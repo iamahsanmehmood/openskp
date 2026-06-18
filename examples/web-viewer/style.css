@@ -98,6 +98,28 @@ body, html {
   text-shadow: 0 0 10px rgba(0, 240, 255, 0.3);
 }
 
+.package-links {
+  display: flex;
+  gap: 20px;
+  align-items: center;
+}
+
+.nav-link {
+  color: rgba(255, 255, 255, 0.6);
+  text-decoration: none;
+  font-weight: 500;
+  font-size: 0.9rem;
+  transition: all 0.2s ease;
+  border-bottom: 2px solid transparent;
+  padding-bottom: 4px;
+}
+
+.nav-link:hover {
+  color: #00f0ff;
+  border-color: #00f0ff;
+  text-shadow: 0 0 8px rgba(0, 240, 255, 0.5);
+}
+
 .actions {
   display: flex;
   gap: 12px;

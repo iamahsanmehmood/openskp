@@ -6,14 +6,17 @@
 
 **Parse `.skp` files without SketchUp. No SDK. No license. Just code.**
 
+### 🌐 [Try the Live Web Viewer (Drag-and-Drop)](https://iamahsanmehmood.github.io/openskp/)
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10+-3776AB.svg?logo=python&logoColor=white)](https://python.org)
-[![npm](https://img.shields.io/badge/npm-coming%20soon-CB3837.svg?logo=npm&logoColor=white)](#platform-support)
+[![npm](https://img.shields.io/npm/v/openskp.svg?logo=npm&logoColor=white)](https://www.npmjs.com/package/openskp)
+[![NuGet](https://img.shields.io/nuget/v/OpenSkp.svg?logo=nuget&logoColor=white)](https://www.nuget.org/packages/OpenSkp)
 [![GitHub Stars](https://img.shields.io/github/stars/iamahsanmehmood/openskp?style=social)](https://github.com/iamahsanmehmood/openskp)
 
 ---
 
-*Open-source SketchUp binary file parser for Python, TypeScript, and Dart*
+*Open-source SketchUp binary file parser for Python, TypeScript, .NET, and Dart*
 
 [Quick Start](#-quick-start) · [Features](#-features) · [Documentation](#-documentation) · [Contributing](#-contributing)
 
@@ -50,11 +53,12 @@ OpenSKP is the **first and only** open-source, cross-platform parser for SketchU
 
 ## 🖥️ Platform Support
 
-| Platform | Version | Status | Install |
-|:---------|:--------|:------:|:--------|
-| 🐍 **Python** | `v0.1.0` | ✅ Available | `pip install openskp` |
-| 📘 **TypeScript** | — | 🚧 In Progress | Coming soon |
-| 🎯 **Dart** | — | 🗓️ Planned | On the roadmap |
+| Platform | Version | Status | Install | Package Link |
+|:---------|:--------|:------:|:--------|:-------------|
+| 🐍 **Python** | `v0.1.0` | ✅ Available | `pip install openskp` | [PyPI](https://pypi.org/project/openskp/) |
+| 📘 **TypeScript / JS** | `v0.1.0` | ✅ Available | `npm install openskp` | [npm](https://www.npmjs.com/package/openskp) |
+| 🚀 **.NET / C#** | `v0.1.0` | ✅ Available | `dotnet add package OpenSkp` | [NuGet](https://www.nuget.org/packages/OpenSkp) |
+| 🎯 **Dart / Flutter** | `v0.1.0` | 🗓️ Bootstrapping | `dart pub add openskp` | [pub.dev](https://pub.dev/packages/openskp) |
 
 ---
 
