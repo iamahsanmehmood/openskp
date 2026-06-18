@@ -44,8 +44,10 @@ jobs:
             fi
           else
             for proj in "${PROJECTS[@]}"; do
+              echo "Building $proj..."
+              dotnet build "$proj" --configuration Release
               echo "Packing $proj..."
-              dotnet pack "$proj" --configuration Release --output nupkg
+              dotnet pack "$proj" --configuration Release --output nupkg --no-build
             done
           fi
 
