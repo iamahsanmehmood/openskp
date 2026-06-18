@@ -1,0 +1,16 @@
+name: openskp
+description: A pure Dart implementation of the OpenSKP parser to extract geometry, metadata, layers, and materials from SketchUp (.skp) files.
+version: 0.1.0
+homepage: https://github.com/iamahsanmehmood/openskp
+repository: https://github.com/iamahsanmehmood/openskp/tree/main/packages/dart
+issue_tracker: https://github.com/iamahsanmehmood/openskp/issues
+
+environment:
+  sdk: ^3.0.0
+
+dependencies:
+  # Placeholder for dependencies when implementation starts
+
+dev_dependencies:
+  lints: ^3.0.0
+  test: ^1.24.0
