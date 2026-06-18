@@ -10,6 +10,7 @@ import {
   extractDynamicProperties,
   reconstructLoopVertices,
   parseMaterialXml,
+  findChildTag,
 } from './geometry';
 
 declare const process: any;
@@ -104,6 +105,7 @@ export function parseSkp(buffer: ArrayBuffer): SkpModel {
   // 2. Parse XML materials to populate layer colors and materials
   const layerColors = new Map<string, [number, number, number]>();
   const materialsMap = new Map<string, Material>();
+  const materialsByFolder = new Map<string, Material>();
 
   for (const [name, xmlBytes] of Object.entries(materialFiles)) {
     const lowerName = name.toLowerCase();
@@ -113,11 +115,16 @@ export function parseSkp(buffer: ArrayBuffer): SkpModel {
         const xmlText = decoder.decode(xmlBytes);
         const parsedMat = parseMaterialXml(xmlText);
         if (parsedMat) {
-          materialsMap.set(parsedMat.name, {
+          const folderName = name.split('/')[1] || '';
+          const matObj = {
             name: parsedMat.name,
             color: { r: parsedMat.r, g: parsedMat.g, b: parsedMat.b },
             transparency: parsedMat.trans,
-          });
+          };
+          materialsMap.set(parsedMat.name, matObj);
+          if (folderName) {
+            materialsByFolder.set(folderName, matObj);
+          }
           if (parsedMat.name.startsWith('Layer_')) {
             layerColors.set(parsedMat.name.slice(6), [parsedMat.r, parsedMat.g, parsedMat.b]);
           }
@@ -128,8 +135,11 @@ export function parseSkp(buffer: ArrayBuffer): SkpModel {
     }
   }
 
-  // 3. Parse TLV recursively starting at offset 16 (skipping file header)
-  const elements = parseTlvRecursive(modelData, 16, modelData.length);
+  // 3. Parse TLV recursively starting at offset 0, handling the F401 container tag wrapper
+  let elements = parseTlvRecursive(modelData, 0, modelData.length);
+  if (elements.length === 1 && elements[0].tag === 'F401') {
+    elements = elements[0].children;
+  }
 
   // 4. Collect layer ID to name mapping
   const layerIdToName = collectLayers(elements);
@@ -139,6 +149,41 @@ export function parseSkp(buffer: ArrayBuffer): SkpModel {
   if (!layerColors.has('Layer0')) {
     layerColors.set('Layer0', [136, 136, 136]);
   }
+
+  // 4b. Collect material ID to name mapping
+  const materialIdToName = new Map<number, string>();
+  function collectMaterialIds(nodes: any[]) {
+    for (const el of nodes) {
+      if (el.tag === 'C832') {
+        const dc05 = findChildTag(el.children, 'DC05');
+        const nameNode = findChildTag(el.children, 'CC32');
+        if (dc05 && nameNode) {
+          const payload = dc05.payload;
+          let mId: number;
+          if (payload.length >= 6 && payload[0] === 0xDE && payload[1] === 0x05) {
+            const de05Len = readU32(payload, 2);
+            mId = parseVarInt(payload, 6, de05Len);
+          } else {
+            mId = parseVarInt(payload, 0, payload.length);
+          }
+          let mName = '';
+          try {
+            const decoder = new TextDecoder('ascii');
+            mName = decoder.decode(nameNode.payload).replace(/\0/g, '').trim();
+          } catch (e) {
+            // Ignore
+          }
+          if (mName) {
+            materialIdToName.set(mId, mName);
+          }
+        }
+      }
+      if (el.children && el.children.length > 0) {
+        collectMaterialIds(el.children);
+      }
+    }
+  }
+  collectMaterialIds(elements);
 
   // 5. Collect component definitions
   const defsDict = collectDefs(elements);
@@ -190,7 +235,8 @@ export function parseSkp(buffer: ArrayBuffer): SkpModel {
     defId: number | string,
     currentMatrix: number[],
     parentLayer: string = 'Layer0',
-    pathName: string = 'ROOT'
+    pathName: string = 'ROOT',
+    inheritedMaterialColor?: { r: number; g: number; b: number }
   ): InstanceNode[] {
     const d = defsDict.get(defId);
     if (!d) return [];
@@ -198,11 +244,43 @@ export function parseSkp(buffer: ArrayBuffer): SkpModel {
     const builder = d.builder;
 
     if (builder.faces.size > 0) {
-      const localVerts: [number, number, number][] = [];
-      const localFaces: number[][] = [];
-      const localVMap = new Map<number, number>();
+      const faceGroups = new Map<string, {
+        color: { r: number; g: number; b: number };
+        localVerts: [number, number, number][];
+        localFaces: number[][];
+        localVMap: Map<number, number>;
+        faceList: { fId: number; fData: any; localFacesStart: number; localFacesEnd: number }[];
+      }>();
 
       for (const [fId, fData] of builder.faces.entries()) {
+        let faceColor = inheritedMaterialColor;
+        const faceMatId = (fData as any).materialId;
+        if (faceMatId !== undefined && faceMatId !== null) {
+          const matName = materialIdToName.get(faceMatId);
+          if (matName) {
+            const mat = materialsMap.get(matName) || materialsByFolder.get(matName);
+            if (mat) {
+              faceColor = mat.color;
+            }
+          }
+        }
+        if (!faceColor) {
+          faceColor = getLayerColor(parentLayer);
+        }
+
+        const colorKey = `${faceColor.r},${faceColor.g},${faceColor.b}`;
+        let group = faceGroups.get(colorKey);
+        if (!group) {
+          group = {
+            color: faceColor,
+            localVerts: [],
+            localFaces: [],
+            localVMap: new Map<number, number>(),
+            faceList: [],
+          };
+          faceGroups.set(colorKey, group);
+        }
+
         const loops: number[][] = [];
         for (const loop of fData.loops) {
           const loopVerts = reconstructLoopVertices(loop, builder.edges);
@@ -213,27 +291,32 @@ export function parseSkp(buffer: ArrayBuffer): SkpModel {
         if (loops.length === 0) continue;
 
         const triangles = triangulateFace3D(builder.vertices, loops, fData.normal);
+        const startFaceIdx = group.localFaces.length;
         for (const tri of triangles) {
           const faceIndices: number[] = [];
           for (const vId of tri) {
             if (builder.vertices.has(vId)) {
-              let idx = localVMap.get(vId);
+              let idx = group.localVMap.get(vId);
               if (idx === undefined) {
                 const pt = builder.vertices.get(vId)!;
-                localVerts.push(pt);
-                idx = localVerts.length - 1;
-                localVMap.set(vId, idx);
+                group.localVerts.push(pt);
+                idx = group.localVerts.length - 1;
+                group.localVMap.set(vId, idx);
               }
               faceIndices.push(idx);
             }
           }
           if (faceIndices.length === 3) {
-            localFaces.push(faceIndices);
+            group.localFaces.push(faceIndices);
           }
         }
+        const endFaceIdx = group.localFaces.length;
+        group.faceList.push({ fId, fData, localFacesStart: startFaceIdx, localFacesEnd: endFaceIdx });
       }
 
-      if (localFaces.length > 0) {
+      for (const [colorKey, group] of faceGroups.entries()) {
+        if (group.localFaces.length === 0) continue;
+
         const isRoot = pathName === 'ROOT';
         const tx = isRoot ? 0 : (currentMatrix[9] ?? 0) * 25.4;
         const ty = isRoot ? 0 : (currentMatrix[10] ?? 0) * 25.4;
@@ -241,7 +324,9 @@ export function parseSkp(buffer: ArrayBuffer): SkpModel {
 
         let safePath = pathName.replace(/ \/ /g, '__').replace(/ /g, '_');
         if (safePath.length > 80) safePath = safePath.slice(0, 80);
-        const geomName = `mesh_${meshCounter.count}_${safePath}_${parentLayer}`;
+        
+        const colorSuffix = faceGroups.size > 1 ? `_${colorKey.replace(/,/g, '_')}` : '';
+        const geomName = `mesh_${meshCounter.count}_${safePath}_${parentLayer}${colorSuffix}`;
         meshCounter.count++;
 
         meshIndex[geomName] = {
@@ -253,15 +338,14 @@ export function parseSkp(buffer: ArrayBuffer): SkpModel {
           path: pathName,
         };
 
-        // Prepare GLB primitive data (pre-transformed to meters and Y-up)
         const scale = 0.0254;
-        const positions = new Float32Array(localVerts.length * 3);
-        const normals = new Float32Array(localVerts.length * 3);
+        const positions = new Float32Array(group.localVerts.length * 3);
+        const normals = new Float32Array(group.localVerts.length * 3);
 
-        const vertexNormalsAccum = new Array(localVerts.length).fill(null).map(() => [0, 0, 0]);
-        for (const [fId, fData] of builder.faces.entries()) {
+        const vertexNormalsAccum = new Array(group.localVerts.length).fill(null).map(() => [0, 0, 0]);
+        for (const faceItem of group.faceList) {
           const loops: number[][] = [];
-          for (const loop of fData.loops) {
+          for (const loop of faceItem.fData.loops) {
             const loopVerts = reconstructLoopVertices(loop, builder.edges);
             if (loopVerts.length > 0) {
               loops.push(loopVerts);
@@ -269,10 +353,10 @@ export function parseSkp(buffer: ArrayBuffer): SkpModel {
           }
           if (loops.length === 0) continue;
 
-          const fn = fData.normal;
+          const fn = faceItem.fData.normal;
           for (const loop of loops) {
             for (const vId of loop) {
-              const idx = localVMap.get(vId);
+              const idx = group.localVMap.get(vId);
               if (idx !== undefined) {
                 vertexNormalsAccum[idx][0] += fn[0];
                 vertexNormalsAccum[idx][1] += fn[1];
@@ -282,8 +366,8 @@ export function parseSkp(buffer: ArrayBuffer): SkpModel {
           }
         }
 
-        for (let i = 0; i < localVerts.length; i++) {
-          const v = localVerts[i];
+        for (let i = 0; i < group.localVerts.length; i++) {
+          const v = group.localVerts[i];
           const pt = transformPoint(currentMatrix, v);
           positions[i * 3] = pt[0] * scale;
           positions[i * 3 + 1] = pt[2] * scale;
@@ -309,15 +393,14 @@ export function parseSkp(buffer: ArrayBuffer): SkpModel {
           }
         }
 
-        const indices = new Uint32Array(localFaces.length * 3);
-        for (let i = 0; i < localFaces.length; i++) {
-          indices[i * 3] = localFaces[i][0];
-          indices[i * 3 + 1] = localFaces[i][1];
-          indices[i * 3 + 2] = localFaces[i][2];
+        const indices = new Uint32Array(group.localFaces.length * 3);
+        for (let i = 0; i < group.localFaces.length; i++) {
+          indices[i * 3] = group.localFaces[i][0];
+          indices[i * 3 + 1] = group.localFaces[i][1];
+          indices[i * 3 + 2] = group.localFaces[i][2];
         }
 
-        const color = getLayerColor(parentLayer);
-        const materialIndex = getMaterialIndex(color);
+        const materialIndex = getMaterialIndex(group.color);
 
         glbPrimitives.push({
           positions,
@@ -337,6 +420,7 @@ export function parseSkp(buffer: ArrayBuffer): SkpModel {
       const newMatrix = multiplyMatrices(currentMatrix, instMatrix);
 
       let lName = parentLayer;
+      let instColor = inheritedMaterialColor;
       const d007 = inst.children.find((c) => c.tag === 'D007');
       let properties: Record<string, string> = {};
 
@@ -352,6 +436,19 @@ export function parseSkp(buffer: ArrayBuffer): SkpModel {
           }
           lName = layerIdToName.get(lId) || parentLayer;
         }
+
+        const d107 = d007.children.find((c) => c.tag === 'D107');
+        if (d107) {
+          const instMatId = parseVarInt(d107.payload, 0, d107.payload.length);
+          const matName = materialIdToName.get(instMatId);
+          if (matName) {
+            const mat = materialsMap.get(matName) || materialsByFolder.get(matName);
+            if (mat) {
+              instColor = mat.color;
+            }
+          }
+        }
+
         try {
           properties = extractDynamicProperties(d007);
         } catch (e) {
@@ -361,7 +458,7 @@ export function parseSkp(buffer: ArrayBuffer): SkpModel {
 
       const instName = inst.name || `Component_${refIdx}`;
       const fullPathName = `${pathName} / ${instName}`;
-      const childNodes = instantiate(refIdx, newMatrix, lName, fullPathName);
+      const childNodes = instantiate(refIdx, newMatrix, lName, fullPathName, instColor);
 
       const tx = (newMatrix[9] ?? 0) * 25.4;
       const ty = (newMatrix[10] ?? 0) * 25.4;

@@ -95,6 +95,7 @@ class Face:
     id: int
     loops: List[List[Tuple[int, int]]] = field(default_factory=list)
     normal: Optional[Tuple[float, float, float]] = None
+    material_id: Optional[int] = None
 
 
 # ── Layers & Materials ────────────────────────────────────────────────────
@@ -308,6 +309,7 @@ class SkpFile:
                     id=f_id,
                     loops=f_data.get("loops", []),
                     normal=f_data.get("normal"),
+                    material_id=f_data.get("material_id"),
                 )
             # Populate instances
             for inst in builder.instances:
