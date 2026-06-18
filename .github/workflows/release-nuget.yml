@@ -1,0 +1,68 @@
+name: Release NuGet Package
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**/*.csproj'
+      - '**/*.cs'
+    tags:
+      - 'nuget-v*'
+  pull_request:
+    branches: [main]
+    paths:
+      - '**/*.csproj'
+      - '**/*.cs'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0'
+
+      - name: Build and Pack
+        shell: bash
+        run: |
+          shopt -s globstar nullglob
+          PROJECTS=(**/*.csproj)
+          if [ ${#PROJECTS[@]} -eq 0 ]; then
+            if [[ "${{ github.ref }}" == refs/tags/nuget-v* ]]; then
+              echo "Error: No .csproj files found for release tag."
+              exit 1
+            else
+              echo "No C# project found. Skipping build."
+            fi
+          else
+            for proj in "${PROJECTS[@]}"; do
+              echo "Packing $proj..."
+              dotnet pack "$proj" --configuration Release --output nupkg
+            done
+          fi
+
+      - name: Publish to NuGet
+        if: startsWith(github.ref, 'refs/tags/nuget-v')
+        shell: bash
+        run: |
+          if [ -d nupkg ] && [ "$(ls -A nupkg)" ]; then
+            dotnet nuget push "nupkg/*.nupkg" --api-key ${{ secrets.NUGET_TOKEN }} --source https://api.nuget.org/v3/index.json --skip-duplicate
+          else
+            echo "No packages found to publish."
+            exit 1
+          fi
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/nuget-v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: nupkg/*.nupkg
+          generate_release_notes: true

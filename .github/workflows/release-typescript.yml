@@ -1,0 +1,51 @@
+name: Release TypeScript Package
+
+on:
+  push:
+    tags:
+      - 'typescript-v*'
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install dependencies
+        run: |
+          cd packages/typescript
+          npm ci
+
+      - name: Build
+        run: |
+          cd packages/typescript
+          npm run build
+
+      - name: Publish to NPM
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          cd packages/typescript
+          npm publish
+
+      - name: Pack package
+        run: |
+          cd packages/typescript
+          npm pack
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: packages/typescript/*.tgz
+          generate_release_notes: true

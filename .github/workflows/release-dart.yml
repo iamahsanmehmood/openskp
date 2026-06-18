@@ -1,0 +1,54 @@
+name: Release Dart Package
+
+on:
+  push:
+    tags:
+      - 'dart-v*'
+
+permissions:
+  id-token: write
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Dart
+        uses: dart-lang/setup-dart@v1
+
+      - name: Verify package structure
+        shell: bash
+        run: |
+          if [ ! -f packages/dart/pubspec.yaml ]; then
+            echo "Error: packages/dart/pubspec.yaml not found. Please ensure the Dart package is fully initialized before releasing."
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: |
+          cd packages/dart
+          dart pub get
+
+      - name: Publish to pub.dev
+        env:
+          PUB_CREDENTIALS: ${{ secrets.PUB_CREDENTIALS }}
+        shell: bash
+        run: |
+          cd packages/dart
+          if [ -n "$PUB_CREDENTIALS" ]; then
+            echo "Using PUB_CREDENTIALS secret for publishing..."
+            mkdir -p ~/.config/dart
+            echo "$PUB_CREDENTIALS" > ~/.config/dart/pub-credentials.json
+          else
+            echo "Using OIDC trusted publishing..."
+          fi
+          dart pub publish --force
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
