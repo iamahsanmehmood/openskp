@@ -336,6 +336,7 @@ OpenSKP is released under the [MIT License](LICENSE). You are free to use, modif
 
 This project would not be possible without:
 
+- [Noor Ali Qureshi](https://github.com/nooraliqureshi) — SketchUp 2025 support, older SKP version fixes, and materials rendering support.
 - The open-source community for inspiration and feedback
 - [Kaitai Struct](https://kaitai.io/) for binary format analysis patterns
 - [glTF](https://www.khronos.org/gltf/) specification by Khronos Group

@@ -29,10 +29,17 @@ jobs:
           cd packages/python
           python -m build
 
-      - name: Publish to PyPI
+      - name: Publish to PyPI (Token)
+        if: ${{ secrets.PYPI_API_TOKEN || secrets.PYPI_TOKEN }}
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           password: ${{ secrets.PYPI_API_TOKEN || secrets.PYPI_TOKEN }}
+          packages-dir: packages/python/dist/
+
+      - name: Publish to PyPI (OIDC)
+        if: ${{ !(secrets.PYPI_API_TOKEN || secrets.PYPI_TOKEN) }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
           packages-dir: packages/python/dist/
 
       - name: Create GitHub Release
