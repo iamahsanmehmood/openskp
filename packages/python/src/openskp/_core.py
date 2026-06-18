@@ -39,7 +39,8 @@ def parse_var_int(data: bytes, offset: int, length: int) -> int:
     return val
 
 CONTAINER_TAGS = {
-    '7C15', '8813', '8913', '8A13', '8B13', '8D13', '4C1D', '6419',
+    'F401', 'F701', 'D430', 'D530', 'C832',
+    '7C15', '8813', '8913', '8A13', '8B13', '8C13', '8D13', '4C1D', '6419',
     'F901', '7017', '7117', 'D007', 'C409', '9411', '9511', '0F01',
     '384A', 'B80B', '9713', '2C4C', 'AC0D', 'AE0D', 'F601', 'F801',
     '983A', '993A', '8C3C', '8D3C',
@@ -253,7 +254,13 @@ def _extract_geometry_from_nodes(elements, builder):
                                 co_edges.append((edge_id, orient))
                         if co_edges:
                             loops.append(co_edges)
-                builder.faces[f_id] = {'loops': loops, 'normal': normal}
+                face_mat_id = None
+                d007 = next((c for c in el['children'] if c['tag'] == 'D007'), None)
+                if d007:
+                    d107 = next((c for c in d007['children'] if c['tag'] == 'D107'), None)
+                    if d107:
+                        face_mat_id = parse_var_int(d107['payload'], 0, len(d107['payload']))
+                builder.faces[f_id] = {'loops': loops, 'normal': normal, 'material_id': face_mat_id}
 
         elif tag == '6419':
             nodes_to_search = el['children'] if el['children'] else [el]
@@ -402,6 +409,7 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
     # Materials & layer colors
     layer_colors = {}
     materials = {}
+    materials_by_folder = {}
     MAT_NS = {'mat': 'http://sketchup.google.com/schemas/sketchup/1.0/material'}
     for name in zf.namelist():
         if name.endswith('material.xml') and name.startswith('materials/'):
@@ -415,7 +423,11 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
                     g = int(mat_elem.get('colorGreen', 128))
                     b = int(mat_elem.get('colorBlue', 128))
                     trans = float(mat_elem.get('trans', 0.5))
-                    materials[mat_name] = {'name': mat_name, 'color': {'r': r, 'g': g, 'b': b}, 'transparency': trans}
+                    folder_name = name.split('/')[1] if len(name.split('/')) > 1 else ''
+                    mat_obj = {'name': mat_name, 'color': {'r': r, 'g': g, 'b': b}, 'transparency': trans}
+                    materials[mat_name] = mat_obj
+                    if folder_name:
+                        materials_by_folder[folder_name] = mat_obj
                     if mat_name.startswith('Layer_'):
                         layer_colors[mat_name[6:]] = (r, g, b)
             except Exception:
@@ -430,7 +442,9 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
     zf.close()
 
     # 3. Parse TLV tree
-    elements = parse_tlv_recursive(model_dat, 16, len(model_dat), CONTAINER_TAGS)
+    elements = parse_tlv_recursive(model_dat, 0, len(model_dat), CONTAINER_TAGS)
+    if len(elements) == 1 and elements[0]['tag'] == 'F401':
+        elements = elements[0]['children']
 
     # Layer ID -> name
     layer_id_to_name = {}
@@ -457,6 +471,25 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
         layer_id_to_name[1] = 'Layer0'
     if 'Layer0' not in layer_colors:
         layer_colors['Layer0'] = (136, 136, 136)
+
+    # Material ID -> name
+    material_id_to_name = {}
+    def collect_material_ids(nodes):
+        for el in nodes:
+            if el['tag'] == 'C832':
+                dc05 = find_child_tag(el['children'], 'DC05')
+                name_node = find_child_tag(el['children'], 'CC32')
+                if dc05 and name_node:
+                    payload = dc05['payload']
+                    if payload.startswith(bytes([0xDE, 0x05])):
+                        de05_len = read_u32(payload, 2)
+                        m_id = parse_var_int(payload, 6, de05_len)
+                    else:
+                        m_id = parse_var_int(payload, 0, len(payload))
+                    m_name = name_node['payload'].decode('ascii', errors='ignore')
+                    material_id_to_name[m_id] = m_name
+            collect_material_ids(el['children'])
+    collect_material_ids(elements)
 
     # Component definitions
     defs_dict = {}
@@ -488,7 +521,9 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
         'version': version,
         'layer_colors': layer_colors,
         'layer_id_to_name': layer_id_to_name,
+        'material_id_to_name': material_id_to_name,
         'materials': materials,
+        'materials_by_folder': materials_by_folder,
         'defs_dict': defs_dict,
         'elements': elements,
         'thumbnail_data': thumbnail_data,
@@ -509,13 +544,15 @@ def build_scene(parsed: Dict[str, Any], output_dir: str, filename_stem: str) -> 
     defs_dict = parsed['defs_dict']
     layer_colors = parsed['layer_colors']
     layer_id_to_name = parsed['layer_id_to_name']
+    material_id_to_name = parsed.get('material_id_to_name', {})
     materials = parsed['materials']
+    materials_by_folder = parsed.get('materials_by_folder', {})
 
     scene = trimesh.Scene()
     mesh_counter = [0]
     mesh_index = {}
 
-    def instantiate(def_id, current_matrix, parent_layer='Layer0', path_name="ROOT"):
+    def instantiate(def_id, current_matrix, parent_layer='Layer0', path_name="ROOT", inherited_color=None):
         if def_id not in defs_dict:
             return []
         d = defs_dict[def_id]
@@ -525,7 +562,24 @@ def build_scene(parsed: Dict[str, Any], output_dir: str, filename_stem: str) -> 
             local_verts = []
             local_faces = []
             local_v_map = {}
+            face_colors_list = []
             for f_id, f_data in builder.faces.items():
+                # Resolve color for this face
+                face_color = None
+                face_mat_id = f_data.get('material_id')
+                if face_mat_id is not None:
+                    mat_name = material_id_to_name.get(face_mat_id)
+                    mat = materials.get(mat_name) or materials_by_folder.get(mat_name)
+                    if mat:
+                        c = mat['color']
+                        face_color = (c['r'], c['g'], c['b'])
+
+                if face_color is None and inherited_color is not None:
+                    face_color = inherited_color
+
+                if face_color is None:
+                    face_color = layer_colors.get(parent_layer, (136, 136, 136))
+
                 loops = []
                 for loop in f_data['loops']:
                     loop_verts = []
@@ -552,6 +606,7 @@ def build_scene(parsed: Dict[str, Any], output_dir: str, filename_stem: str) -> 
                             face_indices.append(local_v_map[v_id])
                     if len(face_indices) == 3:
                         local_faces.append(face_indices)
+                        face_colors_list.append(list(face_color) + [255])
 
             if local_faces:
                 v_trans = []
@@ -562,8 +617,7 @@ def build_scene(parsed: Dict[str, Any], output_dir: str, filename_stem: str) -> 
                     oz = -pt[1] * 25.4
                     v_trans.append((ox, oy, oz))
                 mesh = trimesh.Trimesh(vertices=v_trans, faces=local_faces)
-                color = layer_colors.get(parent_layer, (136, 136, 136))
-                mesh.visual.face_colors = list(color) + [255]
+                mesh.visual.face_colors = face_colors_list
                 safe_path = path_name.replace(' / ', '__').replace(' ', '_')[:80]
                 geom_name = f"mesh_{mesh_counter[0]}_{safe_path}_{parent_layer}"
                 mesh_counter[0] += 1
@@ -576,6 +630,7 @@ def build_scene(parsed: Dict[str, Any], output_dir: str, filename_stem: str) -> 
             new_matrix = multiply_matrices(current_matrix, inst_matrix)
 
             l_name = parent_layer
+            inst_color = inherited_color
             d007 = next((c for c in inst['children'] if c['tag'] == 'D007'), None)
             properties = {}
             if d007:
@@ -587,6 +642,16 @@ def build_scene(parsed: Dict[str, Any], output_dir: str, filename_stem: str) -> 
                     else:
                         l_id = parse_var_int(p, 0, len(p))
                     l_name = layer_id_to_name.get(l_id, parent_layer)
+
+                d107 = next((c for c in d007['children'] if c['tag'] == 'D107'), None)
+                if d107:
+                    inst_mat_id = parse_var_int(d107['payload'], 0, len(d107['payload']))
+                    mat_name = material_id_to_name.get(inst_mat_id)
+                    mat = materials.get(mat_name) or materials_by_folder.get(mat_name)
+                    if mat:
+                        c = mat['color']
+                        inst_color = (c['r'], c['g'], c['b'])
+
                 try:
                     properties = extract_dynamic_properties(d007)
                 except Exception:
@@ -594,7 +659,7 @@ def build_scene(parsed: Dict[str, Any], output_dir: str, filename_stem: str) -> 
 
             inst_name = inst['name'] if inst['name'] else f"Component_{ref_idx}"
             full_path_name = f"{path_name} / {inst_name}"
-            child_nodes = instantiate(ref_idx, new_matrix, l_name, full_path_name)
+            child_nodes = instantiate(ref_idx, new_matrix, l_name, full_path_name, inst_color)
 
             tx = new_matrix[9] * 25.4 if len(new_matrix) > 11 else 0
             ty = new_matrix[10] * 25.4 if len(new_matrix) > 11 else 0
