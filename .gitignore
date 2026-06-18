@@ -1,0 +1,57 @@
+# Byte-compiled / optimized
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+*.egg
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm
+
+# TypeScript
+packages/typescript/dist/
+
+# Dart
+packages/dart/.dart_tool/
+packages/dart/.packages
+packages/dart/build/
+packages/dart/pubspec.lock
+
+# SKP test files (don't commit binary models)
+*.skp
+*.glb
+*.obj

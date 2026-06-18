@@ -1,0 +1,43 @@
+name: Release Python Package
+
+on:
+  push:
+    tags: ['python-v*']
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: pypi
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install build tools
+        run: pip install build twine
+
+      - name: Build package
+        run: |
+          cd packages/python
+          python -m build
+
+      - name: Publish to PyPI
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          cd packages/python
+          python -m twine upload dist/*
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: packages/python/dist/*
+          generate_release_notes: true

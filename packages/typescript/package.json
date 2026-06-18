@@ -1,0 +1,48 @@
+{
+  "name": "openskp",
+  "version": "0.1.0",
+  "description": "Open-source SketchUp (.skp) binary file parser — extract geometry, metadata, layers, and materials. Works in browser and Node.js.",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "files": ["dist"],
+  "exports": {
+    ".": {
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsup src/index.ts --format cjs,esm --dts",
+    "test": "vitest run",
+    "lint": "eslint src/",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "sketchup", "skp", "3d", "parser", "glb", "gltf",
+    "bim", "cad", "geometry", "three.js", "webgl"
+  ],
+  "author": "Ahsan Mehmood",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/iamahsanmehmood/openskp",
+    "directory": "packages/typescript"
+  },
+  "homepage": "https://github.com/iamahsanmehmood/openskp",
+  "bugs": "https://github.com/iamahsanmehmood/openskp/issues",
+  "engines": {
+    "node": ">=16"
+  },
+  "dependencies": {
+    "earcut": "^3.0.0",
+    "fflate": "^0.8.0"
+  },
+  "devDependencies": {
+    "tsup": "^8.0.0",
+    "typescript": "^5.3.0",
+    "vitest": "^1.0.0",
+    "@types/earcut": "^2.1.0"
+  }
+}

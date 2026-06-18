@@ -1,0 +1,44 @@
+name: TypeScript CI
+
+on:
+  push:
+    branches: [main]
+    paths: ['packages/typescript/**']
+  pull_request:
+    branches: [main]
+    paths: ['packages/typescript/**']
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: ['18', '20', '22']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - name: Install dependencies
+        run: |
+          cd packages/typescript
+          npm ci
+
+      - name: Type check
+        run: |
+          cd packages/typescript
+          npm run typecheck
+
+      - name: Build
+        run: |
+          cd packages/typescript
+          npm run build
+
+      - name: Test
+        run: |
+          cd packages/typescript
+          npm test

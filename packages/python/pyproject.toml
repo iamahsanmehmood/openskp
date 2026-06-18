@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "openskp"
+version = "0.1.0"
+description = "Open-source SketchUp (.skp) binary file parser — extract geometry, metadata, layers, and materials"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.9"
+authors = [{name = "Ahsan Mehmood"}]
+keywords = ["sketchup", "skp", "3d", "parser", "glb", "gltf", "bim", "cad"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Graphics :: 3D Modeling",
+    "Topic :: Scientific/Engineering",
+]
+dependencies = [
+    "numpy>=1.20",
+    "trimesh>=3.0",
+    "shapely>=1.8",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/iamahsanmehmood/openskp"
+Repository = "https://github.com/iamahsanmehmood/openskp"
+Issues = "https://github.com/iamahsanmehmood/openskp/issues"
+
+[project.scripts]
+openskp = "openskp.__init__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
