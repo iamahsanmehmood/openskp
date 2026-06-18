@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - 'dart-v*'
+      - 'v*'
 
 permissions:
   id-token: write
