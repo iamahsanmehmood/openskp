@@ -12,6 +12,7 @@ export interface GeometryBuilderInstance {
 export interface GeometryBuilderFace {
   loops: { edgeId: number; orientation: number }[][];
   normal: [number, number, number];
+  materialId?: number | null;
 }
 
 export class GeometryBuilder {
@@ -141,7 +142,15 @@ export function extractGeometryFromNodes(
             }
           }
         }
-        builder.faces.set(fId, { loops, normal });
+        let faceMatId: number | null = null;
+        const d007 = el.children.find((c) => c.tag === 'D007');
+        if (d007) {
+          const d107 = d007.children.find((c) => c.tag === 'D107');
+          if (d107) {
+            faceMatId = parseVarInt(d107.payload, 0, d107.payload.length);
+          }
+        }
+        builder.faces.set(fId, { loops, normal, materialId: faceMatId });
       }
     } else if (tag === '6419') {
       const nodesToSearch = el.children.length > 0 ? el.children : [el];
