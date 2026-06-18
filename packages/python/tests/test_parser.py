@@ -158,7 +158,7 @@ class TestDataModel:
         from openskp.model import SkpModel
 
         model = SkpModel()
-        assert model.version == 0
+        assert model.version == "unknown"
         assert model.definitions == {}
         assert model.layers == []
 
@@ -302,7 +302,7 @@ class TestJsonExport:
 
         model = SkpModel()
         d = to_dict(model)
-        assert d["version"] == 0
+        assert d["version"] == "unknown"
         assert d["definitions"] == {}
         assert d["layers"] == []
         assert d["materials"] == []
