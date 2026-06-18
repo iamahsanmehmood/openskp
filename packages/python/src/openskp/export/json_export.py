@@ -9,14 +9,11 @@ from __future__ import annotations
 
 import json
 import pathlib
-from dataclasses import asdict
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, Union
 
 from ..model import (
     Definition,
     Instance,
-    Layer,
-    Material,
     SkpModel,
 )
 

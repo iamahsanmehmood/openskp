@@ -22,7 +22,7 @@ def _write_obj(model: SkpModel, fp: IO[str]) -> None:
         model: A fully parsed :class:`SkpModel`.
         fp: Writable text file handle.
     """
-    fp.write(f"# OpenSKP OBJ Export\n")
+    fp.write("# OpenSKP OBJ Export\n")
     fp.write(f"# Definitions: {len(model.definitions)}\n\n")
 
     global_vert_offset: int = 1  # OBJ indices are 1-based

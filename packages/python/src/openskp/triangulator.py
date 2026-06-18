@@ -13,7 +13,7 @@ Dependencies:
 
 from __future__ import annotations
 
-from typing import List, Optional, Tuple
+from typing import List, Tuple
 
 import numpy as np
 

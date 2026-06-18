@@ -14,11 +14,8 @@ import io
 import json
 import os
 import struct
-import sys
-import time
 import zipfile
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict
 import xml.etree.ElementTree as ET
 
 import numpy as np
@@ -317,10 +314,18 @@ def multiply_matrices(parent, child):
     def dot(row, col):
         return sum(r*c for r, c in zip(row, col))
     out = [0.0] * 13
-    out[0] = dot(p_r0, c_c0); out[1] = dot(p_r0, c_c1); out[2] = dot(p_r0, c_c2)
-    out[3] = dot(p_r1, c_c0); out[4] = dot(p_r1, c_c1); out[5] = dot(p_r1, c_c2)
-    out[6] = dot(p_r2, c_c0); out[7] = dot(p_r2, c_c1); out[8] = dot(p_r2, c_c2)
-    out[9] = dot(p_r0, c_c3); out[10] = dot(p_r1, c_c3); out[11] = dot(p_r2, c_c3)
+    out[0] = dot(p_r0, c_c0)
+    out[1] = dot(p_r0, c_c1)
+    out[2] = dot(p_r0, c_c2)
+    out[3] = dot(p_r1, c_c0)
+    out[4] = dot(p_r1, c_c1)
+    out[5] = dot(p_r1, c_c2)
+    out[6] = dot(p_r2, c_c0)
+    out[7] = dot(p_r2, c_c1)
+    out[8] = dot(p_r2, c_c2)
+    out[9] = dot(p_r0, c_c3)
+    out[10] = dot(p_r1, c_c3)
+    out[11] = dot(p_r2, c_c3)
     out[12] = parent[12] * child[12]
     return out
 

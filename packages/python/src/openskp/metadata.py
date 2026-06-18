@@ -8,10 +8,10 @@ attributes.
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 from .model import Definition, Instance, TlvNode
-from .parser import read_u32
+from .parser import read_f64, read_u32
 
 
 # ── Tag constants ─────────────────────────────────────────────────────────
@@ -25,8 +25,6 @@ _TAG_DYN_PROP: str = "FF0E"
 _TAG_DYN_KEY: str = "0200"
 _TAG_DYN_VAL: str = "0300"
 _TAG_DEF_REF: str = "0A00"
-
-from .parser import read_f64
 
 
 # ── Dynamic properties ───────────────────────────────────────────────────

@@ -11,7 +11,6 @@ extracts the relevant entries.
 from __future__ import annotations
 
 import io
-import struct
 import zipfile
 from typing import Any, Dict
 

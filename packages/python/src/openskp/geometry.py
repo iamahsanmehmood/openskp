@@ -10,8 +10,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Tuple
 
-from .model import Definition, Edge, Face, Instance, TlvNode, Vertex
-from .parser import read_f64, read_u32, parse_var_int
+from .model import Definition, Edge, Face, TlvNode, Vertex
+from .parser import read_f64, read_u32
 from .triangulator import triangulate_face_3d
 
 

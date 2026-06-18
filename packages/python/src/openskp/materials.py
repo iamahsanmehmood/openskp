@@ -11,7 +11,6 @@ import xml.etree.ElementTree as ET
 from typing import Dict, List, Optional, Tuple
 
 from .model import Layer, Material, TlvNode
-from .parser import read_u32
 
 
 # ── Tag constants ─────────────────────────────────────────────────────────
