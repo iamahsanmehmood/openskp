@@ -8,13 +8,14 @@
   "files": ["dist"],
   "exports": {
     ".": {
+      "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs",
-      "require": "./dist/index.js",
-      "types": "./dist/index.d.ts"
+      "require": "./dist/index.js"
     }
   },
   "scripts": {
     "build": "tsup src/index.ts --format cjs,esm --dts",
+    "copy-dist": "node copy-dist.js",
     "test": "vitest run",
     "lint": "eslint src/",
     "typecheck": "tsc --noEmit"

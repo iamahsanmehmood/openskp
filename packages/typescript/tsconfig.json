@@ -14,7 +14,7 @@
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
-    "lib": ["ES2020"]
+    "lib": ["ES2020", "DOM"]
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist", "tests"]

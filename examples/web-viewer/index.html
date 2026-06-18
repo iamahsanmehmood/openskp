@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OpenSKP Premium Web Viewer</title>
+  <link rel="stylesheet" href="style.css">
+  
+  <!-- ESM Import Maps to resolve Three.js and parser dependencies -->
+  <script type="importmap">
+    {
+      "imports": {
+        "fflate": "https://cdn.jsdelivr.net/npm/fflate@0.8.0/+esm",
+        "earcut": "https://cdn.jsdelivr.net/npm/earcut@3.0.0/+esm",
+        "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <!-- Three.js Canvas Container -->
+  <div id="canvas-container"></div>
+
+  <!-- Main Floating HUD Overlay -->
+  <div id="ui-container">
+    
+    <!-- Top Navbar -->
+    <header class="glass-panel main-header">
+      <div class="logo">
+        <svg viewBox="0 0 24 24" width="24" height="24" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round" class="logo-icon"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
+        <span>OpenSKP <span class="accent-text">Viewer</span></span>
+      </div>
+      
+      <div class="actions">
+        <button id="btn-load" class="btn btn-primary">
+          <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" class="btn-icon"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+          Upload SKP
+        </button>
+        <button id="btn-export" class="btn btn-secondary" disabled>
+          <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" class="btn-icon"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+          Export GLB
+        </button>
+      </div>
+
+      <input type="file" id="file-input" accept=".skp" style="display: none;">
+    </header>
+
+    <!-- Sidebar Left: Layers Panel -->
+    <aside class="glass-panel sidebar-left" id="panel-layers">
+      <div class="panel-header">
+        <h3>Layers</h3>
+        <span class="badge" id="layer-count">0</span>
+      </div>
+      <div class="panel-content scrollable">
+        <div id="layers-list-placeholder" class="empty-state">
+          No layers loaded
+        </div>
+        <ul id="layers-list" style="display: none;"></ul>
+      </div>
+    </aside>
+
+    <!-- Sidebar Right: Inspector Panel -->
+    <aside class="glass-panel sidebar-right" id="panel-inspector">
+      <div class="panel-header">
+        <h3>Properties Inspector</h3>
+      </div>
+      <div class="panel-content scrollable" id="inspector-content">
+        <div id="inspector-empty-state" class="empty-state">
+          <svg viewBox="0 0 24 24" width="32" height="32" stroke="currentColor" stroke-width="1.5" fill="none" class="empty-icon"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+          <p>Select a component in the viewport to inspect its properties.</p>
+        </div>
+        
+        <div id="inspector-details" style="display: none;">
+          <section class="inspector-section">
+            <h4>Component Identity</h4>
+            <table class="property-table">
+              <tr><td>Name</td><td id="prop-name" class="selectable-text">--</td></tr>
+              <tr><td>Definition</td><td id="prop-definition" class="selectable-text">--</td></tr>
+              <tr><td>Layer</td><td id="prop-layer">--</td></tr>
+            </table>
+          </section>
+
+          <section class="inspector-section">
+            <h4>Coordinates (mm)</h4>
+            <div class="coordinates-grid">
+              <div><span class="coord-label">X</span><span id="prop-x" class="coord-value">0.0</span></div>
+              <div><span class="coord-label">Y</span><span id="prop-y" class="coord-value">0.0</span></div>
+              <div><span class="coord-label">Z</span><span id="prop-z" class="coord-value">0.0</span></div>
+            </div>
+          </section>
+
+          <section class="inspector-section" id="section-custom-properties">
+            <h4>Dynamic Attributes</h4>
+            <table class="property-table" id="custom-properties-table">
+              <!-- Filled dynamically -->
+            </table>
+          </section>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Bottom Status Bar -->
+    <footer class="glass-panel status-bar">
+      <div class="status-left">
+        <span id="status-text">Ready. Drag & Drop a .skp file to begin.</span>
+      </div>
+      <div class="status-right" id="model-stats" style="visibility: hidden;">
+        <span id="stat-version" class="stat-item">Version: --</span>
+        <span id="stat-meshes" class="stat-item">Meshes: --</span>
+      </div>
+    </footer>
+  </div>
+
+  <!-- Drag-and-Drop Overlay -->
+  <div id="drop-overlay">
+    <div class="drop-overlay-content">
+      <svg viewBox="0 0 24 24" width="64" height="64" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round" class="drop-icon"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+      <h2>Drop your SketchUp (.skp) file</h2>
+      <p>Supports files up to SketchUp v2021/v2022 VFF format</p>
+    </div>
+  </div>
+
+  <!-- Loading Overlay -->
+  <div id="loading-overlay" class="hidden">
+    <div class="spinner-container">
+      <div class="spinner"></div>
+      <p id="loading-text">Parsing SketchUp model...</p>
+    </div>
+  </div>
+
+  <!-- Main Application Script -->
+  <script type="module" src="viewer.js"></script>
+</body>
+</html>
