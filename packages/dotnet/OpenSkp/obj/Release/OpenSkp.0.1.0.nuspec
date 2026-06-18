@@ -1,0 +1,20 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2012/06/nuspec.xsd">
+  <metadata>
+    <id>OpenSkp</id>
+    <version>0.1.0</version>
+    <authors>Ahsan Mehmood</authors>
+    <license type="expression">MIT</license>
+    <licenseUrl>https://licenses.nuget.org/MIT</licenseUrl>
+    <projectUrl>https://github.com/iamahsanmehmood/openskp</projectUrl>
+    <description>Open-source SketchUp (.skp) binary file parser.</description>
+    <tags>sketchup skp parser 3d glb gltf cad bim</tags>
+    <repository type="git" url="https://github.com/iamahsanmehmood/openskp.git" commit="8b256b6bbeab0ea010496fb72697cb2dffad7db5" />
+    <dependencies>
+      <group targetFramework=".NETStandard2.0" />
+    </dependencies>
+  </metadata>
+  <files>
+    <file src="e:\Devs\TEst\Skp Test\openskp\packages\dotnet\OpenSkp\bin\Release\netstandard2.0\OpenSkp.dll" target="lib\netstandard2.0\OpenSkp.dll" />
+  </files>
+</package>

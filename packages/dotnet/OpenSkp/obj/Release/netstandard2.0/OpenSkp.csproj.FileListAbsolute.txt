@@ -1,0 +1,11 @@
+e:\Devs\TEst\Skp Test\openskp\packages\dotnet\OpenSkp\bin\Release\netstandard2.0\OpenSkp.deps.json
+e:\Devs\TEst\Skp Test\openskp\packages\dotnet\OpenSkp\bin\Release\netstandard2.0\OpenSkp.dll
+e:\Devs\TEst\Skp Test\openskp\packages\dotnet\OpenSkp\bin\Release\netstandard2.0\OpenSkp.pdb
+e:\Devs\TEst\Skp Test\openskp\packages\dotnet\OpenSkp\obj\Release\netstandard2.0\OpenSkp.csproj.AssemblyReference.cache
+e:\Devs\TEst\Skp Test\openskp\packages\dotnet\OpenSkp\obj\Release\netstandard2.0\OpenSkp.GeneratedMSBuildEditorConfig.editorconfig
+e:\Devs\TEst\Skp Test\openskp\packages\dotnet\OpenSkp\obj\Release\netstandard2.0\OpenSkp.AssemblyInfoInputs.cache
+e:\Devs\TEst\Skp Test\openskp\packages\dotnet\OpenSkp\obj\Release\netstandard2.0\OpenSkp.AssemblyInfo.cs
+e:\Devs\TEst\Skp Test\openskp\packages\dotnet\OpenSkp\obj\Release\netstandard2.0\OpenSkp.csproj.CoreCompileInputs.cache
+e:\Devs\TEst\Skp Test\openskp\packages\dotnet\OpenSkp\obj\Release\netstandard2.0\OpenSkp.sourcelink.json
+e:\Devs\TEst\Skp Test\openskp\packages\dotnet\OpenSkp\obj\Release\netstandard2.0\OpenSkp.dll
+e:\Devs\TEst\Skp Test\openskp\packages\dotnet\OpenSkp\obj\Release\netstandard2.0\OpenSkp.pdb
