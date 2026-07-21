@@ -151,6 +151,11 @@ class Instance:
         layer: Layer name this instance belongs to.
         properties: Arbitrary key/value dynamic attributes.
         children: Nested child instances forming a subtree.
+        material_id: Numeric material ID painted onto the instance itself
+            (SketchUp's "paint the component"), or ``None``.  Faces inside
+            the placed definition whose own :attr:`Face.material_id` is
+            ``None`` inherit this material — consumers must resolve that
+            inheritance themselves, like the official SDK does on export.
     """
 
     name: str = ""
@@ -165,6 +170,7 @@ class Instance:
     layer: str = ""
     properties: Dict[str, str] = field(default_factory=dict)
     children: List["Instance"] = field(default_factory=list)
+    material_id: Optional[int] = None
 
 
 @dataclass
@@ -318,6 +324,7 @@ class SkpFile:
                     ref_idx=inst.get("ref_idx"),
                     guid=inst.get("ref_guid", ""),
                     matrix=inst.get("matrix", []),
+                    material_id=inst.get("material_id"),
                 ))
             model.definitions[def_id] = defn
 

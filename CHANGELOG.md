@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Python**: `Instance.material_id` — the material painted onto a component
+  instance itself (SketchUp's "paint the component", the same `D007`/`D107`
+  structure faces use). Faces with no material of their own inherit it;
+  consumers can now resolve that inheritance like the official SDK does.
+
 ## [0.2.0] — 2026-06-18
 
 ### Added

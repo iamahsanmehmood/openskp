@@ -282,12 +282,27 @@ def _extract_geometry_from_nodes(elements, builder):
                 for idx in range(13):
                     matrix.append(read_f64(mat_node['payload'], idx * 8))
 
+            # Instance-level material (SketchUp "paint the component"):
+            # same D007/D107 structure faces use. Faces whose own material
+            # is None inherit this — the SDK resolves that inheritance when
+            # exporting, so consumers need the raw value to do the same.
+            inst_mat_id = None
+            d007 = next((c for c in el['children'] if c['tag'] == 'D007'),
+                        None)
+            if d007:
+                d107 = next((c for c in d007['children']
+                             if c['tag'] == 'D107'), None)
+                if d107:
+                    inst_mat_id = parse_var_int(
+                        d107['payload'], 0, len(d107['payload']))
+
             builder.instances.append({
                 'offset': el['offset'],
                 'ref_guid': guid,
                 'ref_idx': def_idx,
                 'name': name,
                 'matrix': matrix,
+                'material_id': inst_mat_id,
                 'children': el['children']
             })
 
