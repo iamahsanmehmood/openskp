@@ -331,5 +331,36 @@ class TestSkpFile:
             SkpFile.open(str(fake))
 
 
+# ── UTF-8 entity name tests ──────────────────────────────────────────────
+
+
+class TestUtf8EntityNames:
+    """Entity names must decode as UTF-8, not ASCII-with-ignore.
+
+    SketchUp stores names UTF-8 encoded. Decoding them as ASCII and
+    *dropping* the non-ASCII bytes silently corrupts any accented name
+    ("cópia" → "cpia", "Diseño" → "Diseo") — and, worse, breaks the
+    material-name join between the TLV stream and the XML material files,
+    leaving those materials unresolvable.
+    """
+
+    @staticmethod
+    def _tlv(tag_hex: str, payload: bytes) -> bytes:
+        return bytes.fromhex(tag_hex) + struct.pack('<I', len(payload)) + payload
+
+    def test_instance_name_keeps_accents(self) -> None:
+        from openskp import _core
+
+        name = "Diseño de árbol".encode("utf-8")
+        node = self._tlv('6419', self._tlv('6519', name)
+                         + self._tlv('6719', b'\x05'))
+        elements = _core.parse_tlv_recursive(
+            node + self._tlv('0100', b'\x00'), 0, len(node) + 7)
+        builder = _core._GeometryBuilder()
+        _core._extract_geometry_from_nodes(elements, builder)
+
+        assert builder.instances[0]['name'] == "Diseño de árbol"
+
+
 # Need pathlib for tmp_path fixture
 import pathlib

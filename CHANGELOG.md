@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Python**: entity names (materials, layers, definitions, instances,
+  dynamic properties) now decode as **UTF-8** instead of ASCII-with-ignore.
+  Dropping the non-ASCII bytes silently corrupted any accented name
+  ("cópia" → "cpia", "Diseño" → "Diseo") and — critically — broke the
+  material-name join between the TLV stream and the XML material files,
+  leaving those materials unresolvable from geometry.
+
 ## [0.2.0] — 2026-06-18
 
 ### Added
