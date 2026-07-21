@@ -44,6 +44,11 @@ CONTAINER_TAGS = {
     'F901', '7017', '7117', 'D007', 'C409', '9411', '9511', '0F01',
     '384A', 'B80B', '9713', '2C4C', 'AC0D', 'AE0D', 'F601', 'F801',
     '983A', '993A', '8C3C', '8D3C',
+    # Image-entity placement: an Image placed in the model wraps a standard
+    # 6419 instance node inside 9013 -> 401F. Without these two containers,
+    # that inner instance stays buried in an opaque payload and the image
+    # definition looks "never placed".
+    '9013', '401F',
 }
 
 def parse_tlv_recursive(data, start, end, container_tags=None, depth=0):
@@ -498,15 +503,23 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
             if el['tag'] == '7C15':
                 guid = None
                 name = None
+                is_image = False
                 for child in el['children']:
                     if child['tag'] == '7D15' and len(child['payload']) == 16:
                         guid = child['payload'].hex().upper()
                     elif child['tag'] == '7E15':
                         name = child['payload'].decode('ascii', errors='ignore')
+                    elif child['tag'] == '8315' and child['payload']:
+                        # Definition kind: observed 0/1 for ordinary
+                        # component/group definitions, 2 for the quad
+                        # definition backing an Image entity.
+                        is_image = parse_var_int(
+                            child['payload'], 0, len(child['payload'])) == 2
                 ent_id = extract_entity_id(el)
                 builder = _GeometryBuilder()
                 _extract_geometry_from_nodes(el['children'], builder)
-                defs_dict[ent_id] = {'guid': guid, 'name': name, 'builder': builder}
+                defs_dict[ent_id] = {'guid': guid, 'name': name,
+                                     'is_image': is_image, 'builder': builder}
             collect_defs(el['children'])
     collect_defs(elements)
 

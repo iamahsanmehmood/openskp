@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Python**: Image entities — a picture placed in the model as an object
+  now parses: its placement wraps a standard instance node inside the
+  image-specific `9013`/`401F` containers (previously opaque, so the image
+  definition looked "never placed"), and `Definition.is_image` flags the
+  single-quad definition backing it (TLV kind `8315 == 2`). Real-world
+  case: photo cut-out statues/animals placed as images imported with no
+  geometry at all.
+
 ## [0.2.0] — 2026-06-18
 
 ### Added

@@ -179,6 +179,11 @@ class Definition:
         edges: Mapping of edge ID → :class:`Edge`.
         faces: Mapping of face ID → :class:`Face`.
         instances: Child instances placed inside this definition.
+        is_image: ``True`` when this definition backs an *Image entity* (a
+            picture placed in the model as an object): a single textured
+            quad, placed through an image-specific wrapper node. Useful for
+            consumers that give images special treatment (e.g. billboard
+            cut-outs).
     """
 
     id: int = 0
@@ -188,6 +193,7 @@ class Definition:
     edges: Dict[int, Edge] = field(default_factory=dict)
     faces: Dict[int, Face] = field(default_factory=dict)
     instances: List[Instance] = field(default_factory=list)
+    is_image: bool = False
 
 
 # ── Top-level model ──────────────────────────────────────────────────────
@@ -296,6 +302,7 @@ class SkpFile:
                 id=def_id if isinstance(def_id, int) else 0,
                 guid=d.get("guid", ""),
                 name=d.get("name", "") or "",
+                is_image=d.get("is_image", False),
             )
             # Populate vertices
             for v_id, (x, y, z) in builder.vertices.items():
