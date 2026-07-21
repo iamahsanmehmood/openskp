@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Python**: styles — `SkpModel.styles` (`Style`: name, `front_color`,
+  `back_color` RGB) parsed from `styles/*/style.xml` (signed-int32 ARGB
+  items 4000/4001). Viewers need them to shade unpainted faces the way
+  SketchUp does.
+
 ## [0.2.0] — 2026-06-18
 
 ### Added

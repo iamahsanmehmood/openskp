@@ -331,5 +331,44 @@ class TestSkpFile:
             SkpFile.open(str(fake))
 
 
+# ── Style tests ──────────────────────────────────────────────────────────
+
+
+class TestStyles:
+    """Face colors from styles/*/style.xml (items 4000 front / 4001 back)."""
+
+    def test_style_colors_via_synthetic_skp(self, tmp_path: pathlib.Path) -> None:
+        import io
+        import struct as _struct
+        import zipfile
+        from openskp.model import SkpFile
+
+        style_xml = b"""<?xml version="1.0"?>
+<styleDocument xmlns="http://sketchup.google.com/schemas/sketchup/1.0/style"
+               xmlns:sty="http://sketchup.google.com/schemas/sketchup/1.0/style">
+  <sty:style xmlns:t="http://sketchup.google.com/schemas/1.0/types" name="Verde">
+    <sty:item id="4000"><t:variant type="4">-3552052</t:variant></sty:item>
+    <sty:item id="4001"><t:variant type="4">-3093050</t:variant></sty:item>
+  </sty:style>
+</styleDocument>
+"""
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr("model.dat", b"")
+            zf.writestr("styles/Verde/style.xml", style_xml)
+        path = tmp_path / "s.skp"
+        path.write_bytes(b"\xFF\xFE\xFF\x0E" + b"\x00" * 28 + buf.getvalue())
+
+        model = SkpFile.open(str(path)).parse()
+        assert len(model.styles) == 1
+        st = model.styles[0]
+        assert st.name == "Verde"
+        # -3552052 -> 0xFFC9CCCC-ish ARGB: decode matches int32 & 0xFFFFFF
+        v = (-3552052) & 0xFFFFFFFF
+        assert st.front_color == ((v >> 16) & 255, (v >> 8) & 255, v & 255)
+        v2 = (-3093050) & 0xFFFFFFFF
+        assert st.back_color == ((v2 >> 16) & 255, (v2 >> 8) & 255, v2 & 255)
+
+
 # Need pathlib for tmp_path fixture
 import pathlib

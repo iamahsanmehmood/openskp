@@ -119,6 +119,24 @@ class Layer:
 
 
 @dataclass
+class Style:
+    """A rendering style bundled in the file (SketchUp's Styles browser).
+
+    Attributes:
+        name: Style name.
+        front_color: Default front face color ``(r, g, b)`` 0-255, or
+            ``None``. Unpainted faces show it.
+        back_color: Back face color ``(r, g, b)`` 0-255, or ``None``.
+            Unpainted faces seen from behind show it — an author may e.g.
+            pick a green back color so unpainted garden faces read as grass.
+    """
+
+    name: str = ""
+    front_color: Optional[Tuple[int, int, int]] = None
+    back_color: Optional[Tuple[int, int, int]] = None
+
+
+@dataclass
 class Material:
     """A surface material.
 
@@ -213,6 +231,7 @@ class SkpModel:
     layers: List[Layer] = field(default_factory=list)
     materials: List[Material] = field(default_factory=list)
     scene_hierarchy: List[Instance] = field(default_factory=list)
+    styles: List[Style] = field(default_factory=list)
     mesh_index: Dict[int, Any] = field(default_factory=dict)
 
 
@@ -332,6 +351,14 @@ class SkpFile:
                 name=mat_data.get("name", ""),
                 color=(c.get("r", 128), c.get("g", 128), c.get("b", 128)),
                 transparency=mat_data.get("transparency", 0.5),
+            ))
+
+        # Convert styles
+        for st in parsed.get("styles", []):
+            model.styles.append(Style(
+                name=st.get("name", ""),
+                front_color=st.get("front_color"),
+                back_color=st.get("back_color"),
             ))
 
         # Store raw parsed data for export use
