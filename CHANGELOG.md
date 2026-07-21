@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Python**: `Definition.always_faces_camera` — SketchUp's "always face
+  camera" component behavior (2D people / tree cut-outs), decoded from the
+  definition's behavior block (`581B` → sub-TLV `5D1B == 1`; its companion
+  `5E1B` is "shadows face sun"). Consumers can now render such instances
+  as billboards, like SketchUp does.
+
 ## [0.2.0] — 2026-06-18
 
 ### Added

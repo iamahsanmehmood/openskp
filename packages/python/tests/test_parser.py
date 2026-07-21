@@ -331,5 +331,58 @@ class TestSkpFile:
             SkpFile.open(str(fake))
 
 
+# ── Face-camera behavior tests ───────────────────────────────────────────
+
+
+class TestFaceCameraBehavior:
+    """Component behavior flag 5D1B inside the definition's 581B block marks
+    SketchUp's "always face camera" (2D people / tree cut-outs)."""
+
+    @staticmethod
+    def _tlv(tag_hex: str, payload: bytes) -> bytes:
+        return bytes.fromhex(tag_hex) + struct.pack('<I', len(payload)) + payload
+
+    def _def_node(self, flags: bytes) -> bytes:
+        t = self._tlv
+        return t('7C15', t('7E15', b'Susan') + t('581B', flags))
+
+    def test_flag_set(self) -> None:
+        from openskp import _core
+
+        t = self._tlv
+        flags = t('5B1B', b'\x00') + t('5D1B', b'\x01') + t('5E1B', b'\x01')
+        node = self._def_node(flags)
+        elements = _core.parse_tlv_recursive(
+            node + t('0100', b'\x00'), 0, len(node) + 7)
+        # run the def-collection path via full parse plumbing: emulate by
+        # scanning like collect_defs does — simplest is a synthetic file, but
+        # the flag logic is inline; exercise it through a minimal .skp below.
+        assert elements[0]['tag'] == '7C15'
+
+    def test_flag_via_synthetic_skp(self, tmp_path: pathlib.Path) -> None:
+        import io
+        import zipfile
+        from openskp.model import SkpFile
+
+        t = self._tlv
+        on = t('7C15', (t('7D15', b'\x11' * 16) + t('7E15', b'Susan')
+                        + t('581B', t('5D1B', b'\x01'))
+                        + t('DC05', t('DE05', b'\x05'))))
+        off = t('7C15', (t('7D15', b'\x22' * 16) + t('7E15', b'Silla')
+                         + t('581B', t('5D1B', b'\x00'))
+                         + t('DC05', t('DE05', b'\x06'))))
+        model_dat = t('F901', t('7017', t('7117', on + off)))
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, 'w') as zf:
+            zf.writestr('model.dat', model_dat)
+        path = tmp_path / 's.skp'
+        path.write_bytes(b'\xFF\xFE\xFF\x0E' + b'\x00' * 28 + buf.getvalue())
+
+        model = SkpFile.open(str(path)).parse()
+        by_name = {d.name: d for d in model.definitions.values()}
+        assert by_name['Susan'].always_faces_camera is True
+        assert by_name['Silla'].always_faces_camera is False
+
+
 # Need pathlib for tmp_path fixture
 import pathlib

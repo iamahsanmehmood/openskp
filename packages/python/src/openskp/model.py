@@ -179,6 +179,10 @@ class Definition:
         edges: Mapping of edge ID → :class:`Edge`.
         faces: Mapping of face ID → :class:`Face`.
         instances: Child instances placed inside this definition.
+        always_faces_camera: SketchUp's "always face camera" component
+            behavior (2D people / tree cut-outs that rotate to face the
+            viewer). Consumers typically render such instances as
+            billboards.
     """
 
     id: int = 0
@@ -188,6 +192,7 @@ class Definition:
     edges: Dict[int, Edge] = field(default_factory=dict)
     faces: Dict[int, Face] = field(default_factory=dict)
     instances: List[Instance] = field(default_factory=list)
+    always_faces_camera: bool = False
 
 
 # ── Top-level model ──────────────────────────────────────────────────────
@@ -296,6 +301,7 @@ class SkpFile:
                 id=def_id if isinstance(def_id, int) else 0,
                 guid=d.get("guid", ""),
                 name=d.get("name", "") or "",
+                always_faces_camera=d.get("always_faces_camera", False),
             )
             # Populate vertices
             for v_id, (x, y, z) in builder.vertices.items():
