@@ -90,12 +90,31 @@ class Face:
             ``(edge_id, orientation)`` tuples where *orientation* is
             ``1`` for forward or ``-1`` for reversed.
         normal: Optional outward-facing normal vector ``(nx, ny, nz)``.
+        uv_transform: Per-face texture mapping for a *positioned* /
+            photo-fitted texture (SketchUp's pins), or ``None`` when the
+            texture is untouched (default projection applies).  A 9-tuple:
+            a 3×3 **row-major** matrix mapping texture space → face plane.
+            To compute the UV of a point ``p`` (inches):
+
+            1. Plane basis from the face normal ``n``:
+               ``xr = normalize(Z × n)``, ``yr = n × xr`` (for a vertical
+               ``n``: ``xr = X``, ``yr = ±Y`` by the sign of ``n``·Z).
+            2. ``uvq = [p·xr, p·yr, 1] @ inv(M)``  (row-vector convention).
+            3. ``u = uvq[0]/uvq[2] / tile_w``, ``v = uvq[1]/uvq[2] / tile_h``
+               with the material texture's tile size in inches.
+
+            When the texture is untouched (``None``), the default is
+            ``u = (p·xr)/tile_w``, ``v = (p·yr)/tile_h``.  Distorted
+            (4-pin) mappings are projective: ``uvq[2]`` ≠ 1.
+        uv_transform_back: Same for the face's back side, or ``None``.
     """
 
     id: int
     loops: List[List[Tuple[int, int]]] = field(default_factory=list)
     normal: Optional[Tuple[float, float, float]] = None
     material_id: Optional[int] = None
+    uv_transform: Optional[Tuple[float, ...]] = None
+    uv_transform_back: Optional[Tuple[float, ...]] = None
 
 
 # ── Layers & Materials ────────────────────────────────────────────────────
@@ -310,6 +329,8 @@ class SkpFile:
                     loops=f_data.get("loops", []),
                     normal=f_data.get("normal"),
                     material_id=f_data.get("material_id"),
+                    uv_transform=f_data.get("uv_transform"),
+                    uv_transform_back=f_data.get("uv_transform_back"),
                 )
             # Populate instances
             for inst in builder.instances:

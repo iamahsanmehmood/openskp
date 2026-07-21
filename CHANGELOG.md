@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Python**: per-face texture mapping — `Face.uv_transform` /
+  `uv_transform_back` (the 3×3 matrix a positioned / photo-fitted texture
+  stores per face; SketchUp's texture pins). Includes the decoded recipe to
+  turn it into UVs (plane basis from the normal, then
+  `[x, y, 1] @ inv(M) / tile`), calibrated against SDK-exported ground
+  truth to < 0.001 UV error, including projective (4-pin distorted)
+  mappings.
+
 ## [0.2.0] — 2026-06-18
 
 ### Added

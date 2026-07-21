@@ -331,5 +331,78 @@ class TestSkpFile:
             SkpFile.open(str(fake))
 
 
+# ── Per-face UV transform tests ──────────────────────────────────────────
+
+
+class TestFaceUvTransform:
+    """Tests for positioned-texture mapping extraction (``Face.uv_transform``)."""
+
+    ROT90 = (0.0, 1.0, 0.0, -1.0, 0.0, 0.0, 96.0, -96.0, 1.0)
+
+    @staticmethod
+    def _tlv(tag_hex: str, payload: bytes) -> bytes:
+        return bytes.fromhex(tag_hex) + struct.pack('<I', len(payload)) + payload
+
+    def _dc05(self, front=None, back=None) -> bytes:
+        t = self._tlv
+        def side(tag, mat):
+            m1527 = t('1527', struct.pack('<9d', *mat))
+            return t(tag, t('1327', t('1427', b'\x01') + m1527))
+        inner = b''
+        if front is not None:
+            inner += side('1127', front)
+        if back is not None:
+            inner += side('1227', back)
+        t1027 = t('1027', inner)
+        return (t('DE05', b'\x2A')
+                + t('DD05', t('B136', t('B236', t1027))))
+
+    def test_extracts_front_matrix(self) -> None:
+        from openskp._core import _extract_uv_transforms
+
+        front, back = _extract_uv_transforms(self._dc05(front=self.ROT90))
+        assert front == pytest.approx(self.ROT90)
+        assert back is None
+
+    def test_extracts_both_sides(self) -> None:
+        from openskp._core import _extract_uv_transforms
+
+        other = tuple(v * 2 for v in self.ROT90)
+        front, back = _extract_uv_transforms(
+            self._dc05(front=self.ROT90, back=other))
+        assert front == pytest.approx(self.ROT90)
+        assert back == pytest.approx(other)
+
+    def test_untouched_texture_has_no_transform(self) -> None:
+        from openskp._core import _extract_uv_transforms
+        from openskp.model import Face
+
+        t = self._tlv
+        plain = t('DE05', b'\x2A')      # entity id only, no DD05 block
+        assert _extract_uv_transforms(plain) == (None, None)
+        assert Face(id=0).uv_transform is None
+        assert Face(id=0).uv_transform_back is None
+
+    def test_recipe_reproduces_known_uvs(self) -> None:
+        # Ground truth from a controlled SketchUp file: a 1x1 m square on the
+        # ground with the texture rotated 90 deg (48x48 in tile). The stored
+        # matrix maps texture->plane; UV = [x, y, 1] @ inv(M) / tile.
+        import numpy as np
+
+        m = np.array(self.ROT90).reshape(3, 3)
+        minv = np.linalg.inv(m)
+        tile = 48.0
+        for (x, y), (u_t, v_t) in [
+            ((82.64, 0.0), (2.0, 0.2784)),
+            ((122.01, 0.0), (2.0, -0.5418)),
+            ((82.64, 39.37), (2.8202, 0.2784)),
+        ]:
+            uvq = np.array([x, y, 1.0]) @ minv
+            u = uvq[0] / uvq[2] / tile
+            v = uvq[1] / uvq[2] / tile
+            assert u == pytest.approx(u_t, abs=2e-3)
+            assert v == pytest.approx(v_t, abs=2e-3)
+
+
 # Need pathlib for tmp_path fixture
 import pathlib

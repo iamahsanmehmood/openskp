@@ -193,6 +193,66 @@ def extract_entity_id(node):
     return None
 
 
+def _tlv_flat(payload):
+    """Walk a raw payload as a flat TLV sequence; returns [(tag_hex, body)]."""
+    pos = 0
+    out = []
+    while pos <= len(payload) - 6:
+        tag = payload[pos:pos+2].hex().upper()
+        size = read_u32(payload, pos+2)
+        if pos + 6 + size > len(payload):
+            break
+        out.append((tag, payload[pos+6:pos+6+size]))
+        pos += 6 + size
+    return out
+
+
+def _extract_uv_transforms(dc05_payload):
+    """Per-face texture-mapping matrices from a face's DC05 entity-info blob.
+
+    A positioned / photo-fitted texture stores its mapping per face under
+    ``DC05 -> DD05 -> B136 -> B236 -> 1027 -> 1127 (front) / 1227 (back)
+    -> 1327 -> 1527``: a 3x3 row-major matrix of f64 that maps
+    **texture space -> face plane**; consumers invert it to get UVs
+    (see the ``Face.uv_transform`` docs in model.py for the exact recipe).
+
+    Returns:
+        ``(front, back)`` — each a 9-tuple of floats, or ``None`` when the
+        face carries no positioned mapping on that side.
+    """
+    def _find(seq, tag):
+        for t, body in seq:
+            if t == tag:
+                return body
+        return None
+
+    dd05 = _find(_tlv_flat(dc05_payload), 'DD05')
+    if dd05 is None:
+        return None, None
+    b136 = _find(_tlv_flat(dd05), 'B136')
+    if b136 is None:
+        return None, None
+    b236 = _find(_tlv_flat(b136), 'B236')
+    if b236 is None:
+        return None, None
+    t1027 = _find(_tlv_flat(b236), '1027')
+    if t1027 is None:
+        return None, None
+    sides = _tlv_flat(t1027)
+    result = []
+    for side_tag in ('1127', '1227'):
+        side = _find(sides, side_tag)
+        mat = None
+        if side is not None:
+            t1327 = _find(_tlv_flat(side), '1327')
+            if t1327 is not None:
+                t1527 = _find(_tlv_flat(t1327), '1527')
+                if t1527 is not None and len(t1527) == 72:
+                    mat = struct.unpack('<9d', t1527)
+        result.append(mat)
+    return result[0], result[1]
+
+
 def _extract_geometry_from_nodes(elements, builder):
     for el in elements:
         tag = el['tag']
@@ -255,12 +315,19 @@ def _extract_geometry_from_nodes(elements, builder):
                         if co_edges:
                             loops.append(co_edges)
                 face_mat_id = None
+                uv_front = uv_back = None
                 d007 = next((c for c in el['children'] if c['tag'] == 'D007'), None)
                 if d007:
                     d107 = next((c for c in d007['children'] if c['tag'] == 'D107'), None)
                     if d107:
                         face_mat_id = parse_var_int(d107['payload'], 0, len(d107['payload']))
-                builder.faces[f_id] = {'loops': loops, 'normal': normal, 'material_id': face_mat_id}
+                    dc05 = next((c for c in d007['children'] if c['tag'] == 'DC05'), None)
+                    if dc05 is not None:
+                        uv_front, uv_back = _extract_uv_transforms(dc05['payload'])
+                builder.faces[f_id] = {'loops': loops, 'normal': normal,
+                                       'material_id': face_mat_id,
+                                       'uv_transform': uv_front,
+                                       'uv_transform_back': uv_back}
 
         elif tag == '6419':
             nodes_to_search = el['children'] if el['children'] else [el]
