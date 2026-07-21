@@ -331,5 +331,102 @@ class TestSkpFile:
             SkpFile.open(str(fake))
 
 
+# ── Texture extraction tests ─────────────────────────────────────────────
+
+
+_MATERIAL_XML_TEXTURED = b"""<?xml version="1.0" encoding="UTF-8"?>
+<materialDocument xmlns="http://sketchup.google.com/schemas/sketchup/1.0/material"
+                  xmlns:mat="http://sketchup.google.com/schemas/sketchup/1.0/material">
+  <mat:material name="%s" type="1" colorRed="10" colorGreen="20"
+                colorBlue="30" trans="1" hasTexture="1">
+    <mat:texture textureFilename="%s" xScale="24" yScale="12"/>
+  </mat:material>
+</materialDocument>
+"""
+
+_MATERIAL_XML_PLAIN = b"""<?xml version="1.0" encoding="UTF-8"?>
+<materialDocument xmlns="http://sketchup.google.com/schemas/sketchup/1.0/material"
+                  xmlns:mat="http://sketchup.google.com/schemas/sketchup/1.0/material">
+  <mat:material name="Plain" type="0" colorRed="1" colorGreen="2"
+                colorBlue="3" trans="1" hasTexture="0"/>
+</materialDocument>
+"""
+
+
+def _write_synthetic_skp(tmp_path: "pathlib.Path",
+                         entries: dict) -> "pathlib.Path":
+    """Build a minimal ``.skp``: the UTF-16 header marker followed by an
+    embedded ZIP with ``model.dat`` plus *entries*."""
+    import io
+    import zipfile
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("model.dat", b"")
+        for name, data in entries.items():
+            zf.writestr(name, data)
+    path = tmp_path / "synthetic.skp"
+    path.write_bytes(b"\xFF\xFE\xFF\x0E" + b"\x00" * 28 + buf.getvalue())
+    return path
+
+
+class TestTextureExtraction:
+    """Tests for material texture extraction (``Material.texture``)."""
+
+    def test_texture_dataclass_save(self, tmp_path: "pathlib.Path") -> None:
+        from openskp.model import Texture
+
+        tex = Texture(filename="wood.jpg", width=24.0, height=12.0,
+                      data=b"\xff\xd8fakejpeg")
+        out = tex.save(tmp_path / "out.jpg")
+        assert out.read_bytes() == b"\xff\xd8fakejpeg"
+
+    def test_texture_save_without_data_raises(self) -> None:
+        from openskp.model import Texture
+
+        with pytest.raises(ValueError, match="no image data"):
+            Texture(filename="missing.jpg").save("/tmp/never-written.jpg")
+
+    def test_textured_material_roundtrip(self, tmp_path: "pathlib.Path") -> None:
+        from openskp.model import SkpFile
+
+        jpeg = b"\xff\xd8syntheticjpegbytes"
+        skp = _write_synthetic_skp(tmp_path, {
+            "materials/Wood/material.xml":
+                _MATERIAL_XML_TEXTURED % (b"Wood", b"wood.jpg"),
+            "materials/Wood/wood.jpg": jpeg,
+            "materials/Plain/material.xml": _MATERIAL_XML_PLAIN,
+        })
+        model = SkpFile.open(str(skp)).parse()
+
+        by_name = {m.name: m for m in model.materials}
+        wood = by_name["Wood"]
+        assert wood.texture is not None
+        assert wood.texture.filename == "wood.jpg"
+        assert wood.texture.width == 24.0    # inches, from xScale
+        assert wood.texture.height == 12.0
+        assert wood.texture.data == jpeg
+        assert by_name["Plain"].texture is None
+
+    def test_image_name_mismatch_falls_back_to_sibling(
+        self, tmp_path: "pathlib.Path"
+    ) -> None:
+        # Observed in real files: the XML says "..._Safety.jpg" while the
+        # stored image is "..._Saftey.jpg" — the folder sibling must win.
+        from openskp.model import SkpFile
+
+        jpeg = b"\xff\xd8siblingbytes"
+        skp = _write_synthetic_skp(tmp_path, {
+            "materials/Glass/material.xml":
+                _MATERIAL_XML_TEXTURED % (b"Glass", b"glass_safety.jpg"),
+            "materials/Glass/glass_saftey.jpg": jpeg,
+        })
+        model = SkpFile.open(str(skp)).parse()
+
+        glass = {m.name: m for m in model.materials}["Glass"]
+        assert glass.texture is not None
+        assert glass.texture.data == jpeg
+
+
 # Need pathlib for tmp_path fixture
 import pathlib

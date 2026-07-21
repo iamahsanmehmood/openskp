@@ -362,6 +362,60 @@ def extract_dynamic_properties(d007):
     return properties
 
 
+# ── Texture extraction ───────────────────────────────────────────────────
+
+def _extract_texture(zf, xml_name, mat_elem, ns):
+    """Extract a material's texture from its ``<mat:texture>`` block.
+
+    SketchUp stores the texture image next to the ``material.xml`` inside the
+    ZIP (``materials/<folder>/<image>``), and the real-world tile size in the
+    ``xScale`` / ``yScale`` attributes (inches).
+
+    Args:
+        zf: The open ZIP file.
+        xml_name: Archive name of the ``material.xml`` being parsed.
+        mat_elem: Its ``<mat:material>`` element.
+        ns: Namespace map for the material schema.
+
+    Returns:
+        Dict with keys ``filename``, ``x_scale``, ``y_scale`` (inches, 0.0
+        when absent) and ``data`` (raw image bytes, or ``None`` when the
+        image entry is missing) — or ``None`` when the material carries no
+        texture.
+    """
+    tex_elem = mat_elem.find('mat:texture', ns)
+    if tex_elem is None:
+        return None
+    filename = tex_elem.get('textureFilename', '') or ''
+    try:
+        x_scale = float(tex_elem.get('xScale', 0) or 0)
+    except ValueError:
+        x_scale = 0.0
+    try:
+        y_scale = float(tex_elem.get('yScale', 0) or 0)
+    except ValueError:
+        y_scale = 0.0
+
+    folder = xml_name.rsplit('/', 1)[0]
+    data = None
+    candidate = folder + '/' + filename if filename else None
+    names = zf.namelist()
+    if candidate and candidate in names:
+        data = zf.read(candidate)
+    else:
+        # Image name may differ from textureFilename (observed: e.g.
+        # "Saftey" vs "Safety") — take the folder's non-XML sibling.
+        for entry in names:
+            if (entry.startswith(folder + '/') and entry != xml_name
+                    and not entry.lower().endswith('.xml')):
+                data = zf.read(entry)
+                if not filename:
+                    filename = entry.rsplit('/', 1)[-1]
+                break
+    return {'filename': filename, 'x_scale': x_scale, 'y_scale': y_scale,
+            'data': data}
+
+
 # ── Full parse pipeline ──────────────────────────────────────────────────
 
 def full_parse(skp_path: str) -> Dict[str, Any]:
@@ -425,6 +479,9 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
                     trans = float(mat_elem.get('trans', 0.5))
                     folder_name = name.split('/')[1] if len(name.split('/')) > 1 else ''
                     mat_obj = {'name': mat_name, 'color': {'r': r, 'g': g, 'b': b}, 'transparency': trans}
+                    tex = _extract_texture(zf, name, mat_elem, MAT_NS)
+                    if tex is not None:
+                        mat_obj['texture'] = tex
                     materials[mat_name] = mat_obj
                     if folder_name:
                         materials_by_folder[folder_name] = mat_obj

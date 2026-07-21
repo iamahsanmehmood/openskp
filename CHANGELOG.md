@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Python**: texture extraction — `Material.texture` (`Texture` dataclass:
+  `filename`, tile `width`/`height` in inches, raw image `data` bytes,
+  `save()` helper). Images are read from the material's folder inside the
+  embedded ZIP, with a sibling fallback when the stored image name differs
+  from `textureFilename`.
+
 ## [0.2.0] — 2026-06-18
 
 ### Added

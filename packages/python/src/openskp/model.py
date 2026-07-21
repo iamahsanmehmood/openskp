@@ -119,6 +119,41 @@ class Layer:
 
 
 @dataclass
+class Texture:
+    """A material's texture image, extracted from the SKP container.
+
+    SketchUp stores the image next to the material's XML inside the embedded
+    ZIP, and the real-world tile size (how many inches one repetition of the
+    image covers) in the material definition.
+
+    Attributes:
+        filename: Image file name as referenced by the material.
+        width: Tile width in **inches** (SketchUp's internal unit); ``0.0``
+            when the file does not specify it.
+        height: Tile height in inches; ``0.0`` when unspecified.
+        data: Raw image bytes (PNG/JPG as stored), or ``None`` when the
+            image entry was missing from the container.
+    """
+
+    filename: str = ""
+    width: float = 0.0
+    height: float = 0.0
+    data: Optional[bytes] = None
+
+    def save(self, filepath: str | pathlib.Path) -> pathlib.Path:
+        """Write the image bytes to *filepath* and return the path.
+
+        Raises:
+            ValueError: If the texture carries no image data.
+        """
+        if self.data is None:
+            raise ValueError(f"Texture {self.filename!r} has no image data")
+        p = pathlib.Path(filepath)
+        p.write_bytes(self.data)
+        return p
+
+
+@dataclass
 class Material:
     """A surface material.
 
@@ -127,11 +162,14 @@ class Material:
         color: RGBA colour tuple ``(r, g, b, a)`` with each value in 0–255.
         transparency: Opacity factor where ``0.0`` is fully transparent and
             ``1.0`` is fully opaque.
+        texture: The material's :class:`Texture`, or ``None`` for a plain
+            colour material.
     """
 
     name: str
     color: Tuple[int, int, int, int] = (200, 200, 200, 255)
     transparency: float = 1.0
+    texture: Optional[Texture] = None
 
 
 # ── Component hierarchy ───────────────────────────────────────────────────
@@ -328,10 +366,20 @@ class SkpFile:
         # Convert materials
         for mat_data in parsed["materials"].values():
             c = mat_data.get("color", {})
+            tex_data = mat_data.get("texture")
+            texture = None
+            if tex_data is not None:
+                texture = Texture(
+                    filename=tex_data.get("filename", ""),
+                    width=tex_data.get("x_scale", 0.0),
+                    height=tex_data.get("y_scale", 0.0),
+                    data=tex_data.get("data"),
+                )
             model.materials.append(Material(
                 name=mat_data.get("name", ""),
                 color=(c.get("r", 128), c.get("g", 128), c.get("b", 128)),
                 transparency=mat_data.get("transparency", 0.5),
+                texture=texture,
             ))
 
         # Store raw parsed data for export use
