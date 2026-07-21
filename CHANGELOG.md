@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Python**: `Material.id` and `SkpModel.materials_by_id` — expose the TLV
+  material IDs that `Face.material_id` references, so callers can resolve a
+  face's material (colour/transparency) from the public API. Previously the
+  join existed only inside the internal exporter.
+
 ## [0.2.0] — 2026-06-18
 
 ### Added

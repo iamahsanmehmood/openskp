@@ -331,5 +331,88 @@ class TestSkpFile:
             SkpFile.open(str(fake))
 
 
+class TestMaterialIdJoin:
+    """Tests for the ``Face.material_id`` → :class:`Material` join that
+    :meth:`SkpFile.parse` exposes (``Material.id`` +
+    ``SkpModel.materials_by_id``).
+
+    ``full_parse`` is stubbed out, so no real ``.skp`` file is needed.
+    """
+
+    @staticmethod
+    def _parse_with(monkeypatch, tmp_path: pathlib.Path, parsed: dict):
+        import openskp._core as _core
+        from openskp.model import SkpFile
+
+        monkeypatch.setattr(_core, "full_parse", lambda path: parsed)
+        fake = tmp_path / "model.skp"
+        fake.write_bytes(b"")
+        return SkpFile.open(str(fake)).parse()
+
+    def test_material_id_defaults_to_none(self) -> None:
+        from openskp.model import Material
+
+        assert Material(name="Wood").id is None
+
+    def test_face_material_resolves_through_materials_by_id(
+        self, monkeypatch, tmp_path: pathlib.Path
+    ) -> None:
+        parsed = {
+            "version": "test",
+            "defs_dict": {},
+            "layer_colors": {},
+            "materials": {
+                "Wood": {"name": "Wood",
+                         "color": {"r": 10, "g": 20, "b": 30},
+                         "transparency": 1.0},
+            },
+            "materials_by_folder": {},
+            "material_id_to_name": {29491: "Wood"},
+        }
+        model = self._parse_with(monkeypatch, tmp_path, parsed)
+
+        assert model.materials[0].id == 29491
+        mat = model.materials_by_id[29491]
+        assert mat is model.materials[0]
+        assert mat.color == (10, 20, 30)
+
+    def test_folder_alias_resolves_to_same_material(
+        self, monkeypatch, tmp_path: pathlib.Path
+    ) -> None:
+        # The TLV name may match the ZIP folder rather than the XML name —
+        # the same name-then-folder fallback the internal exporter uses.
+        wood = {"name": "Wood", "color": {"r": 1, "g": 2, "b": 3},
+                "transparency": 1.0}
+        parsed = {
+            "version": "test",
+            "defs_dict": {},
+            "layer_colors": {},
+            "materials": {"Wood": wood},
+            "materials_by_folder": {"m0": wood},
+            "material_id_to_name": {7: "Wood", 8: "m0"},
+        }
+        model = self._parse_with(monkeypatch, tmp_path, parsed)
+
+        assert len(model.materials) == 1
+        assert model.materials_by_id[7] is model.materials_by_id[8]
+        # The first ID seen sticks as the Material's own id; both resolve.
+        assert model.materials[0].id in (7, 8)
+
+    def test_unresolvable_id_is_skipped(
+        self, monkeypatch, tmp_path: pathlib.Path
+    ) -> None:
+        parsed = {
+            "version": "test",
+            "defs_dict": {},
+            "layer_colors": {},
+            "materials": {},
+            "materials_by_folder": {},
+            "material_id_to_name": {99: "Ghost"},
+        }
+        model = self._parse_with(monkeypatch, tmp_path, parsed)
+
+        assert model.materials_by_id == {}
+
+
 # Need pathlib for tmp_path fixture
 import pathlib
