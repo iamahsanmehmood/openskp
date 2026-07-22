@@ -333,3 +333,63 @@ class TestSkpFile:
 
 # Need pathlib for tmp_path fixture
 import pathlib
+
+
+# ── Legacy (classic MFC) container tests ─────────────────────────────────
+
+
+class TestLegacyDetection:
+    """Tests for :func:`openskp.legacy.is_legacy`."""
+
+    def test_classic_header_detected(self) -> None:
+        from openskp.legacy import is_legacy
+
+        data = (b"\xFF\xFE\xFF\x0E" + "SketchUp Model".encode("utf-16-le")
+                + b"\xFF\xFE\xFF\x0C" + "{16.0.19912}".encode("utf-16-le")
+                + b"\x00" * 0x20 + b"\xFF\xFF\x00\x00\x0B\x00CVersionMap")
+        assert is_legacy(data) is True
+
+    def test_vff_zip_not_legacy(self) -> None:
+        from openskp.legacy import is_legacy
+
+        data = (b"\xFF\xFE\xFF\x0E" + "SketchUp Model".encode("utf-16-le")
+                + b"\xFF\xFE\xFF\x08" + "{26.2.0}".encode("utf-16-le")
+                + b"VFF\x08" + b"PK\x03\x04" + b"\x00" * 64)
+        assert is_legacy(data) is False
+
+    def test_random_bytes_not_legacy(self) -> None:
+        from openskp.legacy import is_legacy
+
+        assert is_legacy(b"\x00" * 64) is False
+
+
+class TestLegacyStrings:
+    """Tests for the MFC string records (:class:`openskp.legacy._R`)."""
+
+    def test_short_string(self) -> None:
+        from openskp.legacy import _R
+
+        r = _R(b"\xFF\xFE\xFF\x04" + "Casa".encode("utf-16-le"))
+        assert r.utf16() == "Casa"
+
+    def test_empty_string(self) -> None:
+        from openskp.legacy import _R
+
+        r = _R(b"\xFF\xFE\xFF\x00")
+        assert r.utf16() == ""
+
+    def test_escalated_length(self) -> None:
+        from openskp.legacy import _R
+        import struct as _s
+
+        text = "x" * 300
+        r = _R(b"\xFF\xFE\xFF\xFF" + _s.pack("<H", 300)
+               + text.encode("utf-16-le"))
+        assert r.utf16() == text
+
+    def test_not_a_string_raises(self) -> None:
+        import pytest as _pytest
+        from openskp.legacy import _R, LegacyParseError
+
+        with _pytest.raises(LegacyParseError):
+            _R(b"\x00\x00\x00\x00").utf16()
