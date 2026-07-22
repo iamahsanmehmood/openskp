@@ -158,6 +158,7 @@ class _GeometryBuilder:
     def __init__(self):
         self.vertices = {}
         self.edges = {}
+        self.edge_flags = {}      # edge id -> display flag byte (D307)
         self.faces = {}
         self.instances = []
 
@@ -214,6 +215,15 @@ def _extract_geometry_from_nodes(elements, builder):
                 v1 = parse_var_int(v1_node['payload'], 0, len(v1_node['payload'])) if v1_node else None
                 v2 = parse_var_int(v2_node['payload'], 0, len(v2_node['payload'])) if v2_node else None
                 builder.edges[e_id] = (v1, v2)
+                # D007 -> D307 = edge display flags: base 0x06, plus
+                # 0x01 hidden, 0x08|0x10 soft/smooth (cross-validated
+                # against the same models in the classic MFC format,
+                # 26k edges: 0x06 plain, 0x07 hidden, 0x1E soft+smooth)
+                d007 = next((c for c in el['children'] if c['tag'] == 'D007'), None)
+                if d007:
+                    d307 = next((c for c in d007['children'] if c['tag'] == 'D307'), None)
+                    if d307 is not None and d307['payload']:
+                        builder.edge_flags[e_id] = d307['payload'][0]
 
         elif tag == 'AC0D':
             f_id = extract_entity_id(el)
