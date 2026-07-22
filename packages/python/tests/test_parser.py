@@ -362,7 +362,9 @@ class TestUseTrans:
 
         model = SkpFile.open(str(self._skp_with(
             tmp_path, self.XML % (b"0.27", b"1")))).parse()
-        assert model.materials[0].transparency == 0.27
+        # trans stores a TRANSPARENCY; the model exposes the resulting
+        # opacity, so trans="0.27" reads back as 0.73.
+        assert abs(model.materials[0].transparency - 0.73) < 1e-9
 
     def test_use_trans_0_means_opaque(self, tmp_path: pathlib.Path) -> None:
         from openskp.model import SkpFile

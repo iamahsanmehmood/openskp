@@ -426,8 +426,13 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
                     # attribute is a leftover default and the material is
                     # fully opaque. Without this check most materials read
                     # as 50% transparent (or fully invisible for trans="0").
+                    # The stored value is a TRANSPARENCY (0 = opaque,
+                    # 1 = fully transparent) — e.g. SketchUp's library
+                    # "Translucent Glass Blue" (70% opacity) stores
+                    # trans="0.3" — so the exposed opacity is 1 - trans.
                     if mat_elem.get('useTrans') == '1':
-                        trans = float(mat_elem.get('trans', 1.0))
+                        trans = 1.0 - float(mat_elem.get('trans', 0.0))
+                        trans = min(max(trans, 0.0), 1.0)
                     else:
                         trans = 1.0
                     folder_name = name.split('/')[1] if len(name.split('/')) > 1 else ''
