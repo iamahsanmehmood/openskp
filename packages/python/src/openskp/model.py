@@ -90,12 +90,19 @@ class Face:
             ``(edge_id, orientation)`` tuples where *orientation* is
             ``1`` for forward or ``-1`` for reversed.
         normal: Optional outward-facing normal vector ``(nx, ny, nz)``.
+        material_id: Material of the face's FRONT side, or ``None``.
+        back_material_id: Material of the face's BACK side, or ``None``.
+            A face painted only on its back (front unpainted) is common when
+            the author painted the visible side of a downward-facing cap;
+            renderers should show this material on the back side, as
+            SketchUp does.
     """
 
     id: int
     loops: List[List[Tuple[int, int]]] = field(default_factory=list)
     normal: Optional[Tuple[float, float, float]] = None
     material_id: Optional[int] = None
+    back_material_id: Optional[int] = None
 
 
 # ── Layers & Materials ────────────────────────────────────────────────────
@@ -310,6 +317,7 @@ class SkpFile:
                     loops=f_data.get("loops", []),
                     normal=f_data.get("normal"),
                     material_id=f_data.get("material_id"),
+                    back_material_id=f_data.get("back_material_id"),
                 )
             # Populate instances
             for inst in builder.instances:

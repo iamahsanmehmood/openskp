@@ -331,5 +331,37 @@ class TestSkpFile:
             SkpFile.open(str(fake))
 
 
+# ── Back material tests ──────────────────────────────────────────────────
+
+
+class TestBackMaterial:
+    """The AF0D child of a face node is the material of its BACK side."""
+
+    @staticmethod
+    def _tlv(tag_hex: str, payload: bytes) -> bytes:
+        return bytes.fromhex(tag_hex) + struct.pack('<I', len(payload)) + payload
+
+    def test_back_material_extracted(self) -> None:
+        from openskp import _core
+
+        t = self._tlv
+        node = t('AC0D', (t('DC05', t('DE05', b'\x2A'))
+                          + t('AF0D', bytes([0x85, 0x8B, 0x06]))))
+        elements = _core.parse_tlv_recursive(
+            node + t('0100', b'\x00'), 0, len(node) + 7)
+        builder = _core._GeometryBuilder()
+        _core._extract_geometry_from_nodes(elements, builder)
+
+        assert 0x2A in builder.faces
+        f = builder.faces[0x2A]
+        assert f['material_id'] is None          # front unpainted
+        assert f['back_material_id'] == 0x68B85  # back painted
+
+    def test_face_defaults(self) -> None:
+        from openskp.model import Face
+
+        assert Face(id=0).back_material_id is None
+
+
 # Need pathlib for tmp_path fixture
 import pathlib

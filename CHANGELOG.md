@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Python**: `Face.back_material_id` — the material of a face's BACK side
+  (the `AF0D` child of the face node). A face painted only on its back is
+  common when the author paints the visible side of a downward-facing cap;
+  without this field such faces looked unpainted.
+
 ## [0.2.0] — 2026-06-18
 
 ### Added
