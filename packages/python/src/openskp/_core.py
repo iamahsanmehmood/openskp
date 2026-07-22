@@ -412,6 +412,19 @@ def _extract_texture(zf, xml_name, mat_elem, ns):
                 if not filename:
                     filename = entry.rsplit('/', 1)[-1]
                 break
+    if data is None:
+        # Colourized copies ("[Name]1", type="2") keep no image of their
+        # own — their <mat:image path> points into the SOURCE material's
+        # folder ("materials/<other>/<image>"), sometimes prefixed "./".
+        img_elem = tex_elem.find('mat:images/mat:image', ns)
+        img_path = (img_elem.get('path', '') or '') if img_elem is not None else ''
+        img_path = img_path.lstrip('./')
+        for cand in (img_path, folder + '/' + img_path):
+            if cand and cand in names:
+                data = zf.read(cand)
+                if not filename:
+                    filename = cand.rsplit('/', 1)[-1]
+                break
     return {'filename': filename, 'x_scale': x_scale, 'y_scale': y_scale,
             'data': data}
 
@@ -478,7 +491,17 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
                     b = int(mat_elem.get('colorBlue', 128))
                     trans = float(mat_elem.get('trans', 0.5))
                     folder_name = name.split('/')[1] if len(name.split('/')) > 1 else ''
-                    mat_obj = {'name': mat_name, 'color': {'r': r, 'g': g, 'b': b}, 'transparency': trans}
+                    # type="2" marks a colourized copy ("[Name]1"): the
+                    # shared texture must be re-tinted toward the material
+                    # colour before display. colorizeType 0 = hue shift,
+                    # 1 = tint (greyscale then colour).
+                    colorized = mat_elem.get('type') == '2'
+                    try:
+                        colorize_type = int(mat_elem.get('colorizeType', 0) or 0)
+                    except ValueError:
+                        colorize_type = 0
+                    mat_obj = {'name': mat_name, 'color': {'r': r, 'g': g, 'b': b}, 'transparency': trans,
+                               'colorized': colorized, 'colorize_type': colorize_type}
                     tex = _extract_texture(zf, name, mat_elem, MAT_NS)
                     if tex is not None:
                         mat_obj['texture'] = tex

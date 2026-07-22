@@ -164,12 +164,23 @@ class Material:
             ``1.0`` is fully opaque.
         texture: The material's :class:`Texture`, or ``None`` for a plain
             colour material.
+        colorized: ``True`` for a colourized copy of a textured material
+            (SketchUp's ``[Name]1`` materials, ``type="2"`` in the XML).
+            The texture image is shared with the source material as stored;
+            viewers must re-tint it toward :attr:`color` for faithful
+            display.
+        colorize_type: How to re-tint when :attr:`colorized` — ``0`` shifts
+            every pixel's hue/lightness/saturation by the delta between the
+            image average and :attr:`color`; ``1`` tints (greyscales the
+            image, then applies the colour's hue/saturation).
     """
 
     name: str
     color: Tuple[int, int, int, int] = (200, 200, 200, 255)
     transparency: float = 1.0
     texture: Optional[Texture] = None
+    colorized: bool = False
+    colorize_type: int = 0
 
 
 # ── Component hierarchy ───────────────────────────────────────────────────
@@ -380,6 +391,8 @@ class SkpFile:
                 color=(c.get("r", 128), c.get("g", 128), c.get("b", 128)),
                 transparency=mat_data.get("transparency", 0.5),
                 texture=texture,
+                colorized=mat_data.get("colorized", False),
+                colorize_type=mat_data.get("colorize_type", 0),
             ))
 
         # Store raw parsed data for export use

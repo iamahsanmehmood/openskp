@@ -427,6 +427,48 @@ class TestTextureExtraction:
         assert glass.texture is not None
         assert glass.texture.data == jpeg
 
+    def test_colorized_copy_shares_source_image(
+        self, tmp_path: "pathlib.Path"
+    ) -> None:
+        # A colourized material ("[Name]1", type="2") stores no image of
+        # its own — its <mat:image path> points into the SOURCE material's
+        # folder. The shared bytes must be resolved, and the colorized
+        # flag exposed so viewers can re-tint.
+        from openskp.model import SkpFile
+
+        png = b"\x89PNGsharedchainlink"
+        colorized_xml = b"""<?xml version="1.0" encoding="UTF-8"?>
+<materialDocument xmlns="http://sketchup.google.com/schemas/sketchup/1.0/material"
+                  xmlns:mat="http://sketchup.google.com/schemas/sketchup/1.0/material">
+  <mat:material name="[Fence]1" type="2" colorRed="27" colorGreen="135"
+                colorBlue="59" colorizeType="0" trans="1" hasTexture="1">
+    <mat:texture textureFilename="fence.png" xScale="2.75" yScale="2.75">
+      <mat:images>
+        <mat:image id="1" path="materials/Fence/fence.png"
+                   file_name="fence.png"/>
+      </mat:images>
+    </mat:texture>
+  </mat:material>
+</materialDocument>
+"""
+        skp = _write_synthetic_skp(tmp_path, {
+            "materials/Fence/material.xml":
+                _MATERIAL_XML_TEXTURED % (b"Fence", b"fence.png"),
+            "materials/Fence/fence.png": png,
+            "materials/[Fence]1/material.xml": colorized_xml,
+        })
+        model = SkpFile.open(str(skp)).parse()
+
+        by_name = {m.name: m for m in model.materials}
+        copy = by_name["[Fence]1"]
+        assert copy.texture is not None
+        assert copy.texture.data == png       # borrowed from materials/Fence/
+        assert copy.colorized is True
+        assert copy.colorize_type == 0
+        assert copy.color[:3] == (27, 135, 59)
+        base = by_name["Fence"]
+        assert base.colorized is False
+
 
 # Need pathlib for tmp_path fixture
 import pathlib
