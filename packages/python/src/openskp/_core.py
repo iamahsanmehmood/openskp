@@ -422,7 +422,14 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
                     r = int(mat_elem.get('colorRed', 128))
                     g = int(mat_elem.get('colorGreen', 128))
                     b = int(mat_elem.get('colorBlue', 128))
-                    trans = float(mat_elem.get('trans', 0.5))
+                    # 'trans' only applies when useTrans="1"; otherwise the
+                    # attribute is a leftover default and the material is
+                    # fully opaque. Without this check most materials read
+                    # as 50% transparent (or fully invisible for trans="0").
+                    if mat_elem.get('useTrans') == '1':
+                        trans = float(mat_elem.get('trans', 1.0))
+                    else:
+                        trans = 1.0
                     folder_name = name.split('/')[1] if len(name.split('/')) > 1 else ''
                     mat_obj = {'name': mat_name, 'color': {'r': r, 'g': g, 'b': b}, 'transparency': trans}
                     materials[mat_name] = mat_obj

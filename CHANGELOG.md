@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Python**: material transparency now honours `useTrans` — the `trans`
+  attribute in `material.xml` only applies when `useTrans="1"`. Previously
+  most materials read as 50% transparent (the parser default) and some as
+  fully invisible (`trans="0"` with `useTrans="0"`).
+
 ## [0.2.0] — 2026-06-18
 
 ### Added
