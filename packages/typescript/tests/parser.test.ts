@@ -3,6 +3,30 @@ import { validateHeader, readVersion } from '../src/vff';
 import { readU32, readF64, parseVarInt, parseTlvRecursive } from '../src/parser';
 import { transformPoint, multiplyMatrices, isIdentity } from '../src/transforms';
 import { computeFaceNormal, triangulateFace3D } from '../src/triangulator';
+import { GeometryBuilder, extractGeometryFromNodes } from '../src/geometry';
+
+/** Build a single TLV element: 2-byte tag (hex) + 4-byte LE size + payload. */
+function tlv(tagHex: string, payload: Uint8Array): Uint8Array {
+  const tagBytes = new Uint8Array(tagHex.match(/.{2}/g)!.map((h) => parseInt(h, 16)));
+  const sizeBytes = new Uint8Array(4);
+  new DataView(sizeBytes.buffer).setUint32(0, payload.length, true);
+  const result = new Uint8Array(2 + 4 + payload.length);
+  result.set(tagBytes, 0);
+  result.set(sizeBytes, 2);
+  result.set(payload, 6);
+  return result;
+}
+
+function concatBytes(...arrays: Uint8Array[]): Uint8Array {
+  const total = arrays.reduce((sum, a) => sum + a.length, 0);
+  const result = new Uint8Array(total);
+  let offset = 0;
+  for (const a of arrays) {
+    result.set(a, offset);
+    offset += a.length;
+  }
+  return result;
+}
 
 describe('VFF Header and Version Parsing', () => {
   it('should validate VFF header', () => {
@@ -139,5 +163,34 @@ describe('Triangulation', () => {
     expect(triangles.length).toBe(2); // Two triangles for a quad
     expect(triangles[0]).toEqual([0, 1, 2]);
     expect(triangles[1]).toEqual([0, 2, 3]);
+  });
+});
+
+describe('Instance material (paint the component)', () => {
+  it('reads the D007/D107 material id from a 6419 instance node', () => {
+    const d107 = tlv('D107', new Uint8Array([0x33, 0x73])); // id 0x7333
+    const d007 = tlv('D007', d107);
+    const ref = tlv('6719', new Uint8Array([0x05])); // refIdx 5
+    const node = tlv('6419', concatBytes(ref, d007));
+
+    const elements = parseTlvRecursive(node, 0, node.length);
+    const builder = new GeometryBuilder();
+    extractGeometryFromNodes(elements, builder);
+
+    expect(builder.instances.length).toBe(1);
+    expect(builder.instances[0].refIdx).toBe(5);
+    expect(builder.instances[0].materialId).toBe(0x7333);
+  });
+
+  it('defaults materialId to null when the instance has no D007/D107', () => {
+    const ref = tlv('6719', new Uint8Array([0x05]));
+    const node = tlv('6419', ref);
+
+    const elements = parseTlvRecursive(node, 0, node.length);
+    const builder = new GeometryBuilder();
+    extractGeometryFromNodes(elements, builder);
+
+    expect(builder.instances.length).toBe(1);
+    expect(builder.instances[0].materialId).toBeNull();
   });
 });
