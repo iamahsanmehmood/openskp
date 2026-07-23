@@ -229,6 +229,21 @@ export function parseSkp(buffer: ArrayBuffer): SkpModel {
   }
   collectMaterialIds(elements);
 
+  // 4c. Join the TLV material IDs (what Face.materialId references) onto the
+  // parsed materials, so callers can resolve face -> material. Same
+  // name-then-folder resolution used for face/instance colouring below.
+  // materialsMap/materialsByFolder may share the same Material object
+  // reference for an alias, so setting `.id` here is visible through both.
+  const materialsById = new Map<number, Material>();
+  for (const [mId, mName] of materialIdToName.entries()) {
+    const mat = materialsMap.get(mName) || materialsByFolder.get(mName);
+    if (!mat) continue;
+    if (mat.id === null) {
+      mat.id = mId;
+    }
+    materialsById.set(mId, mat);
+  }
+
   // 5. Collect component definitions
   const defsDict = collectDefs(elements);
 
@@ -618,7 +633,6 @@ export function parseSkp(buffer: ArrayBuffer): SkpModel {
     }
   }
 
-  const materialsById = new Map<number, Material>();
   const styles: Style[] = [];
 
   const model: SkpModel = {
