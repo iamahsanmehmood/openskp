@@ -276,7 +276,7 @@ def _extract_geometry_from_nodes(elements, builder):
                 def_idx = parse_var_int(def_idx_node['payload'], 0, len(def_idx_node['payload']))
             name_node = find_child_tag(nodes_to_search, '6519')
             if name_node:
-                name = name_node['payload'].decode('ascii', errors='ignore')
+                name = name_node['payload'].decode('utf-8', errors='replace')
             mat_node = find_child_tag(nodes_to_search, '6619')
             if mat_node and len(mat_node['payload']) >= 104:
                 for idx in range(13):
@@ -352,9 +352,9 @@ def extract_dynamic_properties(d007):
         for n in nodes:
             tag = n['tag']
             if tag == 'B636':
-                current_key = n['payload'].decode('ascii', errors='ignore')
+                current_key = n['payload'].decode('utf-8', errors='replace')
             elif tag == 'AD38' and current_key:
-                val = n['payload'].decode('ascii', errors='ignore')
+                val = n['payload'].decode('utf-8', errors='replace')
                 properties[current_key] = val
                 current_key = None
             extract_props(n['children'])
@@ -462,7 +462,7 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
                                 l_id = parse_var_int(payload, 6, de05_len)
                             else:
                                 l_id = parse_var_int(payload, 0, len(payload))
-                            l_name = name_node['payload'].decode('ascii', errors='ignore')
+                            l_name = name_node['payload'].decode('utf-8', errors='replace')
                             layer_id_to_name[l_id] = l_name
             collect_layers(el['children'])
     collect_layers(elements)
@@ -486,7 +486,7 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
                         m_id = parse_var_int(payload, 6, de05_len)
                     else:
                         m_id = parse_var_int(payload, 0, len(payload))
-                    m_name = name_node['payload'].decode('ascii', errors='ignore')
+                    m_name = name_node['payload'].decode('utf-8', errors='replace')
                     material_id_to_name[m_id] = m_name
             collect_material_ids(el['children'])
     collect_material_ids(elements)
@@ -502,7 +502,7 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
                     if child['tag'] == '7D15' and len(child['payload']) == 16:
                         guid = child['payload'].hex().upper()
                     elif child['tag'] == '7E15':
-                        name = child['payload'].decode('ascii', errors='ignore')
+                        name = child['payload'].decode('utf-8', errors='replace')
                 ent_id = extract_entity_id(el)
                 builder = _GeometryBuilder()
                 _extract_geometry_from_nodes(el['children'], builder)
