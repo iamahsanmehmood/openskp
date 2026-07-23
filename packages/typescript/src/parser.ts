@@ -12,6 +12,11 @@ export const CONTAINER_TAGS = new Set<string>([
   'F901', '7017', '7117', 'D007', 'C409', '9411', '9511', '0F01',
   '384A', 'B80B', '9713', '2C4C', 'AC0D', 'AE0D', 'F601', 'F801',
   '983A', '993A', '8C3C', '8D3C',
+  // Image-entity placement: an Image placed in the model wraps a standard
+  // 6419 instance node inside 9013 -> 401F. Without these two containers,
+  // that inner instance stays buried in an opaque payload and the image
+  // definition looks "never placed".
+  '9013', '401F',
 ]);
 
 export function readU32(data: Uint8Array, offset: number): number {

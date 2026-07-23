@@ -28,6 +28,7 @@ export class GeometryBuilder {
 export interface ParsedDefinition {
   guid: string;
   name: string;
+  isImage: boolean;
   builder: GeometryBuilder;
 }
 
@@ -351,6 +352,7 @@ export function collectDefs(
     if (el.tag === '7C15') {
       let guid: string | null = null;
       let name: string | null = null;
+      let isImage = false;
       for (const child of el.children) {
         if (child.tag === '7D15' && child.payload.length === 16) {
           let hex = '';
@@ -366,6 +368,10 @@ export function collectDefs(
           } catch (e) {
             name = '';
           }
+        } else if (child.tag === '8315' && child.payload.length > 0) {
+          // Definition kind: observed 0/1 for ordinary component/group
+          // definitions, 2 for the quad definition backing an Image entity.
+          isImage = parseVarInt(child.payload, 0, child.payload.length) === 2;
         }
       }
       const entId = extractEntityId(el);
@@ -375,6 +381,7 @@ export function collectDefs(
         defsDict.set(entId, {
           guid: guid || '',
           name: name || '',
+          isImage,
           builder,
         });
       }

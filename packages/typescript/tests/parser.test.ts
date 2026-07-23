@@ -3,7 +3,7 @@ import { validateHeader, readVersion } from '../src/vff';
 import { readU32, readF64, parseVarInt, parseTlvRecursive } from '../src/parser';
 import { transformPoint, multiplyMatrices, isIdentity } from '../src/transforms';
 import { computeFaceNormal, triangulateFace3D } from '../src/triangulator';
-import { GeometryBuilder, extractGeometryFromNodes, extractUvTransforms } from '../src/geometry';
+import { GeometryBuilder, extractGeometryFromNodes, extractUvTransforms, collectDefs } from '../src/geometry';
 
 /** Build a single TLV element: 2-byte tag (hex) + 4-byte LE size + payload. */
 function tlv(tagHex: string, payload: Uint8Array): Uint8Array {
@@ -242,5 +242,48 @@ describe('Face UV transform (positioned texture mapping)', () => {
     const [front, back] = extractUvTransforms(plain);
     expect(front).toBeNull();
     expect(back).toBeNull();
+  });
+});
+
+describe('Image entities', () => {
+  it('extracts the instance wrapped in 9013 -> 401F placement containers', () => {
+    const inner6419 = tlv('6419', tlv('6719', new Uint8Array([0x07]))); // refIdx 7
+    const node = tlv('9013', tlv('401F', inner6419));
+
+    const elements = parseTlvRecursive(node, 0, node.length);
+    const builder = new GeometryBuilder();
+    extractGeometryFromNodes(elements, builder);
+
+    expect(builder.instances.length).toBe(1);
+    expect(builder.instances[0].refIdx).toBe(7);
+  });
+
+  it('marks Definition.isImage when the 8315 kind byte is 2', () => {
+    const defOn = tlv(
+      '7C15',
+      concatBytes(
+        tlv('DE05', new Uint8Array([0x01])),
+        tlv('7D15', new Uint8Array(16).fill(0x11)),
+        tlv('7E15', new TextEncoder().encode('imagen#1')),
+        tlv('8315', new Uint8Array([0x02]))
+      )
+    );
+    const defOff = tlv(
+      '7C15',
+      concatBytes(
+        tlv('DE05', new Uint8Array([0x02])),
+        tlv('7D15', new Uint8Array(16).fill(0x22)),
+        tlv('7E15', new TextEncoder().encode('Grupo')),
+        tlv('8315', new Uint8Array([0x00]))
+      )
+    );
+    const buf = concatBytes(defOn, defOff);
+
+    const elements = parseTlvRecursive(buf, 0, buf.length);
+    const defsDict = collectDefs(elements);
+
+    const names = Array.from(defsDict.values()).map((d) => [d.name, d.isImage]);
+    expect(names).toContainEqual(['imagen#1', true]);
+    expect(names).toContainEqual(['Grupo', false]);
   });
 });
