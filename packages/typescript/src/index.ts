@@ -21,6 +21,8 @@ export interface SkpModel {
   definitions: Map<number, Definition>;
   layers: Layer[];
   materials: Material[];
+  materialsById: Map<number, Material>;
+  styles: Style[];
   sceneHierarchy: InstanceNode;
   meshIndex: Record<string, MeshMetadata>;
 }
@@ -32,6 +34,9 @@ export interface Definition {
   vertices: Vertex[];
   edges: Edge[];
   faces: Face[];
+  instances: Instance[];
+  isImage: boolean;
+  alwaysFacesCamera: boolean;
 }
 
 export interface Vertex {
@@ -45,12 +50,19 @@ export interface Edge {
   id: number;
   v1Id: number;
   v2Id: number;
+  soft: boolean;
+  smooth: boolean;
+  hidden: boolean;
 }
 
 export interface Face {
   id: number;
   loops: CoEdge[][];
   normal: [number, number, number];
+  materialId: number | null;
+  backMaterialId: number | null;
+  uvTransform: number[] | null;
+  uvTransformBack: number[] | null;
 }
 
 export interface CoEdge {
@@ -58,15 +70,43 @@ export interface CoEdge {
   orientation: number;
 }
 
+/** A placed instance (component or group) inside a Definition's own instance list. */
+export interface Instance {
+  name: string;
+  refIdx: number;
+  guid: string;
+  matrix: number[];
+  materialId: number | null;
+}
+
 export interface Layer {
   name: string;
   color: { r: number; g: number; b: number };
+}
+
+/** A material's texture image, extracted from the SKP container. */
+export interface Texture {
+  filename: string;
+  width: number;
+  height: number;
+  data: Uint8Array | null;
+}
+
+/** A rendering style bundled in the file (SketchUp's Styles browser). */
+export interface Style {
+  name: string;
+  frontColor: [number, number, number] | null;
+  backColor: [number, number, number] | null;
 }
 
 export interface Material {
   name: string;
   color: { r: number; g: number; b: number };
   transparency: number;
+  id: number | null;
+  texture: Texture | null;
+  colorized: boolean;
+  colorizeType: number;
 }
 
 export interface InstanceNode {
@@ -116,10 +156,14 @@ export function parseSkp(buffer: ArrayBuffer): SkpModel {
         const parsedMat = parseMaterialXml(xmlText);
         if (parsedMat) {
           const folderName = name.split('/')[1] || '';
-          const matObj = {
+          const matObj: Material = {
             name: parsedMat.name,
             color: { r: parsedMat.r, g: parsedMat.g, b: parsedMat.b },
             transparency: parsedMat.trans,
+            id: null,
+            texture: null,
+            colorized: false,
+            colorizeType: 0,
           };
           materialsMap.set(parsedMat.name, matObj);
           if (folderName) {
@@ -539,11 +583,25 @@ export function parseSkp(buffer: ArrayBuffer): SkpModel {
         id: eId,
         v1Id: v1 ?? 0,
         v2Id: v2 ?? 0,
+        soft: false,
+        smooth: false,
+        hidden: false,
       }));
       const faces: Face[] = Array.from(d.builder.faces.entries()).map(([fId, fData]) => ({
         id: fId,
         loops: fData.loops,
         normal: fData.normal,
+        materialId: (fData as any).materialId ?? null,
+        backMaterialId: null,
+        uvTransform: null,
+        uvTransformBack: null,
+      }));
+      const instances: Instance[] = d.builder.instances.map((inst) => ({
+        name: inst.name,
+        refIdx: inst.refIdx,
+        guid: inst.refGuid,
+        matrix: inst.matrix,
+        materialId: null,
       }));
 
       finalDefinitions.set(id, {
@@ -553,15 +611,23 @@ export function parseSkp(buffer: ArrayBuffer): SkpModel {
         vertices,
         edges,
         faces,
+        instances,
+        isImage: false,
+        alwaysFacesCamera: false,
       });
     }
   }
+
+  const materialsById = new Map<number, Material>();
+  const styles: Style[] = [];
 
   const model: SkpModel = {
     version,
     definitions: finalDefinitions,
     layers: finalLayersList,
     materials: finalMaterialsList,
+    materialsById,
+    styles,
     sceneHierarchy,
     meshIndex,
   };
