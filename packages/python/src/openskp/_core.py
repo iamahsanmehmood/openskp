@@ -601,7 +601,19 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
                     r = int(mat_elem.get('colorRed', 128))
                     g = int(mat_elem.get('colorGreen', 128))
                     b = int(mat_elem.get('colorBlue', 128))
-                    trans = float(mat_elem.get('trans', 0.5))
+                    # 'trans' only applies when useTrans="1"; otherwise the
+                    # attribute is a leftover default and the material is
+                    # fully opaque. Without this check most materials read
+                    # as 50% transparent (or fully invisible for trans="0").
+                    # The stored value is a TRANSPARENCY (0 = opaque,
+                    # 1 = fully transparent) — e.g. SketchUp's library
+                    # "Translucent Glass Blue" (70% opacity) stores
+                    # trans="0.3" — so the exposed opacity is 1 - trans.
+                    if mat_elem.get('useTrans') == '1':
+                        trans = 1.0 - float(mat_elem.get('trans', 0.0))
+                        trans = min(max(trans, 0.0), 1.0)
+                    else:
+                        trans = 1.0
                     folder_name = name.split('/')[1] if len(name.split('/')) > 1 else ''
                     # type="2" marks a colourized copy ("[Name]1"): the
                     # shared texture must be re-tinted toward the material

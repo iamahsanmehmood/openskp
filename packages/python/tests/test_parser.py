@@ -331,6 +331,50 @@ class TestSkpFile:
             SkpFile.open(str(fake))
 
 
+# ── Transparency semantics tests ─────────────────────────────────────────
+
+
+class TestUseTrans:
+    """'trans' in material.xml only applies when useTrans="1"."""
+
+    def _skp_with(self, tmp_path, mat_xml: bytes):
+        import io
+        import struct as _struct
+        import zipfile
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr("model.dat", b"")
+            zf.writestr("materials/M/material.xml", mat_xml)
+        path = tmp_path / "m.skp"
+        path.write_bytes(b"\xFF\xFE\xFF\x0E" + b"\x00" * 28 + buf.getvalue())
+        return path
+
+    XML = b"""<?xml version="1.0"?>
+<materialDocument xmlns="http://sketchup.google.com/schemas/sketchup/1.0/material"
+                  xmlns:mat="http://sketchup.google.com/schemas/sketchup/1.0/material">
+  <mat:material name="M" colorRed="1" colorGreen="2" colorBlue="3"
+                trans="%s" useTrans="%s"/>
+</materialDocument>
+"""
+
+    def test_use_trans_1_applies(self, tmp_path: pathlib.Path) -> None:
+        from openskp.model import SkpFile
+
+        model = SkpFile.open(str(self._skp_with(
+            tmp_path, self.XML % (b"0.27", b"1")))).parse()
+        # trans stores a TRANSPARENCY; the model exposes the resulting
+        # opacity, so trans="0.27" reads back as 0.73.
+        assert abs(model.materials[0].transparency - 0.73) < 1e-9
+
+    def test_use_trans_0_means_opaque(self, tmp_path: pathlib.Path) -> None:
+        from openskp.model import SkpFile
+
+        # trans="0" with useTrans="0" is a leftover default, NOT invisible.
+        model = SkpFile.open(str(self._skp_with(
+            tmp_path, self.XML % (b"0", b"0")))).parse()
+        assert model.materials[0].transparency == 1.0
+
+
 # ── UTF-8 entity name tests ──────────────────────────────────────────────
 
 
