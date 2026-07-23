@@ -29,6 +29,7 @@ export interface ParsedDefinition {
   guid: string;
   name: string;
   isImage: boolean;
+  alwaysFacesCamera: boolean;
   builder: GeometryBuilder;
 }
 
@@ -353,6 +354,7 @@ export function collectDefs(
       let guid: string | null = null;
       let name: string | null = null;
       let isImage = false;
+      let facesCamera = false;
       for (const child of el.children) {
         if (child.tag === '7D15' && child.payload.length === 16) {
           let hex = '';
@@ -372,6 +374,20 @@ export function collectDefs(
           // Definition kind: observed 0/1 for ordinary component/group
           // definitions, 2 for the quad definition backing an Image entity.
           isImage = parseVarInt(child.payload, 0, child.payload.length) === 2;
+        } else if (child.tag === '581B') {
+          // Component behavior flags: sub-TLV 5D1B == 1 marks "always
+          // faces camera" (2D people/tree cut-outs); its companion 5E1B
+          // is "shadows face sun".
+          let pos = 0;
+          const pl = child.payload;
+          while (pos <= pl.length - 6) {
+            const subSize = readU32(pl, pos + 2);
+            if (pos + 6 + subSize > pl.length) break;
+            if (pl[pos] === 0x5d && pl[pos + 1] === 0x1b && subSize >= 1) {
+              facesCamera = parseVarInt(pl, pos + 6, subSize) === 1;
+            }
+            pos += 6 + subSize;
+          }
         }
       }
       const entId = extractEntityId(el);
@@ -382,6 +398,7 @@ export function collectDefs(
           guid: guid || '',
           name: name || '',
           isImage,
+          alwaysFacesCamera: facesCamera,
           builder,
         });
       }

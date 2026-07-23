@@ -283,6 +283,7 @@ export function parseSkp(buffer: ArrayBuffer): SkpModel {
     guid: 'ROOT',
     name: 'ROOT_MODEL',
     isImage: false,
+    alwaysFacesCamera: false,
     builder: rootBuilder,
   });
 
@@ -654,7 +655,7 @@ export function parseSkp(buffer: ArrayBuffer): SkpModel {
         faces,
         instances,
         isImage: d.isImage,
-        alwaysFacesCamera: false,
+        alwaysFacesCamera: d.alwaysFacesCamera,
       });
     }
   }

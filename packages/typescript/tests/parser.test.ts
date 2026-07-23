@@ -287,3 +287,27 @@ describe('Image entities', () => {
     expect(names).toContainEqual(['Grupo', false]);
   });
 });
+
+describe('Always faces camera (component behavior flags)', () => {
+  it('marks Definition.alwaysFacesCamera when 581B carries 5D1B == 1', () => {
+    const behaviorOn = tlv('581B', tlv('5D1B', new Uint8Array([0x01])));
+    const behaviorOff = tlv('581B', tlv('5D1B', new Uint8Array([0x00])));
+
+    const susan = tlv(
+      '7C15',
+      concatBytes(tlv('DE05', new Uint8Array([0x01])), tlv('7E15', new TextEncoder().encode('Susan')), behaviorOn)
+    );
+    const chair = tlv(
+      '7C15',
+      concatBytes(tlv('DE05', new Uint8Array([0x02])), tlv('7E15', new TextEncoder().encode('Chair')), behaviorOff)
+    );
+    const buf = concatBytes(susan, chair);
+
+    const elements = parseTlvRecursive(buf, 0, buf.length);
+    const defsDict = collectDefs(elements);
+
+    const names = Array.from(defsDict.values()).map((d) => [d.name, d.alwaysFacesCamera]);
+    expect(names).toContainEqual(['Susan', true]);
+    expect(names).toContainEqual(['Chair', false]);
+  });
+});
