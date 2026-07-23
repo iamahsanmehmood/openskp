@@ -936,3 +936,124 @@ class TestTextureExtraction:
 
 # Need pathlib for tmp_path fixture
 import pathlib
+
+
+# ── Legacy (classic MFC) container tests ─────────────────────────────────
+
+
+class TestLegacyDetection:
+    """Tests for :func:`openskp.legacy.is_legacy`."""
+
+    def test_classic_header_detected(self) -> None:
+        from openskp.legacy import is_legacy
+
+        data = (b"\xFF\xFE\xFF\x0E" + "SketchUp Model".encode("utf-16-le")
+                + b"\xFF\xFE\xFF\x0C" + "{16.0.19912}".encode("utf-16-le")
+                + b"\x00" * 0x20 + b"\xFF\xFF\x00\x00\x0B\x00CVersionMap")
+        assert is_legacy(data) is True
+
+    def test_vff_zip_not_legacy(self) -> None:
+        from openskp.legacy import is_legacy
+
+        data = (b"\xFF\xFE\xFF\x0E" + "SketchUp Model".encode("utf-16-le")
+                + b"\xFF\xFE\xFF\x08" + "{26.2.0}".encode("utf-16-le")
+                + b"VFF\x08" + b"PK\x03\x04" + b"\x00" * 64)
+        assert is_legacy(data) is False
+
+    def test_random_bytes_not_legacy(self) -> None:
+        from openskp.legacy import is_legacy
+
+        assert is_legacy(b"\x00" * 64) is False
+
+
+class TestLegacyStrings:
+    """Tests for the MFC string records (:class:`openskp.legacy._R`)."""
+
+    def test_short_string(self) -> None:
+        from openskp.legacy import _R
+
+        r = _R(b"\xFF\xFE\xFF\x04" + "Casa".encode("utf-16-le"))
+        assert r.utf16() == "Casa"
+
+    def test_empty_string(self) -> None:
+        from openskp.legacy import _R
+
+        r = _R(b"\xFF\xFE\xFF\x00")
+        assert r.utf16() == ""
+
+    def test_escalated_length(self) -> None:
+        from openskp.legacy import _R
+        import struct as _s
+
+        text = "x" * 300
+        r = _R(b"\xFF\xFE\xFF\xFF" + _s.pack("<H", 300)
+               + text.encode("utf-16-le"))
+        assert r.utf16() == text
+
+    def test_not_a_string_raises(self) -> None:
+        import pytest as _pytest
+        from openskp.legacy import _R, LegacyParseError
+
+        with _pytest.raises(LegacyParseError):
+            _R(b"\x00\x00\x00\x00").utf16()
+
+
+# ── Legacy real-file regression (binary fixture) ─────────────────────────
+
+
+class TestLegacyRealFile:
+    """Decode a real classic (v17 MFC) ``.skp`` end to end and assert the
+    geometry against known ground truth.
+
+    Fixture: ``fixtures/capilla_quiroz_v17.skp`` — a small chapel authored in
+    SketchUp 2017 (v17.0.18899, ~212 KB), contributed by Marco Sumari
+    (IngeTrazo). The expected counts were cross-validated against the same
+    model re-saved as VFF by SketchUp Web: exact face/edge counts, total
+    surface area and bounding box match between the two formats.
+    """
+
+    import pathlib as _pathlib
+
+    FIXTURE = _pathlib.Path(__file__).parent / "fixtures" / "capilla_quiroz_v17.skp"
+
+    def _model(self):
+        import pytest as _pytest
+        if not self.FIXTURE.exists():
+            _pytest.skip("legacy fixture not present")
+        from openskp.model import SkpFile
+        return SkpFile.open(str(self.FIXTURE)).parse()
+
+    def test_version_and_counts(self) -> None:
+        model = self._model()
+        assert model.version == "{17.0.18899}"
+        n_faces = sum(len(d.faces) for d in model.definitions.values())
+        n_edges = sum(len(d.edges) for d in model.definitions.values())
+        n_verts = sum(len(d.vertices) for d in model.definitions.values())
+        assert n_faces == 181
+        assert n_edges == 515
+        assert n_verts == 335
+        assert len(model.materials) == 16
+
+    def test_bounding_box(self) -> None:
+        model = self._model()
+        lo = [float("inf")] * 3
+        hi = [float("-inf")] * 3
+        for d in model.definitions.values():
+            for v in d.vertices.values():
+                for i, c in enumerate((v.x, v.y, v.z)):
+                    lo[i] = min(lo[i], c)
+                    hi[i] = max(hi[i], c)
+        # Inches, exact to 1e-2 (the store is f64; this pins units + Z-up).
+        assert lo == pytest.approx([-326.719, 0.0, -23.419], abs=1e-2)
+        assert hi == pytest.approx([784.443, 222.211, 145.976], abs=1e-2)
+
+    def test_has_instances_and_geometry(self) -> None:
+        model = self._model()
+        # 3 definitions (root + 2 components), and the root places instances.
+        assert len(model.definitions) == 3
+        placed = sum(len(d.instances) for d in model.definitions.values())
+        assert placed >= 2
+        # Every face resolves a real ring of vertices.
+        a_face = next(f for d in model.definitions.values()
+                      for f in d.faces.values() if f.loops)
+        assert len(a_face.loops[0]) >= 3

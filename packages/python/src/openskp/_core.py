@@ -549,10 +549,16 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
     """
     # 1. Find ZIP offset
     with open(skp_path, 'rb') as f:
-        header = f.read(256)
+        header = f.read(512)
 
     if not header.startswith(b'\xFF\xFE\xFF\x0E'):
         raise ValueError("Not a valid SketchUp file")
+
+    # Classic (pre-2021) files are MFC CArchive streams, not VFF/ZIP —
+    # route them to the legacy walker (same output shape).
+    from .legacy import is_legacy, full_parse_legacy
+    if is_legacy(header):
+        return full_parse_legacy(skp_path)
 
     version = "unknown"
     second_marker = header.find(b'\xFF\xFE\xFF', 4)
