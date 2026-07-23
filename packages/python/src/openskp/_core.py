@@ -631,15 +631,33 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
             if el['tag'] == '7C15':
                 guid = None
                 name = None
+                faces_camera = False
                 for child in el['children']:
                     if child['tag'] == '7D15' and len(child['payload']) == 16:
                         guid = child['payload'].hex().upper()
                     elif child['tag'] == '7E15':
                         name = child['payload'].decode('utf-8', errors='replace')
+                    elif child['tag'] == '581B':
+                        # Component behavior flags: sub-TLV 5D1B == 1 marks
+                        # "always faces camera" (2D people/tree cut-outs);
+                        # its companion 5E1B is "shadows face sun".
+                        pos = 0
+                        pl = child['payload']
+                        while pos <= len(pl) - 6:
+                            sub_tag = pl[pos:pos+2].hex().upper()
+                            sub_size = read_u32(pl, pos+2)
+                            if pos + 6 + sub_size > len(pl):
+                                break
+                            if sub_tag == '5D1B' and sub_size >= 1:
+                                faces_camera = parse_var_int(
+                                    pl, pos+6, sub_size) == 1
+                            pos += 6 + sub_size
                 ent_id = extract_entity_id(el)
                 builder = _GeometryBuilder()
                 _extract_geometry_from_nodes(el['children'], builder)
-                defs_dict[ent_id] = {'guid': guid, 'name': name, 'builder': builder}
+                defs_dict[ent_id] = {'guid': guid, 'name': name,
+                                     'always_faces_camera': faces_camera,
+                                     'builder': builder}
             collect_defs(el['children'])
     collect_defs(elements)
 

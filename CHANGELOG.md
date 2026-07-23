@@ -41,6 +41,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (the `AF0D` child of the face node). A face painted only on its back is
   common when the author paints the visible side of a downward-facing cap;
   without this field such faces looked unpainted.
+- **Python**: `Definition.always_faces_camera` — SketchUp's "always face
+  camera" component behavior (2D people / tree cut-outs), decoded from the
+  definition's behavior block (`581B` → sub-TLV `5D1B == 1`; its companion
+  `5E1B` is "shadows face sun"). Consumers can now render such instances
+  as billboards, like SketchUp does.
 
 ## [0.2.0] — 2026-06-18
 
