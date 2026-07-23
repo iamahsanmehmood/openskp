@@ -169,6 +169,41 @@ class Style:
 
 
 @dataclass
+class Texture:
+    """A material's texture image, extracted from the SKP container.
+
+    SketchUp stores the image next to the material's XML inside the embedded
+    ZIP, and the real-world tile size (how many inches one repetition of the
+    image covers) in the material definition.
+
+    Attributes:
+        filename: Image file name as referenced by the material.
+        width: Tile width in **inches** (SketchUp's internal unit); ``0.0``
+            when the file does not specify it.
+        height: Tile height in inches; ``0.0`` when unspecified.
+        data: Raw image bytes (PNG/JPG as stored), or ``None`` when the
+            image entry was missing from the container.
+    """
+
+    filename: str = ""
+    width: float = 0.0
+    height: float = 0.0
+    data: Optional[bytes] = None
+
+    def save(self, filepath: str | pathlib.Path) -> pathlib.Path:
+        """Write the image bytes to *filepath* and return the path.
+
+        Raises:
+            ValueError: If the texture carries no image data.
+        """
+        if self.data is None:
+            raise ValueError(f"Texture {self.filename!r} has no image data")
+        p = pathlib.Path(filepath)
+        p.write_bytes(self.data)
+        return p
+
+
+@dataclass
 class Material:
     """A surface material.
 
@@ -183,12 +218,26 @@ class Material:
             ID (e.g. it is never referenced by geometry).  When several TLV
             IDs alias the same material, this holds the first one seen; every
             ID still resolves through :attr:`SkpModel.materials_by_id`.
+        texture: The material's :class:`Texture`, or ``None`` for a plain
+            colour material.
+        colorized: ``True`` for a colourized copy of a textured material
+            (SketchUp's ``[Name]1`` materials, ``type="2"`` in the XML).
+            The texture image is shared with the source material as stored;
+            viewers must re-tint it toward :attr:`color` for faithful
+            display.
+        colorize_type: How to re-tint when :attr:`colorized` — ``0`` shifts
+            every pixel's hue/lightness/saturation by the delta between the
+            image average and :attr:`color`; ``1`` tints (greyscales the
+            image, then applies the colour's hue/saturation).
     """
 
     name: str
     color: Tuple[int, int, int, int] = (200, 200, 200, 255)
     transparency: float = 1.0
     id: Optional[int] = None
+    texture: Optional[Texture] = None
+    colorized: bool = False
+    colorize_type: int = 0
 
 
 # ── Component hierarchy ───────────────────────────────────────────────────
@@ -419,10 +468,22 @@ class SkpFile:
         mat_for_data: Dict[int, Material] = {}   # id(raw dict) -> Material
         for mat_data in parsed["materials"].values():
             c = mat_data.get("color", {})
+            tex_data = mat_data.get("texture")
+            texture = None
+            if tex_data is not None:
+                texture = Texture(
+                    filename=tex_data.get("filename", ""),
+                    width=tex_data.get("x_scale", 0.0),
+                    height=tex_data.get("y_scale", 0.0),
+                    data=tex_data.get("data"),
+                )
             mat = Material(
                 name=mat_data.get("name", ""),
                 color=(c.get("r", 128), c.get("g", 128), c.get("b", 128)),
                 transparency=mat_data.get("transparency", 0.5),
+                texture=texture,
+                colorized=mat_data.get("colorized", False),
+                colorize_type=mat_data.get("colorize_type", 0),
             )
             model.materials.append(mat)
             mat_for_data[id(mat_data)] = mat

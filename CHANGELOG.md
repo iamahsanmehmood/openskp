@@ -53,6 +53,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   single-quad definition backing it (TLV kind `8315 == 2`). Real-world
   case: photo cut-out statues/animals placed as images imported with no
   geometry at all.
+- **Python**: texture extraction — `Material.texture` (`Texture` dataclass:
+  `filename`, tile `width`/`height` in inches, raw image `data` bytes,
+  `save()` helper). Images are read from the material's folder inside the
+  embedded ZIP, with a sibling fallback when the stored image name differs
+  from `textureFilename`.
 
 ## [0.2.0] — 2026-06-18
 
