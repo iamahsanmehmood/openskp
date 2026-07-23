@@ -246,6 +246,11 @@ class Definition:
             behavior (2D people / tree cut-outs that rotate to face the
             viewer). Consumers typically render such instances as
             billboards.
+        is_image: ``True`` when this definition backs an *Image entity* (a
+            picture placed in the model as an object): a single textured
+            quad, placed through an image-specific wrapper node. Useful for
+            consumers that give images special treatment (e.g. billboard
+            cut-outs).
     """
 
     id: int = 0
@@ -256,6 +261,7 @@ class Definition:
     faces: Dict[int, Face] = field(default_factory=dict)
     instances: List[Instance] = field(default_factory=list)
     always_faces_camera: bool = False
+    is_image: bool = False
 
 
 # ── Top-level model ──────────────────────────────────────────────────────
@@ -370,6 +376,7 @@ class SkpFile:
                 guid=d.get("guid", ""),
                 name=d.get("name", "") or "",
                 always_faces_camera=d.get("always_faces_camera", False),
+                is_image=d.get("is_image", False),
             )
             # Populate vertices
             for v_id, (x, y, z) in builder.vertices.items():

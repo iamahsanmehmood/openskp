@@ -691,5 +691,65 @@ class TestFaceCameraBehavior:
         assert by_name['Silla'].always_faces_camera is False
 
 
+# ── Image entity tests ───────────────────────────────────────────────────
+
+
+class TestImageEntities:
+    """Image entities: a picture placed in the model wraps a standard 6419
+    instance inside ``9013 → 401F``, and its backing definition carries
+    kind ``8315 == 2``."""
+
+    @staticmethod
+    def _tlv(tag_hex: str, payload: bytes) -> bytes:
+        return bytes.fromhex(tag_hex) + struct.pack('<I', len(payload)) + payload
+
+    def test_image_placement_instance_is_extracted(self) -> None:
+        from openskp import _core
+
+        t = self._tlv
+        inner_6419 = t('6419', t('6719', b'\x07'))       # ref_idx 7
+        node = t('9013', t('401F', inner_6419))
+        elements = _core.parse_tlv_recursive(
+            node + t('0100', b'\x00'), 0, len(node) + 7)
+        builder = _core._GeometryBuilder()
+        _core._extract_geometry_from_nodes(elements, builder)
+
+        assert len(builder.instances) == 1
+        assert builder.instances[0]['ref_idx'] == 7
+
+    def test_definition_kind_2_marks_is_image(self, tmp_path: pathlib.Path,
+                                              monkeypatch) -> None:
+        from openskp.model import Definition, SkpFile
+        import openskp._core as _core
+
+        class _B:
+            vertices = {}
+            edges = {}
+            faces = {}
+            instances = []
+
+        parsed = {
+            "version": "test",
+            "defs_dict": {
+                1: {"guid": "", "name": "imagen#1", "is_image": True,
+                    "builder": _B()},
+                2: {"guid": "", "name": "Grupo", "is_image": False,
+                    "builder": _B()},
+            },
+            "layer_colors": {},
+            "materials": {},
+            "materials_by_folder": {},
+            "material_id_to_name": {},
+        }
+        monkeypatch.setattr(_core, "full_parse", lambda path: parsed)
+        fake = tmp_path / "m.skp"
+        fake.write_bytes(b"")
+        model = SkpFile.open(str(fake)).parse()
+
+        assert model.definitions[1].is_image is True
+        assert model.definitions[2].is_image is False
+        assert Definition().is_image is False
+
+
 # Need pathlib for tmp_path fixture
 import pathlib
