@@ -18,7 +18,7 @@
 
 *Open-source SketchUp binary file parser for Python, TypeScript, .NET, and Dart*
 
-[Quick Start](#-quick-start) · [Features](#-features) · [Documentation](#-documentation) · [Contributing](#-contributing)
+[Quick Start](#-quick-start) · [Features](#-features) · [Used in Production](#-used-in-production) · [Documentation](#-documentation) · [Contributing](#-contributing)
 
 </div>
 
@@ -48,6 +48,19 @@ OpenSKP is the **first and only** open-source, cross-platform parser for SketchU
 | **Export to JSON** | ✅ | Complete model data as structured JSON |
 | **Pure Implementation** | ✅ | No SketchUp SDK, no native dependencies, no license required |
 | **Cross-Platform** | ✅ | Works on Linux, macOS, and Windows |
+
+---
+
+## 🏭 Used in Production
+
+OpenSKP isn't just a library — it's the SketchUp-parsing engine behind real, actively-used production applications:
+
+| Project | Description | How it uses OpenSKP |
+|:--------|:-------------|:---------------------|
+| [FrameSmart](https://frame-smart.com/) | A 3D collaboration platform for viewing, sharing, and collaborating on 3D models together with their metadata (IFC, SketchUp, and more) — hosted on Linux, with nearly 200 active users. | Powers FrameSmart's entire SketchUp import pipeline, end to end. |
+| [IngeTrazo](https://ingetrazo.com/) | A free, Linux-first 3D modeler for civil engineering and architecture — a SketchUp alternative with a BIM → IFC bridge. | Replaced IngeTrazo's Wine + proprietary SketchUp DLL dependency as its native `.skp` import backend. |
+
+Using OpenSKP in your own project? [Open an issue](https://github.com/iamahsanmehmood/openskp/issues) or a PR to add it here.
 
 ---
 
@@ -336,7 +349,8 @@ OpenSKP is released under the [MIT License](LICENSE). You are free to use, modif
 
 This project would not be possible without:
 
-- [Noor Ali Qureshi](https://github.com/nooraliqureshi) — SketchUp 2025 support, older SKP version fixes, and materials rendering support.
+- [Noor Ali Qureshi](https://github.com/nooraliqureshi) — SketchUp 2025 support, older SKP version fixes, materials rendering support, and the TypeScript UTF-8 decoding fix.
+- [Marco Sumari](https://github.com/tuxiasumari) — material fidelity (textures, colourized materials, instance and back-side materials, per-face UV mapping), Image entities, styles, edge display flags, and full legacy MFC (SketchUp v8–v20) format support.
 - The open-source community for inspiration and feedback
 - [Kaitai Struct](https://kaitai.io/) for binary format analysis patterns
 - [glTF](https://www.khronos.org/gltf/) specification by Khronos Group
