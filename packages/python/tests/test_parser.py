@@ -445,5 +445,54 @@ class TestMaterialIdJoin:
         assert model.materials_by_id == {}
 
 
+# ── Instance material tests ──────────────────────────────────────────────
+
+
+class TestInstanceMaterial:
+    """Tests for instance-level materials (``Instance.material_id``)."""
+
+    @staticmethod
+    def _tlv(tag_hex: str, payload: bytes) -> bytes:
+        return bytes.fromhex(tag_hex) + struct.pack('<I', len(payload)) + payload
+
+    def test_instance_material_defaults_to_none(self) -> None:
+        from openskp.model import Instance
+
+        assert Instance().material_id is None
+
+    def test_extractor_reads_instance_d007_material(self) -> None:
+        # A 6419 instance node carrying D007/D107 — the same material
+        # structure faces use ("paint the component" in SketchUp).
+        from openskp import _core
+
+        d107 = self._tlv('D107', bytes([0x33, 0x73]))          # id 0x7333
+        d007 = self._tlv('D007', d107)
+        ref = self._tlv('6719', bytes([0x05]))                  # ref_idx 5
+        matrix = self._tlv('6619', struct.pack('<13d', *([1.0] * 13)))
+        node = self._tlv('6419', ref + matrix + d007)
+
+        elements = _core.parse_tlv_recursive(
+            node + self._tlv('0100', b'\x00'), 0, len(node) + 7)
+        builder = _core._GeometryBuilder()
+        _core._extract_geometry_from_nodes(elements, builder)
+
+        assert len(builder.instances) == 1
+        inst = builder.instances[0]
+        assert inst['ref_idx'] == 5
+        assert inst['material_id'] == 0x7333
+
+    def test_instance_without_material_stays_none(self) -> None:
+        from openskp import _core
+
+        ref = self._tlv('6719', bytes([0x05]))
+        node = self._tlv('6419', ref)
+        elements = _core.parse_tlv_recursive(
+            node + self._tlv('0100', b'\x00'), 0, len(node) + 7)
+        builder = _core._GeometryBuilder()
+        _core._extract_geometry_from_nodes(elements, builder)
+
+        assert builder.instances[0]['material_id'] is None
+
+
 # Need pathlib for tmp_path fixture
 import pathlib

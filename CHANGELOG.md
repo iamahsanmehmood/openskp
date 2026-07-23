@@ -22,6 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ("cópia" → "cpia", "Diseño" → "Diseo") and — critically — broke the
   material-name join between the TLV stream and the XML material files,
   leaving those materials unresolvable from geometry.
+- **Python**: `Instance.material_id` — the material painted onto a component
+  instance itself (SketchUp's "paint the component", the same `D007`/`D107`
+  structure faces use). Faces with no material of their own inherit it;
+  consumers can now resolve that inheritance like the official SDK does.
 
 ## [0.2.0] — 2026-06-18
 
