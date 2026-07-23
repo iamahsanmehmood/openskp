@@ -89,6 +89,30 @@ describe('SketchUp Parser Integration Test', () => {
     expect(firstFace.normal.length).toBe(3);
     expect(typeof firstFace.normal[0]).toBe('number');
 
+    // 7b. Assert the model-parity fields added alongside the Python port
+    // (materialId is already-existing baseline data now exposed publicly;
+    // the rest default until their dedicated feature lands).
+    expect(firstFace.materialId === null || typeof firstFace.materialId === 'number').toBe(true);
+    expect(firstFace.backMaterialId).toBeNull();
+    expect(firstFace.uvTransform).toBeNull();
+    expect(firstFace.uvTransformBack).toBeNull();
+
+    expect(firstEdge.soft).toBe(false);
+    expect(firstEdge.smooth).toBe(false);
+    expect(firstEdge.hidden).toBe(false);
+
+    expect(Array.isArray(def66!.instances)).toBe(true);
+    expect(def66!.isImage).toBe(false);
+    expect(def66!.alwaysFacesCamera).toBe(false);
+
+    expect(matLayer0!.id).toBeNull();
+    expect(matLayer0!.texture).toBeNull();
+    expect(matLayer0!.colorized).toBe(false);
+    expect(matLayer0!.colorizeType).toBe(0);
+
+    expect(model.materialsById).toBeInstanceOf(Map);
+    expect(Array.isArray(model.styles)).toBe(true);
+
     // 8. Assert Scene Hierarchy
     expect(model.sceneHierarchy).toBeDefined();
     expect(model.sceneHierarchy.name).toBe('ROOT');
