@@ -282,6 +282,7 @@ export function parseSkp(buffer: ArrayBuffer): SkpModel {
   defsDict.set('ROOT', {
     guid: 'ROOT',
     name: 'ROOT_MODEL',
+    isImage: false,
     builder: rootBuilder,
   });
 
@@ -652,7 +653,7 @@ export function parseSkp(buffer: ArrayBuffer): SkpModel {
         edges,
         faces,
         instances,
-        isImage: false,
+        isImage: d.isImage,
         alwaysFacesCamera: false,
       });
     }
