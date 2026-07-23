@@ -44,6 +44,11 @@ CONTAINER_TAGS = {
     'F901', '7017', '7117', 'D007', 'C409', '9411', '9511', '0F01',
     '384A', 'B80B', '9713', '2C4C', 'AC0D', 'AE0D', 'F601', 'F801',
     '983A', '993A', '8C3C', '8D3C',
+    # Image-entity placement: an Image placed in the model wraps a standard
+    # 6419 instance node inside 9013 -> 401F. Without these two containers,
+    # that inner instance stays buried in an opaque payload and the image
+    # definition looks "never placed".
+    '9013', '401F',
 }
 
 def parse_tlv_recursive(data, start, end, container_tags=None, depth=0):
@@ -158,6 +163,7 @@ class _GeometryBuilder:
     def __init__(self):
         self.vertices = {}
         self.edges = {}
+        self.edge_flags = {}      # edge id -> display flag byte (D307)
         self.faces = {}
         self.instances = []
 
@@ -193,6 +199,66 @@ def extract_entity_id(node):
     return None
 
 
+def _tlv_flat(payload):
+    """Walk a raw payload as a flat TLV sequence; returns [(tag_hex, body)]."""
+    pos = 0
+    out = []
+    while pos <= len(payload) - 6:
+        tag = payload[pos:pos+2].hex().upper()
+        size = read_u32(payload, pos+2)
+        if pos + 6 + size > len(payload):
+            break
+        out.append((tag, payload[pos+6:pos+6+size]))
+        pos += 6 + size
+    return out
+
+
+def _extract_uv_transforms(dc05_payload):
+    """Per-face texture-mapping matrices from a face's DC05 entity-info blob.
+
+    A positioned / photo-fitted texture stores its mapping per face under
+    ``DC05 -> DD05 -> B136 -> B236 -> 1027 -> 1127 (front) / 1227 (back)
+    -> 1327 -> 1527``: a 3x3 row-major matrix of f64 that maps
+    **texture space -> face plane**; consumers invert it to get UVs
+    (see the ``Face.uv_transform`` docs in model.py for the exact recipe).
+
+    Returns:
+        ``(front, back)`` — each a 9-tuple of floats, or ``None`` when the
+        face carries no positioned mapping on that side.
+    """
+    def _find(seq, tag):
+        for t, body in seq:
+            if t == tag:
+                return body
+        return None
+
+    dd05 = _find(_tlv_flat(dc05_payload), 'DD05')
+    if dd05 is None:
+        return None, None
+    b136 = _find(_tlv_flat(dd05), 'B136')
+    if b136 is None:
+        return None, None
+    b236 = _find(_tlv_flat(b136), 'B236')
+    if b236 is None:
+        return None, None
+    t1027 = _find(_tlv_flat(b236), '1027')
+    if t1027 is None:
+        return None, None
+    sides = _tlv_flat(t1027)
+    result = []
+    for side_tag in ('1127', '1227'):
+        side = _find(sides, side_tag)
+        mat = None
+        if side is not None:
+            t1327 = _find(_tlv_flat(side), '1327')
+            if t1327 is not None:
+                t1527 = _find(_tlv_flat(t1327), '1527')
+                if t1527 is not None and len(t1527) == 72:
+                    mat = struct.unpack('<9d', t1527)
+        result.append(mat)
+    return result[0], result[1]
+
+
 def _extract_geometry_from_nodes(elements, builder):
     for el in elements:
         tag = el['tag']
@@ -214,6 +280,15 @@ def _extract_geometry_from_nodes(elements, builder):
                 v1 = parse_var_int(v1_node['payload'], 0, len(v1_node['payload'])) if v1_node else None
                 v2 = parse_var_int(v2_node['payload'], 0, len(v2_node['payload'])) if v2_node else None
                 builder.edges[e_id] = (v1, v2)
+                # D007 -> D307 = edge display flags: base 0x06, plus
+                # 0x01 hidden, 0x08|0x10 soft/smooth (cross-validated
+                # against the same models in the classic MFC format,
+                # 26k edges: 0x06 plain, 0x07 hidden, 0x1E soft+smooth)
+                d007 = next((c for c in el['children'] if c['tag'] == 'D007'), None)
+                if d007:
+                    d307 = next((c for c in d007['children'] if c['tag'] == 'D307'), None)
+                    if d307 is not None and d307['payload']:
+                        builder.edge_flags[e_id] = d307['payload'][0]
 
         elif tag == 'AC0D':
             f_id = extract_entity_id(el)
@@ -255,12 +330,28 @@ def _extract_geometry_from_nodes(elements, builder):
                         if co_edges:
                             loops.append(co_edges)
                 face_mat_id = None
+                uv_front = uv_back = None
                 d007 = next((c for c in el['children'] if c['tag'] == 'D007'), None)
                 if d007:
                     d107 = next((c for c in d007['children'] if c['tag'] == 'D107'), None)
                     if d107:
                         face_mat_id = parse_var_int(d107['payload'], 0, len(d107['payload']))
-                builder.faces[f_id] = {'loops': loops, 'normal': normal, 'material_id': face_mat_id}
+                    dc05 = next((c for c in d007['children'] if c['tag'] == 'DC05'), None)
+                    if dc05 is not None:
+                        uv_front, uv_back = _extract_uv_transforms(dc05['payload'])
+                # Back-side material: the AF0D child of the face node (a face
+                # painted only on its back — common when the author paints the
+                # visible side of a downward-facing cap — carries AF0D but no
+                # D107).
+                back_mat_id = None
+                af0d = next((c for c in el['children'] if c['tag'] == 'AF0D'), None)
+                if af0d and af0d['payload']:
+                    back_mat_id = parse_var_int(af0d['payload'], 0, len(af0d['payload']))
+                builder.faces[f_id] = {'loops': loops, 'normal': normal,
+                                       'material_id': face_mat_id,
+                                       'back_material_id': back_mat_id,
+                                       'uv_transform': uv_front,
+                                       'uv_transform_back': uv_back}
 
         elif tag == '6419':
             nodes_to_search = el['children'] if el['children'] else [el]
@@ -276,11 +367,25 @@ def _extract_geometry_from_nodes(elements, builder):
                 def_idx = parse_var_int(def_idx_node['payload'], 0, len(def_idx_node['payload']))
             name_node = find_child_tag(nodes_to_search, '6519')
             if name_node:
-                name = name_node['payload'].decode('ascii', errors='ignore')
+                name = name_node['payload'].decode('utf-8', errors='replace')
             mat_node = find_child_tag(nodes_to_search, '6619')
             if mat_node and len(mat_node['payload']) >= 104:
                 for idx in range(13):
                     matrix.append(read_f64(mat_node['payload'], idx * 8))
+
+            # Instance-level material (SketchUp "paint the component"):
+            # same D007/D107 structure faces use. Faces whose own material
+            # is None inherit this — the SDK resolves that inheritance when
+            # exporting, so consumers need the raw value to do the same.
+            inst_mat_id = None
+            d007 = next((c for c in el['children'] if c['tag'] == 'D007'),
+                        None)
+            if d007:
+                d107 = next((c for c in d007['children']
+                             if c['tag'] == 'D107'), None)
+                if d107:
+                    inst_mat_id = parse_var_int(
+                        d107['payload'], 0, len(d107['payload']))
 
             builder.instances.append({
                 'offset': el['offset'],
@@ -288,6 +393,7 @@ def _extract_geometry_from_nodes(elements, builder):
                 'ref_idx': def_idx,
                 'name': name,
                 'matrix': matrix,
+                'material_id': inst_mat_id,
                 'children': el['children']
             })
 
@@ -352,14 +458,81 @@ def extract_dynamic_properties(d007):
         for n in nodes:
             tag = n['tag']
             if tag == 'B636':
-                current_key = n['payload'].decode('ascii', errors='ignore')
+                current_key = n['payload'].decode('utf-8', errors='replace')
             elif tag == 'AD38' and current_key:
-                val = n['payload'].decode('ascii', errors='ignore')
+                val = n['payload'].decode('utf-8', errors='replace')
                 properties[current_key] = val
                 current_key = None
             extract_props(n['children'])
     extract_props(prop_elements)
     return properties
+
+
+# ── Texture extraction ───────────────────────────────────────────────────
+
+def _extract_texture(zf, xml_name, mat_elem, ns):
+    """Extract a material's texture from its ``<mat:texture>`` block.
+
+    SketchUp stores the texture image next to the ``material.xml`` inside the
+    ZIP (``materials/<folder>/<image>``), and the real-world tile size in the
+    ``xScale`` / ``yScale`` attributes (inches).
+
+    Args:
+        zf: The open ZIP file.
+        xml_name: Archive name of the ``material.xml`` being parsed.
+        mat_elem: Its ``<mat:material>`` element.
+        ns: Namespace map for the material schema.
+
+    Returns:
+        Dict with keys ``filename``, ``x_scale``, ``y_scale`` (inches, 0.0
+        when absent) and ``data`` (raw image bytes, or ``None`` when the
+        image entry is missing) — or ``None`` when the material carries no
+        texture.
+    """
+    tex_elem = mat_elem.find('mat:texture', ns)
+    if tex_elem is None:
+        return None
+    filename = tex_elem.get('textureFilename', '') or ''
+    try:
+        x_scale = float(tex_elem.get('xScale', 0) or 0)
+    except ValueError:
+        x_scale = 0.0
+    try:
+        y_scale = float(tex_elem.get('yScale', 0) or 0)
+    except ValueError:
+        y_scale = 0.0
+
+    folder = xml_name.rsplit('/', 1)[0]
+    data = None
+    candidate = folder + '/' + filename if filename else None
+    names = zf.namelist()
+    if candidate and candidate in names:
+        data = zf.read(candidate)
+    else:
+        # Image name may differ from textureFilename (observed: e.g.
+        # "Saftey" vs "Safety") — take the folder's non-XML sibling.
+        for entry in names:
+            if (entry.startswith(folder + '/') and entry != xml_name
+                    and not entry.lower().endswith('.xml')):
+                data = zf.read(entry)
+                if not filename:
+                    filename = entry.rsplit('/', 1)[-1]
+                break
+    if data is None:
+        # Colourized copies ("[Name]1", type="2") keep no image of their
+        # own — their <mat:image path> points into the SOURCE material's
+        # folder ("materials/<other>/<image>"), sometimes prefixed "./".
+        img_elem = tex_elem.find('mat:images/mat:image', ns)
+        img_path = (img_elem.get('path', '') or '') if img_elem is not None else ''
+        img_path = img_path.lstrip('./')
+        for cand in (img_path, folder + '/' + img_path):
+            if cand and cand in names:
+                data = zf.read(cand)
+                if not filename:
+                    filename = cand.rsplit('/', 1)[-1]
+                break
+    return {'filename': filename, 'x_scale': x_scale, 'y_scale': y_scale,
+            'data': data}
 
 
 # ── Full parse pipeline ──────────────────────────────────────────────────
@@ -430,7 +603,20 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
                     b = int(mat_elem.get('colorBlue', 128))
                     trans = float(mat_elem.get('trans', 0.5))
                     folder_name = name.split('/')[1] if len(name.split('/')) > 1 else ''
-                    mat_obj = {'name': mat_name, 'color': {'r': r, 'g': g, 'b': b}, 'transparency': trans}
+                    # type="2" marks a colourized copy ("[Name]1"): the
+                    # shared texture must be re-tinted toward the material
+                    # colour before display. colorizeType 0 = hue shift,
+                    # 1 = tint (greyscale then colour).
+                    colorized = mat_elem.get('type') == '2'
+                    try:
+                        colorize_type = int(mat_elem.get('colorizeType', 0) or 0)
+                    except ValueError:
+                        colorize_type = 0
+                    mat_obj = {'name': mat_name, 'color': {'r': r, 'g': g, 'b': b}, 'transparency': trans,
+                               'colorized': colorized, 'colorize_type': colorize_type}
+                    tex = _extract_texture(zf, name, mat_elem, MAT_NS)
+                    if tex is not None:
+                        mat_obj['texture'] = tex
                     materials[mat_name] = mat_obj
                     if folder_name:
                         materials_by_folder[folder_name] = mat_obj
@@ -443,6 +629,38 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
     thumbnail_data = None
     if 'meta/model_thumbnail.png' in zf.namelist():
         thumbnail_data = zf.read('meta/model_thumbnail.png')
+
+    # Styles: face colors live in styles/*/style.xml as signed-int32 ARGB
+    # variants — item id 4000 is the front (default) face color, 4001 the
+    # back face color. Viewers need them to shade unpainted faces the way
+    # SketchUp does (an author may e.g. set a green back color so unpainted
+    # garden faces read as grass).
+    styles = []
+    for name in zf.namelist():
+        if not (name.startswith('styles/') and name.endswith('style.xml')):
+            continue
+        try:
+            sroot = ET.fromstring(zf.read(name))
+        except ET.ParseError:
+            continue
+        STY = '{http://sketchup.google.com/schemas/sketchup/1.0/style}'
+        TYP = '{http://sketchup.google.com/schemas/1.0/types}'
+        style_el = sroot.find(f'{STY}style')
+        if style_el is None:
+            continue
+        colors = {}
+        for item in style_el.findall(f'{STY}item'):
+            iid = item.get('id')
+            var = item.find(f'{TYP}variant')
+            if iid in ('4000', '4001') and var is not None and var.text:
+                try:
+                    v = int(var.text) & 0xFFFFFFFF
+                except ValueError:
+                    continue
+                colors[iid] = ((v >> 16) & 255, (v >> 8) & 255, v & 255)
+        styles.append({'name': style_el.get('name', ''),
+                       'front_color': colors.get('4000'),
+                       'back_color': colors.get('4001')})
 
     model_dat = zf.read('model.dat')
     zf.close()
@@ -468,7 +686,7 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
                                 l_id = parse_var_int(payload, 6, de05_len)
                             else:
                                 l_id = parse_var_int(payload, 0, len(payload))
-                            l_name = name_node['payload'].decode('ascii', errors='ignore')
+                            l_name = name_node['payload'].decode('utf-8', errors='replace')
                             layer_id_to_name[l_id] = l_name
             collect_layers(el['children'])
     collect_layers(elements)
@@ -492,7 +710,7 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
                         m_id = parse_var_int(payload, 6, de05_len)
                     else:
                         m_id = parse_var_int(payload, 0, len(payload))
-                    m_name = name_node['payload'].decode('ascii', errors='ignore')
+                    m_name = name_node['payload'].decode('utf-8', errors='replace')
                     material_id_to_name[m_id] = m_name
             collect_material_ids(el['children'])
     collect_material_ids(elements)
@@ -504,15 +722,40 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
             if el['tag'] == '7C15':
                 guid = None
                 name = None
+                faces_camera = False
+                is_image = False
                 for child in el['children']:
                     if child['tag'] == '7D15' and len(child['payload']) == 16:
                         guid = child['payload'].hex().upper()
                     elif child['tag'] == '7E15':
-                        name = child['payload'].decode('ascii', errors='ignore')
+                        name = child['payload'].decode('utf-8', errors='replace')
+                    elif child['tag'] == '581B':
+                        # Component behavior flags: sub-TLV 5D1B == 1 marks
+                        # "always faces camera" (2D people/tree cut-outs);
+                        # its companion 5E1B is "shadows face sun".
+                        pos = 0
+                        pl = child['payload']
+                        while pos <= len(pl) - 6:
+                            sub_tag = pl[pos:pos+2].hex().upper()
+                            sub_size = read_u32(pl, pos+2)
+                            if pos + 6 + sub_size > len(pl):
+                                break
+                            if sub_tag == '5D1B' and sub_size >= 1:
+                                faces_camera = parse_var_int(
+                                    pl, pos+6, sub_size) == 1
+                            pos += 6 + sub_size
+                    elif child['tag'] == '8315' and child['payload']:
+                        # Definition kind: observed 0/1 for ordinary
+                        # component/group definitions, 2 for the quad
+                        # definition backing an Image entity.
+                        is_image = parse_var_int(
+                            child['payload'], 0, len(child['payload'])) == 2
                 ent_id = extract_entity_id(el)
                 builder = _GeometryBuilder()
                 _extract_geometry_from_nodes(el['children'], builder)
-                defs_dict[ent_id] = {'guid': guid, 'name': name, 'builder': builder}
+                defs_dict[ent_id] = {'guid': guid, 'name': name,
+                                     'always_faces_camera': faces_camera,
+                                     'is_image': is_image, 'builder': builder}
             collect_defs(el['children'])
     collect_defs(elements)
 
@@ -533,6 +776,7 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
         'defs_dict': defs_dict,
         'elements': elements,
         'thumbnail_data': thumbnail_data,
+        'styles': styles,
     }
 
 
