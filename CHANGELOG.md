@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Python**: `Material.id` and `SkpModel.materials_by_id` — expose the TLV
+  material IDs that `Face.material_id` references, so callers can resolve a
+  face's material (colour/transparency) from the public API. Previously the
+  join existed only inside the internal exporter.
+
 ### Fixed
 
 - **Python**: entity names (materials, layers, definitions, instances,

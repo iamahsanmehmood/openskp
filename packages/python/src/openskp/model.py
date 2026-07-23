@@ -127,11 +127,18 @@ class Material:
         color: RGBA colour tuple ``(r, g, b, a)`` with each value in 0–255.
         transparency: Opacity factor where ``0.0`` is fully transparent and
             ``1.0`` is fully opaque.
+        id: Numeric material ID from the TLV stream — the value that
+            :attr:`Face.material_id` references, so callers can resolve a
+            face's material.  ``None`` when the file assigns the material no
+            ID (e.g. it is never referenced by geometry).  When several TLV
+            IDs alias the same material, this holds the first one seen; every
+            ID still resolves through :attr:`SkpModel.materials_by_id`.
     """
 
     name: str
     color: Tuple[int, int, int, int] = (200, 200, 200, 255)
     transparency: float = 1.0
+    id: Optional[int] = None
 
 
 # ── Component hierarchy ───────────────────────────────────────────────────
@@ -202,6 +209,9 @@ class SkpModel:
         definitions: Mapping of definition index → :class:`Definition`.
         layers: List of :class:`Layer` objects found in the file.
         materials: List of :class:`Material` objects found in the file.
+        materials_by_id: Mapping of TLV material ID → :class:`Material`,
+            the join table for :attr:`Face.material_id`.  Several IDs may
+            alias the same :class:`Material` object.
         scene_hierarchy: Top-level :class:`Instance` list forming the
             scene graph.
         mesh_index: Pre-built index mapping definition IDs to triangulated
@@ -212,6 +222,7 @@ class SkpModel:
     definitions: Dict[int, Definition] = field(default_factory=dict)
     layers: List[Layer] = field(default_factory=list)
     materials: List[Material] = field(default_factory=list)
+    materials_by_id: Dict[int, Material] = field(default_factory=dict)
     scene_hierarchy: List[Instance] = field(default_factory=list)
     mesh_index: Dict[int, Any] = field(default_factory=dict)
 
@@ -326,13 +337,30 @@ class SkpFile:
             model.layers.append(Layer(name=name, color_r=r, color_g=g, color_b=b))
 
         # Convert materials
+        mat_for_data: Dict[int, Material] = {}   # id(raw dict) -> Material
         for mat_data in parsed["materials"].values():
             c = mat_data.get("color", {})
-            model.materials.append(Material(
+            mat = Material(
                 name=mat_data.get("name", ""),
                 color=(c.get("r", 128), c.get("g", 128), c.get("b", 128)),
                 transparency=mat_data.get("transparency", 0.5),
-            ))
+            )
+            model.materials.append(mat)
+            mat_for_data[id(mat_data)] = mat
+
+        # Join the TLV material IDs (what Face.material_id references) onto
+        # the parsed materials, so callers can resolve face -> material.
+        # Same name-then-folder resolution the internal exporter uses.
+        materials_by_folder = parsed.get("materials_by_folder", {})
+        for m_id, m_name in parsed.get("material_id_to_name", {}).items():
+            mat_data = (parsed["materials"].get(m_name)
+                        or materials_by_folder.get(m_name))
+            mat = mat_for_data.get(id(mat_data)) if mat_data is not None else None
+            if mat is None:
+                continue
+            if mat.id is None:
+                mat.id = m_id
+            model.materials_by_id[m_id] = mat
 
         # Store raw parsed data for export use
         self._parsed = parsed
