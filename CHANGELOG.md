@@ -26,6 +26,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instance itself (SketchUp's "paint the component", the same `D007`/`D107`
   structure faces use). Faces with no material of their own inherit it;
   consumers can now resolve that inheritance like the official SDK does.
+- **Python**: styles — `SkpModel.styles` (`Style`: name, `front_color`,
+  `back_color` RGB) parsed from `styles/*/style.xml` (signed-int32 ARGB
+  items 4000/4001). Viewers need them to shade unpainted faces the way
+  SketchUp does.
 
 ## [0.2.0] — 2026-06-18
 

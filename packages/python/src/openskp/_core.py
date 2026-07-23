@@ -463,6 +463,38 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
     if 'meta/model_thumbnail.png' in zf.namelist():
         thumbnail_data = zf.read('meta/model_thumbnail.png')
 
+    # Styles: face colors live in styles/*/style.xml as signed-int32 ARGB
+    # variants — item id 4000 is the front (default) face color, 4001 the
+    # back face color. Viewers need them to shade unpainted faces the way
+    # SketchUp does (an author may e.g. set a green back color so unpainted
+    # garden faces read as grass).
+    styles = []
+    for name in zf.namelist():
+        if not (name.startswith('styles/') and name.endswith('style.xml')):
+            continue
+        try:
+            sroot = ET.fromstring(zf.read(name))
+        except ET.ParseError:
+            continue
+        STY = '{http://sketchup.google.com/schemas/sketchup/1.0/style}'
+        TYP = '{http://sketchup.google.com/schemas/1.0/types}'
+        style_el = sroot.find(f'{STY}style')
+        if style_el is None:
+            continue
+        colors = {}
+        for item in style_el.findall(f'{STY}item'):
+            iid = item.get('id')
+            var = item.find(f'{TYP}variant')
+            if iid in ('4000', '4001') and var is not None and var.text:
+                try:
+                    v = int(var.text) & 0xFFFFFFFF
+                except ValueError:
+                    continue
+                colors[iid] = ((v >> 16) & 255, (v >> 8) & 255, v & 255)
+        styles.append({'name': style_el.get('name', ''),
+                       'front_color': colors.get('4000'),
+                       'back_color': colors.get('4001')})
+
     model_dat = zf.read('model.dat')
     zf.close()
 
@@ -552,6 +584,7 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
         'defs_dict': defs_dict,
         'elements': elements,
         'thumbnail_data': thumbnail_data,
+        'styles': styles,
     }
 
 
