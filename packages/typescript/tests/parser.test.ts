@@ -3,7 +3,7 @@ import { validateHeader, readVersion } from '../src/vff';
 import { readU32, readF64, parseVarInt, parseTlvRecursive } from '../src/parser';
 import { transformPoint, multiplyMatrices, isIdentity } from '../src/transforms';
 import { computeFaceNormal, triangulateFace3D } from '../src/triangulator';
-import { GeometryBuilder, extractGeometryFromNodes } from '../src/geometry';
+import { GeometryBuilder, extractGeometryFromNodes, extractUvTransforms } from '../src/geometry';
 
 /** Build a single TLV element: 2-byte tag (hex) + 4-byte LE size + payload. */
 function tlv(tagHex: string, payload: Uint8Array): Uint8Array {
@@ -192,5 +192,55 @@ describe('Instance material (paint the component)', () => {
 
     expect(builder.instances.length).toBe(1);
     expect(builder.instances[0].materialId).toBeNull();
+  });
+});
+
+describe('Face UV transform (positioned texture mapping)', () => {
+  const ROT90 = [0.0, 1.0, 0.0, -1.0, 0.0, 0.0, 96.0, -96.0, 1.0];
+
+  function packF64Array(values: number[]): Uint8Array {
+    const buf = new Uint8Array(values.length * 8);
+    const view = new DataView(buf.buffer);
+    values.forEach((v, i) => view.setFloat64(i * 8, v, true));
+    return buf;
+  }
+
+  function dc05(front: number[] | null, back: number[] | null): Uint8Array {
+    const side = (tag: string, mat: number[]) => {
+      const m1527 = tlv('1527', packF64Array(mat));
+      const inner1327 = tlv('1327', concatBytes(tlv('1427', new Uint8Array([0x01])), m1527));
+      return tlv(tag, inner1327);
+    };
+    let inner = new Uint8Array(0);
+    if (front !== null) inner = concatBytes(inner, side('1127', front));
+    if (back !== null) inner = concatBytes(inner, side('1227', back));
+    const t1027 = tlv('1027', inner);
+    return concatBytes(
+      tlv('DE05', new Uint8Array([0x2a])),
+      tlv('DD05', tlv('B136', tlv('B236', t1027)))
+    );
+  }
+
+  it('extracts the front matrix', () => {
+    const [front, back] = extractUvTransforms(dc05(ROT90, null));
+    expect(front).not.toBeNull();
+    front!.forEach((v, i) => expect(v).toBeCloseTo(ROT90[i]));
+    expect(back).toBeNull();
+  });
+
+  it('extracts both sides', () => {
+    const other = ROT90.map((v) => v * 2);
+    const [front, back] = extractUvTransforms(dc05(ROT90, other));
+    expect(front).not.toBeNull();
+    expect(back).not.toBeNull();
+    front!.forEach((v, i) => expect(v).toBeCloseTo(ROT90[i]));
+    back!.forEach((v, i) => expect(v).toBeCloseTo(other[i]));
+  });
+
+  it('returns null for an untouched texture (no DD05 block)', () => {
+    const plain = tlv('DE05', new Uint8Array([0x2a])); // entity id only
+    const [front, back] = extractUvTransforms(plain);
+    expect(front).toBeNull();
+    expect(back).toBeNull();
   });
 });

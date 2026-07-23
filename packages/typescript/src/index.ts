@@ -59,9 +59,28 @@ export interface Face {
   id: number;
   loops: CoEdge[][];
   normal: [number, number, number];
+  /** Material of the face's FRONT side, or null. */
   materialId: number | null;
+  /** Material of the face's BACK side, or null. */
   backMaterialId: number | null;
+  /**
+   * Per-face texture mapping for a positioned / photo-fitted texture
+   * (SketchUp's pins), or null when the texture is untouched (default
+   * projection applies). A 9-element array: a 3x3 row-major matrix mapping
+   * texture space -> face plane. To compute the UV of a point p (inches):
+   *
+   * 1. Plane basis from the face normal n: xr = normalize(Z x n),
+   *    yr = n x xr (for a vertical n: xr = X, yr = +-Y by the sign of n.Z).
+   * 2. uvq = [p.xr, p.yr, 1] @ inv(M) (row-vector convention).
+   * 3. u = uvq[0]/uvq[2] / tileW, v = uvq[1]/uvq[2] / tileH with the
+   *    material texture's tile size in inches.
+   *
+   * When the texture is untouched (null), the default is
+   * u = (p.xr)/tileW, v = (p.yr)/tileH. Distorted (4-pin) mappings are
+   * projective: uvq[2] != 1.
+   */
   uvTransform: number[] | null;
+  /** Same for the face's back side, or null. */
   uvTransformBack: number[] | null;
 }
 
@@ -612,10 +631,10 @@ export function parseSkp(buffer: ArrayBuffer): SkpModel {
         id: fId,
         loops: fData.loops,
         normal: fData.normal,
-        materialId: (fData as any).materialId ?? null,
+        materialId: fData.materialId ?? null,
         backMaterialId: null,
-        uvTransform: null,
-        uvTransformBack: null,
+        uvTransform: fData.uvTransform ?? null,
+        uvTransformBack: fData.uvTransformBack ?? null,
       }));
       const instances: Instance[] = d.builder.instances.map((inst) => ({
         name: inst.name,
