@@ -334,8 +334,17 @@ def _extract_geometry_from_nodes(elements, builder):
                     dc05 = next((c for c in d007['children'] if c['tag'] == 'DC05'), None)
                     if dc05 is not None:
                         uv_front, uv_back = _extract_uv_transforms(dc05['payload'])
+                # Back-side material: the AF0D child of the face node (a face
+                # painted only on its back — common when the author paints the
+                # visible side of a downward-facing cap — carries AF0D but no
+                # D107).
+                back_mat_id = None
+                af0d = next((c for c in el['children'] if c['tag'] == 'AF0D'), None)
+                if af0d and af0d['payload']:
+                    back_mat_id = parse_var_int(af0d['payload'], 0, len(af0d['payload']))
                 builder.faces[f_id] = {'loops': loops, 'normal': normal,
                                        'material_id': face_mat_id,
+                                       'back_material_id': back_mat_id,
                                        'uv_transform': uv_front,
                                        'uv_transform_back': uv_back}
 

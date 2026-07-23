@@ -37,6 +37,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `[x, y, 1] @ inv(M) / tile`), calibrated against SDK-exported ground
   truth to < 0.001 UV error, including projective (4-pin distorted)
   mappings.
+- **Python**: `Face.back_material_id` — the material of a face's BACK side
+  (the `AF0D` child of the face node). A face painted only on its back is
+  common when the author paints the visible side of a downward-facing cap;
+  without this field such faces looked unpainted.
 
 ## [0.2.0] — 2026-06-18
 
