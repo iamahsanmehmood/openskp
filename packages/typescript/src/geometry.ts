@@ -14,6 +14,8 @@ export interface GeometryBuilderFace {
   loops: { edgeId: number; orientation: number }[][];
   normal: [number, number, number];
   materialId?: number | null;
+  uvTransform?: number[] | null;
+  uvTransformBack?: number[] | null;
 }
 
 export class GeometryBuilder {
@@ -69,6 +71,77 @@ export function extractEntityId(node: TlvNode): number | null {
     if (res !== null) return res;
   }
   return null;
+}
+
+/** Walk a raw payload as a flat TLV sequence; returns [tag, body] pairs. */
+function tlvFlat(payload: Uint8Array): [string, Uint8Array][] {
+  let pos = 0;
+  const out: [string, Uint8Array][] = [];
+  while (pos <= payload.length - 6) {
+    const tagBytes = payload.subarray(pos, pos + 2);
+    let tagHex = '';
+    for (let i = 0; i < 2; i++) {
+      const h = tagBytes[i].toString(16).toUpperCase();
+      tagHex += h.length === 1 ? '0' + h : h;
+    }
+    const size = readU32(payload, pos + 2);
+    if (pos + 6 + size > payload.length) break;
+    out.push([tagHex, payload.subarray(pos + 6, pos + 6 + size)]);
+    pos += 6 + size;
+  }
+  return out;
+}
+
+function findFlat(seq: [string, Uint8Array][], tag: string): Uint8Array | null {
+  for (const [t, body] of seq) {
+    if (t === tag) return body;
+  }
+  return null;
+}
+
+/**
+ * Per-face texture-mapping matrices from a face's DC05 entity-info blob.
+ *
+ * A positioned / photo-fitted texture stores its mapping per face under
+ * DC05 -> DD05 -> B136 -> B236 -> 1027 -> 1127 (front) / 1227 (back)
+ * -> 1327 -> 1527: a 3x3 row-major matrix of f64 that maps
+ * texture space -> face plane; consumers invert it to get UVs
+ * (see the Face.uvTransform docs in index.ts for the exact recipe).
+ *
+ * Returns [front, back] - each a 9-element array of numbers, or null when
+ * the face carries no positioned mapping on that side.
+ */
+export function extractUvTransforms(
+  dc05Payload: Uint8Array
+): [number[] | null, number[] | null] {
+  const dd05 = findFlat(tlvFlat(dc05Payload), 'DD05');
+  if (dd05 === null) return [null, null];
+  const b136 = findFlat(tlvFlat(dd05), 'B136');
+  if (b136 === null) return [null, null];
+  const b236 = findFlat(tlvFlat(b136), 'B236');
+  if (b236 === null) return [null, null];
+  const t1027 = findFlat(tlvFlat(b236), '1027');
+  if (t1027 === null) return [null, null];
+  const sides = tlvFlat(t1027);
+  const result: (number[] | null)[] = [];
+  for (const sideTag of ['1127', '1227']) {
+    const side = findFlat(sides, sideTag);
+    let mat: number[] | null = null;
+    if (side !== null) {
+      const t1327 = findFlat(tlvFlat(side), '1327');
+      if (t1327 !== null) {
+        const t1527 = findFlat(tlvFlat(t1327), '1527');
+        if (t1527 !== null && t1527.length === 72) {
+          mat = [];
+          for (let i = 0; i < 9; i++) {
+            mat.push(readF64(t1527, i * 8));
+          }
+        }
+      }
+    }
+    result.push(mat);
+  }
+  return [result[0], result[1]];
 }
 
 export function extractGeometryFromNodes(
@@ -144,14 +217,26 @@ export function extractGeometryFromNodes(
           }
         }
         let faceMatId: number | null = null;
+        let uvFront: number[] | null = null;
+        let uvBack: number[] | null = null;
         const d007 = el.children.find((c) => c.tag === 'D007');
         if (d007) {
           const d107 = d007.children.find((c) => c.tag === 'D107');
           if (d107) {
             faceMatId = parseVarInt(d107.payload, 0, d107.payload.length);
           }
+          const dc05 = d007.children.find((c) => c.tag === 'DC05');
+          if (dc05) {
+            [uvFront, uvBack] = extractUvTransforms(dc05.payload);
+          }
         }
-        builder.faces.set(fId, { loops, normal, materialId: faceMatId });
+        builder.faces.set(fId, {
+          loops,
+          normal,
+          materialId: faceMatId,
+          uvTransform: uvFront,
+          uvTransformBack: uvBack,
+        });
       }
     } else if (tag === '6419') {
       const nodesToSearch = el.children.length > 0 ? el.children : [el];
