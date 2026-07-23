@@ -76,6 +76,12 @@ export interface Instance {
   refIdx: number;
   guid: string;
   matrix: number[];
+  /**
+   * Material painted onto the instance itself (SketchUp's "paint the
+   * component"), or null. Faces inside the placed definition whose own
+   * Face.materialId is null inherit this material - consumers must resolve
+   * that inheritance themselves, like the official SDK does on export.
+   */
   materialId: number | null;
 }
 
@@ -616,7 +622,7 @@ export function parseSkp(buffer: ArrayBuffer): SkpModel {
         refIdx: inst.refIdx,
         guid: inst.refGuid,
         matrix: inst.matrix,
-        materialId: null,
+        materialId: inst.materialId,
       }));
 
       finalDefinitions.set(id, {

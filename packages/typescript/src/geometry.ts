@@ -6,6 +6,7 @@ export interface GeometryBuilderInstance {
   refIdx: number;
   name: string;
   matrix: number[];
+  materialId: number | null;
   children: TlvNode[];
 }
 
@@ -191,12 +192,26 @@ export function extractGeometryFromNodes(
         }
       }
 
+      // Instance-level material (SketchUp "paint the component"): same
+      // D007/D107 structure faces use. Faces whose own materialId is null
+      // inherit this - the SDK resolves that inheritance when exporting,
+      // so consumers need the raw value to do the same.
+      let instMatId: number | null = null;
+      const d007 = el.children.find((c) => c.tag === 'D007');
+      if (d007) {
+        const d107 = d007.children.find((c) => c.tag === 'D107');
+        if (d107) {
+          instMatId = parseVarInt(d107.payload, 0, d107.payload.length);
+        }
+      }
+
       builder.instances.push({
         offset: el.offset,
         refGuid: guid || '',
         refIdx: defIdx !== null ? defIdx : -1,
         name: name || '',
         matrix: matrix,
+        materialId: instMatId,
         children: el.children,
       });
     } else if (el.children && el.children.length > 0) {
