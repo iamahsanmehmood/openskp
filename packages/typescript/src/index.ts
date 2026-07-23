@@ -168,7 +168,7 @@ export function parseSkp(buffer: ArrayBuffer): SkpModel {
           }
           let mName = '';
           try {
-            const decoder = new TextDecoder('ascii');
+            const decoder = new TextDecoder('utf-8');
             mName = decoder.decode(nameNode.payload).replace(/\0/g, '').trim();
           } catch (e) {
             // Ignore

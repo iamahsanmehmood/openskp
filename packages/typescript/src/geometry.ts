@@ -177,7 +177,7 @@ export function extractGeometryFromNodes(
       const nameNode = findChildTag(nodesToSearch, '6519');
       if (nameNode) {
         try {
-          const decoder = new TextDecoder('ascii');
+          const decoder = new TextDecoder('utf-8');
           name = decoder.decode(nameNode.payload).replace(/\0/g, '').trim();
         } catch (e) {
           name = '';
@@ -226,7 +226,7 @@ export function collectLayers(
             }
             let lName = '';
             try {
-              const decoder = new TextDecoder('ascii');
+              const decoder = new TextDecoder('utf-8');
               lName = decoder.decode(nameNode.payload).replace(/\0/g, '').trim();
             } catch (e) {
               // Ignore
@@ -261,7 +261,7 @@ export function collectDefs(
           guid = hex;
         } else if (child.tag === '7E15') {
           try {
-            const decoder = new TextDecoder('ascii');
+            const decoder = new TextDecoder('utf-8');
             name = decoder.decode(child.payload).replace(/\0/g, '').trim();
           } catch (e) {
             name = '';
@@ -314,14 +314,14 @@ export function extractDynamicProperties(d007: TlvNode): Record<string, string> 
       const tag = n.tag;
       if (tag === 'B636') {
         try {
-          const decoder = new TextDecoder('ascii');
+          const decoder = new TextDecoder('utf-8');
           currentKey = decoder.decode(n.payload).replace(/\0/g, '').trim();
         } catch (e) {
           currentKey = null;
         }
       } else if (tag === 'AD38' && currentKey) {
         try {
-          const decoder = new TextDecoder('ascii');
+          const decoder = new TextDecoder('utf-8');
           const val = decoder.decode(n.payload).replace(/\0/g, '').trim();
           properties[currentKey] = val;
         } catch (e) {
