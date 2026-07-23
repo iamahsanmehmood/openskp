@@ -111,6 +111,13 @@ describe('SketchUp Parser Integration Test', () => {
     expect(matLayer0!.colorizeType).toBe(0);
 
     expect(model.materialsById).toBeInstanceOf(Map);
+    // Real join: TLV material ID 26180 in this fixture resolves to the
+    // default "*" material, and the resolved object is the SAME instance
+    // held in model.materials (not a copy) - the join shares identity.
+    expect(model.materialsById.get(26180)).toBeDefined();
+    expect(model.materialsById.get(26180)!.name).toBe('*');
+    expect(model.materials).toContain(model.materialsById.get(26180));
+    expect(model.materialsById.get(26180)!.id).toBe(26180);
     expect(Array.isArray(model.styles)).toBe(true);
 
     // 8. Assert Scene Hierarchy
