@@ -73,11 +73,17 @@ class Edge:
         id: Unique edge identifier within its definition.
         v1_id: Start-vertex ID.
         v2_id: End-vertex ID.
+        soft: Soft edge (merges the faces it borders into one surface).
+        smooth: Smooth edge (normals interpolate across it).
+        hidden: Edge hidden by the user.
     """
 
     id: int
     v1_id: int
     v2_id: int
+    soft: bool = False
+    smooth: bool = False
+    hidden: bool = False
 
 
 @dataclass
@@ -318,8 +324,13 @@ class SkpFile:
             for v_id, (x, y, z) in builder.vertices.items():
                 defn.vertices[v_id] = Vertex(id=v_id, x=x, y=y, z=z)
             # Populate edges
+            flags_map = getattr(builder, "edge_flags", {})
             for e_id, (v1, v2) in builder.edges.items():
-                defn.edges[e_id] = Edge(id=e_id, v1_id=v1 or 0, v2_id=v2 or 0)
+                flags = flags_map.get(e_id, 0)
+                defn.edges[e_id] = Edge(id=e_id, v1_id=v1 or 0, v2_id=v2 or 0,
+                                        soft=bool(flags & 0x08),
+                                        smooth=bool(flags & 0x10),
+                                        hidden=bool(flags & 0x01))
             # Populate faces
             for f_id, f_data in builder.faces.items():
                 defn.faces[f_id] = Face(
