@@ -7,12 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
+### Changed
 
-- **Python**: material transparency now honours `useTrans` — the `trans`
-  attribute in `material.xml` only applies when `useTrans="1"`. Previously
-  most materials read as 50% transparent (the parser default) and some as
-  fully invisible (`trans="0"` with `useTrans="0"`).
+- **Python** — ⚠️ **`Material.transparency` value change.** The `trans`
+  attribute in `material.xml` is a *transparency* (0 = opaque, 1 = fully
+  transparent), not an opacity, and only applies when `useTrans="1"`. The
+  parser now exposes the resulting **opacity** as `1 - trans` (and `1.0`
+  when `useTrans` is off). This corrects two prior behaviours — most
+  materials previously read as 50% transparent (the parser default) and
+  some as fully invisible (`trans="0"`) — but it also means
+  `Material.transparency` returns **different numeric values for the same
+  file** after this release: most materials move `0.5 → 1.0`, and genuinely
+  translucent ones invert (e.g. SketchUp's "Translucent Glass Blue", 70%
+  opacity, now reads `0.7` instead of `0.3`). **Audit any code that reads
+  `Material.transparency` directly before upgrading.** Validated against
+  SketchUp's own library materials.
 
 ## [0.2.0] — 2026-06-18
 
