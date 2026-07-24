@@ -57,6 +57,7 @@ packages/dart/pubspec.lock
 !packages/python/tests/fixtures/*.skp
 !packages/typescript/tests/fixtures/*.skp
 !packages/dotnet/OpenSkp.Tests/fixtures/*.skp
+!packages/dart/test/fixtures/*.skp
 *.glb
 *.obj
 

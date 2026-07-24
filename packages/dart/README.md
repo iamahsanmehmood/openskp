@@ -67,7 +67,7 @@ void main() async {
   // Inspect Layers
   print('Layers:');
   for (var layer in model.layers) {
-    print('- ${layer.name} (RGB: ${layer.color.r}, ${layer.color.g}, ${layer.color.b})');
+    print('- ${layer.name} (RGB: ${layer.colorR}, ${layer.colorG}, ${layer.colorB})');
   }
 
   // Inspect Materials
@@ -75,6 +75,15 @@ void main() async {
   for (var material in model.materials) {
     print('- ${material.name} (Opacity: ${material.transparency})');
   }
+
+  // Walk component definitions and their geometry
+  model.definitions.forEach((id, def) {
+    print('Definition $id: ${def.name} - ${def.vertices.length} vertices, ${def.faces.length} faces');
+  });
+
+  // model.root holds whatever is placed directly in the model (not inside
+  // any component/group), including root-level instances.
+  print('Root-level instances: ${model.root.instances.length}');
 }
 ```
 
@@ -82,14 +91,17 @@ void main() async {
 
 ## 📐 API Data Model Reference
 
-The public API is designed to mirror the cross-platform OpenSKP specification:
+The public API is designed to mirror the Python reference implementation's
+data model (the same shape the C# port also follows):
 
 ### `SkpModel`
 - `String version` — The parsed SketchUp application version.
-- `Map<int, Definition> definitions` — Component geometry definitions by index.
+- `Map<int, Definition> definitions` — Component/group geometry definitions, keyed by their numeric TLV entity ID.
+- `Definition root` — Whatever is placed directly in the model (not inside any component/group).
 - `List<Layer> layers` — Layer names and color configurations.
 - `List<Material> materials` — Material names, color channels, and transparency values.
-- `InstanceNode sceneHierarchy` — The root of the hierarchical instance tree.
+- `Map<int, Material> materialsById` — Join table from a TLV material ID (`Face.materialId`) to its `Material`.
+- `List<Style> styles` — Bundled rendering styles (default front/back face colors).
 
 ---
 
