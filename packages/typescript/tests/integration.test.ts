@@ -46,6 +46,9 @@ describe('SketchUp Parser Integration Test', () => {
     expect(matLayer0).toBeDefined();
     expect(typeof matLayer0!.color.r).toBe('number');
     expect(typeof matLayer0!.transparency).toBe('number');
+    // Real data: none of this fixture's materials have useTrans="1" set,
+    // so all correctly read fully opaque.
+    expect(matLayer0!.transparency).toBe(1);
 
     // 4. Assert Definitions
     expect(model.definitions.size).toBe(46);

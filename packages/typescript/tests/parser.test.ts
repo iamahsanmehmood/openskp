@@ -3,7 +3,7 @@ import { validateHeader, readVersion } from '../src/vff';
 import { readU32, readF64, parseVarInt, parseTlvRecursive } from '../src/parser';
 import { transformPoint, multiplyMatrices, isIdentity } from '../src/transforms';
 import { computeFaceNormal, triangulateFace3D } from '../src/triangulator';
-import { GeometryBuilder, extractGeometryFromNodes, extractUvTransforms, collectDefs } from '../src/geometry';
+import { GeometryBuilder, extractGeometryFromNodes, extractUvTransforms, collectDefs, parseMaterialXml } from '../src/geometry';
 
 /** Build a single TLV element: 2-byte tag (hex) + 4-byte LE size + payload. */
 function tlv(tagHex: string, payload: Uint8Array): Uint8Array {
@@ -326,5 +326,25 @@ describe('Back-side material (AF0D)', () => {
     const f = builder.faces.get(0x2a)!;
     expect(f.materialId ?? null).toBeNull();
     expect(f.backMaterialId).toBe(0x068b85);
+  });
+});
+
+describe("Material transparency (useTrans gating)", () => {
+  it('applies trans as an opacity (1 - trans) when useTrans="1"', () => {
+    const xml =
+      '<mat:material name="M" colorRed="1" colorGreen="2" colorBlue="3" trans="0.27" useTrans="1"/>';
+    const parsed = parseMaterialXml(xml);
+    expect(parsed).not.toBeNull();
+    // trans stores a TRANSPARENCY; the exposed value is the resulting
+    // opacity, so trans="0.27" reads back as 0.73.
+    expect(parsed!.trans).toBeCloseTo(0.73, 9);
+  });
+
+  it('stays fully opaque when useTrans is absent or "0" (trans is a leftover default)', () => {
+    const xml =
+      '<mat:material name="M" colorRed="1" colorGreen="2" colorBlue="3" trans="0" useTrans="0"/>';
+    const parsed = parseMaterialXml(xml);
+    expect(parsed).not.toBeNull();
+    expect(parsed!.trans).toBe(1.0);
   });
 });

@@ -512,7 +512,19 @@ export function parseMaterialXml(xmlText: string): { name: string; r: number; g:
   const colorRed = parseInt(getAttr('colorRed') || '128', 10);
   const colorGreen = parseInt(getAttr('colorGreen') || '128', 10);
   const colorBlue = parseInt(getAttr('colorBlue') || '128', 10);
-  const trans = parseFloat(getAttr('trans') || '0.5');
+
+  // 'trans' is a TRANSPARENCY (0 = opaque, 1 = fully transparent) and only
+  // applies when useTrans="1"; otherwise it's a leftover default and the
+  // material is fully opaque. Expose the resulting OPACITY as 1 - trans
+  // (e.g. SketchUp's "Translucent Glass Blue", 70% opacity, stores
+  // trans="0.3").
+  let trans: number;
+  if (getAttr('useTrans') === '1') {
+    const rawTrans = parseFloat(getAttr('trans') || '0');
+    trans = Math.min(Math.max(1.0 - rawTrans, 0.0), 1.0);
+  } else {
+    trans = 1.0;
+  }
 
   return { name, r: colorRed, g: colorGreen, b: colorBlue, trans };
 }
