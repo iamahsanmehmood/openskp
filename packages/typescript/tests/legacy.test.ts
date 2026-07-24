@@ -113,5 +113,15 @@ describe('Legacy MFC reader (classic pre-2021 .skp)', () => {
     expect(scene.sceneHierarchy.children.length).toBe(3);
     const instanceDefNames = scene.sceneHierarchy.children.map((c) => c.definitionName).sort();
     expect(instanceDefNames).toEqual(['grada', 'grada', 'puerta']);
+
+    // 7. model.root: the same 3 root-level instances are also reachable
+    // straight off the light parseSkp() result (no buildScene() needed),
+    // matching Python/.NET/Dart's parse() - which all expose root-level
+    // placements without requiring the heavier scene bake.
+    expect(model.root.instances.length).toBe(3);
+    const rootRefNames = model.root.instances
+      .map((i) => model.definitions.get(i.refIdx)?.name)
+      .sort();
+    expect(rootRefNames).toEqual(['grada', 'grada', 'puerta']);
   });
 });

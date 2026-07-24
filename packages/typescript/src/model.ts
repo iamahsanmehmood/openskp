@@ -7,6 +7,11 @@ import { ParseOptions, PROGRESS_INTERVAL, emitLog, emitProgress } from './observ
 export interface SkpModel {
   version: string;
   definitions: Map<number, Definition>;
+  /** The implicit top-level model definition: its `instances` are the
+   * entities placed directly in the model (not inside any component/
+   * group), and its `vertices`/`edges`/`faces` are geometry drawn directly
+   * at the top level. Corresponds to .NET/Dart's `Root`/`root`. */
+  root: Definition;
   layers: Layer[];
   materials: Material[];
   materialsById: Map<number, Material>;
@@ -218,63 +223,77 @@ export function buildModelFromParsed(parsed: ParsedRawData): SkpModel {
   const finalMaterialsList: Material[] = Array.from(materialsMap.values());
 
   const finalDefinitions = new Map<number, Definition>();
+  let rootDefinition: Definition | null = null;
   for (const [id, d] of defsDict.entries()) {
+    const defn = buildDefinition(typeof id === 'number' ? id : 0, d);
     if (typeof id === 'number') {
-      const vertices: Vertex[] = Array.from(d.builder.vertices.entries()).map(([vId, [x, y, z]]) => ({
-        id: vId,
-        x,
-        y,
-        z,
-      }));
-      const edges: Edge[] = Array.from(d.builder.edges.entries()).map(([eId, [v1, v2]]) => {
-        const flags = d.builder.edgeFlags.get(eId) ?? 0;
-        return {
-          id: eId,
-          v1Id: v1 ?? 0,
-          v2Id: v2 ?? 0,
-          soft: (flags & 0x08) !== 0,
-          smooth: (flags & 0x10) !== 0,
-          hidden: (flags & 0x01) !== 0,
-        };
-      });
-      const faces: Face[] = Array.from(d.builder.faces.entries()).map(([fId, fData]) => ({
-        id: fId,
-        loops: fData.loops,
-        normal: fData.normal,
-        materialId: fData.materialId ?? null,
-        backMaterialId: fData.backMaterialId ?? null,
-        uvTransform: fData.uvTransform ?? null,
-        uvTransformBack: fData.uvTransformBack ?? null,
-      }));
-      const instances: Instance[] = d.builder.instances.map((inst) => ({
-        name: inst.name,
-        refIdx: inst.refIdx,
-        guid: inst.refGuid,
-        matrix: inst.matrix,
-        materialId: inst.materialId,
-      }));
-
-      finalDefinitions.set(id, {
-        id,
-        guid: d.guid,
-        name: d.name,
-        vertices,
-        edges,
-        faces,
-        instances,
-        isImage: d.isImage,
-        alwaysFacesCamera: d.alwaysFacesCamera,
-      });
+      finalDefinitions.set(id, defn);
+    } else {
+      rootDefinition = defn;
     }
   }
 
   return {
     version,
     definitions: finalDefinitions,
+    // The implicit top-level model definition: its instances are the
+    // entities placed directly in the model (not inside any component/
+    // group). Kept out of `definitions` (which is numeric-ID-only, one
+    // entry per real component/group definition) and exposed here instead,
+    // matching the .NET and Dart ports' `Root`/`root` field.
+    root: rootDefinition ?? { id: 0, guid: 'ROOT', name: 'ROOT_MODEL', vertices: [], edges: [], faces: [], instances: [], isImage: false, alwaysFacesCamera: false },
     layers: finalLayersList,
     materials: finalMaterialsList,
     materialsById,
     styles,
+  };
+}
+
+function buildDefinition(id: number, d: ParsedDefinition): Definition {
+  const vertices: Vertex[] = Array.from(d.builder.vertices.entries()).map(([vId, [x, y, z]]) => ({
+    id: vId,
+    x,
+    y,
+    z,
+  }));
+  const edges: Edge[] = Array.from(d.builder.edges.entries()).map(([eId, [v1, v2]]) => {
+    const flags = d.builder.edgeFlags.get(eId) ?? 0;
+    return {
+      id: eId,
+      v1Id: v1 ?? 0,
+      v2Id: v2 ?? 0,
+      soft: (flags & 0x08) !== 0,
+      smooth: (flags & 0x10) !== 0,
+      hidden: (flags & 0x01) !== 0,
+    };
+  });
+  const faces: Face[] = Array.from(d.builder.faces.entries()).map(([fId, fData]) => ({
+    id: fId,
+    loops: fData.loops,
+    normal: fData.normal,
+    materialId: fData.materialId ?? null,
+    backMaterialId: fData.backMaterialId ?? null,
+    uvTransform: fData.uvTransform ?? null,
+    uvTransformBack: fData.uvTransformBack ?? null,
+  }));
+  const instances: Instance[] = d.builder.instances.map((inst) => ({
+    name: inst.name,
+    refIdx: inst.refIdx,
+    guid: inst.refGuid,
+    matrix: inst.matrix,
+    materialId: inst.materialId,
+  }));
+
+  return {
+    id,
+    guid: d.guid,
+    name: d.name,
+    vertices,
+    edges,
+    faces,
+    instances,
+    isImage: d.isImage,
+    alwaysFacesCamera: d.alwaysFacesCamera,
   };
 }
 
