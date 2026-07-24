@@ -505,3 +505,43 @@ export function parseMaterialXml(xmlText: string): { name: string; r: number; g:
 
   return { name, r: colorRed, g: colorGreen, b: colorBlue, trans };
 }
+
+/**
+ * Parse a styles/*\/style.xml document: face colors live as signed-int32
+ * ARGB variants under item id 4000 (front / default face color) and 4001
+ * (back face color). Viewers need them to shade unpainted faces the way
+ * SketchUp does.
+ */
+export function parseStyleXml(xmlText: string): {
+  name: string;
+  frontColor: [number, number, number] | null;
+  backColor: [number, number, number] | null;
+} | null {
+  const styleMatch = xmlText.match(/<(?:[a-zA-Z0-9_]+:)?style\b([^>]*)>/);
+  if (!styleMatch) return null;
+  const attrsString = styleMatch[1];
+  const nameMatch = attrsString.match(/\bname\s*=\s*(?:"([^"]*)"|'([^']*)')/);
+  const name = nameMatch ? (nameMatch[1] !== undefined ? nameMatch[1] : nameMatch[2]) : '';
+
+  const colors: Record<string, [number, number, number]> = {};
+  const itemRegex =
+    /<(?:[a-zA-Z0-9_]+:)?item\s+id\s*=\s*(?:"(\d+)"|'(\d+)')[^>]*>([\s\S]*?)<\/(?:[a-zA-Z0-9_]+:)?item>/g;
+  let m: RegExpExecArray | null;
+  while ((m = itemRegex.exec(xmlText)) !== null) {
+    const id = m[1] !== undefined ? m[1] : m[2];
+    if (id !== '4000' && id !== '4001') continue;
+    const inner = m[3];
+    const variantMatch = inner.match(/<(?:[a-zA-Z0-9_]+:)?variant\b[^>]*>(-?\d+)<\/(?:[a-zA-Z0-9_]+:)?variant>/);
+    if (!variantMatch) continue;
+    const raw = parseInt(variantMatch[1], 10);
+    if (Number.isNaN(raw)) continue;
+    const v = raw >>> 0; // reinterpret as unsigned 32-bit, matches Python's `& 0xFFFFFFFF`
+    colors[id] = [(v >> 16) & 255, (v >> 8) & 255, v & 255];
+  }
+
+  return {
+    name,
+    frontColor: colors['4000'] ?? null,
+    backColor: colors['4001'] ?? null,
+  };
+}

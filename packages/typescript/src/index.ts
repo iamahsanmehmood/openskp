@@ -10,6 +10,7 @@ import {
   extractDynamicProperties,
   reconstructLoopVertices,
   parseMaterialXml,
+  parseStyleXml,
   findChildTag,
 } from './geometry';
 
@@ -197,6 +198,29 @@ export function parseSkp(buffer: ArrayBuffer): SkpModel {
           if (parsedMat.name.startsWith('Layer_')) {
             layerColors.set(parsedMat.name.slice(6), [parsedMat.r, parsedMat.g, parsedMat.b]);
           }
+        }
+      } catch (e) {
+        // Ignore XML errors
+      }
+    }
+  }
+
+  // 2b. Parse styles/*/style.xml: face colors for unpainted faces, stored as
+  // signed-int32 ARGB variants under item id 4000 (front) / 4001 (back).
+  const styles: Style[] = [];
+  for (const [name, xmlBytes] of Object.entries(materialFiles)) {
+    const lowerName = name.toLowerCase();
+    if (lowerName.startsWith('styles/') && lowerName.endsWith('style.xml')) {
+      try {
+        const decoder = new TextDecoder('utf-8');
+        const xmlText = decoder.decode(xmlBytes);
+        const parsedStyle = parseStyleXml(xmlText);
+        if (parsedStyle) {
+          styles.push({
+            name: parsedStyle.name,
+            frontColor: parsedStyle.frontColor,
+            backColor: parsedStyle.backColor,
+          });
         }
       } catch (e) {
         // Ignore XML errors
@@ -659,8 +683,6 @@ export function parseSkp(buffer: ArrayBuffer): SkpModel {
       });
     }
   }
-
-  const styles: Style[] = [];
 
   const model: SkpModel = {
     version,

@@ -119,6 +119,13 @@ describe('SketchUp Parser Integration Test', () => {
     expect(model.materials).toContain(model.materialsById.get(26180));
     expect(model.materialsById.get(26180)!.id).toBe(26180);
     expect(Array.isArray(model.styles)).toBe(true);
+    // Real style data: this fixture bundles two style.xml files (the second
+    // is SketchUp's "_1" duplicate-naming convention), both named
+    // "[Construction Documentation Style]" with the same front/back colors.
+    expect(model.styles.length).toBe(2);
+    expect(model.styles[0].name).toBe('[Construction Documentation Style]');
+    expect(model.styles[0].frontColor).toEqual([255, 255, 255]);
+    expect(model.styles[0].backColor).toEqual([208, 209, 189]);
 
     // 8. Assert Scene Hierarchy
     expect(model.sceneHierarchy).toBeDefined();
