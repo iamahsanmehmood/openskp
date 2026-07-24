@@ -14,6 +14,7 @@ export interface GeometryBuilderFace {
   loops: { edgeId: number; orientation: number }[][];
   normal: [number, number, number];
   materialId?: number | null;
+  backMaterialId?: number | null;
   uvTransform?: number[] | null;
   uvTransformBack?: number[] | null;
 }
@@ -232,10 +233,20 @@ export function extractGeometryFromNodes(
             [uvFront, uvBack] = extractUvTransforms(dc05.payload);
           }
         }
+        // Back-side material: the AF0D child of the face node (a face
+        // painted only on its back - common when the author paints the
+        // visible side of a downward-facing cap - carries AF0D but no
+        // D107).
+        let backMatId: number | null = null;
+        const af0d = el.children.find((c) => c.tag === 'AF0D');
+        if (af0d && af0d.payload.length > 0) {
+          backMatId = parseVarInt(af0d.payload, 0, af0d.payload.length);
+        }
         builder.faces.set(fId, {
           loops,
           normal,
           materialId: faceMatId,
+          backMaterialId: backMatId,
           uvTransform: uvFront,
           uvTransformBack: uvBack,
         });

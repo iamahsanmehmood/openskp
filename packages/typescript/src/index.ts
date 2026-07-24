@@ -658,7 +658,7 @@ export function parseSkp(buffer: ArrayBuffer): SkpModel {
         loops: fData.loops,
         normal: fData.normal,
         materialId: fData.materialId ?? null,
-        backMaterialId: null,
+        backMaterialId: fData.backMaterialId ?? null,
         uvTransform: fData.uvTransform ?? null,
         uvTransformBack: fData.uvTransformBack ?? null,
       }));

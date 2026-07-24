@@ -311,3 +311,20 @@ describe('Always faces camera (component behavior flags)', () => {
     expect(names).toContainEqual(['Chair', false]);
   });
 });
+
+describe('Back-side material (AF0D)', () => {
+  it('extracts the back-side material while front stays unpainted', () => {
+    const dc05 = tlv('DC05', tlv('DE05', new Uint8Array([0x2a])));
+    const af0d = tlv('AF0D', new Uint8Array([0x85, 0x8b, 0x06]));
+    const node = tlv('AC0D', concatBytes(dc05, af0d));
+
+    const elements = parseTlvRecursive(node, 0, node.length);
+    const builder = new GeometryBuilder();
+    extractGeometryFromNodes(elements, builder);
+
+    expect(builder.faces.has(0x2a)).toBe(true);
+    const f = builder.faces.get(0x2a)!;
+    expect(f.materialId ?? null).toBeNull();
+    expect(f.backMaterialId).toBe(0x068b85);
+  });
+});
