@@ -157,13 +157,11 @@ export function parseSkp(buffer: ArrayBuffer): SkpModel {
           let mName = '';
           try {
             const decoder = new TextDecoder('utf-8');
-            mName = decoder.decode(nameNode.payload).replace(/\0/g, '').trim();
+            mName = decoder.decode(nameNode.payload);
           } catch (e) {
             // Ignore
           }
-          if (mName) {
-            materialIdToName.set(mId, mName);
-          }
+          materialIdToName.set(mId, mName);
         }
       }
       if (el.children && el.children.length > 0) {
