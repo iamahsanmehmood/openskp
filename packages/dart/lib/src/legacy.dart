@@ -2,7 +2,9 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'core.dart';
+import 'errors.dart';
 import 'geometry.dart';
+import 'observability.dart';
 import 'tlv.dart';
 
 /// Legacy (classic MFC) SketchUp .skp parser - SketchUp 2013-2020 era.
@@ -1140,7 +1142,10 @@ class Legacy {
 
   /// Parse a classic MFC .skp into the shared RawParsed shape, which
   /// Parser converts to the public SkpModel exactly like the VFF path.
-  static RawParsed fullParseLegacy(Uint8List data) {
+  static RawParsed fullParseLegacy(Uint8List data, [ParseOptions? options]) {
+    final sw = Stopwatch()..start();
+    emitLog(options, SkpLogLevel.info, 'Parsing legacy buffer (${data.length} bytes)');
+
     var version = 'unknown';
     final second = _findBytes(data, _strMarker, 4);
     if (second > 0) {
@@ -1157,6 +1162,7 @@ class Legacy {
         version = text.substring(braceStart, braceEnd + 1);
       }
     }
+    emitLog(options, SkpLogLevel.debug, 'Detected legacy version $version');
 
     ({
       Archive ar,
@@ -1167,11 +1173,15 @@ class Legacy {
     try {
       walkResult = _walk(data);
     } on LegacyParseError catch (e) {
-      throw ArgumentError('legacy .skp parse failed: ${e.message}');
+      throw SkpParseException('legacy .skp parse failed: ${e.message}', stage: 'legacy_walk', cause: e);
     }
 
     final ar = walkResult.ar;
     final slots = ar.slots;
+    emitLog(
+      options, SkpLogLevel.debug,
+      'Legacy walk complete: ${walkResult.materials.length} materials, ${walkResult.layers.length} layers',
+    );
 
     final materialsMap = <String, RawMaterial>{};
     final materialIdToName = <int, String>{};
@@ -1227,26 +1237,46 @@ class Legacy {
     }
 
     final defsDict = <int, RawDefinition>{};
-    for (final entry in slots.entries) {
-      final ent = entry.value;
-      if (ent.kind == 'obj' &&
-          ent.name == 'CComponentDefinition' &&
-          ent.value != null) {
-        final d = ent.value as DefinitionRec;
-        final b = GeometryBuilder();
-        _fillBuilder(b, d.ents, slots);
-        defsDict[entry.key] = RawDefinition(
-          guid: d.guid,
-          name: d.name,
-          isImage: false,
-          alwaysFacesCamera: d.facesCamera,
-          builder: b,
-        );
+    var processed = 0;
+    var lastSlot = -1;
+    try {
+      for (final entry in slots.entries) {
+        lastSlot = entry.key;
+        final ent = entry.value;
+        if (ent.kind == 'obj' &&
+            ent.name == 'CComponentDefinition' &&
+            ent.value != null) {
+          final d = ent.value as DefinitionRec;
+          final b = GeometryBuilder();
+          _fillBuilder(b, d.ents, slots);
+          defsDict[entry.key] = RawDefinition(
+            guid: d.guid,
+            name: d.name,
+            isImage: false,
+            alwaysFacesCamera: d.facesCamera,
+            builder: b,
+          );
+          processed++;
+          if (processed % progressInterval == 0) {
+            emitProgress(options, 'legacy_defs', processed, processed);
+            emitLog(options, SkpLogLevel.debug, 'Processed $processed component definitions');
+          }
+        }
       }
+    } catch (e) {
+      throw SkpParseException(
+        'Failed while building component definitions: $e',
+        stage: 'legacy_defs', definitionId: lastSlot, cause: e,
+      );
     }
 
     final rootBuilder = GeometryBuilder();
     _fillBuilder(rootBuilder, walkResult.root, slots);
+
+    emitLog(
+      options, SkpLogLevel.info,
+      'Parse complete: ${defsDict.length} defs (${(sw.elapsedMilliseconds / 1000).toStringAsFixed(2)}s)',
+    );
 
     return RawParsed()
       ..version = version

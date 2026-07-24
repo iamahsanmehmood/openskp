@@ -3,7 +3,7 @@ import 'dart:typed_data';
 
 import 'core.dart';
 import 'geometry.dart';
-import 'legacy.dart';
+import 'observability.dart';
 import 'model.dart';
 import 'scene.dart';
 
@@ -37,13 +37,9 @@ class SkpFile {
     return SkpFile._('<memory>', bytes);
   }
 
-  RawParsed _parseToRaw() {
+  RawParsed _parseToRaw([ParseOptions? options]) {
     final bytes = _bytes ?? File(path).readAsBytesSync();
-    try {
-      return Core.fullParse(bytes);
-    } on LegacyParseError catch (e) {
-      throw ArgumentError('legacy .skp parse failed: ${e.message}');
-    }
+    return Core.fullParse(bytes, options);
   }
 
   /// Bake every instance actually placed in the model into world-space,
@@ -56,12 +52,15 @@ class SkpFile {
   /// For a file that reuses a handful of definitions across many thousands
   /// of instances, the baked output can be far larger than the file's raw
   /// geometry - that's the reason this isn't part of [parse].
-  Scene buildScene() {
-    return SceneBuilder.build(_parseToRaw());
+  ///
+  /// [options] - optional progress/log callbacks (see [ParseOptions]).
+  Scene buildScene([ParseOptions? options]) {
+    return SceneBuilder.build(_parseToRaw(options), options);
   }
 
-  SkpModel parse() {
-    final parsed = _parseToRaw();
+  /// [options] - optional progress/log callbacks (see [ParseOptions]).
+  SkpModel parse([ParseOptions? options]) {
+    final parsed = _parseToRaw(options);
 
     final model = SkpModel()..version = parsed.version;
 

@@ -1,7 +1,9 @@
 import 'dart:math';
 
 import 'core.dart';
+import 'errors.dart';
 import 'geometry.dart';
+import 'observability.dart';
 import 'tlv.dart';
 import 'transforms.dart';
 import 'triangulator.dart';
@@ -110,13 +112,17 @@ const double _inchesToM = 0.0254;
 /// Ported from the TypeScript reference implementation
 /// (model.ts's buildSceneFromParsed).
 class SceneBuilder {
-  static Scene build(RawParsed parsed) {
+  static Scene build(RawParsed parsed, [ParseOptions? options]) {
+    final sw = Stopwatch()..start();
     final defsDict = parsed.defsDict;
     final layerColors = parsed.layerColors;
     final layerIdToName = parsed.layerIdToName;
     final materialIdToName = parsed.materialIdToName;
     final materials = parsed.materials;
     final materialsByFolder = parsed.materialsByFolder;
+
+    emitLog(options, SkpLogLevel.info, 'Building scene: ${defsDict.length} definitions available');
+    var instanceCounter = 0;
 
     int meshCounter = 0;
     final meshIndex = <String, MeshMetadata>{};
@@ -163,6 +169,7 @@ class SceneBuilder {
     List<InstanceNode> instantiateBuilder(
       GeometryBuilder builder,
       String defName,
+      int? defId,
       List<double> currentMatrix,
       String parentLayer,
       String pathName,
@@ -194,7 +201,15 @@ class SceneBuilder {
           }
           if (loops.isEmpty) continue;
 
-          final triangles = Triangulator.triangulateFace3D(builder.vertices, loops, fData.normal);
+          List<List<int>> triangles;
+          try {
+            triangles = Triangulator.triangulateFace3D(builder.vertices, loops, fData.normal);
+          } catch (e) {
+            throw SkpParseException(
+              'Failed to triangulate face: $e',
+              stage: 'build_scene', definitionId: defId, cause: e,
+            );
+          }
           for (final tri in triangles) {
             final faceIndices = <int>[];
             for (final vId in tri) {
@@ -361,9 +376,14 @@ class SceneBuilder {
 
         final instName = (inst.name != null && inst.name!.isNotEmpty) ? inst.name! : 'Component_$refIdx';
         final fullPathName = '$pathName / $instName';
+        instanceCounter++;
+        if (instanceCounter % progressInterval == 0) {
+          emitProgress(options, 'build_scene', instanceCounter, instanceCounter);
+          emitLog(options, SkpLogLevel.debug, 'Processed $instanceCounter placed instances');
+        }
         final childDef = refIdx != null ? defsDict[refIdx] : null;
         final childNodes = (refIdx != null && childDef != null)
-            ? instantiateBuilder(childDef.builder, childDef.name ?? '', newMatrix, lName, fullPathName, instColor)
+            ? instantiateBuilder(childDef.builder, childDef.name ?? '', refIdx, newMatrix, lName, fullPathName, instColor)
             : <InstanceNode>[];
 
         final itx = newMatrix.length > 9 ? newMatrix[9] * _inchesToMm : 0.0;
@@ -394,7 +414,7 @@ class SceneBuilder {
     }
 
     final identityMat = <double>[1.0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1.0];
-    final rootChildren = instantiateBuilder(parsed.root.builder, 'ROOT_MODEL', identityMat, 'Layer0', 'ROOT', null);
+    final rootChildren = instantiateBuilder(parsed.root.builder, 'ROOT_MODEL', null, identityMat, 'Layer0', 'ROOT', null);
 
     for (final entry in meshIndex.entries) {
       final existing = entry.value;
@@ -413,6 +433,12 @@ class SceneBuilder {
       layer: 'Layer0',
       positionMm: (0.0, 0.0, 0.0),
       children: rootChildren,
+    );
+
+    emitLog(
+      options, SkpLogLevel.info,
+      'Scene build complete: $instanceCounter instances, ${meshIndex.length} meshes, '
+      '${glbPrimitives.length} primitives (${(sw.elapsedMilliseconds / 1000).toStringAsFixed(2)}s)',
     );
 
     return Scene(

@@ -152,15 +152,18 @@ class Tlv {
     return headers;
   }
 
-  /// Yield each top-level TLV record's fully-recursed node one at a time,
-  /// transparently unwrapping a lone "F401" wrapper - without ever
-  /// materializing more than one top-level subtree simultaneously. Each
-  /// yielded node is safe to discard (drop all references) once the caller
-  /// is done with it, before the next one is produced - that's what keeps
-  /// peak memory bounded by the size of the single largest top-level record
-  /// instead of the whole file (real production files can have 100k+
-  /// separate definitions).
-  static Iterable<TlvNode> iterTopLevelLazy(Uint8List data, int start, int end, [Set<String>? tags]) sync* {
+  /// Yield `(index, total, node)` for each top-level TLV record's
+  /// fully-recursed node one at a time, transparently unwrapping a lone
+  /// "F401" wrapper - without ever materializing more than one top-level
+  /// subtree simultaneously. `total` (the top-level sibling count) comes
+  /// for free from the same cheap header scan that drives the loop, so
+  /// callers can report "N of total" progress with no extra pass over the
+  /// file. Each yielded node is safe to discard (drop all references) once
+  /// the caller is done with it, before the next one is produced - that's
+  /// what keeps peak memory bounded by the size of the single largest
+  /// top-level record instead of the whole file (real production files can
+  /// have 100k+ separate definitions).
+  static Iterable<(int, int, TlvNode)> iterTopLevelLazy(Uint8List data, int start, int end, [Set<String>? tags]) sync* {
     final containerTagsSet = tags ?? containerTags;
 
     var headers = _flatHeaders(data, start, end);
@@ -169,12 +172,15 @@ class Tlv {
       headers = _flatHeaders(data, f401Offset + 6, f401Offset + 6 + f401Size);
     }
 
+    final total = headers.length;
+    var index = 0;
     for (final (_, offset, size) in headers) {
       final recordEnd = offset + 6 + size;
       final nodes = parseRecursive(data, offset, recordEnd, containerTagsSet);
       if (nodes.isNotEmpty) {
-        yield nodes[0];
+        yield (index, total, nodes[0]);
       }
+      index++;
     }
   }
 }
