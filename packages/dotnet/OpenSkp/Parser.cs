@@ -150,6 +150,45 @@ namespace OpenSkp
 
         public static SkpModel Open(string filePath)
         {
+            return Parse(ReadValidatedBytes(filePath));
+        }
+
+        /// <summary>Bake every instance actually placed in the model into
+        /// world-space, triangulated mesh data - SketchUp's own
+        /// component/group nesting fully resolved and flattened, ready for
+        /// a GLB export or any other renderer.
+        ///
+        /// A separate, opt-in step from <see cref="Parse"/>/<see cref="Open"/>:
+        /// it re-runs the underlying parse independently rather than
+        /// reusing a prior call's data, so a plain Parse()/Open() call
+        /// never pays for the heavier instancing + triangulation work
+        /// here. For a file that reuses a handful of definitions across
+        /// many thousands of instances, the baked output can be far
+        /// larger than the file's raw geometry - that's the reason this
+        /// isn't part of Parse().</summary>
+        public static Scene BuildScene(byte[] buffer)
+        {
+            Core.RawParsed parsed;
+            try
+            {
+                parsed = Core.FullParse(buffer);
+            }
+            catch (LegacyParseError e)
+            {
+                throw new ArgumentException($"legacy .skp parse failed: {e.Message}", e);
+            }
+            return SceneBuilder.Build(parsed);
+        }
+
+        /// <summary>Same as <see cref="BuildScene(byte[])"/>, reading the
+        /// file from disk first.</summary>
+        public static Scene BuildScene(string filePath)
+        {
+            return BuildScene(ReadValidatedBytes(filePath));
+        }
+
+        private static byte[] ReadValidatedBytes(string filePath)
+        {
             var p = Path.GetFullPath(filePath);
             if (!File.Exists(p))
             {
@@ -159,8 +198,7 @@ namespace OpenSkp
             {
                 throw new ArgumentException($"Expected a .skp file, got: {Path.GetExtension(p)}");
             }
-            var bytes = File.ReadAllBytes(p);
-            return Parse(bytes);
+            return File.ReadAllBytes(p);
         }
     }
 
