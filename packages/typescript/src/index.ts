@@ -1,5 +1,7 @@
 import { extractSkpContents } from './vff';
 import { iterTopLevelLazy, readU32, parseVarInt } from './parser';
+import { SkpParseError } from './errors';
+import { ParseOptions, PROGRESS_INTERVAL, emitLog, emitProgress } from './observability';
 import {
   GeometryBuilder,
   collectLayers,
@@ -25,6 +27,8 @@ import {
 import { isLegacy, parseLegacyToRaw } from './legacy';
 
 export * from './model';
+export * from './errors';
+export * from './observability';
 
 declare const process: any;
 declare const require: any;
@@ -38,18 +42,30 @@ declare const require: any;
  * Transparently handles both the modern VFF/ZIP container (SketchUp 2021+)
  * and the classic pre-2021 MFC CArchive container (SketchUp 2013-2020).
  */
-function parseToRaw(buffer: ArrayBuffer): ParsedRawData {
+function parseToRaw(buffer: ArrayBuffer, options?: ParseOptions): ParsedRawData {
+  const t0 = Date.now();
   const data = new Uint8Array(buffer);
+  emitLog(options, 'info', `Parsing buffer (${data.length} bytes)`);
 
   if (isLegacy(data)) {
-    return parseLegacyToRaw(data);
+    emitLog(options, 'debug', 'Detected legacy MFC container; routing to legacy walker');
+    return parseLegacyToRaw(data, options);
   }
 
   // 1. Extract SKP contents from VFF/ZIP container
-  const contents = extractSkpContents(data);
+  let contents;
+  try {
+    contents = extractSkpContents(data);
+  } catch (e) {
+    throw new SkpParseError(`Failed to extract SKP contents: ${(e as Error).message}`, {
+      stage: 'zip_extract',
+      cause: e,
+    });
+  }
   const version = contents.version;
   const modelData = contents.modelData;
   const materialFiles = contents.materialFiles;
+  emitLog(options, 'debug', `Detected version ${version} (VFF/ZIP container)`);
 
   // 2. Parse XML materials to populate layer colors and materials
   const layerColors = new Map<string, [number, number, number]>();
@@ -165,19 +181,41 @@ function parseToRaw(buffer: ArrayBuffer): ParsedRawData {
     }
   }
 
+  emitLog(options, 'debug', `Parsed ${materialsMap.size} materials, ${styles.length} styles`);
+
   const defsDict = new Map<number | string, ParsedDefinition>();
   const rootBuilder = new GeometryBuilder();
 
-  for (const el of iterTopLevelLazy(modelData, 0, modelData.length)) {
-    collectLayers([el], layerIdToName);
-    collectMaterialIds([el]);
-    collectDefs([el], defsDict);
-    if (el.tag === 'F601') {
-      extractGeometryFromNodes(el.children, rootBuilder);
+  for (const { index, total, node: el } of iterTopLevelLazy(modelData, 0, modelData.length)) {
+    try {
+      collectLayers([el], layerIdToName);
+      collectMaterialIds([el]);
+      collectDefs([el], defsDict);
+      if (el.tag === 'F601') {
+        extractGeometryFromNodes(el.children, rootBuilder);
+      }
+    } catch (e) {
+      throw new SkpParseError(`Failed while processing top-level record: ${(e as Error).message}`, {
+        stage: 'tlv_walk',
+        recordIndex: index,
+        totalRecords: total,
+        tag: el.tag,
+        cause: e,
+      });
     }
     // `el` (and its whole subtree) is now unreferenced and eligible for
     // garbage collection before the next top-level record is built.
+    if (index % PROGRESS_INTERVAL === 0 || index === total - 1) {
+      emitProgress(options, 'tlv_walk', index + 1, total);
+      emitLog(options, 'debug', `Processed ${index + 1}/${total} top-level records`);
+    }
   }
+
+  emitLog(
+    options,
+    'info',
+    `Parse complete: ${defsDict.size} defs (${((Date.now() - t0) / 1000).toFixed(2)}s)`
+  );
 
   if (!layerIdToName.has(1)) {
     layerIdToName.set(1, 'Layer0');
@@ -220,10 +258,11 @@ function parseToRaw(buffer: ArrayBuffer): ParsedRawData {
  * the file's raw geometry.
  *
  * @param buffer - The raw file contents as an ArrayBuffer
+ * @param options - Optional progress/log callbacks (see {@link ParseOptions})
  * @returns Parsed SkpModel with full geometry and metadata
  */
-export function parseSkp(buffer: ArrayBuffer): SkpModel {
-  return buildModelFromParsed(parseToRaw(buffer));
+export function parseSkp(buffer: ArrayBuffer, options?: ParseOptions): SkpModel {
+  return buildModelFromParsed(parseToRaw(buffer, options));
 }
 
 /**
@@ -236,9 +275,11 @@ export function parseSkp(buffer: ArrayBuffer): SkpModel {
  * per call rather than sharing it, trading a bit of extra CPU time for
  * keeping each call's memory footprint no larger than what it actually
  * needs.
+ *
+ * @param options - Optional progress/log callbacks (see {@link ParseOptions})
  */
-export function buildScene(buffer: ArrayBuffer): SkpScene {
-  return buildSceneFromParsed(parseToRaw(buffer));
+export function buildScene(buffer: ArrayBuffer, options?: ParseOptions): SkpScene {
+  return buildSceneFromParsed(parseToRaw(buffer, options), options);
 }
 
 function createGlb(json: any, binaryBuffer: Uint8Array): Uint8Array {
@@ -528,16 +569,18 @@ export class SkpFile {
 
   /** Fast, memory-light parse: raw per-definition geometry, no scene-graph
    * instancing resolved. See {@link buildScene} for a triangulated,
-   * world-space scene ready for rendering or GLB export. */
-  parse(): SkpModel {
-    return parseSkp(this.buffer);
+   * world-space scene ready for rendering or GLB export.
+   * @param options - Optional progress/log callbacks (see {@link ParseOptions}) */
+  parse(options?: ParseOptions): SkpModel {
+    return parseSkp(this.buffer, options);
   }
 
   /** Bake every placed instance into world-space, triangulated mesh data.
    * Independent of parse() - re-parses the raw TLV data on its own rather
    * than reusing a prior parse() call, so calling only parse() never pays
-   * for this heavier computation. */
-  buildScene(): SkpScene {
-    return buildScene(this.buffer);
+   * for this heavier computation.
+   * @param options - Optional progress/log callbacks (see {@link ParseOptions}) */
+  buildScene(options?: ParseOptions): SkpScene {
+    return buildScene(this.buffer, options);
   }
 }

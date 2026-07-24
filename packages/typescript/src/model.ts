@@ -1,6 +1,8 @@
 import { transformPoint, multiplyMatrices } from './transforms';
 import { triangulateFace3D } from './triangulator';
 import { reconstructLoopVertices, extractDynamicProperties, ParsedDefinition } from './geometry';
+import { SkpParseError } from './errors';
+import { ParseOptions, PROGRESS_INTERVAL, emitLog, emitProgress } from './observability';
 
 export interface SkpModel {
   version: string;
@@ -287,8 +289,12 @@ export function buildModelFromParsed(parsed: ParsedRawData): SkpModel {
  * that's why it's a separate, opt-in step from {@link buildModelFromParsed}
  * rather than something every parse() pays for.
  */
-export function buildSceneFromParsed(parsed: ParsedRawData): SkpScene {
+export function buildSceneFromParsed(parsed: ParsedRawData, options?: ParseOptions): SkpScene {
+  const t0 = Date.now();
   const { layerColors, layerIdToName, materialIdToName, materialsMap, materialsByFolder, defsDict } = parsed;
+
+  emitLog(options, 'info', `Building scene: ${defsDict.size} definitions available`);
+  const instanceCounter = { count: 0 };
 
   // Instantiate scene hierarchy and gather mesh metadata & GLB primitives
   const meshCounter = { count: 0 };
@@ -379,7 +385,16 @@ export function buildSceneFromParsed(parsed: ParsedRawData): SkpScene {
         }
         if (loops.length === 0) continue;
 
-        const triangles = triangulateFace3D(builder.vertices, loops, fData.normal);
+        let triangles;
+        try {
+          triangles = triangulateFace3D(builder.vertices, loops, fData.normal);
+        } catch (e) {
+          throw new SkpParseError(`Failed to triangulate face: ${(e as Error).message}`, {
+            stage: 'build_scene',
+            definitionId: defId,
+            cause: e,
+          });
+        }
         const startFaceIdx = group.localFaces.length;
         for (const tri of triangles) {
           const faceIndices: number[] = [];
@@ -544,6 +559,11 @@ export function buildSceneFromParsed(parsed: ParsedRawData): SkpScene {
 
       const instName = inst.name || `Component_${refIdx}`;
       const fullPathName = `${pathName} / ${instName}`;
+      instanceCounter.count++;
+      if (instanceCounter.count % PROGRESS_INTERVAL === 0) {
+        emitProgress(options, 'build_scene', instanceCounter.count, instanceCounter.count);
+        emitLog(options, 'debug', `Processed ${instanceCounter.count} placed instances`);
+      }
       const childNodes = instantiate(refIdx, newMatrix, lName, fullPathName, instColor);
 
       const tx = (newMatrix[9] ?? 0) * 25.4;
@@ -604,6 +624,13 @@ export function buildSceneFromParsed(parsed: ParsedRawData): SkpScene {
     properties: {},
     children: rootChildren,
   };
+
+  emitLog(
+    options,
+    'info',
+    `Scene build complete: ${instanceCounter.count} instances, ${Object.keys(meshIndex).length} meshes, ` +
+      `${glbPrimitives.length} primitives (${((Date.now() - t0) / 1000).toFixed(2)}s)`
+  );
 
   return { sceneHierarchy, meshIndex, glbPrimitives, gltfMaterials };
 }

@@ -17,6 +17,8 @@
 
 import { GeometryBuilderFace, GeometryBuilderInstance, ParsedDefinition } from './geometry';
 import { Material, Texture, ParsedRawData } from './model';
+import { SkpParseError } from './errors';
+import { ParseOptions, PROGRESS_INTERVAL, emitLog, emitProgress } from './observability';
 
 export class LegacyParseError extends Error {}
 
@@ -998,7 +1000,10 @@ function fillBuilder(builder: LegacyBuilder, ents: [number, string | null, any][
 /** Parse a classic MFC .skp into the shared raw-parse shape, which both
  * parseSkp() and buildScene() convert onward from exactly like the VFF
  * path. */
-export function parseLegacyToRaw(data: Uint8Array): ParsedRawData {
+export function parseLegacyToRaw(data: Uint8Array, options?: ParseOptions): ParsedRawData {
+  const t0 = Date.now();
+  emitLog(options, 'info', `Parsing legacy buffer (${data.length} bytes)`);
+
   let version = 'unknown';
   const second = findBytes(data, STR_MARKER, 4);
   if (second > 0) {
@@ -1010,19 +1015,24 @@ export function parseLegacyToRaw(data: Uint8Array): ParsedRawData {
       version = text.slice(braceStart, braceEnd + 1);
     }
   }
+  emitLog(options, 'debug', `Detected legacy version ${version}`);
 
   let walkResult: WalkResult;
   try {
     walkResult = walk(data);
   } catch (e) {
     if (e instanceof LegacyParseError || e instanceof RangeError) {
-      throw new Error(`legacy .skp parse failed: ${(e as Error).message}`);
+      throw new SkpParseError(`legacy .skp parse failed: ${(e as Error).message}`, {
+        stage: 'legacy_walk',
+        cause: e,
+      });
     }
     throw e;
   }
 
   const { ar, root, layers, materials } = walkResult;
   const slots = ar.slots;
+  emitLog(options, 'debug', `Legacy walk complete: ${materials.length} materials, ${layers.length} layers`);
 
   // materials - keyed by name like the VFF path
   const materialsMap = new Map<string, Material>();
@@ -1077,19 +1087,35 @@ export function parseLegacyToRaw(data: Uint8Array): ParsedRawData {
 
   // definitions
   const defsDict = new Map<number | string, ParsedDefinition>();
-  for (const [s, ent] of slots.entries()) {
-    if (ent[0] === 'obj' && ent[1] === 'CComponentDefinition' && ent[2]) {
-      const d = ent[2];
-      const b = new LegacyBuilder();
-      fillBuilder(b, d.ents, slots);
-      defsDict.set(s, {
-        guid: d.guid,
-        name: d.name,
-        isImage: false,
-        alwaysFacesCamera: d.faces_camera || false,
-        builder: b,
-      });
+  let processed = 0;
+  let lastSlot: number | undefined;
+  try {
+    for (const [s, ent] of slots.entries()) {
+      lastSlot = s;
+      if (ent[0] === 'obj' && ent[1] === 'CComponentDefinition' && ent[2]) {
+        const d = ent[2];
+        const b = new LegacyBuilder();
+        fillBuilder(b, d.ents, slots);
+        defsDict.set(s, {
+          guid: d.guid,
+          name: d.name,
+          isImage: false,
+          alwaysFacesCamera: d.faces_camera || false,
+          builder: b,
+        });
+        processed++;
+        if (processed % PROGRESS_INTERVAL === 0) {
+          emitProgress(options, 'legacy_defs', processed, processed);
+          emitLog(options, 'debug', `Processed ${processed} component definitions`);
+        }
+      }
     }
+  } catch (e) {
+    throw new SkpParseError(`Failed while building component definitions: ${(e as Error).message}`, {
+      stage: 'legacy_defs',
+      definitionId: lastSlot,
+      cause: e,
+    });
   }
 
   const rootBuilder = new LegacyBuilder();
@@ -1101,6 +1127,12 @@ export function parseLegacyToRaw(data: Uint8Array): ParsedRawData {
     alwaysFacesCamera: false,
     builder: rootBuilder,
   });
+
+  emitLog(
+    options,
+    'info',
+    `Parse complete: ${defsDict.size} defs (${((Date.now() - t0) / 1000).toFixed(2)}s)`
+  );
 
   return {
     version,
