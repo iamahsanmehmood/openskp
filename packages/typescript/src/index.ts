@@ -661,14 +661,17 @@ export function parseSkp(buffer: ArrayBuffer): SkpModel {
         y,
         z,
       }));
-      const edges: Edge[] = Array.from(d.builder.edges.entries()).map(([eId, [v1, v2]]) => ({
-        id: eId,
-        v1Id: v1 ?? 0,
-        v2Id: v2 ?? 0,
-        soft: false,
-        smooth: false,
-        hidden: false,
-      }));
+      const edges: Edge[] = Array.from(d.builder.edges.entries()).map(([eId, [v1, v2]]) => {
+        const flags = d.builder.edgeFlags.get(eId) ?? 0;
+        return {
+          id: eId,
+          v1Id: v1 ?? 0,
+          v2Id: v2 ?? 0,
+          soft: (flags & 0x08) !== 0,
+          smooth: (flags & 0x10) !== 0,
+          hidden: (flags & 0x01) !== 0,
+        };
+      });
       const faces: Face[] = Array.from(d.builder.faces.entries()).map(([fId, fData]) => ({
         id: fId,
         loops: fData.loops,

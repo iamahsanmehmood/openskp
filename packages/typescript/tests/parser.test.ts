@@ -348,3 +348,27 @@ describe("Material transparency (useTrans gating)", () => {
     expect(parsed!.trans).toBe(1.0);
   });
 });
+
+describe('Edge display flags (D307)', () => {
+  it('decodes plain / hidden / soft+smooth edges from the D307 flag byte', () => {
+    const buildEdge = (entityId: number, flag: number) => {
+      const de05 = tlv('DE05', new Uint8Array([entityId]));
+      const d307 = tlv('D307', new Uint8Array([flag]));
+      const d007 = tlv('D007', d307);
+      return tlv('B80B', concatBytes(de05, d007));
+    };
+
+    const plain = buildEdge(0x01, 0x06);
+    const hidden = buildEdge(0x02, 0x07);
+    const softSmooth = buildEdge(0x03, 0x1e);
+    const buf = concatBytes(plain, hidden, softSmooth);
+
+    const elements = parseTlvRecursive(buf, 0, buf.length);
+    const builder = new GeometryBuilder();
+    extractGeometryFromNodes(elements, builder);
+
+    expect(builder.edgeFlags.get(0x01)).toBe(0x06);
+    expect(builder.edgeFlags.get(0x02)).toBe(0x07);
+    expect(builder.edgeFlags.get(0x03)).toBe(0x1e);
+  });
+});

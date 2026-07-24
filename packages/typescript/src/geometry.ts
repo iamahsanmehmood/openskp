@@ -22,6 +22,7 @@ export interface GeometryBuilderFace {
 export class GeometryBuilder {
   vertices = new Map<number, [number, number, number]>(); // id -> [x, y, z]
   edges = new Map<number, [number | null, number | null]>(); // id -> [v1, v2]
+  edgeFlags = new Map<number, number>(); // edge id -> display flag byte (D307)
   faces = new Map<number, GeometryBuilderFace>(); // id -> face data
   instances: GeometryBuilderInstance[] = [];
 }
@@ -171,6 +172,16 @@ export function extractGeometryFromNodes(
         const v1 = v1Node ? parseVarInt(v1Node.payload, 0, v1Node.payload.length) : null;
         const v2 = v2Node ? parseVarInt(v2Node.payload, 0, v2Node.payload.length) : null;
         builder.edges.set(eId, [v1, v2]);
+
+        // D007 -> D307 = edge display flags: base 0x06, plus 0x01 hidden,
+        // 0x08|0x10 soft/smooth.
+        const d007 = el.children.find((c) => c.tag === 'D007');
+        if (d007) {
+          const d307 = d007.children.find((c) => c.tag === 'D307');
+          if (d307 && d307.payload.length > 0) {
+            builder.edgeFlags.set(eId, d307.payload[0]);
+          }
+        }
       }
     } else if (tag === 'AC0D') {
       const fId = extractEntityId(el);
