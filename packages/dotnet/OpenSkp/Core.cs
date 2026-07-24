@@ -127,14 +127,35 @@ namespace OpenSkp
                 modelDat = ms.ToArray();
             }
 
-            var elements = Tlv.ParseRecursive(modelDat, 0, modelDat.Length, Tlv.ContainerTags);
-            if (elements.Count == 1 && elements[0].Tag == "F401")
+            // Walk the TLV tree one top-level record at a time (instead of
+            // building the whole file's tree at once) so peak memory is
+            // bounded by the single largest definition/layer-manager/
+            // material-manager/root block, not by the file's total node
+            // count. Real production files can have 100k+ separate
+            // component definitions; materializing all of them
+            // simultaneously is what actually exhausts memory on large
+            // files - not the (comparatively modest, ~1x) cost of
+            // decompressing model.dat itself.
+            var layerIdToName = new Dictionary<long, string>();
+            var materialIdToName = new Dictionary<long, string>();
+            var defsDictRaw = new Dictionary<long, Geometry.RawDefinition>();
+            var rootBuilder = new GeometryBuilder();
+
+            foreach (var el in Tlv.IterTopLevelLazy(modelDat, 0, modelDat.Length, Tlv.ContainerTags))
             {
-                elements = elements[0].Children;
+                var single = new List<TlvNode> { el };
+                Geometry.CollectLayers(single, layerIdToName);
+                Geometry.CollectMaterialIds(single, materialIdToName);
+                Geometry.CollectDefs(single, defsDictRaw);
+                if (el.Tag == "F601")
+                {
+                    Geometry.ExtractGeometryFromNodes(el.Children, rootBuilder);
+                }
+                // `el` (and its whole subtree) is now unreferenced and
+                // eligible for garbage collection before the next top-level
+                // record is built.
             }
 
-            var layerIdToName = new Dictionary<long, string>();
-            Geometry.CollectLayers(elements, layerIdToName);
             if (!layerIdToName.ContainsKey(1))
             {
                 layerIdToName[1] = "Layer0";
@@ -142,21 +163,6 @@ namespace OpenSkp
             if (!layerColors.ContainsKey("Layer0"))
             {
                 layerColors["Layer0"] = (136, 136, 136);
-            }
-
-            var materialIdToName = new Dictionary<long, string>();
-            Geometry.CollectMaterialIds(elements, materialIdToName);
-
-            var defsDictRaw = new Dictionary<long, Geometry.RawDefinition>();
-            Geometry.CollectDefs(elements, defsDictRaw);
-
-            var rootBuilder = new GeometryBuilder();
-            foreach (var el in elements)
-            {
-                if (el.Tag == "F601")
-                {
-                    Geometry.ExtractGeometryFromNodes(el.Children, rootBuilder);
-                }
             }
 
             return new RawParsed

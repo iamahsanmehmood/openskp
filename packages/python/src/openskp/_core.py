@@ -77,6 +77,50 @@ def parse_tlv_recursive(data, start, end, container_tags=None, depth=0):
     return elements
 
 
+def _flat_headers(data, start, end):
+    """Scan [start, end) for direct-child (tag, offset, size) headers only,
+    without recursing into any container - O(sibling count), not
+    O(total node count). Used to locate top-level records one at a time so
+    full_parse() never has to hold the whole file's TLV tree in memory at
+    once (real production files can have 100k+ top-level definitions)."""
+    headers = []
+    pos = start
+    while pos < end - 6:
+        tag_hex = data[pos:pos+2].hex().upper()
+        size = read_u32(data, pos+2)
+        if pos + 6 + size > end:
+            break
+        headers.append((tag_hex, pos, size))
+        pos += 6 + size
+    return headers
+
+
+def iter_top_level_lazy(data, start, end, container_tags=None):
+    """Yield each top-level TLV record's fully-recursed node one at a time,
+    transparently unwrapping a lone 'F401' wrapper (matching the shape
+    parse_tlv_recursive's callers already expect) - without ever
+    materializing more than one top-level subtree simultaneously.
+
+    Each yielded node is independent and safe to discard (drop all
+    references) once the caller is done with it, before the next one is
+    produced - that's what keeps peak memory bounded by the size of the
+    single largest top-level record instead of the whole file.
+    """
+    if container_tags is None:
+        container_tags = CONTAINER_TAGS
+
+    headers = _flat_headers(data, start, end)
+    if len(headers) == 1 and headers[0][0] == 'F401':
+        _, f401_offset, f401_size = headers[0]
+        headers = _flat_headers(data, f401_offset + 6, f401_offset + 6 + f401_size)
+
+    for tag_hex, offset, size in headers:
+        record_end = offset + 6 + size
+        nodes = parse_tlv_recursive(data, offset, record_end, container_tags)
+        if nodes:
+            yield nodes[0]
+
+
 # ── 3D planar triangulation ──────────────────────────────────────────────
 
 def triangulate_face_3d(vertices_3d, loops, normal):
@@ -677,10 +721,14 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
     model_dat = zf.read('model.dat')
     zf.close()
 
-    # 3. Parse TLV tree
-    elements = parse_tlv_recursive(model_dat, 0, len(model_dat), CONTAINER_TAGS)
-    if len(elements) == 1 and elements[0]['tag'] == 'F401':
-        elements = elements[0]['children']
+    # 3. Walk the TLV tree one top-level record at a time (instead of
+    # building the whole file's tree at once) so peak memory is bounded by
+    # the single largest definition/layer-manager/material-manager/root
+    # block, not by the file's total node count. Real production files can
+    # have 100k+ separate component definitions; materializing all of them
+    # simultaneously is what actually exhausts memory on large files - not
+    # the (comparatively modest, ~1x) cost of decompressing model.dat
+    # itself. See iter_top_level_lazy() for the mechanics.
 
     # Layer ID -> name
     layer_id_to_name = {}
@@ -701,12 +749,6 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
                             l_name = name_node['payload'].decode('utf-8', errors='replace')
                             layer_id_to_name[l_id] = l_name
             collect_layers(el['children'])
-    collect_layers(elements)
-
-    if 1 not in layer_id_to_name:
-        layer_id_to_name[1] = 'Layer0'
-    if 'Layer0' not in layer_colors:
-        layer_colors['Layer0'] = (136, 136, 136)
 
     # Material ID -> name
     material_id_to_name = {}
@@ -725,7 +767,6 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
                     m_name = name_node['payload'].decode('utf-8', errors='replace')
                     material_id_to_name[m_id] = m_name
             collect_material_ids(el['children'])
-    collect_material_ids(elements)
 
     # Component definitions
     defs_dict = {}
@@ -769,13 +810,23 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
                                      'always_faces_camera': faces_camera,
                                      'is_image': is_image, 'builder': builder}
             collect_defs(el['children'])
-    collect_defs(elements)
 
-    # Root definition
     root_builder = _GeometryBuilder()
-    for el in elements:
+
+    for el in iter_top_level_lazy(model_dat, 0, len(model_dat), CONTAINER_TAGS):
+        collect_layers([el])
+        collect_material_ids([el])
+        collect_defs([el])
         if el['tag'] == 'F601':
             _extract_geometry_from_nodes(el['children'], root_builder)
+        # `el` (and its whole subtree) is now unreferenced and eligible for
+        # garbage collection before the next top-level record is built.
+
+    if 1 not in layer_id_to_name:
+        layer_id_to_name[1] = 'Layer0'
+    if 'Layer0' not in layer_colors:
+        layer_colors['Layer0'] = (136, 136, 136)
+
     defs_dict['ROOT'] = {'guid': 'ROOT', 'name': 'ROOT_MODEL', 'builder': root_builder}
 
     return {
@@ -786,7 +837,6 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
         'materials': materials,
         'materials_by_folder': materials_by_folder,
         'defs_dict': defs_dict,
-        'elements': elements,
         'thumbnail_data': thumbnail_data,
         'styles': styles,
     }

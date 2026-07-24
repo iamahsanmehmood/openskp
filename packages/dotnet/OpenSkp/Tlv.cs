@@ -149,5 +149,54 @@ namespace OpenSkp
             }
             return null;
         }
+
+        /// <summary>Scan [start, end) for direct-child (tag, offset, size)
+        /// headers only, without recursing into any container - O(sibling
+        /// count), not O(total node count). Used by IterTopLevelLazy to
+        /// locate top-level records one at a time.</summary>
+        private static List<(string Tag, int Offset, int Size)> FlatHeaders(byte[] data, int start, int end)
+        {
+            var headers = new List<(string, int, int)>();
+            int pos = start;
+            while (pos < end - 6)
+            {
+                string tagHex = TagHex(data, pos);
+                uint size = ReadU32(data, pos + 2);
+                if (pos + 6 + size > end) break;
+                headers.Add((tagHex, pos, (int)size));
+                pos += 6 + (int)size;
+            }
+            return headers;
+        }
+
+        /// <summary>Yield each top-level TLV record's fully-recursed node one
+        /// at a time, transparently unwrapping a lone "F401" wrapper -
+        /// without ever materializing more than one top-level subtree
+        /// simultaneously. Each yielded node is safe to discard (drop all
+        /// references) once the caller is done with it, before the next one
+        /// is produced - that's what keeps peak memory bounded by the size of
+        /// the single largest top-level record instead of the whole file
+        /// (real production files can have 100k+ separate definitions).</summary>
+        public static IEnumerable<TlvNode> IterTopLevelLazy(byte[] data, int start, int end, HashSet<string>? containerTags = null)
+        {
+            containerTags ??= ContainerTags;
+
+            var headers = FlatHeaders(data, start, end);
+            if (headers.Count == 1 && headers[0].Tag == "F401")
+            {
+                var (_, f401Offset, f401Size) = headers[0];
+                headers = FlatHeaders(data, f401Offset + 6, f401Offset + 6 + f401Size);
+            }
+
+            foreach (var (tag, offset, size) in headers)
+            {
+                int recordEnd = offset + 6 + size;
+                var nodes = ParseRecursive(data, offset, recordEnd, containerTags);
+                if (nodes.Count > 0)
+                {
+                    yield return nodes[0];
+                }
+            }
+        }
     }
 }

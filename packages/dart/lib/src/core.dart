@@ -90,32 +90,35 @@ class Core {
     }
     final modelDat = modelDatEntry.content;
 
-    var elements =
-        Tlv.parseRecursive(modelDat, 0, modelDat.length, Tlv.containerTags);
-    if (elements.length == 1 && elements[0].tag == 'F401') {
-      elements = elements[0].children;
+    // Walk the TLV tree one top-level record at a time (instead of building
+    // the whole file's tree at once) so peak memory is bounded by the
+    // single largest definition/layer-manager/material-manager/root block,
+    // not by the file's total node count. Real production files can have
+    // 100k+ separate component definitions; materializing all of them
+    // simultaneously is what actually exhausts memory on large files - not
+    // the (comparatively modest, ~1x) cost of decompressing model.dat
+    // itself.
+    final layerIdToName = <int, String>{};
+    final materialIdToName = <int, String>{};
+    final defsDictRaw = <int, RawDefinition>{};
+    final rootBuilder = GeometryBuilder();
+
+    for (final el in Tlv.iterTopLevelLazy(modelDat, 0, modelDat.length, Tlv.containerTags)) {
+      Geometry.collectLayers([el], layerIdToName);
+      Geometry.collectMaterialIds([el], materialIdToName);
+      Geometry.collectDefs([el], defsDictRaw);
+      if (el.tag == 'F601') {
+        Geometry.extractGeometryFromNodes(el.children, rootBuilder);
+      }
+      // `el` (and its whole subtree) is now unreferenced and eligible for
+      // garbage collection before the next top-level record is built.
     }
 
-    final layerIdToName = <int, String>{};
-    Geometry.collectLayers(elements, layerIdToName);
     if (!layerIdToName.containsKey(1)) {
       layerIdToName[1] = 'Layer0';
     }
     if (!layerColors.containsKey('Layer0')) {
       layerColors['Layer0'] = (136, 136, 136);
-    }
-
-    final materialIdToName = <int, String>{};
-    Geometry.collectMaterialIds(elements, materialIdToName);
-
-    final defsDictRaw = <int, RawDefinition>{};
-    Geometry.collectDefs(elements, defsDictRaw);
-
-    final rootBuilder = GeometryBuilder();
-    for (final el in elements) {
-      if (el.tag == 'F601') {
-        Geometry.extractGeometryFromNodes(el.children, rootBuilder);
-      }
     }
 
     return RawParsed()

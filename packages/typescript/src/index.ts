@@ -1,5 +1,5 @@
 import { extractSkpContents } from './vff';
-import { parseTlvRecursive, readU32, parseVarInt } from './parser';
+import { iterTopLevelLazy, readU32, parseVarInt } from './parser';
 import {
   GeometryBuilder,
   collectLayers,
@@ -9,6 +9,7 @@ import {
   parseStyleXml,
   resolveTextureBytes,
   findChildTag,
+  ParsedDefinition,
 } from './geometry';
 import {
   SkpModel,
@@ -123,22 +124,14 @@ export function parseSkp(buffer: ArrayBuffer): SkpModel {
     }
   }
 
-  // 3. Parse TLV recursively starting at offset 0, handling the F401 container tag wrapper
-  let elements = parseTlvRecursive(modelData, 0, modelData.length);
-  if (elements.length === 1 && elements[0].tag === 'F401') {
-    elements = elements[0].children;
-  }
-
-  // 4. Collect layer ID to name mapping
-  const layerIdToName = collectLayers(elements);
-  if (!layerIdToName.has(1)) {
-    layerIdToName.set(1, 'Layer0');
-  }
-  if (!layerColors.has('Layer0')) {
-    layerColors.set('Layer0', [136, 136, 136]);
-  }
-
-  // 4b. Collect material ID to name mapping
+  // 3. Walk the TLV tree one top-level record at a time (instead of
+  // building the whole file's tree at once) so peak memory is bounded by
+  // the single largest definition/layer-manager/material-manager/root
+  // block, not by the file's total node count. Real production files can
+  // have 100k+ separate component definitions; materializing all of them
+  // simultaneously is what actually exhausts memory on large files - not
+  // the (comparatively modest, ~1x) cost of decompressing model.dat itself.
+  const layerIdToName = new Map<number, string>();
   const materialIdToName = new Map<number, string>();
   function collectMaterialIds(nodes: any[]) {
     for (const el of nodes) {
@@ -169,18 +162,28 @@ export function parseSkp(buffer: ArrayBuffer): SkpModel {
       }
     }
   }
-  collectMaterialIds(elements);
 
-  // 5. Collect component definitions
-  const defsDict = collectDefs(elements);
-
-  // 6. Collect root geometry
+  const defsDict = new Map<number | string, ParsedDefinition>();
   const rootBuilder = new GeometryBuilder();
-  for (const el of elements) {
+
+  for (const el of iterTopLevelLazy(modelData, 0, modelData.length)) {
+    collectLayers([el], layerIdToName);
+    collectMaterialIds([el]);
+    collectDefs([el], defsDict);
     if (el.tag === 'F601') {
       extractGeometryFromNodes(el.children, rootBuilder);
     }
+    // `el` (and its whole subtree) is now unreferenced and eligible for
+    // garbage collection before the next top-level record is built.
   }
+
+  if (!layerIdToName.has(1)) {
+    layerIdToName.set(1, 'Layer0');
+  }
+  if (!layerColors.has('Layer0')) {
+    layerColors.set('Layer0', [136, 136, 136]);
+  }
+
   defsDict.set('ROOT', {
     guid: 'ROOT',
     name: 'ROOT_MODEL',

@@ -1,4 +1,4 @@
-import { unzipSync } from 'fflate';
+import { unzipSync, UnzipFileInfo } from 'fflate';
 
 export interface SkpContents {
   version: string;
@@ -83,9 +83,25 @@ export function extractSkpContents(data: Uint8Array): SkpContents {
   const zipOffset = findZipOffset(data);
   const zipBytes = data.subarray(zipOffset);
 
+  // Only decompress entries we actually consume - a ZIP full of unrelated
+  // large assets (the file's own thumbnails, etc.) would otherwise get
+  // fully inflated into memory alongside model.dat for nothing.
+  const wanted = (file: UnzipFileInfo): boolean => {
+    const lower = file.name.toLowerCase();
+    return (
+      lower === 'model.dat' ||
+      lower.endsWith('/model.dat') ||
+      lower.endsWith('.xml') ||
+      lower.endsWith('.png') ||
+      lower.endsWith('.jpg') ||
+      lower.endsWith('.jpeg') ||
+      lower.includes('material')
+    );
+  };
+
   let unzipped: Record<string, Uint8Array>;
   try {
-    unzipped = unzipSync(zipBytes);
+    unzipped = unzipSync(zipBytes, { filter: wanted });
   } catch (e) {
     throw new Error('Failed to decompress ZIP archive: ' + (e as Error).message);
   }

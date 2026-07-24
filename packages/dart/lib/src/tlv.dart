@@ -134,4 +134,47 @@ class Tlv {
   static String decodeUtf8(Uint8List bytes) {
     return utf8.decode(bytes, allowMalformed: true);
   }
+
+  /// Scan [start, end) for direct-child (tag, offset, size) headers only,
+  /// without recursing into any container - O(sibling count), not O(total
+  /// node count). Used by iterTopLevelLazy to locate top-level records one
+  /// at a time.
+  static List<(String, int, int)> _flatHeaders(Uint8List data, int start, int end) {
+    final headers = <(String, int, int)>[];
+    int pos = start;
+    while (pos < end - 6) {
+      final tagHex = _tagHex(data, pos);
+      final size = readU32(data, pos + 2);
+      if (pos + 6 + size > end) break;
+      headers.add((tagHex, pos, size));
+      pos += 6 + size;
+    }
+    return headers;
+  }
+
+  /// Yield each top-level TLV record's fully-recursed node one at a time,
+  /// transparently unwrapping a lone "F401" wrapper - without ever
+  /// materializing more than one top-level subtree simultaneously. Each
+  /// yielded node is safe to discard (drop all references) once the caller
+  /// is done with it, before the next one is produced - that's what keeps
+  /// peak memory bounded by the size of the single largest top-level record
+  /// instead of the whole file (real production files can have 100k+
+  /// separate definitions).
+  static Iterable<TlvNode> iterTopLevelLazy(Uint8List data, int start, int end, [Set<String>? tags]) sync* {
+    final containerTagsSet = tags ?? containerTags;
+
+    var headers = _flatHeaders(data, start, end);
+    if (headers.length == 1 && headers[0].$1 == 'F401') {
+      final (_, f401Offset, f401Size) = headers[0];
+      headers = _flatHeaders(data, f401Offset + 6, f401Offset + 6 + f401Size);
+    }
+
+    for (final (_, offset, size) in headers) {
+      final recordEnd = offset + 6 + size;
+      final nodes = parseRecursive(data, offset, recordEnd, containerTagsSet);
+      if (nodes.isNotEmpty) {
+        yield nodes[0];
+      }
+    }
+  }
 }
