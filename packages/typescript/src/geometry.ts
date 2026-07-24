@@ -7,6 +7,9 @@ export interface GeometryBuilderInstance {
   name: string;
   matrix: number[];
   materialId: number | null;
+  /** Layer ID this instance belongs to (D007 -> D207), or null. Internal -
+   * used for scene-graph layer inheritance, not part of the public API. */
+  layerId?: number | null;
   children: TlvNode[];
 }
 
@@ -306,11 +309,17 @@ export function extractGeometryFromNodes(
       // inherit this - the SDK resolves that inheritance when exporting,
       // so consumers need the raw value to do the same.
       let instMatId: number | null = null;
+      let instLayerId: number | null = null;
       const d007 = el.children.find((c) => c.tag === 'D007');
       if (d007) {
         const d107 = d007.children.find((c) => c.tag === 'D107');
         if (d107) {
           instMatId = parseVarInt(d107.payload, 0, d107.payload.length);
+        }
+        const d207 = d007.children.find((c) => c.tag === 'D207');
+        if (d207 && d207.payload.length > 0) {
+          const p = d207.payload;
+          instLayerId = p.length === 1 ? p[0] : parseVarInt(p, 0, p.length);
         }
       }
 
@@ -321,6 +330,7 @@ export function extractGeometryFromNodes(
         name: name || '',
         matrix: matrix,
         materialId: instMatId,
+        layerId: instLayerId,
         children: el.children,
       });
     } else if (el.children && el.children.length > 0) {

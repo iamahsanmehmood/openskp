@@ -547,34 +547,31 @@ export function parseSkp(buffer: ArrayBuffer): SkpModel {
 
       let lName = parentLayer;
       let instColor = inheritedMaterialColor;
-      const d007 = inst.children.find((c) => c.tag === 'D007');
       let properties: Record<string, string> = {};
 
+      // Layer and instance-material resolution use the fields already
+      // extracted onto the builder instance (same source data for VFF -
+      // D007/D207/D107 - read once in geometry.ts; legacy files populate
+      // the same fields directly since they have no TLV children).
+      if (inst.layerId !== null && inst.layerId !== undefined) {
+        lName = layerIdToName.get(inst.layerId) || parentLayer;
+      }
+
+      if (inst.materialId !== null && inst.materialId !== undefined) {
+        const matName = materialIdToName.get(inst.materialId);
+        if (matName) {
+          const mat = materialsMap.get(matName) || materialsByFolder.get(matName);
+          if (mat) {
+            instColor = mat.color;
+          }
+        }
+      }
+
+      // Dynamic properties are TLV-specific (no legacy equivalent decoded
+      // yet); inst.children is empty for legacy instances, so this is a
+      // no-op there.
+      const d007 = inst.children.find((c) => c.tag === 'D007');
       if (d007) {
-        const d207 = d007.children.find((c) => c.tag === 'D207');
-        if (d207 && d207.payload.length > 0) {
-          const p = d207.payload;
-          let lId: number;
-          if (p.length === 1) {
-            lId = p[0];
-          } else {
-            lId = parseVarInt(p, 0, p.length);
-          }
-          lName = layerIdToName.get(lId) || parentLayer;
-        }
-
-        const d107 = d007.children.find((c) => c.tag === 'D107');
-        if (d107) {
-          const instMatId = parseVarInt(d107.payload, 0, d107.payload.length);
-          const matName = materialIdToName.get(instMatId);
-          if (matName) {
-            const mat = materialsMap.get(matName) || materialsByFolder.get(matName);
-            if (mat) {
-              instColor = mat.color;
-            }
-          }
-        }
-
         try {
           properties = extractDynamicProperties(d007);
         } catch (e) {
