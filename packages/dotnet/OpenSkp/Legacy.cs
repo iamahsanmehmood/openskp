@@ -1212,8 +1212,11 @@ namespace OpenSkp
         /// <summary>Parse a classic MFC .skp into the shared raw-parse shape
         /// (Core.RawParsed), which Parser.cs converts to the public
         /// SkpModel exactly like the VFF path.</summary>
-        public static Core.RawParsed FullParseLegacy(byte[] data)
+        public static Core.RawParsed FullParseLegacy(byte[] data, SkpParseOptions? options = null)
         {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            Observability.Log(options, SkpLogLevel.Information, $"Parsing legacy buffer ({data.Length} bytes)");
+
             string version = "unknown";
             int second = LegacyBytes.FindBytes(data, LegacyBytes.StrMarker, 4);
             if (second > 0)
@@ -1228,6 +1231,7 @@ namespace OpenSkp
                     version = text.Substring(braceStart, braceEnd - braceStart + 1);
                 }
             }
+            Observability.Log(options, SkpLogLevel.Debug, $"Detected legacy version {version}");
 
             WalkResult walkResult;
             try
@@ -1236,11 +1240,14 @@ namespace OpenSkp
             }
             catch (LegacyParseError e)
             {
-                throw new InvalidOperationException($"legacy .skp parse failed: {e.Message}", e);
+                throw new SkpParseException($"legacy .skp parse failed: {e.Message}", stage: "legacy_walk", innerException: e);
             }
 
             var ar = walkResult.Ar;
             var slots = ar.Slots;
+            Observability.Log(
+                options, SkpLogLevel.Debug,
+                $"Legacy walk complete: {walkResult.Materials.Count} materials, {walkResult.Layers.Count} layers");
 
             var materialsMap = new Dictionary<string, Geometry.RawMaterial>();
             var materialIdToName = new Dictionary<long, string>();
@@ -1297,26 +1304,48 @@ namespace OpenSkp
             }
 
             var defsDict = new Dictionary<long, Geometry.RawDefinition>();
-            foreach (var kv in slots)
+            int processed = 0;
+            long lastSlot = -1;
+            try
             {
-                if (kv.Value.Kind == "obj" && kv.Value.Name == "CComponentDefinition" && kv.Value.Value != null)
+                foreach (var kv in slots)
                 {
-                    var d = (DefinitionRec)kv.Value.Value;
-                    var b = new LegacyBuilder();
-                    FillBuilder(b, d.Ents, slots);
-                    defsDict[kv.Key] = new Geometry.RawDefinition
+                    lastSlot = kv.Key;
+                    if (kv.Value.Kind == "obj" && kv.Value.Name == "CComponentDefinition" && kv.Value.Value != null)
                     {
-                        Guid = d.Guid,
-                        Name = d.Name,
-                        IsImage = false,
-                        AlwaysFacesCamera = d.FacesCamera,
-                        Builder = ToGeometryBuilder(b),
-                    };
+                        var d = (DefinitionRec)kv.Value.Value;
+                        var b = new LegacyBuilder();
+                        FillBuilder(b, d.Ents, slots);
+                        defsDict[kv.Key] = new Geometry.RawDefinition
+                        {
+                            Guid = d.Guid,
+                            Name = d.Name,
+                            IsImage = false,
+                            AlwaysFacesCamera = d.FacesCamera,
+                            Builder = ToGeometryBuilder(b),
+                        };
+                        processed++;
+                        if (processed % ParseTuning.ProgressInterval == 0)
+                        {
+                            Observability.Progress(options, "legacy_defs", processed, processed);
+                            Observability.Log(options, SkpLogLevel.Debug, $"Processed {processed} component definitions");
+                        }
+                    }
                 }
+            }
+            catch (Exception e) when (!(e is SkpParseException))
+            {
+                throw new SkpParseException(
+                    $"Failed while building component definitions: {e.Message}",
+                    stage: "legacy_defs", definitionId: lastSlot, innerException: e);
             }
 
             var rootBuilder = new LegacyBuilder();
             FillBuilder(rootBuilder, walkResult.Root, slots);
+
+            Observability.Log(
+                options, SkpLogLevel.Information,
+                $"Parse complete: {defsDict.Count} defs ({sw.Elapsed.TotalSeconds:F2}s)");
 
             return new Core.RawParsed
             {

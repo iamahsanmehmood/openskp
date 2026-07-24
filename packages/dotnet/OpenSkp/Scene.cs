@@ -84,14 +84,18 @@ namespace OpenSkp
             public List<(long FId, GeometryBuilderFace FData)> FaceList = new List<(long, GeometryBuilderFace)>();
         }
 
-        public static Scene Build(Core.RawParsed parsed)
+        public static Scene Build(Core.RawParsed parsed, SkpParseOptions? options = null)
         {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
             var defsDict = parsed.DefsDict;
             var layerColors = parsed.LayerColors;
             var layerIdToName = parsed.LayerIdToName;
             var materialIdToName = parsed.MaterialIdToName;
             var materials = parsed.Materials;
             var materialsByFolder = parsed.MaterialsByFolder;
+
+            Observability.Log(options, SkpLogLevel.Information, $"Building scene: {defsDict.Count} definitions available");
+            long instanceCounter = 0;
 
             int meshCounter = 0;
             var meshIndex = new Dictionary<string, MeshMetadata>();
@@ -130,16 +134,16 @@ namespace OpenSkp
                 {
                     return new List<InstanceNode>();
                 }
-                return InstantiateBuilder(d.Builder, d.Name ?? "", currentMatrix, parentLayer, pathName, inheritedColor);
+                return InstantiateBuilder(d.Builder, d.Name ?? "", defId, currentMatrix, parentLayer, pathName, inheritedColor);
             }
 
             List<InstanceNode> InstantiateRoot(GeometryBuilder rootBuilder, List<double> currentMatrix)
             {
-                return InstantiateBuilder(rootBuilder, "ROOT_MODEL", currentMatrix, "Layer0", "ROOT", null);
+                return InstantiateBuilder(rootBuilder, "ROOT_MODEL", null, currentMatrix, "Layer0", "ROOT", null);
             }
 
             List<InstanceNode> InstantiateBuilder(
-                GeometryBuilder builder, string defName, List<double> currentMatrix,
+                GeometryBuilder builder, string defName, long? defId, List<double> currentMatrix,
                 string parentLayer, string pathName, (int R, int G, int B)? inheritedColor)
             {
                 if (builder.Faces.Count > 0)
@@ -176,7 +180,17 @@ namespace OpenSkp
                         }
                         if (loops.Count == 0) continue;
 
-                        var triangles = Triangulator.TriangulateFace3D(builder.Vertices, loops, fData.Normal);
+                        List<long[]> triangles;
+                        try
+                        {
+                            triangles = Triangulator.TriangulateFace3D(builder.Vertices, loops, fData.Normal);
+                        }
+                        catch (Exception e) when (!(e is SkpParseException))
+                        {
+                            throw new SkpParseException(
+                                $"Failed to triangulate face: {e.Message}",
+                                stage: "build_scene", definitionId: defId, innerException: e);
+                        }
                         foreach (var tri in triangles)
                         {
                             var faceIndices = new List<int>();
@@ -363,6 +377,12 @@ namespace OpenSkp
 
                     string instName = !string.IsNullOrEmpty(inst.Name) ? inst.Name! : $"Component_{refIdx}";
                     string fullPathName = $"{pathName} / {instName}";
+                    instanceCounter++;
+                    if (instanceCounter % ParseTuning.ProgressInterval == 0)
+                    {
+                        Observability.Progress(options, "build_scene", instanceCounter, instanceCounter);
+                        Observability.Log(options, SkpLogLevel.Debug, $"Processed {instanceCounter} placed instances");
+                    }
                     var childNodes = refIdx.HasValue
                         ? Instantiate(refIdx.Value, false, newMatrix, lName, fullPathName, instColor)
                         : new List<InstanceNode>();
@@ -428,6 +448,11 @@ namespace OpenSkp
                 Properties = new Dictionary<string, string>(),
                 Children = rootChildren,
             };
+
+            Observability.Log(
+                options, SkpLogLevel.Information,
+                $"Scene build complete: {instanceCounter} instances, {meshIndex.Count} meshes, " +
+                $"{glbPrimitives.Count} primitives ({sw.Elapsed.TotalSeconds:F2}s)");
 
             return new Scene
             {

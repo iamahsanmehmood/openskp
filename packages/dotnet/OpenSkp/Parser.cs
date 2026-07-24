@@ -15,17 +15,9 @@ namespace OpenSkp
     /// </summary>
     public static class SkpFile
     {
-        public static SkpModel Parse(byte[] buffer)
+        public static SkpModel Parse(byte[] buffer, SkpParseOptions? options = null)
         {
-            Core.RawParsed parsed;
-            try
-            {
-                parsed = Core.FullParse(buffer);
-            }
-            catch (LegacyParseError e)
-            {
-                throw new ArgumentException($"legacy .skp parse failed: {e.Message}", e);
-            }
+            var parsed = Core.FullParse(buffer, options);
 
             var model = new SkpModel { Version = parsed.Version };
 
@@ -148,9 +140,9 @@ namespace OpenSkp
             return defn;
         }
 
-        public static SkpModel Open(string filePath)
+        public static SkpModel Open(string filePath, SkpParseOptions? options = null)
         {
-            return Parse(ReadValidatedBytes(filePath));
+            return Parse(ReadValidatedBytes(filePath), options);
         }
 
         /// <summary>Bake every instance actually placed in the model into
@@ -166,25 +158,17 @@ namespace OpenSkp
         /// many thousands of instances, the baked output can be far
         /// larger than the file's raw geometry - that's the reason this
         /// isn't part of Parse().</summary>
-        public static Scene BuildScene(byte[] buffer)
+        public static Scene BuildScene(byte[] buffer, SkpParseOptions? options = null)
         {
-            Core.RawParsed parsed;
-            try
-            {
-                parsed = Core.FullParse(buffer);
-            }
-            catch (LegacyParseError e)
-            {
-                throw new ArgumentException($"legacy .skp parse failed: {e.Message}", e);
-            }
-            return SceneBuilder.Build(parsed);
+            var parsed = Core.FullParse(buffer, options);
+            return SceneBuilder.Build(parsed, options);
         }
 
         /// <summary>Same as <see cref="BuildScene(byte[])"/>, reading the
         /// file from disk first.</summary>
-        public static Scene BuildScene(string filePath)
+        public static Scene BuildScene(string filePath, SkpParseOptions? options = null)
         {
-            return BuildScene(ReadValidatedBytes(filePath));
+            return BuildScene(ReadValidatedBytes(filePath), options);
         }
 
         private static byte[] ReadValidatedBytes(string filePath)

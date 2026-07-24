@@ -176,15 +176,33 @@ namespace OpenSkp
             return headers;
         }
 
+        /// <summary>One top-level TLV record yielded by IterTopLevelLazy,
+        /// with its position among the file's top-level siblings.</summary>
+        public readonly struct TopLevelRecord
+        {
+            public readonly int Index;
+            public readonly int Total;
+            public readonly TlvNode Node;
+            public TopLevelRecord(int index, int total, TlvNode node)
+            {
+                Index = index;
+                Total = total;
+                Node = node;
+            }
+        }
+
         /// <summary>Yield each top-level TLV record's fully-recursed node one
         /// at a time, transparently unwrapping a lone "F401" wrapper -
         /// without ever materializing more than one top-level subtree
-        /// simultaneously. Each yielded node is safe to discard (drop all
-        /// references) once the caller is done with it, before the next one
-        /// is produced - that's what keeps peak memory bounded by the size of
-        /// the single largest top-level record instead of the whole file
-        /// (real production files can have 100k+ separate definitions).</summary>
-        public static IEnumerable<TlvNode> IterTopLevelLazy(ChunkedBuffer data, long start, long end, HashSet<string>? containerTags = null)
+        /// simultaneously. Total (the top-level sibling count) comes for free
+        /// from the same cheap header scan that drives the loop, so callers
+        /// can report "N of total" progress with no extra pass over the
+        /// file. Each yielded node is safe to discard (drop all references)
+        /// once the caller is done with it, before the next one is produced
+        /// - that's what keeps peak memory bounded by the size of the single
+        /// largest top-level record instead of the whole file (real
+        /// production files can have 100k+ separate definitions).</summary>
+        public static IEnumerable<TopLevelRecord> IterTopLevelLazy(ChunkedBuffer data, long start, long end, HashSet<string>? containerTags = null)
         {
             containerTags ??= ContainerTags;
 
@@ -195,14 +213,17 @@ namespace OpenSkp
                 headers = FlatHeaders(data, f401Offset + 6, f401Offset + 6 + f401Size);
             }
 
+            int total = headers.Count;
+            int index = 0;
             foreach (var (tag, offset, size) in headers)
             {
                 long recordEnd = offset + 6 + size;
                 var nodes = ParseRecursive(data, offset, recordEnd, containerTags);
                 if (nodes.Count > 0)
                 {
-                    yield return nodes[0];
+                    yield return new TopLevelRecord(index, total, nodes[0]);
                 }
+                index++;
             }
         }
     }

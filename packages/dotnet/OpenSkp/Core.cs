@@ -24,28 +24,33 @@ namespace OpenSkp
             public Geometry.RawDefinition Root = new Geometry.RawDefinition { Guid = "ROOT", Name = "ROOT_MODEL" };
         }
 
-        public static RawParsed FullParse(byte[] data)
+        public static RawParsed FullParse(byte[] data, SkpParseOptions? options = null)
         {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            Observability.Log(options, SkpLogLevel.Information, $"Parsing buffer ({data.Length} bytes)");
+
             int headerLen = Math.Min(512, data.Length);
             var header = new byte[headerLen];
             Array.Copy(data, header, headerLen);
 
             if (!Vff.HasValidHeader(header))
             {
-                throw new ArgumentException("Not a valid SketchUp file");
+                throw new SkpParseException("Not a valid SketchUp file (bad header magic)", stage: "header");
             }
 
             if (Legacy.IsLegacy(data))
             {
-                return Legacy.FullParseLegacy(data);
+                Observability.Log(options, SkpLogLevel.Debug, "Detected legacy MFC container; routing to legacy walker");
+                return Legacy.FullParseLegacy(data, options);
             }
 
             string version = Vff.ExtractVersion(header);
+            Observability.Log(options, SkpLogLevel.Debug, $"Detected version {version} (VFF/ZIP container)");
 
             int pkPos = Vff.FindZipOffset(data);
             if (pkPos < 0)
             {
-                throw new ArgumentException("No ZIP container found");
+                throw new SkpParseException("No ZIP container found", stage: "zip_extract");
             }
 
             using var zip = Vff.OpenZip(data, pkPos);
@@ -114,10 +119,12 @@ namespace OpenSkp
                 }
             }
 
+            Observability.Log(options, SkpLogLevel.Debug, $"Parsed {materials.Count} materials, {styles.Count} styles");
+
             var modelDatEntry = zip.GetEntry("model.dat");
             if (modelDatEntry == null)
             {
-                throw new ArgumentException("model.dat not found in ZIP container");
+                throw new SkpParseException("model.dat not found in ZIP container", stage: "zip_extract");
             }
             // model.dat routinely decompresses to several GB on real
             // production files (SketchUp's binary format has been observed
@@ -131,6 +138,7 @@ namespace OpenSkp
             {
                 modelDat = ChunkedBuffer.FromStream(s, modelDatEntry.Length);
             }
+            Observability.Log(options, SkpLogLevel.Debug, $"Read model.dat: {modelDat.Length} bytes");
 
             // Walk the TLV tree one top-level record at a time (instead of
             // building the whole file's tree at once) so peak memory is
@@ -146,20 +154,40 @@ namespace OpenSkp
             var defsDictRaw = new Dictionary<long, Geometry.RawDefinition>();
             var rootBuilder = new GeometryBuilder();
 
-            foreach (var el in Tlv.IterTopLevelLazy(modelDat, 0, modelDat.Length, Tlv.ContainerTags))
+            foreach (var rec in Tlv.IterTopLevelLazy(modelDat, 0, modelDat.Length, Tlv.ContainerTags))
             {
-                var single = new List<TlvNode> { el };
-                Geometry.CollectLayers(single, layerIdToName);
-                Geometry.CollectMaterialIds(single, materialIdToName);
-                Geometry.CollectDefs(single, defsDictRaw);
-                if (el.Tag == "F601")
+                var el = rec.Node;
+                try
                 {
-                    Geometry.ExtractGeometryFromNodes(el.Children, rootBuilder);
+                    var single = new List<TlvNode> { el };
+                    Geometry.CollectLayers(single, layerIdToName);
+                    Geometry.CollectMaterialIds(single, materialIdToName);
+                    Geometry.CollectDefs(single, defsDictRaw);
+                    if (el.Tag == "F601")
+                    {
+                        Geometry.ExtractGeometryFromNodes(el.Children, rootBuilder);
+                    }
+                }
+                catch (Exception e) when (!(e is SkpParseException))
+                {
+                    throw new SkpParseException(
+                        $"Failed while processing top-level record: {e.Message}",
+                        stage: "tlv_walk", recordIndex: rec.Index, totalRecords: rec.Total, tag: el.Tag,
+                        innerException: e);
                 }
                 // `el` (and its whole subtree) is now unreferenced and
                 // eligible for garbage collection before the next top-level
                 // record is built.
+                if (rec.Index % ParseTuning.ProgressInterval == 0 || rec.Index == rec.Total - 1)
+                {
+                    Observability.Progress(options, "tlv_walk", rec.Index + 1, rec.Total);
+                    Observability.Log(options, SkpLogLevel.Debug, $"Processed {rec.Index + 1}/{rec.Total} top-level records");
+                }
             }
+
+            Observability.Log(
+                options, SkpLogLevel.Information,
+                $"Parse complete: {defsDictRaw.Count} defs ({sw.Elapsed.TotalSeconds:F2}s)");
 
             if (!layerIdToName.ContainsKey(1))
             {
