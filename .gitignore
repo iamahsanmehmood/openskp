@@ -56,6 +56,7 @@ packages/dart/pubspec.lock
 # …except the checked-in regression fixtures (small real models).
 !packages/python/tests/fixtures/*.skp
 !packages/typescript/tests/fixtures/*.skp
+!packages/dotnet/OpenSkp.Tests/fixtures/*.skp
 *.glb
 *.obj
 

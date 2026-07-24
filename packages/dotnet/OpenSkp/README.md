@@ -53,7 +53,7 @@ class Program
         Console.WriteLine("Layers:");
         foreach (var layer in model.Layers)
         {
-            Console.WriteLine($"- {layer.Name} (RGB: {layer.Color.R}, {layer.Color.G}, {layer.Color.B})");
+            Console.WriteLine($"- {layer.Name} (RGB: {layer.ColorR}, {layer.ColorG}, {layer.ColorB})");
         }
 
         // Print Materials List
@@ -62,6 +62,16 @@ class Program
         {
             Console.WriteLine($"- {material.Name} (Transparency: {material.Transparency})");
         }
+
+        // Walk component definitions and their geometry
+        foreach (var (id, def) in model.Definitions)
+        {
+            Console.WriteLine($"Definition {id}: {def.Name} - {def.Vertices.Count} vertices, {def.Faces.Count} faces");
+        }
+
+        // model.Root holds whatever is placed directly in the model (not
+        // inside any component/group), including root-level instances.
+        Console.WriteLine($"Root-level instances: {model.Root.Instances.Count}");
     }
 }
 ```
