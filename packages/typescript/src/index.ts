@@ -11,6 +11,7 @@ import {
   reconstructLoopVertices,
   parseMaterialXml,
   parseStyleXml,
+  resolveTextureBytes,
   findChildTag,
 } from './geometry';
 
@@ -182,14 +183,29 @@ export function parseSkp(buffer: ArrayBuffer): SkpModel {
         const parsedMat = parseMaterialXml(xmlText);
         if (parsedMat) {
           const folderName = name.split('/')[1] || '';
+          let texture: Texture | null = null;
+          if (parsedMat.hasTexture) {
+            const resolved = resolveTextureBytes(
+              materialFiles,
+              name,
+              parsedMat.textureFilename,
+              parsedMat.imagePath
+            );
+            texture = {
+              filename: resolved.filename,
+              width: parsedMat.xScale,
+              height: parsedMat.yScale,
+              data: resolved.data,
+            };
+          }
           const matObj: Material = {
             name: parsedMat.name,
             color: { r: parsedMat.r, g: parsedMat.g, b: parsedMat.b },
             transparency: parsedMat.trans,
             id: null,
-            texture: null,
-            colorized: false,
-            colorizeType: 0,
+            texture,
+            colorized: parsedMat.colorized,
+            colorizeType: parsedMat.colorizeType,
           };
           materialsMap.set(parsedMat.name, matObj);
           if (folderName) {

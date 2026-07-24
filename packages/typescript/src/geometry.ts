@@ -497,7 +497,20 @@ export function reconstructLoopVertices(
   return loopVerts;
 }
 
-export function parseMaterialXml(xmlText: string): { name: string; r: number; g: number; b: number; trans: number } | null {
+export function parseMaterialXml(xmlText: string): {
+  name: string;
+  r: number;
+  g: number;
+  b: number;
+  trans: number;
+  colorized: boolean;
+  colorizeType: number;
+  hasTexture: boolean;
+  textureFilename: string;
+  xScale: number;
+  yScale: number;
+  imagePath: string;
+} | null {
   const match = xmlText.match(/<(?:[a-zA-Z0-9_]+:)?material\b([^>]*)\/?>/);
   if (!match) return null;
   const attrsString = match[1];
@@ -526,7 +539,55 @@ export function parseMaterialXml(xmlText: string): { name: string; r: number; g:
     trans = 1.0;
   }
 
-  return { name, r: colorRed, g: colorGreen, b: colorBlue, trans };
+  // type="2" marks a colourized copy ("[Name]1" materials SketchUp creates
+  // when you re-colour a textured material); colorizeType 0 = hue shift,
+  // 1 = tint.
+  const colorized = getAttr('type') === '2';
+  const colorizeTypeRaw = parseInt(getAttr('colorizeType') || '0', 10);
+  const colorizeType = Number.isNaN(colorizeTypeRaw) ? 0 : colorizeTypeRaw;
+
+  // <mat:texture ...> sub-element, if the material carries hasTexture="1".
+  const textureMatch = xmlText.match(/<(?:[a-zA-Z0-9_]+:)?texture\b([^>]*)\/?>/);
+  let hasTexture = false;
+  let textureFilename = '';
+  let xScale = 0.0;
+  let yScale = 0.0;
+  if (textureMatch) {
+    hasTexture = true;
+    const texAttrs = textureMatch[1];
+    const getTexAttr = (n: string): string | null => {
+      const r = new RegExp(`\\b${n}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`);
+      const m = texAttrs.match(r);
+      return m ? (m[1] !== undefined ? m[1] : m[2]) : null;
+    };
+    textureFilename = getTexAttr('textureFilename') || '';
+    const xs = parseFloat(getTexAttr('xScale') || '0');
+    xScale = Number.isNaN(xs) ? 0.0 : xs;
+    const ys = parseFloat(getTexAttr('yScale') || '0');
+    yScale = Number.isNaN(ys) ? 0.0 : ys;
+  }
+
+  // <mat:images>/<mat:image path="..."> - colourized copies keep no image
+  // of their own; this points into the SOURCE material's folder.
+  const imageMatch = xmlText.match(
+    /<(?:[a-zA-Z0-9_]+:)?image\b[^>]*\bpath\s*=\s*(?:"([^"]*)"|'([^']*)')[^>]*\/?>/
+  );
+  const imagePath = imageMatch ? (imageMatch[1] !== undefined ? imageMatch[1] : imageMatch[2]) : '';
+
+  return {
+    name,
+    r: colorRed,
+    g: colorGreen,
+    b: colorBlue,
+    trans,
+    colorized,
+    colorizeType,
+    hasTexture,
+    textureFilename,
+    xScale,
+    yScale,
+    imagePath,
+  };
 }
 
 /**
@@ -567,4 +628,71 @@ export function parseStyleXml(xmlText: string): {
     frontColor: colors['4000'] ?? null,
     backColor: colors['4001'] ?? null,
   };
+}
+
+/** Strip any leading run of characters in `chars` (Python str.lstrip semantics). */
+function lstripChars(s: string, chars: string): string {
+  let i = 0;
+  while (i < s.length && chars.includes(s[i])) i++;
+  return s.slice(i);
+}
+
+/**
+ * Resolve a material's texture image bytes from the material files map
+ * (the flat "filename -> bytes" view of the embedded ZIP).
+ *
+ * SketchUp stores the image next to material.xml (materials/<folder>/<image>).
+ * The stored image name can differ from textureFilename (observed:
+ * "..._Safety.jpg" in the XML vs "..._Saftey.jpg" on disk) - the folder's
+ * non-XML sibling is used as fallback. Colourized copies ("[Name]1",
+ * type="2") keep no image of their own - their <mat:image path> points into
+ * the SOURCE material's folder, sometimes prefixed "./".
+ */
+export function resolveTextureBytes(
+  materialFiles: Record<string, Uint8Array>,
+  xmlName: string,
+  filename: string,
+  imagePath: string
+): { data: Uint8Array | null; filename: string } {
+  const names = Object.keys(materialFiles);
+  const slashIdx = xmlName.lastIndexOf('/');
+  const folder = slashIdx >= 0 ? xmlName.slice(0, slashIdx) : '';
+
+  let data: Uint8Array | null = null;
+  let resolvedFilename = filename;
+
+  const candidate = filename ? `${folder}/${filename}` : null;
+  if (candidate && names.includes(candidate)) {
+    data = materialFiles[candidate];
+  } else {
+    for (const entry of names) {
+      if (
+        entry.startsWith(folder + '/') &&
+        entry !== xmlName &&
+        !entry.toLowerCase().endsWith('.xml')
+      ) {
+        data = materialFiles[entry];
+        if (!resolvedFilename) {
+          resolvedFilename = entry.split('/').pop() || '';
+        }
+        break;
+      }
+    }
+  }
+
+  if (data === null) {
+    const imgPath = lstripChars(imagePath, './');
+    const candidates = [imgPath, folder ? `${folder}/${imgPath}` : imgPath];
+    for (const cand of candidates) {
+      if (cand && names.includes(cand)) {
+        data = materialFiles[cand];
+        if (!resolvedFilename) {
+          resolvedFilename = cand.split('/').pop() || '';
+        }
+        break;
+      }
+    }
+  }
+
+  return { data, filename: resolvedFilename };
 }
