@@ -650,7 +650,7 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
             pk_pos = chunk.find(b'PK\x03\x04')
     if pk_pos < 0:
         raise SkpParseError(
-            "No ZIP container found", stage="header")
+            "No ZIP container found", stage="zip_extract")
 
     # 2. Extract ZIP contents
     with open(skp_path, 'rb') as f:
