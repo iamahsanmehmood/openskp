@@ -18,9 +18,18 @@ Example::
 from __future__ import annotations
 
 from .model import SkpFile, SkpModel
+from .scene import Scene, InstanceNode, MeshMetadata, GlbPrimitive
 
 __version__: str = "0.2.0"
-__all__: list[str] = ["SkpFile", "SkpModel", "__version__"]
+__all__: list[str] = [
+    "SkpFile",
+    "SkpModel",
+    "Scene",
+    "InstanceNode",
+    "MeshMetadata",
+    "GlbPrimitive",
+    "__version__",
+]
 
 
 def main() -> None:
@@ -41,7 +50,6 @@ def main() -> None:
             print(f"Definitions: {len(model.definitions)}")
             print(f"Layers:      {len(model.layers)}")
             print(f"Materials:   {len(model.materials)}")
-            print(f"Instances:   {len(model.scene_hierarchy)}")
         except Exception as exc:
             print(f"Error: {exc}", file=sys.stderr)
             sys.exit(1)

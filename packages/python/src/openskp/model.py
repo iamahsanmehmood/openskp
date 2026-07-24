@@ -515,3 +515,26 @@ class SkpFile:
 
         return model
 
+    def build_scene(self) -> "scene.Scene":
+        """Bake every instance actually placed in the model into
+        world-space, triangulated mesh data - SketchUp's component/group
+        nesting fully resolved and flattened, ready for a GLB export or any
+        other renderer.
+
+        This is a separate, opt-in step from :meth:`parse`: it re-runs the
+        underlying parse independently rather than reusing a prior
+        :meth:`parse` call's data, so calling only :meth:`parse` never pays
+        for the heavier instancing + triangulation work here. For a file
+        that reuses a handful of definitions across many thousands of
+        instances, the baked output can be far larger than the file's raw
+        geometry - that's the reason this isn't part of :meth:`parse`.
+
+        Returns:
+            A populated :class:`openskp.scene.Scene`.
+        """
+        from . import _core
+        from . import scene as _scene
+
+        parsed = _core.full_parse(str(self.path))
+        return _scene.build_scene(parsed)
+

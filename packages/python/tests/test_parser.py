@@ -1057,3 +1057,62 @@ class TestLegacyRealFile:
         a_face = next(f for d in model.definitions.values()
                       for f in d.faces.values() if f.loops)
         assert len(a_face.loops[0]) >= 3
+
+
+# ── Scene baking (opt-in build_scene(), separate from parse()) ──────────
+
+
+class TestBuildScene:
+    """``SkpFile.build_scene()`` bakes every placed instance into a
+    triangulated, world-space scene - a separate, opt-in step from
+    :meth:`parse` (see module docstring in ``scene.py``).
+
+    Cross-validated directly against the TypeScript port's
+    ``SkpFile.buildScene()`` on this exact fixture: mesh count, mesh_index
+    count, gltf_materials count, and root instance count all match exactly,
+    down to the first three meshes' vertex/triangle counts and material
+    indices.
+    """
+
+    import pathlib as _pathlib
+
+    FIXTURE = _pathlib.Path(__file__).parent / "fixtures" / "capilla_quiroz_v17.skp"
+
+    def _scene(self):
+        import pytest as _pytest
+        if not self.FIXTURE.exists():
+            _pytest.skip("legacy fixture not present")
+        from openskp.model import SkpFile
+        return SkpFile.open(str(self.FIXTURE)).build_scene()
+
+    def test_scene_matches_typescript_ground_truth(self) -> None:
+        scene = self._scene()
+
+        assert len(scene.glb_primitives) == 13
+        assert len(scene.mesh_index) == 13
+        assert len(scene.gltf_materials) == 9
+
+        assert scene.scene_hierarchy.name == "ROOT"
+        assert scene.scene_hierarchy.definition_name == "ROOT_MODEL"
+        assert len(scene.scene_hierarchy.children) == 3
+        assert sorted(c.definition_name for c in scene.scene_hierarchy.children) == [
+            "grada", "grada", "puerta",
+        ]
+
+    def test_primitives_have_valid_geometry(self) -> None:
+        scene = self._scene()
+        for prim in scene.glb_primitives:
+            assert len(prim.positions) % 3 == 0
+            assert len(prim.normals) == len(prim.positions)
+            assert len(prim.indices) % 3 == 0
+            n_verts = len(prim.positions) // 3
+            assert all(0 <= idx < n_verts for idx in prim.indices)
+            assert 0 <= prim.material_index < len(scene.gltf_materials)
+
+    def test_independent_of_parse(self) -> None:
+        """build_scene() must not require parse() to have been called
+        first - it re-parses independently."""
+        from openskp.model import SkpFile
+        skp = SkpFile.open(str(self.FIXTURE))
+        scene = skp.build_scene()
+        assert len(scene.glb_primitives) == 13
