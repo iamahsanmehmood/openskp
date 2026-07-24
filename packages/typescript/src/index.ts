@@ -4,6 +4,7 @@ import { transformPoint, multiplyMatrices } from './transforms';
 import { triangulateFace3D } from './triangulator';
 import {
   GeometryBuilder,
+  ParsedDefinition,
   collectLayers,
   collectDefs,
   extractGeometryFromNodes,
@@ -294,21 +295,6 @@ export function parseSkp(buffer: ArrayBuffer): SkpModel {
   }
   collectMaterialIds(elements);
 
-  // 4c. Join the TLV material IDs (what Face.materialId references) onto the
-  // parsed materials, so callers can resolve face -> material. Same
-  // name-then-folder resolution used for face/instance colouring below.
-  // materialsMap/materialsByFolder may share the same Material object
-  // reference for an alias, so setting `.id` here is visible through both.
-  const materialsById = new Map<number, Material>();
-  for (const [mId, mName] of materialIdToName.entries()) {
-    const mat = materialsMap.get(mName) || materialsByFolder.get(mName);
-    if (!mat) continue;
-    if (mat.id === null) {
-      mat.id = mId;
-    }
-    materialsById.set(mId, mat);
-  }
-
   // 5. Collect component definitions
   const defsDict = collectDefs(elements);
 
@@ -327,7 +313,61 @@ export function parseSkp(buffer: ArrayBuffer): SkpModel {
     builder: rootBuilder,
   });
 
-  // 7. Instantiate scene hierarchy and gather mesh metadata & GLB primitives
+  return buildModelFromParsed({
+    version,
+    layerColors,
+    layerIdToName,
+    materialIdToName,
+    materialsMap,
+    materialsByFolder,
+    styles,
+    defsDict,
+  });
+}
+
+/** Raw parsed data, source-agnostic (populated by either the VFF/ZIP path
+ * above or the legacy MFC walker), that {@link buildModelFromParsed} turns
+ * into the final public {@link SkpModel} - including scene-hierarchy
+ * resolution and GLB primitive building, which both formats share. */
+export interface ParsedRawData {
+  version: string;
+  layerColors: Map<string, [number, number, number]>;
+  layerIdToName: Map<number, string>;
+  materialIdToName: Map<number, string>;
+  materialsMap: Map<string, Material>;
+  materialsByFolder: Map<string, Material>;
+  styles: Style[];
+  defsDict: Map<number | string, ParsedDefinition>;
+}
+
+export function buildModelFromParsed(parsed: ParsedRawData): SkpModel {
+  const {
+    version,
+    layerColors,
+    layerIdToName,
+    materialIdToName,
+    materialsMap,
+    materialsByFolder,
+    styles,
+    defsDict,
+  } = parsed;
+
+  // Join the TLV material IDs (what Face.materialId references) onto the
+  // parsed materials, so callers can resolve face -> material. Same
+  // name-then-folder resolution used for face/instance colouring below.
+  // materialsMap/materialsByFolder may share the same Material object
+  // reference for an alias, so setting `.id` here is visible through both.
+  const materialsById = new Map<number, Material>();
+  for (const [mId, mName] of materialIdToName.entries()) {
+    const mat = materialsMap.get(mName) || materialsByFolder.get(mName);
+    if (!mat) continue;
+    if (mat.id === null) {
+      mat.id = mId;
+    }
+    materialsById.set(mId, mat);
+  }
+
+  // Instantiate scene hierarchy and gather mesh metadata & GLB primitives
   const meshCounter = { count: 0 };
   const meshIndex: Record<string, MeshMetadata> = {};
   const glbPrimitives: any[] = [];
