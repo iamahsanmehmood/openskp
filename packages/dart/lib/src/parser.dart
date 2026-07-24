@@ -5,6 +5,7 @@ import 'core.dart';
 import 'geometry.dart';
 import 'legacy.dart';
 import 'model.dart';
+import 'scene.dart';
 
 /// High-level entry point for opening and parsing .skp files.
 ///
@@ -36,15 +37,31 @@ class SkpFile {
     return SkpFile._('<memory>', bytes);
   }
 
-  SkpModel parse() {
+  RawParsed _parseToRaw() {
     final bytes = _bytes ?? File(path).readAsBytesSync();
-
-    RawParsed parsed;
     try {
-      parsed = Core.fullParse(bytes);
+      return Core.fullParse(bytes);
     } on LegacyParseError catch (e) {
       throw ArgumentError('legacy .skp parse failed: ${e.message}');
     }
+  }
+
+  /// Bake every instance actually placed in the model into world-space,
+  /// triangulated mesh data - SketchUp's own component/group nesting fully
+  /// resolved and flattened, ready for a GLB export or any other renderer.
+  ///
+  /// A separate, opt-in step from [parse]: it re-parses independently
+  /// rather than reusing a prior [parse] call's data, so a plain [parse]
+  /// call never pays for the heavier instancing + triangulation work here.
+  /// For a file that reuses a handful of definitions across many thousands
+  /// of instances, the baked output can be far larger than the file's raw
+  /// geometry - that's the reason this isn't part of [parse].
+  Scene buildScene() {
+    return SceneBuilder.build(_parseToRaw());
+  }
+
+  SkpModel parse() {
+    final parsed = _parseToRaw();
 
     final model = SkpModel()..version = parsed.version;
 

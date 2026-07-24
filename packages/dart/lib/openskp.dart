@@ -4,3 +4,4 @@ library openskp;
 
 export 'src/model.dart';
 export 'src/parser.dart' show SkpFile;
+export 'src/scene.dart' show Scene, InstanceNode, MeshMetadata, GlbPrimitive;
