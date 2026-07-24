@@ -9,8 +9,6 @@ export interface SkpModel {
   materials: Material[];
   materialsById: Map<number, Material>;
   styles: Style[];
-  sceneHierarchy: InstanceNode;
-  meshIndex: Record<string, MeshMetadata>;
 }
 
 export interface Definition {
@@ -138,6 +136,45 @@ export interface MeshMetadata {
   path: string;
 }
 
+/** One triangulated, world-space mesh: all faces sharing a single resolved
+ * color from one flattened scene-graph position. Ready to hand straight to
+ * a GLB/glTF exporter or any other renderer. */
+export interface GlbPrimitive {
+  /** Flat [x, y, z, x, y, z, ...] vertex positions, in metres, Y-up. */
+  positions: Float32Array;
+  /** Flat [x, y, z, ...] vertex normals, matching `positions` 1:1. */
+  normals: Float32Array;
+  /** Triangle vertex indices into `positions`/`normals` (3 per triangle). */
+  indices: Uint32Array;
+  /** Index into `gltfMaterials` for this primitive's resolved color. */
+  materialIndex: number;
+  /** Matches the corresponding key in `SkpScene.meshIndex`. */
+  geomName: string;
+}
+
+/**
+ * The result of baking a parsed file's placed instances into a flat,
+ * world-space 3D scene: every instance's geometry triangulated and
+ * transformed into its final position, ready for rendering or GLB export.
+ *
+ * This is deliberately a *separate*, opt-in step from {@link SkpModel} -
+ * for a file with many repeated instances, baking the scene can produce far
+ * more data than the file's raw (per-definition, un-instanced) geometry, so
+ * callers who only need the raw model data never pay for it.
+ */
+export interface SkpScene {
+  /** The root of the world-space instance tree. */
+  sceneHierarchy: InstanceNode;
+  /** Metadata for every baked mesh, keyed the same as `glbPrimitives`'
+   * `geomName`. */
+  meshIndex: Record<string, MeshMetadata>;
+  /** The actual triangulated mesh data, one entry per unique
+   * (definition, resolved color) combination actually placed in the scene. */
+  glbPrimitives: GlbPrimitive[];
+  /** glTF PBR material definitions referenced by `GlbPrimitive.materialIndex`. */
+  gltfMaterials: unknown[];
+}
+
 /** Raw parsed data, source-agnostic (populated by either the VFF/ZIP path
  * in index.ts or the legacy MFC walker in legacy.ts), that
  * {@link buildModelFromParsed} turns into the final public
@@ -155,20 +192,10 @@ export interface ParsedRawData {
 }
 
 export function buildModelFromParsed(parsed: ParsedRawData): SkpModel {
-  const {
-    version,
-    layerColors,
-    layerIdToName,
-    materialIdToName,
-    materialsMap,
-    materialsByFolder,
-    styles,
-    defsDict,
-  } = parsed;
+  const { version, layerColors, materialIdToName, materialsMap, materialsByFolder, styles, defsDict } = parsed;
 
   // Join the TLV material IDs (what Face.materialId references) onto the
-  // parsed materials, so callers can resolve face -> material. Same
-  // name-then-folder resolution used for face/instance colouring below.
+  // parsed materials, so callers can resolve face -> material.
   // materialsMap/materialsByFolder may share the same Material object
   // reference for an alias, so setting `.id` here is visible through both.
   const materialsById = new Map<number, Material>();
@@ -180,6 +207,88 @@ export function buildModelFromParsed(parsed: ParsedRawData): SkpModel {
     }
     materialsById.set(mId, mat);
   }
+
+  const finalLayersList: Layer[] = Array.from(layerColors.entries()).map(([name, c]) => ({
+    name,
+    color: { r: c[0], g: c[1], b: c[2] },
+  }));
+
+  const finalMaterialsList: Material[] = Array.from(materialsMap.values());
+
+  const finalDefinitions = new Map<number, Definition>();
+  for (const [id, d] of defsDict.entries()) {
+    if (typeof id === 'number') {
+      const vertices: Vertex[] = Array.from(d.builder.vertices.entries()).map(([vId, [x, y, z]]) => ({
+        id: vId,
+        x,
+        y,
+        z,
+      }));
+      const edges: Edge[] = Array.from(d.builder.edges.entries()).map(([eId, [v1, v2]]) => {
+        const flags = d.builder.edgeFlags.get(eId) ?? 0;
+        return {
+          id: eId,
+          v1Id: v1 ?? 0,
+          v2Id: v2 ?? 0,
+          soft: (flags & 0x08) !== 0,
+          smooth: (flags & 0x10) !== 0,
+          hidden: (flags & 0x01) !== 0,
+        };
+      });
+      const faces: Face[] = Array.from(d.builder.faces.entries()).map(([fId, fData]) => ({
+        id: fId,
+        loops: fData.loops,
+        normal: fData.normal,
+        materialId: fData.materialId ?? null,
+        backMaterialId: fData.backMaterialId ?? null,
+        uvTransform: fData.uvTransform ?? null,
+        uvTransformBack: fData.uvTransformBack ?? null,
+      }));
+      const instances: Instance[] = d.builder.instances.map((inst) => ({
+        name: inst.name,
+        refIdx: inst.refIdx,
+        guid: inst.refGuid,
+        matrix: inst.matrix,
+        materialId: inst.materialId,
+      }));
+
+      finalDefinitions.set(id, {
+        id,
+        guid: d.guid,
+        name: d.name,
+        vertices,
+        edges,
+        faces,
+        instances,
+        isImage: d.isImage,
+        alwaysFacesCamera: d.alwaysFacesCamera,
+      });
+    }
+  }
+
+  return {
+    version,
+    definitions: finalDefinitions,
+    layers: finalLayersList,
+    materials: finalMaterialsList,
+    materialsById,
+    styles,
+  };
+}
+
+/**
+ * Bake every instance actually placed in the model into world-space,
+ * triangulated mesh data - SketchUp's component/group nesting fully
+ * resolved and flattened, ready for a GLB export or any other renderer.
+ *
+ * This walks the *entire* placed scene graph, so for a file that reuses a
+ * handful of definitions across many thousands of instances, the output
+ * here can be far larger than the file's raw (un-instanced) geometry -
+ * that's why it's a separate, opt-in step from {@link buildModelFromParsed}
+ * rather than something every parse() pays for.
+ */
+export function buildSceneFromParsed(parsed: ParsedRawData): SkpScene {
+  const { layerColors, layerIdToName, materialIdToName, materialsMap, materialsByFolder, defsDict } = parsed;
 
   // Instantiate scene hierarchy and gather mesh metadata & GLB primitives
   const meshCounter = { count: 0 };
@@ -487,13 +596,6 @@ export function buildModelFromParsed(parsed: ParsedRawData): SkpModel {
     }
   }
 
-  const finalLayersList: Layer[] = Array.from(layerColors.entries()).map(([name, c]) => ({
-    name,
-    color: { r: c[0], g: c[1], b: c[2] },
-  }));
-
-  const finalMaterialsList: Material[] = Array.from(materialsMap.values());
-
   const sceneHierarchy: InstanceNode = {
     name: 'ROOT',
     definitionName: 'ROOT_MODEL',
@@ -503,71 +605,5 @@ export function buildModelFromParsed(parsed: ParsedRawData): SkpModel {
     children: rootChildren,
   };
 
-  const finalDefinitions = new Map<number, Definition>();
-  for (const [id, d] of defsDict.entries()) {
-    if (typeof id === 'number') {
-      const vertices: Vertex[] = Array.from(d.builder.vertices.entries()).map(([vId, [x, y, z]]) => ({
-        id: vId,
-        x,
-        y,
-        z,
-      }));
-      const edges: Edge[] = Array.from(d.builder.edges.entries()).map(([eId, [v1, v2]]) => {
-        const flags = d.builder.edgeFlags.get(eId) ?? 0;
-        return {
-          id: eId,
-          v1Id: v1 ?? 0,
-          v2Id: v2 ?? 0,
-          soft: (flags & 0x08) !== 0,
-          smooth: (flags & 0x10) !== 0,
-          hidden: (flags & 0x01) !== 0,
-        };
-      });
-      const faces: Face[] = Array.from(d.builder.faces.entries()).map(([fId, fData]) => ({
-        id: fId,
-        loops: fData.loops,
-        normal: fData.normal,
-        materialId: fData.materialId ?? null,
-        backMaterialId: fData.backMaterialId ?? null,
-        uvTransform: fData.uvTransform ?? null,
-        uvTransformBack: fData.uvTransformBack ?? null,
-      }));
-      const instances: Instance[] = d.builder.instances.map((inst) => ({
-        name: inst.name,
-        refIdx: inst.refIdx,
-        guid: inst.refGuid,
-        matrix: inst.matrix,
-        materialId: inst.materialId,
-      }));
-
-      finalDefinitions.set(id, {
-        id,
-        guid: d.guid,
-        name: d.name,
-        vertices,
-        edges,
-        faces,
-        instances,
-        isImage: d.isImage,
-        alwaysFacesCamera: d.alwaysFacesCamera,
-      });
-    }
-  }
-
-  const model: SkpModel = {
-    version,
-    definitions: finalDefinitions,
-    layers: finalLayersList,
-    materials: finalMaterialsList,
-    materialsById,
-    styles,
-    sceneHierarchy,
-    meshIndex,
-  };
-
-  // Attach internal GLB data
-  (model as any)._glbPrimitives = glbPrimitives;
-  (model as any)._gltfMaterials = gltfMaterials;
-
-  return model;
+  return { sceneHierarchy, meshIndex, glbPrimitives, gltfMaterials };
 }

@@ -13,14 +13,16 @@ import {
 } from './geometry';
 import {
   SkpModel,
+  SkpScene,
   Style,
   Material,
   Texture,
   InstanceNode,
   ParsedRawData,
   buildModelFromParsed,
+  buildSceneFromParsed,
 } from './model';
-import { isLegacy, parseLegacySkp } from './legacy';
+import { isLegacy, parseLegacyToRaw } from './legacy';
 
 export * from './model';
 
@@ -28,19 +30,19 @@ declare const process: any;
 declare const require: any;
 
 /**
- * Parse a SketchUp (.skp) file from an ArrayBuffer.
+ * Parse a SketchUp (.skp) file from an ArrayBuffer into its raw,
+ * source-agnostic form - shared by parseSkp() (the light public model) and
+ * buildScene() (the opt-in, heavier triangulated-scene builder), so neither
+ * one pays for work only the other needs.
  *
  * Transparently handles both the modern VFF/ZIP container (SketchUp 2021+)
  * and the classic pre-2021 MFC CArchive container (SketchUp 2013-2020).
- *
- * @param buffer - The raw file contents as an ArrayBuffer
- * @returns Parsed SkpModel with full geometry and metadata
  */
-export function parseSkp(buffer: ArrayBuffer): SkpModel {
+function parseToRaw(buffer: ArrayBuffer): ParsedRawData {
   const data = new Uint8Array(buffer);
 
   if (isLegacy(data)) {
-    return parseLegacySkp(data);
+    return parseLegacyToRaw(data);
   }
 
   // 1. Extract SKP contents from VFF/ZIP container
@@ -192,7 +194,7 @@ export function parseSkp(buffer: ArrayBuffer): SkpModel {
     builder: rootBuilder,
   });
 
-  const parsed: ParsedRawData = {
+  return {
     version,
     layerColors,
     layerIdToName,
@@ -202,7 +204,41 @@ export function parseSkp(buffer: ArrayBuffer): SkpModel {
     styles,
     defsDict,
   };
-  return buildModelFromParsed(parsed);
+}
+
+/**
+ * Parse a SketchUp (.skp) file from an ArrayBuffer.
+ *
+ * Transparently handles both the modern VFF/ZIP container (SketchUp 2021+)
+ * and the classic pre-2021 MFC CArchive container (SketchUp 2013-2020).
+ *
+ * Fast and memory-light regardless of file size: this returns each
+ * definition's raw geometry exactly once, with no scene-graph instancing
+ * resolved. For a flattened, triangulated, world-space scene ready for
+ * rendering or GLB export, see {@link buildScene} - a separate, opt-in
+ * step, since baking every placed instance can produce far more data than
+ * the file's raw geometry.
+ *
+ * @param buffer - The raw file contents as an ArrayBuffer
+ * @returns Parsed SkpModel with full geometry and metadata
+ */
+export function parseSkp(buffer: ArrayBuffer): SkpModel {
+  return buildModelFromParsed(parseToRaw(buffer));
+}
+
+/**
+ * Bake every instance actually placed in the model into world-space,
+ * triangulated mesh data, ready for a GLB export or any other renderer.
+ * See {@link buildSceneFromParsed} for the full explanation of why this is
+ * separate from {@link parseSkp}.
+ *
+ * Independent of parseSkp(): calling both re-parses the raw TLV data once
+ * per call rather than sharing it, trading a bit of extra CPU time for
+ * keeping each call's memory footprint no larger than what it actually
+ * needs.
+ */
+export function buildScene(buffer: ArrayBuffer): SkpScene {
+  return buildSceneFromParsed(parseToRaw(buffer));
 }
 
 function createGlb(json: any, binaryBuffer: Uint8Array): Uint8Array {
@@ -245,14 +281,15 @@ function createGlb(json: any, binaryBuffer: Uint8Array): Uint8Array {
 }
 
 /**
- * Export a parsed SkpModel to GLB (binary glTF 2.0) format.
+ * Export a baked SkpScene (see {@link buildScene}) to GLB (binary glTF 2.0)
+ * format.
  *
- * @param model - Parsed SkpModel
+ * @param scene - The result of buildScene()
  * @returns GLB file as Uint8Array
  */
-export function toGLB(model: SkpModel): Uint8Array {
-  const prims = (model as any)._glbPrimitives || [];
-  const gltfMaterials = (model as any)._gltfMaterials || [];
+export function toGLB(scene: SkpScene): Uint8Array {
+  const prims = scene.glbPrimitives || [];
+  const gltfMaterials = scene.gltfMaterials || [];
 
   let totalBinaryLength = 0;
   for (const prim of prims) {
@@ -398,12 +435,15 @@ export function toGLB(model: SkpModel): Uint8Array {
 }
 
 /**
- * Export a parsed SkpModel to a metadata JSON object.
+ * Export a parsed SkpModel to a metadata JSON object. Pass the result of
+ * {@link buildScene} as `scene` to also include mesh/scene-hierarchy data;
+ * omit it for a lighter summary covering just the raw model.
  *
  * @param model - Parsed SkpModel
+ * @param scene - Optional result of buildScene()
  * @returns Metadata object
  */
-export function toJSON(model: SkpModel): Record<string, unknown> {
+export function toJSON(model: SkpModel, scene?: SkpScene): Record<string, unknown> {
   const definitionsObj: Record<string, any> = {};
   for (const [id, defn] of model.definitions.entries()) {
     definitionsObj[id] = {
@@ -451,12 +491,12 @@ export function toJSON(model: SkpModel): Record<string, unknown> {
     format_version: '1.0',
     sketchup_version: model.version,
     total_definitions: model.definitions.size,
-    total_meshes: Object.keys(model.meshIndex).length,
+    total_meshes: scene ? Object.keys(scene.meshIndex).length : 0,
     total_layers: model.layers.length,
     layers: layersList,
     materials: materialsList,
-    mesh_index: model.meshIndex,
-    scene_hierarchy: serializeInstanceNode(model.sceneHierarchy),
+    mesh_index: scene ? scene.meshIndex : {},
+    scene_hierarchy: scene ? serializeInstanceNode(scene.sceneHierarchy) : null,
     definitions: definitionsObj,
   };
 }
@@ -486,7 +526,18 @@ export class SkpFile {
     }
   }
 
+  /** Fast, memory-light parse: raw per-definition geometry, no scene-graph
+   * instancing resolved. See {@link buildScene} for a triangulated,
+   * world-space scene ready for rendering or GLB export. */
   parse(): SkpModel {
     return parseSkp(this.buffer);
+  }
+
+  /** Bake every placed instance into world-space, triangulated mesh data.
+   * Independent of parse() - re-parses the raw TLV data on its own rather
+   * than reusing a prior parse() call, so calling only parse() never pays
+   * for this heavier computation. */
+  buildScene(): SkpScene {
+    return buildScene(this.buffer);
   }
 }

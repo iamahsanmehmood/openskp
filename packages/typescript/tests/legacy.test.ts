@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
-import { parseSkp } from '../src/index';
+import { parseSkp, buildScene } from '../src/index';
 import { isLegacy } from '../src/legacy';
 
 /**
@@ -107,9 +107,11 @@ describe('Legacy MFC reader (classic pre-2021 .skp)', () => {
     expect(maxZ).toBeCloseTo(133.071, 2);
 
     // 6. Scene hierarchy: 3 root-level instances (2x grada, 1x puerta),
-    // matching Python's ROOT definition instance count.
-    expect(model.sceneHierarchy.children.length).toBe(3);
-    const instanceDefNames = model.sceneHierarchy.children.map((c) => c.definitionName).sort();
+    // matching Python's ROOT definition instance count. buildScene() is a
+    // separate, opt-in step from parseSkp() - re-parses independently.
+    const scene = buildScene(arrayBuffer);
+    expect(scene.sceneHierarchy.children.length).toBe(3);
+    const instanceDefNames = scene.sceneHierarchy.children.map((c) => c.definitionName).sort();
     expect(instanceDefNames).toEqual(['grada', 'grada', 'puerta']);
   });
 });

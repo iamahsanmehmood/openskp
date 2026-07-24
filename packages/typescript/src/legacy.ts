@@ -16,7 +16,7 @@
  */
 
 import { GeometryBuilderFace, GeometryBuilderInstance, ParsedDefinition } from './geometry';
-import { SkpModel, Material, Style, Texture, ParsedRawData, buildModelFromParsed } from './model';
+import { Material, Texture, ParsedRawData } from './model';
 
 export class LegacyParseError extends Error {}
 
@@ -995,8 +995,10 @@ function fillBuilder(builder: LegacyBuilder, ents: [number, string | null, any][
   }
 }
 
-/** Parse a classic MFC .skp into the shared SkpModel shape. */
-export function parseLegacySkp(data: Uint8Array): SkpModel {
+/** Parse a classic MFC .skp into the shared raw-parse shape, which both
+ * parseSkp() and buildScene() convert onward from exactly like the VFF
+ * path. */
+export function parseLegacyToRaw(data: Uint8Array): ParsedRawData {
   let version = 'unknown';
   const second = findBytes(data, STR_MARKER, 4);
   if (second > 0) {
@@ -1100,7 +1102,7 @@ export function parseLegacySkp(data: Uint8Array): SkpModel {
     builder: rootBuilder,
   });
 
-  const parsed: ParsedRawData = {
+  return {
     version,
     layerColors,
     layerIdToName,
@@ -1110,5 +1112,4 @@ export function parseLegacySkp(data: Uint8Array): SkpModel {
     styles: [],
     defsDict,
   };
-  return buildModelFromParsed(parsed);
 }
