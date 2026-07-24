@@ -18,11 +18,21 @@ them.
 
 from __future__ import annotations
 
+import logging
+import time
 from array import array
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 from . import _core
+from .errors import SkpParseError
+
+logger = logging.getLogger("openskp.scene")
+
+# Mirrors _core._PROGRESS_INTERVAL - counts placed instances (not
+# definitions), since a handful of definitions can be instanced thousands
+# of times and that's where scene-baking's own cost actually scales.
+_PROGRESS_INTERVAL = 500
 
 INCHES_TO_MM = 25.4
 INCHES_TO_M = 0.0254
@@ -117,6 +127,7 @@ def build_scene(parsed: Dict[str, Any]) -> Scene:
     Returns:
         A populated :class:`Scene`.
     """
+    t0 = time.monotonic()
     defs_dict = parsed["defs_dict"]
     layer_colors = parsed["layer_colors"]
     layer_id_to_name = parsed["layer_id_to_name"]
@@ -124,6 +135,9 @@ def build_scene(parsed: Dict[str, Any]) -> Scene:
     materials = parsed["materials"]
     materials_by_folder = parsed.get("materials_by_folder", {})
 
+    logger.info("Building scene: %d definitions available", len(defs_dict))
+
+    instance_counter = [0]
     mesh_counter = [0]
     mesh_index: Dict[str, MeshMetadata] = {}
     glb_primitives: List[GlbPrimitive] = []
@@ -200,7 +214,13 @@ def build_scene(parsed: Dict[str, Any]) -> Scene:
                 if not loops:
                     continue
 
-                triangles = _core.triangulate_face_3d(builder.vertices, loops, f_data["normal"])
+                try:
+                    triangles = _core.triangulate_face_3d(builder.vertices, loops, f_data["normal"])
+                except Exception as e:
+                    raise SkpParseError(
+                        f"Failed to triangulate face: {e}",
+                        stage="build_scene", definition_id=def_id,
+                    ) from e
                 start_face_idx = len(group["local_faces"])
                 for tri in triangles:
                     face_indices = []
@@ -340,6 +360,9 @@ def build_scene(parsed: Dict[str, Any]) -> Scene:
 
             inst_name = inst["name"] or f"Component_{ref_idx}"
             full_path_name = f"{path_name} / {inst_name}"
+            instance_counter[0] += 1
+            if instance_counter[0] % _PROGRESS_INTERVAL == 0:
+                logger.debug("Processed %d placed instances", instance_counter[0])
             child_nodes = instantiate(ref_idx, new_matrix, l_name, full_path_name, inst_color)
 
             tx = new_matrix[9] * INCHES_TO_MM if len(new_matrix) > 9 else 0.0
@@ -382,6 +405,12 @@ def build_scene(parsed: Dict[str, Any]) -> Scene:
         position_mm=(0.0, 0.0, 0.0),
         properties={},
         children=root_children,
+    )
+
+    logger.info(
+        "Scene build complete: %d instances, %d meshes, %d primitives (%.2fs)",
+        instance_counter[0], len(mesh_index), len(glb_primitives),
+        time.monotonic() - t0,
     )
 
     return Scene(

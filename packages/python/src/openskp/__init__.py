@@ -17,6 +17,7 @@ Example::
 
 from __future__ import annotations
 
+from .errors import SkpParseError
 from .model import SkpFile, SkpModel
 from .scene import Scene, InstanceNode, MeshMetadata, GlbPrimitive
 
@@ -28,6 +29,7 @@ __all__: list[str] = [
     "InstanceNode",
     "MeshMetadata",
     "GlbPrimitive",
+    "SkpParseError",
     "__version__",
 ]
 

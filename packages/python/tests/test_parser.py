@@ -1116,3 +1116,83 @@ class TestBuildScene:
         skp = SkpFile.open(str(self.FIXTURE))
         scene = skp.build_scene()
         assert len(scene.glb_primitives) == 13
+
+
+# ── Observability: progress logging + structured error context ──────────
+
+
+class TestObservability:
+    """openskp exposes progress via the stdlib ``logging`` module (silent
+    by default, matching ``requests``/``urllib3``), and raises
+    :class:`SkpParseError` with structured location context (stage,
+    record_index, tag, ...) on failure - so a production pipeline can
+    trace exactly where a model got stuck instead of a bare traceback."""
+
+    import pathlib as _pathlib
+
+    FIXTURE = _pathlib.Path(__file__).parent / "fixtures" / "capilla_quiroz_v17.skp"
+
+    def test_silent_by_default(self, caplog) -> None:
+        """With no explicit logging configuration, openskp's INFO/DEBUG
+        progress logs must not reach any handler - the library never
+        calls ``basicConfig()`` or installs its own handler/level."""
+        if not self.FIXTURE.exists():
+            pytest.skip("legacy fixture not present")
+        from openskp.model import SkpFile
+        SkpFile.open(str(self.FIXTURE)).parse()
+        assert caplog.records == []
+
+    def test_progress_logs_at_debug(self, caplog) -> None:
+        if not self.FIXTURE.exists():
+            pytest.skip("legacy fixture not present")
+        from openskp.model import SkpFile
+        with caplog.at_level("DEBUG", logger="openskp.legacy"):
+            SkpFile.open(str(self.FIXTURE)).parse()
+        messages = [r.message for r in caplog.records]
+        assert any("Parsing legacy" in m for m in messages)
+        assert any("Parse complete" in m for m in messages)
+
+    def test_scene_build_logs(self, caplog) -> None:
+        if not self.FIXTURE.exists():
+            pytest.skip("legacy fixture not present")
+        from openskp.model import SkpFile
+        with caplog.at_level("INFO", logger="openskp.scene"):
+            SkpFile.open(str(self.FIXTURE)).build_scene()
+        messages = [r.message for r in caplog.records]
+        assert any("Building scene" in m for m in messages)
+        assert any("Scene build complete" in m for m in messages)
+
+    def test_bad_header_raises_parse_error_with_stage(self, tmp_path) -> None:
+        from openskp import SkpParseError
+        from openskp.model import SkpFile
+
+        bad_file = tmp_path / "not_a_skp.skp"
+        bad_file.write_bytes(b"not a real skp file" * 10)
+
+        with pytest.raises(SkpParseError) as exc_info:
+            SkpFile.open(str(bad_file)).parse()
+        assert exc_info.value.stage == "header"
+
+    def test_parse_error_str_includes_context(self) -> None:
+        from openskp import SkpParseError
+
+        err = SkpParseError(
+            "boom", stage="tlv_walk", record_index=3, total_records=10,
+            tag="F601",
+        )
+        text = str(err)
+        assert "stage=tlv_walk" in text
+        assert "record=3/10" in text
+        assert "tag=F601" in text
+
+    def test_parse_error_preserves_cause(self) -> None:
+        from openskp import SkpParseError
+
+        original = ValueError("inner failure")
+        try:
+            try:
+                raise original
+            except ValueError as e:
+                raise SkpParseError("wrapped", stage="tlv_walk") from e
+        except SkpParseError as wrapped:
+            assert wrapped.__cause__ is original

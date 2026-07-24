@@ -33,9 +33,19 @@ version string.
 
 from __future__ import annotations
 
+import logging
 import re
 import struct
+import time
 from typing import Any, Dict, Optional
+
+from .errors import SkpParseError
+
+logger = logging.getLogger("openskp.legacy")
+
+# Mirrors _core._PROGRESS_INTERVAL - coarse enough to cost nothing on
+# files with 100k+ component definitions.
+_PROGRESS_INTERVAL = 500
 
 
 class LegacyParseError(ValueError):
@@ -792,8 +802,10 @@ def _add_edge(builder, slot, e, slots):
 
 def full_parse_legacy(skp_path: str) -> Dict[str, Any]:
     """Parse a classic MFC ``.skp`` into the ``full_parse`` dict shape."""
+    t0 = time.monotonic()
     with open(skp_path, 'rb') as f:
         data = f.read()
+    logger.info("Parsing legacy %s (%d bytes)", skp_path, len(data))
 
     version = 'unknown'
     second = data.find(_STR_MARKER, 4)
@@ -801,11 +813,15 @@ def full_parse_legacy(skp_path: str) -> Dict[str, Any]:
         text = data[second + 4:second + 100].decode('utf-16-le', errors='ignore')
         if '{' in text and '}' in text:
             version = text[text.find('{'):text.find('}') + 1]
+    logger.debug("Detected legacy version %s", version)
 
     try:
         ar, root, layers, materials = _walk(data)
     except (LegacyParseError, struct.error, IndexError, UnicodeDecodeError) as e:
-        raise ValueError(f"legacy .skp parse failed: {e}") from e
+        raise SkpParseError(
+            f"legacy .skp parse failed: {e}", stage="legacy_walk") from e
+    logger.debug(
+        "Legacy walk complete: %d materials, %d layers", len(materials), len(layers))
 
     slots = ar.slots
 
@@ -852,20 +868,35 @@ def full_parse_legacy(skp_path: str) -> Dict[str, Any]:
 
     # definitions
     defs_dict: Dict[Any, Any] = {}
-    for s, ent in slots.items():
-        if ent[0] == 'obj' and ent[1] == 'CComponentDefinition' and ent[2]:
-            d = ent[2]
-            b = _Builder()
-            _fill_builder(b, d['ents'], slots)
-            defs_dict[s] = {'guid': d['guid'], 'name': d['name'],
-                            'is_image': False,
-                            'always_faces_camera': d.get('faces_camera', False),
-                            'builder': b}
+    processed = 0
+    try:
+        for s, ent in slots.items():
+            if ent[0] == 'obj' and ent[1] == 'CComponentDefinition' and ent[2]:
+                d = ent[2]
+                b = _Builder()
+                _fill_builder(b, d['ents'], slots)
+                defs_dict[s] = {'guid': d['guid'], 'name': d['name'],
+                                'is_image': False,
+                                'always_faces_camera': d.get('faces_camera', False),
+                                'builder': b}
+                processed += 1
+                if processed % _PROGRESS_INTERVAL == 0:
+                    logger.debug("Processed %d component definitions", processed)
+    except Exception as e:
+        raise SkpParseError(
+            f"Failed while building component definitions: {e}",
+            stage="legacy_defs", definition_id=s,
+        ) from e
 
     root_builder = _Builder()
     _fill_builder(root_builder, root, slots)
     defs_dict['ROOT'] = {'guid': 'ROOT', 'name': 'ROOT_MODEL',
                          'builder': root_builder}
+
+    logger.info(
+        "Parse complete: %s (%d defs, %.2fs)",
+        skp_path, len(defs_dict), time.monotonic() - t0,
+    )
 
     return {
         'version': version,
