@@ -119,12 +119,17 @@ namespace OpenSkp
             {
                 throw new ArgumentException("model.dat not found in ZIP container");
             }
-            byte[] modelDat;
+            // model.dat routinely decompresses to several GB on real
+            // production files (SketchUp's binary format has been observed
+            // compressing at ~10x) - well past .NET's ~2.1GB single-array
+            // limit. Read it into a ChunkedBuffer (multiple bounded
+            // segments) instead of one MemoryStream, using the ZIP entry's
+            // own recorded uncompressed length so each segment is allocated
+            // once at its exact final size.
+            ChunkedBuffer modelDat;
             using (var s = modelDatEntry.Open())
-            using (var ms = new System.IO.MemoryStream())
             {
-                s.CopyTo(ms);
-                modelDat = ms.ToArray();
+                modelDat = ChunkedBuffer.FromStream(s, modelDatEntry.Length);
             }
 
             // Walk the TLV tree one top-level record at a time (instead of

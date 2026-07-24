@@ -3,12 +3,15 @@ using System.Collections.Generic;
 
 namespace OpenSkp
 {
-    /// <summary>A single Tag-Length-Value node in the binary parse tree.</summary>
+    /// <summary>A single Tag-Length-Value node in the binary parse tree.
+    /// Offset/Size are `long` since a decompressed model.dat can exceed
+    /// 2 GB (see ChunkedBuffer) - the position within it then no longer
+    /// fits in an Int32.</summary>
     internal sealed class TlvNode
     {
-        public int Offset;
+        public long Offset;
         public string Tag = "";
-        public int Size;
+        public long Size;
         public List<TlvNode> Children = new List<TlvNode>();
         public byte[] Payload = Array.Empty<byte>();
     }
@@ -84,15 +87,20 @@ namespace OpenSkp
             return data[offset].ToString("X2") + data[offset + 1].ToString("X2");
         }
 
-        public static List<TlvNode> ParseRecursive(byte[] data, int start, int end, HashSet<string>? containerTags = null)
+        private static string TagHex(ChunkedBuffer data, long offset)
+        {
+            return data[offset].ToString("X2") + data[offset + 1].ToString("X2");
+        }
+
+        public static List<TlvNode> ParseRecursive(ChunkedBuffer data, long start, long end, HashSet<string>? containerTags = null)
         {
             containerTags ??= ContainerTags;
             var elements = new List<TlvNode>();
-            int pos = start;
+            long pos = start;
             while (pos < end - 6)
             {
                 string tagHex = TagHex(data, pos);
-                uint size = ReadU32(data, pos + 2);
+                uint size = data.ReadU32(pos + 2);
                 if (pos + 6 + size > end)
                 {
                     break;
@@ -101,23 +109,22 @@ namespace OpenSkp
                 List<TlvNode> children = new List<TlvNode>();
                 if (isContainer && size > 0)
                 {
-                    children = ParseRecursive(data, pos + 6, (int)(pos + 6 + size), containerTags);
+                    children = ParseRecursive(data, pos + 6, pos + 6 + size, containerTags);
                 }
                 byte[] payload = Array.Empty<byte>();
                 if (children.Count == 0 && size > 0)
                 {
-                    payload = new byte[size];
-                    Array.Copy(data, pos + 6, payload, 0, (int)size);
+                    payload = data.Slice(pos + 6, (int)size);
                 }
                 elements.Add(new TlvNode
                 {
                     Offset = pos,
                     Tag = tagHex,
-                    Size = (int)size,
+                    Size = size,
                     Children = children,
                     Payload = payload,
                 });
-                pos += 6 + (int)size;
+                pos += 6 + size;
             }
             return elements;
         }
@@ -154,17 +161,17 @@ namespace OpenSkp
         /// headers only, without recursing into any container - O(sibling
         /// count), not O(total node count). Used by IterTopLevelLazy to
         /// locate top-level records one at a time.</summary>
-        private static List<(string Tag, int Offset, int Size)> FlatHeaders(byte[] data, int start, int end)
+        private static List<(string Tag, long Offset, long Size)> FlatHeaders(ChunkedBuffer data, long start, long end)
         {
-            var headers = new List<(string, int, int)>();
-            int pos = start;
+            var headers = new List<(string, long, long)>();
+            long pos = start;
             while (pos < end - 6)
             {
                 string tagHex = TagHex(data, pos);
-                uint size = ReadU32(data, pos + 2);
+                uint size = data.ReadU32(pos + 2);
                 if (pos + 6 + size > end) break;
-                headers.Add((tagHex, pos, (int)size));
-                pos += 6 + (int)size;
+                headers.Add((tagHex, pos, size));
+                pos += 6 + size;
             }
             return headers;
         }
@@ -177,7 +184,7 @@ namespace OpenSkp
         /// is produced - that's what keeps peak memory bounded by the size of
         /// the single largest top-level record instead of the whole file
         /// (real production files can have 100k+ separate definitions).</summary>
-        public static IEnumerable<TlvNode> IterTopLevelLazy(byte[] data, int start, int end, HashSet<string>? containerTags = null)
+        public static IEnumerable<TlvNode> IterTopLevelLazy(ChunkedBuffer data, long start, long end, HashSet<string>? containerTags = null)
         {
             containerTags ??= ContainerTags;
 
@@ -190,7 +197,7 @@ namespace OpenSkp
 
             foreach (var (tag, offset, size) in headers)
             {
-                int recordEnd = offset + 6 + size;
+                long recordEnd = offset + 6 + size;
                 var nodes = ParseRecursive(data, offset, recordEnd, containerTags);
                 if (nodes.Count > 0)
                 {

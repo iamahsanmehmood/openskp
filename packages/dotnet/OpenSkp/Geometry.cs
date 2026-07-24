@@ -19,7 +19,7 @@ namespace OpenSkp
 
     internal sealed class GeometryBuilderInstance
     {
-        public int Offset;
+        public long Offset;
         public string? RefGuid;
         public long? RefIdx;
         public string? Name;
