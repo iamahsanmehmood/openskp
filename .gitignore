@@ -53,8 +53,9 @@ packages/dart/pubspec.lock
 
 # SKP test files (don't commit binary models)
 *.skp
-# …except the checked-in regression fixture (a small real model).
+# …except the checked-in regression fixtures (small real models).
 !packages/python/tests/fixtures/*.skp
+!packages/typescript/tests/fixtures/*.skp
 *.glb
 *.obj
 
