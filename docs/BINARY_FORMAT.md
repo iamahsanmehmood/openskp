@@ -3,6 +3,17 @@
 > **Reverse-engineered by the OpenSKP project.**  
 > Applies to SketchUp 2021+ files using the VFF container format.
 
+> [!NOTE]
+> This document covers the **modern VFF container only** (SketchUp 2021+).
+> Files from SketchUp 2013–2020 use a completely different container — a
+> classic MFC `CArchive` object-graph stream, not a ZIP archive at all, with
+> its own store-map/back-reference scheme instead of TLV tags. OpenSKP
+> parses both transparently behind the same `parse()`/`buildScene()` calls
+> (see [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md#legacy-format-support-sketchup-20132020)),
+> but that format isn't documented here — see the extensive docstring at
+> the top of each language's `legacy.py`/`legacy.ts`/`Legacy.cs`/`legacy.dart`
+> for the reverse-engineered details of the classic container.
+
 ## 1. File Container
 
 SKP files are **VFF containers** — a proprietary binary header followed by an embedded ZIP archive.

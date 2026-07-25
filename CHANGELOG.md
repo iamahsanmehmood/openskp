@@ -13,6 +13,99 @@ fields only; no existing field or behaviour removed) unless noted under
 
 ### Added
 
+- **.NET package** — built from scratch: full VFF (2021+) parsing at
+  parity with the other three languages (geometry, components, layers,
+  materials/textures, styles, dynamic properties, image entities), plus
+  full legacy MFC (SketchUp 2013–2020) support. Not yet released to
+  NuGet.
+- **Dart package** — built from scratch: same full VFF + legacy MFC
+  parity as .NET. Not yet released to pub.dev.
+- **All four languages**: opt-in scene baking — `build_scene()` /
+  `buildScene()` / `BuildScene()` — resolves the *entire* placed
+  instance tree to world-space, triangulates every face, and groups
+  results into GLB-ready mesh primitives (`Scene`/`GlbPrimitive`).
+  Deliberately kept separate from `parse()`/`Open()` (which stays light —
+  raw per-definition geometry, no scene-graph resolution) since baking a
+  file that reuses a handful of definitions across many instances can
+  produce far more data than the file's raw geometry. TypeScript already
+  had this; ported to Python, .NET, and Dart this round, each re-parsing
+  independently rather than sharing a prior `parse()` call's data. .NET
+  and Dart's triangulation uses a faithful port of
+  [earcut](https://github.com/mapbox/earcut) (the same algorithm
+  TypeScript already used) rather than a from-scratch alternative.
+- **All four languages**: **memory fix for large real-world files.**
+  Files with 100,000+ component definitions previously required
+  materializing the *entire* file's TLV tree in memory before extraction
+  could begin; peak memory now scales with the size of the single
+  largest top-level record instead of the whole file, via a lazy,
+  streaming top-level iterator
+  (`iter_top_level_lazy`/`iterTopLevelLazy`/`IterTopLevelLazy`) built on
+  a cheap flat-header pre-scan. No change to any tag's decoding logic —
+  purely an orchestration change. Verified against real production files
+  up to 620 MB. .NET additionally needed `ChunkedBuffer` (a
+  multi-segment buffer) plus widening TLV offsets from `int` to `long`,
+  since the CLR's array/`MemoryStream` types have a hard ~2.1 GB ceiling
+  that a decompressed `model.dat` can exceed. See
+  [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#memory-architecture) for
+  the full explanation, and
+  [docs/DEVELOPER_GUIDE.md](docs/DEVELOPER_GUIDE.md#performance) for
+  verified per-language numbers — including TypeScript's remaining,
+  currently-open memory ceiling on very large files, documented honestly
+  rather than glossed over.
+- **All four languages**: **observability** — opt-in progress reporting
+  and structured, location-carrying parse errors, silent by default.
+  Python uses the standard `logging` module
+  (`logging.getLogger("openskp")`); TypeScript/.NET/Dart use an explicit
+  options object with `onProgress`/`onLog` callbacks
+  (`IProgress<T>`-based in .NET). A new `SkpParseError`/`SkpParseException`
+  in every language carries `stage`/`recordIndex`/`totalRecords`/`tag`/
+  `definitionId`, with the original failure always preserved (`__cause__`
+  / `.cause` / `InnerException`). Full reference:
+  [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md).
+- **TypeScript**: `model.root` — the implicit top-level definition
+  (geometry/instances placed directly in the model, not inside any
+  component/group) is now exposed on `parse()`'s result, matching .NET
+  and Dart's `Root`/`root`. Previously dropped entirely from `parseSkp()`
+  — the only way to reach it was the much heavier `buildScene()` call.
+  Purely additive; `model.definitions` is unchanged.
+- **Documentation**: [docs/DEVELOPER_GUIDE.md](docs/DEVELOPER_GUIDE.md)
+  (new) and [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md) (new) —
+  detailed, cross-language, verified against actual source and real
+  files rather than aspirational. `docs/ARCHITECTURE.md` and
+  `docs/API_DESIGN.md` rewritten to match current reality (all four
+  languages available, not "planned"). README rewritten: accurate
+  per-language quick starts (the previous Python example referenced
+  methods — `model.export_glb()`, `openskp.binary.VffReader` — that
+  don't exist in the current package).
+
+### Fixed
+
+- **`examples/web-viewer`**: the web viewer called `parseSkp()` and read
+  triangulated mesh data (`_glbPrimitives`/`meshIndex`/`_gltfMaterials`)
+  directly off the result — the shape `parseSkp()` returned before the
+  scene-baking split above. Every model would parse "successfully" but
+  silently render zero meshes. Fixed to call the new `buildScene()`
+  alongside `parseSkp()`.
+
+### Known limitations (not yet fixed)
+
+- **Python**: `model.definitions` mixes real (integer-keyed) definitions
+  with an implicit root entry under a `'ROOT'` **string key**, unlike
+  TypeScript/.NET/Dart's separate `.root`/`.Root` property. Tracked as a
+  follow-up; not changed yet since existing consumers may rely on the
+  current shape.
+- **TypeScript**: `parseSkp()`'s memory use scales significantly worse
+  than the other three languages on very large files — see "memory fix"
+  above. A 113 MB file needs 8–16 GB of Node heap; a 294 MB file fails
+  even at 16 GB. Root-caused to V8's per-object overhead on millions of
+  small geometry objects; a more compact internal representation is
+  tracked as follow-up work.
+- **GLB export**: only TypeScript ships a complete binary `.glb`
+  serializer (`toGLB()`) today. Python, .NET, and Dart all expose the
+  same triangulated scene data via `buildScene()`, but a consumer needs
+  to serialize it to `.glb` bytes themselves. OBJ and JSON export are not
+  implemented in any language's current public API.
+
 - **Python**: `Material.id` and `SkpModel.materials_by_id` — expose the TLV
   material IDs that `Face.material_id` references, so callers can resolve a
   face's material (colour/transparency) from the public API. Previously the

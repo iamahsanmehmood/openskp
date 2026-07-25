@@ -9,7 +9,7 @@
 ### 🌐 [Try the Live Web Viewer (Drag-and-Drop)](https://iamahsanmehmood.github.io/openskp/)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-[![Python 3.10+](https://img.shields.io/badge/Python-3.10+-3776AB.svg?logo=python&logoColor=white)](https://python.org)
+[![Python 3.9+](https://img.shields.io/badge/Python-3.9+-3776AB.svg?logo=python&logoColor=white)](https://python.org)
 [![npm](https://img.shields.io/npm/v/openskp.svg?logo=npm&logoColor=white)](https://www.npmjs.com/package/openskp)
 [![NuGet](https://img.shields.io/nuget/v/OpenSkp.svg?logo=nuget&logoColor=white)](https://www.nuget.org/packages/OpenSkp)
 [![GitHub Stars](https://img.shields.io/github/stars/iamahsanmehmood/openskp?style=social)](https://github.com/iamahsanmehmood/openskp)
@@ -26,7 +26,7 @@
 
 ## 🌟 What is OpenSKP?
 
-OpenSKP is the **first and only** open-source, cross-platform parser for SketchUp (`.skp`) binary files. Built entirely through reverse engineering of the proprietary **VFF binary format** used in SketchUp 2021+, it gives you full programmatic access to 3D models — geometry, materials, components, layers, and more — without requiring the SketchUp application or its proprietary SDK.
+OpenSKP is the **first and only** open-source, cross-platform parser for SketchUp (`.skp`) binary files. Built entirely through reverse engineering of SketchUp's binary formats — both the modern **VFF container** (2021+) and the classic **MFC `CArchive`** container (2013–2020) — it gives you full programmatic access to 3D models — geometry, materials, components, layers, and more — without requiring the SketchUp application or its proprietary SDK, in **Python, TypeScript, .NET, and Dart**.
 
 > [!IMPORTANT]
 > This project was built by reverse engineering a proprietary binary format. It is not affiliated with or endorsed by Trimble Inc. or SketchUp.
@@ -37,15 +37,18 @@ OpenSKP is the **first and only** open-source, cross-platform parser for SketchU
 
 | Feature | Status | Description |
 |:--------|:------:|:------------|
-| **Parse SKP 2021+** | ✅ | Full support for VFF (SketchUp 2021+) binary format |
+| **Parse SKP 2021+ (VFF)** | ✅ | Full support for the modern VFF binary container |
+| **Parse SKP 2013–2020 (legacy MFC)** | ✅ | Full support for the classic MFC `CArchive` container — same output shape as VFF |
 | **3D Geometry Extraction** | ✅ | Vertices, edges, faces, normals, and UV coordinates |
 | **Component Hierarchy** | ✅ | Nested component definitions and instance transforms |
+| **Scene Baking / Triangulation** | ✅ | Opt-in `buildScene()`: full placed scene graph resolved to world-space, triangulated, GLB-ready — in all four languages |
 | **Layers / Tags** | ✅ | Layer definitions with colors and visibility state |
-| **Materials & Textures** | ✅ | Material properties, colors, and embedded texture images |
+| **Materials & Textures** | ✅ | Material properties, colors, transparency, colorized materials, and embedded texture images |
+| **Styles** | ✅ | Front/back face colors for unpainted faces |
 | **Dynamic Components** | ✅ | Extract dynamic component attribute key-value pairs |
-| **Export to GLB** | ✅ | Industry-standard glTF Binary export with full scene graph |
-| **Export to OBJ** | ✅ | Wavefront OBJ with MTL material support |
-| **Export to JSON** | ✅ | Complete model data as structured JSON |
+| **Observability** | ✅ | Opt-in progress reporting + structured, location-carrying parse errors — see [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md) |
+| **Export to GLB** | ⚠️ | Full binary `.glb` serializer in TypeScript; other languages expose the same triangulated scene data but don't ship a serializer yet — see [Export capabilities](docs/DEVELOPER_GUIDE.md#export-capabilities) |
+| **Streaming / low-memory parsing** | ✅ | Peak memory bounded by the largest single definition, not the whole file — see [Memory architecture](docs/ARCHITECTURE.md#memory-architecture) |
 | **Pure Implementation** | ✅ | No SketchUp SDK, no native dependencies, no license required |
 | **Cross-Platform** | ✅ | Works on Linux, macOS, and Windows |
 
@@ -68,148 +71,143 @@ Using OpenSKP in your own project? [Open an issue](https://github.com/iamahsanme
 
 | Platform | Version | Status | Install | Package Link |
 |:---------|:--------|:------:|:--------|:-------------|
-| 🐍 **Python** | `v0.1.0` | ✅ Available | `pip install openskp` | [PyPI](https://pypi.org/project/openskp/) |
-| 📘 **TypeScript / JS** | `v0.1.0` | ✅ Available | `npm install openskp` | [npm](https://www.npmjs.com/package/openskp) |
-| 🚀 **.NET / C#** | `v0.2.0` | 🚧 In Development | `dotnet add package OpenSkp` | [NuGet](https://www.nuget.org/packages/OpenSkp) |
-| 🎯 **Dart / Flutter** | `v0.1.0` | 🗓️ Bootstrapping | `dart pub add openskp` | [pub.dev](https://pub.dev/packages/openskp) |
+| 🐍 **Python** | `v0.2.0` | ✅ Available | `pip install openskp` | [PyPI](https://pypi.org/project/openskp/) |
+| 📘 **TypeScript / JS** | `v0.2.0` | ✅ Available | `npm install openskp` | [npm](https://www.npmjs.com/package/openskp) |
+| 🚀 **.NET / C#** | `v0.3.0` | ✅ Available | `dotnet add package OpenSkp` | [NuGet](https://www.nuget.org/packages/OpenSkp) |
+| 🎯 **Dart / Flutter** | `v0.3.0` | ✅ Available | `dart pub add openskp` | [pub.dev](https://pub.dev/packages/openskp) |
+
+All four languages parse both the modern VFF (2021+) and classic MFC
+(2013–2020) `.skp` containers, and support the same opt-in scene-baking
+(`buildScene()`) and observability APIs. See the
+[Developer Guide](docs/DEVELOPER_GUIDE.md) for the full picture, including
+where the four ports currently differ.
 
 ---
 
 ## 🚀 Quick Start
 
-### Installation
+Pick your language — every sample below runs against the current public
+API (verified while writing this README). For the full picture (the
+opt-in `buildScene()` step for triangulated meshes, memory/performance
+guidance, progress + error observability, legacy-format support), see the
+**[Developer Guide](docs/DEVELOPER_GUIDE.md)**.
+
+### 🐍 Python
 
 ```bash
 pip install openskp
 ```
 
-### Parse a SketchUp File
-
 ```python
 from openskp import SkpFile
 
-# Open and parse an SKP file
-model = SkpFile.open("my_model.skp")
+model = SkpFile.open("my_model.skp").parse()
 
-# Access geometry
-for face in model.faces:
-    print(f"Face with {len(face.vertices)} vertices")
-    for vertex in face.vertices:
-        print(f"  ({vertex.x:.2f}, {vertex.y:.2f}, {vertex.z:.2f})")
+print(f"SketchUp version: {model.version}")
+print(f"Layers: {[l.name for l in model.layers]}")
 
-# Access components
-for component in model.components:
-    print(f"Component: {component.name}")
-    for instance in component.instances:
-        print(f"  Instance at {instance.transform.origin}")
-```
+for def_id, defn in model.definitions.items():
+    if not isinstance(def_id, int):
+        continue  # skip the implicit 'ROOT' entry
+    print(f"{defn.name}: {len(defn.vertices)} verts, {len(defn.faces)} faces")
 
-### Export to GLB
-
-```python
-from openskp import SkpFile
-
-model = SkpFile.open("my_model.skp")
-
-# Export the entire model to glTF Binary
-model.export_glb("output.glb")
-```
-
-### Export to OBJ
-
-```python
-from openskp import SkpFile
-
-model = SkpFile.open("my_model.skp")
-
-# Export as Wavefront OBJ with materials
-model.export_obj("output.obj")
-```
-
-### Extract Layers and Materials
-
-```python
-from openskp import SkpFile
-
-model = SkpFile.open("my_model.skp")
-
-# List all layers/tags
-for layer in model.layers:
-    print(f"Layer: {layer.name} | Color: {layer.color} | Visible: {layer.visible}")
-
-# List all materials
 for material in model.materials:
-    print(f"Material: {material.name}")
-    if material.texture:
-        material.texture.save(f"textures/{material.name}.png")
+    print(f"Material: {material.name}", "(has texture)" if material.texture else "")
+
+# Opt-in: full placed scene graph, triangulated, world-space, GLB-ready
+scene = SkpFile.open("my_model.skp").build_scene()
+print(f"{len(scene.glb_primitives)} renderable mesh primitives")
 ```
 
-### Low-Level Binary Access
+### 📘 TypeScript / JavaScript
 
-```python
-from openskp.binary import VffReader
+```bash
+npm install openskp
+```
 
-# Parse the raw TLV stream for custom analysis
-reader = VffReader("my_model.skp")
-for tag, length, data in reader.iter_tlv():
-    print(f"Tag: 0x{tag:04X} | Length: {length} bytes")
+```typescript
+import { SkpFile, toGLB } from 'openskp';
+
+// Node.js
+const model = SkpFile.open('my_model.skp').parse();
+
+// Browser (isomorphic - same package, no Node APIs)
+// const buffer = await fetch('my_model.skp').then(r => r.arrayBuffer());
+// const model = parseSkp(buffer);
+
+console.log(model.version, model.layers);
+
+// Opt-in: full placed scene graph, triangulated, world-space, GLB-ready
+const scene = SkpFile.open('my_model.skp').buildScene();
+const glb = toGLB(scene);   // ready to write to a .glb file
+```
+
+### 🚀 .NET / C#
+
+```bash
+dotnet add package OpenSkp
+```
+
+```csharp
+using OpenSkp;
+
+var model = SkpFile.Open("my_model.skp");
+Console.WriteLine($"{model.Version} - {model.Layers.Count} layers");
+
+// Opt-in: full placed scene graph, triangulated, world-space, GLB-ready
+var scene = SkpFile.BuildScene("my_model.skp");
+Console.WriteLine($"{scene.GlbPrimitives.Count} renderable mesh primitives");
+```
+
+### 🎯 Dart / Flutter
+
+```bash
+dart pub add openskp
+```
+
+```dart
+import 'package:openskp/openskp.dart';
+
+final model = SkpFile.open('my_model.skp').parse();
+print('${model.version} - ${model.layers.length} layers');
+
+// Opt-in: full placed scene graph, triangulated, world-space, GLB-ready
+final scene = SkpFile.open('my_model.skp').buildScene();
+print('${scene.glbPrimitives.length} renderable mesh primitives');
 ```
 
 ---
 
 ## 🏛️ Architecture
 
-OpenSKP uses a **three-layer architecture** that separates binary parsing from high-level model access and export:
+OpenSKP splits into a light parse and an opt-in, heavier scene bake — kept
+separate so the common case (just reading geometry/metadata) never pays for
+scene-graph resolution it doesn't need:
 
 ```mermaid
 graph TB
-    subgraph "Layer 3 — Export"
-        GLB["GLB Exporter"]
-        OBJ["OBJ Exporter"]
-        JSON["JSON Exporter"]
-    end
-
-    subgraph "Layer 2 — Structured Model"
-        SM["SkpFile API"]
-        GEO["Geometry<br/>Vertices · Edges · Faces"]
-        COMP["Components<br/>Definitions · Instances"]
-        MAT["Materials<br/>Colors · Textures"]
-        LAYER["Layers / Tags"]
-        DC["Dynamic Components"]
-    end
-
-    subgraph "Layer 1 — Binary Parser"
-        ZIP["ZIP Extractor"]
-        TLV["TLV Parser"]
-        HDR["Header Validator"]
-    end
-
-    subgraph "Input"
-        SKP[".skp File"]
-    end
-
-    SKP --> HDR
-    HDR --> ZIP
-    ZIP --> TLV
-    TLV --> SM
-    SM --> GEO
-    SM --> COMP
-    SM --> MAT
-    SM --> LAYER
-    SM --> DC
-    SM --> GLB
-    SM --> OBJ
-    SM --> JSON
+    SKP[".skp file<br/>(VFF 2021+ or legacy MFC 2013-2020)"] --> HDR["Header + container<br/>detection"]
+    HDR --> WALK["Streaming TLV walk<br/>(one top-level record<br/>at a time)"]
+    WALK --> RAW["Raw parsed data<br/>defs · layers · materials · styles"]
+    RAW --> PARSE["parse() -> SkpModel<br/>per-definition geometry,<br/>no scene resolution"]
+    RAW --> SCENE["buildScene() -> Scene<br/>full placed instance tree,<br/>triangulated, world-space"]
+    SCENE --> GLB["toGLB()<br/>(TypeScript only today)"]
 
     style SKP fill:#f59e0b,color:#000,stroke:#d97706
-    style SM fill:#3b82f6,color:#fff,stroke:#2563eb
-    style TLV fill:#8b5cf6,color:#fff,stroke:#7c3aed
+    style RAW fill:#8b5cf6,color:#fff,stroke:#7c3aed
+    style PARSE fill:#3b82f6,color:#fff,stroke:#2563eb
+    style SCENE fill:#3b82f6,color:#fff,stroke:#2563eb
     style GLB fill:#10b981,color:#fff,stroke:#059669
-    style OBJ fill:#10b981,color:#fff,stroke:#059669
-    style JSON fill:#10b981,color:#fff,stroke:#059669
 ```
 
-> 📖 For a detailed architecture breakdown, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+The streaming TLV walk is what lets OpenSKP handle real production files
+with 100,000+ component definitions without materializing the whole file's
+parse tree in memory at once — peak memory is bounded by the single
+largest top-level record, not the file's total size.
+
+> 📖 For the full architecture breakdown — including the memory model,
+> why .NET needed a genuinely different fix, and where the four languages'
+> internals map to each other — see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ---
 
@@ -223,43 +221,39 @@ openskp/
 ├── CODE_OF_CONDUCT.md         # Contributor Covenant v2.1
 ├── CHANGELOG.md               # Release history
 │
-├── python/                    # 🐍 Python implementation
-│   ├── openskp/
-│   │   ├── __init__.py
-│   │   ├── skp_file.py        # High-level API (Layer 2)
-│   │   ├── binary/            # Binary parser (Layer 1)
-│   │   │   ├── vff_reader.py  # VFF container reader
-│   │   │   ├── tlv_parser.py  # Tag-Length-Value parser
-│   │   │   └── tags.py        # Known tag definitions
-│   │   ├── model/             # Structured model objects
-│   │   │   ├── geometry.py    # Vertex, Edge, Face
-│   │   │   ├── component.py   # ComponentDef, Instance
-│   │   │   ├── material.py    # Material, Texture
-│   │   │   └── layer.py       # Layer / Tag
-│   │   └── export/            # Export engines (Layer 3)
-│   │       ├── glb.py
-│   │       ├── obj.py
-│   │       └── json.py
-│   ├── tests/
-│   ├── setup.py
-│   └── pyproject.toml
+├── packages/
+│   ├── python/                # 🐍 Python implementation
+│   │   ├── src/openskp/       # _core.py, legacy.py, model.py, scene.py, errors.py, ...
+│   │   └── tests/
+│   ├── typescript/            # 📘 TypeScript / JavaScript implementation
+│   │   ├── src/                # index.ts, model.ts, legacy.ts, observability.ts, ...
+│   │   └── tests/
+│   ├── dotnet/                # 🚀 .NET / C# implementation
+│   │   ├── OpenSkp/            # Core.cs, Legacy.cs, Model.cs, Scene.cs, ...
+│   │   └── OpenSkp.Tests/
+│   └── dart/                  # 🎯 Dart / Flutter implementation
+│       ├── lib/src/            # core.dart, legacy.dart, model.dart, scene.dart, ...
+│       └── test/
 │
-├── typescript/                # 📘 TypeScript implementation (coming)
-├── dart/                      # 🎯 Dart implementation (planned)
+├── examples/
+│   ├── web-viewer/             # Drag-and-drop 3D viewer (TypeScript + Three.js),
+│   │                           # deployed live via GitHub Pages
+│   └── python/                 # Python usage examples
 │
-├── docs/                      # 📖 Documentation
-│   ├── BINARY_FORMAT.md       # Reverse-engineered SKP format spec
-│   ├── ARCHITECTURE.md        # Library architecture
-│   └── API_DESIGN.md          # Cross-platform API contract
+├── docs/                       # 📖 Documentation
+│   ├── DEVELOPER_GUIDE.md      # Start here — the detailed cross-language guide
+│   ├── OBSERVABILITY.md        # Progress reporting + structured errors, in depth
+│   ├── ARCHITECTURE.md         # Library architecture, memory model
+│   ├── API_DESIGN.md           # Cross-platform API quick reference
+│   └── BINARY_FORMAT.md        # Reverse-engineered SKP format spec
 │
-├── research/                  # 🔬 Research notes
-│   └── METHODOLOGY.md         # Reverse engineering methodology
+├── research/                   # 🔬 Research notes
+│   └── METHODOLOGY.md          # Reverse engineering methodology
 │
-└── .github/                   # GitHub configuration
+└── .github/
+    ├── workflows/               # CI, per-language release, GitHub Pages deploy
     ├── PULL_REQUEST_TEMPLATE.md
     └── ISSUE_TEMPLATE/
-        ├── bug_report.md
-        └── feature_request.md
 ```
 
 ---
@@ -297,7 +291,13 @@ y_mm =  z_inches × 25.4
 z_mm = -y_inches × 25.4
 ```
 
-> 📖 For the full binary format specification, see [docs/BINARY_FORMAT.md](docs/BINARY_FORMAT.md).
+> 📖 The above covers the modern VFF (2021+) container. Pre-2021 files use a
+> completely different container (a classic MFC `CArchive` object-graph
+> stream, no ZIP involved) — OpenSKP detects and handles both
+> transparently behind the same `parse()` call. See
+> [the Developer Guide's legacy-format section](docs/DEVELOPER_GUIDE.md#legacy-format-support-sketchup-20132020)
+> for details, and [docs/BINARY_FORMAT.md](docs/BINARY_FORMAT.md) for the
+> full VFF/TLV specification.
 
 ---
 
@@ -305,9 +305,11 @@ z_mm = -y_inches × 25.4
 
 | Document | Description |
 |:---------|:------------|
+| [Developer Guide](docs/DEVELOPER_GUIDE.md) | **Start here.** The detailed, verified cross-language guide — API, memory/performance, legacy format, error handling, and known differences between the four ports |
+| [Observability Guide](docs/OBSERVABILITY.md) | Progress reporting + structured errors, in depth |
 | [Binary Format Spec](docs/BINARY_FORMAT.md) | Reverse-engineered VFF / TLV format documentation |
-| [Architecture](docs/ARCHITECTURE.md) | Library design, layers, and module structure |
-| [API Design](docs/API_DESIGN.md) | Cross-platform API contract with examples |
+| [Architecture](docs/ARCHITECTURE.md) | Library design, memory model, and module structure |
+| [API Design](docs/API_DESIGN.md) | Cross-platform API quick reference |
 | [Research Methodology](research/METHODOLOGY.md) | How we reverse-engineered the format |
 | [Changelog](CHANGELOG.md) | Version history and release notes |
 | [Contributing](CONTRIBUTING.md) | How to contribute to OpenSKP |
@@ -323,14 +325,26 @@ We welcome contributions from everyone! Whether it's fixing a bug, adding a feat
 git clone https://github.com/iamahsanmehmood/openskp.git
 cd openskp
 
-# Set up development environment (Python)
-cd python
+# Python
+cd packages/python
 python -m venv .venv
 source .venv/bin/activate   # or .venv\Scripts\activate on Windows
 pip install -e ".[dev]"
-
-# Run tests
 pytest
+
+# TypeScript
+cd packages/typescript
+npm install
+npm test
+
+# .NET
+cd packages/dotnet/OpenSkp.Tests
+dotnet test
+
+# Dart
+cd packages/dart
+dart pub get
+dart test
 ```
 
 Please read our [Contributing Guide](CONTRIBUTING.md) and [Code of Conduct](CODE_OF_CONDUCT.md) before submitting a pull request.
