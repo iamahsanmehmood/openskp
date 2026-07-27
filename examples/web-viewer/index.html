@@ -136,6 +136,28 @@
     </div>
   </div>
 
+  <!-- Large File Warning Overlay -->
+  <div id="size-warning-overlay" class="hidden">
+    <div class="size-warning-content">
+      <svg viewBox="0 0 24 24" width="40" height="40" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round" class="size-warning-icon"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+      <h2>Large file — this may freeze the tab</h2>
+      <p id="size-warning-message"></p>
+      <p class="size-warning-note">
+        This viewer runs entirely in your browser tab, which has a fixed
+        JavaScript memory limit (typically a few GB) that can't be raised
+        from a web page. Very large or complex models can exceed it during
+        parsing, which may freeze or crash this tab rather than showing a
+        clean error. For large files, the
+        <a href="https://github.com/iamahsanmehmood/openskp#-quick-start" target="_blank" rel="noopener">Python, .NET, or Dart packages</a>
+        don't have this limitation.
+      </p>
+      <div class="size-warning-actions">
+        <button id="btn-size-cancel" class="btn btn-secondary">Cancel</button>
+        <button id="btn-size-proceed" class="btn btn-primary">Load anyway</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Main Application Script -->
   <script type="module" src="viewer.js"></script>
 </body>
