@@ -45,7 +45,11 @@ jobs:
           python-version: '3.12'
 
       - name: Install dependencies
-        run: pip install ruff
+        # Pinned: an unpinned `ruff` picks up whatever new default rules the
+        # latest release ships with, so this step can start failing on
+        # previously-clean, unchanged code the moment a new ruff version
+        # comes out - unrelated to anything in the PR being checked.
+        run: pip install ruff==0.15.13
 
       - name: Lint
         run: ruff check packages/python/src/

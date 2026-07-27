@@ -20,7 +20,10 @@ from __future__ import annotations
 
 import pathlib
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+
+if TYPE_CHECKING:
+    from . import scene
 
 
 # ── TLV node (raw parse tree) ─────────────────────────────────────────────
