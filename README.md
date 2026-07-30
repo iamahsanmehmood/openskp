@@ -2,8 +2,6 @@
 
 <img src="assets/logo.png" width="180" alt="OpenSKP logo">
 
-# OpenSKP
-
 ### The Open-Source SketchUp File Parser
 
 **Parse `.skp` files without SketchUp. No SDK. No license. Just code.**
