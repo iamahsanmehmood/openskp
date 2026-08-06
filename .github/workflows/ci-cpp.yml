@@ -1,0 +1,59 @@
+name: C++ CI
+
+on:
+  push:
+    paths: ['packages/cpp/**', '.clang-format', '.github/workflows/ci-cpp.yml']
+  pull_request:
+    paths: ['packages/cpp/**', '.clang-format', '.github/workflows/ci-cpp.yml']
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y clang-format-18
+      - run: cmake -S packages/cpp -B format-build -DOPENSKP_BUILD_TESTS=OFF -DOPENSKP_CLANG_FORMAT_EXECUTABLE=/usr/bin/clang-format-18
+      - run: cmake --build format-build --target openskp-format-check
+
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            compiler: gcc
+          - os: ubuntu-latest
+            compiler: clang
+          - os: macos-latest
+            compiler: clang
+          - os: windows-latest
+            compiler: msvc
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select GCC
+        if: matrix.compiler == 'gcc'
+        run: echo "CXX=g++" >> "$GITHUB_ENV" && echo "CC=gcc" >> "$GITHUB_ENV"
+      - name: Select Clang
+        if: matrix.compiler == 'clang'
+        run: echo "CXX=clang++" >> "$GITHUB_ENV" && echo "CC=clang" >> "$GITHUB_ENV"
+      - run: cmake -S packages/cpp -B build -DOPENSKP_BUILD_TESTS=ON -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/prefix
+      - run: cmake --build build --config Release --parallel
+      - run: ctest --test-dir build -C Release --output-on-failure
+      - run: cmake --install build --config Release
+      - name: Configure installed-package consumer
+        shell: bash
+        run: |
+          mkdir consumer
+          printf '%s\n' 'cmake_minimum_required(VERSION 3.21)' 'project(consumer LANGUAGES CXX)' 'find_package(OpenSkp CONFIG REQUIRED)' 'add_executable(consumer main.cpp)' 'target_link_libraries(consumer PRIVATE OpenSkp::OpenSkp)' > consumer/CMakeLists.txt
+          printf '%s\n' '#include <openskp/openskp.hpp>' 'int main(){ auto f=openskp::SkpFile::from_buffer({}); (void)f; }' > consumer/main.cpp
+          cmake -S consumer -B consumer-build -DCMAKE_PREFIX_PATH=${{ github.workspace }}/prefix
+          cmake --build consumer-build --config Release
+
+  sanitizers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cmake -S packages/cpp -B build -DOPENSKP_BUILD_TESTS=ON -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS='-fsanitize=address,undefined -fno-omit-frame-pointer' -DCMAKE_C_FLAGS='-fsanitize=address,undefined -fno-omit-frame-pointer' -DCMAKE_EXE_LINKER_FLAGS='-fsanitize=address,undefined'
+      - run: cmake --build build --parallel
+      - run: ctest --test-dir build --output-on-failure

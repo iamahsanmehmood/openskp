@@ -37,6 +37,7 @@ This project follows the [Contributor Covenant v2.1](CODE_OF_CONDUCT.md). By par
 | Python | Python 3.10+, pip |
 | TypeScript | Node.js 18+, npm or pnpm |
 | Dart | Dart SDK 3.0+ |
+| C++ | CMake 3.21+, a C++17 compiler |
 | All | Git, a good hex editor (recommended) |
 
 ### Understanding the Codebase
@@ -85,6 +86,14 @@ npm install
 ```bash
 cd dart
 dart pub get
+```
+
+### C++
+
+```bash
+cmake -S packages/cpp -B build/cpp -DOPENSKP_BUILD_TESTS=ON
+cmake --build build/cpp
+ctest --test-dir build/cpp --output-on-failure
 ```
 
 ---
@@ -226,6 +235,20 @@ def parse_vertex(data: bytes, offset: int = 0) -> tuple[float, float, float]:
 | Type checking | `strict: true` in tsconfig |
 | Module system | ESM |
 | Minimum version | Node.js 18 |
+
+### C++
+
+| Rule | Standard |
+|:-----|:---------|
+| Language | C++17 |
+| Formatter | `clang-format` 18 |
+| Style | Google, with a 100-column limit |
+| Local format | `cmake --build build/cpp --target openskp-format` |
+| Local check | `cmake --build build/cpp --target openskp-format-check` |
+
+Formatting is enforced by C++ CI. Configure with
+`-DOPENSKP_CLANG_FORMAT_EXECUTABLE=/path/to/clang-format` to select a specific
+local executable.
 
 ### General Principles
 

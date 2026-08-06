@@ -3,11 +3,11 @@
 This page is a quick side-by-side reference. For the full explanation of
 *why* the API is shaped this way (the `parse()`/`buildScene()` split,
 memory behavior, observability, legacy format support, and the places
-where the four languages currently differ), see the
+where the five languages currently differ), see the
 [Developer Guide](DEVELOPER_GUIDE.md).
 
-All four packages are available today — Python and TypeScript have been
-public longest; .NET and Dart followed, built from scratch against the
+All five packages are available today — Python and TypeScript have been
+public longest; .NET, Dart, and C++ followed, built from scratch against the
 same [binary format spec](BINARY_FORMAT.md) and cross-validated against
 the other two on real files.
 
@@ -99,15 +99,28 @@ final scene = skp.buildScene();
 print('${scene.glbPrimitives.length} GLB-ready mesh primitives');
 ```
 
+## C++17
+
+```cpp
+#include <openskp/openskp.hpp>
+
+auto skp = openskp::SkpFile::open("model.skp");
+auto model = skp.parse();
+auto scene = skp.build_scene();
+
+std::cout << model.version << " " << model.definitions.size() << '\n';
+std::cout << scene.glb_primitives.size() << '\n';
+```
+
 ## Common data model
 
-All four languages produce equivalent structured output for the same file:
+All five languages produce equivalent structured output for the same file:
 
 | Field | Type | Description |
 |---|---|---|
 | `version` | string | SketchUp file-format version, e.g. `"{25.0.575}"` |
 | `definitions` | map | Component/group definitions with geometry, keyed by ID |
-| `root` (TS/.NET/Dart) or the `'ROOT'` entry in `definitions` (Python) | — | The implicit top-level definition — see the [Developer Guide](DEVELOPER_GUIDE.md#the-root-definition) |
+| `root` (TS/.NET/Dart/C++) or the `'ROOT'` entry in `definitions` (Python) | — | The implicit top-level definition — see the [Developer Guide](DEVELOPER_GUIDE.md#the-root-definition) |
 | `layers` | list | Layer names + RGB colors |
 | `materials` | list | Material names, colors, transparency, optional embedded texture |
 | `styles` | list | Named front/back face colors for unpainted faces |
@@ -125,7 +138,7 @@ All four languages produce equivalent structured output for the same file:
 
 | Format | Extension | Ships in |
 |---|---|---|
-| GLB (binary glTF 2.0) | `.glb` | Python (`openskp.export.glb`), TypeScript (`toGLB()`) — see [Export capabilities](DEVELOPER_GUIDE.md#export-capabilities) for .NET/Dart's current status |
+| GLB (binary glTF 2.0) | `.glb` | Python (`openskp.export.glb`), TypeScript (`toGLB()`) — see [Export capabilities](DEVELOPER_GUIDE.md#export-capabilities) for .NET/Dart/C++ status |
 | Wavefront OBJ | `.obj` | Python (`openskp.export.obj`) only |
 | Full metadata JSON | `.json` | Python (`openskp.export.json_export`) only |
-| Raw scene data | — | All four, via `buildScene()`'s `Scene`/`GlbPrimitive` — build your own serializer from this |
+| Raw scene data | — | All five, via scene building and `Scene`/`GlbPrimitive` — build your own serializer from this |

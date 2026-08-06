@@ -3,7 +3,7 @@
 This is the detailed, practical guide to building on OpenSKP: what each
 language's API actually gives you, how memory and performance behave on
 real files, how to plug in progress/error observability, and where the
-four ports currently differ from each other. If you just want the pitch
+five ports currently differ from each other. If you just want the pitch
 and a five-line example, see the [README](../README.md). If you want the
 raw binary format itself, see [BINARY_FORMAT.md](BINARY_FORMAT.md). If you
 want the observability feature in full depth, see
@@ -39,8 +39,9 @@ others, that's stated plainly rather than smoothed over.
 | TypeScript / JavaScript | `npm install openskp` | 0.3.0 |
 | .NET / C# | `dotnet add package OpenSkp` | 0.3.0 |
 | Dart / Flutter | `dart pub add openskp` | 0.3.0 |
+| C++17 / CMake | build/install `packages/cpp`, then `find_package(OpenSkp CONFIG REQUIRED)` | 0.3.0 |
 
-All four are independent packages sharing one reverse-engineered format
+All five are independent packages sharing one reverse-engineered format
 specification, not bindings around a shared native core — each is a
 from-scratch, idiomatic implementation in its own language, cross-validated
 against the others on the same real files.
@@ -67,7 +68,7 @@ geometry processing, or anything that doesn't need a renderable mesh.
 of every component, nested arbitrarily deep, each with its transform
 resolved to world space, each face triangulated (via a ported
 [earcut](https://github.com/mapbox/earcut) - the same ear-clipping
-algorithm in all four languages) and grouped by resolved color into
+algorithm in all five languages) and grouped by resolved color into
 GLB-ready mesh primitives. For a file that reuses a handful of definitions
 across many thousands of placements (a park bench repeated 400 times, say),
 this can produce **far more data** than the file's raw, un-instanced
@@ -101,25 +102,29 @@ var scene = SkpFile.BuildScene("model.skp");
 final model = SkpFile.open("model.skp").parse();
 final scene = SkpFile.open("model.skp").buildScene();
 ```
+```cpp
+// C++
+auto skp = openskp::SkpFile::open("model.skp");
+auto model = skp.parse();
+auto scene = skp.build_scene();
+```
 
 ## The data model
 
-All four languages produce structurally equivalent output for the same
+All five languages produce structurally equivalent output for the same
 file — same counts, same coordinates, same topology, cross-validated
 directly against each other on real fixtures (not just against each
 language's own idea of what the format means).
 
-| Concept | Python | TypeScript | .NET | Dart |
-|---|---|---|---|---|
-| Entry point | `SkpFile.open(path).parse()` | `SkpFile.open(path).parse()` | `SkpFile.Open(path)` | `SkpFile.open(path).parse()` |
-| Top-level result | `SkpModel` | `SkpModel` | `SkpModel` | `SkpModel` |
-| Definitions | `dict[int \| str, Definition]` | `Map<number, Definition>` | `Dictionary<long, Definition>` | `Map<int, Definition>` |
-| Vertex | `Vertex(id, x, y, z)` | `{id, x, y, z}` | `Vertex{Id,X,Y,Z}` | `Vertex(id,x,y,z)` |
-| Edge | `Edge(id, v1_id, v2_id, soft, smooth, hidden)` | `{id, v1Id, v2Id, soft, smooth, hidden}` | `Edge{...}` | `Edge(...)` |
-| Face | `Face(id, loops, normal, material_id, back_material_id, uv_transform, uv_transform_back)` | same, camelCase | same, PascalCase | same, camelCase |
-| Layer | `Layer(name, color_r, color_g, color_b)` | `{name, color: {r,g,b}}` | `Layer{Name,ColorR,...}` | `Layer(name, colorR, ...)` |
-| Material | `Material(name, color, transparency, id, texture, colorized, colorize_type)` | same | same | same |
-| Instance (unresolved placement) | `Instance(name, ref_idx, guid, matrix, material_id)` | same | same | same |
+| Concept | Python | TypeScript | .NET | Dart | C++ |
+|---|---|---|---|---|---|
+| Entry point | `.open().parse()` | `.open().parse()` | `SkpFile.Open()` | `.open().parse()` | `SkpFile::open().parse()` |
+| Top-level result | `SkpModel` | `SkpModel` | `SkpModel` | `SkpModel` | `SkpModel` |
+| Definitions | `dict` | `Map` | `Dictionary` | `Map` | `std::map` |
+| Vertex | dataclass | object | class | class | struct |
+| Edge / Face | dataclass | object | class | class | struct |
+| Layer / Material | dataclass | object | class | class | struct |
+| Instance | dataclass | object | class | class | struct |
 
 Coordinates are always **inches, Z-up** (SketchUp's native units) in the
 `parse()` result. `buildScene()`'s output converts to **meters, Y-up**
@@ -169,7 +174,7 @@ definitions. The naive approach — parse the entire file into one in-memory
 tree, then walk it — means peak memory scales with the *whole file's* node
 count, which is what made large files crash outright before this was fixed.
 
-All four languages now parse **one top-level record at a time**:
+All five languages now parse **one top-level record at a time**:
 `iter_top_level_lazy()` / `iterTopLevelLazy()` / `IterTopLevelLazy()` do a
 cheap flat header scan (O(sibling count), not O(total node count)) to find
 each top-level definition/layer-manager/material-manager/root block, fully
@@ -183,7 +188,7 @@ the file.
 
 **This fixed the crash on large files uniformly** — the underlying
 per-tag extraction logic (every tag's decoding, every field) was untouched;
-only the orchestration loop changed, in all four languages, the same way.
+only the orchestration loop changed, in all five languages, the same way.
 
 ### .NET's additional fix: no array-size ceiling
 
@@ -241,7 +246,7 @@ regardless of Node flags).
 
 ## Observability
 
-All four languages support opt-in progress reporting and structured error
+All five languages support opt-in progress reporting and structured error
 context — silent by default, never printing or logging unless you ask.
 This is substantial enough to have [its own document](OBSERVABILITY.md);
 the short version:
@@ -271,6 +276,12 @@ final model = SkpFile.open("model.skp").parse(ParseOptions(
   onLog: (level, message) => print('[$level] $message'),
 ));
 ```
+```cpp
+openskp::ParseOptions options;
+options.progress = [](const openskp::ParseProgress& p) { /* update UI */ };
+options.log = [](openskp::LogLevel level, std::string_view message) { /* log */ };
+auto model = openskp::SkpFile::open("model.skp").parse(options);
+```
 
 See [OBSERVABILITY.md](OBSERVABILITY.md) for the full stage vocabulary,
 error field reference, and design rationale.
@@ -279,7 +290,7 @@ error field reference, and design rationale.
 
 Every language raises/throws a structured error type — never a bare
 string — for failures anywhere in the parse or scene-build path:
-`SkpParseError` (Python, TypeScript) / `SkpParseException` (.NET, Dart).
+`SkpParseError` (Python, TypeScript, C++) / `SkpParseException` (.NET, Dart).
 Full field reference in [OBSERVABILITY.md](OBSERVABILITY.md#error-fields).
 
 Two other exceptions you may see that are *not* this type, and mean
@@ -289,7 +300,8 @@ something more basic:
   /`ValueError`; TypeScript: n/a in the browser (you supply the buffer),
   Node's `SkpFile.open()` throws whatever `fs.readFileSync` throws; .NET:
   `FileNotFoundException`/`ArgumentException`; Dart:
-  `FileSystemException`/`ArgumentError`. These happen before any actual
+  `FileSystemException`/`ArgumentError`; C++: `std::filesystem::filesystem_error`
+  / `std::invalid_argument`. These happen before any actual
   parsing starts.
 
 ## Export capabilities
@@ -305,6 +317,7 @@ ships file-writing exporters on top of that data:
 | TypeScript | ✅ | ✅ `toGLB(scene)` in `index.ts` | ❌ not yet ported | ❌ not yet ported |
 | .NET | ✅ | ❌ not yet ported | ❌ not yet ported | ❌ not yet ported |
 | Dart | ✅ | ❌ not yet ported | ❌ not yet ported | ❌ not yet ported |
+| C++ | ✅ | ❌ not included in the initial port | ❌ not included | ❌ not included |
 
 Python is the only port with a full set of disk-writing exporters today,
 in `openskp.export`:
@@ -373,7 +386,7 @@ above, then publishes `examples/web-viewer/` to GitHub Pages.
 
 ## Known cross-language differences
 
-Honest list of places where the four ports currently do *not* behave
+Honest list of places where the five ports currently do *not* behave
 identically. None of these are bugs in the sense of "produces wrong data"
 — each language's behavior is internally consistent and correct for what
 it does — but code written against one language's shape will not port
@@ -385,9 +398,9 @@ directly to another's without adjustment.
   `'ROOT'` **string key** alongside the integer definition IDs. There is
   no separate `.root` attribute. Consumers must check
   `isinstance(key, int)` to distinguish real definitions from the root.
-- **TypeScript, .NET, Dart**: `model.definitions`/`model.Definitions` is
+- **TypeScript, .NET, Dart, C++**: `model.definitions`/`model.Definitions` is
   strictly numeric-keyed (no root entry mixed in); the root is a separate
-  `model.root` / `model.Root` property with the same `Definition` shape.
+  `model.root` / `model.Root` / `model.root()` property with the same `Definition` shape.
 
 (TypeScript used to drop root-level data from `parse()` entirely — fixed
 this session to add `model.root`, matching .NET/Dart. Python's differing
@@ -399,14 +412,14 @@ relying on the string-keyed `'ROOT'` entry.)
 
 Covered above under [Export capabilities](#export-capabilities) — Python
 has a full set of disk-writing exporters (GLB/OBJ/JSON); TypeScript has a
-public, complete in-memory `.glb` serializer; .NET and Dart have neither
+public, complete in-memory `.glb` serializer; .NET, Dart, and C++ have neither
 yet, only the raw `Scene` data to serialize from.
 
 ### Progress/logging mechanism
 
 Not a bug, but worth restating: Python's progress is DEBUG-level log
 records through the standard `logging` module (no separate numeric
-callback); TypeScript/.NET/Dart have an explicit `onProgress`/`Progress`
+callback); TypeScript/.NET/Dart/C++ have an explicit progress
 callback distinct from logging. See [OBSERVABILITY.md](OBSERVABILITY.md#per-language-mechanism)
 for the full comparison and why.
 

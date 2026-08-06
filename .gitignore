@@ -58,6 +58,7 @@ packages/dart/pubspec.lock
 !packages/typescript/tests/fixtures/*.skp
 !packages/dotnet/OpenSkp.Tests/fixtures/*.skp
 !packages/dart/test/fixtures/*.skp
+!packages/cpp/tests/fixtures/*.skp
 *.glb
 *.obj
 
@@ -67,4 +68,3 @@ packages/dart/pubspec.lock
 nupkg/
 *.suo
 *.user
-

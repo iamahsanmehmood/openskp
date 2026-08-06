@@ -2,11 +2,11 @@
 
 ## Design principles
 
-1. **One reverse-engineered specification, four independent implementations.**
-   Python, TypeScript, .NET, and Dart each parse the same binary format
+1. **One reverse-engineered specification, five independent implementations.**
+   Python, TypeScript, .NET, Dart, and C++ each parse the same binary format
    from scratch in their own idiomatic style — not bindings around a shared
    native core. [BINARY_FORMAT.md](BINARY_FORMAT.md) is the one canonical
-   reference all four are checked against.
+   reference all five are checked against.
 2. **Zero SketchUp SDK.** Pure implementations, no proprietary dependencies,
    no license required.
 3. **Two-tier API, split for memory, not just abstraction.** `parse()`
@@ -123,20 +123,19 @@ internal representation is tracked as follow-up work.
 Each language groups the same responsibilities, named idiomatically per
 platform:
 
-| Responsibility | Python | TypeScript | .NET | Dart |
-|---|---|---|---|---|
-| Low-level TLV read/write, lazy iteration | `_core.py` (+ `parser.py`) | `parser.ts` | `Tlv.cs` | `tlv.dart` |
-| VFF container (header, ZIP, version) | `vff.py` | `vff.ts` | `Vff.cs` | `vff.dart` |
-| Legacy MFC container | `legacy.py` | `legacy.ts` | `Legacy.cs` | `legacy.dart` |
-| 2GB+ file support | *(not needed — Python has no array ceiling)* | *(not needed — typed arrays aren't ceiling-limited the same way)* | `ChunkedBuffer.cs` | *(not needed)* |
-| Geometry extraction (per-tag decoding) | `_core.py` (+ `geometry.py`) | `geometry.ts` | `Geometry.cs` | `geometry.dart` |
-| Public model (`parse()` result) | `model.py` | `model.ts` | `Model.cs` | `model.dart` |
-| Scene baking (`buildScene()` result) | `scene.py` | `model.ts` (`buildSceneFromParsed`) | `Scene.cs` | `scene.dart` |
-| Triangulation | `triangulator.py` (shapely-based) | `triangulator.ts` (earcut) | `Triangulator.cs` + `Earcut.cs` | `triangulator.dart` + `earcut.dart` |
-| Transform/matrix math | `transforms.py` (numpy) | `transforms.ts` | `Transforms.cs` | `transforms.dart` |
-| Structured errors | `errors.py` | `errors.ts` | `Errors.cs` | `errors.dart` |
-| Progress/log hooks | *(via stdlib `logging`, instrumented directly in `_core.py`/`legacy.py`/`scene.py`)* | `observability.ts` | `Observability.cs` | `observability.dart` |
-| Public entry point | `model.py` (`SkpFile`) | `index.ts` (`SkpFile`, `parseSkp`, `buildScene`, `toGLB`, `toJSON`) | `Parser.cs` (`SkpFile`) | `parser.dart` (`SkpFile`) |
+| Responsibility | Python | TypeScript | .NET | Dart | C++ |
+|---|---|---|---|---|---|
+| Raw parse orchestration | `_core.py` | `index.ts` | `Core.cs` | `core.dart` | `core.cpp` |
+| Low-level TLV parsing / lazy iteration | `_core.py` | `parser.ts` | `Tlv.cs` | `tlv.dart` | `tlv.cpp` |
+| VFF container | `vff.py` | `vff.ts` | `Vff.cs` | `vff.dart` | `vff.cpp` |
+| Legacy MFC container | `legacy.py` | `legacy.ts` | `Legacy.cs` | `legacy.dart` | `legacy.cpp` |
+| Geometry extraction | `_core.py` | `geometry.ts` | `Geometry.cs` | `geometry.dart` | `geometry.cpp` |
+| Public model | `model.py` | `model.ts` | `Model.cs` | `model.dart` | `model.cpp` |
+| Scene baking | `scene.py` | `model.ts` | `Scene.cs` | `scene.dart` | `scene.cpp` |
+| Triangulation | `triangulator.py` | `triangulator.ts` | `Triangulator.cs` + `Earcut.cs` | `triangulator.dart` + `earcut.dart` | `triangulator.cpp` + `earcut.cpp` |
+| Transform math | `transforms.py` | `transforms.ts` | `Transforms.cs` | `transforms.dart` | `transforms.cpp` |
+| Errors / observability | `errors.py` / logging | `errors.ts` / `observability.ts` | `Errors.cs` / `Observability.cs` | `errors.dart` / `observability.dart` | `errors.cpp` / `observability.cpp` |
+| Public entry point | `model.py` | `index.ts` | `Parser.cs` | `parser.dart` | `parser.cpp` |
 
 Note Python has no dedicated `observability.py` — it's instrumented
 directly at each call site using the standard-library `logging` module,
@@ -164,13 +163,13 @@ equivalent, not the internal triangle split.
 
 ## Cross-platform dependency map
 
-| Component | Python | TypeScript | .NET | Dart |
-|---|---|---|---|---|
-| ZIP/VFF extraction | `zipfile` (stdlib) | `fflate` | `System.IO.Compression` (BCL) | `archive` |
-| XML parsing (materials/styles) | `xml.etree.ElementTree` (stdlib) | manual/DOM | `System.Xml` (BCL) | `xml` |
-| Triangulation | `shapely` | `earcut` (ported inline, MIT/ISC) | `Earcut.cs` (ported) | `earcut.dart` (ported) |
-| Matrix/transform math | `numpy` | native | native | `vector_math`-free, native |
-| GLB/OBJ/JSON export | `trimesh`-backed, public (`openskp.export` — see [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md#export-capabilities)) | GLB only, custom (`toGLB()`, public) | *(not yet ported)* | *(not yet ported)* |
+| Component | Python | TypeScript | .NET | Dart | C++ |
+|---|---|---|---|---|---|
+| ZIP/VFF extraction | `zipfile` | `fflate` | `System.IO.Compression` | `archive` | private miniz 3.1.2 |
+| XML parsing | `ElementTree` | manual/DOM | `System.Xml` | `xml` | focused scanner |
+| Triangulation | `shapely` | `earcut` | ported earcut | ported earcut | native C++ |
+| Matrix math | `numpy` | native | native | native | native |
+| GLB/OBJ/JSON export | all | GLB | — | — | — |
 
 ## Testing philosophy
 

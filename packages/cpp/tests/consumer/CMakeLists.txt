@@ -1,0 +1,5 @@
+cmake_minimum_required(VERSION 3.21)
+project(OpenSkpConsumer LANGUAGES CXX)
+find_package(OpenSkp CONFIG REQUIRED)
+add_executable(openskp_consumer main.cpp)
+target_link_libraries(openskp_consumer PRIVATE OpenSkp::OpenSkp)

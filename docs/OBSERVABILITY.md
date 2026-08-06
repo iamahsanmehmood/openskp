@@ -1,6 +1,6 @@
 # Observability: progress and structured errors
 
-Every OpenSKP port — Python, TypeScript, .NET, Dart — exposes the same two
+Every OpenSKP port — Python, TypeScript, .NET, Dart, and C++ — exposes the same two
 things about a parse or scene-bake in progress:
 
 1. **Progress** — how far through the file the walk has gotten.
@@ -37,7 +37,7 @@ questions that a bare try/catch can't:
 Both were built as a single feature, once, in Python, then ported to
 TypeScript, .NET, and Dart in each language's own idiomatic form — not a
 shared library, not a lowest-common-denominator callback shape bolted onto
-four languages. The *semantics* are identical everywhere (same stages, same
+five languages. The *semantics* are identical everywhere (same stages, same
 500-unit progress granularity, same error fields); the *mechanism* isn't.
 
 ## Design principles
@@ -134,6 +134,11 @@ get (e.g., only act every Nth callback yourself).
 | TypeScript | `options.onProgress?: (info: ProgressInfo) => void` | `options.onLog?: (level, message) => void` | `SkpParseError extends Error` |
 | .NET | `SkpParseOptions.Progress: IProgress<SkpParseProgress>?` | `SkpParseOptions.OnLog: Action<SkpLogLevel, string>?` | `SkpParseException : Exception` |
 | Dart | `ParseOptions.onProgress: void Function(ParseProgress)?` | `ParseOptions.onLog: void Function(SkpLogLevel, String)?` | `SkpParseException implements Exception` |
+| C++ | `ParseOptions::progress` callback | `ParseOptions::log` callback | `SkpParseError : std::runtime_error` |
+
+In C++, stages are the strongly typed `ParseStage` enum; `stage_name()`
+returns the exact strings in the table above. Wrapped failures remain
+available through `SkpParseError::cause()` as `std::exception_ptr`.
 
 Python doesn't have a separate progress callback: the standard-library
 `logging` module is the single channel, and progress is reported as
@@ -244,7 +249,7 @@ try {
 ## What "silent by default" actually guarantees
 
 With no options passed (Python: no handler configured on the `"openskp"`
-logger tree; TypeScript/.NET/Dart: no options object, or one with both
+logger tree; TypeScript/.NET/Dart/C++: no options object, or one with both
 callbacks left `null`), OpenSKP:
 
 - Never writes to stdout/stderr/console.

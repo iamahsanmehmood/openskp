@@ -19,7 +19,7 @@
 
 ---
 
-*Open-source SketchUp binary file parser for Python, TypeScript, .NET, and Dart*
+*Open-source SketchUp binary file parser for Python, TypeScript, .NET, Dart, and C++*
 
 [Quick Start](#-quick-start) · [Features](#-features) · [Used in Production](#-used-in-production) · [Documentation](#-documentation) · [Contributing](#-contributing)
 
@@ -29,7 +29,7 @@
 
 ## 🌟 What is OpenSKP?
 
-OpenSKP is the **first and only** open-source, cross-platform parser for SketchUp (`.skp`) binary files. Built entirely through reverse engineering of SketchUp's binary formats — both the modern **VFF container** (2021+) and the classic **MFC `CArchive`** container (2013–2020) — it gives you full programmatic access to 3D models — geometry, materials, components, layers, and more — without requiring the SketchUp application or its proprietary SDK, in **Python, TypeScript, .NET, and Dart**.
+OpenSKP is the **first and only** open-source, cross-platform parser for SketchUp (`.skp`) binary files. Built entirely through reverse engineering of SketchUp's binary formats — both the modern **VFF container** (2021+) and the classic **MFC `CArchive`** container (2013–2020) — it gives you full programmatic access to 3D models — geometry, materials, components, layers, and more — without requiring the SketchUp application or its proprietary SDK, in **Python, TypeScript, .NET, Dart, and C++**.
 
 > [!IMPORTANT]
 > This project was built by reverse engineering a proprietary binary format. It is not affiliated with or endorsed by Trimble Inc. or SketchUp.
@@ -44,13 +44,13 @@ OpenSKP is the **first and only** open-source, cross-platform parser for SketchU
 | **Parse SKP 2013–2020 (legacy MFC)** | ✅ | Full support for the classic MFC `CArchive` container — same output shape as VFF |
 | **3D Geometry Extraction** | ✅ | Vertices, edges, faces, normals, and UV coordinates |
 | **Component Hierarchy** | ✅ | Nested component definitions and instance transforms |
-| **Scene Baking / Triangulation** | ✅ | Opt-in `buildScene()`: full placed scene graph resolved to world-space, triangulated, GLB-ready — in all four languages |
+| **Scene Baking / Triangulation** | ✅ | Opt-in scene baking: full placed scene graph resolved to world-space, triangulated, GLB-ready — in all five languages |
 | **Layers / Tags** | ✅ | Layer definitions with colors and visibility state |
 | **Materials & Textures** | ✅ | Material properties, colors, transparency, colorized materials, and embedded texture images |
 | **Styles** | ✅ | Front/back face colors for unpainted faces |
 | **Dynamic Components** | ✅ | Extract dynamic component attribute key-value pairs |
 | **Observability** | ✅ | Opt-in progress reporting + structured, location-carrying parse errors — see [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md) |
-| **Export to GLB / OBJ / JSON** | ⚠️ | Full disk-writing exporters in Python; GLB-only in TypeScript; .NET/Dart expose the same triangulated scene data but don't ship a serializer yet — see [Export capabilities](docs/DEVELOPER_GUIDE.md#export-capabilities) |
+| **Export to GLB / OBJ / JSON** | ⚠️ | Full disk-writing exporters in Python; GLB-only in TypeScript; .NET, Dart, and C++ expose scene data but don't ship a serializer yet — see [Export capabilities](docs/DEVELOPER_GUIDE.md#export-capabilities) |
 | **Streaming / low-memory parsing** | ✅ | Peak memory bounded by the largest single definition, not the whole file — see [Memory architecture](docs/ARCHITECTURE.md#memory-architecture) |
 | **Pure Implementation** | ✅ | No SketchUp SDK, no native dependencies, no license required |
 | **Cross-Platform** | ✅ | Works on Linux, macOS, and Windows |
@@ -78,12 +78,13 @@ Using OpenSKP in your own project? [Open an issue](https://github.com/iamahsanme
 | 📘 **TypeScript / JS** | `v0.3.0` | ✅ Available | `npm install openskp` | [npm](https://www.npmjs.com/package/openskp) |
 | 🚀 **.NET / C#** | `v0.3.0` | ✅ Available | `dotnet add package OpenSkp` | [NuGet](https://www.nuget.org/packages/OpenSkp) |
 | 🎯 **Dart / Flutter** | `v0.3.0` | ✅ Available | `dart pub add openskp` | [pub.dev](https://pub.dev/packages/openskp) |
+| ⚙️ **C++17** | `v0.3.0` | ✅ Source package | `find_package(OpenSkp CONFIG REQUIRED)` | [`packages/cpp`](packages/cpp) |
 
-All four languages parse both the modern VFF (2021+) and classic MFC
+All five languages parse both the modern VFF (2021+) and classic MFC
 (2013–2020) `.skp` containers, and support the same opt-in scene-baking
 (`buildScene()`) and observability APIs. See the
 [Developer Guide](docs/DEVELOPER_GUIDE.md) for the full picture, including
-where the four ports currently differ.
+where the five ports currently differ.
 
 ---
 
@@ -179,6 +180,21 @@ final scene = SkpFile.open('my_model.skp').buildScene();
 print('${scene.glbPrimitives.length} renderable mesh primitives');
 ```
 
+### ⚙️ C++17 / CMake
+
+```cmake
+find_package(OpenSkp CONFIG REQUIRED)
+target_link_libraries(your_target PRIVATE OpenSkp::OpenSkp)
+```
+
+```cpp
+#include <openskp/openskp.hpp>
+
+auto skp = openskp::SkpFile::open("my_model.skp");
+auto model = skp.parse();
+auto scene = skp.build_scene();
+```
+
 ---
 
 ## 🏛️ Architecture
@@ -209,7 +225,7 @@ parse tree in memory at once — peak memory is bounded by the single
 largest top-level record, not the file's total size.
 
 > 📖 For the full architecture breakdown — including the memory model,
-> why .NET needed a genuinely different fix, and where the four languages'
+> why .NET needed a genuinely different fix, and where the five languages'
 > internals map to each other — see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ---
@@ -234,9 +250,13 @@ openskp/
 │   ├── dotnet/                # 🚀 .NET / C# implementation
 │   │   ├── OpenSkp/            # Core.cs, Legacy.cs, Model.cs, Scene.cs, ...
 │   │   └── OpenSkp.Tests/
-│   └── dart/                  # 🎯 Dart / Flutter implementation
-│       ├── lib/src/            # core.dart, legacy.dart, model.dart, scene.dart, ...
-│       └── test/
+│   ├── dart/                  # 🎯 Dart / Flutter implementation
+│   │   ├── lib/src/            # core.dart, legacy.dart, model.dart, scene.dart, ...
+│   │   └── test/
+│   └── cpp/                   # ⚙️ C++17 / CMake implementation
+│       ├── include/openskp/    # Public API
+│       ├── src/                # Parser and scene implementation
+│       └── tests/
 │
 ├── examples/
 │   ├── web-viewer/             # Drag-and-drop 3D viewer (TypeScript + Three.js),
@@ -308,13 +328,13 @@ z_mm = -y_inches × 25.4
 
 ### 🌐 [iamahsanmehmood.github.io/openskp/docs/](https://iamahsanmehmood.github.io/openskp/docs/)
 
-A browsable docs site — install/quick-start per language, the data model, memory & performance numbers, observability, error handling, and the known differences between the four ports, all in one place. Deployed alongside the [web viewer](https://iamahsanmehmood.github.io/openskp/) from [`examples/web-viewer/docs/`](examples/web-viewer/docs/).
+A browsable docs site — install/quick-start per language, the data model, memory & performance numbers, observability, error handling, and the known differences between the five ports, all in one place. Deployed alongside the [web viewer](https://iamahsanmehmood.github.io/openskp/) from [`examples/web-viewer/docs/`](examples/web-viewer/docs/).
 
 The full source for each topic also lives here as plain Markdown:
 
 | Document | Description |
 |:---------|:------------|
-| [Developer Guide](docs/DEVELOPER_GUIDE.md) | **Start here.** The detailed, verified cross-language guide — API, memory/performance, legacy format, error handling, and known differences between the four ports |
+| [Developer Guide](docs/DEVELOPER_GUIDE.md) | **Start here.** The detailed, verified cross-language guide — API, memory/performance, legacy format, error handling, and known differences between the five ports |
 | [Observability Guide](docs/OBSERVABILITY.md) | Progress reporting + structured errors, in depth |
 | [Binary Format Spec](docs/BINARY_FORMAT.md) | Reverse-engineered VFF / TLV format documentation |
 | [Architecture](docs/ARCHITECTURE.md) | Library design, memory model, and module structure |
