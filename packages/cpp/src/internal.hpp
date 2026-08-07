@@ -114,6 +114,8 @@ void collect_definitions(const std::vector<TlvNode>&, std::map<EntityId, RawDefi
 SkpModel build_model(RawParsed&&);
 Scene build_scene_raw(RawParsed&&, const ParseOptions&);
 std::array<double, 3> transform_point(const std::vector<double>&, const std::array<double, 3>&);
+std::array<double, 3> transform_normal(const std::vector<double>&, const std::array<double, 3>&);
+double transform_determinant(const std::vector<double>&);
 std::vector<double> multiply_matrices(const std::vector<double>&, const std::vector<double>&);
 
 struct EarPoint {

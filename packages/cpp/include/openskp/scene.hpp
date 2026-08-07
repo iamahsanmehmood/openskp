@@ -44,6 +44,7 @@ struct PbrMetallicRoughness {
 
 struct GltfMaterial {
   PbrMetallicRoughness pbr_metallic_roughness;
+  bool double_sided{};
 };
 
 struct OPENSKP_EXPORT Scene {

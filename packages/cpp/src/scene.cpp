@@ -2,20 +2,52 @@
 #include <cmath>
 #include <set>
 #include <sstream>
+#include <tuple>
 
 #include "internal.hpp"
 
 namespace openskp {
 namespace {
-using Key = std::array<int, 3>;
+using Key = std::array<int, 4>;
+
+struct GroupKey {
+  Key color;
+  bool double_sided{};
+
+  bool operator<(const GroupKey& other) const {
+    return std::tie(color, double_sided) < std::tie(other.color, other.double_sided);
+  }
+};
 
 struct Group {
-  Key color;
   std::vector<Vec3> verts;
   std::vector<std::array<size_t, 3>> tris;
   std::map<EntityId, size_t> map;
   std::map<EntityId, Vec3> normals;
 };
+
+std::optional<Key> material_color(const RawParsed& parsed, std::optional<EntityId> id) {
+  if (!id) return {};
+  auto name = parsed.material_id_to_name.find(*id);
+  if (name == parsed.material_id_to_name.end()) return {};
+  std::shared_ptr<RawMaterial> material;
+  auto direct = parsed.materials.find(name->second);
+  if (direct != parsed.materials.end())
+    material = direct->second;
+  else {
+    auto folder = parsed.materials_by_folder.find(name->second);
+    if (folder != parsed.materials_by_folder.end()) material = folder->second;
+  }
+  if (!material) return {};
+  return Key{material->r, material->g, material->b,
+             static_cast<int>(std::lround(std::clamp(material->transparency, 0.0, 1.0) * 255.0))};
+}
+
+Key default_color(const RawParsed& parsed, const std::string& layer) {
+  auto found = parsed.layer_colors.find(layer);
+  auto color = found == parsed.layer_colors.end() ? Color3{136, 136, 136} : found->second;
+  return {color[0], color[1], color[2], 255};
+}
 
 std::vector<EntityId> loop_vertices(const std::vector<CoEdge>& loop, const GeometryBuilder& b) {
   std::vector<EntityId> v;
@@ -42,7 +74,7 @@ Scene build_scene_raw(RawParsed&& p, const ParseOptions& o) {
   scene.scene_hierarchy = {"ROOT", "ROOT_MODEL", "Layer0", {0, 0, 0}, {}, {}};
   emit_log(o, LogLevel::information,
            "Building scene: " + std::to_string(p.definitions.size()) + " definitions available");
-  std::map<Key, size_t> materials;
+  std::map<GroupKey, size_t> materials;
   size_t mesh_counter = 0, instance_counter = 0;
   std::set<EntityId> active;
   std::function<std::vector<InstanceNode>(
@@ -52,29 +84,12 @@ Scene build_scene_raw(RawParsed&& p, const ParseOptions& o) {
   bake = [&](const GeometryBuilder& b, const std::string& defname, std::optional<EntityId> defid,
              const std::vector<double>& matrix, const std::string& layer, const std::string& path,
              std::optional<Key> inherited) {
-    std::map<Key, Group> groups;
+    std::map<GroupKey, Group> groups;
     for (auto& fv : b.faces) {
       auto& f = fv.second;
-      auto color = inherited;
-      if (f.material_id) {
-        auto mn = p.material_id_to_name.find(*f.material_id);
-        if (mn != p.material_id_to_name.end()) {
-          auto mi = p.materials.find(mn->second);
-          if (mi == p.materials.end()) {
-            auto mf = p.materials_by_folder.find(mn->second);
-            if (mf != p.materials_by_folder.end())
-              color = Key{mf->second->r, mf->second->g, mf->second->b};
-          } else
-            color = Key{mi->second->r, mi->second->g, mi->second->b};
-        }
-      }
-      if (!color) {
-        auto c = p.layer_colors.find(layer);
-        auto x = c == p.layer_colors.end() ? Color3{136, 136, 136} : c->second;
-        color = Key{x[0], x[1], x[2]};
-      }
-      auto& g = groups[*color];
-      g.color = *color;
+      const auto fallback = inherited.value_or(default_color(p, layer));
+      const auto front = material_color(p, f.material_id).value_or(fallback);
+      const auto back = material_color(p, f.back_material_id).value_or(fallback);
       std::vector<std::vector<EntityId>> loops;
       for (auto& l : f.loops) {
         auto x = loop_vertices(l, b);
@@ -83,20 +98,32 @@ Scene build_scene_raw(RawParsed&& p, const ParseOptions& o) {
       if (loops.empty()) continue;
       std::map<EntityId, Vertex> vv;
       for (auto& x : b.vertices) vv[x.first] = {x.first, x.second[0], x.second[1], x.second[2]};
-      for (auto& t : triangulate_face_3d(vv, loops, f.normal)) {
-        std::array<size_t, 3> tri{};
-        for (int j = 0; j < 3; ++j) {
-          auto id = t[j];
-          auto it = g.map.find(id);
-          if (it == g.map.end()) {
-            it = g.map.emplace(id, g.verts.size()).first;
-            g.verts.push_back(b.vertices.at(id));
+      const auto triangles = triangulate_face_3d(vv, loops, f.normal);
+      const auto add_side = [&](const GroupKey& key, bool reverse) {
+        auto& group = groups[key];
+        for (auto triangle : triangles) {
+          if (reverse) std::swap(triangle[1], triangle[2]);
+          std::array<size_t, 3> indices{};
+          for (int vertex = 0; vertex < 3; ++vertex) {
+            auto id = triangle[vertex];
+            auto it = group.map.find(id);
+            if (it == group.map.end()) {
+              it = group.map.emplace(id, group.verts.size()).first;
+              group.verts.push_back(b.vertices.at(id));
+            }
+            indices[vertex] = it->second;
+            auto& normal = group.normals[id];
+            for (int axis = 0; axis < 3; ++axis)
+              normal[axis] += reverse ? -f.normal[axis] : f.normal[axis];
           }
-          tri[j] = it->second;
-          auto& nn = g.normals[id];
-          for (int q = 0; q < 3; ++q) nn[q] += f.normal[q];
+          group.tris.push_back(indices);
         }
-        g.tris.push_back(tri);
+      };
+      if (front == back) {
+        add_side({front, true}, false);
+      } else {
+        add_side({front, false}, false);
+        add_side({back, false}, true);
       }
     }
     for (auto& kv : groups) {
@@ -104,8 +131,9 @@ Scene build_scene_raw(RawParsed&& p, const ParseOptions& o) {
       if (g.tris.empty()) continue;
       auto geom = "mesh_" + std::to_string(mesh_counter++) + "_" + safe(path) + "_" + layer;
       if (groups.size() > 1)
-        geom += "_" + std::to_string(kv.first[0]) + "_" + std::to_string(kv.first[1]) + "_" +
-                std::to_string(kv.first[2]);
+        geom += "_" + std::to_string(kv.first.color[0]) + "_" + std::to_string(kv.first.color[1]) +
+                "_" + std::to_string(kv.first.color[2]) + "_" + std::to_string(kv.first.color[3]) +
+                (kv.first.double_sided ? "_ds" : "_ss");
       MeshMetadata meta;
       meta.name =
           path == "ROOT"
@@ -120,8 +148,12 @@ Scene build_scene_raw(RawParsed&& p, const ParseOptions& o) {
       scene.mesh_index[geom] = meta;
       GlbPrimitive prim;
       prim.geom_name = geom;
-      for (auto& t : g.tris)
-        for (auto x : t) prim.indices.push_back(static_cast<uint32_t>(x));
+      const auto mirrored = transform_determinant(matrix) < 0.0;
+      for (auto& triangle : g.tris) {
+        prim.indices.push_back(static_cast<uint32_t>(triangle[0]));
+        prim.indices.push_back(static_cast<uint32_t>(triangle[mirrored ? 2 : 1]));
+        prim.indices.push_back(static_cast<uint32_t>(triangle[mirrored ? 1 : 2]));
+      }
       for (auto& m : g.map) {
         auto pt = transform_point(matrix, b.vertices.at(m.first));
         prim.positions.resize(g.verts.size() * 3);
@@ -136,16 +168,12 @@ Scene build_scene_raw(RawParsed&& p, const ParseOptions& o) {
           n = {0, 0, 1};
         else
           for (auto& x : n) x /= l;
-        Vec3 w{(matrix.size() > 0 ? matrix[0] : 1) * n[0] +
-                   (matrix.size() > 1 ? matrix[1] : 0) * n[1] +
-                   (matrix.size() > 2 ? matrix[2] : 0) * n[2],
-               (matrix.size() > 3 ? matrix[3] : 0) * n[0] +
-                   (matrix.size() > 4 ? matrix[4] : 1) * n[1] +
-                   (matrix.size() > 5 ? matrix[5] : 0) * n[2],
-               (matrix.size() > 6 ? matrix[6] : 0) * n[0] +
-                   (matrix.size() > 7 ? matrix[7] : 0) * n[1] +
-                   (matrix.size() > 8 ? matrix[8] : 1) * n[2]};
+        auto w = transform_normal(matrix, n);
         l = std::sqrt(w[0] * w[0] + w[1] * w[1] + w[2] * w[2]);
+        if (l < 1e-6) {
+          w = n;
+          l = 1.0;
+        }
         prim.normals[i * 3] = float(w[0] / l);
         prim.normals[i * 3 + 1] = float(w[2] / l);
         prim.normals[i * 3 + 2] = float(-w[1] / l);
@@ -154,8 +182,10 @@ Scene build_scene_raw(RawParsed&& p, const ParseOptions& o) {
       if (mi == materials.end()) {
         auto idx = scene.gltf_materials.size();
         GltfMaterial gm;
-        gm.pbr_metallic_roughness.base_color_factor = {kv.first[0] / 255., kv.first[1] / 255.,
-                                                       kv.first[2] / 255., 1};
+        gm.pbr_metallic_roughness.base_color_factor = {
+            kv.first.color[0] / 255., kv.first.color[1] / 255., kv.first.color[2] / 255.,
+            kv.first.color[3] / 255.};
+        gm.double_sided = kv.first.double_sided;
         scene.gltf_materials.push_back(gm);
         mi = materials.emplace(kv.first, idx).first;
       }
@@ -174,19 +204,7 @@ Scene build_scene_raw(RawParsed&& p, const ParseOptions& o) {
         }
       }
       auto child_color = inherited;
-      if (i.material_id) {
-        auto mn = p.material_id_to_name.find(*i.material_id);
-        if (mn != p.material_id_to_name.end()) {
-          auto mi = p.materials.find(mn->second);
-          if (mi != p.materials.end())
-            child_color = Key{mi->second->r, mi->second->g, mi->second->b};
-          else {
-            auto mf = p.materials_by_folder.find(mn->second);
-            if (mf != p.materials_by_folder.end())
-              child_color = Key{mf->second->r, mf->second->g, mf->second->b};
-          }
-        }
-      }
+      if (auto color = material_color(p, i.material_id)) child_color = color;
       auto nm =
           i.name.empty() ? "Component_" + (i.ref_idx ? std::to_string(*i.ref_idx) : "") : i.name;
       auto child_path = path + " / " + nm;

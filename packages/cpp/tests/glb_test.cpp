@@ -21,7 +21,7 @@ namespace {
 
 Scene triangle_scene() {
   Scene scene;
-  scene.gltf_materials.push_back({{{0.25, 0.5, 0.75, 1.0}, 0.1, 0.9}});
+  scene.gltf_materials.push_back({{{0.25, 0.5, 0.75, 1.0}, 0.1, 0.9}, true});
   scene.glb_primitives.push_back({
       {1.0F, 2.0F, 3.0F, -4.0F, 5.0F, 0.0F, 2.0F, -1.0F, 7.0F},
       {0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 1.0F},
@@ -100,6 +100,7 @@ TEST(Glb, SerializesSceneAndBinaryData) {
   EXPECT_DOUBLE_EQ(pbr.metallicFactor, 0.1);
   EXPECT_DOUBLE_EQ(pbr.roughnessFactor, 0.9);
   EXPECT_EQ(model.materials[0].alphaMode, "OPAQUE");
+  EXPECT_TRUE(model.materials[0].doubleSided);
 }
 
 TEST(Glb, SerializesAnEmptyScene) {

@@ -158,9 +158,9 @@ TEST(Parser, LegacyMatchesReference) {
   EXPECT_EQ(model.root().instances.size(), 3);
 
   auto scene = file.build_scene();
-  EXPECT_EQ(scene.glb_primitives.size(), 13);
-  EXPECT_EQ(scene.mesh_index.size(), 13);
-  EXPECT_EQ(scene.gltf_materials.size(), 9);
+  EXPECT_EQ(scene.glb_primitives.size(), 21);
+  EXPECT_EQ(scene.mesh_index.size(), 21);
+  EXPECT_EQ(scene.gltf_materials.size(), 13);
   EXPECT_EQ(scene.scene_hierarchy.children.size(), 3);
 
   std::multiset<std::string> placed_definitions;

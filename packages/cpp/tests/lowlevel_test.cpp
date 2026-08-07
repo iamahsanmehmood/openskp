@@ -56,3 +56,9 @@ TEST(Transforms, TranslatesPoint) {
   const std::vector<double> matrix{1, 0, 0, 0, 1, 0, 0, 0, 1, 5, 10, -2, 1};
   EXPECT_EQ(transform_point(matrix, {1, 2, 3}), (std::array<double, 3>{6, 12, 1}));
 }
+
+TEST(Transforms, DetectsMirrorsAndTransformsNormalsByInverseTranspose) {
+  const std::vector<double> matrix{-2, 0, 0, 0, 3, 0, 0, 0, 4, 0, 0, 0, 1};
+  EXPECT_DOUBLE_EQ(transform_determinant(matrix), -24);
+  EXPECT_EQ(transform_normal(matrix, {1, 1, 1}), (std::array<double, 3>{-12, 8, 6}));
+}

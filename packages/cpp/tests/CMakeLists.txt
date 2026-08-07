@@ -7,6 +7,7 @@ add_executable(
   lowlevel_test.cpp
   observability_test.cpp
   parser_test.cpp
+  scene_test.cpp
   texture_test.cpp
   triangulator_test.cpp
 )

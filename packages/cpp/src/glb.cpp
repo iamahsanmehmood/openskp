@@ -175,6 +175,7 @@ gltf::Model make_model(const Scene& scene) {
                                                          source_pbr.base_color_factor.end());
     material.pbrMetallicRoughness.metallicFactor = source_pbr.metallic_factor;
     material.pbrMetallicRoughness.roughnessFactor = source_pbr.roughness_factor;
+    material.doubleSided = source.double_sided;
     if (source_pbr.base_color_factor[3] < 1.0) material.alphaMode = "BLEND";
     model.materials.push_back(std::move(material));
   }
