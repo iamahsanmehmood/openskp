@@ -167,6 +167,8 @@ TEST(Glb, ExportsRealFixtureByteForByte) {
   ByteBuffer actual(static_cast<std::size_t>(size));
   stream.seekg(0);
   stream.read(reinterpret_cast<char*>(actual.data()), size);
+  stream.close();
+  ASSERT_TRUE(stream);
   EXPECT_EQ(actual, expected);
   const auto model = load_glb(actual);
   EXPECT_EQ(model.meshes[0].primitives.size(), scene.glb_primitives.size());
