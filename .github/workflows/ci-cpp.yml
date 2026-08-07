@@ -47,7 +47,7 @@ jobs:
           mkdir consumer
           printf '%s\n' 'cmake_minimum_required(VERSION 3.21)' 'project(consumer LANGUAGES CXX)' 'find_package(OpenSkp CONFIG REQUIRED)' 'add_executable(consumer main.cpp)' 'target_link_libraries(consumer PRIVATE OpenSkp::OpenSkp)' > consumer/CMakeLists.txt
           printf '%s\n' '#include <openskp/openskp.hpp>' 'int main(){ auto f=openskp::SkpFile::from_buffer({}); (void)f; }' > consumer/main.cpp
-          cmake -S consumer -B consumer-build -DCMAKE_PREFIX_PATH=${{ github.workspace }}/prefix
+          cmake -S consumer -B consumer-build -DCMAKE_PREFIX_PATH="$GITHUB_WORKSPACE/prefix"
           cmake --build consumer-build --config Release
 
   sanitizers:
