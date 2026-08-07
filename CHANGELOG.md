@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **C++**: public `to_glb(const Scene&)` and `export_glb(const Scene&, path)`
+  APIs for in-memory and file-based binary glTF 2.0 export. The implementation
+  uses privately bundled TinyGLTF 2.9.7, validates scene geometry and PBR data,
+  and keeps TinyGLTF out of installed headers and consumer link interfaces.
+
 ## [0.3.1] — TypeScript only — 2026-07-30
 
 ### Fixed

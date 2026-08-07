@@ -1,6 +1,7 @@
 #pragma once
 
 #include <openskp/errors.hpp>
+#include <openskp/glb.hpp>
 #include <openskp/model.hpp>
 #include <openskp/observability.hpp>
 #include <openskp/parser.hpp>

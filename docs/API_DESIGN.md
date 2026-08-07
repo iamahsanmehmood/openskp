@@ -56,7 +56,7 @@ console.log(model.root.instances.length);  // top-level placements
 
 // Opt-in: full placed scene graph, triangulated, world-space
 const scene = skp.buildScene();
-const glbBytes = toGLB(scene);   // only TS ships a binary .glb serializer today
+const glbBytes = toGLB(scene);
 ```
 
 ## .NET / C#
@@ -107,6 +107,8 @@ print('${scene.glbPrimitives.length} GLB-ready mesh primitives');
 auto skp = openskp::SkpFile::open("model.skp");
 auto model = skp.parse();
 auto scene = skp.build_scene();
+auto glb_bytes = openskp::to_glb(scene);
+openskp::export_glb(scene, "model.glb");
 
 std::cout << model.version << " " << model.definitions.size() << '\n';
 std::cout << scene.glb_primitives.size() << '\n';
@@ -138,7 +140,7 @@ All five languages produce equivalent structured output for the same file:
 
 | Format | Extension | Ships in |
 |---|---|---|
-| GLB (binary glTF 2.0) | `.glb` | Python (`openskp.export.glb`), TypeScript (`toGLB()`) — see [Export capabilities](DEVELOPER_GUIDE.md#export-capabilities) for .NET/Dart/C++ status |
+| GLB (binary glTF 2.0) | `.glb` | Python (`openskp.export.glb`), TypeScript (`toGLB()`), C++ (`to_glb()` / `export_glb()`) |
 | Wavefront OBJ | `.obj` | Python (`openskp.export.obj`) only |
 | Full metadata JSON | `.json` | Python (`openskp.export.json_export`) only |
 | Raw scene data | — | All five, via scene building and `Scene`/`GlbPrimitive` — build your own serializer from this |

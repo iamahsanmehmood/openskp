@@ -3,6 +3,7 @@ include(GoogleTest)
 add_executable(
   openskp_tests
   geometry_test.cpp
+  glb_test.cpp
   lowlevel_test.cpp
   observability_test.cpp
   parser_test.cpp
@@ -18,6 +19,7 @@ target_include_directories(
     ${PROJECT_SOURCE_DIR}/src
     ${OPENSKP_MINIZ_INCLUDE_DIR}
     ${miniz_SOURCE_DIR}
+    ${tinygltf_SOURCE_DIR}
 )
 
 target_compile_definitions(

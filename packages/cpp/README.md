@@ -2,8 +2,8 @@
 
 The C++17 OpenSKP implementation parses modern SketchUp VFF/ZIP files and
 legacy SketchUp 2013–2020 MFC archives without the SketchUp SDK. It exposes
-the common parsed model plus separately baked, world-space, GLB-ready scene
-data. Serializers are intentionally outside this initial port.
+the common parsed model plus separately baked, world-space scene data and
+in-memory or file-based GLB export.
 
 ## Dependencies
 
@@ -20,15 +20,17 @@ CMake fetches these pinned dependencies:
 | Dependency | Version | Used for | Required when |
 | --- | --- | --- | --- |
 | [miniz](https://github.com/richgel999/miniz) | 3.1.2 (`77d0dce8627735138c51770d1799a1ef48f2117d`) | Reading modern SKP ZIP containers | Always |
+| [TinyGLTF](https://github.com/syoyo/tinygltf) | 2.9.7 (`488a70a3df62a4df1a736e9e56fb8836580c4888`) | Writing binary glTF 2.0 assets | Always |
 | [GoogleTest](https://github.com/google/googletest) | 1.17.0 (`52eb8108c5bdec04579160ae17225d66034bd723`) | C++ test suite | `OPENSKP_BUILD_TESTS=ON` |
 
-miniz is compiled privately into OpenSKP, and GoogleTest is used only by the
-test executable. Neither is a transitive dependency for installed consumers.
+miniz and TinyGLTF are compiled privately into OpenSKP, and GoogleTest is used
+only by the test executable. None is a transitive dependency for installed consumers.
 The triangulation implementation is included in this source tree and does not
 require a separate library.
 
 Standard FetchContent source overrides and offline workflows are supported,
 including `FETCHCONTENT_SOURCE_DIR_MINIZ` and
+`FETCHCONTENT_SOURCE_DIR_TINYGLTF`, and
 `FETCHCONTENT_SOURCE_DIR_GOOGLETEST`.
 
 clang-format is an optional developer dependency. Version 18 is the canonical
@@ -56,11 +58,20 @@ target_link_libraries(my_app PRIVATE OpenSkp::OpenSkp)
 auto file = openskp::SkpFile::open("model.skp");
 auto model = file.parse();
 auto scene = file.build_scene(); // independent reparse
+auto bytes = openskp::to_glb(scene);
+openskp::export_glb(scene, "model.glb");
 ```
+
+`to_glb()` returns the complete binary asset as a `ByteBuffer`.
+`export_glb()` writes exactly those bytes and accepts any output filename; it
+does not create parent directories. OBJ and metadata JSON export are not yet
+provided by the C++ package.
 
 `BUILD_SHARED_LIBS` controls static/shared output (static is the CMake
 default). `OPENSKP_BUILD_TESTS` defaults on only when this directory is the
 top-level project, and `OPENSKP_BUILD_EXAMPLES` defaults off.
+When examples are enabled, `openskp_export_glb input.skp output.glb` provides
+a small command-line export example.
 
 ## Formatting
 

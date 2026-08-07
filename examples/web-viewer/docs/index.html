@@ -397,6 +397,8 @@ auto skp = openskp::SkpFile::open("my_model.skp");
 auto model = skp.parse();
 
 auto scene = skp.build_scene();
+auto glb = openskp::to_glb(scene);
+openskp::export_glb(scene, "my_model.glb");
 std::cout &lt;&lt; scene.glb_primitives.size() &lt;&lt; " mesh primitives\n";</code></pre>
     </div>
     <div class="callout callout-info">No package registry today - build/install from source (or download a release tarball) via CMake, then <code>find_package(OpenSkp CONFIG REQUIRED)</code>. See <a href="https://github.com/iamahsanmehmood/openskp/releases?q=cpp-" target="_blank" rel="noopener">GitHub Releases</a> for tagged source packages.</div>
@@ -651,7 +653,7 @@ except SkpParseError as e:
     <div class="sec-icon"><svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg></div>
     <div>
       <div class="sec-title">Export Capabilities</div>
-      <div class="sec-sub">Python ships full GLB/OBJ/JSON exporters; other ports have the raw scene data but not all the file writers, yet</div>
+      <div class="sec-sub">Python ships GLB/OBJ/JSON exporters; TypeScript and C++ also export GLB</div>
     </div>
   </div>
 
@@ -666,7 +668,7 @@ except SkpParseError as e:
           <tr><td>TypeScript</td><td><span class="yes">✓</span></td><td><span class="yes">✓ toGLB(scene)</span></td><td><span class="no">✗ not yet ported</span></td><td><span class="no">✗ not yet ported</span></td></tr>
           <tr><td>.NET</td><td><span class="yes">✓</span></td><td><span class="no">✗ not yet ported</span></td><td><span class="no">✗ not yet ported</span></td><td><span class="no">✗ not yet ported</span></td></tr>
           <tr><td>Dart</td><td><span class="yes">✓</span></td><td><span class="no">✗ not yet ported</span></td><td><span class="no">✗ not yet ported</span></td><td><span class="no">✗ not yet ported</span></td></tr>
-          <tr><td>C++</td><td><span class="yes">✓</span></td><td><span class="no">✗ not included</span></td><td><span class="no">✗ not included</span></td><td><span class="no">✗ not included</span></td></tr>
+          <tr><td>C++</td><td><span class="yes">✓</span></td><td><span class="yes">✓ to_glb / export_glb</span></td><td><span class="no">✗ not included</span></td><td><span class="no">✗ not included</span></td></tr>
         </tbody>
       </table>
       </div>
@@ -681,7 +683,8 @@ scene = skp.build_scene()
 glb.export(skp, "output.glb")
 obj.export(scene, "output.obj")
 json_export.export(model, "output.json", scene=scene)</code></pre>
-      <div class="callout callout-warn">TypeScript's <code>toGLB(scene)</code> is the only other language with a complete, public, in-memory-to-<code>.glb</code>-bytes function today. .NET and Dart consumers who need a GLB/OBJ/JSON file need to serialize <code>Scene</code>'s <code>GlbPrimitive</code>s themselves — each is flat position/normal/index arrays, which is most of the work a writer needs anyway.</div>
+      <div class="fn-desc"><strong>C++:</strong> <code>to_glb(scene)</code> returns a <code>ByteBuffer</code>; <code>export_glb(scene, path)</code> writes the same bytes to any filename. TinyGLTF is private to OpenSKP and is not a consumer dependency.</div>
+      <div class="callout callout-warn">.NET and Dart consumers who need a GLB/OBJ/JSON file must serialize <code>Scene</code>'s <code>GlbPrimitive</code>s themselves — each is flat position/normal/index arrays, which is most of the work a writer needs anyway.</div>
     </div>
   </div>
 </section>
@@ -731,7 +734,7 @@ json_export.export(model, "output.json", scene=scene)</code></pre>
   <div class="fn-block">
     <div class="fn-head"><div><div class="fn-name">GLB/OBJ/JSON export</div></div></div>
     <div class="fn-body">
-      <div class="fn-desc">Python has a full set of disk-writing exporters (GLB/OBJ/JSON); TypeScript has a public, complete in-memory GLB serializer but no OBJ/JSON export yet; .NET, Dart, and C++ have neither — just the raw <code>Scene</code> data to serialize from. See <a href="#export">Export Capabilities</a>.</div>
+      <div class="fn-desc">Python has a full set of disk-writing exporters (GLB/OBJ/JSON); TypeScript has an in-memory GLB serializer; C++ has in-memory and file GLB export but no OBJ/JSON export; .NET and Dart expose raw <code>Scene</code> data only. See <a href="#export">Export Capabilities</a>.</div>
     </div>
   </div>
 </section>

@@ -87,6 +87,18 @@ configure_file(
   COPYONLY
 )
 
+FetchContent_Declare(
+  tinygltf
+  GIT_REPOSITORY https://github.com/syoyo/tinygltf.git
+  GIT_TAG 488a70a3df62a4df1a736e9e56fb8836580c4888
+  GIT_SHALLOW FALSE
+)
+FetchContent_GetProperties(tinygltf)
+
+if(NOT tinygltf_POPULATED)
+  FetchContent_Populate(tinygltf)
+endif()
+
 # Library target
 
 set(
@@ -95,6 +107,7 @@ set(
   src/earcut.cpp
   src/errors.cpp
   src/geometry.cpp
+  src/glb.cpp
   src/legacy.cpp
   src/model.cpp
   src/observability.cpp
@@ -127,6 +140,7 @@ target_include_directories(
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
     "${OPENSKP_MINIZ_INCLUDE_DIR}"
     "${miniz_SOURCE_DIR}"
+    "${tinygltf_SOURCE_DIR}"
 )
 
 set_target_properties(
@@ -222,4 +236,7 @@ endif()
 if(OPENSKP_BUILD_EXAMPLES)
   add_executable(openskp_info examples/info.cpp)
   target_link_libraries(openskp_info PRIVATE OpenSkp::OpenSkp)
+
+  add_executable(openskp_export_glb examples/export_glb.cpp)
+  target_link_libraries(openskp_export_glb PRIVATE OpenSkp::OpenSkp)
 endif()

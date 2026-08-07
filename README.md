@@ -49,7 +49,7 @@ OpenSKP is the **first and only** open-source, cross-platform parser for SketchU
 | **Styles** | ✅ | Front/back face colors for unpainted faces |
 | **Dynamic Components** | ✅ | Extract dynamic component attribute key-value pairs |
 | **Observability** | ✅ | Opt-in progress reporting + structured, location-carrying parse errors — see [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md) |
-| **Export to GLB / OBJ / JSON** | ⚠️ | Full disk-writing exporters in Python; GLB-only in TypeScript; .NET, Dart, and C++ expose scene data but don't ship a serializer yet — see [Export capabilities](docs/DEVELOPER_GUIDE.md#export-capabilities) |
+| **Export to GLB / OBJ / JSON** | ⚠️ | Full GLB/OBJ/JSON exporters in Python; GLB export in TypeScript and C++; .NET and Dart expose scene data only — see [Export capabilities](docs/DEVELOPER_GUIDE.md#export-capabilities) |
 | **Streaming / low-memory parsing** | ✅ | Peak memory bounded by the largest single definition, not the whole file — see [Memory architecture](docs/ARCHITECTURE.md#memory-architecture) |
 | **Pure Implementation** | ✅ | No SketchUp SDK, no native dependencies, no license required |
 | **Cross-Platform** | ✅ | Works on Linux, macOS, and Windows |
@@ -192,6 +192,8 @@ target_link_libraries(your_target PRIVATE OpenSkp::OpenSkp)
 auto skp = openskp::SkpFile::open("my_model.skp");
 auto model = skp.parse();
 auto scene = skp.build_scene();
+auto glb = openskp::to_glb(scene);
+openskp::export_glb(scene, "my_model.glb");
 ```
 
 ---
@@ -209,7 +211,7 @@ graph TB
     WALK --> RAW["Raw parsed data<br/>defs · layers · materials · styles"]
     RAW --> PARSE["parse() -> SkpModel<br/>per-definition geometry,<br/>no scene resolution"]
     RAW --> SCENE["buildScene() -> Scene<br/>full placed instance tree,<br/>triangulated, world-space"]
-    SCENE --> GLB["toGLB() / openskp.export<br/>(Python + TypeScript today)"]
+    SCENE --> GLB["GLB export<br/>(Python + TypeScript + C++)"]
 
     style SKP fill:#f59e0b,color:#000,stroke:#d97706
     style RAW fill:#8b5cf6,color:#fff,stroke:#7c3aed

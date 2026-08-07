@@ -107,6 +107,8 @@ final scene = SkpFile.open("model.skp").buildScene();
 auto skp = openskp::SkpFile::open("model.skp");
 auto model = skp.parse();
 auto scene = skp.build_scene();
+auto glb = openskp::to_glb(scene);
+openskp::export_glb(scene, "model.glb");
 ```
 
 ## The data model
@@ -317,7 +319,7 @@ ships file-writing exporters on top of that data:
 | TypeScript | ✅ | ✅ `toGLB(scene)` in `index.ts` | ❌ not yet ported | ❌ not yet ported |
 | .NET | ✅ | ❌ not yet ported | ❌ not yet ported | ❌ not yet ported |
 | Dart | ✅ | ❌ not yet ported | ❌ not yet ported | ❌ not yet ported |
-| C++ | ✅ | ❌ not included in the initial port | ❌ not included | ❌ not included |
+| C++ | ✅ | ✅ `to_glb(scene)` / `export_glb(scene, path)` | ❌ not included | ❌ not included |
 
 Python is the only port with a full set of disk-writing exporters today,
 in `openskp.export`:
@@ -352,10 +354,11 @@ Notes on each:
   `None` unless a built `Scene` is passed via `scene=`, in which case it's
   the real, resolved, world-space instance tree.
 
-TypeScript's `toGLB(scene)` is the only other language with a complete,
-public, in-memory-to-`.glb`-bytes function (used by the
-[web viewer](#the-web-viewer)'s "Export GLB" button). .NET and Dart
-consumers who need a `.glb`/`.obj`/JSON file today need to serialize
+TypeScript's `toGLB(scene)` and C++'s `to_glb(scene)` provide complete,
+public, in-memory-to-`.glb` bytes; C++ also provides `export_glb(scene,
+path)` for direct file output. The C++ writer uses a private, pinned
+TinyGLTF dependency that does not appear in installed consumer interfaces.
+.NET and Dart consumers who need a `.glb`/`.obj`/JSON file today need to serialize
 `Scene`'s `GlbPrimitive`s themselves (the format is simple — see the glTF
 2.0 spec, or read TypeScript's `toGLB()` or Python's `openskp.export.obj`
 for reference implementations of exactly this data shape).
@@ -412,8 +415,8 @@ relying on the string-keyed `'ROOT'` entry.)
 
 Covered above under [Export capabilities](#export-capabilities) — Python
 has a full set of disk-writing exporters (GLB/OBJ/JSON); TypeScript has a
-public, complete in-memory `.glb` serializer; .NET, Dart, and C++ have neither
-yet, only the raw `Scene` data to serialize from.
+public in-memory `.glb` serializer; C++ has in-memory and disk GLB export but
+no OBJ/JSON writer; .NET and Dart have only the raw `Scene` data.
 
 ### Progress/logging mechanism
 
