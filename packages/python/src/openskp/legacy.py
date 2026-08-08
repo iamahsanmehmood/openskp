@@ -678,27 +678,49 @@ def _walk(data: bytes):
     if not ver_m:
         raise LegacyParseError("no version string in header")
     ver = int(ver_m.group(1))
-    ar = _Archive(data, ver)
-    ar.readers.update(_READERS)
-    r = ar.r
-
     # anchor: the material manager (u32 count right before the first
-    # CMaterial new-class record)
+    # CMaterial new-class record); zero-material files have no CMaterial
+    # record anywhere, so fall back to the first CLayer class record and
+    # start at the layer-list marker just before it
     m = re.search(re.escape(b'\xff\xff') + b'..'
                   + re.escape(struct.pack('<H', 9) + b'CMaterial'),
                   data, re.DOTALL)
-    if not m:
-        raise LegacyParseError("no CMaterial class record found")
-    mat_hdr = m.start()
-    mat_count = struct.unpack_from('<I', data, mat_hdr - 4)[0]
-    if mat_count > 100000:
-        raise LegacyParseError("implausible material count")
+    if m:
+        start = m.start()
+        mat_count = struct.unpack_from('<I', data, start - 4)[0]
+        if mat_count > 100000:
+            raise LegacyParseError("implausible material count")
+    else:
+        lm = re.search(re.escape(b'\xff\xff') + b'..'
+                       + re.escape(struct.pack('<H', 6) + b'CLayer'),
+                       data, re.DOTALL)
+        if not lm:
+            raise LegacyParseError("no CMaterial or CLayer class record found")
+        mat_count = 0
+        start = lm.start() - (9 if ver >= 17 else 8)
 
-    # bootstrap the absolute slot base: parse material 1 with a throwaway
-    # archive; material 2's class-ref tag names CMaterial's true slot
-    if mat_count < 2:
-        raise LegacyParseError(
-            "single-material bootstrap not implemented for this file")
+    if mat_count >= 2:
+        bases = [_bootstrap_two_materials(data, ver, start)]
+    else:
+        # single-material / no-material files: derive the base from the
+        # definition-list anchor, a back-ref to the ACTIVE layer object
+        bases = _probe_layer_anchor_bases(data, ver, start, mat_count)
+
+    last_exc = None
+    for base in bases:
+        try:
+            return _walk_model(data, ver, start, mat_count, base)
+        except (LegacyParseError, struct.error, IndexError,
+                UnicodeDecodeError) as exc:
+            last_exc = exc
+    if last_exc is not None:
+        raise last_exc
+    raise LegacyParseError("no viable slot base candidate")
+
+
+def _bootstrap_two_materials(data: bytes, ver: int, mat_hdr: int) -> int:
+    """Parse material 1 with a throwaway archive; material 2's class-ref
+    tag names CMaterial's true absolute slot."""
     boot = _Archive(data, ver)
     boot.readers.update(_READERS)
     boot.next_slot = 1 << 20
@@ -708,11 +730,57 @@ def _walk(data: bytes):
     tag = boot.r.peek_u16()
     if tag == 0xFFFF or not (tag & 0x8000):
         raise LegacyParseError("cannot bootstrap the slot base")
-    ar.next_slot = tag & 0x7FFF
-    ar.walk_base = ar.next_slot
+    return tag & 0x7FFF
+
+
+def _probe_layer_anchor_bases(data: bytes, ver: int, start: int,
+                              mat_count: int):
+    """Slot-base candidates for files where the two-material trick is
+    unavailable.
+
+    Parse the model prefix (materials, layer list) with a throwaway base;
+    the object right after the layer list is the definition-list anchor —
+    an ABSOLUTE back-ref to the active layer, an object we just allocated
+    relatively.  Each walked layer yields one candidate base; with a single
+    layer (the common case) the answer is exact.
+    """
+    boot = _Archive(data, ver)
+    boot.readers.update(_READERS)
+    b0 = 1 << 20
+    boot.next_slot = b0
+    boot.walk_base = b0
+    boot.r.pos = start
+    for _ in range(mat_count):
+        boot.read_object(boot.r, expect='CMaterial')
+    boot.r.u32()
+    if ver >= 17:
+        boot.r.u8()
+    layer_count = boot.r.u32()
+    if not 1 <= layer_count <= 100000:
+        raise LegacyParseError("implausible layer count in base probe")
+    layer_slots = []
+    for _ in range(layer_count):
+        s, _, _ = boot.read_object(boot.r, expect='CLayer')
+        layer_slots.append(s)
+    s, n, _ = boot.read_object(boot.r)
+    if n != 'premodel':
+        # under the throwaway base every absolute back-ref classifies as
+        # premodel; anything else means the prefix did not parse
+        raise LegacyParseError(f"base probe: anchor resolved to {n}")
+    return [s - (rel - b0) for rel in layer_slots
+            if 0 < s - (rel - b0) < b0]
+
+
+def _walk_model(data: bytes, ver: int, start: int, mat_count: int,
+                base: int):
+    ar = _Archive(data, ver)
+    ar.readers.update(_READERS)
+    ar.next_slot = base
+    ar.walk_base = base
+    r = ar.r
 
     # material manager
-    r.pos = mat_hdr
+    r.pos = start
     materials = []
     for _ in range(mat_count):
         s, _, v = ar.read_object(r, expect='CMaterial')
