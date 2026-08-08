@@ -122,6 +122,10 @@ class Face:
             ``u = (p·xr)/tile_w``, ``v = (p·yr)/tile_h``.  Distorted
             (4-pin) mappings are projective: ``uvq[2]`` ≠ 1.
         uv_transform_back: Same for the face's back side, or ``None``.
+        uv_projected: The texture is PROJECTED (e.g. the Add Location
+            terrain drape): its UVs run in the projection plane's frame,
+            not the face frame.
+        uv_projected_back: Same for the face's back side.
     """
 
     id: int
@@ -131,6 +135,8 @@ class Face:
     back_material_id: Optional[int] = None
     uv_transform: Optional[Tuple[float, ...]] = None
     uv_transform_back: Optional[Tuple[float, ...]] = None
+    uv_projected: bool = False
+    uv_projected_back: bool = False
 
 
 # ── Layers & Materials ────────────────────────────────────────────────────
@@ -461,6 +467,8 @@ class SkpFile:
                     back_material_id=f_data.get("back_material_id"),
                     uv_transform=f_data.get("uv_transform"),
                     uv_transform_back=f_data.get("uv_transform_back"),
+                    uv_projected=f_data.get("uv_projected", False),
+                    uv_projected_back=f_data.get("uv_projected_back", False),
                 )
             # Populate instances
             for inst in builder.instances:
