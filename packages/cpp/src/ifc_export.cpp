@@ -39,23 +39,11 @@ std::tuple<double, double, double, double> get_prim_rgb(const Scene& scene, size
   double r = 0.8, g = 0.8, b = 0.8, a = 1.0;
   if (prim_mat_idx < scene.gltf_materials.size()) {
     const auto& mat = scene.gltf_materials[prim_mat_idx];
-    auto pbr_it = mat.find("pbrMetallicRoughness");
-    if (pbr_it != mat.end() &&
-        std::holds_alternative<std::map<std::string, MaterialValue>>(pbr_it->second)) {
-      const auto& pbr = std::get<std::map<std::string, MaterialValue>>(pbr_it->second);
-      auto col_it = pbr.find("baseColorFactor");
-      if (col_it != pbr.end() && std::holds_alternative<std::vector<double>>(col_it->second)) {
-        const auto& color_vec = std::get<std::vector<double>>(col_it->second);
-        if (color_vec.size() >= 3) {
-          r = std::max(0.0, std::min(1.0, color_vec[0]));
-          g = std::max(0.0, std::min(1.0, color_vec[1]));
-          b = std::max(0.0, std::min(1.0, color_vec[2]));
-          if (color_vec.size() >= 4) {
-            a = std::max(0.0, std::min(1.0, color_vec[3]));
-          }
-        }
-      }
-    }
+    const auto& col = mat.pbr_metallic_roughness.base_color_factor;
+    r = std::max(0.0, std::min(1.0, col[0]));
+    g = std::max(0.0, std::min(1.0, col[1]));
+    b = std::max(0.0, std::min(1.0, col[2]));
+    a = std::max(0.0, std::min(1.0, col[3]));
   }
   return {r, g, b, a};
 }

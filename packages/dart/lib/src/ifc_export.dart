@@ -36,7 +36,7 @@ List<double> getPrimRgb(Scene scene, int primMatIdx) {
   double r = 0.8, g = 0.8, b = 0.8, a = 1.0;
   if (primMatIdx >= 0 && primMatIdx < scene.gltfMaterials.length) {
     final mat = scene.gltfMaterials[primMatIdx];
-    if (mat is Map && mat['pbrMetallicRoughness'] is Map) {
+    if (mat['pbrMetallicRoughness'] is Map) {
       final pbr = mat['pbrMetallicRoughness'] as Map;
       if (pbr['baseColorFactor'] is List) {
         final vec = pbr['baseColorFactor'] as List;
