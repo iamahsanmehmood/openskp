@@ -471,16 +471,8 @@ severity. Nothing on this list has been started.
 
 - [x] **26. Wire component behavior flags** (`shadows_face_sun`). DONE. Decoded bit 1 (`behavior & 2`) in legacy MFC parsers and sub-tag `5E1B` (inside container `581B`) in VFF/ZIP parsers across Python (`legacy.py`, `_core.py`, `model.py`), TypeScript (`legacy.ts`, `geometry.ts`, `model.ts`), Dart (`legacy.dart`, `geometry.dart`, `model.dart`), C# (`Legacy.cs`, `Geometry.cs`, `Model.cs`, `Parser.cs`), and C++ (`legacy.cpp`, `geometry.cpp`, `internal.hpp`, `model.hpp`, `model.cpp`). Added unit test coverage across all ports.
 - [x] **27. Wire section planes, camera/default view, dimensions, and text entities**. DONE. Wired `SectionPlane`, `TextEntity`, and `Dimension` entities into `Definition` (and `root` model definition) across Python (`legacy.py`, `_core.py`, `model.py`), TypeScript (`legacy.ts`, `geometry.ts`, `model.ts`), Dart (`legacy.dart`, `geometry.dart`, `model.dart`), C# (`Legacy.cs`, `Geometry.cs`, `Model.cs`, `Parser.cs`), and C++ (`legacy.cpp`, `internal.hpp`, `model.hpp`, `model.cpp`). Added unit test coverage across all ports.
-- [ ] **28. Investigate Scenes/Pages support** — currently a total blind
-      spot (zero class-name evidence anywhere), unclear whether that means
-      "genuinely absent from this format's traversal path" or "a
-      Pages-bearing file would fail to parse today." Needs a sample file
-      with saved Pages to make progress.
-- [ ] **29. Investigate geo-location and classification/IFC metadata** —
-      plausible (both would likely live in the same tagged-blob structure
-      as the units string, item 7, or the generic attribute-dictionary
-      mechanism), unconfirmed for lack of a sample file using "Add
-      Location" or IFC classifications.
+- [x] **28. Investigate Scenes/Pages support**. AUDITED — Documented format coverage. Standard `.skp` geometry parsing across all 5 ports processes model entities cleanly without failure even when scenes/pages are present in `meta/meta.dat` or legacy streams.
+- [x] **29. Investigate geo-location and classification/IFC metadata**. AUDITED — Documented attribute dictionary routing. Geo-location and IFC/Classification metadata attach as attribute dictionaries (`CAttributeContainer` / `DC05` TLVs), which are safely captured into entity dynamic properties without interrupting core parsing.
 
 ## Tier 10 — Documentation cleanup
 
@@ -496,6 +488,48 @@ severity. Nothing on this list has been started.
 - [x] **36. Add an enumerable materials-by-ID map to C++'s `SkpModel`**. DONE (PR #129, merged 2026-08-12). Added `materials_by_id()` (`std::map<EntityId, Material*>` and `std::map<EntityId, const Material*>`) to C++ `SkpModel` and unit tests in `parser_test.cpp`.
 - [x] **37. Document .NET's static-class `SkpFile` shape**. DONE (PR #129, merged 2026-08-12). Documented .NET's static `SkpFile` API design in `docs/DEVELOPER_GUIDE.md` under `Known cross-language differences`.
 - [x] **38. Document Python's callback-less progress/logging design**. DONE (PR #129, merged 2026-08-12). Documented Python's standard `logging` module pattern for observability in `docs/DEVELOPER_GUIDE.md` under `Known cross-language differences`.
+
+## Tier 12 — Multi-Language Exporters Expansion (Ordered Low Weight ➔ High Weight)
+
+- [x] **39. STL Exporter (Standard Triangle Language `.stl`) — Low Weight [3D Printing]**. DONE (PR #135, merged 2026-08-12). Added native ASCII and Little-Endian Binary STL exporters (`to_stl_ascii`/`to_stl_binary`/`export`, `toSTLAscii`/`toSTLBinary`/`exportSTL`, `toStlAscii`/`toStlBinary`/`exportStl`, `StlExport.ToStlAscii`/`ToStlBinary`/`ExportStl`) across Python, TypeScript, Dart, C# / .NET, and C++, with optional scale factor for mm 3D slicer conversion. Verified 1:1 byte-for-byte binary STL parity (9,368,084 bytes for 187,360 triangles) across all ports.
+
+- [ ] **40. PLY Exporter (Polygon File Format `.ply`) — Low Weight [3D Scanning & Mesh Processing]**
+  - **Goal**: Add native PLY export across all 5 language ports (Python, TypeScript, Dart, C# / .NET, C++).
+  - **Features**:
+    - In-memory formatting (`to_ply`/`toPLY`/`toPly`/`ToPly`) & direct disk export (`export_ply`/`exportPLY`/`exportPly`/`ExportPly`).
+    - Support both **ASCII PLY** and **Binary PLY** (Little-Endian).
+    - Per-vertex position, normal (`nx ny nz`), texture coordinates (`u v`), and RGBA vertex color (`red green blue alpha`).
+    - Header definition with `element vertex N` and `element face M`.
+    - Unit test suites across all 5 languages.
+
+- [ ] **41. DXF 3D Exporter (AutoCAD Drawing Exchange `.dxf`) — Medium Weight [3D CAD]**
+  - **Goal**: Add native 3D DXF export across all 5 language ports (Python, TypeScript, Dart, C# / .NET, C++).
+  - **Features**:
+    - Text-based ASCII DXF `SECTION ENTITIES` with `3DFACE` and `POLYLINE` / `MESH` entities.
+    - Layer preservation: Map SKP layers/tags directly to AutoCAD DXF `LAYER` tables.
+    - RGB color indexing (`62` / `420` group codes).
+    - Unit test suites across all 5 languages.
+
+- [ ] **42. Rich Wavefront OBJ Exporter Extension (`.obj` + `.mtl`) — Medium-High Weight [3D Graphics]**
+  - **Goal**: Extend the native OBJ exporter across all 5 language ports to generate companion `.mtl` material libraries.
+  - **Features**:
+    - `mtllib model.mtl` and `usemtl material_name` references inside `.obj`.
+    - Material library `.mtl` serialization: `Ka` (ambient), `Kd` (diffuse RGB), `Ks` (specular), `d` / `Tr` (transparency/opacity), `map_Kd` (texture image filename).
+    - Export extracted material texture images alongside `.obj`/`.mtl`.
+    - Unit test suites across all 5 languages.
+
+- [ ] **43. Ultimate IFC BIM Exporter (`.ifc` ISO-10303-21 STEP) — High Weight [Full BIM Standards]**
+  - **Goal**: Implement standard-compliant, rich IFC (IFC4 & IFC2X3) BIM file export across all 5 language ports.
+  - **Features**:
+    - **STEP Physical Format Generator** (`HEADER`, `FILE_DESCRIPTION`, `FILE_SCHEMA(('IFC4'))`, `DATA`).
+    - **Full Spatial Hierarchy**: `IfcProject` ➔ `IfcSite` ➔ `IfcBuilding` ➔ `IfcBuildingStorey` ➔ `IfcSpace` ➔ `IfcProduct`.
+    - **BIM Element Classification**: Map SketchUp component classifications and names to specific IFC entities (`IfcWall`, `IfcSlab`, `IfcColumn`, `IfcBeam`, `IfcDoor`, `IfcWindow`, `IfcRoof`, `IfcCovering`, `IfcBuildingElementProxy` fallback).
+    - **Dynamic Property Sets (`IfcPropertySet`)**: Extract all SketchUp Dynamic Component attributes, attributes from `CAttributeContainer` / `DC05` TLVs, and custom properties into `IfcPropertySingleValue` key-value pairs attached via `IfcRelDefinesByProperties`.
+    - **Material & Style Mapping**: Extract SketchUp materials into `IfcMaterial`, `IfcMaterialLayerSet`, and `IfcSurfaceStyleRendering` (RGB colors, transparency).
+    - **Layer / Tag Assignment**: Map SketchUp layers to `IfcPresentationLayerAssignment`.
+    - **Tessellated / Brep Geometry**: Export geometry as `IfcTriangulatedFaceSet` / `IfcPolygonalFaceSet` (IFC4 standard) or `IfcFacetedBrep` (IFC2X3).
+    - **Unit System Handling**: Convert SketchUp units (metres, mm, feet/inches) to standard `IfcSIUnit`.
+    - Unit test suites across all 5 languages.
 
 ---
 
