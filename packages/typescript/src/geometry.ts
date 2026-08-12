@@ -45,6 +45,7 @@ export interface ParsedDefinition {
   name: string;
   isImage: boolean;
   alwaysFacesCamera: boolean;
+  shadowsFaceSun?: boolean;
   builder: GeometryBuilder;
 }
 
@@ -418,6 +419,7 @@ export function collectDefs(
       let name: string | null = null;
       let isImage = false;
       let facesCamera = false;
+      let shadowsFaceSun = false;
       for (const child of el.children) {
         if (child.tag === '7D15' && child.payload.length === 16) {
           let hex = '';
@@ -450,6 +452,8 @@ export function collectDefs(
             // Tag 0x5d 0x1b contains component definition flags (1 = always faces camera)
             if (pl[pos] === 0x5d && pl[pos + 1] === 0x1b && subSize >= 1) {
               facesCamera = parseVarInt(pl, pos + 6, subSize) === 1;
+            } else if (pl[pos] === 0x5e && pl[pos + 1] === 0x1b && subSize >= 1) {
+              shadowsFaceSun = parseVarInt(pl, pos + 6, subSize) === 1;
             }
             pos += 6 + subSize;
           }
@@ -464,6 +468,7 @@ export function collectDefs(
           name: name || '',
           isImage,
           alwaysFacesCamera: facesCamera,
+          shadowsFaceSun,
           builder,
         });
       }

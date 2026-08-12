@@ -288,10 +288,10 @@ describe('Image entities', () => {
   });
 });
 
-describe('Always faces camera (component behavior flags)', () => {
-  it('marks Definition.alwaysFacesCamera when 581B carries 5D1B == 1', () => {
-    const behaviorOn = tlv('581B', tlv('5D1B', new Uint8Array([0x01])));
-    const behaviorOff = tlv('581B', tlv('5D1B', new Uint8Array([0x00])));
+describe('Always faces camera and shadows face sun (component behavior flags)', () => {
+  it('marks Definition.alwaysFacesCamera and shadowsFaceSun when 581B carries 5D1B and 5E1B', () => {
+    const behaviorOn = tlv('581B', concatBytes(tlv('5D1B', new Uint8Array([0x01])), tlv('5E1B', new Uint8Array([0x01]))));
+    const behaviorOff = tlv('581B', concatBytes(tlv('5D1B', new Uint8Array([0x00])), tlv('5E1B', new Uint8Array([0x00]))));
 
     const susan = tlv(
       '7C15',
@@ -306,9 +306,9 @@ describe('Always faces camera (component behavior flags)', () => {
     const elements = parseTlvRecursive(buf, 0, buf.length);
     const defsDict = collectDefs(elements);
 
-    const names = Array.from(defsDict.values()).map((d) => [d.name, d.alwaysFacesCamera]);
-    expect(names).toContainEqual(['Susan', true]);
-    expect(names).toContainEqual(['Chair', false]);
+    const names = Array.from(defsDict.values()).map((d) => [d.name, d.alwaysFacesCamera, d.shadowsFaceSun]);
+    expect(names).toContainEqual(['Susan', true, true]);
+    expect(names).toContainEqual(['Chair', false, false]);
   });
 });
 

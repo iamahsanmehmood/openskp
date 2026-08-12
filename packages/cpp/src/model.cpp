@@ -48,6 +48,7 @@ static Definition definition(EntityId id, RawDefinition&& r) {
   d.guid = std::move(r.guid);
   d.name = std::move(r.name);
   d.always_faces_camera = r.always_faces_camera;
+  d.shadows_face_sun = r.shadows_face_sun;
   d.is_image = r.is_image;
   for (auto& v : r.builder.vertices)
     d.vertices.emplace(v.first, Vertex{v.first, v.second[0], v.second[1], v.second[2]});

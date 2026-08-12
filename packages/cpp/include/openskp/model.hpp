@@ -185,6 +185,8 @@ struct Definition {
   std::vector<Instance> instances;
   /// Always faces camera behavior flag.
   bool always_faces_camera{};
+  /// Shadows face sun behavior flag.
+  bool shadows_face_sun{};
   /// Image entity flag.
   bool is_image{};
 };

@@ -73,9 +73,9 @@ TEST(Geometry, MarksImageAndAlwaysFacesCameraDefinitions) {
   const auto image = tlv(
       "7C15", concat({tlv("DE05", {1}), tlv("7E15", test::bytes("imagen#1")), tlv("8315", {2})}));
   const auto billboard = tlv("7C15", concat({tlv("DE05", {2}), tlv("7E15", test::bytes("Susan")),
-                                             tlv("581B", tlv("5D1B", {1}))}));
+                                             tlv("581B", concat({tlv("5D1B", {1}), tlv("5E1B", {1})}))}));
   const auto ordinary = tlv("7C15", concat({tlv("DE05", {3}), tlv("7E15", test::bytes("Chair")),
-                                            tlv("581B", tlv("5D1B", {0}))}));
+                                            tlv("581B", concat({tlv("5D1B", {0}), tlv("5E1B", {0})}))}));
 
   const auto bytes = concat({image, billboard, ordinary});
   std::map<EntityId, RawDefinition> definitions;
@@ -84,7 +84,9 @@ TEST(Geometry, MarksImageAndAlwaysFacesCameraDefinitions) {
   EXPECT_TRUE(definitions.at(1).is_image);
   EXPECT_FALSE(definitions.at(2).is_image);
   EXPECT_TRUE(definitions.at(2).always_faces_camera);
+  EXPECT_TRUE(definitions.at(2).shadows_face_sun);
   EXPECT_FALSE(definitions.at(3).always_faces_camera);
+  EXPECT_FALSE(definitions.at(3).shadows_face_sun);
 }
 
 TEST(Geometry, ExtractsBackMaterialAndEdgeFlags) {

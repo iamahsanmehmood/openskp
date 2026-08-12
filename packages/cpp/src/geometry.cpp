@@ -262,9 +262,12 @@ void collect_definitions(const std::vector<TlvNode>& ns, std::map<EntityId, RawD
         else if (c.tag == "8315" && !c.payload.empty())
           d.is_image = parse_varint(c.payload, 0, c.payload.size()) == 2;
         else if (c.tag == "581B")
-          for (auto& v : parse_flat(c.payload))
+          for (auto& v : parse_flat(c.payload)) {
             if (v.first == "5D1B" && !v.second.empty())
               d.always_faces_camera = parse_varint(v.second, 0, v.second.size()) == 1;
+            else if (v.first == "5E1B" && !v.second.empty())
+              d.shadows_face_sun = parse_varint(v.second, 0, v.second.size()) == 1;
+          }
       }
       collect_geometry(e.children, d.builder);
       if (auto id = entity_id(e)) out[*id] = std::move(d);

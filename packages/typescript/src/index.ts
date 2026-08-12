@@ -259,6 +259,7 @@ function parseToRaw(buffer: ArrayBuffer, options?: ParseOptions): ParsedRawData 
     name: 'ROOT_MODEL',
     isImage: false,
     alwaysFacesCamera: false,
+    shadowsFaceSun: false,
     builder: rootBuilder,
   });
 

@@ -95,12 +95,14 @@ class RawDefinition {
   String? guid;
   String? name;
   bool alwaysFacesCamera;
+  bool shadowsFaceSun;
   bool isImage;
   GeometryBuilder builder;
   RawDefinition({
     this.guid,
     this.name,
     this.alwaysFacesCamera = false,
+    this.shadowsFaceSun = false,
     this.isImage = false,
     GeometryBuilder? builder,
   }) : builder = builder ?? GeometryBuilder();
@@ -466,6 +468,7 @@ class Geometry {
         String? guid;
         String? name;
         bool facesCamera = false;
+        bool shadowsFaceSun = false;
         bool isImage = false;
         for (final child in el.children) {
           if (child.tag == '7D15' && child.payload.length == 16) {
@@ -482,6 +485,8 @@ class Geometry {
               if (pos + 6 + subSize > pl.length) break;
               if (subTag == '5D1B' && subSize >= 1) {
                 facesCamera = Tlv.parseVarInt(pl, pos + 6, subSize) == 1;
+              } else if (subTag == '5E1B' && subSize >= 1) {
+                shadowsFaceSun = Tlv.parseVarInt(pl, pos + 6, subSize) == 1;
               }
               pos += 6 + subSize;
             }
@@ -498,6 +503,7 @@ class Geometry {
             guid: guid,
             name: name,
             alwaysFacesCamera: facesCamera,
+            shadowsFaceSun: shadowsFaceSun,
             isImage: isImage,
             builder: builder,
           );

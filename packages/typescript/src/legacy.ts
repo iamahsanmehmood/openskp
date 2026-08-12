@@ -795,6 +795,7 @@ function readDefinition(ar: Archive, r: R): any {
     guid: toHex(guid),
     ents,
     faces_camera: Boolean(behavior & 1),
+    shadows_face_sun: Boolean(behavior & 2),
   };
 }
 
@@ -1184,6 +1185,7 @@ export function parseLegacyToRaw(data: Uint8Array, options?: ParseOptions): Pars
           name: d.name,
           isImage: false,
           alwaysFacesCamera: d.faces_camera || false,
+          shadowsFaceSun: d.shadows_face_sun || false,
           builder: b,
         });
         processed++;
@@ -1208,6 +1210,7 @@ export function parseLegacyToRaw(data: Uint8Array, options?: ParseOptions): Pars
     name: 'ROOT_MODEL',
     isImage: false,
     alwaysFacesCamera: false,
+    shadowsFaceSun: false,
     builder: rootBuilder,
   });
 

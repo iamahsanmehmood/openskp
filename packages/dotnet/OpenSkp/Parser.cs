@@ -92,6 +92,7 @@ namespace OpenSkp
                 Guid = d.Guid ?? "",
                 Name = d.Name ?? "",
                 AlwaysFacesCamera = d.AlwaysFacesCamera,
+                ShadowsFaceSun = d.ShadowsFaceSun,
                 IsImage = d.IsImage,
             };
 

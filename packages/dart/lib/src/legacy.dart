@@ -437,11 +437,13 @@ class DefinitionRec {
   String guid;
   List<(int, String?, Object?)> ents;
   bool facesCamera;
+  bool shadowsFaceSun;
   DefinitionRec(
       {required this.name,
       required this.guid,
       required this.ents,
-      required this.facesCamera});
+      required this.facesCamera,
+      required this.shadowsFaceSun});
 }
 
 class InstanceRec {
@@ -942,6 +944,7 @@ class LegacyReaders {
       guid: Tlv.toHexUpper(guid),
       ents: ents,
       facesCamera: (behavior & 1) != 0,
+      shadowsFaceSun: (behavior & 2) != 0,
     );
   }
 
@@ -1338,6 +1341,7 @@ class Legacy {
             name: d.name,
             isImage: false,
             alwaysFacesCamera: d.facesCamera,
+            shadowsFaceSun: d.shadowsFaceSun,
             builder: b,
           );
           processed++;

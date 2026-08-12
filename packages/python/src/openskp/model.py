@@ -336,6 +336,7 @@ class Definition:
     faces: Dict[int, Face] = field(default_factory=dict)
     instances: List[Instance] = field(default_factory=list)
     always_faces_camera: bool = False
+    shadows_face_sun: bool = False
     is_image: bool = False
 
 
@@ -467,6 +468,7 @@ class SkpFile:
                 guid=d.get("guid", ""),
                 name=d.get("name", "") or "",
                 always_faces_camera=d.get("always_faces_camera", False),
+                shadows_face_sun=d.get("shadows_face_sun", False),
                 is_image=d.get("is_image", False),
             )
             # Populate vertices

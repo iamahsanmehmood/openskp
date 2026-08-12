@@ -148,6 +148,7 @@ namespace OpenSkp
         public Dictionary<long, Face> Faces { get; set; } = new Dictionary<long, Face>();
         public List<Instance> Instances { get; set; } = new List<Instance>();
         public bool AlwaysFacesCamera { get; set; }
+        public bool ShadowsFaceSun { get; set; }
         public bool IsImage { get; set; }
     }
 

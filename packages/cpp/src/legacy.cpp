@@ -117,6 +117,7 @@ struct V {
   std::uint64_t tex_dib{};
   bool sense{};
   bool faces_camera{};
+  bool shadows_face_sun{};
   bool colorized{};
   int mat{};
   int back_mat{};
@@ -510,6 +511,7 @@ struct Archive {
       if (tpos == std::string::npos) throw std::runtime_error("definition thumbnail not found");
       auto gap = r.raw(tpos - r.p);
       v->faces_camera = gap.size() >= 9 && (gap[gap.size() - 9] & 1);
+      v->shadows_face_sun = gap.size() >= 9 && (gap[gap.size() - 9] & 2);
       object("CThumbnail");
     } else if (n == "CComponentInstance" || n == "CGroup") {
       v->attrs = preamble();
@@ -790,6 +792,7 @@ RawParsed parse_legacy(const ByteBuffer& data, const ParseOptions& o) {
         d.name = s.second.v->name;
         d.guid = s.second.v->guid;
         d.always_faces_camera = s.second.v->faces_camera;
+        d.shadows_face_sun = s.second.v->shadows_face_sun;
         fill(d.builder, s.second.v->ents, ar.slots);
         out.definitions[s.first] = std::move(d);
       }

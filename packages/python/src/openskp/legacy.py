@@ -619,7 +619,8 @@ def _read_definition(ar, r):
     behavior = gap[-9] if len(gap) >= 9 else 0
     ar.read_object(r, expect='CThumbnail')
     return {'k': 'definition', 'name': name, 'guid': guid.hex().upper(),
-            'ents': ents, 'faces_camera': bool(behavior & 1)}
+            'ents': ents, 'faces_camera': bool(behavior & 1),
+            'shadows_face_sun': bool(behavior & 2)}
 
 
 def _read_instance(ar, r):
@@ -1024,6 +1025,7 @@ def full_parse_legacy(skp_path: str) -> Dict[str, Any]:
                 defs_dict[s] = {'guid': d['guid'], 'name': d['name'],
                                 'is_image': False,
                                 'always_faces_camera': d.get('faces_camera', False),
+                                'shadows_face_sun': d.get('shadows_face_sun', False),
                                 'builder': b}
                 processed += 1
                 if processed % _PROGRESS_INTERVAL == 0:

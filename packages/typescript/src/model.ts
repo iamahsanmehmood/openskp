@@ -33,6 +33,7 @@ export interface Definition {
   instances: Instance[];
   isImage: boolean;
   alwaysFacesCamera: boolean;
+  shadowsFaceSun: boolean;
 }
 
 export interface Vertex {
@@ -291,7 +292,7 @@ export function buildModelFromParsed(parsed: ParsedRawData): SkpModel {
     // group). Kept out of `definitions` (which is numeric-ID-only, one
     // entry per real component/group definition) and exposed here instead,
     // matching the .NET and Dart ports' `Root`/`root` field.
-    root: rootDefinition ?? { id: 0, guid: 'ROOT', name: 'ROOT_MODEL', vertices: [], edges: [], faces: [], instances: [], isImage: false, alwaysFacesCamera: false },
+    root: rootDefinition ?? { id: 0, guid: 'ROOT', name: 'ROOT_MODEL', vertices: [], edges: [], faces: [], instances: [], isImage: false, alwaysFacesCamera: false, shadowsFaceSun: false },
     layers: finalLayersList,
     materials: finalMaterialsList,
     materialsById,
@@ -349,6 +350,7 @@ function buildDefinition(id: number, d: ParsedDefinition): Definition {
     instances,
     isImage: d.isImage,
     alwaysFacesCamera: d.alwaysFacesCamera,
+    shadowsFaceSun: d.shadowsFaceSun || false,
   };
 }
 

@@ -109,6 +109,7 @@ namespace OpenSkp.Tests
 
             Assert.False(def66.IsImage);
             Assert.False(def66.AlwaysFacesCamera);
+            Assert.False(def66.ShadowsFaceSun);
 
             // materialsById join: TLV material ID 26180 resolves to the
             // default "*" material, and the resolved object is the SAME

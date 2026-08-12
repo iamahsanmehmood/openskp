@@ -180,6 +180,7 @@ class Definition {
   final Map<int, Face> faces = {};
   final List<Instance> instances = [];
   final bool alwaysFacesCamera;
+  final bool shadowsFaceSun;
   final bool isImage;
 
   Definition({
@@ -187,6 +188,7 @@ class Definition {
     this.guid = '',
     this.name = '',
     this.alwaysFacesCamera = false,
+    this.shadowsFaceSun = false,
     this.isImage = false,
   });
 }

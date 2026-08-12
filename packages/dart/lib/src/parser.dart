@@ -127,6 +127,7 @@ class SkpFile {
       guid: d.guid ?? '',
       name: d.name ?? '',
       alwaysFacesCamera: d.alwaysFacesCamera,
+      shadowsFaceSun: d.shadowsFaceSun,
       isImage: d.isImage,
     );
 

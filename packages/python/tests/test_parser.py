@@ -1258,10 +1258,10 @@ class TestFaceCameraBehavior:
 
         t = self._tlv
         on = t('7C15', (t('7D15', b'\x11' * 16) + t('7E15', b'Susan')
-                        + t('581B', t('5D1B', b'\x01'))
+                        + t('581B', t('5D1B', b'\x01') + t('5E1B', b'\x01'))
                         + t('DC05', t('DE05', b'\x05'))))
         off = t('7C15', (t('7D15', b'\x22' * 16) + t('7E15', b'Silla')
-                         + t('581B', t('5D1B', b'\x00'))
+                         + t('581B', t('5D1B', b'\x00') + t('5E1B', b'\x00'))
                          + t('DC05', t('DE05', b'\x06'))))
         model_dat = t('F901', t('7017', t('7117', on + off)))
         buf = io.BytesIO()
@@ -1273,7 +1273,9 @@ class TestFaceCameraBehavior:
         model = SkpFile.open(str(path)).parse()
         by_name = {d.name: d for d in model.definitions.values()}
         assert by_name['Susan'].always_faces_camera is True
+        assert by_name['Susan'].shadows_face_sun is True
         assert by_name['Silla'].always_faces_camera is False
+        assert by_name['Silla'].shadows_face_sun is False
 
 
 # ── Image entity tests ───────────────────────────────────────────────────

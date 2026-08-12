@@ -120,6 +120,7 @@ void main() {
 
     expect(def66.isImage, isFalse);
     expect(def66.alwaysFacesCamera, isFalse);
+    expect(def66.shadowsFaceSun, isFalse);
 
     // materialsById join: TLV material ID 26180 resolves to the default "*"
     // material, and the resolved object is the SAME instance held in

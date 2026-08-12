@@ -423,6 +423,7 @@ namespace OpenSkp
         public string Guid = "";
         public List<(int Slot, string? Name, object? Value)> Ents = new List<(int, string?, object?)>();
         public bool FacesCamera;
+        public bool ShadowsFaceSun;
     }
     internal sealed class InstanceRec
     {
@@ -939,6 +940,7 @@ namespace OpenSkp
                 Guid = LegacyBytes.ToHex(guid),
                 Ents = ents,
                 FacesCamera = (behavior & 1) != 0,
+                ShadowsFaceSun = (behavior & 2) != 0,
             };
         }
 
@@ -1416,6 +1418,7 @@ namespace OpenSkp
                             Name = d.Name,
                             IsImage = false,
                             AlwaysFacesCamera = d.FacesCamera,
+                            ShadowsFaceSun = d.ShadowsFaceSun,
                             Builder = ToGeometryBuilder(b),
                         };
                         processed++;

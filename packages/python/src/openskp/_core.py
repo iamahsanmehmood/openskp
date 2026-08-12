@@ -978,6 +978,7 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
                 guid = None
                 name = None
                 faces_camera = False
+                shadows_face_sun = False
                 is_image = False
                 for child in el['children']:
                     if child['tag'] == '7D15' and len(child['payload']) == 16:
@@ -998,6 +999,9 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
                             if sub_tag == '5D1B' and sub_size >= 1:
                                 faces_camera = parse_var_int(
                                     pl, pos+6, sub_size) == 1
+                            elif sub_tag == '5E1B' and sub_size >= 1:
+                                shadows_face_sun = parse_var_int(
+                                    pl, pos+6, sub_size) == 1
                             pos += 6 + sub_size
                     elif child['tag'] == '8315' and child['payload']:
                         # Definition kind: observed 0/1 for ordinary
@@ -1010,6 +1014,7 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
                 _extract_geometry_from_nodes(el['children'], builder)
                 defs_dict[ent_id] = {'guid': guid, 'name': name,
                                      'always_faces_camera': faces_camera,
+                                     'shadows_face_sun': shadows_face_sun,
                                      'is_image': is_image, 'builder': builder}
             collect_defs(el['children'])
 

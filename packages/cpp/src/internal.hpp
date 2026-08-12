@@ -59,6 +59,7 @@ struct RawDefinition {
   std::string guid;
   std::string name;
   bool always_faces_camera{};
+  bool shadows_face_sun{};
   bool is_image{};
   GeometryBuilder builder;
 };

@@ -461,6 +461,7 @@ namespace OpenSkp
             public string? Guid;
             public string? Name;
             public bool AlwaysFacesCamera;
+            public bool ShadowsFaceSun;
             public bool IsImage;
             public GeometryBuilder Builder = new GeometryBuilder();
         }
@@ -474,6 +475,7 @@ namespace OpenSkp
                     string? guid = null;
                     string? name = null;
                     bool facesCamera = false;
+                    bool shadowsFaceSun = false;
                     bool isImage = false;
                     foreach (var child in el.Children)
                     {
@@ -498,6 +500,10 @@ namespace OpenSkp
                                 {
                                     facesCamera = Tlv.ParseVarInt(pl, pos + 6, (int)subSize) == 1;
                                 }
+                                else if (subTag == "5E1B" && subSize >= 1)
+                                {
+                                    shadowsFaceSun = Tlv.ParseVarInt(pl, pos + 6, (int)subSize) == 1;
+                                }
                                 pos += 6 + (int)subSize;
                             }
                         }
@@ -516,6 +522,7 @@ namespace OpenSkp
                             Guid = guid,
                             Name = name,
                             AlwaysFacesCamera = facesCamera,
+                            ShadowsFaceSun = shadowsFaceSun,
                             IsImage = isImage,
                             Builder = builder,
                         };
