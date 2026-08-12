@@ -109,6 +109,7 @@ set(
   src/errors.cpp
   src/geometry.cpp
   src/glb.cpp
+  src/ifc_export.cpp
   src/json_export.cpp
   src/legacy.cpp
   src/model.cpp
