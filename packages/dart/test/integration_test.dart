@@ -177,5 +177,8 @@ void main() {
 
     expect(scene.meshIndex.length, 1);
     expect(scene.meshIndex.values.first.definitionName, 'ROOT_MODEL');
+    expect(model.root.sectionPlanes, isEmpty);
+    expect(model.root.texts, isEmpty);
+    expect(model.root.dimensions, isEmpty);
   });
 }

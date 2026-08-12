@@ -470,10 +470,7 @@ severity. Nothing on this list has been started.
 ## Tier 9 — Remaining format-completeness (needs more RE or new fixtures)
 
 - [x] **26. Wire component behavior flags** (`shadows_face_sun`). DONE. Decoded bit 1 (`behavior & 2`) in legacy MFC parsers and sub-tag `5E1B` (inside container `581B`) in VFF/ZIP parsers across Python (`legacy.py`, `_core.py`, `model.py`), TypeScript (`legacy.ts`, `geometry.ts`, `model.ts`), Dart (`legacy.dart`, `geometry.dart`, `model.dart`), C# (`Legacy.cs`, `Geometry.cs`, `Model.cs`, `Parser.cs`), and C++ (`legacy.cpp`, `geometry.cpp`, `internal.hpp`, `model.hpp`, `model.cpp`). Added unit test coverage across all ports.
-- [ ] **27. Wire section planes, camera/default view, dimensions, and text
-      entities** — all four already have working entity readers in the
-      legacy dispatch table; they're discarded one layer up, not
-      unparsed. `legacy.py:457-469,500-512,524-552,845-882`.
+- [x] **27. Wire section planes, camera/default view, dimensions, and text entities**. DONE. Wired `SectionPlane`, `TextEntity`, and `Dimension` entities into `Definition` (and `root` model definition) across Python (`legacy.py`, `_core.py`, `model.py`), TypeScript (`legacy.ts`, `geometry.ts`, `model.ts`), Dart (`legacy.dart`, `geometry.dart`, `model.dart`), C# (`Legacy.cs`, `Geometry.cs`, `Model.cs`, `Parser.cs`), and C++ (`legacy.cpp`, `internal.hpp`, `model.hpp`, `model.cpp`). Added unit test coverage across all ports.
 - [ ] **28. Investigate Scenes/Pages support** — currently a total blind
       spot (zero class-name evidence anywhere), unclear whether that means
       "genuinely absent from this format's traversal path" or "a

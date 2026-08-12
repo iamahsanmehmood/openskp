@@ -169,6 +169,9 @@ namespace OpenSkp.Tests
 
             Assert.Single(scene.MeshIndex);
             Assert.Equal("ROOT_MODEL", scene.MeshIndex.Values.First().DefinitionName);
+            Assert.Empty(model.Root.SectionPlanes);
+            Assert.Empty(model.Root.Texts);
+            Assert.Empty(model.Root.Dimensions);
         }
 
         [Fact]

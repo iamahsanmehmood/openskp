@@ -995,6 +995,9 @@ class LegacyBuilder {
   edgeFlags = new Map<number, number>();
   faces = new Map<number, GeometryBuilderFace>();
   instances: GeometryBuilderInstance[] = [];
+  sectionPlanes: { plane: [number, number, number, number]; name: string; label: string; hidden: boolean }[] = [];
+  texts: { text: string; hidden: boolean }[] = [];
+  dimensions: { text: string; hidden: boolean }[] = [];
 }
 
 function addEdge(builder: LegacyBuilder, slot: number, e: any, slots: Map<number, SlotEntry>): void {
@@ -1071,6 +1074,23 @@ function fillBuilder(builder: LegacyBuilder, ents: [number, string | null, any][
         hidden: Boolean(v.db.hidden),
         children: [],
         properties: extractLegacyDynamicProperties(v.attrs),
+      });
+    } else if (k === 'sectionplane') {
+      builder.sectionPlanes.push({
+        plane: v.plane || [0, 0, 1, 0],
+        name: v.name || '',
+        label: v.label || '',
+        hidden: Boolean(v.db && v.db.hidden),
+      });
+    } else if (k === 'text') {
+      builder.texts.push({
+        text: v.text || '',
+        hidden: Boolean(v.db && v.db.hidden),
+      });
+    } else if (k === 'dimension') {
+      builder.dimensions.push({
+        text: v.text || '',
+        hidden: Boolean(v.db && v.db.hidden),
       });
     }
   }

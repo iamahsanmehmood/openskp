@@ -53,6 +53,9 @@ struct GeometryBuilder {
   std::map<EntityId, int> edge_flags;
   std::map<EntityId, RawFace> faces;
   std::vector<RawInstance> instances;
+  std::vector<SectionPlane> section_planes;
+  std::vector<TextEntity> texts;
+  std::vector<Dimension> dimensions;
 };
 
 struct RawDefinition {

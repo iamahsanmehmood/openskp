@@ -499,17 +499,19 @@ def _read_constructionpoint(ar, r):
 
 def _read_sectionplane(ar, r):
     _preamble(ar, r)
-    _drawbase(ar, r)
+    db = _drawbase(ar, r)
     # optional object pointer before the plane; a real plane starts with a
     # unit-normal component (|x| <= 1) — a tag word does not decode as one
     first = struct.unpack_from('<d', r.data, r.pos)[0]
     if not abs(first) <= 1.0001:
         ar.read_object(r)
-    r.f64s(4)
+    plane = list(r.f64s(4))
+    name = ""
+    label = ""
     if r.peek(3) == _STR_MARKER:     # v18: name + short label
-        r.utf16()
-        r.utf16()
-    return {'k': 'sectionplane'}
+        name = r.utf16()
+        label = r.utf16()
+    return {'k': 'sectionplane', 'plane': plane, 'name': name, 'label': label, 'db': db}
 
 
 def _read_skfont(ar, r):
@@ -532,7 +534,7 @@ def _read_dimlinear(ar, r):
 
 def _read_text(ar, r):
     _preamble(ar, r)
-    _drawbase(ar, r)
+    db = _drawbase(ar, r)
     ar.read_object(r, expect='CSkFont')
     # variable-length variant middle, delimited by an 11-byte block
     # `01 00 00 00 ?? 00 03 00 00 00 01` right before the text string
@@ -549,7 +551,7 @@ def _read_text(ar, r):
     r.raw(idx - r.pos)
     text = r.utf16()
     r.raw(5)
-    return {'k': 'text', 'text': text}
+    return {'k': 'text', 'text': text, 'db': db}
 
 
 def _read_entity_list(ar, r, count, owner):
@@ -881,6 +883,9 @@ class _Builder:
         self.edge_flags = {}      # edge id -> display flag byte (VFF D307 bits)
         self.faces = {}
         self.instances = []
+        self.section_planes = []
+        self.texts = []
+        self.dimensions = []
 
 
 def _fill_builder(builder, ents, slots):
@@ -924,6 +929,23 @@ def _fill_builder(builder, ents, slots):
                 'hidden': bool(v['db']['hidden']),
                 'children': [],
                 'properties': _extract_legacy_dynamic_properties(v.get('attrs'))})
+        elif k == 'sectionplane':
+            builder.section_planes.append({
+                'plane': v.get('plane', [0.0, 0.0, 1.0, 0.0]),
+                'name': v.get('name', ''),
+                'label': v.get('label', ''),
+                'hidden': bool(v.get('db', {}).get('hidden', False))
+            })
+        elif k == 'text':
+            builder.texts.append({
+                'text': v.get('text', ''),
+                'hidden': bool(v.get('db', {}).get('hidden', False))
+            })
+        elif k == 'dimension':
+            builder.dimensions.append({
+                'text': v.get('text', ''),
+                'hidden': bool(v.get('db', {}).get('hidden', False))
+            })
 
 
 def _add_edge(builder, slot, e, slots):

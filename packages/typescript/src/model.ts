@@ -23,6 +23,23 @@ export interface SkpModel {
   units: string | null;
 }
 
+export interface SectionPlane {
+  plane: [number, number, number, number];
+  name: string;
+  label: string;
+  hidden: boolean;
+}
+
+export interface TextEntity {
+  text: string;
+  hidden: boolean;
+}
+
+export interface Dimension {
+  text: string;
+  hidden: boolean;
+}
+
 export interface Definition {
   id: number;
   guid: string;
@@ -31,6 +48,9 @@ export interface Definition {
   edges: Edge[];
   faces: Face[];
   instances: Instance[];
+  sectionPlanes: SectionPlane[];
+  texts: TextEntity[];
+  dimensions: Dimension[];
   isImage: boolean;
   alwaysFacesCamera: boolean;
   shadowsFaceSun: boolean;
@@ -292,7 +312,7 @@ export function buildModelFromParsed(parsed: ParsedRawData): SkpModel {
     // group). Kept out of `definitions` (which is numeric-ID-only, one
     // entry per real component/group definition) and exposed here instead,
     // matching the .NET and Dart ports' `Root`/`root` field.
-    root: rootDefinition ?? { id: 0, guid: 'ROOT', name: 'ROOT_MODEL', vertices: [], edges: [], faces: [], instances: [], isImage: false, alwaysFacesCamera: false, shadowsFaceSun: false },
+    root: rootDefinition ?? { id: 0, guid: 'ROOT', name: 'ROOT_MODEL', vertices: [], edges: [], faces: [], instances: [], sectionPlanes: [], texts: [], dimensions: [], isImage: false, alwaysFacesCamera: false, shadowsFaceSun: false },
     layers: finalLayersList,
     materials: finalMaterialsList,
     materialsById,
@@ -340,6 +360,21 @@ function buildDefinition(id: number, d: ParsedDefinition): Definition {
     hidden: inst.hidden ?? false,
   }));
 
+  const sectionPlanes: SectionPlane[] = (d.builder.sectionPlanes || []).map((sp) => ({
+    plane: sp.plane || [0, 0, 1, 0],
+    name: sp.name || '',
+    label: sp.label || '',
+    hidden: sp.hidden || false,
+  }));
+  const texts: TextEntity[] = (d.builder.texts || []).map((txt) => ({
+    text: txt.text || '',
+    hidden: txt.hidden || false,
+  }));
+  const dimensions: Dimension[] = (d.builder.dimensions || []).map((dim) => ({
+    text: dim.text || '',
+    hidden: dim.hidden || false,
+  }));
+
   return {
     id,
     guid: d.guid,
@@ -348,6 +383,9 @@ function buildDefinition(id: number, d: ParsedDefinition): Definition {
     edges,
     faces,
     instances,
+    sectionPlanes,
+    texts,
+    dimensions,
     isImage: d.isImage,
     alwaysFacesCamera: d.alwaysFacesCamera,
     shadowsFaceSun: d.shadowsFaceSun || false,

@@ -53,6 +53,9 @@ namespace OpenSkp
         public Dictionary<long, int> EdgeFlags = new Dictionary<long, int>();
         public Dictionary<long, GeometryBuilderFace> Faces = new Dictionary<long, GeometryBuilderFace>();
         public List<GeometryBuilderInstance> Instances = new List<GeometryBuilderInstance>();
+        public List<SectionPlane> SectionPlanes = new List<SectionPlane>();
+        public List<TextEntity> Texts = new List<TextEntity>();
+        public List<Dimension> Dimensions = new List<Dimension>();
     }
 
     internal static class Geometry

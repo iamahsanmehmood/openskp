@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:archive/archive.dart';
 import 'package:xml/xml.dart';
 
+import 'model.dart';
 import 'observability.dart';
 import 'tlv.dart';
 import 'vff.dart';
@@ -50,6 +51,9 @@ class GeometryBuilder {
   final Map<int, int> edgeFlags = {};
   final Map<int, GeometryBuilderFace> faces = {};
   final List<GeometryBuilderInstance> instances = [];
+  final List<SectionPlane> sectionPlanes = [];
+  final List<TextEntity> texts = [];
+  final List<Dimension> dimensions = [];
 }
 
 class RawTexture {

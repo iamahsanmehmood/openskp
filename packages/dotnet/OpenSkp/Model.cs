@@ -138,6 +138,26 @@ namespace OpenSkp
         public bool Hidden { get; set; }
     }
 
+    public sealed class SectionPlane
+    {
+        public double[] Plane { get; set; } = new double[] { 0.0, 0.0, 1.0, 0.0 };
+        public string Name { get; set; } = "";
+        public string Label { get; set; } = "";
+        public bool Hidden { get; set; }
+    }
+
+    public sealed class TextEntity
+    {
+        public string Text { get; set; } = "";
+        public bool Hidden { get; set; }
+    }
+
+    public sealed class Dimension
+    {
+        public string Text { get; set; } = "";
+        public bool Hidden { get; set; }
+    }
+
     public sealed class Definition
     {
         public long Id { get; set; }
@@ -147,6 +167,9 @@ namespace OpenSkp
         public Dictionary<long, Edge> Edges { get; set; } = new Dictionary<long, Edge>();
         public Dictionary<long, Face> Faces { get; set; } = new Dictionary<long, Face>();
         public List<Instance> Instances { get; set; } = new List<Instance>();
+        public List<SectionPlane> SectionPlanes { get; set; } = new List<SectionPlane>();
+        public List<TextEntity> Texts { get; set; } = new List<TextEntity>();
+        public List<Dimension> Dimensions { get; set; } = new List<Dimension>();
         public bool AlwaysFacesCamera { get; set; }
         public bool ShadowsFaceSun { get; set; }
         public bool IsImage { get; set; }

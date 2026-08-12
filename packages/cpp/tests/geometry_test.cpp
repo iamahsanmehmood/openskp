@@ -107,5 +107,12 @@ TEST(Geometry, ExtractsBackMaterialAndEdgeFlags) {
   EXPECT_EQ(edge_builder.edge_flags.at(3), 0x1e);
 }
 
+TEST(Geometry, SectionPlaneTextDimensionDefaultsEmpty) {
+  GeometryBuilder builder;
+  EXPECT_TRUE(builder.section_planes.empty());
+  EXPECT_TRUE(builder.texts.empty());
+  EXPECT_TRUE(builder.dimensions.empty());
+}
+
 }  // namespace
 }  // namespace openskp

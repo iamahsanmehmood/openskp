@@ -259,6 +259,9 @@ class _GeometryBuilder:
         self.edge_flags = {}      # edge id -> display flag byte (D307)
         self.faces = {}
         self.instances = []
+        self.section_planes = []
+        self.texts = []
+        self.dimensions = []
 
 
 def find_child_tag(nodes, target):

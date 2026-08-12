@@ -171,6 +171,40 @@ class Instance {
   });
 }
 
+class SectionPlane {
+  final List<double> plane;
+  final String name;
+  final String label;
+  final bool hidden;
+
+  const SectionPlane({
+    this.plane = const [0.0, 0.0, 1.0, 0.0],
+    this.name = '',
+    this.label = '',
+    this.hidden = false,
+  });
+}
+
+class TextEntity {
+  final String text;
+  final bool hidden;
+
+  const TextEntity({
+    this.text = '',
+    this.hidden = false,
+  });
+}
+
+class Dimension {
+  final String text;
+  final bool hidden;
+
+  const Dimension({
+    this.text = '',
+    this.hidden = false,
+  });
+}
+
 class Definition {
   final int id;
   final String guid;
@@ -179,6 +213,9 @@ class Definition {
   final Map<int, Edge> edges = {};
   final Map<int, Face> faces = {};
   final List<Instance> instances = [];
+  final List<SectionPlane> sectionPlanes = [];
+  final List<TextEntity> texts = [];
+  final List<Dimension> dimensions = [];
   final bool alwaysFacesCamera;
   final bool shadowsFaceSun;
   final bool isImage;

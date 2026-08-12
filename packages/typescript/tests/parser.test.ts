@@ -372,3 +372,12 @@ describe('Edge display flags (D307)', () => {
     expect(builder.edgeFlags.get(0x03)).toBe(0x1e);
   });
 });
+
+describe('Section plane, text entity, and dimension defaults', () => {
+  it('exposes sectionPlanes, texts, and dimensions arrays on GeometryBuilder', () => {
+    const builder = new GeometryBuilder();
+    expect(builder.sectionPlanes).toEqual([]);
+    expect(builder.texts).toEqual([]);
+    expect(builder.dimensions).toEqual([]);
+  });
+});

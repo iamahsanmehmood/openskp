@@ -413,10 +413,10 @@ namespace OpenSkp
     internal sealed class RelationshipRec { }
     internal sealed class ConstructionLineRec { }
     internal sealed class ConstructionPointRec { public DrawBase Db = new DrawBase(); public double[] Pos = new double[3]; }
-    internal sealed class SectionPlaneRec { }
+    internal sealed class SectionPlaneRec { public DrawBase Db = new DrawBase(); public double[] Plane = new double[4]; public string Name = ""; public string Label = ""; }
     internal sealed class FontRec { }
     internal sealed class DimLinearRec { public DrawBase Db = new DrawBase(); public string Text = ""; }
-    internal sealed class TextRec { public string Text = ""; }
+    internal sealed class TextRec { public DrawBase Db = new DrawBase(); public string Text = ""; }
     internal sealed class DefinitionRec
     {
         public string Name = "";
@@ -773,19 +773,21 @@ namespace OpenSkp
         public static object ReadSectionPlane(Archive ar, LR r)
         {
             Preamble(ar, r);
-            Drawbase(ar, r);
+            var db = Drawbase(ar, r);
             double first = Tlv.ReadF64(r.Data, r.Pos);
             if (!(Math.Abs(first) <= 1.0001))
             {
                 ar.ReadObject(r);
             }
-            r.F64s(4);
+            var plane = r.F64s(4);
+            string name = "";
+            string label = "";
             if (LegacyBytes.BytesEqual(r.Peek(3), 0, LegacyBytes.StrMarker))
             {
-                r.Utf16();
-                r.Utf16();
+                name = r.Utf16();
+                label = r.Utf16();
             }
-            return new SectionPlaneRec();
+            return new SectionPlaneRec { Db = db, Plane = plane, Name = name, Label = label };
         }
 
         public static object ReadSkFont(Archive ar, LR r)
@@ -813,7 +815,7 @@ namespace OpenSkp
         public static object ReadText(Archive ar, LR r)
         {
             Preamble(ar, r);
-            Drawbase(ar, r);
+            var db = Drawbase(ar, r);
             ar.ReadObject(r, "CSkFont");
             int p = r.Pos;
             int idx;
@@ -837,7 +839,7 @@ namespace OpenSkp
             r.Raw(idx - r.Pos);
             string text = r.Utf16();
             r.Raw(5);
-            return new TextRec { Text = text };
+            return new TextRec { Db = db, Text = text };
         }
 
         public static List<(int Slot, string? Name, object? Value)> ReadEntityList(Archive ar, LR r, long count, string owner)
@@ -1202,11 +1204,14 @@ namespace OpenSkp
         /// dependency-free from the VFF-specific TLV machinery.</summary>
         internal sealed class LegacyBuilder
         {
-            public Dictionary<long, (double, double, double)> Vertices = new Dictionary<long, (double, double, double)>();
-            public Dictionary<long, (long?, long?)> Edges = new Dictionary<long, (long?, long?)>();
+            public Dictionary<long, (double X, double Y, double Z)> Vertices = new Dictionary<long, (double, double, double)>();
+            public Dictionary<long, (long? V1, long? V2)> Edges = new Dictionary<long, (long?, long?)>();
             public Dictionary<long, int> EdgeFlags = new Dictionary<long, int>();
             public Dictionary<long, GeometryBuilderFace> Faces = new Dictionary<long, GeometryBuilderFace>();
             public List<GeometryBuilderInstance> Instances = new List<GeometryBuilderInstance>();
+            public List<SectionPlane> SectionPlanes = new List<SectionPlane>();
+            public List<TextEntity> Texts = new List<TextEntity>();
+            public List<Dimension> Dimensions = new List<Dimension>();
         }
 
         private static void AddEdge(LegacyBuilder builder, int slot, EdgeRec e, Dictionary<int, SlotEntry> slots)
@@ -1294,6 +1299,32 @@ namespace OpenSkp
                         LayerId = instRec.Db.Layer != 0 ? instRec.Db.Layer : (long?)null,
                         Children = new List<TlvNode>(),
                         Properties = LegacyReaders.ExtractLegacyDynamicProperties(instRec.Attrs),
+                    });
+                }
+                else if (v is SectionPlaneRec spRec)
+                {
+                    builder.SectionPlanes.Add(new SectionPlane
+                    {
+                        Plane = spRec.Plane,
+                        Name = spRec.Name,
+                        Label = spRec.Label,
+                        Hidden = spRec.Db.Hidden != 0
+                    });
+                }
+                else if (v is TextRec trRec)
+                {
+                    builder.Texts.Add(new TextEntity
+                    {
+                        Text = trRec.Text,
+                        Hidden = trRec.Db.Hidden != 0
+                    });
+                }
+                else if (v is DimLinearRec dlRec)
+                {
+                    builder.Dimensions.Add(new Dimension
+                    {
+                        Text = dlRec.Text,
+                        Hidden = dlRec.Db.Hidden != 0
                     });
                 }
             }

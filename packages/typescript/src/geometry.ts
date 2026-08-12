@@ -38,6 +38,9 @@ export class GeometryBuilder {
   edgeFlags = new Map<number, number>(); // edge id -> display flag byte (D307)
   faces = new Map<number, GeometryBuilderFace>(); // id -> face data
   instances: GeometryBuilderInstance[] = [];
+  sectionPlanes: { plane: [number, number, number, number]; name: string; label: string; hidden: boolean }[] = [];
+  texts: { text: string; hidden: boolean }[] = [];
+  dimensions: { text: string; hidden: boolean }[] = [];
 }
 
 export interface ParsedDefinition {
@@ -46,6 +49,9 @@ export interface ParsedDefinition {
   isImage: boolean;
   alwaysFacesCamera: boolean;
   shadowsFaceSun?: boolean;
+  sectionPlanes?: { plane: [number, number, number, number]; name: string; label: string; hidden: boolean }[];
+  texts?: { text: string; hidden: boolean }[];
+  dimensions?: { text: string; hidden: boolean }[];
   builder: GeometryBuilder;
 }
 

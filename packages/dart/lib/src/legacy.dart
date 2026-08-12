@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'core.dart';
 import 'errors.dart';
 import 'geometry.dart';
+import 'model.dart';
 import 'observability.dart';
 import 'tlv.dart';
 
@@ -417,7 +418,13 @@ class ConstructionPointRec {
   ConstructionPointRec(this.db, this.pos);
 }
 
-class SectionPlaneRec {}
+class SectionPlaneRec {
+  DrawBase db;
+  List<double> plane;
+  String name;
+  String label;
+  SectionPlaneRec(this.db, this.plane, this.name, this.label);
+}
 
 class FontRec {}
 
@@ -428,8 +435,9 @@ class DimLinearRec {
 }
 
 class TextRec {
+  DrawBase db;
   String text;
-  TextRec(this.text);
+  TextRec(this.db, this.text);
 }
 
 class DefinitionRec {
@@ -794,17 +802,19 @@ class LegacyReaders {
 
   static Object readSectionPlane(Archive ar, LR r) {
     preamble(ar, r);
-    drawbase(ar, r);
+    final db = drawbase(ar, r);
     final first = Tlv.readF64(r.data, r.pos);
     if (!(first.abs() <= 1.0001)) {
       ar.readObject(r);
     }
-    r.f64s(4);
+    final plane = r.f64s(4);
+    var name = '';
+    var label = '';
     if (_bytesEqualAt(r.peek(3), 0, _strMarker)) {
-      r.utf16();
-      r.utf16();
+      name = r.utf16();
+      label = r.utf16();
     }
-    return SectionPlaneRec();
+    return SectionPlaneRec(db, plane, name, label);
   }
 
   static Object readSkFont(Archive ar, LR r) {
@@ -828,7 +838,7 @@ class LegacyReaders {
 
   static Object readText(Archive ar, LR r) {
     preamble(ar, r);
-    drawbase(ar, r);
+    final db = drawbase(ar, r);
     ar.readObject(r, 'CSkFont');
     int p = r.pos;
     int idx;
@@ -854,7 +864,7 @@ class LegacyReaders {
     r.raw(idx - r.pos);
     final text = r.utf16();
     r.raw(5);
-    return TextRec(text);
+    return TextRec(db, text);
   }
 
   static List<(int, String?, Object?)> readEntityList(
@@ -1217,6 +1227,23 @@ class Legacy {
           ..layerId = v.db.layer != 0 ? v.db.layer : null
           ..children = const []
           ..properties = LegacyReaders.extractLegacyDynamicProperties(v.attrs));
+      } else if (v is SectionPlaneRec) {
+        builder.sectionPlanes.add(SectionPlane(
+          plane: v.plane,
+          name: v.name,
+          label: v.label,
+          hidden: v.db.hidden != 0,
+        ));
+      } else if (v is TextRec) {
+        builder.texts.add(TextEntity(
+          text: v.text,
+          hidden: v.db.hidden != 0,
+        ));
+      } else if (v is DimLinearRec) {
+        builder.dimensions.add(Dimension(
+          text: v.text,
+          hidden: v.db.hidden != 0,
+        ));
       }
     }
   }

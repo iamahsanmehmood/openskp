@@ -156,6 +156,10 @@ namespace OpenSkp
                 });
             }
 
+            defn.SectionPlanes.AddRange(d.Builder.SectionPlanes);
+            defn.Texts.AddRange(d.Builder.Texts);
+            defn.Dimensions.AddRange(d.Builder.Dimensions);
+
             return defn;
         }
 

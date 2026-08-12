@@ -74,6 +74,9 @@ static Definition definition(EntityId id, RawDefinition&& r) {
   for (auto& i : r.builder.instances)
     d.instances.push_back({std::move(i.name), i.ref_idx, std::move(i.ref_guid), std::move(i.matrix),
                            std::move(i.layer), std::move(i.properties), i.material_id, i.hidden});
+  d.section_planes = std::move(r.builder.section_planes);
+  d.texts = std::move(r.builder.texts);
+  d.dimensions = std::move(r.builder.dimensions);
   return d;
 }
 

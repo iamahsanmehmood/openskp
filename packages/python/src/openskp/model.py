@@ -306,6 +306,26 @@ class Instance:
 
 
 @dataclass
+class SectionPlane:
+    plane: List[float] = field(default_factory=lambda: [0.0, 0.0, 1.0, 0.0])
+    name: str = ""
+    label: str = ""
+    hidden: bool = False
+
+
+@dataclass
+class TextEntity:
+    text: str = ""
+    hidden: bool = False
+
+
+@dataclass
+class Dimension:
+    text: str = ""
+    hidden: bool = False
+
+
+@dataclass
 class Definition:
     """A component definition containing reusable geometry.
 
@@ -335,6 +355,9 @@ class Definition:
     edges: Dict[int, Edge] = field(default_factory=dict)
     faces: Dict[int, Face] = field(default_factory=dict)
     instances: List[Instance] = field(default_factory=list)
+    section_planes: List[SectionPlane] = field(default_factory=list)
+    texts: List[TextEntity] = field(default_factory=list)
+    dimensions: List[Dimension] = field(default_factory=list)
     always_faces_camera: bool = False
     shadows_face_sun: bool = False
     is_image: bool = False
@@ -508,6 +531,26 @@ class SkpFile:
                     hidden=inst.get("hidden", False),
                     layer=layer_id_to_name.get(layer_id, "") if layer_id is not None else "",
                     properties=inst.get("properties", {}),
+                ))
+            # Populate section planes
+            for sp in getattr(builder, "section_planes", []):
+                defn.section_planes.append(SectionPlane(
+                    plane=sp.get("plane", [0.0, 0.0, 1.0, 0.0]),
+                    name=sp.get("name", ""),
+                    label=sp.get("label", ""),
+                    hidden=sp.get("hidden", False),
+                ))
+            # Populate texts
+            for txt in getattr(builder, "texts", []):
+                defn.texts.append(TextEntity(
+                    text=txt.get("text", ""),
+                    hidden=txt.get("hidden", False),
+                ))
+            # Populate dimensions
+            for dim in getattr(builder, "dimensions", []):
+                defn.dimensions.append(Dimension(
+                    text=dim.get("text", ""),
+                    hidden=dim.get("hidden", False),
                 ))
             if def_id == "ROOT":
                 model.root = defn

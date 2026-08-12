@@ -179,6 +179,10 @@ class SkpFile {
       ));
     }
 
+    defn.sectionPlanes.addAll(d.builder.sectionPlanes);
+    defn.texts.addAll(d.builder.texts);
+    defn.dimensions.addAll(d.builder.dimensions);
+
     return defn;
   }
 }

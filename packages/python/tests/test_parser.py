@@ -1278,6 +1278,27 @@ class TestFaceCameraBehavior:
         assert by_name['Silla'].shadows_face_sun is False
 
 
+class TestSectionPlaneTextDimension:
+    """Definition metadata for section planes, text entities, and dimensions."""
+
+    def test_default_lists_empty(self) -> None:
+        from openskp.model import Definition, SectionPlane, TextEntity, Dimension
+        d = Definition()
+        assert d.section_planes == []
+        assert d.texts == []
+        assert d.dimensions == []
+
+        sp = SectionPlane(plane=[0.0, 0.0, 1.0, 0.0], name="Cut 1", label="A")
+        assert sp.name == "Cut 1"
+        assert sp.hidden is False
+
+        txt = TextEntity(text="Note")
+        assert txt.text == "Note"
+
+        dim = Dimension(text="100mm")
+        assert dim.text == "100mm"
+
+
 # ── Image entity tests ───────────────────────────────────────────────────
 
 

@@ -93,6 +93,8 @@ struct R {
 struct V {
   std::string k;
   std::string name;
+  std::string label;
+  std::string text;
   std::string guid;
   Vec3 xyz{};
   std::vector<double> plane;
@@ -432,13 +434,14 @@ struct Archive {
       r.u8();
     } else if (n == "CSectionPlane") {
       preamble();
+      v->k = "sectionplane";
       draw(*v);
       auto first = read_f64(r.d, r.p);
       if (std::abs(first) > 1.0001) object();
-      r.f64s(4);
+      v->plane = r.f64s(4);
       if (r.marker()) {
-        r.utf16();
-        r.utf16();
+        v->name = r.utf16();
+        v->label = r.utf16();
       }
     } else if (n == "CSkFont") {
       object("CAttributeContainer");
@@ -447,12 +450,14 @@ struct Archive {
       r.raw(15);
     } else if (n == "CDimensionLinear") {
       preamble();
+      v->k = "dimension";
       draw(*v);
-      r.utf16();
+      v->text = r.utf16();
       object("CSkFont");
       r.raw(165);
     } else if (n == "CText") {
       preamble();
+      v->k = "text";
       draw(*v);
       object("CSkFont");
       size_t found = std::string::npos;
@@ -465,7 +470,7 @@ struct Archive {
         }
       if (found == std::string::npos) throw std::runtime_error("text delimiter not found");
       r.raw(found - r.p);
-      r.utf16();
+      v->text = r.utf16();
       r.raw(5);
     } else if (n == "CComponentDefinition") {
       preamble();
@@ -683,6 +688,25 @@ void fill(GeometryBuilder& b,
       i.hidden = v->hidden != 0;
       i.properties = extract_legacy_dynamic_properties(v->attrs, slots);
       b.instances.push_back(std::move(i));
+    } else if (v->k == "sectionplane") {
+      SectionPlane sp;
+      if (v->plane.size() == 4) {
+        sp.plane = {v->plane[0], v->plane[1], v->plane[2], v->plane[3]};
+      }
+      sp.name = v->name;
+      sp.label = v->label;
+      sp.hidden = v->hidden != 0;
+      b.section_planes.push_back(std::move(sp));
+    } else if (v->k == "text") {
+      TextEntity te;
+      te.text = v->text;
+      te.hidden = v->hidden != 0;
+      b.texts.push_back(std::move(te));
+    } else if (v->k == "dimension") {
+      Dimension dim;
+      dim.text = v->text;
+      dim.hidden = v->hidden != 0;
+      b.dimensions.push_back(std::move(dim));
     }
   }
 }

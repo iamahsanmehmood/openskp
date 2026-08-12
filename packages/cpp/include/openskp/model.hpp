@@ -167,6 +167,26 @@ struct Instance {
   bool hidden{};
 };
 
+/// Section plane entity.
+struct SectionPlane {
+  std::array<double, 4> plane{0.0, 0.0, 1.0, 0.0};
+  std::string name;
+  std::string label;
+  bool hidden{false};
+};
+
+/// Text annotation entity.
+struct TextEntity {
+  std::string text;
+  bool hidden{false};
+};
+
+/// Dimension entity.
+struct Dimension {
+  std::string text;
+  bool hidden{false};
+};
+
 /// Reusable geometry container (component definition or group).
 struct Definition {
   /// Unique TLV entity ID.
@@ -183,6 +203,12 @@ struct Definition {
   std::map<EntityId, Face> faces;
   /// Child component/group instances placed inside this definition.
   std::vector<Instance> instances;
+  /// Section planes placed inside this definition.
+  std::vector<SectionPlane> section_planes;
+  /// Text annotations placed inside this definition.
+  std::vector<TextEntity> texts;
+  /// Dimensions placed inside this definition.
+  std::vector<Dimension> dimensions;
   /// Always faces camera behavior flag.
   bool always_faces_camera{};
   /// Shadows face sun behavior flag.
