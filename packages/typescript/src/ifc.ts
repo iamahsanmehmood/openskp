@@ -1,5 +1,8 @@
 import { SkpScene } from './model';
 
+declare const process: any;
+declare const require: any;
+
 export const METRES_TO_INCHES = 39.37007874015748;
 
 const IFC_BASE64 = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_$';
