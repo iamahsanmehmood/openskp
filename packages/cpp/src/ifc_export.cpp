@@ -51,7 +51,7 @@ std::tuple<double, double, double, double> get_prim_rgb(const Scene& scene, size
 }  // namespace
 
 std::string generate_ifc_guid() {
-  static std::mt19937 rng(1337);
+  static std::mt19937 rng(std::random_device{}());
   std::uniform_int_distribution<int> dist(0, 63);
   std::string result;
   result.reserve(22);
@@ -85,14 +85,24 @@ std::string to_ifc(const Scene& scene, double scale, const std::string& schema) 
   auto now = std::chrono::system_clock::now();
   auto timestamp_epoch =
       std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
+  std::time_t now_time = std::chrono::system_clock::to_time_t(now);
+  std::tm gmt{};
+#if defined(_WIN32)
+  gmtime_s(&gmt, &now_time);
+#else
+  gmtime_r(&now_time, &gmt);
+#endif
+  char time_buf[32];
+  std::strftime(time_buf, sizeof(time_buf), "%Y-%m-%dT%H:%M:%S", &gmt);
 
   std::ostringstream ss;
+  ss.imbue(std::locale::classic());
   ss << std::fixed << std::setprecision(6);
 
   ss << "ISO-10303-21;\r\n";
   ss << "HEADER;\r\n";
   ss << "FILE_DESCRIPTION(('ViewDefinition [CoordinationView]'),'2;1');\r\n";
-  ss << "FILE_NAME('model.ifc','2026-08-12T00:00:00',('OpenSKP Author'),('OpenSKP "
+  ss << "FILE_NAME('model.ifc','" << time_buf << "',('OpenSKP Author'),('OpenSKP "
         "Organization'),'OpenSKP IFC Exporter','OpenSKP','');\r\n";
   ss << "FILE_SCHEMA(('" << schema_str << "'));\r\n";
   ss << "ENDSEC;\r\n";
@@ -195,6 +205,7 @@ std::string to_ifc(const Scene& scene, double scale, const std::string& schema) 
     auto [step_type, _] = classify_element(geom_name);
 
     std::ostringstream pt_ss;
+    pt_ss.imbue(std::locale::classic());
     pt_ss << std::fixed << std::setprecision(6);
     for (size_t i = 0; i < v_count; ++i) {
       if (i > 0) pt_ss << ",";
@@ -220,6 +231,7 @@ std::string to_ifc(const Scene& scene, double scale, const std::string& schema) 
 
     auto [r, g, b, a] = get_prim_rgb(scene, prim.material_index);
     std::ostringstream key_ss;
+    key_ss.imbue(std::locale::classic());
     key_ss << std::fixed << std::setprecision(4) << r << "," << g << "," << b << "," << a;
     std::string rgba_key = key_ss.str();
 

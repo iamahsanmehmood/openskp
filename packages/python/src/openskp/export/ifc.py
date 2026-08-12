@@ -135,7 +135,7 @@ def to_ifc(
     lines.append(f"#{person_org_id}=IFCPERSONANDORGANIZATION(#{person_id},#{org_id},$);")
 
     app_id = next_id()
-    lines.append(f"#{app_id}=IFCAPPLICATION(#{org_id},'0.3.0','OpenSKP Exporter','OpenSKP');")
+    lines.append(f"#{app_id}=IFCAPPLICATION(#{org_id},'0.3.1','OpenSKP Exporter','OpenSKP');")
 
     owner_hist_id = next_id()
     lines.append(
@@ -378,4 +378,4 @@ def export(
     path = pathlib.Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     text = to_ifc(scene, scale=scale, schema=schema)
-    path.write_text(text, encoding="utf-8", errors="replace")
+    path.write_bytes(text.encode("utf-8"))
