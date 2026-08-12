@@ -33,6 +33,7 @@ export * from './model';
 export * from './errors';
 export * from './observability';
 export * from './obj';
+export * from './stl';
 
 declare const process: any;
 declare const require: any;

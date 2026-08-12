@@ -1323,6 +1323,48 @@ class TestObjExporter:
         assert "f 1 2 3" in obj_text
 
 
+class TestStlExporter:
+    """STL exporter tests (ASCII & Binary)."""
+
+    def test_to_stl_ascii(self) -> None:
+        from array import array
+        from openskp.scene import Scene, GlbPrimitive
+        from openskp.export.stl import to_stl_ascii
+
+        prim = GlbPrimitive(
+            geom_name="Box",
+            material_index=0,
+            positions=array("f", [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+            normals=array("f", [0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0]),
+            uvs=array("f", [0.0, 0.0, 1.0, 0.0, 0.0, 1.0]),
+            indices=array("I", [0, 1, 2]),
+        )
+        scene = Scene(glb_primitives=[prim])
+        stl_text = to_stl_ascii(scene, scale=1.0)
+        assert "solid OpenSKP_Model" in stl_text
+        assert "facet normal 0.000000 0.000000 1.000000" in stl_text
+        assert "vertex 0.000000 0.000000 0.000000" in stl_text
+        assert "endsolid OpenSKP_Model" in stl_text
+
+    def test_to_stl_binary(self) -> None:
+        from array import array
+        from openskp.scene import Scene, GlbPrimitive
+        from openskp.export.stl import to_stl_binary
+
+        prim = GlbPrimitive(
+            geom_name="Box",
+            material_index=0,
+            positions=array("f", [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+            normals=array("f", [0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0]),
+            uvs=array("f", [0.0, 0.0, 1.0, 0.0, 0.0, 1.0]),
+            indices=array("I", [0, 1, 2]),
+        )
+        scene = Scene(glb_primitives=[prim])
+        data = to_stl_binary(scene, scale=1.0)
+        assert len(data) == 80 + 4 + 50  # Header + uint32 count + 1 triangle
+        assert data.startswith(b"# OpenSKP Binary STL Export")
+
+
 # ── Image entity tests ───────────────────────────────────────────────────
 
 

@@ -12,6 +12,7 @@ add_executable(
   observability_test.cpp
   parser_test.cpp
   scene_test.cpp
+  stl_export_test.cpp
   texture_test.cpp
   triangulator_test.cpp
   zip_entry_size_cap_test.cpp

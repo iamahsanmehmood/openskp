@@ -115,6 +115,7 @@ set(
   src/observability.cpp
   src/parser.cpp
   src/scene.cpp
+  src/stl_export.cpp
   src/tlv.cpp
   src/transforms.cpp
   src/triangulator.cpp

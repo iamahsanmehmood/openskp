@@ -8,4 +8,5 @@
 #include <openskp/observability.hpp>
 #include <openskp/parser.hpp>
 #include <openskp/scene.hpp>
+#include <openskp/stl_export.hpp>
 #include <openskp/triangulator.hpp>
