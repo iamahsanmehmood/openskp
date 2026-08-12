@@ -18,18 +18,17 @@ struct ColorRgba {
 ColorRgba get_material_rgba(const Scene& scene, std::size_t mat_idx) {
   if (mat_idx < scene.gltf_materials.size()) {
     const auto& mat = scene.gltf_materials[mat_idx];
-    if (mat.base_color_factor.size() >= 4) {
-      float r_flt = std::round(static_cast<float>(mat.base_color_factor[0]) * 255.0f);
-      float g_flt = std::round(static_cast<float>(mat.base_color_factor[1]) * 255.0f);
-      float b_flt = std::round(static_cast<float>(mat.base_color_factor[2]) * 255.0f);
-      float a_flt = std::round(static_cast<float>(mat.base_color_factor[3]) * 255.0f);
+    const auto& color = mat.pbr_metallic_roughness.base_color_factor;
+    float r_flt = std::round(static_cast<float>(color[0]) * 255.0f);
+    float g_flt = std::round(static_cast<float>(color[1]) * 255.0f);
+    float b_flt = std::round(static_cast<float>(color[2]) * 255.0f);
+    float a_flt = std::round(static_cast<float>(color[3]) * 255.0f);
 
-      std::uint8_t r = static_cast<std::uint8_t>(std::max(0.0f, std::min(255.0f, r_flt)));
-      std::uint8_t g = static_cast<std::uint8_t>(std::max(0.0f, std::min(255.0f, g_flt)));
-      std::uint8_t b = static_cast<std::uint8_t>(std::max(0.0f, std::min(255.0f, b_flt)));
-      std::uint8_t a = static_cast<std::uint8_t>(std::max(0.0f, std::min(255.0f, a_flt)));
-      return {r, g, b, a};
-    }
+    std::uint8_t r = static_cast<std::uint8_t>(std::max(0.0f, std::min(255.0f, r_flt)));
+    std::uint8_t g = static_cast<std::uint8_t>(std::max(0.0f, std::min(255.0f, g_flt)));
+    std::uint8_t b = static_cast<std::uint8_t>(std::max(0.0f, std::min(255.0f, b_flt)));
+    std::uint8_t a = static_cast<std::uint8_t>(std::max(0.0f, std::min(255.0f, a_flt)));
+    return {r, g, b, a};
   }
   return {200, 200, 200, 255};
 }
