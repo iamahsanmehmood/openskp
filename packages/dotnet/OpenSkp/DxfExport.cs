@@ -76,7 +76,7 @@ namespace OpenSkp
         /// <summary>
         /// Serializes a baked <see cref="Scene"/> to AutoCAD R2000 (AC1015) 3D ASCII DXF format.
         /// </summary>
-        public static string ToDxf(Scene scene, double scale = MetresToInches, string mode = "3dface")
+        public static string ToDxf(Scene scene, double scale = MetresToInches, string mode = "polyface")
         {
             if (scene == null || scene.GlbPrimitives == null)
             {
@@ -188,7 +188,7 @@ namespace OpenSkp
                 "  0", "BLOCK", "  5", "18", "330", "17", "100", "AcDbEntity", "  8", "0", "100", "AcDbBlockBegin", "  2", "*Model_Space", " 70", "0", " 10", "0.0", " 20", "0.0", " 30", "0.0", "  3", "*Model_Space", "  1", "",
                 "  0", "ENDBLK", "  5", "19", "330", "17", "100", "AcDbEntity", "  8", "0", "100", "AcDbBlockEnd",
                 "  0", "BLOCK", "  5", "1C", "330", "1B", "100", "AcDbEntity", "  8", "0", "100", "AcDbBlockBegin", "  2", "*Paper_Space", " 70", "0", " 10", "0.0", " 20", "0.0", " 30", "0.0", "  3", "*Paper_Space", "  1", "",
-                "  0", "ENDBLK", "  5", "1D", "330", "1B", "100", "AcDbEntity", "  8", "0", "100", "AcDbBlockEnd",
+                "  0", "ENDBLK", "  5", "1D", "330", "1B", "100", "AcDbBlockEnd",
                 "  0", "ENDSEC",
                 "  0", "SECTION", "  2", "ENTITIES"
             });
@@ -202,33 +202,78 @@ namespace OpenSkp
                 var (pr, pg, pb) = GetPrimRgb(scene, prim);
                 int aci = RgbToAci(pr, pg, pb);
 
-                for (int i = 0; i < triCount; i++)
+                if (string.Equals(mode, "polyface", StringComparison.OrdinalIgnoreCase))
                 {
-                    int i0 = (int)prim.Indices[i * 3];
-                    int i1 = (int)prim.Indices[i * 3 + 1];
-                    int i2 = (int)prim.Indices[i * 3 + 2];
+                    int vCount = prim.Positions.Length / 3;
+                    lines.AddRange(new[]
+                    {
+                        "  0", "POLYLINE", "  5", NextHandle(), "330", "17", "100", "AcDbEntity", "  8", lName,
+                        " 62", aci.ToString(CultureInfo.InvariantCulture), "100", "AcDbPolyFaceMesh", " 66", "1",
+                        " 10", "0.0", " 20", "0.0", " 30", "0.0",
+                        " 70", "64", " 71", vCount.ToString(CultureInfo.InvariantCulture), " 72", triCount.ToString(CultureInfo.InvariantCulture)
+                    });
 
-                    string v0x = (prim.Positions[i0 * 3] * scale).ToString("F6", CultureInfo.InvariantCulture);
-                    string v0y = (prim.Positions[i0 * 3 + 1] * scale).ToString("F6", CultureInfo.InvariantCulture);
-                    string v0z = (prim.Positions[i0 * 3 + 2] * scale).ToString("F6", CultureInfo.InvariantCulture);
+                    for (int i = 0; i < vCount; i++)
+                    {
+                        string vx = (prim.Positions[i * 3] * scale).ToString("F6", CultureInfo.InvariantCulture);
+                        string vy = (prim.Positions[i * 3 + 1] * scale).ToString("F6", CultureInfo.InvariantCulture);
+                        string vz = (prim.Positions[i * 3 + 2] * scale).ToString("F6", CultureInfo.InvariantCulture);
+                        lines.AddRange(new[]
+                        {
+                            "  0", "VERTEX", "  5", NextHandle(), "330", "17", "100", "AcDbEntity", "  8", lName,
+                            "100", "AcDbVertex", "100", "AcDbPolyFaceMeshVertex",
+                            " 10", vx, " 20", vy, " 30", vz, " 70", "192"
+                        });
+                    }
 
-                    string v1x = (prim.Positions[i1 * 3] * scale).ToString("F6", CultureInfo.InvariantCulture);
-                    string v1y = (prim.Positions[i1 * 3 + 1] * scale).ToString("F6", CultureInfo.InvariantCulture);
-                    string v1z = (prim.Positions[i1 * 3 + 2] * scale).ToString("F6", CultureInfo.InvariantCulture);
-
-                    string v2x = (prim.Positions[i2 * 3] * scale).ToString("F6", CultureInfo.InvariantCulture);
-                    string v2y = (prim.Positions[i2 * 3 + 1] * scale).ToString("F6", CultureInfo.InvariantCulture);
-                    string v2z = (prim.Positions[i2 * 3 + 2] * scale).ToString("F6", CultureInfo.InvariantCulture);
+                    for (int i = 0; i < triCount; i++)
+                    {
+                        uint idx0 = prim.Indices[i * 3] + 1;
+                        uint idx1 = prim.Indices[i * 3 + 1] + 1;
+                        uint idx2 = prim.Indices[i * 3 + 2] + 1;
+                        lines.AddRange(new[]
+                        {
+                            "  0", "VERTEX", "  5", NextHandle(), "330", "17", "100", "AcDbEntity", "  8", lName,
+                            "100", "AcDbVertex", "100", "AcDbFaceRecord", " 70", "128",
+                            " 71", idx0.ToString(CultureInfo.InvariantCulture), " 72", idx1.ToString(CultureInfo.InvariantCulture), " 73", idx2.ToString(CultureInfo.InvariantCulture), " 74", "0"
+                        });
+                    }
 
                     lines.AddRange(new[]
                     {
-                        "  0", "3DFACE", "  5", NextHandle(), "330", "17", "100", "AcDbEntity", "  8", lName,
-                        " 62", aci.ToString(CultureInfo.InvariantCulture), "100", "AcDbFace",
-                        " 10", v0x, " 20", v0y, " 30", v0z,
-                        " 11", v1x, " 21", v1y, " 31", v1z,
-                        " 12", v2x, " 22", v2y, " 32", v2z,
-                        " 13", v2x, " 23", v2y, " 33", v2z
+                        "  0", "SEQEND", "  5", NextHandle(), "330", "17", "100", "AcDbEntity", "  8", lName
                     });
+                }
+                else
+                {
+                    for (int i = 0; i < triCount; i++)
+                    {
+                        int i0 = (int)prim.Indices[i * 3];
+                        int i1 = (int)prim.Indices[i * 3 + 1];
+                        int i2 = (int)prim.Indices[i * 3 + 2];
+
+                        string v0x = (prim.Positions[i0 * 3] * scale).ToString("F6", CultureInfo.InvariantCulture);
+                        string v0y = (prim.Positions[i0 * 3 + 1] * scale).ToString("F6", CultureInfo.InvariantCulture);
+                        string v0z = (prim.Positions[i0 * 3 + 2] * scale).ToString("F6", CultureInfo.InvariantCulture);
+
+                        string v1x = (prim.Positions[i1 * 3] * scale).ToString("F6", CultureInfo.InvariantCulture);
+                        string v1y = (prim.Positions[i1 * 3 + 1] * scale).ToString("F6", CultureInfo.InvariantCulture);
+                        string v1z = (prim.Positions[i1 * 3 + 2] * scale).ToString("F6", CultureInfo.InvariantCulture);
+
+                        string v2x = (prim.Positions[i2 * 3] * scale).ToString("F6", CultureInfo.InvariantCulture);
+                        string v2y = (prim.Positions[i2 * 3 + 1] * scale).ToString("F6", CultureInfo.InvariantCulture);
+                        string v2z = (prim.Positions[i2 * 3 + 2] * scale).ToString("F6", CultureInfo.InvariantCulture);
+
+                        lines.AddRange(new[]
+                        {
+                            "  0", "3DFACE", "  5", NextHandle(), "330", "17", "100", "AcDbEntity", "  8", lName,
+                            " 62", aci.ToString(CultureInfo.InvariantCulture), "100", "AcDbFace",
+                            " 10", v0x, " 20", v0y, " 30", v0z,
+                            " 11", v1x, " 21", v1y, " 31", v1z,
+                            " 12", v2x, " 22", v2y, " 32", v2z,
+                            " 13", v2x, " 23", v2y, " 33", v2z
+                        });
+                    }
                 }
             }
 
@@ -274,7 +319,7 @@ namespace OpenSkp
         /// <summary>
         /// Exports a baked <see cref="Scene"/> directly to an AutoCAD R2000 3D DXF file using UTF-8 without BOM.
         /// </summary>
-        public static void ExportDxf(Scene scene, string outputPath, double scale = MetresToInches, string mode = "3dface")
+        public static void ExportDxf(Scene scene, string outputPath, double scale = MetresToInches, string mode = "polyface")
         {
             if (scene == null)
             {

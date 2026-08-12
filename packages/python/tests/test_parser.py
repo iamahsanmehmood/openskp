@@ -1437,12 +1437,15 @@ class TestDxfExporter:
             indices=array("I", [0, 1, 2]),
         )
         scene = Scene(glb_primitives=[prim])
-        dxf_text = to_dxf(scene, mode="polyface")
+        dxf_text = to_dxf(scene)
         assert "$ACADVER" in dxf_text
         assert "AC1015" in dxf_text
-        assert "3DFACE" in dxf_text or "POLYLINE" in dxf_text
+        assert "POLYLINE" in dxf_text or "3DFACE" in dxf_text
         assert "Walls" in dxf_text
         assert "EOF" in dxf_text
+
+        dxf_poly = to_dxf(scene, mode="polyface")
+        assert "POLYLINE" in dxf_poly or "AcDbPolyFaceMesh" in dxf_poly
 
         dxf_3d = to_dxf(scene, mode="3dface")
         assert "3DFACE" in dxf_3d

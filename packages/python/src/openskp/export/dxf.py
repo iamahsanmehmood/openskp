@@ -67,7 +67,7 @@ def _get_prim_rgb(scene: Scene, prim: any) -> tuple[int, int, int]:
 def to_dxf(
     scene: Scene,
     scale: float = METRES_TO_INCHES,
-    mode: Literal["3dface", "polyface"] = "3dface",
+    mode: Literal["3dface", "polyface"] = "polyface",
 ) -> str:
     """Serialize a baked scene to AutoCAD R2000 (AC1015) 3D ASCII DXF format.
 
@@ -145,7 +145,7 @@ def to_dxf(
         doc.write(stream)
         return stream.getvalue()
 
-    # Zero-dependency native R2000 3DFACE exporter with 100% AutoCAD parity
+    # Zero-dependency native R2000 DXF exporter with 100% AutoCAD parity
     layer_colors: dict[str, tuple[int, int, int]] = {}
     for prim in scene.glb_primitives:
         layer_name = _sanitize_layer_name(prim.geom_name or "0")
@@ -213,31 +213,61 @@ def to_dxf(
         r, g, b = layer_colors.get(layer_name, (200, 200, 200))
         aci = _rgb_to_aci(r, g, b)
 
-        for i in range(tri_count):
-            i0 = prim.indices[i * 3]
-            i1 = prim.indices[i * 3 + 1]
-            i2 = prim.indices[i * 3 + 2]
-
-            v0x = f"{prim.positions[i0 * 3] * scale:.6f}"
-            v0y = f"{prim.positions[i0 * 3 + 1] * scale:.6f}"
-            v0z = f"{prim.positions[i0 * 3 + 2] * scale:.6f}"
-
-            v1x = f"{prim.positions[i1 * 3] * scale:.6f}"
-            v1y = f"{prim.positions[i1 * 3 + 1] * scale:.6f}"
-            v1z = f"{prim.positions[i1 * 3 + 2] * scale:.6f}"
-
-            v2x = f"{prim.positions[i2 * 3] * scale:.6f}"
-            v2y = f"{prim.positions[i2 * 3 + 1] * scale:.6f}"
-            v2z = f"{prim.positions[i2 * 3 + 2] * scale:.6f}"
-
+        if mode == "polyface":
+            v_count = len(prim.positions) // 3
             lines.extend([
-                "  0", "3DFACE", "  5", next_handle(), "330", "17", "100", "AcDbEntity", "  8", layer_name,
-                " 62", str(aci), "100", "AcDbFace",
-                " 10", v0x, " 20", v0y, " 30", v0z,
-                " 11", v1x, " 21", v1y, " 31", v1z,
-                " 12", v2x, " 22", v2y, " 32", v2z,
-                " 13", v2x, " 23", v2y, " 33", v2z
+                "  0", "POLYLINE", "  5", next_handle(), "330", "17", "100", "AcDbEntity", "  8", layer_name,
+                " 62", str(aci), "100", "AcDbPolyFaceMesh", " 66", "1",
+                " 10", "0.0", " 20", "0.0", " 30", "0.0",
+                " 70", "64", " 71", str(v_count), " 72", str(tri_count)
             ])
+            for i in range(v_count):
+                vx = f"{prim.positions[i * 3] * scale:.6f}"
+                vy = f"{prim.positions[i * 3 + 1] * scale:.6f}"
+                vz = f"{prim.positions[i * 3 + 2] * scale:.6f}"
+                lines.extend([
+                    "  0", "VERTEX", "  5", next_handle(), "330", "17", "100", "AcDbEntity", "  8", layer_name,
+                    "100", "AcDbVertex", "100", "AcDbPolyFaceMeshVertex",
+                    " 10", vx, " 20", vy, " 30", vz, " 70", "192"
+                ])
+            for i in range(tri_count):
+                idx0 = prim.indices[i * 3] + 1
+                idx1 = prim.indices[i * 3 + 1] + 1
+                idx2 = prim.indices[i * 3 + 2] + 1
+                lines.extend([
+                    "  0", "VERTEX", "  5", next_handle(), "330", "17", "100", "AcDbEntity", "  8", layer_name,
+                    "100", "AcDbVertex", "100", "AcDbFaceRecord", " 70", "128",
+                    " 71", str(idx0), " 72", str(idx1), " 73", str(idx2), " 74", "0"
+                ])
+            lines.extend([
+                "  0", "SEQEND", "  5", next_handle(), "330", "17", "100", "AcDbEntity", "  8", layer_name
+            ])
+        else:
+            for i in range(tri_count):
+                i0 = prim.indices[i * 3]
+                i1 = prim.indices[i * 3 + 1]
+                i2 = prim.indices[i * 3 + 2]
+
+                v0x = f"{prim.positions[i0 * 3] * scale:.6f}"
+                v0y = f"{prim.positions[i0 * 3 + 1] * scale:.6f}"
+                v0z = f"{prim.positions[i0 * 3 + 2] * scale:.6f}"
+
+                v1x = f"{prim.positions[i1 * 3] * scale:.6f}"
+                v1y = f"{prim.positions[i1 * 3 + 1] * scale:.6f}"
+                v1z = f"{prim.positions[i1 * 3 + 2] * scale:.6f}"
+
+                v2x = f"{prim.positions[i2 * 3] * scale:.6f}"
+                v2y = f"{prim.positions[i2 * 3 + 1] * scale:.6f}"
+                v2z = f"{prim.positions[i2 * 3 + 2] * scale:.6f}"
+
+                lines.extend([
+                    "  0", "3DFACE", "  5", next_handle(), "330", "17", "100", "AcDbEntity", "  8", layer_name,
+                    " 62", str(aci), "100", "AcDbFace",
+                    " 10", v0x, " 20", v0y, " 30", v0z,
+                    " 11", v1x, " 21", v1y, " 31", v1z,
+                    " 12", v2x, " 22", v2y, " 32", v2z,
+                    " 13", v2x, " 23", v2y, " 33", v2z
+                ])
 
     lines.extend([
         "  0", "ENDSEC", "  0", "SECTION", "  2", "OBJECTS", "  0", "DICTIONARY", "  5", "C", "330", "0",
@@ -251,7 +281,7 @@ def export(
     scene: Scene,
     output_path: Union[str, pathlib.Path],
     scale: float = METRES_TO_INCHES,
-    mode: Literal["3dface", "polyface"] = "3dface",
+    mode: Literal["3dface", "polyface"] = "polyface",
 ) -> None:
     """Export a baked scene to an AutoCAD R2000 3D DXF file.
 

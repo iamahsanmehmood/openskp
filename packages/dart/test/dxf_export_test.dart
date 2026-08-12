@@ -31,9 +31,14 @@ void main() {
       final dxfText = toDxf(scene);
       expect(dxfText, contains('\$ACADVER'));
       expect(dxfText, contains('AC1015'));
-      expect(dxfText, contains('3DFACE'));
+      expect(dxfText, contains('POLYLINE'));
+      expect(dxfText, contains('AcDbPolyFaceMesh'));
       expect(dxfText, contains('Walls'));
       expect(dxfText, contains('EOF'));
+
+      final dxf3d = toDxf(scene, mode: '3dface');
+      expect(dxf3d, contains('3DFACE'));
+      expect(dxf3d, contains('AcDbFace'));
     });
   });
 }

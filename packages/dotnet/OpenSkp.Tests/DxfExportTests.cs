@@ -29,9 +29,14 @@ namespace OpenSkp.Tests
             string dxfText = DxfExport.ToDxf(scene);
             Assert.Contains("$ACADVER", dxfText);
             Assert.Contains("AC1015", dxfText);
-            Assert.Contains("3DFACE", dxfText);
+            Assert.Contains("POLYLINE", dxfText);
+            Assert.Contains("AcDbPolyFaceMesh", dxfText);
             Assert.Contains("Walls", dxfText);
             Assert.Contains("EOF", dxfText);
+
+            string dxf3d = DxfExport.ToDxf(scene, mode: "3dface");
+            Assert.Contains("3DFACE", dxf3d);
+            Assert.Contains("AcDbFace", dxf3d);
         }
     }
 }

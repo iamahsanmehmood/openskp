@@ -22,7 +22,7 @@ constexpr double METRES_TO_INCHES = 39.37007874015748;
  * @return Formatted ASCII DXF text string.
  */
 std::string to_dxf(const Scene& scene, double scale = METRES_TO_INCHES,
-                   const std::string& mode = "3dface");
+                   const std::string& mode = "polyface");
 
 /**
  * Export a baked Scene directly to an AutoCAD R2000 3D DXF file.
@@ -30,10 +30,10 @@ std::string to_dxf(const Scene& scene, double scale = METRES_TO_INCHES,
  * @param scene The baked scene returned by SkpFile::build_scene()
  * @param path Destination file path (.dxf)
  * @param scale Scale factor for vertex coordinates (default: METRES_TO_INCHES)
- * @param mode Export mode ("3dface" or "polyface", default: "3dface")
+ * @param mode Export mode ("3dface" or "polyface", default: "polyface")
  */
 void export_dxf(const Scene& scene, const std::filesystem::path& path,
-                double scale = METRES_TO_INCHES, const std::string& mode = "3dface");
+                double scale = METRES_TO_INCHES, const std::string& mode = "polyface");
 
 }  // namespace openskp
 

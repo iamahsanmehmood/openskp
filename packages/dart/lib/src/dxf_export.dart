@@ -67,7 +67,7 @@ List<int> getPrimRgb(Scene scene, GlbPrimitive prim) {
 String toDxf(
   Scene scene, {
   double scale = metresToInches,
-  String mode = '3dface',
+  String mode = 'polyface',
 }) {
   final layerColors = <String, List<int>>{};
   for (final prim in scene.glbPrimitives) {
@@ -181,31 +181,62 @@ String toDxf(
     final rgb = getPrimRgb(scene, prim);
     final aci = rgbToAci(rgb[0], rgb[1], rgb[2]);
 
-    for (int i = 0; i < triCount; i++) {
-      final i0 = prim.indices[i * 3];
-      final i1 = prim.indices[i * 3 + 1];
-      final i2 = prim.indices[i * 3 + 2];
-
-      final v0x = (prim.positions[i0 * 3] * scale).toStringAsFixed(6);
-      final v0y = (prim.positions[i0 * 3 + 1] * scale).toStringAsFixed(6);
-      final v0z = (prim.positions[i0 * 3 + 2] * scale).toStringAsFixed(6);
-
-      final v1x = (prim.positions[i1 * 3] * scale).toStringAsFixed(6);
-      final v1y = (prim.positions[i1 * 3 + 1] * scale).toStringAsFixed(6);
-      final v1z = (prim.positions[i1 * 3 + 2] * scale).toStringAsFixed(6);
-
-      final v2x = (prim.positions[i2 * 3] * scale).toStringAsFixed(6);
-      final v2y = (prim.positions[i2 * 3 + 1] * scale).toStringAsFixed(6);
-      final v2z = (prim.positions[i2 * 3 + 2] * scale).toStringAsFixed(6);
-
+    if (mode == 'polyface') {
+      final vCount = prim.positions.length ~/ 3;
       lines.addAll([
-        '  0', '3DFACE', '  5', nextHandle(), '330', '17', '100', 'AcDbEntity', '  8', layerName,
-        ' 62', aci.toString(), '100', 'AcDbFace',
-        ' 10', v0x, ' 20', v0y, ' 30', v0z,
-        ' 11', v1x, ' 21', v1y, ' 31', v1z,
-        ' 12', v2x, ' 22', v2y, ' 32', v2z,
-        ' 13', v2x, ' 23', v2y, ' 33', v2z
+        '  0', 'POLYLINE', '  5', nextHandle(), '330', '17', '100', 'AcDbEntity', '  8', layerName,
+        ' 62', aci.toString(), '100', 'AcDbPolyFaceMesh', ' 66', '1',
+        ' 10', '0.0', ' 20', '0.0', ' 30', '0.0',
+        ' 70', '64', ' 71', vCount.toString(), ' 72', triCount.toString()
       ]);
+      for (int i = 0; i < vCount; i++) {
+        final vx = (prim.positions[i * 3] * scale).toStringAsFixed(6);
+        final vy = (prim.positions[i * 3 + 1] * scale).toStringAsFixed(6);
+        final vz = (prim.positions[i * 3 + 2] * scale).toStringAsFixed(6);
+        lines.addAll([
+          '  0', 'VERTEX', '  5', nextHandle(), '330', '17', '100', 'AcDbEntity', '  8', layerName,
+          '100', 'AcDbVertex', '100', 'AcDbPolyFaceMeshVertex',
+          ' 10', vx, ' 20', vy, ' 30', vz, ' 70', '192'
+        ]);
+      }
+      for (int i = 0; i < triCount; i++) {
+        final idx0 = prim.indices[i * 3] + 1;
+        final idx1 = prim.indices[i * 3 + 1] + 1;
+        final idx2 = prim.indices[i * 3 + 2] + 1;
+        lines.addAll([
+          '  0', 'VERTEX', '  5', nextHandle(), '330', '17', '100', 'AcDbEntity', '  8', layerName,
+          '100', 'AcDbVertex', '100', 'AcDbFaceRecord', ' 70', '128',
+          ' 71', idx0.toString(), ' 72', idx1.toString(), ' 73', idx2.toString(), ' 74', '0'
+        ]);
+      }
+      lines.addAll(['  0', 'SEQEND', '  5', nextHandle(), '330', '17', '100', 'AcDbEntity', '  8', layerName]);
+    } else {
+      for (int i = 0; i < triCount; i++) {
+        final i0 = prim.indices[i * 3];
+        final i1 = prim.indices[i * 3 + 1];
+        final i2 = prim.indices[i * 3 + 2];
+
+        final v0x = (prim.positions[i0 * 3] * scale).toStringAsFixed(6);
+        final v0y = (prim.positions[i0 * 3 + 1] * scale).toStringAsFixed(6);
+        final v0z = (prim.positions[i0 * 3 + 2] * scale).toStringAsFixed(6);
+
+        final v1x = (prim.positions[i1 * 3] * scale).toStringAsFixed(6);
+        final v1y = (prim.positions[i1 * 3 + 1] * scale).toStringAsFixed(6);
+        final v1z = (prim.positions[i1 * 3 + 2] * scale).toStringAsFixed(6);
+
+        final v2x = (prim.positions[i2 * 3] * scale).toStringAsFixed(6);
+        final v2y = (prim.positions[i2 * 3 + 1] * scale).toStringAsFixed(6);
+        final v2z = (prim.positions[i2 * 3 + 2] * scale).toStringAsFixed(6);
+
+        lines.addAll([
+          '  0', '3DFACE', '  5', nextHandle(), '330', '17', '100', 'AcDbEntity', '  8', layerName,
+          ' 62', aci.toString(), '100', 'AcDbFace',
+          ' 10', v0x, ' 20', v0y, ' 30', v0z,
+          ' 11', v1x, ' 21', v1y, ' 31', v1z,
+          ' 12', v2x, ' 22', v2y, ' 32', v2z,
+          ' 13', v2x, ' 23', v2y, ' 33', v2z
+        ]);
+      }
     }
   }
 
@@ -251,7 +282,7 @@ void exportDxf(
   Scene scene,
   String outputPath, {
   double scale = metresToInches,
-  String mode = '3dface',
+  String mode = 'polyface',
 }) {
   final file = File(outputPath);
   file.parent.createSync(recursive: true);

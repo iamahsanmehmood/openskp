@@ -26,13 +26,21 @@ describe('DXF 3D Exporter', () => {
     gltfMaterials: [],
   });
 
-  it('serializes SkpScene to 3D DXF format', () => {
+  it('serializes SkpScene to 3D DXF format in polyface mode by default', () => {
     const scene = createMockScene();
-    const dxfText = toDXF(scene, METRES_TO_INCHES, 'polyface');
+    const dxfText = toDXF(scene);
     expect(dxfText).toContain('$ACADVER');
     expect(dxfText).toContain('AC1015');
-    expect(dxfText).toContain('3DFACE');
+    expect(dxfText).toContain('POLYLINE');
+    expect(dxfText).toContain('AcDbPolyFaceMesh');
     expect(dxfText).toContain('Walls');
     expect(dxfText).toContain('EOF');
+  });
+
+  it('serializes SkpScene to 3DFACE format when mode is 3dface', () => {
+    const scene = createMockScene();
+    const dxfText = toDXF(scene, METRES_TO_INCHES, '3dface');
+    expect(dxfText).toContain('3DFACE');
+    expect(dxfText).toContain('AcDbFace');
   });
 });

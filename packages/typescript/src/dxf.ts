@@ -72,7 +72,7 @@ function getPrimRgb(scene: SkpScene, prim: any): [number, number, number] {
 export function toDXF(
   scene: SkpScene,
   scale: number = METRES_TO_INCHES,
-  _mode: '3dface' | 'polyface' = '3dface'
+  mode: '3dface' | 'polyface' = 'polyface'
 ): string {
   if (!scene || !scene.glbPrimitives) {
     throw new Error('toDXF requires a valid SkpScene instance');
@@ -187,31 +187,62 @@ export function toDXF(
     const [pr, pg, pb] = getPrimRgb(scene, prim);
     const aci = rgbToAci(pr, pg, pb);
 
-    for (let i = 0; i < triCount; i++) {
-      const i0 = prim.indices[i * 3];
-      const i1 = prim.indices[i * 3 + 1];
-      const i2 = prim.indices[i * 3 + 2];
-
-      const v0x = (prim.positions[i0 * 3] * scale).toFixed(6);
-      const v0y = (prim.positions[i0 * 3 + 1] * scale).toFixed(6);
-      const v0z = (prim.positions[i0 * 3 + 2] * scale).toFixed(6);
-
-      const v1x = (prim.positions[i1 * 3] * scale).toFixed(6);
-      const v1y = (prim.positions[i1 * 3 + 1] * scale).toFixed(6);
-      const v1z = (prim.positions[i1 * 3 + 2] * scale).toFixed(6);
-
-      const v2x = (prim.positions[i2 * 3] * scale).toFixed(6);
-      const v2y = (prim.positions[i2 * 3 + 1] * scale).toFixed(6);
-      const v2z = (prim.positions[i2 * 3 + 2] * scale).toFixed(6);
-
+    if (mode === 'polyface') {
+      const vCount = Math.floor(prim.positions.length / 3);
       lines.push(
-        '  0', '3DFACE', '  5', nextHandle(), '330', '17', '100', 'AcDbEntity', '  8', layerName,
-        ' 62', aci.toString(), '100', 'AcDbFace',
-        ' 10', v0x, ' 20', v0y, ' 30', v0z,
-        ' 11', v1x, ' 21', v1y, ' 31', v1z,
-        ' 12', v2x, ' 22', v2y, ' 32', v2z,
-        ' 13', v2x, ' 23', v2y, ' 33', v2z
+        '  0', 'POLYLINE', '  5', nextHandle(), '330', '17', '100', 'AcDbEntity', '  8', layerName,
+        ' 62', aci.toString(), '100', 'AcDbPolyFaceMesh', ' 66', '1',
+        ' 10', '0.0', ' 20', '0.0', ' 30', '0.0',
+        ' 70', '64', ' 71', vCount.toString(), ' 72', triCount.toString()
       );
+      for (let i = 0; i < vCount; i++) {
+        const vx = (prim.positions[i * 3] * scale).toFixed(6);
+        const vy = (prim.positions[i * 3 + 1] * scale).toFixed(6);
+        const vz = (prim.positions[i * 3 + 2] * scale).toFixed(6);
+        lines.push(
+          '  0', 'VERTEX', '  5', nextHandle(), '330', '17', '100', 'AcDbEntity', '  8', layerName,
+          '100', 'AcDbVertex', '100', 'AcDbPolyFaceMeshVertex',
+          ' 10', vx, ' 20', vy, ' 30', vz, ' 70', '192'
+        );
+      }
+      for (let i = 0; i < triCount; i++) {
+        const idx0 = prim.indices[i * 3] + 1;
+        const idx1 = prim.indices[i * 3 + 1] + 1;
+        const idx2 = prim.indices[i * 3 + 2] + 1;
+        lines.push(
+          '  0', 'VERTEX', '  5', nextHandle(), '330', '17', '100', 'AcDbEntity', '  8', layerName,
+          '100', 'AcDbVertex', '100', 'AcDbFaceRecord', ' 70', '128',
+          ' 71', idx0.toString(), ' 72', idx1.toString(), ' 73', idx2.toString(), ' 74', '0'
+        );
+      }
+      lines.push('  0', 'SEQEND', '  5', nextHandle(), '330', '17', '100', 'AcDbEntity', '  8', layerName);
+    } else {
+      for (let i = 0; i < triCount; i++) {
+        const i0 = prim.indices[i * 3];
+        const i1 = prim.indices[i * 3 + 1];
+        const i2 = prim.indices[i * 3 + 2];
+
+        const v0x = (prim.positions[i0 * 3] * scale).toFixed(6);
+        const v0y = (prim.positions[i0 * 3 + 1] * scale).toFixed(6);
+        const v0z = (prim.positions[i0 * 3 + 2] * scale).toFixed(6);
+
+        const v1x = (prim.positions[i1 * 3] * scale).toFixed(6);
+        const v1y = (prim.positions[i1 * 3 + 1] * scale).toFixed(6);
+        const v1z = (prim.positions[i1 * 3 + 2] * scale).toFixed(6);
+
+        const v2x = (prim.positions[i2 * 3] * scale).toFixed(6);
+        const v2y = (prim.positions[i2 * 3 + 1] * scale).toFixed(6);
+        const v2z = (prim.positions[i2 * 3 + 2] * scale).toFixed(6);
+
+        lines.push(
+          '  0', '3DFACE', '  5', nextHandle(), '330', '17', '100', 'AcDbEntity', '  8', layerName,
+          ' 62', aci.toString(), '100', 'AcDbFace',
+          ' 10', v0x, ' 20', v0y, ' 30', v0z,
+          ' 11', v1x, ' 21', v1y, ' 31', v1z,
+          ' 12', v2x, ' 22', v2y, ' 32', v2z,
+          ' 13', v2x, ' 23', v2y, ' 33', v2z
+        );
+      }
     }
   }
 
@@ -260,13 +291,13 @@ export function toDXF(
  * @param scene The result of SkpFile.buildScene()
  * @param outputPath Destination file path (.dxf)
  * @param scale Scale factor for vertex coordinates (default: METRES_TO_INCHES)
- * @param mode Export mode ('3dface' or 'polyface', default: '3dface')
+ * @param mode Export mode ('3dface' or 'polyface', default: 'polyface')
  */
 export function exportDXF(
   scene: SkpScene,
   outputPath: string,
   scale: number = METRES_TO_INCHES,
-  mode: '3dface' | 'polyface' = '3dface'
+  mode: '3dface' | 'polyface' = 'polyface'
 ): void {
   if (typeof process !== 'undefined' && process.versions && process.versions.node) {
     const fs = require('fs');
