@@ -316,13 +316,12 @@ ships file-writing exporters on top of that data:
 | Language | Scene data (`buildScene()`) | GLB | OBJ | JSON metadata |
 |---|---|---|---|---|
 | Python | ✅ | ✅ `openskp.export.glb` | ✅ `openskp.export.obj` | ✅ `openskp.export.json_export` |
-| TypeScript | ✅ | ✅ `toGLB(scene)` in `index.ts` | 💡 OBJ snippet provided | ✅ `toJSON(model, scene?)` in `index.ts` |
-| .NET | ✅ | ✅ `GlbExport.ToGlb(scene)` / `GlbExport.ExportGlb(scene, path)` | 💡 OBJ snippet provided | ✅ `JsonExport.ToJson(model, scene?)` / `ExportJson(...)` |
-| Dart | ✅ | ✅ `toGlb(scene)` / `exportGlb(scene, path)` | 💡 OBJ snippet provided | ✅ `toJson(model, scene?)` / `exportJson(...)` |
-| C++ | ✅ | ✅ `to_glb(scene)` / `export_glb(scene, path)` | 💡 OBJ snippet provided | ✅ `to_json(model, scene?)` / `export_json(...)` |
+| TypeScript | ✅ | ✅ `toGLB(scene)` in `index.ts` | ✅ `toOBJ(scene)` / `exportOBJ(...)` | ✅ `toJSON(model, scene?)` in `index.ts` |
+| .NET | ✅ | ✅ `GlbExport.ToGlb(scene)` / `GlbExport.ExportGlb(scene, path)` | ✅ `ObjExport.ToObj(scene)` / `ExportObj(...)` | ✅ `JsonExport.ToJson(model, scene?)` / `ExportJson(...)` |
+| Dart | ✅ | ✅ `toGlb(scene)` / `exportGlb(scene, path)` | ✅ `toObj(scene)` / `exportObj(...)` | ✅ `toJson(model, scene?)` / `exportJson(...)` |
+| C++ | ✅ | ✅ `to_glb(scene)` / `export_glb(scene, path)` | ✅ `to_obj(scene)` / `export_obj(...)` | ✅ `to_json(model, scene?)` / `export_json(...)` |
 
-Python is the only port with a full set of disk-writing exporters today,
-in `openskp.export`:
+All five languages provide built-in file-writing and in-memory exporters for GLB, OBJ, and JSON metadata (`to_obj`/`export_obj`, `toOBJ`/`exportOBJ`, `toObj`/`exportObj`, `ObjExport.ToObj`/`ExportObj`). Below is the Python export example:
 
 ```python
 from openskp import SkpFile
@@ -473,11 +472,10 @@ entirely — also fixed, earlier in the same session.)
 
 ### GLB/OBJ/JSON export
 
-Covered above under [Export capabilities](#export-capabilities) — GLB
-export is now available in all five languages. Python has the fullest set
-of disk-writing exporters (GLB/OBJ/JSON); TypeScript also has JSON
-metadata export alongside its in-memory `.glb` serializer; C++, .NET, and
-Dart all have in-memory and disk GLB export but no OBJ/JSON writer yet.
+Covered above under [Export capabilities](#export-capabilities) — GLB, OBJ,
+and JSON metadata export are natively supported in all five languages. All ports
+provide both in-memory string/buffer formatting (`to_obj`/`toOBJ`/`toObj`/`ToObj`)
+and direct file output functions (`export_obj`/`exportOBJ`/`exportObj`/`ExportObj`).
 
 ### Progress/logging mechanism
 

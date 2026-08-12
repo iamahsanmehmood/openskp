@@ -49,7 +49,7 @@ OpenSKP is the **first and only** open-source, cross-platform parser for SketchU
 | **Styles** | ✅ | Front/back face colors for unpainted faces |
 | **Dynamic Components** | ✅ | Extracts dynamic component attribute key-value pairs for both modern (2021+) and legacy (2013–2020) files, in all five languages |
 | **Observability** | ✅ | Opt-in progress reporting + structured, location-carrying parse errors — see [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md) |
-| **Export to GLB / OBJ / JSON** | ✅ | GLB and JSON metadata export are available natively across all five languages; OBJ export code is provided for all ports — see [Export capabilities](docs/DEVELOPER_GUIDE.md#export-capabilities) |
+| **Export to GLB / OBJ / JSON** | ✅ | GLB, OBJ, and JSON metadata export are available natively across all five languages — see [Export capabilities](docs/DEVELOPER_GUIDE.md#export-capabilities) |
 | **Streaming / low-memory parsing** | ✅ | Peak memory bounded by the largest single definition, not the whole file — see [Memory architecture](docs/ARCHITECTURE.md#memory-architecture) |
 | **Pure Implementation** | ✅ | No SketchUp SDK, no native dependencies, no license required |
 | **Cross-Platform** | ✅ | Works on Linux, macOS, and Windows |

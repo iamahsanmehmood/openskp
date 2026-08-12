@@ -4,6 +4,7 @@
 #include <openskp/glb.hpp>
 #include <openskp/json_export.hpp>
 #include <openskp/model.hpp>
+#include <openskp/obj_export.hpp>
 #include <openskp/observability.hpp>
 #include <openskp/parser.hpp>
 #include <openskp/scene.hpp>

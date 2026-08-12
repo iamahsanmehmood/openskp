@@ -8,6 +8,7 @@ add_executable(
   json_export_test.cpp
   layer_hidden_test.cpp
   lowlevel_test.cpp
+  obj_export_test.cpp
   observability_test.cpp
   parser_test.cpp
   scene_test.cpp

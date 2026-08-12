@@ -1299,6 +1299,30 @@ class TestSectionPlaneTextDimension:
         assert dim.text == "100mm"
 
 
+class TestObjExporter:
+    """Wavefront OBJ text exporter."""
+
+    def test_to_obj_exports_primitives(self) -> None:
+        from array import array
+        from openskp.scene import Scene, GlbPrimitive
+        from openskp.export.obj import to_obj
+
+        prim = GlbPrimitive(
+            geom_name="Box",
+            material_index=0,
+            positions=array("f", [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+            normals=array("f", [0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0]),
+            uvs=array("f", [0.0, 0.0, 1.0, 0.0, 0.0, 1.0]),
+            indices=array("I", [0, 1, 2]),
+        )
+        scene = Scene(glb_primitives=[prim])
+        obj_text = to_obj(scene)
+        assert "# OpenSKP OBJ Export" in obj_text
+        assert "o Box" in obj_text
+        assert "v 0.000000 0.000000 0.000000" in obj_text
+        assert "f 1 2 3" in obj_text
+
+
 # ── Image entity tests ───────────────────────────────────────────────────
 
 

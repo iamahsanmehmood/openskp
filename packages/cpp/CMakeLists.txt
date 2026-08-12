@@ -111,6 +111,7 @@ set(
   src/json_export.cpp
   src/legacy.cpp
   src/model.cpp
+  src/obj_export.cpp
   src/observability.cpp
   src/parser.cpp
   src/scene.cpp

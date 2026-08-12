@@ -32,6 +32,7 @@ import { isLegacy, parseLegacyToRaw } from './legacy';
 export * from './model';
 export * from './errors';
 export * from './observability';
+export * from './obj';
 
 declare const process: any;
 declare const require: any;

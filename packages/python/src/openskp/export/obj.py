@@ -16,36 +16,46 @@ from typing import IO, Union
 from ..scene import Scene
 
 
-def _write_obj(scene: Scene, fp: IO[str]) -> None:
-    """Write OBJ records for every baked primitive to an open text stream.
+def to_obj(scene: Scene) -> str:
+    """Return Wavefront OBJ text representation for a baked scene.
 
     Args:
         scene: The result of :meth:`SkpFile.build_scene`.
-        fp: Writable text file handle.
-    """
-    fp.write("# OpenSKP OBJ Export\n")
-    fp.write(f"# Primitives: {len(scene.glb_primitives)}\n\n")
 
+    Returns:
+        The formatted OBJ text string.
+    """
+    lines: list[str] = [
+        "# OpenSKP OBJ Export",
+        f"# Primitives: {len(scene.glb_primitives)}",
+        "",
+    ]
     vert_offset = 1  # OBJ indices are 1-based
     for prim in scene.glb_primitives:
-        fp.write(f"o {prim.geom_name}\n")
-
+        lines.append(f"o {prim.geom_name}")
         vert_count = len(prim.positions) // 3
         for i in range(vert_count):
             x = prim.positions[i * 3]
             y = prim.positions[i * 3 + 1]
             z = prim.positions[i * 3 + 2]
-            fp.write(f"v {x:.6f} {y:.6f} {z:.6f}\n")
+            lines.append(f"v {x:.6f} {y:.6f} {z:.6f}")
 
         tri_count = len(prim.indices) // 3
         for i in range(tri_count):
             i0 = prim.indices[i * 3] + vert_offset
             i1 = prim.indices[i * 3 + 1] + vert_offset
             i2 = prim.indices[i * 3 + 2] + vert_offset
-            fp.write(f"f {i0} {i1} {i2}\n")
+            lines.append(f"f {i0} {i1} {i2}")
 
         vert_offset += vert_count
-        fp.write("\n")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+def _write_obj(scene: Scene, fp: IO[str]) -> None:
+    """Write OBJ records for every baked primitive to an open text stream."""
+    fp.write(to_obj(scene))
 
 
 def export(scene: Scene, output_path: Union[str, pathlib.Path]) -> None:
@@ -63,4 +73,7 @@ def export(scene: Scene, output_path: Union[str, pathlib.Path]) -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
 
     with open(out, "w", encoding="utf-8") as fp:
-        _write_obj(scene, fp)
+        fp.write(to_obj(scene))
+
+
+__all__ = ["to_obj", "export"]
