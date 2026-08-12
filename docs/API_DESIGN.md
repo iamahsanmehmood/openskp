@@ -140,7 +140,11 @@ All five languages produce equivalent structured output for the same file:
 
 | Format | Extension | Ships in |
 |---|---|---|
-| GLB (binary glTF 2.0) | `.glb` | Python (`openskp.export.glb`), TypeScript (`toGLB()`), C++ (`to_glb()` / `export_glb()`) |
-| Wavefront OBJ | `.obj` | Python (`openskp.export.obj`) only |
-| Full metadata JSON | `.json` | Python (`openskp.export.json_export`) only |
-| Raw scene data | — | All five, via scene building and `Scene`/`GlbPrimitive` — build your own serializer from this |
+| GLB (binary glTF 2.0) | `.glb` | All 5 languages (`glb.export` / `toGLB` / `GlbExport.ExportGlb` / `exportGlb` / `export_glb`) |
+| Wavefront OBJ | `.obj` | All 5 languages (`obj.export` / `toOBJ` / `ObjExport.ExportObj` / `exportObj` / `export_obj`) |
+| STL (3D Printing) | `.stl` | All 5 languages (`stl.export` / `toSTLAscii` / `StlExport.ExportStl` / `exportStl` / `export_stl`) |
+| PLY (Stanford Mesh) | `.ply` | All 5 languages (`ply.export` / `toPLYAscii` / `PlyExport.ExportPly` / `exportPly` / `export_ply`) |
+| DXF 3D (AutoCAD Polyface Mesh) | `.dxf` | All 5 languages (`dxf.export` / `toDXF` / `DxfExport.ExportDxf` / `exportDxf` / `export_dxf`) |
+| IFC4 (BIM ISO STEP) | `.ifc` | All 5 languages (`ifc.export` / `toIFC` / `IfcExport.ExportIfc` / `exportIfc` / `export_ifc`) |
+| Full metadata JSON | `.json` | All 5 languages (`json_export.export` / `toJSON` / `JsonExport.ExportJson` / `exportJson` / `export_json`) |
+| Raw scene data | — | All 5 languages via `buildScene()` — build custom serializers directly from `Scene` / `GlbPrimitive` |

@@ -77,7 +77,7 @@ class Program
         Scene scene = SkpFile.BuildScene("house.skp");
         DxfExport.ExportDxf(scene, "house.dxf");
         IfcExport.ExportIfc(scene, "house.ifc");
-        GlbExport.ExportGlb("house.skp", "house.glb");
+        GlbExport.ExportGlb(scene, "house.glb");
         ObjExport.ExportObj(scene, "house.obj");
         StlExport.ExportStl(scene, "house.stl");
         PlyExport.ExportPly(scene, "house.ply");

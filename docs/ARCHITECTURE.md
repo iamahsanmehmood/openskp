@@ -41,7 +41,7 @@ graph TD
     D --> E
     E --> F["parse() -> SkpModel\n(light, no scene resolution)"]
     E --> G["buildScene() -> Scene\n(opt-in: full instance tree,\ntriangulated, world-space)"]
-    G --> H["GLB export\n(Python, TypeScript, C++)"]
+    G --> H["Exporters (GLB, OBJ, STL, PLY, DXF, IFC, JSON)\n(all five languages)"]
 ```
 
 **VFF path** (`core.*` / `_core.py`): validate the `FF FE FF 0E` header,
@@ -133,7 +133,7 @@ platform:
 | Geometry extraction | `_core.py` | `geometry.ts` | `Geometry.cs` | `geometry.dart` | `geometry.cpp` |
 | Public model | `model.py` | `model.ts` | `Model.cs` | `model.dart` | `model.cpp` |
 | Scene baking | `scene.py` | `model.ts` | `Scene.cs` | `scene.dart` | `scene.cpp` |
-| GLB writing | `export/glb.py` | `index.ts` | — | — | `glb.cpp` |
+| Exporters (GLB, OBJ, STL, PLY, DXF, IFC, JSON) | `export/` | `obj.ts`, `stl.ts`, `ply.ts`, `dxf.ts`, `ifc.ts` | `GlbExport.cs`, `ObjExport.cs`, `StlExport.cs`, `PlyExport.cs`, `DxfExport.cs`, `IfcExport.cs`, `JsonExport.cs` | `glb_export.dart`, `obj_export.dart`, `stl_export.dart`, `ply_export.dart`, `dxf_export.dart`, `ifc_export.dart`, `json_export.dart` | `glb_export.cpp`, `obj_export.cpp`, `stl_export.cpp`, `ply_export.cpp`, `dxf_export.cpp`, `ifc_export.cpp`, `json_export.cpp` |
 | Triangulation | `triangulator.py` | `triangulator.ts` | `Triangulator.cs` + `Earcut.cs` | `triangulator.dart` + `earcut.dart` | `triangulator.cpp` + `earcut.cpp` |
 | Transform math | `transforms.py` | `transforms.ts` | `Transforms.cs` | `transforms.dart` | `transforms.cpp` |
 | Errors / observability | `errors.py` / logging | `errors.ts` / `observability.ts` | `Errors.cs` / `Observability.cs` | `errors.dart` / `observability.dart` | `errors.cpp` / `observability.cpp` |
@@ -171,7 +171,7 @@ equivalent, not the internal triangle split.
 | XML parsing | `ElementTree` | manual/DOM | `System.Xml` | `xml` | focused scanner |
 | Triangulation | `shapely` | `earcut` | ported earcut | ported earcut | native C++ |
 | Matrix math | `numpy` | native | native | native | native |
-| GLB/OBJ/JSON export | all | GLB | — | — | GLB via private TinyGLTF 2.9.7 |
+| GLB/OBJ/STL/PLY/DXF/IFC/JSON export | all (native / `trimesh`) | all (native) | all (native) | all (native) | all (native + private TinyGLTF 2.9.7) |
 
 ## Testing philosophy
 

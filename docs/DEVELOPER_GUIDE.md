@@ -324,7 +324,7 @@ All five languages provide built-in file-writing and in-memory exporters for GLB
 
 ```python
 from openskp import SkpFile
-from openskp.export import glb, obj, json_export
+from openskp.export import glb, obj, stl, ply, dxf, ifc, json_export
 
 skp = SkpFile.open("model.skp")
 model = skp.parse()
@@ -332,6 +332,10 @@ scene = skp.build_scene()
 
 glb.export(skp, "output.glb")               # takes the SkpFile, writes .glb + .json via trimesh
 obj.export(scene, "output.obj")              # takes a built Scene, writes vertices/faces only
+stl.export(scene, "output.stl", binary=True) # writes 3D printing STL (ASCII/binary)
+ply.export(scene, "output.ply", binary=True) # writes Stanford PLY mesh
+dxf.export(scene, "output.dxf")              # writes AutoCAD R2000 3D Polyface Mesh DXF
+ifc.export(scene, "output.ifc")              # writes ISO 10303-21 STEP IFC4 BIM model
 json_export.export(model, "output.json", scene=scene)  # scene= populates scene_hierarchy
 ```
 

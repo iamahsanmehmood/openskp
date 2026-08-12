@@ -45,7 +45,7 @@ console.log(scene.glbPrimitives.length, 'renderable mesh primitives');
 ## Exporting
 
 ```typescript
-import { toGLB, toOBJ, toSTL, toPLY, toDXF, exportDXF, toIFC, exportIFC, toJSON } from 'openskp';
+import { toGLB, toOBJ, toSTLAscii, toSTLBinary, exportSTL, toPLYAscii, toPLYBinary, exportPLY, toDXF, exportDXF, toIFC, exportIFC, toJSON } from 'openskp';
 
 // Serialize a built scene straight to .glb bytes (in-memory, no disk I/O)
 const glbBytes = toGLB(scene);
@@ -54,10 +54,12 @@ const glbBytes = toGLB(scene);
 const objText = toOBJ(scene);
 
 // Export to STL ASCII or Binary string/buffer
-const stlText = toSTL(scene);
+const stlText = toSTLAscii(scene);
+const stlBytes = toSTLBinary(scene);
 
 // Export to PLY ASCII or Binary string/buffer
-const plyText = toPLY(scene);
+const plyText = toPLYAscii(scene);
+const plyBytes = toPLYBinary(scene);
 
 // Export to AutoCAD 3D DXF text format (R2000 / AC1015 compliant)
 const dxfText = toDXF(scene);
