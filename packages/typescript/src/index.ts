@@ -36,7 +36,7 @@ export { toOBJ, toMTL, exportOBJ } from './obj';
 export * from './stl';
 export * from './ply';
 export * from './dxf';
-export * from './ifc';
+export { toIFC, exportIFC, generateIFCGUID, classifyElement } from './ifc';
 
 declare const process: any;
 declare const require: any;

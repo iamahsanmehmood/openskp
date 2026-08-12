@@ -37,7 +37,7 @@ export function classifyElement(geomName: string): [string, string] {
 function getPrimRgb(scene: SkpScene, primMatIdx: number): [number, number, number, number] {
   let r = 0.8, g = 0.8, b = 0.8, a = 1.0;
   if (scene.gltfMaterials && primMatIdx >= 0 && primMatIdx < scene.gltfMaterials.length) {
-    const mat = scene.gltfMaterials[primMatIdx];
+    const mat = scene.gltfMaterials[primMatIdx] as any;
     if (mat && mat.pbrMetallicRoughness && Array.isArray(mat.pbrMetallicRoughness.baseColorFactor)) {
       const vec = mat.pbrMetallicRoughness.baseColorFactor;
       if (vec.length >= 3) {
