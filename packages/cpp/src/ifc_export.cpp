@@ -102,7 +102,8 @@ std::string to_ifc(const Scene& scene, double scale, const std::string& schema) 
   ss << "ISO-10303-21;\r\n";
   ss << "HEADER;\r\n";
   ss << "FILE_DESCRIPTION(('ViewDefinition [CoordinationView]'),'2;1');\r\n";
-  ss << "FILE_NAME('model.ifc','" << time_buf << "',('OpenSKP Author'),('OpenSKP "
+  ss << "FILE_NAME('model.ifc','" << time_buf
+     << "',('OpenSKP Author'),('OpenSKP "
         "Organization'),'OpenSKP IFC Exporter','OpenSKP','');\r\n";
   ss << "FILE_SCHEMA(('" << schema_str << "'));\r\n";
   ss << "ENDSEC;\r\n";
