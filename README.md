@@ -49,7 +49,7 @@ OpenSKP is the **first and only** open-source, cross-platform parser for SketchU
 | **Styles** | ✅ | Front/back face colors for unpainted faces |
 | **Dynamic Components** | ✅ | Extracts dynamic component attribute key-value pairs for both modern (2021+) and legacy (2013–2020) files, in all five languages |
 | **Observability** | ✅ | Opt-in progress reporting + structured, location-carrying parse errors — see [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md) |
-| **Export to GLB / OBJ / STL / PLY / DXF 3D / JSON** | ✅ | GLB, Wavefront OBJ, STL, PLY, DXF 3D (AutoCAD R12 `3DFACE`), and JSON metadata export are available natively across all five languages — see [Export capabilities](docs/DEVELOPER_GUIDE.md#export-capabilities) |
+| **Export to GLB / OBJ / STL / PLY / DXF 3D / IFC4 / JSON** | ✅ | GLB, Wavefront OBJ, STL, PLY, DXF 3D (AutoCAD Polyface Mesh), IFC4 (BIM), and JSON metadata export are available natively across all five languages — see [Export capabilities](docs/DEVELOPER_GUIDE.md#export-capabilities) |
 | **Streaming / low-memory parsing** | ✅ | Peak memory bounded by the largest single definition, not the whole file — see [Memory architecture](docs/ARCHITECTURE.md#memory-architecture) |
 | **Pure Implementation** | ✅ | No SketchUp SDK, no native dependencies, no license required |
 | **Cross-Platform** | ✅ | Works on Linux, macOS, and Windows |
@@ -161,6 +161,7 @@ Console.WriteLine($"{scene.GlbPrimitives.Count} renderable mesh primitives");
 
 var glb = GlbExport.ToGlb(scene);       // ready to write to a .glb file
 GlbExport.ExportGlb(scene, "my_model.glb");
+IfcExport.ExportIfc(scene, "my_model.ifc");
 ```
 
 ### 🎯 Dart / Flutter
@@ -181,6 +182,7 @@ print('${scene.glbPrimitives.length} renderable mesh primitives');
 
 final glb = toGlb(scene);               // ready to write to a .glb file
 exportGlb(scene, 'my_model.glb');
+exportIfc(scene, 'my_model.ifc');
 ```
 
 ### ⚙️ C++17 / CMake
@@ -198,6 +200,7 @@ auto model = skp.parse();
 auto scene = skp.build_scene();
 auto glb = openskp::to_glb(scene);
 openskp::export_glb(scene, "my_model.glb");
+openskp::export_ifc(scene, "my_model.ifc");
 ```
 
 ---

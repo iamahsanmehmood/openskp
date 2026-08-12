@@ -43,7 +43,7 @@ for inst in scene.scene_hierarchy.children:
 ## Exporting
 
 ```python
-from openskp.export import glb, obj, stl, ply, dxf, json_export
+from openskp.export import glb, obj, stl, ply, dxf, ifc, json_export
 
 # Export to GLB (glTF 2.0 binary) - takes the SkpFile itself
 glb.export(skp, "output.glb")
@@ -59,6 +59,9 @@ ply.export(scene, "output.ply", binary=True)
 
 # Export to AutoCAD 3D DXF (AutoCAD R2000 compliant)
 dxf.export(scene, "output.dxf")
+
+# Export to IFC4 / BIM (ISO 10303-21 STEP ASCII format)
+ifc.export(scene, "output.ifc")
 
 # Export metadata as JSON - pass scene= to include the resolved hierarchy
 meta = json_export.to_dict(model, scene=scene)

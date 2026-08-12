@@ -67,6 +67,10 @@ openskp::export_glb(scene, "model.glb");
 auto dxf_str = openskp::to_dxf(scene);
 openskp::export_dxf(scene, "model.dxf");
 
+// IFC4 / BIM export (ISO 10303-21 STEP format)
+auto ifc_str = openskp::to_ifc(scene);
+openskp::export_ifc(scene, "model.ifc");
+
 // OBJ / STL / PLY export
 openskp::export_obj(scene, "model.obj");
 openskp::export_stl(scene, "model.stl");

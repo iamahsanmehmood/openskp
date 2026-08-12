@@ -114,6 +114,10 @@ void main() async {
   // Export to 3D DXF (AutoCAD R2000 compliant)
   final dxfText = toDxf(scene);
   exportDxf(scene, 'my_model.dxf');
+
+  // Export to IFC4 / BIM (ISO 10303-21 STEP format)
+  final ifcText = toIfc(scene);
+  exportIfc(scene, 'my_model.ifc');
 }
 ```
 
