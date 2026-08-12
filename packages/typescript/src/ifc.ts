@@ -161,6 +161,7 @@ export function toIFC(
   );
 
   const productIds: number[] = [];
+  const layerItems: Map<string, number[]> = new Map();
   const matStyleCache: Map<string, number> = new Map();
 
   for (const prim of scene.glbPrimitives) {
@@ -169,6 +170,8 @@ export function toIFC(
     if (triCount === 0 || vCount === 0) continue;
 
     const geomName = sanitizeName(prim.geomName);
+    const meta = scene.meshIndex ? scene.meshIndex[prim.geomName] : undefined;
+    const layerName = sanitizeName(meta && meta.layer ? meta.layer : 'Layer0');
     const [stepType] = classifyElement(geomName);
 
     const ptCoords: string[] = [];
@@ -194,6 +197,11 @@ export function toIFC(
     lines.push(
       `#${faceSetId}=IFCTRIANGULATEDFACESET(#${ptListId},$,.TRUE.,(${faceIndices.join(',')}),$);`
     );
+
+    if (!layerItems.has(layerName)) {
+      layerItems.set(layerName, []);
+    }
+    layerItems.get(layerName)!.push(faceSetId);
 
     const [r, g, b, a] = getPrimRgb(scene, prim.materialIndex);
     const rgbaKey = `${r.toFixed(4)},${g.toFixed(4)},${b.toFixed(4)},${a.toFixed(4)}`;
@@ -245,7 +253,6 @@ export function toIFC(
     }
     productIds.push(productId);
 
-    const meta = scene.meshIndex ? scene.meshIndex[prim.geomName] : undefined;
     if (meta && meta.properties && typeof meta.properties === 'object') {
       const propValIds: number[] = [];
       for (const [pk, pv] of Object.entries(meta.properties)) {
@@ -267,6 +274,17 @@ export function toIFC(
           `#${nextId()}=IFCRELDEFINESBYPROPERTIES('${generateIFCGUID()}',#${ownerHistId},$,$,(#${productId}),#${psetId});`
         );
       }
+    }
+  }
+
+  const sortedLayerNames = Array.from(layerItems.keys()).sort();
+  for (const lName of sortedLayerNames) {
+    const itemIds = layerItems.get(lName)!;
+    if (itemIds.length > 0) {
+      const itemRefs = itemIds.map((iid) => `#${iid}`).join(',');
+      lines.push(
+        `#${nextId()}=IFCPRESENTATIONLAYERASSIGNMENT('${lName}',$,(${itemRefs}),$);`
+      );
     }
   }
 

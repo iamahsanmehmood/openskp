@@ -169,6 +169,7 @@ namespace OpenSkp
             lines.Add($"#{NextId()}=IFCRELAGGREGATES('{GenerateIfcGuid()}',#{ownerHistId},$,$,#{bldgId},(#{storeyId}));");
 
             var productIds = new List<int>();
+            var layerItems = new Dictionary<string, List<int>>();
             var matStyleCache = new Dictionary<string, int>();
 
             foreach (var prim in scene.GlbPrimitives)
@@ -178,6 +179,16 @@ namespace OpenSkp
                 if (triCount == 0 || vCount == 0) continue;
 
                 string geomName = SanitizeName(prim.GeomName);
+                string layerName = "Layer0";
+                MeshMetadata meta = null;
+                if (scene.MeshIndex != null && scene.MeshIndex.TryGetValue(prim.GeomName, out meta) && meta != null)
+                {
+                    if (!string.IsNullOrEmpty(meta.Layer))
+                    {
+                        layerName = SanitizeName(meta.Layer);
+                    }
+                }
+
                 var (stepType, _) = ClassifyElement(geomName);
 
                 var ptCoords = new List<string>();
@@ -203,6 +214,12 @@ namespace OpenSkp
 
                 int faceSetId = NextId();
                 lines.Add($"#{faceSetId}=IFCTRIANGULATEDFACESET(#{ptListId},$,.TRUE.,({string.Join(",", faceIndices)}),$);");
+
+                if (!layerItems.ContainsKey(layerName))
+                {
+                    layerItems[layerName] = new List<int>();
+                }
+                layerItems[layerName].Add(faceSetId);
 
                 var (r, g, b, a) = GetPrimRgb(scene, prim.MaterialIndex);
                 string rgbaKey = $"{r.ToString("F4", CultureInfo.InvariantCulture)},{g.ToString("F4", CultureInfo.InvariantCulture)},{b.ToString("F4", CultureInfo.InvariantCulture)},{a.ToString("F4", CultureInfo.InvariantCulture)}";
@@ -249,7 +266,7 @@ namespace OpenSkp
                 }
                 productIds.Add(productId);
 
-                if (scene.MeshIndex != null && scene.MeshIndex.TryGetValue(prim.GeomName, out var meta) && meta != null && meta.Properties != null && meta.Properties.Count > 0)
+                if (meta != null && meta.Properties != null && meta.Properties.Count > 0)
                 {
                     var propValIds = new List<int>();
                     foreach (var kvp in meta.Properties)
@@ -269,6 +286,18 @@ namespace OpenSkp
 
                         lines.Add($"#{NextId()}=IFCRELDEFINESBYPROPERTIES('{GenerateIfcGuid()}',#{ownerHistId},$,$,(#{productId}),#{psetId});");
                     }
+                }
+            }
+
+            var sortedLayerNames = new List<string>(layerItems.Keys);
+            sortedLayerNames.Sort(StringComparer.Ordinal);
+            foreach (var lName in sortedLayerNames)
+            {
+                var itemIds = layerItems[lName];
+                if (itemIds.Count > 0)
+                {
+                    string itemRefs = string.Join(",", itemIds.ConvertAll(iid => $"#{iid}"));
+                    lines.Add($"#{NextId()}=IFCPRESENTATIONLAYERASSIGNMENT('{lName}',$,({itemRefs}),$);");
                 }
             }
 

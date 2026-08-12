@@ -161,6 +161,7 @@ String toIfc(
   );
 
   final productIds = <int>[];
+  final layerItems = <String, List<int>>{};
   final matStyleCache = <String, int>{};
 
   for (final prim in scene.glbPrimitives) {
@@ -169,6 +170,8 @@ String toIfc(
     if (triCount == 0 || vCount == 0) continue;
 
     final geomName = sanitizeName(prim.geomName);
+    final meta = scene.meshIndex[prim.geomName];
+    final layerName = sanitizeName(meta?.layer ?? 'Layer0');
     final classification = classifyElement(geomName);
     final stepType = classification[0];
 
@@ -195,6 +198,8 @@ String toIfc(
     lines.add(
       '#$faceSetId=IFCTRIANGULATEDFACESET(#$ptListId,\$,.TRUE.,(${faceIndices.join(',')}),\$);'
     );
+
+    layerItems.putIfAbsent(layerName, () => []).add(faceSetId);
 
     final rgba = getPrimRgb(scene, prim.materialIndex);
     final r = rgba[0], g = rgba[1], b = rgba[2], a = rgba[3];
@@ -248,7 +253,6 @@ String toIfc(
     }
     productIds.add(productId);
 
-    final meta = scene.meshIndex[prim.geomName];
     if (meta != null && meta.properties.isNotEmpty) {
       final propValIds = <int>[];
       for (final entry in meta.properties.entries) {
@@ -270,6 +274,17 @@ String toIfc(
           '#${nextId()}=IFCRELDEFINESBYPROPERTIES(\'${generateIfcGuid()}\',#$ownerHistId,\$,\$,(#$productId),#$psetId);'
         );
       }
+    }
+  }
+
+  final sortedLayerNames = layerItems.keys.toList()..sort();
+  for (final lName in sortedLayerNames) {
+    final itemIds = layerItems[lName]!;
+    if (itemIds.isNotEmpty) {
+      final itemRefs = itemIds.map((iid) => '#$iid').join(',');
+      lines.add(
+        '#${nextId()}=IFCPRESENTATIONLAYERASSIGNMENT(\'$lName\',\$,($itemRefs),\$);'
+      );
     }
   }
 

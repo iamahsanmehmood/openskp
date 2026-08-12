@@ -168,6 +168,7 @@ std::string to_ifc(const Scene& scene, double scale, const std::string& schema) 
     ss << "#" << next_id() << "=IFCRELAGGREGATES('" << generate_ifc_guid() << "',#" << owner_hist_id << ",$,$,#" << bldg_id << ",(#" << storey_id << "));\r\n";
 
     std::vector<int> product_ids;
+    std::map<std::string, std::vector<int>> layer_items;
     std::map<std::string, int> mat_style_cache;
 
     for (const auto& prim : scene.glb_primitives) {
@@ -176,6 +177,12 @@ std::string to_ifc(const Scene& scene, double scale, const std::string& schema) 
         if (tri_count == 0 || v_count == 0) continue;
 
         std::string geom_name = sanitize_name(prim.geom_name);
+        std::string layer_name = "Layer0";
+        auto meta_it = scene.mesh_index.find(prim.geom_name);
+        if (meta_it != scene.mesh_index.end() && !meta_it->second.layer.empty()) {
+            layer_name = sanitize_name(meta_it->second.layer);
+        }
+
         auto [step_type, _] = classify_element(geom_name);
 
         std::ostringstream pt_ss;
@@ -200,6 +207,8 @@ std::string to_ifc(const Scene& scene, double scale, const std::string& schema) 
 
         int face_set_id = next_id();
         ss << "#" << face_set_id << "=IFCTRIANGULATEDFACESET(#" << pt_list_id << ",$,.TRUE.,(" << face_ss.str() << "),$);\r\n";
+
+        layer_items[layer_name].push_back(face_set_id);
 
         auto [r, g, b, a] = get_prim_rgb(scene, prim.material_index);
         std::ostringstream key_ss;
@@ -248,7 +257,6 @@ std::string to_ifc(const Scene& scene, double scale, const std::string& schema) 
         }
         product_ids.push_back(product_id);
 
-        auto meta_it = scene.mesh_index.find(prim.geom_name);
         if (meta_it != scene.mesh_index.end() && !meta_it->second.properties.empty()) {
             std::vector<int> prop_val_ids;
             for (const auto& [pk, pv] : meta_it->second.properties) {
@@ -269,6 +277,17 @@ std::string to_ifc(const Scene& scene, double scale, const std::string& schema) 
                 ss << "#" << pset_id << "=IFCPROPERTYSET('" << generate_ifc_guid() << "',#" << owner_hist_id << ",'Pset_CustomProperties',$,(" << prop_ss.str() << "));\r\n";
                 ss << "#" << next_id() << "=IFCRELDEFINESBYPROPERTIES('" << generate_ifc_guid() << "',#" << owner_hist_id << ",$,$,(#" << product_id << "),#" << pset_id << ");\r\n";
             }
+        }
+    }
+
+    for (const auto& [l_name, item_ids] : layer_items) {
+        if (!item_ids.empty()) {
+            std::ostringstream item_ss;
+            for (size_t i = 0; i < item_ids.size(); ++i) {
+                if (i > 0) item_ss << ",";
+                item_ss << "#" << item_ids[i];
+            }
+            ss << "#" << next_id() << "=IFCPRESENTATIONLAYERASSIGNMENT('" << l_name << "',$,(" << item_ss.str() << "),$);\r\n";
         }
     }
 

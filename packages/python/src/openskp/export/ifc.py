@@ -219,6 +219,7 @@ def to_ifc(
     )
 
     product_ids: List[int] = []
+    layer_items: Dict[str, List[int]] = {}
     mat_style_cache: Dict[Tuple[float, float, float, float], int] = {}
 
     for prim in scene.glb_primitives:
@@ -228,6 +229,11 @@ def to_ifc(
             continue
 
         geom_name = sanitize_name(prim.geom_name)
+        layer_name = "Layer0"
+        meta = scene.mesh_index.get(prim.geom_name)
+        if meta and getattr(meta, "layer", None):
+            layer_name = sanitize_name(meta.layer)
+
         step_type, ifc_class = classify_element(geom_name)
 
         # 1. Coordinate Point List 3D
@@ -253,6 +259,8 @@ def to_ifc(
         lines.append(
             f"#{face_set_id}=IFCTRIANGULATEDFACESET(#{pt_list_id},$,.TRUE.,({','.join(face_indices)}),$);"
         )
+
+        layer_items.setdefault(layer_name, []).append(face_set_id)
 
         # 3. Surface Style / Material Color if present
         r, g, b, a = _get_prim_rgb(scene, prim.material_index)
@@ -307,7 +315,6 @@ def to_ifc(
         product_ids.append(product_id)
 
         # 5. Property Sets (if scene metadata contains dynamic properties)
-        meta = scene.mesh_index.get(prim.geom_name)
         if meta and hasattr(meta, "properties") and isinstance(meta.properties, dict) and meta.properties:
             prop_val_ids: List[int] = []
             for p_key, p_val in meta.properties.items():
@@ -333,7 +340,16 @@ def to_ifc(
                     f"#{rel_prop_id}=IFCRELDEFINESBYPROPERTIES('{rel_prop_guid}',#{owner_hist_id},$,$,(#{product_id}),#{pset_id});"
                 )
 
-    # 6. Containment Relation in Spatial Hierarchy
+    # 6. Presentation Layer Assignments (Preserve Layers)
+    for l_name, item_ids in sorted(layer_items.items()):
+        if item_ids:
+            item_refs = ",".join(f"#{iid}" for iid in item_ids)
+            layer_assign_id = next_id()
+            lines.append(
+                f"#{layer_assign_id}=IFCPRESENTATIONLAYERASSIGNMENT('{l_name}',$,({item_refs}),$);"
+            )
+
+    # 7. Containment Relation in Spatial Hierarchy
     if product_ids:
         prod_refs = ",".join(f"#{pid}" for pid in product_ids)
         contain_rel_id = next_id()
