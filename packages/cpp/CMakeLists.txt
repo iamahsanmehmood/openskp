@@ -114,6 +114,7 @@ set(
   src/obj_export.cpp
   src/observability.cpp
   src/parser.cpp
+  src/ply_export.cpp
   src/scene.cpp
   src/stl_export.cpp
   src/tlv.cpp

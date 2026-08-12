@@ -9,5 +9,6 @@ export 'src/glb.dart' show toGlb, exportGlb;
 export 'src/json_export.dart' show toJson;
 export 'src/obj_export.dart' show toObj, exportObj;
 export 'src/stl_export.dart' show toStlAscii, toStlBinary, exportStl;
+export 'src/ply_export.dart' show toPlyAscii, toPlyBinary, exportPly;
 export 'src/errors.dart' show SkpParseException;
 export 'src/observability.dart' show SkpLogLevel, ParseProgress, ParseOptions;

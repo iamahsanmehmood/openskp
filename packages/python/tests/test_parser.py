@@ -1365,6 +1365,49 @@ class TestStlExporter:
         assert data.startswith(b"# OpenSKP Binary STL Export")
 
 
+class TestPlyExporter:
+    """PLY exporter tests (ASCII & Binary)."""
+
+    def test_to_ply_ascii(self) -> None:
+        from array import array
+        from openskp.scene import Scene, GlbPrimitive
+        from openskp.export.ply import to_ply_ascii
+
+        prim = GlbPrimitive(
+            geom_name="Box",
+            material_index=0,
+            positions=array("f", [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+            normals=array("f", [0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0]),
+            uvs=array("f", [0.0, 0.0, 1.0, 0.0, 0.0, 1.0]),
+            indices=array("I", [0, 1, 2]),
+        )
+        scene = Scene(glb_primitives=[prim])
+        ply_text = to_ply_ascii(scene)
+        assert "format ascii 1.0" in ply_text
+        assert "element vertex 3" in ply_text
+        assert "element face 1" in ply_text
+        assert "3 0 1 2" in ply_text
+
+    def test_to_ply_binary(self) -> None:
+        from array import array
+        from openskp.scene import Scene, GlbPrimitive
+        from openskp.export.ply import to_ply_binary
+
+        prim = GlbPrimitive(
+            geom_name="Box",
+            material_index=0,
+            positions=array("f", [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+            normals=array("f", [0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0]),
+            uvs=array("f", [0.0, 0.0, 1.0, 0.0, 0.0, 1.0]),
+            indices=array("I", [0, 1, 2]),
+        )
+        scene = Scene(glb_primitives=[prim])
+        data = to_ply_binary(scene)
+        assert b"format binary_little_endian 1.0" in data
+        assert b"element vertex 3" in data
+        assert b"element face 1" in data
+
+
 # ── Image entity tests ───────────────────────────────────────────────────
 
 

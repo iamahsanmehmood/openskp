@@ -313,15 +313,15 @@ already exactly the data a GLB/glTF exporter needs — triangulated,
 world-space, grouped by material. What differs is whether each language
 ships file-writing exporters on top of that data:
 
-| Language | Scene data (`buildScene()`) | GLB | OBJ | STL (ASCII & Binary) | JSON metadata |
-|---|---|---|---|---|---|
-| Python | ✅ | ✅ `openskp.export.glb` | ✅ `openskp.export.obj` | ✅ `openskp.export.stl` | ✅ `openskp.export.json_export` |
-| TypeScript | ✅ | ✅ `toGLB(scene)` | ✅ `toOBJ(scene)` / `exportOBJ` | ✅ `toSTLAscii` / `toSTLBinary` / `exportSTL` | ✅ `toJSON(model, scene?)` |
-| .NET | ✅ | ✅ `GlbExport.ExportGlb` | ✅ `ObjExport.ExportObj` | ✅ `StlExport.ToStlAscii` / `ToStlBinary` / `ExportStl` | ✅ `JsonExport.ExportJson` |
-| Dart | ✅ | ✅ `exportGlb` | ✅ `exportObj` | ✅ `toStlAscii` / `toStlBinary` / `exportStl` | ✅ `exportJson` |
-| C++ | ✅ | ✅ `export_glb` | ✅ `export_obj` | ✅ `to_stl_ascii` / `to_stl_binary` / `export_stl` | ✅ `export_json` |
+| Language | Scene data (`buildScene()`) | GLB | OBJ | STL | PLY (ASCII & Binary) | JSON metadata |
+|---|---|---|---|---|---|---|
+| Python | ✅ | ✅ `openskp.export.glb` | ✅ `openskp.export.obj` | ✅ `openskp.export.stl` | ✅ `openskp.export.ply` | ✅ `openskp.export.json_export` |
+| TypeScript | ✅ | ✅ `toGLB(scene)` | ✅ `toOBJ(scene)` / `exportOBJ` | ✅ `toSTLAscii` / `exportSTL` | ✅ `toPLYAscii` / `toPLYBinary` / `exportPLY` | ✅ `toJSON(model, scene?)` |
+| .NET | ✅ | ✅ `GlbExport.ExportGlb` | ✅ `ObjExport.ExportObj` | ✅ `StlExport.ExportStl` | ✅ `PlyExport.ToPlyAscii` / `ToPlyBinary` / `ExportPly` | ✅ `JsonExport.ExportJson` |
+| Dart | ✅ | ✅ `exportGlb` | ✅ `exportObj` | ✅ `exportStl` | ✅ `toPlyAscii` / `toPlyBinary` / `exportPly` | ✅ `exportJson` |
+| C++ | ✅ | ✅ `export_glb` | ✅ `export_obj` | ✅ `export_stl` | ✅ `to_ply_ascii` / `to_ply_binary` / `export_ply` | ✅ `export_json` |
 
-All five languages provide built-in file-writing and in-memory exporters for GLB, OBJ, STL (ASCII & Binary), and JSON metadata. Below is the Python export example:
+All five languages provide built-in file-writing and in-memory exporters for GLB, OBJ, STL, PLY (ASCII & Binary), and JSON metadata. Below is the Python export example:
 
 ```python
 from openskp import SkpFile

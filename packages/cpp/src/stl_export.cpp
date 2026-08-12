@@ -36,9 +36,12 @@ Vector3 calculate_normal(const Vector3& v0, const Vector3& v1, const Vector3& v2
 }
 
 void write_float_le(std::vector<std::uint8_t>& buf, float value) {
-  std::uint8_t bytes[4];
-  std::memcpy(bytes, &value, 4);
-  buf.insert(buf.end(), bytes, bytes + 4);
+  std::uint32_t uval;
+  std::memcpy(&uval, &value, 4);
+  buf.push_back(static_cast<std::uint8_t>(uval & 0xFF));
+  buf.push_back(static_cast<std::uint8_t>((uval >> 8) & 0xFF));
+  buf.push_back(static_cast<std::uint8_t>((uval >> 16) & 0xFF));
+  buf.push_back(static_cast<std::uint8_t>((uval >> 24) & 0xFF));
 }
 
 void write_uint16_le(std::vector<std::uint8_t>& buf, std::uint16_t value) {

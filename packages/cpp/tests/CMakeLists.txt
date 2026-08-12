@@ -11,6 +11,7 @@ add_executable(
   obj_export_test.cpp
   observability_test.cpp
   parser_test.cpp
+  ply_export_test.cpp
   scene_test.cpp
   stl_export_test.cpp
   texture_test.cpp

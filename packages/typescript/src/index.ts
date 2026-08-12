@@ -34,6 +34,7 @@ export * from './errors';
 export * from './observability';
 export * from './obj';
 export * from './stl';
+export * from './ply';
 
 declare const process: any;
 declare const require: any;
