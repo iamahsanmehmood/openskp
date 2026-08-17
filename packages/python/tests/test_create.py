@@ -77,6 +77,40 @@ _JPEG_FIXTURE = bytes.fromhex(
 )
 
 
+class TestUnicodeNames:
+    # Compares by codepoint/exact string equality throughout, never by
+    # printed representation - a terminal's own display codepage can
+    # substitute a replacement glyph for a character it can't render even
+    # when the underlying decoded string is byte-perfect, which looks
+    # identical to real data corruption unless checked this way.
+    NAME = "Rouge Écarlate étoile"
+
+    def test_material_name_round_trips_exactly(self):
+        builder = create()
+        mat = builder.add_material(self.NAME, (255, 0, 0))
+        builder.add_face(SQUARE, material=mat)
+        data = builder.to_bytes()
+        ar, root, layers, materials = legacy._walk(data)
+        assert dict(materials)[mat]["name"] == self.NAME
+
+    def test_layer_name_round_trips_exactly(self):
+        builder = create()
+        layer = builder.add_layer(self.NAME)
+        builder.add_face(SQUARE, layer=layer)
+        data = builder.to_bytes()
+        ar, root, layers, materials = legacy._walk(data)
+        assert dict(layers)[layer]["name"] == self.NAME
+
+    def test_definition_and_instance_names_round_trip_exactly(self):
+        builder = create()
+        with builder.add_component_definition(self.NAME) as comp:
+            comp.add_face(SQUARE)
+        builder.add_instance(comp, name=self.NAME)
+        data = builder.to_bytes()
+        ar, root, layers, materials = legacy._walk(data)
+        assert root[0][2]["name"] == self.NAME
+
+
 class TestBuilderErrors:
     def test_saving_with_no_geometry_raises(self):
         with pytest.raises(SkpWriteError, match="no geometry"):
@@ -1452,6 +1486,54 @@ class TestRealSketchUpOracle:
             ndef = ctypes.c_size_t()
             dll.SUModelGetNumComponentDefinitions(model, ctypes.byref(ndef))
             assert ndef.value == 30  # 20 explicit + 10 backing the groups
+            dll.SUModelRelease(ctypes.byref(model))
+        finally:
+            dll.SUTerminate()
+
+    def test_unicode_material_name_round_trips_through_real_sketchup(self, tmp_path):
+        # Self-parsing (TestUnicodeNames) already locks in that the raw
+        # bytes decode correctly; this additionally confirms real SketchUp
+        # itself reads the name back exactly, not just this project's own
+        # reader.
+        import ctypes
+
+        name = "Rouge Écarlate"
+        builder = create()
+        mat = builder.add_material(name, (255, 0, 0))
+        builder.add_face(SQUARE, material=mat)
+        out = tmp_path / "unicode.skp"
+        builder.save(str(out))
+
+        dll = ctypes.CDLL(_SDK_DLL_PATH)
+        dll.SUInitialize()
+        dll.SUModelGetMaterials.argtypes = [
+            ctypes.c_void_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_size_t),
+        ]
+        dll.SUModelGetNumMaterials.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_size_t)]
+        dll.SUMaterialGetNameLegacyBehavior.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUStringCreate.argtypes = [ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUStringGetUTF8Length.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_size_t)]
+        dll.SUStringGetUTF8.argtypes = [
+            ctypes.c_void_p, ctypes.c_size_t, ctypes.c_char_p, ctypes.POINTER(ctypes.c_size_t),
+        ]
+        try:
+            model = ctypes.c_void_p()
+            err = dll.SUModelCreateFromFile(ctypes.byref(model), str(out).encode())
+            assert err == 0, f"SketchUp SDK rejected the file (error {err})"
+            nmat = ctypes.c_size_t()
+            dll.SUModelGetNumMaterials(model, ctypes.byref(nmat))
+            mats = (ctypes.c_void_p * nmat.value)()
+            got = ctypes.c_size_t()
+            dll.SUModelGetMaterials(model, nmat.value, mats, ctypes.byref(got))
+            sref = ctypes.c_void_p()
+            dll.SUStringCreate(ctypes.byref(sref))
+            dll.SUMaterialGetNameLegacyBehavior(mats[0], ctypes.byref(sref))
+            length = ctypes.c_size_t()
+            dll.SUStringGetUTF8Length(sref, ctypes.byref(length))
+            buf = ctypes.create_string_buffer(length.value + 1)
+            outlen = ctypes.c_size_t()
+            dll.SUStringGetUTF8(sref, length.value + 1, buf, ctypes.byref(outlen))
+            assert buf.value.decode("utf-8") == name
             dll.SUModelRelease(ctypes.byref(model))
         finally:
             dll.SUTerminate()
