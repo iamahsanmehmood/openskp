@@ -14,13 +14,14 @@ are involved, and how.
 
 * Faces built directly from vertex coordinates, sharing vertices and edges
   automatically wherever coordinates coincide exactly. Solid-color and
-  PNG-textured materials, named layers, and reusable component definitions
-  with multiple instances (each with its own translation/rotation/scale)
-  are all supported - see :meth:`SkpBuilder.add_material` / :meth:`SkpBuilder.
+  PNG/JPEG-textured materials, named layers, reusable component
+  definitions with multiple positioned instances, and groups are all
+  supported - see :meth:`SkpBuilder.add_material` / :meth:`SkpBuilder.
   add_texture_material` / :meth:`SkpBuilder.add_layer` / :meth:`SkpBuilder.
-  add_component_definition`. There is no support yet for explicit texture
-  positioning/pinning, nested definitions (a definition containing another
-  definition's instances), or groups (as opposed to components).
+  add_component_definition` / :meth:`SkpBuilder.add_group`. There is no
+  support yet for explicit texture positioning/pinning or nested
+  definitions (a definition containing another definition's instances or
+  groups).
 * Coordinates are in **inches** - SketchUp's own native internal unit for
   this era of the format. Converting from another unit is the caller's
   responsibility for now.
@@ -135,6 +136,7 @@ _TEXTURE_H_SENTINEL = bytes.fromhex("f0ffffffffffff0f")
 
 _DEFINITION_SCHEMA = 11
 _INSTANCE_SCHEMA = 6
+_GROUP_SCHEMA = 1
 _THUMBNAIL_SCHEMA = 1
 
 # CCamera's class is declared inside the scaffold's own style/scene-manager
@@ -453,6 +455,29 @@ class _ArchiveWriter:
         self.buf += bytes(43)
         self.write_thumbnail()
 
+    def _write_instance_like(
+        self,
+        class_name: str,
+        schema: int,
+        real_attrs: bool,
+        definition_slot: int,
+        name: str,
+        translation: Tuple[float, float, float],
+        matrix3x3: Optional[Tuple[float, float, float, float, float, float, float, float, float]],
+        mat: int,
+        layer: int,
+    ) -> None:
+        self._new_of_known_class(class_name, schema=schema)
+        self._preamble(real_attrs=real_attrs)
+        self._drawbase(mat=mat, layer=layer)
+        self._backref(definition_slot)
+        if matrix3x3 is None:
+            matrix3x3 = (1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
+        for v in (*matrix3x3, *translation, 1.0):
+            self.buf += _f64(v)
+        self._write_str(name)
+        self.buf += uuid.uuid4().bytes
+
     def write_instance(
         self,
         definition_slot: int,
@@ -476,16 +501,37 @@ class _ArchiveWriter:
         4x4 affine matrix, always [0, 0, 0, 1], is omitted entirely rather
         than stored.
         """
-        self._new_of_known_class("CComponentInstance", schema=_INSTANCE_SCHEMA)
-        self._preamble(real_attrs=True)  # ground truth: instances also carry a real (empty) attr container
-        self._drawbase(mat=instance_material, layer=instance_layer)
-        self._backref(definition_slot)
-        if matrix3x3 is None:
-            matrix3x3 = (1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
-        for v in (*matrix3x3, *translation, 1.0):
-            self.buf += _f64(v)
-        self._write_str(name)
-        self.buf += uuid.uuid4().bytes
+        # ground truth: instances also carry a real (empty) attr container, unlike CGroup
+        self._write_instance_like(
+            "CComponentInstance", _INSTANCE_SCHEMA, True,
+            definition_slot, name, translation, matrix3x3, instance_material, instance_layer,
+        )
+        return 1
+
+    def write_group(
+        self,
+        definition_slot: int,
+        name: str,
+        translation: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+        matrix3x3: Optional[Tuple[float, float, float, float, float, float, float, float, float]] = None,
+        group_material: int = 0,
+        group_layer: int = 0,
+    ) -> int:
+        """Write one ``CGroup`` placing a copy of ``definition_slot`` and
+        return how many new root-entity-list slots it consumed - always 1,
+        same contract as `write_instance`.
+
+        A group is structurally almost identical to a component instance
+        (same preamble/drawbase/def-backref/transform/name/guid shape,
+        confirmed via SDK ground truth) - the two real differences are its
+        class name/schema (CGroup, schema 1) and that - unlike
+        CComponentInstance - it uses a plain null attribute pointer rather
+        than the real (empty) CAttributeContainer instances need.
+        """
+        self._write_instance_like(
+            "CGroup", _GROUP_SCHEMA, False,
+            definition_slot, name, translation, matrix3x3, group_material, group_layer,
+        )
         return 1
 
     def write_face(
@@ -630,17 +676,22 @@ def _plane_from_polygon(points: Sequence[Point3]) -> Tuple[float, float, float, 
 
 
 class ComponentDefinitionBuilder:
-    """Accumulates one reusable component definition's geometry. Construct
-    via :meth:`SkpBuilder.add_component_definition`, not directly - use it
-    as a context manager, then pass it to :meth:`SkpBuilder.add_instance`
-    to place copies of it.
+    """Accumulates one component/group definition's geometry. Construct via
+    :meth:`SkpBuilder.add_component_definition` or :meth:`SkpBuilder.
+    add_group`, not directly - use it as a context manager. A component
+    definition needs a separate :meth:`SkpBuilder.add_instance` call per
+    placement; a group places itself automatically when its ``with`` block
+    exits.
 
     >>> with builder.add_component_definition("Chair") as chair:
     ...     chair.add_face([(0, 0, 0), (20, 0, 0), (20, 20, 0), (0, 20, 0)])
     >>> builder.add_instance(chair, translation=(100, 0, 0))
     """
 
-    def __init__(self, skp: "SkpBuilder", slot: int, name: str, count_patch_pos: int):
+    def __init__(
+        self, skp: "SkpBuilder", slot: int, name: str, count_patch_pos: int,
+        group_placement: Optional[Tuple[Tuple[float, float, float], Optional[Tuple[float, ...]], int, int]] = None,
+    ):
         self._skp = skp
         self.slot = slot
         self.name = name
@@ -649,6 +700,10 @@ class ComponentDefinitionBuilder:
         self._edge_registry: Dict[FrozenSet[int], Tuple[int, int]] = {}
         self._new_entity_count = 0
         self._closed = False
+        # set only by SkpBuilder.add_group - a group places itself
+        # immediately on close, unlike a plain component definition, which
+        # needs an explicit later add_instance call.
+        self._group_placement = group_placement
 
     def add_face(
         self,
@@ -692,6 +747,13 @@ class ComponentDefinitionBuilder:
         writer.write_definition_tail(self.name)
         self._closed = True
         self._skp._open_definition = None
+        if self._group_placement is not None:
+            translation, matrix3x3, mat, layer = self._group_placement
+            self._skp._ensure_geometry_writer()
+            self._skp._new_entity_count += self._skp._geometry_writer.write_group(
+                self.slot, self.name, translation, matrix3x3, mat, layer
+            )
+            self._skp._face_count += 1
         return None
 
 
@@ -901,6 +963,30 @@ class SkpBuilder:
             return dict(self._layer_writer.class_slot)
         return self._material_shifted_class_slot()
 
+    def _start_definition(
+        self, name: str, caller: str,
+        group_placement: Optional[Tuple[Tuple[float, float, float], Optional[Tuple[float, ...]], int, int]] = None,
+    ) -> "ComponentDefinitionBuilder":
+        if self._geometry_writer is not None:
+            raise SkpWriteError(f"{caller} must be called before any add_face/add_instance calls")
+        if self._open_definition is not None:
+            raise SkpWriteError(
+                f"component definition {self._open_definition.name!r} is still open - "
+                "exit its `with` block before starting another"
+            )
+        if self._definition_writer is None:
+            self._definition_writer_start = self._scaffold_next_slot + (
+                self._material_writer.next_slot - self._base
+            ) + self._layer_shift()
+            self._definition_writer = _ArchiveWriter(
+                next_slot=self._definition_writer_start, class_slot=self._post_layer_class_slot()
+            )
+        slot, count_patch_pos = self._definition_writer.write_definition_header()
+        self._definition_count += 1
+        comp = ComponentDefinitionBuilder(self, slot, name, count_patch_pos, group_placement)
+        self._open_definition = comp
+        return comp
+
     def add_component_definition(self, name: str) -> "ComponentDefinitionBuilder":
         """Start a new reusable component definition. Use the returned
         object as a context manager, adding its geometry via `.add_face`
@@ -916,25 +1002,33 @@ class SkpBuilder:
         and layers, before root-level geometry, so their slot numbering
         depends on the final material and layer counts.
         """
-        if self._geometry_writer is not None:
-            raise SkpWriteError("add_component_definition must be called before any add_face/add_instance calls")
-        if self._open_definition is not None:
-            raise SkpWriteError(
-                f"component definition {self._open_definition.name!r} is still open - "
-                "exit its `with` block before starting another"
-            )
-        if self._definition_writer is None:
-            self._definition_writer_start = self._scaffold_next_slot + (
-                self._material_writer.next_slot - self._base
-            ) + self._layer_shift()
-            self._definition_writer = _ArchiveWriter(
-                next_slot=self._definition_writer_start, class_slot=self._post_layer_class_slot()
-            )
-        slot, count_patch_pos = self._definition_writer.write_definition_header()
-        self._definition_count += 1
-        comp = ComponentDefinitionBuilder(self, slot, name, count_patch_pos)
-        self._open_definition = comp
-        return comp
+        return self._start_definition(name, "add_component_definition")
+
+    def add_group(
+        self,
+        name: Optional[str] = None,
+        translation: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+        matrix3x3: Optional[Tuple[float, float, float, float, float, float, float, float, float]] = None,
+        material: Optional[int] = None,
+        layer: Optional[int] = None,
+    ) -> "ComponentDefinitionBuilder":
+        """Start a new group. Use the returned object as a context manager,
+        adding its geometry via `.add_face` inside the ``with`` block - the
+        group is placed at ``translation``/``matrix3x3`` automatically when
+        the block exits, unlike `add_component_definition` there is no
+        separate placement call, matching how groups are normally used
+        (defined and placed once, not reused across multiple positions).
+
+        >>> with builder.add_group("Table", translation=(50, 0, 0)) as table:
+        ...     table.add_face([(0, 0, 0), (30, 0, 0), (30, 30, 0), (0, 30, 0)])
+
+        Same ordering rule as `add_component_definition` - must be called
+        before any `add_face`/`add_instance`/`add_group` call already in
+        progress on the builder itself.
+        """
+        return self._start_definition(
+            name or "Group", "add_group", group_placement=(translation, matrix3x3, material or 0, layer or 0)
+        )
 
     def _definition_shift(self) -> int:
         if self._definition_writer is None:

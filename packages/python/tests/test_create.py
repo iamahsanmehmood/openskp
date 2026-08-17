@@ -385,6 +385,52 @@ class TestComponentDefinitions:
         assert kinds.count("CEdge") == 4  # its own 4 edges, not shared with the definition's
 
 
+class TestGroups:
+    def test_basic_group_places_itself_on_close(self):
+        builder = create()
+        with builder.add_group("Table", translation=(50.0, 0.0, 0.0)) as table:
+            table.add_face(SQUARE)
+        data = builder.to_bytes()
+
+        ar, root, layers, materials = legacy._walk(data)
+        assert len(root) == 1
+        kind = root[0][1]
+        inst = root[0][2]
+        assert kind == "CGroup"
+        assert inst["name"] == "Table"
+        assert inst["xf"][9:12] == (50.0, 0.0, 0.0)
+        # ground truth: unlike CComponentInstance, CGroup uses a plain null
+        # attribute pointer, not the real (empty) CAttributeContainer.
+        assert inst["attrs"] is None
+
+    def test_group_without_geometry_raises(self):
+        builder = create()
+        with pytest.raises(SkpWriteError, match="no geometry"):
+            with builder.add_group("Empty"):
+                pass
+
+    def test_group_and_component_definition_together(self):
+        builder = create()
+        with builder.add_component_definition("Chair") as chair:
+            chair.add_face(SQUARE)
+        with builder.add_group("Table", translation=(100.0, 0.0, 0.0)) as table:
+            table.add_face(SQUARE)
+        builder.add_instance(chair, translation=(0.0, 100.0, 0.0))
+        data = builder.to_bytes()
+
+        ar, root, layers, materials = legacy._walk(data)
+        kinds = {n for (_, n, _) in root}
+        assert kinds == {"CGroup", "CComponentInstance"}
+
+    def test_default_group_name(self):
+        builder = create()
+        with builder.add_group() as g:
+            g.add_face(SQUARE)
+        data = builder.to_bytes()
+        ar, root, layers, materials = legacy._walk(data)
+        assert root[0][2]["name"] == "Group"
+
+
 class TestMaterials:
     def test_material_assigned_to_face_front(self):
         builder = create()
@@ -1179,6 +1225,41 @@ class TestRealSketchUpOracle:
             ninst = ctypes.c_long()
             dll.SUEntitiesGetNumInstances(entities, ctypes.byref(ninst))
             assert ninst.value == 1
+            dll.SUModelRelease(ctypes.byref(model))
+        finally:
+            dll.SUTerminate()
+
+    def test_group_round_trips_through_real_sketchup(self, tmp_path):
+        import ctypes
+
+        builder = create()
+        with builder.add_group("Table", translation=(50.0, 0.0, 0.0)) as table:
+            table.add_face(SQUARE)
+        out = tmp_path / "group.skp"
+        builder.save(str(out))
+
+        dll = ctypes.CDLL(_SDK_DLL_PATH)
+        dll.SUInitialize()
+        dll.SUEntitiesGetNumGroups.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_size_t)]
+        dll.SUEntitiesGetGroups.argtypes = [
+            ctypes.c_void_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_size_t),
+        ]
+        dll.SUGroupGetTransform.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_double * 16)]
+        try:
+            model = ctypes.c_void_p()
+            err = dll.SUModelCreateFromFile(ctypes.byref(model), str(out).encode())
+            assert err == 0, f"SketchUp SDK rejected the file (error {err})"
+            entities = ctypes.c_void_p()
+            dll.SUModelGetEntities(model, ctypes.byref(entities))
+            ng = ctypes.c_size_t()
+            dll.SUEntitiesGetNumGroups(entities, ctypes.byref(ng))
+            assert ng.value == 1
+            groups = (ctypes.c_void_p * 1)()
+            got = ctypes.c_size_t()
+            dll.SUEntitiesGetGroups(entities, 1, groups, ctypes.byref(got))
+            xf = (ctypes.c_double * 16)()
+            dll.SUGroupGetTransform(groups[0], ctypes.byref(xf))
+            assert (xf[12], xf[13], xf[14]) == (50.0, 0.0, 0.0)
             dll.SUModelRelease(ctypes.byref(model))
         finally:
             dll.SUTerminate()
