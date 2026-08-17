@@ -259,6 +259,106 @@ class TestNonManifoldTopology:
         assert kinds.count("CEdge") == 7
 
 
+class TestComponentDefinitions:
+    def test_basic_definition_and_instance(self):
+        builder = create()
+        with builder.add_component_definition("Chair") as chair:
+            chair.add_face(SQUARE)
+        builder.add_instance(chair)
+        data = builder.to_bytes()
+
+        ar, root, layers, materials = legacy._walk(data)
+        assert len(root) == 1
+        inst = root[0][2]
+        assert inst["name"] == "Chair"
+        assert inst["xf"] == pytest.approx((1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0))
+
+    def test_multiple_instances_share_one_definition(self):
+        builder = create()
+        with builder.add_component_definition("Chair") as chair:
+            chair.add_face(SQUARE)
+        for i in range(5):
+            builder.add_instance(chair, name=f"Chair{i}", translation=(i * 40.0, 0.0, 0.0))
+        data = builder.to_bytes()
+
+        ar, root, layers, materials = legacy._walk(data)
+        assert len(root) == 5
+        defs = {v["def"] for (_, n, v) in root}
+        assert defs == {chair.slot}
+        translations = sorted(v["xf"][9] for (_, n, v) in root)
+        assert translations == [0.0, 40.0, 80.0, 120.0, 160.0]
+
+    def test_transform_matrix_applied(self):
+        builder = create()
+        with builder.add_component_definition("Post") as post:
+            post.add_face(SQUARE)
+        # 2x scale on X only
+        builder.add_instance(post, matrix3x3=(2.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0))
+        data = builder.to_bytes()
+        ar, root, layers, materials = legacy._walk(data)
+        assert root[0][2]["xf"][0] == 2.0
+
+    def test_empty_definition_raises(self):
+        builder = create()
+        with pytest.raises(SkpWriteError, match="no geometry"):
+            with builder.add_component_definition("Empty"):
+                pass
+
+    def test_add_face_after_definition_closed_raises(self):
+        builder = create()
+        with builder.add_component_definition("Chair") as chair:
+            chair.add_face(SQUARE)
+        with pytest.raises(SkpWriteError, match="already closed"):
+            chair.add_face(SQUARE)
+
+    def test_add_instance_of_unclosed_definition_raises(self):
+        builder = create()
+        comp = builder.add_component_definition("Chair")
+        comp.add_face(SQUARE)
+        with pytest.raises(SkpWriteError, match="still open"):
+            builder.add_instance(comp)
+
+    def test_two_open_definitions_at_once_raises(self):
+        builder = create()
+        comp = builder.add_component_definition("Chair")
+        comp.add_face(SQUARE)
+        with pytest.raises(SkpWriteError, match="still open"):
+            builder.add_component_definition("Table")
+
+    def test_add_material_after_definition_started_raises(self):
+        # Materials splice in earlier in the file than definitions, so a
+        # definition already under construction has locked in the slot
+        # numbering a later material would need to shift - this is the
+        # exact case that produced a real corrupted (SU_ERROR_MODEL_INVALID)
+        # file during development, caught only by the SDK oracle since
+        # self-parsing doesn't validate the tail-reference shift amounts.
+        builder = create()
+        with builder.add_component_definition("Chair") as chair:
+            chair.add_face(SQUARE)
+        with pytest.raises(SkpWriteError, match="before any add_component_definition"):
+            builder.add_material("TooLate", (0, 0, 0))
+
+    def test_add_component_definition_after_add_face_raises(self):
+        builder = create()
+        builder.add_face(SQUARE)
+        with pytest.raises(SkpWriteError, match="before any add_face/add_instance"):
+            builder.add_component_definition("TooLate")
+
+    def test_definition_geometry_and_root_geometry_share_no_vertices(self):
+        # Each definition's vertex/edge sharing is scoped to itself, never
+        # to the root model or other definitions.
+        builder = create()
+        with builder.add_component_definition("Chair") as chair:
+            chair.add_face(SQUARE)
+        builder.add_face(SQUARE)  # same coordinates, root level
+        builder.add_instance(chair)
+        data = builder.to_bytes()
+        ar, root, layers, materials = legacy._walk(data)
+        kinds = [n for (_, n, _) in root]
+        assert kinds.count("CFace") == 1  # only the root-level face
+        assert kinds.count("CEdge") == 4  # its own 4 edges, not shared with the definition's
+
+
 class TestMaterials:
     def test_material_assigned_to_face_front(self):
         builder = create()
@@ -883,6 +983,90 @@ class TestRealSketchUpOracle:
                 dll.SUEdgeGetSoft(edges[i], ctypes.byref(es))
                 dll.SUEdgeGetSmooth(edges[i], ctypes.byref(esm))
                 assert (eh.value, es.value, esm.value) == (True, True, True)
+            dll.SUModelRelease(ctypes.byref(model))
+        finally:
+            dll.SUTerminate()
+
+    def test_component_instances_round_trip_through_real_sketchup(self, tmp_path):
+        import ctypes
+
+        builder = create()
+        with builder.add_component_definition("Chair") as chair:
+            chair.add_face(SQUARE)
+        for i in range(5):
+            builder.add_instance(chair, name=f"Chair{i}", translation=(i * 40.0, 0.0, 0.0))
+        out = tmp_path / "instances.skp"
+        builder.save(str(out))
+
+        dll = ctypes.CDLL(_SDK_DLL_PATH)
+        dll.SUInitialize()
+        dll.SUEntitiesGetNumInstances.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_long)]
+        dll.SUEntitiesGetInstances.argtypes = [
+            ctypes.c_void_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_size_t),
+        ]
+        dll.SUComponentInstanceGetTransform.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_double * 16)]
+        try:
+            model = ctypes.c_void_p()
+            err = dll.SUModelCreateFromFile(ctypes.byref(model), str(out).encode())
+            assert err == 0, f"SketchUp SDK rejected the file (error {err})"
+            entities = ctypes.c_void_p()
+            dll.SUModelGetEntities(model, ctypes.byref(entities))
+            ninst = ctypes.c_long()
+            dll.SUEntitiesGetNumInstances(entities, ctypes.byref(ninst))
+            assert ninst.value == 5
+            insts = (ctypes.c_void_p * 5)()
+            got = ctypes.c_size_t()
+            dll.SUEntitiesGetInstances(entities, 5, insts, ctypes.byref(got))
+            translations = []
+            for i in range(5):
+                xf = (ctypes.c_double * 16)()
+                dll.SUComponentInstanceGetTransform(insts[i], ctypes.byref(xf))
+                translations.append(xf[12])
+            assert sorted(translations) == [0.0, 40.0, 80.0, 120.0, 160.0]
+            dll.SUModelRelease(ctypes.byref(model))
+        finally:
+            dll.SUTerminate()
+
+    def test_materials_inside_definition_and_at_root_round_trip(self, tmp_path):
+        # Regression guard for a real bug found during development: adding
+        # a root-level material AFTER a component definition had already
+        # started writing produced a file that self-parsed fine but was
+        # SU_ERROR_MODEL_INVALID in real SketchUp - the definition's
+        # already-written bytes assumed a material count that a later
+        # add_material call silently invalidated. add_material now raises
+        # if called after add_component_definition (see
+        # TestComponentDefinitions.test_add_material_after_definition_started_raises);
+        # this test locks in the *correct* ordering actually working.
+        import ctypes
+
+        builder = create()
+        brown = builder.add_material("Brown", (110, 80, 50))
+        ground = builder.add_material("Grass", (86, 150, 60))
+        with builder.add_component_definition("Box") as box:
+            box.add_face(SQUARE, material=brown)
+        builder.add_face(
+            [(-20.0, -20.0, 0.0), (220.0, -20.0, 0.0), (220.0, 120.0, 0.0), (-20.0, 120.0, 0.0)],
+            material=ground,
+        )
+        builder.add_instance(box)
+        out = tmp_path / "combo.skp"
+        builder.save(str(out))
+
+        dll = ctypes.CDLL(_SDK_DLL_PATH)
+        dll.SUInitialize()
+        dll.SUEntitiesGetNumInstances.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_long)]
+        try:
+            model = ctypes.c_void_p()
+            err = dll.SUModelCreateFromFile(ctypes.byref(model), str(out).encode())
+            assert err == 0, f"SketchUp SDK rejected the file (error {err})"
+            entities = ctypes.c_void_p()
+            dll.SUModelGetEntities(model, ctypes.byref(entities))
+            nfaces = ctypes.c_long()
+            dll.SUEntitiesGetNumFaces(entities, ctypes.byref(nfaces))
+            assert nfaces.value == 1  # the root-level ground face
+            ninst = ctypes.c_long()
+            dll.SUEntitiesGetNumInstances(entities, ctypes.byref(ninst))
+            assert ninst.value == 1
             dll.SUModelRelease(ctypes.byref(model))
         finally:
             dll.SUTerminate()

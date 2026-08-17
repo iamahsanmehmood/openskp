@@ -12,15 +12,15 @@ are involved, and how.
 
 **Scope (deliberately limited for this first version):**
 
-* Root-level geometry only - faces built directly from vertex coordinates,
-  sharing vertices and edges automatically wherever coordinates coincide
-  exactly. Solid-color and PNG-textured materials, plus named layers, are
-  supported (see :meth:`SkpBuilder.add_material` / :meth:`SkpBuilder.
-  add_texture_material` / :meth:`SkpBuilder.add_layer`); there is no
-  support yet for explicit texture positioning/pinning or component/group
-  definitions (nested component internals contain a byte region this
-  project has not reverse-engineered yet - see :mod:`openskp.legacy`'s
-  module docstring).
+* Faces built directly from vertex coordinates, sharing vertices and edges
+  automatically wherever coordinates coincide exactly. Solid-color and
+  PNG-textured materials, named layers, and reusable component definitions
+  with multiple instances (each with its own translation/rotation/scale)
+  are all supported - see :meth:`SkpBuilder.add_material` / :meth:`SkpBuilder.
+  add_texture_material` / :meth:`SkpBuilder.add_layer` / :meth:`SkpBuilder.
+  add_component_definition`. There is no support yet for explicit texture
+  positioning/pinning, nested definitions (a definition containing another
+  definition's instances), or groups (as opposed to components).
 * Coordinates are in **inches** - SketchUp's own native internal unit for
   this era of the format. Converting from another unit is the caller's
   responsibility for now.
@@ -60,12 +60,14 @@ from __future__ import annotations
 import hashlib
 import re
 import struct
+import time
+import uuid
 from importlib import resources
 from typing import Dict, FrozenSet, List, Optional, Sequence, Tuple
 
 from . import legacy
 
-__all__ = ["SkpWriteError", "SkpBuilder", "create"]
+__all__ = ["SkpWriteError", "SkpBuilder", "ComponentDefinitionBuilder", "create"]
 
 Point3 = Tuple[float, float, float]
 
@@ -130,6 +132,43 @@ _DIB_SCHEMA = 3
 # formula since its bit pattern doesn't correspond to any sensible height
 # value (it decodes as ~1.29e-231 as an f64).
 _TEXTURE_H_SENTINEL = bytes.fromhex("f0ffffffffffff0f")
+
+_DEFINITION_SCHEMA = 11
+_INSTANCE_SCHEMA = 6
+_THUMBNAIL_SCHEMA = 1
+
+# CCamera's class is declared inside the scaffold's own style/scene-manager
+# prefix (before any of our splice points), not something this project has
+# ever needed to declare fresh - ground-truth confirmed fixed at slot 7 for
+# this exact bundled scaffold file. A thumbnail's camera sub-object is
+# always written as a short class-ref to this slot.
+_CCAMERA_SLOT = 7
+
+# Same pattern as _CCAMERA_SLOT: CAttributeContainer's class is declared in
+# the scaffold's own prefix, ground-truth confirmed fixed at slot 3.
+_ATTR_CONTAINER_SLOT = 3
+
+# The 176 bytes (everything after CCamera's 2-byte class-ref tag) real
+# SketchUp writes for a definition's default thumbnail camera - copied
+# verbatim rather than decoded, the same way as _TEXTURE_H_SENTINEL: this
+# project has not reverse-engineered CCamera's internal fields, and a
+# thumbnail's camera framing has no bearing on the geometry it depicts.
+_CAMERA_TEMPLATE = bytes.fromhex(
+    "00000000000000000000000000000000000000000000f03f0000000000000000"
+    "00000000000000000000000000000000004000000000000000000000000000f0"
+    "3f0000000000000000000000000000000000000000000000000100000000003e"
+    "40000000000000f03f0000000000000000000000000000000000000000000000"
+    "0000000000000000000100fffeff00000000000000000000000000000000f03f"
+    "00000000000000000000000000000000"
+)
+
+# The definition record's 22-byte "base block" (immediately after its own
+# preamble, before the embedded layer list) - all zero except offsets 3-4,
+# matching the same 1,1 padding convention _drawbase already requires.
+# This project has not reverse-engineered its meaning, only confirmed via
+# ground truth that a definition with these bytes zeroed loads correctly
+# (unlike drawbase's padding, which real SketchUp silently drops without).
+_DEFINITION_BASE_BLOCK = bytes([0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
 
 
 def _u32(v: int) -> bytes:
@@ -225,8 +264,19 @@ class _ArchiveWriter:
                 pid_bytes.append(byte_val)
         return bytes([mask]) + bytes(pid_bytes)
 
-    def _preamble(self, pid: Optional[int] = None) -> None:
-        self._null()  # no CAttributeContainer
+    def _preamble(self, pid: Optional[int] = None, real_attrs: bool = False) -> None:
+        if real_attrs:
+            # Ground truth: CComponentDefinition and CComponentInstance both
+            # reference a real (but childless) CAttributeContainer here
+            # instead of the null pointer every other entity in this
+            # project uses - CAttributeContainer's own class is pre-existing
+            # in the scaffold's prefix, same pattern as _CCAMERA_SLOT.
+            self.buf += struct.pack("<H", 0x8000 | _ATTR_CONTAINER_SLOT)
+            self._alloc()  # a class-ref always allocates a new object slot, even a bookkeeping-only one
+            self.buf += bytes(3)  # the container's own nested preamble: null attrs (2) + mask=0 (1)
+            self.buf += struct.pack("<H", 0)  # empty children-list terminator
+        else:
+            self._null()  # no CAttributeContainer
         if pid is None:
             pid = self._alloc_pid()
         self.buf += self._encode_pid(pid)
@@ -309,21 +359,24 @@ class _ArchiveWriter:
         self.buf.append(0)  # use_opacity = False
         return slot
 
-    def write_layer(self, name: str) -> int:
+    def write_layer(self, name: str, with_pids: bool = True) -> int:
         """Write one ``CLayer`` record and return its slot. CLayer is
         always already declared (the scaffold's Layer0 guarantees it), so
         this never emits a new-class declaration - only a short class-ref.
 
-        Ground truth shows each layer record contains a second, embedded
-        pid (inside a 5-byte block after the visible name - byte 0 is the
-        hidden flag, bytes 1-2 are always zero, then a mask+pidbytes pair
-        matching the same encoding _preamble uses) - so each layer consumes
-        2 pids, not 1.
+        Ground truth shows each top-level layer record contains a second,
+        embedded pid (inside a 5-byte block after the visible name - byte 0
+        is the hidden flag, bytes 1-2 are always zero, then a mask+pidbytes
+        pair matching the same encoding _preamble uses) - so each layer
+        consumes 2 pids, not 1. ``with_pids=False`` (used only for the
+        layer a component definition embeds internally - see
+        `write_definition_header`) omits both: ground truth shows that
+        copy carries neither its own preamble pid nor this second one.
         """
         slot = self._new_of_known_class("CLayer", schema=_LAYER_SCHEMA)
-        self._preamble()
+        self._preamble(pid=None if with_pids else 0)
         self._write_str(name)
-        pid2 = self._alloc_pid()
+        pid2 = self._alloc_pid() if with_pids else 0
         self.buf += bytes(3) + self._encode_pid(pid2)  # hidden=0, pad, pad, then mask+pidbytes
         self._write_str(f"Layer_{name}")
         self.buf += struct.pack("<H", 256)  # ground truth is a constant 256 here
@@ -331,6 +384,88 @@ class _ArchiveWriter:
         self._write_str("")  # second name field - empty in ground truth
         self.buf += bytes(8) + _f64(0.5) + bytes(5)  # 21-byte tail, opacity-like f64=0.5
         return slot
+
+    def write_thumbnail(self) -> None:
+        """Write a ``CThumbnail`` with a default camera and no image -
+        ground truth shows the image itself is optional (a null CDib
+        reference is valid and is what real SketchUp writes for a
+        definition whose thumbnail was never explicitly rendered)."""
+        self._new_of_known_class("CThumbnail", schema=_THUMBNAIL_SCHEMA)
+        self._preamble(pid=0)  # structural container: ground truth carries no pid
+        self.buf += struct.pack("<H", 0x8000 | _CCAMERA_SLOT)
+        self._alloc()  # a class-ref always allocates a new object slot, even a bookkeeping-only one
+        self.buf += _CAMERA_TEMPLATE
+        self._null()  # no thumbnail image
+
+    def write_definition_header(self) -> Tuple[int, int]:
+        """Begin a ``CComponentDefinition`` record - everything up to (not
+        including) its internal entity list. Returns ``(definition_slot,
+        count_patch_pos)``: the caller writes the definition's geometry via
+        further `write_face` calls (appended directly to ``self.buf``),
+        then must patch a u32 entity count into ``self.buf`` at
+        ``count_patch_pos`` and call `write_definition_tail` to close it out.
+        """
+        slot = self._new_of_known_class("CComponentDefinition", schema=_DEFINITION_SCHEMA)
+        self._preamble(real_attrs=True)  # ground truth: a real pid and a real (empty) attr container
+        self.buf += _DEFINITION_BASE_BLOCK
+        self.buf += _u32(1)  # nlayers: always 1, an embedded copy of Layer0
+        embedded_layer_slot = self.write_layer("Layer0", with_pids=False)
+        self._backref(embedded_layer_slot)  # "decl": this definition's own active layer
+        self.buf += _u32(0)  # nested-definition count - always 0, not supported
+        count_patch_pos = len(self.buf)
+        self.buf += _u32(0)  # placeholder entity count, patched by the caller
+        return slot, count_patch_pos
+
+    def write_definition_tail(self, name: str) -> None:
+        """Close out a ``CComponentDefinition`` record: relationship count,
+        GUID, name, timestamp, behavior flags, and a default thumbnail."""
+        self.buf += _u32(0)  # nrel: CRelationship count - always 0, not supported
+        self.buf += struct.pack("<H", 0)
+        self.buf += uuid.uuid4().bytes
+        self._write_str(name)
+        self._write_str("")  # description - empty in ground truth
+        self._write_str("")  # second name field - empty in ground truth
+        self.buf += _u32(int(time.time()))
+        # 43-byte gap; byte -9 carries the always-faces-camera/
+        # shadows-face-sun behavior flags (legacy.py's _read_definition) -
+        # both left off, matching neither being exposed by this writer yet.
+        self.buf += bytes(43)
+        self.write_thumbnail()
+
+    def write_instance(
+        self,
+        definition_slot: int,
+        name: str,
+        translation: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+        matrix3x3: Optional[Tuple[float, float, float, float, float, float, float, float, float]] = None,
+        instance_material: int = 0,
+        instance_layer: int = 0,
+    ) -> int:
+        """Write one ``CComponentInstance`` placing a copy of
+        ``definition_slot`` (from `write_definition_header`) and return how
+        many new root-entity-list slots it consumed - always 1, matching
+        `write_face`'s return contract (the caller accumulates this into
+        the file's total root count; an instance has no sub-entities of
+        its own the way a face has edges).
+
+        ``matrix3x3`` is a row-major 3x3 rotation/scale matrix (identity if
+        omitted); ``translation`` is applied after it. Ground truth shows
+        the file's transform encoding is exactly this 3x3 matrix (9 f64s) +
+        translation (3 f64s) + a trailing 1.0 - the 4th row of a standard
+        4x4 affine matrix, always [0, 0, 0, 1], is omitted entirely rather
+        than stored.
+        """
+        self._new_of_known_class("CComponentInstance", schema=_INSTANCE_SCHEMA)
+        self._preamble(real_attrs=True)  # ground truth: instances also carry a real (empty) attr container
+        self._drawbase(mat=instance_material, layer=instance_layer)
+        self._backref(definition_slot)
+        if matrix3x3 is None:
+            matrix3x3 = (1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
+        for v in (*matrix3x3, *translation, 1.0):
+            self.buf += _f64(v)
+        self._write_str(name)
+        self.buf += uuid.uuid4().bytes
+        return 1
 
     def write_face(
         self,
@@ -473,6 +608,72 @@ def _plane_from_polygon(points: Sequence[Point3]) -> Tuple[float, float, float, 
     return nx, ny, nz, d
 
 
+class ComponentDefinitionBuilder:
+    """Accumulates one reusable component definition's geometry. Construct
+    via :meth:`SkpBuilder.add_component_definition`, not directly - use it
+    as a context manager, then pass it to :meth:`SkpBuilder.add_instance`
+    to place copies of it.
+
+    >>> with builder.add_component_definition("Chair") as chair:
+    ...     chair.add_face([(0, 0, 0), (20, 0, 0), (20, 20, 0), (0, 20, 0)])
+    >>> builder.add_instance(chair, translation=(100, 0, 0))
+    """
+
+    def __init__(self, skp: "SkpBuilder", slot: int, name: str, count_patch_pos: int):
+        self._skp = skp
+        self.slot = slot
+        self.name = name
+        self._count_patch_pos = count_patch_pos
+        self._vertex_slots: Dict[Point3, int] = {}
+        self._edge_registry: Dict[FrozenSet[int], Tuple[int, int]] = {}
+        self._new_entity_count = 0
+        self._closed = False
+
+    def add_face(
+        self,
+        points: Sequence[Point3],
+        material: Optional[int] = None,
+        layer: Optional[int] = None,
+        back_material: Optional[int] = None,
+        hidden: bool = False,
+        soft_edges: bool = False,
+        smooth_edges: bool = False,
+        hidden_edges: bool = False,
+    ) -> None:
+        """Add one planar face to this definition - same signature and
+        behavior as :meth:`SkpBuilder.add_face`, except vertices/edges are
+        shared only within this definition, never with the root model or
+        other definitions."""
+        if self._closed:
+            raise SkpWriteError(
+                f"component definition {self.name!r} has already closed "
+                "(its `with` block exited) - cannot add more faces to it"
+            )
+        points = [(float(p[0]), float(p[1]), float(p[2])) for p in points]
+        if len(points) < 3:
+            raise SkpWriteError("a face needs at least 3 points")
+        self._new_entity_count += self._skp._definition_writer.write_face(
+            points, self._vertex_slots, self._edge_registry,
+            material or 0, layer or 0, back_material or 0,
+            hidden, soft_edges, smooth_edges, hidden_edges,
+        )
+
+    def __enter__(self) -> "ComponentDefinitionBuilder":
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        if exc_type is not None:
+            return None
+        if self._new_entity_count == 0:
+            raise SkpWriteError(f"component definition {self.name!r} has no geometry - add at least one face")
+        writer = self._skp._definition_writer
+        struct.pack_into("<I", writer.buf, self._count_patch_pos, self._new_entity_count)
+        writer.write_definition_tail(self.name)
+        self._closed = True
+        self._skp._open_definition = None
+        return None
+
+
 class SkpBuilder:
     """Accumulates geometry and writes it into a new legacy-format (v17)
     ``.skp`` file. Construct via :func:`create`, not directly."""
@@ -500,6 +701,7 @@ class SkpBuilder:
         layer_insert_pos = r.pos
         layer_writer_base = ar.next_slot
         ar.read_object(r)  # definition-list anchor (active-layer back-ref)
+        def_count_pos = r.pos
         def_count = r.u32()
         for _ in range(def_count):
             ar.read_object(r, expect="CComponentDefinition")
@@ -516,6 +718,8 @@ class SkpBuilder:
         self._layer_count_pos = layer_count_pos
         self._orig_layer_count = orig_layer_count
         self._layer_insert_pos = layer_insert_pos
+        self._def_count_pos = def_count_pos
+        self._orig_def_count = def_count
         self._root_count_pos = root_count_pos
         self._orig_root_count = orig_root_count
         self._tail_pos = tail_pos
@@ -542,6 +746,13 @@ class SkpBuilder:
         self._layer_writer_start: Optional[int] = None
         self._layers_by_name: Dict[str, int] = {}
         self._layer_count = 0
+        # Deferred the same way as the layer writer: component definitions
+        # splice in after layers, before root-level geometry, so their
+        # starting slot depends on the final material+layer shift.
+        self._definition_writer: Optional[_ArchiveWriter] = None
+        self._definition_writer_start: Optional[int] = None
+        self._definition_count = 0
+        self._open_definition: Optional["ComponentDefinitionBuilder"] = None
         self._geometry_writer: Optional[_ArchiveWriter] = None
         self._vertex_slots: Dict[Point3, int] = {}
         self._edge_registry: Dict[FrozenSet[int], Tuple[int, int]] = {}
@@ -559,14 +770,16 @@ class SkpBuilder:
         All materials must be added before the first `add_face` call - the
         geometry section's slot numbering is fixed once writing begins, and
         depends on the final material count. They must also come before any
-        `add_layer` call - materials are spliced in earlier in the file, so
-        the layer section's own slot numbering depends on the final
-        material count too.
+        `add_layer` or `add_component_definition` call - materials are
+        spliced in earlier in the file, so both of those sections' own slot
+        numbering depends on the final material count too.
         """
         if self._geometry_writer is not None:
             raise SkpWriteError("add_material must be called before any add_face calls")
         if self._layer_writer is not None:
             raise SkpWriteError("add_material must be called before any add_layer calls")
+        if self._definition_writer is not None:
+            raise SkpWriteError("add_material must be called before any add_component_definition calls")
         if name in self._materials_by_name:
             return self._materials_by_name[name]
         if len(rgba) == 3:
@@ -592,12 +805,14 @@ class SkpBuilder:
         rather than a much larger face-attribute feature).
 
         Same ordering rules as `add_material` - must be called before any
-        `add_layer` or `add_face` call.
+        `add_layer`, `add_component_definition`, or `add_face` call.
         """
         if self._geometry_writer is not None:
             raise SkpWriteError("add_texture_material must be called before any add_face calls")
         if self._layer_writer is not None:
             raise SkpWriteError("add_texture_material must be called before any add_layer calls")
+        if self._definition_writer is not None:
+            raise SkpWriteError("add_texture_material must be called before any add_component_definition calls")
         if name in self._materials_by_name:
             return self._materials_by_name[name]
         if not image_path.lower().endswith(".png"):
@@ -617,10 +832,15 @@ class SkpBuilder:
         handle rather than creating a duplicate layer.
 
         All layers must be added before the first `add_face` call, for the
-        same reason as `add_material`.
+        same reason as `add_material`. They must also come before any
+        `add_component_definition` call - layers are spliced in earlier in
+        the file, so a definition's own slot numbering depends on the
+        final layer count too.
         """
         if self._geometry_writer is not None:
             raise SkpWriteError("add_layer must be called before any add_face calls")
+        if self._definition_writer is not None:
+            raise SkpWriteError("add_layer must be called before any add_component_definition calls")
         if name in self._layers_by_name:
             return self._layers_by_name[name]
         if self._layer_writer is None:
@@ -633,17 +853,112 @@ class SkpBuilder:
             # every entry before handing it to a writer that might look one
             # up (write_layer's short class-ref for CLayer needs the true
             # post-shift slot, not the baseline one).
-            shifted_class_slot = {n: s + material_shift for n, s in self._scaffold_class_slot.items()}
-            self._layer_writer = _ArchiveWriter(next_slot=self._layer_writer_start, class_slot=shifted_class_slot)
+            self._layer_writer = _ArchiveWriter(
+                next_slot=self._layer_writer_start, class_slot=self._material_shifted_class_slot()
+            )
         slot = self._layer_writer.write_layer(name)
         self._layers_by_name[name] = slot
         self._layer_count += 1
         return slot
 
+    def _material_shifted_class_slot(self) -> Dict[str, int]:
+        material_shift = self._material_writer.next_slot - self._base
+        return {n: s + material_shift for n, s in self._scaffold_class_slot.items()}
+
     def _layer_shift(self) -> int:
         if self._layer_writer is None:
             return 0
         return self._layer_writer.next_slot - self._layer_writer_start
+
+    def _post_layer_class_slot(self) -> Dict[str, int]:
+        """The class_slot dict a writer positioned right after the layer
+        section (a definition writer, or root geometry if no definitions
+        exist) should start from."""
+        if self._layer_writer is not None:
+            return dict(self._layer_writer.class_slot)
+        return self._material_shifted_class_slot()
+
+    def add_component_definition(self, name: str) -> "ComponentDefinitionBuilder":
+        """Start a new reusable component definition. Use the returned
+        object as a context manager, adding its geometry via `.add_face`
+        inside the ``with`` block; once closed, pass it to `add_instance`
+        to place copies of it in the model.
+
+        >>> with builder.add_component_definition("Chair") as chair:
+        ...     chair.add_face([(0, 0, 0), (20, 0, 0), (20, 20, 0), (0, 20, 0)])
+        >>> builder.add_instance(chair, translation=(100, 0, 0))
+
+        Must be called before any `add_face`/`add_instance` call on the
+        builder itself - component definitions splice in after materials
+        and layers, before root-level geometry, so their slot numbering
+        depends on the final material and layer counts.
+        """
+        if self._geometry_writer is not None:
+            raise SkpWriteError("add_component_definition must be called before any add_face/add_instance calls")
+        if self._open_definition is not None:
+            raise SkpWriteError(
+                f"component definition {self._open_definition.name!r} is still open - "
+                "exit its `with` block before starting another"
+            )
+        if self._definition_writer is None:
+            self._definition_writer_start = self._scaffold_next_slot + (
+                self._material_writer.next_slot - self._base
+            ) + self._layer_shift()
+            self._definition_writer = _ArchiveWriter(
+                next_slot=self._definition_writer_start, class_slot=self._post_layer_class_slot()
+            )
+        slot, count_patch_pos = self._definition_writer.write_definition_header()
+        self._definition_count += 1
+        comp = ComponentDefinitionBuilder(self, slot, name, count_patch_pos)
+        self._open_definition = comp
+        return comp
+
+    def _definition_shift(self) -> int:
+        if self._definition_writer is None:
+            return 0
+        return self._definition_writer.next_slot - self._definition_writer_start
+
+    def _post_definition_class_slot(self) -> Dict[str, int]:
+        if self._definition_writer is not None:
+            return dict(self._definition_writer.class_slot)
+        return self._post_layer_class_slot()
+
+    def add_instance(
+        self,
+        definition: "ComponentDefinitionBuilder",
+        name: Optional[str] = None,
+        translation: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+        matrix3x3: Optional[Tuple[float, float, float, float, float, float, float, float, float]] = None,
+        material: Optional[int] = None,
+        layer: Optional[int] = None,
+    ) -> None:
+        """Place one instance of ``definition`` (from
+        `add_component_definition`, already closed) in the model.
+
+        ``matrix3x3`` is a row-major 3x3 rotation/scale matrix (identity if
+        omitted); ``translation`` is applied after it, in inches.
+        ``material``/``layer``, if given, are handles from `add_material`/
+        `add_layer` applied to the instance itself (not its contents).
+        """
+        if definition._closed is False:
+            raise SkpWriteError(
+                f"component definition {definition.name!r} is still open - "
+                "exit its `with` block before calling add_instance"
+            )
+        self._ensure_geometry_writer()
+        self._new_entity_count += self._geometry_writer.write_instance(
+            definition.slot, name or definition.name, translation, matrix3x3, material or 0, layer or 0
+        )
+        self._face_count += 1  # reuses the "at least one root entity" check in to_bytes
+
+    def _ensure_geometry_writer(self) -> None:
+        if self._geometry_writer is not None:
+            return
+        material_shift = self._material_writer.next_slot - self._base
+        self._geometry_writer = _ArchiveWriter(
+            next_slot=self._scaffold_next_slot + material_shift + self._layer_shift() + self._definition_shift(),
+            class_slot=self._post_definition_class_slot(),
+        )
 
     def add_face(
         self,
@@ -680,12 +995,7 @@ class SkpBuilder:
         points = [(float(p[0]), float(p[1]), float(p[2])) for p in points]
         if len(points) < 3:
             raise SkpWriteError("a face needs at least 3 points")
-        if self._geometry_writer is None:
-            material_shift = self._material_writer.next_slot - self._base
-            self._geometry_writer = _ArchiveWriter(
-                next_slot=self._scaffold_next_slot + material_shift + self._layer_shift(),
-                class_slot=self._scaffold_class_slot,
-            )
+        self._ensure_geometry_writer()
         self._new_entity_count += self._geometry_writer.write_face(
             points, self._vertex_slots, self._edge_registry,
             material or 0, layer or 0, back_material or 0,
@@ -703,7 +1013,8 @@ class SkpBuilder:
         # total, so each shift is just the delta since its writer started.
         material_shift = self._material_writer.next_slot - self._base
         layer_shift = self._layer_shift()
-        geometry_initial_slot = self._scaffold_next_slot + material_shift + layer_shift
+        definition_shift = self._definition_shift()
+        geometry_initial_slot = self._scaffold_next_slot + material_shift + layer_shift + definition_shift
         geometry_shift = self._geometry_writer.next_slot - geometry_initial_slot
         new_root_count = self._orig_root_count + self._new_entity_count
 
@@ -739,20 +1050,28 @@ class SkpBuilder:
         if self._layer_writer is not None:
             out += self._layer_writer.buf
 
-        # layer_insert_pos -> root_count_pos: starts with the active-layer
-        # anchor, which needs +material_shift (never +layer_shift - Layer0
-        # itself never moves just because more layers are appended after it).
-        middle2 = bytearray(self._data[self._layer_insert_pos : self._root_count_pos])
+        # layer_insert_pos -> def_count_pos: just the active-layer anchor,
+        # which needs +material_shift (never +layer_shift - Layer0 itself
+        # never moves just because more layers are appended after it).
+        middle2a = bytearray(self._data[self._layer_insert_pos : self._def_count_pos])
         if material_shift:
-            _shift_ref(middle2, _ACTIVE_LAYER_ANCHOR_REL, material_shift)
-        out += middle2
+            _shift_ref(middle2a, _ACTIVE_LAYER_ANCHOR_REL, material_shift)
+        out += middle2a
+
+        out += _u32(self._orig_def_count + self._definition_count)
+        if self._definition_writer is not None:
+            out += self._definition_writer.buf
+
+        # def_count_pos+4 -> root_count_pos: any already-existing
+        # definitions (none, in the blank scaffold), unmodified.
+        out += self._data[self._def_count_pos + 4 : self._root_count_pos]
 
         out += _u32(new_root_count)
         out += self._data[self._root_count_pos + 4 : self._tail_pos]
         out += self._geometry_writer.buf
 
         tail = bytearray(self._data[self._tail_pos :])
-        total_tail_shift = material_shift + layer_shift + geometry_shift
+        total_tail_shift = material_shift + layer_shift + definition_shift + geometry_shift
         for pos in _TAIL_REF_POSITIONS:
             _shift_ref(tail, pos, total_tail_shift)
         out += tail
