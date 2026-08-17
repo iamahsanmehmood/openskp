@@ -66,6 +66,11 @@ class TestBuilderErrors:
         with pytest.raises(SkpWriteError, match="collinear"):
             builder.add_face([(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (2.0, 0.0, 0.0)])
 
+    def test_non_planar_points_raise(self):
+        builder = create()
+        with pytest.raises(SkpWriteError, match="not coplanar"):
+            builder.add_face([(0.0, 0.0, 0.0), (100.0, 0.0, 0.0), (100.0, 100.0, 0.0), (0.0, 100.0, 50.0)])
+
 
 class TestSingleFace:
     def test_matches_ground_truth_byte_size(self):
@@ -185,6 +190,28 @@ class TestMultiFace:
         ar, root, layers, materials = legacy._walk(data)
         assert sum(1 for (_, n, _) in root if n == "CFace") == 30
         assert sum(1 for (_, n, _) in root if n == "CEdge") == 120
+
+
+class TestConcavePolygons:
+    # L-shape: a 100x100 square missing its (50,50)-(100,100) corner.
+    # Deliberately starts at the reflex (concave) vertex - the worst case
+    # for a plane-normal computation that only looks at the first 3 points,
+    # since that vertex's own local geometry points the "wrong" way.
+    L_SHAPE = [
+        (50.0, 50.0, 0.0), (100.0, 50.0, 0.0), (100.0, 100.0, 0.0),
+        (0.0, 100.0, 0.0), (0.0, 0.0, 0.0), (50.0, 0.0, 0.0),
+    ]
+
+    def test_reflex_first_vertex_still_gets_correct_normal(self):
+        # Regression guard: a naive first-3-points normal (rather than
+        # Newell's method, summed over every edge) gets this backwards for
+        # a concave polygon starting at its reflex corner.
+        builder = create()
+        builder.add_face(self.L_SHAPE)
+        data = builder.to_bytes()
+        ar, root, layers, materials = legacy._walk(data)
+        face = [v for (_, n, v) in root if n == "CFace"][0]
+        assert face["plane"][:3] == pytest.approx((0.0, 0.0, 1.0), abs=1e-9)
 
 
 class TestMaterials:
@@ -609,6 +636,44 @@ class TestRealSketchUpOracle:
             sw, sh = ctypes.c_double(), ctypes.c_double()
             dll.SUTextureGetDimensions(texture, ctypes.byref(w), ctypes.byref(h), ctypes.byref(sw), ctypes.byref(sh))
             assert (w.value, h.value) == (8, 8)
+            dll.SUModelRelease(ctypes.byref(model))
+        finally:
+            dll.SUTerminate()
+
+    def test_concave_face_area_is_correct_in_real_sketchup(self, tmp_path):
+        import ctypes
+
+        builder = create()
+        builder.add_face(TestConcavePolygons.L_SHAPE)
+        out = tmp_path / "lshape.skp"
+        builder.save(str(out))
+
+        dll = ctypes.CDLL(_SDK_DLL_PATH)
+        dll.SUInitialize()
+        dll.SUEntitiesGetFaces.argtypes = [
+            ctypes.c_void_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_size_t),
+        ]
+        dll.SUFaceGetArea.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_double)]
+        try:
+            model = ctypes.c_void_p()
+            err = dll.SUModelCreateFromFile(ctypes.byref(model), str(out).encode())
+            assert err == 0, f"SketchUp SDK rejected the file (error {err})"
+            entities = ctypes.c_void_p()
+            dll.SUModelGetEntities(model, ctypes.byref(entities))
+            nfaces = ctypes.c_long()
+            dll.SUEntitiesGetNumFaces(entities, ctypes.byref(nfaces))
+            assert nfaces.value == 1
+            faces = (ctypes.c_void_p * 1)()
+            got = ctypes.c_size_t()
+            dll.SUEntitiesGetFaces(entities, 1, faces, ctypes.byref(got))
+            area = ctypes.c_double()
+            dll.SUFaceGetArea(faces[0], ctypes.byref(area))
+            # 100x100 square minus the missing 50x50 corner = 7500 sq in.
+            # A wrong-signed/backwards normal wouldn't necessarily change
+            # this number, but a broken loop winding would - this is the
+            # cheapest real-SketchUp check that the geometry is actually
+            # the L-shape, not something degenerate.
+            assert area.value == pytest.approx(7500.0, abs=1e-6)
             dll.SUModelRelease(ctypes.byref(model))
         finally:
             dll.SUTerminate()

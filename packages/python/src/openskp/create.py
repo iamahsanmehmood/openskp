@@ -415,17 +415,42 @@ class _ArchiveWriter:
 
 
 def _plane_from_polygon(points: Sequence[Point3]) -> Tuple[float, float, float, float]:
-    p0, p1, p2 = points[0], points[1], points[2]
-    ax, ay, az = p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]
-    bx, by, bz = p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2]
-    nx = ay * bz - az * by
-    ny = az * bx - ax * bz
-    nz = ax * by - ay * bx
+    # Newell's method: sums a cross-product-like term over every edge
+    # rather than reading the normal off just the first 3 points. That
+    # first-3-points approach breaks for concave polygons whenever the
+    # first vertex happens to be a reflex corner (wrong-signed normal) -
+    # Newell's sum is the polygon's true area-weighted normal regardless
+    # of convexity, as long as it's planar and simple (non-self-intersecting).
+    n = len(points)
+    nx = ny = nz = 0.0
+    for i in range(n):
+        x0, y0, z0 = points[i]
+        x1, y1, z1 = points[(i + 1) % n]
+        nx += (y0 - y1) * (z0 + z1)
+        ny += (z0 - z1) * (x0 + x1)
+        nz += (x0 - x1) * (y0 + y1)
     length = (nx * nx + ny * ny + nz * nz) ** 0.5
-    if length < 1e-12:
-        raise SkpWriteError("face points are collinear or coincident; cannot compute a plane")
+    if length < 1e-9:
+        raise SkpWriteError("face points are collinear or degenerate; cannot compute a plane")
     nx, ny, nz = nx / length, ny / length, nz / length
-    d = nx * p0[0] + ny * p0[1] + nz * p0[2]
+    cx = sum(p[0] for p in points) / n
+    cy = sum(p[1] for p in points) / n
+    cz = sum(p[2] for p in points) / n
+    d = nx * cx + ny * cy + nz * cz
+
+    # Every point must actually lie on the fitted plane - a mesh built
+    # from slightly-off-plane input would otherwise silently warp instead
+    # of failing loudly. Tolerance scales with the face's own size so it
+    # means the same thing for a 1-inch face and a 1000-inch one.
+    span = max(max(p[i] for p in points) - min(p[i] for p in points) for i in range(3))
+    tol = max(span, 1.0) * 1e-6
+    for p in points:
+        dist = nx * p[0] + ny * p[1] + nz * p[2] - d
+        if abs(dist) > tol:
+            raise SkpWriteError(
+                f"face points are not coplanar (point {p} is {abs(dist):.6g} units "
+                "off the fitted plane) - openskp.create only supports planar faces"
+            )
     return nx, ny, nz, d
 
 
