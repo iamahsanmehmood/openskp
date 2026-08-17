@@ -81,7 +81,7 @@ class TestSingleFace:
         # Every drawbase record in this build is 10 bytes: mat(u16) hidden
         # pad pad soft smooth pad layer(u16). Scan the writer's raw buffer
         # for every occurrence and check offsets 3-4 are both 0x01.
-        buf = bytes(builder._writer.buf)
+        buf = bytes(builder._geometry_writer.buf)
         # Each CEdge/CFace preamble+drawbase starts right after a class-ref
         # or class-declaration tag; rather than re-parse the whole stream,
         # confirm at least one drawbase's padding is set by checking that
@@ -98,7 +98,7 @@ class TestSingleFace:
         # 2 bytes: b"\x00\x00\x00" + b"\x01\x01".
         builder = SkpBuilder()
         builder.add_face(SQUARE)
-        buf = bytes(builder._writer.buf)
+        buf = bytes(builder._geometry_writer.buf)
         assert b"\x00\x00\x00\x01\x01" in buf
 
 
@@ -169,6 +169,81 @@ class TestMultiFace:
         assert sum(1 for (_, n, _) in root if n == "CEdge") == 120
 
 
+class TestMaterials:
+    def test_material_assigned_to_face_front(self):
+        builder = create()
+        red = builder.add_material("Red", (255, 0, 0))
+        builder.add_face(SQUARE, material=red)
+        data = builder.to_bytes()
+
+        ar, root, layers, materials = legacy._walk(data)
+        mat_by_slot = {s: v for s, v in materials}
+        assert mat_by_slot[red]["name"] == "Red"
+        assert mat_by_slot[red]["rgba"] == (255, 0, 0, 255)
+        face = [v for (_, n, v) in root if n == "CFace"][0]
+        assert face["db"]["mat"] == red
+        # edges never carry a material, even when their face does (ground
+        # truth: edge drawbase mat stays 0 regardless of the face's material)
+        edges = [v for (_, n, v) in root if n == "CEdge"]
+        assert all(e["db"]["mat"] == 0 for e in edges)
+
+    def test_unmaterialed_face_keeps_default(self):
+        builder = create()
+        builder.add_material("Unused", (1, 2, 3))
+        builder.add_face(SQUARE)
+        data = builder.to_bytes()
+        ar, root, layers, materials = legacy._walk(data)
+        face = [v for (_, n, v) in root if n == "CFace"][0]
+        assert face["db"]["mat"] == 0
+
+    def test_material_dedup_by_name_returns_same_handle(self):
+        builder = create()
+        a = builder.add_material("Shared", (10, 20, 30))
+        b = builder.add_material("Shared", (10, 20, 30))
+        assert a == b
+        builder.add_face(SQUARE, material=a)
+        data = builder.to_bytes()
+        ar, root, layers, materials = legacy._walk(data)
+        assert len(materials) == 1
+
+    def test_add_material_after_add_face_raises(self):
+        builder = create()
+        builder.add_face(SQUARE)
+        with pytest.raises(SkpWriteError, match="before any add_face"):
+            builder.add_material("TooLate", (0, 0, 0))
+
+    def test_invalid_rgba_raises(self):
+        builder = create()
+        with pytest.raises(SkpWriteError, match="rgba"):
+            builder.add_material("Bad", (300, 0, 0))
+        with pytest.raises(SkpWriteError, match="rgba"):
+            builder.add_material("Bad", (0, 0))
+
+    def test_many_materials_and_faces_self_parse(self):
+        # Regression guard for the same class of shift-tracking bug the
+        # geometry-only large-mesh test guards against, but for the
+        # material-manager insertion point instead of the tail: 40 new
+        # materials plus 40 new faces stack two independent slot shifts
+        # (material_shift into the layer/definition-list region and into
+        # total_tail_shift, geometry_shift into total_tail_shift only).
+        builder = create()
+        mats = [builder.add_material(f"M{i}", (i % 256, (i * 7) % 256, (i * 13) % 256))
+                for i in range(40)]
+        for i, m in enumerate(mats):
+            x0 = i * 150.0
+            builder.add_face(
+                [(x0, 0.0, 0.0), (x0 + 100.0, 0.0, 0.0),
+                 (x0 + 100.0, 100.0, 0.0), (x0, 100.0, 0.0)],
+                material=m,
+            )
+        data = builder.to_bytes()
+        ar, root, layers, materials = legacy._walk(data)
+        assert len(materials) == 40
+        assert sum(1 for (_, n, _) in root if n == "CFace") == 40
+        faces_by_mat = {v["db"]["mat"] for (_, n, v) in root if n == "CFace"}
+        assert faces_by_mat == set(mats)
+
+
 class TestScaffoldIntegrity:
     def test_scaffold_hash_matches_expected(self):
         # Guards against the scaffold file silently drifting (e.g. a bad
@@ -218,6 +293,55 @@ class TestRealSketchUpOracle:
             nfaces = ctypes.c_long()
             dll.SUEntitiesGetNumFaces(entities, ctypes.byref(nfaces))
             assert nfaces.value == 1
+            dll.SUModelRelease(ctypes.byref(model))
+        finally:
+            dll.SUTerminate()
+
+    def test_material_colors_round_trip_through_real_sketchup(self, tmp_path):
+        import ctypes
+
+        class SUColor(ctypes.Structure):
+            _fields_ = [("red", ctypes.c_ubyte), ("green", ctypes.c_ubyte),
+                        ("blue", ctypes.c_ubyte), ("alpha", ctypes.c_ubyte)]
+
+        builder = create()
+        red = builder.add_material("Red", (255, 0, 0))
+        blue = builder.add_material("Blue", (0, 0, 255))
+        builder.add_face(SQUARE, material=red)
+        builder.add_face(
+            [(100.0, 0.0, 0.0), (200.0, 0.0, 0.0), (200.0, 100.0, 0.0), (100.0, 100.0, 0.0)],
+            material=blue,
+        )
+        out = tmp_path / "two_materials.skp"
+        builder.save(str(out))
+
+        dll = ctypes.CDLL(_SDK_DLL_PATH)
+        dll.SUInitialize()
+        dll.SUEntitiesGetFaces.argtypes = [
+            ctypes.c_void_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_size_t),
+        ]
+        dll.SUFaceGetFrontMaterial.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUMaterialGetColor.argtypes = [ctypes.c_void_p, ctypes.POINTER(SUColor)]
+        try:
+            model = ctypes.c_void_p()
+            err = dll.SUModelCreateFromFile(ctypes.byref(model), str(out).encode())
+            assert err == 0, f"SketchUp SDK rejected the file (error {err})"
+            entities = ctypes.c_void_p()
+            dll.SUModelGetEntities(model, ctypes.byref(entities))
+            nfaces = ctypes.c_long()
+            dll.SUEntitiesGetNumFaces(entities, ctypes.byref(nfaces))
+            assert nfaces.value == 2
+            faces = (ctypes.c_void_p * 2)()
+            got = ctypes.c_size_t()
+            dll.SUEntitiesGetFaces(entities, 2, faces, ctypes.byref(got))
+            colors = []
+            for i in range(2):
+                mat = ctypes.c_void_p()
+                assert dll.SUFaceGetFrontMaterial(faces[i], ctypes.byref(mat)) == 0
+                color = SUColor()
+                assert dll.SUMaterialGetColor(mat, ctypes.byref(color)) == 0
+                colors.append((color.red, color.green, color.blue))
+            assert set(colors) == {(255, 0, 0), (0, 0, 255)}
             dll.SUModelRelease(ctypes.byref(model))
         finally:
             dll.SUTerminate()

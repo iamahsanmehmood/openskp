@@ -14,8 +14,9 @@ are involved, and how.
 
 * Root-level geometry only - faces built directly from vertex coordinates,
   sharing vertices and edges automatically wherever coordinates coincide
-  exactly. There is no support yet for materials, layers other than the
-  default, or component/group definitions (nested component internals
+  exactly. Solid-color materials are supported (see :meth:`SkpBuilder.
+  add_material`); there is no support yet for textures, layers other than
+  the default, or component/group definitions (nested component internals
   contain a byte region this project has not reverse-engineered yet - see
   :mod:`openskp.legacy`'s module docstring).
 * Coordinates are in **inches** - SketchUp's own native internal unit for
@@ -91,6 +92,27 @@ _TAIL_REF_POSITIONS = (409, 468, 477, 479, 1383, 1385)
 
 _CLAYER_PATTERN = re.escape(b"\xff\xff") + b".." + re.escape(struct.pack("<H", 6) + b"CLayer")
 
+# Offset (relative to the material-manager insertion point - the position
+# right before the "layer list marker" that a zero-material scaffold starts
+# with) of the one internal reference in the layer/definition-list region
+# that must be renumbered by the number of new archive slots the material
+# section adds. Found by diffing real SDK-authored files with 0 vs N
+# materials; confirmed to hold from N=1 up to N=300. Six other candidate
+# positions found the same way turned out to be _TAIL_REF_POSITIONS in
+# disguise (their tail-relative offsets are exactly 409, 468, 477, 479,
+# 1383, 1385) - those already get shifted correctly since to_bytes() adds
+# the material shift into total_tail_shift alongside the geometry shift.
+_MATERIAL_REF_POSITIONS = (105,)
+
+# Absolute offset of a u16 "next available pid" counter that lives BEFORE the
+# material insertion point (so only its value, not its position, needs
+# correction). Increments by exactly the material COUNT (one pid consumed
+# per material object; unlike the slot-reference fields above, the material
+# class declaration itself doesn't consume a pid). Confirmed up to N=300.
+_PID_COUNTER_POS = 1987
+
+_MATERIAL_SCHEMA = 12
+
 
 def _u32(v: int) -> bytes:
     return struct.pack("<I", v)
@@ -98,6 +120,15 @@ def _u32(v: int) -> bytes:
 
 def _f64(v: float) -> bytes:
     return struct.pack("<d", v)
+
+
+def _shift_ref(buf: bytearray, pos: int, shift: int) -> None:
+    """Renumber the u16 archive slot-reference at ``pos`` by ``shift``,
+    preserving the 0x8000 class-ref tag bit if the reference carries one."""
+    u16 = struct.unpack_from("<H", buf, pos)[0]
+    tag_bit = u16 & 0x8000
+    slot = u16 & 0x7FFF
+    struct.pack_into("<H", buf, pos, tag_bit | ((slot + shift) & 0x7FFF))
 
 
 def _load_scaffold() -> bytes:
@@ -198,11 +229,32 @@ class _ArchiveWriter:
         self.buf += _f64(point[0]) + _f64(point[1]) + _f64(point[2])
         return slot
 
+    def _write_str(self, s: str) -> None:
+        encoded = s.encode("utf-16-le")
+        n = len(encoded) // 2
+        if n >= 0xFF:
+            raise SkpWriteError("string too long to encode (255 char limit)")
+        self.buf += b"\xff\xfe\xff" + struct.pack("<B", n) + encoded
+
+    def write_material(self, name: str, rgba: Tuple[int, int, int, int]) -> int:
+        """Write one solid-color ``CMaterial`` record and return its slot."""
+        slot = self._new_of_known_class("CMaterial", schema=_MATERIAL_SCHEMA)
+        self._preamble()
+        self._write_str(name)
+        self.buf += struct.pack("<H", 0)  # texflag: solid color, no texture
+        self.buf += bytes(rgba)
+        self._write_str("")  # texture path (empty - no texture)
+        self.buf += bytes(8)  # unknown/padding - ground truth is all-zero here
+        self.buf += _f64(1.0)  # opacity
+        self.buf.append(0)  # use_opacity = False (alpha carries transparency instead)
+        return slot
+
     def write_face(
         self,
         points: Sequence[Point3],
         vertex_slots: Dict[Point3, int],
         edge_registry: Dict[FrozenSet[int], Tuple[int, int]],
+        face_material: int = 0,
     ) -> int:
         """Write one planar face and return how many new root-entity-list
         slots it consumed (edges newly declared, plus the face itself) -
@@ -212,7 +264,11 @@ class _ArchiveWriter:
         point at the end). Vertices and edges are shared automatically
         across calls via ``vertex_slots``/``edge_registry`` wherever
         coordinates coincide exactly - pass the same dicts across every
-        `write_face` call building one mesh.
+        `write_face` call building one mesh. ``face_material`` is a material
+        slot (from :meth:`write_material`) applied to the face's front side;
+        0 means the default (no material). Edges are never materialed -
+        ground truth shows edges always keep drawbase mat=0 even when their
+        face has one.
         """
         n = len(points)
         point_slots = [vertex_slots.get(p) for p in points]
@@ -254,7 +310,7 @@ class _ArchiveWriter:
 
         self._new_of_known_class("CFace", schema=3)
         self._preamble()
-        self._drawbase()
+        self._drawbase(mat=face_material)
         nx, ny, nz, d = _plane_from_polygon(points)
         self.buf += _f64(nx) + _f64(ny) + _f64(nz) + _f64(d)
         self.buf += _u32(1)  # nloops = 1
@@ -329,17 +385,56 @@ class SkpBuilder:
         tail_pos = r.pos
 
         self._data = data
+        self._material_insert_pos = start
+        self._base = base
         self._root_count_pos = root_count_pos
         self._orig_root_count = orig_root_count
         self._tail_pos = tail_pos
-        self._initial_next_slot = ar.next_slot
-        self._writer = _ArchiveWriter(next_slot=ar.next_slot, class_slot=ar.class_slot)
+        # The scaffold-derived starting slot for anything written AFTER the
+        # (always byte-for-byte-copied) layer/definition/root-entity region -
+        # i.e. where geometry's own new slots would start if zero materials
+        # are added. Materials are spliced in even earlier (right before the
+        # layer list), so every slot from here on shifts by however many
+        # slots the material section ends up consuming - see add_material.
+        self._scaffold_next_slot = ar.next_slot
+        self._scaffold_class_slot = ar.class_slot
+        # Materials always start allocating at `base`, the same slot the
+        # (possibly absent) material section would have occupied.
+        self._material_writer = _ArchiveWriter(next_slot=base, class_slot={})
+        self._materials_by_name: Dict[str, int] = {}
+        self._material_count = 0
+        self._geometry_writer: Optional[_ArchiveWriter] = None
         self._vertex_slots: Dict[Point3, int] = {}
         self._edge_registry: Dict[FrozenSet[int], Tuple[int, int]] = {}
         self._new_entity_count = 0
         self._face_count = 0
 
-    def add_face(self, points: Sequence[Point3]) -> None:
+    def add_material(self, name: str, rgba: Sequence[int]) -> int:
+        """Register a solid-color material and return a handle to pass as
+        `add_face`'s ``material`` argument. ``rgba`` is ``(r, g, b)`` or
+        ``(r, g, b, a)``, each 0-255; alpha defaults to 255 (opaque).
+
+        Calling this again with a name already registered returns the same
+        handle rather than creating a duplicate material.
+
+        All materials must be added before the first `add_face` call - the
+        geometry section's slot numbering is fixed once writing begins, and
+        depends on the final material count.
+        """
+        if self._geometry_writer is not None:
+            raise SkpWriteError("add_material must be called before any add_face calls")
+        if name in self._materials_by_name:
+            return self._materials_by_name[name]
+        if len(rgba) == 3:
+            rgba = (*rgba, 255)
+        if len(rgba) != 4 or not all(isinstance(c, int) and 0 <= c <= 255 for c in rgba):
+            raise SkpWriteError("rgba must be 3 or 4 integers in 0-255")
+        slot = self._material_writer.write_material(name, tuple(rgba))
+        self._materials_by_name[name] = slot
+        self._material_count += 1
+        return slot
+
+    def add_face(self, points: Sequence[Point3], material: Optional[int] = None) -> None:
         """Add one planar face, defined by 3 or more coplanar points (in
         inches) forming a closed polygon in order - do not repeat the
         first point at the end.
@@ -349,12 +444,22 @@ class SkpBuilder:
         (same float values) - build a connected mesh by reusing the same
         point tuples across `add_face` calls, not by re-deriving
         numerically-close-but-not-identical coordinates.
+
+        ``material``, if given, is a handle returned by `add_material` -
+        applied to the face's front side. Leave unset for the default
+        (untextured, uncolored) material.
         """
         points = [(float(p[0]), float(p[1]), float(p[2])) for p in points]
         if len(points) < 3:
             raise SkpWriteError("a face needs at least 3 points")
-        self._new_entity_count += self._writer.write_face(
-            points, self._vertex_slots, self._edge_registry
+        if self._geometry_writer is None:
+            material_shift = self._material_writer.next_slot - self._base
+            self._geometry_writer = _ArchiveWriter(
+                next_slot=self._scaffold_next_slot + material_shift,
+                class_slot=self._scaffold_class_slot,
+            )
+        self._new_entity_count += self._geometry_writer.write_face(
+            points, self._vertex_slots, self._edge_registry, material or 0
         )
         self._face_count += 1
 
@@ -363,25 +468,45 @@ class SkpBuilder:
         if self._face_count == 0:
             raise SkpWriteError("no geometry added - call add_face at least once before saving")
 
-        new_root_count = self._orig_root_count + self._new_entity_count
         # Every new-class declaration and every new object allocation each
         # consume one archive slot; next_slot already reflects the running
-        # total, so the shift is just the delta since construction. This is
-        # the same number the tail's internal cross-references need to be
-        # renumbered by (see _TAIL_REF_POSITIONS).
-        shift = self._writer.next_slot - self._initial_next_slot
+        # total, so each shift is just the delta since its writer started.
+        material_shift = self._material_writer.next_slot - self._base
+        geometry_initial_slot = self._scaffold_next_slot + material_shift
+        geometry_shift = self._geometry_writer.next_slot - geometry_initial_slot
+        new_root_count = self._orig_root_count + self._new_entity_count
 
         out = bytearray()
-        out += self._data[: self._root_count_pos]
+
+        # The 4 bytes right before the material insertion point are a
+        # reserved (always-present) mat_count field - zero/implicit in the
+        # zero-material scaffold, not a gap that needs new bytes inserted.
+        # Real SketchUp overwrites them in place rather than growing the
+        # file by 4 extra bytes here; ground-truth-confirmed by diffing SDK-
+        # authored files (an earlier version of this method double-counted
+        # this field as a fresh insertion, corrupting every offset after it).
+        prefix = bytearray(self._data[: self._material_insert_pos - 4])
+        if self._material_count:
+            u16 = struct.unpack_from("<H", prefix, _PID_COUNTER_POS)[0]
+            struct.pack_into("<H", prefix, _PID_COUNTER_POS, u16 + self._material_count)
+        out += prefix
+        out += _u32(self._material_count)
+        out += self._material_writer.buf
+
+        middle = bytearray(self._data[self._material_insert_pos : self._root_count_pos])
+        if material_shift:
+            for rel in _MATERIAL_REF_POSITIONS:
+                _shift_ref(middle, rel, material_shift)
+        out += middle
+
         out += _u32(new_root_count)
         out += self._data[self._root_count_pos + 4 : self._tail_pos]
-        out += self._writer.buf
+        out += self._geometry_writer.buf
+
         tail = bytearray(self._data[self._tail_pos :])
+        total_tail_shift = material_shift + geometry_shift
         for pos in _TAIL_REF_POSITIONS:
-            u16 = struct.unpack_from("<H", tail, pos)[0]
-            tag_bit = u16 & 0x8000
-            slot = u16 & 0x7FFF
-            struct.pack_into("<H", tail, pos, tag_bit | ((slot + shift) & 0x7FFF))
+            _shift_ref(tail, pos, total_tail_shift)
         out += tail
         return bytes(out)
 
@@ -395,10 +520,11 @@ def create() -> SkpBuilder:
     """Start building a new legacy-format (v17) ``.skp`` file from scratch.
 
     >>> builder = create()
-    >>> builder.add_face([(0, 0, 0), (100, 0, 0), (100, 100, 0), (0, 100, 0)])
+    >>> red = builder.add_material("Red", (255, 0, 0))
+    >>> builder.add_face([(0, 0, 0), (100, 0, 0), (100, 100, 0), (0, 100, 0)], material=red)
     >>> builder.save("output.skp")
 
     See the :mod:`openskp.create` module docstring for the current scope
-    and limitations (no materials/layers/components yet, inches only).
+    and limitations (no textures/layers/components yet, inches only).
     """
     return SkpBuilder()
