@@ -403,6 +403,29 @@ class TestTextures:
         faces = [v for (_, n, v) in root if n == "CFace"]
         assert {f["db"]["mat"] for f in faces} == {solid, tex}
 
+    def test_two_texture_materials_together(self, tmp_path):
+        # CDib is its own class declaration, separate from CMaterial's -
+        # regression guard that a second texture correctly reuses CDib's
+        # class-ref rather than colliding with it (the same class of bug
+        # found for CLayer when combining materials and layers).
+        png1 = tmp_path / "tex1.png"
+        png1.write_bytes(_make_test_png(size=4, rgb=(200, 50, 50)))
+        png2 = tmp_path / "tex2.png"
+        png2.write_bytes(_make_test_png(size=8, rgb=(50, 200, 50)))
+        builder = create()
+        t1 = builder.add_texture_material("Tex1", str(png1))
+        t2 = builder.add_texture_material("Tex2", str(png2))
+        builder.add_face(SQUARE, material=t1)
+        builder.add_face(
+            [(100.0, 0.0, 0.0), (200.0, 0.0, 0.0), (200.0, 100.0, 0.0), (100.0, 100.0, 0.0)],
+            material=t2,
+        )
+        data = builder.to_bytes()
+        ar, root, layers, materials = legacy._walk(data)
+        mat_by_slot = {s: v for s, v in materials}
+        assert mat_by_slot[t1]["tex_file"] == str(png1)
+        assert mat_by_slot[t2]["tex_file"] == str(png2)
+
 
 class TestLayers:
     def test_layer_assigned_to_face(self):
