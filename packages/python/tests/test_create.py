@@ -33,6 +33,24 @@ create_module = importlib.import_module("openskp.create")
 SQUARE = [(0.0, 0.0, 0.0), (100.0, 0.0, 0.0), (100.0, 100.0, 0.0), (0.0, 100.0, 0.0)]
 
 
+def _make_test_png(size: int = 4, rgb=(200, 50, 50)) -> bytes:
+    """A minimal, dependency-free PNG encoder (stdlib zlib only) - avoids
+    pulling in an image library just to produce test fixtures. Solid color,
+    no filtering, no interlacing."""
+    import struct
+    import zlib
+
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data))
+
+    sig = b"\x89PNG\r\n\x1a\n"
+    ihdr = chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 2, 0, 0, 0))
+    raw = b"".join(b"\x00" + bytes(rgb) * size for _ in range(size))
+    idat = chunk(b"IDAT", zlib.compress(raw))
+    iend = chunk(b"IEND", b"")
+    return sig + ihdr + idat + iend
+
+
 class TestBuilderErrors:
     def test_saving_with_no_geometry_raises(self):
         with pytest.raises(SkpWriteError, match="no geometry"):
@@ -242,6 +260,64 @@ class TestMaterials:
         assert sum(1 for (_, n, _) in root if n == "CFace") == 40
         faces_by_mat = {v["db"]["mat"] for (_, n, v) in root if n == "CFace"}
         assert faces_by_mat == set(mats)
+
+
+class TestTextures:
+    def test_texture_material_self_parses(self, tmp_path):
+        png_path = tmp_path / "tex.png"
+        png_path.write_bytes(_make_test_png(size=4, rgb=(200, 50, 50)))
+
+        builder = create()
+        tex = builder.add_texture_material("Brick", str(png_path))
+        builder.add_face(SQUARE, material=tex)
+        data = builder.to_bytes()
+
+        ar, root, layers, materials = legacy._walk(data)
+        mat_by_slot = {s: v for s, v in materials}
+        assert mat_by_slot[tex]["name"] == "Brick"
+        assert mat_by_slot[tex]["tex_file"] == str(png_path)
+        face = [v for (_, n, v) in root if n == "CFace"][0]
+        assert face["db"]["mat"] == tex
+
+    def test_non_png_raises(self, tmp_path):
+        bad_path = tmp_path / "tex.jpg"
+        bad_path.write_bytes(b"not really a jpeg")
+        builder = create()
+        with pytest.raises(SkpWriteError, match="only .png"):
+            builder.add_texture_material("Bad", str(bad_path))
+
+    def test_texture_material_dedup_by_name(self, tmp_path):
+        png_path = tmp_path / "tex.png"
+        png_path.write_bytes(_make_test_png())
+        builder = create()
+        a = builder.add_texture_material("Shared", str(png_path))
+        b = builder.add_texture_material("Shared", str(png_path))
+        assert a == b
+
+    def test_add_texture_material_after_add_face_raises(self, tmp_path):
+        png_path = tmp_path / "tex.png"
+        png_path.write_bytes(_make_test_png())
+        builder = create()
+        builder.add_face(SQUARE)
+        with pytest.raises(SkpWriteError, match="before any add_face"):
+            builder.add_texture_material("TooLate", str(png_path))
+
+    def test_texture_and_solid_materials_together(self, tmp_path):
+        png_path = tmp_path / "tex.png"
+        png_path.write_bytes(_make_test_png())
+        builder = create()
+        solid = builder.add_material("Red", (255, 0, 0))
+        tex = builder.add_texture_material("Brick", str(png_path))
+        builder.add_face(SQUARE, material=solid)
+        builder.add_face(
+            [(100.0, 0.0, 0.0), (200.0, 0.0, 0.0), (200.0, 100.0, 0.0), (100.0, 100.0, 0.0)],
+            material=tex,
+        )
+        data = builder.to_bytes()
+        ar, root, layers, materials = legacy._walk(data)
+        assert len(materials) == 2
+        faces = [v for (_, n, v) in root if n == "CFace"]
+        assert {f["db"]["mat"] for f in faces} == {solid, tex}
 
 
 class TestLayers:
@@ -489,6 +565,50 @@ class TestRealSketchUpOracle:
                 dll.SUStringGetUTF8(sref, length.value + 1, buf, ctypes.byref(outlen))
                 names.append(buf.value.decode())
             assert set(names) == {"Roof", "Walls"}
+            dll.SUModelRelease(ctypes.byref(model))
+        finally:
+            dll.SUTerminate()
+
+    def test_texture_material_round_trips_through_real_sketchup(self, tmp_path):
+        import ctypes
+
+        png_path = tmp_path / "tex.png"
+        png_path.write_bytes(_make_test_png(size=8, rgb=(60, 180, 75)))
+
+        builder = create()
+        tex = builder.add_texture_material("Checker", str(png_path))
+        builder.add_face(SQUARE, material=tex)
+        out = tmp_path / "textured.skp"
+        builder.save(str(out))
+
+        dll = ctypes.CDLL(_SDK_DLL_PATH)
+        dll.SUInitialize()
+        dll.SUEntitiesGetFaces.argtypes = [
+            ctypes.c_void_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_size_t),
+        ]
+        dll.SUFaceGetFrontMaterial.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUMaterialGetTexture.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUTextureGetDimensions.argtypes = [
+            ctypes.c_void_p, ctypes.POINTER(ctypes.c_size_t), ctypes.POINTER(ctypes.c_size_t),
+            ctypes.POINTER(ctypes.c_double), ctypes.POINTER(ctypes.c_double),
+        ]
+        try:
+            model = ctypes.c_void_p()
+            err = dll.SUModelCreateFromFile(ctypes.byref(model), str(out).encode())
+            assert err == 0, f"SketchUp SDK rejected the file (error {err})"
+            entities = ctypes.c_void_p()
+            dll.SUModelGetEntities(model, ctypes.byref(entities))
+            faces = (ctypes.c_void_p * 1)()
+            got = ctypes.c_size_t()
+            dll.SUEntitiesGetFaces(entities, 1, faces, ctypes.byref(got))
+            mat = ctypes.c_void_p()
+            assert dll.SUFaceGetFrontMaterial(faces[0], ctypes.byref(mat)) == 0
+            texture = ctypes.c_void_p()
+            assert dll.SUMaterialGetTexture(mat, ctypes.byref(texture)) == 0
+            w, h = ctypes.c_size_t(), ctypes.c_size_t()
+            sw, sh = ctypes.c_double(), ctypes.c_double()
+            dll.SUTextureGetDimensions(texture, ctypes.byref(w), ctypes.byref(h), ctypes.byref(sw), ctypes.byref(sh))
+            assert (w.value, h.value) == (8, 8)
             dll.SUModelRelease(ctypes.byref(model))
         finally:
             dll.SUTerminate()

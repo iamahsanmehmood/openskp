@@ -14,11 +14,13 @@ are involved, and how.
 
 * Root-level geometry only - faces built directly from vertex coordinates,
   sharing vertices and edges automatically wherever coordinates coincide
-  exactly. Solid-color materials and named layers are supported (see
-  :meth:`SkpBuilder.add_material` / :meth:`SkpBuilder.add_layer`); there is
-  no support yet for textures or component/group definitions (nested
-  component internals contain a byte region this project has not
-  reverse-engineered yet - see :mod:`openskp.legacy`'s module docstring).
+  exactly. Solid-color and PNG-textured materials, plus named layers, are
+  supported (see :meth:`SkpBuilder.add_material` / :meth:`SkpBuilder.
+  add_texture_material` / :meth:`SkpBuilder.add_layer`); there is no
+  support yet for explicit texture positioning/pinning or component/group
+  definitions (nested component internals contain a byte region this
+  project has not reverse-engineered yet - see :mod:`openskp.legacy`'s
+  module docstring).
 * Coordinates are in **inches** - SketchUp's own native internal unit for
   this era of the format. Converting from another unit is the caller's
   responsibility for now.
@@ -119,6 +121,15 @@ _LAYER_SCHEMA = 3
 _PID_COUNTER_POS = 1987
 
 _MATERIAL_SCHEMA = 12
+_DIB_SCHEMA = 3
+
+# Ground-truth byte pattern (not a meaningful float) that real SketchUp
+# writes for a texture's "applied height" when the caller never explicitly
+# overrides the texture's scale/aspect - found by diffing an SDK-authored
+# textured-material file; present verbatim rather than derived from a
+# formula since its bit pattern doesn't correspond to any sensible height
+# value (it decodes as ~1.29e-231 as an f64).
+_TEXTURE_H_SENTINEL = bytes.fromhex("f0ffffffffffff0f")
 
 
 def _u32(v: int) -> bytes:
@@ -256,6 +267,40 @@ class _ArchiveWriter:
         self.buf += bytes(8)  # unknown/padding - ground truth is all-zero here
         self.buf += _f64(1.0)  # opacity
         self.buf.append(0)  # use_opacity = False (alpha carries transparency instead)
+        return slot
+
+    def write_textured_material(self, name: str, image_bytes: bytes, texture_path: str, subtype: int) -> int:
+        """Write one image-textured ``CMaterial`` record (embedding
+        ``image_bytes`` verbatim inside a ``CDib`` sub-object) and return
+        its slot. ``texture_path`` is stored as-is - ground truth shows
+        real SketchUp stores the original absolute file path, but any
+        string round-trips fine structurally. ``subtype`` is CDib's image
+        format tag (4 for PNG - the only value this project has confirmed
+        via SDK ground truth; see :meth:`SkpBuilder.add_texture_material`).
+        """
+        slot = self._new_of_known_class("CMaterial", schema=_MATERIAL_SCHEMA)
+        self._preamble()
+        self._write_str(name)
+        self.buf += struct.pack("<H", 1)  # texflag: textured
+        self.buf += bytes(2)  # texture-flag pad (v17+)
+        self._new_of_known_class("CDib", schema=_DIB_SCHEMA)
+        self.buf += struct.pack("<I", subtype)
+        self.buf += struct.pack("<I", len(image_bytes))
+        self.buf += image_bytes
+        self.buf += _f64(1.0)  # applied width - ground truth default when unscaled
+        self.buf += _TEXTURE_H_SENTINEL
+        self._write_str(texture_path)
+        # avg color (RGBA + pad + RGBA repeated, per legacy.py's _read_material
+        # comment) - neutral opaque white rather than a real image average,
+        # since this project doesn't depend on an image library to compute
+        # one. Ground truth confirms real SketchUp reads texture pixels
+        # directly for rendering; avg only feeds the material browser's
+        # thumbnail/tint preview.
+        self.buf += bytes([255, 255, 255, 255, 0, 255, 255, 255, 255])
+        self._write_str("")  # second name field - empty in ground truth
+        self.buf += struct.pack("<I", 1) + struct.pack("<I", 0)  # blob (colorize-related, ground truth: 1, 0)
+        self.buf += _f64(1.0)  # opacity
+        self.buf.append(0)  # use_opacity = False
         return slot
 
     def write_layer(self, name: str) -> int:
@@ -485,6 +530,37 @@ class SkpBuilder:
         if len(rgba) != 4 or not all(isinstance(c, int) and 0 <= c <= 255 for c in rgba):
             raise SkpWriteError("rgba must be 3 or 4 integers in 0-255")
         slot = self._material_writer.write_material(name, tuple(rgba))
+        self._materials_by_name[name] = slot
+        self._material_count += 1
+        return slot
+
+    def add_texture_material(self, name: str, image_path: str) -> int:
+        """Register an image-textured material from a local PNG file and
+        return a handle to pass as `add_face`'s ``material`` argument.
+
+        Only PNG is supported for now - the only image format this project
+        has confirmed the on-disk ``CDib`` encoding for via SDK ground
+        truth (see :meth:`_ArchiveWriter.write_textured_material`). UV
+        mapping is always the default planar projection; explicit
+        positioning/pinning is not supported (ground truth shows the
+        default case needs no extra per-face texture-coordinate record at
+        all, which is what keeps this scoped as an addition to materials
+        rather than a much larger face-attribute feature).
+
+        Same ordering rules as `add_material` - must be called before any
+        `add_layer` or `add_face` call.
+        """
+        if self._geometry_writer is not None:
+            raise SkpWriteError("add_texture_material must be called before any add_face calls")
+        if self._layer_writer is not None:
+            raise SkpWriteError("add_texture_material must be called before any add_layer calls")
+        if name in self._materials_by_name:
+            return self._materials_by_name[name]
+        if not image_path.lower().endswith(".png"):
+            raise SkpWriteError("only .png textures are supported for now")
+        with open(image_path, "rb") as f:
+            image_bytes = f.read()
+        slot = self._material_writer.write_textured_material(name, image_bytes, image_path, subtype=4)
         self._materials_by_name[name] = slot
         self._material_count += 1
         return slot
