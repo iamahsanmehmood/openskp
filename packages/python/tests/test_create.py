@@ -214,6 +214,31 @@ class TestConcavePolygons:
         assert face["plane"][:3] == pytest.approx((0.0, 0.0, 1.0), abs=1e-9)
 
 
+class TestNonManifoldTopology:
+    # Three triangular "fins" sharing one common edge (the z-axis segment
+    # from (0,0,0) to (0,0,100)) - nothing in the CEdgeUse/loop encoding
+    # inherently limits an edge to 2 faces, but this was previously
+    # unvalidated territory.
+    SHARED_EDGE = [(0.0, 0.0, 0.0), (0.0, 0.0, 100.0)]
+    FINS = [
+        [SHARED_EDGE[0], SHARED_EDGE[1], (100.0, 0.0, 50.0)],
+        [SHARED_EDGE[0], SHARED_EDGE[1], (-70.0, 70.0, 50.0)],
+        [SHARED_EDGE[0], SHARED_EDGE[1], (-70.0, -70.0, 50.0)],
+    ]
+
+    def test_three_faces_share_one_edge(self):
+        builder = create()
+        for fin in self.FINS:
+            builder.add_face(fin)
+        data = builder.to_bytes()
+        ar, root, layers, materials = legacy._walk(data)
+        kinds = [n for (_, n, _) in root]
+        assert kinds.count("CFace") == 3
+        # 3 triangles x 3 edges = 9 edge-uses, but the shared edge collapses
+        # 3 references into 1 -> 9 - 2 = 7 unique edges.
+        assert kinds.count("CEdge") == 7
+
+
 class TestMaterials:
     def test_material_assigned_to_face_front(self):
         builder = create()
@@ -674,6 +699,47 @@ class TestRealSketchUpOracle:
             # cheapest real-SketchUp check that the geometry is actually
             # the L-shape, not something degenerate.
             assert area.value == pytest.approx(7500.0, abs=1e-6)
+            dll.SUModelRelease(ctypes.byref(model))
+        finally:
+            dll.SUTerminate()
+
+    def test_three_faces_sharing_an_edge_have_correct_areas_in_real_sketchup(self, tmp_path):
+        import ctypes
+
+        builder = create()
+        for fin in TestNonManifoldTopology.FINS:
+            builder.add_face(fin)
+        out = tmp_path / "three_fins.skp"
+        builder.save(str(out))
+
+        dll = ctypes.CDLL(_SDK_DLL_PATH)
+        dll.SUInitialize()
+        dll.SUEntitiesGetFaces.argtypes = [
+            ctypes.c_void_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_size_t),
+        ]
+        dll.SUFaceGetArea.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_double)]
+        try:
+            model = ctypes.c_void_p()
+            err = dll.SUModelCreateFromFile(ctypes.byref(model), str(out).encode())
+            assert err == 0, f"SketchUp SDK rejected the file (error {err})"
+            entities = ctypes.c_void_p()
+            dll.SUModelGetEntities(model, ctypes.byref(entities))
+            nfaces = ctypes.c_long()
+            dll.SUEntitiesGetNumFaces(entities, ctypes.byref(nfaces))
+            assert nfaces.value == 3
+            faces = (ctypes.c_void_p * 3)()
+            got = ctypes.c_size_t()
+            dll.SUEntitiesGetFaces(entities, 3, faces, ctypes.byref(got))
+            areas = []
+            for i in range(3):
+                area = ctypes.c_double()
+                dll.SUFaceGetArea(faces[i], ctypes.byref(area))
+                areas.append(area.value)
+            # base 100 (the shared edge's length) x each apex's distance
+            # from the shared edge's line: 100 for the first fin, and
+            # sqrt(70^2+70^2) for the other two.
+            expected = sorted([5000.0, 4949.747468305833, 4949.747468305833])
+            assert sorted(areas) == pytest.approx(expected, abs=1e-6)
             dll.SUModelRelease(ctypes.byref(model))
         finally:
             dll.SUTerminate()
