@@ -188,6 +188,21 @@ def _shift_ref(buf: bytearray, pos: int, shift: int) -> None:
     struct.pack_into("<H", buf, pos, tag_bit | ((slot + shift) & 0x7FFF))
 
 
+def _detect_image_subtype(image_bytes: bytes) -> int:
+    """CDib's format tag for the two image formats this project has
+    confirmed via SDK ground truth (diffing an SDK-authored textured
+    material file for each) - PNG and JPEG, both real SketchUp encodes as
+    the source file's bytes verbatim, distinguished only by this tag."""
+    if image_bytes[:8] == b"\x89PNG\r\n\x1a\n":
+        return 4
+    if image_bytes[:3] == b"\xff\xd8\xff":
+        return 1
+    raise SkpWriteError(
+        "unrecognized image format - only PNG and JPEG textures are supported for now "
+        "(detected from the file's own magic bytes, not its extension)"
+    )
+
+
 def _load_scaffold() -> bytes:
     # _scaffold is a plain data subdirectory, not an importable package (no
     # __init__.py) - anchor on the openskp package itself and navigate in.
@@ -331,8 +346,7 @@ class _ArchiveWriter:
         its slot. ``texture_path`` is stored as-is - ground truth shows
         real SketchUp stores the original absolute file path, but any
         string round-trips fine structurally. ``subtype`` is CDib's image
-        format tag (4 for PNG - the only value this project has confirmed
-        via SDK ground truth; see :meth:`SkpBuilder.add_texture_material`).
+        format tag (4 for PNG, 1 for JPEG - see :func:`_detect_image_subtype`).
         """
         slot = self._new_of_known_class("CMaterial", schema=_MATERIAL_SCHEMA)
         self._preamble()
@@ -343,6 +357,13 @@ class _ArchiveWriter:
         self.buf += struct.pack("<I", subtype)
         self.buf += struct.pack("<I", len(image_bytes))
         self.buf += image_bytes
+        if subtype == 1:
+            # JPEG only: one extra u32 real SketchUp always writes here -
+            # ground-truth confirmed constant 90 regardless of the source
+            # JPEG's own actual encoded quality (tested at two different
+            # qualities, same value both times), so not something this
+            # project computes from the image; PNG has no such field.
+            self.buf += _u32(90)
         self.buf += _f64(1.0)  # applied width - ground truth default when unscaled
         self.buf += _TEXTURE_H_SENTINEL
         self._write_str(texture_path)
@@ -792,17 +813,20 @@ class SkpBuilder:
         return slot
 
     def add_texture_material(self, name: str, image_path: str) -> int:
-        """Register an image-textured material from a local PNG file and
-        return a handle to pass as `add_face`'s ``material`` argument.
+        """Register an image-textured material from a local PNG or JPEG
+        file and return a handle to pass as `add_face`'s ``material``
+        argument.
 
-        Only PNG is supported for now - the only image format this project
-        has confirmed the on-disk ``CDib`` encoding for via SDK ground
-        truth (see :meth:`_ArchiveWriter.write_textured_material`). UV
-        mapping is always the default planar projection; explicit
-        positioning/pinning is not supported (ground truth shows the
-        default case needs no extra per-face texture-coordinate record at
-        all, which is what keeps this scoped as an addition to materials
-        rather than a much larger face-attribute feature).
+        The format is detected from the file's own magic bytes, not its
+        extension - PNG and JPEG are the only two this project has
+        confirmed the on-disk ``CDib`` subtype tag for via SDK ground
+        truth (4 and 1 respectively; see :meth:`_ArchiveWriter.
+        write_textured_material`). UV mapping is always the default planar
+        projection; explicit positioning/pinning is not supported (ground
+        truth shows the default case needs no extra per-face
+        texture-coordinate record at all, which is what keeps this scoped
+        as an addition to materials rather than a much larger
+        face-attribute feature).
 
         Same ordering rules as `add_material` - must be called before any
         `add_layer`, `add_component_definition`, or `add_face` call.
@@ -815,11 +839,10 @@ class SkpBuilder:
             raise SkpWriteError("add_texture_material must be called before any add_component_definition calls")
         if name in self._materials_by_name:
             return self._materials_by_name[name]
-        if not image_path.lower().endswith(".png"):
-            raise SkpWriteError("only .png textures are supported for now")
         with open(image_path, "rb") as f:
             image_bytes = f.read()
-        slot = self._material_writer.write_textured_material(name, image_bytes, image_path, subtype=4)
+        subtype = _detect_image_subtype(image_bytes)
+        slot = self._material_writer.write_textured_material(name, image_bytes, image_path, subtype=subtype)
         self._materials_by_name[name] = slot
         self._material_count += 1
         return slot

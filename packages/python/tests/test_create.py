@@ -51,6 +51,32 @@ def _make_test_png(size: int = 4, rgb=(200, 50, 50)) -> bytes:
     return sig + ihdr + idat + iend
 
 
+# A real 8x8 JPEG's exact bytes, pre-encoded - unlike PNG, JPEG needs real
+# DCT/entropy encoding, not worth reimplementing just for a test fixture.
+_JPEG_FIXTURE = bytes.fromhex(
+    "ffd8ffe000104a46494600010100000100010000ffdb004300100b0c0e0c0a10"
+    "0e0d0e1211101318281a181616183123251d283a333d3c3933383740485c4e40"
+    "4457453738506d51575f626768673e4d71797064785c656763ffdb0043011112"
+    "121815182f1a1a2f634238426363636363636363636363636363636363636363"
+    "636363636363636363636363636363636363636363636363636363636363ffc0"
+    "0011080008000803012200021101031101ffc4001f0000010501010101010100"
+    "000000000000000102030405060708090a0bffc400b510000201030302040305"
+    "0504040000017d01020300041105122131410613516107227114328191a10823"
+    "42b1c11552d1f02433627282090a161718191a25262728292a3435363738393a"
+    "434445464748494a535455565758595a636465666768696a737475767778797a"
+    "838485868788898a92939495969798999aa2a3a4a5a6a7a8a9aab2b3b4b5b6b7"
+    "b8b9bac2c3c4c5c6c7c8c9cad2d3d4d5d6d7d8d9dae1e2e3e4e5e6e7e8e9eaf1"
+    "f2f3f4f5f6f7f8f9faffc4001f01000301010101010101010100000000000001"
+    "02030405060708090a0bffc400b5110002010204040304070504040001027700"
+    "0102031104052131061241510761711322328108144291a1b1c109233352f015"
+    "6272d10a162434e125f11718191a262728292a35363738393a43444546474849"
+    "4a535455565758595a636465666768696a737475767778797a82838485868788"
+    "898a92939495969798999aa2a3a4a5a6a7a8a9aab2b3b4b5b6b7b8b9bac2c3c4"
+    "c5c6c7c8c9cad2d3d4d5d6d7d8d9dae2e3e4e5e6e7e8e9eaf2f3f4f5f6f7f8f9"
+    "faffda000c03010002110311003f00c8a28a2bda28ffd9"
+)
+
+
 class TestBuilderErrors:
     def test_saving_with_no_geometry_raises(self):
         with pytest.raises(SkpWriteError, match="no geometry"):
@@ -463,11 +489,53 @@ class TestTextures:
         face = [v for (_, n, v) in root if n == "CFace"][0]
         assert face["db"]["mat"] == tex
 
-    def test_non_png_raises(self, tmp_path):
+    def test_jpeg_texture_material_self_parses(self, tmp_path):
+        jpg_path = tmp_path / "tex.jpg"
+        jpg_path.write_bytes(_JPEG_FIXTURE)
+
+        builder = create()
+        tex = builder.add_texture_material("Photo", str(jpg_path))
+        builder.add_face(SQUARE, material=tex)
+        data = builder.to_bytes()
+
+        ar, root, layers, materials = legacy._walk(data)
+        mat_by_slot = {s: v for s, v in materials}
+        assert mat_by_slot[tex]["name"] == "Photo"
+        assert mat_by_slot[tex]["tex_file"] == str(jpg_path)
+        face = [v for (_, n, v) in root if n == "CFace"][0]
+        assert face["db"]["mat"] == tex
+
+    def test_png_and_jpeg_textures_together(self, tmp_path):
+        # PNG and JPEG take different code paths inside write_textured_material
+        # (JPEG writes one extra ground-truth u32 field PNG doesn't) -
+        # regression guard that mixing both in one file doesn't misalign
+        # anything downstream.
+        png_path = tmp_path / "tex.png"
+        png_path.write_bytes(_make_test_png())
+        jpg_path = tmp_path / "tex.jpg"
+        jpg_path.write_bytes(_JPEG_FIXTURE)
+
+        builder = create()
+        png_mat = builder.add_texture_material("PngTex", str(png_path))
+        jpg_mat = builder.add_texture_material("JpgTex", str(jpg_path))
+        builder.add_face(SQUARE, material=png_mat)
+        builder.add_face(
+            [(100.0, 0.0, 0.0), (200.0, 0.0, 0.0), (200.0, 100.0, 0.0), (100.0, 100.0, 0.0)],
+            material=jpg_mat,
+        )
+        data = builder.to_bytes()
+        ar, root, layers, materials = legacy._walk(data)
+        assert len(materials) == 2
+        faces = [v for (_, n, v) in root if n == "CFace"]
+        assert {f["db"]["mat"] for f in faces} == {png_mat, jpg_mat}
+
+    def test_unrecognized_format_raises(self, tmp_path):
+        # Detection is by magic bytes, not extension - a .jpg with garbage
+        # content should be rejected on content, not silently accepted.
         bad_path = tmp_path / "tex.jpg"
         bad_path.write_bytes(b"not really a jpeg")
         builder = create()
-        with pytest.raises(SkpWriteError, match="only .png"):
+        with pytest.raises(SkpWriteError, match="unrecognized image format"):
             builder.add_texture_material("Bad", str(bad_path))
 
     def test_texture_material_dedup_by_name(self, tmp_path):
@@ -860,6 +928,50 @@ class TestRealSketchUpOracle:
             sw, sh = ctypes.c_double(), ctypes.c_double()
             dll.SUTextureGetDimensions(texture, ctypes.byref(w), ctypes.byref(h), ctypes.byref(sw), ctypes.byref(sh))
             assert (w.value, h.value) == (8, 8)
+            dll.SUModelRelease(ctypes.byref(model))
+        finally:
+            dll.SUTerminate()
+
+    def test_jpeg_texture_material_round_trips_through_real_sketchup(self, tmp_path):
+        import ctypes
+
+        jpg_path = tmp_path / "tex.jpg"
+        jpg_path.write_bytes(_JPEG_FIXTURE)
+
+        builder = create()
+        tex = builder.add_texture_material("Photo", str(jpg_path))
+        builder.add_face(SQUARE, material=tex)
+        out = tmp_path / "jpeg_textured.skp"
+        builder.save(str(out))
+
+        dll = ctypes.CDLL(_SDK_DLL_PATH)
+        dll.SUInitialize()
+        dll.SUEntitiesGetFaces.argtypes = [
+            ctypes.c_void_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_size_t),
+        ]
+        dll.SUFaceGetFrontMaterial.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUMaterialGetTexture.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUTextureGetDimensions.argtypes = [
+            ctypes.c_void_p, ctypes.POINTER(ctypes.c_size_t), ctypes.POINTER(ctypes.c_size_t),
+            ctypes.POINTER(ctypes.c_double), ctypes.POINTER(ctypes.c_double),
+        ]
+        try:
+            model = ctypes.c_void_p()
+            err = dll.SUModelCreateFromFile(ctypes.byref(model), str(out).encode())
+            assert err == 0, f"SketchUp SDK rejected the file (error {err})"
+            entities = ctypes.c_void_p()
+            dll.SUModelGetEntities(model, ctypes.byref(entities))
+            faces = (ctypes.c_void_p * 1)()
+            got = ctypes.c_size_t()
+            dll.SUEntitiesGetFaces(entities, 1, faces, ctypes.byref(got))
+            mat = ctypes.c_void_p()
+            assert dll.SUFaceGetFrontMaterial(faces[0], ctypes.byref(mat)) == 0
+            texture = ctypes.c_void_p()
+            assert dll.SUMaterialGetTexture(mat, ctypes.byref(texture)) == 0
+            w, h = ctypes.c_size_t(), ctypes.c_size_t()
+            sw, sh = ctypes.c_double(), ctypes.c_double()
+            dll.SUTextureGetDimensions(texture, ctypes.byref(w), ctypes.byref(h), ctypes.byref(sw), ctypes.byref(sh))
+            assert (w.value, h.value) == (8, 8)  # the fixture JPEG is 8x8
             dll.SUModelRelease(ctypes.byref(model))
         finally:
             dll.SUTerminate()
