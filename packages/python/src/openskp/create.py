@@ -333,6 +333,7 @@ class _ArchiveWriter:
         edge_registry: Dict[FrozenSet[int], Tuple[int, int]],
         face_material: int = 0,
         face_layer: int = 0,
+        back_material: int = 0,
     ) -> int:
         """Write one planar face and return how many new root-entity-list
         slots it consumed (edges newly declared, plus the face itself) -
@@ -342,12 +343,13 @@ class _ArchiveWriter:
         point at the end). Vertices and edges are shared automatically
         across calls via ``vertex_slots``/``edge_registry`` wherever
         coordinates coincide exactly - pass the same dicts across every
-        `write_face` call building one mesh. ``face_material`` is a material
-        slot (from :meth:`write_material`) applied to the face's front side;
-        ``face_layer`` is a layer slot (from :meth:`write_layer`). 0 means
-        the default in both cases. Edges always keep drawbase mat=0 and
-        layer=0 (default) even when their face has a material or layer -
-        ground truth confirms this for both fields.
+        `write_face` call building one mesh. ``face_material``/
+        ``back_material`` are material slots (from :meth:`write_material`)
+        applied to the face's front/back side; ``face_layer`` is a layer
+        slot (from :meth:`write_layer`). 0 means the default in all three
+        cases. Edges always keep drawbase mat=0 and layer=0 (default) even
+        when their face has a material or layer - ground truth confirms
+        this for both fields.
         """
         n = len(points)
         point_slots = [vertex_slots.get(p) for p in points]
@@ -409,7 +411,7 @@ class _ArchiveWriter:
             self._backref(loop_slot)
         self._null()  # loop terminator
 
-        self.buf += struct.pack("<H", 0)  # back_mat = default
+        self.buf += struct.pack("<H", back_material)
         new_entities += 1  # the face itself
         return new_entities
 
@@ -631,6 +633,7 @@ class SkpBuilder:
         points: Sequence[Point3],
         material: Optional[int] = None,
         layer: Optional[int] = None,
+        back_material: Optional[int] = None,
     ) -> None:
         """Add one planar face, defined by 3 or more coplanar points (in
         inches) forming a closed polygon in order - do not repeat the
@@ -642,9 +645,10 @@ class SkpBuilder:
         point tuples across `add_face` calls, not by re-deriving
         numerically-close-but-not-identical coordinates.
 
-        ``material``, if given, is a handle returned by `add_material` -
-        applied to the face's front side. ``layer``, if given, is a handle
-        returned by `add_layer`. Leave either unset for the default.
+        ``material``/``back_material``, if given, are handles returned by
+        `add_material` (or `add_texture_material`) - applied to the face's
+        front/back side respectively. ``layer``, if given, is a handle
+        returned by `add_layer`. Leave any unset for the default.
         """
         points = [(float(p[0]), float(p[1]), float(p[2])) for p in points]
         if len(points) < 3:
@@ -656,7 +660,8 @@ class SkpBuilder:
                 class_slot=self._scaffold_class_slot,
             )
         self._new_entity_count += self._geometry_writer.write_face(
-            points, self._vertex_slots, self._edge_registry, material or 0, layer or 0
+            points, self._vertex_slots, self._edge_registry,
+            material or 0, layer or 0, back_material or 0,
         )
         self._face_count += 1
 

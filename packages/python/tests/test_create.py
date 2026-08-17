@@ -257,6 +257,18 @@ class TestMaterials:
         edges = [v for (_, n, v) in root if n == "CEdge"]
         assert all(e["db"]["mat"] == 0 for e in edges)
 
+    def test_back_material_distinct_from_front(self):
+        builder = create()
+        red = builder.add_material("Red", (255, 0, 0))
+        green = builder.add_material("Green", (0, 255, 0))
+        builder.add_face(SQUARE, material=red, back_material=green)
+        data = builder.to_bytes()
+
+        ar, root, layers, materials = legacy._walk(data)
+        face = [v for (_, n, v) in root if n == "CFace"][0]
+        assert face["db"]["mat"] == red
+        assert face["back_mat"] == green
+
     def test_unmaterialed_face_keeps_default(self):
         builder = create()
         builder.add_material("Unused", (1, 2, 3))
@@ -560,6 +572,50 @@ class TestRealSketchUpOracle:
                 assert dll.SUMaterialGetColor(mat, ctypes.byref(color)) == 0
                 colors.append((color.red, color.green, color.blue))
             assert set(colors) == {(255, 0, 0), (0, 0, 255)}
+            dll.SUModelRelease(ctypes.byref(model))
+        finally:
+            dll.SUTerminate()
+
+    def test_back_material_round_trips_through_real_sketchup(self, tmp_path):
+        import ctypes
+
+        class SUColor(ctypes.Structure):
+            _fields_ = [("red", ctypes.c_ubyte), ("green", ctypes.c_ubyte),
+                        ("blue", ctypes.c_ubyte), ("alpha", ctypes.c_ubyte)]
+
+        builder = create()
+        red = builder.add_material("Red", (255, 0, 0))
+        green = builder.add_material("Green", (0, 255, 0))
+        builder.add_face(SQUARE, material=red, back_material=green)
+        out = tmp_path / "back_material.skp"
+        builder.save(str(out))
+
+        dll = ctypes.CDLL(_SDK_DLL_PATH)
+        dll.SUInitialize()
+        dll.SUEntitiesGetFaces.argtypes = [
+            ctypes.c_void_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_size_t),
+        ]
+        dll.SUFaceGetFrontMaterial.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUFaceGetBackMaterial.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUMaterialGetColor.argtypes = [ctypes.c_void_p, ctypes.POINTER(SUColor)]
+        try:
+            model = ctypes.c_void_p()
+            err = dll.SUModelCreateFromFile(ctypes.byref(model), str(out).encode())
+            assert err == 0, f"SketchUp SDK rejected the file (error {err})"
+            entities = ctypes.c_void_p()
+            dll.SUModelGetEntities(model, ctypes.byref(entities))
+            faces = (ctypes.c_void_p * 1)()
+            got = ctypes.c_size_t()
+            dll.SUEntitiesGetFaces(entities, 1, faces, ctypes.byref(got))
+            front_mat = ctypes.c_void_p()
+            back_mat = ctypes.c_void_p()
+            assert dll.SUFaceGetFrontMaterial(faces[0], ctypes.byref(front_mat)) == 0
+            assert dll.SUFaceGetBackMaterial(faces[0], ctypes.byref(back_mat)) == 0
+            front_color, back_color = SUColor(), SUColor()
+            dll.SUMaterialGetColor(front_mat, ctypes.byref(front_color))
+            dll.SUMaterialGetColor(back_mat, ctypes.byref(back_color))
+            assert (front_color.red, front_color.green, front_color.blue) == (255, 0, 0)
+            assert (back_color.red, back_color.green, back_color.blue) == (0, 255, 0)
             dll.SUModelRelease(ctypes.byref(model))
         finally:
             dll.SUTerminate()
