@@ -748,12 +748,14 @@ class ComponentDefinitionBuilder:
         self._closed = True
         self._skp._open_definition = None
         if self._group_placement is not None:
-            translation, matrix3x3, mat, layer = self._group_placement
-            self._skp._ensure_geometry_writer()
-            self._skp._new_entity_count += self._skp._geometry_writer.write_group(
-                self.slot, self.name, translation, matrix3x3, mat, layer
-            )
-            self._skp._face_count += 1
+            # Deferred rather than written here: writing immediately would
+            # call _ensure_geometry_writer() and lock in root-level slot
+            # numbering right away, which would wrongly reject any
+            # further add_group/add_component_definition call after this
+            # one - group placements are flushed together the first time
+            # anything actually needs the geometry writer (see
+            # _ensure_geometry_writer and to_bytes).
+            self._skp._pending_groups.append((self, self._group_placement))
         return None
 
 
@@ -836,6 +838,7 @@ class SkpBuilder:
         self._definition_writer_start: Optional[int] = None
         self._definition_count = 0
         self._open_definition: Optional["ComponentDefinitionBuilder"] = None
+        self._pending_groups: List[Tuple["ComponentDefinitionBuilder", tuple]] = []
         self._geometry_writer: Optional[_ArchiveWriter] = None
         self._vertex_slots: Dict[Point3, int] = {}
         self._edge_registry: Dict[FrozenSet[int], Tuple[int, int]] = {}
@@ -1076,6 +1079,16 @@ class SkpBuilder:
             next_slot=self._scaffold_next_slot + material_shift + self._layer_shift() + self._definition_shift(),
             class_slot=self._post_definition_class_slot(),
         )
+        # Flush any groups that closed earlier, in the order they were
+        # created - deferred until now so closing one group doesn't lock in
+        # root-level slot numbering before a later add_group/
+        # add_component_definition call has had a chance to run.
+        for comp, (translation, matrix3x3, mat, layer) in self._pending_groups:
+            self._new_entity_count += self._geometry_writer.write_group(
+                comp.slot, comp.name, translation, matrix3x3, mat, layer
+            )
+            self._face_count += 1
+        self._pending_groups = []
 
     def add_face(
         self,
@@ -1122,6 +1135,12 @@ class SkpBuilder:
 
     def to_bytes(self) -> bytes:
         """Return the finished file's bytes."""
+        if self._pending_groups:
+            # A file with only groups (no add_face/add_instance call) would
+            # otherwise never flush them - _ensure_geometry_writer is a
+            # no-op once already created, so this is safe to call
+            # unconditionally alongside every other call site.
+            self._ensure_geometry_writer()
         if self._face_count == 0:
             raise SkpWriteError("no geometry added - call add_face at least once before saving")
 

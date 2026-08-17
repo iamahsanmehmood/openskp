@@ -731,6 +731,87 @@ class TestLayers:
         assert {f["db"]["layer"] for f in faces} == set(lyrs)
 
 
+def _build_kitchen_sink(builder, png_path, jpg_path):
+    """Exercises every feature together at once - materials (solid + PNG +
+    JPEG), layers, component definitions with concave and shared-edge
+    geometry inside them, multiple instances, multiple groups, root-level
+    materials/layers/back-materials/hidden faces, and a non-manifold shared
+    edge. This combination (specifically, two groups back-to-back) is what
+    originally caught the deferred-group-placement bug: a second
+    add_group/add_component_definition call after an earlier group had
+    already closed and auto-placed itself would wrongly reject with "must
+    be called before any add_face/add_instance calls", since placing a
+    group locks in root-level slot numbering. Used by both
+    TestKitchenSink (self-parse) and TestRealSketchUpOracle (SDK) below as
+    a permanent regression guard against that whole class of ordering bug.
+    """
+    solids = [builder.add_material(f"Solid{i}", (i * 20 % 256, (i * 53) % 256, (i * 97) % 256))
+              for i in range(4)]
+    png_mat = builder.add_texture_material("Checker", str(png_path))
+    jpg_mat = builder.add_texture_material("Photo", str(jpg_path))
+    layers = [builder.add_layer(f"Layer{i}") for i in range(3)]
+
+    defs = []
+    for d in range(2):
+        with builder.add_component_definition(f"Part{d}") as comp:
+            comp.add_face(  # concave (L-shaped)
+                [(50.0, 50.0, 0.0), (100.0, 50.0, 0.0), (100.0, 100.0, 0.0),
+                 (0.0, 100.0, 0.0), (0.0, 0.0, 0.0), (50.0, 0.0, 0.0)],
+                material=solids[d], layer=layers[d],
+            )
+            comp.add_face([(0.0, 0.0, 0.0), (0.0, 0.0, 40.0), (100.0, 0.0, 20.0)], material=solids[d])
+            comp.add_face([(0.0, 0.0, 0.0), (0.0, 0.0, 40.0), (-100.0, 0.0, 20.0)], material=solids[d],
+                           soft_edges=True, smooth_edges=True)
+        defs.append(comp)
+
+    # Two groups back-to-back - the exact shape that caught the bug.
+    with builder.add_group("GroupA", translation=(0.0, 200.0, 0.0)) as g:
+        g.add_face(SQUARE, material=png_mat)
+    with builder.add_group("GroupB", translation=(100.0, 200.0, 0.0)) as g:
+        g.add_face(SQUARE, material=jpg_mat)
+
+    for i in range(6):
+        builder.add_instance(
+            defs[i % 2], name=f"Inst{i}", translation=(i * 60.0, 0.0, 0.0),
+            material=solids[i % len(solids)], layer=layers[i % len(layers)],
+        )
+
+    for i in range(3):
+        x0 = i * 25.0
+        builder.add_face(
+            [(x0, -100.0, 0.0), (x0 + 20.0, -100.0, 0.0), (x0 + 20.0, -80.0, 0.0), (x0, -80.0, 0.0)],
+            material=solids[i % len(solids)], layer=layers[i % len(layers)],
+            back_material=solids[(i + 1) % len(solids)], hidden=(i == 1),
+        )
+
+    shared = [(0.0, -150.0, 0.0), (0.0, -150.0, 50.0)]
+    builder.add_face([shared[0], shared[1], (30.0, -150.0, 25.0)], material=png_mat)
+    builder.add_face([shared[0], shared[1], (-30.0, -140.0, 25.0)], material=jpg_mat)
+    builder.add_face([shared[0], shared[1], (-30.0, -160.0, 25.0)])
+
+
+class TestKitchenSink:
+    def test_self_parses_with_expected_counts(self, tmp_path):
+        png_path = tmp_path / "tex.png"
+        png_path.write_bytes(_make_test_png())
+        jpg_path = tmp_path / "tex.jpg"
+        jpg_path.write_bytes(_JPEG_FIXTURE)
+
+        builder = create()
+        _build_kitchen_sink(builder, png_path, jpg_path)
+        data = builder.to_bytes()
+
+        ar, root, layers, materials = legacy._walk(data)
+        assert len(materials) == 6  # 4 solid + png + jpeg
+        assert len(layers) == 4  # 3 + Layer0
+        kinds = {}
+        for (_, n, _) in root:
+            kinds[n] = kinds.get(n, 0) + 1
+        assert kinds["CGroup"] == 2
+        assert kinds["CComponentInstance"] == 6
+        assert kinds["CFace"] == 6  # 3 disjoint + 3 sharing one edge
+
+
 class TestScaffoldIntegrity:
     def test_scaffold_hash_matches_expected(self):
         # Guards against the scaffold file silently drifting (e.g. a bad
@@ -1260,6 +1341,46 @@ class TestRealSketchUpOracle:
             xf = (ctypes.c_double * 16)()
             dll.SUGroupGetTransform(groups[0], ctypes.byref(xf))
             assert (xf[12], xf[13], xf[14]) == (50.0, 0.0, 0.0)
+            dll.SUModelRelease(ctypes.byref(model))
+        finally:
+            dll.SUTerminate()
+
+    def test_kitchen_sink_round_trips_through_real_sketchup(self, tmp_path):
+        import ctypes
+
+        png_path = tmp_path / "tex.png"
+        png_path.write_bytes(_make_test_png())
+        jpg_path = tmp_path / "tex.jpg"
+        jpg_path.write_bytes(_JPEG_FIXTURE)
+
+        builder = create()
+        _build_kitchen_sink(builder, png_path, jpg_path)
+        out = tmp_path / "kitchen_sink.skp"
+        builder.save(str(out))
+
+        dll = ctypes.CDLL(_SDK_DLL_PATH)
+        dll.SUInitialize()
+        dll.SUEntitiesGetNumInstances.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_long)]
+        dll.SUEntitiesGetNumGroups.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_size_t)]
+        dll.SUModelGetNumMaterials.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_size_t)]
+        try:
+            model = ctypes.c_void_p()
+            err = dll.SUModelCreateFromFile(ctypes.byref(model), str(out).encode())
+            assert err == 0, f"SketchUp SDK rejected the file (error {err})"
+            entities = ctypes.c_void_p()
+            dll.SUModelGetEntities(model, ctypes.byref(entities))
+            nfaces = ctypes.c_long()
+            dll.SUEntitiesGetNumFaces(entities, ctypes.byref(nfaces))
+            assert nfaces.value == 6
+            ninst = ctypes.c_long()
+            dll.SUEntitiesGetNumInstances(entities, ctypes.byref(ninst))
+            assert ninst.value == 6
+            ng = ctypes.c_size_t()
+            dll.SUEntitiesGetNumGroups(entities, ctypes.byref(ng))
+            assert ng.value == 2
+            nmat = ctypes.c_size_t()
+            dll.SUModelGetNumMaterials(model, ctypes.byref(nmat))
+            assert nmat.value == 6
             dll.SUModelRelease(ctypes.byref(model))
         finally:
             dll.SUTerminate()
