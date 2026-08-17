@@ -29,6 +29,35 @@ function findSequence(data: Uint8Array, sequence: number[], startOffset: number 
   return -1;
 }
 
+/**
+ * Recover a ZIP entry name that was decoded as Latin-1.
+ *
+ * SketchUp writes entry names as UTF-8 but does not set the language encoding
+ * flag (general purpose bit 11), so a spec-compliant reader falls back to
+ * CP437/Latin-1: a material folder named "ДСП Egger" arrives as "ÐÐ¡Ð Egger".
+ * That mangled name is later compared against the material's real name and
+ * never matches, so the material silently loses its id and every face using it
+ * falls back to the layer colour.
+ *
+ * The Latin-1 mapping is lossless, so the original bytes can be recovered and
+ * decoded again as UTF-8. Names that are not valid UTF-8 are kept as they are,
+ * and a pure ASCII name survives the round trip unchanged.
+ */
+function decodeEntryName(entry: string): string {
+  if (!/[\u0080-\u00ff]/.test(entry)) return entry;
+  const bytes = new Uint8Array(entry.length);
+  for (let i = 0; i < entry.length; i++) {
+    const code = entry.charCodeAt(i);
+    if (code > 0xff) return entry;
+    bytes[i] = code;
+  }
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {
+    return entry;
+  }
+}
+
 export function validateHeader(data: Uint8Array): boolean {
   if (data.length < 4) return false;
   return (
@@ -187,12 +216,13 @@ export function extractSkpContents(data: Uint8Array, options?: ParseOptions): Sk
   let metaData: Uint8Array | null = null;
   const materialFiles: Record<string, Uint8Array> = {};
 
-  for (const entry of Object.keys(unzipped)) {
+  for (const rawEntry of Object.keys(unzipped)) {
+    const entry = decodeEntryName(rawEntry);
     const lower = entry.toLowerCase();
     if (lower === 'model.dat' || lower.endsWith('/model.dat')) {
-      modelData = unzipped[entry];
+      modelData = unzipped[rawEntry];
     } else if (lower === 'meta/meta.dat') {
-      metaData = unzipped[entry];
+      metaData = unzipped[rawEntry];
     } else if (
       lower.endsWith('.xml') ||
       lower.endsWith('.png') ||
@@ -200,7 +230,7 @@ export function extractSkpContents(data: Uint8Array, options?: ParseOptions): Sk
       lower.endsWith('.jpeg') ||
       lower.includes('material')
     ) {
-      materialFiles[entry] = unzipped[entry];
+      materialFiles[entry] = unzipped[rawEntry];
     }
   }
 
