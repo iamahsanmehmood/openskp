@@ -430,6 +430,36 @@ class TestGroups:
         ar, root, layers, materials = legacy._walk(data)
         assert root[0][2]["name"] == "Group"
 
+    def test_many_definitions_instances_and_groups_self_parse(self):
+        # Definitions/instances/groups haven't been stress-tested at scale
+        # the way materials/layers already are elsewhere in this file -
+        # this is that gap, sized to plausibly catch the same class of
+        # shift-arithmetic bug the tail-reference byte-overflow fix and the
+        # deferred-group-placement fix both were.
+        builder = create()
+        defs = []
+        for d in range(20):
+            with builder.add_component_definition(f"Def{d}") as comp:
+                comp.add_face(SQUARE)
+            defs.append(comp)
+        groups = []
+        for g in range(10):
+            with builder.add_group(f"Grp{g}", translation=(g * 30.0, 500.0, 0.0)) as grp:
+                grp.add_face(SQUARE)
+            groups.append(grp)
+        for i in range(40):
+            builder.add_instance(defs[i % 20], name=f"Inst{i}", translation=(i * 25.0, 1000.0, 0.0))
+        data = builder.to_bytes()
+
+        ar, root, layers, materials = legacy._walk(data)
+        kinds = {}
+        for (_, n, _) in root:
+            kinds[n] = kinds.get(n, 0) + 1
+        assert kinds["CGroup"] == 10
+        assert kinds["CComponentInstance"] == 40
+        def_refs = {v["def"] for (_, n, v) in root if n == "CComponentInstance"}
+        assert def_refs == {d.slot for d in defs}
+
 
 class TestMaterials:
     def test_material_assigned_to_face_front(self):
@@ -1381,6 +1411,47 @@ class TestRealSketchUpOracle:
             nmat = ctypes.c_size_t()
             dll.SUModelGetNumMaterials(model, ctypes.byref(nmat))
             assert nmat.value == 6
+            dll.SUModelRelease(ctypes.byref(model))
+        finally:
+            dll.SUTerminate()
+
+    def test_many_definitions_instances_and_groups_round_trip(self, tmp_path):
+        import ctypes
+
+        builder = create()
+        defs = []
+        for d in range(20):
+            with builder.add_component_definition(f"Def{d}") as comp:
+                comp.add_face(SQUARE)
+            defs.append(comp)
+        for g in range(10):
+            with builder.add_group(f"Grp{g}", translation=(g * 30.0, 500.0, 0.0)) as grp:
+                grp.add_face(SQUARE)
+        for i in range(40):
+            builder.add_instance(defs[i % 20], name=f"Inst{i}", translation=(i * 25.0, 1000.0, 0.0))
+        out = tmp_path / "many_defs.skp"
+        builder.save(str(out))
+
+        dll = ctypes.CDLL(_SDK_DLL_PATH)
+        dll.SUInitialize()
+        dll.SUEntitiesGetNumInstances.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_long)]
+        dll.SUEntitiesGetNumGroups.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_size_t)]
+        dll.SUModelGetNumComponentDefinitions.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_size_t)]
+        try:
+            model = ctypes.c_void_p()
+            err = dll.SUModelCreateFromFile(ctypes.byref(model), str(out).encode())
+            assert err == 0, f"SketchUp SDK rejected the file (error {err})"
+            entities = ctypes.c_void_p()
+            dll.SUModelGetEntities(model, ctypes.byref(entities))
+            ninst = ctypes.c_long()
+            dll.SUEntitiesGetNumInstances(entities, ctypes.byref(ninst))
+            assert ninst.value == 40
+            ng = ctypes.c_size_t()
+            dll.SUEntitiesGetNumGroups(entities, ctypes.byref(ng))
+            assert ng.value == 10
+            ndef = ctypes.c_size_t()
+            dll.SUModelGetNumComponentDefinitions(model, ctypes.byref(ndef))
+            assert ndef.value == 30  # 20 explicit + 10 backing the groups
             dll.SUModelRelease(ctypes.byref(model))
         finally:
             dll.SUTerminate()
