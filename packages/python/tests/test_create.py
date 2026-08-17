@@ -124,6 +124,26 @@ class TestSingleFace:
         buf = bytes(builder._geometry_writer.buf)
         assert b"\x00\x00\x00\x01\x01" in buf
 
+    def test_hidden_soft_smooth_flags(self):
+        builder = create()
+        builder.add_face(SQUARE, hidden=True, soft_edges=True, smooth_edges=True, hidden_edges=True)
+        data = builder.to_bytes()
+        ar, root, layers, materials = legacy._walk(data)
+        face = [v for (_, n, v) in root if n == "CFace"][0]
+        assert face["db"]["hidden"] == 1
+        edges = [v for (_, n, v) in root if n == "CEdge"]
+        assert all(e["db"]["hidden"] == 1 and e["db"]["soft"] == 1 and e["db"]["smooth"] == 1 for e in edges)
+
+    def test_default_flags_are_off(self):
+        builder = create()
+        builder.add_face(SQUARE)
+        data = builder.to_bytes()
+        ar, root, layers, materials = legacy._walk(data)
+        face = [v for (_, n, v) in root if n == "CFace"][0]
+        assert face["db"]["hidden"] == 0
+        edges = [v for (_, n, v) in root if n == "CEdge"]
+        assert all(e["db"]["hidden"] == 0 and e["db"]["soft"] == 0 and e["db"]["smooth"] == 0 for e in edges)
+
 
 class TestMultiFace:
     def test_shares_vertices_and_edges_across_faces(self):
@@ -796,6 +816,50 @@ class TestRealSketchUpOracle:
             # sqrt(70^2+70^2) for the other two.
             expected = sorted([5000.0, 4949.747468305833, 4949.747468305833])
             assert sorted(areas) == pytest.approx(expected, abs=1e-6)
+            dll.SUModelRelease(ctypes.byref(model))
+        finally:
+            dll.SUTerminate()
+
+    def test_hidden_soft_smooth_flags_round_trip_through_real_sketchup(self, tmp_path):
+        import ctypes
+
+        builder = create()
+        builder.add_face(SQUARE, hidden=True, soft_edges=True, smooth_edges=True, hidden_edges=True)
+        out = tmp_path / "hidden_smooth.skp"
+        builder.save(str(out))
+
+        dll = ctypes.CDLL(_SDK_DLL_PATH)
+        dll.SUInitialize()
+        dll.SUEntitiesGetFaces.argtypes = [
+            ctypes.c_void_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_size_t),
+        ]
+        dll.SUFaceGetEdges.argtypes = [
+            ctypes.c_void_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_size_t),
+        ]
+        dll.SUDrawingElementGetHidden.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_bool)]
+        dll.SUEdgeGetSoft.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_bool)]
+        dll.SUEdgeGetSmooth.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_bool)]
+        try:
+            model = ctypes.c_void_p()
+            err = dll.SUModelCreateFromFile(ctypes.byref(model), str(out).encode())
+            assert err == 0, f"SketchUp SDK rejected the file (error {err})"
+            entities = ctypes.c_void_p()
+            dll.SUModelGetEntities(model, ctypes.byref(entities))
+            faces = (ctypes.c_void_p * 1)()
+            got = ctypes.c_size_t()
+            dll.SUEntitiesGetFaces(entities, 1, faces, ctypes.byref(got))
+            face_hidden = ctypes.c_bool()
+            assert dll.SUDrawingElementGetHidden(faces[0], ctypes.byref(face_hidden)) == 0
+            assert face_hidden.value is True
+            edges = (ctypes.c_void_p * 4)()
+            got2 = ctypes.c_size_t()
+            dll.SUFaceGetEdges(faces[0], 4, edges, ctypes.byref(got2))
+            for i in range(4):
+                eh, es, esm = ctypes.c_bool(), ctypes.c_bool(), ctypes.c_bool()
+                dll.SUDrawingElementGetHidden(edges[i], ctypes.byref(eh))
+                dll.SUEdgeGetSoft(edges[i], ctypes.byref(es))
+                dll.SUEdgeGetSmooth(edges[i], ctypes.byref(esm))
+                assert (eh.value, es.value, esm.value) == (True, True, True)
             dll.SUModelRelease(ctypes.byref(model))
         finally:
             dll.SUTerminate()

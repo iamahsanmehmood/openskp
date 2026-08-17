@@ -231,15 +231,21 @@ class _ArchiveWriter:
             pid = self._alloc_pid()
         self.buf += self._encode_pid(pid)
 
-    def _drawbase(self, mat: int = 0, layer: int = 0) -> None:
+    def _drawbase(
+        self, mat: int = 0, layer: int = 0,
+        hidden: bool = False, soft: bool = False, smooth: bool = False,
+    ) -> None:
         b = bytearray(10)
         struct.pack_into("<H", b, 0, mat)
+        b[2] = 1 if hidden else 0
         # offsets 3-4: legacy.py's reader documents these as unused padding
         # (_drawbase's docstring), but real SketchUp silently drops any
         # entity whose drawbase has them zeroed - ground-truth-confirmed by
         # diffing real SDK-authored files. Must be 1, 1.
         b[3] = 1
         b[4] = 1
+        b[5] = 1 if soft else 0
+        b[6] = 1 if smooth else 0
         struct.pack_into("<H", b, 8, layer)
         self.buf += bytes(b)
 
@@ -334,6 +340,10 @@ class _ArchiveWriter:
         face_material: int = 0,
         face_layer: int = 0,
         back_material: int = 0,
+        hidden: bool = False,
+        soft_edges: bool = False,
+        smooth_edges: bool = False,
+        hidden_edges: bool = False,
     ) -> int:
         """Write one planar face and return how many new root-entity-list
         slots it consumed (edges newly declared, plus the face itself) -
@@ -350,6 +360,13 @@ class _ArchiveWriter:
         cases. Edges always keep drawbase mat=0 and layer=0 (default) even
         when their face has a material or layer - ground truth confirms
         this for both fields.
+
+        ``hidden`` hides the face itself. ``soft_edges``/``smooth_edges``/
+        ``hidden_edges`` apply to any edge NEWLY declared by this call
+        (typical for tessellated curved surfaces, where the internal edges
+        between adjacent faces should shade smoothly and stay invisible) -
+        an edge already shared with a previous face keeps whatever flags
+        it was first declared with; these have no effect on it.
         """
         n = len(points)
         point_slots = [vertex_slots.get(p) for p in points]
@@ -373,7 +390,7 @@ class _ArchiveWriter:
 
             edge_slot = self._new_of_known_class("CEdge", schema=2)
             self._preamble()
-            self._drawbase()
+            self._drawbase(hidden=hidden_edges, soft=soft_edges, smooth=smooth_edges)
             for idx in (v1_idx, v2_idx):
                 if point_slots[idx] is None:
                     point_slots[idx] = self._write_vertex(points[idx])
@@ -391,7 +408,7 @@ class _ArchiveWriter:
 
         self._new_of_known_class("CFace", schema=3)
         self._preamble()
-        self._drawbase(mat=face_material, layer=face_layer)
+        self._drawbase(mat=face_material, layer=face_layer, hidden=hidden)
         nx, ny, nz, d = _plane_from_polygon(points)
         self.buf += _f64(nx) + _f64(ny) + _f64(nz) + _f64(d)
         self.buf += _u32(1)  # nloops = 1
@@ -634,6 +651,10 @@ class SkpBuilder:
         material: Optional[int] = None,
         layer: Optional[int] = None,
         back_material: Optional[int] = None,
+        hidden: bool = False,
+        soft_edges: bool = False,
+        smooth_edges: bool = False,
+        hidden_edges: bool = False,
     ) -> None:
         """Add one planar face, defined by 3 or more coplanar points (in
         inches) forming a closed polygon in order - do not repeat the
@@ -649,6 +670,12 @@ class SkpBuilder:
         `add_material` (or `add_texture_material`) - applied to the face's
         front/back side respectively. ``layer``, if given, is a handle
         returned by `add_layer`. Leave any unset for the default.
+
+        ``hidden`` hides the face. ``soft_edges``/``smooth_edges``/
+        ``hidden_edges`` control any edge newly created by this call (not
+        one already shared with a previous face) - typical for a
+        tessellated curved surface, where the seams between adjacent
+        facets should shade smoothly and stay invisible.
         """
         points = [(float(p[0]), float(p[1]), float(p[2])) for p in points]
         if len(points) < 3:
@@ -662,6 +689,7 @@ class SkpBuilder:
         self._new_entity_count += self._geometry_writer.write_face(
             points, self._vertex_slots, self._edge_registry,
             material or 0, layer or 0, back_material or 0,
+            hidden, soft_edges, smooth_edges, hidden_edges,
         )
         self._face_count += 1
 
