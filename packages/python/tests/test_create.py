@@ -244,6 +244,96 @@ class TestMaterials:
         assert faces_by_mat == set(mats)
 
 
+class TestLayers:
+    def test_layer_assigned_to_face(self):
+        builder = create()
+        roof = builder.add_layer("Roof")
+        builder.add_face(SQUARE, layer=roof)
+        data = builder.to_bytes()
+
+        ar, root, layers, materials = legacy._walk(data)
+        names = {s: v["name"] for s, v in layers}
+        assert names[roof] == "Roof"
+        assert "Layer0" in names.values()
+        face = [v for (_, n, v) in root if n == "CFace"][0]
+        assert face["db"]["layer"] == roof
+        edges = [v for (_, n, v) in root if n == "CEdge"]
+        assert all(e["db"]["layer"] == 0 for e in edges)
+
+    def test_layer_dedup_by_name_returns_same_handle(self):
+        builder = create()
+        a = builder.add_layer("Shared")
+        b = builder.add_layer("Shared")
+        assert a == b
+        builder.add_face(SQUARE, layer=a)
+        data = builder.to_bytes()
+        ar, root, layers, materials = legacy._walk(data)
+        assert len(layers) == 2  # Layer0 + Shared
+
+    def test_add_layer_after_add_face_raises(self):
+        builder = create()
+        builder.add_face(SQUARE)
+        with pytest.raises(SkpWriteError, match="before any add_face"):
+            builder.add_layer("TooLate")
+
+    def test_add_material_after_add_layer_raises(self):
+        # Materials splice in earlier in the file than layers, so the layer
+        # section's slot numbering depends on the final material count -
+        # add_material must happen first.
+        builder = create()
+        builder.add_layer("L")
+        with pytest.raises(SkpWriteError, match="before any add_layer"):
+            builder.add_material("TooLate", (0, 0, 0))
+
+    def test_materials_and_layers_together(self):
+        # The combined case stacks two independent front-of-file shifts:
+        # layers splice in after materials, so the layer writer's starting
+        # slot - and every scaffold class it might reference (CLayer) -
+        # depends on the final material count.
+        builder = create()
+        red = builder.add_material("Red", (255, 0, 0))
+        blue = builder.add_material("Blue", (0, 0, 255))
+        roof = builder.add_layer("Roof")
+        walls = builder.add_layer("Walls")
+        builder.add_face(SQUARE, material=red, layer=roof)
+        builder.add_face(
+            [(100.0, 0.0, 0.0), (200.0, 0.0, 0.0), (200.0, 100.0, 0.0), (100.0, 100.0, 0.0)],
+            material=blue, layer=walls,
+        )
+        data = builder.to_bytes()
+        ar, root, layers, materials = legacy._walk(data)
+        mat_names = {s: v["name"] for s, v in materials}
+        layer_names = {s: v["name"] for s, v in layers}
+        faces = [v for (_, n, v) in root if n == "CFace"]
+        got = {(mat_names[f["db"]["mat"]], layer_names[f["db"]["layer"]]) for f in faces}
+        assert got == {("Red", "Roof"), ("Blue", "Walls")}
+
+    def test_many_layers_and_materials_self_parse(self):
+        # Regression guard for the same class of slot-shift bug the
+        # material stress test guards against, at the scale where the
+        # scaffold's own CLayer class-slot reference (which shifts by
+        # material_shift) is most likely to be forgotten.
+        builder = create()
+        mats = [builder.add_material(f"M{i}", (i % 256, (i * 7) % 256, (i * 13) % 256))
+                for i in range(25)]
+        lyrs = [builder.add_layer(f"L{i}") for i in range(25)]
+        for i in range(25):
+            x0 = i * 150.0
+            builder.add_face(
+                [(x0, 0.0, 0.0), (x0 + 100.0, 0.0, 0.0),
+                 (x0 + 100.0, 100.0, 0.0), (x0, 100.0, 0.0)],
+                material=mats[i], layer=lyrs[i],
+            )
+        data = builder.to_bytes()
+        ar, root, layers, materials = legacy._walk(data)
+        assert len(materials) == 25
+        assert len(layers) == 26  # Layer0 + 25 new
+        faces = [v for (_, n, v) in root if n == "CFace"]
+        assert len(faces) == 25
+        assert {f["db"]["mat"] for f in faces} == set(mats)
+        assert {f["db"]["layer"] for f in faces} == set(lyrs)
+
+
 class TestScaffoldIntegrity:
     def test_scaffold_hash_matches_expected(self):
         # Guards against the scaffold file silently drifting (e.g. a bad
@@ -342,6 +432,63 @@ class TestRealSketchUpOracle:
                 assert dll.SUMaterialGetColor(mat, ctypes.byref(color)) == 0
                 colors.append((color.red, color.green, color.blue))
             assert set(colors) == {(255, 0, 0), (0, 0, 255)}
+            dll.SUModelRelease(ctypes.byref(model))
+        finally:
+            dll.SUTerminate()
+
+    def test_materials_and_layers_round_trip_through_real_sketchup(self, tmp_path):
+        import ctypes
+
+        builder = create()
+        red = builder.add_material("Red", (255, 0, 0))
+        blue = builder.add_material("Blue", (0, 0, 255))
+        roof = builder.add_layer("Roof")
+        walls = builder.add_layer("Walls")
+        builder.add_face(SQUARE, material=red, layer=roof)
+        builder.add_face(
+            [(100.0, 0.0, 0.0), (200.0, 0.0, 0.0), (200.0, 100.0, 0.0), (100.0, 100.0, 0.0)],
+            material=blue, layer=walls,
+        )
+        out = tmp_path / "materials_and_layers.skp"
+        builder.save(str(out))
+
+        dll = ctypes.CDLL(_SDK_DLL_PATH)
+        dll.SUInitialize()
+        dll.SUEntitiesGetFaces.argtypes = [
+            ctypes.c_void_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_size_t),
+        ]
+        dll.SUDrawingElementGetLayer.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+        dll.SULayerGetName.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUStringCreate.argtypes = [ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUStringGetUTF8Length.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_size_t)]
+        dll.SUStringGetUTF8.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_char_p, ctypes.POINTER(ctypes.c_size_t)]
+        try:
+            model = ctypes.c_void_p()
+            err = dll.SUModelCreateFromFile(ctypes.byref(model), str(out).encode())
+            assert err == 0, f"SketchUp SDK rejected the file (error {err})"
+            entities = ctypes.c_void_p()
+            dll.SUModelGetEntities(model, ctypes.byref(entities))
+            nfaces = ctypes.c_long()
+            dll.SUEntitiesGetNumFaces(entities, ctypes.byref(nfaces))
+            assert nfaces.value == 2
+            faces = (ctypes.c_void_p * 2)()
+            got = ctypes.c_size_t()
+            dll.SUEntitiesGetFaces(entities, 2, faces, ctypes.byref(got))
+
+            names = []
+            for i in range(2):
+                layer = ctypes.c_void_p()
+                assert dll.SUDrawingElementGetLayer(faces[i], ctypes.byref(layer)) == 0
+                sref = ctypes.c_void_p()
+                dll.SUStringCreate(ctypes.byref(sref))
+                dll.SULayerGetName(layer, ctypes.byref(sref))
+                length = ctypes.c_size_t()
+                dll.SUStringGetUTF8Length(sref, ctypes.byref(length))
+                buf = ctypes.create_string_buffer(length.value + 1)
+                outlen = ctypes.c_size_t()
+                dll.SUStringGetUTF8(sref, length.value + 1, buf, ctypes.byref(outlen))
+                names.append(buf.value.decode())
+            assert set(names) == {"Roof", "Walls"}
             dll.SUModelRelease(ctypes.byref(model))
         finally:
             dll.SUTerminate()
