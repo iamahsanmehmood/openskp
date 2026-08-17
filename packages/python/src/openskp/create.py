@@ -1060,7 +1060,7 @@ class SkpBuilder:
         ``material``/``layer``, if given, are handles from `add_material`/
         `add_layer` applied to the instance itself (not its contents).
         """
-        if definition._closed is False:
+        if not definition._closed:
             raise SkpWriteError(
                 f"component definition {definition.name!r} is still open - "
                 "exit its `with` block before calling add_instance"
@@ -1229,6 +1229,7 @@ def create() -> SkpBuilder:
     >>> builder.save("output.skp")
 
     See the :mod:`openskp.create` module docstring for the current scope
-    and limitations (no textures/components yet, inches only).
+    and limitations (no texture UV positioning or nested definitions yet;
+    inches only).
     """
     return SkpBuilder()
