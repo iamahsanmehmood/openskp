@@ -48,5 +48,8 @@ openskp = "openskp.__init__:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+openskp = ["_scaffold/*.skp"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

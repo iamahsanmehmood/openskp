@@ -53,12 +53,14 @@ packages/dart/pubspec.lock
 
 # SKP test files (don't commit binary models)
 *.skp
-# …except the checked-in regression fixtures (small real models).
+# …except the checked-in regression fixtures (small real models) and the
+# bundled blank-document scaffold openskp.create splices new geometry into.
 !packages/python/tests/fixtures/*.skp
 !packages/typescript/tests/fixtures/*.skp
 !packages/dotnet/OpenSkp.Tests/fixtures/*.skp
 !packages/dart/test/fixtures/*.skp
 !packages/cpp/tests/fixtures/*.skp
+!packages/python/src/openskp/_scaffold/*.skp
 *.glb
 *.obj
 
