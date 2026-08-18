@@ -296,6 +296,73 @@ class TestConcavePolygons:
         assert face["plane"][:3] == pytest.approx((0.0, 0.0, 1.0), abs=1e-9)
 
 
+class TestAutoTriangulate:
+    # A "quad" whose 4th point is deliberately raised out of the other
+    # 3's plane - a corner "pop" no shared-plane tilt could produce, the
+    # same non-planarity a tessellated curved surface hits in practice.
+    WARPED_QUAD = [(0.0, 0.0, 0.0), (10.0, 0.0, 0.0), (10.0, 10.0, 0.0), (0.0, 10.0, 5.0)]
+    FLAT_SQUARE = [(0.0, 0.0, 0.0), (10.0, 0.0, 0.0), (10.0, 10.0, 0.0), (0.0, 10.0, 0.0)]
+
+    def test_non_planar_without_auto_triangulate_still_raises(self):
+        builder = create()
+        with pytest.raises(SkpWriteError, match="not coplanar"):
+            builder.add_face(self.WARPED_QUAD)
+
+    def test_non_planar_with_auto_triangulate_splits_into_two_faces(self):
+        builder = create()
+        builder.add_face(self.WARPED_QUAD, auto_triangulate=True)
+        data = builder.to_bytes()
+        ar, root, layers, materials = legacy._walk(data)
+        faces = [v for (_, n, v) in root if n == "CFace"]
+        assert len(faces) == 2
+
+    def test_already_planar_input_stays_a_single_face(self):
+        # auto_triangulate should be a no-op for input that's already flat
+        # - not force-split every face into triangles.
+        builder = create()
+        builder.add_face(self.FLAT_SQUARE, auto_triangulate=True)
+        data = builder.to_bytes()
+        ar, root, layers, materials = legacy._walk(data)
+        faces = [v for (_, n, v) in root if n == "CFace"]
+        assert len(faces) == 1
+
+    def test_triangulated_faces_share_the_fan_origin_vertex(self):
+        builder = create()
+        builder.add_face(self.WARPED_QUAD, auto_triangulate=True)
+        data = builder.to_bytes()
+        ar, root, layers, materials = legacy._walk(data)
+        edges = [v for (_, n, v) in root if n == "CEdge"]
+        vertex_ids = set()
+        for e in edges:
+            vertex_ids.add(e["v1"])
+            vertex_ids.add(e["v2"])
+        # 4 corners, no duplicate CVertex for the shared fan-origin point
+        assert len(vertex_ids) == 4
+
+    def test_auto_triangulate_rejects_front_uv(self):
+        builder = create()
+        with pytest.raises(SkpWriteError, match="auto_triangulate cannot be combined"):
+            builder.add_face(
+                self.WARPED_QUAD, auto_triangulate=True,
+                front_uv=[((0, 0, 0), (0.0, 0.0)), ((10, 0, 0), (1.0, 0.0)), ((10, 10, 0), (1.0, 1.0))],
+            )
+
+    def test_auto_triangulate_still_raises_for_degenerate_input(self):
+        # A genuinely collinear/degenerate input isn't "fixed" by
+        # triangulation - _is_coplanar itself still raises for it.
+        builder = create()
+        with pytest.raises(SkpWriteError, match="collinear or degenerate"):
+            builder.add_face([(0.0, 0.0, 0.0), (5.0, 0.0, 0.0), (10.0, 0.0, 0.0)], auto_triangulate=True)
+
+    def test_auto_triangulate_in_component_definition(self):
+        builder = create()
+        with builder.add_component_definition("Fin") as fin:
+            fin.add_face(self.WARPED_QUAD, auto_triangulate=True)
+        builder.add_instance(fin)
+        data = builder.to_bytes()
+        legacy._walk(data)
+
+
 class TestNonManifoldTopology:
     # Three triangular "fins" sharing one common edge (the z-axis segment
     # from (0,0,0) to (0,0,100)) - nothing in the CEdgeUse/loop encoding
@@ -3048,6 +3115,40 @@ class TestRealSketchUpOracle:
             col0 = t.values[0:3]
             world = (10.0 * col0[0], 10.0 * col0[1], 10.0 * col0[2])
             assert world == pytest.approx((0.0, 10.0, 0.0), abs=1e-6)
+            dll.SUModelRelease(ctypes.byref(model))
+        finally:
+            dll.SUTerminate()
+
+    def test_auto_triangulated_warped_quad_opens_as_two_faces_in_real_sketchup(self, tmp_path):
+        # A non-planar "quad" real SketchUp itself would silently split
+        # into 2 triangles when drawn by hand - confirms this writer's
+        # auto_triangulate fallback produces the same structurally valid
+        # result the real application accepts, not just something our
+        # own lenient reader tolerates.
+        import ctypes
+
+        builder = create()
+        builder.add_face(
+            [(0.0, 0.0, 0.0), (10.0, 0.0, 0.0), (10.0, 10.0, 0.0), (0.0, 10.0, 5.0)],
+            auto_triangulate=True,
+        )
+        out = tmp_path / "warped_quad.skp"
+        builder.save(str(out))
+
+        dll = ctypes.CDLL(_SDK_DLL_PATH)
+        dll.SUModelCreateFromFile.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_char_p]
+        dll.SUModelGetEntities.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUEntitiesGetNumFaces.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_size_t)]
+        dll.SUInitialize()
+        try:
+            model = ctypes.c_void_p()
+            err = dll.SUModelCreateFromFile(ctypes.byref(model), str(out).encode())
+            assert err == 0, f"SketchUp SDK rejected the file (error {err})"
+            entities = ctypes.c_void_p()
+            dll.SUModelGetEntities(model, ctypes.byref(entities))
+            nf = ctypes.c_size_t()
+            dll.SUEntitiesGetNumFaces(entities, ctypes.byref(nf))
+            assert nf.value == 2
             dll.SUModelRelease(ctypes.byref(model))
         finally:
             dll.SUTerminate()

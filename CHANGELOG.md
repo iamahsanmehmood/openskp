@@ -100,6 +100,13 @@ for the full scope notes.
   (Rodrigues' rotation formula). Confirmed against the real SDK's own
   `SUComponentInstanceGetTransform` to match SketchUp's transform
   convention exactly, not just "some rotation was applied."
+- `add_face(..., auto_triangulate=True)` — a non-coplanar polygon (a
+  tessellated curved surface's warped "quad," the case that previously
+  had to be hand-split into triangles before calling `add_face` at all)
+  is now fan-triangulated into real, always-planar faces automatically
+  instead of raising, the same silent fallback real SketchUp's own UI
+  applies when you draw a not-quite-flat face. Off by default — existing
+  strict-planarity behavior is unchanged unless opted into.
 
 ### Fixed
 
