@@ -185,6 +185,13 @@ namespace OpenSkp
             var meshIndex = new Dictionary<string, MeshMetadata>();
             var glbPrimitives = new List<GlbPrimitive>();
 
+            // Instance path -> (Properties, Name) updates, collected in O(1) per
+            // instance and applied once after instantiation (see the prefix-walk
+            // loop below). Replaces the previous per-instance full meshIndex
+            // scan, which was O(instances x meshes) and dominated BuildScene on
+            // models with tens or hundreds of thousands of placed instances.
+            var pathUpdates = new Dictionary<string, (Dictionary<string, string> Props, string Name)>();
+
             var colorToMaterialIndex = new Dictionary<((int, int, int) Color, bool DoubleSided), int>();
             var gltfMaterials = new List<object>();
 
@@ -558,16 +565,15 @@ namespace OpenSkp
                     };
                     childInstancesInfo.Add(instInfo);
 
-                    string safeChildPath = fullPathName.Replace(" / ", "__").Replace(" ", "_");
-                    if (safeChildPath.Length > 80) safeChildPath = safeChildPath.Substring(0, 80);
-                    foreach (var meshKv in meshIndex)
-                    {
-                        if (meshKv.Key.Contains(safeChildPath))
-                        {
-                            meshKv.Value.Properties = properties;
-                            meshKv.Value.Name = inst.Name ?? "";
-                        }
-                    }
+                    // Record this instance's (Properties, Name) for the deferred
+                    // mesh back-fill below. The scan this replaces iterated the
+                    // entire meshIndex per placed instance (string Contains per
+                    // mesh), i.e. O(instances x meshes); with hundreds of
+                    // thousands of both this alone took tens of minutes on real
+                    // production files. The final state is identical: an
+                    // instance's update is applied to every mesh under its path,
+                    // and the outermost (most shallow) ancestor's update wins.
+                    pathUpdates[fullPathName] = (properties, inst.Name ?? "");
                 }
 
                 return childInstancesInfo;
@@ -576,9 +582,36 @@ namespace OpenSkp
             var identityMat = new List<double> { 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1.0 };
             var rootChildren = InstantiateRoot(parsed.Root.Builder, identityMat);
 
+            // Deferred mesh back-fill: for each mesh, walk its Path from the
+            // leaf up to the root and apply the shallowest recorded ancestor
+            // update. Equivalent to the old scan's final state (the outermost
+            // ancestor wrote last and won), O(meshes x path_depth) instead of
+            // O(instances x meshes). This also fixes a latent over-match in the
+            // old substring test: "ROOT / A_B" would previously match a mesh
+            // whose GeomName merely contained the substring "A_B" (e.g. inside
+            // "A_BC"), wrongly propagating the update to non-descendants.
             foreach (var meshKv2 in meshIndex)
             {
-                var existing = meshKv2.Value;
+                var mesh = meshKv2.Value;
+                var meshPath = mesh.Path ?? "";
+                (Dictionary<string, string> Props, string Name)? found = null;
+                string p = meshPath;
+                while (p.Length > 0)
+                {
+                    if (pathUpdates.TryGetValue(p, out var u)) found = u;
+                    int sep = p.LastIndexOf(" / ");
+                    p = sep >= 0 ? p.Substring(0, sep) : "";
+                }
+                if (found.HasValue)
+                {
+                    mesh.Properties = found.Value.Props;
+                    mesh.Name = found.Value.Name;
+                }
+            }
+
+            foreach (var meshKv3 in meshIndex)
+            {
+                var existing = meshKv3.Value;
                 if (existing.Path == "ROOT")
                 {
                     existing.Name = "ROOT";
