@@ -30,7 +30,24 @@ for the full scope notes.
   instances (`add_component_definition`, `add_instance`), and groups
   (`add_group`, which place themselves automatically on close rather than
   needing a separate placement call).
+- Nested definitions — a component definition can contain instances of
+  another, already-built definition inside its own body
+  (`ComponentDefinitionBuilder.add_instance`), the same assembly-of-parts
+  nesting real SketchUp supports, to any depth. A nested placement can
+  also be a *group* rather than a component instance
+  (`ComponentDefinitionBuilder.add_group_instance`) — this format has no
+  way to declare one definition's body inside another's, so the group's
+  own geometry still has to be built with a normal
+  `add_component_definition` first, then placed here.
+- Explicit texture positioning (`add_face`'s `front_uv`/`back_uv`) —
+  scale, rotate, shear, and offset a face's texture independently per
+  side instead of the default planar projection, given 3 world-point/UV
+  correspondences. Currently limited to faces aligned to the X, Y, or Z
+  axis.
 - Per-face/per-edge hidden, soft, and smooth flags.
+- Every file now opens to the standard "Iso" view (parallel projection,
+  looking at the origin) instead of the blank scaffold's own arbitrary
+  default camera.
 - No SketchUp SDK dependency at import, write, or any other runtime path.
   The bundled blank-document scaffold this module splices geometry into
   is disclosed plainly as SDK-authored boilerplate (Trimble's own
@@ -38,6 +55,13 @@ for the full scope notes.
   module's own docstring — the writer logic itself (the entity encoding,
   the object-graph protocol, the tail-reference renumbering) is 100%
   independently reverse-engineered.
+
+### Fixed
+
+- Calling `add_face`/`add_instance` on the root builder while a component
+  definition was still open (its `with` block not yet exited) silently
+  produced a corrupted file instead of raising — found while testing
+  group nesting, unrelated to it otherwise. Now raises immediately.
 
 ### Validation
 
@@ -54,10 +78,13 @@ entities) as a regression guard.
 
 ### Explicitly out of scope for this first pass
 
-- Explicit texture UV positioning/pinning (default planar projection
-  only).
-- Nested definitions (a component or group containing another
-  component's instances).
+- Explicit texture positioning on a tilted (non-axis-aligned) face - the
+  local 2D parameterization needed for that has not been reverse-engineered.
+- Declaring a group's geometry inline nested inside another definition's
+  own body, the way `add_group` self-places at the root level - this
+  format has no mechanism for one definition's declaration to live inside
+  another's, so a nested group's geometry has to be built separately
+  first (see `add_group_instance` above).
 - Editing an existing arbitrary `.skp` file — a separately harder
   problem (real SketchUp re-serializes the whole document on save rather
   than appending), not attempted here.

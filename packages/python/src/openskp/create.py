@@ -18,13 +18,27 @@ are involved, and how.
   definitions with multiple positioned instances, and groups are all
   supported - see :meth:`SkpBuilder.add_material` / :meth:`SkpBuilder.
   add_texture_material` / :meth:`SkpBuilder.add_layer` / :meth:`SkpBuilder.
-  add_component_definition` / :meth:`SkpBuilder.add_group`. There is no
-  support yet for explicit texture positioning/pinning or nested
-  definitions (a definition containing another definition's instances or
-  groups).
+  add_component_definition` / :meth:`SkpBuilder.add_group`. A definition
+  can also nest instances (or group instances) of another, already-built
+  definition inside its own body (an assembly containing its own
+  sub-parts) via :meth:`ComponentDefinitionBuilder.add_instance` /
+  :meth:`ComponentDefinitionBuilder.add_group_instance` - nested groups
+  can't be declared inline the way :meth:`SkpBuilder.add_group` is at the
+  root level (this format has no way to embed one definition's
+  declaration inside another's), so build the group's geometry with a
+  normal `add_component_definition` first, then place it as a group.
+  A face's texture can be explicitly positioned (scaled/rotated/sheared/
+  offset, independently per side) instead of the default planar
+  projection - see `write_face`'s ``front_uv``/``back_uv`` parameters -
+  currently only for faces aligned to the X, Y, or Z axis. There is no
+  support yet for positioning on a tilted face.
 * Coordinates are in **inches** - SketchUp's own native internal unit for
   this era of the format. Converting from another unit is the caller's
   responsibility for now.
+* Every file opens to the standard "Iso" view (parallel projection,
+  looking at the origin from the (1, -1, 1) octant) rather than the
+  blank scaffold's own arbitrary default camera - see
+  ``_ISO_CAMERA_PREFIX_PATCH`` below. Not configurable yet.
 * Editing an *existing* arbitrary ``.skp`` file is a separate, harder
   problem this module does not attempt: real SketchUp does not simply
   append to a file on save, it re-serializes the whole document, so there
@@ -94,6 +108,36 @@ _SCAFFOLD_SHA256 = "809a1ab73a20a192ab13aaff197afb1c67d0e9352f6a353a9cd8030919f8
 # file's tail content; do not reuse for a different base file without
 # re-deriving them the same way.
 _TAIL_REF_POSITIONS = (409, 468, 477, 479, 1383, 1385)
+
+# The blank scaffold ships with SketchUp's own arbitrary default camera;
+# every file this writer produces instead always patches it to the
+# standard "Iso" view (eye along the (1, -1, 1) octant looking at the
+# origin, up = Z, parallel/orthographic projection - matching Camera >
+# Standard Views > Iso) so it opens already framed the conventional way,
+# rather than whatever angle a brand-new blank document happens to
+# default to. Found the same way as every other ground-truth constant
+# here: diffing two SDK-authored blank documents that differ only in an
+# explicit SUCameraSetOrientation + SUCameraSetPerspective(False) call
+# before saving - these are the exact bytes real SketchUp itself wrote
+# for that camera, copied verbatim rather than decoded (like
+# _CAMERA_TEMPLATE, this project has not reverse-engineered CCamera's
+# own internal field layout, only confirmed these specific byte ranges
+# are what changes for this camera setting). The prefix offset is
+# absolute (within the always-unshifted scaffold prefix, well before
+# _material_insert_pos); the tail patches are relative to the document
+# "tail" like _TAIL_REF_POSITIONS, since this camera setting also
+# touches two small fields further into that region.
+_ISO_CAMERA_PREFIX_OFFSET = 2993
+_ISO_CAMERA_PREFIX_PATCH = bytes.fromhex(
+    "594000000000000059c000000000000059400000000000000000000000000000"
+    "000000000000000000003f2c0c70bd20dabf3f2c0c70bd20da3f3f2c0c70bd20"
+    "ea3f000000000000f03f0000000000408f40000000000000003e402adf272c80"
+    "3457"
+)
+_ISO_CAMERA_TAIL_PATCHES = (
+    (509, bytes.fromhex("d0a869613c442d4799a4667d1adfa836")),
+    (1390, bytes.fromhex("4e53c84477029246bba95827bba7e2")),
+)
 
 _CLAYER_PATTERN = re.escape(b"\xff\xff") + b".." + re.escape(struct.pack("<H", 6) + b"CLayer")
 
@@ -171,6 +215,97 @@ _CAMERA_TEMPLATE = bytes.fromhex(
 # ground truth that a definition with these bytes zeroed loads correctly
 # (unlike drawbase's padding, which real SketchUp silently drops without).
 _DEFINITION_BASE_BLOCK = bytes([0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+
+_FTC_SCHEMA = 4
+
+# A face with no explicit texture positioning stores no CFaceTextureCoords
+# at all, so this identity is only ever used to fill the *other* side's slot
+# when just one of front/back is explicitly positioned - real SketchUp still
+# writes a full 24-f64 block either way, just with the unpositioned side's
+# matrix left as identity, ground-truth confirmed by positioning only one
+# side and reading the other back as (1,0,0, 0,1,0, 0,0,1).
+_IDENTITY_UV_MATRIX = (1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
+
+
+def _det3(m: Sequence[Sequence[float]]) -> float:
+    return (
+        m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+        - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+        + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
+    )
+
+
+def _solve3x3(a: Sequence[Sequence[float]], b: Sequence[float]) -> Tuple[float, float, float]:
+    """Solve the 3x3 linear system ``a @ x = b`` via Cramer's rule."""
+    d = _det3(a)
+    if abs(d) < 1e-9:
+        raise SkpWriteError(
+            "the 3 texture-positioning points map to collinear (u, v) coordinates - "
+            "cannot determine a texture mapping from them"
+        )
+    cols = []
+    for col in range(3):
+        ai = [list(row) for row in a]
+        for r in range(3):
+            ai[r][col] = b[r]
+        cols.append(_det3(ai) / d)
+    return cols[0], cols[1], cols[2]
+
+
+def _solve_uv_matrix(
+    pairs: Sequence[Tuple[Point3, Tuple[float, float]]], axes: Tuple[int, int]
+) -> Tuple[float, ...]:
+    """Fit the 3x3 UV-to-world affine matrix ground truth shows real
+    SketchUp stores for a positioned texture, from exactly 3 (world point,
+    (u, v)) correspondences - the minimum that fully determines an affine
+    map (scale, rotation, shear, translation; no perspective/keystone term,
+    matching the third column ground truth always shows as (0, 0, 1)).
+
+    ``axes`` selects which two of the face's own (x, y, z) coordinates to
+    treat as its local 2D plane (see the axis-aligned-only restriction in
+    `_uv_matrix_for_face`) - the world side of each correspondence is
+    projected onto those two axes before fitting.
+
+    Ground truth (see ``_read_ftc`` in legacy.py, which this inverts) shows
+    the stored matrix satisfies ``(u, v, 1) @ M == (world_x, world_y, 1)``
+    in row-vector convention - i.e. it maps a UV coordinate to the world
+    point it should land on, which is the natural direction for *defining*
+    a mapping (a caller says where each UV coordinate goes).
+    """
+    if len(pairs) != 3:
+        raise SkpWriteError("texture positioning needs exactly 3 (point, uv) pairs")
+    i, j = axes
+    a = [[uv[0], uv[1], 1.0] for _, uv in pairs]
+    bx = [pt[i] for pt, _ in pairs]
+    by = [pt[j] for pt, _ in pairs]
+    col_x = _solve3x3(a, bx)
+    col_y = _solve3x3(a, by)
+    a0, c0, e0 = col_x
+    b0, d0, f0 = col_y
+    return (a0, b0, 0.0, c0, d0, 0.0, e0, f0, 1.0)
+
+
+def _uv_matrix_for_face(
+    pairs: Sequence[Tuple[Point3, Tuple[float, float]]], normal: Tuple[float, float, float]
+) -> Tuple[float, ...]:
+    """As `_solve_uv_matrix`, but derives which 2 of (x, y, z) to use from
+    the face's own plane normal - only axis-aligned faces (normal parallel
+    to X, Y, or Z) are supported for now; a tilted face's local 2D
+    parameterization has not been reverse-engineered (every ground-truth
+    sample used to derive this feature was axis-aligned)."""
+    nx, ny, nz = normal
+    if abs(nz) > 1 - 1e-6:
+        axes = (0, 1)
+    elif abs(ny) > 1 - 1e-6:
+        axes = (0, 2)
+    elif abs(nx) > 1 - 1e-6:
+        axes = (1, 2)
+    else:
+        raise SkpWriteError(
+            "explicit texture positioning is only supported on faces aligned to the "
+            "X, Y, or Z axis for now (this face's plane is tilted)"
+        )
+    return _solve_uv_matrix(pairs, axes)
 
 
 def _u32(v: int) -> bytes:
@@ -297,6 +432,53 @@ class _ArchiveWriter:
         if pid is None:
             pid = self._alloc_pid()
         self.buf += self._encode_pid(pid)
+
+    def _preamble_with_texture_coords(
+        self,
+        front_matrix: Optional[Tuple[float, ...]],
+        back_matrix: Optional[Tuple[float, ...]],
+    ) -> None:
+        """Like `_preamble(real_attrs=True)`, but the attribute container's
+        children list holds one real `CFaceTextureCoords` entry instead of
+        closing immediately - used only for a face with explicit texture
+        positioning on its front and/or back side. ``front_matrix``/
+        ``back_matrix`` is ``None`` for the side that isn't positioned."""
+        self.buf += struct.pack("<H", 0x8000 | _ATTR_CONTAINER_SLOT)
+        self._alloc()
+        self.buf += bytes(3)  # the container's own nested preamble: null attrs (2) + mask=0 (1)
+        self.write_face_texture_coords(front_matrix, back_matrix)
+        self._null()  # children-list terminator
+        self.buf += self._encode_pid(self._alloc_pid())
+
+    def write_face_texture_coords(
+        self,
+        front_matrix: Optional[Tuple[float, ...]],
+        back_matrix: Optional[Tuple[float, ...]],
+    ) -> None:
+        """Write one ``CFaceTextureCoords`` record - the explicit
+        front/back texture-positioning data a face's attribute container
+        holds when either side has been explicitly positioned (as opposed
+        to the default planar projection, which needs no such record at
+        all). Inverts ``legacy._read_ftc`` field-for-field; see that
+        function's docstring for what each field means.
+
+        ``front_matrix``/``back_matrix`` are the 9-value row-major
+        UV-to-world affine matrices from `_uv_matrix_for_face`, or
+        ``None`` for a side that isn't explicitly positioned (written as
+        identity, matching ground truth for the untouched side).
+        """
+        self._new_of_known_class("CFaceTextureCoords", schema=_FTC_SCHEMA)
+        self._preamble(pid=0)
+        self.buf += _u32(0)  # ground truth: read and discarded by legacy.py's reader too
+        ks = [0.0] * 24
+        ks[0:9] = front_matrix if front_matrix is not None else _IDENTITY_UV_MATRIX
+        ks[12:21] = back_matrix if back_matrix is not None else _IDENTITY_UV_MATRIX
+        for v in ks:
+            self.buf += _f64(v)
+        self.buf += _u32(0)  # front pin count - this writer always emits a solved matrix, never raw pins
+        self.buf += _u32(0)  # back pin count
+        self.buf += _u32(1 if front_matrix is not None else 0)  # fflags bit 0: front painted/positioned
+        self.buf += _u32(1 if back_matrix is not None else 0)  # bflags bit 0: back painted/positioned
 
     def _drawbase(
         self, mat: int = 0, layer: int = 0,
@@ -434,7 +616,14 @@ class _ArchiveWriter:
         self.buf += _u32(1)  # nlayers: always 1, an embedded copy of Layer0
         embedded_layer_slot = self.write_layer("Layer0", with_pids=False)
         self._backref(embedded_layer_slot)  # "decl": this definition's own active layer
-        self.buf += _u32(0)  # nested-definition count - always 0, not supported
+        # A separate field from nested instances (which live in the entity
+        # list just below, like any other entity) - ground truth shows this
+        # counts CComponentDefinition classes declared inline within this
+        # definition's own header, a distinct and rarer construct this
+        # project has not needed: every definition this writer produces is
+        # declared at the top level, so this stays 0 even when its entity
+        # list below places instances of other top-level definitions.
+        self.buf += _u32(0)
         count_patch_pos = len(self.buf)
         self.buf += _u32(0)  # placeholder entity count, patched by the caller
         return slot, count_patch_pos
@@ -546,6 +735,8 @@ class _ArchiveWriter:
         soft_edges: bool = False,
         smooth_edges: bool = False,
         hidden_edges: bool = False,
+        front_uv: Optional[Sequence[Tuple[Point3, Tuple[float, float]]]] = None,
+        back_uv: Optional[Sequence[Tuple[Point3, Tuple[float, float]]]] = None,
     ) -> int:
         """Write one planar face and return how many new root-entity-list
         slots it consumed (edges newly declared, plus the face itself) -
@@ -569,6 +760,14 @@ class _ArchiveWriter:
         between adjacent faces should shade smoothly and stay invisible) -
         an edge already shared with a previous face keeps whatever flags
         it was first declared with; these have no effect on it.
+
+        ``front_uv``/``back_uv``, if given, explicitly position that
+        side's texture instead of the default planar projection - exactly
+        3 ``(point, (u, v))`` pairs (a world point on the face's plane
+        paired with the texture coordinate it should land on), which fully
+        determines an affine mapping (scale/rotation/shear/translation, no
+        perspective). Only supported on faces aligned to the X, Y, or Z
+        axis for now. See :meth:`SkpBuilder.add_face` for a worked example.
         """
         n = len(points)
         point_slots = [vertex_slots.get(p) for p in points]
@@ -608,10 +807,16 @@ class _ArchiveWriter:
                 point_slots[v1_idx],
             )
 
-        self._new_of_known_class("CFace", schema=3)
-        self._preamble()
-        self._drawbase(mat=face_material, layer=face_layer, hidden=hidden)
         nx, ny, nz, d = _plane_from_polygon(points)
+
+        self._new_of_known_class("CFace", schema=3)
+        if front_uv is not None or back_uv is not None:
+            front_matrix = _uv_matrix_for_face(front_uv, (nx, ny, nz)) if front_uv is not None else None
+            back_matrix = _uv_matrix_for_face(back_uv, (nx, ny, nz)) if back_uv is not None else None
+            self._preamble_with_texture_coords(front_matrix, back_matrix)
+        else:
+            self._preamble()
+        self._drawbase(mat=face_material, layer=face_layer, hidden=hidden)
         self.buf += _f64(nx) + _f64(ny) + _f64(nz) + _f64(d)
         self.buf += _u32(1)  # nloops = 1
 
@@ -705,6 +910,13 @@ class ComponentDefinitionBuilder:
         # needs an explicit later add_instance call.
         self._group_placement = group_placement
 
+    def _check_writable(self, action: str) -> None:
+        if self._closed:
+            raise SkpWriteError(
+                f"component definition {self.name!r} has already closed "
+                f"(its `with` block exited) - cannot add more {action} to it"
+            )
+
     def add_face(
         self,
         points: Sequence[Point3],
@@ -715,16 +927,14 @@ class ComponentDefinitionBuilder:
         soft_edges: bool = False,
         smooth_edges: bool = False,
         hidden_edges: bool = False,
+        front_uv: Optional[Sequence[Tuple[Point3, Tuple[float, float]]]] = None,
+        back_uv: Optional[Sequence[Tuple[Point3, Tuple[float, float]]]] = None,
     ) -> None:
         """Add one planar face to this definition - same signature and
         behavior as :meth:`SkpBuilder.add_face`, except vertices/edges are
         shared only within this definition, never with the root model or
         other definitions."""
-        if self._closed:
-            raise SkpWriteError(
-                f"component definition {self.name!r} has already closed "
-                "(its `with` block exited) - cannot add more faces to it"
-            )
+        self._check_writable("faces")
         points = [(float(p[0]), float(p[1]), float(p[2])) for p in points]
         if len(points) < 3:
             raise SkpWriteError("a face needs at least 3 points")
@@ -732,6 +942,93 @@ class ComponentDefinitionBuilder:
             points, self._vertex_slots, self._edge_registry,
             material or 0, layer or 0, back_material or 0,
             hidden, soft_edges, smooth_edges, hidden_edges,
+            front_uv, back_uv,
+        )
+
+    def add_instance(
+        self,
+        definition: "ComponentDefinitionBuilder",
+        name: Optional[str] = None,
+        translation: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+        matrix3x3: Optional[Tuple[float, float, float, float, float, float, float, float, float]] = None,
+        material: Optional[int] = None,
+        layer: Optional[int] = None,
+    ) -> None:
+        """Place one instance of another, already-closed component
+        definition inside this one - the same nesting real SketchUp
+        supports (an assembly definition containing instances of its own
+        sub-part definitions), same signature and behavior as
+        :meth:`SkpBuilder.add_instance` otherwise.
+
+        >>> with builder.add_component_definition("Wheel") as wheel:
+        ...     wheel.add_face([(0, 0, 0), (10, 0, 0), (10, 10, 0), (0, 10, 0)])
+        >>> with builder.add_component_definition("Car") as car:
+        ...     car.add_instance(wheel, translation=(0, 0, 0))
+        ...     car.add_instance(wheel, translation=(100, 0, 0))
+
+        ``definition`` must come from this same builder - a definition
+        from a different `create()` call has a slot number that means
+        nothing in this document. It is always already closed by the time
+        it's valid to pass here: only one definition can be open on a
+        given builder at once (see `add_component_definition`), and that
+        one is always ``self`` while its own `with` block is active - so
+        any *other* definition from this builder reachable here was
+        necessarily closed before ``self`` was even opened. That
+        ordering is also what rules out cycles: a definition can only
+        ever nest others fully built strictly before it existed, never
+        itself or anything still in progress.
+        """
+        self._check_writable("instances")
+        if definition._skp is not self._skp:
+            raise SkpWriteError(
+                f"component definition {definition.name!r} belongs to a different "
+                "builder (a different create() call) - its slot number is meaningless here"
+            )
+        if definition is self:
+            raise SkpWriteError(f"component definition {self.name!r} cannot nest an instance of itself")
+        self._new_entity_count += self._skp._definition_writer.write_instance(
+            definition.slot, name or definition.name, translation, matrix3x3, material or 0, layer or 0
+        )
+
+    def add_group_instance(
+        self,
+        definition: "ComponentDefinitionBuilder",
+        name: Optional[str] = None,
+        translation: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+        matrix3x3: Optional[Tuple[float, float, float, float, float, float, float, float, float]] = None,
+        material: Optional[int] = None,
+        layer: Optional[int] = None,
+    ) -> None:
+        """Place another, already-closed component definition inside this
+        one as a *group* (``CGroup``) rather than a component instance -
+        otherwise identical to `add_instance`, including the same
+        already-closed/same-builder/no-self-reference requirements.
+
+        Unlike the self-placing :meth:`SkpBuilder.add_group` at the root
+        level, a nested group can't be declared inline: this format has
+        no way to embed one definition's declaration inside another's -
+        every definition is a flat, top-level record, and a definition
+        can only reference others already fully closed strictly before
+        it was opened, the same constraint `add_instance` relies on for
+        cycle-safety. So build the group's geometry with a normal
+        `add_component_definition` first, then place it here:
+
+        >>> with builder.add_component_definition("Engine") as engine:
+        ...     engine.add_face([(0, 0, 0), (30, 0, 0), (30, 30, 0), (0, 30, 0)])
+        >>> with builder.add_component_definition("Car") as car:
+        ...     car.add_face([(0, 0, 0), (150, 0, 0), (150, 60, 0), (0, 60, 0)])
+        ...     car.add_group_instance(engine, translation=(50, 0, 10))
+        """
+        self._check_writable("groups")
+        if definition._skp is not self._skp:
+            raise SkpWriteError(
+                f"component definition {definition.name!r} belongs to a different "
+                "builder (a different create() call) - its slot number is meaningless here"
+            )
+        if definition is self:
+            raise SkpWriteError(f"component definition {self.name!r} cannot nest a group instance of itself")
+        self._new_entity_count += self._skp._definition_writer.write_group(
+            definition.slot, name or definition.name, translation, matrix3x3, material or 0, layer or 0
         )
 
     def __enter__(self) -> "ComponentDefinitionBuilder":
@@ -1060,6 +1357,11 @@ class SkpBuilder:
         ``material``/``layer``, if given, are handles from `add_material`/
         `add_layer` applied to the instance itself (not its contents).
         """
+        if definition._skp is not self:
+            raise SkpWriteError(
+                f"component definition {definition.name!r} belongs to a different "
+                "builder (a different create() call) - its slot number is meaningless here"
+            )
         if not definition._closed:
             raise SkpWriteError(
                 f"component definition {definition.name!r} is still open - "
@@ -1074,6 +1376,22 @@ class SkpBuilder:
     def _ensure_geometry_writer(self) -> None:
         if self._geometry_writer is not None:
             return
+        if self._open_definition is not None:
+            # Calling this while a definition/group is still open would
+            # lock in the geometry writer's starting slot before that
+            # definition (and anything added to it afterward) finishes
+            # growing _definition_writer - the locked-in slot would then be
+            # too low, corrupting every back-reference root-level geometry
+            # makes. A real, previously-unguarded gap: nothing stopped
+            # calling add_face/add_instance on the root builder from
+            # inside an open `with add_component_definition(...)` block,
+            # which silently produced a file whose root entities didn't
+            # parse (found while testing group nesting - not related to
+            # it otherwise).
+            raise SkpWriteError(
+                f"component definition {self._open_definition.name!r} is still open - "
+                "exit its `with` block before adding root-level geometry"
+            )
         material_shift = self._material_writer.next_slot - self._base
         self._geometry_writer = _ArchiveWriter(
             next_slot=self._scaffold_next_slot + material_shift + self._layer_shift() + self._definition_shift(),
@@ -1100,6 +1418,8 @@ class SkpBuilder:
         soft_edges: bool = False,
         smooth_edges: bool = False,
         hidden_edges: bool = False,
+        front_uv: Optional[Sequence[Tuple[Point3, Tuple[float, float]]]] = None,
+        back_uv: Optional[Sequence[Tuple[Point3, Tuple[float, float]]]] = None,
     ) -> None:
         """Add one planar face, defined by 3 or more coplanar points (in
         inches) forming a closed polygon in order - do not repeat the
@@ -1121,6 +1441,23 @@ class SkpBuilder:
         one already shared with a previous face) - typical for a
         tessellated curved surface, where the seams between adjacent
         facets should shade smoothly and stay invisible.
+
+        ``front_uv``/``back_uv``, if given, explicitly position that
+        side's texture instead of the default planar projection: exactly
+        3 ``(point, (u, v))`` pairs, each a world point on the face paired
+        with the texture coordinate that should land there. Only
+        supported on faces aligned to the X, Y, or Z axis for now.
+
+        >>> brick = builder.add_texture_material("Brick", "brick.png")
+        >>> builder.add_face(
+        ...     [(0, 0, 0), (100, 0, 0), (100, 100, 0), (0, 100, 0)],
+        ...     material=brick,
+        ...     front_uv=[
+        ...         ((0, 0, 0), (0.0, 0.0)),
+        ...         ((50, 0, 0), (1.0, 0.0)),
+        ...         ((0, 50, 0), (0.0, 1.0)),
+        ...     ],
+        ... )
         """
         points = [(float(p[0]), float(p[1]), float(p[2])) for p in points]
         if len(points) < 3:
@@ -1130,6 +1467,7 @@ class SkpBuilder:
             points, self._vertex_slots, self._edge_registry,
             material or 0, layer or 0, back_material or 0,
             hidden, soft_edges, smooth_edges, hidden_edges,
+            front_uv, back_uv,
         )
         self._face_count += 1
 
@@ -1172,6 +1510,9 @@ class SkpBuilder:
         if pid_delta:
             u16 = struct.unpack_from("<H", prefix, _PID_COUNTER_POS)[0]
             struct.pack_into("<H", prefix, _PID_COUNTER_POS, u16 + pid_delta)
+        prefix[_ISO_CAMERA_PREFIX_OFFSET : _ISO_CAMERA_PREFIX_OFFSET + len(_ISO_CAMERA_PREFIX_PATCH)] = (
+            _ISO_CAMERA_PREFIX_PATCH
+        )
         out += prefix
         out += _u32(self._material_count)
         out += self._material_writer.buf
@@ -1210,6 +1551,8 @@ class SkpBuilder:
         total_tail_shift = material_shift + layer_shift + definition_shift + geometry_shift
         for pos in _TAIL_REF_POSITIONS:
             _shift_ref(tail, pos, total_tail_shift)
+        for pos, patch in _ISO_CAMERA_TAIL_PATCHES:
+            tail[pos : pos + len(patch)] = patch
         out += tail
         return bytes(out)
 
@@ -1229,7 +1572,7 @@ def create() -> SkpBuilder:
     >>> builder.save("output.skp")
 
     See the :mod:`openskp.create` module docstring for the current scope
-    and limitations (no texture UV positioning or nested definitions yet;
-    inches only).
+    and limitations (texture positioning only on axis-aligned faces so
+    far, no inline-declared nested groups; inches only).
     """
     return SkpBuilder()

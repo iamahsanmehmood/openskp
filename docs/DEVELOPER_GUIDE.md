@@ -474,12 +474,61 @@ after it. `ComponentDefinitionBuilder` (the object yielded by the `with`
 block) is exported alongside `SkpBuilder` from the top-level `openskp`
 package.
 
-Explicitly out of scope for this first pass: explicit texture UV
-positioning/pinning (default planar projection only), nested definitions
-(a definition containing another definition's instances or groups), and
-editing an existing arbitrary `.skp` file (a separately harder problem —
-real SketchUp re-serializes the whole document on save rather than
-appending to it — not attempted here). See
+A definition can also nest instances of another, already-closed
+definition inside its own body, to any depth (an assembly containing its
+own sub-parts) - `ComponentDefinitionBuilder.add_instance` has the same
+signature as `SkpBuilder.add_instance`:
+
+```python
+with builder.add_component_definition("Wheel") as wheel:
+    wheel.add_face([(0, 0, 0), (10, 0, 0), (10, 10, 0), (0, 10, 0)])
+with builder.add_component_definition("Car") as car:
+    car.add_instance(wheel, translation=(0, 0, 0))
+    car.add_instance(wheel, translation=(100, 0, 0))
+builder.add_instance(car)
+```
+
+A nested placement can also be a *group* rather than a component
+instance (`add_group_instance`, same signature as `add_instance` again).
+Unlike root-level `add_group`, a nested group can't be declared inline -
+this format has no way to embed one definition's declaration inside
+another's, so its geometry still needs a normal `add_component_definition`
+first:
+
+```python
+with builder.add_component_definition("Engine") as engine:
+    engine.add_face([(0, 0, 0), (30, 0, 0), (30, 30, 0), (0, 30, 0)])
+with builder.add_component_definition("Car") as car:
+    car.add_face([(0, 0, 0), (150, 0, 0), (150, 60, 0), (0, 60, 0)])
+    car.add_group_instance(engine, translation=(50, 0, 10))
+builder.add_instance(car)
+```
+
+A face's texture can also be explicitly positioned (scaled, rotated,
+sheared, offset - independently per side) instead of the default planar
+projection, given 3 world-point/UV correspondences, on faces aligned to
+the X, Y, or Z axis:
+
+```python
+brick = builder.add_texture_material("Brick", "brick.png")
+builder.add_face(
+    [(0, 0, 0), (100, 0, 0), (100, 100, 0), (0, 100, 0)],
+    material=brick,
+    front_uv=[
+        ((0, 0, 0), (0.0, 0.0)),
+        ((50, 0, 0), (1.0, 0.0)),
+        ((0, 50, 0), (0.0, 1.0)),
+    ],
+)
+```
+
+Explicitly out of scope for this first pass: texture positioning on a
+tilted (non-axis-aligned) face, declaring a group's geometry inline
+nested inside another definition (as opposed to placing an
+already-built one via `add_group_instance`), and editing an existing
+arbitrary `.skp` file (a separately harder problem — real SketchUp
+re-serializes the whole document on save rather than appending to it —
+not attempted here). See
 [`openskp/create.py`](../packages/python/src/openskp/create.py) for the
 full, current scope notes, and the [Python package README](../packages/python/README.md#writing-early-stage)
 for a longer worked example.

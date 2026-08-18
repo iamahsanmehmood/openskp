@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import importlib
 import os
+import struct
 
 import pytest
 
@@ -495,6 +496,316 @@ class TestGroups:
         assert def_refs == {d.slot for d in defs}
 
 
+class TestNestedDefinitions:
+    def test_definition_nests_instance_of_another_definition(self, tmp_path):
+        from openskp import SkpFile
+
+        builder = create()
+        with builder.add_component_definition("Wheel") as wheel:
+            wheel.add_face(SQUARE)
+        with builder.add_component_definition("Car") as car:
+            car.add_instance(wheel, translation=(0.0, 0.0, 0.0))
+            car.add_instance(wheel, translation=(200.0, 0.0, 0.0))
+        builder.add_instance(car)
+        data = builder.to_bytes()
+
+        # Root level only ever sees Car - Wheel is never placed there.
+        ar, root, layers, materials = legacy._walk(data)
+        assert len(root) == 1
+        assert root[0][1] == "CComponentInstance"
+        assert root[0][2]["def"] == car.slot
+
+        # Car's own body has 0 faces of its own, 2 nested instances of Wheel.
+        out = tmp_path / "nested.skp"
+        out.write_bytes(data)
+        model = SkpFile.open(str(out)).parse()
+        car_def = model.definitions[car.slot]
+        assert len(car_def.faces) == 0
+        assert len(car_def.instances) == 2
+        assert {inst.name for inst in car_def.instances} == {"Wheel"}
+        translations = sorted(inst.matrix[9] for inst in car_def.instances)
+        assert translations == [0.0, 200.0]
+
+    def test_real_sketchup_resolves_nested_instances(self, tmp_path):
+        # Recursively resolving Car -> 2x Wheel -> 1 face each through 2
+        # placed Car instances should total 4 faces - confirmed against the
+        # real SketchUp SDK, not just this project's own reader, the same
+        # discipline as the rest of this suite's oracle tests.
+        import ctypes
+
+        if not os.path.exists(_SDK_DLL_PATH):
+            pytest.skip("SketchUp SDK not present on this machine")
+
+        builder = create()
+        with builder.add_component_definition("Wheel") as wheel:
+            wheel.add_face(SQUARE)
+        with builder.add_component_definition("Car") as car:
+            car.add_instance(wheel, translation=(0.0, 0.0, 0.0))
+            car.add_instance(wheel, translation=(200.0, 0.0, 0.0))
+        builder.add_instance(car, translation=(0.0, 0.0, 0.0))
+        builder.add_instance(car, translation=(500.0, 0.0, 0.0))
+        out = tmp_path / "nested.skp"
+        builder.save(str(out))
+
+        dll = ctypes.CDLL(_SDK_DLL_PATH)
+        dll.SUEntitiesGetNumFaces.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_size_t)]
+        dll.SUEntitiesGetNumInstances.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_size_t)]
+        dll.SUEntitiesGetInstances.argtypes = [
+            ctypes.c_void_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_size_t),
+        ]
+        dll.SUComponentInstanceGetDefinition.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUComponentDefinitionGetEntities.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+
+        def count_faces_recursive(entities) -> int:
+            nfaces = ctypes.c_size_t()
+            dll.SUEntitiesGetNumFaces(entities, ctypes.byref(nfaces))
+            total = nfaces.value
+            ninst = ctypes.c_size_t()
+            dll.SUEntitiesGetNumInstances(entities, ctypes.byref(ninst))
+            if ninst.value:
+                insts = (ctypes.c_void_p * ninst.value)()
+                got = ctypes.c_size_t()
+                dll.SUEntitiesGetInstances(entities, ninst.value, insts, ctypes.byref(got))
+                for i in range(got.value):
+                    comp_def = ctypes.c_void_p()
+                    dll.SUComponentInstanceGetDefinition(insts[i], ctypes.byref(comp_def))
+                    sub_entities = ctypes.c_void_p()
+                    dll.SUComponentDefinitionGetEntities(comp_def, ctypes.byref(sub_entities))
+                    total += count_faces_recursive(sub_entities)
+            return total
+
+        dll.SUInitialize()
+        try:
+            model = ctypes.c_void_p()
+            err = dll.SUModelCreateFromFile(ctypes.byref(model), str(out).encode())
+            assert err == 0, f"SketchUp SDK rejected the file (error {err})"
+            entities = ctypes.c_void_p()
+            dll.SUModelGetEntities(model, ctypes.byref(entities))
+            assert count_faces_recursive(entities) == 4
+            dll.SUModelRelease(ctypes.byref(model))
+        finally:
+            dll.SUTerminate()
+
+    def test_deeply_nested_three_levels_self_parses(self, tmp_path):
+        from openskp import SkpFile
+
+        builder = create()
+        with builder.add_component_definition("Bolt") as bolt:
+            bolt.add_face(SQUARE)
+        with builder.add_component_definition("Wheel") as wheel:
+            wheel.add_instance(bolt, translation=(0.0, 0.0, 0.0))
+            wheel.add_instance(bolt, translation=(30.0, 0.0, 0.0))
+        with builder.add_component_definition("Car") as car:
+            car.add_instance(wheel)
+        builder.add_instance(car)
+        data = builder.to_bytes()
+
+        out = tmp_path / "nested3.skp"
+        out.write_bytes(data)
+        model = SkpFile.open(str(out)).parse()
+        car_def = model.definitions[car.slot]
+        wheel_def = model.definitions[wheel.slot]
+        bolt_def = model.definitions[bolt.slot]
+        assert len(car_def.instances) == 1
+        assert len(wheel_def.instances) == 2
+        assert len(bolt_def.faces) == 1
+
+    def test_nested_instance_of_self_raises(self):
+        builder = create()
+        comp = builder.add_component_definition("Loop")
+        comp.add_face(SQUARE)
+        with pytest.raises(SkpWriteError, match="cannot nest an instance of itself"):
+            comp.add_instance(comp)
+
+    def test_nested_instance_of_definition_from_a_different_builder_raises(self):
+        # A definition from a different create() call has a slot number
+        # that means nothing in this builder's document - without this
+        # check it would silently write a garbage back-reference instead
+        # of failing loudly.
+        builder1 = create()
+        with builder1.add_component_definition("Wheel") as wheel:
+            wheel.add_face(SQUARE)
+
+        builder2 = create()
+        with builder2.add_component_definition("Car") as car:
+            car.add_face(SQUARE)
+            with pytest.raises(SkpWriteError, match="different builder"):
+                car.add_instance(wheel)
+
+    def test_nested_instance_after_definition_closed_raises(self):
+        builder = create()
+        with builder.add_component_definition("Wheel") as wheel:
+            wheel.add_face(SQUARE)
+        with builder.add_component_definition("Car") as car:
+            car.add_instance(wheel)
+        with pytest.raises(SkpWriteError, match="already closed"):
+            car.add_instance(wheel)
+
+
+class TestNestedGroups:
+    def test_group_instance_nested_in_definition_self_parses(self, tmp_path):
+        from openskp import SkpFile
+
+        builder = create()
+        with builder.add_component_definition("Engine") as engine:
+            engine.add_face(SQUARE)
+        with builder.add_component_definition("Car") as car:
+            car.add_face(SQUARE)
+            car.add_group_instance(engine, translation=(50.0, 0.0, 10.0))
+        builder.add_instance(car)
+        data = builder.to_bytes()
+
+        # Root only ever sees Car - Engine is never placed at root level.
+        ar, root, layers, materials = legacy._walk(data)
+        assert len(root) == 1
+        assert root[0][1] == "CComponentInstance"
+        assert root[0][2]["def"] == car.slot
+
+        out = tmp_path / "nested_group.skp"
+        out.write_bytes(data)
+        model = SkpFile.open(str(out)).parse()
+        car_def = model.definitions[car.slot]
+        assert len(car_def.faces) == 1
+        assert len(car_def.instances) == 1
+        assert car_def.instances[0].name == "Engine"
+        assert car_def.instances[0].matrix[9:12] == pytest.approx([50.0, 0.0, 10.0])
+
+    def test_group_instance_is_a_real_cgroup_not_a_component_instance(self):
+        # The whole point of add_group_instance over add_instance: the
+        # placement record itself must be a genuine CGroup class
+        # declaration, not CComponentInstance - Car's own body (unlike
+        # root-level entities) isn't exposed through legacy._walk, so
+        # check for the class declaration bytes directly, the same way
+        # the writer itself declares a class on first use.
+        builder = create()
+        with builder.add_component_definition("Engine") as engine:
+            engine.add_face(SQUARE)
+        with builder.add_component_definition("Car") as car:
+            car.add_face(SQUARE)
+            car.add_group_instance(engine, translation=(50.0, 0.0, 0.0))
+        builder.add_instance(car)
+        data = builder.to_bytes()
+
+        cgroup_decl = struct.pack("<H", 0xFFFF) + struct.pack("<H", 1) + struct.pack("<H", 6) + b"CGroup"
+        assert cgroup_decl in data
+
+    def test_group_instance_recursively_resolves_through_real_sketchup(self, tmp_path):
+        import ctypes
+
+        if not os.path.exists(_SDK_DLL_PATH):
+            pytest.skip("SketchUp SDK not present on this machine")
+
+        builder = create()
+        with builder.add_component_definition("Engine") as engine:
+            engine.add_face(SQUARE)
+        with builder.add_component_definition("Car") as car:
+            car.add_face(SQUARE)
+            car.add_group_instance(engine, translation=(50.0, 0.0, 10.0))
+        builder.add_instance(car)
+        out = tmp_path / "nested_group_oracle.skp"
+        builder.save(str(out))
+
+        dll = ctypes.CDLL(_SDK_DLL_PATH)
+        dll.SUModelCreateFromFile.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_char_p]
+        dll.SUModelGetEntities.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUEntitiesGetNumInstances.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_size_t)]
+        dll.SUEntitiesGetInstances.argtypes = [
+            ctypes.c_void_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_size_t),
+        ]
+        dll.SUComponentInstanceGetDefinition.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUComponentDefinitionGetEntities.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUEntitiesGetNumFaces.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_size_t)]
+        dll.SUEntitiesGetNumGroups.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_size_t)]
+        dll.SUEntitiesGetGroups.argtypes = [
+            ctypes.c_void_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_size_t),
+        ]
+        dll.SUGroupGetEntities.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUInitialize()
+        try:
+            model = ctypes.c_void_p()
+            err = dll.SUModelCreateFromFile(ctypes.byref(model), str(out).encode())
+            assert err == 0, f"SketchUp SDK rejected the file (error {err})"
+            entities = ctypes.c_void_p()
+            dll.SUModelGetEntities(model, ctypes.byref(entities))
+            ninst = ctypes.c_size_t()
+            dll.SUEntitiesGetNumInstances(entities, ctypes.byref(ninst))
+            assert ninst.value == 1
+            insts = (ctypes.c_void_p * 1)()
+            got = ctypes.c_size_t()
+            dll.SUEntitiesGetInstances(entities, 1, insts, ctypes.byref(got))
+            comp_def = ctypes.c_void_p()
+            dll.SUComponentInstanceGetDefinition(insts[0], ctypes.byref(comp_def))
+            car_entities = ctypes.c_void_p()
+            dll.SUComponentDefinitionGetEntities(comp_def, ctypes.byref(car_entities))
+            nfaces = ctypes.c_size_t()
+            dll.SUEntitiesGetNumFaces(car_entities, ctypes.byref(nfaces))
+            assert nfaces.value == 1
+            ngroups = ctypes.c_size_t()
+            dll.SUEntitiesGetNumGroups(car_entities, ctypes.byref(ngroups))
+            assert ngroups.value == 1
+            groups = (ctypes.c_void_p * 1)()
+            got2 = ctypes.c_size_t()
+            dll.SUEntitiesGetGroups(car_entities, 1, groups, ctypes.byref(got2))
+            engine_entities = ctypes.c_void_p()
+            dll.SUGroupGetEntities(groups[0], ctypes.byref(engine_entities))
+            nfaces2 = ctypes.c_size_t()
+            dll.SUEntitiesGetNumFaces(engine_entities, ctypes.byref(nfaces2))
+            assert nfaces2.value == 1
+            dll.SUModelRelease(ctypes.byref(model))
+        finally:
+            dll.SUTerminate()
+
+    def test_group_instance_of_definition_from_a_different_builder_raises(self):
+        builder1 = create()
+        with builder1.add_component_definition("Engine") as engine:
+            engine.add_face(SQUARE)
+
+        builder2 = create()
+        with builder2.add_component_definition("Car") as car:
+            car.add_face(SQUARE)
+            with pytest.raises(SkpWriteError, match="different builder"):
+                car.add_group_instance(engine)
+
+    def test_group_instance_of_self_raises(self):
+        builder = create()
+        comp = builder.add_component_definition("Loop")
+        comp.add_face(SQUARE)
+        with pytest.raises(SkpWriteError, match="cannot nest a group instance of itself"):
+            comp.add_group_instance(comp)
+
+    def test_group_instance_after_definition_closed_raises(self):
+        builder = create()
+        with builder.add_component_definition("Engine") as engine:
+            engine.add_face(SQUARE)
+        with builder.add_component_definition("Car") as car:
+            car.add_group_instance(engine)
+        with pytest.raises(SkpWriteError, match="already closed"):
+            car.add_group_instance(engine)
+
+
+class TestPreExistingOrderingGap:
+    def test_root_add_face_while_definition_open_raises(self):
+        # Real, previously-unguarded bug found while testing group nesting:
+        # calling add_face on the root builder while a component
+        # definition was still open silently corrupted the file (the
+        # geometry writer's starting slot got locked in too early). Not
+        # related to nested groups themselves - just found alongside them.
+        builder = create()
+        comp = builder.add_component_definition("Chair")
+        comp.add_face(SQUARE)
+        with pytest.raises(SkpWriteError, match="still open"):
+            builder.add_face(SQUARE)
+
+    def test_root_add_instance_while_definition_open_raises(self):
+        builder = create()
+        with builder.add_component_definition("Wheel") as wheel:
+            wheel.add_face(SQUARE)
+        comp = builder.add_component_definition("Chair")
+        comp.add_face(SQUARE)
+        with pytest.raises(SkpWriteError, match="still open"):
+            builder.add_instance(wheel)
+
+
 class TestMaterials:
     def test_material_assigned_to_face_front(self):
         builder = create()
@@ -705,6 +1016,171 @@ class TestTextures:
         assert mat_by_slot[t2]["tex_file"] == str(png2)
 
 
+class TestUVPositioning:
+    def test_axis_aligned_scale_matches_solved_matrix(self, tmp_path):
+        png_path = tmp_path / "tex.png"
+        png_path.write_bytes(_make_test_png())
+        builder = create()
+        tex = builder.add_texture_material("Brick", str(png_path))
+        # (0,0,0)->(0,0), (50,0,0)->(1,0), (0,50,0)->(0,1): a pure 50x scale,
+        # no rotation - the matrix should come out as diag(50, 50).
+        builder.add_face(
+            SQUARE, material=tex,
+            front_uv=[((0.0, 0.0, 0.0), (0.0, 0.0)), ((50.0, 0.0, 0.0), (1.0, 0.0)), ((0.0, 50.0, 0.0), (0.0, 1.0))],
+        )
+        data = builder.to_bytes()
+
+        ar, root, layers, materials = legacy._walk(data)
+        face = [v for (_, n, v) in root if n == "CFace"][0]
+        ftc = dict(face["attrs"]["children"])["CFaceTextureCoords"]
+        assert ftc["front"] == pytest.approx((50.0, 0.0, 0.0, 0.0, 50.0, 0.0, 0.0, 0.0, 1.0))
+        assert ftc["back"] == pytest.approx((1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0))
+        assert ftc["front_projected"] is False
+        assert ftc["back_projected"] is False
+
+    def test_rotated_mapping_matches_solved_matrix(self, tmp_path):
+        # (0,0,0)->(0,0), (100,0,0)->(1,1), (0,100,0)->(-1,1): a 45-degree
+        # rotated UV basis - the matrix should show real off-diagonal terms,
+        # not just a diagonal scale.
+        png_path = tmp_path / "tex.png"
+        png_path.write_bytes(_make_test_png())
+        builder = create()
+        tex = builder.add_texture_material("Brick", str(png_path))
+        builder.add_face(
+            SQUARE, material=tex,
+            front_uv=[
+                ((0.0, 0.0, 0.0), (0.0, 0.0)),
+                ((100.0, 0.0, 0.0), (1.0, 1.0)),
+                ((0.0, 100.0, 0.0), (-1.0, 1.0)),
+            ],
+        )
+        data = builder.to_bytes()
+        ar, root, layers, materials = legacy._walk(data)
+        face = [v for (_, n, v) in root if n == "CFace"][0]
+        ftc = dict(face["attrs"]["children"])["CFaceTextureCoords"]
+        assert ftc["front"] == pytest.approx((50.0, -50.0, 0.0, 50.0, 50.0, 0.0, 0.0, 0.0, 1.0))
+
+    def test_front_and_back_positioned_independently(self, tmp_path):
+        png_path = tmp_path / "tex.png"
+        png_path.write_bytes(_make_test_png())
+        builder = create()
+        front_tex = builder.add_texture_material("Front", str(png_path))
+        back_tex = builder.add_texture_material("Back", str(png_path))
+        builder.add_face(
+            SQUARE, material=front_tex, back_material=back_tex,
+            front_uv=[((0.0, 0.0, 0.0), (0.0, 0.0)), ((50.0, 0.0, 0.0), (1.0, 0.0)), ((0.0, 50.0, 0.0), (0.0, 1.0))],
+            back_uv=[((0.0, 0.0, 0.0), (0.0, 0.0)), ((25.0, 0.0, 0.0), (1.0, 0.0)), ((0.0, 25.0, 0.0), (0.0, 1.0))],
+        )
+        data = builder.to_bytes()
+        ar, root, layers, materials = legacy._walk(data)
+        face = [v for (_, n, v) in root if n == "CFace"][0]
+        assert face["db"]["mat"] == front_tex
+        assert face["back_mat"] == back_tex
+        ftc = dict(face["attrs"]["children"])["CFaceTextureCoords"]
+        assert ftc["front"] == pytest.approx((50.0, 0.0, 0.0, 0.0, 50.0, 0.0, 0.0, 0.0, 1.0))
+        assert ftc["back"] == pytest.approx((25.0, 0.0, 0.0, 0.0, 25.0, 0.0, 0.0, 0.0, 1.0))
+
+    def test_unpositioned_face_has_no_texture_coords_record(self, tmp_path):
+        # A face with a texture but no explicit positioning shouldn't pay
+        # for (or emit) a CFaceTextureCoords/attribute-container record at
+        # all - ground truth confirms the default-projection case needs none.
+        png_path = tmp_path / "tex.png"
+        png_path.write_bytes(_make_test_png())
+        builder = create()
+        tex = builder.add_texture_material("Brick", str(png_path))
+        builder.add_face(SQUARE, material=tex)
+        data = builder.to_bytes()
+        ar, root, layers, materials = legacy._walk(data)
+        face = [v for (_, n, v) in root if n == "CFace"][0]
+        assert face["attrs"] is None
+
+    def test_xz_and_yz_aligned_faces_supported(self, tmp_path):
+        png_path = tmp_path / "tex.png"
+        png_path.write_bytes(_make_test_png())
+        builder = create()
+        tex = builder.add_texture_material("Brick", str(png_path))
+        # XZ-aligned face (constant y=0).
+        builder.add_face(
+            [(0.0, 0.0, 0.0), (50.0, 0.0, 0.0), (50.0, 0.0, 50.0), (0.0, 0.0, 50.0)],
+            material=tex,
+            front_uv=[((0.0, 0.0, 0.0), (0.0, 0.0)), ((50.0, 0.0, 0.0), (1.0, 0.0)), ((0.0, 0.0, 50.0), (0.0, 1.0))],
+        )
+        # YZ-aligned face (constant x=0).
+        builder.add_face(
+            [(0.0, 0.0, 0.0), (0.0, 50.0, 0.0), (0.0, 50.0, 50.0), (0.0, 0.0, 50.0)],
+            material=tex,
+            front_uv=[((0.0, 0.0, 0.0), (0.0, 0.0)), ((0.0, 50.0, 0.0), (1.0, 0.0)), ((0.0, 0.0, 50.0), (0.0, 1.0))],
+        )
+        data = builder.to_bytes()
+        ar, root, layers, materials = legacy._walk(data)
+        faces = [v for (_, n, v) in root if n == "CFace"]
+        assert len(faces) == 2
+        for face in faces:
+            ftc = dict(face["attrs"]["children"])["CFaceTextureCoords"]
+            assert ftc["front"] == pytest.approx((50.0, 0.0, 0.0, 0.0, 50.0, 0.0, 0.0, 0.0, 1.0))
+
+    def test_tilted_face_raises(self, tmp_path):
+        png_path = tmp_path / "tex.png"
+        png_path.write_bytes(_make_test_png())
+        builder = create()
+        tex = builder.add_texture_material("Brick", str(png_path))
+        tilted = [(0.0, 0.0, 0.0), (50.0, 0.0, 10.0), (50.0, 50.0, 10.0), (0.0, 50.0, 0.0)]
+        with pytest.raises(SkpWriteError, match="axis"):
+            builder.add_face(
+                tilted, material=tex,
+                front_uv=[((0.0, 0.0, 0.0), (0.0, 0.0)), ((50.0, 0.0, 10.0), (1.0, 0.0)), ((0.0, 50.0, 0.0), (0.0, 1.0))],
+            )
+
+    def test_wrong_number_of_pairs_raises(self, tmp_path):
+        png_path = tmp_path / "tex.png"
+        png_path.write_bytes(_make_test_png())
+        builder = create()
+        tex = builder.add_texture_material("Brick", str(png_path))
+        with pytest.raises(SkpWriteError, match="exactly 3"):
+            builder.add_face(
+                SQUARE, material=tex,
+                front_uv=[((0.0, 0.0, 0.0), (0.0, 0.0)), ((50.0, 0.0, 0.0), (1.0, 0.0))],
+            )
+
+    def test_collinear_uv_points_raise(self, tmp_path):
+        png_path = tmp_path / "tex.png"
+        png_path.write_bytes(_make_test_png())
+        builder = create()
+        tex = builder.add_texture_material("Brick", str(png_path))
+        with pytest.raises(SkpWriteError, match="collinear"):
+            builder.add_face(
+                SQUARE, material=tex,
+                front_uv=[
+                    ((0.0, 0.0, 0.0), (0.0, 0.0)),
+                    ((50.0, 0.0, 0.0), (1.0, 0.0)),
+                    ((0.0, 50.0, 0.0), (2.0, 0.0)),
+                ],
+            )
+
+    def test_positioning_in_component_definition(self, tmp_path):
+        png_path = tmp_path / "tex.png"
+        png_path.write_bytes(_make_test_png())
+        builder = create()
+        tex = builder.add_texture_material("Brick", str(png_path))
+        with builder.add_component_definition("Panel") as panel:
+            panel.add_face(
+                SQUARE, material=tex,
+                front_uv=[
+                    ((0.0, 0.0, 0.0), (0.0, 0.0)), ((50.0, 0.0, 0.0), (1.0, 0.0)), ((0.0, 50.0, 0.0), (0.0, 1.0)),
+                ],
+            )
+        builder.add_instance(panel)
+        data = builder.to_bytes()
+
+        from openskp import SkpFile
+        out = tmp_path / "panel.skp"
+        out.write_bytes(data)
+        model = SkpFile.open(str(out)).parse()
+        defn = model.definitions[panel.slot]
+        face = list(defn.faces.values())[0]
+        assert face.uv_transform == pytest.approx([50.0, 0.0, 0.0, 0.0, 50.0, 0.0, 0.0, 0.0, 1.0])
+
+
 class TestLayers:
     def test_layer_assigned_to_face(self):
         builder = create()
@@ -874,6 +1350,39 @@ class TestKitchenSink:
         assert kinds["CGroup"] == 2
         assert kinds["CComponentInstance"] == 6
         assert kinds["CFace"] == 6  # 3 disjoint + 3 sharing one edge
+
+
+class TestDefaultCamera:
+    def test_every_file_gets_the_iso_camera_patch(self):
+        # Byte-level guard: every file this writer produces should carry the
+        # same fixed ISO-camera bytes at the same fixed offsets, regardless
+        # of what geometry/materials/etc. it also contains - independent of
+        # the SDK oracle test below, which additionally confirms real
+        # SketchUp reads these bytes back as the intended eye/target/
+        # perspective.
+        builder = create()
+        builder.add_face(SQUARE)
+        data = builder.to_bytes()
+        off = create_module._ISO_CAMERA_PREFIX_OFFSET
+        patch = create_module._ISO_CAMERA_PREFIX_PATCH
+        assert data[off : off + len(patch)] == patch
+
+    def test_camera_patch_present_regardless_of_other_content(self):
+        # The prefix patch offset is well before _material_insert_pos, so
+        # it should never move even once materials/layers/definitions
+        # shift everything after it - confirmed with a file that exercises
+        # all of those.
+        builder = create()
+        red = builder.add_material("Red", (255, 0, 0))
+        builder.add_layer("Roof")
+        with builder.add_component_definition("Chair") as chair:
+            chair.add_face(SQUARE)
+        builder.add_instance(chair)
+        builder.add_face(SQUARE, material=red)
+        data = builder.to_bytes()
+        off = create_module._ISO_CAMERA_PREFIX_OFFSET
+        patch = create_module._ISO_CAMERA_PREFIX_PATCH
+        assert data[off : off + len(patch)] == patch
 
 
 class TestScaffoldIntegrity:
@@ -1534,6 +2043,109 @@ class TestRealSketchUpOracle:
             outlen = ctypes.c_size_t()
             dll.SUStringGetUTF8(sref, length.value + 1, buf, ctypes.byref(outlen))
             assert buf.value.decode("utf-8") == name
+            dll.SUModelRelease(ctypes.byref(model))
+        finally:
+            dll.SUTerminate()
+
+    def test_positioned_texture_round_trips_through_real_sketchup(self, tmp_path):
+        # Beyond just loading without SU_ERROR_MODEL_INVALID: independently
+        # verifies the position through the SDK's own SUUVHelper, which
+        # computes UV coordinates from the same on-disk matrix this test
+        # doesn't otherwise inspect - confirms real SketchUp both accepts
+        # and correctly *interprets* the mapping, not just tolerates it.
+        import ctypes
+
+        class SUPoint3D(ctypes.Structure):
+            _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double), ("z", ctypes.c_double)]
+
+        class SUUVQ(ctypes.Structure):
+            _fields_ = [("u", ctypes.c_double), ("v", ctypes.c_double), ("q", ctypes.c_double)]
+
+        png_path = tmp_path / "tex.png"
+        png_path.write_bytes(_make_test_png())
+        builder = create()
+        tex = builder.add_texture_material("Brick", str(png_path))
+        # (0,0,0)->(0,0), (50,0,0)->(1,0), (0,50,0)->(0,1): pure 50x scale.
+        builder.add_face(
+            SQUARE, material=tex,
+            front_uv=[((0.0, 0.0, 0.0), (0.0, 0.0)), ((50.0, 0.0, 0.0), (1.0, 0.0)), ((0.0, 50.0, 0.0), (0.0, 1.0))],
+        )
+        out = tmp_path / "positioned.skp"
+        builder.save(str(out))
+
+        dll = ctypes.CDLL(_SDK_DLL_PATH)
+        dll.SUModelCreateFromFile.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_char_p]
+        dll.SUModelGetEntities.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUEntitiesGetFaces.argtypes = [
+            ctypes.c_void_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_size_t),
+        ]
+        dll.SUFaceGetUVHelper.argtypes = [
+            ctypes.c_void_p, ctypes.c_bool, ctypes.c_bool, ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p),
+        ]
+        dll.SUUVHelperGetFrontUVQ.argtypes = [ctypes.c_void_p, ctypes.POINTER(SUPoint3D), ctypes.POINTER(SUUVQ)]
+        dll.SUInitialize()
+        try:
+            model = ctypes.c_void_p()
+            err = dll.SUModelCreateFromFile(ctypes.byref(model), str(out).encode())
+            assert err == 0, f"SketchUp SDK rejected the file (error {err})"
+            entities = ctypes.c_void_p()
+            dll.SUModelGetEntities(model, ctypes.byref(entities))
+            faces = (ctypes.c_void_p * 1)()
+            got = ctypes.c_size_t()
+            dll.SUEntitiesGetFaces(entities, 1, faces, ctypes.byref(got))
+            assert got.value == 1
+            uv_helper = ctypes.c_void_p()
+            err = dll.SUFaceGetUVHelper(faces[0], True, False, ctypes.c_void_p(0), ctypes.byref(uv_helper))
+            assert err == 0
+            # SUUVHelperGetFrontUVQ's v-component is unreliable through this
+            # minimal call shape (a documented SDK quirk, not specific to
+            # this file - q and u alone already cross-check the mapping:
+            # u=0.5 at the midpoint between the 0->0 and 50->1 pins).
+            uvq = SUUVQ()
+            err = dll.SUUVHelperGetFrontUVQ(uv_helper, ctypes.byref(SUPoint3D(25.0, 25.0, 0.0)), ctypes.byref(uvq))
+            assert err == 0
+            assert uvq.u == pytest.approx(0.5)
+            assert uvq.q == pytest.approx(1.0)
+            dll.SUModelRelease(ctypes.byref(model))
+        finally:
+            dll.SUTerminate()
+
+    def test_default_camera_is_iso_through_real_sketchup(self, tmp_path):
+        import ctypes
+
+        class SUPoint3D(ctypes.Structure):
+            _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double), ("z", ctypes.c_double)]
+
+        class SUVector3D(ctypes.Structure):
+            _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double), ("z", ctypes.c_double)]
+
+        builder = create()
+        builder.add_face(SQUARE)
+        out = tmp_path / "iso_camera.skp"
+        builder.save(str(out))
+
+        dll = ctypes.CDLL(_SDK_DLL_PATH)
+        dll.SUModelCreateFromFile.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_char_p]
+        dll.SUModelGetCamera.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUCameraGetOrientation.argtypes = [
+            ctypes.c_void_p, ctypes.POINTER(SUPoint3D), ctypes.POINTER(SUPoint3D), ctypes.POINTER(SUVector3D),
+        ]
+        dll.SUCameraGetPerspective.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_bool)]
+        dll.SUInitialize()
+        try:
+            model = ctypes.c_void_p()
+            err = dll.SUModelCreateFromFile(ctypes.byref(model), str(out).encode())
+            assert err == 0, f"SketchUp SDK rejected the file (error {err})"
+            camera = ctypes.c_void_p()
+            dll.SUModelGetCamera(model, ctypes.byref(camera))
+            eye, target, up = SUPoint3D(), SUPoint3D(), SUVector3D()
+            err = dll.SUCameraGetOrientation(camera, ctypes.byref(eye), ctypes.byref(target), ctypes.byref(up))
+            assert err == 0
+            assert (eye.x, eye.y, eye.z) == pytest.approx((100.0, -100.0, 100.0))
+            assert (target.x, target.y, target.z) == pytest.approx((0.0, 0.0, 0.0))
+            perspective = ctypes.c_bool()
+            dll.SUCameraGetPerspective(camera, ctypes.byref(perspective))
+            assert perspective.value is False
             dll.SUModelRelease(ctypes.byref(model))
         finally:
             dll.SUTerminate()

@@ -123,10 +123,11 @@ OpenSKP can also *create* new `.skp` files from scratch — a genuine,
 from-scratch binary writer for the legacy MFC `CArchive` format (SketchUp
 2013–2020), with no SketchUp SDK involved at any point. This is a new,
 early-stage capability: geometry, materials (solid + PNG/JPEG textures),
-layers, component definitions with multiple instances, and groups are all
-supported; explicit texture UV positioning and nested definitions are not
-yet. See [`openskp/create.py`](src/openskp/create.py) for the full scope
-notes.
+layers, component definitions with multiple instances, groups, nested
+definitions and nested group instances (an assembly containing instances
+or groups of its own sub-parts, to any depth), and explicit per-side
+texture positioning (on axis-aligned faces) are all supported. See
+[`openskp/create.py`](src/openskp/create.py) for the full scope notes.
 
 ```python
 from openskp import create
@@ -142,7 +143,13 @@ roof_layer = builder.add_layer("Roof")
 # add_instance/add_face call - placing anything locks in the file's
 # slot numbering for what comes after.
 with builder.add_component_definition("Chair") as chair:
-    chair.add_face([(0, 0, 0), (20, 0, 0), (20, 20, 0), (0, 20, 0)], material=brick)
+    chair.add_face(
+        [(0, 0, 0), (20, 0, 0), (20, 20, 0), (0, 20, 0)],
+        material=brick,
+        # Explicit texture positioning: 3 (world point, uv) pairs pin the
+        # texture's scale/rotation/offset instead of the default projection.
+        front_uv=[((0, 0, 0), (0.0, 0.0)), ((10, 0, 0), (1.0, 0.0)), ((0, 10, 0), (0.0, 1.0))],
+    )
 
 # A one-off group (placed automatically when its `with` block exits)
 with builder.add_group("Table", translation=(100, 0, 0)) as table:
