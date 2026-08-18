@@ -55,8 +55,14 @@ for the full scope notes.
   not `num_segments` disconnected straight edges that merely trace that
   shape. Every edge in the tessellation shares one real curve backref,
   confirmed via the SDK's own `SUEdgeGetCurve`/`SUCurveGetType` to resolve
-  to a single, correctly-typed arc entity. A partial (open) arc and
-  freeform polyline curves (`CCurve`) are not yet exposed as public API.
+  to a single, correctly-typed arc entity.
+- Partial (open) arcs (`add_arc`) — the same genuine `CArcCurve` entity as
+  `add_circle`, but a chain of edges with no face, swept between
+  caller-given `start_angle`/`end_angle` (radians). Confirmed via the SDK
+  that the written endpoint coordinates land exactly where the requested
+  sweep says they should, not just that "some curve object" exists.
+  Freeform polyline curves (`CCurve`, distinct from a true arc) are not
+  yet exposed as public API.
 - Every file now opens to the standard "Iso" view (parallel projection,
   looking at the origin) instead of the blank scaffold's own arbitrary
   default camera.

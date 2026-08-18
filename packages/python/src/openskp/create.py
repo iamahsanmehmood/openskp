@@ -36,14 +36,13 @@ are involved, and how.
   component" attributes use - via each of their ``attributes`` parameters;
   not yet supported on groups (ground truth shows a group's own
   attribute pointer is always null, unlike a component instance's).
-  Circular faces - real, editable-by-radius SketchUp arc/circle
-  entities, not N disconnected straight edges that merely trace that
-  shape - are supported via :meth:`SkpBuilder.add_circle` /
-  :meth:`ComponentDefinitionBuilder.add_circle`; a partial (open) arc
-  with no face is a natural follow-up the underlying
-  :meth:`_ArchiveWriter.write_arc_curve` primitive already supports but
-  isn't yet exposed as public API, and freeform polyline curve grouping
-  (``CCurve``, distinct from a true arc) is also not yet supported.
+  Circular faces and partial (open) arcs - real, editable-by-radius
+  SketchUp arc/circle entities, not disconnected straight edges that
+  merely trace that shape - are supported via :meth:`SkpBuilder.
+  add_circle` / :meth:`SkpBuilder.add_arc` and their
+  :class:`ComponentDefinitionBuilder` equivalents; freeform polyline
+  curve grouping (``CCurve``, distinct from a true arc) is not yet
+  supported.
 * Coordinates are in **inches** - SketchUp's own native internal unit for
   this era of the format. Converting from another unit is the caller's
   responsibility for now.
@@ -353,6 +352,36 @@ def _circle_points(
     pts: List[Point3] = []
     for i in range(num_segments):
         angle = 2.0 * math.pi * i / num_segments
+        c, s = math.cos(angle), math.sin(angle)
+        pts.append((
+            center[0] + radius * (c * u[0] + s * w[0]),
+            center[1] + radius * (c * u[1] + s * w[1]),
+            center[2] + radius * (c * u[2] + s * w[2]),
+        ))
+    return pts
+
+
+def _arc_points(
+    center: Point3,
+    normal: Tuple[float, float, float],
+    radius: float,
+    num_segments: int,
+    u: Tuple[float, float, float],
+    w: Tuple[float, float, float],
+    start_angle: float,
+    end_angle: float,
+) -> List[Point3]:
+    """The ``num_segments + 1`` points (both endpoints included) tracing a
+    PARTIAL arc from ``start_angle`` to ``end_angle`` (radians, measured
+    from ``u`` toward ``w`` - the same convention :func:`_circle_points`
+    and :meth:`_ArchiveWriter.write_arc_curve` use, so this is a strict
+    generalization: ``_circle_points(...)`` is equivalent to
+    ``_arc_points(..., 0.0, 2*pi)[:-1]``, the closing point dropped since
+    a full circle's own last edge back to the start is implicit).
+    """
+    pts: List[Point3] = []
+    for i in range(num_segments + 1):
+        angle = start_angle + (end_angle - start_angle) * i / num_segments
         c, s = math.cos(angle), math.sin(angle)
         pts.append((
             center[0] + radius * (c * u[0] + s * w[0]),
@@ -946,6 +975,110 @@ class _ArchiveWriter:
         )
         return 1
 
+    def _write_edge_chain(
+        self,
+        points: Sequence[Point3],
+        vertex_slots: Dict[Point3, int],
+        edge_registry: Dict[FrozenSet[int], Tuple[int, int]],
+        closed: bool,
+        hidden_edges: bool = False,
+        soft_edges: bool = False,
+        smooth_edges: bool = False,
+        curve_params: Optional[
+            Tuple[Point3, Tuple[float, float, float], Tuple[float, float, float], float, float, float, int]
+        ] = None,
+    ) -> Tuple[List[int], List[int], int]:
+        """Write a chain of straight ``CEdge`` records connecting ``points``
+        in order, sharing vertices/edges via ``vertex_slots``/
+        ``edge_registry`` exactly like `write_face` (which uses this for
+        its own, always-``closed`` polygon boundary) - ``closed=True``
+        also connects the last point back to the first (an ``n``-edge
+        loop); ``closed=False`` stops after the last pair (an ``n-1``-edge
+        open chain, for a partial arc with no face).
+
+        Returns ``(edge_slots, edge_senses, new_entities)`` - the last is
+        how many new root-entity-list slots were consumed (edges newly
+        declared; the caller adds any of its own, e.g. a face record).
+
+        ``curve_params``, if given, is a ``(center, normal, xaxis,
+        start_angle, end_angle, radius, num_segments)`` tuple for
+        :meth:`write_arc_curve` - ground truth shows the shared
+        ``CArcCurve`` is declared inline as the FIRST newly-declared
+        edge's own "curve" field, and every other edge newly declared by
+        this call backrefs that same slot instead of writing a null curve.
+        """
+        n = len(points)
+        pair_count = n if closed else n - 1
+        point_slots = [vertex_slots.get(p) for p in points]
+        edge_slots: List[int] = []
+        edge_senses: List[int] = []
+        new_entities = 0
+        curve_slot: Optional[int] = None
+
+        for i in range(pair_count):
+            v1_idx, v2_idx = i, (i + 1) % n
+            v1_known, v2_known = point_slots[v1_idx], point_slots[v2_idx]
+            key = (
+                frozenset((v1_known, v2_known))
+                if v1_known is not None and v2_known is not None
+                else None
+            )
+            if key is not None and key in edge_registry:
+                edge_slot, fwd_v1 = edge_registry[key]
+                edge_slots.append(edge_slot)
+                edge_senses.append(0 if fwd_v1 == v1_known else 1)
+                continue
+
+            edge_slot = self._new_of_known_class("CEdge", schema=2)
+            self._preamble()
+            self._drawbase(hidden=hidden_edges, soft=soft_edges, smooth=smooth_edges)
+            for idx in (v1_idx, v2_idx):
+                if point_slots[idx] is None:
+                    point_slots[idx] = self._write_vertex(points[idx])
+                    vertex_slots[points[idx]] = point_slots[idx]
+                else:
+                    self._backref(point_slots[idx])
+            if curve_params is not None:
+                if curve_slot is None:
+                    curve_slot = self.write_arc_curve(*curve_params)
+                else:
+                    self._backref(curve_slot)
+            else:
+                self._null()  # curve = None
+            edge_slots.append(edge_slot)
+            edge_senses.append(0)
+            new_entities += 1
+            edge_registry[frozenset((point_slots[v1_idx], point_slots[v2_idx]))] = (
+                edge_slot,
+                point_slots[v1_idx],
+            )
+
+        return edge_slots, edge_senses, new_entities
+
+    def write_arc(
+        self,
+        points: Sequence[Point3],
+        vertex_slots: Dict[Point3, int],
+        edge_registry: Dict[FrozenSet[int], Tuple[int, int]],
+        curve_params: Tuple[Point3, Tuple[float, float, float], Tuple[float, float, float], float, float, float, int],
+        hidden_edges: bool = False,
+        soft_edges: bool = False,
+        smooth_edges: bool = False,
+    ) -> int:
+        """Write a partial (open) arc as a chain of straight ``CEdge``
+        records - no face, unlike `write_face`'s always-closed polygon
+        boundary. ``points`` are the ``num_segments + 1`` points along the
+        arc in order (see :func:`_arc_points`); ``curve_params`` are the
+        same args :meth:`write_arc_curve` needs, shared by every edge here
+        exactly like `write_face`'s ``curve_params``. Returns how many new
+        root-entity-list slots were consumed (edges newly declared).
+        """
+        _, _, new_entities = self._write_edge_chain(
+            points, vertex_slots, edge_registry, False,
+            hidden_edges, soft_edges, smooth_edges, curve_params,
+        )
+        return new_entities
+
     def write_face(
         self,
         points: Sequence[Point3],
@@ -1012,50 +1145,10 @@ class _ArchiveWriter:
         slot instead of writing a null curve. An edge already shared
         with a previous face is left alone either way.
         """
-        n = len(points)
-        point_slots = [vertex_slots.get(p) for p in points]
-        edge_slots: List[int] = []
-        edge_senses: List[int] = []
-        new_entities = 0
-        curve_slot: Optional[int] = None
-
-        for i in range(n):
-            v1_idx, v2_idx = i, (i + 1) % n
-            v1_known, v2_known = point_slots[v1_idx], point_slots[v2_idx]
-            key = (
-                frozenset((v1_known, v2_known))
-                if v1_known is not None and v2_known is not None
-                else None
-            )
-            if key is not None and key in edge_registry:
-                edge_slot, fwd_v1 = edge_registry[key]
-                edge_slots.append(edge_slot)
-                edge_senses.append(0 if fwd_v1 == v1_known else 1)
-                continue
-
-            edge_slot = self._new_of_known_class("CEdge", schema=2)
-            self._preamble()
-            self._drawbase(hidden=hidden_edges, soft=soft_edges, smooth=smooth_edges)
-            for idx in (v1_idx, v2_idx):
-                if point_slots[idx] is None:
-                    point_slots[idx] = self._write_vertex(points[idx])
-                    vertex_slots[points[idx]] = point_slots[idx]
-                else:
-                    self._backref(point_slots[idx])
-            if curve_params is not None:
-                if curve_slot is None:
-                    curve_slot = self.write_arc_curve(*curve_params)
-                else:
-                    self._backref(curve_slot)
-            else:
-                self._null()  # curve = None
-            edge_slots.append(edge_slot)
-            edge_senses.append(0)
-            new_entities += 1
-            edge_registry[frozenset((point_slots[v1_idx], point_slots[v2_idx]))] = (
-                edge_slot,
-                point_slots[v1_idx],
-            )
+        edge_slots, edge_senses, new_entities = self._write_edge_chain(
+            points, vertex_slots, edge_registry, True,
+            hidden_edges, soft_edges, smooth_edges, curve_params,
+        )
 
         nx, ny, nz, d = _plane_from_polygon(points)
 
@@ -1077,7 +1170,7 @@ class _ArchiveWriter:
         # silent-drop failure mode as the drawbase padding above.
         self.buf += bytes([1, 1])
 
-        for i in range(n):
+        for i in range(len(edge_slots)):
             self._new_of_known_class("CEdgeUse", schema=1)
             self._preamble(pid=0)
             self._backref(edge_slots[i])
@@ -1234,6 +1327,39 @@ class ComponentDefinitionBuilder:
             hidden, False, False, False,
             front_uv, back_uv, attribute_dicts,
             curve_params=curve_params,
+        )
+
+    def add_arc(
+        self,
+        center: Point3,
+        normal: Tuple[float, float, float],
+        radius: float,
+        start_angle: float,
+        end_angle: float,
+        num_segments: int = 24,
+        hidden_edges: bool = False,
+        soft_edges: bool = False,
+        smooth_edges: bool = False,
+    ) -> None:
+        """Add one partial (open) arc to this definition - same signature
+        and behavior as :meth:`SkpBuilder.add_arc`, except vertices/edges
+        are shared only within this definition."""
+        self._check_writable("arcs")
+        if not (3 <= num_segments <= 255):
+            raise SkpWriteError(f"num_segments must be between 3 and 255, got {num_segments}")
+        if end_angle == start_angle:
+            raise SkpWriteError("start_angle and end_angle must differ - use add_circle for a full circle")
+        center = (float(center[0]), float(center[1]), float(center[2]))
+        normal = _normalize3((float(normal[0]), float(normal[1]), float(normal[2])))
+        radius = float(radius)
+        writer = self._skp._definition_writer
+        u, w = _circle_basis(normal)
+        xaxis = (radius * u[0], radius * u[1], radius * u[2])
+        curve_params = (center, normal, xaxis, float(start_angle), float(end_angle), radius, num_segments)
+        points = _arc_points(center, normal, radius, num_segments, u, w, float(start_angle), float(end_angle))
+        self._new_entity_count += writer.write_arc(
+            points, self._vertex_slots, self._edge_registry, curve_params,
+            hidden_edges, soft_edges, smooth_edges,
         )
 
     def add_instance(
@@ -1845,6 +1971,59 @@ class SkpBuilder:
             curve_params=curve_params,
         )
         self._face_count += 1
+
+    def add_arc(
+        self,
+        center: Point3,
+        normal: Tuple[float, float, float],
+        radius: float,
+        start_angle: float,
+        end_angle: float,
+        num_segments: int = 24,
+        hidden_edges: bool = False,
+        soft_edges: bool = False,
+        smooth_edges: bool = False,
+    ) -> None:
+        """Add one partial (open) arc - a genuine SketchUp arc entity
+        (editable by radius/angle, re-tessellatable), not disconnected
+        straight edges that merely trace that shape. Unlike `add_circle`,
+        this creates edges only, no face.
+
+        ``center``/``radius`` are in inches; ``normal`` is the arc's
+        plane normal (need not be a unit vector). ``start_angle``/
+        ``end_angle`` (radians) measure the sweep from an arbitrary but
+        fixed 0-angle reference direction in that plane (perpendicular to
+        ``normal``, chosen automatically the same way for every arc/circle
+        built by this same normal) - there's no vertex/edge to derive a
+        caller-visible "angle 0" from the way a face has its own first
+        edge, so the reference direction itself isn't exposed. Sweeps in
+        either direction (``end_angle`` less than or greater than
+        ``start_angle``) and sweeps beyond a full turn are both valid.
+        ``num_segments`` (3-255) controls tessellation. ``hidden_edges``/
+        ``soft_edges``/``smooth_edges`` apply to every edge (all newly
+        declared, since an arc's own points are essentially never shared
+        with prior geometry).
+
+        >>> import math
+        >>> builder.add_arc((50, 50, 0), (0, 0, 1), radius=40, start_angle=0, end_angle=math.pi / 2)
+        """
+        if not (3 <= num_segments <= 255):
+            raise SkpWriteError(f"num_segments must be between 3 and 255, got {num_segments}")
+        if end_angle == start_angle:
+            raise SkpWriteError("start_angle and end_angle must differ - use add_circle for a full circle")
+        center = (float(center[0]), float(center[1]), float(center[2]))
+        normal = _normalize3((float(normal[0]), float(normal[1]), float(normal[2])))
+        radius = float(radius)
+        self._ensure_geometry_writer()
+        u, w = _circle_basis(normal)
+        xaxis = (radius * u[0], radius * u[1], radius * u[2])
+        curve_params = (center, normal, xaxis, float(start_angle), float(end_angle), radius, num_segments)
+        points = _arc_points(center, normal, radius, num_segments, u, w, float(start_angle), float(end_angle))
+        self._new_entity_count += self._geometry_writer.write_arc(
+            points, self._vertex_slots, self._edge_registry, curve_params,
+            hidden_edges, soft_edges, smooth_edges,
+        )
+        self._face_count += 1  # reuses the "at least one root entity" check in to_bytes
 
     def to_bytes(self) -> bytes:
         """Return the finished file's bytes."""
