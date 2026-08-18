@@ -25,6 +25,7 @@ others, that's stated plainly rather than smoothed over.
 - [Observability: progress and errors](#observability)
 - [Error handling](#error-handling)
 - [Export capabilities](#export-capabilities)
+- [Write capabilities](#write-capabilities)
 - [The web viewer](#the-web-viewer)
 - [Known cross-language differences](#known-cross-language-differences)
 - [Troubleshooting](#troubleshooting)
@@ -429,6 +430,60 @@ for (const auto& prim : scene.glb_primitives) {
 }
 ```
 
+## Write capabilities
+
+Everything above this section is about reading `.skp` files. As of this
+writing, one language — Python — can also go the other direction: create a
+new `.skp` file from nothing.
+
+| Language | Write new `.skp` files |
+|---|---|
+| Python | 🧪 `openskp.create()` — early-stage, legacy-format (2013–2020) only |
+| TypeScript | ❌ not yet |
+| .NET | ❌ not yet |
+| Dart | ❌ not yet |
+| C++ | ❌ not yet |
+
+`openskp.create()` returns an `SkpBuilder` that assembles a legacy MFC
+`CArchive`-format `.skp` file byte-for-byte — geometry, materials
+(solid-color and PNG/JPEG-textured), named layers, reusable component
+definitions with multiple positioned instances, and groups — then
+`.save(path)` writes it to disk. No SketchUp SDK is involved at import,
+build, or save time; the writer works by inverting this project's own
+reader logic (the same class-ref/back-ref object-graph protocol and entity
+encodings documented in [BINARY_FORMAT.md](BINARY_FORMAT.md)), against a
+small bundled blank-document scaffold it splices new entities into.
+
+```python
+from openskp import create
+
+builder = create()
+red = builder.add_material("Red", (255, 0, 0))
+with builder.add_component_definition("Chair") as chair:
+    chair.add_face([(0, 0, 0), (20, 0, 0), (20, 20, 0), (0, 20, 0)])
+builder.add_instance(chair, translation=(50, 0, 0))
+builder.add_face([(0, 0, 0), (100, 0, 0), (100, 100, 0), (0, 100, 0)], material=red)
+builder.save("output.skp")
+```
+
+One ordering rule falls out of how the format's internal slot numbering
+works: every `add_component_definition`/`add_group` call must happen
+before any `add_face`/`add_instance` call on the builder itself — placing
+root-level geometry locks in the numbering for everything that comes
+after it. `ComponentDefinitionBuilder` (the object yielded by the `with`
+block) is exported alongside `SkpBuilder` from the top-level `openskp`
+package.
+
+Explicitly out of scope for this first pass: explicit texture UV
+positioning/pinning (default planar projection only), nested definitions
+(a definition containing another definition's instances or groups), and
+editing an existing arbitrary `.skp` file (a separately harder problem —
+real SketchUp re-serializes the whole document on save rather than
+appending to it — not attempted here). See
+[`openskp/create.py`](../packages/python/src/openskp/create.py) for the
+full, current scope notes, and the [Python package README](../packages/python/README.md#writing-early-stage)
+for a longer worked example.
+
 ## The web viewer
 
 [`examples/web-viewer/`](../examples/web-viewer/) is a full drag-and-drop
@@ -492,6 +547,14 @@ The .NET port exposes `SkpFile` as a static class with factory methods
 (`SkpFile.Parse`, `SkpFile.BuildScene`, `SkpFile.Open`), rather than requiring an
 instantiated file handle object before invoking `.Parse()`. This is a deliberate
 C# idiom choice that matches standard .NET framework library designs (e.g. `System.IO.File`).
+
+### Write support — Python only
+
+Covered above under [Write capabilities](#write-capabilities): Python is
+currently the only port that can create new `.skp` files (`openskp.create()`).
+This is a genuine capability gap, not a shape difference — TypeScript,
+.NET, Dart, and C++ remain read/export-only until a writer is ported to
+each. Contributions bringing the other four ports to parity are welcome.
 
 ### C++ `materials_by_id()` helper
 

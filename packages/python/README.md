@@ -25,6 +25,10 @@ first-class packages for TypeScript, .NET, Dart, and C++ — see the
 [project README](https://github.com/iamahsanmehmood/openskp) for the full
 cross-language picture.
 
+🧪 This Python package can also *write* new `.skp` files from scratch now
+— early-stage and Python-only for the moment (see
+[Writing](#writing-early-stage) below).
+
 ## Features
 
 - **Full-fidelity parsing** — vertices, edges, faces, normals, UV
@@ -43,6 +47,10 @@ cross-language picture.
   largest single definition, not the whole file.
 - **Structured observability** — opt-in progress reporting and
   location-carrying parse errors for debugging malformed or unusual files.
+- **Write support (early-stage, Python-only)** — build new legacy-format
+  `.skp` files from scratch: geometry, materials (solid + PNG/JPEG
+  textures), layers, component definitions with multiple instances, and
+  groups. No SDK involved. See [Writing](#writing-early-stage) below.
 
 ## Installation
 
@@ -109,6 +117,50 @@ meta = json_export.to_dict(model, scene=scene)
 json_export.export(model, "output.json", scene=scene)
 ```
 
+## Writing (early-stage)
+
+OpenSKP can also *create* new `.skp` files from scratch — a genuine,
+from-scratch binary writer for the legacy MFC `CArchive` format (SketchUp
+2013–2020), with no SketchUp SDK involved at any point. This is a new,
+early-stage capability: geometry, materials (solid + PNG/JPEG textures),
+layers, component definitions with multiple instances, and groups are all
+supported; explicit texture UV positioning and nested definitions are not
+yet. See [`openskp/create.py`](src/openskp/create.py) for the full scope
+notes.
+
+```python
+from openskp import create
+
+builder = create()
+
+# Materials and layers
+red = builder.add_material("Red", (255, 0, 0))
+brick = builder.add_texture_material("Brick", "brick.png")
+roof_layer = builder.add_layer("Roof")
+
+# All add_component_definition/add_group calls must come before any
+# add_instance/add_face call - placing anything locks in the file's
+# slot numbering for what comes after.
+with builder.add_component_definition("Chair") as chair:
+    chair.add_face([(0, 0, 0), (20, 0, 0), (20, 20, 0), (0, 20, 0)], material=brick)
+
+# A one-off group (placed automatically when its `with` block exits)
+with builder.add_group("Table", translation=(100, 0, 0)) as table:
+    table.add_face([(0, 0, 0), (60, 0, 0), (60, 40, 0), (0, 40, 0)])
+
+# Now place instances of the reusable component
+builder.add_instance(chair, translation=(0, 0, 0))
+builder.add_instance(chair, translation=(50, 0, 0))
+
+# Root-level geometry
+builder.add_face(
+    [(0, 0, 0), (200, 0, 0), (200, 150, 0), (0, 150, 0)],
+    material=red, layer=roof_layer,
+)
+
+builder.save("output.skp")
+```
+
 ## Package Structure
 
 | Module | Purpose |
@@ -122,6 +174,7 @@ json_export.export(model, "output.json", scene=scene)
 | `openskp.metadata` | Dynamic properties and scene hierarchy |
 | `openskp.transforms` | 3D matrix transforms and coordinate conversion |
 | `openskp.export` | GLB, OBJ/MTL, STL, PLY, DXF, IFC4, and JSON exporters |
+| `openskp.create` | Writer — build new `.skp` files from scratch (early-stage) |
 
 ## Requirements
 
