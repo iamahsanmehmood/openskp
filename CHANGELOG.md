@@ -50,6 +50,13 @@ for the full scope notes.
   be `str`, `int`, or `float`; not yet supported on groups, since ground
   truth shows a group's own attribute pointer is always null unlike a
   component instance's.
+- Circular faces (`add_circle` on `SkpBuilder`/`ComponentDefinitionBuilder`)
+  — a genuine, editable-by-radius SketchUp arc/circle entity (`CArcCurve`),
+  not `num_segments` disconnected straight edges that merely trace that
+  shape. Every edge in the tessellation shares one real curve backref,
+  confirmed via the SDK's own `SUEdgeGetCurve`/`SUCurveGetType` to resolve
+  to a single, correctly-typed arc entity. A partial (open) arc and
+  freeform polyline curves (`CCurve`) are not yet exposed as public API.
 - Every file now opens to the standard "Iso" view (parallel projection,
   looking at the origin) instead of the blank scaffold's own arbitrary
   default camera.

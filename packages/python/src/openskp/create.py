@@ -36,6 +36,14 @@ are involved, and how.
   component" attributes use - via each of their ``attributes`` parameters;
   not yet supported on groups (ground truth shows a group's own
   attribute pointer is always null, unlike a component instance's).
+  Circular faces - real, editable-by-radius SketchUp arc/circle
+  entities, not N disconnected straight edges that merely trace that
+  shape - are supported via :meth:`SkpBuilder.add_circle` /
+  :meth:`ComponentDefinitionBuilder.add_circle`; a partial (open) arc
+  with no face is a natural follow-up the underlying
+  :meth:`_ArchiveWriter.write_arc_curve` primitive already supports but
+  isn't yet exposed as public API, and freeform polyline curve grouping
+  (``CCurve``, distinct from a true arc) is also not yet supported.
 * Coordinates are in **inches** - SketchUp's own native internal unit for
   this era of the format. Converting from another unit is the caller's
   responsibility for now.
@@ -77,6 +85,7 @@ happens at import time, write time, or any other runtime path.
 from __future__ import annotations
 
 import hashlib
+import math
 import re
 import struct
 import time
@@ -238,6 +247,8 @@ _DEFINITION_BASE_BLOCK = bytes([0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
 
 _FTC_SCHEMA = 4
 
+_ARCCURVE_SCHEMA = 3
+
 # A face with no explicit texture positioning stores no CFaceTextureCoords
 # at all, so this identity is only ever used to fill the *other* side's slot
 # when just one of front/back is explicitly positioned - real SketchUp still
@@ -304,6 +315,51 @@ def _face_uv_basis(
     ))
     w = _normalize3(_cross(normal, u))
     return u, w
+
+
+def _circle_basis(
+    normal: Tuple[float, float, float],
+) -> Tuple[Tuple[float, float, float], Tuple[float, float, float]]:
+    """An arbitrary orthonormal in-plane basis (U, W) for a circle/arc's
+    plane, given only its normal - unlike :func:`_face_uv_basis` there's
+    no "first edge" to derive U from here, so pick whichever of world
+    +Z/+X is less parallel to ``normal`` as a seed and Gram-Schmidt it
+    against ``normal`` to get U, then W = normal x U. This choice of seed
+    only affects where angle 0 points around the circle, not its shape.
+    """
+    seed = (0.0, 0.0, 1.0) if abs(normal[2]) < 0.9 else (1.0, 0.0, 0.0)
+    dot = seed[0] * normal[0] + seed[1] * normal[1] + seed[2] * normal[2]
+    u_raw = (seed[0] - dot * normal[0], seed[1] - dot * normal[1], seed[2] - dot * normal[2])
+    u = _normalize3(u_raw)
+    w = _normalize3(_cross(normal, u))
+    return u, w
+
+
+def _circle_points(
+    center: Point3,
+    normal: Tuple[float, float, float],
+    radius: float,
+    num_segments: int,
+    u: Tuple[float, float, float],
+    w: Tuple[float, float, float],
+) -> List[Point3]:
+    """The ``num_segments`` polygon vertices approximating a full circle
+    in ``center``/``radius``/``normal``'s plane, walking counter-clockwise
+    around ``normal`` (right-hand rule) starting at ``center + radius*u``
+    - so the resulting face's own computed normal (Newell's method on
+    these points, see :func:`_plane_from_polygon`) comes out parallel to
+    ``normal``, not anti-parallel to it.
+    """
+    pts: List[Point3] = []
+    for i in range(num_segments):
+        angle = 2.0 * math.pi * i / num_segments
+        c, s = math.cos(angle), math.sin(angle)
+        pts.append((
+            center[0] + radius * (c * u[0] + s * w[0]),
+            center[1] + radius * (c * u[1] + s * w[1]),
+            center[2] + radius * (c * u[2] + s * w[2]),
+        ))
+    return pts
 
 
 def _solve_uv_matrix(
@@ -606,6 +662,48 @@ class _ArchiveWriter:
         self.buf += _f64(point[0]) + _f64(point[1]) + _f64(point[2])
         return slot
 
+    def write_arc_curve(
+        self,
+        center: Point3,
+        normal: Tuple[float, float, float],
+        xaxis: Tuple[float, float, float],
+        start_angle: float,
+        end_angle: float,
+        radius: float,
+        num_segments: int,
+    ) -> int:
+        """Write one ``CArcCurve`` record and return its slot - the shared
+        geometric-parameter object a circle/arc's straight ``CEdge``
+        segments each carry a backref to (via `write_face`'s
+        ``curve_params``, which calls this inline as the first newly
+        declared edge's own "curve" field - ground truth shows that's
+        where a real SDK-authored file declares it, not as a standalone
+        entity before the edges), so real SketchUp recognizes the result
+        as a true circle/arc (editable by radius, re-tessellatable)
+        rather than N disconnected straight edges that merely happen to
+        form that shape.
+
+        ``xaxis`` is the arc's own fixed 0-angle reference direction
+        (a unit vector times ``radius``, in the plane perpendicular to
+        ``normal``) - ``start_angle``/``end_angle`` (radians) are offsets
+        from it, not the direction to the start point itself. Ground
+        truth: found by creating full circles and partial arcs via the
+        SDK's own ``SUGeometryInputAddArcCurve`` and reading back the
+        resulting bytes - a full circle has ``start_angle=0``,
+        ``end_angle=2*pi``. Two of the 14 stored values (ground truth
+        offsets 11 and 13, interleaved with the fields above) were 0 in
+        every sample tested and are written as 0 here too; their meaning
+        hasn't been reverse-engineered.
+        """
+        if not (0 <= num_segments <= 0xFF):
+            raise SkpWriteError(f"num_segments must be between 0 and 255, got {num_segments}")
+        slot = self._new_of_known_class("CArcCurve", schema=_ARCCURVE_SCHEMA)
+        self._preamble()
+        self.buf += bytes([0, num_segments]) + bytes(3)
+        for v in (*center, *normal, *xaxis, start_angle, end_angle, 0.0, radius, 0.0):
+            self.buf += _f64(v)
+        return slot
+
     def _write_str(self, s: str) -> None:
         encoded = s.encode("utf-16-le")
         n = len(encoded) // 2
@@ -863,6 +961,9 @@ class _ArchiveWriter:
         front_uv: Optional[Sequence[Tuple[Point3, Tuple[float, float]]]] = None,
         back_uv: Optional[Sequence[Tuple[Point3, Tuple[float, float]]]] = None,
         attribute_dicts: Sequence[Tuple[str, Dict[str, object]]] = (),
+        curve_params: Optional[
+            Tuple[Point3, Tuple[float, float, float], Tuple[float, float, float], float, float, float, int]
+        ] = None,
     ) -> int:
         """Write one planar face and return how many new root-entity-list
         slots it consumed (edges newly declared, plus the face itself) -
@@ -899,12 +1000,24 @@ class _ArchiveWriter:
         ``attribute_dicts``, if given, is a sequence of ``(dict_name,
         entries)`` pairs - custom key/value metadata attached to this
         face (``entries`` values may be ``str``, ``int``, or ``float``).
+
+        ``curve_params``, if given, is a ``(center, normal, xaxis,
+        start_angle, end_angle, radius, num_segments)`` tuple - the args
+        :meth:`write_arc_curve` needs. Ground truth (an SDK-authored
+        circle's own byte layout) shows the shared ``CArcCurve`` is
+        declared inline as the FIRST newly-declared edge's own "curve"
+        field (the same first-use-inline-declaration pattern
+        :meth:`_write_vertex` already follows for vertices) - every
+        OTHER edge newly declared by this call then backrefs that same
+        slot instead of writing a null curve. An edge already shared
+        with a previous face is left alone either way.
         """
         n = len(points)
         point_slots = [vertex_slots.get(p) for p in points]
         edge_slots: List[int] = []
         edge_senses: List[int] = []
         new_entities = 0
+        curve_slot: Optional[int] = None
 
         for i in range(n):
             v1_idx, v2_idx = i, (i + 1) % n
@@ -929,7 +1042,13 @@ class _ArchiveWriter:
                     vertex_slots[points[idx]] = point_slots[idx]
                 else:
                     self._backref(point_slots[idx])
-            self._null()  # curve = None
+            if curve_params is not None:
+                if curve_slot is None:
+                    curve_slot = self.write_arc_curve(*curve_params)
+                else:
+                    self._backref(curve_slot)
+            else:
+                self._null()  # curve = None
             edge_slots.append(edge_slot)
             edge_senses.append(0)
             new_entities += 1
@@ -1077,6 +1196,44 @@ class ComponentDefinitionBuilder:
             material or 0, layer or 0, back_material or 0,
             hidden, soft_edges, smooth_edges, hidden_edges,
             front_uv, back_uv, attribute_dicts,
+        )
+
+    def add_circle(
+        self,
+        center: Point3,
+        normal: Tuple[float, float, float],
+        radius: float,
+        num_segments: int = 24,
+        material: Optional[int] = None,
+        layer: Optional[int] = None,
+        back_material: Optional[int] = None,
+        hidden: bool = False,
+        front_uv: Optional[Sequence[Tuple[Point3, Tuple[float, float]]]] = None,
+        back_uv: Optional[Sequence[Tuple[Point3, Tuple[float, float]]]] = None,
+        attributes: Optional[Dict[str, object]] = None,
+        attribute_dict_name: str = "attributes",
+    ) -> None:
+        """Add one circular face to this definition - same signature and
+        behavior as :meth:`SkpBuilder.add_circle`, except vertices/edges
+        are shared only within this definition."""
+        self._check_writable("faces")
+        if not (3 <= num_segments <= 255):
+            raise SkpWriteError(f"num_segments must be between 3 and 255, got {num_segments}")
+        center = (float(center[0]), float(center[1]), float(center[2]))
+        normal = _normalize3((float(normal[0]), float(normal[1]), float(normal[2])))
+        radius = float(radius)
+        writer = self._skp._definition_writer
+        u, w = _circle_basis(normal)
+        xaxis = (radius * u[0], radius * u[1], radius * u[2])
+        curve_params = (center, normal, xaxis, 0.0, 2.0 * math.pi, radius, num_segments)
+        points = _circle_points(center, normal, radius, num_segments, u, w)
+        attribute_dicts = [(attribute_dict_name, attributes)] if attributes else []
+        self._new_entity_count += writer.write_face(
+            points, self._vertex_slots, self._edge_registry,
+            material or 0, layer or 0, back_material or 0,
+            hidden, False, False, False,
+            front_uv, back_uv, attribute_dicts,
+            curve_params=curve_params,
         )
 
     def add_instance(
@@ -1634,6 +1791,58 @@ class SkpBuilder:
             material or 0, layer or 0, back_material or 0,
             hidden, soft_edges, smooth_edges, hidden_edges,
             front_uv, back_uv, attribute_dicts,
+        )
+        self._face_count += 1
+
+    def add_circle(
+        self,
+        center: Point3,
+        normal: Tuple[float, float, float],
+        radius: float,
+        num_segments: int = 24,
+        material: Optional[int] = None,
+        layer: Optional[int] = None,
+        back_material: Optional[int] = None,
+        hidden: bool = False,
+        front_uv: Optional[Sequence[Tuple[Point3, Tuple[float, float]]]] = None,
+        back_uv: Optional[Sequence[Tuple[Point3, Tuple[float, float]]]] = None,
+        attributes: Optional[Dict[str, object]] = None,
+        attribute_dict_name: str = "attributes",
+    ) -> None:
+        """Add one circular face - a true SketchUp circle (editable by
+        radius, re-tessellatable, selectable as a single "Curve" entity),
+        not ``num_segments`` disconnected straight edges that merely
+        happen to trace that shape.
+
+        ``center``/``radius`` are in inches; ``normal`` is the circle's
+        plane normal (need not be a unit vector - it's normalized
+        automatically), also the resulting face's front-side normal.
+        ``num_segments`` (3-255) controls tessellation, matching
+        SketchUp's own circle tool default of 24.
+
+        ``material``/``back_material``/``layer``/``hidden``/`front_uv`/
+        ``back_uv``/``attributes``/``attribute_dict_name`` are the same
+        as :meth:`add_face`.
+
+        >>> builder.add_circle((50, 50, 0), (0, 0, 1), radius=40)
+        """
+        if not (3 <= num_segments <= 255):
+            raise SkpWriteError(f"num_segments must be between 3 and 255, got {num_segments}")
+        center = (float(center[0]), float(center[1]), float(center[2]))
+        normal = _normalize3((float(normal[0]), float(normal[1]), float(normal[2])))
+        radius = float(radius)
+        self._ensure_geometry_writer()
+        u, w = _circle_basis(normal)
+        xaxis = (radius * u[0], radius * u[1], radius * u[2])
+        curve_params = (center, normal, xaxis, 0.0, 2.0 * math.pi, radius, num_segments)
+        points = _circle_points(center, normal, radius, num_segments, u, w)
+        attribute_dicts = [(attribute_dict_name, attributes)] if attributes else []
+        self._new_entity_count += self._geometry_writer.write_face(
+            points, self._vertex_slots, self._edge_registry,
+            material or 0, layer or 0, back_material or 0,
+            hidden, False, False, False,
+            front_uv, back_uv, attribute_dicts,
+            curve_params=curve_params,
         )
         self._face_count += 1
 

@@ -543,12 +543,29 @@ builder.add_instance(chair, attributes={"serial": "A1"})
 Not yet supported on groups - ground truth shows a group's own attribute
 pointer is always null, unlike a component instance's (real) one.
 
+A circular face (`add_circle`) is a genuine, editable-by-radius
+SketchUp arc/circle entity (`CArcCurve`), not `num_segments`
+disconnected straight edges that merely trace that shape - every edge in
+the tessellation shares one real curve backref, the same object graph
+real SketchUp's own Circle tool produces:
+
+```python
+builder.add_circle((50, 50, 0), normal=(0, 0, 1), radius=40, num_segments=24)
+```
+
+Confirmed against the real SDK: every edge's `SUEdgeGetCurve` resolves to
+the exact same curve object, typed as a genuine arc (`SUCurveGetType`)
+with the requested edge count. A partial (open) arc with no face, and
+freeform polyline curve grouping (`CCurve`, distinct from a true arc),
+aren't exposed as public API yet.
+
 Explicitly out of scope for this first pass: declaring a group's
 geometry inline nested inside another definition (as opposed to placing
 an already-built one via `add_group_instance`), attributes on groups,
-and editing an existing arbitrary `.skp` file (a separately harder
-problem — real SketchUp re-serializes the whole document on save rather
-than appending to it — not attempted here). See
+partial/open arcs, freeform polyline curves, and editing an existing
+arbitrary `.skp` file (a separately harder problem — real SketchUp
+re-serializes the whole document on save rather than appending to it —
+not attempted here). See
 [`openskp/create.py`](../packages/python/src/openskp/create.py) for the
 full, current scope notes, and the [Python package README](../packages/python/README.md#writing-early-stage)
 for a longer worked example.
