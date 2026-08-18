@@ -5,6 +5,65 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — Python only
+
+**Initial write support.** OpenSKP can now *create* new `.skp` files from
+scratch, not just parse existing ones — a genuine, from-scratch binary
+writer for the legacy MFC `CArchive` format (SketchUp 2013–2020), built by
+inverting the existing reader's own decoding logic rather than wrapping
+any SDK. Early-stage and Python-only for now; the other four language
+ports do not yet have this capability. See
+[`packages/python/src/openskp/create.py`](packages/python/src/openskp/create.py)
+for the full scope notes.
+
+### Added
+
+- `openskp.create()` / `SkpBuilder` — build faces (planar, including
+  concave polygons and non-manifold shared edges) directly from vertex
+  coordinates, with automatic vertex/edge sharing wherever coordinates
+  coincide exactly.
+- Solid-color and image-textured materials (`add_material`,
+  `add_texture_material` — PNG and JPEG, detected from the file's own
+  magic bytes), assignable independently to a face's front and back side.
+- Named layers (`add_layer`).
+- Reusable component definitions with multiple independently-positioned
+  instances (`add_component_definition`, `add_instance`), and groups
+  (`add_group`, which place themselves automatically on close rather than
+  needing a separate placement call).
+- Per-face/per-edge hidden, soft, and smooth flags.
+- No SketchUp SDK dependency at import, write, or any other runtime path.
+  The bundled blank-document scaffold this module splices geometry into
+  is disclosed plainly as SDK-authored boilerplate (Trimble's own
+  built-in empty-document bytes, not anyone's creative work) in the
+  module's own docstring — the writer logic itself (the entity encoding,
+  the object-graph protocol, the tail-reference renumbering) is 100%
+  independently reverse-engineered.
+
+### Validation
+
+Every capability above is verified against the real SketchUp SDK
+(`SketchUpAPI.dll` used strictly as a local, offline validation oracle —
+never a runtime dependency), not just against OpenSKP's own reader —
+several silent-failure fields (drawbase padding, loop flags, attribute
+container requirements) only show up as `SU_ERROR_MODEL_INVALID` in real
+SketchUp despite parsing cleanly through this project's own code. A
+combined "kitchen sink" test exercises every feature together in one
+file (materials, layers, textures, definitions, instances, groups,
+concave/non-manifold geometry) and is checked at scale (hundreds of
+entities) as a regression guard.
+
+### Explicitly out of scope for this first pass
+
+- Explicit texture UV positioning/pinning (default planar projection
+  only).
+- Nested definitions (a component or group containing another
+  component's instances).
+- Editing an existing arbitrary `.skp` file — a separately harder
+  problem (real SketchUp re-serializes the whole document on save rather
+  than appending), not attempted here.
+- The other four language ports (TypeScript, .NET, Dart, C++) do not
+  have write support yet.
+
 ## [1.0.0] — 2026-08-13
 
 First stable release. All five language ports (Python, TypeScript, Dart,

@@ -30,6 +30,8 @@
 
 OpenSKP is the **first and only** open-source, cross-platform parser for SketchUp (`.skp`) binary files. Built entirely through reverse engineering of SketchUp's binary formats — both the modern **VFF container** (2021+) and the classic **MFC `CArchive`** container (2013–2020) — it gives you full programmatic access to 3D models — geometry, materials, components, layers, and more — without requiring the SketchUp application or its proprietary SDK, in **Python, TypeScript, .NET, Dart, and C++**.
 
+🧪 **New:** OpenSKP can now *write* native `.skp` files too — not just parse them. This is early-stage and Python-only for now (see the [Features](#-features) table below and [`openskp.create`](packages/python/src/openskp/create.py)); the other four ports don't have it yet, and contributions to bring them up to parity are very welcome.
+
 > [!IMPORTANT]
 > This project was built by reverse engineering a proprietary binary format. It is not affiliated with or endorsed by Trimble Inc. or SketchUp.
 
@@ -50,6 +52,7 @@ OpenSKP is the **first and only** open-source, cross-platform parser for SketchU
 | **Dynamic Components** | ✅ | Extracts dynamic component attribute key-value pairs for both modern (2021+) and legacy (2013–2020) files, in all five languages |
 | **Observability** | ✅ | Opt-in progress reporting + structured, location-carrying parse errors — see [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md) |
 | **Export to GLB / OBJ / STL / PLY / DXF 3D / IFC4 / JSON** | ✅ | GLB, Wavefront OBJ, STL, PLY, DXF 3D (AutoCAD Polyface Mesh), IFC4 (BIM), and JSON metadata export are available natively across all five languages — see [Export capabilities](docs/DEVELOPER_GUIDE.md#export-capabilities) |
+| **Write native `.skp` files** | 🧪 Early (Python) | Build new `.skp` files from scratch — geometry, solid/textured materials, layers, component definitions with multiple instances, and groups. No SDK involved. Early-stage and Python-only for now — see [`openskp.create`](packages/python/src/openskp/create.py) |
 | **Streaming / low-memory parsing** | ✅ | Peak memory bounded by the largest single definition, not the whole file — see [Memory architecture](docs/ARCHITECTURE.md#memory-architecture) |
 | **Pure Implementation** | ✅ | No SketchUp SDK, no native dependencies, no license required |
 | **Cross-Platform** | ✅ | Works on Linux, macOS, and Windows |
@@ -118,6 +121,20 @@ for material in model.materials:
 # Opt-in: full placed scene graph, triangulated, world-space, GLB-ready
 scene = SkpFile.open("my_model.skp").build_scene()
 print(f"{len(scene.glb_primitives)} renderable mesh primitives")
+```
+
+🧪 **Writing** (early-stage, Python-only):
+
+```python
+from openskp import create
+
+builder = create()
+red = builder.add_material("Red", (255, 0, 0))
+with builder.add_component_definition("Chair") as chair:
+    chair.add_face([(0, 0, 0), (20, 0, 0), (20, 20, 0), (0, 20, 0)])
+builder.add_instance(chair, translation=(50, 0, 0))
+builder.add_face([(0, 0, 0), (100, 0, 0), (100, 100, 0), (0, 100, 0)], material=red)
+builder.save("output.skp")
 ```
 
 ### 📘 TypeScript / JavaScript

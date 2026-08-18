@@ -20,21 +20,39 @@ skp = SkpFile.open("model.skp")
 model = skp.parse()
 
 print(model.version)              # "{25.0.575}"
-print(len(model.definitions))     # includes a 'ROOT' string key - see note below
-print(len(model.layers))
+print(len(model.definitions))     # numeric-keyed only; the implicit top-level
+print(len(model.layers))          # geometry lives separately in model.root
 
 for layer in model.layers:
     print(f"{layer.name}: rgb({layer.color_r}, {layer.color_g}, {layer.color_b})")
 
 for def_id, defn in model.definitions.items():
-    if not isinstance(def_id, int):
-        continue  # 'ROOT' - see the Developer Guide's root-definition note
     print(f"{defn.name}: {len(defn.vertices)} verts, {len(defn.faces)} faces")
+
+print(f"root: {len(model.root.vertices)} verts, {len(model.root.faces)} faces")
 
 # Opt-in: full placed scene graph, triangulated, world-space
 scene = skp.build_scene()
 print(len(scene.glb_primitives), "GLB-ready mesh primitives")
 ```
+
+🧪 **Writing (early-stage, Python-only — no equivalent in the other four
+languages yet):**
+
+```python
+from openskp import create
+
+builder = create()
+red = builder.add_material("Red", (255, 0, 0))
+with builder.add_component_definition("Chair") as chair:
+    chair.add_face([(0, 0, 0), (20, 0, 0), (20, 20, 0), (0, 20, 0)])
+builder.add_instance(chair, translation=(50, 0, 0))
+builder.add_face([(0, 0, 0), (100, 0, 0), (100, 100, 0), (0, 100, 0)], material=red)
+builder.save("output.skp")
+```
+
+See [Write capabilities](DEVELOPER_GUIDE.md#write-capabilities) in the
+Developer Guide for the full scope and limitations.
 
 ## TypeScript / JavaScript
 
