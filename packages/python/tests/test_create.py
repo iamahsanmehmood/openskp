@@ -1671,6 +1671,73 @@ class TestCurvedEdges:
         legacy._walk(data)
 
 
+class TestInstanceRotation:
+    def test_rotation_matrix_matches_matrix3x3_for_90deg_z(self):
+        # A +90-degree rotation around +Z (right-hand rule) sends the
+        # world X axis to the world Y axis - the same identity a rotation
+        # matrix must satisfy regardless of how it was derived.
+        m = create_module._rotation_matrix3x3((0.0, 0.0, 1.0), math.pi / 2)
+        # Apply m (row-major: m[0:3]=row0, m[3:6]=row1, m[6:9]=row2) to
+        # local point (1, 0, 0) - confirmed against the real SDK's own
+        # SUComponentInstanceGetTransform for this exact rotation.
+        x, y, z = 1.0, 0.0, 0.0
+        rx = m[0] * x + m[1] * y + m[2] * z
+        ry = m[3] * x + m[4] * y + m[5] * z
+        rz = m[6] * x + m[7] * y + m[8] * z
+        assert (rx, ry, rz) == pytest.approx((0.0, 1.0, 0.0), abs=1e-9)
+
+    def test_rotation_matrix_identity_at_zero_angle(self):
+        m = create_module._rotation_matrix3x3((0.0, 0.0, 1.0), 0.0)
+        assert m == pytest.approx((1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0))
+
+    def test_rotation_matrix_rejects_zero_axis(self):
+        with pytest.raises(SkpWriteError, match="zero vector"):
+            create_module._rotation_matrix3x3((0.0, 0.0, 0.0), 1.0)
+
+    def test_add_instance_rotation_and_matrix3x3_are_mutually_exclusive(self):
+        builder = create()
+        with builder.add_component_definition("Chair") as chair:
+            chair.add_face(SQUARE)
+        with pytest.raises(SkpWriteError, match="at most one"):
+            builder.add_instance(
+                chair, matrix3x3=(1, 0, 0, 0, 1, 0, 0, 0, 1), rotation=((0, 0, 1), math.pi / 2),
+            )
+
+    def test_add_instance_rotation_produces_same_matrix_as_equivalent_matrix3x3(self):
+        # Byte-for-byte comparison isn't meaningful here - each instance
+        # embeds a fresh random GUID - so compare the parsed-back
+        # transform field instead.
+        angle = math.pi / 3
+        expected = create_module._rotation_matrix3x3((0, 0, 1), angle)
+
+        b1 = create()
+        with b1.add_component_definition("Chair") as chair1:
+            chair1.add_face(SQUARE)
+        b1.add_instance(chair1, rotation=((0, 0, 1), angle))
+        ar, root, layers, materials = legacy._walk(b1.to_bytes())
+        inst = [v for (_, n, v) in root if n == "CComponentInstance"][0]
+        assert tuple(inst["xf"][0:9]) == pytest.approx(expected)
+
+    def test_add_group_rotation(self):
+        builder = create()
+        with builder.add_group("Table", rotation=((0, 0, 1), math.pi / 4)) as table:
+            table.add_face(SQUARE)
+        data = builder.to_bytes()
+        ar, root, layers, materials = legacy._walk(data)
+        assert any(n == "CGroup" for (_, n, v) in root)
+
+    def test_add_group_instance_rotation(self):
+        builder = create()
+        with builder.add_component_definition("Engine") as engine:
+            engine.add_face(SQUARE)
+        with builder.add_component_definition("Car") as car:
+            car.add_face(SQUARE)
+            car.add_group_instance(engine, rotation=((1, 0, 0), math.pi / 6))
+        builder.add_instance(car)
+        data = builder.to_bytes()
+        legacy._walk(data)
+
+
 class TestLayers:
     def test_layer_assigned_to_face(self):
         builder = create()
@@ -2932,6 +2999,55 @@ class TestRealSketchUpOracle:
             dll.SUCurveGetNumEdges(curve, ctypes.byref(cne))
             assert cne.value == 3
 
+            dll.SUModelRelease(ctypes.byref(model))
+        finally:
+            dll.SUTerminate()
+
+    def test_instance_rotation_matches_real_sketchup_transform(self, tmp_path):
+        # A +90-degree rotation around +Z (right-hand rule) must send a
+        # local point on the +X axis to world +Y - confirms this writer's
+        # `rotation=` convenience matches real SketchUp's own transform
+        # convention, not just that SOME rotation was applied.
+        import ctypes
+
+        class SUPoint3D(ctypes.Structure):
+            _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double), ("z", ctypes.c_double)]
+
+        class SUTransformation(ctypes.Structure):
+            _fields_ = [("values", ctypes.c_double * 16)]
+
+        builder = create()
+        with builder.add_component_definition("Marker") as marker:
+            marker.add_face([(0.0, 0.0, 0.0), (10.0, 0.0, 0.0), (10.0, 1.0, 0.0), (0.0, 1.0, 0.0)])
+        builder.add_instance(marker, rotation=((0.0, 0.0, 1.0), math.pi / 2))
+        out = tmp_path / "rotation_oracle.skp"
+        builder.save(str(out))
+
+        dll = ctypes.CDLL(_SDK_DLL_PATH)
+        dll.SUModelCreateFromFile.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_char_p]
+        dll.SUModelGetEntities.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUEntitiesGetInstances.argtypes = [
+            ctypes.c_void_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_size_t),
+        ]
+        dll.SUComponentInstanceGetTransform.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        dll.SUInitialize()
+        try:
+            model = ctypes.c_void_p()
+            err = dll.SUModelCreateFromFile(ctypes.byref(model), str(out).encode())
+            assert err == 0, f"SketchUp SDK rejected the file (error {err})"
+            entities = ctypes.c_void_p()
+            dll.SUModelGetEntities(model, ctypes.byref(entities))
+            inst = (ctypes.c_void_p * 1)()
+            got = ctypes.c_size_t()
+            dll.SUEntitiesGetInstances(entities, 1, inst, ctypes.byref(got))
+            assert got.value == 1
+            t = SUTransformation()
+            dll.SUComponentInstanceGetTransform(inst[0], ctypes.byref(t))
+            # SUTransformation.values is column-major: column 0 is where the
+            # local +X axis (10, 0, 0) ends up.
+            col0 = t.values[0:3]
+            world = (10.0 * col0[0], 10.0 * col0[1], 10.0 * col0[2])
+            assert world == pytest.approx((0.0, 10.0, 0.0), abs=1e-6)
             dll.SUModelRelease(ctypes.byref(model))
         finally:
             dll.SUTerminate()

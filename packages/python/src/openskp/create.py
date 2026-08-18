@@ -43,7 +43,9 @@ are involved, and how.
   curves (``CCurve`` - a labeled grouping of straight edges, distinct
   from a true arc's own geometric frame) via :meth:`SkpBuilder.
   add_polyline`; all three have :class:`ComponentDefinitionBuilder`
-  equivalents.
+  equivalents. An instance/group placement's rotation can be given
+  directly as ``rotation=(axis, angle_radians)`` instead of a hand-
+  derived ``matrix3x3`` - see :func:`_rotation_matrix3x3`.
 * Coordinates are in **inches** - SketchUp's own native internal unit for
   this era of the format. Converting from another unit is the caller's
   responsibility for now.
@@ -298,6 +300,45 @@ def _normalize3(v: Tuple[float, float, float]) -> Tuple[float, float, float]:
     if length < 1e-9:
         raise SkpWriteError("cannot determine a texture-positioning basis: the face's first edge is degenerate")
     return (v[0] / length, v[1] / length, v[2] / length)
+
+
+def _rotation_matrix3x3(
+    axis: Tuple[float, float, float], angle: float,
+) -> Tuple[float, float, float, float, float, float, float, float, float]:
+    """The row-major 3x3 rotation matrix for rotating by ``angle`` radians
+    (right-hand rule) around ``axis`` (need not be a unit vector) -
+    Rodrigues' rotation formula. Same row-major convention `add_instance`'s
+    own ``matrix3x3`` parameter already uses, so this is a drop-in way to
+    get a rotation without hand-deriving the matrix.
+    """
+    length = (axis[0] ** 2 + axis[1] ** 2 + axis[2] ** 2) ** 0.5
+    if length < 1e-9:
+        raise SkpWriteError("rotation axis must not be the zero vector")
+    x, y, z = (axis[0] / length, axis[1] / length, axis[2] / length)
+    c = math.cos(angle)
+    s = math.sin(angle)
+    t = 1.0 - c
+    return (
+        t * x * x + c, t * x * y - s * z, t * x * z + s * y,
+        t * x * y + s * z, t * y * y + c, t * y * z - s * x,
+        t * x * z - s * y, t * y * z + s * x, t * z * z + c,
+    )
+
+
+def _resolve_matrix3x3(
+    matrix3x3: Optional[Tuple[float, float, float, float, float, float, float, float, float]],
+    rotation: Optional[Tuple[Tuple[float, float, float], float]],
+) -> Optional[Tuple[float, float, float, float, float, float, float, float, float]]:
+    """Shared by every ``add_instance``/``add_group``/``add_group_instance``
+    call - ``matrix3x3`` and ``rotation`` are alternate ways to specify the
+    same underlying transform field, not two separate ones, so exactly one
+    (or neither, for identity) may be given."""
+    if matrix3x3 is not None and rotation is not None:
+        raise SkpWriteError("pass at most one of matrix3x3/rotation - rotation is just a convenience for matrix3x3")
+    if rotation is not None:
+        axis, angle = rotation
+        return _rotation_matrix3x3(axis, angle)
+    return matrix3x3
 
 
 def _face_uv_basis(
@@ -1488,6 +1529,7 @@ class ComponentDefinitionBuilder:
         name: Optional[str] = None,
         translation: Tuple[float, float, float] = (0.0, 0.0, 0.0),
         matrix3x3: Optional[Tuple[float, float, float, float, float, float, float, float, float]] = None,
+        rotation: Optional[Tuple[Tuple[float, float, float], float]] = None,
         material: Optional[int] = None,
         layer: Optional[int] = None,
         attributes: Optional[Dict[str, object]] = None,
@@ -1516,6 +1558,10 @@ class ComponentDefinitionBuilder:
         ordering is also what rules out cycles: a definition can only
         ever nest others fully built strictly before it existed, never
         itself or anything still in progress.
+
+        ``rotation``, if given, is a ``(axis, angle_radians)`` pair - an
+        alternative to hand-deriving ``matrix3x3`` for the common case of
+        a pure rotation; pass at most one of the two.
         """
         self._check_writable("instances")
         if definition._skp is not self._skp:
@@ -1525,6 +1571,7 @@ class ComponentDefinitionBuilder:
             )
         if definition is self:
             raise SkpWriteError(f"component definition {self.name!r} cannot nest an instance of itself")
+        matrix3x3 = _resolve_matrix3x3(matrix3x3, rotation)
         attribute_dicts = [(attribute_dict_name, attributes)] if attributes else []
         self._new_entity_count += self._skp._definition_writer.write_instance(
             definition.slot, name or definition.name, translation, matrix3x3, material or 0, layer or 0,
@@ -1537,6 +1584,7 @@ class ComponentDefinitionBuilder:
         name: Optional[str] = None,
         translation: Tuple[float, float, float] = (0.0, 0.0, 0.0),
         matrix3x3: Optional[Tuple[float, float, float, float, float, float, float, float, float]] = None,
+        rotation: Optional[Tuple[Tuple[float, float, float], float]] = None,
         material: Optional[int] = None,
         layer: Optional[int] = None,
     ) -> None:
@@ -1559,6 +1607,10 @@ class ComponentDefinitionBuilder:
         >>> with builder.add_component_definition("Car") as car:
         ...     car.add_face([(0, 0, 0), (150, 0, 0), (150, 60, 0), (0, 60, 0)])
         ...     car.add_group_instance(engine, translation=(50, 0, 10))
+
+        ``rotation``, if given, is a ``(axis, angle_radians)`` pair - an
+        alternative to hand-deriving ``matrix3x3`` for the common case of
+        a pure rotation; pass at most one of the two.
         """
         self._check_writable("groups")
         if definition._skp is not self._skp:
@@ -1568,6 +1620,7 @@ class ComponentDefinitionBuilder:
             )
         if definition is self:
             raise SkpWriteError(f"component definition {self.name!r} cannot nest a group instance of itself")
+        matrix3x3 = _resolve_matrix3x3(matrix3x3, rotation)
         self._new_entity_count += self._skp._definition_writer.write_group(
             definition.slot, name or definition.name, translation, matrix3x3, material or 0, layer or 0
         )
@@ -1861,6 +1914,7 @@ class SkpBuilder:
         name: Optional[str] = None,
         translation: Tuple[float, float, float] = (0.0, 0.0, 0.0),
         matrix3x3: Optional[Tuple[float, float, float, float, float, float, float, float, float]] = None,
+        rotation: Optional[Tuple[Tuple[float, float, float], float]] = None,
         material: Optional[int] = None,
         layer: Optional[int] = None,
     ) -> "ComponentDefinitionBuilder":
@@ -1877,7 +1931,12 @@ class SkpBuilder:
         Same ordering rule as `add_component_definition` - must be called
         before any `add_face`/`add_instance`/`add_group` call already in
         progress on the builder itself.
+
+        ``rotation``, if given, is a ``(axis, angle_radians)`` pair - an
+        alternative to hand-deriving ``matrix3x3`` for the common case of
+        a pure rotation; pass at most one of the two.
         """
+        matrix3x3 = _resolve_matrix3x3(matrix3x3, rotation)
         return self._start_definition(
             name or "Group", "add_group", group_placement=(translation, matrix3x3, material or 0, layer or 0)
         )
@@ -1898,6 +1957,7 @@ class SkpBuilder:
         name: Optional[str] = None,
         translation: Tuple[float, float, float] = (0.0, 0.0, 0.0),
         matrix3x3: Optional[Tuple[float, float, float, float, float, float, float, float, float]] = None,
+        rotation: Optional[Tuple[Tuple[float, float, float], float]] = None,
         material: Optional[int] = None,
         layer: Optional[int] = None,
         attributes: Optional[Dict[str, object]] = None,
@@ -1910,6 +1970,15 @@ class SkpBuilder:
         omitted); ``translation`` is applied after it, in inches.
         ``material``/``layer``, if given, are handles from `add_material`/
         `add_layer` applied to the instance itself (not its contents).
+
+        ``rotation``, if given, is a ``(axis, angle_radians)`` pair - an
+        alternative to ``matrix3x3`` for the common case of a pure
+        rotation, so the caller doesn't have to hand-derive a rotation
+        matrix (Rodrigues' formula) themselves; pass at most one of the
+        two.
+
+        >>> import math
+        >>> builder.add_instance(chair, rotation=((0, 0, 1), math.radians(90)))
 
         ``attributes``, if given, is custom key/value metadata (values
         may be ``str``, ``int``, or ``float``) attached to this instance
@@ -1927,6 +1996,7 @@ class SkpBuilder:
                 f"component definition {definition.name!r} is still open - "
                 "exit its `with` block before calling add_instance"
             )
+        matrix3x3 = _resolve_matrix3x3(matrix3x3, rotation)
         self._ensure_geometry_writer()
         attribute_dicts = [(attribute_dict_name, attributes)] if attributes else []
         self._new_entity_count += self._geometry_writer.write_instance(

@@ -167,7 +167,9 @@ with builder.add_group("Table", translation=(100, 0, 0)) as table:
 
 # Now place instances of the reusable component
 builder.add_instance(chair, translation=(0, 0, 0))
-builder.add_instance(chair, translation=(50, 0, 0))
+# rotation=(axis, angle_radians) is a shortcut for a hand-derived matrix3x3
+import math
+builder.add_instance(chair, translation=(50, 0, 0), rotation=((0, 0, 1), math.radians(180)))
 
 # Root-level geometry
 builder.add_face(
@@ -179,7 +181,6 @@ builder.add_face(
 builder.add_circle((100, 75, 0), normal=(0, 0, 1), radius=30, num_segments=24)
 
 # A partial (open) arc - same real curve entity, but edges only, no face
-import math
 builder.add_arc((100, 75, 0), normal=(0, 0, 1), radius=30, start_angle=0, end_angle=math.pi / 2)
 
 # A freeform polyline - an arbitrary edge chain grouped into one curve
