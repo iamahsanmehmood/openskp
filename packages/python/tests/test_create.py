@@ -1621,6 +1621,55 @@ class TestCurvedEdges:
         # unnecessary because the two shapes never overlap.
         assert coords.count((10.0, 0.0, 0.0)) == 1
 
+    def test_write_curve_byte_layout(self):
+        # Ground truth (SDK-authored open and closed polylines of several
+        # edge counts, read back and byte-decoded): a 1-byte field always
+        # 1 (open or closed), followed by num_edges as a u32.
+        writer = create_module._ArchiveWriter(next_slot=1, class_slot={})
+        slot = writer.write_curve(3)
+        assert slot == 2  # first-ever declaration: class slot 1, object slot 2
+        record = bytes(writer.buf)[-5:]
+        assert record[0] == 1
+        assert struct.unpack("<I", record[1:])[0] == 3
+
+    def test_add_polyline_open_self_parses_no_face(self):
+        builder = create()
+        builder.add_polyline([(0.0, 0.0, 0.0), (10.0, 10.0, 0.0), (20.0, 0.0, 0.0), (30.0, 10.0, 0.0)])
+        data = builder.to_bytes()
+        ar, root, layers, materials = legacy._walk(data)
+        edges = [v for (_, n, v) in root if n == "CEdge"]
+        faces = [v for (_, n, v) in root if n == "CFace"]
+        assert len(edges) == 3
+        assert len(faces) == 0
+        curve_slots = {e["curve"] for e in edges}
+        assert len(curve_slots) == 1
+        assert None not in curve_slots
+
+    def test_add_polyline_closed_wraps_around(self):
+        builder = create()
+        builder.add_polyline(
+            [(0.0, 0.0, 0.0), (10.0, 0.0, 0.0), (10.0, 10.0, 0.0), (0.0, 10.0, 0.0)], closed=True,
+        )
+        data = builder.to_bytes()
+        ar, root, layers, materials = legacy._walk(data)
+        edges = [v for (_, n, v) in root if n == "CEdge"]
+        assert len(edges) == 4
+        curve_slots = {e["curve"] for e in edges}
+        assert len(curve_slots) == 1
+
+    def test_add_polyline_rejects_too_few_points(self):
+        builder = create()
+        with pytest.raises(SkpWriteError, match="at least 2 points"):
+            builder.add_polyline([(0, 0, 0)])
+
+    def test_add_polyline_in_component_definition(self):
+        builder = create()
+        with builder.add_component_definition("Wire") as wire:
+            wire.add_polyline([(0.0, 0.0, 0.0), (10.0, 0.0, 5.0), (20.0, 0.0, 0.0)])
+        builder.add_instance(wire)
+        data = builder.to_bytes()
+        legacy._walk(data)
+
 
 class TestLayers:
     def test_layer_assigned_to_face(self):
@@ -2813,6 +2862,75 @@ class TestRealSketchUpOracle:
             # angle 0 -> center + (radius, 0, 0); angle pi/2 -> center + (0, radius, 0)
             assert (90.0, 50.0, 0.0) in positions
             assert (50.0, 90.0, 0.0) in positions
+
+            dll.SUModelRelease(ctypes.byref(model))
+        finally:
+            dll.SUTerminate()
+
+    def test_polyline_recognized_as_simple_curve_by_real_sketchup(self, tmp_path):
+        # Same discipline as the circle/arc oracle tests above, but for a
+        # freeform polyline (add_polyline): no face, every edge shares the
+        # same curve object, and that curve's own type is the "simple"
+        # kind (SUCurveType_Simple = 0) - distinct from the arc/circle
+        # tests' SUCurveType_ArcCurve = 1, confirming real SketchUp
+        # recognizes this as the same grouping mechanism but a genuinely
+        # different curve kind, not an arc curve with an unused geometry.
+        import ctypes
+
+        builder = create()
+        builder.add_polyline([(0.0, 0.0, 0.0), (10.0, 10.0, 0.0), (20.0, 0.0, 0.0), (30.0, 10.0, 0.0)])
+        out = tmp_path / "polyline_oracle.skp"
+        builder.save(str(out))
+
+        dll = ctypes.CDLL(_SDK_DLL_PATH)
+        dll.SUModelCreateFromFile.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_char_p]
+        dll.SUModelGetEntities.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUEntitiesGetNumFaces.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_size_t)]
+        dll.SUEntitiesGetNumEdges.argtypes = [ctypes.c_void_p, ctypes.c_bool, ctypes.POINTER(ctypes.c_size_t)]
+        dll.SUEntitiesGetEdges.argtypes = [
+            ctypes.c_void_p, ctypes.c_bool, ctypes.c_size_t,
+            ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_size_t),
+        ]
+        dll.SUEdgeGetCurve.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUCurveGetType.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_int)]
+        dll.SUCurveGetNumEdges.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_size_t)]
+        dll.SUInitialize()
+        try:
+            model = ctypes.c_void_p()
+            err = dll.SUModelCreateFromFile(ctypes.byref(model), str(out).encode())
+            assert err == 0, f"SketchUp SDK rejected the file (error {err})"
+            entities = ctypes.c_void_p()
+            dll.SUModelGetEntities(model, ctypes.byref(entities))
+
+            nf = ctypes.c_size_t()
+            dll.SUEntitiesGetNumFaces(entities, ctypes.byref(nf))
+            assert nf.value == 0
+
+            ne = ctypes.c_size_t()
+            dll.SUEntitiesGetNumEdges(entities, False, ctypes.byref(ne))
+            assert ne.value == 3
+            edges = (ctypes.c_void_p * 3)()
+            got = ctypes.c_size_t()
+            dll.SUEntitiesGetEdges(entities, False, 3, edges, ctypes.byref(got))
+            assert got.value == 3
+
+            curve_ptrs = set()
+            for i in range(3):
+                curve = ctypes.c_void_p()
+                err = dll.SUEdgeGetCurve(edges[i], ctypes.byref(curve))
+                assert err == 0
+                assert curve.value is not None
+                curve_ptrs.add(curve.value)
+            assert len(curve_ptrs) == 1, "every edge must share the exact same curve"
+
+            curve = ctypes.c_void_p(curve_ptrs.pop())
+            ctype = ctypes.c_int()
+            dll.SUCurveGetType(curve, ctypes.byref(ctype))
+            assert ctype.value == 0  # SUCurveType_Simple, not ArcCurve
+
+            cne = ctypes.c_size_t()
+            dll.SUCurveGetNumEdges(curve, ctypes.byref(cne))
+            assert cne.value == 3
 
             dll.SUModelRelease(ctypes.byref(model))
         finally:
