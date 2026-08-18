@@ -363,6 +363,101 @@ class TestAutoTriangulate:
         legacy._walk(data)
 
 
+class TestFaceHoles:
+    WALL = [(0.0, 0.0, 0.0), (200.0, 0.0, 0.0), (200.0, 100.0, 0.0), (0.0, 100.0, 0.0)]
+    WINDOW = [(80.0, 30.0, 0.0), (120.0, 30.0, 0.0), (120.0, 70.0, 0.0), (80.0, 70.0, 0.0)]
+    WINDOW_2 = [(20.0, 30.0, 0.0), (50.0, 30.0, 0.0), (50.0, 70.0, 0.0), (20.0, 70.0, 0.0)]
+
+    def test_single_hole_produces_two_loops(self):
+        builder = create()
+        builder.add_face(self.WALL, holes=[self.WINDOW])
+        data = builder.to_bytes()
+        ar, root, layers, materials = legacy._walk(data)
+        faces = [v for (_, n, v) in root if n == "CFace"]
+        assert len(faces) == 1
+        assert len(faces[0]["loops"]) == 2
+        assert len(faces[0]["loops"][0]["uses"]) == 4  # outer boundary
+        assert len(faces[0]["loops"][1]["uses"]) == 4  # hole
+
+    def test_two_holes_produce_three_loops(self):
+        builder = create()
+        builder.add_face(self.WALL, holes=[self.WINDOW, self.WINDOW_2])
+        data = builder.to_bytes()
+        ar, root, layers, materials = legacy._walk(data)
+        faces = [v for (_, n, v) in root if n == "CFace"]
+        assert len(faces[0]["loops"]) == 3
+
+    def test_hole_loop_flag_byte_is_zero_boundary_loop_stays_one(self):
+        # Ground truth (an SDK-authored window-in-a-wall face, byte-decoded):
+        # CLoop's first flag byte is 1 for the boundary loop, 0 for a hole
+        # loop - the second byte is 1 either way. legacy.py's reader treats
+        # both bytes as opaque (`_read_loop` just does `r.raw(2)`), so
+        # capture them directly by patching the reader for this one check.
+        flag_bytes = []
+        orig = legacy._READERS["CLoop"]
+
+        def patched(ar, r):
+            my_slot = ar.next_slot - 1
+            prev = ar.current_loop
+            ar.current_loop = my_slot
+            legacy._preamble(ar, r)
+            flag_bytes.append(r.raw(2))
+            uses = []
+            while True:
+                if r.peek_u16() == 0:
+                    r.pos += 2
+                    break
+                _, _, v = ar.read_object(r, expect="CEdgeUse")
+                uses.append(v)
+            ar.current_loop = prev
+            return {"k": "loop", "uses": uses}
+
+        legacy._READERS["CLoop"] = patched
+        try:
+            builder = create()
+            builder.add_face(self.WALL, holes=[self.WINDOW])
+            legacy._walk(builder.to_bytes())
+        finally:
+            legacy._READERS["CLoop"] = orig
+
+        assert flag_bytes == [bytes([1, 1]), bytes([0, 1])]
+
+    def test_hole_not_on_face_plane_raises(self):
+        builder = create()
+        off_plane_hole = [(80.0, 30.0, 5.0), (120.0, 30.0, 0.0), (120.0, 70.0, 0.0), (80.0, 70.0, 0.0)]
+        with pytest.raises(SkpWriteError, match="off the face's own plane"):
+            builder.add_face(self.WALL, holes=[off_plane_hole])
+
+    def test_hole_with_too_few_points_raises(self):
+        builder = create()
+        with pytest.raises(SkpWriteError, match="at least 3 points"):
+            builder.add_face(self.WALL, holes=[[(1.0, 1.0, 0.0), (2.0, 2.0, 0.0)]])
+
+    def test_hole_winding_direction_does_not_matter(self):
+        # Ground truth (SDK oracle, both directions tested): a hole's own
+        # winding relative to the outer boundary doesn't affect whether
+        # it's recognized as a hole - confirm both orders self-parse
+        # identically (same loop/edge counts) rather than one silently
+        # producing a different structure.
+        forward = create()
+        forward.add_face(self.WALL, holes=[self.WINDOW])
+        reversed_builder = create()
+        reversed_builder.add_face(self.WALL, holes=[list(reversed(self.WINDOW))])
+        for b in (forward, reversed_builder):
+            ar, root, layers, materials = legacy._walk(b.to_bytes())
+            faces = [v for (_, n, v) in root if n == "CFace"]
+            assert len(faces[0]["loops"]) == 2
+            assert len(faces[0]["loops"][1]["uses"]) == 4
+
+    def test_hole_in_component_definition(self):
+        builder = create()
+        with builder.add_component_definition("Wall") as wall:
+            wall.add_face(self.WALL, holes=[self.WINDOW])
+        builder.add_instance(wall)
+        data = builder.to_bytes()
+        legacy._walk(data)
+
+
 class TestNonManifoldTopology:
     # Three triangular "fins" sharing one common edge (the z-axis segment
     # from (0,0,0) to (0,0,100)) - nothing in the CEdgeUse/loop encoding
@@ -3149,6 +3244,45 @@ class TestRealSketchUpOracle:
             nf = ctypes.c_size_t()
             dll.SUEntitiesGetNumFaces(entities, ctypes.byref(nf))
             assert nf.value == 2
+            dll.SUModelRelease(ctypes.byref(model))
+        finally:
+            dll.SUTerminate()
+
+    def test_face_hole_area_is_subtracted_by_real_sketchup(self, tmp_path):
+        # The real, load-bearing claim for holes: not just "the file opens
+        # and has 2 loops" but that real SketchUp actually treats the
+        # inner loop as a genuine subtracted opening - confirmed via the
+        # face's own reported area, not just structural presence.
+        import ctypes
+
+        outer = [(0.0, 0.0, 0.0), (100.0, 0.0, 0.0), (100.0, 100.0, 0.0), (0.0, 100.0, 0.0)]
+        hole = [(30.0, 30.0, 0.0), (70.0, 30.0, 0.0), (70.0, 70.0, 0.0), (30.0, 70.0, 0.0)]
+        builder = create()
+        builder.add_face(outer, holes=[hole])
+        out = tmp_path / "hole_face.skp"
+        builder.save(str(out))
+
+        dll = ctypes.CDLL(_SDK_DLL_PATH)
+        dll.SUModelCreateFromFile.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_char_p]
+        dll.SUModelGetEntities.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUEntitiesGetFaces.argtypes = [
+            ctypes.c_void_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_size_t),
+        ]
+        dll.SUFaceGetArea.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_double)]
+        dll.SUInitialize()
+        try:
+            model = ctypes.c_void_p()
+            err = dll.SUModelCreateFromFile(ctypes.byref(model), str(out).encode())
+            assert err == 0, f"SketchUp SDK rejected the file (error {err})"
+            entities = ctypes.c_void_p()
+            dll.SUModelGetEntities(model, ctypes.byref(entities))
+            faces = (ctypes.c_void_p * 1)()
+            got = ctypes.c_size_t()
+            dll.SUEntitiesGetFaces(entities, 1, faces, ctypes.byref(got))
+            assert got.value == 1
+            area = ctypes.c_double()
+            dll.SUFaceGetArea(faces[0], ctypes.byref(area))
+            assert area.value == pytest.approx(100 * 100 - 40 * 40)
             dll.SUModelRelease(ctypes.byref(model))
         finally:
             dll.SUTerminate()
