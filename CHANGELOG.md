@@ -61,8 +61,13 @@ for the full scope notes.
   caller-given `start_angle`/`end_angle` (radians). Confirmed via the SDK
   that the written endpoint coordinates land exactly where the requested
   sweep says they should, not just that "some curve object" exists.
-  Freeform polyline curves (`CCurve`, distinct from a true arc) are not
-  yet exposed as public API.
+- Freeform polyline curves (`add_polyline`) — an arbitrary chain of
+  straight edges (open or `closed`) grouped into one genuine `CCurve`
+  entity, distinct from `CArcCurve`'s own geometric frame: just a type
+  tag and an edge count, ground-truth-derived from SDK-authored open and
+  closed polylines of several edge counts. Confirmed via the SDK that
+  every edge shares the same curve object, typed as `SUCurveType_Simple`
+  (not `ArcCurve`), with the correct edge count.
 - Every file now opens to the standard "Iso" view (parallel projection,
   looking at the origin) instead of the blank scaffold's own arbitrary
   default camera.

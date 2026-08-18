@@ -39,10 +39,11 @@ are involved, and how.
   Circular faces and partial (open) arcs - real, editable-by-radius
   SketchUp arc/circle entities, not disconnected straight edges that
   merely trace that shape - are supported via :meth:`SkpBuilder.
-  add_circle` / :meth:`SkpBuilder.add_arc` and their
-  :class:`ComponentDefinitionBuilder` equivalents; freeform polyline
-  curve grouping (``CCurve``, distinct from a true arc) is not yet
-  supported.
+  add_circle` / :meth:`SkpBuilder.add_arc`, as are freeform polyline
+  curves (``CCurve`` - a labeled grouping of straight edges, distinct
+  from a true arc's own geometric frame) via :meth:`SkpBuilder.
+  add_polyline`; all three have :class:`ComponentDefinitionBuilder`
+  equivalents.
 * Coordinates are in **inches** - SketchUp's own native internal unit for
   this era of the format. Converting from another unit is the caller's
   responsibility for now.
@@ -247,6 +248,8 @@ _DEFINITION_BASE_BLOCK = bytes([0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
 _FTC_SCHEMA = 4
 
 _ARCCURVE_SCHEMA = 3
+
+_CCURVE_SCHEMA = 4
 
 # A face with no explicit texture positioning stores no CFaceTextureCoords
 # at all, so this identity is only ever used to fill the *other* side's slot
@@ -733,6 +736,26 @@ class _ArchiveWriter:
             self.buf += _f64(v)
         return slot
 
+    def write_curve(self, num_edges: int) -> int:
+        """Write one ``CCurve`` record and return its slot - a freeform
+        polyline curve grouping (as opposed to ``CArcCurve``'s arc
+        geometry): a labeled set of already-straight ``CEdge`` segments,
+        with no geometric data of its own beyond how many edges share it.
+
+        Ground truth (SDK-authored open and closed polylines, of several
+        different edge counts, read back and byte-decoded): the record
+        is just a 1-byte field - always ``1`` in every sample tested
+        (open or closed), written as a constant here since its meaning
+        (beyond a "this is a curve" type tag) hasn't been reverse-
+        engineered - followed by ``num_edges`` as a u32, matching
+        :mod:`openskp.legacy`'s own ``_read_curve`` shape exactly
+        (``r.u8()`` then ``r.u32()``).
+        """
+        slot = self._new_of_known_class("CCurve", schema=_CCURVE_SCHEMA)
+        self._preamble()
+        self.buf += bytes([1]) + _u32(num_edges)
+        return slot
+
     def _write_str(self, s: str) -> None:
         encoded = s.encode("utf-16-le")
         n = len(encoded) // 2
@@ -987,6 +1010,7 @@ class _ArchiveWriter:
         curve_params: Optional[
             Tuple[Point3, Tuple[float, float, float], Tuple[float, float, float], float, float, float, int]
         ] = None,
+        polyline_num_edges: Optional[int] = None,
     ) -> Tuple[List[int], List[int], int]:
         """Write a chain of straight ``CEdge`` records connecting ``points``
         in order, sharing vertices/edges via ``vertex_slots``/
@@ -994,18 +1018,22 @@ class _ArchiveWriter:
         its own, always-``closed`` polygon boundary) - ``closed=True``
         also connects the last point back to the first (an ``n``-edge
         loop); ``closed=False`` stops after the last pair (an ``n-1``-edge
-        open chain, for a partial arc with no face).
+        open chain, for a partial arc or polyline curve with no face).
 
         Returns ``(edge_slots, edge_senses, new_entities)`` - the last is
         how many new root-entity-list slots were consumed (edges newly
         declared; the caller adds any of its own, e.g. a face record).
 
-        ``curve_params``, if given, is a ``(center, normal, xaxis,
-        start_angle, end_angle, radius, num_segments)`` tuple for
-        :meth:`write_arc_curve` - ground truth shows the shared
-        ``CArcCurve`` is declared inline as the FIRST newly-declared
-        edge's own "curve" field, and every other edge newly declared by
-        this call backrefs that same slot instead of writing a null curve.
+        At most one of ``curve_params``/``polyline_num_edges`` should be
+        given - both describe the SAME first-use-inline-declaration
+        pattern (ground truth shows the shared curve object is declared
+        inline as the FIRST newly-declared edge's own "curve" field, and
+        every other edge newly declared by this call backrefs that same
+        slot instead of writing a null curve), just for two different
+        curve record types: ``curve_params`` is a ``(center, normal,
+        xaxis, start_angle, end_angle, radius, num_segments)`` tuple for
+        :meth:`write_arc_curve` (a circle/arc); ``polyline_num_edges`` is
+        the edge count :meth:`write_curve` needs (a freeform polyline).
         """
         n = len(points)
         pair_count = n if closed else n - 1
@@ -1038,11 +1066,12 @@ class _ArchiveWriter:
                     vertex_slots[points[idx]] = point_slots[idx]
                 else:
                     self._backref(point_slots[idx])
-            if curve_params is not None:
-                if curve_slot is None:
-                    curve_slot = self.write_arc_curve(*curve_params)
-                else:
-                    self._backref(curve_slot)
+            if curve_slot is not None:
+                self._backref(curve_slot)
+            elif curve_params is not None:
+                curve_slot = self.write_arc_curve(*curve_params)
+            elif polyline_num_edges is not None:
+                curve_slot = self.write_curve(polyline_num_edges)
             else:
                 self._null()  # curve = None
             edge_slots.append(edge_slot)
@@ -1076,6 +1105,38 @@ class _ArchiveWriter:
         _, _, new_entities = self._write_edge_chain(
             points, vertex_slots, edge_registry, False,
             hidden_edges, soft_edges, smooth_edges, curve_params,
+        )
+        return new_entities
+
+    def write_polyline(
+        self,
+        points: Sequence[Point3],
+        vertex_slots: Dict[Point3, int],
+        edge_registry: Dict[FrozenSet[int], Tuple[int, int]],
+        closed: bool = False,
+        hidden_edges: bool = False,
+        soft_edges: bool = False,
+        smooth_edges: bool = False,
+    ) -> int:
+        """Write a freeform polyline curve - a chain of straight ``CEdge``
+        records connecting ``points`` in order, all sharing one ``CCurve``
+        grouping (see :meth:`write_curve`), no face. ``closed=True``
+        additionally connects the last point back to the first. Distinct
+        from `write_arc`: there's no geometric arc frame here, just a
+        labeled set of already-straight edges - the same grouping real
+        SketchUp's own Freehand/multi-segment-line tools produce.
+        Returns how many new root-entity-list slots were consumed (edges
+        newly declared; the ``CCurve`` itself is declared inline as the
+        first one's own "curve" field, so it doesn't consume a separate
+        slot - the same pattern `write_arc`/`write_face` use for
+        ``CArcCurve``).
+        """
+        n = len(points)
+        pair_count = n if closed else n - 1
+        _, _, new_entities = self._write_edge_chain(
+            points, vertex_slots, edge_registry, closed,
+            hidden_edges, soft_edges, smooth_edges,
+            polyline_num_edges=pair_count,
         )
         return new_entities
 
@@ -1360,6 +1421,26 @@ class ComponentDefinitionBuilder:
         self._new_entity_count += writer.write_arc(
             points, self._vertex_slots, self._edge_registry, curve_params,
             hidden_edges, soft_edges, smooth_edges,
+        )
+
+    def add_polyline(
+        self,
+        points: Sequence[Point3],
+        closed: bool = False,
+        hidden_edges: bool = False,
+        soft_edges: bool = False,
+        smooth_edges: bool = False,
+    ) -> None:
+        """Add one freeform polyline curve to this definition - same
+        signature and behavior as :meth:`SkpBuilder.add_polyline`, except
+        vertices/edges are shared only within this definition."""
+        self._check_writable("polylines")
+        points = [(float(p[0]), float(p[1]), float(p[2])) for p in points]
+        if len(points) < 2:
+            raise SkpWriteError("a polyline needs at least 2 points")
+        self._new_entity_count += self._skp._definition_writer.write_polyline(
+            points, self._vertex_slots, self._edge_registry,
+            closed, hidden_edges, soft_edges, smooth_edges,
         )
 
     def add_instance(
@@ -2022,6 +2103,41 @@ class SkpBuilder:
         self._new_entity_count += self._geometry_writer.write_arc(
             points, self._vertex_slots, self._edge_registry, curve_params,
             hidden_edges, soft_edges, smooth_edges,
+        )
+        self._face_count += 1  # reuses the "at least one root entity" check in to_bytes
+
+    def add_polyline(
+        self,
+        points: Sequence[Point3],
+        closed: bool = False,
+        hidden_edges: bool = False,
+        soft_edges: bool = False,
+        smooth_edges: bool = False,
+    ) -> None:
+        """Add one freeform polyline curve - a chain of straight edges
+        (``points`` in order, at least 2) grouped into one genuine
+        SketchUp "Curve" entity (selectable/editable as a whole, the same
+        grouping real SketchUp's own Freehand/multi-segment-line tools
+        produce), not disconnected individual edges that merely happen to
+        connect end-to-end. No face, unlike `add_face`. Distinct from
+        `add_arc`: there's no arc geometry here, just a labeled set of
+        already-straight edges - use this for an arbitrary polyline shape
+        that isn't a circular arc.
+
+        ``closed``, if true, also connects the last point back to the
+        first. ``hidden_edges``/``soft_edges``/``smooth_edges`` apply to
+        every edge (all newly declared, since a polyline's own points are
+        essentially never shared with prior geometry).
+
+        >>> builder.add_polyline([(0, 0, 0), (10, 10, 0), (20, 0, 0), (30, 10, 0)])
+        """
+        points = [(float(p[0]), float(p[1]), float(p[2])) for p in points]
+        if len(points) < 2:
+            raise SkpWriteError("a polyline needs at least 2 points")
+        self._ensure_geometry_writer()
+        self._new_entity_count += self._geometry_writer.write_polyline(
+            points, self._vertex_slots, self._edge_registry,
+            closed, hidden_edges, soft_edges, smooth_edges,
         )
         self._face_count += 1  # reuses the "at least one root entity" check in to_bytes
 

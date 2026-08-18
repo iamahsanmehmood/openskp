@@ -131,9 +131,10 @@ positioning (on a face of any orientation), custom key/value
 attribute dictionaries on definitions/instances/faces (the same
 mechanism SketchUp's own "dynamic component" attributes use), and
 circular faces and partial arcs (genuine, editable-by-radius arc/circle
-entities, not disconnected straight edges that merely trace that shape)
-are all supported. See [`openskp/create.py`](src/openskp/create.py) for
-the full scope notes.
+entities, not disconnected straight edges that merely trace that shape),
+and freeform polyline curves (an arbitrary chain of edges grouped into
+one genuine `CCurve` entity) are all supported. See
+[`openskp/create.py`](src/openskp/create.py) for the full scope notes.
 
 ```python
 from openskp import create
@@ -177,6 +178,9 @@ builder.add_circle((100, 75, 0), normal=(0, 0, 1), radius=30, num_segments=24)
 # A partial (open) arc - same real curve entity, but edges only, no face
 import math
 builder.add_arc((100, 75, 0), normal=(0, 0, 1), radius=30, start_angle=0, end_angle=math.pi / 2)
+
+# A freeform polyline - an arbitrary edge chain grouped into one curve
+builder.add_polyline([(0, 0, 0), (10, 10, 0), (20, 0, 0), (30, 10, 0)])
 
 builder.save("output.skp")
 ```
