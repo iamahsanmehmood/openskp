@@ -1187,6 +1187,39 @@ class TestKitchenSink:
         assert kinds["CFace"] == 6  # 3 disjoint + 3 sharing one edge
 
 
+class TestDefaultCamera:
+    def test_every_file_gets_the_iso_camera_patch(self):
+        # Byte-level guard: every file this writer produces should carry the
+        # same fixed ISO-camera bytes at the same fixed offsets, regardless
+        # of what geometry/materials/etc. it also contains - independent of
+        # the SDK oracle test below, which additionally confirms real
+        # SketchUp reads these bytes back as the intended eye/target/
+        # perspective.
+        builder = create()
+        builder.add_face(SQUARE)
+        data = builder.to_bytes()
+        off = create_module._ISO_CAMERA_PREFIX_OFFSET
+        patch = create_module._ISO_CAMERA_PREFIX_PATCH
+        assert data[off : off + len(patch)] == patch
+
+    def test_camera_patch_present_regardless_of_other_content(self):
+        # The prefix patch offset is well before _material_insert_pos, so
+        # it should never move even once materials/layers/definitions
+        # shift everything after it - confirmed with a file that exercises
+        # all of those.
+        builder = create()
+        red = builder.add_material("Red", (255, 0, 0))
+        builder.add_layer("Roof")
+        with builder.add_component_definition("Chair") as chair:
+            chair.add_face(SQUARE)
+        builder.add_instance(chair)
+        builder.add_face(SQUARE, material=red)
+        data = builder.to_bytes()
+        off = create_module._ISO_CAMERA_PREFIX_OFFSET
+        patch = create_module._ISO_CAMERA_PREFIX_PATCH
+        assert data[off : off + len(patch)] == patch
+
+
 class TestScaffoldIntegrity:
     def test_scaffold_hash_matches_expected(self):
         # Guards against the scaffold file silently drifting (e.g. a bad
@@ -1908,6 +1941,46 @@ class TestRealSketchUpOracle:
             assert err == 0
             assert uvq.u == pytest.approx(0.5)
             assert uvq.q == pytest.approx(1.0)
+            dll.SUModelRelease(ctypes.byref(model))
+        finally:
+            dll.SUTerminate()
+
+    def test_default_camera_is_iso_through_real_sketchup(self, tmp_path):
+        import ctypes
+
+        class SUPoint3D(ctypes.Structure):
+            _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double), ("z", ctypes.c_double)]
+
+        class SUVector3D(ctypes.Structure):
+            _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double), ("z", ctypes.c_double)]
+
+        builder = create()
+        builder.add_face(SQUARE)
+        out = tmp_path / "iso_camera.skp"
+        builder.save(str(out))
+
+        dll = ctypes.CDLL(_SDK_DLL_PATH)
+        dll.SUModelCreateFromFile.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_char_p]
+        dll.SUModelGetCamera.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUCameraGetOrientation.argtypes = [
+            ctypes.c_void_p, ctypes.POINTER(SUPoint3D), ctypes.POINTER(SUPoint3D), ctypes.POINTER(SUVector3D),
+        ]
+        dll.SUCameraGetPerspective.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_bool)]
+        dll.SUInitialize()
+        try:
+            model = ctypes.c_void_p()
+            err = dll.SUModelCreateFromFile(ctypes.byref(model), str(out).encode())
+            assert err == 0, f"SketchUp SDK rejected the file (error {err})"
+            camera = ctypes.c_void_p()
+            dll.SUModelGetCamera(model, ctypes.byref(camera))
+            eye, target, up = SUPoint3D(), SUPoint3D(), SUVector3D()
+            err = dll.SUCameraGetOrientation(camera, ctypes.byref(eye), ctypes.byref(target), ctypes.byref(up))
+            assert err == 0
+            assert (eye.x, eye.y, eye.z) == pytest.approx((100.0, -100.0, 100.0))
+            assert (target.x, target.y, target.z) == pytest.approx((0.0, 0.0, 0.0))
+            perspective = ctypes.c_bool()
+            dll.SUCameraGetPerspective(camera, ctypes.byref(perspective))
+            assert perspective.value is False
             dll.SUModelRelease(ctypes.byref(model))
         finally:
             dll.SUTerminate()

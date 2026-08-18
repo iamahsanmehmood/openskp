@@ -40,6 +40,9 @@ for the full scope notes.
   correspondences. Currently limited to faces aligned to the X, Y, or Z
   axis.
 - Per-face/per-edge hidden, soft, and smooth flags.
+- Every file now opens to the standard "Iso" view (parallel projection,
+  looking at the origin) instead of the blank scaffold's own arbitrary
+  default camera.
 - No SketchUp SDK dependency at import, write, or any other runtime path.
   The bundled blank-document scaffold this module splices geometry into
   is disclosed plainly as SDK-authored boilerplate (Trimble's own

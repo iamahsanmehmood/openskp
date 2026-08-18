@@ -31,6 +31,10 @@ are involved, and how.
 * Coordinates are in **inches** - SketchUp's own native internal unit for
   this era of the format. Converting from another unit is the caller's
   responsibility for now.
+* Every file opens to the standard "Iso" view (parallel projection,
+  looking at the origin from the (1, -1, 1) octant) rather than the
+  blank scaffold's own arbitrary default camera - see
+  ``_ISO_CAMERA_PREFIX_PATCH`` below. Not configurable yet.
 * Editing an *existing* arbitrary ``.skp`` file is a separate, harder
   problem this module does not attempt: real SketchUp does not simply
   append to a file on save, it re-serializes the whole document, so there
@@ -100,6 +104,36 @@ _SCAFFOLD_SHA256 = "809a1ab73a20a192ab13aaff197afb1c67d0e9352f6a353a9cd8030919f8
 # file's tail content; do not reuse for a different base file without
 # re-deriving them the same way.
 _TAIL_REF_POSITIONS = (409, 468, 477, 479, 1383, 1385)
+
+# The blank scaffold ships with SketchUp's own arbitrary default camera;
+# every file this writer produces instead always patches it to the
+# standard "Iso" view (eye along the (1, -1, 1) octant looking at the
+# origin, up = Z, parallel/orthographic projection - matching Camera >
+# Standard Views > Iso) so it opens already framed the conventional way,
+# rather than whatever angle a brand-new blank document happens to
+# default to. Found the same way as every other ground-truth constant
+# here: diffing two SDK-authored blank documents that differ only in an
+# explicit SUCameraSetOrientation + SUCameraSetPerspective(False) call
+# before saving - these are the exact bytes real SketchUp itself wrote
+# for that camera, copied verbatim rather than decoded (like
+# _CAMERA_TEMPLATE, this project has not reverse-engineered CCamera's
+# own internal field layout, only confirmed these specific byte ranges
+# are what changes for this camera setting). The prefix offset is
+# absolute (within the always-unshifted scaffold prefix, well before
+# _material_insert_pos); the tail patches are relative to the document
+# "tail" like _TAIL_REF_POSITIONS, since this camera setting also
+# touches two small fields further into that region.
+_ISO_CAMERA_PREFIX_OFFSET = 2993
+_ISO_CAMERA_PREFIX_PATCH = bytes.fromhex(
+    "594000000000000059c000000000000059400000000000000000000000000000"
+    "000000000000000000003f2c0c70bd20dabf3f2c0c70bd20da3f3f2c0c70bd20"
+    "ea3f000000000000f03f0000000000408f40000000000000003e402adf272c80"
+    "3457"
+)
+_ISO_CAMERA_TAIL_PATCHES = (
+    (509, bytes.fromhex("d0a869613c442d4799a4667d1adfa836")),
+    (1390, bytes.fromhex("4e53c84477029246bba95827bba7e2")),
+)
 
 _CLAYER_PATTERN = re.escape(b"\xff\xff") + b".." + re.escape(struct.pack("<H", 6) + b"CLayer")
 
@@ -1416,6 +1450,9 @@ class SkpBuilder:
         if pid_delta:
             u16 = struct.unpack_from("<H", prefix, _PID_COUNTER_POS)[0]
             struct.pack_into("<H", prefix, _PID_COUNTER_POS, u16 + pid_delta)
+        prefix[_ISO_CAMERA_PREFIX_OFFSET : _ISO_CAMERA_PREFIX_OFFSET + len(_ISO_CAMERA_PREFIX_PATCH)] = (
+            _ISO_CAMERA_PREFIX_PATCH
+        )
         out += prefix
         out += _u32(self._material_count)
         out += self._material_writer.buf
@@ -1454,6 +1491,8 @@ class SkpBuilder:
         total_tail_shift = material_shift + layer_shift + definition_shift + geometry_shift
         for pos in _TAIL_REF_POSITIONS:
             _shift_ref(tail, pos, total_tail_shift)
+        for pos, patch in _ISO_CAMERA_TAIL_PATCHES:
+            tail[pos : pos + len(patch)] = patch
         out += tail
         return bytes(out)
 
