@@ -512,7 +512,7 @@ export function buildSceneFromParsed(parsed: ParsedRawData, options?: ParseOptio
     currentMatrix: number[],
     parentLayer: string = 'Layer0',
     pathName: string = 'ROOT',
-    inheritedMaterialColor?: { r: number; g: number; b: number }
+    inheritedMaterial?: Material
   ): InstanceNode[] {
     const d = defsDict.get(defId);
     if (!d) return [];
@@ -618,10 +618,16 @@ export function buildSceneFromParsed(parsed: ParsedRawData, options?: ParseOptio
       };
 
       for (const [_fId, fData] of builder.faces.entries()) {
-        const fallbackColor = inheritedMaterialColor ?? getLayerColor(parentLayer);
+        const fallbackColor = inheritedMaterial?.color ?? getLayerColor(parentLayer);
 
-        const frontMat = resolveMaterial((fData as any).materialId);
-        const backMat = resolveMaterial((fData as any).backMaterialId);
+        // A face with no material of its own is painted by the instance
+        // (SketchUp's "paint the component"). Inheriting the whole material -
+        // not just its colour - is what gives computeFaceUv the texture's tile
+        // size: without it tileW/tileH fall back to 1 and the UVs come out in
+        // raw inches, so a 1.9 m decor sheet tiles ~150 times across a 600 mm
+        // panel instead of covering a third of it.
+        const frontMat = resolveMaterial((fData as any).materialId) ?? inheritedMaterial;
+        const backMat = resolveMaterial((fData as any).backMaterialId) ?? inheritedMaterial;
         const frontColor = frontMat?.color ?? fallbackColor;
         const backColor = backMat?.color ?? fallbackColor;
 
@@ -751,7 +757,7 @@ export function buildSceneFromParsed(parsed: ParsedRawData, options?: ParseOptio
       const newMatrix = multiplyMatrices(currentMatrix, instMatrix);
 
       let lName = parentLayer;
-      let instColor = inheritedMaterialColor;
+      let instMaterial = inheritedMaterial;
       // Legacy (pre-2021 MFC) instances carry a precomputed `properties`
       // record (see legacy.ts's extractLegacyDynamicProperties) - VFF
       // instances don't set this, so this stays {} for them and gets
@@ -771,7 +777,7 @@ export function buildSceneFromParsed(parsed: ParsedRawData, options?: ParseOptio
         if (matName) {
           const mat = materialsMap.get(matName) || materialsByFolder.get(matName);
           if (mat) {
-            instColor = mat.color;
+            instMaterial = mat;
           }
         }
       }
@@ -805,7 +811,7 @@ export function buildSceneFromParsed(parsed: ParsedRawData, options?: ParseOptio
         });
       }
       activeDefinitions.add(refIdx);
-      const childNodes = instantiate(refIdx, newMatrix, lName, fullPathName, instColor);
+      const childNodes = instantiate(refIdx, newMatrix, lName, fullPathName, instMaterial);
       activeDefinitions.delete(refIdx);
 
       const tx = (newMatrix[9] ?? 0) * 25.4;
