@@ -133,7 +133,8 @@ mechanism SketchUp's own "dynamic component" attributes use), and
 circular faces and partial arcs (genuine, editable-by-radius arc/circle
 entities, not disconnected straight edges that merely trace that shape),
 and freeform polyline curves (an arbitrary chain of edges grouped into
-one genuine `CCurve` entity) are all supported, along with an
+one genuine `CCurve` entity) are all supported, along with faces with
+one or more holes cut out (a window opening in a wall, say) and an
 `add_face(..., auto_triangulate=True)` fallback for non-planar input.
 `openskp.open_existing()` can also load an *existing* legacy-format file
 and rebuild it as a new builder, so more geometry can be added to it
@@ -192,6 +193,11 @@ builder.add_polyline([(0, 0, 0), (10, 10, 0), (20, 0, 0), (30, 10, 0)])
 # faces instead of raising, the same thing SketchUp's own UI does
 warped_quad = [(0, 0, 0), (10, 0, 0), (10, 10, 0), (0, 10, 5)]
 builder.add_face(warped_quad, auto_triangulate=True)
+
+# A face with a hole cut out - a window opening in a wall
+wall = [(0, 0, 0), (200, 0, 0), (200, 100, 0), (0, 100, 0)]
+window = [(80, 30, 0), (120, 30, 0), (120, 70, 0), (80, 70, 0)]
+builder.add_face(wall, holes=[window])
 
 builder.save("output.skp")
 ```

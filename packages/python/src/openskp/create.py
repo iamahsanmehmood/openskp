@@ -1229,6 +1229,7 @@ class _ArchiveWriter:
         curve_params: Optional[
             Tuple[Point3, Tuple[float, float, float], Tuple[float, float, float], float, float, float, int]
         ] = None,
+        holes: Sequence[Sequence[Point3]] = (),
     ) -> int:
         """Write one planar face and return how many new root-entity-list
         slots it consumed (edges newly declared, plus the face itself) -
@@ -1276,6 +1277,20 @@ class _ArchiveWriter:
         OTHER edge newly declared by this call then backrefs that same
         slot instead of writing a null curve. An edge already shared
         with a previous face is left alone either way.
+
+        ``holes``, if given, is a sequence of point lists - each an
+        independent closed polygon (own winding direction doesn't
+        matter, confirmed via the SDK's own geometry-input API accepting
+        either), cut out of the face. Ground truth (an SDK-authored
+        window-in-a-wall face) shows a hole is just another ``CLoop`` in
+        the face's own ``nloops`` list, with its own independent edges -
+        the ONLY difference from the outer boundary loop is its first
+        flag byte (``0`` instead of ``1``; ground truth confirms this
+        exact byte marks a loop as a hole rather than the boundary,
+        tested with 2 holes in one face - both showed the same ``0``).
+        Every hole's points must lie on the same plane as ``points``
+        itself - a hole floating off the face's own plane doesn't mean
+        anything.
         """
         # Validate everything that CAN fail (a degenerate UV correspondence,
         # an unsupported attribute value) before writing a single byte or
@@ -1292,11 +1307,31 @@ class _ArchiveWriter:
         back_matrix = _uv_matrix_for_face(points, back_uv, (nx, ny, nz)) if back_uv is not None else None
         for _, entries in attribute_dicts:
             self._validate_attribute_entries(entries)
+        span = max(max(p[i] for p in points) - min(p[i] for p in points) for i in range(3))
+        tol = max(span, 1.0) * 1e-6
+        for hole in holes:
+            if len(hole) < 3:
+                raise SkpWriteError("a hole needs at least 3 points")
+            for p in hole:
+                dist = nx * p[0] + ny * p[1] + nz * p[2] - d
+                if abs(dist) > tol:
+                    raise SkpWriteError(
+                        f"hole point {p} is {abs(dist):.6g} units off the face's own "
+                        "plane - a hole must lie on the same plane as the outer boundary"
+                    )
 
         edge_slots, edge_senses, new_entities = self._write_edge_chain(
             points, vertex_slots, edge_registry, True,
             hidden_edges, soft_edges, smooth_edges, curve_params,
         )
+        hole_loops: List[Tuple[List[int], List[int]]] = []
+        for hole in holes:
+            h_edge_slots, h_edge_senses, h_new = self._write_edge_chain(
+                list(hole), vertex_slots, edge_registry, True,
+                hidden_edges, soft_edges, smooth_edges, None,
+            )
+            hole_loops.append((h_edge_slots, h_edge_senses))
+            new_entities += h_new
 
         self._new_of_known_class("CFace", schema=3)
         if front_uv is not None or back_uv is not None or attribute_dicts:
@@ -1305,7 +1340,7 @@ class _ArchiveWriter:
             self._preamble()
         self._drawbase(mat=face_material, layer=face_layer, hidden=hidden)
         self.buf += _f64(nx) + _f64(ny) + _f64(nz) + _f64(d)
-        self.buf += _u32(1)  # nloops = 1
+        self.buf += _u32(1 + len(holes))  # nloops
 
         loop_slot = self._new_of_known_class("CLoop", schema=1)
         self._preamble(pid=0)  # structural object: ground truth uses pid 0
@@ -1321,6 +1356,18 @@ class _ArchiveWriter:
             self.buf.append(edge_senses[i])
             self._backref(loop_slot)
         self._null()  # loop terminator
+
+        for h_edge_slots, h_edge_senses in hole_loops:
+            h_loop_slot = self._new_of_known_class("CLoop", schema=1)
+            self._preamble(pid=0)
+            self.buf += bytes([0, 1])  # ground truth: 0 marks a hole loop, not the boundary
+            for i in range(len(h_edge_slots)):
+                self._new_of_known_class("CEdgeUse", schema=1)
+                self._preamble(pid=0)
+                self._backref(h_edge_slots[i])
+                self.buf.append(h_edge_senses[i])
+                self._backref(h_loop_slot)
+            self._null()
 
         self.buf += struct.pack("<H", back_material)
         new_entities += 1  # the face itself
@@ -1410,6 +1457,7 @@ def _write_face_or_triangulate(
     back_uv: Optional[Sequence[Tuple[Point3, Tuple[float, float]]]],
     attribute_dicts: Sequence[Tuple[str, Dict[str, object]]],
     auto_triangulate: bool,
+    holes: Sequence[Sequence[Point3]] = (),
 ) -> int:
     """Shared by :meth:`SkpBuilder.add_face` and
     :meth:`ComponentDefinitionBuilder.add_face` - writes ``points`` as one
@@ -1420,7 +1468,10 @@ def _write_face_or_triangulate(
     4-point face you draw that isn't quite flat is silently split into 2
     triangles rather than rejected. Not attempted for a genuinely
     degenerate (collinear) input - `_is_coplanar` still raises for that,
-    since no triangulation fixes it.
+    since no triangulation fixes it. Not attempted either when ``holes``
+    is given - a triangulated-with-holes face isn't supported, so a
+    non-planar boundary combined with holes just falls through to
+    `write_face`'s own (in that case, hole-plane) validation error.
 
     Not compatible with ``front_uv``/``back_uv``: positioning a texture
     from one 3-point correspondence doesn't generalize to a fan of
@@ -1429,12 +1480,13 @@ def _write_face_or_triangulate(
     Returns the total new-root-entity-list-slot count (same contract as
     `write_face`/`write_arc`/`write_polyline`).
     """
-    if not auto_triangulate or len(points) == 3 or _is_coplanar(points):
+    if holes or not auto_triangulate or len(points) == 3 or _is_coplanar(points):
         return writer.write_face(
             points, vertex_slots, edge_registry,
             material, layer, back_material,
             hidden, soft_edges, smooth_edges, hidden_edges,
             front_uv, back_uv, attribute_dicts,
+            holes=holes,
         )
     if front_uv is not None or back_uv is not None:
         raise SkpWriteError("auto_triangulate cannot be combined with front_uv/back_uv positioning")
@@ -1501,6 +1553,7 @@ class ComponentDefinitionBuilder:
         attributes: Optional[Dict[str, object]] = None,
         attribute_dict_name: str = "attributes",
         auto_triangulate: bool = False,
+        holes: Sequence[Sequence[Point3]] = (),
     ) -> None:
         """Add one planar face to this definition - same signature and
         behavior as :meth:`SkpBuilder.add_face`, except vertices/edges are
@@ -1510,12 +1563,14 @@ class ComponentDefinitionBuilder:
         points = [(float(p[0]), float(p[1]), float(p[2])) for p in points]
         if len(points) < 3:
             raise SkpWriteError("a face needs at least 3 points")
+        holes = [[(float(p[0]), float(p[1]), float(p[2])) for p in hole] for hole in holes]
         attribute_dicts = [(attribute_dict_name, attributes)] if attributes else []
         self._new_entity_count += _write_face_or_triangulate(
             self._skp._definition_writer, points, self._vertex_slots, self._edge_registry,
             material or 0, layer or 0, back_material or 0,
             hidden, soft_edges, smooth_edges, hidden_edges,
             front_uv, back_uv, attribute_dicts, auto_triangulate,
+            holes=holes,
         )
 
     def add_circle(
@@ -2141,6 +2196,7 @@ class SkpBuilder:
         attributes: Optional[Dict[str, object]] = None,
         attribute_dict_name: str = "attributes",
         auto_triangulate: bool = False,
+        holes: Sequence[Sequence[Point3]] = (),
     ) -> None:
         """Add one planar face, defined by 3 or more coplanar points (in
         inches) forming a closed polygon in order - do not repeat the
@@ -2196,10 +2252,23 @@ class SkpBuilder:
         unpredictable number of independently-drawn triangles). Already-
         planar input is written as a single face either way - this only
         changes behavior for input that would otherwise be rejected.
+
+        ``holes``, if given, is a sequence of point lists - each an
+        independent closed polygon (winding direction doesn't matter)
+        cut out of the face, e.g. a window opening in a wall:
+
+        >>> wall = [(0, 0, 0), (200, 0, 0), (200, 100, 0), (0, 100, 0)]
+        >>> window = [(80, 30, 0), (120, 30, 0), (120, 70, 0), (80, 70, 0)]
+        >>> builder.add_face(wall, holes=[window])
+
+        Every hole's points must lie on the same plane as ``points``
+        itself. Not combined with ``auto_triangulate`` - see that
+        parameter's own note.
         """
         points = [(float(p[0]), float(p[1]), float(p[2])) for p in points]
         if len(points) < 3:
             raise SkpWriteError("a face needs at least 3 points")
+        holes = [[(float(p[0]), float(p[1]), float(p[2])) for p in hole] for hole in holes]
         self._ensure_geometry_writer()
         attribute_dicts = [(attribute_dict_name, attributes)] if attributes else []
         self._new_entity_count += _write_face_or_triangulate(
@@ -2207,6 +2276,7 @@ class SkpBuilder:
             material or 0, layer or 0, back_material or 0,
             hidden, soft_edges, smooth_edges, hidden_edges,
             front_uv, back_uv, attribute_dicts, auto_triangulate,
+            holes=holes,
         )
         self._face_count += 1
 

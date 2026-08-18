@@ -24,9 +24,6 @@ module's own docstring for why):
 * Only a **legacy-format** (SketchUp 2013-2020) source file is accepted -
   :mod:`openskp.create` never writes any other format, so a modern VFF
   (2021+) source can't be faithfully round-tripped through it.
-* A face with more than one loop (a hole) is skipped - `write_face`
-  (like real SketchUp's own simplest case) only supports a single
-  boundary loop; a warning is returned identifying it.
 * Per-edge ``hidden``/``soft``/``smooth`` flags are applied per-FACE, not
   per-edge (an "any edge in this boundary has the flag" approximation) -
   `add_face` can only set these uniformly for every edge it newly
@@ -194,7 +191,7 @@ def _edge_map(defn: Definition) -> Dict[int, Tuple[int, int]]:
 def _definition_has_content(defn: Definition, def_builders: Dict[int, ComponentDefinitionBuilder]) -> bool:
     edges = _edge_map(defn)
     for face in defn.faces.values():
-        if len(face.loops) != 1:
+        if not face.loops:
             continue
         if len(_scene_mod._reconstruct_loop_vertices(face.loops[0], edges)) >= 3:
             return True
@@ -239,14 +236,22 @@ def _replay_face(
     warnings: List[str],
     context: str,
 ) -> None:
-    if len(face.loops) != 1:
-        warnings.append(f"{context}: face {face.id} has {len(face.loops)} loops (holes) - skipped")
+    if len(face.loops) < 1:
+        warnings.append(f"{context}: face {face.id} has no loops - skipped")
         return
     vert_ids = _scene_mod._reconstruct_loop_vertices(face.loops[0], edges)
     if len(vert_ids) < 3:
         warnings.append(f"{context}: face {face.id} has fewer than 3 usable points - skipped")
         return
     points = [(defn.vertices[v].x, defn.vertices[v].y, defn.vertices[v].z) for v in vert_ids]
+
+    holes: List[List[Point3]] = []
+    for hole_loop in face.loops[1:]:
+        hole_vert_ids = _scene_mod._reconstruct_loop_vertices(hole_loop, edges)
+        if len(hole_vert_ids) < 3:
+            warnings.append(f"{context}: face {face.id} has a hole with fewer than 3 usable points - skipped")
+            return
+        holes.append([(defn.vertices[v].x, defn.vertices[v].y, defn.vertices[v].z) for v in hole_vert_ids])
 
     loop_edges = [defn.edges[eid] for eid, _ in face.loops[0] if eid in defn.edges]
     hidden_edges = any(e.hidden for e in loop_edges)
@@ -265,6 +270,7 @@ def _replay_face(
             material=material, back_material=back_material,
             hidden=face.hidden, soft_edges=soft_edges, smooth_edges=smooth_edges, hidden_edges=hidden_edges,
             front_uv=front_uv, back_uv=back_uv,
+            holes=holes,
         )
     except SkpWriteError as exc:
         warnings.append(f"{context}: face {face.id} skipped ({exc})")

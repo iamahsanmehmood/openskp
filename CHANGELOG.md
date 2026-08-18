@@ -107,6 +107,22 @@ for the full scope notes.
   instead of raising, the same silent fallback real SketchUp's own UI
   applies when you draw a not-quite-flat face. Off by default — existing
   strict-planarity behavior is unchanged unless opted into.
+  file had that couldn't be faithfully reproduced (a projected texture,
+  a colorized material's tint, and several others — see the module's
+  own docstring for the complete, itemized list) rather than silently
+  dropping it.
+- `add_face(..., holes=[...])` — cut one or more independent closed
+  polygons out of a face (a window opening in a wall, say) as real
+  additional loops in the same `CFace` record, not a separate,
+  unconnected geometry hack. Ground-truth-derived from an SDK-authored
+  window-in-a-wall face: a hole loop is structurally identical to the
+  boundary loop except one flag byte, and its winding direction doesn't
+  matter (confirmed via the SDK's own geometry-input API accepting
+  either, and independently by writing raw bytes both ways). Confirmed
+  against the real SDK that the hole's area is genuinely subtracted
+  (`SUFaceGetArea`), not just structurally present.
+  `openskp.open_existing()` now replays a multi-loop face faithfully
+  instead of skipping it.
 
 ### Fixed
 

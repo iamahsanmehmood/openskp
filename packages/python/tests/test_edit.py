@@ -127,13 +127,31 @@ class TestOpenExisting:
         assert rebuilt.materials[0].texture is not None
         assert rebuilt.materials[0].texture.data == _make_test_png()
 
-    def test_face_with_hole_is_skipped_not_corrupting(self, tmp_path):
-        # write_face itself only supports a single loop, so a 2-loop face
-        # can't come from this project's own writer - simulate the reader
-        # seeing one anyway by monkeypatching a definition's own faces
-        # after a normal parse, confirming the skip path doesn't corrupt
-        # anything written after it.
-        from openskp.model import Face
+    def test_face_with_hole_round_trips(self, tmp_path):
+        # add_face's holes= support (added alongside this module) means a
+        # multi-loop face is now faithfully replayed, not skipped.
+        wall = [(0.0, 0.0, 0.0), (200.0, 0.0, 0.0), (200.0, 100.0, 0.0), (0.0, 100.0, 0.0)]
+        window = [(80.0, 30.0, 0.0), (120.0, 30.0, 0.0), (120.0, 70.0, 0.0), (80.0, 70.0, 0.0)]
+        builder = create()
+        builder.add_face(wall, holes=[window])
+        src = tmp_path / "source.skp"
+        builder.save(str(src))
+
+        new_builder, warnings = edit.open_existing(str(src))
+        assert not any("hole" in w for w in warnings)
+        out = tmp_path / "rebuilt.skp"
+        out.write_bytes(new_builder.to_bytes())
+        rebuilt = SkpFile.open(str(out)).parse()
+        face = next(iter(rebuilt.root.faces.values()))
+        assert len(face.loops) == 2
+
+    def test_face_with_invalid_hole_is_skipped_not_corrupting(self, tmp_path):
+        # A hole loop that isn't on the face's own plane is something
+        # write_face itself rejects (upfront-validated, before writing
+        # any bytes) - simulate the reader seeing one anyway by
+        # monkeypatching a parsed definition's faces, confirming the
+        # skip-this-face path doesn't corrupt geometry written afterward.
+        from openskp.model import Edge, Face, Vertex
 
         builder = create()
         builder.add_face(SQUARE)
@@ -144,14 +162,30 @@ class TestOpenExisting:
         model = SkpFile.open(str(src)).parse()
         first_id = next(iter(model.root.faces))
         original = model.root.faces[first_id]
-        model.root.faces[first_id] = Face(id=original.id, loops=[original.loops[0], original.loops[0]])
+
+        # Fabricate an off-plane "hole" loop using fresh vertex/edge ids.
+        off_plane_pts = [(20.0, 20.0, 5.0), (40.0, 20.0, 5.0), (40.0, 40.0, 5.0), (20.0, 40.0, 5.0)]
+        base_vid = max(model.root.vertices) + 1
+        base_eid = max(model.root.edges) + 1
+        hole_loop = []
+        for i, p in enumerate(off_plane_pts):
+            vid = base_vid + i
+            model.root.vertices[vid] = Vertex(id=vid, x=p[0], y=p[1], z=p[2])
+        for i in range(4):
+            eid = base_eid + i
+            v1 = base_vid + i
+            v2 = base_vid + (i + 1) % 4
+            model.root.edges[eid] = Edge(id=eid, v1_id=v1, v2_id=v2)
+            hole_loop.append((eid, 1))
+
+        model.root.faces[first_id] = Face(id=original.id, loops=[original.loops[0], hole_loop])
 
         new_builder = create()
         warnings = []
         material_slots = edit._replay_materials(new_builder, model, warnings)
         layer_slots = {}
         edit._replay_body(new_builder, model.root, model, material_slots, layer_slots, warnings, "root", {})
-        assert any("holes" in w for w in warnings)
+        assert any("skipped" in w for w in warnings)
         data = new_builder.to_bytes()
         # self-parses cleanly and the second (valid) face survived
         out = tmp_path / "rebuilt.skp"

@@ -549,6 +549,22 @@ warped_quad = [(0, 0, 0), (10, 0, 0), (10, 10, 0), (0, 10, 5)]
 builder.add_face(warped_quad, auto_triangulate=True)  # -> 2 triangular faces
 ```
 
+A face can also have one or more holes cut out of it - `holes=` takes
+a list of independent closed polygons, each on the same plane as the
+face itself; winding direction doesn't matter:
+
+```python
+wall = [(0, 0, 0), (200, 0, 0), (200, 100, 0), (0, 100, 0)]
+window = [(80, 30, 0), (120, 30, 0), (120, 70, 0), (80, 70, 0)]
+builder.add_face(wall, holes=[window])
+```
+
+Ground-truth-derived from an SDK-authored window-in-a-wall face: a hole
+is a real additional loop in the same `CFace` record - structurally
+identical to the boundary loop, differing only in one flag byte.
+Confirmed against the real SDK that the hole's area is genuinely
+subtracted (`SUFaceGetArea`), not just structurally present.
+
 Component definitions, instances, and faces can also carry custom
 key/value metadata - the same mechanism SketchUp's own "dynamic
 component" attributes use - via each of their `attributes` parameters
@@ -639,14 +655,14 @@ builder.save("building_edited.skp")
 Only a legacy-format (SketchUp 2013-2020) source file is accepted, for
 the same reason `openskp.create` only ever writes that format. The
 returned `warnings` list is the honest account of what couldn't be
-faithfully reproduced for that specific file - a face with more than one
-loop (a hole), per-edge flags collapsed to a per-face approximation, a
-projected/distorted texture falling back to the default projection, a
-material's texture scale or colorized tint, an instance's hidden flag, a
-layer's color, section planes/text/dimensions (no writer support at
-all), and an original circle/arc's curve grouping (this project's reader
-doesn't preserve it, so it round-trips as a plain straight-edged face) -
-see [`openskp/edit.py`](../packages/python/src/openskp/edit.py)'s own
+faithfully reproduced for that specific file - per-edge flags collapsed
+to a per-face approximation, a projected/distorted texture falling back
+to the default projection, a material's texture scale or colorized tint,
+an instance's hidden flag, a layer's color, section planes/text/
+dimensions (no writer support at all), and an original circle/arc's
+curve grouping (this project's reader doesn't preserve it, so it
+round-trips as a plain straight-edged face) - see
+[`openskp/edit.py`](../packages/python/src/openskp/edit.py)'s own
 module docstring for the complete, itemized list and the reasoning
 behind each one. Round-trip-validated against real, non-writer-authored
 architectural models, not just files this project's own writer produced.
