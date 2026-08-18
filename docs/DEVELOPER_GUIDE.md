@@ -504,6 +504,16 @@ with builder.add_component_definition("Car") as car:
 builder.add_instance(car)
 ```
 
+`add_instance`/`add_group`/`add_group_instance` all also accept
+`rotation=(axis, angle_radians)` as a convenience alternative to
+hand-deriving a `matrix3x3` rotation matrix yourself - pass at most one
+of the two:
+
+```python
+import math
+builder.add_instance(wheel, translation=(0, 0, 0), rotation=((0, 0, 1), math.radians(90)))
+```
+
 A face's texture can also be explicitly positioned (scaled, rotated,
 sheared, offset - independently per side) instead of the default planar
 projection, given 3 world-point/UV correspondences - on a face of any

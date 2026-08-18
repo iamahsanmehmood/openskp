@@ -94,6 +94,12 @@ for the full scope notes.
   projected texture, a colorized material's tint, and several others —
   see the module's own docstring for the complete, itemized list) rather
   than silently dropping it.
+- `rotation=(axis, angle_radians)` on `add_instance`/`add_group`/
+  `add_group_instance` — a convenience alternative to hand-deriving a
+  `matrix3x3` rotation matrix for the common case of a pure rotation
+  (Rodrigues' rotation formula). Confirmed against the real SDK's own
+  `SUComponentInstanceGetTransform` to match SketchUp's transform
+  convention exactly, not just "some rotation was applied."
 
 ### Fixed
 
