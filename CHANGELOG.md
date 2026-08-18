@@ -34,6 +34,11 @@ for the full scope notes.
   another, already-built definition inside its own body
   (`ComponentDefinitionBuilder.add_instance`), the same assembly-of-parts
   nesting real SketchUp supports, to any depth.
+- Explicit texture positioning (`add_face`'s `front_uv`/`back_uv`) —
+  scale, rotate, shear, and offset a face's texture independently per
+  side instead of the default planar projection, given 3 world-point/UV
+  correspondences. Currently limited to faces aligned to the X, Y, or Z
+  axis.
 - Per-face/per-edge hidden, soft, and smooth flags.
 - No SketchUp SDK dependency at import, write, or any other runtime path.
   The bundled blank-document scaffold this module splices geometry into
@@ -58,8 +63,8 @@ entities) as a regression guard.
 
 ### Explicitly out of scope for this first pass
 
-- Explicit texture UV positioning/pinning (default planar projection
-  only).
+- Explicit texture positioning on a tilted (non-axis-aligned) face - the
+  local 2D parameterization needed for that has not been reverse-engineered.
 - Nesting a self-placing *group* (as opposed to a definition instance)
   inside another definition.
 - Editing an existing arbitrary `.skp` file — a separately harder

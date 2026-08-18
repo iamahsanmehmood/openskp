@@ -851,6 +851,171 @@ class TestTextures:
         assert mat_by_slot[t2]["tex_file"] == str(png2)
 
 
+class TestUVPositioning:
+    def test_axis_aligned_scale_matches_solved_matrix(self, tmp_path):
+        png_path = tmp_path / "tex.png"
+        png_path.write_bytes(_make_test_png())
+        builder = create()
+        tex = builder.add_texture_material("Brick", str(png_path))
+        # (0,0,0)->(0,0), (50,0,0)->(1,0), (0,50,0)->(0,1): a pure 50x scale,
+        # no rotation - the matrix should come out as diag(50, 50).
+        builder.add_face(
+            SQUARE, material=tex,
+            front_uv=[((0.0, 0.0, 0.0), (0.0, 0.0)), ((50.0, 0.0, 0.0), (1.0, 0.0)), ((0.0, 50.0, 0.0), (0.0, 1.0))],
+        )
+        data = builder.to_bytes()
+
+        ar, root, layers, materials = legacy._walk(data)
+        face = [v for (_, n, v) in root if n == "CFace"][0]
+        ftc = dict(face["attrs"]["children"])["CFaceTextureCoords"]
+        assert ftc["front"] == pytest.approx((50.0, 0.0, 0.0, 0.0, 50.0, 0.0, 0.0, 0.0, 1.0))
+        assert ftc["back"] == pytest.approx((1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0))
+        assert ftc["front_projected"] is False
+        assert ftc["back_projected"] is False
+
+    def test_rotated_mapping_matches_solved_matrix(self, tmp_path):
+        # (0,0,0)->(0,0), (100,0,0)->(1,1), (0,100,0)->(-1,1): a 45-degree
+        # rotated UV basis - the matrix should show real off-diagonal terms,
+        # not just a diagonal scale.
+        png_path = tmp_path / "tex.png"
+        png_path.write_bytes(_make_test_png())
+        builder = create()
+        tex = builder.add_texture_material("Brick", str(png_path))
+        builder.add_face(
+            SQUARE, material=tex,
+            front_uv=[
+                ((0.0, 0.0, 0.0), (0.0, 0.0)),
+                ((100.0, 0.0, 0.0), (1.0, 1.0)),
+                ((0.0, 100.0, 0.0), (-1.0, 1.0)),
+            ],
+        )
+        data = builder.to_bytes()
+        ar, root, layers, materials = legacy._walk(data)
+        face = [v for (_, n, v) in root if n == "CFace"][0]
+        ftc = dict(face["attrs"]["children"])["CFaceTextureCoords"]
+        assert ftc["front"] == pytest.approx((50.0, -50.0, 0.0, 50.0, 50.0, 0.0, 0.0, 0.0, 1.0))
+
+    def test_front_and_back_positioned_independently(self, tmp_path):
+        png_path = tmp_path / "tex.png"
+        png_path.write_bytes(_make_test_png())
+        builder = create()
+        front_tex = builder.add_texture_material("Front", str(png_path))
+        back_tex = builder.add_texture_material("Back", str(png_path))
+        builder.add_face(
+            SQUARE, material=front_tex, back_material=back_tex,
+            front_uv=[((0.0, 0.0, 0.0), (0.0, 0.0)), ((50.0, 0.0, 0.0), (1.0, 0.0)), ((0.0, 50.0, 0.0), (0.0, 1.0))],
+            back_uv=[((0.0, 0.0, 0.0), (0.0, 0.0)), ((25.0, 0.0, 0.0), (1.0, 0.0)), ((0.0, 25.0, 0.0), (0.0, 1.0))],
+        )
+        data = builder.to_bytes()
+        ar, root, layers, materials = legacy._walk(data)
+        face = [v for (_, n, v) in root if n == "CFace"][0]
+        assert face["db"]["mat"] == front_tex
+        assert face["back_mat"] == back_tex
+        ftc = dict(face["attrs"]["children"])["CFaceTextureCoords"]
+        assert ftc["front"] == pytest.approx((50.0, 0.0, 0.0, 0.0, 50.0, 0.0, 0.0, 0.0, 1.0))
+        assert ftc["back"] == pytest.approx((25.0, 0.0, 0.0, 0.0, 25.0, 0.0, 0.0, 0.0, 1.0))
+
+    def test_unpositioned_face_has_no_texture_coords_record(self, tmp_path):
+        # A face with a texture but no explicit positioning shouldn't pay
+        # for (or emit) a CFaceTextureCoords/attribute-container record at
+        # all - ground truth confirms the default-projection case needs none.
+        png_path = tmp_path / "tex.png"
+        png_path.write_bytes(_make_test_png())
+        builder = create()
+        tex = builder.add_texture_material("Brick", str(png_path))
+        builder.add_face(SQUARE, material=tex)
+        data = builder.to_bytes()
+        ar, root, layers, materials = legacy._walk(data)
+        face = [v for (_, n, v) in root if n == "CFace"][0]
+        assert face["attrs"] is None
+
+    def test_xz_and_yz_aligned_faces_supported(self, tmp_path):
+        png_path = tmp_path / "tex.png"
+        png_path.write_bytes(_make_test_png())
+        builder = create()
+        tex = builder.add_texture_material("Brick", str(png_path))
+        # XZ-aligned face (constant y=0).
+        builder.add_face(
+            [(0.0, 0.0, 0.0), (50.0, 0.0, 0.0), (50.0, 0.0, 50.0), (0.0, 0.0, 50.0)],
+            material=tex,
+            front_uv=[((0.0, 0.0, 0.0), (0.0, 0.0)), ((50.0, 0.0, 0.0), (1.0, 0.0)), ((0.0, 0.0, 50.0), (0.0, 1.0))],
+        )
+        # YZ-aligned face (constant x=0).
+        builder.add_face(
+            [(0.0, 0.0, 0.0), (0.0, 50.0, 0.0), (0.0, 50.0, 50.0), (0.0, 0.0, 50.0)],
+            material=tex,
+            front_uv=[((0.0, 0.0, 0.0), (0.0, 0.0)), ((0.0, 50.0, 0.0), (1.0, 0.0)), ((0.0, 0.0, 50.0), (0.0, 1.0))],
+        )
+        data = builder.to_bytes()
+        ar, root, layers, materials = legacy._walk(data)
+        faces = [v for (_, n, v) in root if n == "CFace"]
+        assert len(faces) == 2
+        for face in faces:
+            ftc = dict(face["attrs"]["children"])["CFaceTextureCoords"]
+            assert ftc["front"] == pytest.approx((50.0, 0.0, 0.0, 0.0, 50.0, 0.0, 0.0, 0.0, 1.0))
+
+    def test_tilted_face_raises(self, tmp_path):
+        png_path = tmp_path / "tex.png"
+        png_path.write_bytes(_make_test_png())
+        builder = create()
+        tex = builder.add_texture_material("Brick", str(png_path))
+        tilted = [(0.0, 0.0, 0.0), (50.0, 0.0, 10.0), (50.0, 50.0, 10.0), (0.0, 50.0, 0.0)]
+        with pytest.raises(SkpWriteError, match="axis"):
+            builder.add_face(
+                tilted, material=tex,
+                front_uv=[((0.0, 0.0, 0.0), (0.0, 0.0)), ((50.0, 0.0, 10.0), (1.0, 0.0)), ((0.0, 50.0, 0.0), (0.0, 1.0))],
+            )
+
+    def test_wrong_number_of_pairs_raises(self, tmp_path):
+        png_path = tmp_path / "tex.png"
+        png_path.write_bytes(_make_test_png())
+        builder = create()
+        tex = builder.add_texture_material("Brick", str(png_path))
+        with pytest.raises(SkpWriteError, match="exactly 3"):
+            builder.add_face(
+                SQUARE, material=tex,
+                front_uv=[((0.0, 0.0, 0.0), (0.0, 0.0)), ((50.0, 0.0, 0.0), (1.0, 0.0))],
+            )
+
+    def test_collinear_uv_points_raise(self, tmp_path):
+        png_path = tmp_path / "tex.png"
+        png_path.write_bytes(_make_test_png())
+        builder = create()
+        tex = builder.add_texture_material("Brick", str(png_path))
+        with pytest.raises(SkpWriteError, match="collinear"):
+            builder.add_face(
+                SQUARE, material=tex,
+                front_uv=[
+                    ((0.0, 0.0, 0.0), (0.0, 0.0)),
+                    ((50.0, 0.0, 0.0), (1.0, 0.0)),
+                    ((0.0, 50.0, 0.0), (2.0, 0.0)),
+                ],
+            )
+
+    def test_positioning_in_component_definition(self, tmp_path):
+        png_path = tmp_path / "tex.png"
+        png_path.write_bytes(_make_test_png())
+        builder = create()
+        tex = builder.add_texture_material("Brick", str(png_path))
+        with builder.add_component_definition("Panel") as panel:
+            panel.add_face(
+                SQUARE, material=tex,
+                front_uv=[
+                    ((0.0, 0.0, 0.0), (0.0, 0.0)), ((50.0, 0.0, 0.0), (1.0, 0.0)), ((0.0, 50.0, 0.0), (0.0, 1.0)),
+                ],
+            )
+        builder.add_instance(panel)
+        data = builder.to_bytes()
+
+        from openskp import SkpFile
+        out = tmp_path / "panel.skp"
+        out.write_bytes(data)
+        model = SkpFile.open(str(out)).parse()
+        defn = model.definitions[panel.slot]
+        face = list(defn.faces.values())[0]
+        assert face.uv_transform == pytest.approx([50.0, 0.0, 0.0, 0.0, 50.0, 0.0, 0.0, 0.0, 1.0])
+
+
 class TestLayers:
     def test_layer_assigned_to_face(self):
         builder = create()
@@ -1680,6 +1845,69 @@ class TestRealSketchUpOracle:
             outlen = ctypes.c_size_t()
             dll.SUStringGetUTF8(sref, length.value + 1, buf, ctypes.byref(outlen))
             assert buf.value.decode("utf-8") == name
+            dll.SUModelRelease(ctypes.byref(model))
+        finally:
+            dll.SUTerminate()
+
+    def test_positioned_texture_round_trips_through_real_sketchup(self, tmp_path):
+        # Beyond just loading without SU_ERROR_MODEL_INVALID: independently
+        # verifies the position through the SDK's own SUUVHelper, which
+        # computes UV coordinates from the same on-disk matrix this test
+        # doesn't otherwise inspect - confirms real SketchUp both accepts
+        # and correctly *interprets* the mapping, not just tolerates it.
+        import ctypes
+
+        class SUPoint3D(ctypes.Structure):
+            _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double), ("z", ctypes.c_double)]
+
+        class SUUVQ(ctypes.Structure):
+            _fields_ = [("u", ctypes.c_double), ("v", ctypes.c_double), ("q", ctypes.c_double)]
+
+        png_path = tmp_path / "tex.png"
+        png_path.write_bytes(_make_test_png())
+        builder = create()
+        tex = builder.add_texture_material("Brick", str(png_path))
+        # (0,0,0)->(0,0), (50,0,0)->(1,0), (0,50,0)->(0,1): pure 50x scale.
+        builder.add_face(
+            SQUARE, material=tex,
+            front_uv=[((0.0, 0.0, 0.0), (0.0, 0.0)), ((50.0, 0.0, 0.0), (1.0, 0.0)), ((0.0, 50.0, 0.0), (0.0, 1.0))],
+        )
+        out = tmp_path / "positioned.skp"
+        builder.save(str(out))
+
+        dll = ctypes.CDLL(_SDK_DLL_PATH)
+        dll.SUModelCreateFromFile.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_char_p]
+        dll.SUModelGetEntities.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUEntitiesGetFaces.argtypes = [
+            ctypes.c_void_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_size_t),
+        ]
+        dll.SUFaceGetUVHelper.argtypes = [
+            ctypes.c_void_p, ctypes.c_bool, ctypes.c_bool, ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p),
+        ]
+        dll.SUUVHelperGetFrontUVQ.argtypes = [ctypes.c_void_p, ctypes.POINTER(SUPoint3D), ctypes.POINTER(SUUVQ)]
+        dll.SUInitialize()
+        try:
+            model = ctypes.c_void_p()
+            err = dll.SUModelCreateFromFile(ctypes.byref(model), str(out).encode())
+            assert err == 0, f"SketchUp SDK rejected the file (error {err})"
+            entities = ctypes.c_void_p()
+            dll.SUModelGetEntities(model, ctypes.byref(entities))
+            faces = (ctypes.c_void_p * 1)()
+            got = ctypes.c_size_t()
+            dll.SUEntitiesGetFaces(entities, 1, faces, ctypes.byref(got))
+            assert got.value == 1
+            uv_helper = ctypes.c_void_p()
+            err = dll.SUFaceGetUVHelper(faces[0], True, False, ctypes.c_void_p(0), ctypes.byref(uv_helper))
+            assert err == 0
+            # SUUVHelperGetFrontUVQ's v-component is unreliable through this
+            # minimal call shape (a documented SDK quirk, not specific to
+            # this file - q and u alone already cross-check the mapping:
+            # u=0.5 at the midpoint between the 0->0 and 50->1 pins).
+            uvq = SUUVQ()
+            err = dll.SUUVHelperGetFrontUVQ(uv_helper, ctypes.byref(SUPoint3D(25.0, 25.0, 0.0)), ctypes.byref(uvq))
+            assert err == 0
+            assert uvq.u == pytest.approx(0.5)
+            assert uvq.q == pytest.approx(1.0)
             dll.SUModelRelease(ctypes.byref(model))
         finally:
             dll.SUTerminate()

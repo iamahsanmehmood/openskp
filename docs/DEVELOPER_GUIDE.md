@@ -488,12 +488,30 @@ with builder.add_component_definition("Car") as car:
 builder.add_instance(car)
 ```
 
-Explicitly out of scope for this first pass: explicit texture UV
-positioning/pinning (default planar projection only), nesting a
-self-placing *group* (as opposed to a definition instance) inside another
-definition, and editing an existing arbitrary `.skp` file (a separately
-harder problem — real SketchUp re-serializes the whole document on save
-rather than appending to it — not attempted here). See
+A face's texture can also be explicitly positioned (scaled, rotated,
+sheared, offset - independently per side) instead of the default planar
+projection, given 3 world-point/UV correspondences, on faces aligned to
+the X, Y, or Z axis:
+
+```python
+brick = builder.add_texture_material("Brick", "brick.png")
+builder.add_face(
+    [(0, 0, 0), (100, 0, 0), (100, 100, 0), (0, 100, 0)],
+    material=brick,
+    front_uv=[
+        ((0, 0, 0), (0.0, 0.0)),
+        ((50, 0, 0), (1.0, 0.0)),
+        ((0, 50, 0), (0.0, 1.0)),
+    ],
+)
+```
+
+Explicitly out of scope for this first pass: texture positioning on a
+tilted (non-axis-aligned) face, nesting a self-placing *group* (as
+opposed to a definition instance) inside another definition, and editing
+an existing arbitrary `.skp` file (a separately harder problem — real
+SketchUp re-serializes the whole document on save rather than appending
+to it — not attempted here). See
 [`openskp/create.py`](../packages/python/src/openskp/create.py) for the
 full, current scope notes, and the [Python package README](../packages/python/README.md#writing-early-stage)
 for a longer worked example.

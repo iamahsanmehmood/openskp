@@ -21,10 +21,13 @@ are involved, and how.
   add_component_definition` / :meth:`SkpBuilder.add_group`. A definition
   can also nest instances of another, already-built definition inside its
   own body (an assembly containing its own sub-parts) via
-  :meth:`ComponentDefinitionBuilder.add_instance`. There is no support yet
-  for explicit texture positioning/pinning, or for nesting a
-  self-placing *group* (as opposed to a definition instance) inside
-  another definition.
+  :meth:`ComponentDefinitionBuilder.add_instance`. A face's texture can be
+  explicitly positioned (scaled/rotated/sheared/offset, independently per
+  side) instead of the default planar projection - see `write_face`'s
+  ``front_uv``/``back_uv`` parameters - currently only for faces aligned
+  to the X, Y, or Z axis. There is no support yet for positioning on a
+  tilted face, or for nesting a self-placing *group* (as opposed to a
+  definition instance) inside another definition.
 * Coordinates are in **inches** - SketchUp's own native internal unit for
   this era of the format. Converting from another unit is the caller's
   responsibility for now.
@@ -175,6 +178,97 @@ _CAMERA_TEMPLATE = bytes.fromhex(
 # (unlike drawbase's padding, which real SketchUp silently drops without).
 _DEFINITION_BASE_BLOCK = bytes([0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
 
+_FTC_SCHEMA = 4
+
+# A face with no explicit texture positioning stores no CFaceTextureCoords
+# at all, so this identity is only ever used to fill the *other* side's slot
+# when just one of front/back is explicitly positioned - real SketchUp still
+# writes a full 24-f64 block either way, just with the unpositioned side's
+# matrix left as identity, ground-truth confirmed by positioning only one
+# side and reading the other back as (1,0,0, 0,1,0, 0,0,1).
+_IDENTITY_UV_MATRIX = (1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
+
+
+def _det3(m: Sequence[Sequence[float]]) -> float:
+    return (
+        m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+        - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+        + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
+    )
+
+
+def _solve3x3(a: Sequence[Sequence[float]], b: Sequence[float]) -> Tuple[float, float, float]:
+    """Solve the 3x3 linear system ``a @ x = b`` via Cramer's rule."""
+    d = _det3(a)
+    if abs(d) < 1e-9:
+        raise SkpWriteError(
+            "the 3 texture-positioning points map to collinear (u, v) coordinates - "
+            "cannot determine a texture mapping from them"
+        )
+    cols = []
+    for col in range(3):
+        ai = [list(row) for row in a]
+        for r in range(3):
+            ai[r][col] = b[r]
+        cols.append(_det3(ai) / d)
+    return cols[0], cols[1], cols[2]
+
+
+def _solve_uv_matrix(
+    pairs: Sequence[Tuple[Point3, Tuple[float, float]]], axes: Tuple[int, int]
+) -> Tuple[float, ...]:
+    """Fit the 3x3 UV-to-world affine matrix ground truth shows real
+    SketchUp stores for a positioned texture, from exactly 3 (world point,
+    (u, v)) correspondences - the minimum that fully determines an affine
+    map (scale, rotation, shear, translation; no perspective/keystone term,
+    matching the third column ground truth always shows as (0, 0, 1)).
+
+    ``axes`` selects which two of the face's own (x, y, z) coordinates to
+    treat as its local 2D plane (see the axis-aligned-only restriction in
+    `_uv_matrix_for_face`) - the world side of each correspondence is
+    projected onto those two axes before fitting.
+
+    Ground truth (see ``_read_ftc`` in legacy.py, which this inverts) shows
+    the stored matrix satisfies ``(u, v, 1) @ M == (world_x, world_y, 1)``
+    in row-vector convention - i.e. it maps a UV coordinate to the world
+    point it should land on, which is the natural direction for *defining*
+    a mapping (a caller says where each UV coordinate goes).
+    """
+    if len(pairs) != 3:
+        raise SkpWriteError("texture positioning needs exactly 3 (point, uv) pairs")
+    i, j = axes
+    a = [[uv[0], uv[1], 1.0] for _, uv in pairs]
+    bx = [pt[i] for pt, _ in pairs]
+    by = [pt[j] for pt, _ in pairs]
+    col_x = _solve3x3(a, bx)
+    col_y = _solve3x3(a, by)
+    a0, c0, e0 = col_x
+    b0, d0, f0 = col_y
+    return (a0, b0, 0.0, c0, d0, 0.0, e0, f0, 1.0)
+
+
+def _uv_matrix_for_face(
+    pairs: Sequence[Tuple[Point3, Tuple[float, float]]], normal: Tuple[float, float, float]
+) -> Tuple[float, ...]:
+    """As `_solve_uv_matrix`, but derives which 2 of (x, y, z) to use from
+    the face's own plane normal - only axis-aligned faces (normal parallel
+    to X, Y, or Z) are supported for now; a tilted face's local 2D
+    parameterization has not been reverse-engineered (every ground-truth
+    sample used to derive this feature was axis-aligned)."""
+    nx, ny, nz = normal
+    if abs(nz) > 1 - 1e-6:
+        axes = (0, 1)
+    elif abs(ny) > 1 - 1e-6:
+        axes = (0, 2)
+    elif abs(nx) > 1 - 1e-6:
+        axes = (1, 2)
+    else:
+        raise SkpWriteError(
+            "explicit texture positioning is only supported on faces aligned to the "
+            "X, Y, or Z axis for now (this face's plane is tilted)"
+        )
+    return _solve_uv_matrix(pairs, axes)
+
 
 def _u32(v: int) -> bytes:
     return struct.pack("<I", v)
@@ -300,6 +394,53 @@ class _ArchiveWriter:
         if pid is None:
             pid = self._alloc_pid()
         self.buf += self._encode_pid(pid)
+
+    def _preamble_with_texture_coords(
+        self,
+        front_matrix: Optional[Tuple[float, ...]],
+        back_matrix: Optional[Tuple[float, ...]],
+    ) -> None:
+        """Like `_preamble(real_attrs=True)`, but the attribute container's
+        children list holds one real `CFaceTextureCoords` entry instead of
+        closing immediately - used only for a face with explicit texture
+        positioning on its front and/or back side. ``front_matrix``/
+        ``back_matrix`` is ``None`` for the side that isn't positioned."""
+        self.buf += struct.pack("<H", 0x8000 | _ATTR_CONTAINER_SLOT)
+        self._alloc()
+        self.buf += bytes(3)  # the container's own nested preamble: null attrs (2) + mask=0 (1)
+        self.write_face_texture_coords(front_matrix, back_matrix)
+        self._null()  # children-list terminator
+        self.buf += self._encode_pid(self._alloc_pid())
+
+    def write_face_texture_coords(
+        self,
+        front_matrix: Optional[Tuple[float, ...]],
+        back_matrix: Optional[Tuple[float, ...]],
+    ) -> None:
+        """Write one ``CFaceTextureCoords`` record - the explicit
+        front/back texture-positioning data a face's attribute container
+        holds when either side has been explicitly positioned (as opposed
+        to the default planar projection, which needs no such record at
+        all). Inverts ``legacy._read_ftc`` field-for-field; see that
+        function's docstring for what each field means.
+
+        ``front_matrix``/``back_matrix`` are the 9-value row-major
+        UV-to-world affine matrices from `_uv_matrix_for_face`, or
+        ``None`` for a side that isn't explicitly positioned (written as
+        identity, matching ground truth for the untouched side).
+        """
+        self._new_of_known_class("CFaceTextureCoords", schema=_FTC_SCHEMA)
+        self._preamble(pid=0)
+        self.buf += _u32(0)  # ground truth: read and discarded by legacy.py's reader too
+        ks = [0.0] * 24
+        ks[0:9] = front_matrix if front_matrix is not None else _IDENTITY_UV_MATRIX
+        ks[12:21] = back_matrix if back_matrix is not None else _IDENTITY_UV_MATRIX
+        for v in ks:
+            self.buf += _f64(v)
+        self.buf += _u32(0)  # front pin count - this writer always emits a solved matrix, never raw pins
+        self.buf += _u32(0)  # back pin count
+        self.buf += _u32(1 if front_matrix is not None else 0)  # fflags bit 0: front painted/positioned
+        self.buf += _u32(1 if back_matrix is not None else 0)  # bflags bit 0: back painted/positioned
 
     def _drawbase(
         self, mat: int = 0, layer: int = 0,
@@ -556,6 +697,8 @@ class _ArchiveWriter:
         soft_edges: bool = False,
         smooth_edges: bool = False,
         hidden_edges: bool = False,
+        front_uv: Optional[Sequence[Tuple[Point3, Tuple[float, float]]]] = None,
+        back_uv: Optional[Sequence[Tuple[Point3, Tuple[float, float]]]] = None,
     ) -> int:
         """Write one planar face and return how many new root-entity-list
         slots it consumed (edges newly declared, plus the face itself) -
@@ -579,6 +722,14 @@ class _ArchiveWriter:
         between adjacent faces should shade smoothly and stay invisible) -
         an edge already shared with a previous face keeps whatever flags
         it was first declared with; these have no effect on it.
+
+        ``front_uv``/``back_uv``, if given, explicitly position that
+        side's texture instead of the default planar projection - exactly
+        3 ``(point, (u, v))`` pairs (a world point on the face's plane
+        paired with the texture coordinate it should land on), which fully
+        determines an affine mapping (scale/rotation/shear/translation, no
+        perspective). Only supported on faces aligned to the X, Y, or Z
+        axis for now. See :meth:`SkpBuilder.add_face` for a worked example.
         """
         n = len(points)
         point_slots = [vertex_slots.get(p) for p in points]
@@ -618,10 +769,16 @@ class _ArchiveWriter:
                 point_slots[v1_idx],
             )
 
-        self._new_of_known_class("CFace", schema=3)
-        self._preamble()
-        self._drawbase(mat=face_material, layer=face_layer, hidden=hidden)
         nx, ny, nz, d = _plane_from_polygon(points)
+
+        self._new_of_known_class("CFace", schema=3)
+        if front_uv is not None or back_uv is not None:
+            front_matrix = _uv_matrix_for_face(front_uv, (nx, ny, nz)) if front_uv is not None else None
+            back_matrix = _uv_matrix_for_face(back_uv, (nx, ny, nz)) if back_uv is not None else None
+            self._preamble_with_texture_coords(front_matrix, back_matrix)
+        else:
+            self._preamble()
+        self._drawbase(mat=face_material, layer=face_layer, hidden=hidden)
         self.buf += _f64(nx) + _f64(ny) + _f64(nz) + _f64(d)
         self.buf += _u32(1)  # nloops = 1
 
@@ -725,6 +882,8 @@ class ComponentDefinitionBuilder:
         soft_edges: bool = False,
         smooth_edges: bool = False,
         hidden_edges: bool = False,
+        front_uv: Optional[Sequence[Tuple[Point3, Tuple[float, float]]]] = None,
+        back_uv: Optional[Sequence[Tuple[Point3, Tuple[float, float]]]] = None,
     ) -> None:
         """Add one planar face to this definition - same signature and
         behavior as :meth:`SkpBuilder.add_face`, except vertices/edges are
@@ -742,6 +901,7 @@ class ComponentDefinitionBuilder:
             points, self._vertex_slots, self._edge_registry,
             material or 0, layer or 0, back_material or 0,
             hidden, soft_edges, smooth_edges, hidden_edges,
+            front_uv, back_uv,
         )
 
     def add_instance(
@@ -1164,6 +1324,8 @@ class SkpBuilder:
         soft_edges: bool = False,
         smooth_edges: bool = False,
         hidden_edges: bool = False,
+        front_uv: Optional[Sequence[Tuple[Point3, Tuple[float, float]]]] = None,
+        back_uv: Optional[Sequence[Tuple[Point3, Tuple[float, float]]]] = None,
     ) -> None:
         """Add one planar face, defined by 3 or more coplanar points (in
         inches) forming a closed polygon in order - do not repeat the
@@ -1185,6 +1347,23 @@ class SkpBuilder:
         one already shared with a previous face) - typical for a
         tessellated curved surface, where the seams between adjacent
         facets should shade smoothly and stay invisible.
+
+        ``front_uv``/``back_uv``, if given, explicitly position that
+        side's texture instead of the default planar projection: exactly
+        3 ``(point, (u, v))`` pairs, each a world point on the face paired
+        with the texture coordinate that should land there. Only
+        supported on faces aligned to the X, Y, or Z axis for now.
+
+        >>> brick = builder.add_texture_material("Brick", "brick.png")
+        >>> builder.add_face(
+        ...     [(0, 0, 0), (100, 0, 0), (100, 100, 0), (0, 100, 0)],
+        ...     material=brick,
+        ...     front_uv=[
+        ...         ((0, 0, 0), (0.0, 0.0)),
+        ...         ((50, 0, 0), (1.0, 0.0)),
+        ...         ((0, 50, 0), (0.0, 1.0)),
+        ...     ],
+        ... )
         """
         points = [(float(p[0]), float(p[1]), float(p[2])) for p in points]
         if len(points) < 3:
@@ -1194,6 +1373,7 @@ class SkpBuilder:
             points, self._vertex_slots, self._edge_registry,
             material or 0, layer or 0, back_material or 0,
             hidden, soft_edges, smooth_edges, hidden_edges,
+            front_uv, back_uv,
         )
         self._face_count += 1
 
@@ -1293,7 +1473,7 @@ def create() -> SkpBuilder:
     >>> builder.save("output.skp")
 
     See the :mod:`openskp.create` module docstring for the current scope
-    and limitations (no texture UV positioning or nested groups yet;
-    inches only).
+    and limitations (texture positioning only on axis-aligned faces so
+    far, no nested groups yet; inches only).
     """
     return SkpBuilder()
