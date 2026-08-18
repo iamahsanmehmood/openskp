@@ -36,8 +36,8 @@ scene = skp.build_scene()
 print(len(scene.glb_primitives), "GLB-ready mesh primitives")
 ```
 
-🧪 **Writing (early-stage, Python-only — no equivalent in the other four
-languages yet):**
+🧪 **Writing (Python-only — no equivalent in the other four languages yet;
+porting it is a planned future direction):**
 
 ```python
 from openskp import create

@@ -2,9 +2,9 @@
 
 <img src="assets/logo.png" width="500" Height="400" alt="OpenSKP logo"/>
 
-### The Open-Source SketchUp File Parser
+### The Open-Source SketchUp File Toolkit
 
-**Parse `.skp` files without SketchUp. No SDK. No license. Just code.**
+**Parse `.skp` files in five languages — and write them natively in Python. No SDK. No license. Just code.**
 
 ### 🏠 [openskp.com](https://openskp.com) · 🌐 [Try the Live Web Viewer (Drag-and-Drop)](https://iamahsanmehmood.github.io/openskp/) · 📖 [Browse the Docs Site](https://iamahsanmehmood.github.io/openskp/docs/)
 
@@ -18,7 +18,7 @@
 
 ---
 
-*Open-source SketchUp binary file parser for Python, TypeScript, .NET, Dart, and C++*
+*Open-source SketchUp binary file parser for Python, TypeScript, .NET, Dart, and C++ — plus a native `.skp` writer and editor in Python*
 
 [Quick Start](#-quick-start) · [Features](#-features) · [Used in Production](#-used-in-production) · [Documentation](#-documentation) · [Contributing](#-contributing)
 
@@ -28,9 +28,11 @@
 
 ## 🌟 What is OpenSKP?
 
-OpenSKP is the **first and only** open-source, cross-platform parser for SketchUp (`.skp`) binary files. Built entirely through reverse engineering of SketchUp's binary formats — both the modern **VFF container** (2021+) and the classic **MFC `CArchive`** container (2013–2020) — it gives you full programmatic access to 3D models — geometry, materials, components, layers, and more — without requiring the SketchUp application or its proprietary SDK, in **Python, TypeScript, .NET, Dart, and C++**.
+OpenSKP is the **first and only** open-source, cross-platform toolkit for SketchUp (`.skp`) binary files — built entirely through reverse engineering, with no SketchUp application or proprietary SDK required at any point.
 
-🧪 **New:** OpenSKP can now *write* native `.skp` files too — not just parse them. This is early-stage and Python-only for now (see the [Features](#-features) table below and [`openskp.create`](packages/python/src/openskp/create.py)); the other four ports don't have it yet, and contributions to bring them up to parity are very welcome.
+**Reading** is available in **five languages** — Python, TypeScript, .NET, Dart, and C++ — parsing both the modern **VFF container** (2021+) and the classic **MFC `CArchive`** container (2013–2020) into full programmatic access: geometry, materials, components, layers, and more.
+
+**Writing** is available in **Python**: a from-scratch legacy-format writer ([`openskp.create`](packages/python/src/openskp/create.py)) that produces real, editable geometry — materials and textures, layers, nested component definitions and groups, circular/arc curves, freeform polylines, faces with holes cut out — plus an editor ([`openskp.open_existing`](packages/python/src/openskp/edit.py)) that loads a file that already exists and extends it. Every writer feature is validated against the real SketchUp SDK, not just against this project's own reader, and it holds up rebuilding complex, real architectural models — not only synthetic test fixtures. Writing is Python-only today; porting it to the other four languages is a planned future direction, not yet under way — contributions toward that are very welcome.
 
 > [!IMPORTANT]
 > This project was built by reverse engineering a proprietary binary format. It is not affiliated with or endorsed by Trimble Inc. or SketchUp.
@@ -52,7 +54,8 @@ OpenSKP is the **first and only** open-source, cross-platform parser for SketchU
 | **Dynamic Components** | ✅ | Extracts dynamic component attribute key-value pairs for both modern (2021+) and legacy (2013–2020) files, in all five languages |
 | **Observability** | ✅ | Opt-in progress reporting + structured, location-carrying parse errors — see [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md) |
 | **Export to GLB / OBJ / STL / PLY / DXF 3D / IFC4 / JSON** | ✅ | GLB, Wavefront OBJ, STL, PLY, DXF 3D (AutoCAD Polyface Mesh), IFC4 (BIM), and JSON metadata export are available natively across all five languages — see [Export capabilities](docs/DEVELOPER_GUIDE.md#export-capabilities) |
-| **Write native `.skp` files** | 🧪 Early (Python) | Build new `.skp` files from scratch — geometry, solid/textured materials, layers, component definitions with multiple instances, and groups. No SDK involved. Early-stage and Python-only for now — see [`openskp.create`](packages/python/src/openskp/create.py) |
+| **Write native `.skp` files** | 🧪 Python only | Build new `.skp` files from scratch — geometry (including genuine circular/arc curves, freeform polylines, faces with holes cut out, and non-planar auto-triangulation), solid/textured materials, layers, nested component definitions and groups, instance rotation/visibility, and custom attribute dictionaries. No SDK involved — every feature validated against the real SketchUp SDK. See [`openskp.create`](packages/python/src/openskp/create.py) |
+| **Edit existing `.skp` files** | 🧪 Python only | Load an existing legacy-format file and extend it — reuses its materials, layers, and component definitions, adds new geometry or instances, and saves a new file. See [`openskp.open_existing`](packages/python/src/openskp/edit.py) |
 | **Streaming / low-memory parsing** | ✅ | Peak memory bounded by the largest single definition, not the whole file — see [Memory architecture](docs/ARCHITECTURE.md#memory-architecture) |
 | **Pure Implementation** | ✅ | No SketchUp SDK, no native dependencies, no license required |
 | **Cross-Platform** | ✅ | Works on Linux, macOS, and Windows |
@@ -95,7 +98,8 @@ where the five ports currently differ.
 Pick your language — every sample below runs against the current public
 API (verified while writing this README). For the full picture (the
 opt-in `buildScene()` step for triangulated meshes, memory/performance
-guidance, progress + error observability, legacy-format support), see the
+guidance, progress + error observability, legacy-format support, and the
+full writer/editor API), see the
 **[Developer Guide](docs/DEVELOPER_GUIDE.md)**.
 
 ### 🐍 Python
@@ -123,7 +127,7 @@ scene = SkpFile.open("my_model.skp").build_scene()
 print(f"{len(scene.glb_primitives)} renderable mesh primitives")
 ```
 
-🧪 **Writing** (early-stage, Python-only):
+🧪 **Writing** (Python-only):
 
 ```python
 from openskp import create
@@ -133,9 +137,15 @@ red = builder.add_material("Red", (255, 0, 0))
 with builder.add_component_definition("Chair") as chair:
     chair.add_face([(0, 0, 0), (20, 0, 0), (20, 20, 0), (0, 20, 0)])
 builder.add_instance(chair, translation=(50, 0, 0))
+builder.add_instance(chair, translation=(100, 0, 0), hidden=True)
 builder.add_face([(0, 0, 0), (100, 0, 0), (100, 100, 0), (0, 100, 0)], material=red)
 builder.save("output.skp")
 ```
+
+And to extend a file that already exists rather than starting from
+scratch, use `open_existing()` — see
+[Editing an existing file](docs/DEVELOPER_GUIDE.md#editing-an-existing-file)
+in the Developer Guide.
 
 ### 📘 TypeScript / JavaScript
 
@@ -266,8 +276,8 @@ openskp/
 ├── CHANGELOG.md               # Release history
 │
 ├── packages/
-│   ├── python/                # 🐍 Python implementation
-│   │   ├── src/openskp/       # _core.py, legacy.py, model.py, scene.py, errors.py, ...
+│   ├── python/                # 🐍 Python implementation — parse + write
+│   │   ├── src/openskp/       # _core.py, legacy.py, model.py, scene.py, create.py, edit.py, ...
 │   │   └── tests/
 │   ├── typescript/            # 📘 TypeScript / JavaScript implementation
 │   │   ├── src/                # index.ts, model.ts, legacy.ts, observability.ts, ...
