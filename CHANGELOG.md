@@ -134,6 +134,15 @@ for the full scope notes.
   satisfied by the time replay finishes writing root-level geometry);
   that limitation is now documented and tested rather than just
   discovered by trial and error.
+- `hidden=True` on `add_instance`/`add_group`/`add_group_instance` — hides
+  that specific placement (its contents still exist in the file), the
+  same drawbase bit `add_face`'s own `hidden` already used. `color=`/
+  `hidden=` on `add_layer` — the layer's own color and default
+  visibility, both already exposed on the read side as `Layer.color_r/g/
+  b`/`Layer.hidden` but previously fixed at a hardcoded default on write.
+  All three confirmed against the real SDK (`SUDrawingElementGetHidden`,
+  `SULayerGetVisibility`). `openskp.open_existing()` now replays both
+  faithfully instead of warning that they were dropped.
 
 ### Fixed
 

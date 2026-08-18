@@ -887,7 +887,13 @@ class _ArchiveWriter:
         self.buf.append(0)  # use_opacity = False
         return slot
 
-    def write_layer(self, name: str, with_pids: bool = True) -> int:
+    def write_layer(
+        self,
+        name: str,
+        with_pids: bool = True,
+        hidden: bool = False,
+        rgba: Optional[Tuple[int, int, int, int]] = None,
+    ) -> int:
         """Write one ``CLayer`` record and return its slot. CLayer is
         always already declared (the scaffold's Layer0 guarantees it), so
         this never emits a new-class declaration - only a short class-ref.
@@ -900,15 +906,21 @@ class _ArchiveWriter:
         layer a component definition embeds internally - see
         `write_definition_header`) omits both: ground truth shows that
         copy carries neither its own preamble pid nor this second one.
+
+        ``rgba``, if given, is this layer's own color (:mod:`openskp.
+        legacy`'s reader already exposes it as ``Layer.color_r/g/b``) -
+        ``None`` keeps the previous default of all-zero bytes here,
+        unchanged from before this parameter existed.
         """
         slot = self._new_of_known_class("CLayer", schema=_LAYER_SCHEMA)
         self._preamble(pid=None if with_pids else 0)
         self._write_str(name)
         pid2 = self._alloc_pid() if with_pids else 0
-        self.buf += bytes(3) + self._encode_pid(pid2)  # hidden=0, pad, pad, then mask+pidbytes
+        # byte 0 is the hidden flag, bytes 1-2 are always zero (ground truth)
+        self.buf += bytes([1 if hidden else 0, 0, 0]) + self._encode_pid(pid2)
         self._write_str(f"Layer_{name}")
         self.buf += struct.pack("<H", 256)  # ground truth is a constant 256 here
-        self.buf += bytes(4)  # rgba - layers don't carry a rendering color
+        self.buf += bytes(rgba) if rgba is not None else bytes(4)
         self._write_str("")  # second name field - empty in ground truth
         self.buf += bytes(8) + _f64(0.5) + bytes(5)  # 21-byte tail, opacity-like f64=0.5
         return slot
@@ -989,13 +1001,14 @@ class _ArchiveWriter:
         mat: int,
         layer: int,
         attribute_dicts: Sequence[Tuple[str, Dict[str, object]]] = (),
+        hidden: bool = False,
     ) -> None:
         self._new_of_known_class(class_name, schema=schema)
         if real_attrs and attribute_dicts:
             self._preamble_with_real_attrs(attribute_dicts=attribute_dicts)
         else:
             self._preamble(real_attrs=real_attrs)
-        self._drawbase(mat=mat, layer=layer)
+        self._drawbase(mat=mat, layer=layer, hidden=hidden)
         self._backref(definition_slot)
         if matrix3x3 is None:
             matrix3x3 = (1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
@@ -1013,6 +1026,7 @@ class _ArchiveWriter:
         instance_material: int = 0,
         instance_layer: int = 0,
         attribute_dicts: Sequence[Tuple[str, Dict[str, object]]] = (),
+        hidden: bool = False,
     ) -> int:
         """Write one ``CComponentInstance`` placing a copy of
         ``definition_slot`` (from `write_definition_header`) and return how
@@ -1034,12 +1048,17 @@ class _ArchiveWriter:
         attributes use). Not available on `write_group` - ground truth
         shows a group's attribute pointer is always null, unlike a
         component instance's real (if often empty) container.
+
+        ``hidden`` hides the instance itself (SketchUp's "Hide" on this
+        specific placement) - the same drawbase bit `write_face` already
+        uses for a face, ground truth confirms it means the same thing
+        here.
         """
         # ground truth: instances also carry a real (empty) attr container, unlike CGroup
         self._write_instance_like(
             "CComponentInstance", _INSTANCE_SCHEMA, True,
             definition_slot, name, translation, matrix3x3, instance_material, instance_layer,
-            attribute_dicts,
+            attribute_dicts, hidden,
         )
         return 1
 
@@ -1051,6 +1070,7 @@ class _ArchiveWriter:
         matrix3x3: Optional[Tuple[float, float, float, float, float, float, float, float, float]] = None,
         group_material: int = 0,
         group_layer: int = 0,
+        hidden: bool = False,
     ) -> int:
         """Write one ``CGroup`` placing a copy of ``definition_slot`` and
         return how many new root-entity-list slots it consumed - always 1,
@@ -1066,6 +1086,7 @@ class _ArchiveWriter:
         self._write_instance_like(
             "CGroup", _GROUP_SCHEMA, False,
             definition_slot, name, translation, matrix3x3, group_material, group_layer,
+            hidden=hidden,
         )
         return 1
 
@@ -1516,7 +1537,7 @@ class ComponentDefinitionBuilder:
 
     def __init__(
         self, skp: "SkpBuilder", slot: int, name: str, count_patch_pos: int,
-        group_placement: Optional[Tuple[Tuple[float, float, float], Optional[Tuple[float, ...]], int, int]] = None,
+        group_placement: Optional[Tuple[Tuple[float, float, float], Optional[Tuple[float, ...]], int, int, bool]] = None,
     ):
         self._skp = skp
         self.slot = slot
@@ -1675,6 +1696,7 @@ class ComponentDefinitionBuilder:
         layer: Optional[int] = None,
         attributes: Optional[Dict[str, object]] = None,
         attribute_dict_name: str = "attributes",
+        hidden: bool = False,
     ) -> None:
         """Place one instance of another, already-closed component
         definition inside this one - the same nesting real SketchUp
@@ -1702,7 +1724,8 @@ class ComponentDefinitionBuilder:
 
         ``rotation``, if given, is a ``(axis, angle_radians)`` pair - an
         alternative to hand-deriving ``matrix3x3`` for the common case of
-        a pure rotation; pass at most one of the two.
+        a pure rotation; pass at most one of the two. ``hidden`` hides
+        this specific placement (SketchUp's "Hide" on the instance).
         """
         self._check_writable("instances")
         if definition._skp is not self._skp:
@@ -1716,7 +1739,7 @@ class ComponentDefinitionBuilder:
         attribute_dicts = [(attribute_dict_name, attributes)] if attributes else []
         self._new_entity_count += self._skp._definition_writer.write_instance(
             definition.slot, name or definition.name, translation, matrix3x3, material or 0, layer or 0,
-            attribute_dicts,
+            attribute_dicts, hidden,
         )
 
     def add_group_instance(
@@ -1728,6 +1751,7 @@ class ComponentDefinitionBuilder:
         rotation: Optional[Tuple[Tuple[float, float, float], float]] = None,
         material: Optional[int] = None,
         layer: Optional[int] = None,
+        hidden: bool = False,
     ) -> None:
         """Place another, already-closed component definition inside this
         one as a *group* (``CGroup``) rather than a component instance -
@@ -1751,7 +1775,8 @@ class ComponentDefinitionBuilder:
 
         ``rotation``, if given, is a ``(axis, angle_radians)`` pair - an
         alternative to hand-deriving ``matrix3x3`` for the common case of
-        a pure rotation; pass at most one of the two.
+        a pure rotation; pass at most one of the two. ``hidden`` hides
+        this specific placement.
         """
         self._check_writable("groups")
         if definition._skp is not self._skp:
@@ -1763,7 +1788,7 @@ class ComponentDefinitionBuilder:
             raise SkpWriteError(f"component definition {self.name!r} cannot nest a group instance of itself")
         matrix3x3 = _resolve_matrix3x3(matrix3x3, rotation)
         self._new_entity_count += self._skp._definition_writer.write_group(
-            definition.slot, name or definition.name, translation, matrix3x3, material or 0, layer or 0
+            definition.slot, name or definition.name, translation, matrix3x3, material or 0, layer or 0, hidden,
         )
 
     def __enter__(self) -> "ComponentDefinitionBuilder":
@@ -1953,18 +1978,30 @@ class SkpBuilder:
         self._material_count += 1
         return slot
 
-    def add_layer(self, name: str) -> int:
+    def add_layer(
+        self,
+        name: str,
+        color: Optional[Sequence[int]] = None,
+        hidden: bool = False,
+    ) -> int:
         """Register a layer and return a handle to pass as `add_face`'s
         ``layer`` argument.
 
         Calling this again with a name already registered returns the same
-        handle rather than creating a duplicate layer.
+        handle rather than creating a duplicate layer (``color``/``hidden``
+        are ignored on a repeat call - only the first registration sets them).
 
         All layers must be added before the first `add_face` call, for the
         same reason as `add_material`. They must also come before any
         `add_component_definition` call - layers are spliced in earlier in
         the file, so a definition's own slot numbering depends on the
         final layer count too.
+
+        ``color``, if given, is ``(r, g, b)`` or ``(r, g, b, a)``, each
+        0-255 (alpha defaults to 255) - :mod:`openskp.legacy`'s reader
+        already exposes this back as ``Layer.color_r/g/b``. ``hidden``
+        sets the layer's own visibility (SketchUp's layer-panel checkbox),
+        exposed back as ``Layer.hidden``.
         """
         if self._geometry_writer is not None:
             raise SkpWriteError("add_layer must be called before any add_face calls")
@@ -1972,6 +2009,13 @@ class SkpBuilder:
             raise SkpWriteError("add_layer must be called before any add_component_definition calls")
         if name in self.layers_by_name:
             return self.layers_by_name[name]
+        rgba: Optional[Tuple[int, int, int, int]] = None
+        if color is not None:
+            if len(color) == 3:
+                color = (*color, 255)
+            if len(color) != 4 or not all(isinstance(c, int) and 0 <= c <= 255 for c in color):
+                raise SkpWriteError("color must be 3 or 4 integers in 0-255")
+            rgba = tuple(color)
         if self._layer_writer is None:
             material_shift = self._material_writer.next_slot - self._base
             self._layer_writer_start = self._layer_writer_base + material_shift
@@ -1985,7 +2029,7 @@ class SkpBuilder:
             self._layer_writer = _ArchiveWriter(
                 next_slot=self._layer_writer_start, class_slot=self._material_shifted_class_slot()
             )
-        slot = self._layer_writer.write_layer(name)
+        slot = self._layer_writer.write_layer(name, hidden=hidden, rgba=rgba)
         self.layers_by_name[name] = slot
         self._layer_count += 1
         return slot
@@ -2009,7 +2053,7 @@ class SkpBuilder:
 
     def _start_definition(
         self, name: str, caller: str,
-        group_placement: Optional[Tuple[Tuple[float, float, float], Optional[Tuple[float, ...]], int, int]] = None,
+        group_placement: Optional[Tuple[Tuple[float, float, float], Optional[Tuple[float, ...]], int, int, bool]] = None,
         attribute_dicts: Sequence[Tuple[str, Dict[str, object]]] = (),
     ) -> "ComponentDefinitionBuilder":
         if self._geometry_writer is not None:
@@ -2067,6 +2111,7 @@ class SkpBuilder:
         rotation: Optional[Tuple[Tuple[float, float, float], float]] = None,
         material: Optional[int] = None,
         layer: Optional[int] = None,
+        hidden: bool = False,
     ) -> "ComponentDefinitionBuilder":
         """Start a new group. Use the returned object as a context manager,
         adding its geometry via `.add_face` inside the ``with`` block - the
@@ -2084,11 +2129,13 @@ class SkpBuilder:
 
         ``rotation``, if given, is a ``(axis, angle_radians)`` pair - an
         alternative to hand-deriving ``matrix3x3`` for the common case of
-        a pure rotation; pass at most one of the two.
+        a pure rotation; pass at most one of the two. ``hidden`` hides
+        this group once placed.
         """
         matrix3x3 = _resolve_matrix3x3(matrix3x3, rotation)
         return self._start_definition(
-            name or "Group", "add_group", group_placement=(translation, matrix3x3, material or 0, layer or 0)
+            name or "Group", "add_group",
+            group_placement=(translation, matrix3x3, material or 0, layer or 0, hidden),
         )
 
     def _definition_shift(self) -> int:
@@ -2112,6 +2159,7 @@ class SkpBuilder:
         layer: Optional[int] = None,
         attributes: Optional[Dict[str, object]] = None,
         attribute_dict_name: str = "attributes",
+        hidden: bool = False,
     ) -> None:
         """Place one instance of ``definition`` (from
         `add_component_definition`, already closed) in the model.
@@ -2135,6 +2183,10 @@ class SkpBuilder:
         specifically (as opposed to its definition), under a dictionary
         named ``attribute_dict_name`` - the same mechanism SketchUp's own
         "dynamic component" attributes use for per-instance overrides.
+
+        ``hidden`` hides this specific placement (SketchUp's "Hide" on
+        the instance) - its contents still exist in the file, just not
+        shown by default.
         """
         if definition._skp is not self:
             raise SkpWriteError(
@@ -2151,7 +2203,7 @@ class SkpBuilder:
         attribute_dicts = [(attribute_dict_name, attributes)] if attributes else []
         self._new_entity_count += self._geometry_writer.write_instance(
             definition.slot, name or definition.name, translation, matrix3x3, material or 0, layer or 0,
-            attribute_dicts,
+            attribute_dicts, hidden,
         )
         self._face_count += 1  # reuses the "at least one root entity" check in to_bytes
 
@@ -2183,9 +2235,9 @@ class SkpBuilder:
         # created - deferred until now so closing one group doesn't lock in
         # root-level slot numbering before a later add_group/
         # add_component_definition call has had a chance to run.
-        for comp, (translation, matrix3x3, mat, layer) in self._pending_groups:
+        for comp, (translation, matrix3x3, mat, layer, hidden) in self._pending_groups:
             self._new_entity_count += self._geometry_writer.write_group(
-                comp.slot, comp.name, translation, matrix3x3, mat, layer
+                comp.slot, comp.name, translation, matrix3x3, mat, layer, hidden,
             )
             self._face_count += 1
         self._pending_groups = []

@@ -58,10 +58,6 @@ module's own docstring for why):
 * Per-face material/layer painting: only a face's front/back *material*
   is replayed - this project's reader doesn't expose a per-face layer
   assignment at all (only instances carry an explicit layer).
-* An instance's ``hidden`` flag isn't reproduced - `add_instance` has no
-  visibility parameter yet.
-* A layer's color and hidden state aren't reproduced - `add_layer` only
-  takes a name.
 * Every placed thing (originally a group or a component instance alike)
   is replayed as a plain component instance - structurally simpler, and
   visually identical, but no longer shows as a "Group" in SketchUp's
@@ -140,10 +136,12 @@ def open_existing(
     builder = create()
 
     material_slots = _replay_materials(builder, model, warnings)
-    layer_slots = {layer.name: builder.add_layer(layer.name) for layer in model.layers}
-    for layer in model.layers:
-        if layer.hidden or (layer.color_r, layer.color_g, layer.color_b) != (200, 200, 200):
-            warnings.append(f"layer {layer.name!r}: color/hidden state not reproduced")
+    layer_slots = {
+        layer.name: builder.add_layer(
+            layer.name, color=(layer.color_r, layer.color_g, layer.color_b), hidden=layer.hidden,
+        )
+        for layer in model.layers
+    }
 
     def_builders: Dict[int, ComponentDefinitionBuilder] = {}
     for def_id in _definition_order(model):
@@ -373,11 +371,8 @@ def _replay_instance(
     try:
         target.add_instance(
             def_builder, name=inst.name or None, translation=translation, matrix3x3=matrix3x3,
-            material=material, layer=layer,
+            material=material, layer=layer, hidden=inst.hidden,
             attributes=inst.properties or None, attribute_dict_name="dynamic_attributes",
         )
     except SkpWriteError as exc:
         warnings.append(f"{context}: instance {inst.name!r} skipped ({exc})")
-        return
-    if inst.hidden:
-        warnings.append(f"{context}: instance {inst.name!r} was hidden - hidden flag not reproduced")

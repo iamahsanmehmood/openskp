@@ -601,6 +601,14 @@ class TestGroups:
         # attribute pointer, not the real (empty) CAttributeContainer.
         assert inst["attrs"] is None
 
+    def test_hidden_group(self):
+        builder = create()
+        with builder.add_group("Table", hidden=True) as table:
+            table.add_face(SQUARE)
+        data = builder.to_bytes()
+        ar, root, layers, materials = legacy._walk(data)
+        assert root[0][2]["db"]["hidden"] == 1
+
     def test_group_without_geometry_raises(self):
         builder = create()
         with pytest.raises(SkpWriteError, match="no geometry"):
@@ -688,6 +696,28 @@ class TestNestedDefinitions:
         assert {inst.name for inst in car_def.instances} == {"Wheel"}
         translations = sorted(inst.matrix[9] for inst in car_def.instances)
         assert translations == [0.0, 200.0]
+
+    def test_hidden_instance_at_root_and_nested(self):
+        builder = create()
+        with builder.add_component_definition("Wheel") as wheel:
+            wheel.add_face(SQUARE)
+        with builder.add_component_definition("Car") as car:
+            car.add_instance(wheel, translation=(0.0, 0.0, 0.0), hidden=True)
+        builder.add_instance(car, hidden=True)
+        data = builder.to_bytes()
+        ar, root, layers, materials = legacy._walk(data)
+        assert root[0][2]["db"]["hidden"] == 1
+
+    def test_hidden_group_instance(self):
+        builder = create()
+        with builder.add_component_definition("Engine") as engine:
+            engine.add_face(SQUARE)
+        with builder.add_component_definition("Car") as car:
+            car.add_face(SQUARE)
+            car.add_group_instance(engine, hidden=True)
+        builder.add_instance(car)
+        data = builder.to_bytes()
+        legacy._walk(data)
 
     def test_real_sketchup_resolves_nested_instances(self, tmp_path):
         # Recursively resolving Car -> 2x Wheel -> 1 face each through 2
@@ -1936,6 +1966,41 @@ class TestLayers:
         builder = create()
         roof = builder.add_layer("Roof")
         assert builder.layers_by_name["Roof"] == roof
+
+    def test_layer_color_and_hidden_round_trip(self):
+        builder = create()
+        roof = builder.add_layer("Roof", color=(150, 75, 30), hidden=True)
+        builder.add_face(SQUARE, layer=roof)
+        data = builder.to_bytes()
+        ar, root, layers, materials = legacy._walk(data)
+        by_slot = {s: v for s, v in layers}
+        assert by_slot[roof]["rgba"] == (150, 75, 30, 255)
+        assert by_slot[roof]["hidden"] == 1
+
+    def test_layer_color_alpha_defaults_to_opaque(self):
+        builder = create()
+        roof = builder.add_layer("Roof", color=(10, 20, 30))
+        builder.add_face(SQUARE, layer=roof)
+        data = builder.to_bytes()
+        ar, root, layers, materials = legacy._walk(data)
+        by_slot = {s: v for s, v in layers}
+        assert by_slot[roof]["rgba"] == (10, 20, 30, 255)
+
+    def test_layer_without_color_or_hidden_matches_previous_bytes(self):
+        # No behavior change for callers not using the new parameters.
+        builder = create()
+        roof = builder.add_layer("Roof")
+        builder.add_face(SQUARE, layer=roof)
+        data = builder.to_bytes()
+        ar, root, layers, materials = legacy._walk(data)
+        by_slot = {s: v for s, v in layers}
+        assert by_slot[roof]["rgba"] == (0, 0, 0, 0)
+        assert by_slot[roof]["hidden"] == 0
+
+    def test_invalid_layer_color_raises(self):
+        builder = create()
+        with pytest.raises(SkpWriteError, match="color"):
+            builder.add_layer("Bad", color=(300, 0, 0))
 
     def test_add_layer_after_add_face_raises(self):
         builder = create()
@@ -3294,6 +3359,75 @@ class TestRealSketchUpOracle:
             area = ctypes.c_double()
             dll.SUFaceGetArea(faces[0], ctypes.byref(area))
             assert area.value == pytest.approx(100 * 100 - 40 * 40)
+            dll.SUModelRelease(ctypes.byref(model))
+        finally:
+            dll.SUTerminate()
+
+    def test_hidden_instance_group_and_layer_visibility_match_real_sketchup(self, tmp_path):
+        import ctypes
+
+        builder = create()
+        roof = builder.add_layer("Roof", color=(150, 75, 30), hidden=True)
+        with builder.add_component_definition("Chair") as chair:
+            chair.add_face(SQUARE)
+        with builder.add_group("Table", hidden=True) as table:
+            table.add_face(SQUARE)
+        builder.add_instance(chair, hidden=True, layer=roof)
+        out = tmp_path / "hidden_oracle.skp"
+        builder.save(str(out))
+
+        dll = ctypes.CDLL(_SDK_DLL_PATH)
+        dll.SUModelCreateFromFile.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_char_p]
+        dll.SUModelGetEntities.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUEntitiesGetInstances.argtypes = [
+            ctypes.c_void_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_size_t),
+        ]
+        dll.SUEntitiesGetGroups.argtypes = [
+            ctypes.c_void_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_size_t),
+        ]
+        dll.SUDrawingElementGetHidden.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_bool)]
+        dll.SUModelGetNumLayers.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_size_t)]
+        dll.SUModelGetLayers.argtypes = [
+            ctypes.c_void_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_size_t),
+        ]
+        dll.SULayerGetVisibility.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_bool)]
+        dll.SUInitialize()
+        try:
+            model = ctypes.c_void_p()
+            err = dll.SUModelCreateFromFile(ctypes.byref(model), str(out).encode())
+            assert err == 0, f"SketchUp SDK rejected the file (error {err})"
+            entities = ctypes.c_void_p()
+            dll.SUModelGetEntities(model, ctypes.byref(entities))
+
+            inst = (ctypes.c_void_p * 1)()
+            got = ctypes.c_size_t()
+            dll.SUEntitiesGetInstances(entities, 1, inst, ctypes.byref(got))
+            assert got.value == 1
+            hidden = ctypes.c_bool()
+            dll.SUDrawingElementGetHidden(inst[0], ctypes.byref(hidden))
+            assert hidden.value is True
+
+            grp = (ctypes.c_void_p * 1)()
+            got2 = ctypes.c_size_t()
+            dll.SUEntitiesGetGroups(entities, 1, grp, ctypes.byref(got2))
+            assert got2.value == 1
+            hidden2 = ctypes.c_bool()
+            dll.SUDrawingElementGetHidden(grp[0], ctypes.byref(hidden2))
+            assert hidden2.value is True
+
+            nl = ctypes.c_size_t()
+            dll.SUModelGetNumLayers(model, ctypes.byref(nl))
+            layers = (ctypes.c_void_p * nl.value)()
+            gotl = ctypes.c_size_t()
+            dll.SUModelGetLayers(model, nl.value, layers, ctypes.byref(gotl))
+            visibilities = []
+            for i in range(gotl.value):
+                vis = ctypes.c_bool()
+                dll.SULayerGetVisibility(layers[i], ctypes.byref(vis))
+                visibilities.append(vis.value)
+            assert False in visibilities  # the hidden "Roof" layer
+            assert True in visibilities  # the default, visible "Layer0"
+
             dll.SUModelRelease(ctypes.byref(model))
         finally:
             dll.SUTerminate()
