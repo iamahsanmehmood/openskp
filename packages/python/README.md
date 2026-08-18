@@ -133,11 +133,13 @@ mechanism SketchUp's own "dynamic component" attributes use), and
 circular faces and partial arcs (genuine, editable-by-radius arc/circle
 entities, not disconnected straight edges that merely trace that shape),
 and freeform polyline curves (an arbitrary chain of edges grouped into
-one genuine `CCurve` entity) are all supported. `openskp.open_existing()`
-can also load an *existing* legacy-format file and rebuild it as a new
-builder, so more geometry can be added to it before saving (see
-[Editing an existing file](#editing-an-existing-file) below). See
-[`openskp/create.py`](src/openskp/create.py) for the full scope notes.
+one genuine `CCurve` entity) are all supported, along with an
+`add_face(..., auto_triangulate=True)` fallback for non-planar input.
+`openskp.open_existing()` can also load an *existing* legacy-format file
+and rebuild it as a new builder, so more geometry can be added to it
+before saving (see [Editing an existing file](#editing-an-existing-file)
+below). See [`openskp/create.py`](src/openskp/create.py) for the full
+scope notes.
 
 ```python
 from openskp import create
@@ -185,6 +187,11 @@ builder.add_arc((100, 75, 0), normal=(0, 0, 1), radius=30, start_angle=0, end_an
 
 # A freeform polyline - an arbitrary edge chain grouped into one curve
 builder.add_polyline([(0, 0, 0), (10, 10, 0), (20, 0, 0), (30, 10, 0)])
+
+# A non-planar "quad" - auto_triangulate fans it into 2 real triangular
+# faces instead of raising, the same thing SketchUp's own UI does
+warped_quad = [(0, 0, 0), (10, 0, 0), (10, 10, 0), (0, 10, 5)]
+builder.add_face(warped_quad, auto_triangulate=True)
 
 builder.save("output.skp")
 ```

@@ -539,6 +539,16 @@ matrix against several candidate formulas, then confirmed exactly (all
 6 matrix values matching) against a correspondence deliberately chosen
 not to align with the face's own edges.
 
+`add_face` only stores true planar faces (all it can represent), so
+non-coplanar points raise by default - pass `auto_triangulate=True` to
+fan-triangulate instead, the same silent fallback real SketchUp's own UI
+applies to a not-quite-flat quad you draw by hand:
+
+```python
+warped_quad = [(0, 0, 0), (10, 0, 0), (10, 10, 0), (0, 10, 5)]
+builder.add_face(warped_quad, auto_triangulate=True)  # -> 2 triangular faces
+```
+
 Component definitions, instances, and faces can also carry custom
 key/value metadata - the same mechanism SketchUp's own "dynamic
 component" attributes use - via each of their `attributes` parameters

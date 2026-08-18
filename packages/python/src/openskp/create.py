@@ -45,7 +45,10 @@ are involved, and how.
   add_polyline`; all three have :class:`ComponentDefinitionBuilder`
   equivalents. An instance/group placement's rotation can be given
   directly as ``rotation=(axis, angle_radians)`` instead of a hand-
-  derived ``matrix3x3`` - see :func:`_rotation_matrix3x3`.
+  derived ``matrix3x3`` - see :func:`_rotation_matrix3x3`. ``add_face``'s
+  ``auto_triangulate`` fan-splits a non-coplanar polygon into real,
+  always-planar triangular faces instead of raising - the same thing
+  real SketchUp's own UI does silently for a not-quite-flat quad.
 * Coordinates are in **inches** - SketchUp's own native internal unit for
   this era of the format. Converting from another unit is the caller's
   responsibility for now.
@@ -1364,6 +1367,88 @@ def _plane_from_polygon(points: Sequence[Point3]) -> Tuple[float, float, float, 
     return nx, ny, nz, d
 
 
+def _is_coplanar(points: Sequence[Point3]) -> bool:
+    """Same fit/tolerance `_plane_from_polygon` uses, but returns a bool
+    for "not coplanar" instead of raising - used by `add_face`'s
+    ``auto_triangulate`` to decide whether a fan-triangulation fallback
+    is even needed. Still raises for a collinear/degenerate input (no
+    triangulation fixes that - it's not a "not flat enough" problem)."""
+    n = len(points)
+    nx = ny = nz = 0.0
+    for i in range(n):
+        x0, y0, z0 = points[i]
+        x1, y1, z1 = points[(i + 1) % n]
+        nx += (y0 - y1) * (z0 + z1)
+        ny += (z0 - z1) * (x0 + x1)
+        nz += (x0 - x1) * (y0 + y1)
+    length = (nx * nx + ny * ny + nz * nz) ** 0.5
+    if length < 1e-9:
+        raise SkpWriteError("face points are collinear or degenerate; cannot compute a plane")
+    nx, ny, nz = nx / length, ny / length, nz / length
+    cx = sum(p[0] for p in points) / n
+    cy = sum(p[1] for p in points) / n
+    cz = sum(p[2] for p in points) / n
+    d = nx * cx + ny * cy + nz * cz
+    span = max(max(p[i] for p in points) - min(p[i] for p in points) for i in range(3))
+    tol = max(span, 1.0) * 1e-6
+    return all(abs(nx * p[0] + ny * p[1] + nz * p[2] - d) <= tol for p in points)
+
+
+def _write_face_or_triangulate(
+    writer: "_ArchiveWriter",
+    points: List[Point3],
+    vertex_slots: Dict[Point3, int],
+    edge_registry: Dict[FrozenSet[int], Tuple[int, int]],
+    material: int,
+    layer: int,
+    back_material: int,
+    hidden: bool,
+    soft_edges: bool,
+    smooth_edges: bool,
+    hidden_edges: bool,
+    front_uv: Optional[Sequence[Tuple[Point3, Tuple[float, float]]]],
+    back_uv: Optional[Sequence[Tuple[Point3, Tuple[float, float]]]],
+    attribute_dicts: Sequence[Tuple[str, Dict[str, object]]],
+    auto_triangulate: bool,
+) -> int:
+    """Shared by :meth:`SkpBuilder.add_face` and
+    :meth:`ComponentDefinitionBuilder.add_face` - writes ``points`` as one
+    face normally, unless ``auto_triangulate`` is set AND the points
+    aren't coplanar, in which case it fan-triangulates from ``points[0]``
+    and writes one real, always-planar triangular face per fan wedge
+    instead of raising. This mirrors real SketchUp's own UI behavior: a
+    4-point face you draw that isn't quite flat is silently split into 2
+    triangles rather than rejected. Not attempted for a genuinely
+    degenerate (collinear) input - `_is_coplanar` still raises for that,
+    since no triangulation fixes it.
+
+    Not compatible with ``front_uv``/``back_uv``: positioning a texture
+    from one 3-point correspondence doesn't generalize to a fan of
+    independently-drawn triangles.
+
+    Returns the total new-root-entity-list-slot count (same contract as
+    `write_face`/`write_arc`/`write_polyline`).
+    """
+    if not auto_triangulate or len(points) == 3 or _is_coplanar(points):
+        return writer.write_face(
+            points, vertex_slots, edge_registry,
+            material, layer, back_material,
+            hidden, soft_edges, smooth_edges, hidden_edges,
+            front_uv, back_uv, attribute_dicts,
+        )
+    if front_uv is not None or back_uv is not None:
+        raise SkpWriteError("auto_triangulate cannot be combined with front_uv/back_uv positioning")
+    total = 0
+    for i in range(1, len(points) - 1):
+        total += writer.write_face(
+            [points[0], points[i], points[i + 1]], vertex_slots, edge_registry,
+            material, layer, back_material,
+            hidden, soft_edges, smooth_edges, hidden_edges,
+            None, None, attribute_dicts,
+        )
+    return total
+
+
 class ComponentDefinitionBuilder:
     """Accumulates one component/group definition's geometry. Construct via
     :meth:`SkpBuilder.add_component_definition` or :meth:`SkpBuilder.
@@ -1415,6 +1500,7 @@ class ComponentDefinitionBuilder:
         back_uv: Optional[Sequence[Tuple[Point3, Tuple[float, float]]]] = None,
         attributes: Optional[Dict[str, object]] = None,
         attribute_dict_name: str = "attributes",
+        auto_triangulate: bool = False,
     ) -> None:
         """Add one planar face to this definition - same signature and
         behavior as :meth:`SkpBuilder.add_face`, except vertices/edges are
@@ -1425,11 +1511,11 @@ class ComponentDefinitionBuilder:
         if len(points) < 3:
             raise SkpWriteError("a face needs at least 3 points")
         attribute_dicts = [(attribute_dict_name, attributes)] if attributes else []
-        self._new_entity_count += self._skp._definition_writer.write_face(
-            points, self._vertex_slots, self._edge_registry,
+        self._new_entity_count += _write_face_or_triangulate(
+            self._skp._definition_writer, points, self._vertex_slots, self._edge_registry,
             material or 0, layer or 0, back_material or 0,
             hidden, soft_edges, smooth_edges, hidden_edges,
-            front_uv, back_uv, attribute_dicts,
+            front_uv, back_uv, attribute_dicts, auto_triangulate,
         )
 
     def add_circle(
@@ -2054,6 +2140,7 @@ class SkpBuilder:
         back_uv: Optional[Sequence[Tuple[Point3, Tuple[float, float]]]] = None,
         attributes: Optional[Dict[str, object]] = None,
         attribute_dict_name: str = "attributes",
+        auto_triangulate: bool = False,
     ) -> None:
         """Add one planar face, defined by 3 or more coplanar points (in
         inches) forming a closed polygon in order - do not repeat the
@@ -2096,17 +2183,30 @@ class SkpBuilder:
         ``attributes``, if given, is custom key/value metadata (values
         may be ``str``, ``int``, or ``float``) attached to this face,
         under a dictionary named ``attribute_dict_name``.
+
+        By default, non-coplanar ``points`` raise `SkpWriteError` - this
+        writer only stores true planar faces, since that's all a single
+        ``CFace`` record can represent. ``auto_triangulate=True`` instead
+        mirrors real SketchUp's own behavior when you draw a not-quite-flat
+        polygon: it's silently fan-triangulated from ``points[0]`` into
+        several always-planar triangular faces (2 for a quad) rather than
+        rejected. Each triangle gets its own copy of ``attributes``, if
+        given; not compatible with ``front_uv``/``back_uv`` (positioning a
+        texture from one 3-point correspondence doesn't generalize to an
+        unpredictable number of independently-drawn triangles). Already-
+        planar input is written as a single face either way - this only
+        changes behavior for input that would otherwise be rejected.
         """
         points = [(float(p[0]), float(p[1]), float(p[2])) for p in points]
         if len(points) < 3:
             raise SkpWriteError("a face needs at least 3 points")
         self._ensure_geometry_writer()
         attribute_dicts = [(attribute_dict_name, attributes)] if attributes else []
-        self._new_entity_count += self._geometry_writer.write_face(
-            points, self._vertex_slots, self._edge_registry,
+        self._new_entity_count += _write_face_or_triangulate(
+            self._geometry_writer, points, self._vertex_slots, self._edge_registry,
             material or 0, layer or 0, back_material or 0,
             hidden, soft_edges, smooth_edges, hidden_edges,
-            front_uv, back_uv, attribute_dicts,
+            front_uv, back_uv, attribute_dicts, auto_triangulate,
         )
         self._face_count += 1
 
