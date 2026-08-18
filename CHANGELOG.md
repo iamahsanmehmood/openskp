@@ -90,10 +90,10 @@ for the full scope notes.
   models (not just files this project's own writer produced), confirming
   face/instance/definition counts and the real SDK's own acceptance of
   the rebuilt file. Returns a list of warnings for anything the source
-  file had that couldn't be faithfully reproduced (a face with a hole, a
-  projected texture, a colorized material's tint, and several others —
-  see the module's own docstring for the complete, itemized list) rather
-  than silently dropping it.
+  file had that couldn't be faithfully reproduced (a projected texture,
+  a colorized material's tint, and several others — see the module's
+  own docstring for the complete, itemized list) rather than silently
+  dropping it.
 - `rotation=(axis, angle_radians)` on `add_instance`/`add_group`/
   `add_group_instance` — a convenience alternative to hand-deriving a
   `matrix3x3` rotation matrix for the common case of a pure rotation
@@ -107,10 +107,6 @@ for the full scope notes.
   instead of raising, the same silent fallback real SketchUp's own UI
   applies when you draw a not-quite-flat face. Off by default — existing
   strict-planarity behavior is unchanged unless opted into.
-  file had that couldn't be faithfully reproduced (a projected texture,
-  a colorized material's tint, and several others — see the module's
-  own docstring for the complete, itemized list) rather than silently
-  dropping it.
 - `add_face(..., holes=[...])` — cut one or more independent closed
   polygons out of a face (a window opening in a wall, say) as real
   additional loops in the same `CFace` record, not a separate,
@@ -123,6 +119,21 @@ for the full scope notes.
   (`SUFaceGetArea`), not just structurally present.
   `openskp.open_existing()` now replays a multi-loop face faithfully
   instead of skipping it.
+- `SkpBuilder.materials_by_name`/`layers_by_name` — every material/layer
+  registered so far, by name, always kept up to date as a side effect of
+  `add_material`/`add_texture_material`/`add_layer` (previously a private,
+  undocumented implementation detail). `openskp.open_existing()` now
+  also returns a third value, `definitions` (component definition name →
+  its builder), so a caller can reuse the source file's own materials,
+  layers, and component definitions on new geometry — e.g.
+  `builder.add_face(pts, material=builder.materials_by_name["Walnut"])`
+  or `builder.add_instance(definitions["Wheel"], translation=...)` —
+  without reaching into a private attribute. Registering a genuinely NEW
+  material/layer/definition/group on the returned builder still isn't
+  possible (the file format's own ordering requirement is already
+  satisfied by the time replay finishes writing root-level geometry);
+  that limitation is now documented and tested rather than just
+  discovered by trial and error.
 
 ### Fixed
 
@@ -165,9 +176,6 @@ entities) as a regression guard.
   format has no mechanism for one definition's declaration to live inside
   another's, so a nested group's geometry has to be built separately
   first (see `add_group_instance` above).
-- Editing an existing arbitrary `.skp` file — a separately harder
-  problem (real SketchUp re-serializes the whole document on save rather
-  than appending), not attempted here.
 - The other four language ports (TypeScript, .NET, Dart, C++) do not
   have write support yet.
 

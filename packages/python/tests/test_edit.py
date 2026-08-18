@@ -51,7 +51,7 @@ class TestOpenExisting:
         src = tmp_path / "source.skp"
         builder.save(str(src))
 
-        new_builder, warnings = edit.open_existing(str(src))
+        new_builder, warnings, definitions = edit.open_existing(str(src))
         data = new_builder.to_bytes()
         out = tmp_path / "rebuilt.skp"
         out.write_bytes(data)
@@ -74,7 +74,7 @@ class TestOpenExisting:
         src = tmp_path / "source.skp"
         builder.save(str(src))
 
-        new_builder, warnings = edit.open_existing(str(src))
+        new_builder, warnings, definitions = edit.open_existing(str(src))
         out = tmp_path / "rebuilt.skp"
         out.write_bytes(new_builder.to_bytes())
         rebuilt = SkpFile.open(str(out)).parse()
@@ -96,7 +96,7 @@ class TestOpenExisting:
         src = tmp_path / "source.skp"
         builder.save(str(src))
 
-        new_builder, warnings = edit.open_existing(str(src))
+        new_builder, warnings, definitions = edit.open_existing(str(src))
         out = tmp_path / "rebuilt.skp"
         out.write_bytes(new_builder.to_bytes())
         rebuilt = SkpFile.open(str(out)).parse()
@@ -104,6 +104,71 @@ class TestOpenExisting:
         by_name = {d.name: d for d in rebuilt.definitions.values()}
         assert set(by_name) == {"Wheel", "Car"}
         assert len(by_name["Car"].instances) == 2
+
+    def test_materials_and_layers_reusable_after_replay(self, tmp_path):
+        # The practical gap independent testing surfaced: after
+        # open_existing(), a caller needs a way to reuse the source
+        # file's own materials/layers on new geometry without reaching
+        # into a private attribute.
+        builder = create()
+        red = builder.add_material("Red", (255, 0, 0))
+        roof = builder.add_layer("Roof")
+        builder.add_face(SQUARE, material=red, layer=roof)
+        src = tmp_path / "source.skp"
+        builder.save(str(src))
+
+        new_builder, warnings, definitions = edit.open_existing(str(src))
+        assert "Red" in new_builder.materials_by_name
+        assert "Roof" in new_builder.layers_by_name
+        # The reused handle actually works on new geometry, not just present.
+        new_builder.add_face(
+            [(300, 0, 0), (310, 0, 0), (310, 10, 0), (300, 10, 0)],
+            material=new_builder.materials_by_name["Red"],
+            layer=new_builder.layers_by_name["Roof"],
+        )
+        out = tmp_path / "rebuilt.skp"
+        out.write_bytes(new_builder.to_bytes())
+        rebuilt = SkpFile.open(str(out)).parse()
+        assert len(rebuilt.materials) == 1  # still just "Red" - reused, not duplicated
+        assert len(rebuilt.root.faces) == 2
+
+    def test_definitions_returned_by_name(self, tmp_path):
+        builder = create()
+        with builder.add_component_definition("Wheel") as wheel:
+            wheel.add_face([(0, 0, 0), (10, 0, 0), (10, 10, 0), (0, 10, 0)])
+        builder.add_instance(wheel, translation=(0, 0, 0))
+        src = tmp_path / "source.skp"
+        builder.save(str(src))
+
+        new_builder, warnings, definitions = edit.open_existing(str(src))
+        assert "Wheel" in definitions
+        # The returned definition is directly usable for a NEW placement.
+        new_builder.add_instance(definitions["Wheel"], translation=(100, 0, 0))
+        out = tmp_path / "rebuilt.skp"
+        out.write_bytes(new_builder.to_bytes())
+        rebuilt = SkpFile.open(str(out)).parse()
+        assert len(rebuilt.definitions) == 1  # still just one Wheel definition
+        assert len(rebuilt.root.instances) == 2  # but now placed twice
+
+    def test_new_material_layer_definition_group_all_rejected_after_replay(self, tmp_path):
+        # Documented, tested constraint (not a bug): replaying a source
+        # file's own root-level geometry already finalizes the writer's
+        # materials/layers/definitions sections, per the same file-format
+        # ordering requirement every create() builder has always had.
+        builder = create()
+        builder.add_face(SQUARE)
+        src = tmp_path / "source.skp"
+        builder.save(str(src))
+
+        new_builder, warnings, definitions = edit.open_existing(str(src))
+        with pytest.raises(SkpWriteError, match="before any add_face"):
+            new_builder.add_material("Chrome", (180, 180, 185))
+        with pytest.raises(SkpWriteError, match="before any add_face"):
+            new_builder.add_layer("Extra")
+        with pytest.raises(SkpWriteError, match="before any add_face/add_instance"):
+            new_builder.add_component_definition("New")
+        with pytest.raises(SkpWriteError, match="before any add_face/add_instance"):
+            new_builder.add_group("NewGroup")
 
     def test_positioned_texture_round_trips(self, tmp_path):
         png_path = tmp_path / "tex.png"
@@ -117,7 +182,7 @@ class TestOpenExisting:
         src = tmp_path / "source.skp"
         builder.save(str(src))
 
-        new_builder, warnings = edit.open_existing(str(src))
+        new_builder, warnings, definitions = edit.open_existing(str(src))
         out = tmp_path / "rebuilt.skp"
         out.write_bytes(new_builder.to_bytes())
         rebuilt = SkpFile.open(str(out)).parse()
@@ -137,7 +202,7 @@ class TestOpenExisting:
         src = tmp_path / "source.skp"
         builder.save(str(src))
 
-        new_builder, warnings = edit.open_existing(str(src))
+        new_builder, warnings, definitions = edit.open_existing(str(src))
         assert not any("hole" in w for w in warnings)
         out = tmp_path / "rebuilt.skp"
         out.write_bytes(new_builder.to_bytes())
@@ -194,7 +259,7 @@ class TestOpenExisting:
         assert len(rebuilt.root.faces) == 1
 
     def test_empty_source_can_still_be_saved_after_adding_geometry(self, tmp_path):
-        new_builder, warnings = edit.open_existing(FIXTURES / "blank_v17.skp")
+        new_builder, warnings, definitions = edit.open_existing(FIXTURES / "blank_v17.skp")
         with pytest.raises(SkpWriteError, match="no geometry"):
             new_builder.to_bytes()
         new_builder.add_face(SQUARE)
@@ -213,7 +278,7 @@ class TestRealWorldFixtures:
         path = FIXTURES / fixture_name
         if not path.exists():
             pytest.skip(f"fixture {fixture_name} not present")
-        new_builder, warnings = edit.open_existing(str(path))
+        new_builder, warnings, definitions = edit.open_existing(str(path))
         data = new_builder.to_bytes()
         out = tmp_path / "rebuilt.skp"
         out.write_bytes(data)
@@ -226,7 +291,7 @@ class TestRealWorldFixtures:
         if not path.exists():
             pytest.skip("fixture not present")
         orig = SkpFile.open(str(path)).parse()
-        new_builder, warnings = edit.open_existing(str(path))
+        new_builder, warnings, definitions = edit.open_existing(str(path))
         out = tmp_path / "rebuilt.skp"
         out.write_bytes(new_builder.to_bytes())
         rebuilt = SkpFile.open(str(out)).parse()
@@ -259,7 +324,7 @@ class TestRealSketchUpOracle:
             pytest.skip("fixture not present")
 
         orig = SkpFile.open(str(path)).parse()
-        new_builder, warnings = edit.open_existing(str(path))
+        new_builder, warnings, definitions = edit.open_existing(str(path))
         out = tmp_path / "rebuilt.skp"
         out.write_bytes(new_builder.to_bytes())
 

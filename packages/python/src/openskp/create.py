@@ -1852,7 +1852,14 @@ class SkpBuilder:
         # Materials always start allocating at `base`, the same slot the
         # (possibly absent) material section would have occupied.
         self._material_writer = _ArchiveWriter(next_slot=base, class_slot={})
-        self._materials_by_name: Dict[str, int] = {}
+        #: Every material registered so far, by name - populated by
+        #: `add_material`/`add_texture_material` as a side effect (they
+        #: already de-dupe by name through this same dict), not something
+        #: a caller needs to maintain separately. Useful for reusing a
+        #: handle without having kept the one `add_material` originally
+        #: returned - e.g. after `openskp.open_existing()`, every material
+        #: the source file had is already here.
+        self.materials_by_name: Dict[str, int] = {}
         self._material_count = 0
         # Deferred: layers splice in AFTER materials, so the layer writer's
         # starting slot depends on the final material count. Constructed
@@ -1861,7 +1868,9 @@ class SkpBuilder:
         self._layer_writer_base = layer_writer_base
         self._layer_writer: Optional[_ArchiveWriter] = None
         self._layer_writer_start: Optional[int] = None
-        self._layers_by_name: Dict[str, int] = {}
+        #: Every layer registered so far, by name - same pattern as
+        #: `materials_by_name`, populated automatically by `add_layer`.
+        self.layers_by_name: Dict[str, int] = {}
         self._layer_count = 0
         # Deferred the same way as the layer writer: component definitions
         # splice in after layers, before root-level geometry, so their
@@ -1898,14 +1907,14 @@ class SkpBuilder:
             raise SkpWriteError("add_material must be called before any add_layer calls")
         if self._definition_writer is not None:
             raise SkpWriteError("add_material must be called before any add_component_definition calls")
-        if name in self._materials_by_name:
-            return self._materials_by_name[name]
+        if name in self.materials_by_name:
+            return self.materials_by_name[name]
         if len(rgba) == 3:
             rgba = (*rgba, 255)
         if len(rgba) != 4 or not all(isinstance(c, int) and 0 <= c <= 255 for c in rgba):
             raise SkpWriteError("rgba must be 3 or 4 integers in 0-255")
         slot = self._material_writer.write_material(name, tuple(rgba))
-        self._materials_by_name[name] = slot
+        self.materials_by_name[name] = slot
         self._material_count += 1
         return slot
 
@@ -1934,13 +1943,13 @@ class SkpBuilder:
             raise SkpWriteError("add_texture_material must be called before any add_layer calls")
         if self._definition_writer is not None:
             raise SkpWriteError("add_texture_material must be called before any add_component_definition calls")
-        if name in self._materials_by_name:
-            return self._materials_by_name[name]
+        if name in self.materials_by_name:
+            return self.materials_by_name[name]
         with open(image_path, "rb") as f:
             image_bytes = f.read()
         subtype = _detect_image_subtype(image_bytes)
         slot = self._material_writer.write_textured_material(name, image_bytes, image_path, subtype=subtype)
-        self._materials_by_name[name] = slot
+        self.materials_by_name[name] = slot
         self._material_count += 1
         return slot
 
@@ -1961,8 +1970,8 @@ class SkpBuilder:
             raise SkpWriteError("add_layer must be called before any add_face calls")
         if self._definition_writer is not None:
             raise SkpWriteError("add_layer must be called before any add_component_definition calls")
-        if name in self._layers_by_name:
-            return self._layers_by_name[name]
+        if name in self.layers_by_name:
+            return self.layers_by_name[name]
         if self._layer_writer is None:
             material_shift = self._material_writer.next_slot - self._base
             self._layer_writer_start = self._layer_writer_base + material_shift
@@ -1977,7 +1986,7 @@ class SkpBuilder:
                 next_slot=self._layer_writer_start, class_slot=self._material_shifted_class_slot()
             )
         slot = self._layer_writer.write_layer(name)
-        self._layers_by_name[name] = slot
+        self.layers_by_name[name] = slot
         self._layer_count += 1
         return slot
 
