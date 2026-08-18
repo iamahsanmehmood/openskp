@@ -1119,17 +1119,85 @@ class TestUVPositioning:
             ftc = dict(face["attrs"]["children"])["CFaceTextureCoords"]
             assert ftc["front"] == pytest.approx((50.0, 0.0, 0.0, 0.0, 50.0, 0.0, 0.0, 0.0, 1.0))
 
-    def test_tilted_face_raises(self, tmp_path):
+    def test_tilted_face_edge_aligned_mapping_is_a_pure_scale(self, tmp_path):
+        # A 100x100 square tilted 45 degrees around X (points[1]-points[0]
+        # runs along world X; points[3]-points[0] runs along the tilted
+        # diagonal, also length 100). Mapping UV corners onto the face's
+        # own corners should give a clean scale-only matrix - ground truth
+        # (an SDK-authored file positioned the same way) confirms this
+        # exact result, not just "some matrix that self-parses".
         png_path = tmp_path / "tex.png"
         png_path.write_bytes(_make_test_png())
         builder = create()
         tex = builder.add_texture_material("Brick", str(png_path))
-        tilted = [(0.0, 0.0, 0.0), (50.0, 0.0, 10.0), (50.0, 50.0, 10.0), (0.0, 50.0, 0.0)]
-        with pytest.raises(SkpWriteError, match="axis"):
-            builder.add_face(
-                tilted, material=tex,
-                front_uv=[((0.0, 0.0, 0.0), (0.0, 0.0)), ((50.0, 0.0, 10.0), (1.0, 0.0)), ((0.0, 50.0, 0.0), (0.0, 1.0))],
-            )
+        s = 70.71067811865476  # 100 / sqrt(2)
+        tilted = [(0.0, 0.0, 0.0), (100.0, 0.0, 0.0), (100.0, s, s), (0.0, s, s)]
+        builder.add_face(
+            tilted, material=tex,
+            front_uv=[((0.0, 0.0, 0.0), (0.0, 0.0)), ((100.0, 0.0, 0.0), (1.0, 0.0)), ((0.0, s, s), (0.0, 1.0))],
+        )
+        data = builder.to_bytes()
+        ar, root, layers, materials = legacy._walk(data)
+        face = [v for (_, n, v) in root if n == "CFace"][0]
+        ftc = dict(face["attrs"]["children"])["CFaceTextureCoords"]
+        assert ftc["front"] == pytest.approx((100.0, 0.0, 0.0, 0.0, 100.0, 0.0, 0.0, 0.0, 1.0), abs=1e-6)
+
+    def test_tilted_face_asymmetric_mapping_matches_ground_truth(self, tmp_path):
+        # Same tilted face, but correspondence points/uvs chosen specifically
+        # to not align with the face's own edges - the resulting matrix
+        # must match exactly what a real SDK-authored file produces for the
+        # identical setup (verified once by ground-truth diffing; this pins
+        # it as a byte-exact regression test). In particular this is what
+        # ruled out a plausible-looking "subtract points[0] first" origin
+        # hypothesis, which predicted the wrong translation terms here.
+        png_path = tmp_path / "tex.png"
+        png_path.write_bytes(_make_test_png())
+        builder = create()
+        tex = builder.add_texture_material("Brick", str(png_path))
+        s = 70.71067811865476
+        tilted = [(0.0, 0.0, 0.0), (100.0, 0.0, 0.0), (100.0, s, s), (0.0, s, s)]
+        builder.add_face(
+            tilted, material=tex,
+            front_uv=[
+                ((20.0, 0.0, 0.0), (0.5, 1.0)),
+                ((80.0, 0.0, 0.0), (2.0, 1.0)),
+                ((20.0, s * 0.4, s * 0.4), (0.5, 3.0)),
+            ],
+        )
+        data = builder.to_bytes()
+        ar, root, layers, materials = legacy._walk(data)
+        face = [v for (_, n, v) in root if n == "CFace"][0]
+        ftc = dict(face["attrs"]["children"])["CFaceTextureCoords"]
+        assert ftc["front"] == pytest.approx((40.0, 0.0, 0.0, 0.0, 20.0, 0.0, 0.0, -20.0, 1.0), abs=1e-6)
+
+    def test_tilted_face_far_from_world_origin_matches_ground_truth(self, tmp_path):
+        # A face offset far from (0,0,0) - the case that actually
+        # distinguished "no origin subtraction" (correct) from "subtract
+        # points[0] first" (plausible-looking, but wrong) during
+        # ground-truth research, since every earlier sample happened to
+        # have points[0] at the world origin, making the two hypotheses
+        # indistinguishable there.
+        png_path = tmp_path / "tex.png"
+        png_path.write_bytes(_make_test_png())
+        builder = create()
+        tex = builder.add_texture_material("Brick", str(png_path))
+        ox, oy, oz = 200.0, 300.0, 50.0
+        tilted = [
+            (ox, oy, oz), (ox + 100.0, oy, oz), (ox + 100.0, oy, oz + 80.0), (ox, oy, oz + 80.0),
+        ]
+        builder.add_face(
+            tilted, material=tex,
+            front_uv=[
+                ((ox + 10.0, oy, oz + 10.0), (0.0, 0.0)),
+                ((ox + 60.0, oy, oz + 10.0), (2.0, 0.0)),
+                ((ox + 10.0, oy, oz + 50.0), (0.0, 1.6)),
+            ],
+        )
+        data = builder.to_bytes()
+        ar, root, layers, materials = legacy._walk(data)
+        face = [v for (_, n, v) in root if n == "CFace"][0]
+        ftc = dict(face["attrs"]["children"])["CFaceTextureCoords"]
+        assert ftc["front"] == pytest.approx((25.0, 0.0, 0.0, 0.0, 25.0, 0.0, 210.0, 60.0, 1.0), abs=1e-6)
 
     def test_wrong_number_of_pairs_raises(self, tmp_path):
         png_path = tmp_path / "tex.png"
@@ -1179,6 +1247,202 @@ class TestUVPositioning:
         defn = model.definitions[panel.slot]
         face = list(defn.faces.values())[0]
         assert face.uv_transform == pytest.approx([50.0, 0.0, 0.0, 0.0, 50.0, 0.0, 0.0, 0.0, 1.0])
+
+
+class TestAttributeDicts:
+    def test_instance_attributes_self_parse(self):
+        # legacy._walk only exposes root-level entities, so an instance
+        # (unlike a definition or a face nested inside one) can be checked
+        # directly this way.
+        builder = create()
+        with builder.add_component_definition("Chair") as chair:
+            chair.add_face(SQUARE)
+        builder.add_instance(chair, attributes={"serial": "A1", "count": 3, "weight": 4.5})
+        data = builder.to_bytes()
+
+        ar, root, layers, materials = legacy._walk(data)
+        inst = root[0][2]
+        assert inst["attrs"]["children"] == [
+            ("CAttributeNamed", {
+                "k": "dict", "name": "attributes",
+                "entries": {"serial": "A1", "count": 3, "weight": 4.5},
+            }),
+        ]
+
+    def test_custom_dict_name(self):
+        builder = create()
+        with builder.add_component_definition("Chair") as chair:
+            chair.add_face(SQUARE)
+        builder.add_instance(chair, attributes={"a": 1}, attribute_dict_name="dynamic_attributes")
+        data = builder.to_bytes()
+        ar, root, layers, materials = legacy._walk(data)
+        assert root[0][2]["attrs"]["children"][0][1]["name"] == "dynamic_attributes"
+
+    def test_face_with_no_attributes_has_no_attr_container(self):
+        # A face with no attributes (and no UV positioning) shouldn't pay
+        # for (or emit) an attribute container at all - same discipline as
+        # test_unpositioned_face_has_no_texture_coords_record. Instances/
+        # definitions differ here: ground truth already has them always
+        # carrying a real (possibly empty) container regardless of
+        # attributes, so this check is face-specific.
+        builder = create()
+        builder.add_face(SQUARE)
+        data = builder.to_bytes()
+        ar, root, layers, materials = legacy._walk(data)
+        face = [v for (_, n, v) in root if n == "CFace"][0]
+        assert face["attrs"] is None
+
+    def test_instance_with_no_attributes_has_empty_attr_container(self):
+        # Unlike a face, an instance always carries a real attribute
+        # container regardless of whether attributes are given (ground
+        # truth predates this feature) - adding attributes support
+        # shouldn't change that pre-existing shape for the no-attributes case.
+        builder = create()
+        with builder.add_component_definition("Chair") as chair:
+            chair.add_face(SQUARE)
+        builder.add_instance(chair)
+        data = builder.to_bytes()
+        ar, root, layers, materials = legacy._walk(data)
+        assert root[0][2]["attrs"] == {"k": "attrs", "children": []}
+
+    def test_bool_value_raises(self):
+        builder = create()
+        with builder.add_component_definition("Chair") as chair:
+            chair.add_face(SQUARE)
+        with pytest.raises(SkpWriteError, match="bool is not a supported"):
+            builder.add_instance(chair, attributes={"flag": True})
+
+    def test_unsupported_type_raises(self):
+        builder = create()
+        with builder.add_component_definition("Chair") as chair:
+            chair.add_face(SQUARE)
+        with pytest.raises(SkpWriteError, match="unsupported value type"):
+            builder.add_instance(chair, attributes={"bad": [1, 2, 3]})
+
+    def test_int32_out_of_range_raises(self):
+        builder = create()
+        with builder.add_component_definition("Chair") as chair:
+            chair.add_face(SQUARE)
+        with pytest.raises(SkpWriteError, match="out of signed 32-bit range"):
+            builder.add_instance(chair, attributes={"huge": 2**40})
+
+    def test_face_attributes_in_component_definition(self):
+        builder = create()
+        with builder.add_component_definition("Panel") as panel:
+            panel.add_face(SQUARE, attributes={"note": "handle with care"})
+        builder.add_instance(panel)
+        data = builder.to_bytes()
+        # Byte-level presence check (face attrs live inside the definition,
+        # not exposed by legacy._walk's root-only view) - the SDK oracle
+        # test below is the authoritative check for this case.
+        assert "handle with care".encode("utf-16-le") in data
+
+    def test_definition_and_instance_and_face_attributes_together_via_real_sketchup(self, tmp_path):
+        # The comprehensive case: attributes at all three levels this
+        # writer supports at once, each independently readable by real
+        # SketchUp through its own standard attribute-dictionary API -
+        # not just this project's own reader.
+        import ctypes
+
+        if not os.path.exists(_SDK_DLL_PATH):
+            pytest.skip("SketchUp SDK not present on this machine")
+
+        builder = create()
+        with builder.add_component_definition(
+            "Chair", attributes={"sku": "CH-100", "price": 49.99, "stock": 12},
+        ) as chair:
+            chair.add_face(SQUARE, attributes={"material_note": "oak"})
+        builder.add_instance(chair, translation=(50.0, 0.0, 0.0), attributes={"serial": "A1"})
+        out = tmp_path / "attrs.skp"
+        builder.save(str(out))
+
+        dll = ctypes.CDLL(_SDK_DLL_PATH)
+        dll.SUModelCreateFromFile.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_char_p]
+        dll.SUModelGetEntities.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUEntitiesGetInstances.argtypes = [
+            ctypes.c_void_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_size_t),
+        ]
+        dll.SUEntitiesGetNumInstances.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_size_t)]
+        dll.SUComponentInstanceGetDefinition.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUComponentDefinitionGetEntities.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUEntitiesGetFaces.argtypes = [
+            ctypes.c_void_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_size_t),
+        ]
+        dll.SUEntityGetAttributeDictionary.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUAttributeDictionaryGetValue.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUTypedValueCreate.argtypes = [ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUTypedValueGetString.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUTypedValueGetDouble.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_double)]
+        dll.SUTypedValueGetInt32.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_int32)]
+        dll.SUStringCreate.argtypes = [ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUStringGetUTF8Length.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_size_t)]
+        dll.SUStringGetUTF8.argtypes = [
+            ctypes.c_void_p, ctypes.c_size_t, ctypes.c_char_p, ctypes.POINTER(ctypes.c_size_t),
+        ]
+
+        def get_string_value(typed_value):
+            s = ctypes.c_void_p()
+            dll.SUStringCreate(ctypes.byref(s))
+            dll.SUTypedValueGetString(typed_value, ctypes.byref(s))
+            length = ctypes.c_size_t()
+            dll.SUStringGetUTF8Length(s, ctypes.byref(length))
+            buf = ctypes.create_string_buffer(length.value + 1)
+            outlen = ctypes.c_size_t()
+            dll.SUStringGetUTF8(s, length.value + 1, buf, ctypes.byref(outlen))
+            return buf.value.decode("utf-8")
+
+        def get_value(dict_ref, key):
+            tv = ctypes.c_void_p()
+            dll.SUTypedValueCreate(ctypes.byref(tv))
+            err = dll.SUAttributeDictionaryGetValue(dict_ref, key.encode(), ctypes.byref(tv))
+            assert err == 0, f"key {key!r} not found (error {err})"
+            return tv
+
+        dll.SUInitialize()
+        try:
+            model = ctypes.c_void_p()
+            err = dll.SUModelCreateFromFile(ctypes.byref(model), str(out).encode())
+            assert err == 0, f"SketchUp SDK rejected the file (error {err})"
+            entities = ctypes.c_void_p()
+            dll.SUModelGetEntities(model, ctypes.byref(entities))
+            ninst = ctypes.c_size_t()
+            dll.SUEntitiesGetNumInstances(entities, ctypes.byref(ninst))
+            assert ninst.value == 1
+            insts = (ctypes.c_void_p * 1)()
+            got = ctypes.c_size_t()
+            dll.SUEntitiesGetInstances(entities, 1, insts, ctypes.byref(got))
+
+            inst_dict = ctypes.c_void_p()
+            err = dll.SUEntityGetAttributeDictionary(insts[0], b"attributes", ctypes.byref(inst_dict))
+            assert err == 0
+            assert get_string_value(get_value(inst_dict, "serial")) == "A1"
+
+            comp_def = ctypes.c_void_p()
+            dll.SUComponentInstanceGetDefinition(insts[0], ctypes.byref(comp_def))
+            def_dict = ctypes.c_void_p()
+            err = dll.SUEntityGetAttributeDictionary(comp_def, b"attributes", ctypes.byref(def_dict))
+            assert err == 0
+            assert get_string_value(get_value(def_dict, "sku")) == "CH-100"
+            price = ctypes.c_double()
+            dll.SUTypedValueGetDouble(get_value(def_dict, "price"), ctypes.byref(price))
+            assert price.value == pytest.approx(49.99)
+            stock = ctypes.c_int32()
+            dll.SUTypedValueGetInt32(get_value(def_dict, "stock"), ctypes.byref(stock))
+            assert stock.value == 12
+
+            def_entities = ctypes.c_void_p()
+            dll.SUComponentDefinitionGetEntities(comp_def, ctypes.byref(def_entities))
+            faces = (ctypes.c_void_p * 1)()
+            got2 = ctypes.c_size_t()
+            dll.SUEntitiesGetFaces(def_entities, 1, faces, ctypes.byref(got2))
+            face_dict = ctypes.c_void_p()
+            err = dll.SUEntityGetAttributeDictionary(faces[0], b"attributes", ctypes.byref(face_dict))
+            assert err == 0
+            assert get_string_value(get_value(face_dict, "material_note")) == "oak"
+
+            dll.SUModelRelease(ctypes.byref(model))
+        finally:
+            dll.SUTerminate()
 
 
 class TestLayers:
@@ -2103,6 +2367,69 @@ class TestRealSketchUpOracle:
             # u=0.5 at the midpoint between the 0->0 and 50->1 pins).
             uvq = SUUVQ()
             err = dll.SUUVHelperGetFrontUVQ(uv_helper, ctypes.byref(SUPoint3D(25.0, 25.0, 0.0)), ctypes.byref(uvq))
+            assert err == 0
+            assert uvq.u == pytest.approx(0.5)
+            assert uvq.q == pytest.approx(1.0)
+            dll.SUModelRelease(ctypes.byref(model))
+        finally:
+            dll.SUTerminate()
+
+    def test_positioned_texture_on_tilted_face_round_trips_through_real_sketchup(self, tmp_path):
+        # Same discipline as the axis-aligned oracle test above, but for a
+        # face tilted 45 degrees - real SketchUp must both accept the file
+        # and agree with the u-coordinate this project's own basis formula
+        # (_face_uv_basis) computes, not just tolerate the bytes.
+        import ctypes
+
+        class SUPoint3D(ctypes.Structure):
+            _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double), ("z", ctypes.c_double)]
+
+        class SUUVQ(ctypes.Structure):
+            _fields_ = [("u", ctypes.c_double), ("v", ctypes.c_double), ("q", ctypes.c_double)]
+
+        png_path = tmp_path / "tex.png"
+        png_path.write_bytes(_make_test_png())
+        builder = create()
+        tex = builder.add_texture_material("Brick", str(png_path))
+        s = 70.71067811865476
+        tilted = [(0.0, 0.0, 0.0), (100.0, 0.0, 0.0), (100.0, s, s), (0.0, s, s)]
+        # (0,0,0)->(0,0), (100,0,0)->(1,0), (0,s,s)->(0,1): pure 100x scale
+        # along the face's own (tilted) edges.
+        builder.add_face(
+            tilted, material=tex,
+            front_uv=[((0.0, 0.0, 0.0), (0.0, 0.0)), ((100.0, 0.0, 0.0), (1.0, 0.0)), ((0.0, s, s), (0.0, 1.0))],
+        )
+        out = tmp_path / "tilted_positioned.skp"
+        builder.save(str(out))
+
+        dll = ctypes.CDLL(_SDK_DLL_PATH)
+        dll.SUModelCreateFromFile.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_char_p]
+        dll.SUModelGetEntities.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUEntitiesGetFaces.argtypes = [
+            ctypes.c_void_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_size_t),
+        ]
+        dll.SUFaceGetUVHelper.argtypes = [
+            ctypes.c_void_p, ctypes.c_bool, ctypes.c_bool, ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p),
+        ]
+        dll.SUUVHelperGetFrontUVQ.argtypes = [ctypes.c_void_p, ctypes.POINTER(SUPoint3D), ctypes.POINTER(SUUVQ)]
+        dll.SUInitialize()
+        try:
+            model = ctypes.c_void_p()
+            err = dll.SUModelCreateFromFile(ctypes.byref(model), str(out).encode())
+            assert err == 0, f"SketchUp SDK rejected the file (error {err})"
+            entities = ctypes.c_void_p()
+            dll.SUModelGetEntities(model, ctypes.byref(entities))
+            faces = (ctypes.c_void_p * 1)()
+            got = ctypes.c_size_t()
+            dll.SUEntitiesGetFaces(entities, 1, faces, ctypes.byref(got))
+            assert got.value == 1
+            uv_helper = ctypes.c_void_p()
+            err = dll.SUFaceGetUVHelper(faces[0], True, False, ctypes.c_void_p(0), ctypes.byref(uv_helper))
+            assert err == 0
+            # Midpoint of the tilted face: (50, s/2, s/2) -> u should be 0.5.
+            uvq = SUUVQ()
+            midpoint = SUPoint3D(50.0, s / 2, s / 2)
+            err = dll.SUUVHelperGetFrontUVQ(uv_helper, ctypes.byref(midpoint), ctypes.byref(uvq))
             assert err == 0
             assert uvq.u == pytest.approx(0.5)
             assert uvq.q == pytest.approx(1.0)

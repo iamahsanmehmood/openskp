@@ -506,8 +506,8 @@ builder.add_instance(car)
 
 A face's texture can also be explicitly positioned (scaled, rotated,
 sheared, offset - independently per side) instead of the default planar
-projection, given 3 world-point/UV correspondences, on faces aligned to
-the X, Y, or Z axis:
+projection, given 3 world-point/UV correspondences - on a face of any
+orientation, tilted or not:
 
 ```python
 brick = builder.add_texture_material("Brick", "brick.png")
@@ -522,13 +522,33 @@ builder.add_face(
 )
 ```
 
-Explicitly out of scope for this first pass: texture positioning on a
-tilted (non-axis-aligned) face, declaring a group's geometry inline
-nested inside another definition (as opposed to placing an
-already-built one via `add_group_instance`), and editing an existing
-arbitrary `.skp` file (a separately harder problem — real SketchUp
-re-serializes the whole document on save rather than appending to it —
-not attempted here). See
+The in-plane 2D basis this uses for a tilted face - the face's own first
+edge direction as one axis, the plane normal crossed with that as the
+other - was found by comparing an SDK-authored file's own computed
+matrix against several candidate formulas, then confirmed exactly (all
+6 matrix values matching) against a correspondence deliberately chosen
+not to align with the face's own edges.
+
+Component definitions, instances, and faces can also carry custom
+key/value metadata - the same mechanism SketchUp's own "dynamic
+component" attributes use - via each of their `attributes` parameters
+(values may be `str`, `int`, or `float`):
+
+```python
+with builder.add_component_definition("Chair", attributes={"sku": "CH-100", "price": 49.99}) as chair:
+    chair.add_face([(0, 0, 0), (20, 0, 0), (20, 20, 0), (0, 20, 0)])
+builder.add_instance(chair, attributes={"serial": "A1"})
+```
+
+Not yet supported on groups - ground truth shows a group's own attribute
+pointer is always null, unlike a component instance's (real) one.
+
+Explicitly out of scope for this first pass: declaring a group's
+geometry inline nested inside another definition (as opposed to placing
+an already-built one via `add_group_instance`), attributes on groups,
+and editing an existing arbitrary `.skp` file (a separately harder
+problem — real SketchUp re-serializes the whole document on save rather
+than appending to it — not attempted here). See
 [`openskp/create.py`](../packages/python/src/openskp/create.py) for the
 full, current scope notes, and the [Python package README](../packages/python/README.md#writing-early-stage)
 for a longer worked example.
