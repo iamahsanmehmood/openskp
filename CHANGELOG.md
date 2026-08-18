@@ -30,6 +30,10 @@ for the full scope notes.
   instances (`add_component_definition`, `add_instance`), and groups
   (`add_group`, which place themselves automatically on close rather than
   needing a separate placement call).
+- Nested definitions — a component definition can contain instances of
+  another, already-built definition inside its own body
+  (`ComponentDefinitionBuilder.add_instance`), the same assembly-of-parts
+  nesting real SketchUp supports, to any depth.
 - Per-face/per-edge hidden, soft, and smooth flags.
 - No SketchUp SDK dependency at import, write, or any other runtime path.
   The bundled blank-document scaffold this module splices geometry into
@@ -56,8 +60,8 @@ entities) as a regression guard.
 
 - Explicit texture UV positioning/pinning (default planar projection
   only).
-- Nested definitions (a component or group containing another
-  component's instances).
+- Nesting a self-placing *group* (as opposed to a definition instance)
+  inside another definition.
 - Editing an existing arbitrary `.skp` file — a separately harder
   problem (real SketchUp re-serializes the whole document on save rather
   than appending), not attempted here.

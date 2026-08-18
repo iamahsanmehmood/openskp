@@ -123,8 +123,9 @@ OpenSKP can also *create* new `.skp` files from scratch — a genuine,
 from-scratch binary writer for the legacy MFC `CArchive` format (SketchUp
 2013–2020), with no SketchUp SDK involved at any point. This is a new,
 early-stage capability: geometry, materials (solid + PNG/JPEG textures),
-layers, component definitions with multiple instances, and groups are all
-supported; explicit texture UV positioning and nested definitions are not
+layers, component definitions with multiple instances, groups, and
+nested definitions (an assembly instancing its own sub-part definitions,
+to any depth) are all supported; explicit texture UV positioning is not
 yet. See [`openskp/create.py`](src/openskp/create.py) for the full scope
 notes.
 

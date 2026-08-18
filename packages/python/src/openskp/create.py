@@ -18,10 +18,13 @@ are involved, and how.
   definitions with multiple positioned instances, and groups are all
   supported - see :meth:`SkpBuilder.add_material` / :meth:`SkpBuilder.
   add_texture_material` / :meth:`SkpBuilder.add_layer` / :meth:`SkpBuilder.
-  add_component_definition` / :meth:`SkpBuilder.add_group`. There is no
-  support yet for explicit texture positioning/pinning or nested
-  definitions (a definition containing another definition's instances or
-  groups).
+  add_component_definition` / :meth:`SkpBuilder.add_group`. A definition
+  can also nest instances of another, already-built definition inside its
+  own body (an assembly containing its own sub-parts) via
+  :meth:`ComponentDefinitionBuilder.add_instance`. There is no support yet
+  for explicit texture positioning/pinning, or for nesting a
+  self-placing *group* (as opposed to a definition instance) inside
+  another definition.
 * Coordinates are in **inches** - SketchUp's own native internal unit for
   this era of the format. Converting from another unit is the caller's
   responsibility for now.
@@ -434,7 +437,14 @@ class _ArchiveWriter:
         self.buf += _u32(1)  # nlayers: always 1, an embedded copy of Layer0
         embedded_layer_slot = self.write_layer("Layer0", with_pids=False)
         self._backref(embedded_layer_slot)  # "decl": this definition's own active layer
-        self.buf += _u32(0)  # nested-definition count - always 0, not supported
+        # A separate field from nested instances (which live in the entity
+        # list just below, like any other entity) - ground truth shows this
+        # counts CComponentDefinition classes declared inline within this
+        # definition's own header, a distinct and rarer construct this
+        # project has not needed: every definition this writer produces is
+        # declared at the top level, so this stays 0 even when its entity
+        # list below places instances of other top-level definitions.
+        self.buf += _u32(0)
         count_patch_pos = len(self.buf)
         self.buf += _u32(0)  # placeholder entity count, patched by the caller
         return slot, count_patch_pos
@@ -732,6 +742,55 @@ class ComponentDefinitionBuilder:
             points, self._vertex_slots, self._edge_registry,
             material or 0, layer or 0, back_material or 0,
             hidden, soft_edges, smooth_edges, hidden_edges,
+        )
+
+    def add_instance(
+        self,
+        definition: "ComponentDefinitionBuilder",
+        name: Optional[str] = None,
+        translation: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+        matrix3x3: Optional[Tuple[float, float, float, float, float, float, float, float, float]] = None,
+        material: Optional[int] = None,
+        layer: Optional[int] = None,
+    ) -> None:
+        """Place one instance of another, already-closed component
+        definition inside this one - the same nesting real SketchUp
+        supports (an assembly definition containing instances of its own
+        sub-part definitions), same signature and behavior as
+        :meth:`SkpBuilder.add_instance` otherwise.
+
+        >>> with builder.add_component_definition("Wheel") as wheel:
+        ...     wheel.add_face([(0, 0, 0), (10, 0, 0), (10, 10, 0), (0, 10, 0)])
+        >>> with builder.add_component_definition("Car") as car:
+        ...     car.add_instance(wheel, translation=(0, 0, 0))
+        ...     car.add_instance(wheel, translation=(100, 0, 0))
+
+        ``definition`` must come from this same builder - a definition
+        from a different `create()` call has a slot number that means
+        nothing in this document. It is always already closed by the time
+        it's valid to pass here: only one definition can be open on a
+        given builder at once (see `add_component_definition`), and that
+        one is always ``self`` while its own `with` block is active - so
+        any *other* definition from this builder reachable here was
+        necessarily closed before ``self`` was even opened. That
+        ordering is also what rules out cycles: a definition can only
+        ever nest others fully built strictly before it existed, never
+        itself or anything still in progress.
+        """
+        if self._closed:
+            raise SkpWriteError(
+                f"component definition {self.name!r} has already closed "
+                "(its `with` block exited) - cannot add more instances to it"
+            )
+        if definition._skp is not self._skp:
+            raise SkpWriteError(
+                f"component definition {definition.name!r} belongs to a different "
+                "builder (a different create() call) - its slot number is meaningless here"
+            )
+        if definition is self:
+            raise SkpWriteError(f"component definition {self.name!r} cannot nest an instance of itself")
+        self._new_entity_count += self._skp._definition_writer.write_instance(
+            definition.slot, name or definition.name, translation, matrix3x3, material or 0, layer or 0
         )
 
     def __enter__(self) -> "ComponentDefinitionBuilder":
@@ -1060,6 +1119,11 @@ class SkpBuilder:
         ``material``/``layer``, if given, are handles from `add_material`/
         `add_layer` applied to the instance itself (not its contents).
         """
+        if definition._skp is not self:
+            raise SkpWriteError(
+                f"component definition {definition.name!r} belongs to a different "
+                "builder (a different create() call) - its slot number is meaningless here"
+            )
         if not definition._closed:
             raise SkpWriteError(
                 f"component definition {definition.name!r} is still open - "
@@ -1229,7 +1293,7 @@ def create() -> SkpBuilder:
     >>> builder.save("output.skp")
 
     See the :mod:`openskp.create` module docstring for the current scope
-    and limitations (no texture UV positioning or nested definitions yet;
+    and limitations (no texture UV positioning or nested groups yet;
     inches only).
     """
     return SkpBuilder()

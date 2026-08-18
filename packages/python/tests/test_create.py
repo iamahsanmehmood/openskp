@@ -495,6 +495,152 @@ class TestGroups:
         assert def_refs == {d.slot for d in defs}
 
 
+class TestNestedDefinitions:
+    def test_definition_nests_instance_of_another_definition(self, tmp_path):
+        from openskp import SkpFile
+
+        builder = create()
+        with builder.add_component_definition("Wheel") as wheel:
+            wheel.add_face(SQUARE)
+        with builder.add_component_definition("Car") as car:
+            car.add_instance(wheel, translation=(0.0, 0.0, 0.0))
+            car.add_instance(wheel, translation=(200.0, 0.0, 0.0))
+        builder.add_instance(car)
+        data = builder.to_bytes()
+
+        # Root level only ever sees Car - Wheel is never placed there.
+        ar, root, layers, materials = legacy._walk(data)
+        assert len(root) == 1
+        assert root[0][1] == "CComponentInstance"
+        assert root[0][2]["def"] == car.slot
+
+        # Car's own body has 0 faces of its own, 2 nested instances of Wheel.
+        out = tmp_path / "nested.skp"
+        out.write_bytes(data)
+        model = SkpFile.open(str(out)).parse()
+        car_def = model.definitions[car.slot]
+        assert len(car_def.faces) == 0
+        assert len(car_def.instances) == 2
+        assert {inst.name for inst in car_def.instances} == {"Wheel"}
+        translations = sorted(inst.matrix[9] for inst in car_def.instances)
+        assert translations == [0.0, 200.0]
+
+    def test_real_sketchup_resolves_nested_instances(self, tmp_path):
+        # Recursively resolving Car -> 2x Wheel -> 1 face each through 2
+        # placed Car instances should total 4 faces - confirmed against the
+        # real SketchUp SDK, not just this project's own reader, the same
+        # discipline as the rest of this suite's oracle tests.
+        import ctypes
+
+        if not os.path.exists(_SDK_DLL_PATH):
+            pytest.skip("SketchUp SDK not present on this machine")
+
+        builder = create()
+        with builder.add_component_definition("Wheel") as wheel:
+            wheel.add_face(SQUARE)
+        with builder.add_component_definition("Car") as car:
+            car.add_instance(wheel, translation=(0.0, 0.0, 0.0))
+            car.add_instance(wheel, translation=(200.0, 0.0, 0.0))
+        builder.add_instance(car, translation=(0.0, 0.0, 0.0))
+        builder.add_instance(car, translation=(500.0, 0.0, 0.0))
+        out = tmp_path / "nested.skp"
+        builder.save(str(out))
+
+        dll = ctypes.CDLL(_SDK_DLL_PATH)
+        dll.SUEntitiesGetNumFaces.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_size_t)]
+        dll.SUEntitiesGetNumInstances.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_size_t)]
+        dll.SUEntitiesGetInstances.argtypes = [
+            ctypes.c_void_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_size_t),
+        ]
+        dll.SUComponentInstanceGetDefinition.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUComponentDefinitionGetEntities.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+
+        def count_faces_recursive(entities) -> int:
+            nfaces = ctypes.c_size_t()
+            dll.SUEntitiesGetNumFaces(entities, ctypes.byref(nfaces))
+            total = nfaces.value
+            ninst = ctypes.c_size_t()
+            dll.SUEntitiesGetNumInstances(entities, ctypes.byref(ninst))
+            if ninst.value:
+                insts = (ctypes.c_void_p * ninst.value)()
+                got = ctypes.c_size_t()
+                dll.SUEntitiesGetInstances(entities, ninst.value, insts, ctypes.byref(got))
+                for i in range(got.value):
+                    comp_def = ctypes.c_void_p()
+                    dll.SUComponentInstanceGetDefinition(insts[i], ctypes.byref(comp_def))
+                    sub_entities = ctypes.c_void_p()
+                    dll.SUComponentDefinitionGetEntities(comp_def, ctypes.byref(sub_entities))
+                    total += count_faces_recursive(sub_entities)
+            return total
+
+        dll.SUInitialize()
+        try:
+            model = ctypes.c_void_p()
+            err = dll.SUModelCreateFromFile(ctypes.byref(model), str(out).encode())
+            assert err == 0, f"SketchUp SDK rejected the file (error {err})"
+            entities = ctypes.c_void_p()
+            dll.SUModelGetEntities(model, ctypes.byref(entities))
+            assert count_faces_recursive(entities) == 4
+            dll.SUModelRelease(ctypes.byref(model))
+        finally:
+            dll.SUTerminate()
+
+    def test_deeply_nested_three_levels_self_parses(self, tmp_path):
+        from openskp import SkpFile
+
+        builder = create()
+        with builder.add_component_definition("Bolt") as bolt:
+            bolt.add_face(SQUARE)
+        with builder.add_component_definition("Wheel") as wheel:
+            wheel.add_instance(bolt, translation=(0.0, 0.0, 0.0))
+            wheel.add_instance(bolt, translation=(30.0, 0.0, 0.0))
+        with builder.add_component_definition("Car") as car:
+            car.add_instance(wheel)
+        builder.add_instance(car)
+        data = builder.to_bytes()
+
+        out = tmp_path / "nested3.skp"
+        out.write_bytes(data)
+        model = SkpFile.open(str(out)).parse()
+        car_def = model.definitions[car.slot]
+        wheel_def = model.definitions[wheel.slot]
+        bolt_def = model.definitions[bolt.slot]
+        assert len(car_def.instances) == 1
+        assert len(wheel_def.instances) == 2
+        assert len(bolt_def.faces) == 1
+
+    def test_nested_instance_of_self_raises(self):
+        builder = create()
+        comp = builder.add_component_definition("Loop")
+        comp.add_face(SQUARE)
+        with pytest.raises(SkpWriteError, match="cannot nest an instance of itself"):
+            comp.add_instance(comp)
+
+    def test_nested_instance_of_definition_from_a_different_builder_raises(self):
+        # A definition from a different create() call has a slot number
+        # that means nothing in this builder's document - without this
+        # check it would silently write a garbage back-reference instead
+        # of failing loudly.
+        builder1 = create()
+        with builder1.add_component_definition("Wheel") as wheel:
+            wheel.add_face(SQUARE)
+
+        builder2 = create()
+        with builder2.add_component_definition("Car") as car:
+            car.add_face(SQUARE)
+            with pytest.raises(SkpWriteError, match="different builder"):
+                car.add_instance(wheel)
+
+    def test_nested_instance_after_definition_closed_raises(self):
+        builder = create()
+        with builder.add_component_definition("Wheel") as wheel:
+            wheel.add_face(SQUARE)
+        with builder.add_component_definition("Car") as car:
+            car.add_instance(wheel)
+        with pytest.raises(SkpWriteError, match="already closed"):
+            car.add_instance(wheel)
+
+
 class TestMaterials:
     def test_material_assigned_to_face_front(self):
         builder = create()

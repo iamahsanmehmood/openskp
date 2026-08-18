@@ -474,12 +474,26 @@ after it. `ComponentDefinitionBuilder` (the object yielded by the `with`
 block) is exported alongside `SkpBuilder` from the top-level `openskp`
 package.
 
+A definition can also nest instances of another, already-closed
+definition inside its own body, to any depth (an assembly containing its
+own sub-parts) - `ComponentDefinitionBuilder.add_instance` has the same
+signature as `SkpBuilder.add_instance`:
+
+```python
+with builder.add_component_definition("Wheel") as wheel:
+    wheel.add_face([(0, 0, 0), (10, 0, 0), (10, 10, 0), (0, 10, 0)])
+with builder.add_component_definition("Car") as car:
+    car.add_instance(wheel, translation=(0, 0, 0))
+    car.add_instance(wheel, translation=(100, 0, 0))
+builder.add_instance(car)
+```
+
 Explicitly out of scope for this first pass: explicit texture UV
-positioning/pinning (default planar projection only), nested definitions
-(a definition containing another definition's instances or groups), and
-editing an existing arbitrary `.skp` file (a separately harder problem —
-real SketchUp re-serializes the whole document on save rather than
-appending to it — not attempted here). See
+positioning/pinning (default planar projection only), nesting a
+self-placing *group* (as opposed to a definition instance) inside another
+definition, and editing an existing arbitrary `.skp` file (a separately
+harder problem — real SketchUp re-serializes the whole document on save
+rather than appending to it — not attempted here). See
 [`openskp/create.py`](../packages/python/src/openskp/create.py) for the
 full, current scope notes, and the [Python package README](../packages/python/README.md#writing-early-stage)
 for a longer worked example.
