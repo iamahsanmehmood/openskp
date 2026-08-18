@@ -42,8 +42,7 @@ for the full scope notes.
 - Explicit texture positioning (`add_face`'s `front_uv`/`back_uv`) —
   scale, rotate, shear, and offset a face's texture independently per
   side instead of the default planar projection, given 3 world-point/UV
-  correspondences. Currently limited to faces aligned to the X, Y, or Z
-  axis.
+  correspondences. Works on a face of any orientation, tilted or not.
 - Per-face/per-edge hidden, soft, and smooth flags.
 - Every file now opens to the standard "Iso" view (parallel projection,
   looking at the origin) instead of the blank scaffold's own arbitrary
@@ -78,8 +77,6 @@ entities) as a regression guard.
 
 ### Explicitly out of scope for this first pass
 
-- Explicit texture positioning on a tilted (non-axis-aligned) face - the
-  local 2D parameterization needed for that has not been reverse-engineered.
 - Declaring a group's geometry inline nested inside another definition's
   own body, the way `add_group` self-places at the root level - this
   format has no mechanism for one definition's declaration to live inside

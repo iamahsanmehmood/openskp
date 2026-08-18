@@ -29,9 +29,8 @@ are involved, and how.
   normal `add_component_definition` first, then place it as a group.
   A face's texture can be explicitly positioned (scaled/rotated/sheared/
   offset, independently per side) instead of the default planar
-  projection - see `write_face`'s ``front_uv``/``back_uv`` parameters -
-  currently only for faces aligned to the X, Y, or Z axis. There is no
-  support yet for positioning on a tilted face.
+  projection, on a face of any orientation - see `write_face`'s
+  ``front_uv``/``back_uv`` parameters.
 * Coordinates are in **inches** - SketchUp's own native internal unit for
   this era of the format. Converting from another unit is the caller's
   responsibility for now.
@@ -252,8 +251,43 @@ def _solve3x3(a: Sequence[Sequence[float]], b: Sequence[float]) -> Tuple[float, 
     return cols[0], cols[1], cols[2]
 
 
+def _cross(a: Tuple[float, float, float], b: Tuple[float, float, float]) -> Tuple[float, float, float]:
+    return (a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0])
+
+
+def _normalize3(v: Tuple[float, float, float]) -> Tuple[float, float, float]:
+    length = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]) ** 0.5
+    if length < 1e-9:
+        raise SkpWriteError("cannot determine a texture-positioning basis: the face's first edge is degenerate")
+    return (v[0] / length, v[1] / length, v[2] / length)
+
+
+def _face_uv_basis(
+    points: Sequence[Point3], normal: Tuple[float, float, float]
+) -> Tuple[Tuple[float, float, float], Tuple[float, float, float]]:
+    """The in-plane 2D basis (U, W) real SketchUp uses to parameterize a
+    face's texture mapping, for a face of ANY orientation (not just
+    axis-aligned) - ground truth (an SDK-authored file's own computed
+    matrix, cross-checked against this formula using an asymmetric
+    correspondence specifically chosen to rule out simpler axis-dropping
+    projections) shows it's simply the face's own first edge direction
+    (``points[1] - points[0]``, normalized) as U, and the plane normal
+    crossed with that as W - both unit vectors. This exactly explains why
+    the axis-aligned case (this feature's first version) worked with
+    fixed (x, y)/(x, z)/(y, z) axis pairs: for a face whose first edge
+    happens to run along a world axis, this formula reduces to exactly
+    that pair.
+    """
+    u = _normalize3((
+        points[1][0] - points[0][0], points[1][1] - points[0][1], points[1][2] - points[0][2],
+    ))
+    w = _normalize3(_cross(normal, u))
+    return u, w
+
+
 def _solve_uv_matrix(
-    pairs: Sequence[Tuple[Point3, Tuple[float, float]]], axes: Tuple[int, int]
+    pairs: Sequence[Tuple[Point3, Tuple[float, float]]],
+    basis: Tuple[Tuple[float, float, float], Tuple[float, float, float]],
 ) -> Tuple[float, ...]:
     """Fit the 3x3 UV-to-world affine matrix ground truth shows real
     SketchUp stores for a positioned texture, from exactly 3 (world point,
@@ -261,10 +295,13 @@ def _solve_uv_matrix(
     map (scale, rotation, shear, translation; no perspective/keystone term,
     matching the third column ground truth always shows as (0, 0, 1)).
 
-    ``axes`` selects which two of the face's own (x, y, z) coordinates to
-    treat as its local 2D plane (see the axis-aligned-only restriction in
-    `_uv_matrix_for_face`) - the world side of each correspondence is
-    projected onto those two axes before fitting.
+    ``basis`` is the face's own (U, W) in-plane unit vectors (see
+    `_face_uv_basis`) - each correspondence's world point is projected
+    onto them via a plain dot product (ground truth confirms this uses
+    the point's raw coordinates with no origin subtraction - confirmed by
+    positioning a face far from the world origin, where an "obviously
+    sensible" points[0]-relative hypothesis predicted the wrong
+    translation terms) before fitting.
 
     Ground truth (see ``_read_ftc`` in legacy.py, which this inverts) shows
     the stored matrix satisfies ``(u, v, 1) @ M == (world_x, world_y, 1)``
@@ -274,10 +311,10 @@ def _solve_uv_matrix(
     """
     if len(pairs) != 3:
         raise SkpWriteError("texture positioning needs exactly 3 (point, uv) pairs")
-    i, j = axes
+    u_axis, w_axis = basis
     a = [[uv[0], uv[1], 1.0] for _, uv in pairs]
-    bx = [pt[i] for pt, _ in pairs]
-    by = [pt[j] for pt, _ in pairs]
+    bx = [pt[0] * u_axis[0] + pt[1] * u_axis[1] + pt[2] * u_axis[2] for pt, _ in pairs]
+    by = [pt[0] * w_axis[0] + pt[1] * w_axis[1] + pt[2] * w_axis[2] for pt, _ in pairs]
     col_x = _solve3x3(a, bx)
     col_y = _solve3x3(a, by)
     a0, c0, e0 = col_x
@@ -286,26 +323,12 @@ def _solve_uv_matrix(
 
 
 def _uv_matrix_for_face(
-    pairs: Sequence[Tuple[Point3, Tuple[float, float]]], normal: Tuple[float, float, float]
+    points: Sequence[Point3],
+    pairs: Sequence[Tuple[Point3, Tuple[float, float]]],
+    normal: Tuple[float, float, float],
 ) -> Tuple[float, ...]:
-    """As `_solve_uv_matrix`, but derives which 2 of (x, y, z) to use from
-    the face's own plane normal - only axis-aligned faces (normal parallel
-    to X, Y, or Z) are supported for now; a tilted face's local 2D
-    parameterization has not been reverse-engineered (every ground-truth
-    sample used to derive this feature was axis-aligned)."""
-    nx, ny, nz = normal
-    if abs(nz) > 1 - 1e-6:
-        axes = (0, 1)
-    elif abs(ny) > 1 - 1e-6:
-        axes = (0, 2)
-    elif abs(nx) > 1 - 1e-6:
-        axes = (1, 2)
-    else:
-        raise SkpWriteError(
-            "explicit texture positioning is only supported on faces aligned to the "
-            "X, Y, or Z axis for now (this face's plane is tilted)"
-        )
-    return _solve_uv_matrix(pairs, axes)
+    """`_solve_uv_matrix` using the face's own `_face_uv_basis`."""
+    return _solve_uv_matrix(pairs, _face_uv_basis(points, normal))
 
 
 def _u32(v: int) -> bytes:
@@ -766,8 +789,9 @@ class _ArchiveWriter:
         3 ``(point, (u, v))`` pairs (a world point on the face's plane
         paired with the texture coordinate it should land on), which fully
         determines an affine mapping (scale/rotation/shear/translation, no
-        perspective). Only supported on faces aligned to the X, Y, or Z
-        axis for now. See :meth:`SkpBuilder.add_face` for a worked example.
+        perspective). Works on a face of any orientation, not just
+        axis-aligned ones. See :meth:`SkpBuilder.add_face` for a worked
+        example.
         """
         n = len(points)
         point_slots = [vertex_slots.get(p) for p in points]
@@ -811,8 +835,8 @@ class _ArchiveWriter:
 
         self._new_of_known_class("CFace", schema=3)
         if front_uv is not None or back_uv is not None:
-            front_matrix = _uv_matrix_for_face(front_uv, (nx, ny, nz)) if front_uv is not None else None
-            back_matrix = _uv_matrix_for_face(back_uv, (nx, ny, nz)) if back_uv is not None else None
+            front_matrix = _uv_matrix_for_face(points, front_uv, (nx, ny, nz)) if front_uv is not None else None
+            back_matrix = _uv_matrix_for_face(points, back_uv, (nx, ny, nz)) if back_uv is not None else None
             self._preamble_with_texture_coords(front_matrix, back_matrix)
         else:
             self._preamble()
@@ -1445,8 +1469,8 @@ class SkpBuilder:
         ``front_uv``/``back_uv``, if given, explicitly position that
         side's texture instead of the default planar projection: exactly
         3 ``(point, (u, v))`` pairs, each a world point on the face paired
-        with the texture coordinate that should land there. Only
-        supported on faces aligned to the X, Y, or Z axis for now.
+        with the texture coordinate that should land there. Works on a
+        face of any orientation, not just axis-aligned ones.
 
         >>> brick = builder.add_texture_material("Brick", "brick.png")
         >>> builder.add_face(
@@ -1572,7 +1596,6 @@ def create() -> SkpBuilder:
     >>> builder.save("output.skp")
 
     See the :mod:`openskp.create` module docstring for the current scope
-    and limitations (texture positioning only on axis-aligned faces so
-    far, no inline-declared nested groups; inches only).
+    and limitations (no inline-declared nested groups; inches only).
     """
     return SkpBuilder()

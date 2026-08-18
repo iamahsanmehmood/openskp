@@ -506,8 +506,8 @@ builder.add_instance(car)
 
 A face's texture can also be explicitly positioned (scaled, rotated,
 sheared, offset - independently per side) instead of the default planar
-projection, given 3 world-point/UV correspondences, on faces aligned to
-the X, Y, or Z axis:
+projection, given 3 world-point/UV correspondences - on a face of any
+orientation, tilted or not:
 
 ```python
 brick = builder.add_texture_material("Brick", "brick.png")
@@ -522,10 +522,16 @@ builder.add_face(
 )
 ```
 
-Explicitly out of scope for this first pass: texture positioning on a
-tilted (non-axis-aligned) face, declaring a group's geometry inline
-nested inside another definition (as opposed to placing an
-already-built one via `add_group_instance`), and editing an existing
+The in-plane 2D basis this uses for a tilted face - the face's own first
+edge direction as one axis, the plane normal crossed with that as the
+other - was found by comparing an SDK-authored file's own computed
+matrix against several candidate formulas, then confirmed exactly (all
+6 matrix values matching) against a correspondence deliberately chosen
+not to align with the face's own edges.
+
+Explicitly out of scope for this first pass: declaring a group's
+geometry inline nested inside another definition (as opposed to placing
+an already-built one via `add_group_instance`), and editing an existing
 arbitrary `.skp` file (a separately harder problem — real SketchUp
 re-serializes the whole document on save rather than appending to it —
 not attempted here). See

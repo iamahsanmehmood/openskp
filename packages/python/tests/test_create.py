@@ -1119,17 +1119,85 @@ class TestUVPositioning:
             ftc = dict(face["attrs"]["children"])["CFaceTextureCoords"]
             assert ftc["front"] == pytest.approx((50.0, 0.0, 0.0, 0.0, 50.0, 0.0, 0.0, 0.0, 1.0))
 
-    def test_tilted_face_raises(self, tmp_path):
+    def test_tilted_face_edge_aligned_mapping_is_a_pure_scale(self, tmp_path):
+        # A 100x100 square tilted 45 degrees around X (points[1]-points[0]
+        # runs along world X; points[3]-points[0] runs along the tilted
+        # diagonal, also length 100). Mapping UV corners onto the face's
+        # own corners should give a clean scale-only matrix - ground truth
+        # (an SDK-authored file positioned the same way) confirms this
+        # exact result, not just "some matrix that self-parses".
         png_path = tmp_path / "tex.png"
         png_path.write_bytes(_make_test_png())
         builder = create()
         tex = builder.add_texture_material("Brick", str(png_path))
-        tilted = [(0.0, 0.0, 0.0), (50.0, 0.0, 10.0), (50.0, 50.0, 10.0), (0.0, 50.0, 0.0)]
-        with pytest.raises(SkpWriteError, match="axis"):
-            builder.add_face(
-                tilted, material=tex,
-                front_uv=[((0.0, 0.0, 0.0), (0.0, 0.0)), ((50.0, 0.0, 10.0), (1.0, 0.0)), ((0.0, 50.0, 0.0), (0.0, 1.0))],
-            )
+        s = 70.71067811865476  # 100 / sqrt(2)
+        tilted = [(0.0, 0.0, 0.0), (100.0, 0.0, 0.0), (100.0, s, s), (0.0, s, s)]
+        builder.add_face(
+            tilted, material=tex,
+            front_uv=[((0.0, 0.0, 0.0), (0.0, 0.0)), ((100.0, 0.0, 0.0), (1.0, 0.0)), ((0.0, s, s), (0.0, 1.0))],
+        )
+        data = builder.to_bytes()
+        ar, root, layers, materials = legacy._walk(data)
+        face = [v for (_, n, v) in root if n == "CFace"][0]
+        ftc = dict(face["attrs"]["children"])["CFaceTextureCoords"]
+        assert ftc["front"] == pytest.approx((100.0, 0.0, 0.0, 0.0, 100.0, 0.0, 0.0, 0.0, 1.0), abs=1e-6)
+
+    def test_tilted_face_asymmetric_mapping_matches_ground_truth(self, tmp_path):
+        # Same tilted face, but correspondence points/uvs chosen specifically
+        # to not align with the face's own edges - the resulting matrix
+        # must match exactly what a real SDK-authored file produces for the
+        # identical setup (verified once by ground-truth diffing; this pins
+        # it as a byte-exact regression test). In particular this is what
+        # ruled out a plausible-looking "subtract points[0] first" origin
+        # hypothesis, which predicted the wrong translation terms here.
+        png_path = tmp_path / "tex.png"
+        png_path.write_bytes(_make_test_png())
+        builder = create()
+        tex = builder.add_texture_material("Brick", str(png_path))
+        s = 70.71067811865476
+        tilted = [(0.0, 0.0, 0.0), (100.0, 0.0, 0.0), (100.0, s, s), (0.0, s, s)]
+        builder.add_face(
+            tilted, material=tex,
+            front_uv=[
+                ((20.0, 0.0, 0.0), (0.5, 1.0)),
+                ((80.0, 0.0, 0.0), (2.0, 1.0)),
+                ((20.0, s * 0.4, s * 0.4), (0.5, 3.0)),
+            ],
+        )
+        data = builder.to_bytes()
+        ar, root, layers, materials = legacy._walk(data)
+        face = [v for (_, n, v) in root if n == "CFace"][0]
+        ftc = dict(face["attrs"]["children"])["CFaceTextureCoords"]
+        assert ftc["front"] == pytest.approx((40.0, 0.0, 0.0, 0.0, 20.0, 0.0, 0.0, -20.0, 1.0), abs=1e-6)
+
+    def test_tilted_face_far_from_world_origin_matches_ground_truth(self, tmp_path):
+        # A face offset far from (0,0,0) - the case that actually
+        # distinguished "no origin subtraction" (correct) from "subtract
+        # points[0] first" (plausible-looking, but wrong) during
+        # ground-truth research, since every earlier sample happened to
+        # have points[0] at the world origin, making the two hypotheses
+        # indistinguishable there.
+        png_path = tmp_path / "tex.png"
+        png_path.write_bytes(_make_test_png())
+        builder = create()
+        tex = builder.add_texture_material("Brick", str(png_path))
+        ox, oy, oz = 200.0, 300.0, 50.0
+        tilted = [
+            (ox, oy, oz), (ox + 100.0, oy, oz), (ox + 100.0, oy, oz + 80.0), (ox, oy, oz + 80.0),
+        ]
+        builder.add_face(
+            tilted, material=tex,
+            front_uv=[
+                ((ox + 10.0, oy, oz + 10.0), (0.0, 0.0)),
+                ((ox + 60.0, oy, oz + 10.0), (2.0, 0.0)),
+                ((ox + 10.0, oy, oz + 50.0), (0.0, 1.6)),
+            ],
+        )
+        data = builder.to_bytes()
+        ar, root, layers, materials = legacy._walk(data)
+        face = [v for (_, n, v) in root if n == "CFace"][0]
+        ftc = dict(face["attrs"]["children"])["CFaceTextureCoords"]
+        assert ftc["front"] == pytest.approx((25.0, 0.0, 0.0, 0.0, 25.0, 0.0, 210.0, 60.0, 1.0), abs=1e-6)
 
     def test_wrong_number_of_pairs_raises(self, tmp_path):
         png_path = tmp_path / "tex.png"
@@ -2103,6 +2171,69 @@ class TestRealSketchUpOracle:
             # u=0.5 at the midpoint between the 0->0 and 50->1 pins).
             uvq = SUUVQ()
             err = dll.SUUVHelperGetFrontUVQ(uv_helper, ctypes.byref(SUPoint3D(25.0, 25.0, 0.0)), ctypes.byref(uvq))
+            assert err == 0
+            assert uvq.u == pytest.approx(0.5)
+            assert uvq.q == pytest.approx(1.0)
+            dll.SUModelRelease(ctypes.byref(model))
+        finally:
+            dll.SUTerminate()
+
+    def test_positioned_texture_on_tilted_face_round_trips_through_real_sketchup(self, tmp_path):
+        # Same discipline as the axis-aligned oracle test above, but for a
+        # face tilted 45 degrees - real SketchUp must both accept the file
+        # and agree with the u-coordinate this project's own basis formula
+        # (_face_uv_basis) computes, not just tolerate the bytes.
+        import ctypes
+
+        class SUPoint3D(ctypes.Structure):
+            _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double), ("z", ctypes.c_double)]
+
+        class SUUVQ(ctypes.Structure):
+            _fields_ = [("u", ctypes.c_double), ("v", ctypes.c_double), ("q", ctypes.c_double)]
+
+        png_path = tmp_path / "tex.png"
+        png_path.write_bytes(_make_test_png())
+        builder = create()
+        tex = builder.add_texture_material("Brick", str(png_path))
+        s = 70.71067811865476
+        tilted = [(0.0, 0.0, 0.0), (100.0, 0.0, 0.0), (100.0, s, s), (0.0, s, s)]
+        # (0,0,0)->(0,0), (100,0,0)->(1,0), (0,s,s)->(0,1): pure 100x scale
+        # along the face's own (tilted) edges.
+        builder.add_face(
+            tilted, material=tex,
+            front_uv=[((0.0, 0.0, 0.0), (0.0, 0.0)), ((100.0, 0.0, 0.0), (1.0, 0.0)), ((0.0, s, s), (0.0, 1.0))],
+        )
+        out = tmp_path / "tilted_positioned.skp"
+        builder.save(str(out))
+
+        dll = ctypes.CDLL(_SDK_DLL_PATH)
+        dll.SUModelCreateFromFile.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_char_p]
+        dll.SUModelGetEntities.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUEntitiesGetFaces.argtypes = [
+            ctypes.c_void_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_size_t),
+        ]
+        dll.SUFaceGetUVHelper.argtypes = [
+            ctypes.c_void_p, ctypes.c_bool, ctypes.c_bool, ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p),
+        ]
+        dll.SUUVHelperGetFrontUVQ.argtypes = [ctypes.c_void_p, ctypes.POINTER(SUPoint3D), ctypes.POINTER(SUUVQ)]
+        dll.SUInitialize()
+        try:
+            model = ctypes.c_void_p()
+            err = dll.SUModelCreateFromFile(ctypes.byref(model), str(out).encode())
+            assert err == 0, f"SketchUp SDK rejected the file (error {err})"
+            entities = ctypes.c_void_p()
+            dll.SUModelGetEntities(model, ctypes.byref(entities))
+            faces = (ctypes.c_void_p * 1)()
+            got = ctypes.c_size_t()
+            dll.SUEntitiesGetFaces(entities, 1, faces, ctypes.byref(got))
+            assert got.value == 1
+            uv_helper = ctypes.c_void_p()
+            err = dll.SUFaceGetUVHelper(faces[0], True, False, ctypes.c_void_p(0), ctypes.byref(uv_helper))
+            assert err == 0
+            # Midpoint of the tilted face: (50, s/2, s/2) -> u should be 0.5.
+            uvq = SUUVQ()
+            midpoint = SUPoint3D(50.0, s / 2, s / 2)
+            err = dll.SUUVHelperGetFrontUVQ(uv_helper, ctypes.byref(midpoint), ctypes.byref(uvq))
             assert err == 0
             assert uvq.u == pytest.approx(0.5)
             assert uvq.q == pytest.approx(1.0)
