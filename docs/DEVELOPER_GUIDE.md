@@ -644,7 +644,7 @@ content that more geometry can still be added to before saving:
 ```python
 from openskp import open_existing
 
-builder, warnings = open_existing("building.skp")
+builder, warnings, definitions = open_existing("building.skp")
 for w in warnings:
     print("not fully reproduced:", w)
 
@@ -666,6 +666,26 @@ round-trips as a plain straight-edged face) - see
 module docstring for the complete, itemized list and the reasoning
 behind each one. Round-trip-validated against real, non-writer-authored
 architectural models, not just files this project's own writer produced.
+
+Every material/layer the source had is already reachable on the
+returned `builder` without a separate lookup - `builder.materials_by_name
+["Walnut"]`/`builder.layers_by_name["Roof"]` - and `definitions` maps
+each replayed component definition's own name to its builder, for
+placing more instances of something the source already defined:
+
+```python
+builder.add_face(points, material=builder.materials_by_name["Walnut"])
+builder.add_instance(definitions["Wheel"], translation=(50, 0, 0))
+```
+
+What the returned `builder` can no longer do is register a genuinely
+NEW material, layer, or component definition/group - by the time
+replay finishes writing the source's own root-level geometry, this
+writer's usual file-format ordering requirement (materials/layers/
+definitions must be finalized before any geometry) is already
+satisfied, so `add_material`/`add_layer`/`add_component_definition`/
+`add_group` all raise on this particular builder. Build anything new
+into a separate `create()` call instead.
 
 ## The web viewer
 

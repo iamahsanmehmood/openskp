@@ -1018,6 +1018,12 @@ class TestMaterials:
         ar, root, layers, materials = legacy._walk(data)
         assert len(materials) == 1
 
+    def test_materials_by_name_reflects_registered_handle(self):
+        builder = create()
+        red = builder.add_material("Red", (255, 0, 0))
+        assert builder.materials_by_name["Red"] == red
+        assert builder.materials_by_name == {"Red": red}
+
     def test_add_material_after_add_face_raises(self):
         builder = create()
         builder.add_face(SQUARE)
@@ -1925,6 +1931,11 @@ class TestLayers:
         data = builder.to_bytes()
         ar, root, layers, materials = legacy._walk(data)
         assert len(layers) == 2  # Layer0 + Shared
+
+    def test_layers_by_name_reflects_registered_handle(self):
+        builder = create()
+        roof = builder.add_layer("Roof")
+        assert builder.layers_by_name["Roof"] == roof
 
     def test_add_layer_after_add_face_raises(self):
         builder = create()

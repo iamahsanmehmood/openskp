@@ -214,17 +214,20 @@ producing a brand-new file with equivalent content:
 ```python
 from openskp import open_existing
 
-builder, warnings = open_existing("building.skp")
+builder, warnings, definitions = open_existing("building.skp")
 for w in warnings:
     print("not fully reproduced:", w)
 
-builder.add_circle((0, 0, 100), (0, 0, 1), radius=50)
+# Every material/layer the source had is already reusable, no separate lookup:
+builder.add_circle((0, 0, 100), (0, 0, 1), radius=50, material=builder.materials_by_name.get("Roofing"))
+# definitions maps each replayed component's own name to its builder:
+builder.add_instance(definitions["Window"], translation=(0, 300, 0))
 builder.save("building_edited.skp")
 ```
 
 `warnings` lists anything the source file had that couldn't be
-faithfully reproduced (a face with a hole, a projected texture, a
-material's texture scale, and several others) — see
+faithfully reproduced (a projected texture, a material's texture scale,
+and several others) — see
 [`openskp/edit.py`](src/openskp/edit.py) for the complete, itemized
 scope.
 

@@ -17,6 +17,23 @@ definition, every face/instance) to produce a brand-new file - not a
 byte-patched copy of the original, but a freshly-built one with equivalent
 content, to which the caller can add more geometry before saving.
 
+**Adding more geometry after the fact.** The returned builder can take
+more ``add_face``/``add_circle``/``add_instance``/etc. calls, and every
+material/layer the source had is already reachable via
+``builder.materials_by_name``/``builder.layers_by_name`` (no separate
+lookup needed - `open_existing` also returns a ``definitions`` dict
+mapping each component definition's name to its builder, for placing
+more instances of something the source already defined). What the
+returned builder can no longer do is register a genuinely NEW material,
+layer, or component definition/group - :mod:`openskp.create`'s own
+file-format ordering requirement (materials/layers/definitions must all
+be finalized before any geometry is written) is already satisfied by the
+time replay finishes writing the source's own root-level geometry
+(which happens for any source file with root-level content - in
+practice, almost always), so all four of `add_material`/`add_layer`/
+`add_component_definition`/`add_group` raise on the returned builder.
+Build anything new into a separate `create()` call instead.
+
 **Scope and known fidelity gaps** (this reads long because every gap here
 is a genuine, deliberately-scoped limitation, not an oversight - see each
 module's own docstring for why):
@@ -72,16 +89,38 @@ from .create import ComponentDefinitionBuilder, Point3, SkpBuilder, SkpWriteErro
 from .model import Definition, Face, Instance, SkpFile, SkpModel
 
 
-def open_existing(path: "str | pathlib.Path") -> Tuple[SkpBuilder, List[str]]:
+def open_existing(
+    path: "str | pathlib.Path",
+) -> Tuple[SkpBuilder, List[str], Dict[str, ComponentDefinitionBuilder]]:
     """Parse ``path`` (a legacy-format ``.skp`` file) and rebuild it as a
     new :class:`SkpBuilder`, replaying materials, layers, every component
     definition, and all root-level geometry/instances.
 
-    Returns ``(builder, warnings)`` - ``builder`` is ready for more
-    ``add_face``/``add_circle``/`add_instance``/etc. calls before
-    :meth:`SkpBuilder.save`; ``warnings`` lists anything from the source
-    file that couldn't be faithfully reproduced (see this module's own
-    docstring for the exact, deliberately-scoped gaps this draws from).
+    Returns ``(builder, warnings, definitions)``:
+
+    * ``builder`` is ready for more ``add_face``/``add_circle``/
+      ``add_instance``/etc. calls before :meth:`SkpBuilder.save`. Every
+      material and layer the source file had is already reachable via
+      ``builder.materials_by_name``/``builder.layers_by_name`` - reuse
+      one as e.g. ``add_face(points, material=builder.materials_by_name
+      ["Walnut"])``. A file format ordering requirement this writer has
+      always had (materials/layers/definitions must be finalized before
+      any geometry is written) means a genuinely NEW material/layer/
+      definition/group can no longer be added to ``builder`` at this
+      point, since replaying the source's own root-level geometry
+      already finalized all of those sections - build anything new into
+      a SEPARATE `create()` builder instead.
+    * ``warnings`` lists anything from the source file that couldn't be
+      faithfully reproduced (see this module's own docstring for the
+      exact, deliberately-scoped gaps this draws from).
+    * ``definitions`` maps each replayed component definition's own name
+      to its (already-closed) :class:`~openskp.create.
+      ComponentDefinitionBuilder`, so the caller can place additional
+      instances of something the source file already defined via
+      ``builder.add_instance(definitions["Wheel"], translation=...)``.
+      If two source definitions share a name, the later one wins - real
+      SketchUp allows duplicate component names, this project's writer
+      doesn't need them to be unique, only this convenience lookup does.
 
     Raises:
         SkpWriteError: if ``path`` isn't a legacy-format file.
@@ -119,7 +158,12 @@ def open_existing(path: "str | pathlib.Path") -> Tuple[SkpBuilder, List[str]]:
 
     _replay_body(builder, model.root, model, material_slots, layer_slots, warnings, "root", def_builders)
 
-    return builder, warnings
+    definitions_by_name = {
+        model.definitions[def_id].name: db
+        for def_id, db in def_builders.items()
+        if model.definitions[def_id].name
+    }
+    return builder, warnings, definitions_by_name
 
 
 def _replay_materials(builder: SkpBuilder, model: SkpModel, warnings: List[str]) -> Dict[int, int]:
