@@ -488,6 +488,22 @@ with builder.add_component_definition("Car") as car:
 builder.add_instance(car)
 ```
 
+A nested placement can also be a *group* rather than a component
+instance (`add_group_instance`, same signature as `add_instance` again).
+Unlike root-level `add_group`, a nested group can't be declared inline -
+this format has no way to embed one definition's declaration inside
+another's, so its geometry still needs a normal `add_component_definition`
+first:
+
+```python
+with builder.add_component_definition("Engine") as engine:
+    engine.add_face([(0, 0, 0), (30, 0, 0), (30, 30, 0), (0, 30, 0)])
+with builder.add_component_definition("Car") as car:
+    car.add_face([(0, 0, 0), (150, 0, 0), (150, 60, 0), (0, 60, 0)])
+    car.add_group_instance(engine, translation=(50, 0, 10))
+builder.add_instance(car)
+```
+
 A face's texture can also be explicitly positioned (scaled, rotated,
 sheared, offset - independently per side) instead of the default planar
 projection, given 3 world-point/UV correspondences, on faces aligned to
@@ -507,11 +523,12 @@ builder.add_face(
 ```
 
 Explicitly out of scope for this first pass: texture positioning on a
-tilted (non-axis-aligned) face, nesting a self-placing *group* (as
-opposed to a definition instance) inside another definition, and editing
-an existing arbitrary `.skp` file (a separately harder problem — real
-SketchUp re-serializes the whole document on save rather than appending
-to it — not attempted here). See
+tilted (non-axis-aligned) face, declaring a group's geometry inline
+nested inside another definition (as opposed to placing an
+already-built one via `add_group_instance`), and editing an existing
+arbitrary `.skp` file (a separately harder problem — real SketchUp
+re-serializes the whole document on save rather than appending to it —
+not attempted here). See
 [`openskp/create.py`](../packages/python/src/openskp/create.py) for the
 full, current scope notes, and the [Python package README](../packages/python/README.md#writing-early-stage)
 for a longer worked example.

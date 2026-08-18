@@ -124,10 +124,10 @@ from-scratch binary writer for the legacy MFC `CArchive` format (SketchUp
 2013–2020), with no SketchUp SDK involved at any point. This is a new,
 early-stage capability: geometry, materials (solid + PNG/JPEG textures),
 layers, component definitions with multiple instances, groups, nested
-definitions (an assembly instancing its own sub-part definitions, to any
-depth), and explicit per-side texture positioning (on axis-aligned faces)
-are all supported. See [`openskp/create.py`](src/openskp/create.py) for
-the full scope notes.
+definitions and nested group instances (an assembly containing instances
+or groups of its own sub-parts, to any depth), and explicit per-side
+texture positioning (on axis-aligned faces) are all supported. See
+[`openskp/create.py`](src/openskp/create.py) for the full scope notes.
 
 ```python
 from openskp import create

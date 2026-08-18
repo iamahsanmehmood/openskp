@@ -19,15 +19,19 @@ are involved, and how.
   supported - see :meth:`SkpBuilder.add_material` / :meth:`SkpBuilder.
   add_texture_material` / :meth:`SkpBuilder.add_layer` / :meth:`SkpBuilder.
   add_component_definition` / :meth:`SkpBuilder.add_group`. A definition
-  can also nest instances of another, already-built definition inside its
-  own body (an assembly containing its own sub-parts) via
-  :meth:`ComponentDefinitionBuilder.add_instance`. A face's texture can be
-  explicitly positioned (scaled/rotated/sheared/offset, independently per
-  side) instead of the default planar projection - see `write_face`'s
-  ``front_uv``/``back_uv`` parameters - currently only for faces aligned
-  to the X, Y, or Z axis. There is no support yet for positioning on a
-  tilted face, or for nesting a self-placing *group* (as opposed to a
-  definition instance) inside another definition.
+  can also nest instances (or group instances) of another, already-built
+  definition inside its own body (an assembly containing its own
+  sub-parts) via :meth:`ComponentDefinitionBuilder.add_instance` /
+  :meth:`ComponentDefinitionBuilder.add_group_instance` - nested groups
+  can't be declared inline the way :meth:`SkpBuilder.add_group` is at the
+  root level (this format has no way to embed one definition's
+  declaration inside another's), so build the group's geometry with a
+  normal `add_component_definition` first, then place it as a group.
+  A face's texture can be explicitly positioned (scaled/rotated/sheared/
+  offset, independently per side) instead of the default planar
+  projection - see `write_face`'s ``front_uv``/``back_uv`` parameters -
+  currently only for faces aligned to the X, Y, or Z axis. There is no
+  support yet for positioning on a tilted face.
 * Coordinates are in **inches** - SketchUp's own native internal unit for
   this era of the format. Converting from another unit is the caller's
   responsibility for now.
@@ -906,6 +910,13 @@ class ComponentDefinitionBuilder:
         # needs an explicit later add_instance call.
         self._group_placement = group_placement
 
+    def _check_writable(self, action: str) -> None:
+        if self._closed:
+            raise SkpWriteError(
+                f"component definition {self.name!r} has already closed "
+                f"(its `with` block exited) - cannot add more {action} to it"
+            )
+
     def add_face(
         self,
         points: Sequence[Point3],
@@ -923,11 +934,7 @@ class ComponentDefinitionBuilder:
         behavior as :meth:`SkpBuilder.add_face`, except vertices/edges are
         shared only within this definition, never with the root model or
         other definitions."""
-        if self._closed:
-            raise SkpWriteError(
-                f"component definition {self.name!r} has already closed "
-                "(its `with` block exited) - cannot add more faces to it"
-            )
+        self._check_writable("faces")
         points = [(float(p[0]), float(p[1]), float(p[2])) for p in points]
         if len(points) < 3:
             raise SkpWriteError("a face needs at least 3 points")
@@ -971,11 +978,7 @@ class ComponentDefinitionBuilder:
         ever nest others fully built strictly before it existed, never
         itself or anything still in progress.
         """
-        if self._closed:
-            raise SkpWriteError(
-                f"component definition {self.name!r} has already closed "
-                "(its `with` block exited) - cannot add more instances to it"
-            )
+        self._check_writable("instances")
         if definition._skp is not self._skp:
             raise SkpWriteError(
                 f"component definition {definition.name!r} belongs to a different "
@@ -984,6 +987,47 @@ class ComponentDefinitionBuilder:
         if definition is self:
             raise SkpWriteError(f"component definition {self.name!r} cannot nest an instance of itself")
         self._new_entity_count += self._skp._definition_writer.write_instance(
+            definition.slot, name or definition.name, translation, matrix3x3, material or 0, layer or 0
+        )
+
+    def add_group_instance(
+        self,
+        definition: "ComponentDefinitionBuilder",
+        name: Optional[str] = None,
+        translation: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+        matrix3x3: Optional[Tuple[float, float, float, float, float, float, float, float, float]] = None,
+        material: Optional[int] = None,
+        layer: Optional[int] = None,
+    ) -> None:
+        """Place another, already-closed component definition inside this
+        one as a *group* (``CGroup``) rather than a component instance -
+        otherwise identical to `add_instance`, including the same
+        already-closed/same-builder/no-self-reference requirements.
+
+        Unlike the self-placing :meth:`SkpBuilder.add_group` at the root
+        level, a nested group can't be declared inline: this format has
+        no way to embed one definition's declaration inside another's -
+        every definition is a flat, top-level record, and a definition
+        can only reference others already fully closed strictly before
+        it was opened, the same constraint `add_instance` relies on for
+        cycle-safety. So build the group's geometry with a normal
+        `add_component_definition` first, then place it here:
+
+        >>> with builder.add_component_definition("Engine") as engine:
+        ...     engine.add_face([(0, 0, 0), (30, 0, 0), (30, 30, 0), (0, 30, 0)])
+        >>> with builder.add_component_definition("Car") as car:
+        ...     car.add_face([(0, 0, 0), (150, 0, 0), (150, 60, 0), (0, 60, 0)])
+        ...     car.add_group_instance(engine, translation=(50, 0, 10))
+        """
+        self._check_writable("groups")
+        if definition._skp is not self._skp:
+            raise SkpWriteError(
+                f"component definition {definition.name!r} belongs to a different "
+                "builder (a different create() call) - its slot number is meaningless here"
+            )
+        if definition is self:
+            raise SkpWriteError(f"component definition {self.name!r} cannot nest a group instance of itself")
+        self._new_entity_count += self._skp._definition_writer.write_group(
             definition.slot, name or definition.name, translation, matrix3x3, material or 0, layer or 0
         )
 
@@ -1332,6 +1376,22 @@ class SkpBuilder:
     def _ensure_geometry_writer(self) -> None:
         if self._geometry_writer is not None:
             return
+        if self._open_definition is not None:
+            # Calling this while a definition/group is still open would
+            # lock in the geometry writer's starting slot before that
+            # definition (and anything added to it afterward) finishes
+            # growing _definition_writer - the locked-in slot would then be
+            # too low, corrupting every back-reference root-level geometry
+            # makes. A real, previously-unguarded gap: nothing stopped
+            # calling add_face/add_instance on the root builder from
+            # inside an open `with add_component_definition(...)` block,
+            # which silently produced a file whose root entities didn't
+            # parse (found while testing group nesting - not related to
+            # it otherwise).
+            raise SkpWriteError(
+                f"component definition {self._open_definition.name!r} is still open - "
+                "exit its `with` block before adding root-level geometry"
+            )
         material_shift = self._material_writer.next_slot - self._base
         self._geometry_writer = _ArchiveWriter(
             next_slot=self._scaffold_next_slot + material_shift + self._layer_shift() + self._definition_shift(),
@@ -1513,6 +1573,6 @@ def create() -> SkpBuilder:
 
     See the :mod:`openskp.create` module docstring for the current scope
     and limitations (texture positioning only on axis-aligned faces so
-    far, no nested groups yet; inches only).
+    far, no inline-declared nested groups; inches only).
     """
     return SkpBuilder()

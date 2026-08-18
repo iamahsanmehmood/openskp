@@ -33,7 +33,12 @@ for the full scope notes.
 - Nested definitions — a component definition can contain instances of
   another, already-built definition inside its own body
   (`ComponentDefinitionBuilder.add_instance`), the same assembly-of-parts
-  nesting real SketchUp supports, to any depth.
+  nesting real SketchUp supports, to any depth. A nested placement can
+  also be a *group* rather than a component instance
+  (`ComponentDefinitionBuilder.add_group_instance`) — this format has no
+  way to declare one definition's body inside another's, so the group's
+  own geometry still has to be built with a normal
+  `add_component_definition` first, then placed here.
 - Explicit texture positioning (`add_face`'s `front_uv`/`back_uv`) —
   scale, rotate, shear, and offset a face's texture independently per
   side instead of the default planar projection, given 3 world-point/UV
@@ -50,6 +55,13 @@ for the full scope notes.
   module's own docstring — the writer logic itself (the entity encoding,
   the object-graph protocol, the tail-reference renumbering) is 100%
   independently reverse-engineered.
+
+### Fixed
+
+- Calling `add_face`/`add_instance` on the root builder while a component
+  definition was still open (its `with` block not yet exited) silently
+  produced a corrupted file instead of raising — found while testing
+  group nesting, unrelated to it otherwise. Now raises immediately.
 
 ### Validation
 
@@ -68,8 +80,11 @@ entities) as a regression guard.
 
 - Explicit texture positioning on a tilted (non-axis-aligned) face - the
   local 2D parameterization needed for that has not been reverse-engineered.
-- Nesting a self-placing *group* (as opposed to a definition instance)
-  inside another definition.
+- Declaring a group's geometry inline nested inside another definition's
+  own body, the way `add_group` self-places at the root level - this
+  format has no mechanism for one definition's declaration to live inside
+  another's, so a nested group's geometry has to be built separately
+  first (see `add_group_instance` above).
 - Editing an existing arbitrary `.skp` file — a separately harder
   problem (real SketchUp re-serializes the whole document on save rather
   than appending), not attempted here.

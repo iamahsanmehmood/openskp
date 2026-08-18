@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import importlib
 import os
+import struct
 
 import pytest
 
@@ -639,6 +640,170 @@ class TestNestedDefinitions:
             car.add_instance(wheel)
         with pytest.raises(SkpWriteError, match="already closed"):
             car.add_instance(wheel)
+
+
+class TestNestedGroups:
+    def test_group_instance_nested_in_definition_self_parses(self, tmp_path):
+        from openskp import SkpFile
+
+        builder = create()
+        with builder.add_component_definition("Engine") as engine:
+            engine.add_face(SQUARE)
+        with builder.add_component_definition("Car") as car:
+            car.add_face(SQUARE)
+            car.add_group_instance(engine, translation=(50.0, 0.0, 10.0))
+        builder.add_instance(car)
+        data = builder.to_bytes()
+
+        # Root only ever sees Car - Engine is never placed at root level.
+        ar, root, layers, materials = legacy._walk(data)
+        assert len(root) == 1
+        assert root[0][1] == "CComponentInstance"
+        assert root[0][2]["def"] == car.slot
+
+        out = tmp_path / "nested_group.skp"
+        out.write_bytes(data)
+        model = SkpFile.open(str(out)).parse()
+        car_def = model.definitions[car.slot]
+        assert len(car_def.faces) == 1
+        assert len(car_def.instances) == 1
+        assert car_def.instances[0].name == "Engine"
+        assert car_def.instances[0].matrix[9:12] == pytest.approx([50.0, 0.0, 10.0])
+
+    def test_group_instance_is_a_real_cgroup_not_a_component_instance(self):
+        # The whole point of add_group_instance over add_instance: the
+        # placement record itself must be a genuine CGroup class
+        # declaration, not CComponentInstance - Car's own body (unlike
+        # root-level entities) isn't exposed through legacy._walk, so
+        # check for the class declaration bytes directly, the same way
+        # the writer itself declares a class on first use.
+        builder = create()
+        with builder.add_component_definition("Engine") as engine:
+            engine.add_face(SQUARE)
+        with builder.add_component_definition("Car") as car:
+            car.add_face(SQUARE)
+            car.add_group_instance(engine, translation=(50.0, 0.0, 0.0))
+        builder.add_instance(car)
+        data = builder.to_bytes()
+
+        cgroup_decl = struct.pack("<H", 0xFFFF) + struct.pack("<H", 1) + struct.pack("<H", 6) + b"CGroup"
+        assert cgroup_decl in data
+
+    def test_group_instance_recursively_resolves_through_real_sketchup(self, tmp_path):
+        import ctypes
+
+        if not os.path.exists(_SDK_DLL_PATH):
+            pytest.skip("SketchUp SDK not present on this machine")
+
+        builder = create()
+        with builder.add_component_definition("Engine") as engine:
+            engine.add_face(SQUARE)
+        with builder.add_component_definition("Car") as car:
+            car.add_face(SQUARE)
+            car.add_group_instance(engine, translation=(50.0, 0.0, 10.0))
+        builder.add_instance(car)
+        out = tmp_path / "nested_group_oracle.skp"
+        builder.save(str(out))
+
+        dll = ctypes.CDLL(_SDK_DLL_PATH)
+        dll.SUModelCreateFromFile.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_char_p]
+        dll.SUModelGetEntities.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUEntitiesGetNumInstances.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_size_t)]
+        dll.SUEntitiesGetInstances.argtypes = [
+            ctypes.c_void_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_size_t),
+        ]
+        dll.SUComponentInstanceGetDefinition.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUComponentDefinitionGetEntities.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUEntitiesGetNumFaces.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_size_t)]
+        dll.SUEntitiesGetNumGroups.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_size_t)]
+        dll.SUEntitiesGetGroups.argtypes = [
+            ctypes.c_void_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_size_t),
+        ]
+        dll.SUGroupGetEntities.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUInitialize()
+        try:
+            model = ctypes.c_void_p()
+            err = dll.SUModelCreateFromFile(ctypes.byref(model), str(out).encode())
+            assert err == 0, f"SketchUp SDK rejected the file (error {err})"
+            entities = ctypes.c_void_p()
+            dll.SUModelGetEntities(model, ctypes.byref(entities))
+            ninst = ctypes.c_size_t()
+            dll.SUEntitiesGetNumInstances(entities, ctypes.byref(ninst))
+            assert ninst.value == 1
+            insts = (ctypes.c_void_p * 1)()
+            got = ctypes.c_size_t()
+            dll.SUEntitiesGetInstances(entities, 1, insts, ctypes.byref(got))
+            comp_def = ctypes.c_void_p()
+            dll.SUComponentInstanceGetDefinition(insts[0], ctypes.byref(comp_def))
+            car_entities = ctypes.c_void_p()
+            dll.SUComponentDefinitionGetEntities(comp_def, ctypes.byref(car_entities))
+            nfaces = ctypes.c_size_t()
+            dll.SUEntitiesGetNumFaces(car_entities, ctypes.byref(nfaces))
+            assert nfaces.value == 1
+            ngroups = ctypes.c_size_t()
+            dll.SUEntitiesGetNumGroups(car_entities, ctypes.byref(ngroups))
+            assert ngroups.value == 1
+            groups = (ctypes.c_void_p * 1)()
+            got2 = ctypes.c_size_t()
+            dll.SUEntitiesGetGroups(car_entities, 1, groups, ctypes.byref(got2))
+            engine_entities = ctypes.c_void_p()
+            dll.SUGroupGetEntities(groups[0], ctypes.byref(engine_entities))
+            nfaces2 = ctypes.c_size_t()
+            dll.SUEntitiesGetNumFaces(engine_entities, ctypes.byref(nfaces2))
+            assert nfaces2.value == 1
+            dll.SUModelRelease(ctypes.byref(model))
+        finally:
+            dll.SUTerminate()
+
+    def test_group_instance_of_definition_from_a_different_builder_raises(self):
+        builder1 = create()
+        with builder1.add_component_definition("Engine") as engine:
+            engine.add_face(SQUARE)
+
+        builder2 = create()
+        with builder2.add_component_definition("Car") as car:
+            car.add_face(SQUARE)
+            with pytest.raises(SkpWriteError, match="different builder"):
+                car.add_group_instance(engine)
+
+    def test_group_instance_of_self_raises(self):
+        builder = create()
+        comp = builder.add_component_definition("Loop")
+        comp.add_face(SQUARE)
+        with pytest.raises(SkpWriteError, match="cannot nest a group instance of itself"):
+            comp.add_group_instance(comp)
+
+    def test_group_instance_after_definition_closed_raises(self):
+        builder = create()
+        with builder.add_component_definition("Engine") as engine:
+            engine.add_face(SQUARE)
+        with builder.add_component_definition("Car") as car:
+            car.add_group_instance(engine)
+        with pytest.raises(SkpWriteError, match="already closed"):
+            car.add_group_instance(engine)
+
+
+class TestPreExistingOrderingGap:
+    def test_root_add_face_while_definition_open_raises(self):
+        # Real, previously-unguarded bug found while testing group nesting:
+        # calling add_face on the root builder while a component
+        # definition was still open silently corrupted the file (the
+        # geometry writer's starting slot got locked in too early). Not
+        # related to nested groups themselves - just found alongside them.
+        builder = create()
+        comp = builder.add_component_definition("Chair")
+        comp.add_face(SQUARE)
+        with pytest.raises(SkpWriteError, match="still open"):
+            builder.add_face(SQUARE)
+
+    def test_root_add_instance_while_definition_open_raises(self):
+        builder = create()
+        with builder.add_component_definition("Wheel") as wheel:
+            wheel.add_face(SQUARE)
+        comp = builder.add_component_definition("Chair")
+        comp.add_face(SQUARE)
+        with pytest.raises(SkpWriteError, match="still open"):
+            builder.add_instance(wheel)
 
 
 class TestMaterials:
