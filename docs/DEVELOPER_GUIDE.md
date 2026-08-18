@@ -555,17 +555,30 @@ builder.add_circle((50, 50, 0), normal=(0, 0, 1), radius=40, num_segments=24)
 
 Confirmed against the real SDK: every edge's `SUEdgeGetCurve` resolves to
 the exact same curve object, typed as a genuine arc (`SUCurveGetType`)
-with the requested edge count. A partial (open) arc with no face, and
-freeform polyline curve grouping (`CCurve`, distinct from a true arc),
-aren't exposed as public API yet.
+with the requested edge count.
+
+A partial (open) arc (`add_arc`) is the same underlying `CArcCurve`
+entity, but a chain of edges with no face - given `start_angle`/
+`end_angle` (radians), swept from an arbitrary but fixed reference
+direction in the arc's own plane:
+
+```python
+import math
+builder.add_arc((50, 50, 0), normal=(0, 0, 1), radius=40, start_angle=0, end_angle=math.pi / 2)
+```
+
+Confirmed against the real SDK that the written endpoint coordinates
+land exactly where the requested sweep says they should - not just that
+some curve object exists with the right edge count. Freeform polyline
+curve grouping (`CCurve`, distinct from a true arc) isn't exposed as
+public API yet.
 
 Explicitly out of scope for this first pass: declaring a group's
 geometry inline nested inside another definition (as opposed to placing
 an already-built one via `add_group_instance`), attributes on groups,
-partial/open arcs, freeform polyline curves, and editing an existing
-arbitrary `.skp` file (a separately harder problem — real SketchUp
-re-serializes the whole document on save rather than appending to it —
-not attempted here). See
+freeform polyline curves, and editing an existing arbitrary `.skp` file
+(a separately harder problem — real SketchUp re-serializes the whole
+document on save rather than appending to it — not attempted here). See
 [`openskp/create.py`](../packages/python/src/openskp/create.py) for the
 full, current scope notes, and the [Python package README](../packages/python/README.md#writing-early-stage)
 for a longer worked example.

@@ -15,6 +15,7 @@ in the specific fields that mattered.
 from __future__ import annotations
 
 import importlib
+import math
 import os
 import struct
 
@@ -1539,6 +1540,87 @@ class TestCurvedEdges:
         # round-trips through our own reader without raising.
         legacy._walk(data)
 
+    def test_add_arc_self_parses_as_open_chain_no_face(self):
+        builder = create()
+        builder.add_arc(
+            (50.0, 50.0, 0.0), (0.0, 0.0, 1.0), radius=40.0,
+            start_angle=0.0, end_angle=math.pi / 2, num_segments=6,
+        )
+        data = builder.to_bytes()
+        ar, root, layers, materials = legacy._walk(data)
+        edges = [v for (_, n, v) in root if n == "CEdge"]
+        faces = [v for (_, n, v) in root if n == "CFace"]
+        assert len(edges) == 6
+        assert len(faces) == 0
+        curve_slots = {e["curve"] for e in edges}
+        assert len(curve_slots) == 1
+        assert None not in curve_slots
+
+    def test_add_arc_endpoints_match_requested_sweep(self, tmp_path):
+        # angle 0 -> center + radius*u, angle pi/2 -> center + radius*w -
+        # confirm the actual written vertex coordinates land there exactly,
+        # not just that a curve object exists. CVertex isn't a root-level
+        # entity (it's nested inline inside CEdge, like CArcCurve) so
+        # legacy._walk's root-only view can't see it directly - go through
+        # the public parse API instead, which resolves nested vertices.
+        from openskp import SkpFile
+
+        builder = create()
+        builder.add_arc(
+            (50.0, 50.0, 0.0), (0.0, 0.0, 1.0), radius=40.0,
+            start_angle=0.0, end_angle=math.pi / 2, num_segments=6,
+        )
+        out = tmp_path / "arc_endpoints.skp"
+        builder.save(str(out))
+        model = SkpFile.open(str(out)).parse()
+        coords = {(round(v.x, 6), round(v.y, 6), round(v.z, 6)) for v in model.root.vertices.values()}
+        assert (90.0, 50.0, 0.0) in coords
+        assert (50.0, 90.0, 0.0) in coords
+
+    def test_add_arc_rejects_equal_angles(self):
+        builder = create()
+        with pytest.raises(SkpWriteError, match="must differ"):
+            builder.add_arc((0, 0, 0), (0, 0, 1), radius=10.0, start_angle=1.0, end_angle=1.0)
+
+    def test_add_arc_rejects_bad_segment_count(self):
+        builder = create()
+        with pytest.raises(SkpWriteError, match="num_segments"):
+            builder.add_arc((0, 0, 0), (0, 0, 1), radius=10.0, start_angle=0.0, end_angle=1.0, num_segments=2)
+
+    def test_add_arc_in_component_definition(self):
+        builder = create()
+        with builder.add_component_definition("Bracket") as bracket:
+            bracket.add_arc(
+                (0.0, 0.0, 0.0), (0.0, 0.0, 1.0), radius=15.0,
+                start_angle=0.0, end_angle=math.pi, num_segments=8,
+            )
+        builder.add_instance(bracket)
+        data = builder.to_bytes()
+        legacy._walk(data)
+
+    def test_add_arc_and_add_circle_share_vertex_registry(self, tmp_path):
+        # An arc and a circle built with the same center/radius/normal
+        # trace overlapping points (e.g. angle 0) - confirm the shared
+        # vertex_slots dict actually dedupes across the two calls rather
+        # than emitting a duplicate CVertex.
+        from openskp import SkpFile
+
+        builder = create()
+        builder.add_arc(
+            (0.0, 0.0, 0.0), (0.0, 0.0, 1.0), radius=10.0,
+            start_angle=0.0, end_angle=math.pi, num_segments=4,
+        )
+        builder.add_circle((0.0, 0.0, 0.0), (0.0, 0.0, 1.0), radius=10.0, num_segments=4)
+        out = tmp_path / "arc_circle_shared.skp"
+        builder.save(str(out))
+        model = SkpFile.open(str(out)).parse()
+        coords = [(round(v.x, 6), round(v.y, 6), round(v.z, 6)) for v in model.root.vertices.values()]
+        assert len(coords) == len(set(coords)), "no duplicate CVertex for a shared point"
+        # angle 0 for both is the same point (10, 0, 0) - confirm it's
+        # really shared (present once), not that dedup happened to be
+        # unnecessary because the two shapes never overlap.
+        assert coords.count((10.0, 0.0, 0.0)) == 1
+
 
 class TestLayers:
     def test_layer_assigned_to_face(self):
@@ -2644,6 +2726,93 @@ class TestRealSketchUpOracle:
             cne = ctypes.c_size_t()
             dll.SUCurveGetNumEdges(curve, ctypes.byref(cne))
             assert cne.value == 8
+
+            dll.SUModelRelease(ctypes.byref(model))
+        finally:
+            dll.SUTerminate()
+
+    def test_partial_arc_recognized_as_open_arc_by_real_sketchup(self, tmp_path):
+        # Same discipline as the circle oracle test above, but for a
+        # partial (open) arc built with add_arc: no face at all, and the
+        # actual endpoint positions must land exactly where the requested
+        # start_angle/end_angle sweep says they should - not just "some
+        # curve object exists with the right edge count".
+        import math as _math
+        import ctypes
+
+        class SUPoint3D(ctypes.Structure):
+            _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double), ("z", ctypes.c_double)]
+
+        builder = create()
+        builder.add_arc(
+            (50.0, 50.0, 0.0), (0.0, 0.0, 1.0), radius=40.0,
+            start_angle=0.0, end_angle=_math.pi / 2, num_segments=6,
+        )
+        out = tmp_path / "arc_oracle.skp"
+        builder.save(str(out))
+
+        dll = ctypes.CDLL(_SDK_DLL_PATH)
+        dll.SUModelCreateFromFile.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_char_p]
+        dll.SUModelGetEntities.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUEntitiesGetNumFaces.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_size_t)]
+        dll.SUEntitiesGetNumEdges.argtypes = [ctypes.c_void_p, ctypes.c_bool, ctypes.POINTER(ctypes.c_size_t)]
+        dll.SUEntitiesGetEdges.argtypes = [
+            ctypes.c_void_p, ctypes.c_bool, ctypes.c_size_t,
+            ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_size_t),
+        ]
+        dll.SUEdgeGetCurve.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUEdgeGetStartVertex.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUEdgeGetEndVertex.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUVertexGetPosition.argtypes = [ctypes.c_void_p, ctypes.POINTER(SUPoint3D)]
+        dll.SUCurveGetType.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_int)]
+        dll.SUCurveGetNumEdges.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_size_t)]
+        dll.SUInitialize()
+        try:
+            model = ctypes.c_void_p()
+            err = dll.SUModelCreateFromFile(ctypes.byref(model), str(out).encode())
+            assert err == 0, f"SketchUp SDK rejected the file (error {err})"
+            entities = ctypes.c_void_p()
+            dll.SUModelGetEntities(model, ctypes.byref(entities))
+
+            nf = ctypes.c_size_t()
+            dll.SUEntitiesGetNumFaces(entities, ctypes.byref(nf))
+            assert nf.value == 0
+
+            ne = ctypes.c_size_t()
+            dll.SUEntitiesGetNumEdges(entities, False, ctypes.byref(ne))
+            assert ne.value == 6
+            edges = (ctypes.c_void_p * 6)()
+            got = ctypes.c_size_t()
+            dll.SUEntitiesGetEdges(entities, False, 6, edges, ctypes.byref(got))
+            assert got.value == 6
+
+            curve_ptrs = set()
+            positions = set()
+            for i in range(6):
+                curve = ctypes.c_void_p()
+                err = dll.SUEdgeGetCurve(edges[i], ctypes.byref(curve))
+                assert err == 0
+                assert curve.value is not None
+                curve_ptrs.add(curve.value)
+                for get_vertex in (dll.SUEdgeGetStartVertex, dll.SUEdgeGetEndVertex):
+                    vert = ctypes.c_void_p()
+                    get_vertex(edges[i], ctypes.byref(vert))
+                    pos = SUPoint3D()
+                    dll.SUVertexGetPosition(vert, ctypes.byref(pos))
+                    positions.add((round(pos.x, 6), round(pos.y, 6), round(pos.z, 6)))
+            assert len(curve_ptrs) == 1, "every edge must share the exact same curve"
+
+            curve = ctypes.c_void_p(curve_ptrs.pop())
+            ctype = ctypes.c_int()
+            dll.SUCurveGetType(curve, ctypes.byref(ctype))
+            assert ctype.value == 1  # SUCurveType_ArcCurve
+            cne = ctypes.c_size_t()
+            dll.SUCurveGetNumEdges(curve, ctypes.byref(cne))
+            assert cne.value == 6
+
+            # angle 0 -> center + (radius, 0, 0); angle pi/2 -> center + (0, radius, 0)
+            assert (90.0, 50.0, 0.0) in positions
+            assert (50.0, 90.0, 0.0) in positions
 
             dll.SUModelRelease(ctypes.byref(model))
         finally:
