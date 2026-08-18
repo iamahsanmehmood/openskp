@@ -25,9 +25,9 @@ first-class packages for TypeScript, .NET, Dart, and C++ — see the
 [project README](https://github.com/iamahsanmehmood/openskp) for the full
 cross-language picture.
 
-🧪 This Python package can also *write* new `.skp` files from scratch now
-— early-stage and Python-only for the moment (see
-[Writing](#writing-early-stage) below).
+🧪 This Python package can also *write* new `.skp` files from scratch, and
+edit existing ones — Python-only for the moment, validated feature-by-feature
+against the real SketchUp SDK (see [Writing](#writing) below).
 
 ## Features
 
@@ -47,11 +47,14 @@ cross-language picture.
   largest single definition, not the whole file.
 - **Structured observability** — opt-in progress reporting and
   location-carrying parse errors for debugging malformed or unusual files.
-- **Write support (early-stage, Python-only)** — build new legacy-format
-  `.skp` files from scratch: geometry (including true, editable circular
-  faces), materials (solid + PNG/JPEG textures), layers, component
-  definitions with multiple instances, and groups. No SDK involved. See
-  [Writing](#writing-early-stage) below.
+- **Write support (Python-only)** — build new legacy-format `.skp` files
+  from scratch: geometry (including true, editable circular/arc curves,
+  freeform polylines, faces with holes cut out, and non-planar
+  auto-triangulation), materials (solid + PNG/JPEG textures), layers,
+  nested component definitions and groups, instance rotation/visibility,
+  and custom attribute dictionaries — or load and extend an existing file
+  with `open_existing()`. No SDK involved; every feature validated
+  against the real SketchUp SDK. See [Writing](#writing) below.
 
 ## Installation
 
@@ -118,29 +121,35 @@ meta = json_export.to_dict(model, scene=scene)
 json_export.export(model, "output.json", scene=scene)
 ```
 
-## Writing (early-stage)
+## Writing
 
 OpenSKP can also *create* new `.skp` files from scratch — a genuine,
 from-scratch binary writer for the legacy MFC `CArchive` format (SketchUp
-2013–2020), with no SketchUp SDK involved at any point. This is a new,
-early-stage capability: geometry, materials (solid + PNG/JPEG textures),
-layers, component definitions with multiple instances, groups, nested
+2013–2020), with no SketchUp SDK involved at any point. Python-only for
+now, but feature-complete for common modeling needs and validated
+feature-by-feature against the real SketchUp SDK: geometry, materials
+(solid + PNG/JPEG textures), layers (with color and default visibility),
+component definitions with multiple instances, groups, nested
 definitions and nested group instances (an assembly containing instances
-or groups of its own sub-parts, to any depth), explicit per-side texture
-positioning (on a face of any orientation), custom key/value
-attribute dictionaries on definitions/instances/faces (the same
-mechanism SketchUp's own "dynamic component" attributes use), and
-circular faces and partial arcs (genuine, editable-by-radius arc/circle
-entities, not disconnected straight edges that merely trace that shape),
-and freeform polyline curves (an arbitrary chain of edges grouped into
-one genuine `CCurve` entity) are all supported, along with faces with
-one or more holes cut out (a window opening in a wall, say) and an
-`add_face(..., auto_triangulate=True)` fallback for non-planar input.
-`openskp.open_existing()` can also load an *existing* legacy-format file
-and rebuild it as a new builder, so more geometry can be added to it
-before saving (see [Editing an existing file](#editing-an-existing-file)
-below). See [`openskp/create.py`](src/openskp/create.py) for the full
-scope notes.
+or groups of its own sub-parts, to any depth), per-instance rotation and
+visibility, explicit per-side texture positioning (on a face of any
+orientation), custom key/value attribute dictionaries on
+definitions/instances/faces (the same mechanism SketchUp's own "dynamic
+component" attributes use), and circular faces and partial arcs (genuine,
+editable-by-radius arc/circle entities, not disconnected straight edges
+that merely trace that shape), and freeform polyline curves (an arbitrary
+chain of edges grouped into one genuine `CCurve` entity) are all
+supported, along with faces with one or more holes cut out (a window
+opening in a wall, say) and an `add_face(..., auto_triangulate=True)`
+fallback for non-planar input. `openskp.open_existing()` can also load an
+*existing* legacy-format file and rebuild it as a new builder, so more
+geometry can be added to it before saving (see
+[Editing an existing file](#editing-an-existing-file) below). See
+[`openskp/create.py`](src/openskp/create.py) for the full scope notes.
+
+This is Python-only today — porting the writer to the other four
+languages (TypeScript, .NET, Dart, C++) is a planned future direction,
+not yet under way. Contributions toward that are very welcome.
 
 ```python
 from openskp import create
@@ -246,8 +255,8 @@ scope.
 | `openskp.metadata` | Dynamic properties and scene hierarchy |
 | `openskp.transforms` | 3D matrix transforms and coordinate conversion |
 | `openskp.export` | GLB, OBJ/MTL, STL, PLY, DXF, IFC4, and JSON exporters |
-| `openskp.create` | Writer — build new `.skp` files from scratch (early-stage) |
-| `openskp.edit` | Load an existing legacy `.skp` file and rebuild it as a new writer (early-stage) |
+| `openskp.create` | Writer — build new `.skp` files from scratch |
+| `openskp.edit` | Load an existing legacy `.skp` file and rebuild it as a new writer |
 
 ## Requirements
 

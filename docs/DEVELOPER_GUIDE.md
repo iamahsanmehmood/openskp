@@ -434,11 +434,18 @@ for (const auto& prim : scene.glb_primitives) {
 
 Everything above this section is about reading `.skp` files. As of this
 writing, one language — Python — can also go the other direction: create a
-new `.skp` file from nothing.
+new `.skp` file from nothing, or load and extend a file that already
+exists. Python-only today, but the write path itself has matured well
+past a proof of concept — every feature below has been validated
+feature-by-feature against the real SketchUp SDK, and it holds up
+rebuilding complex, real architectural models, not just synthetic test
+fixtures. Porting it to the other four languages is a planned future
+direction, not yet under way — contributions toward that are very
+welcome.
 
 | Language | Write new `.skp` files |
 |---|---|
-| Python | 🧪 `openskp.create()` — early-stage, legacy-format (2013–2020) only |
+| Python | 🧪 `openskp.create()` / `openskp.open_existing()` — legacy-format (2013–2020) only |
 | TypeScript | ❌ not yet |
 | .NET | ❌ not yet |
 | Dart | ❌ not yet |
@@ -636,7 +643,7 @@ Explicitly out of scope for this first pass: declaring a group's
 geometry inline nested inside another definition (as opposed to placing
 an already-built one via `add_group_instance`), and attributes on
 groups. See [`openskp/create.py`](../packages/python/src/openskp/create.py)
-for the full, current scope notes, and the [Python package README](../packages/python/README.md#writing-early-stage)
+for the full, current scope notes, and the [Python package README](../packages/python/README.md#writing)
 for a longer worked example.
 
 ### Editing an existing file
