@@ -125,9 +125,12 @@ from-scratch binary writer for the legacy MFC `CArchive` format (SketchUp
 early-stage capability: geometry, materials (solid + PNG/JPEG textures),
 layers, component definitions with multiple instances, groups, nested
 definitions and nested group instances (an assembly containing instances
-or groups of its own sub-parts, to any depth), and explicit per-side
-texture positioning (on a face of any orientation) are all supported.
-See [`openskp/create.py`](src/openskp/create.py) for the full scope notes.
+or groups of its own sub-parts, to any depth), explicit per-side texture
+positioning (on a face of any orientation), and custom key/value
+attribute dictionaries on definitions/instances/faces (the same
+mechanism SketchUp's own "dynamic component" attributes use) are all
+supported. See [`openskp/create.py`](src/openskp/create.py) for the full
+scope notes.
 
 ```python
 from openskp import create

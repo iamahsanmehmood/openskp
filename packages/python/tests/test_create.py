@@ -1249,6 +1249,202 @@ class TestUVPositioning:
         assert face.uv_transform == pytest.approx([50.0, 0.0, 0.0, 0.0, 50.0, 0.0, 0.0, 0.0, 1.0])
 
 
+class TestAttributeDicts:
+    def test_instance_attributes_self_parse(self):
+        # legacy._walk only exposes root-level entities, so an instance
+        # (unlike a definition or a face nested inside one) can be checked
+        # directly this way.
+        builder = create()
+        with builder.add_component_definition("Chair") as chair:
+            chair.add_face(SQUARE)
+        builder.add_instance(chair, attributes={"serial": "A1", "count": 3, "weight": 4.5})
+        data = builder.to_bytes()
+
+        ar, root, layers, materials = legacy._walk(data)
+        inst = root[0][2]
+        assert inst["attrs"]["children"] == [
+            ("CAttributeNamed", {
+                "k": "dict", "name": "attributes",
+                "entries": {"serial": "A1", "count": 3, "weight": 4.5},
+            }),
+        ]
+
+    def test_custom_dict_name(self):
+        builder = create()
+        with builder.add_component_definition("Chair") as chair:
+            chair.add_face(SQUARE)
+        builder.add_instance(chair, attributes={"a": 1}, attribute_dict_name="dynamic_attributes")
+        data = builder.to_bytes()
+        ar, root, layers, materials = legacy._walk(data)
+        assert root[0][2]["attrs"]["children"][0][1]["name"] == "dynamic_attributes"
+
+    def test_face_with_no_attributes_has_no_attr_container(self):
+        # A face with no attributes (and no UV positioning) shouldn't pay
+        # for (or emit) an attribute container at all - same discipline as
+        # test_unpositioned_face_has_no_texture_coords_record. Instances/
+        # definitions differ here: ground truth already has them always
+        # carrying a real (possibly empty) container regardless of
+        # attributes, so this check is face-specific.
+        builder = create()
+        builder.add_face(SQUARE)
+        data = builder.to_bytes()
+        ar, root, layers, materials = legacy._walk(data)
+        face = [v for (_, n, v) in root if n == "CFace"][0]
+        assert face["attrs"] is None
+
+    def test_instance_with_no_attributes_has_empty_attr_container(self):
+        # Unlike a face, an instance always carries a real attribute
+        # container regardless of whether attributes are given (ground
+        # truth predates this feature) - adding attributes support
+        # shouldn't change that pre-existing shape for the no-attributes case.
+        builder = create()
+        with builder.add_component_definition("Chair") as chair:
+            chair.add_face(SQUARE)
+        builder.add_instance(chair)
+        data = builder.to_bytes()
+        ar, root, layers, materials = legacy._walk(data)
+        assert root[0][2]["attrs"] == {"k": "attrs", "children": []}
+
+    def test_bool_value_raises(self):
+        builder = create()
+        with builder.add_component_definition("Chair") as chair:
+            chair.add_face(SQUARE)
+        with pytest.raises(SkpWriteError, match="bool is not a supported"):
+            builder.add_instance(chair, attributes={"flag": True})
+
+    def test_unsupported_type_raises(self):
+        builder = create()
+        with builder.add_component_definition("Chair") as chair:
+            chair.add_face(SQUARE)
+        with pytest.raises(SkpWriteError, match="unsupported value type"):
+            builder.add_instance(chair, attributes={"bad": [1, 2, 3]})
+
+    def test_int32_out_of_range_raises(self):
+        builder = create()
+        with builder.add_component_definition("Chair") as chair:
+            chair.add_face(SQUARE)
+        with pytest.raises(SkpWriteError, match="out of signed 32-bit range"):
+            builder.add_instance(chair, attributes={"huge": 2**40})
+
+    def test_face_attributes_in_component_definition(self):
+        builder = create()
+        with builder.add_component_definition("Panel") as panel:
+            panel.add_face(SQUARE, attributes={"note": "handle with care"})
+        builder.add_instance(panel)
+        data = builder.to_bytes()
+        # Byte-level presence check (face attrs live inside the definition,
+        # not exposed by legacy._walk's root-only view) - the SDK oracle
+        # test below is the authoritative check for this case.
+        assert "handle with care".encode("utf-16-le") in data
+
+    def test_definition_and_instance_and_face_attributes_together_via_real_sketchup(self, tmp_path):
+        # The comprehensive case: attributes at all three levels this
+        # writer supports at once, each independently readable by real
+        # SketchUp through its own standard attribute-dictionary API -
+        # not just this project's own reader.
+        import ctypes
+
+        if not os.path.exists(_SDK_DLL_PATH):
+            pytest.skip("SketchUp SDK not present on this machine")
+
+        builder = create()
+        with builder.add_component_definition(
+            "Chair", attributes={"sku": "CH-100", "price": 49.99, "stock": 12},
+        ) as chair:
+            chair.add_face(SQUARE, attributes={"material_note": "oak"})
+        builder.add_instance(chair, translation=(50.0, 0.0, 0.0), attributes={"serial": "A1"})
+        out = tmp_path / "attrs.skp"
+        builder.save(str(out))
+
+        dll = ctypes.CDLL(_SDK_DLL_PATH)
+        dll.SUModelCreateFromFile.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_char_p]
+        dll.SUModelGetEntities.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUEntitiesGetInstances.argtypes = [
+            ctypes.c_void_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_size_t),
+        ]
+        dll.SUEntitiesGetNumInstances.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_size_t)]
+        dll.SUComponentInstanceGetDefinition.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUComponentDefinitionGetEntities.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUEntitiesGetFaces.argtypes = [
+            ctypes.c_void_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_size_t),
+        ]
+        dll.SUEntityGetAttributeDictionary.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUAttributeDictionaryGetValue.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUTypedValueCreate.argtypes = [ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUTypedValueGetString.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUTypedValueGetDouble.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_double)]
+        dll.SUTypedValueGetInt32.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_int32)]
+        dll.SUStringCreate.argtypes = [ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUStringGetUTF8Length.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_size_t)]
+        dll.SUStringGetUTF8.argtypes = [
+            ctypes.c_void_p, ctypes.c_size_t, ctypes.c_char_p, ctypes.POINTER(ctypes.c_size_t),
+        ]
+
+        def get_string_value(typed_value):
+            s = ctypes.c_void_p()
+            dll.SUStringCreate(ctypes.byref(s))
+            dll.SUTypedValueGetString(typed_value, ctypes.byref(s))
+            length = ctypes.c_size_t()
+            dll.SUStringGetUTF8Length(s, ctypes.byref(length))
+            buf = ctypes.create_string_buffer(length.value + 1)
+            outlen = ctypes.c_size_t()
+            dll.SUStringGetUTF8(s, length.value + 1, buf, ctypes.byref(outlen))
+            return buf.value.decode("utf-8")
+
+        def get_value(dict_ref, key):
+            tv = ctypes.c_void_p()
+            dll.SUTypedValueCreate(ctypes.byref(tv))
+            err = dll.SUAttributeDictionaryGetValue(dict_ref, key.encode(), ctypes.byref(tv))
+            assert err == 0, f"key {key!r} not found (error {err})"
+            return tv
+
+        dll.SUInitialize()
+        try:
+            model = ctypes.c_void_p()
+            err = dll.SUModelCreateFromFile(ctypes.byref(model), str(out).encode())
+            assert err == 0, f"SketchUp SDK rejected the file (error {err})"
+            entities = ctypes.c_void_p()
+            dll.SUModelGetEntities(model, ctypes.byref(entities))
+            ninst = ctypes.c_size_t()
+            dll.SUEntitiesGetNumInstances(entities, ctypes.byref(ninst))
+            assert ninst.value == 1
+            insts = (ctypes.c_void_p * 1)()
+            got = ctypes.c_size_t()
+            dll.SUEntitiesGetInstances(entities, 1, insts, ctypes.byref(got))
+
+            inst_dict = ctypes.c_void_p()
+            err = dll.SUEntityGetAttributeDictionary(insts[0], b"attributes", ctypes.byref(inst_dict))
+            assert err == 0
+            assert get_string_value(get_value(inst_dict, "serial")) == "A1"
+
+            comp_def = ctypes.c_void_p()
+            dll.SUComponentInstanceGetDefinition(insts[0], ctypes.byref(comp_def))
+            def_dict = ctypes.c_void_p()
+            err = dll.SUEntityGetAttributeDictionary(comp_def, b"attributes", ctypes.byref(def_dict))
+            assert err == 0
+            assert get_string_value(get_value(def_dict, "sku")) == "CH-100"
+            price = ctypes.c_double()
+            dll.SUTypedValueGetDouble(get_value(def_dict, "price"), ctypes.byref(price))
+            assert price.value == pytest.approx(49.99)
+            stock = ctypes.c_int32()
+            dll.SUTypedValueGetInt32(get_value(def_dict, "stock"), ctypes.byref(stock))
+            assert stock.value == 12
+
+            def_entities = ctypes.c_void_p()
+            dll.SUComponentDefinitionGetEntities(comp_def, ctypes.byref(def_entities))
+            faces = (ctypes.c_void_p * 1)()
+            got2 = ctypes.c_size_t()
+            dll.SUEntitiesGetFaces(def_entities, 1, faces, ctypes.byref(got2))
+            face_dict = ctypes.c_void_p()
+            err = dll.SUEntityGetAttributeDictionary(faces[0], b"attributes", ctypes.byref(face_dict))
+            assert err == 0
+            assert get_string_value(get_value(face_dict, "material_note")) == "oak"
+
+            dll.SUModelRelease(ctypes.byref(model))
+        finally:
+            dll.SUTerminate()
+
+
 class TestLayers:
     def test_layer_assigned_to_face(self):
         builder = create()

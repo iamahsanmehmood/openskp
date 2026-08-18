@@ -44,6 +44,12 @@ for the full scope notes.
   side instead of the default planar projection, given 3 world-point/UV
   correspondences. Works on a face of any orientation, tilted or not.
 - Per-face/per-edge hidden, soft, and smooth flags.
+- Custom key/value attribute dictionaries (`attributes` on
+  `add_component_definition`, `add_instance`, and `add_face`) — the same
+  mechanism SketchUp's own "dynamic component" attributes use. Values may
+  be `str`, `int`, or `float`; not yet supported on groups, since ground
+  truth shows a group's own attribute pointer is always null unlike a
+  component instance's.
 - Every file now opens to the standard "Iso" view (parallel projection,
   looking at the origin) instead of the blank scaffold's own arbitrary
   default camera.

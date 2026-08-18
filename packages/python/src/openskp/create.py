@@ -30,7 +30,12 @@ are involved, and how.
   A face's texture can be explicitly positioned (scaled/rotated/sheared/
   offset, independently per side) instead of the default planar
   projection, on a face of any orientation - see `write_face`'s
-  ``front_uv``/``back_uv`` parameters.
+  ``front_uv``/``back_uv`` parameters. Component definitions, instances,
+  and faces can also carry custom key/value metadata (``str``/``int``/
+  ``float`` values) - the same mechanism SketchUp's own "dynamic
+  component" attributes use - via each of their ``attributes`` parameters;
+  not yet supported on groups (ground truth shows a group's own
+  attribute pointer is always null, unlike a component instance's).
 * Coordinates are in **inches** - SketchUp's own native internal unit for
   this era of the format. Converting from another unit is the caller's
   responsibility for now.
@@ -192,6 +197,22 @@ _CCAMERA_SLOT = 7
 # Same pattern as _CCAMERA_SLOT: CAttributeContainer's class is declared in
 # the scaffold's own prefix, ground-truth confirmed fixed at slot 3.
 _ATTR_CONTAINER_SLOT = 3
+
+# Same pattern again: CAttributeNamed (one named key/value dictionary
+# within an attribute container) is also pre-declared in the scaffold's
+# own prefix, ground-truth confirmed fixed at slot 5 - found by attaching
+# a real attribute dictionary to a face via the SDK's own
+# SUEntityGetAttributeDictionary/SUAttributeDictionarySetValue and
+# reading back where its class-ref pointed.
+_ATTRIBUTE_NAMED_SLOT = 5
+
+# CAttributeNamed's own value-type tags, ground-truth-and-reader-confirmed
+# (legacy.py's _read_attr_named documents the full set this format
+# supports; only the 3 most commonly useful ones for custom metadata are
+# exposed by this writer for now - see write_attribute_dict).
+_ATTR_TYPE_INT32 = 0x04
+_ATTR_TYPE_DOUBLE = 0x06
+_ATTR_TYPE_STRING = 0x0A
 
 # The 176 bytes (everything after CCamera's 2-byte class-ref tag) real
 # SketchUp writes for a definition's default thumbnail camera - copied
@@ -456,22 +477,80 @@ class _ArchiveWriter:
             pid = self._alloc_pid()
         self.buf += self._encode_pid(pid)
 
-    def _preamble_with_texture_coords(
+    def _preamble_with_real_attrs(
         self,
-        front_matrix: Optional[Tuple[float, ...]],
-        back_matrix: Optional[Tuple[float, ...]],
+        front_matrix: Optional[Tuple[float, ...]] = None,
+        back_matrix: Optional[Tuple[float, ...]] = None,
+        attribute_dicts: Sequence[Tuple[str, Dict[str, object]]] = (),
+        pid: Optional[int] = None,
     ) -> None:
         """Like `_preamble(real_attrs=True)`, but the attribute container's
-        children list holds one real `CFaceTextureCoords` entry instead of
-        closing immediately - used only for a face with explicit texture
-        positioning on its front and/or back side. ``front_matrix``/
-        ``back_matrix`` is ``None`` for the side that isn't positioned."""
+        children list holds real content instead of closing immediately:
+        an optional `CFaceTextureCoords` (``front_matrix``/``back_matrix``
+        - faces with explicit texture positioning only; a face with
+        neither side positioned writes none, even if it has
+        ``attribute_dicts``) followed by zero or more named
+        `CAttributeNamed` dictionaries (``attribute_dicts``, custom
+        key/value metadata - the same mechanism SketchUp's own "dynamic
+        component" attributes use)."""
         self.buf += struct.pack("<H", 0x8000 | _ATTR_CONTAINER_SLOT)
         self._alloc()
         self.buf += bytes(3)  # the container's own nested preamble: null attrs (2) + mask=0 (1)
-        self.write_face_texture_coords(front_matrix, back_matrix)
+        if front_matrix is not None or back_matrix is not None:
+            self.write_face_texture_coords(front_matrix, back_matrix)
+        for dict_name, entries in attribute_dicts:
+            self.write_attribute_dict(dict_name, entries)
         self._null()  # children-list terminator
-        self.buf += self._encode_pid(self._alloc_pid())
+        if pid is None:
+            pid = self._alloc_pid()
+        self.buf += self._encode_pid(pid)
+
+    def write_attribute_dict(self, dict_name: str, entries: Dict[str, object]) -> None:
+        """Write one ``CAttributeNamed`` record - a named dictionary of
+        custom key/value metadata attached to an entity's real attribute
+        container (the same mechanism SketchUp's own "dynamic component"
+        attributes use). Inverts ``legacy._read_attr_named`` field-for-
+        field; see that function's docstring for the full set of value
+        types this format supports - only ``str``, ``int`` (32-bit
+        signed), and ``float`` are exposed by this writer for now.
+
+        Unlike every other class this project declares, ``CAttributeNamed``
+        is already pre-declared in the scaffold's own prefix (ground
+        truth: found by attaching a real attribute dictionary to a face
+        via the SDK's own attribute-dictionary API and reading back where
+        its class-ref pointed) - so this always writes a short class-ref
+        to ``_ATTRIBUTE_NAMED_SLOT``, never a fresh ``0xFFFF`` declaration.
+        """
+        self.buf += struct.pack("<H", 0x8000 | _ATTRIBUTE_NAMED_SLOT)
+        self._alloc()
+        self.buf += bytes(3)  # this dict's own preamble: null attrs (2) + mask=0 (1), pid=0
+        self.buf += _u32(0)  # ground truth: read and discarded by legacy.py's reader too
+        self._write_str(dict_name)
+        for key, value in entries.items():
+            self._write_str(key)
+            if isinstance(value, str):
+                self.buf.append(_ATTR_TYPE_STRING)
+                self._write_str(value)
+            elif isinstance(value, bool):
+                raise SkpWriteError(
+                    f"attribute {key!r}: bool is not a supported value type - "
+                    "use an int (0/1) if you need a boolean-like flag"
+                )
+            elif isinstance(value, int):
+                if not (-(2**31) <= value < 2**31):
+                    raise SkpWriteError(f"attribute {key!r}: int value {value} out of signed 32-bit range")
+                self.buf.append(_ATTR_TYPE_INT32)
+                self.buf += struct.pack("<i", value)
+            elif isinstance(value, float):
+                self.buf.append(_ATTR_TYPE_DOUBLE)
+                self.buf += _f64(value)
+            else:
+                raise SkpWriteError(
+                    f"attribute {key!r}: unsupported value type {type(value).__name__} "
+                    "(only str, int, and float are supported for now)"
+                )
+        self._write_str("")  # empty-key terminator
+        self.buf += _u32(0)  # ground truth: read and discarded by legacy.py's reader too
 
     def write_face_texture_coords(
         self,
@@ -625,16 +704,26 @@ class _ArchiveWriter:
         self.buf += _CAMERA_TEMPLATE
         self._null()  # no thumbnail image
 
-    def write_definition_header(self) -> Tuple[int, int]:
+    def write_definition_header(
+        self, attribute_dicts: Sequence[Tuple[str, Dict[str, object]]] = (),
+    ) -> Tuple[int, int]:
         """Begin a ``CComponentDefinition`` record - everything up to (not
         including) its internal entity list. Returns ``(definition_slot,
         count_patch_pos)``: the caller writes the definition's geometry via
         further `write_face` calls (appended directly to ``self.buf``),
         then must patch a u32 entity count into ``self.buf`` at
         ``count_patch_pos`` and call `write_definition_tail` to close it out.
+
+        ``attribute_dicts``, if given, is a sequence of ``(dict_name,
+        entries)`` pairs - custom key/value metadata attached to this
+        definition (the same mechanism SketchUp's own "dynamic component"
+        attributes use).
         """
         slot = self._new_of_known_class("CComponentDefinition", schema=_DEFINITION_SCHEMA)
-        self._preamble(real_attrs=True)  # ground truth: a real pid and a real (empty) attr container
+        if attribute_dicts:
+            self._preamble_with_real_attrs(attribute_dicts=attribute_dicts)
+        else:
+            self._preamble(real_attrs=True)  # ground truth: a real pid and a real (empty) attr container
         self.buf += _DEFINITION_BASE_BLOCK
         self.buf += _u32(1)  # nlayers: always 1, an embedded copy of Layer0
         embedded_layer_slot = self.write_layer("Layer0", with_pids=False)
@@ -678,9 +767,13 @@ class _ArchiveWriter:
         matrix3x3: Optional[Tuple[float, float, float, float, float, float, float, float, float]],
         mat: int,
         layer: int,
+        attribute_dicts: Sequence[Tuple[str, Dict[str, object]]] = (),
     ) -> None:
         self._new_of_known_class(class_name, schema=schema)
-        self._preamble(real_attrs=real_attrs)
+        if real_attrs and attribute_dicts:
+            self._preamble_with_real_attrs(attribute_dicts=attribute_dicts)
+        else:
+            self._preamble(real_attrs=real_attrs)
         self._drawbase(mat=mat, layer=layer)
         self._backref(definition_slot)
         if matrix3x3 is None:
@@ -698,6 +791,7 @@ class _ArchiveWriter:
         matrix3x3: Optional[Tuple[float, float, float, float, float, float, float, float, float]] = None,
         instance_material: int = 0,
         instance_layer: int = 0,
+        attribute_dicts: Sequence[Tuple[str, Dict[str, object]]] = (),
     ) -> int:
         """Write one ``CComponentInstance`` placing a copy of
         ``definition_slot`` (from `write_definition_header`) and return how
@@ -712,11 +806,19 @@ class _ArchiveWriter:
         translation (3 f64s) + a trailing 1.0 - the 4th row of a standard
         4x4 affine matrix, always [0, 0, 0, 1], is omitted entirely rather
         than stored.
+
+        ``attribute_dicts``, if given, is a sequence of ``(dict_name,
+        entries)`` pairs - custom key/value metadata attached to this
+        instance (the same mechanism SketchUp's own "dynamic component"
+        attributes use). Not available on `write_group` - ground truth
+        shows a group's attribute pointer is always null, unlike a
+        component instance's real (if often empty) container.
         """
         # ground truth: instances also carry a real (empty) attr container, unlike CGroup
         self._write_instance_like(
             "CComponentInstance", _INSTANCE_SCHEMA, True,
             definition_slot, name, translation, matrix3x3, instance_material, instance_layer,
+            attribute_dicts,
         )
         return 1
 
@@ -760,6 +862,7 @@ class _ArchiveWriter:
         hidden_edges: bool = False,
         front_uv: Optional[Sequence[Tuple[Point3, Tuple[float, float]]]] = None,
         back_uv: Optional[Sequence[Tuple[Point3, Tuple[float, float]]]] = None,
+        attribute_dicts: Sequence[Tuple[str, Dict[str, object]]] = (),
     ) -> int:
         """Write one planar face and return how many new root-entity-list
         slots it consumed (edges newly declared, plus the face itself) -
@@ -792,6 +895,10 @@ class _ArchiveWriter:
         perspective). Works on a face of any orientation, not just
         axis-aligned ones. See :meth:`SkpBuilder.add_face` for a worked
         example.
+
+        ``attribute_dicts``, if given, is a sequence of ``(dict_name,
+        entries)`` pairs - custom key/value metadata attached to this
+        face (``entries`` values may be ``str``, ``int``, or ``float``).
         """
         n = len(points)
         point_slots = [vertex_slots.get(p) for p in points]
@@ -834,10 +941,10 @@ class _ArchiveWriter:
         nx, ny, nz, d = _plane_from_polygon(points)
 
         self._new_of_known_class("CFace", schema=3)
-        if front_uv is not None or back_uv is not None:
+        if front_uv is not None or back_uv is not None or attribute_dicts:
             front_matrix = _uv_matrix_for_face(points, front_uv, (nx, ny, nz)) if front_uv is not None else None
             back_matrix = _uv_matrix_for_face(points, back_uv, (nx, ny, nz)) if back_uv is not None else None
-            self._preamble_with_texture_coords(front_matrix, back_matrix)
+            self._preamble_with_real_attrs(front_matrix, back_matrix, attribute_dicts)
         else:
             self._preamble()
         self._drawbase(mat=face_material, layer=face_layer, hidden=hidden)
@@ -953,6 +1060,8 @@ class ComponentDefinitionBuilder:
         hidden_edges: bool = False,
         front_uv: Optional[Sequence[Tuple[Point3, Tuple[float, float]]]] = None,
         back_uv: Optional[Sequence[Tuple[Point3, Tuple[float, float]]]] = None,
+        attributes: Optional[Dict[str, object]] = None,
+        attribute_dict_name: str = "attributes",
     ) -> None:
         """Add one planar face to this definition - same signature and
         behavior as :meth:`SkpBuilder.add_face`, except vertices/edges are
@@ -962,11 +1071,12 @@ class ComponentDefinitionBuilder:
         points = [(float(p[0]), float(p[1]), float(p[2])) for p in points]
         if len(points) < 3:
             raise SkpWriteError("a face needs at least 3 points")
+        attribute_dicts = [(attribute_dict_name, attributes)] if attributes else []
         self._new_entity_count += self._skp._definition_writer.write_face(
             points, self._vertex_slots, self._edge_registry,
             material or 0, layer or 0, back_material or 0,
             hidden, soft_edges, smooth_edges, hidden_edges,
-            front_uv, back_uv,
+            front_uv, back_uv, attribute_dicts,
         )
 
     def add_instance(
@@ -977,6 +1087,8 @@ class ComponentDefinitionBuilder:
         matrix3x3: Optional[Tuple[float, float, float, float, float, float, float, float, float]] = None,
         material: Optional[int] = None,
         layer: Optional[int] = None,
+        attributes: Optional[Dict[str, object]] = None,
+        attribute_dict_name: str = "attributes",
     ) -> None:
         """Place one instance of another, already-closed component
         definition inside this one - the same nesting real SketchUp
@@ -1010,8 +1122,10 @@ class ComponentDefinitionBuilder:
             )
         if definition is self:
             raise SkpWriteError(f"component definition {self.name!r} cannot nest an instance of itself")
+        attribute_dicts = [(attribute_dict_name, attributes)] if attributes else []
         self._new_entity_count += self._skp._definition_writer.write_instance(
-            definition.slot, name or definition.name, translation, matrix3x3, material or 0, layer or 0
+            definition.slot, name or definition.name, translation, matrix3x3, material or 0, layer or 0,
+            attribute_dicts,
         )
 
     def add_group_instance(
@@ -1290,6 +1404,7 @@ class SkpBuilder:
     def _start_definition(
         self, name: str, caller: str,
         group_placement: Optional[Tuple[Tuple[float, float, float], Optional[Tuple[float, ...]], int, int]] = None,
+        attribute_dicts: Sequence[Tuple[str, Dict[str, object]]] = (),
     ) -> "ComponentDefinitionBuilder":
         if self._geometry_writer is not None:
             raise SkpWriteError(f"{caller} must be called before any add_face/add_instance calls")
@@ -1305,13 +1420,17 @@ class SkpBuilder:
             self._definition_writer = _ArchiveWriter(
                 next_slot=self._definition_writer_start, class_slot=self._post_layer_class_slot()
             )
-        slot, count_patch_pos = self._definition_writer.write_definition_header()
+        slot, count_patch_pos = self._definition_writer.write_definition_header(attribute_dicts)
         self._definition_count += 1
         comp = ComponentDefinitionBuilder(self, slot, name, count_patch_pos, group_placement)
         self._open_definition = comp
         return comp
 
-    def add_component_definition(self, name: str) -> "ComponentDefinitionBuilder":
+    def add_component_definition(
+        self, name: str,
+        attributes: Optional[Dict[str, object]] = None,
+        attribute_dict_name: str = "attributes",
+    ) -> "ComponentDefinitionBuilder":
         """Start a new reusable component definition. Use the returned
         object as a context manager, adding its geometry via `.add_face`
         inside the ``with`` block; once closed, pass it to `add_instance`
@@ -1325,8 +1444,14 @@ class SkpBuilder:
         builder itself - component definitions splice in after materials
         and layers, before root-level geometry, so their slot numbering
         depends on the final material and layer counts.
+
+        ``attributes``, if given, is custom key/value metadata (values
+        may be ``str``, ``int``, or ``float``) attached to the definition
+        itself, under a dictionary named ``attribute_dict_name`` - the
+        same mechanism SketchUp's own "dynamic component" attributes use.
         """
-        return self._start_definition(name, "add_component_definition")
+        attribute_dicts = [(attribute_dict_name, attributes)] if attributes else []
+        return self._start_definition(name, "add_component_definition", attribute_dicts=attribute_dicts)
 
     def add_group(
         self,
@@ -1372,6 +1497,8 @@ class SkpBuilder:
         matrix3x3: Optional[Tuple[float, float, float, float, float, float, float, float, float]] = None,
         material: Optional[int] = None,
         layer: Optional[int] = None,
+        attributes: Optional[Dict[str, object]] = None,
+        attribute_dict_name: str = "attributes",
     ) -> None:
         """Place one instance of ``definition`` (from
         `add_component_definition`, already closed) in the model.
@@ -1380,6 +1507,12 @@ class SkpBuilder:
         omitted); ``translation`` is applied after it, in inches.
         ``material``/``layer``, if given, are handles from `add_material`/
         `add_layer` applied to the instance itself (not its contents).
+
+        ``attributes``, if given, is custom key/value metadata (values
+        may be ``str``, ``int``, or ``float``) attached to this instance
+        specifically (as opposed to its definition), under a dictionary
+        named ``attribute_dict_name`` - the same mechanism SketchUp's own
+        "dynamic component" attributes use for per-instance overrides.
         """
         if definition._skp is not self:
             raise SkpWriteError(
@@ -1392,8 +1525,10 @@ class SkpBuilder:
                 "exit its `with` block before calling add_instance"
             )
         self._ensure_geometry_writer()
+        attribute_dicts = [(attribute_dict_name, attributes)] if attributes else []
         self._new_entity_count += self._geometry_writer.write_instance(
-            definition.slot, name or definition.name, translation, matrix3x3, material or 0, layer or 0
+            definition.slot, name or definition.name, translation, matrix3x3, material or 0, layer or 0,
+            attribute_dicts,
         )
         self._face_count += 1  # reuses the "at least one root entity" check in to_bytes
 
@@ -1444,6 +1579,8 @@ class SkpBuilder:
         hidden_edges: bool = False,
         front_uv: Optional[Sequence[Tuple[Point3, Tuple[float, float]]]] = None,
         back_uv: Optional[Sequence[Tuple[Point3, Tuple[float, float]]]] = None,
+        attributes: Optional[Dict[str, object]] = None,
+        attribute_dict_name: str = "attributes",
     ) -> None:
         """Add one planar face, defined by 3 or more coplanar points (in
         inches) forming a closed polygon in order - do not repeat the
@@ -1482,16 +1619,21 @@ class SkpBuilder:
         ...         ((0, 50, 0), (0.0, 1.0)),
         ...     ],
         ... )
+
+        ``attributes``, if given, is custom key/value metadata (values
+        may be ``str``, ``int``, or ``float``) attached to this face,
+        under a dictionary named ``attribute_dict_name``.
         """
         points = [(float(p[0]), float(p[1]), float(p[2])) for p in points]
         if len(points) < 3:
             raise SkpWriteError("a face needs at least 3 points")
         self._ensure_geometry_writer()
+        attribute_dicts = [(attribute_dict_name, attributes)] if attributes else []
         self._new_entity_count += self._geometry_writer.write_face(
             points, self._vertex_slots, self._edge_registry,
             material or 0, layer or 0, back_material or 0,
             hidden, soft_edges, smooth_edges, hidden_edges,
-            front_uv, back_uv,
+            front_uv, back_uv, attribute_dicts,
         )
         self._face_count += 1
 
