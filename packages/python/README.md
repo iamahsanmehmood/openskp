@@ -48,9 +48,10 @@ cross-language picture.
 - **Structured observability** — opt-in progress reporting and
   location-carrying parse errors for debugging malformed or unusual files.
 - **Write support (early-stage, Python-only)** — build new legacy-format
-  `.skp` files from scratch: geometry, materials (solid + PNG/JPEG
-  textures), layers, component definitions with multiple instances, and
-  groups. No SDK involved. See [Writing](#writing-early-stage) below.
+  `.skp` files from scratch: geometry (including true, editable circular
+  faces), materials (solid + PNG/JPEG textures), layers, component
+  definitions with multiple instances, and groups. No SDK involved. See
+  [Writing](#writing-early-stage) below.
 
 ## Installation
 
@@ -126,9 +127,11 @@ early-stage capability: geometry, materials (solid + PNG/JPEG textures),
 layers, component definitions with multiple instances, groups, nested
 definitions and nested group instances (an assembly containing instances
 or groups of its own sub-parts, to any depth), explicit per-side texture
-positioning (on a face of any orientation), and custom key/value
+positioning (on a face of any orientation), custom key/value
 attribute dictionaries on definitions/instances/faces (the same
-mechanism SketchUp's own "dynamic component" attributes use) are all
+mechanism SketchUp's own "dynamic component" attributes use), and
+circular faces (genuine, editable-by-radius arc/circle entities, not
+disconnected straight edges that merely trace that shape) are all
 supported. See [`openskp/create.py`](src/openskp/create.py) for the full
 scope notes.
 
@@ -167,6 +170,9 @@ builder.add_face(
     [(0, 0, 0), (200, 0, 0), (200, 150, 0), (0, 150, 0)],
     material=red, layer=roof_layer,
 )
+
+# A true, editable circular face - not disconnected straight edges
+builder.add_circle((100, 75, 0), normal=(0, 0, 1), radius=30, num_segments=24)
 
 builder.save("output.skp")
 ```
