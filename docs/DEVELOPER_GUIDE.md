@@ -587,13 +587,49 @@ tests' `SUCurveType_ArcCurve`), with the correct edge count.
 
 Explicitly out of scope for this first pass: declaring a group's
 geometry inline nested inside another definition (as opposed to placing
-an already-built one via `add_group_instance`), attributes on groups,
-and editing an existing arbitrary `.skp` file (a separately harder
-problem — real SketchUp re-serializes the whole document on save rather
-than appending to it — not attempted here). See
-[`openskp/create.py`](../packages/python/src/openskp/create.py) for the
-full, current scope notes, and the [Python package README](../packages/python/README.md#writing-early-stage)
+an already-built one via `add_group_instance`), and attributes on
+groups. See [`openskp/create.py`](../packages/python/src/openskp/create.py)
+for the full, current scope notes, and the [Python package README](../packages/python/README.md#writing-early-stage)
 for a longer worked example.
+
+### Editing an existing file
+
+`openskp.create` only ever builds a brand-new file from its own blank
+scaffold - real SketchUp never patches a file in place either (it fully
+re-serializes the whole document on every save), so there's no stable
+byte region to append to for an arbitrary existing file the way there is
+for that blank scaffold. `openskp.open_existing()` takes the other
+viable approach: fully parse the existing file with this project's own
+reader, then replay everything it understood - materials, layers, every
+component definition, all root-level geometry and instances - back
+through the writer's own API, producing a brand-new file with equivalent
+content that more geometry can still be added to before saving:
+
+```python
+from openskp import open_existing
+
+builder, warnings = open_existing("building.skp")
+for w in warnings:
+    print("not fully reproduced:", w)
+
+builder.add_circle((0, 0, 100), (0, 0, 1), radius=50)
+builder.save("building_edited.skp")
+```
+
+Only a legacy-format (SketchUp 2013-2020) source file is accepted, for
+the same reason `openskp.create` only ever writes that format. The
+returned `warnings` list is the honest account of what couldn't be
+faithfully reproduced for that specific file - a face with more than one
+loop (a hole), per-edge flags collapsed to a per-face approximation, a
+projected/distorted texture falling back to the default projection, a
+material's texture scale or colorized tint, an instance's hidden flag, a
+layer's color, section planes/text/dimensions (no writer support at
+all), and an original circle/arc's curve grouping (this project's reader
+doesn't preserve it, so it round-trips as a plain straight-edged face) -
+see [`openskp/edit.py`](../packages/python/src/openskp/edit.py)'s own
+module docstring for the complete, itemized list and the reasoning
+behind each one. Round-trip-validated against real, non-writer-authored
+architectural models, not just files this project's own writer produced.
 
 ## The web viewer
 
