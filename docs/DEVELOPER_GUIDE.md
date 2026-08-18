@@ -514,6 +514,17 @@ import math
 builder.add_instance(wheel, translation=(0, 0, 0), rotation=((0, 0, 1), math.radians(90)))
 ```
 
+`add_instance`/`add_group`/`add_group_instance` also all take
+`hidden=True` to hide that specific placement (its contents still exist
+in the file, just not shown by default), and `add_layer` takes
+`color=(r, g, b)`/`hidden=True` for the layer's own color and default
+visibility:
+
+```python
+roof = builder.add_layer("Roof", color=(180, 60, 40), hidden=True)
+builder.add_instance(chair, hidden=True)
+```
+
 A face's texture can also be explicitly positioned (scaled, rotated,
 sheared, offset - independently per side) instead of the default planar
 projection, given 3 world-point/UV correspondences - on a face of any
@@ -658,10 +669,9 @@ returned `warnings` list is the honest account of what couldn't be
 faithfully reproduced for that specific file - per-edge flags collapsed
 to a per-face approximation, a projected/distorted texture falling back
 to the default projection, a material's texture scale or colorized tint,
-an instance's hidden flag, a layer's color, section planes/text/
-dimensions (no writer support at all), and an original circle/arc's
-curve grouping (this project's reader doesn't preserve it, so it
-round-trips as a plain straight-edged face) - see
+section planes/text/dimensions (no writer support at all), and an
+original circle/arc's curve grouping (this project's reader doesn't
+preserve it, so it round-trips as a plain straight-edged face) - see
 [`openskp/edit.py`](../packages/python/src/openskp/edit.py)'s own
 module docstring for the complete, itemized list and the reasoning
 behind each one. Round-trip-validated against real, non-writer-authored

@@ -150,7 +150,7 @@ builder = create()
 # Materials and layers
 red = builder.add_material("Red", (255, 0, 0))
 brick = builder.add_texture_material("Brick", "brick.png")
-roof_layer = builder.add_layer("Roof")
+roof_layer = builder.add_layer("Roof", color=(180, 60, 40))
 
 # All add_component_definition/add_group calls must come before any
 # add_instance/add_face call - placing anything locks in the file's
@@ -173,6 +173,8 @@ builder.add_instance(chair, translation=(0, 0, 0))
 # rotation=(axis, angle_radians) is a shortcut for a hand-derived matrix3x3
 import math
 builder.add_instance(chair, translation=(50, 0, 0), rotation=((0, 0, 1), math.radians(180)))
+# hidden=True hides this specific placement (its contents still exist)
+builder.add_instance(chair, translation=(100, 0, 0), hidden=True)
 
 # Root-level geometry
 builder.add_face(

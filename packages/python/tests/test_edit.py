@@ -82,6 +82,25 @@ class TestOpenExisting:
         inst = rebuilt.root.instances[0]
         assert (inst.matrix[9], inst.matrix[10], inst.matrix[11]) == pytest.approx((37.5, -12.25, 8.0))
 
+    def test_preserves_instance_hidden_and_layer_color(self, tmp_path):
+        builder = create()
+        roof = builder.add_layer("Roof", color=(150, 75, 30), hidden=True)
+        with builder.add_component_definition("Post") as post:
+            post.add_face([(0, 0, 0), (5, 0, 0), (5, 5, 0), (0, 5, 0)])
+        builder.add_instance(post, hidden=True, layer=roof)
+        src = tmp_path / "source.skp"
+        builder.save(str(src))
+
+        new_builder, warnings, definitions = edit.open_existing(str(src))
+        out = tmp_path / "rebuilt.skp"
+        out.write_bytes(new_builder.to_bytes())
+        rebuilt = SkpFile.open(str(out)).parse()
+
+        assert rebuilt.root.instances[0].hidden is True
+        roof_layer = next(layer for layer in rebuilt.layers if layer.name == "Roof")
+        assert (roof_layer.color_r, roof_layer.color_g, roof_layer.color_b) == (150, 75, 30)
+        assert roof_layer.hidden is True
+
     def test_nested_definition_dependency_order(self, tmp_path):
         # Car nests 2 instances of Wheel - Wheel must be fully built and
         # closed before Car opens (write order matters for this format).
