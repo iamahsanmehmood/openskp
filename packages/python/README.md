@@ -133,7 +133,10 @@ mechanism SketchUp's own "dynamic component" attributes use), and
 circular faces and partial arcs (genuine, editable-by-radius arc/circle
 entities, not disconnected straight edges that merely trace that shape),
 and freeform polyline curves (an arbitrary chain of edges grouped into
-one genuine `CCurve` entity) are all supported. See
+one genuine `CCurve` entity) are all supported. `openskp.open_existing()`
+can also load an *existing* legacy-format file and rebuild it as a new
+builder, so more geometry can be added to it before saving (see
+[Editing an existing file](#editing-an-existing-file) below). See
 [`openskp/create.py`](src/openskp/create.py) for the full scope notes.
 
 ```python
@@ -185,6 +188,32 @@ builder.add_polyline([(0, 0, 0), (10, 10, 0), (20, 0, 0), (30, 10, 0)])
 builder.save("output.skp")
 ```
 
+### Editing an existing file
+
+`create()` only ever starts from a blank scaffold. To load an *existing*
+legacy-format `.skp` file and add to it, use `open_existing()` instead —
+it fully parses the file with OpenSKP's own reader and replays
+everything it understood (materials, layers, every component definition,
+all root-level geometry/instances) back through the writer's own API,
+producing a brand-new file with equivalent content:
+
+```python
+from openskp import open_existing
+
+builder, warnings = open_existing("building.skp")
+for w in warnings:
+    print("not fully reproduced:", w)
+
+builder.add_circle((0, 0, 100), (0, 0, 1), radius=50)
+builder.save("building_edited.skp")
+```
+
+`warnings` lists anything the source file had that couldn't be
+faithfully reproduced (a face with a hole, a projected texture, a
+material's texture scale, and several others) — see
+[`openskp/edit.py`](src/openskp/edit.py) for the complete, itemized
+scope.
+
 ## Package Structure
 
 | Module | Purpose |
@@ -199,6 +228,7 @@ builder.save("output.skp")
 | `openskp.transforms` | 3D matrix transforms and coordinate conversion |
 | `openskp.export` | GLB, OBJ/MTL, STL, PLY, DXF, IFC4, and JSON exporters |
 | `openskp.create` | Writer — build new `.skp` files from scratch (early-stage) |
+| `openskp.edit` | Load an existing legacy `.skp` file and rebuild it as a new writer (early-stage) |
 
 ## Requirements
 

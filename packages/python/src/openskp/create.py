@@ -51,11 +51,15 @@ are involved, and how.
   looking at the origin from the (1, -1, 1) octant) rather than the
   blank scaffold's own arbitrary default camera - see
   ``_ISO_CAMERA_PREFIX_PATCH`` below. Not configurable yet.
-* Editing an *existing* arbitrary ``.skp`` file is a separate, harder
-  problem this module does not attempt: real SketchUp does not simply
-  append to a file on save, it re-serializes the whole document, so there
-  is no stable "original bytes + appended bytes" structure to target for
-  an arbitrary input file the way there is for the blank scaffold below.
+* This module itself only ever builds a brand-new file from its own
+  blank scaffold - it has no notion of an existing input file at all
+  (real SketchUp does not simply append to a file on save, it
+  re-serializes the whole document, so there is no stable "original
+  bytes + appended bytes" structure to target the way there is for the
+  blank scaffold below). :mod:`openskp.edit` builds on top of this
+  module and :mod:`openskp.legacy` to load an *existing* legacy file by
+  fully parsing it and replaying its content back through this module's
+  own API - see that module's docstring for the exact scope and gaps.
 
 **The blank scaffold, and why it's there.** Every legacy ``.skp`` file
 carries a header/material-manager/style-and-font-manager region this
@@ -593,6 +597,34 @@ class _ArchiveWriter:
             pid = self._alloc_pid()
         self.buf += self._encode_pid(pid)
 
+    def _validate_attribute_entries(self, entries: Dict[str, object]) -> None:
+        """Raise ``SkpWriteError`` for the first unsupported key/value in
+        ``entries``, without writing anything - shares
+        `write_attribute_dict`'s own exact validation rules so a caller
+        can check every attribute dict a multi-part write will need
+        BEFORE that write starts mutating ``self.buf`` (and any shared
+        vertex/edge-sharing dicts a caller passes in), see `write_face`'s
+        own upfront-validation comment for why that ordering matters.
+        """
+        for key, value in entries.items():
+            if isinstance(value, str):
+                continue
+            if isinstance(value, bool):
+                raise SkpWriteError(
+                    f"attribute {key!r}: bool is not a supported value type - "
+                    "use an int (0/1) if you need a boolean-like flag"
+                )
+            if isinstance(value, int):
+                if not (-(2**31) <= value < 2**31):
+                    raise SkpWriteError(f"attribute {key!r}: int value {value} out of signed 32-bit range")
+                continue
+            if isinstance(value, float):
+                continue
+            raise SkpWriteError(
+                f"attribute {key!r}: unsupported value type {type(value).__name__} "
+                "(only str, int, and float are supported for now)"
+            )
+
     def write_attribute_dict(self, dict_name: str, entries: Dict[str, object]) -> None:
         """Write one ``CAttributeNamed`` record - a named dictionary of
         custom key/value metadata attached to an entity's real attribute
@@ -613,30 +645,19 @@ class _ArchiveWriter:
         self._alloc()
         self.buf += bytes(3)  # this dict's own preamble: null attrs (2) + mask=0 (1), pid=0
         self.buf += _u32(0)  # ground truth: read and discarded by legacy.py's reader too
+        self._validate_attribute_entries(entries)
         self._write_str(dict_name)
         for key, value in entries.items():
             self._write_str(key)
             if isinstance(value, str):
                 self.buf.append(_ATTR_TYPE_STRING)
                 self._write_str(value)
-            elif isinstance(value, bool):
-                raise SkpWriteError(
-                    f"attribute {key!r}: bool is not a supported value type - "
-                    "use an int (0/1) if you need a boolean-like flag"
-                )
             elif isinstance(value, int):
-                if not (-(2**31) <= value < 2**31):
-                    raise SkpWriteError(f"attribute {key!r}: int value {value} out of signed 32-bit range")
                 self.buf.append(_ATTR_TYPE_INT32)
                 self.buf += struct.pack("<i", value)
-            elif isinstance(value, float):
+            else:
                 self.buf.append(_ATTR_TYPE_DOUBLE)
                 self.buf += _f64(value)
-            else:
-                raise SkpWriteError(
-                    f"attribute {key!r}: unsupported value type {type(value).__name__} "
-                    "(only str, int, and float are supported for now)"
-                )
         self._write_str("")  # empty-key terminator
         self.buf += _u32(0)  # ground truth: read and discarded by legacy.py's reader too
 
@@ -804,12 +825,18 @@ class _ArchiveWriter:
         self.buf += _TEXTURE_H_SENTINEL
         self._write_str(texture_path)
         # avg color (RGBA + pad + RGBA repeated, per legacy.py's _read_material
-        # comment) - neutral opaque white rather than a real image average,
-        # since this project doesn't depend on an image library to compute
-        # one. Ground truth confirms real SketchUp reads texture pixels
-        # directly for rendering; avg only feeds the material browser's
-        # thumbnail/tint preview.
-        self.buf += bytes([255, 255, 255, 255, 0, 255, 255, 255, 255])
+        # comment) - neutral near-opaque white rather than a real image
+        # average, since this project doesn't depend on an image library to
+        # compute one. Ground truth confirms real SketchUp reads texture
+        # pixels directly for rendering; avg only feeds the material
+        # browser's thumbnail/tint preview. Alpha is 254, not a fully-opaque
+        # 255: legacy.py's own reader treats alpha=255 here as one of its
+        # two "this material is colorized" signals (`avg[3] == 0xFF`,
+        # alongside the blob flag below) - a real SketchUp-authored
+        # colorized material's stored average apparently always has full
+        # alpha, but a PLAIN one's placeholder must not, or every plain
+        # texture this writer creates reads back as falsely colorized.
+        self.buf += bytes([255, 255, 255, 254, 0, 255, 255, 255, 254])
         self._write_str("")  # second name field - empty in ground truth
         self.buf += struct.pack("<I", 1) + struct.pack("<I", 0)  # blob (colorize-related, ground truth: 1, 0)
         self.buf += _f64(1.0)  # opacity
@@ -1206,17 +1233,29 @@ class _ArchiveWriter:
         slot instead of writing a null curve. An edge already shared
         with a previous face is left alone either way.
         """
+        # Validate everything that CAN fail (a degenerate UV correspondence,
+        # an unsupported attribute value) before writing a single byte or
+        # touching vertex_slots/edge_registry below - _write_edge_chain
+        # mutates both this writer's own buffer AND those caller-owned,
+        # shared-across-calls dicts as it goes, with no rollback if
+        # something later in this method raises; a caller that catches the
+        # exception and tries to keep building (e.g. skipping one bad face
+        # while replaying many) would otherwise be left with orphaned,
+        # uncounted edges silently corrupting the rest of the file - a real
+        # bug found via exactly that usage pattern (see openskp.edit).
+        nx, ny, nz, d = _plane_from_polygon(points)
+        front_matrix = _uv_matrix_for_face(points, front_uv, (nx, ny, nz)) if front_uv is not None else None
+        back_matrix = _uv_matrix_for_face(points, back_uv, (nx, ny, nz)) if back_uv is not None else None
+        for _, entries in attribute_dicts:
+            self._validate_attribute_entries(entries)
+
         edge_slots, edge_senses, new_entities = self._write_edge_chain(
             points, vertex_slots, edge_registry, True,
             hidden_edges, soft_edges, smooth_edges, curve_params,
         )
 
-        nx, ny, nz, d = _plane_from_polygon(points)
-
         self._new_of_known_class("CFace", schema=3)
         if front_uv is not None or back_uv is not None or attribute_dicts:
-            front_matrix = _uv_matrix_for_face(points, front_uv, (nx, ny, nz)) if front_uv is not None else None
-            back_matrix = _uv_matrix_for_face(points, back_uv, (nx, ny, nz)) if back_uv is not None else None
             self._preamble_with_real_attrs(front_matrix, back_matrix, attribute_dicts)
         else:
             self._preamble()

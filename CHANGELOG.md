@@ -78,6 +78,22 @@ for the full scope notes.
   module's own docstring — the writer logic itself (the entity encoding,
   the object-graph protocol, the tail-reference renumbering) is 100%
   independently reverse-engineered.
+- `openskp.open_existing()` (`openskp.edit` module) — load an *existing*
+  legacy-format `.skp` file and rebuild it as a new `SkpBuilder`, so more
+  geometry can be added before saving. Real SketchUp itself never patches
+  a file in place (it fully re-serializes on every save), so this works
+  by fully parsing the source with this project's own reader and
+  replaying everything it understood — materials, layers, every
+  component definition, all root-level geometry/instances — back through
+  the writer's own API, rather than touching the original bytes at all.
+  Round-trip-validated against real, non-writer-authored architectural
+  models (not just files this project's own writer produced), confirming
+  face/instance/definition counts and the real SDK's own acceptance of
+  the rebuilt file. Returns a list of warnings for anything the source
+  file had that couldn't be faithfully reproduced (a face with a hole, a
+  projected texture, a colorized material's tint, and several others —
+  see the module's own docstring for the complete, itemized list) rather
+  than silently dropping it.
 
 ### Fixed
 
@@ -85,6 +101,20 @@ for the full scope notes.
   definition was still open (its `with` block not yet exited) silently
   produced a corrupted file instead of raising — found while testing
   group nesting, unrelated to it otherwise. Now raises immediately.
+- `write_face` validated texture-positioning correspondences and
+  attribute values only partway through writing a face's bytes - a
+  caller that caught the resulting `SkpWriteError` and kept building
+  (exactly what `open_existing()`'s replay does when skipping one
+  unsupported face) was left with orphaned, uncounted edges silently
+  corrupting everything written afterward, with no error surfaced until
+  the file failed to fully parse. Both checks now run before any bytes
+  are written.
+- `write_textured_material`'s placeholder average-color always had a
+  fully-opaque alpha byte, which `legacy.py`'s reader treats as one of
+  its two signals that a material is a colorized (tinted) variant - every
+  plain (non-colorized) texture this writer created was silently
+  misreported as colorized when read back. Found via `open_existing()`
+  round-tripping the writer's own output.
 
 ### Validation
 
