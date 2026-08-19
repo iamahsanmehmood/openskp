@@ -496,13 +496,35 @@ def _f64(v: float) -> bytes:
     return struct.pack("<d", v)
 
 
-def _shift_ref(buf: bytearray, pos: int, shift: int) -> None:
+def _shift_ref(buf: bytearray, pos: int, shift: int) -> int:
     """Renumber the u16 archive slot-reference at ``pos`` by ``shift``,
-    preserving the 0x8000 class-ref tag bit if the reference carries one."""
+    preserving the 0x8000 class-ref tag bit if the reference carries one.
+
+    Widens to the 6-byte escape form (same encoding `_backref`/
+    `_new_of_known_class` use, and the same `< 0x7FFF` boundary - see
+    their comments) if the shifted slot would land at or past 0x7FFF.
+    The scaffold's own references always start small enough to fit in 2
+    bytes on their own (it's a blank document), but a large enough shift
+    - a big model's total material/layer/definition/geometry slot count -
+    can push one past that boundary; masking it back into 15 bits instead
+    of widening would silently renumber it to the wrong slot entirely,
+    corrupting whatever it points to.
+
+    Returns the number of bytes the field grew by (0 or 4), so a caller
+    patching several positions in the same buffer can shift every
+    position after this one by the accumulated growth before acting on
+    it - the buffer's own length changes under it otherwise.
+    """
     u16 = struct.unpack_from("<H", buf, pos)[0]
     tag_bit = u16 & 0x8000
     slot = u16 & 0x7FFF
-    struct.pack_into("<H", buf, pos, tag_bit | ((slot + shift) & 0x7FFF))
+    new_slot = slot + shift
+    if new_slot < 0x7FFF:
+        struct.pack_into("<H", buf, pos, tag_bit | new_slot)
+        return 0
+    val = (0x80000000 | new_slot) if tag_bit else new_slot
+    buf[pos : pos + 2] = struct.pack("<H", 0x7FFF) + _u32(val)
+    return 4
 
 
 def _detect_image_subtype(image_bytes: bytes) -> int:
@@ -569,7 +591,14 @@ class _ArchiveWriter:
             self.class_slot[class_name] = self._alloc()
             return self._alloc()
         slot = self.class_slot[class_name]
-        if slot <= 0x7FFF:
+        # slot == 0x7FFF is deliberately excluded from the short form even
+        # though it numerically fits in 15 bits: 0x8000 | 0x7FFF == 0xFFFF,
+        # which _Archive.read_object (legacy.py) checks for "new class
+        # declaration" BEFORE it ever checks the class-ref high bit - a
+        # class landing at exactly that slot would be silently
+        # misinterpreted as the start of a bogus class record, desyncing
+        # every read after it. The escape form has no such collision.
+        if slot < 0x7FFF:
             self.buf += struct.pack("<H", 0x8000 | slot)
         else:
             self.buf += struct.pack("<H", 0x7FFF)
@@ -580,7 +609,14 @@ class _ArchiveWriter:
         self.buf += struct.pack("<H", 0)
 
     def _backref(self, slot: int) -> None:
-        if slot <= 0x7FFF:
+        # Same exclusion as _new_of_known_class, for the plain (no
+        # class-ref bit) case: a bare slot value of 0x7FFF is
+        # indistinguishable from the big-tag escape marker itself -
+        # read_object checks `tag == 0x7FFF` before it ever falls through
+        # to "plain object back-ref", so it would consume the next 4
+        # bytes as a bogus slot number instead. Confirmed both collisions
+        # empirically, not just from the protocol table.
+        if slot < 0x7FFF:
             self.buf += struct.pack("<H", slot)
         else:
             self.buf += struct.pack("<H", 0x7FFF)
@@ -2559,10 +2595,26 @@ class SkpBuilder:
 
         tail = bytearray(self._data[self._tail_pos :])
         total_tail_shift = material_shift + layer_shift + definition_shift + geometry_shift
-        for pos in _TAIL_REF_POSITIONS:
-            _shift_ref(tail, pos, total_tail_shift)
-        for pos, patch in _ISO_CAMERA_TAIL_PATCHES:
-            tail[pos : pos + len(patch)] = patch
+        # _TAIL_REF_POSITIONS and _ISO_CAMERA_TAIL_PATCHES's positions both
+        # index into this same tail buffer. A ref-shift that widens to the
+        # 6-byte escape form (see _shift_ref) grows the buffer at that
+        # point, pushing every later position forward - so every action is
+        # applied in ascending original-offset order, tracking that growth,
+        # rather than at its original hardcoded offset.
+        iso_patches = dict(_ISO_CAMERA_TAIL_PATCHES)
+        actions = sorted(
+            [(pos, "ref") for pos in _TAIL_REF_POSITIONS]
+            + [(pos, "patch") for pos in iso_patches],
+            key=lambda a: a[0],
+        )
+        growth = 0
+        for pos, kind in actions:
+            here = pos + growth
+            if kind == "ref":
+                growth += _shift_ref(tail, here, total_tail_shift)
+            else:
+                patch = iso_patches[pos]
+                tail[here : here + len(patch)] = patch
         out += tail
         return bytes(out)
 

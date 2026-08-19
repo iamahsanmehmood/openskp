@@ -258,10 +258,16 @@ def _is_class_ref(data: bytes, p: int, slot: int) -> bool:
     """True when the bytes at *p* are an MFC class-ref to class *slot*.
 
     Mirrors both encodings that ``_Archive.read_object`` decodes: the short
-    16-bit form ``0x8000|slot`` and, for slots past 0x7FFF, the big-tag
-    escape ``0x7FFF`` followed by a u32 of ``0x80000000|slot``.
+    16-bit form ``0x8000|slot`` and, for slots at or past 0x7FFF, the
+    big-tag escape ``0x7FFF`` followed by a u32 of ``0x80000000|slot``.
+    ``slot == 0x7FFF`` is deliberately excluded from the short form even
+    though it fits in 15 bits: ``0x8000 | 0x7FFF == 0xFFFF``, which
+    ``read_object`` checks for "new class declaration" before it ever
+    checks the class-ref high bit - a real encoder can never emit the
+    short form for exactly that slot, so this predicate must not expect
+    it either.
     """
-    if slot <= 0x7FFF:
+    if slot < 0x7FFF:
         return (p + 2 <= len(data)
                 and struct.unpack_from('<H', data, p)[0] == 0x8000 | slot)
     return (p + 6 <= len(data)

@@ -164,6 +164,29 @@ for the full scope notes.
   plain (non-colorized) texture this writer created was silently
   misreported as colorized when read back. Found via `open_existing()`
   round-tripping the writer's own output.
+- **A large model (total archive-slot count crossing 32,767) produced a
+  corrupted file real SketchUp rejected outright.** An archive slot of
+  exactly `0x7FFF` (32767) is unrepresentable in the format's short
+  2-byte reference form no matter which encoding would otherwise apply -
+  it's byte-identical to either the big-tag escape marker or the
+  new-class-declaration marker, both of which `legacy.py`'s reader
+  checks before it ever considers "this is just a normal reference" -
+  confirmed by tracing the actual read dispatch order, not just the
+  protocol table. `_backref`/`_new_of_known_class` used an off-by-one
+  `<= 0x7FFF` boundary that let slot 32767 through in the ambiguous short
+  form; `_shift_ref` (used to renumber a handful of fixed pointers in the
+  blank scaffold's tail region when new slots are inserted) additionally
+  had no escape-widening at all, silently wrapping any shifted reference
+  past that boundary back into the wrong slot. Reverting the fix
+  reproduces the exact reported symptom: real SketchUp's SDK rejects the
+  file outright (`SUModelCreateFromFile` error), and — more seriously —
+  this project's own reader doesn't error either, it silently drops
+  roughly 40% of a 5,000-face reproduction's faces with no error
+  surfaced at all. Found while reviewing a large-model (31,966-face)
+  export failure report from a downstream project (IngeTrazo) building a
+  `.skp` exporter on this writer; independently re-derived and verified
+  rather than taken on faith, including a before/after real-SketchUp-SDK
+  comparison on the exact failure shape.
 
 ### Validation
 
