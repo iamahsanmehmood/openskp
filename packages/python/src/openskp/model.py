@@ -321,8 +321,58 @@ class TextEntity:
 
 @dataclass
 class Dimension:
+    """A linear dimension (SketchUp's Dimension tool).
+
+    The legacy (pre-2021) reader recovers only ``text``/``hidden``. The VFF
+    reader (2021+) recovers the full geometry — see :attr:`SkpModel.dimensions`
+    for the model-level, world-space list.
+
+    Attributes:
+        text: The displayed text. Empty when the dimension shows its
+            auto-computed measured value (the caller formats ``|b − a|``).
+        hidden: Whether the dimension is hidden.
+        a: First measured point ``(x, y, z)`` in inches (world space), or
+            ``None`` when only the text was recovered.
+        b: Second measured point.
+        offset: Offset distance (inches) — how far the dimension line sits
+            from the ``a``–``b`` segment, along the in-plane perpendicular.
+        plane_x: The dimension plane's x-axis, or ``None``.
+        normal: The dimension plane's normal, or ``None``.
+    """
+
     text: str = ""
     hidden: bool = False
+    a: Optional[Tuple[float, float, float]] = None
+    b: Optional[Tuple[float, float, float]] = None
+    offset: float = 0.0
+    plane_x: Optional[Tuple[float, float, float]] = None
+    normal: Optional[Tuple[float, float, float]] = None
+
+
+@dataclass
+class Page:
+    """A saved scene (SketchUp's "Scenes" tabs; "pages" in the SDK).
+
+    Attributes:
+        name: Scene name as shown on its tab.
+        eye: Camera position ``(x, y, z)`` in inches, or ``None``.
+        target: Point the camera looks at, in inches.
+        up: Camera up vector.
+        fov: Field of view in degrees (SketchUp default 35).
+        parallel: ``True`` when the scene uses parallel (orthographic)
+            projection; ``fov`` still holds the stored perspective angle.
+        ortho_height: Visible height in inches when ``parallel``.
+        hidden_layers: Names of the layers this scene hides.
+    """
+
+    name: str = ""
+    eye: Optional[Tuple[float, float, float]] = None
+    target: Optional[Tuple[float, float, float]] = None
+    up: Optional[Tuple[float, float, float]] = None
+    fov: float = 35.0
+    parallel: bool = False
+    ortho_height: float = 0.0
+    hidden_layers: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -381,6 +431,11 @@ class SkpModel:
             are geometry drawn directly at the top level. Corresponds to
             TypeScript/.NET/Dart/C++'s ``root``/``Root``.
         layers: List of :class:`Layer` objects found in the file.
+        pages: List of :class:`Page` objects — the file's saved scenes
+            (VFF files; classic pre-2021 files import with none).
+        dimensions: Model-level linear dimensions with world-space
+            endpoints (VFF files). Legacy files surface text-only
+            dimensions per definition instead (``Definition.dimensions``).
         materials: List of :class:`Material` objects found in the file.
         materials_by_id: Mapping of TLV material ID → :class:`Material`,
             the join table for :attr:`Face.material_id`.  Several IDs may
@@ -403,6 +458,8 @@ class SkpModel:
     definitions: Dict[int, Definition] = field(default_factory=dict)
     root: Definition = field(default_factory=Definition)
     layers: List[Layer] = field(default_factory=list)
+    pages: List[Page] = field(default_factory=list)
+    dimensions: List[Dimension] = field(default_factory=list)
     materials: List[Material] = field(default_factory=list)
     materials_by_id: Dict[int, Material] = field(default_factory=dict)
     styles: List[Style] = field(default_factory=list)
@@ -563,6 +620,31 @@ class SkpFile:
             model.layers.append(
                 Layer(name=name, color_r=r, color_g=g, color_b=b, hidden=layer_hidden.get(name, False))
             )
+
+        # Convert pages (saved scenes) — hidden layer ids resolve to names;
+        # unknown ids (stale refs) are dropped.
+        for pg in parsed.get("pages") or []:
+            model.pages.append(Page(
+                name=pg.get("name", ""),
+                eye=pg.get("eye"),
+                target=pg.get("target"),
+                up=pg.get("up"),
+                fov=pg.get("fov", 35.0),
+                parallel=pg.get("parallel", False),
+                ortho_height=pg.get("ortho_height", 0.0),
+                hidden_layers=[layer_id_to_name[i]
+                               for i in pg.get("hidden_layer_ids", [])
+                               if i in layer_id_to_name],
+            ))
+
+        # Convert model-level linear dimensions (VFF; world space).
+        for dm in parsed.get("dimensions") or []:
+            model.dimensions.append(Dimension(
+                a=tuple(dm["a"]), b=tuple(dm["b"]),
+                offset=dm.get("offset", 0.0),
+                plane_x=dm.get("plane_x"), normal=dm.get("normal"),
+                text=dm.get("text", ""),
+            ))
 
         # Convert materials
         mat_for_data: Dict[int, Material] = {}   # id(raw dict) -> Material
