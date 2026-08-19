@@ -366,9 +366,49 @@ function createGlb(json: any, binaryBuffer: Uint8Array): Uint8Array {
  * @param scene - The result of buildScene()
  * @returns GLB file as Uint8Array
  */
-export function toGLB(scene: SkpScene): Uint8Array {
+/** Options for {@link toGLB}. */
+export interface GlbOptions {
+  /** Embed the scene's texture images in the GLB and point each textured
+   * material's `baseColorTexture` at them.
+   *
+   * Off by default because it is not free: a model with photographic
+   * textures can be several times larger with the images than without, and
+   * the geometry alone is what most callers are after. When off, textured
+   * materials fall back to their averaged base colour, which is what this
+   * exporter has always produced.
+   */
+  textures?: boolean;
+}
+
+/**
+ * Drops `baseColorTexture` from materials when the images are not being
+ * embedded. The reference would otherwise dangle - `textures[0]` would not
+ * exist - and a strict glTF reader rejects the file outright.
+ */
+function stripTextureRefs(materials: unknown[]): unknown[] {
+  let needsCopy = false;
+  for (const mat of materials) {
+    if ((mat as any)?.pbrMetallicRoughness?.baseColorTexture) {
+      needsCopy = true;
+      break;
+    }
+  }
+  if (!needsCopy) return materials;
+  return materials.map((mat) => {
+    const pbr = (mat as any)?.pbrMetallicRoughness;
+    if (!pbr?.baseColorTexture) return mat;
+    const restPbr = { ...pbr };
+    delete restPbr.baseColorTexture;
+    return { ...(mat as any), pbrMetallicRoughness: restPbr };
+  });
+}
+
+export function toGLB(scene: SkpScene, options?: GlbOptions): Uint8Array {
   const prims = scene.glbPrimitives || [];
   const gltfMaterials = scene.gltfMaterials || [];
+  // Off by default: embedding the images makes the export several times
+  // larger, and a caller who only wants geometry should not pay for it.
+  const sceneTextures = options?.textures ? scene.textures || [] : [];
 
   let totalBinaryLength = 0;
   for (const prim of prims) {
@@ -376,6 +416,14 @@ export function toGLB(scene: SkpScene): Uint8Array {
     totalBinaryLength += prim.normals.byteLength;
     totalBinaryLength += prim.uvs.byteLength;
     totalBinaryLength += prim.indices.byteLength;
+  }
+
+  // images go after the vertex data, each aligned to 4 bytes as glTF requires
+  const imagePlacements: { offset: number; length: number }[] = [];
+  for (const tex of sceneTextures) {
+    totalBinaryLength += (4 - (totalBinaryLength % 4)) % 4;
+    imagePlacements.push({ offset: totalBinaryLength, length: tex.data.length });
+    totalBinaryLength += tex.data.length;
   }
 
   const binaryBuffer = new Uint8Array(totalBinaryLength);
@@ -499,6 +547,20 @@ export function toGLB(scene: SkpScene): Uint8Array {
     });
   }
 
+  const gltfImages: any[] = [];
+  const gltfTextures: any[] = [];
+  for (let i = 0; i < sceneTextures.length; i++) {
+    const tex = sceneTextures[i];
+    const place = imagePlacements[i];
+    binaryBuffer.set(tex.data, place.offset);
+    const viewIdx = bufferViews.length;
+    bufferViews.push({ buffer: 0, byteOffset: place.offset, byteLength: place.length });
+    gltfImages.push({ bufferView: viewIdx, mimeType: tex.mimeType });
+    // one sampler for all of them: SketchUp tiles a material's texture across
+    // the face, which is REPEAT on both axes
+    gltfTextures.push({ sampler: 0, source: gltfImages.length - 1 });
+  }
+
   const gltfMeshes: any[] = [];
   if (gltfPrimitives.length > 0) {
     gltfMeshes.push({
@@ -523,7 +585,7 @@ export function toGLB(scene: SkpScene): Uint8Array {
       },
     ] : [],
     meshes: gltfMeshes,
-    materials: gltfMaterials,
+    materials: sceneTextures.length > 0 ? gltfMaterials : stripTextureRefs(gltfMaterials),
     buffers: [
       {
         byteLength: totalBinaryLength,
@@ -531,6 +593,13 @@ export function toGLB(scene: SkpScene): Uint8Array {
     ],
     bufferViews,
     accessors,
+    ...(gltfImages.length > 0
+      ? {
+          images: gltfImages,
+          textures: gltfTextures,
+          samplers: [{ wrapS: 10497, wrapT: 10497 }], // REPEAT / REPEAT
+        }
+      : {}),
   };
 
   return createGlb(gltfJson, binaryBuffer);

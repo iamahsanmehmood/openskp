@@ -234,8 +234,49 @@ export interface SkpScene {
   /** The actual triangulated mesh data, one entry per unique
    * (definition, resolved color) combination actually placed in the scene. */
   glbPrimitives: GlbPrimitive[];
-  /** glTF PBR material definitions referenced by `GlbPrimitive.materialIndex`. */
+  /** glTF PBR material definitions referenced by `GlbPrimitive.materialIndex`.
+   * A material whose source had a texture image carries a `baseColorTexture`
+   * whose `index` points into {@link SkpScene.textures}. */
   gltfMaterials: unknown[];
+  /** The distinct texture images the placed materials use, deduplicated by
+   * source bytes. Empty when nothing placed in the scene is textured.
+   *
+   * Kept out of `gltfMaterials` so a caller can decide whether to pay for
+   * them: {@link toGLB} embeds these only when asked, since a model with a
+   * handful of photographic textures is several times larger with them than
+   * without. */
+  textures: SceneTexture[];
+}
+
+/**
+ * Image type from the file's magic bytes. glTF only carries PNG and JPEG, so
+ * anything else (TIFF from older SketchUp, say) reports null and the material
+ * keeps its flat colour instead of embedding an image no viewer would read.
+ */
+export function sniffImageMime(data: Uint8Array): 'image/png' | 'image/jpeg' | null {
+  if (data.length >= 3 && data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff) {
+    return 'image/jpeg';
+  }
+  if (
+    data.length >= 8 &&
+    data[0] === 0x89 && data[1] === 0x50 && data[2] === 0x4e && data[3] === 0x47 &&
+    data[4] === 0x0d && data[5] === 0x0a && data[6] === 0x1a && data[7] === 0x0a
+  ) {
+    return 'image/png';
+  }
+  return null;
+}
+
+/** One texture image referenced by {@link SkpScene.gltfMaterials}. */
+export interface SceneTexture {
+  /** The image file's raw bytes, exactly as they were stored in the .skp. */
+  data: Uint8Array;
+  /** Sniffed from the bytes, not from `filename`: SketchUp records the
+   * authoring machine's path, whose extension can disagree with the content. */
+  mimeType: 'image/png' | 'image/jpeg';
+  /** The material's texture path as recorded in the file. Informational: it
+   * is usually an absolute path on the machine that authored the model. */
+  filename: string;
 }
 
 /** Raw parsed data, source-agnostic (populated by either the VFF/ZIP path
@@ -478,6 +519,28 @@ export function buildSceneFromParsed(parsed: ParsedRawData, options?: ParseOptio
     return { r: c[0], g: c[1], b: c[2] };
   };
 
+  // Textures are deduplicated by their bytes: the same image routinely backs
+  // several materials, and re-embedding it per material would multiply the
+  // export size for nothing.
+  const textures: SceneTexture[] = [];
+  const textureIndexByKey = new Map<string, number>();
+
+  function textureIndexFor(tex: Texture | null | undefined): number | null {
+    if (!tex || !tex.data || tex.data.length === 0) return null;
+    const mimeType = sniffImageMime(tex.data);
+    if (mimeType === null) return null; // a format glTF cannot carry
+    // length plus a short byte prefix is enough to tell real images apart
+    // without hashing megabytes on every face
+    const head = Array.from(tex.data.subarray(0, 16)).join(',');
+    const key = `${tex.data.length}:${head}`;
+    const hit = textureIndexByKey.get(key);
+    if (hit !== undefined) return hit;
+    const idx = textures.length;
+    textures.push({ data: tex.data, mimeType, filename: tex.filename });
+    textureIndexByKey.set(key, idx);
+    return idx;
+  }
+
   const colorToMaterialIndex = new Map<string, number>();
   const gltfMaterials: any[] = [];
 
@@ -488,19 +551,33 @@ export function buildSceneFromParsed(parsed: ParsedRawData, options?: ParseOptio
   // the stack overflows.
   const activeDefinitions = new Set<number | string>();
 
-  function getMaterialIndex(color: { r: number; g: number; b: number }, doubleSided: boolean) {
-    const key = `${color.r},${color.g},${color.b},${doubleSided}`;
+  function getMaterialIndex(
+    color: { r: number; g: number; b: number },
+    doubleSided: boolean,
+    textureIndex: number | null
+  ) {
+    // The texture is part of the identity, not just the colour: two different
+    // images can average to the same RGB (real files do this - two fabrics
+    // both resolving to 141,141,141), and keying on colour alone would merge
+    // them into one material and lose one of the images.
+    const key = `${color.r},${color.g},${color.b},${doubleSided},${textureIndex ?? -1}`;
     if (colorToMaterialIndex.has(key)) {
       return colorToMaterialIndex.get(key)!;
     }
     const idx = gltfMaterials.length;
-    const material: any = {
-      pbrMetallicRoughness: {
-        baseColorFactor: [color.r / 255, color.g / 255, color.b / 255, 1.0],
-        metallicFactor: 0.0,
-        roughnessFactor: 0.8,
-      },
+    const pbr: any = {
+      baseColorFactor: [color.r / 255, color.g / 255, color.b / 255, 1.0],
+      metallicFactor: 0.0,
+      roughnessFactor: 0.8,
     };
+    // baseColorFactor stays as the resolved colour even with a texture
+    // attached: glTF multiplies the two, and SketchUp's own colorized
+    // materials rely on exactly that tint. Overwriting it with white would
+    // also drop the colour every existing consumer of this exporter reads.
+    if (textureIndex !== null) {
+      pbr.baseColorTexture = { index: textureIndex };
+    }
+    const material: any = { pbrMetallicRoughness: pbr };
     if (doubleSided) material.doubleSided = true;
     gltfMaterials.push(material);
     colorToMaterialIndex.set(key, idx);
@@ -539,6 +616,7 @@ export function buildSceneFromParsed(parsed: ParsedRawData, options?: ParseOptio
         normalsAccum: number[][];
         localFaces: number[][];
         localVMap: Map<string, number>;
+        textureIndex: number | null;
       };
       const faceGroups = new Map<string, FaceGroup>();
 
@@ -556,12 +634,17 @@ export function buildSceneFromParsed(parsed: ParsedRawData, options?: ParseOptio
         xr: [number, number, number],
         yr: [number, number, number]
       ) => {
-        const colorKey = `${color.r},${color.g},${color.b},${doubleSided}`;
+        // faces are batched per emitted material, so the texture has to be
+        // part of the key too - otherwise two differently-textured faces with
+        // the same average colour end up in one primitive with one image
+        const texIndex = textureIndexFor(mat?.texture);
+        const colorKey = `${color.r},${color.g},${color.b},${doubleSided},${texIndex ?? -1}`;
         let group = faceGroups.get(colorKey);
         if (!group) {
           group = {
             color,
             doubleSided,
+            textureIndex: texIndex,
             localVerts: [],
             localUvs: [],
             normalsAccum: [],
@@ -736,7 +819,7 @@ export function buildSceneFromParsed(parsed: ParsedRawData, options?: ParseOptio
           indices[i * 3 + 2] = group.localFaces[i][2];
         }
 
-        const materialIndex = getMaterialIndex(group.color, group.doubleSided);
+        const materialIndex = getMaterialIndex(group.color, group.doubleSided, group.textureIndex);
 
         glbPrimitives.push({
           positions,
@@ -880,7 +963,7 @@ export function buildSceneFromParsed(parsed: ParsedRawData, options?: ParseOptio
       `${glbPrimitives.length} primitives (${((Date.now() - t0) / 1000).toFixed(2)}s)`
   );
 
-  return { sceneHierarchy, meshIndex, glbPrimitives, gltfMaterials };
+  return { sceneHierarchy, meshIndex, glbPrimitives, gltfMaterials, textures };
 }
 
 export function resolveMaterialFromMaps(
