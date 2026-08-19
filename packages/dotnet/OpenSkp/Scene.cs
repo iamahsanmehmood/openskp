@@ -122,7 +122,11 @@ namespace OpenSkp
         /// <summary>Face-plane basis vectors (xr, yr) for UV projection,
         /// from a face normal. See Face.UvTransform's docs for the recipe
         /// this implements.</summary>
-        private static ((double X, double Y, double Z) Xr, (double X, double Y, double Z) Yr) FaceUvBasis((double X, double Y, double Z) n)
+        /// <summary>Internal (not private) so Edit.cs can reuse this same
+        /// read-side UV basis/sampling when replaying a source face's
+        /// stored uv_transform into the 3-point correspondences
+        /// SkpBuilder.AddFace's front_uv/back_uv expects.</summary>
+        internal static ((double X, double Y, double Z) Xr, (double X, double Y, double Z) Yr) FaceUvBasis((double X, double Y, double Z) n)
         {
             double cx = -n.Y, cy = n.X;
             double clen = Math.Sqrt(cx * cx + cy * cy);
@@ -147,7 +151,7 @@ namespace OpenSkp
         /// <summary>UV of point p (inches, local/object space) on a face
         /// with the given plane basis, per-face uvTransform (or null for
         /// the default projection), and material tile size (inches).</summary>
-        private static (double U, double V) ComputeFaceUv(
+        internal static (double U, double V) ComputeFaceUv(
             (double X, double Y, double Z) p,
             (double X, double Y, double Z) xr,
             (double X, double Y, double Z) yr,
@@ -646,7 +650,10 @@ namespace OpenSkp
             };
         }
 
-        private static List<long> ReconstructLoopVertices(List<(long EdgeId, long Orientation)> loop, Dictionary<long, (long? V1, long? V2)> edges)
+        /// <summary>Internal (not private) so Edit.cs can reuse this same
+        /// loop-walk when replaying a source face's boundary/hole loops
+        /// into the point lists SkpBuilder.AddFace expects.</summary>
+        internal static List<long> ReconstructLoopVertices(List<(long EdgeId, long Orientation)> loop, Dictionary<long, (long? V1, long? V2)> edges)
         {
             var loopVerts = new List<long>();
             foreach (var (edgeId, orient) in loop)
