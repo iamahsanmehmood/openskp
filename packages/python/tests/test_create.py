@@ -2180,6 +2180,122 @@ class TestDefaultCamera:
         assert data[off : off + len(patch)] == patch
 
 
+class TestSlotBoundaryEncoding:
+    """A slot of exactly 0x7FFF (32767) is unrepresentable in the short
+    2-byte form no matter which of the two short encodings would
+    otherwise apply - it collides with a reserved marker value either
+    way, confirmed by tracing legacy.py's actual read dispatch order
+    (`_Archive.read_object`), not just from the protocol table:
+
+    * A plain back-ref of exactly 0x7FFF is byte-identical to the
+      big-tag escape marker itself - `read_object` checks
+      `tag == 0x7FFF` before it ever falls through to "plain back-ref",
+      so it would consume the next (unrelated) 4 bytes as a bogus slot.
+    * A class-ref of exactly 0x7FFF sets `0x8000 | 0x7FFF == 0xFFFF`,
+      which `read_object` checks for "new class declaration" before it
+      ever checks the class-ref high bit.
+
+    Both desync every read after that point - the file doesn't just fail
+    to open, our own reader silently drops entities without erroring
+    (see TestLargeModelSlotBoundary below for a real-scale reproduction
+    of exactly that silent data loss, before this fix)."""
+
+    def test_backref_below_boundary_uses_short_form(self):
+        writer = create_module._ArchiveWriter(next_slot=1, class_slot={})
+        writer._backref(0x7FFE)
+        assert bytes(writer.buf) == struct.pack("<H", 0x7FFE)
+
+    def test_backref_at_boundary_uses_escape_form(self):
+        writer = create_module._ArchiveWriter(next_slot=1, class_slot={})
+        writer._backref(0x7FFF)
+        assert bytes(writer.buf) == struct.pack("<H", 0x7FFF) + struct.pack("<I", 0x7FFF)
+        # Specifically NOT the collision byte pattern a `<=` boundary
+        # would have produced (identical to the escape marker alone).
+        assert bytes(writer.buf) != struct.pack("<H", 0x7FFF)
+
+    def test_new_of_known_class_below_boundary_uses_short_form(self):
+        writer = create_module._ArchiveWriter(next_slot=1, class_slot={"Foo": 0x7FFE})
+        writer._new_of_known_class("Foo")
+        assert bytes(writer.buf) == struct.pack("<H", 0x8000 | 0x7FFE)
+
+    def test_new_of_known_class_at_boundary_uses_escape_form(self):
+        writer = create_module._ArchiveWriter(next_slot=1, class_slot={"Foo": 0x7FFF})
+        writer._new_of_known_class("Foo")
+        assert bytes(writer.buf) == struct.pack("<H", 0x7FFF) + struct.pack("<I", 0x80000000 | 0x7FFF)
+        # Specifically NOT 0xFFFF - the "new class declaration" marker.
+        tag = struct.unpack_from("<H", writer.buf, 0)[0]
+        assert tag != 0xFFFF
+
+    def test_shift_ref_below_boundary_stays_short_and_reports_no_growth(self):
+        buf = bytearray(struct.pack("<H", 100))
+        grown = create_module._shift_ref(buf, 0, 0x7FFE - 100)  # -> exactly 0x7FFE
+        assert grown == 0
+        assert bytes(buf) == struct.pack("<H", 0x7FFE)
+
+    def test_shift_ref_crossing_boundary_widens_and_reports_growth(self):
+        buf = bytearray(struct.pack("<H", 100) + b"\x00\x00")  # trailing bytes to prove no overwrite
+        grown = create_module._shift_ref(buf, 0, 0x7FFF)  # 100 + 0x7FFF -> past the boundary
+        assert grown == 4
+        assert len(buf) == 8
+        tag = struct.unpack_from("<H", buf, 0)[0]
+        val = struct.unpack_from("<I", buf, 2)[0]
+        assert tag == 0x7FFF
+        assert val == 100 + 0x7FFF
+        assert bytes(buf[6:8]) == b"\x00\x00"  # original trailing bytes preserved, just pushed forward
+
+    def test_shift_ref_preserves_class_ref_tag_bit_when_widening(self):
+        buf = bytearray(struct.pack("<H", 0x8000 | 50))
+        create_module._shift_ref(buf, 0, 0x7FFF)
+        val = struct.unpack_from("<I", buf, 2)[0]
+        assert val == 0x80000000 | (50 + 0x7FFF)
+
+    def test_is_class_ref_below_boundary(self):
+        data = struct.pack("<H", 0x8000 | 0x7FFE)
+        assert legacy._is_class_ref(data, 0, 0x7FFE) is True
+
+    def test_is_class_ref_at_boundary_expects_escape_form(self):
+        # A real encoder can never emit the short form for slot 0x7FFF
+        # (same collision as _new_of_known_class above) - the short-form
+        # bytes at this position must NOT match, even though the naive
+        # `0x8000 | 0x7FFF` bit-math alone would suggest otherwise.
+        short_form = struct.pack("<H", 0x8000 | 0x7FFF)
+        assert legacy._is_class_ref(short_form, 0, 0x7FFF) is False
+        escape_form = struct.pack("<H", 0x7FFF) + struct.pack("<I", 0x80000000 | 0x7FFF)
+        assert legacy._is_class_ref(escape_form, 0, 0x7FFF) is True
+
+
+class TestLargeModelSlotBoundary:
+    """Real-scale reproduction: enough unique (non-shared-vertex)
+    triangles to push the file's total archive-slot count past 32,767,
+    the exact condition that corrupted large flattened-geometry exports
+    before this fix. Deliberately uses unique vertices per triangle
+    (~11 new slots each) rather than a shared grid, to land the crossing
+    at an unpredictable, non-hand-picked slot number - the same
+    worst-case shape a CAD import's flattened mesh produces."""
+
+    def _build(self, n=5000):
+        builder = create()
+        for i in range(n):
+            x = i * 10.0
+            builder.add_face([(x, 0.0, 0.0), (x + 1.0, 0.0, 0.0), (x, 1.0, 0.0)])
+        return builder
+
+    def test_next_slot_actually_crosses_the_boundary(self):
+        # Sanity check that this test is exercising the real condition,
+        # not accidentally staying under it.
+        builder = self._build()
+        assert builder._geometry_writer.next_slot > 0x7FFF
+
+    def test_round_trips_through_own_reader_with_exact_face_count(self, tmp_path):
+        builder = self._build()
+        out = tmp_path / "slot_boundary.skp"
+        builder.save(str(out))
+        from openskp import SkpFile
+
+        parsed = SkpFile.open(str(out)).parse()
+        assert len(parsed.root.faces) == 5000
+
+
 class TestScaffoldIntegrity:
     def test_scaffold_hash_matches_expected(self):
         # Guards against the scaffold file silently drifting (e.g. a bad
@@ -3428,6 +3544,41 @@ class TestRealSketchUpOracle:
             assert False in visibilities  # the hidden "Roof" layer
             assert True in visibilities  # the default, visible "Layer0"
 
+            dll.SUModelRelease(ctypes.byref(model))
+        finally:
+            dll.SUTerminate()
+
+    def test_model_crossing_the_slot_boundary_opens_cleanly(self, tmp_path):
+        # Before the _backref/_new_of_known_class/_shift_ref fix, a model
+        # whose total archive-slot count crossed 0x7FFF (32767) was
+        # rejected outright by the real SDK (SUModelCreateFromFile
+        # returned a non-zero error, matching the "Unexpected file
+        # format" a user sees in the SketchUp GUI) - confirmed by
+        # reverting the fix locally and observing error code 12 on this
+        # exact file shape, plus our own reader silently dropping ~40%
+        # of the faces with no error at all. 5000 unique (non-shared-
+        # vertex) triangles reliably crosses the boundary with margin.
+        import ctypes
+
+        builder = create()
+        for i in range(5000):
+            x = i * 10.0
+            builder.add_face([(x, 0.0, 0.0), (x + 1.0, 0.0, 0.0), (x, 1.0, 0.0)])
+        assert builder._geometry_writer.next_slot > 0x7FFF
+        out = tmp_path / "slot_boundary_oracle.skp"
+        builder.save(str(out))
+
+        dll = ctypes.CDLL(_SDK_DLL_PATH)
+        dll.SUInitialize()
+        try:
+            model = ctypes.c_void_p()
+            err = dll.SUModelCreateFromFile(ctypes.byref(model), str(out).encode())
+            assert err == 0, f"SketchUp SDK rejected the file (error {err})"
+            entities = ctypes.c_void_p()
+            dll.SUModelGetEntities(model, ctypes.byref(entities))
+            nfaces = ctypes.c_long()
+            dll.SUEntitiesGetNumFaces(entities, ctypes.byref(nfaces))
+            assert nfaces.value == 5000
             dll.SUModelRelease(ctypes.byref(model))
         finally:
             dll.SUTerminate()
