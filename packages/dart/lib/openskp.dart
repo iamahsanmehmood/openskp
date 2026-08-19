@@ -14,3 +14,16 @@ export 'src/dxf_export.dart' show toDxf, exportDxf, metresToInches;
 export 'src/ifc_export.dart' show toIfc, exportIfc, generateIfcGuid, classifyElement;
 export 'src/errors.dart' show SkpParseException;
 export 'src/observability.dart' show SkpLogLevel, ParseProgress, ParseOptions;
+export 'src/create.dart'
+    show
+        create,
+        SkpBuilder,
+        ComponentDefinitionBuilder,
+        GeometryHost,
+        SkpWriteError,
+        Point3,
+        Matrix3x3,
+        Rotation,
+        CurveParams,
+        rotationMatrix3x3;
+export 'src/edit.dart' show openExisting, OpenExistingResult;
