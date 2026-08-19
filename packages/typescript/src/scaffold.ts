@@ -72,7 +72,6 @@ export function loadScaffold(): Uint8Array {
   if (typeof atob === 'function') {
     binary = atob(SCAFFOLD_BASE64);
   } else {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
     binary = Buffer.from(SCAFFOLD_BASE64, 'base64').toString('binary');
   }
   const bytes = new Uint8Array(binary.length);

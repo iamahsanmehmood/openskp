@@ -131,6 +131,23 @@ export interface Instance {
    * specific component/group placement, not a layer/tag visibility
    * toggle). */
   hidden: boolean;
+  /** This instance's own explicit layer override, or `''` when it has
+   * none. An instance without an explicit override inherits its
+   * *placement's* layer, which can only be resolved once the scene graph
+   * is flattened - see `buildScene`'s `InstanceNode.layer` for that
+   * resolved value. Populated for legacy (pre-2021 MFC) files, where the
+   * layer id is read directly off the instance's drawbase record and
+   * resolved to a name here; always `''` for modern (VFF) files, which
+   * this reader doesn't currently resolve a per-instance layer id for. */
+  layer: string;
+  /** Arbitrary key/value dynamic attributes attached directly to this
+   * instance (SketchUp's Dynamic Components), or `{}`. Populated for
+   * legacy (pre-2021 MFC) files (see legacy.ts's
+   * extractLegacyDynamicProperties); always `{}` for modern (VFF) files,
+   * whose per-instance properties are only resolved lazily during scene
+   * baking (see buildScene's InstanceNode.properties) rather than at
+   * parse time. */
+  properties: Record<string, string>;
 }
 
 export interface Layer {
@@ -264,6 +281,7 @@ export function buildModelFromParsed(parsed: ParsedRawData): SkpModel {
     units,
     layerColors,
     layerHidden,
+    layerIdToName,
     materialIdToName,
     materialsMap,
     materialsByFolder,
@@ -296,7 +314,7 @@ export function buildModelFromParsed(parsed: ParsedRawData): SkpModel {
   const finalDefinitions = new Map<number, Definition>();
   let rootDefinition: Definition | null = null;
   for (const [id, d] of defsDict.entries()) {
-    const defn = buildDefinition(typeof id === 'number' ? id : 0, d);
+    const defn = buildDefinition(typeof id === 'number' ? id : 0, d, layerIdToName);
     if (typeof id === 'number') {
       finalDefinitions.set(id, defn);
     } else {
@@ -321,7 +339,7 @@ export function buildModelFromParsed(parsed: ParsedRawData): SkpModel {
   };
 }
 
-function buildDefinition(id: number, d: ParsedDefinition): Definition {
+function buildDefinition(id: number, d: ParsedDefinition, layerIdToName?: Map<number, string>): Definition {
   const vertices: Vertex[] = Array.from(d.builder.vertices.entries()).map(([vId, [x, y, z]]) => ({
     id: vId,
     x,
@@ -358,6 +376,8 @@ function buildDefinition(id: number, d: ParsedDefinition): Definition {
     matrix: inst.matrix,
     materialId: inst.materialId,
     hidden: inst.hidden ?? false,
+    layer: (inst.layerId != null ? layerIdToName?.get(inst.layerId) : undefined) ?? '',
+    properties: inst.properties ?? {},
   }));
 
   const sectionPlanes: SectionPlane[] = (d.builder.sectionPlanes || []).map((sp) => ({
@@ -408,8 +428,10 @@ function invertMatrix3x3(m: number[]): number[] {
 }
 
 /** Face-plane basis vectors (xr, yr) for UV projection, from a face
- * normal. See `Face.uvTransform`'s docs for the recipe this implements. */
-function faceUvBasis(n: [number, number, number]): { xr: [number, number, number]; yr: [number, number, number] } {
+ * normal. See `Face.uvTransform`'s docs for the recipe this implements.
+ * Exported for edit.ts's own UV replay, which needs the identical basis
+ * a source face's uvTransform was computed against. */
+export function faceUvBasis(n: [number, number, number]): { xr: [number, number, number]; yr: [number, number, number] } {
   const [nx, ny, nz] = n;
   const cx = -ny;
   const cy = nx;
@@ -428,8 +450,8 @@ function faceUvBasis(n: [number, number, number]): { xr: [number, number, number
 
 /** UV of point p (inches, local/object space) on a face with the given
  * plane basis, per-face uvTransform (or null for the default projection),
- * and material tile size (inches). */
-function computeFaceUv(
+ * and material tile size (inches). Exported for edit.ts's own UV replay. */
+export function computeFaceUv(
   p: [number, number, number],
   xr: [number, number, number],
   yr: [number, number, number],

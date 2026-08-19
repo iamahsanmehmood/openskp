@@ -37,6 +37,29 @@ export * from './stl';
 export * from './ply';
 export * from './dxf';
 export { toIFC, exportIFC, generateIFCGUID, classifyElement } from './ifc';
+export {
+  create,
+  SkpBuilder,
+  ComponentDefinitionBuilder,
+  SkpWriteError,
+} from './create';
+export type {
+  Point3,
+  Matrix3x3,
+  UvPair,
+  Rotation,
+  AttributeValue,
+  AttributeDict,
+  AddFaceOptions,
+  AddCircleOptions,
+  AddArcOptions,
+  AddPolylineOptions,
+  AddInstanceOptions,
+  AddGroupInstanceOptions,
+  AddComponentDefinitionOptions,
+  AddGroupOptions,
+} from './create';
+export { openExisting } from './edit';
 
 declare const process: any;
 declare const require: any;
