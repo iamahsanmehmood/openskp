@@ -24,10 +24,60 @@ export class LegacyParseError extends Error {}
 
 const STR_MARKER = new Uint8Array([0xff, 0xfe, 0xff]);
 
+/** Widest zero padding seen between the v20 filler's empty string and the
+ * count that follows it (9 and 13 bytes occur in real files; the ceiling
+ * leaves room without letting the probe wander into unrelated records). */
+const MAX_V20_FILLER_PAD = 29;
+
 function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
   return true;
+}
+
+/**
+ * Locates the count that follows a v20 filler record, given the offset the
+ * bad count was read from. Pure byte logic, exported for tests; see
+ * {@link retryCountAfterV20Filler} for how it is used.
+ *
+ * Returns the count and the offset just past it, or null when the bytes do
+ * not match the filler layout.
+ */
+export function findCountAfterV20Filler(
+  data: Uint8Array,
+  countPos: number,
+  limit: number
+): { count: number; next: number } | null {
+  // the marker sits within a handful of bytes of the bad read; the window is
+  // deliberately tight so a coincidental ff-fe-ff further out cannot match
+  let markerAt = -1;
+  for (let i = countPos; i < countPos + 12 && i + 4 <= data.length; i++) {
+    if (data[i] === 0xff && data[i + 1] === 0xfe && data[i + 2] === 0xff) {
+      markerAt = i;
+      break;
+    }
+  }
+  if (markerAt < 0) return null;
+  if (data[markerAt + 3] !== 0) return null; // non-empty string: real data
+
+  // The count sits past a run of zero padding whose length varies per call
+  // site (9 and 13 bytes both occur in real files), but always lands at
+  // `markerAt + 4 + pad` with `pad % 4 === 1`. Step through those candidate
+  // offsets and take the first plausible u32.
+  //
+  // Deliberately NOT "scan forward to the first non-zero byte": a count that
+  // is an exact multiple of 256 has a 0x00 low byte, which such a scan cannot
+  // tell apart from padding, so it would skip into the count and misalign
+  // every later read. Probing whole u32s at 4-byte strides never inspects an
+  // individual byte, so those counts round-trip correctly.
+  const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  for (let pad = 1; pad <= MAX_V20_FILLER_PAD; pad += 4) {
+    const at = markerAt + 4 + pad;
+    if (at + 4 > data.length) break;
+    const count = view.getUint32(at, true);
+    if (count > 0 && count <= limit) return { count, next: at + 4 };
+  }
+  return null;
 }
 
 /**
@@ -51,30 +101,11 @@ function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
  * `countPos` is the offset the count was read FROM (i.e. r.pos - 4).
  * Returns the corrected count, or null when this is not the v20 layout.
  */
-function retryCountAfterV20Filler(r: R, countPos: number): number | null {
-  const data = r.data;
-  // the marker sits within a handful of bytes of the bad read; the window is
-  // deliberately tight so a coincidental ff-fe-ff further out cannot match
-  let markerAt = -1;
-  for (let i = countPos; i < countPos + 12 && i + 4 <= data.length; i++) {
-    if (data[i] === 0xff && data[i + 1] === 0xfe && data[i + 2] === 0xff) {
-      markerAt = i;
-      break;
-    }
-  }
-  if (markerAt < 0) return null;
-  if (data[markerAt + 3] !== 0) return null; // non-empty string: real data
-
-  // Skip the zero padding that follows the empty string. The count is
-  // little-endian and non-zero, so the first non-zero byte after the padding
-  // IS its low byte — the run ends exactly on the count.
-  let at = markerAt + 4;
-  while (at < data.length && data[at] === 0) at++;
-  if (at + 4 > data.length) return null;
-  const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
-  const count = view.getUint32(at, true);
-  r.pos = at + 4;
-  return count;
+function retryCountAfterV20Filler(r: R, countPos: number, limit: number): number | null {
+  const hit = findCountAfterV20Filler(r.data, countPos, limit);
+  if (hit === null) return null;
+  r.pos = hit.next;
+  return hit.count;
 }
 
 /** Search for `needle` (exact bytes) within [start, end). Returns -1 if absent. */
@@ -794,7 +825,7 @@ function readDefinition(ar: Archive, r: R): any {
   // instead of the count. A genuinely empty definition reads zero with no
   // filler ahead, and retryCountAfterV20Filler leaves those alone.
   if (count > 5_000_000 || count === 0) {
-    const retry = retryCountAfterV20Filler(r, r.pos - 4);
+    const retry = retryCountAfterV20Filler(r, r.pos - 4, 5_000_000);
     if (retry !== null) count = retry;
   }
   if (count > 5_000_000) {
@@ -803,7 +834,7 @@ function readDefinition(ar: Archive, r: R): any {
   const ents = readEntityList(ar, r, count, 'def');
   let nrel = r.u32();
   if (nrel > 100000) {
-    const retry = retryCountAfterV20Filler(r, r.pos - 4);
+    const retry = retryCountAfterV20Filler(r, r.pos - 4, 100_000);
     if (retry !== null) nrel = retry;
   }
   if (nrel > 100000) {
@@ -1107,7 +1138,7 @@ function walkModel(data: Uint8Array, ver: number, start: number, matCount: numbe
   }
   let defCount = r.u32();
   if (defCount > 1_000_000) {
-    const retry = retryCountAfterV20Filler(r, r.pos - 4);
+    const retry = retryCountAfterV20Filler(r, r.pos - 4, 1_000_000);
     if (retry !== null) defCount = retry;
   }
   if (defCount > 1_000_000) {
@@ -1132,7 +1163,7 @@ function walkModel(data: Uint8Array, ver: number, start: number, matCount: numbe
   // root entity list
   let rootCount = r.u32();
   if (rootCount > 5_000_000) {
-    const retry = retryCountAfterV20Filler(r, r.pos - 4);
+    const retry = retryCountAfterV20Filler(r, r.pos - 4, 5_000_000);
     if (retry !== null) rootCount = retry;
   }
   if (rootCount > 5_000_000) {
