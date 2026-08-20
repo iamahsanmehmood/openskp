@@ -1195,6 +1195,14 @@ class Legacy {
     ];
   }
 
+  /// Public entry point for [_probeLayerAnchorBases] - exposed for
+  /// openskp.create's scaffold-splicing bootstrap, which needs the exact
+  /// same slot-base bootstrap this reader already performs for a
+  /// zero/one-material legacy prefix (see that method's own doc comment).
+  static List<int> probeLayerAnchorBases(
+          Uint8List data, int ver, int start, int matCount) =>
+      _probeLayerAnchorBases(data, ver, start, matCount);
+
   static ({
     Archive ar,
     List<(int, String?, Object?)> root,
