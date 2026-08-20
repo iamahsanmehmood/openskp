@@ -47,3 +47,26 @@ vertex slots), offset, font ref, pid bytes; leave the 7 doubles as a
 per-orientation hypothesis to be calibrated against SketchUp Web
 rendering. Validate every generated file by round-tripping through the
 (fixed) legacy reader before human inspection.
+
+## RESOLVED — SDK ground truth (2026-08-20)
+
+A MinGW-built helper (`mkdim`) drove the real SketchUpAPI.dll under
+Wine to CREATE dimensions in every orientation and save as SU2017
+(`SUModelSaveToFileWithVersion`, version enum: 6={13} … 10={17} 11={18}).
+The harvested records settle everything:
+
+- B37 / B42 are the CONNECTION blocks: `[flags][u32 TYPE][u32 4]
+  [point3d]` with TYPE **1 = free point stored inline** (object ref is
+  null) and **2 = anchored** (point zeroed, back-ref follows) — the same
+  1/2 enum as VFF connections.
+- The placement head for FREE dimensions is a constant SketchUp
+  default: seven doubles `(0,0,0, 1,1,0, 0)`, mode u32 = 0, trailing
+  u32 = 1. The offset lives at B82+62 and can be patched in.
+- The orientation-specific heads seen in human-drawn corpus files
+  (quiroz) apply to ANCHORED dimensions; decoding those fully would be
+  the follow-up if anchored writing is wanted (extend mkdim with
+  anchored creates).
+
+`add_dimension()` writes byte-exact SDK-shaped free dimensions;
+verified by SDK acceptance, reader round-trip, and rendering in real
+SketchUp (Web) across X/Y/Z/diagonal orientations.
