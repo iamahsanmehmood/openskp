@@ -8,7 +8,6 @@
 
 #include <cmath>
 #include <fstream>
-
 #include <gtest/gtest.h>
 
 #include <openskp/openskp.hpp>
@@ -57,7 +56,8 @@ TEST(Create, SingleFaceRoundTrips) {
     for (const auto& [id, v] : root.vertices) {
       if (v.x == p[0] && v.y == p[1] && v.z == p[2]) found = true;
     }
-    EXPECT_TRUE(found) << "expected vertex (" << p[0] << ", " << p[1] << ", " << p[2] << ") not found";
+    EXPECT_TRUE(found) << "expected vertex (" << p[0] << ", " << p[1] << ", " << p[2]
+                       << ") not found";
   }
 }
 
@@ -373,7 +373,8 @@ TEST(Create, HoleNeedsAtLeast3Points) {
   auto builder = create();
   FaceOptions opts;
   opts.holes = {{{1, 1, 0}, {2, 2, 0}}};
-  EXPECT_THROW(builder->add_face({{0, 0, 0}, {10, 0, 0}, {10, 10, 0}, {0, 10, 0}}, opts), SkpWriteError);
+  EXPECT_THROW(builder->add_face({{0, 0, 0}, {10, 0, 0}, {10, 10, 0}, {0, 10, 0}}, opts),
+               SkpWriteError);
 }
 
 TEST(Create, AutoTriangulateSplitsANonPlanarQuadIntoTwoFaces) {

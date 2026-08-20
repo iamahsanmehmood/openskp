@@ -15,7 +15,8 @@ namespace openskp {
 namespace {
 
 std::filesystem::path temp_skp(const char* stem) {
-  return std::filesystem::temp_directory_path() / (std::string("openskp_edit_test_") + stem + ".skp");
+  return std::filesystem::temp_directory_path() /
+         (std::string("openskp_edit_test_") + stem + ".skp");
 }
 
 TEST(Edit, RejectsAModernNonLegacyFile) {

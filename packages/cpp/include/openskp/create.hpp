@@ -324,6 +324,13 @@ class OPENSKP_EXPORT ComponentDefinitionBuilder {
   friend class SkpBuilder;
   struct Impl;
   explicit ComponentDefinitionBuilder(std::unique_ptr<Impl> impl);
+  /// Throws if this definition is already closed - shared by every add_*
+  /// method below. A member function (not a free function) specifically so
+  /// it can name the private nested `Impl` type in its own signature -
+  /// only SkpBuilder and ComponentDefinitionBuilder itself have that
+  /// access, and a free function doesn't inherit either friendship even
+  /// when every one of its callers already has it.
+  void check_writable(const std::string& action) const;
   std::unique_ptr<Impl> impl_;
 };
 

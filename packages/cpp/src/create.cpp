@@ -1412,18 +1412,16 @@ ComponentDefinitionBuilder::~ComponentDefinitionBuilder() = default;
 const std::string& ComponentDefinitionBuilder::name() const noexcept { return impl_->name; }
 bool ComponentDefinitionBuilder::closed() const noexcept { return impl_->closed; }
 
-namespace {
-void check_writable(const ComponentDefinitionBuilder::Impl& impl, const std::string& action) {
-  if (impl.closed) {
-    throw SkpWriteError("component definition '" + impl.name +
+void ComponentDefinitionBuilder::check_writable(const std::string& action) const {
+  if (impl_->closed) {
+    throw SkpWriteError("component definition '" + impl_->name +
                          "' has already closed (close() was already called) - cannot add more " + action +
                          " to it");
   }
 }
-}  // namespace
 
 void ComponentDefinitionBuilder::add_face(const std::vector<Point3>& points, const FaceOptions& options) {
-  check_writable(*impl_, "faces");
+  check_writable("faces");
   if (points.size() < 3) throw SkpWriteError("a face needs at least 3 points");
   detail::AttributeDictList dicts;
   if (!options.attributes.empty()) dicts.emplace_back(options.attribute_dict_name, options.attributes);
@@ -1436,27 +1434,27 @@ void ComponentDefinitionBuilder::add_face(const std::vector<Point3>& points, con
 
 void ComponentDefinitionBuilder::add_circle(Point3 center, Point3 normal, double radius,
                                              const CircleOptions& options) {
-  check_writable(*impl_, "faces");
+  check_writable("faces");
   impl_->new_entity_count +=
       detail::do_add_circle(*impl_->writer, impl_->vertex_slots, impl_->edge_registry, center, normal, radius, options);
 }
 
 void ComponentDefinitionBuilder::add_arc(Point3 center, Point3 normal, double radius, double start_angle,
                                           double end_angle, const ArcOptions& options) {
-  check_writable(*impl_, "arcs");
+  check_writable("arcs");
   impl_->new_entity_count += detail::do_add_arc(*impl_->writer, impl_->vertex_slots, impl_->edge_registry, center,
                                                  normal, radius, start_angle, end_angle, options);
 }
 
 void ComponentDefinitionBuilder::add_polyline(const std::vector<Point3>& points, const PolylineOptions& options) {
-  check_writable(*impl_, "polylines");
+  check_writable("polylines");
   impl_->new_entity_count +=
       detail::do_add_polyline(*impl_->writer, impl_->vertex_slots, impl_->edge_registry, points, options);
 }
 
 void ComponentDefinitionBuilder::add_instance(const ComponentDefinitionBuilder& definition,
                                                const InstanceOptions& options) {
-  check_writable(*impl_, "instances");
+  check_writable("instances");
   if (definition.impl_->skp != impl_->skp) {
     throw SkpWriteError("component definition '" + definition.name() +
                          "' belongs to a different builder (a different create() call) - "
@@ -1476,7 +1474,7 @@ void ComponentDefinitionBuilder::add_instance(const ComponentDefinitionBuilder& 
 
 void ComponentDefinitionBuilder::add_group_instance(const ComponentDefinitionBuilder& definition,
                                                       const GroupInstanceOptions& options) {
-  check_writable(*impl_, "groups");
+  check_writable("groups");
   if (definition.impl_->skp != impl_->skp) {
     throw SkpWriteError("component definition '" + definition.name() +
                          "' belongs to a different builder (a different create() call) - "
