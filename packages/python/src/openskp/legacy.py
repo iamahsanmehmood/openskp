@@ -824,9 +824,12 @@ def _read_dimlinear(ar, r):
     c1 = _entity_ref(ar, r)          # connection point 1 (may be null)
     r.raw(42)
     c2 = _entity_ref(ar, r)          # connection point 2 (may be null)
-    r.raw(82)
+    b82 = r.raw(82)
+    # the dimension-line offset (inches, signed) sits at a fixed position
+    # of the trailing block on every sample (v17 and v18 alike)
+    offset = struct.unpack_from('<d', b82, 62)[0]
     return {'k': 'dimension', 'db': db, 'text': text,
-            'connect': (c1, c2)}
+            'connect': (c1, c2), 'offset': offset}
 
 
 def _read_text(ar, r):
@@ -1350,10 +1353,22 @@ def _fill_builder(builder, ents, slots):
                 'hidden': bool(v.get('db', {}).get('hidden', False))
             })
         elif k == 'dimension':
-            builder.dimensions.append({
+            dim = {
                 'text': v.get('text', ''),
-                'hidden': bool(v.get('db', {}).get('hidden', False))
-            })
+                'hidden': bool(v.get('db', {}).get('hidden', False)),
+                'offset': v.get('offset', 0.0),
+            }
+            # resolve the anchored connection points to their vertices so
+            # model-level dimensions carry real endpoints (inches)
+            pts = []
+            for cs in v.get('connect', ()):
+                ent = slots.get(cs) if cs is not None else None
+                val = ent[2] if ent and ent[0] == 'obj' else None
+                pts.append(tuple(val['xyz']) if isinstance(val, dict)
+                           and 'xyz' in val else None)
+            if len(pts) == 2 and pts[0] and pts[1]:
+                dim['a'], dim['b'] = pts[0], pts[1]
+            builder.dimensions.append(dim)
 
 
 def _add_edge(builder, slot, e, slots):
@@ -1478,6 +1493,8 @@ def full_parse_legacy(skp_path: str) -> Dict[str, Any]:
 
     return {
         'version': version,
+        'dimensions': [d for d in root_builder.dimensions
+                       if d.get('a') and d.get('b')],
         'layer_colors': layer_colors,
         'layer_hidden': layer_hidden,
         'layer_id_to_name': layer_id_to_name,

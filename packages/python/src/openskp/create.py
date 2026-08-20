@@ -510,10 +510,6 @@ _DIM_B37 = bytes.fromhex("0101000000020000000400000000000000"
                          "0000000000000000000000000000000000000000")
 _DIM_B42 = bytes.fromhex("00000000000000000000020000000400000000000000"
                          "0000000000000000000000000000000000000000")
-_DIM_B82_HEAD = (bytes(2 + 16)
-                 + bytes.fromhex("000000000000f03f") + bytes(8)
-                 + bytes.fromhex("000000000000f0bf") + bytes(16)
-                 + bytes.fromhex("02000000"))
 
 
 def _f64(v: float) -> bytes:
@@ -2582,7 +2578,26 @@ class SkpBuilder:
         w._backref(s1)
         w.buf += _DIM_B42
         w._backref(s2)
-        w.buf += _DIM_B82_HEAD
+        # B82 head: u16 + measure direction U (3×f64) + offset direction V
+        # (3×f64) + spare f64 + placement mode u32. Calibrated against real
+        # SketchUp rendering: the vertical-dimension corpus template is
+        # U=(0,0,1), V=(0,-1,0); a template mismatched to the measured
+        # direction renders the dimension collapsed onto the edge, so U/V
+        # are computed per dimension.
+        dx = (k2[0] - k1[0], k2[1] - k1[1], k2[2] - k1[2])
+        ln = math.sqrt(dx[0] ** 2 + dx[1] ** 2 + dx[2] ** 2)
+        if ln < 1e-9:
+            raise SkpWriteError("add_dimension endpoints coincide")
+        u = (dx[0] / ln, dx[1] / ln, dx[2] / ln)
+        if abs(u[0]) < 1e-9 and abs(u[1]) < 1e-9:
+            v = (0.0, -1.0, 0.0)             # vertical: corpus convention
+        else:
+            hl = math.hypot(u[0], u[1])      # Z×U, normalized in plan
+            v = (-u[1] / hl, u[0] / hl, 0.0)
+        w.buf += bytes(2)
+        w.buf += _f64(u[0]) + _f64(u[1]) + _f64(u[2])
+        w.buf += _f64(v[0]) + _f64(v[1]) + _f64(v[2])
+        w.buf += _f64(0.0) + _u32(2)
         w.buf += _f64(float(offset)) + _f64(0.0) + _u32(3)
         self._new_entity_count += 1
         self._face_count += 1  # reuses the "at least one root entity" check in to_bytes
