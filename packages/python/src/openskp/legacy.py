@@ -858,6 +858,15 @@ def _read_text(ar, r):
                 and arrow <= 8 and blk[10] == 1):
             break                    # blk[6:10] is the ARROW TYPE (0-4 seen)
         p = idx + 3
+    # The variant middle carries the same free-connection block dimensions
+    # use: [u32 type=1][u32 4][point3d]. Type 1 stores the anchor inline
+    # (world inches); anchored texts (type 2) zero the point, so only
+    # type 1 is trusted.
+    point = None
+    mid = r.data[r.pos:idx]
+    off = mid.find(b'\x01\x00\x00\x00\x04\x00\x00\x00')
+    if off >= 0 and off + 32 <= len(mid):
+        point = struct.unpack_from('<3d', mid, off + 8)
     r.raw(idx - r.pos)
     text = r.utf16()
     r.raw(5)
@@ -875,7 +884,8 @@ def _read_text(ar, r):
             break                    # new-object tag — the next entity
         r.raw(6)
         attach.append(val)
-    return {'k': 'text', 'text': text, 'db': db, 'attach': attach}
+    return {'k': 'text', 'text': text, 'db': db, 'attach': attach,
+            'p': point}
 
 
 def _read_entity_list(ar, r, count, owner):
@@ -1360,7 +1370,8 @@ def _fill_builder(builder, ents, slots):
         elif k == 'text':
             builder.texts.append({
                 'text': v.get('text', ''),
-                'hidden': bool(v.get('db', {}).get('hidden', False))
+                'hidden': bool(v.get('db', {}).get('hidden', False)),
+                'p': v.get('p'),
             })
         elif k == 'dimension':
             dim = {

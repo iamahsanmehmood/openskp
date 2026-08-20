@@ -315,8 +315,19 @@ class SectionPlane:
 
 @dataclass
 class TextEntity:
+    """A leader-text label (SketchUp's Text tool).
+
+    Attributes:
+        text: The displayed string.
+        hidden: Whether the label is hidden.
+        point: Anchor point ``(x, y, z)`` in inches (world space for
+            model-root texts), or ``None`` when the record anchors to
+            geometry instead of a free point (not resolved yet).
+    """
+
     text: str = ""
     hidden: bool = False
+    point: Optional[Tuple[float, float, float]] = None
 
 
 @dataclass
@@ -602,6 +613,7 @@ class SkpFile:
                 defn.texts.append(TextEntity(
                     text=txt.get("text", ""),
                     hidden=txt.get("hidden", False),
+                    point=tuple(txt["p"]) if txt.get("p") else None,
                 ))
             # Populate dimensions
             for dim in getattr(builder, "dimensions", []):
