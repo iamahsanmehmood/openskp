@@ -18,4 +18,12 @@
   <ItemGroup>
     <None Include="README.md" Pack="true" PackagePath="\"/>
   </ItemGroup>
+
+  <ItemGroup>
+    <!-- Bundled blank-document scaffold Create.cs splices new geometry
+         into to build a new .skp file - see Create.cs's own header
+         comment for the full explanation and the disclosure of this
+         file's SDK-authored origin. -->
+    <EmbeddedResource Include="_scaffold\blank_v17.skp" LogicalName="OpenSkp._scaffold.blank_v17.skp" />
+  </ItemGroup>
 </Project>
