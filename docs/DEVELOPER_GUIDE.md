@@ -7,7 +7,8 @@ five ports currently differ from each other. If you just want the pitch
 and a five-line example, see the [README](../README.md). If you want the
 raw binary format itself, see [BINARY_FORMAT.md](BINARY_FORMAT.md). If you
 want the observability feature in full depth, see
-[OBSERVABILITY.md](OBSERVABILITY.md).
+[OBSERVABILITY.md](OBSERVABILITY.md). If you're pointing an AI coding
+agent at OpenSKP, see [AI_MODELING.md](AI_MODELING.md).
 
 Every claim in this guide — every number, every code sample, every "this
 works"/"this doesn't yet" — was checked against the actual current source

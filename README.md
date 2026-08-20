@@ -426,10 +426,12 @@ openskp/
 │
 ├── docs/                       # 📖 Documentation
 │   ├── DEVELOPER_GUIDE.md      # Start here — the detailed cross-language guide
+│   ├── AI_MODELING.md          # AI coding agents as a writer target, with real examples
 │   ├── OBSERVABILITY.md        # Progress reporting + structured errors, in depth
-│   ├── ARCHITECTURE.md         # Library architecture, memory model
+│   ├── ARCHITECTURE.md         # Library architecture, memory model, writer design
 │   ├── API_DESIGN.md           # Cross-platform API quick reference
-│   └── BINARY_FORMAT.md        # Reverse-engineered SKP format spec
+│   ├── BINARY_FORMAT.md        # Reverse-engineered SKP format spec
+│   └── assets/                 # Images referenced by the docs above
 │
 ├── research/                   # 🔬 Research notes
 │   └── METHODOLOGY.md          # Reverse engineering methodology
