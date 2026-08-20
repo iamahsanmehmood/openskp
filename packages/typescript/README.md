@@ -1,11 +1,11 @@
 # OpenSKP
 
-**The open-source SketchUp (`.skp`) file parser — TypeScript / JavaScript edition.**
+**The open-source SketchUp (`.skp`) file parser, writer, and converter — TypeScript / JavaScript edition.**
 
-Parse `.skp` files without SketchUp. No SDK. No license. Zero native
-dependencies — `fflate` handles ZIP extraction and a ported `earcut`
-handles triangulation, so it runs anywhere JavaScript does: Node.js or the
-browser.
+Parse, write, and convert `.skp` files without SketchUp. No SDK. No
+license. Zero native dependencies — `fflate` handles ZIP extraction and a
+ported `earcut` handles triangulation, so it runs anywhere JavaScript
+does: Node.js or the browser.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![npm](https://img.shields.io/npm/v/openskp.svg?logo=npm&logoColor=white)](https://www.npmjs.com/package/openskp)
@@ -42,7 +42,7 @@ SDK (see [Writing](#writing) below).
   call.
 - **Scene baking** — an opt-in `buildScene()` pass resolves the full placed
   scene graph to world-space, triangulated, export-ready geometry.
-- **Native multi-format export** — glTF (GLB), Wavefront OBJ/MTL, STL,
+- **Native multi-format conversion** — glTF (GLB), Wavefront OBJ/MTL, STL,
   PLY, AutoCAD DXF (3DFACE and Polyface Mesh), IFC4 (BIM/ISO 10303-21 STEP),
   and JSON — all written from scratch, no third-party CAD/BIM SDK involved.
   The DXF writer is verified against real desktop AutoCAD, not just lenient

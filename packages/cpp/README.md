@@ -1,8 +1,8 @@
 # OpenSKP
 
-**The open-source SketchUp (`.skp`) file parser — C++17 edition.**
+**The open-source SketchUp (`.skp`) file parser, writer, and converter — C++17 edition.**
 
-Parse `.skp` files without SketchUp. No SDK. No license. Just code.
+Parse, write, and convert `.skp` files without SketchUp. No SDK. No license. Just code.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![C++](https://img.shields.io/github/v/release/iamahsanmehmood/openskp?filter=cpp-v*&logo=cplusplus&logoColor=white&label=cpp)](https://github.com/iamahsanmehmood/openskp/releases?q=cpp-)
@@ -37,7 +37,7 @@ SDK (see [Writing](#writing) below).
   (2013–2020) containers, transparently, behind one `parse()` call.
 - **Scene baking** — an opt-in `build_scene()` pass resolves the full
   placed scene graph to world-space, triangulated, export-ready geometry.
-- **Native multi-format export** — glTF (GLB), Wavefront OBJ/MTL, STL,
+- **Native multi-format conversion** — glTF (GLB), Wavefront OBJ/MTL, STL,
   PLY, AutoCAD DXF (3DFACE and Polyface Mesh), IFC4 (BIM/ISO 10303-21
   STEP), and JSON — no third-party CAD/BIM SDK involved beyond the two
   privately-bundled dependencies below (miniz for ZIP, TinyGLTF for GLB).

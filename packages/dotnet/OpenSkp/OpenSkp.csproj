@@ -5,12 +5,12 @@
     <Nullable>enable</Nullable>
     <Version>1.1.0</Version>
     <Authors>Ahsan Mehmood</Authors>
-    <Description>Open-source SketchUp (.skp) binary file parser and writer - extract geometry, metadata, layers, and materials; create and edit .skp files; export to GLB, OBJ, STL, PLY, DXF, and IFC4.</Description>
+    <Description>Open-source SketchUp (.skp) binary file parser, writer, and converter - extract geometry, metadata, layers, and materials; create and edit .skp files; convert to GLB, OBJ, STL, PLY, DXF, and IFC4.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://openskp.com</PackageProjectUrl>
     <RepositoryUrl>https://github.com/iamahsanmehmood/openskp.git</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
-    <PackageTags>sketchup;skp;parser;3d;glb;gltf;cad;bim;dxf;autocad;ifc;obj;stl;ply</PackageTags>
+    <PackageTags>sketchup;skp;parser;writer;converter;conversion;3d;glb;gltf;cad;bim;dxf;autocad;ifc;obj;stl;ply</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
   </PropertyGroup>

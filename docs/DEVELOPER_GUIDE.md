@@ -308,10 +308,12 @@ something more basic:
   parsing starts.
 ## Export capabilities
 
-`buildScene()`'s result (`Scene`, `GlbPrimitive[]`, `gltfMaterials`) is
-already exactly the data a GLB/glTF exporter needs — triangulated,
-world-space, grouped by material. What differs is whether each language
-ships file-writing exporters on top of that data:
+This is where OpenSKP converts, not just reads: `buildScene()`'s result
+(`Scene`, `GlbPrimitive[]`, `gltfMaterials`) is already exactly the data
+a converter needs — triangulated, world-space, grouped by material — and
+every language ships a native, from-scratch converter on top of it for
+every format below, with no third-party CAD/BIM SDK involved. What
+differs is only naming, per each language's own convention:
 
 | Language | Scene data (`buildScene()`) | GLB | OBJ | STL | PLY | DXF 3D (AutoCAD R2000) | IFC4 (BIM) | JSON metadata |
 |---|---|---|---|---|---|---|---|---|
@@ -321,7 +323,7 @@ ships file-writing exporters on top of that data:
 | Dart | ✅ | ✅ `exportGlb` | ✅ `exportObj` | ✅ `exportStl` | ✅ `exportPly` | ✅ `toDxf` / `exportDxf` | ✅ `toIfc` / `exportIfc` | ✅ `exportJson` |
 | C++ | ✅ | ✅ `export_glb` | ✅ `export_obj` | ✅ `export_stl` | ✅ `export_ply` | ✅ `to_dxf` / `export_dxf` | ✅ `to_ifc` / `export_ifc` | ✅ `export_json` |
 
-All five languages provide built-in file-writing and in-memory exporters for GLB, OBJ, STL, PLY, DXF 3D, IFC4 (BIM), and JSON metadata. Below is the Python export example:
+All five languages provide built-in file-writing and in-memory converters for GLB, OBJ, STL, PLY, DXF 3D, IFC4 (BIM), and JSON metadata. Below is the Python conversion example:
 
 ```python
 from openskp import SkpFile
@@ -880,7 +882,7 @@ entirely — also fixed, earlier in the same session.)
 
 ### GLB/OBJ/STL/PLY/DXF/IFC/JSON export
 
-Covered above under [Export capabilities](#export-capabilities) — GLB, Wavefront OBJ, STL (3D Printing), PLY (Stanford Mesh), DXF 3D (AutoCAD R2000 compliant), IFC4 (BIM ISO STEP), and JSON metadata export are natively supported in all five languages. All ports provide both in-memory string/buffer formatting (`to_ifc`/`toIFC`/`toIfc`/`ToIfc`) and direct file output functions (`export_ifc`/`exportIFC`/`exportIfc`/`ExportIfc`).
+Covered above under [Export capabilities](#export-capabilities) — GLB, Wavefront OBJ, STL (3D Printing), PLY (Stanford Mesh), DXF 3D (AutoCAD R2000 compliant), IFC4 (BIM ISO STEP), and JSON metadata conversion are natively supported in all five languages. All ports provide both in-memory string/buffer formatting (`to_ifc`/`toIFC`/`toIfc`/`ToIfc`) and direct file output functions (`export_ifc`/`exportIFC`/`exportIfc`/`ExportIfc`).
 
 ### Progress/logging mechanism
 

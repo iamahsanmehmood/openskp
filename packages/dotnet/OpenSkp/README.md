@@ -1,8 +1,8 @@
 # OpenSKP
 
-**The open-source SketchUp (`.skp`) file parser — C# / .NET edition.**
+**The open-source SketchUp (`.skp`) file parser, writer, and converter — C# / .NET edition.**
 
-Parse `.skp` files without SketchUp. No SDK. No license. Just code.
+Parse, write, and convert `.skp` files without SketchUp. No SDK. No license. Just code.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/iamahsanmehmood/openskp/blob/main/LICENSE)
 [![NuGet](https://img.shields.io/nuget/v/OpenSkp.svg?logo=nuget&logoColor=white)](https://www.nuget.org/packages/OpenSkp)
@@ -41,7 +41,7 @@ SDK (see [Writing](#-writing) below).
 - **Scene baking** — an opt-in `SkpFile.BuildScene()` pass resolves the
   full placed scene graph to world-space, triangulated, export-ready
   geometry.
-- **Native multi-format export** — glTF (GLB), Wavefront OBJ/MTL, STL,
+- **Native multi-format conversion** — glTF (GLB), Wavefront OBJ/MTL, STL,
   PLY, AutoCAD DXF (3DFACE and Polyface Mesh), IFC4 (BIM/ISO 10303-21
   STEP), and JSON — all written from scratch, no third-party CAD/BIM SDK
   involved. The DXF writer is verified against real desktop AutoCAD, not

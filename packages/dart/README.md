@@ -1,8 +1,8 @@
 # OpenSKP
 
-**The open-source SketchUp (`.skp`) file parser — Dart / Flutter edition.**
+**The open-source SketchUp (`.skp`) file parser, writer, and converter — Dart / Flutter edition.**
 
-Parse `.skp` files without SketchUp. No SDK. No license. Just code.
+Parse, write, and convert `.skp` files without SketchUp. No SDK. No license. Just code.
 
 [![Pub Version](https://img.shields.io/pub/v/openskp.svg?logo=dart&logoColor=white)](https://pub.dev/packages/openskp)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/iamahsanmehmood/openskp/blob/main/LICENSE)
@@ -56,7 +56,7 @@ Enable mobile (iOS/Android), desktop, and web developers to parse and build 3D S
   (2013–2020) containers, transparently, behind one `parse()` call.
 - **Scene baking**: an opt-in `buildScene()` pass resolves the full placed
   scene graph to world-space, triangulated, export-ready geometry.
-- **Native multi-format export**: glTF (GLB), Wavefront OBJ/MTL, STL,
+- **Native multi-format conversion**: glTF (GLB), Wavefront OBJ/MTL, STL,
   PLY, AutoCAD DXF (3DFACE and Polyface Mesh), IFC4 (BIM/ISO 10303-21
   STEP) — all written from scratch, no third-party CAD/BIM SDK involved.
   The DXF writer is verified against real desktop AutoCAD, not just

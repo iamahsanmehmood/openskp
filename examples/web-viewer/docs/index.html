@@ -4,7 +4,7 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>Docs · OpenSKP</title>
-<meta name="description" content="Complete developer documentation for OpenSKP — the open-source SketchUp (.skp) file parser for Python, TypeScript, .NET, and Dart."/>
+<meta name="description" content="Complete developer documentation for OpenSKP — the open-source SketchUp (.skp) file parser, writer, and converter for Python, TypeScript, .NET, Dart, and C++."/>
 <link rel="icon" type="image/png" href="../assets/favicon.png"/>
 <link rel="preconnect" href="https://fonts.googleapis.com"/>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
@@ -225,7 +225,7 @@ code[class*="language-"]{font-family:var(--font-code)!important;font-size:12.5px
   <a class="mnav-item" href="#performance"><svg viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>Performance</a>
   <a class="mnav-item" href="#observability"><svg viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>Observability</a>
   <a class="mnav-item" href="#errors"><svg viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>Errors</a>
-  <a class="mnav-item" href="#export"><svg viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>Export</a>
+  <a class="mnav-item" href="#export"><svg viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>Convert</a>
   <a class="mnav-item" href="#viewer"><svg viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>Viewer</a>
   <a class="mnav-item" href="#differences"><svg viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="12" r="7"></circle><circle cx="15" cy="12" r="7"></circle></svg>Differences</a>
   <a class="mnav-item" href="#contributing"><svg viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>Contributing</a>
@@ -245,7 +245,7 @@ code[class*="language-"]{font-family:var(--font-code)!important;font-size:12.5px
   </div>
   <div class="nav-divider"></div>
   <div class="nav-section">
-    <span class="nav-lbl">Writing (Python)</span>
+    <span class="nav-lbl">Writing</span>
     <a class="nav-item" href="#writing-create" onclick="setActive(this)">
       <svg class="nav-icon" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="12" y1="18" x2="12" y2="12"></line><line x1="9" y1="15" x2="15" y2="15"></line></svg>Create Files
     </a>
@@ -272,7 +272,7 @@ code[class*="language-"]{font-family:var(--font-code)!important;font-size:12.5px
       <svg class="nav-icon" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>Error Handling
     </a>
     <a class="nav-item" href="#export" onclick="setActive(this)">
-      <svg class="nav-icon" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>Export
+      <svg class="nav-icon" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>Convert
     </a>
     <a class="nav-item" href="#viewer" onclick="setActive(this)">
       <svg class="nav-icon" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>Web Viewer
@@ -295,9 +295,10 @@ code[class*="language-"]{font-family:var(--font-code)!important;font-size:12.5px
 <!-- Hero -->
 <div id="hero">
   <div class="hero-title">OpenSKP Documentation</div>
-  <div class="hero-sub">The open-source SketchUp (.skp) file toolkit — parsing in Python, TypeScript, .NET, Dart, and C++, plus a native <code>.skp</code> writer and editor in Python. No SketchUp SDK, no license, both the modern VFF (2021+) and classic MFC (2013–2020) formats. This page is the detailed, verified developer reference; the full write-ups live in <a href="https://github.com/iamahsanmehmood/openskp/tree/main/docs" target="_blank" rel="noopener">docs/</a> on GitHub.</div>
+  <div class="hero-sub">The open-source SketchUp (.skp) file toolkit — parse, write, and convert .skp files, natively in Python, TypeScript, .NET, Dart, and C++. Convert SketchUp models to glTF (GLB), OBJ, STL, PLY, DXF, IFC4, and JSON with no SketchUp SDK, no license, both the modern VFF (2021+) and classic MFC (2013–2020) formats supported. This page is the detailed, verified developer reference; the full write-ups live in <a href="https://github.com/iamahsanmehmood/openskp/tree/main/docs" target="_blank" rel="noopener">docs/</a> on GitHub.</div>
   <div class="hero-stats">
     <div><div class="hero-stat-n">5</div><div class="hero-stat-l">Languages</div></div>
+    <div><div class="hero-stat-n">7</div><div class="hero-stat-l">Convert-to formats</div></div>
     <div><div class="hero-stat-n">179</div><div class="hero-stat-l">Tests passing</div></div>
     <div><div class="hero-stat-n">620MB</div><div class="hero-stat-l">Largest file verified</div></div>
     <div><div class="hero-stat-n">2</div><div class="hero-stat-l">Container formats (VFF + legacy MFC)</div></div>
@@ -453,15 +454,15 @@ std::cout &lt;&lt; scene.glb_primitives.size() &lt;&lt; " mesh primitives\n";</c
     <div class="sec-icon"><svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="12" y1="18" x2="12" y2="12"></line><line x1="9" y1="15" x2="15" y2="15"></line></svg></div>
     <div>
       <div class="sec-title">Creating Files</div>
-      <div class="sec-sub"><code>openskp.create()</code> — build a new .skp file from nothing, Python only</div>
+      <div class="sec-sub"><code>create()</code> — build a new .skp file from nothing, all five languages</div>
     </div>
   </div>
 
   <div class="fn-block">
     <div class="fn-body">
-      <div class="fn-desc">OpenSKP can also go the other direction: <code>openskp.create()</code> returns an <code>SkpBuilder</code> that assembles a genuine legacy MFC <code>CArchive</code>-format <code>.skp</code> file (SketchUp 2013–2020) from nothing — geometry, materials, layers, component definitions, and groups — with <strong>no SketchUp SDK</strong> involved at import, build, or save time. It works by inverting this project's own reader logic against a small bundled blank-document scaffold.</div>
+      <div class="fn-desc">OpenSKP can also go the other direction: <code>create()</code> returns an <code>SkpBuilder</code> that assembles a genuine legacy MFC <code>CArchive</code>-format <code>.skp</code> file (SketchUp 2013–2020) from nothing — geometry, materials, layers, component definitions, and groups — with <strong>no SketchUp SDK</strong> involved at import, build, or save time. It works by inverting this project's own reader logic against a small bundled blank-document scaffold.</div>
       <div class="fn-desc">Every feature on this page has been validated feature-by-feature against the <strong>real SketchUp SDK</strong> (<code>SketchUpAPI.dll</code>), not just against this project's own reader — and it holds up rebuilding complex, real architectural models, not only synthetic test fixtures.</div>
-      <div class="callout callout-warn"><strong>Python-only today.</strong> Porting the writer to TypeScript, .NET, Dart, and C++ is a planned future direction, not yet under way — contributions toward that are very welcome.</div>
+      <div class="callout callout-info">Landed in Python first, then ported to TypeScript, .NET, Dart, and C++ — the identical feature set is now available in all five languages (<a href="https://github.com/iamahsanmehmood/openskp/blob/main/CHANGELOG.md#110--2026-08-20" target="_blank" rel="noopener">1.1.0</a>). Combined with the export formats below, this makes OpenSKP a genuine <strong>SketchUp file converter</strong> in both directions this project targets: build a <code>.skp</code> from nothing, or convert an existing one to glTF/OBJ/STL/PLY/DXF/IFC4/JSON.</div>
     </div>
   </div>
 
@@ -875,29 +876,31 @@ except SkpParseError as e:
   <div class="sec-head">
     <div class="sec-icon"><svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg></div>
     <div>
-      <div class="sec-title">Export Capabilities</div>
-      <div class="sec-sub">Python ships GLB/OBJ/JSON exporters; TypeScript and C++ also export GLB</div>
+      <div class="sec-title">Convert &amp; Export Capabilities</div>
+      <div class="sec-sub">Convert a .skp file to 7 formats, natively, in all five languages</div>
     </div>
   </div>
 
   <div class="fn-block">
     <div class="fn-body">
-      <div class="fn-desc"><code>buildScene()</code>'s result (<code>Scene</code>, <code>GlbPrimitive[]</code>, <code>gltfMaterials</code>) is already exactly the data a GLB/glTF exporter needs — triangulated, world-space, grouped by material. What differs is whether each language ships file-writing exporters on top of it.</div>
+      <div class="fn-desc">This is where OpenSKP becomes a real <strong>SketchUp file converter</strong>, not just a reader: <code>buildScene()</code>'s result (<code>Scene</code>, <code>GlbPrimitive[]</code>, <code>gltfMaterials</code>) is already exactly the data a converter needs — triangulated, world-space, grouped by material — and every language ships native, from-scratch writers on top of it for every format below. No third-party CAD/BIM SDK is involved for any of them.</div>
       <div class="tblwrap">
       <table class="doc-table">
-        <thead><tr><th>Language</th><th>Scene data</th><th>GLB</th><th>OBJ</th><th>JSON metadata</th></tr></thead>
+        <thead><tr><th>Format</th><th>Extension</th><th>Ships in</th></tr></thead>
         <tbody>
-          <tr><td>Python</td><td><span class="yes">✓</span></td><td><span class="yes">✓ openskp.export.glb</span></td><td><span class="yes">✓ openskp.export.obj</span></td><td><span class="yes">✓ openskp.export.json_export</span></td></tr>
-          <tr><td>TypeScript</td><td><span class="yes">✓</span></td><td><span class="yes">✓ toGLB(scene)</span></td><td><span class="no">✗ not yet ported</span></td><td><span class="no">✗ not yet ported</span></td></tr>
-          <tr><td>.NET</td><td><span class="yes">✓</span></td><td><span class="no">✗ not yet ported</span></td><td><span class="no">✗ not yet ported</span></td><td><span class="no">✗ not yet ported</span></td></tr>
-          <tr><td>Dart</td><td><span class="yes">✓</span></td><td><span class="no">✗ not yet ported</span></td><td><span class="no">✗ not yet ported</span></td><td><span class="no">✗ not yet ported</span></td></tr>
-          <tr><td>C++</td><td><span class="yes">✓</span></td><td><span class="yes">✓ to_glb / export_glb</span></td><td><span class="no">✗ not included</span></td><td><span class="no">✗ not included</span></td></tr>
+          <tr><td>glTF (binary GLB)</td><td><code>.glb</code></td><td><span class="yes">✓ all 5 languages</span></td></tr>
+          <tr><td>Wavefront OBJ + MTL</td><td><code>.obj</code></td><td><span class="yes">✓ all 5 languages</span></td></tr>
+          <tr><td>STL (3D printing)</td><td><code>.stl</code></td><td><span class="yes">✓ all 5 languages</span></td></tr>
+          <tr><td>PLY (Stanford Triangle Format)</td><td><code>.ply</code></td><td><span class="yes">✓ all 5 languages</span></td></tr>
+          <tr><td>DXF 3D (AutoCAD Polyface Mesh / 3DFACE)</td><td><code>.dxf</code></td><td><span class="yes">✓ all 5 languages</span></td></tr>
+          <tr><td>IFC4 (BIM / ISO 10303-21 STEP)</td><td><code>.ifc</code></td><td><span class="yes">✓ all 5 languages</span></td></tr>
+          <tr><td>Full metadata JSON</td><td><code>.json</code></td><td><span class="yes">✓ all 5 languages</span></td></tr>
         </tbody>
       </table>
       </div>
-      <div class="fn-desc">Python's exporters, in <code>openskp.export</code>:</div>
+      <div class="fn-desc">Python's converters, in <code>openskp.export</code>:</div>
       <pre><code>from openskp import SkpFile
-from openskp.export import glb, obj, json_export
+from openskp.export import glb, obj, stl, ply, dxf, ifc, json_export
 
 skp = SkpFile.open("model.skp")
 model = skp.parse()
@@ -905,9 +908,13 @@ scene = skp.build_scene()
 
 glb.export(skp, "output.glb")
 obj.export(scene, "output.obj")
+stl.export(scene, "output.stl")
+ply.export(scene, "output.ply")
+dxf.export(scene, "output.dxf")
+ifc.export(scene, "output.ifc")
 json_export.export(model, "output.json", scene=scene)</code></pre>
-      <div class="fn-desc"><strong>C++:</strong> <code>to_glb(scene)</code> returns a <code>ByteBuffer</code>; <code>export_glb(scene, path)</code> writes the same bytes to any filename. TinyGLTF is private to OpenSKP and is not a consumer dependency.</div>
-      <div class="callout callout-warn">.NET and Dart consumers who need a GLB/OBJ/JSON file must serialize <code>Scene</code>'s <code>GlbPrimitive</code>s themselves — each is flat position/normal/index arrays, which is most of the work a writer needs anyway.</div>
+      <div class="fn-desc"><strong>TypeScript:</strong> <code>toGLB</code>/<code>toOBJ</code>/<code>toSTLAscii</code>/<code>toSTLBinary</code>/<code>toPLYAscii</code>/<code>toPLYBinary</code>/<code>toDXF</code>/<code>toIFC</code>/<code>toJSON</code>, plus Node-only <code>exportOBJ</code>/<code>exportSTL</code>/<code>exportPLY</code>/<code>exportDXF</code>/<code>exportIFC</code> file writers. <strong>.NET:</strong> <code>GlbExport</code>/<code>ObjExport</code>/<code>StlExport</code>/<code>PlyExport</code>/<code>DxfExport</code>/<code>IfcExport</code>/<code>JsonExport</code>, each with a <code>.Export*</code> file-writing method. <strong>Dart:</strong> <code>toGlb</code>/<code>exportGlb</code>/<code>toObj</code>/<code>exportObj</code>/<code>toStlAscii</code>/<code>toStlBinary</code>/<code>exportStl</code>/<code>toPlyAscii</code>/<code>toPlyBinary</code>/<code>exportPly</code>/<code>toDxf</code>/<code>exportDxf</code>/<code>toIfc</code>/<code>exportIfc</code>/<code>toJson</code>. <strong>C++:</strong> <code>to_glb</code>/<code>export_glb</code>/<code>to_obj</code>/<code>export_obj</code>/<code>to_stl_ascii</code>/<code>to_stl_binary</code>/<code>export_stl</code>/<code>to_ply_ascii</code>/<code>to_ply_binary</code>/<code>export_ply</code>/<code>to_dxf</code>/<code>export_dxf</code>/<code>to_ifc</code>/<code>export_ifc</code>/<code>to_json</code>/<code>export_json</code>. TinyGLTF and miniz are private to OpenSKP's C++ package, not consumer dependencies.</div>
+      <div class="callout callout-info">The DXF converter specifically is verified against real desktop AutoCAD, not just lenient DXF readers — see the <a href="https://github.com/iamahsanmehmood/openskp/blob/main/CHANGELOG.md" target="_blank" rel="noopener">Changelog</a> for the exact compatibility issues that surfaced and were fixed.</div>
     </div>
   </div>
 </section>
@@ -955,9 +962,16 @@ json_export.export(model, "output.json", scene=scene)</code></pre>
   </div>
 
   <div class="fn-block">
-    <div class="fn-head"><div><div class="fn-name">GLB/OBJ/JSON export</div></div></div>
+    <div class="fn-head"><div><div class="fn-name">.NET static <code>SkpFile</code> API shape</div></div></div>
     <div class="fn-body">
-      <div class="fn-desc">Python has a full set of disk-writing exporters (GLB/OBJ/JSON); TypeScript has an in-memory GLB serializer; C++ has in-memory and file GLB export but no OBJ/JSON export; .NET and Dart expose raw <code>Scene</code> data only. See <a href="#export">Export Capabilities</a>.</div>
+      <div class="fn-desc">The .NET port exposes <code>SkpFile</code> as a static class with factory methods (<code>SkpFile.Parse</code>, <code>SkpFile.BuildScene</code>, <code>SkpFile.Open</code>), rather than requiring an instantiated file handle object before calling <code>.Parse()</code> — a deliberate C# idiom matching standard .NET framework designs like <code>System.IO.File</code>.</div>
+    </div>
+  </div>
+
+  <div class="fn-block">
+    <div class="fn-head"><div><div class="fn-name">C++ <code>materials_by_id()</code> helper</div></div></div>
+    <div class="fn-body">
+      <div class="fn-desc"><code>SkpModel::materials_by_id()</code> returns a <code>std::map&lt;EntityId, Material*&gt;</code> (a method, not a plain field) — matching the enumerable dictionary/map the other four languages expose as <code>materials_by_id</code>/<code>materialsById</code>/<code>MaterialsById</code>.</div>
     </div>
   </div>
 </section>
