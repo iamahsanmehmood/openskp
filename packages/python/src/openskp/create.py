@@ -2578,26 +2578,28 @@ class SkpBuilder:
         w._backref(s1)
         w.buf += _DIM_B42
         w._backref(s2)
-        # B82 head: u16 + measure direction U (3×f64) + offset direction V
-        # (3×f64) + spare f64 + placement mode u32. Calibrated against real
-        # SketchUp rendering: the vertical-dimension corpus template is
-        # U=(0,0,1), V=(0,-1,0); a template mismatched to the measured
-        # direction renders the dimension collapsed onto the edge, so U/V
-        # are computed per dimension.
+        # B82 head: seven doubles + a mode u32. The values are NOT free —
+        # the real SketchUp SDK rejects some combinations outright (probed
+        # against SketchUpAPI via skp2dae) — so both accepted variants come
+        # verbatim from real SketchUp-written files: the vertical corpus
+        # template (capilla quiroz, dir ±Z) and the horizontal pattern
+        # (casa bueno, dir ±X/±Y, near-zero head).
         dx = (k2[0] - k1[0], k2[1] - k1[1], k2[2] - k1[2])
         ln = math.sqrt(dx[0] ** 2 + dx[1] ** 2 + dx[2] ** 2)
         if ln < 1e-9:
             raise SkpWriteError("add_dimension endpoints coincide")
         u = (dx[0] / ln, dx[1] / ln, dx[2] / ln)
-        if abs(u[0]) < 1e-9 and abs(u[1]) < 1e-9:
-            v = (0.0, -1.0, 0.0)             # vertical: corpus convention
-        else:
-            hl = math.hypot(u[0], u[1])      # Z×U, normalized in plan
-            v = (-u[1] / hl, u[0] / hl, 0.0)
         w.buf += bytes(2)
-        w.buf += _f64(u[0]) + _f64(u[1]) + _f64(u[2])
-        w.buf += _f64(v[0]) + _f64(v[1]) + _f64(v[2])
-        w.buf += _f64(0.0) + _u32(2)
+        if abs(u[0]) < 1e-9 and abs(u[1]) < 1e-9:
+            # vertical: U=(0,0,1), V=(0,-1,0), mode 2
+            for val in (0.0, 0.0, 1.0, 0.0, -1.0, 0.0, 0.0):
+                w.buf += _f64(val)
+            w.buf += _u32(2)
+        else:
+            # horizontal / in-plan: casa bueno pattern
+            for val in (0.0, 0.0, 0.0, -1.0, -1.0, 0.0, 0.0):
+                w.buf += _f64(val)
+            w.buf += _u32(2)
         w.buf += _f64(float(offset)) + _f64(0.0) + _u32(3)
         self._new_entity_count += 1
         self._face_count += 1  # reuses the "at least one root entity" check in to_bytes
