@@ -408,8 +408,10 @@ def _read_attr_named(ar, r):
             if n > 100000:
                 raise LegacyParseError(f"implausible attr array count {r.ctx()}")
             return [read_typed(r.u8()) for _ in range(n)]
+        if t == 0x11:
+            return r.f64s(3)         # 3D point (Geom::Point3d)
         if t == 0x12:
-            return r.f64s(3)         # 3D vector
+            return r.f64s(3)         # 3D vector (Geom::Vector3d)
         raise LegacyParseError(f"unknown attribute value type {t:#x} {r.ctx()}")
 
     entries = {}
@@ -537,6 +539,27 @@ def _read_thumbnail(ar, r):
     ar.read_object(r, expect='CCamera')
     _, _, dib = ar.read_object(r, expect='CDib')
     return {'k': 'thumbnail', 'dib': dib}
+
+
+def _read_image(ar, r):
+    """CImage: an Image entity — instance-shaped: a back-ref to the
+    (already walked) CComponentDefinition holding the image's face and
+    texture, a 3x4 placement, a constant 1.0, the source path string
+    (empty in every sample), and a 16-byte GUID. It appears as a normal
+    entity-list item inside the definition that owns the image (typically
+    a face-me/photo definition), whose own tail the ordinary definition
+    reader then consumes. Calibrated byte-exact on two real files — an
+    80 MB v18 and a 661 MB v17 — both previously rejected outright with
+    "no reader for class CImage"."""
+    _preamble(ar, r)
+    db = _drawbase(ar, r)
+    ds, dn, _ = ar.read_object(r)             # the image's definition
+    xform = r.f64s(12)
+    r.f64()                                    # constant 1.0
+    r.utf16()                                  # source path
+    guid = r.raw(16)
+    return {'k': 'image', 'db': db, 'def': ds, 'xform': xform,
+            'guid': guid.hex().upper()}
 
 
 def _read_relationship(ar, r):
@@ -798,7 +821,7 @@ _READERS = {
     'CAttributeContainer': _read_attr_container,
     'CAttributeNamed': _read_attr_named, 'CCamera': _read_camera,
     'CThumbnail': _read_thumbnail, 'CRelationship': _read_relationship,
-    'CComponentDefinition': _read_definition,
+    'CComponentDefinition': _read_definition, 'CImage': _read_image,
     'CComponentInstance': _read_instance, 'CGroup': _read_instance,
     'CFaceTextureCoords': _read_ftc,
     'CConstructionLine': _read_constructionline,
