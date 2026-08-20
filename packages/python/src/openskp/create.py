@@ -2588,18 +2588,22 @@ class SkpBuilder:
         ln = math.sqrt(dx[0] ** 2 + dx[1] ** 2 + dx[2] ** 2)
         if ln < 1e-9:
             raise SkpWriteError("add_dimension endpoints coincide")
-        u = (dx[0] / ln, dx[1] / ln, dx[2] / ln)
+        u = (abs(dx[0] / ln), abs(dx[1] / ln), abs(dx[2] / ln))
+        # The head's seven doubles are a CONSTANT — (0,0,1, 0,-1,0, 0) on
+        # every root-level dimension SketchUp itself wrote, horizontal and
+        # vertical alike — and the u32 after them is the dimension TYPE:
+        # 1 = horizontal, 2 = vertical (both harvested from real files),
+        # 0 = aligned (anything not axis-aligned).
         w.buf += bytes(2)
-        if abs(u[0]) < 1e-9 and abs(u[1]) < 1e-9:
-            # vertical: U=(0,0,1), V=(0,-1,0), mode 2
-            for val in (0.0, 0.0, 1.0, 0.0, -1.0, 0.0, 0.0):
-                w.buf += _f64(val)
-            w.buf += _u32(2)
+        for val in (0.0, 0.0, 1.0, 0.0, -1.0, 0.0, 0.0):
+            w.buf += _f64(val)
+        if u[2] > 1 - 1e-9:
+            mode = 2                          # vertical
+        elif u[2] < 1e-9 and (u[0] > 1 - 1e-9 or u[1] > 1 - 1e-9):
+            mode = 1                          # horizontal, axis-aligned
         else:
-            # horizontal / in-plan: casa bueno pattern
-            for val in (0.0, 0.0, 0.0, -1.0, -1.0, 0.0, 0.0):
-                w.buf += _f64(val)
-            w.buf += _u32(2)
+            mode = 0                          # aligned
+        w.buf += _u32(mode)
         w.buf += _f64(float(offset)) + _f64(0.0) + _u32(3)
         self._new_entity_count += 1
         self._face_count += 1  # reuses the "at least one root entity" check in to_bytes
