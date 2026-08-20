@@ -2,8 +2,6 @@
 // include/openskp/edit.hpp for the overall approach and the exact, deliberately-scoped fidelity
 // gaps this replay carries over from the Python port.
 
-#include <openskp/edit.hpp>
-
 #include <cmath>
 #include <fstream>
 #include <functional>
@@ -13,6 +11,7 @@
 #include <sstream>
 #include <system_error>
 
+#include <openskp/edit.hpp>
 #include <openskp/parser.hpp>
 
 #include "internal.hpp"  // is_legacy - not part of the public API, see that header's own comment
@@ -34,7 +33,8 @@ EdgeMap build_edge_map(const Definition& defn) {
   return m;
 }
 
-std::vector<EntityId> reconstruct_loop_vertices(const std::vector<CoEdge>& loop, const EdgeMap& edges) {
+std::vector<EntityId> reconstruct_loop_vertices(const std::vector<CoEdge>& loop,
+                                                const EdgeMap& edges) {
   std::vector<EntityId> loop_verts;
   for (const auto& c : loop) {
     auto it = edges.find(c.edge_id);
@@ -76,8 +76,8 @@ std::pair<Point3, Point3> face_uv_basis(Point3 n) {
 }
 
 std::pair<double, double> compute_face_uv(Point3 p, Point3 xr, Point3 yr,
-                                           const std::optional<std::array<double, 9>>& uv_transform, double tile_w,
-                                           double tile_h) {
+                                          const std::optional<std::array<double, 9>>& uv_transform,
+                                          double tile_w, double tile_h) {
   double px = p[0] * xr[0] + p[1] * xr[1] + p[2] * xr[2];
   double py = p[0] * yr[0] + p[1] * yr[1] + p[2] * yr[2];
   if (!uv_transform) return {px / tile_w, py / tile_h};
@@ -94,7 +94,7 @@ std::pair<double, double> compute_face_uv(Point3 p, Point3 xr, Point3 yr,
 // ---------------------------------------------------------------------------------------------
 
 std::map<const Material*, int> replay_materials(SkpBuilder& builder, const SkpModel& model,
-                                                  std::vector<std::string>& warnings) {
+                                                std::vector<std::string>& warnings) {
   std::map<const Material*, int> slots;
   std::mt19937_64 rng{std::random_device{}()};
   for (const auto& mat : model.materials) {
@@ -126,11 +126,13 @@ std::map<const Material*, int> replay_materials(SkpBuilder& builder, const SkpMo
         warnings.push_back("material '" + mat.name + "': original texture tile size not preserved");
       }
       if (mat.colorized) {
-        warnings.push_back("material '" + mat.name + "': colorized tint not reproduced (base texture only)");
+        warnings.push_back("material '" + mat.name +
+                           "': colorized tint not reproduced (base texture only)");
       }
     } else {
       if (mat.texture) {
-        warnings.push_back("material '" + mat.name + "': texture image data missing - replayed as solid color");
+        warnings.push_back("material '" + mat.name +
+                           "': texture image data missing - replayed as solid color");
       }
       slot = builder.add_material(mat.name, mat.color);
     }
@@ -139,8 +141,9 @@ std::map<const Material*, int> replay_materials(SkpBuilder& builder, const SkpMo
   return slots;
 }
 
-std::optional<int> material_slot(std::optional<EntityId> material_id, const std::map<EntityId, const Material*>& by_id,
-                                  const std::map<const Material*, int>& slots) {
+std::optional<int> material_slot(std::optional<EntityId> material_id,
+                                 const std::map<EntityId, const Material*>& by_id,
+                                 const std::map<const Material*, int>& slots) {
   if (!material_id) return std::nullopt;
   auto it = by_id.find(*material_id);
   if (it == by_id.end()) return std::nullopt;
@@ -173,7 +176,7 @@ std::vector<EntityId> definition_order(const SkpModel& model) {
     if (visited.count(def_id)) return;
     if (in_progress.count(def_id)) {
       throw SkpWriteError("circular component-definition reference involving definition " +
-                           std::to_string(def_id));
+                          std::to_string(def_id));
     }
     in_progress.insert(def_id);
     auto it = model.definitions.find(def_id);
@@ -193,7 +196,8 @@ std::vector<EntityId> definition_order(const SkpModel& model) {
   return order;
 }
 
-bool definition_has_content(const Definition& defn, const std::map<EntityId, ComponentDefinitionBuilder*>& def_builders) {
+bool definition_has_content(const Definition& defn,
+                            const std::map<EntityId, ComponentDefinitionBuilder*>& def_builders) {
   EdgeMap edges = build_edge_map(defn);
   for (const auto& [id, face] : defn.faces) {
     (void)id;
@@ -213,14 +217,16 @@ bool definition_has_content(const Definition& defn, const std::map<EntityId, Com
 // ---------------------------------------------------------------------------------------------
 
 std::optional<UvCorrespondence> replay_uv(std::optional<EntityId> material_id,
-                                           const std::optional<std::array<double, 9>>& uv_transform, bool projected,
-                                           const std::vector<Point3>& points, const std::optional<Vec3>& normal,
-                                           const std::map<EntityId, const Material*>& by_id,
-                                           std::vector<std::string>& warnings, const std::string& context,
-                                           const std::string& side) {
+                                          const std::optional<std::array<double, 9>>& uv_transform,
+                                          bool projected, const std::vector<Point3>& points,
+                                          const std::optional<Vec3>& normal,
+                                          const std::map<EntityId, const Material*>& by_id,
+                                          std::vector<std::string>& warnings,
+                                          const std::string& context, const std::string& side) {
   if (!uv_transform) return std::nullopt;
   if (projected) {
-    warnings.push_back(context + ": " + side + " texture is projected/draped - falls back to default projection");
+    warnings.push_back(context + ": " + side +
+                       " texture is projected/draped - falls back to default projection");
     return std::nullopt;
   }
   if (!normal) return std::nullopt;
@@ -236,7 +242,8 @@ std::optional<UvCorrespondence> replay_uv(std::optional<EntityId> material_id,
   if (points.size() < 3) return std::nullopt;
   UvCorrespondence pairs;
   for (int i = 0; i < 3; ++i) {
-    auto [u, v] = compute_face_uv(points[static_cast<std::size_t>(i)], xr, yr, uv_transform, tile_w, tile_h);
+    auto [u, v] =
+        compute_face_uv(points[static_cast<std::size_t>(i)], xr, yr, uv_transform, tile_w, tile_h);
     pairs.push_back({points[static_cast<std::size_t>(i)], std::array<double, 2>{u, v}});
   }
   return pairs;
@@ -244,15 +251,17 @@ std::optional<UvCorrespondence> replay_uv(std::optional<EntityId> material_id,
 
 template <class Target>
 void replay_face(Target& target, const Face& face, const Definition& defn, const EdgeMap& edges,
-                  const std::map<EntityId, const Material*>& by_id, const std::map<const Material*, int>& material_slots,
-                  std::vector<std::string>& warnings, const std::string& context) {
+                 const std::map<EntityId, const Material*>& by_id,
+                 const std::map<const Material*, int>& material_slots,
+                 std::vector<std::string>& warnings, const std::string& context) {
   if (face.loops.empty()) {
     warnings.push_back(context + ": face " + std::to_string(face.id) + " has no loops - skipped");
     return;
   }
   auto vert_ids = reconstruct_loop_vertices(face.loops[0], edges);
   if (vert_ids.size() < 3) {
-    warnings.push_back(context + ": face " + std::to_string(face.id) + " has fewer than 3 usable points - skipped");
+    warnings.push_back(context + ": face " + std::to_string(face.id) +
+                       " has fewer than 3 usable points - skipped");
     return;
   }
   std::vector<Point3> points;
@@ -260,7 +269,8 @@ void replay_face(Target& target, const Face& face, const Definition& defn, const
   for (EntityId vid : vert_ids) {
     auto it = defn.vertices.find(vid);
     if (it == defn.vertices.end()) {
-      warnings.push_back(context + ": face " + std::to_string(face.id) + " references a missing vertex - skipped");
+      warnings.push_back(context + ": face " + std::to_string(face.id) +
+                         " references a missing vertex - skipped");
       return;
     }
     points.push_back({it->second.x, it->second.y, it->second.z});
@@ -271,7 +281,7 @@ void replay_face(Target& target, const Face& face, const Definition& defn, const
     auto hole_vert_ids = reconstruct_loop_vertices(face.loops[li], edges);
     if (hole_vert_ids.size() < 3) {
       warnings.push_back(context + ": face " + std::to_string(face.id) +
-                          " has a hole with fewer than 3 usable points - skipped");
+                         " has a hole with fewer than 3 usable points - skipped");
       return;
     }
     std::vector<Point3> hole_points;
@@ -280,7 +290,7 @@ void replay_face(Target& target, const Face& face, const Definition& defn, const
       auto it = defn.vertices.find(vid);
       if (it == defn.vertices.end()) {
         warnings.push_back(context + ": face " + std::to_string(face.id) +
-                            " has a hole referencing a missing vertex - skipped");
+                           " has a hole referencing a missing vertex - skipped");
         return;
       }
       hole_points.push_back({it->second.x, it->second.y, it->second.z});
@@ -304,29 +314,30 @@ void replay_face(Target& target, const Face& face, const Definition& defn, const
   options.soft_edges = soft_edges;
   options.smooth_edges = smooth_edges;
   options.hidden_edges = hidden_edges;
-  options.front_uv =
-      replay_uv(face.material_id, face.uv_transform, face.uv_projected, points, face.normal, by_id, warnings,
-                context, "front");
-  options.back_uv = replay_uv(face.back_material_id, face.uv_transform_back, face.uv_projected_back, points,
-                               face.normal, by_id, warnings, context, "back");
+  options.front_uv = replay_uv(face.material_id, face.uv_transform, face.uv_projected, points,
+                               face.normal, by_id, warnings, context, "front");
+  options.back_uv = replay_uv(face.back_material_id, face.uv_transform_back, face.uv_projected_back,
+                              points, face.normal, by_id, warnings, context, "back");
   options.holes = holes;
 
   try {
     target.add_face(points, options);
   } catch (const SkpWriteError& exc) {
-    warnings.push_back(context + ": face " + std::to_string(face.id) + " skipped (" + exc.what() + ")");
+    warnings.push_back(context + ": face " + std::to_string(face.id) + " skipped (" + exc.what() +
+                       ")");
   }
 }
 
 template <class Target>
 void replay_instance(Target& target, const Instance& inst,
-                      const std::map<EntityId, ComponentDefinitionBuilder*>& def_builders,
-                      const std::map<EntityId, const Material*>& by_id,
-                      const std::map<const Material*, int>& material_slots,
-                      const std::map<std::string, int>& layer_slots, std::vector<std::string>& warnings,
-                      const std::string& context) {
+                     const std::map<EntityId, ComponentDefinitionBuilder*>& def_builders,
+                     const std::map<EntityId, const Material*>& by_id,
+                     const std::map<const Material*, int>& material_slots,
+                     const std::map<std::string, int>& layer_slots,
+                     std::vector<std::string>& warnings, const std::string& context) {
   if (!inst.ref_idx || def_builders.find(*inst.ref_idx) == def_builders.end()) {
-    warnings.push_back(context + ": instance '" + inst.name + "' references unavailable definition - skipped");
+    warnings.push_back(context + ": instance '" + inst.name +
+                       "' references unavailable definition - skipped");
     return;
   }
   ComponentDefinitionBuilder* def_builder = def_builders.at(*inst.ref_idx);
@@ -339,7 +350,8 @@ void replay_instance(Target& target, const Instance& inst,
   Point3 translation{0.0, 0.0, 0.0};
   if (inst.matrix.size() >= 9) {
     Matrix3x3 m{};
-    for (int i = 0; i < 9; ++i) m[static_cast<std::size_t>(i)] = inst.matrix[static_cast<std::size_t>(i)];
+    for (int i = 0; i < 9; ++i)
+      m[static_cast<std::size_t>(i)] = inst.matrix[static_cast<std::size_t>(i)];
     matrix3x3 = m;
   }
   if (inst.matrix.size() >= 12) {
@@ -369,17 +381,20 @@ void replay_instance(Target& target, const Instance& inst,
 }
 
 template <class Target>
-void replay_body(Target& target, const Definition& defn, const std::map<EntityId, const Material*>& by_id,
-                  const std::map<const Material*, int>& material_slots, const std::map<std::string, int>& layer_slots,
-                  std::vector<std::string>& warnings, const std::string& context,
-                  const std::map<EntityId, ComponentDefinitionBuilder*>& def_builders) {
+void replay_body(Target& target, const Definition& defn,
+                 const std::map<EntityId, const Material*>& by_id,
+                 const std::map<const Material*, int>& material_slots,
+                 const std::map<std::string, int>& layer_slots, std::vector<std::string>& warnings,
+                 const std::string& context,
+                 const std::map<EntityId, ComponentDefinitionBuilder*>& def_builders) {
   EdgeMap edges = build_edge_map(defn);
   for (const auto& [id, face] : defn.faces) {
     (void)id;
     replay_face(target, face, defn, edges, by_id, material_slots, warnings, context);
   }
   for (const auto& inst : defn.instances) {
-    replay_instance(target, inst, def_builders, by_id, material_slots, layer_slots, warnings, context);
+    replay_instance(target, inst, def_builders, by_id, material_slots, layer_slots, warnings,
+                    context);
   }
 }
 
@@ -392,10 +407,10 @@ OpenExistingResult open_existing(const std::filesystem::path& path) {
 
   if (!is_legacy(data)) {
     throw SkpWriteError("'" + path.string() +
-                         "' is not a legacy-format (SketchUp 2013-2020) .skp file - openskp::create "
-                         "only ever writes that format, so only a legacy-format source file can be "
-                         "rebuilt through it (see edit.hpp's own docstring for why an arbitrary "
-                         "existing file can't simply be patched)");
+                        "' is not a legacy-format (SketchUp 2013-2020) .skp file - openskp::create "
+                        "only ever writes that format, so only a legacy-format source file can be "
+                        "rebuilt through it (see edit.hpp's own docstring for why an arbitrary "
+                        "existing file can't simply be patched)");
   }
 
   // const: materials_by_id() (below) has a non-const overload returning map<EntityId, Material*>
@@ -423,16 +438,19 @@ OpenExistingResult open_existing(const std::filesystem::path& path) {
       continue;
     }
     ComponentDefinitionBuilder& db = builder.add_component_definition(dname);
-    replay_body(db, defn, by_id, material_slots, layer_slots, result.warnings, context, def_builders);
+    replay_body(db, defn, by_id, material_slots, layer_slots, result.warnings, context,
+                def_builders);
     db.close();
     def_builders[def_id] = &db;
   }
 
-  replay_body(builder, model.root(), by_id, material_slots, layer_slots, result.warnings, "root", def_builders);
+  replay_body(builder, model.root(), by_id, material_slots, layer_slots, result.warnings, "root",
+              def_builders);
 
   for (const auto& [def_id, db] : def_builders) {
     const std::string& n = model.definitions.at(def_id).name;
-    if (!n.empty()) result.definitions[n] = db;  // if two source definitions share a name, the later one wins
+    if (!n.empty())
+      result.definitions[n] = db;  // if two source definitions share a name, the later one wins
   }
   return result;
 }

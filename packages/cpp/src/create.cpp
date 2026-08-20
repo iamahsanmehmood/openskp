@@ -30,8 +30,6 @@
 // the byte array here is a compile-time constant reviewed and compiled together with the offset
 // constants below, not a mutable external resource that could go stale between builds.
 
-#include <openskp/create.hpp>
-
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -41,6 +39,8 @@
 #include <iterator>
 #include <random>
 #include <utility>
+
+#include <openskp/create.hpp>
 
 #include "scaffold_blank_v17.hpp"
 
@@ -129,22 +129,18 @@ constexpr std::uint8_t kTextureHSentinel[8] = {240, 255, 255, 255, 255, 255, 255
 // embedded layer list) - all zero except offsets 3-4 (the same 1,1 padding convention drawbase
 // uses).
 constexpr std::uint8_t kDefinitionBaseBlock[22] = {0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0,
-                                                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+                                                   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 
 // The 176 bytes (everything after CCamera's 2-byte class-ref tag) real SketchUp writes for a
 // definition's default thumbnail camera - copied verbatim, not decoded.
 constexpr std::uint8_t kCameraTemplate[176] = {
-    0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
-    0,   0,   0,   0,   0,   0,   240, 63,  0,   0,   0,   0,   0,   0,   0,   0,
-    0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
-    0,   64,  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   240,
-    63,  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
-    0,   0,   0,   0,   0,   0,   0,   0,   0,   1,   0,   0,   0,   0,   0,   62,
-    64,  0,   0,   0,   0,   0,   0,   240, 63,  0,   0,   0,   0,   0,   0,   0,
-    0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
-    0,   0,   0,   0,   0,   0,   0,   0,   0,   1,   0,   255, 254, 255, 0,   0,
-    0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   240, 63,
-    0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+    0,  0, 0,   0,  0, 0, 0, 0, 0, 0,   0,   0,   0,  0, 0, 0, 0, 0,  0,  0, 0, 0, 240, 63, 0, 0,
+    0,  0, 0,   0,  0, 0, 0, 0, 0, 0,   0,   0,   0,  0, 0, 0, 0, 0,  0,  0, 0, 0, 0,   64, 0, 0,
+    0,  0, 0,   0,  0, 0, 0, 0, 0, 0,   0,   240, 63, 0, 0, 0, 0, 0,  0,  0, 0, 0, 0,   0,  0, 0,
+    0,  0, 0,   0,  0, 0, 0, 0, 0, 0,   0,   1,   0,  0, 0, 0, 0, 62, 64, 0, 0, 0, 0,   0,  0, 240,
+    63, 0, 0,   0,  0, 0, 0, 0, 0, 0,   0,   0,   0,  0, 0, 0, 0, 0,  0,  0, 0, 0, 0,   0,  0, 0,
+    0,  0, 0,   0,  0, 0, 0, 1, 0, 255, 254, 255, 0,  0, 0, 0, 0, 0,  0,  0, 0, 0, 0,   0,  0, 0,
+    0,  0, 240, 63, 0, 0, 0, 0, 0, 0,   0,   0,   0,  0, 0, 0, 0, 0,  0,  0,
 };
 
 // The blank scaffold ships with SketchUp's own arbitrary default camera; every file this writer
@@ -153,24 +149,24 @@ constexpr std::uint8_t kCameraTemplate[176] = {
 // call before saving - copied verbatim rather than decoded.
 constexpr std::size_t kIsoCameraPrefixOffset = 2993;
 constexpr std::uint8_t kIsoCameraPrefixPatch[98] = {
-    89,  64,  0,   0,   0,   0,  0,  0,   89, 192, 0,   0,   0,   0,  0,  0,   89,  64,
-    0,   0,   0,   0,   0,   0,  0,  0,   0,  0,   0,   0,   0,   0,  0,  0,   0,   0,
-    0,   0,   0,   0,   0,   0,  63, 44,  12, 112, 189, 32,  218, 191, 63, 44,
-    12,  112, 189, 32,  218, 63, 63, 44,  12, 112, 189, 32,  234, 63, 0,  0,
-    0,   0,   0,   0,   240, 63, 0,  0,   0,  0,   0,   64,  143, 64, 0,  0,
-    0,   0,   0,   0,   0,   62, 64, 42,  223, 39,  44,  128, 52,  87,
+    89,  64,  0,   0,  0,   0,   0,   0,  89,  192, 0,  0,  0,   0,   0,   0,   89,  64, 0,  0,
+    0,   0,   0,   0,  0,   0,   0,   0,  0,   0,   0,  0,  0,   0,   0,   0,   0,   0,  0,  0,
+    0,   0,   63,  44, 12,  112, 189, 32, 218, 191, 63, 44, 12,  112, 189, 32,  218, 63, 63, 44,
+    12,  112, 189, 32, 234, 63,  0,   0,  0,   0,   0,  0,  240, 63,  0,   0,   0,   0,  0,  64,
+    143, 64,  0,   0,  0,   0,   0,   0,  0,   62,  64, 42, 223, 39,  44,  128, 52,  87,
 };
 
-const std::uint8_t kIsoCameraTailPatch1[16] = {208, 168, 105, 97, 60,  68, 45,  71,
-                                                153, 164, 102, 125, 26, 223, 168, 54};
-const std::uint8_t kIsoCameraTailPatch2[15] = {78, 83, 200, 68, 119, 2,   146,
-                                                70, 187, 169, 88, 39, 187, 167, 226};
+const std::uint8_t kIsoCameraTailPatch1[16] = {208, 168, 105, 97,  60, 68,  45,  71,
+                                               153, 164, 102, 125, 26, 223, 168, 54};
+const std::uint8_t kIsoCameraTailPatch2[15] = {78,  83,  200, 68, 119, 2,   146, 70,
+                                               187, 169, 88,  39, 187, 167, 226};
 
 struct TailPatch {
   std::size_t pos;
   const std::uint8_t* data;
   std::size_t size;
 };
+
 const TailPatch kIsoCameraTailPatches[2] = {
     {509, kIsoCameraTailPatch1, sizeof(kIsoCameraTailPatch1)},
     {1390, kIsoCameraTailPatch2, sizeof(kIsoCameraTailPatch2)},
@@ -249,7 +245,8 @@ std::u16string utf8_to_utf16(const std::string& s) {
     }
     for (int k = 1; k < len; ++k) {
       unsigned char ck = static_cast<unsigned char>(s[i + k]);
-      if ((ck & 0xC0) != 0x80) throw SkpWriteError("invalid UTF-8 string passed to openskp::create");
+      if ((ck & 0xC0) != 0x80)
+        throw SkpWriteError("invalid UTF-8 string passed to openskp::create");
       cp = (cp << 6) | (ck & 0x3F);
     }
     i += static_cast<std::size_t>(len);
@@ -287,24 +284,29 @@ std::size_t shift_ref(ByteBuffer& buf, std::size_t pos, int shift) {
   int slot = u16 & 0x7FFF;
   int new_slot = slot + shift;
   if (new_slot < 0x7FFF) {
-    write_u16_at(buf, pos, static_cast<std::uint16_t>(tag_bit | static_cast<std::uint16_t>(new_slot)));
+    write_u16_at(buf, pos,
+                 static_cast<std::uint16_t>(tag_bit | static_cast<std::uint16_t>(new_slot)));
     return 0;
   }
   std::uint32_t val = tag_bit ? (0x80000000u | static_cast<std::uint32_t>(new_slot))
-                               : static_cast<std::uint32_t>(new_slot);
+                              : static_cast<std::uint32_t>(new_slot);
   ByteBuffer replacement(6);
   replacement[0] = 0xFF;
   replacement[1] = 0x7F;
-  for (int i = 0; i < 4; ++i) replacement[2 + i] = static_cast<std::uint8_t>((val >> (8 * i)) & 0xFF);
-  buf.erase(buf.begin() + static_cast<std::ptrdiff_t>(pos), buf.begin() + static_cast<std::ptrdiff_t>(pos + 2));
-  buf.insert(buf.begin() + static_cast<std::ptrdiff_t>(pos), replacement.begin(), replacement.end());
+  for (int i = 0; i < 4; ++i)
+    replacement[2 + i] = static_cast<std::uint8_t>((val >> (8 * i)) & 0xFF);
+  buf.erase(buf.begin() + static_cast<std::ptrdiff_t>(pos),
+            buf.begin() + static_cast<std::ptrdiff_t>(pos + 2));
+  buf.insert(buf.begin() + static_cast<std::ptrdiff_t>(pos), replacement.begin(),
+             replacement.end());
   return 4;
 }
 
 int detect_image_subtype(const ByteBuffer& image_bytes) {
   static const std::uint8_t png_sig[8] = {0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'};
   if (image_bytes.size() >= 8 && std::equal(png_sig, png_sig + 8, image_bytes.begin())) return 4;
-  if (image_bytes.size() >= 3 && image_bytes[0] == 0xFF && image_bytes[1] == 0xD8 && image_bytes[2] == 0xFF) {
+  if (image_bytes.size() >= 3 && image_bytes[0] == 0xFF && image_bytes[1] == 0xD8 &&
+      image_bytes[2] == 0xFF) {
     return 1;
   }
   throw SkpWriteError(
@@ -322,7 +324,8 @@ double det3(const std::array<std::array<double, 3>, 3>& m) {
          m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
 }
 
-std::array<double, 3> solve3x3(const std::array<std::array<double, 3>, 3>& a, const std::array<double, 3>& b) {
+std::array<double, 3> solve3x3(const std::array<std::array<double, 3>, 3>& a,
+                               const std::array<double, 3>& b) {
   double d = det3(a);
   if (std::abs(d) < 1e-9) {
     throw SkpWriteError(
@@ -345,7 +348,8 @@ Point3 cross3(Point3 a, Point3 b) {
 Point3 normalize3(Point3 v) {
   double length = std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
   if (length < 1e-9) {
-    throw SkpWriteError("cannot determine a texture-positioning basis: the face's first edge is degenerate");
+    throw SkpWriteError(
+        "cannot determine a texture-positioning basis: the face's first edge is degenerate");
   }
   return {v[0] / length, v[1] / length, v[2] / length};
 }
@@ -358,18 +362,19 @@ Matrix3x3 rotation_matrix3x3(Point3 axis, double angle) {
   double x = axis[0] / length, y = axis[1] / length, z = axis[2] / length;
   double c = std::cos(angle), s = std::sin(angle), t = 1.0 - c;
   return {
-      t * x * x + c,     t * x * y - s * z, t * x * z + s * y,
-      t * x * y + s * z, t * y * y + c,     t * y * z - s * x,
-      t * x * z - s * y, t * y * z + s * x, t * z * z + c,
+      t * x * x + c,     t * x * y - s * z, t * x * z + s * y, t * x * y + s * z, t * y * y + c,
+      t * y * z - s * x, t * x * z - s * y, t * y * z + s * x, t * z * z + c,
   };
 }
 
 // Shared by every add_instance/add_group/add_group_instance overload - `matrix3x3` and
 // `rotation` are alternate ways to specify the same underlying transform field, not two separate
 // ones, so exactly one (or neither, for identity) may be given.
-std::optional<Matrix3x3> resolve_matrix3x3(std::optional<Matrix3x3> matrix3x3, std::optional<Rotation> rotation) {
+std::optional<Matrix3x3> resolve_matrix3x3(std::optional<Matrix3x3> matrix3x3,
+                                           std::optional<Rotation> rotation) {
   if (matrix3x3 && rotation) {
-    throw SkpWriteError("pass at most one of matrix3x3/rotation - rotation is just a convenience for matrix3x3");
+    throw SkpWriteError(
+        "pass at most one of matrix3x3/rotation - rotation is just a convenience for matrix3x3");
   }
   if (rotation) return rotation_matrix3x3(rotation->first, rotation->second);
   return matrix3x3;
@@ -379,7 +384,8 @@ std::optional<Matrix3x3> resolve_matrix3x3(std::optional<Matrix3x3> matrix3x3, s
 // a face of ANY orientation - the face's own first edge direction (points[1] - points[0],
 // normalized) as U, and the plane normal crossed with that as W.
 std::pair<Point3, Point3> face_uv_basis(const std::vector<Point3>& points, Point3 normal) {
-  Point3 u = normalize3({points[1][0] - points[0][0], points[1][1] - points[0][1], points[1][2] - points[0][2]});
+  Point3 u = normalize3(
+      {points[1][0] - points[0][0], points[1][1] - points[0][1], points[1][2] - points[0][2]});
   Point3 w = normalize3(cross3(normal, u));
   return {u, w};
 }
@@ -396,30 +402,32 @@ std::pair<Point3, Point3> circle_basis(Point3 normal) {
   return {u, w};
 }
 
-std::vector<Point3> circle_points(Point3 center, Point3 /*normal*/, double radius, int num_segments, Point3 u,
-                                   Point3 w) {
+std::vector<Point3> circle_points(Point3 center, Point3 /*normal*/, double radius, int num_segments,
+                                  Point3 u, Point3 w) {
   std::vector<Point3> pts;
   pts.reserve(static_cast<std::size_t>(num_segments));
   for (int i = 0; i < num_segments; ++i) {
     double angle = 2.0 * kPi * i / num_segments;
     double c = std::cos(angle), s = std::sin(angle);
-    pts.push_back({center[0] + radius * (c * u[0] + s * w[0]), center[1] + radius * (c * u[1] + s * w[1]),
-                    center[2] + radius * (c * u[2] + s * w[2])});
+    pts.push_back({center[0] + radius * (c * u[0] + s * w[0]),
+                   center[1] + radius * (c * u[1] + s * w[1]),
+                   center[2] + radius * (c * u[2] + s * w[2])});
   }
   return pts;
 }
 
 // The `num_segments + 1` points (both endpoints included) tracing a PARTIAL arc from
 // `start_angle` to `end_angle`.
-std::vector<Point3> arc_points(Point3 center, Point3 /*normal*/, double radius, int num_segments, Point3 u, Point3 w,
-                                double start_angle, double end_angle) {
+std::vector<Point3> arc_points(Point3 center, Point3 /*normal*/, double radius, int num_segments,
+                               Point3 u, Point3 w, double start_angle, double end_angle) {
   std::vector<Point3> pts;
   pts.reserve(static_cast<std::size_t>(num_segments) + 1);
   for (int i = 0; i <= num_segments; ++i) {
     double angle = start_angle + (end_angle - start_angle) * i / num_segments;
     double c = std::cos(angle), s = std::sin(angle);
-    pts.push_back({center[0] + radius * (c * u[0] + s * w[0]), center[1] + radius * (c * u[1] + s * w[1]),
-                    center[2] + radius * (c * u[2] + s * w[2])});
+    pts.push_back({center[0] + radius * (c * u[0] + s * w[0]),
+                   center[1] + radius * (c * u[1] + s * w[1]),
+                   center[2] + radius * (c * u[2] + s * w[2])});
   }
   return pts;
 }
@@ -427,7 +435,8 @@ std::vector<Point3> arc_points(Point3 center, Point3 /*normal*/, double radius, 
 // Fit the 3x3 UV-to-world affine matrix ground truth shows real SketchUp stores for a
 // positioned texture, from exactly 3 (world point, (u, v)) correspondences.
 Matrix3x3 solve_uv_matrix(const UvCorrespondence& pairs, const std::pair<Point3, Point3>& basis) {
-  if (pairs.size() != 3) throw SkpWriteError("texture positioning needs exactly 3 (point, uv) pairs");
+  if (pairs.size() != 3)
+    throw SkpWriteError("texture positioning needs exactly 3 (point, uv) pairs");
   const auto& u_axis = basis.first;
   const auto& w_axis = basis.second;
   std::array<std::array<double, 3>, 3> a{};
@@ -446,7 +455,8 @@ Matrix3x3 solve_uv_matrix(const UvCorrespondence& pairs, const std::pair<Point3,
   return {a0, b0, 0.0, c0, d0, 0.0, e0, f0, 1.0};
 }
 
-Matrix3x3 uv_matrix_for_face(const std::vector<Point3>& points, const UvCorrespondence& pairs, Point3 normal) {
+Matrix3x3 uv_matrix_for_face(const std::vector<Point3>& points, const UvCorrespondence& pairs,
+                             Point3 normal) {
   return solve_uv_matrix(pairs, face_uv_basis(points, normal));
 }
 
@@ -482,7 +492,8 @@ PlaneResult newell_normal(const std::vector<Point3>& points) {
     nz += (p0[0] - p1[0]) * (p0[1] + p1[1]);
   }
   double length = std::sqrt(nx * nx + ny * ny + nz * nz);
-  if (length < 1e-9) throw SkpWriteError("face points are collinear or degenerate; cannot compute a plane");
+  if (length < 1e-9)
+    throw SkpWriteError("face points are collinear or degenerate; cannot compute a plane");
   nx /= length;
   ny /= length;
   nz /= length;
@@ -558,10 +569,12 @@ class ArchiveWriter {
   std::uint64_t next_pid;
   ByteBuffer buf;
 
-  explicit ArchiveWriter(int next_slot_, std::map<std::string, int> class_slot_ = {}, std::uint64_t next_pid_ = 1)
+  explicit ArchiveWriter(int next_slot_, std::map<std::string, int> class_slot_ = {},
+                         std::uint64_t next_pid_ = 1)
       : next_slot(next_slot_), class_slot(std::move(class_slot_)), next_pid(next_pid_) {}
 
   int alloc() { return next_slot++; }
+
   std::uint64_t alloc_pid() { return next_pid++; }
 
   // Declares (on first use) or short-class-refs (on repeat use) `class_name`, and always
@@ -633,27 +646,31 @@ class ArchiveWriter {
     buf.insert(buf.end(), enc.begin(), enc.end());
   }
 
-  void write_face_texture_coords(std::optional<Matrix3x3> front_matrix, std::optional<Matrix3x3> back_matrix);
+  void write_face_texture_coords(std::optional<Matrix3x3> front_matrix,
+                                 std::optional<Matrix3x3> back_matrix);
   void write_attribute_dict(const std::string& dict_name, const AttributeDict& entries);
 
   // Like preamble(real_attrs=true), but the attribute container's children list holds real
   // content instead of closing immediately: an optional CFaceTextureCoords followed by zero or
   // more named CAttributeNamed dictionaries.
-  void preamble_with_real_attrs(std::optional<Matrix3x3> front_matrix, std::optional<Matrix3x3> back_matrix,
-                                 const AttributeDictList& attribute_dicts,
-                                 std::optional<std::uint64_t> pid = std::nullopt) {
+  void preamble_with_real_attrs(std::optional<Matrix3x3> front_matrix,
+                                std::optional<Matrix3x3> back_matrix,
+                                const AttributeDictList& attribute_dicts,
+                                std::optional<std::uint64_t> pid = std::nullopt) {
     append_u16(buf, 0x8000u | static_cast<std::uint32_t>(kAttrContainerSlot));
     alloc();
     append_bytes(buf, reinterpret_cast<const std::uint8_t*>("\0\0\0"), 3);
     if (front_matrix || back_matrix) write_face_texture_coords(front_matrix, back_matrix);
-    for (const auto& [dict_name, entries] : attribute_dicts) write_attribute_dict(dict_name, entries);
+    for (const auto& [dict_name, entries] : attribute_dicts)
+      write_attribute_dict(dict_name, entries);
     write_null();  // children-list terminator
     std::uint64_t p = pid ? *pid : alloc_pid();
     auto enc = encode_pid(p);
     buf.insert(buf.end(), enc.begin(), enc.end());
   }
 
-  void drawbase(int mat = 0, int layer = 0, bool hidden = false, bool soft = false, bool smooth = false) {
+  void drawbase(int mat = 0, int layer = 0, bool hidden = false, bool soft = false,
+                bool smooth = false) {
     ByteBuffer b(10, 0);
     write_u16_at(b, 0, static_cast<std::uint16_t>(mat));
     b[2] = hidden ? 1 : 0;
@@ -681,19 +698,20 @@ class ArchiveWriter {
   // 0-angle reference direction (a unit vector times radius); start_angle/end_angle are offsets
   // from it. Two of the 14 stored values (ground truth offsets 11 and 13) were 0 in every sample
   // tested and are written as 0 here too.
-  int write_arc_curve(Point3 center, Point3 normal, Point3 xaxis, double start_angle, double end_angle,
-                       double radius, int num_segments) {
+  int write_arc_curve(Point3 center, Point3 normal, Point3 xaxis, double start_angle,
+                      double end_angle, double radius, int num_segments) {
     if (num_segments < 0 || num_segments > 0xFF) {
-      throw SkpWriteError("num_segments must be between 0 and 255, got " + std::to_string(num_segments));
+      throw SkpWriteError("num_segments must be between 0 and 255, got " +
+                          std::to_string(num_segments));
     }
     int slot = new_of_known_class("CArcCurve", kArcCurveSchema);
     preamble();
     buf.push_back(0);
     buf.push_back(static_cast<std::uint8_t>(num_segments));
     append_bytes(buf, reinterpret_cast<const std::uint8_t*>("\0\0\0"), 3);
-    const double vals[14] = {center[0], center[1], center[2], normal[0], normal[1], normal[2],
-                              xaxis[0],  xaxis[1],  xaxis[2],  start_angle, end_angle, 0.0,
-                              radius,    0.0};
+    const double vals[14] = {center[0], center[1], center[2], normal[0], normal[1],
+                             normal[2], xaxis[0],  xaxis[1],  xaxis[2],  start_angle,
+                             end_angle, 0.0,       radius,    0.0};
     for (double v : vals) append_f64(buf, v);
     return slot;
   }
@@ -738,7 +756,7 @@ class ArchiveWriter {
 
   // `subtype` is CDib's image format tag (4 for PNG, 1 for JPEG - see detect_image_subtype).
   int write_textured_material(const std::string& name, const ByteBuffer& image_bytes,
-                               const std::string& texture_path, int subtype) {
+                              const std::string& texture_path, int subtype) {
     int slot = new_of_known_class("CMaterial", kMaterialSchema);
     preamble();
     write_str(name);
@@ -773,9 +791,10 @@ class ArchiveWriter {
   // visible name, so each layer consumes 2 pids, not 1. `with_pids=false` (used only for the
   // layer a component definition embeds internally) omits both.
   int write_layer(const std::string& name, bool with_pids = true, bool hidden = false,
-                   std::optional<Color4> rgba = std::nullopt) {
+                  std::optional<Color4> rgba = std::nullopt) {
     int slot = new_of_known_class("CLayer", kLayerSchema);
-    preamble(with_pids ? std::optional<std::uint64_t>(std::nullopt) : std::optional<std::uint64_t>(0));
+    preamble(with_pids ? std::optional<std::uint64_t>(std::nullopt)
+                       : std::optional<std::uint64_t>(0));
     write_str(name);
     std::uint64_t pid2 = with_pids ? alloc_pid() : 0;
     buf.push_back(hidden ? 1 : 0);
@@ -847,9 +866,10 @@ class ArchiveWriter {
     write_thumbnail();
   }
 
-  void write_instance_like(const std::string& class_name, int schema, bool real_attrs, int definition_slot,
-                            const std::string& name, Point3 translation, std::optional<Matrix3x3> matrix3x3, int mat,
-                            int layer, const AttributeDictList& attribute_dicts, bool hidden) {
+  void write_instance_like(const std::string& class_name, int schema, bool real_attrs,
+                           int definition_slot, const std::string& name, Point3 translation,
+                           std::optional<Matrix3x3> matrix3x3, int mat, int layer,
+                           const AttributeDictList& attribute_dicts, bool hidden) {
     new_of_known_class(class_name, schema);
     if (real_attrs && !attribute_dicts.empty()) {
       preamble_with_real_attrs(std::nullopt, std::nullopt, attribute_dicts);
@@ -870,20 +890,22 @@ class ArchiveWriter {
   // Places a copy of `definition_slot`; returns how many new root-entity-list slots it consumed
   // (always 1).
   int write_instance(int definition_slot, const std::string& name, Point3 translation,
-                      std::optional<Matrix3x3> matrix3x3, int instance_material, int instance_layer,
-                      const AttributeDictList& attribute_dicts, bool hidden) {
+                     std::optional<Matrix3x3> matrix3x3, int instance_material, int instance_layer,
+                     const AttributeDictList& attribute_dicts, bool hidden) {
     // ground truth: instances also carry a real (empty) attr container, unlike CGroup
-    write_instance_like("CComponentInstance", kInstanceSchema, true, definition_slot, name, translation, matrix3x3,
-                         instance_material, instance_layer, attribute_dicts, hidden);
+    write_instance_like("CComponentInstance", kInstanceSchema, true, definition_slot, name,
+                        translation, matrix3x3, instance_material, instance_layer, attribute_dicts,
+                        hidden);
     return 1;
   }
 
   // A group is structurally almost identical to a component instance - the two real differences
   // are its class name/schema and that it uses a plain null attribute pointer.
   int write_group(int definition_slot, const std::string& name, Point3 translation,
-                   std::optional<Matrix3x3> matrix3x3, int group_material, int group_layer, bool hidden) {
-    write_instance_like("CGroup", kGroupSchema, false, definition_slot, name, translation, matrix3x3, group_material,
-                         group_layer, {}, hidden);
+                  std::optional<Matrix3x3> matrix3x3, int group_material, int group_layer,
+                  bool hidden) {
+    write_instance_like("CGroup", kGroupSchema, false, definition_slot, name, translation,
+                        matrix3x3, group_material, group_layer, {}, hidden);
     return 1;
   }
 
@@ -892,10 +914,11 @@ class ArchiveWriter {
   // point back to the first. At most one of curve_params/polyline_num_edges should be given -
   // both describe the same first-use-inline-declaration pattern (the shared curve object is
   // declared inline as the FIRST newly-declared edge's own "curve" field).
-  EdgeChainResult write_edge_chain(const std::vector<Point3>& points, std::map<Point3, int>& vertex_slots,
-                                    EdgeRegistry& edge_registry, bool closed, bool hidden_edges, bool soft_edges,
-                                    bool smooth_edges, std::optional<ArcCurveParams> curve_params,
-                                    std::optional<int> polyline_num_edges) {
+  EdgeChainResult write_edge_chain(const std::vector<Point3>& points,
+                                   std::map<Point3, int>& vertex_slots, EdgeRegistry& edge_registry,
+                                   bool closed, bool hidden_edges, bool soft_edges,
+                                   bool smooth_edges, std::optional<ArcCurveParams> curve_params,
+                                   std::optional<int> polyline_num_edges) {
     int n = static_cast<int>(points.size());
     int pair_count = closed ? n : n - 1;
     std::vector<std::optional<int>> point_slots(static_cast<std::size_t>(n));
@@ -937,9 +960,10 @@ class ArchiveWriter {
       if (curve_slot) {
         backref(*curve_slot);
       } else if (curve_params) {
-        curve_slot = write_arc_curve(curve_params->center, curve_params->normal, curve_params->xaxis,
-                                      curve_params->start_angle, curve_params->end_angle, curve_params->radius,
-                                      curve_params->num_segments);
+        curve_slot =
+            write_arc_curve(curve_params->center, curve_params->normal, curve_params->xaxis,
+                            curve_params->start_angle, curve_params->end_angle,
+                            curve_params->radius, curve_params->num_segments);
       } else if (polyline_num_edges) {
         curve_slot = write_curve(*polyline_num_edges);
       } else {
@@ -949,7 +973,7 @@ class ArchiveWriter {
       result.edge_senses.push_back(0);
       result.new_entities += 1;
       std::pair<int, int> key2 = std::minmax(*point_slots[static_cast<std::size_t>(v1_idx)],
-                                              *point_slots[static_cast<std::size_t>(v2_idx)]);
+                                             *point_slots[static_cast<std::size_t>(v2_idx)]);
       edge_registry[key2] = {edge_slot, *point_slots[static_cast<std::size_t>(v1_idx)]};
     }
     return result;
@@ -957,39 +981,43 @@ class ArchiveWriter {
 
   // Write a partial (open) arc as a chain of straight CEdge records - no face. Returns how many
   // new root-entity-list slots were consumed.
-  int write_arc(const std::vector<Point3>& points, std::map<Point3, int>& vertex_slots, EdgeRegistry& edge_registry,
-                const ArcCurveParams& curve_params, bool hidden_edges, bool soft_edges, bool smooth_edges) {
-    auto res = write_edge_chain(points, vertex_slots, edge_registry, false, hidden_edges, soft_edges, smooth_edges,
-                                 curve_params, std::nullopt);
+  int write_arc(const std::vector<Point3>& points, std::map<Point3, int>& vertex_slots,
+                EdgeRegistry& edge_registry, const ArcCurveParams& curve_params, bool hidden_edges,
+                bool soft_edges, bool smooth_edges) {
+    auto res = write_edge_chain(points, vertex_slots, edge_registry, false, hidden_edges,
+                                soft_edges, smooth_edges, curve_params, std::nullopt);
     return res.new_entities;
   }
 
   // Write a freeform polyline curve - a chain of straight CEdge records all sharing one CCurve
   // grouping, no face. Returns how many new root-entity-list slots were consumed.
   int write_polyline(const std::vector<Point3>& points, std::map<Point3, int>& vertex_slots,
-                      EdgeRegistry& edge_registry, bool closed, bool hidden_edges, bool soft_edges,
-                      bool smooth_edges) {
+                     EdgeRegistry& edge_registry, bool closed, bool hidden_edges, bool soft_edges,
+                     bool smooth_edges) {
     int n = static_cast<int>(points.size());
     int pair_count = closed ? n : n - 1;
-    auto res = write_edge_chain(points, vertex_slots, edge_registry, closed, hidden_edges, soft_edges, smooth_edges,
-                                 std::nullopt, pair_count);
+    auto res = write_edge_chain(points, vertex_slots, edge_registry, closed, hidden_edges,
+                                soft_edges, smooth_edges, std::nullopt, pair_count);
     return res.new_entities;
   }
 
   // Write one planar face and return how many new root-entity-list slots it consumed (edges
   // newly declared, plus the face itself, plus every hole's own newly-declared edges).
   int write_face(const std::vector<Point3>& points, std::map<Point3, int>& vertex_slots,
-                 EdgeRegistry& edge_registry, int face_material, int face_layer, int back_material, bool hidden,
-                 bool soft_edges, bool smooth_edges, bool hidden_edges,
-                 const std::optional<UvCorrespondence>& front_uv, const std::optional<UvCorrespondence>& back_uv,
-                 const AttributeDictList& attribute_dicts, std::optional<ArcCurveParams> curve_params = std::nullopt,
+                 EdgeRegistry& edge_registry, int face_material, int face_layer, int back_material,
+                 bool hidden, bool soft_edges, bool smooth_edges, bool hidden_edges,
+                 const std::optional<UvCorrespondence>& front_uv,
+                 const std::optional<UvCorrespondence>& back_uv,
+                 const AttributeDictList& attribute_dicts,
+                 std::optional<ArcCurveParams> curve_params = std::nullopt,
                  const std::vector<std::vector<Point3>>& holes = {}) {
     // Validate everything that CAN fail before writing a single byte or touching
     // vertex_slots/edge_registry - write_edge_chain mutates both this writer's own buffer AND
     // those caller-owned, shared-across-calls containers as it goes, with no rollback.
     PlaneResult plane = plane_from_polygon(points);
     std::optional<Matrix3x3> front_matrix, back_matrix;
-    if (front_uv) front_matrix = uv_matrix_for_face(points, *front_uv, {plane.nx, plane.ny, plane.nz});
+    if (front_uv)
+      front_matrix = uv_matrix_for_face(points, *front_uv, {plane.nx, plane.ny, plane.nz});
     if (back_uv) back_matrix = uv_matrix_for_face(points, *back_uv, {plane.nx, plane.ny, plane.nz});
     double tol = std::max(polygon_span(points), 1.0) * 1e-6;
     for (const auto& hole : holes) {
@@ -1004,13 +1032,13 @@ class ArchiveWriter {
       }
     }
 
-    auto chain = write_edge_chain(points, vertex_slots, edge_registry, true, hidden_edges, soft_edges, smooth_edges,
-                                   curve_params, std::nullopt);
+    auto chain = write_edge_chain(points, vertex_slots, edge_registry, true, hidden_edges,
+                                  soft_edges, smooth_edges, curve_params, std::nullopt);
     int new_entities = chain.new_entities;
     std::vector<std::pair<std::vector<int>, std::vector<int>>> hole_loops;
     for (const auto& hole : holes) {
-      auto h_chain = write_edge_chain(hole, vertex_slots, edge_registry, true, hidden_edges, soft_edges,
-                                       smooth_edges, std::nullopt, std::nullopt);
+      auto h_chain = write_edge_chain(hole, vertex_slots, edge_registry, true, hidden_edges,
+                                      soft_edges, smooth_edges, std::nullopt, std::nullopt);
       hole_loops.emplace_back(h_chain.edge_slots, h_chain.edge_senses);
       new_entities += h_chain.new_entities;
     }
@@ -1064,7 +1092,7 @@ class ArchiveWriter {
 };
 
 void ArchiveWriter::write_face_texture_coords(std::optional<Matrix3x3> front_matrix,
-                                               std::optional<Matrix3x3> back_matrix) {
+                                              std::optional<Matrix3x3> back_matrix) {
   new_of_known_class("CFaceTextureCoords", kFtcSchema);
   preamble(0);
   append_u32(buf, 0);
@@ -1072,20 +1100,23 @@ void ArchiveWriter::write_face_texture_coords(std::optional<Matrix3x3> front_mat
   Matrix3x3 fm = front_matrix.value_or(kIdentityUvMatrix);
   Matrix3x3 bm = back_matrix.value_or(kIdentityUvMatrix);
   for (int i = 0; i < 9; ++i) ks[static_cast<std::size_t>(i)] = fm[static_cast<std::size_t>(i)];
-  for (int i = 0; i < 9; ++i) ks[static_cast<std::size_t>(12 + i)] = bm[static_cast<std::size_t>(i)];
+  for (int i = 0; i < 9; ++i)
+    ks[static_cast<std::size_t>(12 + i)] = bm[static_cast<std::size_t>(i)];
   for (double v : ks) append_f64(buf, v);
-  append_u32(buf, 0);                          // front pin count - this writer always emits a solved matrix
-  append_u32(buf, 0);                          // back pin count
-  append_u32(buf, front_matrix ? 1 : 0);       // fflags bit 0: front painted/positioned
-  append_u32(buf, back_matrix ? 1 : 0);        // bflags bit 0: back painted/positioned
+  append_u32(buf, 0);  // front pin count - this writer always emits a solved matrix
+  append_u32(buf, 0);  // back pin count
+  append_u32(buf, front_matrix ? 1 : 0);  // fflags bit 0: front painted/positioned
+  append_u32(buf, back_matrix ? 1 : 0);   // bflags bit 0: back painted/positioned
 }
 
-void ArchiveWriter::write_attribute_dict(const std::string& dict_name, const AttributeDict& entries) {
+void ArchiveWriter::write_attribute_dict(const std::string& dict_name,
+                                         const AttributeDict& entries) {
   // Unlike every other class this project declares, CAttributeNamed is already pre-declared in
   // the scaffold's own prefix - always a short class-ref, never a fresh 0xFFFF declaration.
   append_u16(buf, 0x8000u | static_cast<std::uint32_t>(kAttributeNamedSlot));
   alloc();
-  append_bytes(buf, reinterpret_cast<const std::uint8_t*>("\0\0\0"), 3);  // null attrs (2) + mask=0 (1), pid=0
+  append_bytes(buf, reinterpret_cast<const std::uint8_t*>("\0\0\0"),
+               3);     // null attrs (2) + mask=0 (1), pid=0
   append_u32(buf, 0);  // ground truth: read and discarded by the reader too
   write_str(dict_name);
   // AttributeValue's 3 alternatives (string/int32/double) are exactly the 3 types this writer
@@ -1113,33 +1144,37 @@ void ArchiveWriter::write_attribute_dict(const std::string& dict_name, const Att
 // ---------------------------------------------------------------------------------------------
 
 int write_face_or_triangulate(ArchiveWriter& writer, const std::vector<Point3>& points,
-                               std::map<Point3, int>& vertex_slots, EdgeRegistry& edge_registry, int material,
-                               int layer, int back_material, bool hidden, bool soft_edges, bool smooth_edges,
-                               bool hidden_edges, const std::optional<UvCorrespondence>& front_uv,
-                               const std::optional<UvCorrespondence>& back_uv,
-                               const AttributeDictList& attribute_dicts, bool auto_triangulate,
-                               const std::vector<std::vector<Point3>>& holes) {
+                              std::map<Point3, int>& vertex_slots, EdgeRegistry& edge_registry,
+                              int material, int layer, int back_material, bool hidden,
+                              bool soft_edges, bool smooth_edges, bool hidden_edges,
+                              const std::optional<UvCorrespondence>& front_uv,
+                              const std::optional<UvCorrespondence>& back_uv,
+                              const AttributeDictList& attribute_dicts, bool auto_triangulate,
+                              const std::vector<std::vector<Point3>>& holes) {
   if (!holes.empty() || !auto_triangulate || points.size() == 3 || is_coplanar(points)) {
-    return writer.write_face(points, vertex_slots, edge_registry, material, layer, back_material, hidden,
-                              soft_edges, smooth_edges, hidden_edges, front_uv, back_uv, attribute_dicts,
-                              std::nullopt, holes);
+    return writer.write_face(points, vertex_slots, edge_registry, material, layer, back_material,
+                             hidden, soft_edges, smooth_edges, hidden_edges, front_uv, back_uv,
+                             attribute_dicts, std::nullopt, holes);
   }
   if (front_uv || back_uv) {
     throw SkpWriteError("auto_triangulate cannot be combined with front_uv/back_uv positioning");
   }
   int total = 0;
   for (std::size_t i = 1; i + 1 < points.size(); ++i) {
-    total += writer.write_face({points[0], points[i], points[i + 1]}, vertex_slots, edge_registry, material, layer,
-                                back_material, hidden, soft_edges, smooth_edges, hidden_edges, std::nullopt,
-                                std::nullopt, attribute_dicts, std::nullopt, {});
+    total += writer.write_face({points[0], points[i], points[i + 1]}, vertex_slots, edge_registry,
+                               material, layer, back_material, hidden, soft_edges, smooth_edges,
+                               hidden_edges, std::nullopt, std::nullopt, attribute_dicts,
+                               std::nullopt, {});
   }
   return total;
 }
 
-int do_add_circle(ArchiveWriter& writer, std::map<Point3, int>& vertex_slots, EdgeRegistry& edge_registry,
-                   Point3 center, Point3 normal, double radius, const CircleOptions& options) {
+int do_add_circle(ArchiveWriter& writer, std::map<Point3, int>& vertex_slots,
+                  EdgeRegistry& edge_registry, Point3 center, Point3 normal, double radius,
+                  const CircleOptions& options) {
   if (options.num_segments < 3 || options.num_segments > 255) {
-    throw SkpWriteError("num_segments must be between 3 and 255, got " + std::to_string(options.num_segments));
+    throw SkpWriteError("num_segments must be between 3 and 255, got " +
+                        std::to_string(options.num_segments));
   }
   Point3 n = normalize3(normal);
   auto [u, w] = circle_basis(n);
@@ -1147,17 +1182,20 @@ int do_add_circle(ArchiveWriter& writer, std::map<Point3, int>& vertex_slots, Ed
   ArcCurveParams curve_params{center, n, xaxis, 0.0, 2.0 * kPi, radius, options.num_segments};
   auto points = circle_points(center, n, radius, options.num_segments, u, w);
   AttributeDictList dicts;
-  if (!options.attributes.empty()) dicts.emplace_back(options.attribute_dict_name, options.attributes);
+  if (!options.attributes.empty())
+    dicts.emplace_back(options.attribute_dict_name, options.attributes);
   return writer.write_face(points, vertex_slots, edge_registry, options.material.value_or(0),
-                            options.layer.value_or(0), options.back_material.value_or(0), options.hidden, false,
-                            false, false, options.front_uv, options.back_uv, dicts, curve_params, {});
+                           options.layer.value_or(0), options.back_material.value_or(0),
+                           options.hidden, false, false, false, options.front_uv, options.back_uv,
+                           dicts, curve_params, {});
 }
 
-int do_add_arc(ArchiveWriter& writer, std::map<Point3, int>& vertex_slots, EdgeRegistry& edge_registry,
-               Point3 center, Point3 normal, double radius, double start_angle, double end_angle,
-               const ArcOptions& options) {
+int do_add_arc(ArchiveWriter& writer, std::map<Point3, int>& vertex_slots,
+               EdgeRegistry& edge_registry, Point3 center, Point3 normal, double radius,
+               double start_angle, double end_angle, const ArcOptions& options) {
   if (options.num_segments < 3 || options.num_segments > 255) {
-    throw SkpWriteError("num_segments must be between 3 and 255, got " + std::to_string(options.num_segments));
+    throw SkpWriteError("num_segments must be between 3 and 255, got " +
+                        std::to_string(options.num_segments));
   }
   if (end_angle == start_angle) {
     throw SkpWriteError("start_angle and end_angle must differ - use add_circle for a full circle");
@@ -1165,17 +1203,19 @@ int do_add_arc(ArchiveWriter& writer, std::map<Point3, int>& vertex_slots, EdgeR
   Point3 n = normalize3(normal);
   auto [u, w] = circle_basis(n);
   Point3 xaxis = {radius * u[0], radius * u[1], radius * u[2]};
-  ArcCurveParams curve_params{center, n, xaxis, start_angle, end_angle, radius, options.num_segments};
+  ArcCurveParams curve_params{
+      center, n, xaxis, start_angle, end_angle, radius, options.num_segments};
   auto points = arc_points(center, n, radius, options.num_segments, u, w, start_angle, end_angle);
   return writer.write_arc(points, vertex_slots, edge_registry, curve_params, options.hidden_edges,
-                           options.soft_edges, options.smooth_edges);
+                          options.soft_edges, options.smooth_edges);
 }
 
-int do_add_polyline(ArchiveWriter& writer, std::map<Point3, int>& vertex_slots, EdgeRegistry& edge_registry,
-                     const std::vector<Point3>& points, const PolylineOptions& options) {
+int do_add_polyline(ArchiveWriter& writer, std::map<Point3, int>& vertex_slots,
+                    EdgeRegistry& edge_registry, const std::vector<Point3>& points,
+                    const PolylineOptions& options) {
   if (points.size() < 2) throw SkpWriteError("a polyline needs at least 2 points");
-  return writer.write_polyline(points, vertex_slots, edge_registry, options.closed, options.hidden_edges,
-                                options.soft_edges, options.smooth_edges);
+  return writer.write_polyline(points, vertex_slots, edge_registry, options.closed,
+                               options.hidden_edges, options.soft_edges, options.smooth_edges);
 }
 
 }  // namespace
@@ -1208,6 +1248,7 @@ struct ComponentDefinitionBuilder::Impl {
     int layer;
     bool hidden;
   };
+
   // Set only when this definition was started via SkpBuilder::add_group - a group places itself
   // immediately on close(), unlike a plain component definition (which needs an explicit later
   // SkpBuilder::add_instance call).
@@ -1228,7 +1269,8 @@ struct SkpBuilder::Impl {
 
   std::vector<std::unique_ptr<ComponentDefinitionBuilder>> definitions;
   ComponentDefinitionBuilder* open_definition = nullptr;
-  std::vector<std::pair<ComponentDefinitionBuilder*, ComponentDefinitionBuilder::Impl::GroupPlacement>>
+  std::vector<
+      std::pair<ComponentDefinitionBuilder*, ComponentDefinitionBuilder::Impl::GroupPlacement>>
       pending_groups;
 
   std::optional<detail::ArchiveWriter> geometry_writer;
@@ -1244,11 +1286,14 @@ struct SkpBuilder::Impl {
   std::map<std::string, int> material_shifted_class_slot() const {
     int shift = material_shift();
     std::map<std::string, int> out;
-    out["CLayer"] = detail::kBase + shift;  // the scaffold's only pre-declared class (see kScaffoldClassSlot)
+    out["CLayer"] =
+        detail::kBase + shift;  // the scaffold's only pre-declared class (see kScaffoldClassSlot)
     return out;
   }
 
-  int layer_shift() const { return layer_writer ? layer_writer->next_slot - layer_writer_start : 0; }
+  int layer_shift() const {
+    return layer_writer ? layer_writer->next_slot - layer_writer_start : 0;
+  }
 
   std::map<std::string, int> post_layer_class_slot() const {
     if (layer_writer) return layer_writer->class_slot;
@@ -1271,18 +1316,18 @@ struct SkpBuilder::Impl {
       // starting slot before that definition finishes growing definition_writer - corrupting
       // every back-reference root-level geometry makes.
       throw SkpWriteError("component definition '" + open_definition->name() +
-                           "' is still open - call close() on it before adding root-level geometry");
+                          "' is still open - call close() on it before adding root-level geometry");
     }
     int mshift = material_shift();
     geometry_writer.emplace(detail::kScaffoldNextSlot + mshift + layer_shift() + definition_shift(),
-                             post_definition_class_slot());
+                            post_definition_class_slot());
     // Flush any groups that closed earlier, in the order they were created - deferred until now
     // so closing one group doesn't lock in root-level slot numbering before a later
     // add_group/add_component_definition call has had a chance to run.
     for (auto& [comp, gp] : pending_groups) {
       new_entity_count +=
-          geometry_writer->write_group(comp->slot(), comp->name(), gp.translation, gp.matrix3x3, gp.material,
-                                        gp.layer, gp.hidden);
+          geometry_writer->write_group(comp->slot(), comp->name(), gp.translation, gp.matrix3x3,
+                                       gp.material, gp.layer, gp.hidden);
       face_count += 1;
     }
     pending_groups.clear();
@@ -1294,14 +1339,15 @@ struct SkpBuilder::Impl {
   // not extend to this nested Impl struct (a nested class does not inherit its enclosing class's
   // friendships), only to SkpBuilder's own member function bodies. See add_component_definition/
   // add_group below, which do the actual construction.
-  std::pair<int, std::size_t> begin_definition_header(const char* caller,
-                                                        const detail::AttributeDictList& attribute_dicts) {
+  std::pair<int, std::size_t> begin_definition_header(
+      const char* caller, const detail::AttributeDictList& attribute_dicts) {
     if (geometry_writer) {
-      throw SkpWriteError(std::string(caller) + " must be called before any add_face/add_instance calls");
+      throw SkpWriteError(std::string(caller) +
+                          " must be called before any add_face/add_instance calls");
     }
     if (open_definition) {
       throw SkpWriteError("component definition '" + open_definition->name() +
-                           "' is still open - call close() on it before starting another");
+                          "' is still open - call close() on it before starting another");
     }
     if (!definition_writer) {
       definition_writer_start = detail::kScaffoldNextSlot + material_shift() + layer_shift();
@@ -1318,7 +1364,8 @@ struct SkpBuilder::Impl {
       // them - ensure_geometry_writer is a no-op once already created.
       ensure_geometry_writer();
     }
-    if (face_count == 0) throw SkpWriteError("no geometry added - call add_face at least once before saving");
+    if (face_count == 0)
+      throw SkpWriteError("no geometry added - call add_face at least once before saving");
 
     int mshift = material_shift();
     int lshift = layer_shift();
@@ -1337,7 +1384,8 @@ struct SkpBuilder::Impl {
     ByteBuffer prefix(data, data + (detail::kMaterialInsertPos - 4));
     if (pid_delta) {
       std::uint16_t u16 = detail::read_u16_le(prefix, detail::kPidCounterPos);
-      detail::write_u16_at(prefix, detail::kPidCounterPos, static_cast<std::uint16_t>(u16 + pid_delta));
+      detail::write_u16_at(prefix, detail::kPidCounterPos,
+                           static_cast<std::uint16_t>(u16 + pid_delta));
     }
     std::copy(std::begin(detail::kIsoCameraPrefixPatch), std::end(detail::kIsoCameraPrefixPatch),
               prefix.begin() + static_cast<std::ptrdiff_t>(detail::kIsoCameraPrefixOffset));
@@ -1349,7 +1397,8 @@ struct SkpBuilder::Impl {
     // layer_count field, unmodified except for that count.
     ByteBuffer middle1(data + detail::kMaterialInsertPos, data + detail::kLayerInsertPos);
     std::size_t layer_count_rel = detail::kLayerCountPos - detail::kMaterialInsertPos;
-    detail::write_u32_at(middle1, layer_count_rel, static_cast<std::uint32_t>(detail::kOrigLayerCount + layer_count));
+    detail::write_u32_at(middle1, layer_count_rel,
+                         static_cast<std::uint32_t>(detail::kOrigLayerCount + layer_count));
     out.insert(out.end(), middle1.begin(), middle1.end());
     if (layer_writer) out.insert(out.end(), layer_writer->buf.begin(), layer_writer->buf.end());
 
@@ -1361,7 +1410,8 @@ struct SkpBuilder::Impl {
     out.insert(out.end(), middle2a.begin(), middle2a.end());
 
     detail::append_u32(out, static_cast<std::uint32_t>(detail::kOrigDefCount + definition_count));
-    if (definition_writer) out.insert(out.end(), definition_writer->buf.begin(), definition_writer->buf.end());
+    if (definition_writer)
+      out.insert(out.end(), definition_writer->buf.begin(), definition_writer->buf.end());
 
     // def_count_pos+4 -> root_count_pos: any already-existing definitions (none, in the blank
     // scaffold), unmodified.
@@ -1383,10 +1433,12 @@ struct SkpBuilder::Impl {
       bool is_ref;
       const detail::TailPatch* patch;
     };
+
     std::vector<Action> actions;
     for (std::size_t pos : detail::kTailRefPositions) actions.push_back({pos, true, nullptr});
     for (const auto& p : detail::kIsoCameraTailPatches) actions.push_back({p.pos, false, &p});
-    std::sort(actions.begin(), actions.end(), [](const Action& a, const Action& b) { return a.pos < b.pos; });
+    std::sort(actions.begin(), actions.end(),
+              [](const Action& a, const Action& b) { return a.pos < b.pos; });
 
     std::size_t growth = 0;
     for (const auto& act : actions) {
@@ -1394,7 +1446,8 @@ struct SkpBuilder::Impl {
       if (act.is_ref) {
         growth += detail::shift_ref(tail, here, total_tail_shift);
       } else {
-        std::copy(act.patch->data, act.patch->data + act.patch->size, tail.begin() + static_cast<std::ptrdiff_t>(here));
+        std::copy(act.patch->data, act.patch->data + act.patch->size,
+                  tail.begin() + static_cast<std::ptrdiff_t>(here));
       }
     }
     out.insert(out.end(), tail.begin(), tail.end());
@@ -1406,97 +1459,110 @@ struct SkpBuilder::Impl {
 // ComponentDefinitionBuilder (method bodies)
 // ===============================================================================================
 
-ComponentDefinitionBuilder::ComponentDefinitionBuilder(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
+ComponentDefinitionBuilder::ComponentDefinitionBuilder(std::unique_ptr<Impl> impl)
+    : impl_(std::move(impl)) {}
+
 ComponentDefinitionBuilder::~ComponentDefinitionBuilder() = default;
 
 const std::string& ComponentDefinitionBuilder::name() const noexcept { return impl_->name; }
+
 bool ComponentDefinitionBuilder::closed() const noexcept { return impl_->closed; }
 
 void ComponentDefinitionBuilder::check_writable(const std::string& action) const {
   if (impl_->closed) {
     throw SkpWriteError("component definition '" + impl_->name +
-                         "' has already closed (close() was already called) - cannot add more " + action +
-                         " to it");
+                        "' has already closed (close() was already called) - cannot add more " +
+                        action + " to it");
   }
 }
 
-void ComponentDefinitionBuilder::add_face(const std::vector<Point3>& points, const FaceOptions& options) {
+void ComponentDefinitionBuilder::add_face(const std::vector<Point3>& points,
+                                          const FaceOptions& options) {
   check_writable("faces");
   if (points.size() < 3) throw SkpWriteError("a face needs at least 3 points");
   detail::AttributeDictList dicts;
-  if (!options.attributes.empty()) dicts.emplace_back(options.attribute_dict_name, options.attributes);
+  if (!options.attributes.empty())
+    dicts.emplace_back(options.attribute_dict_name, options.attributes);
   impl_->new_entity_count += detail::write_face_or_triangulate(
-      *impl_->writer, points, impl_->vertex_slots, impl_->edge_registry, options.material.value_or(0),
-      options.layer.value_or(0), options.back_material.value_or(0), options.hidden, options.soft_edges,
-      options.smooth_edges, options.hidden_edges, options.front_uv, options.back_uv, dicts,
-      options.auto_triangulate, options.holes);
+      *impl_->writer, points, impl_->vertex_slots, impl_->edge_registry,
+      options.material.value_or(0), options.layer.value_or(0), options.back_material.value_or(0),
+      options.hidden, options.soft_edges, options.smooth_edges, options.hidden_edges,
+      options.front_uv, options.back_uv, dicts, options.auto_triangulate, options.holes);
 }
 
 void ComponentDefinitionBuilder::add_circle(Point3 center, Point3 normal, double radius,
-                                             const CircleOptions& options) {
+                                            const CircleOptions& options) {
   check_writable("faces");
-  impl_->new_entity_count +=
-      detail::do_add_circle(*impl_->writer, impl_->vertex_slots, impl_->edge_registry, center, normal, radius, options);
+  impl_->new_entity_count += detail::do_add_circle(
+      *impl_->writer, impl_->vertex_slots, impl_->edge_registry, center, normal, radius, options);
 }
 
-void ComponentDefinitionBuilder::add_arc(Point3 center, Point3 normal, double radius, double start_angle,
-                                          double end_angle, const ArcOptions& options) {
+void ComponentDefinitionBuilder::add_arc(Point3 center, Point3 normal, double radius,
+                                         double start_angle, double end_angle,
+                                         const ArcOptions& options) {
   check_writable("arcs");
-  impl_->new_entity_count += detail::do_add_arc(*impl_->writer, impl_->vertex_slots, impl_->edge_registry, center,
-                                                 normal, radius, start_angle, end_angle, options);
+  impl_->new_entity_count +=
+      detail::do_add_arc(*impl_->writer, impl_->vertex_slots, impl_->edge_registry, center, normal,
+                         radius, start_angle, end_angle, options);
 }
 
-void ComponentDefinitionBuilder::add_polyline(const std::vector<Point3>& points, const PolylineOptions& options) {
+void ComponentDefinitionBuilder::add_polyline(const std::vector<Point3>& points,
+                                              const PolylineOptions& options) {
   check_writable("polylines");
-  impl_->new_entity_count +=
-      detail::do_add_polyline(*impl_->writer, impl_->vertex_slots, impl_->edge_registry, points, options);
+  impl_->new_entity_count += detail::do_add_polyline(*impl_->writer, impl_->vertex_slots,
+                                                     impl_->edge_registry, points, options);
 }
 
 void ComponentDefinitionBuilder::add_instance(const ComponentDefinitionBuilder& definition,
-                                               const InstanceOptions& options) {
+                                              const InstanceOptions& options) {
   check_writable("instances");
   if (definition.impl_->skp != impl_->skp) {
     throw SkpWriteError("component definition '" + definition.name() +
-                         "' belongs to a different builder (a different create() call) - "
-                         "its slot number is meaningless here");
+                        "' belongs to a different builder (a different create() call) - "
+                        "its slot number is meaningless here");
   }
   if (&definition == this) {
-    throw SkpWriteError("component definition '" + impl_->name + "' cannot nest an instance of itself");
+    throw SkpWriteError("component definition '" + impl_->name +
+                        "' cannot nest an instance of itself");
   }
   auto matrix = detail::resolve_matrix3x3(options.matrix3x3, options.rotation);
   detail::AttributeDictList dicts;
-  if (!options.attributes.empty()) dicts.emplace_back(options.attribute_dict_name, options.attributes);
-  impl_->new_entity_count +=
-      impl_->writer->write_instance(definition.slot(), options.name.value_or(definition.name()),
-                                     options.translation, matrix, options.material.value_or(0),
-                                     options.layer.value_or(0), dicts, options.hidden);
+  if (!options.attributes.empty())
+    dicts.emplace_back(options.attribute_dict_name, options.attributes);
+  impl_->new_entity_count += impl_->writer->write_instance(
+      definition.slot(), options.name.value_or(definition.name()), options.translation, matrix,
+      options.material.value_or(0), options.layer.value_or(0), dicts, options.hidden);
 }
 
 void ComponentDefinitionBuilder::add_group_instance(const ComponentDefinitionBuilder& definition,
-                                                      const GroupInstanceOptions& options) {
+                                                    const GroupInstanceOptions& options) {
   check_writable("groups");
   if (definition.impl_->skp != impl_->skp) {
     throw SkpWriteError("component definition '" + definition.name() +
-                         "' belongs to a different builder (a different create() call) - "
-                         "its slot number is meaningless here");
+                        "' belongs to a different builder (a different create() call) - "
+                        "its slot number is meaningless here");
   }
   if (&definition == this) {
-    throw SkpWriteError("component definition '" + impl_->name + "' cannot nest a group instance of itself");
+    throw SkpWriteError("component definition '" + impl_->name +
+                        "' cannot nest a group instance of itself");
   }
   auto matrix = detail::resolve_matrix3x3(options.matrix3x3, options.rotation);
-  impl_->new_entity_count +=
-      impl_->writer->write_group(definition.slot(), options.name.value_or(definition.name()), options.translation,
-                                  matrix, options.material.value_or(0), options.layer.value_or(0), options.hidden);
+  impl_->new_entity_count += impl_->writer->write_group(
+      definition.slot(), options.name.value_or(definition.name()), options.translation, matrix,
+      options.material.value_or(0), options.layer.value_or(0), options.hidden);
 }
 
 int ComponentDefinitionBuilder::slot() const noexcept { return impl_->slot; }
 
 void ComponentDefinitionBuilder::close() {
-  if (impl_->closed) throw SkpWriteError("component definition '" + impl_->name + "' has already closed");
+  if (impl_->closed)
+    throw SkpWriteError("component definition '" + impl_->name + "' has already closed");
   if (impl_->new_entity_count == 0) {
-    throw SkpWriteError("component definition '" + impl_->name + "' has no geometry - add at least one face");
+    throw SkpWriteError("component definition '" + impl_->name +
+                        "' has no geometry - add at least one face");
   }
-  detail::write_u32_at(impl_->writer->buf, impl_->count_patch_pos, static_cast<std::uint32_t>(impl_->new_entity_count));
+  detail::write_u32_at(impl_->writer->buf, impl_->count_patch_pos,
+                       static_cast<std::uint32_t>(impl_->new_entity_count));
   impl_->writer->write_definition_tail(impl_->name);
   impl_->closed = true;
   // ComponentDefinitionBuilder is a friend of SkpBuilder (create.hpp), so this is allowed to
@@ -1514,11 +1580,14 @@ void ComponentDefinitionBuilder::close() {
 // ===============================================================================================
 
 SkpBuilder::SkpBuilder() : impl_(std::make_unique<Impl>()) {}
+
 SkpBuilder::~SkpBuilder() = default;
 
 int SkpBuilder::add_material(const std::string& name, Color4 rgba) {
-  if (impl_->geometry_writer) throw SkpWriteError("add_material must be called before any add_face calls");
-  if (impl_->layer_writer) throw SkpWriteError("add_material must be called before any add_layer calls");
+  if (impl_->geometry_writer)
+    throw SkpWriteError("add_material must be called before any add_face calls");
+  if (impl_->layer_writer)
+    throw SkpWriteError("add_material must be called before any add_layer calls");
   if (impl_->definition_writer) {
     throw SkpWriteError("add_material must be called before any add_component_definition calls");
   }
@@ -1534,11 +1603,15 @@ int SkpBuilder::add_material(const std::string& name, Color3 rgb) {
   return add_material(name, Color4{rgb[0], rgb[1], rgb[2], 255});
 }
 
-int SkpBuilder::add_texture_material(const std::string& name, const std::filesystem::path& image_path) {
-  if (impl_->geometry_writer) throw SkpWriteError("add_texture_material must be called before any add_face calls");
-  if (impl_->layer_writer) throw SkpWriteError("add_texture_material must be called before any add_layer calls");
+int SkpBuilder::add_texture_material(const std::string& name,
+                                     const std::filesystem::path& image_path) {
+  if (impl_->geometry_writer)
+    throw SkpWriteError("add_texture_material must be called before any add_face calls");
+  if (impl_->layer_writer)
+    throw SkpWriteError("add_texture_material must be called before any add_layer calls");
   if (impl_->definition_writer) {
-    throw SkpWriteError("add_texture_material must be called before any add_component_definition calls");
+    throw SkpWriteError(
+        "add_texture_material must be called before any add_component_definition calls");
   }
   auto it = materials_by_name.find(name);
   if (it != materials_by_name.end()) return it->second;
@@ -1546,14 +1619,16 @@ int SkpBuilder::add_texture_material(const std::string& name, const std::filesys
   if (!f) throw SkpWriteError("cannot open texture image file: " + image_path.string());
   ByteBuffer image_bytes((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
   int subtype = detail::detect_image_subtype(image_bytes);
-  int slot = impl_->material_writer.write_textured_material(name, image_bytes, image_path.string(), subtype);
+  int slot = impl_->material_writer.write_textured_material(name, image_bytes, image_path.string(),
+                                                            subtype);
   materials_by_name[name] = slot;
   impl_->material_count += 1;
   return slot;
 }
 
 int SkpBuilder::add_layer(const std::string& name, const LayerOptions& options) {
-  if (impl_->geometry_writer) throw SkpWriteError("add_layer must be called before any add_face calls");
+  if (impl_->geometry_writer)
+    throw SkpWriteError("add_layer must be called before any add_face calls");
   if (impl_->definition_writer) {
     throw SkpWriteError("add_layer must be called before any add_component_definition calls");
   }
@@ -1578,9 +1653,10 @@ int SkpBuilder::add_layer(const std::string& name, const LayerOptions& options) 
 // factored out further without adding an explicit `friend` for it).
 
 ComponentDefinitionBuilder& SkpBuilder::add_component_definition(const std::string& name,
-                                                                   const DefinitionOptions& options) {
+                                                                 const DefinitionOptions& options) {
   detail::AttributeDictList dicts;
-  if (!options.attributes.empty()) dicts.emplace_back(options.attribute_dict_name, options.attributes);
+  if (!options.attributes.empty())
+    dicts.emplace_back(options.attribute_dict_name, options.attributes);
   auto [slot, count_patch_pos] = impl_->begin_definition_header("add_component_definition", dicts);
   auto cdb_impl = std::make_unique<ComponentDefinitionBuilder::Impl>();
   cdb_impl->skp = this;
@@ -1588,8 +1664,8 @@ ComponentDefinitionBuilder& SkpBuilder::add_component_definition(const std::stri
   cdb_impl->name = name;
   cdb_impl->count_patch_pos = count_patch_pos;
   cdb_impl->writer = &*impl_->definition_writer;
-  impl_->definitions.push_back(
-      std::unique_ptr<ComponentDefinitionBuilder>(new ComponentDefinitionBuilder(std::move(cdb_impl))));
+  impl_->definitions.push_back(std::unique_ptr<ComponentDefinitionBuilder>(
+      new ComponentDefinitionBuilder(std::move(cdb_impl))));
   ComponentDefinitionBuilder* raw = impl_->definitions.back().get();
   impl_->open_definition = raw;
   return *raw;
@@ -1605,28 +1681,31 @@ ComponentDefinitionBuilder& SkpBuilder::add_group(const GroupOptions& options) {
   cdb_impl->count_patch_pos = count_patch_pos;
   cdb_impl->writer = &*impl_->definition_writer;
   cdb_impl->group_placement = ComponentDefinitionBuilder::Impl::GroupPlacement{
-      options.translation, matrix, options.material.value_or(0), options.layer.value_or(0), options.hidden};
-  impl_->definitions.push_back(
-      std::unique_ptr<ComponentDefinitionBuilder>(new ComponentDefinitionBuilder(std::move(cdb_impl))));
+      options.translation, matrix, options.material.value_or(0), options.layer.value_or(0),
+      options.hidden};
+  impl_->definitions.push_back(std::unique_ptr<ComponentDefinitionBuilder>(
+      new ComponentDefinitionBuilder(std::move(cdb_impl))));
   ComponentDefinitionBuilder* raw = impl_->definitions.back().get();
   impl_->open_definition = raw;
   return *raw;
 }
 
-void SkpBuilder::add_instance(const ComponentDefinitionBuilder& definition, const InstanceOptions& options) {
+void SkpBuilder::add_instance(const ComponentDefinitionBuilder& definition,
+                              const InstanceOptions& options) {
   if (definition.impl_->skp != this) {
     throw SkpWriteError("component definition '" + definition.name() +
-                         "' belongs to a different builder (a different create() call) - "
-                         "its slot number is meaningless here");
+                        "' belongs to a different builder (a different create() call) - "
+                        "its slot number is meaningless here");
   }
   if (!definition.closed()) {
     throw SkpWriteError("component definition '" + definition.name() +
-                         "' is still open - call close() on it before calling add_instance");
+                        "' is still open - call close() on it before calling add_instance");
   }
   auto matrix = detail::resolve_matrix3x3(options.matrix3x3, options.rotation);
   impl_->ensure_geometry_writer();
   detail::AttributeDictList dicts;
-  if (!options.attributes.empty()) dicts.emplace_back(options.attribute_dict_name, options.attributes);
+  if (!options.attributes.empty())
+    dicts.emplace_back(options.attribute_dict_name, options.attributes);
   impl_->new_entity_count += impl_->geometry_writer->write_instance(
       definition.slot(), options.name.value_or(definition.name()), options.translation, matrix,
       options.material.value_or(0), options.layer.value_or(0), dicts, options.hidden);
@@ -1637,34 +1716,38 @@ void SkpBuilder::add_face(const std::vector<Point3>& points, const FaceOptions& 
   if (points.size() < 3) throw SkpWriteError("a face needs at least 3 points");
   impl_->ensure_geometry_writer();
   detail::AttributeDictList dicts;
-  if (!options.attributes.empty()) dicts.emplace_back(options.attribute_dict_name, options.attributes);
+  if (!options.attributes.empty())
+    dicts.emplace_back(options.attribute_dict_name, options.attributes);
   impl_->new_entity_count += detail::write_face_or_triangulate(
-      *impl_->geometry_writer, points, impl_->vertex_slots, impl_->edge_registry, options.material.value_or(0),
-      options.layer.value_or(0), options.back_material.value_or(0), options.hidden, options.soft_edges,
-      options.smooth_edges, options.hidden_edges, options.front_uv, options.back_uv, dicts,
-      options.auto_triangulate, options.holes);
+      *impl_->geometry_writer, points, impl_->vertex_slots, impl_->edge_registry,
+      options.material.value_or(0), options.layer.value_or(0), options.back_material.value_or(0),
+      options.hidden, options.soft_edges, options.smooth_edges, options.hidden_edges,
+      options.front_uv, options.back_uv, dicts, options.auto_triangulate, options.holes);
   impl_->face_count += 1;
 }
 
-void SkpBuilder::add_circle(Point3 center, Point3 normal, double radius, const CircleOptions& options) {
+void SkpBuilder::add_circle(Point3 center, Point3 normal, double radius,
+                            const CircleOptions& options) {
   impl_->ensure_geometry_writer();
-  impl_->new_entity_count += detail::do_add_circle(*impl_->geometry_writer, impl_->vertex_slots,
-                                                     impl_->edge_registry, center, normal, radius, options);
+  impl_->new_entity_count +=
+      detail::do_add_circle(*impl_->geometry_writer, impl_->vertex_slots, impl_->edge_registry,
+                            center, normal, radius, options);
   impl_->face_count += 1;
 }
 
-void SkpBuilder::add_arc(Point3 center, Point3 normal, double radius, double start_angle, double end_angle,
-                          const ArcOptions& options) {
+void SkpBuilder::add_arc(Point3 center, Point3 normal, double radius, double start_angle,
+                         double end_angle, const ArcOptions& options) {
   impl_->ensure_geometry_writer();
-  impl_->new_entity_count += detail::do_add_arc(*impl_->geometry_writer, impl_->vertex_slots, impl_->edge_registry,
-                                                 center, normal, radius, start_angle, end_angle, options);
+  impl_->new_entity_count +=
+      detail::do_add_arc(*impl_->geometry_writer, impl_->vertex_slots, impl_->edge_registry, center,
+                         normal, radius, start_angle, end_angle, options);
   impl_->face_count += 1;  // reuses the "at least one root entity" check in to_bytes
 }
 
 void SkpBuilder::add_polyline(const std::vector<Point3>& points, const PolylineOptions& options) {
   impl_->ensure_geometry_writer();
-  impl_->new_entity_count +=
-      detail::do_add_polyline(*impl_->geometry_writer, impl_->vertex_slots, impl_->edge_registry, points, options);
+  impl_->new_entity_count += detail::do_add_polyline(*impl_->geometry_writer, impl_->vertex_slots,
+                                                     impl_->edge_registry, points, options);
   impl_->face_count += 1;  // reuses the "at least one root entity" check in to_bytes
 }
 

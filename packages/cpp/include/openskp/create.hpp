@@ -305,14 +305,15 @@ class OPENSKP_EXPORT ComponentDefinitionBuilder {
   /// closed, and must not be `*this` (this format's definitions are strictly ordered - a
   /// definition can only nest others fully built strictly before it was opened, which also rules
   /// out cycles).
-  void add_instance(const ComponentDefinitionBuilder& definition, const InstanceOptions& options = {});
+  void add_instance(const ComponentDefinitionBuilder& definition,
+                    const InstanceOptions& options = {});
   /// Place `definition` inside this one as a *group* (`CGroup`) rather than a component
   /// instance - otherwise identical to `add_instance`, including the same already-closed/
   /// same-builder/no-self-reference requirements. A nested group can't be declared inline (this
   /// format has no way to embed one definition's declaration inside another's) - build its
   /// geometry with a normal `add_component_definition` first, then place it here.
   void add_group_instance(const ComponentDefinitionBuilder& definition,
-                           const GroupInstanceOptions& options = {});
+                          const GroupInstanceOptions& options = {});
 
   /// Finalize this definition: patches its entity count, writes its tail (GUID/name/thumbnail),
   /// and - if this definition was started via `SkpBuilder::add_group` - places it immediately at
@@ -385,7 +386,7 @@ class OPENSKP_EXPORT SkpBuilder {
   /// root-level geometry, so their slot numbering depends on the final material and layer
   /// counts. The returned reference remains valid for the lifetime of this `SkpBuilder`.
   ComponentDefinitionBuilder& add_component_definition(const std::string& name,
-                                                         const DefinitionOptions& options = {});
+                                                       const DefinitionOptions& options = {});
 
   /// Start a new group. Add its geometry via the returned builder's `add_face`/etc.; the group
   /// is placed at `options.translation`/`matrix3x3` automatically when `.close()` is called on
@@ -396,7 +397,8 @@ class OPENSKP_EXPORT SkpBuilder {
   /// Place one instance of `definition` (already closed) in the model. `options.matrix3x3` is a
   /// row-major 3x3 rotation/scale matrix (identity if unset); `options.translation` is applied
   /// after it, in inches.
-  void add_instance(const ComponentDefinitionBuilder& definition, const InstanceOptions& options = {});
+  void add_instance(const ComponentDefinitionBuilder& definition,
+                    const InstanceOptions& options = {});
 
   /// Add one planar face, defined by 3+ coplanar points (inches) forming a closed polygon in
   /// order - do not repeat the first point at the end. Vertices/edges are automatically shared
