@@ -133,10 +133,17 @@ class _Archive:
         self.current_loop: Optional[int] = None
         self.in_entity_list = False
         self._as_item = False
-        # Slot re-alignment bookkeeping (see _resync_slots): total indices
-        # the writer burned so far, and the slot right after the last
-        # annotation record — the earliest point a burn can hide behind.
-        self.shift_total = 0
+        # Burned store-map indices (see _read_edgeuse): the writer maps an
+        # annotation's connection points into the store map WITHOUT writing
+        # bytes, so file back-references beyond each burn run ahead of the
+        # walker's numbering. Registrations always stay at WALKER indices —
+        # no captured slot ever goes stale — and _backref translates file
+        # references through the burn bands instead. ``burns`` holds
+        # (file_band_start, width) per event; ``cum_delta`` their total;
+        # ``annot_watermark`` the walker slot right after the last
+        # annotation record — the only place a band can start.
+        self.burns: list = []
+        self.cum_delta = 0
         self.annot_watermark: Optional[int] = None
         self.burn_stack: list = []    # per-entity-list burned-item credits
 
@@ -188,7 +195,6 @@ class _Archive:
         self._as_item = self.in_entity_list
         self.in_entity_list = False
         slot = self.alloc(('obj', name, None))
-        epoch = self.shift_total
         reader = self.readers.get(name)
         if reader is None:
             raise LegacyParseError(f"no reader for class {name} {r.ctx()}")
@@ -198,14 +204,32 @@ class _Archive:
             value = reader(self, r)
         finally:
             self.current_class = prev_class
-        # a resync during our read moved every open registration up
-        slot += self.shift_total - epoch
         self.slots[slot] = ('obj', name, value)
         if name in ('CDimensionLinear', 'CText'):
-            self.annot_watermark = slot + 1
+            self.annot_watermark = self.next_slot
         return slot, name, value
 
+    def _translate_ref(self, slot):
+        """Map a FILE store-map index to the walker's numbering through the
+        burn bands. Returns the walker slot, or ``None`` when the reference
+        points INTO a band (a phantom, never-serialized connection point)."""
+        offset = 0
+        for start, width in self.burns:
+            if slot < start:
+                break
+            if slot < start + width:
+                return None
+            offset += width
+        return slot - offset
+
     def _backref(self, slot, r):
+        if self.burns and slot >= self.burns[0][0]:
+            walker = self._translate_ref(slot)
+            if walker is None:
+                # a phantom (burned) connection-point index — annotation
+                # metadata only; nothing was ever serialized for it
+                return slot, 'reserved', None
+            slot = walker
         ent = self.slots.get(slot)
         if ent is None:
             if slot < self.walk_base:
@@ -358,30 +382,20 @@ def _read_arccurve(ar, r):
     return {'k': 'arccurve'}
 
 
-def _resync_slots(ar, delta):
-    """Re-align the store-map counter after the writer burned ``delta``
-    indices without serializing any bytes for them.
+def _register_burn(ar, delta):
+    """Record that the writer burned ``delta`` store-map indices without
+    serializing any bytes for them.
 
     SketchUp maps an annotation's connection-point objects into the MFC
     store map (CArchive::MapObject) when a dimension or leader text is
     attached to geometry — each mapping consumes an index, but nothing is
-    written to the stream, so a byte-exact walk allocates fewer slots than
-    the writer did and every later back-reference is offset. The edge-use
-    parent oracle detects the offset (an edge-use names its parent loop's
-    TRUE index); this shifts every registration made since the last
-    annotation record up by ``delta`` and reserves the vacated indices for
-    the phantom connection points."""
-    start = ar.annot_watermark
-    if start is None or start > ar.current_loop:
-        start = ar.current_loop
-    for s in range(ar.next_slot - 1, start - 1, -1):
-        ar.slots[s + delta] = ar.slots.pop(s, ('obj', 'reserved', None))
-    for s in range(start, start + delta):
-        ar.slots.setdefault(s, ('obj', 'reserved', None))
-    ar.next_slot += delta
-    ar.shift_total += delta
-    if ar.current_loop is not None and ar.current_loop >= start:
-        ar.current_loop += delta
+    written to the stream, so the file's later back-references run ahead
+    of a byte-exact walk. The band starts right after the last annotation
+    record (in FILE numbering); registrations never move — _backref
+    translates file references through the recorded bands instead, so no
+    slot value captured anywhere can go stale."""
+    ar.burns.append((ar.annot_watermark + ar.cum_delta, delta))
+    ar.cum_delta += delta
     ar.annot_watermark = None
     # each burn event corresponds to ONE phantom top-level entity that the
     # entity list's declared count includes but the stream never carries —
@@ -394,10 +408,10 @@ def _read_edgeuse(ar, r):
     _preamble(ar, r)
     es, _, _ = ar.read_object(r, expect='CEdge')
     sense = r.u8()
-    # parent-loop back-ref: the alignment oracle. Read tolerantly — after
-    # annotations the claimed index can sit AHEAD of the walk counter
-    # (burned MapObject indices, see _resync_slots), which is a correction
-    # signal, not a mis-parse.
+    # parent-loop back-ref: the alignment oracle. Read as a RAW file index
+    # — after annotations the claimed index can sit AHEAD of the walker's
+    # numbering (burned MapObject indices, see _register_burn), which is a
+    # correction signal, not a mis-parse.
     p0 = r.pos
     tag = r.u16()
     if tag == 0x7FFF:
@@ -408,14 +422,17 @@ def _read_edgeuse(ar, r):
         raise LegacyParseError(f"edge-use parent is a new object {r.ctx()}")
     else:
         ps = tag if tag else None
-    if ps != ar.current_loop:
-        delta = ps - ar.current_loop if isinstance(ps, int) else 0
-        if 0 < delta <= 4096:
-            _resync_slots(ar, delta)
+    expected = (ar.current_loop + ar.cum_delta
+                if ar.current_loop is not None else None)
+    if ps != expected:
+        delta = (ps - expected
+                 if isinstance(ps, int) and expected is not None else 0)
+        if 0 < delta <= 4096 and ar.annot_watermark is not None:
+            _register_burn(ar, delta)
         else:
             r.pos = p0
             raise LegacyParseError(
-                f"edge-use parent slot {ps} != current loop {ar.current_loop} {r.ctx()}")
+                f"edge-use parent slot {ps} != current loop {expected} {r.ctx()}")
     return {'k': 'edgeuse', 'edge': es, 'sense': sense}
 
 
@@ -799,7 +816,7 @@ def _read_entity_list_inner(ar, r, count, owner, ents):
         if (owner == 'def' and ar.burn_stack and ar.burn_stack[-1]
                 and struct.unpack_from('<I', r.data, p)[0] == 0
                 and r.data[p + 22:p + 25] == _STR_MARKER):
-            # burned MapObject indices (see _resync_slots) mean the declared
+            # burned MapObject indices (see _register_burn) mean the declared
             # count includes phantom entities the stream never carries; the
             # definition tail signature (nrel=0 + pad + 16-byte GUID + name
             # marker at +22) marks the list's REAL end
@@ -814,7 +831,7 @@ def _read_entity_list_inner(ar, r, count, owner, ents):
                 r.pos = p
                 break
             if owner == 'def' and ar.burn_stack and ar.burn_stack[-1]:
-                # this list had burned MapObject indices (see _resync_slots):
+                # this list had burned MapObject indices (see _register_burn):
                 # the phantom connection points were also counted as items,
                 # so the declared count overshoots the real records. Stop at
                 # the failed item — the definition tail that follows (nrel,
