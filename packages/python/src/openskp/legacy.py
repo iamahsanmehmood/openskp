@@ -242,7 +242,22 @@ class _Archive:
         return slot, ent[1], ent[2]
 
 
-def _retry_count_after_v20_filler(r: _R, count_pos: int) -> Optional[int]:
+def _plausible_list_tag(ar, data, at) -> bool:
+    """True when the u16 at ``at`` can legally start an object read: a
+    null, an escape, a class definition, a class-ref to a KNOWN class, or
+    an object back-ref within the allocated range."""
+    if at + 2 > len(data):
+        return False
+    t = struct.unpack_from('<H', data, at)[0]
+    if t in (0x0000, 0x7FFF, 0xFFFF):
+        return True
+    if t & 0x8000:
+        ent = ar.slots.get(t & 0x7FFF)
+        return ent is not None and ent[0] == 'class'
+    return t < ar.next_slot
+
+
+def _retry_count_after_v20_filler(r: _R, count_pos: int, ar=None) -> Optional[int]:
     """SketchUp 2020 (v20) writes an extra, undocumented record ahead of some
     counts that v17 does not have, which leaves the reader a few bytes early
     and makes it read garbage as the count. The filler is an empty UTF-16
@@ -274,17 +289,27 @@ def _retry_count_after_v20_filler(r: _R, count_pos: int) -> Optional[int]:
     if data[marker_at + 3] != 0:          # non-empty string: real data
         return None
 
-    # Skip the zero padding that follows the empty string. The count is
-    # little-endian and non-zero, so the first non-zero byte after the
-    # padding IS its low byte - the run ends exactly on the count.
+    # Skip the zero padding that follows the empty string. The count's
+    # LOW byte is usually the first non-zero byte after the padding — but
+    # a count divisible by 256 (e.g. 4608 entities) has a zero low byte,
+    # which the padding run swallows. Try the first non-zero byte and up
+    # to three positions before it, taking the first candidate that is
+    # plausible AND is followed by a legitimate list tag.
     at = marker_at + 4
     while at < len(data) and data[at] == 0:
         at += 1
-    if at + 4 > len(data):
-        return None
-    count = struct.unpack_from('<I', data, at)[0]
-    r.pos = at + 4
-    return count
+    for back in range(0, 4):
+        at2 = at - back
+        if at2 < marker_at + 4 or at2 + 4 > len(data):
+            continue
+        count = struct.unpack_from('<I', data, at2)[0]
+        if not (0 < count <= 5_000_000):
+            continue
+        if ar is not None and not _plausible_list_tag(ar, data, at2 + 4):
+            continue
+        r.pos = at2 + 4
+        return count
+    return None
 
 
 # ── shared record blocks ─────────────────────────────────────────────────
@@ -676,16 +701,55 @@ def _read_relationship(ar, r):
     return {'k': 'relationship', 'refs': (a, b)}
 
 
+def _strict_next_tag(ar, data, at, allow_null=True) -> bool:
+    """True when the u16 at ``at`` starts an object read in one of the
+    UNAMBIGUOUS forms: null, escape, class definition, or a class-ref to a
+    class already known. Plain object back-refs are excluded on purpose —
+    any 2-byte junk below 0x8000 would qualify, which is exactly the
+    ambiguity this check exists to avoid."""
+    if at + 2 > len(data):
+        return False
+    t = struct.unpack_from('<H', data, at)[0]
+    if t == 0x0000:
+        return allow_null
+    if t in (0x7FFF, 0xFFFF):
+        return True
+    if t & 0x8000:
+        ent = ar.slots.get(t & 0x7FFF)
+        return ent is not None and ent[0] == 'class'
+    return False
+
+
 def _read_constructionline(ar, r):
     _preamble(ar, r)
     _drawbase(ar, r)
     r.f64s(3)
     r.f64s(3)
-    r.f64s(2)
-    # trailing block: 4 bytes on v16 and v18 (measured on a real 2018
-    # file whose guide lines sit 84 bytes apart), 7 on v17 (validated on
-    # the 661 MB v17 corpus model)
-    r.raw(7 if ar.ver == 17 else 4)
+    r.f64s(2)                        # line params (±~4.4e29 = infinite)
+    # The trailing block varies by the WRITING BUILD, not cleanly by
+    # version: 7 bytes on the v17 calibration corpus, 4 on v16 and on a
+    # real v18, 0 on another real v17. Self-calibrate on the first guide
+    # line of the file — the length that lands on a legitimate next tag
+    # (strict forms only) — and cache it for the rest of the file.
+    k = getattr(ar, '_cline_tail', None)
+    if k is None:
+        default = 7 if ar.ver == 17 else 4
+        order = [default] + [c for c in (0, 4, 7) if c != default]
+        # two passes: a zero tail full of padding can mimic a null tag, so
+        # only accept a null-anchored candidate when no candidate lands on
+        # a STRONG form (escape / known class / class definition)
+        for allow_null in (False, True):
+            for cand in order:
+                if _strict_next_tag(ar, r.data, r.pos + cand,
+                                    allow_null=allow_null):
+                    k = cand
+                    break
+            if k is not None:
+                break
+        if k is None:
+            k = default
+        ar._cline_tail = k
+    r.raw(k)
     return {'k': 'cline'}
 
 
@@ -851,19 +915,34 @@ def _read_definition(ar, r):
     nlayers = r.u32()
     if nlayers > 10000:
         raise LegacyParseError(f"implausible def layer count {r.ctx()}")
-    for _ in range(nlayers):
+    # like the model-level layer list, the count is REAL layers (new records
+    # or back-refs); SketchUp 2020 interleaves null separators between them
+    got = 0
+    while got < nlayers:
+        if r.peek_u16() == 0:
+            r.pos += 2
+            continue
         ar.read_object(r, expect='CLayer')
+        got += 1
     decl = r.u16()
     if decl == 0x7FFF:
         decl = r.u32()
-    r.u32()
-    count = r.u32()
+    # v20 can drop its undocumented filler right here, swallowing the u32
+    # field (and, behind a layer-separator null, even the decl itself): if
+    # the empty-string marker sits in the next few bytes, the real count is
+    # the first non-zero u32 after its padding.
+    count = None
+    if ar.ver >= 20:
+        count = _retry_count_after_v20_filler(r, r.pos, ar)
+    if count is None:
+        r.u32()
+        count = r.u32()
     # A zero count is as much a symptom of the v20 filler as an implausibly
     # large one: the reader lands on the leading zero bytes of the filler
     # instead of the count. A genuinely empty definition reads zero with no
     # filler ahead, and _retry_count_after_v20_filler leaves those alone.
     if count > 5_000_000 or count == 0:
-        retry = _retry_count_after_v20_filler(r, r.pos - 4)
+        retry = _retry_count_after_v20_filler(r, r.pos - 4, ar)
         if retry is not None:
             count = retry
     if count > 5_000_000:
@@ -871,7 +950,7 @@ def _read_definition(ar, r):
     ents = _read_entity_list(ar, r, count, 'def')
     nrel = r.u32()
     if nrel > 100000:
-        retry = _retry_count_after_v20_filler(r, r.pos - 4)
+        retry = _retry_count_after_v20_filler(r, r.pos - 4, ar)
         if retry is not None:
             nrel = retry
     if nrel > 100000:
@@ -1090,17 +1169,37 @@ def _walk_model(data: bytes, ver: int, start: int, mat_count: int,
     layer_count = r.u32()
     if layer_count > 100000:
         raise LegacyParseError("implausible layer count")
+    # ``layer_count`` counts REAL layers. SketchUp 2020 interleaves a null
+    # object-ref after each layer record (a separator, not a layer), so
+    # counting reads walks off mid-list on files with several layers; count
+    # parsed layers instead, skip the separators, and stop early if the
+    # next tag is a back-ref (the definition-list anchor) — a v20 variant
+    # where the count over-includes separators.
     layers = []
-    for _ in range(layer_count):
+    while len(layers) < layer_count:
+        tag = r.peek_u16()
+        if tag == 0:
+            r.pos += 2
+            continue
+        if tag != 0xFFFF and not (tag & 0x8000):
+            break
         s, _, v = ar.read_object(r, expect='CLayer')
-        # A null object-ref occupies a slot in the list without carrying a
-        # layer record (seen in SketchUp 2020 files, where layer_count
-        # includes it). Keeping it would push a None into the list and blow
-        # up downstream on v['rgba']; read_object has still consumed the
-        # ref from the stream.
         if v is None:
             continue
         layers.append((s, v))
+    # trailing separators (and any layer records past the declared count)
+    lay_cls = ar.class_slot.get('CLayer')
+    while True:
+        tag = r.peek_u16()
+        if tag == 0:
+            r.pos += 2
+            continue
+        if lay_cls is not None and tag == (0x8000 | lay_cls):
+            s, _, v = ar.read_object(r, expect='CLayer')
+            if v is not None:
+                layers.append((s, v))
+            continue
+        break
 
     # definition list: object pointer to the ACTIVE layer, then count
     _, dn, _ = ar.read_object(r)
@@ -1108,7 +1207,7 @@ def _walk_model(data: bytes, ver: int, start: int, mat_count: int,
         raise LegacyParseError(f"definition-list anchor is {dn}, not a layer")
     def_count = r.u32()
     if def_count > 1_000_000:
-        retry = _retry_count_after_v20_filler(r, r.pos - 4)
+        retry = _retry_count_after_v20_filler(r, r.pos - 4, ar)
         if retry is not None:
             def_count = retry
     if def_count > 1_000_000:
@@ -1131,7 +1230,7 @@ def _walk_model(data: bytes, ver: int, start: int, mat_count: int,
     # root entity list
     root_count = r.u32()
     if root_count > 5_000_000:
-        retry = _retry_count_after_v20_filler(r, r.pos - 4)
+        retry = _retry_count_after_v20_filler(r, r.pos - 4, ar)
         if retry is not None:
             root_count = retry
     if root_count > 5_000_000:

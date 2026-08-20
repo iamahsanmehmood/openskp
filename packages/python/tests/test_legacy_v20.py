@@ -48,10 +48,14 @@ class TestLegacyV20Parse:
         assert len(model.definitions) == 20
         assert len(model.materials) == 24
 
-        # v20 writes a null object-ref into the layer list, which the layer
-        # count includes. It must not reach model.layers as a null entry.
+        # v20 interleaves a null object-ref after EACH layer record; the
+        # count is the number of REAL layers. The old reader counted the
+        # separators as items and dropped every layer after the first —
+        # this fixture really does carry "Gondulas Laterais" (visible in
+        # SketchUp), which the previous assertion enshrined as missing.
+        # Nulls must still never reach model.layers.
         names = [layer.name for layer in model.layers]
-        assert names == ["Layer0"]
+        assert names == ["Layer0", "Gondulas Laterais"]
         for layer in model.layers:
             assert layer is not None
             assert isinstance(layer.name, str)
