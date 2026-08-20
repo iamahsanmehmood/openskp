@@ -505,6 +505,11 @@ _DIM_FONT_PAYLOAD = bytes.fromhex(
     "0000" "08000000" "00"
     "ecf57abd5eaf2340"                # height f64
 )
+_TEXT_HALVES = bytes.fromhex("000000000000e03f000000000000e03f")
+_TEXT_TAIL75 = bytes.fromhex(
+    "0000000000000000000000000000000000000000000000000000000000000000"
+    "0000000000000000000000000000000000000000000000000000f03f00000000"
+    "0100000001000100000001")
 _DIM_DRAWBASE = bytes.fromhex("00000001010000000000")
 _DIM_B37 = bytes.fromhex("0101000000020000000400000000000000"
                          "0000000000000000000000000000000000000000")
@@ -2582,6 +2587,37 @@ class SkpBuilder:
             w.buf += _f64(val)
         w.buf += _u32(0)
         w.buf += _f64(float(offset)) + _f64(0.0) + _u32(1)
+        self._new_entity_count += 1
+        self._face_count += 1  # reuses the "at least one root entity" check in to_bytes
+
+    def add_text(self, text: str, point: Point3) -> None:
+        """Add a screen-facing text label (SketchUp's Text tool) anchored
+        at ``point`` (inches, world space).
+
+        The record is the byte-exact one the REAL SketchUp SDK writes for
+        a point text (generated via SketchUpAPI and harvested): the same
+        free-connection block dimensions use — [u32 type=1][u32 4]
+        [point3d] — plus a fixed placement tail whose u32 at the end of
+        the delimiter block is the arrow type. Leader vectors are not
+        supported yet (the SDK create drops them too).
+        """
+        self._ensure_geometry_writer()
+        w = self._geometry_writer
+        p = (float(point[0]), float(point[1]), float(point[2]))
+        w._new_of_known_class("CText", schema=9)
+        w._preamble()
+        w.buf += _DIM_DRAWBASE
+        if self._dim_font_slot is None:
+            self._dim_font_slot = w._new_of_known_class("CSkFont", schema=1)
+            w.buf += _DIM_FONT_PAYLOAD
+        else:
+            w._backref(self._dim_font_slot)
+        w.buf += _TEXT_HALVES
+        w.buf += _u32(1) + _u32(4)           # free connection + constant
+        w.buf += _f64(p[0]) + _f64(p[1]) + _f64(p[2])
+        w.buf += _TEXT_TAIL75
+        w._write_str(text)
+        w.buf += bytes(5)
         self._new_entity_count += 1
         self._face_count += 1  # reuses the "at least one root entity" check in to_bytes
 

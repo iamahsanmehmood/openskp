@@ -70,3 +70,25 @@ The harvested records settle everything:
 `add_dimension()` writes byte-exact SDK-shaped free dimensions;
 verified by SDK acceptance, reader round-trip, and rendering in real
 SketchUp (Web) across X/Y/Z/diagonal orientations.
+
+## CText (leader texts) — same Rosetta method (2026-08-20)
+
+A second SDK helper (`mktext`) settled the text record. Key findings:
+
+- A `SUTextRef` needs a FONT assigned (`SUTextSetFont` with a font from
+  `SUModelGetFonts`) or the model fails to serialize (SUResult 7) in
+  every version — the failure is the text, not the target version.
+- Record layout: preamble + drawbase + font (inline first use /
+  back-ref) + two f64 0.5 + the SAME free-connection block dimensions
+  use (`[u32 1][u32 4][point3d]`) + a fixed 75-byte tail + string +
+  5 zero bytes.
+- The reader's "text delimiter" block encodes the ARROW TYPE in its
+  u32 (values 0-4 seen); the old predicate hard-required 3 and silently
+  dropped any text with a different arrow (root-list tolerance ate the
+  error). Now any arrow ≤ 8 matches.
+- `_read_skfont` consumed the pid MASK but not the pid bytes it
+  declares — fixed; SDK-written fonts also carry a longer tail, which
+  the text reader's delimiter scan absorbs.
+- Leader VECTORS did not persist through `SUTextSetLeaderVector` in the
+  harness (records carry only the anchor point); point-labels are what
+  `add_text()` writes, which matches IngeTrazo's text entities.

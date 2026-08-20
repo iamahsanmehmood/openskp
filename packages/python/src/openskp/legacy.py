@@ -782,7 +782,8 @@ def _read_sectionplane(ar, r):
 def _read_skfont(ar, r):
     ar.read_object(r, expect='CAttributeContainer')
     if ar.has_pid:
-        r.u8()
+        mask = r.u8()
+        r.raw(bin(mask).count('1'))  # consume the pid bytes the mask declares
     r.utf16()
     r.raw(15)
     return {'k': 'font'}
@@ -852,9 +853,10 @@ def _read_text(ar, r):
         if idx < 0:
             raise LegacyParseError(f"text delimiter not found {r.ctx()}")
         blk = r.data[idx - 11:idx]
+        arrow = struct.unpack_from('<I', blk, 6)[0]
         if (blk[:4] == b'\x01\x00\x00\x00'
-                and blk[6:10] == b'\x03\x00\x00\x00' and blk[10] == 1):
-            break
+                and arrow <= 8 and blk[10] == 1):
+            break                    # blk[6:10] is the ARROW TYPE (0-4 seen)
         p = idx + 3
     r.raw(idx - r.pos)
     text = r.utf16()
