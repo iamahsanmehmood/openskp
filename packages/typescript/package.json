@@ -1,7 +1,7 @@
 {
   "name": "openskp",
-  "version": "1.0.0",
-  "description": "Open-source SketchUp (.skp) binary file parser — extract geometry, metadata, layers, and materials; export to GLB, OBJ, STL, PLY, DXF, and IFC4. Works in browser and Node.js.",
+  "version": "1.1.0",
+  "description": "Open-source SketchUp (.skp) binary file parser and writer — extract geometry, metadata, layers, and materials; create and edit .skp files; export to GLB, OBJ, STL, PLY, DXF, and IFC4. Works in browser and Node.js.",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
   "types": "dist/index.d.ts",

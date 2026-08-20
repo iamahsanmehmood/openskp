@@ -36,8 +36,7 @@ scene = skp.build_scene()
 print(len(scene.glb_primitives), "GLB-ready mesh primitives")
 ```
 
-🧪 **Writing (Python-only — no equivalent in the other four languages yet;
-porting it is a planned future direction):**
+**Writing:**
 
 ```python
 from openskp import create
@@ -52,7 +51,11 @@ builder.save("output.skp")
 ```
 
 See [Write capabilities](DEVELOPER_GUIDE.md#write-capabilities) in the
-Developer Guide for the full scope and limitations.
+Developer Guide for the full scope, limitations, and the naming
+convention each language follows (`add_component_definition`'s scoping
+in particular differs quite a bit per language — Python's `with` above,
+TypeScript/Dart's callback form, .NET's `using` block, and C++'s
+explicit `.close()`; see the examples below).
 
 ## TypeScript / JavaScript
 
@@ -77,6 +80,21 @@ const scene = skp.buildScene();
 const glbBytes = toGLB(scene);
 ```
 
+**Writing:**
+
+```typescript
+import { create } from 'openskp';
+
+const builder = create();
+const red = builder.addMaterial('Red', [255, 0, 0]);
+const chair = builder.addComponentDefinition('Chair', (def) => {
+  def.addFace([[0, 0, 0], [20, 0, 0], [20, 20, 0], [0, 20, 0]]);
+});
+builder.addInstance(chair, { translation: [50, 0, 0] });
+builder.addFace([[0, 0, 0], [100, 0, 0], [100, 100, 0], [0, 100, 0]], { material: red });
+builder.save('output.skp');   // Node.js; use builder.toBytes() in the browser
+```
+
 ## .NET / C#
 
 ```csharp
@@ -94,6 +112,21 @@ foreach (var layer in model.Layers)
 // Opt-in: full placed scene graph, triangulated, world-space
 Scene scene = SkpFile.BuildScene("model.skp");
 Console.WriteLine(scene.GlbPrimitives.Count);
+```
+
+**Writing:**
+
+```csharp
+var builder = SkpCreate.NewFile();
+int red = builder.AddMaterial("Red", (255, 0, 0));
+var chair = builder.AddComponentDefinition("Chair");
+using (chair)
+{
+    chair.AddFace(new (double, double, double)[] { (0, 0, 0), (20, 0, 0), (20, 20, 0), (0, 20, 0) });
+}
+builder.AddInstance(chair, translation: (50, 0, 0));
+builder.AddFace(new (double, double, double)[] { (0, 0, 0), (100, 0, 0), (100, 100, 0), (0, 100, 0) }, material: red);
+builder.Save("output.skp");
 ```
 
 ## Dart / Flutter
@@ -117,6 +150,19 @@ final scene = skp.buildScene();
 print('${scene.glbPrimitives.length} GLB-ready mesh primitives');
 ```
 
+**Writing:**
+
+```dart
+final builder = create();
+final red = builder.addMaterial('Red', [255, 0, 0]);
+final chair = builder.addComponentDefinition('Chair', (def) {
+  def.addFace([(0.0, 0.0, 0.0), (20.0, 0.0, 0.0), (20.0, 20.0, 0.0), (0.0, 20.0, 0.0)]);
+});
+builder.addInstance(chair, translation: (50.0, 0.0, 0.0));
+builder.addFace([(0.0, 0.0, 0.0), (100.0, 0.0, 0.0), (100.0, 100.0, 0.0), (0.0, 100.0, 0.0)], material: red);
+builder.save('output.skp');
+```
+
 ## C++17
 
 ```cpp
@@ -130,6 +176,21 @@ openskp::export_glb(scene, "model.glb");
 
 std::cout << model.version << " " << model.definitions.size() << '\n';
 std::cout << scene.glb_primitives.size() << '\n';
+```
+
+**Writing:**
+
+```cpp
+using namespace openskp;
+
+auto builder = create();
+int red = builder->add_material("Red", Color3{255, 0, 0});
+auto& chair = builder->add_component_definition("Chair");
+chair.add_face({{0, 0, 0}, {20, 0, 0}, {20, 20, 0}, {0, 20, 0}});
+chair.close();
+builder->add_instance(chair, {.translation = {50, 0, 0}});
+builder->add_face({{0, 0, 0}, {100, 0, 0}, {100, 100, 0}, {0, 100, 0}}, {.material = red});
+builder->save("output.skp");
 ```
 
 ## Common data model

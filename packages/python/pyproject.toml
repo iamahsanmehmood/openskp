@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "openskp"
-version = "1.0.0"
-description = "Open-source SketchUp (.skp) binary file parser — extract geometry, metadata, layers, and materials; export to GLB, OBJ, STL, PLY, DXF, and IFC4"
+version = "1.1.0"
+description = "Open-source SketchUp (.skp) binary file parser and writer — extract geometry, metadata, layers, and materials; create and edit .skp files; export to GLB, OBJ, STL, PLY, DXF, and IFC4"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.9"

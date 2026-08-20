@@ -28,6 +28,10 @@ as first-class packages for Python, .NET, Dart, and C++ — see the
 [project README](https://github.com/iamahsanmehmood/openskp) for the full
 cross-language picture.
 
+This package can also *write* new `.skp` files from scratch, and edit
+existing ones, validated feature-by-feature against the real SketchUp
+SDK (see [Writing](#writing) below).
+
 ## Features
 
 - **Full-fidelity parsing** — vertices, edges, faces, normals, UV
@@ -47,6 +51,14 @@ cross-language picture.
   Node.js and directly in the browser from a `File`/`Blob`.
 - **Structured observability** — opt-in progress reporting and
   structured, location-carrying parse errors.
+- **Write support** — build new legacy-format `.skp` files from scratch:
+  geometry (including true, editable circular/arc curves, freeform
+  polylines, faces with holes cut out, and non-planar auto-triangulation),
+  materials (solid + PNG/JPEG textures), layers, nested component
+  definitions and groups, instance rotation/visibility, and custom
+  attribute dictionaries — or load and extend an existing file with
+  `openExisting()`. No SDK involved; every feature validated against the
+  real SketchUp SDK. See [Writing](#writing) below.
 
 ## Installation
 
@@ -120,6 +132,70 @@ exportIFC(scene, 'output.ifc');
 // Full metadata as a JSON-compatible object
 const meta = toJSON(model, scene);
 ```
+
+## Writing
+
+OpenSKP can also *create* new `.skp` files from scratch — a genuine,
+from-scratch binary writer for the legacy MFC `CArchive` format (SketchUp
+2013–2020), with no SketchUp SDK involved at any point. Ports the same
+feature set as the Python package's writer, verified byte-identical to
+Python's own output on the same input: geometry, materials (solid +
+PNG/JPEG textures), layers (with color and default visibility),
+component definitions with multiple instances, groups, nested
+definitions and nested group instances, per-instance rotation and
+visibility, explicit per-side texture positioning, custom key/value
+attribute dictionaries, circular faces and partial arcs, freeform
+polyline curves, faces with holes cut out, and non-planar
+auto-triangulation. `openExisting()` loads an *existing* legacy-format
+file and rebuilds it as a new builder, so more geometry can be added
+before saving. See [`src/create.ts`](src/create.ts) for the full scope
+notes.
+
+```typescript
+import { create } from 'openskp';
+
+const builder = create();
+
+// Materials and layers
+const red = builder.addMaterial('Red', [255, 0, 0]);
+const brick = builder.addTextureMaterial('Brick', brickPngBytes);
+const roofLayer = builder.addLayer('Roof', { color: [180, 60, 40] });
+
+// All addComponentDefinition/addGroup calls must come before any
+// addInstance/addFace call - placing anything locks in the file's
+// internal slot numbering for everything after it
+const chair = builder.addComponentDefinition('Chair', (def) => {
+  def.addFace([[0, 0, 0], [20, 0, 0], [20, 20, 0], [0, 20, 0]]);
+});
+builder.addInstance(chair, { translation: [50, 0, 0] });
+builder.addInstance(chair, { translation: [100, 0, 0], hidden: true });
+
+builder.addFace(
+  [[0, 0, 0], [100, 0, 0], [100, 100, 0], [0, 100, 0]],
+  { material: red, layer: roofLayer }
+);
+
+builder.save('output.skp');   // Node.js only; use builder.toBytes() in the browser
+```
+
+### Editing an existing file
+
+```typescript
+import { openExisting } from 'openskp';
+
+const { builder, warnings, definitions } = openExisting('building.skp');
+for (const w of warnings) console.log('not fully reproduced:', w);
+
+builder.addCircle([0, 0, 100], [0, 0, 1], 50);
+builder.save('building_edited.skp');
+```
+
+`warnings` is the honest account of what couldn't be faithfully
+reproduced from that specific source file. Every material/layer the
+source had is reachable on `builder.materialsByName`/`builder.layersByName`
+without a separate lookup, and `definitions` maps each replayed component
+definition's own name to its builder for placing more instances of
+something the source already defined.
 
 ## Observability
 

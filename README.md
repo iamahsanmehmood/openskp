@@ -4,7 +4,7 @@
 
 ### The Open-Source SketchUp File Toolkit
 
-**Parse `.skp` files in five languages — and write them natively in Python. No SDK. No license. Just code.**
+**Parse and write `.skp` files natively in five languages. No SDK. No license. Just code.**
 
 ### 🏠 [openskp.com](https://openskp.com) · 🌐 [Try the Live Web Viewer (Drag-and-Drop)](https://iamahsanmehmood.github.io/openskp/) · 📖 [Browse the Docs Site](https://iamahsanmehmood.github.io/openskp/docs/)
 
@@ -18,7 +18,7 @@
 
 ---
 
-*Open-source SketchUp binary file parser for Python, TypeScript, .NET, Dart, and C++ — plus a native `.skp` writer and editor in Python*
+*Open-source SketchUp binary file parser and writer for Python, TypeScript, .NET, Dart, and C++*
 
 [Quick Start](#-quick-start) · [Features](#-features) · [Used in Production](#-used-in-production) · [Documentation](#-documentation) · [Contributing](#-contributing)
 
@@ -32,7 +32,7 @@ OpenSKP is the **first and only** open-source, cross-platform toolkit for Sketch
 
 **Reading** is available in **five languages** — Python, TypeScript, .NET, Dart, and C++ — parsing both the modern **VFF container** (2021+) and the classic **MFC `CArchive`** container (2013–2020) into full programmatic access: geometry, materials, components, layers, and more.
 
-**Writing** is available in **Python**: a from-scratch legacy-format writer ([`openskp.create`](packages/python/src/openskp/create.py)) that produces real, editable geometry — materials and textures, layers, nested component definitions and groups, circular/arc curves, freeform polylines, faces with holes cut out — plus an editor ([`openskp.open_existing`](packages/python/src/openskp/edit.py)) that loads a file that already exists and extends it. Every writer feature is validated against the real SketchUp SDK, not just against this project's own reader, and it holds up rebuilding complex, real architectural models — not only synthetic test fixtures. Writing is Python-only today; porting it to the other four languages is a planned future direction, not yet under way — contributions toward that are very welcome.
+**Writing** is available in **all five languages**: a from-scratch legacy-format writer (`openskp.create()` / `create()` / `SkpCreate.NewFile()` / `openskp::create()` — see the [Quick Start](#-quick-start) below for the exact call per language) that produces real, editable geometry — materials and textures, layers, nested component definitions and groups, circular/arc curves, freeform polylines, faces with holes cut out — plus an editor (`openskp.open_existing()` / `openExisting()` / `SkpEdit.OpenExisting()` / `openskp::open_existing()`) that loads a file that already exists and extends it. Every writer feature is validated against the real SketchUp SDK, not just against this project's own reader, and it holds up rebuilding complex, real architectural models — not only synthetic test fixtures. Landed in Python first; TypeScript, .NET, Dart, and C++ now match it feature-for-feature, each verified against the same SDK oracle. See [Write capabilities](docs/DEVELOPER_GUIDE.md#write-capabilities) in the Developer Guide for the full picture, including the naming convention each language follows.
 
 > [!IMPORTANT]
 > This project was built by reverse engineering a proprietary binary format. It is not affiliated with or endorsed by Trimble Inc. or SketchUp.
@@ -54,8 +54,8 @@ OpenSKP is the **first and only** open-source, cross-platform toolkit for Sketch
 | **Dynamic Components** | ✅ | Extracts dynamic component attribute key-value pairs for both modern (2021+) and legacy (2013–2020) files, in all five languages |
 | **Observability** | ✅ | Opt-in progress reporting + structured, location-carrying parse errors — see [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md) |
 | **Export to GLB / OBJ / STL / PLY / DXF 3D / IFC4 / JSON** | ✅ | GLB, Wavefront OBJ, STL, PLY, DXF 3D (AutoCAD Polyface Mesh), IFC4 (BIM), and JSON metadata export are available natively across all five languages — see [Export capabilities](docs/DEVELOPER_GUIDE.md#export-capabilities) |
-| **Write native `.skp` files** | 🧪 Python only | Build new `.skp` files from scratch — geometry (including genuine circular/arc curves, freeform polylines, faces with holes cut out, and non-planar auto-triangulation), solid/textured materials, layers, nested component definitions and groups, instance rotation/visibility, and custom attribute dictionaries. No SDK involved — every feature validated against the real SketchUp SDK. See [`openskp.create`](packages/python/src/openskp/create.py) |
-| **Edit existing `.skp` files** | 🧪 Python only | Load an existing legacy-format file and extend it — reuses its materials, layers, and component definitions, adds new geometry or instances, and saves a new file. See [`openskp.open_existing`](packages/python/src/openskp/edit.py) |
+| **Write native `.skp` files** | ✅ | Build new `.skp` files from scratch — geometry (including genuine circular/arc curves, freeform polylines, faces with holes cut out, and non-planar auto-triangulation), solid/textured materials, layers, nested component definitions and groups, instance rotation/visibility, and custom attribute dictionaries. No SDK involved — every feature validated against the real SketchUp SDK, in all five languages. See [Write capabilities](docs/DEVELOPER_GUIDE.md#write-capabilities) |
+| **Edit existing `.skp` files** | ✅ | Load an existing legacy-format file and extend it — reuses its materials, layers, and component definitions, adds new geometry or instances, and saves a new file. All five languages. See [Editing an existing file](docs/DEVELOPER_GUIDE.md#editing-an-existing-file) |
 | **Streaming / low-memory parsing** | ✅ | Peak memory bounded by the largest single definition, not the whole file — see [Memory architecture](docs/ARCHITECTURE.md#memory-architecture) |
 | **Pure Implementation** | ✅ | No SketchUp SDK, no native dependencies, no license required |
 | **Cross-Platform** | ✅ | Works on Linux, macOS, and Windows |
@@ -127,7 +127,7 @@ scene = SkpFile.open("my_model.skp").build_scene()
 print(f"{len(scene.glb_primitives)} renderable mesh primitives")
 ```
 
-🧪 **Writing** (Python-only):
+**Writing:**
 
 ```python
 from openskp import create
@@ -170,6 +170,22 @@ const scene = SkpFile.open('my_model.skp').buildScene();
 const glb = toGLB(scene);   // ready to write to a .glb file
 ```
 
+**Writing:**
+
+```typescript
+import { create } from 'openskp';
+
+const builder = create();
+const red = builder.addMaterial('Red', [255, 0, 0]);
+const chair = builder.addComponentDefinition('Chair', (def) => {
+  def.addFace([[0, 0, 0], [20, 0, 0], [20, 20, 0], [0, 20, 0]]);
+});
+builder.addInstance(chair, { translation: [50, 0, 0] });
+builder.addInstance(chair, { translation: [100, 0, 0], hidden: true });
+builder.addFace([[0, 0, 0], [100, 0, 0], [100, 100, 0], [0, 100, 0]], { material: red });
+builder.save('output.skp');   // Node.js; use builder.toBytes() in the browser
+```
+
 ### 🚀 .NET / C#
 
 ```bash
@@ -189,6 +205,22 @@ Console.WriteLine($"{scene.GlbPrimitives.Count} renderable mesh primitives");
 var glb = GlbExport.ToGlb(scene);       // ready to write to a .glb file
 GlbExport.ExportGlb(scene, "my_model.glb");
 IfcExport.ExportIfc(scene, "my_model.ifc");
+```
+
+**Writing:**
+
+```csharp
+var builder = SkpCreate.NewFile();
+int red = builder.AddMaterial("Red", (255, 0, 0));
+var chair = builder.AddComponentDefinition("Chair");
+using (chair)
+{
+    chair.AddFace(new (double, double, double)[] { (0, 0, 0), (20, 0, 0), (20, 20, 0), (0, 20, 0) });
+}
+builder.AddInstance(chair, translation: (50, 0, 0));
+builder.AddInstance(chair, translation: (100, 0, 0), hidden: true);
+builder.AddFace(new (double, double, double)[] { (0, 0, 0), (100, 0, 0), (100, 100, 0), (0, 100, 0) }, material: red);
+builder.Save("output.skp");
 ```
 
 ### 🎯 Dart / Flutter
@@ -212,6 +244,20 @@ exportGlb(scene, 'my_model.glb');
 exportIfc(scene, 'my_model.ifc');
 ```
 
+**Writing:**
+
+```dart
+final builder = create();
+final red = builder.addMaterial('Red', [255, 0, 0]);
+final chair = builder.addComponentDefinition('Chair', (def) {
+  def.addFace([(0.0, 0.0, 0.0), (20.0, 0.0, 0.0), (20.0, 20.0, 0.0), (0.0, 20.0, 0.0)]);
+});
+builder.addInstance(chair, translation: (50.0, 0.0, 0.0));
+builder.addInstance(chair, translation: (100.0, 0.0, 0.0), hidden: true);
+builder.addFace([(0.0, 0.0, 0.0), (100.0, 0.0, 0.0), (100.0, 100.0, 0.0), (0.0, 100.0, 0.0)], material: red);
+builder.save('output.skp');
+```
+
 ### ⚙️ C++17 / CMake
 
 ```cmake
@@ -228,6 +274,22 @@ auto scene = skp.build_scene();
 auto glb = openskp::to_glb(scene);
 openskp::export_glb(scene, "my_model.glb");
 openskp::export_ifc(scene, "my_model.ifc");
+```
+
+**Writing:**
+
+```cpp
+using namespace openskp;
+
+auto builder = create();
+int red = builder->add_material("Red", Color3{255, 0, 0});
+auto& chair = builder->add_component_definition("Chair");
+chair.add_face({{0, 0, 0}, {20, 0, 0}, {20, 20, 0}, {0, 20, 0}});
+chair.close();
+builder->add_instance(chair, {.translation = {50, 0, 0}});
+builder->add_instance(chair, {.translation = {100, 0, 0}, .hidden = true});
+builder->add_face({{0, 0, 0}, {100, 0, 0}, {100, 100, 0}, {0, 100, 0}}, {.material = red});
+builder->save("output.skp");
 ```
 
 ---
@@ -279,18 +341,18 @@ openskp/
 │   ├── python/                # 🐍 Python implementation — parse + write
 │   │   ├── src/openskp/       # _core.py, legacy.py, model.py, scene.py, create.py, edit.py, ...
 │   │   └── tests/
-│   ├── typescript/            # 📘 TypeScript / JavaScript implementation
-│   │   ├── src/                # index.ts, model.ts, legacy.ts, observability.ts, ...
+│   ├── typescript/            # 📘 TypeScript / JavaScript implementation — parse + write
+│   │   ├── src/                # index.ts, model.ts, legacy.ts, create.ts, edit.ts, observability.ts, ...
 │   │   └── tests/
-│   ├── dotnet/                # 🚀 .NET / C# implementation
-│   │   ├── OpenSkp/            # Core.cs, Legacy.cs, Model.cs, Scene.cs, ...
+│   ├── dotnet/                # 🚀 .NET / C# implementation — parse + write
+│   │   ├── OpenSkp/            # Core.cs, Legacy.cs, Model.cs, Scene.cs, Create.cs, Edit.cs, ...
 │   │   └── OpenSkp.Tests/
-│   ├── dart/                  # 🎯 Dart / Flutter implementation
-│   │   ├── lib/src/            # core.dart, legacy.dart, model.dart, scene.dart, ...
+│   ├── dart/                  # 🎯 Dart / Flutter implementation — parse + write
+│   │   ├── lib/src/            # core.dart, legacy.dart, model.dart, scene.dart, create.dart, edit.dart, ...
 │   │   └── test/
-│   └── cpp/                   # ⚙️ C++17 / CMake implementation
-│       ├── include/openskp/    # Public API
-│       ├── src/                # Parser and scene implementation
+│   └── cpp/                   # ⚙️ C++17 / CMake implementation — parse + write
+│       ├── include/openskp/    # Public API (create.hpp, edit.hpp, ...)
+│       ├── src/                # Parser, scene, and writer implementation
 │       └── tests/
 │
 ├── examples/
@@ -362,6 +424,20 @@ metadata for placement/inspection rather than renderer-facing vertex data.
 > [the Developer Guide's legacy-format section](docs/DEVELOPER_GUIDE.md#legacy-format-support-sketchup-20132020)
 > for details, and [docs/BINARY_FORMAT.md](docs/BINARY_FORMAT.md) for the
 > full VFF/TLV specification.
+
+### Writing
+
+Every writer only ever produces the **legacy MFC** container above, never
+VFF — real SketchUp itself still writes MFC-format files when saving as an
+older version, and it's the format this project's writer/editor logic was
+reverse-engineered against first. Rather than synthesizing a file from
+nothing, each language's writer bundles a small, disclosed
+[SDK-authored blank-document scaffold](packages/python/src/openskp/create.py)
+and splices new class-ref/back-ref object-graph entities into it — the
+same encoding [docs/BINARY_FORMAT.md](docs/BINARY_FORMAT.md) documents for
+reading, just inverted. See
+[Write capabilities](docs/DEVELOPER_GUIDE.md#write-capabilities) in the
+Developer Guide for the full API and behavior.
 
 ---
 

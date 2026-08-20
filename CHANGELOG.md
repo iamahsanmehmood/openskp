@@ -5,18 +5,47 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] — Python only
+## [1.1.0] — 2026-08-20
 
-**Initial write support.** OpenSKP can now *create* new `.skp` files from
-scratch, not just parse existing ones — a genuine, from-scratch binary
-writer for the legacy MFC `CArchive` format (SketchUp 2013–2020), built by
-inverting the existing reader's own decoding logic rather than wrapping
-any SDK. Early-stage and Python-only for now; the other four language
-ports do not yet have this capability. See
-[`packages/python/src/openskp/create.py`](packages/python/src/openskp/create.py)
-for the full scope notes.
+**Write support, now in all five languages.** OpenSKP can *create* new
+`.skp` files from scratch, not just parse existing ones — a genuine,
+from-scratch binary writer for the legacy MFC `CArchive` format (SketchUp
+2013–2020), built by inverting the existing reader's own decoding logic
+rather than wrapping any SDK. Landed in Python first (previously the
+`[Unreleased]` entry on this file); this release ports the identical
+feature set — geometry, materials, layers, component definitions and
+groups (including nesting), circular/arc curves, freeform polylines,
+faces with holes, auto-triangulation, custom attributes, and the
+`open_existing()`/edit path — to TypeScript, .NET, Dart, and C++.
+TypeScript, .NET, and Dart are each verified byte-identical to Python's
+own already-SDK-validated output on the same input; C++ (no local
+compiler available in this project's environment) is verified structurally
+- every embedded byte constant cross-checked against Python's real
+values - plus its own full test suite passing in CI across GCC, Clang,
+and MSVC. See [Write capabilities](docs/DEVELOPER_GUIDE.md#write-capabilities) in
+the Developer Guide for the full picture and the naming convention each
+language follows.
 
-### Added
+The entry point per language:
+
+| Language | Start building | Edit an existing file |
+|---|---|---|
+| Python | `openskp.create()` | `openskp.open_existing()` |
+| TypeScript | `create()` | `openExisting()` |
+| .NET | `SkpCreate.NewFile()` | `SkpEdit.OpenExisting()` |
+| Dart | `create()` | `openExisting()` |
+| C++ | `openskp::create()` | `openskp::open_existing()` |
+
+Every other method follows each language's own naming convention on top
+of the same underlying API shape (`add_face`/`addFace`/`AddFace`,
+`add_material`/`addMaterial`/`AddMaterial`, and so on) — see the table in
+[Write capabilities](docs/DEVELOPER_GUIDE.md#write-capabilities) for the
+complete mapping, including where component-definition scoping differs
+(Python's `with` context manager vs. TypeScript/Dart's callback-based
+`addComponentDefinition(name, (def) => {...})` vs. .NET's `using`
+block vs. C++'s explicit `.close()`).
+
+### Added — writer, ported to TypeScript/.NET/Dart/C++
 
 - `openskp.create()` / `SkpBuilder` — build faces (planar, including
   concave polygons and non-manifold shared edges) directly from vertex
@@ -208,8 +237,31 @@ entities) as a regression guard.
   format has no mechanism for one definition's declaration to live inside
   another's, so a nested group's geometry has to be built separately
   first (see `add_group_instance` above).
-- The other four language ports (TypeScript, .NET, Dart, C++) do not
-  have write support yet.
+- Writing the modern VFF (2021+) container - every language's writer
+  only ever produces the legacy MFC format, the same restriction
+  `open_existing()` places on its own source file.
+
+### Fixed — TypeScript
+
+- `retryCountAfterV20Filler`'s byte-at-a-time zero-padding scan
+  misidentified a v20 filler-record count that was an exact multiple of
+  256 (its own low byte is `0x00`, indistinguishable from padding to
+  that scan), misaligning every read after it. Rewritten to probe whole
+  u32s at 4-byte strides instead of inspecting individual bytes, which
+  can't be fooled by a zero low byte the same way. Follow-up to a review
+  note on #155; thanks to [Marco Sumari](https://github.com/tuxiasumari)
+  for tracking it down. (#192)
+
+### Added — TypeScript
+
+- `toGLB(scene, { textures: true })` — embed the scene's texture images
+  in the GLB export and point each textured material's
+  `baseColorTexture` at them, opt-in since it can multiply the exported
+  file's size. Off by default, output byte-identical to before. Also
+  fixes material identity: materials were previously deduplicated by
+  colour alone, silently merging two different textures that happened to
+  average to the same RGB - the texture is now part of the dedup key too.
+  Thanks to [Thomaz Yuji Baba](https://github.com/thomazyujibaba). (#193)
 
 ## [1.0.0] — 2026-08-13
 

@@ -3,9 +3,9 @@
     <TargetFramework>netstandard2.0</TargetFramework>
     <LangVersion>10.0</LangVersion>
     <Nullable>enable</Nullable>
-    <Version>1.0.0</Version>
+    <Version>1.1.0</Version>
     <Authors>Ahsan Mehmood</Authors>
-    <Description>Open-source SketchUp (.skp) binary file parser - extract geometry, metadata, layers, and materials; export to GLB, OBJ, STL, PLY, DXF, and IFC4.</Description>
+    <Description>Open-source SketchUp (.skp) binary file parser and writer - extract geometry, metadata, layers, and materials; create and edit .skp files; export to GLB, OBJ, STL, PLY, DXF, and IFC4.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://openskp.com</PackageProjectUrl>
     <RepositoryUrl>https://github.com/iamahsanmehmood/openskp.git</RepositoryUrl>

@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.1.0
+
+- **Write support** — `create()` returns an `SkpBuilder` that assembles a
+  legacy MFC `CArchive`-format `.skp` file: geometry (`addFace`,
+  `addCircle`, `addArc`, `addPolyline`, including holes and
+  non-coplanar auto-triangulation), solid-color and PNG/JPEG-textured
+  materials, named layers, reusable component definitions with multiple
+  positioned instances, groups, and custom key/value attribute
+  dictionaries — then `save(path)`/`toBytes()` writes it out. No
+  SketchUp SDK involved at any point.
+- **Edit support** — `openExisting(path)` loads an existing legacy-format
+  file, replays everything this package's own reader understood back
+  through the writer API, and returns a builder more geometry can still
+  be added to before saving.
+- Ports the same feature set already shipped in the Python package this
+  release, verified byte-identical to Python's own output on the same
+  input and validated against the real SketchUp SDK.
+
 ## 1.0.0
 
 - Added native Wavefront OBJ exporter (`toObj`/`exportObj`) plus a companion

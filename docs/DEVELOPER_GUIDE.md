@@ -432,34 +432,62 @@ for (const auto& prim : scene.glb_primitives) {
 
 ## Write capabilities
 
-Everything above this section is about reading `.skp` files. As of this
-writing, one language — Python — can also go the other direction: create a
-new `.skp` file from nothing, or load and extend a file that already
-exists. Python-only today, but the write path itself has matured well
-past a proof of concept — every feature below has been validated
-feature-by-feature against the real SketchUp SDK, and it holds up
-rebuilding complex, real architectural models, not just synthetic test
-fixtures. Porting it to the other four languages is a planned future
-direction, not yet under way — contributions toward that are very
-welcome.
+Everything above this section is about reading `.skp` files. All five
+languages can also go the other direction: create a new `.skp` file from
+nothing, or load and extend a file that already exists. The write path has
+matured well past a proof of concept — every feature below has been
+validated feature-by-feature against the real SketchUp SDK, and it holds
+up rebuilding complex, real architectural models, not just synthetic test
+fixtures. It landed in Python first; TypeScript, .NET, Dart, and C++ were
+ported to the identical feature set, each cross-checked against Python's
+own already-SDK-validated output (byte-identical for TypeScript/.NET/Dart;
+structurally verified plus full CI for C++, which has no local compiler in
+this project's own development environment).
 
-| Language | Write new `.skp` files |
-|---|---|
-| Python | 🧪 `openskp.create()` / `openskp.open_existing()` — legacy-format (2013–2020) only |
-| TypeScript | ❌ not yet |
-| .NET | ❌ not yet |
-| Dart | ❌ not yet |
-| C++ | ❌ not yet |
+| Language | Write new `.skp` files | Start building | Edit an existing file |
+|---|---|---|---|
+| Python | ✅ legacy-format (2013–2020) only | `openskp.create()` | `openskp.open_existing()` |
+| TypeScript | ✅ legacy-format (2013–2020) only | `create()` | `openExisting()` |
+| .NET | ✅ legacy-format (2013–2020) only | `SkpCreate.NewFile()` | `SkpEdit.OpenExisting()` |
+| Dart | ✅ legacy-format (2013–2020) only | `create()` | `openExisting()` |
+| C++ | ✅ legacy-format (2013–2020) only | `openskp::create()` | `openskp::open_existing()` |
 
-`openskp.create()` returns an `SkpBuilder` that assembles a legacy MFC
-`CArchive`-format `.skp` file byte-for-byte — geometry, materials
-(solid-color and PNG/JPEG-textured), named layers, reusable component
-definitions with multiple positioned instances, and groups — then
-`.save(path)` writes it to disk. No SketchUp SDK is involved at import,
-build, or save time; the writer works by inverting this project's own
-reader logic (the same class-ref/back-ref object-graph protocol and entity
-encodings documented in [BINARY_FORMAT.md](BINARY_FORMAT.md)), against a
-small bundled blank-document scaffold it splices new entities into.
+Every language's entry point returns an `SkpBuilder` that assembles a
+legacy MFC `CArchive`-format `.skp` file byte-for-byte — geometry,
+materials (solid-color and PNG/JPEG-textured), named layers, reusable
+component definitions with multiple positioned instances, and groups —
+then a save call writes it to disk. No SketchUp SDK is involved at
+import, build, or save time; the writer works by inverting this project's
+own reader logic (the same class-ref/back-ref object-graph protocol and
+entity encodings documented in [BINARY_FORMAT.md](BINARY_FORMAT.md)),
+against a small bundled blank-document scaffold it splices new entities
+into.
+
+Method names follow each language's own convention on top of the same
+underlying shape — the examples below are all Python, but the mapping is
+mechanical for the plain methods:
+
+| Python | TypeScript | .NET | Dart | C++ |
+|---|---|---|---|---|
+| `add_material` | `addMaterial` | `AddMaterial` | `addMaterial` | `add_material` |
+| `add_texture_material` | `addTextureMaterial` | `AddTextureMaterial` | `addTextureMaterial` | `add_texture_material` |
+| `add_layer` | `addLayer` | `AddLayer` | `addLayer` | `add_layer` |
+| `add_instance` | `addInstance` | `AddInstance` | `addInstance` | `add_instance` |
+| `add_face` | `addFace` | `AddFace` | `addFace` | `add_face` |
+| `add_circle` | `addCircle` | `AddCircle` | `addCircle` | `add_circle` |
+| `add_arc` | `addArc` | `AddArc` | `addArc` | `add_arc` |
+| `add_polyline` | `addPolyline` | `AddPolyline` | `addPolyline` | `add_polyline` |
+| `save(path)` / (no `to_bytes`, see below) | `save(path)` / `toBytes()` | `Save(path)` / `ToBytes()` | `save(path)` / `toBytes()` | `save(path)` / `to_bytes()` |
+
+One thing does *not* map mechanically: how a component definition's scope
+is delimited, since it has to match each language's own idiom for "run
+this code, then finalize." Python uses a `with` context manager;
+TypeScript and Dart take a callback that receives the definition builder
+and auto-close on return; .NET's `AddComponentDefinition` returns an
+`IDisposable` for a `using` block; C++ returns a reference you must call
+`.close()` on explicitly (no RAII auto-close, since half-built state on an
+exception mid-construction can't safely finish writing anyway) — see each
+language's own snippet below.
 
 ```python
 from openskp import create
@@ -646,6 +674,108 @@ groups. See [`openskp/create.py`](../packages/python/src/openskp/create.py)
 for the full, current scope notes, and the [Python package README](../packages/python/README.md#writing)
 for a longer worked example.
 
+### The same feature set in the other four languages
+
+Every capability walked through above — materials/textures, layers,
+nested definitions and groups, rotation, hidden flags, custom
+attributes, circles/arcs/polylines, `auto_triangulate`, holes,
+`front_uv`/`back_uv` texture positioning, and `open_existing()` editing —
+is available identically in TypeScript, .NET, Dart, and C++, with the
+same parameter names under each language's own casing convention (see
+the method-name table above). One representative example per language,
+covering materials, a colored/hidden layer, a component definition with
+custom attributes, a rotated+hidden instance, and root-level geometry:
+
+**TypeScript:**
+
+```typescript
+import { create } from 'openskp';
+
+const builder = create();
+const red = builder.addMaterial('Red', [255, 0, 0]);
+const roof = builder.addLayer('Roof', { color: [180, 60, 40], hidden: true });
+const chair = builder.addComponentDefinition(
+  'Chair',
+  (def) => def.addFace([[0, 0, 0], [20, 0, 0], [20, 20, 0], [0, 20, 0]]),
+  { attributes: { sku: 'CH-100', price: 49.99 } }
+);
+builder.addInstance(chair, {
+  translation: [50, 0, 0],
+  rotation: { axis: [0, 0, 1], angleRadians: Math.PI / 2 },
+  hidden: true,
+});
+builder.addFace([[0, 0, 0], [100, 0, 0], [100, 100, 0], [0, 100, 0]], { material: red, layer: roof });
+builder.save('output.skp');
+```
+
+**.NET:**
+
+```csharp
+var builder = SkpCreate.NewFile();
+int red = builder.AddMaterial("Red", (255, 0, 0));
+int roof = builder.AddLayer("Roof", color: (180, 60, 40), hidden: true);
+var chair = builder.AddComponentDefinition(
+    "Chair", attributes: new Dictionary<string, object> { ["sku"] = "CH-100", ["price"] = 49.99 });
+using (chair)
+{
+    chair.AddFace(new (double, double, double)[] { (0, 0, 0), (20, 0, 0), (20, 20, 0), (0, 20, 0) });
+}
+builder.AddInstance(chair, translation: (50, 0, 0), rotation: ((0, 0, 1), Math.PI / 2), hidden: true);
+builder.AddFace(new (double, double, double)[] { (0, 0, 0), (100, 0, 0), (100, 100, 0), (0, 100, 0) },
+    material: red, layer: roof);
+builder.Save("output.skp");
+```
+
+**Dart:**
+
+```dart
+import 'dart:math';
+
+final builder = create();
+final red = builder.addMaterial('Red', [255, 0, 0]);
+final roof = builder.addLayer('Roof', color: [180, 60, 40], hidden: true);
+final chair = builder.addComponentDefinition(
+  'Chair',
+  (def) => def.addFace([(0.0, 0.0, 0.0), (20.0, 0.0, 0.0), (20.0, 20.0, 0.0), (0.0, 20.0, 0.0)]),
+  attributes: {'sku': 'CH-100', 'price': 49.99},
+);
+builder.addInstance(chair,
+    translation: (50.0, 0.0, 0.0), rotation: ((0.0, 0.0, 1.0), pi / 2), hidden: true);
+builder.addFace([(0.0, 0.0, 0.0), (100.0, 0.0, 0.0), (100.0, 100.0, 0.0), (0.0, 100.0, 0.0)],
+    material: red, layer: roof);
+builder.save('output.skp');
+```
+
+**C++:**
+
+```cpp
+using namespace openskp;
+
+constexpr double kHalfPi = 1.5707963267948966;  // avoids the M_PI portability wrinkle on MSVC
+
+auto builder = create();
+int red = builder->add_material("Red", Color3{255, 0, 0});
+int roof = builder->add_layer("Roof", {.color = Color4{180, 60, 40, 255}, .hidden = true});
+DefinitionOptions dopts;
+dopts.attributes = {{"sku", std::string{"CH-100"}}, {"price", 49.99}};
+auto& chair = builder->add_component_definition("Chair", dopts);
+chair.add_face({{0, 0, 0}, {20, 0, 0}, {20, 20, 0}, {0, 20, 0}});
+chair.close();
+builder->add_instance(chair, {
+    .translation = {50, 0, 0},
+    .rotation = Rotation{{0, 0, 1}, kHalfPi},
+    .hidden = true,
+});
+builder->add_face({{0, 0, 0}, {100, 0, 0}, {100, 100, 0}, {0, 100, 0}}, {.material = red, .layer = roof});
+builder->save("output.skp");
+```
+
+Each language's own test suite (`packages/<language>/tests/` or
+`packages/<language>/test/`) exercises every other capability from the
+Python walkthrough above — circles/arcs/polylines, holes,
+`auto_triangulate`, explicit texture positioning, nested definitions and
+groups — with the same coverage depth Python's own tests have.
+
 ### Editing an existing file
 
 `openskp.create` only ever builds a brand-new file from its own blank
@@ -767,14 +897,6 @@ The .NET port exposes `SkpFile` as a static class with factory methods
 (`SkpFile.Parse`, `SkpFile.BuildScene`, `SkpFile.Open`), rather than requiring an
 instantiated file handle object before invoking `.Parse()`. This is a deliberate
 C# idiom choice that matches standard .NET framework library designs (e.g. `System.IO.File`).
-
-### Write support — Python only
-
-Covered above under [Write capabilities](#write-capabilities): Python is
-currently the only port that can create new `.skp` files (`openskp.create()`).
-This is a genuine capability gap, not a shape difference — TypeScript,
-.NET, Dart, and C++ remain read/export-only until a writer is ported to
-each. Contributions bringing the other four ports to parity are welcome.
 
 ### C++ `materials_by_id()` helper
 

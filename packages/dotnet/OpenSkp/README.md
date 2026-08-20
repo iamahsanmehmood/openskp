@@ -27,6 +27,10 @@ for Python, TypeScript, Dart, and C++ — see the
 [project README](https://github.com/iamahsanmehmood/openskp) for the full
 cross-language picture.
 
+This package can also *write* new `.skp` files from scratch, and edit
+existing ones, validated feature-by-feature against the real SketchUp
+SDK (see [Writing](#-writing) below).
+
 ## ✨ Features
 
 - **Full-fidelity parsing** — vertices, edges, faces, normals, UV
@@ -48,6 +52,14 @@ cross-language picture.
   (153,586 definitions) with zero special configuration.
 - **Structured observability** — opt-in progress reporting and
   location-carrying parse errors for debugging malformed or unusual files.
+- **Write support** — build new legacy-format `.skp` files from scratch:
+  geometry (including true, editable circular/arc curves, freeform
+  polylines, faces with holes cut out, and non-planar auto-triangulation),
+  materials (solid + PNG/JPEG textures), layers, nested component
+  definitions and groups, instance rotation/visibility, and custom
+  attribute dictionaries — or load and extend an existing file with
+  `SkpEdit.OpenExisting()`. No SDK involved; every feature validated
+  against the real SketchUp SDK. See [Writing](#-writing) below.
 
 ### 🌐 [Try the Live Web Viewer (Drag-and-Drop)](https://iamahsanmehmood.github.io/openskp/)
 
@@ -122,6 +134,70 @@ class Program
     }
 }
 ```
+
+---
+
+## ✏️ Writing
+
+OpenSKP can also *create* new `.skp` files from scratch — a genuine,
+from-scratch binary writer for the legacy MFC `CArchive` format (SketchUp
+2013–2020), with no SketchUp SDK involved at any point. Ports the same
+feature set as the Python package's writer, verified byte-identical to
+Python's own output on the same input: geometry, materials (solid +
+PNG/JPEG textures), layers (with color and default visibility),
+component definitions with multiple instances, groups, nested
+definitions and nested group instances, per-instance rotation and
+visibility, explicit per-side texture positioning, custom key/value
+attribute dictionaries, circular faces and partial arcs, freeform
+polyline curves, faces with holes cut out, and non-planar
+auto-triangulation. `SkpEdit.OpenExisting()` loads an *existing*
+legacy-format file and rebuilds it as a new builder, so more geometry can
+be added before saving. See [`Create.cs`](Create.cs) for the full scope
+notes.
+
+```csharp
+using OpenSkp;
+
+var builder = SkpCreate.NewFile();
+
+// Materials and layers
+int red = builder.AddMaterial("Red", (255, 0, 0));
+int roof = builder.AddLayer("Roof", color: (180, 60, 40));
+
+// All AddComponentDefinition/AddGroup calls must come before any
+// AddInstance/AddFace call - placing anything locks in the file's
+// internal slot numbering for everything after it
+var chair = builder.AddComponentDefinition("Chair");
+using (chair)
+{
+    chair.AddFace(new (double, double, double)[] { (0, 0, 0), (20, 0, 0), (20, 20, 0), (0, 20, 0) });
+}
+builder.AddInstance(chair, translation: (50, 0, 0));
+builder.AddInstance(chair, translation: (100, 0, 0), hidden: true);
+
+builder.AddFace(
+    new (double, double, double)[] { (0, 0, 0), (100, 0, 0), (100, 100, 0), (0, 100, 0) },
+    material: red, layer: roof);
+
+builder.Save("output.skp");
+```
+
+### Editing an existing file
+
+```csharp
+var result = SkpEdit.OpenExisting("building.skp");
+foreach (var w in result.Warnings) Console.WriteLine($"not fully reproduced: {w}");
+
+result.Builder.AddCircle((0, 0, 100), (0, 0, 1), 50);
+result.Builder.Save("building_edited.skp");
+```
+
+`result.Warnings` is the honest account of what couldn't be faithfully
+reproduced from that specific source file. Every material/layer the
+source had is reachable on `result.Builder.MaterialsByName`/
+`LayersByName` without a separate lookup, and `result.Definitions` maps
+each replayed component definition's own name to its builder for placing
+more instances of something the source already defined.
 
 ---
 
