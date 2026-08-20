@@ -20,7 +20,7 @@
 
 *Open-source SketchUp binary file parser, writer, and converter for Python, TypeScript, .NET, Dart, and C++*
 
-[Quick Start](#-quick-start) · [Features](#-features) · [Used in Production](#-used-in-production) · [Documentation](#-documentation) · [Contributing](#-contributing)
+[Quick Start](#-quick-start) · [Features](#-features) · [Built by AI](#-built-by-ai-too) · [Used in Production](#-used-in-production) · [Documentation](#-documentation) · [Contributing](#-contributing)
 
 </div>
 
@@ -297,36 +297,97 @@ builder->save("output.skp");
 
 ---
 
+## 🤖 Built by AI, Too
+
+The writer above is a generic, well-documented API on purpose — no
+`add_chair()` or `add_staircase()` helpers, just materials, faces,
+components, and instances. That turns out to make it an unusually good
+target for AI coding agents: every model below was generated from a
+natural-language (or reference-photo) prompt, by two *independent* AI
+agents, using nothing but the raw API documented above.
+
+<table>
+<tr>
+<td width="33%" align="center">
+<img src="docs/assets/ai-modeling/chair-table-armchair.png" alt="AI-generated armchair and side table" width="100%"><br>
+<sub>Armchair + side table — tapered legs, curved tessellated backrest</sub>
+</td>
+<td width="33%" align="center">
+<img src="docs/assets/ai-modeling/executive-desk.png" alt="AI-generated executive desk with drawers" width="100%"><br>
+<sub>Executive desk — 8 nested component definitions</sub>
+</td>
+<td width="33%" align="center">
+<img src="docs/assets/ai-modeling/phone-front-back.png" alt="AI-generated smartphone modeled from a reference photo" width="100%"><br>
+<sub>Smartphone — modeled directly from a product reference photo</sub>
+</td>
+</tr>
+</table>
+
+See [AI-Generated Models](docs/AI_MODELING.md) for the full write-up —
+why this works, more examples (including real code excerpts and exact
+component/material counts), how to point your own AI coding agent at
+OpenSKP today, and open directions for contributors (a render/validate
+feedback loop, evaluating an MCP server, more showcase models).
+
+---
+
 ## 🏛️ Architecture
 
-OpenSKP splits into a light parse and an opt-in, heavier scene bake — kept
-separate so the common case (just reading geometry/metadata) never pays for
-scene-graph resolution it doesn't need:
+Two independent flows, both native in all five languages: **reading and
+converting** an existing `.skp` file, and **writing** a new one (or
+editing an existing one) from nothing but the same public API.
 
 ```mermaid
 graph TB
-    SKP[".skp file<br/>(VFF 2021+ or legacy MFC 2013-2020)"] --> HDR["Header + container<br/>detection"]
-    HDR --> WALK["Streaming TLV walk<br/>(one top-level record<br/>at a time)"]
-    WALK --> RAW["Raw parsed data<br/>defs · layers · materials · styles"]
-    RAW --> PARSE["parse() -> SkpModel<br/>per-definition geometry,<br/>no scene resolution"]
-    RAW --> SCENE["buildScene() -> Scene<br/>full placed instance tree,<br/>triangulated, world-space"]
-    SCENE --> GLB["GLB export<br/>(all five languages)"]
+    subgraph read[" Reading and converting "]
+        direction LR
+        SKP1[".skp file<br/>VFF 2021+ or<br/>legacy MFC 2013-2020"] --> WALK["Streaming TLV walk<br/>one top-level record<br/>at a time"]
+        WALK --> RAW["Raw parsed data<br/>defs · layers ·<br/>materials · styles"]
+        RAW --> PARSE["parse()<br/>-> SkpModel<br/>no scene resolution"]
+        RAW --> SCENE["buildScene()<br/>-> Scene<br/>triangulated, world-space"]
+        SCENE --> CONVERT["Convert to 7 formats<br/>GLB · OBJ · STL · PLY<br/>DXF · IFC4 · JSON"]
+    end
 
-    style SKP fill:#f59e0b,color:#000,stroke:#d97706
+    subgraph write[" Writing and editing "]
+        direction LR
+        NEW["create()"] --> SPLICE["Splice new entities into<br/>the blank-document scaffold"]
+        SKP2[".skp file<br/>to extend"] --> EDIT["open_existing()<br/>parse -> replay -> extend"]
+        EDIT --> SPLICE
+        SPLICE --> OUT["New .skp file"]
+    end
+
+    style SKP1 fill:#f59e0b,color:#000,stroke:#d97706
+    style SKP2 fill:#f59e0b,color:#000,stroke:#d97706
     style RAW fill:#8b5cf6,color:#fff,stroke:#7c3aed
+    style SPLICE fill:#8b5cf6,color:#fff,stroke:#7c3aed
     style PARSE fill:#3b82f6,color:#fff,stroke:#2563eb
     style SCENE fill:#3b82f6,color:#fff,stroke:#2563eb
-    style GLB fill:#10b981,color:#fff,stroke:#059669
+    style NEW fill:#3b82f6,color:#fff,stroke:#2563eb
+    style EDIT fill:#3b82f6,color:#fff,stroke:#2563eb
+    style CONVERT fill:#10b981,color:#fff,stroke:#059669
+    style OUT fill:#10b981,color:#fff,stroke:#059669
 ```
 
-The streaming TLV walk is what lets OpenSKP handle real production files
-with 100,000+ component definitions without materializing the whole file's
-parse tree in memory at once — peak memory is bounded by the single
-largest top-level record, not the file's total size.
+**Reading** streams the TLV tree one top-level record at a time rather
+than materializing the whole thing in memory — the reason OpenSKP
+handles real production files with 100,000+ component definitions;
+peak memory is bounded by the single largest top-level record, not the
+file's total size. `parse()` (light, per-definition) and `buildScene()`
+(opt-in, full placed scene graph) are deliberately separate so the
+common case never pays for scene-graph resolution it doesn't need.
+
+**Writing** takes the opposite shape: rather than streaming a large
+input, it splices new class-ref/back-ref entities into a small,
+disclosed, SDK-authored blank-document scaffold — the same protocol
+[docs/BINARY_FORMAT.md](docs/BINARY_FORMAT.md) documents for reading,
+inverted. `open_existing()` reuses this by fully parsing a source file
+first, then replaying everything it understood back through the same
+writer API before any new geometry is added.
 
 > 📖 For the full architecture breakdown — including the memory model,
-> why .NET needed a genuinely different fix, and where the five languages'
-> internals map to each other — see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+> the writer's scaffold-splicing design, why .NET needed a genuinely
+> different memory fix, and where the five languages' internals map to
+> each other — see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ---
 
