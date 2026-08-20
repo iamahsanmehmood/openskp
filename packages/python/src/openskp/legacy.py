@@ -429,12 +429,55 @@ def _read_layer(ar, r):
     while len(mid) < 8 and r.peek(3) != _STR_MARKER:
         mid += r.raw(1)              # flags: 3 bytes on v16, 4 on v17+
     r.utf16()                        # internal name ("Layer_<name>")
-    r.u16()
+    flags = r.u16()
+    if flags & 0x00FF:
+        # Colour-by-layer with a TEXTURED material: instead of the flat
+        # RGBA, the layer embeds the same texture block a CMaterial
+        # carries (SketchUp Pro assigns full materials to layers). Low
+        # byte of the flag word set = textured; a plain colour layer has
+        # 0 there (its high byte carries an unrelated flag, so the word
+        # as a whole is non-zero either way).
+        tex = _texture_block(ar, r)
+        r.raw(4)                     # trailing u32
+        return {'k': 'layer', 'name': name, 'hidden': mid[0] if mid else 0,
+                'rgba': tex['rgba']}
     rgba = r.raw(4)
     r.utf16()
     r.raw(21)
     return {'k': 'layer', 'name': name, 'hidden': mid[0] if mid else 0,
             'rgba': tuple(rgba)}
+
+
+def _texture_block(ar, r):
+    """The textured-material payload: an embedded CDib plus applied size,
+    source file name, average colour, and opacity. Shared verbatim between
+    a CMaterial with a texture and a colour-by-layer CLayer that carries a
+    textured material."""
+    r.raw(2 if ar.ver >= 17 else 1)     # texture flag pad
+    s, n, dib = ar.read_object(r, expect='CDib')
+    if not (isinstance(dib, dict) and dib.get('k') == 'dib'):
+        raise LegacyParseError(f"texture object is not a dib {r.ctx()}")
+    # optional u32 between the dib and the 2 x f64 applied size
+    marker = r.data.find(_STR_MARKER, r.pos, r.pos + 28)
+    if marker - r.pos == 20:
+        r.u32()
+    elif marker - r.pos != 16:
+        raise LegacyParseError(f"texture size block misaligned {r.ctx()}")
+    w = r.f64()
+    h = r.f64()
+    fname = r.utf16()
+    avg = r.raw(9)               # RGBA + 00 + RGBA (colour stored twice)
+    r.utf16()
+    blob = r.raw(8)              # u32 + u32 colorized flag
+    opacity = r.f64()
+    use_op = r.u8()
+    # A colourized (re-tinted) texture stores the ORIGINAL image plus
+    # the tint as the average colour; flagged by the second blob u32
+    # or by alpha 0xFF on the stored colour.
+    colorized = bool(blob[4]) or avg[3] == 0xFF
+    return {'rgba': tuple(avg[:4]), 'opacity': opacity, 'use_opacity': use_op,
+            'tex_dib': s, 'tex_w': w, 'tex_h': h, 'tex_file': fname,
+            'colorized': colorized}
 
 
 def _read_material(ar, r):
@@ -450,31 +493,7 @@ def _read_material(ar, r):
         use_op = r.u8()
         out.update(rgba=tuple(rgba), opacity=opacity, use_opacity=use_op)
     else:
-        r.raw(2 if ar.ver >= 17 else 1)     # texture flag pad
-        s, n, dib = ar.read_object(r, expect='CDib')
-        if not (isinstance(dib, dict) and dib.get('k') == 'dib'):
-            raise LegacyParseError(f"texture object is not a dib {r.ctx()}")
-        # optional u32 between the dib and the 2 x f64 applied size
-        marker = r.data.find(_STR_MARKER, r.pos, r.pos + 28)
-        if marker - r.pos == 20:
-            r.u32()
-        elif marker - r.pos != 16:
-            raise LegacyParseError(f"texture size block misaligned {r.ctx()}")
-        w = r.f64()
-        h = r.f64()
-        fname = r.utf16()
-        avg = r.raw(9)               # RGBA + 00 + RGBA (colour stored twice)
-        r.utf16()
-        blob = r.raw(8)              # u32 + u32 colorized flag
-        opacity = r.f64()
-        use_op = r.u8()
-        # A colourized (re-tinted) texture stores the ORIGINAL image plus
-        # the tint as the average colour; flagged by the second blob u32
-        # or by alpha 0xFF on the stored colour.
-        colorized = bool(blob[4]) or avg[3] == 0xFF
-        out.update(rgba=tuple(avg[:4]), opacity=opacity, use_opacity=use_op,
-                   tex_dib=s, tex_w=w, tex_h=h, tex_file=fname,
-                   colorized=colorized)
+        out.update(_texture_block(ar, r))
     return out
 
 
@@ -521,12 +540,16 @@ def _read_thumbnail(ar, r):
 
 
 def _read_relationship(ar, r):
-    _preamble(ar, r)
     # two object pointers (small maps: two u16 back-refs — which read like
-    # the "u32" of the public notes; big maps escalate them to big-tags)
-    ar.read_object(r)
-    ar.read_object(r)
-    return {'k': 'relationship'}
+    # the "u32" of the public notes; big maps escalate them to big-tags).
+    # They bind an annotation to the entity it labels, and the annotation
+    # side is routinely serialized BEFORE the geometry side — so these can
+    # point forward, past the walk cursor; _entity_ref tolerates that
+    # where read_object's back-ref path (rightly) does not.
+    _preamble(ar, r)
+    a = _entity_ref(ar, r)
+    b = _entity_ref(ar, r)
+    return {'k': 'relationship', 'refs': (a, b)}
 
 
 def _read_constructionline(ar, r):
@@ -574,13 +597,45 @@ def _read_skfont(ar, r):
     return {'k': 'font'}
 
 
+def _entity_ref(ar, r):
+    """A reference-to-entity tag: dimension connection points and text
+    leader attachments. Unlike ``read_object``'s back-ref path, this
+    tolerates a slot the walk has not reached yet — SketchUp serializes a
+    label/dimension BEFORE the entity it anchors to when both live in the
+    same entity list, so the reference can legitimately point forward.
+    Returns the slot number, or ``None`` for a null reference."""
+    tag = r.u16()
+    if tag == 0:
+        return None
+    if tag == 0x7FFF:
+        big = r.u32()
+        if big & 0x80000000:
+            raise LegacyParseError(f"entity ref is a new object {r.ctx()}")
+        return big
+    if tag == 0xFFFF or tag & 0x8000:
+        raise LegacyParseError(f"entity ref is a new object {r.ctx()}")
+    return tag
+
+
 def _read_dimlinear(ar, r):
     _preamble(ar, r)
     db = _drawbase(ar, r)
     text = r.utf16()
     ar.read_object(r, expect='CSkFont')
-    r.raw(165)
-    return {'k': 'dimension', 'db': db, 'text': text}
+    # The tail is NOT a fixed 165-byte blob: it embeds two object
+    # references (the dimension's connection points into the geometry).
+    # Each is a normal MFC tag — 2 bytes in small files, but 6 bytes once
+    # the archive holds more than 0x7FFE objects and the 0x7FFF big-tag
+    # escape kicks in — so a fixed-size skip walks off the rails exactly
+    # on large models (found on a real 17 MB SketchUp 2018 file whose
+    # dimension sat past object #517k).
+    r.raw(37)
+    c1 = _entity_ref(ar, r)          # connection point 1 (may be null)
+    r.raw(42)
+    c2 = _entity_ref(ar, r)          # connection point 2 (may be null)
+    r.raw(82)
+    return {'k': 'dimension', 'db': db, 'text': text,
+            'connect': (c1, c2)}
 
 
 def _read_text(ar, r):
@@ -602,7 +657,21 @@ def _read_text(ar, r):
     r.raw(idx - r.pos)
     text = r.utf16()
     r.raw(5)
-    return {'k': 'text', 'text': text, 'db': db}
+    # Optional leader-attachment refs follow the fixed tail (a text label
+    # anchored to geometry stores the anchored entities here; they can
+    # point FORWARD — see _entity_ref). Only the escaped 6-byte form is
+    # recognisable without risk: a 2-byte back-ref here would be
+    # indistinguishable from the next list item's tag, and every known
+    # sample either has no attachments or lives in a >0x7FFE-object file
+    # where the escape is mandatory anyway.
+    attach = []
+    while r.peek(2) == b'\xff\x7f':
+        val = struct.unpack_from('<I', r.data, r.pos + 2)[0]
+        if val & 0x80000000:
+            break                    # new-object tag — the next entity
+        r.raw(6)
+        attach.append(val)
+    return {'k': 'text', 'text': text, 'db': db, 'attach': attach}
 
 
 def _read_entity_list(ar, r, count, owner):
