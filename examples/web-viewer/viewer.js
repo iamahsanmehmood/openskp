@@ -736,3 +736,13 @@ btnCloseInspector.addEventListener('click', () => setDrawer(panelInspector, mtog
 initViewport();
 initDragAndDrop();
 setLoader(false);
+
+// Load a real, non-trivial sample model by default so a first-time visitor
+// sees something rendered immediately instead of an empty drop zone - the
+// AI-generated chair + table showcase model (see docs/AI_MODELING.md).
+// Failure here (e.g. a deployment that doesn't bundle samples/) just falls
+// back to the normal empty "drop a file" state, silently.
+fetch('samples/chair_and_table.skp')
+  .then((res) => (res.ok ? res.arrayBuffer() : Promise.reject(res.status)))
+  .then((buffer) => loadSkpBuffer(buffer, 'chair_and_table.skp'))
+  .catch((err) => console.warn('Default sample model did not load:', err));
