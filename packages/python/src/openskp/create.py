@@ -2539,29 +2539,23 @@ class SkpBuilder:
         self._face_count += 1  # reuses the "at least one root entity" check in to_bytes
 
     def add_dimension(self, p1: Point3, p2: Point3, offset: float = 10.0) -> None:
-        """Add an ANCHORED linear dimension between two points of already-
-        written root geometry (both must be vertices of a previous
-        ``add_face``/``add_circle`` call — the record references their
-        vertex objects, so the dimension stays associative in SketchUp).
-        ``offset`` is the dimension line's offset from the measured edge,
-        in inches (signed).
+        """Add a FREE linear dimension between two explicit points (inches,
+        world space). ``offset`` is the dimension line's offset from the
+        measured segment, in inches (signed).
 
-        Record layout harvested byte-exact from real SketchUp 2017 files
-        (see docs/dimension-record-notes.md): the geometry comes entirely
-        from the two vertex back-refs; the fixed blocks are templates from
-        the calibration corpus. The auto-computed measurement text is the
-        empty string, exactly as SketchUp writes it.
+        The record layout is the byte-exact one the REAL SketchUp SDK
+        writes for free dimensions (generated via SketchUpAPI and
+        harvested — see docs/dimension-record-notes.md): connection type 1
+        with the point stored inline in each connection block and null
+        object refs. Free dimensions render in any orientation; anchored
+        (type 2) dimensions are a future refinement.
         """
         self._ensure_geometry_writer()
         w = self._geometry_writer
         k1 = (float(p1[0]), float(p1[1]), float(p1[2]))
         k2 = (float(p2[0]), float(p2[1]), float(p2[2]))
-        s1 = self._vertex_slots.get(k1)
-        s2 = self._vertex_slots.get(k2)
-        if s1 is None or s2 is None:
-            raise SkpWriteError(
-                "add_dimension endpoints must coincide with vertices of "
-                "already-added root geometry")
+        if k1 == k2:
+            raise SkpWriteError("add_dimension endpoints coincide")
         w._new_of_known_class("CDimensionLinear", schema=6)
         w._preamble()
         w.buf += _DIM_DRAWBASE
@@ -2574,37 +2568,20 @@ class SkpBuilder:
             w.buf += _DIM_FONT_PAYLOAD
         else:
             w._backref(self._dim_font_slot)
-        w.buf += _DIM_B37
-        w._backref(s1)
-        w.buf += _DIM_B42
-        w._backref(s2)
-        # B82 head: seven doubles + a mode u32. The values are NOT free —
-        # the real SketchUp SDK rejects some combinations outright (probed
-        # against SketchUpAPI via skp2dae) — so both accepted variants come
-        # verbatim from real SketchUp-written files: the vertical corpus
-        # template (capilla quiroz, dir ±Z) and the horizontal pattern
-        # (casa bueno, dir ±X/±Y, near-zero head).
-        dx = (k2[0] - k1[0], k2[1] - k1[1], k2[2] - k1[2])
-        ln = math.sqrt(dx[0] ** 2 + dx[1] ** 2 + dx[2] ** 2)
-        if ln < 1e-9:
-            raise SkpWriteError("add_dimension endpoints coincide")
-        u = (abs(dx[0] / ln), abs(dx[1] / ln), abs(dx[2] / ln))
-        # The head's seven doubles are a CONSTANT — (0,0,1, 0,-1,0, 0) on
-        # every root-level dimension SketchUp itself wrote, horizontal and
-        # vertical alike — and the u32 after them is the dimension TYPE:
-        # 1 = horizontal, 2 = vertical (both harvested from real files),
-        # 0 = aligned (anything not axis-aligned).
+        # connection 1: [u8 0][u32 0][u32 type=1][u32 4][point A], null ref
+        w.buf += bytes(5) + _u32(1) + _u32(4)
+        w.buf += _f64(k1[0]) + _f64(k1[1]) + _f64(k1[2])
+        w.buf += struct.pack("<H", 0)
+        # connection 2: [u16 0][f64 0][u32 type=1][u32 4][point B], null ref
+        w.buf += bytes(10) + _u32(1) + _u32(4)
+        w.buf += _f64(k2[0]) + _f64(k2[1]) + _f64(k2[2])
+        w.buf += struct.pack("<H", 0)
+        # placement block: SDK free-dimension defaults + our offset
         w.buf += bytes(2)
-        for val in (0.0, 0.0, 1.0, 0.0, -1.0, 0.0, 0.0):
+        for val in (0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0):
             w.buf += _f64(val)
-        if u[2] > 1 - 1e-9:
-            mode = 2                          # vertical
-        elif u[2] < 1e-9 and (u[0] > 1 - 1e-9 or u[1] > 1 - 1e-9):
-            mode = 1                          # horizontal, axis-aligned
-        else:
-            mode = 0                          # aligned
-        w.buf += _u32(mode)
-        w.buf += _f64(float(offset)) + _f64(0.0) + _u32(3)
+        w.buf += _u32(0)
+        w.buf += _f64(float(offset)) + _f64(0.0) + _u32(1)
         self._new_entity_count += 1
         self._face_count += 1  # reuses the "at least one root entity" check in to_bytes
 
