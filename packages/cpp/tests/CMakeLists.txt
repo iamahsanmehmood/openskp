@@ -2,7 +2,9 @@ include(GoogleTest)
 
 add_executable(
   openskp_tests
+  create_test.cpp
   dxf_export_test.cpp
+  edit_test.cpp
   face_instance_hidden_test.cpp
   geometry_test.cpp
   glb_test.cpp

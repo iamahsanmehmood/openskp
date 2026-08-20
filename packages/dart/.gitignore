@@ -1,0 +1,18 @@
+# The repo root .gitignore blanket-excludes *.skp (no user/client binary
+# models committed) but only allowlists a few specific fixture directories
+# per package - re-include this package's own two exceptions, both
+# disclosed plainly in create.dart's own module doc comment:
+#
+# - lib/src/scaffold/blank_v17.skp: the bundled blank-document scaffold
+#   openskp.create splices new geometry into (SketchUp SDK's own built-in
+#   empty-document boilerplate, not user/client data - same file, same
+#   disclosure, as packages/python/src/openskp/_scaffold/blank_v17.skp,
+#   already allowlisted there).
+# - test/fixtures/create_reference/*.skp: deterministic reference files
+#   this package's own create_test.dart byte-compares its output against,
+#   generated once by the real, SDK-validated Python writer (not user
+#   data either - synthetic test geometry only). The root .gitignore's own
+#   `!packages/dart/test/fixtures/*.skp` allow doesn't reach this nested
+#   subdirectory.
+!lib/src/scaffold/*.skp
+!test/fixtures/create_reference/*.skp

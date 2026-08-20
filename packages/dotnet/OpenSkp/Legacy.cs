@@ -1214,7 +1214,11 @@ namespace OpenSkp
         /// layer, an object we just allocated relatively. Each walked layer
         /// yields one candidate base; with a single layer (the common case)
         /// the answer is exact.</summary>
-        private static List<int> ProbeLayerAnchorBases(byte[] data, int ver, int start, uint matCount)
+        /// <summary>Internal (not private) so Create.cs's SkpBuilder
+        /// constructor can bootstrap the same slot base against the bundled
+        /// blank scaffold - the writer-side mirror of this reader-side
+        /// probe, same reasoning as the docs above.</summary>
+        internal static List<int> ProbeLayerAnchorBases(byte[] data, int ver, int start, uint matCount)
         {
             var boot = new Archive(data, ver);
             foreach (var kv in LegacyReaders.Readers) boot.Readers[kv.Key] = kv.Value;
