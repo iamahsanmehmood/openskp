@@ -492,6 +492,30 @@ def _u32(v: int) -> bytes:
     return struct.pack("<I", v)
 
 
+# ── dimension record templates ───────────────────────────────────────────
+# Byte-exact templates harvested from a real SketchUp 2017 file (28
+# dimensions, capilla quiroz corpus model); see
+# docs/dimension-record-notes.md for the full layout. Geometry comes from
+# the vertex back-refs, so these fixed blocks are safe to reuse verbatim;
+# the 7 doubles in the B82 head are the orientation/placement fields still
+# under calibration against real SketchUp rendering.
+_DIM_FONT_PAYLOAD = bytes.fromhex(
+    "000000"                          # preamble: null attrs + pid mask 0
+    "fffeff065400610068006f006d006100"  # "Tahoma"
+    "0000" "08000000" "00"
+    "ecf57abd5eaf2340"                # height f64
+)
+_DIM_DRAWBASE = bytes.fromhex("00000001010000000000")
+_DIM_B37 = bytes.fromhex("0101000000020000000400000000000000"
+                         "0000000000000000000000000000000000000000")
+_DIM_B42 = bytes.fromhex("00000000000000000000020000000400000000000000"
+                         "0000000000000000000000000000000000000000")
+_DIM_B82_HEAD = (bytes(2 + 16)
+                 + bytes.fromhex("000000000000f03f") + bytes(8)
+                 + bytes.fromhex("000000000000f0bf") + bytes(16)
+                 + bytes.fromhex("02000000"))
+
+
 def _f64(v: float) -> bytes:
     return struct.pack("<d", v)
 
@@ -1946,6 +1970,7 @@ class SkpBuilder:
         self._edge_registry: Dict[FrozenSet[int], Tuple[int, int]] = {}
         self._new_entity_count = 0
         self._face_count = 0
+        self._dim_font_slot: Optional[int] = None
 
     def add_material(self, name: str, rgba: Sequence[int]) -> int:
         """Register a solid-color material and return a handle to pass as
@@ -2515,6 +2540,51 @@ class SkpBuilder:
             points, self._vertex_slots, self._edge_registry,
             closed, hidden_edges, soft_edges, smooth_edges,
         )
+        self._face_count += 1  # reuses the "at least one root entity" check in to_bytes
+
+    def add_dimension(self, p1: Point3, p2: Point3, offset: float = 10.0) -> None:
+        """Add an ANCHORED linear dimension between two points of already-
+        written root geometry (both must be vertices of a previous
+        ``add_face``/``add_circle`` call — the record references their
+        vertex objects, so the dimension stays associative in SketchUp).
+        ``offset`` is the dimension line's offset from the measured edge,
+        in inches (signed).
+
+        Record layout harvested byte-exact from real SketchUp 2017 files
+        (see docs/dimension-record-notes.md): the geometry comes entirely
+        from the two vertex back-refs; the fixed blocks are templates from
+        the calibration corpus. The auto-computed measurement text is the
+        empty string, exactly as SketchUp writes it.
+        """
+        self._ensure_geometry_writer()
+        w = self._geometry_writer
+        k1 = (float(p1[0]), float(p1[1]), float(p1[2]))
+        k2 = (float(p2[0]), float(p2[1]), float(p2[2]))
+        s1 = self._vertex_slots.get(k1)
+        s2 = self._vertex_slots.get(k2)
+        if s1 is None or s2 is None:
+            raise SkpWriteError(
+                "add_dimension endpoints must coincide with vertices of "
+                "already-added root geometry")
+        w._new_of_known_class("CDimensionLinear", schema=6)
+        w._preamble()
+        w.buf += _DIM_DRAWBASE
+        w._write_str("")                     # auto-computed measurement text
+        if self._dim_font_slot is None:
+            # one CSkFont per file, serialized INLINE at the first
+            # dimension's font field (exactly as SketchUp writes it) and
+            # re-used by back-ref afterwards (template: Tahoma)
+            self._dim_font_slot = w._new_of_known_class("CSkFont", schema=1)
+            w.buf += _DIM_FONT_PAYLOAD
+        else:
+            w._backref(self._dim_font_slot)
+        w.buf += _DIM_B37
+        w._backref(s1)
+        w.buf += _DIM_B42
+        w._backref(s2)
+        w.buf += _DIM_B82_HEAD
+        w.buf += _f64(float(offset)) + _f64(0.0) + _u32(3)
+        self._new_entity_count += 1
         self._face_count += 1  # reuses the "at least one root entity" check in to_bytes
 
     def to_bytes(self) -> bytes:
