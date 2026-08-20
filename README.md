@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/logo.png" width="500" Height="400" alt="OpenSKP logo"/>
+<img src="assets/logo.png" width="400" Height="400" alt="OpenSKP logo"/>
 
 ### The Open-Source SketchUp File Toolkit
 
