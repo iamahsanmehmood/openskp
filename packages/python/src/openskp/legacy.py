@@ -133,6 +133,12 @@ class _Archive:
         self.current_loop: Optional[int] = None
         self.in_entity_list = False
         self._as_item = False
+        # Slot re-alignment bookkeeping (see _resync_slots): total indices
+        # the writer burned so far, and the slot right after the last
+        # annotation record — the earliest point a burn can hide behind.
+        self.shift_total = 0
+        self.annot_watermark: Optional[int] = None
+        self.burn_stack: list = []    # per-entity-list burned-item credits
 
     def alloc(self, entry) -> int:
         s = self.next_slot
@@ -182,6 +188,7 @@ class _Archive:
         self._as_item = self.in_entity_list
         self.in_entity_list = False
         slot = self.alloc(('obj', name, None))
+        epoch = self.shift_total
         reader = self.readers.get(name)
         if reader is None:
             raise LegacyParseError(f"no reader for class {name} {r.ctx()}")
@@ -191,7 +198,11 @@ class _Archive:
             value = reader(self, r)
         finally:
             self.current_class = prev_class
+        # a resync during our read moved every open registration up
+        slot += self.shift_total - epoch
         self.slots[slot] = ('obj', name, value)
+        if name in ('CDimensionLinear', 'CText'):
+            self.annot_watermark = slot + 1
         return slot, name, value
 
     def _backref(self, slot, r):
@@ -288,10 +299,31 @@ def _preamble(ar, r):
 
 
 def _drawbase(ar, r):
-    b = r.raw(10)
+    b = r.raw(8)
+    # The layer field is normally a u16 id, but an entity can carry the
+    # layer BY OBJECT instead (seen on real 2018 instances): a full
+    # inline CLayer record on first use, an escaped back-ref to it on
+    # later siblings. Layer ids never have the 0x8000 bit and never
+    # equal 0x7FFF, so both object forms are unambiguous. (A 2-byte
+    # back-ref would collide with the id space — not seen in any file;
+    # by-object layers have only appeared in >32k-object archives where
+    # refs escape anyway.)
+    lay_cls = ar.class_slot.get('CLayer')
+    tag = r.peek_u16()
+    if lay_cls is not None and tag == (0x8000 | lay_cls):
+        ar.read_object(r, expect='CLayer')
+        layer = 0                    # by-object layer: keep the default id
+    elif tag == 0x7FFF:
+        r.u16()
+        big = r.u32()
+        if big & 0x80000000:
+            raise LegacyParseError(f"drawbase layer: unexpected class {r.ctx()}")
+        layer = 0                    # by-object layer (back-ref)
+    else:
+        layer = r.u16()
     return {'mat': struct.unpack_from('<H', b, 0)[0],
             'hidden': b[2], 'soft': b[5], 'smooth': b[6],
-            'layer': struct.unpack_from('<H', b, 8)[0]}
+            'layer': layer}
 
 
 # ── entity readers ───────────────────────────────────────────────────────
@@ -326,14 +358,64 @@ def _read_arccurve(ar, r):
     return {'k': 'arccurve'}
 
 
+def _resync_slots(ar, delta):
+    """Re-align the store-map counter after the writer burned ``delta``
+    indices without serializing any bytes for them.
+
+    SketchUp maps an annotation's connection-point objects into the MFC
+    store map (CArchive::MapObject) when a dimension or leader text is
+    attached to geometry — each mapping consumes an index, but nothing is
+    written to the stream, so a byte-exact walk allocates fewer slots than
+    the writer did and every later back-reference is offset. The edge-use
+    parent oracle detects the offset (an edge-use names its parent loop's
+    TRUE index); this shifts every registration made since the last
+    annotation record up by ``delta`` and reserves the vacated indices for
+    the phantom connection points."""
+    start = ar.annot_watermark
+    if start is None or start > ar.current_loop:
+        start = ar.current_loop
+    for s in range(ar.next_slot - 1, start - 1, -1):
+        ar.slots[s + delta] = ar.slots.pop(s, ('obj', 'reserved', None))
+    for s in range(start, start + delta):
+        ar.slots.setdefault(s, ('obj', 'reserved', None))
+    ar.next_slot += delta
+    ar.shift_total += delta
+    if ar.current_loop is not None and ar.current_loop >= start:
+        ar.current_loop += delta
+    ar.annot_watermark = None
+    # each burn event corresponds to ONE phantom top-level entity that the
+    # entity list's declared count includes but the stream never carries —
+    # credit it so the list doesn't run past its real end
+    if ar.burn_stack:
+        ar.burn_stack[-1] += 1
+
+
 def _read_edgeuse(ar, r):
     _preamble(ar, r)
     es, _, _ = ar.read_object(r, expect='CEdge')
     sense = r.u8()
-    ps, pn, _ = ar.read_object(r)    # parent-loop back-ref: alignment oracle
+    # parent-loop back-ref: the alignment oracle. Read tolerantly — after
+    # annotations the claimed index can sit AHEAD of the walk counter
+    # (burned MapObject indices, see _resync_slots), which is a correction
+    # signal, not a mis-parse.
+    p0 = r.pos
+    tag = r.u16()
+    if tag == 0x7FFF:
+        ps = r.u32()
+        if ps & 0x80000000:
+            raise LegacyParseError(f"edge-use parent is a new object {r.ctx()}")
+    elif tag == 0xFFFF or tag & 0x8000:
+        raise LegacyParseError(f"edge-use parent is a new object {r.ctx()}")
+    else:
+        ps = tag if tag else None
     if ps != ar.current_loop:
-        raise LegacyParseError(
-            f"edge-use parent slot {ps} != current loop {ar.current_loop} {r.ctx()}")
+        delta = ps - ar.current_loop if isinstance(ps, int) else 0
+        if 0 < delta <= 4096:
+            _resync_slots(ar, delta)
+        else:
+            r.pos = p0
+            raise LegacyParseError(
+                f"edge-use parent slot {ps} != current loop {ar.current_loop} {r.ctx()}")
     return {'k': 'edgeuse', 'edge': es, 'sense': sense}
 
 
@@ -581,7 +663,10 @@ def _read_constructionline(ar, r):
     r.f64s(3)
     r.f64s(3)
     r.f64s(2)
-    r.raw(7 if ar.ver >= 17 else 4)
+    # trailing block: 4 bytes on v16 and v18 (measured on a real 2018
+    # file whose guide lines sit 84 bytes apart), 7 on v17 (validated on
+    # the 661 MB v17 corpus model)
+    r.raw(7 if ar.ver == 17 else 4)
     return {'k': 'cline'}
 
 
@@ -699,18 +784,42 @@ def _read_text(ar, r):
 
 def _read_entity_list(ar, r, count, owner):
     ents = []
+    ar.burn_stack.append(0)
+    try:
+        return _read_entity_list_inner(ar, r, count, owner, ents)
+    finally:
+        ar.burn_stack.pop()
+
+
+def _read_entity_list_inner(ar, r, count, owner, ents):
     while len(ents) < count:
         p = r.pos
+        if (owner == 'def' and ar.burn_stack and ar.burn_stack[-1]
+                and struct.unpack_from('<I', r.data, p)[0] == 0
+                and r.data[p + 22:p + 25] == _STR_MARKER):
+            # burned MapObject indices (see _resync_slots) mean the declared
+            # count includes phantom entities the stream never carries; the
+            # definition tail signature (nrel=0 + pad + 16-byte GUID + name
+            # marker at +22) marks the list's REAL end
+            break
         prev_flag = ar.in_entity_list
         ar.in_entity_list = True
         try:
             s, n, v = ar.read_object(r)
         except LegacyParseError:
-            if owner != 'root':
-                raise
-            # over-declared root counts run into the document tail — stop
-            r.pos = p
-            break
+            if owner == 'root':
+                # over-declared root counts run into the document tail — stop
+                r.pos = p
+                break
+            if owner == 'def' and ar.burn_stack and ar.burn_stack[-1]:
+                # this list had burned MapObject indices (see _resync_slots):
+                # the phantom connection points were also counted as items,
+                # so the declared count overshoots the real records. Stop at
+                # the failed item — the definition tail that follows (nrel,
+                # GUID anchor, thumbnail scan) validates the cut.
+                r.pos = p
+                break
+            raise
         finally:
             ar.in_entity_list = prev_flag
         ents.append((s, n, v))
