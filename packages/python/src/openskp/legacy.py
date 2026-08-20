@@ -485,6 +485,8 @@ def _read_attr_named(ar, r):
             return r.u32()           # time_t
         if t == 0x0A:
             return r.utf16()
+        if t == 0x0C:
+            return r.f64()           # Length (a double, inches)
         if t == 0x0B:
             n = r.u32()
             if n > 100000:
