@@ -33,10 +33,6 @@ TEST(Edit, RoundTripsAFreshlyBuiltFile) {
     auto builder = create();
     int red = builder->add_material("Red", Color3{255, 0, 0});
     int roof = builder->add_layer("Roof");
-    FaceOptions opts;
-    opts.material = red;
-    opts.layer = roof;
-    builder->add_face({{0, 0, 0}, {100, 0, 0}, {100, 100, 0}, {0, 100, 0}}, opts);
 
     auto& chair = builder->add_component_definition("Chair");
     chair.add_face({{0, 0, 0}, {20, 0, 0}, {20, 20, 0}, {0, 20, 0}});
@@ -44,6 +40,11 @@ TEST(Edit, RoundTripsAFreshlyBuiltFile) {
     InstanceOptions iopts;
     iopts.translation = {200, 0, 0};
     builder->add_instance(chair, iopts);
+
+    FaceOptions opts;
+    opts.material = red;
+    opts.layer = roof;
+    builder->add_face({{0, 0, 0}, {100, 0, 0}, {100, 100, 0}, {0, 100, 0}}, opts);
 
     builder->save(path);
   }
