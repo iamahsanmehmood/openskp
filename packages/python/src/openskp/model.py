@@ -323,11 +323,14 @@ class TextEntity:
         point: Anchor point ``(x, y, z)`` in inches (world space for
             model-root texts), or ``None`` when the record anchors to
             geometry instead of a free point (not resolved yet).
+        label_point: Where the label text floats (the leader line joins
+            it to ``point``), or ``None`` for screen texts / unknown.
     """
 
     text: str = ""
     hidden: bool = False
     point: Optional[Tuple[float, float, float]] = None
+    label_point: Optional[Tuple[float, float, float]] = None
 
 
 @dataclass
@@ -614,6 +617,7 @@ class SkpFile:
                     text=txt.get("text", ""),
                     hidden=txt.get("hidden", False),
                     point=tuple(txt["p"]) if txt.get("p") else None,
+                    label_point=tuple(txt["lp"]) if txt.get("lp") else None,
                 ))
             # Populate dimensions
             for dim in getattr(builder, "dimensions", []):

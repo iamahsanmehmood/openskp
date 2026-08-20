@@ -89,6 +89,22 @@ A second SDK helper (`mktext`) settled the text record. Key findings:
 - `_read_skfont` consumed the pid MASK but not the pid bytes it
   declares — fixed; SDK-written fonts also carry a longer tail, which
   the text reader's delimiter scan absorbs.
-- Leader VECTORS did not persist through `SUTextSetLeaderVector` in the
-  harness (records carry only the anchor point); point-labels are what
-  `add_text()` writes, which matches IngeTrazo's text entities.
+- Leader VECTORS never persist through the SDK — not even when the
+  text is anchored to real geometry via `SUInstancePath` (a second
+  harness, `mktext2`, proved it: face- and vertex-anchored records
+  save fine but the leader stays zeroed, and face+leader texts are
+  silently DROPPED from the file). The SDK can only author SCREEN
+  texts: the two doubles after the font are SCREEN FRACTIONS (0.5,
+  0.5 = view centre) and SketchUp renders every such text superimposed
+  there, detached from the model.
+- Human-drawn LEADER texts (casa bueno, quiroz) settle the real
+  grammar. Connection types: 1 = free 3D anchor inline, 2 = anchored
+  to an entity back-ref (like dimensions), 7 = attached to a FACE
+  (two u,v bbox fractions + face ref). The placement tail after the
+  connection is `[12B zeros][point3d LABEL world position][16B zeros]
+  [f64 1.0][u32 LEADER TYPE (0 none / 2 pushpin)][delimiter]` — the
+  leader line joins the label position to the anchor.
+- `add_text()` therefore writes the HUMAN shape, not the SDK's:
+  screen slot zeroed, free connection with the anchor, label position
+  at ``point + leader``, leader type 2, closed arrow (3). The reader
+  extracts both points (``TextEntity.point`` / ``label_point``).

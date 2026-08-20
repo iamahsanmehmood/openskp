@@ -863,10 +863,18 @@ def _read_text(ar, r):
     # (world inches); anchored texts (type 2) zero the point, so only
     # type 1 is trusted.
     point = None
+    label = None
     mid = r.data[r.pos:idx]
     off = mid.find(b'\x01\x00\x00\x00\x04\x00\x00\x00')
     if off >= 0 and off + 32 <= len(mid):
         point = struct.unpack_from('<3d', mid, off + 8)
+        # placement tail: [12B zeros][point3d LABEL][16B zeros][f64 1.0]
+        # [u32 leader type][delimiter]; all-zero label = screen text
+        lo = off + 32 + 12
+        if lo + 24 <= len(mid):
+            lp = struct.unpack_from('<3d', mid, lo)
+            if any(abs(c) > 1e-12 for c in lp):
+                label = lp
     r.raw(idx - r.pos)
     text = r.utf16()
     r.raw(5)
@@ -885,7 +893,7 @@ def _read_text(ar, r):
         r.raw(6)
         attach.append(val)
     return {'k': 'text', 'text': text, 'db': db, 'attach': attach,
-            'p': point}
+            'p': point, 'lp': label}
 
 
 def _read_entity_list(ar, r, count, owner):
@@ -1372,6 +1380,7 @@ def _fill_builder(builder, ents, slots):
                 'text': v.get('text', ''),
                 'hidden': bool(v.get('db', {}).get('hidden', False)),
                 'p': v.get('p'),
+                'lp': v.get('lp'),
             })
         elif k == 'dimension':
             dim = {
