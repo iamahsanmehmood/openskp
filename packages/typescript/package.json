@@ -1,7 +1,7 @@
 {
   "name": "openskp",
   "version": "1.1.0",
-  "description": "Open-source SketchUp (.skp) binary file parser, writer, and converter — extract geometry, metadata, layers, and materials; create and edit .skp files; convert to GLB, OBJ, STL, PLY, DXF, and IFC4. Works in browser and Node.js.",
+  "description": "Open-source SketchUp (.skp) binary file parser, writer, and converter \u2014 extract geometry, metadata, layers, and materials; create and edit .skp files; convert to GLB, OBJ, STL, PLY, DXF, and IFC4. Works in browser and Node.js.",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
   "types": "dist/index.d.ts",
@@ -19,6 +19,7 @@
     "build": "tsup src/index.ts --format cjs,esm --dts",
     "copy-dist": "node copy-dist.js",
     "test": "vitest run",
+    "bench:instanced": "vite-node tests/bench/instanced-bench.ts",
     "lint": "eslint src/",
     "typecheck": "tsc --noEmit"
   },
@@ -67,6 +68,7 @@
     "tsup": "^8.0.0",
     "typescript": "^5.3.0",
     "typescript-eslint": "8.67.0",
+    "vite-node": "^1.6.1",
     "vitest": "^1.0.0"
   },
   "overrides": {

@@ -28,8 +28,17 @@ import {
   buildSceneFromParsed,
 } from './model';
 import { isLegacy, parseLegacyToRaw } from './legacy';
+import { buildInstancedSceneFromParsed, InstancedScene } from './instanced';
 
 export * from './model';
+export type {
+  InstancedScene,
+  InstancedNode,
+  InstancedMeshResource,
+  LocalPrimitive,
+} from './instanced';
+export { toInstancedGLB } from './instanced-glb';
+export type { InstancedGlbOptions } from './instanced-glb';
 export * from './errors';
 export * from './observability';
 export { toOBJ, toMTL, exportOBJ } from './obj';
@@ -341,6 +350,42 @@ export function parseSkp(buffer: ArrayBuffer, options?: ParseOptions): SkpModel 
  */
 export function buildScene(buffer: ArrayBuffer, options?: ParseOptions): SkpScene {
   return buildSceneFromParsed(parseToRaw(buffer, options), options);
+}
+
+/**
+ * Build the placed scene graph with SketchUp's INSTANCING PRESERVED: each
+ * distinct definition is triangulated once, in its own local space, and
+ * every placement is a node carrying the transform that puts it there.
+ *
+ * Use this instead of {@link buildScene} when a model reuses components:
+ * buildScene() bakes each placement into its own world-space vertex
+ * buffers, so its output grows with `definition geometry x placement
+ * count`, while this grows with `unique geometry + instance transforms`. A
+ * chair placed 1,000 times costs one copy of the chair here.
+ *
+ * Losslessly: this performs NO decimation, quantisation or any other
+ * approximation. The triangles, UVs, normals, materials and metadata are
+ * the ones {@link buildScene} produces - stored once and referenced, rather
+ * than copied per placement.
+ *
+ * Units and axes match {@link buildScene}'s GLB output: geometry and node
+ * matrices are in metres, glTF Y-up (`InstancedNode.matrix` is a
+ * 16-element column-major, parent-relative glTF matrix). The one exception
+ * is `positionMm`, kept in millimetres on SketchUp's Z-up axes so it lines
+ * up with the baked path's own metadata field.
+ *
+ * Independent of {@link parseSkp} and {@link buildScene}: this re-parses the
+ * raw TLV data, consistent with the existing two-tier API, so callers who
+ * never ask for it never pay for it.
+ *
+ * @param buffer - The raw file contents as an ArrayBuffer
+ * @param options - Optional progress/log callbacks (see {@link ParseOptions})
+ */
+export function buildInstancedScene(
+  buffer: ArrayBuffer,
+  options?: ParseOptions
+): InstancedScene {
+  return buildInstancedSceneFromParsed(parseToRaw(buffer, options), options);
 }
 
 function createGlb(json: any, binaryBuffer: Uint8Array): Uint8Array {
@@ -794,5 +839,13 @@ export class SkpFile {
    * @param options - Optional progress/log callbacks (see {@link ParseOptions}) */
   buildScene(options?: ParseOptions): SkpScene {
     return buildScene(this.buffer, options);
+  }
+
+  /** Build the placed scene graph with instancing PRESERVED: unique
+   * geometry once, plus one transform per placement. See
+   * {@link buildInstancedScene} for when to prefer this over buildScene().
+   * @param options - Optional progress/log callbacks (see {@link ParseOptions}) */
+  buildInstancedScene(options?: ParseOptions): InstancedScene {
+    return buildInstancedScene(this.buffer, options);
   }
 }

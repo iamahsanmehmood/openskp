@@ -42,6 +42,11 @@ SDK (see [Writing](#writing) below).
   call.
 - **Scene baking** — an opt-in `buildScene()` pass resolves the full placed
   scene graph to world-space, triangulated, export-ready geometry.
+- **Instancing preserved** — `buildInstancedScene()` keeps SketchUp's own
+  instancing instead of baking it out: unique geometry once, plus one
+  transform per placement, so a component placed 1,000 times costs one copy
+  of its buffers. Losslessly — no decimation or quantisation. See
+  [Choosing an API](#choosing-an-api).
 - **Native multi-format conversion** — glTF (GLB), Wavefront OBJ/MTL, STL,
   PLY, AutoCAD DXF (3DFACE and Polyface Mesh), IFC4 (BIM/ISO 10303-21 STEP),
   and JSON — all written from scratch, no third-party CAD/BIM SDK involved.
@@ -94,15 +99,137 @@ console.log(model.root.instances.length, 'root-level instances');
 // Opt-in: full placed scene graph, triangulated, world-space, GLB-ready
 const scene = skp.buildScene();
 console.log(scene.glbPrimitives.length, 'renderable mesh primitives');
+
+// Or keep the file's instancing instead of baking it out: unique geometry
+// once, plus a transform per placement.
+const instanced = skp.buildInstancedScene();
+console.log(instanced.meshResources.length, 'unique meshes');
 ```
+
+## Choosing an API
+
+Three entry points, in increasing order of what they compute. Each one
+re-parses the file independently, so you only pay for the one you call.
+
+| Use | When |
+|---|---|
+| `parseSkp()` / `.parse()` | You want the file's raw contents — definitions, layers, materials, metadata — with no scene-graph instancing resolved. Fastest and lightest. |
+| `buildScene()` / `.buildScene()` | You want a flat, world-space, triangulated scene to hand straight to a renderer or an exporter (`toGLB`, `toOBJ`, `toSTL`, `toIFC`, …). Every placement is baked into its own vertex buffers. |
+| `buildInstancedScene()` / `.buildInstancedScene()` | You want the same geometry, but with the file's instancing preserved: each definition triangulated once and referenced by every placement. |
+
+### The memory tradeoff
+
+`buildScene()` bakes each placed instance into its own world-space buffers,
+so its output scales with:
+
+```
+definition geometry x number of placed instances
+```
+
+`buildInstancedScene()` stores each distinct definition once and puts the
+placement on the node, so it scales with:
+
+```
+unique geometry + instance transforms
+```
+
+For a model that reuses components heavily — furniture, facade panels,
+fixtures, anything repeated — that is the difference between an output that
+grows with the model's *placement count* and one that grows with its
+*distinct content*. On a synthetic scene of one 24-face component repeated
+1,000 times, the geometry buffers are 1,000x smaller (3,562 KB vs 3.6 KB)
+and the exported GLB is 48x smaller.
+
+The cost is that you must apply the node transforms yourself (or hand the
+result to `toInstancedGLB()`, or to any glTF/three.js-style scene graph,
+which do it natively). If you just want flat triangles, `buildScene()` is
+still the simpler call.
+
+**This is lossless instancing preservation, not mesh decimation.** No
+vertices are removed, merged, quantised or approximated. The triangles are
+exactly the ones `buildScene()` produces; they are stored once and
+referenced N times instead of copied N times. The test suite asserts this
+directly, by flattening the instanced result and comparing it against the
+baked one on the repository's real `.skp` fixtures.
+
+### Coordinate systems and units
+
+SketchUp stores geometry in **inches on a Z-up** axis system. Both scene
+builders convert to **metres on glTF's Y-up** axes, applying the same
+`(x, y, z) -> (x, z, -y)` swap, so:
+
+- `LocalPrimitive.positions` / `normals` are in metres, Y-up, and in
+  **definition-local space** — no instance transform applied.
+- `InstancedNode.matrix` is a 16-element **column-major glTF matrix**, in
+  metres, Y-up, and is **relative to its parent**. Compose the chain by
+  walking the tree, exactly as glTF does. The root node's matrix is the
+  identity.
+- `InstancedNode.positionMm` is the one exception: it is the node's
+  **absolute** position in **millimetres on SketchUp's Z-up** axes, kept in
+  that frame so it matches the baked path's `InstanceNode.positionMm`
+  field for metadata comparisons.
+
+Normals are left in local space deliberately. Transforming them is the
+consumer's job (glTF's own rule: inverse-transpose of the node's upper-left
+3x3), and deferring it is what keeps non-uniform and mirrored
+(negative-determinant) scales correct without baking a per-placement copy of
+the normal buffer.
+
+### How material variants affect resource reuse
+
+Two placements share a mesh resource when their *effective rendered
+geometry* is identical — which is not the same as sharing a definition ID.
+The same component renders differently depending on where it is placed, so
+resource identity also accounts for:
+
+- the **inherited instance material** (SketchUp's "paint the component"),
+  which sets both the colour of unpainted faces and, through its texture's
+  tile size, their UVs;
+- **texture identity**, not just averaged colour — two different images can
+  average to the same RGB;
+- the **effective layer's fallback colour**, which is what an entirely
+  unpainted face renders as.
+
+So two instances of one definition painted with different materials produce
+two resource *variants*, while two instances with the same effective context
+share one. Front/back material resolution, per-face UV mapping and
+double-sided-vs-split geometry all follow deterministically from the
+definition plus those inputs. `InstancedMeshResource.variantKey` exposes the
+resolved context if you need to see why a definition produced more than one
+resource. Resource IDs (`mesh_0`, `mesh_1`, …) are stable and deterministic
+for a given file.
+
+### Exporting an instanced GLB
+
+```typescript
+import { SkpFile, toInstancedGLB } from 'openskp';
+import * as fs from 'fs';
+
+const instanced = SkpFile.open('model.skp').buildInstancedScene();
+
+// Multiple glTF nodes reference the SAME mesh - the vertex and index
+// buffers are written once, not once per placement.
+fs.writeFileSync('model.glb', toInstancedGLB(instanced));
+
+// Pass { textures: true } to embed the texture images, as with toGLB().
+fs.writeFileSync('textured.glb', toInstancedGLB(instanced, { textures: true }));
+```
+
+A definition that resolves to several materials becomes one glTF mesh with
+several primitives, which is glTF's normal representation — not several
+nodes. `toGLB()` and `buildScene()` are untouched and still produce exactly
+what they always have.
 
 ## Exporting
 
 ```typescript
-import { toGLB, toOBJ, toMTL, exportOBJ, toSTLAscii, toSTLBinary, exportSTL, toPLYAscii, toPLYBinary, exportPLY, toDXF, exportDXF, toIFC, exportIFC, toJSON } from 'openskp';
+import { toGLB, toInstancedGLB, toOBJ, toMTL, exportOBJ, toSTLAscii, toSTLBinary, exportSTL, toPLYAscii, toPLYBinary, exportPLY, toDXF, exportDXF, toIFC, exportIFC, toJSON } from 'openskp';
 
 // Serialize a built scene straight to .glb bytes (in-memory, no disk I/O)
 const glbBytes = toGLB(scene);
+
+// Instancing-preserving GLB: one mesh, many nodes (see Choosing an API)
+const instancedGlb = toInstancedGLB(instanced);
 
 // Export to Wavefront OBJ string, plus a companion .mtl material library
 const objText = toOBJ(scene, 'output.mtl');
@@ -237,7 +364,10 @@ verified numbers before parsing very large files in this package.
 | `transforms.ts` | 3D matrix transforms and coordinate conversions |
 | `observability.ts` | Progress/log callback types |
 | `errors.ts` | `SkpParseError` and structured failure context |
-| `index.ts` | Public entry point — `SkpFile`, `parseSkp`, `buildScene`, `toGLB`, `toJSON` |
+| `face-groups.ts` | Local-space face grouping shared by both scene builders |
+| `instanced.ts` | Instancing-preserving scene builder (`buildInstancedScene`) |
+| `instanced-glb.ts` | GLB exporter that reuses one mesh across many nodes |
+| `index.ts` | Public entry point — `SkpFile`, `parseSkp`, `buildScene`, `buildInstancedScene`, `toGLB`, `toInstancedGLB`, `toJSON` |
 
 ## Requirements
 
