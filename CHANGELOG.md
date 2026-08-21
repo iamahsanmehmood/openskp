@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added — TypeScript
+
+**Instancing-preserving scene output.** A new `buildInstancedScene()` keeps
+the instancing SketchUp already recorded, instead of baking it out the way
+`buildScene()` does. Each distinct definition is triangulated once, in its
+own local space, and every placement becomes a node carrying the transform
+that puts it there — so output scales with `unique geometry + instance
+transforms` rather than `definition geometry x placement count`. A
+companion `toInstancedGLB()` writes glTF 2.0/GLB in which many nodes
+reference one mesh, so a definition's vertex and index buffers are written
+once rather than once per placement.
+
+This is lossless instancing preservation, not mesh decimation: no
+vertices are removed, merged, quantised or approximated, and no new
+dependencies are introduced. The triangles are exactly the ones
+`buildScene()` produces. The test suite asserts that directly, by
+flattening the instanced result and comparing it against the baked one on
+the repository's real `.skp` fixtures.
+
+On a synthetic scene of one 24-face component repeated 1,000 times, the
+geometry buffers are 1,000x smaller (3,562 KB to 3.6 KB), the exported GLB
+is 48x smaller, and the build is 46x faster. Run
+`npm run bench:instanced` in `packages/typescript` to reproduce.
+
+`parseSkp()`, `buildScene()` and `toGLB()` are unchanged in behaviour,
+return type and output. TypeScript only; the Python, .NET, Dart and C++
+ports are untouched. See
+[Choosing an API](packages/typescript/README.md#choosing-an-api).
+
 ## [1.1.0] — 2026-08-20
 
 **Write support, now in all five languages.** OpenSKP can *create* new
