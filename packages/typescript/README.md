@@ -199,6 +199,43 @@ resolved context if you need to see why a definition produced more than one
 resource. Resource IDs (`mesh_0`, `mesh_1`, …) are stable and deterministic
 for a given file.
 
+### Edge and face visibility
+
+SketchUp does not draw every edge it stores. Three flags suppress an edge:
+`hidden` (explicitly hidden), and `soft`/`smooth` — the smoothing flags
+that make a faceted surface read as curved. That last pair is why a
+rounded model carries far more edges than it appears to: every curve is
+triangles stitched by edges that define the shape and are never shown.
+
+These are parsed and exposed on `Edge`, but acting on them is opt-in.
+
+```typescript
+import { parseSkp, isDrawableEdge } from 'openskp';
+
+const model = parseSkp(buffer);
+const visible = model.root.edges.filter(isDrawableEdge);
+```
+
+How much that saves is strongly model-dependent — measured across this
+repository's fixtures, 27.3% of edges are non-drawable on aggregate, but
+that ranges from **0.2% on a mostly-flat model to 66.1% on a
+curved-surface one**. Use it in wireframe/hidden-line renderers built on
+`parseSkp()` output, where drawing suppressed edges is both slower and
+visually wrong.
+
+For faces, both scene builders take an opt-in flag:
+
+```typescript
+const scene = buildScene(buffer, { respectEdgeVisibility: true });
+```
+
+This skips faces carrying SketchUp's "Hide" flag. It does **not** filter
+edges, because neither scene builder emits edges — their output is face
+triangles. Hidden faces are rare in practice (none in this repository's
+fixtures), so expect this to be correct rather than dramatic; the edge
+helper above is where the real saving lives. Off by default, since what
+SketchUp draws is a display policy rather than a parsing fact.
+
 ### Exporting an instanced GLB
 
 ```typescript

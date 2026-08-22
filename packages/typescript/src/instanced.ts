@@ -7,6 +7,7 @@ import {
   Material,
   Texture,
   SceneTexture,
+  SceneOptions,
   ParsedRawData,
   sniffImageMime,
   resolveMaterialFromMaps,
@@ -151,7 +152,7 @@ export interface InstancedScene {
  */
 export function buildInstancedSceneFromParsed(
   parsed: ParsedRawData,
-  options?: ParseOptions
+  options?: ParseOptions & SceneOptions
 ): InstancedScene {
   const t0 = Date.now();
   const { layerColors, layerIdToName, materialIdToName, materialsMap, materialsByFolder, defsDict } =
@@ -275,6 +276,7 @@ export function buildInstancedSceneFromParsed(
       inheritedMaterial,
       fallbackLayerColor: getLayerColor(layer),
       definitionId: defId,
+      respectVisibility: options?.respectEdgeVisibility,
     });
 
     const primitives: LocalPrimitive[] = [];
