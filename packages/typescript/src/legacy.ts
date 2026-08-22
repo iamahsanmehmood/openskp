@@ -16,6 +16,7 @@
  */
 
 import { GeometryBuilderFace, GeometryBuilderInstance, ParsedDefinition } from './geometry';
+import { EdgeFlagStore } from './edge-flags';
 import { Material, Texture, ParsedRawData } from './model';
 import { SkpParseError } from './errors';
 import { ParseOptions, PROGRESS_INTERVAL, emitLog, emitProgress } from './observability';
@@ -1181,7 +1182,7 @@ function walkModel(data: Uint8Array, ver: number, start: number, matCount: numbe
 class LegacyBuilder {
   vertices = new Map<number, [number, number, number]>();
   edges = new Map<number, [number | null, number | null]>();
-  edgeFlags = new Map<number, number>();
+  edgeFlags = new EdgeFlagStore();
   faces = new Map<number, GeometryBuilderFace>();
   instances: GeometryBuilderInstance[] = [];
   sectionPlanes: { plane: [number, number, number, number]; name: string; label: string; hidden: boolean }[] = [];

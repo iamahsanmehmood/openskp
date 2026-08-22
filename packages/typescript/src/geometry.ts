@@ -1,5 +1,6 @@
 import { TlvNode, readF64, readU32, parseVarInt, parseTlvRecursive } from './parser';
 import { ParseOptions, emitLog } from './observability';
+import { EdgeFlagStore } from './edge-flags';
 
 export interface GeometryBuilderInstance {
   offset: number;
@@ -35,7 +36,9 @@ export interface GeometryBuilderFace {
 export class GeometryBuilder {
   vertices = new Map<number, [number, number, number]>(); // id -> [x, y, z]
   edges = new Map<number, [number | null, number | null]>(); // id -> [v1, v2]
-  edgeFlags = new Map<number, number>(); // edge id -> display flag byte (D307)
+  /** Edge id -> display flag byte (D307). Backed by a Uint8Array rather
+   * than a Map: the value is one byte, and a Map entry costs ~30. */
+  edgeFlags = new EdgeFlagStore();
   faces = new Map<number, GeometryBuilderFace>(); // id -> face data
   instances: GeometryBuilderInstance[] = [];
   sectionPlanes: { plane: [number, number, number, number]; name: string; label: string; hidden: boolean }[] = [];
