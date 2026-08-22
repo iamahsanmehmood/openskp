@@ -492,6 +492,28 @@ def _u32(v: int) -> bytes:
     return struct.pack("<I", v)
 
 
+# ── dimension record templates ───────────────────────────────────────────
+# Byte-exact templates harvested from a real SketchUp 2017 file (28
+# dimensions, capilla quiroz corpus model); see
+# docs/dimension-record-notes.md for the full layout. Geometry comes from
+# the vertex back-refs, so these fixed blocks are safe to reuse verbatim;
+# the 7 doubles in the B82 head are the orientation/placement fields still
+# under calibration against real SketchUp rendering.
+_DIM_FONT_PAYLOAD = bytes.fromhex(
+    "000000"                          # preamble: null attrs + pid mask 0
+    "fffeff065400610068006f006d006100"  # "Tahoma"
+    "0000" "08000000" "00"
+    "ecf57abd5eaf2340"                # height f64
+)
+# Leader-text delimiter block: [u32 1][u8 flag=1][u8 0][u32 ARROW=3 closed][u8 1]
+_TEXT_DELIM = bytes.fromhex("0100000001000300000001")
+_DIM_DRAWBASE = bytes.fromhex("00000001010000000000")
+_DIM_B37 = bytes.fromhex("0101000000020000000400000000000000"
+                         "0000000000000000000000000000000000000000")
+_DIM_B42 = bytes.fromhex("00000000000000000000020000000400000000000000"
+                         "0000000000000000000000000000000000000000")
+
+
 def _f64(v: float) -> bytes:
     return struct.pack("<d", v)
 
@@ -1946,6 +1968,7 @@ class SkpBuilder:
         self._edge_registry: Dict[FrozenSet[int], Tuple[int, int]] = {}
         self._new_entity_count = 0
         self._face_count = 0
+        self._dim_font_slot: Optional[int] = None
 
     def add_material(self, name: str, rgba: Sequence[int]) -> int:
         """Register a solid-color material and return a handle to pass as
@@ -2515,6 +2538,93 @@ class SkpBuilder:
             points, self._vertex_slots, self._edge_registry,
             closed, hidden_edges, soft_edges, smooth_edges,
         )
+        self._face_count += 1  # reuses the "at least one root entity" check in to_bytes
+
+    def add_dimension(self, p1: Point3, p2: Point3, offset: float = 10.0) -> None:
+        """Add a FREE linear dimension between two explicit points (inches,
+        world space). ``offset`` is the dimension line's offset from the
+        measured segment, in inches (signed).
+
+        The record layout is the byte-exact one the REAL SketchUp SDK
+        writes for free dimensions (generated via SketchUpAPI and
+        harvested — see docs/dimension-record-notes.md): connection type 1
+        with the point stored inline in each connection block and null
+        object refs. Free dimensions render in any orientation; anchored
+        (type 2) dimensions are a future refinement.
+        """
+        self._ensure_geometry_writer()
+        w = self._geometry_writer
+        k1 = (float(p1[0]), float(p1[1]), float(p1[2]))
+        k2 = (float(p2[0]), float(p2[1]), float(p2[2]))
+        if k1 == k2:
+            raise SkpWriteError("add_dimension endpoints coincide")
+        w._new_of_known_class("CDimensionLinear", schema=6)
+        w._preamble()
+        w.buf += _DIM_DRAWBASE
+        w._write_str("")                     # auto-computed measurement text
+        if self._dim_font_slot is None:
+            # one CSkFont per file, serialized INLINE at the first
+            # dimension's font field (exactly as SketchUp writes it) and
+            # re-used by back-ref afterwards (template: Tahoma)
+            self._dim_font_slot = w._new_of_known_class("CSkFont", schema=1)
+            w.buf += _DIM_FONT_PAYLOAD
+        else:
+            w._backref(self._dim_font_slot)
+        # connection 1: [u8 0][u32 0][u32 type=1][u32 4][point A], null ref
+        w.buf += bytes(5) + _u32(1) + _u32(4)
+        w.buf += _f64(k1[0]) + _f64(k1[1]) + _f64(k1[2])
+        w.buf += struct.pack("<H", 0)
+        # connection 2: [u16 0][f64 0][u32 type=1][u32 4][point B], null ref
+        w.buf += bytes(10) + _u32(1) + _u32(4)
+        w.buf += _f64(k2[0]) + _f64(k2[1]) + _f64(k2[2])
+        w.buf += struct.pack("<H", 0)
+        # placement block: SDK free-dimension defaults + our offset
+        w.buf += bytes(2)
+        for val in (0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0):
+            w.buf += _f64(val)
+        w.buf += _u32(0)
+        w.buf += _f64(float(offset)) + _f64(0.0) + _u32(1)
+        self._new_entity_count += 1
+        self._face_count += 1  # reuses the "at least one root entity" check in to_bytes
+
+    def add_text(self, text: str, point: Point3,
+                 leader: Point3 = (15.0, 15.0, 15.0)) -> None:
+        """Add a leader text (SketchUp's Text tool) anchored at ``point``
+        (inches, world space), with the label floating at ``point +
+        leader`` and a leader line joining them.
+
+        The record mirrors human-drawn leader texts harvested from real
+        files (the SDK's own create only produces SCREEN texts — its
+        two 0.5 doubles are screen fractions and SketchUp renders them
+        superimposed at view centre): screen slot zeroed, the free-
+        connection block dimensions use ([u32 1][u32 4][point3d]), the
+        label's world position in the placement tail, and leader type 2
+        (pushpin) before the arrow delimiter.
+        """
+        self._ensure_geometry_writer()
+        w = self._geometry_writer
+        p = (float(point[0]), float(point[1]), float(point[2]))
+        lb = tuple(p[i] + float(leader[i]) for i in range(3))
+        w._new_of_known_class("CText", schema=9)
+        w._preamble()
+        w.buf += _DIM_DRAWBASE
+        if self._dim_font_slot is None:
+            self._dim_font_slot = w._new_of_known_class("CSkFont", schema=1)
+            w.buf += _DIM_FONT_PAYLOAD
+        else:
+            w._backref(self._dim_font_slot)
+        w.buf += _f64(0.0) + _f64(0.0)       # screen-fraction slot (unused)
+        w.buf += _u32(1) + _u32(4)           # free connection + constant
+        w.buf += _f64(p[0]) + _f64(p[1]) + _f64(p[2])
+        w.buf += bytes(12)
+        w.buf += _f64(lb[0]) + _f64(lb[1]) + _f64(lb[2])   # label position
+        w.buf += bytes(16)
+        w.buf += _f64(1.0)
+        w.buf += _u32(2)                     # leader type: pushpin
+        w.buf += _TEXT_DELIM
+        w._write_str(text)
+        w.buf += bytes(5)
+        self._new_entity_count += 1
         self._face_count += 1  # reuses the "at least one root entity" check in to_bytes
 
     def to_bytes(self) -> bytes:

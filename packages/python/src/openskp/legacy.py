@@ -782,7 +782,8 @@ def _read_sectionplane(ar, r):
 def _read_skfont(ar, r):
     ar.read_object(r, expect='CAttributeContainer')
     if ar.has_pid:
-        r.u8()
+        mask = r.u8()
+        r.raw(bin(mask).count('1'))  # consume the pid bytes the mask declares
     r.utf16()
     r.raw(15)
     return {'k': 'font'}
@@ -820,13 +821,24 @@ def _read_dimlinear(ar, r):
     # escape kicks in — so a fixed-size skip walks off the rails exactly
     # on large models (found on a real 17 MB SketchUp 2018 file whose
     # dimension sat past object #517k).
-    r.raw(37)
+    b37 = r.raw(37)
     c1 = _entity_ref(ar, r)          # connection point 1 (may be null)
-    r.raw(42)
+    b42 = r.raw(42)
     c2 = _entity_ref(ar, r)          # connection point 2 (may be null)
-    r.raw(82)
-    return {'k': 'dimension', 'db': db, 'text': text,
-            'connect': (c1, c2)}
+    b82 = r.raw(82)
+    # the dimension-line offset (inches, signed) sits at a fixed position
+    # of the trailing block on every sample (v17 and v18 alike)
+    offset = struct.unpack_from('<d', b82, 62)[0]
+    out = {'k': 'dimension', 'db': db, 'text': text,
+           'connect': (c1, c2), 'offset': offset}
+    # connection blocks: [.. u32 TYPE ..][u32 4][point3d]. Type 1 = a FREE
+    # point stored inline (SDK-generated ground truth); type 2 = anchored
+    # to the referenced entity, point zeroed.
+    if struct.unpack_from('<I', b37, 5)[0] == 1:
+        out['a'] = struct.unpack_from('<3d', b37, 13)
+    if struct.unpack_from('<I', b42, 10)[0] == 1:
+        out['b'] = struct.unpack_from('<3d', b42, 18)
+    return out
 
 
 def _read_text(ar, r):
@@ -841,10 +853,28 @@ def _read_text(ar, r):
         if idx < 0:
             raise LegacyParseError(f"text delimiter not found {r.ctx()}")
         blk = r.data[idx - 11:idx]
+        arrow = struct.unpack_from('<I', blk, 6)[0]
         if (blk[:4] == b'\x01\x00\x00\x00'
-                and blk[6:10] == b'\x03\x00\x00\x00' and blk[10] == 1):
-            break
+                and arrow <= 8 and blk[10] == 1):
+            break                    # blk[6:10] is the ARROW TYPE (0-4 seen)
         p = idx + 3
+    # The variant middle carries the same free-connection block dimensions
+    # use: [u32 type=1][u32 4][point3d]. Type 1 stores the anchor inline
+    # (world inches); anchored texts (type 2) zero the point, so only
+    # type 1 is trusted.
+    point = None
+    label = None
+    mid = r.data[r.pos:idx]
+    off = mid.find(b'\x01\x00\x00\x00\x04\x00\x00\x00')
+    if off >= 0 and off + 32 <= len(mid):
+        point = struct.unpack_from('<3d', mid, off + 8)
+        # placement tail: [12B zeros][point3d LABEL][16B zeros][f64 1.0]
+        # [u32 leader type][delimiter]; all-zero label = screen text
+        lo = off + 32 + 12
+        if lo + 24 <= len(mid):
+            lp = struct.unpack_from('<3d', mid, lo)
+            if any(abs(c) > 1e-12 for c in lp):
+                label = lp
     r.raw(idx - r.pos)
     text = r.utf16()
     r.raw(5)
@@ -862,7 +892,8 @@ def _read_text(ar, r):
             break                    # new-object tag — the next entity
         r.raw(6)
         attach.append(val)
-    return {'k': 'text', 'text': text, 'db': db, 'attach': attach}
+    return {'k': 'text', 'text': text, 'db': db, 'attach': attach,
+            'p': point, 'lp': label}
 
 
 def _read_entity_list(ar, r, count, owner):
@@ -1347,13 +1378,29 @@ def _fill_builder(builder, ents, slots):
         elif k == 'text':
             builder.texts.append({
                 'text': v.get('text', ''),
-                'hidden': bool(v.get('db', {}).get('hidden', False))
+                'hidden': bool(v.get('db', {}).get('hidden', False)),
+                'p': v.get('p'),
+                'lp': v.get('lp'),
             })
         elif k == 'dimension':
-            builder.dimensions.append({
+            dim = {
                 'text': v.get('text', ''),
-                'hidden': bool(v.get('db', {}).get('hidden', False))
-            })
+                'hidden': bool(v.get('db', {}).get('hidden', False)),
+                'offset': v.get('offset', 0.0),
+            }
+            # endpoints: FREE connections carry them inline; anchored ones
+            # resolve to their vertices (inches)
+            pts = [v.get('a'), v.get('b')]
+            for i, cs in enumerate(v.get('connect', ())[:2]):
+                if pts[i] is not None:
+                    continue
+                ent = slots.get(cs) if cs is not None else None
+                val = ent[2] if ent and ent[0] == 'obj' else None
+                if isinstance(val, dict) and 'xyz' in val:
+                    pts[i] = tuple(val['xyz'])
+            if len(pts) == 2 and pts[0] and pts[1]:
+                dim['a'], dim['b'] = pts[0], pts[1]
+            builder.dimensions.append(dim)
 
 
 def _add_edge(builder, slot, e, slots):
@@ -1478,6 +1525,8 @@ def full_parse_legacy(skp_path: str) -> Dict[str, Any]:
 
     return {
         'version': version,
+        'dimensions': [d for d in root_builder.dimensions
+                       if d.get('a') and d.get('b')],
         'layer_colors': layer_colors,
         'layer_hidden': layer_hidden,
         'layer_id_to_name': layer_id_to_name,
