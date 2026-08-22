@@ -272,6 +272,20 @@ export interface GlbPrimitive {
  * more data than the file's raw (per-definition, un-instanced) geometry, so
  * callers who only need the raw model data never pay for it.
  */
+/**
+ * Axis-aligned bounds of a scene's geometry, in the same frame as the
+ * vertex data it summarises: metres, glTF Y-up.
+ */
+export interface SceneBounds {
+  min: [number, number, number];
+  max: [number, number, number];
+  /** `max - min` per axis. The model's overall size, which is what a
+   * catalogue listing or a fit-to-view camera actually wants. */
+  size: [number, number, number];
+  /** Midpoint of `min` and `max`. */
+  center: [number, number, number];
+}
+
 export interface SkpScene {
   /** The root of the world-space instance tree. */
   sceneHierarchy: InstanceNode;
@@ -285,6 +299,11 @@ export interface SkpScene {
    * A material whose source had a texture image carries a `baseColorTexture`
    * whose `index` points into {@link SkpScene.textures}. */
   gltfMaterials: unknown[];
+  /** Axis-aligned bounds over every baked primitive, metres and Y-up, or
+   * `null` when the scene has no geometry. Computed during the bake, so
+   * reading it costs nothing extra - every consumer previously had to walk
+   * the position buffers itself to get the model's size. */
+  bounds: SceneBounds | null;
   /** The distinct texture images the placed materials use, deduplicated by
    * source bytes. Empty when nothing placed in the scene is textured.
    *
@@ -617,6 +636,11 @@ export function buildSceneFromParsed(
   const colorToMaterialIndex = new Map<string, number>();
   const gltfMaterials: any[] = [];
 
+  // Accumulated while positions are written, so bounds cost no extra pass
+  // over the vertex data.
+  const boundsMin: [number, number, number] = [Infinity, Infinity, Infinity];
+  const boundsMax: [number, number, number] = [-Infinity, -Infinity, -Infinity];
+
   // Definitions currently being instantiated on the active recursion path
   // (not "ever visited" - the same definition legitimately reused by
   // sibling instances is fine). Guards against a component that directly
@@ -737,6 +761,21 @@ export function buildSceneFromParsed(
           positions[i * 3] = pt[0] * scale;
           positions[i * 3 + 1] = pt[2] * scale;
           positions[i * 3 + 2] = -pt[1] * scale;
+
+          // Read back out of the Float32Array rather than using the float64
+          // values above: bounds must describe the vertex data as STORED, so
+          // that a consumer sweeping `positions` itself gets the identical
+          // answer rather than one off by a float32 ulp.
+          const wx = positions[i * 3];
+          const wy = positions[i * 3 + 1];
+          const wz = positions[i * 3 + 2];
+
+          if (wx < boundsMin[0]) boundsMin[0] = wx;
+          if (wy < boundsMin[1]) boundsMin[1] = wy;
+          if (wz < boundsMin[2]) boundsMin[2] = wz;
+          if (wx > boundsMax[0]) boundsMax[0] = wx;
+          if (wy > boundsMax[1]) boundsMax[1] = wy;
+          if (wz > boundsMax[2]) boundsMax[2] = wz;
 
           uvs[i * 2] = group.localUvs[i][0];
           uvs[i * 2 + 1] = group.localUvs[i][1];
@@ -912,7 +951,24 @@ export function buildSceneFromParsed(
       `${glbPrimitives.length} primitives (${((Date.now() - t0) / 1000).toFixed(2)}s)`
   );
 
-  return { sceneHierarchy, meshIndex, glbPrimitives, gltfMaterials, textures };
+  const bounds: SceneBounds | null = Number.isFinite(boundsMin[0])
+    ? {
+        min: [boundsMin[0], boundsMin[1], boundsMin[2]],
+        max: [boundsMax[0], boundsMax[1], boundsMax[2]],
+        size: [
+          boundsMax[0] - boundsMin[0],
+          boundsMax[1] - boundsMin[1],
+          boundsMax[2] - boundsMin[2],
+        ],
+        center: [
+          (boundsMin[0] + boundsMax[0]) / 2,
+          (boundsMin[1] + boundsMax[1]) / 2,
+          (boundsMin[2] + boundsMax[2]) / 2,
+        ],
+      }
+    : null;
+
+  return { sceneHierarchy, meshIndex, glbPrimitives, gltfMaterials, textures, bounds };
 }
 
 export function resolveMaterialFromMaps(
