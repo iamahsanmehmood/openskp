@@ -31,6 +31,7 @@ import {
 import { isLegacy, parseLegacyToRaw } from './legacy';
 import { encodeIndices } from './gltf-indices';
 import { buildInstancedSceneFromParsed, InstancedScene } from './instanced';
+import { extractThumbnail, SkpThumbnail } from './thumbnail';
 
 export * from './model';
 export type {
@@ -40,6 +41,8 @@ export type {
   LocalPrimitive,
 } from './instanced';
 export { toInstancedGLB } from './instanced-glb';
+export { extractThumbnail } from './thumbnail';
+export type { SkpThumbnail } from './thumbnail';
 export type { InstancedGlbOptions } from './instanced-glb';
 export * from './errors';
 export * from './observability';
@@ -869,5 +872,12 @@ export class SkpFile {
    * @param options - Optional progress/log callbacks (see {@link ParseOptions}) */
   buildInstancedScene(options?: ParseOptions & SceneOptions): InstancedScene {
     return buildInstancedScene(this.buffer, options);
+  }
+
+  /** The preview image SketchUp stored in the file, or null when it has
+   * none. Cheap: reads container metadata only, never geometry.
+   * @param options - Optional progress/log callbacks */
+  thumbnail(options?: ParseOptions): SkpThumbnail | null {
+    return extractThumbnail(this.buffer, options);
   }
 }

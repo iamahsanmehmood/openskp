@@ -236,6 +236,45 @@ fixtures), so expect this to be correct rather than dramatic; the edge
 helper above is where the real saving lives. Off by default, since what
 SketchUp draws is a display policy rather than a parsing fact.
 
+### Cataloguing models
+
+Two things an asset browser or block library needs, without paying for a
+full parse or a render:
+
+```typescript
+import { extractThumbnail, buildScene } from 'openskp';
+
+// The preview image SketchUp already saved inside the file. Reads
+// container metadata only - no geometry parsing, no renderer.
+const thumb = extractThumbnail(buffer);
+if (thumb) {
+  // thumb.data (raw bytes), thumb.mimeType, thumb.width, thumb.height
+  fs.writeFileSync('cover.png', thumb.data);
+}
+
+// The model's overall size, computed during the bake.
+const scene = buildScene(buffer);
+if (scene.bounds) {
+  const [w, h, d] = scene.bounds.size;       // metres, glTF Y-up
+  console.log(`${w.toFixed(2)} x ${h.toFixed(2)} x ${d.toFixed(2)} m`);
+  console.log('centre:', scene.bounds.center); // e.g. to frame a camera
+}
+```
+
+`extractThumbnail()` prefers SketchUp's clean `model_thumbnail` over
+`preview_thumbnail`, which has the red/green/blue axis lines drawn in and
+reads as clutter on a catalogue card; `thumb.source` says which was used.
+
+It returns `null` rather than throwing when there is no usable preview.
+That includes **legacy (pre-2021 MFC) files**: those embed PNGs too, but
+the container stores them without entry names, so a thumbnail cannot be
+distinguished from a material's texture image without guessing.
+
+`scene.bounds` is `null` for a model with no geometry, so an empty model
+stays distinguishable from one sitting at the origin.
+`buildInstancedScene()` exposes the same field, computed from the placed
+node transforms so both builders agree.
+
 ### Exporting an instanced GLB
 
 ```typescript

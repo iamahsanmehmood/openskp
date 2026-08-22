@@ -8,6 +8,7 @@ import {
   Texture,
   SceneTexture,
   SceneOptions,
+  SceneBounds,
   ParsedRawData,
   sniffImageMime,
   resolveMaterialFromMaps,
@@ -129,6 +130,16 @@ export interface InstancedNode {
  * produces, just stored once and referenced N times.
  */
 export interface InstancedScene {
+  /**
+   * Axis-aligned bounds of the scene as PLACED, metres and Y-up, or `null`
+   * when nothing is placed.
+   *
+   * Computed by walking the node tree and transforming each referenced
+   * resource's corners, so it describes where the model actually sits -
+   * not the union of the local-space resources, which would be meaningless
+   * as a model size. Matches {@link SkpScene.bounds} for the same file.
+   */
+  bounds: SceneBounds | null;
   /** Root of the placed instance tree (identity transform). */
   sceneHierarchy: InstancedNode;
   /** Every distinct (definition, rendering-context) mesh actually placed,
@@ -494,6 +505,86 @@ export function buildInstancedSceneFromParsed(
     children: rootChildren,
   };
 
+  // Bounds of the scene AS PLACED: walk the tree, transform each
+  // resource's local corners by the accumulated node matrix. Only the 8
+  // corners of each resource's local box are transformed rather than every
+  // vertex - an affine transform maps the box's corners to the corners of
+  // the transformed box, so the result is exact for the axis-aligned
+  // bounds, at a fraction of the cost.
+  const bMin: [number, number, number] = [Infinity, Infinity, Infinity];
+  const bMax: [number, number, number] = [-Infinity, -Infinity, -Infinity];
+  const resourceById = new Map(meshResources.map((r) => [r.id, r]));
+  const localBoxCache = new Map<string, { min: number[]; max: number[] } | null>();
+
+  const localBox = (id: string) => {
+    const cached = localBoxCache.get(id);
+    if (cached !== undefined) return cached;
+    const res = resourceById.get(id);
+    let box: { min: number[]; max: number[] } | null = null;
+    if (res) {
+      const lo = [Infinity, Infinity, Infinity];
+      const hi = [-Infinity, -Infinity, -Infinity];
+      for (const prim of res.primitives) {
+        for (let i = 0; i < prim.positions.length; i += 3) {
+          for (let k = 0; k < 3; k++) {
+            const v = prim.positions[i + k];
+            if (v < lo[k]) lo[k] = v;
+            if (v > hi[k]) hi[k] = v;
+          }
+        }
+      }
+      if (Number.isFinite(lo[0])) box = { min: lo, max: hi };
+    }
+    localBoxCache.set(id, box);
+    return box;
+  };
+
+  const mul4 = (a: number[], b: number[]) => {
+    const out = new Array(16).fill(0);
+    for (let col = 0; col < 4; col++) {
+      for (let row = 0; row < 4; row++) {
+        let acc = 0;
+        for (let k = 0; k < 4; k++) acc += a[k * 4 + row] * b[col * 4 + k];
+        out[col * 4 + row] = acc;
+      }
+    }
+    return out;
+  };
+
+  const accumulate = (node: InstancedNode, parent: number[]) => {
+    const world = mul4(parent, node.matrix);
+    if (node.meshResourceId !== undefined) {
+      const box = localBox(node.meshResourceId);
+      if (box) {
+        for (let c = 0; c < 8; c++) {
+          const x = c & 1 ? box.max[0] : box.min[0];
+          const y = c & 2 ? box.max[1] : box.min[1];
+          const z = c & 4 ? box.max[2] : box.min[2];
+          const wx = world[0] * x + world[4] * y + world[8] * z + world[12];
+          const wy = world[1] * x + world[5] * y + world[9] * z + world[13];
+          const wz = world[2] * x + world[6] * y + world[10] * z + world[14];
+          if (wx < bMin[0]) bMin[0] = wx;
+          if (wy < bMin[1]) bMin[1] = wy;
+          if (wz < bMin[2]) bMin[2] = wz;
+          if (wx > bMax[0]) bMax[0] = wx;
+          if (wy > bMax[1]) bMax[1] = wy;
+          if (wz > bMax[2]) bMax[2] = wz;
+        }
+      }
+    }
+    for (const child of node.children) accumulate(child, world);
+  };
+  accumulate(sceneHierarchy, [...IDENTITY_GLTF]);
+
+  const bounds: SceneBounds | null = Number.isFinite(bMin[0])
+    ? {
+        min: [bMin[0], bMin[1], bMin[2]],
+        max: [bMax[0], bMax[1], bMax[2]],
+        size: [bMax[0] - bMin[0], bMax[1] - bMin[1], bMax[2] - bMin[2]],
+        center: [(bMin[0] + bMax[0]) / 2, (bMin[1] + bMax[1]) / 2, (bMin[2] + bMax[2]) / 2],
+      }
+    : null;
+
   emitLog(
     options,
     'info',
@@ -501,5 +592,5 @@ export function buildInstancedSceneFromParsed(
       `${meshResources.length} mesh resources (${((Date.now() - t0) / 1000).toFixed(2)}s)`
   );
 
-  return { sceneHierarchy, meshResources, gltfMaterials, textures };
+  return { sceneHierarchy, meshResources, gltfMaterials, textures, bounds };
 }
