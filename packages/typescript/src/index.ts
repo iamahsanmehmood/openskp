@@ -26,6 +26,7 @@ import {
   ParsedRawData,
   buildModelFromParsed,
   buildSceneFromParsed,
+  SceneOptions,
 } from './model';
 import { isLegacy, parseLegacyToRaw } from './legacy';
 import { buildInstancedSceneFromParsed, InstancedScene } from './instanced';
@@ -348,7 +349,10 @@ export function parseSkp(buffer: ArrayBuffer, options?: ParseOptions): SkpModel 
  *
  * @param options - Optional progress/log callbacks (see {@link ParseOptions})
  */
-export function buildScene(buffer: ArrayBuffer, options?: ParseOptions): SkpScene {
+export function buildScene(
+  buffer: ArrayBuffer,
+  options?: ParseOptions & SceneOptions
+): SkpScene {
   return buildSceneFromParsed(parseToRaw(buffer, options), options);
 }
 
@@ -383,7 +387,7 @@ export function buildScene(buffer: ArrayBuffer, options?: ParseOptions): SkpScen
  */
 export function buildInstancedScene(
   buffer: ArrayBuffer,
-  options?: ParseOptions
+  options?: ParseOptions & SceneOptions
 ): InstancedScene {
   return buildInstancedSceneFromParsed(parseToRaw(buffer, options), options);
 }
@@ -837,7 +841,7 @@ export class SkpFile {
    * than reusing a prior parse() call, so calling only parse() never pays
    * for this heavier computation.
    * @param options - Optional progress/log callbacks (see {@link ParseOptions}) */
-  buildScene(options?: ParseOptions): SkpScene {
+  buildScene(options?: ParseOptions & SceneOptions): SkpScene {
     return buildScene(this.buffer, options);
   }
 
@@ -845,7 +849,7 @@ export class SkpFile {
    * geometry once, plus one transform per placement. See
    * {@link buildInstancedScene} for when to prefer this over buildScene().
    * @param options - Optional progress/log callbacks (see {@link ParseOptions}) */
-  buildInstancedScene(options?: ParseOptions): InstancedScene {
+  buildInstancedScene(options?: ParseOptions & SceneOptions): InstancedScene {
     return buildInstancedScene(this.buffer, options);
   }
 }

@@ -44,6 +44,10 @@ export interface FaceGroupContext {
   fallbackLayerColor: { r: number; g: number; b: number };
   /** Identifies the definition in a triangulation failure. */
   definitionId: number | string;
+  /** Skip faces SketchUp itself would not draw (see
+   * {@link SceneOptions.respectEdgeVisibility}). Off by default, matching
+   * the behaviour every existing consumer already relies on. */
+  respectVisibility?: boolean;
 }
 
 /**
@@ -138,6 +142,11 @@ export function buildLocalFaceGroups(
   };
 
   for (const [_fId, fData] of builder.faces.entries()) {
+    // A face explicitly hidden in SketchUp. Skipped only on request: the
+    // baked output every existing consumer reads includes these, so
+    // filtering by default would silently change what they render.
+    if (ctx.respectVisibility && fData.hidden) continue;
+
     const fallbackColor = ctx.inheritedMaterial?.color ?? ctx.fallbackLayerColor;
 
     // A face with no material of its own is painted by the instance
