@@ -262,7 +262,9 @@ what they always have.
 ```typescript
 import { toGLB, toInstancedGLB, toOBJ, toMTL, exportOBJ, toSTLAscii, toSTLBinary, exportSTL, toPLYAscii, toPLYBinary, exportPLY, toDXF, exportDXF, toIFC, exportIFC, toJSON } from 'openskp';
 
-// Serialize a built scene straight to .glb bytes (in-memory, no disk I/O)
+// Serialize a built scene straight to .glb bytes (in-memory, no disk I/O).
+// Index buffers are written as UNSIGNED_SHORT when every index fits, which
+// is the usual case - roughly halving the index data at no loss.
 const glbBytes = toGLB(scene);
 
 // Instancing-preserving GLB: one mesh, many nodes (see Choosing an API)

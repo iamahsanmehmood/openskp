@@ -1,4 +1,5 @@
 import type { InstancedScene, InstancedNode } from './instanced';
+import { encodeIndices } from './gltf-indices';
 
 /** Options for {@link toInstancedGLB}. */
 export interface InstancedGlbOptions {
@@ -97,13 +98,26 @@ export function toInstancedGLB(
   const gltfMaterials = scene.gltfMaterials || [];
   const sceneTextures = options?.textures ? scene.textures || [] : [];
 
+  // Narrow each index buffer to UNSIGNED_SHORT where every index fits.
+  // Keyed by resource id + primitive position so the layout pass and the
+  // write pass below agree exactly.
+  const encodedIndices = new Map<string, ReturnType<typeof encodeIndices>>();
+  const encodedKey = (resId: string, primIdx: number) => `${resId}:${primIdx}`;
+
   let totalBinaryLength = 0;
   for (const res of resources) {
-    for (const prim of res.primitives) {
+    for (let i = 0; i < res.primitives.length; i++) {
+      const prim = res.primitives[i];
+      const encoded = encodeIndices(prim.indices);
+      encodedIndices.set(encodedKey(res.id, i), encoded);
       totalBinaryLength += prim.positions.byteLength;
       totalBinaryLength += prim.normals.byteLength;
       totalBinaryLength += prim.uvs.byteLength;
-      totalBinaryLength += prim.indices.byteLength;
+      totalBinaryLength += encoded.data.byteLength;
+      // A 16-bit index buffer of odd length leaves the offset 2-byte
+      // aligned; the next primitive's POSITION accessor is float32 and
+      // glTF requires 4-byte alignment.
+      totalBinaryLength += (4 - (totalBinaryLength % 4)) % 4;
     }
   }
 
@@ -126,7 +140,9 @@ export function toInstancedGLB(
   for (const res of resources) {
     const gltfPrimitives: any[] = [];
 
-    for (const prim of res.primitives) {
+    for (let primIdx = 0; primIdx < res.primitives.length; primIdx++) {
+      const prim = res.primitives[primIdx];
+      const encoded = encodedIndices.get(encodedKey(res.id, primIdx))!;
       const posByteOffset = byteOffset;
       binaryBuffer.set(
         new Uint8Array(prim.positions.buffer, prim.positions.byteOffset, prim.positions.byteLength),
@@ -150,10 +166,11 @@ export function toInstancedGLB(
 
       const indByteOffset = byteOffset;
       binaryBuffer.set(
-        new Uint8Array(prim.indices.buffer, prim.indices.byteOffset, prim.indices.byteLength),
+        new Uint8Array(encoded.data.buffer, encoded.data.byteOffset, encoded.data.byteLength),
         indByteOffset
       );
-      byteOffset += prim.indices.byteLength;
+      byteOffset += encoded.data.byteLength;
+      byteOffset += (4 - (byteOffset % 4)) % 4;
 
       const posBufferViewIdx = bufferViews.length;
       bufferViews.push({
@@ -183,7 +200,7 @@ export function toInstancedGLB(
       bufferViews.push({
         buffer: 0,
         byteOffset: indByteOffset,
-        byteLength: prim.indices.byteLength,
+        byteLength: encoded.data.byteLength,
         target: 34963, // ELEMENT_ARRAY_BUFFER
       });
 
@@ -235,7 +252,7 @@ export function toInstancedGLB(
       accessors.push({
         bufferView: indBufferViewIdx,
         byteOffset: 0,
-        componentType: 5125, // UNSIGNED_INT
+        componentType: encoded.componentType,
         count: prim.indices.length,
         type: 'SCALAR',
       });
