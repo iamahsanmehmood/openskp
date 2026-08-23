@@ -17,6 +17,7 @@
 
 import { GeometryBuilderFace, GeometryBuilderInstance, ParsedDefinition } from './geometry';
 import { EdgeFlagStore } from './edge-flags';
+import { DefaultVertexStore, type VertexStore } from './vertex-store';
 import { Material, Texture, ParsedRawData } from './model';
 import { SkpParseError } from './errors';
 import { ParseOptions, PROGRESS_INTERVAL, emitLog, emitProgress } from './observability';
@@ -1180,7 +1181,7 @@ function walkModel(data: Uint8Array, ver: number, start: number, matCount: numbe
 /** Mirror of geometry.ts's GeometryBuilder (structurally compatible, kept
  * dependency-free from the VFF-specific TLV machinery). */
 class LegacyBuilder {
-  vertices = new Map<number, [number, number, number]>();
+  vertices: VertexStore = new DefaultVertexStore();
   edges = new Map<number, [number | null, number | null]>();
   edgeFlags = new EdgeFlagStore();
   faces = new Map<number, GeometryBuilderFace>();

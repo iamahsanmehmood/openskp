@@ -44,7 +44,9 @@ export function computeFaceNormal(
 export function triangulateFace3D(
   vertices3D:
     | Map<number, { x: number; y: number; z: number } | [number, number, number] | number[]>
-    | Record<number, { x: number; y: number; z: number } | [number, number, number] | number[]>,
+    | Record<number, { x: number; y: number; z: number } | [number, number, number] | number[]>
+    // Any id-keyed lookup with a Map-shaped `get`, e.g. VertexStore.
+    | { get(id: number): { x: number; y: number; z: number } | [number, number, number] | number[] | undefined },
   loops: number[][],
   normal: [number, number, number]
 ): number[][] {
@@ -106,10 +108,14 @@ export function triangulateFace3D(
 
   const getVertex = (id: number): { x: number; y: number; z: number } | null => {
     let pt: any;
-    if (vertices3D instanceof Map) {
-      pt = vertices3D.get(id);
+    // Anything exposing a Map-shaped `get` is queried through it; only a
+    // plain Record falls back to index access. Checking for the method
+    // rather than `instanceof Map` is what lets a VertexStore be passed
+    // here without the Record branch silently returning undefined.
+    if (typeof (vertices3D as any).get === 'function') {
+      pt = (vertices3D as any).get(id);
     } else {
-      pt = vertices3D[id];
+      pt = (vertices3D as any)[id];
     }
     if (!pt) return null;
     if (Array.isArray(pt)) {

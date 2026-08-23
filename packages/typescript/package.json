@@ -20,6 +20,7 @@
     "copy-dist": "node copy-dist.js",
     "test": "vitest run",
     "bench:instanced": "vite-node tests/bench/instanced-bench.ts",
+    "bench:vertex-store": "node --expose-gc ./node_modules/vite-node/vite-node.mjs tests/bench/vertex-store-bench.ts",
     "lint": "eslint src/",
     "typecheck": "tsc --noEmit"
   },
