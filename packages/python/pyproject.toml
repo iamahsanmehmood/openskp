@@ -24,7 +24,7 @@ classifiers = [
 ]
 dependencies = [
     "numpy>=1.20",
-    "trimesh>=3.0",
+    "trimesh>=5.0.0",
     "shapely>=1.8",
     "defusedxml>=0.7.1",
 ]
