@@ -97,7 +97,9 @@ describe('EdgeFlagStore', () => {
 
   it('matches a Map exactly on a randomised access pattern', () => {
     // Deterministic pseudo-random ids; no Math.random, so a failure is
-    // reproducible.
+    // reproducible. ~14,000 assertions genuinely takes longer than
+    // vitest's 5s default on a loaded CI runner - not a regression, just
+    // more headroom than the default budget.
     const s = new EdgeFlagStore();
     const ref = new Map<number, number>();
     let seed = 12345;
@@ -116,5 +118,5 @@ describe('EdgeFlagStore', () => {
       expect(s.has(id)).toBe(ref.has(id));
     }
     expect(s.size).toBe(ref.size);
-  });
+  }, 15000);
 });
