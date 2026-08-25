@@ -23,8 +23,7 @@ import 'package:test/test.dart';
 /// parse that "succeeds" while silently dropping placements would still be
 /// a bug, so the instance counts matter as much as the parse not throwing.
 void main() {
-  final fixturePath =
-      '${Directory.current.path}/test/fixtures/gondola_v20.skp';
+  final fixturePath = '${Directory.current.path}/test/fixtures/gondola_v20.skp';
 
   test('is detected as a legacy container', () {
     final bytes = File(fixturePath).readAsBytesSync();
@@ -41,10 +40,14 @@ void main() {
     expect(model.definitions.length, 20);
     expect(model.materials.length, 24);
 
-    // v20 writes a null object-ref into the layer list, which the layer
-    // count includes. It must not reach model.layers as a null entry.
+    // v20 interleaves a null object-ref after EACH layer record; the count
+    // is the number of REAL layers. The old reader counted the separators
+    // as items and dropped every layer after the first - this fixture
+    // really does carry "Gondulas Laterais" (visible in SketchUp), which
+    // the previous assertion enshrined as missing. Nulls must still never
+    // reach model.layers.
     final names = model.layers.map((l) => l.name).toList();
-    expect(names, ['Layer0']);
+    expect(names, ['Layer0', 'Gondulas Laterais']);
 
     // real geometry, not an empty shell
     var faces = 0, edges = 0, vertices = 0;

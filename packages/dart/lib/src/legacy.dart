@@ -112,8 +112,9 @@ const int _maxV20FillerPad = 29;
 ({int count, int next})? findCountAfterV20Filler(
   Uint8List data,
   int countPos,
-  int limit,
-) {
+  int limit, [
+  Archive? ar,
+]) {
   int markerAt = -1;
   for (int i = countPos; i < countPos + 12 && i + 4 <= data.length; i++) {
     if (data[i] == 0xFF && data[i + 1] == 0xFE && data[i + 2] == 0xFF) {
@@ -138,16 +139,34 @@ const int _maxV20FillerPad = 29;
     final at = markerAt + 4 + pad;
     if (at + 4 > data.length) break;
     final count = Tlv.readU32(data, at);
-    if (count > 0 && count <= limit) return (count: count, next: at + 4);
+    if (count > 0 &&
+        count <= limit &&
+        (ar == null || _plausibleListTag(ar, data, at + 4))) {
+      return (count: count, next: at + 4);
+    }
   }
   return null;
 }
 
-int? retryCountAfterV20Filler(LR r, int countPos, int limit) {
-  final hit = findCountAfterV20Filler(r.data, countPos, limit);
+int? retryCountAfterV20Filler(LR r, int countPos, int limit, [Archive? ar]) {
+  final hit = findCountAfterV20Filler(r.data, countPos, limit, ar);
   if (hit == null) return null;
   r.pos = hit.next;
   return hit.count;
+}
+
+/// True when the u16 at [at] can legally start an object read: a null, an
+/// escape, a class definition, a class-ref to a KNOWN class, or an object
+/// back-ref within the allocated range.
+bool _plausibleListTag(Archive ar, Uint8List data, int at) {
+  if (at + 2 > data.length) return false;
+  final t = Tlv.readU16(data, at);
+  if (t == 0x0000 || t == 0x7FFF || t == 0xFFFF) return true;
+  if ((t & 0x8000) != 0) {
+    final ent = ar.slots[t & 0x7FFF];
+    return ent != null && ent.kind == 'class';
+  }
+  return t < ar.nextSlot;
 }
 
 /// True when the bytes at [p] are an MFC class-ref to class [slot]. Mirrors
@@ -273,6 +292,21 @@ class Archive {
   int? currentLoop;
   bool inEntityList = false;
 
+  // Burned store-map indices (see readEdgeUse): the writer maps an
+  // annotation's connection points into the store map WITHOUT writing
+  // bytes, so file back-references beyond each burn run ahead of the
+  // walker's numbering. Registrations always stay at WALKER indices - no
+  // captured slot ever goes stale - and _backref translates file
+  // references through the burn bands instead. [burns] holds
+  // (fileBandStart, width) per event; [cumDelta] their total;
+  // [annotWatermark] the walker slot right after the last annotation
+  // record - the only place a band can start.
+  final List<(int, int)> burns = [];
+  int cumDelta = 0;
+  int? annotWatermark;
+  final List<int> burnStack = []; // per-entity-list burned-item credits
+  int? clineTail;
+
   Archive(this.data, this.ver) : hasPid = ver >= 17 {
     r = LR(data);
   }
@@ -348,10 +382,35 @@ class Archive {
       currentClass = prevClass;
     }
     slots[slot] = SlotEntry(kind: 'obj', name: name, value: value);
+    if (name == 'CDimensionLinear' || name == 'CText') {
+      annotWatermark = nextSlot;
+    }
     return (slot, name, value);
   }
 
+  /// Map a FILE store-map index to the walker's numbering through the burn
+  /// bands. Returns the walker slot, or null when the reference points
+  /// INTO a band (a phantom, never-serialized connection point).
+  int? _translateRef(int slot) {
+    int offset = 0;
+    for (final (start, width) in burns) {
+      if (slot < start) break;
+      if (slot < start + width) return null;
+      offset += width;
+    }
+    return slot - offset;
+  }
+
   (int?, String?, Object?) _backref(int slot, LR r) {
+    if (burns.isNotEmpty && slot >= burns[0].$1) {
+      final walker = _translateRef(slot);
+      if (walker == null) {
+        // a phantom (burned) connection-point index - annotation metadata
+        // only; nothing was ever serialized for it
+        return (slot, 'reserved', null);
+      }
+      slot = walker;
+    }
     final ent = slots[slot];
     if (ent == null) {
       if (slot < walkBase) {
@@ -452,6 +511,26 @@ class MaterialRec {
   MaterialRec({required this.name, required this.rgba});
 }
 
+class TextureBlockRec {
+  Uint8List rgba;
+  double opacity;
+  int useOpacity;
+  int texDib;
+  double texW, texH;
+  String texFile;
+  bool colorized;
+  TextureBlockRec({
+    required this.rgba,
+    required this.opacity,
+    required this.useOpacity,
+    required this.texDib,
+    required this.texW,
+    required this.texH,
+    required this.texFile,
+    required this.colorized,
+  });
+}
+
 class DibRec {
   int subtype;
   Uint8List data;
@@ -477,6 +556,15 @@ class CameraRec {}
 class ThumbnailRec {
   int? dib;
   ThumbnailRec(this.dib);
+}
+
+class ImageRec {
+  DrawBase db;
+  int? def;
+  List<double> xform;
+  String guid;
+  ImageRec(
+      {required this.db, this.def, required this.xform, required this.guid});
 }
 
 class RelationshipRec {}
@@ -557,13 +645,34 @@ class LegacyReaders {
   }
 
   static DrawBase drawbase(Archive ar, LR r) {
-    final b = r.raw(10);
+    final b = r.raw(8);
+    // The layer field is normally a u16 id, but an entity can carry the
+    // layer BY OBJECT instead (seen on real 2018 instances): a full inline
+    // CLayer record on first use, an escaped back-ref to it on later
+    // siblings. Layer ids never have the 0x8000 bit and never equal
+    // 0x7FFF, so both object forms are unambiguous.
+    final layCls = ar.classSlot['CLayer'];
+    final tag = r.peekU16();
+    int layer;
+    if (layCls != null && tag == (0x8000 | layCls)) {
+      ar.readObject(r, 'CLayer');
+      layer = 0; // by-object layer: keep the default id
+    } else if (tag == 0x7FFF) {
+      r.u16();
+      final big = r.u32();
+      if ((big & 0x80000000) != 0) {
+        throw LegacyParseError('drawbase layer: unexpected class ${r.ctx()}');
+      }
+      layer = 0; // by-object layer (back-ref)
+    } else {
+      layer = r.u16();
+    }
     return DrawBase()
       ..mat = Tlv.readU16(b, 0)
       ..hidden = b[2]
       ..soft = b[5]
       ..smooth = b[6]
-      ..layer = Tlv.readU16(b, 8);
+      ..layer = layer;
   }
 
   static Object readVertex(Archive ar, LR r) {
@@ -597,14 +706,62 @@ class LegacyReaders {
     return ArcCurveRec();
   }
 
+  /// Record that the writer burned [delta] store-map indices without
+  /// serializing any bytes for them.
+  ///
+  /// SketchUp maps an annotation's connection-point objects into the MFC
+  /// store map (CArchive::MapObject) when a dimension or leader text is
+  /// attached to geometry - each mapping consumes an index, but nothing is
+  /// written to the stream, so the file's later back-references run ahead
+  /// of a byte-exact walk. The band starts right after the last annotation
+  /// record (in FILE numbering); registrations never move - _backref
+  /// translates file references through the recorded bands instead, so no
+  /// slot value captured anywhere can go stale.
+  static void _registerBurn(Archive ar, int delta) {
+    ar.burns.add((ar.annotWatermark! + ar.cumDelta, delta));
+    ar.cumDelta += delta;
+    ar.annotWatermark = null;
+    // each burn event corresponds to ONE phantom top-level entity that the
+    // entity list's declared count includes but the stream never carries -
+    // credit it so the list doesn't run past its real end
+    if (ar.burnStack.isNotEmpty) {
+      ar.burnStack[ar.burnStack.length - 1] += 1;
+    }
+  }
+
   static Object readEdgeUse(Archive ar, LR r) {
     preamble(ar, r);
     final (es, _, __) = ar.readObject(r, 'CEdge');
     final sense = r.u8();
-    final (ps, _2, __2) = ar.readObject(r);
-    if (ps != ar.currentLoop) {
-      throw LegacyParseError(
-          'edge-use parent slot $ps != current loop ${ar.currentLoop} ${r.ctx()}');
+    // parent-loop back-ref: the alignment oracle. Read as a RAW file index
+    // - after annotations the claimed index can sit AHEAD of the walker's
+    // numbering (burned MapObject indices, see _registerBurn), which is a
+    // correction signal, not a mis-parse.
+    final p0 = r.pos;
+    final tag = r.u16();
+    int? ps;
+    if (tag == 0x7FFF) {
+      final big = r.u32();
+      if ((big & 0x80000000) != 0) {
+        throw LegacyParseError('edge-use parent is a new object ${r.ctx()}');
+      }
+      ps = big;
+    } else if (tag == 0xFFFF || (tag & 0x8000) != 0) {
+      throw LegacyParseError('edge-use parent is a new object ${r.ctx()}');
+    } else {
+      ps = tag != 0 ? tag : null;
+    }
+    final expected =
+        ar.currentLoop != null ? ar.currentLoop! + ar.cumDelta : null;
+    if (ps != expected) {
+      final delta = (ps != null && expected != null) ? ps - expected : 0;
+      if (delta > 0 && delta <= 4096 && ar.annotWatermark != null) {
+        _registerBurn(ar, delta);
+      } else {
+        r.pos = p0;
+        throw LegacyParseError(
+            'edge-use parent slot $ps != current loop $expected ${r.ctx()}');
+      }
     }
     return EdgeUseRec(edge: es, sense: sense);
   }
@@ -671,6 +828,7 @@ class LegacyReaders {
     if (t == 0x07) return r.u8();
     if (t == 0x09) return r.u32();
     if (t == 0x0a) return r.utf16();
+    if (t == 0x0c) return r.f64(); // Length (a double, inches)
     if (t == 0x0b) {
       final n = r.u32();
       if (n > 100000) {
@@ -678,7 +836,8 @@ class LegacyReaders {
       }
       return [for (int i = 0; i < n; i++) _readTyped(r, r.u8())];
     }
-    if (t == 0x12) return r.f64s(3);
+    if (t == 0x11) return r.f64s(3); // 3D point (Geom::Point3d)
+    if (t == 0x12) return r.f64s(3); // 3D vector (Geom::Vector3d)
     throw LegacyParseError(
         'unknown attribute value type 0x${t.toRadixString(16)} ${r.ctx()}');
   }
@@ -741,12 +900,65 @@ class LegacyReaders {
       mid.add(r.raw(1)[0]);
     }
     r.utf16();
-    r.u16();
+    final flags = r.u16();
+    if ((flags & 0x00FF) != 0) {
+      // Colour-by-layer with a TEXTURED material: instead of the flat
+      // RGBA, the layer embeds the same texture block a CMaterial carries
+      // (SketchUp Pro assigns full materials to layers). Low byte of the
+      // flag word set = textured; a plain colour layer has 0 there (its
+      // high byte carries an unrelated flag, so the word as a whole is
+      // non-zero either way).
+      final tex = _textureBlock(ar, r);
+      r.raw(4); // trailing u32
+      return LayerRec(
+          name: name, hidden: mid.isNotEmpty ? mid[0] : 0, rgba: tex.rgba);
+    }
     final rgba = r.raw(4);
     r.utf16();
     r.raw(21);
     return LayerRec(
         name: name, hidden: mid.isNotEmpty ? mid[0] : 0, rgba: rgba);
+  }
+
+  /// The textured-material payload: an embedded CDib plus applied size,
+  /// source file name, average colour, and opacity. Shared verbatim
+  /// between a CMaterial with a texture and a colour-by-layer CLayer that
+  /// carries a textured material.
+  static TextureBlockRec _textureBlock(Archive ar, LR r) {
+    r.raw(ar.ver >= 17 ? 2 : 1); // texture flag pad
+    final (s, _, dib) = ar.readObject(r, 'CDib');
+    if (dib is! DibRec) {
+      throw LegacyParseError('texture object is not a dib ${r.ctx()}');
+    }
+    // optional u32 between the dib and the 2 x f64 applied size
+    final marker = _findBytes(r.data, _strMarker, r.pos, r.pos + 28);
+    if (marker - r.pos == 20) {
+      r.u32();
+    } else if (marker - r.pos != 16) {
+      throw LegacyParseError('texture size block misaligned ${r.ctx()}');
+    }
+    final w = r.f64();
+    final h = r.f64();
+    final fname = r.utf16();
+    final avg = r.raw(9); // RGBA + 00 + RGBA (colour stored twice)
+    r.utf16();
+    final blob = r.raw(8); // u32 + u32 colorized flag
+    final opacity = r.f64();
+    final useOp = r.u8();
+    // A colourized (re-tinted) texture stores the ORIGINAL image plus the
+    // tint as the average colour; flagged by the second blob u32 or by
+    // alpha 0xFF on the stored colour.
+    final colorized = blob[4] != 0 || avg[3] == 0xFF;
+    return TextureBlockRec(
+      rgba: Uint8List.sublistView(avg, 0, 4),
+      opacity: opacity,
+      useOpacity: useOp,
+      texDib: s!,
+      texW: w,
+      texH: h,
+      texFile: fname,
+      colorized: colorized,
+    );
   }
 
   static Object readMaterial(Archive ar, LR r) {
@@ -765,34 +977,15 @@ class LegacyReaders {
       out.opacity = opacity;
       out.useOpacity = useOp;
     } else {
-      r.raw(ar.ver >= 17 ? 2 : 1);
-      final (s, _, dib) = ar.readObject(r, 'CDib');
-      if (dib is! DibRec) {
-        throw LegacyParseError('texture object is not a dib ${r.ctx()}');
-      }
-      final marker = _findBytes(r.data, _strMarker, r.pos, r.pos + 28);
-      if (marker - r.pos == 20) {
-        r.u32();
-      } else if (marker - r.pos != 16) {
-        throw LegacyParseError('texture size block misaligned ${r.ctx()}');
-      }
-      final w = r.f64();
-      final h = r.f64();
-      final fname = r.utf16();
-      final avg = r.raw(9);
-      r.utf16();
-      final blob = r.raw(8);
-      final opacity = r.f64();
-      final useOp = r.u8();
-      final colorized = blob[4] != 0 || avg[3] == 0xFF;
-      out.rgba = Uint8List.sublistView(avg, 0, 4);
-      out.opacity = opacity;
-      out.useOpacity = useOp;
-      out.texDib = s;
-      out.texW = w;
-      out.texH = h;
-      out.texFile = fname;
-      out.colorized = colorized;
+      final tex = _textureBlock(ar, r);
+      out.rgba = tex.rgba;
+      out.opacity = tex.opacity;
+      out.useOpacity = tex.useOpacity;
+      out.texDib = tex.texDib;
+      out.texW = tex.texW;
+      out.texH = tex.texH;
+      out.texFile = tex.texFile;
+      out.colorized = tex.colorized;
       out.hasTexture = true;
     }
     return out;
@@ -845,11 +1038,75 @@ class LegacyReaders {
     return ThumbnailRec(dibSlot);
   }
 
-  static Object readRelationship(Archive ar, LR r) {
+  /// CImage: an Image entity - instance-shaped: a back-ref to the (already
+  /// walked) CComponentDefinition holding the image's face and texture, a
+  /// 3x4 placement, a constant 1.0, the source path string (empty in every
+  /// sample), and a 16-byte GUID. It appears as a normal entity-list item
+  /// inside the definition that owns the image (typically a
+  /// face-me/photo definition), whose own tail the ordinary definition
+  /// reader then consumes.
+  static Object readImage(Archive ar, LR r) {
     preamble(ar, r);
-    ar.readObject(r);
-    ar.readObject(r);
+    final db = drawbase(ar, r);
+    final (ds, _, __) = ar.readObject(r); // the image's definition
+    final xform = r.f64s(12);
+    r.f64(); // constant 1.0
+    r.utf16(); // source path
+    final guid = r.raw(16);
+    return ImageRec(db: db, def: ds, xform: xform, guid: Tlv.toHexUpper(guid));
+  }
+
+  /// A reference-to-entity tag: dimension connection points and text
+  /// leader attachments. Unlike readObject's back-ref path, this tolerates
+  /// a slot the walk has not reached yet - SketchUp serializes a
+  /// label/dimension BEFORE the entity it anchors to when both live in the
+  /// same entity list, so the reference can legitimately point forward.
+  /// Returns the slot number, or null for a null reference.
+  static int? _entityRef(Archive ar, LR r) {
+    final tag = r.u16();
+    if (tag == 0) return null;
+    if (tag == 0x7FFF) {
+      final big = r.u32();
+      if ((big & 0x80000000) != 0) {
+        throw LegacyParseError('entity ref is a new object ${r.ctx()}');
+      }
+      return big;
+    }
+    if (tag == 0xFFFF || (tag & 0x8000) != 0) {
+      throw LegacyParseError('entity ref is a new object ${r.ctx()}');
+    }
+    return tag;
+  }
+
+  static Object readRelationship(Archive ar, LR r) {
+    // two object pointers (small maps: two u16 back-refs - which read like
+    // the "u32" of the public notes; big maps escalate them to big-tags).
+    // They bind an annotation to the entity it labels, and the annotation
+    // side is routinely serialized BEFORE the geometry side - so these can
+    // point forward, past the walk cursor; _entityRef tolerates that where
+    // readObject's back-ref path (rightly) does not.
+    preamble(ar, r);
+    _entityRef(ar, r);
+    _entityRef(ar, r);
     return RelationshipRec();
+  }
+
+  /// True when the u16 at [at] starts an object read in one of the
+  /// UNAMBIGUOUS forms: null, escape, class definition, or a class-ref to
+  /// a class already known. Plain object back-refs are excluded on
+  /// purpose - any 2-byte junk below 0x8000 would qualify, which is
+  /// exactly the ambiguity this check exists to avoid.
+  static bool _strictNextTag(Archive ar, Uint8List data, int at,
+      [bool allowNull = true]) {
+    if (at + 2 > data.length) return false;
+    final t = Tlv.readU16(data, at);
+    if (t == 0x0000) return allowNull;
+    if (t == 0x7FFF || t == 0xFFFF) return true;
+    if ((t & 0x8000) != 0) {
+      final ent = ar.slots[t & 0x7FFF];
+      return ent != null && ent.kind == 'class';
+    }
+    return false;
   }
 
   static Object readConstructionLine(Archive ar, LR r) {
@@ -857,8 +1114,35 @@ class LegacyReaders {
     drawbase(ar, r);
     r.f64s(3);
     r.f64s(3);
-    r.f64s(2);
-    r.raw(ar.ver >= 17 ? 7 : 4);
+    r.f64s(2); // line params (+-~4.4e29 = infinite)
+    // The trailing block varies by the WRITING BUILD, not cleanly by
+    // version: 7 bytes on the v17 calibration corpus, 4 on v16 and on a
+    // real v18, 0 on another real v17. Self-calibrate on the first guide
+    // line of the file - the length that lands on a legitimate next tag
+    // (strict forms only) - and cache it for the rest of the file.
+    int? k = ar.clineTail;
+    if (k == null) {
+      final dflt = ar.ver == 17 ? 7 : 4;
+      final order = [
+        dflt,
+        ...[0, 4, 7].where((c) => c != dflt)
+      ];
+      // two passes: a zero tail full of padding can mimic a null tag, so
+      // only accept a null-anchored candidate when no candidate lands on a
+      // STRONG form (escape / known class / class definition)
+      outer:
+      for (final allowNull in [false, true]) {
+        for (final cand in order) {
+          if (_strictNextTag(ar, r.data, r.pos + cand, allowNull)) {
+            k = cand;
+            break outer;
+          }
+        }
+      }
+      k ??= dflt;
+      ar.clineTail = k;
+    }
+    r.raw(k);
     return ConstructionLineRec();
   }
 
@@ -903,7 +1187,17 @@ class LegacyReaders {
     final db = drawbase(ar, r);
     final text = r.utf16();
     ar.readObject(r, 'CSkFont');
-    r.raw(165);
+    // The tail is NOT a fixed 165-byte blob: it embeds two object
+    // references (the dimension's connection points into the geometry).
+    // Each is a normal MFC tag - 2 bytes in small files, but 6 bytes once
+    // the archive holds more than 0x7FFE objects and the 0x7FFF big-tag
+    // escape kicks in - so a fixed-size skip walks off the rails exactly
+    // on large models.
+    r.raw(37);
+    _entityRef(ar, r); // connection point 1 (may be null)
+    r.raw(42);
+    _entityRef(ar, r); // connection point 2 (may be null)
+    r.raw(82);
     return DimLinearRec(db, text);
   }
 
@@ -935,14 +1229,52 @@ class LegacyReaders {
     r.raw(idx - r.pos);
     final text = r.utf16();
     r.raw(5);
+    // Optional leader-attachment refs follow the fixed tail (a text label
+    // anchored to geometry stores the anchored entities here; they can
+    // point FORWARD - see _entityRef). Only the escaped 6-byte form is
+    // recognisable without risk: a 2-byte back-ref here would be
+    // indistinguishable from the next list item's tag, and every known
+    // sample either has no attachments or lives in a >0x7FFE-object file
+    // where the escape is mandatory anyway.
+    while (true) {
+      final head = r.peek(2);
+      if (!(head.length == 2 && head[0] == 0xFF && head[1] == 0x7F)) break;
+      final full = r.peek(6);
+      if (full.length < 6) break;
+      final val = Tlv.readU32(full, 2);
+      if ((val & 0x80000000) != 0) break; // new-object tag - the next entity
+      r.raw(6);
+    }
     return TextRec(db, text);
   }
 
   static List<(int, String?, Object?)> readEntityList(
       Archive ar, LR r, int count, String owner) {
     final ents = <(int, String?, Object?)>[];
+    ar.burnStack.add(0);
+    try {
+      return _readEntityListInner(ar, r, count, owner, ents);
+    } finally {
+      ar.burnStack.removeLast();
+    }
+  }
+
+  static List<(int, String?, Object?)> _readEntityListInner(Archive ar, LR r,
+      int count, String owner, List<(int, String?, Object?)> ents) {
     while (ents.length < count) {
       final p = r.pos;
+      final hasBurnCredit =
+          owner == 'def' && ar.burnStack.isNotEmpty && ar.burnStack.last > 0;
+      if (hasBurnCredit &&
+          p + 25 <= r.data.length &&
+          Tlv.readU32(r.data, p) == 0 &&
+          _bytesEqualAt(r.data, p + 22, _strMarker)) {
+        // burned MapObject indices (see _registerBurn) mean the declared
+        // count includes phantom entities the stream never carries; the
+        // definition tail signature (nrel=0 + pad + 16-byte GUID + name
+        // marker at +22) marks the list's REAL end
+        break;
+      }
       final prevFlag = ar.inEntityList;
       ar.inEntityList = true;
       int? s;
@@ -952,9 +1284,21 @@ class LegacyReaders {
         (s, n, v) = ar.readObject(r);
       } on LegacyParseError {
         ar.inEntityList = prevFlag;
-        if (owner != 'root') rethrow;
-        r.pos = p;
-        break;
+        if (owner == 'root') {
+          // over-declared root counts run into the document tail - stop
+          r.pos = p;
+          break;
+        }
+        if (hasBurnCredit) {
+          // this list had burned MapObject indices (see _registerBurn):
+          // the phantom connection points were also counted as items, so
+          // the declared count overshoots the real records. Stop at the
+          // failed item - the definition tail that follows (nrel, GUID
+          // anchor, thumbnail scan) validates the cut.
+          r.pos = p;
+          break;
+        }
+        rethrow;
       }
       ar.inEntityList = prevFlag;
       ents.add((s!, n, v));
@@ -969,21 +1313,43 @@ class LegacyReaders {
     if (nlayers > 10000) {
       throw LegacyParseError('implausible def layer count ${r.ctx()}');
     }
-    for (int i = 0; i < nlayers; i++) {
+    // like the model-level layer list, the count is REAL layers (new
+    // records or back-refs); SketchUp 2020 interleaves null separators
+    // between them
+    int got = 0;
+    while (got < nlayers) {
+      if (r.peekU16() == 0) {
+        r.pos += 2;
+        continue;
+      }
       ar.readObject(r, 'CLayer');
+      got += 1;
     }
     var decl = r.u16();
     if (decl == 0x7FFF) {
       decl = r.u32();
     }
-    r.u32();
-    var count = r.u32();
+    // v20 can drop its undocumented filler right here, swallowing the u32
+    // field (and, behind a layer-separator null, even the decl itself): if
+    // the empty-string marker sits in the next few bytes, the real count
+    // is the first non-zero u32 after its padding.
+    int? filled;
+    if (ar.ver >= 20) {
+      filled = retryCountAfterV20Filler(r, r.pos, 5000000, ar);
+    }
+    int count;
+    if (filled != null) {
+      count = filled;
+    } else {
+      r.u32();
+      count = r.u32();
+    }
     // A zero count is as much a symptom of the v20 filler as an implausibly
     // large one: the reader lands on the leading zero bytes of the filler
     // instead of the count. A genuinely empty definition reads zero with no
     // filler ahead, and retryCountAfterV20Filler leaves those alone.
     if (count > 5000000 || count == 0) {
-      final retry = retryCountAfterV20Filler(r, r.pos - 4, 5000000);
+      final retry = retryCountAfterV20Filler(r, r.pos - 4, 5000000, ar);
       if (retry != null) count = retry;
     }
     if (count > 5000000) {
@@ -992,7 +1358,7 @@ class LegacyReaders {
     final ents = readEntityList(ar, r, count, 'def');
     var nrel = r.u32();
     if (nrel > 100000) {
-      final retry = retryCountAfterV20Filler(r, r.pos - 4, 100000);
+      final retry = retryCountAfterV20Filler(r, r.pos - 4, 100000, ar);
       if (retry != null) nrel = retry;
     }
     if (nrel > 100000) {
@@ -1100,6 +1466,7 @@ class LegacyReaders {
     'CThumbnail': readThumbnail,
     'CRelationship': readRelationship,
     'CComponentDefinition': readDefinition,
+    'CImage': readImage,
     'CComponentInstance': readInstance,
     'CGroup': readInstance,
     'CFaceTextureCoords': readFtc,
@@ -1306,15 +1673,40 @@ class Legacy {
     if (layerCount > 100000) {
       throw LegacyParseError('implausible layer count');
     }
+    // layerCount counts REAL layers. SketchUp 2020 interleaves a null
+    // object-ref after each layer record (a separator, not a layer), so
+    // counting reads walks off mid-list on files with several layers;
+    // count parsed layers instead, skip the separators, and stop early if
+    // the next tag is a back-ref (the definition-list anchor) - a v20
+    // variant where the count over-includes separators.
     final layers = <(int, Object?)>[];
-    for (int i = 0; i < layerCount; i++) {
+    while (layers.length < layerCount) {
+      final tag = r.peekU16();
+      if (tag == 0) {
+        r.pos += 2;
+        continue;
+      }
+      if (tag != 0xFFFF && (tag & 0x8000) == 0) {
+        break;
+      }
       final (s, _, v) = ar.readObject(r, 'CLayer');
-      // A null object-ref occupies a slot in the list without carrying a
-      // layer record (seen in SketchUp 2020 files, where layerCount
-      // includes it). Keeping it would push a null into the list; readObject
-      // has still consumed the ref from the stream.
       if (v == null) continue;
       layers.add((s!, v));
+    }
+    // trailing separators (and any layer records past the declared count)
+    final layCls = ar.classSlot['CLayer'];
+    while (true) {
+      final tag = r.peekU16();
+      if (tag == 0) {
+        r.pos += 2;
+        continue;
+      }
+      if (layCls != null && tag == (0x8000 | layCls)) {
+        final (s, _, v) = ar.readObject(r, 'CLayer');
+        if (v != null) layers.add((s!, v));
+        continue;
+      }
+      break;
     }
 
     final (_, dn, __) = ar.readObject(r);
@@ -1323,7 +1715,7 @@ class Legacy {
     }
     var defCount = r.u32();
     if (defCount > 1000000) {
-      final retry = retryCountAfterV20Filler(r, r.pos - 4, 1000000);
+      final retry = retryCountAfterV20Filler(r, r.pos - 4, 1000000, ar);
       if (retry != null) defCount = retry;
     }
     if (defCount > 1000000) {
@@ -1348,7 +1740,7 @@ class Legacy {
 
     var rootCount = r.u32();
     if (rootCount > 5000000) {
-      final retry = retryCountAfterV20Filler(r, r.pos - 4, 5000000);
+      final retry = retryCountAfterV20Filler(r, r.pos - 4, 5000000, ar);
       if (retry != null) rootCount = retry;
     }
     if (rootCount > 5000000) {

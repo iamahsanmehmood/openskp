@@ -43,9 +43,13 @@ describe('Legacy MFC reader - SketchUp 2020 (v20) layout', () => {
     expect(model.definitions.size).toBe(20);
     expect(model.materials.length).toBe(24);
 
-    // v20 writes a null object-ref into the layer list, which layerCount
-    // includes. It must not reach model.layers as a null entry.
-    expect(model.layers.map((l) => l.name)).toEqual(['Layer0']);
+    // v20 interleaves a null object-ref after EACH layer record; the count
+    // is the number of REAL layers. The old reader counted the separators
+    // as items and dropped every layer after the first - this fixture
+    // really does carry "Gondulas Laterais" (visible in SketchUp), which
+    // the previous assertion enshrined as missing. Nulls must still never
+    // reach model.layers.
+    expect(model.layers.map((l) => l.name)).toEqual(['Layer0', 'Gondulas Laterais']);
     for (const layer of model.layers) {
       expect(layer).not.toBeNull();
       expect(layer.name).toBeTypeOf('string');

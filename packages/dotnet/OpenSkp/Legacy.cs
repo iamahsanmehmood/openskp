@@ -87,6 +87,22 @@ namespace OpenSkp
                 && Tlv.ReadU32(data, p + 2) == (0x80000000u | (uint)slot);
         }
 
+        /// <summary>True when the u16 at <paramref name="at"/> can legally
+        /// start an object read: a null, an escape, a class definition, a
+        /// class-ref to a KNOWN class, or an object back-ref within the
+        /// allocated range.</summary>
+        public static bool PlausibleListTag(Archive ar, byte[] data, int at)
+        {
+            if (at + 2 > data.Length) return false;
+            ushort t = Tlv.ReadU16(data, at);
+            if (t == 0x0000 || t == 0x7FFF || t == 0xFFFF) return true;
+            if ((t & 0x8000) != 0)
+            {
+                return ar.Slots.TryGetValue(t & 0x7FFF, out var ent) && ent.Kind == "class";
+            }
+            return t < ar.NextSlot;
+        }
+
         public static int[] AsciiCodes(string s) => s.Select(c => (int)c).ToArray();
 
         public static bool MatchesAscii(byte[] data, int offset, string str)
@@ -140,7 +156,7 @@ namespace OpenSkp
         /// tests; see <see cref="RetryCountAfterV20Filler"/> for how it is
         /// used.
         /// </summary>
-        public static (uint Count, int Next)? FindCountAfterV20Filler(byte[] data, int countPos, uint limit)
+        public static (uint Count, int Next)? FindCountAfterV20Filler(byte[] data, int countPos, uint limit, Archive? ar = null)
         {
             int markerAt = -1;
             for (int i = countPos; i < countPos + 12 && i + 4 <= data.Length; i++)
@@ -158,7 +174,11 @@ namespace OpenSkp
             // per call site (9 and 13 bytes both occur in real files), but
             // always lands at markerAt + 4 + pad with pad % 4 == 1. Step
             // through those candidate offsets and take the first plausible
-            // u32.
+            // u32 that is ALSO followed by a legitimate list tag (when an
+            // Archive is available to check against) - a numerically
+            // plausible count is not enough by itself once the filler can
+            // also swallow the field ahead of it (see ReadDefinition's
+            // decl-position retry), which raises the odds of a false match.
             //
             // Deliberately NOT "scan forward to the first non-zero byte": a
             // count that is an exact multiple of 256 has a 0x00 low byte,
@@ -171,14 +191,16 @@ namespace OpenSkp
                 int at = markerAt + 4 + pad;
                 if (at + 4 > data.Length) break;
                 uint count = Tlv.ReadU32(data, at);
-                if (count > 0 && count <= limit) return (count, at + 4);
+                if (count == 0 || count > limit) continue;
+                if (ar != null && !PlausibleListTag(ar, data, at + 4)) continue;
+                return (count, at + 4);
             }
             return null;
         }
 
-        public static uint? RetryCountAfterV20Filler(LR r, int countPos, uint limit)
+        public static uint? RetryCountAfterV20Filler(LR r, int countPos, uint limit, Archive? ar = null)
         {
-            var hit = FindCountAfterV20Filler(r.Data, countPos, limit);
+            var hit = FindCountAfterV20Filler(r.Data, countPos, limit, ar);
             if (hit == null) return null;
             r.Pos = hit.Value.Next;
             return hit.Value.Count;
@@ -316,6 +338,22 @@ namespace OpenSkp
         public Dictionary<string, LegacyReader> Readers = new Dictionary<string, LegacyReader>();
         public int? CurrentLoop;
         public bool InEntityList;
+        // Burned store-map indices (see ReadEdgeUse): the writer maps an
+        // annotation's connection points into the store map WITHOUT writing
+        // bytes, so file back-references beyond each burn run ahead of the
+        // walker's numbering. Registrations always stay at WALKER indices -
+        // no captured slot ever goes stale - and Backref translates file
+        // references through the burn bands instead. Burns holds
+        // (fileBandStart, width) per event; CumDelta their total;
+        // AnnotWatermark the walker slot right after the last annotation
+        // record - the only place a band can start.
+        public List<(int Start, int Width)> Burns = new List<(int, int)>();
+        public int CumDelta;
+        public int? AnnotWatermark;
+        public List<int> BurnStack = new List<int>();  // per-entity-list burned-item credits
+        // Cached CConstructionLine trailer width, self-calibrated on the
+        // first guide line of the file (see ReadConstructionLine).
+        public int? ClineTail;
 
         public Archive(byte[] data, int ver)
         {
@@ -410,11 +448,41 @@ namespace OpenSkp
                 CurrentClass = prevClass;
             }
             Slots[slot] = new SlotEntry { Kind = "obj", Name = name, Value = value };
+            if (name == "CDimensionLinear" || name == "CText")
+            {
+                AnnotWatermark = NextSlot;
+            }
             return (slot, name, value);
+        }
+
+        /// <summary>Map a FILE store-map index to the walker's numbering
+        /// through the burn bands. Returns null when the reference points
+        /// INTO a band (a phantom, never-serialized connection point).</summary>
+        private int? TranslateRef(int slot)
+        {
+            int offset = 0;
+            foreach (var (start, width) in Burns)
+            {
+                if (slot < start) break;
+                if (slot < start + width) return null;
+                offset += width;
+            }
+            return slot - offset;
         }
 
         private (int?, string?, object?) Backref(int slot, LR r)
         {
+            if (Burns.Count > 0 && slot >= Burns[0].Start)
+            {
+                var walker = TranslateRef(slot);
+                if (walker == null)
+                {
+                    // a phantom (burned) connection-point index - annotation
+                    // metadata only; nothing was ever serialized for it
+                    return (slot, "reserved", null);
+                }
+                slot = walker.Value;
+            }
             if (!Slots.TryGetValue(slot, out var ent))
             {
                 if (slot < WalkBase)
@@ -465,6 +533,17 @@ namespace OpenSkp
     internal sealed class AttrsRec { public List<(string? Name, object? Value)> Children = new List<(string?, object?)>(); }
     internal sealed class DictRec { public string Name = ""; public Dictionary<string, object?> Entries = new Dictionary<string, object?>(); }
     internal sealed class LayerRec { public string Name = ""; public int Hidden; public byte[] Rgba = new byte[4]; }
+    internal sealed class TextureBlockRec
+    {
+        public byte[] Rgba = new byte[4];
+        public double Opacity;
+        public int UseOpacity;
+        public int? TexDib;
+        public double TexW;
+        public double TexH;
+        public string TexFile = "";
+        public bool Colorized;
+    }
     internal sealed class MaterialRec
     {
         public string Name = "";
@@ -490,6 +569,7 @@ namespace OpenSkp
     }
     internal sealed class CameraRec { }
     internal sealed class ThumbnailRec { public int? Dib; }
+    internal sealed class ImageRec { public DrawBase Db = new DrawBase(); public int? Def; public double[] Xform = new double[12]; public string Guid = ""; }
     internal sealed class RelationshipRec { }
     internal sealed class ConstructionLineRec { }
     internal sealed class ConstructionPointRec { public DrawBase Db = new DrawBase(); public double[] Pos = new double[3]; }
@@ -537,14 +617,44 @@ namespace OpenSkp
 
         public static DrawBase Drawbase(Archive ar, LR r)
         {
-            var b = r.Raw(10);
+            var b = r.Raw(8);
+            // The layer field is normally a u16 id, but an entity can carry
+            // the layer BY OBJECT instead (seen on real 2018 instances): a
+            // full inline CLayer record on first use, an escaped back-ref
+            // to it on later siblings. Layer ids never have the 0x8000 bit
+            // and never equal 0x7FFF, so both object forms are unambiguous.
+            // (A 2-byte back-ref would collide with the id space - not seen
+            // in any file; by-object layers have only appeared in
+            // >32k-object archives where refs escape anyway.)
+            bool haveLayCls = ar.ClassSlot.TryGetValue("CLayer", out int layCls);
+            ushort tag = r.PeekU16();
+            int layer;
+            if (haveLayCls && tag == (0x8000 | layCls))
+            {
+                ar.ReadObject(r, "CLayer");
+                layer = 0;                   // by-object layer: keep the default id
+            }
+            else if (tag == 0x7FFF)
+            {
+                r.U16();
+                uint big = r.U32();
+                if ((big & 0x80000000) != 0)
+                {
+                    throw new LegacyParseError($"drawbase layer: unexpected class {r.Ctx()}");
+                }
+                layer = 0;                   // by-object layer (back-ref)
+            }
+            else
+            {
+                layer = r.U16();
+            }
             return new DrawBase
             {
                 Mat = Tlv.ReadU16(b, 0),
                 Hidden = b[2],
                 Soft = b[5],
                 Smooth = b[6],
-                Layer = Tlv.ReadU16(b, 8),
+                Layer = layer,
             };
         }
 
@@ -584,15 +694,76 @@ namespace OpenSkp
             return new ArcCurveRec();
         }
 
+        /// <summary>Record that the writer burned <paramref name="delta"/>
+        /// store-map indices without serializing any bytes for them.
+        ///
+        /// SketchUp maps an annotation's connection-point objects into the
+        /// MFC store map (CArchive::MapObject) when a dimension or leader
+        /// text is attached to geometry - each mapping consumes an index,
+        /// but nothing is written to the stream, so the file's later
+        /// back-references run ahead of a byte-exact walk. The band starts
+        /// right after the last annotation record (in FILE numbering);
+        /// registrations never move - Backref translates file references
+        /// through the recorded bands instead, so no slot value captured
+        /// anywhere can go stale.</summary>
+        private static void RegisterBurn(Archive ar, int delta)
+        {
+            ar.Burns.Add((ar.AnnotWatermark!.Value + ar.CumDelta, delta));
+            ar.CumDelta += delta;
+            ar.AnnotWatermark = null;
+            // each burn event corresponds to ONE phantom top-level entity
+            // that the entity list's declared count includes but the
+            // stream never carries - credit it so the list doesn't run
+            // past its real end
+            if (ar.BurnStack.Count > 0)
+            {
+                ar.BurnStack[ar.BurnStack.Count - 1] += 1;
+            }
+        }
+
         public static object ReadEdgeUse(Archive ar, LR r)
         {
             Preamble(ar, r);
             var (es, _, _) = ar.ReadObject(r, "CEdge");
             byte sense = r.U8();
-            var (ps, _, _) = ar.ReadObject(r);
-            if (ps != ar.CurrentLoop)
+            // parent-loop back-ref: the alignment oracle. Read as a RAW
+            // file index - after annotations the claimed index can sit
+            // AHEAD of the walker's numbering (burned MapObject indices,
+            // see RegisterBurn), which is a correction signal, not a
+            // mis-parse.
+            int p0 = r.Pos;
+            ushort tag = r.U16();
+            int? ps;
+            if (tag == 0x7FFF)
             {
-                throw new LegacyParseError($"edge-use parent slot {ps} != current loop {ar.CurrentLoop} {r.Ctx()}");
+                uint big = r.U32();
+                if ((big & 0x80000000) != 0)
+                {
+                    throw new LegacyParseError($"edge-use parent is a new object {r.Ctx()}");
+                }
+                ps = (int)big;
+            }
+            else if (tag == 0xFFFF || (tag & 0x8000) != 0)
+            {
+                throw new LegacyParseError($"edge-use parent is a new object {r.Ctx()}");
+            }
+            else
+            {
+                ps = tag != 0 ? (int?)tag : null;
+            }
+            int? expected = ar.CurrentLoop != null ? ar.CurrentLoop + ar.CumDelta : (int?)null;
+            if (ps != expected)
+            {
+                int delta = (ps.HasValue && expected.HasValue) ? ps.Value - expected.Value : 0;
+                if (delta > 0 && delta <= 4096 && ar.AnnotWatermark != null)
+                {
+                    RegisterBurn(ar, delta);
+                }
+                else
+                {
+                    r.Pos = p0;
+                    throw new LegacyParseError($"edge-use parent slot {ps} != current loop {expected} {r.Ctx()}");
+                }
             }
             return new EdgeUseRec { Edge = es, Sense = sense };
         }
@@ -664,6 +835,7 @@ namespace OpenSkp
             if (t == 0x07) return r.U8();
             if (t == 0x09) return r.U32();
             if (t == 0x0a) return r.Utf16();
+            if (t == 0x0c) return r.F64();           // Length (a double, inches)
             if (t == 0x0b)
             {
                 uint n = r.U32();
@@ -675,7 +847,8 @@ namespace OpenSkp
                 for (int i = 0; i < n; i++) arr.Add(ReadTyped(r, r.U8()));
                 return arr;
             }
-            if (t == 0x12) return r.F64s(3);
+            if (t == 0x11) return r.F64s(3);         // 3D point (Geom::Point3d)
+            if (t == 0x12) return r.F64s(3);         // 3D vector (Geom::Vector3d)
             throw new LegacyParseError($"unknown attribute value type 0x{t:x} {r.Ctx()}");
         }
 
@@ -704,12 +877,72 @@ namespace OpenSkp
             {
                 mid.Add(r.Raw(1)[0]);
             }
-            r.Utf16();
-            r.U16();
+            r.Utf16();                       // internal name ("Layer_<name>")
+            ushort flags = r.U16();
+            if ((flags & 0x00FF) != 0)
+            {
+                // Colour-by-layer with a TEXTURED material: instead of the
+                // flat RGBA, the layer embeds the same texture block a
+                // CMaterial carries (SketchUp Pro assigns full materials to
+                // layers). Low byte of the flag word set = textured; a
+                // plain colour layer has 0 there (its high byte carries an
+                // unrelated flag, so the word as a whole is non-zero
+                // either way).
+                var tex = TextureBlock(ar, r);
+                r.Raw(4);                    // trailing u32
+                return new LayerRec { Name = name, Hidden = mid.Count > 0 ? mid[0] : 0, Rgba = tex.Rgba };
+            }
             var rgba = r.Raw(4);
             r.Utf16();
             r.Raw(21);
             return new LayerRec { Name = name, Hidden = mid.Count > 0 ? mid[0] : 0, Rgba = rgba };
+        }
+
+        /// <summary>The textured-material payload: an embedded CDib plus
+        /// applied size, source file name, average colour, and opacity.
+        /// Shared verbatim between a CMaterial with a texture and a
+        /// colour-by-layer CLayer that carries a textured material.</summary>
+        public static TextureBlockRec TextureBlock(Archive ar, LR r)
+        {
+            r.Raw(ar.Ver >= 17 ? 2 : 1);        // texture flag pad
+            var (s, _, dib) = ar.ReadObject(r, "CDib");
+            if (!(dib is DibRec))
+            {
+                throw new LegacyParseError($"texture object is not a dib {r.Ctx()}");
+            }
+            // optional u32 between the dib and the 2 x f64 applied size
+            int marker = LegacyBytes.FindBytes(r.Data, LegacyBytes.StrMarker, r.Pos, r.Pos + 28);
+            if (marker - r.Pos == 20)
+            {
+                r.U32();
+            }
+            else if (marker - r.Pos != 16)
+            {
+                throw new LegacyParseError($"texture size block misaligned {r.Ctx()}");
+            }
+            double w = r.F64();
+            double h = r.F64();
+            string fname = r.Utf16();
+            var avg = r.Raw(9);              // RGBA + 00 + RGBA (colour stored twice)
+            r.Utf16();
+            var blob = r.Raw(8);             // u32 + u32 colorized flag
+            double opacity = r.F64();
+            byte useOp = r.U8();
+            // A colourized (re-tinted) texture stores the ORIGINAL image
+            // plus the tint as the average colour; flagged by the second
+            // blob u32 or by alpha 0xFF on the stored colour.
+            bool colorized = blob[4] != 0 || avg[3] == 0xFF;
+            return new TextureBlockRec
+            {
+                Rgba = avg.Take(4).ToArray(),
+                Opacity = opacity,
+                UseOpacity = useOp,
+                TexDib = s,
+                TexW = w,
+                TexH = h,
+                TexFile = fname,
+                Colorized = colorized,
+            };
         }
 
         public static object ReadMaterial(Archive ar, LR r)
@@ -731,38 +964,15 @@ namespace OpenSkp
             }
             else
             {
-                r.Raw(ar.Ver >= 17 ? 2 : 1);
-                var (s, _, dib) = ar.ReadObject(r, "CDib");
-                if (!(dib is DibRec))
-                {
-                    throw new LegacyParseError($"texture object is not a dib {r.Ctx()}");
-                }
-                int marker = LegacyBytes.FindBytes(r.Data, LegacyBytes.StrMarker, r.Pos, r.Pos + 28);
-                if (marker - r.Pos == 20)
-                {
-                    r.U32();
-                }
-                else if (marker - r.Pos != 16)
-                {
-                    throw new LegacyParseError($"texture size block misaligned {r.Ctx()}");
-                }
-                double w = r.F64();
-                double h = r.F64();
-                string fname = r.Utf16();
-                var avg = r.Raw(9);
-                r.Utf16();
-                var blob = r.Raw(8);
-                double opacity = r.F64();
-                byte useOp = r.U8();
-                bool colorized = blob[4] != 0 || avg[3] == 0xFF;
-                outRec.Rgba = avg.Take(4).ToArray();
-                outRec.Opacity = opacity;
-                outRec.UseOpacity = useOp;
-                outRec.TexDib = s;
-                outRec.TexW = w;
-                outRec.TexH = h;
-                outRec.TexFile = fname;
-                outRec.Colorized = colorized;
+                var tex = TextureBlock(ar, r);
+                outRec.Rgba = tex.Rgba;
+                outRec.Opacity = tex.Opacity;
+                outRec.UseOpacity = tex.UseOpacity;
+                outRec.TexDib = tex.TexDib;
+                outRec.TexW = tex.TexW;
+                outRec.TexH = tex.TexH;
+                outRec.TexFile = tex.TexFile;
+                outRec.Colorized = tex.Colorized;
                 outRec.HasTexture = true;
             }
             return outRec;
@@ -821,12 +1031,87 @@ namespace OpenSkp
             return new ThumbnailRec { Dib = dibSlot };
         }
 
-        public static object ReadRelationship(Archive ar, LR r)
+        /// <summary>CImage: an Image entity - instance-shaped: a back-ref
+        /// to the (already walked) CComponentDefinition holding the
+        /// image's face and texture, a 3x4 placement, a constant 1.0, the
+        /// source path string (empty in every sample), and a 16-byte GUID.
+        /// It appears as a normal entity-list item inside the definition
+        /// that owns the image (typically a face-me/photo definition),
+        /// whose own tail the ordinary definition reader then consumes.
+        /// Calibrated byte-exact on two real files - an 80 MB v18 and a
+        /// 661 MB v17 - both previously rejected outright with "no reader
+        /// for class CImage".</summary>
+        public static object ReadImage(Archive ar, LR r)
         {
             Preamble(ar, r);
-            ar.ReadObject(r);
-            ar.ReadObject(r);
+            var db = Drawbase(ar, r);
+            var (ds, _, _) = ar.ReadObject(r);          // the image's definition
+            var xform = r.F64s(12);
+            r.F64();                                     // constant 1.0
+            r.Utf16();                                    // source path
+            var guid = r.Raw(16);
+            return new ImageRec { Db = db, Def = ds, Xform = xform, Guid = LegacyBytes.ToHex(guid) };
+        }
+
+        /// <summary>A reference-to-entity tag: dimension connection points
+        /// and text leader attachments. Unlike ReadObject's back-ref path,
+        /// this tolerates a slot the walk has not reached yet - SketchUp
+        /// serializes a label/dimension BEFORE the entity it anchors to
+        /// when both live in the same entity list, so the reference can
+        /// legitimately point forward. Returns the slot number, or null
+        /// for a null reference.</summary>
+        private static int? EntityRef(Archive ar, LR r)
+        {
+            ushort tag = r.U16();
+            if (tag == 0) return null;
+            if (tag == 0x7FFF)
+            {
+                uint big = r.U32();
+                if ((big & 0x80000000) != 0)
+                {
+                    throw new LegacyParseError($"entity ref is a new object {r.Ctx()}");
+                }
+                return (int)big;
+            }
+            if (tag == 0xFFFF || (tag & 0x8000) != 0)
+            {
+                throw new LegacyParseError($"entity ref is a new object {r.Ctx()}");
+            }
+            return tag;
+        }
+
+        public static object ReadRelationship(Archive ar, LR r)
+        {
+            // two object pointers (small maps: two u16 back-refs - which
+            // read like the "u32" of the public notes; big maps escalate
+            // them to big-tags). They bind an annotation to the entity it
+            // labels, and the annotation side is routinely serialized
+            // BEFORE the geometry side - so these can point forward, past
+            // the walk cursor; EntityRef tolerates that where ReadObject's
+            // back-ref path (rightly) does not.
+            Preamble(ar, r);
+            EntityRef(ar, r);
+            EntityRef(ar, r);
             return new RelationshipRec();
+        }
+
+        /// <summary>True when the u16 at <paramref name="at"/> starts an
+        /// object read in one of the UNAMBIGUOUS forms: null, escape, class
+        /// definition, or a class-ref to a class already known. Plain
+        /// object back-refs are excluded on purpose - any 2-byte junk below
+        /// 0x8000 would qualify, which is exactly the ambiguity this check
+        /// exists to avoid.</summary>
+        private static bool StrictNextTag(Archive ar, byte[] data, int at, bool allowNull = true)
+        {
+            if (at + 2 > data.Length) return false;
+            ushort t = Tlv.ReadU16(data, at);
+            if (t == 0x0000) return allowNull;
+            if (t == 0x7FFF || t == 0xFFFF) return true;
+            if ((t & 0x8000) != 0)
+            {
+                return ar.Slots.TryGetValue(t & 0x7FFF, out var ent) && ent.Kind == "class";
+            }
+            return false;
         }
 
         public static object ReadConstructionLine(Archive ar, LR r)
@@ -835,8 +1120,39 @@ namespace OpenSkp
             Drawbase(ar, r);
             r.F64s(3);
             r.F64s(3);
-            r.F64s(2);
-            r.Raw(ar.Ver >= 17 ? 7 : 4);
+            r.F64s(2);                       // line params (+-~4.4e29 = infinite)
+            // The trailing block varies by the WRITING BUILD, not cleanly
+            // by version: 7 bytes on the v17 calibration corpus, 4 on v16
+            // and on a real v18, 0 on another real v17. Self-calibrate on
+            // the first guide line of the file - the length that lands on
+            // a legitimate next tag (strict forms only) - and cache it for
+            // the rest of the file.
+            int? k = ar.ClineTail;
+            if (k == null)
+            {
+                int def = ar.Ver == 17 ? 7 : 4;
+                var order = new List<int> { def };
+                foreach (var c in new[] { 0, 4, 7 }) if (c != def) order.Add(c);
+                // two passes: a zero tail full of padding can mimic a null
+                // tag, so only accept a null-anchored candidate when no
+                // candidate lands on a STRONG form (escape / known class /
+                // class definition)
+                foreach (var allowNull in new[] { false, true })
+                {
+                    foreach (var cand in order)
+                    {
+                        if (StrictNextTag(ar, r.Data, r.Pos + cand, allowNull))
+                        {
+                            k = cand;
+                            break;
+                        }
+                    }
+                    if (k != null) break;
+                }
+                if (k == null) k = def;
+                ar.ClineTail = k;
+            }
+            r.Raw(k.Value);
             return new ConstructionLineRec();
         }
 
@@ -888,7 +1204,19 @@ namespace OpenSkp
             var db = Drawbase(ar, r);
             string text = r.Utf16();
             ar.ReadObject(r, "CSkFont");
-            r.Raw(165);
+            // The tail is NOT a fixed 165-byte blob: it embeds two object
+            // references (the dimension's connection points into the
+            // geometry). Each is a normal MFC tag - 2 bytes in small
+            // files, but 6 bytes once the archive holds more than 0x7FFE
+            // objects and the 0x7FFF big-tag escape kicks in - so a
+            // fixed-size skip walks off the rails exactly on large models
+            // (found on a real 17 MB SketchUp 2018 file whose dimension
+            // sat past object #517k).
+            r.Raw(37);
+            EntityRef(ar, r);                // connection point 1 (may be null)
+            r.Raw(42);
+            EntityRef(ar, r);                // connection point 2 (may be null)
+            r.Raw(82);
             return new DimLinearRec { Db = db, Text = text };
         }
 
@@ -919,31 +1247,90 @@ namespace OpenSkp
             r.Raw(idx - r.Pos);
             string text = r.Utf16();
             r.Raw(5);
+            // Optional leader-attachment refs follow the fixed tail (a
+            // text label anchored to geometry stores the anchored entities
+            // here; they can point FORWARD - see EntityRef). Only the
+            // escaped 6-byte form is recognisable without risk: a 2-byte
+            // back-ref here would be indistinguishable from the next list
+            // item's tag, and every known sample either has no attachments
+            // or lives in a >0x7FFE-object file where the escape is
+            // mandatory anyway.
+            while (r.Pos + 2 <= r.Data.Length && r.Data[r.Pos] == 0xFF && r.Data[r.Pos + 1] == 0x7F)
+            {
+                uint val = Tlv.ReadU32(r.Data, r.Pos + 2);
+                if ((val & 0x80000000) != 0) break;   // new-object tag - the next entity
+                r.Raw(6);
+            }
             return new TextRec { Db = db, Text = text };
         }
 
         public static List<(int Slot, string? Name, object? Value)> ReadEntityList(Archive ar, LR r, long count, string owner)
         {
+            ar.BurnStack.Add(0);
+            try
+            {
+                return ReadEntityListInner(ar, r, count, owner);
+            }
+            finally
+            {
+                ar.BurnStack.RemoveAt(ar.BurnStack.Count - 1);
+            }
+        }
+
+        private static List<(int Slot, string? Name, object? Value)> ReadEntityListInner(Archive ar, LR r, long count, string owner)
+        {
             var ents = new List<(int, string?, object?)>();
             while (ents.Count < count)
             {
                 int p = r.Pos;
+                bool hasBurnCredit = owner == "def" && ar.BurnStack.Count > 0 && ar.BurnStack[ar.BurnStack.Count - 1] > 0;
+                if (hasBurnCredit
+                    && p + 25 <= r.Data.Length
+                    && Tlv.ReadU32(r.Data, p) == 0
+                    && LegacyBytes.BytesEqual(r.Data, p + 22, LegacyBytes.StrMarker))
+                {
+                    // burned MapObject indices (see RegisterBurn) mean the
+                    // declared count includes phantom entities the stream
+                    // never carries; the definition tail signature (nrel=0
+                    // + pad + 16-byte GUID + name marker at +22) marks the
+                    // list's REAL end
+                    break;
+                }
                 bool prevFlag = ar.InEntityList;
                 ar.InEntityList = true;
-                int? s;
-                string? n;
-                object? v;
+                int? s = null;
+                string? n = null;
+                object? v = null;
+                bool failed = false;
                 try
                 {
                     (s, n, v) = ar.ReadObject(r);
                 }
-                catch (LegacyParseError) when (owner == "root")
+                catch (LegacyParseError)
+                {
+                    if (owner != "root" && !hasBurnCredit)
+                    {
+                        throw;
+                    }
+                    // owner == "root": over-declared root counts run into
+                    // the document tail - stop.
+                    // hasBurnCredit: this list had burned MapObject indices
+                    // (see RegisterBurn): the phantom connection points
+                    // were also counted as items, so the declared count
+                    // overshoots the real records. Stop at the failed item
+                    // - the definition tail that follows (nrel, GUID
+                    // anchor, thumbnail scan) validates the cut.
+                    failed = true;
+                }
+                finally
                 {
                     ar.InEntityList = prevFlag;
+                }
+                if (failed)
+                {
                     r.Pos = p;
                     break;
                 }
-                ar.InEntityList = prevFlag;
                 ents.Add((s!.Value, n, v));
             }
             return ents;
@@ -958,17 +1345,40 @@ namespace OpenSkp
             {
                 throw new LegacyParseError($"implausible def layer count {r.Ctx()}");
             }
-            for (int i = 0; i < nlayers; i++)
+            // like the model-level layer list, the count is REAL layers
+            // (new records or back-refs); SketchUp 2020 interleaves null
+            // separators between them
+            int got = 0;
+            while (got < nlayers)
             {
+                if (r.PeekU16() == 0)
+                {
+                    r.Pos += 2;
+                    continue;
+                }
                 ar.ReadObject(r, "CLayer");
+                got++;
             }
             uint decl = r.U16();
             if (decl == 0x7FFF)
             {
                 decl = r.U32();
             }
-            r.U32();
-            uint count = r.U32();
+            // v20 can drop its undocumented filler right here, swallowing
+            // the u32 field (and, behind a layer-separator null, even the
+            // decl itself): if the empty-string marker sits in the next
+            // few bytes, the real count is the first non-zero u32 after
+            // its padding.
+            uint? count = null;
+            if (ar.Ver >= 20)
+            {
+                count = LegacyBytes.RetryCountAfterV20Filler(r, r.Pos, 5_000_000, ar);
+            }
+            if (count == null)
+            {
+                r.U32();
+                count = r.U32();
+            }
             // A zero count is as much a symptom of the v20 filler as an
             // implausibly large one: the reader lands on the leading zero
             // bytes of the filler instead of the count. A genuinely empty
@@ -976,18 +1386,18 @@ namespace OpenSkp
             // RetryCountAfterV20Filler leaves those alone.
             if (count > 5_000_000 || count == 0)
             {
-                var retry = LegacyBytes.RetryCountAfterV20Filler(r, r.Pos - 4, 5_000_000);
+                var retry = LegacyBytes.RetryCountAfterV20Filler(r, r.Pos - 4, 5_000_000, ar);
                 if (retry.HasValue) count = retry.Value;
             }
             if (count > 5_000_000)
             {
                 throw new LegacyParseError($"implausible def entity count {r.Ctx()}");
             }
-            var ents = ReadEntityList(ar, r, count, "def");
+            var ents = ReadEntityList(ar, r, count.Value, "def");
             uint nrel = r.U32();
             if (nrel > 100000)
             {
-                var retry = LegacyBytes.RetryCountAfterV20Filler(r, r.Pos - 4, 100_000);
+                var retry = LegacyBytes.RetryCountAfterV20Filler(r, r.Pos - 4, 100_000, ar);
                 if (retry.HasValue) nrel = retry.Value;
             }
             if (nrel > 100000)
@@ -1146,6 +1556,7 @@ namespace OpenSkp
             ["CThumbnail"] = ReadThumbnail,
             ["CRelationship"] = ReadRelationship,
             ["CComponentDefinition"] = ReadDefinition,
+            ["CImage"] = ReadImage,
             ["CComponentInstance"] = ReadInstance,
             ["CGroup"] = ReadInstance,
             ["CFaceTextureCoords"] = ReadFtc,
@@ -1372,17 +1783,47 @@ namespace OpenSkp
             {
                 throw new LegacyParseError("implausible layer count");
             }
+            // layerCount counts REAL layers. SketchUp 2020 interleaves a
+            // null object-ref after each layer record (a separator, not a
+            // layer), so counting reads walks off mid-list on files with
+            // several layers; count parsed layers instead, skip the
+            // separators, and stop early if the next tag is a back-ref
+            // (the definition-list anchor) - a v20 variant where the count
+            // over-includes separators.
             var layers = new List<(int, object?)>();
-            for (int i = 0; i < layerCount; i++)
+            while (layers.Count < layerCount)
             {
+                ushort tag = r.PeekU16();
+                if (tag == 0)
+                {
+                    r.Pos += 2;
+                    continue;
+                }
+                if (tag != 0xFFFF && (tag & 0x8000) == 0)
+                {
+                    break;
+                }
                 var (s, _, v) = ar.ReadObject(r, "CLayer");
-                // A null object-ref occupies a slot in the list without
-                // carrying a layer record (seen in SketchUp 2020 files,
-                // where layerCount includes it). Keeping it would push a
-                // null into the list; ReadObject has still consumed the ref
-                // from the stream.
                 if (v == null) continue;
                 layers.Add((s!.Value, v));
+            }
+            // trailing separators (and any layer records past the declared count)
+            bool haveTrailingLayCls = ar.ClassSlot.TryGetValue("CLayer", out int trailingLayCls);
+            while (true)
+            {
+                ushort tag = r.PeekU16();
+                if (tag == 0)
+                {
+                    r.Pos += 2;
+                    continue;
+                }
+                if (haveTrailingLayCls && tag == (0x8000 | trailingLayCls))
+                {
+                    var (s, _, v) = ar.ReadObject(r, "CLayer");
+                    if (v != null) layers.Add((s!.Value, v));
+                    continue;
+                }
+                break;
             }
 
             var (_, dn, _) = ar.ReadObject(r);
@@ -1393,7 +1834,7 @@ namespace OpenSkp
             uint defCount = r.U32();
             if (defCount > 1_000_000)
             {
-                var retry = LegacyBytes.RetryCountAfterV20Filler(r, r.Pos - 4, 1_000_000);
+                var retry = LegacyBytes.RetryCountAfterV20Filler(r, r.Pos - 4, 1_000_000, ar);
                 if (retry.HasValue) defCount = retry.Value;
             }
             if (defCount > 1_000_000)
@@ -1421,7 +1862,7 @@ namespace OpenSkp
             uint rootCount = r.U32();
             if (rootCount > 5_000_000)
             {
-                var retry = LegacyBytes.RetryCountAfterV20Filler(r, r.Pos - 4, 5_000_000);
+                var retry = LegacyBytes.RetryCountAfterV20Filler(r, r.Pos - 4, 5_000_000, ar);
                 if (retry.HasValue) rootCount = retry.Value;
             }
             if (rootCount > 5_000_000)
