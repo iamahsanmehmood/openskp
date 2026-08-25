@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 if TYPE_CHECKING:
-    from . import scene
+    from . import instanced_scene, scene
 
 
 # ── TLV node (raw parse tree) ─────────────────────────────────────────────
@@ -735,4 +735,27 @@ class SkpFile:
 
         parsed = _core.full_parse(str(self.path))
         return _scene.build_scene(parsed)
+
+    def build_instanced_scene(self) -> "instanced_scene.InstancedScene":
+        """Build the placed scene graph with SketchUp's component/group
+        INSTANCING PRESERVED, instead of baked into world-space vertex data.
+
+        Use this instead of :meth:`build_scene` when the model reuses
+        components: :meth:`build_scene` bakes each placement into its own
+        world-space vertex buffers, so its output grows with `definition
+        geometry x placement count`, while this grows with `unique geometry
+        + instance transforms`. A component placed 1,000 times costs one
+        copy of its geometry here.
+
+        Same separate, opt-in re-parse as :meth:`build_scene` - see that
+        method's docstring.
+
+        Returns:
+            A populated :class:`openskp.instanced_scene.InstancedScene`.
+        """
+        from . import _core
+        from . import instanced_scene
+
+        parsed = _core.full_parse(str(self.path))
+        return instanced_scene.build_instanced_scene(parsed)
 

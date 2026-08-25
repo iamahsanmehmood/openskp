@@ -80,7 +80,7 @@ import tempfile
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from . import legacy
-from . import scene as _scene_mod
+from ._face_groups import compute_face_uv, face_uv_basis, reconstruct_loop_vertices
 from .create import ComponentDefinitionBuilder, Point3, SkpBuilder, SkpWriteError, create
 from .model import Definition, Face, Instance, SkpFile, SkpModel
 
@@ -235,7 +235,7 @@ def _definition_has_content(defn: Definition, def_builders: Dict[int, ComponentD
     for face in defn.faces.values():
         if not face.loops:
             continue
-        if len(_scene_mod._reconstruct_loop_vertices(face.loops[0], edges)) >= 3:
+        if len(reconstruct_loop_vertices(face.loops[0], edges)) >= 3:
             return True
     for inst in defn.instances:
         if inst.ref_idx in def_builders:
@@ -281,7 +281,7 @@ def _replay_face(
     if len(face.loops) < 1:
         warnings.append(f"{context}: face {face.id} has no loops - skipped")
         return
-    vert_ids = _scene_mod._reconstruct_loop_vertices(face.loops[0], edges)
+    vert_ids = reconstruct_loop_vertices(face.loops[0], edges)
     if len(vert_ids) < 3:
         warnings.append(f"{context}: face {face.id} has fewer than 3 usable points - skipped")
         return
@@ -289,7 +289,7 @@ def _replay_face(
 
     holes: List[List[Point3]] = []
     for hole_loop in face.loops[1:]:
-        hole_vert_ids = _scene_mod._reconstruct_loop_vertices(hole_loop, edges)
+        hole_vert_ids = reconstruct_loop_vertices(hole_loop, edges)
         if len(hole_vert_ids) < 3:
             warnings.append(f"{context}: face {face.id} has a hole with fewer than 3 usable points - skipped")
             return
@@ -339,13 +339,13 @@ def _replay_uv(
     mat = model.materials_by_id.get(material_id) if material_id is not None else None
     tile_w = (mat.texture.width if mat is not None and mat.texture is not None else 0.0) or 1.0
     tile_h = (mat.texture.height if mat is not None and mat.texture is not None else 0.0) or 1.0
-    xr, yr = _scene_mod._face_uv_basis(normal)
+    xr, yr = face_uv_basis(normal)
     sample = points[:3]
     if len(sample) < 3:
         return None
     pairs = []
     for p in sample:
-        u, v = _scene_mod._compute_face_uv(p, xr, yr, uv_transform, tile_w, tile_h)
+        u, v = compute_face_uv(p, xr, yr, uv_transform, tile_w, tile_h)
         pairs.append((p, (u, v)))
     return pairs
 

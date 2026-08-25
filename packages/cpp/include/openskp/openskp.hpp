@@ -5,6 +5,8 @@
 #include <openskp/edit.hpp>
 #include <openskp/errors.hpp>
 #include <openskp/glb.hpp>
+#include <openskp/instanced_glb.hpp>
+#include <openskp/instanced_scene.hpp>
 #include <openskp/json_export.hpp>
 #include <openskp/model.hpp>
 #include <openskp/obj_export.hpp>

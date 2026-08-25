@@ -22,6 +22,13 @@ from importlib.metadata import PackageNotFoundError, version as _version
 from .create import ComponentDefinitionBuilder, SkpBuilder, SkpWriteError, create
 from .edit import open_existing
 from .errors import SkpParseError
+from .instanced_scene import (
+    InstancedMeshResource,
+    InstancedNode,
+    InstancedScene,
+    LocalPrimitive,
+    SceneBounds,
+)
 from .model import SkpFile, SkpModel
 from .scene import Scene, InstanceNode, MeshMetadata, GlbPrimitive, SceneTexture
 
@@ -37,6 +44,11 @@ __all__: list[str] = [
     "MeshMetadata",
     "GlbPrimitive",
     "SceneTexture",
+    "InstancedScene",
+    "InstancedNode",
+    "InstancedMeshResource",
+    "LocalPrimitive",
+    "SceneBounds",
     "SkpParseError",
     "create",
     "SkpBuilder",
