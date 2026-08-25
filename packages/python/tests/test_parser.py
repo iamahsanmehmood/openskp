@@ -2310,6 +2310,66 @@ class TestGlbExport:
         with pytest.raises(NotImplementedError, match="units"):
             glb_export.export(skp, str(tmp_path / "out.glb"), units="inches")
 
+    def test_scene_deduplicates_textures_and_keys_materials_by_them(self, tmp_path) -> None:
+        # openskp#193 (ported from TypeScript): color-to-material dedup used
+        # to key on (color, double_sided) alone, so two different textures
+        # averaging to the same color would silently collapse into one
+        # material and lose an image. Real fixture, not a mock: 3 distinct
+        # JPEGs, correctly deduplicated and correctly referenced.
+        from openskp import scene as scene_mod
+        from openskp.model import SkpFile
+
+        skp = SkpFile.open(str(self.FIXTURE))
+        skp.parse()
+        scene_obj = scene_mod.build_scene(skp._parsed)
+
+        assert len(scene_obj.textures) == 3
+        for tex in scene_obj.textures:
+            assert tex.mime_type in ("image/jpeg", "image/png")
+            assert len(tex.data) > 0
+
+        textured_materials = [
+            m for m in scene_obj.gltf_materials if "baseColorTexture" in m["pbrMetallicRoughness"]
+        ]
+        assert len(textured_materials) == 4
+        # every referenced index is a real, in-range texture
+        for mat in textured_materials:
+            idx = mat["pbrMetallicRoughness"]["baseColorTexture"]["index"]
+            assert 0 <= idx < len(scene_obj.textures)
+
+    def test_export_omits_images_by_default(self, tmp_path) -> None:
+        skp, glb_path = self._export(tmp_path)
+        with open(glb_path, "rb") as f:
+            data = f.read()
+        assert b'"images"' not in data
+        assert b"\xff\xd8\xff" not in data  # no JPEG magic bytes embedded
+
+    def test_export_embeds_textures_when_asked(self, tmp_path) -> None:
+        from openskp.export import glb as glb_export
+        from openskp.model import SkpFile
+
+        skp = SkpFile.open(str(self.FIXTURE))
+        skp.parse()
+        out_path = tmp_path / "with_textures.glb"
+        glb_export.export(skp, str(out_path), textures=True)
+
+        with open(out_path, "rb") as f:
+            data = f.read()
+        assert b'"images"' in data
+        assert b"\xff\xd8\xff" in data  # real JPEG bytes, not a reference
+
+        import trimesh
+        loaded = trimesh.load(out_path, file_type="glb")
+        # the embedded images must actually be usable as textures, not just
+        # bytes sitting in the file
+        found_texture = False
+        for geom in loaded.geometry.values():
+            mat = getattr(geom.visual, "material", None)
+            if mat is not None and getattr(mat, "baseColorTexture", None) is not None:
+                found_texture = True
+                break
+        assert found_texture
+
     def test_export_rejects_self_referencing_definition(self, tmp_path) -> None:
         # export() now bakes via scene.build_scene() instead of its own
         # separate trimesh pass, so the recursion guard covered by

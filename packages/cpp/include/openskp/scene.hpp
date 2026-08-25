@@ -3,10 +3,12 @@
 #include <array>
 #include <cstdint>
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include <openskp/export.hpp>
+#include <openskp/model.hpp>
 
 namespace openskp {
 
@@ -51,6 +53,11 @@ struct PbrMetallicRoughness {
   std::array<double, 4> base_color_factor{1, 1, 1, 1};
   double metallic_factor{};
   double roughness_factor{0.8};
+  // Index into Scene::textures, or nullopt for an untextured material.
+  // baseColorFactor stays the resolved color even with a texture set:
+  // glTF multiplies the two, and SketchUp's own colorized materials rely
+  // on exactly that tint.
+  std::optional<std::size_t> base_color_texture;
 };
 
 struct GltfMaterial {
@@ -60,10 +67,24 @@ struct GltfMaterial {
   bool double_sided{};
 };
 
+/// One texture image referenced by Scene::gltf_materials.
+struct SceneTexture {
+  /// The image file's raw bytes, exactly as stored in the .skp.
+  ByteBuffer data;
+  /// Sniffed from the bytes, not from filename: SketchUp records the
+  /// authoring machine's path, whose extension can disagree with the
+  /// content.
+  std::string mime_type;
+  std::string filename;
+};
+
 struct OPENSKP_EXPORT Scene {
   InstanceNode scene_hierarchy;
   std::map<std::string, MeshMetadata> mesh_index;
   std::vector<GlbPrimitive> glb_primitives;
   std::vector<GltfMaterial> gltf_materials;
+  // Distinct texture images the placed materials use, deduplicated by
+  // source bytes. Empty when nothing placed in the scene is textured.
+  std::vector<SceneTexture> textures;
 };
 }  // namespace openskp

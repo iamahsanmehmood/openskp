@@ -14,9 +14,15 @@ using Key = std::array<int, 4>;
 struct GroupKey {
   Key color;
   bool double_sided{};
+  // The texture is part of the identity, not just the color: two
+  // different images can average to the same RGB (real files do this),
+  // and keying on color alone would merge them into one material and
+  // lose one of the images.
+  std::optional<std::size_t> texture_index;
 
   bool operator<(const GroupKey& other) const {
-    return std::tie(color, double_sided) < std::tie(other.color, other.double_sided);
+    return std::tie(color, double_sided, texture_index) <
+           std::tie(other.color, other.double_sided, other.texture_index);
   }
 };
 
@@ -49,6 +55,19 @@ std::optional<Key> material_color(const std::shared_ptr<RawMaterial>& material) 
   if (!material) return {};
   return Key{material->r, material->g, material->b,
              static_cast<int>(std::lround(std::clamp(material->transparency, 0.0, 1.0) * 255.0))};
+}
+
+// Identifies an image's MIME type from its magic bytes. Returns nullopt
+// for anything glTF cannot carry (glTF only allows PNG and JPEG).
+std::optional<std::string> sniff_image_mime(const ByteBuffer& data) {
+  if (data.size() >= 3 && data[0] == 0xff && data[1] == 0xd8 && data[2] == 0xff) {
+    return "image/jpeg";
+  }
+  if (data.size() >= 8 && data[0] == 0x89 && data[1] == 0x50 && data[2] == 0x4e &&
+      data[3] == 0x47 && data[4] == 0x0d && data[5] == 0x0a && data[6] == 0x1a && data[7] == 0x0a) {
+    return "image/png";
+  }
+  return std::nullopt;
 }
 
 std::pair<double, double> tile_size(const std::shared_ptr<RawMaterial>& material) {
@@ -138,6 +157,34 @@ Scene build_scene_raw(RawParsed&& p, const ParseOptions& o) {
   std::map<GroupKey, size_t> materials;
   size_t mesh_counter = 0, instance_counter = 0;
   std::set<EntityId> active;
+
+  // Textures deduplicated by bytes: the same image routinely backs
+  // several materials, and re-embedding it per material would multiply
+  // the export size for nothing.
+  std::map<std::string, std::size_t> texture_index_by_key;
+  auto texture_index_for =
+      [&](const std::shared_ptr<RawMaterial>& mat) -> std::optional<std::size_t> {
+    if (!mat || !mat->texture || !mat->texture->data || mat->texture->data->empty()) {
+      return std::nullopt;
+    }
+    const auto& data = *mat->texture->data;
+    auto mime_type = sniff_image_mime(data);
+    if (!mime_type) return std::nullopt;  // a format glTF cannot carry
+    // length plus a short byte prefix is enough to tell real images apart
+    // without hashing megabytes on every face
+    std::ostringstream key_stream;
+    key_stream << data.size() << ':';
+    for (std::size_t i = 0; i < data.size() && i < 16; ++i) {
+      key_stream << std::hex << static_cast<int>(data[i]);
+    }
+    const auto key = key_stream.str();
+    auto found = texture_index_by_key.find(key);
+    if (found != texture_index_by_key.end()) return found->second;
+    const auto idx = scene.textures.size();
+    scene.textures.push_back(SceneTexture{data, *mime_type, mat->texture->filename});
+    texture_index_by_key.emplace(key, idx);
+    return idx;
+  };
   std::function<std::vector<InstanceNode>(
       const GeometryBuilder&, const std::string&, std::optional<EntityId>,
       const std::vector<double>&, const std::string&, const std::string&, std::optional<Key>)>
@@ -195,12 +242,12 @@ Scene build_scene_raw(RawParsed&& p, const ParseOptions& o) {
       };
       if (front == back) {
         const auto [tw, th] = tile_size(front_mat);
-        add_side({front, true}, false, f.uv_transform, tw, th);
+        add_side({front, true, texture_index_for(front_mat)}, false, f.uv_transform, tw, th);
       } else {
         const auto [ftw, fth] = tile_size(front_mat);
-        add_side({front, false}, false, f.uv_transform, ftw, fth);
+        add_side({front, false, texture_index_for(front_mat)}, false, f.uv_transform, ftw, fth);
         const auto [btw, bth] = tile_size(back_mat);
-        add_side({back, false}, true, f.uv_transform_back, btw, bth);
+        add_side({back, false, texture_index_for(back_mat)}, true, f.uv_transform_back, btw, bth);
       }
     }
     for (auto& kv : groups) {
@@ -265,6 +312,7 @@ Scene build_scene_raw(RawParsed&& p, const ParseOptions& o) {
         gm.pbr_metallic_roughness.base_color_factor = {
             kv.first.color[0] / 255., kv.first.color[1] / 255., kv.first.color[2] / 255.,
             kv.first.color[3] / 255.};
+        gm.pbr_metallic_roughness.base_color_texture = kv.first.texture_index;
         gm.double_sided = kv.first.double_sided;
         scene.gltf_materials.push_back(gm);
         mi = materials.emplace(kv.first, idx).first;

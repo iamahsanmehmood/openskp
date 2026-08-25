@@ -17,9 +17,23 @@ const int _glbSizeLimit = 0xFFFFFFFF;
 /// chunk directly, no custom serializer needed. Structurally ported from
 /// the TypeScript reference implementation's `toGLB()`, with full
 /// TEXCOORD_0 UV support.
-Uint8List toGlb(Scene scene) {
+///
+/// [textures]: embed the scene's texture images in the GLB and point each
+/// textured material's `baseColorTexture` at them. Off by default,
+/// matching every other language's exporter: photographic textures can
+/// multiply the file size, and the geometry alone is what most callers
+/// are after.
+Uint8List toGlb(Scene scene, {bool textures = false}) {
   final prims = scene.glbPrimitives;
-  final materials = scene.gltfMaterials;
+  final rawMaterials = scene.gltfMaterials;
+  final sceneTextures = textures ? scene.textures : <SceneTexture>[];
+
+  // Materials always reference textures by index (buildScene() sets that
+  // up unconditionally); embedding the actual image bytes is the opt-in
+  // part. When not embedding, strip the reference so a strict glTF reader
+  // never sees a baseColorTexture pointing at a textures[] array that was
+  // never written - a copy, never mutating the Scene the caller owns.
+  final materials = textures ? rawMaterials : _stripTextureRefs(rawMaterials);
 
   _validateScene(prims, materials);
 
@@ -30,6 +44,16 @@ Uint8List toGlb(Scene scene) {
     totalBinaryLength += prim.uvs.length * 4;
     totalBinaryLength += prim.indices.length * 4;
   }
+
+  // Each image is placed on its own 4-byte-aligned offset, as glTF
+  // requires for bufferView data.
+  final imagePlacements = <(int offset, int length)>[];
+  for (final tex in sceneTextures) {
+    totalBinaryLength += (4 - (totalBinaryLength % 4)) % 4;
+    imagePlacements.add((totalBinaryLength, tex.data.length));
+    totalBinaryLength += tex.data.length;
+  }
+
   if (totalBinaryLength > _glbSizeLimit) {
     throw StateError("scene geometry exceeds GLB's 32-bit binary-buffer limit");
   }
@@ -166,6 +190,26 @@ Uint8List toGlb(Scene scene) {
     });
   }
 
+  final gltfImages = <Map<String, dynamic>>[];
+  final gltfTextures = <Map<String, dynamic>>[];
+  final bufferBytes = binaryBuffer.buffer.asUint8List();
+  for (var i = 0; i < sceneTextures.length; i++) {
+    final tex = sceneTextures[i];
+    final (offset, length) = imagePlacements[i];
+    bufferBytes.setRange(offset, offset + length, tex.data);
+
+    final imgBufferViewIdx = bufferViews.length;
+    bufferViews.add({
+      'buffer': 0,
+      'byteOffset': offset,
+      'byteLength': length,
+    });
+
+    final imageIdx = gltfImages.length;
+    gltfImages.add({'bufferView': imgBufferViewIdx, 'mimeType': tex.mimeType});
+    gltfTextures.add({'sampler': 0, 'source': imageIdx});
+  }
+
   final gltfMeshes = <Map<String, dynamic>>[];
   if (gltfPrimitives.isNotEmpty) {
     gltfMeshes.add({'primitives': gltfPrimitives});
@@ -187,16 +231,41 @@ Uint8List toGlb(Scene scene) {
     ],
     'bufferViews': bufferViews,
     'accessors': accessors,
+    if (gltfImages.isNotEmpty) 'images': gltfImages,
+    if (gltfImages.isNotEmpty) 'textures': gltfTextures,
+    if (gltfImages.isNotEmpty)
+      'samplers': [
+        {'wrapS': 10497, 'wrapT': 10497}, // REPEAT / REPEAT
+      ],
   };
 
-  return _createGlb(gltfJson, binaryBuffer.buffer.asUint8List());
+  return _createGlb(gltfJson, bufferBytes);
+}
+
+/// Materials with every `baseColorTexture` reference removed - a copy,
+/// never mutating the input. Used when not embedding images, so a strict
+/// glTF reader never sees a reference into a textures[] array that was
+/// never written.
+List<Map<String, dynamic>> _stripTextureRefs(List<Map<String, dynamic>> materials) {
+  final needsCopy = materials.any((m) {
+    final pbr = m['pbrMetallicRoughness'] as Map<String, dynamic>?;
+    return pbr != null && pbr.containsKey('baseColorTexture');
+  });
+  if (!needsCopy) return materials;
+
+  return materials.map((m) {
+    final pbr = m['pbrMetallicRoughness'] as Map<String, dynamic>?;
+    if (pbr == null || !pbr.containsKey('baseColorTexture')) return m;
+    final newPbr = Map<String, dynamic>.from(pbr)..remove('baseColorTexture');
+    return Map<String, dynamic>.from(m)..['pbrMetallicRoughness'] = newPbr;
+  }).toList();
 }
 
 /// Serializes a baked [Scene] to GLB and writes it to [path]. Does not
 /// create missing parent directories - matching the C++ and .NET ports'
 /// export_glb/ExportGlb.
-void exportGlb(Scene scene, String path) {
-  File(path).writeAsBytesSync(toGlb(scene));
+void exportGlb(Scene scene, String path, {bool textures = false}) {
+  File(path).writeAsBytesSync(toGlb(scene, textures: textures));
 }
 
 void _validateScene(List<GlbPrimitive> prims, List<Map<String, dynamic>> materials) {

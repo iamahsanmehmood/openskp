@@ -42,7 +42,25 @@ from typing import Any, Dict, List
 _M_TO_MM = 1000.0
 
 
-def _primitive_to_trimesh(prim, materials: List[Dict[str, Any]]):
+def _decode_texture_image(data: bytes):
+    """Decode raw image bytes into a PIL Image for trimesh's
+    ``baseColorTexture``. Imported lazily so callers who never pass
+    ``textures=True`` never pay for (or need) Pillow."""
+    try:
+        from PIL import Image
+    except ImportError as e:
+        raise ImportError(
+            "export(..., textures=True) requires Pillow to decode texture "
+            "images. Install it with `pip install pillow`."
+        ) from e
+    import io
+
+    return Image.open(io.BytesIO(data))
+
+
+def _primitive_to_trimesh(
+    prim, materials: List[Dict[str, Any]], scene_textures: List[Any], embed_textures: bool,
+):
     import trimesh
 
     n_verts = len(prim.positions) // 3
@@ -74,10 +92,16 @@ def _primitive_to_trimesh(prim, materials: List[Dict[str, Any]]):
 
     mat = materials[prim.material_index]
     pbr = mat["pbrMetallicRoughness"]
+    base_color_texture = None
+    tex_ref = pbr.get("baseColorTexture") if embed_textures else None
+    if tex_ref is not None:
+        tex = scene_textures[tex_ref["index"]]
+        base_color_texture = _decode_texture_image(tex.data)
     mesh.visual = trimesh.visual.TextureVisuals(
         uv=uvs,
         material=trimesh.visual.material.PBRMaterial(
             baseColorFactor=pbr["baseColorFactor"],
+            baseColorTexture=base_color_texture,
             metallicFactor=pbr["metallicFactor"],
             roughnessFactor=pbr["roughnessFactor"],
             doubleSided=mat.get("doubleSided", False),
@@ -116,6 +140,7 @@ def export(
     *,
     coordinate_system: str = "y-up",
     units: str = "mm",
+    textures: bool = False,
 ) -> str:
     """Export a parsed SkpFile to GLB (binary glTF 2.0) format.
 
@@ -130,6 +155,13 @@ def export(
         coordinate_system: Target coordinate system. Currently only
             ``"y-up"`` (glTF standard) is supported.
         units: Target unit system. Currently only ``"mm"`` is supported.
+        textures: Embed the scene's texture images in the GLB, so each
+            textured material's ``baseColorTexture`` points at real image
+            data instead of just a resolved color. Off by default:
+            photographic textures can multiply the file size, and the
+            geometry alone is what most callers are after. Requires
+            Pillow (``pip install pillow``) - imported lazily, so callers
+            who leave this off never need it installed.
 
     Returns:
         Absolute path to the written GLB file.
@@ -168,7 +200,7 @@ def export(
 
     trimesh_scene = trimesh.Scene()
     for prim in scene_obj.glb_primitives:
-        mesh = _primitive_to_trimesh(prim, scene_obj.gltf_materials)
+        mesh = _primitive_to_trimesh(prim, scene_obj.gltf_materials, scene_obj.textures, textures)
         trimesh_scene.add_geometry(mesh, geom_name=prim.geom_name)
 
     output_dir = os.path.dirname(os.path.abspath(output_path))
