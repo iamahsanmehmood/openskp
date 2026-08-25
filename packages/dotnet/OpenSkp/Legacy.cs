@@ -128,9 +128,20 @@ namespace OpenSkp
         /// (i.e. r.Pos - 4). Returns the corrected count, or null when this
         /// is not the v20 layout.
         /// </summary>
-        public static uint? RetryCountAfterV20Filler(LR r, int countPos)
+        /// <summary>Widest zero padding seen between the v20 filler's empty
+        /// string and the count that follows it (9 and 13 bytes occur in
+        /// real files; the ceiling leaves room without letting the probe
+        /// wander into unrelated records).</summary>
+        private const int MaxV20FillerPad = 29;
+
+        /// <summary>
+        /// Locates the count that follows a v20 filler record, given the
+        /// offset the bad count was read from. Pure byte logic, exposed for
+        /// tests; see <see cref="RetryCountAfterV20Filler"/> for how it is
+        /// used.
+        /// </summary>
+        public static (uint Count, int Next)? FindCountAfterV20Filler(byte[] data, int countPos, uint limit)
         {
-            var data = r.Data;
             int markerAt = -1;
             for (int i = countPos; i < countPos + 12 && i + 4 <= data.Length; i++)
             {
@@ -143,16 +154,34 @@ namespace OpenSkp
             if (markerAt < 0) return null;
             if (data[markerAt + 3] != 0) return null; // non-empty string: real data
 
-            // Skip the zero padding that follows the empty string. The count
-            // is little-endian and non-zero, so the first non-zero byte
-            // after the padding IS its low byte - the run ends exactly on
-            // the count.
-            int at = markerAt + 4;
-            while (at < data.Length && data[at] == 0) at++;
-            if (at + 4 > data.Length) return null;
-            uint count = Tlv.ReadU32(data, at);
-            r.Pos = at + 4;
-            return count;
+            // The count sits past a run of zero padding whose length varies
+            // per call site (9 and 13 bytes both occur in real files), but
+            // always lands at markerAt + 4 + pad with pad % 4 == 1. Step
+            // through those candidate offsets and take the first plausible
+            // u32.
+            //
+            // Deliberately NOT "scan forward to the first non-zero byte": a
+            // count that is an exact multiple of 256 has a 0x00 low byte,
+            // which such a scan cannot tell apart from padding, so it would
+            // skip into the count and misalign every later read. Probing
+            // whole u32s at 4-byte strides never inspects an individual
+            // byte, so those counts round-trip correctly.
+            for (int pad = 1; pad <= MaxV20FillerPad; pad += 4)
+            {
+                int at = markerAt + 4 + pad;
+                if (at + 4 > data.Length) break;
+                uint count = Tlv.ReadU32(data, at);
+                if (count > 0 && count <= limit) return (count, at + 4);
+            }
+            return null;
+        }
+
+        public static uint? RetryCountAfterV20Filler(LR r, int countPos, uint limit)
+        {
+            var hit = FindCountAfterV20Filler(r.Data, countPos, limit);
+            if (hit == null) return null;
+            r.Pos = hit.Value.Next;
+            return hit.Value.Count;
         }
     }
 
@@ -947,7 +976,7 @@ namespace OpenSkp
             // RetryCountAfterV20Filler leaves those alone.
             if (count > 5_000_000 || count == 0)
             {
-                var retry = LegacyBytes.RetryCountAfterV20Filler(r, r.Pos - 4);
+                var retry = LegacyBytes.RetryCountAfterV20Filler(r, r.Pos - 4, 5_000_000);
                 if (retry.HasValue) count = retry.Value;
             }
             if (count > 5_000_000)
@@ -958,7 +987,7 @@ namespace OpenSkp
             uint nrel = r.U32();
             if (nrel > 100000)
             {
-                var retry = LegacyBytes.RetryCountAfterV20Filler(r, r.Pos - 4);
+                var retry = LegacyBytes.RetryCountAfterV20Filler(r, r.Pos - 4, 100_000);
                 if (retry.HasValue) nrel = retry.Value;
             }
             if (nrel > 100000)
@@ -1364,7 +1393,7 @@ namespace OpenSkp
             uint defCount = r.U32();
             if (defCount > 1_000_000)
             {
-                var retry = LegacyBytes.RetryCountAfterV20Filler(r, r.Pos - 4);
+                var retry = LegacyBytes.RetryCountAfterV20Filler(r, r.Pos - 4, 1_000_000);
                 if (retry.HasValue) defCount = retry.Value;
             }
             if (defCount > 1_000_000)
@@ -1392,7 +1421,7 @@ namespace OpenSkp
             uint rootCount = r.U32();
             if (rootCount > 5_000_000)
             {
-                var retry = LegacyBytes.RetryCountAfterV20Filler(r, r.Pos - 4);
+                var retry = LegacyBytes.RetryCountAfterV20Filler(r, r.Pos - 4, 5_000_000);
                 if (retry.HasValue) rootCount = retry.Value;
             }
             if (rootCount > 5_000_000)

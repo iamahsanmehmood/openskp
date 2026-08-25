@@ -98,8 +98,22 @@ bool _matchesAscii(Uint8List data, int offset, String str) {
 ///
 /// [countPos] is the offset the count was read FROM (i.e. r.pos - 4).
 /// Returns the corrected count, or null when this is not the v20 layout.
-int? retryCountAfterV20Filler(LR r, int countPos) {
-  final data = r.data;
+/// Widest zero padding seen between the v20 filler's empty string and the
+/// count that follows it (9 and 13 bytes occur in real files; the ceiling
+/// leaves room without letting the probe wander into unrelated records).
+const int _maxV20FillerPad = 29;
+
+/// Locates the count that follows a v20 filler record, given the offset the
+/// bad count was read from. Pure byte logic, exported for tests; see
+/// [retryCountAfterV20Filler] for how it is used.
+///
+/// Returns the count and the offset just past it, or null when the bytes do
+/// not match the filler layout.
+({int count, int next})? findCountAfterV20Filler(
+  Uint8List data,
+  int countPos,
+  int limit,
+) {
   int markerAt = -1;
   for (int i = countPos; i < countPos + 12 && i + 4 <= data.length; i++) {
     if (data[i] == 0xFF && data[i + 1] == 0xFE && data[i + 2] == 0xFF) {
@@ -110,17 +124,30 @@ int? retryCountAfterV20Filler(LR r, int countPos) {
   if (markerAt < 0) return null;
   if (data[markerAt + 3] != 0) return null; // non-empty string: real data
 
-  // Skip the zero padding that follows the empty string. The count is
-  // little-endian and non-zero, so the first non-zero byte after the
-  // padding IS its low byte - the run ends exactly on the count.
-  int at = markerAt + 4;
-  while (at < data.length && data[at] == 0) {
-    at++;
+  // The count sits past a run of zero padding whose length varies per call
+  // site (9 and 13 bytes both occur in real files), but always lands at
+  // markerAt + 4 + pad with pad % 4 == 1. Step through those candidate
+  // offsets and take the first plausible u32.
+  //
+  // Deliberately NOT "scan forward to the first non-zero byte": a count
+  // that is an exact multiple of 256 has a 0x00 low byte, which such a scan
+  // cannot tell apart from padding, so it would skip into the count and
+  // misalign every later read. Probing whole u32s at 4-byte strides never
+  // inspects an individual byte, so those counts round-trip correctly.
+  for (int pad = 1; pad <= _maxV20FillerPad; pad += 4) {
+    final at = markerAt + 4 + pad;
+    if (at + 4 > data.length) break;
+    final count = Tlv.readU32(data, at);
+    if (count > 0 && count <= limit) return (count: count, next: at + 4);
   }
-  if (at + 4 > data.length) return null;
-  final count = Tlv.readU32(data, at);
-  r.pos = at + 4;
-  return count;
+  return null;
+}
+
+int? retryCountAfterV20Filler(LR r, int countPos, int limit) {
+  final hit = findCountAfterV20Filler(r.data, countPos, limit);
+  if (hit == null) return null;
+  r.pos = hit.next;
+  return hit.count;
 }
 
 /// True when the bytes at [p] are an MFC class-ref to class [slot]. Mirrors
@@ -956,7 +983,7 @@ class LegacyReaders {
     // instead of the count. A genuinely empty definition reads zero with no
     // filler ahead, and retryCountAfterV20Filler leaves those alone.
     if (count > 5000000 || count == 0) {
-      final retry = retryCountAfterV20Filler(r, r.pos - 4);
+      final retry = retryCountAfterV20Filler(r, r.pos - 4, 5000000);
       if (retry != null) count = retry;
     }
     if (count > 5000000) {
@@ -965,7 +992,7 @@ class LegacyReaders {
     final ents = readEntityList(ar, r, count, 'def');
     var nrel = r.u32();
     if (nrel > 100000) {
-      final retry = retryCountAfterV20Filler(r, r.pos - 4);
+      final retry = retryCountAfterV20Filler(r, r.pos - 4, 100000);
       if (retry != null) nrel = retry;
     }
     if (nrel > 100000) {
@@ -1296,7 +1323,7 @@ class Legacy {
     }
     var defCount = r.u32();
     if (defCount > 1000000) {
-      final retry = retryCountAfterV20Filler(r, r.pos - 4);
+      final retry = retryCountAfterV20Filler(r, r.pos - 4, 1000000);
       if (retry != null) defCount = retry;
     }
     if (defCount > 1000000) {
@@ -1321,7 +1348,7 @@ class Legacy {
 
     var rootCount = r.u32();
     if (rootCount > 5000000) {
-      final retry = retryCountAfterV20Filler(r, r.pos - 4);
+      final retry = retryCountAfterV20Filler(r, r.pos - 4, 5000000);
       if (retry != null) rootCount = retry;
     }
     if (rootCount > 5000000) {

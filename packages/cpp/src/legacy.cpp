@@ -13,6 +13,63 @@ bool legacy_instance_has_guid(const std::string& class_name, std::optional<int> 
   return *schema >= (class_name == "CGroup" ? 1 : 5);
 }
 
+// Widest zero padding seen between the v20 filler's empty string and the
+// count that follows it (9 and 13 bytes occur in real files; the ceiling
+// leaves room without letting the probe wander into unrelated records).
+constexpr size_t kMaxV20FillerPad = 29;
+
+// Locates the count that follows a v20 filler record, given the offset the
+// bad count was read from. Pure byte logic, exposed for tests; see
+// retry_count_after_v20_filler (legacy.cpp) for how it is used.
+//
+// SketchUp 2020 (v20) writes an extra, undocumented record ahead of some
+// counts that v17 does not have, which leaves the reader a few bytes early
+// and makes it read garbage as the count. The filler is an empty UTF-16
+// string record followed by zero padding:
+//
+//   <ff fe ff> <u8 0>        empty string
+//   <zero padding>           runs up to the real count
+//
+// Rather than hard-code an offset (the number of bytes before the marker
+// differs per call site), locate the marker in the short window ahead,
+// then take the first plausible u32 that follows the padding. Only the
+// EMPTY-string form counts as filler: a real string here would mean
+// genuine data, and moving the cursor past it would corrupt the parse.
+//
+// Returns the count and the offset just past it, or nullopt when the bytes
+// do not match the filler layout.
+std::optional<V20FillerHit> find_count_after_v20_filler(const ByteBuffer& d, size_t count_pos,
+                                                          uint32_t limit) {
+  size_t marker_at = std::string::npos;
+  for (size_t i = count_pos; i + 4 <= d.size() && i < count_pos + 12; ++i) {
+    if (d[i] == 255 && d[i + 1] == 254 && d[i + 2] == 255) {
+      marker_at = i;
+      break;
+    }
+  }
+  if (marker_at == std::string::npos) return std::nullopt;
+  if (d[marker_at + 3] != 0) return std::nullopt;  // non-empty string: real data
+
+  // The count sits past a run of zero padding whose length varies per call
+  // site (9 and 13 bytes both occur in real files), but always lands at
+  // marker_at + 4 + pad with pad % 4 == 1. Step through those candidate
+  // offsets and take the first plausible u32.
+  //
+  // Deliberately NOT "scan forward to the first non-zero byte": a count
+  // that is an exact multiple of 256 has a 0x00 low byte, which such a
+  // scan cannot tell apart from padding, so it would skip into the count
+  // and misalign every later read. Probing whole u32s at 4-byte strides
+  // never inspects an individual byte, so those counts round-trip
+  // correctly.
+  for (size_t pad = 1; pad <= kMaxV20FillerPad; pad += 4) {
+    size_t at = marker_at + 4 + pad;
+    if (at + 4 > d.size()) break;
+    uint32_t count = read_u32(d, at);
+    if (count > 0 && count <= limit) return V20FillerHit{count, at + 4};
+  }
+  return std::nullopt;
+}
+
 namespace {
 struct R {
   const ByteBuffer& d;
@@ -181,27 +238,11 @@ bool is_class_ref(const ByteBuffer& d, size_t p, uint64_t slot) {
 //
 // count_pos is the offset the count was read FROM (i.e. r.p - 4). Returns
 // the corrected count, or nullopt when this is not the v20 layout.
-std::optional<uint32_t> retry_count_after_v20_filler(R& r, size_t count_pos) {
-  const auto& d = r.d;
-  size_t marker_at = std::string::npos;
-  for (size_t i = count_pos; i + 4 <= d.size() && i < count_pos + 12; ++i) {
-    if (d[i] == 255 && d[i + 1] == 254 && d[i + 2] == 255) {
-      marker_at = i;
-      break;
-    }
-  }
-  if (marker_at == std::string::npos) return std::nullopt;
-  if (d[marker_at + 3] != 0) return std::nullopt;  // non-empty string: real data
-
-  // Skip the zero padding that follows the empty string. The count is
-  // little-endian and non-zero, so the first non-zero byte after the
-  // padding IS its low byte - the run ends exactly on the count.
-  size_t at = marker_at + 4;
-  while (at < d.size() && d[at] == 0) ++at;
-  if (at + 4 > d.size()) return std::nullopt;
-  uint32_t count = read_u32(d, at);
-  r.p = at + 4;
-  return count;
+std::optional<uint32_t> retry_count_after_v20_filler(R& r, size_t count_pos, uint32_t limit) {
+  auto hit = find_count_after_v20_filler(r.d, count_pos, limit);
+  if (!hit) return std::nullopt;
+  r.p = hit->next;
+  return hit->count;
 }
 
 struct Archive {
@@ -533,14 +574,14 @@ struct Archive {
       // reads zero with no filler ahead, and retry_count_after_v20_filler
       // leaves those alone.
       if (count > 5000000 || count == 0) {
-        auto retry = retry_count_after_v20_filler(r, r.p - 4);
+        auto retry = retry_count_after_v20_filler(r, r.p - 4, 5000000);
         if (retry) count = *retry;
       }
       if (count > 5000000) throw std::runtime_error("implausible def entities");
       v->ents = entity_list(count, false);
       auto nr = r.u32();
       if (nr > 100000) {
-        auto retry = retry_count_after_v20_filler(r, r.p - 4);
+        auto retry = retry_count_after_v20_filler(r, r.p - 4, 100000);
         if (retry) nr = *retry;
       }
       if (nr > 100000) throw std::runtime_error("definition list misaligned");
@@ -771,7 +812,7 @@ WalkResult walk_model(const ByteBuffer& data, int ver, size_t start, uint32_t ma
   if (std::get<1>(anchor) != "CLayer") throw std::runtime_error("definition anchor is not a layer");
   auto dc = ar.r.u32();
   if (dc > 1000000) {
-    auto retry = retry_count_after_v20_filler(ar.r, ar.r.p - 4);
+    auto retry = retry_count_after_v20_filler(ar.r, ar.r.p - 4, 1000000);
     if (retry) dc = *retry;
   }
   if (dc > 1000000) throw std::runtime_error("invalid definition count");
@@ -788,7 +829,7 @@ WalkResult walk_model(const ByteBuffer& data, int ver, size_t start, uint32_t ma
   }
   auto root_count = ar.r.u32();
   if (root_count > 5000000) {
-    auto retry = retry_count_after_v20_filler(ar.r, ar.r.p - 4);
+    auto retry = retry_count_after_v20_filler(ar.r, ar.r.p - 4, 5000000);
     if (retry) root_count = *retry;
   }
   if (root_count > 5000000) throw std::runtime_error("implausible root entity count");
