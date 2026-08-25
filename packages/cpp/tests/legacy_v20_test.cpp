@@ -49,10 +49,15 @@ TEST(LegacyV20, ParsesRealV20FileThatPreviouslyThrew) {
   // as items and dropped every layer after the first - this fixture
   // really does carry "Gondulas Laterais" (visible in SketchUp), which
   // the previous assertion enshrined as missing. Nulls must still never
-  // reach model.layers.
+  // reach model.layers. Order-independent: model.layers is built from
+  // layer_colors, a std::map keyed by name (sorted alphabetically, not
+  // file order) - a pre-existing, unrelated characteristic of this
+  // port's layer-building code (model.cpp), not something this fixture's
+  // fix controls.
   ASSERT_EQ(model.layers.size(), 2);
-  EXPECT_EQ(model.layers[0].name, "Layer0");
-  EXPECT_EQ(model.layers[1].name, "Gondulas Laterais");
+  std::set<std::string> names;
+  for (const auto& layer : model.layers) names.insert(layer.name);
+  EXPECT_EQ(names, (std::set<std::string>{"Layer0", "Gondulas Laterais"}));
 
   // real geometry, not an empty shell
   std::size_t faces = 0, edges = 0, vertices = 0;
