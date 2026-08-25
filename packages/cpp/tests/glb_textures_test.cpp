@@ -5,10 +5,9 @@
 #include <gtest/gtest.h>
 #include <initializer_list>
 #include <string>
+#include <tiny_gltf.h>
 
 #include <openskp/openskp.hpp>
-
-#include <tiny_gltf.h>
 
 #include "test_helpers.hpp"
 
