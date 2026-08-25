@@ -39,7 +39,7 @@ constexpr size_t kMaxV20FillerPad = 29;
 // Returns the count and the offset just past it, or nullopt when the bytes
 // do not match the filler layout.
 std::optional<V20FillerHit> find_count_after_v20_filler(const ByteBuffer& d, size_t count_pos,
-                                                          uint32_t limit) {
+                                                        uint32_t limit) {
   size_t marker_at = std::string::npos;
   for (size_t i = count_pos; i + 4 <= d.size() && i < count_pos + 12; ++i) {
     if (d[i] == 255 && d[i + 1] == 254 && d[i + 2] == 255) {
