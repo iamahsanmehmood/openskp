@@ -186,12 +186,29 @@ TEST_P(InstancedSceneParity, ReproducesBuildScenesWorldSpaceTriangles) {
                          baked.gltf_materials[e.material_index])) {
       ++material_mismatches;
     }
-    for (const auto& pair : {std::pair{a.a, e.a}, std::pair{a.b, e.b}, std::pair{a.c, e.c}}) {
+
+    // The baked path flips a mirrored instance's triangle winding
+    // (swapping indices[1]/[2]) so a naive renderer sees correct-facing
+    // geometry even after the per-instance transform is baked away and
+    // "erased." The instanced path doesn't need that: a mirrored
+    // instance's negative-determinant matrix stays on the node, and a
+    // spec-compliant glTF consumer flips the front-face convention from
+    // that - the standard way glTF represents mirrored placements of
+    // shared geometry, which a baked, never-shared primitive has no
+    // matrix left to do. So the same triangle can legitimately reach here
+    // in either winding; try both pairings and keep whichever is closer.
+    const auto delta_for = [](const std::array<double, 3>& p1, const std::array<double, 3>& p2) {
+      double d = 0;
       for (int k = 0; k < 3; ++k) {
-        worst_delta = std::max(worst_delta, std::abs(pair.first[static_cast<std::size_t>(k)] -
-                                                     pair.second[static_cast<std::size_t>(k)]));
+        d = std::max(d,
+                     std::abs(p1[static_cast<std::size_t>(k)] - p2[static_cast<std::size_t>(k)]));
       }
-    }
+      return d;
+    };
+    const double direct = std::max({delta_for(a.a, e.a), delta_for(a.b, e.b), delta_for(a.c, e.c)});
+    const double reflected =
+        std::max({delta_for(a.a, e.a), delta_for(a.b, e.c), delta_for(a.c, e.b)});
+    worst_delta = std::max(worst_delta, std::min(direct, reflected));
   }
 
   EXPECT_EQ(material_mismatches, 0u);
