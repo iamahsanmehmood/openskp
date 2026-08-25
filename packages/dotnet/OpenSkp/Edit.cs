@@ -285,7 +285,7 @@ namespace OpenSkp
             foreach (var face in defn.Faces.Values)
             {
                 if (face.Loops.Count == 0) continue;
-                if (SceneBuilder.ReconstructLoopVertices(face.Loops[0], edges).Count >= 3) return true;
+                if (FaceGroups.ReconstructLoopVertices(face.Loops[0], edges).Count >= 3) return true;
             }
             foreach (var inst in defn.Instances)
             {
@@ -327,7 +327,7 @@ namespace OpenSkp
                 warnings.Add($"{context}: face {face.Id} has no loops - skipped");
                 return;
             }
-            var vertIds = SceneBuilder.ReconstructLoopVertices(face.Loops[0], edges);
+            var vertIds = FaceGroups.ReconstructLoopVertices(face.Loops[0], edges);
             if (vertIds.Count < 3)
             {
                 warnings.Add($"{context}: face {face.Id} has fewer than 3 usable points - skipped");
@@ -338,7 +338,7 @@ namespace OpenSkp
             var holes = new List<IReadOnlyList<(double X, double Y, double Z)>>();
             for (int i = 1; i < face.Loops.Count; i++)
             {
-                var holeVertIds = SceneBuilder.ReconstructLoopVertices(face.Loops[i], edges);
+                var holeVertIds = FaceGroups.ReconstructLoopVertices(face.Loops[i], edges);
                 if (holeVertIds.Count < 3)
                 {
                     warnings.Add($"{context}: face {face.Id} has a hole with fewer than 3 usable points - skipped");
@@ -394,12 +394,12 @@ namespace OpenSkp
             Material? mat = materialId.HasValue ? model.MaterialsById.TryGetValue(materialId.Value, out var m) ? m : null : null;
             double tileW = (mat?.Texture != null && mat.Texture.Width > 1e-9) ? mat.Texture.Width : 1.0;
             double tileH = (mat?.Texture != null && mat.Texture.Height > 1e-9) ? mat.Texture.Height : 1.0;
-            var (xr, yr) = SceneBuilder.FaceUvBasis((normal.Value.Nx, normal.Value.Ny, normal.Value.Nz));
+            var (xr, yr) = FaceGroups.FaceUvBasis((normal.Value.Nx, normal.Value.Ny, normal.Value.Nz));
             if (points.Count < 3) return null;
             var pairs = new List<UvCorrespondence>();
             foreach (var p in points.Take(3))
             {
-                var (u, v) = SceneBuilder.ComputeFaceUv(p, xr, yr, uvTransform, tileW, tileH);
+                var (u, v) = FaceGroups.ComputeFaceUv(p, xr, yr, uvTransform, tileW, tileH);
                 pairs.Add(new UvCorrespondence(p, (u, v)));
             }
             return pairs;

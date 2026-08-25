@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <utility>
 
+#include <openskp/instanced_scene.hpp>
 #include <openskp/model.hpp>
 #include <openskp/observability.hpp>
 #include <openskp/scene.hpp>
@@ -31,6 +32,23 @@ OPENSKP_EXPORT SkpModel parse_skp(ByteBuffer buffer, const ParseOptions& options
 /// @return Baked scene hierarchy, mesh metadata, primitives, and glTF material data.
 /// @throws SkpParseError if parsing or scene construction fails, including recursive definitions.
 OPENSKP_EXPORT Scene build_scene(ByteBuffer buffer, const ParseOptions& options = {});
+
+/// Parses an SKP buffer and builds the placed scene graph with SketchUp's
+/// component/group instancing PRESERVED, instead of baked into
+/// world-space vertex data.
+///
+/// Use this instead of build_scene() when the model reuses components:
+/// build_scene() bakes each placement into its own world-space vertex
+/// buffers, so its output grows with `definition geometry x placement
+/// count`, while this grows with `unique geometry + instance transforms`.
+/// A component placed 1,000 times costs one copy of its geometry here.
+///
+/// @param buffer Complete contents of an SKP file. Use `std::move(buffer)` to avoid a copy.
+/// @param options Optional progress and logging callbacks for parsing and scene construction.
+/// @return Placed instance tree, mesh resources, and glTF material data.
+/// @throws SkpParseError if parsing or scene construction fails, including recursive definitions.
+OPENSKP_EXPORT InstancedScene build_instanced_scene(ByteBuffer buffer,
+                                                    const ParseOptions& options = {});
 
 /// In-memory handle for repeatedly parsing or baking one SKP source.
 ///
@@ -75,6 +93,18 @@ class OPENSKP_EXPORT SkpFile {
   /// @return Baked scene hierarchy, mesh metadata, primitives, and glTF material data.
   /// @throws SkpParseError if parsing or scene construction fails, including recursive definitions.
   Scene build_scene(const ParseOptions& options = {}) const;
+
+  /// Parses the stored source and builds a new instanced scene, with
+  /// SketchUp's component/group instancing PRESERVED. See the free
+  /// function build_instanced_scene() for the full explanation.
+  ///
+  /// This operation reparses the original source independently of any
+  /// previous `parse()`/`build_scene()` call.
+  ///
+  /// @param options Optional progress and logging callbacks for parsing and scene construction.
+  /// @return Placed instance tree, mesh resources, and glTF material data.
+  /// @throws SkpParseError if parsing or scene construction fails, including recursive definitions.
+  InstancedScene build_instanced_scene(const ParseOptions& options = {}) const;
 
  private:
   explicit SkpFile(ByteBuffer data) : data_(std::move(data)) {}

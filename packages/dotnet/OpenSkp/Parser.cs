@@ -199,6 +199,36 @@ namespace OpenSkp
             return BuildScene(ReadValidatedBytes(filePath), options);
         }
 
+        /// <summary>Build the placed scene graph with SketchUp's
+        /// component/group instancing PRESERVED, instead of baked into
+        /// world-space vertex data.
+        ///
+        /// Use this instead of <see cref="BuildScene(byte[], SkpParseOptions?)"/>
+        /// when the model reuses components: that grows with `definition
+        /// geometry x placement count`, while this grows with `unique
+        /// geometry + instance transforms`. A component placed 1,000 times
+        /// costs one copy of its geometry here.
+        ///
+        /// Same separate, opt-in re-parse as <see cref="BuildScene(byte[], SkpParseOptions?)"/> -
+        /// see that method's docs.</summary>
+        public static InstancedScene BuildInstancedScene(byte[] buffer, SkpParseOptions? options = null)
+        {
+            if (buffer == null)
+            {
+                throw new ArgumentNullException(nameof(buffer), "Buffer cannot be null.");
+            }
+
+            var parsed = Core.FullParse(buffer, options);
+            return InstancedSceneBuilder.Build(parsed, options);
+        }
+
+        /// <summary>Same as <see cref="BuildInstancedScene(byte[], SkpParseOptions?)"/>,
+        /// reading the file from disk first.</summary>
+        public static InstancedScene BuildInstancedScene(string filePath, SkpParseOptions? options = null)
+        {
+            return BuildInstancedScene(ReadValidatedBytes(filePath), options);
+        }
+
         private static byte[] ReadValidatedBytes(string filePath)
         {
             var p = Path.GetFullPath(filePath);

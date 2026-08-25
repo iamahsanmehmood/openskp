@@ -5,7 +5,10 @@ library openskp;
 export 'src/model.dart';
 export 'src/parser.dart' show SkpFile;
 export 'src/scene.dart' show Scene, InstanceNode, MeshMetadata, GlbPrimitive;
+export 'src/instanced_scene.dart'
+    show InstancedScene, InstancedNode, InstancedMeshResource, LocalPrimitive, SceneBounds;
 export 'src/glb.dart' show toGlb, exportGlb;
+export 'src/instanced_glb.dart' show toInstancedGlb, exportInstancedGlb;
 export 'src/json_export.dart' show toJson;
 export 'src/obj_export.dart' show toObj, toMtl, exportObj;
 export 'src/stl_export.dart' show toStlAscii, toStlBinary, exportStl;

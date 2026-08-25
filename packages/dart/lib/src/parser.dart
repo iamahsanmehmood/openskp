@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'core.dart';
 import 'geometry.dart';
+import 'instanced_scene.dart';
 import 'observability.dart';
 import 'model.dart';
 import 'scene.dart';
@@ -56,6 +57,22 @@ class SkpFile {
   /// [options] - optional progress/log callbacks (see [ParseOptions]).
   Scene buildScene([ParseOptions? options]) {
     return SceneBuilder.build(_parseToRaw(options), options);
+  }
+
+  /// Build the placed scene graph with SketchUp's component/group
+  /// instancing PRESERVED, instead of baked into world-space vertex data.
+  ///
+  /// Use this instead of [buildScene] when the model reuses components:
+  /// that grows with `definition geometry x placement count`, while this
+  /// grows with `unique geometry + instance transforms`. A component
+  /// placed 1,000 times costs one copy of its geometry here.
+  ///
+  /// Same separate, opt-in re-parse as [buildScene] - see that method's
+  /// docs.
+  ///
+  /// [options] - optional progress/log callbacks (see [ParseOptions]).
+  InstancedScene buildInstancedScene([ParseOptions? options]) {
+    return InstancedSceneBuilder.build(_parseToRaw(options), options);
   }
 
   /// [options] - optional progress/log callbacks (see [ParseOptions]).
