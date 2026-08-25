@@ -169,8 +169,10 @@ void collect_geometry(const std::vector<TlvNode>& es, GeometryBuilder& b) {
               for (auto& v : parse_flat(cn->payload)) {
                 if (v.first == "A10F")
                   eid = parse_varint(v.second, 0, v.second.size());
-                else if (v.first == "A20F")
-                  ori = parse_varint(v.second, 0, v.second.size());
+                else if (v.first == "A20F") {
+                  const auto raw_orientation = parse_varint(v.second, 0, v.second.size());
+                  ori = raw_orientation == 0 ? 1 : -1;
+                }
               }
               if (eid && ori) co.push_back({*eid, *ori});
             }
