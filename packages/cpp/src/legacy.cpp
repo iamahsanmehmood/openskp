@@ -238,12 +238,14 @@ bool is_class_ref(const ByteBuffer& d, size_t p, uint64_t slot) {
 //
 // count_pos is the offset the count was read FROM (i.e. r.p - 4). Returns
 // the corrected count, or nullopt when this is not the v20 layout.
-std::optional<uint32_t> retry_count_after_v20_filler(R& r, size_t count_pos, uint32_t limit) {
-  auto hit = find_count_after_v20_filler(r.d, count_pos, limit);
-  if (!hit) return std::nullopt;
-  r.p = hit->next;
-  return hit->count;
-}
+//
+// Declared here (before struct Archive) so callers throughout struct
+// Archive can see it; the Archive-aware overload actually implementing
+// the extra validation is defined after struct Archive (it needs the
+// complete type to inspect slots/next), and this is left a mere
+// declaration until then.
+std::optional<uint32_t> retry_count_after_v20_filler(R& r, size_t count_pos, uint32_t limit,
+                                                     struct Archive* ar = nullptr);
 
 struct Archive {
   R r;
@@ -256,6 +258,21 @@ struct Archive {
   std::unordered_map<uint64_t, Entry> slots;
   std::unordered_map<std::string, uint64_t> class_slot;
   std::unordered_map<std::string, int> class_schema;
+
+  // Burned store-map indices (see the CEdgeUse branch of read()): the
+  // writer maps an annotation's connection points into the store map
+  // WITHOUT writing bytes, so file back-references beyond each burn run
+  // ahead of the walker's numbering. Registrations always stay at WALKER
+  // indices - no captured slot ever goes stale - and back() translates
+  // file references through the burn bands instead. `burns` holds
+  // (file_band_start, width) per event; `cum_delta` their total;
+  // `annot_watermark` the walker slot right after the last annotation
+  // record - the only place a band can start.
+  std::vector<std::pair<uint64_t, uint64_t>> burns;
+  uint64_t cum_delta{};
+  std::optional<uint64_t> annot_watermark;
+  std::vector<int> burn_stack;  // per-entity-list burned-item credits
+  std::optional<size_t> cline_tail;
 
   Archive(const ByteBuffer& d, int v) : r{d}, ver(v), pid(v >= 17) {}
 
@@ -302,7 +319,29 @@ struct Archive {
     return new_obj(i->second.name);
   }
 
+  // Maps a FILE store-map index to the walker's numbering through the
+  // burn bands. Returns the walker slot, or nullopt when the reference
+  // points INTO a band (a phantom, never-serialized connection point).
+  std::optional<uint64_t> translate_ref(uint64_t slot) {
+    uint64_t offset = 0;
+    for (auto& band : burns) {
+      if (slot < band.first) break;
+      if (slot < band.first + band.second) return std::nullopt;
+      offset += band.second;
+    }
+    return slot - offset;
+  }
+
   std::tuple<uint64_t, std::string, std::shared_ptr<V>> back(uint64_t s) {
+    if (!burns.empty() && s >= burns[0].first) {
+      auto walker = translate_ref(s);
+      if (!walker) {
+        // a phantom (burned) connection-point index - annotation metadata
+        // only; nothing was ever serialized for it
+        return {s, "reserved", {}};
+      }
+      s = *walker;
+    }
     auto i = slots.find(s);
     if (i == slots.end()) {
       if (s < base) return {s, "premodel", {}};
@@ -310,6 +349,87 @@ struct Archive {
     }
     if (i->second.cls) throw std::runtime_error("legacy backref to class");
     return {s, i->second.name, i->second.v};
+  }
+
+  // Records that the writer burned `delta` store-map indices without
+  // serializing any bytes for them. See the field comments above for the
+  // mechanism this supports.
+  void register_burn(uint64_t delta) {
+    burns.push_back({*annot_watermark + cum_delta, delta});
+    cum_delta += delta;
+    annot_watermark.reset();
+    // each burn event corresponds to ONE phantom top-level entity that the
+    // entity list's declared count includes but the stream never carries -
+    // credit it so the list doesn't run past its real end
+    if (!burn_stack.empty()) burn_stack.back() += 1;
+  }
+
+  // A reference-to-entity tag: dimension connection points and text
+  // leader attachments. Unlike object()'s back-ref path, this tolerates a
+  // slot the walk has not reached yet - SketchUp serializes a
+  // label/dimension BEFORE the entity it anchors to when both live in the
+  // same entity list, so the reference can legitimately point forward.
+  std::optional<uint64_t> entity_ref() {
+    auto tag = r.u16();
+    if (!tag) return std::nullopt;
+    if (tag == 0x7fff) {
+      auto big = r.u32();
+      if (big & 0x80000000) throw std::runtime_error("entity ref is a new object");
+      return big;
+    }
+    if (tag == 0xffff || (tag & 0x8000)) throw std::runtime_error("entity ref is a new object");
+    return tag;
+  }
+
+  // True when the u16 at `at` starts an object read in one of the
+  // UNAMBIGUOUS forms: null, escape, class definition, or a class-ref to
+  // a class already known. Plain object back-refs are excluded on
+  // purpose - any 2-byte junk below 0x8000 would qualify, which is
+  // exactly the ambiguity this check exists to avoid.
+  bool strict_next_tag(size_t at, bool allow_null = true) {
+    if (at + 2 > r.d.size()) return false;
+    auto t = read_u16(r.d, at);
+    if (t == 0x0000) return allow_null;
+    if (t == 0x7fff || t == 0xffff) return true;
+    if (t & 0x8000) {
+      auto i = slots.find(t & 0x7fff);
+      return i != slots.end() && i->second.cls;
+    }
+    return false;
+  }
+
+  // The textured-material payload: an embedded CDib plus applied size,
+  // source file name, average colour, and opacity. Shared verbatim
+  // between a CMaterial with a texture and a colour-by-layer CLayer that
+  // carries a textured material.
+  void texture_block(V& v) {
+    r.raw(ver >= 17 ? 2 : 1);  // texture flag pad
+    auto q = object("CDib");
+    v.tex_dib = std::get<0>(q);
+    auto begin = r.p, limit = std::min(r.d.size(), r.p + 28);
+    size_t marker = begin;
+    for (; marker + 3 <= limit; ++marker)
+      if (r.d[marker] == 255 && r.d[marker + 1] == 254 && r.d[marker + 2] == 255) break;
+    if (marker - begin == 20)
+      r.u32();
+    else if (marker - begin != 16)
+      throw std::runtime_error("texture size block misaligned");
+    v.tw = r.f64();
+    v.th = r.f64();
+    v.tex_file = r.utf16();
+    auto c = r.raw(9);  // RGBA + 00 + RGBA (colour stored twice)
+    v.r = c[0];
+    v.g = c[1];
+    v.b = c[2];
+    // c[3] here is not a colour alpha byte - it feeds the colorized check
+    // below alongside blob[4]. v.a keeps its default (255); textured
+    // materials/layers carry no separate alpha channel in this record
+    // shape.
+    r.utf16();
+    auto blob = r.raw(8);  // u32 + u32 colorized flag
+    v.opacity = r.f64();
+    if (!r.u8()) v.opacity = 0;
+    v.colorized = blob[4] != 0 || c[3] == 255;
   }
 
   // Returns the CAttributeContainer's slot, or nullopt when this entity
@@ -327,18 +447,38 @@ struct Archive {
   }
 
   void draw(V& v) {
-    auto b = r.raw(10);
+    auto b = r.raw(8);
     v.mat = int(b[0] | b[1] << 8);
     v.hidden = b[2];
     v.soft = b[5];
     v.smooth = b[6];
-    v.layer = int(b[8] | b[9] << 8);
+    // The layer field is normally a u16 id, but an entity can carry the
+    // layer BY OBJECT instead (seen on real 2018 instances): a full
+    // inline CLayer record on first use, an escaped back-ref to it on
+    // later siblings. Layer ids never have the 0x8000 bit and never equal
+    // 0x7fff, so both object forms are unambiguous.
+    auto lay_cs = class_slot.find("CLayer");
+    auto tag = read_u16(r.d, r.p);
+    if (lay_cs != class_slot.end() && tag == (0x8000 | lay_cs->second)) {
+      object("CLayer");
+      v.layer = 0;  // by-object layer: keep the default id
+    } else if (tag == 0x7fff) {
+      r.u16();
+      auto big = r.u32();
+      if (big & 0x80000000) throw std::runtime_error("drawbase layer: unexpected class");
+      v.layer = 0;  // by-object layer (back-ref)
+    } else {
+      v.layer = r.u16();
+    }
   }
 
   std::tuple<uint64_t, std::string, std::shared_ptr<V>> new_obj(const std::string& n) {
     auto slot = alloc({false, n, 0, {}});
     auto v = read(n, slot);
     slots[slot].v = v;
+    if (n == "CDimensionLinear" || n == "CText") {
+      annot_watermark = next;
+    }
     return {slot, n, v};
   }
 
@@ -371,8 +511,32 @@ struct Archive {
       v->k = "edgeuse";
       v->edge = std::get<0>(object("CEdge"));
       v->sense = r.u8() != 0;
-      auto parent = std::get<0>(object());
-      if (parent != current_loop) throw std::runtime_error("edge-use parent mismatch");
+      // parent-loop back-ref: the alignment oracle. Read as a RAW file
+      // index - after annotations the claimed index can sit AHEAD of the
+      // walker's numbering (burned MapObject indices, see
+      // register_burn()), which is a correction signal, not a mis-parse.
+      size_t p0 = r.p;
+      auto tag = r.u16();
+      std::optional<uint64_t> parent;
+      if (tag == 0x7fff) {
+        auto big = r.u32();
+        if (big & 0x80000000) throw std::runtime_error("edge-use parent is a new object");
+        parent = big;
+      } else if (tag == 0xffff || (tag & 0x8000)) {
+        throw std::runtime_error("edge-use parent is a new object");
+      } else if (tag != 0) {
+        parent = tag;
+      }
+      uint64_t expected = current_loop + cum_delta;
+      if (!parent || *parent != expected) {
+        int64_t delta = parent ? int64_t(*parent) - int64_t(expected) : 0;
+        if (delta > 0 && delta <= 4096 && annot_watermark) {
+          register_burn(uint64_t(delta));
+        } else {
+          r.p = p0;
+          throw std::runtime_error("edge-use parent mismatch");
+        }
+      }
     } else if (n == "CLoop") {
       auto old = current_loop;
       current_loop = self;
@@ -422,13 +586,24 @@ struct Archive {
       while (mid.size() < 8 && !r.marker()) mid.push_back(r.u8());
       v->hidden = mid.empty() ? 0 : mid[0];
       r.utf16();
-      r.u16();
-      auto c = r.raw(4);
-      v->r = c[0];
-      v->g = c[1];
-      v->b = c[2];
-      r.utf16();
-      r.raw(21);
+      auto flags = r.u16();
+      if (flags & 0x00ff) {
+        // Colour-by-layer with a TEXTURED material: instead of the flat
+        // RGBA, the layer embeds the same texture block a CMaterial
+        // carries (SketchUp Pro assigns full materials to layers). Low
+        // byte of the flag word set = textured; a plain colour layer has
+        // 0 there (its high byte carries an unrelated flag, so the word
+        // as a whole is non-zero either way).
+        texture_block(*v);
+        r.raw(4);  // trailing u32
+      } else {
+        auto c = r.raw(4);
+        v->r = c[0];
+        v->g = c[1];
+        v->b = c[2];
+        r.utf16();
+        r.raw(21);
+      }
     } else if (n == "CMaterial") {
       preamble();
       v->k = "material";
@@ -445,33 +620,7 @@ struct Archive {
         v->opacity = r.f64();
         if (!r.u8()) v->opacity = 0;
       } else {
-        r.raw(ver >= 17 ? 2 : 1);
-        auto q = object("CDib");
-        v->tex_dib = std::get<0>(q);
-        auto begin = r.p, limit = std::min(r.d.size(), r.p + 28);
-        size_t marker = begin;
-        for (; marker + 3 <= limit; ++marker)
-          if (r.d[marker] == 255 && r.d[marker + 1] == 254 && r.d[marker + 2] == 255) break;
-        if (marker - begin == 20)
-          r.u32();
-        else if (marker - begin != 16)
-          throw std::runtime_error("texture size block misaligned");
-        v->tw = r.f64();
-        v->th = r.f64();
-        v->tex_file = r.utf16();
-        auto c = r.raw(9);
-        v->r = c[0];
-        v->g = c[1];
-        v->b = c[2];
-        // c[3] here is not a colour alpha byte - it feeds the colorized
-        // check below alongside blob[4]. v->a keeps its default (255);
-        // textured materials carry no separate alpha channel in this
-        // record shape.
-        r.utf16();
-        auto blob = r.raw(8);
-        v->opacity = r.f64();
-        if (!r.u8()) v->opacity = 0;
-        v->colorized = blob[4] != 0 || c[3] == 255;
+        texture_block(*v);
       }
     } else if (n == "CDib") {
       v->k = "dib";
@@ -503,15 +652,74 @@ struct Archive {
       preamble();
       object("CCamera");
       object("CDib");
-    } else if (n == "CRelationship") {
+    } else if (n == "CImage") {
+      // CImage: an Image entity - instance-shaped: a back-ref to the
+      // (already walked) CComponentDefinition holding the image's face
+      // and texture, a 3x4 placement, a constant 1.0, the source path
+      // string (empty in every sample), and a 16-byte GUID. It appears as
+      // a normal entity-list item inside the definition that owns the
+      // image (typically a face-me/photo definition), whose own tail the
+      // ordinary definition reader then consumes. Its parsed value is
+      // never consumed downstream - it exists purely so the byte stream
+      // stays aligned.
       preamble();
-      object();
-      object();
+      v->k = "image";
+      draw(*v);
+      auto q = object();
+      v->def = std::get<0>(q);
+      v->xf = r.f64s(12);
+      r.f64();    // constant 1.0
+      r.utf16();  // source path
+      auto g = r.raw(16);
+      static char h[] = "0123456789ABCDEF";
+      for (auto x : g) {
+        v->guid += h[x >> 4];
+        v->guid += h[x & 15];
+      }
+    } else if (n == "CRelationship") {
+      // two object pointers (small maps: two u16 back-refs - which read
+      // like the "u32" of the public notes; big maps escalate them to
+      // big-tags). They bind an annotation to the entity it labels, and
+      // the annotation side is routinely serialized BEFORE the geometry
+      // side - so these can point forward, past the walk cursor;
+      // entity_ref() tolerates that where object()'s back-ref path
+      // (rightly) does not.
+      preamble();
+      v->k = "relationship";
+      entity_ref();
+      entity_ref();
     } else if (n == "CConstructionLine") {
       preamble();
       draw(*v);
-      r.f64s(8);
-      r.raw(ver >= 17 ? 7 : 4);
+      r.f64s(8);  // line params (+-~4.4e29 = infinite)
+      // The trailing block varies by the WRITING BUILD, not cleanly by
+      // version: 7 bytes on the v17 calibration corpus, 4 on v16 and on a
+      // real v18, 0 on another real v17. Self-calibrate on the first
+      // guide line of the file - the length that lands on a legitimate
+      // next tag (strict forms only) - and cache it for the rest of the
+      // file.
+      if (!cline_tail) {
+        size_t dflt = ver == 17 ? 7 : 4;
+        std::vector<size_t> order{dflt};
+        for (size_t c : {size_t(0), size_t(4), size_t(7)})
+          if (c != dflt) order.push_back(c);
+        // two passes: a zero tail full of padding can mimic a null tag,
+        // so only accept a null-anchored candidate when no candidate
+        // lands on a STRONG form (escape / known class / class
+        // definition)
+        std::optional<size_t> k;
+        for (bool allow_null : {false, true}) {
+          for (size_t cand : order) {
+            if (strict_next_tag(r.p + cand, allow_null)) {
+              k = cand;
+              break;
+            }
+          }
+          if (k) break;
+        }
+        cline_tail = k ? *k : dflt;
+      }
+      r.raw(*cline_tail);
     } else if (n == "CConstructionPoint") {
       preamble();
       draw(*v);
@@ -539,7 +747,17 @@ struct Archive {
       draw(*v);
       v->text = r.utf16();
       object("CSkFont");
-      r.raw(165);
+      // The tail is NOT a fixed 165-byte blob: it embeds two object
+      // references (the dimension's connection points into the
+      // geometry). Each is a normal MFC tag - 2 bytes in small files, but
+      // 6 bytes once the archive holds more than 0x7ffe objects and the
+      // 0x7fff big-tag escape kicks in - so a fixed-size skip walks off
+      // the rails exactly on large models.
+      r.raw(37);
+      entity_ref();  // connection point 1 (may be null)
+      r.raw(42);
+      entity_ref();  // connection point 2 (may be null)
+      r.raw(82);
     } else if (n == "CText") {
       preamble();
       v->k = "text";
@@ -557,31 +775,72 @@ struct Archive {
       r.raw(found - r.p);
       v->text = r.utf16();
       r.raw(5);
+      // Optional leader-attachment refs follow the fixed tail (a text
+      // label anchored to geometry stores the anchored entities here;
+      // they can point FORWARD - see entity_ref()). Only the escaped
+      // 6-byte form is recognisable without risk: a 2-byte back-ref here
+      // would be indistinguishable from the next list item's tag, and
+      // every known sample either has no attachments or lives in a
+      // >0x7ffe-object file where the escape is mandatory anyway.
+      while (r.p + 2 <= r.d.size() && r.d[r.p] == 255 && r.d[r.p + 1] == 127) {
+        if (r.p + 6 > r.d.size()) break;
+        uint32_t val = read_u32(r.d, r.p + 2);
+        if (val & 0x80000000) break;  // new-object tag - the next entity
+        r.raw(6);
+      }
     } else if (n == "CComponentDefinition") {
       preamble();
       v->k = "definition";
       r.raw(ver >= 17 ? 22 : 20);
       auto nl = r.u32();
       if (nl > 10000) throw std::runtime_error("implausible def layers");
-      while (nl--) object("CLayer");
+      // like the model-level layer list, the count is REAL layers (new
+      // records or back-refs); SketchUp 2020 interleaves null separators
+      // between them
+      {
+        uint32_t got = 0;
+        while (got < nl) {
+          if (r.p + 2 <= r.d.size() && read_u16(r.d, r.p) == 0) {
+            r.p += 2;
+            continue;
+          }
+          object("CLayer");
+          got++;
+        }
+      }
       auto decl = r.u16();
       if (decl == 0x7fff) r.u32();
-      r.u32();
-      auto count = r.u32();
+      // v20 can drop its undocumented filler right here, swallowing the
+      // u32 field (and, behind a layer-separator null, even the decl
+      // itself): if the empty-string marker sits in the next few bytes,
+      // the real count is the first non-zero u32 after its padding.
+      uint32_t count = 0;
+      bool filled = false;
+      if (ver >= 20) {
+        auto c = retry_count_after_v20_filler(r, r.p, 5000000, this);
+        if (c) {
+          count = *c;
+          filled = true;
+        }
+      }
+      if (!filled) {
+        r.u32();
+        count = r.u32();
+      }
       // A zero count is as much a symptom of the v20 filler as an
       // implausibly large one: the reader lands on the leading zero bytes
       // of the filler instead of the count. A genuinely empty definition
       // reads zero with no filler ahead, and retry_count_after_v20_filler
       // leaves those alone.
       if (count > 5000000 || count == 0) {
-        auto retry = retry_count_after_v20_filler(r, r.p - 4, 5000000);
+        auto retry = retry_count_after_v20_filler(r, r.p - 4, 5000000, this);
         if (retry) count = *retry;
       }
       if (count > 5000000) throw std::runtime_error("implausible def entities");
       v->ents = entity_list(count, false);
       auto nr = r.u32();
       if (nr > 100000) {
-        auto retry = retry_count_after_v20_filler(r, r.p - 4, 100000);
+        auto retry = retry_count_after_v20_filler(r, r.p - 4, 100000, this);
         if (retry) nr = *retry;
       }
       if (nr > 100000) throw std::runtime_error("definition list misaligned");
@@ -669,6 +928,8 @@ struct Archive {
         return std::to_string(r.u32());
       case 10:
         return r.utf16();
+      case 12:
+        return std::to_string(r.f64());  // Length (a double, inches)
       case 11: {
         auto n = r.u32();
         if (n > 100000) throw std::runtime_error("attr array too large");
@@ -679,7 +940,11 @@ struct Archive {
         }
         return joined;
       }
-      case 18: {
+      case 17: {  // 3D point (Geom::Point3d)
+        auto v = r.f64s(3);
+        return std::to_string(v[0]) + "," + std::to_string(v[1]) + "," + std::to_string(v[2]);
+      }
+      case 18: {  // 3D vector (Geom::Vector3d)
         auto v = r.f64s(3);
         return std::to_string(v[0]) + "," + std::to_string(v[1]) + "," + std::to_string(v[2]);
       }
@@ -690,20 +955,97 @@ struct Archive {
 
   std::vector<std::tuple<uint64_t, std::string, std::shared_ptr<V>>> entity_list(uint32_t n,
                                                                                  bool root) {
+    burn_stack.push_back(0);
+
+    struct PopGuard {
+      Archive* a;
+
+      ~PopGuard() { a->burn_stack.pop_back(); }
+    } pop_guard{this};
+
     std::vector<std::tuple<uint64_t, std::string, std::shared_ptr<V>>> v;
     while (v.size() < n) {
       auto save = r.p;
+      bool has_burn_credit = !root && !burn_stack.empty() && burn_stack.back() > 0;
+      if (has_burn_credit && save + 25 <= r.d.size() && read_u32(r.d, save) == 0 &&
+          r.d[save + 22] == 255 && r.d[save + 23] == 254 && r.d[save + 24] == 255) {
+        // burned MapObject indices (see register_burn()) mean the
+        // declared count includes phantom entities the stream never
+        // carries; the definition tail signature (nrel=0 + pad + 16-byte
+        // GUID + name marker at +22) marks the list's REAL end
+        break;
+      }
       try {
         v.push_back(object());
       } catch (...) {
-        if (!root) throw;
-        r.p = save;
-        break;
+        if (root) {
+          // over-declared root counts run into the document tail - stop
+          r.p = save;
+          break;
+        }
+        if (has_burn_credit) {
+          // this list had burned MapObject indices (see register_burn()):
+          // the phantom connection points were also counted as items, so
+          // the declared count overshoots the real records. Stop at the
+          // failed item - the definition tail that follows (nrel, GUID
+          // anchor, thumbnail scan) validates the cut.
+          r.p = save;
+          break;
+        }
+        throw;
       }
     }
     return v;
   }
 };
+
+// True when the u16 at `at` can legally start an object read: a null, an
+// escape, a class definition, a class-ref to a KNOWN class, or an object
+// back-ref within the allocated range.
+bool plausible_list_tag(Archive& ar, const ByteBuffer& d, size_t at) {
+  if (at + 2 > d.size()) return false;
+  auto t = read_u16(d, at);
+  if (t == 0x0000 || t == 0x7fff || t == 0xffff) return true;
+  if (t & 0x8000) {
+    auto i = ar.slots.find(t & 0x7fff);
+    return i != ar.slots.end() && i->second.cls;
+  }
+  return t < ar.next;
+}
+
+// SketchUp 2020's filler can appear at MORE call sites than the count-only
+// read this originally guarded (a v20 layer-separator null before a
+// definition's decl field, for one) - the same byte-stride search as
+// find_count_after_v20_filler, but each candidate must ALSO look like a
+// legal object-read start (plausible_list_tag) to reduce false positives.
+// Deliberately a separate search from find_count_after_v20_filler's own
+// (which stays a pure, Archive-free function so its own tests keep
+// working unchanged): needs Archive for the validation, and Archive is an
+// anonymous-namespace type find_count_after_v20_filler's header-declared
+// signature cannot reference.
+std::optional<uint32_t> retry_count_after_v20_filler(R& r, size_t count_pos, uint32_t limit,
+                                                     Archive* ar) {
+  const ByteBuffer& d = r.d;
+  size_t marker_at = std::string::npos;
+  for (size_t i = count_pos; i + 4 <= d.size() && i < count_pos + 12; ++i) {
+    if (d[i] == 255 && d[i + 1] == 254 && d[i + 2] == 255) {
+      marker_at = i;
+      break;
+    }
+  }
+  if (marker_at == std::string::npos) return std::nullopt;
+  if (d[marker_at + 3] != 0) return std::nullopt;  // non-empty string: real data
+  for (size_t pad = 1; pad <= kMaxV20FillerPad; pad += 4) {
+    size_t at = marker_at + 4 + pad;
+    if (at + 4 > d.size()) break;
+    uint32_t count = read_u32(d, at);
+    if (count > 0 && count <= limit && (!ar || plausible_list_tag(*ar, d, at + 4))) {
+      r.p = at + 4;
+      return count;
+    }
+  }
+  return std::nullopt;
+}
 
 struct WalkResult {
   Archive ar;
@@ -799,20 +1141,46 @@ WalkResult walk_model(const ByteBuffer& data, int ver, size_t start, uint32_t ma
   if (ver >= 17) ar.r.u8();
   auto lc = ar.r.u32();
   if (lc > 100000) throw std::runtime_error("invalid layer count");
-  while (lc--) {
+  // lc counts REAL layers. SketchUp 2020 interleaves a null object-ref
+  // after each layer record (a separator, not a layer), so counting reads
+  // walks off mid-list on files with several layers; count parsed layers
+  // instead, skip the separators, and stop early if the next tag is a
+  // back-ref (the definition-list anchor) - a v20 variant where the count
+  // over-includes separators.
+  while (layers.size() < lc) {
+    if (ar.r.p + 2 > data.size()) break;
+    auto tag = read_u16(data, ar.r.p);
+    if (tag == 0) {
+      ar.r.p += 2;
+      continue;
+    }
+    if (tag != 0xffff && !(tag & 0x8000)) break;
     auto q = ar.object("CLayer");
-    // A null object-ref occupies a slot in the list without carrying a
-    // layer record (seen in SketchUp 2020 files, where lc includes it).
-    // Keeping it would push a null V into layers and blow up downstream
-    // on its r/g/b fields; ar.object() has still consumed the ref.
     if (!std::get<2>(q)) continue;
     layers.push_back({std::get<0>(q), std::get<2>(q)});
+  }
+  // trailing separators (and any layer records past the declared count)
+  {
+    auto lay_cs = ar.class_slot.find("CLayer");
+    while (ar.r.p + 2 <= data.size()) {
+      auto tag = read_u16(data, ar.r.p);
+      if (tag == 0) {
+        ar.r.p += 2;
+        continue;
+      }
+      if (lay_cs != ar.class_slot.end() && tag == (0x8000 | lay_cs->second)) {
+        auto q = ar.object("CLayer");
+        if (std::get<2>(q)) layers.push_back({std::get<0>(q), std::get<2>(q)});
+        continue;
+      }
+      break;
+    }
   }
   auto anchor = ar.object();
   if (std::get<1>(anchor) != "CLayer") throw std::runtime_error("definition anchor is not a layer");
   auto dc = ar.r.u32();
   if (dc > 1000000) {
-    auto retry = retry_count_after_v20_filler(ar.r, ar.r.p - 4, 1000000);
+    auto retry = retry_count_after_v20_filler(ar.r, ar.r.p - 4, 1000000, &ar);
     if (retry) dc = *retry;
   }
   if (dc > 1000000) throw std::runtime_error("invalid definition count");
@@ -829,7 +1197,7 @@ WalkResult walk_model(const ByteBuffer& data, int ver, size_t start, uint32_t ma
   }
   auto root_count = ar.r.u32();
   if (root_count > 5000000) {
-    auto retry = retry_count_after_v20_filler(ar.r, ar.r.p - 4, 5000000);
+    auto retry = retry_count_after_v20_filler(ar.r, ar.r.p - 4, 5000000, &ar);
     if (retry) root_count = *retry;
   }
   if (root_count > 5000000) throw std::runtime_error("implausible root entity count");

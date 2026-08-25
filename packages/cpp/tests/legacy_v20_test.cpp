@@ -44,10 +44,15 @@ TEST(LegacyV20, ParsesRealV20FileThatPreviouslyThrew) {
   EXPECT_EQ(model.definitions.size(), 20);
   EXPECT_EQ(model.materials.size(), 24);
 
-  // v20 writes a null object-ref into the layer list, which the layer
-  // count includes. It must not reach model.layers as a null entry.
-  ASSERT_EQ(model.layers.size(), 1);
+  // v20 interleaves a null object-ref after EACH layer record; the count
+  // is the number of REAL layers. The old reader counted the separators
+  // as items and dropped every layer after the first - this fixture
+  // really does carry "Gondulas Laterais" (visible in SketchUp), which
+  // the previous assertion enshrined as missing. Nulls must still never
+  // reach model.layers.
+  ASSERT_EQ(model.layers.size(), 2);
   EXPECT_EQ(model.layers[0].name, "Layer0");
+  EXPECT_EQ(model.layers[1].name, "Gondulas Laterais");
 
   // real geometry, not an empty shell
   std::size_t faces = 0, edges = 0, vertices = 0;

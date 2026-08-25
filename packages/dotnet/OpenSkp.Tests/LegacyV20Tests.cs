@@ -46,12 +46,15 @@ namespace OpenSkp.Tests
             Assert.Equal(20, model.Definitions.Count);
             Assert.Equal(24, model.Materials.Count);
 
-            // v20 writes a null object-ref into the layer list, which the
-            // layer count includes. It must not reach model.Layers as a
-            // null entry.
+            // v20 interleaves a null object-ref after EACH layer record;
+            // the count is the number of REAL layers. The old reader
+            // counted the separators as items and dropped every layer
+            // after the first - this fixture really does carry "Gondulas
+            // Laterais" (visible in SketchUp), which the previous
+            // assertion enshrined as missing. Nulls must still never reach
+            // model.Layers.
             var names = model.Layers.Select(l => l.Name).ToList();
-            Assert.Single(names);
-            Assert.Equal("Layer0", names[0]);
+            Assert.Equal(new[] { "Layer0", "Gondulas Laterais" }, names);
 
             // real geometry, not an empty shell
             int faces = model.Definitions.Values.Sum(d => d.Faces.Count);

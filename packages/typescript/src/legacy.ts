@@ -48,7 +48,8 @@ function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
 export function findCountAfterV20Filler(
   data: Uint8Array,
   countPos: number,
-  limit: number
+  limit: number,
+  ar?: Archive
 ): { count: number; next: number } | null {
   // the marker sits within a handful of bytes of the bad read; the window is
   // deliberately tight so a coincidental ff-fe-ff further out cannot match
@@ -77,7 +78,9 @@ export function findCountAfterV20Filler(
     const at = markerAt + 4 + pad;
     if (at + 4 > data.length) break;
     const count = view.getUint32(at, true);
-    if (count > 0 && count <= limit) return { count, next: at + 4 };
+    if (count > 0 && count <= limit && (ar === undefined || plausibleListTag(ar, data, at + 4))) {
+      return { count, next: at + 4 };
+    }
   }
   return null;
 }
@@ -103,11 +106,26 @@ export function findCountAfterV20Filler(
  * `countPos` is the offset the count was read FROM (i.e. r.pos - 4).
  * Returns the corrected count, or null when this is not the v20 layout.
  */
-function retryCountAfterV20Filler(r: R, countPos: number, limit: number): number | null {
-  const hit = findCountAfterV20Filler(r.data, countPos, limit);
+function retryCountAfterV20Filler(r: R, countPos: number, limit: number, ar?: Archive): number | null {
+  const hit = findCountAfterV20Filler(r.data, countPos, limit, ar);
   if (hit === null) return null;
   r.pos = hit.next;
   return hit.count;
+}
+
+/** True when the u16 at `at` can legally start an object read: a null, an
+ * escape, a class definition, a class-ref to a KNOWN class, or an object
+ * back-ref within the allocated range. */
+function plausibleListTag(ar: Archive, data: Uint8Array, at: number): boolean {
+  if (at + 2 > data.length) return false;
+  const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  const t = view.getUint16(at, true);
+  if (t === 0x0000 || t === 0x7fff || t === 0xffff) return true;
+  if (t & 0x8000) {
+    const ent = ar.slots.get(t & 0x7fff);
+    return ent !== undefined && ent[0] === 'class';
+  }
+  return t < ar.nextSlot;
 }
 
 /** Search for `needle` (exact bytes) within [start, end). Returns -1 if absent. */
@@ -280,6 +298,21 @@ class Archive {
   currentLoop: number | null = null;
   inEntityList = false;
 
+  // Burned store-map indices (see readEdgeUse): the writer maps an
+  // annotation's connection points into the store map WITHOUT writing
+  // bytes, so file back-references beyond each burn run ahead of the
+  // walker's numbering. Registrations always stay at WALKER indices - no
+  // captured slot ever goes stale - and backref translates file
+  // references through the burn bands instead. `burns` holds
+  // [fileBandStart, width] per event; `cumDelta` their total;
+  // `annotWatermark` the walker slot right after the last annotation
+  // record - the only place a band can start.
+  burns: [number, number][] = [];
+  cumDelta = 0;
+  annotWatermark: number | null = null;
+  burnStack: number[] = []; // per-entity-list burned-item credits
+  clineTail: number | null = null;
+
   constructor(data: Uint8Array, ver: number) {
     this.data = data;
     this.ver = ver;
@@ -358,10 +391,35 @@ class Archive {
       this.currentClass = prevClass;
     }
     this.slots.set(slot, ['obj', name, value]);
+    if (name === 'CDimensionLinear' || name === 'CText') {
+      this.annotWatermark = this.nextSlot;
+    }
     return [slot, name, value];
   }
 
+  /** Map a FILE store-map index to the walker's numbering through the burn
+   * bands. Returns the walker slot, or `null` when the reference points
+   * INTO a band (a phantom, never-serialized connection point). */
+  private translateRef(slot: number): number | null {
+    let offset = 0;
+    for (const [start, width] of this.burns) {
+      if (slot < start) break;
+      if (slot < start + width) return null;
+      offset += width;
+    }
+    return slot - offset;
+  }
+
   private backref(slot: number, r: R): [number, string | null, any] {
+    if (this.burns.length > 0 && slot >= this.burns[0][0]) {
+      const walker = this.translateRef(slot);
+      if (walker === null) {
+        // a phantom (burned) connection-point index - annotation metadata
+        // only; nothing was ever serialized for it
+        return [slot, 'reserved', null];
+      }
+      slot = walker;
+    }
     const ent = this.slots.get(slot);
     if (ent === undefined) {
       if (slot < this.walkBase) {
@@ -393,14 +451,35 @@ function preamble(ar: Archive, r: R): { attrs: any; pid: number } {
 }
 
 function drawbase(ar: Archive, r: R): { mat: number; hidden: number; soft: number; smooth: number; layer: number } {
-  const b = r.raw(10);
+  const b = r.raw(8);
   const view = new DataView(b.buffer, b.byteOffset, b.byteLength);
+  // The layer field is normally a u16 id, but an entity can carry the
+  // layer BY OBJECT instead (seen on real 2018 instances): a full inline
+  // CLayer record on first use, an escaped back-ref to it on later
+  // siblings. Layer ids never have the 0x8000 bit and never equal 0x7FFF,
+  // so both object forms are unambiguous.
+  const layCls = ar.classSlot.get('CLayer');
+  const tag = r.peekU16();
+  let layer: number;
+  if (layCls !== undefined && tag === (0x8000 | layCls)) {
+    ar.readObject(r, 'CLayer');
+    layer = 0; // by-object layer: keep the default id
+  } else if (tag === 0x7fff) {
+    r.u16();
+    const big = r.u32();
+    if (big & 0x80000000) {
+      throw new LegacyParseError(`drawbase layer: unexpected class ${r.ctx()}`);
+    }
+    layer = 0; // by-object layer (back-ref)
+  } else {
+    layer = r.u16();
+  }
   return {
     mat: view.getUint16(0, true),
     hidden: b[2],
     soft: b[5],
     smooth: b[6],
-    layer: view.getUint16(8, true),
+    layer,
   };
 }
 
@@ -437,13 +516,60 @@ function readArcCurve(ar: Archive, r: R): any {
   return { k: 'arccurve' };
 }
 
+/** Record that the writer burned `delta` store-map indices without
+ * serializing any bytes for them.
+ *
+ * SketchUp maps an annotation's connection-point objects into the MFC
+ * store map (CArchive::MapObject) when a dimension or leader text is
+ * attached to geometry - each mapping consumes an index, but nothing is
+ * written to the stream, so the file's later back-references run ahead of
+ * a byte-exact walk. The band starts right after the last annotation
+ * record (in FILE numbering); registrations never move - backref
+ * translates file references through the recorded bands instead, so no
+ * slot value captured anywhere can go stale. */
+function registerBurn(ar: Archive, delta: number): void {
+  ar.burns.push([(ar.annotWatermark as number) + ar.cumDelta, delta]);
+  ar.cumDelta += delta;
+  ar.annotWatermark = null;
+  // each burn event corresponds to ONE phantom top-level entity that the
+  // entity list's declared count includes but the stream never carries -
+  // credit it so the list doesn't run past its real end
+  if (ar.burnStack.length > 0) {
+    ar.burnStack[ar.burnStack.length - 1] += 1;
+  }
+}
+
 function readEdgeUse(ar: Archive, r: R): any {
   preamble(ar, r);
   const [es] = ar.readObject(r, 'CEdge');
   const sense = r.u8();
-  const [ps] = ar.readObject(r); // parent-loop back-ref: alignment oracle
-  if (ps !== ar.currentLoop) {
-    throw new LegacyParseError(`edge-use parent slot ${ps} != current loop ${ar.currentLoop} ${r.ctx()}`);
+  // parent-loop back-ref: the alignment oracle. Read as a RAW file index -
+  // after annotations the claimed index can sit AHEAD of the walker's
+  // numbering (burned MapObject indices, see registerBurn), which is a
+  // correction signal, not a mis-parse.
+  const p0 = r.pos;
+  const tag = r.u16();
+  let ps: number | null;
+  if (tag === 0x7fff) {
+    const big = r.u32();
+    if (big & 0x80000000) {
+      throw new LegacyParseError(`edge-use parent is a new object ${r.ctx()}`);
+    }
+    ps = big;
+  } else if (tag === 0xffff || tag & 0x8000) {
+    throw new LegacyParseError(`edge-use parent is a new object ${r.ctx()}`);
+  } else {
+    ps = tag !== 0 ? tag : null;
+  }
+  const expected = ar.currentLoop !== null ? ar.currentLoop + ar.cumDelta : null;
+  if (ps !== expected) {
+    const delta = typeof ps === 'number' && expected !== null ? ps - expected : 0;
+    if (delta > 0 && delta <= 4096 && ar.annotWatermark !== null) {
+      registerBurn(ar, delta);
+    } else {
+      r.pos = p0;
+      throw new LegacyParseError(`edge-use parent slot ${ps} != current loop ${expected} ${r.ctx()}`);
+    }
   }
   return { k: 'edgeuse', edge: es, sense };
 }
@@ -513,6 +639,7 @@ function readAttrNamed(ar: Archive, r: R): any {
     if (t === 0x07) return r.u8();
     if (t === 0x09) return r.u32(); // time_t
     if (t === 0x0a) return r.utf16();
+    if (t === 0x0c) return r.f64(); // Length (a double, inches)
     if (t === 0x0b) {
       const n = r.u32();
       if (n > 100000) {
@@ -522,7 +649,8 @@ function readAttrNamed(ar: Archive, r: R): any {
       for (let i = 0; i < n; i++) arr.push(readTyped(r.u8()));
       return arr;
     }
-    if (t === 0x12) return r.f64s(3); // 3D vector
+    if (t === 0x11) return r.f64s(3); // 3D point (Geom::Point3d)
+    if (t === 0x12) return r.f64s(3); // 3D vector (Geom::Vector3d)
     throw new LegacyParseError(`unknown attribute value type 0x${t.toString(16)} ${r.ctx()}`);
   }
 
@@ -582,11 +710,75 @@ function readLayer(ar: Archive, r: R): any {
     mid.push(r.raw(1)[0]); // flags: 3 bytes on v16, 4 on v17+
   }
   r.utf16(); // internal name ("Layer_<name>")
-  r.u16();
+  const flags = r.u16();
+  if (flags & 0x00ff) {
+    // Colour-by-layer with a TEXTURED material: instead of the flat RGBA,
+    // the layer embeds the same texture block a CMaterial carries
+    // (SketchUp Pro assigns full materials to layers). Low byte of the
+    // flag word set = textured; a plain colour layer has 0 there (its high
+    // byte carries an unrelated flag, so the word as a whole is non-zero
+    // either way).
+    const tex = textureBlock(ar, r);
+    r.raw(4); // trailing u32
+    return { k: 'layer', name, hidden: mid.length ? mid[0] : 0, rgba: tex.rgba };
+  }
   const rgba = r.raw(4);
   r.utf16();
   r.raw(21);
   return { k: 'layer', name, hidden: mid.length ? mid[0] : 0, rgba: Array.from(rgba) };
+}
+
+/** The textured-material payload: an embedded CDib plus applied size,
+ * source file name, average colour, and opacity. Shared verbatim between a
+ * CMaterial with a texture and a colour-by-layer CLayer that carries a
+ * textured material. */
+function textureBlock(
+  ar: Archive,
+  r: R
+): {
+  rgba: number[];
+  opacity: number;
+  use_opacity: number;
+  tex_dib: number;
+  tex_w: number;
+  tex_h: number;
+  tex_file: string;
+  colorized: boolean;
+} {
+  r.raw(ar.ver >= 17 ? 2 : 1); // texture flag pad
+  const [s, , dib] = ar.readObject(r, 'CDib');
+  if (!(dib && typeof dib === 'object' && dib.k === 'dib')) {
+    throw new LegacyParseError(`texture object is not a dib ${r.ctx()}`);
+  }
+  // optional u32 between the dib and the 2 x f64 applied size
+  const marker = findBytes(r.data, STR_MARKER, r.pos, r.pos + 28);
+  if (marker - r.pos === 20) {
+    r.u32();
+  } else if (marker - r.pos !== 16) {
+    throw new LegacyParseError(`texture size block misaligned ${r.ctx()}`);
+  }
+  const w = r.f64();
+  const h = r.f64();
+  const fname = r.utf16();
+  const avg = r.raw(9); // RGBA + 00 + RGBA (colour stored twice)
+  r.utf16();
+  const blob = r.raw(8); // u32 + u32 colorized flag
+  const opacity = r.f64();
+  const useOp = r.u8();
+  // A colourized (re-tinted) texture stores the ORIGINAL image plus the
+  // tint as the average colour; flagged by the second blob u32 or by alpha
+  // 0xFF on the stored colour.
+  const colorized = Boolean(blob[4]) || avg[3] === 0xff;
+  return {
+    rgba: Array.from(avg.subarray(0, 4)),
+    opacity,
+    use_opacity: useOp,
+    tex_dib: s as number,
+    tex_w: w,
+    tex_h: h,
+    tex_file: fname,
+    colorized,
+  };
 }
 
 function readMaterial(ar: Archive, r: R): any {
@@ -604,38 +796,15 @@ function readMaterial(ar: Archive, r: R): any {
     out.opacity = opacity;
     out.use_opacity = useOp;
   } else {
-    r.raw(ar.ver >= 17 ? 2 : 1); // texture flag pad
-    const [s, , dib] = ar.readObject(r, 'CDib');
-    if (!(dib && typeof dib === 'object' && dib.k === 'dib')) {
-      throw new LegacyParseError(`texture object is not a dib ${r.ctx()}`);
-    }
-    // optional u32 between the dib and the 2 x f64 applied size
-    const marker = findBytes(r.data, STR_MARKER, r.pos, r.pos + 28);
-    if (marker - r.pos === 20) {
-      r.u32();
-    } else if (marker - r.pos !== 16) {
-      throw new LegacyParseError(`texture size block misaligned ${r.ctx()}`);
-    }
-    const w = r.f64();
-    const h = r.f64();
-    const fname = r.utf16();
-    const avg = r.raw(9); // RGBA + 00 + RGBA (colour stored twice)
-    r.utf16();
-    const blob = r.raw(8); // u32 + u32 colorized flag
-    const opacity = r.f64();
-    const useOp = r.u8();
-    // A colourized (re-tinted) texture stores the ORIGINAL image plus the
-    // tint as the average colour; flagged by the second blob u32 or by
-    // alpha 0xFF on the stored colour.
-    const colorized = Boolean(blob[4]) || avg[3] === 0xff;
-    out.rgba = Array.from(avg.subarray(0, 4));
-    out.opacity = opacity;
-    out.use_opacity = useOp;
-    out.tex_dib = s;
-    out.tex_w = w;
-    out.tex_h = h;
-    out.tex_file = fname;
-    out.colorized = colorized;
+    const tex = textureBlock(ar, r);
+    out.rgba = tex.rgba;
+    out.opacity = tex.opacity;
+    out.use_opacity = tex.use_opacity;
+    out.tex_dib = tex.tex_dib;
+    out.tex_w = tex.tex_w;
+    out.tex_h = tex.tex_h;
+    out.tex_file = tex.tex_file;
+    out.colorized = tex.colorized;
   }
   return out;
 }
@@ -691,11 +860,75 @@ function readThumbnail(ar: Archive, r: R): any {
   return { k: 'thumbnail', dib };
 }
 
-function readRelationship(ar: Archive, r: R): any {
+/** CImage: an Image entity - instance-shaped: a back-ref to the (already
+ * walked) CComponentDefinition holding the image's face and texture, a 3x4
+ * placement, a constant 1.0, the source path string (empty in every
+ * sample), and a 16-byte GUID. It appears as a normal entity-list item
+ * inside the definition that owns the image (typically a face-me/photo
+ * definition), whose own tail the ordinary definition reader then
+ * consumes. */
+function readImage(ar: Archive, r: R): any {
   preamble(ar, r);
-  ar.readObject(r);
-  ar.readObject(r);
-  return { k: 'relationship' };
+  const db = drawbase(ar, r);
+  const [ds] = ar.readObject(r); // the image's definition
+  const xform = r.f64s(12);
+  r.f64(); // constant 1.0
+  r.utf16(); // source path
+  const guid = r.raw(16);
+  return { k: 'image', db, def: ds, xform, guid: toHex(guid) };
+}
+
+/** A reference-to-entity tag: dimension connection points and text leader
+ * attachments. Unlike `readObject`'s back-ref path, this tolerates a slot
+ * the walk has not reached yet - SketchUp serializes a label/dimension
+ * BEFORE the entity it anchors to when both live in the same entity list,
+ * so the reference can legitimately point forward. Returns the slot
+ * number, or `null` for a null reference. */
+function entityRef(ar: Archive, r: R): number | null {
+  const tag = r.u16();
+  if (tag === 0) return null;
+  if (tag === 0x7fff) {
+    const big = r.u32();
+    if (big & 0x80000000) {
+      throw new LegacyParseError(`entity ref is a new object ${r.ctx()}`);
+    }
+    return big;
+  }
+  if (tag === 0xffff || tag & 0x8000) {
+    throw new LegacyParseError(`entity ref is a new object ${r.ctx()}`);
+  }
+  return tag;
+}
+
+function readRelationship(ar: Archive, r: R): any {
+  // two object pointers (small maps: two u16 back-refs - which read like
+  // the "u32" of the public notes; big maps escalate them to big-tags).
+  // They bind an annotation to the entity it labels, and the annotation
+  // side is routinely serialized BEFORE the geometry side - so these can
+  // point forward, past the walk cursor; entityRef tolerates that where
+  // readObject's back-ref path (rightly) does not.
+  preamble(ar, r);
+  const a = entityRef(ar, r);
+  const b = entityRef(ar, r);
+  return { k: 'relationship', refs: [a, b] };
+}
+
+/** True when the u16 at `at` starts an object read in one of the
+ * UNAMBIGUOUS forms: null, escape, class definition, or a class-ref to a
+ * class already known. Plain object back-refs are excluded on purpose -
+ * any 2-byte junk below 0x8000 would qualify, which is exactly the
+ * ambiguity this check exists to avoid. */
+function strictNextTag(ar: Archive, data: Uint8Array, at: number, allowNull = true): boolean {
+  if (at + 2 > data.length) return false;
+  const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  const t = view.getUint16(at, true);
+  if (t === 0x0000) return allowNull;
+  if (t === 0x7fff || t === 0xffff) return true;
+  if (t & 0x8000) {
+    const ent = ar.slots.get(t & 0x7fff);
+    return ent !== undefined && ent[0] === 'class';
+  }
+  return false;
 }
 
 function readConstructionLine(ar: Archive, r: R): any {
@@ -703,8 +936,31 @@ function readConstructionLine(ar: Archive, r: R): any {
   drawbase(ar, r);
   r.f64s(3);
   r.f64s(3);
-  r.f64s(2);
-  r.raw(ar.ver >= 17 ? 7 : 4);
+  r.f64s(2); // line params (+-~4.4e29 = infinite)
+  // The trailing block varies by the WRITING BUILD, not cleanly by
+  // version: 7 bytes on the v17 calibration corpus, 4 on v16 and on a real
+  // v18, 0 on another real v17. Self-calibrate on the first guide line of
+  // the file - the length that lands on a legitimate next tag (strict
+  // forms only) - and cache it for the rest of the file.
+  let k = ar.clineTail;
+  if (k === null) {
+    const dflt = ar.ver === 17 ? 7 : 4;
+    const order = [dflt, ...[0, 4, 7].filter((c) => c !== dflt)];
+    // two passes: a zero tail full of padding can mimic a null tag, so
+    // only accept a null-anchored candidate when no candidate lands on a
+    // STRONG form (escape / known class / class definition)
+    outer: for (const allowNull of [false, true]) {
+      for (const cand of order) {
+        if (strictNextTag(ar, r.data, r.pos + cand, allowNull)) {
+          k = cand;
+          break outer;
+        }
+      }
+    }
+    if (k === null) k = dflt;
+    ar.clineTail = k;
+  }
+  r.raw(k);
   return { k: 'cline' };
 }
 
@@ -751,13 +1007,23 @@ function readDimLinear(ar: Archive, r: R): any {
   const db = drawbase(ar, r);
   const text = r.utf16();
   ar.readObject(r, 'CSkFont');
-  r.raw(165);
-  return { k: 'dimension', db, text };
+  // The tail is NOT a fixed 165-byte blob: it embeds two object
+  // references (the dimension's connection points into the geometry).
+  // Each is a normal MFC tag - 2 bytes in small files, but 6 bytes once
+  // the archive holds more than 0x7FFE objects and the 0x7FFF big-tag
+  // escape kicks in - so a fixed-size skip walks off the rails exactly on
+  // large models.
+  r.raw(37);
+  const c1 = entityRef(ar, r); // connection point 1 (may be null)
+  r.raw(42);
+  const c2 = entityRef(ar, r); // connection point 2 (may be null)
+  r.raw(82);
+  return { k: 'dimension', db, text, connect: [c1, c2] };
 }
 
 function readText(ar: Archive, r: R): any {
   preamble(ar, r);
-  drawbase(ar, r);
+  const db = drawbase(ar, r);
   ar.readObject(r, 'CSkFont');
   // variable-length variant middle, delimited by an 11-byte block
   // `01 00 00 00 ?? 00 03 00 00 00 01` right before the text string
@@ -781,13 +1047,61 @@ function readText(ar: Archive, r: R): any {
   r.raw(idx - r.pos);
   const text = r.utf16();
   r.raw(5);
-  return { k: 'text', text };
+  // Optional leader-attachment refs follow the fixed tail (a text label
+  // anchored to geometry stores the anchored entities here; they can
+  // point FORWARD - see entityRef). Only the escaped 6-byte form is
+  // recognisable without risk: a 2-byte back-ref here would be
+  // indistinguishable from the next list item's tag, and every known
+  // sample either has no attachments or lives in a >0x7FFE-object file
+  // where the escape is mandatory anyway.
+  const attach: number[] = [];
+  while (true) {
+    const head = r.peek(2);
+    if (!(head.length === 2 && head[0] === 0xff && head[1] === 0x7f)) break;
+    const full = r.peek(6);
+    if (full.length < 6) break;
+    const dv = new DataView(full.buffer, full.byteOffset, full.byteLength);
+    const val = dv.getUint32(2, true);
+    if (val & 0x80000000) break; // new-object tag - the next entity
+    r.raw(6);
+    attach.push(val);
+  }
+  return { k: 'text', text, db, attach };
 }
 
 function readEntityList(ar: Archive, r: R, count: number, owner: string): [number, string | null, any][] {
   const ents: [number, string | null, any][] = [];
+  ar.burnStack.push(0);
+  try {
+    return readEntityListInner(ar, r, count, owner, ents);
+  } finally {
+    ar.burnStack.pop();
+  }
+}
+
+function readEntityListInner(
+  ar: Archive,
+  r: R,
+  count: number,
+  owner: string,
+  ents: [number, string | null, any][]
+): [number, string | null, any][] {
+  const view = new DataView(r.data.buffer, r.data.byteOffset, r.data.byteLength);
   while (ents.length < count) {
     const p = r.pos;
+    const hasBurnCredit = owner === 'def' && ar.burnStack.length > 0 && ar.burnStack[ar.burnStack.length - 1] > 0;
+    if (
+      hasBurnCredit &&
+      p + 25 <= r.data.length &&
+      view.getUint32(p, true) === 0 &&
+      bytesEqual(r.data.subarray(p + 22, p + 25), STR_MARKER)
+    ) {
+      // burned MapObject indices (see registerBurn) mean the declared
+      // count includes phantom entities the stream never carries; the
+      // definition tail signature (nrel=0 + pad + 16-byte GUID + name
+      // marker at +22) marks the list's REAL end
+      break;
+    }
     const prevFlag = ar.inEntityList;
     ar.inEntityList = true;
     try {
@@ -796,11 +1110,24 @@ function readEntityList(ar: Archive, r: R, count: number, owner: string): [numbe
       ents.push([s as number, n, v]);
     } catch (e) {
       ar.inEntityList = prevFlag;
-      if (!(e instanceof LegacyParseError) || owner !== 'root') {
+      if (!(e instanceof LegacyParseError)) {
         throw e;
       }
-      r.pos = p;
-      break;
+      if (owner === 'root') {
+        // over-declared root counts run into the document tail - stop
+        r.pos = p;
+        break;
+      }
+      if (hasBurnCredit) {
+        // this list had burned MapObject indices (see registerBurn): the
+        // phantom connection points were also counted as items, so the
+        // declared count overshoots the real records. Stop at the failed
+        // item - the definition tail that follows (nrel, GUID anchor,
+        // thumbnail scan) validates the cut.
+        r.pos = p;
+        break;
+      }
+      throw e;
     }
   }
   return ents;
@@ -813,21 +1140,40 @@ function readDefinition(ar: Archive, r: R): any {
   if (nlayers > 10000) {
     throw new LegacyParseError(`implausible def layer count ${r.ctx()}`);
   }
-  for (let i = 0; i < nlayers; i++) {
+  // like the model-level layer list, the count is REAL layers (new
+  // records or back-refs); SketchUp 2020 interleaves null separators
+  // between them
+  let got = 0;
+  while (got < nlayers) {
+    if (r.peekU16() === 0) {
+      r.pos += 2;
+      continue;
+    }
     ar.readObject(r, 'CLayer');
+    got += 1;
   }
   const decl = r.u16();
   if (decl === 0x7fff) {
     r.u32();
   }
-  r.u32();
-  let count = r.u32();
+  // v20 can drop its undocumented filler right here, swallowing the u32
+  // field (and, behind a layer-separator null, even the decl itself): if
+  // the empty-string marker sits in the next few bytes, the real count is
+  // the first non-zero u32 after its padding.
+  let count: number | null = null;
+  if (ar.ver >= 20) {
+    count = retryCountAfterV20Filler(r, r.pos, 5_000_000, ar);
+  }
+  if (count === null) {
+    r.u32();
+    count = r.u32();
+  }
   // A zero count is as much a symptom of the v20 filler as an implausibly
   // large one: the reader lands on the leading zero bytes of the filler
   // instead of the count. A genuinely empty definition reads zero with no
   // filler ahead, and retryCountAfterV20Filler leaves those alone.
   if (count > 5_000_000 || count === 0) {
-    const retry = retryCountAfterV20Filler(r, r.pos - 4, 5_000_000);
+    const retry = retryCountAfterV20Filler(r, r.pos - 4, 5_000_000, ar);
     if (retry !== null) count = retry;
   }
   if (count > 5_000_000) {
@@ -836,7 +1182,7 @@ function readDefinition(ar: Archive, r: R): any {
   const ents = readEntityList(ar, r, count, 'def');
   let nrel = r.u32();
   if (nrel > 100000) {
-    const retry = retryCountAfterV20Filler(r, r.pos - 4, 100_000);
+    const retry = retryCountAfterV20Filler(r, r.pos - 4, 100_000, ar);
     if (retry !== null) nrel = retry;
   }
   if (nrel > 100000) {
@@ -939,6 +1285,7 @@ const READERS: Record<string, (ar: Archive, r: R) => any> = {
   CThumbnail: readThumbnail,
   CRelationship: readRelationship,
   CComponentDefinition: readDefinition,
+  CImage: readImage,
   CComponentInstance: readInstance,
   CGroup: readInstance,
   CFaceTextureCoords: readFtc,
@@ -1122,15 +1469,40 @@ function walkModel(data: Uint8Array, ver: number, start: number, matCount: numbe
   if (layerCount > 100000) {
     throw new LegacyParseError('implausible layer count');
   }
+  // layerCount counts REAL layers. SketchUp 2020 interleaves a null
+  // object-ref after each layer record (a separator, not a layer), so
+  // counting reads walks off mid-list on files with several layers; count
+  // parsed layers instead, skip the separators, and stop early if the
+  // next tag is a back-ref (the definition-list anchor) - a v20 variant
+  // where the count over-includes separators.
   const layers: [number, any][] = [];
-  for (let i = 0; i < layerCount; i++) {
+  while (layers.length < layerCount) {
+    const tag = r.peekU16();
+    if (tag === 0) {
+      r.pos += 2;
+      continue;
+    }
+    if (tag !== 0xffff && !(tag & 0x8000)) {
+      break;
+    }
     const [s, , v] = ar.readObject(r, 'CLayer');
-    // A null object-ref occupies a slot in the list without carrying a layer
-    // record (seen in SketchUp 2020 files, where layerCount includes it).
-    // Keeping it would push a null into the list and blow up downstream on
-    // v.rgba; readObject has still consumed the ref from the stream.
     if (v === null) continue;
     layers.push([s as number, v]);
+  }
+  // trailing separators (and any layer records past the declared count)
+  const layCls = ar.classSlot.get('CLayer');
+  while (true) {
+    const tag = r.peekU16();
+    if (tag === 0) {
+      r.pos += 2;
+      continue;
+    }
+    if (layCls !== undefined && tag === (0x8000 | layCls)) {
+      const [s, , v] = ar.readObject(r, 'CLayer');
+      if (v !== null) layers.push([s as number, v]);
+      continue;
+    }
+    break;
   }
 
   // definition list: object pointer to the ACTIVE layer, then count
@@ -1140,7 +1512,7 @@ function walkModel(data: Uint8Array, ver: number, start: number, matCount: numbe
   }
   let defCount = r.u32();
   if (defCount > 1_000_000) {
-    const retry = retryCountAfterV20Filler(r, r.pos - 4, 1_000_000);
+    const retry = retryCountAfterV20Filler(r, r.pos - 4, 1_000_000, ar);
     if (retry !== null) defCount = retry;
   }
   if (defCount > 1_000_000) {
@@ -1165,7 +1537,7 @@ function walkModel(data: Uint8Array, ver: number, start: number, matCount: numbe
   // root entity list
   let rootCount = r.u32();
   if (rootCount > 5_000_000) {
-    const retry = retryCountAfterV20Filler(r, r.pos - 4, 5_000_000);
+    const retry = retryCountAfterV20Filler(r, r.pos - 4, 5_000_000, ar);
     if (retry !== null) rootCount = retry;
   }
   if (rootCount > 5_000_000) {
