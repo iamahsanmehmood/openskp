@@ -267,7 +267,7 @@ class TestInstancedGlbExport:
 
     def test_writes_a_metadata_sidecar(self, tmp_path):
         skp = self._built(tmp_path)
-        out = instanced_glb.export(skp, str(tmp_path / "out.glb"))
+        instanced_glb.export(skp, str(tmp_path / "out.glb"))
         meta_path = str(tmp_path / "out_metadata.json")
         assert os.path.exists(meta_path)
         with open(meta_path, encoding="utf-8") as f:

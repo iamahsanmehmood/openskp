@@ -102,22 +102,34 @@ namespace OpenSkp
                     var posBufferViewIdx = bufferViews.Count;
                     bufferViews.Add(new Dictionary<string, object>
                     {
-                        ["buffer"] = 0, ["byteOffset"] = posByteOffset, ["byteLength"] = prim.Positions.Length * 4, ["target"] = 34962,
+                        ["buffer"] = 0,
+                        ["byteOffset"] = posByteOffset,
+                        ["byteLength"] = prim.Positions.Length * 4,
+                        ["target"] = 34962,
                     });
                     var normBufferViewIdx = bufferViews.Count;
                     bufferViews.Add(new Dictionary<string, object>
                     {
-                        ["buffer"] = 0, ["byteOffset"] = normByteOffset, ["byteLength"] = prim.Normals.Length * 4, ["target"] = 34962,
+                        ["buffer"] = 0,
+                        ["byteOffset"] = normByteOffset,
+                        ["byteLength"] = prim.Normals.Length * 4,
+                        ["target"] = 34962,
                     });
                     var uvBufferViewIdx = bufferViews.Count;
                     bufferViews.Add(new Dictionary<string, object>
                     {
-                        ["buffer"] = 0, ["byteOffset"] = uvByteOffset, ["byteLength"] = prim.Uvs.Length * 4, ["target"] = 34962,
+                        ["buffer"] = 0,
+                        ["byteOffset"] = uvByteOffset,
+                        ["byteLength"] = prim.Uvs.Length * 4,
+                        ["target"] = 34962,
                     });
                     var indBufferViewIdx = bufferViews.Count;
                     bufferViews.Add(new Dictionary<string, object>
                     {
-                        ["buffer"] = 0, ["byteOffset"] = indByteOffset, ["byteLength"] = prim.Indices.Length * 4, ["target"] = 34963,
+                        ["buffer"] = 0,
+                        ["byteOffset"] = indByteOffset,
+                        ["byteLength"] = prim.Indices.Length * 4,
+                        ["target"] = 34963,
                     });
 
                     float minX = float.PositiveInfinity, minY = float.PositiveInfinity, minZ = float.PositiveInfinity;
@@ -134,34 +146,49 @@ namespace OpenSkp
                     var posAccessorIdx = accessors.Count;
                     accessors.Add(new Dictionary<string, object>
                     {
-                        ["bufferView"] = posBufferViewIdx, ["byteOffset"] = 0, ["componentType"] = 5126,
-                        ["count"] = prim.Positions.Length / 3, ["type"] = "VEC3",
-                        ["min"] = new object[] { minX, minY, minZ }, ["max"] = new object[] { maxX, maxY, maxZ },
+                        ["bufferView"] = posBufferViewIdx,
+                        ["byteOffset"] = 0,
+                        ["componentType"] = 5126,
+                        ["count"] = prim.Positions.Length / 3,
+                        ["type"] = "VEC3",
+                        ["min"] = new object[] { minX, minY, minZ },
+                        ["max"] = new object[] { maxX, maxY, maxZ },
                     });
                     var normAccessorIdx = accessors.Count;
                     accessors.Add(new Dictionary<string, object>
                     {
-                        ["bufferView"] = normBufferViewIdx, ["byteOffset"] = 0, ["componentType"] = 5126,
-                        ["count"] = prim.Normals.Length / 3, ["type"] = "VEC3",
+                        ["bufferView"] = normBufferViewIdx,
+                        ["byteOffset"] = 0,
+                        ["componentType"] = 5126,
+                        ["count"] = prim.Normals.Length / 3,
+                        ["type"] = "VEC3",
                     });
                     var uvAccessorIdx = accessors.Count;
                     accessors.Add(new Dictionary<string, object>
                     {
-                        ["bufferView"] = uvBufferViewIdx, ["byteOffset"] = 0, ["componentType"] = 5126,
-                        ["count"] = prim.Uvs.Length / 2, ["type"] = "VEC2",
+                        ["bufferView"] = uvBufferViewIdx,
+                        ["byteOffset"] = 0,
+                        ["componentType"] = 5126,
+                        ["count"] = prim.Uvs.Length / 2,
+                        ["type"] = "VEC2",
                     });
                     var indAccessorIdx = accessors.Count;
                     accessors.Add(new Dictionary<string, object>
                     {
-                        ["bufferView"] = indBufferViewIdx, ["byteOffset"] = 0, ["componentType"] = 5125,
-                        ["count"] = prim.Indices.Length, ["type"] = "SCALAR",
+                        ["bufferView"] = indBufferViewIdx,
+                        ["byteOffset"] = 0,
+                        ["componentType"] = 5125,
+                        ["count"] = prim.Indices.Length,
+                        ["type"] = "SCALAR",
                     });
 
                     gltfPrimitives.Add(new Dictionary<string, object>
                     {
                         ["attributes"] = new Dictionary<string, object>
                         {
-                            ["POSITION"] = posAccessorIdx, ["NORMAL"] = normAccessorIdx, ["TEXCOORD_0"] = uvAccessorIdx,
+                            ["POSITION"] = posAccessorIdx,
+                            ["NORMAL"] = normAccessorIdx,
+                            ["TEXCOORD_0"] = uvAccessorIdx,
                         },
                         ["indices"] = indAccessorIdx,
                         ["material"] = prim.MaterialIndex,
