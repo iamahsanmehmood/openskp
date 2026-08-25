@@ -1260,7 +1260,7 @@ void fill(GeometryBuilder& b,
           auto i = slots.find(u->edge);
           if (i != slots.end() && i->second.v) {
             add_edge(b, u->edge, *i->second.v, slots);
-            co.push_back({EntityId(u->edge), u->sense ? 1 : 0});
+            co.push_back({EntityId(u->edge), u->sense ? -1 : 1});
           }
         }
         f.loops.push_back(std::move(co));

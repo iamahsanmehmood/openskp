@@ -11,6 +11,25 @@
 namespace openskp {
 namespace {
 
+void ExpectConnectedNormalizedLoops(const Definition& definition) {
+  for (const auto& [face_id, face] : definition.faces) {
+    (void)face_id;
+    for (const auto& loop : face.loops) {
+      ASSERT_FALSE(loop.empty());
+      for (std::size_t i = 0; i < loop.size(); ++i) {
+        const auto& use = loop[i];
+        const auto& next_use = loop[(i + 1) % loop.size()];
+        EXPECT_TRUE(use.orientation == 1 || use.orientation == -1);
+        const auto& edge = definition.edges.at(use.edge_id);
+        const auto& next_edge = definition.edges.at(next_use.edge_id);
+        const EntityId end = use.orientation == 1 ? edge.v2_id : edge.v1_id;
+        const EntityId next_start = next_use.orientation == 1 ? next_edge.v1_id : next_edge.v2_id;
+        EXPECT_EQ(end, next_start);
+      }
+    }
+  }
+}
+
 TEST(Parser, ModernUntitled) {
   auto model = SkpFile::open(test::fixture("Untitled.skp")).parse();
   EXPECT_EQ(model.version, "{25.0.575}");
@@ -58,6 +77,7 @@ TEST(Parser, ModernUntitled) {
   for (const auto& [face_id, f] : definition.faces) {
     EXPECT_FALSE(f.hidden);
   }
+  ExpectConnectedNormalizedLoops(definition);
 
   auto* joined_material = model.material_by_id(26180);
   ASSERT_NE(joined_material, nullptr);
@@ -120,6 +140,15 @@ TEST(Parser, ModernRootOnly) {
   EXPECT_EQ(scene.mesh_index.begin()->second.definition_name, "ROOT_MODEL");
 }
 
+TEST(Parser, CoedgeOrientationsAreNormalizedAndConnected) {
+  const auto model = SkpFile::open(test::fixture("coedge_orientation_regression.skp")).parse();
+  ExpectConnectedNormalizedLoops(model.root());
+  for (const auto& [definition_id, definition] : model.definitions) {
+    (void)definition_id;
+    ExpectConnectedNormalizedLoops(definition);
+  }
+}
+
 TEST(Parser, LegacyMatchesReference) {
   auto file = SkpFile::open(test::fixture("capilla_quiroz_v17.skp"));
   auto model = file.parse();
@@ -149,6 +178,7 @@ TEST(Parser, LegacyMatchesReference) {
   EXPECT_NEAR(puerta.vertices.at(45).x, 60.671292283583, 1e-9);
   EXPECT_NEAR(puerta.vertices.at(45).y, 8.526512829121202e-14, 1e-18);
   EXPECT_NEAR(puerta.vertices.at(45).z, 109.03580700984524, 1e-9);
+  ExpectConnectedNormalizedLoops(puerta);
 
   const auto& grada = model.definitions.at(395);
   EXPECT_EQ(grada.name, "grada");
