@@ -29,9 +29,19 @@
 namespace openskp {
 namespace {
 
+// TinyGLTF is built with TINYGLTF_NO_STB_IMAGE, so it has no default pixel
+// decoder and refuses to load a GLB with embedded images unless the caller
+// supplies one. These tests only check structure (bufferView, mimeType,
+// indices), never pixel data, so a no-op stand-in is enough.
+bool skip_image_decode(tinygltf::Image*, const int, std::string*, std::string*, int, int,
+                       const unsigned char*, int, void*) {
+  return true;
+}
+
 tinygltf::Model load_glb(const ByteBuffer& bytes) {
   tinygltf::Model model;
   tinygltf::TinyGLTF loader;
+  loader.SetImageLoader(skip_image_decode, nullptr);
   std::string error;
   std::string warning;
   EXPECT_TRUE(loader.LoadBinaryFromMemory(&model, &error, &warning, bytes.data(), bytes.size()))
