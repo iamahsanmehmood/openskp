@@ -138,6 +138,17 @@ namespace OpenSkp
     /// bundled TinyGLTF. Ported from the TypeScript reference
     /// implementation's toGLB(), with full TEXCOORD_0 UV support and the
     /// same validation rigor as the C++ port's glb.cpp.</summary>
+    /// <summary>Options for <see cref="GlbExport.ToGlb"/>/<see cref="GlbExport.ExportGlb"/>.</summary>
+    public sealed class GlbOptions
+    {
+        /// <summary>Embed the scene's texture images in the GLB and point
+        /// each textured material's baseColorTexture at them. Off by
+        /// default, matching every other language's exporter: photographic
+        /// textures can multiply the file size, and the geometry alone is
+        /// what most callers are after.</summary>
+        public bool Textures { get; set; }
+    }
+
     public static class GlbExport
     {
         // glTF's chunk-length fields are uint32 - a GLB file's total size
@@ -146,11 +157,21 @@ namespace OpenSkp
         private const long GlbSizeLimit = uint.MaxValue;
 
         /// <summary>Serializes a baked Scene to binary glTF 2.0 (GLB) bytes.</summary>
-        public static byte[] ToGlb(Scene scene)
+        public static byte[] ToGlb(Scene scene, GlbOptions? options = null)
         {
             if (scene == null) throw new ArgumentNullException(nameof(scene));
             var prims = scene.GlbPrimitives ?? new List<GlbPrimitive>();
-            var materials = scene.GltfMaterials ?? new List<object>();
+            var rawMaterials = scene.GltfMaterials ?? new List<object>();
+            bool embedTextures = options?.Textures == true;
+            var sceneTextures = embedTextures ? (scene.Textures ?? new List<SceneTexture>()) : new List<SceneTexture>();
+
+            // Materials always reference textures by index (Scene.Build sets
+            // that up unconditionally); embedding the actual image bytes is
+            // the opt-in part. When not embedding, strip the reference so a
+            // strict glTF reader never sees a baseColorTexture pointing at a
+            // textures[] array that was never written - a copy, so the
+            // Scene the caller owns is never mutated.
+            var materials = embedTextures ? rawMaterials : StripTextureRefs(rawMaterials);
 
             ValidateScene(prims, materials);
 
@@ -162,6 +183,17 @@ namespace OpenSkp
                 totalBinaryLength += (long)prim.Uvs.Length * 4;
                 totalBinaryLength += (long)prim.Indices.Length * 4;
             }
+
+            // Each image is placed on its own 4-byte-aligned offset, as
+            // glTF requires for bufferView data.
+            var imagePlacements = new List<(long Offset, int Length)>();
+            foreach (var tex in sceneTextures)
+            {
+                totalBinaryLength += (4 - (totalBinaryLength % 4)) % 4;
+                imagePlacements.Add((totalBinaryLength, tex.Data.Length));
+                totalBinaryLength += tex.Data.Length;
+            }
+
             if (totalBinaryLength > GlbSizeLimit)
                 throw new InvalidOperationException("scene geometry exceeds GLB's 32-bit binary-buffer limit");
 
@@ -295,6 +327,31 @@ namespace OpenSkp
                 });
             }
 
+            var gltfImages = new List<object>();
+            var gltfTextures = new List<object>();
+            for (var i = 0; i < sceneTextures.Count; i++)
+            {
+                var tex = sceneTextures[i];
+                var (offset, length) = imagePlacements[i];
+                Buffer.BlockCopy(tex.Data, 0, binaryBuffer, (int)offset, length);
+
+                var imgBufferViewIdx = bufferViews.Count;
+                bufferViews.Add(new Dictionary<string, object>
+                {
+                    ["buffer"] = 0,
+                    ["byteOffset"] = offset,
+                    ["byteLength"] = length,
+                });
+
+                var imageIdx = gltfImages.Count;
+                gltfImages.Add(new Dictionary<string, object>
+                {
+                    ["bufferView"] = imgBufferViewIdx,
+                    ["mimeType"] = tex.MimeType,
+                });
+                gltfTextures.Add(new Dictionary<string, object> { ["sampler"] = 0, ["source"] = imageIdx });
+            }
+
             var gltfMeshes = new List<object>();
             if (gltfPrimitives.Count > 0)
             {
@@ -316,17 +373,74 @@ namespace OpenSkp
                 ["bufferViews"] = bufferViews,
                 ["accessors"] = accessors,
             };
+            if (gltfImages.Count > 0)
+            {
+                gltfJson["images"] = gltfImages;
+                gltfJson["textures"] = gltfTextures;
+                gltfJson["samplers"] = new object[]
+                {
+                    new Dictionary<string, object> { ["wrapS"] = 10497, ["wrapT"] = 10497 }, // REPEAT / REPEAT
+                };
+            }
 
             return CreateGlb(gltfJson, binaryBuffer);
+        }
+
+        /// <summary>Materials with every baseColorTexture reference removed -
+        /// a copy, never mutating the input. Used when not embedding images,
+        /// so a strict glTF reader never sees a reference into a textures[]
+        /// array that was never written.
+        ///
+        /// Only Dictionary-shaped materials (what SceneBuilder.Build
+        /// produces) are inspected; anything else - e.g. the anonymous
+        /// types a hand-built Scene can still use, since GltfMaterials is
+        /// publicly just List&lt;object&gt; - passes through unchanged.
+        /// Stripping is a courtesy for the auto-generated shape, not a
+        /// contract on every possible material representation.</summary>
+        private static List<object> StripTextureRefs(List<object> materials)
+        {
+            var needsCopy = false;
+            foreach (var m in materials)
+            {
+                if (m is IDictionary<string, object> dict &&
+                    dict.TryGetValue("pbrMetallicRoughness", out var pbrObj) &&
+                    pbrObj is IDictionary<string, object> pbr &&
+                    pbr.ContainsKey("baseColorTexture"))
+                {
+                    needsCopy = true;
+                    break;
+                }
+            }
+            if (!needsCopy) return materials;
+
+            var result = new List<object>(materials.Count);
+            foreach (var m in materials)
+            {
+                if (m is IDictionary<string, object> dict &&
+                    dict.TryGetValue("pbrMetallicRoughness", out var pbrObj) &&
+                    pbrObj is IDictionary<string, object> pbr &&
+                    pbr.ContainsKey("baseColorTexture"))
+                {
+                    var newPbr = new Dictionary<string, object>(pbr);
+                    newPbr.Remove("baseColorTexture");
+                    var newMat = new Dictionary<string, object>(dict) { ["pbrMetallicRoughness"] = newPbr };
+                    result.Add(newMat);
+                }
+                else
+                {
+                    result.Add(m);
+                }
+            }
+            return result;
         }
 
         /// <summary>Serializes a baked Scene to GLB and writes it to
         /// <paramref name="path"/>. Does not create missing parent
         /// directories - matching the C++ port's export_glb, the other
         /// language with this same in-memory-bytes/file-write pair.</summary>
-        public static void ExportGlb(Scene scene, string path)
+        public static void ExportGlb(Scene scene, string path, GlbOptions? options = null)
         {
-            var bytes = ToGlb(scene);
+            var bytes = ToGlb(scene, options);
             File.WriteAllBytes(path, bytes);
         }
 

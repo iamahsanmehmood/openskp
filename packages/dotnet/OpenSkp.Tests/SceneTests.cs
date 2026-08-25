@@ -81,8 +81,8 @@ namespace OpenSkp.Tests
             bool HasColor(int r, int g, int b) => scene.GltfMaterials.Any(m =>
             {
                 var dict = (System.Collections.Generic.IDictionary<string, object>)m;
-                dynamic pbr = dict["pbrMetallicRoughness"];
-                double[] c = pbr.baseColorFactor;
+                var pbr = (System.Collections.Generic.IDictionary<string, object>)dict["pbrMetallicRoughness"];
+                double[] c = (double[])pbr["baseColorFactor"];
                 return (int)Math.Round(c[0] * 255) == r &&
                     (int)Math.Round(c[1] * 255) == g &&
                     (int)Math.Round(c[2] * 255) == b;

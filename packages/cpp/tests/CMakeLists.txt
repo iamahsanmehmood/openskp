@@ -8,6 +8,7 @@ add_executable(
   face_instance_hidden_test.cpp
   geometry_test.cpp
   glb_test.cpp
+  glb_textures_test.cpp
   ifc_export_test.cpp
   json_export_test.cpp
   layer_hidden_test.cpp

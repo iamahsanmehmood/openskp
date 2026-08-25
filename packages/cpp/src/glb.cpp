@@ -162,7 +162,7 @@ void validate_scene(const Scene& scene) {
   }
 }
 
-gltf::Model make_model(const Scene& scene) {
+gltf::Model make_model(const Scene& scene, bool embed_textures) {
   validate_scene(scene);
 
   gltf::Model model;
@@ -181,6 +181,14 @@ gltf::Model make_model(const Scene& scene) {
     material.pbrMetallicRoughness.roughnessFactor = source_pbr.roughness_factor;
     material.doubleSided = source.double_sided;
     if (source_pbr.base_color_factor[3] < 1.0) material.alphaMode = "BLEND";
+    // baseColorTexture.index defaults to -1 (unset); TinyGLTF omits the
+    // key from the serialized JSON in that case, so leaving it untouched
+    // when not embedding is the strip - no separate pass needed, unlike
+    // the hand-rolled writers in the other languages.
+    if (embed_textures && source_pbr.base_color_texture) {
+      material.pbrMetallicRoughness.baseColorTexture.index =
+          static_cast<int>(*source_pbr.base_color_texture);
+    }
     model.materials.push_back(std::move(material));
   }
 
@@ -243,6 +251,38 @@ gltf::Model make_model(const Scene& scene) {
     mesh.primitives.push_back(std::move(primitive));
   }
 
+  if (embed_textures && !scene.textures.empty()) {
+    model.samplers.emplace_back();
+    model.samplers[0].wrapS = TINYGLTF_TEXTURE_WRAP_REPEAT;
+    model.samplers[0].wrapT = TINYGLTF_TEXTURE_WRAP_REPEAT;
+
+    for (const auto& tex : scene.textures) {
+      const auto image_offset = append_values(
+          binary, tex.data, [](ByteBuffer& bytes, std::uint8_t value) { bytes.push_back(value); });
+
+      // Not add_view(): that helper always sets BufferView::target, but an
+      // image bufferView must leave target unset (glTF's target enum only
+      // covers vertex/index buffers - 0 is not a valid value, and TinyGLTF
+      // only omits the key from the output when target is its -1 default).
+      gltf::BufferView view;
+      view.buffer = 0;
+      view.byteOffset = image_offset;
+      view.byteLength = tex.data.size();
+      model.bufferViews.push_back(std::move(view));
+      const auto image_view = static_cast<int>(model.bufferViews.size() - 1);
+
+      gltf::Image image;
+      image.mimeType = tex.mime_type;
+      image.bufferView = image_view;
+      model.images.push_back(std::move(image));
+
+      gltf::Texture texture;
+      texture.sampler = 0;
+      texture.source = static_cast<int>(model.images.size() - 1);
+      model.textures.push_back(std::move(texture));
+    }
+  }
+
   model.meshes.push_back(std::move(mesh));
   model.nodes.emplace_back();
   model.nodes[0].name = "OpenSKP Scene";
@@ -253,8 +293,8 @@ gltf::Model make_model(const Scene& scene) {
 
 }  // namespace
 
-ByteBuffer to_glb(const Scene& scene) {
-  auto model = make_model(scene);
+ByteBuffer to_glb(const Scene& scene, const GlbOptions& options) {
+  auto model = make_model(scene, options.textures);
   std::ostringstream stream(std::ios::binary | std::ios::out);
   try {
     gltf::TinyGLTF writer;
@@ -274,8 +314,9 @@ ByteBuffer to_glb(const Scene& scene) {
   return ByteBuffer(serialized.begin(), serialized.end());
 }
 
-void export_glb(const Scene& scene, const std::filesystem::path& output_path) {
-  const auto bytes = to_glb(scene);
+void export_glb(const Scene& scene, const std::filesystem::path& output_path,
+                const GlbOptions& options) {
+  const auto bytes = to_glb(scene, options);
   std::ofstream stream(output_path, std::ios::binary | std::ios::trunc);
   if (!stream) throw std::runtime_error("failed to open GLB output file");
   stream.write(reinterpret_cast<const char*>(bytes.data()),

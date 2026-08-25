@@ -88,6 +88,21 @@ class GlbPrimitive {
   });
 }
 
+/// One texture image referenced by Scene.gltfMaterials.
+class SceneTexture {
+  /// The image file's raw bytes, exactly as stored in the .skp.
+  final List<int> data;
+
+  /// Sniffed from the bytes, not from [filename]: SketchUp records the
+  /// authoring machine's path, whose extension can disagree with the
+  /// content.
+  final String mimeType;
+
+  final String filename;
+
+  SceneTexture({required this.data, required this.mimeType, this.filename = ''});
+}
+
 /// The result of baking a parsed file's placed instances into a flat,
 /// world-space 3D scene.
 class Scene {
@@ -96,12 +111,31 @@ class Scene {
   List<GlbPrimitive> glbPrimitives;
   List<Map<String, dynamic>> gltfMaterials;
 
+  /// Distinct texture images the placed materials use, deduplicated by
+  /// source bytes. Empty when nothing placed in the scene is textured.
+  List<SceneTexture> textures;
+
   Scene({
     required this.sceneHierarchy,
     required this.meshIndex,
     required this.glbPrimitives,
     required this.gltfMaterials,
-  });
+    List<SceneTexture>? textures,
+  }) : textures = textures ?? [];
+}
+
+/// Identifies an image's MIME type from its magic bytes. Returns null for
+/// anything glTF cannot carry (glTF only allows PNG and JPEG).
+String? sniffImageMime(List<int> data) {
+  if (data.length >= 3 && data[0] == 0xff && data[1] == 0xd8 && data[2] == 0xff) {
+    return 'image/jpeg';
+  }
+  if (data.length >= 8 &&
+      data[0] == 0x89 && data[1] == 0x50 && data[2] == 0x4e && data[3] == 0x47 &&
+      data[4] == 0x0d && data[5] == 0x0a && data[6] == 0x1a && data[7] == 0x0a) {
+    return 'image/png';
+  }
+  return null;
 }
 
 class _FaceGroup {
@@ -196,7 +230,31 @@ class SceneBuilder {
     final meshIndex = <String, MeshMetadata>{};
     final glbPrimitives = <GlbPrimitive>[];
 
-    final colorToMaterialIndex = <((int, int, int), bool), int>{};
+    // Textures deduplicated by bytes: the same image routinely backs
+    // several materials, and re-embedding it per material would multiply
+    // the export size for nothing.
+    final textures = <SceneTexture>[];
+    final textureIndexByKey = <String, int>{};
+
+    int? textureIndexFor(RawTexture? tex) {
+      if (tex == null || tex.data == null || tex.data!.isEmpty) return null;
+      final data = tex.data!;
+      final mimeType = sniffImageMime(data);
+      if (mimeType == null) return null; // a format glTF cannot carry
+      // length plus a short byte prefix is enough to tell real images
+      // apart without hashing megabytes on every face
+      final headLen = data.length < 16 ? data.length : 16;
+      final head = data.sublist(0, headLen).join(',');
+      final key = '${data.length}:$head';
+      final hit = textureIndexByKey[key];
+      if (hit != null) return hit;
+      final idx = textures.length;
+      textures.add(SceneTexture(data: data, mimeType: mimeType, filename: tex.filename));
+      textureIndexByKey[key] = idx;
+      return idx;
+    }
+
+    final colorToMaterialIndex = <((int, int, int), bool, int?), int>{};
     final gltfMaterials = <Map<String, dynamic>>[];
 
     // Definitions currently being instantiated on the active recursion path
@@ -208,19 +266,28 @@ class SceneBuilder {
 
     (int, int, int) getLayerColor(String name) => layerColors[name] ?? (136, 136, 136);
 
-    int getMaterialIndex((int, int, int) color, bool doubleSided) {
-      final key = (color, doubleSided);
+    int getMaterialIndex((int, int, int) color, bool doubleSided, int? textureIndex) {
+      // The texture is part of the identity, not just the color: two
+      // different images can average to the same RGB (real files do
+      // this), and keying on color alone would merge them into one
+      // material and lose one of the images.
+      final key = (color, doubleSided, textureIndex);
       final existing = colorToMaterialIndex[key];
       if (existing != null) return existing;
       final idx = gltfMaterials.length;
       final (r, g, b) = color;
-      final material = <String, dynamic>{
-        'pbrMetallicRoughness': {
-          'baseColorFactor': [r / 255, g / 255, b / 255, 1.0],
-          'metallicFactor': 0.0,
-          'roughnessFactor': 0.8,
-        },
+      final pbr = <String, dynamic>{
+        'baseColorFactor': [r / 255, g / 255, b / 255, 1.0],
+        'metallicFactor': 0.0,
+        'roughnessFactor': 0.8,
       };
+      // baseColorFactor stays as the resolved color even with a texture
+      // attached: glTF multiplies the two, and SketchUp's own colorized
+      // materials rely on exactly that tint.
+      if (textureIndex != null) {
+        pbr['baseColorTexture'] = {'index': textureIndex};
+      }
+      final material = <String, dynamic>{'pbrMetallicRoughness': pbr};
       if (doubleSided) material['doubleSided'] = true;
       gltfMaterials.add(material);
       colorToMaterialIndex[key] = idx;
@@ -265,7 +332,7 @@ class SceneBuilder {
         // the back material - so each side renders its own correct color
         // instead of the front material leaking onto (or the back
         // vanishing from) the far side.
-        final faceGroups = <((int, int, int), bool), _FaceGroup>{};
+        final faceGroups = <((int, int, int), bool, int?), _FaceGroup>{};
 
         RawMaterial? resolveMaterial(int? matId) =>
             _resolveMaterial(matId, materialIdToName, materials, materialsByFolder);
@@ -281,7 +348,12 @@ class SceneBuilder {
           (double, double, double) xr,
           (double, double, double) yr,
         ) {
-          final key = (color, doubleSided);
+          // faces are batched per emitted material, so the texture has to
+          // be part of the key too - otherwise two differently-textured
+          // faces with the same average color end up in one group with
+          // one image
+          final texIndex = textureIndexFor(mat?.texture);
+          final key = (color, doubleSided, texIndex);
           final group = faceGroups.putIfAbsent(key, () => _FaceGroup(color, doubleSided));
 
           final tex = mat?.texture;
@@ -370,7 +442,9 @@ class SceneBuilder {
         final isRootPath = pathName == 'ROOT';
         final multiGroup = faceGroups.length > 1;
 
-        for (final group in faceGroups.values) {
+        for (final groupEntry in faceGroups.entries) {
+          final (_, _, texIndex) = groupEntry.key;
+          final group = groupEntry.value;
           final color = group.color;
           if (group.localFaces.isEmpty) continue;
 
@@ -455,7 +529,7 @@ class SceneBuilder {
             indices.add(tri[2]);
           }
 
-          final materialIndex = getMaterialIndex(color, group.doubleSided);
+          final materialIndex = getMaterialIndex(color, group.doubleSided, texIndex);
           glbPrimitives.add(GlbPrimitive(
             positions: positions,
             normals: normals,
@@ -593,6 +667,7 @@ class SceneBuilder {
       meshIndex: meshIndex,
       glbPrimitives: glbPrimitives,
       gltfMaterials: gltfMaterials,
+      textures: textures,
     );
   }
 

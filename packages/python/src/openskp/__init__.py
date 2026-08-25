@@ -23,7 +23,7 @@ from .create import ComponentDefinitionBuilder, SkpBuilder, SkpWriteError, creat
 from .edit import open_existing
 from .errors import SkpParseError
 from .model import SkpFile, SkpModel
-from .scene import Scene, InstanceNode, MeshMetadata, GlbPrimitive
+from .scene import Scene, InstanceNode, MeshMetadata, GlbPrimitive, SceneTexture
 
 try:
     __version__: str = _version("openskp")
@@ -36,6 +36,7 @@ __all__: list[str] = [
     "InstanceNode",
     "MeshMetadata",
     "GlbPrimitive",
+    "SceneTexture",
     "SkpParseError",
     "create",
     "SkpBuilder",

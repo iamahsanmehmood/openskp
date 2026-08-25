@@ -65,6 +65,20 @@ namespace OpenSkp
         public string GeomName { get; set; } = "";
     }
 
+    /// <summary>One texture image referenced by Scene.GltfMaterials.</summary>
+    public sealed class SceneTexture
+    {
+        /// <summary>The image file's raw bytes, exactly as stored in the .skp.</summary>
+        public byte[] Data { get; set; } = Array.Empty<byte>();
+
+        /// <summary>Sniffed from the bytes, not from Filename: SketchUp
+        /// records the authoring machine's path, whose extension can
+        /// disagree with the content.</summary>
+        public string MimeType { get; set; } = "";
+
+        public string Filename { get; set; } = "";
+    }
+
     /// <summary>The result of baking a parsed file's placed instances into
     /// a flat, world-space 3D scene.</summary>
     public sealed class Scene
@@ -73,6 +87,11 @@ namespace OpenSkp
         public Dictionary<string, MeshMetadata> MeshIndex { get; set; } = new Dictionary<string, MeshMetadata>();
         public List<GlbPrimitive> GlbPrimitives { get; set; } = new List<GlbPrimitive>();
         public List<object> GltfMaterials { get; set; } = new List<object>();
+
+        /// <summary>Distinct texture images the placed materials use,
+        /// deduplicated by source bytes. Empty when nothing placed in the
+        /// scene is textured.</summary>
+        public List<SceneTexture> Textures { get; set; } = new List<SceneTexture>();
     }
 
     /// <summary>Bakes every instance actually placed in a parsed model into
@@ -196,7 +215,29 @@ namespace OpenSkp
             // models with tens or hundreds of thousands of placed instances.
             var pathUpdates = new Dictionary<string, (Dictionary<string, string> Props, string Name)>();
 
-            var colorToMaterialIndex = new Dictionary<((int, int, int) Color, bool DoubleSided), int>();
+            // Textures deduplicated by bytes: the same image routinely backs
+            // several materials, and re-embedding it per material would
+            // multiply the export size for nothing.
+            var textures = new List<SceneTexture>();
+            var textureIndexByKey = new Dictionary<string, int>();
+
+            int? TextureIndexFor(Geometry.RawTexture? tex)
+            {
+                if (tex?.Data == null || tex.Data.Length == 0) return null;
+                var mimeType = SniffImageMime(tex.Data);
+                if (mimeType == null) return null; // a format glTF cannot carry
+                // length plus a short byte prefix is enough to tell real
+                // images apart without hashing megabytes on every face
+                var head = BitConverter.ToString(tex.Data, 0, Math.Min(16, tex.Data.Length));
+                var key = $"{tex.Data.Length}:{head}";
+                if (textureIndexByKey.TryGetValue(key, out var hit)) return hit;
+                var idx = textures.Count;
+                textures.Add(new SceneTexture { Data = tex.Data, MimeType = mimeType, Filename = tex.Filename });
+                textureIndexByKey[key] = idx;
+                return idx;
+            }
+
+            var colorToMaterialIndex = new Dictionary<((int, int, int) Color, bool DoubleSided, int? TextureIndex), int>();
             var gltfMaterials = new List<object>();
 
             // Definitions currently being instantiated on the active
@@ -212,20 +253,30 @@ namespace OpenSkp
                 return layerColors.TryGetValue(name, out var c) ? c : (136, 136, 136);
             }
 
-            int GetMaterialIndex((int R, int G, int B) color, bool doubleSided)
+            int GetMaterialIndex((int R, int G, int B) color, bool doubleSided, int? textureIndex)
             {
-                var key = (color, doubleSided);
+                // The texture is part of the identity, not just the color:
+                // two different images can average to the same RGB (real
+                // files do this), and keying on color alone would merge
+                // them into one material and lose one of the images.
+                var key = (color, doubleSided, textureIndex);
                 if (colorToMaterialIndex.TryGetValue(key, out var existing)) return existing;
                 int idx = gltfMaterials.Count;
-                var material = new Dictionary<string, object>
+                var pbr = new Dictionary<string, object>
                 {
-                    ["pbrMetallicRoughness"] = new
-                    {
-                        baseColorFactor = new[] { color.R / 255.0, color.G / 255.0, color.B / 255.0, 1.0 },
-                        metallicFactor = 0.0,
-                        roughnessFactor = 0.8,
-                    },
+                    ["baseColorFactor"] = new[] { color.R / 255.0, color.G / 255.0, color.B / 255.0, 1.0 },
+                    ["metallicFactor"] = 0.0,
+                    ["roughnessFactor"] = 0.8,
                 };
+                // baseColorFactor stays as the resolved color even with a
+                // texture attached: glTF multiplies the two, and
+                // SketchUp's own colorized materials rely on exactly that
+                // tint.
+                if (textureIndex.HasValue)
+                {
+                    pbr["baseColorTexture"] = new Dictionary<string, object> { ["index"] = textureIndex.Value };
+                }
+                var material = new Dictionary<string, object> { ["pbrMetallicRoughness"] = pbr };
                 if (doubleSided) material["doubleSided"] = true;
                 gltfMaterials.Add(material);
                 colorToMaterialIndex[key] = idx;
@@ -270,7 +321,7 @@ namespace OpenSkp
             {
                 if (builder.Faces.Count > 0)
                 {
-                    var faceGroups = new Dictionary<((int R, int G, int B) Color, bool DoubleSided), FaceGroup>();
+                    var faceGroups = new Dictionary<((int R, int G, int B) Color, bool DoubleSided, int? TextureIndex), FaceGroup>();
 
                     void AddSide(
                         List<long[]> triangles, (double X, double Y, double Z) fn,
@@ -278,7 +329,13 @@ namespace OpenSkp
                         Geometry.RawMaterial? mat, double[]? uvTransform,
                         (double X, double Y, double Z) xr, (double X, double Y, double Z) yr)
                     {
-                        var key = (color, doubleSided);
+                        // faces are batched per emitted material, so the
+                        // texture has to be part of the key too -
+                        // otherwise two differently-textured faces with
+                        // the same average color end up in one group with
+                        // one image
+                        int? texIndex = TextureIndexFor(mat?.Texture);
+                        var key = (color, doubleSided, texIndex);
                         if (!faceGroups.TryGetValue(key, out var group))
                         {
                             group = new FaceGroup { Color = color, DoubleSided = doubleSided };
@@ -388,6 +445,7 @@ namespace OpenSkp
                     foreach (var groupKv in faceGroups)
                     {
                         var color = groupKv.Key.Color;
+                        var texIndex = groupKv.Key.TextureIndex;
                         var group = groupKv.Value;
                         if (group.LocalFaces.Count == 0) continue;
 
@@ -468,7 +526,7 @@ namespace OpenSkp
                             indices[i * 3 + 2] = (uint)group.LocalFaces[i][2];
                         }
 
-                        int materialIndex = GetMaterialIndex(color, group.DoubleSided);
+                        int materialIndex = GetMaterialIndex(color, group.DoubleSided, texIndex);
                         glbPrimitives.Add(new GlbPrimitive
                         {
                             Positions = positions,
@@ -647,7 +705,26 @@ namespace OpenSkp
                 MeshIndex = meshIndex,
                 GlbPrimitives = glbPrimitives,
                 GltfMaterials = gltfMaterials,
+                Textures = textures,
             };
+        }
+
+        /// <summary>Identifies an image's MIME type from its magic bytes.
+        /// Returns null for anything glTF cannot carry (glTF only allows
+        /// PNG and JPEG).</summary>
+        private static string? SniffImageMime(byte[] data)
+        {
+            if (data.Length >= 3 && data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF)
+            {
+                return "image/jpeg";
+            }
+            if (data.Length >= 8 &&
+                data[0] == 0x89 && data[1] == 0x50 && data[2] == 0x4E && data[3] == 0x47 &&
+                data[4] == 0x0D && data[5] == 0x0A && data[6] == 0x1A && data[7] == 0x0A)
+            {
+                return "image/png";
+            }
+            return null;
         }
 
         /// <summary>Internal (not private) so Edit.cs can reuse this same

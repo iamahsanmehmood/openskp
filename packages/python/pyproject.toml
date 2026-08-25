@@ -33,6 +33,9 @@ dev = [
     "pytest>=7.0",
     "pytest-cov>=7.1.0",
 ]
+textures = [
+    "pillow>=9.0",
+]
 
 [project.urls]
 Homepage = "https://github.com/iamahsanmehmood/openskp"
