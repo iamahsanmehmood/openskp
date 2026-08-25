@@ -124,6 +124,16 @@ std::string extract_version(const ByteBuffer&);
 bool valid_header(const ByteBuffer&);
 bool is_legacy(const ByteBuffer&);
 bool legacy_instance_has_guid(const std::string&, std::optional<int>);
+
+/// Result of `find_count_after_v20_filler`: the recovered count and the
+/// offset just past it.
+struct V20FillerHit {
+  std::uint32_t count;
+  std::size_t next;
+};
+
+std::optional<V20FillerHit> find_count_after_v20_filler(const ByteBuffer&, std::size_t,
+                                                        std::uint32_t);
 RawParsed full_parse(const ByteBuffer&, const ParseOptions&);
 RawParsed parse_legacy(const ByteBuffer&, const ParseOptions&);
 void collect_geometry(const std::vector<TlvNode>&, GeometryBuilder&);
