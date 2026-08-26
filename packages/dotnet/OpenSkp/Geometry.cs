@@ -280,7 +280,10 @@ namespace OpenSkp
                                     }
                                     if (edgeId != null && orient != null)
                                     {
-                                        coEdges.Add((edgeId.Value, orient.Value));
+                                        // Normalize to the documented CoEdge contract (+1 = same
+                                        // direction as the edge, -1 = reversed) - the raw A20F
+                                        // value is SketchUp's own bit (0 = forward, 1 = reversed).
+                                        coEdges.Add((edgeId.Value, orient.Value == 0 ? 1 : -1));
                                     }
                                 }
                                 if (coEdges.Count > 0) loops.Add(coEdges);

@@ -1931,7 +1931,10 @@ namespace OpenSkp
                             int? es = u.Edge;
                             if (es == null || !slots.TryGetValue(es.Value, out var ent) || ent.Value == null) continue;
                             AddEdge(builder, es.Value, (EdgeRec)ent.Value, slots);
-                            loop.Add((es.Value, u.Sense != 0 ? 1 : 0));
+                            // Normalize to the documented CoEdge contract (+1 = same
+                            // direction as the edge, -1 = reversed) - u.Sense is the raw
+                            // SketchUp bit (0 = forward, 1 = reversed).
+                            loop.Add((es.Value, u.Sense != 0 ? -1 : 1));
                         }
                         loops.Add(loop);
                     }
