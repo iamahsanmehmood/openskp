@@ -689,8 +689,11 @@ export function stringifyAttrValue(value: any): string {
  * carries no attribute container or no dynamic_attributes dictionary. */
 export function extractLegacyDynamicProperties(attrs: any): Record<string, string> {
   if (!attrs || typeof attrs !== 'object') return {};
-  for (const [name, value] of attrs.children || []) {
-    if (name === DYNAMIC_ATTRIBUTES_DICT_NAME && value && typeof value === 'object') {
+  // Each child tuple's first element is the entity CLASS NAME (always
+  // 'CAttributeNamed', from ar.readObject) - never the dictionary's own
+  // declared name, which lives in value.name.
+  for (const [, value] of attrs.children || []) {
+    if (value && typeof value === 'object' && value.name === DYNAMIC_ATTRIBUTES_DICT_NAME) {
       const entries = value.entries || {};
       const properties: Record<string, string> = {};
       for (const key of Object.keys(entries)) {

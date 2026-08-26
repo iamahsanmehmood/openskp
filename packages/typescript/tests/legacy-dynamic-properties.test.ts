@@ -36,12 +36,16 @@ describe('stringifyAttrValue', () => {
 
 describe('extractLegacyDynamicProperties', () => {
   it('extracts the dynamic_attributes dict by name', () => {
+    // Real shape from readAttrContainer/readAttrNamed: each child tuple's
+    // first element is the ENTITY CLASS NAME (always 'CAttributeNamed',
+    // from ar.readObject) - never the dictionary's own declared name,
+    // which lives in the value's own `name` field.
     const attrs = {
       k: 'attrs',
       children: [
-        ['SU_DefinitionSet', { k: 'dict', name: 'SU_DefinitionSet', entries: { unrelated: 1 } }],
+        ['CAttributeNamed', { k: 'dict', name: 'SU_DefinitionSet', entries: { unrelated: 1 } }],
         [
-          'dynamic_attributes',
+          'CAttributeNamed',
           {
             k: 'dict',
             name: 'dynamic_attributes',
@@ -60,7 +64,7 @@ describe('extractLegacyDynamicProperties', () => {
   it('returns {} when no dynamic_attributes dict is present', () => {
     const attrs = {
       k: 'attrs',
-      children: [['SU_DefinitionSet', { k: 'dict', name: 'SU_DefinitionSet', entries: { a: 1 } }]],
+      children: [['CAttributeNamed', { k: 'dict', name: 'SU_DefinitionSet', entries: { a: 1 } }]],
     };
     expect(extractLegacyDynamicProperties(attrs)).toEqual({});
   });

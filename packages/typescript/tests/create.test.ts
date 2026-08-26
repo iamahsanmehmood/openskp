@@ -526,12 +526,19 @@ describe('Component definitions', () => {
     expect(model.root.edges.length).toBe(4);
   });
 
-  it('instance attributes round-trip via model.definitions instance properties', () => {
+  it('instance dynamic attributes round-trip through Instance.properties', () => {
+    // Was reader-side broken (extractLegacyDynamicProperties compared the
+    // *class* name ar.readObject returns for each CAttributeContainer
+    // child - always 'CAttributeNamed' - against the dictionary's own
+    // name instead of comparing value.name, so 'dynamic_attributes' was
+    // never recognized) - fixed 2026-08-26, ported from the same fix in
+    // Python's legacy.py. Now genuinely round-trips.
     const builder = create();
     const chair = builder.addComponentDefinition('Chair', (def) => def.addFace(SQUARE));
-    builder.addInstance(chair, { attributes: { sku: 'CH-1', count: 3 } });
+    builder.addInstance(chair, { attributes: { sku: 'CH-1', count: 3 }, attributeDictName: 'dynamic_attributes' });
     const model = parseSkp(toBuffer(builder.toBytes()));
     expect(model.root.instances.length).toBe(1);
+    expect(model.root.instances[0].properties).toEqual({ sku: 'CH-1', count: '3' });
   });
 });
 

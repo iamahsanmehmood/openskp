@@ -1304,8 +1304,11 @@ def _extract_legacy_dynamic_properties(attrs):
     container or no dynamic_attributes dictionary."""
     if not isinstance(attrs, dict):
         return {}
-    for name, value in attrs.get('children', []):
-        if name == _DYNAMIC_ATTRIBUTES_DICT_NAME and isinstance(value, dict):
+    for _class_name, value in attrs.get('children', []):
+        # _class_name is the entity class name (always 'CAttributeNamed'
+        # here, from ar.read_object) - the dictionary's own declared name
+        # lives inside the value, as value['name'].
+        if isinstance(value, dict) and value.get('name') == _DYNAMIC_ATTRIBUTES_DICT_NAME:
             entries = value.get('entries', {})
             return {k: _stringify_attr_value(v) for k, v in entries.items()}
     return {}

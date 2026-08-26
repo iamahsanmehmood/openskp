@@ -67,10 +67,14 @@ void main() {
 
   group('extractLegacyDynamicProperties', () {
     test('extracts the dynamic_attributes dict by name', () {
+      // Real shape from readAttrContainer/readAttrNamed: each tuple's
+      // first element is the ENTITY CLASS NAME (always 'CAttributeNamed',
+      // from Archive.readObject) - never the dictionary's own declared
+      // name, which lives in DictRec.name.
       final attrs = AttrsRec([
-        ('SU_DefinitionSet', DictRec('SU_DefinitionSet', {'unrelated': 1})),
+        ('CAttributeNamed', DictRec('SU_DefinitionSet', {'unrelated': 1})),
         (
-          'dynamic_attributes',
+          'CAttributeNamed',
           DictRec('dynamic_attributes', {'width': 10.0, '_width_label': 'Width', 'count': 4}),
         ),
       ]);
@@ -80,7 +84,7 @@ void main() {
 
     test('returns {} when no dynamic_attributes dict is present', () {
       final attrs = AttrsRec([
-        ('SU_DefinitionSet', DictRec('SU_DefinitionSet', {'a': 1})),
+        ('CAttributeNamed', DictRec('SU_DefinitionSet', {'a': 1})),
       ]);
       expect(LegacyReaders.extractLegacyDynamicProperties(attrs), {});
     });
