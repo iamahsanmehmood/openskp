@@ -1344,7 +1344,10 @@ def _fill_builder(builder, ents, slots):
                     if ent is None or ent[2] is None:
                         continue
                     _add_edge(builder, es, ent[2], slots)
-                    loop.append((es, 1 if u['sense'] else 0))
+                    # Normalize to the documented CoEdge contract (+1 = same
+                    # direction as the edge, -1 = reversed) - u['sense'] is
+                    # the raw SketchUp bit (0 = forward, 1 = reversed).
+                    loop.append((es, -1 if u['sense'] else 1))
                 loops.append(loop)
             face = {'loops': loops, 'normal': tuple(v['plane'][:3]),
                     'material_id': v['db']['mat'] or None,

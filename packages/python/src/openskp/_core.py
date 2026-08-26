@@ -695,7 +695,13 @@ def _extract_geometry_from_nodes(elements, builder):
                                         orient = val
                                 sub_pos += 6 + sub_size
                             if edge_id is not None and orient is not None:
-                                co_edges.append((edge_id, orient))
+                                # Normalize to the documented CoEdge
+                                # contract (+1 = same direction as the
+                                # edge, -1 = reversed) - the raw A20F
+                                # value is SketchUp's own bit (0 = forward,
+                                # 1 = reversed).
+                                co_edges.append(
+                                    (edge_id, 1 if orient == 0 else -1))
                         if co_edges:
                             loops.append(co_edges)
                 face_mat_id = None

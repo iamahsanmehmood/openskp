@@ -1598,7 +1598,10 @@ function fillBuilder(builder: LegacyBuilder, ents: [number, string | null, any][
           const ent = slots.get(es);
           if (ent === undefined || ent[2] === null) continue;
           addEdge(builder, es, ent[2], slots);
-          loop.push({ edgeId: es, orientation: u.sense ? 1 : 0 });
+          // Normalize to the documented CoEdge contract (+1 = same
+          // direction as the edge, -1 = reversed) - u.sense is the raw
+          // SketchUp bit (0 = forward, 1 = reversed).
+          loop.push({ edgeId: es, orientation: u.sense ? -1 : 1 });
         }
         loops.push(loop);
       }
