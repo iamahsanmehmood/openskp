@@ -2019,11 +2019,15 @@ class TestLegacyDynamicProperties:
 
     def test_extracts_dynamic_attributes_dict_by_name(self) -> None:
         from openskp.legacy import _extract_legacy_dynamic_properties
+        # Real shape from _read_attr_container/_read_attr_named: each
+        # child tuple's first element is the ENTITY CLASS NAME (always
+        # 'CAttributeNamed', from ar.read_object) - never the dictionary's
+        # own declared name, which lives inside the value as value['name'].
         attrs = {
             "k": "attrs",
             "children": [
-                ("SU_DefinitionSet", {"k": "dict", "name": "SU_DefinitionSet", "entries": {"unrelated": 1}}),
-                ("dynamic_attributes", {
+                ("CAttributeNamed", {"k": "dict", "name": "SU_DefinitionSet", "entries": {"unrelated": 1}}),
+                ("CAttributeNamed", {
                     "k": "dict", "name": "dynamic_attributes",
                     "entries": {"width": 10.0, "_width_label": "Width", "count": 4},
                 }),
@@ -2035,7 +2039,7 @@ class TestLegacyDynamicProperties:
     def test_returns_empty_dict_when_no_dynamic_attributes_dict(self) -> None:
         from openskp.legacy import _extract_legacy_dynamic_properties
         attrs = {"k": "attrs", "children": [
-            ("SU_DefinitionSet", {"k": "dict", "name": "SU_DefinitionSet", "entries": {"a": 1}}),
+            ("CAttributeNamed", {"k": "dict", "name": "SU_DefinitionSet", "entries": {"a": 1}}),
         ]}
         assert _extract_legacy_dynamic_properties(attrs) == {}
 

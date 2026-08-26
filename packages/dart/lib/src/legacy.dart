@@ -881,8 +881,11 @@ class LegacyReaders {
   /// carries no attribute container or no dynamic_attributes dictionary.
   static Map<String, String> extractLegacyDynamicProperties(AttrsRec? attrs) {
     if (attrs == null) return {};
-    for (final (name, value) in attrs.children) {
-      if (name == _dynamicAttributesDictName && value is DictRec) {
+    // The tuple's first element is the entity CLASS NAME (always
+    // 'CAttributeNamed', from readObject) - never the dictionary's own
+    // declared name, which lives in DictRec.name.
+    for (final (_, value) in attrs.children) {
+      if (value is DictRec && value.name == _dynamicAttributesDictName) {
         return {
           for (final entry in value.entries.entries)
             entry.key: stringifyAttrValue(entry.value)

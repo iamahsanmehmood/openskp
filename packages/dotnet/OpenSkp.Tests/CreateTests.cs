@@ -394,6 +394,29 @@ namespace OpenSkp.Tests
         }
 
         [Fact]
+        public void InstanceDynamicAttributesRoundTripThroughInstanceProperties()
+        {
+            // Was reader-side broken (LegacyReaders.ExtractLegacyDynamicProperties
+            // compared the *class* name Archive.ReadObject returns for each
+            // CAttributeContainer child - always "CAttributeNamed" - against
+            // the dictionary's own name instead of comparing DictRec.Name,
+            // so "dynamic_attributes" was never recognized) - fixed
+            // 2026-08-26, ported from the same fix in Python's legacy.py.
+            // Now genuinely round-trips.
+            var builder = SkpCreate.NewFile();
+            var chair = builder.AddComponentDefinition("Chair");
+            using (chair) { chair.AddFace(Square()); }
+            builder.AddInstance(
+                chair,
+                attributes: new System.Collections.Generic.Dictionary<string, object> { ["sku"] = "CH-1", ["count"] = 3 },
+                attributeDictName: "dynamic_attributes");
+            var model = SkpFile.Parse(builder.ToBytes());
+            var instance = Assert.Single(model.Root.Instances);
+            Assert.Equal("CH-1", instance.Properties["sku"]);
+            Assert.Equal("3", instance.Properties["count"]);
+        }
+
+        [Fact]
         public void UnsupportedAttributeValueTypeThrows()
         {
             var builder = SkpCreate.NewFile();

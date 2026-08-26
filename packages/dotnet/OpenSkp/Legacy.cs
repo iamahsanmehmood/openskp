@@ -1526,9 +1526,12 @@ namespace OpenSkp
         public static Dictionary<string, string> ExtractLegacyDynamicProperties(AttrsRec? attrs)
         {
             if (attrs == null) return new Dictionary<string, string>();
-            foreach (var (name, value) in attrs.Children)
+            // Each child tuple's Name is the entity CLASS NAME (always
+            // 'CAttributeNamed', from Archive.ReadObject) - never the
+            // dictionary's own declared name, which lives in DictRec.Name.
+            foreach (var (_, value) in attrs.Children)
             {
-                if (name == DynamicAttributesDictName && value is DictRec dict)
+                if (value is DictRec dict && dict.Name == DynamicAttributesDictName)
                 {
                     var result = new Dictionary<string, string>();
                     foreach (var kv in dict.Entries) result[kv.Key] = StringifyAttrValue(kv.Value);

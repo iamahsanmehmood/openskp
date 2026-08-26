@@ -59,6 +59,10 @@ namespace OpenSkp.Tests
         [Fact]
         public void ExtractLegacyDynamicProperties_FindsDictByName()
         {
+            // Real shape from ReadAttrContainer/ReadAttrNamed: each child
+            // tuple's Name is the entity CLASS NAME (always
+            // "CAttributeNamed", from Archive.ReadObject) - never the
+            // dictionary's own declared name, which lives in DictRec.Name.
             var dynamicDict = new DictRec
             {
                 Name = "dynamic_attributes",
@@ -67,7 +71,7 @@ namespace OpenSkp.Tests
             var otherDict = new DictRec { Name = "SU_DefinitionSet", Entries = new Dictionary<string, object?> { ["unrelated"] = 1 } };
             var attrs = new AttrsRec
             {
-                Children = new List<(string?, object?)> { ("SU_DefinitionSet", otherDict), ("dynamic_attributes", dynamicDict) },
+                Children = new List<(string?, object?)> { ("CAttributeNamed", otherDict), ("CAttributeNamed", dynamicDict) },
             };
 
             var props = LegacyReaders.ExtractLegacyDynamicProperties(attrs);
@@ -82,7 +86,7 @@ namespace OpenSkp.Tests
         {
             var attrs = new AttrsRec
             {
-                Children = new List<(string?, object?)> { ("SU_DefinitionSet", new DictRec { Name = "SU_DefinitionSet" }) },
+                Children = new List<(string?, object?)> { ("CAttributeNamed", new DictRec { Name = "SU_DefinitionSet" }) },
             };
             Assert.Empty(LegacyReaders.ExtractLegacyDynamicProperties(attrs));
         }

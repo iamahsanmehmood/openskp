@@ -577,22 +577,14 @@ void main() {
       );
     });
 
-    test('instance dynamic attributes write without corrupting the file', () {
-      // NOTE: this only checks that writing a "dynamic_attributes"
-      // dictionary produces a self-parsing file, not that
-      // Instance.properties actually comes back populated - it currently
-      // doesn't. LegacyReaders.extractLegacyDynamicProperties (and its
-      // Python counterpart, _extract_legacy_dynamic_properties in
-      // legacy.py - this isn't a Dart-port-specific bug) compares the
-      // *class* name Archive.readObject returns for each
-      // CAttributeContainer child ("CAttributeNamed", always) against the
-      // dictionary's own name instead of comparing DictRec.name, so the
-      // "dynamic_attributes" dictionary is never actually recognized and
-      // Instance.properties reads back empty regardless of what was
-      // written. Confirmed independently against the installed Python
-      // package during this port - a genuine, pre-existing reader-side
-      // gap in both languages, out of scope for this writer port to fix.
-      // Flagged for a separate follow-up rather than silently patched here.
+    test('instance dynamic attributes round-trip through Instance.properties', () {
+      // Was reader-side broken (LegacyReaders.extractLegacyDynamicProperties
+      // compared the *class* name Archive.readObject returns for each
+      // CAttributeContainer child - always "CAttributeNamed" - against the
+      // dictionary's own name instead of comparing DictRec.name, so
+      // "dynamic_attributes" was never recognized) - fixed 2026-08-26,
+      // ported from the same fix in Python's legacy.py. Now genuinely
+      // round-trips.
       final builder = create();
       final chair = builder.addComponentDefinition('Chair', (def) {
         def.addFace(square);
@@ -604,6 +596,7 @@ void main() {
       );
       final model = SkpFile.fromBuffer(builder.toBytes()).parse();
       expect(model.root.instances.single.name, 'Chair');
+      expect(model.root.instances.single.properties, {'sku': 'CH-1', 'qty': '3'});
     });
   });
 
