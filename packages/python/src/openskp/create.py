@@ -917,6 +917,7 @@ class _ArchiveWriter:
 
     def write_textured_material(
         self, name: str, image_bytes: bytes, texture_path: str, subtype: int,
+        applied_width: Optional[float] = None,
         applied_height: Optional[float] = None,
     ) -> int:
         """Write one image-textured ``CMaterial`` record (embedding
@@ -926,11 +927,13 @@ class _ArchiveWriter:
         string round-trips fine structurally. ``subtype`` is CDib's image
         format tag (4 for PNG, 1 for JPEG - see :func:`_detect_image_subtype`).
 
-        ``applied_height`` defaults to 1.0, matching applied width (always
-        1.0, unconditionally). Pass a different value for a textured
-        material used with default (unpositioned) projection, to make the
-        texture repeat at a specific real-world size instead of every 1
-        inch - `_face_groups.compute_face_uv`, this project's own
+        ``applied_width``/``applied_height`` both default to 1.0. Pass the
+        material's real-world tile size for a textured material used with
+        default (unpositioned) projection, to make the texture repeat at a
+        specific size instead of every 1 inch (real SketchUp writes the
+        material's own size here - a file authored in SketchUp Web carries
+        8.0 x 16.0 for a brick) - `_face_groups.compute_face_uv`, this
+        project's own
         reverse-engineered read-side formula, divides a face's final UV by
         the material's applied width/height, for a default-projected face
         exactly as much as a `front_uv`/`back_uv`-positioned one. Until
@@ -956,8 +959,14 @@ class _ArchiveWriter:
             # qualities, same value both times), so not something this
             # project computes from the image; PNG has no such field.
             self.buf += _u32(90)
-        self.buf += _f64(1.0)  # applied width - ground truth default when unscaled
-        self.buf += _f64(applied_height if applied_height is not None else 1.0)
+        # Applied size: how much MODEL SPACE one tile of the image covers, in
+        # inches - two plain f64s, which is what legacy.py's
+        # ``_texture_block`` reads back as ``tex_w``/``tex_h``. For a texture
+        # applied WITHOUT positioning it is the only thing that says how big
+        # the image is - such faces carry no per-face UV record at all, so a
+        # wrong size here is the whole mapping wrong.
+        self.buf += _f64(1.0 if applied_width is None else float(applied_width))
+        self.buf += _f64(1.0 if applied_height is None else float(applied_height))
         self._write_str(texture_path)
         # avg color (RGBA + pad + RGBA repeated, per legacy.py's _read_material
         # comment) - neutral near-opaque white rather than a real image
@@ -2081,24 +2090,27 @@ class SkpBuilder:
         return slot
 
     def add_texture_material(
-        self, name: str, image_path: str, applied_height: Optional[float] = None,
+        self, name: str, image_path: str,
+        applied_width: Optional[float] = None,
+        applied_height: Optional[float] = None,
     ) -> int:
         """Register an image-textured material from a local PNG or JPEG
         file and return a handle to pass as `add_face`'s ``material``
         argument.
+
+        ``applied_width``/``applied_height``, if given, are the applied
+        size in INCHES - how much model space one tile of the image
+        covers. Both default to 1.0. A texture applied without positioning
+        carries no per-face UV record, so this size IS its mapping - and
+        see `write_textured_material`'s own docstring for why it matters
+        even for `add_face`'s ``front_uv``/``back_uv`` pinning (a
+        positioned mapping still divides by it).
 
         The format is detected from the file's own magic bytes, not its
         extension - PNG and JPEG are the only two this project has
         confirmed the on-disk ``CDib`` subtype tag for via SDK ground
         truth (4 and 1 respectively; see :meth:`_ArchiveWriter.
         write_textured_material`).
-
-        ``applied_height`` defaults to 1.0 (matching applied width, always
-        1.0). Pass a different value to make a default-projected face's
-        texture repeat at a specific real-world size instead of every 1
-        inch - see `write_textured_material`'s own docstring for why this
-        field matters even for `add_face`'s ``front_uv``/``back_uv``
-        pinning (a positioned mapping still divides by it).
 
         Same ordering rules as `add_material` - must be called before any
         `add_layer`, `add_component_definition`, or `add_face` call.
@@ -2115,7 +2127,8 @@ class SkpBuilder:
             image_bytes = f.read()
         subtype = _detect_image_subtype(image_bytes)
         slot = self._material_writer.write_textured_material(
-            name, image_bytes, image_path, subtype=subtype, applied_height=applied_height,
+            name, image_bytes, image_path, subtype=subtype,
+            applied_width=applied_width, applied_height=applied_height,
         )
         self.materials_by_name[name] = slot
         self._material_count += 1
