@@ -92,6 +92,26 @@ struct RawStyle {
   std::optional<Color3> back_color;
 };
 
+struct RawPage {
+  std::string name;
+  std::optional<Vec3> eye;
+  std::optional<Vec3> target;
+  std::optional<Vec3> up;
+  double fov{35.0};
+  bool parallel{};
+  double ortho_height{};
+  std::vector<EntityId> hidden_layer_ids;
+};
+
+struct RawDimension {
+  Vec3 a{};
+  Vec3 b{};
+  double offset{};
+  std::optional<Vec3> plane_x;
+  std::optional<Vec3> normal;
+  std::string text;
+};
+
 struct RawParsed {
   std::string version{"unknown"};
   // The model's unit-system string (e.g. "Millimeter"), read from
@@ -104,6 +124,8 @@ struct RawParsed {
   // so every VFF layer defaults to visible.
   std::map<std::string, bool> layer_hidden;
   std::map<EntityId, std::string> layer_id_to_name;
+  std::vector<RawPage> pages;
+  std::vector<RawDimension> dimensions;
   std::map<EntityId, std::string> material_id_to_name;
   std::map<std::string, std::shared_ptr<RawMaterial>> materials;
   std::map<std::string, std::shared_ptr<RawMaterial>> materials_by_folder;
@@ -147,6 +169,12 @@ std::array<double, 3> transform_point(const std::vector<double>&, const std::arr
 std::array<double, 3> transform_normal(const std::vector<double>&, const std::array<double, 3>&);
 double transform_determinant(const std::vector<double>&);
 std::vector<double> multiply_matrices(const std::vector<double>&, const std::vector<double>&);
+void scan_vertex_positions(const TlvNode&, std::map<std::string, Vec3>&);
+void scan_instance_transforms(const TlvNode&, std::map<std::string, std::vector<double>>&);
+std::vector<RawDimension> parse_dimensions(const ByteBuffer&, const std::map<std::string, Vec3>&,
+                                           const std::map<std::string, std::vector<double>>&);
+const TlvNode* find_page_node(const TlvNode&);
+std::vector<RawPage> parse_pages(const TlvNode*);
 
 struct EarPoint {
   double x{};

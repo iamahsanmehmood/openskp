@@ -1,5 +1,5 @@
 import { extractSkpContents, readMetaUnits } from './vff';
-import { iterTopLevelLazy, readU32, parseVarInt } from './parser';
+import { iterTopLevelLazy, readU32, parseVarInt, TlvNode } from './parser';
 import { SkpParseError } from './errors';
 import { ParseOptions, PROGRESS_INTERVAL, emitLog, emitProgress } from './observability';
 import {
@@ -29,6 +29,7 @@ import {
   SceneOptions,
 } from './model';
 import { isLegacy, parseLegacyToRaw } from './legacy';
+import { scanVertexPositions, scanInstanceTransforms, findPageNode, parsePages, parseDimensions } from './pages-dimensions';
 import { encodeIndices } from './gltf-indices';
 import { buildInstancedSceneFromParsed, InstancedScene } from './instanced';
 import { extractThumbnail, SkpThumbnail } from './thumbnail';
@@ -254,12 +255,20 @@ function parseToRaw(buffer: ArrayBuffer, options?: ParseOptions): ParsedRawData 
 
   const defsDict = new Map<number | string, ParsedDefinition>();
   const rootBuilder = new GeometryBuilder();
+  const vertexPositions = new Map<string, [number, number, number]>();
+  const instanceWorld = new Map<string, number[] | null>();
+  let pageNode: TlvNode | null = null;
 
   for (const { index, total, node: el } of iterTopLevelLazy(modelData, 0, modelData.length)) {
     try {
       collectLayers([el], layerIdToName, options);
       collectMaterialIds([el]);
       collectDefs([el], defsDict, options);
+      scanVertexPositions(el, vertexPositions);
+      scanInstanceTransforms(el, instanceWorld);
+      if (pageNode === null) {
+        pageNode = findPageNode(el);
+      }
       if (el.tag === 'F601') {
         extractGeometryFromNodes(el.children, rootBuilder, options);
       }
@@ -311,6 +320,8 @@ function parseToRaw(buffer: ArrayBuffer, options?: ParseOptions): ParsedRawData 
     layerColors,
     layerHidden,
     layerIdToName,
+    pages: parsePages(pageNode),
+    dimensions: parseDimensions(modelData, vertexPositions, instanceWorld),
     materialIdToName,
     materialsMap,
     materialsByFolder,

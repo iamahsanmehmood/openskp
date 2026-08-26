@@ -21,6 +21,7 @@ add_executable(
   meta_units_test.cpp
   obj_export_test.cpp
   observability_test.cpp
+  pages_dimensions_test.cpp
   parser_test.cpp
   ply_export_test.cpp
   scene_test.cpp

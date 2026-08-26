@@ -26,6 +26,8 @@ namespace OpenSkp
             // defaults to visible.
             public Dictionary<string, bool> LayerHidden = new Dictionary<string, bool>();
             public Dictionary<long, string> LayerIdToName = new Dictionary<long, string>();
+            public List<RawPage> Pages = new List<RawPage>();
+            public List<RawDimension> Dimensions = new List<RawDimension>();
             public Dictionary<long, string> MaterialIdToName = new Dictionary<long, string>();
             public Dictionary<string, Geometry.RawMaterial> Materials = new Dictionary<string, Geometry.RawMaterial>();
             public Dictionary<string, Geometry.RawMaterial> MaterialsByFolder = new Dictionary<string, Geometry.RawMaterial>();
@@ -169,6 +171,9 @@ namespace OpenSkp
             var materialIdToName = new Dictionary<long, string>();
             var defsDictRaw = new Dictionary<long, Geometry.RawDefinition>();
             var rootBuilder = new GeometryBuilder();
+            var vertexPositions = new Dictionary<string, (double X, double Y, double Z)>();
+            var instanceWorld = new Dictionary<string, List<double>?>();
+            TlvNode? pageNode = null;
 
             foreach (var rec in Tlv.IterTopLevelLazy(modelDat, 0, modelDat.Length, Tlv.ContainerTags))
             {
@@ -179,6 +184,12 @@ namespace OpenSkp
                     Geometry.CollectLayers(single, layerIdToName);
                     Geometry.CollectMaterialIds(single, materialIdToName);
                     Geometry.CollectDefs(single, defsDictRaw);
+                    PagesDimensions.ScanVertexPositions(el, vertexPositions);
+                    PagesDimensions.ScanInstanceTransforms(el, instanceWorld);
+                    if (pageNode == null)
+                    {
+                        pageNode = PagesDimensions.FindPageNode(el);
+                    }
                     if (el.Tag == "F601")
                     {
                         Geometry.ExtractGeometryFromNodes(el.Children, rootBuilder);
@@ -250,6 +261,8 @@ namespace OpenSkp
                 LayerColors = layerColors,
                 LayerHidden = layerHidden,
                 LayerIdToName = layerIdToName,
+                Pages = PagesDimensions.ParsePages(pageNode),
+                Dimensions = PagesDimensions.ParseDimensions(modelDat, vertexPositions, instanceWorld),
                 MaterialIdToName = materialIdToName,
                 Materials = materials,
                 MaterialsByFolder = materialsByFolder,

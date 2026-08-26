@@ -18,6 +18,8 @@ function parsed(defsDict: Map<number | string, any>): ParsedRawData {
     layerColors: new Map(),
     layerHidden: new Map(),
     layerIdToName: new Map(),
+    pages: [],
+    dimensions: [],
     materialIdToName: new Map(),
     materialsMap: new Map(),
     materialsByFolder: new Map(),

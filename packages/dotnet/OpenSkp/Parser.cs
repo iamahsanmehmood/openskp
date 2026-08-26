@@ -38,6 +38,45 @@ namespace OpenSkp
                 model.Layers.Add(new Layer { Name = kv.Key, ColorR = kv.Value.R, ColorG = kv.Value.G, ColorB = kv.Value.B, Hidden = hidden });
             }
 
+            // Convert pages (saved scenes) - hidden layer ids resolve to
+            // names; unknown ids (stale refs) are dropped.
+            foreach (var pg in parsed.Pages)
+            {
+                var hiddenLayers = new List<string>();
+                foreach (var id in pg.HiddenLayerIds)
+                {
+                    if (parsed.LayerIdToName.TryGetValue(id, out var layerName))
+                    {
+                        hiddenLayers.Add(layerName);
+                    }
+                }
+                model.Pages.Add(new Page
+                {
+                    Name = pg.Name,
+                    Eye = pg.Eye,
+                    Target = pg.Target,
+                    Up = pg.Up,
+                    Fov = pg.Fov,
+                    Parallel = pg.Parallel,
+                    OrthoHeight = pg.OrthoHeight,
+                    HiddenLayers = hiddenLayers,
+                });
+            }
+
+            // Convert model-level linear dimensions (VFF; world space).
+            foreach (var dm in parsed.Dimensions)
+            {
+                model.Dimensions.Add(new Dimension
+                {
+                    A = dm.A,
+                    B = dm.B,
+                    Offset = dm.Offset,
+                    PlaneX = dm.PlaneX,
+                    Normal = dm.Normal,
+                    Text = dm.Text,
+                });
+            }
+
             var matForData = new Dictionary<Geometry.RawMaterial, Material>(ReferenceEqualityComparer.Instance);
             foreach (var rawMat in parsed.Materials.Values)
             {

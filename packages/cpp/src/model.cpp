@@ -104,6 +104,34 @@ SkpModel build_model(RawParsed&& p, const ParseOptions& o) {
     bool hidden = hidden_it != p.layer_hidden.end() && hidden_it->second;
     m.layers.push_back({l.first, l.second, hidden});
   }
+  // Convert pages (saved scenes) - hidden layer ids resolve to names;
+  // unknown ids (stale refs) are dropped.
+  for (auto& pg : p.pages) {
+    Page page;
+    page.name = pg.name;
+    page.eye = pg.eye;
+    page.target = pg.target;
+    page.up = pg.up;
+    page.fov = pg.fov;
+    page.parallel = pg.parallel;
+    page.ortho_height = pg.ortho_height;
+    for (auto id : pg.hidden_layer_ids) {
+      auto it = p.layer_id_to_name.find(id);
+      if (it != p.layer_id_to_name.end()) page.hidden_layers.push_back(it->second);
+    }
+    m.pages.push_back(std::move(page));
+  }
+  // Convert model-level linear dimensions (VFF; world space).
+  for (auto& dm : p.dimensions) {
+    Dimension dim;
+    dim.a = dm.a;
+    dim.b = dm.b;
+    dim.offset = dm.offset;
+    dim.plane_x = dm.plane_x;
+    dim.normal = dm.normal;
+    dim.text = dm.text;
+    m.dimensions.push_back(std::move(dim));
+  }
   std::map<const RawMaterial*, std::size_t> raw_index;
   for (auto& v : p.materials) {
     auto& r = *v.second;

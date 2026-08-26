@@ -152,10 +152,64 @@ namespace OpenSkp
         public bool Hidden { get; set; }
     }
 
+    /// <summary>A linear dimension (SketchUp's Dimension tool).
+    ///
+    /// The legacy (pre-2021) reader recovers only Text/Hidden. The VFF
+    /// reader (2021+) recovers the full geometry - see
+    /// <see cref="SkpModel.Dimensions"/> for the model-level, world-space
+    /// list.</summary>
     public sealed class Dimension
     {
+        /// <summary>The displayed text. Empty when the dimension shows its
+        /// auto-computed measured value (the caller formats |B - A|).</summary>
         public string Text { get; set; } = "";
         public bool Hidden { get; set; }
+
+        /// <summary>First measured point (x, y, z) in inches (world space),
+        /// or null when only the text was recovered.</summary>
+        public (double X, double Y, double Z)? A { get; set; }
+
+        /// <summary>Second measured point.</summary>
+        public (double X, double Y, double Z)? B { get; set; }
+
+        /// <summary>Offset distance (inches) - how far the dimension line
+        /// sits from the A-B segment, along the in-plane perpendicular.</summary>
+        public double Offset { get; set; }
+
+        /// <summary>The dimension plane's x-axis, or null.</summary>
+        public (double X, double Y, double Z)? PlaneX { get; set; }
+
+        /// <summary>The dimension plane's normal, or null.</summary>
+        public (double X, double Y, double Z)? Normal { get; set; }
+    }
+
+    /// <summary>A saved scene (SketchUp's "Scenes" tabs; "pages" in the SDK).</summary>
+    public sealed class Page
+    {
+        /// <summary>Scene name as shown on its tab.</summary>
+        public string Name { get; set; } = "";
+
+        /// <summary>Camera position (x, y, z) in inches, or null.</summary>
+        public (double X, double Y, double Z)? Eye { get; set; }
+
+        /// <summary>Point the camera looks at, in inches.</summary>
+        public (double X, double Y, double Z)? Target { get; set; }
+
+        /// <summary>Camera up vector.</summary>
+        public (double X, double Y, double Z)? Up { get; set; }
+
+        /// <summary>Field of view in degrees (SketchUp default 35).</summary>
+        public double Fov { get; set; } = 35.0;
+
+        /// <summary>True when the scene uses parallel (orthographic)
+        /// projection; Fov still holds the stored perspective angle.</summary>
+        public bool Parallel { get; set; }
+
+        /// <summary>Visible height in inches when Parallel.</summary>
+        public double OrthoHeight { get; set; }
+
+        /// <summary>Names of the layers this scene hides.</summary>
+        public List<string> HiddenLayers { get; set; } = new List<string>();
     }
 
     public sealed class Definition
@@ -199,6 +253,16 @@ namespace OpenSkp
         public Definition Root { get; set; } = new Definition { Name = "ROOT_MODEL" };
 
         public List<Layer> Layers { get; set; } = new List<Layer>();
+
+        /// <summary>The file's saved scenes (VFF files; classic pre-2021
+        /// files import with none).</summary>
+        public List<Page> Pages { get; set; } = new List<Page>();
+
+        /// <summary>Model-level linear dimensions with world-space endpoints
+        /// (VFF files). Legacy files surface text-only dimensions per
+        /// definition instead (<see cref="Definition.Dimensions"/>).</summary>
+        public List<Dimension> Dimensions { get; set; } = new List<Dimension>();
+
         public List<Material> Materials { get; set; } = new List<Material>();
 
         /// <summary>Join table for Face.MaterialId / Instance.MaterialId:

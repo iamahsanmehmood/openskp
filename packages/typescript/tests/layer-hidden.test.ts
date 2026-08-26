@@ -16,6 +16,8 @@ function parsed(layerColors: Map<string, [number, number, number]>, layerHidden:
     layerColors,
     layerHidden,
     layerIdToName: new Map(),
+    pages: [],
+    dimensions: [],
     materialIdToName: new Map(),
     materialsMap: new Map(),
     materialsByFolder: new Map(),
