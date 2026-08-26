@@ -1812,6 +1812,12 @@ export function parseLegacyToRaw(data: Uint8Array, options?: ParseOptions): Pars
     layerColors,
     layerHidden,
     layerIdToName,
+    // Classic (pre-2021) files carry no equivalent VFF entity families -
+    // the legacy CArchive walker never surfaces scenes or model-level
+    // linear dimensions (legacy files still surface text-only dimensions
+    // per definition, via each entity list's own CDimensionLinear reads).
+    pages: [],
+    dimensions: [],
     materialIdToName,
     materialsMap,
     materialsByFolder: new Map(),

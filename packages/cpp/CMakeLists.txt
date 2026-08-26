@@ -122,6 +122,7 @@ set(
   src/model.cpp
   src/obj_export.cpp
   src/observability.cpp
+  src/pages_dimensions.cpp
   src/parser.cpp
   src/ply_export.cpp
   src/scene.cpp

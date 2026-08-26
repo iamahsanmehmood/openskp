@@ -87,6 +87,8 @@ function parsed(overrides: Partial<ParsedRawData>): ParsedRawData {
     layerColors: new Map(),
     layerHidden: new Map(),
     layerIdToName: new Map(),
+    pages: [],
+    dimensions: [],
     materialIdToName: new Map(),
     materialsMap: new Map(),
     materialsByFolder: new Map(),

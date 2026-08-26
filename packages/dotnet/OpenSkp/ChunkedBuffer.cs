@@ -81,6 +81,58 @@ namespace OpenSkp
             return (uint)(_scratch8[0] | (_scratch8[1] << 8) | (_scratch8[2] << 16) | (_scratch8[3] << 24));
         }
 
+        /// <summary>Find the first occurrence of `needle` at or after `start`,
+        /// or -1 if absent. Mirrors Python's `bytes.find()` for the one place
+        /// that needs a raw byte-pattern search over the whole buffer (linear
+        /// dimensions, whose 5BCC record is located by literal bytes rather
+        /// than walked via the TLV tree). Scans within each chunk's backing
+        /// array directly (cheap - short needle, plain byte[] indexing);
+        /// falls back to the slow per-byte indexer only for the handful of
+        /// candidate positions near a chunk boundary where the needle could
+        /// straddle two chunks.</summary>
+        public long IndexOf(byte[] needle, long start)
+        {
+            if (needle.Length == 0) return start < 0 ? 0 : start;
+            long pos = start < 0 ? 0 : start;
+            long limit = Length - needle.Length;
+            while (pos <= limit)
+            {
+                int chunkIdx = (int)(pos / _chunkSize);
+                int offsetInChunk = (int)(pos % _chunkSize);
+                byte[] chunk = _chunks[chunkIdx];
+                int maxOffsetInChunk = chunk.Length - needle.Length;
+                if (offsetInChunk <= maxOffsetInChunk)
+                {
+                    int idx = IndexOfInArray(chunk, needle, offsetInChunk, maxOffsetInChunk);
+                    if (idx >= 0) return pos + (idx - offsetInChunk);
+                    pos += (maxOffsetInChunk - offsetInChunk) + 1;
+                    continue;
+                }
+                bool match = true;
+                for (int j = 0; j < needle.Length; j++)
+                {
+                    if (this[pos + j] != needle[j]) { match = false; break; }
+                }
+                if (match) return pos;
+                pos++;
+            }
+            return -1;
+        }
+
+        private static int IndexOfInArray(byte[] hay, byte[] needle, int from, int to)
+        {
+            for (int i = from; i <= to; i++)
+            {
+                bool ok = true;
+                for (int j = 0; j < needle.Length; j++)
+                {
+                    if (hay[i + j] != needle[j]) { ok = false; break; }
+                }
+                if (ok) return i;
+            }
+            return -1;
+        }
+
         /// <summary>Read the whole buffer, chunk by chunk, from a stream
         /// whose total decompressed length is already known (from the ZIP
         /// entry's recorded uncompressed size) - so each chunk can be

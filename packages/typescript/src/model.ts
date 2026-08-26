@@ -3,6 +3,7 @@ import { extractDynamicProperties, ParsedDefinition } from './geometry';
 import { buildLocalFaceGroups } from './face-groups';
 import { SkpParseError } from './errors';
 import { ParseOptions, PROGRESS_INTERVAL, emitLog, emitProgress } from './observability';
+import { RawPage, RawDimension } from './pages-dimensions';
 
 export interface SkpModel {
   version: string;
@@ -13,6 +14,13 @@ export interface SkpModel {
    * at the top level. Corresponds to .NET/Dart's `Root`/`root`. */
   root: Definition;
   layers: Layer[];
+  /** The file's saved scenes (VFF files; classic pre-2021 files import
+   * with none). */
+  pages: Page[];
+  /** Model-level linear dimensions with world-space endpoints (VFF
+   * files). Legacy files surface text-only dimensions per definition
+   * instead (`Definition.dimensions`). */
+  dimensions: Dimension[];
   materials: Material[];
   materialsById: Map<number, Material>;
   styles: Style[];
@@ -35,9 +43,51 @@ export interface TextEntity {
   hidden: boolean;
 }
 
+/**
+ * A linear dimension (SketchUp's Dimension tool).
+ *
+ * The legacy (pre-2021) reader recovers only `text`/`hidden`. The VFF
+ * reader (2021+) recovers the full geometry - see `SkpModel.dimensions`
+ * for the model-level, world-space list.
+ */
 export interface Dimension {
+  /** The displayed text. Empty when the dimension shows its auto-computed
+   * measured value (the caller formats `|b - a|`). */
   text: string;
   hidden: boolean;
+  /** First measured point [x, y, z] in inches (world space), or null when
+   * only the text was recovered. */
+  a: [number, number, number] | null;
+  /** Second measured point. */
+  b: [number, number, number] | null;
+  /** Offset distance (inches) - how far the dimension line sits from the
+   * a-b segment, along the in-plane perpendicular. */
+  offset: number;
+  /** The dimension plane's x-axis, or null. */
+  planeX: [number, number, number] | null;
+  /** The dimension plane's normal, or null. */
+  normal: [number, number, number] | null;
+}
+
+/** A saved scene (SketchUp's "Scenes" tabs; "pages" in the SDK). */
+export interface Page {
+  /** Scene name as shown on its tab. */
+  name: string;
+  /** Camera position [x, y, z] in inches, or null. */
+  eye: [number, number, number] | null;
+  /** Point the camera looks at, in inches. */
+  target: [number, number, number] | null;
+  /** Camera up vector. */
+  up: [number, number, number] | null;
+  /** Field of view in degrees (SketchUp default 35). */
+  fov: number;
+  /** True when the scene uses parallel (orthographic) projection; `fov`
+   * still holds the stored perspective angle. */
+  parallel: boolean;
+  /** Visible height in inches when `parallel`. */
+  orthoHeight: number;
+  /** Names of the layers this scene hides. */
+  hiddenLayers: string[];
 }
 
 export interface Definition {
@@ -376,6 +426,8 @@ export interface ParsedRawData {
   layerColors: Map<string, [number, number, number]>;
   layerHidden: Map<string, boolean>;
   layerIdToName: Map<number, string>;
+  pages: RawPage[];
+  dimensions: RawDimension[];
   materialIdToName: Map<number, string>;
   materialsMap: Map<string, Material>;
   materialsByFolder: Map<string, Material>;
@@ -390,6 +442,8 @@ export function buildModelFromParsed(parsed: ParsedRawData): SkpModel {
     layerColors,
     layerHidden,
     layerIdToName,
+    pages,
+    dimensions,
     materialIdToName,
     materialsMap,
     materialsByFolder,
@@ -419,6 +473,32 @@ export function buildModelFromParsed(parsed: ParsedRawData): SkpModel {
 
   const finalMaterialsList: Material[] = Array.from(materialsMap.values());
 
+  // Convert pages (saved scenes) - hidden layer ids resolve to names;
+  // unknown ids (stale refs) are dropped.
+  const finalPagesList: Page[] = pages.map((pg) => ({
+    name: pg.name,
+    eye: pg.eye,
+    target: pg.target,
+    up: pg.up,
+    fov: pg.fov,
+    parallel: pg.parallel,
+    orthoHeight: pg.orthoHeight,
+    hiddenLayers: pg.hiddenLayerIds
+      .map((id) => layerIdToName.get(id))
+      .filter((name): name is string => name !== undefined),
+  }));
+
+  // Convert model-level linear dimensions (VFF; world space).
+  const finalDimensionsList: Dimension[] = dimensions.map((dm) => ({
+    a: dm.a,
+    b: dm.b,
+    offset: dm.offset,
+    planeX: dm.planeX,
+    normal: dm.normal,
+    text: dm.text,
+    hidden: false,
+  }));
+
   const finalDefinitions = new Map<number, Definition>();
   let rootDefinition: Definition | null = null;
   for (const [id, d] of defsDict.entries()) {
@@ -440,6 +520,8 @@ export function buildModelFromParsed(parsed: ParsedRawData): SkpModel {
     // matching the .NET and Dart ports' `Root`/`root` field.
     root: rootDefinition ?? { id: 0, guid: 'ROOT', name: 'ROOT_MODEL', vertices: [], edges: [], faces: [], instances: [], sectionPlanes: [], texts: [], dimensions: [], isImage: false, alwaysFacesCamera: false, shadowsFaceSun: false },
     layers: finalLayersList,
+    pages: finalPagesList,
+    dimensions: finalDimensionsList,
     materials: finalMaterialsList,
     materialsById,
     styles,
@@ -501,6 +583,11 @@ function buildDefinition(id: number, d: ParsedDefinition, layerIdToName?: Map<nu
   const dimensions: Dimension[] = (d.builder.dimensions || []).map((dim) => ({
     text: dim.text || '',
     hidden: dim.hidden || false,
+    a: null,
+    b: null,
+    offset: 0,
+    planeX: null,
+    normal: null,
   }));
 
   return {

@@ -92,7 +92,38 @@ class SkpFile {
     for (final entry in parsed.layerColors.entries) {
       final (r, g, b) = entry.value;
       final hidden = parsed.layerHidden[entry.key] ?? false;
-      model.layers.add(Layer(name: entry.key, colorR: r, colorG: g, colorB: b, hidden: hidden));
+      model.layers.add(Layer(
+          name: entry.key, colorR: r, colorG: g, colorB: b, hidden: hidden));
+    }
+
+    // Convert pages (saved scenes) - hidden layer ids resolve to names;
+    // unknown ids (stale refs) are dropped.
+    for (final pg in parsed.pages) {
+      model.pages.add(Page(
+        name: pg.name,
+        eye: pg.eye,
+        target: pg.target,
+        up: pg.up,
+        fov: pg.fov,
+        parallel: pg.parallel,
+        orthoHeight: pg.orthoHeight,
+        hiddenLayers: [
+          for (final id in pg.hiddenLayerIds)
+            if (parsed.layerIdToName[id] != null) parsed.layerIdToName[id]!
+        ],
+      ));
+    }
+
+    // Convert model-level linear dimensions (VFF; world space).
+    for (final dm in parsed.dimensions) {
+      model.dimensions.add(Dimension(
+        a: dm.a,
+        b: dm.b,
+        offset: dm.offset,
+        planeX: dm.planeX,
+        normal: dm.normal,
+        text: dm.text,
+      ));
     }
 
     final matForData = <RawMaterial, Material>{};

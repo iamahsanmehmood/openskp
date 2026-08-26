@@ -4,6 +4,7 @@ import 'errors.dart';
 import 'geometry.dart';
 import 'legacy.dart';
 import 'observability.dart';
+import 'pages_dimensions.dart';
 import 'tlv.dart';
 import 'vff.dart';
 
@@ -23,6 +24,8 @@ class RawParsed {
   // so every VFF layer defaults to visible.
   final Map<String, bool> layerHidden = {};
   final Map<int, String> layerIdToName = {};
+  final List<RawPage> pages = [];
+  final List<RawDimension> dimensions = [];
   final Map<int, String> materialIdToName = {};
   final Map<String, RawMaterial> materials = {};
   final Map<String, RawMaterial> materialsByFolder = {};
@@ -43,16 +46,19 @@ class Core {
     final header = Uint8List.sublistView(data, 0, headerLen);
 
     if (!Vff.hasValidHeader(header)) {
-      throw SkpParseException('Not a valid SketchUp file (bad header magic)', stage: 'header');
+      throw SkpParseException('Not a valid SketchUp file (bad header magic)',
+          stage: 'header');
     }
 
     if (Legacy.isLegacy(data)) {
-      emitLog(options, SkpLogLevel.debug, 'Detected legacy MFC container; routing to legacy walker');
+      emitLog(options, SkpLogLevel.debug,
+          'Detected legacy MFC container; routing to legacy walker');
       return Legacy.fullParseLegacy(data, options);
     }
 
     final version = Vff.extractVersion(header);
-    emitLog(options, SkpLogLevel.debug, 'Detected version $version (VFF/ZIP container)');
+    emitLog(options, SkpLogLevel.debug,
+        'Detected version $version (VFF/ZIP container)');
 
     final pkPos = Vff.findZipOffset(data);
     if (pkPos < 0) {
@@ -75,7 +81,8 @@ class Core {
           mat = Geometry.parseMaterialXml(zip, name, entry.content, options);
         } catch (e) {
           mat = null;
-          emitLog(options, SkpLogLevel.debug, 'Failed to parse material.xml $name: $e');
+          emitLog(options, SkpLogLevel.debug,
+              'Failed to parse material.xml $name: $e');
         }
         if (mat != null) {
           final parts = name.split('/');
@@ -105,15 +112,18 @@ class Core {
       }
     }
 
-    emitLog(options, SkpLogLevel.debug, 'Parsed ${materials.length} materials, ${styles.length} styles');
+    emitLog(options, SkpLogLevel.debug,
+        'Parsed ${materials.length} materials, ${styles.length} styles');
 
     final modelDatEntry = zip.findFile('model.dat');
     if (modelDatEntry == null) {
-      throw SkpParseException('model.dat not found in ZIP container', stage: 'zip_extract');
+      throw SkpParseException('model.dat not found in ZIP container',
+          stage: 'zip_extract');
     }
     Vff.validateEntrySize(modelDatEntry);
     final modelDat = modelDatEntry.content;
-    emitLog(options, SkpLogLevel.debug, 'Read model.dat: ${modelDat.length} bytes');
+    emitLog(
+        options, SkpLogLevel.debug, 'Read model.dat: ${modelDat.length} bytes');
 
     // Walk the TLV tree one top-level record at a time (instead of building
     // the whole file's tree at once) so peak memory is bounded by the
@@ -127,19 +137,29 @@ class Core {
     final materialIdToName = <int, String>{};
     final defsDictRaw = <int, RawDefinition>{};
     final rootBuilder = GeometryBuilder();
+    final vertexPositions = <String, (double, double, double)>{};
+    final instanceWorld = <String, List<double>>{};
+    TlvNode? pageNode;
 
-    for (final (index, total, el) in Tlv.iterTopLevelLazy(modelDat, 0, modelDat.length, Tlv.containerTags)) {
+    for (final (index, total, el) in Tlv.iterTopLevelLazy(
+        modelDat, 0, modelDat.length, Tlv.containerTags)) {
       try {
         Geometry.collectLayers([el], layerIdToName);
         Geometry.collectMaterialIds([el], materialIdToName);
         Geometry.collectDefs([el], defsDictRaw);
+        scanVertexPositions(el, vertexPositions);
+        scanInstanceTransforms(el, instanceWorld);
+        pageNode ??= findPageNode(el);
         if (el.tag == 'F601') {
           Geometry.extractGeometryFromNodes(el.children, rootBuilder);
         }
       } catch (e) {
         throw SkpParseException(
           'Failed while processing top-level record: $e',
-          stage: 'tlv_walk', recordIndex: index, totalRecords: total, tag: el.tag,
+          stage: 'tlv_walk',
+          recordIndex: index,
+          totalRecords: total,
+          tag: el.tag,
           cause: e,
         );
       }
@@ -147,12 +167,14 @@ class Core {
       // garbage collection before the next top-level record is built.
       if (index % progressInterval == 0 || index == total - 1) {
         emitProgress(options, 'tlv_walk', index + 1, total);
-        emitLog(options, SkpLogLevel.debug, 'Processed ${index + 1}/$total top-level records');
+        emitLog(options, SkpLogLevel.debug,
+            'Processed ${index + 1}/$total top-level records');
       }
     }
 
     emitLog(
-      options, SkpLogLevel.info,
+      options,
+      SkpLogLevel.info,
       'Parse complete: ${defsDictRaw.length} defs (${(sw.elapsedMilliseconds / 1000).toStringAsFixed(2)}s)',
     );
 
@@ -185,6 +207,9 @@ class Core {
       ..layerColors.addAll(layerColors)
       ..layerHidden.addAll(layerHidden)
       ..layerIdToName.addAll(layerIdToName)
+      ..pages.addAll(parsePages(pageNode))
+      ..dimensions
+          .addAll(parseDimensions(modelDat, vertexPositions, instanceWorld))
       ..materialIdToName.addAll(materialIdToName)
       ..materials.addAll(materials)
       ..materialsByFolder.addAll(materialsByFolder)

@@ -181,10 +181,49 @@ struct TextEntity {
   bool hidden{false};
 };
 
-/// Dimension entity.
+/// A linear dimension (SketchUp's Dimension tool).
+///
+/// The legacy (pre-2021) reader recovers only `text`/`hidden`. The VFF
+/// reader (2021+) recovers the full geometry - see `SkpModel::dimensions`
+/// for the model-level, world-space list.
 struct Dimension {
+  /// The displayed text. Empty when the dimension shows its auto-computed
+  /// measured value (the caller formats |b - a|).
   std::string text;
   bool hidden{false};
+  /// First measured point (x, y, z) in inches (world space), or unset when
+  /// only the text was recovered.
+  std::optional<Vec3> a;
+  /// Second measured point.
+  std::optional<Vec3> b;
+  /// Offset distance (inches) - how far the dimension line sits from the
+  /// a-b segment, along the in-plane perpendicular.
+  double offset{};
+  /// The dimension plane's x-axis, or unset.
+  std::optional<Vec3> plane_x;
+  /// The dimension plane's normal, or unset.
+  std::optional<Vec3> normal;
+};
+
+/// A saved scene (SketchUp's "Scenes" tabs; "pages" in the SDK).
+struct Page {
+  /// Scene name as shown on its tab.
+  std::string name;
+  /// Camera position (x, y, z) in inches, or unset.
+  std::optional<Vec3> eye;
+  /// Point the camera looks at, in inches.
+  std::optional<Vec3> target;
+  /// Camera up vector.
+  std::optional<Vec3> up;
+  /// Field of view in degrees (SketchUp default 35).
+  double fov{35.0};
+  /// True when the scene uses parallel (orthographic) projection; `fov`
+  /// still holds the stored perspective angle.
+  bool parallel{};
+  /// Visible height in inches when `parallel`.
+  double ortho_height{};
+  /// Names of the layers this scene hides.
+  std::vector<std::string> hidden_layers;
 };
 
 /// Reusable geometry container (component definition or group).
@@ -231,6 +270,13 @@ class OPENSKP_EXPORT SkpModel {
   std::map<EntityId, Definition> definitions;
   /// Model layers.
   std::vector<Layer> layers;
+  /// The file's saved scenes (VFF files; classic pre-2021 files import
+  /// with none).
+  std::vector<Page> pages;
+  /// Model-level linear dimensions with world-space endpoints (VFF
+  /// files). Legacy files surface text-only dimensions per definition
+  /// instead (`Definition::dimensions`).
+  std::vector<Dimension> dimensions;
   /// Model materials sequence.
   std::deque<Material> materials;
   /// Model rendering styles.

@@ -195,13 +195,81 @@ class TextEntity {
   });
 }
 
+/// A linear dimension (SketchUp's Dimension tool).
+///
+/// The legacy (pre-2021) reader recovers only [text]/[hidden]. The VFF
+/// reader (2021+) recovers the full geometry - see [SkpModel.dimensions]
+/// for the model-level, world-space list.
 class Dimension {
+  /// The displayed text. Empty when the dimension shows its auto-computed
+  /// measured value (the caller formats `|b - a|`).
   final String text;
   final bool hidden;
+
+  /// First measured point (x, y, z) in inches (world space), or null when
+  /// only the text was recovered.
+  final (double, double, double)? a;
+
+  /// Second measured point.
+  final (double, double, double)? b;
+
+  /// Offset distance (inches) - how far the dimension line sits from the
+  /// a-b segment, along the in-plane perpendicular.
+  final double offset;
+
+  /// The dimension plane's x-axis, or null.
+  final (double, double, double)? planeX;
+
+  /// The dimension plane's normal, or null.
+  final (double, double, double)? normal;
 
   const Dimension({
     this.text = '',
     this.hidden = false,
+    this.a,
+    this.b,
+    this.offset = 0.0,
+    this.planeX,
+    this.normal,
+  });
+}
+
+/// A saved scene (SketchUp's "Scenes" tabs; "pages" in the SDK).
+class Page {
+  /// Scene name as shown on its tab.
+  final String name;
+
+  /// Camera position (x, y, z) in inches, or null.
+  final (double, double, double)? eye;
+
+  /// Point the camera looks at, in inches.
+  final (double, double, double)? target;
+
+  /// Camera up vector.
+  final (double, double, double)? up;
+
+  /// Field of view in degrees (SketchUp default 35).
+  final double fov;
+
+  /// True when the scene uses parallel (orthographic) projection; [fov]
+  /// still holds the stored perspective angle.
+  final bool parallel;
+
+  /// Visible height in inches when [parallel].
+  final double orthoHeight;
+
+  /// Names of the layers this scene hides.
+  final List<String> hiddenLayers;
+
+  const Page({
+    this.name = '',
+    this.eye,
+    this.target,
+    this.up,
+    this.fov = 35.0,
+    this.parallel = false,
+    this.orthoHeight = 0.0,
+    this.hiddenLayers = const [],
   });
 }
 
@@ -253,6 +321,16 @@ class SkpModel {
   Definition root = Definition(name: 'ROOT_MODEL');
 
   final List<Layer> layers = [];
+
+  /// The file's saved scenes (VFF files; classic pre-2021 files import
+  /// with none).
+  final List<Page> pages = [];
+
+  /// Model-level linear dimensions with world-space endpoints (VFF
+  /// files). Legacy files surface text-only dimensions per definition
+  /// instead ([Definition.dimensions]).
+  final List<Dimension> dimensions = [];
+
   final List<Material> materials = [];
 
   /// Join table for Face.materialId / Instance.materialId: TLV material ID

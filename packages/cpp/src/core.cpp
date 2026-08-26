@@ -251,6 +251,10 @@ RawParsed full_parse(const ByteBuffer& data, const ParseOptions& o) {
   auto hs = headers(*model, 0, model->size());
   if (hs.size() == 1 && model->at(hs[0].offset) == 0xf4 && model->at(hs[0].offset + 1) == 1)
     hs = headers(*model, hs[0].offset + 6, hs[0].offset + 6 + hs[0].size);
+  std::map<std::string, Vec3> vertex_positions;
+  std::map<std::string, std::vector<double>> instance_world;
+  const TlvNode* page_node = nullptr;
+  std::vector<TlvNode> page_node_owner;  // keeps page_node's subtree alive past the loop
   auto total = hs.size();
   for (std::size_t i = 0; i < total; ++i) {
     std::string tag;
@@ -261,6 +265,14 @@ RawParsed full_parse(const ByteBuffer& data, const ParseOptions& o) {
       collect_layers(one, p.layer_id_to_name);
       collect_material_ids(one, p.material_id_to_name);
       collect_definitions(one, p.definitions);
+      scan_vertex_positions(one[0], vertex_positions);
+      scan_instance_transforms(one[0], instance_world);
+      if (!page_node) {
+        if (auto* found = find_page_node(one[0])) {
+          page_node_owner.push_back(*found);
+          page_node = &page_node_owner.back();
+        }
+      }
       if (one[0].tag == "F601") collect_geometry(one[0].children, p.root.builder);
     } catch (const SkpParseError&) {
       throw;
@@ -279,6 +291,8 @@ RawParsed full_parse(const ByteBuffer& data, const ParseOptions& o) {
     p.units = std::nullopt;
     emit_log(o, LogLevel::debug, "Failed to read units from meta/meta.dat");
   }
+  p.pages = parse_pages(page_node);
+  p.dimensions = parse_dimensions(*model, vertex_positions, instance_world);
   if (!p.layer_id_to_name.count(1)) p.layer_id_to_name[1] = "Layer0";
   if (!p.layer_colors.count("Layer0")) p.layer_colors["Layer0"] = {136, 136, 136};
   if (!p.layer_hidden.count("Layer0")) p.layer_hidden["Layer0"] = false;
