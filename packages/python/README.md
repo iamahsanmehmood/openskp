@@ -252,7 +252,6 @@ scope.
 | `openskp.parser` | TLV binary parser for SketchUp's internal format |
 | `openskp.model` | Dataclasses for geometry, layers, materials |
 | `openskp.vff` | VFF/ZIP container handling |
-| `openskp.geometry` | Geometry extraction from parsed nodes |
 | `openskp.triangulator` | 3D planar polygon triangulation |
 | `openskp.materials` | Material and layer XML parsing |
 | `openskp.metadata` | Dynamic properties and scene hierarchy |
