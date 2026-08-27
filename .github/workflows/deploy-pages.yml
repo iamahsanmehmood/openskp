@@ -52,6 +52,16 @@ jobs:
           cd packages/typescript
           npm run copy-dist
 
+      - name: Cache-bust viewer.js
+        # GitHub Pages' CDN sets Cache-Control: max-age=600 on viewer.js, so
+        # a returning visitor within that window can keep running code from
+        # before this deploy with no visible sign anything is stale. The
+        # commit SHA in the query string gives every deploy a distinct URL,
+        # so the browser is forced to fetch fresh instead of reusing a
+        # cached response from an earlier commit.
+        run: |
+          sed -i "s/src=\"viewer.js\"/src=\"viewer.js?v=${GITHUB_SHA}\"/" examples/web-viewer/index.html
+
       - name: Setup Pages
         uses: actions/configure-pages@v6
 
