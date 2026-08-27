@@ -20,6 +20,10 @@ import type { Material, Texture } from './model';
  */
 export interface LocalFaceGroup {
   color: { r: number; g: number; b: number };
+  /** The resolved material's opacity: `1.0` fully opaque, `0.0` fully
+   * invisible. Carried through so the exported glTF material can declare a
+   * real alpha instead of always claiming fully opaque. */
+  transparency: number;
   doubleSided: boolean;
   /** Local-space vertex positions, inches, SketchUp Z-up. */
   localVerts: [number, number, number][];
@@ -67,7 +71,7 @@ export function buildLocalFaceGroups(
   const addSide = (
     triangles: number[][],
     fn: [number, number, number],
-    color: { r: number; g: number; b: number },
+    color: { r: number; g: number; b: number; a?: number },
     doubleSided: boolean,
     reverse: boolean,
     mat: Material | undefined,
@@ -79,11 +83,23 @@ export function buildLocalFaceGroups(
     // part of the key too - otherwise two differently-textured faces with
     // the same average colour end up in one primitive with one image
     const texIndex = ctx.textureIndexFor(mat?.texture);
-    const colorKey = `${color.r},${color.g},${color.b},${doubleSided},${texIndex ?? -1}`;
+    // Two independent SketchUp mechanisms can reduce a material's opacity:
+    // the plain RGBA colour record's alpha byte (older/simple materials,
+    // and what the writer's addMaterial(rgba) sets), and the newer XML
+    // material definition's own `trans`/`useTrans` attribute (surfaced as
+    // Material.transparency, already resolved - see parser.test.ts's
+    // "useTrans gating" tests). A real file only ever populates one of the
+    // two for a given material, but multiplying both is safe either way:
+    // the untouched one defaults to fully-opaque (255 / 1.0), so it never
+    // silently darkens a material that only used the other mechanism.
+    const colorAlpha = color.a !== undefined ? color.a / 255 : 1.0;
+    const transparency = colorAlpha * (mat?.transparency ?? 1.0);
+    const colorKey = `${color.r},${color.g},${color.b},${doubleSided},${texIndex ?? -1},${transparency}`;
     let group = faceGroups.get(colorKey);
     if (!group) {
       group = {
         color,
+        transparency,
         doubleSided,
         textureIndex: texIndex,
         localVerts: [],

@@ -183,17 +183,18 @@ class InstancedSceneBuilder {
       return idx;
     }
 
-    final colorToMaterialIndex = <((int, int, int), bool, int?), int>{};
+    final colorToMaterialIndex = <((int, int, int), bool, int?, double), int>{};
     final gltfMaterials = <Map<String, dynamic>>[];
 
-    int getMaterialIndex((int, int, int) color, bool doubleSided, int? textureIndex) {
-      final key = (color, doubleSided, textureIndex);
+    int getMaterialIndex((int, int, int) color, bool doubleSided, int? textureIndex,
+        [double transparency = 1.0]) {
+      final key = (color, doubleSided, textureIndex, transparency);
       final existing = colorToMaterialIndex[key];
       if (existing != null) return existing;
       final idx = gltfMaterials.length;
       final (r, g, b) = color;
       final pbr = <String, dynamic>{
-        'baseColorFactor': [r / 255, g / 255, b / 255, 1.0],
+        'baseColorFactor': [r / 255, g / 255, b / 255, transparency],
         'metallicFactor': 0.0,
         'roughnessFactor': 0.8,
       };
@@ -202,6 +203,14 @@ class InstancedSceneBuilder {
       }
       final material = <String, dynamic>{'pbrMetallicRoughness': pbr};
       if (doubleSided) material['doubleSided'] = true;
+      // See scene.dart's getMaterialIndex for why: BLEND for genuinely
+      // translucent materials, MASK (safe no-op on an opaque-alpha
+      // texture) for textured ones, otherwise glTF's default OPAQUE.
+      if (transparency < 1.0) {
+        material['alphaMode'] = 'BLEND';
+      } else if (textureIndex != null) {
+        material['alphaMode'] = 'MASK';
+      }
       gltfMaterials.add(material);
       colorToMaterialIndex[key] = idx;
       return idx;
@@ -248,7 +257,7 @@ class InstancedSceneBuilder {
 
       final primitives = <LocalPrimitive>[];
       for (final groupEntry in faceGroups.entries) {
-        final (color, doubleSided, texIndex) = groupEntry.key;
+        final (color, doubleSided, texIndex, transparency) = groupEntry.key;
         final group = groupEntry.value;
         if (group.localFaces.isEmpty) continue;
 
@@ -303,7 +312,7 @@ class InstancedSceneBuilder {
           normals: normals,
           uvs: uvs,
           indices: indices,
-          materialIndex: getMaterialIndex(color, doubleSided, texIndex),
+          materialIndex: getMaterialIndex(color, doubleSided, texIndex, transparency),
         ));
       }
 

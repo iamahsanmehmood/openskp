@@ -29,6 +29,7 @@ import 'triangulator.dart';
 
 class LocalFaceGroup {
   final (int, int, int) color;
+  final double transparency;
   final bool doubleSided;
   final int? textureIndex;
   final List<(double, double, double)> localVerts = [];
@@ -37,11 +38,22 @@ class LocalFaceGroup {
   final List<List<int>> localFaces = [];
   final Map<(int, double, double), int> localVMap = {};
 
-  LocalFaceGroup(this.color, this.doubleSided, this.textureIndex);
+  LocalFaceGroup(this.color, this.doubleSided, this.textureIndex, this.transparency);
 }
 
-/// Key: (color, doubleSided, textureIndex).
-typedef FaceGroupKey = ((int, int, int), bool, int?);
+/// The resolved material's overall opacity: 1.0 fully opaque, 0.0 fully
+/// invisible. Two independent SketchUp mechanisms can reduce it - the plain
+/// RGBA color record's alpha byte, and the newer XML material definition's
+/// own trans/useTrans attribute (already resolved into
+/// RawMaterial.transparency). A real material only ever populates one of
+/// the two, but multiplying both is safe either way: the untouched one
+/// defaults to fully-opaque (255 or 1.0), so it never silently darkens a
+/// material that only used the other mechanism.
+double resolveTransparency(RawMaterial? mat) =>
+    mat == null ? 1.0 : (mat.a / 255.0) * mat.transparency;
+
+/// Key: (color, doubleSided, textureIndex, transparency).
+typedef FaceGroupKey = ((int, int, int), bool, int?, double);
 
 /// Everything [buildLocalFaceGroups] needs from its caller that isn't the
 /// builder itself.
@@ -163,8 +175,10 @@ Map<FaceGroupKey, LocalFaceGroup> buildLocalFaceGroups(GeometryBuilder builder, 
     // part of the key too - otherwise two differently-textured faces with
     // the same average color end up in one group with one image
     final texIndex = ctx.textureIndexFor(mat?.texture);
-    final key = (color, doubleSided, texIndex);
-    final group = faceGroups.putIfAbsent(key, () => LocalFaceGroup(color, doubleSided, texIndex));
+    final transparency = resolveTransparency(mat);
+    final key = (color, doubleSided, texIndex, transparency);
+    final group = faceGroups.putIfAbsent(
+        key, () => LocalFaceGroup(color, doubleSided, texIndex, transparency));
 
     final tex = mat?.texture;
     final tileW = (tex != null && tex.xScale > 1e-9) ? tex.xScale : 1.0;

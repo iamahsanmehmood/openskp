@@ -552,6 +552,13 @@ namespace OpenSkp
         {
             public string Name = "";
             public int R = 128, G = 128, B = 128;
+            /// <summary>The raw RGBA color record's alpha byte, 0-255
+            /// (255 = fully opaque). Independent of Transparency, which
+            /// carries the newer XML material definition's own
+            /// trans/useTrans opacity - a real material only ever
+            /// populates one of the two, and callers combine them (see
+            /// FaceGroups.ResolveTransparency).</summary>
+            public int A = 255;
             public double Transparency = 1.0;
             public bool Colorized;
             public int ColorizeType;

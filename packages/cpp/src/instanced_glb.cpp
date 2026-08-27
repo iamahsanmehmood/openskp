@@ -213,7 +213,14 @@ gltf::Model make_model(const InstancedScene& scene, bool embed_textures) {
     material.pbrMetallicRoughness.metallicFactor = source_pbr.metallic_factor;
     material.pbrMetallicRoughness.roughnessFactor = source_pbr.roughness_factor;
     material.doubleSided = source.double_sided;
-    if (source_pbr.base_color_factor[3] < 1.0) material.alphaMode = "BLEND";
+    // See glb.cpp's make_model for why: BLEND for genuinely translucent
+    // materials, MASK (a safe no-op on an opaque-alpha texture) for
+    // textured ones, otherwise glTF's default OPAQUE.
+    if (source_pbr.base_color_factor[3] < 1.0) {
+      material.alphaMode = "BLEND";
+    } else if (source_pbr.base_color_texture) {
+      material.alphaMode = "MASK";
+    }
     if (embed_textures && source_pbr.base_color_texture) {
       material.pbrMetallicRoughness.baseColorTexture.index =
           static_cast<int>(*source_pbr.base_color_texture);

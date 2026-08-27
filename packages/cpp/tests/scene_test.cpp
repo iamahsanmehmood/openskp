@@ -85,6 +85,52 @@ TEST(Scene, PreservesDistinctFrontAndBackFaceMaterials) {
   EXPECT_TRUE(found_back);
 }
 
+// A material's overall opacity can come from either of two independent
+// SketchUp mechanisms: the plain RGBA color record's alpha byte
+// (RawMaterial::a), or the newer XML material definition's own
+// trans/useTrans attribute (RawMaterial::transparency, already exercised by
+// UsesOneDoubleSidedPrimitiveWhenFaceMaterialsMatch above). Before this fix,
+// material_color() only read transparency - a's default (255, fully
+// opaque) meant a translucent material written via the raw color byte (as
+// SkpBuilder::add_material's 4-channel overload does) lost its alpha
+// entirely once baked into the scene.
+RawParsed triangle_with_raw_alpha(int alpha) {
+  RawParsed parsed;
+  parsed.root.builder.vertices = {{1, {0, 0, 0}}, {2, {1, 0, 0}}, {3, {0, 1, 0}}};
+  parsed.root.builder.edges = {{10, {1, 2}}, {11, {2, 3}}, {12, {3, 1}}};
+  RawFace face;
+  face.loops = {{{10, 1}, {11, 1}, {12, 1}}};
+  face.normal = {0, 0, 1};
+  face.material_id = 100;
+  face.back_material_id = face.material_id;
+  parsed.root.builder.faces.emplace(20, std::move(face));
+
+  auto mat = std::make_shared<RawMaterial>();
+  mat->name = "glass";
+  mat->r = 40;
+  mat->g = 70;
+  mat->b = 100;
+  mat->a = alpha;
+  // transparency left at its default (1.0) - this material's opacity comes
+  // entirely from the raw color alpha byte, not the XML mechanism.
+  parsed.materials.emplace(mat->name, mat);
+  parsed.material_id_to_name.emplace(100, mat->name);
+  return parsed;
+}
+
+TEST(Scene, PropagatesRawColorAlphaByteIntoBaseColorFactor) {
+  auto scene = build_scene_raw(triangle_with_raw_alpha(128), {});
+  ASSERT_EQ(scene.gltf_materials.size(), 1);
+  EXPECT_NEAR(scene.gltf_materials[0].pbr_metallic_roughness.base_color_factor[3], 128.0 / 255.0,
+              1.0 / 255.0);
+}
+
+TEST(Scene, LeavesFullyOpaqueRawAlphaByteForByteUnchanged) {
+  auto scene = build_scene_raw(triangle_with_raw_alpha(255), {});
+  ASSERT_EQ(scene.gltf_materials.size(), 1);
+  EXPECT_DOUBLE_EQ(scene.gltf_materials[0].pbr_metallic_roughness.base_color_factor[3], 1.0);
+}
+
 TEST(Scene, KeepsWindingAndNormalsAlignedForMirroredInstances) {
   auto parsed = triangle_with_materials(true);
   RawDefinition definition;

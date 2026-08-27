@@ -202,7 +202,7 @@ def build_scene(parsed: Dict[str, Any]) -> Scene:
         texture_index_by_key[key] = idx
         return idx
 
-    color_to_material_index: Dict[Tuple[Tuple[int, int, int], bool, Optional[int]], int] = {}
+    color_to_material_index: Dict[Tuple[Tuple[int, int, int], bool, Optional[int], float], int] = {}
     gltf_materials: List[Dict[str, Any]] = []
 
     # Definitions currently being instantiated on the active recursion
@@ -216,19 +216,22 @@ def build_scene(parsed: Dict[str, Any]) -> Scene:
         return layer_colors.get(name, (136, 136, 136))
 
     def get_material_index(
-        color: Tuple[int, int, int], double_sided: bool, texture_index: Optional[int]
+        color: Tuple[int, int, int],
+        double_sided: bool,
+        texture_index: Optional[int],
+        transparency: float = 1.0,
     ) -> int:
         # The texture is part of the identity, not just the color: two
         # different images can average to the same RGB (real files do
         # this), and keying on color alone would merge them into one
         # material and lose one of the images.
-        key = (color, double_sided, texture_index)
+        key = (color, double_sided, texture_index, transparency)
         if key in color_to_material_index:
             return color_to_material_index[key]
         idx = len(gltf_materials)
         r, g, b = color
         pbr: Dict[str, Any] = {
-            "baseColorFactor": [r / 255, g / 255, b / 255, 1.0],
+            "baseColorFactor": [r / 255, g / 255, b / 255, transparency],
             "metallicFactor": 0.0,
             "roughnessFactor": 0.8,
         }
@@ -240,6 +243,23 @@ def build_scene(parsed: Dict[str, Any]) -> Scene:
         mat_dict: Dict[str, Any] = {"pbrMetallicRoughness": pbr}
         if double_sided:
             mat_dict["doubleSided"] = True
+        # glTF's default alphaMode is OPAQUE, which tells a conformant
+        # renderer to ignore alpha entirely - both the material's own
+        # opacity and any texture's alpha channel. Genuinely translucent
+        # materials (glass, water) need BLEND so baseColorFactor's alpha
+        # (and the texture's, if any) actually takes effect. A
+        # textured-but-otherwise-opaque material gets MASK instead: many
+        # SketchUp Warehouse assets (tree foliage, fences, signage) rely on
+        # the image's own alpha channel to cut a shape out of an otherwise
+        # flat quad, and without MASK a renderer would show the full
+        # rectangle. MASK is a no-op for a texture with no real cutout - a
+        # fully-opaque alpha channel (or none, as in JPEG) stays above the
+        # cutoff everywhere - so this is safe to set unconditionally rather
+        # than trying to detect which textures need it.
+        if transparency < 1.0:
+            mat_dict["alphaMode"] = "BLEND"
+        elif texture_index is not None:
+            mat_dict["alphaMode"] = "MASK"
         gltf_materials.append(mat_dict)
         color_to_material_index[key] = idx
         return idx
@@ -281,7 +301,7 @@ def build_scene(parsed: Dict[str, Any]) -> Scene:
                 ),
             )
 
-            for (face_color, double_sided, tex_index), group in face_groups.items():
+            for (face_color, double_sided, tex_index, transparency), group in face_groups.items():
                 local_faces = group["local_faces"]
                 if not local_faces:
                     continue
@@ -350,7 +370,7 @@ def build_scene(parsed: Dict[str, Any]) -> Scene:
                     indices[i * 3 + 1] = tri[1]
                     indices[i * 3 + 2] = tri[2]
 
-                material_index = get_material_index(face_color, double_sided, tex_index)
+                material_index = get_material_index(face_color, double_sided, tex_index, transparency)
                 glb_primitives.append(
                     GlbPrimitive(
                         positions=positions,

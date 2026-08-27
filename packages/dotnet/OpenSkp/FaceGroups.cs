@@ -28,9 +28,22 @@ namespace OpenSkp
     /// changed by this extraction.</summary>
     internal static class FaceGroups
     {
+        /// <summary>The resolved material's overall opacity: 1.0 fully
+        /// opaque, 0.0 fully invisible. Two independent SketchUp mechanisms
+        /// can reduce it - the plain RGBA color record's alpha byte, and
+        /// the newer XML material definition's own trans/useTrans
+        /// attribute (already resolved into RawMaterial.Transparency). A
+        /// real material only ever populates one of the two, but
+        /// multiplying both is safe either way: the untouched one defaults
+        /// to fully-opaque (255 or 1.0), so it never silently darkens a
+        /// material that only used the other mechanism.</summary>
+        public static double ResolveTransparency(Geometry.RawMaterial? mat) =>
+            mat == null ? 1.0 : (mat.A / 255.0) * mat.Transparency;
+
         public sealed class FaceGroup
         {
             public (int R, int G, int B) Color;
+            public double Transparency = 1.0;
             public bool DoubleSided;
             public int? TextureIndex;
             public List<(double X, double Y, double Z)> LocalVerts = new List<(double, double, double)>();
@@ -163,9 +176,9 @@ namespace OpenSkp
         /// is emitted as two single-sided triangle sets (one normal-wound
         /// front, one reverse-wound back) so each side keeps its own
         /// color.</summary>
-        public static Dictionary<((int R, int G, int B) Color, bool DoubleSided, int? TextureIndex), FaceGroup> BuildLocalFaceGroups(GeometryBuilder builder, Context ctx)
+        public static Dictionary<((int R, int G, int B) Color, bool DoubleSided, int? TextureIndex, double Transparency), FaceGroup> BuildLocalFaceGroups(GeometryBuilder builder, Context ctx)
         {
-            var faceGroups = new Dictionary<((int R, int G, int B) Color, bool DoubleSided, int? TextureIndex), FaceGroup>();
+            var faceGroups = new Dictionary<((int R, int G, int B) Color, bool DoubleSided, int? TextureIndex, double Transparency), FaceGroup>();
 
             void AddSide(
                 List<long[]> triangles, (double X, double Y, double Z) fn,
@@ -178,10 +191,11 @@ namespace OpenSkp
                 // differently-textured faces with the same average color
                 // end up in one group with one image
                 int? texIndex = ctx.TextureIndexFor(mat?.Texture);
-                var key = (color, doubleSided, texIndex);
+                double transparency = ResolveTransparency(mat);
+                var key = (color, doubleSided, texIndex, transparency);
                 if (!faceGroups.TryGetValue(key, out var group))
                 {
-                    group = new FaceGroup { Color = color, DoubleSided = doubleSided, TextureIndex = texIndex };
+                    group = new FaceGroup { Color = color, Transparency = transparency, DoubleSided = doubleSided, TextureIndex = texIndex };
                     faceGroups[key] = group;
                 }
 

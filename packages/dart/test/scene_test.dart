@@ -82,4 +82,88 @@ void main() {
     final doubleSidedCount = scene.gltfMaterials.where((m) => m['doubleSided'] == true).length;
     expect(doubleSidedCount, 4);
   });
+
+  test('translucent material gets BLEND alpha', () {
+    // Round-tripped through the real writer and reader rather than a
+    // hand-built fixture: addMaterial's 4th (alpha) channel is documented
+    // to carry SketchUp's own opacity mechanism, so this exercises the
+    // exact path a real .skp file with a translucent material takes.
+    // Before this fix, baseColorFactor's alpha was hardcoded to 1.0 and no
+    // glTF material ever declared alphaMode, so a conformant renderer
+    // showed every material fully opaque regardless of the source file's
+    // actual transparency.
+    final builder = create();
+    final glass = builder.addMaterial('Glass', [40, 70, 100, 128]);
+    builder.addFace(
+      [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (1.0, 1.0, 0.0), (0.0, 1.0, 0.0)],
+      material: glass,
+    );
+    final bytes = builder.toBytes();
+
+    final path = '${Directory.systemTemp.path}/openskp_dart_glass_test.skp';
+    File(path).writeAsBytesSync(bytes);
+    try {
+      final scene = SkpFile.open(path).buildScene();
+      final mat = scene.gltfMaterials.firstWhere((m) {
+        final pbr = m['pbrMetallicRoughness'] as Map<String, dynamic>;
+        final c = pbr['baseColorFactor'] as List;
+        return (c[3] as double) != 1.0;
+      });
+      final pbr = mat['pbrMetallicRoughness'] as Map<String, dynamic>;
+      final alpha = (pbr['baseColorFactor'] as List)[3] as double;
+      expect(alpha, closeTo(128 / 255, 0.01));
+      expect(mat['alphaMode'], 'BLEND');
+    } finally {
+      File(path).deleteSync();
+    }
+  });
+
+  test('opaque material stays byte-for-byte unchanged (no alphaMode field)', () {
+    final builder = create();
+    final red = builder.addMaterial('Red', [255, 0, 0]);
+    builder.addFace(
+      [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (1.0, 1.0, 0.0), (0.0, 1.0, 0.0)],
+      material: red,
+    );
+    final bytes = builder.toBytes();
+
+    final path = '${Directory.systemTemp.path}/openskp_dart_red_test.skp';
+    File(path).writeAsBytesSync(bytes);
+    try {
+      final scene = SkpFile.open(path).buildScene();
+      final mat = scene.gltfMaterials[0];
+      final pbr = mat['pbrMetallicRoughness'] as Map<String, dynamic>;
+      expect((pbr['baseColorFactor'] as List)[3], 1.0);
+      expect(mat.containsKey('alphaMode'), false);
+    } finally {
+      File(path).deleteSync();
+    }
+  });
+
+  test('textured materials get MASK or BLEND, never left OPAQUE', () {
+    // capilla_quiroz_v17.skp has four textured materials: two ordinary
+    // opaque ones (MASK - a safe no-op, nothing in their JPEGs to cut out)
+    // and two genuinely translucent stained-glass-style materials at alpha
+    // 0.5 (BLEND, so that opacity actually renders instead of being
+    // silently dropped under glTF's OPAQUE default).
+    final scene = SkpFile.open(fixturePath).buildScene();
+    final textured = scene.gltfMaterials.where((m) {
+      final pbr = m['pbrMetallicRoughness'] as Map<String, dynamic>;
+      return pbr.containsKey('baseColorTexture');
+    }).toList();
+    expect(textured.length, 4);
+
+    final translucent = textured.where((m) => m['alphaMode'] == 'BLEND').toList();
+    final opaque = textured.where((m) => m['alphaMode'] == 'MASK').toList();
+    expect(translucent.length, 2);
+    expect(opaque.length, 2);
+    for (final m in translucent) {
+      final pbr = m['pbrMetallicRoughness'] as Map<String, dynamic>;
+      expect((pbr['baseColorFactor'] as List)[3] as double, lessThan(1.0));
+    }
+    for (final m in opaque) {
+      final pbr = m['pbrMetallicRoughness'] as Map<String, dynamic>;
+      expect((pbr['baseColorFactor'] as List)[3], 1.0);
+    }
+  });
 }

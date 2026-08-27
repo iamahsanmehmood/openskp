@@ -121,8 +121,25 @@ def resolve_color(mat: Optional[Dict[str, Any]]) -> Optional[Tuple[int, int, int
     return (c["r"], c["g"], c["b"])
 
 
-# Key: (color, double_sided, texture_index).
-FaceGroupKey = Tuple[Tuple[int, int, int], bool, Optional[int]]
+def resolve_transparency(mat: Optional[Dict[str, Any]]) -> float:
+    """The material's overall opacity: ``1.0`` fully opaque, ``0.0`` fully
+    invisible. Two independent SketchUp mechanisms can reduce it - the plain
+    RGBA color record's alpha byte, and the newer XML material definition's
+    own ``trans``/``useTrans`` attribute (already resolved into
+    ``mat["transparency"]`` - see _core.py's "useTrans gating" comment). A
+    real material only ever populates one of the two, but multiplying both
+    is safe either way: the untouched one defaults to fully-opaque (255 or
+    1.0), so it never silently darkens a material that only used the other
+    mechanism.
+    """
+    if mat is None:
+        return 1.0
+    color_alpha = mat["color"].get("a", 255) / 255.0
+    return color_alpha * mat.get("transparency", 1.0)
+
+
+# Key: (color, double_sided, texture_index, transparency).
+FaceGroupKey = Tuple[Tuple[int, int, int], bool, Optional[int], float]
 
 
 @dataclass
@@ -161,11 +178,13 @@ def _add_face_side(
     # part of the key too - otherwise two differently-textured faces with
     # the same average color end up in one group with one image
     tex_index = texture_index_for(tex)
-    key = (color, double_sided, tex_index)
+    transparency = resolve_transparency(mat)
+    key = (color, double_sided, tex_index, transparency)
     group = face_groups.get(key)
     if group is None:
         group = {
             "color": color,
+            "transparency": transparency,
             "double_sided": double_sided,
             "texture_index": tex_index,
             "local_verts": [],

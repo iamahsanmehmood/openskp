@@ -2378,6 +2378,81 @@ class TestGlbExport:
             idx = mat["pbrMetallicRoughness"]["baseColorTexture"]["index"]
             assert 0 <= idx < len(scene_obj.textures)
 
+    def test_translucent_material_gets_blend_alpha(self, tmp_path) -> None:
+        # Round-tripped through the real writer and reader rather than a
+        # hand-built fixture: add_material's 4th (alpha) channel is
+        # documented to carry SketchUp's own opacity mechanism, so this
+        # exercises the exact path a real .skp file with a translucent
+        # material takes. Before this fix, baseColorFactor's alpha was
+        # hardcoded to 1.0 and no glTF material ever declared alphaMode, so
+        # a conformant renderer showed every material fully opaque
+        # regardless of the source file's actual transparency.
+        from openskp import create as create_fn
+        from openskp import scene as scene_mod
+        from openskp.model import SkpFile
+
+        builder = create_fn()
+        glass = builder.add_material("Glass", (40, 70, 100, 128))
+        builder.add_face([(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0)], material=glass)
+        out_path = tmp_path / "glass.skp"
+        with open(out_path, "wb") as f:
+            f.write(builder.to_bytes())
+
+        skp = SkpFile.open(str(out_path))
+        skp.parse()
+        scene_obj = scene_mod.build_scene(skp._parsed)
+        mat = next(
+            m for m in scene_obj.gltf_materials
+            if m["pbrMetallicRoughness"]["baseColorFactor"][3] != 1.0
+        )
+        assert mat["pbrMetallicRoughness"]["baseColorFactor"][3] == pytest.approx(128 / 255, abs=0.01)
+        assert mat["alphaMode"] == "BLEND"
+
+    def test_opaque_material_stays_byte_for_byte_unchanged(self, tmp_path) -> None:
+        from openskp import create as create_fn
+        from openskp import scene as scene_mod
+        from openskp.model import SkpFile
+
+        builder = create_fn()
+        red = builder.add_material("Red", (255, 0, 0))
+        builder.add_face([(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0)], material=red)
+        out_path = tmp_path / "red.skp"
+        with open(out_path, "wb") as f:
+            f.write(builder.to_bytes())
+
+        skp = SkpFile.open(str(out_path))
+        skp.parse()
+        scene_obj = scene_mod.build_scene(skp._parsed)
+        mat = scene_obj.gltf_materials[0]
+        assert mat["pbrMetallicRoughness"]["baseColorFactor"][3] == 1.0
+        assert "alphaMode" not in mat
+
+    def test_textured_materials_get_mask_or_blend_never_left_opaque(self, tmp_path) -> None:
+        # capilla_quiroz_v17.skp has four textured materials: two ordinary
+        # opaque ones (MASK - a safe no-op, nothing in their JPEGs to cut
+        # out) and two genuinely translucent stained-glass-style materials
+        # at alpha 0.5 (BLEND, so that opacity actually renders instead of
+        # being silently dropped under glTF's OPAQUE default).
+        from openskp import scene as scene_mod
+        from openskp.model import SkpFile
+
+        skp = SkpFile.open(str(self.FIXTURE))
+        skp.parse()
+        scene_obj = scene_mod.build_scene(skp._parsed)
+
+        textured = [
+            m for m in scene_obj.gltf_materials if "baseColorTexture" in m["pbrMetallicRoughness"]
+        ]
+        assert len(textured) == 4
+        translucent = [m for m in textured if m["alphaMode"] == "BLEND"]
+        opaque = [m for m in textured if m["alphaMode"] == "MASK"]
+        assert len(translucent) == 2
+        assert len(opaque) == 2
+        for m in translucent:
+            assert m["pbrMetallicRoughness"]["baseColorFactor"][3] < 1.0
+        for m in opaque:
+            assert m["pbrMetallicRoughness"]["baseColorFactor"][3] == 1.0
+
     def test_export_omits_images_by_default(self, tmp_path) -> None:
         skp, glb_path = self._export(tmp_path)
         with open(glb_path, "rb") as f:

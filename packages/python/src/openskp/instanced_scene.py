@@ -223,19 +223,22 @@ def build_instanced_scene(parsed: Dict[str, Any]) -> InstancedScene:
         texture_index_by_key[key] = idx
         return idx
 
-    color_to_material_index: Dict[Tuple[Tuple[int, int, int], bool, Optional[int]], int] = {}
+    color_to_material_index: Dict[Tuple[Tuple[int, int, int], bool, Optional[int], float], int] = {}
     gltf_materials: List[Dict[str, Any]] = []
 
     def get_material_index(
-        color: Tuple[int, int, int], double_sided: bool, texture_index: Optional[int]
+        color: Tuple[int, int, int],
+        double_sided: bool,
+        texture_index: Optional[int],
+        transparency: float = 1.0,
     ) -> int:
-        key = (color, double_sided, texture_index)
+        key = (color, double_sided, texture_index, transparency)
         if key in color_to_material_index:
             return color_to_material_index[key]
         idx = len(gltf_materials)
         r, g, b = color
         pbr: Dict[str, Any] = {
-            "baseColorFactor": [r / 255, g / 255, b / 255, 1.0],
+            "baseColorFactor": [r / 255, g / 255, b / 255, transparency],
             "metallicFactor": 0.0,
             "roughnessFactor": 0.8,
         }
@@ -244,6 +247,13 @@ def build_instanced_scene(parsed: Dict[str, Any]) -> InstancedScene:
         mat_dict: Dict[str, Any] = {"pbrMetallicRoughness": pbr}
         if double_sided:
             mat_dict["doubleSided"] = True
+        # See scene.py's get_material_index for why: BLEND for genuinely
+        # translucent materials, MASK (safe no-op on an opaque-alpha
+        # texture) for textured ones, otherwise glTF's default OPAQUE.
+        if transparency < 1.0:
+            mat_dict["alphaMode"] = "BLEND"
+        elif texture_index is not None:
+            mat_dict["alphaMode"] = "MASK"
         gltf_materials.append(mat_dict)
         color_to_material_index[key] = idx
         return idx
@@ -292,7 +302,7 @@ def build_instanced_scene(parsed: Dict[str, Any]) -> InstancedScene:
         )
 
         primitives: List[LocalPrimitive] = []
-        for (color, double_sided, tex_index), group in face_groups.items():
+        for (color, double_sided, tex_index, transparency), group in face_groups.items():
             local_faces = group["local_faces"]
             if not local_faces:
                 continue
@@ -341,7 +351,7 @@ def build_instanced_scene(parsed: Dict[str, Any]) -> InstancedScene:
                     normals=normals,
                     uvs=uvs,
                     indices=indices,
-                    material_index=get_material_index(color, double_sided, tex_index),
+                    material_index=get_material_index(color, double_sided, tex_index, transparency),
                 )
             )
 
