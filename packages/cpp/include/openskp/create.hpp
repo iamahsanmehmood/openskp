@@ -252,6 +252,17 @@ struct GroupInstanceOptions {
   bool hidden = false;
 };
 
+/// Options for `SkpBuilder::add_image`.
+struct ImageOptions {
+  Point3 translation{0.0, 0.0, 0.0};
+  /// Row-major 3x3 rotation/scale matrix (identity if unset). Pass at most one of `matrix3x3`/
+  /// `rotation`.
+  std::optional<Matrix3x3> matrix3x3;
+  std::optional<Rotation> rotation;
+  std::optional<int> layer;
+  bool hidden = false;
+};
+
 /// Accumulates one component/group definition's geometry. Construct via
 /// `SkpBuilder::add_component_definition` or `SkpBuilder::add_group`, not directly.
 ///
@@ -368,10 +379,18 @@ class OPENSKP_EXPORT SkpBuilder {
 
   /// Register an image-textured material from a local PNG or JPEG file and return a handle to
   /// pass as `FaceOptions::material`. The format is detected from the file's own magic bytes,
-  /// not its extension. UV mapping is always the default planar projection; explicit
-  /// positioning/pinning is not supported for a texture *material* (see `FaceOptions::front_uv`/
-  /// `back_uv` for per-face positioning). Same ordering rules as `add_material`.
-  int add_texture_material(const std::string& name, const std::filesystem::path& image_path);
+  /// not its extension. Same ordering rules as `add_material`.
+  ///
+  /// If this material will ever be used with `FaceOptions::front_uv`/`back_uv` pinning, pass
+  /// `applied_height = 1.0` (matching those pins' own 0..1 range) - the read-side UV formula
+  /// divides by this field even for a positioned mapping, and the default (an internal sentinel,
+  /// real SketchUp's own byte pattern for "never explicitly scaled") is astronomically small,
+  /// which corrupts ANY face using this material, not just default-projected ones (confirmed
+  /// against real SketchUp 2026-08-27 - see `write_textured_material`'s own note in create.cpp).
+  /// Left at the default for the plain default-planar-projection case, matching this method's
+  /// original, narrower scope.
+  int add_texture_material(const std::string& name, const std::filesystem::path& image_path,
+                           std::optional<double> applied_height = std::nullopt);
 
   /// Register a layer and return a handle to pass as `FaceOptions::layer`. Calling this again
   /// with a name already registered returns the same handle (`options` are ignored on a repeat
@@ -399,6 +418,45 @@ class OPENSKP_EXPORT SkpBuilder {
   /// after it, in inches.
   void add_instance(const ComponentDefinitionBuilder& definition,
                     const InstanceOptions& options = {});
+
+  /// Place a SketchUp Image entity (File > Import > Image) - a picture placed as its own object,
+  /// distinct from painting a texture material onto an ordinary face (an Image gets its own
+  /// Outliner classification and explode behavior a plain textured face doesn't).
+  ///
+  /// `width`/`height` size the image's quad in inches; the image covers it edge to edge,
+  /// undistorted regardless of the source file's own pixel aspect ratio (get the ratio right
+  /// yourself if that matters - this does not auto-derive it). `options.translation`/
+  /// `matrix3x3`/`rotation`/`hidden` place it exactly like `add_instance` - the quad starts in
+  /// the XY plane; rotate it to stand upright (e.g. on a wall) the same way you would any other
+  /// placement. `options.layer`, if given, is a handle from `add_layer`.
+  ///
+  /// \code
+  /// builder->add_image("photo.jpg", 48, 36,
+  ///                    {.translation = {0, 0, 40}, .rotation = Rotation{{1, 0, 0}, M_PI / 2}});
+  /// \endcode
+  ///
+  /// Must be called before any `add_layer`/`add_component_definition`/`add_group`/`add_face`/
+  /// `add_instance` call - like `add_texture_material` (which this calls internally to register
+  /// the image itself), it needs a material, and this writer's file format requires every
+  /// material to be registered before any geometry section begins.
+  ///
+  /// The image's quad and UV mapping are pinned explicitly (`FaceOptions::front_uv`), not left
+  /// to the default per-material tile-size projection - `add_texture_material` is called with
+  /// `applied_height = 1.0` for exactly this reason: the read-side UV formula divides by the
+  /// material's applied height even for a pinned mapping, and the library default there (a
+  /// ground-truth sentinel, not a real number) is astronomically small - confirmed via real
+  /// SketchUp screenshots (2026-08-27, Python writer) to render as a corrupted, vertically-
+  /// smeared texture when left in place. 1.0 makes that division a no-op against this method's
+  /// own 0..1 pins.
+  ///
+  /// Unlike every other entity this writer produces, CImage's exact binary schema version (see
+  /// `kImageSchema` in create.cpp) is a best-effort guess, not calibrated against a real
+  /// SketchUp-authored Image entity - none was available. This project's own reader round-trips
+  /// the result correctly, but real SketchUp's acceptance of the file is unverified beyond the
+  /// Python port's own real-SketchUp test (placement/orientation/texture all confirmed correct
+  /// there after the applied_height fix - see CHECKLIST.md).
+  void add_image(const std::filesystem::path& image_path, double width, double height,
+                 const ImageOptions& options = {});
 
   /// Add one planar face, defined by 3+ coplanar points (inches) forming a closed polygon in
   /// order - do not repeat the first point at the end. Vertices/edges are automatically shared

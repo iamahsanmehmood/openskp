@@ -23,6 +23,7 @@ import pytest
 
 from openskp.create import SkpBuilder, SkpWriteError, create
 from openskp import legacy
+from openskp import SkpFile
 
 # `openskp.create` (the submodule) and `openskp.create` (the top-level
 # re-exported function of the same name) collide as an attribute on the
@@ -1213,6 +1214,25 @@ class TestTextures:
         mat_by_slot = {s: v for s, v in materials}
         assert mat_by_slot[t1]["tex_file"] == str(png1)
         assert mat_by_slot[t2]["tex_file"] == str(png2)
+
+    def test_add_image_places_a_real_image_entity_not_a_plain_textured_face(self, tmp_path):
+        png_path = tmp_path / "photo.png"
+        png_path.write_bytes(_make_test_png())
+        builder = create()
+        builder.add_image(
+            str(png_path), width=48.0, height=36.0,
+            translation=(0.0, 0.0, 40.0),
+            rotation=((1.0, 0.0, 0.0), math.radians(90)),
+        )
+        out_path = tmp_path / "out.skp"
+        out_path.write_bytes(builder.to_bytes())
+
+        model = SkpFile.open(str(out_path)).parse()
+        image_defs = [d for d in model.definitions.values() if d.is_image]
+        assert len(image_defs) == 1
+        assert len(image_defs[0].faces) == 1
+        assert len(model.root.instances) == 1
+        assert model.root.instances[0].ref_idx == image_defs[0].id
 
 
 class TestUVPositioning:

@@ -1644,6 +1644,28 @@ function fillBuilder(builder: LegacyBuilder, ents: [number, string | null, any][
         children: [],
         properties: extractLegacyDynamicProperties(v.attrs),
       });
+    } else if (k === 'image') {
+      // Placed exactly like an ordinary component instance - same
+      // transform/definition-reference shape - the only difference is the
+      // definition it points at is flagged isImage=true (set below via
+      // imageDefIds), matching how the VFF/modern reader already treats
+      // an Image entity as "a component placed through the same instance
+      // machinery as any other". Previously dropped here entirely: this
+      // object's `k` matched none of the branches above, so an Image
+      // entity parsed without error but never appeared anywhere a caller
+      // could see it.
+      builder.instances.push({
+        offset: 0,
+        name: '',
+        refIdx: v.def,
+        refGuid: v.guid || '',
+        matrix: [...v.xform],
+        materialId: v.db.mat || null,
+        layerId: v.db.layer || null,
+        hidden: Boolean(v.db.hidden),
+        children: [],
+        properties: {},
+      });
     } else if (k === 'sectionplane') {
       builder.sectionPlanes.push({
         plane: v.plane || [0, 0, 1, 0],
@@ -1701,6 +1723,16 @@ export function parseLegacyToRaw(data: Uint8Array, options?: ParseOptions): Pars
   const { ar, root, layers, materials } = walkResult;
   const slots = ar.slots;
   emitLog(options, 'debug', `Legacy walk complete: ${materials.length} materials, ${layers.length} layers`);
+
+  // Scanned before the definitions loop below so isImage can be set
+  // correctly the first time a definition is built, matching the VFF
+  // reader's Definition.isImage field.
+  const imageDefIds = new Set<number>();
+  for (const ent of slots.values()) {
+    if (ent[0] === 'obj' && ent[1] === 'CImage' && ent[2]) {
+      imageDefIds.add(ent[2].def);
+    }
+  }
 
   // materials - keyed by name like the VFF path
   const materialsMap = new Map<string, Material>();
@@ -1772,7 +1804,7 @@ export function parseLegacyToRaw(data: Uint8Array, options?: ParseOptions): Pars
         defsDict.set(s, {
           guid: d.guid,
           name: d.name,
-          isImage: false,
+          isImage: imageDefIds.has(s),
           alwaysFacesCamera: d.faces_camera || false,
           shadowsFaceSun: d.shadows_face_sun || false,
           builder: b,

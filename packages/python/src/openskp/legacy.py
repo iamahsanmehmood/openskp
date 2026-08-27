@@ -1374,6 +1374,23 @@ def _fill_builder(builder, ents, slots):
                 'hidden': bool(v['db']['hidden']),
                 'children': [],
                 'properties': _extract_legacy_dynamic_properties(v.get('attrs'))})
+        elif k == 'image':
+            # Placed exactly like an ordinary component instance - same
+            # transform/definition-reference shape - the only difference is
+            # the definition it points at is flagged is_image=True (set
+            # above via image_def_ids), matching how the VFF/modern reader
+            # already treats an Image entity as "a component placed through
+            # the same instance machinery as any other". Previously dropped
+            # here entirely: this dict's 'k' matched none of the branches
+            # above, so an Image entity parsed without error but never
+            # appeared anywhere a caller could see it.
+            builder.instances.append({
+                'name': '', 'ref_idx': v['def'],
+                'ref_guid': v.get('guid', ''), 'matrix': list(v['xform']),
+                'material_id': v['db']['mat'] or None,
+                'layer_id': v['db']['layer'] or None,
+                'hidden': bool(v['db']['hidden']),
+                'children': [], 'properties': {}})
         elif k == 'sectionplane':
             builder.section_planes.append({
                 'plane': v.get('plane', [0.0, 0.0, 1.0, 0.0]),
@@ -1451,6 +1468,18 @@ def full_parse_legacy(skp_path: str) -> Dict[str, Any]:
 
     slots = ar.slots
 
+    # Definitions an Image entity (CImage) places - a legacy file encodes
+    # "this definition is an Image" purely by which KIND of entity places
+    # it (CImage vs CComponentInstance/CGroup), not by a byte on the
+    # definition itself (unlike the VFF path's 8315 kind-byte sub-tag).
+    # Scanned before the definitions loop below so is_image can be set
+    # correctly the first time a definition is built, matching the VFF
+    # reader's Definition.is_image field.
+    image_def_ids = {
+        ent[2]['def'] for ent in slots.values()
+        if ent[0] == 'obj' and ent[1] == 'CImage' and ent[2]
+    }
+
     # materials — keyed by name like the VFF path
     mats: Dict[str, Any] = {}
     material_id_to_name: Dict[int, str] = {}
@@ -1506,7 +1535,7 @@ def full_parse_legacy(skp_path: str) -> Dict[str, Any]:
                 b = _Builder()
                 _fill_builder(b, d['ents'], slots)
                 defs_dict[s] = {'guid': d['guid'], 'name': d['name'],
-                                'is_image': False,
+                                'is_image': s in image_def_ids,
                                 'always_faces_camera': d.get('faces_camera', False),
                                 'shadows_face_sun': d.get('shadows_face_sun', False),
                                 'builder': b}

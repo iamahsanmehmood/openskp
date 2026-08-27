@@ -73,6 +73,7 @@ export type {
   AddGroupInstanceOptions,
   AddComponentDefinitionOptions,
   AddGroupOptions,
+  AddImageOptions,
 } from './create';
 export { openExisting } from './edit';
 

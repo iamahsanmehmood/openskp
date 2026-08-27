@@ -4,6 +4,7 @@
 #include <optional>
 #include <regex>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "internal.hpp"
 
@@ -1302,6 +1303,25 @@ void fill(GeometryBuilder& b,
       i.hidden = v->hidden != 0;
       i.properties = extract_legacy_dynamic_properties(v->attrs, slots);
       b.instances.push_back(std::move(i));
+    } else if (v->k == "image") {
+      // Placed exactly like an ordinary component instance - same
+      // transform/definition-reference shape - the only difference is the
+      // definition it points at is flagged is_image=true (set below via
+      // image_def_ids), matching how the VFF/modern reader already treats
+      // an Image entity as "a component placed through the same instance
+      // machinery as any other". Previously dropped here entirely: this
+      // record's parsed value was documented as "never consumed
+      // downstream, exists purely so the byte stream stays aligned" - an
+      // Image entity parsed without error but never appeared anywhere a
+      // caller could see it.
+      RawInstance i;
+      i.ref_idx = v->def;
+      i.ref_guid = v->guid;
+      i.matrix = v->xf;
+      if (v->mat) i.material_id = v->mat;
+      if (v->layer) i.layer = std::to_string(v->layer);
+      i.hidden = v->hidden != 0;
+      b.instances.push_back(std::move(i));
     } else if (v->k == "sectionplane") {
       SectionPlane sp;
       if (v->plane.size() == 4) {
@@ -1419,6 +1439,14 @@ RawParsed parse_legacy(const ByteBuffer& data, const ParseOptions& o) {
     }
     if (!out.layer_colors.count("Layer0")) out.layer_colors["Layer0"] = {136, 136, 136};
     if (!out.layer_hidden.count("Layer0")) out.layer_hidden["Layer0"] = false;
+    // Scanned before the definitions loop below so is_image can be set
+    // correctly the first time a definition is built, matching the VFF
+    // reader's RawDefinition::is_image field.
+    std::unordered_set<std::uint64_t> image_def_ids;
+    for (auto& s : ar.slots)
+      if (!s.second.cls && s.second.name == "CImage" && s.second.v) {
+        image_def_ids.insert(s.second.v->def);
+      }
     for (auto& s : ar.slots)
       if (!s.second.cls && s.second.name == "CComponentDefinition" && s.second.v) {
         RawDefinition d;
@@ -1426,6 +1454,7 @@ RawParsed parse_legacy(const ByteBuffer& data, const ParseOptions& o) {
         d.guid = s.second.v->guid;
         d.always_faces_camera = s.second.v->faces_camera;
         d.shadows_face_sun = s.second.v->shadows_face_sun;
+        d.is_image = image_def_ids.count(s.first) != 0;
         fill(d.builder, s.second.v->ents, ar.slots);
         out.definitions[s.first] = std::move(d);
       }

@@ -1834,6 +1834,27 @@ class Legacy {
           ..layerId = v.db.layer != 0 ? v.db.layer : null
           ..children = const []
           ..properties = LegacyReaders.extractLegacyDynamicProperties(v.attrs));
+      } else if (v is ImageRec) {
+        // Placed exactly like an ordinary component instance - same
+        // transform/definition-reference shape - the only difference is
+        // the definition it points at is flagged isImage=true (set below
+        // via imageDefIds), matching how the VFF/modern reader already
+        // treats an Image entity as "a component placed through the same
+        // instance machinery as any other". Previously dropped here
+        // entirely: this record matched none of the branches above, so an
+        // Image entity parsed without error but never appeared anywhere a
+        // caller could see it.
+        builder.instances.add(GeometryBuilderInstance()
+          ..offset = 0
+          ..name = ''
+          ..refIdx = v.def
+          ..refGuid = v.guid
+          ..matrix = List<double>.from(v.xform)
+          ..materialId = v.db.mat != 0 ? v.db.mat : null
+          ..hidden = v.db.hidden != 0
+          ..layerId = v.db.layer != 0 ? v.db.layer : null
+          ..children = const []
+          ..properties = const {});
       } else if (v is SectionPlaneRec) {
         builder.sectionPlanes.add(SectionPlane(
           plane: v.plane,
@@ -1960,6 +1981,18 @@ class Legacy {
       layerHidden['Layer0'] = false;
     }
 
+    // Scanned before the definitions loop below so isImage can be set
+    // correctly the first time a definition is built, matching the VFF
+    // reader's RawDefinition.isImage field.
+    final imageDefIds = <int>{};
+    for (final entry in slots.entries) {
+      final ent = entry.value;
+      if (ent.kind == 'obj' && ent.name == 'CImage' && ent.value is ImageRec) {
+        final def = (ent.value as ImageRec).def;
+        if (def != null) imageDefIds.add(def);
+      }
+    }
+
     final defsDict = <int, RawDefinition>{};
     var processed = 0;
     var lastSlot = -1;
@@ -1976,7 +2009,7 @@ class Legacy {
           defsDict[entry.key] = RawDefinition(
             guid: d.guid,
             name: d.name,
-            isImage: false,
+            isImage: imageDefIds.contains(entry.key),
             alwaysFacesCamera: d.facesCamera,
             shadowsFaceSun: d.shadowsFaceSun,
             builder: b,

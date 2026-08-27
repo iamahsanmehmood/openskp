@@ -204,6 +204,17 @@ _DEFINITION_SCHEMA = 11
 _INSTANCE_SCHEMA = 6
 _GROUP_SCHEMA = 1
 _THUMBNAIL_SCHEMA = 1
+# UNVERIFIED - unlike every other schema constant in this file, not
+# calibrated against a real SketchUp-authored file: no sample containing a
+# CImage entity (File > Import > Image) was available. legacy.py's
+# _read_image never branches on schema the way _read_instance does for
+# CComponentInstance/CGroup (see that function's own comment on schema-gated
+# fields), so this project's OWN reader round-trips correctly regardless of
+# the exact value - this only affects whether real SketchUp accepts the
+# file. Chosen to match _INSTANCE_SCHEMA since CImage's read function always
+# expects the trailing GUID unconditionally, the same "always present" shape
+# CComponentInstance has at schema >= 5.
+_IMAGE_SCHEMA = 6
 
 # CCamera's class is declared inside the scaffold's own style/scene-manager
 # prefix (before any of our splice points), not something this project has
@@ -899,13 +910,33 @@ class _ArchiveWriter:
         self.buf.append(0)  # use_opacity = False (alpha carries transparency instead)
         return slot
 
-    def write_textured_material(self, name: str, image_bytes: bytes, texture_path: str, subtype: int) -> int:
+    def write_textured_material(
+        self, name: str, image_bytes: bytes, texture_path: str, subtype: int,
+        applied_height: Optional[float] = None,
+    ) -> int:
         """Write one image-textured ``CMaterial`` record (embedding
         ``image_bytes`` verbatim inside a ``CDib`` sub-object) and return
         its slot. ``texture_path`` is stored as-is - ground truth shows
         real SketchUp stores the original absolute file path, but any
         string round-trips fine structurally. ``subtype`` is CDib's image
         format tag (4 for PNG, 1 for JPEG - see :func:`_detect_image_subtype`).
+
+        ``applied_height``, if given, is written in place of
+        ``_TEXTURE_H_SENTINEL`` (applied width stays a fixed 1.0 either
+        way). Needed because `_face_groups.compute_face_uv` - this
+        project's own reverse-engineered, ground-truth-derived read-side
+        formula - divides a face's final UV by the material's applied
+        width/height EVEN for a `write_face`-positioned (``front_uv``)
+        mapping, not just the default projection. The sentinel decodes to
+        ~1.29e-231 - dividing by it blows up to an astronomical value,
+        which real SketchUp visibly renders as a corrupted, vertically-
+        smeared texture (confirmed 2026-08-27: two independent real-
+        SketchUp screenshots of a sentinel-height material, one default-
+        projected and one front_uv-positioned, showed the identical
+        streaky corruption). A caller that's going to position this
+        material via `front_uv`/`back_uv` should pass a real
+        ``applied_height`` (`add_image` uses 1.0, matching its own pins'
+        0..1 range) so that division is a no-op instead of a corruption.
         """
         slot = self._new_of_known_class("CMaterial", schema=_MATERIAL_SCHEMA)
         self._preamble()
@@ -924,7 +955,7 @@ class _ArchiveWriter:
             # project computes from the image; PNG has no such field.
             self.buf += _u32(90)
         self.buf += _f64(1.0)  # applied width - ground truth default when unscaled
-        self.buf += _TEXTURE_H_SENTINEL
+        self.buf += _f64(applied_height) if applied_height is not None else _TEXTURE_H_SENTINEL
         self._write_str(texture_path)
         # avg color (RGBA + pad + RGBA repeated, per legacy.py's _read_material
         # comment) - neutral near-opaque white rather than a real image
@@ -1144,6 +1175,38 @@ class _ArchiveWriter:
         self._write_instance_like(
             "CGroup", _GROUP_SCHEMA, False,
             definition_slot, name, translation, matrix3x3, group_material, group_layer,
+            hidden=hidden,
+        )
+        return 1
+
+    def write_image(
+        self,
+        definition_slot: int,
+        translation: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+        matrix3x3: Optional[Tuple[float, float, float, float, float, float, float, float, float]] = None,
+        image_layer: int = 0,
+        hidden: bool = False,
+    ) -> int:
+        """Write one ``CImage`` placing ``definition_slot`` (the quad +
+        texture material `add_image` built for it) and return how many new
+        root-entity-list slots it consumed - always 1, same contract as
+        `write_instance`/`write_group`.
+
+        legacy.py's `_read_image` docstring calls CImage "instance-shaped":
+        preamble, drawbase, a definition back-ref, a 3x4 placement, a
+        constant 1.0, a source-path string, and a 16-byte GUID - field-for-
+        field identical in count and order to `write_instance`'s own
+        matrix3x3(9)+translation(3)+1.0(1)=13 f64s, name string, GUID. The
+        source-path string is always empty - ground truth (`_read_image`'s
+        own docstring) shows real SketchUp writes it empty too, so this
+        isn't a fidelity gap, just an unused field. No material argument -
+        ground truth shows an Image entity isn't painted a material the way
+        a face or instance can be; its appearance comes entirely from the
+        definition's own textured face.
+        """
+        self._write_instance_like(
+            "CImage", _IMAGE_SCHEMA, False,
+            definition_slot, "", translation, matrix3x3, 0, image_layer,
             hidden=hidden,
         )
         return 1
@@ -2002,7 +2065,9 @@ class SkpBuilder:
         self._material_count += 1
         return slot
 
-    def add_texture_material(self, name: str, image_path: str) -> int:
+    def add_texture_material(
+        self, name: str, image_path: str, applied_height: Optional[float] = None,
+    ) -> int:
         """Register an image-textured material from a local PNG or JPEG
         file and return a handle to pass as `add_face`'s ``material``
         argument.
@@ -2011,12 +2076,18 @@ class SkpBuilder:
         extension - PNG and JPEG are the only two this project has
         confirmed the on-disk ``CDib`` subtype tag for via SDK ground
         truth (4 and 1 respectively; see :meth:`_ArchiveWriter.
-        write_textured_material`). UV mapping is always the default planar
-        projection; explicit positioning/pinning is not supported (ground
-        truth shows the default case needs no extra per-face
-        texture-coordinate record at all, which is what keeps this scoped
-        as an addition to materials rather than a much larger
-        face-attribute feature).
+        write_textured_material`).
+
+        If this material will ever be used with `add_face`'s ``front_uv``/
+        ``back_uv`` pinning, pass ``applied_height=1.0`` (matching those
+        pins' own 0..1 range) - the read-side UV formula divides by this
+        field even for a positioned mapping, and the default (an internal
+        sentinel, real SketchUp's own byte pattern for "never explicitly
+        scaled") is astronomically small, which corrupts ANY face using
+        this material, not just default-projected ones (confirmed against
+        real SketchUp 2026-08-27 - see `write_textured_material`'s own
+        note). Left at the default for the plain default-planar-projection
+        case, matching this method's original, narrower scope.
 
         Same ordering rules as `add_material` - must be called before any
         `add_layer`, `add_component_definition`, or `add_face` call.
@@ -2032,7 +2103,9 @@ class SkpBuilder:
         with open(image_path, "rb") as f:
             image_bytes = f.read()
         subtype = _detect_image_subtype(image_bytes)
-        slot = self._material_writer.write_textured_material(name, image_bytes, image_path, subtype=subtype)
+        slot = self._material_writer.write_textured_material(
+            name, image_bytes, image_path, subtype=subtype, applied_height=applied_height,
+        )
         self.materials_by_name[name] = slot
         self._material_count += 1
         return slot
@@ -2263,6 +2336,89 @@ class SkpBuilder:
         self._new_entity_count += self._geometry_writer.write_instance(
             definition.slot, name or definition.name, translation, matrix3x3, material or 0, layer or 0,
             attribute_dicts, hidden,
+        )
+        self._face_count += 1  # reuses the "at least one root entity" check in to_bytes
+
+    def add_image(
+        self,
+        image_path: str,
+        width: float,
+        height: float,
+        translation: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+        matrix3x3: Optional[Tuple[float, float, float, float, float, float, float, float, float]] = None,
+        rotation: Optional[Tuple[Tuple[float, float, float], float]] = None,
+        layer: Optional[int] = None,
+        hidden: bool = False,
+    ) -> None:
+        """Place a SketchUp Image entity (File > Import > Image) - a
+        picture placed as its own object, distinct from painting a texture
+        material onto an ordinary face (an Image gets its own Outliner
+        classification and explode behavior a plain textured face doesn't).
+
+        ``width``/``height`` size the image's quad in inches; the image
+        covers it edge to edge, undistorted regardless of the source
+        file's own pixel aspect ratio (get the ratio right yourself if
+        that matters - this does not auto-derive it).
+        ``translation``/``matrix3x3``/``rotation``/``hidden`` place it
+        exactly like `add_instance` - the quad starts in the XY plane
+        (matching every other `add_face` example in this file); rotate it
+        to stand upright (e.g. on a wall) the same way you would any other
+        placement. ``layer``, if given, is a handle from `add_layer`.
+
+        >>> painting = builder.add_material  # (not used directly here)
+        >>> builder.add_image("photo.jpg", width=48, height=36,
+        ...                    translation=(0, 0, 40),
+        ...                    rotation=((1, 0, 0), math.radians(90)))
+
+        Must be called before any `add_layer`/`add_component_definition`/
+        `add_group`/`add_face`/`add_instance` call - like
+        `add_texture_material` (which this calls internally to register
+        the image itself), it needs a material, and this writer's file
+        format requires every material to be registered before any
+        geometry section begins.
+
+        The image's quad and UV mapping are pinned explicitly (`add_face`'s
+        ``front_uv``), not left to the default per-material tile-size
+        projection - `add_texture_material` is called with
+        ``applied_height=1.0`` for exactly this reason: the read-side UV
+        formula divides by the material's applied height even for a
+        pinned mapping, and the library default there (a ground-truth
+        sentinel, not a real number) is astronomically small - confirmed
+        via real SketchUp screenshots (2026-08-27) to render as a
+        corrupted, vertically-smeared texture when left in place. 1.0
+        makes that division a no-op against this method's own 0..1 pins.
+
+        ⚠️ Unlike every other entity this writer produces, CImage's exact
+        binary schema version (see `_IMAGE_SCHEMA`) is a best-effort guess,
+        not calibrated against a real SketchUp-authored Image entity - none
+        was available. This project's own reader round-trips the result
+        correctly (verified), but real SketchUp's acceptance of the file is
+        unverified - open the output in real SketchUp before relying on
+        this, and please report back what you find either way.
+        """
+        mat = self.add_texture_material(
+            f"__openskp_image_{self._material_count}", image_path, applied_height=1.0,
+        )
+        with self.add_component_definition(f"Image{self._definition_count}") as image_def:
+            # Standard (0,0)-at-bottom-left, V increasing upward - no
+            # vertical flip. Every other UV-related fact in this file is
+            # calibrated against real SketchUp output; this one specific
+            # sense is NOT (no ground truth available - see this method's
+            # own warning above) and could come out upside down in real
+            # SketchUp if its texture sampling flips V the other way.
+            image_def.add_face(
+                [(0.0, 0.0, 0.0), (width, 0.0, 0.0), (width, height, 0.0), (0.0, height, 0.0)],
+                material=mat,
+                front_uv=[
+                    ((0.0, 0.0, 0.0), (0.0, 0.0)),
+                    ((width, 0.0, 0.0), (1.0, 0.0)),
+                    ((0.0, height, 0.0), (0.0, 1.0)),
+                ],
+            )
+        matrix3x3 = _resolve_matrix3x3(matrix3x3, rotation)
+        self._ensure_geometry_writer()
+        self._new_entity_count += self._geometry_writer.write_image(
+            image_def.slot, translation, matrix3x3, layer or 0, hidden,
         )
         self._face_count += 1  # reuses the "at least one root entity" check in to_bytes
 

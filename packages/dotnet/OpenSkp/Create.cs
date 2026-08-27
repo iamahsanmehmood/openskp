@@ -197,6 +197,19 @@ namespace OpenSkp
         internal const int DefinitionSchema = 11;
         internal const int InstanceSchema = 6;
         internal const int GroupSchema = 1;
+        // UNVERIFIED - unlike every other schema constant here, not
+        // calibrated against a real SketchUp-authored file: no sample
+        // containing a CImage entity (File > Import > Image) was available
+        // (ported from the Python writer, same caveat there - see
+        // create.py's own comment). Legacy.cs's image reader never
+        // branches on schema the way instance/group reading does, so this
+        // project's own reader round-trips correctly regardless of the
+        // exact value - this only affects whether real SketchUp accepts
+        // the file. Chosen to match InstanceSchema for the same reason as
+        // Python's _IMAGE_SCHEMA: CImage's read path always expects the
+        // trailing GUID unconditionally, the same "always present" shape
+        // CComponentInstance has.
+        internal const int ImageSchema = 6;
         internal const int ThumbnailSchema = 1;
 
         // CCamera's class is declared inside the scaffold's own
@@ -1056,8 +1069,23 @@ namespace OpenSkp
         /// <summary>Write one image-textured CMaterial record (embedding
         /// imageBytes verbatim inside a CDib sub-object) and return its
         /// slot. texturePath is stored as-is. subtype is CDib's image
-        /// format tag (4 for PNG, 1 for JPEG).</summary>
-        internal int WriteTexturedMaterial(string name, byte[] imageBytes, string texturePath, int subtype)
+        /// format tag (4 for PNG, 1 for JPEG).
+        ///
+        /// appliedHeight, if given, is written in place of
+        /// CreateConstants.TextureHSentinel (applied width stays a fixed
+        /// 1.0 either way). Needed because the reader's own
+        /// ground-truth-derived UV formula divides a face's final UV by
+        /// the material's applied width/height EVEN for a positioned
+        /// (frontUv) mapping, not just the default projection - the
+        /// sentinel decodes to ~1.29e-231, and dividing by it blows up to
+        /// an astronomical value, which real SketchUp visibly renders as a
+        /// corrupted, vertically-smeared texture (confirmed against real
+        /// SketchUp 2026-08-27 via the Python writer - see create.py's own
+        /// note on this). A caller positioning this material via
+        /// frontUv/backUv should pass a real appliedHeight (AddImage uses
+        /// 1.0, matching its own pins' 0..1 range) so that division is a
+        /// no-op instead of a corruption.</summary>
+        internal int WriteTexturedMaterial(string name, byte[] imageBytes, string texturePath, int subtype, double? appliedHeight = null)
         {
             int slot = NewOfKnownClass("CMaterial", CreateConstants.MaterialSchema);
             Preamble();
@@ -1076,7 +1104,14 @@ namespace OpenSkp
                 AddU32(90);
             }
             AddF64(1.0); // applied width - ground truth default when unscaled
-            AddRaw(CreateConstants.TextureHSentinel);
+            if (appliedHeight.HasValue)
+            {
+                AddF64(appliedHeight.Value);
+            }
+            else
+            {
+                AddRaw(CreateConstants.TextureHSentinel);
+            }
             WriteStr(texturePath);
             // avg color (RGBA + pad + RGBA repeated) - neutral near-opaque
             // white rather than a real image average, since this project
@@ -1266,6 +1301,34 @@ namespace OpenSkp
             WriteInstanceLike(
                 "CGroup", CreateConstants.GroupSchema, false,
                 definitionSlot, name, translation, matrix3x3, groupMaterial, groupLayer,
+                null, hidden);
+            return 1;
+        }
+
+        /// <summary>Write one CImage placing definitionSlot (the quad +
+        /// texture material AddImage built for it) - return contract
+        /// matches WriteInstance/WriteGroup (always 1).
+        ///
+        /// Legacy.cs's image reader treats CImage as "instance-shaped":
+        /// preamble, drawbase, a definition back-ref, a 3x4 placement, a
+        /// constant 1.0, a source-path string, and a 16-byte GUID -
+        /// field-for-field identical in count and order to WriteInstance's
+        /// own matrix3x3(9)+translation(3)+1.0(1)=13 f64s, name string,
+        /// GUID. The source-path string is always empty - ground truth
+        /// shows real SketchUp writes it empty too. No material argument -
+        /// an Image entity isn't painted a material the way a face or
+        /// instance can be; its appearance comes entirely from the
+        /// definition's own textured face.</summary>
+        internal int WriteImage(
+            int definitionSlot,
+            (double X, double Y, double Z) translation = default,
+            double[]? matrix3x3 = null,
+            int imageLayer = 0,
+            bool hidden = false)
+        {
+            WriteInstanceLike(
+                "CImage", CreateConstants.ImageSchema, false,
+                definitionSlot, "", translation, matrix3x3, 0, imageLayer,
                 null, hidden);
             return 1;
         }
@@ -2106,10 +2169,20 @@ namespace OpenSkp
         /// argument. The format is detected from the file's own magic
         /// bytes, not its extension - PNG and JPEG are the only two this
         /// project has confirmed the on-disk CDib subtype tag for via SDK
-        /// ground truth. UV mapping is always the default planar
-        /// projection; explicit positioning/pinning is not supported.
-        /// Same ordering rules as AddMaterial.</summary>
-        public int AddTextureMaterial(string name, string imagePath)
+        /// ground truth. Same ordering rules as AddMaterial.
+        ///
+        /// If this material will ever be used with AddFace's frontUv/
+        /// backUv pinning, pass appliedHeight: 1.0 (matching those pins'
+        /// own 0..1 range) - the read-side UV formula divides by this
+        /// field even for a positioned mapping, and the default (an
+        /// internal sentinel, real SketchUp's own byte pattern for "never
+        /// explicitly scaled") is astronomically small, which corrupts ANY
+        /// face using this material, not just default-projected ones
+        /// (confirmed against real SketchUp 2026-08-27 - see
+        /// WriteTexturedMaterial's own note). Left at the default for the
+        /// plain default-planar-projection case, matching this method's
+        /// original, narrower scope.</summary>
+        public int AddTextureMaterial(string name, string imagePath, double? appliedHeight = null)
         {
             if (_geometryWriter != null)
             {
@@ -2126,7 +2199,7 @@ namespace OpenSkp
             if (MaterialsByName.TryGetValue(name, out int existing)) return existing;
             byte[] imageBytes = System.IO.File.ReadAllBytes(imagePath);
             int subtype = CreateMath.DetectImageSubtype(imageBytes);
-            int slot = _materialWriter.WriteTexturedMaterial(name, imageBytes, imagePath, subtype);
+            int slot = _materialWriter.WriteTexturedMaterial(name, imageBytes, imagePath, subtype, appliedHeight);
             MaterialsByName[name] = slot;
             _materialCount += 1;
             return slot;
@@ -2334,6 +2407,89 @@ namespace OpenSkp
             _newEntityCount += _geometryWriter!.WriteInstance(
                 definition.Slot, name ?? definition.Name, translation, resolved, material ?? 0, layer ?? 0,
                 attributeDicts, hidden);
+            _faceCount += 1; // reuses the "at least one root entity" check in ToBytes
+        }
+
+        /// <summary>Place a SketchUp Image entity (File > Import > Image) -
+        /// a picture placed as its own object, distinct from painting a
+        /// texture material onto an ordinary face (an Image gets its own
+        /// Outliner classification and explode behavior a plain textured
+        /// face doesn't).
+        ///
+        /// width/height size the image's quad in inches; the image covers
+        /// it edge to edge, undistorted regardless of the source file's
+        /// own pixel aspect ratio (get the ratio right yourself if that
+        /// matters - this does not auto-derive it). translation/
+        /// matrix3x3/rotation/hidden place it exactly like AddInstance -
+        /// the quad starts in the XY plane; rotate it to stand upright
+        /// (e.g. on a wall) the same way you would any other placement.
+        /// layer, if given, is a handle from AddLayer.
+        ///
+        /// <code>
+        /// builder.AddImage("photo.jpg", 48, 36,
+        ///     translation: (0, 0, 40),
+        ///     rotation: ((1, 0, 0), Math.PI / 2));
+        /// </code>
+        ///
+        /// Must be called before any AddLayer/AddComponentDefinition/
+        /// AddGroup/AddFace/AddInstance call - like AddTextureMaterial
+        /// (which this calls internally to register the image itself), it
+        /// needs a material, and this writer's file format requires every
+        /// material to be registered before any geometry section begins.
+        ///
+        /// The image's quad and UV mapping are pinned explicitly (AddFace's
+        /// frontUv), not left to the default per-material tile-size
+        /// projection - AddTextureMaterial is called with appliedHeight:
+        /// 1.0 for exactly this reason: the read-side UV formula divides
+        /// by the material's applied height even for a pinned mapping, and
+        /// the library default there (a ground-truth sentinel, not a real
+        /// number) is astronomically small - confirmed via real SketchUp
+        /// screenshots (2026-08-27, Python writer) to render as a
+        /// corrupted, vertically-smeared texture when left in place. 1.0
+        /// makes that division a no-op against this method's own 0..1
+        /// pins.
+        ///
+        /// Unlike every other entity this writer produces, CImage's exact
+        /// binary schema version (see CreateConstants.ImageSchema) is a
+        /// best-effort guess, not calibrated against a real
+        /// SketchUp-authored Image entity - none was available. This
+        /// project's own reader round-trips the result correctly, but real
+        /// SketchUp's acceptance of the file is unverified beyond the
+        /// Python port's own real-SketchUp test (placement/orientation/
+        /// texture all confirmed correct there after the appliedHeight fix
+        /// - see CHECKLIST.md).</summary>
+        public void AddImage(
+            string imagePath, double width, double height,
+            (double X, double Y, double Z) translation = default,
+            double[]? matrix3x3 = null,
+            ((double X, double Y, double Z) Axis, double AngleRadians)? rotation = null,
+            int? layer = null,
+            bool hidden = false)
+        {
+            int mat = AddTextureMaterial($"__openskp_image_{_materialCount}", imagePath, appliedHeight: 1.0);
+            ComponentDefinitionBuilder imageDef;
+            using (imageDef = AddComponentDefinition($"Image{_definitionCount}"))
+            {
+                // Standard (0,0)-at-bottom-left, V increasing upward - no
+                // vertical flip. Every other UV-related fact in this file
+                // is calibrated against real SketchUp output; this one
+                // specific sense is NOT (no ground truth available - see
+                // this method's own warning above) and could come out
+                // upside down in real SketchUp if its texture sampling
+                // flips V the other way.
+                imageDef.AddFace(
+                    new (double, double, double)[] { (0, 0, 0), (width, 0, 0), (width, height, 0), (0, height, 0) },
+                    material: mat,
+                    frontUv: new[]
+                    {
+                        new UvCorrespondence((0, 0, 0), (0.0, 0.0)),
+                        new UvCorrespondence((width, 0, 0), (1.0, 0.0)),
+                        new UvCorrespondence((0, height, 0), (0.0, 1.0)),
+                    });
+            }
+            var resolved = CreateMath.ResolveMatrix3x3(matrix3x3, rotation);
+            EnsureGeometryWriter();
+            _newEntityCount += _geometryWriter!.WriteImage(imageDef.Slot, translation, resolved, layer ?? 0, hidden);
             _faceCount += 1; // reuses the "at least one root entity" check in ToBytes
         }
 
