@@ -69,20 +69,29 @@ describe('Legacy MFC reader - SketchUp 2020 (v20) layout', () => {
     expect(vertices).toBe(6543);
   });
 
-  it('places every root instance (a parse that drops them is still broken)', () => {
-    const model = parseSkp(arrayBuffer);
-    // 23 root-level placements: the definitions above are useless if the
-    // instances that position them in the model are lost, which is exactly
-    // what a subtly misaligned walk produces - a file that parses into an
-    // almost-empty scene instead of throwing.
-    expect(model.root.instances.length).toBe(23);
+  it(
+    'places every root instance (a parse that drops them is still broken)',
+    () => {
+      // Both parseSkp() and buildScene() do their own full pass over this
+      // legacy v20 fixture - genuinely takes longer than vitest's 5s
+      // default on a loaded CI runner (same buildScene() cost flagged on
+      // "gives every baked primitive valid uv coordinates" below), not a
+      // regression, just more headroom than the default budget.
+      const model = parseSkp(arrayBuffer);
+      // 23 root-level placements: the definitions above are useless if the
+      // instances that position them in the model are lost, which is exactly
+      // what a subtly misaligned walk produces - a file that parses into an
+      // almost-empty scene instead of throwing.
+      expect(model.root.instances.length).toBe(23);
 
-    const scene = buildScene(arrayBuffer);
-    expect(scene.sceneHierarchy.children.length).toBe(23);
-    expect(scene.glbPrimitives.length).toBe(201);
-    expect(Object.keys(scene.meshIndex).length).toBe(201);
-    expect(scene.gltfMaterials.length).toBe(17);
-  });
+      const scene = buildScene(arrayBuffer);
+      expect(scene.sceneHierarchy.children.length).toBe(23);
+      expect(scene.glbPrimitives.length).toBe(201);
+      expect(Object.keys(scene.meshIndex).length).toBe(201);
+      expect(scene.gltfMaterials.length).toBe(17);
+    },
+    20000
+  );
 
   it('resolves placed instances to definitions that carry geometry', () => {
     // Guards the failure mode that a zero entity count produces: the
@@ -116,35 +125,53 @@ describe('Legacy MFC reader - SketchUp 2020 (v20) layout', () => {
     expect(empty).toEqual([]);
   });
 
-  it('bakes geometry at a plausible real-world scale', () => {
-    const scene = buildScene(arrayBuffer);
-    let min = [Infinity, Infinity, Infinity];
-    let max = [-Infinity, -Infinity, -Infinity];
-    for (const prim of scene.glbPrimitives) {
-      for (let i = 0; i < prim.positions.length; i += 3) {
-        for (let a = 0; a < 3; a++) {
-          const v = prim.positions[i + a];
-          if (v < min[a]) min[a] = v;
-          if (v > max[a]) max[a] = v;
+  it(
+    'bakes geometry at a plausible real-world scale',
+    () => {
+      // Another fresh buildScene() on the same heavy legacy v20 fixture -
+      // see the timeout comment on "gives every baked primitive valid uv
+      // coordinates" below.
+      const scene = buildScene(arrayBuffer);
+      let min = [Infinity, Infinity, Infinity];
+      let max = [-Infinity, -Infinity, -Infinity];
+      for (const prim of scene.glbPrimitives) {
+        for (let i = 0; i < prim.positions.length; i += 3) {
+          for (let a = 0; a < 3; a++) {
+            const v = prim.positions[i + a];
+            if (v < min[a]) min[a] = v;
+            if (v > max[a]) max[a] = v;
+          }
         }
       }
-    }
-    // a shop gondola display: metres, not the 1e3-off or degenerate box a
-    // misaligned read produces
-    expect(max[0] - min[0]).toBeCloseTo(3.82, 1);
-    expect(max[1] - min[1]).toBeCloseTo(3.14, 1);
-    expect(max[2] - min[2]).toBeCloseTo(4.82, 1);
-  });
+      // a shop gondola display: metres, not the 1e3-off or degenerate box a
+      // misaligned read produces
+      expect(max[0] - min[0]).toBeCloseTo(3.82, 1);
+      expect(max[1] - min[1]).toBeCloseTo(3.14, 1);
+      expect(max[2] - min[2]).toBeCloseTo(4.82, 1);
+    },
+    20000
+  );
 
-  it('gives every baked primitive valid uv coordinates', () => {
-    const scene = buildScene(arrayBuffer);
-    expect(scene.glbPrimitives.length).toBeGreaterThan(0);
-    for (const prim of scene.glbPrimitives) {
-      const nVerts = prim.positions.length / 3;
-      expect(prim.uvs.length).toBe(nVerts * 2);
-      for (const uv of prim.uvs) {
-        expect(Number.isFinite(uv)).toBe(true);
+  it(
+    'gives every baked primitive valid uv coordinates',
+    () => {
+      // A fresh full buildScene() on this legacy v20 fixture, then a
+      // per-value assertion over every UV of every primitive - the
+      // heaviest single call in this file. Genuinely takes longer than
+      // vitest's 5s default on a loaded CI runner (observed timing out
+      // there), not a regression, just more headroom than the default
+      // budget. Same situation as edge-flags.test.ts's
+      // randomised-access-pattern test.
+      const scene = buildScene(arrayBuffer);
+      expect(scene.glbPrimitives.length).toBeGreaterThan(0);
+      for (const prim of scene.glbPrimitives) {
+        const nVerts = prim.positions.length / 3;
+        expect(prim.uvs.length).toBe(nVerts * 2);
+        for (const uv of prim.uvs) {
+          expect(Number.isFinite(uv)).toBe(true);
+        }
       }
-    }
-  });
+    },
+    20000
+  );
 });

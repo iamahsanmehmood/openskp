@@ -218,9 +218,18 @@ describe('toGLB texture embedding', () => {
     }
   });
 
-  it('is a no-op on a model with no textures', () => {
-    const plain = buildScene(readFixture('Untitled.skp'));
-    expect(plain.textures.length).toBe(0);
-    expect(toGLB(plain, { textures: true })).toEqual(toGLB(plain));
-  });
+  it(
+    'is a no-op on a model with no textures',
+    () => {
+      // Parses Untitled.skp and exports it twice for a byte-for-byte
+      // comparison - genuinely takes longer than vitest's 5s default on a
+      // loaded CI runner (observed timing out at ~5.3-5.4s there twice),
+      // not a regression, just more headroom than the default budget. Same
+      // situation as edge-flags.test.ts's randomised-access-pattern test.
+      const plain = buildScene(readFixture('Untitled.skp'));
+      expect(plain.textures.length).toBe(0);
+      expect(toGLB(plain, { textures: true })).toEqual(toGLB(plain));
+    },
+    15000
+  );
 });
