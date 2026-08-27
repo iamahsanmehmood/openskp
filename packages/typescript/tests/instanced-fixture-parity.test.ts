@@ -64,36 +64,51 @@ describe('instanced vs baked parity on real fixtures', () => {
     });
   }
 
-  it('never stores more geometry than the baked path', () => {
-    for (const name of FIXTURES) {
-      const ab = readFixture(name);
-      const bakedBytes = bakedBufferBytes(buildScene(ab));
-      const instBytes = instancedBufferBytes(buildInstancedScene(ab));
-      // Equal when nothing repeats; strictly smaller once anything does.
-      expect(instBytes).toBeLessThanOrEqual(bakedBytes);
-    }
-  });
+  it(
+    'never stores more geometry than the baked path',
+    () => {
+      // Both builders, over all 5 fixtures (including gondola_v20.skp, the
+      // same heavy legacy fixture flagged in legacy-v20.test.ts) in one
+      // test - genuinely takes longer than vitest's 5s default on a loaded
+      // CI runner, not a regression, just more headroom than the default
+      // budget.
+      for (const name of FIXTURES) {
+        const ab = readFixture(name);
+        const bakedBytes = bakedBufferBytes(buildScene(ab));
+        const instBytes = instancedBufferBytes(buildInstancedScene(ab));
+        // Equal when nothing repeats; strictly smaller once anything does.
+        expect(instBytes).toBeLessThanOrEqual(bakedBytes);
+      }
+    },
+    15000
+  );
 
-  it('resolves the same layers and dynamic properties per node', () => {
-    for (const name of FIXTURES) {
-      const ab = readFixture(name);
-      const baked = buildScene(ab);
-      const instanced = buildInstancedScene(ab);
+  it(
+    'resolves the same layers and dynamic properties per node',
+    () => {
+      // Same reason as "never stores more geometry than the baked path"
+      // above: both builders over all 5 fixtures in one test.
+      for (const name of FIXTURES) {
+        const ab = readFixture(name);
+        const baked = buildScene(ab);
+        const instanced = buildInstancedScene(ab);
 
-      // Walk both trees in lockstep: the instance walk order is identical,
-      // so a divergence in metadata shows up as a mismatch here.
-      const walk = (b: any, i: any) => {
-        expect(i.name).toBe(b.name);
-        expect(i.definitionName).toBe(b.definitionName);
-        expect(i.layer).toBe(b.layer);
-        expect(i.positionMm).toEqual(b.positionMm);
-        expect(i.properties).toEqual(b.properties);
-        expect(i.children.length).toBe(b.children.length);
-        for (let k = 0; k < b.children.length; k++) {
-          walk(b.children[k], i.children[k]);
-        }
-      };
-      walk(baked.sceneHierarchy, instanced.sceneHierarchy);
-    }
-  });
+        // Walk both trees in lockstep: the instance walk order is identical,
+        // so a divergence in metadata shows up as a mismatch here.
+        const walk = (b: any, i: any) => {
+          expect(i.name).toBe(b.name);
+          expect(i.definitionName).toBe(b.definitionName);
+          expect(i.layer).toBe(b.layer);
+          expect(i.positionMm).toEqual(b.positionMm);
+          expect(i.properties).toEqual(b.properties);
+          expect(i.children.length).toBe(b.children.length);
+          for (let k = 0; k < b.children.length; k++) {
+            walk(b.children[k], i.children[k]);
+          }
+        };
+        walk(baked.sceneHierarchy, instanced.sceneHierarchy);
+      }
+    },
+    15000
+  );
 });
