@@ -586,6 +586,38 @@ export function reconstructLoopVertices(
   return loopVerts;
 }
 
+/** Decodes the 5 predefined XML entities plus numeric character
+ * references (`&#39;`, `&#x27;`) in a raw attribute value extracted by
+ * regex rather than a real XML parser. A real material name legitimately
+ * contains `<`/`>` - SketchUp's own "&lt;auto&gt;" default-material
+ * naming convention - so without this, names like that come through
+ * still escaped instead of as the literal characters a real XML parser
+ * (this project's other four ports all use one) would produce. A single
+ * regex pass, not five sequential .replace() calls: sequential replacement
+ * would double-decode `&amp;lt;` into `<` instead of the correct `&lt;`. */
+function decodeXmlEntities(value: string): string {
+  return value.replace(/&(lt|gt|amp|apos|quot|#\d+|#x[0-9a-fA-F]+);/g, (whole, entity: string) => {
+    switch (entity) {
+      case 'lt':
+        return '<';
+      case 'gt':
+        return '>';
+      case 'amp':
+        return '&';
+      case 'apos':
+        return "'";
+      case 'quot':
+        return '"';
+      default:
+        if (entity[0] === '#') {
+          const codePoint = entity[1] === 'x' || entity[1] === 'X' ? parseInt(entity.slice(2), 16) : parseInt(entity.slice(1), 10);
+          return Number.isFinite(codePoint) ? String.fromCodePoint(codePoint) : whole;
+        }
+        return whole;
+    }
+  });
+}
+
 export function parseMaterialXml(xmlText: string): {
   name: string;
   r: number;
@@ -607,7 +639,8 @@ export function parseMaterialXml(xmlText: string): {
   const getAttr = (name: string): string | null => {
     const attrRegex = new RegExp(`\\b${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`);
     const m = attrsString.match(attrRegex);
-    return m ? (m[1] !== undefined ? m[1] : m[2]) : null;
+    const raw = m ? (m[1] !== undefined ? m[1] : m[2]) : null;
+    return raw === null ? null : decodeXmlEntities(raw);
   };
 
   const name = getAttr('name') || 'unknown';
@@ -647,7 +680,8 @@ export function parseMaterialXml(xmlText: string): {
     const getTexAttr = (n: string): string | null => {
       const r = new RegExp(`\\b${n}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`);
       const m = texAttrs.match(r);
-      return m ? (m[1] !== undefined ? m[1] : m[2]) : null;
+      const raw = m ? (m[1] !== undefined ? m[1] : m[2]) : null;
+      return raw === null ? null : decodeXmlEntities(raw);
     };
     textureFilename = getTexAttr('textureFilename') || '';
     const xs = parseFloat(getTexAttr('xScale') || '0');
@@ -661,7 +695,7 @@ export function parseMaterialXml(xmlText: string): {
   const imageMatch = xmlText.match(
     /<(?:[a-zA-Z0-9_]+:)?image\b[^>]*\bpath\s*=\s*(?:"([^"]*)"|'([^']*)')[^>]*\/?>/
   );
-  const imagePath = imageMatch ? (imageMatch[1] !== undefined ? imageMatch[1] : imageMatch[2]) : '';
+  const imagePath = imageMatch ? decodeXmlEntities(imageMatch[1] !== undefined ? imageMatch[1] : imageMatch[2]!) : '';
 
   return {
     name,

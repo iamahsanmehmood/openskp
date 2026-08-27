@@ -349,6 +349,32 @@ describe("Material transparency (useTrans gating)", () => {
   });
 });
 
+describe('XML entity decoding (parseMaterialXml uses regex, not a real XML parser)', () => {
+  it('decodes "&lt;auto&gt;" to the literal "<auto>" - SketchUp\'s own default-material naming convention', () => {
+    // A real XML attribute value with < or > MUST be escaped in the
+    // source (the raw bytes literally contain "&lt;auto&gt;") - a real
+    // XML parser (this project's other four ports all use one) decodes
+    // that back to the literal characters automatically. This project's
+    // TS/C++ readers extract attributes via regex instead, which had no
+    // decoding step at all: the name came through still escaped.
+    const xml = '<mat:material name="&lt;auto&gt;" colorRed="255" colorGreen="128" colorBlue="128"/>';
+    const parsed = parseMaterialXml(xml);
+    expect(parsed).not.toBeNull();
+    expect(parsed!.name).toBe('<auto>');
+  });
+
+  it('decodes &amp;/&apos;/&quot; and numeric character references, without double-decoding &amp;lt;', () => {
+    const xml =
+      '<mat:material name="Tom &amp;amp; Jerry&apos;s &quot;Wood&quot; &#65;&#x42;" colorRed="1" colorGreen="1" colorBlue="1"/>';
+    const parsed = parseMaterialXml(xml);
+    expect(parsed).not.toBeNull();
+    // &amp;amp; must decode to the single literal "&amp;", not further to
+    // "&" - a naive multi-pass replace (decode &amp; first, then &lt; on
+    // the result) would over-decode this.
+    expect(parsed!.name).toBe('Tom &amp; Jerry\'s "Wood" AB');
+  });
+});
+
 describe('Edge display flags (D307)', () => {
   it('decodes plain / hidden / soft+smooth edges from the D307 flag byte', () => {
     const buildEdge = (entityId: number, flag: number) => {

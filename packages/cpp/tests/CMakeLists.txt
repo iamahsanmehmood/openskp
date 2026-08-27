@@ -28,6 +28,7 @@ add_executable(
   stl_export_test.cpp
   texture_test.cpp
   triangulator_test.cpp
+  xml_entities_test.cpp
   zip_entry_size_cap_test.cpp
 )
 
