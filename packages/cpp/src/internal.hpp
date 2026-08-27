@@ -157,6 +157,7 @@ struct V20FillerHit {
 std::optional<V20FillerHit> find_count_after_v20_filler(const ByteBuffer&, std::size_t,
                                                         std::uint32_t);
 RawParsed full_parse(const ByteBuffer&, const ParseOptions&);
+std::string decode_xml_entities(const std::string&);
 RawParsed parse_legacy(const ByteBuffer&, const ParseOptions&);
 void collect_geometry(const std::vector<TlvNode>&, GeometryBuilder&);
 void collect_layers(const std::vector<TlvNode>&, std::map<EntityId, std::string>&);

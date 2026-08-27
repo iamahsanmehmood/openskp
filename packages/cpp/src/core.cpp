@@ -6,6 +6,14 @@
 #include "internal.hpp"
 
 namespace openskp {
+
+// Declared here (defined below, outside the anonymous namespace) so it's
+// independently unit-testable via internal.hpp, the same way build_scene_raw
+// and friends are - the anonymous-namespace members below it that call it
+// (attr()) never leave this translation unit, but the decoder itself is a
+// small, self-contained piece worth exercising directly.
+std::string decode_xml_entities(const std::string& value);
+
 namespace {
 struct Zip {
   mz_zip_archive z{};
@@ -102,10 +110,19 @@ std::vector<Header> headers(const ByteBuffer& d, std::size_t start, std::size_t 
 
 std::string str(const ByteBuffer& b) { return {reinterpret_cast<const char*>(b.data()), b.size()}; }
 
+// Decodes the 5 predefined XML entities plus numeric character references
+// (&#39;, &#x27;) in a raw attribute value extracted by regex rather than a
+// real XML parser. A real material name legitimately contains "<"/">" -
+// SketchUp's own "&lt;auto&gt;" default-material naming convention - so
+// without this, names like that come through still escaped instead of as
+// the literal characters a real XML parser (this project's other four
+// ports all use one) would produce. A single regex pass, not five
+// sequential replacements: sequential replacement would double-decode
+// "&amp;lt;" into "<" instead of the correct "&lt;".
 std::string attr(const std::string& s, const std::string& key) {
   std::regex r("(?:^|\\s)" + key + "\\s*=\\s*[\\\"']([^\\\"']*)[\\\"']", std::regex::icase);
   std::smatch m;
-  return std::regex_search(s, m, r) ? m[1].str() : "";
+  return std::regex_search(s, m, r) ? decode_xml_entities(m[1].str()) : "";
 }
 
 int integer(const std::string& s, int fallback) {
@@ -211,6 +228,70 @@ std::optional<RawStyle> style_xml(const ByteBuffer& bytes) {
   return o;
 }
 }  // namespace
+
+// Decodes the 5 predefined XML entities plus numeric character references
+// (&#39;, &#x27;) in a raw attribute value extracted by regex rather than a
+// real XML parser. A real material name legitimately contains "<"/">" -
+// SketchUp's own "&lt;auto&gt;" default-material naming convention - so
+// without this, names like that come through still escaped instead of as
+// the literal characters a real XML parser (this project's other four
+// ports all use one) would produce. A single regex pass, not five
+// sequential replacements: sequential replacement would double-decode
+// "&amp;lt;" into "<" instead of the correct "&lt;".
+std::string decode_xml_entities(const std::string& value) {
+  static const std::regex entity("&(lt|gt|amp|apos|quot|#[0-9]+|#[xX][0-9a-fA-F]+);");
+  std::string out;
+  out.reserve(value.size());
+  auto begin = std::sregex_iterator(value.begin(), value.end(), entity);
+  auto end = std::sregex_iterator();
+  std::size_t lastPos = 0;
+  for (auto it = begin; it != end; ++it) {
+    const auto& m = *it;
+    out.append(value, lastPos, static_cast<std::size_t>(m.position()) - lastPos);
+    const std::string name = m[1].str();
+    if (name == "lt") {
+      out += '<';
+    } else if (name == "gt") {
+      out += '>';
+    } else if (name == "amp") {
+      out += '&';
+    } else if (name == "apos") {
+      out += '\'';
+    } else if (name == "quot") {
+      out += '"';
+    } else if (name[0] == '#') {
+      try {
+        const bool hex = name.size() > 1 && (name[1] == 'x' || name[1] == 'X');
+        const unsigned long codePoint =
+            std::stoul(name.substr(hex ? 2 : 1), nullptr, hex ? 16 : 10);
+        // UTF-8 encode. SketchUp material/style names are practically
+        // always within the BMP, but handle the full range regardless.
+        if (codePoint <= 0x7F) {
+          out += static_cast<char>(codePoint);
+        } else if (codePoint <= 0x7FF) {
+          out += static_cast<char>(0xC0 | (codePoint >> 6));
+          out += static_cast<char>(0x80 | (codePoint & 0x3F));
+        } else if (codePoint <= 0xFFFF) {
+          out += static_cast<char>(0xE0 | (codePoint >> 12));
+          out += static_cast<char>(0x80 | ((codePoint >> 6) & 0x3F));
+          out += static_cast<char>(0x80 | (codePoint & 0x3F));
+        } else {
+          out += static_cast<char>(0xF0 | (codePoint >> 18));
+          out += static_cast<char>(0x80 | ((codePoint >> 12) & 0x3F));
+          out += static_cast<char>(0x80 | ((codePoint >> 6) & 0x3F));
+          out += static_cast<char>(0x80 | (codePoint & 0x3F));
+        }
+      } catch (...) {
+        out += m[0].str();  // malformed numeric reference - leave as-is
+      }
+    } else {
+      out += m[0].str();
+    }
+    lastPos = static_cast<std::size_t>(m.position() + m.length());
+  }
+  out.append(value, lastPos, std::string::npos);
+  return out;
+}
 
 RawParsed full_parse(const ByteBuffer& data, const ParseOptions& o) {
   emit_log(o, LogLevel::information, "Parsing buffer (" + std::to_string(data.size()) + " bytes)");
