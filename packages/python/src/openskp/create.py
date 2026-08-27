@@ -902,7 +902,8 @@ class _ArchiveWriter:
             raise SkpWriteError("string too long to encode (255 char limit)")
         self.buf += b"\xff\xfe\xff" + struct.pack("<B", n) + encoded
 
-    def write_material(self, name: str, rgba: Tuple[int, int, int, int]) -> int:
+    def write_material(self, name: str, rgba: Tuple[int, int, int, int],
+                       opacity: Optional[float] = None) -> int:
         """Write one solid-color ``CMaterial`` record and return its slot."""
         slot = self._new_of_known_class("CMaterial", schema=_MATERIAL_SCHEMA)
         self._preamble()
@@ -911,14 +912,16 @@ class _ArchiveWriter:
         self.buf += bytes(rgba)
         self._write_str("")  # texture path (empty - no texture)
         self.buf += bytes(8)  # unknown/padding - ground truth is all-zero here
-        self.buf += _f64(1.0)  # opacity
-        self.buf.append(0)  # use_opacity = False (alpha carries transparency instead)
+        # Stored TRANSPARENCY (0 = opaque); see write_textured_material.
+        self.buf += _f64(1.0 if opacity is None else 1.0 - float(opacity))
+        self.buf.append(0 if opacity is None else 1)  # use_opacity gates it
         return slot
 
     def write_textured_material(
         self, name: str, image_bytes: bytes, texture_path: str, subtype: int,
         applied_width: Optional[float] = None,
         applied_height: Optional[float] = None,
+        opacity: Optional[float] = None,
     ) -> int:
         """Write one image-textured ``CMaterial`` record (embedding
         ``image_bytes`` verbatim inside a ``CDib`` sub-object) and return
@@ -983,8 +986,15 @@ class _ArchiveWriter:
         self.buf += bytes([255, 255, 255, 254, 0, 255, 255, 255, 254])
         self._write_str("")  # second name field - empty in ground truth
         self.buf += struct.pack("<I", 1) + struct.pack("<I", 0)  # blob (colorize-related, ground truth: 1, 0)
-        self.buf += _f64(1.0)  # opacity
-        self.buf.append(0)  # use_opacity = False
+        # Opacity, and the u8 that GATES it. The stored f64 is TRANSPARENCY
+        # (0 = opaque) - legacy.py turns it into the opacity factor
+        # ``Material.transparency`` exposes with ``1.0 - stored``, and only
+        # when the flag is set - so an ``opacity`` argument is written
+        # inverted and round-trips as itself. Hardcoding 1.0/False meant a
+        # translucent material came out solid: a pool's water, 0.6 in the
+        # source, exported as an opaque slab.
+        self.buf += _f64(1.0 if opacity is None else 1.0 - float(opacity))
+        self.buf.append(0 if opacity is None else 1)
         return slot
 
     def write_layer(
@@ -2057,7 +2067,8 @@ class SkpBuilder:
         self._face_count = 0
         self._dim_font_slot: Optional[int] = None
 
-    def add_material(self, name: str, rgba: Sequence[int]) -> int:
+    def add_material(self, name: str, rgba: Sequence[int],
+                     opacity: Optional[float] = None) -> int:
         """Register a solid-color material and return a handle to pass as
         `add_face`'s ``material`` argument. ``rgba`` is ``(r, g, b)`` or
         ``(r, g, b, a)``, each 0-255; alpha defaults to 255 (opaque).
@@ -2084,7 +2095,7 @@ class SkpBuilder:
             rgba = (*rgba, 255)
         if len(rgba) != 4 or not all(isinstance(c, int) and 0 <= c <= 255 for c in rgba):
             raise SkpWriteError("rgba must be 3 or 4 integers in 0-255")
-        slot = self._material_writer.write_material(name, tuple(rgba))
+        slot = self._material_writer.write_material(name, tuple(rgba), opacity=opacity)
         self.materials_by_name[name] = slot
         self._material_count += 1
         return slot
@@ -2093,6 +2104,7 @@ class SkpBuilder:
         self, name: str, image_path: str,
         applied_width: Optional[float] = None,
         applied_height: Optional[float] = None,
+        opacity: Optional[float] = None,
     ) -> int:
         """Register an image-textured material from a local PNG or JPEG
         file and return a handle to pass as `add_face`'s ``material``
@@ -2129,6 +2141,7 @@ class SkpBuilder:
         slot = self._material_writer.write_textured_material(
             name, image_bytes, image_path, subtype=subtype,
             applied_width=applied_width, applied_height=applied_height,
+            opacity=opacity,
         )
         self.materials_by_name[name] = slot
         self._material_count += 1
