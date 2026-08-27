@@ -12,12 +12,11 @@ namespace {
 // SketchUp's own "<auto>" default-material convention - which the raw XML
 // bytes MUST spell as "&lt;auto&gt;" - came through still escaped.
 
-TEST(XmlEntities, DecodesLtGt) {
-  EXPECT_EQ(decode_xml_entities("&lt;auto&gt;"), "<auto>");
-}
+TEST(XmlEntities, DecodesLtGt) { EXPECT_EQ(decode_xml_entities("&lt;auto&gt;"), "<auto>"); }
 
 TEST(XmlEntities, DecodesAmpApostropheQuote) {
-  EXPECT_EQ(decode_xml_entities("Tom &amp; Jerry&apos;s &quot;Wood&quot;"), "Tom & Jerry's \"Wood\"");
+  EXPECT_EQ(decode_xml_entities("Tom &amp; Jerry&apos;s &quot;Wood&quot;"),
+            "Tom & Jerry's \"Wood\"");
 }
 
 TEST(XmlEntities, DecodesNumericCharacterReferencesDecimalAndHex) {

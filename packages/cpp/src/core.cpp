@@ -262,7 +262,8 @@ std::string decode_xml_entities(const std::string& value) {
     } else if (name[0] == '#') {
       try {
         const bool hex = name.size() > 1 && (name[1] == 'x' || name[1] == 'X');
-        const unsigned long codePoint = std::stoul(name.substr(hex ? 2 : 1), nullptr, hex ? 16 : 10);
+        const unsigned long codePoint =
+            std::stoul(name.substr(hex ? 2 : 1), nullptr, hex ? 16 : 10);
         // UTF-8 encode. SketchUp material/style names are practically
         // always within the BMP, but handle the full range regardless.
         if (codePoint <= 0x7F) {
