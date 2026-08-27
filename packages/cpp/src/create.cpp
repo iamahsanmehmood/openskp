@@ -104,6 +104,15 @@ constexpr int kDibSchema = 3;
 constexpr int kDefinitionSchema = 11;
 constexpr int kInstanceSchema = 6;
 constexpr int kGroupSchema = 1;
+// UNVERIFIED - unlike every other schema constant here, not calibrated against a real
+// SketchUp-authored file: no sample containing a CImage entity (File > Import > Image) was
+// available (ported from the Python writer, same caveat there - see create.py's own comment).
+// legacy.cpp's image reader never branches on schema the way instance/group reading does, so
+// this project's own reader round-trips correctly regardless of the exact value - this only
+// affects whether real SketchUp accepts the file. Chosen to match kInstanceSchema for the same
+// reason as Python's _IMAGE_SCHEMA: CImage's read path always expects the trailing GUID
+// unconditionally, the same "always present" shape CComponentInstance has.
+constexpr int kImageSchema = 6;
 constexpr int kThumbnailSchema = 1;
 constexpr int kFtcSchema = 4;
 constexpr int kArcCurveSchema = 3;
@@ -755,8 +764,19 @@ class ArchiveWriter {
   }
 
   // `subtype` is CDib's image format tag (4 for PNG, 1 for JPEG - see detect_image_subtype).
+  //
+  // `applied_height`, if given, is written in place of kTextureHSentinel (applied width stays a
+  // fixed 1.0 either way). Needed because the reader's own ground-truth-derived UV formula
+  // divides a face's final UV by the material's applied width/height EVEN for a positioned
+  // (front_uv) mapping, not just the default projection - the sentinel decodes to ~1.29e-231,
+  // and dividing by it blows up to an astronomical value, which real SketchUp visibly renders as
+  // a corrupted, vertically-smeared texture (confirmed against real SketchUp 2026-08-27 via the
+  // Python writer - see create.py's own note on this). A caller positioning this material via
+  // front_uv/back_uv should pass a real applied_height (add_image uses 1.0, matching its own
+  // pins' 0..1 range) so that division is a no-op instead of a corruption.
   int write_textured_material(const std::string& name, const ByteBuffer& image_bytes,
-                              const std::string& texture_path, int subtype) {
+                              const std::string& texture_path, int subtype,
+                              std::optional<double> applied_height = std::nullopt) {
     int slot = new_of_known_class("CMaterial", kMaterialSchema);
     preamble();
     write_str(name);
@@ -772,7 +792,11 @@ class ArchiveWriter {
       append_u32(buf, 90);
     }
     append_f64(buf, 1.0);  // applied width - ground truth default when unscaled
-    append_bytes(buf, kTextureHSentinel, sizeof(kTextureHSentinel));
+    if (applied_height) {
+      append_f64(buf, *applied_height);
+    } else {
+      append_bytes(buf, kTextureHSentinel, sizeof(kTextureHSentinel));
+    }
     write_str(texture_path);
     // avg color: neutral near-opaque white. Alpha is 254, not fully-opaque 255 - the reader
     // treats alpha=255 here as one of its two "this material is colorized" signals; a plain
@@ -906,6 +930,23 @@ class ArchiveWriter {
                   bool hidden) {
     write_instance_like("CGroup", kGroupSchema, false, definition_slot, name, translation,
                         matrix3x3, group_material, group_layer, {}, hidden);
+    return 1;
+  }
+
+  // Places definition_slot (the quad + texture material add_image built for it); return contract
+  // matches write_instance/write_group (always 1).
+  //
+  // legacy.cpp's image reader treats CImage as "instance-shaped": preamble, drawbase, a
+  // definition back-ref, a 3x4 placement, a constant 1.0, a source-path string, and a 16-byte
+  // GUID - field-for-field identical in count and order to write_instance's own
+  // matrix3x3(9)+translation(3)+1.0(1)=13 f64s, name string, GUID. The source-path string is
+  // always empty - ground truth shows real SketchUp writes it empty too. No material argument -
+  // an Image entity isn't painted a material the way a face or instance can be; its appearance
+  // comes entirely from the definition's own textured face.
+  int write_image(int definition_slot, Point3 translation, std::optional<Matrix3x3> matrix3x3,
+                  int image_layer, bool hidden) {
+    write_instance_like("CImage", kImageSchema, false, definition_slot, "", translation, matrix3x3,
+                        0, image_layer, {}, hidden);
     return 1;
   }
 
@@ -1604,7 +1645,8 @@ int SkpBuilder::add_material(const std::string& name, Color3 rgb) {
 }
 
 int SkpBuilder::add_texture_material(const std::string& name,
-                                     const std::filesystem::path& image_path) {
+                                     const std::filesystem::path& image_path,
+                                     std::optional<double> applied_height) {
   if (impl_->geometry_writer)
     throw SkpWriteError("add_texture_material must be called before any add_face calls");
   if (impl_->layer_writer)
@@ -1620,7 +1662,7 @@ int SkpBuilder::add_texture_material(const std::string& name,
   ByteBuffer image_bytes((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
   int subtype = detail::detect_image_subtype(image_bytes);
   int slot = impl_->material_writer.write_textured_material(name, image_bytes, image_path.string(),
-                                                            subtype);
+                                                            subtype, applied_height);
   materials_by_name[name] = slot;
   impl_->material_count += 1;
   return slot;
@@ -1709,6 +1751,32 @@ void SkpBuilder::add_instance(const ComponentDefinitionBuilder& definition,
   impl_->new_entity_count += impl_->geometry_writer->write_instance(
       definition.slot(), options.name.value_or(definition.name()), options.translation, matrix,
       options.material.value_or(0), options.layer.value_or(0), dicts, options.hidden);
+  impl_->face_count += 1;  // reuses the "at least one root entity" check in to_bytes
+}
+
+void SkpBuilder::add_image(const std::filesystem::path& image_path, double width, double height,
+                           const ImageOptions& options) {
+  int mat = add_texture_material("__openskp_image_" + std::to_string(impl_->material_count),
+                                 image_path, 1.0);
+  auto& image_def = add_component_definition("Image" + std::to_string(impl_->definition_count));
+  // Standard (0,0)-at-bottom-left, V increasing upward - no vertical flip. Every other UV-related
+  // fact in this file is calibrated against real SketchUp output; this one specific sense is NOT
+  // (no ground truth available - see add_image's own warning in create.hpp) and could come out
+  // upside down in real SketchUp if its texture sampling flips V the other way.
+  FaceOptions face_opts;
+  face_opts.material = mat;
+  face_opts.front_uv = UvCorrespondence{
+      UvPoint{Point3{0.0, 0.0, 0.0}, {0.0, 0.0}},
+      UvPoint{Point3{width, 0.0, 0.0}, {1.0, 0.0}},
+      UvPoint{Point3{0.0, height, 0.0}, {0.0, 1.0}},
+  };
+  image_def.add_face({{0.0, 0.0, 0.0}, {width, 0.0, 0.0}, {width, height, 0.0}, {0.0, height, 0.0}},
+                     face_opts);
+  image_def.close();
+  auto matrix = detail::resolve_matrix3x3(options.matrix3x3, options.rotation);
+  impl_->ensure_geometry_writer();
+  impl_->new_entity_count += impl_->geometry_writer->write_image(
+      image_def.slot(), options.translation, matrix, options.layer.value_or(0), options.hidden);
   impl_->face_count += 1;  // reuses the "at least one root entity" check in to_bytes
 }
 

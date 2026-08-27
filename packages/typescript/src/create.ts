@@ -148,6 +148,17 @@ const TEXTURE_H_SENTINEL = hexToBytes('f0ffffffffffff0f');
 const DEFINITION_SCHEMA = 11;
 const INSTANCE_SCHEMA = 6;
 const GROUP_SCHEMA = 1;
+// UNVERIFIED - unlike every other schema constant here, not calibrated
+// against a real SketchUp-authored file: no sample containing a CImage
+// entity (File > Import > Image) was available (ported from the Python
+// writer, same caveat there - see create.py's own comment). legacy.ts's
+// image reader never branches on schema the way instance/group reading
+// does, so this project's own reader round-trips correctly regardless of
+// the exact value - this only affects whether real SketchUp accepts the
+// file. Chosen to match INSTANCE_SCHEMA for the same reason as Python's
+// _IMAGE_SCHEMA: CImage's read path always expects the trailing GUID
+// unconditionally, the same "always present" shape CComponentInstance has.
+const IMAGE_SCHEMA = 6;
 const THUMBNAIL_SCHEMA = 1;
 const LAYER_SCHEMA = 3;
 const FTC_SCHEMA = 4;
@@ -747,8 +758,23 @@ class ArchiveWriter {
 
   /** Write one image-textured CMaterial record (embedding `imageBytes`
    * verbatim inside a CDib sub-object) and return its slot. `subtype` is
-   * CDib's image format tag (4 for PNG, 1 for JPEG). */
-  writeTexturedMaterial(name: string, imageBytes: Uint8Array, texturePath: string, subtype: number): number {
+   * CDib's image format tag (4 for PNG, 1 for JPEG).
+   *
+   * `appliedHeight`, if given, is written in place of TEXTURE_H_SENTINEL
+   * (applied width stays a fixed 1.0 either way). Needed because the
+   * reader's own ground-truth-derived UV formula divides a face's final
+   * UV by the material's applied width/height EVEN for a positioned
+   * (`frontUv`) mapping, not just the default projection - the sentinel
+   * decodes to ~1.29e-231, and dividing by it blows up to an astronomical
+   * value, which real SketchUp visibly renders as a corrupted,
+   * vertically-smeared texture (confirmed against real SketchUp
+   * 2026-08-27 via the Python writer - see create.py's own note on this).
+   * A caller positioning this material via `frontUv`/`backUv` should pass
+   * a real `appliedHeight` (addImage uses 1.0, matching its own pins'
+   * 0..1 range) so that division is a no-op instead of a corruption. */
+  writeTexturedMaterial(
+    name: string, imageBytes: Uint8Array, texturePath: string, subtype: number, appliedHeight?: number
+  ): number {
     const slot = this.newOfKnownClass('CMaterial', MATERIAL_SCHEMA);
     this.preamble();
     this.writeStr(name);
@@ -765,7 +791,11 @@ class ArchiveWriter {
       this.pushU32(90);
     }
     this.pushF64(1.0); // applied width - ground truth default when unscaled
-    this.pushBytes(TEXTURE_H_SENTINEL);
+    if (appliedHeight !== undefined) {
+      this.pushF64(appliedHeight);
+    } else {
+      this.pushBytes(TEXTURE_H_SENTINEL);
+    }
     this.writeStr(texturePath);
     // avg color: neutral near-opaque white, alpha 254 not 255 - legacy.ts's
     // own reader treats alpha=255 here as one of its two "this material is
@@ -899,6 +929,30 @@ class ArchiveWriter {
     this.writeInstanceLike(
       'CGroup', GROUP_SCHEMA, false,
       definitionSlot, name, translation, matrix3x3, groupMaterial, groupLayer, [], hidden
+    );
+    return 1;
+  }
+
+  /** Write one CImage placing `definitionSlot` (the quad + texture
+   * material `addImage` built for it) - return contract matches
+   * writeInstance/writeGroup (always 1).
+   *
+   * legacy.ts's image reader treats CImage as "instance-shaped": preamble,
+   * drawbase, a definition back-ref, a 3x4 placement, a constant 1.0, a
+   * source-path string, and a 16-byte GUID - field-for-field identical in
+   * count and order to writeInstance's own
+   * matrix3x3(9)+translation(3)+1.0(1)=13 f64s, name string, GUID. The
+   * source-path string is always empty - ground truth shows real SketchUp
+   * writes it empty too. No material argument - an Image entity isn't
+   * painted a material the way a face or instance can be; its appearance
+   * comes entirely from the definition's own textured face. */
+  writeImage(
+    definitionSlot: number, translation: Point3 = [0, 0, 0], matrix3x3?: Matrix3x3,
+    imageLayer = 0, hidden = false
+  ): number {
+    this.writeInstanceLike(
+      'CImage', IMAGE_SCHEMA, false,
+      definitionSlot, '', translation, matrix3x3, 0, imageLayer, [], hidden
     );
     return 1;
   }
@@ -1280,6 +1334,18 @@ export interface AddInstanceOptions {
   hidden?: boolean;
 }
 
+export interface AddImageOptions {
+  translation?: Point3;
+  matrix3x3?: Matrix3x3;
+  rotation?: Rotation;
+  layer?: number;
+  hidden?: boolean;
+  /** Stored as-is in the image material's own texture-path field (SketchUp
+   * shows it as the source file's original path); has no effect on the
+   * embedded image bytes themselves. */
+  texturePath?: string;
+}
+
 export interface AddGroupInstanceOptions {
   name?: string;
   translation?: Point3;
@@ -1562,8 +1628,14 @@ export class SkpBuilder {
    * as Node, where there's no universal way to read an arbitrary file
    * path. `texturePath`, if given, is stored as-is in the material
    * record (SketchUp shows it as the texture's original file path); it
-   * has no effect on the embedded image bytes themselves. */
-  addTextureMaterial(name: string, imageBytes: Uint8Array, texturePath = ''): number {
+   * has no effect on the embedded image bytes themselves.
+   *
+   * If this material will ever be used with addFace's `frontUv`/`backUv`
+   * pinning, pass `appliedHeight: 1.0` (matching those pins' own 0..1
+   * range) - see writeTexturedMaterial's own note on why the default
+   * (an internal sentinel) corrupts any face using this material, not
+   * just default-projected ones. */
+  addTextureMaterial(name: string, imageBytes: Uint8Array, texturePath = '', appliedHeight?: number): number {
     if (this.geometryWriter !== null) {
       throw new SkpWriteError('addTextureMaterial must be called before any addFace calls');
     }
@@ -1575,7 +1647,7 @@ export class SkpBuilder {
     }
     if (this.materialsByName.has(name)) return this.materialsByName.get(name)!;
     const subtype = detectImageSubtype(imageBytes);
-    const slot = this.materialWriter.writeTexturedMaterial(name, imageBytes, texturePath, subtype);
+    const slot = this.materialWriter.writeTexturedMaterial(name, imageBytes, texturePath, subtype, appliedHeight);
     this.materialsByName.set(name, slot);
     this.materialCount += 1;
     return slot;
@@ -1719,6 +1791,79 @@ export class SkpBuilder {
     this.newEntityCount += (this.geometryWriter as ArchiveWriter).writeInstance(
       definition.slot, options.name ?? definition.name, options.translation ?? [0, 0, 0], matrix3x3,
       options.material ?? 0, options.layer ?? 0, attributeDicts, options.hidden ?? false
+    );
+    this.faceCount += 1; // reuses the "at least one root entity" check in toBytes
+  }
+
+  /** Place a SketchUp Image entity (File > Import > Image) - a picture
+   * placed as its own object, distinct from painting a texture material
+   * onto an ordinary face (an Image gets its own Outliner classification
+   * and explode behavior a plain textured face doesn't).
+   *
+   * `width`/`height` size the image's quad in inches; the image covers it
+   * edge to edge, undistorted regardless of the source file's own pixel
+   * aspect ratio (get the ratio right yourself if that matters). Unlike
+   * `addTextureMaterial`, this takes the image bytes directly (browser
+   * compatibility - see addTextureMaterial's own note).
+   *
+   * ```ts
+   * builder.addImage(photoBytes, 48, 36, {
+   *   translation: [0, 0, 40],
+   *   rotation: { axis: [1, 0, 0], angleRadians: Math.PI / 2 },
+   * });
+   * ```
+   *
+   * Must be called before any addLayer/addComponentDefinition/addGroup/
+   * addFace/addInstance call - like addTextureMaterial (which this calls
+   * internally to register the image itself), it needs a material, and
+   * this writer's file format requires every material to be registered
+   * before any geometry section begins.
+   *
+   * The image's quad and UV mapping are pinned explicitly (addFace's
+   * `frontUv`), not left to the default per-material tile-size projection
+   * - addTextureMaterial is called with `appliedHeight: 1.0` for exactly
+   * this reason: the read-side UV formula divides by the material's
+   * applied height even for a pinned mapping, and the library default
+   * there (a ground-truth sentinel, not a real number) is astronomically
+   * small - confirmed via real SketchUp screenshots (2026-08-27, Python
+   * writer) to render as a corrupted, vertically-smeared texture when
+   * left in place. 1.0 makes that division a no-op against this method's
+   * own 0..1 pins.
+   *
+   * ⚠️ Unlike every other entity this writer produces, CImage's exact
+   * binary schema version (see IMAGE_SCHEMA) is a best-effort guess, not
+   * calibrated against a real SketchUp-authored Image entity - none was
+   * available. This project's own reader round-trips the result
+   * correctly, but real SketchUp's acceptance of the file is unverified
+   * beyond the Python port's own real-SketchUp test (placement/
+   * orientation/texture all confirmed correct there after the
+   * appliedHeight fix - see CHECKLIST.md). */
+  addImage(imageBytes: Uint8Array, width: number, height: number, options: AddImageOptions = {}): void {
+    const mat = this.addTextureMaterial(
+      `__openskp_image_${this.materialCount}`, imageBytes, options.texturePath ?? '', 1.0
+    );
+    const imageDef = this.addComponentDefinition(`Image${this.definitionCount}`, (def) => {
+      // Standard (0,0)-at-bottom-left, V increasing upward - no vertical
+      // flip. Every other UV-related fact in this file is calibrated
+      // against real SketchUp output; this one specific sense is NOT (no
+      // ground truth available) and could come out upside down in real
+      // SketchUp if its texture sampling flips V the other way.
+      def.addFace(
+        [[0, 0, 0], [width, 0, 0], [width, height, 0], [0, height, 0]],
+        {
+          material: mat,
+          frontUv: [
+            [[0, 0, 0], [0, 0]],
+            [[width, 0, 0], [1, 0]],
+            [[0, height, 0], [0, 1]],
+          ],
+        }
+      );
+    });
+    const matrix3x3 = resolveMatrix3x3(options.matrix3x3, options.rotation);
+    this.ensureGeometryWriter();
+    this.newEntityCount += (this.geometryWriter as ArchiveWriter).writeImage(
+      imageDef.slot, options.translation ?? [0, 0, 0], matrix3x3, options.layer ?? 0, options.hidden ?? false
     );
     this.faceCount += 1; // reuses the "at least one root entity" check in toBytes
   }

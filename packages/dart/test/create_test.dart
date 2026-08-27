@@ -407,6 +407,29 @@ void main() {
         tmpDir.deleteSync(recursive: true);
       }
     });
+
+    test('addImage places a real Image entity, not a plain textured face', () {
+      final tmpDir = Directory.systemTemp.createTempSync('openskp_tex_');
+      final pngPath = '${tmpDir.path}${Platform.pathSeparator}tex.png';
+      File(pngPath).writeAsBytesSync(makeFakePng());
+      try {
+        final builder = create();
+        builder.addImage(
+          pngPath, 48, 36,
+          translation: (0.0, 0.0, 40.0),
+          rotation: ((1.0, 0.0, 0.0), pi / 2),
+        );
+        final model = SkpFile.fromBuffer(builder.toBytes()).parse();
+
+        final imageDefs = model.definitions.values.where((d) => d.isImage).toList();
+        expect(imageDefs, hasLength(1));
+        expect(imageDefs.single.faces, hasLength(1));
+        expect(model.root.instances, hasLength(1));
+        expect(model.root.instances.single.refIdx, imageDefs.single.id);
+      } finally {
+        tmpDir.deleteSync(recursive: true);
+      }
+    });
   });
 
   group('Layers', () {

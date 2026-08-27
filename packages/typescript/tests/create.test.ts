@@ -323,6 +323,22 @@ describe('Textures', () => {
     const builder = create();
     expect(() => builder.addTextureMaterial('Bogus', Uint8Array.from([1, 2, 3, 4]))).toThrow(/unrecognized image format/);
   });
+
+  it('addImage places a real Image entity, not a plain textured face', () => {
+    const builder = create();
+    const png = makeTestPng();
+    builder.addImage(png, 48, 36, {
+      translation: [0, 0, 40],
+      rotation: { axis: [1, 0, 0], angleRadians: Math.PI / 2 },
+    });
+    const model = parseSkp(toBuffer(builder.toBytes()));
+
+    const imageDefs = [...model.definitions.values()].filter((d) => d.isImage);
+    expect(imageDefs.length).toBe(1);
+    expect(imageDefs[0].faces.length).toBe(1);
+    expect(model.root.instances.length).toBe(1);
+    expect(model.root.instances[0].refIdx).toBe(imageDefs[0].id);
+  });
 });
 
 describe('UV positioning', () => {

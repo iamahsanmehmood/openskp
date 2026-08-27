@@ -143,6 +143,38 @@ TEST(Create, TexturedMaterialRoundTrips) {
   EXPECT_EQ(*mat.texture->data, fake_png_bytes());
 }
 
+TEST(Create, AddImagePlacesARealImageEntityNotAPlainTexturedFace) {
+  auto tmp_path = std::filesystem::temp_directory_path() / "openskp_create_test_image.png";
+  {
+    std::ofstream f(tmp_path, std::ios::binary);
+    ByteBuffer png = fake_png_bytes();
+    f.write(reinterpret_cast<const char*>(png.data()), static_cast<std::streamsize>(png.size()));
+  }
+
+  auto builder = create();
+  ImageOptions opts;
+  opts.translation = {0, 0, 40};
+  opts.rotation = Rotation{{1, 0, 0}, kPi / 2};
+  builder->add_image(tmp_path, 48, 36, opts);
+
+  SkpModel model = round_trip(*builder);
+  std::filesystem::remove(tmp_path);
+
+  int image_def_count = 0;
+  EntityId image_def_id = 0;
+  for (const auto& [id, def] : model.definitions) {
+    if (def.is_image) {
+      image_def_count++;
+      image_def_id = id;
+      EXPECT_EQ(def.faces.size(), 1u);
+    }
+  }
+  EXPECT_EQ(image_def_count, 1);
+  ASSERT_EQ(model.root().instances.size(), 1u);
+  ASSERT_TRUE(model.root().instances[0].ref_idx.has_value());
+  EXPECT_EQ(*model.root().instances[0].ref_idx, image_def_id);
+}
+
 TEST(Create, MaterialsMustPrecedeGeometry) {
   auto builder = create();
   builder->add_face({{0, 0, 0}, {1, 0, 0}, {1, 1, 0}});

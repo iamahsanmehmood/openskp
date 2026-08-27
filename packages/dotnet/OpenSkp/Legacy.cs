@@ -1983,6 +1983,33 @@ namespace OpenSkp
                         Properties = LegacyReaders.ExtractLegacyDynamicProperties(instRec.Attrs),
                     });
                 }
+                else if (v is ImageRec imgRec)
+                {
+                    // Placed exactly like an ordinary component instance -
+                    // same transform/definition-reference shape - the only
+                    // difference is the definition it points at is flagged
+                    // IsImage=true (set below via imageDefIds), matching
+                    // how the VFF/modern reader already treats an Image
+                    // entity as "a component placed through the same
+                    // instance machinery as any other". Previously
+                    // dropped here entirely: this record matched none of
+                    // the branches above, so an Image entity parsed
+                    // without error but never appeared anywhere a caller
+                    // could see it.
+                    builder.Instances.Add(new GeometryBuilderInstance
+                    {
+                        Offset = 0,
+                        Name = "",
+                        RefIdx = imgRec.Def,
+                        RefGuid = imgRec.Guid,
+                        Matrix = imgRec.Xform.ToList(),
+                        MaterialId = imgRec.Db.Mat != 0 ? imgRec.Db.Mat : (long?)null,
+                        Hidden = imgRec.Db.Hidden != 0,
+                        LayerId = imgRec.Db.Layer != 0 ? imgRec.Db.Layer : (long?)null,
+                        Children = new List<TlvNode>(),
+                        Properties = new Dictionary<string, string>(),
+                    });
+                }
                 else if (v is SectionPlaneRec spRec)
                 {
                     builder.SectionPlanes.Add(new SectionPlane
@@ -2113,6 +2140,19 @@ namespace OpenSkp
                 layerHidden["Layer0"] = false;
             }
 
+            // Scanned before the definitions loop below so IsImage can be
+            // set correctly the first time a definition is built, matching
+            // the VFF reader's RawDefinition.IsImage field.
+            var imageDefIds = new HashSet<int>();
+            foreach (var kv in slots)
+            {
+                if (kv.Value.Kind == "obj" && kv.Value.Name == "CImage" && kv.Value.Value is ImageRec imgDefRec
+                    && imgDefRec.Def.HasValue)
+                {
+                    imageDefIds.Add(imgDefRec.Def.Value);
+                }
+            }
+
             var defsDict = new Dictionary<long, Geometry.RawDefinition>();
             int processed = 0;
             long lastSlot = -1;
@@ -2130,7 +2170,7 @@ namespace OpenSkp
                         {
                             Guid = d.Guid,
                             Name = d.Name,
-                            IsImage = false,
+                            IsImage = imageDefIds.Contains((int)kv.Key),
                             AlwaysFacesCamera = d.FacesCamera,
                             ShadowsFaceSun = d.ShadowsFaceSun,
                             Builder = ToGeometryBuilder(b),

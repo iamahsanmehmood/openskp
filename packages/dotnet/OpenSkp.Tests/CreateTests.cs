@@ -203,6 +203,32 @@ namespace OpenSkp.Tests
         }
 
         [Fact]
+        public void AddImagePlacesARealImageEntityNotAPlainTexturedFace()
+        {
+            string pngPath = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".png");
+            File.WriteAllBytes(pngPath, TinyPng());
+            try
+            {
+                var builder = SkpCreate.NewFile();
+                builder.AddImage(
+                    pngPath, 48, 36,
+                    translation: (0, 0, 40),
+                    rotation: ((1, 0, 0), Math.PI / 2));
+                var model = SkpFile.Parse(builder.ToBytes());
+
+                var imageDefs = model.Definitions.Values.Where(d => d.IsImage).ToList();
+                Assert.Single(imageDefs);
+                Assert.Single(imageDefs[0].Faces);
+                Assert.Single(model.Root.Instances);
+                Assert.Equal(imageDefs[0].Id, model.Root.Instances[0].RefIdx);
+            }
+            finally
+            {
+                File.Delete(pngPath);
+            }
+        }
+
+        [Fact]
         public void LayerRoundTrips()
         {
             var builder = SkpCreate.NewFile();
