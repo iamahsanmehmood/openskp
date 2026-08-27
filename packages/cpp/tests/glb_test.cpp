@@ -111,6 +111,49 @@ TEST(Glb, SerializesSceneAndBinaryData) {
   EXPECT_TRUE(model.materials[0].doubleSided);
 }
 
+TEST(Glb, DeclaresBlendAlphaModeForTranslucentMaterials) {
+  Scene scene;
+  scene.gltf_materials.push_back({"Glass", "", {{0.16, 0.27, 0.39, 0.5}, 0.0, 0.8}, false});
+  scene.glb_primitives.push_back({
+      {0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F},
+      {0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 1.0F},
+      {0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 1.0F},
+      {0, 1, 2},
+      0,
+      "triangle",
+  });
+
+  const auto model = load_glb(to_glb(scene));
+  ASSERT_EQ(model.materials.size(), 1);
+  EXPECT_EQ(model.materials[0].alphaMode, "BLEND");
+}
+
+TEST(Glb, DeclaresMaskAlphaModeForTexturedOpaqueMaterials) {
+  // glTF's default alphaMode is OPAQUE, which tells a conformant renderer
+  // to ignore a texture's own alpha channel entirely. A textured material
+  // whose baseColorFactor alpha is 1.0 (SketchUp Warehouse foliage/fence/
+  // signage cutouts commonly look like this) needs MASK declared instead,
+  // or the image's transparent regions render as a solid rectangle.
+  Scene scene;
+  GltfMaterial material{"Leaf", "", {{0.2, 0.5, 0.1, 1.0}, 0.0, 0.8}, false};
+  material.pbr_metallic_roughness.base_color_texture = std::size_t{0};
+  scene.gltf_materials.push_back(material);
+  scene.textures.push_back(
+      {ByteBuffer{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a}, "image/png", "leaf.png"});
+  scene.glb_primitives.push_back({
+      {0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F},
+      {0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 1.0F},
+      {0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 1.0F},
+      {0, 1, 2},
+      0,
+      "triangle",
+  });
+
+  const auto model = load_glb(to_glb(scene));
+  ASSERT_EQ(model.materials.size(), 1);
+  EXPECT_EQ(model.materials[0].alphaMode, "MASK");
+}
+
 TEST(Glb, SerializesAnEmptyScene) {
   const auto model = load_glb(to_glb({}));
   ASSERT_EQ(model.scenes.size(), 1);

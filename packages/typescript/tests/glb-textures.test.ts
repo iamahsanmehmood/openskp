@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
-import { buildScene, toGLB } from '../src/index';
+import { buildScene, toGLB, create } from '../src/index';
 import { sniffImageMime } from '../src/model';
 
 /**
@@ -93,6 +93,77 @@ describe('buildScene texture collection', () => {
     // adding the texture to the grouping key must not split primitives that
     // were previously batched together
     expect(scene.glbPrimitives.length).toBe(21);
+  });
+});
+
+describe('Material transparency -> glTF alpha', () => {
+  // Round-tripped through the real writer and reader rather than a hand-built
+  // fixture: addMaterial's 4th (alpha) channel is documented to carry
+  // SketchUp's own opacity mechanism (create.ts's `use_opacity = False -
+  // alpha carries transparency instead`), so this exercises the exact path a
+  // real .skp file with a translucent material takes.
+  it('propagates a translucent material into baseColorFactor alpha + alphaMode BLEND', () => {
+    const builder = create();
+    const glass = builder.addMaterial('Glass', [40, 70, 100, 128]);
+    builder.addFace(
+      [
+        [0, 0, 0],
+        [1, 0, 0],
+        [1, 1, 0],
+        [0, 1, 0],
+      ],
+      { material: glass }
+    );
+    const scene = buildScene(builder.toBytes());
+    const mat = (scene.gltfMaterials as any[]).find(
+      (m) => m.pbrMetallicRoughness?.baseColorFactor
+    );
+    expect(mat).toBeDefined();
+    expect(mat.pbrMetallicRoughness.baseColorFactor[3]).toBeCloseTo(128 / 255, 2);
+    expect(mat.alphaMode).toBe('BLEND');
+  });
+
+  it('leaves a fully opaque material byte-for-byte as before (no alphaMode field)', () => {
+    const builder = create();
+    const red = builder.addMaterial('Red', [255, 0, 0]);
+    builder.addFace(
+      [
+        [0, 0, 0],
+        [1, 0, 0],
+        [1, 1, 0],
+        [0, 1, 0],
+      ],
+      { material: red }
+    );
+    const scene = buildScene(builder.toBytes());
+    const mat = (scene.gltfMaterials as any[])[0];
+    expect(mat.pbrMetallicRoughness.baseColorFactor[3]).toBe(1.0);
+    expect(mat.alphaMode).toBeUndefined();
+  });
+
+  it('marks every textured material MASK or BLEND, never left at the OPAQUE default', () => {
+    // A conformant glTF viewer ignores alpha entirely under the default
+    // alphaMode (OPAQUE) - both the texture's own channel and
+    // baseColorFactor's. capilla_quiroz_v17.skp has four textured
+    // materials: two ordinary opaque ones (MASK - a safe no-op, since
+    // there's nothing in their JPEGs to cut out) and two genuinely
+    // translucent stained-glass-style materials at alpha 0.5 (BLEND, so
+    // that opacity actually renders instead of being silently dropped).
+    const scene = buildScene(readFixture('capilla_quiroz_v17.skp'));
+    const textured = (scene.gltfMaterials as any[]).filter(
+      (m) => m.pbrMetallicRoughness?.baseColorTexture
+    );
+    expect(textured.length).toBe(4);
+    for (const mat of textured) {
+      expect(['MASK', 'BLEND']).toContain(mat.alphaMode);
+      if (mat.alphaMode === 'BLEND') {
+        expect(mat.pbrMetallicRoughness.baseColorFactor[3]).toBeLessThan(1.0);
+      } else {
+        expect(mat.pbrMetallicRoughness.baseColorFactor[3]).toBe(1.0);
+      }
+    }
+    const translucent = textured.filter((m) => m.alphaMode === 'BLEND');
+    expect(translucent.length).toBe(2);
   });
 });
 

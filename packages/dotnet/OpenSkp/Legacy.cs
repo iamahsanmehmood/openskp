@@ -2080,6 +2080,7 @@ namespace OpenSkp
                     R = rgba[0],
                     G = rgba[1],
                     B = rgba[2],
+                    A = rgba.Length > 3 ? rgba[3] : 255,
                     Transparency = trans,
                     Colorized = colorized,
                     // colourize type is not decoded in the legacy record;

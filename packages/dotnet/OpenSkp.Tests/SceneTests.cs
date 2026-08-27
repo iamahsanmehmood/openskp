@@ -95,5 +95,101 @@ namespace OpenSkp.Tests
                 ((System.Collections.Generic.IDictionary<string, object>)m).TryGetValue("doubleSided", out var v) && v is bool b && b);
             Assert.Equal(4, doubleSidedCount);
         }
+
+        private static System.Collections.Generic.IDictionary<string, object> Pbr(object mat) =>
+            (System.Collections.Generic.IDictionary<string, object>)
+                ((System.Collections.Generic.IDictionary<string, object>)mat)["pbrMetallicRoughness"];
+
+        [Fact]
+        public void TranslucentMaterialGetsBlendAlpha()
+        {
+            // Round-tripped through the real writer and reader rather than
+            // a hand-built fixture: AddMaterial's 4th (alpha) channel is
+            // documented to carry SketchUp's own opacity mechanism, so
+            // this exercises the exact path a real .skp file with a
+            // translucent material takes. Before this fix, the legacy
+            // binary reader dropped the color record's alpha byte entirely
+            // (Legacy.cs hardcoded it to 255 downstream in Parser.cs), and
+            // even where transparency WAS correctly parsed,
+            // baseColorFactor's alpha was hardcoded to 1.0 with no
+            // material ever declaring alphaMode - so a conformant renderer
+            // showed every material fully opaque regardless of the source
+            // file's actual transparency.
+            var builder = SkpCreate.NewFile();
+            int glass = builder.AddMaterial("Glass", (40, 70, 100, 128));
+            builder.AddFace(new (double, double, double)[] { (0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0) }, material: glass);
+            byte[] bytes = builder.ToBytes();
+
+            string path = Path.Combine(Path.GetTempPath(), $"openskp_dotnet_glass_{Guid.NewGuid():N}.skp");
+            File.WriteAllBytes(path, bytes);
+            try
+            {
+                var scene = SkpFile.BuildScene(path);
+                var mat = scene.GltfMaterials
+                    .Select(m => (Mat: m, Pbr: Pbr(m)))
+                    .First(x => (double)((double[])x.Pbr["baseColorFactor"])[3] != 1.0);
+                double alpha = (double)((double[])mat.Pbr["baseColorFactor"])[3];
+                Assert.InRange(alpha, 128 / 255.0 - 0.01, 128 / 255.0 + 0.01);
+                Assert.Equal("BLEND", ((System.Collections.Generic.IDictionary<string, object>)mat.Mat)["alphaMode"]);
+            }
+            finally
+            {
+                File.Delete(path);
+            }
+        }
+
+        [Fact]
+        public void OpaqueMaterialStaysByteForByteUnchanged()
+        {
+            var builder = SkpCreate.NewFile();
+            int red = builder.AddMaterial("Red", (255, 0, 0));
+            builder.AddFace(new (double, double, double)[] { (0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0) }, material: red);
+            byte[] bytes = builder.ToBytes();
+
+            string path = Path.Combine(Path.GetTempPath(), $"openskp_dotnet_red_{Guid.NewGuid():N}.skp");
+            File.WriteAllBytes(path, bytes);
+            try
+            {
+                var scene = SkpFile.BuildScene(path);
+                var mat = scene.GltfMaterials[0];
+                var pbr = Pbr(mat);
+                Assert.Equal(1.0, (double)((double[])pbr["baseColorFactor"])[3]);
+                Assert.False(((System.Collections.Generic.IDictionary<string, object>)mat).ContainsKey("alphaMode"));
+            }
+            finally
+            {
+                File.Delete(path);
+            }
+        }
+
+        [Fact]
+        public void TexturedMaterialsGetMaskOrBlendNeverLeftOpaque()
+        {
+            // capilla_quiroz_v17.skp has four textured materials: two
+            // ordinary opaque ones (MASK - a safe no-op, nothing in their
+            // JPEGs to cut out) and two genuinely translucent
+            // stained-glass-style materials at alpha 0.5 (BLEND, so that
+            // opacity actually renders instead of being silently dropped
+            // under glTF's OPAQUE default).
+            var scene = SkpFile.BuildScene(FixturePath("capilla_quiroz_v17.skp"));
+            var textured = scene.GltfMaterials
+                .Select(m => (Mat: (System.Collections.Generic.IDictionary<string, object>)m, Pbr: Pbr(m)))
+                .Where(x => x.Pbr.ContainsKey("baseColorTexture"))
+                .ToList();
+            Assert.Equal(4, textured.Count);
+
+            var translucent = textured.Where(x => (string)x.Mat["alphaMode"] == "BLEND").ToList();
+            var opaque = textured.Where(x => (string)x.Mat["alphaMode"] == "MASK").ToList();
+            Assert.Equal(2, translucent.Count);
+            Assert.Equal(2, opaque.Count);
+            foreach (var x in translucent)
+            {
+                Assert.True((double)((double[])x.Pbr["baseColorFactor"])[3] < 1.0);
+            }
+            foreach (var x in opaque)
+            {
+                Assert.Equal(1.0, (double)((double[])x.Pbr["baseColorFactor"])[3]);
+            }
+        }
     }
 }

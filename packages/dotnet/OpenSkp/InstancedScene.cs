@@ -200,17 +200,17 @@ namespace OpenSkp
                 return idx;
             }
 
-            var colorToMaterialIndex = new Dictionary<((int, int, int) Color, bool DoubleSided, int? TextureIndex), int>();
+            var colorToMaterialIndex = new Dictionary<((int, int, int) Color, bool DoubleSided, int? TextureIndex, double Transparency), int>();
             var gltfMaterials = new List<object>();
 
-            int GetMaterialIndex((int R, int G, int B) color, bool doubleSided, int? textureIndex)
+            int GetMaterialIndex((int R, int G, int B) color, bool doubleSided, int? textureIndex, double transparency = 1.0)
             {
-                var key = (color, doubleSided, textureIndex);
+                var key = (color, doubleSided, textureIndex, transparency);
                 if (colorToMaterialIndex.TryGetValue(key, out var existing)) return existing;
                 int idx = gltfMaterials.Count;
                 var pbr = new Dictionary<string, object>
                 {
-                    ["baseColorFactor"] = new[] { color.R / 255.0, color.G / 255.0, color.B / 255.0, 1.0 },
+                    ["baseColorFactor"] = new[] { color.R / 255.0, color.G / 255.0, color.B / 255.0, transparency },
                     ["metallicFactor"] = 0.0,
                     ["roughnessFactor"] = 0.8,
                 };
@@ -220,6 +220,18 @@ namespace OpenSkp
                 }
                 var material = new Dictionary<string, object> { ["pbrMetallicRoughness"] = pbr };
                 if (doubleSided) material["doubleSided"] = true;
+                // See Scene.cs's GetMaterialIndex for why: BLEND for
+                // genuinely translucent materials, MASK (safe no-op on an
+                // opaque-alpha texture) for textured ones, otherwise
+                // glTF's default OPAQUE.
+                if (transparency < 1.0)
+                {
+                    material["alphaMode"] = "BLEND";
+                }
+                else if (textureIndex.HasValue)
+                {
+                    material["alphaMode"] = "MASK";
+                }
                 gltfMaterials.Add(material);
                 colorToMaterialIndex[key] = idx;
                 return idx;
@@ -331,7 +343,7 @@ namespace OpenSkp
                         Normals = normals,
                         Uvs = uvs,
                         Indices = indices,
-                        MaterialIndex = GetMaterialIndex(color, group.DoubleSided, texIndex),
+                        MaterialIndex = GetMaterialIndex(color, group.DoubleSided, texIndex, group.Transparency),
                     });
                 }
 

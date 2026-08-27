@@ -94,7 +94,7 @@ namespace OpenSkp
                 var mat = new Material
                 {
                     Name = rawMat.Name,
-                    Color = (rawMat.R, rawMat.G, rawMat.B, 255),
+                    Color = (rawMat.R, rawMat.G, rawMat.B, rawMat.A),
                     Transparency = rawMat.Transparency,
                     Texture = texture,
                     Colorized = rawMat.Colorized,

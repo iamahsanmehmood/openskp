@@ -88,9 +88,17 @@ std::shared_ptr<RawMaterial> find_material(const RawParsed& parsed, std::optiona
 
 std::optional<FaceColorKey> material_color(const std::shared_ptr<RawMaterial>& material) {
   if (!material) return {};
-  return FaceColorKey{
-      material->r, material->g, material->b,
-      static_cast<int>(std::lround(std::clamp(material->transparency, 0.0, 1.0) * 255.0))};
+  // Two independent SketchUp mechanisms can reduce a material's opacity:
+  // the plain RGBA color record's alpha byte (material->a), and the newer
+  // XML material definition's own trans/useTrans attribute (already
+  // resolved into material->transparency). A real material only ever
+  // populates one of the two, but multiplying both is safe either way: the
+  // untouched one defaults to fully-opaque (255 or 1.0), so it never
+  // silently darkens a material that only used the other mechanism.
+  const double combined =
+      (std::clamp(material->a, 0, 255) / 255.0) * std::clamp(material->transparency, 0.0, 1.0);
+  return FaceColorKey{material->r, material->g, material->b,
+                      static_cast<int>(std::lround(combined * 255.0))};
 }
 
 FaceColorKey default_color(const RawParsed& parsed, const std::string& layer) {

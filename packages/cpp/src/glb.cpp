@@ -180,7 +180,22 @@ gltf::Model make_model(const Scene& scene, bool embed_textures) {
     material.pbrMetallicRoughness.metallicFactor = source_pbr.metallic_factor;
     material.pbrMetallicRoughness.roughnessFactor = source_pbr.roughness_factor;
     material.doubleSided = source.double_sided;
-    if (source_pbr.base_color_factor[3] < 1.0) material.alphaMode = "BLEND";
+    // glTF's default alphaMode is OPAQUE, which tells a conformant
+    // renderer to ignore alpha entirely - both the material's own opacity
+    // and any texture's alpha channel. Genuinely translucent materials
+    // (glass, water) need BLEND so baseColorFactor's alpha actually takes
+    // effect. A textured-but-otherwise-opaque material gets MASK instead:
+    // many SketchUp Warehouse assets (tree foliage, fences, signage) rely
+    // on the image's own alpha channel to cut a shape out of an otherwise
+    // flat quad, and without MASK a renderer would show the full
+    // rectangle. MASK is a no-op for a texture with no real cutout, so
+    // this is safe to set unconditionally rather than trying to detect
+    // which textures need it.
+    if (source_pbr.base_color_factor[3] < 1.0) {
+      material.alphaMode = "BLEND";
+    } else if (source_pbr.base_color_texture) {
+      material.alphaMode = "MASK";
+    }
     // baseColorTexture.index defaults to -1 (unset); TinyGLTF omits the
     // key from the serialized JSON in that case, so leaving it untouched
     // when not embedding is the strip - no separate pass needed, unlike

@@ -26,6 +26,13 @@ let currentScene = null;
 let currentLoadedFilename = '';
 let layerVisibility = {};
 
+// Three.js Texture objects decoded from currentScene.textures, keyed by index
+// into that array - built lazily so a texture shared by several materials is
+// only decoded once. Reset (and its object URLs revoked) on every new load.
+let threeTextureCache = new Map();
+let textureObjectUrls = [];
+const textureLoader = new THREE.TextureLoader();
+
 // DOM Elements
 const canvasContainer = document.getElementById('canvas-container');
 const dropOverlay = document.getElementById('drop-overlay');
@@ -296,11 +303,11 @@ function clearScene() {
     if (child.isMesh) {
       if (child.geometry) child.geometry.dispose();
       if (child.material) {
-        if (Array.isArray(child.material)) {
-          child.material.forEach((mat) => mat.dispose());
-        } else {
-          child.material.dispose();
-        }
+        const materials = Array.isArray(child.material) ? child.material : [child.material];
+        materials.forEach((mat) => {
+          if (mat.map) mat.map.dispose();
+          mat.dispose();
+        });
       }
     }
   });
@@ -309,6 +316,34 @@ function clearScene() {
   while (modelGroup.children.length > 0) {
     modelGroup.remove(modelGroup.children[0]);
   }
+
+  // Drop the decoded-texture cache from the previous model and free the
+  // object URLs backing it - each load gets its own set of textures.
+  textureObjectUrls.forEach((url) => URL.revokeObjectURL(url));
+  textureObjectUrls = [];
+  threeTextureCache.clear();
+}
+
+// Decodes currentScene.textures[index] (raw PNG/JPEG bytes from the .skp) into
+// a THREE.Texture, caching by index so a texture shared by several materials
+// is only decoded once per load.
+function getSceneTexture(index) {
+  if (threeTextureCache.has(index)) return threeTextureCache.get(index);
+
+  const sceneTexture = currentScene.textures && currentScene.textures[index];
+  if (!sceneTexture) return null;
+
+  const blob = new Blob([sceneTexture.data], { type: sceneTexture.mimeType });
+  const url = URL.createObjectURL(blob);
+  textureObjectUrls.push(url);
+
+  const texture = textureLoader.load(url);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.RepeatWrapping;
+
+  threeTextureCache.set(index, texture);
+  return texture;
 }
 
 // Show/hide loader
@@ -454,6 +489,9 @@ function loadSkpBuffer(arrayBuffer, filename) {
 
         geometry.setAttribute('position', new THREE.BufferAttribute(prim.positions, 3));
         geometry.setAttribute('normal', new THREE.BufferAttribute(prim.normals, 3));
+        if (prim.uvs && prim.uvs.length > 0) {
+          geometry.setAttribute('uv', new THREE.BufferAttribute(prim.uvs, 2));
+        }
         geometry.setIndex(new THREE.BufferAttribute(prim.indices, 1));
 
         // Get metadata
@@ -462,9 +500,12 @@ function loadSkpBuffer(arrayBuffer, filename) {
         // Material & Color setup (Fallback to layer color if material factor is missing)
         const matIdx = prim.materialIndex;
         let colorFactor = [0.6, 0.6, 0.6, 1.0];
+        let baseColorTextureIndex = null;
 
         if (currentScene.gltfMaterials && currentScene.gltfMaterials[matIdx]) {
-          colorFactor = currentScene.gltfMaterials[matIdx].pbrMetallicRoughness.baseColorFactor;
+          const pbr = currentScene.gltfMaterials[matIdx].pbrMetallicRoughness;
+          colorFactor = pbr.baseColorFactor;
+          if (pbr.baseColorTexture) baseColorTextureIndex = pbr.baseColorTexture.index;
         } else {
           // Attempt to find layer color
           const lay = currentModel.layers.find((l) => l.name === metadata.layer);
@@ -473,12 +514,34 @@ function loadSkpBuffer(arrayBuffer, filename) {
           }
         }
 
-        const material = new THREE.MeshStandardMaterial({
+        const materialOptions = {
           color: new THREE.Color(colorFactor[0], colorFactor[1], colorFactor[2]),
           roughness: 0.6,
           metalness: 0.1,
           side: THREE.DoubleSide
-        });
+        };
+
+        // A textured material may be a cutout (leaf clusters, chain-link,
+        // signage) where the image's own alpha channel carves the visible
+        // shape out of an otherwise plain rectangle - very common on
+        // SketchUp Warehouse trees/foliage/fences. The parsed file's
+        // material.transparency flag says which materials mean this, but
+        // that flag isn't in the exported glTF material yet (tracked
+        // separately as a cross-language library bug). Until that lands,
+        // alphaTest is applied to every textured material as a safe
+        // default: a fully-opaque texture (alpha=255 everywhere) renders
+        // identically with or without it, so this only changes anything
+        // for textures that actually carry a cutout.
+        if (baseColorTextureIndex !== null) {
+          const texture = getSceneTexture(baseColorTextureIndex);
+          if (texture) {
+            materialOptions.map = texture;
+            materialOptions.transparent = true;
+            materialOptions.alphaTest = 0.5;
+          }
+        }
+
+        const material = new THREE.MeshStandardMaterial(materialOptions);
 
         const mesh = new THREE.Mesh(geometry, material);
         mesh.castShadow = true;

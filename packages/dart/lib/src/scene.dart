@@ -189,7 +189,7 @@ class SceneBuilder {
       return idx;
     }
 
-    final colorToMaterialIndex = <((int, int, int), bool, int?), int>{};
+    final colorToMaterialIndex = <((int, int, int), bool, int?, double), int>{};
     final gltfMaterials = <Map<String, dynamic>>[];
 
     // Definitions currently being instantiated on the active recursion path
@@ -201,18 +201,19 @@ class SceneBuilder {
 
     (int, int, int) getLayerColor(String name) => layerColors[name] ?? (136, 136, 136);
 
-    int getMaterialIndex((int, int, int) color, bool doubleSided, int? textureIndex) {
+    int getMaterialIndex((int, int, int) color, bool doubleSided, int? textureIndex,
+        [double transparency = 1.0]) {
       // The texture is part of the identity, not just the color: two
       // different images can average to the same RGB (real files do
       // this), and keying on color alone would merge them into one
       // material and lose one of the images.
-      final key = (color, doubleSided, textureIndex);
+      final key = (color, doubleSided, textureIndex, transparency);
       final existing = colorToMaterialIndex[key];
       if (existing != null) return existing;
       final idx = gltfMaterials.length;
       final (r, g, b) = color;
       final pbr = <String, dynamic>{
-        'baseColorFactor': [r / 255, g / 255, b / 255, 1.0],
+        'baseColorFactor': [r / 255, g / 255, b / 255, transparency],
         'metallicFactor': 0.0,
         'roughnessFactor': 0.8,
       };
@@ -224,6 +225,24 @@ class SceneBuilder {
       }
       final material = <String, dynamic>{'pbrMetallicRoughness': pbr};
       if (doubleSided) material['doubleSided'] = true;
+      // glTF's default alphaMode is OPAQUE, which tells a conformant
+      // renderer to ignore alpha entirely - both the material's own
+      // opacity and any texture's alpha channel. Genuinely translucent
+      // materials (glass, water) need BLEND so baseColorFactor's alpha
+      // (and the texture's, if any) actually takes effect. A
+      // textured-but-otherwise-opaque material gets MASK instead: many
+      // SketchUp Warehouse assets (tree foliage, fences, signage) rely on
+      // the image's own alpha channel to cut a shape out of an otherwise
+      // flat quad, and without MASK a renderer would show the full
+      // rectangle. MASK is a no-op for a texture with no real cutout - a
+      // fully-opaque alpha channel (or none, as in JPEG) stays above the
+      // cutoff everywhere - so this is safe to set unconditionally rather
+      // than trying to detect which textures need it.
+      if (transparency < 1.0) {
+        material['alphaMode'] = 'BLEND';
+      } else if (textureIndex != null) {
+        material['alphaMode'] = 'MASK';
+      }
       gltfMaterials.add(material);
       colorToMaterialIndex[key] = idx;
       return idx;
@@ -265,7 +284,7 @@ class SceneBuilder {
         final multiGroup = faceGroups.length > 1;
 
         for (final groupEntry in faceGroups.entries) {
-          final (_, _, texIndex) = groupEntry.key;
+          final (_, _, texIndex, _) = groupEntry.key;
           final group = groupEntry.value;
           final color = group.color;
           if (group.localFaces.isEmpty) continue;
@@ -351,7 +370,7 @@ class SceneBuilder {
             indices.add(tri[2]);
           }
 
-          final materialIndex = getMaterialIndex(color, group.doubleSided, texIndex);
+          final materialIndex = getMaterialIndex(color, group.doubleSided, texIndex, group.transparency);
           glbPrimitives.add(GlbPrimitive(
             positions: positions,
             normals: normals,

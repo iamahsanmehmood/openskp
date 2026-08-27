@@ -738,19 +738,20 @@ export function buildSceneFromParsed(
   function getMaterialIndex(
     color: { r: number; g: number; b: number },
     doubleSided: boolean,
-    textureIndex: number | null
+    textureIndex: number | null,
+    transparency: number = 1.0
   ) {
     // The texture is part of the identity, not just the colour: two different
     // images can average to the same RGB (real files do this - two fabrics
     // both resolving to 141,141,141), and keying on colour alone would merge
     // them into one material and lose one of the images.
-    const key = `${color.r},${color.g},${color.b},${doubleSided},${textureIndex ?? -1}`;
+    const key = `${color.r},${color.g},${color.b},${doubleSided},${textureIndex ?? -1},${transparency}`;
     if (colorToMaterialIndex.has(key)) {
       return colorToMaterialIndex.get(key)!;
     }
     const idx = gltfMaterials.length;
     const pbr: any = {
-      baseColorFactor: [color.r / 255, color.g / 255, color.b / 255, 1.0],
+      baseColorFactor: [color.r / 255, color.g / 255, color.b / 255, transparency],
       metallicFactor: 0.0,
       roughnessFactor: 0.8,
     };
@@ -763,6 +764,23 @@ export function buildSceneFromParsed(
     }
     const material: any = { pbrMetallicRoughness: pbr };
     if (doubleSided) material.doubleSided = true;
+    // glTF's default alphaMode is OPAQUE, which tells a conformant renderer
+    // to ignore alpha entirely - both the material's own opacity and any
+    // texture's alpha channel. Genuinely translucent materials (glass,
+    // water) need BLEND so baseColorFactor's alpha (and the texture's, if
+    // any) actually takes effect. A textured-but-otherwise-opaque material
+    // gets MASK instead: many SketchUp Warehouse assets (tree foliage,
+    // fences, signage) rely on the image's own alpha channel to cut a
+    // shape out of an otherwise flat quad, and without MASK a renderer
+    // would show the full rectangle. MASK is a no-op for a texture with no
+    // real cutout - a fully-opaque alpha channel (or none, as in JPEG)
+    // stays above the cutoff everywhere - so this is safe to set
+    // unconditionally rather than trying to detect which textures need it.
+    if (transparency < 1.0) {
+      material.alphaMode = 'BLEND';
+    } else if (textureIndex !== null) {
+      material.alphaMode = 'MASK';
+    }
     gltfMaterials.push(material);
     colorToMaterialIndex.set(key, idx);
     return idx;
@@ -894,7 +912,7 @@ export function buildSceneFromParsed(
           indices[i * 3 + 2] = group.localFaces[i][2];
         }
 
-        const materialIndex = getMaterialIndex(group.color, group.doubleSided, group.textureIndex);
+        const materialIndex = getMaterialIndex(group.color, group.doubleSided, group.textureIndex, group.transparency);
 
         glbPrimitives.push({
           positions,

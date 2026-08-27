@@ -201,15 +201,16 @@ export function buildInstancedSceneFromParsed(
   function getMaterialIndex(
     color: { r: number; g: number; b: number },
     doubleSided: boolean,
-    textureIndex: number | null
+    textureIndex: number | null,
+    transparency: number = 1.0
   ) {
-    const key = `${color.r},${color.g},${color.b},${doubleSided},${textureIndex ?? -1}`;
+    const key = `${color.r},${color.g},${color.b},${doubleSided},${textureIndex ?? -1},${transparency}`;
     if (colorToMaterialIndex.has(key)) {
       return colorToMaterialIndex.get(key)!;
     }
     const idx = gltfMaterials.length;
     const pbr: any = {
-      baseColorFactor: [color.r / 255, color.g / 255, color.b / 255, 1.0],
+      baseColorFactor: [color.r / 255, color.g / 255, color.b / 255, transparency],
       metallicFactor: 0.0,
       roughnessFactor: 0.8,
     };
@@ -218,6 +219,14 @@ export function buildInstancedSceneFromParsed(
     }
     const material: any = { pbrMetallicRoughness: pbr };
     if (doubleSided) material.doubleSided = true;
+    // See model.ts's getMaterialIndex for why: BLEND for genuinely
+    // translucent materials, MASK (safe no-op on an opaque-alpha texture)
+    // for textured ones, otherwise glTF's default OPAQUE.
+    if (transparency < 1.0) {
+      material.alphaMode = 'BLEND';
+    } else if (textureIndex !== null) {
+      material.alphaMode = 'MASK';
+    }
     gltfMaterials.push(material);
     colorToMaterialIndex.set(key, idx);
     return idx;
@@ -337,7 +346,7 @@ export function buildInstancedSceneFromParsed(
         normals,
         uvs,
         indices,
-        materialIndex: getMaterialIndex(group.color, group.doubleSided, group.textureIndex),
+        materialIndex: getMaterialIndex(group.color, group.doubleSided, group.textureIndex, group.transparency),
       });
     }
 

@@ -152,7 +152,7 @@ namespace OpenSkp
                 return idx;
             }
 
-            var colorToMaterialIndex = new Dictionary<((int, int, int) Color, bool DoubleSided, int? TextureIndex), int>();
+            var colorToMaterialIndex = new Dictionary<((int, int, int) Color, bool DoubleSided, int? TextureIndex, double Transparency), int>();
             var gltfMaterials = new List<object>();
 
             // Definitions currently being instantiated on the active
@@ -168,18 +168,18 @@ namespace OpenSkp
                 return layerColors.TryGetValue(name, out var c) ? c : (136, 136, 136);
             }
 
-            int GetMaterialIndex((int R, int G, int B) color, bool doubleSided, int? textureIndex)
+            int GetMaterialIndex((int R, int G, int B) color, bool doubleSided, int? textureIndex, double transparency = 1.0)
             {
                 // The texture is part of the identity, not just the color:
                 // two different images can average to the same RGB (real
                 // files do this), and keying on color alone would merge
                 // them into one material and lose one of the images.
-                var key = (color, doubleSided, textureIndex);
+                var key = (color, doubleSided, textureIndex, transparency);
                 if (colorToMaterialIndex.TryGetValue(key, out var existing)) return existing;
                 int idx = gltfMaterials.Count;
                 var pbr = new Dictionary<string, object>
                 {
-                    ["baseColorFactor"] = new[] { color.R / 255.0, color.G / 255.0, color.B / 255.0, 1.0 },
+                    ["baseColorFactor"] = new[] { color.R / 255.0, color.G / 255.0, color.B / 255.0, transparency },
                     ["metallicFactor"] = 0.0,
                     ["roughnessFactor"] = 0.8,
                 };
@@ -193,6 +193,29 @@ namespace OpenSkp
                 }
                 var material = new Dictionary<string, object> { ["pbrMetallicRoughness"] = pbr };
                 if (doubleSided) material["doubleSided"] = true;
+                // glTF's default alphaMode is OPAQUE, which tells a
+                // conformant renderer to ignore alpha entirely - both the
+                // material's own opacity and any texture's alpha channel.
+                // Genuinely translucent materials (glass, water) need
+                // BLEND so baseColorFactor's alpha (and the texture's, if
+                // any) actually takes effect. A textured-but-otherwise-
+                // opaque material gets MASK instead: many SketchUp
+                // Warehouse assets (tree foliage, fences, signage) rely on
+                // the image's own alpha channel to cut a shape out of an
+                // otherwise flat quad, and without MASK a renderer would
+                // show the full rectangle. MASK is a no-op for a texture
+                // with no real cutout - a fully-opaque alpha channel (or
+                // none, as in JPEG) stays above the cutoff everywhere - so
+                // this is safe to set unconditionally rather than trying
+                // to detect which textures need it.
+                if (transparency < 1.0)
+                {
+                    material["alphaMode"] = "BLEND";
+                }
+                else if (textureIndex.HasValue)
+                {
+                    material["alphaMode"] = "MASK";
+                }
                 gltfMaterials.Add(material);
                 colorToMaterialIndex[key] = idx;
                 return idx;
@@ -332,7 +355,7 @@ namespace OpenSkp
                             indices[i * 3 + 2] = (uint)group.LocalFaces[i][2];
                         }
 
-                        int materialIndex = GetMaterialIndex(color, group.DoubleSided, texIndex);
+                        int materialIndex = GetMaterialIndex(color, group.DoubleSided, texIndex, group.Transparency);
                         glbPrimitives.Add(new GlbPrimitive
                         {
                             Positions = positions,
