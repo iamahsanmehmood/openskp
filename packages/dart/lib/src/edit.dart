@@ -163,10 +163,9 @@ Map<Material, int> _replayMaterials(SkpBuilder builder, SkpModel model, List<Str
         // bake in the SOURCE's real tile size via computeFaceUv - the
         // material's own stored applied height must be a no-op divisor
         // (1.0) or the read-side UV formula divides by it a second time.
-        // Leaving this at the library default (an internal sentinel,
-        // ~1.29e-231) was confirmed against real SketchUp 2026-08-27 to
-        // corrupt the texture into a vertically-smeared mess - see
-        // addTextureMaterial's own note.
+        // This happens to match addTextureMaterial's own default too, but
+        // is kept explicit here since it's a hard requirement of this
+        // call site specifically, not just a safe default.
         slot = builder.addTextureMaterial(mat.name, tmpFile.path, appliedHeight: 1.0);
       } finally {
         tmpDir.deleteSync(recursive: true);

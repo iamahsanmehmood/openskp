@@ -138,12 +138,12 @@ def to_python_code(model: SkpModel) -> str:
             b64 = base64.b64encode(mat.texture.data).decode("ascii")
             suffix = "".join(ch for ch in (mat.texture.filename or "").rsplit(".", 1)[-1:] if ch.isalnum())
             suffix = f".{suffix}" if suffix else ".png"
-            # appliedHeight=1.0 - see add_texture_material's own note on
-            # why the library default (an internal sentinel) corrupts ANY
-            # face using this material. Every face using a textured
-            # material is written below with explicit front_uv/back_uv,
-            # never left to default projection, so the original applied
-            # width/height never needs to be reproduced.
+            # applied_height=1.0 - every face using a textured material is
+            # written below with explicit front_uv/back_uv, never left to
+            # default projection, so the material's own applied height
+            # must be an exact no-op divisor (matches
+            # add_texture_material's own default too, but kept explicit
+            # since it's a hard requirement here, not just a safe default).
             push(f"    _tex_fd, _tex_path = tempfile.mkstemp(suffix={suffix!r})")
             push("    with os.fdopen(_tex_fd, 'wb') as _f:")
             push(f"        _f.write(base64.b64decode({b64!r}))")

@@ -19,6 +19,14 @@ std::filesystem::path temp_skp(const char* stem) {
          (std::string("openskp_edit_test_") + stem + ".skp");
 }
 
+// A syntactically-tiny PNG - just the magic bytes plus filler, matching create_test.cpp's own
+// fake_png_bytes() (not shared across translation units, so duplicated here).
+ByteBuffer fake_png_bytes() {
+  ByteBuffer data = {0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'};
+  data.insert(data.end(), 64, 0x42);
+  return data;
+}
+
 TEST(Edit, RejectsAModernNonLegacyFile) {
   EXPECT_THROW(open_existing(test::fixture("Untitled.skp")), SkpWriteError);
 }
@@ -66,6 +74,75 @@ TEST(Edit, RoundTripsAFreshlyBuiltFile) {
   EXPECT_EQ(rebuilt.root().instances.size(), 1u);
 
   std::filesystem::remove(path);
+}
+
+TEST(Edit, DefaultProjectedTextureGetsAnExplicitUvPinNotLeftCorrupted) {
+  // Found via cross-language analysis (2026-08-28): replay_materials wrote every rebuilt texture
+  // material with the library's (until now) corrupted default applied height, and replay_uv only
+  // replayed a face's UV when it already had an explicit uv_transform - leaving a DEFAULT-projected
+  // textured face's material (and thus its real SketchUp rendering) corrupted end to end. Both are
+  // fixed; this checks the rebuilt face actually gets a pin (not just that some texture data
+  // round-tripped) and that the material's applied height isn't the corrupted sentinel.
+  auto png_path = std::filesystem::temp_directory_path() / "openskp_edit_test_uv_texture.png";
+  {
+    std::ofstream f(png_path, std::ios::binary);
+    ByteBuffer png = fake_png_bytes();
+    f.write(reinterpret_cast<const char*>(png.data()), static_cast<std::streamsize>(png.size()));
+  }
+  auto path = temp_skp("default_projected_texture");
+  {
+    auto builder = create();
+    int brick = builder->add_texture_material("Brick", png_path);
+    FaceOptions opts;
+    opts.material = brick;
+    builder->add_face({{0, 0, 0}, {100, 0, 0}, {100, 100, 0}, {0, 100, 0}}, opts);  // no front_uv
+    builder->save(path);
+  }
+  std::filesystem::remove(png_path);
+
+  OpenExistingResult result = open_existing(path);
+  ASSERT_NE(result.builder, nullptr);
+  ByteBuffer rebuilt_bytes = result.builder->to_bytes();
+  SkpModel rebuilt = SkpFile::from_buffer(rebuilt_bytes).parse();
+  std::filesystem::remove(path);
+
+  ASSERT_EQ(rebuilt.materials.size(), 1u);
+  ASSERT_TRUE(rebuilt.materials[0].texture.has_value());
+  EXPECT_DOUBLE_EQ(rebuilt.materials[0].texture->width, 1.0);
+  EXPECT_DOUBLE_EQ(rebuilt.materials[0].texture->height, 1.0);
+  ASSERT_EQ(rebuilt.root().faces.size(), 1u);
+  EXPECT_TRUE(rebuilt.root().faces.begin()->second.uv_transform.has_value());
+}
+
+TEST(Edit, GenuinelyEmptyInstanceNameIsPreservedNotReplaced) {
+  // Found via cross-language analysis (2026-08-28): add_instance's own name.value_or(definition
+  // name) fallback and replay_instance's `if (!inst.name.empty()) options.name = inst.name;` both
+  // silently replaced a genuinely empty instance name with its definition's name - a real
+  // difference, not cosmetic (a later rename of the definition would no longer show through).
+  auto path = temp_skp("empty_instance_name");
+  {
+    auto builder = create();
+    auto& box = builder->add_component_definition("Box");
+    box.add_face({{0, 0, 0}, {10, 0, 0}, {10, 10, 0}, {0, 10, 0}});
+    box.close();
+    InstanceOptions iopts;
+    iopts.name = "";
+    builder->add_instance(box, iopts);
+    builder->save(path);
+  }
+
+  SkpModel source = SkpFile::open(path).parse();
+  ASSERT_EQ(source.root().instances.size(), 1u);
+  EXPECT_EQ(source.root().instances[0].name, "");
+
+  OpenExistingResult result = open_existing(path);
+  ASSERT_NE(result.builder, nullptr);
+  ByteBuffer rebuilt_bytes = result.builder->to_bytes();
+  SkpModel rebuilt = SkpFile::from_buffer(rebuilt_bytes).parse();
+  std::filesystem::remove(path);
+
+  ASSERT_EQ(rebuilt.root().instances.size(), 1u);
+  EXPECT_EQ(rebuilt.root().instances[0].name, "");
 }
 
 TEST(Edit, ReturnedBuilderCanAddMoreGeometryAndCannotRegisterNewSections) {

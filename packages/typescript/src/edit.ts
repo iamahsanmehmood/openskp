@@ -54,10 +54,11 @@
  *   source mapping won't interpolate identically between them. A
  *   *projected* (draped) texture has no equivalent at all and falls back
  *   to the default projection.
- * - A material's original texture tile size isn't preserved -
- *   `addTextureMaterial` has no scale parameter yet. A colorized
- *   (tinted) material variant is replayed as its plain source texture,
- *   losing the tint.
+ * - A colorized (tinted) material variant is replayed as its plain
+ *   source texture, losing the tint. A material's real-world texture
+ *   tile size *is* preserved, via an explicit frontUv/backUv pin
+ *   computed from it on every replayed textured face (not left to
+ *   addTextureMaterial's own default projection).
  * - Per-face material/layer painting: only a face's front/back
  *   *material* is replayed - this package's reader doesn't expose a
  *   per-face layer assignment at all (only instances carry an explicit
@@ -205,10 +206,15 @@ function replayMaterials(builder: SkpBuilder, model: SkpModel, warnings: string[
   for (const mat of model.materials) {
     let slot: number;
     if (mat.texture !== null && mat.texture.data !== null) {
-      slot = builder.addTextureMaterial(mat.name, mat.texture.data, mat.texture.filename || 'texture');
-      if (mat.texture.width || mat.texture.height) {
-        warnings.push(`material ${JSON.stringify(mat.name)}: original texture tile size not preserved`);
-      }
+      // appliedHeight: 1.0 - every textured face is now replayed with an
+      // explicit frontUv/backUv (see replayUv), whose pins already bake
+      // in the SOURCE's real tile size via computeFaceUv - the
+      // material's own stored applied height must be a no-op divisor
+      // (1.0) or the read-side UV formula divides by it a second time.
+      // This happens to match addTextureMaterial's own default too, but
+      // is kept explicit here since it's a hard requirement of this call
+      // site specifically, not just a safe default.
+      slot = builder.addTextureMaterial(mat.name, mat.texture.data, mat.texture.filename || 'texture', 1.0);
       if (mat.colorized) {
         warnings.push(`material ${JSON.stringify(mat.name)}: colorized tint not reproduced (base texture only)`);
       }
@@ -381,6 +387,34 @@ function replayFace(
   }
 }
 
+// front_uv/back_uv need exactly 3 correspondences whose (u, v) values are
+// NOT collinear (an affine fit is impossible otherwise) - real faces can
+// have a "flat" vertex (three consecutive vertices genuinely collinear in
+// 3D, seen on real building geometry), which points[0..2] alone isn't
+// guaranteed to avoid. Search for the first non-collinear triple instead of
+// assuming the first 3 vertices work.
+function nonCollinearTriple(points: readonly Point3[]): [Point3, Point3, Point3] | undefined {
+  for (let i = 0; i < points.length; i++) {
+    for (let j = i + 1; j < points.length; j++) {
+      for (let k = j + 1; k < points.length; k++) {
+        const [ax, ay, az] = points[i];
+        const [bx, by, bz] = points[j];
+        const [cx, cy, cz] = points[k];
+        const e1 = [bx - ax, by - ay, bz - az];
+        const e2 = [cx - ax, cy - ay, cz - az];
+        const cross = [
+          e1[1] * e2[2] - e1[2] * e2[1],
+          e1[2] * e2[0] - e1[0] * e2[2],
+          e1[0] * e2[1] - e1[1] * e2[0],
+        ];
+        const mag2 = cross[0] * cross[0] + cross[1] * cross[1] + cross[2] * cross[2];
+        if (mag2 > 1e-9) return [points[i], points[j], points[k]];
+      }
+    }
+  }
+  return undefined;
+}
+
 function replayUv(
   materialId: number | null,
   uvTransform: number[] | null,
@@ -392,17 +426,25 @@ function replayUv(
   context: string,
   side: 'front' | 'back'
 ): UvPair[] | undefined {
-  if (uvTransform === null) return undefined;
+  // Explicit frontUv/backUv for EVERY textured face, not just
+  // already-positioned ones - computeFaceUv already computes the correct
+  // final UV for the untouched-projection case too (uvTransform === null)
+  // using the source's real tile size, so this reproduces a
+  // default-projected face's true rendering exactly without needing the
+  // material's own applied width/height to match (which, post-replay, is
+  // intentionally 1.0 - see replayMaterials).
+  if (materialId === null) return undefined;
+  const mat = model.materialsById.get(materialId);
+  if (!mat || !mat.texture) return undefined; // solid color - no UV to replay
   if (projected) {
     warnings.push(`${context}: ${side} texture is projected/draped - falls back to default projection`);
     return undefined;
   }
-  const mat = materialId !== null ? model.materialsById.get(materialId) : undefined;
-  const tileW = (mat && mat.texture ? mat.texture.width : 0) || 1.0;
-  const tileH = (mat && mat.texture ? mat.texture.height : 0) || 1.0;
+  const tileW = mat.texture.width || 1.0;
+  const tileH = mat.texture.height || 1.0;
   const { xr, yr } = faceUvBasis(normal as [number, number, number]);
-  const sample = points.slice(0, 3);
-  if (sample.length < 3) return undefined;
+  const sample = nonCollinearTriple(points);
+  if (!sample) return undefined;
   return sample.map((p): UvPair => {
     const [u, v] = computeFaceUv(p, xr, yr, uvTransform, tileW, tileH);
     return [p, [u, v]];
@@ -430,7 +472,13 @@ function replayInstance(
   const layer = inst.layer ? layerSlots.get(inst.layer) : undefined;
   try {
     target.addInstance(defBuilder, {
-      name: inst.name || undefined,
+      // inst.name unconditionally, not `inst.name || undefined` - an
+      // explicit empty string is a real, valid instance name (SketchUp
+      // shows the definition's own name in the Outliner as a UI-level
+      // fallback only, without storing it) - `|| undefined` would omit
+      // it, letting addInstance's own default silently substitute the
+      // definition's name instead.
+      name: inst.name,
       translation,
       matrix3x3,
       material,

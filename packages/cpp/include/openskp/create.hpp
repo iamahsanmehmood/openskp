@@ -381,14 +381,11 @@ class OPENSKP_EXPORT SkpBuilder {
   /// pass as `FaceOptions::material`. The format is detected from the file's own magic bytes,
   /// not its extension. Same ordering rules as `add_material`.
   ///
-  /// If this material will ever be used with `FaceOptions::front_uv`/`back_uv` pinning, pass
-  /// `applied_height = 1.0` (matching those pins' own 0..1 range) - the read-side UV formula
-  /// divides by this field even for a positioned mapping, and the default (an internal sentinel,
-  /// real SketchUp's own byte pattern for "never explicitly scaled") is astronomically small,
-  /// which corrupts ANY face using this material, not just default-projected ones (confirmed
-  /// against real SketchUp 2026-08-27 - see `write_textured_material`'s own note in create.cpp).
-  /// Left at the default for the plain default-planar-projection case, matching this method's
-  /// original, narrower scope.
+  /// `applied_height` defaults to 1.0 (matching applied width, always 1.0). Pass a different
+  /// value to make a default-projected face's texture repeat at a specific real-world size
+  /// instead of every 1 inch - see `write_textured_material`'s own note in create.cpp for why
+  /// this field matters even for `FaceOptions::front_uv`/`back_uv` pinning (a positioned mapping
+  /// still divides by it).
   int add_texture_material(const std::string& name, const std::filesystem::path& image_path,
                            std::optional<double> applied_height = std::nullopt);
 
@@ -441,20 +438,16 @@ class OPENSKP_EXPORT SkpBuilder {
   /// material to be registered before any geometry section begins.
   ///
   /// The image's quad and UV mapping are pinned explicitly (`FaceOptions::front_uv`), not left
-  /// to the default per-material tile-size projection - `add_texture_material` is called with
-  /// `applied_height = 1.0` for exactly this reason: the read-side UV formula divides by the
-  /// material's applied height even for a pinned mapping, and the library default there (a
-  /// ground-truth sentinel, not a real number) is astronomically small - confirmed via real
-  /// SketchUp screenshots (2026-08-27, Python writer) to render as a corrupted, vertically-
-  /// smeared texture when left in place. 1.0 makes that division a no-op against this method's
-  /// own 0..1 pins.
+  /// to the default per-material tile-size projection - the read-side UV formula divides by the
+  /// material's applied height even for a pinned mapping, and `add_texture_material`'s default
+  /// height (1.0) makes that division a no-op against this method's own 0..1 pins.
   ///
   /// Unlike every other entity this writer produces, CImage's exact binary schema version (see
   /// `kImageSchema` in create.cpp) is a best-effort guess, not calibrated against a real
   /// SketchUp-authored Image entity - none was available. This project's own reader round-trips
   /// the result correctly, but real SketchUp's acceptance of the file is unverified beyond the
   /// Python port's own real-SketchUp test (placement/orientation/texture all confirmed correct
-  /// there after the applied_height fix - see CHECKLIST.md).
+  /// there - see CHECKLIST.md).
   void add_image(const std::filesystem::path& image_path, double width, double height,
                  const ImageOptions& options = {});
 

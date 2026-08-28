@@ -371,6 +371,47 @@ void main() {
       }
     });
 
+    test('default applied height is 1.0, not the corrupted sentinel', () {
+      // Regression test for a real bug: until 2026-08-28, an omitted
+      // appliedHeight wrote a corrupted internal sentinel byte pattern
+      // (~1.29e-231) instead of a real number - confirmed via real
+      // SketchUp screenshots to render as a streaky, vertically-smeared
+      // texture. addTextureMaterial's applied WIDTH is unconditionally
+      // 1.0 (a deliberate ground-truth value); height should match it by
+      // default now, not silently corrupt every caller who doesn't know
+      // to pass appliedHeight: 1.0 explicitly.
+      final tmpDir = Directory.systemTemp.createTempSync('openskp_tex_');
+      final pngPath = '${tmpDir.path}${Platform.pathSeparator}tex.png';
+      File(pngPath).writeAsBytesSync(makeFakePng());
+      try {
+        final builder = create();
+        final tex = builder.addTextureMaterial('Brick', pngPath);
+        builder.addFace(square, material: tex);
+        final model = SkpFile.fromBuffer(builder.toBytes()).parse();
+        final mat = model.materials.single;
+        expect(mat.texture!.width, 1.0);
+        expect(mat.texture!.height, 1.0);
+      } finally {
+        tmpDir.deleteSync(recursive: true);
+      }
+    });
+
+    test('explicit applied height is still overridable', () {
+      final tmpDir = Directory.systemTemp.createTempSync('openskp_tex_');
+      final pngPath = '${tmpDir.path}${Platform.pathSeparator}tex.png';
+      File(pngPath).writeAsBytesSync(makeFakePng());
+      try {
+        final builder = create();
+        final tex = builder.addTextureMaterial('Brick', pngPath, appliedHeight: 48.0);
+        builder.addFace(square, material: tex);
+        final model = SkpFile.fromBuffer(builder.toBytes()).parse();
+        final mat = model.materials.single;
+        expect(mat.texture!.height, 48.0);
+      } finally {
+        tmpDir.deleteSync(recursive: true);
+      }
+    });
+
     test('an unrecognized image format throws', () {
       final tmpDir = Directory.systemTemp.createTempSync('openskp_tex_');
       final badPath = '${tmpDir.path}${Platform.pathSeparator}tex.jpg';
