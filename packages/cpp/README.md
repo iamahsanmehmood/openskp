@@ -175,7 +175,9 @@ auto builder = create();
 
 // Materials and layers
 int red = builder->add_material("Red", Color3{255, 0, 0});
-int roof = builder->add_layer("Roof", {.color = Color4{180, 60, 40, 255}});
+LayerOptions roof_opts;
+roof_opts.color = Color4{180, 60, 40, 255};
+int roof = builder->add_layer("Roof", roof_opts);
 
 // All add_component_definition/add_group calls must come before any
 // add_instance/add_face call - placing anything locks in the file's
@@ -183,11 +185,20 @@ int roof = builder->add_layer("Roof", {.color = Color4{180, 60, 40, 255}});
 auto& chair = builder->add_component_definition("Chair");
 chair.add_face({{0, 0, 0}, {20, 0, 0}, {20, 20, 0}, {0, 20, 0}});
 chair.close();
-builder->add_instance(chair, {.translation = {50, 0, 0}});
-builder->add_instance(chair, {.translation = {100, 0, 0}, .hidden = true});
 
-builder->add_face({{0, 0, 0}, {100, 0, 0}, {100, 100, 0}, {0, 100, 0}},
-                  {.material = red, .layer = roof});
+InstanceOptions first_chair_opts;
+first_chair_opts.translation = {50, 0, 0};
+builder->add_instance(chair, first_chair_opts);
+
+InstanceOptions second_chair_opts;
+second_chair_opts.translation = {100, 0, 0};
+second_chair_opts.hidden = true;
+builder->add_instance(chair, second_chair_opts);
+
+FaceOptions roof_face_opts;
+roof_face_opts.material = red;
+roof_face_opts.layer = roof;
+builder->add_face({{0, 0, 0}, {100, 0, 0}, {100, 100, 0}, {0, 100, 0}}, roof_face_opts);
 
 builder->save("output.skp");
 ```
@@ -208,6 +219,22 @@ source had is reachable on `result.builder->materials_by_name`/
 `layers_by_name` without a separate lookup, and `result.definitions` maps
 each replayed component definition's own name to its builder for placing
 more instances of something the source already defined.
+
+### Generating code from a file
+
+`to_cpp_code()` takes the opposite approach: instead of a builder you
+keep editing, it returns a **string of source code** — a re-runnable
+transcript of `create()` calls that rebuilds an equivalent file when run:
+
+```cpp
+SkpModel model = SkpFile::open("building.skp").parse();
+std::cout << to_cpp_code(model);
+```
+
+Useful for handing a real model to an AI coding agent as editable
+starting code, or for a diffable, reviewable text representation of a
+`.skp` file. Shares the same fidelity scope as `openskp::open_existing()`
+above.
 
 ## Formatting
 

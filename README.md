@@ -34,6 +34,8 @@ OpenSKP is the **first and only** open-source, cross-platform toolkit for Sketch
 
 **Writing** is available in **all five languages**: a from-scratch legacy-format writer (`openskp.create()` / `create()` / `SkpCreate.NewFile()` / `openskp::create()` — see the [Quick Start](#-quick-start) below for the exact call per language) that produces real, editable geometry — materials and textures, layers, nested component definitions and groups, circular/arc curves, freeform polylines, faces with holes cut out — plus an editor (`openskp.open_existing()` / `openExisting()` / `SkpEdit.OpenExisting()` / `openskp::open_existing()`) that loads a file that already exists and extends it. Every writer feature is validated against the real SketchUp SDK, not just against this project's own reader, and it holds up rebuilding complex, real architectural models — not only synthetic test fixtures. Landed in Python first; TypeScript, .NET, Dart, and C++ now match it feature-for-feature, each verified against the same SDK oracle. See [Write capabilities](docs/DEVELOPER_GUIDE.md#write-capabilities) in the Developer Guide for the full picture, including the naming convention each language follows.
 
+**Generating code** turns a parsed file into a source-code transcript instead of an opaque binary: `openskp.to_python_code()` / `toTypeScriptCode()` / `Codegen.ToCSharpCode()` / `toDartCode()` / `to_cpp_code()` walks a model and emits human-readable, re-runnable source that calls the same language's own writer API to rebuild an equivalent file — materials (including textures with explicit UV pins), layers, nested definitions in dependency order, faces with holes, and instance-level paint and names. Useful for handing a real model to an AI coding agent as editable starting code, or getting a diffable, reviewable text representation of a `.skp` file. See [Generating code from a file](docs/DEVELOPER_GUIDE.md#generating-code-from-a-file).
+
 **Converting** puts reading and writing together: OpenSKP is a genuine **SketchUp file converter**, not just a parser with an export bolt-on. Every one of the five languages natively converts a `.skp` file to **7 formats** — glTF (GLB), Wavefront OBJ/MTL, STL, PLY, DXF 3D (AutoCAD), IFC4 (BIM), and JSON — with no third-party CAD/BIM SDK involved, and the DXF converter specifically verified against real desktop AutoCAD, not just lenient readers. Converting `.skp` *into* other formats is fully shipped today; converting *other* formats into `.skp` (glTF/IFC/OBJ → SketchUp) is a planned future direction built on the now-mature writer, not yet under way.
 
 > [!IMPORTANT]
@@ -58,6 +60,7 @@ OpenSKP is the **first and only** open-source, cross-platform toolkit for Sketch
 | **Convert to GLB / OBJ / STL / PLY / DXF 3D / IFC4 / JSON** | ✅ | Native, from-scratch conversion to glTF (GLB), Wavefront OBJ, STL, PLY, DXF 3D (AutoCAD Polyface Mesh), IFC4 (BIM), and JSON metadata — available in all five languages, no third-party CAD/BIM SDK involved — see [Export capabilities](docs/DEVELOPER_GUIDE.md#export-capabilities) |
 | **Write native `.skp` files** | ✅ | Build new `.skp` files from scratch — geometry (including genuine circular/arc curves, freeform polylines, faces with holes cut out, and non-planar auto-triangulation), solid/textured materials, layers, nested component definitions and groups, instance rotation/visibility, and custom attribute dictionaries. No SDK involved — every feature validated against the real SketchUp SDK, in all five languages. See [Write capabilities](docs/DEVELOPER_GUIDE.md#write-capabilities) |
 | **Edit existing `.skp` files** | ✅ | Load an existing legacy-format file and extend it — reuses its materials, layers, and component definitions, adds new geometry or instances, and saves a new file. All five languages. See [Editing an existing file](docs/DEVELOPER_GUIDE.md#editing-an-existing-file) |
+| **Generate rebuild code from a file** | ✅ | Turn a parsed `.skp` file into a human-readable, re-runnable source-code transcript that calls the same language's own writer API to rebuild it — materials, textures, layers, nested definitions, holes, instance-level paint and names. All five languages. See [Generating code from a file](docs/DEVELOPER_GUIDE.md#generating-code-from-a-file) |
 | **AI coding-agent ready** | ✅ | A generic, well-documented writer API (no object-specific helpers needed) that AI coding agents can compose freely — proven on real generated models (furniture, a house, an executive desk, a smartphone modeled from a photo) across two independent AI agents, each built from a natural-language prompt with no primitives library involved. See [AI-Generated Models](docs/AI_MODELING.md) |
 | **Streaming / low-memory parsing** | ✅ | Peak memory bounded by the largest single definition, not the whole file — see [Memory architecture](docs/ARCHITECTURE.md#memory-architecture) |
 | **Pure Implementation** | ✅ | No SketchUp SDK, no native dependencies, no license required |
@@ -289,9 +292,20 @@ int red = builder->add_material("Red", Color3{255, 0, 0});
 auto& chair = builder->add_component_definition("Chair");
 chair.add_face({{0, 0, 0}, {20, 0, 0}, {20, 20, 0}, {0, 20, 0}});
 chair.close();
-builder->add_instance(chair, {.translation = {50, 0, 0}});
-builder->add_instance(chair, {.translation = {100, 0, 0}, .hidden = true});
-builder->add_face({{0, 0, 0}, {100, 0, 0}, {100, 100, 0}, {0, 100, 0}}, {.material = red});
+
+InstanceOptions opts1;
+opts1.translation = {50, 0, 0};
+builder->add_instance(chair, opts1);
+
+InstanceOptions opts2;
+opts2.translation = {100, 0, 0};
+opts2.hidden = true;
+builder->add_instance(chair, opts2);
+
+FaceOptions face_opts;
+face_opts.material = red;
+builder->add_face({{0, 0, 0}, {100, 0, 0}, {100, 100, 0}, {0, 100, 0}}, face_opts);
+
 builder->save("output.skp");
 ```
 

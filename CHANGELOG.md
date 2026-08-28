@@ -36,6 +36,47 @@ return type and output. TypeScript only; the Python, .NET, Dart and C++
 ports are untouched. See
 [Choosing an API](packages/typescript/README.md#choosing-an-api).
 
+### Added — SKP-to-code generator, all 5 languages
+
+`openskp.to_python_code()` / `toTypeScriptCode()` / `Codegen.ToCSharpCode()`
+/ `toDartCode()` / `to_cpp_code()` walks a parsed `SkpModel` and emits
+human-readable, re-runnable source that calls that same language's own
+writer API to rebuild an equivalent file — a faithful transcript of API
+calls, not a serialized dump. Handles materials (solid and textured, with
+explicit `front_uv`/`back_uv` pins computed for every textured face, even
+ones that originally used default projection), layers, component/group
+definitions built in dependency order, faces (holes, auto-triangulation
+for near-planar real-world faces), and instances (transform,
+instance-level paint, instance-level name — including a genuinely empty
+name, which is different from an omitted one). See
+[Generating code from a file](docs/DEVELOPER_GUIDE.md#generating-code-from-a-file).
+
+Building and testing this against a real, large file (`jeff.skp`: 2713
+definitions, 113643 faces, 2581/2713 painted instances) surfaced three
+pre-existing bugs shared by every language's existing
+`open_existing`/`edit.*` replay path, fixed there too:
+
+- **Instance-level paint silently dropped.** SketchUp lets you paint a
+  whole component/group instance once instead of every internal face;
+  every language's replay path never passed the instance's own `material`
+  option when rebuilding.
+- **Instance names silently replaced.** A genuinely empty stored instance
+  name was converted to the writer's "omitted" sentinel before calling
+  `add_instance`, defeating the writer's own correct
+  name-defaults-to-definition-name fallback and baking in the wrong name.
+- **Textured materials replayed corrupted.** Every replay path called
+  `add_texture_material` without `applied_height`, leaving in place the
+  library's internal corrupted-sentinel default (already fixed in the
+  writer itself for `add_image`, but the replay callers were never
+  updated).
+
+A fourth bug, found while building the new codegen and then also present
+in the existing replay logic: blindly sampling the first 3 vertices for a
+UV correspondence can pick a collinear triple on real "flat" geometry,
+which the writer's UV solver correctly rejects — fixed via a
+non-collinear-triple search helper in both the new codegen and the
+existing replay logic.
+
 ## [1.1.0] — 2026-08-20
 
 **Write support, now in all five languages.** OpenSKP can *create* new

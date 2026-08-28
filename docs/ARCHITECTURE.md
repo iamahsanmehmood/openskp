@@ -162,6 +162,14 @@ already-validated output — see
 [Write capabilities](DEVELOPER_GUIDE.md#write-capabilities) in the
 Developer Guide for the full API and the per-language naming convention.
 
+`to_python_code()`/`toTypeScriptCode()`/etc. reuse `open_existing()`'s own
+replay logic (the same UV/hole/instance-paint reconstruction), but emit
+the resulting sequence of writer API calls as **source text** rather than
+executing them directly — a third mode alongside `create()` and
+`open_existing()`, for when the goal is an editable transcript rather
+than an immediately-rebuilt file. See
+[Generating code from a file](DEVELOPER_GUIDE.md#generating-code-from-a-file).
+
 ## Module layout
 
 Each language groups the same responsibilities, named idiomatically per
@@ -183,6 +191,7 @@ platform:
 | Public entry point | `model.py` | `index.ts` | `Parser.cs` | `parser.dart` | `parser.cpp` |
 | Writer (create new files) | `create.py` | `create.ts` | `Create.cs` | `create.dart` | `create.hpp` / `create.cpp` |
 | Writer (edit existing files) | `edit.py` | `edit.ts` | `Edit.cs` | `edit.dart` | `edit.hpp` / `edit.cpp` |
+| Writer (generate rebuild code) | `codegen.py` | `codegen.ts` | `Codegen.cs` | `codegen.dart` | `codegen.hpp` / `codegen.cpp` |
 
 Note Python has no dedicated `observability.py` — it's instrumented
 directly at each call site using the standard-library `logging` module,

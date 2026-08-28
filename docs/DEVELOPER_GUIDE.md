@@ -758,18 +758,29 @@ constexpr double kHalfPi = 1.5707963267948966;  // avoids the M_PI portability w
 
 auto builder = create();
 int red = builder->add_material("Red", Color3{255, 0, 0});
-int roof = builder->add_layer("Roof", {.color = Color4{180, 60, 40, 255}, .hidden = true});
+
+LayerOptions lopts;
+lopts.color = Color4{180, 60, 40, 255};
+lopts.hidden = true;
+int roof = builder->add_layer("Roof", lopts);
+
 DefinitionOptions dopts;
 dopts.attributes = {{"sku", std::string{"CH-100"}}, {"price", 49.99}};
 auto& chair = builder->add_component_definition("Chair", dopts);
 chair.add_face({{0, 0, 0}, {20, 0, 0}, {20, 20, 0}, {0, 20, 0}});
 chair.close();
-builder->add_instance(chair, {
-    .translation = {50, 0, 0},
-    .rotation = Rotation{{0, 0, 1}, kHalfPi},
-    .hidden = true,
-});
-builder->add_face({{0, 0, 0}, {100, 0, 0}, {100, 100, 0}, {0, 100, 0}}, {.material = red, .layer = roof});
+
+InstanceOptions iopts;
+iopts.translation = {50, 0, 0};
+iopts.rotation = Rotation{{0, 0, 1}, kHalfPi};
+iopts.hidden = true;
+builder->add_instance(chair, iopts);
+
+FaceOptions fopts;
+fopts.material = red;
+fopts.layer = roof;
+builder->add_face({{0, 0, 0}, {100, 0, 0}, {100, 100, 0}, {0, 100, 0}}, fopts);
+
 builder->save("output.skp");
 ```
 
@@ -808,14 +819,17 @@ the same reason `openskp.create` only ever writes that format. The
 returned `warnings` list is the honest account of what couldn't be
 faithfully reproduced for that specific file - per-edge flags collapsed
 to a per-face approximation, a projected/distorted texture falling back
-to the default projection, a material's texture scale or colorized tint,
-section planes/text/dimensions (no writer support at all), and an
-original circle/arc's curve grouping (this project's reader doesn't
+to the default projection, a colorized (tinted) material variant losing
+its tint, section planes/text/dimensions (no writer support at all), and
+an original circle/arc's curve grouping (this project's reader doesn't
 preserve it, so it round-trips as a plain straight-edged face) - see
 [`openskp/edit.py`](../packages/python/src/openskp/edit.py)'s own
 module docstring for the complete, itemized list and the reasoning
 behind each one. Round-trip-validated against real, non-writer-authored
 architectural models, not just files this project's own writer produced.
+A material's real-world texture tile size *is* preserved, via an explicit
+`front_uv`/`back_uv` pin computed from it on every replayed textured face
+(not left to the writer's own default projection).
 
 Every material/layer the source had is already reachable on the
 returned `builder` without a separate lookup - `builder.materials_by_name
@@ -836,6 +850,79 @@ definitions must be finalized before any geometry) is already
 satisfied, so `add_material`/`add_layer`/`add_component_definition`/
 `add_group` all raise on this particular builder. Build anything new
 into a separate `create()` call instead.
+
+### Generating code from a file
+
+`openskp.to_python_code()` (and its equivalent in every other language -
+`toTypeScriptCode`, `Codegen.ToCSharpCode`, `toDartCode`, `to_cpp_code`)
+takes the opposite approach from `open_existing()`: instead of returning
+a builder you keep editing programmatically, it returns a **string of
+source code** - a faithful, human-readable, re-runnable transcript of
+`create()`/`SkpBuilder` calls that rebuilds an equivalent file when run:
+
+```python
+from openskp import SkpFile, to_python_code
+
+model = SkpFile.open("building.skp").parse()
+print(to_python_code(model))
+```
+
+```python
+import base64
+import os
+import tempfile
+
+from openskp import create
+
+
+def build():
+    builder = create()
+
+    # --- Materials (1) ---
+    mat0 = builder.add_material('Red', (255, 0, 0, 255))
+
+    # --- Layers (2) ---
+    layer0 = builder.add_layer('Layer0', color=(255, 84, 84), hidden=False)
+    layer1 = builder.add_layer('Roof', color=(200, 60, 60), hidden=False)
+
+    # 'Wheel' - 1 faces, 0 nested instances
+    with builder.add_component_definition('Wheel') as def0:
+        def0.add_face([(0.0, 0.0, 0.0), (10.0, 0.0, 0.0), (10.0, 10.0, 0.0), (0.0, 10.0, 0.0)], material=mat0, auto_triangulate=True)
+
+    # --- Root instances (1) ---
+    builder.add_instance(def0, translation=(50.0, 0.0, 0.0), matrix3x3=(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0), material=mat0, name='')
+
+    return builder.to_bytes()
+```
+
+(`base64`/`tempfile` are always imported, whether or not this particular
+model has a textured material - they're only exercised when one does,
+decoding its embedded image data back out to a temp file for
+`add_texture_material` to read)
+
+This is useful anywhere you want a file's structure as *editable code*
+rather than as an opaque binary - handing a real model to an AI coding
+agent as a starting point it can read and modify, generating a diffable/
+reviewable text representation of a `.skp` file for version control, or
+just understanding how a specific file was built without a SketchUp
+license. It's not an alternative to `open_existing()` for programmatic
+editing - the returned string still needs to be executed to produce a
+file, and every fidelity gap `open_existing()` has (see above) applies
+here too, since both share the same UV/hole/instance-paint reconstruction
+logic. One difference: `to_python_code()`'s output always pins UVs
+explicitly (`front_uv`/`back_uv`) on every textured face, even ones that
+originally used default projection, so the regenerated material's applied
+height never needs to match the source's.
+
+Only reproduces geometry reachable by walking a definition's faces -
+standalone/construction edges and curves that don't bound any face aren't
+reproduced (doesn't affect materials, textures, instance paint, or any
+visible face/surface geometry). See each language's own `codegen` module
+docstring (`packages/python/src/openskp/codegen.py`,
+`packages/typescript/src/codegen.ts`, `packages/dotnet/OpenSkp/Codegen.cs`,
+`packages/dart/lib/src/codegen.dart`, `packages/cpp/src/codegen.cpp`) for
+the exact same itemized gap list `open_existing()` has, since both share
+it.
 
 ## The web viewer
 

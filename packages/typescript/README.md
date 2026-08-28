@@ -395,6 +395,23 @@ builder.addCircle([0, 0, 100], [0, 0, 1], 50);
 builder.save('building_edited.skp');
 ```
 
+### Generating code from a file
+
+`toTypeScriptCode()` takes the opposite approach: instead of a builder you
+keep editing, it returns a **string of source code** — a re-runnable
+transcript of `create()` calls that rebuilds an equivalent file when run:
+
+```typescript
+import { SkpFile, toTypeScriptCode } from 'openskp';
+
+const model = SkpFile.open('building.skp').parse();
+console.log(toTypeScriptCode(model));
+```
+
+Useful for handing a real model to an AI coding agent as editable
+starting code, or for a diffable, reviewable text representation of a
+`.skp` file. Shares the same fidelity scope as `openExisting()` above.
+
 `warnings` is the honest account of what couldn't be faithfully
 reproduced from that specific source file. Every material/layer the
 source had is reachable on `builder.materialsByName`/`builder.layersByName`
