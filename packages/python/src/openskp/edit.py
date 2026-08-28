@@ -148,7 +148,13 @@ def open_existing(
         if not _definition_has_content(defn, def_builders):
             warnings.append(f"{context}: skipped (no replayable geometry)")
             continue
-        with builder.add_component_definition(defn.name or f"Definition{def_id}") as db:
+        # defn.name unconditionally, not `defn.name or f"Definition{def_id}"`
+        # - an explicit empty string is a real, valid definition name.
+        # SketchUp Groups are internally just unnamed component
+        # definitions (unlike Components, which SketchUp auto-names), so
+        # an empty name is common in real files - the same reasoning as
+        # _replay_instance's own name handling below.
+        with builder.add_component_definition(defn.name) as db:
             _replay_body(db, defn, model, material_slots, layer_slots, warnings, context, def_builders)
         def_builders[def_id] = db
 

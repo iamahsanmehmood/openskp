@@ -53,6 +53,34 @@ namespace OpenSkp.Tests
             Assert.Null(byName["PlainBox"].MaterialId);
         }
 
+        [Fact]
+        public void ReproducesAGenuinelyEmptyDefinitionName()
+        {
+            // Found via cross-language analysis (2026-08-28), same bug
+            // class as the empty instance name case above:
+            // `!IsNullOrEmpty(defn.Name) ? defn.Name : $"Def{defId}"`
+            // silently replaced a genuinely empty definition name with a
+            // fabricated one. SketchUp Groups are internally just unnamed
+            // component definitions (unlike Components, which SketchUp
+            // auto-names), so an empty name is common in real files.
+            var builder = SkpCreate.NewFile();
+            var box = builder.AddComponentDefinition("");
+            using (box)
+            {
+                box.AddFace(new (double, double, double)[] { (0, 0, 0), (10, 0, 0), (10, 10, 0), (0, 10, 0) });
+            }
+            builder.AddInstance(box, translation: (0, 0, 0));
+
+            var original = SkpFile.Parse(builder.ToBytes());
+            Assert.Equal("", original.Definitions.Values.First().Name);
+
+            string code = Codegen.ToCSharpCode(original);
+            byte[] regenBytes = CompileAndRun(code);
+            var regen = SkpFile.Parse(regenBytes);
+
+            Assert.Equal("", regen.Definitions.Values.First().Name);
+        }
+
         public static System.Collections.Generic.IEnumerable<object[]> RealFixtures()
         {
             // single_material_v17.skp is deliberately excluded: it

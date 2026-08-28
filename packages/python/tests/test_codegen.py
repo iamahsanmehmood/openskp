@@ -70,6 +70,31 @@ class TestToPythonCode:
         assert by_name["PaintedBox"].material_id is not None
         assert by_name["PlainBox"].material_id is None
 
+    def test_reproduces_a_genuinely_empty_definition_name(self, tmp_path):
+        # Found via cross-language analysis (2026-08-28), same bug class as
+        # the empty INSTANCE name case above: `defn.name or f"Def{def_id}"`
+        # silently replaced a genuinely empty definition name with a
+        # fabricated one. SketchUp Groups are internally just unnamed
+        # component definitions (unlike Components, which SketchUp
+        # auto-names), so an empty name is common in real files.
+        b = create()
+        with b.add_component_definition("") as box:
+            box.add_face([(0.0, 0.0, 0.0), (10.0, 0.0, 0.0), (10.0, 10.0, 0.0), (0.0, 10.0, 0.0)])
+        b.add_instance(box, translation=(0.0, 0.0, 0.0))
+
+        out = tmp_path / "orig.skp"
+        out.write_bytes(b.to_bytes())
+        original = SkpFile.open(str(out)).parse()
+        assert next(iter(original.definitions.values())).name == ""
+
+        code = to_python_code(original)
+        regen_bytes = _run_generated_code(code)
+        regen_out = tmp_path / "regen.skp"
+        regen_out.write_bytes(regen_bytes)
+        regen = SkpFile.open(str(regen_out)).parse()
+
+        assert next(iter(regen.definitions.values())).name == ""
+
     def test_reproduces_textured_material_with_default_projection(self, tmp_path):
         png_path = tmp_path / "brick.png"
         png_path.write_bytes(_make_test_png())

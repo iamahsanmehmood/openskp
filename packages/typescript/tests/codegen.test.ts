@@ -122,6 +122,34 @@ describe('toTypeScriptCode', () => {
     expect(byName.get('PlainBox')?.materialId).toBeNull();
   });
 
+  it('reproduces a genuinely empty definition name', () => {
+    // Found via cross-language analysis (2026-08-28), same bug class as
+    // the empty-instance-name case above: `def.name || \`Def${defId}\`
+    // silently replaced a genuinely empty definition name with a
+    // fabricated one. SketchUp Groups are internally just unnamed
+    // component definitions (unlike Components, which SketchUp
+    // auto-names), so an empty name is common in real files.
+    const b = create();
+    const def = b.addComponentDefinition('', (d) => {
+      d.addFace([
+        [0, 0, 0],
+        [10, 0, 0],
+        [10, 10, 0],
+        [0, 10, 0],
+      ]);
+    });
+    b.addInstance(def, { translation: [0, 0, 0] });
+
+    const original = parseSkp(toBuffer(b.toBytes()));
+    expect(Array.from(original.definitions.values())[0].name).toBe('');
+
+    const code = toTypeScriptCode(original);
+    const regenBytes = runGeneratedCode(code);
+    const regen = parseSkp(toBuffer(regenBytes));
+
+    expect(Array.from(regen.definitions.values())[0].name).toBe('');
+  });
+
   it('reproduces a textured material with default projection', () => {
     const png = makeTestPng();
     const b = create();

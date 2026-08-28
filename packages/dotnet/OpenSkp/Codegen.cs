@@ -234,7 +234,16 @@ namespace OpenSkp
                 }
 
                 string varName = $"def{defCounter++}";
-                string defName = !string.IsNullOrEmpty(defn.Name) ? defn.Name : $"Def{defId}";
+                // defn.Name unconditionally, not `IsNullOrEmpty(...) ? ... :
+                // $"Def{defId}"` - an explicit empty string is a real,
+                // valid definition name, and this same value also feeds
+                // InstanceOptsStr's comparison below, which needs the TRUE
+                // definition name to correctly decide whether an
+                // instance's own name differs from it - a fabricated
+                // fallback here would corrupt that comparison, not just
+                // the written name. varName (the emitted identifier, e.g.
+                // "def0") is unrelated and always safe.
+                string defName = defn.Name;
                 defVar[defId] = varName;
 
                 Push("");

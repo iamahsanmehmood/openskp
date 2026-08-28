@@ -282,6 +282,30 @@ class TestOpenExisting:
         rebuilt = SkpFile.open(str(out)).parse()
         assert rebuilt.root.instances[0].name == ""
 
+    def test_empty_definition_name_is_preserved_not_replaced(self, tmp_path):
+        # Found via cross-language analysis (2026-08-28), same bug class as
+        # the empty INSTANCE name case just above: `defn.name or
+        # f"Definition{def_id}"` silently replaced a genuinely empty
+        # definition name with a fabricated one. SketchUp Groups are
+        # internally just unnamed component definitions (unlike
+        # Components, which SketchUp auto-names), so an empty name is
+        # common in real files, not an edge case.
+        builder = create()
+        with builder.add_component_definition("") as box:
+            box.add_face([(0.0, 0.0, 0.0), (10.0, 0.0, 0.0), (10.0, 10.0, 0.0), (0.0, 10.0, 0.0)])
+        builder.add_instance(box, translation=(0.0, 0.0, 0.0))
+        src = tmp_path / "source.skp"
+        builder.save(str(src))
+
+        source = SkpFile.open(str(src)).parse()
+        assert next(iter(source.definitions.values())).name == ""
+
+        new_builder, warnings, definitions = edit.open_existing(str(src))
+        out = tmp_path / "rebuilt.skp"
+        out.write_bytes(new_builder.to_bytes())
+        rebuilt = SkpFile.open(str(out)).parse()
+        assert next(iter(rebuilt.definitions.values())).name == ""
+
     def test_face_with_hole_round_trips(self, tmp_path):
         # add_face's holes= support (added alongside this module) means a
         # multi-loop face is now faithfully replayed, not skipped.

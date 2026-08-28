@@ -474,13 +474,21 @@ OpenExistingResult open_existing(const std::filesystem::path& path) {
     auto it = model.definitions.find(def_id);
     if (it == model.definitions.end()) continue;
     const Definition& defn = it->second;
-    std::string dname = defn.name.empty() ? ("Definition" + std::to_string(def_id)) : defn.name;
-    std::string context = "definition '" + dname + "'";
+    std::string context_name =
+        defn.name.empty() ? ("Definition" + std::to_string(def_id)) : defn.name;
+    std::string context = "definition '" + context_name + "'";
     if (!definition_has_content(defn, def_builders)) {
       result.warnings.push_back(context + ": skipped (no replayable geometry)");
       continue;
     }
-    ComponentDefinitionBuilder& db = builder.add_component_definition(dname);
+    // defn.name unconditionally, not the context_name fallback above - an
+    // explicit empty string is a real, valid definition name. SketchUp
+    // Groups are internally just unnamed component definitions (unlike
+    // Components, which SketchUp auto-names), so an empty name is common
+    // in real files - same reasoning as replay_instance's own name
+    // handling below. context_name stays fallback-safe since it's only
+    // ever used for a human-readable warning message.
+    ComponentDefinitionBuilder& db = builder.add_component_definition(defn.name);
     replay_body(db, defn, by_id, material_slots, layer_slots, result.warnings, context,
                 def_builders);
     db.close();

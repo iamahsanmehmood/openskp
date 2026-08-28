@@ -145,6 +145,36 @@ TEST(Edit, GenuinelyEmptyInstanceNameIsPreservedNotReplaced) {
   EXPECT_EQ(rebuilt.root().instances[0].name, "");
 }
 
+TEST(Edit, GenuinelyEmptyDefinitionNameIsPreservedNotReplaced) {
+  // Found via cross-language analysis (2026-08-28), same bug class as the empty instance name
+  // case above: `defn.name.empty() ? ("Definition" + std::to_string(def_id)) : defn.name` silently
+  // replaced a genuinely empty definition name with a fabricated one. SketchUp Groups are
+  // internally just unnamed component definitions (unlike Components, which SketchUp
+  // auto-names), so an empty name is common in real files.
+  auto path = temp_skp("empty_definition_name");
+  {
+    auto builder = create();
+    auto& box = builder->add_component_definition("");
+    box.add_face({{0, 0, 0}, {10, 0, 0}, {10, 10, 0}, {0, 10, 0}});
+    box.close();
+    builder->add_instance(box, {});
+    builder->save(path);
+  }
+
+  SkpModel source = SkpFile::open(path).parse();
+  ASSERT_EQ(source.definitions.size(), 1u);
+  EXPECT_EQ(source.definitions.begin()->second.name, "");
+
+  OpenExistingResult result = open_existing(path);
+  ASSERT_NE(result.builder, nullptr);
+  ByteBuffer rebuilt_bytes = result.builder->to_bytes();
+  SkpModel rebuilt = SkpFile::from_buffer(rebuilt_bytes).parse();
+  std::filesystem::remove(path);
+
+  ASSERT_EQ(rebuilt.definitions.size(), 1u);
+  EXPECT_EQ(rebuilt.definitions.begin()->second.name, "");
+}
+
 TEST(Edit, ReturnedBuilderCanAddMoreGeometryAndCannotRegisterNewSections) {
   auto path = temp_skp("addmore");
   {

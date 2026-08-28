@@ -185,7 +185,13 @@ export function openExisting(
       warnings.push(`${context}: skipped (no replayable geometry)`);
       continue;
     }
-    const db = builder.addComponentDefinition(defn.name || `Definition${defId}`, (d) => {
+    // defn.name unconditionally, not `defn.name || \`Definition${defId}\`` -
+    // an explicit empty string is a real, valid definition name. SketchUp
+    // Groups are internally just unnamed component definitions (unlike
+    // Components, which SketchUp auto-names), so an empty name is common
+    // in real files - same reasoning as replayInstance's own name
+    // handling below.
+    const db = builder.addComponentDefinition(defn.name, (d) => {
       replayBody(d, defn, model, materialSlots, layerSlots, warnings, context, defBuilders);
     });
     defBuilders.set(defId, db);
