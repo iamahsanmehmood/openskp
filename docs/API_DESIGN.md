@@ -208,7 +208,7 @@ All five languages produce equivalent structured output for the same file:
 |---|---|---|
 | `version` | string | SketchUp file-format version, e.g. `"{25.0.575}"` |
 | `definitions` | map | Component/group definitions with geometry, keyed by ID |
-| `root` (TS/.NET/Dart/C++) or the `'ROOT'` entry in `definitions` (Python) | — | The implicit top-level definition — see the [Developer Guide](DEVELOPER_GUIDE.md#the-root-definition) |
+| `root` (all five languages - `model.root()` is a method in C++, a plain field/property elsewhere) | — | The implicit top-level definition — see the [Developer Guide](DEVELOPER_GUIDE.md#the-root-definition) |
 | `layers` | list | Layer names + RGB colors |
 | `materials` | list | Material names, colors, transparency, optional embedded texture |
 | `styles` | list | Named front/back face colors for unpainted faces |
@@ -232,5 +232,5 @@ All five languages produce equivalent structured output for the same file:
 | PLY (Stanford Mesh) | `.ply` | All 5 languages (`ply.export` / `toPLYAscii` / `PlyExport.ExportPly` / `exportPly` / `export_ply`) |
 | DXF 3D (AutoCAD Polyface Mesh) | `.dxf` | All 5 languages (`dxf.export` / `toDXF` / `DxfExport.ExportDxf` / `exportDxf` / `export_dxf`) |
 | IFC4 (BIM ISO STEP) | `.ifc` | All 5 languages (`ifc.export` / `toIFC` / `IfcExport.ExportIfc` / `exportIfc` / `export_ifc`) |
-| Full metadata JSON | `.json` | All 5 languages (`json_export.export` / `toJSON` / `JsonExport.ExportJson` / `exportJson` / `export_json`) |
+| Full metadata JSON | `.json` | All 5 languages (`json_export.export` / `toJSON` / `JsonExport.ToDict` / `toJson` / `export_json`) — TypeScript/.NET/Dart return the object/dict only; see [Export capabilities](DEVELOPER_GUIDE.md#export-capabilities) for the file-writing gap |
 | Raw scene data | — | All 5 languages via `buildScene()` — build custom serializers directly from `Scene` / `GlbPrimitive` |
