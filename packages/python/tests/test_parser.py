@@ -100,12 +100,64 @@ class TestParseTlvRecursive:
     def test_empty_payload(self) -> None:
         from openskp.parser import parse_tlv_recursive
 
-        # Need a second element so buffer > 6 bytes (the while guard is `pos < end - 6`)
         data = self._make_tlv("0300", b'') + self._make_tlv("0100", b'\x01')
         nodes = parse_tlv_recursive(data, 0, len(data))
         assert len(nodes) == 2
         assert nodes[0].size == 0
         assert nodes[0].payload == b''
+
+    def test_single_element_whose_header_exactly_fills_the_range(self) -> None:
+        # Regression test for a real bug: the "is there room for one more
+        # header" loop guard used `pos < end - 6` instead of the correct
+        # `pos <= end - 6` (equivalently `pos + 6 <= end`), so a header
+        # occupying exactly the last 6 bytes of [start, end) - a real, valid
+        # record, not corrupt data - was silently dropped with no error.
+        # A zero-payload element is exactly 6 bytes, so a single one fills
+        # the whole range and exercises the boundary directly (unlike
+        # test_empty_payload above, which sidesteps it with a second
+        # element).
+        from openskp.parser import parse_tlv_recursive
+
+        data = self._make_tlv("0300", b'')
+        assert len(data) == 6
+        nodes = parse_tlv_recursive(data, 0, len(data))
+        assert len(nodes) == 1
+        assert nodes[0].tag == "0300"
+        assert nodes[0].size == 0
+
+
+class TestCoreTlvBoundary:
+    """Regression coverage for the same header-boundary off-by-one in
+    :mod:`openskp._core` - the actually-live production TLV walker
+    (:mod:`openskp.parser`'s own copy above is a separately-tested but
+    unused-in-production module; only :func:`openskp._core.read_u32`/
+    :func:`read_f64` are ever imported from it, by :mod:`openskp.metadata`).
+    """
+
+    @staticmethod
+    def _tlv(tag_hex: str, payload: bytes) -> bytes:
+        return bytes.fromhex(tag_hex) + struct.pack('<I', len(payload)) + payload
+
+    def test_parse_tlv_recursive_keeps_a_header_that_exactly_fills_the_range(self) -> None:
+        from openskp import _core
+
+        data = self._tlv("0300", b'')
+        assert len(data) == 6
+        nodes = _core.parse_tlv_recursive(data, 0, len(data))
+        assert len(nodes) == 1
+        assert nodes[0]['tag'] == "0300"
+
+    def test_flat_headers_keeps_a_header_that_exactly_fills_the_range(self) -> None:
+        # _flat_headers backs iter_top_level_lazy, the lazy scanner real
+        # 100k+-definition files depend on - this is the one that could
+        # silently drop a trailing TOP-LEVEL definition, not just a nested
+        # child.
+        from openskp import _core
+
+        data = self._tlv("0300", b'')
+        assert len(data) == 6
+        headers = _core._flat_headers(data, 0, len(data))
+        assert headers == [("0300", 0, 0)]
 
 
 # ── Data model tests ─────────────────────────────────────────────────────

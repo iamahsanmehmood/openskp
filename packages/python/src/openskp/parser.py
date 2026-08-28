@@ -124,7 +124,7 @@ def parse_tlv_recursive(
     pos: int = start
     elements: List[TlvNode] = []
 
-    while pos < end - 6:
+    while pos <= end - 6:
         tag_bytes = data[pos:pos + 2]
         size = read_u32(data, pos + 2)
 
