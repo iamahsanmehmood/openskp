@@ -241,6 +241,22 @@ source had is reachable on `result.builder.materialsByName`/
 each replayed component definition's own name to its builder for placing
 more instances of something the source already defined.
 
+### Generating code from a file
+
+`toDartCode()` takes the opposite approach: instead of a builder you keep
+editing, it returns a **string of source code** — a re-runnable
+transcript of `create()` calls that rebuilds an equivalent file when run:
+
+```dart
+final bytes = await File('building.skp').readAsBytes();
+final model = SkpFile.fromBuffer(bytes).parse();
+print(toDartCode(model));
+```
+
+Useful for handing a real model to an AI coding agent as editable
+starting code, or for a diffable, reviewable text representation of a
+`.skp` file. Shares the same fidelity scope as `openExisting()` above.
+
 ---
 
 ## 📐 API Data Model Reference

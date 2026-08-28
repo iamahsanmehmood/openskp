@@ -199,6 +199,23 @@ source had is reachable on `result.Builder.MaterialsByName`/
 each replayed component definition's own name to its builder for placing
 more instances of something the source already defined.
 
+### Generating code from a file
+
+`Codegen.ToCSharpCode()` takes the opposite approach: instead of a
+builder you keep editing, it returns a **string of source code** — a
+re-runnable transcript of `SkpCreate.NewFile()` calls that rebuilds an
+equivalent file when run:
+
+```csharp
+SkpModel model = SkpFile.Open("building.skp");
+Console.WriteLine(Codegen.ToCSharpCode(model));
+```
+
+Useful for handing a real model to an AI coding agent as editable
+starting code, or for a diffable, reviewable text representation of a
+`.skp` file. Shares the same fidelity scope as `SkpEdit.OpenExisting()`
+above.
+
 ---
 
 ## ⚙️ Target Frameworks

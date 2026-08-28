@@ -188,8 +188,15 @@ int red = builder->add_material("Red", Color3{255, 0, 0});
 auto& chair = builder->add_component_definition("Chair");
 chair.add_face({{0, 0, 0}, {20, 0, 0}, {20, 20, 0}, {0, 20, 0}});
 chair.close();
-builder->add_instance(chair, {.translation = {50, 0, 0}});
-builder->add_face({{0, 0, 0}, {100, 0, 0}, {100, 100, 0}, {0, 100, 0}}, {.material = red});
+
+InstanceOptions opts;
+opts.translation = {50, 0, 0};
+builder->add_instance(chair, opts);
+
+FaceOptions face_opts;
+face_opts.material = red;
+builder->add_face({{0, 0, 0}, {100, 0, 0}, {100, 100, 0}, {0, 100, 0}}, face_opts);
+
 builder->save("output.skp");
 ```
 

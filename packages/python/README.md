@@ -240,10 +240,27 @@ builder.save("building_edited.skp")
 ```
 
 `warnings` lists anything the source file had that couldn't be
-faithfully reproduced (a projected texture, a material's texture scale,
-and several others) — see
-[`openskp/edit.py`](src/openskp/edit.py) for the complete, itemized
+faithfully reproduced (a projected/draped texture falling back to
+default projection, a colorized material's tint, and several others) —
+see [`openskp/edit.py`](src/openskp/edit.py) for the complete, itemized
 scope.
+
+### Generating code from a file
+
+`to_python_code()` takes the opposite approach: instead of a builder you
+keep editing, it returns a **string of source code** — a re-runnable
+transcript of `create()` calls that rebuilds an equivalent file when run:
+
+```python
+from openskp import SkpFile, to_python_code
+
+model = SkpFile.open("building.skp").parse()
+print(to_python_code(model))
+```
+
+Useful for handing a real model to an AI coding agent as editable
+starting code, or for a diffable, reviewable text representation of a
+`.skp` file. Shares the same fidelity scope as `open_existing()` above.
 
 ## Package Structure
 

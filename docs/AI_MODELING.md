@@ -124,7 +124,12 @@ SketchUp (or view it via the [live web viewer](https://iamahsanmehood.github.io/
 by exporting to GLB first) to check it, then iterate — including editing
 an *existing* file with `open_existing()` rather than starting over, the
 same way a human would keep refining a model rather than redrawing it
-from scratch.
+from scratch. When the agent can't execute code directly against a file
+(a chat-only session, or handing off to another agent), `to_python_code()`
+gives it the same starting point as text - a readable transcript of an
+existing model's `create()` calls it can read, reason about, and extend,
+rather than an opaque `.skp` binary. See
+[Generating code from a file](DEVELOPER_GUIDE.md#generating-code-from-a-file).
 
 ## What's next — help build this out
 
