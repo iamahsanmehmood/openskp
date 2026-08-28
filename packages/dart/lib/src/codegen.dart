@@ -317,7 +317,15 @@ String toDartCode(SkpModel model) {
     }
 
     final varName = 'def${defCounter++}';
-    final defName = defn.name.isNotEmpty ? defn.name : 'Def$defId';
+    // defn.name unconditionally, not `defn.name.isNotEmpty ? defn.name :
+    // 'Def$defId'` - an explicit empty string is a real, valid definition
+    // name, and this same value also feeds instanceOptsStr's comparison
+    // below, which needs the TRUE definition name to correctly decide
+    // whether an instance's own name differs from it - a fabricated
+    // fallback here would corrupt that comparison, not just the written
+    // name. varName (the emitted identifier, e.g. "def0") is unrelated
+    // and always safe.
+    final defName = defn.name;
     defVar[defId] = varName;
 
     push('');

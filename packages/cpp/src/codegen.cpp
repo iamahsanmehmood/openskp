@@ -463,7 +463,15 @@ std::string to_cpp_code(const SkpModel& model) {
     }
 
     std::string var_name = "def" + std::to_string(def_counter++);
-    std::string def_name = defn.name.empty() ? ("Def" + std::to_string(def_id)) : defn.name;
+    // defn.name unconditionally, not `defn.name.empty() ? ... :
+    // defn.name` - an explicit empty string is a real, valid definition
+    // name, and this same value also feeds instance_opts_lines's
+    // comparison below, which needs the TRUE definition name to
+    // correctly decide whether an instance's own name differs from it -
+    // a fabricated fallback here would corrupt that comparison, not just
+    // the written name. var_name (the emitted identifier, e.g. "def0")
+    // is unrelated and always safe.
+    std::string def_name = defn.name;
     def_var[def_id] = var_name;
 
     push("");

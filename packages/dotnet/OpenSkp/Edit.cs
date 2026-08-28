@@ -134,7 +134,14 @@ namespace OpenSkp
                     warnings.Add($"{context}: skipped (no replayable geometry)");
                     continue;
                 }
-                var db = builder.AddComponentDefinition(string.IsNullOrEmpty(defn.Name) ? $"Definition{defId}" : defn.Name);
+                // defn.Name unconditionally, not `IsNullOrEmpty(...) ? ... :
+                // defn.Name` - an explicit empty string is a real, valid
+                // definition name. SketchUp Groups are internally just
+                // unnamed component definitions (unlike Components, which
+                // SketchUp auto-names), so an empty name is common in real
+                // files - same reasoning as ReplayInstance's own name
+                // handling below.
+                var db = builder.AddComponentDefinition(defn.Name);
                 ReplayBody(db, defn, model, materialSlots, layerSlots, warnings, context, defBuilders);
                 db.Dispose();
                 defBuilders[defId] = db;

@@ -316,6 +316,27 @@ describe('openExisting', () => {
     const rebuilt = parseSkp(toBuffer(newBuilder.toBytes()));
     expect(rebuilt.root.instances[0].name).toBe('');
   });
+
+  it('a genuinely empty definition name is preserved, not replaced', () => {
+    // Found via cross-language analysis (2026-08-28), same bug class as
+    // the empty instance name case above: `defn.name || \`Definition${defId}\`
+    // silently replaced a genuinely empty definition name with a
+    // fabricated one. SketchUp Groups are internally just unnamed
+    // component definitions (unlike Components, which SketchUp
+    // auto-names), so an empty name is common in real files.
+    const builder = create();
+    const box = builder.addComponentDefinition('', (def) => {
+      def.addFace([[0, 0, 0], [10, 0, 0], [10, 10, 0], [0, 10, 0]]);
+    });
+    builder.addInstance(box, { translation: [0, 0, 0] });
+
+    const source = parseSkp(toBuffer(builder.toBytes()));
+    expect(Array.from(source.definitions.values())[0].name).toBe('');
+
+    const { builder: newBuilder } = openExisting(toBuffer(builder.toBytes()));
+    const rebuilt = parseSkp(toBuffer(newBuilder.toBytes()));
+    expect(Array.from(rebuilt.definitions.values())[0].name).toBe('');
+  });
 });
 
 describe('Real-world fixtures (non-writer-authored)', () => {

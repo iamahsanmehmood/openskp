@@ -68,6 +68,63 @@ void main() {
       }
     });
 
+    test('a genuinely empty instance name is preserved, not replaced', () {
+      // Found via cross-language analysis (2026-08-28): addInstance's own
+      // name-defaults-to-definition-name fallback and _replayInstance's
+      // own `inst.name.isNotEmpty ? inst.name : null` both silently
+      // replaced a genuinely empty instance name with its definition's
+      // name - a real difference, not cosmetic (a later rename of the
+      // definition would no longer show through). No dedicated
+      // regression test for this existed for Dart specifically, unlike
+      // Python/TypeScript.
+      final tmpDir = Directory.systemTemp.createTempSync('openskp_edit_test_');
+      try {
+        final builder = create();
+        final box = builder.addComponentDefinition('Box', (def) {
+          def.addFace([(0.0, 0.0, 0.0), (10.0, 0.0, 0.0), (10.0, 10.0, 0.0), (0.0, 10.0, 0.0)]);
+        });
+        builder.addInstance(box, name: '', translation: (0.0, 0.0, 0.0));
+        final src = saveToTempFile(builder, tmpDir);
+
+        final source = SkpFile.fromBuffer(File(src).readAsBytesSync()).parse();
+        expect(source.root.instances[0].name, '');
+
+        final result = openExisting(src);
+        final rebuilt = SkpFile.fromBuffer(result.builder.toBytes()).parse();
+        expect(rebuilt.root.instances[0].name, '');
+      } finally {
+        tmpDir.deleteSync(recursive: true);
+      }
+    });
+
+    test('a genuinely empty definition name is preserved, not replaced', () {
+      // Found via cross-language analysis (2026-08-28), same bug class as
+      // the empty instance name case above: `defn.name.isNotEmpty ?
+      // defn.name : 'Definition$defId'` silently replaced a genuinely
+      // empty definition name with a fabricated one. SketchUp Groups are
+      // internally just unnamed component definitions (unlike
+      // Components, which SketchUp auto-names), so an empty name is
+      // common in real files.
+      final tmpDir = Directory.systemTemp.createTempSync('openskp_edit_test_');
+      try {
+        final builder = create();
+        final box = builder.addComponentDefinition('', (def) {
+          def.addFace([(0.0, 0.0, 0.0), (10.0, 0.0, 0.0), (10.0, 10.0, 0.0), (0.0, 10.0, 0.0)]);
+        });
+        builder.addInstance(box, translation: (0.0, 0.0, 0.0));
+        final src = saveToTempFile(builder, tmpDir);
+
+        final source = SkpFile.fromBuffer(File(src).readAsBytesSync()).parse();
+        expect(source.definitions.values.first.name, '');
+
+        final result = openExisting(src);
+        final rebuilt = SkpFile.fromBuffer(result.builder.toBytes()).parse();
+        expect(rebuilt.definitions.values.first.name, '');
+      } finally {
+        tmpDir.deleteSync(recursive: true);
+      }
+    });
+
     test('preserves instance translation', () {
       final tmpDir = Directory.systemTemp.createTempSync('openskp_edit_test_');
       try {

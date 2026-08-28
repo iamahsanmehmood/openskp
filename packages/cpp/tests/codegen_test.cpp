@@ -111,6 +111,32 @@ TEST(Codegen, PreservesGenuinelyEmptyInstanceNameAndInstancePaint) {
   EXPECT_NE(code.find("inst_opts1.material = mat0;"), std::string::npos);
 }
 
+TEST(Codegen, PreservesGenuinelyEmptyDefinitionName) {
+  // Found via cross-language analysis (2026-08-28), same bug class as the empty instance name
+  // case above: `defn.name.empty() ? ("Def" + std::to_string(def_id)) : defn.name` silently
+  // replaced a genuinely empty definition name with a fabricated one. SketchUp Groups are
+  // internally just unnamed component definitions (unlike Components, which SketchUp
+  // auto-names), so an empty name is common in real files.
+  auto builder = create();
+  auto& def = builder->add_component_definition("");
+  def.add_face({{0, 0, 0}, {10, 0, 0}, {10, 10, 0}, {0, 10, 0}});
+  def.close();
+  builder->add_instance(def, {});
+
+  SkpModel model = roundtrip(builder);
+  ASSERT_EQ(model.definitions.size(), 1u);
+  EXPECT_EQ(model.definitions.begin()->second.name, "");
+
+  std::string code = to_cpp_code(model);
+
+  // add_component_definition("") - not a fabricated "Def123" name - and the def-vs-instance
+  // name comparison must still use the real (empty) name, not the fabricated fallback, or a
+  // root instance whose own name is also genuinely empty would incorrectly get an explicit
+  // `.name = ""` line instead of being correctly recognized as matching its definition.
+  EXPECT_NE(code.find("add_component_definition(\"\")"), std::string::npos);
+  EXPECT_EQ(code.find("add_component_definition(\"Def"), std::string::npos);
+}
+
 TEST(Codegen, UsesDotForDefinitionBuildersAndArrowForRootBuilder) {
   auto builder = create();
   auto& inner = builder->add_component_definition("Inner");

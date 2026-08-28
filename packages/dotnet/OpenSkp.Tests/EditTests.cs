@@ -100,6 +100,77 @@ namespace OpenSkp.Tests
         }
 
         [Fact]
+        public void GenuinelyEmptyInstanceNameIsPreservedNotReplaced()
+        {
+            // Found via cross-language analysis (2026-08-28): AddInstance's
+            // own name-defaults-to-definition-name fallback and
+            // ReplayInstance's own `IsNullOrEmpty(...) ? null : inst.Name`
+            // both silently replaced a genuinely empty instance name with
+            // its definition's name - a real difference, not cosmetic (a
+            // later rename of the definition would no longer show
+            // through). No dedicated regression test for this existed for
+            // .NET specifically, unlike Python/TypeScript/Dart/C++.
+            var original = SkpCreate.NewFile();
+            ComponentDefinitionBuilder box;
+            using (box = original.AddComponentDefinition("Box"))
+            {
+                box.AddFace(new (double, double, double)[] { (0, 0, 0), (10, 0, 0), (10, 10, 0), (0, 10, 0) });
+            }
+            original.AddInstance(box, name: "", translation: (0, 0, 0));
+
+            string path = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".skp");
+            original.Save(path);
+            try
+            {
+                var source = SkpFile.Parse(File.ReadAllBytes(path));
+                Assert.Equal("", source.Root.Instances[0].Name);
+
+                var result = SkpEdit.OpenExisting(path);
+                var rebuilt = SkpFile.Parse(result.Builder.ToBytes());
+                Assert.Equal("", rebuilt.Root.Instances[0].Name);
+            }
+            finally
+            {
+                File.Delete(path);
+            }
+        }
+
+        [Fact]
+        public void GenuinelyEmptyDefinitionNameIsPreservedNotReplaced()
+        {
+            // Found via cross-language analysis (2026-08-28), same bug
+            // class as the empty instance name case above:
+            // `IsNullOrEmpty(defn.Name) ? $"Definition{defId}" : defn.Name`
+            // silently replaced a genuinely empty definition name with a
+            // fabricated one. SketchUp Groups are internally just unnamed
+            // component definitions (unlike Components, which SketchUp
+            // auto-names), so an empty name is common in real files.
+            var original = SkpCreate.NewFile();
+            ComponentDefinitionBuilder box;
+            using (box = original.AddComponentDefinition(""))
+            {
+                box.AddFace(new (double, double, double)[] { (0, 0, 0), (10, 0, 0), (10, 10, 0), (0, 10, 0) });
+            }
+            original.AddInstance(box, translation: (0, 0, 0));
+
+            string path = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".skp");
+            original.Save(path);
+            try
+            {
+                var source = SkpFile.Parse(File.ReadAllBytes(path));
+                Assert.Equal("", source.Definitions.Values.First().Name);
+
+                var result = SkpEdit.OpenExisting(path);
+                var rebuilt = SkpFile.Parse(result.Builder.ToBytes());
+                Assert.Equal("", rebuilt.Definitions.Values.First().Name);
+            }
+            finally
+            {
+                File.Delete(path);
+            }
+        }
+
+        [Fact]
         public void NewMaterialAfterOpenExistingThrows()
         {
             var original = SkpCreate.NewFile();

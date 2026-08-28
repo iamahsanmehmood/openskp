@@ -92,6 +92,36 @@ void main() {
       }
     });
 
+    test('reproduces a genuinely empty definition name', () {
+      // Found via cross-language analysis (2026-08-28), same bug class as
+      // the empty-instance-name case above: `defn.name.isNotEmpty ?
+      // defn.name : 'Def$defId'` silently replaced a genuinely empty
+      // definition name with a fabricated one. SketchUp Groups are
+      // internally just unnamed component definitions (unlike
+      // Components, which SketchUp auto-names), so an empty name is
+      // common in real files.
+      final b = create();
+      final box = b.addComponentDefinition('', (d) {
+        d.addFace([(0.0, 0.0, 0.0), (10.0, 0.0, 0.0), (10.0, 10.0, 0.0), (0.0, 10.0, 0.0)]);
+      });
+      b.addInstance(box, translation: (0.0, 0.0, 0.0));
+
+      final original = SkpFile.fromBuffer(Uint8List.fromList(b.toBytes())).parse();
+      expect(original.definitions.values.first.name, '');
+      final code = toDartCode(original);
+
+      final tmpOut = '$packageRoot/.tmp_codegen_out_${DateTime.now().microsecondsSinceEpoch}.skp';
+      try {
+        final regenBytes = runGeneratedCode(code, tmpOut);
+        final regen = SkpFile.fromBuffer(Uint8List.fromList(regenBytes)).parse();
+
+        expect(regen.definitions.values.first.name, '');
+      } finally {
+        final f = File(tmpOut);
+        if (f.existsSync()) f.deleteSync();
+      }
+    });
+
     test('reproduces a textured material with default projection', () {
       final tmpDir = Directory.systemTemp.createTempSync('openskp_codegen_tex_');
       final pngPath = '${tmpDir.path}${Platform.pathSeparator}brick.png';

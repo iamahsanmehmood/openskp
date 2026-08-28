@@ -332,7 +332,14 @@ export function toTypeScriptCode(model: SkpModel): string {
     for (const inst of def.instances) getOrBuildDef(inst.refIdx as number, visiting);
 
     const varName = `def${defCounter++}`;
-    const defName = def.name || `Def${defId}`;
+    // def.name unconditionally, not `def.name || \`Def${defId}\`` - an
+    // explicit empty string is a real, valid definition name, and this
+    // same value also feeds instanceOptsStr's comparison below, which
+    // needs the TRUE definition name to correctly decide whether an
+    // instance's own name differs from it - a fabricated fallback here
+    // would corrupt that comparison, not just the written name. varName
+    // (the emitted identifier, e.g. "def0") is unrelated and always safe.
+    const defName = def.name;
     defVar.set(defId, varName);
 
     push(``);

@@ -282,7 +282,16 @@ def to_python_code(model: SkpModel) -> str:
 
         var_name = f"def{def_counter}"
         def_counter += 1
-        def_name = defn.name or f"Def{def_id}"
+        # defn.name unconditionally, not `defn.name or f"Def{def_id}"` - an
+        # explicit empty string is a real, valid definition name (SketchUp
+        # Groups are internally unnamed definitions), and this same value
+        # also feeds instance_opts_str's comparison below, which needs the
+        # TRUE definition name to correctly decide whether an instance's
+        # own name differs from it - a fabricated fallback here would
+        # corrupt that comparison, not just the written name. var_name
+        # (the emitted Python variable, e.g. "def0") is unrelated and
+        # always safe regardless of defn.name.
+        def_name = defn.name
         def_var[def_id] = var_name
 
         push("")
