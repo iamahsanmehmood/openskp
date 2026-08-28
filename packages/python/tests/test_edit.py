@@ -211,6 +211,77 @@ class TestOpenExisting:
         assert rebuilt.materials[0].texture is not None
         assert rebuilt.materials[0].texture.data == _make_test_png()
 
+    def test_default_projected_texture_uv_matches_source(self, tmp_path):
+        # Found via cross-language analysis (2026-08-28, alongside
+        # TypeScript's toTypeScriptCode): _replay_materials wrote every
+        # rebuilt texture material with the library's default applied
+        # height (a corrupted sentinel), and _replay_uv only replayed a
+        # face's UV when it already had an explicit uv_transform - leaving
+        # a DEFAULT-projected textured face's material (and thus its real
+        # SketchUp rendering) corrupted end to end. Both are fixed; this
+        # checks the actual rendered UV at every vertex matches, not just
+        # "some texture data round-tripped".
+        png_path = tmp_path / "tex.png"
+        png_path.write_bytes(_make_test_png())
+        builder = create()
+        # applied_height=1.0 so the SOURCE file itself isn't corrupted -
+        # a fair, apples-to-apples fixture (see create.py's own note on
+        # the sentinel).
+        brick = builder.add_texture_material("Brick", str(png_path), applied_height=1.0)
+        builder.add_face(SQUARE, material=brick)  # no front_uv - default projection
+        src = tmp_path / "source.skp"
+        builder.save(str(src))
+
+        source = SkpFile.open(str(src)).parse()
+        new_builder, warnings, definitions = edit.open_existing(str(src))
+        assert not any("tile size" in w for w in warnings)
+        out = tmp_path / "rebuilt.skp"
+        out.write_bytes(new_builder.to_bytes())
+        rebuilt = SkpFile.open(str(out)).parse()
+
+        from openskp._face_groups import compute_face_uv, face_uv_basis, reconstruct_loop_vertices
+
+        def face_uvs(model):
+            mat = model.materials[0]
+            face = next(iter(model.root.faces.values()))
+            edges = {e.id: (e.v1_id, e.v2_id) for e in model.root.edges.values()}
+            vids = reconstruct_loop_vertices(face.loops[0], edges)
+            pts = [(model.root.vertices[v].x, model.root.vertices[v].y, model.root.vertices[v].z) for v in vids]
+            xr, yr = face_uv_basis(face.normal)
+            tile_w = mat.texture.width or 1.0
+            tile_h = mat.texture.height or 1.0
+            return [compute_face_uv(p, xr, yr, face.uv_transform, tile_w, tile_h) for p in pts]
+
+        source_uvs = face_uvs(source)
+        rebuilt_uvs = face_uvs(rebuilt)
+        assert len(source_uvs) == len(rebuilt_uvs)
+        for (su, sv), (ru, rv) in zip(source_uvs, rebuilt_uvs):
+            assert su == pytest.approx(ru, abs=1e-6)
+            assert sv == pytest.approx(rv, abs=1e-6)
+
+    def test_empty_instance_name_is_preserved_not_replaced(self, tmp_path):
+        # Found via cross-language analysis (2026-08-28): add_instance's
+        # own `name or definition.name` fallback (now `name if name is not
+        # None else ...`) and _replay_instance's `inst.name or None` both
+        # silently replaced a genuinely empty instance name with its
+        # definition's name - a real difference, not cosmetic (a later
+        # rename of the definition would no longer show through).
+        builder = create()
+        with builder.add_component_definition("Box") as box:
+            box.add_face([(0.0, 0.0, 0.0), (10.0, 0.0, 0.0), (10.0, 10.0, 0.0), (0.0, 10.0, 0.0)])
+        builder.add_instance(box, name="", translation=(0.0, 0.0, 0.0))
+        src = tmp_path / "source.skp"
+        builder.save(str(src))
+
+        source = SkpFile.open(str(src)).parse()
+        assert source.root.instances[0].name == ""
+
+        new_builder, warnings, definitions = edit.open_existing(str(src))
+        out = tmp_path / "rebuilt.skp"
+        out.write_bytes(new_builder.to_bytes())
+        rebuilt = SkpFile.open(str(out)).parse()
+        assert rebuilt.root.instances[0].name == ""
+
     def test_face_with_hole_round_trips(self, tmp_path):
         # add_face's holes= support (added alongside this module) means a
         # multi-loop face is now faithfully replayed, not skipped.

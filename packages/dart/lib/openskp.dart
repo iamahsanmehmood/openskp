@@ -30,3 +30,4 @@ export 'src/create.dart'
         CurveParams,
         rotationMatrix3x3;
 export 'src/edit.dart' show openExisting, OpenExistingResult;
+export 'src/codegen.dart' show toDartCode;

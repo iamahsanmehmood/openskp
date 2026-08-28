@@ -45,9 +45,8 @@
 ///   projective (4-pin/distorted) source mapping won't interpolate identically between them. A
 ///   *projected* (draped) texture has no equivalent at all and falls back to the default
 ///   projection.
-/// * A material's original texture tile size isn't preserved - `SkpBuilder::add_texture_material`
-///   has no scale parameter yet. A colorized (tinted) material variant is replayed as its plain
-///   source texture, losing the tint.
+/// * A colorized (tinted) material variant is replayed as its plain source texture, losing the
+///   tint.
 /// * Per-face material/layer painting: only a face's front/back *material* is replayed - this
 ///   project's reader doesn't expose a per-face layer assignment at all (only instances carry an
 ///   explicit layer).

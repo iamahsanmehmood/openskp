@@ -47,9 +47,8 @@
 ///   projective (4-pin/distorted) source mapping won't interpolate
 ///   identically between them. A *projected* (draped) texture has no
 ///   equivalent at all and falls back to the default projection.
-/// * A material's original texture tile size isn't preserved. A colorized
-///   (tinted) material variant is replayed as its plain source texture,
-///   losing the tint.
+/// * A colorized (tinted) material variant is replayed as its plain
+///   source texture, losing the tint.
 /// * Per-face material/layer painting: only a face's front/back *material*
 ///   is replayed - this package's reader doesn't expose a per-face layer
 ///   assignment at all.
@@ -159,12 +158,18 @@ Map<Material, int> _replayMaterials(SkpBuilder builder, SkpModel model, List<Str
       final tmpFile = File('${tmpDir.path}${Platform.pathSeparator}texture$suffix');
       tmpFile.writeAsBytesSync(texData);
       try {
-        slot = builder.addTextureMaterial(mat.name, tmpFile.path);
+        // appliedHeight: 1.0 - every textured face is now replayed with
+        // an explicit frontUv/backUv (see _replayUv), whose pins already
+        // bake in the SOURCE's real tile size via computeFaceUv - the
+        // material's own stored applied height must be a no-op divisor
+        // (1.0) or the read-side UV formula divides by it a second time.
+        // Leaving this at the library default (an internal sentinel,
+        // ~1.29e-231) was confirmed against real SketchUp 2026-08-27 to
+        // corrupt the texture into a vertically-smeared mess - see
+        // addTextureMaterial's own note.
+        slot = builder.addTextureMaterial(mat.name, tmpFile.path, appliedHeight: 1.0);
       } finally {
         tmpDir.deleteSync(recursive: true);
-      }
-      if (tex.width != 0.0 || tex.height != 0.0) {
-        warnings.add("material '${mat.name}': original texture tile size not preserved");
       }
       if (mat.colorized) {
         warnings.add("material '${mat.name}': colorized tint not reproduced (base texture only)");
@@ -349,6 +354,39 @@ void _replayFace(
 
 double _tileDimension(double raw) => raw != 0.0 ? raw : 1.0;
 
+/// frontUv/backUv need exactly 3 correspondences whose (u, v) values are
+/// NOT collinear (an affine fit is impossible otherwise) - real faces can
+/// have a "flat" vertex (three consecutive vertices genuinely collinear
+/// in 3D), which points.sublist(0, 3) alone isn't guaranteed to avoid.
+/// Search for the first non-collinear triple - an affine map preserves
+/// collinearity, so a non-collinear triple in 3D is also non-collinear in
+/// (u, v).
+List<Point3>? _nonCollinearTriple(List<Point3> points) {
+  for (var i = 0; i < points.length; i++) {
+    for (var j = i + 1; j < points.length; j++) {
+      for (var k = j + 1; k < points.length; k++) {
+        final a = points[i], b = points[j], c = points[k];
+        final e1 = (b.$1 - a.$1, b.$2 - a.$2, b.$3 - a.$3);
+        final e2 = (c.$1 - a.$1, c.$2 - a.$2, c.$3 - a.$3);
+        final cx = e1.$2 * e2.$3 - e1.$3 * e2.$2;
+        final cy = e1.$3 * e2.$1 - e1.$1 * e2.$3;
+        final cz = e1.$1 * e2.$2 - e1.$2 * e2.$1;
+        if (cx * cx + cy * cy + cz * cz > 1e-9) {
+          return [a, b, c];
+        }
+      }
+    }
+  }
+  return null;
+}
+
+/// Explicit frontUv/backUv for EVERY textured face, not just already-
+/// positioned ones - _computeFaceUv already computes the correct final UV
+/// for the untouched-projection case too (uvTransform is null) using the
+/// source's real tile size, so this reproduces a default-projected face's
+/// true rendering exactly without needing the material's own applied
+/// width/height to match (which, post-replay, is intentionally 1.0 - see
+/// _replayMaterials).
 List<(Point3, (double, double))>? _replayUv(
   int? materialId,
   List<double>? uvTransform,
@@ -360,18 +398,19 @@ List<(Point3, (double, double))>? _replayUv(
   String context,
   String side,
 ) {
-  if (uvTransform == null) return null;
+  if (materialId == null) return null;
+  final mat = model.materialsById[materialId];
+  if (mat?.texture == null) return null; // solid color - no UV to replay
   if (projected) {
     warnings.add('$context: $side texture is projected/draped - falls back to default projection');
     return null;
   }
   if (normal == null) return null;
-  final mat = materialId != null ? model.materialsById[materialId] : null;
-  final tileW = _tileDimension(mat?.texture?.width ?? 0.0);
-  final tileH = _tileDimension(mat?.texture?.height ?? 0.0);
+  final tileW = _tileDimension(mat!.texture!.width);
+  final tileH = _tileDimension(mat.texture!.height);
   final (xr, yr) = _faceUvBasis(normal);
-  final sample = points.length > 3 ? points.sublist(0, 3) : points;
-  if (sample.length < 3) return null;
+  final sample = _nonCollinearTriple(points);
+  if (sample == null) return null; // every vertex triple collinear - a sliver face
   final pairs = <(Point3, (double, double))>[];
   for (final p in sample) {
     final uv = _computeFaceUv(p, xr, yr, uvTransform, tileW, tileH);
@@ -410,9 +449,17 @@ void _replayInstance(
   final material = _materialSlot(inst.materialId, model, materialSlots);
   final layer = inst.layer.isNotEmpty ? layerSlots[inst.layer] : null;
   try {
+    // name: inst.name, not `inst.name.isNotEmpty ? inst.name : null` - an
+    // explicit empty string is a real, valid instance name (SketchUp
+    // itself stores it that way when a placement was never renamed,
+    // showing the definition's name in the Outliner only as a UI-level
+    // fallback); addInstance's own `name ?? definition.name` fallback
+    // only triggers on null, so passing '' through must not be converted
+    // to null here or that name gets silently replaced with the
+    // definition's own name instead.
     target.addInstance(
       defBuilder,
-      name: inst.name.isNotEmpty ? inst.name : null,
+      name: inst.name,
       translation: translation,
       matrix3x3: matrix3x3,
       rotation: null,
