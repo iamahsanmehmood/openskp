@@ -1110,6 +1110,41 @@ class TestTextures:
         face = [v for (_, n, v) in root if n == "CFace"][0]
         assert face["db"]["mat"] == tex
 
+    def test_texture_material_default_applied_height_is_one_not_corrupted(self, tmp_path):
+        # Regression test for a real bug: until 2026-08-28, an omitted
+        # applied_height wrote a corrupted internal sentinel byte pattern
+        # (~1.29e-231) instead of a real number - confirmed via real
+        # SketchUp screenshots to render as a streaky, vertically-smeared
+        # texture. add_texture_material's applied WIDTH is unconditionally
+        # 1.0 (a deliberate ground-truth value); height should match it by
+        # default now, not silently corrupt every caller who doesn't know
+        # to pass applied_height=1.0 explicitly.
+        png_path = tmp_path / "tex.png"
+        png_path.write_bytes(_make_test_png(size=4, rgb=(200, 50, 50)))
+
+        builder = create()
+        tex = builder.add_texture_material("Brick", str(png_path))
+        builder.add_face(SQUARE, material=tex)
+        data = builder.to_bytes()
+
+        ar, root, layers, materials = legacy._walk(data)
+        mat_by_slot = {s: v for s, v in materials}
+        assert mat_by_slot[tex]["tex_w"] == 1.0
+        assert mat_by_slot[tex]["tex_h"] == 1.0
+
+    def test_texture_material_explicit_applied_height_still_overridable(self, tmp_path):
+        png_path = tmp_path / "tex.png"
+        png_path.write_bytes(_make_test_png(size=4, rgb=(200, 50, 50)))
+
+        builder = create()
+        tex = builder.add_texture_material("Brick", str(png_path), applied_height=48.0)
+        builder.add_face(SQUARE, material=tex)
+        data = builder.to_bytes()
+
+        ar, root, layers, materials = legacy._walk(data)
+        mat_by_slot = {s: v for s, v in materials}
+        assert mat_by_slot[tex]["tex_h"] == 48.0
+
     def test_jpeg_texture_material_self_parses(self, tmp_path):
         jpg_path = tmp_path / "tex.jpg"
         jpg_path.write_bytes(_JPEG_FIXTURE)

@@ -187,6 +187,56 @@ namespace OpenSkp.Tests
         }
 
         [Fact]
+        public void TexturedMaterialDefaultAppliedHeightIsOneNotCorrupted()
+        {
+            // Regression test for a real bug: until 2026-08-28, an omitted
+            // appliedHeight wrote a corrupted internal sentinel byte
+            // pattern (~1.29e-231) instead of a real number - confirmed
+            // via real SketchUp screenshots to render as a streaky,
+            // vertically-smeared texture. AddTextureMaterial's applied
+            // WIDTH is unconditionally 1.0 (a deliberate ground-truth
+            // value); height should match it by default now, not
+            // silently corrupt every caller who doesn't know to pass
+            // appliedHeight: 1.0 explicitly.
+            string pngPath = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".png");
+            File.WriteAllBytes(pngPath, TinyPng());
+            try
+            {
+                var builder = SkpCreate.NewFile();
+                int brick = builder.AddTextureMaterial("Brick", pngPath);
+                builder.AddFace(Square(), material: brick);
+                var model = SkpFile.Parse(builder.ToBytes());
+                var mat = model.Materials.Single();
+                Assert.Equal(1.0, mat.Texture!.Width);
+                Assert.Equal(1.0, mat.Texture.Height);
+            }
+            finally
+            {
+                File.Delete(pngPath);
+            }
+        }
+
+        [Fact]
+        public void TexturedMaterialExplicitAppliedHeightStillOverridable()
+        {
+            string pngPath = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".png");
+            File.WriteAllBytes(pngPath, TinyPng());
+            try
+            {
+                var builder = SkpCreate.NewFile();
+                int brick = builder.AddTextureMaterial("Brick", pngPath, appliedHeight: 48.0);
+                builder.AddFace(Square(), material: brick);
+                var model = SkpFile.Parse(builder.ToBytes());
+                var mat = model.Materials.Single();
+                Assert.Equal(48.0, mat.Texture!.Height);
+            }
+            finally
+            {
+                File.Delete(pngPath);
+            }
+        }
+
+        [Fact]
         public void UnrecognizedImageFormatThrows()
         {
             string path = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".bin");

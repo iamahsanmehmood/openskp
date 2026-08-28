@@ -171,12 +171,12 @@ String toDartCode(SkpModel model) {
     if (tex != null && tex.data != null && tex.data!.isNotEmpty) {
       texturedMats.add(mat.name);
       final b64 = base64Encode(tex.data!);
-      // appliedHeight: 1.0 - see addTextureMaterial's own note on why the
-      // library default (an internal sentinel) corrupts ANY face using
-      // this material. Every face using a textured material is written
-      // below with explicit frontUv/backUv, never left to default
-      // projection, so the original applied width/height never needs to
-      // be reproduced.
+      // appliedHeight: 1.0 - every face using a textured material is
+      // written below with explicit frontUv/backUv, never left to
+      // default projection, so the material's own applied height must be
+      // an exact no-op divisor (matches addTextureMaterial's own default
+      // too, but kept explicit since it's a hard requirement here, not
+      // just a safe default).
       push('  final _texBytes$i = base64Decode(');
       push("    '$b64',");
       push('  );');

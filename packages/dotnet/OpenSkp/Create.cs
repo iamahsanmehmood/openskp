@@ -185,13 +185,19 @@ namespace OpenSkp
         internal const int MaterialSchema = 12;
         internal const int DibSchema = 3;
 
-        // Ground-truth byte pattern (not a meaningful float) that real
-        // SketchUp writes for a texture's "applied height" when the caller
-        // never explicitly overrides the texture's scale/aspect - found by
-        // diffing an SDK-authored textured-material file; present verbatim
-        // rather than derived from a formula since its bit pattern doesn't
-        // correspond to any sensible height value (it decodes as ~1.29e-231
-        // as an f64).
+        // Byte pattern found in one SDK-authored textured-material sample's
+        // "applied height" field, decoding to ~1.29e-231 as an f64 - not a
+        // meaningful height value. Confirmed 2026-08-27 via real SketchUp
+        // screenshots that a material written with this exact value renders
+        // as a corrupted, vertically-smeared texture, so it was never a
+        // genuine "never scaled" default - almost certainly uninitialized
+        // memory in the one sample file this was calibrated against, given
+        // WriteTexturedMaterial's applied WIDTH is unconditionally 1.0 (a
+        // clearly deliberate value) with no equivalent garbage pattern. No
+        // longer used as this project's own default (see
+        // WriteTexturedMaterial, which now defaults to 1.0 instead) - kept
+        // only as a documented historical artifact of what real SketchUp
+        // can apparently write here.
         internal static readonly byte[] TextureHSentinel = FromHex("f0ffffffffffff0f");
 
         internal const int DefinitionSchema = 11;
@@ -1071,20 +1077,19 @@ namespace OpenSkp
         /// slot. texturePath is stored as-is. subtype is CDib's image
         /// format tag (4 for PNG, 1 for JPEG).
         ///
-        /// appliedHeight, if given, is written in place of
-        /// CreateConstants.TextureHSentinel (applied width stays a fixed
-        /// 1.0 either way). Needed because the reader's own
-        /// ground-truth-derived UV formula divides a face's final UV by
-        /// the material's applied width/height EVEN for a positioned
-        /// (frontUv) mapping, not just the default projection - the
-        /// sentinel decodes to ~1.29e-231, and dividing by it blows up to
-        /// an astronomical value, which real SketchUp visibly renders as a
-        /// corrupted, vertically-smeared texture (confirmed against real
-        /// SketchUp 2026-08-27 via the Python writer - see create.py's own
-        /// note on this). A caller positioning this material via
-        /// frontUv/backUv should pass a real appliedHeight (AddImage uses
-        /// 1.0, matching its own pins' 0..1 range) so that division is a
-        /// no-op instead of a corruption.</summary>
+        /// appliedHeight defaults to 1.0, matching applied width (always
+        /// 1.0, unconditionally). Pass a different value for a textured
+        /// material used with default (unpositioned) projection, to make
+        /// the texture repeat at a specific real-world size instead of
+        /// every 1 inch - the reader's own ground-truth-derived UV formula
+        /// divides a face's final UV by the material's applied
+        /// width/height, for a default-projected face exactly as much as
+        /// a positioned (frontUv/backUv) one. Until 2026-08-28 this
+        /// defaulted to a corrupted sentinel byte pattern instead (see
+        /// CreateConstants.TextureHSentinel's own comment) - confirmed via
+        /// real SketchUp screenshots to render as a streaky,
+        /// vertically-smeared texture regardless of projection
+        /// mode.</summary>
         internal int WriteTexturedMaterial(string name, byte[] imageBytes, string texturePath, int subtype, double? appliedHeight = null)
         {
             int slot = NewOfKnownClass("CMaterial", CreateConstants.MaterialSchema);
@@ -1104,14 +1109,7 @@ namespace OpenSkp
                 AddU32(90);
             }
             AddF64(1.0); // applied width - ground truth default when unscaled
-            if (appliedHeight.HasValue)
-            {
-                AddF64(appliedHeight.Value);
-            }
-            else
-            {
-                AddRaw(CreateConstants.TextureHSentinel);
-            }
+            AddF64(appliedHeight ?? 1.0);
             WriteStr(texturePath);
             // avg color (RGBA + pad + RGBA repeated) - neutral near-opaque
             // white rather than a real image average, since this project
@@ -2171,17 +2169,12 @@ namespace OpenSkp
         /// project has confirmed the on-disk CDib subtype tag for via SDK
         /// ground truth. Same ordering rules as AddMaterial.
         ///
-        /// If this material will ever be used with AddFace's frontUv/
-        /// backUv pinning, pass appliedHeight: 1.0 (matching those pins'
-        /// own 0..1 range) - the read-side UV formula divides by this
-        /// field even for a positioned mapping, and the default (an
-        /// internal sentinel, real SketchUp's own byte pattern for "never
-        /// explicitly scaled") is astronomically small, which corrupts ANY
-        /// face using this material, not just default-projected ones
-        /// (confirmed against real SketchUp 2026-08-27 - see
-        /// WriteTexturedMaterial's own note). Left at the default for the
-        /// plain default-planar-projection case, matching this method's
-        /// original, narrower scope.</summary>
+        /// appliedHeight defaults to 1.0 (matching applied width, always
+        /// 1.0). Pass a different value to make a default-projected
+        /// face's texture repeat at a specific real-world size instead of
+        /// every 1 inch - see WriteTexturedMaterial's own note for why
+        /// this field matters even for AddFace's frontUv/backUv pinning
+        /// (a positioned mapping still divides by it).</summary>
         public int AddTextureMaterial(string name, string imagePath, double? appliedHeight = null)
         {
             if (_geometryWriter != null)
@@ -2439,15 +2432,10 @@ namespace OpenSkp
         ///
         /// The image's quad and UV mapping are pinned explicitly (AddFace's
         /// frontUv), not left to the default per-material tile-size
-        /// projection - AddTextureMaterial is called with appliedHeight:
-        /// 1.0 for exactly this reason: the read-side UV formula divides
-        /// by the material's applied height even for a pinned mapping, and
-        /// the library default there (a ground-truth sentinel, not a real
-        /// number) is astronomically small - confirmed via real SketchUp
-        /// screenshots (2026-08-27, Python writer) to render as a
-        /// corrupted, vertically-smeared texture when left in place. 1.0
-        /// makes that division a no-op against this method's own 0..1
-        /// pins.
+        /// projection - the read-side UV formula divides by the
+        /// material's applied height even for a pinned mapping, and
+        /// AddTextureMaterial's default height (1.0) makes that division
+        /// a no-op against this method's own 0..1 pins.
         ///
         /// Unlike every other entity this writer produces, CImage's exact
         /// binary schema version (see CreateConstants.ImageSchema) is a
@@ -2456,8 +2444,7 @@ namespace OpenSkp
         /// project's own reader round-trips the result correctly, but real
         /// SketchUp's acceptance of the file is unverified beyond the
         /// Python port's own real-SketchUp test (placement/orientation/
-        /// texture all confirmed correct there after the appliedHeight fix
-        /// - see CHECKLIST.md).</summary>
+        /// texture all confirmed correct there - see CHECKLIST.md).</summary>
         public void AddImage(
             string imagePath, double width, double height,
             (double X, double Y, double Z) translation = default,
@@ -2466,7 +2453,7 @@ namespace OpenSkp
             int? layer = null,
             bool hidden = false)
         {
-            int mat = AddTextureMaterial($"__openskp_image_{_materialCount}", imagePath, appliedHeight: 1.0);
+            int mat = AddTextureMaterial($"__openskp_image_{_materialCount}", imagePath);
             ComponentDefinitionBuilder imageDef;
             using (imageDef = AddComponentDefinition($"Image{_definitionCount}"))
             {

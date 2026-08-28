@@ -4,6 +4,8 @@ import * as path from 'path';
 import { openExisting } from '../src/edit';
 import { create, SkpWriteError, Point3 } from '../src/create';
 import { parseSkp } from '../src/index';
+import { SkpModel, faceUvBasis, computeFaceUv } from '../src/model';
+import { reconstructLoopVertices } from '../src/geometry';
 
 /**
  * Tests for edit.ts - loading an existing legacy .skp file and rebuilding
@@ -154,52 +156,53 @@ describe('openExisting', () => {
     expect(() => newBuilder.addGroup(() => {}, { name: 'NewGroup' })).toThrow(SkpWriteError);
   });
 
-  it('a positioned texture round-trips', () => {
-    // Minimal 4x4 solid-color PNG (same generator as create.test.ts's
-    // Textures suite - kept local here to avoid a cross-file test dependency).
-    function makeTestPng(): Uint8Array {
-      function crc32(buf: number[]): number {
-        const table: number[] = [];
-        for (let n = 0; n < 256; n++) {
-          let c = n;
-          for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-          table[n] = c >>> 0;
-        }
-        let crc = 0xffffffff;
-        for (const b of buf) crc = table[(crc ^ b) & 0xff] ^ (crc >>> 8);
-        return (crc ^ 0xffffffff) >>> 0;
+  // Minimal 4x4 solid-color PNG (same generator as create.test.ts's Textures
+  // suite - kept local here to avoid a cross-file test dependency). Shared
+  // by every test in this describe block that needs a real texture.
+  function makeTestPng(): Uint8Array {
+    function crc32(buf: number[]): number {
+      const table: number[] = [];
+      for (let n = 0; n < 256; n++) {
+        let c = n;
+        for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+        table[n] = c >>> 0;
       }
-      function u32be(v: number): number[] {
-        return [(v >>> 24) & 0xff, (v >>> 16) & 0xff, (v >>> 8) & 0xff, v & 0xff];
-      }
-      function chunk(tag: number[], data: number[]): number[] {
-        return [...u32be(data.length), ...tag, ...data, ...u32be(crc32([...tag, ...data]))];
-      }
-      const size = 4;
-      const rgb = [200, 50, 50];
-      const rawRows: number[][] = [];
-      for (let y = 0; y < size; y++) {
-        const row = [0];
-        for (let x = 0; x < size; x++) row.push(...rgb);
-        rawRows.push(row);
-      }
-      const rawData = rawRows.flat();
-      let adler1 = 1;
-      let adler2 = 0;
-      for (const b of rawData) {
-        adler1 = (adler1 + b) % 65521;
-        adler2 = (adler2 + adler1) % 65521;
-      }
-      const deflate: number[] = [];
-      deflate.push(1, rawData.length & 0xff, (rawData.length >> 8) & 0xff, ~rawData.length & 0xff, (~rawData.length >> 8) & 0xff, ...rawData);
-      const zlibStream = [0x78, 0x01, ...deflate, (adler2 >> 8) & 0xff, adler2 & 0xff, (adler1 >> 8) & 0xff, adler1 & 0xff];
-      const sig = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
-      const ihdr = chunk([0x49, 0x48, 0x44, 0x52], [...u32be(size), ...u32be(size), 8, 2, 0, 0, 0]);
-      const idat = chunk([0x49, 0x44, 0x41, 0x54], zlibStream);
-      const iend = chunk([0x49, 0x45, 0x4e, 0x44], []);
-      return Uint8Array.from([...sig, ...ihdr, ...idat, ...iend]);
+      let crc = 0xffffffff;
+      for (const b of buf) crc = table[(crc ^ b) & 0xff] ^ (crc >>> 8);
+      return (crc ^ 0xffffffff) >>> 0;
     }
+    function u32be(v: number): number[] {
+      return [(v >>> 24) & 0xff, (v >>> 16) & 0xff, (v >>> 8) & 0xff, v & 0xff];
+    }
+    function chunk(tag: number[], data: number[]): number[] {
+      return [...u32be(data.length), ...tag, ...data, ...u32be(crc32([...tag, ...data]))];
+    }
+    const size = 4;
+    const rgb = [200, 50, 50];
+    const rawRows: number[][] = [];
+    for (let y = 0; y < size; y++) {
+      const row = [0];
+      for (let x = 0; x < size; x++) row.push(...rgb);
+      rawRows.push(row);
+    }
+    const rawData = rawRows.flat();
+    let adler1 = 1;
+    let adler2 = 0;
+    for (const b of rawData) {
+      adler1 = (adler1 + b) % 65521;
+      adler2 = (adler2 + adler1) % 65521;
+    }
+    const deflate: number[] = [];
+    deflate.push(1, rawData.length & 0xff, (rawData.length >> 8) & 0xff, ~rawData.length & 0xff, (~rawData.length >> 8) & 0xff, ...rawData);
+    const zlibStream = [0x78, 0x01, ...deflate, (adler2 >> 8) & 0xff, adler2 & 0xff, (adler1 >> 8) & 0xff, adler1 & 0xff];
+    const sig = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+    const ihdr = chunk([0x49, 0x48, 0x44, 0x52], [...u32be(size), ...u32be(size), 8, 2, 0, 0, 0]);
+    const idat = chunk([0x49, 0x44, 0x41, 0x54], zlibStream);
+    const iend = chunk([0x49, 0x45, 0x4e, 0x44], []);
+    return Uint8Array.from([...sig, ...ihdr, ...idat, ...iend]);
+  }
 
+  it('a positioned texture round-trips', () => {
     const builder = create();
     const png = makeTestPng();
     const brick = builder.addTextureMaterial('Brick', png, 'brick.png');
@@ -246,6 +249,72 @@ describe('openExisting', () => {
     const { builder: newBuilder } = openExisting(toBuffer(builder.toBytes()));
     const rebuilt = parseSkp(toBuffer(newBuilder.toBytes()));
     expect(rebuilt.root.edges.every((e) => e.hidden && e.soft && e.smooth)).toBe(true);
+  });
+
+  it('a default-projected texture UV matches the source (not left corrupted)', () => {
+    // Found via cross-language analysis (2026-08-28): replayMaterials wrote
+    // every rebuilt texture material with the library's (until now)
+    // corrupted default applied height, and replayUv only replayed a
+    // face's UV when it already had an explicit uvTransform - leaving a
+    // DEFAULT-projected textured face's material (and thus its real
+    // SketchUp rendering) corrupted end to end. Both are fixed; this
+    // checks the actual rendered UV at every vertex matches, not just
+    // "some texture data round-tripped".
+    const png = makeTestPng();
+    const builder = create();
+    const brick = builder.addTextureMaterial('Brick', png, 'brick.png');
+    builder.addFace(SQUARE, { material: brick }); // no frontUv - default projection
+
+    const source = parseSkp(toBuffer(builder.toBytes()));
+    const { builder: newBuilder, warnings } = openExisting(toBuffer(builder.toBytes()));
+    expect(warnings.some((w) => w.includes('tile size'))).toBe(false);
+    const rebuilt = parseSkp(toBuffer(newBuilder.toBytes()));
+
+    function faceUvs(model: SkpModel): [number, number][] {
+      const mat = model.materials[0];
+      const face = model.root.faces[0];
+      const edges = new Map<number, [number | null, number | null]>();
+      for (const e of model.root.edges) edges.set(e.id, [e.v1Id, e.v2Id]);
+      const vids = reconstructLoopVertices(face.loops[0], edges);
+      const verticesById = new Map(model.root.vertices.map((v) => [v.id, v]));
+      const pts: Point3[] = vids.map((v) => {
+        const vertex = verticesById.get(v)!;
+        return [vertex.x, vertex.y, vertex.z];
+      });
+      const { xr, yr } = faceUvBasis(face.normal as [number, number, number]);
+      const tileW = mat.texture!.width || 1.0;
+      const tileH = mat.texture!.height || 1.0;
+      return pts.map((p) => computeFaceUv(p, xr, yr, face.uvTransform, tileW, tileH));
+    }
+
+    const sourceUvs = faceUvs(source);
+    const rebuiltUvs = faceUvs(rebuilt);
+    expect(rebuiltUvs.length).toBe(sourceUvs.length);
+    for (let i = 0; i < sourceUvs.length; i++) {
+      expect(rebuiltUvs[i][0]).toBeCloseTo(sourceUvs[i][0], 6);
+      expect(rebuiltUvs[i][1]).toBeCloseTo(sourceUvs[i][1], 6);
+    }
+  });
+
+  it('a genuinely empty instance name is preserved, not replaced', () => {
+    // Found via cross-language analysis (2026-08-28): addInstance's own
+    // `name ?? definition.name` fallback and replayInstance's
+    // `inst.name || undefined` both silently replaced a genuinely empty
+    // instance name with its definition's name - a real difference, not
+    // cosmetic (a later rename of the definition would no longer show
+    // through).
+    const builder = create();
+    const box = builder.addComponentDefinition('Box', (def) => {
+      def.addFace([[0, 0, 0], [10, 0, 0], [10, 10, 0], [0, 10, 0]]);
+    });
+    builder.addInstance(box, { name: '', translation: [0, 0, 0] });
+
+    const source = parseSkp(toBuffer(builder.toBytes()));
+    expect(source.root.instances[0].name).toBe('');
+
+    const { builder: newBuilder } = openExisting(toBuffer(builder.toBytes()));
+    const rebuilt = parseSkp(toBuffer(newBuilder.toBytes()));
+    expect(rebuilt.root.instances[0].name).toBe('');
   });
 });
 

@@ -246,10 +246,11 @@ std::string to_cpp_code(const SkpModel& model) {
         auto dot = mat.texture->filename.find_last_of('.');
         if (dot != std::string::npos) suffix = mat.texture->filename.substr(dot);
         if (suffix.empty()) suffix = ".png";
-        // applied_height: 1.0 - see add_texture_material's own note on why the library default
-        // (an internal sentinel) corrupts ANY face using this material. Every face using a
-        // textured material is written below with explicit front_uv/back_uv, never left to
-        // default projection, so the original applied width/height never needs to be reproduced.
+        // applied_height: 1.0 - every face using a textured material is written below with
+        // explicit front_uv/back_uv, never left to default projection, so the material's own
+        // applied height must be an exact no-op divisor (matches add_texture_material's own
+        // default too, but kept explicit since it's a hard requirement here, not just a safe
+        // default).
         //
         // var_name is declared here, then only ASSIGNED inside the nested `{ }` block below (its
         // temp-file cleanup needs its own scope) - a fresh declaration in that inner scope would

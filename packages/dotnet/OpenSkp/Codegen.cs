@@ -85,13 +85,13 @@ namespace OpenSkp
                     string b64 = Convert.ToBase64String(mat.Texture.Data);
                     string ext = System.IO.Path.GetExtension(mat.Texture.Filename ?? "");
                     if (string.IsNullOrEmpty(ext)) ext = ".png";
-                    // appliedHeight: 1.0 - see AddTextureMaterial's own note
-                    // on why the library default (an internal sentinel)
-                    // corrupts ANY face using this material. Every face
-                    // using a textured material is written below with
-                    // explicit frontUv/backUv, never left to default
-                    // projection, so the original applied width/height
-                    // never needs to be reproduced.
+                    // appliedHeight: 1.0 - every face using a textured
+                    // material is written below with explicit
+                    // frontUv/backUv, never left to default projection,
+                    // so the material's own applied height must be an
+                    // exact no-op divisor (matches AddTextureMaterial's
+                    // own default too, but kept explicit since it's a
+                    // hard requirement here, not just a safe default).
                     Push($"        var _texPath{i} = System.IO.Path.Combine(System.IO.Path.GetTempPath(), Guid.NewGuid() + \"{ext}\");");
                     Push($"        System.IO.File.WriteAllBytes(_texPath{i}, Convert.FromBase64String(\"{b64}\"));");
                     Push("        int " + varName + $" = builder.AddTextureMaterial({CsString(mat.Name)}, _texPath{i}, appliedHeight: 1.0);");

@@ -143,6 +143,60 @@ TEST(Create, TexturedMaterialRoundTrips) {
   EXPECT_EQ(*mat.texture->data, fake_png_bytes());
 }
 
+TEST(Create, TexturedMaterialDefaultAppliedHeightIsOneNotCorrupted) {
+  // Regression test for a real bug: until 2026-08-28, an omitted
+  // applied_height wrote a corrupted internal sentinel byte pattern
+  // (~1.29e-231) instead of a real number - confirmed via real SketchUp
+  // screenshots to render as a streaky, vertically-smeared texture.
+  // add_texture_material's applied WIDTH is unconditionally 1.0 (a
+  // deliberate ground-truth value); height should match it by default
+  // now, not silently corrupt every caller who doesn't know to pass
+  // applied_height=1.0 explicitly.
+  auto tmp_path = std::filesystem::temp_directory_path() / "openskp_create_test_texture_height.png";
+  {
+    std::ofstream f(tmp_path, std::ios::binary);
+    ByteBuffer png = fake_png_bytes();
+    f.write(reinterpret_cast<const char*>(png.data()), static_cast<std::streamsize>(png.size()));
+  }
+
+  auto builder = create();
+  int brick = builder->add_texture_material("Brick", tmp_path);
+  FaceOptions opts;
+  opts.material = brick;
+  builder->add_face({{0, 0, 0}, {100, 0, 0}, {100, 100, 0}, {0, 100, 0}}, opts);
+
+  SkpModel model = round_trip(*builder);
+  std::filesystem::remove(tmp_path);
+
+  ASSERT_EQ(model.materials.size(), 1u);
+  ASSERT_TRUE(model.materials[0].texture.has_value());
+  EXPECT_DOUBLE_EQ(model.materials[0].texture->width, 1.0);
+  EXPECT_DOUBLE_EQ(model.materials[0].texture->height, 1.0);
+}
+
+TEST(Create, TexturedMaterialExplicitAppliedHeightStillOverridable) {
+  auto tmp_path =
+      std::filesystem::temp_directory_path() / "openskp_create_test_texture_height2.png";
+  {
+    std::ofstream f(tmp_path, std::ios::binary);
+    ByteBuffer png = fake_png_bytes();
+    f.write(reinterpret_cast<const char*>(png.data()), static_cast<std::streamsize>(png.size()));
+  }
+
+  auto builder = create();
+  int brick = builder->add_texture_material("Brick", tmp_path, 48.0);
+  FaceOptions opts;
+  opts.material = brick;
+  builder->add_face({{0, 0, 0}, {100, 0, 0}, {100, 100, 0}, {0, 100, 0}}, opts);
+
+  SkpModel model = round_trip(*builder);
+  std::filesystem::remove(tmp_path);
+
+  ASSERT_EQ(model.materials.size(), 1u);
+  ASSERT_TRUE(model.materials[0].texture.has_value());
+  EXPECT_DOUBLE_EQ(model.materials[0].texture->height, 48.0);
+}
+
 TEST(Create, AddImagePlacesARealImageEntityNotAPlainTexturedFace) {
   auto tmp_path = std::filesystem::temp_directory_path() / "openskp_create_test_image.png";
   {

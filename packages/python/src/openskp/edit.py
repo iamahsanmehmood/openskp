@@ -176,11 +176,10 @@ def _replay_materials(builder: SkpBuilder, model: SkpModel, warnings: List[str])
                 # pins already bake in the SOURCE's real tile size via
                 # compute_face_uv - the material's own stored applied
                 # height must be a no-op divisor (1.0) or the read-side UV
-                # formula divides by it a second time. Leaving this at the
-                # library default (an internal sentinel, ~1.29e-231) was
-                # confirmed against real SketchUp 2026-08-27 to corrupt the
-                # texture into a vertically-smeared mess - see
-                # add_texture_material's own note.
+                # formula divides by it a second time. This happens to
+                # match add_texture_material's own default too, but is
+                # kept explicit here since it's a hard requirement of this
+                # call site specifically, not just a safe default.
                 slot = builder.add_texture_material(mat.name, tmp_path, applied_height=1.0)
             finally:
                 os.unlink(tmp_path)

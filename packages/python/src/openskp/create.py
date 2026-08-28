@@ -192,12 +192,17 @@ _PID_COUNTER_POS = 1987
 _MATERIAL_SCHEMA = 12
 _DIB_SCHEMA = 3
 
-# Ground-truth byte pattern (not a meaningful float) that real SketchUp
-# writes for a texture's "applied height" when the caller never explicitly
-# overrides the texture's scale/aspect - found by diffing an SDK-authored
-# textured-material file; present verbatim rather than derived from a
-# formula since its bit pattern doesn't correspond to any sensible height
-# value (it decodes as ~1.29e-231 as an f64).
+# Byte pattern found in one SDK-authored textured-material sample's "applied
+# height" field, decoding to ~1.29e-231 as an f64 - not a meaningful height
+# value. Confirmed 2026-08-27 via real SketchUp screenshots that a material
+# written with this exact value renders as a corrupted, vertically-smeared
+# texture, so it was never a genuine "never scaled" default - almost
+# certainly uninitialized memory in the one sample file this was calibrated
+# against, given `write_textured_material`'s applied WIDTH is unconditionally
+# 1.0 (a clearly deliberate value) with no equivalent garbage pattern. No
+# longer used as this project's own default (see write_textured_material,
+# which now defaults to 1.0 instead) - kept only as a documented historical
+# artifact of what real SketchUp can apparently write here.
 _TEXTURE_H_SENTINEL = bytes.fromhex("f0ffffffffffff0f")
 
 _DEFINITION_SCHEMA = 11
@@ -921,22 +926,19 @@ class _ArchiveWriter:
         string round-trips fine structurally. ``subtype`` is CDib's image
         format tag (4 for PNG, 1 for JPEG - see :func:`_detect_image_subtype`).
 
-        ``applied_height``, if given, is written in place of
-        ``_TEXTURE_H_SENTINEL`` (applied width stays a fixed 1.0 either
-        way). Needed because `_face_groups.compute_face_uv` - this
-        project's own reverse-engineered, ground-truth-derived read-side
-        formula - divides a face's final UV by the material's applied
-        width/height EVEN for a `write_face`-positioned (``front_uv``)
-        mapping, not just the default projection. The sentinel decodes to
-        ~1.29e-231 - dividing by it blows up to an astronomical value,
-        which real SketchUp visibly renders as a corrupted, vertically-
-        smeared texture (confirmed 2026-08-27: two independent real-
-        SketchUp screenshots of a sentinel-height material, one default-
-        projected and one front_uv-positioned, showed the identical
-        streaky corruption). A caller that's going to position this
-        material via `front_uv`/`back_uv` should pass a real
-        ``applied_height`` (`add_image` uses 1.0, matching its own pins'
-        0..1 range) so that division is a no-op instead of a corruption.
+        ``applied_height`` defaults to 1.0, matching applied width (always
+        1.0, unconditionally). Pass a different value for a textured
+        material used with default (unpositioned) projection, to make the
+        texture repeat at a specific real-world size instead of every 1
+        inch - `_face_groups.compute_face_uv`, this project's own
+        reverse-engineered read-side formula, divides a face's final UV by
+        the material's applied width/height, for a default-projected face
+        exactly as much as a `front_uv`/`back_uv`-positioned one. Until
+        2026-08-28 this defaulted to a corrupted sentinel byte pattern
+        instead (see ``_TEXTURE_H_SENTINEL``'s own comment) - confirmed via
+        real SketchUp screenshots to render as a streaky, vertically-smeared
+        texture regardless of projection mode, so every prior caller that
+        didn't explicitly override it was shipping a broken texture.
         """
         slot = self._new_of_known_class("CMaterial", schema=_MATERIAL_SCHEMA)
         self._preamble()
@@ -955,7 +957,7 @@ class _ArchiveWriter:
             # project computes from the image; PNG has no such field.
             self.buf += _u32(90)
         self.buf += _f64(1.0)  # applied width - ground truth default when unscaled
-        self.buf += _f64(applied_height) if applied_height is not None else _TEXTURE_H_SENTINEL
+        self.buf += _f64(applied_height if applied_height is not None else 1.0)
         self._write_str(texture_path)
         # avg color (RGBA + pad + RGBA repeated, per legacy.py's _read_material
         # comment) - neutral near-opaque white rather than a real image
@@ -2081,16 +2083,12 @@ class SkpBuilder:
         truth (4 and 1 respectively; see :meth:`_ArchiveWriter.
         write_textured_material`).
 
-        If this material will ever be used with `add_face`'s ``front_uv``/
-        ``back_uv`` pinning, pass ``applied_height=1.0`` (matching those
-        pins' own 0..1 range) - the read-side UV formula divides by this
-        field even for a positioned mapping, and the default (an internal
-        sentinel, real SketchUp's own byte pattern for "never explicitly
-        scaled") is astronomically small, which corrupts ANY face using
-        this material, not just default-projected ones (confirmed against
-        real SketchUp 2026-08-27 - see `write_textured_material`'s own
-        note). Left at the default for the plain default-planar-projection
-        case, matching this method's original, narrower scope.
+        ``applied_height`` defaults to 1.0 (matching applied width, always
+        1.0). Pass a different value to make a default-projected face's
+        texture repeat at a specific real-world size instead of every 1
+        inch - see `write_textured_material`'s own docstring for why this
+        field matters even for `add_face`'s ``front_uv``/``back_uv``
+        pinning (a positioned mapping still divides by it).
 
         Same ordering rules as `add_material` - must be called before any
         `add_layer`, `add_component_definition`, or `add_face` call.
@@ -2392,14 +2390,10 @@ class SkpBuilder:
 
         The image's quad and UV mapping are pinned explicitly (`add_face`'s
         ``front_uv``), not left to the default per-material tile-size
-        projection - `add_texture_material` is called with
-        ``applied_height=1.0`` for exactly this reason: the read-side UV
-        formula divides by the material's applied height even for a
-        pinned mapping, and the library default there (a ground-truth
-        sentinel, not a real number) is astronomically small - confirmed
-        via real SketchUp screenshots (2026-08-27) to render as a
-        corrupted, vertically-smeared texture when left in place. 1.0
-        makes that division a no-op against this method's own 0..1 pins.
+        projection - the read-side UV formula divides by the material's
+        applied height even for a pinned mapping, and `add_texture_material`'s
+        default height (1.0) makes that division a no-op against this
+        method's own 0..1 pins.
 
         ⚠️ Unlike every other entity this writer produces, CImage's exact
         binary schema version (see `_IMAGE_SCHEMA`) is a best-effort guess,
@@ -2409,9 +2403,7 @@ class SkpBuilder:
         unverified - open the output in real SketchUp before relying on
         this, and please report back what you find either way.
         """
-        mat = self.add_texture_material(
-            f"__openskp_image_{self._material_count}", image_path, applied_height=1.0,
-        )
+        mat = self.add_texture_material(f"__openskp_image_{self._material_count}", image_path)
         with self.add_component_definition(f"Image{self._definition_count}") as image_def:
             # Standard (0,0)-at-bottom-left, V increasing upward - no
             # vertical flip. Every other UV-related fact in this file is
