@@ -257,7 +257,7 @@ def _plausible_list_tag(ar, data, at) -> bool:
     return t < ar.next_slot
 
 
-def _retry_count_after_v20_filler(r: _R, count_pos: int, ar=None) -> Optional[int]:
+def _retry_count_after_v20_filler(r: _R, count_pos: int, limit: int, ar=None) -> Optional[int]:
     """SketchUp 2020 (v20) writes an extra, undocumented record ahead of some
     counts that v17 does not have, which leaves the reader a few bytes early
     and makes it read garbage as the count. The filler is an empty UTF-16
@@ -276,6 +276,18 @@ def _retry_count_after_v20_filler(r: _R, count_pos: int, ar=None) -> Optional[in
     files that were already parsing (v17, and the VFF path) never reach it.
 
     *count_pos* is the offset the count was read FROM (i.e. ``r.pos - 4``).
+
+    *limit* is the caller's own plausibility ceiling for whatever count this
+    is (e.g. 100,000 for a relationship count, 1,000,000 for a definition
+    count) - required, not a shared internal default, since a candidate this
+    function accepts is returned directly with no further check at most call
+    sites. A single hardcoded ceiling here previously let a byte-garbage
+    candidate between a tighter caller's real limit and that hardcoded value
+    win the search over a better/correct candidate at a different offset,
+    causing the caller's own downstream check to fail on an otherwise-valid
+    file (found 2026-08-28, cross-language audit against TypeScript/.NET/
+    Dart/C++, which always passed their own caller-specific limit through).
+
     Returns the corrected count, or ``None`` when this is not the v20 layout.
     """
     data = r.data
@@ -303,7 +315,7 @@ def _retry_count_after_v20_filler(r: _R, count_pos: int, ar=None) -> Optional[in
         if at2 < marker_at + 4 or at2 + 4 > len(data):
             continue
         count = struct.unpack_from('<I', data, at2)[0]
-        if not (0 < count <= 5_000_000):
+        if not (0 < count <= limit):
             continue
         if ar is not None and not _plausible_list_tag(ar, data, at2 + 4):
             continue
@@ -964,7 +976,7 @@ def _read_definition(ar, r):
     # the first non-zero u32 after its padding.
     count = None
     if ar.ver >= 20:
-        count = _retry_count_after_v20_filler(r, r.pos, ar)
+        count = _retry_count_after_v20_filler(r, r.pos, 5_000_000, ar)
     if count is None:
         r.u32()
         count = r.u32()
@@ -973,7 +985,7 @@ def _read_definition(ar, r):
     # instead of the count. A genuinely empty definition reads zero with no
     # filler ahead, and _retry_count_after_v20_filler leaves those alone.
     if count > 5_000_000 or count == 0:
-        retry = _retry_count_after_v20_filler(r, r.pos - 4, ar)
+        retry = _retry_count_after_v20_filler(r, r.pos - 4, 5_000_000, ar)
         if retry is not None:
             count = retry
     if count > 5_000_000:
@@ -981,7 +993,7 @@ def _read_definition(ar, r):
     ents = _read_entity_list(ar, r, count, 'def')
     nrel = r.u32()
     if nrel > 100000:
-        retry = _retry_count_after_v20_filler(r, r.pos - 4, ar)
+        retry = _retry_count_after_v20_filler(r, r.pos - 4, 100_000, ar)
         if retry is not None:
             nrel = retry
     if nrel > 100000:
@@ -1238,7 +1250,7 @@ def _walk_model(data: bytes, ver: int, start: int, mat_count: int,
         raise LegacyParseError(f"definition-list anchor is {dn}, not a layer")
     def_count = r.u32()
     if def_count > 1_000_000:
-        retry = _retry_count_after_v20_filler(r, r.pos - 4, ar)
+        retry = _retry_count_after_v20_filler(r, r.pos - 4, 1_000_000, ar)
         if retry is not None:
             def_count = retry
     if def_count > 1_000_000:
@@ -1261,7 +1273,7 @@ def _walk_model(data: bytes, ver: int, start: int, mat_count: int,
     # root entity list
     root_count = r.u32()
     if root_count > 5_000_000:
-        retry = _retry_count_after_v20_filler(r, r.pos - 4, ar)
+        retry = _retry_count_after_v20_filler(r, r.pos - 4, 5_000_000, ar)
         if retry is not None:
             root_count = retry
     if root_count > 5_000_000:
