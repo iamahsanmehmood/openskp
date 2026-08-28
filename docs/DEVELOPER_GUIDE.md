@@ -113,6 +113,22 @@ auto glb = openskp::to_glb(scene);
 openskp::export_glb(scene, "model.glb");
 ```
 
+**A third, opt-in option: `buildInstancedScene()`.** Where `buildScene()`
+bakes every placement out into its own triangles, `buildInstancedScene()`
+(`build_instanced_scene()` in Python and C++, `BuildInstancedScene()` in
+.NET) keeps the instancing SketchUp already recorded — each distinct
+definition is triangulated once, and every placement becomes a node
+carrying a transform, so output scales with unique geometry plus instance
+transforms rather than definition geometry times placement count. Pair it
+with `toInstancedGLB()` (`to_instanced_glb()` in Python and C++,
+`InstancedGlbExport.ToInstancedGlb()`/`.ExportInstancedGlb()` in .NET,
+`toInstancedGlb()` in Dart) to write a glTF/GLB where many nodes reference
+one mesh instead of duplicating it per placement. It produces exactly the
+same triangles as `buildScene()` — lossless instancing preservation, not
+mesh decimation — and is worth reaching for whenever a file reuses
+definitions across many placements (see the [Unreleased] entry in
+[CHANGELOG.md](../CHANGELOG.md) for size/speed numbers on a repeated-1,000-times case).
+
 ## The data model
 
 All five languages produce structurally equivalent output for the same
@@ -320,11 +336,11 @@ differs is only naming, per each language's own convention:
 |---|---|---|---|---|---|---|---|---|
 | Python | ✅ | ✅ `openskp.export.glb` | ✅ `openskp.export.obj` | ✅ `openskp.export.stl` | ✅ `openskp.export.ply` | ✅ `openskp.export.dxf` | ✅ `openskp.export.ifc` | ✅ `openskp.export.json_export` |
 | TypeScript | ✅ | ✅ `toGLB(scene)` | ✅ `toOBJ(scene)` / `exportOBJ` | ✅ `toSTLAscii` / `exportSTL` | ✅ `toPLYAscii` / `exportPLY` | ✅ `toDXF(scene)` / `exportDXF` | ✅ `toIFC(scene)` / `exportIFC` | ✅ `toJSON(model, scene?)` |
-| .NET | ✅ | ✅ `GlbExport.ExportGlb` | ✅ `ObjExport.ExportObj` | ✅ `StlExport.ExportStl` | ✅ `PlyExport.ExportPly` | ✅ `DxfExport.ToDxf` / `ExportDxf` | ✅ `IfcExport.ToIfc` / `ExportIfc` | ✅ `JsonExport.ExportJson` |
-| Dart | ✅ | ✅ `exportGlb` | ✅ `exportObj` | ✅ `exportStl` | ✅ `exportPly` | ✅ `toDxf` / `exportDxf` | ✅ `toIfc` / `exportIfc` | ✅ `exportJson` |
+| .NET | ✅ | ✅ `GlbExport.ExportGlb` | ✅ `ObjExport.ExportObj` | ✅ `StlExport.ExportStl` | ✅ `PlyExport.ExportPly` | ✅ `DxfExport.ToDxf` / `ExportDxf` | ✅ `IfcExport.ToIfc` / `ExportIfc` | ✅ `JsonExport.ToDict` (in-memory only) |
+| Dart | ✅ | ✅ `exportGlb` | ✅ `exportObj` | ✅ `exportStl` | ✅ `exportPly` | ✅ `toDxf` / `exportDxf` | ✅ `toIfc` / `exportIfc` | ✅ `toJson` (in-memory only) |
 | C++ | ✅ | ✅ `export_glb` | ✅ `export_obj` | ✅ `export_stl` | ✅ `export_ply` | ✅ `to_dxf` / `export_dxf` | ✅ `to_ifc` / `export_ifc` | ✅ `export_json` |
 
-All five languages provide built-in file-writing and in-memory converters for GLB, OBJ, STL, PLY, DXF 3D, IFC4 (BIM), and JSON metadata. Below is the Python conversion example:
+All five languages provide built-in converters for GLB, OBJ, STL, PLY, DXF 3D, IFC4 (BIM), and JSON metadata; file-writing (not just in-memory bytes/objects) is included for every format in every language, with two exceptions: TypeScript's GLB export and TypeScript/.NET/Dart's JSON export are in-memory only (see below for both). Below is the Python conversion example:
 
 ```python
 from openskp import SkpFile
@@ -346,12 +362,12 @@ json_export.export(model, "output.json", scene=scene)  # scene= populates scene_
 Notes on each:
 
 - **`glb.export(skp_file, output_path, ...)`** requires `skp_file.parse()`
-  to have been called first. Internally it calls the older
-  `openskp._core.build_scene(parsed, output_dir, filename_stem)` helper
-  (trimesh-based, writes GLB+JSON straight to disk) — a different function
-  from the public `openskp.scene.build_scene()` this guide otherwise
-  describes, but it is real, working, public API reachable via
-  `openskp.export.glb`.
+  to have been called first. Internally it calls the same public
+  `openskp.scene.build_scene()` this guide describes elsewhere, then hands
+  the resulting primitives to trimesh purely for GLB binary serialization
+  - so every fix made to `scene.build_scene()` reaches real `.glb` output
+  automatically, with no separate scene-baking pipeline to fall out of
+  sync.
 - **`obj.export(scene, output_path)`** takes a built `Scene` (not the raw
   model) and writes one `o` group per `GlbPrimitive` with `v`/`f` records
   only — no materials, normals, or UVs.
@@ -359,6 +375,17 @@ Notes on each:
   definitions/layers/materials from `model` always; `scene_hierarchy` is
   `None` unless a built `Scene` is passed via `scene=`, in which case it's
   the real, resolved, world-space instance tree.
+
+Unlike every other export format, JSON file-writing exists in only two of
+the five languages: Python's `json_export.export(...)` and C++'s
+`export_json(...)` write straight to disk. TypeScript's `toJSON(model, scene?)`,
+.NET's `JsonExport.ToDict(model, scene)`, and Dart's `toJson(model, [scene])`
+all return the in-memory object/dictionary only — there is no
+`exportJSON`/`ExportJson`/`exportJson` file-writing counterpart in those
+three languages. Write the result to disk yourself with each language's
+own JSON encoder, e.g. TypeScript's `fs.writeFileSync(path, JSON.stringify(toJSON(model, scene)))`,
+.NET's `File.WriteAllText(path, JsonSerializer.Serialize(JsonExport.ToDict(model, scene)))`,
+or Dart's `File(path).writeAsStringSync(jsonEncode(toJson(model, scene)))`.
 
 TypeScript's `toGLB(scene)` provides complete, public, in-memory-to-`.glb`
 bytes only (no file-write variant). C++, .NET, and Dart all provide both:
@@ -369,69 +396,18 @@ dependency — .NET added a small internal JSON serializer since
 `netstandard2.0` has none built in; C++'s writer uses a private, pinned
 TinyGLTF dependency that does not appear in installed consumer
 interfaces; Dart's uses `dart:convert`'s built-in JSON support directly.
-None of the five GLB writers include OBJ export except Python (`openskp.export.obj`).
-However, because every language's `buildScene()` returns the same `Scene` shape (`GlbPrimitive[]` with triangulated `positions` and `indices`), generating a Wavefront `.obj` file in any language requires only a short loop over `scene.glbPrimitives`:
-
-```csharp
-// .NET OBJ export snippet
-using var writer = new StreamWriter("output.obj");
-int vertexOffset = 1;
-foreach (var prim in scene.GlbPrimitives) {
-    for (int i = 0; i < prim.Positions.Count; i += 3)
-        writer.WriteLine($"v {prim.Positions[i]} {prim.Positions[i+1]} {prim.Positions[i+2]}");
-    for (int i = 0; i < prim.Indices.Count; i += 3)
-        writer.WriteLine($"f {prim.Indices[i] + vertexOffset} {prim.Indices[i+1] + vertexOffset} {prim.Indices[i+2] + vertexOffset}");
-    vertexOffset += prim.Positions.Count / 3;
-}
-```
-
-```typescript
-// TypeScript OBJ export snippet
-let objText = "";
-let vertexOffset = 1;
-for (const prim of scene.glbPrimitives) {
-  for (let i = 0; i < prim.positions.length; i += 3) {
-    objText += `v ${prim.positions[i]} ${prim.positions[i+1]} ${prim.positions[i+2]}\n`;
-  }
-  for (let i = 0; i < prim.indices.length; i += 3) {
-    objText += `f ${prim.indices[i] + vertexOffset} ${prim.indices[i+1] + vertexOffset} ${prim.indices[i+2] + vertexOffset}\n`;
-  }
-  vertexOffset += prim.positions.length / 3;
-}
-```
-
-```dart
-// Dart OBJ export snippet
-final buffer = StringBuffer();
-var vertexOffset = 1;
-for (final prim in scene.glbPrimitives) {
-  for (var i = 0; i < prim.positions.length; i += 3) {
-    buffer.writeln('v ${prim.positions[i]} ${prim.positions[i + 1]} ${prim.positions[i + 2]}');
-  }
-  for (var i = 0; i < prim.indices.length; i += 3) {
-    buffer.writeln('f ${prim.indices[i] + vertexOffset} ${prim.indices[i + 1] + vertexOffset} ${prim.indices[i + 2] + vertexOffset}');
-  }
-  vertexOffset += prim.positions.length ~/ 3;
-}
-await File('output.obj').writeAsString(buffer.toString());
-```
-
-```cpp
-// C++ OBJ export snippet
-std::ofstream out("output.obj");
-std::uint32_t vertex_offset = 1;
-for (const auto& prim : scene.glb_primitives) {
-    for (std::size_t i = 0; i < prim.positions.size(); i += 3) {
-        out << "v " << prim.positions[i] << " " << prim.positions[i+1] << " " << prim.positions[i+2] << "\n";
-    }
-    for (std::size_t i = 0; i < prim.indices.size(); i += 3) {
-        out << "f " << (prim.indices[i] + vertex_offset) << " "
-            << (prim.indices[i+1] + vertex_offset) << " "
-            << (prim.indices[i+2] + vertex_offset) << "\n";
-    }
-    vertex_offset += static_cast<std::uint32_t>(prim.positions.size() / 3);
-}
-```
+OBJ export is native in all five languages, not just Python — see the
+capability table above (`openskp.export.obj` / `toOBJ`/`exportOBJ` /
+`ObjExport.ExportObj` / `toObj`/`exportObj` / `to_obj`/`export_obj`). Each
+takes a built `Scene` (not the raw model) and writes one `o` group per
+`GlbPrimitive` with `v`/`f` records only — no materials, normals, or UVs,
+matching Python's `obj.export(scene, output_path)` documented above. Since
+every language's `buildScene()` returns the same `Scene` shape
+(`GlbPrimitive[]` with triangulated `positions` and `indices`), a custom
+OBJ variant — say, with per-primitive groups or vertex normals the
+built-in writer omits — is only a short loop over `scene.glbPrimitives`
+away in any language, but the built-in exporters above cover the common
+case without writing that loop yourself.
 
 ## Write capabilities
 

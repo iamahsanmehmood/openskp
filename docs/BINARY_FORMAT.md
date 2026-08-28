@@ -66,11 +66,18 @@ Each TLV element:
 These tags contain nested child TLV elements:
 
 ```
-7C15  8813  8913  8A13  8B13  8D13  4C1D  6419
+F401  F701  D430  D530  C832
+7C15  8813  8913  8A13  8B13  8C13  8D13  4C1D  6419
 F901  7017  7117  D007  C409  9411  9511  0F01
 384A  B80B  9713  2C4C  AC0D  AE0D  F601  F801
 983A  993A  8C3C  8D3C
+9013  401F
 ```
+
+`9013`/`401F` are the pair of containers an Image entity's placement is
+wrapped in: a placed Image wraps a standard `6419` Instance node inside
+`9013` → `401F`. Without treating both as containers, that inner instance
+stays buried in an opaque payload and the image looks never placed.
 
 ## 3. Tag Reference
 

@@ -307,7 +307,7 @@ code[class*="language-"]{font-family:var(--font-code)!important;font-size:12.5px
   <div class="hero-stats">
     <div><div class="hero-stat-n">5</div><div class="hero-stat-l">Languages</div></div>
     <div><div class="hero-stat-n">7</div><div class="hero-stat-l">Convert-to formats</div></div>
-    <div><div class="hero-stat-n">179</div><div class="hero-stat-l">Tests passing</div></div>
+    <div><div class="hero-stat-n">1,306</div><div class="hero-stat-l">Tests passing</div></div>
     <div><div class="hero-stat-n">620MB</div><div class="hero-stat-l">Largest file verified</div></div>
     <div><div class="hero-stat-n">2</div><div class="hero-stat-l">Container formats (VFF + legacy MFC)</div></div>
   </div>
@@ -778,7 +778,7 @@ def build():
       <table class="doc-table">
         <thead><tr><th>Concept</th><th>Python</th><th>TypeScript</th><th>.NET</th><th>Dart</th><th>C++</th></tr></thead>
         <tbody>
-          <tr><td>definitions</td><td>dict[int|str, Definition]</td><td>Map&lt;number, Definition&gt;</td><td>Dictionary&lt;long, Definition&gt;</td><td>Map&lt;int, Definition&gt;</td><td>std::map&lt;EntityId, Definition&gt;</td></tr>
+          <tr><td>definitions</td><td>dict[int, Definition]</td><td>Map&lt;number, Definition&gt;</td><td>Dictionary&lt;long, Definition&gt;</td><td>Map&lt;int, Definition&gt;</td><td>std::map&lt;EntityId, Definition&gt;</td></tr>
           <tr><td>Vertex</td><td>id, x, y, z</td><td>{id, x, y, z}</td><td>Id, X, Y, Z</td><td>id, x, y, z</td><td>id, x, y, z</td></tr>
           <tr><td>Edge</td><td>id, v1_id, v2_id, soft, smooth, hidden</td><td>camelCase</td><td>PascalCase</td><td>camelCase</td><td>snake_case (matches Python)</td></tr>
           <tr><td>Face</td><td>id, loops, normal, material_id, back_material_id, uv_transform</td><td>camelCase</td><td>PascalCase</td><td>camelCase</td><td>snake_case (matches Python)</td></tr>
@@ -1015,7 +1015,7 @@ ply.export(scene, "output.ply")
 dxf.export(scene, "output.dxf")
 ifc.export(scene, "output.ifc")
 json_export.export(model, "output.json", scene=scene)</code></pre>
-      <div class="fn-desc"><strong>TypeScript:</strong> <code>toGLB</code>/<code>toOBJ</code>/<code>toSTLAscii</code>/<code>toSTLBinary</code>/<code>toPLYAscii</code>/<code>toPLYBinary</code>/<code>toDXF</code>/<code>toIFC</code>/<code>toJSON</code>, plus Node-only <code>exportOBJ</code>/<code>exportSTL</code>/<code>exportPLY</code>/<code>exportDXF</code>/<code>exportIFC</code> file writers. <strong>.NET:</strong> <code>GlbExport</code>/<code>ObjExport</code>/<code>StlExport</code>/<code>PlyExport</code>/<code>DxfExport</code>/<code>IfcExport</code>/<code>JsonExport</code>, each with a <code>.Export*</code> file-writing method. <strong>Dart:</strong> <code>toGlb</code>/<code>exportGlb</code>/<code>toObj</code>/<code>exportObj</code>/<code>toStlAscii</code>/<code>toStlBinary</code>/<code>exportStl</code>/<code>toPlyAscii</code>/<code>toPlyBinary</code>/<code>exportPly</code>/<code>toDxf</code>/<code>exportDxf</code>/<code>toIfc</code>/<code>exportIfc</code>/<code>toJson</code>. <strong>C++:</strong> <code>to_glb</code>/<code>export_glb</code>/<code>to_obj</code>/<code>export_obj</code>/<code>to_stl_ascii</code>/<code>to_stl_binary</code>/<code>export_stl</code>/<code>to_ply_ascii</code>/<code>to_ply_binary</code>/<code>export_ply</code>/<code>to_dxf</code>/<code>export_dxf</code>/<code>to_ifc</code>/<code>export_ifc</code>/<code>to_json</code>/<code>export_json</code>. TinyGLTF and miniz are private to OpenSKP's C++ package, not consumer dependencies.</div>
+      <div class="fn-desc"><strong>TypeScript:</strong> <code>toGLB</code>/<code>toOBJ</code>/<code>toSTLAscii</code>/<code>toSTLBinary</code>/<code>toPLYAscii</code>/<code>toPLYBinary</code>/<code>toDXF</code>/<code>toIFC</code>/<code>toJSON</code>, plus Node-only <code>exportOBJ</code>/<code>exportSTL</code>/<code>exportPLY</code>/<code>exportDXF</code>/<code>exportIFC</code> file writers. <strong>.NET:</strong> <code>GlbExport</code>/<code>ObjExport</code>/<code>StlExport</code>/<code>PlyExport</code>/<code>DxfExport</code>/<code>IfcExport</code>, each with a <code>.Export*</code> file-writing method, plus <code>JsonExport.ToDict</code> (in-memory only — no file-writing method). <strong>Dart:</strong> <code>toGlb</code>/<code>exportGlb</code>/<code>toObj</code>/<code>exportObj</code>/<code>toStlAscii</code>/<code>toStlBinary</code>/<code>exportStl</code>/<code>toPlyAscii</code>/<code>toPlyBinary</code>/<code>exportPly</code>/<code>toDxf</code>/<code>exportDxf</code>/<code>toIfc</code>/<code>exportIfc</code>/<code>toJson</code>. <strong>C++:</strong> <code>to_glb</code>/<code>export_glb</code>/<code>to_obj</code>/<code>export_obj</code>/<code>to_stl_ascii</code>/<code>to_stl_binary</code>/<code>export_stl</code>/<code>to_ply_ascii</code>/<code>to_ply_binary</code>/<code>export_ply</code>/<code>to_dxf</code>/<code>export_dxf</code>/<code>to_ifc</code>/<code>export_ifc</code>/<code>to_json</code>/<code>export_json</code>. TinyGLTF and miniz are private to OpenSKP's C++ package, not consumer dependencies.</div>
       <div class="callout callout-info">The DXF converter specifically is verified against real desktop AutoCAD, not just lenient DXF readers — see the <a href="https://github.com/iamahsanmehmood/openskp/blob/main/CHANGELOG.md" target="_blank" rel="noopener">Changelog</a> for the exact compatibility issues that surfaced and were fixed.</div>
     </div>
   </div>
@@ -1052,7 +1052,7 @@ json_export.export(model, "output.json", scene=scene)</code></pre>
   <div class="fn-block">
     <div class="fn-head"><div><div class="fn-name">Root-level definition access</div></div></div>
     <div class="fn-body">
-      <div class="fn-desc"><strong>Python:</strong> <code>model.definitions</code> is a single dict that includes a <code>'ROOT'</code> string key alongside integer definition IDs — no separate <code>.root</code> attribute. <strong>TypeScript, .NET, Dart:</strong> <code>model.definitions</code> is strictly numeric-keyed; root is a separate <code>model.root</code>/<code>model.Root</code> property with the same <code>Definition</code> shape. <strong>C++:</strong> same numeric-keyed split, but root is a <code>model.root()</code> accessor method rather than a plain field.</div>
+      <div class="fn-desc">This was resolved - all five languages now agree. <code>model.definitions</code> is strictly numeric-keyed in every language; root is a separate value with the same <code>Definition</code> shape: a plain field in Python/Dart (<code>model.root</code>), a property in TypeScript/.NET (<code>model.root</code>/<code>model.Root</code>), and an accessor method in C++ (<code>model.root()</code>).</div>
     </div>
   </div>
 

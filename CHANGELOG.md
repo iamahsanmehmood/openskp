@@ -7,33 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added — TypeScript
+### Added — Instancing-preserving scene output, all 5 languages
 
-**Instancing-preserving scene output.** A new `buildInstancedScene()` keeps
-the instancing SketchUp already recorded, instead of baking it out the way
+**Instancing-preserving scene output.** A new `buildInstancedScene()` /
+`build_instanced_scene()` / `BuildInstancedScene()` keeps the instancing
+SketchUp already recorded, instead of baking it out the way
 `buildScene()` does. Each distinct definition is triangulated once, in its
 own local space, and every placement becomes a node carrying the transform
 that puts it there — so output scales with `unique geometry + instance
 transforms` rather than `definition geometry x placement count`. A
-companion `toInstancedGLB()` writes glTF 2.0/GLB in which many nodes
-reference one mesh, so a definition's vertex and index buffers are written
-once rather than once per placement.
+companion `toInstancedGLB()` / `to_instanced_glb()` / `ToInstancedGlb()`
+writes glTF 2.0/GLB in which many nodes reference one mesh, so a
+definition's vertex and index buffers are written once rather than once
+per placement — Python's `openskp.export.instanced_glb`, TypeScript's
+`toInstancedGLB`, .NET's `InstancedGlbExport.ToInstancedGlb` /
+`.ExportInstancedGlb`, Dart's `toInstancedGlb`, and C++'s
+`to_instanced_glb` all share the same shape. It landed in TypeScript
+first, then was ported to Python, .NET, Dart, and C++ — each cross-checked
+against TypeScript's own already-verified output the same way the
+SKP-to-code generator below was.
 
 This is lossless instancing preservation, not mesh decimation: no
 vertices are removed, merged, quantised or approximated, and no new
 dependencies are introduced. The triangles are exactly the ones
 `buildScene()` produces. The test suite asserts that directly, by
 flattening the instanced result and comparing it against the baked one on
-the repository's real `.skp` fixtures.
+the repository's real `.skp` fixtures, in every language.
 
-On a synthetic scene of one 24-face component repeated 1,000 times, the
-geometry buffers are 1,000x smaller (3,562 KB to 3.6 KB), the exported GLB
-is 48x smaller, and the build is 46x faster. Run
+On a synthetic scene of one 24-face component repeated 1,000 times
+(TypeScript benchmark; the underlying algorithm is identical across
+languages), the geometry buffers are 1,000x smaller (3,562 KB to 3.6 KB),
+the exported GLB is 48x smaller, and the build is 46x faster. Run
 `npm run bench:instanced` in `packages/typescript` to reproduce.
 
-`parseSkp()`, `buildScene()` and `toGLB()` are unchanged in behaviour,
-return type and output. TypeScript only; the Python, .NET, Dart and C++
-ports are untouched. See
+`parseSkp()`/`parse()`, `buildScene()`/`build_scene()` and
+`toGLB()`/`export_glb` are unchanged in behaviour, return type and output
+in every language. See
 [Choosing an API](packages/typescript/README.md#choosing-an-api).
 
 ### Added — SKP-to-code generator, all 5 languages

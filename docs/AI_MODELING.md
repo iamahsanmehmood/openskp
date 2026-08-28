@@ -120,7 +120,7 @@ Point your AI coding agent at:
 The workflow that produced every showcase model above: describe the
 object, let the agent write and run `openskp.create()` code, open the
 result in
-SketchUp (or view it via the [live web viewer](https://iamahsanmehood.github.io/openskp/)
+SketchUp (or view it via the [live web viewer](https://iamahsanmehmood.github.io/openskp/)
 by exporting to GLB first) to check it, then iterate — including editing
 an *existing* file with `open_existing()` rather than starting over, the
 same way a human would keep refining a model rather than redrawing it

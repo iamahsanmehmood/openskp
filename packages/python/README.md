@@ -279,7 +279,7 @@ starting code, or for a diffable, reviewable text representation of a
 
 ## Requirements
 
-- Python ≥ 3.9
+- Python ≥ 3.10
 - NumPy ≥ 1.20
 - Trimesh ≥ 3.0
 - Shapely ≥ 1.8
