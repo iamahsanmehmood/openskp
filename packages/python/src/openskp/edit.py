@@ -51,9 +51,7 @@ module's own docstring for why):
   source mapping won't interpolate identically between them. A *projected*
   (draped) texture has no equivalent at all and falls back to the default
   projection.
-* A material's original texture tile size isn't preserved -
-  `SkpBuilder.add_texture_material` has no scale parameter yet. A
-  colorized (tinted) material variant is replayed as its plain source
+* A colorized (tinted) material variant is replayed as its plain source
   texture, losing the tint.
 * Per-face material/layer painting: only a face's front/back *material*
   is replayed - this project's reader doesn't expose a per-face layer
@@ -173,11 +171,19 @@ def _replay_materials(builder: SkpBuilder, model: SkpModel, warnings: List[str])
             try:
                 with os.fdopen(fd, "wb") as f:
                     f.write(mat.texture.data)
-                slot = builder.add_texture_material(mat.name, tmp_path)
+                # applied_height=1.0 - every textured face is now replayed
+                # with an explicit front_uv/back_uv (see _replay_uv), whose
+                # pins already bake in the SOURCE's real tile size via
+                # compute_face_uv - the material's own stored applied
+                # height must be a no-op divisor (1.0) or the read-side UV
+                # formula divides by it a second time. Leaving this at the
+                # library default (an internal sentinel, ~1.29e-231) was
+                # confirmed against real SketchUp 2026-08-27 to corrupt the
+                # texture into a vertically-smeared mess - see
+                # add_texture_material's own note.
+                slot = builder.add_texture_material(mat.name, tmp_path, applied_height=1.0)
             finally:
                 os.unlink(tmp_path)
-            if mat.texture.width or mat.texture.height:
-                warnings.append(f"material {mat.name!r}: original texture tile size not preserved")
             if mat.colorized:
                 warnings.append(f"material {mat.name!r}: colorized tint not reproduced (base texture only)")
         else:
@@ -318,6 +324,33 @@ def _replay_face(
         warnings.append(f"{context}: face {face.id} skipped ({exc})")
 
 
+def _non_collinear_triple(points: Sequence[Point3]) -> Optional[Tuple[Point3, Point3, Point3]]:
+    """The first 3 points of a real polygon aren't guaranteed to form a
+    non-degenerate triangle - a real face can have a "flat" vertex (three
+    consecutive vertices genuinely collinear in 3D, seen on real building
+    geometry), which front_uv's exactly-3-point affine fit can't use
+    (SkpWriteError: "collinear (u, v) coordinates"). Search for the first
+    triple that isn't, since an affine map preserves collinearity: a
+    non-collinear triple in 3D is also non-collinear in (u, v)."""
+    n = len(points)
+    for i in range(n):
+        for j in range(i + 1, n):
+            for k in range(j + 1, n):
+                ax, ay, az = points[i]
+                bx, by, bz = points[j]
+                cx, cy, cz = points[k]
+                e1 = (bx - ax, by - ay, bz - az)
+                e2 = (cx - ax, cy - ay, cz - az)
+                cross = (
+                    e1[1] * e2[2] - e1[2] * e2[1],
+                    e1[2] * e2[0] - e1[0] * e2[2],
+                    e1[0] * e2[1] - e1[1] * e2[0],
+                )
+                if cross[0] ** 2 + cross[1] ** 2 + cross[2] ** 2 > 1e-9:
+                    return points[i], points[j], points[k]
+    return None
+
+
 def _replay_uv(
     material_id: Optional[int],
     uv_transform: Optional[Tuple[float, ...]],
@@ -329,20 +362,29 @@ def _replay_uv(
     context: str,
     side: str,
 ) -> Optional[List[Tuple[Point3, Tuple[float, float]]]]:
-    if uv_transform is None:
+    # Explicit front_uv/back_uv for EVERY textured face, not just
+    # already-positioned ones - compute_face_uv already computes the
+    # correct final UV for the untouched-projection case too
+    # (uv_transform is None) using the source's real tile size, so this
+    # reproduces a default-projected face's true rendering exactly without
+    # needing the material's own applied width/height to match (which,
+    # post-replay, is intentionally 1.0 - see _replay_materials).
+    if material_id is None:
         return None
+    mat = model.materials_by_id.get(material_id)
+    if mat is None or mat.texture is None:
+        return None  # solid color - no UV to replay
     if projected:
         warnings.append(f"{context}: {side} texture is projected/draped - falls back to default projection")
         return None
     if normal is None:
         return None
-    mat = model.materials_by_id.get(material_id) if material_id is not None else None
-    tile_w = (mat.texture.width if mat is not None and mat.texture is not None else 0.0) or 1.0
-    tile_h = (mat.texture.height if mat is not None and mat.texture is not None else 0.0) or 1.0
+    tile_w = mat.texture.width or 1.0
+    tile_h = mat.texture.height or 1.0
     xr, yr = face_uv_basis(normal)
-    sample = points[:3]
-    if len(sample) < 3:
-        return None
+    sample = _non_collinear_triple(points)
+    if sample is None:
+        return None  # every vertex triple collinear - a sliver face
     pairs = []
     for p in sample:
         u, v = compute_face_uv(p, xr, yr, uv_transform, tile_w, tile_h)
@@ -369,8 +411,15 @@ def _replay_instance(
     material = _material_slot(inst.material_id, model, material_slots)
     layer = layer_slots.get(inst.layer) if inst.layer else None
     try:
+        # name=inst.name, not `inst.name or None` - an explicit empty
+        # string is a real, valid instance name (SketchUp itself stores it
+        # that way when a placement was never renamed, showing the
+        # definition's name in the Outliner only as a UI-level fallback);
+        # `or None` would let add_instance's own `name if name is not None
+        # else definition.name` fallback silently replace it with the
+        # definition's name instead.
         target.add_instance(
-            def_builder, name=inst.name or None, translation=translation, matrix3x3=matrix3x3,
+            def_builder, name=inst.name, translation=translation, matrix3x3=matrix3x3,
             material=material, layer=layer, hidden=inst.hidden,
             attributes=inst.properties or None, attribute_dict_name="dynamic_attributes",
         )

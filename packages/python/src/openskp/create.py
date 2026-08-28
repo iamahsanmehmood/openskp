@@ -1858,9 +1858,12 @@ class ComponentDefinitionBuilder:
             raise SkpWriteError(f"component definition {self.name!r} cannot nest an instance of itself")
         matrix3x3 = _resolve_matrix3x3(matrix3x3, rotation)
         attribute_dicts = [(attribute_dict_name, attributes)] if attributes else []
+        # See SkpBuilder.add_instance's own comment on `name if name is not
+        # None else ...` vs `name or ...` - an explicit empty string must
+        # round-trip as empty, not silently become the definition's name.
         self._new_entity_count += self._skp._definition_writer.write_instance(
-            definition.slot, name or definition.name, translation, matrix3x3, material or 0, layer or 0,
-            attribute_dicts, hidden,
+            definition.slot, name if name is not None else definition.name, translation, matrix3x3,
+            material or 0, layer or 0, attribute_dicts, hidden,
         )
 
     def add_group_instance(
@@ -2333,9 +2336,19 @@ class SkpBuilder:
         matrix3x3 = _resolve_matrix3x3(matrix3x3, rotation)
         self._ensure_geometry_writer()
         attribute_dicts = [(attribute_dict_name, attributes)] if attributes else []
+        # `name if name is not None else definition.name`, not `name or
+        # definition.name` - an explicit empty string is a real, valid
+        # instance name (SketchUp itself stores it that way when a
+        # placement was never renamed, showing the definition's name in
+        # the Outliner only as a UI-level fallback) - `or` would silently
+        # replace it with the definition's name instead, permanently
+        # baking in a name the source instance never actually had. Found
+        # via the codegen module's own real-fixture testing (TypeScript's
+        # `toTypeScriptCode`), where every root instance in a real file had
+        # an empty stored name.
         self._new_entity_count += self._geometry_writer.write_instance(
-            definition.slot, name or definition.name, translation, matrix3x3, material or 0, layer or 0,
-            attribute_dicts, hidden,
+            definition.slot, name if name is not None else definition.name, translation, matrix3x3,
+            material or 0, layer or 0, attribute_dicts, hidden,
         )
         self._face_count += 1  # reuses the "at least one root entity" check in to_bytes
 

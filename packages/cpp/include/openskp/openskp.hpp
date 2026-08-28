@@ -1,5 +1,6 @@
 #pragma once
 
+#include <openskp/codegen.hpp>
 #include <openskp/create.hpp>
 #include <openskp/dxf_export.hpp>
 #include <openskp/edit.hpp>

@@ -52,6 +52,7 @@ export * from './stl';
 export * from './ply';
 export * from './dxf';
 export { toIFC, exportIFC, generateIFCGUID, classifyElement } from './ifc';
+export { toTypeScriptCode } from './codegen';
 export {
   create,
   SkpBuilder,

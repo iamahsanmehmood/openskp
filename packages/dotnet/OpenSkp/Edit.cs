@@ -64,10 +64,8 @@ namespace OpenSkp
     /// projective (4-pin/distorted) source mapping won't interpolate
     /// identically between them. A PROJECTED (draped) texture has no
     /// equivalent at all and falls back to the default projection.</item>
-    /// <item>A material's original texture tile size isn't preserved -
-    /// SkpBuilder.AddTextureMaterial has no scale parameter yet. A
-    /// colorized (tinted) material variant is replayed as its plain
-    /// source texture, losing the tint.</item>
+    /// <item>A colorized (tinted) material variant is replayed as its
+    /// plain source texture, losing the tint.</item>
     /// <item>Per-face material/layer painting: only a face's front/back
     /// MATERIAL is replayed - this project's reader doesn't expose a
     /// per-face layer assignment at all (only instances carry an explicit
@@ -171,15 +169,23 @@ namespace OpenSkp
                     try
                     {
                         File.WriteAllBytes(tmpPath, mat.Texture.Data);
-                        slot = builder.AddTextureMaterial(mat.Name, tmpPath);
+                        // appliedHeight: 1.0 - every textured face is now
+                        // replayed with an explicit FrontUv/BackUv (see
+                        // ReplayUv), whose pins already bake in the
+                        // SOURCE's real tile size via ComputeFaceUv - the
+                        // material's own stored applied height must be a
+                        // no-op divisor (1.0) or the read-side UV formula
+                        // divides by it a second time. Leaving this at the
+                        // library default (an internal sentinel,
+                        // ~1.29e-231) was confirmed against real SketchUp
+                        // 2026-08-27 to corrupt the texture into a
+                        // vertically-smeared mess - see
+                        // AddTextureMaterial's own note.
+                        slot = builder.AddTextureMaterial(mat.Name, tmpPath, appliedHeight: 1.0);
                     }
                     finally
                     {
                         try { File.Delete(tmpPath); } catch (IOException) { /* best-effort cleanup */ }
-                    }
-                    if (mat.Texture.Width != 0 || mat.Texture.Height != 0)
-                    {
-                        warnings.Add($"material '{mat.Name}': original texture tile size not preserved");
                     }
                     if (mat.Colorized)
                     {
@@ -379,25 +385,68 @@ namespace OpenSkp
             }
         }
 
+        /// front_uv/back_uv need exactly 3 correspondences whose (u, v)
+        /// values are NOT collinear (an affine fit is impossible
+        /// otherwise) - real faces can have a "flat" vertex (three
+        /// consecutive vertices genuinely collinear in 3D), which
+        /// points.Take(3) alone isn't guaranteed to avoid. Search for the
+        /// first non-collinear triple - an affine map preserves
+        /// collinearity, so a non-collinear triple in 3D is also
+        /// non-collinear in (u, v).
+        private static (double X, double Y, double Z)[]? NonCollinearTriple(
+            IReadOnlyList<(double X, double Y, double Z)> points)
+        {
+            for (int i = 0; i < points.Count; i++)
+            {
+                for (int j = i + 1; j < points.Count; j++)
+                {
+                    for (int k = j + 1; k < points.Count; k++)
+                    {
+                        var a = points[i]; var b = points[j]; var c = points[k];
+                        var e1 = (X: b.X - a.X, Y: b.Y - a.Y, Z: b.Z - a.Z);
+                        var e2 = (X: c.X - a.X, Y: c.Y - a.Y, Z: c.Z - a.Z);
+                        double cx = e1.Y * e2.Z - e1.Z * e2.Y;
+                        double cy = e1.Z * e2.X - e1.X * e2.Z;
+                        double cz = e1.X * e2.Y - e1.Y * e2.X;
+                        if (cx * cx + cy * cy + cz * cz > 1e-9)
+                        {
+                            return new[] { a, b, c };
+                        }
+                    }
+                }
+            }
+            return null;
+        }
+
+        // Explicit FrontUv/BackUv for EVERY textured face, not just
+        // already-positioned ones - ComputeFaceUv already computes the
+        // correct final UV for the untouched-projection case too
+        // (uvTransform is null) using the source's real tile size, so
+        // this reproduces a default-projected face's true rendering
+        // exactly without needing the material's own applied
+        // width/height to match (which, post-replay, is intentionally
+        // 1.0 - see ReplayMaterials).
         private static List<UvCorrespondence>? ReplayUv(
             long? materialId, double[]? uvTransform, bool projected,
             IReadOnlyList<(double X, double Y, double Z)> points, (double Nx, double Ny, double Nz)? normal,
             SkpModel model, List<string> warnings, string context, string side)
         {
-            if (uvTransform == null) return null;
+            if (!materialId.HasValue) return null;
+            Material? mat = model.MaterialsById.TryGetValue(materialId.Value, out var m) ? m : null;
+            if (mat?.Texture == null) return null; // solid color - no UV to replay
             if (projected)
             {
                 warnings.Add($"{context}: {side} texture is projected/draped - falls back to default projection");
                 return null;
             }
             if (normal == null) return null;
-            Material? mat = materialId.HasValue ? model.MaterialsById.TryGetValue(materialId.Value, out var m) ? m : null : null;
-            double tileW = (mat?.Texture != null && mat.Texture.Width > 1e-9) ? mat.Texture.Width : 1.0;
-            double tileH = (mat?.Texture != null && mat.Texture.Height > 1e-9) ? mat.Texture.Height : 1.0;
+            double tileW = mat.Texture.Width > 1e-9 ? mat.Texture.Width : 1.0;
+            double tileH = mat.Texture.Height > 1e-9 ? mat.Texture.Height : 1.0;
             var (xr, yr) = FaceGroups.FaceUvBasis((normal.Value.Nx, normal.Value.Ny, normal.Value.Nz));
-            if (points.Count < 3) return null;
+            var sample = NonCollinearTriple(points);
+            if (sample == null) return null; // every vertex triple collinear - a sliver face
             var pairs = new List<UvCorrespondence>();
-            foreach (var p in points.Take(3))
+            foreach (var p in sample)
             {
                 var (u, v) = FaceGroups.ComputeFaceUv(p, xr, yr, uvTransform, tileW, tileH);
                 pairs.Add(new UvCorrespondence(p, (u, v)));
@@ -427,8 +476,17 @@ namespace OpenSkp
                 : null;
             try
             {
+                // name: inst.Name, not `string.IsNullOrEmpty(...) ? null :
+                // ...` - an explicit empty string is a real, valid
+                // instance name (SketchUp itself stores it that way when a
+                // placement was never renamed, showing the definition's
+                // name in the Outliner only as a UI-level fallback);
+                // AddInstance's own `name ?? definition.Name` fallback
+                // only triggers on null, so passing "" through must not
+                // be converted to null here or that name gets silently
+                // replaced with the definition's own name instead.
                 target.AddInstance(
-                    defBuilder, name: string.IsNullOrEmpty(inst.Name) ? null : inst.Name,
+                    defBuilder, name: inst.Name,
                     translation: translation, matrix3x3: matrix3x3,
                     material: material, layer: layer, hidden: inst.Hidden,
                     attributes: attributes, attributeDictName: "dynamic_attributes");

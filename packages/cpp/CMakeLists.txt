@@ -105,6 +105,7 @@ endif()
 
 set(
   OPENSKP_SOURCES
+  src/codegen.cpp
   src/core.cpp
   src/create.cpp
   src/dxf_export.cpp
