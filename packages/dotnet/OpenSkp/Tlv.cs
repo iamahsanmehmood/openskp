@@ -101,7 +101,7 @@ namespace OpenSkp
             containerTags ??= ContainerTags;
             var elements = new List<TlvNode>();
             long pos = start;
-            while (pos < end - 6)
+            while (pos <= end - 6)
             {
                 string tagHex = TagHex(data, pos);
                 uint size = data.ReadU32(pos + 2);
@@ -169,7 +169,7 @@ namespace OpenSkp
         {
             var headers = new List<(string, long, long)>();
             long pos = start;
-            while (pos < end - 6)
+            while (pos <= end - 6)
             {
                 string tagHex = TagHex(data, pos);
                 uint size = data.ReadU32(pos + 2);

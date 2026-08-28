@@ -79,7 +79,7 @@ def parse_tlv_recursive(data, start, end, container_tags=None, depth=0):
         container_tags = CONTAINER_TAGS
     pos = start
     elements = []
-    while pos < end - 6:
+    while pos <= end - 6:
         tag_bytes = data[pos:pos+2]
         size = read_u32(data, pos+2)
         if pos + 6 + size > end:
@@ -108,7 +108,7 @@ def _flat_headers(data, start, end):
     once (real production files can have 100k+ top-level definitions)."""
     headers = []
     pos = start
-    while pos < end - 6:
+    while pos <= end - 6:
         tag_hex = data[pos:pos+2].hex().upper()
         size = read_u32(data, pos+2)
         if pos + 6 + size > end:

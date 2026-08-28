@@ -85,7 +85,7 @@ class Tlv {
     final containerTagsSet = tags ?? containerTags;
     final elements = <TlvNode>[];
     int pos = start;
-    while (pos < end - 6) {
+    while (pos <= end - 6) {
       final tagHex = _tagHex(data, pos);
       final size = readU32(data, pos + 2);
       if (pos + 6 + size > end) {
@@ -146,7 +146,7 @@ class Tlv {
   static List<(String, int, int)> _flatHeaders(Uint8List data, int start, int end) {
     final headers = <(String, int, int)>[];
     int pos = start;
-    while (pos < end - 6) {
+    while (pos <= end - 6) {
       final tagHex = _tagHex(data, pos);
       final size = readU32(data, pos + 2);
       if (pos + 6 + size > end) break;
