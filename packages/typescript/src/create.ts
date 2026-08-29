@@ -1428,6 +1428,9 @@ export class ComponentDefinitionBuilder {
 
   addFace(points: readonly Point3[], options: AddFaceOptions = {}): void {
     this.checkWritable('faces');
+    this._skp._checkMaterialHandle(options.material, 'material');
+    this._skp._checkMaterialHandle(options.backMaterial, 'backMaterial');
+    this._skp._checkLayerHandle(options.layer);
     const pts = points.map(toPoint3);
     if (pts.length < 3) throw new SkpWriteError('a face needs at least 3 points');
     const holes = (options.holes ?? []).map((h) => h.map(toPoint3));
@@ -1444,6 +1447,9 @@ export class ComponentDefinitionBuilder {
 
   addCircle(center: Point3, normal: Point3, radius: number, options: AddCircleOptions = {}): void {
     this.checkWritable('faces');
+    this._skp._checkMaterialHandle(options.material, 'material');
+    this._skp._checkMaterialHandle(options.backMaterial, 'backMaterial');
+    this._skp._checkLayerHandle(options.layer);
     const numSegments = options.numSegments ?? 24;
     if (!(numSegments >= 3 && numSegments <= 255)) {
       throw new SkpWriteError(`num_segments must be between 3 and 255, got ${numSegments}`);
@@ -1500,6 +1506,8 @@ export class ComponentDefinitionBuilder {
    * already-closed definition (never `this`). */
   addInstance(definition: ComponentDefinitionBuilder, options: AddInstanceOptions = {}): void {
     this.checkWritable('instances');
+    this._skp._checkMaterialHandle(options.material, 'material');
+    this._skp._checkLayerHandle(options.layer);
     if (definition._skp !== this._skp) {
       throw new SkpWriteError(
         `component definition ${JSON.stringify(definition.name)} belongs to a different builder (a different create() call) - its slot number is meaningless here`
@@ -1522,6 +1530,8 @@ export class ComponentDefinitionBuilder {
    * `addComponentDefinition` first, then place it here. */
   addGroupInstance(definition: ComponentDefinitionBuilder, options: AddGroupInstanceOptions = {}): void {
     this.checkWritable('groups');
+    this._skp._checkMaterialHandle(options.material, 'material');
+    this._skp._checkLayerHandle(options.layer);
     if (definition._skp !== this._skp) {
       throw new SkpWriteError(
         `component definition ${JSON.stringify(definition.name)} belongs to a different builder (a different create() call) - its slot number is meaningless here`
@@ -1683,6 +1693,36 @@ export class SkpBuilder {
     return slot;
   }
 
+  /** @internal Reject a material/backMaterial option that isn't a handle
+   * this builder's own addMaterial()/addTextureMaterial() actually
+   * returned. Without this, a stray value - most commonly a layer handle
+   * passed to the wrong option by mistake - gets written straight into
+   * the file as a material reference: this project's own reader tolerates
+   * the dangling reference silently, but real SketchUp rejects the whole
+   * file as corrupt on open, with no indication of which call caused it. */
+  _checkMaterialHandle(value: number | undefined, param: string): void {
+    if (value && ![...this.materialsByName.values()].includes(value)) {
+      throw new SkpWriteError(
+        `${param}=${value} is not a handle this builder's addMaterial()/addTextureMaterial() ` +
+          'returned - passing an unrelated value (e.g. a layer handle by mistake) would silently ' +
+          'write an invalid material reference that real SketchUp rejects on open'
+      );
+    }
+  }
+
+  /** @internal Reject a layer option that isn't a handle this builder's
+   * own addLayer() actually returned - see `_checkMaterialHandle` for why
+   * this matters. */
+  _checkLayerHandle(value: number | undefined, param = 'layer'): void {
+    if (value && ![...this.layersByName.values()].includes(value)) {
+      throw new SkpWriteError(
+        `${param}=${value} is not a handle this builder's addLayer() returned - passing an ` +
+          'unrelated value (e.g. a material handle by mistake) would silently write an invalid ' +
+          'layer reference that real SketchUp rejects on open'
+      );
+    }
+  }
+
   private materialShiftedClassSlot(): Record<string, number> {
     const materialShift = this.materialWriter.nextSlot - this.base;
     const out: Record<string, number> = {};
@@ -1760,6 +1800,8 @@ export class SkpBuilder {
    * }, { name: 'Table', translation: [50, 0, 0] });
    * ``` */
   addGroup(build: (def: ComponentDefinitionBuilder) => void, options: AddGroupOptions = {}): ComponentDefinitionBuilder {
+    this._checkMaterialHandle(options.material, 'material');
+    this._checkLayerHandle(options.layer);
     const matrix3x3 = resolveMatrix3x3(options.matrix3x3, options.rotation);
     const placement: GroupPlacement = [
       options.translation ?? [0, 0, 0], matrix3x3, options.material ?? 0, options.layer ?? 0, options.hidden ?? false,
@@ -1784,6 +1826,8 @@ export class SkpBuilder {
    * already closed) in the model. `rotation`, if given, is an
    * alternative to `matrix3x3` for the common case of a pure rotation. */
   addInstance(definition: ComponentDefinitionBuilder, options: AddInstanceOptions = {}): void {
+    this._checkMaterialHandle(options.material, 'material');
+    this._checkLayerHandle(options.layer);
     if (definition._skp !== this) {
       throw new SkpWriteError(
         `component definition ${JSON.stringify(definition.name)} belongs to a different builder (a different create() call) - its slot number is meaningless here`
@@ -1838,6 +1882,7 @@ export class SkpBuilder {
    * beyond the Python port's own real-SketchUp test (placement/
    * orientation/texture all confirmed correct there - see CHECKLIST.md). */
   addImage(imageBytes: Uint8Array, width: number, height: number, options: AddImageOptions = {}): void {
+    this._checkLayerHandle(options.layer);
     const mat = this.addTextureMaterial(`__openskp_image_${this.materialCount}`, imageBytes, options.texturePath ?? '');
     const imageDef = this.addComponentDefinition(`Image${this.definitionCount}`, (def) => {
       // Standard (0,0)-at-bottom-left, V increasing upward - no vertical
@@ -1897,6 +1942,9 @@ export class SkpBuilder {
    * and edges are automatically shared with previously-added faces
    * wherever a point's coordinates match exactly. */
   addFace(points: readonly Point3[], options: AddFaceOptions = {}): void {
+    this._checkMaterialHandle(options.material, 'material');
+    this._checkMaterialHandle(options.backMaterial, 'backMaterial');
+    this._checkLayerHandle(options.layer);
     const pts = points.map(toPoint3);
     if (pts.length < 3) throw new SkpWriteError('a face needs at least 3 points');
     const holes = (options.holes ?? []).map((h) => h.map(toPoint3));
@@ -1916,6 +1964,9 @@ export class SkpBuilder {
   /** Add one circular face - a true SketchUp circle (editable by radius,
    * re-tessellatable), not `numSegments` disconnected straight edges. */
   addCircle(center: Point3, normal: Point3, radius: number, options: AddCircleOptions = {}): void {
+    this._checkMaterialHandle(options.material, 'material');
+    this._checkMaterialHandle(options.backMaterial, 'backMaterial');
+    this._checkLayerHandle(options.layer);
     const numSegments = options.numSegments ?? 24;
     if (!(numSegments >= 3 && numSegments <= 255)) {
       throw new SkpWriteError(`num_segments must be between 3 and 255, got ${numSegments}`);

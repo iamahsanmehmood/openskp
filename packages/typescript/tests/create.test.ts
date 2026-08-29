@@ -45,6 +45,70 @@ describe('Builder errors', () => {
       builder.addFace([[0, 0, 0], [100, 0, 0], [100, 100, 0], [0, 100, 50]])
     ).toThrow(/not coplanar/);
   });
+
+  it('addFace rejects a layer handle passed as material', () => {
+    // The exact real-world mistake this guards against: a caller
+    // accidentally passes a layer handle into the `material` option (e.g.
+    // via an argument-order slip in a wrapper function around addFace).
+    // Before this check, the layer's slot silently became a dangling
+    // material reference - openskp's own reader tolerated it, but real
+    // SketchUp rejected the resulting file outright.
+    const builder = create();
+    const layer = builder.addLayer('Layer0');
+    expect(() => builder.addFace(SQUARE, { material: layer })).toThrow(/material/);
+  });
+
+  it('addFace rejects a material handle passed as layer', () => {
+    const builder = create();
+    const mat = builder.addMaterial('Red', [255, 0, 0]);
+    expect(() => builder.addFace(SQUARE, { layer: mat })).toThrow(/layer/);
+  });
+
+  it('addFace rejects an unrelated backMaterial handle', () => {
+    const builder = create();
+    const layer = builder.addLayer('Layer0');
+    expect(() => builder.addFace(SQUARE, { backMaterial: layer })).toThrow(/backMaterial/);
+  });
+
+  it('addFace rejects a handle from a different builder', () => {
+    const otherBuilder = create();
+    const strayMaterial = otherBuilder.addMaterial('Blue', [0, 0, 255]);
+    const builder = create();
+    expect(() => builder.addFace(SQUARE, { material: strayMaterial })).toThrow(/material/);
+  });
+
+  it('addInstance rejects a layer handle passed as material', () => {
+    const builder = create();
+    const layer = builder.addLayer('Layer0');
+    const chair = builder.addComponentDefinition('Chair', (def) => def.addFace(SQUARE));
+    expect(() => builder.addInstance(chair, { material: layer })).toThrow(/material/);
+  });
+
+  it('addGroup rejects an unrelated layer handle', () => {
+    const builder = create();
+    const mat = builder.addMaterial('Red', [255, 0, 0]);
+    expect(() =>
+      builder.addGroup((def) => def.addFace(SQUARE), { name: 'Table', layer: mat })
+    ).toThrow(/layer/);
+  });
+
+  it('a component-scope addFace rejects an unrelated handle', () => {
+    const builder = create();
+    const layer = builder.addLayer('Layer0');
+    expect(() =>
+      builder.addComponentDefinition('Chair', (def) => {
+        def.addFace(SQUARE, { material: layer });
+      })
+    ).toThrow(/material/);
+  });
+
+  it('addFace accepts a real material and layer', () => {
+    const builder = create();
+    const mat = builder.addMaterial('Red', [255, 0, 0]);
+    const layer = builder.addLayer('MyLayer');
+    builder.addFace(SQUARE, { material: mat, layer });
+    expect(builder.toBytes().length).toBeGreaterThan(0);
+  });
 });
 
 describe('Single face', () => {

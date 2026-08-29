@@ -1015,6 +1015,91 @@ void main() {
         throwsA(isA<SkpWriteError>().having((e) => e.message, 'message', contains('not coplanar'))),
       );
     });
+
+    final square = [
+      (0.0, 0.0, 0.0), (100.0, 0.0, 0.0), (100.0, 100.0, 0.0), (0.0, 100.0, 0.0),
+    ];
+
+    test('addFace rejects a layer handle passed as material', () {
+      // The exact real-world mistake this guards against: a caller
+      // accidentally passes a layer handle into the material parameter
+      // (e.g. via an argument-order slip in a wrapper function around
+      // addFace). Before this check, the layer's slot silently became a
+      // dangling material reference - openskp's own reader tolerated it,
+      // but real SketchUp rejected the resulting file outright.
+      final builder = create();
+      final layer = builder.addLayer('Layer0');
+      expect(
+        () => builder.addFace(square, material: layer),
+        throwsA(isA<SkpWriteError>().having((e) => e.message, 'message', contains('material'))),
+      );
+    });
+
+    test('addFace rejects a material handle passed as layer', () {
+      final builder = create();
+      final mat = builder.addMaterial('Red', [255, 0, 0]);
+      expect(
+        () => builder.addFace(square, layer: mat),
+        throwsA(isA<SkpWriteError>().having((e) => e.message, 'message', contains('layer'))),
+      );
+    });
+
+    test('addFace rejects an unrelated backMaterial handle', () {
+      final builder = create();
+      final layer = builder.addLayer('Layer0');
+      expect(
+        () => builder.addFace(square, backMaterial: layer),
+        throwsA(isA<SkpWriteError>().having((e) => e.message, 'message', contains('backMaterial'))),
+      );
+    });
+
+    test('addFace rejects a handle from a different builder', () {
+      final otherBuilder = create();
+      final strayMaterial = otherBuilder.addMaterial('Blue', [0, 0, 255]);
+      final builder = create();
+      expect(
+        () => builder.addFace(square, material: strayMaterial),
+        throwsA(isA<SkpWriteError>()),
+      );
+    });
+
+    test('addInstance rejects a layer handle passed as material', () {
+      final builder = create();
+      final layer = builder.addLayer('Layer0');
+      final chair = builder.addComponentDefinition('Chair', (def) => def.addFace(square));
+      expect(
+        () => builder.addInstance(chair, material: layer),
+        throwsA(isA<SkpWriteError>().having((e) => e.message, 'message', contains('material'))),
+      );
+    });
+
+    test('addGroup rejects an unrelated layer handle', () {
+      final builder = create();
+      final mat = builder.addMaterial('Red', [255, 0, 0]);
+      expect(
+        () => builder.addGroup((def) => def.addFace(square), name: 'Table', layer: mat),
+        throwsA(isA<SkpWriteError>().having((e) => e.message, 'message', contains('layer'))),
+      );
+    });
+
+    test('a component-scope addFace rejects an unrelated handle', () {
+      final builder = create();
+      final layer = builder.addLayer('Layer0');
+      expect(
+        () => builder.addComponentDefinition('Chair', (def) {
+          def.addFace(square, material: layer);
+        }),
+        throwsA(isA<SkpWriteError>().having((e) => e.message, 'message', contains('material'))),
+      );
+    });
+
+    test('addFace accepts a real material and layer', () {
+      final builder = create();
+      final mat = builder.addMaterial('Red', [255, 0, 0]);
+      final layer = builder.addLayer('MyLayer');
+      builder.addFace(square, material: mat, layer: layer);
+      expect(builder.toBytes().length, greaterThan(0));
+    });
   });
 
   group('SlotBoundary', () {

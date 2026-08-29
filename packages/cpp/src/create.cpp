@@ -1262,6 +1262,40 @@ int do_add_polyline(ArchiveWriter& writer, std::map<Point3, int>& vertex_slots,
                                options.hidden_edges, options.soft_edges, options.smooth_edges);
 }
 
+// Reject a material/back_material option that isn't a handle `skp`'s own add_material()/
+// add_texture_material() actually returned. Without this, a stray value - most commonly a layer
+// handle passed to the wrong option by mistake - gets written straight into the file as a
+// material reference: this project's own reader tolerates the dangling reference silently, but
+// real SketchUp rejects the whole file as corrupt on open, with no indication of which call
+// caused it.
+void check_material_handle(const SkpBuilder& skp, const std::optional<int>& value,
+                           const std::string& param) {
+  if (!value || *value == 0) return;
+  for (const auto& [name, slot] : skp.materials_by_name) {
+    if (slot == *value) return;
+  }
+  throw SkpWriteError(
+      param + "=" + std::to_string(*value) +
+      " is not a handle this builder's add_material()/add_texture_material() returned - "
+      "passing an unrelated value (e.g. a layer handle by mistake) would silently write an "
+      "invalid material reference that real SketchUp rejects on open");
+}
+
+// Reject a layer option that isn't a handle `skp`'s own add_layer() actually returned - see
+// check_material_handle for why this matters.
+void check_layer_handle(const SkpBuilder& skp, const std::optional<int>& value,
+                        const std::string& param = "layer") {
+  if (!value || *value == 0) return;
+  for (const auto& [name, slot] : skp.layers_by_name) {
+    if (slot == *value) return;
+  }
+  throw SkpWriteError(
+      param + "=" + std::to_string(*value) +
+      " is not a handle this builder's add_layer() returned - passing an unrelated value "
+      "(e.g. a material handle by mistake) would silently write an invalid layer reference "
+      "that real SketchUp rejects on open");
+}
+
 }  // namespace
 }  // namespace detail
 
@@ -1523,6 +1557,9 @@ void ComponentDefinitionBuilder::check_writable(const std::string& action) const
 void ComponentDefinitionBuilder::add_face(const std::vector<Point3>& points,
                                           const FaceOptions& options) {
   check_writable("faces");
+  detail::check_material_handle(*impl_->skp, options.material, "material");
+  detail::check_material_handle(*impl_->skp, options.back_material, "back_material");
+  detail::check_layer_handle(*impl_->skp, options.layer);
   if (points.size() < 3) throw SkpWriteError("a face needs at least 3 points");
   detail::AttributeDictList dicts;
   if (!options.attributes.empty())
@@ -1537,6 +1574,9 @@ void ComponentDefinitionBuilder::add_face(const std::vector<Point3>& points,
 void ComponentDefinitionBuilder::add_circle(Point3 center, Point3 normal, double radius,
                                             const CircleOptions& options) {
   check_writable("faces");
+  detail::check_material_handle(*impl_->skp, options.material, "material");
+  detail::check_material_handle(*impl_->skp, options.back_material, "back_material");
+  detail::check_layer_handle(*impl_->skp, options.layer);
   impl_->new_entity_count += detail::do_add_circle(
       *impl_->writer, impl_->vertex_slots, impl_->edge_registry, center, normal, radius, options);
 }
@@ -1560,6 +1600,8 @@ void ComponentDefinitionBuilder::add_polyline(const std::vector<Point3>& points,
 void ComponentDefinitionBuilder::add_instance(const ComponentDefinitionBuilder& definition,
                                               const InstanceOptions& options) {
   check_writable("instances");
+  detail::check_material_handle(*impl_->skp, options.material, "material");
+  detail::check_layer_handle(*impl_->skp, options.layer);
   if (definition.impl_->skp != impl_->skp) {
     throw SkpWriteError("component definition '" + definition.name() +
                         "' belongs to a different builder (a different create() call) - "
@@ -1581,6 +1623,8 @@ void ComponentDefinitionBuilder::add_instance(const ComponentDefinitionBuilder& 
 void ComponentDefinitionBuilder::add_group_instance(const ComponentDefinitionBuilder& definition,
                                                     const GroupInstanceOptions& options) {
   check_writable("groups");
+  detail::check_material_handle(*impl_->skp, options.material, "material");
+  detail::check_layer_handle(*impl_->skp, options.layer);
   if (definition.impl_->skp != impl_->skp) {
     throw SkpWriteError("component definition '" + definition.name() +
                         "' belongs to a different builder (a different create() call) - "
@@ -1717,6 +1761,8 @@ ComponentDefinitionBuilder& SkpBuilder::add_component_definition(const std::stri
 }
 
 ComponentDefinitionBuilder& SkpBuilder::add_group(const GroupOptions& options) {
+  detail::check_material_handle(*this, options.material, "material");
+  detail::check_layer_handle(*this, options.layer);
   auto matrix = detail::resolve_matrix3x3(options.matrix3x3, options.rotation);
   auto [slot, count_patch_pos] = impl_->begin_definition_header("add_group", {});
   auto cdb_impl = std::make_unique<ComponentDefinitionBuilder::Impl>();
@@ -1737,6 +1783,8 @@ ComponentDefinitionBuilder& SkpBuilder::add_group(const GroupOptions& options) {
 
 void SkpBuilder::add_instance(const ComponentDefinitionBuilder& definition,
                               const InstanceOptions& options) {
+  detail::check_material_handle(*this, options.material, "material");
+  detail::check_layer_handle(*this, options.layer);
   if (definition.impl_->skp != this) {
     throw SkpWriteError("component definition '" + definition.name() +
                         "' belongs to a different builder (a different create() call) - "
@@ -1759,6 +1807,7 @@ void SkpBuilder::add_instance(const ComponentDefinitionBuilder& definition,
 
 void SkpBuilder::add_image(const std::filesystem::path& image_path, double width, double height,
                            const ImageOptions& options) {
+  detail::check_layer_handle(*this, options.layer);
   int mat =
       add_texture_material("__openskp_image_" + std::to_string(impl_->material_count), image_path);
   auto& image_def = add_component_definition("Image" + std::to_string(impl_->definition_count));
@@ -1784,6 +1833,9 @@ void SkpBuilder::add_image(const std::filesystem::path& image_path, double width
 }
 
 void SkpBuilder::add_face(const std::vector<Point3>& points, const FaceOptions& options) {
+  detail::check_material_handle(*this, options.material, "material");
+  detail::check_material_handle(*this, options.back_material, "back_material");
+  detail::check_layer_handle(*this, options.layer);
   if (points.size() < 3) throw SkpWriteError("a face needs at least 3 points");
   impl_->ensure_geometry_writer();
   detail::AttributeDictList dicts;
@@ -1799,6 +1851,9 @@ void SkpBuilder::add_face(const std::vector<Point3>& points, const FaceOptions& 
 
 void SkpBuilder::add_circle(Point3 center, Point3 normal, double radius,
                             const CircleOptions& options) {
+  detail::check_material_handle(*this, options.material, "material");
+  detail::check_material_handle(*this, options.back_material, "back_material");
+  detail::check_layer_handle(*this, options.layer);
   impl_->ensure_geometry_writer();
   impl_->new_entity_count +=
       detail::do_add_circle(*impl_->geometry_writer, impl_->vertex_slots, impl_->edge_registry,

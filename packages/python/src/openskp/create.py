@@ -1704,6 +1704,9 @@ class ComponentDefinitionBuilder:
         shared only within this definition, never with the root model or
         other definitions."""
         self._check_writable("faces")
+        self._skp._check_material_handle(material, "material")
+        self._skp._check_material_handle(back_material, "back_material")
+        self._skp._check_layer_handle(layer)
         points = [(float(p[0]), float(p[1]), float(p[2])) for p in points]
         if len(points) < 3:
             raise SkpWriteError("a face needs at least 3 points")
@@ -1736,6 +1739,9 @@ class ComponentDefinitionBuilder:
         behavior as :meth:`SkpBuilder.add_circle`, except vertices/edges
         are shared only within this definition."""
         self._check_writable("faces")
+        self._skp._check_material_handle(material, "material")
+        self._skp._check_material_handle(back_material, "back_material")
+        self._skp._check_layer_handle(layer)
         if not (3 <= num_segments <= 255):
             raise SkpWriteError(f"num_segments must be between 3 and 255, got {num_segments}")
         center = (float(center[0]), float(center[1]), float(center[2]))
@@ -1851,6 +1857,8 @@ class ComponentDefinitionBuilder:
         this specific placement (SketchUp's "Hide" on the instance).
         """
         self._check_writable("instances")
+        self._skp._check_material_handle(material, "material")
+        self._skp._check_layer_handle(layer)
         if definition._skp is not self._skp:
             raise SkpWriteError(
                 f"component definition {definition.name!r} belongs to a different "
@@ -1905,6 +1913,8 @@ class ComponentDefinitionBuilder:
         this specific placement.
         """
         self._check_writable("groups")
+        self._skp._check_material_handle(material, "material")
+        self._skp._check_layer_handle(layer)
         if definition._skp is not self._skp:
             raise SkpWriteError(
                 f"component definition {definition.name!r} belongs to a different "
@@ -2167,6 +2177,38 @@ class SkpBuilder:
         self._layer_count += 1
         return slot
 
+    def _check_material_handle(self, value: Optional[int], param: str) -> None:
+        """Reject a material/back_material argument that isn't a handle
+        this builder's own add_material()/add_texture_material() actually
+        returned. Without this, a stray value - most commonly a layer
+        handle passed to the wrong parameter by mistake - gets written
+        straight into the file as a material reference: this project's own
+        reader tolerates the dangling reference silently, but real
+        SketchUp rejects the whole file as corrupt on open, with no
+        indication of which call caused it."""
+        # `value` rather than `value is not None`: every call site already
+        # treats `material or 0` as its own "no material" sentinel, so an
+        # explicit falsy 0 is just as much "not given" as None is.
+        if value and value not in self.materials_by_name.values():
+            raise SkpWriteError(
+                f"{param}={value!r} is not a handle this builder's add_material()/"
+                "add_texture_material() returned - passing an unrelated value "
+                "(e.g. a layer handle by mistake) would silently write an "
+                "invalid material reference that real SketchUp rejects on open"
+            )
+
+    def _check_layer_handle(self, value: Optional[int], param: str = "layer") -> None:
+        """Reject a layer argument that isn't a handle this builder's own
+        add_layer() actually returned - see `_check_material_handle` for
+        why this matters."""
+        if value and value not in self.layers_by_name.values():
+            raise SkpWriteError(
+                f"{param}={value!r} is not a handle this builder's add_layer() "
+                "returned - passing an unrelated value (e.g. a material handle "
+                "by mistake) would silently write an invalid layer reference "
+                "that real SketchUp rejects on open"
+            )
+
     def _material_shifted_class_slot(self) -> Dict[str, int]:
         material_shift = self._material_writer.next_slot - self._base
         return {n: s + material_shift for n, s in self._scaffold_class_slot.items()}
@@ -2265,6 +2307,8 @@ class SkpBuilder:
         a pure rotation; pass at most one of the two. ``hidden`` hides
         this group once placed.
         """
+        self._check_material_handle(material, "material")
+        self._check_layer_handle(layer)
         matrix3x3 = _resolve_matrix3x3(matrix3x3, rotation)
         return self._start_definition(
             name or "Group", "add_group",
@@ -2321,6 +2365,8 @@ class SkpBuilder:
         the instance) - its contents still exist in the file, just not
         shown by default.
         """
+        self._check_material_handle(material, "material")
+        self._check_layer_handle(layer)
         if definition._skp is not self:
             raise SkpWriteError(
                 f"component definition {definition.name!r} belongs to a different "
@@ -2403,6 +2449,7 @@ class SkpBuilder:
         unverified - open the output in real SketchUp before relying on
         this, and please report back what you find either way.
         """
+        self._check_layer_handle(layer)
         mat = self.add_texture_material(f"__openskp_image_{self._material_count}", image_path)
         with self.add_component_definition(f"Image{self._definition_count}") as image_def:
             # Standard (0,0)-at-bottom-left, V increasing upward - no
@@ -2546,6 +2593,9 @@ class SkpBuilder:
         itself. Not combined with ``auto_triangulate`` - see that
         parameter's own note.
         """
+        self._check_material_handle(material, "material")
+        self._check_material_handle(back_material, "back_material")
+        self._check_layer_handle(layer)
         points = [(float(p[0]), float(p[1]), float(p[2])) for p in points]
         if len(points) < 3:
             raise SkpWriteError("a face needs at least 3 points")
@@ -2593,6 +2643,9 @@ class SkpBuilder:
 
         >>> builder.add_circle((50, 50, 0), (0, 0, 1), radius=40)
         """
+        self._check_material_handle(material, "material")
+        self._check_material_handle(back_material, "back_material")
+        self._check_layer_handle(layer)
         if not (3 <= num_segments <= 255):
             raise SkpWriteError(f"num_segments must be between 3 and 255, got {num_segments}")
         center = (float(center[0]), float(center[1]), float(center[2]))

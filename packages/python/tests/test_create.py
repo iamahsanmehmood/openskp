@@ -134,6 +134,67 @@ class TestBuilderErrors:
         with pytest.raises(SkpWriteError, match="not coplanar"):
             builder.add_face([(0.0, 0.0, 0.0), (100.0, 0.0, 0.0), (100.0, 100.0, 0.0), (0.0, 100.0, 50.0)])
 
+    def test_add_face_rejects_a_layer_handle_passed_as_material(self):
+        # The exact real-world mistake this guards against: a caller
+        # accidentally passes a layer handle into `material=` (e.g. via a
+        # positional-argument slip in a wrapper function around add_face).
+        # Before this check, the layer's slot silently became a dangling
+        # material reference - openskp's own reader tolerated it, but real
+        # SketchUp rejected the resulting file outright.
+        builder = create()
+        layer = builder.add_layer("Layer0")
+        with pytest.raises(SkpWriteError, match="material"):
+            builder.add_face(SQUARE, material=layer)
+
+    def test_add_face_rejects_a_material_handle_passed_as_layer(self):
+        builder = create()
+        mat = builder.add_material("Red", (255, 0, 0))
+        with pytest.raises(SkpWriteError, match="layer"):
+            builder.add_face(SQUARE, layer=mat)
+
+    def test_add_face_rejects_an_unrelated_back_material_handle(self):
+        builder = create()
+        layer = builder.add_layer("Layer0")
+        with pytest.raises(SkpWriteError, match="back_material"):
+            builder.add_face(SQUARE, back_material=layer)
+
+    def test_add_face_rejects_a_handle_from_a_different_builder(self):
+        other_builder = create()
+        stray_material = other_builder.add_material("Blue", (0, 0, 255))
+        builder = create()
+        with pytest.raises(SkpWriteError, match="material"):
+            builder.add_face(SQUARE, material=stray_material)
+
+    def test_add_instance_rejects_a_layer_handle_passed_as_material(self):
+        builder = create()
+        layer = builder.add_layer("Layer0")
+        with builder.add_component_definition("Chair") as chair:
+            chair.add_face(SQUARE)
+        with pytest.raises(SkpWriteError, match="material"):
+            builder.add_instance(chair, material=layer)
+
+    def test_add_group_rejects_an_unrelated_layer_handle(self):
+        builder = create()
+        mat = builder.add_material("Red", (255, 0, 0))
+        with pytest.raises(SkpWriteError, match="layer"):
+            builder.add_group("Table", layer=mat)
+
+    def test_component_scope_add_face_rejects_an_unrelated_handle(self):
+        builder = create()
+        layer = builder.add_layer("Layer0")
+        with builder.add_component_definition("Chair") as chair:
+            with pytest.raises(SkpWriteError, match="material"):
+                chair.add_face(SQUARE, material=layer)
+            # the definition must still be usable after a rejected call
+            chair.add_face(SQUARE)
+
+    def test_add_face_accepts_a_real_material_and_layer(self):
+        builder = create()
+        mat = builder.add_material("Red", (255, 0, 0))
+        layer = builder.add_layer("MyLayer")
+        builder.add_face(SQUARE, material=mat, layer=layer)
+        assert len(builder.to_bytes()) > 0
+
 
 class TestSingleFace:
     def test_matches_ground_truth_byte_size(self):

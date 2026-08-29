@@ -74,6 +74,89 @@ namespace OpenSkp.Tests
         }
 
         [Fact]
+        public void AddFaceRejectsALayerHandlePassedAsMaterial()
+        {
+            // The exact real-world mistake this guards against: a caller
+            // accidentally passes a layer handle into the material
+            // parameter (e.g. via an argument-order slip in a wrapper
+            // function around AddFace). Before this check, the layer's
+            // slot silently became a dangling material reference -
+            // openskp's own reader tolerated it, but real SketchUp
+            // rejected the resulting file outright.
+            var builder = SkpCreate.NewFile();
+            int layer = builder.AddLayer("Layer0");
+            var ex = Assert.Throws<SkpWriteException>(() => builder.AddFace(Square(), material: layer));
+            Assert.Contains("material", ex.Message);
+        }
+
+        [Fact]
+        public void AddFaceRejectsAMaterialHandlePassedAsLayer()
+        {
+            var builder = SkpCreate.NewFile();
+            int mat = builder.AddMaterial("Red", (255, 0, 0));
+            var ex = Assert.Throws<SkpWriteException>(() => builder.AddFace(Square(), layer: mat));
+            Assert.Contains("layer", ex.Message);
+        }
+
+        [Fact]
+        public void AddFaceRejectsAnUnrelatedBackMaterialHandle()
+        {
+            var builder = SkpCreate.NewFile();
+            int layer = builder.AddLayer("Layer0");
+            var ex = Assert.Throws<SkpWriteException>(() => builder.AddFace(Square(), backMaterial: layer));
+            Assert.Contains("backMaterial", ex.Message);
+        }
+
+        [Fact]
+        public void AddFaceRejectsAHandleFromADifferentBuilder()
+        {
+            var otherBuilder = SkpCreate.NewFile();
+            int strayMaterial = otherBuilder.AddMaterial("Blue", (0, 0, 255));
+            var builder = SkpCreate.NewFile();
+            Assert.Throws<SkpWriteException>(() => builder.AddFace(Square(), material: strayMaterial));
+        }
+
+        [Fact]
+        public void AddInstanceRejectsALayerHandlePassedAsMaterial()
+        {
+            var builder = SkpCreate.NewFile();
+            int layer = builder.AddLayer("Layer0");
+            var chair = builder.AddComponentDefinition("Chair");
+            chair.AddFace(Square());
+            chair.Dispose();
+            Assert.Throws<SkpWriteException>(() => builder.AddInstance(chair, material: layer));
+        }
+
+        [Fact]
+        public void AddGroupRejectsAnUnrelatedLayerHandle()
+        {
+            var builder = SkpCreate.NewFile();
+            int mat = builder.AddMaterial("Red", (255, 0, 0));
+            Assert.Throws<SkpWriteException>(() => builder.AddGroup("Table", layer: mat));
+        }
+
+        [Fact]
+        public void ComponentScopeAddFaceRejectsAnUnrelatedHandle()
+        {
+            var builder = SkpCreate.NewFile();
+            int layer = builder.AddLayer("Layer0");
+            using var chair = builder.AddComponentDefinition("Chair");
+            Assert.Throws<SkpWriteException>(() => chair.AddFace(Square(), material: layer));
+            // the definition must still be usable after a rejected call
+            chair.AddFace(Square());
+        }
+
+        [Fact]
+        public void AddFaceAcceptsARealMaterialAndLayer()
+        {
+            var builder = SkpCreate.NewFile();
+            int mat = builder.AddMaterial("Red", (255, 0, 0));
+            int layer = builder.AddLayer("MyLayer");
+            builder.AddFace(Square(), material: mat, layer: layer);
+            Assert.True(builder.ToBytes().Length > 0);
+        }
+
+        [Fact]
         public void AutoTriangulateSplitsNonPlanarQuad()
         {
             var builder = SkpCreate.NewFile();
