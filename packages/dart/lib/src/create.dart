@@ -1744,6 +1744,9 @@ class ComponentDefinitionBuilder implements GeometryHost {
     List<List<Point3>> holes = const [],
   }) {
     _checkWritable('faces');
+    _skp._checkMaterialHandle(material, 'material');
+    _skp._checkMaterialHandle(backMaterial, 'backMaterial');
+    _skp._checkLayerHandle(layer);
     if (points.length < 3) {
       throw SkpWriteError('a face needs at least 3 points');
     }
@@ -1786,6 +1789,9 @@ class ComponentDefinitionBuilder implements GeometryHost {
     String attributeDictName = 'attributes',
   }) {
     _checkWritable('faces');
+    _skp._checkMaterialHandle(material, 'material');
+    _skp._checkMaterialHandle(backMaterial, 'backMaterial');
+    _skp._checkLayerHandle(layer);
     if (numSegments < 3 || numSegments > 255) {
       throw SkpWriteError('numSegments must be between 3 and 255, got $numSegments');
     }
@@ -1894,6 +1900,8 @@ class ComponentDefinitionBuilder implements GeometryHost {
     bool hidden = false,
   }) {
     _checkWritable('instances');
+    _skp._checkMaterialHandle(material, 'material');
+    _skp._checkLayerHandle(layer);
     if (!identical(definition._skp, _skp)) {
       throw SkpWriteError(
         "component definition '${definition.name}' belongs to a different builder "
@@ -1935,6 +1943,8 @@ class ComponentDefinitionBuilder implements GeometryHost {
     bool hidden = false,
   }) {
     _checkWritable('groups');
+    _skp._checkMaterialHandle(material, 'material');
+    _skp._checkLayerHandle(layer);
     if (!identical(definition._skp, _skp)) {
       throw SkpWriteError(
         "component definition '${definition.name}' belongs to a different builder "
@@ -2197,6 +2207,36 @@ class SkpBuilder implements GeometryHost {
     return slot;
   }
 
+  /// Reject a material/backMaterial argument that isn't a handle this
+  /// builder's own [addMaterial]/[addTextureMaterial] actually returned.
+  /// Without this, a stray value - most commonly a layer handle passed to
+  /// the wrong parameter by mistake - gets written straight into the file
+  /// as a material reference: this project's own reader tolerates the
+  /// dangling reference silently, but real SketchUp rejects the whole
+  /// file as corrupt on open, with no indication of which call caused it.
+  void _checkMaterialHandle(int? value, String param) {
+    if (value != null && value != 0 && !materialsByName.values.contains(value)) {
+      throw SkpWriteError(
+        "$param=$value is not a handle this builder's addMaterial()/addTextureMaterial() "
+        'returned - passing an unrelated value (e.g. a layer handle by mistake) would '
+        'silently write an invalid material reference that real SketchUp rejects on open',
+      );
+    }
+  }
+
+  /// Reject a layer argument that isn't a handle this builder's own
+  /// [addLayer] actually returned - see [_checkMaterialHandle] for why
+  /// this matters.
+  void _checkLayerHandle(int? value, [String param = 'layer']) {
+    if (value != null && value != 0 && !layersByName.values.contains(value)) {
+      throw SkpWriteError(
+        "$param=$value is not a handle this builder's addLayer() returned - passing an "
+        'unrelated value (e.g. a material handle by mistake) would silently write an '
+        'invalid layer reference that real SketchUp rejects on open',
+      );
+    }
+  }
+
   Map<String, int> _materialShiftedClassSlot() {
     final materialShift = _materialWriter.nextSlot - _base;
     return {for (final e in _scaffoldClassSlot.entries) e.key: e.value + materialShift};
@@ -2296,6 +2336,8 @@ class SkpBuilder implements GeometryHost {
     int? layer,
     bool hidden = false,
   }) {
+    _checkMaterialHandle(material, 'material');
+    _checkLayerHandle(layer);
     final resolved = _resolveMatrix3x3(matrix3x3, rotation);
     final comp = _startDefinition(
       name ?? 'Group',
@@ -2344,6 +2386,8 @@ class SkpBuilder implements GeometryHost {
     String attributeDictName = 'attributes',
     bool hidden = false,
   }) {
+    _checkMaterialHandle(material, 'material');
+    _checkLayerHandle(layer);
     if (!identical(definition._skp, this)) {
       throw SkpWriteError(
         "component definition '${definition.name}' belongs to a different builder "
@@ -2421,6 +2465,7 @@ class SkpBuilder implements GeometryHost {
     int? layer,
     bool hidden = false,
   }) {
+    _checkLayerHandle(layer);
     final mat = addTextureMaterial('__openskp_image_$_materialCount', imagePath);
     late final ComponentDefinitionBuilder imageDef;
     imageDef = addComponentDefinition('Image$_definitionCount', (def) {
@@ -2512,6 +2557,9 @@ class SkpBuilder implements GeometryHost {
     bool autoTriangulate = false,
     List<List<Point3>> holes = const [],
   }) {
+    _checkMaterialHandle(material, 'material');
+    _checkMaterialHandle(backMaterial, 'backMaterial');
+    _checkLayerHandle(layer);
     if (points.length < 3) {
       throw SkpWriteError('a face needs at least 3 points');
     }
@@ -2560,6 +2608,9 @@ class SkpBuilder implements GeometryHost {
     Map<String, Object>? attributes,
     String attributeDictName = 'attributes',
   }) {
+    _checkMaterialHandle(material, 'material');
+    _checkMaterialHandle(backMaterial, 'backMaterial');
+    _checkLayerHandle(layer);
     if (numSegments < 3 || numSegments > 255) {
       throw SkpWriteError('numSegments must be between 3 and 255, got $numSegments');
     }

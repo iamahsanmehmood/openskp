@@ -1747,6 +1747,9 @@ namespace OpenSkp
             IReadOnlyList<IReadOnlyList<(double X, double Y, double Z)>>? holes = null)
         {
             CheckWritable("faces");
+            Skp.CheckMaterialHandle(material, "material");
+            Skp.CheckMaterialHandle(backMaterial, "backMaterial");
+            Skp.CheckLayerHandle(layer);
             if (points.Count < 3)
             {
                 throw new SkpWriteException("a face needs at least 3 points");
@@ -1772,6 +1775,9 @@ namespace OpenSkp
             IReadOnlyDictionary<string, object>? attributes = null, string attributeDictName = "attributes")
         {
             CheckWritable("faces");
+            Skp.CheckMaterialHandle(material, "material");
+            Skp.CheckMaterialHandle(backMaterial, "backMaterial");
+            Skp.CheckLayerHandle(layer);
             if (numSegments < 3 || numSegments > 255)
             {
                 throw new SkpWriteException($"num_segments must be between 3 and 255, got {numSegments}");
@@ -1852,6 +1858,8 @@ namespace OpenSkp
             bool hidden = false)
         {
             CheckWritable("instances");
+            Skp.CheckMaterialHandle(material, "material");
+            Skp.CheckLayerHandle(layer);
             if (!ReferenceEquals(definition.Skp, Skp))
             {
                 throw new SkpWriteException(
@@ -1887,6 +1895,8 @@ namespace OpenSkp
             bool hidden = false)
         {
             CheckWritable("groups");
+            Skp.CheckMaterialHandle(material, "material");
+            Skp.CheckLayerHandle(layer);
             if (!ReferenceEquals(definition.Skp, Skp))
             {
                 throw new SkpWriteException(
@@ -2249,6 +2259,40 @@ namespace OpenSkp
         public int AddLayer(string name, (int R, int G, int B) color, bool hidden = false) =>
             AddLayer(name, (color.R, color.G, color.B, 255), hidden);
 
+        /// <summary>Reject a material/backMaterial argument that isn't a
+        /// handle this builder's own AddMaterial()/AddTextureMaterial()
+        /// actually returned. Without this, a stray value - most commonly
+        /// a layer handle passed to the wrong parameter by mistake - gets
+        /// written straight into the file as a material reference: this
+        /// project's own reader tolerates the dangling reference silently,
+        /// but real SketchUp rejects the whole file as corrupt on open,
+        /// with no indication of which call caused it.</summary>
+        internal void CheckMaterialHandle(int? value, string param)
+        {
+            if (value.HasValue && value.Value != 0 && !MaterialsByName.ContainsValue(value.Value))
+            {
+                throw new SkpWriteException(
+                    $"{param}={value.Value} is not a handle this builder's AddMaterial()/" +
+                    "AddTextureMaterial() returned - passing an unrelated value (e.g. a layer " +
+                    "handle by mistake) would silently write an invalid material reference that " +
+                    "real SketchUp rejects on open");
+            }
+        }
+
+        /// <summary>Reject a layer argument that isn't a handle this
+        /// builder's own AddLayer() actually returned - see
+        /// CheckMaterialHandle for why this matters.</summary>
+        internal void CheckLayerHandle(int? value, string param = "layer")
+        {
+            if (value.HasValue && value.Value != 0 && !LayersByName.ContainsValue(value.Value))
+            {
+                throw new SkpWriteException(
+                    $"{param}={value.Value} is not a handle this builder's AddLayer() returned - " +
+                    "passing an unrelated value (e.g. a material handle by mistake) would silently " +
+                    "write an invalid layer reference that real SketchUp rejects on open");
+            }
+        }
+
         private Dictionary<string, int> MaterialShiftedClassSlot()
         {
             int materialShift = _materialWriter.NextSlot - _base;
@@ -2342,6 +2386,8 @@ namespace OpenSkp
             int? material = null, int? layer = null,
             bool hidden = false)
         {
+            CheckMaterialHandle(material, "material");
+            CheckLayerHandle(layer);
             var resolved = CreateMath.ResolveMatrix3x3(matrix3x3, rotation);
             var placement = new GroupPlacement(translation, resolved, material ?? 0, layer ?? 0, hidden);
             return StartDefinition(name ?? "Group", "AddGroup", placement, null);
@@ -2382,6 +2428,8 @@ namespace OpenSkp
             IReadOnlyDictionary<string, object>? attributes = null, string attributeDictName = "attributes",
             bool hidden = false)
         {
+            CheckMaterialHandle(material, "material");
+            CheckLayerHandle(layer);
             if (!ReferenceEquals(definition.Skp, this))
             {
                 throw new SkpWriteException(
@@ -2453,6 +2501,7 @@ namespace OpenSkp
             int? layer = null,
             bool hidden = false)
         {
+            CheckLayerHandle(layer);
             int mat = AddTextureMaterial($"__openskp_image_{_materialCount}", imagePath);
             ComponentDefinitionBuilder imageDef;
             using (imageDef = AddComponentDefinition($"Image{_definitionCount}"))
@@ -2566,6 +2615,9 @@ namespace OpenSkp
             bool autoTriangulate = false,
             IReadOnlyList<IReadOnlyList<(double X, double Y, double Z)>>? holes = null)
         {
+            CheckMaterialHandle(material, "material");
+            CheckMaterialHandle(backMaterial, "backMaterial");
+            CheckLayerHandle(layer);
             if (points.Count < 3)
             {
                 throw new SkpWriteException("a face needs at least 3 points");
@@ -2601,6 +2653,9 @@ namespace OpenSkp
             IReadOnlyList<UvCorrespondence>? frontUv = null, IReadOnlyList<UvCorrespondence>? backUv = null,
             IReadOnlyDictionary<string, object>? attributes = null, string attributeDictName = "attributes")
         {
+            CheckMaterialHandle(material, "material");
+            CheckMaterialHandle(backMaterial, "backMaterial");
+            CheckLayerHandle(layer);
             if (numSegments < 3 || numSegments > 255)
             {
                 throw new SkpWriteException($"num_segments must be between 3 and 255, got {numSegments}");

@@ -85,6 +85,92 @@ TEST(Create, NonCoplanarFaceRaisesWithoutAutoTriangulate) {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Material/layer handle validation.
+// ---------------------------------------------------------------------------------------------
+
+std::vector<Point3> square_pts() { return {{0, 0, 0}, {100, 0, 0}, {100, 100, 0}, {0, 100, 0}}; }
+
+TEST(Create, AddFaceRejectsALayerHandlePassedAsMaterial) {
+  // The exact real-world mistake this guards against: a caller accidentally passes a layer
+  // handle into FaceOptions::material (e.g. via a field mix-up in a wrapper function around
+  // add_face). Before this check, the layer's slot silently became a dangling material
+  // reference - openskp's own reader tolerated it, but real SketchUp rejected the resulting
+  // file outright.
+  auto builder = create();
+  int layer = builder->add_layer("Layer0");
+  FaceOptions opts;
+  opts.material = layer;
+  EXPECT_THROW(builder->add_face(square_pts(), opts), SkpWriteError);
+}
+
+TEST(Create, AddFaceRejectsAMaterialHandlePassedAsLayer) {
+  auto builder = create();
+  int mat = builder->add_material("Red", Color3{255, 0, 0});
+  FaceOptions opts;
+  opts.layer = mat;
+  EXPECT_THROW(builder->add_face(square_pts(), opts), SkpWriteError);
+}
+
+TEST(Create, AddFaceRejectsAnUnrelatedBackMaterialHandle) {
+  auto builder = create();
+  int layer = builder->add_layer("Layer0");
+  FaceOptions opts;
+  opts.back_material = layer;
+  EXPECT_THROW(builder->add_face(square_pts(), opts), SkpWriteError);
+}
+
+TEST(Create, AddFaceRejectsAHandleFromADifferentBuilder) {
+  auto other_builder = create();
+  int stray_material = other_builder->add_material("Blue", Color3{0, 0, 255});
+  auto builder = create();
+  FaceOptions opts;
+  opts.material = stray_material;
+  EXPECT_THROW(builder->add_face(square_pts(), opts), SkpWriteError);
+}
+
+TEST(Create, AddInstanceRejectsALayerHandlePassedAsMaterial) {
+  auto builder = create();
+  int layer = builder->add_layer("Layer0");
+  auto& chair = builder->add_component_definition("Chair");
+  chair.add_face(square_pts());
+  chair.close();
+  InstanceOptions opts;
+  opts.material = layer;
+  EXPECT_THROW(builder->add_instance(chair, opts), SkpWriteError);
+}
+
+TEST(Create, AddGroupRejectsAnUnrelatedLayerHandle) {
+  auto builder = create();
+  int mat = builder->add_material("Red", Color3{255, 0, 0});
+  GroupOptions opts;
+  opts.name = "Table";
+  opts.layer = mat;
+  EXPECT_THROW(builder->add_group(opts), SkpWriteError);
+}
+
+TEST(Create, ComponentScopeAddFaceRejectsAnUnrelatedHandle) {
+  auto builder = create();
+  int layer = builder->add_layer("Layer0");
+  auto& chair = builder->add_component_definition("Chair");
+  FaceOptions opts;
+  opts.material = layer;
+  EXPECT_THROW(chair.add_face(square_pts(), opts), SkpWriteError);
+  // the definition must still be usable after a rejected call
+  chair.add_face(square_pts());
+}
+
+TEST(Create, AddFaceAcceptsARealMaterialAndLayer) {
+  auto builder = create();
+  int mat = builder->add_material("Red", Color3{255, 0, 0});
+  int layer = builder->add_layer("MyLayer");
+  FaceOptions opts;
+  opts.material = mat;
+  opts.layer = layer;
+  builder->add_face(square_pts(), opts);
+  EXPECT_GT(builder->to_bytes().size(), 0u);
+}
+
+// ---------------------------------------------------------------------------------------------
 // Materials.
 // ---------------------------------------------------------------------------------------------
 
