@@ -3,7 +3,8 @@ import 'dart:math' as math;
 import 'scene.dart';
 
 const double metresToInches = 39.37007874015748;
-const _ifcBase64 = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_\$';
+const _ifcBase64 =
+    '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_\$';
 
 String generateIfcGuid() {
   final rand = math.Random();
@@ -20,15 +21,33 @@ String sanitizeName(String? name) {
   return clean.isEmpty ? 'Unnamed' : clean;
 }
 
-List<String> classifyElement(String geomName) {
-  final l = geomName.toLowerCase();
+List<String>? _classifyByKeyword(String name) {
+  final l = name.toLowerCase();
   if (l.contains('wall')) return ['IFCWALL', 'IfcWall'];
   if (l.contains('door')) return ['IFCDOOR', 'IfcDoor'];
   if (l.contains('window')) return ['IFCWINDOW', 'IfcWindow'];
   if (l.contains('slab') || l.contains('floor')) return ['IFCSLAB', 'IfcSlab'];
-  if (l.contains('column') || l.contains('pillar')) return ['IFCCOLUMN', 'IfcColumn'];
+  if (l.contains('column') || l.contains('pillar'))
+    return ['IFCCOLUMN', 'IfcColumn'];
   if (l.contains('beam') || l.contains('joist')) return ['IFCBEAM', 'IfcBeam'];
   if (l.contains('roof')) return ['IFCROOF', 'IfcRoof'];
+  return null;
+}
+
+/// Maps a geometry/component name to an IFC4 entity type and constructor.
+///
+/// Tries [geomName] first, then falls back to [layerName] (many
+/// SketchUp-for-BIM workflows organize by tag/layer - "Walls", "Doors" -
+/// even when individual components are never renamed away from
+/// SketchUp's own defaults like "Component#109415"), then falls back to
+/// a generic, untyped element if neither matches.
+List<String> classifyElement(String geomName, [String layerName = '']) {
+  final byName = _classifyByKeyword(geomName);
+  if (byName != null) return byName;
+  if (layerName.isNotEmpty) {
+    final byLayer = _classifyByKeyword(layerName);
+    if (byLayer != null) return byLayer;
+  }
   return ['IFCBUILDINGELEMENTPROXY', 'IfcBuildingElementProxy'];
 }
 
@@ -61,7 +80,9 @@ String toIfc(
   Scene scene, {
   double scale = metresToInches,
   String schema = 'IFC4',
+  List<String> Function(String geomName, String layerName)? classifier,
 }) {
+  final classify = classifier ?? classifyElement;
   final schemaStr = schema.toUpperCase();
   final nowIso = DateTime.now().toUtc().toIso8601String().split('.').first;
   final timestampEpoch = DateTime.now().toUtc().millisecondsSinceEpoch ~/ 1000;
@@ -89,12 +110,12 @@ String toIfc(
   lines.add('#$personOrgId=IFCPERSONANDORGANIZATION(#$personId,#$orgId,\$);');
 
   final appId = nextId();
-  lines.add('#$appId=IFCAPPLICATION(#$orgId,\'0.3.1\',\'OpenSKP Exporter\',\'OpenSKP\');');
+  lines.add(
+      '#$appId=IFCAPPLICATION(#$orgId,\'0.3.1\',\'OpenSKP Exporter\',\'OpenSKP\');');
 
   final ownerHistId = nextId();
   lines.add(
-    '#$ownerHistId=IFCOWNERHISTORY(#$personOrgId,#$appId,\$,.READWRITE.,\$,\$,\$,$timestampEpoch);'
-  );
+      '#$ownerHistId=IFCOWNERHISTORY(#$personOrgId,#$appId,\$,.READWRITE.,\$,\$,\$,$timestampEpoch);');
 
   final lengthUnitId = nextId();
   lines.add('#$lengthUnitId=IFCSIUNIT(*,.LENGTHUNIT.,.MILLI.,.METRE.);');
@@ -107,8 +128,7 @@ String toIfc(
 
   final unitAssignId = nextId();
   lines.add(
-    '#$unitAssignId=IFCUNITASSIGNMENT((#$lengthUnitId,#$angleUnitId,#$solidUnitId));'
-  );
+      '#$unitAssignId=IFCUNITASSIGNMENT((#$lengthUnitId,#$angleUnitId,#$solidUnitId));');
 
   final ptZeroId = nextId();
   lines.add('#$ptZeroId=IFCCARTESIANPOINT((0.0,0.0,0.0));');
@@ -118,47 +138,41 @@ String toIfc(
 
   final geomCtxId = nextId();
   lines.add(
-    '#$geomCtxId=IFCGEOMETRICREPRESENTATIONCONTEXT(\$,\'Model\',3,1.0E-5,#$axisPlacementId,\$);'
-  );
+      '#$geomCtxId=IFCGEOMETRICREPRESENTATIONCONTEXT(\$,\'Model\',3,1.0E-5,#$axisPlacementId,\$);');
 
   final projId = nextId();
   lines.add(
-    '#$projId=IFCPROJECT(\'${generateIfcGuid()}\',#$ownerHistId,\'OpenSKP Project\',\$,\$,\$,\$,(#$geomCtxId),#$unitAssignId);'
-  );
+      '#$projId=IFCPROJECT(\'${generateIfcGuid()}\',#$ownerHistId,\'OpenSKP Project\',\$,\$,\$,\$,(#$geomCtxId),#$unitAssignId);');
 
   final sitePlacementId = nextId();
   lines.add('#$sitePlacementId=IFCLOCALPLACEMENT(\$,#$axisPlacementId);');
 
   final siteId = nextId();
   lines.add(
-    '#$siteId=IFCSITE(\'${generateIfcGuid()}\',#$ownerHistId,\'Site\',\$,\$,#$sitePlacementId,\$,\$,.ELEMENT.,\$,\$,\$,\$,\$);'
-  );
+      '#$siteId=IFCSITE(\'${generateIfcGuid()}\',#$ownerHistId,\'Site\',\$,\$,#$sitePlacementId,\$,\$,.ELEMENT.,\$,\$,\$,\$,\$);');
 
   final bldgPlacementId = nextId();
-  lines.add('#$bldgPlacementId=IFCLOCALPLACEMENT(#$sitePlacementId,#$axisPlacementId);');
+  lines.add(
+      '#$bldgPlacementId=IFCLOCALPLACEMENT(#$sitePlacementId,#$axisPlacementId);');
 
   final bldgId = nextId();
   lines.add(
-    '#$bldgId=IFCBUILDING(\'${generateIfcGuid()}\',#$ownerHistId,\'Building\',\$,\$,#$bldgPlacementId,\$,\$,.ELEMENT.,\$,\$,\$);'
-  );
+      '#$bldgId=IFCBUILDING(\'${generateIfcGuid()}\',#$ownerHistId,\'Building\',\$,\$,#$bldgPlacementId,\$,\$,.ELEMENT.,\$,\$,\$);');
 
   final storeyPlacementId = nextId();
-  lines.add('#$storeyPlacementId=IFCLOCALPLACEMENT(#$bldgPlacementId,#$axisPlacementId);');
+  lines.add(
+      '#$storeyPlacementId=IFCLOCALPLACEMENT(#$bldgPlacementId,#$axisPlacementId);');
 
   final storeyId = nextId();
   lines.add(
-    '#$storeyId=IFCBUILDINGSTOREY(\'${generateIfcGuid()}\',#$ownerHistId,\'Level 0\',\$,\$,#$storeyPlacementId,\$,\$,.ELEMENT.,0.0);'
-  );
+      '#$storeyId=IFCBUILDINGSTOREY(\'${generateIfcGuid()}\',#$ownerHistId,\'Level 0\',\$,\$,#$storeyPlacementId,\$,\$,.ELEMENT.,0.0);');
 
   lines.add(
-    '#${nextId()}=IFCRELAGGREGATES(\'${generateIfcGuid()}\',#$ownerHistId,\$,\$,#$projId,(#$siteId));'
-  );
+      '#${nextId()}=IFCRELAGGREGATES(\'${generateIfcGuid()}\',#$ownerHistId,\$,\$,#$projId,(#$siteId));');
   lines.add(
-    '#${nextId()}=IFCRELAGGREGATES(\'${generateIfcGuid()}\',#$ownerHistId,\$,\$,#$siteId,(#$bldgId));'
-  );
+      '#${nextId()}=IFCRELAGGREGATES(\'${generateIfcGuid()}\',#$ownerHistId,\$,\$,#$siteId,(#$bldgId));');
   lines.add(
-    '#${nextId()}=IFCRELAGGREGATES(\'${generateIfcGuid()}\',#$ownerHistId,\$,\$,#$bldgId,(#$storeyId));'
-  );
+      '#${nextId()}=IFCRELAGGREGATES(\'${generateIfcGuid()}\',#$ownerHistId,\$,\$,#$bldgId,(#$storeyId));');
 
   final productIds = <int>[];
   final layerItems = <String, List<int>>{};
@@ -172,7 +186,7 @@ String toIfc(
     final geomName = sanitizeName(prim.geomName);
     final meta = scene.meshIndex[prim.geomName];
     final layerName = sanitizeName(meta?.layer ?? 'Layer0');
-    final classification = classifyElement(geomName);
+    final classification = classify(geomName, layerName);
     final stepType = classification[0];
 
     final ptCoords = <String>[];
@@ -196,28 +210,29 @@ String toIfc(
 
     final faceSetId = nextId();
     lines.add(
-      '#$faceSetId=IFCTRIANGULATEDFACESET(#$ptListId,\$,.TRUE.,(${faceIndices.join(',')}),\$);'
-    );
+        '#$faceSetId=IFCTRIANGULATEDFACESET(#$ptListId,\$,.TRUE.,(${faceIndices.join(',')}),\$);');
 
     layerItems.putIfAbsent(layerName, () => []).add(faceSetId);
 
     final rgba = getPrimRgb(scene, prim.materialIndex);
     final r = rgba[0], g = rgba[1], b = rgba[2], a = rgba[3];
-    final rgbaKey = '${r.toStringAsFixed(4)},${g.toStringAsFixed(4)},${b.toStringAsFixed(4)},${a.toStringAsFixed(4)}';
+    final rgbaKey =
+        '${r.toStringAsFixed(4)},${g.toStringAsFixed(4)},${b.toStringAsFixed(4)},${a.toStringAsFixed(4)}';
     int styleAssignId;
 
     if (!matStyleCache.containsKey(rgbaKey)) {
       final colId = nextId();
-      lines.add('#$colId=IFCCOLOURRGB(\$,${r.toStringAsFixed(4)},${g.toStringAsFixed(4)},${b.toStringAsFixed(4)});');
+      lines.add(
+          '#$colId=IFCCOLOURRGB(\$,${r.toStringAsFixed(4)},${g.toStringAsFixed(4)},${b.toStringAsFixed(4)});');
 
       final transparency = (1.0 - a).toStringAsFixed(4);
       final renderingId = nextId();
       lines.add(
-        '#$renderingId=IFCSURFACESTYLERENDERING(#$colId,$transparency,\$,\$,\$,\$,\$,\$,.FLAT.);'
-      );
+          '#$renderingId=IFCSURFACESTYLERENDERING(#$colId,$transparency,\$,\$,\$,\$,\$,\$,.FLAT.);');
 
       final styleId = nextId();
-      lines.add('#$styleId=IFCSURFACESTYLE(\'${geomName}_Material\',.BOTH.,(#$renderingId));');
+      lines.add(
+          '#$styleId=IFCSURFACESTYLE(\'${geomName}_Material\',.BOTH.,(#$renderingId));');
 
       styleAssignId = nextId();
       lines.add('#$styleAssignId=IFCPRESENTATIONSTYLEASSIGNMENT((#$styleId));');
@@ -227,29 +242,28 @@ String toIfc(
     }
 
     final styledItemId = nextId();
-    lines.add('#$styledItemId=IFCSTYLEDITEM(#$faceSetId,(#$styleAssignId),\$);');
+    lines
+        .add('#$styledItemId=IFCSTYLEDITEM(#$faceSetId,(#$styleAssignId),\$);');
 
     final shapeRepId = nextId();
     lines.add(
-      '#$shapeRepId=IFCSHAPEREPRESENTATION(#$geomCtxId,\'Body\',\'Tessellation\',(#$faceSetId));'
-    );
+        '#$shapeRepId=IFCSHAPEREPRESENTATION(#$geomCtxId,\'Body\',\'Tessellation\',(#$faceSetId));');
 
     final prodShapeId = nextId();
     lines.add('#$prodShapeId=IFCPRODUCTDEFINITIONSHAPE(\$,\$,(#$shapeRepId));');
 
     final prodPlacementId = nextId();
-    lines.add('#$prodPlacementId=IFCLOCALPLACEMENT(#$storeyPlacementId,#$axisPlacementId);');
+    lines.add(
+        '#$prodPlacementId=IFCLOCALPLACEMENT(#$storeyPlacementId,#$axisPlacementId);');
 
     final productId = nextId();
     final prodGuid = generateIfcGuid();
     if (stepType == 'IFCBUILDINGELEMENTPROXY') {
       lines.add(
-        '#$productId=$stepType(\'$prodGuid\',#$ownerHistId,\'$geomName\',\$,\$,#$prodPlacementId,#$prodShapeId,\$,.NOTDEFINED.);'
-      );
+          '#$productId=$stepType(\'$prodGuid\',#$ownerHistId,\'$geomName\',\$,\$,#$prodPlacementId,#$prodShapeId,\$,.NOTDEFINED.);');
     } else {
       lines.add(
-        '#$productId=$stepType(\'$prodGuid\',#$ownerHistId,\'$geomName\',\$,\$,#$prodPlacementId,#$prodShapeId,\$,\$);'
-      );
+          '#$productId=$stepType(\'$prodGuid\',#$ownerHistId,\'$geomName\',\$,\$,#$prodPlacementId,#$prodShapeId,\$,\$);');
     }
     productIds.add(productId);
 
@@ -259,7 +273,8 @@ String toIfc(
         final cleanK = sanitizeName(entry.key);
         final cleanV = sanitizeName(entry.value);
         final propId = nextId();
-        lines.add('#$propId=IFCPROPERTYSINGLEVALUE(\'$cleanK\',\$,IFCTEXT(\'$cleanV\'),\$);');
+        lines.add(
+            '#$propId=IFCPROPERTYSINGLEVALUE(\'$cleanK\',\$,IFCTEXT(\'$cleanV\'),\$);');
         propValIds.add(propId);
       }
 
@@ -267,12 +282,10 @@ String toIfc(
         final psetId = nextId();
         final propRefs = propValIds.map((pid) => '#$pid').join(',');
         lines.add(
-          '#$psetId=IFCPROPERTYSET(\'${generateIfcGuid()}\',#$ownerHistId,\'Pset_CustomProperties\',\$,($propRefs));'
-        );
+            '#$psetId=IFCPROPERTYSET(\'${generateIfcGuid()}\',#$ownerHistId,\'Pset_CustomProperties\',\$,($propRefs));');
 
         lines.add(
-          '#${nextId()}=IFCRELDEFINESBYPROPERTIES(\'${generateIfcGuid()}\',#$ownerHistId,\$,\$,(#$productId),#$psetId);'
-        );
+            '#${nextId()}=IFCRELDEFINESBYPROPERTIES(\'${generateIfcGuid()}\',#$ownerHistId,\$,\$,(#$productId),#$psetId);');
       }
     }
   }
@@ -283,16 +296,14 @@ String toIfc(
     if (itemIds.isNotEmpty) {
       final itemRefs = itemIds.map((iid) => '#$iid').join(',');
       lines.add(
-        '#${nextId()}=IFCPRESENTATIONLAYERASSIGNMENT(\'$lName\',\$,($itemRefs),\$);'
-      );
+          '#${nextId()}=IFCPRESENTATIONLAYERASSIGNMENT(\'$lName\',\$,($itemRefs),\$);');
     }
   }
 
   if (productIds.isNotEmpty) {
     final prodRefs = productIds.map((pid) => '#$pid').join(',');
     lines.add(
-      '#${nextId()}=IFCRELCONTAINEDINSPATIALSTRUCTURE(\'${generateIfcGuid()}\',#$ownerHistId,\$,\$,($prodRefs),#$storeyId);'
-    );
+        '#${nextId()}=IFCRELCONTAINEDINSPATIALSTRUCTURE(\'${generateIfcGuid()}\',#$ownerHistId,\$,\$,($prodRefs),#$storeyId);');
   }
 
   lines.add('ENDSEC;');
@@ -305,9 +316,11 @@ void exportIfc(
   String outputPath, {
   double scale = metresToInches,
   String schema = 'IFC4',
+  List<String> Function(String geomName, String layerName)? classifier,
 }) {
   final file = File(outputPath);
   file.parent.createSync(recursive: true);
-  final text = toIfc(scene, scale: scale, schema: schema);
+  final text =
+      toIfc(scene, scale: scale, schema: schema, classifier: classifier);
   file.writeAsStringSync(text);
 }

@@ -22,8 +22,8 @@ export function sanitizeName(name: string | null | undefined): string {
   return clean.length > 0 ? clean : 'Unnamed';
 }
 
-export function classifyElement(geomName: string): [string, string] {
-  const l = geomName.toLowerCase();
+function classifyByKeyword(name: string): [string, string] | null {
+  const l = name.toLowerCase();
   if (l.includes('wall')) return ['IFCWALL', 'IfcWall'];
   if (l.includes('door')) return ['IFCDOOR', 'IfcDoor'];
   if (l.includes('window')) return ['IFCWINDOW', 'IfcWindow'];
@@ -31,6 +31,25 @@ export function classifyElement(geomName: string): [string, string] {
   if (l.includes('column') || l.includes('pillar')) return ['IFCCOLUMN', 'IfcColumn'];
   if (l.includes('beam') || l.includes('joist')) return ['IFCBEAM', 'IfcBeam'];
   if (l.includes('roof')) return ['IFCROOF', 'IfcRoof'];
+  return null;
+}
+
+/**
+ * Map a geometry/component name to an IFC4 entity type and constructor.
+ *
+ * Tries the component's own name first, then falls back to `layerName`
+ * (many SketchUp-for-BIM workflows organize by tag/layer - "Walls",
+ * "Doors" - even when individual components are never renamed away from
+ * SketchUp's own defaults like "Component#109415"), then falls back to a
+ * generic, untyped element if neither matches.
+ */
+export function classifyElement(geomName: string, layerName = ''): [string, string] {
+  const byName = classifyByKeyword(geomName);
+  if (byName) return byName;
+  if (layerName) {
+    const byLayer = classifyByKeyword(layerName);
+    if (byLayer) return byLayer;
+  }
   return ['IFCBUILDINGELEMENTPROXY', 'IfcBuildingElementProxy'];
 }
 
@@ -55,15 +74,24 @@ function getPrimRgb(scene: SkpScene, primMatIdx: number): [number, number, numbe
 
 /**
  * Serialize a baked SkpScene to ISO-10303-21 STEP ASCII IFC4 format.
+ *
+ * @param classifier - Optional override for {@link classifyElement}, called
+ * as `classifier(geomName, layerName)` and expected to return the same
+ * `[STEP_ENTITY_TYPE, IFC_CLASS_NAME]` tuple - use this to supply your own
+ * naming convention or metadata-driven typing instead of the built-in
+ * keyword/layer heuristic.
  */
 export function toIFC(
   scene: SkpScene,
   scale: number = METRES_TO_INCHES,
-  schema: string = 'IFC4'
+  schema: string = 'IFC4',
+  classifier?: (geomName: string, layerName: string) => [string, string]
 ): string {
   if (!scene || !scene.glbPrimitives) {
     throw new Error('toIFC requires a valid SkpScene instance');
   }
+
+  const classify = classifier || classifyElement;
 
   const schemaStr = (schema || 'IFC4').toUpperCase();
   const nowIso = new Date().toISOString().replace(/\.\d{3}Z$/, '');
@@ -175,7 +203,7 @@ export function toIFC(
     const geomName = sanitizeName(prim.geomName);
     const meta = scene.meshIndex ? scene.meshIndex[prim.geomName] : undefined;
     const layerName = sanitizeName(meta && meta.layer ? meta.layer : 'Layer0');
-    const [stepType] = classifyElement(geomName);
+    const [stepType] = classify(geomName, layerName);
 
     const ptCoords: string[] = [];
     for (let i = 0; i < vCount; i++) {
@@ -309,7 +337,8 @@ export function exportIFC(
   scene: SkpScene,
   outputPath: string,
   scale: number = METRES_TO_INCHES,
-  schema: string = 'IFC4'
+  schema: string = 'IFC4',
+  classifier?: (geomName: string, layerName: string) => [string, string]
 ): void {
   if (typeof process !== 'undefined' && process.versions && process.versions.node) {
     const fs = require('fs');
@@ -318,7 +347,7 @@ export function exportIFC(
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
-    const text = toIFC(scene, scale, schema);
+    const text = toIFC(scene, scale, schema, classifier);
     fs.writeFileSync(outputPath, text, 'utf8');
   } else {
     throw new Error('exportIFC is only supported in Node.js environment');

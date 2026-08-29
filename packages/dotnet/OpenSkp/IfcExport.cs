@@ -39,13 +39,10 @@ namespace OpenSkp
             return string.IsNullOrEmpty(clean) ? "Unnamed" : clean;
         }
 
-        /// <summary>
-        /// Classifies geometry/component name into an IFC entity type.
-        /// </summary>
-        public static (string StepType, string ClassName) ClassifyElement(string geomName)
+        private static (string StepType, string ClassName)? ClassifyByKeyword(string name)
         {
-            if (string.IsNullOrEmpty(geomName)) return ("IFCBUILDINGELEMENTPROXY", "IfcBuildingElementProxy");
-            string l = geomName.ToLowerInvariant();
+            if (string.IsNullOrEmpty(name)) return null;
+            string l = name.ToLowerInvariant();
             if (l.Contains("wall")) return ("IFCWALL", "IfcWall");
             if (l.Contains("door")) return ("IFCDOOR", "IfcDoor");
             if (l.Contains("window")) return ("IFCWINDOW", "IfcWindow");
@@ -53,6 +50,27 @@ namespace OpenSkp
             if (l.Contains("column") || l.Contains("pillar")) return ("IFCCOLUMN", "IfcColumn");
             if (l.Contains("beam") || l.Contains("joist")) return ("IFCBEAM", "IfcBeam");
             if (l.Contains("roof")) return ("IFCROOF", "IfcRoof");
+            return null;
+        }
+
+        /// <summary>
+        /// Classifies geometry/component name into an IFC entity type.
+        /// Tries <paramref name="geomName"/> first, then falls back to
+        /// <paramref name="layerName"/> (many SketchUp-for-BIM workflows
+        /// organize by tag/layer - "Walls", "Doors" - even when individual
+        /// components are never renamed away from SketchUp's own defaults
+        /// like "Component#109415"), then falls back to a generic, untyped
+        /// element if neither matches.
+        /// </summary>
+        public static (string StepType, string ClassName) ClassifyElement(string geomName, string layerName = "")
+        {
+            var byName = ClassifyByKeyword(geomName);
+            if (byName.HasValue) return byName.Value;
+            if (!string.IsNullOrEmpty(layerName))
+            {
+                var byLayer = ClassifyByKeyword(layerName);
+                if (byLayer.HasValue) return byLayer.Value;
+            }
             return ("IFCBUILDINGELEMENTPROXY", "IfcBuildingElementProxy");
         }
 
@@ -82,12 +100,17 @@ namespace OpenSkp
         /// <summary>
         /// Serializes a baked <see cref="Scene"/> to ISO-10303-21 STEP ASCII IFC4 format.
         /// </summary>
-        public static string ToIfc(Scene scene, double scale = MetresToInches, string schema = "IFC4")
+        /// <param name="classifier">Optional override for <see cref="ClassifyElement"/> -
+        /// use this to supply your own naming convention or metadata-driven typing
+        /// instead of the built-in keyword/layer heuristic.</param>
+        public static string ToIfc(Scene scene, double scale = MetresToInches, string schema = "IFC4", Func<string, string, (string StepType, string ClassName)>? classifier = null)
         {
             if (scene == null || scene.GlbPrimitives == null)
             {
                 throw new ArgumentNullException(nameof(scene), "ToIfc requires a valid Scene instance");
             }
+
+            var classify = classifier ?? ClassifyElement;
 
             string schemaStr = string.IsNullOrWhiteSpace(schema) ? "IFC4" : schema.ToUpperInvariant();
             string nowIso = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss", CultureInfo.InvariantCulture);
@@ -189,7 +212,7 @@ namespace OpenSkp
                     }
                 }
 
-                var (stepType, _) = ClassifyElement(geomName);
+                var (stepType, _) = classify(geomName, layerName);
 
                 var ptCoords = new List<string>();
                 for (int i = 0; i < vCount; i++)
@@ -315,7 +338,7 @@ namespace OpenSkp
         /// <summary>
         /// Exports a baked <see cref="Scene"/> directly to an ISO-10303-21 STEP ASCII IFC4 file using UTF-8 without BOM.
         /// </summary>
-        public static void ExportIfc(Scene scene, string outputPath, double scale = MetresToInches, string schema = "IFC4")
+        public static void ExportIfc(Scene scene, string outputPath, double scale = MetresToInches, string schema = "IFC4", Func<string, string, (string StepType, string ClassName)>? classifier = null)
         {
             if (scene == null)
             {
@@ -332,7 +355,7 @@ namespace OpenSkp
                 Directory.CreateDirectory(dir);
             }
 
-            string text = ToIfc(scene, scale, schema);
+            string text = ToIfc(scene, scale, schema, classifier);
             File.WriteAllText(outputPath, text, new UTF8Encoding(false));
         }
     }

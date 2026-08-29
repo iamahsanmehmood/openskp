@@ -6,6 +6,7 @@
 #include <fstream>
 #include <iomanip>
 #include <map>
+#include <optional>
 #include <random>
 #include <sstream>
 
@@ -61,23 +62,38 @@ std::string generate_ifc_guid() {
   return result;
 }
 
-std::pair<std::string, std::string> classify_element(const std::string& geom_name) {
-  std::string l = geom_name;
+namespace {
+
+std::optional<std::pair<std::string, std::string>> classify_by_keyword(const std::string& name) {
+  std::string l = name;
   std::transform(l.begin(), l.end(), l.begin(), [](unsigned char c) { return std::tolower(c); });
-  if (l.find("wall") != std::string::npos) return {"IFCWALL", "IfcWall"};
-  if (l.find("door") != std::string::npos) return {"IFCDOOR", "IfcDoor"};
-  if (l.find("window") != std::string::npos) return {"IFCWINDOW", "IfcWindow"};
+  if (l.find("wall") != std::string::npos) return std::pair{"IFCWALL", "IfcWall"};
+  if (l.find("door") != std::string::npos) return std::pair{"IFCDOOR", "IfcDoor"};
+  if (l.find("window") != std::string::npos) return std::pair{"IFCWINDOW", "IfcWindow"};
   if (l.find("slab") != std::string::npos || l.find("floor") != std::string::npos)
-    return {"IFCSLAB", "IfcSlab"};
+    return std::pair{"IFCSLAB", "IfcSlab"};
   if (l.find("column") != std::string::npos || l.find("pillar") != std::string::npos)
-    return {"IFCCOLUMN", "IfcColumn"};
+    return std::pair{"IFCCOLUMN", "IfcColumn"};
   if (l.find("beam") != std::string::npos || l.find("joist") != std::string::npos)
-    return {"IFCBEAM", "IfcBeam"};
-  if (l.find("roof") != std::string::npos) return {"IFCROOF", "IfcRoof"};
+    return std::pair{"IFCBEAM", "IfcBeam"};
+  if (l.find("roof") != std::string::npos) return std::pair{"IFCROOF", "IfcRoof"};
+  return std::nullopt;
+}
+
+}  // namespace
+
+std::pair<std::string, std::string> classify_element(const std::string& geom_name,
+                                                     const std::string& layer_name) {
+  if (auto by_name = classify_by_keyword(geom_name)) return *by_name;
+  if (!layer_name.empty()) {
+    if (auto by_layer = classify_by_keyword(layer_name)) return *by_layer;
+  }
   return {"IFCBUILDINGELEMENTPROXY", "IfcBuildingElementProxy"};
 }
 
-std::string to_ifc(const Scene& scene, double scale, const std::string& schema) {
+std::string to_ifc(const Scene& scene, double scale, const std::string& schema,
+                   const IfcClassifier& classifier) {
+  IfcClassifier classify = classifier ? classifier : IfcClassifier(classify_element);
   std::string schema_str = schema.empty() ? "IFC4" : schema;
   std::transform(schema_str.begin(), schema_str.end(), schema_str.begin(),
                  [](unsigned char c) { return std::toupper(c); });
@@ -203,7 +219,7 @@ std::string to_ifc(const Scene& scene, double scale, const std::string& schema) 
       layer_name = sanitize_name(meta_it->second.layer);
     }
 
-    auto [step_type, _] = classify_element(geom_name);
+    auto [step_type, _] = classify(geom_name, layer_name);
 
     std::ostringstream pt_ss;
     pt_ss.imbue(std::locale::classic());
@@ -341,7 +357,7 @@ std::string to_ifc(const Scene& scene, double scale, const std::string& schema) 
 }
 
 void export_ifc(const Scene& scene, const std::filesystem::path& path, double scale,
-                const std::string& schema) {
+                const std::string& schema, const IfcClassifier& classifier) {
   if (path.has_parent_path()) {
     std::filesystem::create_directories(path.parent_path());
   }
@@ -349,7 +365,7 @@ void export_ifc(const Scene& scene, const std::filesystem::path& path, double sc
   if (!file.is_open()) {
     throw std::runtime_error("Failed to open file for writing: " + path.string());
   }
-  std::string text = to_ifc(scene, scale, schema);
+  std::string text = to_ifc(scene, scale, schema, classifier);
   file.write(text.data(), text.size());
 }
 
