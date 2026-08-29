@@ -12,7 +12,7 @@ from __future__ import annotations
 import datetime
 import pathlib
 import uuid
-from typing import Dict, List, Tuple, Union
+from typing import Callable, Dict, List, Optional, Tuple, Union
 
 from ..scene import Scene
 
@@ -40,13 +40,9 @@ def sanitize_name(name: str) -> str:
     return clean if clean else "Unnamed"
 
 
-def classify_element(geom_name: str) -> Tuple[str, str]:
-    """Map a geometry/component name to an IFC4 entity type and constructor.
-
-    Returns:
-        Tuple of (STEP_ENTITY_TYPE, IFC_CLASS_NAME)
-    """
-    name_lower = geom_name.lower()
+def _classify_by_keyword(name: str) -> Union[Tuple[str, str], None]:
+    """Match a single name string against the keyword vocabulary, or None."""
+    name_lower = name.lower()
     if "wall" in name_lower:
         return "IFCWALL", "IfcWall"
     if "door" in name_lower:
@@ -61,6 +57,31 @@ def classify_element(geom_name: str) -> Tuple[str, str]:
         return "IFCBEAM", "IfcBeam"
     if "roof" in name_lower:
         return "IFCROOF", "IfcRoof"
+    return None
+
+
+def classify_element(geom_name: str, layer_name: str = "") -> Tuple[str, str]:
+    """Map a geometry/component name to an IFC4 entity type and constructor.
+
+    Tries the component's own name first - if a modeler bothered to name a
+    part "Wall_A", that's the most specific signal available. Most
+    real-world files never get that far (SketchUp's own default names like
+    "Component#109415" carry no semantic info), so this falls back to
+    ``layer_name`` next: many SketchUp-for-BIM workflows organize by
+    tag/layer ("Walls", "Doors") even when individual components are never
+    renamed. Only if neither matches does this fall back to a generic,
+    untyped element.
+
+    Returns:
+        Tuple of (STEP_ENTITY_TYPE, IFC_CLASS_NAME)
+    """
+    result = _classify_by_keyword(geom_name)
+    if result is not None:
+        return result
+    if layer_name:
+        result = _classify_by_keyword(layer_name)
+        if result is not None:
+            return result
     return "IFCBUILDINGELEMENTPROXY", "IfcBuildingElementProxy"
 
 
@@ -86,6 +107,7 @@ def to_ifc(
     scene: Scene,
     scale: float = METRES_TO_INCHES,
     schema: str = "IFC4",
+    classifier: Optional[Callable[[str, str], Tuple[str, str]]] = None,
 ) -> str:
     """Serialize a baked Scene into ISO-10303-21 STEP ASCII IFC4 format.
 
@@ -94,12 +116,19 @@ def to_ifc(
         scene: The baked scene returned by :meth:`SkpFile.build_scene`.
         scale: Coordinate scale factor (default: METRES_TO_INCHES).
         schema: IFC schema version (default: "IFC4").
+        classifier: Optional override for :func:`classify_element`, called
+            as ``classifier(geom_name, layer_name)`` and expected to return
+            the same ``(STEP_ENTITY_TYPE, IFC_CLASS_NAME)`` tuple - use this
+            to supply your own naming convention or metadata-driven typing
+            instead of the built-in keyword/layer heuristic.
 
     Returns:
         Formatted ASCII IFC text string.
     """
     if not isinstance(scene, Scene):
         raise TypeError("to_ifc requires a valid Scene instance")
+
+    classify = classifier or classify_element
 
     schema_str = schema.upper() if schema else "IFC4"
     now_iso = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
@@ -131,10 +160,14 @@ def to_ifc(
     lines.append(f"#{org_id}=IFCORGANIZATION($,'OpenSKP',$,$,$);")
 
     person_org_id = next_id()
-    lines.append(f"#{person_org_id}=IFCPERSONANDORGANIZATION(#{person_id},#{org_id},$);")
+    lines.append(
+        f"#{person_org_id}=IFCPERSONANDORGANIZATION(#{person_id},#{org_id},$);"
+    )
 
     app_id = next_id()
-    lines.append(f"#{app_id}=IFCAPPLICATION(#{org_id},'0.3.1','OpenSKP Exporter','OpenSKP');")
+    lines.append(
+        f"#{app_id}=IFCAPPLICATION(#{org_id},'0.3.1','OpenSKP Exporter','OpenSKP');"
+    )
 
     owner_hist_id = next_id()
     lines.append(
@@ -184,7 +217,9 @@ def to_ifc(
     )
 
     bldg_placement_id = next_id()
-    lines.append(f"#{bldg_placement_id}=IFCLOCALPLACEMENT(#{site_placement_id},#{axis_placement_id});")
+    lines.append(
+        f"#{bldg_placement_id}=IFCLOCALPLACEMENT(#{site_placement_id},#{axis_placement_id});"
+    )
 
     bldg_id = next_id()
     bldg_guid = generate_ifc_guid()
@@ -193,7 +228,9 @@ def to_ifc(
     )
 
     storey_placement_id = next_id()
-    lines.append(f"#{storey_placement_id}=IFCLOCALPLACEMENT(#{bldg_placement_id},#{axis_placement_id});")
+    lines.append(
+        f"#{storey_placement_id}=IFCLOCALPLACEMENT(#{bldg_placement_id},#{axis_placement_id});"
+    )
 
     storey_id = next_id()
     storey_guid = generate_ifc_guid()
@@ -233,7 +270,7 @@ def to_ifc(
         if meta and getattr(meta, "layer", None):
             layer_name = sanitize_name(meta.layer)
 
-        step_type, ifc_class = classify_element(geom_name)
+        step_type, ifc_class = classify(geom_name, layer_name)
 
         # 1. Coordinate Point List 3D
         pt_coords: List[str] = []
@@ -280,13 +317,17 @@ def to_ifc(
             )
 
             style_assign_id = next_id()
-            lines.append(f"#{style_assign_id}=IFCPRESENTATIONSTYLEASSIGNMENT((#{style_id}));")
+            lines.append(
+                f"#{style_assign_id}=IFCPRESENTATIONSTYLEASSIGNMENT((#{style_id}));"
+            )
             mat_style_cache[rgba_key] = style_assign_id
         else:
             style_assign_id = mat_style_cache[rgba_key]
 
         styled_item_id = next_id()
-        lines.append(f"#{styled_item_id}=IFCSTYLEDITEM(#{face_set_id},(#{style_assign_id}),$);")
+        lines.append(
+            f"#{styled_item_id}=IFCSTYLEDITEM(#{face_set_id},(#{style_assign_id}),$);"
+        )
 
         # 4. Shape Representation & Product Definition Shape
         shape_rep_id = next_id()
@@ -295,10 +336,14 @@ def to_ifc(
         )
 
         prod_shape_id = next_id()
-        lines.append(f"#{prod_shape_id}=IFCPRODUCTDEFINITIONSHAPE($,$,(#{shape_rep_id}));")
+        lines.append(
+            f"#{prod_shape_id}=IFCPRODUCTDEFINITIONSHAPE($,$,(#{shape_rep_id}));"
+        )
 
         prod_placement_id = next_id()
-        lines.append(f"#{prod_placement_id}=IFCLOCALPLACEMENT(#{storey_placement_id},#{axis_placement_id});")
+        lines.append(
+            f"#{prod_placement_id}=IFCLOCALPLACEMENT(#{storey_placement_id},#{axis_placement_id});"
+        )
 
         prod_guid = generate_ifc_guid()
         product_id = next_id()
@@ -314,7 +359,12 @@ def to_ifc(
         product_ids.append(product_id)
 
         # 5. Property Sets (if scene metadata contains dynamic properties)
-        if meta and hasattr(meta, "properties") and isinstance(meta.properties, dict) and meta.properties:
+        if (
+            meta
+            and hasattr(meta, "properties")
+            and isinstance(meta.properties, dict)
+            and meta.properties
+        ):
             prop_val_ids: List[int] = []
             for p_key, p_val in meta.properties.items():
                 clean_k = sanitize_name(str(p_key))
@@ -365,6 +415,7 @@ def export(
     output_path: Union[str, pathlib.Path],
     scale: float = METRES_TO_INCHES,
     schema: str = "IFC4",
+    classifier: Optional[Callable[[str, str], Tuple[str, str]]] = None,
 ) -> None:
     """Export a baked scene to an ISO-10303-21 STEP ASCII IFC4 file.
 
@@ -373,8 +424,10 @@ def export(
         output_path: Destination path (.ifc).
         scale: Coordinate scale factor (default: METRES_TO_INCHES).
         schema: IFC schema version (default: "IFC4").
+        classifier: Optional override for :func:`classify_element` - see
+            :func:`to_ifc` for the calling convention.
     """
     path = pathlib.Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    text = to_ifc(scene, scale=scale, schema=schema)
+    text = to_ifc(scene, scale=scale, schema=schema, classifier=classifier)
     path.write_bytes(text.encode("utf-8"))
