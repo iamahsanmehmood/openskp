@@ -34,7 +34,7 @@ dev = [
     "pytest-cov>=7.1.0",
 ]
 textures = [
-    "pillow>=9.0",
+    "pillow>=12.3.0",
 ]
 
 [project.urls]
