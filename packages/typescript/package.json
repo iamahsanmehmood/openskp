@@ -68,7 +68,7 @@
     "eslint": "10.8.1",
     "tsup": "^8.0.0",
     "typescript": "^5.3.0",
-    "typescript-eslint": "8.67.0",
+    "typescript-eslint": "8.68.0",
     "vite-node": "^6.0.0",
     "vitest": "^3.2.7"
   },
