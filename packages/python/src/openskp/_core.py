@@ -74,28 +74,83 @@ CONTAINER_TAGS = {
     '9013', '401F',
 }
 
+# Every byte value's 2-character uppercase hex form, precomputed once.
+# `data[pos:pos+2].hex().upper()` is a 2-byte slice (an allocation) plus two
+# full string passes (hex() then upper()) on the *hot* path of the TLV
+# parser - millions of times on a large real file. Two lookups plus a
+# concat produce the identical 4-char string with no slice and no second
+# pass - see openskp#244.
+_HEX_UPPER = [format(i, '02X') for i in range(256)]
+
+
+class _TlvNode:
+    """One parsed TLV record - the same (offset, tag, size, children,
+    payload) shape every caller already gets from a plain dict (and every
+    caller still spells it that way: ``node['tag']``, ``node['payload']``,
+    etc. - this class implements ``__getitem__``/``get`` so none of them
+    need to change), but as a fixed-slot object instead of a dict.
+    Constructing millions of these (one per TLV record in a large real
+    file) is measurably cheaper as slot assignments than as dict-literal
+    construction (no hashing, no hash table growth) - see openskp#244.
+
+    ``payload`` is lazy: for a leaf record, the actual byte slice - a real
+    copy, not a view - is deferred until something actually reads
+    ``node['payload']``, and cached from then on. Most real files have far
+    more leaf records than are ever inspected downstream (many tags are
+    read only for their presence/offset/size, or belong to a branch of the
+    tree the caller skips entirely), so this turns a guaranteed copy into
+    one only when it's actually needed. A container record's payload is
+    always the empty bytes ``b''`` (its content lives in ``children``
+    instead), so that case is resolved eagerly with no deferred state at
+    all - matching the original dict version's own `if not children else
+    b''` rule exactly.
+    """
+
+    __slots__ = ('offset', 'tag', 'size', 'children', '_data', '_payload_start', '_payload_end', '_payload')
+
+    def __init__(self, offset, tag, size, children, data, payload_start, payload_end):
+        self.offset = offset
+        self.tag = tag
+        self.size = size
+        self.children = children
+        if children:
+            self._payload = b''
+            self._data = None
+        else:
+            self._payload = None
+            self._data = data
+            self._payload_start = payload_start
+            self._payload_end = payload_end
+
+    @property
+    def payload(self):
+        if self._payload is None:
+            self._payload = self._data[self._payload_start:self._payload_end]
+            self._data = None  # release the whole-buffer reference once resolved
+        return self._payload
+
+    def __getitem__(self, key):
+        return getattr(self, key)
+
+    def get(self, key, default=None):
+        return getattr(self, key, default)
+
+
 def parse_tlv_recursive(data, start, end, container_tags=None, depth=0):
     if container_tags is None:
         container_tags = CONTAINER_TAGS
     pos = start
     elements = []
     while pos <= end - 6:
-        tag_bytes = data[pos:pos+2]
+        tag_hex = _HEX_UPPER[data[pos]] + _HEX_UPPER[data[pos + 1]]
         size = read_u32(data, pos+2)
         if pos + 6 + size > end:
             break
-        tag_hex = tag_bytes.hex().upper()
         children = []
         is_container = tag_hex in container_tags
         if is_container and size > 0:
             children = parse_tlv_recursive(data, pos+6, pos+6+size, container_tags, depth+1)
-        elements.append({
-            'offset': pos,
-            'tag': tag_hex,
-            'size': size,
-            'children': children,
-            'payload': data[pos+6 : pos+6+size] if not children else b''
-        })
+        elements.append(_TlvNode(pos, tag_hex, size, children, data, pos + 6, pos + 6 + size))
         pos += 6 + size
     return elements
 
@@ -109,7 +164,7 @@ def _flat_headers(data, start, end):
     headers = []
     pos = start
     while pos <= end - 6:
-        tag_hex = data[pos:pos+2].hex().upper()
+        tag_hex = _HEX_UPPER[data[pos]] + _HEX_UPPER[data[pos + 1]]
         size = read_u32(data, pos+2)
         if pos + 6 + size > end:
             break
