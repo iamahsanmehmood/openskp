@@ -176,6 +176,16 @@ def build_scene(parsed: Dict[str, Any]) -> Scene:
     mesh_index: Dict[str, MeshMetadata] = {}
     glb_primitives: List[GlbPrimitive] = []
 
+    # Instance path -> (properties, name) updates, collected in O(1) per
+    # instance and applied once after instantiation completes (see the
+    # path-walk loop below), instead of scanning the entire mesh_index per
+    # placed instance - an O(instances x meshes) substring scan that both
+    # dominated build_scene on models with many placed instances and could
+    # match the wrong meshes (a shallow instance's path is always a string
+    # prefix of every deeper descendant's path too, so "in" matched far
+    # more than intended - see openskp#240).
+    path_updates: Dict[str, Tuple[Dict[str, str], str]] = {}
+
     # Textures deduplicated by bytes: the same image routinely backs
     # several materials, and re-embedding it per material would multiply
     # the export size for nothing.
@@ -451,16 +461,27 @@ def build_scene(parsed: Dict[str, Any]) -> Scene:
             )
             child_instances_info.append(inst_info)
 
-            safe_child_path = full_path_name.replace(" / ", "__").replace(" ", "_")[:80]
-            for geom_name, existing in mesh_index.items():
-                if safe_child_path in geom_name:
-                    existing.properties = properties
-                    existing.name = inst["name"] or ""
+            path_updates[full_path_name] = (properties, inst["name"] or "")
 
         return child_instances_info
 
     identity_mat = [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1.0]
     root_children = instantiate("ROOT", identity_mat)
+
+    # Deferred mesh backfill: each mesh's own path was recorded verbatim as
+    # a path_updates key by the exact instance that placed the definition
+    # that mesh's own faces belong to (never an ancestor's), so a direct
+    # O(1) lookup per mesh is enough - no cascading from an ancestor down
+    # to its descendants' own meshes. Properties/name are per-instance
+    # (each definition's own Dynamic Component attributes and placement
+    # name), not inherited by nested sub-parts, matching how
+    # scene_hierarchy already builds each InstanceNode from that same
+    # instance's own `inst["name"]`/`properties` directly above - a mesh
+    # ending up with some ancestor's name/properties instead of its own
+    # was exactly this bug (openskp#240).
+    for existing in mesh_index.values():
+        if existing.path in path_updates:
+            existing.properties, existing.name = path_updates[existing.path]
 
     for geom_name, existing in mesh_index.items():
         if existing.path == "ROOT":

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { create, SkpWriteError, _internal, Point3 } from '../src/create';
-import { parseSkp } from '../src/index';
+import { parseSkp, buildScene } from '../src/index';
 
 /**
  * Tests for create.ts - the from-scratch legacy (v17) .skp writer, ported
@@ -729,6 +729,34 @@ describe('Nested definitions and groups', () => {
     const carDefinition = [...model.definitions.values()].find((d) => d.name === 'Car')!;
     expect(carDefinition.instances.length).toBe(1);
     expect(carDefinition.faces.length).toBe(1);
+  });
+
+  it('buildScene keeps each nested level\'s own instance name in meshIndex (openskp#240)', () => {
+    // Regression: each mesh's own name must reflect the specific instance
+    // that placed its OWN definition, not an ancestor's - matching how
+    // sceneHierarchy already builds each InstanceNode from that same
+    // instance directly. A prior bug backfilled meshIndex by a substring
+    // match on the sanitized path string; since a shallow instance's path
+    // is always a string prefix of every deeper descendant's path too,
+    // the shallowest instance's own name silently overwrote every mesh
+    // beneath it as recursion unwound.
+    const builder = create();
+    const leaf = builder.addComponentDefinition('Leaf', (def) =>
+      def.addFace([[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0]])
+    );
+    const middle = builder.addComponentDefinition('Middle', (def) => {
+      def.addFace([[0, 0, 10], [1, 0, 10], [1, 1, 10], [0, 1, 10]]);
+      def.addInstance(leaf, { name: 'LeafInstance' });
+    });
+    const outer = builder.addComponentDefinition('Outer', (def) => {
+      def.addFace([[0, 0, 20], [1, 0, 20], [1, 1, 20], [0, 1, 20]]);
+      def.addInstance(middle, { name: 'MiddleInstance' });
+    });
+    builder.addInstance(outer, { name: 'OuterInstance' });
+
+    const scene = buildScene(toBuffer(builder.toBytes()));
+    const names = Object.values(scene.meshIndex).map((m) => m.name).sort();
+    expect(names).toEqual(['LeafInstance', 'MiddleInstance', 'OuterInstance']);
   });
 });
 

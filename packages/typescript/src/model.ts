@@ -693,6 +693,16 @@ export function buildSceneFromParsed(
   const meshIndex: Record<string, MeshMetadata> = {};
   const glbPrimitives: any[] = [];
 
+  // Instance path -> (properties, name) updates, recorded in O(1) per
+  // instance and applied once after instantiation completes (see the
+  // lookup pass below), instead of scanning the entire meshIndex per
+  // placed instance - an O(instances x meshes) substring scan that both
+  // dominated build_scene on models with many placed instances and could
+  // match the wrong meshes (a shallow instance's path is always a string
+  // prefix of every deeper descendant's path too, so `includes()` matched
+  // far more than intended - see openskp#240).
+  const pathUpdates = new Map<string, { properties: Record<string, string>; name: string }>();
+
   const getLayerColor = (name: string) => {
     const c = layerColors.get(name) || [136, 136, 136];
     return { r: c[0], g: c[1], b: c[2] };
@@ -1008,18 +1018,7 @@ export function buildSceneFromParsed(
       };
       childInstancesInfo.push(instInfo);
 
-      let safeChildPath = fullPathName.replace(/ \/ /g, '__').replace(/ /g, '_');
-      if (safeChildPath.length > 80) safeChildPath = safeChildPath.slice(0, 80);
-
-      for (const geomName of Object.keys(meshIndex)) {
-        if (geomName.includes(safeChildPath)) {
-          const existing = meshIndex[geomName];
-          if (existing) {
-            existing.properties = properties;
-            existing.name = inst.name || '';
-          }
-        }
-      }
+      pathUpdates.set(fullPathName, { properties, name: inst.name || '' });
     }
 
     return childInstancesInfo;
@@ -1027,6 +1026,23 @@ export function buildSceneFromParsed(
 
   const identityMat = [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1.0];
   const rootChildren = instantiate('ROOT', identityMat);
+
+  // Deferred mesh backfill: each mesh's own path was recorded verbatim as
+  // a pathUpdates key by the exact instance that placed the definition
+  // that mesh's own faces belong to (never an ancestor's), so a direct
+  // O(1) lookup per mesh is enough - no cascading from an ancestor down
+  // to its descendants' own meshes. Properties/name are per-instance,
+  // not inherited by nested sub-parts, matching how sceneHierarchy
+  // already builds each InstanceNode from that same instance's own
+  // `inst.name`/`properties` directly above.
+  for (const geomName of Object.keys(meshIndex)) {
+    const existing = meshIndex[geomName];
+    const update = existing ? pathUpdates.get(existing.path) : undefined;
+    if (existing && update) {
+      existing.properties = update.properties;
+      existing.name = update.name;
+    }
+  }
 
   // Fill in missing root meshes
   for (const geomName of Object.keys(meshIndex)) {

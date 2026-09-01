@@ -165,6 +165,16 @@ class SceneBuilder {
     final meshIndex = <String, MeshMetadata>{};
     final glbPrimitives = <GlbPrimitive>[];
 
+    // Instance path -> (properties, name) updates, recorded in O(1) per
+    // instance and applied once after instantiation completes (see the
+    // lookup pass below), instead of scanning the entire meshIndex per
+    // placed instance - an O(instances x meshes) substring scan that both
+    // dominated build_scene on models with many placed instances and
+    // could match the wrong meshes (a shallow instance's path is always a
+    // string prefix of every deeper descendant's path too, so `contains`
+    // matched far more than intended - see openskp#240).
+    final pathUpdates = <String, (Map<String, String>, String)>{};
+
     // Textures deduplicated by bytes: the same image routinely backs
     // several materials, and re-embedding it per material would multiply
     // the export size for nothing.
@@ -462,14 +472,7 @@ class SceneBuilder {
         );
         childInstancesInfo.add(instInfo);
 
-        var safeChildPath = fullPathName.replaceAll(' / ', '__').replaceAll(' ', '_');
-        if (safeChildPath.length > 80) safeChildPath = safeChildPath.substring(0, 80);
-        for (final entry in meshIndex.entries) {
-          if (entry.key.contains(safeChildPath)) {
-            entry.value.properties = properties;
-            entry.value.name = inst.name ?? '';
-          }
-        }
+        pathUpdates[fullPathName] = (properties, inst.name ?? '');
       }
 
       return childInstancesInfo;
@@ -477,6 +480,22 @@ class SceneBuilder {
 
     final identityMat = <double>[1.0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1.0];
     final rootChildren = instantiateBuilder(parsed.root.builder, 'ROOT_MODEL', null, identityMat, 'Layer0', 'ROOT', null);
+
+    // Deferred mesh backfill: each mesh's own path was recorded verbatim
+    // as a pathUpdates key by the exact instance that placed the
+    // definition that mesh's own faces belong to (never an ancestor's),
+    // so a direct O(1) lookup per mesh is enough - no cascading from an
+    // ancestor down to its descendants' own meshes. Properties/name are
+    // per-instance, not inherited by nested sub-parts, matching how the
+    // instance tree above already builds each InstanceNode from that
+    // same instance's own `inst.name`/`properties` directly.
+    for (final entry in meshIndex.entries) {
+      final update = pathUpdates[entry.value.path];
+      if (update != null) {
+        entry.value.properties = update.$1;
+        entry.value.name = update.$2;
+      }
+    }
 
     for (final entry in meshIndex.entries) {
       final existing = entry.value;

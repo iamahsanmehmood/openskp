@@ -2298,6 +2298,40 @@ class TestBuildSceneRecursionGuard:
         assert len(scene.scene_hierarchy.children) == 2
 
 
+class TestBuildSceneMeshIndexPerInstanceMetadata:
+    """Regression for openskp#240: each mesh's own ``name`` must reflect
+    the specific instance that placed its OWN definition, not an
+    ancestor's - matching how ``scene_hierarchy`` already builds each
+    ``InstanceNode`` directly from that same instance. A prior bug
+    backfilled ``mesh_index`` by a substring match on the sanitized path
+    string; since a shallow instance's path is always a string prefix of
+    every deeper descendant's path too, the shallowest instance's own
+    name silently overwrote every mesh beneath it as recursion unwound.
+    """
+
+    def test_each_nested_level_keeps_its_own_instance_name(self, tmp_path) -> None:
+        from openskp import SkpFile
+        from openskp.create import create
+
+        builder = create()
+        with builder.add_component_definition("Leaf") as leaf:
+            leaf.add_face([(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0)])
+        with builder.add_component_definition("Middle") as middle:
+            middle.add_face([(0, 0, 10), (1, 0, 10), (1, 1, 10), (0, 1, 10)])
+            middle.add_instance(leaf, name="LeafInstance")
+        with builder.add_component_definition("Outer") as outer:
+            outer.add_face([(0, 0, 20), (1, 0, 20), (1, 1, 20), (0, 1, 20)])
+            outer.add_instance(middle, name="MiddleInstance")
+        builder.add_instance(outer, name="OuterInstance")
+
+        out = tmp_path / "nested_metadata.skp"
+        out.write_bytes(builder.to_bytes())
+        scene = SkpFile.open(str(out)).build_scene()
+
+        names = sorted(m.name for m in scene.mesh_index.values())
+        assert names == ["LeafInstance", "MiddleInstance", "OuterInstance"]
+
+
 class TestGlbExport:
     """``export.glb.export()`` bakes via ``scene.build_scene()`` (the same
     step ``SkpFile.build_scene()`` exposes directly) and hands the

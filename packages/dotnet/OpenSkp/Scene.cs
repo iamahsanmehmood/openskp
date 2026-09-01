@@ -473,30 +473,26 @@ namespace OpenSkp
             var identityMat = new List<double> { 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1.0 };
             var rootChildren = InstantiateRoot(parsed.Root.Builder, identityMat);
 
-            // Deferred mesh back-fill: for each mesh, walk its Path from the
-            // leaf up to the root and apply the shallowest recorded ancestor
-            // update. Equivalent to the old scan's final state (the outermost
-            // ancestor wrote last and won), O(meshes x path_depth) instead of
-            // O(instances x meshes). This also fixes a latent over-match in the
-            // old substring test: "ROOT / A_B" would previously match a mesh
-            // whose GeomName merely contained the substring "A_B" (e.g. inside
-            // "A_BC"), wrongly propagating the update to non-descendants.
+            // Deferred mesh back-fill: each mesh's own Path was recorded
+            // verbatim as a pathUpdates key by the exact instance that placed
+            // the definition that mesh's own faces belong to (never an
+            // ancestor's), so a direct O(1) lookup per mesh is enough - no
+            // cascading from an ancestor down to its descendants' own meshes.
+            // Properties/Name are per-instance, not inherited by nested
+            // sub-parts, matching how the instance tree above already builds
+            // each InstanceNode from that same instance's own Name/properties
+            // directly. An earlier version of this loop walked from each
+            // mesh's Path up toward the root and let the outermost ancestor
+            // with a recorded update win - which, for a genuinely nested
+            // structure, meant every mesh under an assembly ended up with
+            // that assembly's own name instead of its own (openskp#240).
             foreach (var meshKv2 in meshIndex)
             {
                 var mesh = meshKv2.Value;
-                var meshPath = mesh.Path ?? "";
-                (Dictionary<string, string> Props, string Name)? found = null;
-                string p = meshPath;
-                while (p.Length > 0)
+                if (pathUpdates.TryGetValue(mesh.Path ?? "", out var u))
                 {
-                    if (pathUpdates.TryGetValue(p, out var u)) found = u;
-                    int sep = p.LastIndexOf(" / ");
-                    p = sep >= 0 ? p.Substring(0, sep) : "";
-                }
-                if (found.HasValue)
-                {
-                    mesh.Properties = found.Value.Props;
-                    mesh.Name = found.Value.Name;
+                    mesh.Properties = u.Props;
+                    mesh.Name = u.Name;
                 }
             }
 

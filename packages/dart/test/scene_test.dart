@@ -140,6 +140,41 @@ void main() {
     }
   });
 
+  test('each nested level keeps its own instance name in meshIndex (openskp#240)', () {
+    // Regression: each mesh's own name must reflect the specific instance
+    // that placed its OWN definition, not an ancestor's - matching how
+    // sceneHierarchy already builds each InstanceNode from that same
+    // instance directly. A prior bug backfilled meshIndex by a substring
+    // match on the sanitized path string; since a shallow instance's path
+    // is always a string prefix of every deeper descendant's path too,
+    // the shallowest instance's own name silently overwrote every mesh
+    // beneath it as recursion unwound.
+    final builder = create();
+    final leaf = builder.addComponentDefinition('Leaf', (def) {
+      def.addFace([(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (1.0, 1.0, 0.0), (0.0, 1.0, 0.0)]);
+    });
+    final middle = builder.addComponentDefinition('Middle', (def) {
+      def.addFace([(0.0, 0.0, 10.0), (1.0, 0.0, 10.0), (1.0, 1.0, 10.0), (0.0, 1.0, 10.0)]);
+      def.addInstance(leaf, name: 'LeafInstance');
+    });
+    final outer = builder.addComponentDefinition('Outer', (def) {
+      def.addFace([(0.0, 0.0, 20.0), (1.0, 0.0, 20.0), (1.0, 1.0, 20.0), (0.0, 1.0, 20.0)]);
+      def.addInstance(middle, name: 'MiddleInstance');
+    });
+    builder.addInstance(outer, name: 'OuterInstance');
+    final bytes = builder.toBytes();
+
+    final path = '${Directory.systemTemp.path}/openskp_dart_nested_metadata_test.skp';
+    File(path).writeAsBytesSync(bytes);
+    try {
+      final scene = SkpFile.open(path).buildScene();
+      final names = scene.meshIndex.values.map((m) => m.name).toList()..sort();
+      expect(names, ['LeafInstance', 'MiddleInstance', 'OuterInstance']);
+    } finally {
+      File(path).deleteSync();
+    }
+  });
+
   test('textured materials get MASK or BLEND, never left OPAQUE', () {
     // capilla_quiroz_v17.skp has four textured materials: two ordinary
     // opaque ones (MASK - a safe no-op, nothing in their JPEGs to cut out)
