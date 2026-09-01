@@ -17,8 +17,20 @@ namespace OpenSkp.Tests
     /// that single loop took tens of minutes (measured: 323,856 instances x
     /// 321,683 meshes -> ~73 minutes in BuildScene, ~98% of the total
     /// conversion time). The replacement records one dictionary entry per
-    /// instance during instantiation and applies updates once afterwards by
-    /// walking each mesh's Path to its shallowest recorded ancestor.
+    /// instance during instantiation and applies updates once afterwards.
+    ///
+    /// An earlier version of that deferred pass walked each mesh's Path up
+    /// toward the root and applied the shallowest ancestor with a recorded
+    /// update ("outermost wins"), deliberately matching what the old O(n^2)
+    /// scan produced. That matched the old scan, but the old scan itself
+    /// was wrong: for a genuinely nested structure, every mesh under an
+    /// assembly ended up with that assembly's own name/properties instead
+    /// of its own (openskp#240 - the same bug, independently found via
+    /// Python's port). Each mesh's own Path is always recorded verbatim in
+    /// pathUpdates by the exact instance that placed the definition its own
+    /// faces belong to, so a direct O(1) lookup - no walking, no cascading
+    /// to descendants - is both correct and simpler than the walk it
+    /// replaced.
     ///
     /// These tests build synthetic RawParsed models directly (internals are
     /// visible to the test assembly) so the semantics and the linear-time
@@ -60,7 +72,7 @@ namespace OpenSkp.Tests
         }
 
         [Fact]
-        public void MeshBackfill_OutermostAncestorWins()
+        public void MeshBackfill_EachInstanceKeepsItsOwnNameAndProperties()
         {
             // ROOT (one direct face)
             //  |- A (def1: one face + child instance C -> def3, dynamic props)
@@ -99,17 +111,18 @@ namespace OpenSkp.Tests
             Assert.Equal("ROOT", rootMesh.Name);
             Assert.Empty(rootMesh.Properties);
 
-            // Mesh directly under instance A: gets A's properties/name.
+            // Mesh directly under instance A: gets A's own properties/name.
             var meshA = Assert.Single(scene.MeshIndex.Values, m => m.Path == "ROOT / A");
             Assert.Equal("A", meshA.Name);
             Assert.Equal("10", meshA.Properties["width"]);
 
-            // Mesh under A's child C: the OUTERMOST ancestor (A) wins, exactly
-            // like the old scan (A wrote last, after C).
+            // Mesh under A's child C: gets C's OWN properties/name, not A's -
+            // properties/name are per-instance, never inherited from an
+            // ancestor (openskp#240).
             var meshAC = Assert.Single(scene.MeshIndex.Values, m => m.Path == "ROOT / A / C");
-            Assert.Equal("A", meshAC.Name);
-            Assert.Equal("10", meshAC.Properties["width"]);
-            Assert.False(meshAC.Properties.ContainsKey("height"));
+            Assert.Equal("C", meshAC.Name);
+            Assert.Equal("5", meshAC.Properties["height"]);
+            Assert.False(meshAC.Properties.ContainsKey("width"));
 
             // Mesh under B: B has no dynamic props; still records (empty, "B").
             var meshB = Assert.Single(scene.MeshIndex.Values, m => m.Path == "ROOT / B");

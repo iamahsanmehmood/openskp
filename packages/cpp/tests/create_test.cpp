@@ -6,6 +6,7 @@
 // and assert on the resulting SkpModel - the same "read your own output back with the
 // already-trusted reader" validation strategy this project already uses on the read side.
 
+#include <algorithm>
 #include <cmath>
 #include <fstream>
 #include <gtest/gtest.h>
@@ -449,6 +450,42 @@ TEST(Create, NestedDefinitionInstanceAndNestedGroupInstance) {
   ASSERT_NE(car_def, nullptr);
   EXPECT_EQ(car_def->faces.size(), 1u);
   EXPECT_EQ(car_def->instances.size(), 2u);  // the wheel instance + the engine group instance
+}
+
+TEST(Create, EachNestedLevelKeepsItsOwnInstanceNameInMeshIndex) {
+  // Cross-language parity check for openskp#240: Python, TypeScript, .NET,
+  // and Dart all had a bug where a shallow instance's own name overwrote
+  // every mesh beneath it in scene.mesh_index, since a shallow instance's
+  // path is always a string prefix of every deeper descendant's path too.
+  // C++ never had that bug - each mesh's name is set once, correctly, at
+  // creation time from its own path, with no later backfill/cascading
+  // pass at all - but this test locks that in so it can't regress toward
+  // the same bug the other four languages had.
+  auto builder = create();
+  auto& leaf = builder->add_component_definition("Leaf");
+  leaf.add_face({{0, 0, 0}, {1, 0, 0}, {1, 1, 0}, {0, 1, 0}});
+  leaf.close();
+  auto& middle = builder->add_component_definition("Middle");
+  middle.add_face({{0, 0, 10}, {1, 0, 10}, {1, 1, 10}, {0, 1, 10}});
+  InstanceOptions leaf_inst;
+  leaf_inst.name = "LeafInstance";
+  middle.add_instance(leaf, leaf_inst);
+  middle.close();
+  auto& outer = builder->add_component_definition("Outer");
+  outer.add_face({{0, 0, 20}, {1, 0, 20}, {1, 1, 20}, {0, 1, 20}});
+  InstanceOptions middle_inst;
+  middle_inst.name = "MiddleInstance";
+  outer.add_instance(middle, middle_inst);
+  outer.close();
+  InstanceOptions outer_inst;
+  outer_inst.name = "OuterInstance";
+  builder->add_instance(outer, outer_inst);
+
+  Scene scene = SkpFile::from_buffer(builder->to_bytes()).build_scene();
+  std::vector<std::string> names;
+  for (const auto& [geom_name, meta] : scene.mesh_index) names.push_back(meta.name);
+  std::sort(names.begin(), names.end());
+  EXPECT_EQ(names, (std::vector<std::string>{"LeafInstance", "MiddleInstance", "OuterInstance"}));
 }
 
 TEST(Create, DefinitionCannotNestAnInstanceOfItself) {

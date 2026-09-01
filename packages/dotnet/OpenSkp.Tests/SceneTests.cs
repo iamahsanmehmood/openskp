@@ -101,6 +101,46 @@ namespace OpenSkp.Tests
                 ((System.Collections.Generic.IDictionary<string, object>)mat)["pbrMetallicRoughness"];
 
         [Fact]
+        public void EachNestedLevelKeepsItsOwnInstanceNameInMeshIndex()
+        {
+            // Regression for openskp#240: each mesh's own name must reflect
+            // the specific instance that placed its OWN definition, not an
+            // ancestor's - matching how the instance tree already builds
+            // each InstanceNode from that same instance directly. A prior
+            // bug backfilled MeshIndex by a substring/path-prefix-walk
+            // match; since a shallow instance's path is always a prefix of
+            // every deeper descendant's path too, the shallowest instance's
+            // own name silently overwrote every mesh beneath it.
+            var builder = SkpCreate.NewFile();
+            var leaf = builder.AddComponentDefinition("Leaf");
+            leaf.AddFace(new (double, double, double)[] { (0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0) });
+            leaf.Dispose();
+            var middle = builder.AddComponentDefinition("Middle");
+            middle.AddFace(new (double, double, double)[] { (0, 0, 10), (1, 0, 10), (1, 1, 10), (0, 1, 10) });
+            middle.AddInstance(leaf, name: "LeafInstance");
+            middle.Dispose();
+            var outer = builder.AddComponentDefinition("Outer");
+            outer.AddFace(new (double, double, double)[] { (0, 0, 20), (1, 0, 20), (1, 1, 20), (0, 1, 20) });
+            outer.AddInstance(middle, name: "MiddleInstance");
+            outer.Dispose();
+            builder.AddInstance(outer, name: "OuterInstance");
+            byte[] bytes = builder.ToBytes();
+
+            string path = Path.Combine(Path.GetTempPath(), $"openskp_dotnet_nested_metadata_{Guid.NewGuid():N}.skp");
+            File.WriteAllBytes(path, bytes);
+            try
+            {
+                var scene = SkpFile.BuildScene(path);
+                var names = scene.MeshIndex.Values.Select(m => m.Name).OrderBy(n => n).ToList();
+                Assert.Equal(new[] { "LeafInstance", "MiddleInstance", "OuterInstance" }, names);
+            }
+            finally
+            {
+                File.Delete(path);
+            }
+        }
+
+        [Fact]
         public void TranslucentMaterialGetsBlendAlpha()
         {
             // Round-tripped through the real writer and reader rather than
