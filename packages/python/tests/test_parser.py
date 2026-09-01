@@ -160,6 +160,71 @@ class TestCoreTlvBoundary:
         assert headers == [("0300", 0, 0)]
 
 
+class TestTlvNodePerformance:
+    """Regression coverage for openskp#244: ``_core.parse_tlv_recursive``
+    dominated CPU time on large real files (98% of a 305MB/1644-material
+    file's parse time), driven by a per-record dict literal plus a
+    byte-slice + double string pass (``.hex().upper()``) for every single
+    TLV record - potentially millions on a large file.
+
+    ``_TlvNode`` (a ``__slots__`` object, constructed via direct byte
+    indexing into a precomputed hex table instead of a slice) replaces the
+    dict, with ``payload`` lazily sliced only when actually read. These
+    tests pin the contract every one of the ~50 existing ``node['key']``/
+    ``node.get('key')`` call sites in _core.py depends on, plus the lazy/
+    cached payload behavior specifically.
+    """
+
+    @staticmethod
+    def _tlv(tag_hex: str, payload: bytes) -> bytes:
+        return bytes.fromhex(tag_hex) + struct.pack('<I', len(payload)) + payload
+
+    def test_node_supports_dict_style_bracket_access(self) -> None:
+        from openskp import _core
+
+        data = self._tlv("0100", b'\xAA\xBB')
+        node = _core.parse_tlv_recursive(data, 0, len(data))[0]
+        assert node['offset'] == 0
+        assert node['tag'] == "0100"
+        assert node['size'] == 2
+        assert node['children'] == []
+        assert node['payload'] == b'\xAA\xBB'
+
+    def test_node_supports_dict_style_get_with_default(self) -> None:
+        from openskp import _core
+
+        data = self._tlv("0100", b'\xAA')
+        node = _core.parse_tlv_recursive(data, 0, len(data))[0]
+        assert node.get('tag') == "0100"
+        assert node.get('nonexistent') is None
+        assert node.get('nonexistent', 'fallback') == 'fallback'
+
+    def test_container_payload_is_empty_without_touching_the_buffer(self) -> None:
+        # A container's payload is always b'' - its content lives in
+        # children instead - resolved eagerly with no deferred state, same
+        # as the original dict version's `if not children else b''`.
+        from openskp import _core
+
+        inner = self._tlv("0300", b'\x01')
+        data = self._tlv("7C15", inner)  # 7C15 is a real container tag
+        node = _core.parse_tlv_recursive(data, 0, len(data))[0]
+        assert len(node['children']) == 1
+        assert node['payload'] == b''
+
+    def test_leaf_payload_is_lazy_but_correct_and_cached(self) -> None:
+        # Read twice: the second read must return the identical (cached)
+        # bytes, not re-slice - and both reads must match what the eager
+        # dict version always produced.
+        from openskp import _core
+
+        data = self._tlv("0100", b'\xDE\xAD\xBE\xEF')
+        node = _core.parse_tlv_recursive(data, 0, len(data))[0]
+        first = node['payload']
+        second = node['payload']
+        assert first == b'\xDE\xAD\xBE\xEF'
+        assert first is second
+
+
 # ── Data model tests ─────────────────────────────────────────────────────
 
 
