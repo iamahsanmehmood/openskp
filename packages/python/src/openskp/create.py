@@ -31,11 +31,15 @@ are involved, and how.
   offset, independently per side) instead of the default planar
   projection, on a face of any orientation - see `write_face`'s
   ``front_uv``/``back_uv`` parameters. Component definitions, instances,
-  and faces can also carry custom key/value metadata (``str``/``int``/
-  ``float`` values) - the same mechanism SketchUp's own "dynamic
-  component" attributes use - via each of their ``attributes`` parameters;
-  not yet supported on groups (ground truth shows a group's own
-  attribute pointer is always null, unlike a component instance's).
+  faces, and groups can also carry custom key/value metadata (any of
+  ``str``/``int``/``float``/``bool``/``None``/:class:`Point3d`/
+  :class:`Vector3d`/:class:`Length`/:class:`Timestamp`, or a nestable
+  list of these) - the same mechanism SketchUp's own "dynamic component"
+  attributes use - via each of their ``attributes``/``attribute_dicts``
+  parameters. A group only pays for a real attribute container when it
+  actually has one (ground truth: an un-attributed group's own attribute
+  pointer is null, same as an un-attributed face's), unlike a component
+  instance, which always carries a real (if often empty) one.
   Circular faces and partial (open) arcs - real, editable-by-radius
   SketchUp arc/circle entities, not disconnected straight edges that
   merely trace that shape - are supported via :meth:`SkpBuilder.
@@ -1277,16 +1281,16 @@ class _ArchiveWriter:
         ``attribute_dicts``, if given, is a sequence of ``(dict_name,
         entries)`` pairs - custom key/value metadata attached to this
         instance (the same mechanism SketchUp's own "dynamic component"
-        attributes use). Not available on `write_group` - ground truth
-        shows a group's attribute pointer is always null, unlike a
-        component instance's real (if often empty) container.
+        attributes use). `write_group` supports the same parameter, but
+        conditionally (a container only when actually given) rather than
+        unconditionally like this method - see its own docstring.
 
         ``hidden`` hides the instance itself (SketchUp's "Hide" on this
         specific placement) - the same drawbase bit `write_face` already
         uses for a face, ground truth confirms it means the same thing
         here.
         """
-        # ground truth: instances also carry a real (empty) attr container, unlike CGroup
+        # ground truth: an instance always carries a real (possibly empty) attr container
         self._write_instance_like(
             "CComponentInstance", _INSTANCE_SCHEMA, True,
             definition_slot, name, translation, matrix3x3, instance_material, instance_layer,
@@ -1302,6 +1306,7 @@ class _ArchiveWriter:
         matrix3x3: Optional[Tuple[float, float, float, float, float, float, float, float, float]] = None,
         group_material: int = 0,
         group_layer: int = 0,
+        attribute_dicts: Sequence[Tuple[str, Dict[str, object]]] = (),
         hidden: bool = False,
     ) -> int:
         """Write one ``CGroup`` placing a copy of ``definition_slot`` and
@@ -1311,14 +1316,22 @@ class _ArchiveWriter:
         A group is structurally almost identical to a component instance
         (same preamble/drawbase/def-backref/transform/name/guid shape,
         confirmed via SDK ground truth) - the two real differences are its
-        class name/schema (CGroup, schema 1) and that - unlike
-        CComponentInstance - it uses a plain null attribute pointer rather
-        than the real (empty) CAttributeContainer instances need.
+        class name/schema (CGroup, schema 1) and its attribute pointer:
+        unlike CComponentInstance (which always carries a real, if often
+        empty, ``CAttributeContainer`` regardless of whether attributes
+        are given), a group only gets one when ``attribute_dicts`` is
+        actually given - matching `write_face`'s conditional pattern
+        instead. A real production Group WITH attributes (SketchUp 2020
+        export, ground truth) carries a genuine ``CAttributeContainer`` at
+        this exact schema; a plain, never-attributed Group correctly gets
+        a null pointer either way, so this doesn't change that case at
+        all - only makes attributes on a group possible for the first
+        time (openskp#261).
         """
         self._write_instance_like(
-            "CGroup", _GROUP_SCHEMA, False,
+            "CGroup", _GROUP_SCHEMA, bool(attribute_dicts),
             definition_slot, name, translation, matrix3x3, group_material, group_layer,
-            hidden=hidden,
+            attribute_dicts=attribute_dicts, hidden=hidden,
         )
         return 1
 
@@ -1801,7 +1814,7 @@ class ComponentDefinitionBuilder:
 
     def __init__(
         self, skp: "SkpBuilder", slot: int, name: str, count_patch_pos: int,
-        group_placement: Optional[Tuple[Tuple[float, float, float], Optional[Tuple[float, ...]], int, int, bool]] = None,
+        group_placement: Optional[Tuple[Tuple[float, float, float], Optional[Tuple[float, ...]], int, int, Sequence[Tuple[str, Dict[str, object]]], bool]] = None,
     ):
         self._skp = skp
         self.slot = slot
@@ -2029,6 +2042,9 @@ class ComponentDefinitionBuilder:
         rotation: Optional[Tuple[Tuple[float, float, float], float]] = None,
         material: Optional[int] = None,
         layer: Optional[int] = None,
+        attributes: Optional[Dict[str, object]] = None,
+        attribute_dict_name: str = "attributes",
+        attribute_dicts: Sequence[Tuple[str, Dict[str, object]]] = (),
         hidden: bool = False,
     ) -> None:
         """Place another, already-closed component definition inside this
@@ -2055,6 +2071,11 @@ class ComponentDefinitionBuilder:
         alternative to hand-deriving ``matrix3x3`` for the common case of
         a pure rotation; pass at most one of the two. ``hidden`` hides
         this specific placement.
+
+        ``attributes``/``attribute_dict_name``/``attribute_dicts`` are the
+        same as `add_instance` - real production groups (SketchUp 2021+)
+        routinely carry them; a group with none given still writes the
+        same null attribute pointer as before (openskp#261).
         """
         self._check_writable("groups")
         self._skp._check_material_handle(material, "material")
@@ -2067,8 +2088,10 @@ class ComponentDefinitionBuilder:
         if definition is self:
             raise SkpWriteError(f"component definition {self.name!r} cannot nest a group instance of itself")
         matrix3x3 = _resolve_matrix3x3(matrix3x3, rotation)
+        resolved_attribute_dicts = _resolve_attribute_dicts(attributes, attribute_dict_name, attribute_dicts)
         self._new_entity_count += self._skp._definition_writer.write_group(
-            definition.slot, name or definition.name, translation, matrix3x3, material or 0, layer or 0, hidden,
+            definition.slot, name or definition.name, translation, matrix3x3, material or 0, layer or 0,
+            attribute_dicts=resolved_attribute_dicts, hidden=hidden,
         )
 
     def __enter__(self) -> "ComponentDefinitionBuilder":
@@ -2418,7 +2441,7 @@ class SkpBuilder:
 
     def _start_definition(
         self, name: str, caller: str,
-        group_placement: Optional[Tuple[Tuple[float, float, float], Optional[Tuple[float, ...]], int, int, bool]] = None,
+        group_placement: Optional[Tuple[Tuple[float, float, float], Optional[Tuple[float, ...]], int, int, Sequence[Tuple[str, Dict[str, object]]], bool]] = None,
         attribute_dicts: Sequence[Tuple[str, Dict[str, object]]] = (),
     ) -> "ComponentDefinitionBuilder":
         if self._geometry_writer is not None:
@@ -2484,6 +2507,9 @@ class SkpBuilder:
         rotation: Optional[Tuple[Tuple[float, float, float], float]] = None,
         material: Optional[int] = None,
         layer: Optional[int] = None,
+        attributes: Optional[Dict[str, object]] = None,
+        attribute_dict_name: str = "attributes",
+        attribute_dicts: Sequence[Tuple[str, Dict[str, object]]] = (),
         hidden: bool = False,
     ) -> "ComponentDefinitionBuilder":
         """Start a new group. Use the returned object as a context manager,
@@ -2504,13 +2530,19 @@ class SkpBuilder:
         alternative to hand-deriving ``matrix3x3`` for the common case of
         a pure rotation; pass at most one of the two. ``hidden`` hides
         this group once placed.
+
+        ``attributes``/``attribute_dict_name``/``attribute_dicts`` are the
+        same as `add_instance` - real production groups (SketchUp 2021+)
+        routinely carry them; a group with none given still writes the
+        same null attribute pointer as before (openskp#261).
         """
         self._check_material_handle(material, "material")
         self._check_layer_handle(layer)
         matrix3x3 = _resolve_matrix3x3(matrix3x3, rotation)
+        resolved_attribute_dicts = _resolve_attribute_dicts(attributes, attribute_dict_name, attribute_dicts)
         return self._start_definition(
             name or "Group", "add_group",
-            group_placement=(translation, matrix3x3, material or 0, layer or 0, hidden),
+            group_placement=(translation, matrix3x3, material or 0, layer or 0, resolved_attribute_dicts, hidden),
         )
 
     def _definition_shift(self) -> int:
@@ -2701,9 +2733,10 @@ class SkpBuilder:
         # created - deferred until now so closing one group doesn't lock in
         # root-level slot numbering before a later add_group/
         # add_component_definition call has had a chance to run.
-        for comp, (translation, matrix3x3, mat, layer, hidden) in self._pending_groups:
+        for comp, (translation, matrix3x3, mat, layer, attribute_dicts, hidden) in self._pending_groups:
             self._new_entity_count += self._geometry_writer.write_group(
-                comp.slot, comp.name, translation, matrix3x3, mat, layer, hidden,
+                comp.slot, comp.name, translation, matrix3x3, mat, layer,
+                attribute_dicts=attribute_dicts, hidden=hidden,
             )
             self._face_count += 1
         self._pending_groups = []
