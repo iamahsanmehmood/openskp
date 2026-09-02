@@ -1176,10 +1176,9 @@ class TestTextures:
         # applied_height wrote a corrupted internal sentinel byte pattern
         # (~1.29e-231) instead of a real number - confirmed via real
         # SketchUp screenshots to render as a streaky, vertically-smeared
-        # texture. add_texture_material's applied WIDTH is unconditionally
-        # 1.0 (a deliberate ground-truth value); height should match it by
-        # default now, not silently corrupt every caller who doesn't know
-        # to pass applied_height=1.0 explicitly.
+        # texture. add_texture_material's applied width and height both
+        # default to 1.0 now (each overridable), not silently corrupt every
+        # caller who doesn't know to pass applied_height=1.0 explicitly.
         png_path = tmp_path / "tex.png"
         png_path.write_bytes(_make_test_png(size=4, rgb=(200, 50, 50)))
 
@@ -1205,6 +1204,25 @@ class TestTextures:
         ar, root, layers, materials = legacy._walk(data)
         mat_by_slot = {s: v for s, v in materials}
         assert mat_by_slot[tex]["tex_h"] == 48.0
+
+    def test_texture_material_applied_size_fully_overridable(self, tmp_path):
+        # Real SketchUp writes the material's own tile size in BOTH axes (a
+        # file authored in SketchUp Web carries 8.0 x 16.0 for a brick); a
+        # texture applied without positioning carries no per-face UV record,
+        # so this pair IS its mapping.
+        png_path = tmp_path / "tex.png"
+        png_path.write_bytes(_make_test_png(size=4, rgb=(200, 50, 50)))
+
+        builder = create()
+        tex = builder.add_texture_material(
+            "Brick", str(png_path), applied_width=8.0, applied_height=16.0)
+        builder.add_face(SQUARE, material=tex)
+        data = builder.to_bytes()
+
+        ar, root, layers, materials = legacy._walk(data)
+        mat_by_slot = {s: v for s, v in materials}
+        assert mat_by_slot[tex]["tex_w"] == 8.0
+        assert mat_by_slot[tex]["tex_h"] == 16.0
 
     def test_jpeg_texture_material_self_parses(self, tmp_path):
         jpg_path = tmp_path / "tex.jpg"
@@ -3698,3 +3716,40 @@ class TestRealSketchUpOracle:
             dll.SUModelRelease(ctypes.byref(model))
         finally:
             dll.SUTerminate()
+
+
+class TestMaterialOpacity:
+    def test_solid_material_carries_opacity(self):
+        builder = create()
+        glass = builder.add_material("Glass", (200, 220, 255), opacity=0.35)
+        builder.add_face(SQUARE, material=glass)
+        data = builder.to_bytes()
+
+        ar, root, layers, materials = legacy._walk(data)
+        mat = {s: v for s, v in materials}[glass]
+        # Stored as TRANSPARENCY gated by use_opacity - the exact solid-tail
+        # shape legacy.py documents (and VFF's useTrans semantics).
+        assert mat["use_opacity"] == 1
+        assert mat["opacity"] == pytest.approx(0.65)
+
+    def test_omitted_opacity_stays_ungated(self):
+        builder = create()
+        red = builder.add_material("Red", (255, 0, 0))
+        builder.add_face(SQUARE, material=red)
+        data = builder.to_bytes()
+
+        mat = {s: v for s, v in legacy._walk(data)[3]}[red]
+        assert mat["use_opacity"] == 0
+
+    def test_texture_material_carries_opacity(self, tmp_path):
+        png_path = tmp_path / "tex.png"
+        png_path.write_bytes(_make_test_png(size=4, rgb=(200, 50, 50)))
+
+        builder = create()
+        tex = builder.add_texture_material("Voile", str(png_path), opacity=0.5)
+        builder.add_face(SQUARE, material=tex)
+        data = builder.to_bytes()
+
+        mat = {s: v for s, v in legacy._walk(data)[3]}[tex]
+        assert mat["use_opacity"] == 1
+        assert mat["opacity"] == pytest.approx(0.5)
