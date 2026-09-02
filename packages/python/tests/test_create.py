@@ -700,6 +700,87 @@ class TestGroups:
         ar, root, layers, materials = legacy._walk(data)
         assert root[0][2]["name"] == "Group"
 
+    # openskp#261: a group WITH attributes carries a real, non-null
+    # CAttributeContainer at the same schema (1) - verified against a
+    # real SketchUp 2020-legacy-format export of an attributed group
+    # (see CHECKLIST.md). A group with none given still writes a null
+    # pointer, same as before (test_basic_group_places_itself_on_close
+    # above already covers that unchanged case).
+
+    def test_group_with_attribute_dicts_carries_real_container(self):
+        builder = create()
+        with builder.add_group("W-1", attribute_dicts=[
+            ("fbd-einfo", {"depth": 15.5, "code": "Ks"}),
+        ]) as grp:
+            grp.add_face(SQUARE)
+        data = builder.to_bytes()
+        ar, root, layers, materials = legacy._walk(data)
+        assert root[0][2]["attrs"] == {
+            "k": "attrs", "children": [
+                ("CAttributeNamed", {
+                    "k": "dict", "name": "fbd-einfo",
+                    "entries": {"depth": 15.5, "code": "Ks"},
+                }),
+            ],
+        }
+
+    def test_group_with_attributes_shorthand(self):
+        builder = create()
+        with builder.add_group("W-1", attributes={"a": 1}) as grp:
+            grp.add_face(SQUARE)
+        data = builder.to_bytes()
+        ar, root, layers, materials = legacy._walk(data)
+        assert root[0][2]["attrs"]["children"][0][1]["name"] == "attributes"
+        assert root[0][2]["attrs"]["children"][0][1]["entries"] == {"a": 1}
+
+    def test_group_attributes_and_attribute_dicts_together_raises(self):
+        builder = create()
+        with pytest.raises(SkpWriteError, match="not both"):
+            with builder.add_group("W-1", attributes={"a": 1}, attribute_dicts=[("b", {"c": 2})]):
+                pass
+
+    def test_group_multiple_attribute_dicts(self):
+        builder = create()
+        with builder.add_group("W-1", attribute_dicts=[
+            ("fbd-einfo", {"depth": 15.5}),
+            ("fbd-profile", {"guide": 1}),
+        ]) as grp:
+            grp.add_face(SQUARE)
+        data = builder.to_bytes()
+        ar, root, layers, materials = legacy._walk(data)
+        names = [v["name"] for _, v in root[0][2]["attrs"]["children"]]
+        assert names == ["fbd-einfo", "fbd-profile"]
+
+    def test_group_instance_attribute_dicts(self):
+        # The nested (definition-scoped) placement path - add_group_instance,
+        # not the root-level self-placing add_group.
+        builder = create()
+        with builder.add_component_definition("Part") as part:
+            part.add_face(SQUARE)
+        with builder.add_component_definition("Assembly") as assembly:
+            assembly.add_group_instance(part, name="Nested", attribute_dicts=[("fbd-profile", {"guide": 1})])
+        builder.add_instance(assembly)
+        data = builder.to_bytes()
+        # Nested content lives inside the definition, not exposed by
+        # legacy._walk's root-only view - byte-level presence check,
+        # matching test_face_attributes_in_component_definition's own
+        # established pattern for this case.
+        assert "fbd-profile".encode("utf-16-le") in data
+        assert "guide".encode("utf-16-le") in data
+
+    def test_group_attribute_dictionaries_round_trip_through_public_reader(self, tmp_path):
+        builder = create()
+        with builder.add_group("W-1", attribute_dicts=[
+            ("fbd-einfo", {"depth": 15.5, "code": "Ks"}),
+        ]) as grp:
+            grp.add_face(SQUARE)
+        out = tmp_path / "group_attrs.skp"
+        builder.save(str(out))
+
+        model = SkpFile.open(str(out)).parse()
+        inst = model.root.instances[0]
+        assert inst.attribute_dictionaries == {"fbd-einfo": {"depth": 15.5, "code": "Ks"}}
+
     def test_many_definitions_instances_and_groups_self_parse(self):
         # Definitions/instances/groups haven't been stress-tested at scale
         # the way materials/layers already are elsewhere in this file -
