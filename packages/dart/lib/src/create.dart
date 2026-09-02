@@ -1018,7 +1018,7 @@ class _ArchiveWriter {
   }
 
   /// Write one solid-color `CMaterial` record and return its slot.
-  int writeMaterial(String name, (int, int, int, int) rgba) {
+  int writeMaterial(String name, (int, int, int, int) rgba, {double? opacity}) {
     final slot = _newOfKnownClass('CMaterial', schema: _materialSchema);
     _preamble();
     _writeStr(name);
@@ -1026,8 +1026,9 @@ class _ArchiveWriter {
     buf.addAll([rgba.$1, rgba.$2, rgba.$3, rgba.$4]);
     _writeStr(''); // texture path (empty - no texture)
     buf.addAll(List<int>.filled(8, 0)); // unknown/padding - ground truth is all-zero
-    buf.addAll(_f64(1.0)); // opacity
-    buf.add(0); // use_opacity = False (alpha carries transparency instead)
+    // Stored TRANSPARENCY (0 = opaque); see writeTexturedMaterial.
+    buf.addAll(_f64(opacity == null ? 1.0 : 1.0 - opacity));
+    buf.add(opacity == null ? 0 : 1); // use_opacity gates it
     return slot;
   }
 
@@ -1036,19 +1037,21 @@ class _ArchiveWriter {
   /// CDib's image format tag (4 for PNG, 1 for JPEG - see
   /// [_detectImageSubtype]).
   ///
-  /// [appliedHeight] defaults to 1.0, matching applied width (always 1.0,
-  /// unconditionally). Pass a different value for a textured material used
-  /// with default (unpositioned) projection, to make the texture repeat at
-  /// a specific real-world size instead of every 1 inch - the reader's own
-  /// ground-truth-derived UV formula divides a face's final UV by the
-  /// material's applied width/height, for a default-projected face exactly
-  /// as much as a positioned (`frontUv`/`backUv`) one. Until 2026-08-28
-  /// this defaulted to a corrupted sentinel byte pattern instead (see
+  /// [appliedWidth]/[appliedHeight] both default to 1.0. Pass the
+  /// material's real-world tile size for a textured material used with
+  /// default (unpositioned) projection, to make the texture repeat at a
+  /// specific size instead of every 1 inch (real SketchUp writes the
+  /// material's own size here - a file authored in SketchUp Web carries
+  /// 8.0 x 16.0 for a brick) - the reader's own ground-truth-derived UV
+  /// formula divides a face's final UV by the material's applied
+  /// width/height, for a default-projected face exactly as much as a
+  /// positioned (`frontUv`/`backUv`) one. Until 2026-08-28 this defaulted
+  /// to a corrupted sentinel byte pattern instead (see
   /// [_textureHSentinel]'s own comment) - confirmed via real SketchUp
   /// screenshots to render as a streaky, vertically-smeared texture
   /// regardless of projection mode.
   int writeTexturedMaterial(String name, Uint8List imageBytes, String texturePath, int subtype,
-      {double? appliedHeight}) {
+      {double? appliedHeight, double? appliedWidth, double? opacity}) {
     final slot = _newOfKnownClass('CMaterial', schema: _materialSchema);
     _preamble();
     _writeStr(name);
@@ -1064,7 +1067,12 @@ class _ArchiveWriter {
       // actual encoded quality.
       buf.addAll(_u32(90));
     }
-    buf.addAll(_f64(1.0)); // applied width - ground truth default when unscaled
+    // Applied size: how much MODEL SPACE one tile of the image covers, in
+    // inches - two plain f64s. For a texture applied WITHOUT positioning it
+    // is the only thing that says how big the image is - such faces carry
+    // no per-face UV record at all, so a wrong size here is the whole
+    // mapping wrong.
+    buf.addAll(_f64(appliedWidth ?? 1.0));
     buf.addAll(_f64(appliedHeight ?? 1.0));
     _writeStr(texturePath);
     // avg color (RGBA + pad + RGBA repeated) - neutral near-opaque white
@@ -1078,8 +1086,14 @@ class _ArchiveWriter {
     _writeStr(''); // second name field - empty in ground truth
     buf.addAll(_u32(1)); // blob (colorize-related, ground truth: 1, 0)
     buf.addAll(_u32(0));
-    buf.addAll(_f64(1.0)); // opacity
-    buf.add(0); // use_opacity = False
+    // Opacity, and the u8 that GATES it. The stored f64 is TRANSPARENCY
+    // (0 = opaque) - the reader turns it into the opacity factor exposed
+    // with `1.0 - stored`, and only when the flag is set - so an
+    // [opacity] argument here is written inverted and round-trips as
+    // itself. Hardcoding 1.0/false meant a translucent material came out
+    // solid: a pool's water at 0.6 exported as an opaque slab.
+    buf.addAll(_f64(opacity == null ? 1.0 : 1.0 - opacity));
+    buf.add(opacity == null ? 0 : 1);
     return slot;
   }
 
@@ -2116,7 +2130,7 @@ class SkpBuilder implements GeometryHost {
   /// before any [addLayer]/[addComponentDefinition] call - materials
   /// splice in earlier in the file, so those sections' own slot numbering
   /// depends on the final material count too.
-  int addMaterial(String name, List<int> rgba) {
+  int addMaterial(String name, List<int> rgba, {double? opacity}) {
     if (_geometryWriter != null) {
       throw SkpWriteError('addMaterial must be called before any addFace calls');
     }
@@ -2132,7 +2146,7 @@ class SkpBuilder implements GeometryHost {
     if (r.length != 4 || r.any((c) => c < 0 || c > 255)) {
       throw SkpWriteError('rgba must be 3 or 4 integers in 0-255');
     }
-    final slot = _materialWriter.writeMaterial(name, (r[0], r[1], r[2], r[3]));
+    final slot = _materialWriter.writeMaterial(name, (r[0], r[1], r[2], r[3]), opacity: opacity);
     materialsByName[name] = slot;
     _materialCount++;
     return slot;
@@ -2143,13 +2157,15 @@ class SkpBuilder implements GeometryHost {
   /// format is detected from the file's own magic bytes, not its
   /// extension. Same ordering rules as [addMaterial].
   ///
-  /// [appliedHeight] defaults to 1.0 (matching applied width, always 1.0).
-  /// Pass a different value to make a default-projected face's texture
-  /// repeat at a specific real-world size instead of every 1 inch - see
-  /// [_ArchiveWriter.writeTexturedMaterial]'s own comment for why this
-  /// field matters even for `addFace`'s `frontUv`/`backUv` pinning (a
-  /// positioned mapping still divides by it).
-  int addTextureMaterial(String name, String imagePath, {double? appliedHeight}) {
+  /// [appliedHeight]/[appliedWidth], if given, are the applied size in
+  /// INCHES - how much model space one tile of the image covers. Both
+  /// default to 1.0. A texture applied without positioning carries no
+  /// per-face UV record, so this pair IS its mapping - see
+  /// [_ArchiveWriter.writeTexturedMaterial]'s own comment for why it
+  /// matters even for `addFace`'s `frontUv`/`backUv` pinning (a positioned
+  /// mapping still divides by it).
+  int addTextureMaterial(String name, String imagePath,
+      {double? appliedHeight, double? appliedWidth, double? opacity}) {
     if (_geometryWriter != null) {
       throw SkpWriteError('addTextureMaterial must be called before any addFace calls');
     }
@@ -2162,8 +2178,8 @@ class SkpBuilder implements GeometryHost {
     if (materialsByName.containsKey(name)) return materialsByName[name]!;
     final imageBytes = File(imagePath).readAsBytesSync();
     final subtype = _detectImageSubtype(imageBytes);
-    final slot =
-        _materialWriter.writeTexturedMaterial(name, imageBytes, imagePath, subtype, appliedHeight: appliedHeight);
+    final slot = _materialWriter.writeTexturedMaterial(name, imageBytes, imagePath, subtype,
+        appliedHeight: appliedHeight, appliedWidth: appliedWidth, opacity: opacity);
     materialsByName[name] = slot;
     _materialCount++;
     return slot;
