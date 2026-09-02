@@ -1309,21 +1309,33 @@ def _stringify_attr_value(value):
     return str(value)
 
 
-def _extract_legacy_dynamic_properties(attrs):
-    """Extract Dynamic Component attribute key/value pairs from a legacy
-    entity's already-parsed CAttributeContainer (see _DYNAMIC_ATTRIBUTES_
-    DICT_NAME above), or {} when the entity carries no attribute
-    container or no dynamic_attributes dictionary."""
+def _extract_legacy_attribute_dictionaries(attrs):
+    """Extract EVERY attribute dictionary attached to a legacy entity's
+    already-parsed CAttributeContainer, keyed by the dictionary's own
+    declared name - not just the one named _DYNAMIC_ATTRIBUTES_DICT_NAME
+    (openskp#254). Real entities routinely carry several at once (a
+    SketchUp extension's own dictionary alongside SketchUp's own
+    'dynamic_attributes' one, or several of the extension's own, e.g.
+    FrameBuilder's 'fbd-einfo'/'fbd-profile'/'fbd-profile-cords') -
+    filtering down to one hardcoded name silently discarded the rest.
+    Values keep their real, already-typed shape (int/float/str/None/a
+    3-tuple/a possibly-nested list) - see _stringify_attr_value for the
+    separate, backward-compatible stringified view. Returns {} when the
+    entity carries no attribute container at all."""
     if not isinstance(attrs, dict):
         return {}
+    out = {}
     for _class_name, value in attrs.get('children', []):
         # _class_name is the entity class name (always 'CAttributeNamed'
         # here, from ar.read_object) - the dictionary's own declared name
         # lives inside the value, as value['name'].
-        if isinstance(value, dict) and value.get('name') == _DYNAMIC_ATTRIBUTES_DICT_NAME:
-            entries = value.get('entries', {})
-            return {k: _stringify_attr_value(v) for k, v in entries.items()}
-    return {}
+        if not isinstance(value, dict):
+            continue
+        name = value.get('name')
+        if not name:
+            continue
+        out[name] = dict(value.get('entries', {}))
+    return out
 
 
 # ── adapter to the full_parse dict shape ────────────────────────────────
@@ -1378,6 +1390,8 @@ def _fill_builder(builder, ents, slots):
                         face['uv_projected_back'] = cv.get('back_projected', False)
             builder.faces[s] = face
         elif k == 'instance':
+            attr_dicts = _extract_legacy_attribute_dictionaries(v.get('attrs'))
+            dynamic = attr_dicts.get(_DYNAMIC_ATTRIBUTES_DICT_NAME, {})
             builder.instances.append({
                 'name': v['name'], 'ref_idx': v['def'],
                 'ref_guid': '', 'matrix': list(v['xf']),
@@ -1385,7 +1399,12 @@ def _fill_builder(builder, ents, slots):
                 'layer_id': v['db']['layer'] or None,
                 'hidden': bool(v['db']['hidden']),
                 'children': [],
-                'properties': _extract_legacy_dynamic_properties(v.get('attrs'))})
+                'attribute_dictionaries': attr_dicts,
+                # Backward-compatible view: the one dictionary SketchUp's
+                # own Dynamic Components extension uses, stringified (or
+                # {} if this entity carries no dictionary by that exact
+                # name) - matching this field's pre-existing contract.
+                'properties': {dk: _stringify_attr_value(dv) for dk, dv in dynamic.items()}})
         elif k == 'image':
             # Placed exactly like an ordinary component instance - same
             # transform/definition-reference shape - the only difference is

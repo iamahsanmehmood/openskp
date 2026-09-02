@@ -2010,8 +2010,16 @@ class TestModernRealFile:
         assert battens[0].layer == "Hat Sections"
         w1 = [i for i in model.root.instances if i.name == "W1"]
         assert w1
-        assert w1[0].properties["generator"] == "SteelFramer::Engine::PanelGenerator"
-        assert w1[0].properties["profile"] == "362S200-43"
+        # "generator"/"profile" live under this SteelFramer-authored
+        # file's own "steelframer-dict" dictionary, not SketchUp's
+        # "dynamic_attributes" - properties (the backward-compatible
+        # dynamic_attributes-only view) is correctly empty for this
+        # instance; attribute_dictionaries exposes every dictionary by
+        # its own name (openskp#254).
+        assert w1[0].properties == {}
+        steelframer = w1[0].attribute_dictionaries["steelframer-dict"]
+        assert steelframer["generator"] == "SteelFramer::Engine::PanelGenerator"
+        assert steelframer["profile"] == "362S200-43"
 
         # 4. Definitions
         assert len(model.definitions) == 46
@@ -2134,8 +2142,10 @@ class TestLegacyDynamicProperties:
         assert _stringify_attr_value([1, 2, 3]) == "1,2,3"
         assert _stringify_attr_value((1.0, 2.0, 3.0)) == "1.0,2.0,3.0"
 
-    def test_extracts_dynamic_attributes_dict_by_name(self) -> None:
-        from openskp.legacy import _extract_legacy_dynamic_properties
+    def test_extracts_every_attribute_dictionary_by_name(self) -> None:
+        # openskp#254: every dictionary is returned, keyed by its own
+        # declared name - not just the one named 'dynamic_attributes'.
+        from openskp.legacy import _extract_legacy_attribute_dictionaries
         # Real shape from _read_attr_container/_read_attr_named: each
         # child tuple's first element is the ENTITY CLASS NAME (always
         # 'CAttributeNamed', from ar.read_object) - never the dictionary's
@@ -2148,21 +2158,27 @@ class TestLegacyDynamicProperties:
                     "k": "dict", "name": "dynamic_attributes",
                     "entries": {"width": 10.0, "_width_label": "Width", "count": 4},
                 }),
+                ("CAttributeNamed", {"k": "dict", "name": "fbd-profile", "entries": {"guide": (1.0, 2.0, 3.0)}}),
             ],
         }
-        props = _extract_legacy_dynamic_properties(attrs)
-        assert props == {"width": "10.0", "_width_label": "Width", "count": "4"}
+        dicts = _extract_legacy_attribute_dictionaries(attrs)
+        # Real, already-typed values - not stringified (see
+        # _stringify_attr_value for the separate stringified view
+        # `properties` uses).
+        assert dicts == {
+            "SU_DefinitionSet": {"unrelated": 1},
+            "dynamic_attributes": {"width": 10.0, "_width_label": "Width", "count": 4},
+            "fbd-profile": {"guide": (1.0, 2.0, 3.0)},
+        }
 
-    def test_returns_empty_dict_when_no_dynamic_attributes_dict(self) -> None:
-        from openskp.legacy import _extract_legacy_dynamic_properties
-        attrs = {"k": "attrs", "children": [
-            ("CAttributeNamed", {"k": "dict", "name": "SU_DefinitionSet", "entries": {"a": 1}}),
-        ]}
-        assert _extract_legacy_dynamic_properties(attrs) == {}
+    def test_returns_empty_dict_for_no_children(self) -> None:
+        from openskp.legacy import _extract_legacy_attribute_dictionaries
+        attrs = {"k": "attrs", "children": []}
+        assert _extract_legacy_attribute_dictionaries(attrs) == {}
 
     def test_returns_empty_dict_for_no_attribute_container(self) -> None:
-        from openskp.legacy import _extract_legacy_dynamic_properties
-        assert _extract_legacy_dynamic_properties(None) == {}
+        from openskp.legacy import _extract_legacy_attribute_dictionaries
+        assert _extract_legacy_attribute_dictionaries(None) == {}
 
     import pathlib as _pathlib
 
@@ -2185,6 +2201,150 @@ class TestLegacyDynamicProperties:
                 walk(child)
 
         walk(scene.scene_hierarchy)
+
+
+class TestVffAttributeDictionaries:
+    """Tests for _core.extract_attribute_dictionaries/extract_dynamic_
+    properties (openskp#254/#255) - the VFF-format counterpart of
+    TestLegacyDynamicProperties above.
+
+    The TLV shape asserted here (B436 dictionary-name node immediately
+    followed by a B536 entries sibling; each entry a B636 key followed by
+    an A438 value wrapper; A438 with no children is null, otherwise wraps
+    exactly one type-tagged child; AE38 wraps an array's own elements,
+    each itself A438-wrapped, concatenated with no count prefix) was
+    confirmed byte-for-byte against a real FrameBuilder-authored
+    production file, cross-checked against SketchUp's own Ruby API
+    reading the identical file live - not guessed at. See CHECKLIST.md's
+    entry on this fix for how that verification was done.
+    """
+
+    @staticmethod
+    def _tlv(tag_hex: str, payload: bytes) -> bytes:
+        return bytes.fromhex(tag_hex) + struct.pack('<I', len(payload)) + payload
+
+    def _value(self, inner: bytes = b"") -> bytes:
+        """One A438-wrapped value: empty payload (no children) is null,
+        otherwise `inner` is exactly one type-tagged TLV element."""
+        return self._tlv('A438', inner)
+
+    def _entry(self, key: str, value_bytes: bytes) -> bytes:
+        return self._tlv('B636', key.encode('utf-8')) + value_bytes
+
+    def _dict(self, name: str, entries: bytes) -> bytes:
+        return self._tlv('B436', name.encode('utf-8')) + self._tlv('B536', entries)
+
+    def _d007(self, dc05_payload: bytes):
+        from openskp import _core
+        d007_bytes = self._tlv('D007', self._tlv('DC05', dc05_payload))
+        elements = _core.parse_tlv_recursive(d007_bytes, 0, len(d007_bytes))
+        return elements[0]
+
+    def test_string_value_round_trips(self) -> None:
+        from openskp import _core
+        entries = self._entry('code', self._value(self._tlv('AD38', b'Ks')))
+        d007 = self._d007(self._dict('fbd-einfo', entries))
+        assert _core.extract_attribute_dictionaries(d007) == {'fbd-einfo': {'code': 'Ks'}}
+
+    def test_length_and_float_are_distinct_tags_both_f64(self) -> None:
+        # AF38 (Length) and A938 (plain Float) both encode as a flat
+        # 8-byte float64 but are genuinely different tags - real
+        # SketchUp/FrameBuilder data uses both for different keys.
+        from openskp import _core
+        entries = (
+            self._entry('depth', self._value(self._tlv('AF38', struct.pack('<d', 15.5))))
+            + self._entry('price', self._value(self._tlv('A938', struct.pack('<d', 120.0))))
+        )
+        d007 = self._d007(self._dict('fbd-einfo', entries))
+        result = _core.extract_attribute_dictionaries(d007)['fbd-einfo']
+        assert result == {'depth': 15.5, 'price': 120.0}
+        assert isinstance(result['depth'], float) and isinstance(result['price'], float)
+
+    def test_integer_value_round_trips(self) -> None:
+        from openskp import _core
+        entries = self._entry('angle', self._value(self._tlv('A738', struct.pack('<i', -7))))
+        d007 = self._d007(self._dict('fbd-einfo', entries))
+        assert _core.extract_attribute_dictionaries(d007) == {'fbd-einfo': {'angle': -7}}
+
+    def test_null_value_round_trips(self) -> None:
+        from openskp import _core
+        entries = self._entry('child_thickness', self._value())  # A438 with no children
+        d007 = self._d007(self._dict('fbd-einfo', entries))
+        assert _core.extract_attribute_dictionaries(d007) == {'fbd-einfo': {'child_thickness': None}}
+
+    def test_point3d_and_vector3d_round_trip(self) -> None:
+        from openskp import _core
+        point_bytes = self._tlv('B438', struct.pack('<3d', 0.0, 0.807085, 14.6551))
+        vector_bytes = self._tlv('B538', struct.pack('<3d', 1.0, 0.0, 0.0))
+        entries = (
+            self._entry('end_pos', self._value(point_bytes))
+            + self._entry('vector_new', self._value(vector_bytes))
+        )
+        d007 = self._d007(self._dict('fbd-einfo', entries))
+        result = _core.extract_attribute_dictionaries(d007)['fbd-einfo']
+        assert result == {'end_pos': (0.0, 0.807085, 14.6551), 'vector_new': (1.0, 0.0, 0.0)}
+
+    def test_empty_array_round_trips(self) -> None:
+        from openskp import _core
+        entries = self._entry('added_bolt_holes', self._value(self._tlv('AE38', b'')))
+        d007 = self._d007(self._dict('fbd-einfo', entries))
+        assert _core.extract_attribute_dictionaries(d007) == {'fbd-einfo': {'added_bolt_holes': []}}
+
+    def test_array_of_floats_round_trips(self) -> None:
+        from openskp import _core
+        elems = b''.join(self._value(self._tlv('A938', struct.pack('<d', v))) for v in (0.728, 11.358, 14.655))
+        entries = self._entry('flangeholes', self._value(self._tlv('AE38', elems)))
+        d007 = self._d007(self._dict('fbd-einfo', entries))
+        assert _core.extract_attribute_dictionaries(d007) == {'fbd-einfo': {'flangeholes': [0.728, 11.358, 14.655]}}
+
+    def test_nested_array_round_trips(self) -> None:
+        # openskp#253's motivating case mirrored on the read side:
+        # fbd-profile-cords style [[x, y], [x, y]] - an array whose
+        # elements are themselves arrays.
+        from openskp import _core
+        inner1 = b''.join(self._value(self._tlv('A938', struct.pack('<d', v))) for v in (25.17, 0.07))
+        inner2 = b''.join(self._value(self._tlv('A938', struct.pack('<d', v))) for v in (25.17, 15.35))
+        outer = self._value(self._tlv('AE38', inner1)) + self._value(self._tlv('AE38', inner2))
+        entries = self._entry('lip_side1_cords', self._value(self._tlv('AE38', outer)))
+        d007 = self._d007(self._dict('fbd-einfo', entries))
+        result = _core.extract_attribute_dictionaries(d007)['fbd-einfo']
+        assert result == {'lip_side1_cords': [[25.17, 0.07], [25.17, 15.35]]}
+
+    def test_multiple_dictionaries_kept_separate_by_name(self) -> None:
+        # openskp#254: dictionaries no longer merged into one flat blob.
+        from openskp import _core
+        d1 = self._dict('fbd-einfo', self._entry('code', self._value(self._tlv('AD38', b'Ks'))))
+        d2 = self._dict('fbd-profile', self._entry('guide', self._value(self._tlv('A738', struct.pack('<i', 1)))))
+        d007 = self._d007(d1 + d2)
+        assert _core.extract_attribute_dictionaries(d007) == {
+            'fbd-einfo': {'code': 'Ks'},
+            'fbd-profile': {'guide': 1},
+        }
+
+    def test_unrecognized_value_tag_is_skipped_not_guessed(self) -> None:
+        # A type tag this decoder doesn't (yet) know is left as None
+        # rather than misinterpreted - safer than a wrong guess.
+        from openskp import _core
+        entries = self._entry('mystery', self._value(self._tlv('EE99', b'\x01\x02')))
+        d007 = self._d007(self._dict('fbd-einfo', entries))
+        assert _core.extract_attribute_dictionaries(d007) == {'fbd-einfo': {'mystery': None}}
+
+    def test_backward_compatible_properties_view(self) -> None:
+        # extract_dynamic_properties stays the stringified,
+        # dynamic_attributes-only view for existing callers.
+        from openskp import _core
+        d1 = self._dict('dynamic_attributes', self._entry(
+            'width', self._value(self._tlv('AF38', struct.pack('<d', 10.0)))))
+        d2 = self._dict('fbd-profile', self._entry('guide', self._value(self._tlv('A738', struct.pack('<i', 1)))))
+        d007 = self._d007(d1 + d2)
+        assert _core.extract_dynamic_properties(d007) == {'width': '10.0'}
+
+    def test_no_dc05_returns_empty(self) -> None:
+        from openskp import _core
+        d007_bytes = self._tlv('D007', b'')
+        elements = _core.parse_tlv_recursive(d007_bytes, 0, len(d007_bytes))
+        assert _core.extract_attribute_dictionaries(elements[0]) == {}
+        assert _core.extract_dynamic_properties(elements[0]) == {}
 
 
 # ── Scene baking (opt-in build_scene(), separate from parse()) ──────────

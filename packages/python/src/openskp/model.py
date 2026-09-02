@@ -279,7 +279,22 @@ class Instance:
             :meth:`SkpFile.build_scene`'s ``InstanceNode.layer`` for that
             resolved value.
         properties: Arbitrary key/value dynamic attributes attached
-            directly to this instance (SketchUp's Dynamic Components).
+            directly to this instance (SketchUp's Dynamic Components) -
+            a backward-compatible view of
+            ``attribute_dictionaries.get("dynamic_attributes", {})``.
+        attribute_dictionaries: Every custom attribute dictionary
+            attached to this instance, keyed by the dictionary's own
+            declared name - not just the one SketchUp's own Dynamic
+            Components extension uses. A real instance routinely carries
+            several at once (a SketchUp extension's own dictionary
+            alongside SketchUp's, or several of the extension's own).
+            Unlike :attr:`properties`, values here keep their real type
+            (``str``/``int``/``float``/``None``/a 3-tuple for a Point3d
+            or Vector3d/a possibly-nested ``list``) rather than being
+            stringified - an extension is free to store a value as a
+            genuine array or as its own string-encoded convention (both
+            are observed in real files), and this preserves whichever
+            one it chose.
         material_id: Numeric material ID painted onto the instance itself
             (SketchUp's "paint the component"), or ``None``.  Faces inside
             the placed definition whose own :attr:`Face.material_id` is
@@ -301,6 +316,7 @@ class Instance:
     ])
     layer: str = ""
     properties: Dict[str, str] = field(default_factory=dict)
+    attribute_dictionaries: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     material_id: Optional[int] = None
     hidden: bool = False
 
@@ -602,6 +618,7 @@ class SkpFile:
                     hidden=inst.get("hidden", False),
                     layer=layer_id_to_name.get(layer_id, "") if layer_id is not None else "",
                     properties=inst.get("properties", {}),
+                    attribute_dictionaries=inst.get("attribute_dictionaries", {}),
                 ))
             # Populate section planes
             for sp in getattr(builder, "section_planes", []):
