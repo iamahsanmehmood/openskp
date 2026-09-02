@@ -116,6 +116,17 @@ Point your AI coding agent at:
   legs and a curved backrest" works better than asking for SketchUp API
   calls directly, since the agent already knows how to turn a shape
   description into geometry once it has the writer's API in context.
+- [`examples/python/lathe_and_extrude.py`](../examples/python/lathe_and_extrude.py)
+  for turned/revolved shapes specifically (columns, vases, balusters,
+  fountain tiers) — a `revolve()`/`extrude()` pair built entirely on the
+  raw `add_face()`/`add_group()` API above, not a new writer capability.
+  It exists because agents kept hand-rolling the same ~40-line
+  ring-of-quads math per turned part; one call now does it. This is a
+  narrow, deliberate exception to "no object-specific helpers" — it's a
+  geometric primitive (a lathe), not a domain-specific one (`add_chair`
+  is still out of scope) — contributed as a CC0 gift by
+  [IngeTrazo](https://github.com/iamahsanmehmood) after the same pattern
+  showed up repeatedly in their own AI Assistant's generated code.
 
 The workflow that produced every showcase model above: describe the
 object, let the agent write and run `openskp.create()` code, open the
@@ -134,21 +145,31 @@ rather than an opaque `.skp` binary. See
 ## What's next — help build this out
 
 This page documents what already works today: a generic, AI-legible
-writer API, proven on real generated models. What doesn't exist yet, and
-is a genuinely open direction:
+writer API, proven on real generated models. Two directions listed here
+as open now have a real reference implementation, built by a downstream
+project rather than in this repo:
 
 - **A render/validate feedback loop.** The biggest gap in "AI generates
-  a `.skp` file" today is that the agent has no way to *see* what it
-  built without a human opening SketchUp. A tool (MCP or otherwise) that
-  renders a built file to an image, or runs it through the real SDK for
-  validation, would close that loop directly.
-- **An MCP server**, if it turns out to add real value beyond what a
-  coding agent can already do by writing and running code directly
-  against the library — worth prototyping and comparing rather than
-  assuming either direction up front.
+  a `.skp` file" is that the agent has no way to *see* what it built
+  without a human opening SketchUp — closing that loop needs an actual
+  3D viewport, which is out of scope for a library that only reads and
+  writes files. [IngeTrazo](https://github.com/iamahsanmehmood), a
+  desktop `.skp` editor built on this project's reader and writer, has
+  shipped exactly this: an in-app AI Assistant that runs an agent's
+  recipe against the live scene, screenshots the viewport, and feeds the
+  image back for the next turn — closing the loop this page describes,
+  just one layer up from OpenSKP itself.
+- **An MCP server.** IngeTrazo also ships one (`docs/ai-bridge.md` in
+  their repo) exposing the same recipe-execution engine to an external
+  MCP client. Worth a look before building a second one from scratch.
 - **More showcase models** — different shapes, different levels of
   geometric complexity, ideally with the prompt that produced them
-  alongside the code and a real screenshot.
+  alongside the code and a real screenshot. IngeTrazo's own AI Assistant
+  reproduced a real three-tier garden fountain from a single reference
+  photo this way — 7 component definitions, 1,104 faces, correct
+  real-world dimensions, using the `revolve()`/`extrude()` helpers above
+  — a strong independent proof point for the writer API under real,
+  unsupervised AI use.
 
 Contributions and ideas on any of the above are welcome — see
 [CONTRIBUTING.md](../CONTRIBUTING.md), or open a discussion on the
