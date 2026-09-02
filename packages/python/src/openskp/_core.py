@@ -826,7 +826,7 @@ def _extract_geometry_from_nodes(elements, builder):
             # knowable once the scene graph is actually flattened (see
             # SkpFile.build_scene()'s InstanceNode.layer for that).
             inst_layer_id = None
-            inst_properties = {}
+            inst_attribute_dicts = {}
             d007 = next((c for c in el['children'] if c['tag'] == 'D007'),
                         None)
             if d007:
@@ -840,7 +840,7 @@ def _extract_geometry_from_nodes(elements, builder):
                 if d207 and d207['payload']:
                     inst_layer_id = parse_var_int(
                         d207['payload'], 0, len(d207['payload']))
-                inst_properties = extract_dynamic_properties(d007)
+                inst_attribute_dicts = extract_attribute_dictionaries(d007)
                 # D307 = display flags, same record edges/faces already
                 # read (base 0x06, +0x01 hidden).
                 d307 = next((c for c in d007['children']
@@ -848,6 +848,7 @@ def _extract_geometry_from_nodes(elements, builder):
                 if d307 is not None and d307['payload']:
                     inst_hidden = bool(d307['payload'][0] & 0x01)
 
+            dynamic = inst_attribute_dicts.get('dynamic_attributes', {})
             builder.instances.append({
                 'offset': el['offset'],
                 'ref_guid': guid,
@@ -857,7 +858,11 @@ def _extract_geometry_from_nodes(elements, builder):
                 'material_id': inst_mat_id,
                 'hidden': inst_hidden,
                 'layer_id': inst_layer_id,
-                'properties': inst_properties,
+                # Backward-compatible view: stringified dynamic_attributes
+                # dict only. attribute_dictionaries carries every
+                # dictionary by name, real (non-stringified) types.
+                'properties': {k: _stringify_vff_attr_value(v) for k, v in dynamic.items()},
+                'attribute_dictionaries': inst_attribute_dicts,
                 'children': el['children']
             })
 
@@ -909,37 +914,124 @@ def multiply_matrices(parent, child):
 
 # ── Dynamic properties ───────────────────────────────────────────────────
 
-def extract_dynamic_properties(d007):
-    """Extract Dynamic Component attribute key-value pairs from a D007 container node.
+# TLV container tags nesting the dynamic property key/value nodes. A438
+# wraps one attribute value (its own type tag lives inside it, or no
+# children at all for null); AE38 wraps an array's own elements (each
+# itself an A438-wrapped value, concatenated with no count prefix - the
+# array's own declared byte size is what bounds how many there are). Both
+# must be descended into for real content to appear instead of an opaque
+# leaf payload - confirmed byte-for-byte against real FrameBuilder-
+# authored production files (openskp#254/#255), cross-checked against
+# SketchUp's own Ruby API reading the identical file live.
+_PROP_CONTAINER_TAGS = ['DD05', 'B536', 'B136', 'B236', 'B336', 'B036', 'A438', 'AE38']
 
-    Dynamic properties are stored in a nested TLV hierarchy under the DC05 tag:
-    - Container tags (DD05, B536, B136, B236, B336, B036, A438) wrap property sub-trees.
-    - Tag B636 contains the attribute key name (UTF-8 string).
-    - Tag AD38 contains the attribute value (UTF-8 string).
+# Attribute value type tags found inside an A438 wrapper - the VFF-format
+# counterpart of legacy._read_attr_named's own type table, verified the
+# same way (real bytes, not guessed): AD38 string, AF38 Length, A938
+# plain double - SketchUp genuinely uses two different tags for the same
+# 8-byte float64 encoding depending on whether the value is a Length or a
+# plain Float - A738 int32, B438 Point3d, B538 Vector3d (each 3 x f64,
+# 24 bytes flat, no per-component tags). No native bool/time_t tag has
+# been observed in real data yet -
+# FrameBuilder itself stores booleans as the literal strings "true"/
+# "false" - so those two of legacy's 9 types are not yet decoded here;
+# left safely unrecognized (see _decode_vff_attr_value) rather than
+# guessed at.
+_VFF_ATTR_DOUBLE_TAGS = ('AF38', 'A938')
+
+
+def _decode_vff_attr_value(a438_node):
+    """Decode one A438-wrapped attribute value node into a native Python
+    value. A438 with no children is null; otherwise it has exactly one
+    child holding the value's own type tag. An unrecognized type tag (or
+    a payload of the wrong size for its tag) is left undecoded (returns
+    None) rather than guessed at - matching this project's standing rule
+    to never assume an unverified binary layout."""
+    children = a438_node['children']
+    if not children:
+        return None
+    child = children[0]
+    tag = child['tag']
+    payload = child['payload']
+    if tag == 'AD38':
+        return payload.decode('utf-8', errors='replace')
+    if tag in _VFF_ATTR_DOUBLE_TAGS and len(payload) == 8:
+        return struct.unpack('<d', payload)[0]
+    if tag == 'A738' and len(payload) == 4:
+        return struct.unpack('<i', payload)[0]
+    if tag in ('B438', 'B538') and len(payload) == 24:
+        return struct.unpack('<3d', payload)
+    if tag == 'AE38':
+        return [_decode_vff_attr_value(elem) for elem in child['children']]
+    return None
+
+
+def extract_attribute_dictionaries(d007):
+    """Extract EVERY attribute dictionary attached to a D007 container
+    node, keyed by the dictionary's own declared name (tag B436) rather
+    than merged into one flat dict (openskp#254), decoding every value
+    type the format carries rather than only strings (openskp#255).
+
+    Dynamic properties are stored in a nested TLV hierarchy under the
+    DC05 tag. Each dictionary is a B436 (name) node immediately followed
+    by a sibling entries container (typically B536) holding that
+    dictionary's own B636 (key name) / A438 (type-tagged value) pairs.
+    Returns {} when the entity carries no DC05 subtree at all.
     """
     dc05 = next((c for c in d007['children'] if c['tag'] == 'DC05'), None)
     if not dc05:
         return {}
-    # TLV container tags nesting the dynamic property key/value nodes
-    prop_container_tags = ['DD05', 'B536', 'B136', 'B236', 'B336', 'B036', 'A438']
-    prop_elements = parse_tlv_recursive(dc05['payload'], 0, len(dc05['payload']), prop_container_tags)
-    properties = {}
-    current_key = None
-    def extract_props(nodes):
-        nonlocal current_key
+    prop_elements = parse_tlv_recursive(dc05['payload'], 0, len(dc05['payload']), _PROP_CONTAINER_TAGS)
+
+    dictionaries: Dict[str, Dict[str, Any]] = {}
+
+    def extract_entries(nodes, entries):
+        current_key = None
         for n in nodes:
             tag = n['tag']
             if tag == 'B636':
-                # Property key name (UTF-8 string)
                 current_key = n['payload'].decode('utf-8', errors='replace')
-            elif tag == 'AD38' and current_key:
-                # Property value (UTF-8 string) matching preceding key
-                val = n['payload'].decode('utf-8', errors='replace')
-                properties[current_key] = val
+            elif tag == 'A438' and current_key is not None:
+                entries[current_key] = _decode_vff_attr_value(n)
                 current_key = None
-            extract_props(n['children'])
-    extract_props(prop_elements)
-    return properties
+            else:
+                extract_entries(n['children'], entries)
+
+    def walk(nodes):
+        for i, n in enumerate(nodes):
+            if n['tag'] == 'B436':
+                name = n['payload'].decode('utf-8', errors='replace')
+                entries: Dict[str, Any] = {}
+                if i + 1 < len(nodes):
+                    extract_entries(nodes[i + 1]['children'], entries)
+                dictionaries[name] = entries
+            else:
+                walk(n['children'])
+
+    walk(prop_elements)
+    return dictionaries
+
+
+def _stringify_vff_attr_value(value):
+    """Render an already-typed VFF attribute value as a string, matching
+    extract_dynamic_properties' pre-existing Dict[str, str] contract -
+    mirrors legacy._stringify_attr_value exactly."""
+    if value is None:
+        return ''
+    if isinstance(value, (list, tuple)):
+        return ','.join(_stringify_vff_attr_value(v) for v in value)
+    return str(value)
+
+
+def extract_dynamic_properties(d007):
+    """Extract Dynamic Component attribute key-value pairs from a D007
+    container node - a backward-compatible view of just the one
+    dictionary SketchUp's own Dynamic Components extension uses
+    (``dynamic_attributes``), values stringified. See
+    extract_attribute_dictionaries for every dictionary by name, with
+    real (non-stringified) types."""
+    dynamic = extract_attribute_dictionaries(d007).get('dynamic_attributes', {})
+    return {k: _stringify_vff_attr_value(v) for k, v in dynamic.items()}
 
 
 # ── ZIP entry size validation ────────────────────────────────────────────
