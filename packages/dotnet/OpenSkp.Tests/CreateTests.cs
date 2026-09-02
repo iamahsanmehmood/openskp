@@ -320,6 +320,73 @@ namespace OpenSkp.Tests
         }
 
         [Fact]
+        public void TexturedMaterialAppliedSizeFullyOverridable()
+        {
+            // Real SketchUp writes the material's own tile size in BOTH
+            // axes (a file authored in SketchUp Web carries 8.0 x 16.0 for
+            // a brick); a texture applied without positioning carries no
+            // per-face UV record, so this pair IS its mapping.
+            string pngPath = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".png");
+            File.WriteAllBytes(pngPath, TinyPng());
+            try
+            {
+                var builder = SkpCreate.NewFile();
+                int brick = builder.AddTextureMaterial("Brick", pngPath, appliedHeight: 16.0, appliedWidth: 8.0);
+                builder.AddFace(Square(), material: brick);
+                var model = SkpFile.Parse(builder.ToBytes());
+                var mat = model.Materials.Single();
+                Assert.Equal(8.0, mat.Texture!.Width);
+                Assert.Equal(16.0, mat.Texture.Height);
+            }
+            finally
+            {
+                File.Delete(pngPath);
+            }
+        }
+
+        [Fact]
+        public void TexturedMaterialCarriesOpacity()
+        {
+            string pngPath = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".png");
+            File.WriteAllBytes(pngPath, TinyPng());
+            try
+            {
+                var builder = SkpCreate.NewFile();
+                int voile = builder.AddTextureMaterial("Voile", pngPath, opacity: 0.5);
+                builder.AddFace(Square(), material: voile);
+                var model = SkpFile.Parse(builder.ToBytes());
+                var mat = model.Materials.Single();
+                Assert.Equal(0.5, mat.Transparency, 6);
+            }
+            finally
+            {
+                File.Delete(pngPath);
+            }
+        }
+
+        [Fact]
+        public void SolidMaterialCarriesOpacity()
+        {
+            var builder = SkpCreate.NewFile();
+            int glass = builder.AddMaterial("Glass", (200, 220, 255), opacity: 0.35);
+            builder.AddFace(Square(), material: glass);
+            var model = SkpFile.Parse(builder.ToBytes());
+            var mat = model.Materials.Single();
+            Assert.Equal(0.35, mat.Transparency, 6);
+        }
+
+        [Fact]
+        public void OmittedOpacityStaysFullyOpaque()
+        {
+            var builder = SkpCreate.NewFile();
+            int red = builder.AddMaterial("Red", (255, 0, 0));
+            builder.AddFace(Square(), material: red);
+            var model = SkpFile.Parse(builder.ToBytes());
+            var mat = model.Materials.Single();
+            Assert.Equal(1.0, mat.Transparency);
+        }
+
+        [Fact]
         public void UnrecognizedImageFormatThrows()
         {
             string path = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".bin");

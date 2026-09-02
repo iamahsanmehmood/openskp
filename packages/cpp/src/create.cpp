@@ -758,7 +758,8 @@ class ArchiveWriter {
     }
   }
 
-  int write_material(const std::string& name, Color4 rgba) {
+  int write_material(const std::string& name, Color4 rgba,
+                     std::optional<double> opacity = std::nullopt) {
     int slot = new_of_known_class("CMaterial", kMaterialSchema);
     preamble();
     write_str(name);
@@ -766,24 +767,32 @@ class ArchiveWriter {
     buf.insert(buf.end(), rgba.begin(), rgba.end());
     write_str("");  // texture path (empty - no texture)
     buf.insert(buf.end(), 8, 0);
-    append_f64(buf, 1.0);  // opacity
-    buf.push_back(0);      // use_opacity = False
+    // Stored TRANSPARENCY (0 = opaque); see write_textured_material.
+    append_f64(buf, opacity.has_value() ? 1.0 - *opacity : 1.0);
+    buf.push_back(opacity.has_value() ? 1 : 0);  // use_opacity gates it
     return slot;
   }
 
   // `subtype` is CDib's image format tag (4 for PNG, 1 for JPEG - see detect_image_subtype).
   //
-  // `applied_height` defaults to 1.0, matching applied width (always 1.0, unconditionally). Pass
-  // a different value for a textured material used with default (unpositioned) projection, to
-  // make the texture repeat at a specific real-world size instead of every 1 inch - the reader's
-  // own ground-truth-derived UV formula divides a face's final UV by the material's applied
-  // width/height, for a default-projected face exactly as much as a positioned (front_uv/back_uv)
-  // one. Until 2026-08-28 this defaulted to a corrupted sentinel byte pattern instead (see
-  // kTextureHSentinel's own comment) - confirmed via real SketchUp screenshots to render as a
-  // streaky, vertically-smeared texture regardless of projection mode.
+  // `applied_width`/`applied_height` both default to 1.0. Pass the material's real-world tile
+  // size for a textured material used with default (unpositioned) projection, to make the
+  // texture repeat at a specific size instead of every 1 inch (real SketchUp writes the
+  // material's own size here - a file authored in SketchUp Web carries 8.0 x 16.0 for a brick) -
+  // the reader's own ground-truth-derived UV formula divides a face's final UV by the material's
+  // applied width/height, for a default-projected face exactly as much as a positioned
+  // (front_uv/back_uv) one. Until 2026-08-28 this defaulted to a corrupted sentinel byte pattern
+  // instead (see kTextureHSentinel's own comment) - confirmed via real SketchUp screenshots to
+  // render as a streaky, vertically-smeared texture regardless of projection mode.
+  //
+  // `applied_width` and `opacity` are appended after `applied_height` (rather than sitting next
+  // to it) so an existing positional call passing `applied_height` as the 5th argument keeps
+  // meaning what it always meant.
   int write_textured_material(const std::string& name, const ByteBuffer& image_bytes,
                               const std::string& texture_path, int subtype,
-                              std::optional<double> applied_height = std::nullopt) {
+                              std::optional<double> applied_height = std::nullopt,
+                              std::optional<double> applied_width = std::nullopt,
+                              std::optional<double> opacity = std::nullopt) {
     int slot = new_of_known_class("CMaterial", kMaterialSchema);
     preamble();
     write_str(name);
@@ -798,7 +807,11 @@ class ArchiveWriter {
       // encoded quality.
       append_u32(buf, 90);
     }
-    append_f64(buf, 1.0);  // applied width - ground truth default when unscaled
+    // Applied size: how much MODEL SPACE one tile of the image covers, in inches - two plain
+    // f64s. For a texture applied WITHOUT positioning it is the only thing that says how big the
+    // image is - such faces carry no per-face UV record at all, so a wrong size here is the whole
+    // mapping wrong.
+    append_f64(buf, applied_width.value_or(1.0));
     append_f64(buf, applied_height.value_or(1.0));
     write_str(texture_path);
     // avg color: neutral near-opaque white. Alpha is 254, not fully-opaque 255 - the reader
@@ -808,9 +821,14 @@ class ArchiveWriter {
     append_bytes(buf, avg, sizeof(avg));
     write_str("");  // second name field - empty in ground truth
     append_u32(buf, 1);
-    append_u32(buf, 0);    // blob (colorize-related, ground truth: 1, 0)
-    append_f64(buf, 1.0);  // opacity
-    buf.push_back(0);      // use_opacity = False
+    append_u32(buf, 0);  // blob (colorize-related, ground truth: 1, 0)
+    // Opacity, and the u8 that GATES it. The stored f64 is TRANSPARENCY (0 = opaque) - the reader
+    // turns it into the opacity factor exposed with `1.0 - stored`, and only when the flag is
+    // set - so an `opacity` argument here is written inverted and round-trips as itself.
+    // Hardcoding 1.0/false meant a translucent material came out solid: a pool's water at 0.6
+    // exported as an opaque slab.
+    append_f64(buf, opacity.has_value() ? 1.0 - *opacity : 1.0);
+    buf.push_back(opacity.has_value() ? 1 : 0);
     return slot;
   }
 
@@ -1671,7 +1689,7 @@ SkpBuilder::SkpBuilder() : impl_(std::make_unique<Impl>()) {}
 
 SkpBuilder::~SkpBuilder() = default;
 
-int SkpBuilder::add_material(const std::string& name, Color4 rgba) {
+int SkpBuilder::add_material(const std::string& name, Color4 rgba, std::optional<double> opacity) {
   if (impl_->geometry_writer)
     throw SkpWriteError("add_material must be called before any add_face calls");
   if (impl_->layer_writer)
@@ -1681,19 +1699,21 @@ int SkpBuilder::add_material(const std::string& name, Color4 rgba) {
   }
   auto it = materials_by_name.find(name);
   if (it != materials_by_name.end()) return it->second;
-  int slot = impl_->material_writer.write_material(name, rgba);
+  int slot = impl_->material_writer.write_material(name, rgba, opacity);
   materials_by_name[name] = slot;
   impl_->material_count += 1;
   return slot;
 }
 
-int SkpBuilder::add_material(const std::string& name, Color3 rgb) {
-  return add_material(name, Color4{rgb[0], rgb[1], rgb[2], 255});
+int SkpBuilder::add_material(const std::string& name, Color3 rgb, std::optional<double> opacity) {
+  return add_material(name, Color4{rgb[0], rgb[1], rgb[2], 255}, opacity);
 }
 
 int SkpBuilder::add_texture_material(const std::string& name,
                                      const std::filesystem::path& image_path,
-                                     std::optional<double> applied_height) {
+                                     std::optional<double> applied_height,
+                                     std::optional<double> applied_width,
+                                     std::optional<double> opacity) {
   if (impl_->geometry_writer)
     throw SkpWriteError("add_texture_material must be called before any add_face calls");
   if (impl_->layer_writer)
@@ -1708,8 +1728,8 @@ int SkpBuilder::add_texture_material(const std::string& name,
   if (!f) throw SkpWriteError("cannot open texture image file: " + image_path.string());
   ByteBuffer image_bytes((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
   int subtype = detail::detect_image_subtype(image_bytes);
-  int slot = impl_->material_writer.write_textured_material(name, image_bytes, image_path.string(),
-                                                            subtype, applied_height);
+  int slot = impl_->material_writer.write_textured_material(
+      name, image_bytes, image_path.string(), subtype, applied_height, applied_width, opacity);
   materials_by_name[name] = slot;
   impl_->material_count += 1;
   return slot;

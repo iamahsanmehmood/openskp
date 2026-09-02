@@ -347,6 +347,24 @@ void main() {
       expect(frontName, 'Red');
       expect(backName, 'Blue');
     });
+
+    test('carries opacity on a solid material (openskp#252)', () {
+      final builder = create();
+      final glass = builder.addMaterial('Glass', [200, 220, 255], opacity: 0.35);
+      builder.addFace(square, material: glass);
+      final model = SkpFile.fromBuffer(builder.toBytes()).parse();
+      final mat = model.materials.single;
+      expect(mat.transparency, closeTo(0.35, 1e-9));
+    });
+
+    test('omitted opacity stays fully opaque', () {
+      final builder = create();
+      final red = builder.addMaterial('Red', [255, 0, 0]);
+      builder.addFace(square, material: red);
+      final model = SkpFile.fromBuffer(builder.toBytes()).parse();
+      final mat = model.materials.single;
+      expect(mat.transparency, 1.0);
+    });
   });
 
   group('Textures', () {
@@ -407,6 +425,43 @@ void main() {
         final model = SkpFile.fromBuffer(builder.toBytes()).parse();
         final mat = model.materials.single;
         expect(mat.texture!.height, 48.0);
+      } finally {
+        tmpDir.deleteSync(recursive: true);
+      }
+    });
+
+    test('applied width and height are both overridable (openskp#252)', () {
+      // Real SketchUp writes the material's own tile size in BOTH axes (a
+      // file authored in SketchUp Web carries 8.0 x 16.0 for a brick); a
+      // texture applied without positioning carries no per-face UV record,
+      // so this pair IS its mapping.
+      final tmpDir = Directory.systemTemp.createTempSync('openskp_tex_');
+      final pngPath = '${tmpDir.path}${Platform.pathSeparator}tex.png';
+      File(pngPath).writeAsBytesSync(makeFakePng());
+      try {
+        final builder = create();
+        final tex = builder.addTextureMaterial('Brick', pngPath, appliedHeight: 16.0, appliedWidth: 8.0);
+        builder.addFace(square, material: tex);
+        final model = SkpFile.fromBuffer(builder.toBytes()).parse();
+        final mat = model.materials.single;
+        expect(mat.texture!.width, 8.0);
+        expect(mat.texture!.height, 16.0);
+      } finally {
+        tmpDir.deleteSync(recursive: true);
+      }
+    });
+
+    test('carries opacity on a textured material (openskp#252)', () {
+      final tmpDir = Directory.systemTemp.createTempSync('openskp_tex_');
+      final pngPath = '${tmpDir.path}${Platform.pathSeparator}tex.png';
+      File(pngPath).writeAsBytesSync(makeFakePng());
+      try {
+        final builder = create();
+        final tex = builder.addTextureMaterial('Voile', pngPath, opacity: 0.5);
+        builder.addFace(square, material: tex);
+        final model = SkpFile.fromBuffer(builder.toBytes()).parse();
+        final mat = model.materials.single;
+        expect(mat.transparency, closeTo(0.5, 1e-9));
       } finally {
         tmpDir.deleteSync(recursive: true);
       }

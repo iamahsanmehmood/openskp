@@ -373,21 +373,28 @@ class OPENSKP_EXPORT SkpBuilder {
   /// also come before any `add_layer` or `add_component_definition` call - materials are
   /// spliced in earlier in the file, so both of those sections' own slot numbering depends on
   /// the final material count too.
-  int add_material(const std::string& name, Color4 rgba);
+  int add_material(const std::string& name, Color4 rgba,
+                   std::optional<double> opacity = std::nullopt);
   /// Overload taking an opaque (alpha = 255) RGB color.
-  int add_material(const std::string& name, Color3 rgb);
+  int add_material(const std::string& name, Color3 rgb,
+                   std::optional<double> opacity = std::nullopt);
 
   /// Register an image-textured material from a local PNG or JPEG file and return a handle to
   /// pass as `FaceOptions::material`. The format is detected from the file's own magic bytes,
   /// not its extension. Same ordering rules as `add_material`.
   ///
-  /// `applied_height` defaults to 1.0 (matching applied width, always 1.0). Pass a different
-  /// value to make a default-projected face's texture repeat at a specific real-world size
-  /// instead of every 1 inch - see `write_textured_material`'s own note in create.cpp for why
-  /// this field matters even for `FaceOptions::front_uv`/`back_uv` pinning (a positioned mapping
-  /// still divides by it).
+  /// `applied_height`/`applied_width`, if given, are the applied size in INCHES - how much model
+  /// space one tile of the image covers. Both default to 1.0. A texture applied without
+  /// positioning carries no per-face UV record, so this pair IS its mapping - see
+  /// `write_textured_material`'s own note in create.cpp for why it matters even for
+  /// `FaceOptions::front_uv`/`back_uv` pinning (a positioned mapping still divides by it).
+  /// `applied_width` and `opacity` sit after `applied_height` (not alongside it) so an existing
+  /// positional call passing `applied_height` as the 3rd argument keeps meaning what it always
+  /// meant.
   int add_texture_material(const std::string& name, const std::filesystem::path& image_path,
-                           std::optional<double> applied_height = std::nullopt);
+                           std::optional<double> applied_height = std::nullopt,
+                           std::optional<double> applied_width = std::nullopt,
+                           std::optional<double> opacity = std::nullopt);
 
   /// Register a layer and return a handle to pass as `FaceOptions::layer`. Calling this again
   /// with a name already registered returns the same handle (`options` are ignored on a repeat

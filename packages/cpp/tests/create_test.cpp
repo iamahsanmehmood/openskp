@@ -284,6 +284,80 @@ TEST(Create, TexturedMaterialExplicitAppliedHeightStillOverridable) {
   EXPECT_DOUBLE_EQ(model.materials[0].texture->height, 48.0);
 }
 
+// Real SketchUp writes the material's own tile size in BOTH axes (a file authored in SketchUp
+// Web carries 8.0 x 16.0 for a brick); a texture applied without positioning carries no per-face
+// UV record, so this pair IS its mapping (openskp#252).
+TEST(Create, TexturedMaterialAppliedSizeFullyOverridable) {
+  auto tmp_path = std::filesystem::temp_directory_path() / "openskp_create_test_texture_size.png";
+  {
+    std::ofstream f(tmp_path, std::ios::binary);
+    ByteBuffer png = fake_png_bytes();
+    f.write(reinterpret_cast<const char*>(png.data()), static_cast<std::streamsize>(png.size()));
+  }
+
+  auto builder = create();
+  int brick = builder->add_texture_material("Brick", tmp_path, 16.0, 8.0);
+  FaceOptions opts;
+  opts.material = brick;
+  builder->add_face({{0, 0, 0}, {100, 0, 0}, {100, 100, 0}, {0, 100, 0}}, opts);
+
+  SkpModel model = round_trip(*builder);
+  std::filesystem::remove(tmp_path);
+
+  ASSERT_EQ(model.materials.size(), 1u);
+  ASSERT_TRUE(model.materials[0].texture.has_value());
+  EXPECT_DOUBLE_EQ(model.materials[0].texture->width, 8.0);
+  EXPECT_DOUBLE_EQ(model.materials[0].texture->height, 16.0);
+}
+
+TEST(Create, TexturedMaterialCarriesOpacity) {
+  auto tmp_path =
+      std::filesystem::temp_directory_path() / "openskp_create_test_texture_opacity.png";
+  {
+    std::ofstream f(tmp_path, std::ios::binary);
+    ByteBuffer png = fake_png_bytes();
+    f.write(reinterpret_cast<const char*>(png.data()), static_cast<std::streamsize>(png.size()));
+  }
+
+  auto builder = create();
+  int voile = builder->add_texture_material("Voile", tmp_path, std::nullopt, std::nullopt, 0.5);
+  FaceOptions opts;
+  opts.material = voile;
+  builder->add_face({{0, 0, 0}, {100, 0, 0}, {100, 100, 0}, {0, 100, 0}}, opts);
+
+  SkpModel model = round_trip(*builder);
+  std::filesystem::remove(tmp_path);
+
+  ASSERT_EQ(model.materials.size(), 1u);
+  EXPECT_NEAR(model.materials[0].transparency, 0.5, 1e-9);
+}
+
+TEST(Create, SolidMaterialCarriesOpacity) {
+  auto builder = create();
+  int glass = builder->add_material("Glass", Color4{200, 220, 255, 255}, 0.35);
+  FaceOptions opts;
+  opts.material = glass;
+  builder->add_face({{0, 0, 0}, {100, 0, 0}, {100, 100, 0}, {0, 100, 0}}, opts);
+
+  SkpModel model = round_trip(*builder);
+
+  ASSERT_EQ(model.materials.size(), 1u);
+  EXPECT_NEAR(model.materials[0].transparency, 0.35, 1e-9);
+}
+
+TEST(Create, OmittedOpacityStaysFullyOpaque) {
+  auto builder = create();
+  int red = builder->add_material("Red", Color3{255, 0, 0});
+  FaceOptions opts;
+  opts.material = red;
+  builder->add_face({{0, 0, 0}, {100, 0, 0}, {100, 100, 0}, {0, 100, 0}}, opts);
+
+  SkpModel model = round_trip(*builder);
+
+  ASSERT_EQ(model.materials.size(), 1u);
+  EXPECT_DOUBLE_EQ(model.materials[0].transparency, 1.0);
+}
+
 TEST(Create, AddImagePlacesARealImageEntityNotAPlainTexturedFace) {
   auto tmp_path = std::filesystem::temp_directory_path() / "openskp_create_test_image.png";
   {

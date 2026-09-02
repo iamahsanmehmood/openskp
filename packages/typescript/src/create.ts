@@ -751,7 +751,9 @@ class ArchiveWriter {
   }
 
   /** Write one solid-color CMaterial record and return its slot. */
-  writeMaterial(name: string, rgba: readonly [number, number, number, number]): number {
+  writeMaterial(
+    name: string, rgba: readonly [number, number, number, number], opacity?: number
+  ): number {
     const slot = this.newOfKnownClass('CMaterial', MATERIAL_SCHEMA);
     this.preamble();
     this.writeStr(name);
@@ -759,8 +761,9 @@ class ArchiveWriter {
     this.pushBytes(rgba);
     this.writeStr(''); // texture path (empty - no texture)
     this.pushZeros(8); // unknown/padding - ground truth is all-zero here
-    this.pushF64(1.0); // opacity
-    this.pushU8(0); // use_opacity = False (alpha carries transparency instead)
+    // Stored TRANSPARENCY (0 = opaque); see writeTexturedMaterial.
+    this.pushF64(opacity === undefined ? 1.0 : 1.0 - opacity);
+    this.pushU8(opacity === undefined ? 0 : 1); // use_opacity gates it
     return slot;
   }
 
@@ -768,19 +771,27 @@ class ArchiveWriter {
    * verbatim inside a CDib sub-object) and return its slot. `subtype` is
    * CDib's image format tag (4 for PNG, 1 for JPEG).
    *
-   * `appliedHeight` defaults to 1.0, matching applied width (always 1.0,
-   * unconditionally). Pass a different value for a textured material used
-   * with default (unpositioned) projection, to make the texture repeat at
-   * a specific real-world size instead of every 1 inch - the reader's own
-   * ground-truth-derived UV formula divides a face's final UV by the
-   * material's applied width/height, for a default-projected face exactly
-   * as much as a positioned (`frontUv`/`backUv`) one. Until 2026-08-28
-   * this defaulted to a corrupted sentinel byte pattern instead (see
+   * `appliedWidth`/`appliedHeight` both default to 1.0. Pass the
+   * material's real-world tile size for a textured material used with
+   * default (unpositioned) projection, to make the texture repeat at a
+   * specific size instead of every 1 inch (real SketchUp writes the
+   * material's own size here - a file authored in SketchUp Web carries
+   * 8.0 x 16.0 for a brick) - the reader's own ground-truth-derived UV
+   * formula divides a face's final UV by the material's applied
+   * width/height, for a default-projected face exactly as much as a
+   * positioned (`frontUv`/`backUv`) one. Until 2026-08-28 this defaulted
+   * to a corrupted sentinel byte pattern instead (see
    * _TEXTURE_H_SENTINEL's own comment) - confirmed via real SketchUp
    * screenshots to render as a streaky, vertically-smeared texture
-   * regardless of projection mode. */
+   * regardless of projection mode.
+   *
+   * `appliedWidth` and `opacity` are appended after `appliedHeight`
+   * (rather than sitting next to it, matching Python's ordering) so an
+   * existing positional call passing `appliedHeight` as the 5th argument
+   * keeps meaning what it always meant. */
   writeTexturedMaterial(
-    name: string, imageBytes: Uint8Array, texturePath: string, subtype: number, appliedHeight?: number
+    name: string, imageBytes: Uint8Array, texturePath: string, subtype: number,
+    appliedHeight?: number, appliedWidth?: number, opacity?: number
   ): number {
     const slot = this.newOfKnownClass('CMaterial', MATERIAL_SCHEMA);
     this.preamble();
@@ -797,7 +808,12 @@ class ArchiveWriter {
       // JPEG's own actual encoded quality.
       this.pushU32(90);
     }
-    this.pushF64(1.0); // applied width - ground truth default when unscaled
+    // Applied size: how much MODEL SPACE one tile of the image covers, in
+    // inches - two plain f64s. For a texture applied WITHOUT positioning it
+    // is the only thing that says how big the image is - such faces carry
+    // no per-face UV record at all, so a wrong size here is the whole
+    // mapping wrong.
+    this.pushF64(appliedWidth !== undefined ? appliedWidth : 1.0);
     this.pushF64(appliedHeight !== undefined ? appliedHeight : 1.0);
     this.writeStr(texturePath);
     // avg color: neutral near-opaque white, alpha 254 not 255 - legacy.ts's
@@ -807,8 +823,14 @@ class ArchiveWriter {
     this.writeStr(''); // second name field - empty in ground truth
     this.pushU32(1);
     this.pushU32(0); // blob (colorize-related, ground truth: 1, 0)
-    this.pushF64(1.0); // opacity
-    this.pushU8(0); // use_opacity = False
+    // Opacity, and the u8 that GATES it. The stored f64 is TRANSPARENCY
+    // (0 = opaque) - the reader turns it into the opacity factor
+    // exposed with `1.0 - stored`, and only when the flag is set - so an
+    // `opacity` argument here is written inverted and round-trips as
+    // itself. Hardcoding 1.0/false meant a translucent material came out
+    // solid: a pool's water at 0.6 exported as an opaque slab.
+    this.pushF64(opacity === undefined ? 1.0 : 1.0 - opacity);
+    this.pushU8(opacity === undefined ? 0 : 1);
     return slot;
   }
 
@@ -1616,7 +1638,7 @@ export class SkpBuilder {
     this.materialWriter = new ArchiveWriter(this.base, {});
   }
 
-  addMaterial(name: string, rgba: readonly number[]): number {
+  addMaterial(name: string, rgba: readonly number[], opacity?: number): number {
     if (this.geometryWriter !== null) throw new SkpWriteError('addMaterial must be called before any addFace calls');
     if (this.layerWriter !== null) throw new SkpWriteError('addMaterial must be called before any addLayer calls');
     if (this.definitionWriterInstance !== null) {
@@ -1628,7 +1650,7 @@ export class SkpBuilder {
     if (full.length !== 4 || !full.every((c) => Number.isInteger(c) && c >= 0 && c <= 255)) {
       throw new SkpWriteError('rgba must be 3 or 4 integers in 0-255');
     }
-    const slot = this.materialWriter.writeMaterial(name, full as [number, number, number, number]);
+    const slot = this.materialWriter.writeMaterial(name, full as [number, number, number, number], opacity);
     this.materialsByName.set(name, slot);
     this.materialCount += 1;
     return slot;
@@ -1643,13 +1665,20 @@ export class SkpBuilder {
    * record (SketchUp shows it as the texture's original file path); it
    * has no effect on the embedded image bytes themselves.
    *
-   * `appliedHeight` defaults to 1.0 (matching applied width, always 1.0).
-   * Pass a different value to make a default-projected face's texture
-   * repeat at a specific real-world size instead of every 1 inch - see
-   * writeTexturedMaterial's own comment for why this field matters even
-   * for addFace's `frontUv`/`backUv` pinning (a positioned mapping still
-   * divides by it). */
-  addTextureMaterial(name: string, imageBytes: Uint8Array, texturePath = '', appliedHeight?: number): number {
+   * `appliedHeight`/`appliedWidth`, if given, are the applied size in
+   * INCHES - how much model space one tile of the image covers. Both
+   * default to 1.0. A texture applied without positioning carries no
+   * per-face UV record, so this pair IS its mapping - and see
+   * writeTexturedMaterial's own comment for why it matters even for
+   * addFace's `frontUv`/`backUv` pinning (a positioned mapping still
+   * divides by it). `appliedWidth` and `opacity` sit after `appliedHeight`
+   * (not alongside it) so an existing positional call passing
+   * `appliedHeight` as the 4th argument keeps meaning what it always
+   * meant. */
+  addTextureMaterial(
+    name: string, imageBytes: Uint8Array, texturePath = '',
+    appliedHeight?: number, appliedWidth?: number, opacity?: number
+  ): number {
     if (this.geometryWriter !== null) {
       throw new SkpWriteError('addTextureMaterial must be called before any addFace calls');
     }
@@ -1661,7 +1690,9 @@ export class SkpBuilder {
     }
     if (this.materialsByName.has(name)) return this.materialsByName.get(name)!;
     const subtype = detectImageSubtype(imageBytes);
-    const slot = this.materialWriter.writeTexturedMaterial(name, imageBytes, texturePath, subtype, appliedHeight);
+    const slot = this.materialWriter.writeTexturedMaterial(
+      name, imageBytes, texturePath, subtype, appliedHeight, appliedWidth, opacity
+    );
     this.materialsByName.set(name, slot);
     this.materialCount += 1;
     return slot;

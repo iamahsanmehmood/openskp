@@ -312,6 +312,24 @@ describe('Materials', () => {
     expect(glass.color.a).toBe(128);
     expect(solid.color).toEqual({ r: 10, g: 20, b: 30, a: 255 });
   });
+
+  it('carries opacity on a solid material (openskp#252)', () => {
+    const builder = create();
+    const glass = builder.addMaterial('Glass', [200, 220, 255], 0.35);
+    builder.addFace(SQUARE, { material: glass });
+    const model = parseSkp(toBuffer(builder.toBytes()));
+    const mat = model.materials.find((m) => m.name === 'Glass')!;
+    expect(mat.transparency).toBeCloseTo(0.35);
+  });
+
+  it('omitted opacity stays fully opaque', () => {
+    const builder = create();
+    const red = builder.addMaterial('Red', [255, 0, 0]);
+    builder.addFace(SQUARE, { material: red });
+    const model = parseSkp(toBuffer(builder.toBytes()));
+    const mat = model.materials.find((m) => m.name === 'Red')!;
+    expect(mat.transparency).toBe(1.0);
+  });
 });
 
 describe('Textures', () => {
@@ -386,6 +404,42 @@ describe('Textures', () => {
   it('an unrecognized image format throws', () => {
     const builder = create();
     expect(() => builder.addTextureMaterial('Bogus', Uint8Array.from([1, 2, 3, 4]))).toThrow(/unrecognized image format/);
+  });
+
+  it('carries the applied width and height on a textured material (openskp#252)', () => {
+    // Real SketchUp writes the material's own tile size in BOTH axes (a
+    // file authored in SketchUp Web carries 8.0 x 16.0 for a brick); a
+    // texture applied without positioning carries no per-face UV record,
+    // so this pair IS its mapping.
+    const builder = create();
+    const png = makeTestPng();
+    const brick = builder.addTextureMaterial('Brick', png, 'brick.png', 16.0, 8.0);
+    builder.addFace(SQUARE, { material: brick });
+    const model = parseSkp(toBuffer(builder.toBytes()));
+    const mat = model.materials.find((m) => m.name === 'Brick')!;
+    expect(mat.texture!.width).toBe(8.0);
+    expect(mat.texture!.height).toBe(16.0);
+  });
+
+  it('applied width and height both default to 1.0', () => {
+    const builder = create();
+    const png = makeTestPng();
+    const brick = builder.addTextureMaterial('Brick', png, 'brick.png');
+    builder.addFace(SQUARE, { material: brick });
+    const model = parseSkp(toBuffer(builder.toBytes()));
+    const mat = model.materials.find((m) => m.name === 'Brick')!;
+    expect(mat.texture!.width).toBe(1.0);
+    expect(mat.texture!.height).toBe(1.0);
+  });
+
+  it('carries opacity on a textured material (openskp#252)', () => {
+    const builder = create();
+    const png = makeTestPng();
+    const voile = builder.addTextureMaterial('Voile', png, 'voile.png', undefined, undefined, 0.5);
+    builder.addFace(SQUARE, { material: voile });
+    const model = parseSkp(toBuffer(builder.toBytes()));
+    const mat = model.materials.find((m) => m.name === 'Voile')!;
+    expect(mat.transparency).toBeCloseTo(0.5);
   });
 
   it('addImage places a real Image entity, not a plain textured face', () => {

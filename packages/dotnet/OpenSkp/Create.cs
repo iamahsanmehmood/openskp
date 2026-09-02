@@ -1058,7 +1058,7 @@ namespace OpenSkp
             AddRaw(encoded);
         }
 
-        internal int WriteMaterial(string name, (byte R, byte G, byte B, byte A) rgba)
+        internal int WriteMaterial(string name, (byte R, byte G, byte B, byte A) rgba, double? opacity = null)
         {
             int slot = NewOfKnownClass("CMaterial", CreateConstants.MaterialSchema);
             Preamble();
@@ -1067,8 +1067,9 @@ namespace OpenSkp
             Buf.Add(rgba.R); Buf.Add(rgba.G); Buf.Add(rgba.B); Buf.Add(rgba.A);
             WriteStr(""); // texture path (empty - no texture)
             AddZeros(8); // unknown/padding - ground truth is all-zero here
-            AddF64(1.0); // opacity
-            Buf.Add(0); // use_opacity = False (alpha carries transparency instead)
+            // Stored TRANSPARENCY (0 = opaque); see WriteTexturedMaterial.
+            AddF64(opacity.HasValue ? 1.0 - opacity.Value : 1.0);
+            Buf.Add(opacity.HasValue ? (byte)1 : (byte)0); // use_opacity gates it
             return slot;
         }
 
@@ -1077,20 +1078,28 @@ namespace OpenSkp
         /// slot. texturePath is stored as-is. subtype is CDib's image
         /// format tag (4 for PNG, 1 for JPEG).
         ///
-        /// appliedHeight defaults to 1.0, matching applied width (always
-        /// 1.0, unconditionally). Pass a different value for a textured
-        /// material used with default (unpositioned) projection, to make
-        /// the texture repeat at a specific real-world size instead of
-        /// every 1 inch - the reader's own ground-truth-derived UV formula
-        /// divides a face's final UV by the material's applied
-        /// width/height, for a default-projected face exactly as much as
-        /// a positioned (frontUv/backUv) one. Until 2026-08-28 this
-        /// defaulted to a corrupted sentinel byte pattern instead (see
-        /// CreateConstants.TextureHSentinel's own comment) - confirmed via
-        /// real SketchUp screenshots to render as a streaky,
-        /// vertically-smeared texture regardless of projection
-        /// mode.</summary>
-        internal int WriteTexturedMaterial(string name, byte[] imageBytes, string texturePath, int subtype, double? appliedHeight = null)
+        /// appliedWidth/appliedHeight both default to 1.0. Pass the
+        /// material's real-world tile size for a textured material used
+        /// with default (unpositioned) projection, to make the texture
+        /// repeat at a specific size instead of every 1 inch (real
+        /// SketchUp writes the material's own size here - a file authored
+        /// in SketchUp Web carries 8.0 x 16.0 for a brick) - the reader's
+        /// own ground-truth-derived UV formula divides a face's final UV
+        /// by the material's applied width/height, for a default-projected
+        /// face exactly as much as a positioned (frontUv/backUv) one.
+        /// Until 2026-08-28 this defaulted to a corrupted sentinel byte
+        /// pattern instead (see CreateConstants.TextureHSentinel's own
+        /// comment) - confirmed via real SketchUp screenshots to render as
+        /// a streaky, vertically-smeared texture regardless of projection
+        /// mode.
+        ///
+        /// appliedWidth and opacity are appended after appliedHeight
+        /// (rather than sitting next to it) so an existing positional call
+        /// passing appliedHeight as the 5th argument keeps meaning what it
+        /// always meant.</summary>
+        internal int WriteTexturedMaterial(
+            string name, byte[] imageBytes, string texturePath, int subtype,
+            double? appliedHeight = null, double? appliedWidth = null, double? opacity = null)
         {
             int slot = NewOfKnownClass("CMaterial", CreateConstants.MaterialSchema);
             Preamble();
@@ -1108,7 +1117,12 @@ namespace OpenSkp
                 // source JPEG's own actual encoded quality.
                 AddU32(90);
             }
-            AddF64(1.0); // applied width - ground truth default when unscaled
+            // Applied size: how much MODEL SPACE one tile of the image
+            // covers, in inches - two plain f64s. For a texture applied
+            // WITHOUT positioning it is the only thing that says how big
+            // the image is - such faces carry no per-face UV record at
+            // all, so a wrong size here is the whole mapping wrong.
+            AddF64(appliedWidth ?? 1.0);
             AddF64(appliedHeight ?? 1.0);
             WriteStr(texturePath);
             // avg color (RGBA + pad + RGBA repeated) - neutral near-opaque
@@ -1122,8 +1136,15 @@ namespace OpenSkp
             AddRaw(new byte[] { 255, 255, 255, 254, 0, 255, 255, 255, 254 });
             WriteStr(""); // second name field - empty in ground truth
             AddU32(1); AddU32(0); // blob (colorize-related, ground truth: 1, 0)
-            AddF64(1.0); // opacity
-            Buf.Add(0); // use_opacity = False
+            // Opacity, and the u8 that GATES it. The stored f64 is
+            // TRANSPARENCY (0 = opaque) - the reader turns it into the
+            // opacity factor exposed with 1.0 - stored, and only when the
+            // flag is set - so an opacity argument here is written
+            // inverted and round-trips as itself. Hardcoding 1.0/false
+            // meant a translucent material came out solid: a pool's water
+            // at 0.6 exported as an opaque slab.
+            AddF64(opacity.HasValue ? 1.0 - opacity.Value : 1.0);
+            Buf.Add(opacity.HasValue ? (byte)1 : (byte)0);
             return slot;
         }
 
@@ -2136,7 +2157,7 @@ namespace OpenSkp
         /// before any AddLayer or AddComponentDefinition call - materials
         /// are spliced in earlier in the file, so both of those sections'
         /// own slot numbering depends on the final material count too.</summary>
-        public int AddMaterial(string name, (int R, int G, int B, int A) rgba)
+        public int AddMaterial(string name, (int R, int G, int B, int A) rgba, double? opacity = null)
         {
             if (_geometryWriter != null)
             {
@@ -2155,14 +2176,14 @@ namespace OpenSkp
             ValidateByteRange(rgba.G, nameof(rgba.G));
             ValidateByteRange(rgba.B, nameof(rgba.B));
             ValidateByteRange(rgba.A, nameof(rgba.A));
-            int slot = _materialWriter.WriteMaterial(name, ((byte)rgba.R, (byte)rgba.G, (byte)rgba.B, (byte)rgba.A));
+            int slot = _materialWriter.WriteMaterial(name, ((byte)rgba.R, (byte)rgba.G, (byte)rgba.B, (byte)rgba.A), opacity);
             MaterialsByName[name] = slot;
             _materialCount += 1;
             return slot;
         }
 
         /// <summary>Convenience overload defaulting alpha to 255 (opaque).</summary>
-        public int AddMaterial(string name, (int R, int G, int B) rgb) => AddMaterial(name, (rgb.R, rgb.G, rgb.B, 255));
+        public int AddMaterial(string name, (int R, int G, int B) rgb, double? opacity = null) => AddMaterial(name, (rgb.R, rgb.G, rgb.B, 255), opacity);
 
         private static void ValidateByteRange(int v, string label)
         {
@@ -2179,13 +2200,18 @@ namespace OpenSkp
         /// project has confirmed the on-disk CDib subtype tag for via SDK
         /// ground truth. Same ordering rules as AddMaterial.
         ///
-        /// appliedHeight defaults to 1.0 (matching applied width, always
-        /// 1.0). Pass a different value to make a default-projected
-        /// face's texture repeat at a specific real-world size instead of
-        /// every 1 inch - see WriteTexturedMaterial's own note for why
-        /// this field matters even for AddFace's frontUv/backUv pinning
-        /// (a positioned mapping still divides by it).</summary>
-        public int AddTextureMaterial(string name, string imagePath, double? appliedHeight = null)
+        /// appliedHeight/appliedWidth, if given, are the applied size in
+        /// INCHES - how much model space one tile of the image covers.
+        /// Both default to 1.0. A texture applied without positioning
+        /// carries no per-face UV record, so this pair IS its mapping -
+        /// see WriteTexturedMaterial's own note for why it matters even
+        /// for AddFace's frontUv/backUv pinning (a positioned mapping
+        /// still divides by it). appliedWidth and opacity sit after
+        /// appliedHeight (not alongside it) so an existing positional call
+        /// passing appliedHeight as the 3rd argument keeps meaning what it
+        /// always meant.</summary>
+        public int AddTextureMaterial(
+            string name, string imagePath, double? appliedHeight = null, double? appliedWidth = null, double? opacity = null)
         {
             if (_geometryWriter != null)
             {
@@ -2202,7 +2228,7 @@ namespace OpenSkp
             if (MaterialsByName.TryGetValue(name, out int existing)) return existing;
             byte[] imageBytes = System.IO.File.ReadAllBytes(imagePath);
             int subtype = CreateMath.DetectImageSubtype(imageBytes);
-            int slot = _materialWriter.WriteTexturedMaterial(name, imageBytes, imagePath, subtype, appliedHeight);
+            int slot = _materialWriter.WriteTexturedMaterial(name, imageBytes, imagePath, subtype, appliedHeight, appliedWidth, opacity);
             MaterialsByName[name] = slot;
             _materialCount += 1;
             return slot;
