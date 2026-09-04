@@ -173,12 +173,50 @@ def _flat_headers(data, start, end):
     return headers
 
 
+_DEFINITION_LIST_WRAPPER_CHAIN = ('7017', '7117')
+_DEFINITION_TAG = '7C15'
+
+
+def _unwrap_definitions_container(data, offset, size):
+    """``F901`` wraps the file's whole component/group-definition list
+    behind two more single-child containers (``7017``, then ``7117``)
+    before reaching the real, independent list of one ``7C15`` per
+    definition (openskp#264: on a real 359MB production file, one such
+    list held 95,363 definitions and 95% of the entire decompressed
+    model - see CHECKLIST.md for the full investigation). Returns the
+    flat ``(tag, offset, size)`` headers of each ``7C15`` - a cheap,
+    header-only scan at every level, no tree building - or ``None`` if
+    the expected wrapper shape isn't found, so a caller can fall back to
+    treating ``F901`` as an ordinary single record rather than risk
+    silently mis-parsing a differently-shaped file."""
+    level = _flat_headers(data, offset + 6, offset + 6 + size)
+    for expected_tag in _DEFINITION_LIST_WRAPPER_CHAIN:
+        container = next((h for h in level if h[0] == expected_tag), None)
+        if container is None:
+            return None
+        _, c_offset, c_size = container
+        level = _flat_headers(data, c_offset + 6, c_offset + 6 + c_size)
+    defs = [h for h in level if h[0] == _DEFINITION_TAG]
+    return defs if defs else None
+
+
 def iter_top_level_lazy(data, start, end, container_tags=None):
     """Yield ``(index, total, node)`` for each top-level TLV record, fully
     recursed, one at a time - transparently unwrapping a lone 'F401'
     wrapper (matching the shape parse_tlv_recursive's callers already
-    expect) - without ever materializing more than one top-level subtree
+    expect), and an 'F901' component/group-definition-list wrapper (see
+    :func:`_unwrap_definitions_container`) - without ever materializing
+    more than one top-level subtree, or one definition's subtree,
     simultaneously.
+
+    The 'F901' unwrap matters because its own subtree is otherwise
+    treated as ONE top-level record like any other: without it, a file
+    whose definitions are all nested under one 'F901' (rather than
+    spread across many top-level records) would need its ENTIRE
+    definition list - every vertex/edge/face/loop of every definition -
+    built as one monolithic Python object graph before any of it could
+    be processed and released, defeating the streaming this function
+    exists to provide (openskp#264).
 
     ``total`` (the top-level sibling count) comes for free from the same
     cheap header scan that drives the loop, so callers can report "N of
@@ -187,7 +225,8 @@ def iter_top_level_lazy(data, start, end, container_tags=None):
     Each yielded node is independent and safe to discard (drop all
     references) once the caller is done with it, before the next one is
     produced - that's what keeps peak memory bounded by the size of the
-    single largest top-level record instead of the whole file.
+    single largest top-level record (or single largest definition, once
+    the 'F901' unwrap applies) instead of the whole file.
     """
     if container_tags is None:
         container_tags = CONTAINER_TAGS
@@ -196,6 +235,16 @@ def iter_top_level_lazy(data, start, end, container_tags=None):
     if len(headers) == 1 and headers[0][0] == 'F401':
         _, f401_offset, f401_size = headers[0]
         headers = _flat_headers(data, f401_offset + 6, f401_offset + 6 + f401_size)
+
+    expanded = []
+    for tag_hex, offset, size in headers:
+        if tag_hex == 'F901':
+            def_headers = _unwrap_definitions_container(data, offset, size)
+            if def_headers is not None:
+                expanded.extend(def_headers)
+                continue
+        expanded.append((tag_hex, offset, size))
+    headers = expanded
 
     total = len(headers)
     for index, (tag_hex, offset, size) in enumerate(headers):
@@ -275,19 +324,36 @@ def triangulate_face_3d(vertices_3d, loops, normal):
         mp = MultiPoint(points_2d)
         triangles = shapely.ops.triangulate(mp)
 
+        # A triangle's own corners are copies of the exact points MultiPoint was
+        # built from (Delaunay triangulation over a fixed point set never invents
+        # new coordinates), so a direct reverse lookup finds the matching v_id in
+        # O(1) instead of the O(V) linear scan below - the difference between a
+        # face with V vertices costing O(V) here instead of O(V^2) per triangle
+        # corner (O(V^3) for the whole face). Real production files can have
+        # individual faces with tens of thousands of vertices (see openskp#264's
+        # investigation), where the old linear scan made this function the
+        # dominant cost of scene building - confirmed via a live py-spy stack
+        # sample stuck here for 15+ minutes on one such file. Falls back to the
+        # original nearest-distance scan only if the exact lookup ever misses
+        # (kept for safety - not observed to trigger on any real or test fixture
+        # file - rather than assume float equality always holds through Shapely's
+        # own internal representation).
+        coord_to_v_id = {c2d: v_id for v_id, c2d in v_id_to_2d.items()}
+
         inside_triangles = []
         for tri in triangles:
             if poly_2d.contains(tri.centroid):
                 tri_coords = list(tri.exterior.coords)[:3]
                 tri_v_ids = []
                 for tc in tri_coords:
-                    best_v_id = None
-                    min_dist = float('inf')
-                    for v_id, c2d in v_id_to_2d.items():
-                        dist = (tc[0] - c2d[0])**2 + (tc[1] - c2d[1])**2
-                        if dist < min_dist:
-                            min_dist = dist
-                            best_v_id = v_id
+                    best_v_id = coord_to_v_id.get(tc)
+                    if best_v_id is None:
+                        min_dist = float('inf')
+                        for v_id, c2d in v_id_to_2d.items():
+                            dist = (tc[0] - c2d[0])**2 + (tc[1] - c2d[1])**2
+                            if dist < min_dist:
+                                min_dist = dist
+                                best_v_id = v_id
                     if best_v_id is not None:
                         tri_v_ids.append(best_v_id)
                 if len(tri_v_ids) == 3 and len(set(tri_v_ids)) == 3:
