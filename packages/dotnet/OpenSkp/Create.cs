@@ -1307,20 +1307,28 @@ namespace OpenSkp
         /// return how many new root-entity-list slots it consumed - always
         /// 1, same contract as WriteInstance. A group is structurally
         /// almost identical to a component instance - the two real
-        /// differences are its class name/schema (CGroup, schema 1) and
-        /// that it uses a plain null attribute pointer rather than the
-        /// real (empty) CAttributeContainer instances need.</summary>
+        /// differences are its class name/schema (CGroup, schema 1) and its
+        /// attribute pointer: unlike CComponentInstance (which always
+        /// carries a real, if often empty, CAttributeContainer regardless
+        /// of whether attributes are given), a group only gets one when
+        /// attributeDicts is actually given - matching WriteFace's
+        /// conditional pattern instead. A real production Group WITH
+        /// attributes (SketchUp 2020 export, ground truth) carries a
+        /// genuine CAttributeContainer at this exact schema; a
+        /// never-attributed group still correctly gets a null pointer
+        /// either way (openskp#261).</summary>
         internal int WriteGroup(
             int definitionSlot, string name,
             (double X, double Y, double Z) translation = default,
             double[]? matrix3x3 = null,
             int groupMaterial = 0, int groupLayer = 0,
+            IReadOnlyList<AttributeDict>? attributeDicts = null,
             bool hidden = false)
         {
             WriteInstanceLike(
-                "CGroup", CreateConstants.GroupSchema, false,
+                "CGroup", CreateConstants.GroupSchema, attributeDicts != null && attributeDicts.Count > 0,
                 definitionSlot, name, translation, matrix3x3, groupMaterial, groupLayer,
-                null, hidden);
+                attributeDicts, hidden);
             return 1;
         }
 
@@ -1913,6 +1921,7 @@ namespace OpenSkp
             double[]? matrix3x3 = null,
             ((double X, double Y, double Z) Axis, double AngleRadians)? rotation = null,
             int? material = null, int? layer = null,
+            IReadOnlyDictionary<string, object>? attributes = null, string attributeDictName = "attributes",
             bool hidden = false)
         {
             CheckWritable("groups");
@@ -1928,7 +1937,8 @@ namespace OpenSkp
                 throw new SkpWriteException($"component definition '{Name}' cannot nest a group instance of itself");
             }
             var resolved = CreateMath.ResolveMatrix3x3(matrix3x3, rotation);
-            _newEntityCount += Skp.DefinitionWriter!.WriteGroup(definition.Slot, name ?? definition.Name, translation, resolved, material ?? 0, layer ?? 0, hidden);
+            var attributeDicts = BuildAttributeDicts(attributes, attributeDictName);
+            _newEntityCount += Skp.DefinitionWriter!.WriteGroup(definition.Slot, name ?? definition.Name, translation, resolved, material ?? 0, layer ?? 0, attributeDicts, hidden);
         }
 
         private static List<AttributeDict>? BuildAttributeDicts(IReadOnlyDictionary<string, object>? attributes, string dictName)
@@ -1962,8 +1972,8 @@ namespace OpenSkp
         }
     }
 
-    /// <summary>(translation, matrix3x3, material, layer, hidden) for a
-    /// group's deferred self-placement - mirrors create.py's
+    /// <summary>(translation, matrix3x3, material, layer, attributeDicts,
+    /// hidden) for a group's deferred self-placement - mirrors create.py's
     /// group_placement tuple.</summary>
     internal readonly struct GroupPlacement
     {
@@ -1971,14 +1981,16 @@ namespace OpenSkp
         public readonly double[]? Matrix3x3;
         public readonly int Material;
         public readonly int Layer;
+        public readonly IReadOnlyList<AttributeDict>? AttributeDicts;
         public readonly bool Hidden;
 
-        public GroupPlacement((double X, double Y, double Z) translation, double[]? matrix3x3, int material, int layer, bool hidden)
+        public GroupPlacement((double X, double Y, double Z) translation, double[]? matrix3x3, int material, int layer, IReadOnlyList<AttributeDict>? attributeDicts, bool hidden)
         {
             Translation = translation;
             Matrix3x3 = matrix3x3;
             Material = material;
             Layer = layer;
+            AttributeDicts = attributeDicts;
             Hidden = hidden;
         }
     }
@@ -2410,12 +2422,16 @@ namespace OpenSkp
             double[]? matrix3x3 = null,
             ((double X, double Y, double Z) Axis, double AngleRadians)? rotation = null,
             int? material = null, int? layer = null,
+            IReadOnlyDictionary<string, object>? attributes = null, string attributeDictName = "attributes",
             bool hidden = false)
         {
             CheckMaterialHandle(material, "material");
             CheckLayerHandle(layer);
             var resolved = CreateMath.ResolveMatrix3x3(matrix3x3, rotation);
-            var placement = new GroupPlacement(translation, resolved, material ?? 0, layer ?? 0, hidden);
+            var attributeDicts = attributes != null && attributes.Count > 0
+                ? new List<AttributeDict> { new AttributeDict(attributeDictName, attributes) }
+                : null;
+            var placement = new GroupPlacement(translation, resolved, material ?? 0, layer ?? 0, attributeDicts, hidden);
             return StartDefinition(name ?? "Group", "AddGroup", placement, null);
         }
 
@@ -2581,7 +2597,7 @@ namespace OpenSkp
             foreach (var (comp, placement) in _pendingGroups)
             {
                 _newEntityCount += _geometryWriter.WriteGroup(
-                    comp.Slot, comp.Name, placement.Translation, placement.Matrix3x3, placement.Material, placement.Layer, placement.Hidden);
+                    comp.Slot, comp.Name, placement.Translation, placement.Matrix3x3, placement.Material, placement.Layer, placement.AttributeDicts, placement.Hidden);
                 _faceCount += 1;
             }
             _pendingGroups.Clear();

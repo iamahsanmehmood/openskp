@@ -89,11 +89,12 @@ typedef Rotation = (Point3, double);
 /// xaxis, startAngle, endAngle, radius, numSegments)`.
 typedef CurveParams = (Point3, Point3, Point3, double, double, double, int);
 
-/// `(translation, matrix3x3, materialSlot, layerSlot, hidden)` - a group's
-/// deferred self-placement, recorded when [SkpBuilder.addGroup]'s body
-/// closes and flushed the first time anything actually needs the root
-/// geometry writer (see [SkpBuilder._ensureGeometryWriter]).
-typedef GroupPlacement = (Point3, Matrix3x3?, int, int, bool);
+/// `(translation, matrix3x3, materialSlot, layerSlot, attributeDicts,
+/// hidden)` - a group's deferred self-placement, recorded when
+/// [SkpBuilder.addGroup]'s body closes and flushed the first time anything
+/// actually needs the root geometry writer (see
+/// [SkpBuilder._ensureGeometryWriter]).
+typedef GroupPlacement = (Point3, Matrix3x3?, int, int, List<(String, Map<String, Object>)>, bool);
 
 /// Raised when a `.skp` file cannot be constructed.
 class SkpWriteError implements Exception {
@@ -1253,27 +1254,35 @@ class _ArchiveWriter {
   ///
   /// A group is structurally almost identical to a component instance -
   /// the two real differences are its class name/schema (CGroup, schema 1)
-  /// and that it uses a plain null attribute pointer rather than the real
-  /// (empty) CAttributeContainer instances need.
+  /// and its attribute pointer: unlike `CComponentInstance` (which always
+  /// carries a real, if often empty, `CAttributeContainer` regardless of
+  /// whether attributes are given), a group only gets one when
+  /// [attributeDicts] is actually given - matching `writeFace`'s
+  /// conditional pattern instead. A real production Group WITH attributes
+  /// (SketchUp 2020 export, ground truth) carries a genuine
+  /// `CAttributeContainer` at this exact schema; a never-attributed group
+  /// still correctly gets a null pointer either way (openskp#261).
   int writeGroup(
     int definitionSlot,
     String name,
     Point3 translation,
     Matrix3x3? matrix3x3,
     int groupMaterial,
-    int groupLayer, [
+    int groupLayer, {
+    List<(String, Map<String, Object>)> attributeDicts = const [],
     bool hidden = false,
-  ]) {
+  }) {
     _writeInstanceLike(
       className: 'CGroup',
       schema: _groupSchema,
-      realAttrs: false,
+      realAttrs: attributeDicts.isNotEmpty,
       definitionSlot: definitionSlot,
       name: name,
       translation: translation,
       matrix3x3: matrix3x3,
       mat: groupMaterial,
       layer: groupLayer,
+      attributeDicts: attributeDicts,
       hidden: hidden,
     );
     return 1;
@@ -1954,6 +1963,8 @@ class ComponentDefinitionBuilder implements GeometryHost {
     Rotation? rotation,
     int? material,
     int? layer,
+    Map<String, Object>? attributes,
+    String attributeDictName = 'attributes',
     bool hidden = false,
   }) {
     _checkWritable('groups');
@@ -1969,6 +1980,7 @@ class ComponentDefinitionBuilder implements GeometryHost {
       throw SkpWriteError("component definition '$name' cannot nest a group instance of itself");
     }
     final resolved = _resolveMatrix3x3(matrix3x3, rotation);
+    final attributeDicts = _attrDicts(attributes, attributeDictName);
     _newEntityCount += _skp._definitionWriter!.writeGroup(
       definition.slot,
       name ?? definition.name,
@@ -1976,7 +1988,8 @@ class ComponentDefinitionBuilder implements GeometryHost {
       resolved,
       material ?? 0,
       layer ?? 0,
-      hidden,
+      attributeDicts: attributeDicts,
+      hidden: hidden,
     );
   }
 
@@ -2350,15 +2363,18 @@ class SkpBuilder implements GeometryHost {
     Rotation? rotation,
     int? material,
     int? layer,
+    Map<String, Object>? attributes,
+    String attributeDictName = 'attributes',
     bool hidden = false,
   }) {
     _checkMaterialHandle(material, 'material');
     _checkLayerHandle(layer);
     final resolved = _resolveMatrix3x3(matrix3x3, rotation);
+    final attributeDicts = _attrDicts(attributes, attributeDictName);
     final comp = _startDefinition(
       name ?? 'Group',
       'addGroup',
-      groupPlacement: (translation, resolved, material ?? 0, layer ?? 0, hidden),
+      groupPlacement: (translation, resolved, material ?? 0, layer ?? 0, attributeDicts, hidden),
     );
     body(comp);
     comp._close();
@@ -2530,8 +2546,11 @@ class SkpBuilder implements GeometryHost {
     // slot numbering before a later addGroup/addComponentDefinition call
     // has had a chance to run.
     for (final (comp, placement) in _pendingGroups) {
-      final (translation, matrix3x3, mat, layer, hidden) = placement;
-      _newEntityCount += _geometryWriter!.writeGroup(comp.slot, comp.name, translation, matrix3x3, mat, layer, hidden);
+      final (translation, matrix3x3, mat, layer, attributeDicts, hidden) = placement;
+      _newEntityCount += _geometryWriter!.writeGroup(
+        comp.slot, comp.name, translation, matrix3x3, mat, layer,
+        attributeDicts: attributeDicts, hidden: hidden,
+      );
       _faceCount++;
     }
     _pendingGroups = [];

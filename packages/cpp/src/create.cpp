@@ -945,12 +945,18 @@ class ArchiveWriter {
   }
 
   // A group is structurally almost identical to a component instance - the two real differences
-  // are its class name/schema and that it uses a plain null attribute pointer.
+  // are its class name/schema and its attribute pointer: unlike CComponentInstance (which always
+  // carries a real, if often empty, CAttributeContainer regardless of whether attributes are
+  // given), a group only gets one when attribute_dicts is actually given - matching write_face's
+  // conditional pattern instead. A real production Group WITH attributes (SketchUp 2020 export,
+  // ground truth) carries a genuine CAttributeContainer at this exact schema; a never-attributed
+  // group still correctly gets a null pointer either way (openskp#261).
   int write_group(int definition_slot, const std::string& name, Point3 translation,
                   std::optional<Matrix3x3> matrix3x3, int group_material, int group_layer,
-                  bool hidden) {
-    write_instance_like("CGroup", kGroupSchema, false, definition_slot, name, translation,
-                        matrix3x3, group_material, group_layer, {}, hidden);
+                  const AttributeDictList& attribute_dicts, bool hidden) {
+    write_instance_like("CGroup", kGroupSchema, !attribute_dicts.empty(), definition_slot, name,
+                        translation, matrix3x3, group_material, group_layer, attribute_dicts,
+                        hidden);
     return 1;
   }
 
@@ -1342,6 +1348,7 @@ struct ComponentDefinitionBuilder::Impl {
     std::optional<Matrix3x3> matrix3x3;
     int material;
     int layer;
+    detail::AttributeDictList attribute_dicts;
     bool hidden;
   };
 
@@ -1423,7 +1430,7 @@ struct SkpBuilder::Impl {
     for (auto& [comp, gp] : pending_groups) {
       new_entity_count +=
           geometry_writer->write_group(comp->slot(), comp->name(), gp.translation, gp.matrix3x3,
-                                       gp.material, gp.layer, gp.hidden);
+                                       gp.material, gp.layer, gp.attribute_dicts, gp.hidden);
       face_count += 1;
     }
     pending_groups.clear();
@@ -1653,9 +1660,12 @@ void ComponentDefinitionBuilder::add_group_instance(const ComponentDefinitionBui
                         "' cannot nest a group instance of itself");
   }
   auto matrix = detail::resolve_matrix3x3(options.matrix3x3, options.rotation);
+  detail::AttributeDictList dicts;
+  if (!options.attributes.empty())
+    dicts.emplace_back(options.attribute_dict_name, options.attributes);
   impl_->new_entity_count += impl_->writer->write_group(
       definition.slot(), options.name.value_or(definition.name()), options.translation, matrix,
-      options.material.value_or(0), options.layer.value_or(0), options.hidden);
+      options.material.value_or(0), options.layer.value_or(0), dicts, options.hidden);
 }
 
 int ComponentDefinitionBuilder::slot() const noexcept { return impl_->slot; }
@@ -1791,9 +1801,12 @@ ComponentDefinitionBuilder& SkpBuilder::add_group(const GroupOptions& options) {
   cdb_impl->name = options.name.value_or("Group");
   cdb_impl->count_patch_pos = count_patch_pos;
   cdb_impl->writer = &*impl_->definition_writer;
+  detail::AttributeDictList group_dicts;
+  if (!options.attributes.empty())
+    group_dicts.emplace_back(options.attribute_dict_name, options.attributes);
   cdb_impl->group_placement = ComponentDefinitionBuilder::Impl::GroupPlacement{
-      options.translation, matrix, options.material.value_or(0), options.layer.value_or(0),
-      options.hidden};
+      options.translation,       matrix,      options.material.value_or(0),
+      options.layer.value_or(0), group_dicts, options.hidden};
   impl_->definitions.push_back(std::unique_ptr<ComponentDefinitionBuilder>(
       new ComponentDefinitionBuilder(std::move(cdb_impl))));
   ComponentDefinitionBuilder* raw = impl_->definitions.back().get();

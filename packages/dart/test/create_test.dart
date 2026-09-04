@@ -824,9 +824,22 @@ void main() {
       final inst = model.root.instances.single;
       expect(inst.name, 'Table');
       expect(inst.matrix[9], 50.0);
-      // ground truth: unlike CComponentInstance, CGroup carries no dynamic
-      // attributes - properties should be empty.
+      // A group with no attributes given still gets a null attribute
+      // pointer, same as before openskp#261 - properties should be empty.
       expect(inst.properties, isEmpty);
+    });
+
+    test('group attribute dicts round-trip through Instance.properties (openskp#261)', () {
+      // Groups used to hardcode a null attribute pointer on the belief that
+      // a CGroup never carries a CAttributeContainer - real production
+      // files (SketchUp 2020-legacy export, ground truth) contradicted
+      // this.
+      final builder = create();
+      builder.addGroup((def) {
+        def.addFace(square);
+      }, name: 'Table', attributes: {'sku': 'TBL-1', 'qty': 2}, attributeDictName: 'dynamic_attributes');
+      final model = SkpFile.fromBuffer(builder.toBytes()).parse();
+      expect(model.root.instances.single.properties, {'sku': 'TBL-1', 'qty': '2'});
     });
 
     test('a hidden group round-trips', () {
@@ -959,6 +972,26 @@ void main() {
       expect(carDef.faces.length, 1);
       expect(carDef.instances.length, 1);
       expect(carDef.instances.single.name, 'Engine');
+    });
+
+    test('a nested group-instance carries its own attribute dicts too (openskp#261)', () {
+      final builder = create();
+      final engine = builder.addComponentDefinition('Engine', (def) {
+        def.addFace(square);
+      });
+      final car = builder.addComponentDefinition('Car', (def) {
+        def.addFace(square);
+        def.addGroupInstance(
+          engine,
+          translation: (50.0, 0.0, 10.0),
+          attributes: {'part': 'V6'},
+          attributeDictName: 'dynamic_attributes',
+        );
+      });
+      builder.addInstance(car);
+      final model = SkpFile.fromBuffer(builder.toBytes()).parse();
+      final carDef = model.definitions.values.firstWhere((d) => d.name == 'Car');
+      expect(carDef.instances.single.properties, {'part': 'V6'});
     });
   });
 
