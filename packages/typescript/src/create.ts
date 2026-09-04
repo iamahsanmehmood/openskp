@@ -945,15 +945,21 @@ class ArchiveWriter {
 
   /** Write one CGroup placing a copy of `definitionSlot` - structurally
    * almost identical to writeInstance; the real differences are its
-   * class name/schema and that it uses a plain null attribute pointer
-   * rather than the real (empty) CAttributeContainer instances need. */
+   * class name/schema and its attribute pointer: unlike CComponentInstance
+   * (which always carries a real, if often empty, CAttributeContainer), a
+   * group only gets one when `attributeDicts` is actually given - matching
+   * writeFace's conditional pattern instead. A real production Group WITH
+   * attributes (SketchUp 2020 export, ground truth) carries a genuine
+   * CAttributeContainer at this exact schema; a never-attributed group
+   * still correctly gets a null pointer either way (openskp#261). */
   writeGroup(
     definitionSlot: number, name: string, translation: Point3 = [0, 0, 0], matrix3x3?: Matrix3x3,
-    groupMaterial = 0, groupLayer = 0, hidden = false
+    groupMaterial = 0, groupLayer = 0,
+    attributeDicts: ReadonlyArray<[string, AttributeDict]> = [], hidden = false
   ): number {
     this.writeInstanceLike(
-      'CGroup', GROUP_SCHEMA, false,
-      definitionSlot, name, translation, matrix3x3, groupMaterial, groupLayer, [], hidden
+      'CGroup', GROUP_SCHEMA, attributeDicts.length > 0,
+      definitionSlot, name, translation, matrix3x3, groupMaterial, groupLayer, attributeDicts, hidden
     );
     return 1;
   }
@@ -1378,6 +1384,8 @@ export interface AddGroupInstanceOptions {
   rotation?: Rotation;
   material?: number;
   layer?: number;
+  attributes?: AttributeDict;
+  attributeDictName?: string;
   hidden?: boolean;
 }
 
@@ -1393,10 +1401,12 @@ export interface AddGroupOptions {
   rotation?: Rotation;
   material?: number;
   layer?: number;
+  attributes?: AttributeDict;
+  attributeDictName?: string;
   hidden?: boolean;
 }
 
-type GroupPlacement = [Point3, Matrix3x3 | undefined, number, number, boolean];
+type GroupPlacement = [Point3, Matrix3x3 | undefined, number, number, ReadonlyArray<[string, AttributeDict]>, boolean];
 
 function toPoint3(p: readonly [number, number, number]): Point3 {
   return [Number(p[0]), Number(p[1]), Number(p[2])];
@@ -1563,9 +1573,10 @@ export class ComponentDefinitionBuilder {
       throw new SkpWriteError(`component definition ${JSON.stringify(this.name)} cannot nest a group instance of itself`);
     }
     const matrix3x3 = resolveMatrix3x3(options.matrix3x3, options.rotation);
+    const attributeDicts = attributeDictsFrom(options.attributes, options.attributeDictName ?? 'attributes');
     this.newEntityCount += this._skp._definitionWriter().writeGroup(
       definition.slot, options.name ?? definition.name, options.translation ?? [0, 0, 0], matrix3x3,
-      options.material ?? 0, options.layer ?? 0, options.hidden ?? false
+      options.material ?? 0, options.layer ?? 0, attributeDicts, options.hidden ?? false
     );
   }
 
@@ -1834,8 +1845,9 @@ export class SkpBuilder {
     this._checkMaterialHandle(options.material, 'material');
     this._checkLayerHandle(options.layer);
     const matrix3x3 = resolveMatrix3x3(options.matrix3x3, options.rotation);
+    const attributeDicts = attributeDictsFrom(options.attributes, options.attributeDictName ?? 'attributes');
     const placement: GroupPlacement = [
-      options.translation ?? [0, 0, 0], matrix3x3, options.material ?? 0, options.layer ?? 0, options.hidden ?? false,
+      options.translation ?? [0, 0, 0], matrix3x3, options.material ?? 0, options.layer ?? 0, attributeDicts, options.hidden ?? false,
     ];
     const def = this.startDefinition(options.name ?? 'Group', 'addGroup', placement);
     build(def);
@@ -1961,8 +1973,8 @@ export class SkpBuilder {
     // created - deferred until now so closing one group doesn't lock in
     // root-level slot numbering before a later addGroup/
     // addComponentDefinition call has had a chance to run.
-    for (const [comp, [translation, matrix3x3, mat, layer, hidden]] of this.pendingGroups) {
-      this.newEntityCount += this.geometryWriter.writeGroup(comp.slot, comp.name, translation, matrix3x3, mat, layer, hidden);
+    for (const [comp, [translation, matrix3x3, mat, layer, attributeDicts, hidden]] of this.pendingGroups) {
+      this.newEntityCount += this.geometryWriter.writeGroup(comp.slot, comp.name, translation, matrix3x3, mat, layer, attributeDicts, hidden);
       this.faceCount += 1;
     }
     this.pendingGroups = [];

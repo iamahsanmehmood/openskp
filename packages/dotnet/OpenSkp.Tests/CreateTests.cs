@@ -513,6 +513,40 @@ namespace OpenSkp.Tests
         }
 
         [Fact]
+        public void GroupAttributeDictsRoundTripThroughInstanceProperties()
+        {
+            // Groups used to hardcode a null attribute pointer on the belief
+            // that a CGroup never carries a CAttributeContainer - real
+            // production files (SketchUp 2020-legacy export, ground truth)
+            // contradicted this (openskp#261).
+            var builder = SkpCreate.NewFile();
+            using (var table = builder.AddGroup(
+                "Table",
+                attributes: new System.Collections.Generic.Dictionary<string, object> { ["sku"] = "TBL-1", ["qty"] = 2 },
+                attributeDictName: "dynamic_attributes"))
+            {
+                table.AddFace(Square());
+            }
+            var model = SkpFile.Parse(builder.ToBytes());
+            var instance = Assert.Single(model.Root.Instances);
+            Assert.Equal("TBL-1", instance.Properties["sku"]);
+            Assert.Equal("2", instance.Properties["qty"]);
+        }
+
+        [Fact]
+        public void GroupWithNoAttributesStillGetsNullAttributePointer()
+        {
+            var builder = SkpCreate.NewFile();
+            using (var table = builder.AddGroup("Table"))
+            {
+                table.AddFace(Square());
+            }
+            var model = SkpFile.Parse(builder.ToBytes());
+            var instance = Assert.Single(model.Root.Instances);
+            Assert.Empty(instance.Properties);
+        }
+
+        [Fact]
         public void NestedDefinitionInstanceInsideAnother()
         {
             var builder = SkpCreate.NewFile();
@@ -557,6 +591,32 @@ namespace OpenSkp.Tests
             Assert.Single(carDef.Faces);
             Assert.Single(carDef.Instances); // the nested group placement
             Assert.Single(model.Root.Instances); // the top-level Car instance
+        }
+
+        [Fact]
+        public void NestedGroupInstanceCarriesItsOwnAttributeDictsToo()
+        {
+            var builder = SkpCreate.NewFile();
+            ComponentDefinitionBuilder engine;
+            ComponentDefinitionBuilder car;
+            using (engine = builder.AddComponentDefinition("Engine"))
+            {
+                engine.AddFace(Square());
+            }
+            using (car = builder.AddComponentDefinition("Car"))
+            {
+                car.AddFace(new (double, double, double)[] { (0, 0, 0), (150, 0, 0), (150, 60, 0), (0, 60, 0) });
+                car.AddGroupInstance(
+                    engine, translation: (50, 0, 10),
+                    attributes: new System.Collections.Generic.Dictionary<string, object> { ["part"] = "V6" },
+                    attributeDictName: "dynamic_attributes");
+            }
+            builder.AddInstance(car, translation: (0, 0, 0));
+
+            var model = SkpFile.Parse(builder.ToBytes());
+            var carDef = model.Definitions.Values.Single(d => d.Name == "Car");
+            var groupInstance = Assert.Single(carDef.Instances);
+            Assert.Equal("V6", groupInstance.Properties["part"]);
         }
 
         [Fact]

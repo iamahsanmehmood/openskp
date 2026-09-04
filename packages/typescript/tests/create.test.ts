@@ -742,6 +742,25 @@ describe('Groups', () => {
     );
     expect(defRefs.size).toBe(20);
   });
+
+  it('group attribute dicts round-trip through Instance.properties (openskp#261)', () => {
+    // Groups used to hardcode a null attribute pointer on the belief that
+    // a CGroup never carries a CAttributeContainer - real production files
+    // (SketchUp 2020-legacy export, ground truth) contradicted this.
+    const builder = create();
+    builder.addGroup((table) => table.addFace(SQUARE), {
+      name: 'Table', attributes: { sku: 'TBL-1', qty: 2 }, attributeDictName: 'dynamic_attributes',
+    });
+    const model = parseSkp(toBuffer(builder.toBytes()));
+    expect(model.root.instances[0].properties).toEqual({ sku: 'TBL-1', qty: '2' });
+  });
+
+  it('a group with no attributes still gets a null attribute pointer', () => {
+    const builder = create();
+    builder.addGroup((table) => table.addFace(SQUARE), { name: 'Table' });
+    const model = parseSkp(toBuffer(builder.toBytes()));
+    expect(model.root.instances[0].properties).toEqual({});
+  });
 });
 
 describe('Nested definitions and groups', () => {
@@ -783,6 +802,21 @@ describe('Nested definitions and groups', () => {
     const carDefinition = [...model.definitions.values()].find((d) => d.name === 'Car')!;
     expect(carDefinition.instances.length).toBe(1);
     expect(carDefinition.faces.length).toBe(1);
+  });
+
+  it('a nested group-instance carries its own attribute dicts too (openskp#261)', () => {
+    const builder = create();
+    const engine = builder.addComponentDefinition('Engine', (def) => def.addFace(SQUARE));
+    const car = builder.addComponentDefinition('Car', (def) => {
+      def.addFace([[0, 0, 0], [150, 0, 0], [150, 60, 0], [0, 60, 0]]);
+      def.addGroupInstance(engine, {
+        translation: [50, 0, 10], attributes: { part: 'V6' }, attributeDictName: 'dynamic_attributes',
+      });
+    });
+    builder.addInstance(car);
+    const model = parseSkp(toBuffer(builder.toBytes()));
+    const carDefinition = [...model.definitions.values()].find((d) => d.name === 'Car')!;
+    expect(carDefinition.instances[0].properties).toEqual({ part: 'V6' });
   });
 
   it('buildScene keeps each nested level\'s own instance name in meshIndex (openskp#240)', () => {

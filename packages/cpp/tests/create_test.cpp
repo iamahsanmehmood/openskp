@@ -493,6 +493,25 @@ TEST(Create, GroupSelfPlaces) {
   EXPECT_NEAR(inst.matrix[9], 50.0, 1e-9);
 }
 
+TEST(Create, GroupAttributesRoundTrip) {
+  // Groups used to hardcode a null attribute pointer on the belief that a CGroup never carries a
+  // CAttributeContainer - real production files (SketchUp 2020-legacy export, ground truth)
+  // contradicted this (openskp#261). Smoke test only, matching InstanceAttributesRoundTrip above:
+  // model.root().instances[].properties isn't wired to custom CAttributeNamed dictionaries in
+  // this port.
+  auto builder = create();
+  GroupOptions opts;
+  opts.name = "Table";
+  opts.attributes["sku"] = std::string{"TBL-1"};
+  opts.attributes["qty"] = std::int32_t{2};
+  auto& table = builder->add_group(opts);
+  table.add_face({{0, 0, 0}, {30, 0, 0}, {30, 30, 0}, {0, 30, 0}});
+  table.close();
+
+  SkpModel model = round_trip(*builder);
+  ASSERT_EQ(model.root().instances.size(), 1u);
+}
+
 TEST(Create, NestedDefinitionInstanceAndNestedGroupInstance) {
   auto builder = create();
   auto& wheel = builder->add_component_definition("Wheel");
@@ -524,6 +543,31 @@ TEST(Create, NestedDefinitionInstanceAndNestedGroupInstance) {
   ASSERT_NE(car_def, nullptr);
   EXPECT_EQ(car_def->faces.size(), 1u);
   EXPECT_EQ(car_def->instances.size(), 2u);  // the wheel instance + the engine group instance
+}
+
+TEST(Create, NestedGroupInstanceCarriesItsOwnAttributesToo) {
+  auto builder = create();
+  auto& engine = builder->add_component_definition("Engine");
+  engine.add_face({{0, 0, 0}, {30, 0, 0}, {30, 30, 0}, {0, 30, 0}});
+  engine.close();
+
+  auto& car = builder->add_component_definition("Car");
+  car.add_face({{0, 0, 0}, {150, 0, 0}, {150, 60, 0}, {0, 60, 0}});
+  GroupInstanceOptions engine_group;
+  engine_group.translation = {50, 0, 10};
+  engine_group.attributes["part"] = std::string{"V6"};
+  car.add_group_instance(engine, engine_group);
+  car.close();
+
+  builder->add_instance(car);
+
+  SkpModel model = round_trip(*builder);
+  const Definition* car_def = nullptr;
+  for (const auto& [id, defn] : model.definitions) {
+    if (defn.name == "Car") car_def = &defn;
+  }
+  ASSERT_NE(car_def, nullptr);
+  EXPECT_EQ(car_def->instances.size(), 1u);
 }
 
 TEST(Create, EachNestedLevelKeepsItsOwnInstanceNameInMeshIndex) {

@@ -20,9 +20,10 @@
 /// add_group` is at the root level, since this format has no way to embed one definition's
 /// declaration inside another's); per-instance rotation (axis+angle convenience) and hidden
 /// state; explicit per-side texture positioning (`FaceOptions::front_uv`/`back_uv`) on a face of
-/// any orientation; custom attribute dictionaries on definitions/instances/faces (the same
-/// mechanism SketchUp's own "dynamic component" attributes use; not yet supported on groups -
-/// ground truth shows a group's own attribute pointer is always null); real, editable-by-radius
+/// any orientation; custom attribute dictionaries on definitions/instances/faces/groups (the same
+/// mechanism SketchUp's own "dynamic component" attributes use - a group only pays for a real
+/// attribute container when it actually has one, unlike a component instance, which always
+/// carries a real, if often empty, one); real, editable-by-radius
 /// `CArcCurve` circles/arcs (`add_circle`/`add_arc`) and freeform `CCurve` polylines
 /// (`add_polyline`); faces with one or more holes; `auto_triangulate` fan-splitting a
 /// non-coplanar polygon into real, always-planar triangles instead of raising (mirrors real
@@ -236,12 +237,15 @@ struct GroupOptions {
   std::optional<Rotation> rotation;
   std::optional<int> material;
   std::optional<int> layer;
+  /// Custom key/value metadata attached to this group, under a dictionary named
+  /// `attribute_dict_name`. A group only gets a real attribute container when this is
+  /// non-empty - matching `FaceOptions::attributes`' own conditional pattern (openskp#261).
+  AttributeDict attributes;
+  std::string attribute_dict_name = "attributes";
   bool hidden = false;
 };
 
-/// Options for `ComponentDefinitionBuilder::add_group_instance`. Same shape as `GroupOptions`
-/// (a group's attribute pointer is always null in ground truth, unlike a component instance's -
-/// hence no `attributes` here, unlike `InstanceOptions`).
+/// Options for `ComponentDefinitionBuilder::add_group_instance`. Same shape as `GroupOptions`.
 struct GroupInstanceOptions {
   std::optional<std::string> name;
   Point3 translation{0.0, 0.0, 0.0};
@@ -249,6 +253,8 @@ struct GroupInstanceOptions {
   std::optional<Rotation> rotation;
   std::optional<int> material;
   std::optional<int> layer;
+  AttributeDict attributes;
+  std::string attribute_dict_name = "attributes";
   bool hidden = false;
 };
 
