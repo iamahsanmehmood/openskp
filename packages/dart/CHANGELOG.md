@@ -1,5 +1,38 @@
 # Changelog
 
+## 1.2.0
+
+- **Groups can now carry attributes.** `addGroup`/`addGroupInstance` gained
+  `attributes`/`attributeDictName` parameters, matching what `addInstance`
+  already offered — a group only gets a real attribute container when one
+  is actually given, instead of always writing a null pointer.
+- `addTextureMaterial` gained `applied_width` support (alongside the
+  existing `applied_height`), and `addMaterial`/`addTextureMaterial`
+  gained `opacity`.
+- Added `addImage` — writes a genuine SketchUp Image entity (File →
+  Import → Image), distinct from a textured face.
+- Ported VFF (2021+) scene ("pages") and linear dimension parsing from
+  Python — surfaced as `SkpModel.pages`/`SkpModel.dimensions`.
+- Fixed `Scene.meshIndex` entries getting the same, wrong `name` cascaded
+  down from the outermost ancestor instance instead of each mesh's own
+  correctly-nested name.
+- Fixed a TLV header-scan off-by-one that could silently drop a record
+  whose 6-byte header exactly filled the remaining buffer space.
+- Fixed legacy Dynamic Component attribute lookup returning empty even
+  when a file genuinely had Dynamic Component data.
+- Fixed `CoEdge.orientation` being inverted (raw storage bit passed
+  through instead of the documented `+1`/`-1` contract).
+- Fixed an empty component/group definition name being fabricated into a
+  placeholder (`"Def123"`) on `openExisting()`/`toDartCode()` replay.
+- Fixed GLB export silently merging differently-textured materials that
+  happened to average to the same flat color, and embedded texture images
+  into exported GLB files for the first time.
+- Fixed a SketchUp-2020 filler-recovery heuristic that could misdetect a
+  value that was a multiple of 256.
+- Writer now validates every `material`/`backMaterial`/`layer` argument
+  against handles the same builder actually issued, raising immediately
+  on a mismatch instead of silently accepting a stray value.
+
 ## 1.1.0
 
 - **Write support** — `create()` returns an `SkpBuilder` that assembles a
