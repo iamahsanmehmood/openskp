@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.21)
 
 project(
   OpenSkp
-  VERSION 1.1.0
+  VERSION 1.2.0
   DESCRIPTION "Open-source SketchUp (.skp) binary file parser, writer, and converter - extract geometry, metadata, layers, and materials; create and edit .skp files; convert to GLB, OBJ, STL, PLY, DXF, and IFC4"
   HOMEPAGE_URL "https://openskp.com"
   LANGUAGES C CXX

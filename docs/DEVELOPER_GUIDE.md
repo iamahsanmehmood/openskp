@@ -796,7 +796,10 @@ returned `warnings` list is the honest account of what couldn't be
 faithfully reproduced for that specific file - per-edge flags collapsed
 to a per-face approximation, a projected/distorted texture falling back
 to the default projection, a colorized (tinted) material variant losing
-its tint, section planes/text/dimensions (no writer support at all), and
+its tint, section planes/text/dimensions not carried over on replay (the
+writer can now *create* new text/dimension entities via `add_text`/
+`add_dimension`, just not reproduce existing ones from the source file;
+section planes still have no writer support at all), and
 an original circle/arc's curve grouping (this project's reader doesn't
 preserve it, so it round-trips as a plain straight-edged face) - see
 [`openskp/edit.py`](../packages/python/src/openskp/edit.py)'s own

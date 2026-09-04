@@ -38,8 +38,10 @@ namespace OpenSkp
     /// <c>backUv</c> parameters. Component definitions, instances, and faces
     /// can carry custom key/value metadata (string/int/double values) via
     /// their <c>attributes</c> parameters - the same mechanism SketchUp's
-    /// own "dynamic component" attributes use; not yet supported on groups
-    /// (ground truth shows a group's own attribute pointer is always null).
+    /// own "dynamic component" attributes use; groups can carry them too,
+    /// getting a real attribute container only when one is actually given
+    /// (unlike a component instance, which always carries a real, if
+    /// often empty, one).
     /// Circular faces and partial (open) arcs - real, editable-by-radius
     /// SketchUp arc/circle entities - are supported via <c>AddCircle</c>/
     /// <c>AddArc</c>, as are freeform polyline curves (<c>CCurve</c>) via

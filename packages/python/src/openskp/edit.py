@@ -60,8 +60,12 @@ module's own docstring for why):
   is replayed as a plain component instance - structurally simpler, and
   visually identical, but no longer shows as a "Group" in SketchUp's
   Outliner afterward.
-* Section planes, text entities, and dimensions aren't carried over at
-  all - the writer has no support for any of these entity types.
+* Section planes, text entities, and dimensions aren't carried over on
+  replay - `_replay_body` only replays faces and instances. The writer
+  itself can now *create* new text (`add_text`) and dimension
+  (`add_dimension`) entities from scratch, but this function doesn't call
+  either to reproduce ones the source file already had. Section planes
+  still have no writer support at all, in any form.
 * A circle/arc/polyline's original ``CArcCurve``/``CCurve`` grouping is
   lost - this project's reader doesn't preserve that grouping in its
   public :class:`~openskp.model.Face`/:class:`~openskp.model.Edge` model,
