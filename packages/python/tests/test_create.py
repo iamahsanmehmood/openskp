@@ -4432,3 +4432,68 @@ def test_face_me_behaviour_round_trips(tmp_path):
     assert by_name["Susan"].shadows_face_sun is True
     assert by_name["Chair"].always_faces_camera is False
     assert by_name["Chair"].shadows_face_sun is False
+
+
+
+def test_persistent_ids_run_in_one_sequence_across_sections():
+    """Every section's writer used to hand out pids from 1 again, so a
+    material, a definition and a root instance could all be pid 1, and the
+    header counter (a u32 at _PID_COUNTER_POS) only ever grew by the
+    material and layer count. SketchUp loads such a file and renumbers the
+    duplicates - and then SUModelSaveToFile fails with SU_ERROR_SERIALIZATION
+    once the model is big enough or a definition happens to come first
+    ("Guardado fallido" in SketchUp Web on a real 7 MB export). One sequence
+    now, continuing from the scaffold's counter, and the counter tells the
+    truth."""
+    import struct
+    from openskp.create import _PID_COUNTER_POS
+    builder = create()
+    tex_free = builder.add_material("Rojo", (255, 0, 0, 255))
+    layer = builder.add_layer("Estructura")
+    with builder.add_component_definition("A") as a:
+        a.add_face(SQUARE, material=tex_free, layer=layer)
+        a.add_face([(x + 300.0, y, z) for x, y, z in SQUARE])
+    with builder.add_component_definition("B") as b:
+        b.add_face([(x, y, z + 50.0) for x, y, z in SQUARE])
+    builder.add_instance(a)
+    builder.add_instance(b, translation=(0.0, 0.0, 100.0))
+    data = builder.to_bytes()
+    counter = struct.unpack_from("<I", data, _PID_COUNTER_POS)[0]
+    # sections in order, each continuing where the previous stopped
+    starts = [builder._pid_start, builder._material_writer.next_pid,
+              builder._layer_writer.next_pid, builder._definition_writer.next_pid,
+              builder._geometry_writer.next_pid]
+    assert starts == sorted(starts) and starts[0] < starts[-1]
+    assert counter == builder._geometry_writer.next_pid - 1
+    assert counter > builder._pid_start + 2          # far more than materials + layers
+
+
+def test_a_small_definition_before_a_bigger_one_saves_through_real_sketchup(tmp_path):
+    """The minimal case that real SketchUp refused to SAVE (SU_ERROR_SERIALIZATION,
+    7) before pids ran in one sequence: a 1-face definition, then a 3-face
+    one, both placed. Needs the SDK DLL."""
+    import ctypes, os
+    if not os.path.exists(_SDK_DLL_PATH):
+        pytest.skip("SketchUp SDK not present on this machine")
+    builder = create()
+    with builder.add_component_definition("Primera") as d1:
+        d1.add_face(SQUARE)
+    with builder.add_component_definition("Segunda") as d2:
+        for k in range(3):
+            d2.add_face([(x + 300.0 * k, y, z + 50.0) for x, y, z in SQUARE])
+    builder.add_instance(d1)
+    builder.add_instance(d2, translation=(0.0, 0.0, 100.0))
+    src = tmp_path / "small-then-big.skp"
+    builder.save(str(src))
+    dll = ctypes.CDLL(_SDK_DLL_PATH)
+    dll.SUModelCreateFromFile.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_char_p]
+    dll.SUModelSaveToFile.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+    dll.SUInitialize()
+    try:
+        model = ctypes.c_void_p()
+        assert dll.SUModelCreateFromFile(ctypes.byref(model), str(src).encode()) == 0
+        out = tmp_path / "resaved.skp"
+        assert dll.SUModelSaveToFile(model, str(out).encode()) == 0
+        dll.SUModelRelease(ctypes.byref(model))
+    finally:
+        dll.SUTerminate()

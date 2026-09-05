@@ -2202,7 +2202,16 @@ class SkpBuilder:
         self._scaffold_class_slot = ar.class_slot
         # Materials always start allocating at `base`, the same slot the
         # (possibly absent) material section would have occupied.
-        self._material_writer = _ArchiveWriter(next_slot=base, class_slot={})
+        # Persistent IDs run in ONE sequence across every section of the
+        # file, continuing from the scaffold's own counter (u32 at
+        # _PID_COUNTER_POS). Each section's writer used to start at 1 again,
+        # so a definition, a root instance and a material could all carry
+        # pid 1: SketchUp loads such a file, renumbers the duplicates, and
+        # then fails to SAVE it (SUModelSaveToFile -> SU_ERROR_SERIALIZATION,
+        # "Guardado fallido" in SketchUp Web) once the model is big enough
+        # or a definition happens to come first - measured on real exports.
+        self._pid_start = struct.unpack_from("<I", data, _PID_COUNTER_POS)[0] + 1
+        self._material_writer = _ArchiveWriter(next_slot=base, class_slot={}, next_pid=self._pid_start)
         #: Every material registered so far, by name - populated by
         #: `add_material`/`add_texture_material` as a side effect (they
         #: already de-dupe by name through this same dict), not something
@@ -2415,7 +2424,8 @@ class SkpBuilder:
             # up (write_layer's short class-ref for CLayer needs the true
             # post-shift slot, not the baseline one).
             self._layer_writer = _ArchiveWriter(
-                next_slot=self._layer_writer_start, class_slot=self._material_shifted_class_slot()
+                next_slot=self._layer_writer_start, class_slot=self._material_shifted_class_slot(),
+                next_pid=self._material_writer.next_pid,
             )
         slot = self._layer_writer.write_layer(name, hidden=hidden, rgba=rgba)
         self.layers_by_name[name] = slot
@@ -2492,7 +2502,8 @@ class SkpBuilder:
                 self._material_writer.next_slot - self._base
             ) + self._layer_shift()
             self._definition_writer = _ArchiveWriter(
-                next_slot=self._definition_writer_start, class_slot=self._post_layer_class_slot()
+                next_slot=self._definition_writer_start, class_slot=self._post_layer_class_slot(),
+                next_pid=self._next_pid(),
             )
         slot, count_patch_pos = self._definition_writer.write_definition_header(attribute_dicts)
         self._definition_count += 1
@@ -2748,6 +2759,16 @@ class SkpBuilder:
         )
         self._face_count += 1  # reuses the "at least one root entity" check in to_bytes
 
+    def _next_pid(self) -> int:
+        """The next free persistent ID: sections are written in order
+        (materials, layers, definitions, root geometry), each continuing
+        where the previous one stopped."""
+        for w in (self._geometry_writer, self._definition_writer,
+                  self._layer_writer, self._material_writer):
+            if w is not None:
+                return w.next_pid
+        return self._pid_start
+
     def _ensure_geometry_writer(self) -> None:
         if self._geometry_writer is not None:
             return
@@ -2771,6 +2792,7 @@ class SkpBuilder:
         self._geometry_writer = _ArchiveWriter(
             next_slot=self._scaffold_next_slot + material_shift + self._layer_shift() + self._definition_shift(),
             class_slot=self._post_definition_class_slot(),
+            next_pid=self._next_pid(),
         )
         # Flush any groups that closed earlier, in the order they were
         # created - deferred until now so closing one group doesn't lock in
@@ -3152,15 +3174,12 @@ class SkpBuilder:
         # file by 4 extra bytes here; ground-truth-confirmed by diffing SDK-
         # authored files (an earlier version of this method double-counted
         # this field as a fresh insertion, corrupting every offset after it).
-        # Each layer's record embeds 2 pids (see write_layer); materials
-        # use 1 pid each (write_material).
-        layer_pids = (self._layer_writer.next_pid - 1) if self._layer_writer else 0
-        pid_delta = self._material_count + layer_pids
-
         prefix = bytearray(self._data[: self._material_insert_pos - 4])
-        if pid_delta:
-            u16 = struct.unpack_from("<H", prefix, _PID_COUNTER_POS)[0]
-            struct.pack_into("<H", prefix, _PID_COUNTER_POS, u16 + pid_delta)
+        # The model's pid counter: the last pid handed out, in every
+        # section. A 32-bit field (the two bytes after the old u16 are part
+        # of it - a counter of 2 000 000 round-trips through the SDK), so a
+        # model with more than 65 535 entities keeps a truthful counter.
+        struct.pack_into("<I", prefix, _PID_COUNTER_POS, self._next_pid() - 1)
         prefix[_ISO_CAMERA_PREFIX_OFFSET : _ISO_CAMERA_PREFIX_OFFSET + len(_ISO_CAMERA_PREFIX_PATCH)] = (
             _ISO_CAMERA_PREFIX_PATCH
         )

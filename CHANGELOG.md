@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — files the writer produced could not be SAVED by SketchUp (Python writer)
+
+Every section's writer (materials, layers, definitions, root geometry) handed out persistent IDs
+from 1 again, so a material, a definition and a root instance could all carry pid 1, and the header's
+pid counter — a 32-bit field the writer treated as 16-bit — only grew by the material and layer count.
+SketchUp loads such a file, renumbers the duplicates, and then `SUModelSaveToFile` fails with
+`SU_ERROR_SERIALIZATION` once the model is big enough or a definition happens to come first: a real
+7 MB export opened fine in SketchUp Web and every attempt to save it ended in "Save failed". Measured
+with the SDK: a 1-face definition followed by a 3-face one is enough. Pids now run in one sequence
+across sections, continuing from the scaffold's counter, and the counter is written as the u32 it is,
+with the last pid handed out. Real exports of 7 MB and 27 MB re-save through the SDK.
+
 ### Added — face-me components in the writer (Python)
 
 `add_component_definition(name, always_faces_camera=True, shadows_face_sun=True)` sets SketchUp's
