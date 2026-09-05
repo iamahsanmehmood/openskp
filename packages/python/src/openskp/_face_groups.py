@@ -43,17 +43,35 @@ def _invert_3x3(m: Tuple[float, ...]) -> Tuple[float, ...]:
     )
 
 
+#: |Z x n| below which real SketchUp projects with the world axes instead of
+#: the cross product. Measured with the SDK (SUMeshHelperGetFrontSTQCoords)
+#: on faces tilted by 1e-10 .. 1e-2, looking up and looking down: the world
+#: axes hold up to a tilt whose sine is 1.0000004e-3, the cross product takes
+#: over from 1.0001e-3.
+VERTICAL_TOLERANCE = 1e-3
+
+
 def face_uv_basis(n: Tuple[float, float, float]) -> Tuple[Tuple[float, float, float], Tuple[float, float, float]]:
-    """Face-plane basis vectors (xr, yr) for UV projection, from a face
-    normal. See ``Face.uv_transform`` in model.py for the recipe this
-    implements."""
+    """Face-plane basis vectors (xr, yr) for UV projection, from a unit
+    face normal. See ``Face.uv_transform`` in model.py for the recipe this
+    implements.
+
+    ``Z x n`` is discontinuous at the vertical - for ``(e, 0, 1)`` it points
+    along +Y however small ``e`` is, for ``(0, e, 1)`` along -X - and real
+    SketchUp resolves that with a tolerance (`VERTICAL_TOLERANCE`, measured)
+    rather than the 1e-9 used here before: a horizontal face whose stored
+    normal carries a little float noise projects with the world axes. And
+    the snapped basis of a face looking DOWN is ``(-X, +Y)`` - the 180-degree
+    turn of the upward ``(X, Y)`` - not the ``(X, -Y)`` mirror assumed
+    before; measured the same way, on pinned and default-projected faces
+    alike (every underside of a real model read back upside-down)."""
     nx, ny, nz = n
     # xr = normalize(Z x n) = normalize((-ny, nx, 0))
     cx, cy = -ny, nx
     clen = (cx * cx + cy * cy) ** 0.5
-    if clen < 1e-9:
-        xr = (1.0, 0.0, 0.0)
-        yr = (0.0, 1.0 if nz >= 0 else -1.0, 0.0)
+    if clen < VERTICAL_TOLERANCE:
+        xr = (1.0, 0.0, 0.0) if nz >= 0 else (-1.0, 0.0, 0.0)
+        yr = (0.0, 1.0, 0.0)
     else:
         xr = (cx / clen, cy / clen, 0.0)
         # yr = n x xr

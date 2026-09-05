@@ -28,6 +28,13 @@ test square happened to be axis-aligned and every test material 1 inch per tile:
   `openskp.edit` and `to_python_code` write the source's real applied size again instead of forcing
   `applied_height=1.0` to dodge the double division.
 
+- **Vertical tolerance and the downward basis (reader and writer).** `face_uv_basis` treated a
+  normal as vertical only within 1e-9 of it, and gave a face looking down the basis `(X, −Y)`. Real
+  SketchUp, measured with the SDK on faces tilted from 1e-10 to 1e-2 looking up and down, keeps the
+  world axes while the sine of the tilt is below 1e-3, and turns the basis 180° for a downward face:
+  `(−X, +Y)`. A horizontal face whose stored normal carries float noise, and every underside of a
+  model, read back (and were written) turned. `VERTICAL_TOLERANCE = 1e-3` in `_face_groups`.
+
 Measured through the SDK's own `SUMeshHelperGetFrontSTQCoords` (skp2dae) on 11 orientations before and
 after; new tests pin the invariant — what you pin is what the reader hands back at that point, on
 six orientations and vertex orders, and at applied size 10 — plus a real-SketchUp oracle test for the

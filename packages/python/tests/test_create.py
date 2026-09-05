@@ -1622,6 +1622,22 @@ class TestUVPositioning:
             ftc = dict(face["attrs"]["children"])["CFaceTextureCoords"]
             assert ftc["front"] == pytest.approx((50.0, 0.0, 0.0, 0.0, 50.0, 0.0, 0.0, 0.0, 1.0))
 
+    def test_face_uv_basis_snaps_and_turns_like_real_sketchup(self):
+        # Measured with the SDK (2026-09-04): the world axes hold while the
+        # sine of the tilt is below 1e-3 (1.0000004e-3 still vertical,
+        # 1.0001e-3 already the cross product), and a face looking DOWN
+        # gets (-X, +Y), the 180-degree turn of the upward basis - not the
+        # (X, -Y) mirror this reader assumed, which turned every underside.
+        from openskp._face_groups import face_uv_basis
+        up = ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0))
+        assert face_uv_basis((0.0, 0.0, 1.0)) == up
+        assert face_uv_basis((9.9e-4, 0.0, 1.0)) == up                # float noise, a 1e-4 tilt
+        assert face_uv_basis((0.0, 0.0, -1.0)) == ((-1.0, 0.0, 0.0), (0.0, 1.0, 0.0))
+        assert face_uv_basis((3e-4, 0.0, -1.0)) == ((-1.0, 0.0, 0.0), (0.0, 1.0, 0.0))
+        xr, yr = face_uv_basis((2e-3, 0.0, 0.999998))                 # a real tilt: Z x n
+        assert xr == pytest.approx((0.0, 1.0, 0.0))
+        assert yr[0] == pytest.approx(-0.999998) and abs(yr[1]) < 1e-12   # yr = n x xr
+
     def test_vertex_order_does_not_turn_the_mapping(self, tmp_path):
         # The SAME square as test_uv_scale_only..., listed from a different
         # corner so its first edge runs along +Y instead of +X, pinned to
