@@ -1622,6 +1622,106 @@ class TestUVPositioning:
             ftc = dict(face["attrs"]["children"])["CFaceTextureCoords"]
             assert ftc["front"] == pytest.approx((50.0, 0.0, 0.0, 0.0, 50.0, 0.0, 0.0, 0.0, 1.0))
 
+    def test_vertex_order_does_not_turn_the_mapping(self, tmp_path):
+        # The SAME square as test_uv_scale_only..., listed from a different
+        # corner so its first edge runs along +Y instead of +X, pinned to
+        # the same u = x/50, v = y/50. SketchUp expresses a face's matrix
+        # in a basis derived from the NORMAL alone ((X, Y) for a horizontal
+        # face), so the stored matrix must be the same diag(50, 50). The
+        # writer used to solve it in a first-edge basis, which agrees only
+        # when that edge happens to run along Z x n: this face came out
+        # turned 90 degrees in SketchUp (measured through the SDK's own
+        # SUMeshHelperGetFrontSTQCoords).
+        png_path = tmp_path / "tex.png"
+        png_path.write_bytes(_make_test_png())
+        builder = create()
+        tex = builder.add_texture_material("Brick", str(png_path))
+        rotated = SQUARE[1:] + SQUARE[:1]
+        builder.add_face(
+            rotated, material=tex,
+            front_uv=[((0.0, 0.0, 0.0), (0.0, 0.0)), ((50.0, 0.0, 0.0), (1.0, 0.0)), ((0.0, 50.0, 0.0), (0.0, 1.0))],
+        )
+        data = builder.to_bytes()
+
+        ar, root, layers, materials = legacy._walk(data)
+        face = [v for (_, n, v) in root if n == "CFace"][0]
+        ftc = dict(face["attrs"]["children"])["CFaceTextureCoords"]
+        assert ftc["front"] == pytest.approx((50.0, 0.0, 0.0, 0.0, 50.0, 0.0, 0.0, 0.0, 1.0), abs=1e-9)
+
+    def test_pins_read_back_as_pinned_on_every_orientation(self, tmp_path):
+        # The contract: whatever (point, uv) you pin, the reader - which
+        # inverts the matrix in SketchUp's normal-derived basis, calibrated
+        # against SDK-authored files - hands the same uv back at that point,
+        # on a face of ANY orientation and vertex order. Each square here
+        # is pinned to a mapping deliberately not aligned with its first
+        # edge; the fourth corner checks the map is affine over the face.
+        from openskp._face_groups import compute_face_uv, face_uv_basis
+        s = 70.71067811865476
+        squares = [
+            [(0.0, 0.0, 0.0), (0.0, 50.0, 0.0), (-50.0, 50.0, 0.0), (-50.0, 0.0, 0.0)],   # horizontal, 1st edge +Y
+            [(0.0, 0.0, 0.0), (0.0, 0.0, 50.0), (50.0, 0.0, 50.0), (50.0, 0.0, 0.0)],     # wall facing +Y, 1st edge +Z
+            [(0.0, 0.0, 0.0), (50.0, 0.0, 0.0), (50.0, 0.0, 50.0), (0.0, 0.0, 50.0)],     # wall facing -Y
+            [(0.0, 0.0, 0.0), (0.0, 0.0, 50.0), (0.0, 50.0, 50.0), (0.0, 50.0, 0.0)],     # wall facing -X, 1st edge +Z
+            [(0.0, 0.0, 0.0), (50.0, 0.0, 0.0), (50.0, s, s), (0.0, s, s)],                # 45-degree slope
+            [(0.0, 0.0, 0.0), (0.0, s, s), (-50.0, s, s), (-50.0, 0.0, 0.0)],              # same slope, 1st edge up it
+        ]
+        png_path = tmp_path / "tex.png"
+        png_path.write_bytes(_make_test_png())
+        builder = create()
+        tex = builder.add_texture_material("Brick", str(png_path))
+        pins_by_face = []
+        for pts in squares:
+            # An asymmetric affine map over the face: u/v from two skewed
+            # combinations of the corners, so no axis of it lines up with
+            # an edge.
+            p0, p1, p2, p3 = pts
+            pins = [(p0, (0.1, 0.2)), (p1, (0.9, 0.35)), (p3, (0.25, 1.4))]
+            builder.add_face(pts, material=tex, front_uv=pins)
+            pins_by_face.append((pins, p2))
+        data = builder.to_bytes()
+
+        ar, root, layers, materials = legacy._walk(data)
+        faces = [v for (_, n, v) in root if n == "CFace"]
+        assert len(faces) == len(squares)
+        for face, (pins, p2) in zip(faces, pins_by_face):
+            ftc = dict(face["attrs"]["children"])["CFaceTextureCoords"]
+            xr, yr = face_uv_basis(tuple(face["plane"][:3]))
+            for pt, (u, v) in pins:
+                got = compute_face_uv(pt, xr, yr, tuple(ftc["front"]), 1.0, 1.0)
+                assert got == pytest.approx((u, v), abs=1e-9), (pt, got, (u, v))
+            # Affine: the fourth corner is p1 + p3 - p0 in uv too.
+            (_, uv0), (_, uv1), (_, uv3) = pins
+            expect = (uv1[0] + uv3[0] - uv0[0], uv1[1] + uv3[1] - uv0[1])
+            got = compute_face_uv(p2, xr, yr, tuple(ftc["front"]), 1.0, 1.0)
+            assert got == pytest.approx(expect, abs=1e-9)
+
+    def test_pins_are_in_tiles_whatever_the_applied_size(self, tmp_path):
+        # Real SketchUp stores the per-face matrix in INCHES of texture
+        # space and divides by the material's applied size on read (so
+        # does compute_face_uv). A caller pins in tiles: (50,0,0) -> (1,0)
+        # must read back as u = 1 whether the material is 1 in or 10 in per
+        # tile. It used to read back as 0.1 for the 10-inch material - a
+        # 2 m water tile came out 78.74x too big.
+        from openskp._face_groups import compute_face_uv, face_uv_basis
+        png_path = tmp_path / "tex.png"
+        png_path.write_bytes(_make_test_png())
+        builder = create()
+        tex = builder.add_texture_material("Brick", str(png_path), applied_width=10.0, applied_height=10.0)
+        builder.add_face(
+            SQUARE, material=tex,
+            front_uv=[((0.0, 0.0, 0.0), (0.0, 0.0)), ((50.0, 0.0, 0.0), (1.0, 0.0)), ((0.0, 50.0, 0.0), (0.0, 1.0))],
+        )
+        data = builder.to_bytes()
+
+        ar, root, layers, materials = legacy._walk(data)
+        face = [v for (_, n, v) in root if n == "CFace"][0]
+        ftc = dict(face["attrs"]["children"])["CFaceTextureCoords"]
+        # 10 texture-inches (one tile) span 50 model inches: a 5x scale.
+        assert ftc["front"] == pytest.approx((5.0, 0.0, 0.0, 0.0, 5.0, 0.0, 0.0, 0.0, 1.0), abs=1e-9)
+        xr, yr = face_uv_basis((0.0, 0.0, 1.0))
+        assert compute_face_uv((50.0, 0.0, 0.0), xr, yr, tuple(ftc["front"]), 10.0, 10.0) == pytest.approx((1.0, 0.0))
+        assert compute_face_uv((0.0, 50.0, 0.0), xr, yr, tuple(ftc["front"]), 10.0, 10.0) == pytest.approx((0.0, 1.0))
+
     def test_tilted_face_edge_aligned_mapping_is_a_pure_scale(self, tmp_path):
         # A 100x100 square tilted 45 degrees around X (points[1]-points[0]
         # runs along world X; points[3]-points[0] runs along the tilted
@@ -3690,6 +3790,69 @@ class TestRealSketchUpOracle:
             assert err == 0
             assert uvq.u == pytest.approx(0.5)
             assert uvq.q == pytest.approx(1.0)
+            dll.SUModelRelease(ctypes.byref(model))
+        finally:
+            dll.SUTerminate()
+
+    def test_positioned_texture_survives_vertex_order_through_real_sketchup(self, tmp_path):
+        # The square listed from its second corner (first edge along +Y),
+        # pinned to u = x/100: real SketchUp must still put u = 0.5 at
+        # x = 50, i.e. read the matrix in its normal-derived basis, not in
+        # a first-edge one. The axis-aligned oracle test above cannot tell
+        # the two apart (its first edge runs along Z x n).
+        import ctypes
+
+        class SUPoint3D(ctypes.Structure):
+            _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double), ("z", ctypes.c_double)]
+
+        class SUUVQ(ctypes.Structure):
+            _fields_ = [("u", ctypes.c_double), ("v", ctypes.c_double), ("q", ctypes.c_double)]
+
+        png_path = tmp_path / "tex.png"
+        png_path.write_bytes(_make_test_png())
+        builder = create()
+        tex = builder.add_texture_material("Brick", str(png_path))
+        rotated = SQUARE[1:] + SQUARE[:1]
+        builder.add_face(
+            rotated, material=tex,
+            front_uv=[((0.0, 0.0, 0.0), (0.0, 0.0)), ((100.0, 0.0, 0.0), (1.0, 0.0)), ((0.0, 100.0, 0.0), (0.0, 1.0))],
+        )
+        out = tmp_path / "rotated_order_positioned.skp"
+        builder.save(str(out))
+
+        dll = ctypes.CDLL(_SDK_DLL_PATH)
+        dll.SUModelCreateFromFile.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_char_p]
+        dll.SUModelGetEntities.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUEntitiesGetFaces.argtypes = [
+            ctypes.c_void_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_size_t),
+        ]
+        dll.SUFaceGetUVHelper.argtypes = [
+            ctypes.c_void_p, ctypes.c_bool, ctypes.c_bool, ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p),
+        ]
+        dll.SUUVHelperGetFrontUVQ.argtypes = [ctypes.c_void_p, ctypes.POINTER(SUPoint3D), ctypes.POINTER(SUUVQ)]
+        dll.SUInitialize()
+        try:
+            model = ctypes.c_void_p()
+            err = dll.SUModelCreateFromFile(ctypes.byref(model), str(out).encode())
+            assert err == 0, f"SketchUp SDK rejected the file (error {err})"
+            entities = ctypes.c_void_p()
+            dll.SUModelGetEntities(model, ctypes.byref(entities))
+            faces = (ctypes.c_void_p * 1)()
+            got = ctypes.c_size_t()
+            dll.SUEntitiesGetFaces(entities, 1, faces, ctypes.byref(got))
+            assert got.value == 1
+            uv_helper = ctypes.c_void_p()
+            err = dll.SUFaceGetUVHelper(faces[0], True, False, ctypes.c_void_p(0), ctypes.byref(uv_helper))
+            assert err == 0
+            uvq = SUUVQ()
+            err = dll.SUUVHelperGetFrontUVQ(uv_helper, ctypes.byref(SUPoint3D(50.0, 0.0, 0.0)), ctypes.byref(uvq))
+            assert err == 0
+            assert uvq.u == pytest.approx(0.5)
+            assert uvq.v == pytest.approx(0.0, abs=1e-9)
+            err = dll.SUUVHelperGetFrontUVQ(uv_helper, ctypes.byref(SUPoint3D(0.0, 50.0, 0.0)), ctypes.byref(uvq))
+            assert err == 0
+            assert uvq.u == pytest.approx(0.0, abs=1e-9)
+            assert uvq.v == pytest.approx(0.5)
             dll.SUModelRelease(ctypes.byref(model))
         finally:
             dll.SUTerminate()

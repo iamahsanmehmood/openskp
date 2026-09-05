@@ -108,6 +108,7 @@ from importlib import resources
 from typing import Dict, FrozenSet, Iterator, List, NamedTuple, Optional, Sequence, Tuple, Union
 
 from . import legacy
+from ._face_groups import face_uv_basis
 
 __all__ = [
     "SkpWriteError", "SkpBuilder", "ComponentDefinitionBuilder", "create",
@@ -437,35 +438,12 @@ def _resolve_matrix3x3(
     return matrix3x3
 
 
-def _face_uv_basis(
-    points: Sequence[Point3], normal: Tuple[float, float, float]
-) -> Tuple[Tuple[float, float, float], Tuple[float, float, float]]:
-    """The in-plane 2D basis (U, W) real SketchUp uses to parameterize a
-    face's texture mapping, for a face of ANY orientation (not just
-    axis-aligned) - ground truth (an SDK-authored file's own computed
-    matrix, cross-checked against this formula using an asymmetric
-    correspondence specifically chosen to rule out simpler axis-dropping
-    projections) shows it's simply the face's own first edge direction
-    (``points[1] - points[0]``, normalized) as U, and the plane normal
-    crossed with that as W - both unit vectors. This exactly explains why
-    the axis-aligned case (this feature's first version) worked with
-    fixed (x, y)/(x, z)/(y, z) axis pairs: for a face whose first edge
-    happens to run along a world axis, this formula reduces to exactly
-    that pair.
-    """
-    u = _normalize3((
-        points[1][0] - points[0][0], points[1][1] - points[0][1], points[1][2] - points[0][2],
-    ))
-    w = _normalize3(_cross(normal, u))
-    return u, w
-
-
 def _circle_basis(
     normal: Tuple[float, float, float],
 ) -> Tuple[Tuple[float, float, float], Tuple[float, float, float]]:
     """An arbitrary orthonormal in-plane basis (U, W) for a circle/arc's
-    plane, given only its normal - unlike :func:`_face_uv_basis` there's
-    no "first edge" to derive U from here, so pick whichever of world
+    plane, given only its normal - any consistent choice works for an arc
+    (unlike a texture matrix, whose basis SketchUp fixes), so pick whichever of world
     +Z/+X is less parallel to ``normal`` as a seed and Gram-Schmidt it
     against ``normal`` to get U, then W = normal x U. This choice of seed
     only affects where angle 0 points around the circle, not its shape.
@@ -545,13 +523,24 @@ def _solve_uv_matrix(
     map (scale, rotation, shear, translation; no perspective/keystone term,
     matching the third column ground truth always shows as (0, 0, 1)).
 
-    ``basis`` is the face's own (U, W) in-plane unit vectors (see
-    `_face_uv_basis`) - each correspondence's world point is projected
-    onto them via a plain dot product (ground truth confirms this uses
-    the point's raw coordinates with no origin subtraction - confirmed by
-    positioning a face far from the world origin, where an "obviously
-    sensible" points[0]-relative hypothesis predicted the wrong
-    translation terms) before fitting.
+    ``basis`` is the (U, W) in-plane unit pair the stored matrix is
+    expressed in - SketchUp's own, derived from the face NORMAL alone
+    (`face_uv_basis` in `_face_groups`: ``U = normalize(Z × n)``,
+    ``W = n × U``; ``(X, ±Y)`` for a horizontal face), the same basis the
+    reader inverts the matrix in. Each correspondence's world point is
+    projected onto them via a plain dot product (ground truth confirms this
+    uses the point's raw coordinates with no origin subtraction - confirmed
+    by positioning a face far from the world origin, where an "obviously
+    sensible" points[0]-relative hypothesis predicted the wrong translation
+    terms) before fitting.
+
+    This writer first used the face's own first edge as U. That agrees with
+    SketchUp's basis exactly when the first edge happens to run along
+    ``Z × n`` - which every axis-aligned test square did - and otherwise
+    turns the mapping by the angle between the two: a horizontal face
+    listed from a different corner came out rotated 90° or 180°, a curved
+    surface of many small quads shattered. Measured through the SDK's own
+    ``SUMeshHelperGetFrontSTQCoords`` on 11 orientations (2026-09-04).
 
     Ground truth (see ``_read_ftc`` in legacy.py, which this inverts) shows
     the stored matrix satisfies ``(u, v, 1) @ M == (world_x, world_y, 1)``
@@ -577,8 +566,30 @@ def _uv_matrix_for_face(
     pairs: Sequence[Tuple[Point3, Tuple[float, float]]],
     normal: Tuple[float, float, float],
 ) -> Tuple[float, ...]:
-    """`_solve_uv_matrix` using the face's own `_face_uv_basis`."""
-    return _solve_uv_matrix(pairs, _face_uv_basis(points, normal))
+    """`_solve_uv_matrix` in the basis SketchUp reads the face's matrix in
+    (`face_uv_basis` of the plane normal; ``points`` no longer matter, kept
+    for the call sites)."""
+    return _solve_uv_matrix(pairs, face_uv_basis(normal))
+
+
+def _scale_pins(
+    pins: Optional[Sequence[Tuple[Point3, Tuple[float, float]]]],
+    size: Optional[Tuple[float, float]],
+) -> Optional[Sequence[Tuple[Point3, Tuple[float, float]]]]:
+    """A caller's ``front_uv``/``back_uv`` pins are in TILES of the image
+    ((1, 0) = one full repeat along U, however big the material's applied
+    size makes a tile). The matrix real SketchUp stores is in INCHES of
+    texture space - it divides by the material's applied width/height when
+    it reads a face's UV back (`_face_groups.compute_face_uv`, calibrated
+    against SDK-authored files, does the same) - so the pins are scaled up
+    by that size before the fit. Without this a texture applied at 2 m per
+    tile (78.74 in) came out 78.74× too big on every pinned face."""
+    if pins is None or size is None:
+        return pins
+    w, h = size
+    if w == 1.0 and h == 1.0:
+        return pins
+    return [(pt, (uv[0] * w, uv[1] * h)) for pt, uv in pins]
 
 
 def _u32(v: int) -> bytes:
@@ -1867,6 +1878,8 @@ class ComponentDefinitionBuilder:
             raise SkpWriteError("a face needs at least 3 points")
         holes = [[(float(p[0]), float(p[1]), float(p[2])) for p in hole] for hole in holes]
         resolved_attribute_dicts = _resolve_attribute_dicts(attributes, attribute_dict_name, attribute_dicts)
+        front_uv = _scale_pins(front_uv, self._skp._applied_sizes.get(material or 0))
+        back_uv = _scale_pins(back_uv, self._skp._applied_sizes.get(back_material or 0))
         self._new_entity_count += _write_face_or_triangulate(
             self._skp._definition_writer, points, self._vertex_slots, self._edge_registry,
             material or 0, layer or 0, back_material or 0,
@@ -2189,6 +2202,10 @@ class SkpBuilder:
         #: the source file had is already here.
         self.materials_by_name: Dict[str, int] = {}
         self._material_count = 0
+        #: Applied size (inches) each TEXTURED material slot was written
+        #: with - `add_face` scales its ``front_uv``/``back_uv`` pins by it
+        #: (see `_scale_pins`).
+        self._applied_sizes: Dict[int, Tuple[float, float]] = {}
         # Deferred: layers splice in AFTER materials, so the layer writer's
         # starting slot depends on the final material count. Constructed
         # lazily on the first add_layer() call, once material_shift is
@@ -2300,10 +2317,11 @@ class SkpBuilder:
         ``applied_width``/``applied_height``, if given, are the applied
         size in INCHES - how much model space one tile of the image
         covers. Both default to 1.0. A texture applied without positioning
-        carries no per-face UV record, so this size IS its mapping - and
-        see `write_textured_material`'s own docstring for why it matters
-        even for `add_face`'s ``front_uv``/``back_uv`` pinning (a
-        positioned mapping still divides by it).
+        carries no per-face UV record, so this size IS its mapping; a face
+        positioned with `add_face`'s ``front_uv``/``back_uv`` keeps its
+        pins in tiles of the image regardless of it (`add_face` scales
+        them by this size, since SketchUp stores and reads the per-face
+        matrix in inches of texture space - see `_scale_pins`).
 
         The format is detected from the file's own magic bytes, not its
         extension - PNG and JPEG are the only two this project has
@@ -2331,6 +2349,10 @@ class SkpBuilder:
             opacity=opacity,
         )
         self.materials_by_name[name] = slot
+        self._applied_sizes[slot] = (
+            1.0 if applied_width is None else float(applied_width),
+            1.0 if applied_height is None else float(applied_height),
+        )
         self._material_count += 1
         return slot
 
@@ -2783,8 +2805,10 @@ class SkpBuilder:
         ``front_uv``/``back_uv``, if given, explicitly position that
         side's texture instead of the default planar projection: exactly
         3 ``(point, (u, v))`` pairs, each a world point on the face paired
-        with the texture coordinate that should land there. Works on a
-        face of any orientation, not just axis-aligned ones.
+        with the texture coordinate that should land there, in TILES of
+        the image ((1, 0) is one full repeat along U whatever the
+        material's applied size). Works on a face of any orientation and
+        any vertex order, not just axis-aligned ones.
 
         >>> brick = builder.add_texture_material("Brick", "brick.png")
         >>> builder.add_face(
@@ -2835,6 +2859,8 @@ class SkpBuilder:
         holes = [[(float(p[0]), float(p[1]), float(p[2])) for p in hole] for hole in holes]
         self._ensure_geometry_writer()
         resolved_attribute_dicts = _resolve_attribute_dicts(attributes, attribute_dict_name, attribute_dicts)
+        front_uv = _scale_pins(front_uv, self._applied_sizes.get(material or 0))
+        back_uv = _scale_pins(back_uv, self._applied_sizes.get(back_material or 0))
         self._new_entity_count += _write_face_or_triangulate(
             self._geometry_writer, points, self._vertex_slots, self._edge_registry,
             material or 0, layer or 0, back_material or 0,

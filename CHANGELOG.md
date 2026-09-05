@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — `front_uv`/`back_uv` pins land where SketchUp draws them, on any face and at any applied size (Python writer)
+
+Two defects in the writer's texture positioning, invisible to its own reader tests because every
+test square happened to be axis-aligned and every test material 1 inch per tile:
+
+- **Basis.** The per-face matrix was solved in a basis built from the face's *first edge*
+  (`points[1] - points[0]`, and the normal crossed with it). Real SketchUp — and this project's own
+  reader, calibrated against SDK-authored files — express and invert it in a basis derived from the
+  **normal alone** (`U = normalize(Z × n)`, `W = n × U`; `(X, ±Y)` for a horizontal face). The two agree
+  exactly when the first edge runs along `Z × n`, which every existing test face did; otherwise the
+  texture came out turned by the angle between them. A horizontal face listed from another corner
+  arrived in SketchUp rotated 90° or 180°; a curved surface of many small quads, each with its own
+  first edge, shattered. `_uv_matrix_for_face` now uses `_face_groups.face_uv_basis`.
+- **Scale.** SketchUp stores the matrix in *inches of texture space* and divides by the material's
+  applied width/height when it reads a face's UV back (`compute_face_uv` already did the same). The
+  pins a caller gives are in tiles of the image, and were fitted as-is, so a material applied at
+  2 m per tile (78.74 in) came out 78.74× too big on every positioned face. `add_face` (root and
+  definition builders) now scales pins by the applied size recorded at `add_texture_material` time;
+  `openskp.edit` and `to_python_code` write the source's real applied size again instead of forcing
+  `applied_height=1.0` to dodge the double division.
+
+Measured through the SDK's own `SUMeshHelperGetFrontSTQCoords` (skp2dae) on 11 orientations before and
+after; new tests pin the invariant — what you pin is what the reader hands back at that point, on
+six orientations and vertex orders, and at applied size 10 — plus a real-SketchUp oracle test for the
+rotated vertex order (`TestRealSketchUpOracle`, needs the SDK DLL).
+
 ### Added — Full attribute-dictionary support in the writer, Python; groups gain attributes, all 5 languages
 
 The writer's custom attribute dictionaries (`attributes`/`attribute_dict_name` on
