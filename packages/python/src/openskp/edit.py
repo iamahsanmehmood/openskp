@@ -158,7 +158,10 @@ def open_existing(
         # definitions (unlike Components, which SketchUp auto-names), so
         # an empty name is common in real files - the same reasoning as
         # _replay_instance's own name handling below.
-        with builder.add_component_definition(defn.name) as db:
+        with builder.add_component_definition(
+                defn.name,
+                always_faces_camera=getattr(defn, "always_faces_camera", False),
+                shadows_face_sun=getattr(defn, "shadows_face_sun", False)) as db:
             _replay_body(db, defn, model, material_slots, layer_slots, warnings, context, def_builders)
         def_builders[def_id] = db
 

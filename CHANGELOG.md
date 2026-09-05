@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — face-me components in the writer (Python)
+
+`add_component_definition(name, always_faces_camera=True, shadows_face_sun=True)` sets SketchUp's
+component-behavior byte the reader already decoded (bit 0 / bit 1 of byte −9 in the definition's
+43-byte gap), so a 2D person or cut-out tree written with openskp turns toward the camera in
+SketchUp instead of standing still. `openskp.edit` replays a source file's flags when re-saving.
+
 ### Fixed — `front_uv`/`back_uv` pins land where SketchUp draws them, on any face and at any applied size (Python writer)
 
 Two defects in the writer's texture positioning, invisible to its own reader tests because every

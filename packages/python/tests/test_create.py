@@ -4408,3 +4408,27 @@ class TestMaterialOpacity:
         mat = {s: v for s, v in legacy._walk(data)[3]}[tex]
         assert mat["use_opacity"] == 1
         assert mat["opacity"] == pytest.approx(0.5)
+
+
+
+def test_face_me_behaviour_round_trips(tmp_path):
+    """``always_faces_camera`` / ``shadows_face_sun`` land in the behavior
+    byte the reader already decodes (byte -9 of the definition's 43-byte
+    gap): a 2D person written here is a real face-me component in SketchUp
+    - it turns toward the camera - instead of a flat cut-out standing still."""
+    from openskp import SkpFile
+    builder = create()
+    with builder.add_component_definition("Susan", always_faces_camera=True, shadows_face_sun=True) as susan:
+        susan.add_face([(0.0, 0.0, 0.0), (20.0, 0.0, 0.0), (20.0, 0.0, 70.0), (0.0, 0.0, 70.0)])
+    with builder.add_component_definition("Chair") as chair:
+        chair.add_face(SQUARE)
+    builder.add_instance(susan, translation=(100.0, 50.0, 0.0))
+    builder.add_instance(chair, translation=(0.0, 0.0, 0.0))
+    out = tmp_path / "faceme.skp"
+    builder.save(str(out))
+    model = SkpFile.open(str(out)).parse()
+    by_name = {d.name: d for d in model.definitions.values()}
+    assert by_name["Susan"].always_faces_camera is True
+    assert by_name["Susan"].shadows_face_sun is True
+    assert by_name["Chair"].always_faces_camera is False
+    assert by_name["Chair"].shadows_face_sun is False

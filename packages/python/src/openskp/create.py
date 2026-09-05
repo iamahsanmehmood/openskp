@@ -1220,9 +1220,14 @@ class _ArchiveWriter:
         self.buf += _u32(0)  # placeholder entity count, patched by the caller
         return slot, count_patch_pos
 
-    def write_definition_tail(self, name: str) -> None:
+    def write_definition_tail(self, name: str, behavior: int = 0) -> None:
         """Close out a ``CComponentDefinition`` record: relationship count,
-        GUID, name, timestamp, behavior flags, and a default thumbnail."""
+        GUID, name, timestamp, behavior flags, and a default thumbnail.
+
+        ``behavior`` is SketchUp's component-behavior byte: bit 0 "always
+        face camera" (2D people and cut-out trees turn toward the eye), bit
+        1 "shadows face sun" - the same two bits legacy.py's
+        ``_read_definition`` decodes from byte -9 of the 43-byte gap."""
         self.buf += _u32(0)  # nrel: CRelationship count - always 0, not supported
         self.buf += struct.pack("<H", 0)
         self.buf += uuid.uuid4().bytes
@@ -1230,10 +1235,12 @@ class _ArchiveWriter:
         self._write_str("")  # description - empty in ground truth
         self._write_str("")  # second name field - empty in ground truth
         self.buf += _u32(int(time.time()))
-        # 43-byte gap; byte -9 carries the always-faces-camera/
-        # shadows-face-sun behavior flags (legacy.py's _read_definition) -
-        # both left off, matching neither being exposed by this writer yet.
-        self.buf += bytes(43)
+        # 43-byte gap; byte -9 carries the always-faces-camera (bit 0) /
+        # shadows-face-sun (bit 1) behavior flags (legacy.py's
+        # _read_definition reads exactly that byte).
+        gap = bytearray(43)
+        gap[43 - 9] = behavior & 0xFF
+        self.buf += bytes(gap)
         self.write_thumbnail()
 
     def _write_instance_like(
@@ -1830,6 +1837,9 @@ class ComponentDefinitionBuilder:
         self._skp = skp
         self.slot = slot
         self.name = name
+        #: SketchUp's behavior byte, set by `SkpBuilder.add_component_definition`
+        #: (bit 0 always-faces-camera, bit 1 shadows-face-sun).
+        self.behavior = 0
         self._count_patch_pos = count_patch_pos
         self._vertex_slots: Dict[Point3, int] = {}
         self._edge_registry: Dict[FrozenSet[int], Tuple[int, int]] = {}
@@ -2117,7 +2127,7 @@ class ComponentDefinitionBuilder:
             raise SkpWriteError(f"component definition {self.name!r} has no geometry - add at least one face")
         writer = self._skp._definition_writer
         struct.pack_into("<I", writer.buf, self._count_patch_pos, self._new_entity_count)
-        writer.write_definition_tail(self.name)
+        writer.write_definition_tail(self.name, behavior=self.behavior)
         self._closed = True
         self._skp._open_definition = None
         if self._group_placement is not None:
@@ -2495,11 +2505,20 @@ class SkpBuilder:
         attributes: Optional[Dict[str, object]] = None,
         attribute_dict_name: str = "attributes",
         attribute_dicts: Sequence[Tuple[str, Dict[str, object]]] = (),
+        always_faces_camera: bool = False,
+        shadows_face_sun: bool = False,
     ) -> "ComponentDefinitionBuilder":
         """Start a new reusable component definition. Use the returned
         object as a context manager, adding its geometry via `.add_face`
         inside the ``with`` block; once closed, pass it to `add_instance`
         to place copies of it in the model.
+
+        ``always_faces_camera`` makes the definition a SketchUp face-me
+        component - 2D people and cut-out trees that turn about their own Z
+        so their local -Y axis points at the camera; ``shadows_face_sun``
+        keeps such a component's cast shadow still while the camera moves.
+        Both read back as ``Definition.always_faces_camera`` /
+        ``Definition.shadows_face_sun``.
 
         >>> with builder.add_component_definition("Chair") as chair:
         ...     chair.add_face([(0, 0, 0), (20, 0, 0), (20, 20, 0), (0, 20, 0)])
@@ -2519,7 +2538,9 @@ class SkpBuilder:
         carry more than one. Passing both raises.
         """
         resolved_attribute_dicts = _resolve_attribute_dicts(attributes, attribute_dict_name, attribute_dicts)
-        return self._start_definition(name, "add_component_definition", attribute_dicts=resolved_attribute_dicts)
+        db = self._start_definition(name, "add_component_definition", attribute_dicts=resolved_attribute_dicts)
+        db.behavior = (1 if always_faces_camera else 0) | (2 if shadows_face_sun else 0)
+        return db
 
     def add_group(
         self,
