@@ -4472,7 +4472,8 @@ def test_a_small_definition_before_a_bigger_one_saves_through_real_sketchup(tmp_
     """The minimal case that real SketchUp refused to SAVE (SU_ERROR_SERIALIZATION,
     7) before pids ran in one sequence: a 1-face definition, then a 3-face
     one, both placed. Needs the SDK DLL."""
-    import ctypes, os
+    import ctypes
+    import os
     if not os.path.exists(_SDK_DLL_PATH):
         pytest.skip("SketchUp SDK not present on this machine")
     builder = create()
