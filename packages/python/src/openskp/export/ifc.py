@@ -68,7 +68,12 @@ def _classify_by_keyword(name: str) -> Union[Tuple[str, str], None]:
     return None
 
 
-def classify_element(geom_name: str, layer_name: str = "") -> Tuple[str, str]:
+def classify_element(
+    geom_name: str,
+    layer_name: str = "",
+    path_name: str = "",
+    classify_using_full_path: bool = False,
+) -> Tuple[str, str]:
     """Map a geometry/component name to an IFC4 entity type and constructor.
 
     Tries the component's own name first - if a modeler bothered to name a
@@ -77,8 +82,19 @@ def classify_element(geom_name: str, layer_name: str = "") -> Tuple[str, str]:
     "Component#109415" carry no semantic info), so this falls back to
     ``layer_name`` next: many SketchUp-for-BIM workflows organize by
     tag/layer ("Walls", "Doors") even when individual components are never
-    renamed. Only if neither matches does this fall back to a generic,
-    untyped element.
+    renamed.
+
+    If neither matches and ``classify_using_full_path`` is set, falls back
+    further to keyword-matching the component's full ancestor hierarchy
+    path (e.g. "ROOT / Wall Frame / Stud 12") - a broader, noisier signal
+    than the component's own name/layer, since it can match on an
+    *ancestor's* name rather than the part itself. Off by default: this
+    exporter used to match keywords against exactly this kind of
+    concatenated internal string unconditionally (a bug - it also
+    corrupted the element's displayed Name), and turning that broad
+    matching back on is now an explicit opt-in rather than the only
+    behavior available. Only if nothing at all matches does this fall
+    back to a generic, untyped element.
 
     Returns:
         Tuple of (STEP_ENTITY_TYPE, IFC_CLASS_NAME)
@@ -88,6 +104,10 @@ def classify_element(geom_name: str, layer_name: str = "") -> Tuple[str, str]:
         return result
     if layer_name:
         result = _classify_by_keyword(layer_name)
+        if result is not None:
+            return result
+    if classify_using_full_path and path_name:
+        result = _classify_by_keyword(path_name)
         if result is not None:
             return result
     return "IFCBUILDINGELEMENTPROXY", "IfcBuildingElementProxy"
@@ -116,6 +136,7 @@ def to_ifc(
     scale: float = METRES_TO_MM,
     schema: str = "IFC4",
     classifier: Optional[Callable[[str, str], Tuple[str, str]]] = None,
+    classify_using_full_path: bool = False,
 ) -> str:
     """Serialize a baked Scene into ISO-10303-21 STEP ASCII IFC4 format.
 
@@ -128,7 +149,16 @@ def to_ifc(
             as ``classifier(geom_name, layer_name)`` and expected to return
             the same ``(STEP_ENTITY_TYPE, IFC_CLASS_NAME)`` tuple - use this
             to supply your own naming convention or metadata-driven typing
-            instead of the built-in keyword/layer heuristic.
+            instead of the built-in keyword/layer heuristic. Ignored (never
+            called) when ``classify_using_full_path`` is set, since that
+            flag only affects the built-in classifier.
+        classify_using_full_path: When the built-in classifier (i.e.
+            ``classifier`` is not given) can't type an element from its own
+            name or layer, also try keyword-matching its full ancestor
+            hierarchy path (e.g. a part named "Stud 12" under a "Wall
+            Frame" component would match on "Wall Frame"). Off by default -
+            see :func:`classify_element` for why this is opt-in rather than
+            always-on.
 
     Returns:
         Formatted ASCII IFC text string.
@@ -136,7 +166,12 @@ def to_ifc(
     if not isinstance(scene, Scene):
         raise TypeError("to_ifc requires a valid Scene instance")
 
-    classify = classifier or classify_element
+    if classifier is not None:
+        def classify(name: str, layer: str, path: str) -> Tuple[str, str]:
+            return classifier(name, layer)
+    else:
+        def classify(name: str, layer: str, path: str) -> Tuple[str, str]:
+            return classify_element(name, layer, path, classify_using_full_path)
 
     schema_str = schema.upper() if schema else "IFC4"
     now_iso = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
@@ -285,7 +320,8 @@ def to_ifc(
         if meta and getattr(meta, "layer", None):
             layer_name = sanitize_name(meta.layer)
 
-        step_type, ifc_class = classify(display_name, layer_name)
+        path_name = meta.path if meta and getattr(meta, "path", None) else ""
+        step_type, ifc_class = classify(display_name, layer_name, path_name)
 
         # 1. Coordinate Point List 3D
         #
@@ -446,6 +482,7 @@ def export(
     scale: float = METRES_TO_MM,
     schema: str = "IFC4",
     classifier: Optional[Callable[[str, str], Tuple[str, str]]] = None,
+    classify_using_full_path: bool = False,
 ) -> None:
     """Export a baked scene to an ISO-10303-21 STEP ASCII IFC4 file.
 
@@ -456,8 +493,12 @@ def export(
         schema: IFC schema version (default: "IFC4").
         classifier: Optional override for :func:`classify_element` - see
             :func:`to_ifc` for the calling convention.
+        classify_using_full_path: See :func:`to_ifc`.
     """
     path = pathlib.Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    text = to_ifc(scene, scale=scale, schema=schema, classifier=classifier)
+    text = to_ifc(
+        scene, scale=scale, schema=schema, classifier=classifier,
+        classify_using_full_path=classify_using_full_path,
+    )
     path.write_bytes(text.encode("utf-8"))

@@ -77,6 +77,27 @@ class TestIfcExporter:
         )
         assert classify_element("Component#109415")[0] == "IFCBUILDINGELEMENTPROXY"
 
+    def test_classify_element_full_path_is_opt_in(self):
+        """Neither the part's own name nor its layer say "wall" - only an
+        ancestor in its hierarchy path does. That must stay untyped by
+        default, and only match when classify_using_full_path is set -
+        this is the broader, noisier fallback callers can opt into after
+        openskp#272 stopped matching keywords against internal path
+        strings unconditionally."""
+        path = "ROOT / Wall Frame / Stud 12"
+        assert classify_element("Stud 12", "Layer0", path)[0] == "IFCBUILDINGELEMENTPROXY"
+        assert (
+            classify_element("Stud 12", "Layer0", path, classify_using_full_path=True)[0]
+            == "IFCWALL"
+        )
+
+    def test_classify_element_full_path_still_prefers_name_and_layer(self):
+        """The path fallback only kicks in once name and layer both miss -
+        it must never override a real, specific match."""
+        path = "ROOT / Wall Frame / Front Door"
+        result = classify_element("Front Door", "Layer0", path, classify_using_full_path=True)
+        assert result[0] == "IFCDOOR"
+
     def test_to_ifc_uses_layer_name_fallback_for_unnamed_components(self):
         prim = GlbPrimitive(
             positions=array("f", [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
@@ -97,6 +118,37 @@ class TestIfcExporter:
         ifc_text = to_ifc(scene)
         assert "IFCWALL(" in ifc_text
         assert "IFCBUILDINGELEMENTPROXY" not in ifc_text
+
+    def test_to_ifc_classify_using_full_path_opt_in(self):
+        prim = GlbPrimitive(
+            positions=array("f", [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+            normals=array("f", [0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0]),
+            uvs=array("f", [0.0, 0.0, 1.0, 0.0, 0.0, 1.0]),
+            indices=array("I", [0, 1, 2]),
+            material_index=0,
+            geom_name="mesh_0_ROOT__Wall_Frame__Stud_12_Layer0",
+        )
+        scene = Scene(
+            scene_hierarchy=InstanceNode(name="Root"),
+            mesh_index={
+                "mesh_0_ROOT__Wall_Frame__Stud_12_Layer0": MeshMetadata(
+                    name="Stud 12", layer="Layer0", path="ROOT / Wall Frame / Stud 12",
+                )
+            },
+            glb_primitives=[prim],
+            gltf_materials=[{}],
+        )
+
+        default_text = to_ifc(scene)
+        assert "IFCBUILDINGELEMENTPROXY" in default_text
+        assert "IFCWALL(" not in default_text
+
+        opted_in_text = to_ifc(scene, classify_using_full_path=True)
+        assert "IFCWALL(" in opted_in_text
+        # the real, clean name is still what's shown - opting into the
+        # broader classification fallback doesn't reintroduce the old
+        # mangled-name-as-Name bug.
+        assert "'Stud 12'" in opted_in_text
 
     def test_to_ifc_accepts_a_custom_classifier(self):
         scene = create_mock_scene()
