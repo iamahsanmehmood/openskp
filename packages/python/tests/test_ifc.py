@@ -229,8 +229,8 @@ class TestIfcExporter:
         assert "IFCPRESENTATIONLAYERWITHSTYLE" in ifc_text
         assert "IFCPRESENTATIONLAYERASSIGNMENT(" not in ifc_text
         assert "'Hidden Layer',$,(#" in ifc_text
-        hidden_line = next(l for l in ifc_text.splitlines() if "'Hidden Layer'" in l)
-        visible_line = next(l for l in ifc_text.splitlines() if "'Visible Layer'" in l)
+        hidden_line = next(line for line in ifc_text.splitlines() if "'Hidden Layer'" in line)
+        visible_line = next(line for line in ifc_text.splitlines() if "'Visible Layer'" in line)
         assert ",.F.,.F.,.F.,())" in hidden_line
         assert ",.T.,.F.,.F.,())" in visible_line
 
