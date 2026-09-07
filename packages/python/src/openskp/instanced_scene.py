@@ -102,6 +102,8 @@ class InstancedNode:
     matrix: Tuple[float, ...] = IDENTITY_GLTF
     position_mm: Tuple[float, float, float] = (0.0, 0.0, 0.0)
     properties: Dict[str, str] = field(default_factory=dict)
+    # See openskp.scene.InstanceNode.attribute_dictionaries.
+    attribute_dictionaries: Dict[str, Dict[str, str]] = field(default_factory=dict)
     mesh_resource_id: Optional[str] = None
     children: List["InstancedNode"] = field(default_factory=list)
 
@@ -395,6 +397,8 @@ def build_instanced_scene(parsed: Dict[str, Any]) -> InstancedScene:
             l_name = parent_layer
             inst_color = inherited_color
             properties: Dict[str, str] = dict(inst.get("properties") or {})
+            attribute_dicts: Dict[str, Dict[str, str]] = {}
+            name_override: Optional[str] = None
 
             d007 = next((c for c in inst["children"] if c["tag"] == "D007"), None)
             if d007:
@@ -414,14 +418,32 @@ def build_instanced_scene(parsed: Dict[str, Any]) -> InstancedScene:
                         inst_color = (c["r"], c["g"], c["b"])
 
                 try:
-                    properties = _core.extract_dynamic_properties(d007)
+                    all_dicts = _core.extract_attribute_dictionaries(d007)
+                    dynamic = all_dicts.get("dynamic_attributes", {})
+                    properties = {k: _core._stringify_vff_attr_value(v) for k, v in dynamic.items()}
+                    # See openskp.scene.build_scene's identical loop for why
+                    # SU_InstanceSet is skipped and name/label/code take
+                    # priority as the display-name override.
+                    for dict_name, entries in all_dicts.items():
+                        if dict_name in ("dynamic_attributes", "SU_InstanceSet"):
+                            continue
+                        attribute_dicts[dict_name] = {
+                            k: _core._stringify_vff_attr_value(v) for k, v in entries.items()
+                        }
+                        if name_override is None:
+                            for key in ("name", "label", "code"):
+                                val = entries.get(key)
+                                if val:
+                                    name_override = str(val)
+                                    break
                 except Exception:
                     logger.debug(
-                        "Failed to extract dynamic properties for instance %r (ref_idx=%r)",
+                        "Failed to extract attribute dictionaries for instance %r (ref_idx=%r)",
                         inst.get("name"), ref_idx, exc_info=True,
                     )
 
             inst_name = inst["name"] or f"Component_{ref_idx}"
+            display_name = name_override or inst_name
             instance_counter[0] += 1
             if instance_counter[0] % _PROGRESS_INTERVAL == 0:
                 logger.debug("Processed %d placed instances", instance_counter[0])
@@ -441,12 +463,13 @@ def build_instanced_scene(parsed: Dict[str, Any]) -> InstancedScene:
 
             nodes.append(
                 InstancedNode(
-                    name=inst_name,
+                    name=display_name,
                     definition_name=(defs_dict.get(ref_idx) or {}).get("name") or "",
                     layer=l_name,
                     matrix=_to_gltf_matrix(inst["matrix"]),
                     position_mm=(round(tx, 2), round(ty, 2), round(tz, 2)),
                     properties=properties,
+                    attribute_dictionaries=attribute_dicts,
                     mesh_resource_id=mesh_resource_for(ref_idx, inst_color, l_name),
                     children=children,
                 )

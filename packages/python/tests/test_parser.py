@@ -2628,6 +2628,197 @@ class TestBuildSceneMeshIndexPerInstanceMetadata:
         assert names == ["LeafInstance", "MiddleInstance", "OuterInstance"]
 
 
+class TestBuildSceneAttributeDictionaries:
+    """Regression coverage for the Keith Street fix: a third-party
+    steel-detailing plugin's per-instance attribute dictionary (seen in
+    production as ``fbd-einfo``/``fbd-profile``/``fbd-profile-cords``)
+    carries the element's REAL identity (``name``/``label``/``code``) and
+    rich structural metadata that build_scene previously discarded
+    entirely - only ``dynamic_attributes`` (SketchUp's own Dynamic
+    Components dictionary) was ever surfaced. Per the user's explicit
+    choice, this data now surfaces BOTH ways: as the displayed
+    name/InstanceNode.name (name/label/code, in that priority) and as
+    MeshMetadata/InstanceNode.attribute_dictionaries, keyed by the
+    dictionary's own name.
+    """
+
+    @staticmethod
+    def _tlv(tag_hex: str, payload: bytes) -> bytes:
+        return bytes.fromhex(tag_hex) + struct.pack('<I', len(payload)) + payload
+
+    @classmethod
+    def _value(cls, inner: bytes = b"") -> bytes:
+        return cls._tlv('A438', inner)
+
+    @classmethod
+    def _entry(cls, key: str, value_bytes: bytes) -> bytes:
+        return cls._tlv('B636', key.encode('utf-8')) + value_bytes
+
+    @classmethod
+    def _dict(cls, name: str, entries: bytes) -> bytes:
+        return cls._tlv('B436', name.encode('utf-8')) + cls._tlv('B536', entries)
+
+    @classmethod
+    def _d007_with_dicts(cls, *dicts: bytes):
+        from openskp import _core
+        dc05_payload = b"".join(dicts)
+        d007_bytes = cls._tlv('D007', cls._tlv('DC05', dc05_payload))
+        elements = _core.parse_tlv_recursive(d007_bytes, 0, len(d007_bytes))
+        return elements[0]
+
+    @classmethod
+    def _instance(cls, ref_idx, name, d007=None):
+        return {
+            "offset": 0, "ref_guid": "", "ref_idx": ref_idx, "name": name,
+            "matrix": [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1.0],
+            "material_id": None, "children": [d007] if d007 else [],
+        }
+
+    @staticmethod
+    def _parsed(defs_dict):
+        return {
+            "defs_dict": defs_dict,
+            "layer_colors": {},
+            "layer_id_to_name": {},
+            "material_id_to_name": {},
+            "materials": {},
+            "materials_by_folder": {},
+        }
+
+    def test_plugin_dict_name_overrides_displayed_name(self) -> None:
+        from openskp._core import _GeometryBuilder
+        from openskp.scene import build_scene
+
+        d007 = self._d007_with_dicts(
+            self._dict("fbd-einfo", self._entry("name", self._value(self._tlv("AD38", b"Profile25"))))
+        )
+        root_builder = _GeometryBuilder()
+        root_builder.instances.append(self._instance(1, "GLB-12", d007))
+        defs_dict = {
+            1: {"guid": "g1", "name": "wall_def", "builder": _GeometryBuilder()},
+            "ROOT": {"guid": "ROOT", "name": "ROOT_MODEL", "builder": root_builder},
+        }
+
+        scene = build_scene(self._parsed(defs_dict))
+
+        assert scene.scene_hierarchy.children[0].name == "Profile25"
+
+    def test_name_label_code_priority_order(self) -> None:
+        """label beats code, and (from the other test) name beats label."""
+        from openskp._core import _GeometryBuilder
+        from openskp.scene import build_scene
+
+        d007 = self._d007_with_dicts(
+            self._dict(
+                "fbd-einfo",
+                self._entry("label", self._value(self._tlv("AD38", b"W1")))
+                + self._entry("code", self._value(self._tlv("AD38", b"aPf"))),
+            )
+        )
+        root_builder = _GeometryBuilder()
+        root_builder.instances.append(self._instance(1, "GLB-12", d007))
+        defs_dict = {
+            1: {"guid": "g1", "name": "wall_def", "builder": _GeometryBuilder()},
+            "ROOT": {"guid": "ROOT", "name": "ROOT_MODEL", "builder": root_builder},
+        }
+
+        scene = build_scene(self._parsed(defs_dict))
+
+        assert scene.scene_hierarchy.children[0].name == "W1"
+
+    def test_no_override_falls_back_to_real_instance_name(self) -> None:
+        from openskp._core import _GeometryBuilder
+        from openskp.scene import build_scene
+
+        d007 = self._d007_with_dicts(
+            self._dict("fbd-einfo", self._entry("angle", self._value(self._tlv("A738", struct.pack("<i", 90)))))
+        )
+        root_builder = _GeometryBuilder()
+        root_builder.instances.append(self._instance(1, "GLB-12", d007))
+        defs_dict = {
+            1: {"guid": "g1", "name": "wall_def", "builder": _GeometryBuilder()},
+            "ROOT": {"guid": "ROOT", "name": "ROOT_MODEL", "builder": root_builder},
+        }
+
+        scene = build_scene(self._parsed(defs_dict))
+
+        assert scene.scene_hierarchy.children[0].name == "GLB-12"
+
+    def test_extra_dictionaries_exposed_on_instance_node(self) -> None:
+        from openskp._core import _GeometryBuilder
+        from openskp.scene import build_scene
+
+        d007 = self._d007_with_dicts(
+            self._dict(
+                "fbd-einfo",
+                self._entry("name", self._value(self._tlv("AD38", b"Profile25")))
+                + self._entry("angle", self._value(self._tlv("A738", struct.pack("<i", 90)))),
+            )
+        )
+        root_builder = _GeometryBuilder()
+        root_builder.instances.append(self._instance(1, "GLB-12", d007))
+        defs_dict = {
+            1: {"guid": "g1", "name": "wall_def", "builder": _GeometryBuilder()},
+            "ROOT": {"guid": "ROOT", "name": "ROOT_MODEL", "builder": root_builder},
+        }
+
+        scene = build_scene(self._parsed(defs_dict))
+
+        node = scene.scene_hierarchy.children[0]
+        assert node.attribute_dictionaries == {"fbd-einfo": {"name": "Profile25", "angle": "90"}}
+
+    def test_su_instance_set_and_dynamic_attributes_excluded_from_extras(self) -> None:
+        """SU_InstanceSet is SketchUp's own always-present, always-empty
+        boilerplate and dynamic_attributes already has its own dedicated
+        `properties` field - neither belongs in the extras dict too."""
+        from openskp._core import _GeometryBuilder
+        from openskp.scene import build_scene
+
+        d007 = self._d007_with_dicts(
+            self._dict("SU_InstanceSet", self._entry("Owner", self._value(self._tlv("AD38", b"")))),
+            self._dict("dynamic_attributes", self._entry("width", self._value(self._tlv("AF38", struct.pack("<d", 10.0))))),
+        )
+        root_builder = _GeometryBuilder()
+        root_builder.instances.append(self._instance(1, "GLB-12", d007))
+        defs_dict = {
+            1: {"guid": "g1", "name": "wall_def", "builder": _GeometryBuilder()},
+            "ROOT": {"guid": "ROOT", "name": "ROOT_MODEL", "builder": root_builder},
+        }
+
+        scene = build_scene(self._parsed(defs_dict))
+
+        node = scene.scene_hierarchy.children[0]
+        assert node.attribute_dictionaries == {}
+        assert node.properties == {"width": "10.0"}
+
+    def test_non_unique_plugin_label_does_not_collide_mesh_index_paths(self) -> None:
+        """Two sibling instances sharing the same plugin-supplied "name"
+        (a catalog/type label like "Profile25" is frequently shared across
+        every instance of that profile, not a per-instance identifier)
+        must still resolve to two separate, correctly-backfilled mesh_index
+        entries - path_updates keys off the real (locally-unique)
+        inst_name, never the display_name override."""
+        from openskp._core import _GeometryBuilder
+        from openskp.scene import build_scene
+
+        d007 = self._d007_with_dicts(
+            self._dict("fbd-einfo", self._entry("name", self._value(self._tlv("AD38", b"Profile25"))))
+        )
+        child_builder = _GeometryBuilder()  # no faces - forces the deferred path_updates backfill
+        root_builder = _GeometryBuilder()
+        root_builder.instances.append(self._instance(1, "GLB-11", d007))
+        root_builder.instances.append(self._instance(1, "GLB-12", d007))
+        defs_dict = {
+            1: {"guid": "g1", "name": "shared_def", "builder": child_builder},
+            "ROOT": {"guid": "ROOT", "name": "ROOT_MODEL", "builder": root_builder},
+        }
+
+        scene = build_scene(self._parsed(defs_dict))
+
+        names = sorted(c.name for c in scene.scene_hierarchy.children)
+        assert names == ["Profile25", "Profile25"]
+
+
 class TestGlbExport:
     """``export.glb.export()`` bakes via ``scene.build_scene()`` (the same
     step ``SkpFile.build_scene()`` exposes directly) and hands the
