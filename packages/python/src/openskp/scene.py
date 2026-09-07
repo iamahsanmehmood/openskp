@@ -135,6 +135,13 @@ class Scene:
     # textures=True)) - most callers just want geometry, and photographic
     # textures can multiply file size.
     textures: List[SceneTexture] = field(default_factory=list)
+    # Each layer's own visibility checkbox in SketchUp (the parsed file's
+    # own "layer_hidden", keyed by layer name) - independent of whether any
+    # placed geometry on that layer ended up in glb_primitives. Consumers
+    # that expose a layer list (e.g. the IFC exporter's IfcPresentationLayerWithStyle.LayerOn)
+    # use this to match SketchUp's own on/off state instead of always
+    # defaulting every layer to visible.
+    layer_hidden: Dict[str, bool] = field(default_factory=dict)
 
 
 def _sniff_image_mime(data: bytes) -> Optional[str]:
@@ -452,7 +459,7 @@ def build_scene(parsed: Dict[str, Any]) -> Scene:
             tz = new_matrix[11] * INCHES_TO_MM if len(new_matrix) > 11 else 0.0
 
             inst_info = InstanceNode(
-                name=inst["name"] or "",
+                name=inst_name,
                 definition_name=(defs_dict.get(ref_idx) or {}).get("name") or "",
                 layer=l_name,
                 position_mm=(round(tx, 2), round(ty, 2), round(tz, 2)),
@@ -461,7 +468,7 @@ def build_scene(parsed: Dict[str, Any]) -> Scene:
             )
             child_instances_info.append(inst_info)
 
-            path_updates[full_path_name] = (properties, inst["name"] or "")
+            path_updates[full_path_name] = (properties, inst_name)
 
         return child_instances_info
 
@@ -512,4 +519,5 @@ def build_scene(parsed: Dict[str, Any]) -> Scene:
         glb_primitives=glb_primitives,
         gltf_materials=gltf_materials,
         textures=textures,
+        layer_hidden=dict(parsed.get("layer_hidden") or {}),
     )
