@@ -3230,6 +3230,39 @@ class SkpBuilder:
         self._new_entity_count += 1
         self._face_count += 1  # reuses the "at least one root entity" check in to_bytes
 
+    def add_section_plane(self, point: Point3, normal: Point3) -> None:
+        """Add a section plane (SketchUp's Section Plane tool) through
+        ``point`` with the given ``normal`` (need not be unit length),
+        matching ``Entities#add_section_plane([point, normal])``.
+
+        Ground truth (real SketchUp 2025, SDK/Ruby cross-checked against a
+        genuinely v17-native save): the record is preamble + drawbase +
+        the plane as 4 doubles ``(a, b, c, d)`` satisfying
+        ``a*x + b*y + c*z + d = 0`` for every point on the plane - the
+        same implicit form ``Sketchup::SectionPlane#get_plane`` returns,
+        confirmed to match exactly (``normal`` normalized, ``d = -(normal
+        . point)``). A name/short-label pair can follow on v18+ saves per
+        the reader (``legacy.py``'s ``_read_sectionplane``) - omitted
+        here since this writer only ever produces v17-tagged files, same
+        scope as ``add_dimension``/``add_text``/``add_construction_line``.
+        """
+        self._ensure_geometry_writer()
+        w = self._geometry_writer
+        p = (float(point[0]), float(point[1]), float(point[2]))
+        n = (float(normal[0]), float(normal[1]), float(normal[2]))
+        nlen = math.sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2])
+        if nlen == 0.0:
+            raise SkpWriteError("add_section_plane: normal must be nonzero")
+        a, b, c = n[0] / nlen, n[1] / nlen, n[2] / nlen
+        d = -(a * p[0] + b * p[1] + c * p[2])
+        w._new_of_known_class("CSectionPlane", schema=3)
+        w._preamble()
+        w.buf += _DIM_DRAWBASE
+        for v in (a, b, c, d):
+            w.buf += _f64(v)
+        self._new_entity_count += 1
+        self._face_count += 1  # reuses the "at least one root entity" check in to_bytes
+
     def to_bytes(self) -> bytes:
         """Return the finished file's bytes."""
         if self._pending_groups:
