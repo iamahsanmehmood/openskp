@@ -3,8 +3,10 @@
 Serializes a baked :class:`~openskp.scene.Scene` into ISO-10303-21 STEP ASCII format
 conforming to the IFC4 schema (FILE_SCHEMA(('IFC4'))).
 
-Uses native ``IfcTriangulatedFaceSet`` geometry representation for direct 1:1
-mapping of triangulated vertex positions and face indices from baked scene primitives.
+Uses native ``IfcTriangulatedFaceSet`` geometry representation, reusing the
+baked scene's triangulated face indices as-is and its vertex positions after
+converting them back from glTF's Y-up convention to IFC's (SketchUp's own)
+Z-up convention.
 """
 
 from __future__ import annotations
@@ -16,8 +18,14 @@ from typing import Callable, Dict, List, Optional, Tuple, Union
 
 from ..scene import Scene
 
-# 1 metre = 39.37007874015748 inches (SketchUp native unit)
+# 1 metre = 39.37007874015748 inches (SketchUp native unit) - kept for
+# callers that want inch-scaled coordinates explicitly, but NOT the
+# default scale below: the file always declares its length unit as
+# millimetres (see IFCSIUNIT below), so the default scale has to produce
+# millimetre-scaled values or every coordinate reads back ~25.4x too
+# small in any IFC consumer that respects the unit declaration.
 METRES_TO_INCHES = 39.37007874015748
+METRES_TO_MM = 1000.0
 
 _IFC_BASE64 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_$"
 
@@ -105,7 +113,7 @@ def _get_prim_rgb(scene: Scene, prim_mat_idx: int) -> Tuple[float, float, float,
 
 def to_ifc(
     scene: Scene,
-    scale: float = METRES_TO_INCHES,
+    scale: float = METRES_TO_MM,
     schema: str = "IFC4",
     classifier: Optional[Callable[[str, str], Tuple[str, str]]] = None,
 ) -> str:
@@ -114,7 +122,7 @@ def to_ifc(
     Args:
 
         scene: The baked scene returned by :meth:`SkpFile.build_scene`.
-        scale: Coordinate scale factor (default: METRES_TO_INCHES).
+        scale: Coordinate scale factor (default: METRES_TO_MM - matches the millimetre length unit this exporter always declares).
         schema: IFC schema version (default: "IFC4").
         classifier: Optional override for :func:`classify_element`, called
             as ``classifier(geom_name, layer_name)`` and expected to return
@@ -273,11 +281,18 @@ def to_ifc(
         step_type, ifc_class = classify(geom_name, layer_name)
 
         # 1. Coordinate Point List 3D
+        #
+        # scene.glb_primitives positions are baked in glTF's Y-up
+        # convention (see Scene/scene.py: glTF.y = SketchUp Z (height),
+        # glTF.z = -SketchUp Y (depth)) - correct for GLB export, but IFC
+        # (like SketchUp itself) is Z-up, so it has to be converted back
+        # rather than passed through raw, or the exported building comes
+        # out rotated ~90 degrees and mirrored.
         pt_coords: List[str] = []
         for i in range(v_count):
             vx = round(prim.positions[i * 3] * scale, 6)
-            vy = round(prim.positions[i * 3 + 1] * scale, 6)
-            vz = round(prim.positions[i * 3 + 2] * scale, 6)
+            vy = round(-prim.positions[i * 3 + 2] * scale, 6)
+            vz = round(prim.positions[i * 3 + 1] * scale, 6)
             pt_coords.append(f"({vx},{vy},{vz})")
 
         pt_list_id = next_id()
@@ -413,7 +428,7 @@ def to_ifc(
 def export(
     scene: Scene,
     output_path: Union[str, pathlib.Path],
-    scale: float = METRES_TO_INCHES,
+    scale: float = METRES_TO_MM,
     schema: str = "IFC4",
     classifier: Optional[Callable[[str, str], Tuple[str, str]]] = None,
 ) -> None:
@@ -422,7 +437,7 @@ def export(
     Args:
         scene: The baked scene returned by :meth:`SkpFile.build_scene`.
         output_path: Destination path (.ifc).
-        scale: Coordinate scale factor (default: METRES_TO_INCHES).
+        scale: Coordinate scale factor (default: METRES_TO_MM - matches the millimetre length unit this exporter always declares).
         schema: IFC schema version (default: "IFC4").
         classifier: Optional override for :func:`classify_element` - see
             :func:`to_ifc` for the calling convention.

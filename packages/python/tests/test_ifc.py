@@ -129,6 +129,64 @@ class TestIfcExporter:
         assert "IFCRELCONTAINEDINSPATIALSTRUCTURE" in ifc_text
         assert "ENDSEC;" in ifc_text
 
+    def test_to_ifc_declares_millimetres_and_scales_to_match(self):
+        """The exporter always declares millimetres - the default scale has
+        to actually produce millimetre-scaled values, or every coordinate
+        reads back ~25.4x too small in any IFC consumer that respects the
+        unit declaration (this exact bug, caught 2026-09-07 comparing
+        against a real SketchUp IFC export of the same file)."""
+        prim = GlbPrimitive(
+            positions=array("f", [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]),
+            normals=array("f", [0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0]),
+            uvs=array("f", [0.0, 0.0, 1.0, 0.0, 0.0, 1.0]),
+            indices=array("I", [0, 1, 2]),
+            material_index=0,
+            geom_name="Test Triangle",
+        )
+        scene = Scene(
+            scene_hierarchy=InstanceNode(name="Root"),
+            mesh_index={"Test Triangle": MeshMetadata(name="Test Triangle", properties={})},
+            glb_primitives=[prim],
+            gltf_materials=[{"pbrMetallicRoughness": {"baseColorFactor": [0.5, 0.5, 0.5, 1.0]}}],
+        )
+        ifc_text = to_ifc(scene)
+
+        assert "IFCSIUNIT(*,.LENGTHUNIT.,.MILLI.,.METRE.)" in ifc_text
+        # vertex 2 is glTF (1.0, 0.0, 0.0) = 1 metre along X, which maps
+        # straight through to IFC X - millimetres means it must come out
+        # as 1000.0, not ~39.37 (metres-to-inches, the old default).
+        assert "(1000.0,-0.0,0.0)" in ifc_text
+
+    def test_to_ifc_converts_gltf_y_up_to_ifc_z_up(self):
+        """scene.glb_primitives positions are baked in glTF's Y-up
+        convention (glTF.y = SketchUp Z/height, glTF.z = -SketchUp
+        Y/depth) for GLB export - IFC (like SketchUp itself) is Z-up, so
+        to_ifc must convert back rather than pass positions through raw,
+        or the exported building comes out rotated ~90 degrees and
+        mirrored (this exact bug, caught 2026-09-07 comparing against a
+        real SketchUp IFC export of the same file)."""
+        prim = GlbPrimitive(
+            positions=array("f", [0.0, 0.0, 0.0, 2.0, 3.0, 5.0, 0.0, 1.0, 0.0]),
+            normals=array("f", [0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0]),
+            uvs=array("f", [0.0, 0.0, 1.0, 0.0, 0.0, 1.0]),
+            indices=array("I", [0, 1, 2]),
+            material_index=0,
+            geom_name="Test Triangle",
+        )
+        scene = Scene(
+            scene_hierarchy=InstanceNode(name="Root"),
+            mesh_index={"Test Triangle": MeshMetadata(name="Test Triangle", properties={})},
+            glb_primitives=[prim],
+            gltf_materials=[{"pbrMetallicRoughness": {"baseColorFactor": [0.5, 0.5, 0.5, 1.0]}}],
+        )
+        ifc_text = to_ifc(scene, scale=1.0)
+
+        # glTF (2.0, 3.0, 5.0) is SketchUp (x=2.0, y=-5.0, z=3.0) - IFC/
+        # SketchUp Z-up means that vertex must appear as (2.0,-5.0,3.0),
+        # not the raw glTF-order (2.0,3.0,5.0).
+        assert "(2.0,-5.0,3.0)" in ifc_text
+        assert "(2.0,3.0,5.0)" not in ifc_text
+
     def test_export_file(self):
         scene = create_mock_scene()
         with tempfile.TemporaryDirectory() as tmp_dir:
