@@ -158,7 +158,10 @@ def open_existing(
         # definitions (unlike Components, which SketchUp auto-names), so
         # an empty name is common in real files - the same reasoning as
         # _replay_instance's own name handling below.
-        with builder.add_component_definition(defn.name) as db:
+        with builder.add_component_definition(
+                defn.name,
+                always_faces_camera=getattr(defn, "always_faces_camera", False),
+                shadows_face_sun=getattr(defn, "shadows_face_sun", False)) as db:
             _replay_body(db, defn, model, material_slots, layer_slots, warnings, context, def_builders)
         def_builders[def_id] = db
 
@@ -181,16 +184,18 @@ def _replay_materials(builder: SkpBuilder, model: SkpModel, warnings: List[str])
             try:
                 with os.fdopen(fd, "wb") as f:
                     f.write(mat.texture.data)
-                # applied_height=1.0 - every textured face is now replayed
-                # with an explicit front_uv/back_uv (see _replay_uv), whose
-                # pins already bake in the SOURCE's real tile size via
-                # compute_face_uv - the material's own stored applied
-                # height must be a no-op divisor (1.0) or the read-side UV
-                # formula divides by it a second time. This happens to
-                # match add_texture_material's own default too, but is
-                # kept explicit here since it's a hard requirement of this
-                # call site specifically, not just a safe default.
-                slot = builder.add_texture_material(mat.name, tmp_path, applied_height=1.0)
+                # The source's real applied size travels with the material
+                # (a brick stays 8 x 16 in in the material browser), and the
+                # replayed pins - in tiles, from compute_face_uv - are scaled
+                # by it inside add_face, so the read-side division by the
+                # applied size lands back on the same UV. (This used to
+                # force applied_height=1.0 to dodge a double division; the
+                # writer scales the pins itself now.)
+                slot = builder.add_texture_material(
+                    mat.name, tmp_path,
+                    applied_width=mat.texture.width or 1.0,
+                    applied_height=mat.texture.height or 1.0,
+                )
             finally:
                 os.unlink(tmp_path)
             if mat.colorized:

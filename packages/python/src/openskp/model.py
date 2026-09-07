@@ -113,7 +113,8 @@ class Face:
 
             1. Plane basis from the face normal ``n``:
                ``xr = normalize(Z × n)``, ``yr = n × xr`` (for a vertical
-               ``n``: ``xr = X``, ``yr = ±Y`` by the sign of ``n``·Z).
+               ``n`` - ``|Z × n| < 1e-3``, SketchUp's own tolerance -
+               ``(X, Y)`` looking up and ``(−X, Y)`` looking down).
             2. ``uvq = [p·xr, p·yr, 1] @ inv(M)``  (row-vector convention).
             3. ``u = uvq[0]/uvq[2] / tile_w``, ``v = uvq[1]/uvq[2] / tile_h``
                with the material texture's tile size in inches.
