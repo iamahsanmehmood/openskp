@@ -407,6 +407,46 @@ class Page:
 
 
 @dataclass
+class ConstructionLine:
+    """A construction/guide line (SketchUp's Construction Line tool).
+
+    Stored internally (and here, unchanged) as a point + normalized
+    direction + two signed distance parameters along that direction
+    marking where the visible segment starts/ends - the same shape
+    :class:`Sketchup::ConstructionLine`'s own ``start``/``end``/
+    ``direction`` properties expose. A parameter magnitude of ``1e30``
+    means unbounded in that direction (SketchUp draws this as an infinite
+    guide line through ``point``) - ``start``/``end`` come back ``None``
+    in that case, matching the real API returning ``nil``.
+
+    Attributes:
+        point: A point on the line, in inches (world space) - matches the
+            bounded case's own ``start``, or the anchor point given for an
+            infinite line.
+        direction: The line's normalized direction vector.
+        start: The bounded segment's start point, or ``None`` if unbounded
+            in this direction.
+        end: The bounded segment's end point, or ``None`` if unbounded.
+    """
+
+    point: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    direction: Tuple[float, float, float] = (1.0, 0.0, 0.0)
+    start: Optional[Tuple[float, float, float]] = None
+    end: Optional[Tuple[float, float, float]] = None
+
+
+@dataclass
+class ConstructionPoint:
+    """A construction/guide point (SketchUp's Construction Point tool).
+
+    Attributes:
+        position: The point's position, in inches (world space).
+    """
+
+    position: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+
+
+@dataclass
 class Definition:
     """A component definition containing reusable geometry.
 
@@ -418,6 +458,10 @@ class Definition:
         edges: Mapping of edge ID → :class:`Edge`.
         faces: Mapping of face ID → :class:`Face`.
         instances: Child instances placed inside this definition.
+        construction_lines: Construction/guide lines - see
+            :class:`ConstructionLine`.
+        construction_points: Construction/guide points - see
+            :class:`ConstructionPoint`.
         always_faces_camera: SketchUp's "always face camera" component
             behavior (2D people / tree cut-outs that rotate to face the
             viewer). Consumers typically render such instances as
@@ -439,6 +483,8 @@ class Definition:
     section_planes: List[SectionPlane] = field(default_factory=list)
     texts: List[TextEntity] = field(default_factory=list)
     dimensions: List[Dimension] = field(default_factory=list)
+    construction_lines: List[ConstructionLine] = field(default_factory=list)
+    construction_points: List[ConstructionPoint] = field(default_factory=list)
     always_faces_camera: bool = False
     shadows_face_sun: bool = False
     is_image: bool = False
@@ -642,6 +688,18 @@ class SkpFile:
                 defn.dimensions.append(Dimension(
                     text=dim.get("text", ""),
                     hidden=dim.get("hidden", False),
+                ))
+            # Populate construction lines/points
+            for cl in getattr(builder, "construction_lines", []):
+                defn.construction_lines.append(ConstructionLine(
+                    point=cl.get("point", (0.0, 0.0, 0.0)),
+                    direction=cl.get("direction", (1.0, 0.0, 0.0)),
+                    start=cl.get("start"),
+                    end=cl.get("end"),
+                ))
+            for cp in getattr(builder, "construction_points", []):
+                defn.construction_points.append(ConstructionPoint(
+                    position=cp.get("position", (0.0, 0.0, 0.0)),
                 ))
             if def_id == "ROOT":
                 model.root = defn
