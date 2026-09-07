@@ -187,6 +187,53 @@ class TestIfcExporter:
         assert "(2.0,-5.0,3.0)" in ifc_text
         assert "(2.0,3.0,5.0)" not in ifc_text
 
+    def test_to_ifc_uses_real_instance_name_not_internal_key(self):
+        """prim.geom_name is an internal lookup key (mesh index + hierarchy
+        path + layer, e.g. "mesh_3_ROOT__W1_Layer0") - never a name a user
+        should see. The IFC element's Name must come from
+        MeshMetadata.name (the actual SketchUp instance name) instead
+        (this exact bug, caught 2026-09-07 comparing against real IFC
+        exports of the same file)."""
+        prim = GlbPrimitive(
+            positions=array("f", [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+            normals=array("f", [0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0]),
+            uvs=array("f", [0.0, 0.0, 1.0, 0.0, 0.0, 1.0]),
+            indices=array("I", [0, 1, 2]),
+            material_index=0,
+            geom_name="mesh_3_ROOT__W1_Layer0",
+        )
+        scene = Scene(
+            scene_hierarchy=InstanceNode(name="Root"),
+            mesh_index={"mesh_3_ROOT__W1_Layer0": MeshMetadata(name="W1", layer="Layer0")},
+            glb_primitives=[prim],
+            gltf_materials=[{"pbrMetallicRoughness": {"baseColorFactor": [0.5, 0.5, 0.5, 1.0]}}],
+        )
+        ifc_text = to_ifc(scene)
+
+        assert "'W1'" in ifc_text
+        assert "mesh_3_ROOT" not in ifc_text
+
+    def test_to_ifc_layer_on_reflects_scene_layer_hidden(self):
+        """Only IfcPresentationLayerWithStyle (not the plain
+        IfcPresentationLayerAssignment this exporter used to write)
+        carries a layer's visibility - LayerOn must match the source
+        file's own hidden/visible state per layer, not just default to
+        visible for everything."""
+        scene = create_mock_scene()
+        scene.mesh_index["Outer Wall"].layer = "Hidden Layer"
+        scene.mesh_index["Front Door"].layer = "Visible Layer"
+        scene.layer_hidden = {"Hidden Layer": True, "Visible Layer": False}
+
+        ifc_text = to_ifc(scene)
+
+        assert "IFCPRESENTATIONLAYERWITHSTYLE" in ifc_text
+        assert "IFCPRESENTATIONLAYERASSIGNMENT(" not in ifc_text
+        assert "'Hidden Layer',$,(#" in ifc_text
+        hidden_line = next(line for line in ifc_text.splitlines() if "'Hidden Layer'" in line)
+        visible_line = next(line for line in ifc_text.splitlines() if "'Visible Layer'" in line)
+        assert ",.F.,.F.,.F.,())" in hidden_line
+        assert ",.T.,.F.,.F.,())" in visible_line
+
     def test_export_file(self):
         scene = create_mock_scene()
         with tempfile.TemporaryDirectory() as tmp_dir:

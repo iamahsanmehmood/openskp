@@ -421,6 +421,7 @@ def build_instanced_scene(parsed: Dict[str, Any]) -> InstancedScene:
                         inst.get("name"), ref_idx, exc_info=True,
                     )
 
+            inst_name = inst["name"] or f"Component_{ref_idx}"
             instance_counter[0] += 1
             if instance_counter[0] % _PROGRESS_INTERVAL == 0:
                 logger.debug("Processed %d placed instances", instance_counter[0])
@@ -440,7 +441,7 @@ def build_instanced_scene(parsed: Dict[str, Any]) -> InstancedScene:
 
             nodes.append(
                 InstancedNode(
-                    name=inst["name"] or "",
+                    name=inst_name,
                     definition_name=(defs_dict.get(ref_idx) or {}).get("name") or "",
                     layer=l_name,
                     matrix=_to_gltf_matrix(inst["matrix"]),

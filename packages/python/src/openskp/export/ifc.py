@@ -272,13 +272,20 @@ def to_ifc(
         if tri_count == 0 or v_count == 0:
             continue
 
-        geom_name = sanitize_name(prim.geom_name)
-        layer_name = "Layer0"
         meta = scene.mesh_index.get(prim.geom_name)
+        # prim.geom_name is an internal lookup key (mesh index + hierarchy
+        # path + layer, e.g. "mesh_3115_ROOT__Component_6205261_Layer0") -
+        # never the element's real name. meta.name is the actual SketchUp
+        # instance name (or SketchUp's own "Component_<id>" default when
+        # nobody renamed it) - use that for both classification and the
+        # element's IFC Name, falling back to the internal key only if a
+        # primitive somehow has no mesh_index entry.
+        display_name = sanitize_name(meta.name) if meta and meta.name else sanitize_name(prim.geom_name)
+        layer_name = "Layer0"
         if meta and getattr(meta, "layer", None):
             layer_name = sanitize_name(meta.layer)
 
-        step_type, ifc_class = classify(geom_name, layer_name)
+        step_type, ifc_class = classify(display_name, layer_name)
 
         # 1. Coordinate Point List 3D
         #
@@ -328,7 +335,7 @@ def to_ifc(
 
             style_id = next_id()
             lines.append(
-                f"#{style_id}=IFCSURFACESTYLE('{geom_name}_Material',.BOTH.,(#{rendering_id}));"
+                f"#{style_id}=IFCSURFACESTYLE('{display_name}_Material',.BOTH.,(#{rendering_id}));"
             )
 
             style_assign_id = next_id()
@@ -364,11 +371,11 @@ def to_ifc(
         product_id = next_id()
         if step_type == "IFCBUILDINGELEMENTPROXY":
             lines.append(
-                f"#{product_id}={step_type}('{prod_guid}',#{owner_hist_id},'{geom_name}',$,$,#{prod_placement_id},#{prod_shape_id},$,.NOTDEFINED.);"
+                f"#{product_id}={step_type}('{prod_guid}',#{owner_hist_id},'{display_name}',$,$,#{prod_placement_id},#{prod_shape_id},$,.NOTDEFINED.);"
             )
         else:
             lines.append(
-                f"#{product_id}={step_type}('{prod_guid}',#{owner_hist_id},'{geom_name}',$,$,#{prod_placement_id},#{prod_shape_id},$,$);"
+                f"#{product_id}={step_type}('{prod_guid}',#{owner_hist_id},'{display_name}',$,$,#{prod_placement_id},#{prod_shape_id},$,$);"
             )
 
         product_ids.append(product_id)
@@ -404,13 +411,21 @@ def to_ifc(
                     f"#{rel_prop_id}=IFCRELDEFINESBYPROPERTIES('{rel_prop_guid}',#{owner_hist_id},$,$,(#{product_id}),#{pset_id});"
                 )
 
-    # 6. Presentation Layer Assignments (Preserve Layers)
+    # 6. Presentation Layer Assignments (preserve layers and their on/off
+    # state). IfcPresentationLayerWithStyle - not the plain
+    # IfcPresentationLayerAssignment neither SketchUp's own IFC exporter
+    # nor the IFC-manager SketchUp extension use - is the only IFC4 entity
+    # that can carry a layer's visibility at all (LayerOn); every other
+    # attribute here besides Name and LayerOn is left unset/false since
+    # this project doesn't track them (freeze/block/layer-level styles).
     for l_name, item_ids in sorted(layer_items.items()):
         if item_ids:
             item_refs = ",".join(f"#{iid}" for iid in item_ids)
+            layer_on = ".F." if scene.layer_hidden.get(l_name) else ".T."
             layer_assign_id = next_id()
             lines.append(
-                f"#{layer_assign_id}=IFCPRESENTATIONLAYERASSIGNMENT('{l_name}',$,({item_refs}),$);"
+                f"#{layer_assign_id}=IFCPRESENTATIONLAYERWITHSTYLE("
+                f"'{l_name}',$,({item_refs}),$,{layer_on},.F.,.F.,());"
             )
 
     # 7. Containment Relation in Spatial Hierarchy

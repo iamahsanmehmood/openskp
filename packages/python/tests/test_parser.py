@@ -2522,6 +2522,77 @@ class TestBuildSceneRecursionGuard:
         scene = build_scene(self._parsed(defs_dict))
         assert len(scene.scene_hierarchy.children) == 2
 
+    def test_unnamed_instance_gets_readable_fallback_not_empty_string(self) -> None:
+        """An instance nobody renamed in SketchUp (inst["name"] == "")
+        must still get the same readable "Component_<id>" fallback the
+        mesh-level path already uses - InstanceNode.name and
+        MeshMetadata.name (via the deferred path_updates backfill) used a
+        different, empty-string fallback for the exact same case, so a
+        nested unnamed instance's real name silently vanished (caught
+        2026-09-07 comparing IFC export element names against a real
+        SketchUp export of the same file)."""
+        from openskp._core import _GeometryBuilder
+        from openskp.scene import build_scene
+
+        child_builder = _GeometryBuilder()  # no faces - forces the deferred path_updates backfill
+        root_builder = _GeometryBuilder()
+        root_builder.instances.append(self._instance(1, name=""))
+        defs_dict = {
+            1: {"guid": "g1", "name": "unnamed_def", "builder": child_builder},
+            "ROOT": {"guid": "ROOT", "name": "ROOT_MODEL", "builder": root_builder},
+        }
+
+        scene = build_scene(self._parsed(defs_dict))
+
+        assert scene.scene_hierarchy.children[0].name == "Component_1"
+
+
+class TestBuildSceneLayerHidden:
+    """Scene.layer_hidden must carry the source file's own per-layer
+    visibility through from parsed["layer_hidden"] - consumers that
+    expose a layer list (e.g. the IFC exporter's
+    IfcPresentationLayerWithStyle.LayerOn) rely on this rather than
+    always defaulting every layer to visible."""
+
+    def test_layer_hidden_passed_through_from_parsed(self) -> None:
+        from openskp._core import _GeometryBuilder
+        from openskp.scene import build_scene
+
+        root_builder = _GeometryBuilder()
+        parsed = {
+            "defs_dict": {"ROOT": {"guid": "ROOT", "name": "ROOT_MODEL", "builder": root_builder}},
+            "layer_colors": {},
+            "layer_id_to_name": {},
+            "material_id_to_name": {},
+            "materials": {},
+            "materials_by_folder": {},
+            "layer_hidden": {"Layer0": False, "Framing": True},
+        }
+
+        scene = build_scene(parsed)
+
+        assert scene.layer_hidden == {"Layer0": False, "Framing": True}
+
+    def test_missing_layer_hidden_defaults_to_empty(self) -> None:
+        """An older/synthetic parsed dict with no layer_hidden key at all
+        must not crash build_scene - just produce an empty mapping."""
+        from openskp._core import _GeometryBuilder
+        from openskp.scene import build_scene
+
+        root_builder = _GeometryBuilder()
+        parsed = {
+            "defs_dict": {"ROOT": {"guid": "ROOT", "name": "ROOT_MODEL", "builder": root_builder}},
+            "layer_colors": {},
+            "layer_id_to_name": {},
+            "material_id_to_name": {},
+            "materials": {},
+            "materials_by_folder": {},
+        }
+
+        scene = build_scene(parsed)
+
+        assert scene.layer_hidden == {}
+
 
 class TestBuildSceneMeshIndexPerInstanceMetadata:
     """Regression for openskp#240: each mesh's own ``name`` must reflect
