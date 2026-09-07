@@ -11,7 +11,7 @@ import math
 import struct
 from pathlib import Path
 
-from openskp import _core
+from openskp import _core, legacy
 from openskp.model import SkpFile
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -132,3 +132,42 @@ def test_pages_absent_is_empty():
     assert _core._parse_pages(None) == []
     model = SkpFile.open(str(FIXTURES / "SU_File.skp")).parse()
     assert model.pages == []
+
+
+# ── legacy pages (scenes) ───────────────────────────────────────────────
+#
+# CViewPage's full record also embeds a camera, an optional thumbnail, a
+# font, and — for any flag combination beyond hidden-layers — an entire
+# Style sub-object of undocumented size, so the legacy scanner only
+# supports the narrow flag set it fully understands (see
+# ``legacy._PAGE_ALLOWED_FLAGS``); everything else is silently skipped.
+# Ground truth (the flags bitmask, the hidden-layers list shape) was
+# captured from real v17-native SketchUp saves via the live SAIE bridge.
+
+def _legacy_page_record(name: str, flags: int, hidden_ids=()) -> bytes:
+    marker = legacy._STR_MARKER
+    out = marker + bytes([len(name)]) + name.encode('utf-16-le')
+    out += marker + bytes([0])              # second name: always empty
+    out += struct.pack('<I', flags)
+    out += bytes(2)                         # camera: null ref
+    out += bytes(2)                         # thumbnail dib: null ref
+    if flags & legacy._PAGE_HIDDEN_LAYERS_BIT:
+        for hid in hidden_ids:
+            out += struct.pack('<H', hid)
+        out += struct.pack('<I', 1)         # marker; also stops the u16 list
+    return out
+
+
+def test_scan_pages_legacy_synthetic():
+    data = (_legacy_page_record("Baseline", 0xc00)
+            + _legacy_page_record("WithHidden", 0xc20, hidden_ids=(5, 6))
+            + _legacy_page_record("TooFull", 0xfff, hidden_ids=(5,)))
+    ar = legacy._Archive(data, 17)
+    ar.slots[5] = ('obj', 'CLayer', {'name': 'Layer0'})
+    ar.slots[6] = ('obj', 'CLayer', {'name': 'Roof'})
+
+    pages = legacy._scan_pages(data, ar)
+
+    assert [p['name'] for p in pages] == ["Baseline", "WithHidden"]
+    assert pages[0]['hidden_layer_ids'] == []
+    assert pages[1]['hidden_layer_ids'] == [5, 6]
