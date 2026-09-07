@@ -612,6 +612,11 @@ _DIM_FONT_PAYLOAD = bytes.fromhex(
 # Leader-text delimiter block: [u32 1][u8 flag=1][u8 0][u32 ARROW=3 closed][u8 1]
 _TEXT_DELIM = bytes.fromhex("0100000001000300000001")
 _DIM_DRAWBASE = bytes.fromhex("00000001010000000000")
+# Sentinel a CConstructionLine's start/end distance-parameter carries when
+# unbounded in that direction - real SketchUp's own value, ground-truth
+# verified (2026-09) against Sketchup::ConstructionLine#start/#end
+# returning nil for that side.
+_CLINE_INFINITE = 1e30
 _DIM_B37 = bytes.fromhex("0101000000020000000400000000000000"
                          "0000000000000000000000000000000000000000")
 _DIM_B42 = bytes.fromhex("00000000000000000000020000000400000000000000"
@@ -3141,6 +3146,87 @@ class SkpBuilder:
         w.buf += _TEXT_DELIM
         w._write_str(text)
         w.buf += bytes(5)
+        self._new_entity_count += 1
+        self._face_count += 1  # reuses the "at least one root entity" check in to_bytes
+
+    def add_construction_line(
+        self, point: Point3,
+        point2: Optional[Point3] = None,
+        direction: Optional[Point3] = None,
+    ) -> None:
+        """Add a construction/guide line (SketchUp's Construction Line
+        tool). Pass exactly one of ``point2`` (a bounded segment between
+        ``point`` and ``point2``, matching ``Entities#add_cline(p1, p2)``)
+        or ``direction`` (an unbounded guide line through ``point``,
+        matching ``Entities#add_cline(point, vector)``).
+
+        Ground truth (real SketchUp 2025, SDK/Ruby cross-checked, against
+        BOTH a v2020-downgrade save and a genuinely v17-native save -
+        schema, field values, and this trailer all matched exactly between
+        the two independently-produced real files): the record stores a
+        point + normalized direction + two signed distance parameters
+        along that direction marking the visible segment's start/end -
+        exactly the shape ``Sketchup::ConstructionLine#start``/``#end``/
+        ``#direction`` exposes, confirmed byte-for-byte including the
+        segment length itself. An unbounded direction is written as the
+        real ``±1e30`` sentinel SketchUp itself uses
+        (``Sketchup::ConstructionLine#start``/``#end`` return ``nil`` for
+        that side). A 4-byte trailer follows - present (with different,
+        evidently-inert content) in both real samples, so written as
+        zero rather than omitted (an earlier version of this method wrote
+        zero trailer bytes, matching an older/different SketchUp build's
+        historical variant documented in the reader's own comment, not
+        this one - real SketchUp rejected the result as an unrecognized
+        file).
+        """
+        self._ensure_geometry_writer()
+        w = self._geometry_writer
+        p = (float(point[0]), float(point[1]), float(point[2]))
+        if (point2 is None) == (direction is None):
+            raise SkpWriteError("add_construction_line: pass exactly one of point2 or direction")
+        if point2 is not None:
+            p2 = (float(point2[0]), float(point2[1]), float(point2[2]))
+            dx, dy, dz = p2[0] - p[0], p2[1] - p[1], p2[2] - p[2]
+            length = math.sqrt(dx * dx + dy * dy + dz * dz)
+            if length == 0.0:
+                raise SkpWriteError("add_construction_line: point and point2 coincide")
+            dirv = (dx / length, dy / length, dz / length)
+            start_param, end_param = 0.0, length
+        else:
+            d = (float(direction[0]), float(direction[1]), float(direction[2]))
+            dlen = math.sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2])
+            if dlen == 0.0:
+                raise SkpWriteError("add_construction_line: direction must be nonzero")
+            dirv = (d[0] / dlen, d[1] / dlen, d[2] / dlen)
+            start_param, end_param = -_CLINE_INFINITE, _CLINE_INFINITE
+        w._new_of_known_class("CConstructionLine", schema=1)
+        w._preamble()
+        w.buf += _DIM_DRAWBASE
+        for v in (p[0], p[1], p[2], dirv[0], dirv[1], dirv[2], start_param, end_param):
+            w.buf += _f64(v)
+        w.buf += bytes(4)  # trailer - see docstring
+        self._new_entity_count += 1
+        self._face_count += 1  # reuses the "at least one root entity" check in to_bytes
+
+    def add_construction_point(self, position: Point3) -> None:
+        """Add a construction/guide point (SketchUp's Construction Point
+        tool) at ``position`` (inches, world space).
+
+        Ground truth (real SketchUp 2025, SDK/Ruby cross-checked): a
+        second, always-zero 3-double block and a trailing zero byte follow
+        the position - reserved/unused (no corresponding
+        ``Sketchup::ConstructionPoint`` property exists to name them
+        after), written as zero to match every real-file sample seen.
+        """
+        self._ensure_geometry_writer()
+        w = self._geometry_writer
+        p = (float(position[0]), float(position[1]), float(position[2]))
+        w._new_of_known_class("CConstructionPoint", schema=0)
+        w._preamble()
+        w.buf += _DIM_DRAWBASE
+        for v in (p[0], p[1], p[2], 0.0, 0.0, 0.0):
+            w.buf += _f64(v)
+        w.buf += bytes(1)
         self._new_entity_count += 1
         self._face_count += 1  # reuses the "at least one root entity" check in to_bytes
 

@@ -734,15 +734,24 @@ def _strict_next_tag(ar, data, at, allow_null=True) -> bool:
 
 def _read_constructionline(ar, r):
     _preamble(ar, r)
-    _drawbase(ar, r)
-    r.f64s(3)
-    r.f64s(3)
-    r.f64s(2)                        # line params (±~4.4e29 = infinite)
+    db = _drawbase(ar, r)
+    point = r.f64s(3)
+    direction = r.f64s(3)
+    # Signed distance along `direction` from `point` marking where the
+    # visible segment starts/ends - ground truth (real SketchUp 2025,
+    # SDK/Ruby cross-checked, 2026-09): a bounded segment's start/end
+    # exactly equal `point`/`direction` scaled by these two parameters
+    # (verified against Sketchup::ConstructionLine#start/#end/#direction
+    # byte-for-byte, including the segment LENGTH as end_param); an
+    # unbounded direction uses a ±1e30 sentinel, matching
+    # Sketchup::ConstructionLine#start/#end returning nil for that side.
+    start_param, end_param = r.f64s(2)
     # The trailing block varies by the WRITING BUILD, not cleanly by
     # version: 7 bytes on the v17 calibration corpus, 4 on v16 and on a
-    # real v18, 0 on another real v17. Self-calibrate on the first guide
-    # line of the file — the length that lands on a legitimate next tag
-    # (strict forms only) — and cache it for the rest of the file.
+    # real v18, 0 on another real v17 (also 0 on a real SketchUp 2025
+    # build). Self-calibrate on the first guide line of the file — the
+    # length that lands on a legitimate next tag (strict forms only) — and
+    # cache it for the rest of the file.
     k = getattr(ar, '_cline_tail', None)
     if k is None:
         default = 7 if ar.ver == 17 else 4
@@ -762,15 +771,22 @@ def _read_constructionline(ar, r):
             k = default
         ar._cline_tail = k
     r.raw(k)
-    return {'k': 'cline'}
+    huge = 1e20  # well below the real ±1e30 sentinel, far above any real geometry extent
+    start = None if abs(start_param) >= huge else tuple(
+        point[i] + direction[i] * start_param for i in range(3))
+    end = None if abs(end_param) >= huge else tuple(
+        point[i] + direction[i] * end_param for i in range(3))
+    return {'k': 'cline', 'db': db, 'point': tuple(point),
+            'direction': tuple(direction), 'start': start, 'end': end}
 
 
 def _read_constructionpoint(ar, r):
     _preamble(ar, r)
     db = _drawbase(ar, r)
     pos = r.f64s(3)
-    r.f64s(3)
-    r.u8()
+    r.f64s(3)  # reserved/unused (observed all-zero, real SDK ground truth 2026-09) - no
+               # corresponding Sketchup::ConstructionPoint property to name it after
+    r.u8()     # reserved/unused (observed 0)
     return {'k': 'cpoint', 'db': db, 'pos': pos}
 
 
@@ -1352,6 +1368,8 @@ class _Builder:
         self.section_planes = []
         self.texts = []
         self.dimensions = []
+        self.construction_lines = []
+        self.construction_points = []
 
 
 def _fill_builder(builder, ents, slots):
@@ -1455,6 +1473,17 @@ def _fill_builder(builder, ents, slots):
             if len(pts) == 2 and pts[0] and pts[1]:
                 dim['a'], dim['b'] = pts[0], pts[1]
             builder.dimensions.append(dim)
+        elif k == 'cline':
+            builder.construction_lines.append({
+                'point': v.get('point', (0.0, 0.0, 0.0)),
+                'direction': v.get('direction', (1.0, 0.0, 0.0)),
+                'start': v.get('start'),
+                'end': v.get('end'),
+            })
+        elif k == 'cpoint':
+            builder.construction_points.append({
+                'position': v.get('pos', (0.0, 0.0, 0.0)),
+            })
 
 
 def _add_edge(builder, slot, e, slots):
