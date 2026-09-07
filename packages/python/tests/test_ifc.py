@@ -286,6 +286,64 @@ class TestIfcExporter:
         assert ",.F.,.F.,.F.,())" in hidden_line
         assert ",.T.,.F.,.F.,())" in visible_line
 
+    def test_to_ifc_writes_a_property_set_per_extra_attribute_dictionary(self):
+        """A third-party plugin's attribute dictionary (e.g. the
+        steel-detailing "fbd-einfo" seen on the Keith Street file) must
+        reach the exported IFC as its own named property set - separate
+        from Pset_CustomProperties (which stays SketchUp's own Dynamic
+        Components data), since a second source of properties commonly
+        reuses key names like "name"."""
+        prim = GlbPrimitive(
+            positions=array("f", [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+            normals=array("f", [0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0]),
+            uvs=array("f", [0.0, 0.0, 1.0, 0.0, 0.0, 1.0]),
+            indices=array("I", [0, 1, 2]),
+            material_index=0,
+            geom_name="mesh_0_ROOT__Profile25_Layer0",
+        )
+        scene = Scene(
+            scene_hierarchy=InstanceNode(name="Root"),
+            mesh_index={
+                "mesh_0_ROOT__Profile25_Layer0": MeshMetadata(
+                    name="Profile25",
+                    properties={"width": "10.0"},
+                    attribute_dictionaries={"fbd-einfo": {"code": "aPf", "angle": "90"}},
+                )
+            },
+            glb_primitives=[prim],
+            gltf_materials=[{"pbrMetallicRoughness": {"baseColorFactor": [0.5, 0.5, 0.5, 1.0]}}],
+        )
+        ifc_text = to_ifc(scene)
+
+        assert "'Pset_CustomProperties'" in ifc_text
+        assert "'Pset_fbd-einfo'" in ifc_text
+        assert "'width'" in ifc_text
+        assert "'code'" in ifc_text and "'aPf'" in ifc_text
+        assert "'angle'" in ifc_text and "'90'" in ifc_text
+
+    def test_to_ifc_skips_empty_attribute_dictionaries(self):
+        prim = GlbPrimitive(
+            positions=array("f", [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+            normals=array("f", [0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0]),
+            uvs=array("f", [0.0, 0.0, 1.0, 0.0, 0.0, 1.0]),
+            indices=array("I", [0, 1, 2]),
+            material_index=0,
+            geom_name="Test Triangle",
+        )
+        scene = Scene(
+            scene_hierarchy=InstanceNode(name="Root"),
+            mesh_index={
+                "Test Triangle": MeshMetadata(
+                    name="Test Triangle", properties={}, attribute_dictionaries={"empty_dict": {}}
+                )
+            },
+            glb_primitives=[prim],
+            gltf_materials=[{"pbrMetallicRoughness": {"baseColorFactor": [0.5, 0.5, 0.5, 1.0]}}],
+        )
+        ifc_text = to_ifc(scene)
+
+        assert "Pset_empty_dict" not in ifc_text
+
     def test_export_file(self):
         scene = create_mock_scene()
         with tempfile.TemporaryDirectory() as tmp_dir:

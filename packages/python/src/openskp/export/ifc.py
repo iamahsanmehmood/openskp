@@ -14,7 +14,7 @@ from __future__ import annotations
 import datetime
 import pathlib
 import uuid
-from typing import Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from ..scene import Scene
 
@@ -217,6 +217,35 @@ def to_ifc(
         f"#{owner_hist_id}=IFCOWNERHISTORY(#{person_org_id},#{app_id},$,.READWRITE.,$,$,$,{timestamp_epoch});"
     )
 
+    def write_pset(product_id: int, pset_name: str, props: Dict[str, Any]) -> None:
+        """Write one IFCPROPERTYSET from a flat string-keyed dict and attach
+        it to ``product_id`` via IFCRELDEFINESBYPROPERTIES."""
+        prop_val_ids: List[int] = []
+        for p_key, p_val in props.items():
+            clean_k = sanitize_name(str(p_key))
+            clean_v = sanitize_name(str(p_val))
+            prop_id = next_id()
+            lines.append(
+                f"#{prop_id}=IFCPROPERTYSINGLEVALUE('{clean_k}',$,IFCTEXT('{clean_v}'),$);"
+            )
+            prop_val_ids.append(prop_id)
+
+        if not prop_val_ids:
+            return
+
+        pset_guid = generate_ifc_guid()
+        pset_id = next_id()
+        prop_refs = ",".join(f"#{pid}" for pid in prop_val_ids)
+        lines.append(
+            f"#{pset_id}=IFCPROPERTYSET('{pset_guid}',#{owner_hist_id},'{sanitize_name(pset_name)}',$,({prop_refs}));"
+        )
+
+        rel_prop_guid = generate_ifc_guid()
+        rel_prop_id = next_id()
+        lines.append(
+            f"#{rel_prop_id}=IFCRELDEFINESBYPROPERTIES('{rel_prop_guid}',#{owner_hist_id},$,$,(#{product_id}),#{pset_id});"
+        )
+
     length_unit_id = next_id()
     lines.append(f"#{length_unit_id}=IFCSIUNIT(*,.LENGTHUNIT.,.MILLI.,.METRE.);")
 
@@ -417,35 +446,20 @@ def to_ifc(
         product_ids.append(product_id)
 
         # 5. Property Sets (if scene metadata contains dynamic properties)
-        if (
-            meta
-            and hasattr(meta, "properties")
-            and isinstance(meta.properties, dict)
-            and meta.properties
-        ):
-            prop_val_ids: List[int] = []
-            for p_key, p_val in meta.properties.items():
-                clean_k = sanitize_name(str(p_key))
-                clean_v = sanitize_name(str(p_val))
-                prop_id = next_id()
-                lines.append(
-                    f"#{prop_id}=IFCPROPERTYSINGLEVALUE('{clean_k}',$,IFCTEXT('{clean_v}'),$);"
-                )
-                prop_val_ids.append(prop_id)
+        if meta and hasattr(meta, "properties") and isinstance(meta.properties, dict) and meta.properties:
+            write_pset(product_id, "Pset_CustomProperties", meta.properties)
 
-            if prop_val_ids:
-                pset_guid = generate_ifc_guid()
-                pset_id = next_id()
-                prop_refs = ",".join(f"#{pid}" for pid in prop_val_ids)
-                lines.append(
-                    f"#{pset_id}=IFCPROPERTYSET('{pset_guid}',#{owner_hist_id},'Pset_CustomProperties',$,({prop_refs}));"
-                )
-
-                rel_prop_guid = generate_ifc_guid()
-                rel_prop_id = next_id()
-                lines.append(
-                    f"#{rel_prop_id}=IFCRELDEFINESBYPROPERTIES('{rel_prop_guid}',#{owner_hist_id},$,$,(#{product_id}),#{pset_id});"
-                )
+        # Any OTHER attribute dictionaries the instance carries (third-party
+        # BIM/steel-detailing plugins, etc. - see
+        # openskp.scene.InstanceNode.attribute_dictionaries) - each becomes
+        # its own named property set instead of being merged into
+        # Pset_CustomProperties, since these come from a distinct source and
+        # commonly share key names with each other (e.g. multiple plugins
+        # using "name").
+        if meta and getattr(meta, "attribute_dictionaries", None):
+            for dict_name, entries in meta.attribute_dictionaries.items():
+                if entries:
+                    write_pset(product_id, f"Pset_{dict_name}", entries)
 
     # 6. Presentation Layer Assignments (preserve layers and their on/off
     # state). IfcPresentationLayerWithStyle - not the plain

@@ -48,6 +48,14 @@ class InstanceNode:
     layer: str = ""
     position_mm: Tuple[float, float, float] = (0.0, 0.0, 0.0)
     properties: Dict[str, str] = field(default_factory=dict)
+    # Every OTHER attribute dictionary this instance carries, keyed by the
+    # dictionary's own name, values stringified the same way `properties`
+    # already is - `properties` stays exactly SketchUp's own Dynamic
+    # Components data (`dynamic_attributes`) for backward compatibility;
+    # third-party plugins (BIM/steel-detailing tools, etc.) commonly
+    # attach their own richer per-instance data under their own dictionary
+    # name instead, which this project never surfaced before.
+    attribute_dictionaries: Dict[str, Dict[str, str]] = field(default_factory=dict)
     children: List["InstanceNode"] = field(default_factory=list)
 
 
@@ -61,6 +69,8 @@ class MeshMetadata:
     layer: str = ""
     position_mm: Tuple[float, float, float] = (0.0, 0.0, 0.0)
     properties: Dict[str, str] = field(default_factory=dict)
+    # See InstanceNode.attribute_dictionaries.
+    attribute_dictionaries: Dict[str, Dict[str, str]] = field(default_factory=dict)
     path: str = ""
 
 
@@ -191,7 +201,7 @@ def build_scene(parsed: Dict[str, Any]) -> Scene:
     # match the wrong meshes (a shallow instance's path is always a string
     # prefix of every deeper descendant's path too, so "in" matched far
     # more than intended - see openskp#240).
-    path_updates: Dict[str, Tuple[Dict[str, str], str]] = {}
+    path_updates: Dict[str, Tuple[Dict[str, str], str, Dict[str, Dict[str, str]]]] = {}
 
     # Textures deduplicated by bytes: the same image routinely backs
     # several materials, and re-embedding it per material would multiply
@@ -413,6 +423,8 @@ def build_scene(parsed: Dict[str, Any]) -> Scene:
             # this stays {} for them and gets overwritten below via the
             # D007/DC05 TLV walk instead.
             properties: Dict[str, str] = dict(inst.get("properties") or {})
+            attribute_dicts: Dict[str, Dict[str, str]] = {}
+            name_override: Optional[str] = None
 
             d007 = next((c for c in inst["children"] if c["tag"] == "D007"), None)
             if d007:
@@ -432,14 +444,41 @@ def build_scene(parsed: Dict[str, Any]) -> Scene:
                         inst_color = (c["r"], c["g"], c["b"])
 
                 try:
-                    properties = _core.extract_dynamic_properties(d007)
+                    all_dicts = _core.extract_attribute_dictionaries(d007)
+                    dynamic = all_dicts.get("dynamic_attributes", {})
+                    properties = {k: _core._stringify_vff_attr_value(v) for k, v in dynamic.items()}
+                    # Every other dictionary a third-party plugin (BIM
+                    # workflow, steel-detailing tool, ...) attached to
+                    # this specific instance - SU_InstanceSet is
+                    # SketchUp's own always-present, always-empty
+                    # Owner/Status boilerplate, not worth surfacing.
+                    for dict_name, entries in all_dicts.items():
+                        if dict_name in ("dynamic_attributes", "SU_InstanceSet"):
+                            continue
+                        attribute_dicts[dict_name] = {
+                            k: _core._stringify_vff_attr_value(v) for k, v in entries.items()
+                        }
+                        if name_override is None:
+                            for key in ("name", "label", "code"):
+                                val = entries.get(key)
+                                if val:
+                                    name_override = str(val)
+                                    break
                 except Exception:
                     logger.debug(
-                        "Failed to extract dynamic properties for instance %r (ref_idx=%r)",
+                        "Failed to extract attribute dictionaries for instance %r (ref_idx=%r)",
                         inst.get("name"), ref_idx, exc_info=True,
                     )
 
+            # inst_name (never overridden) is what keeps full_path_name -
+            # and so path_updates' own keys - locally unique: a plugin's
+            # "name"/"label" field (used for display_name below) is
+            # frequently a shared type/catalog label ("Profile25" for
+            # every instance of that profile), not a real per-instance
+            # identifier, and using it here would collide different
+            # instances' path_updates entries onto each other.
             inst_name = inst["name"] or f"Component_{ref_idx}"
+            display_name = name_override or inst_name
             full_path_name = f"{path_name} / {inst_name}"
             instance_counter[0] += 1
             if instance_counter[0] % _PROGRESS_INTERVAL == 0:
@@ -459,16 +498,17 @@ def build_scene(parsed: Dict[str, Any]) -> Scene:
             tz = new_matrix[11] * INCHES_TO_MM if len(new_matrix) > 11 else 0.0
 
             inst_info = InstanceNode(
-                name=inst_name,
+                name=display_name,
                 definition_name=(defs_dict.get(ref_idx) or {}).get("name") or "",
                 layer=l_name,
                 position_mm=(round(tx, 2), round(ty, 2), round(tz, 2)),
                 properties=properties,
+                attribute_dictionaries=attribute_dicts,
                 children=child_nodes,
             )
             child_instances_info.append(inst_info)
 
-            path_updates[full_path_name] = (properties, inst_name)
+            path_updates[full_path_name] = (properties, display_name, attribute_dicts)
 
         return child_instances_info
 
@@ -488,7 +528,7 @@ def build_scene(parsed: Dict[str, Any]) -> Scene:
     # was exactly this bug (openskp#240).
     for existing in mesh_index.values():
         if existing.path in path_updates:
-            existing.properties, existing.name = path_updates[existing.path]
+            existing.properties, existing.name, existing.attribute_dictionaries = path_updates[existing.path]
 
     for geom_name, existing in mesh_index.items():
         if existing.path == "ROOT":
@@ -497,6 +537,7 @@ def build_scene(parsed: Dict[str, Any]) -> Scene:
             existing.layer = "Layer0"
             existing.position_mm = (0.0, 0.0, 0.0)
             existing.properties = {}
+            existing.attribute_dictionaries = {}
 
     scene_hierarchy = InstanceNode(
         name="ROOT",
