@@ -1304,10 +1304,12 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
 
     # Materials & layer colors
     layer_colors = {}
-    # Modern (VFF) files derive layers from Layer_<name>-prefixed materials,
-    # which carry no visibility flag of their own - unlike legacy MFC files,
-    # there is currently no known tag exposing a VFF layer's hidden state,
-    # so every VFF layer defaults to visible here.
+    # Modern (VFF) files derive layer COLOR from Layer_<name>-prefixed
+    # materials, which carry no visibility flag of their own - real
+    # visibility comes from the model.dat layer manager's own 8E3C byte,
+    # read in collect_layers() below. Seeded to False (visible) here so a
+    # layer that never went through collect_layers (e.g. a layer with no
+    # painted material at all) still gets a sane default.
     layer_hidden = {}
     materials = {}
     materials_by_folder = {}
@@ -1445,6 +1447,17 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
                                 l_id = parse_var_int(payload, 0, len(payload))
                             l_name = name_node['payload'].decode('utf-8', errors='replace')
                             layer_id_to_name[l_id] = l_name
+                            # 8E3C: a single byte, 1 = hidden / 0 = visible -
+                            # confirmed byte-for-byte against a real
+                            # production file's own Tags panel (openskp
+                            # FrameSmart pipeline report, 2026-09-08): every
+                            # layer showing a hollow (hidden) eye icon had
+                            # 8E3C=01, every visible one had 8E3C=00. This is
+                            # the VFF-format counterpart of the legacy
+                            # format's already-known layer-hidden flag.
+                            hidden_node = find_child_tag(child['children'], '8E3C')
+                            if hidden_node and hidden_node['payload']:
+                                layer_hidden[l_name] = hidden_node['payload'][0] == 1
             collect_layers(el['children'])
 
     # Material ID -> name
