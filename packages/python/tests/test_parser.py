@@ -818,8 +818,11 @@ class TestLayerHidden:
     extracted from legacy MFC files (``legacy._read_layer``) but previously
     discarded before reaching the public model; now wired through
     ``layer_hidden`` alongside the existing ``layer_colors``/
-    ``layer_id_to_name`` dicts. VFF files carry no known visibility tag, so
-    they always default to ``False`` (documented on ``Layer.hidden``).
+    ``layer_id_to_name`` dicts. VFF files ALSO carry this bit now - see
+    ``TestVffLayerHidden`` below for the tag that exposes it - so this
+    class only needs to cover the plumbing from ``parsed["layer_hidden"]``
+    down to the public ``Layer.hidden`` field, independent of which parser
+    populated it.
 
     ``full_parse`` is stubbed out (matching ``TestMaterialIdJoin``'s
     pattern above), since hand-crafting a real hidden-layer legacy file
@@ -884,6 +887,90 @@ class TestLayerHidden:
         model = SkpFile.open(str(fixture)).parse()
         assert len(model.layers) == 1
         assert model.layers[0].hidden is False
+
+
+class TestVffLayerHidden:
+    """The VFF-format (2021+) counterpart of the legacy layer-hidden flag:
+    each layer's ``8C3C`` node (under a ``993A`` layer-manager list) carries
+    a single-byte ``8E3C`` child sibling to the already-parsed ``DC05``
+    (id) and ``8D3C`` (name) - 1 = hidden, 0 = visible. Confirmed
+    byte-for-byte against a real production file's own Tags panel
+    (FrameSmart pipeline report, 2026-09-08): every layer shown with a
+    hollow/hidden eye icon had ``8E3C=01``, every visible one had
+    ``8E3C=00``, with no exceptions across all 85 layers in that file.
+
+    Before this fix, VFF layers derived only color from
+    ``Layer_<name>``-prefixed materials (which carry no visibility of their
+    own), so every VFF layer's hidden state silently defaulted to
+    ``False`` regardless of the file's real Tags panel state - the
+    IFC exporter's ``IfcPresentationLayerWithStyle.LayerOn`` (openskp#272)
+    then always showed visible, with no way for a downstream consumer to
+    ever recover a hidden VFF layer's actual state.
+    """
+
+    @staticmethod
+    def _tlv(tag_hex: str, payload: bytes) -> bytes:
+        import struct
+        return bytes.fromhex(tag_hex) + struct.pack("<I", len(payload)) + payload
+
+    @classmethod
+    def _layer_node(cls, layer_id: int, name: str, hidden: bool) -> bytes:
+        return (
+            cls._tlv("DC05", bytes([layer_id]))
+            + cls._tlv("8D3C", name.encode("utf-8"))
+            + cls._tlv("8E3C", bytes([1 if hidden else 0]))
+        )
+
+    @classmethod
+    def _build_skp(cls, tmp_path, *layers: bytes) -> "pathlib.Path":
+        import io
+        import zipfile
+
+        model_dat = cls._tlv("993A", b"".join(cls._tlv("8C3C", layer) for layer in layers))
+
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("model.dat", model_dat)
+        zip_bytes = buf.getvalue()
+
+        # Real header: VFF magic, then the zip container starts within the
+        # first 256 bytes (is_legacy() checks exactly that window).
+        path = tmp_path / "vff_layers.skp"
+        path.write_bytes(b"\xff\xfe\xff\x0e" + zip_bytes)
+        return path
+
+    def test_hidden_and_visible_layers_read_correctly(self, tmp_path: pathlib.Path) -> None:
+        from openskp import _core
+
+        path = self._build_skp(
+            tmp_path,
+            self._layer_node(5, "wall_external_cladding_1", hidden=True),
+            self._layer_node(6, "wall", hidden=False),
+        )
+
+        parsed = _core.full_parse(str(path))
+
+        assert parsed["layer_hidden"]["wall_external_cladding_1"] is True
+        assert parsed["layer_hidden"]["wall"] is False
+
+    def test_build_scene_threads_the_real_value_through(self, tmp_path: pathlib.Path) -> None:
+        """build_scene()'s own layer_hidden plumbing (TestBuildSceneLayerHidden)
+        is already covered against a hand-built parsed dict - this just
+        confirms a REAL _core.full_parse() result carries the same shape
+        through, end to end from raw bytes."""
+        from openskp import _core
+        from openskp.scene import build_scene
+
+        path = self._build_skp(
+            tmp_path,
+            self._layer_node(5, "wall_external_cladding_1", hidden=True),
+            self._layer_node(6, "wall", hidden=False),
+        )
+
+        scene = build_scene(_core.full_parse(str(path)))
+
+        assert scene.layer_hidden["wall_external_cladding_1"] is True
+        assert scene.layer_hidden["wall"] is False
 
 
 class TestFaceInstanceHidden:
