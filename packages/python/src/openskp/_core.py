@@ -256,6 +256,33 @@ def iter_top_level_lazy(data, start, end, container_tags=None):
 
 # ── 3D planar triangulation ──────────────────────────────────────────────
 
+def _is_convex_2d(coords) -> bool:
+    """Whether a simple (non-self-intersecting) polygon's own vertices, in
+    order, turn the same direction at every corner - the standard
+    cross-product-sign test. `coords` excludes the closing repeat of the
+    first point. A degenerate (collinear-but-not-reversing) corner is
+    allowed through (its cross product is ~0, doesn't flip the running
+    sign) since a triangle fan handles a straight edge correctly either
+    way; only an actual direction reversal (concavity) disqualifies the
+    fast path below."""
+    n = len(coords)
+    if n < 3:
+        return False
+    sign = 0
+    for i in range(n):
+        ax, ay = coords[i]
+        bx, by = coords[(i + 1) % n]
+        cx, cy = coords[(i + 2) % n]
+        cross = (bx - ax) * (cy - by) - (by - ay) * (cx - bx)
+        if abs(cross) > 1e-9:
+            s = 1 if cross > 0 else -1
+            if sign == 0:
+                sign = s
+            elif s != sign:
+                return False
+    return sign != 0
+
+
 def triangulate_face_3d(vertices_3d, loops, normal):
     if not loops or not loops[0] or len(loops[0]) < 3:
         return []
@@ -300,6 +327,26 @@ def triangulate_face_3d(vertices_3d, loops, normal):
     outer_coords = [v_id_to_2d[v_id] for v_id in loops[0]]
     if outer_coords[0] != outer_coords[-1]:
         outer_coords.append(outer_coords[0])
+
+    # A convex outer loop with no holes needs none of Shapely's machinery
+    # at all: a triangle fan from its first vertex is a complete, correct
+    # triangulation of any convex polygon - not an approximation of the
+    # Delaunay result, a DIFFERENT valid triangulation of the exact same
+    # boundary (same watertight surface, just a different diagonal choice
+    # than Delaunay might pick - both are equally "correct"). Skips the
+    # Polygon/MultiPoint construction, the O(triangles) is-inside filter,
+    # and the triangulation call itself - the dominant cost of scene
+    # building on real files (openskp#264: one production face stalled 16+
+    # minutes in this function before the O(V^2)->O(V) fix below even
+    # applies, since that fix only speeds up Shapely's OWN triangulation,
+    # it doesn't avoid calling it). Falls through to the general Shapely
+    # path unchanged for anything concave or with holes - fidelity is
+    # identical either way, this only changes how the *simple* majority of
+    # real-world faces (extruded profiles, panels, washers, bolt heads)
+    # get triangulated, faster.
+    if len(loops) == 1 and _is_convex_2d(outer_coords[:-1]):
+        loop = loops[0]
+        return [[loop[0], loop[i], loop[i + 1]] for i in range(1, len(loop) - 1)]
 
     inner_holes = []
     for hole_loop in loops[1:]:
