@@ -40,7 +40,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e packages/python[dev,textures]
+          pip install -e packages/python[dev,textures,fragments]
 
       - name: Run tests
         run: |
