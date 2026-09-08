@@ -96,6 +96,14 @@ class InstancedNode:
     name: str = ""
     definition_name: str = ""
     layer: str = ""
+    # This instance's own persistent GUID (a real one from the source SKP
+    # file when available - modern/VFF files carry a genuine 16-byte
+    # instance GUID per placement, see openskp._core's '6819' tag; legacy
+    # (pre-2021) files don't currently expose one, so this is "" for them).
+    # Never used for geometry/placement - purely an identity string a
+    # consumer (e.g. a Fragments-format exporter) can carry through so a
+    # clicked/selected element has something stable to key off of.
+    guid: str = ""
     # This node's transform RELATIVE TO ITS PARENT, as a 16-element
     # column-major glTF matrix (metres, Y-up) - directly usable as a glTF
     # node `matrix`. The root node's matrix is the identity.
@@ -475,6 +483,7 @@ def build_instanced_scene(parsed: Dict[str, Any]) -> InstancedScene:
                     position_mm=(round(tx, 2), round(ty, 2), round(tz, 2)),
                     properties=properties,
                     attribute_dictionaries=attribute_dicts,
+                    guid=inst.get("ref_guid") or "",
                     mesh_resource_id=mesh_resource_for(ref_idx, inst_color, l_name),
                     children=children,
                 )

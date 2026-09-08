@@ -377,6 +377,7 @@ def to_fragments(scene: "InstancedScene", *, raw: bool = False) -> bytes:
     local_ids: List[int] = []
     categories: List[str] = []
     names: List[str] = []
+    guids: List[str] = []
     sample_material: List[int] = []
     sample_representation: List[int] = []
     meshes_items: List[int] = []
@@ -396,6 +397,16 @@ def to_fragments(scene: "InstancedScene", *, raw: bool = False) -> bytes:
         local_ids.append(item_index)
         categories.append(node.layer or "Layer0")
         names.append(node.name or "")
+        # Real SketchUp instance GUID when the source file carries one
+        # (VFF/2021+); a stable synthetic fallback otherwise (legacy-format
+        # files don't currently expose a per-instance GUID). Either way,
+        # every tracked item gets a non-empty, unique-within-this-export
+        # identifier - consumers keyed on GUID<->local_id parity (e.g. a
+        # viewer's own id-bridge, zipping Model.guids against Model.local_ids
+        # index-for-index) silently get an empty map otherwise, since a
+        # zero-length guids vector zips to nothing regardless of how many
+        # real items exist.
+        guids.append(node.guid or f"openskp-{item_index}")
         item_index_by_node_id[id(node)] = item_index
         for prim_idx, prim in enumerate(res.primitives):
             sample_material.append(get_material_index(prim.material_index))
@@ -482,9 +493,30 @@ def to_fragments(scene: "InstancedScene", *, raw: bool = False) -> bytes:
     local_ids_vec = builder.EndVector()
 
     guid_str = builder.CreateString("00000000-0000-0000-0000-000000000000")
-    Model.StartGuidsVector(builder, 0)
+
+    # Per-item GUIDs. `guids[i]` is that item's identifier; `guids_items[i]`
+    # is which local_id it belongs to - real consumers use both forms: some
+    # (the library's own internal category/property indexing) walk
+    # guids_items-paired-with-guids as a sparse map, but the more common
+    # public entry point (a viewer's own id-bridge, matching the real
+    # IfcImporter's own output shape) simply zips model.getGuids() against
+    # model.getLocalIds() index-for-index - which only works when the two
+    # vectors are the same length, in the same order, one entry per tracked
+    # item. A zero-length guids vector (this export's previous behavior)
+    # zips to an empty map regardless of how many real items exist, which
+    # is silent and easy to miss: geometry still renders fine (nothing
+    # about drawing a mesh needs a GUID), but every GUID-keyed interaction -
+    # click-to-select's property/context-menu lookup, hide-by-id, anything
+    # built on "resolve what was clicked" - has nothing to resolve against.
+    guid_offsets = [builder.CreateString(g) for g in guids]
+    Model.StartGuidsVector(builder, len(guids))
+    for off in reversed(guid_offsets):
+        builder.PrependUOffsetTRelative(off)
     guids_vec = builder.EndVector()
-    Model.StartGuidsItemsVector(builder, 0)
+
+    Model.StartGuidsItemsVector(builder, len(local_ids))
+    for lid in reversed(local_ids):
+        builder.PrependUint32(lid)
     guids_items_vec = builder.EndVector()
 
     # One Attribute per tracked item (same order as local_ids/categories),
