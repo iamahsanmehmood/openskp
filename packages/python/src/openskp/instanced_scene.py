@@ -129,6 +129,11 @@ class InstancedScene:
     # Distinct texture images the placed materials use, deduplicated by
     # source bytes - same as Scene.textures.
     textures: List[SceneTexture]
+    # The source file's own per-layer visibility, keyed by layer name -
+    # same shape and source (parsed["layer_hidden"]) as Scene.layer_hidden;
+    # this was never threaded through here even after that fix landed for
+    # the baked path (openskp#272).
+    layer_hidden: Dict[str, bool] = field(default_factory=dict)
 
 
 def _to_gltf_matrix(m: List[float]) -> Tuple[float, ...]:
@@ -579,4 +584,5 @@ def build_instanced_scene(parsed: Dict[str, Any]) -> InstancedScene:
         mesh_resources=mesh_resources,
         gltf_materials=gltf_materials,
         textures=textures,
+        layer_hidden=dict(parsed.get("layer_hidden") or {}),
     )
