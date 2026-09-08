@@ -142,39 +142,56 @@ export function toFragments(
       // Build Points Vector (backwards as required by FlatBuffers)
       Shell.startPointsVector(builder, vertexCount);
       for (let i = vertexCount - 1; i >= 0; i--) {
-        FloatVector.createFloatVector(
-          builder,
-          positions[i * 3],
-          positions[i * 3 + 1],
-          positions[i * 3 + 2]
-        );
+        builder.writeFloat32(positions[i * 3 + 2]);
+        builder.writeFloat32(positions[i * 3 + 1]);
+        builder.writeFloat32(positions[i * 3]);
       }
       const pointsOffset = builder.endVector();
 
       // Build Profiles (each triangle is a profile of 3 indices)
       const triangleCount = Math.floor(indices.length / 3);
-      const profileOffsets: flatbuffers.Offset[] = [];
-      const bigProfileOffsets: flatbuffers.Offset[] = [];
+      let profilesVector: flatbuffers.Offset;
+      let bigProfilesVector: flatbuffers.Offset;
 
-      for (let t = 0; t < triangleCount; t++) {
-        const triIndices = [indices[t * 3], indices[t * 3 + 1], indices[t * 3 + 2]];
-        if (isBig) {
-          const idxVector = BigShellProfile.createIndicesVector(builder, triIndices);
-          bigProfileOffsets.push(BigShellProfile.createBigShellProfile(builder, idxVector));
-        } else {
-          const idxVector = ShellProfile.createIndicesVector(builder, triIndices);
-          profileOffsets.push(ShellProfile.createShellProfile(builder, idxVector));
+      if (isBig) {
+        const bigProfileOffsets = new Array<flatbuffers.Offset>(triangleCount);
+        for (let t = 0; t < triangleCount; t++) {
+          builder.startVector(4, 3, 4);
+          builder.addInt32(indices[t * 3 + 2]);
+          builder.addInt32(indices[t * 3 + 1]);
+          builder.addInt32(indices[t * 3]);
+          const idxVector = builder.endVector();
+
+          BigShellProfile.startBigShellProfile(builder);
+          BigShellProfile.addIndices(builder, idxVector);
+          bigProfileOffsets[t] = BigShellProfile.endBigShellProfile(builder);
         }
+        bigProfilesVector = Shell.createBigProfilesVector(builder, bigProfileOffsets);
+        profilesVector = Shell.createProfilesVector(builder, []);
+      } else {
+        const profileOffsets = new Array<flatbuffers.Offset>(triangleCount);
+        for (let t = 0; t < triangleCount; t++) {
+          builder.startVector(2, 3, 2);
+          builder.addInt16(indices[t * 3 + 2]);
+          builder.addInt16(indices[t * 3 + 1]);
+          builder.addInt16(indices[t * 3]);
+          const idxVector = builder.endVector();
+
+          ShellProfile.startShellProfile(builder);
+          ShellProfile.addIndices(builder, idxVector);
+          profileOffsets[t] = ShellProfile.endShellProfile(builder);
+        }
+        profilesVector = Shell.createProfilesVector(builder, profileOffsets);
+        bigProfilesVector = Shell.createBigProfilesVector(builder, []);
       }
 
-      const profilesVector = Shell.createProfilesVector(builder, profileOffsets);
-      const bigProfilesVector = Shell.createBigProfilesVector(builder, bigProfileOffsets);
       const holesVector = Shell.createHolesVector(builder, []);
       const bigHolesVector = Shell.createBigHolesVector(builder, []);
-      const faceIdsVector = Shell.createProfilesFaceIdsVector(
-        builder,
-        new Int16Array(triangleCount)
-      );
+
+      // Fast zero-fill faceIds vector (no intermediate arrays)
+      builder.startVector(2, triangleCount, 2);
+      builder.pad(triangleCount * 2);
+      const faceIdsVector = builder.endVector();
 
       Shell.startShell(builder);
       Shell.addProfiles(builder, profilesVector);
@@ -416,7 +433,7 @@ export function toFragments(
   for (let i = 0; i < instCount; i++) {
     const locId = nextId++;
     localIdsArray[i] = locId;
-    guidOffsets[i] = builder.createString(generateUUID());
+    guidOffsets[i] = builder.createString(`${guidStr}_${locId}`);
     guidItemsArray[i] = locId;
   }
   const localIdsVector = Model.createLocalIdsVector(builder, localIdsArray);
