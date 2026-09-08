@@ -3408,7 +3408,7 @@ class TestTriangulateFace3dConvexFastPath:
         # A fan from vertex 0 over an n-gon always yields exactly n-2
         # triangles, and (since a fan only ever touches the boundary
         # vertices already given) every vertex id used must be one of the
-        # loop's own - if the general Shapely path had run instead, it
+        # loop's own - if the general (earcut) path had run instead, it
         # could equally validly invent a different diagonal pattern.
         assert len(triangles) == n - 2
         used_ids = {v for tri in triangles for v in tri}
@@ -3427,13 +3427,28 @@ class TestTriangulateFace3dConvexFastPath:
 
         triangles = triangulate_face_3d(vertices_3d, loops, normal)
 
-        # A naive fan from vertex 0 here would produce a triangle
-        # (0, 2, 3) that sticks outside the L's own boundary - real
-        # (Shapely-driven) triangulation must never emit it.
-        assert [0, 2, 3] not in triangles
+        # A concave polygon has more than one valid triangulation (which
+        # diagonals get drawn isn't unique - a naive fan from vertex 0
+        # actually happens to be valid for THIS particular L-shape, so
+        # asserting against one specific triangle would only be checking
+        # which algorithm ran, not whether the result is correct). The
+        # real, algorithm-agnostic invariant: total triangulated area must
+        # equal the polygon's own true area (shoelace formula) - a wrong
+        # triangulation would either miss part of the L or double-cover
+        # part of it, and either way the areas wouldn't match.
+        l_shape_area = 3.0  # 2x1 rectangle + 1x1 rectangle
+        total_area = sum(
+            0.5 * abs(
+                (b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1])
+            )
+            for a, b, c in (
+                [vertices_3d[i][:2] for i in tri] for tri in triangles
+            )
+        )
+        assert total_area == pytest.approx(l_shape_area)
         assert len(triangles) > 0
 
-    def test_convex_outer_loop_with_a_hole_still_uses_shapely(self) -> None:
+    def test_convex_outer_loop_with_a_hole_still_uses_the_general_path(self) -> None:
         from openskp._core import triangulate_face_3d
 
         # A square outer loop (convex) with a small square hole in the
@@ -3449,7 +3464,86 @@ class TestTriangulateFace3dConvexFastPath:
         triangles = triangulate_face_3d(vertices_3d, loops, normal)
 
         # A fan across the outer loop alone (ignoring the hole) would
-        # produce exactly 2 triangles (len(loop)-2 for a 4-gon) - Shapely
-        # correctly triangulating the annulus around the hole produces
-        # more, smaller triangles instead.
+        # produce exactly 2 triangles (len(loop)-2 for a 4-gon) - correctly
+        # triangulating the annulus around the hole produces more, smaller
+        # triangles instead, AND the total area must equal the outer
+        # square minus the hole (16 - 1 = 15), not the full square.
         assert len(triangles) > 2
+        total_area = sum(
+            0.5 * abs((b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1])
+                      ) for a, b, c in ([vertices_3d[i][:2] for i in tri] for tri in triangles)
+        )
+        assert total_area == pytest.approx(15.0)
+
+
+class TestTriangulateFace3dMatchesTrueArea:
+    """A real face from production data (gondola_v20.skp) where the
+    Shapely-based implementation this replaced was measurably WRONG: its
+    Delaunay-then-centroid-containment-filter approach silently dropped
+    valid triangles near this face's concave boundary, under-covering it
+    by ~10.5% (4728.16 sq units instead of its true 5284.95, independently
+    verified via the shoelace formula - unambiguous for a confirmed
+    simple, non-self-intersecting polygon). earcut, ear-clipping the
+    boundary directly rather than filtering a Delaunay hull, gets this
+    exact face right. Regression coverage for that fix, not just the
+    speedup - a 27-vertex real roof/wall profile outline, kept intact
+    rather than simplified, since a simplified stand-in isn't guaranteed
+    to reproduce whatever specific geometric feature triggered the
+    original bug."""
+
+    def test_complex_real_face_area_matches_shoelace_ground_truth(self) -> None:
+        import numpy as np
+
+        from openskp._core import triangulate_face_3d
+
+        vertices_3d = {
+            0: (-41.559374800456, 0.0, 5.684341886080802e-14),
+            1: (-41.559374800456, 0.0, 92.01968665725143),
+            2: (-38.18087514171725, 0.0, 93.24830373850286),
+            3: (-37.00671821448964, 0.0, 93.59448980685772),
+            4: (-34.756278501896986, 0.0, 94.25800492830899),
+            5: (-31.294656880495722, 0.0, 95.04611545657166),
+            6: (-27.80518035881937, 0.0, 95.61054756257866),
+            7: (-24.297092807780018, 0.0, 95.94980602563017),
+            8: (-20.779687400227658, 0.0, 96.06299212598445),
+            9: (-17.262281992675753, 0.0, 95.94980602563015),
+            10: (-13.7541944416364, 0.0, 95.61054756257863),
+            11: (-10.264717919960049, 0.0, 95.04611545657163),
+            12: (-6.80309629855924, 0.0, 94.25800492830895),
+            13: (-4.552656585966133, 0.0, 93.59448980685768),
+            14: (-3.3784996587380647, 0.0, 93.24830373850278),
+            15: (6.821210263296962e-13, 0.0, 92.01968665725138),
+            16: (0.0, 0.0, 5.684341886080802e-14),
+            17: (7.1653543307083964, 0.0, 0.0),
+            18: (7.1653543307083964, 0.0, 59.05511811023625),
+            19: (54.40944881889959, 0.0, 59.05511811023629),
+            20: (54.40944881889959, 0.0, 98.42519685039386),
+            21: (0.0, 0.0, 98.42519685039386),
+            22: (-41.559374800456, 0.0, 98.42519685039386),
+            23: (-95.96882361935559, 0.0, 98.42519685039386),
+            24: (-95.96882361935559, 0.0, 59.055118110236215),
+            25: (-48.724729131164395, 0.0, 59.05511811023616),
+            26: (-48.724729131164395, 0.0, 0.0),
+        }
+        loops = [list(range(27))]
+        normal = (0.0, -1.0, 0.0)
+
+        triangles = triangulate_face_3d(vertices_3d, loops, normal)
+
+        # Ground truth via the shoelace formula on the raw loop, projected
+        # the same way triangulate_face_3d itself does (normal is already
+        # axis-aligned here, so the 2D coords are just (x, z)).
+        coords_2d = [(vertices_3d[i][0], vertices_3d[i][2]) for i in loops[0]]
+        n = len(coords_2d)
+        signed = sum(
+            coords_2d[i][0] * coords_2d[(i + 1) % n][1] - coords_2d[(i + 1) % n][0] * coords_2d[i][1]
+            for i in range(n)
+        )
+        true_area = abs(signed) / 2.0
+
+        def tri_area_3d(tri):
+            a, b, c = (np.array(vertices_3d[i]) for i in tri)
+            return 0.5 * float(np.linalg.norm(np.cross(b - a, c - a)))
+
+        total_area = sum(tri_area_3d(t) for t in triangles)
+        assert total_area == pytest.approx(true_area, rel=1e-6)

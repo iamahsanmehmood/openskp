@@ -26,9 +26,8 @@ from typing import Any, Dict
 import defusedxml.ElementTree as ET
 from defusedxml.common import DefusedXmlException
 
+import mapbox_earcut
 import numpy as np
-from shapely.geometry import Polygon, Point, MultiPoint
-import shapely.ops
 
 from .errors import SkpParseError
 
@@ -348,68 +347,47 @@ def triangulate_face_3d(vertices_3d, loops, normal):
         loop = loops[0]
         return [[loop[0], loop[i], loop[i + 1]] for i in range(1, len(loop) - 1)]
 
-    inner_holes = []
-    for hole_loop in loops[1:]:
-        hole_coords = [v_id_to_2d[v_id] for v_id in hole_loop]
-        if hole_coords[0] != hole_coords[-1]:
-            hole_coords.append(hole_coords[0])
-        inner_holes.append(hole_coords)
-
     try:
-        poly_2d = Polygon(outer_coords, inner_holes)
-        if not poly_2d.is_valid:
-            poly_2d = poly_2d.buffer(0)
+        # earcut (ear-clipping) triangulates a polygon - concave, with
+        # holes, or both - directly from its own boundary, unlike the
+        # Delaunay-then-filter approach this replaced (build a Polygon,
+        # triangulate its convex hull, then test every resulting triangle's
+        # centroid against the real boundary to throw away the ones that
+        # fall in a hole or outside a concave notch). ear-clipping only
+        # ever produces triangles that are already part of the polygon's
+        # interior, by construction - there is no filter step, and no
+        # "which real vertex does this Delaunay-invented coordinate
+        # correspond to" reverse lookup either: earcut returns indices
+        # directly into the exact point array it was given, so feeding it
+        # points in v_id order means its output indices already ARE
+        # positions into that same order - a direct list index, not a
+        # coordinate match. Verified: same triangulated AREA as the
+        # previous Shapely path across every fixture this project has
+        # (they're different valid triangulations of the same boundary,
+        # not identical diagonal choices - like the convex fast path
+        # above, a concave/holed polygon has no single "correct"
+        # triangulation, only a correct BOUNDARY, which this preserves).
+        flat_v_ids = []
+        ring_ends = []
+        for loop in loops:
+            ring = loop[:-1] if len(loop) >= 2 and loop[0] == loop[-1] else loop
+            flat_v_ids.extend(ring)
+            ring_ends.append(len(flat_v_ids))
 
-        points_2d = []
-        for coords in [outer_coords] + inner_holes:
-            for c in coords[:-1]:
-                points_2d.append(Point(c))
-
-        if not points_2d:
+        if len(flat_v_ids) < 3:
             return []
 
-        mp = MultiPoint(points_2d)
-        triangles = shapely.ops.triangulate(mp)
+        flat_coords = np.array([v_id_to_2d[v_id] for v_id in flat_v_ids], dtype=np.float64)
+        tri_indices = mapbox_earcut.triangulate_float64(flat_coords, np.array(ring_ends, dtype=np.uint32))
 
-        # A triangle's own corners are copies of the exact points MultiPoint was
-        # built from (Delaunay triangulation over a fixed point set never invents
-        # new coordinates), so a direct reverse lookup finds the matching v_id in
-        # O(1) instead of the O(V) linear scan below - the difference between a
-        # face with V vertices costing O(V) here instead of O(V^2) per triangle
-        # corner (O(V^3) for the whole face). Real production files can have
-        # individual faces with tens of thousands of vertices (see openskp#264's
-        # investigation), where the old linear scan made this function the
-        # dominant cost of scene building - confirmed via a live py-spy stack
-        # sample stuck here for 15+ minutes on one such file. Falls back to the
-        # original nearest-distance scan only if the exact lookup ever misses
-        # (kept for safety - not observed to trigger on any real or test fixture
-        # file - rather than assume float equality always holds through Shapely's
-        # own internal representation).
-        coord_to_v_id = {c2d: v_id for v_id, c2d in v_id_to_2d.items()}
-
-        inside_triangles = []
-        for tri in triangles:
-            if poly_2d.contains(tri.centroid):
-                tri_coords = list(tri.exterior.coords)[:3]
-                tri_v_ids = []
-                for tc in tri_coords:
-                    best_v_id = coord_to_v_id.get(tc)
-                    if best_v_id is None:
-                        min_dist = float('inf')
-                        for v_id, c2d in v_id_to_2d.items():
-                            dist = (tc[0] - c2d[0])**2 + (tc[1] - c2d[1])**2
-                            if dist < min_dist:
-                                min_dist = dist
-                                best_v_id = v_id
-                    if best_v_id is not None:
-                        tri_v_ids.append(best_v_id)
-                if len(tri_v_ids) == 3 and len(set(tri_v_ids)) == 3:
-                    inside_triangles.append(tri_v_ids)
-
-        if inside_triangles:
-            return inside_triangles
+        earcut_triangles = [
+            [flat_v_ids[tri_indices[i]], flat_v_ids[tri_indices[i + 1]], flat_v_ids[tri_indices[i + 2]]]
+            for i in range(0, len(tri_indices) - 2, 3)
+        ]
+        if earcut_triangles:
+            return earcut_triangles
     except Exception:
-        logger.debug("Shapely triangulation failed for face, falling back to fan triangulation", exc_info=True)
+        logger.debug("earcut triangulation failed for face, falling back to fan triangulation", exc_info=True)
 
     # Fan triangulation fallback for outer loop
     outer_loop = loops[0]
