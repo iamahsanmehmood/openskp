@@ -2984,6 +2984,13 @@ class TestGlbExport:
         assert "definition_name" in first_child
         assert "position_mm" in first_child
 
+        # Scene.layer_hidden exists but was never threaded into this
+        # sidecar - a consumer wanting to match the source file's own
+        # default layer visibility had no way to get it from export()'s
+        # output at all.
+        assert "layer_hidden" in metadata
+        assert isinstance(metadata["layer_hidden"], dict)
+
     def test_export_rejects_unsupported_coordinate_system(self, tmp_path) -> None:
         # The underlying conversion is hardcoded to y-up/mm - passing
         # anything else must raise, not silently produce y-up/mm output

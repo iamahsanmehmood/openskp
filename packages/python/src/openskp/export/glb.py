@@ -224,6 +224,7 @@ def export(
         "total_meshes": len(scene_obj.mesh_index),
         "total_layers": len(layers_list),
         "layers": layers_list,
+        "layer_hidden": dict(scene_obj.layer_hidden),
         "materials": [_json_safe_material(m) for m in parsed["materials"].values()],
         "mesh_index": {
             name: {

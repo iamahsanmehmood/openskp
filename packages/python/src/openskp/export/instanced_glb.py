@@ -185,6 +185,7 @@ def export(
         "total_mesh_resources": len(scene_obj.mesh_resources),
         "total_layers": len(layers_list),
         "layers": layers_list,
+        "layer_hidden": dict(scene_obj.layer_hidden),
         "bounds": (
             {
                 "min": list(scene_obj.bounds.min),

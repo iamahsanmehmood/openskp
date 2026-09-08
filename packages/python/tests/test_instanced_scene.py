@@ -275,3 +275,9 @@ class TestInstancedGlbExport:
         assert meta["instanced"] is True
         assert meta["total_mesh_resources"] == 3
         assert meta["scene_hierarchy"]["name"] == "ROOT"
+        # InstancedScene.layer_hidden exists on the dataclass but was never
+        # threaded into this sidecar - a consumer wanting to match the
+        # source file's own default layer visibility (as glb.export()'s own
+        # sidecar already lets them) had no way to get it from here.
+        assert "layer_hidden" in meta
+        assert isinstance(meta["layer_hidden"], dict)
