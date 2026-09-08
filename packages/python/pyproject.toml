@@ -26,6 +26,7 @@ dependencies = [
     "trimesh>=3.0",
     "shapely>=1.8",
     "defusedxml>=0.7.1",
+    "mapbox_earcut>=1.0",
 ]
 
 [project.optional-dependencies]
