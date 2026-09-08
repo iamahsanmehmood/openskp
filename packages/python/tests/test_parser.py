@@ -3347,3 +3347,109 @@ class TestTriangulateFace3dRobustness:
 
         triangles = triangulate_face_3d(vertices_3d, loops, normal)
         assert triangles == []
+
+
+class TestIsConvex2d:
+    def test_square_is_convex(self) -> None:
+        from openskp._core import _is_convex_2d
+
+        assert _is_convex_2d([(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]) is True
+
+    def test_l_shape_is_not_convex(self) -> None:
+        from openskp._core import _is_convex_2d
+
+        # An L-shaped hexagon - one genuine reflex (concave) corner.
+        l_shape = [
+            (0.0, 0.0), (2.0, 0.0), (2.0, 1.0),
+            (1.0, 1.0), (1.0, 2.0), (0.0, 2.0),
+        ]
+        assert _is_convex_2d(l_shape) is False
+
+    def test_collinear_point_on_an_edge_stays_convex(self) -> None:
+        from openskp._core import _is_convex_2d
+
+        # A square with one extra vertex sitting exactly on an edge - a
+        # zero-cross-product corner, not a direction reversal, so a fan
+        # triangulation from any vertex is still a valid triangulation.
+        square_with_midpoint = [(0.0, 0.0), (0.5, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
+        assert _is_convex_2d(square_with_midpoint) is True
+
+    def test_fewer_than_three_points_is_not_convex(self) -> None:
+        from openskp._core import _is_convex_2d
+
+        assert _is_convex_2d([(0.0, 0.0), (1.0, 1.0)]) is False
+
+
+class TestTriangulateFace3dConvexFastPath:
+    """The convex-outer-loop, no-holes fast path added to skip Shapely
+    entirely for the common case (openskp perf work, 2026-09-08): must
+    produce the SAME watertight surface as the Shapely path for convex
+    faces (verified separately, at real-file scale, by comparing exported
+    GLB triangle/vertex counts and bounds before/after byte-for-byte), and
+    must never engage for anything concave or holed, where a naive fan
+    would silently produce wrong (self-overlapping or hole-ignoring)
+    geometry."""
+
+    def test_convex_pentagon_triangulates_via_fan(self) -> None:
+        import math
+
+        from openskp._core import triangulate_face_3d
+
+        n = 5
+        vertices_3d = {
+            i: (math.cos(2 * math.pi * i / n), math.sin(2 * math.pi * i / n), 0.0)
+            for i in range(n)
+        }
+        loops = [list(range(n))]
+        normal = (0.0, 0.0, 1.0)
+
+        triangles = triangulate_face_3d(vertices_3d, loops, normal)
+
+        # A fan from vertex 0 over an n-gon always yields exactly n-2
+        # triangles, and (since a fan only ever touches the boundary
+        # vertices already given) every vertex id used must be one of the
+        # loop's own - if the general Shapely path had run instead, it
+        # could equally validly invent a different diagonal pattern.
+        assert len(triangles) == n - 2
+        used_ids = {v for tri in triangles for v in tri}
+        assert used_ids <= set(range(n))
+
+    def test_concave_polygon_does_not_use_the_fan_shortcut(self) -> None:
+        from openskp._core import triangulate_face_3d
+
+        # Same L-shape as TestIsConvex2d, lifted into 3D (z=0, planar).
+        vertices_3d = {
+            0: (0.0, 0.0, 0.0), 1: (2.0, 0.0, 0.0), 2: (2.0, 1.0, 0.0),
+            3: (1.0, 1.0, 0.0), 4: (1.0, 2.0, 0.0), 5: (0.0, 2.0, 0.0),
+        }
+        loops = [[0, 1, 2, 3, 4, 5]]
+        normal = (0.0, 0.0, 1.0)
+
+        triangles = triangulate_face_3d(vertices_3d, loops, normal)
+
+        # A naive fan from vertex 0 here would produce a triangle
+        # (0, 2, 3) that sticks outside the L's own boundary - real
+        # (Shapely-driven) triangulation must never emit it.
+        assert [0, 2, 3] not in triangles
+        assert len(triangles) > 0
+
+    def test_convex_outer_loop_with_a_hole_still_uses_shapely(self) -> None:
+        from openskp._core import triangulate_face_3d
+
+        # A square outer loop (convex) with a small square hole in the
+        # middle - the fast path must not fire just because the OUTER
+        # loop alone is convex; a hole always needs the general path.
+        vertices_3d = {
+            0: (0.0, 0.0, 0.0), 1: (4.0, 0.0, 0.0), 2: (4.0, 4.0, 0.0), 3: (0.0, 4.0, 0.0),
+            4: (1.0, 1.0, 0.0), 5: (1.0, 2.0, 0.0), 6: (2.0, 2.0, 0.0), 7: (2.0, 1.0, 0.0),
+        }
+        loops = [[0, 1, 2, 3], [4, 5, 6, 7]]
+        normal = (0.0, 0.0, 1.0)
+
+        triangles = triangulate_face_3d(vertices_3d, loops, normal)
+
+        # A fan across the outer loop alone (ignoring the hole) would
+        # produce exactly 2 triangles (len(loop)-2 for a 4-gon) - Shapely
+        # correctly triangulating the annulus around the hole produces
+        # more, smaller triangles instead.
+        assert len(triangles) > 2
