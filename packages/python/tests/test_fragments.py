@@ -135,6 +135,62 @@ class TestToFragments:
         assert x1.X() == pytest.approx(math.cos(math.radians(45)), abs=1e-5)
         assert x1.Y() == pytest.approx(math.sin(math.radians(45)), abs=1e-5)
 
+
+class TestToFragmentsGuids:
+    """Model.guids/guids_items were previously written as empty vectors
+    unconditionally - geometry still rendered fine (nothing about drawing a
+    mesh needs a GUID), but any consumer that zips model.getGuids() against
+    model.getLocalIds() index-for-index (the real IfcImporter's own output
+    shape, and what a viewer's own id-bridge typically does to resolve
+    "what did I click on") silently got an empty map, breaking every
+    GUID-keyed interaction: selection lookups, context menus, hide-by-id."""
+
+    def test_guids_and_local_ids_are_the_same_length_and_order(self):
+        scene = _make_two_instance_scene()
+        data = fragments.to_fragments(scene, raw=True)
+        model = Model.GetRootAsModel(bytearray(data), 0)
+
+        n = model.LocalIdsLength()
+        assert n == 2
+        assert model.GuidsLength() == n
+        assert model.GuidsItemsLength() == n
+        # guids_items[i] names which local_id guids[i] belongs to - a real
+        # consumer's simpler zip (getGuids() against getLocalIds(),
+        # index-for-index) only works when this parity actually holds.
+        for i in range(n):
+            assert model.GuidsItems(i) == model.LocalIds(i)
+
+    def test_items_without_a_source_guid_get_a_unique_synthetic_one(self):
+        # _make_two_instance_scene's nodes don't set InstancedNode.guid -
+        # the common case for legacy (pre-2021) SKP files, which don't
+        # currently expose a per-instance GUID at parse time.
+        scene = _make_two_instance_scene()
+        data = fragments.to_fragments(scene, raw=True)
+        model = Model.GetRootAsModel(bytearray(data), 0)
+
+        guids = [model.Guids(i).decode() for i in range(model.GuidsLength())]
+        assert all(g for g in guids)  # never empty
+        assert len(set(guids)) == len(guids)  # never duplicated
+
+    def test_a_real_source_guid_is_preserved_exactly(self):
+        resource = InstancedMeshResource(
+            id="mesh_0", definition_id=1, definition_name="Box",
+            variant_key="1|255,255,255", primitives=[_box_primitive()],
+        )
+        real_guid = "F160C36229782F47A9857FC88DD1F2CB"
+        node = InstancedNode(name="Box", layer="Framing", matrix=IDENTITY, mesh_resource_id="mesh_0", guid=real_guid)
+        root = InstancedNode(name="ROOT", matrix=IDENTITY, children=[node])
+        scene = InstancedScene(
+            bounds=None, scene_hierarchy=root, mesh_resources=[resource],
+            gltf_materials=[{"pbrMetallicRoughness": {"baseColorFactor": [1.0, 1.0, 1.0, 1.0]}}],
+            textures=[],
+        )
+        data = fragments.to_fragments(scene, raw=True)
+        model = Model.GetRootAsModel(bytearray(data), 0)
+
+        assert model.GuidsLength() == 1
+        assert model.Guids(0).decode() == real_guid
+
     def test_shell_geometry_matches_the_source_primitive(self):
         scene = _make_two_instance_scene()
         data = fragments.to_fragments(scene, raw=True)
