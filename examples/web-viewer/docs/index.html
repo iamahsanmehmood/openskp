@@ -1076,11 +1076,9 @@ ifc.export(scene, "output.ifc", classify_using_full_path=True)</code></pre>
       <div class="fn-desc"><a href="https://github.com/ThatOpen/engine_fragment" target="_blank" rel="noopener">ThatOpen's Fragments</a> is a public, IFC-agnostic FlatBuffers binary format built for fast loading in BIM web viewers (<code>@thatopen/fragments</code>). <code>openskp.export.fragments</code> writes it directly from an <code>InstancedScene</code> — no IFC text-generation step in between, which is the whole point: it eliminates the downstream IFC re-parse a viewer would otherwise need to do.</div>
       <pre class="language-python"><code class="language-python">from openskp import SkpFile
 from openskp.export import fragments
-from openskp.instanced_scene import build_instanced_scene
 
 skp = SkpFile.open("model.skp")
-skp.parse()
-scene = build_instanced_scene(skp)
+scene = skp.build_instanced_scene()
 
 fragments.export(scene, "output.frag")          # write the file directly
 data = fragments.to_fragments(scene, raw=True)   # or get the raw flatbuffer bytes</code></pre>

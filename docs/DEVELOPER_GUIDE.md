@@ -429,11 +429,9 @@ in BIM web viewers (`@thatopen/fragments`) — directly from an
 ```python
 from openskp import SkpFile
 from openskp.export import fragments
-from openskp.instanced_scene import build_instanced_scene
 
 skp = SkpFile.open("model.skp")
-skp.parse()
-scene = build_instanced_scene(skp)
+scene = skp.build_instanced_scene()
 
 fragments.export(scene, "output.frag")          # writes the file directly
 data = fragments.to_fragments(scene, raw=True)   # or get the raw flatbuffer bytes
