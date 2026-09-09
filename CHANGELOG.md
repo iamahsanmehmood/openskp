@@ -7,6 +7,144 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] — 2026-09-09 — Python only, GitHub-only pre-release
+
+> **This tag is not published to PyPI.** It's a real, tested, tagged release
+> — install it with:
+> ```
+> pip install "openskp[fragments] @ git+https://github.com/iamahsanmehmood/openskp.git@python-v1.3.0#subdirectory=packages/python"
+> ```
+> It will fold into a PyPI release once cross-language parity work below
+> catches up across the other 4 languages. Everything in this section is
+> Python-only unless stated otherwise.
+
+### Added — Direct SketchUp → Fragments (.frag) export
+
+New `openskp.export.fragments` module (`to_fragments(scene, *, raw=False)` /
+`export(scene, output_path, *, raw=False)`) writes ThatOpen's public
+Fragments/FlatBuffers format straight from an `InstancedScene`, with no IFC
+intermediate — real nested spatial hierarchy (matching the source file's own
+component nesting, not a flat list), IfcImporter-compatible display names,
+per-item GUIDs (the source file's real per-instance SketchUp GUID on VFF/2021+
+files, a stable synthetic one on legacy files), and non-unit scale/mirrored
+instances baked correctly into geometry (Fragments' own `Transform` struct has
+no scale field). New optional dependency group: `pip install openskp[fragments]`
+(`flatbuffers>=24.0`), vendored FlatBuffers bindings under `_fragments_fb/`.
+Verified against the real `@thatopen/fragments` runtime, not just this
+project's own reader, including a production-scale real file (12,338 items).
+
+**Known gaps, stated honestly:**
+- No other language has this yet. A community TypeScript port is open as
+  [PR #276](https://github.com/iamahsanmehmood/openskp/pull/276) but its
+  required lint check is currently failing — not mergeable as-is. .NET, Dart,
+  and C++ have no Fragments work started at all.
+- The Fragments format itself has no native visibility field. Per-layer
+  hidden state is carried via a `Model.metadata` JSON sidecar — a convention
+  this project defined, not part of the public ThatOpen schema. Any other
+  consumer of the `.frag` file needs to know to read it.
+- `Model.guid` (the single model-level identifier, distinct from each item's
+  own per-instance guid) is still an unpopulated placeholder.
+
+### Changed — Face triangulation: Shapely replaced with earcut
+
+Two-part performance and correctness change to `triangulate_face_3d`:
+a convex, hole-free face now triangulates via a direct fan (zero fidelity
+change, 10–44% faster on real fixtures); every other face now triangulates
+via `mapbox_earcut` instead of Shapely's Delaunay-plus-centroid-containment-
+filter approach (42–73% faster on top of the fan fast path). This is also a
+real correctness fix, not just speed: Shapely's centroid-containment filter
+was found under-covering a real concave 27-vertex face by roughly 10.5% of
+its area, confirmed against an independent shoelace-formula ground truth.
+New mandatory dependency: `mapbox_earcut>=1.0`.
+
+### Fixed — 4 correctness issues in IFC export
+
+- **Units and axis convention** — coordinates were written inch-scaled but
+  labeled as millimetres (~25.4× off), and the axis convention reused
+  glTF's Y-up values directly instead of converting to IFC/SketchUp's Z-up
+  — a real export came out rotated ~90° and mirrored. Found by diffing
+  against SketchUp's own native IFC export.
+- **Real instance names and layer visibility** — `to_ifc()` previously named
+  elements after internal mesh-lookup keys instead of the real instance
+  name, and used `IfcPresentationLayerAssignment` (no on/off state) instead
+  of `IfcPresentationLayerWithStyle` (carries `LayerOn`). New
+  `Scene.layer_hidden` field. Legacy files now get correct on/off state in
+  IFC output; VFF (2021+) files still always report visible in this
+  specific export path — the VFF hidden-flag read added below was not yet
+  wired into the IFC exporter, tracked as an open follow-up.
+- **Plugin attribute dictionaries surfaced as element names and IFC
+  properties** — `build_scene`/`build_instanced_scene` now extract every
+  attribute dictionary an instance carries (not just `dynamic_attributes`),
+  and use `name`/`label`/`code` (priority order) for the display name when
+  present. Each dictionary becomes its own `Pset_<dict-name>` in IFC output.
+  Targets real steel-detailing plugin data (`fbd-einfo`/`fbd-profile`/
+  `fbd-profile-cords`) that previously had no way to reach the exported
+  model at all.
+- **Opt-in full-path keyword classification** — `classify_element()`/
+  `to_ifc()` gain `classify_using_full_path` (default `False`, so existing
+  callers see no behavior change): when a name/layer match both miss, fall
+  back to matching the full ancestor-path string.
+
+### Added — Read the real per-layer hidden flag from VFF (2021+) files
+
+New `8E3C` single-byte sibling tag read on each layer's `8C3C` node.
+Previously VFF layer visibility was inferred only from `Layer_<name>`-
+prefixed materials, which carry no hidden bit at all — every VFF layer
+always read as visible regardless of its real state in the source file.
+
+### Added — `layer_hidden` in both GLB exporters' metadata sidecars
+
+`export/glb.py` and `export/instanced_glb.py` now surface
+`Scene.layer_hidden` / `InstancedScene.layer_hidden` in their `_metadata.json`
+output, so a consumer can apply the source file's real default layer
+visibility without re-deriving it.
+
+### Added — Read pages/scenes for legacy (pre-2021) files
+
+`legacy._scan_pages` populates `Page.name`/`.hidden_layers` for legacy MFC
+files — previously only the VFF (2021+) reader path populated `SkpModel.pages`
+at all. Scoped narrowly and deliberately: only pages whose capture flags are
+"nothing" or "hidden layers only" are supported; a page with a fuller capture
+(camera, style, shadow info — the common case for a hand-arranged scene) is
+silently skipped rather than guessed at, so it's simply absent from
+`model.pages` instead of producing wrong data.
+
+### Added — Write section planes
+
+`SkpBuilder.add_section_plane(point, normal)`, ground-truthed against real
+v17-native SketchUp saves and verified by opening the written file in live
+SketchUp (correct plane readback and visual render).
+
+### Added — Read and write construction lines/points
+
+`legacy._read_constructionline`/`_read_constructionpoint` now retain their
+fields instead of discarding them (`Definition.construction_lines`/
+`.construction_points`); writer gains `add_construction_line`/
+`add_construction_point` (root-level only). Ground-truthed against real
+SketchUp saves; a missing 4-byte trailer bug (previously rejected by real
+SketchUp as "unexpected file format") was found and fixed during that
+verification.
+
+### Fixed — large real files could exhaust all available memory or stall for 16+ minutes
+
+Two independent bugs, both confirmed against a real 359MB/95,363-definition
+production file that had crashed a 40GB development machine:
+- The TLV parser's `iter_top_level_lazy` already streamed ordinary top-level
+  records one at a time, but a file whose definitions are nearly all nested
+  under one dominant `F901`→`7017`→`7117` wrapper (rather than spread across
+  many top-level records) forced the *entire* wrapper's subtree to be
+  materialized in memory before any of it could be processed and released.
+  Extended the same streaming principle one level deeper via a new
+  `_unwrap_definitions_container()` helper.
+- `triangulate_face_3d`'s fallback path did an O(V) linear nearest-vertex
+  scan per triangle corner, making triangulation of any large, non-trivial
+  face effectively O(V²). Replaced with an O(1) reverse-coordinate-lookup
+  dict built once per face.
+
+Combined, the real trigger file now completes in ~773s at a peak of ~12.5GB
+RSS instead of crashing outright. Fixes
+[#264](https://github.com/iamahsanmehmood/openskp/issues/264).
+
 ### Fixed — files the writer produced could not be SAVED by SketchUp (Python writer)
 
 Every section's writer (materials, layers, definitions, root geometry) handed out persistent IDs
@@ -58,6 +196,8 @@ Measured through the SDK's own `SUMeshHelperGetFrontSTQCoords` (skp2dae) on 11 o
 after; new tests pin the invariant — what you pin is what the reader hands back at that point, on
 six orientations and vertex orders, and at applied size 10 — plus a real-SketchUp oracle test for the
 rotated vertex order (`TestRealSketchUpOracle`, needs the SDK DLL).
+
+## [1.2.0] — 2026-09-04
 
 ### Added — Full attribute-dictionary support in the writer, Python; groups gain attributes, all 5 languages
 
