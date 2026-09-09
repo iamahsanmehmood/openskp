@@ -344,6 +344,255 @@ class TestIfcExporter:
 
         assert "Pset_empty_dict" not in ifc_text
 
+    def test_to_ifc_wraps_named_wrapper_in_element_assembly(self):
+        """A pure organizational group with real, per-instance identity
+        (FrameBuilder's "W-2" wall, whose own children are its studs/
+        plates/cladding) has no geometry of its own - export/fragments.py
+        already gives it its own trackable identity for Fragments export
+        (openskp#286); IFC needs the equivalent: a real IFCELEMENTASSEMBLY
+        with its members related via IFCRELAGGREGATES, not a flat sibling
+        list under the storey."""
+        stud = GlbPrimitive(
+            positions=array("f", [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+            normals=array("f", [0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0]),
+            uvs=array("f", [0.0, 0.0, 1.0, 0.0, 0.0, 1.0]),
+            indices=array("I", [0, 1, 2]),
+            material_index=0,
+            geom_name="mesh_0_ROOT__W-2__Stud_1_Layer0",
+        )
+        plate = GlbPrimitive(
+            positions=array("f", [2.0, 0.0, 0.0, 3.0, 0.0, 0.0, 2.0, 1.0, 0.0]),
+            normals=array("f", [0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0]),
+            uvs=array("f", [0.0, 0.0, 1.0, 0.0, 0.0, 1.0]),
+            indices=array("I", [0, 1, 2]),
+            material_index=0,
+            geom_name="mesh_1_ROOT__W-2__Plate_1_Layer0",
+        )
+        scene_hierarchy = InstanceNode(
+            name="ROOT",
+            path="ROOT",
+            children=[
+                InstanceNode(
+                    name="W-2",
+                    path="ROOT / W-2",
+                    properties={"MarkID": "W-2"},
+                    children=[
+                        InstanceNode(name="Stud 1", path="ROOT / W-2 / Stud 1"),
+                        InstanceNode(name="Plate 1", path="ROOT / W-2 / Plate 1"),
+                    ],
+                ),
+            ],
+        )
+        scene = Scene(
+            scene_hierarchy=scene_hierarchy,
+            mesh_index={
+                "mesh_0_ROOT__W-2__Stud_1_Layer0": MeshMetadata(
+                    name="Stud 1", path="ROOT / W-2 / Stud 1",
+                ),
+                "mesh_1_ROOT__W-2__Plate_1_Layer0": MeshMetadata(
+                    name="Plate 1", path="ROOT / W-2 / Plate 1",
+                ),
+            },
+            glb_primitives=[stud, plate],
+            gltf_materials=[{"pbrMetallicRoughness": {"baseColorFactor": [0.5, 0.5, 0.5, 1.0]}}],
+        )
+        ifc_text = to_ifc(scene)
+
+        assert ifc_text.count("IFCELEMENTASSEMBLY(") == 1
+        assembly_line = next(
+            line for line in ifc_text.splitlines() if "IFCELEMENTASSEMBLY(" in line
+        )
+        assert "'W-2'" in assembly_line
+        assembly_id = assembly_line.split("=")[0].lstrip("#")
+
+        # Member elements go through IFCRELAGGREGATES to the assembly...
+        rel_agg_line = next(
+            line for line in ifc_text.splitlines()
+            if line.startswith("#") and "IFCRELAGGREGATES(" in line and f",#{assembly_id},(" in line
+        )
+        stud_id = next(
+            line for line in ifc_text.splitlines() if "'Stud 1'" in line and "IFCBUILDINGELEMENTPROXY" in line
+        ).split("=")[0].lstrip("#")
+        plate_id = next(
+            line for line in ifc_text.splitlines() if "'Plate 1'" in line and "IFCBUILDINGELEMENTPROXY" in line
+        ).split("=")[0].lstrip("#")
+        assert f"#{stud_id}" in rel_agg_line
+        assert f"#{plate_id}" in rel_agg_line
+
+        # ...and only the assembly itself (never its individual members)
+        # is related to the storey via IFCRELCONTAINEDINSPATIALSTRUCTURE.
+        contain_line = next(
+            line for line in ifc_text.splitlines() if "IFCRELCONTAINEDINSPATIALSTRUCTURE(" in line
+        )
+        assert f"#{assembly_id}" in contain_line
+        assert f"#{stud_id}" not in contain_line
+        assert f"#{plate_id}" not in contain_line
+
+        # The wrapper's own properties (FrameBuilder's own Mark ID, here)
+        # attach to the assembly element itself, not to its members.
+        assert "'MarkID'" in ifc_text
+        assert "'W-2'" in ifc_text  # both the element Name and the pset value
+
+    def test_to_ifc_generic_wrapper_stays_flat(self):
+        """A generated/placeholder group name (SketchUp's own auto "Group#1"
+        style, or simply no children) must NOT become an IFCELEMENTASSEMBLY -
+        only a real, named organizational wrapper should."""
+        prim = GlbPrimitive(
+            positions=array("f", [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+            normals=array("f", [0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0]),
+            uvs=array("f", [0.0, 0.0, 1.0, 0.0, 0.0, 1.0]),
+            indices=array("I", [0, 1, 2]),
+            material_index=0,
+            geom_name="mesh_0_ROOT__Group#1__Stud_1_Layer0",
+        )
+        scene_hierarchy = InstanceNode(
+            name="ROOT",
+            path="ROOT",
+            children=[
+                InstanceNode(
+                    name="Component_2",
+                    name_is_generated=True,
+                    path="ROOT / Component_2",
+                    children=[
+                        InstanceNode(name="Stud 1", path="ROOT / Component_2 / Stud 1"),
+                    ],
+                ),
+            ],
+        )
+        scene = Scene(
+            scene_hierarchy=scene_hierarchy,
+            mesh_index={
+                "mesh_0_ROOT__Group#1__Stud_1_Layer0": MeshMetadata(
+                    name="Stud 1", path="ROOT / Component_2 / Stud 1",
+                ),
+            },
+            glb_primitives=[prim],
+            gltf_materials=[{"pbrMetallicRoughness": {"baseColorFactor": [0.5, 0.5, 0.5, 1.0]}}],
+        )
+        ifc_text = to_ifc(scene)
+
+        assert "IFCELEMENTASSEMBLY(" not in ifc_text
+        # IFCRELAGGREGATES still appears 3 times for the boilerplate
+        # Project -> Site -> Building -> Storey hierarchy - just not for
+        # this generated-name wrapper.
+        assert ifc_text.count("IFCRELAGGREGATES(") == 3
+        contain_line = next(
+            line for line in ifc_text.splitlines() if "IFCRELCONTAINEDINSPATIALSTRUCTURE(" in line
+        )
+        assert "'Stud 1'" not in contain_line  # sanity: Name isn't in this line at all
+        stud_id = next(
+            line for line in ifc_text.splitlines() if "'Stud 1'" in line
+        ).split("=")[0].lstrip("#")
+        assert f"#{stud_id}" in contain_line
+
+    def test_to_ifc_nests_assemblies_via_rel_aggregates(self):
+        """A named wrapper nested inside another named wrapper (e.g. a
+        "door1" sub-assembly inside wall "W-2") must be related to its
+        *parent assembly* via IFCRELAGGREGATES, not directly to the
+        storey - only the outermost assembly is ever spatially contained."""
+        hinge = GlbPrimitive(
+            positions=array("f", [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+            normals=array("f", [0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0]),
+            uvs=array("f", [0.0, 0.0, 1.0, 0.0, 0.0, 1.0]),
+            indices=array("I", [0, 1, 2]),
+            material_index=0,
+            geom_name="mesh_0_ROOT__W-2__door1__Hinge_Layer0",
+        )
+        scene_hierarchy = InstanceNode(
+            name="ROOT",
+            path="ROOT",
+            children=[
+                InstanceNode(
+                    name="W-2",
+                    path="ROOT / W-2",
+                    children=[
+                        InstanceNode(
+                            name="door1",
+                            path="ROOT / W-2 / door1",
+                            children=[
+                                InstanceNode(name="Hinge", path="ROOT / W-2 / door1 / Hinge"),
+                            ],
+                        ),
+                    ],
+                ),
+            ],
+        )
+        scene = Scene(
+            scene_hierarchy=scene_hierarchy,
+            mesh_index={
+                "mesh_0_ROOT__W-2__door1__Hinge_Layer0": MeshMetadata(
+                    name="Hinge", path="ROOT / W-2 / door1 / Hinge",
+                ),
+            },
+            glb_primitives=[hinge],
+            gltf_materials=[{"pbrMetallicRoughness": {"baseColorFactor": [0.5, 0.5, 0.5, 1.0]}}],
+        )
+        ifc_text = to_ifc(scene)
+
+        assert ifc_text.count("IFCELEMENTASSEMBLY(") == 2
+        w2_line = next(
+            line for line in ifc_text.splitlines()
+            if "IFCELEMENTASSEMBLY(" in line and "'W-2'" in line
+        )
+        door_line = next(
+            line for line in ifc_text.splitlines()
+            if "IFCELEMENTASSEMBLY(" in line and "'door1'" in line
+        )
+        w2_id = w2_line.split("=")[0].lstrip("#")
+        door_id = door_line.split("=")[0].lstrip("#")
+
+        # door1 is aggregated INTO W-2...
+        rel_line = next(
+            line for line in ifc_text.splitlines()
+            if "IFCRELAGGREGATES(" in line and f",#{w2_id},(" in line
+        )
+        assert f"#{door_id}" in rel_line
+
+        # ...and only W-2 (not door1) is contained in the storey.
+        contain_line = next(
+            line for line in ifc_text.splitlines() if "IFCRELCONTAINEDINSPATIALSTRUCTURE(" in line
+        )
+        assert f"#{w2_id}" in contain_line
+        assert f"#{door_id}" not in contain_line
+
+    def test_to_ifc_assembly_predefined_type_matches_truss_keyword(self):
+        prim = GlbPrimitive(
+            positions=array("f", [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+            normals=array("f", [0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0]),
+            uvs=array("f", [0.0, 0.0, 1.0, 0.0, 0.0, 1.0]),
+            indices=array("I", [0, 1, 2]),
+            material_index=0,
+            geom_name="mesh_0_ROOT__RT-2__Profile_Layer0",
+        )
+        scene_hierarchy = InstanceNode(
+            name="ROOT",
+            path="ROOT",
+            children=[
+                InstanceNode(
+                    name="RT-2 truss",
+                    path="ROOT / RT-2 truss",
+                    children=[
+                        InstanceNode(name="Profile", path="ROOT / RT-2 truss / Profile"),
+                    ],
+                ),
+            ],
+        )
+        scene = Scene(
+            scene_hierarchy=scene_hierarchy,
+            mesh_index={
+                "mesh_0_ROOT__RT-2__Profile_Layer0": MeshMetadata(
+                    name="Profile", path="ROOT / RT-2 truss / Profile",
+                ),
+            },
+            glb_primitives=[prim],
+            gltf_materials=[{"pbrMetallicRoughness": {"baseColorFactor": [0.5, 0.5, 0.5, 1.0]}}],
+        )
+        ifc_text = to_ifc(scene)
+        assembly_line = next(
+            line for line in ifc_text.splitlines() if "IFCELEMENTASSEMBLY(" in line
+        )
+        assert assembly_line.rstrip(";").endswith(".TRUSS.)")
+
     def test_export_file(self):
         scene = create_mock_scene()
         with tempfile.TemporaryDirectory() as tmp_dir:

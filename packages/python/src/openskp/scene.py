@@ -72,6 +72,12 @@ class InstanceNode:
     # name instead, which this project never surfaced before.
     attribute_dictionaries: Dict[str, Dict[str, str]] = field(default_factory=dict)
     children: List["InstanceNode"] = field(default_factory=list)
+    # Same full-path string that scoping instance's own meshes (and every
+    # nested descendant's meshes) carry as MeshMetadata.path - lets a
+    # consumer (e.g. export/ifc.py's assembly grouping) correlate a flat
+    # GlbPrimitive back to its owning tree node by exact string match,
+    # without re-deriving SketchUp's own name-resolution/override rules.
+    path: str = ""
 
 
 @dataclass
@@ -531,6 +537,7 @@ def build_scene(parsed: Dict[str, Any]) -> Scene:
                 properties=properties,
                 attribute_dictionaries=attribute_dicts,
                 children=child_nodes,
+                path=full_path_name,
             )
             child_instances_info.append(inst_info)
 
@@ -572,6 +579,7 @@ def build_scene(parsed: Dict[str, Any]) -> Scene:
         position_mm=(0.0, 0.0, 0.0),
         properties={},
         children=root_children,
+        path="ROOT",
     )
 
     logger.info(
