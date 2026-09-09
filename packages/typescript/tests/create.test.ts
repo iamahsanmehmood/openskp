@@ -940,33 +940,36 @@ describe('Slot-boundary encoding (0x7FFF)', () => {
   // matter which of the two short encodings would otherwise apply, since
   // it collides with a reserved marker value either way.
   const { ArchiveWriter, shiftRef } = _internal;
+  // ArchiveWriter.bytes is a GrowableBytes (typed array); compare its contents.
+  const bytesOf = (w: InstanceType<typeof ArchiveWriter>) => Array.from(w.bytes.view());
 
   it('a backref below the boundary uses the short form', () => {
     const w = new ArchiveWriter(1, {});
     w.writeBackref(0x7ffe);
-    expect(w.bytes).toEqual([0xfe, 0x7f]);
+    expect(bytesOf(w)).toEqual([0xfe, 0x7f]);
   });
 
   it('a backref at the boundary uses the escape form, not the collision bytes', () => {
     const w = new ArchiveWriter(1, {});
     w.writeBackref(0x7fff);
-    expect(w.bytes).toEqual([0xff, 0x7f, 0xff, 0x7f, 0x00, 0x00]);
-    expect(w.bytes).not.toEqual([0xff, 0x7f]);
+    expect(bytesOf(w)).toEqual([0xff, 0x7f, 0xff, 0x7f, 0x00, 0x00]);
+    expect(bytesOf(w)).not.toEqual([0xff, 0x7f]);
   });
 
   it('newOfKnownClass below the boundary uses the short class-ref form', () => {
     const w = new ArchiveWriter(1, { Foo: 0x7ffe });
     w.newOfKnownClass('Foo');
-    expect(w.bytes).toEqual([0xfe, 0xff]); // 0x8000 | 0x7FFE = 0xFFFE
+    expect(bytesOf(w)).toEqual([0xfe, 0xff]); // 0x8000 | 0x7FFE = 0xFFFE
   });
 
   it('newOfKnownClass at the boundary uses the escape form, never 0xFFFF', () => {
     const w = new ArchiveWriter(1, { Foo: 0x7fff });
     w.newOfKnownClass('Foo');
-    expect(w.bytes.slice(0, 2)).toEqual([0xff, 0x7f]);
-    const tag = w.bytes[0] | (w.bytes[1] << 8);
+    const b = bytesOf(w);
+    expect(b.slice(0, 2)).toEqual([0xff, 0x7f]);
+    const tag = b[0] | (b[1] << 8);
     expect(tag).not.toBe(0xffff);
-    const val = w.bytes[2] | (w.bytes[3] << 8) | (w.bytes[4] << 16) | (w.bytes[5] << 24);
+    const val = b[2] | (b[3] << 8) | (b[4] << 16) | (b[5] << 24);
     expect(val >>> 0).toBe((0x80000000 | 0x7fff) >>> 0);
   });
 

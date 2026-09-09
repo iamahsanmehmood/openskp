@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — TypeScript writer memory
+
+`ArchiveWriter` keeps the archive in a growable `Uint8Array` instead of a
+`number[]`, and `SkpBuilder.toBytes()` assembles the file into one exact-size
+buffer instead of a second `number[]` plus a final copy. A `number[]` costs
+about 9 bytes of heap per file byte, so a 62 MB write peaked at ~2.1 GB of
+transient heap and took a browser tab down; it now peaks at ~0.2 GB. Output is
+byte-identical. No public API change (`_internal.GrowableBytes` is exposed for
+tests).
+
 ## [1.3.0] — 2026-09-09 — Python only, GitHub-only pre-release
 
 > **This tag is not published to PyPI.** It's a real, tested, tagged release
