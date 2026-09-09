@@ -87,21 +87,60 @@ Using OpenSKP in your own project? [Open an issue](https://github.com/iamahsanme
 
 ## 🖥️ Platform Support
 
-| Platform | Version | Status | Install | Package Link |
+| Platform | Version | Status | Install | Unreleased on `main`? |
 |:---------|:--------|:------:|:--------|:-------------|
-| 🐍 **Python** | [![PyPI](https://img.shields.io/pypi/v/openskp.svg?label=)](https://pypi.org/project/openskp/) | ✅ Available | `pip install openskp` | [PyPI](https://pypi.org/project/openskp/) |
-| 📘 **TypeScript / JS** | [![npm](https://img.shields.io/npm/v/openskp.svg?label=)](https://www.npmjs.com/package/openskp) | ✅ Available | `npm install openskp` | [npm](https://www.npmjs.com/package/openskp) |
-| 🚀 **.NET / C#** | [![NuGet](https://img.shields.io/nuget/v/OpenSkp.svg?label=)](https://www.nuget.org/packages/OpenSkp) | ✅ Available | `dotnet add package OpenSkp` | [NuGet](https://www.nuget.org/packages/OpenSkp) |
-| 🎯 **Dart / Flutter** | [![Pub](https://img.shields.io/pub/v/openskp.svg?label=)](https://pub.dev/packages/openskp) | ✅ Available | `dart pub add openskp` | [pub.dev](https://pub.dev/packages/openskp) |
-| ⚙️ **C++17** | [![C++](https://img.shields.io/github/v/release/iamahsanmehmood/openskp?filter=cpp-v*&label=)](https://github.com/iamahsanmehmood/openskp/releases?q=cpp-) | ✅ Source package | `find_package(OpenSkp CONFIG REQUIRED)` | [`packages/cpp`](packages/cpp) |
+| 🐍 **Python** | [![PyPI](https://img.shields.io/pypi/v/openskp.svg?label=)](https://pypi.org/project/openskp/) | ✅ Available | `pip install openskp` | **Yes** — [`preview-python-v1.3.0`](https://github.com/iamahsanmehmood/openskp/releases/tag/preview-python-v1.3.0), GitHub-only, not on PyPI yet |
+| 📘 **TypeScript / JS** | [![npm](https://img.shields.io/npm/v/openskp.svg?label=)](https://www.npmjs.com/package/openskp) | ✅ Available | `npm install openskp` | No |
+| 🚀 **.NET / C#** | [![NuGet](https://img.shields.io/nuget/v/OpenSkp.svg?label=)](https://www.nuget.org/packages/OpenSkp) | ✅ Available | `dotnet add package OpenSkp` | No |
+| 🎯 **Dart / Flutter** | [![Pub](https://img.shields.io/pub/v/openskp.svg?label=)](https://pub.dev/packages/openskp) | ✅ Available | `dart pub add openskp` | No |
+| ⚙️ **C++17** | [![C++](https://img.shields.io/github/v/release/iamahsanmehmood/openskp?filter=cpp-v*&label=)](https://github.com/iamahsanmehmood/openskp/releases?q=cpp-) | ✅ Source package | `find_package(OpenSkp CONFIG REQUIRED)` | No |
 
 All five languages parse both the modern VFF (2021+) and classic MFC
 (2013–2020) `.skp` containers, and support the same opt-in scene-baking
-(`buildScene()`) and observability APIs. See the
-[Developer Guide](docs/DEVELOPER_GUIDE.md) for the full picture, and
-[docs/LANGUAGE_PARITY.md](docs/LANGUAGE_PARITY.md) for exactly where the
-five ports currently differ — kept current as ports land, not a one-time
-snapshot.
+(`buildScene()`) and observability APIs. Full detail on what's unreleased,
+what differs between languages, and which real SketchUp file versions
+actually parse today is in the section right below.
+
+---
+
+## 🔀 Feature Support by Language
+
+Every feature, across all 5 languages — ✅ shipped & released, 🔶 shipped on
+`main` but not released yet, ❌ not yet ported. Full detail (including
+`n/a`/"not independently checked" nuance) in
+**[docs/LANGUAGE_PARITY.md](docs/LANGUAGE_PARITY.md)** — this is the
+condensed version.
+
+| Feature | Python | TypeScript | .NET | Dart | C++ |
+|:---|:---:|:---:|:---:|:---:|:---:|
+| Parse VFF (2021+) & legacy MFC (2013–2020) | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Geometry, layers, materials/textures, styles, Dynamic Components | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Single attribute dictionary per entity | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Attribute dicts: full 9-value-type + multi-dict support | ✅ | ❌ | ❌ | ❌ | ❌ |
+| VFF pages/scenes + dimension parsing | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Legacy (pre-2021) pages/scenes reading | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Construction lines/points reading | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Scene baking, instancing-preserving scene output | ✅ | ✅ | ✅ | ✅ | ✅ |
+| earcut triangulation (perf + correctness fix) | 🔶 | n/a | n/a | n/a | n/a |
+| Writer: materials/layers/definitions/groups/faces/curves/images | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Writer: dimensions, section planes, construction geometry | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Editor (`open_existing()`), code generator | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Export: GLB / OBJ / STL / PLY / DXF / IFC4 / JSON | ✅ | ✅ | ✅ | ✅ | ✅ |
+| IFC export correctness fixes (units, layer visibility, Psets, classification) | 🔶 | not checked | not checked | not checked | not checked |
+| **Fragments (`.frag`) export** | 🔶 GitHub-only | 🔶 [PR #276](https://github.com/iamahsanmehmood/openskp/pull/276) open, CI failing | ❌ not started | ❌ not started | ❌ not started |
+
+### Real SketchUp file version support
+
+**Not every real old-format file parses today — stated plainly.** A
+14-file real-world version sweep (versions 3 through 2025, same project
+across its save history) found:
+
+| Result | Versions |
+|:---|:---|
+| ✅ Parse, build, and export cleanly | 2014, 2015, 2016, 2017, 2018, 2020, 2021, 2025 |
+| ❌ Fail — 5 distinct error signatures, root cause tracked in [issue #284](https://github.com/iamahsanmehmood/openskp/issues/284) | V3, V4, V6, V7, V8, 2013, 2019 |
+
+Full per-version error table and investigation notes: [docs/LANGUAGE_PARITY.md § 4](docs/LANGUAGE_PARITY.md#4-real-sketchup-file-version-support).
 
 ---
 

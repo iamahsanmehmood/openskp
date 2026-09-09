@@ -229,6 +229,7 @@ code[class*="language-"]{font-family:var(--font-code)!important;font-size:12.5px
   <a class="mnav-item" href="#errors"><svg viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>Errors</a>
   <a class="mnav-item" href="#export"><svg viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>Convert</a>
   <a class="mnav-item" href="#fragments"><svg viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>Fragments</a>
+  <a class="mnav-item" href="#support"><svg viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>Support</a>
   <a class="mnav-item" href="#viewer"><svg viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>Viewer</a>
   <a class="mnav-item" href="#differences"><svg viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="12" r="7"></circle><circle cx="15" cy="12" r="7"></circle></svg>Differences</a>
   <a class="mnav-item" href="#contributing"><svg viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>Contributing</a>
@@ -286,6 +287,9 @@ code[class*="language-"]{font-family:var(--font-code)!important;font-size:12.5px
     <a class="nav-item" href="#fragments" onclick="setActive(this)">
       <svg class="nav-icon" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>Fragments <span style="margin-left:auto;font-size:9px;font-weight:700;padding:1px 6px;border-radius:20px;background:rgba(62,207,142,0.15);color:var(--green)">NEW</span>
     </a>
+    <a class="nav-item" href="#support" onclick="setActive(this)">
+      <svg class="nav-icon" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>Language Support
+    </a>
     <a class="nav-item" href="#viewer" onclick="setActive(this)">
       <svg class="nav-icon" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>Web Viewer
     </a>
@@ -312,7 +316,7 @@ code[class*="language-"]{font-family:var(--font-code)!important;font-size:12.5px
     <div><div class="hero-stat-n">5</div><div class="hero-stat-l">Languages</div></div>
     <div><div class="hero-stat-n">7</div><div class="hero-stat-l">Convert-to formats</div></div>
     <div><div class="hero-stat-n">1,306</div><div class="hero-stat-l">Tests passing</div></div>
-    <div><div class="hero-stat-n">620MB</div><div class="hero-stat-l">Largest file verified</div></div>
+    <div><div class="hero-stat-n">620MB</div><div class="hero-stat-l">Largest file verified (.NET)</div></div>
     <div><div class="hero-stat-n">2</div><div class="hero-stat-l">Container formats (VFF + legacy MFC)</div></div>
   </div>
 </div>
@@ -1102,6 +1106,92 @@ data = fragments.to_fragments(scene, raw=True)   # or get the raw flatbuffer byt
       <div class="fn-desc"><code>Model.guid</code> (the single model-level identifier, distinct from each item's own per-instance guid above) is still an unpopulated placeholder.</div>
       <div class="fn-desc">Only Python has this today. A community TypeScript port is open (<a href="https://github.com/iamahsanmehmood/openskp/pull/276" target="_blank" rel="noopener">PR #276</a>) but its required CI check is currently failing, so it isn't usable yet. .NET, Dart, and C++ have no work started.</div>
       <div class="fn-desc" style="margin-top:14px">Full reference: <a href="https://github.com/iamahsanmehmood/openskp/blob/main/docs/DEVELOPER_GUIDE.md#fragments-export" target="_blank" rel="noopener">DEVELOPER_GUIDE.md § Fragments export</a>. Cross-language status: <a href="https://github.com/iamahsanmehmood/openskp/blob/main/docs/LANGUAGE_PARITY.md" target="_blank" rel="noopener">LANGUAGE_PARITY.md</a>. What's next: <a href="https://github.com/iamahsanmehmood/openskp/blob/main/ROADMAP.md" target="_blank" rel="noopener">ROADMAP.md</a>.</div>
+    </div>
+  </div>
+</section>
+
+<!-- Language & Version Support -->
+<section id="support">
+  <div class="sec-head">
+    <div class="sec-icon"><svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg></div>
+    <div>
+      <div class="sec-title">Language &amp; Version Support</div>
+      <div class="sec-sub">Every feature, which of the 5 languages has it, what's unreleased, and which real SketchUp file versions actually parse</div>
+    </div>
+  </div>
+
+  <div class="fn-block">
+    <div class="fn-head"><div><div class="fn-name">Package versions</div></div></div>
+    <div class="fn-body">
+      <div class="tblwrap">
+      <table class="doc-table">
+        <thead><tr><th>Language</th><th>Released version</th><th>Unreleased on <code>main</code>?</th></tr></thead>
+        <tbody>
+          <tr><td>🐍 Python</td><td><a href="https://pypi.org/project/openskp/" target="_blank" rel="noopener">PyPI</a></td><td><strong>Yes</strong> — <a href="https://github.com/iamahsanmehmood/openskp/releases/tag/preview-python-v1.3.0" target="_blank" rel="noopener"><code>preview-python-v1.3.0</code></a>, GitHub-only, not on PyPI yet</td></tr>
+          <tr><td>📘 TypeScript</td><td><a href="https://www.npmjs.com/package/openskp" target="_blank" rel="noopener">npm</a></td><td>No</td></tr>
+          <tr><td>🚀 .NET</td><td><a href="https://www.nuget.org/packages/OpenSkp" target="_blank" rel="noopener">NuGet</a></td><td>No</td></tr>
+          <tr><td>🎯 Dart</td><td><a href="https://pub.dev/packages/openskp" target="_blank" rel="noopener">pub.dev</a></td><td>No</td></tr>
+          <tr><td>⚙️ C++</td><td><a href="https://github.com/iamahsanmehmood/openskp/releases?q=cpp-" target="_blank" rel="noopener">GitHub Releases</a></td><td>No</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <div class="fn-desc" style="margin-top:10px">Each language releases independently — version numbers can legitimately diverge rather than always moving in lockstep. See <a href="https://github.com/iamahsanmehmood/openskp/blob/main/CONTRIBUTING.md#releasing-maintainers" target="_blank" rel="noopener">CONTRIBUTING.md</a> for why.</div>
+    </div>
+  </div>
+
+  <div class="fn-block">
+    <div class="fn-head"><div><div class="fn-name">Full feature matrix</div></div></div>
+    <div class="fn-body">
+      <div class="fn-desc">✅ shipped &amp; released &middot; 🔶 shipped on <code>main</code>, not released yet &middot; ❌ not yet ported.</div>
+      <div class="tblwrap">
+      <table class="doc-table">
+        <thead><tr><th>Feature</th><th>Python</th><th>TypeScript</th><th>.NET</th><th>Dart</th><th>C++</th></tr></thead>
+        <tbody>
+          <tr><td>Parse VFF (2021+) &amp; legacy MFC (2013–2020)</td><td>✅</td><td>✅</td><td>✅</td><td>✅</td><td>✅</td></tr>
+          <tr><td>Geometry, layers, materials/textures, styles, Dynamic Components</td><td>✅</td><td>✅</td><td>✅</td><td>✅</td><td>✅</td></tr>
+          <tr><td>Single attribute dictionary per entity</td><td>✅</td><td>✅</td><td>✅</td><td>✅</td><td>✅</td></tr>
+          <tr><td>Attribute dicts: full 9-value-type + multi-dict support</td><td>✅</td><td>❌</td><td>❌</td><td>❌</td><td>❌</td></tr>
+          <tr><td>VFF pages/scenes + dimension parsing</td><td>✅</td><td>✅</td><td>✅</td><td>✅</td><td>✅</td></tr>
+          <tr><td>Legacy (pre-2021) pages/scenes reading</td><td>✅</td><td>❌</td><td>❌</td><td>❌</td><td>❌</td></tr>
+          <tr><td>Construction lines/points reading</td><td>✅</td><td>❌</td><td>❌</td><td>❌</td><td>❌</td></tr>
+          <tr><td>VFF per-layer-hidden flag reading</td><td>🔶</td><td>❌</td><td>❌</td><td>❌</td><td>❌</td></tr>
+          <tr><td><code>mesh_index[...].properties</code> populated</td><td>✅</td><td>✅</td><td>✅</td><td>✅</td><td>❌</td></tr>
+          <tr><td><code>model.layers</code> in file order (not alphabetical)</td><td>✅</td><td>✅</td><td>✅</td><td>✅</td><td>❌</td></tr>
+          <tr><td>Scene baking, instancing-preserving scene output</td><td>✅</td><td>✅</td><td>✅</td><td>✅</td><td>✅</td></tr>
+          <tr><td>earcut triangulation (perf + correctness fix)</td><td>🔶</td><td>n/a</td><td>n/a</td><td>n/a</td><td>n/a</td></tr>
+          <tr><td>Large-file streaming fix (<a href="https://github.com/iamahsanmehmood/openskp/issues/264" target="_blank" rel="noopener">#264</a>)</td><td>🔶</td><td>not checked</td><td>not checked</td><td>not checked</td><td>not checked</td></tr>
+          <tr><td>Writer: materials/layers/definitions/groups/faces/curves/images</td><td>✅</td><td>✅</td><td>✅</td><td>✅</td><td>✅</td></tr>
+          <tr><td>Writer: dimensions, section planes, construction geometry</td><td>✅</td><td>❌</td><td>❌</td><td>❌</td><td>❌</td></tr>
+          <tr><td>Editor (<code>open_existing()</code>), code generator</td><td>✅</td><td>✅</td><td>✅</td><td>✅</td><td>✅</td></tr>
+          <tr><td>codegen round-trips <code>applied_width</code>/opacity</td><td>❌</td><td>❌</td><td>❌</td><td>❌</td><td>❌ — gap in all 5</td></tr>
+          <tr><td>Export: GLB / OBJ / STL / PLY / DXF / IFC4 / JSON</td><td>✅</td><td>✅</td><td>✅</td><td>✅</td><td>✅</td></tr>
+          <tr><td>IFC export correctness fixes (units, layer visibility, Psets, classification)</td><td>🔶</td><td>not checked</td><td>not checked</td><td>not checked</td><td>not checked</td></tr>
+          <tr><td><strong>Fragments (.frag) export</strong></td><td>🔶 GitHub-only</td><td>🔶 <a href="https://github.com/iamahsanmehmood/openskp/pull/276" target="_blank" rel="noopener">PR #276</a> open, CI failing</td><td>❌ not started</td><td>❌ not started</td><td>❌ not started</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <div class="fn-desc" style="margin-top:10px">Full detail (including "not independently checked" nuance and why): <a href="https://github.com/iamahsanmehmood/openskp/blob/main/docs/LANGUAGE_PARITY.md" target="_blank" rel="noopener">docs/LANGUAGE_PARITY.md</a>. Cross-language porting backlog: <a href="https://github.com/iamahsanmehmood/openskp/issues/285" target="_blank" rel="noopener">issue #285</a>.</div>
+    </div>
+  </div>
+
+  <div class="fn-block">
+    <div class="fn-head"><div><div class="fn-name">Real SketchUp file version support</div></div></div>
+    <div class="fn-body">
+      <div class="fn-desc"><strong>Not every real old-format file parses today — stated plainly.</strong> A 14-file real-world version sweep (versions 3 through 2025, same project across its save history) found 8 parse, build, and export cleanly; 6 fail with 5 distinct error signatures.</div>
+      <div class="tblwrap">
+      <table class="doc-table">
+        <thead><tr><th>SketchUp version</th><th>Result</th><th>Error / notes</th></tr></thead>
+        <tbody>
+          <tr><td>2014, 2015, 2016, 2017, 2018, 2020, 2021, 2025</td><td><span class="yes">✓ Clean</span></td><td>Parse, build, and export cleanly — consistent output across all 8</td></tr>
+          <tr><td>V3</td><td>❌ Fails</td><td><code>expected a string record</code></td></tr>
+          <tr><td>V4</td><td>❌ Fails</td><td><code>texture object is not a dib</code></td></tr>
+          <tr><td>V6</td><td>❌ Fails</td><td><code>definition list misaligned</code></td></tr>
+          <tr><td>V7, V8, 2013</td><td>❌ Fails</td><td><code>class-ref to non-class slot N (CAttributeNamed)</code> — root cause narrowed, not yet found</td></tr>
+          <tr><td>2019</td><td>❌ Fails</td><td><code>implausible def entity count</code></td></tr>
+        </tbody>
+      </table>
+      </div>
+      <div class="callout callout-warn">Only investigated against the <strong>Python</strong> legacy MFC reader — each of the other 4 languages has its own independently-implemented parser, so this isn't assumed fixed or broken the same way there. Tracked in <a href="https://github.com/iamahsanmehmood/openskp/issues/284" target="_blank" rel="noopener">issue #284</a> — a real repro <code>.skp</code> file for any of these speeds up narrowing it down further.</div>
     </div>
   </div>
 </section>
