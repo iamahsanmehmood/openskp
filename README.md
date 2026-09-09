@@ -48,7 +48,7 @@ OpenSKP is the **first and only** open-source, cross-platform toolkit for Sketch
 | Feature | Status | Description |
 |:--------|:------:|:------------|
 | **Parse SKP 2021+ (VFF)** | ✅ | Full support for the modern VFF binary container |
-| **Parse SKP 2013–2020 (legacy MFC)** | ✅ | Full support for the classic MFC `CArchive` container — same output shape as VFF |
+| **Parse SKP 2013–2020 (legacy MFC)** | ✅ | Broad support for the classic MFC `CArchive` container — same output shape as VFF. A real version-compatibility sweep found 8/14 old-format test files parse cleanly; the remaining 6 hit a known, tracked parsing gap — see [ROADMAP.md](ROADMAP.md#known-bugs) |
 | **3D Geometry Extraction** | ✅ | Vertices, edges, faces, normals, and UV coordinates |
 | **Component Hierarchy** | ✅ | Nested component definitions and instance transforms |
 | **Scene Baking / Triangulation** | ✅ | Opt-in scene baking: full placed scene graph resolved to world-space, triangulated, GLB-ready — in all five languages |
@@ -58,6 +58,7 @@ OpenSKP is the **first and only** open-source, cross-platform toolkit for Sketch
 | **Dynamic Components** | ✅ | Extracts dynamic component attribute key-value pairs for both modern (2021+) and legacy (2013–2020) files, in all five languages |
 | **Observability** | ✅ | Opt-in progress reporting + structured, location-carrying parse errors — see [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md) |
 | **Convert to GLB / OBJ / STL / PLY / DXF 3D / IFC4 / JSON** | ✅ | Native, from-scratch conversion to glTF (GLB), Wavefront OBJ, STL, PLY, DXF 3D (AutoCAD Polyface Mesh), IFC4 (BIM), and JSON metadata — available in all five languages, no third-party CAD/BIM SDK involved — see [Export capabilities](docs/DEVELOPER_GUIDE.md#export-capabilities) |
+| **Convert to Fragments (.frag)** | 🐍 | Direct SketchUp → [ThatOpen Fragments](https://github.com/ThatOpen/engine_fragment) export for BIM web viewers, no IFC intermediate. **Python only, not on PyPI yet** — install from the [tagged GitHub release](https://github.com/iamahsanmehmood/openskp/releases/tag/preview-python-v1.3.0). See [Fragments export](docs/DEVELOPER_GUIDE.md#fragments-export) and [ROADMAP.md](ROADMAP.md) for what's still Python-only |
 | **Write native `.skp` files** | ✅ | Build new `.skp` files from scratch — geometry (including genuine circular/arc curves, freeform polylines, faces with holes cut out, and non-planar auto-triangulation), solid/textured materials, layers, nested component definitions and groups, instance rotation/visibility, and custom attribute dictionaries. No SDK involved — every feature validated against the real SketchUp SDK, in all five languages. See [Write capabilities](docs/DEVELOPER_GUIDE.md#write-capabilities) |
 | **Edit existing `.skp` files** | ✅ | Load an existing legacy-format file and extend it — reuses its materials, layers, and component definitions, adds new geometry or instances, and saves a new file. All five languages. See [Editing an existing file](docs/DEVELOPER_GUIDE.md#editing-an-existing-file) |
 | **Generate rebuild code from a file** | ✅ | Turn a parsed `.skp` file into a human-readable, re-runnable source-code transcript that calls the same language's own writer API to rebuild it — materials, textures, layers, nested definitions, holes, instance-level paint and names. All five languages. See [Generating code from a file](docs/DEVELOPER_GUIDE.md#generating-code-from-a-file) |
@@ -94,8 +95,10 @@ Using OpenSKP in your own project? [Open an issue](https://github.com/iamahsanme
 All five languages parse both the modern VFF (2021+) and classic MFC
 (2013–2020) `.skp` containers, and support the same opt-in scene-baking
 (`buildScene()`) and observability APIs. See the
-[Developer Guide](docs/DEVELOPER_GUIDE.md) for the full picture, including
-where the five ports currently differ.
+[Developer Guide](docs/DEVELOPER_GUIDE.md) for the full picture, and
+[docs/LANGUAGE_PARITY.md](docs/LANGUAGE_PARITY.md) for exactly where the
+five ports currently differ — kept current as ports land, not a one-time
+snapshot.
 
 ---
 
@@ -546,6 +549,8 @@ The full source for each topic also lives here as plain Markdown:
 | Document | Description |
 |:---------|:------------|
 | [Developer Guide](docs/DEVELOPER_GUIDE.md) | **Start here.** The detailed, verified cross-language guide — API, memory/performance, legacy format, error handling, and known differences between the five ports |
+| [Language Parity](docs/LANGUAGE_PARITY.md) | Exactly which features are in every language vs. Python-only today, kept current as ports land |
+| [Roadmap](ROADMAP.md) | What's next, what's known-broken, and where to start if you want to contribute |
 | [AI-Generated Models](docs/AI_MODELING.md) | Why OpenSKP's writer works well as an AI coding-agent target, real generated examples, and open directions for contributors |
 | [Observability Guide](docs/OBSERVABILITY.md) | Progress reporting + structured errors, in depth |
 | [Binary Format Spec](docs/BINARY_FORMAT.md) | Reverse-engineered VFF / TLV format documentation |

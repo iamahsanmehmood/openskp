@@ -26,6 +26,7 @@ others, that's stated plainly rather than smoothed over.
 - [Observability: progress and errors](#observability)
 - [Error handling](#error-handling)
 - [Export capabilities](#export-capabilities)
+  - [Fragments export](#fragments-export) — Python only, not on PyPI yet
 - [Write capabilities](#write-capabilities)
 - [The web viewer](#the-web-viewer)
 - [Known cross-language differences](#known-cross-language-differences)
@@ -408,6 +409,79 @@ OBJ variant — say, with per-primitive groups or vertex normals the
 built-in writer omits — is only a short loop over `scene.glbPrimitives`
 away in any language, but the built-in exporters above cover the common
 case without writing that loop yourself.
+
+### Fragments export
+
+> **Python only, and not on PyPI yet.** See
+> [ROADMAP.md](../ROADMAP.md#cross-language-porting-backlog) for the other
+> 4 languages' status and
+> [docs/LANGUAGE_PARITY.md](LANGUAGE_PARITY.md) for the full parity picture.
+> Install with:
+> ```bash
+> pip install "openskp[fragments] @ git+https://github.com/iamahsanmehmood/openskp.git@preview-python-v1.3.0#subdirectory=packages/python"
+> ```
+
+`openskp.export.fragments` writes [ThatOpen's Fragments](https://github.com/ThatOpen/engine_fragment)
+format — a public FlatBuffers-based binary format designed for fast loading
+in BIM web viewers (`@thatopen/fragments`) — directly from an
+`InstancedScene`, with no IFC intermediate step:
+
+```python
+from openskp import SkpFile
+from openskp.export import fragments
+from openskp.instanced_scene import build_instanced_scene
+
+skp = SkpFile.open("model.skp")
+skp.parse()
+scene = build_instanced_scene(skp)
+
+fragments.export(scene, "output.frag")          # writes the file directly
+data = fragments.to_fragments(scene, raw=True)   # or get the raw flatbuffer bytes
+```
+
+Requires the optional `fragments` extra (`pip install openskp[fragments]`,
+pulls in `flatbuffers>=24.0`). `raw=False` (the default) produces the
+zlib-compressed container `@thatopen/fragments` expects from a file on disk;
+`raw=True` returns the uncompressed flatbuffer directly, matching how the
+loader auto-detects either.
+
+What's carried through from the source `.skp` file:
+
+- **Real nested spatial hierarchy** — matches the source file's own
+  component nesting (a component with both its own geometry and a nested
+  sub-component instance gets both correctly represented), not a flattened
+  list.
+- **Display names** — the same name-resolution priority
+  `build_instanced_scene()` already uses (third-party plugin attribute
+  dictionaries' `name`/`label`/`code`, falling back to the component
+  definition name), written in the same `["Name", value, "STRING"]`
+  attribute convention the real `IfcImporter` uses for its own name field —
+  so a viewer that already knows how to read an IFC-derived `.frag` file's
+  names reads a directly-exported one the same way.
+- **Per-item GUIDs** — the source file's real per-instance SketchUp GUID
+  when available (VFF/2021+ files' `6819` tag), a stable synthetic GUID
+  otherwise (legacy pre-2021 files have no equivalent field to read).
+- **Non-unit scale and mirrored instances** — baked directly into the
+  geometry (Fragments' `Transform` struct has no scale field at all, unlike
+  glTF), with shells still deduplicated by `(resource, primitive, baked
+  scale)` so instances sharing the same non-unit scale still share geometry.
+- **Per-layer default visibility** — via a `Model.metadata` JSON sidecar
+  (see the callout below — this is *not* part of the public Fragments
+  schema).
+
+**Known limitations, stated plainly, not glossed over:**
+
+- The Fragments schema has no native visibility field anywhere. There is no
+  way to make this "just read the file correctly" — any consumer needs to
+  know to read `Model.metadata`'s JSON for per-layer hidden state, a
+  convention this project defined for this purpose, not a public part of
+  the format.
+- `Model.guid` — the single model-level identifier, distinct from each
+  item's own per-instance guid above — is still an unpopulated placeholder.
+- Only Python has this today. A community TypeScript port is open
+  ([PR #276](https://github.com/iamahsanmehmood/openskp/pull/276)) but its
+  required CI lint check is currently failing, so it isn't usable yet.
+  .NET, Dart, and C++ have no work started on this.
 
 ## Write capabilities
 

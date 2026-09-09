@@ -36,6 +36,7 @@ This project follows the [Contributor Covenant v2.1](CODE_OF_CONDUCT.md). By par
 |:---------|:------------|
 | Python | Python 3.10+, pip |
 | TypeScript | Node.js 18+, npm or pnpm |
+| .NET | .NET SDK 8.0+ |
 | Dart | Dart SDK 3.0+ |
 | C++ | CMake 3.21+, a C++17 compiler |
 | All | Git, a good hex editor (recommended) |
@@ -61,7 +62,7 @@ git clone https://github.com/iamahsanmehmood/openskp.git
 cd openskp
 
 # Create and activate a virtual environment
-cd python
+cd packages/python
 python -m venv .venv
 
 # Linux / macOS
@@ -74,18 +75,27 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 ```
 
-### TypeScript (Coming Soon)
+### TypeScript
 
 ```bash
-cd typescript
+cd packages/typescript
 npm install
+npm test
 ```
 
-### Dart (Planned)
+### .NET
 
 ```bash
-cd dart
+cd packages/dotnet/OpenSkp.Tests
+dotnet test
+```
+
+### Dart
+
+```bash
+cd packages/dart
 dart pub get
+dart test
 ```
 
 ### C++
@@ -103,7 +113,7 @@ ctest --test-dir build/cpp --output-on-failure
 ### Python
 
 ```bash
-cd python
+cd packages/python
 
 # Run the full test suite
 pytest
@@ -118,9 +128,12 @@ pytest tests/test_tlv_parser.py
 pytest -k "test_vertex"
 ```
 
+See [Development Setup](#development-setup) above for the equivalent test
+commands in TypeScript, .NET, Dart, and C++.
+
 ### Test Fixtures
 
-Test SKP files are stored in `python/tests/fixtures/`. If you need to add new test files:
+Test SKP files are stored in `packages/python/tests/fixtures/`. If you need to add new test files:
 
 1. Keep them small (< 1 MB if possible)
 2. Document what each test file contains
