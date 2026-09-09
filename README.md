@@ -15,6 +15,7 @@
 [![Pub](https://img.shields.io/pub/v/openskp.svg?logo=dart&logoColor=white&label=pub.dev)](https://pub.dev/packages/openskp)
 [![C++](https://img.shields.io/github/v/release/iamahsanmehmood/openskp?filter=cpp-v*&logo=cplusplus&logoColor=white&label=cpp)](https://github.com/iamahsanmehmood/openskp/releases?q=cpp-)
 [![GitHub Stars](https://img.shields.io/github/stars/iamahsanmehmood/openskp?style=social)](https://github.com/iamahsanmehmood/openskp)
+[![NEW: Fragments export](https://img.shields.io/badge/NEW-Fragments%20(.frag)%20export%2C%20Python-3ecf8e)](docs/DEVELOPER_GUIDE.md#fragments-export)
 
 ---
 
@@ -37,6 +38,8 @@ OpenSKP is the **first and only** open-source, cross-platform toolkit for Sketch
 **Generating code** turns a parsed file into a source-code transcript instead of an opaque binary: `openskp.to_python_code()` / `toTypeScriptCode()` / `Codegen.ToCSharpCode()` / `toDartCode()` / `to_cpp_code()` walks a model and emits human-readable, re-runnable source that calls the same language's own writer API to rebuild an equivalent file — materials (including textures with explicit UV pins), layers, nested definitions in dependency order, faces with holes, and instance-level paint and names. Useful for handing a real model to an AI coding agent as editable starting code, or getting a diffable, reviewable text representation of a `.skp` file. See [Generating code from a file](docs/DEVELOPER_GUIDE.md#generating-code-from-a-file).
 
 **Converting** puts reading and writing together: OpenSKP is a genuine **SketchUp file converter**, not just a parser with an export bolt-on. Every one of the five languages natively converts a `.skp` file to **7 formats** — glTF (GLB), Wavefront OBJ/MTL, STL, PLY, DXF 3D (AutoCAD), IFC4 (BIM), and JSON — with no third-party CAD/BIM SDK involved, and the DXF converter specifically verified against real desktop AutoCAD, not just lenient readers. Converting `.skp` *into* other formats is fully shipped today; converting *other* formats into `.skp` (glTF/IFC/OBJ → SketchUp) is a planned future direction built on the now-mature writer, not yet under way.
+
+**🆕 Direct BIM export (Fragments)** — the newest capability: `openskp.export.fragments` converts a `.skp` file straight to [ThatOpen's Fragments](https://github.com/ThatOpen/engine_fragment) (`.frag`) format, the FlatBuffers-based format real BIM web viewers (`@thatopen/fragments`) load — with **no IFC intermediate step**, eliminating the slow downstream re-parse a viewer would otherwise pay for. **Python only today, and not on PyPI yet** — a real, fully tested, tagged [GitHub release](https://github.com/iamahsanmehmood/openskp/releases/tag/preview-python-v1.3.0), installable by pinning the tag directly. See [Fragments export](docs/DEVELOPER_GUIDE.md#fragments-export) for the full API and known limitations, stated plainly.
 
 > [!IMPORTANT]
 > This project was built by reverse engineering a proprietary binary format. It is not affiliated with or endorsed by Trimble Inc. or SketchUp.
