@@ -19,6 +19,7 @@ them.
 from __future__ import annotations
 
 import logging
+import re
 import time
 from array import array
 from dataclasses import dataclass, field
@@ -38,12 +39,26 @@ _PROGRESS_INTERVAL = 500
 INCHES_TO_MM = 25.4
 INCHES_TO_M = 0.0254
 
+# See openskp.instanced_scene._is_generic_definition_name - same pattern,
+# duplicated rather than cross-imported since instanced_scene.py already
+# imports from this module and a name-resolution helper isn't worth a
+# shared-utility module of its own for one regex.
+_GENERIC_DEFINITION_NAME_RE = re.compile(r"^(?:Group|Component)\d*#\d+$")
+
+
+def _is_generic_definition_name(name: str) -> bool:
+    return bool(_GENERIC_DEFINITION_NAME_RE.match(name))
+
 
 @dataclass
 class InstanceNode:
     """One node in the baked, world-space instance tree."""
 
     name: str = ""
+    # See openskp.instanced_scene.InstancedNode.name_is_generated - same
+    # meaning: True when `name` is a fallback this project generated,
+    # rather than a real name from the source file.
+    name_is_generated: bool = False
     definition_name: str = ""
     layer: str = ""
     position_mm: Tuple[float, float, float] = (0.0, 0.0, 0.0)
@@ -477,8 +492,18 @@ def build_scene(parsed: Dict[str, Any]) -> Scene:
             # every instance of that profile), not a real per-instance
             # identifier, and using it here would collide different
             # instances' path_updates entries onto each other.
-            inst_name = inst["name"] or f"Component_{ref_idx}"
+            def_name = (defs_dict.get(ref_idx) or {}).get("name") or ""
+            # Same fallback order as openskp.instanced_scene: attribute-dict
+            # override, then the instance's own name, then the definition's
+            # own name if it's not itself an auto-generated "Group#1"-style
+            # placeholder, then finally the internal index.
+            inst_name = inst["name"] or (
+                def_name if def_name and not _is_generic_definition_name(def_name) else ""
+            ) or f"Component_{ref_idx}"
             display_name = name_override or inst_name
+            name_is_generated = not (name_override or inst["name"] or (
+                def_name and not _is_generic_definition_name(def_name)
+            ))
             full_path_name = f"{path_name} / {inst_name}"
             instance_counter[0] += 1
             if instance_counter[0] % _PROGRESS_INTERVAL == 0:
@@ -499,7 +524,8 @@ def build_scene(parsed: Dict[str, Any]) -> Scene:
 
             inst_info = InstanceNode(
                 name=display_name,
-                definition_name=(defs_dict.get(ref_idx) or {}).get("name") or "",
+                name_is_generated=name_is_generated,
+                definition_name=def_name,
                 layer=l_name,
                 position_mm=(round(tx, 2), round(ty, 2), round(tz, 2)),
                 properties=properties,

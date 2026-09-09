@@ -455,8 +455,12 @@ class TestToFragmentsScaleAndMirror:
 
 class TestSpatialStructure:
     """The exported spatial_structure must reproduce the source scene's
-    real component nesting - a pure organizational group/container (no
-    geometry of its own) wraps its children with no local_id; a leaf with
+    real component nesting - a container with no geometry of its own
+    still gets a local_id (and therefore a Name/GUID other tools can look
+    up) when it has a real name, since that's the only place a wrapper
+    like a SketchUp group named "W-2" can attach its own identity; a
+    truly generic/unnamed container (name_is_generated=True) gets no
+    local_id, same as before this distinction existed. A leaf with
     geometry gets the local_id matching its own sample's item index; a
     node with BOTH its own geometry AND children (a component that has
     faces of its own plus a nested sub-component) gets both."""
@@ -466,38 +470,50 @@ class TestSpatialStructure:
                                           variant_key="1|x", primitives=[_box_primitive()])
         leaf_a = InstancedNode(name="LeafA", layer="Framing", matrix=IDENTITY, mesh_resource_id="mesh_0")
         leaf_b = InstancedNode(name="LeafB", layer="Framing", matrix=IDENTITY, mesh_resource_id="mesh_0")
-        # Pure container: no geometry of its own, just wraps LeafB.
+        # Named container: no geometry of its own, just wraps LeafB - but
+        # has a real name, so it should still become a trackable item.
         inner_group = InstancedNode(name="InnerGroup", layer="Layer0", matrix=IDENTITY,
                                      mesh_resource_id=None, children=[leaf_b])
         # Mixed node: has its OWN geometry AND a nested child.
         mixed = InstancedNode(name="Mixed", layer="Framing", matrix=IDENTITY,
                                mesh_resource_id="mesh_0", children=[inner_group])
-        root = InstancedNode(name="ROOT", layer="Layer0", matrix=IDENTITY, children=[leaf_a, mixed])
+        leaf_c = InstancedNode(name="LeafC", layer="Framing", matrix=IDENTITY, mesh_resource_id="mesh_0")
+        # Generic container: no geometry, no real name - nobody in
+        # SketchUp named this group, so it should stay a plain nesting
+        # level with no local_id of its own, exactly like before.
+        generic_group = InstancedNode(name="Component_9", name_is_generated=True, layer="Layer0",
+                                       matrix=IDENTITY, mesh_resource_id=None, children=[leaf_c])
+        root = InstancedNode(name="ROOT", layer="Layer0", matrix=IDENTITY,
+                              children=[leaf_a, mixed, generic_group])
         return InstancedScene(
             bounds=None, scene_hierarchy=root, mesh_resources=[resource],
             gltf_materials=[{"pbrMetallicRoughness": {"baseColorFactor": [1, 1, 1, 1]}}],
             textures=[],
         )
 
-    def test_pure_container_wraps_children_with_no_local_id(self):
+    def test_named_container_gets_a_local_id_generic_one_does_not(self):
         scene = self._nested_scene()
         data = fragments.to_fragments(scene, raw=True)
         model = Model.GetRootAsModel(bytearray(data), 0)
 
         root_node = model.SpatialStructure()
-        # root -> [LeafA, Mixed]
-        assert root_node.ChildrenLength() == 2
+        # root -> [LeafA, Mixed, GenericGroup]
+        assert root_node.ChildrenLength() == 3
         assert root_node.LocalId() is None  # ROOT is never itself an item
         mixed_node = root_node.Children(1)
         assert mixed_node.LocalId() is not None  # Mixed has its own geometry
         assert mixed_node.ChildrenLength() == 1
 
         inner_group_node = mixed_node.Children(0)
-        assert inner_group_node.LocalId() is None  # pure container, no geometry
+        assert inner_group_node.LocalId() is not None  # named container - now a trackable item
         assert inner_group_node.ChildrenLength() == 1
 
         leaf_b_node = inner_group_node.Children(0)
         assert leaf_b_node.LocalId() is not None
+
+        generic_group_node = root_node.Children(2)
+        assert generic_group_node.LocalId() is None  # no real name - stays a plain nesting level
+        assert generic_group_node.ChildrenLength() == 1
 
     def test_leaf_local_ids_match_their_own_sample_item_index(self):
         scene = self._nested_scene()
@@ -507,15 +523,21 @@ class TestSpatialStructure:
         root_node = model.SpatialStructure()
         leaf_a_node = root_node.Children(0)
         mixed_node = root_node.Children(1)
-        leaf_b_node = mixed_node.Children(0).Children(0)
+        inner_group_node = mixed_node.Children(0)
+        leaf_b_node = inner_group_node.Children(0)
+        leaf_c_node = root_node.Children(2).Children(0)
 
-        # 3 geometry-bearing nodes were walked in this order: LeafA,
-        # Mixed, LeafB - local_ids/meshes_items assign item indices 0,1,2
-        # in that same traversal order.
+        # Pre-order walk assigns item indices as each tracked node (mesh
+        # leaf OR named container) is first visited: LeafA, Mixed,
+        # InnerGroup (named, no mesh), LeafB, LeafC - GenericGroup itself
+        # is skipped (no real name), so LeafC's index follows straight
+        # from LeafB's rather than leaving a gap for it.
         assert leaf_a_node.LocalId() == 0
         assert mixed_node.LocalId() == 1
-        assert leaf_b_node.LocalId() == 2
-        assert model.LocalIdsLength() == 3  # only geometry-bearing nodes are tracked items
+        assert inner_group_node.LocalId() == 2
+        assert leaf_b_node.LocalId() == 3
+        assert leaf_c_node.LocalId() == 4
+        assert model.LocalIdsLength() == 5
 
     def test_category_reflects_each_nodes_own_layer(self):
         scene = self._nested_scene()

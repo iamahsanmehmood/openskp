@@ -130,20 +130,37 @@ _IDENTITY_MATRIX: Tuple[float, ...] = (
 
 def _collect_leaves(scene: "InstancedScene"):
     """Walk the instanced scene's tree, accumulating each node's GLOBAL
-    (world) transform, and return every leaf that actually carries
-    geometry as ``(node, world_matrix)`` - the node itself (not just its
+    (world) transform, and return every node worth tracking as its own
+    item - "leaf" in the geometry sense (carries a mesh) OR a real, named
+    organizational wrapper with no geometry of its own (e.g. a SketchUp
+    group like "W-2" that only exists to hold several separately-meshed
+    parts) - as ``(node, world_matrix)``. The node itself (not just its
     fields) is kept so the spatial-structure builder can later look up
-    which item index a given tree node was assigned, by identity."""
+    which item index a given tree node was assigned, by identity.
+
+    Without the second case, a real, meaningfully-named wrapper has
+    nowhere to attach its own Name/GUID at all: `build_spatial_node` only
+    gives a node a `local_id` (and therefore a place for `getItemsData` to
+    find a Name) when it's one of these tracked items, so a wrapper with
+    no geometry of its own would show up in a viewer's tree only as its
+    bare category ("wall"), never as "W-2" - exactly the gap this
+    function closes. A wrapper with no real name (an anonymous SketchUp
+    group nobody named, `name_is_generated=True`) is deliberately excluded
+    - it stays a plain, id-less nesting level in the spatial structure,
+    same as before, rather than becoming a noisy, meaninglessly-named item.
+    """
     leaves: List[Tuple[object, Tuple[float, ...]]] = []
+    root = scene.scene_hierarchy
 
     def walk(node, parent_matrix):
         world = _mat4_mul(parent_matrix, node.matrix)
-        if node.mesh_resource_id is not None:
+        is_named_wrapper = node is not root and not node.name_is_generated
+        if node.mesh_resource_id is not None or is_named_wrapper:
             leaves.append((node, world))
         for child in node.children:
             walk(child, world)
 
-    walk(scene.scene_hierarchy, _IDENTITY_MATRIX)
+    walk(root, _IDENTITY_MATRIX)
     return leaves
 
 
@@ -378,6 +395,13 @@ def to_fragments(scene: "InstancedScene", *, raw: bool = False) -> bytes:
     categories: List[str] = []
     names: List[str] = []
     guids: List[str] = []
+    # GUIDs of items whose `names` entry is a fallback this project
+    # generated (no real name anywhere in the source file), not something
+    # a person or plugin actually named - see
+    # InstancedNode.name_is_generated. Carried in Model.metadata below,
+    # same mechanism as layer_hidden, since the public Fragments schema
+    # has no field for this either.
+    generated_name_guids: List[str] = []
     sample_material: List[int] = []
     sample_representation: List[int] = []
     meshes_items: List[int] = []
@@ -390,10 +414,17 @@ def to_fragments(scene: "InstancedScene", *, raw: bool = False) -> bytes:
 
     for item_index, (node, world_matrix) in enumerate(leaves):
         resource_id = node.mesh_resource_id
-        res = resource_by_id.get(resource_id)
-        if res is None:
+        res = resource_by_id.get(resource_id) if resource_id is not None else None
+        # A node with no mesh_resource_id at all is a real, named
+        # organizational wrapper (see _collect_leaves) - tracked as an item
+        # so it gets a Name/GUID, but with zero geometry samples of its
+        # own. A node that DID declare a resource_id but it's missing from
+        # resource_by_id is the original error case (a real geometry leaf
+        # whose resource never got baked) - skip it as before, since
+        # silently tracking it as a nameless, geometry-less item would
+        # hide that bug rather than surface it.
+        if resource_id is not None and res is None:
             continue
-        pos, x_dir, y_dir, scale, mirrored = _decompose_trs(world_matrix)
         local_ids.append(item_index)
         categories.append(node.layer or "Layer0")
         names.append(node.name or "")
@@ -406,13 +437,18 @@ def to_fragments(scene: "InstancedScene", *, raw: bool = False) -> bytes:
         # index-for-index) silently get an empty map otherwise, since a
         # zero-length guids vector zips to nothing regardless of how many
         # real items exist.
-        guids.append(node.guid or f"openskp-{item_index}")
+        item_guid = node.guid or f"openskp-{item_index}"
+        guids.append(item_guid)
+        if node.name_is_generated:
+            generated_name_guids.append(item_guid)
         item_index_by_node_id[id(node)] = item_index
-        for prim_idx, prim in enumerate(res.primitives):
-            sample_material.append(get_material_index(prim.material_index))
-            sample_representation.append(get_or_bake_shell(resource_id, prim_idx, prim, scale, mirrored))
-            meshes_items.append(item_index)
-            global_transform_data.append((pos, x_dir, y_dir))
+        if res is not None:
+            pos, x_dir, y_dir, scale, mirrored = _decompose_trs(world_matrix)
+            for prim_idx, prim in enumerate(res.primitives):
+                sample_material.append(get_material_index(prim.material_index))
+                sample_representation.append(get_or_bake_shell(resource_id, prim_idx, prim, scale, mirrored))
+                meshes_items.append(item_index)
+                global_transform_data.append((pos, x_dir, y_dir))
 
     n_samples = len(sample_material)
 
@@ -559,7 +595,10 @@ def to_fragments(scene: "InstancedScene", *, raw: bool = False) -> bytes:
     # external_cladding_1" category that was off by default in
     # SketchUp/FrameBuilder, instead of requiring every viewer session to
     # manually re-discover and re-toggle it).
-    metadata_off = builder.CreateString(json.dumps({"layer_hidden": scene.layer_hidden}))
+    metadata_off = builder.CreateString(json.dumps({
+        "layer_hidden": scene.layer_hidden,
+        "generated_name_guids": generated_name_guids,
+    }))
 
     # Spatial structure: one SpatialStructure node per InstancedNode in
     # the ORIGINAL tree (not just leaves), so real component nesting -
