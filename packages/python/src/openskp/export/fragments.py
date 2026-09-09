@@ -411,6 +411,30 @@ def to_fragments(scene: "InstancedScene", *, raw: bool = False) -> bytes:
     # structure builder below to place a leaf's local_id at its real
     # position in the tree instead of flattening everything under one root.
     item_index_by_node_id: Dict[int, int] = {}
+    # Real-world SketchUp files can carry a non-unique per-instance GUID:
+    # an engineer authors one instance (a framing plugin writes its own
+    # identity into that instance's attribute dictionary), then duplicates
+    # it 10-20 times via SketchUp's own native Copy/Move+Copy/Array tools
+    # instead of re-running the plugin per placement. A plain SketchUp
+    # entity duplication carries the source instance's attribute
+    # dictionaries - and whatever GUID field a plugin wrote into one - to
+    # every copy verbatim; each copy gets its own distinct transform but
+    # not its own distinct identity (confirmed against a real production
+    # file: 74 distinct GUID values each shared by exactly 17 different
+    # physical instances, cross-checked with a second real file from the
+    # same pipeline that has zero duplicates - openskp#290). A GUID that
+    # doesn't uniquely identify its instance is exactly as broken as one
+    # that's missing entirely for any GUID-keyed lookup (a viewer's
+    # "select every member of this assembly" resolves a GUID back to a
+    # scene item via a map that can only hold one value per key - 16 of
+    # 17 colliding instances silently overwrite each other, and every
+    # click on any of them resolves to whichever was registered last).
+    # Reuses the exact same synthetic-fallback mechanism already used for
+    # a genuinely missing GUID, just triggered on a second (or third...)
+    # sighting of the same value instead of only on emptiness - the first
+    # instance to claim a real GUID keeps it, every later instance sharing
+    # that same value falls back to a synthetic one instead.
+    seen_guids: set = set()
 
     for item_index, (node, world_matrix) in enumerate(leaves):
         resource_id = node.mesh_resource_id
@@ -429,15 +453,21 @@ def to_fragments(scene: "InstancedScene", *, raw: bool = False) -> bytes:
         categories.append(node.layer or "Layer0")
         names.append(node.name or "")
         # Real SketchUp instance GUID when the source file carries one
-        # (VFF/2021+); a stable synthetic fallback otherwise (legacy-format
-        # files don't currently expose a per-instance GUID). Either way,
-        # every tracked item gets a non-empty, unique-within-this-export
-        # identifier - consumers keyed on GUID<->local_id parity (e.g. a
-        # viewer's own id-bridge, zipping Model.guids against Model.local_ids
+        # (VFF/2021+) AND it hasn't already been claimed by an earlier
+        # item in this same export (see seen_guids above); a stable
+        # synthetic fallback otherwise (legacy-format files don't
+        # currently expose a per-instance GUID, and a duplicate real GUID
+        # is treated the same as a missing one). Either way, every tracked
+        # item gets a non-empty, unique-within-this-export identifier -
+        # consumers keyed on GUID<->local_id parity (e.g. a viewer's own
+        # id-bridge, zipping Model.guids against Model.local_ids
         # index-for-index) silently get an empty map otherwise, since a
         # zero-length guids vector zips to nothing regardless of how many
-        # real items exist.
-        item_guid = node.guid or f"openskp-{item_index}"
+        # real items exist - and a collided (non-unique) GUID breaks that
+        # same lookup just as thoroughly as an empty one would.
+        raw_guid = node.guid or ""
+        item_guid = raw_guid if raw_guid and raw_guid not in seen_guids else f"openskp-{item_index}"
+        seen_guids.add(item_guid)
         guids.append(item_guid)
         if node.name_is_generated:
             generated_name_guids.append(item_guid)

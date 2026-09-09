@@ -191,6 +191,45 @@ class TestToFragmentsGuids:
         assert model.GuidsLength() == 1
         assert model.Guids(0).decode() == real_guid
 
+    def test_a_duplicated_source_guid_does_not_collide(self):
+        """openskp#290: SketchUp's own native Copy/Move+Copy/Array tools
+        carry an instance's attribute dictionaries - and whatever GUID a
+        framing plugin wrote into one - to every copy verbatim, so a real
+        file can have several DIFFERENT physical instances all sharing the
+        exact same non-empty InstancedNode.guid. The first instance to
+        claim a real GUID keeps it; every later instance sharing that same
+        value must fall back to a synthetic one instead of silently
+        colliding - a collision breaks any GUID-keyed lookup exactly like
+        a missing GUID would (see test_items_without_a_source_guid_get_a_
+        unique_synthetic_one above), just with real, non-obviously-wrong-
+        looking values instead of an empty string."""
+        resource = InstancedMeshResource(
+            id="mesh_0", definition_id=1, definition_name="Truss",
+            variant_key="1|255,255,255", primitives=[_box_primitive()],
+        )
+        duplicated_guid = "F160C36229782F47A9857FC88DD1F2CB"
+        nodes = [
+            InstancedNode(
+                name=f"Truss{i}", layer="Framing", matrix=IDENTITY,
+                mesh_resource_id="mesh_0", guid=duplicated_guid,
+            )
+            for i in range(3)
+        ]
+        root = InstancedNode(name="ROOT", matrix=IDENTITY, children=nodes)
+        scene = InstancedScene(
+            bounds=None, scene_hierarchy=root, mesh_resources=[resource],
+            gltf_materials=[{"pbrMetallicRoughness": {"baseColorFactor": [1.0, 1.0, 1.0, 1.0]}}],
+            textures=[],
+        )
+        data = fragments.to_fragments(scene, raw=True)
+        model = Model.GetRootAsModel(bytearray(data), 0)
+
+        assert model.GuidsLength() == 3
+        guids = [model.Guids(i).decode() for i in range(3)]
+        assert len(set(guids)) == 3  # never duplicated, even though the source was
+        assert duplicated_guid in guids  # the first claimant keeps the real value
+        assert guids.count(duplicated_guid) == 1  # but only the first one
+
     def test_shell_geometry_matches_the_source_primitive(self):
         scene = _make_two_instance_scene()
         data = fragments.to_fragments(scene, raw=True)
