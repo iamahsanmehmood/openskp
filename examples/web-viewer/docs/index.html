@@ -228,6 +228,7 @@ code[class*="language-"]{font-family:var(--font-code)!important;font-size:12.5px
   <a class="mnav-item" href="#observability"><svg viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>Observability</a>
   <a class="mnav-item" href="#errors"><svg viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>Errors</a>
   <a class="mnav-item" href="#export"><svg viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>Convert</a>
+  <a class="mnav-item" href="#fragments"><svg viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>Fragments</a>
   <a class="mnav-item" href="#viewer"><svg viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>Viewer</a>
   <a class="mnav-item" href="#differences"><svg viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="12" r="7"></circle><circle cx="15" cy="12" r="7"></circle></svg>Differences</a>
   <a class="mnav-item" href="#contributing"><svg viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>Contributing</a>
@@ -281,6 +282,9 @@ code[class*="language-"]{font-family:var(--font-code)!important;font-size:12.5px
     </a>
     <a class="nav-item" href="#export" onclick="setActive(this)">
       <svg class="nav-icon" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>Convert
+    </a>
+    <a class="nav-item" href="#fragments" onclick="setActive(this)">
+      <svg class="nav-icon" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>Fragments <span style="margin-left:auto;font-size:9px;font-weight:700;padding:1px 6px;border-radius:20px;background:rgba(62,207,142,0.15);color:var(--green)">NEW</span>
     </a>
     <a class="nav-item" href="#viewer" onclick="setActive(this)">
       <svg class="nav-icon" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>Web Viewer
@@ -1017,6 +1021,87 @@ ifc.export(scene, "output.ifc")
 json_export.export(model, "output.json", scene=scene)</code></pre>
       <div class="fn-desc"><strong>TypeScript:</strong> <code>toGLB</code>/<code>toOBJ</code>/<code>toSTLAscii</code>/<code>toSTLBinary</code>/<code>toPLYAscii</code>/<code>toPLYBinary</code>/<code>toDXF</code>/<code>toIFC</code>/<code>toJSON</code>, plus Node-only <code>exportOBJ</code>/<code>exportSTL</code>/<code>exportPLY</code>/<code>exportDXF</code>/<code>exportIFC</code> file writers. <strong>.NET:</strong> <code>GlbExport</code>/<code>ObjExport</code>/<code>StlExport</code>/<code>PlyExport</code>/<code>DxfExport</code>/<code>IfcExport</code>, each with a <code>.Export*</code> file-writing method, plus <code>JsonExport.ToDict</code> (in-memory only — no file-writing method). <strong>Dart:</strong> <code>toGlb</code>/<code>exportGlb</code>/<code>toObj</code>/<code>exportObj</code>/<code>toStlAscii</code>/<code>toStlBinary</code>/<code>exportStl</code>/<code>toPlyAscii</code>/<code>toPlyBinary</code>/<code>exportPly</code>/<code>toDxf</code>/<code>exportDxf</code>/<code>toIfc</code>/<code>exportIfc</code>/<code>toJson</code>. <strong>C++:</strong> <code>to_glb</code>/<code>export_glb</code>/<code>to_obj</code>/<code>export_obj</code>/<code>to_stl_ascii</code>/<code>to_stl_binary</code>/<code>export_stl</code>/<code>to_ply_ascii</code>/<code>to_ply_binary</code>/<code>export_ply</code>/<code>to_dxf</code>/<code>export_dxf</code>/<code>to_ifc</code>/<code>export_ifc</code>/<code>to_json</code>/<code>export_json</code>. TinyGLTF and miniz are private to OpenSKP's C++ package, not consumer dependencies.</div>
       <div class="callout callout-info">The DXF converter specifically is verified against real desktop AutoCAD, not just lenient DXF readers — see the <a href="https://github.com/iamahsanmehmood/openskp/blob/main/CHANGELOG.md" target="_blank" rel="noopener">Changelog</a> for the exact compatibility issues that surfaced and were fixed.</div>
+    </div>
+  </div>
+
+  <div class="fn-block">
+    <div class="fn-head"><div><div class="fn-name">IFC export: options and real flexibility (Python)</div></div></div>
+    <div class="fn-body">
+      <div class="fn-desc">The IFC exporter's real signature — every default is safe to leave alone, but each is a genuine lever, not decoration:</div>
+      <pre class="language-python"><code class="language-python">ifc.export(
+    scene,
+    "output.ifc",
+    scale=1000.0,                    # coordinate scale - default matches the millimetre unit this exporter always declares
+    schema="IFC4",                   # IFC schema version string written into the file header
+    classifier=None,                 # optional callable(name, layer) -> (STEP_ENTITY_TYPE, IFC_CLASS_NAME)
+    classify_using_full_path=False,  # opt-in: also try keyword-matching the full ancestor path
+)</code></pre>
+      <div class="fn-desc"><strong>Classification</strong> — every element needs an IFC type (<code>IfcWall</code>, <code>IfcBeam</code>, …). The built-in <code>classify_element()</code> tries the component's own name first, then its layer/tag, and falls back to an untyped <code>IfcBuildingElementProxy</code> if neither matches a known keyword. Two ways to change that:</div>
+      <pre class="language-python"><code class="language-python"># 1. Bring your own classifier entirely
+def my_classifier(name, layer):
+    if "truss" in name.lower():
+        return "IFCMEMBER", "IfcMember"
+    return "IFCBUILDINGELEMENTPROXY", "IfcBuildingElementProxy"
+
+ifc.export(scene, "output.ifc", classifier=my_classifier)
+
+# 2. Or widen the built-in classifier's search instead of replacing it
+ifc.export(scene, "output.ifc", classify_using_full_path=True)</code></pre>
+      <div class="fn-desc"><code>classify_using_full_path</code> is off by default on purpose: it matches keywords against a part's full ancestor hierarchy path (e.g. a "Stud 12" under a "Wall Frame" component would match on "Wall Frame"), which is broader and noisier than matching the part's own name/layer — good for a file where individual parts are never named or tagged usefully, but can mistype an element based on its container rather than itself. Try without it first.</div>
+      <div class="fn-desc" style="margin-top:14px"><strong>Automatic, no flag needed</strong> — two things carry through from the source file without any option to set: every attribute dictionary an instance carries (not just SketchUp's own Dynamic Component attributes) becomes its own <code>Pset_&lt;dictionary-name&gt;</code> in the IFC output, useful for third-party plugin data (steel-detailing tools, structural framing plugins) that would otherwise have no path into the exported model at all; and per-layer visibility carries through as <code>IfcPresentationLayerWithStyle.LayerOn</code>, from <code>Scene.layer_hidden</code> — currently correct for legacy (2013–2020) source files, while VFF (2021+) source files always report visible in this specific export path today, a known gap tracked on the <a href="https://github.com/iamahsanmehmood/openskp/blob/main/ROADMAP.md" target="_blank" rel="noopener">roadmap</a>.</div>
+    </div>
+  </div>
+</section>
+
+<!-- Fragments Export -->
+<section id="fragments">
+  <div class="sec-head">
+    <div class="sec-icon"><svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg></div>
+    <div>
+      <div class="sec-title">Fragments (.frag) Export <span style="display:inline-flex;vertical-align:middle;margin-left:8px;font-family:var(--font-code);font-size:11px;font-weight:700;padding:3px 9px;border-radius:20px;background:rgba(62,207,142,0.12);color:var(--green)">NEW — Python only</span></div>
+      <div class="sec-sub">Direct SketchUp → ThatOpen Fragments export for BIM web viewers, no IFC intermediate</div>
+    </div>
+  </div>
+
+  <div class="callout callout-warn">Python only, and <strong>not published to PyPI yet</strong> — a real, fully tested, tagged <a href="https://github.com/iamahsanmehmood/openskp/releases/tag/preview-python-v1.3.0" target="_blank" rel="noopener">GitHub release</a> (530 tests passing). Install with:
+  <pre class="language-bash" style="margin-top:8px"><code class="language-bash">pip install "openskp[fragments] @ git+https://github.com/iamahsanmehmood/openskp.git@preview-python-v1.3.0#subdirectory=packages/python"</code></pre>
+  </div>
+
+  <div class="fn-block">
+    <div class="fn-body">
+      <div class="fn-desc"><a href="https://github.com/ThatOpen/engine_fragment" target="_blank" rel="noopener">ThatOpen's Fragments</a> is a public, IFC-agnostic FlatBuffers binary format built for fast loading in BIM web viewers (<code>@thatopen/fragments</code>). <code>openskp.export.fragments</code> writes it directly from an <code>InstancedScene</code> — no IFC text-generation step in between, which is the whole point: it eliminates the downstream IFC re-parse a viewer would otherwise need to do.</div>
+      <pre class="language-python"><code class="language-python">from openskp import SkpFile
+from openskp.export import fragments
+from openskp.instanced_scene import build_instanced_scene
+
+skp = SkpFile.open("model.skp")
+skp.parse()
+scene = build_instanced_scene(skp)
+
+fragments.export(scene, "output.frag")          # write the file directly
+data = fragments.to_fragments(scene, raw=True)   # or get the raw flatbuffer bytes</code></pre>
+      <div class="fn-desc">Requires the optional <code>fragments</code> extra (<code>pip install openskp[fragments]</code>, pulls in <code>flatbuffers&gt;=24.0</code>). <code>raw=False</code> (the default) produces the zlib-compressed container the real loader expects from a file on disk; <code>raw=True</code> returns the uncompressed flatbuffer, matching how the loader auto-detects either.</div>
+    </div>
+  </div>
+
+  <div class="fn-block">
+    <div class="fn-head"><div><div class="fn-name">What's carried through from the source file</div></div></div>
+    <div class="fn-body">
+      <div class="fn-desc"><strong>Real nested spatial hierarchy</strong> — matches the source file's own component nesting, not a flattened list. A component with both its own geometry and a nested sub-component instance gets both correctly represented.</div>
+      <div class="fn-desc"><strong>Display names</strong> — the same priority <code>build_instanced_scene()</code> already uses (plugin attribute dictionaries' <code>name</code>/<code>label</code>/<code>code</code>, falling back to the definition name), written in the exact <code>["Name", value, "STRING"]</code> attribute convention the real <code>IfcImporter</code> uses for its own name field.</div>
+      <div class="fn-desc"><strong>Per-item GUIDs</strong> — the source file's real per-instance SketchUp GUID when available (VFF/2021+ files), a stable synthetic GUID otherwise.</div>
+      <div class="fn-desc"><strong>Non-unit scale and mirrored instances</strong> — baked into geometry, since Fragments' <code>Transform</code> struct has no scale field at all. Shells still dedupe by <code>(resource, primitive, baked scale)</code>, so instances sharing a scale still share geometry.</div>
+      <div class="fn-desc"><strong>Per-layer default visibility</strong> — via a <code>Model.metadata</code> JSON sidecar (see the limitation below — this is not part of the public Fragments schema).</div>
+    </div>
+  </div>
+
+  <div class="fn-block">
+    <div class="fn-head"><div><div class="fn-name">Known limitations — stated plainly</div></div></div>
+    <div class="fn-body">
+      <div class="fn-desc">The Fragments schema has no native visibility field anywhere. Any consumer needs to know to read <code>Model.metadata</code>'s JSON for per-layer hidden state — a convention this project defined for this purpose, not a public part of the format.</div>
+      <div class="fn-desc"><code>Model.guid</code> (the single model-level identifier, distinct from each item's own per-instance guid above) is still an unpopulated placeholder.</div>
+      <div class="fn-desc">Only Python has this today. A community TypeScript port is open (<a href="https://github.com/iamahsanmehmood/openskp/pull/276" target="_blank" rel="noopener">PR #276</a>) but its required CI check is currently failing, so it isn't usable yet. .NET, Dart, and C++ have no work started.</div>
+      <div class="fn-desc" style="margin-top:14px">Full reference: <a href="https://github.com/iamahsanmehmood/openskp/blob/main/docs/DEVELOPER_GUIDE.md#fragments-export" target="_blank" rel="noopener">DEVELOPER_GUIDE.md § Fragments export</a>. Cross-language status: <a href="https://github.com/iamahsanmehmood/openskp/blob/main/docs/LANGUAGE_PARITY.md" target="_blank" rel="noopener">LANGUAGE_PARITY.md</a>. What's next: <a href="https://github.com/iamahsanmehmood/openskp/blob/main/ROADMAP.md" target="_blank" rel="noopener">ROADMAP.md</a>.</div>
     </div>
   </div>
 </section>
