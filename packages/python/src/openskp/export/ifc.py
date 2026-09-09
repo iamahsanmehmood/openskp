@@ -330,6 +330,61 @@ def to_ifc(
     layer_items: Dict[str, List[int]] = {}
     mat_style_cache: Dict[Tuple[float, float, float, float], int] = {}
 
+    # Assembly grouping: a named organizational wrapper with no geometry of
+    # its own (e.g. FrameBuilder's "W-2" wall group, whose only children are
+    # its studs/plates/cladding) becomes a real IFCELEMENTASSEMBLY, with its
+    # member elements related to it via IFCRELAGGREGATES - mirroring the
+    # named-wrapper local-id behavior already shipped for Fragments export
+    # (export/fragments.py's _collect_leaves), so an IFC viewer's model tree
+    # groups parts under "W-2" the same way FrameSmart's own tree already
+    # does, instead of showing every part as a flat, ungrouped sibling.
+    # Keyed by InstanceNode.path, which is built with the exact same
+    # full-path string as MeshMetadata.path (see scene.py's instantiate()),
+    # so a primitive's owning node can be found by a direct dict lookup.
+    assembly_ids_by_path: Dict[str, int] = {}
+    # One list per assembly of EVERY object it directly decomposes into -
+    # both leaf member elements and nested child assemblies together, so
+    # each assembly is the RelatingObject of exactly one IFCRELAGGREGATES
+    # (some IFC consumers only look at the first such relation for a given
+    # object, so splitting members and child assemblies across two
+    # relations here would silently hide one set of them in those tools).
+    assembly_related_objects: Dict[int, List[int]] = {}
+    top_level_assembly_ids: List[int] = []
+    nearest_assembly_by_path: Dict[str, Optional[int]] = {}
+
+    def walk_assemblies(node, parent_assembly_id: Optional[int], is_root: bool = False) -> None:
+        is_assembly = not is_root and not node.name_is_generated and bool(node.children)
+        own_assembly_id = parent_assembly_id
+        if is_assembly:
+            placement_id = next_id()
+            lines.append(
+                f"#{placement_id}=IFCLOCALPLACEMENT(#{storey_placement_id},#{axis_placement_id});"
+            )
+            combined = f"{node.name} {node.layer}".lower()
+            predefined = "TRUSS" if "truss" in combined else "NOTDEFINED"
+            assembly_id = next_id()
+            lines.append(
+                f"#{assembly_id}=IFCELEMENTASSEMBLY('{generate_ifc_guid()}',#{owner_hist_id},"
+                f"'{sanitize_name(node.name)}',$,$,#{placement_id},$,$,$,.{predefined}.);"
+            )
+            if node.properties:
+                write_pset(assembly_id, "Pset_CustomProperties", node.properties)
+            for dict_name, entries in (node.attribute_dictionaries or {}).items():
+                if entries:
+                    write_pset(assembly_id, f"Pset_{dict_name}", entries)
+            if parent_assembly_id is not None:
+                assembly_related_objects.setdefault(parent_assembly_id, []).append(assembly_id)
+            else:
+                top_level_assembly_ids.append(assembly_id)
+            assembly_ids_by_path[node.path] = assembly_id
+            own_assembly_id = assembly_id
+
+        nearest_assembly_by_path[node.path] = own_assembly_id
+        for child in node.children:
+            walk_assemblies(child, own_assembly_id)
+
+    walk_assemblies(scene.scene_hierarchy, None, is_root=True)
+
     for prim in scene.glb_primitives:
         tri_count = len(prim.indices) // 3
         v_count = len(prim.positions) // 3
@@ -443,7 +498,11 @@ def to_ifc(
                 f"#{product_id}={step_type}('{prod_guid}',#{owner_hist_id},'{display_name}',$,$,#{prod_placement_id},#{prod_shape_id},$,$);"
             )
 
-        product_ids.append(product_id)
+        assembly_id = nearest_assembly_by_path.get(path_name) if path_name else None
+        if assembly_id is not None:
+            assembly_related_objects.setdefault(assembly_id, []).append(product_id)
+        else:
+            product_ids.append(product_id)
 
         # 5. Property Sets (if scene metadata contains dynamic properties)
         if meta and hasattr(meta, "properties") and isinstance(meta.properties, dict) and meta.properties:
@@ -478,9 +537,23 @@ def to_ifc(
                 f"'{l_name}',$,({item_refs}),$,{layer_on},.F.,.F.,());"
             )
 
-    # 7. Containment Relation in Spatial Hierarchy
-    if product_ids:
-        prod_refs = ",".join(f"#{pid}" for pid in product_ids)
+    # 7. Assembly Aggregation, then Containment Relation in Spatial
+    # Hierarchy. Per IFC4 semantics an element belongs to exactly one
+    # containment context: an assembly's members are related to it via
+    # IFCRELAGGREGATES (not spatially contained themselves), a nested
+    # assembly is aggregated into its parent assembly the same way, and
+    # only the outermost assemblies - alongside any genuinely ungrouped
+    # elements - are ever related to the storey via
+    # IFCRELCONTAINEDINSPATIALSTRUCTURE.
+    for assembly_id, related_ids in assembly_related_objects.items():
+        related_refs = ",".join(f"#{rid}" for rid in related_ids)
+        lines.append(
+            f"#{next_id()}=IFCRELAGGREGATES('{generate_ifc_guid()}',#{owner_hist_id},$,$,#{assembly_id},({related_refs}));"
+        )
+
+    contained_ids = product_ids + top_level_assembly_ids
+    if contained_ids:
+        prod_refs = ",".join(f"#{pid}" for pid in contained_ids)
         contain_rel_id = next_id()
         lines.append(
             f"#{contain_rel_id}=IFCRELCONTAINEDINSPATIALSTRUCTURE('{generate_ifc_guid()}',#{owner_hist_id},$,$,({prod_refs}),#{storey_id});"
