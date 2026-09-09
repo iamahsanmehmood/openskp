@@ -21,6 +21,7 @@ world-space copies.
 from __future__ import annotations
 
 import logging
+import re
 import time
 from array import array
 from dataclasses import dataclass, field
@@ -43,6 +44,17 @@ IDENTITY_GLTF: Tuple[float, ...] = (
     0.0, 0.0, 1.0, 0.0,
     0.0, 0.0, 0.0, 1.0,
 )
+
+# SketchUp's own auto-generated placeholder pattern for an unnamed
+# component/group definition ("Group#1", "Component#12", "Group86#2" for a
+# nested one) - never something a person actually typed. Used to decide
+# whether a definition's own name is worth falling back to, or just as
+# uninformative as the internal index it would otherwise fall back to.
+_GENERIC_DEFINITION_NAME_RE = re.compile(r"^(?:Group|Component)\d*#\d+$")
+
+
+def _is_generic_definition_name(name: str) -> bool:
+    return bool(_GENERIC_DEFINITION_NAME_RE.match(name))
 
 
 @dataclass
@@ -94,6 +106,13 @@ class InstancedNode:
     """
 
     name: str = ""
+    # True when `name` is a fallback this project generated (no real name
+    # anywhere - no attribute-dict override, no instance name, no
+    # meaningfully-named definition) rather than something a person or a
+    # plugin actually named. A consumer can use this to render such nodes
+    # distinctly (greyed out, routed to an "Uncategorized" bucket) instead
+    # of presenting a synthetic placeholder as if it were real data.
+    name_is_generated: bool = False
     definition_name: str = ""
     layer: str = ""
     # This instance's own persistent GUID (a real one from the source SKP
@@ -455,8 +474,20 @@ def build_instanced_scene(parsed: Dict[str, Any]) -> InstancedScene:
                         inst.get("name"), ref_idx, exc_info=True,
                     )
 
-            inst_name = inst["name"] or f"Component_{ref_idx}"
+            def_name = (defs_dict.get(ref_idx) or {}).get("name") or ""
+            # Fallback order: an attribute-dict name/label/code override,
+            # then the instance's own explicit name, then the definition's
+            # own name IF it's not itself just SketchUp's auto-generated
+            # "Group#1"/"Component#12" placeholder (no more meaningful than
+            # the internal index below), then finally the internal index -
+            # the only case with no real name anywhere in the source file.
+            inst_name = inst["name"] or (
+                def_name if def_name and not _is_generic_definition_name(def_name) else ""
+            ) or f"Component_{ref_idx}"
             display_name = name_override or inst_name
+            name_is_generated = not (name_override or inst["name"] or (
+                def_name and not _is_generic_definition_name(def_name)
+            ))
             instance_counter[0] += 1
             if instance_counter[0] % _PROGRESS_INTERVAL == 0:
                 logger.debug("Processed %d placed instances", instance_counter[0])
@@ -477,7 +508,8 @@ def build_instanced_scene(parsed: Dict[str, Any]) -> InstancedScene:
             nodes.append(
                 InstancedNode(
                     name=display_name,
-                    definition_name=(defs_dict.get(ref_idx) or {}).get("name") or "",
+                    name_is_generated=name_is_generated,
+                    definition_name=def_name,
                     layer=l_name,
                     matrix=_to_gltf_matrix(inst["matrix"]),
                     position_mm=(round(tx, 2), round(ty, 2), round(tz, 2)),
