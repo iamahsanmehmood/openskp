@@ -25,7 +25,7 @@ import re
 import time
 from array import array
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from . import _core
 from ._face_groups import FaceGroupContext, build_local_face_groups
@@ -204,7 +204,10 @@ def _mul4(a: Tuple[float, ...], b: Tuple[float, ...]) -> Tuple[float, ...]:
     return tuple(out)
 
 
-def build_instanced_scene(parsed: Dict[str, Any]) -> InstancedScene:
+def build_instanced_scene(
+    parsed: Dict[str, Any],
+    name_override_keys: Sequence[str] = ("name", "label", "code"),
+) -> InstancedScene:
     """Build an instanced scene from already-parsed raw data.
 
     Walks the same placed scene graph as :func:`openskp.scene.build_scene`
@@ -215,6 +218,9 @@ def build_instanced_scene(parsed: Dict[str, Any]) -> InstancedScene:
     Args:
         parsed: Output of ``_core.full_parse()`` (same input as
             :func:`openskp.scene.build_scene`).
+        name_override_keys: See :func:`openskp.scene.build_scene` - same
+            meaning, same default, same generic (not tied to any one
+            plugin's own dictionary name) lookup.
 
     Returns:
         A populated :class:`InstancedScene`.
@@ -463,7 +469,7 @@ def build_instanced_scene(parsed: Dict[str, Any]) -> InstancedScene:
                             k: _core._stringify_vff_attr_value(v) for k, v in entries.items()
                         }
                         if name_override is None:
-                            for key in ("name", "label", "code"):
+                            for key in name_override_keys:
                                 val = entries.get(key)
                                 if val:
                                     name_override = str(val)

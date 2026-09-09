@@ -23,7 +23,7 @@ import re
 import time
 from array import array
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from . import _core
 from ._face_groups import FaceGroupContext, build_local_face_groups
@@ -185,7 +185,10 @@ def _sniff_image_mime(data: bytes) -> Optional[str]:
     return None
 
 
-def build_scene(parsed: Dict[str, Any]) -> Scene:
+def build_scene(
+    parsed: Dict[str, Any],
+    name_override_keys: Sequence[str] = ("name", "label", "code"),
+) -> Scene:
     """Bake every instance actually placed in ``parsed`` (the output of
     :func:`openskp._core.full_parse` / ``full_parse_legacy``) into
     world-space, triangulated mesh data.
@@ -195,6 +198,15 @@ def build_scene(parsed: Dict[str, Any]) -> Scene:
             this by calling :meth:`SkpFile.parse` first is *not* required -
             :meth:`SkpFile.build_scene` re-runs the raw parse independently,
             so a plain ``parse()`` call never carries this cost.
+        name_override_keys: Attribute-dictionary key names (checked in
+            order, first match wins) that identify an instance's real,
+            plugin-assigned name - tried across every non-boilerplate
+            dictionary the instance carries, whichever third-party plugin
+            (FrameBuilder, TechSteel, or any other SketchUp extension that
+            attaches its own attribute dictionary) wrote it, not a specific
+            plugin's own dictionary name. The default covers the common
+            convention; pass your own tuple to also recognize a plugin
+            that instead uses e.g. ``"mark"`` or ``"partNumber"``.
 
     Returns:
         A populated :class:`Scene`.
@@ -480,7 +492,7 @@ def build_scene(parsed: Dict[str, Any]) -> Scene:
                             k: _core._stringify_vff_attr_value(v) for k, v in entries.items()
                         }
                         if name_override is None:
-                            for key in ("name", "label", "code"):
+                            for key in name_override_keys:
                                 val = entries.get(key)
                                 if val:
                                     name_override = str(val)

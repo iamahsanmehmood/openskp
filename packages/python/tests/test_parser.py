@@ -2859,6 +2859,35 @@ class TestBuildSceneAttributeDictionaries:
 
         assert scene.scene_hierarchy.children[0].name == "GLB-12"
 
+    def test_name_override_keys_recognizes_a_non_default_key(self) -> None:
+        """The name/label/code vocabulary is a convention, not a hardcoded
+        requirement - openskp is not FrameBuilder-specific, so any plugin
+        that instead calls its identifier field e.g. "mark" must be able to
+        opt in without forking the source."""
+        from openskp._core import _GeometryBuilder
+        from openskp.scene import build_scene
+
+        d007 = self._d007_with_dicts(
+            self._dict("techsteel-data", self._entry("mark", self._value(self._tlv("AD38", b"RT-2"))))
+        )
+        root_builder = _GeometryBuilder()
+        root_builder.instances.append(self._instance(1, "GLB-12", d007))
+        defs_dict = {
+            1: {"guid": "g1", "name": "truss_def", "builder": _GeometryBuilder()},
+            "ROOT": {"guid": "ROOT", "name": "ROOT_MODEL", "builder": root_builder},
+        }
+        parsed = self._parsed(defs_dict)
+
+        # Default vocabulary doesn't know "mark" - falls back to the
+        # instance's own real SketchUp name, same as no override at all.
+        default_scene = build_scene(parsed)
+        assert default_scene.scene_hierarchy.children[0].name == "GLB-12"
+
+        # Opting a custom plugin's key into the vocabulary picks it up,
+        # with no change to openskp's own source needed.
+        custom_scene = build_scene(parsed, name_override_keys=("mark", "name", "label", "code"))
+        assert custom_scene.scene_hierarchy.children[0].name == "RT-2"
+
     def test_extra_dictionaries_exposed_on_instance_node(self) -> None:
         from openskp._core import _GeometryBuilder
         from openskp.scene import build_scene

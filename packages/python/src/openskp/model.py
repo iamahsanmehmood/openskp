@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import pathlib
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple
 
 if TYPE_CHECKING:
     from . import instanced_scene, scene
@@ -789,7 +789,10 @@ class SkpFile:
 
         return model
 
-    def build_scene(self) -> "scene.Scene":
+    def build_scene(
+        self,
+        name_override_keys: Sequence[str] = ("name", "label", "code"),
+    ) -> "scene.Scene":
         """Bake every instance actually placed in the model into
         world-space, triangulated mesh data - SketchUp's component/group
         nesting fully resolved and flattened, ready for a GLB export or any
@@ -803,6 +806,18 @@ class SkpFile:
         instances, the baked output can be far larger than the file's raw
         geometry - that's the reason this isn't part of :meth:`parse`.
 
+        Args:
+            name_override_keys: Attribute-dictionary key names (checked in
+                order, first match wins) that identify an instance's real,
+                plugin-assigned name. This is deliberately generic, not
+                tied to any one SketchUp extension: it's tried across
+                *every* non-boilerplate attribute dictionary an instance
+                carries, whichever plugin (FrameBuilder, TechSteel, or any
+                other tool that attaches its own dictionary) wrote it. The
+                default ``("name", "label", "code")`` covers the common
+                convention - pass your own tuple if your plugin instead
+                uses a key like ``"mark"`` or ``"partNumber"``.
+
         Returns:
             A populated :class:`openskp.scene.Scene`.
         """
@@ -810,9 +825,12 @@ class SkpFile:
         from . import scene as _scene
 
         parsed = _core.full_parse(str(self.path))
-        return _scene.build_scene(parsed)
+        return _scene.build_scene(parsed, name_override_keys=name_override_keys)
 
-    def build_instanced_scene(self) -> "instanced_scene.InstancedScene":
+    def build_instanced_scene(
+        self,
+        name_override_keys: Sequence[str] = ("name", "label", "code"),
+    ) -> "instanced_scene.InstancedScene":
         """Build the placed scene graph with SketchUp's component/group
         INSTANCING PRESERVED, instead of baked into world-space vertex data.
 
@@ -826,6 +844,11 @@ class SkpFile:
         Same separate, opt-in re-parse as :meth:`build_scene` - see that
         method's docstring.
 
+        Args:
+            name_override_keys: See :meth:`build_scene` - same meaning,
+                same default, same generic (not tied to any one plugin's
+                own dictionary name) lookup.
+
         Returns:
             A populated :class:`openskp.instanced_scene.InstancedScene`.
         """
@@ -833,5 +856,5 @@ class SkpFile:
         from . import instanced_scene
 
         parsed = _core.full_parse(str(self.path))
-        return instanced_scene.build_instanced_scene(parsed)
+        return instanced_scene.build_instanced_scene(parsed, name_override_keys=name_override_keys)
 
