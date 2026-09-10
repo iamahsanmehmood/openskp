@@ -67,6 +67,8 @@ struct GeometryBuilder {
   std::vector<SectionPlane> section_planes;
   std::vector<TextEntity> texts;
   std::vector<Dimension> dimensions;
+  std::vector<ConstructionLine> construction_lines;
+  std::vector<ConstructionPoint> construction_points;
 };
 
 struct RawDefinition {
@@ -196,6 +198,12 @@ struct V {
   std::string text;
   std::string guid;
   Vec3 xyz{};
+  // Only populated for k == "constructionline": the line's normalized
+  // direction, and its bounded segment's start/end (unset when unbounded
+  // in that direction) - see ConstructionLine's own doc comment.
+  Vec3 direction{};
+  std::optional<Vec3> start;
+  std::optional<Vec3> end;
   std::vector<double> plane;
   std::vector<double> xf;
   std::vector<double> uvf;

@@ -171,6 +171,34 @@ byte layout itself was already established by Python's own
 implementation, ground-truthed against real v17-native SketchUp saves;
 this port carries that over faithfully rather than re-deriving it.
 
+### Added — C++: read construction lines/points (legacy only)
+
+Ports Python's `legacy._read_constructionline`/`_read_constructionpoint`
+reading side to `legacy.cpp` (writer/`create.py`'s side is out of scope
+here, per this round's own priority - see `docs/LANGUAGE_PARITY.md`'s
+still-open "Writer: construction lines/points" row). Both entity types
+were already being parsed (needed for archive slot-sync) but their
+fields were read and immediately discarded - new `ConstructionLine`/
+`ConstructionPoint` model types and `Definition::construction_lines`/
+`.construction_points` fields now surface them, matching Python's own
+`ConstructionLine`/`ConstructionPoint` dataclasses field-for-field.
+
+A bounded `CConstructionLine` stores a point + normalized direction +
+two signed distance parameters along that direction marking the
+segment's start/end - translated into the same start/end/direction
+shape `Sketchup::ConstructionLine`'s own Ruby API exposes. An unbounded
+line uses a large-magnitude sentinel (start/end come back unset,
+matching the real API returning `nil`). A `CConstructionPoint` stores
+its position plus a second, always-zero 3-double block and a trailing
+byte with no corresponding Ruby property - left unexposed, matching
+Python exactly.
+
+Verified against a real committed fixture (`capilla_quiroz_v17.skp`): 7
+real construction points, every coordinate byte-for-byte identical to
+Python's own parse of the same file. No construction lines were
+available in any fixture or real production file to verify against -
+stated honestly in `docs/LANGUAGE_PARITY.md` rather than glossed over.
+
 ## [1.3.0] — 2026-09-09 — Python only, GitHub-only pre-release
 
 > **This tag is not published to PyPI.** It's a real, tested, tagged release

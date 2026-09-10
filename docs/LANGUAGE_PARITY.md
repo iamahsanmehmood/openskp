@@ -51,7 +51,7 @@ Every feature OpenSKP has, across all 5 languages. ✅ = shipped and released.
 | Attribute dicts: multiple dictionaries per entity | ✅ | ❌ single dict only | ❌ | ❌ | ✅ |
 | VFF pages/scenes + dimension parsing | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Legacy (pre-2021) pages/scenes reading | ✅ | ❌ VFF only | ❌ VFF only | ❌ VFF only | 🔶 on main, GitHub-only |
-| Construction lines/points reading | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Construction lines/points reading | ✅ legacy only | ❌ | ❌ | ❌ | 🔶 legacy only, on main, GitHub-only |
 | VFF per-layer-hidden flag reading | 🔶 on main | ❌ | ❌ | ❌ | 🔶 on main, GitHub-only |
 | `mesh_index[...].properties` populated | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `model.layers` in file order (not alphabetical) | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -116,6 +116,7 @@ C++ merged, not yet released:
 | VFF (2021+) per-layer-hidden flag reading (`8E3C` tag) | `geometry.cpp`'s `collect_layers`, `core.cpp` | [CHANGELOG.md § Unreleased](../CHANGELOG.md) |
 | `model.layers` in source-file order, not alphabetical (`RawParsed::layer_order`) | `core.cpp`, `legacy.cpp`, `model.cpp` | [CHANGELOG.md § Unreleased](../CHANGELOG.md) |
 | Legacy (pre-2021) pages/scenes reading (`scan_pages_for_layers`) | `legacy.cpp` | [CHANGELOG.md § Unreleased](../CHANGELOG.md) |
+| Construction lines/points reading, legacy only (`ConstructionLine`/`ConstructionPoint`) | `legacy.cpp`, `model.hpp` | [CHANGELOG.md § Unreleased](../CHANGELOG.md) |
 
 Known gaps in this C++ work, stated honestly rather than glossed over:
 - Attribute dictionary values decode as strings only (no `Point3d`/`Length`/
@@ -127,6 +128,12 @@ Known gaps in this C++ work, stated honestly rather than glossed over:
   against a synthetic byte-level test mirroring Python's own
   ground-truthed test case, plus real-file smoke testing (no crash, no
   false positives) on 5 real files with no scenes at all.
+- Construction *points* were verified byte-for-byte against a real
+  committed fixture (`capilla_quiroz_v17.skp`, 7 real points, identical
+  coordinates to Python's own parse); construction *lines* were not -
+  none of the available fixtures or real production files contain one,
+  so that half rests on code review + sharing the exact same read path
+  as the now-verified points, not independent real-data confirmation.
 
 ## 4. Real SketchUp file version support
 

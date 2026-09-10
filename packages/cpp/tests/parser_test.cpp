@@ -193,6 +193,19 @@ TEST(Parser, LegacyMatchesReference) {
   EXPECT_EQ(grada.edges.size(), 30);
   EXPECT_EQ(grada.vertices.size(), 20);
 
+  // Construction (guide) points - real data on this fixture, all on the
+  // root definition. No construction lines on this particular file.
+  // Cross-checked byte-for-byte against Python's own parse of the same
+  // fixture.
+  EXPECT_TRUE(model.root().construction_lines.empty());
+  ASSERT_EQ(model.root().construction_points.size(), 7);
+  EXPECT_NEAR(model.root().construction_points[0].position[0], -44.69836289477159, 1e-9);
+  EXPECT_NEAR(model.root().construction_points[0].position[1], 125.87449928268785, 1e-9);
+  EXPECT_NEAR(model.root().construction_points[0].position[2], 90.15748031496064, 1e-9);
+  EXPECT_NEAR(model.root().construction_points[6].position[0], 183.8551286073387, 1e-9);
+  EXPECT_NEAR(model.root().construction_points[6].position[1], 125.95096929693227, 1e-9);
+  EXPECT_NEAR(model.root().construction_points[6].position[2], 90.15748031496064, 1e-9);
+
   const std::set<std::string> expected_materials{
       "*1",
       "[0037_SandyBrown]",

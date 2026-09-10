@@ -649,8 +649,28 @@ struct Archive {
       entity_ref();
     } else if (n == "CConstructionLine") {
       preamble();
+      v->k = "constructionline";
       draw(*v);
-      r.f64s(8);  // line params (+-~4.4e29 = infinite)
+      // point(3) + direction(3) + two signed distance params along
+      // direction marking where the visible segment starts/ends - the
+      // same shape Sketchup::ConstructionLine's own start/end/direction
+      // properties expose. A parameter magnitude past kHugeParam means
+      // unbounded in that direction (matches the real API returning nil).
+      auto line_params = r.f64s(8);
+      v->xyz = {line_params[0], line_params[1], line_params[2]};
+      v->direction = {line_params[3], line_params[4], line_params[5]};
+      constexpr double kHugeParam = 1e20;
+      double start_param = line_params[6], end_param = line_params[7];
+      if (std::abs(start_param) < kHugeParam) {
+        v->start = Vec3{v->xyz[0] + v->direction[0] * start_param,
+                        v->xyz[1] + v->direction[1] * start_param,
+                        v->xyz[2] + v->direction[2] * start_param};
+      }
+      if (std::abs(end_param) < kHugeParam) {
+        v->end =
+            Vec3{v->xyz[0] + v->direction[0] * end_param, v->xyz[1] + v->direction[1] * end_param,
+                 v->xyz[2] + v->direction[2] * end_param};
+      }
       // The trailing block varies by the WRITING BUILD, not cleanly by
       // version: 7 bytes on the v17 calibration corpus, 4 on v16 and on a
       // real v18, 0 on another real v17. Self-calibrate on the first
@@ -681,9 +701,13 @@ struct Archive {
       r.raw(*cline_tail);
     } else if (n == "CConstructionPoint") {
       preamble();
+      v->k = "constructionpoint";
       draw(*v);
-      r.f64s(6);
-      r.u8();
+      auto pos = r.f64s(3);
+      v->xyz = {pos[0], pos[1], pos[2]};
+      r.f64s(3);  // reserved/unused (observed all-zero) - no corresponding
+                  // Sketchup::ConstructionPoint property to name it after
+      r.u8();     // reserved/unused (observed 0)
     } else if (n == "CSectionPlane") {
       preamble();
       v->k = "sectionplane";
@@ -1299,6 +1323,17 @@ void fill(GeometryBuilder& b,
       dim.text = v->text;
       dim.hidden = v->hidden != 0;
       b.dimensions.push_back(std::move(dim));
+    } else if (v->k == "constructionline") {
+      ConstructionLine cl;
+      cl.point = v->xyz;
+      cl.direction = v->direction;
+      cl.start = v->start;
+      cl.end = v->end;
+      b.construction_lines.push_back(std::move(cl));
+    } else if (v->k == "constructionpoint") {
+      ConstructionPoint cp;
+      cp.position = v->xyz;
+      b.construction_points.push_back(std::move(cp));
     }
   }
 }
