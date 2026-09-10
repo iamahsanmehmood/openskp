@@ -74,7 +74,7 @@ std::vector<TlvNode> parse_tlv_recursive(const ByteBuffer& d, std::size_t start,
     n.size = size;
     n.tag = tag;
     if (size && containers.count(tag)) n.children = parse_tlv_recursive(d, p + 6, p + 6 + size);
-    if (n.children.empty() && size && size <= 65536)
+    if (n.children.empty() && size)
       n.payload.assign(d.begin() + static_cast<std::ptrdiff_t>(p + 6),
                        d.begin() + static_cast<std::ptrdiff_t>(p + 6 + size));
     out.push_back(std::move(n));

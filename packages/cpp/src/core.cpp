@@ -336,82 +336,68 @@ RawParsed full_parse(const ByteBuffer& data, const ParseOptions& o) {
   const TlvNode* page_node = nullptr;
   std::vector<TlvNode> page_node_owner;  // keeps page_node's subtree alive past the loop
 
+  // VFF model.dat stores definitions inside container tag F901 -> 7017 -> 7117.
+  // Instead of recursively expanding all definitions at once (which exhausts memory
+  // on models with millions of nodes, Issue #264), we walk the container levels using
+  // headers() and invoke parse_tlv_recursive on each individual definition record (7C15),
+  // immediately collecting geometry/metadata and releasing the per-definition AST.
   auto parse_definitions_streaming = [&](std::size_t f901_offset, std::size_t f901_size) {
-    std::size_t p_f901 = f901_offset + 6;
-    std::size_t end_f901 = std::min(p_f901 + f901_size, model->size());
     std::size_t def_count = 0;
-
-    while (p_f901 + 6 <= end_f901) {
-      auto tag_f901 = tag_at(*model, p_f901);
-      auto len_f901 = read_u32(*model, p_f901 + 2);
-      if (len_f901 > end_f901 - p_f901 - 6) break;
-
+    for (const auto& h_70 : headers(*model, f901_offset + 6, f901_offset + 6 + f901_size)) {
+      auto tag_f901 = tag_at(*model, h_70.offset);
       if (tag_f901 == "7017") {
-        std::size_t p_70 = p_f901 + 6;
-        std::size_t end_70 = p_70 + len_f901;
-        while (p_70 + 6 <= end_70) {
-          auto tag_70 = tag_at(*model, p_70);
-          auto len_70 = read_u32(*model, p_70 + 2);
-          if (len_70 > end_70 - p_70 - 6) break;
-
+        for (const auto& h_71 : headers(*model, h_70.offset + 6, h_70.offset + 6 + h_70.size)) {
+          auto tag_70 = tag_at(*model, h_71.offset);
           if (tag_70 == "7117") {
-            std::size_t p_71 = p_70 + 6;
-            std::size_t end_71 = p_71 + len_70;
-            while (p_71 + 6 <= end_71) {
-              auto tag_71 = tag_at(*model, p_71);
-              auto len_71 = read_u32(*model, p_71 + 2);
-              if (len_71 > end_71 - p_71 - 6) break;
-
-              if (tag_71 == "7C15") {
-                auto single = parse_tlv_recursive(*model, p_71, p_71 + 6 + len_71);
-                if (!single.empty()) {
-                  collect_layers(single, p.layer_id_to_name, p.layer_hidden);
-                  collect_material_ids(single, p.material_id_to_name);
-                  collect_definitions(single, p.definitions);
-                  if (model->size() <= 50 * 1024 * 1024) {
-                    scan_vertex_positions(single[0], vertex_positions);
-                    scan_instance_transforms(single[0], instance_world);
-                  }
-                  if (!page_node) {
-                    if (auto* found = find_page_node(single[0])) {
-                      page_node_owner.push_back(*found);
-                      page_node = &page_node_owner.back();
-                    }
-                  }
+            for (const auto& h_def :
+                 headers(*model, h_71.offset + 6, h_71.offset + 6 + h_71.size)) {
+              auto tag_71 = tag_at(*model, h_def.offset);
+              if (tag_71 == "6300") continue;
+              auto single =
+                  parse_tlv_recursive(*model, h_def.offset, h_def.offset + 6 + h_def.size);
+              if (single.empty()) {
+                emit_log(o, LogLevel::debug, "Failed to parse definition record in F901 container");
+                continue;
+              }
+              collect_layers(single, p.layer_id_to_name, p.layer_hidden);
+              collect_material_ids(single, p.material_id_to_name);
+              collect_definitions(single, p.definitions);
+              scan_vertex_positions(single[0], vertex_positions);
+              scan_instance_transforms(single[0], instance_world);
+              if (!page_node) {
+                if (auto* found = find_page_node(single[0])) {
+                  page_node_owner.push_back(*found);
+                  page_node = &page_node_owner.back();
                 }
+              }
+              if (tag_71 == "7C15") {
                 def_count++;
                 if (def_count % 1000 == 0) {
                   emit_progress(o, ParseStage::tlv_walk, def_count, def_count + 1000);
                 }
-              } else if (tag_71 != "6300") {
-                auto other = parse_tlv_recursive(*model, p_71, p_71 + 6 + len_71);
-                if (!other.empty()) {
-                  collect_layers(other, p.layer_id_to_name, p.layer_hidden);
-                  collect_material_ids(other, p.material_id_to_name);
-                  collect_definitions(other, p.definitions);
-                }
               }
-              p_71 += 6 + len_71;
             }
           } else if (tag_70 != "6300") {
-            auto other = parse_tlv_recursive(*model, p_70, p_70 + 6 + len_70);
-            if (!other.empty()) {
+            auto other = parse_tlv_recursive(*model, h_71.offset, h_71.offset + 6 + h_71.size);
+            if (other.empty()) {
+              emit_log(o, LogLevel::debug, "Failed to parse sub-record in 7017 container");
+            } else {
               collect_layers(other, p.layer_id_to_name, p.layer_hidden);
               collect_material_ids(other, p.material_id_to_name);
               collect_definitions(other, p.definitions);
             }
           }
-          p_70 += 6 + len_70;
         }
       } else if (tag_f901 != "6300") {
-        auto other = parse_tlv_recursive(*model, p_f901, p_f901 + 6 + len_f901);
-        if (!other.empty()) {
+        auto other = parse_tlv_recursive(*model, h_70.offset, h_70.offset + 6 + h_70.size);
+        if (other.empty()) {
+          emit_log(o, LogLevel::debug, "Failed to parse sub-record in F901 container");
+        } else {
           collect_layers(other, p.layer_id_to_name, p.layer_hidden);
           collect_material_ids(other, p.material_id_to_name);
           collect_definitions(other, p.definitions);
         }
       }
-      p_f901 += 6 + len_f901;
     }
   };
 
@@ -433,10 +419,8 @@ RawParsed full_parse(const ByteBuffer& data, const ParseOptions& o) {
       collect_layers(one, p.layer_id_to_name, p.layer_hidden);
       collect_material_ids(one, p.material_id_to_name);
       collect_definitions(one, p.definitions);
-      if (model->size() <= 50 * 1024 * 1024) {
-        scan_vertex_positions(one[0], vertex_positions);
-        scan_instance_transforms(one[0], instance_world);
-      }
+      scan_vertex_positions(one[0], vertex_positions);
+      scan_instance_transforms(one[0], instance_world);
       if (!page_node) {
         if (auto* found = find_page_node(one[0])) {
           page_node_owner.push_back(*found);

@@ -1,4 +1,4 @@
-﻿#ifdef __EMSCRIPTEN__
+#ifdef __EMSCRIPTEN__
 
 #include <chrono>
 #include <cmath>
@@ -20,7 +20,7 @@ using namespace openskp;
 
 namespace {
 
-val parse_skp_to_fragments(const val& uint8_array, bool respect_edge_visibility) {
+val parse_skp_to_fragments(const val& uint8_array) {
   auto start_time = std::chrono::high_resolution_clock::now();
   val result_obj = val::object();
 
@@ -37,17 +37,6 @@ val parse_skp_to_fragments(const val& uint8_array, bool respect_edge_visibility)
     ByteBuffer buffer(length);
     val js_buf_view(typed_memory_view(length, buffer.data()));
     js_buf_view.call<void>("set", uint8_array);
-
-    // Skip any header prefix before SketchUp magic
-    for (std::size_t i = 0; i + 4 <= buffer.size() && i < 512; ++i) {
-      if (buffer[i] == 0xff && buffer[i + 1] == 0xfe && buffer[i + 2] == 0xff &&
-          buffer[i + 3] == 0x0e) {
-        if (i > 0) {
-          buffer = ByteBuffer(buffer.begin() + i, buffer.end());
-        }
-        break;
-      }
-    }
 
     // 2. Parse instanced scene in native C++
     stage = "full_parse";
@@ -101,7 +90,7 @@ val parse_skp_to_fragments(const val& uint8_array, bool respect_edge_visibility)
   return result_obj;
 }
 
-val parse_skp_to_glb(const val& uint8_array, bool respect_edge_visibility) {
+val parse_skp_to_glb(const val& uint8_array) {
   auto start_time = std::chrono::high_resolution_clock::now();
   val result_obj = val::object();
 

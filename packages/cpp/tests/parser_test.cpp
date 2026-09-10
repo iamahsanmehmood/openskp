@@ -373,10 +373,17 @@ TEST(Parser, MaterialsByIdMap) {
 
 TEST(Parser, StreamingDefinitionsPreservesGeometryAndHierarchy) {
   auto skp = SkpFile::open(test::fixture("Untitled.skp"));
+  auto model = skp.parse();
+  EXPECT_EQ(model.definitions.size(), 46);
+  EXPECT_EQ(model.layers.size(), 14);
+  EXPECT_EQ(model.materials.size(), 15);
+  EXPECT_EQ(model.dimensions.size(), 13);
+
   auto scene = skp.build_instanced_scene();
   EXPECT_FALSE(scene.mesh_resources.empty());
   EXPECT_EQ(scene.scene_hierarchy.name, "ROOT");
   EXPECT_FALSE(scene.scene_hierarchy.children.empty());
+  EXPECT_EQ(scene.gltf_materials.size(), 8);
 
   std::size_t total_faces = 0;
   for (const auto& res : scene.mesh_resources) {
@@ -384,7 +391,7 @@ TEST(Parser, StreamingDefinitionsPreservesGeometryAndHierarchy) {
       total_faces += prim.indices.size() / 3;
     }
   }
-  EXPECT_GT(total_faces, 10000u);
+  EXPECT_EQ(total_faces, 16949u);
 }
 
 }  // namespace
