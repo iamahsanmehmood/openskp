@@ -16,6 +16,7 @@ about 9 bytes of heap per file byte, so a 62 MB write peaked at ~2.1 GB of
 transient heap and took a browser tab down; it now peaks at ~0.2 GB. Output is
 byte-identical. No public API change (`_internal.GrowableBytes` is exposed for
 tests).
+
 ### Added — C++: Direct SketchUp → Fragments (.frag) export
 
 New `openskp::to_fragments()` / `openskp::export_fragments()`
