@@ -343,7 +343,7 @@ RawParsed full_parse(const ByteBuffer& data, const ParseOptions& o) {
       auto one = parse_tlv_recursive(*model, hs[i].offset, hs[i].offset + 6 + hs[i].size);
       if (one.empty()) continue;
       tag = one[0].tag;
-      collect_layers(one, p.layer_id_to_name);
+      collect_layers(one, p.layer_id_to_name, p.layer_hidden);
       collect_material_ids(one, p.material_id_to_name);
       collect_definitions(one, p.definitions);
       scan_vertex_positions(one[0], vertex_positions);

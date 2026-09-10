@@ -52,7 +52,7 @@ Every feature OpenSKP has, across all 5 languages. ✅ = shipped and released.
 | VFF pages/scenes + dimension parsing | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Legacy (pre-2021) pages/scenes reading | ✅ | ❌ VFF only | ❌ VFF only | ❌ VFF only | ❌ VFF only |
 | Construction lines/points reading | ✅ | ❌ | ❌ | ❌ | ❌ |
-| VFF per-layer-hidden flag reading | 🔶 on main | ❌ | ❌ | ❌ | ❌ |
+| VFF per-layer-hidden flag reading | 🔶 on main | ❌ | ❌ | ❌ | 🔶 on main, GitHub-only |
 | `mesh_index[...].properties` populated | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `model.layers` in file order (not alphabetical) | ✅ | ✅ | ✅ | ✅ | ❌ known gap |
 | **Scene building & observability** | | | | | |
@@ -113,6 +113,7 @@ C++ merged, not yet released:
 | Multi-dictionary attribute extraction (`Instance::attribute_dictionaries` / `InstancedNode::attribute_dictionaries`) | `geometry.cpp`, `instanced_scene.cpp`, `scene.cpp` | [CHANGELOG.md § Unreleased](../CHANGELOG.md) |
 | 4 IFC export correctness fixes (units/axis, real names + layer visibility, plugin-attribute Psets, opt-in full-path classification) | `ifc_export.cpp` | [CHANGELOG.md § Unreleased](../CHANGELOG.md) |
 | `mesh_index[...].properties`/`.attribute_dictionaries` backfill in the baked (`build_scene`) path | `scene.cpp` | [CHANGELOG.md § Unreleased](../CHANGELOG.md) |
+| VFF (2021+) per-layer-hidden flag reading (`8E3C` tag) | `geometry.cpp`'s `collect_layers`, `core.cpp` | [CHANGELOG.md § Unreleased](../CHANGELOG.md) |
 
 Known gap in this C++ work, stated honestly rather than glossed over:
 attribute dictionary values decode as strings only (no `Point3d`/`Length`/

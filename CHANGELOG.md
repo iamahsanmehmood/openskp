@@ -98,6 +98,25 @@ unit including both. Moved to a single definition in `model.hpp`. The
 `openskp.hpp` umbrella header was also missing `fragments_export.hpp`
 and `ifc_export.hpp` entirely — both now included.
 
+### Added — C++: read the real per-layer hidden flag from VFF (2021+) files
+
+Ports Python's VFF layer-hidden fix to `geometry.cpp`'s `collect_layers()`.
+VFF-format files previously derived a layer's visibility only from
+`Layer_<name>`-prefixed materials, which carry no hidden/visible bit of
+their own — every VFF layer's hidden state silently defaulted to visible
+regardless of the file's actual Tags panel state, which also meant the
+IFC exporter's `IFCPRESENTATIONLAYERWITHSTYLE.LayerOn` (above) always
+reported visible for VFF files.
+
+The real flag lives right alongside the already-parsed layer id/name:
+each layer's `8C3C` node carries an `8E3C` single-byte sibling (`1` =
+hidden, `0` = visible). Verified against two real production files: the
+same cladding/sheeting-layer + label-layer hidden pattern Python found
+on its own file showed up independently on a different file here (5 of
+30 layers correctly flagged hidden, all cladding/sheeting/label layers).
+3 new unit tests exercise `collect_layers()` directly against hand-built
+TLV node trees.
+
 ## [1.3.0] — 2026-09-09 — Python only, GitHub-only pre-release
 
 > **This tag is not published to PyPI.** It's a real, tested, tagged release

@@ -170,7 +170,8 @@ RawParsed full_parse(const ByteBuffer&, const ParseOptions&);
 std::string decode_xml_entities(const std::string&);
 RawParsed parse_legacy(const ByteBuffer&, const ParseOptions&);
 void collect_geometry(const std::vector<TlvNode>&, GeometryBuilder&);
-void collect_layers(const std::vector<TlvNode>&, std::map<EntityId, std::string>&);
+void collect_layers(const std::vector<TlvNode>&, std::map<EntityId, std::string>&,
+                    std::map<std::string, bool>&);
 void collect_material_ids(const std::vector<TlvNode>&, std::map<EntityId, std::string>&);
 void collect_definitions(const std::vector<TlvNode>&, std::map<EntityId, RawDefinition>&);
 SkpModel build_model(RawParsed&&, const ParseOptions& = {});
