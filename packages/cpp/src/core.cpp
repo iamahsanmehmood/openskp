@@ -39,11 +39,8 @@ struct Zip {
     mz_zip_archive_file_stat s{};
     if (!mz_zip_reader_file_stat(&z, i, &s)) return {};
     validate_entry_size(s);
-    size_t n = 0;
-    void* p = mz_zip_reader_extract_to_heap(&z, i, &n, 0);
-    if (!p) return {};
-    ByteBuffer b(static_cast<std::uint8_t*>(p), static_cast<std::uint8_t*>(p) + n);
-    mz_free(p);
+    ByteBuffer b(static_cast<std::size_t>(s.m_uncomp_size));
+    if (!mz_zip_reader_extract_to_mem(&z, i, b.data(), b.size(), 0)) return {};
     return b;
   }
 
@@ -338,18 +335,108 @@ RawParsed full_parse(const ByteBuffer& data, const ParseOptions& o) {
   std::map<std::string, std::vector<double>> instance_world;
   const TlvNode* page_node = nullptr;
   std::vector<TlvNode> page_node_owner;  // keeps page_node's subtree alive past the loop
+
+  auto parse_definitions_streaming = [&](std::size_t f901_offset, std::size_t f901_size) {
+    std::size_t p_f901 = f901_offset + 6;
+    std::size_t end_f901 = std::min(p_f901 + f901_size, model->size());
+    std::size_t def_count = 0;
+
+    while (p_f901 + 6 <= end_f901) {
+      auto tag_f901 = tag_at(*model, p_f901);
+      auto len_f901 = read_u32(*model, p_f901 + 2);
+      if (len_f901 > end_f901 - p_f901 - 6) break;
+
+      if (tag_f901 == "7017") {
+        std::size_t p_70 = p_f901 + 6;
+        std::size_t end_70 = p_70 + len_f901;
+        while (p_70 + 6 <= end_70) {
+          auto tag_70 = tag_at(*model, p_70);
+          auto len_70 = read_u32(*model, p_70 + 2);
+          if (len_70 > end_70 - p_70 - 6) break;
+
+          if (tag_70 == "7117") {
+            std::size_t p_71 = p_70 + 6;
+            std::size_t end_71 = p_71 + len_70;
+            while (p_71 + 6 <= end_71) {
+              auto tag_71 = tag_at(*model, p_71);
+              auto len_71 = read_u32(*model, p_71 + 2);
+              if (len_71 > end_71 - p_71 - 6) break;
+
+              if (tag_71 == "7C15") {
+                auto single = parse_tlv_recursive(*model, p_71, p_71 + 6 + len_71);
+                if (!single.empty()) {
+                  collect_layers(single, p.layer_id_to_name, p.layer_hidden);
+                  collect_material_ids(single, p.material_id_to_name);
+                  collect_definitions(single, p.definitions);
+                  if (model->size() <= 50 * 1024 * 1024) {
+                    scan_vertex_positions(single[0], vertex_positions);
+                    scan_instance_transforms(single[0], instance_world);
+                  }
+                  if (!page_node) {
+                    if (auto* found = find_page_node(single[0])) {
+                      page_node_owner.push_back(*found);
+                      page_node = &page_node_owner.back();
+                    }
+                  }
+                }
+                def_count++;
+                if (def_count % 1000 == 0) {
+                  emit_progress(o, ParseStage::tlv_walk, def_count, def_count + 1000);
+                }
+              } else if (tag_71 != "6300") {
+                auto other = parse_tlv_recursive(*model, p_71, p_71 + 6 + len_71);
+                if (!other.empty()) {
+                  collect_layers(other, p.layer_id_to_name, p.layer_hidden);
+                  collect_material_ids(other, p.material_id_to_name);
+                  collect_definitions(other, p.definitions);
+                }
+              }
+              p_71 += 6 + len_71;
+            }
+          } else if (tag_70 != "6300") {
+            auto other = parse_tlv_recursive(*model, p_70, p_70 + 6 + len_70);
+            if (!other.empty()) {
+              collect_layers(other, p.layer_id_to_name, p.layer_hidden);
+              collect_material_ids(other, p.material_id_to_name);
+              collect_definitions(other, p.definitions);
+            }
+          }
+          p_70 += 6 + len_70;
+        }
+      } else if (tag_f901 != "6300") {
+        auto other = parse_tlv_recursive(*model, p_f901, p_f901 + 6 + len_f901);
+        if (!other.empty()) {
+          collect_layers(other, p.layer_id_to_name, p.layer_hidden);
+          collect_material_ids(other, p.material_id_to_name);
+          collect_definitions(other, p.definitions);
+        }
+      }
+      p_f901 += 6 + len_f901;
+    }
+  };
+
   auto total = hs.size();
   for (std::size_t i = 0; i < total; ++i) {
     std::string tag;
     try {
+      auto cur_tag = tag_at(*model, hs[i].offset);
+      if (cur_tag == "F901") {
+        tag = "F901";
+        parse_definitions_streaming(hs[i].offset, hs[i].size);
+        if (i % progress_interval == 0 || i + 1 == total)
+          emit_progress(o, ParseStage::tlv_walk, i + 1, total);
+        continue;
+      }
       auto one = parse_tlv_recursive(*model, hs[i].offset, hs[i].offset + 6 + hs[i].size);
       if (one.empty()) continue;
       tag = one[0].tag;
       collect_layers(one, p.layer_id_to_name, p.layer_hidden);
       collect_material_ids(one, p.material_id_to_name);
       collect_definitions(one, p.definitions);
-      scan_vertex_positions(one[0], vertex_positions);
-      scan_instance_transforms(one[0], instance_world);
+      if (model->size() <= 50 * 1024 * 1024) {
+        scan_vertex_positions(one[0], vertex_positions);
+        scan_instance_transforms(one[0], instance_world);
+      }
       if (!page_node) {
         if (auto* found = find_page_node(one[0])) {
           page_node_owner.push_back(*found);
@@ -374,8 +461,19 @@ RawParsed full_parse(const ByteBuffer& data, const ParseOptions& o) {
     p.units = std::nullopt;
     emit_log(o, LogLevel::debug, "Failed to read units from meta/meta.dat");
   }
-  p.pages = parse_pages(page_node);
-  p.dimensions = parse_dimensions(*model, vertex_positions, instance_world);
+  try {
+    p.pages = parse_pages(page_node);
+  } catch (...) {
+    emit_log(o, LogLevel::debug, "Failed to parse pages");
+  }
+  if (!vertex_positions.empty()) {
+    try {
+      p.dimensions = parse_dimensions(*model, vertex_positions, instance_world);
+    } catch (...) {
+      emit_log(o, LogLevel::debug, "Failed to parse dimensions");
+    }
+  }
+  model.reset();
   if (!p.layer_id_to_name.count(1)) p.layer_id_to_name[1] = "Layer0";
   if (!p.layer_colors.count("Layer0")) {
     p.layer_order.push_back("Layer0");

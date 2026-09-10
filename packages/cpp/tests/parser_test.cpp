@@ -371,5 +371,21 @@ TEST(Parser, MaterialsByIdMap) {
   }
 }
 
+TEST(Parser, StreamingDefinitionsPreservesGeometryAndHierarchy) {
+  auto skp = SkpFile::open(test::fixture("Untitled.skp"));
+  auto scene = skp.build_instanced_scene();
+  EXPECT_FALSE(scene.mesh_resources.empty());
+  EXPECT_EQ(scene.scene_hierarchy.name, "ROOT");
+  EXPECT_FALSE(scene.scene_hierarchy.children.empty());
+
+  std::size_t total_faces = 0;
+  for (const auto& res : scene.mesh_resources) {
+    for (const auto& prim : res.primitives) {
+      total_faces += prim.indices.size() / 3;
+    }
+  }
+  EXPECT_GT(total_faces, 10000u);
+}
+
 }  // namespace
 }  // namespace openskp
