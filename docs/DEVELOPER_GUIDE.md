@@ -506,6 +506,58 @@ What's carried through from the source `.skp` file:
   existing string-only property handling elsewhere. See
   [docs/LANGUAGE_PARITY.md](LANGUAGE_PARITY.md).
 
+### Reading a `.frag` file back
+
+> **Python only, and not on PyPI yet** — same preview tag as the export
+> side above. See [Fragments export](#fragments-export) for install steps.
+
+The mirror direction: `openskp.export.fragments.read()`/`from_fragments()`
+parse a real `.frag` file straight into an `InstancedScene` — OpenSKP's
+6th input format alongside `.skp`. Any file works, not just one this
+project wrote — ThatOpen's own real `IfcImporter` output, or anyone
+else's:
+
+```python
+from openskp.export import fragments
+
+scene = fragments.read("model.frag")
+
+# Rides every other export this project already has, same as a scene
+# from SkpFile.build_instanced_scene() would:
+from openskp.export import instanced_glb
+# ...or convert straight back to .skp via the writer, or to GLB/OBJ/
+# STL/PLY/DXF/IFC4/JSON — whatever the file needs next.
+```
+
+Verified two ways: round-trips this project's own output exactly (world-
+space vertex positions match to the last bit, not just object counts —
+see `tests/test_fragments.py`'s `TestFromFragments`), and reads a real
+ThatOpen-produced production file (a genuine IFC-derived building, 5,751
+nodes / 100,332 vertices) cleanly — re-exporting that file through this
+same module and loading the result back through the actual
+`@thatopen/fragments` runtime preserves real IFC GUIDs and category names.
+
+**Known limitations, stated plainly:**
+
+- No UVs anywhere in the schema (`Shell` is points + triangle indices
+  only) — every reconstructed primitive gets an all-zero UV band.
+  Materials are flat RGBA; there's no texture reference to read either.
+- No stored vertex normals — rebuilt as one flat per-face normal,
+  duplicated across that face's 3 vertices. Correct for a hard-edged
+  shell; the original smooth-shading groups are gone, since Fragments
+  never had anywhere to keep them.
+- A purely organizational (non-geometry) node's own local transform was
+  never serialized on export — only geometry-bearing items' full WORLD
+  transforms survive via `Meshes.GlobalTransforms`. Reconstructed wrapper
+  nodes get an identity matrix; since every geometry leaf's own matrix is
+  its full world transform directly, the composed result is still
+  correct — it just can't recover what the original per-level split
+  looked like before export.
+- `RepresentationClass.CIRCLE_EXTRUSION` (round profiles — rebar, pipes)
+  has no reader yet, only `SHELL`. A real `IfcImporter`-produced file can
+  contain these; such samples are skipped with a warning rather than
+  silently dropped or misread as shells.
+
 ## Write capabilities
 
 Everything above this section is about reading `.skp` files. All five

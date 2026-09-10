@@ -444,6 +444,43 @@ entries); no output shape change for models with no extra dictionaries
 (`attribute_dictionaries` is simply `{}`). Same fix ported to C++, see
 [§ preview-cpp-v1.3.0](#preview-cpp-v130--2026-09-10--c-only-github-only-pre-release).
 
+### Added — Read a `.frag` file back (`openskp.export.fragments.read`/`from_fragments`)
+
+The mirror of this release's own `to_fragments`/`export`: parses a real
+`.frag` file straight into an `InstancedScene`, OpenSKP's 6th input format
+alongside `.skp`. Any file works, not just this project's own encoder's
+output — ThatOpen's real `IfcImporter` output, or anyone else's — and
+rides every other export this project already has (GLB, OBJ, STL, PLY,
+DXF, IFC4, JSON, `.skp` itself via the writer) for free, once parsed.
+
+Verified two ways: round-trips this project's own output exactly (world-
+space vertex positions across a real `.skp`-derived scene match to the
+last bit, not just object/vertex counts), and reads a real ThatOpen-
+produced production file cleanly (a genuine IFC-derived building, 5,751
+nodes / 100,332 vertices, not a synthetic fixture) — re-exporting that
+file through this same module and loading the result back through the
+actual `@thatopen/fragments` runtime preserves real IFC GUIDs and
+category names. A smaller real ThatOpen fixture (MIT-licensed, from their
+own `resources/frags/`) is committed at
+`tests/fixtures/thatopen_small_test.frag` for CI.
+
+**Known gaps, stated honestly:**
+- No UVs or stored vertex normals anywhere in the schema — every
+  reconstructed primitive gets an all-zero UV band, and normals are
+  rebuilt as flat per-face (correct for a hard-edged shell, not the
+  original smooth-shading groups). Not a gap in this reader — the format
+  itself never had anywhere to keep either.
+- A purely organizational (non-geometry) node's own local transform was
+  never serialized on export — only geometry-bearing items' full WORLD
+  transforms survive. Reconstructed wrapper nodes get an identity matrix;
+  since every geometry leaf's own matrix is its full world transform
+  directly, the composed placement is still exactly correct, it just
+  can't recover the original per-level transform split.
+- `RepresentationClass.CIRCLE_EXTRUSION` (round profiles — rebar, pipes)
+  has no reader yet, only `SHELL`. A real `IfcImporter`-produced file can
+  contain these; such samples are skipped with a warning, not silently
+  misread as shells.
+
 ## [1.2.0] — 2026-09-04
 
 ### Added — Full attribute-dictionary support in the writer, Python; groups gain attributes, all 5 languages

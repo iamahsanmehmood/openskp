@@ -80,6 +80,8 @@ Every feature OpenSKP has, across all 5 languages. ✅ = shipped and released.
 | GLB / OBJ+MTL / STL / PLY / DXF 3D / IFC4 / JSON | ✅ | ✅ | ✅ | ✅ | ✅ |
 | IFC export: unit/axis fix, real names + layer visibility, plugin-attribute Psets, full-path classification | 🔶 on main | not checked for equivalent issues | not checked | not checked | 🔶 on main, GitHub-only |
 | Direct SketchUp → Fragments (`.frag`) export | 🔶 on main, GitHub-only | 🔶 open [PR #276](https://github.com/iamahsanmehmood/openskp/pull/276), CI failing | ❌ not started | ❌ not started | 🔶 on main, GitHub-only |
+| **Import** | | | | | |
+| Read a `.frag` file back (6th input format alongside `.skp`) | 🔶 on main | ❌ not started | ❌ not started | ❌ not started | ❌ not started |
 
 ## 3. Unreleased on main
 
@@ -106,6 +108,15 @@ release (installable by pinning that tag directly — see the
 It folds into a proper PyPI `1.3.0` once the cross-language porting items in
 [§2](#2-feature-matrix) and [issue #285](https://github.com/iamahsanmehmood/openskp/issues/285)
 catch up.
+
+Also merged on `main` since that preview tag, not yet part of it: reading
+a `.frag` file back (`export/fragments.py`'s `from_fragments`/`read`) —
+OpenSKP's 6th input format alongside `.skp`, turning any real `.frag`
+file (this project's own output, ThatOpen's real `IfcImporter` output, or
+anyone else's) into an `InstancedScene` that rides every other export
+this project already has. See
+[CHANGELOG.md § 1.3.0](../CHANGELOG.md) and
+[DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md#reading-a-frag-file-back).
 
 TypeScript merged, not yet released: a writer memory fix (`ArchiveWriter`
 now keeps the archive in a growable `Uint8Array` instead of a `number[]`,
