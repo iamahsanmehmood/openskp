@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — `attribute_dictionaries` missing from GLB/JSON metadata export (Python, C++)
+
+Every attribute dictionary an instance carries (not just SketchUp's own
+`dynamic_attributes`, which `properties` is scoped to exclusively per
+[#254](https://github.com/iamahsanmehmood/openskp/issues/254)) was already
+correctly resolved by `build_scene()`/`build_instanced_scene()` in both
+languages, but was never written into any of the JSON-producing export
+paths — Python's `export/glb.py`, `export/json_export.py`, and
+`export/instanced_glb.py`; C++'s `json_export.cpp` (`instance_node_to_json`/
+`mesh_metadata_to_json`). Only the IFC exporter surfaced this data at all
+(as `Pset_<dict-name>` properties). A consumer reading GLB/JSON metadata
+instead of the derived `.ifc` — e.g. a third-party plugin's own named
+dictionary such as a steel-detailing tool's `steelframer-dict` — silently
+never saw it.
+
+Both `_instance_node_to_dict`/`mesh_index` (Python, all three export
+modules) and `instance_node_to_json`/`mesh_metadata_to_json` (C++) now
+include an `attribute_dictionaries` key alongside the existing `properties`
+key, keyed by each dictionary's own declared name. Verified against real
+plugin data on `Untitled.skp` (`steelframer-dict`, 45 entries) in both
+languages; no output shape change for models with no extra dictionaries
+(`attribute_dictionaries` is simply `{}`).
+
+TypeScript, .NET, and Dart don't have an `attribute_dictionaries` field at
+all yet (see [§2 of LANGUAGE_PARITY.md](docs/LANGUAGE_PARITY.md)) — out of
+scope here, tracked under the existing cross-language porting backlog
+([#285](https://github.com/iamahsanmehmood/openskp/issues/285)).
+
 ### Changed — TypeScript writer memory
 
 `ArchiveWriter` keeps the archive in a growable `Uint8Array` instead of a

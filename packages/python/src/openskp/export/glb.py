@@ -117,6 +117,12 @@ def _instance_node_to_dict(node) -> Dict[str, Any]:
         "layer": node.layer,
         "position_mm": list(node.position_mm),
         "properties": dict(node.properties),
+        # Every OTHER attribute dictionary this instance carries (e.g. a
+        # third-party plugin's own named dictionary) - already correctly
+        # resolved by build_scene(), but previously never reached this
+        # metadata JSON at all, silently hiding it from any consumer that
+        # reads mesh_index/scene_hierarchy instead of the derived .ifc.
+        "attribute_dictionaries": {k: dict(v) for k, v in node.attribute_dictionaries.items()},
         "children": [_instance_node_to_dict(c) for c in node.children],
     }
 
@@ -233,6 +239,7 @@ def export(
                 "layer": m.layer,
                 "position_mm": list(m.position_mm),
                 "properties": dict(m.properties),
+                "attribute_dictionaries": {k: dict(v) for k, v in m.attribute_dictionaries.items()},
                 "path": m.path,
             }
             for name, m in scene_obj.mesh_index.items()

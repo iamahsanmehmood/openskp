@@ -1,3 +1,4 @@
+#include <functional>
 #include <gtest/gtest.h>
 
 #include <openskp/openskp.hpp>
@@ -79,6 +80,44 @@ TEST(JsonExport, IncludesSceneHierarchyAndMeshIndexWhenSceneIsPassed) {
   const auto& first_mesh = mesh_index[0].second;
   EXPECT_NE(first_mesh.find("definition_name"), nullptr);
   EXPECT_NE(first_mesh.find("position_mm"), nullptr);
+}
+
+// Every attribute dictionary an instance carries (not just SketchUp's own
+// dynamic_attributes, which `properties` already covers) must reach JSON
+// output too - it was already correctly resolved by build_scene() but
+// previously never serialized in mesh_index/scene_hierarchy at all,
+// silently dropping third-party plugin data (e.g. a steel-detailing
+// tool's own named dictionary) from every JSON/GLB-metadata consumer.
+// Untitled.skp's real "W1" instance carries a real "steelframer-dict"
+// (45 entries, including "generator"/"profile") - see Parser.
+// ModernUntitled for the same real data verified at the raw-parse level.
+TEST(JsonExport, IncludesAttributeDictionariesFromRealPluginData) {
+  auto model = SkpFile::open(test::fixture("Untitled.skp")).parse();
+  auto scene = SkpFile::open(test::fixture("Untitled.skp")).build_scene();
+  auto d = to_json(model, &scene);
+
+  std::function<const JsonValue*(const JsonValue&)> find_w1 =
+      [&](const JsonValue& node) -> const JsonValue* {
+    auto* name = node.find("name");
+    if (name && name->as_string() == "W1") return &node;
+    auto* children = node.find("children");
+    if (children && children->is_array()) {
+      for (auto& child : children->as_array()) {
+        if (auto* found = find_w1(child)) return found;
+      }
+    }
+    return nullptr;
+  };
+  const auto* w1 = find_w1(*d.find("scene_hierarchy"));
+  ASSERT_NE(w1, nullptr);
+
+  EXPECT_TRUE(w1->find("properties")->as_object().empty());
+  const auto* dicts = w1->find("attribute_dictionaries");
+  ASSERT_NE(dicts, nullptr);
+  const auto* steelframer = dicts->find("steelframer-dict");
+  ASSERT_NE(steelframer, nullptr);
+  EXPECT_EQ(steelframer->find("generator")->as_string(), "SteelFramer::Engine::PanelGenerator");
+  EXPECT_EQ(steelframer->find("profile")->as_string(), "362S200-43");
 }
 
 TEST(JsonExport, ProducesNonEmptySerializedOutput) {

@@ -63,6 +63,11 @@ def _instanced_node_to_dict(node) -> Dict[str, Any]:
         "layer": node.layer,
         "position_mm": list(node.position_mm),
         "properties": dict(node.properties),
+        # Every OTHER attribute dictionary this instance carries (e.g. a
+        # third-party plugin's own named dictionary) - already correctly
+        # resolved by build_instanced_scene(), but previously never
+        # reached this export at all.
+        "attribute_dictionaries": {k: dict(v) for k, v in node.attribute_dictionaries.items()},
         "mesh_resource_id": node.mesh_resource_id,
         "children": [_instanced_node_to_dict(c) for c in node.children],
     }
