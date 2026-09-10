@@ -33,12 +33,27 @@ bool is_generic_definition_name(const std::string& name) {
 
 Scene build_scene_raw(RawParsed&& p, const ParseOptions& o) {
   Scene scene;
-  scene.scene_hierarchy = {"ROOT", "ROOT_MODEL", "Layer0", {0, 0, 0}, {}, {}};
+  scene.scene_hierarchy = {"ROOT", "ROOT_MODEL", "Layer0", {0, 0, 0}, {}, {}, {}};
+  scene.layer_hidden = p.layer_hidden;
   emit_log(o, LogLevel::information,
            "Building scene: " + std::to_string(p.definitions.size()) + " definitions available");
   std::map<GroupKey, size_t> materials;
   size_t mesh_counter = 0, instance_counter = 0;
   std::set<EntityId> active;
+
+  // Deferred mesh backfill: a mesh's own path is recorded verbatim as a
+  // path_updates key by the exact instance that placed the definition
+  // that mesh's own faces belong to (never an ancestor's), so a direct
+  // O(1) lookup per mesh after the whole tree is built is enough - no
+  // cascading from an ancestor down to its descendants' own meshes.
+  // Needed because a mesh's own MeshMetadata is built once per
+  // definition's own geometry (shared across every instance of that
+  // definition), before the instance placing it - and so its real
+  // per-instance name/properties/attribute dictionaries - is even known.
+  // Matches openskp.scene.build_scene's identical path_updates mechanism.
+  std::map<std::string, std::tuple<std::map<std::string, std::string>, std::string,
+                                   std::map<std::string, std::map<std::string, std::string>>>>
+      path_updates;
 
   // Textures deduplicated by bytes: the same image routinely backs
   // several materials, and re-embedding it per material would multiply
@@ -217,7 +232,9 @@ Scene build_scene_raw(RawParsed&& p, const ParseOptions& o) {
                         {mat.size() > 9 ? mat[9] * 25.4 : 0, mat.size() > 10 ? mat[10] * 25.4 : 0,
                          mat.size() > 11 ? mat[11] * 25.4 : 0},
                         i.properties,
-                        std::move(nested)};
+                        std::move(nested),
+                        i.attribute_dicts};
+      path_updates[child_path] = {i.properties, display_name, i.attribute_dicts};
       children.push_back(std::move(node));
       if (++instance_counter % progress_interval == 0)
         emit_progress(o, ParseStage::build_scene, instance_counter, instance_counter);
@@ -227,6 +244,17 @@ Scene build_scene_raw(RawParsed&& p, const ParseOptions& o) {
   std::vector<double> identity{1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1};
   scene.scene_hierarchy.children =
       bake(p.root.builder, "ROOT_MODEL", {}, identity, "Layer0", "ROOT", {});
+
+  // Apply the deferred backfill: each mesh's real per-instance name/
+  // properties/attribute dictionaries, now that the whole tree (and so
+  // every instance's own data) has been walked.
+  for (auto& [geom_name, meta] : scene.mesh_index) {
+    auto found = path_updates.find(meta.path);
+    if (found != path_updates.end()) {
+      std::tie(meta.properties, meta.name, meta.attribute_dictionaries) = found->second;
+    }
+  }
+
   emit_log(o, LogLevel::information,
            "Scene build complete: " + std::to_string(instance_counter) + " instances, " +
                std::to_string(scene.mesh_index.size()) + " meshes, " +

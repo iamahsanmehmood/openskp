@@ -5,7 +5,9 @@
 #include <openskp/dxf_export.hpp>
 #include <openskp/edit.hpp>
 #include <openskp/errors.hpp>
+#include <openskp/fragments_export.hpp>
 #include <openskp/glb.hpp>
+#include <openskp/ifc_export.hpp>
 #include <openskp/instanced_glb.hpp>
 #include <openskp/instanced_scene.hpp>
 #include <openskp/json_export.hpp>

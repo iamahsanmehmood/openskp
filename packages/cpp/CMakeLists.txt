@@ -285,4 +285,7 @@ if(OPENSKP_BUILD_EXAMPLES)
 
   add_executable(openskp_parsetest examples/parsetest.cpp)
   target_link_libraries(openskp_parsetest PRIVATE OpenSkp::OpenSkp)
+
+  add_executable(openskp_ifctest examples/ifctest.cpp)
+  target_link_libraries(openskp_ifctest PRIVATE OpenSkp::OpenSkp)
 endif()

@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cmath>
 #include <fstream>
+#include <functional>
 #include <iomanip>
 #include <map>
 #include <optional>
@@ -83,17 +84,71 @@ std::optional<std::pair<std::string, std::string>> classify_by_keyword(const std
 }  // namespace
 
 std::pair<std::string, std::string> classify_element(const std::string& geom_name,
-                                                     const std::string& layer_name) {
+                                                     const std::string& layer_name,
+                                                     const std::string& path_name,
+                                                     bool classify_using_full_path) {
   if (auto by_name = classify_by_keyword(geom_name)) return *by_name;
   if (!layer_name.empty()) {
     if (auto by_layer = classify_by_keyword(layer_name)) return *by_layer;
   }
+  if (classify_using_full_path && !path_name.empty()) {
+    if (auto by_path = classify_by_keyword(path_name)) return *by_path;
+  }
   return {"IFCBUILDINGELEMENTPROXY", "IfcBuildingElementProxy"};
 }
 
+namespace {
+
+// One IFCPROPERTYSET (props) attached to product_id via
+// IFCRELDEFINESBYPROPERTIES. Shared by both meta.properties
+// (Pset_CustomProperties) and every other attribute dictionary an
+// instance carries (Pset_<dict-name>) below.
+void write_pset(std::ostringstream& ss, const std::function<int()>& next_id, int owner_hist_id,
+                int product_id, const std::string& pset_name,
+                const std::map<std::string, std::string>& props) {
+  if (props.empty()) return;
+  std::vector<int> prop_val_ids;
+  for (const auto& [pk, pv] : props) {
+    std::string clean_k = sanitize_name(pk);
+    std::string clean_v = sanitize_name(pv);
+    int prop_id = next_id();
+    ss << "#" << prop_id << "=IFCPROPERTYSINGLEVALUE('" << clean_k << "',$,IFCTEXT('" << clean_v
+       << "'),$);\r\n";
+    prop_val_ids.push_back(prop_id);
+  }
+
+  int pset_id = next_id();
+  std::ostringstream prop_ss;
+  for (size_t i = 0; i < prop_val_ids.size(); ++i) {
+    if (i > 0) prop_ss << ",";
+    prop_ss << "#" << prop_val_ids[i];
+  }
+  ss << "#" << pset_id << "=IFCPROPERTYSET('" << generate_ifc_guid() << "',#" << owner_hist_id
+     << ",'" << sanitize_name(pset_name) << "',$,(" << prop_ss.str() << "));\r\n";
+  ss << "#" << next_id() << "=IFCRELDEFINESBYPROPERTIES('" << generate_ifc_guid() << "',#"
+     << owner_hist_id << ",$,$,(#" << product_id << "),#" << pset_id << ");\r\n";
+}
+
+}  // namespace
+
 std::string to_ifc(const Scene& scene, double scale, const std::string& schema,
-                   const IfcClassifier& classifier) {
-  IfcClassifier classify = classifier ? classifier : IfcClassifier(classify_element);
+                   const IfcClassifier& classifier, bool classify_using_full_path) {
+  // classifier (if given) keeps its original 2-arg (name, layer) public
+  // signature; only the built-in classify_element() gains the path/
+  // full-path-matching parameters, matching openskp.export.ifc's own
+  // to_ifc()/classify_element() split.
+  std::function<std::pair<std::string, std::string>(const std::string&, const std::string&,
+                                                    const std::string&)>
+      classify;
+  if (classifier) {
+    classify = [&](const std::string& name, const std::string& layer, const std::string&) {
+      return classifier(name, layer);
+    };
+  } else {
+    classify = [&](const std::string& name, const std::string& layer, const std::string& path) {
+      return classify_element(name, layer, path, classify_using_full_path);
+    };
+  }
   std::string schema_str = schema.empty() ? "IFC4" : schema;
   std::transform(schema_str.begin(), schema_str.end(), schema_str.begin(),
                  [](unsigned char c) { return std::toupper(c); });
@@ -212,22 +267,39 @@ std::string to_ifc(const Scene& scene, double scale, const std::string& schema,
     size_t v_count = prim.positions.size() / 3;
     if (tri_count == 0 || v_count == 0) continue;
 
-    std::string geom_name = sanitize_name(prim.geom_name);
-    std::string layer_name = "Layer0";
     auto meta_it = scene.mesh_index.find(prim.geom_name);
+    // prim.geom_name is an internal lookup key (mesh index + hierarchy
+    // path + layer, e.g. "mesh_3115_ROOT__Component_6205261_Layer0") -
+    // never the element's real name. meta.name is the actual SketchUp
+    // instance name (or SketchUp's own "Component_<id>" default when
+    // nobody renamed it) - use that for both classification and the
+    // element's IFC Name, falling back to the internal key only if a
+    // primitive somehow has no mesh_index entry.
+    std::string display_name = (meta_it != scene.mesh_index.end() && !meta_it->second.name.empty())
+                                   ? sanitize_name(meta_it->second.name)
+                                   : sanitize_name(prim.geom_name);
+    std::string layer_name = "Layer0";
     if (meta_it != scene.mesh_index.end() && !meta_it->second.layer.empty()) {
       layer_name = sanitize_name(meta_it->second.layer);
     }
+    std::string path_name = meta_it != scene.mesh_index.end() ? meta_it->second.path : "";
 
-    auto [step_type, _] = classify(geom_name, layer_name);
+    auto [step_type, _] = classify(display_name, layer_name, path_name);
 
+    // scene.glb_primitives positions are baked in glTF's Y-up convention
+    // (glTF.y = SketchUp Z/height, glTF.z = -SketchUp Y/depth) - correct
+    // for GLB export, but IFC (like SketchUp itself) is Z-up, so it has
+    // to be converted back rather than passed through raw, or the
+    // exported building comes out rotated ~90 degrees and mirrored.
     std::ostringstream pt_ss;
     pt_ss.imbue(std::locale::classic());
     pt_ss << std::fixed << std::setprecision(6);
     for (size_t i = 0; i < v_count; ++i) {
       if (i > 0) pt_ss << ",";
-      pt_ss << "(" << (prim.positions[i * 3] * scale) << "," << (prim.positions[i * 3 + 1] * scale)
-            << "," << (prim.positions[i * 3 + 2] * scale) << ")";
+      double vx = prim.positions[i * 3] * scale;
+      double vy = -prim.positions[i * 3 + 2] * scale;
+      double vz = prim.positions[i * 3 + 1] * scale;
+      pt_ss << "(" << vx << "," << vy << "," << vz << ")";
     }
 
     int pt_list_id = next_id();
@@ -265,7 +337,7 @@ std::string to_ifc(const Scene& scene, double scale, const std::string& schema,
          << ",$,$,$,$,$,$,.FLAT.);\r\n";
 
       int style_id = next_id();
-      ss << "#" << style_id << "=IFCSURFACESTYLE('" << geom_name << "_Material',.BOTH.,(#"
+      ss << "#" << style_id << "=IFCSURFACESTYLE('" << display_name << "_Material',.BOTH.,(#"
          << rendering_id << "));\r\n";
 
       style_assign_id = next_id();
@@ -294,41 +366,38 @@ std::string to_ifc(const Scene& scene, double scale, const std::string& schema,
     std::string prod_guid = generate_ifc_guid();
     if (step_type == "IFCBUILDINGELEMENTPROXY") {
       ss << "#" << product_id << "=" << step_type << "('" << prod_guid << "',#" << owner_hist_id
-         << ",'" << geom_name << "',$,$,#" << prod_placement_id << ",#" << prod_shape_id
+         << ",'" << display_name << "',$,$,#" << prod_placement_id << ",#" << prod_shape_id
          << ",$,.NOTDEFINED.);\r\n";
     } else {
       ss << "#" << product_id << "=" << step_type << "('" << prod_guid << "',#" << owner_hist_id
-         << ",'" << geom_name << "',$,$,#" << prod_placement_id << ",#" << prod_shape_id
+         << ",'" << display_name << "',$,$,#" << prod_placement_id << ",#" << prod_shape_id
          << ",$,$);\r\n";
     }
     product_ids.push_back(product_id);
 
-    if (meta_it != scene.mesh_index.end() && !meta_it->second.properties.empty()) {
-      std::vector<int> prop_val_ids;
-      for (const auto& [pk, pv] : meta_it->second.properties) {
-        std::string clean_k = sanitize_name(pk);
-        std::string clean_v = sanitize_name(pv);
-        int prop_id = next_id();
-        ss << "#" << prop_id << "=IFCPROPERTYSINGLEVALUE('" << clean_k << "',$,IFCTEXT('" << clean_v
-           << "'),$);\r\n";
-        prop_val_ids.push_back(prop_id);
-      }
+    if (meta_it != scene.mesh_index.end()) {
+      write_pset(ss, next_id, owner_hist_id, product_id, "Pset_CustomProperties",
+                 meta_it->second.properties);
 
-      if (!prop_val_ids.empty()) {
-        int pset_id = next_id();
-        std::ostringstream prop_ss;
-        for (size_t i = 0; i < prop_val_ids.size(); ++i) {
-          if (i > 0) prop_ss << ",";
-          prop_ss << "#" << prop_val_ids[i];
-        }
-        ss << "#" << pset_id << "=IFCPROPERTYSET('" << generate_ifc_guid() << "',#" << owner_hist_id
-           << ",'Pset_CustomProperties',$,(" << prop_ss.str() << "));\r\n";
-        ss << "#" << next_id() << "=IFCRELDEFINESBYPROPERTIES('" << generate_ifc_guid() << "',#"
-           << owner_hist_id << ",$,$,(#" << product_id << "),#" << pset_id << ");\r\n";
+      // Any OTHER attribute dictionaries the instance carries (third-party
+      // BIM/steel-detailing plugins, etc. - see MeshMetadata::
+      // attribute_dictionaries) - each becomes its own named property set
+      // instead of being merged into Pset_CustomProperties, since these
+      // come from a distinct source and commonly share key names with
+      // each other (e.g. multiple plugins using "name").
+      for (const auto& [dict_name, entries] : meta_it->second.attribute_dictionaries) {
+        write_pset(ss, next_id, owner_hist_id, product_id, "Pset_" + dict_name, entries);
       }
     }
   }
 
+  // Presentation Layer Assignments (preserve layers and their on/off
+  // state). IFCPRESENTATIONLAYERWITHSTYLE - not the plain
+  // IFCPRESENTATIONLAYERASSIGNMENT neither SketchUp's own IFC exporter
+  // nor the IFC-manager SketchUp extension use - is the only IFC4 entity
+  // that can carry a layer's visibility at all (LayerOn); every other
+  // attribute here besides Name and LayerOn is left unset/false since
+  // this project doesn't track them (freeze/block/layer-level styles).
   for (const auto& [l_name, item_ids] : layer_items) {
     if (!item_ids.empty()) {
       std::ostringstream item_ss;
@@ -336,8 +405,11 @@ std::string to_ifc(const Scene& scene, double scale, const std::string& schema,
         if (i > 0) item_ss << ",";
         item_ss << "#" << item_ids[i];
       }
-      ss << "#" << next_id() << "=IFCPRESENTATIONLAYERASSIGNMENT('" << l_name << "',$,("
-         << item_ss.str() << "),$);\r\n";
+      auto hidden_it = scene.layer_hidden.find(l_name);
+      const char* layer_on =
+          (hidden_it != scene.layer_hidden.end() && hidden_it->second) ? ".F." : ".T.";
+      ss << "#" << next_id() << "=IFCPRESENTATIONLAYERWITHSTYLE('" << l_name << "',$,("
+         << item_ss.str() << "),$," << layer_on << ",.F.,.F.,());\r\n";
     }
   }
 
@@ -357,7 +429,8 @@ std::string to_ifc(const Scene& scene, double scale, const std::string& schema,
 }
 
 void export_ifc(const Scene& scene, const std::filesystem::path& path, double scale,
-                const std::string& schema, const IfcClassifier& classifier) {
+                const std::string& schema, const IfcClassifier& classifier,
+                bool classify_using_full_path) {
   if (path.has_parent_path()) {
     std::filesystem::create_directories(path.parent_path());
   }
@@ -365,7 +438,7 @@ void export_ifc(const Scene& scene, const std::filesystem::path& path, double sc
   if (!file.is_open()) {
     throw std::runtime_error("Failed to open file for writing: " + path.string());
   }
-  std::string text = to_ifc(scene, scale, schema, classifier);
+  std::string text = to_ifc(scene, scale, schema, classifier, classify_using_full_path);
   file.write(text.data(), text.size());
 }
 
