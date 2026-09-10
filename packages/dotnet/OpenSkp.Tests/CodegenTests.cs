@@ -81,6 +81,28 @@ namespace OpenSkp.Tests
             Assert.Equal("", regen.Definitions.Values.First().Name);
         }
 
+        [Fact]
+        public void ReproducesTexturedMaterialAppliedWidthAndOpacity()
+        {
+            var model = new SkpModel();
+            model.Materials.Add(new Material
+            {
+                Name = "Brick",
+                Transparency = 0.75,
+                Texture = new Texture
+                {
+                    Filename = "brick.png",
+                    Width = 24.0,
+                    Height = 12.0,
+                    Data = new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 }
+                }
+            });
+            string code = Codegen.ToCSharpCode(model);
+            Assert.Contains("appliedHeight: 12", code);
+            Assert.Contains("appliedWidth: 24", code);
+            Assert.Contains("opacity: 0.75", code);
+        }
+
         public static System.Collections.Generic.IEnumerable<object[]> RealFixtures()
         {
             // single_material_v17.skp is deliberately excluded: it

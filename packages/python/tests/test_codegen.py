@@ -159,6 +159,36 @@ class TestToPythonCode:
         regen_face = next(iter(regen.root.faces.values()))
         assert regen_face.uv_transform == pytest.approx(orig_face.uv_transform, abs=1e-6)
 
+    def test_reproduces_textured_material_applied_width_and_opacity(self, tmp_path):
+        png_path = tmp_path / "brick.png"
+        png_path.write_bytes(_make_test_png())
+        b = create()
+        tex = b.add_texture_material("Brick", str(png_path), applied_width=24.0, applied_height=12.0, opacity=0.7)
+        b.add_face(
+            [(0.0, 0.0, 0.0), (100.0, 0.0, 0.0), (100.0, 100.0, 0.0), (0.0, 100.0, 0.0)],
+            material=tex,
+        )
+
+        out = tmp_path / "orig.skp"
+        out.write_bytes(b.to_bytes())
+        original = SkpFile.open(str(out)).parse()
+
+        code = to_python_code(original)
+        assert "applied_width=24.0" in code
+        assert "applied_height=12.0" in code
+        assert "opacity=0.7" in code
+
+        regen_bytes = _run_generated_code(code)
+        regen_out = tmp_path / "regen.skp"
+        regen_out.write_bytes(regen_bytes)
+        regen = SkpFile.open(str(regen_out)).parse()
+
+        regen_mat = next(m for m in regen.materials if m.name == "Brick")
+        assert regen_mat.texture is not None
+        assert regen_mat.texture.width == pytest.approx(24.0)
+        assert regen_mat.texture.height == pytest.approx(12.0)
+        assert regen_mat.transparency == pytest.approx(0.7)
+
 
 def _reachable_counts(defn) -> tuple:
     referenced_edges = set()

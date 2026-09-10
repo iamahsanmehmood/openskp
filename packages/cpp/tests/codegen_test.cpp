@@ -58,6 +58,25 @@ TEST(Codegen, EmitsSolidMaterialLayerAndFaceWithFieldAssignment) {
   EXPECT_EQ(code.find("{."), std::string::npos);
 }
 
+TEST(Codegen, EmitsTexturedMaterialWithAppliedWidthAndOpacity) {
+  SkpModel model;
+  Material mat;
+  mat.name = "Brick";
+  mat.transparency = 0.75;
+  Texture tex;
+  tex.filename = "brick.png";
+  tex.width = 24.0;
+  tex.height = 12.0;
+  tex.data = ByteBuffer{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A};
+  mat.texture = tex;
+  model.materials.push_back(mat);
+
+  std::string code = to_cpp_code(model);
+
+  EXPECT_NE(code.find("add_texture_material(\"Brick\", tex_path_0, 12, 24, 0.75)"),
+            std::string::npos);
+}
+
 TEST(Codegen, ReconstructsFaceHoles) {
   auto builder = create();
   FaceOptions fopts;

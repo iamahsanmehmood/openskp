@@ -85,16 +85,15 @@ namespace OpenSkp
                     string b64 = Convert.ToBase64String(mat.Texture.Data);
                     string ext = System.IO.Path.GetExtension(mat.Texture.Filename ?? "");
                     if (string.IsNullOrEmpty(ext)) ext = ".png";
-                    // appliedHeight: 1.0 - every face using a textured
-                    // material is written below with explicit
-                    // frontUv/backUv, never left to default projection,
-                    // so the material's own applied height must be an
-                    // exact no-op divisor (matches AddTextureMaterial's
-                    // own default too, but kept explicit since it's a
-                    // hard requirement here, not just a safe default).
+                    // The real applied size: the generated AddFace pins are in
+                    // tiles and the writer scales them by the material's size, so
+                    // the material keeps its size and the faces their mapping.
+                    double appH = mat.Texture.Height > 1e-9 ? mat.Texture.Height : 1.0;
+                    double appW = mat.Texture.Width > 1e-9 ? mat.Texture.Width : 1.0;
+                    string optOpacity = mat.Transparency < 1.0 - 1e-6 ? $", opacity: {Round(mat.Transparency)}" : "";
                     Push($"        var _texPath{i} = System.IO.Path.Combine(System.IO.Path.GetTempPath(), Guid.NewGuid() + \"{ext}\");");
                     Push($"        System.IO.File.WriteAllBytes(_texPath{i}, Convert.FromBase64String(\"{b64}\"));");
-                    Push("        int " + varName + $" = builder.AddTextureMaterial({CsString(mat.Name)}, _texPath{i}, appliedHeight: 1.0);");
+                    Push("        int " + varName + $" = builder.AddTextureMaterial({CsString(mat.Name)}, _texPath{i}, appliedHeight: {Round(appH)}, appliedWidth: {Round(appW)}{optOpacity});");
                     Push($"        System.IO.File.Delete(_texPath{i});");
                 }
                 else

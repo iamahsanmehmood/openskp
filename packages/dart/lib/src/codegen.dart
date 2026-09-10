@@ -171,17 +171,17 @@ String toDartCode(SkpModel model) {
     if (tex != null && tex.data != null && tex.data!.isNotEmpty) {
       texturedMats.add(mat.name);
       final b64 = base64Encode(tex.data!);
-      // appliedHeight: 1.0 - every face using a textured material is
-      // written below with explicit frontUv/backUv, never left to
-      // default projection, so the material's own applied height must be
-      // an exact no-op divisor (matches addTextureMaterial's own default
-      // too, but kept explicit since it's a hard requirement here, not
-      // just a safe default).
+      // The real applied size: the generated addFace pins are in
+      // tiles and the writer scales them by the material's size, so
+      // the material keeps its size and the faces their mapping.
+      final appH = tex.height > 1e-9 ? tex.height : 1.0;
+      final appW = tex.width > 1e-9 ? tex.width : 1.0;
+      final optOpacity = mat.transparency < 1.0 - 1e-6 ? ', opacity: ${round(mat.transparency)}' : '';
       push('  final _texBytes$i = base64Decode(');
       push("    '$b64',");
       push('  );');
       push(
-          "  final $varName = builder.addTextureMaterial(${_dartString(mat.name)}, _writeTempFile(_texBytes$i, ${_dartString(_extOf(tex.filename))}), appliedHeight: 1.0);");
+          "  final $varName = builder.addTextureMaterial(${_dartString(mat.name)}, _writeTempFile(_texBytes$i, ${_dartString(_extOf(tex.filename))}), appliedHeight: ${round(appH)}, appliedWidth: ${round(appW)}$optOpacity);");
     } else {
       final c = mat.color;
       push(

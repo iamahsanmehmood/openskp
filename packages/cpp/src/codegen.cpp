@@ -246,11 +246,8 @@ std::string to_cpp_code(const SkpModel& model) {
         auto dot = mat.texture->filename.find_last_of('.');
         if (dot != std::string::npos) suffix = mat.texture->filename.substr(dot);
         if (suffix.empty()) suffix = ".png";
-        // applied_height: 1.0 - every face using a textured material is written below with
-        // explicit front_uv/back_uv, never left to default projection, so the material's own
-        // applied height must be an exact no-op divisor (matches add_texture_material's own
-        // default too, but kept explicit since it's a hard requirement here, not just a safe
-        // default).
+        // The real applied size: the generated add_face pins are in tiles and the writer scales
+        // them by the material's size, so the material keeps its size and the faces their mapping.
         //
         // var_name is declared here, then only ASSIGNED inside the nested `{ }` block below (its
         // temp-file cleanup needs its own scope) - a fresh declaration in that inner scope would
@@ -268,8 +265,15 @@ std::string to_cpp_code(const SkpModel& model) {
         push("    std::string tex_path_" + std::to_string(i) +
              " = openskp_codegen_write_temp_file(tex_bytes_" + std::to_string(i) + ", " +
              cpp_string(suffix) + ");");
+        double app_h = (mat.texture && mat.texture->height > 1e-9) ? mat.texture->height : 1.0;
+        double app_w = (mat.texture && mat.texture->width > 1e-9) ? mat.texture->width : 1.0;
+        std::ostringstream extra_args_ss;
+        extra_args_ss << ", " << round4(app_h) << ", " << round4(app_w);
+        if (mat.transparency < 1.0 - 1e-6) {
+          extra_args_ss << ", " << round4(mat.transparency);
+        }
         push("    " + var_name + " = builder->add_texture_material(" + cpp_string(mat.name) +
-             ", tex_path_" + std::to_string(i) + ", 1.0);");
+             ", tex_path_" + std::to_string(i) + extra_args_ss.str() + ");");
         push("    std::remove(tex_path_" + std::to_string(i) + ".c_str());");
         push("  }");
       } else {

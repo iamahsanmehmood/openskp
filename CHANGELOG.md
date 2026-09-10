@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — Cross-language codegen textured material round-trip
+
+`to_*_code()` now preserves both `applied_width` and material `opacity` when regenerating textured materials across all 5 language ports (Python, TypeScript, .NET, Dart, C++).
+
 ### Changed — TypeScript writer memory
 
 `ArchiveWriter` keeps the archive in a growable `Uint8Array` instead of a

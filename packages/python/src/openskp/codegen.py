@@ -145,9 +145,16 @@ def to_python_code(model: SkpModel) -> str:
             push("    with os.fdopen(_tex_fd, 'wb') as _f:")
             push(f"        _f.write(base64.b64decode({b64!r}))")
             push("    try:")
+            extra_args = [
+                f"applied_width={mat.texture.width or 1.0!r}",
+                f"applied_height={mat.texture.height or 1.0!r}",
+            ]
+            if mat.transparency is not None and mat.transparency < 1.0 - 1e-6:
+                extra_args.append(f"opacity={round(mat.transparency, 4)!r}")
             push(
                 f"        {var_name} = builder.add_texture_material({mat.name!r}, _tex_path, "
-                f"applied_width={mat.texture.width or 1.0!r}, applied_height={mat.texture.height or 1.0!r})"
+                + ", ".join(extra_args)
+                + ")"
             )
             push("    finally:")
             push("        os.unlink(_tex_path)")

@@ -113,20 +113,20 @@ export function toTypeScriptCode(model: SkpModel): string {
     if (mat.texture && mat.texture.data) {
       texturedMats.add(mat.name);
       const b64 = toBase64(mat.texture.data);
-      // appliedHeight: 1.0 - every face using a textured material is
-      // written below with explicit frontUv/backUv, never left to
-      // default projection, so the material's own applied height must be
-      // an exact no-op divisor (matches addTextureMaterial's own default
-      // too, but kept explicit since it's a hard requirement here, not
-      // just a safe default).
+      // The real applied size: the generated addFace pins are in
+      // tiles and the writer scales them by the material's size, so
+      // the material keeps its size and the faces their mapping.
       //
       // atob/charCodeAt (not Buffer) so the generated code runs in a
       // browser too, matching addTextureMaterial's own byte-based (not
       // file-path) design for this package.
+      const appH = mat.texture.height || 1.0;
+      const appW = mat.texture.width || 1.0;
+      const opacityArg = mat.transparency < 1.0 - 1e-6 ? `, ${round(mat.transparency)}` : '';
       push(`  const ${varName} = builder.addTextureMaterial(`);
       push(`    ${JSON.stringify(mat.name)},`);
       push(`    Uint8Array.from(atob(${JSON.stringify(b64)}), (c) => c.charCodeAt(0)),`);
-      push(`    ${JSON.stringify(mat.texture.filename)}, 1.0`);
+      push(`    ${JSON.stringify(mat.texture.filename)}, ${round(appH)}, ${round(appW)}${opacityArg}`);
       push(`  );`);
     } else {
       const rgba = [mat.color.r, mat.color.g, mat.color.b, mat.color.a];
