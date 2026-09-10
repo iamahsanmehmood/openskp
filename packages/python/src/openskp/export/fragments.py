@@ -1006,7 +1006,16 @@ def from_fragments(data: bytes) -> "InstancedScene":
                     warned_unsupported = True
                 continue
             signature.append((rep_idx, mat_idx))
-            points, triangles = decode_shell(rep_idx)
+            # Representation.Id() is the index into Meshes.Shells - NOT the
+            # representation's own position in the Representations vector.
+            # OpenSKP's writer happens to keep the two equal, but a real
+            # ThatOpen-produced file does not, so this must follow Id()
+            # (matches the real reader's own `meshes.shells(repr.id!, ...)`
+            # in fetch-functions.ts).
+            shell_idx = representation.Id()
+            if shell_idx >= n_shells:
+                continue
+            points, triangles = decode_shell(shell_idx)
             normals = _compute_flat_normals(points, triangles)
             positions = array("f")
             normals_arr = array("f")
