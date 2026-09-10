@@ -50,6 +50,7 @@ Every feature OpenSKP has, across all 5 languages. ✅ = shipped and released.
 | Single attribute dictionary per entity | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Attribute dicts: full 9-value-type support (`Point3d`/`Vector3d`/`Length`/`Timestamp`/nested lists) | ✅ | ❌ str/int/float only | ❌ | ❌ | ❌ str only |
 | Attribute dicts: multiple dictionaries per entity | ✅ | ❌ single dict only | ❌ | ❌ | ✅ |
+| Attribute dicts surfaced in GLB/JSON metadata export (not just IFC Psets) | 🔶 on main | n/a, no `attribute_dictionaries` field | n/a | n/a | 🔶 on main, GitHub-only |
 | VFF pages/scenes + dimension parsing | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Legacy (pre-2021) pages/scenes reading | ✅ | ❌ VFF only | ❌ VFF only | ❌ VFF only | 🔶 on main, GitHub-only |
 | Construction lines/points reading | ✅ legacy only | ❌ | ❌ | ❌ | 🔶 legacy only, on main, GitHub-only |
@@ -105,6 +106,12 @@ It folds into a proper PyPI `1.3.0` once the cross-language porting items in
 [§2](#2-feature-matrix) and [issue #285](https://github.com/iamahsanmehmood/openskp/issues/285)
 catch up.
 
+Also merged on `main` since that preview tag, not yet part of it: a fix so
+`attribute_dictionaries` (every attribute dictionary an instance carries,
+not just `dynamic_attributes`) actually reaches GLB/JSON metadata export —
+`export/glb.py`, `export/json_export.py`, `export/instanced_glb.py` — see
+[CHANGELOG.md § Unreleased](../CHANGELOG.md).
+
 TypeScript merged, not yet released: a writer memory fix (`ArchiveWriter`
 now keeps the archive in a growable `Uint8Array` instead of a `number[]`,
 cutting peak heap on a 62 MB write from ~2.1 GB to ~0.2 GB) — see
@@ -132,6 +139,14 @@ numbered `cpp-v1.3.0` release yet. It folds into that once the known gaps
 below are closed and the cross-language porting items in
 [§2](#2-feature-matrix) and [issue #285](https://github.com/iamahsanmehmood/openskp/issues/285)
 catch up.
+
+Also merged on `main` since that preview tag, not yet part of it: a fix so
+`attribute_dictionaries` actually reaches `json_export.cpp`'s
+`instance_node_to_json`/`mesh_metadata_to_json` output (it was already
+correctly resolved by `build_scene()`, just never serialized) — see
+[CHANGELOG.md § Unreleased](../CHANGELOG.md). Note this is a distinct gap
+from the "values decode as strings only" item below — this one was a
+missing field in the export layer entirely, not a type-fidelity limit.
 
 Known gaps in this C++ work, stated honestly rather than glossed over:
 - Attribute dictionary values decode as strings only (no `Point3d`/`Length`/

@@ -212,6 +212,24 @@ JsonValue definition_to_json(const Definition& defn) {
   return obj;
 }
 
+// Every attribute dictionary an instance/mesh carries, keyed by the
+// dictionary's own declared name - not just SketchUp's own
+// dynamic_attributes (which `properties` above already covers). This is
+// where a third-party plugin's own per-instance data (e.g. a
+// steel-detailing tool's own named dictionary) reaches JSON output; it
+// was already correctly resolved by build_scene()/build_instanced_scene()
+// but previously never serialized here at all.
+JsonValue attribute_dictionaries_to_json(
+    const std::map<std::string, std::map<std::string, std::string>>& dicts) {
+  auto obj = JsonValue::make_object();
+  for (const auto& [dict_name, entries] : dicts) {
+    auto entries_obj = JsonValue::make_object();
+    for (const auto& [k, v] : entries) entries_obj.set(k, v);
+    obj.set(dict_name, std::move(entries_obj));
+  }
+  return obj;
+}
+
 JsonValue instance_node_to_json(const InstanceNode& node) {
   auto obj = JsonValue::make_object();
   obj.set("name", node.name);
@@ -225,6 +243,7 @@ JsonValue instance_node_to_json(const InstanceNode& node) {
   auto props = JsonValue::make_object();
   for (const auto& [k, v] : node.properties) props.set(k, v);
   obj.set("properties", std::move(props));
+  obj.set("attribute_dictionaries", attribute_dictionaries_to_json(node.attribute_dictionaries));
   auto children = JsonValue::make_array();
   for (const auto& child : node.children) children.push(instance_node_to_json(child));
   obj.set("children", std::move(children));
@@ -244,6 +263,7 @@ JsonValue mesh_metadata_to_json(const MeshMetadata& m) {
   auto props = JsonValue::make_object();
   for (const auto& [k, v] : m.properties) props.set(k, v);
   obj.set("properties", std::move(props));
+  obj.set("attribute_dictionaries", attribute_dictionaries_to_json(m.attribute_dictionaries));
   obj.set("path", m.path);
   return obj;
 }

@@ -2165,6 +2165,77 @@ class TestModernRealFile:
         # exercises the full TLV/XML decode path without touching
         # triangulation at all.
 
+    def test_untitled_skp_attribute_dictionaries_reach_glb_and_json_export(self, tmp_path) -> None:
+        """Every attribute dictionary an instance carries (not just
+        SketchUp's own dynamic_attributes) was already correctly resolved
+        by build_scene() - InstanceNode.attribute_dictionaries has held
+        it since openskp#254 - but export/glb.py's and export/json_export.py's
+        own metadata dicts never actually wrote that field out, silently
+        dropping every third-party plugin's data (e.g. this real file's
+        own SteelFramer dictionary) from any consumer reading the
+        metadata JSON/dict directly instead of a derived .ifc file."""
+        import json as _json
+
+        from openskp.export import glb as glb_export
+        from openskp.export import json_export
+
+        skp = self._model(self.FIXTURE_UNTITLED)
+        skp.parse()
+        scene = skp.build_scene()
+
+        def find_w1(node):
+            if node.name == "W1":
+                return node
+            for c in node.children:
+                found = find_w1(c)
+                if found:
+                    return found
+            return None
+
+        w1 = find_w1(scene.scene_hierarchy)
+        assert w1 is not None
+        assert w1.properties == {}
+        assert w1.attribute_dictionaries["steelframer-dict"]["generator"] == (
+            "SteelFramer::Engine::PanelGenerator"
+        )
+
+        # 1. export/glb.py's metadata JSON sidecar
+        out_glb = tmp_path / "untitled.glb"
+        glb_export.export(skp, str(out_glb))
+        with open(str(out_glb).replace(".glb", "_metadata.json"), encoding="utf-8") as f:
+            metadata = _json.load(f)
+
+        def find_w1_dict(node):
+            if node.get("name") == "W1":
+                return node
+            for c in node.get("children", []):
+                found = find_w1_dict(c)
+                if found:
+                    return found
+            return None
+
+        w1_glb = find_w1_dict(metadata["scene_hierarchy"])
+        assert w1_glb is not None
+        assert w1_glb["attribute_dictionaries"]["steelframer-dict"]["profile"] == "362S200-43"
+
+        # 2. export/json_export.py's own schema (both the scene_hierarchy
+        # tree and the mesh_index entries)
+        d = json_export.to_dict(skp.parse(), scene)
+        w1_json = find_w1_dict(d["scene_hierarchy"])
+        assert w1_json is not None
+        assert w1_json["attribute_dictionaries"]["steelframer-dict"]["generator"] == (
+            "SteelFramer::Engine::PanelGenerator"
+        )
+        mesh_with_dict = next(
+            (
+                m
+                for m in d["mesh_index"].values()
+                if m.get("attribute_dictionaries", {}).get("steelframer-dict")
+            ),
+            None,
+        )
+        assert mesh_with_dict is not None
+
     def test_su_file_skp_matches_ground_truth(self) -> None:
         skp = self._model(self.FIXTURE_SU_FILE)
         model = skp.parse()
