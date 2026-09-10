@@ -453,15 +453,21 @@ output — ThatOpen's real `IfcImporter` output, or anyone else's — and
 rides every other export this project already has (GLB, OBJ, STL, PLY,
 DXF, IFC4, JSON, `.skp` itself via the writer) for free, once parsed.
 
-Verified two ways: round-trips this project's own output exactly (world-
+Verified three ways: round-trips this project's own output exactly (world-
 space vertex positions across a real `.skp`-derived scene match to the
-last bit, not just object/vertex counts), and reads a real ThatOpen-
-produced production file cleanly (a genuine IFC-derived building, 5,751
-nodes / 100,332 vertices, not a synthetic fixture) — re-exporting that
-file through this same module and loading the result back through the
-actual `@thatopen/fragments` runtime preserves real IFC GUIDs and
-category names. A smaller real ThatOpen fixture (MIT-licensed, from their
-own `resources/frags/`) is committed at
+last bit, not just object/vertex counts); reads a real ThatOpen-produced
+production file cleanly (a genuine IFC-derived building, 5,751 nodes /
+100,332 vertices, not a synthetic fixture) — re-exporting that file
+through this same module and loading the result back through the actual
+`@thatopen/fragments` runtime preserves real IFC GUIDs and category
+names; and, independently of any pre-existing fixture, converts real IFC
+source files (a Revit-exported wall, and a real ~8.6 MB structural model)
+through ThatOpen's own actual `IfcImporter` and reads the freshly-produced
+`.frag` output straight into an `InstancedScene` — correct spatial
+hierarchy, GUIDs, and geometry counts, with `CIRCLE_EXTRUSION` samples
+(present in the structural model) skipped with a warning as documented.
+A smaller real ThatOpen fixture (MIT-licensed, from their own
+`resources/frags/`) is committed at
 `tests/fixtures/thatopen_small_test.frag` for CI.
 
 **Known gaps, stated honestly:**
@@ -480,6 +486,24 @@ own `resources/frags/`) is committed at
   has no reader yet, only `SHELL`. A real `IfcImporter`-produced file can
   contain these; such samples are skipped with a warning, not silently
   misread as shells.
+
+### Fixed — `.frag` reader crashed on real ThatOpen-produced files (wrong shell lookup)
+
+`from_fragments` resolved each sample's geometry via `Representation`'s
+own position in the `Representations` vector, treating that position as
+the index into `Meshes.Shells`. That's only true of this project's own
+writer, which happens to always keep the two equal — `Representation.Id()`
+is the actual `Shells` index, and a real ThatOpen `IfcImporter`-produced
+file does not keep it equal to the representation's vector position.
+Surfaced as an `IndexError` reading a `.frag` file freshly converted from
+a real structural IFC model via ThatOpen's own `IfcImporter` (not caught
+by any prior test, since every previous fixture — including this
+project's own writer's output — happened not to exercise the divergence).
+Fixed by following `Representation.Id()`, matching the real reader's own
+`meshes.shells(repr.id!, ...)` (`Utils/edit/fetch-functions.ts` in
+`@thatopen/fragments`). Regression test patches a representation's
+`Id()` in place to diverge from its vector position and confirms the
+correct (not merely non-crashing) shell comes back.
 
 ## [1.2.0] — 2026-09-04
 

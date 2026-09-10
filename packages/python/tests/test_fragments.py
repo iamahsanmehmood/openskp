@@ -862,3 +862,79 @@ class TestFromFragments:
         # sample referencing it is skipped - zero primitives anywhere in
         # the resulting scene, not a crash and not misread geometry.
         assert sum(len(r.primitives) for r in result.mesh_resources) == 0
+
+    def test_follows_representation_id_not_its_vector_position_for_shell_lookup(self):
+        """Representation.Id() is the index into Meshes.Shells - it is NOT
+        guaranteed to equal the representation's own position in the
+        Representations vector. OpenSKP's writer always keeps the two
+        equal, so this divergence never showed up in any round trip
+        through our own encoder (or even in ThatOpen's small fixture) -
+        it only surfaced reading a real ThatOpen IfcImporter file, where
+        it crashed with an IndexError. This proves the fix: the reader
+        must follow Id(), matching the real reader's own
+        `meshes.shells(repr.id!, ...)` (fetch-functions.ts)."""
+        box = InstancedMeshResource(
+            id="mesh_box", definition_id=1, definition_name="Box",
+            variant_key="1|255,255,255", primitives=[_box_primitive()],
+        )
+        triangle = LocalPrimitive(
+            positions=array("f", [0, 0, 0, 1, 0, 0, 0, 1, 0]),
+            normals=array("f", [0.0] * 9),
+            uvs=array("f", [0.0] * 6),
+            indices=array("I", [0, 1, 2]),
+            material_index=0,
+        )
+        flag = InstancedMeshResource(
+            id="mesh_flag", definition_id=2, definition_name="Flag",
+            variant_key="2|255,255,255", primitives=[triangle],
+        )
+        node_a = InstancedNode(name="Item_Box", matrix=IDENTITY, mesh_resource_id="mesh_box")
+        node_b = InstancedNode(name="Item_Flag", matrix=IDENTITY, mesh_resource_id="mesh_flag")
+        root = InstancedNode(name="ROOT", matrix=IDENTITY, children=[node_a, node_b])
+        scene = InstancedScene(
+            bounds=None, scene_hierarchy=root, mesh_resources=[box, flag],
+            gltf_materials=[{"pbrMetallicRoughness": {"baseColorFactor": [1.0, 1.0, 1.0, 1.0]}}],
+            textures=[],
+        )
+        data = fragments.to_fragments(scene, raw=True)
+
+        model = Model.GetRootAsModel(bytearray(data), 0)
+        meshes = model.Meshes()
+        assert meshes.ShellsLength() == 2
+        assert meshes.RepresentationsLength() == 2
+
+        rep0 = meshes.Representations(0)
+        rep1 = meshes.Representations(1)
+        id0, id1 = rep0.Id(), rep1.Id()
+        assert id0 != id1
+
+        # Swap the two representations' Id() fields (Uint32 at struct
+        # offset 0 - see Representation.py) while leaving their positions
+        # in the Representations vector untouched, so position-based
+        # lookup and Id()-based lookup now disagree.
+        patched = bytearray(data)
+        import struct
+        struct.pack_into("<I", patched, rep0._tab.Pos, id1)
+        struct.pack_into("<I", patched, rep1._tab.Pos, id0)
+
+        result = fragments.from_fragments(bytes(patched))
+
+        def find(node, name):
+            if node.name == name:
+                return node
+            for c in node.children:
+                found = find(c, name)
+                if found is not None:
+                    return found
+            return None
+
+        def vert_count(node):
+            resource = next(r for r in result.mesh_resources if r.id == node.mesh_resource_id)
+            return sum(len(p.positions) // 3 for p in resource.primitives)
+
+        # Whichever shell each representation's swapped Id() now points
+        # at is what must come out - the box's item now resolves to the
+        # 3-vertex triangle shell, and vice versa. Reading by vector
+        # position instead would show the ORIGINAL, unswapped counts.
+        assert vert_count(find(result.scene_hierarchy, "Item_Box")) == 3
+        assert vert_count(find(result.scene_hierarchy, "Item_Flag")) == 8
