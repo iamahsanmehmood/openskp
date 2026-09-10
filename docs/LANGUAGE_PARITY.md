@@ -50,7 +50,7 @@ Every feature OpenSKP has, across all 5 languages. ✅ = shipped and released.
 | Attribute dicts: full 9-value-type support (`Point3d`/`Vector3d`/`Length`/`Timestamp`/nested lists) | ✅ | ❌ str/int/float only | ❌ | ❌ | ❌ str only |
 | Attribute dicts: multiple dictionaries per entity | ✅ | ❌ single dict only | ❌ | ❌ | ✅ |
 | VFF pages/scenes + dimension parsing | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Legacy (pre-2021) pages/scenes reading | ✅ | ❌ VFF only | ❌ VFF only | ❌ VFF only | ❌ VFF only |
+| Legacy (pre-2021) pages/scenes reading | ✅ | ❌ VFF only | ❌ VFF only | ❌ VFF only | 🔶 on main, GitHub-only |
 | Construction lines/points reading | ✅ | ❌ | ❌ | ❌ | ❌ |
 | VFF per-layer-hidden flag reading | 🔶 on main | ❌ | ❌ | ❌ | 🔶 on main, GitHub-only |
 | `mesh_index[...].properties` populated | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -115,11 +115,18 @@ C++ merged, not yet released:
 | `mesh_index[...].properties`/`.attribute_dictionaries` backfill in the baked (`build_scene`) path | `scene.cpp` | [CHANGELOG.md § Unreleased](../CHANGELOG.md) |
 | VFF (2021+) per-layer-hidden flag reading (`8E3C` tag) | `geometry.cpp`'s `collect_layers`, `core.cpp` | [CHANGELOG.md § Unreleased](../CHANGELOG.md) |
 | `model.layers` in source-file order, not alphabetical (`RawParsed::layer_order`) | `core.cpp`, `legacy.cpp`, `model.cpp` | [CHANGELOG.md § Unreleased](../CHANGELOG.md) |
+| Legacy (pre-2021) pages/scenes reading (`scan_pages_for_layers`) | `legacy.cpp` | [CHANGELOG.md § Unreleased](../CHANGELOG.md) |
 
-Known gap in this C++ work, stated honestly rather than glossed over:
-attribute dictionary values decode as strings only (no `Point3d`/`Length`/
-nested-list support, matching C++'s existing string-only property handling
-elsewhere — see the feature matrix above).
+Known gaps in this C++ work, stated honestly rather than glossed over:
+- Attribute dictionary values decode as strings only (no `Point3d`/`Length`/
+  nested-list support, matching C++'s existing string-only property handling
+  elsewhere — see the feature matrix above).
+- The legacy pages/scenes reader has not been exercised against a real
+  file that actually contains a scene (none of the committed fixtures or
+  the real production files available while building it had one) — only
+  against a synthetic byte-level test mirroring Python's own
+  ground-truthed test case, plus real-file smoke testing (no crash, no
+  false positives) on 5 real files with no scenes at all.
 
 ## 4. Real SketchUp file version support
 

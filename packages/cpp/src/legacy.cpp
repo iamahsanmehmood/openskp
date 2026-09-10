@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <cmath>
 #include <exception>
+#include <functional>
 #include <optional>
 #include <regex>
 #include <unordered_map>
@@ -121,6 +122,11 @@ struct R {
     return p + 3 <= d.size() && d[p] == 255 && d[p + 1] == 254 && d[p + 2] == 255;
   }
 
+  uint16_t peek_u16() {
+    need(2);
+    return read_u16(d, p);
+  }
+
   std::string utf16() {
     if (!marker()) throw std::runtime_error("expected legacy string record");
     p += 3;
@@ -150,63 +156,15 @@ struct R {
   }
 };
 
-struct V {
-  std::string k;
-  std::string name;
-  std::string label;
-  std::string text;
-  std::string guid;
-  Vec3 xyz{};
-  std::vector<double> plane;
-  std::vector<double> xf;
-  std::vector<double> uvf;
-  std::vector<double> uvb;
-  bool front_projected{};
-  bool back_projected{};
-  std::uint64_t v1{};
-  std::uint64_t v2{};
-  std::uint64_t edge{};
-  std::uint64_t def{};
-  // Slot of this entity's CAttributeContainer (resolved through
-  // Archive::slots), or nullopt when it has none. Not a bare slot number:
-  // slot 0 is a legitimate real slot (the first object allocated in the
-  // archive), so 0 can't double as a sentinel for "absent."
-  std::optional<std::uint64_t> attrs;
-  // Only populated for "dict" (CAttributeNamed) entities: this
-  // dictionary's own key/value pairs, already stringified (see
-  // Archive::typed()).
-  std::map<std::string, std::string> entries;
-  std::uint64_t tex_dib{};
-  bool sense{};
-  bool faces_camera{};
-  bool shadows_face_sun{};
-  bool colorized{};
-  int mat{};
-  int back_mat{};
-  int layer{};
-  int hidden{};
-  int soft{};
-  int smooth{};
-  int r{128};
-  int g{128};
-  int b{128};
-  int a{255};
-  double opacity{};
-  double tw{};
-  double th{};
-  std::string tex_file;
-  ByteBuffer blob;
-  std::vector<std::shared_ptr<V>> loops;
-  std::vector<std::shared_ptr<V>> uses;
-  std::vector<std::tuple<uint64_t, std::string, std::shared_ptr<V>>> ents;
-};
+// V is now defined in internal.hpp (moved out of this anonymous
+// namespace so LegacySlotEntry there can hold a real shared_ptr<V> - see
+// that struct's own comment).
 
-struct Entry {
-  bool cls{};
-  std::string name;
-  int schema{};
-  std::shared_ptr<V> v;
-};
+// Same shape as internal.hpp's LegacySlotEntry (which is exposed there
+// purely for scan_pages_for_layers's testability - see its own comment)
+// - aliased here so every existing use of Entry throughout this file
+// stays unchanged.
+using Entry = LegacySlotEntry;
 
 // True when the bytes at p are an MFC class-ref to class `slot`. Mirrors both
 // encodings Archive::object() decodes: the short 16-bit form (0x8000|slot)
@@ -1344,7 +1302,188 @@ void fill(GeometryBuilder& b,
     }
   }
 }
+
+// ── pages (scenes) ────────────────────────────────────────────────────
+//
+// CViewPage's full record embeds a camera, an optional thumbnail image, a
+// font, and - whenever any of its several independent "use_*" capture
+// flags beyond hidden-layers is set - an entire Style sub-object with no
+// documented fixed size. Reverse engineering that is out of scope, so
+// only the narrow case is supported: a page whose captured flags are
+// exactly the baseline (nothing captured) or baseline + hidden-layers.
+// Ground truth for both (the flags bitmask, the hidden-layers list shape)
+// was captured from real v17-native SketchUp saves - mirrors Python's
+// legacy._scan_pages exactly.
+constexpr uint32_t kPageAllowedFlags[] = {0xc00, 0xc20};
+constexpr uint32_t kPageHiddenLayersBit = 0x20;
+
+bool is_allowed_page_flags(uint32_t flags) {
+  for (auto f : kPageAllowedFlags)
+    if (f == flags) return true;
+  return false;
+}
+
+// Same conversion R::utf16() applies per UTF-16 code unit (no surrogate
+// pairing - matches this file's existing, already-shipped string
+// decoding elsewhere), just addressed by a raw (pos, char_count) range
+// instead of a cursor, since the page scan below needs to decode a name
+// it has already found the bounds of without re-walking a marker.
+std::string decode_utf16le_range(const ByteBuffer& d, size_t pos, size_t char_count) {
+  std::string s;
+  for (size_t i = 0; i < char_count; ++i) {
+    uint16_t c = uint16_t(d[pos]) | uint16_t(d[pos + 1]) << 8;
+    pos += 2;
+    if (c < 0x80) {
+      s += char(c);
+    } else if (c < 0x800) {
+      s += char(0xc0 | (c >> 6));
+      s += char(0x80 | (c & 63));
+    } else {
+      s += char(0xe0 | (c >> 12));
+      s += char(0x80 | ((c >> 6) & 63));
+      s += char(0x80 | (c & 63));
+    }
+  }
+  return s;
+}
+
+// Consume one reference to an object of `cls_name` - a null tag, a
+// back-ref (value unneeded here, so left unresolved), a class-ref to an
+// already-declared class, or (rarely, if this is the class's first use
+// in the file) a fresh declaration - without relying on the referenced
+// object's slot already being known to `slots` the way Archive::object()
+// requires. The page scan below runs over a region of the file the main
+// walk never visits, so back-refs into that region can't be resolved.
+// Mirrors Python's legacy._skip_typed_ref exactly.
+void skip_typed_ref(LegacySlotTable& slots, R& r, const std::string& cls_name,
+                    const std::function<void(R&)>& read_body) {
+  auto tag = r.peek_u16();
+  if (tag == 0) {
+    r.u16();
+    return;
+  }
+  if (tag == 0xffff) {
+    r.u16();
+    auto schema = r.u16();
+    auto namelen = r.u16();
+    if (namelen > 40) throw std::runtime_error("implausible class name length");
+    auto raw_name = r.raw(namelen);
+    std::string name(raw_name.begin(), raw_name.end());
+    if (name != cls_name) throw std::runtime_error("expected " + cls_name + " decl, got " + name);
+    if (!slots.class_slot.count(cls_name))
+      slots.class_slot[cls_name] = slots.alloc({true, cls_name, int(schema), {}});
+    read_body(r);
+    return;
+  }
+  if (tag & 0x8000) {
+    uint64_t cslot = tag & 0x7fff;
+    auto it = slots.slots.find(cslot);
+    if (it == slots.slots.end() || !it->second.cls || it->second.name != cls_name)
+      throw std::runtime_error("unexpected " + cls_name + " class-ref");
+    r.u16();
+    read_body(r);
+    return;
+  }
+  r.u16();  // plain back-ref - the referenced value isn't needed here
+}
+
+// Same byte layout as the CCamera/CDib branches of Archive::object()'s
+// dispatch above (r.raw(137); r.u16(); r.utf16(); r.raw(33) / r.u32();
+// z=r.u32(); r.raw(z)) - duplicated here as standalone bodies since
+// skip_typed_ref can't safely route through the full object() dispatch
+// (see its own comment) but still needs to consume the exact same bytes
+// when a page candidate's camera/thumbnail happens to be a fresh
+// declaration or class-ref rather than the usual null tag.
+void read_camera_body(R& r) {
+  r.raw(137);
+  r.u16();
+  r.utf16();
+  r.raw(33);
+}
+
+void read_dib_body(R& r) {
+  r.u32();
+  auto z = r.u32();
+  if (z > r.d.size()) throw std::runtime_error("implausible dib length");
+  r.raw(z);
+}
+
 }  // namespace
+
+// Best-effort scan for CViewPage (scene) records: name + hidden-layer
+// slot ids only, for the narrow flag combinations this reader
+// understands (see kPageAllowedFlags above).
+//
+// Runs as an independent scan over the file tail (from where the main
+// entity walk stops) rather than as a sequential archive read: each
+// candidate is validated by its own local structure (a name string
+// immediately followed by an empty second string and a recognized flags
+// word), and any candidate that doesn't fully validate - an unsupported
+// flag combination, or a reference into a part of the file this scan
+// never visited - is silently skipped rather than guessed at, so a page
+// this reader can't fully understand is just absent from the result
+// instead of producing wrong data. Mirrors Python's legacy._scan_pages
+// exactly. Declared in internal.hpp (see LegacySlotTable's own comment
+// for why) - not just a parse_legacy() implementation detail.
+std::vector<RawPage> scan_pages_for_layers(const ByteBuffer& data, std::size_t start_pos,
+                                           LegacySlotTable slots) {
+  std::vector<RawPage> pages;
+  size_t pos = start_pos;
+  const size_t n = data.size();
+  while (true) {
+    size_t idx = std::string::npos;
+    for (size_t i = pos; i + 3 <= n; ++i) {
+      if (data[i] == 255 && data[i + 1] == 254 && data[i + 2] == 255) {
+        idx = i;
+        break;
+      }
+    }
+    if (idx == std::string::npos) break;
+    pos = idx + 1;
+    size_t nlen_pos = idx + 3;
+    if (nlen_pos >= n) break;
+    uint8_t nlen = data[nlen_pos];
+    if (nlen == 0 || nlen > 40) continue;
+    size_t name_start = nlen_pos + 1;
+    size_t name_end = name_start + 2 * size_t(nlen);
+    if (name_end + 7 > n) continue;
+    if (!(data[name_end] == 255 && data[name_end + 1] == 254 && data[name_end + 2] == 255 &&
+          data[name_end + 3] == 0)) {
+      continue;  // second name must be empty
+    }
+    size_t flags_pos = name_end + 4;
+    uint32_t flags = read_u32(data, flags_pos);
+    if (!is_allowed_page_flags(flags)) continue;
+    std::string name = decode_utf16le_range(data, name_start, nlen);
+    try {
+      R r{data, flags_pos + 4};
+      skip_typed_ref(slots, r, "CCamera", read_camera_body);
+      skip_typed_ref(slots, r, "CDib", read_dib_body);
+      std::vector<EntityId> hidden_ids;
+      if (flags & kPageHiddenLayersBit) {
+        while (true) {
+          size_t save = r.p;
+          auto v = r.u16();
+          auto it = slots.slots.find(v);
+          if (it != slots.slots.end() && !it->second.cls && it->second.name == "CLayer") {
+            hidden_ids.push_back(static_cast<EntityId>(v));
+          } else {
+            r.p = save;
+            break;
+          }
+        }
+        if (r.u32() != 1) throw std::runtime_error("unexpected hidden-layers marker");
+      }
+      RawPage page;
+      page.name = std::move(name);
+      page.hidden_layer_ids = std::move(hidden_ids);
+      pages.push_back(std::move(page));
+    } catch (const std::exception&) {
+      continue;
+    }
+  }
+  return pages;
+}
 
 RawParsed parse_legacy(const ByteBuffer& data, const ParseOptions& o) {
   emit_log(o, LogLevel::information,
@@ -1463,6 +1602,12 @@ RawParsed parse_legacy(const ByteBuffer& data, const ParseOptions& o) {
         out.definitions[s.first] = std::move(d);
       }
     fill(out.root.builder, root, ar.slots);
+    try {
+      out.pages =
+          scan_pages_for_layers(data, ar.r.p, LegacySlotTable{ar.slots, ar.class_slot, ar.next});
+    } catch (const std::exception&) {
+      out.pages.clear();
+    }
     emit_progress(o, ParseStage::legacy_defs, out.definitions.size(), out.definitions.size());
     emit_log(o, LogLevel::information,
              "Parse complete: " + std::to_string(out.definitions.size()) + " defs");
