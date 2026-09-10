@@ -317,9 +317,11 @@ RawParsed full_parse(const ByteBuffer& data, const ParseOptions& o) {
           p.materials[m->name] = m;
           p.materials_by_folder[folder] = m;
           if (m->name.rfind("Layer_", 0) == 0) {
-            p.layer_colors[m->name.substr(6)] = {std::uint8_t(m->r), std::uint8_t(m->g),
-                                                 std::uint8_t(m->b)};
-            p.layer_hidden[m->name.substr(6)] = false;
+            auto layer_name = m->name.substr(6);
+            if (!p.layer_colors.count(layer_name)) p.layer_order.push_back(layer_name);
+            p.layer_colors[layer_name] = {std::uint8_t(m->r), std::uint8_t(m->g),
+                                          std::uint8_t(m->b)};
+            p.layer_hidden[layer_name] = false;
           }
         }
     }
@@ -375,7 +377,10 @@ RawParsed full_parse(const ByteBuffer& data, const ParseOptions& o) {
   p.pages = parse_pages(page_node);
   p.dimensions = parse_dimensions(*model, vertex_positions, instance_world);
   if (!p.layer_id_to_name.count(1)) p.layer_id_to_name[1] = "Layer0";
-  if (!p.layer_colors.count("Layer0")) p.layer_colors["Layer0"] = {136, 136, 136};
+  if (!p.layer_colors.count("Layer0")) {
+    p.layer_order.push_back("Layer0");
+    p.layer_colors["Layer0"] = {136, 136, 136};
+  }
   if (!p.layer_hidden.count("Layer0")) p.layer_hidden["Layer0"] = false;
   emit_log(o, LogLevel::information,
            "Parse complete: " + std::to_string(p.definitions.size()) + " defs");

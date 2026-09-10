@@ -1433,11 +1433,15 @@ RawParsed parse_legacy(const ByteBuffer& data, const ParseOptions& o) {
     }
     for (auto& l : layers) {
       out.layer_id_to_name[l.first] = l.second->name;
+      if (!out.layer_colors.count(l.second->name)) out.layer_order.push_back(l.second->name);
       out.layer_colors[l.second->name] = {uint8_t(l.second->r), uint8_t(l.second->g),
                                           uint8_t(l.second->b)};
       out.layer_hidden[l.second->name] = l.second->hidden != 0;
     }
-    if (!out.layer_colors.count("Layer0")) out.layer_colors["Layer0"] = {136, 136, 136};
+    if (!out.layer_colors.count("Layer0")) {
+      out.layer_order.push_back("Layer0");
+      out.layer_colors["Layer0"] = {136, 136, 136};
+    }
     if (!out.layer_hidden.count("Layer0")) out.layer_hidden["Layer0"] = false;
     // Scanned before the definitions loop below so is_image can be set
     // correctly the first time a definition is built, matching the VFF

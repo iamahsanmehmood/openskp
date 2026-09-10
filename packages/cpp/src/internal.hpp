@@ -128,10 +128,18 @@ struct RawParsed {
   // meta/meta.dat. Unset for legacy files or when the tag isn't found.
   std::optional<std::string> units;
   std::map<std::string, Color3> layer_colors;
-  // Modern (VFF) files derive layers from Layer_<name>-prefixed materials,
-  // which carry no visibility flag of their own - unlike legacy MFC files,
-  // there is currently no known tag exposing a VFF layer's hidden state,
-  // so every VFF layer defaults to visible.
+  // Layer names in the order they were first encountered in the source
+  // file (material.xml archive-entry order for VFF, slot-scan order for
+  // legacy) - layer_colors above is a std::map (sorted by name), so this
+  // is the only place file order survives; model.cpp's layer-building
+  // loop iterates this instead of layer_colors directly. Mirrors
+  // Python's plain dict for the same field, which preserves insertion
+  // order natively.
+  std::vector<std::string> layer_order;
+  // Modern (VFF) files derive layer COLOR from Layer_<name>-prefixed
+  // materials, which carry no visibility flag of their own - real
+  // visibility comes from the model.dat layer manager's own 8E3C byte
+  // (see geometry.cpp's collect_layers), read here into this same map.
   std::map<std::string, bool> layer_hidden;
   std::map<EntityId, std::string> layer_id_to_name;
   std::vector<RawPage> pages;
