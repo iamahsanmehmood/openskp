@@ -19,6 +19,10 @@ struct InstanceNode {
   std::array<double, 3> position_mm{};
   std::map<std::string, std::string> properties;
   std::vector<InstanceNode> children;
+  // Every attribute dictionary this instance carries, keyed by the
+  // dictionary's own declared name - not just SketchUp's own
+  // dynamic_attributes (which is what `properties` above holds).
+  std::map<std::string, std::map<std::string, std::string>> attribute_dictionaries;
 };
 
 struct MeshMetadata {
@@ -28,6 +32,10 @@ struct MeshMetadata {
   std::array<double, 3> position_mm{};
   std::map<std::string, std::string> properties;
   std::string path;
+  // Same as InstanceNode::attribute_dictionaries above - backfilled from
+  // the instance that placed this mesh's definition, matching `name`
+  // and `properties` above (see build_scene_raw's deferred backfill).
+  std::map<std::string, std::map<std::string, std::string>> attribute_dictionaries;
 };
 
 struct GlbPrimitive {
@@ -86,5 +94,11 @@ struct OPENSKP_EXPORT Scene {
   // Distinct texture images the placed materials use, deduplicated by
   // source bytes. Empty when nothing placed in the scene is textured.
   std::vector<SceneTexture> textures;
+  // Each layer's own hidden/visible state, by layer name - threaded
+  // through from the parser's existing per-layer hidden state. Legacy
+  // (pre-2021) files carry a real per-layer flag; VFF (2021+) files are
+  // not yet read here (open gap, see docs/LANGUAGE_PARITY.md), so every
+  // VFF layer is absent from this map (treated as visible by consumers).
+  std::map<std::string, bool> layer_hidden;
 };
 }  // namespace openskp

@@ -49,6 +49,55 @@ display names the same way Python's `instanced_scene.py`/`scene.py` do:
 attribute-dict override → instance's own name → definition's own name
 (unless auto-generated) → internal index fallback.
 
+### Fixed — C++: 4 correctness issues in IFC export
+
+Ports Python's `1.3.0` IFC fixes to `ifc_export.cpp`, verified against a
+real production file (steel-detailing plugin data included) as well as
+new unit tests mirroring Python's own (`packages/python/tests/test_ifc.py`).
+
+- **Units and axis convention** — `to_ifc()`/`export_ifc()` always declared
+  the length unit as millimetres but defaulted their coordinate scale to
+  `METRES_TO_INCHES` — every coordinate was written inch-scaled but
+  labeled millimetre, off by ~25.4x in any IFC consumer that respects the
+  unit declaration. Default scale is now `METRES_TO_MM` (1000.0). Vertex
+  positions (baked in glTF's Y-up convention for GLB export) are now
+  converted back to IFC/SketchUp's Z-up convention instead of being
+  written through raw — the previous behavior exported buildings rotated
+  ~90 degrees and mirrored.
+- **Real instance names and layer visibility** — elements were named
+  after `GlbPrimitive::geom_name` (an internal mesh-lookup key, e.g.
+  `"mesh_3115_ROOT__Component_6205261_Layer0"`) instead of the real
+  SketchUp instance name. Now uses `MeshMetadata::name`. Also switches
+  the IFC layer assignment from `IFCPRESENTATIONLAYERASSIGNMENT` to
+  `IFCPRESENTATIONLAYERWITHSTYLE`, which can actually carry a layer's
+  on/off state (`LayerOn`) — new `Scene::layer_hidden` field, threaded
+  through from the parser's existing per-layer hidden state (legacy
+  pre-2021 files only; VFF files always read visible here, a separate,
+  open gap — see [LANGUAGE_PARITY.md](docs/LANGUAGE_PARITY.md)).
+- **Plugin attribute dictionaries surfaced as element names and IFC
+  properties** — `build_scene()` (`scene.cpp`) gained the same
+  attribute-dict-override name-resolution fallback `instanced_scene.cpp`
+  already had, plus a deferred mesh backfill mechanism (mirroring
+  Python's `path_updates`) so each mesh's real per-instance name,
+  properties, and attribute dictionaries are known by the time `to_ifc()`
+  reads them — new `MeshMetadata::attribute_dictionaries` /
+  `InstanceNode::attribute_dictionaries` fields. Each dictionary becomes
+  its own `Pset_<dict-name>` in IFC output, separate from
+  `Pset_CustomProperties`. This also closes a pre-existing, previously
+  documented gap: `mesh_index[...].properties` was never populated at
+  all in the C++ baked path before this fix.
+- **Opt-in full-path keyword classification** — `classify_element()`/
+  `to_ifc()`/`export_ifc()` gain `classify_using_full_path` (default
+  `false`, so existing callers see no behavior change): when a name/layer
+  match both miss, fall back to matching the full ancestor-path string.
+
+Also fixes a latent bug this work surfaced: `dxf_export.hpp` and
+`ifc_export.hpp` each declared their own `METRES_TO_INCHES` constant in
+the same `openskp` namespace — a redefinition error in any translation
+unit including both. Moved to a single definition in `model.hpp`. The
+`openskp.hpp` umbrella header was also missing `fragments_export.hpp`
+and `ifc_export.hpp` entirely — both now included.
+
 ## [1.3.0] — 2026-09-09 — Python only, GitHub-only pre-release
 
 > **This tag is not published to PyPI.** It's a real, tested, tagged release

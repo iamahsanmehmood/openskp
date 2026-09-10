@@ -22,6 +22,13 @@ using Vec3 = std::array<double, 3>;
 using Color3 = std::array<std::uint8_t, 3>;
 using Color4 = std::array<std::uint8_t, 4>;
 
+// 1 metre = 39.37007874015748 inches (SketchUp native unit). Shared by
+// every exporter that takes a coordinate scale factor (dxf_export.hpp,
+// ifc_export.hpp, ...) - defined once here rather than duplicated per
+// header, since two same-named constexprs in the same namespace collide
+// as a redefinition error in any translation unit that includes both.
+constexpr double METRES_TO_INCHES = 39.37007874015748;
+
 /// 3D point coordinate in raw SketchUp space.
 struct Vertex {
   /// Unique TLV entity ID.

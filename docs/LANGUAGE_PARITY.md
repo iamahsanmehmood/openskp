@@ -53,7 +53,7 @@ Every feature OpenSKP has, across all 5 languages. ✅ = shipped and released.
 | Legacy (pre-2021) pages/scenes reading | ✅ | ❌ VFF only | ❌ VFF only | ❌ VFF only | ❌ VFF only |
 | Construction lines/points reading | ✅ | ❌ | ❌ | ❌ | ❌ |
 | VFF per-layer-hidden flag reading | 🔶 on main | ❌ | ❌ | ❌ | ❌ |
-| `mesh_index[...].properties` populated | ✅ | ✅ | ✅ | ✅ | ❌ known gap |
+| `mesh_index[...].properties` populated | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `model.layers` in file order (not alphabetical) | ✅ | ✅ | ✅ | ✅ | ❌ known gap |
 | **Scene building & observability** | | | | | |
 | Scene baking / triangulation (`buildScene()`) | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -76,7 +76,7 @@ Every feature OpenSKP has, across all 5 languages. ✅ = shipped and released.
 | codegen round-trips `applied_width`/opacity | ❌ | ❌ | ❌ | ❌ | ❌ — gap in all 5 |
 | **Export** | | | | | |
 | GLB / OBJ+MTL / STL / PLY / DXF 3D / IFC4 / JSON | ✅ | ✅ | ✅ | ✅ | ✅ |
-| IFC export: unit/axis fix, real names + layer visibility, plugin-attribute Psets, full-path classification | 🔶 on main | not checked for equivalent issues | not checked | not checked | not checked |
+| IFC export: unit/axis fix, real names + layer visibility, plugin-attribute Psets, full-path classification | 🔶 on main | not checked for equivalent issues | not checked | not checked | 🔶 on main, GitHub-only |
 | Direct SketchUp → Fragments (`.frag`) export | 🔶 on main, GitHub-only | 🔶 open [PR #276](https://github.com/iamahsanmehmood/openskp/pull/276), CI failing | ❌ not started | ❌ not started | 🔶 on main, GitHub-only |
 
 ## 3. Unreleased on main
@@ -111,13 +111,13 @@ C++ merged, not yet released:
 |:---|:---|:---|
 | Direct SketchUp → Fragments (`.frag`) export | `openskp::to_fragments`/`export_fragments` (`fragments_export.cpp`) | [CHANGELOG.md § Unreleased](../CHANGELOG.md) |
 | Multi-dictionary attribute extraction (`Instance::attribute_dictionaries` / `InstancedNode::attribute_dictionaries`) | `geometry.cpp`, `instanced_scene.cpp`, `scene.cpp` | [CHANGELOG.md § Unreleased](../CHANGELOG.md) |
+| 4 IFC export correctness fixes (units/axis, real names + layer visibility, plugin-attribute Psets, opt-in full-path classification) | `ifc_export.cpp` | [CHANGELOG.md § Unreleased](../CHANGELOG.md) |
+| `mesh_index[...].properties`/`.attribute_dictionaries` backfill in the baked (`build_scene`) path | `scene.cpp` | [CHANGELOG.md § Unreleased](../CHANGELOG.md) |
 
-Known gaps in this C++ work, stated honestly rather than glossed over:
+Known gap in this C++ work, stated honestly rather than glossed over:
 attribute dictionary values decode as strings only (no `Point3d`/`Length`/
 nested-list support, matching C++'s existing string-only property handling
-elsewhere — see the feature matrix above); `mesh_index[...].properties` is
-still not backfilled in the baked (`build_scene`) path, a pre-existing gap
-this work did not close.
+elsewhere — see the feature matrix above).
 
 ## 4. Real SketchUp file version support
 
