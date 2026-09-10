@@ -19,11 +19,11 @@ cross-language porting backlog) and [`ROADMAP.md`](../ROADMAP.md).
 
 | Language | Registry | Released version | On `main`, not released yet |
 |:---|:---|:---:|:---|
-| 🐍 Python | [PyPI](https://pypi.org/project/openskp/) | [![PyPI](https://img.shields.io/pypi/v/openskp.svg?label=)](https://pypi.org/project/openskp/) | **Yes** — [`preview-python-v1.3.0`](https://github.com/iamahsanmehmood/openskp/releases/tag/preview-python-v1.3.0), GitHub-only, see [§3](#3-unreleased-on-main) |
+| 🐍 Python | [PyPI](https://pypi.org/project/openskp/) | [![PyPI](https://img.shields.io/pypi/v/openskp.svg?label=)](https://pypi.org/project/openskp/) | **Yes** — [`preview-python-v1.3.2`](https://github.com/iamahsanmehmood/openskp/releases/tag/preview-python-v1.3.2), GitHub-only, see [§3](#3-unreleased-on-main) |
 | 📘 TypeScript | [npm](https://www.npmjs.com/package/openskp) | [![npm](https://img.shields.io/npm/v/openskp.svg?label=)](https://www.npmjs.com/package/openskp) | **Yes** — writer memory fix (`GrowableBytes`), see [CHANGELOG.md § Unreleased](../CHANGELOG.md) |
 | 🚀 .NET | [NuGet](https://www.nuget.org/packages/OpenSkp) | [![NuGet](https://img.shields.io/nuget/v/OpenSkp.svg?label=)](https://www.nuget.org/packages/OpenSkp) | No |
 | 🎯 Dart | [pub.dev](https://pub.dev/packages/openskp) | [![Pub](https://img.shields.io/pub/v/openskp.svg?label=)](https://pub.dev/packages/openskp) | No |
-| ⚙️ C++ | [GitHub Releases](https://github.com/iamahsanmehmood/openskp/releases?q=cpp-) | [![C++](https://img.shields.io/github/v/release/iamahsanmehmood/openskp?filter=cpp-v*&label=)](https://github.com/iamahsanmehmood/openskp/releases?q=cpp-) | **Yes** — [`preview-cpp-v1.3.0`](https://github.com/iamahsanmehmood/openskp/releases/tag/preview-cpp-v1.3.0), GitHub-only preview, see [§3](#3-unreleased-on-main) |
+| ⚙️ C++ | [GitHub Releases](https://github.com/iamahsanmehmood/openskp/releases?q=cpp-) | [![C++](https://img.shields.io/github/v/release/iamahsanmehmood/openskp?filter=cpp-v*&label=)](https://github.com/iamahsanmehmood/openskp/releases?q=cpp-) | **Yes** — [`preview-cpp-v1.3.1`](https://github.com/iamahsanmehmood/openskp/releases/tag/preview-cpp-v1.3.1), GitHub-only preview, see [§3](#3-unreleased-on-main) |
 
 Each language releases independently — see
 [CONTRIBUTING.md § Releasing](../CONTRIBUTING.md#releasing-maintainers) for
@@ -96,21 +96,16 @@ Python-only:
 | Section planes writer | `create.py` | [CHANGELOG.md § 1.3.0](../CHANGELOG.md) |
 | Construction lines/points read + write | `legacy.py`, `create.py` | [CHANGELOG.md § 1.3.0](../CHANGELOG.md) |
 | Large-file parser fix | `_core.py` | [#264](https://github.com/iamahsanmehmood/openskp/issues/264) |
+| `attribute_dictionaries` surfaced in GLB/JSON metadata export (not just IFC Psets) | `export/glb.py`, `export/json_export.py`, `export/instanced_glb.py` | [CHANGELOG.md § 1.3.0](../CHANGELOG.md) |
 
 All of the above are on GitHub as the tagged
-[`preview-python-v1.3.0`](https://github.com/iamahsanmehmood/openskp/releases/tag/preview-python-v1.3.0)
+[`preview-python-v1.3.2`](https://github.com/iamahsanmehmood/openskp/releases/tag/preview-python-v1.3.2)
 release (installable by pinning that tag directly — see the
 [README](../README.md) or
 [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md#fragments-export)) — not on PyPI yet.
 It folds into a proper PyPI `1.3.0` once the cross-language porting items in
 [§2](#2-feature-matrix) and [issue #285](https://github.com/iamahsanmehmood/openskp/issues/285)
 catch up.
-
-Also merged on `main` since that preview tag, not yet part of it: a fix so
-`attribute_dictionaries` (every attribute dictionary an instance carries,
-not just `dynamic_attributes`) actually reaches GLB/JSON metadata export —
-`export/glb.py`, `export/json_export.py`, `export/instanced_glb.py` — see
-[CHANGELOG.md § Unreleased](../CHANGELOG.md).
 
 TypeScript merged, not yet released: a writer memory fix (`ArchiveWriter`
 now keeps the archive in a growable `Uint8Array` instead of a `number[]`,
@@ -130,23 +125,16 @@ C++:
 | `model.layers` in source-file order, not alphabetical (`RawParsed::layer_order`) | `core.cpp`, `legacy.cpp`, `model.cpp` | [CHANGELOG.md § preview-cpp-v1.3.0](../CHANGELOG.md) |
 | Legacy (pre-2021) pages/scenes reading (`scan_pages_for_layers`) | `legacy.cpp` | [CHANGELOG.md § preview-cpp-v1.3.0](../CHANGELOG.md) |
 | Construction lines/points reading, legacy only (`ConstructionLine`/`ConstructionPoint`) | `legacy.cpp`, `model.hpp` | [CHANGELOG.md § preview-cpp-v1.3.0](../CHANGELOG.md) |
+| `attribute_dictionaries` surfaced in `json_export.cpp` output (not just IFC Psets) — was already correctly resolved by `build_scene()`, just never serialized | `json_export.cpp` | [CHANGELOG.md § preview-cpp-v1.3.0](../CHANGELOG.md) |
 
 All of the above are on GitHub as the tagged
-[`preview-cpp-v1.3.0`](https://github.com/iamahsanmehmood/openskp/releases/tag/preview-cpp-v1.3.0)
+[`preview-cpp-v1.3.1`](https://github.com/iamahsanmehmood/openskp/releases/tag/preview-cpp-v1.3.1)
 release (build it by checking out that tag directly — see
 [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md)'s C++ install steps) — not the
 numbered `cpp-v1.3.0` release yet. It folds into that once the known gaps
 below are closed and the cross-language porting items in
 [§2](#2-feature-matrix) and [issue #285](https://github.com/iamahsanmehmood/openskp/issues/285)
 catch up.
-
-Also merged on `main` since that preview tag, not yet part of it: a fix so
-`attribute_dictionaries` actually reaches `json_export.cpp`'s
-`instance_node_to_json`/`mesh_metadata_to_json` output (it was already
-correctly resolved by `build_scene()`, just never serialized) — see
-[CHANGELOG.md § Unreleased](../CHANGELOG.md). Note this is a distinct gap
-from the "values decode as strings only" item below — this one was a
-missing field in the export layer entirely, not a type-fidelity limit.
 
 Known gaps in this C++ work, stated honestly rather than glossed over:
 - Attribute dictionary values decode as strings only (no `Point3d`/`Length`/
