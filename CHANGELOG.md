@@ -117,6 +117,20 @@ on its own file showed up independently on a different file here (5 of
 3 new unit tests exercise `collect_layers()` directly against hand-built
 TLV node trees.
 
+### Fixed — C++: `model.layers` now in source-file order, not alphabetical
+
+`RawParsed::layer_colors` is a `std::map` (sorted by key), so every
+consumer of `model.layers` previously saw layers alphabetized rather
+than in the order they actually appear in the source file (material.xml
+archive-entry order for VFF, slot-scan order for legacy) - Python's own
+`layer_colors` is a plain dict, which preserves insertion order
+natively, so this was C++-only behavior, not a cross-language
+difference in the underlying data. New `RawParsed::layer_order`
+(a `std::vector<std::string>`, populated at every layer-insertion site
+in `core.cpp`/`legacy.cpp`) is what `model.cpp`'s layer-building loop
+now iterates. Verified byte-for-byte identical order to Python's own
+output on the same real production file (30 layers, non-alphabetical).
+
 ## [1.3.0] — 2026-09-09 — Python only, GitHub-only pre-release
 
 > **This tag is not published to PyPI.** It's a real, tested, tagged release
