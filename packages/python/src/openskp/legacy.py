@@ -860,7 +860,16 @@ def _skip_typed_ref(ar, r, cls_name, reader_fn):
     if tag & 0x8000:
         cslot = tag & 0x7FFF
         ent = ar.slots.get(cslot)
-        if not (ent and ent[0] == 'class' and ent[1] == cls_name):
+        if ent is None:
+            # A class declared in a part of the file this scan never
+            # visited (this project's writer references CCamera's class
+            # this way, itself declared in the scaffold's own prefix,
+            # well before where the main walk even starts) — same
+            # "learn it from context" fallback _Archive._new_of_class
+            # already uses for the same situation.
+            ent = ('class', cls_name, None)
+            ar.slots[cslot] = ent
+        if not (ent[0] == 'class' and ent[1] == cls_name):
             raise LegacyParseError(f"unexpected {cls_name} class-ref")
         r.u16()
         reader_fn(ar, r)
