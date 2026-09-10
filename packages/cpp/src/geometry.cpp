@@ -310,15 +310,24 @@ void collect_geometry(const std::vector<TlvNode>& es, GeometryBuilder& b) {
   }
 }
 
-void collect_layers(const std::vector<TlvNode>& ns, std::map<EntityId, std::string>& out) {
+void collect_layers(const std::vector<TlvNode>& ns, std::map<EntityId, std::string>& out,
+                    std::map<std::string, bool>& hidden) {
   for (auto& e : ns) {
     if (e.tag == "993A")
       for (auto& c : e.children)
         if (c.tag == "8C3C") {
           auto *d = find_node(c.children, "DC05"), *n = find_node(c.children, "8D3C");
           if (d && n && !d->payload.empty()) out[dc_id(d->payload)] = text(n->payload);
+          // 8E3C: a single byte, 1 = hidden / 0 = visible - the VFF-format
+          // counterpart of the legacy format's already-known layer-hidden
+          // flag, confirmed byte-for-byte against a real production
+          // file's own Tags panel (matches Python's _core.py exactly).
+          if (n) {
+            auto* h = find_node(c.children, "8E3C");
+            if (h && !h->payload.empty()) hidden[text(n->payload)] = h->payload[0] == 1;
+          }
         }
-    collect_layers(e.children, out);
+    collect_layers(e.children, out, hidden);
   }
 }
 
