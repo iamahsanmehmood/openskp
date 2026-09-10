@@ -53,8 +53,23 @@ struct InstancedMeshResource {
 /// into vertex data.
 struct InstancedNode {
   std::string name;
+  /// True when `name` is a fallback this project generated (no real name
+  /// anywhere - no attribute-dict override, no instance name, no
+  /// meaningfully-named definition) rather than something a person or a
+  /// plugin actually named. A consumer can use this to render such nodes
+  /// distinctly (greyed out, routed to an "Uncategorized" bucket) instead
+  /// of presenting a synthetic placeholder as if it were real data.
+  bool name_is_generated{false};
   std::string definition_name;
   std::string layer;
+  /// This instance's own persistent GUID (a real one from the source SKP
+  /// file when available - modern/VFF files carry a genuine 16-byte
+  /// instance GUID per placement; legacy pre-2021 files don't currently
+  /// expose one, so this is "" for them). Never used for geometry/
+  /// placement - purely an identity string a consumer (e.g. a
+  /// Fragments-format exporter) can carry through so a clicked/selected
+  /// element has something stable to key off of.
+  std::string guid;
   /// This node's transform RELATIVE TO ITS PARENT, as a 16-element
   /// column-major glTF matrix (metres, Y-up) - directly usable as a glTF
   /// node "matrix". The root node's matrix is the identity.
@@ -63,6 +78,12 @@ struct InstancedNode {
   };
   std::array<double, 3> position_mm{};
   std::map<std::string, std::string> properties;
+  /// Every OTHER attribute dictionary this instance carries, keyed by the
+  /// dictionary's own name - a third-party plugin (BIM/steel-detailing
+  /// tool, etc.) commonly attaches its own richer per-instance data under
+  /// its own dictionary name instead of `properties` (SketchUp's own
+  /// Dynamic Components data).
+  std::map<std::string, std::map<std::string, std::string>> attribute_dictionaries;
   std::optional<std::string> mesh_resource_id;
   std::vector<InstancedNode> children;
 };
@@ -95,6 +116,12 @@ struct OPENSKP_EXPORT InstancedScene {
   /// Distinct texture images the placed materials use, deduplicated by
   /// source bytes - same as Scene::textures.
   std::vector<SceneTexture> textures;
+  /// The source file's own per-layer visibility (VFF 8E3C tag), keyed by
+  /// layer name - a consumer (e.g. the Fragments exporter) that wants to
+  /// respect "this layer was off by default in SketchUp" carries this
+  /// through, since the layer concept itself doesn't survive into the
+  /// instanced tree/mesh data any other way.
+  std::map<std::string, bool> layer_hidden;
 };
 
 }  // namespace openskp

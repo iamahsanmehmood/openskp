@@ -7,6 +7,7 @@ add_executable(
   dxf_export_test.cpp
   edit_test.cpp
   face_instance_hidden_test.cpp
+  fragments_export_test.cpp
   geometry_test.cpp
   glb_test.cpp
   glb_textures_test.cpp
@@ -29,6 +30,7 @@ add_executable(
   stl_export_test.cpp
   texture_test.cpp
   triangulator_test.cpp
+  vff_layer_hidden_test.cpp
   xml_entities_test.cpp
   zip_entry_size_cap_test.cpp
 )
@@ -42,6 +44,7 @@ target_include_directories(
     ${OPENSKP_MINIZ_INCLUDE_DIR}
     ${miniz_SOURCE_DIR}
     ${tinygltf_SOURCE_DIR}
+    ${flatbuffers_SOURCE_DIR}/include
 )
 
 target_compile_definitions(

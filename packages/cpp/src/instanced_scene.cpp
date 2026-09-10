@@ -2,6 +2,7 @@
 #include <cmath>
 #include <functional>
 #include <limits>
+#include <regex>
 #include <set>
 #include <sstream>
 #include <utility>
@@ -11,6 +12,15 @@
 
 namespace openskp {
 namespace {
+
+// Matches SketchUp's own auto-generated placeholder definition names
+// ("Group#1", "Component#12"), which carry no more meaning than the
+// internal index they'd otherwise fall back to - mirrors Python's
+// _is_generic_definition_name() exactly (same pattern, same purpose).
+bool is_generic_definition_name(const std::string& name) {
+  static const std::regex kPattern(R"(^(?:Group|Component)\d*#\d+$)");
+  return std::regex_match(name, kPattern);
+}
 
 constexpr double kInchesToMm = 25.4;
 constexpr double kInchesToM = 0.0254;
@@ -256,14 +266,52 @@ InstancedScene build_instanced_scene_raw(RawParsed&& p, const ParseOptions& o) {
       auto inst_color = inherited;
       if (auto color = material_color(find_material(p, i.material_id))) inst_color = color;
 
+      // def_name is looked up before building the node, since the name-
+      // resolution fallback chain below needs it - same order as Python's
+      // instanced_scene.py.
+      std::string def_name;
+      if (i.ref_idx) {
+        auto dd = p.definitions.find(*i.ref_idx);
+        if (dd != p.definitions.end()) def_name = dd->second.name;
+      }
+      const bool def_name_is_real = !def_name.empty() && !is_generic_definition_name(def_name);
+
+      // Same fallback order as openskp.instanced_scene: attribute-dict
+      // override (any OTHER dictionary the instance carries, whichever
+      // plugin wrote it - "name"/"label"/"code", first dictionary and
+      // first key found wins), then the instance's own name, then the
+      // definition's own name if it's not itself an auto-generated
+      // "Group#1"-style placeholder, then finally the internal index.
+      std::optional<std::string> name_override;
+      for (auto& [dict_name, entries] : i.attribute_dicts) {
+        for (const char* key : {"name", "label", "code"}) {
+          auto it = entries.find(key);
+          if (it != entries.end() && !it->second.empty()) {
+            name_override = it->second;
+            break;
+          }
+        }
+        if (name_override) break;
+      }
+
+      const std::string inst_name = !i.name.empty() ? i.name
+                                    : def_name_is_real
+                                        ? def_name
+                                        : ("Component_" + std::to_string(i.ref_idx.value_or(0)));
+      const std::string display_name = name_override.value_or(inst_name);
+      const bool name_is_generated = !(name_override || !i.name.empty() || def_name_is_real);
+
       InstancedNode node;
-      node.name = i.name;
+      node.name = display_name;
+      node.name_is_generated = name_is_generated;
+      node.guid = i.ref_guid;
       node.layer = l_name;
       node.matrix = to_gltf_matrix(i.matrix);
       node.position_mm = {new_matrix.size() > 9 ? new_matrix[9] * kInchesToMm : 0,
                           new_matrix.size() > 10 ? new_matrix[10] * kInchesToMm : 0,
                           new_matrix.size() > 11 ? new_matrix[11] * kInchesToMm : 0};
       node.properties = i.properties;
+      node.attribute_dictionaries = i.attribute_dicts;
 
       if (i.ref_idx) {
         if (active.count(*i.ref_idx)) {
@@ -296,6 +344,8 @@ InstancedScene build_instanced_scene_raw(RawParsed&& p, const ParseOptions& o) {
   // root node's own mesh resource.
   auto root_mesh_resource_id =
       mesh_resource_for_builder(p.root.builder, "ROOT_MODEL", std::nullopt, std::nullopt, "Layer0");
+
+  scene.layer_hidden = p.layer_hidden;
 
   scene.scene_hierarchy = InstancedNode{};
   scene.scene_hierarchy.name = "ROOT";

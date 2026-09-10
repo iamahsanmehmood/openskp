@@ -16,6 +16,169 @@ about 9 bytes of heap per file byte, so a 62 MB write peaked at ~2.1 GB of
 transient heap and took a browser tab down; it now peaks at ~0.2 GB. Output is
 byte-identical. No public API change (`_internal.GrowableBytes` is exposed for
 tests).
+### Added — C++: Direct SketchUp → Fragments (.frag) export
+
+New `openskp::to_fragments()` / `openskp::export_fragments()`
+(`fragments_export.cpp`), porting Python's `openskp.export.fragments`
+line-for-line: real nested spatial hierarchy, per-item GUIDs (the source
+file's real per-instance SketchUp GUID on VFF/2021+ files, a stable
+synthetic one otherwise), non-unit scale/mirrored instances baked into
+geometry. Verified against the real `@thatopen/fragments` runtime, not just
+this project's own reader — including two real production files (2,239 and
+14,694 items), both with every GUID confirmed distinct and non-empty and
+`mesh_resources` counts matching Python's own output on the same files
+exactly (987/987 and 9,614/9,614).
+
+Roughly 5-9x faster end to end than the equivalent Python pipeline on the
+same real files (parse + scene build + export): ~9.6s vs ~84s on a 14MB
+file, ~97s vs ~500s on a 173MB file.
+
+**Known gaps, stated honestly:**
+- Attribute dictionary values decode as strings only — no `Point3d`/
+  `Vector3d`/`Length`/nested-list support, matching this port's existing
+  string-only property handling elsewhere. See
+  [LANGUAGE_PARITY.md](docs/LANGUAGE_PARITY.md).
+- Same Fragments-format caveats as Python's own implementation: no native
+  per-layer visibility field (carried via a `Model.metadata` JSON sidecar
+  instead), `Model.guid` unpopulated.
+
+### Added — C++: multiple attribute dictionaries per entity
+
+`Instance::attribute_dictionaries` / `InstancedNode::attribute_dictionaries`
+now expose every attribute dictionary an instance carries, keyed by the
+dictionary's own declared name — not just SketchUp's own
+`dynamic_attributes`. Fixes a real bug found while building the Fragments
+port: the previous single-dictionary attribute reader flattened every
+dictionary's entries into one map regardless of source, so a third-party
+plugin's own dictionary (e.g. a steel-detailing tool's own named
+dictionary) silently mixed into `Instance::properties`, and the baked
+(`build_scene`) name-resolution path had no attribute-dict-override
+fallback at all. Both `instanced_scene.cpp` and `scene.cpp` now resolve
+display names the same way Python's `instanced_scene.py`/`scene.py` do:
+attribute-dict override → instance's own name → definition's own name
+(unless auto-generated) → internal index fallback.
+
+### Fixed — C++: 4 correctness issues in IFC export
+
+Ports Python's `1.3.0` IFC fixes to `ifc_export.cpp`, verified against a
+real production file (steel-detailing plugin data included) as well as
+new unit tests mirroring Python's own (`packages/python/tests/test_ifc.py`).
+
+- **Units and axis convention** — `to_ifc()`/`export_ifc()` always declared
+  the length unit as millimetres but defaulted their coordinate scale to
+  `METRES_TO_INCHES` — every coordinate was written inch-scaled but
+  labeled millimetre, off by ~25.4x in any IFC consumer that respects the
+  unit declaration. Default scale is now `METRES_TO_MM` (1000.0). Vertex
+  positions (baked in glTF's Y-up convention for GLB export) are now
+  converted back to IFC/SketchUp's Z-up convention instead of being
+  written through raw — the previous behavior exported buildings rotated
+  ~90 degrees and mirrored.
+- **Real instance names and layer visibility** — elements were named
+  after `GlbPrimitive::geom_name` (an internal mesh-lookup key, e.g.
+  `"mesh_3115_ROOT__Component_6205261_Layer0"`) instead of the real
+  SketchUp instance name. Now uses `MeshMetadata::name`. Also switches
+  the IFC layer assignment from `IFCPRESENTATIONLAYERASSIGNMENT` to
+  `IFCPRESENTATIONLAYERWITHSTYLE`, which can actually carry a layer's
+  on/off state (`LayerOn`) — new `Scene::layer_hidden` field, threaded
+  through from the parser's existing per-layer hidden state (legacy
+  pre-2021 files only; VFF files always read visible here, a separate,
+  open gap — see [LANGUAGE_PARITY.md](docs/LANGUAGE_PARITY.md)).
+- **Plugin attribute dictionaries surfaced as element names and IFC
+  properties** — `build_scene()` (`scene.cpp`) gained the same
+  attribute-dict-override name-resolution fallback `instanced_scene.cpp`
+  already had, plus a deferred mesh backfill mechanism (mirroring
+  Python's `path_updates`) so each mesh's real per-instance name,
+  properties, and attribute dictionaries are known by the time `to_ifc()`
+  reads them — new `MeshMetadata::attribute_dictionaries` /
+  `InstanceNode::attribute_dictionaries` fields. Each dictionary becomes
+  its own `Pset_<dict-name>` in IFC output, separate from
+  `Pset_CustomProperties`. This also closes a pre-existing, previously
+  documented gap: `mesh_index[...].properties` was never populated at
+  all in the C++ baked path before this fix.
+- **Opt-in full-path keyword classification** — `classify_element()`/
+  `to_ifc()`/`export_ifc()` gain `classify_using_full_path` (default
+  `false`, so existing callers see no behavior change): when a name/layer
+  match both miss, fall back to matching the full ancestor-path string.
+
+Also fixes a latent bug this work surfaced: `dxf_export.hpp` and
+`ifc_export.hpp` each declared their own `METRES_TO_INCHES` constant in
+the same `openskp` namespace — a redefinition error in any translation
+unit including both. Moved to a single definition in `model.hpp`. The
+`openskp.hpp` umbrella header was also missing `fragments_export.hpp`
+and `ifc_export.hpp` entirely — both now included.
+
+### Added — C++: read the real per-layer hidden flag from VFF (2021+) files
+
+Ports Python's VFF layer-hidden fix to `geometry.cpp`'s `collect_layers()`.
+VFF-format files previously derived a layer's visibility only from
+`Layer_<name>`-prefixed materials, which carry no hidden/visible bit of
+their own — every VFF layer's hidden state silently defaulted to visible
+regardless of the file's actual Tags panel state, which also meant the
+IFC exporter's `IFCPRESENTATIONLAYERWITHSTYLE.LayerOn` (above) always
+reported visible for VFF files.
+
+The real flag lives right alongside the already-parsed layer id/name:
+each layer's `8C3C` node carries an `8E3C` single-byte sibling (`1` =
+hidden, `0` = visible). Verified against two real production files: the
+same cladding/sheeting-layer + label-layer hidden pattern Python found
+on its own file showed up independently on a different file here (5 of
+30 layers correctly flagged hidden, all cladding/sheeting/label layers).
+3 new unit tests exercise `collect_layers()` directly against hand-built
+TLV node trees.
+
+### Fixed — C++: `model.layers` now in source-file order, not alphabetical
+
+`RawParsed::layer_colors` is a `std::map` (sorted by key), so every
+consumer of `model.layers` previously saw layers alphabetized rather
+than in the order they actually appear in the source file (material.xml
+archive-entry order for VFF, slot-scan order for legacy) - Python's own
+`layer_colors` is a plain dict, which preserves insertion order
+natively, so this was C++-only behavior, not a cross-language
+difference in the underlying data. New `RawParsed::layer_order`
+(a `std::vector<std::string>`, populated at every layer-insertion site
+in `core.cpp`/`legacy.cpp`) is what `model.cpp`'s layer-building loop
+now iterates. Verified byte-for-byte identical order to Python's own
+output on the same real production file (30 layers, non-alphabetical).
+
+### Added — C++: read pages/scenes for legacy (pre-2021) files
+
+Ports Python's `legacy._scan_pages` (narrow scope) to `legacy.cpp`'s new
+`scan_pages_for_layers`. Legacy (pre-2021 MFC) `.skp` files had no page/
+scene reading code at all in C++ - `SkpModel.pages` was only ever
+populated for the VFF path, matching a gap Python itself only closed
+recently.
+
+CViewPage's full record also embeds a camera, an optional thumbnail, a
+font, and (for any of several independently-optional capture flags
+beyond hidden-layers) an entire Style sub-object of undocumented size.
+Scoped down deliberately, matching Python exactly: only the flag
+combination capturing nothing, or only hidden-layers, is supported;
+anything else is silently skipped rather than guessed at, so an
+unsupported page is simply absent from `model.pages` instead of
+producing wrong data. Runs as an independent scan over the file tail
+(from where the main entity walk stops) rather than part of the
+sequential archive read, to avoid needing to fully bound each page's
+opaque tail.
+
+Also exposes `LegacySlotEntry`/`LegacySlotTable`/`scan_pages_for_layers`
+via `internal.hpp` (`struct V` moved out of `legacy.cpp`'s own anonymous
+namespace to make this possible without duplicating it) so this feature
+is unit-testable the same way VFF's `parse_pages`/`parse_dimensions`
+already are - previously, legacy.cpp's internals were only reachable
+through real fixture files. 2 new unit tests exercise
+`scan_pages_for_layers` directly against hand-built byte records
+mirroring Python's own `test_scan_pages_legacy_synthetic` test exactly
+(three candidate pages, one with an unsupported flag combination
+correctly rejected).
+
+**Known gap, stated honestly:** not exercised against a real file that
+actually contains a legacy scene - none of the committed fixtures or
+the real production files available while building this had one (5
+real files smoke-tested: no crash, no false positives, all correctly
+report zero pages since none of them have any). Ground truth for the
+byte layout itself was already established by Python's own
+implementation, ground-truthed against real v17-native SketchUp saves;
+this port carries that over faithfully rather than re-deriving it.
 
 ## [1.3.0] — 2026-09-09 — Python only, GitHub-only pre-release
 

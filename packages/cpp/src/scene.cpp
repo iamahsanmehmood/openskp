@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cmath>
+#include <regex>
 #include <set>
 #include <sstream>
 #include <tuple>
@@ -17,16 +18,42 @@ std::string safe(std::string s) {
   if (s.size() > 80) s.resize(80);
   return s;
 }
+
+// Matches SketchUp's own auto-generated placeholder definition names
+// ("Group#1", "Component#12"), which carry no more meaning than the
+// internal index they'd otherwise fall back to - mirrors Python's
+// _is_generic_definition_name() exactly (same pattern, duplicated rather
+// than shared, exactly as openskp.scene.build_scene duplicates it from
+// openskp.instanced_scene - see instanced_scene.cpp's identical helper).
+bool is_generic_definition_name(const std::string& name) {
+  static const std::regex kPattern(R"(^(?:Group|Component)\d*#\d+$)");
+  return std::regex_match(name, kPattern);
+}
 }  // namespace
 
 Scene build_scene_raw(RawParsed&& p, const ParseOptions& o) {
   Scene scene;
-  scene.scene_hierarchy = {"ROOT", "ROOT_MODEL", "Layer0", {0, 0, 0}, {}, {}};
+  scene.scene_hierarchy = {"ROOT", "ROOT_MODEL", "Layer0", {0, 0, 0}, {}, {}, {}};
+  scene.layer_hidden = p.layer_hidden;
   emit_log(o, LogLevel::information,
            "Building scene: " + std::to_string(p.definitions.size()) + " definitions available");
   std::map<GroupKey, size_t> materials;
   size_t mesh_counter = 0, instance_counter = 0;
   std::set<EntityId> active;
+
+  // Deferred mesh backfill: a mesh's own path is recorded verbatim as a
+  // path_updates key by the exact instance that placed the definition
+  // that mesh's own faces belong to (never an ancestor's), so a direct
+  // O(1) lookup per mesh after the whole tree is built is enough - no
+  // cascading from an ancestor down to its descendants' own meshes.
+  // Needed because a mesh's own MeshMetadata is built once per
+  // definition's own geometry (shared across every instance of that
+  // definition), before the instance placing it - and so its real
+  // per-instance name/properties/attribute dictionaries - is even known.
+  // Matches openskp.scene.build_scene's identical path_updates mechanism.
+  std::map<std::string, std::tuple<std::map<std::string, std::string>, std::string,
+                                   std::map<std::string, std::map<std::string, std::string>>>>
+      path_updates;
 
   // Textures deduplicated by bytes: the same image routinely backs
   // several materials, and re-embedding it per material would multiply
@@ -149,12 +176,44 @@ Scene build_scene_raw(RawParsed&& p, const ParseOptions& o) {
       }
       auto child_color = inherited;
       if (auto color = material_color(find_material(p, i.material_id))) child_color = color;
-      auto nm =
-          i.name.empty() ? "Component_" + (i.ref_idx ? std::to_string(*i.ref_idx) : "") : i.name;
-      auto child_path = path + " / " + nm;
+
+      // def_name is looked up before building the node, since the
+      // name-resolution fallback chain below needs it - same order as
+      // openskp.instanced_scene / openskp.scene's own build_scene.
+      std::string def_name;
+      if (i.ref_idx) {
+        auto dd = p.definitions.find(*i.ref_idx);
+        if (dd != p.definitions.end()) def_name = dd->second.name;
+      }
+      const bool def_name_is_real = !def_name.empty() && !is_generic_definition_name(def_name);
+
+      // Same fallback order as instanced_scene.cpp: attribute-dict
+      // override (any OTHER dictionary the instance carries, whichever
+      // plugin wrote it - "name"/"label"/"code", first dictionary and
+      // first key found wins), then the instance's own name, then the
+      // definition's own name if it's not itself an auto-generated
+      // "Group#1"-style placeholder, then finally the internal index.
+      std::optional<std::string> name_override;
+      for (auto& [dict_name, entries] : i.attribute_dicts) {
+        for (const char* key : {"name", "label", "code"}) {
+          auto it = entries.find(key);
+          if (it != entries.end() && !it->second.empty()) {
+            name_override = it->second;
+            break;
+          }
+        }
+        if (name_override) break;
+      }
+
+      const std::string inst_name =
+          !i.name.empty()    ? i.name
+          : def_name_is_real ? def_name
+                             : ("Component_" + (i.ref_idx ? std::to_string(*i.ref_idx) : ""));
+      const std::string display_name = name_override.value_or(inst_name);
+
+      auto child_path = path + " / " + inst_name;
       auto mat = multiply_matrices(matrix, i.matrix);
       std::vector<InstanceNode> nested;
-      std::string child_def;
       if (i.ref_idx) {
         if (active.count(*i.ref_idx))
           throw SkpParseError("Recursive component definition", ParseStage::build_scene, {}, {}, {},
@@ -162,19 +221,20 @@ Scene build_scene_raw(RawParsed&& p, const ParseOptions& o) {
         auto d = p.definitions.find(*i.ref_idx);
         if (d != p.definitions.end()) {
           active.insert(*i.ref_idx);
-          child_def = d->second.name;
           nested = bake(d->second.builder, d->second.name, *i.ref_idx, mat, child_layer, child_path,
                         child_color);
           active.erase(*i.ref_idx);
         }
       }
-      InstanceNode node{i.name,
-                        child_def,
+      InstanceNode node{display_name,
+                        def_name,
                         child_layer,
                         {mat.size() > 9 ? mat[9] * 25.4 : 0, mat.size() > 10 ? mat[10] * 25.4 : 0,
                          mat.size() > 11 ? mat[11] * 25.4 : 0},
                         i.properties,
-                        std::move(nested)};
+                        std::move(nested),
+                        i.attribute_dicts};
+      path_updates[child_path] = {i.properties, display_name, i.attribute_dicts};
       children.push_back(std::move(node));
       if (++instance_counter % progress_interval == 0)
         emit_progress(o, ParseStage::build_scene, instance_counter, instance_counter);
@@ -184,6 +244,17 @@ Scene build_scene_raw(RawParsed&& p, const ParseOptions& o) {
   std::vector<double> identity{1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1};
   scene.scene_hierarchy.children =
       bake(p.root.builder, "ROOT_MODEL", {}, identity, "Layer0", "ROOT", {});
+
+  // Apply the deferred backfill: each mesh's real per-instance name/
+  // properties/attribute dictionaries, now that the whole tree (and so
+  // every instance's own data) has been walked.
+  for (auto& [geom_name, meta] : scene.mesh_index) {
+    auto found = path_updates.find(meta.path);
+    if (found != path_updates.end()) {
+      std::tie(meta.properties, meta.name, meta.attribute_dictionaries) = found->second;
+    }
+  }
+
   emit_log(o, LogLevel::information,
            "Scene build complete: " + std::to_string(instance_counter) + " instances, " +
                std::to_string(scene.mesh_index.size()) + " meshes, " +

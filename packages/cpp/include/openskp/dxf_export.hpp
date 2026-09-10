@@ -9,9 +9,6 @@
 
 namespace openskp {
 
-// 1 metre = 39.37007874015748 inches (SketchUp native unit)
-constexpr double METRES_TO_INCHES = 39.37007874015748;
-
 /**
  * Serialize a baked Scene into AutoCAD R2000 (AC1015) 3D ASCII DXF text format.
  * Exports Polyface Mesh (POLYLINE 70=64) entities with layer and entity RGB materials.

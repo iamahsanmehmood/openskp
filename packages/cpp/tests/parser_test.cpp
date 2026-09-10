@@ -118,8 +118,15 @@ TEST(Parser, ModernUntitled) {
   const auto w1 = std::find_if(model.root().instances.begin(), model.root().instances.end(),
                                [](const Instance& i) { return i.name == "W1"; });
   ASSERT_NE(w1, model.root().instances.end());
-  EXPECT_EQ(w1->properties.at("generator"), "SteelFramer::Engine::PanelGenerator");
-  EXPECT_EQ(w1->properties.at("profile"), "362S200-43");
+  // "generator"/"profile" live under this SteelFramer-authored file's own
+  // "steelframer-dict" dictionary, not SketchUp's "dynamic_attributes" -
+  // properties (the backward-compatible dynamic_attributes-only view) is
+  // correctly empty for this instance; attribute_dictionaries exposes
+  // every dictionary by its own name (openskp#254).
+  EXPECT_TRUE(w1->properties.empty());
+  const auto& steelframer = w1->attribute_dictionaries.at("steelframer-dict");
+  EXPECT_EQ(steelframer.at("generator"), "SteelFramer::Engine::PanelGenerator");
+  EXPECT_EQ(steelframer.at("profile"), "362S200-43");
 }
 
 TEST(Parser, ModernRootOnly) {

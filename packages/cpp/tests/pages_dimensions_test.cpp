@@ -186,4 +186,92 @@ TEST(PagesDimensions, FileWithNoPagesParsesWithEmptyPagesList) {
   auto model = SkpFile::open(test::fixture("SU_File.skp")).parse();
   EXPECT_TRUE(model.pages.empty());
 }
+
+// ── legacy scenes (pages) ────────────────────────────────────────────────
+//
+// CViewPage's full record also embeds a camera, an optional thumbnail, a
+// font, and - for any flag combination beyond hidden-layers - an entire
+// Style sub-object of undocumented size, so the legacy scanner only
+// supports the narrow flag set it fully understands (see
+// scan_pages_for_layers's own comment in legacy.cpp); everything else is
+// silently skipped. Ground truth (the flags bitmask, the hidden-layers
+// list shape) was captured from real v17-native SketchUp saves - ported
+// byte-for-byte from Python's legacy._scan_pages / its own
+// test_scan_pages_legacy_synthetic.
+
+namespace {
+
+ByteBuffer legacy_page_record(const std::string& name, std::uint32_t flags,
+                              const std::vector<std::uint16_t>& hidden_ids = {}) {
+  ByteBuffer out;
+  auto push_marker = [&]() {
+    out.push_back(255);
+    out.push_back(254);
+    out.push_back(255);
+  };
+  push_marker();
+  out.push_back(static_cast<std::uint8_t>(name.size()));
+  for (char c : name) {
+    out.push_back(static_cast<std::uint8_t>(c));
+    out.push_back(0);
+  }
+  push_marker();
+  out.push_back(0);  // second name: always empty
+  for (int i = 0; i < 4; ++i) out.push_back(static_cast<std::uint8_t>(flags >> (i * 8)));
+  out.push_back(0);
+  out.push_back(0);  // camera: null ref
+  out.push_back(0);
+  out.push_back(0);  // thumbnail dib: null ref
+  constexpr std::uint32_t kHiddenLayersBit = 0x20;
+  if (flags & kHiddenLayersBit) {
+    for (auto hid : hidden_ids) {
+      out.push_back(static_cast<std::uint8_t>(hid & 0xff));
+      out.push_back(static_cast<std::uint8_t>((hid >> 8) & 0xff));
+    }
+    out.push_back(1);
+    out.push_back(0);
+    out.push_back(0);
+    out.push_back(0);  // u32 marker (also stops the u16 list)
+  }
+  return out;
+}
+
+}  // namespace
+
+TEST(PagesDimensions, ScanPagesLegacySynthetic) {
+  auto data = test::concat({
+      legacy_page_record("Baseline", 0xc00),
+      legacy_page_record("WithHidden", 0xc20, {5, 6}),
+      legacy_page_record("TooFull", 0xfff, {5}),
+  });
+
+  std::unordered_map<std::uint64_t, LegacySlotEntry> slots;
+  std::unordered_map<std::string, std::uint64_t> class_slot;
+  std::uint64_t next = 0;
+  slots[5] = LegacySlotEntry{false, "CLayer", 0, {}};
+  slots[6] = LegacySlotEntry{false, "CLayer", 0, {}};
+
+  auto pages = scan_pages_for_layers(data, 0, LegacySlotTable{slots, class_slot, next});
+
+  ASSERT_EQ(pages.size(), 2u);
+  EXPECT_EQ(pages[0].name, "Baseline");
+  EXPECT_EQ(pages[1].name, "WithHidden");
+  EXPECT_TRUE(pages[0].hidden_layer_ids.empty());
+  ASSERT_EQ(pages[1].hidden_layer_ids.size(), 2u);
+  EXPECT_EQ(pages[1].hidden_layer_ids[0], 5);
+  EXPECT_EQ(pages[1].hidden_layer_ids[1], 6);
+}
+
+TEST(PagesDimensions, ScanPagesLegacyIgnoresUnrelatedNoise) {
+  // Random bytes containing the marker sequence but not shaped like a
+  // real page record must never crash or fabricate a page.
+  ByteBuffer noise{255, 254, 255, 5, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
+  std::unordered_map<std::uint64_t, LegacySlotEntry> slots;
+  std::unordered_map<std::string, std::uint64_t> class_slot;
+  std::uint64_t next = 0;
+
+  auto pages = scan_pages_for_layers(noise, 0, LegacySlotTable{slots, class_slot, next});
+
+  EXPECT_TRUE(pages.empty());
+}
 }  // namespace openskp
