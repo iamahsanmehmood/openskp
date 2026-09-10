@@ -412,16 +412,21 @@ case without writing that loop yourself.
 
 ### Fragments export
 
-> **Python only, and not on PyPI yet.** See
-> [ROADMAP.md](../ROADMAP.md#cross-language-porting-backlog) for the other
-> 4 languages' status and
+> **Python and C++ only, neither on a package registry yet.** See
+> [ROADMAP.md](../ROADMAP.md#cross-language-porting-backlog) for TypeScript/
+> .NET/Dart's status and
 > [docs/LANGUAGE_PARITY.md](LANGUAGE_PARITY.md) for the full parity picture.
-> Install with:
+> Install Python with:
 > ```bash
-> pip install "openskp[fragments] @ git+https://github.com/iamahsanmehmood/openskp.git@preview-python-v1.3.0#subdirectory=packages/python"
+> pip install "openskp[fragments] @ git+https://github.com/iamahsanmehmood/openskp.git@preview-python-v1.3.2#subdirectory=packages/python"
 > ```
+> Build C++ from the [`preview-cpp-v1.3.1`](https://github.com/iamahsanmehmood/openskp/releases/tag/preview-cpp-v1.3.1)
+> tag — check it out directly and follow the C++17/CMake Quick Start in
+> [README.md](../README.md) (`find_package(OpenSkp CONFIG REQUIRED)`). C++
+> measured roughly 5-9x faster end to end than the Python pipeline on the
+> same real files (parse + scene build + export).
 
-`openskp.export.fragments` writes [ThatOpen's Fragments](https://github.com/ThatOpen/engine_fragment)
+`openskp.export.fragments` / `openskp::to_fragments()` write [ThatOpen's Fragments](https://github.com/ThatOpen/engine_fragment)
 format — a public FlatBuffers-based binary format designed for fast loading
 in BIM web viewers (`@thatopen/fragments`) — directly from an
 `InstancedScene`, with no IFC intermediate step:
@@ -442,6 +447,21 @@ pulls in `flatbuffers>=24.0`). `raw=False` (the default) produces the
 zlib-compressed container `@thatopen/fragments` expects from a file on disk;
 `raw=True` returns the uncompressed flatbuffer directly, matching how the
 loader auto-detects either.
+
+```cpp
+#include <openskp/openskp.hpp>
+
+auto skp = openskp::SkpFile::open("model.skp");
+auto scene = skp.build_instanced_scene();
+
+openskp::export_fragments(scene, "output.frag");          // writes the file directly
+auto data = openskp::to_fragments(scene, /*raw=*/true);    // or get the raw flatbuffer bytes
+```
+
+No extra CMake dependency needed — FlatBuffers is already one of the three
+`FetchContent`-fetched dependencies (alongside miniz and TinyGLTF) the C++
+package pulls in for every build. Same `raw` semantics as Python's
+`to_fragments()`.
 
 What's carried through from the source `.skp` file:
 
@@ -476,10 +496,15 @@ What's carried through from the source `.skp` file:
   the format.
 - `Model.guid` — the single model-level identifier, distinct from each
   item's own per-instance guid above — is still an unpopulated placeholder.
-- Only Python has this today. A community TypeScript port is open
+- Python and C++ have this today (both GitHub-only preview tags — see
+  above). A community TypeScript port is open
   ([PR #276](https://github.com/iamahsanmehmood/openskp/pull/276)) but its
   required CI lint check is currently failing, so it isn't usable yet.
-  .NET, Dart, and C++ have no work started on this.
+  .NET and Dart have no work started on this.
+- C++'s attribute dictionary values are strings only (no native
+  `Point3d`/`Length`/nested-list types like Python has) — matches its
+  existing string-only property handling elsewhere. See
+  [docs/LANGUAGE_PARITY.md](LANGUAGE_PARITY.md).
 
 ## Write capabilities
 

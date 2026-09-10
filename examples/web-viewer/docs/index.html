@@ -1062,13 +1062,14 @@ ifc.export(scene, "output.ifc", classify_using_full_path=True)</code></pre>
   <div class="sec-head">
     <div class="sec-icon"><svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg></div>
     <div>
-      <div class="sec-title">Fragments (.frag) Export <span style="display:inline-flex;vertical-align:middle;margin-left:8px;font-family:var(--font-code);font-size:11px;font-weight:700;padding:3px 9px;border-radius:20px;background:rgba(62,207,142,0.12);color:var(--green)">NEW — Python only</span></div>
+      <div class="sec-title">Fragments (.frag) Export <span style="display:inline-flex;vertical-align:middle;margin-left:8px;font-family:var(--font-code);font-size:11px;font-weight:700;padding:3px 9px;border-radius:20px;background:rgba(62,207,142,0.12);color:var(--green)">NEW — Python + C++</span></div>
       <div class="sec-sub">Direct SketchUp → ThatOpen Fragments export for BIM web viewers, no IFC intermediate</div>
     </div>
   </div>
 
-  <div class="callout callout-warn">Python only, and <strong>not published to PyPI yet</strong> — a real, fully tested, tagged <a href="https://github.com/iamahsanmehmood/openskp/releases/tag/preview-python-v1.3.0" target="_blank" rel="noopener">GitHub release</a> (530 tests passing). Install with:
-  <pre class="language-bash" style="margin-top:8px"><code class="language-bash">pip install "openskp[fragments] @ git+https://github.com/iamahsanmehmood/openskp.git@preview-python-v1.3.0#subdirectory=packages/python"</code></pre>
+  <div class="callout callout-warn">Python and C++, neither <strong>published to a package registry yet</strong> — real, fully tested, tagged GitHub releases (<a href="https://github.com/iamahsanmehmood/openskp/releases/tag/preview-python-v1.3.2" target="_blank" rel="noopener">Python</a>, <a href="https://github.com/iamahsanmehmood/openskp/releases/tag/preview-cpp-v1.3.1" target="_blank" rel="noopener">C++</a>). C++ measured roughly 5-9x faster end to end than the Python pipeline on the same real files. Install Python with:
+  <pre class="language-bash" style="margin-top:8px"><code class="language-bash">pip install "openskp[fragments] @ git+https://github.com/iamahsanmehmood/openskp.git@preview-python-v1.3.2#subdirectory=packages/python"</code></pre>
+  Build C++ by checking out the <code>preview-cpp-v1.3.1</code> tag directly and following <a href="https://github.com/iamahsanmehmood/openskp/blob/main/README.md" target="_blank" rel="noopener">README.md</a>'s C++17/CMake Quick Start (<code>find_package(OpenSkp CONFIG REQUIRED)</code>).
   </div>
 
   <div class="fn-block">
@@ -1083,6 +1084,14 @@ scene = skp.build_instanced_scene()
 fragments.export(scene, "output.frag")          # write the file directly
 data = fragments.to_fragments(scene, raw=True)   # or get the raw flatbuffer bytes</code></pre>
       <div class="fn-desc">Requires the optional <code>fragments</code> extra (<code>pip install openskp[fragments]</code>, pulls in <code>flatbuffers&gt;=24.0</code>). <code>raw=False</code> (the default) produces the zlib-compressed container the real loader expects from a file on disk; <code>raw=True</code> returns the uncompressed flatbuffer, matching how the loader auto-detects either.</div>
+      <pre class="language-cpp"><code class="language-cpp">#include &lt;openskp/openskp.hpp&gt;
+
+auto skp = openskp::SkpFile::open("model.skp");
+auto scene = skp.build_instanced_scene();
+
+openskp::export_fragments(scene, "output.frag");        // write the file directly
+auto data = openskp::to_fragments(scene, /*raw=*/true);  // or get the raw flatbuffer bytes</code></pre>
+      <div class="fn-desc">No extra CMake dependency needed — FlatBuffers is already one of the three <code>FetchContent</code>-fetched dependencies (alongside miniz and TinyGLTF) the C++ package pulls in for every build. Same <code>raw</code> semantics as Python's <code>to_fragments()</code>.</div>
     </div>
   </div>
 
@@ -1102,7 +1111,7 @@ data = fragments.to_fragments(scene, raw=True)   # or get the raw flatbuffer byt
     <div class="fn-body">
       <div class="fn-desc">The Fragments schema has no native visibility field anywhere. Any consumer needs to know to read <code>Model.metadata</code>'s JSON for per-layer hidden state — a convention this project defined for this purpose, not a public part of the format.</div>
       <div class="fn-desc"><code>Model.guid</code> (the single model-level identifier, distinct from each item's own per-instance guid above) is still an unpopulated placeholder.</div>
-      <div class="fn-desc">Only Python has this today. A community TypeScript port is open (<a href="https://github.com/iamahsanmehmood/openskp/pull/276" target="_blank" rel="noopener">PR #276</a>) but its required CI check is currently failing, so it isn't usable yet. .NET, Dart, and C++ have no work started.</div>
+      <div class="fn-desc">Python and C++ have this today (both GitHub-only preview tags — <a href="https://github.com/iamahsanmehmood/openskp/releases/tag/preview-python-v1.3.2" target="_blank" rel="noopener">Python</a>, <a href="https://github.com/iamahsanmehmood/openskp/releases/tag/preview-cpp-v1.3.1" target="_blank" rel="noopener">C++</a>); C++ measured roughly 5-9x faster end to end than the Python pipeline on the same real files. A community TypeScript port is open (<a href="https://github.com/iamahsanmehmood/openskp/pull/276" target="_blank" rel="noopener">PR #276</a>) but its required CI check is currently failing, so it isn't usable yet. .NET and Dart have no work started.</div>
       <div class="fn-desc" style="margin-top:14px">Full reference: <a href="https://github.com/iamahsanmehmood/openskp/blob/main/docs/DEVELOPER_GUIDE.md#fragments-export" target="_blank" rel="noopener">DEVELOPER_GUIDE.md § Fragments export</a>. Cross-language status: <a href="https://github.com/iamahsanmehmood/openskp/blob/main/docs/LANGUAGE_PARITY.md" target="_blank" rel="noopener">LANGUAGE_PARITY.md</a>. What's next: <a href="https://github.com/iamahsanmehmood/openskp/blob/main/ROADMAP.md" target="_blank" rel="noopener">ROADMAP.md</a>.</div>
     </div>
   </div>
@@ -1125,11 +1134,11 @@ data = fragments.to_fragments(scene, raw=True)   # or get the raw flatbuffer byt
       <table class="doc-table">
         <thead><tr><th>Language</th><th>Released version</th><th>Unreleased on <code>main</code>?</th></tr></thead>
         <tbody>
-          <tr><td>🐍 Python</td><td><a href="https://pypi.org/project/openskp/" target="_blank" rel="noopener">PyPI</a></td><td><strong>Yes</strong> — <a href="https://github.com/iamahsanmehmood/openskp/releases/tag/preview-python-v1.3.0" target="_blank" rel="noopener"><code>preview-python-v1.3.0</code></a>, GitHub-only, not on PyPI yet</td></tr>
-          <tr><td>📘 TypeScript</td><td><a href="https://www.npmjs.com/package/openskp" target="_blank" rel="noopener">npm</a></td><td>No</td></tr>
+          <tr><td>🐍 Python</td><td><a href="https://pypi.org/project/openskp/" target="_blank" rel="noopener">PyPI</a></td><td><strong>Yes</strong> — <a href="https://github.com/iamahsanmehmood/openskp/releases/tag/preview-python-v1.3.2" target="_blank" rel="noopener"><code>preview-python-v1.3.2</code></a>, GitHub-only, not on PyPI yet</td></tr>
+          <tr><td>📘 TypeScript</td><td><a href="https://www.npmjs.com/package/openskp" target="_blank" rel="noopener">npm</a></td><td><strong>Yes</strong> — writer memory fix (<code>GrowableBytes</code>)</td></tr>
           <tr><td>🚀 .NET</td><td><a href="https://www.nuget.org/packages/OpenSkp" target="_blank" rel="noopener">NuGet</a></td><td>No</td></tr>
           <tr><td>🎯 Dart</td><td><a href="https://pub.dev/packages/openskp" target="_blank" rel="noopener">pub.dev</a></td><td>No</td></tr>
-          <tr><td>⚙️ C++</td><td><a href="https://github.com/iamahsanmehmood/openskp/releases?q=cpp-" target="_blank" rel="noopener">GitHub Releases</a></td><td>No</td></tr>
+          <tr><td>⚙️ C++</td><td><a href="https://github.com/iamahsanmehmood/openskp/releases?q=cpp-" target="_blank" rel="noopener">GitHub Releases</a></td><td><strong>Yes</strong> — <a href="https://github.com/iamahsanmehmood/openskp/releases/tag/preview-cpp-v1.3.1" target="_blank" rel="noopener"><code>preview-cpp-v1.3.1</code></a>, GitHub-only preview</td></tr>
         </tbody>
       </table>
       </div>
@@ -1148,13 +1157,15 @@ data = fragments.to_fragments(scene, raw=True)   # or get the raw flatbuffer byt
           <tr><td>Parse VFF (2021+) &amp; legacy MFC (2013–2020)</td><td>✅</td><td>✅</td><td>✅</td><td>✅</td><td>✅</td></tr>
           <tr><td>Geometry, layers, materials/textures, styles, Dynamic Components</td><td>✅</td><td>✅</td><td>✅</td><td>✅</td><td>✅</td></tr>
           <tr><td>Single attribute dictionary per entity</td><td>✅</td><td>✅</td><td>✅</td><td>✅</td><td>✅</td></tr>
-          <tr><td>Attribute dicts: full 9-value-type + multi-dict support</td><td>✅</td><td>❌</td><td>❌</td><td>❌</td><td>❌</td></tr>
+          <tr><td>Attribute dicts: multiple dictionaries per entity</td><td>✅</td><td>❌</td><td>❌</td><td>❌</td><td>✅ 🔶 GitHub-only</td></tr>
+          <tr><td>Attribute dicts: full 9-value-type support (<code>Point3d</code>/<code>Length</code>/nested lists)</td><td>✅</td><td>❌</td><td>❌</td><td>❌</td><td>❌ str only</td></tr>
+          <tr><td>Attribute dicts surfaced in GLB/JSON metadata export (not just IFC Psets)</td><td>🔶 GitHub-only</td><td>n/a</td><td>n/a</td><td>n/a</td><td>🔶 GitHub-only</td></tr>
           <tr><td>VFF pages/scenes + dimension parsing</td><td>✅</td><td>✅</td><td>✅</td><td>✅</td><td>✅</td></tr>
-          <tr><td>Legacy (pre-2021) pages/scenes reading</td><td>✅</td><td>❌</td><td>❌</td><td>❌</td><td>❌</td></tr>
-          <tr><td>Construction lines/points reading</td><td>✅</td><td>❌</td><td>❌</td><td>❌</td><td>❌</td></tr>
-          <tr><td>VFF per-layer-hidden flag reading</td><td>🔶</td><td>❌</td><td>❌</td><td>❌</td><td>❌</td></tr>
-          <tr><td><code>mesh_index[...].properties</code> populated</td><td>✅</td><td>✅</td><td>✅</td><td>✅</td><td>❌</td></tr>
-          <tr><td><code>model.layers</code> in file order (not alphabetical)</td><td>✅</td><td>✅</td><td>✅</td><td>✅</td><td>❌</td></tr>
+          <tr><td>Legacy (pre-2021) pages/scenes reading</td><td>✅</td><td>❌</td><td>❌</td><td>❌</td><td>🔶 GitHub-only</td></tr>
+          <tr><td>Construction lines/points reading</td><td>✅</td><td>❌</td><td>❌</td><td>❌</td><td>🔶 legacy only, GitHub-only</td></tr>
+          <tr><td>VFF per-layer-hidden flag reading</td><td>🔶</td><td>❌</td><td>❌</td><td>❌</td><td>🔶 GitHub-only</td></tr>
+          <tr><td><code>mesh_index[...].properties</code> populated</td><td>✅</td><td>✅</td><td>✅</td><td>✅</td><td>✅</td></tr>
+          <tr><td><code>model.layers</code> in file order (not alphabetical)</td><td>✅</td><td>✅</td><td>✅</td><td>✅</td><td>✅</td></tr>
           <tr><td>Scene baking, instancing-preserving scene output</td><td>✅</td><td>✅</td><td>✅</td><td>✅</td><td>✅</td></tr>
           <tr><td>earcut triangulation (perf + correctness fix)</td><td>🔶</td><td>n/a</td><td>n/a</td><td>n/a</td><td>n/a</td></tr>
           <tr><td>Large-file streaming fix (<a href="https://github.com/iamahsanmehmood/openskp/issues/264" target="_blank" rel="noopener">#264</a>)</td><td>🔶</td><td>not checked</td><td>not checked</td><td>not checked</td><td>not checked</td></tr>
@@ -1163,8 +1174,8 @@ data = fragments.to_fragments(scene, raw=True)   # or get the raw flatbuffer byt
           <tr><td>Editor (<code>open_existing()</code>), code generator</td><td>✅</td><td>✅</td><td>✅</td><td>✅</td><td>✅</td></tr>
           <tr><td>codegen round-trips <code>applied_width</code>/opacity</td><td>❌</td><td>❌</td><td>❌</td><td>❌</td><td>❌ — gap in all 5</td></tr>
           <tr><td>Export: GLB / OBJ / STL / PLY / DXF / IFC4 / JSON</td><td>✅</td><td>✅</td><td>✅</td><td>✅</td><td>✅</td></tr>
-          <tr><td>IFC export correctness fixes (units, layer visibility, Psets, classification)</td><td>🔶</td><td>not checked</td><td>not checked</td><td>not checked</td><td>not checked</td></tr>
-          <tr><td><strong>Fragments (.frag) export</strong></td><td>🔶 GitHub-only</td><td>🔶 <a href="https://github.com/iamahsanmehmood/openskp/pull/276" target="_blank" rel="noopener">PR #276</a> open, CI failing</td><td>❌ not started</td><td>❌ not started</td><td>❌ not started</td></tr>
+          <tr><td>IFC export correctness fixes (units, layer visibility, Psets, classification)</td><td>🔶</td><td>not checked</td><td>not checked</td><td>not checked</td><td>🔶 GitHub-only</td></tr>
+          <tr><td><strong>Fragments (.frag) export</strong></td><td>🔶 GitHub-only</td><td>🔶 <a href="https://github.com/iamahsanmehmood/openskp/pull/276" target="_blank" rel="noopener">PR #276</a> open, CI failing</td><td>❌ not started</td><td>❌ not started</td><td>🔶 GitHub-only</td></tr>
         </tbody>
       </table>
       </div>

@@ -15,7 +15,7 @@
 [![Pub](https://img.shields.io/pub/v/openskp.svg?logo=dart&logoColor=white&label=pub.dev)](https://pub.dev/packages/openskp)
 [![C++](https://img.shields.io/github/v/release/iamahsanmehmood/openskp?filter=cpp-v*&logo=cplusplus&logoColor=white&label=cpp)](https://github.com/iamahsanmehmood/openskp/releases?q=cpp-)
 [![GitHub Stars](https://img.shields.io/github/stars/iamahsanmehmood/openskp?style=social)](https://github.com/iamahsanmehmood/openskp)
-[![NEW: Fragments export](https://img.shields.io/badge/NEW-Fragments%20(.frag)%20export%2C%20Python-3ecf8e)](docs/DEVELOPER_GUIDE.md#fragments-export)
+[![NEW: Fragments export](https://img.shields.io/badge/NEW-Fragments%20(.frag)%20export%2C%20Python%20%2B%20C%2B%2B-3ecf8e)](docs/DEVELOPER_GUIDE.md#fragments-export)
 
 ---
 
@@ -39,7 +39,7 @@ OpenSKP is the **first and only** open-source, cross-platform toolkit for Sketch
 
 **Converting** puts reading and writing together: OpenSKP is a genuine **SketchUp file converter**, not just a parser with an export bolt-on. Every one of the five languages natively converts a `.skp` file to **7 formats** — glTF (GLB), Wavefront OBJ/MTL, STL, PLY, DXF 3D (AutoCAD), IFC4 (BIM), and JSON — with no third-party CAD/BIM SDK involved, and the DXF converter specifically verified against real desktop AutoCAD, not just lenient readers. Converting `.skp` *into* other formats is fully shipped today; converting *other* formats into `.skp` (glTF/IFC/OBJ → SketchUp) is a planned future direction built on the now-mature writer, not yet under way.
 
-**🆕 Direct BIM export (Fragments)** — the newest capability: `openskp.export.fragments` converts a `.skp` file straight to [ThatOpen's Fragments](https://github.com/ThatOpen/engine_fragment) (`.frag`) format, the FlatBuffers-based format real BIM web viewers (`@thatopen/fragments`) load — with **no IFC intermediate step**, eliminating the slow downstream re-parse a viewer would otherwise pay for. **Python only today, and not on PyPI yet** — a real, fully tested, tagged [GitHub release](https://github.com/iamahsanmehmood/openskp/releases/tag/preview-python-v1.3.0), installable by pinning the tag directly. See [Fragments export](docs/DEVELOPER_GUIDE.md#fragments-export) for the full API and known limitations, stated plainly.
+**🆕 Direct BIM export (Fragments)** — the newest capability: `openskp.export.fragments` / `openskp::to_fragments()` converts a `.skp` file straight to [ThatOpen's Fragments](https://github.com/ThatOpen/engine_fragment) (`.frag`) format, the FlatBuffers-based format real BIM web viewers (`@thatopen/fragments`) load — with **no IFC intermediate step**, eliminating the slow downstream re-parse a viewer would otherwise pay for. **Python and C++ today, neither on a package registry yet** — real, fully tested, tagged GitHub releases ([Python](https://github.com/iamahsanmehmood/openskp/releases/tag/preview-python-v1.3.2), [C++](https://github.com/iamahsanmehmood/openskp/releases/tag/preview-cpp-v1.3.1)), installable by pinning the tag directly; C++ measured roughly 5-9x faster end to end than the Python pipeline on the same real files. See [Fragments export](docs/DEVELOPER_GUIDE.md#fragments-export) for the full API and known limitations, stated plainly.
 
 > [!IMPORTANT]
 > This project was built by reverse engineering a proprietary binary format. It is not affiliated with or endorsed by Trimble Inc. or SketchUp.
@@ -61,7 +61,7 @@ OpenSKP is the **first and only** open-source, cross-platform toolkit for Sketch
 | **Dynamic Components** | ✅ | Extracts dynamic component attribute key-value pairs for both modern (2021+) and legacy (2013–2020) files, in all five languages |
 | **Observability** | ✅ | Opt-in progress reporting + structured, location-carrying parse errors — see [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md) |
 | **Convert to GLB / OBJ / STL / PLY / DXF 3D / IFC4 / JSON** | ✅ | Native, from-scratch conversion to glTF (GLB), Wavefront OBJ, STL, PLY, DXF 3D (AutoCAD Polyface Mesh), IFC4 (BIM), and JSON metadata — available in all five languages, no third-party CAD/BIM SDK involved — see [Export capabilities](docs/DEVELOPER_GUIDE.md#export-capabilities) |
-| **Convert to Fragments (.frag)** | 🐍 | Direct SketchUp → [ThatOpen Fragments](https://github.com/ThatOpen/engine_fragment) export for BIM web viewers, no IFC intermediate. **Python only, not on PyPI yet** — install from the [tagged GitHub release](https://github.com/iamahsanmehmood/openskp/releases/tag/preview-python-v1.3.0). See [Fragments export](docs/DEVELOPER_GUIDE.md#fragments-export) and [ROADMAP.md](ROADMAP.md) for what's still Python-only |
+| **Convert to Fragments (.frag)** | 🐍⚙️ | Direct SketchUp → [ThatOpen Fragments](https://github.com/ThatOpen/engine_fragment) export for BIM web viewers, no IFC intermediate. **Python and C++, neither on a package registry yet** — install from the tagged GitHub release ([Python](https://github.com/iamahsanmehmood/openskp/releases/tag/preview-python-v1.3.2), [C++](https://github.com/iamahsanmehmood/openskp/releases/tag/preview-cpp-v1.3.1)). See [Fragments export](docs/DEVELOPER_GUIDE.md#fragments-export) and [ROADMAP.md](ROADMAP.md) for what's still outstanding |
 | **Write native `.skp` files** | ✅ | Build new `.skp` files from scratch — geometry (including genuine circular/arc curves, freeform polylines, faces with holes cut out, and non-planar auto-triangulation), solid/textured materials, layers, nested component definitions and groups, instance rotation/visibility, and custom attribute dictionaries. No SDK involved — every feature validated against the real SketchUp SDK, in all five languages. See [Write capabilities](docs/DEVELOPER_GUIDE.md#write-capabilities) |
 | **Edit existing `.skp` files** | ✅ | Load an existing legacy-format file and extend it — reuses its materials, layers, and component definitions, adds new geometry or instances, and saves a new file. All five languages. See [Editing an existing file](docs/DEVELOPER_GUIDE.md#editing-an-existing-file) |
 | **Generate rebuild code from a file** | ✅ | Turn a parsed `.skp` file into a human-readable, re-runnable source-code transcript that calls the same language's own writer API to rebuild it — materials, textures, layers, nested definitions, holes, instance-level paint and names. All five languages. See [Generating code from a file](docs/DEVELOPER_GUIDE.md#generating-code-from-a-file) |
@@ -89,11 +89,11 @@ Using OpenSKP in your own project? [Open an issue](https://github.com/iamahsanme
 
 | Platform | Version | Status | Install | Unreleased on `main`? |
 |:---------|:--------|:------:|:--------|:-------------|
-| 🐍 **Python** | [![PyPI](https://img.shields.io/pypi/v/openskp.svg?label=)](https://pypi.org/project/openskp/) | ✅ Available | `pip install openskp` | **Yes** — [`preview-python-v1.3.0`](https://github.com/iamahsanmehmood/openskp/releases/tag/preview-python-v1.3.0), GitHub-only, not on PyPI yet |
-| 📘 **TypeScript / JS** | [![npm](https://img.shields.io/npm/v/openskp.svg?label=)](https://www.npmjs.com/package/openskp) | ✅ Available | `npm install openskp` | No |
+| 🐍 **Python** | [![PyPI](https://img.shields.io/pypi/v/openskp.svg?label=)](https://pypi.org/project/openskp/) | ✅ Available | `pip install openskp` | **Yes** — [`preview-python-v1.3.2`](https://github.com/iamahsanmehmood/openskp/releases/tag/preview-python-v1.3.2), GitHub-only, not on PyPI yet |
+| 📘 **TypeScript / JS** | [![npm](https://img.shields.io/npm/v/openskp.svg?label=)](https://www.npmjs.com/package/openskp) | ✅ Available | `npm install openskp` | **Yes** — writer memory fix (`GrowableBytes`), see [CHANGELOG.md](CHANGELOG.md) |
 | 🚀 **.NET / C#** | [![NuGet](https://img.shields.io/nuget/v/OpenSkp.svg?label=)](https://www.nuget.org/packages/OpenSkp) | ✅ Available | `dotnet add package OpenSkp` | No |
 | 🎯 **Dart / Flutter** | [![Pub](https://img.shields.io/pub/v/openskp.svg?label=)](https://pub.dev/packages/openskp) | ✅ Available | `dart pub add openskp` | No |
-| ⚙️ **C++17** | [![C++](https://img.shields.io/github/v/release/iamahsanmehmood/openskp?filter=cpp-v*&label=)](https://github.com/iamahsanmehmood/openskp/releases?q=cpp-) | ✅ Source package | `find_package(OpenSkp CONFIG REQUIRED)` | No |
+| ⚙️ **C++17** | [![C++](https://img.shields.io/github/v/release/iamahsanmehmood/openskp?filter=cpp-v*&label=)](https://github.com/iamahsanmehmood/openskp/releases?q=cpp-) | ✅ Source package | `find_package(OpenSkp CONFIG REQUIRED)` | **Yes** — [`preview-cpp-v1.3.1`](https://github.com/iamahsanmehmood/openskp/releases/tag/preview-cpp-v1.3.1), GitHub-only preview |
 
 All five languages parse both the modern VFF (2021+) and classic MFC
 (2013–2020) `.skp` containers, and support the same opt-in scene-baking
@@ -116,18 +116,20 @@ condensed version.
 | Parse VFF (2021+) & legacy MFC (2013–2020) | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Geometry, layers, materials/textures, styles, Dynamic Components | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Single attribute dictionary per entity | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Attribute dicts: full 9-value-type + multi-dict support | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Attribute dicts: multiple dictionaries per entity | ✅ | ❌ | ❌ | ❌ | ✅ 🔶 GitHub-only |
+| Attribute dicts: full 9-value-type support (`Point3d`/`Length`/nested lists) | ✅ | ❌ | ❌ | ❌ | ❌ str only |
+| Attribute dicts surfaced in GLB/JSON metadata export (not just IFC Psets) | 🔶 GitHub-only | n/a | n/a | n/a | 🔶 GitHub-only |
 | VFF pages/scenes + dimension parsing | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Legacy (pre-2021) pages/scenes reading | ✅ | ❌ | ❌ | ❌ | ❌ |
-| Construction lines/points reading | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Legacy (pre-2021) pages/scenes reading | ✅ | ❌ | ❌ | ❌ | 🔶 GitHub-only |
+| Construction lines/points reading | ✅ | ❌ | ❌ | ❌ | 🔶 legacy only, GitHub-only |
 | Scene baking, instancing-preserving scene output | ✅ | ✅ | ✅ | ✅ | ✅ |
 | earcut triangulation (perf + correctness fix) | 🔶 | n/a | n/a | n/a | n/a |
 | Writer: materials/layers/definitions/groups/faces/curves/images | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Writer: dimensions, section planes, construction geometry | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Editor (`open_existing()`), code generator | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Export: GLB / OBJ / STL / PLY / DXF / IFC4 / JSON | ✅ | ✅ | ✅ | ✅ | ✅ |
-| IFC export correctness fixes (units, layer visibility, Psets, classification) | 🔶 | not checked | not checked | not checked | not checked |
-| **Fragments (`.frag`) export** | 🔶 GitHub-only | 🔶 [PR #276](https://github.com/iamahsanmehmood/openskp/pull/276) open, CI failing | ❌ not started | ❌ not started | ❌ not started |
+| IFC export correctness fixes (units, layer visibility, Psets, classification) | 🔶 | not checked | not checked | not checked | 🔶 GitHub-only |
+| **Fragments (`.frag`) export** | 🔶 GitHub-only | 🔶 [PR #276](https://github.com/iamahsanmehmood/openskp/pull/276) open, CI failing | ❌ not started | ❌ not started | 🔶 GitHub-only |
 
 ### Real SketchUp file version support
 
