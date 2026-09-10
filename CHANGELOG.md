@@ -131,6 +131,46 @@ in `core.cpp`/`legacy.cpp`) is what `model.cpp`'s layer-building loop
 now iterates. Verified byte-for-byte identical order to Python's own
 output on the same real production file (30 layers, non-alphabetical).
 
+### Added — C++: read pages/scenes for legacy (pre-2021) files
+
+Ports Python's `legacy._scan_pages` (narrow scope) to `legacy.cpp`'s new
+`scan_pages_for_layers`. Legacy (pre-2021 MFC) `.skp` files had no page/
+scene reading code at all in C++ - `SkpModel.pages` was only ever
+populated for the VFF path, matching a gap Python itself only closed
+recently.
+
+CViewPage's full record also embeds a camera, an optional thumbnail, a
+font, and (for any of several independently-optional capture flags
+beyond hidden-layers) an entire Style sub-object of undocumented size.
+Scoped down deliberately, matching Python exactly: only the flag
+combination capturing nothing, or only hidden-layers, is supported;
+anything else is silently skipped rather than guessed at, so an
+unsupported page is simply absent from `model.pages` instead of
+producing wrong data. Runs as an independent scan over the file tail
+(from where the main entity walk stops) rather than part of the
+sequential archive read, to avoid needing to fully bound each page's
+opaque tail.
+
+Also exposes `LegacySlotEntry`/`LegacySlotTable`/`scan_pages_for_layers`
+via `internal.hpp` (`struct V` moved out of `legacy.cpp`'s own anonymous
+namespace to make this possible without duplicating it) so this feature
+is unit-testable the same way VFF's `parse_pages`/`parse_dimensions`
+already are - previously, legacy.cpp's internals were only reachable
+through real fixture files. 2 new unit tests exercise
+`scan_pages_for_layers` directly against hand-built byte records
+mirroring Python's own `test_scan_pages_legacy_synthetic` test exactly
+(three candidate pages, one with an unsupported flag combination
+correctly rejected).
+
+**Known gap, stated honestly:** not exercised against a real file that
+actually contains a legacy scene - none of the committed fixtures or
+the real production files available while building this had one (5
+real files smoke-tested: no crash, no false positives, all correctly
+report zero pages since none of them have any). Ground truth for the
+byte layout itself was already established by Python's own
+implementation, ground-truthed against real v17-native SketchUp saves;
+this port carries that over faithfully rather than re-deriving it.
+
 ## [1.3.0] — 2026-09-09 — Python only, GitHub-only pre-release
 
 > **This tag is not published to PyPI.** It's a real, tested, tagged release
