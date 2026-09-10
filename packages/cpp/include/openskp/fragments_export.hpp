@@ -20,7 +20,8 @@ namespace openskp {
 /// convention) deflate-compresses the output (zlib/RFC 1950) - the real
 /// Fragments loader auto-detects either form. Pass `raw = true` for the
 /// uncompressed FlatBuffers bytes directly.
-OPENSKP_EXPORT std::vector<std::uint8_t> to_fragments(const InstancedScene& scene, bool raw = false);
+OPENSKP_EXPORT std::vector<std::uint8_t> to_fragments(const InstancedScene& scene,
+                                                      bool raw = false);
 
 /// Exports an instanced scene directly to a `.frag` file.
 OPENSKP_EXPORT void export_fragments(const InstancedScene& scene,

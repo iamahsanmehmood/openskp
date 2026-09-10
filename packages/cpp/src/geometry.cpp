@@ -125,8 +125,8 @@ static std::vector<std::pair<std::string, std::pair<size_t, size_t>>> parse_flat
 // structure, so recursing into it would misinterpret arbitrary bytes as
 // tags/lengths.
 static bool is_prop_container_tag(const std::string& t) {
-  return t == "DD05" || t == "B536" || t == "B136" || t == "B236" || t == "B336" ||
-         t == "B036" || t == "A438" || t == "AE38";
+  return t == "DD05" || t == "B536" || t == "B136" || t == "B236" || t == "B336" || t == "B036" ||
+         t == "A438" || t == "AE38";
 }
 
 // A438 wraps exactly one attribute value: its payload holds a single

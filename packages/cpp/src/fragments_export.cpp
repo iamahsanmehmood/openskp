@@ -1,20 +1,18 @@
-#include <openskp/fragments_export.hpp>
-
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <flatbuffers/flatbuffers.h>
 #include <fstream>
 #include <functional>
 #include <map>
+#include <miniz.h>
 #include <set>
 #include <sstream>
 #include <tuple>
 #include <vector>
 
-#include <flatbuffers/flatbuffers.h>
-#include <miniz.h>
-
 #include <openskp/_fragments_fb/index_generated.h>
+#include <openskp/fragments_export.hpp>
 #include <openskp/json_export.hpp>
 
 namespace openskp {
@@ -49,7 +47,8 @@ Mat4 mat4_mul(const Mat4& a, const Mat4& b) {
   for (int col = 0; col < 4; ++col) {
     for (int row = 0; row < 4; ++row) {
       double s = 0.0;
-      for (int k = 0; k < 4; ++k) s += a[static_cast<std::size_t>(k * 4 + row)] * b[static_cast<std::size_t>(col * 4 + k)];
+      for (int k = 0; k < 4; ++k)
+        s += a[static_cast<std::size_t>(k * 4 + row)] * b[static_cast<std::size_t>(col * 4 + k)];
       out[static_cast<std::size_t>(col * 4 + row)] = s;
     }
   }
@@ -123,7 +122,8 @@ struct BakedGeometry {
 // LOCAL points and triangle winding, so the resulting geometry is correct
 // when placed by a purely rigid Transform - a direct port of
 // openskp.export.fragments._bake_primitive.
-BakedGeometry bake_primitive(const LocalPrimitive& prim, const std::array<double, 3>& scale, bool mirrored) {
+BakedGeometry bake_primitive(const LocalPrimitive& prim, const std::array<double, 3>& scale,
+                             bool mirrored) {
   const double sx = mirrored ? -scale[0] : scale[0];
   const double sy = scale[1], sz = scale[2];
 
@@ -141,7 +141,8 @@ BakedGeometry bake_primitive(const LocalPrimitive& prim, const std::array<double
   const std::size_t n_tris = prim.indices.size() / 3;
   out.triangles.reserve(n_tris);
   for (std::size_t i = 0; i < n_tris; ++i) {
-    std::array<std::uint32_t, 3> tri{prim.indices[i * 3], prim.indices[i * 3 + 1], prim.indices[i * 3 + 2]};
+    std::array<std::uint32_t, 3> tri{prim.indices[i * 3], prim.indices[i * 3 + 1],
+                                     prim.indices[i * 3 + 2]};
     if (mirrored) std::swap(tri[1], tri[2]);
     out.triangles.push_back(tri);
   }
@@ -185,7 +186,8 @@ std::vector<std::uint8_t> to_fragments(const InstancedScene& scene, bool raw) {
     auto found = material_key_to_index.find(material_index);
     if (found != material_key_to_index.end()) return found->second;
     std::array<double, 4> base{1.0, 1.0, 1.0, 1.0};
-    if (material_index >= 0 && static_cast<std::size_t>(material_index) < scene.gltf_materials.size()) {
+    if (material_index >= 0 &&
+        static_cast<std::size_t>(material_index) < scene.gltf_materials.size()) {
       const auto& gm = scene.gltf_materials[static_cast<std::size_t>(material_index)];
       base = gm.pbr_metallic_roughness.base_color_factor;
     }
@@ -201,8 +203,9 @@ std::vector<std::uint8_t> to_fragments(const InstancedScene& scene, bool raw) {
     return idx;
   };
 
-  auto get_or_bake_shell = [&](const std::string& resource_id, int prim_idx, const LocalPrimitive& prim,
-                               const std::array<double, 3>& scale, bool mirrored) -> std::size_t {
+  auto get_or_bake_shell = [&](const std::string& resource_id, int prim_idx,
+                               const LocalPrimitive& prim, const std::array<double, 3>& scale,
+                               bool mirrored) -> std::size_t {
     const auto sk = scale_cache_key(mirrored, scale);
     const ShellKey key{resource_id, prim_idx, sk[0], sk[1], sk[2]};
     auto found = shell_key_to_index.find(key);
@@ -218,7 +221,8 @@ std::vector<std::uint8_t> to_fragments(const InstancedScene& scene, bool raw) {
         std::vector<std::uint32_t> idx{tri[0], tri[1], tri[2]};
         big_profile_offsets.push_back(fb::CreateBigShellProfileDirect(fbb, &idx));
       } else {
-        std::vector<std::uint16_t> idx{static_cast<std::uint16_t>(tri[0]), static_cast<std::uint16_t>(tri[1]),
+        std::vector<std::uint16_t> idx{static_cast<std::uint16_t>(tri[0]),
+                                       static_cast<std::uint16_t>(tri[1]),
                                        static_cast<std::uint16_t>(tri[2])};
         profile_offsets.push_back(fb::CreateShellProfileDirect(fbb, &idx));
       }
@@ -241,14 +245,18 @@ std::vector<std::uint8_t> to_fragments(const InstancedScene& scene, bool raw) {
     const auto index = shell_offsets.size();
     shell_offsets.push_back(shell_off);
 
-    std::array<float, 3> lo{std::numeric_limits<float>::infinity(), std::numeric_limits<float>::infinity(),
+    std::array<float, 3> lo{std::numeric_limits<float>::infinity(),
+                            std::numeric_limits<float>::infinity(),
                             std::numeric_limits<float>::infinity()};
-    std::array<float, 3> hi{-std::numeric_limits<float>::infinity(), -std::numeric_limits<float>::infinity(),
+    std::array<float, 3> hi{-std::numeric_limits<float>::infinity(),
+                            -std::numeric_limits<float>::infinity(),
                             -std::numeric_limits<float>::infinity()};
     for (auto& p : baked.points) {
       for (int k = 0; k < 3; ++k) {
-        if (p[static_cast<std::size_t>(k)] < lo[static_cast<std::size_t>(k)]) lo[static_cast<std::size_t>(k)] = p[static_cast<std::size_t>(k)];
-        if (p[static_cast<std::size_t>(k)] > hi[static_cast<std::size_t>(k)]) hi[static_cast<std::size_t>(k)] = p[static_cast<std::size_t>(k)];
+        if (p[static_cast<std::size_t>(k)] < lo[static_cast<std::size_t>(k)])
+          lo[static_cast<std::size_t>(k)] = p[static_cast<std::size_t>(k)];
+        if (p[static_cast<std::size_t>(k)] > hi[static_cast<std::size_t>(k)])
+          hi[static_cast<std::size_t>(k)] = p[static_cast<std::size_t>(k)];
       }
     }
     representation_bounds.emplace_back(lo, hi);
@@ -284,7 +292,8 @@ std::vector<std::uint8_t> to_fragments(const InstancedScene& scene, bool raw) {
     const InstancedMeshResource* res = nullptr;
     if (node.mesh_resource_id) {
       auto found = resource_by_id.find(*node.mesh_resource_id);
-      if (found == resource_by_id.end()) continue;  // real error case: leaf declared a resource that never baked
+      if (found == resource_by_id.end())
+        continue;  // real error case: leaf declared a resource that never baked
       res = found->second;
     }
 
@@ -293,8 +302,9 @@ std::vector<std::uint8_t> to_fragments(const InstancedScene& scene, bool raw) {
     names.push_back(node.name);
 
     const std::string raw_guid = node.guid;
-    const std::string item_guid =
-        (!raw_guid.empty() && !seen_guids.count(raw_guid)) ? raw_guid : ("openskp-" + std::to_string(item_index));
+    const std::string item_guid = (!raw_guid.empty() && !seen_guids.count(raw_guid))
+                                      ? raw_guid
+                                      : ("openskp-" + std::to_string(item_index));
     seen_guids.insert(item_guid);
     guids.push_back(item_guid);
     if (node.name_is_generated) generated_name_guids.push_back(item_guid);
@@ -305,8 +315,8 @@ std::vector<std::uint8_t> to_fragments(const InstancedScene& scene, bool raw) {
       for (std::size_t prim_idx = 0; prim_idx < res->primitives.size(); ++prim_idx) {
         const auto& prim = res->primitives[prim_idx];
         sample_material.push_back(get_material_index(static_cast<int>(prim.material_index)));
-        sample_representation.push_back(
-            get_or_bake_shell(*node.mesh_resource_id, static_cast<int>(prim_idx), prim, trs.scale, trs.mirrored));
+        sample_representation.push_back(get_or_bake_shell(
+            *node.mesh_resource_id, static_cast<int>(prim_idx), prim, trs.scale, trs.mirrored));
         meshes_items.push_back(static_cast<std::uint32_t>(item_index));
         global_transform_data.push_back(trs);
       }
@@ -320,7 +330,8 @@ std::vector<std::uint8_t> to_fragments(const InstancedScene& scene, bool raw) {
   std::vector<fb::Material> material_structs;
   material_structs.reserve(material_rgba.size());
   for (auto& rgba : material_rgba) {
-    material_structs.emplace_back(rgba[0], rgba[1], rgba[2], rgba[3], fb::RenderedFaces_ONE, fb::Stroke_DEFAULT);
+    material_structs.emplace_back(rgba[0], rgba[1], rgba[2], rgba[3], fb::RenderedFaces_ONE,
+                                  fb::Stroke_DEFAULT);
   }
   const auto materials_vec = fbb.CreateVectorOfStructs(material_structs);
 
@@ -328,15 +339,18 @@ std::vector<std::uint8_t> to_fragments(const InstancedScene& scene, bool raw) {
   representation_structs.reserve(representation_bounds.size());
   for (std::size_t i = 0; i < representation_bounds.size(); ++i) {
     const auto& [lo, hi] = representation_bounds[i];
-    representation_structs.emplace_back(static_cast<std::uint32_t>(i), fb::BoundingBox(fb::FloatVector(lo[0], lo[1], lo[2]), fb::FloatVector(hi[0], hi[1], hi[2])),
-                                        fb::RepresentationClass_SHELL);
+    representation_structs.emplace_back(
+        static_cast<std::uint32_t>(i),
+        fb::BoundingBox(fb::FloatVector(lo[0], lo[1], lo[2]), fb::FloatVector(hi[0], hi[1], hi[2])),
+        fb::RepresentationClass_SHELL);
   }
   const auto representations_vec = fbb.CreateVectorOfStructs(representation_structs);
 
   std::vector<fb::Sample> sample_structs;
   sample_structs.reserve(n_samples);
   for (std::size_t i = 0; i < n_samples; ++i) {
-    sample_structs.emplace_back(static_cast<std::uint32_t>(i), static_cast<std::uint32_t>(sample_material[i]),
+    sample_structs.emplace_back(static_cast<std::uint32_t>(i),
+                                static_cast<std::uint32_t>(sample_material[i]),
                                 static_cast<std::uint32_t>(sample_representation[i]), 0u);
   }
   const auto samples_vec = fbb.CreateVectorOfStructs(sample_structs);
@@ -348,8 +362,10 @@ std::vector<std::uint8_t> to_fragments(const InstancedScene& scene, bool raw) {
   for (auto& trs : global_transform_data) {
     global_transform_structs.emplace_back(
         fb::DoubleVector(trs.position[0], trs.position[1], trs.position[2]),
-        fb::FloatVector(static_cast<float>(trs.x_dir[0]), static_cast<float>(trs.x_dir[1]), static_cast<float>(trs.x_dir[2])),
-        fb::FloatVector(static_cast<float>(trs.y_dir[0]), static_cast<float>(trs.y_dir[1]), static_cast<float>(trs.y_dir[2])));
+        fb::FloatVector(static_cast<float>(trs.x_dir[0]), static_cast<float>(trs.x_dir[1]),
+                        static_cast<float>(trs.x_dir[2])),
+        fb::FloatVector(static_cast<float>(trs.y_dir[0]), static_cast<float>(trs.y_dir[1]),
+                        static_cast<float>(trs.y_dir[2])));
   }
   const auto global_transforms_vec = fbb.CreateVectorOfStructs(global_transform_structs);
 
@@ -364,11 +380,12 @@ std::vector<std::uint8_t> to_fragments(const InstancedScene& scene, bool raw) {
   std::vector<::flatbuffers::Offset<fb::CircleExtrusion>> no_circle_extrusions;
   const auto circle_extrusions_vec = fbb.CreateVector(no_circle_extrusions);
 
-  const fb::Transform coordinates(fb::DoubleVector(0, 0, 0), fb::FloatVector(1, 0, 0), fb::FloatVector(0, 1, 0));
+  const fb::Transform coordinates(fb::DoubleVector(0, 0, 0), fb::FloatVector(1, 0, 0),
+                                  fb::FloatVector(0, 1, 0));
 
-  const auto meshes_off =
-      fb::CreateMeshes(fbb, &coordinates, meshes_items_vec, samples_vec, representations_vec, materials_vec,
-                       circle_extrusions_vec, shells_vec, local_transforms_vec, global_transforms_vec);
+  const auto meshes_off = fb::CreateMeshes(
+      fbb, &coordinates, meshes_items_vec, samples_vec, representations_vec, materials_vec,
+      circle_extrusions_vec, shells_vec, local_transforms_vec, global_transforms_vec);
 
   const auto categories_vec = fbb.CreateVectorOfStrings(categories);
   const auto local_ids_vec = fbb.CreateVector(local_ids);
@@ -402,7 +419,8 @@ std::vector<std::uint8_t> to_fragments(const InstancedScene& scene, bool raw) {
   // field, same sidecar convention Python's exporter uses.
   JsonValue::Object metadata_obj;
   JsonValue::Object layer_hidden_obj;
-  for (auto& [layer, hidden] : scene.layer_hidden) layer_hidden_obj.emplace_back(layer, JsonValue(hidden));
+  for (auto& [layer, hidden] : scene.layer_hidden)
+    layer_hidden_obj.emplace_back(layer, JsonValue(hidden));
   metadata_obj.emplace_back("layer_hidden", JsonValue(layer_hidden_obj));
   JsonValue::Array generated_arr;
   for (auto& g : generated_name_guids) generated_arr.push_back(JsonValue(g));
@@ -413,8 +431,10 @@ std::vector<std::uint8_t> to_fragments(const InstancedScene& scene, bool raw) {
   // ORIGINAL tree (not just leaves), so real component nesting comes
   // through, not just a flat list. Matches
   // openskp.export.fragments.to_fragments's build_spatial_node exactly.
-  std::function<::flatbuffers::Offset<fb::SpatialStructure>(const InstancedNode&)> build_spatial_node;
-  build_spatial_node = [&](const InstancedNode& node) -> ::flatbuffers::Offset<fb::SpatialStructure> {
+  std::function<::flatbuffers::Offset<fb::SpatialStructure>(const InstancedNode&)>
+      build_spatial_node;
+  build_spatial_node =
+      [&](const InstancedNode& node) -> ::flatbuffers::Offset<fb::SpatialStructure> {
     std::vector<::flatbuffers::Offset<fb::SpatialStructure>> child_offsets;
     child_offsets.reserve(node.children.size());
     for (auto& child : node.children) child_offsets.push_back(build_spatial_node(child));
@@ -431,10 +451,10 @@ std::vector<std::uint8_t> to_fragments(const InstancedScene& scene, bool raw) {
   };
   const auto root_spatial = build_spatial_node(scene.scene_hierarchy);
 
-  const auto model_off = fb::CreateModel(fbb, metadata_off, guids_vec, guids_items_vec,
-                                         static_cast<std::uint32_t>(local_ids.size()), local_ids_vec, categories_vec,
-                                         meshes_off, attributes_vec, /*relations*/ 0, /*relations_items*/ 0, guid_str,
-                                         root_spatial);
+  const auto model_off = fb::CreateModel(
+      fbb, metadata_off, guids_vec, guids_items_vec, static_cast<std::uint32_t>(local_ids.size()),
+      local_ids_vec, categories_vec, meshes_off, attributes_vec, /*relations*/ 0,
+      /*relations_items*/ 0, guid_str, root_spatial);
 
   fbb.Finish(model_off, "0001");
 
@@ -448,15 +468,18 @@ std::vector<std::uint8_t> to_fragments(const InstancedScene& scene, bool raw) {
   mz_ulong bound = mz_compressBound(static_cast<mz_ulong>(size));
   std::vector<std::uint8_t> compressed(bound);
   mz_ulong compressed_len = bound;
-  const int rc = mz_compress2(compressed.data(), &compressed_len, buf, static_cast<mz_ulong>(size), MZ_DEFAULT_LEVEL);
+  const int rc = mz_compress2(compressed.data(), &compressed_len, buf, static_cast<mz_ulong>(size),
+                              MZ_DEFAULT_LEVEL);
   if (rc != MZ_OK) {
-    throw std::runtime_error("Fragments export: zlib compression failed (miniz error " + std::to_string(rc) + ")");
+    throw std::runtime_error("Fragments export: zlib compression failed (miniz error " +
+                             std::to_string(rc) + ")");
   }
   compressed.resize(compressed_len);
   return compressed;
 }
 
-void export_fragments(const InstancedScene& scene, const std::filesystem::path& output_path, bool raw) {
+void export_fragments(const InstancedScene& scene, const std::filesystem::path& output_path,
+                      bool raw) {
   std::filesystem::create_directories(output_path.parent_path());
   const auto data = to_fragments(scene, raw);
   std::ofstream out(output_path, std::ios::binary);

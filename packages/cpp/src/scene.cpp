@@ -1,11 +1,10 @@
 #include <algorithm>
 #include <cmath>
+#include <regex>
 #include <set>
 #include <sstream>
 #include <tuple>
 #include <utility>
-
-#include <regex>
 
 #include "face_groups.hpp"
 #include "internal.hpp"
@@ -192,9 +191,9 @@ Scene build_scene_raw(RawParsed&& p, const ParseOptions& o) {
       }
 
       const std::string inst_name =
-          !i.name.empty() ? i.name
+          !i.name.empty()    ? i.name
           : def_name_is_real ? def_name
-                              : ("Component_" + (i.ref_idx ? std::to_string(*i.ref_idx) : ""));
+                             : ("Component_" + (i.ref_idx ? std::to_string(*i.ref_idx) : ""));
       const std::string display_name = name_override.value_or(inst_name);
 
       auto child_path = path + " / " + inst_name;

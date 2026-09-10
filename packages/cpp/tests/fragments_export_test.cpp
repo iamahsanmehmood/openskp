@@ -1,9 +1,8 @@
 #include <array>
+#include <gtest/gtest.h>
 #include <set>
 #include <string>
 #include <vector>
-
-#include <gtest/gtest.h>
 
 #include <openskp/_fragments_fb/index_generated.h>
 #include <openskp/fragments_export.hpp>
@@ -160,7 +159,8 @@ TEST(FragmentsExport, ADuplicatedSourceGuidDoesNotCollide) {
     guids.push_back(s);
     if (s == duplicated_guid) ++real_guid_count;
   }
-  EXPECT_EQ(std::set<std::string>(guids.begin(), guids.end()).size(), 3u) << "guids must never collide";
+  EXPECT_EQ(std::set<std::string>(guids.begin(), guids.end()).size(), 3u)
+      << "guids must never collide";
   EXPECT_EQ(real_guid_count, 1) << "only the first claimant keeps the real value";
 }
 
@@ -216,7 +216,8 @@ TEST(FragmentsExport, NamedWrapperWithNoGeometryGetsATrackedItem) {
       if (s.find("W-2") != std::string::npos) found_w2 = true;
     }
   }
-  EXPECT_TRUE(found_w2) << "the named wrapper's own real name must reach the exported Attribute data";
+  EXPECT_TRUE(found_w2)
+      << "the named wrapper's own real name must reach the exported Attribute data";
 }
 
 TEST(FragmentsExport, CompressedOutputIsSmallerAndDecompresses) {

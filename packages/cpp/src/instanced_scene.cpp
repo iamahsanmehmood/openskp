@@ -295,8 +295,9 @@ InstancedScene build_instanced_scene_raw(RawParsed&& p, const ParseOptions& o) {
       }
 
       const std::string inst_name = !i.name.empty() ? i.name
-                                     : def_name_is_real ? def_name
-                                                         : ("Component_" + std::to_string(i.ref_idx.value_or(0)));
+                                    : def_name_is_real
+                                        ? def_name
+                                        : ("Component_" + std::to_string(i.ref_idx.value_or(0)));
       const std::string display_name = name_override.value_or(inst_name);
       const bool name_is_generated = !(name_override || !i.name.empty() || def_name_is_real);
 
