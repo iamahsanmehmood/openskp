@@ -43,7 +43,17 @@ struct RawInstance {
   std::vector<double> matrix;
   std::vector<TlvNode> children;
   std::string layer;
+  // The "dynamic_attributes" dictionary only (SketchUp's own Dynamic
+  // Components data) - the same backward-compatible view Python's
+  // extract_dynamic_properties() exposes as `properties`.
   std::map<std::string, std::string> properties;
+  // Every OTHER attribute dictionary this instance carries, keyed by the
+  // dictionary's own declared name (VFF tag B436) - a third-party plugin
+  // (steel-detailing tool, etc.) commonly attaches its own richer
+  // per-instance data under its own dictionary name instead of
+  // dynamic_attributes. SU_InstanceSet (SketchUp's own always-present,
+  // always-empty boilerplate) is excluded, same as dynamic_attributes.
+  std::map<std::string, std::map<std::string, std::string>> attribute_dicts;
   bool hidden{};
 };
 

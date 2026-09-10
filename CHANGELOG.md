@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — C++: Direct SketchUp → Fragments (.frag) export
+
+New `openskp::to_fragments()` / `openskp::export_fragments()`
+(`fragments_export.cpp`), porting Python's `openskp.export.fragments`
+line-for-line: real nested spatial hierarchy, per-item GUIDs (the source
+file's real per-instance SketchUp GUID on VFF/2021+ files, a stable
+synthetic one otherwise), non-unit scale/mirrored instances baked into
+geometry. Verified against the real `@thatopen/fragments` runtime, not just
+this project's own reader — including two real production files (2,239 and
+14,694 items), both with every GUID confirmed distinct and non-empty and
+`mesh_resources` counts matching Python's own output on the same files
+exactly (987/987 and 9,614/9,614).
+
+Roughly 5-9x faster end to end than the equivalent Python pipeline on the
+same real files (parse + scene build + export): ~9.6s vs ~84s on a 14MB
+file, ~97s vs ~500s on a 173MB file.
+
+**Known gaps, stated honestly:**
+- Attribute dictionary values decode as strings only — no `Point3d`/
+  `Vector3d`/`Length`/nested-list support, matching this port's existing
+  string-only property handling elsewhere. See
+  [LANGUAGE_PARITY.md](docs/LANGUAGE_PARITY.md).
+- Same Fragments-format caveats as Python's own implementation: no native
+  per-layer visibility field (carried via a `Model.metadata` JSON sidecar
+  instead), `Model.guid` unpopulated.
+
+### Added — C++: multiple attribute dictionaries per entity
+
+`Instance::attribute_dictionaries` / `InstancedNode::attribute_dictionaries`
+now expose every attribute dictionary an instance carries, keyed by the
+dictionary's own declared name — not just SketchUp's own
+`dynamic_attributes`. Fixes a real bug found while building the Fragments
+port: the previous single-dictionary attribute reader flattened every
+dictionary's entries into one map regardless of source, so a third-party
+plugin's own dictionary (e.g. a steel-detailing tool's own named
+dictionary) silently mixed into `Instance::properties`, and the baked
+(`build_scene`) name-resolution path had no attribute-dict-override
+fallback at all. Both `instanced_scene.cpp` and `scene.cpp` now resolve
+display names the same way Python's `instanced_scene.py`/`scene.py` do:
+attribute-dict override → instance's own name → definition's own name
+(unless auto-generated) → internal index fallback.
+
 ## [1.3.0] — 2026-09-09 — Python only, GitHub-only pre-release
 
 > **This tag is not published to PyPI.** It's a real, tested, tagged release

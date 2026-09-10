@@ -101,6 +101,23 @@ if(NOT tinygltf_POPULATED)
   FetchContent_Populate(tinygltf)
 endif()
 
+# Header-only C++ runtime for reading/writing the vendored ThatOpen
+# Fragments (.frag) FlatBuffers schema (include/openskp/_fragments_fb/
+# index.fbs, generated via `flatc --cpp`) - same role Python's
+# `flatbuffers` pip package plays there. No sources to compile: this
+# pulls in only its `include/flatbuffers/*.h` headers.
+FetchContent_Declare(
+  flatbuffers
+  GIT_REPOSITORY https://github.com/google/flatbuffers.git
+  GIT_TAG v25.12.19
+  GIT_SHALLOW TRUE
+)
+FetchContent_GetProperties(flatbuffers)
+
+if(NOT flatbuffers_POPULATED)
+  FetchContent_Populate(flatbuffers)
+endif()
+
 # Library target
 
 set(
@@ -113,6 +130,7 @@ set(
   src/edit.cpp
   src/errors.cpp
   src/face_groups.cpp
+  src/fragments_export.cpp
   src/geometry.cpp
   src/glb.cpp
   src/ifc_export.cpp
@@ -156,6 +174,7 @@ target_include_directories(
     "${OPENSKP_MINIZ_INCLUDE_DIR}"
     "${miniz_SOURCE_DIR}"
     "${tinygltf_SOURCE_DIR}"
+    "${flatbuffers_SOURCE_DIR}/include"
 )
 
 set_target_properties(
@@ -254,4 +273,16 @@ if(OPENSKP_BUILD_EXAMPLES)
 
   add_executable(openskp_export_glb examples/export_glb.cpp)
   target_link_libraries(openskp_export_glb PRIVATE OpenSkp::OpenSkp)
+
+  add_executable(openskp_bench examples/bench.cpp)
+  target_link_libraries(openskp_bench PRIVATE OpenSkp::OpenSkp)
+
+  add_executable(openskp_nametest examples/nametest.cpp)
+  target_link_libraries(openskp_nametest PRIVATE OpenSkp::OpenSkp)
+
+  add_executable(openskp_fragtest examples/fragtest.cpp)
+  target_link_libraries(openskp_fragtest PRIVATE OpenSkp::OpenSkp)
+
+  add_executable(openskp_parsetest examples/parsetest.cpp)
+  target_link_libraries(openskp_parsetest PRIVATE OpenSkp::OpenSkp)
 endif()

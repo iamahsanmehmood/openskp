@@ -95,36 +95,107 @@ static std::pair<std::optional<std::array<double, 9>>, std::optional<std::array<
   return {side("1127"), side("1227")};
 }
 
-// Extract Dynamic Component key/value pairs from a DC05 payload.
-// B636 = property key string tag; AD38 = property value string tag;
-// DD05, B536, B136, B236, B336, B036, A438 = property container tags.
-static void scan_properties(const ByteBuffer& p, std::map<std::string, std::string>& out) {
-  std::string key;
-  std::function<void(size_t, size_t)> walk = [&](size_t a, size_t z) {
-    while (a + 6 <= z) {
-      auto n = read_u32(p, a + 2);
-      if (n > z - a - 6) break;
-      std::string t;
-      static char h[] = "0123456789ABCDEF";
-      t += h[p[a] >> 4];
-      t += h[p[a] & 15];
-      t += h[p[a + 1] >> 4];
-      t += h[p[a + 1] & 15];
-      if (t == "B636")
-        // Property key name (UTF-8 string)
-        key = std::string(reinterpret_cast<const char*>(p.data() + a + 6), n);
-      else if (t == "AD38" && !key.empty()) {
-        // Property value (UTF-8 string) matching preceding key
-        out[key] = std::string(reinterpret_cast<const char*>(p.data() + a + 6), n);
+// Decode a flat span of the DC05 payload into (tag, offset, size) triples -
+// same shape as Python's _core.parse_flat, used below to walk siblings at
+// one level without recursing into their children automatically (needed to
+// find a dictionary's own entries container, which is a SIBLING of its
+// B436 name node, not a child of it - see extract_attribute_dictionaries's
+// own docstring in _core.py for the exact same structure).
+static std::vector<std::pair<std::string, std::pair<size_t, size_t>>> parse_flat_spans(
+    const ByteBuffer& p, size_t a, size_t z) {
+  std::vector<std::pair<std::string, std::pair<size_t, size_t>>> out;
+  while (a + 6 <= z) {
+    auto n = read_u32(p, a + 2);
+    if (n > z - a - 6) break;
+    std::string t;
+    static char h[] = "0123456789ABCDEF";
+    t += h[p[a] >> 4];
+    t += h[p[a] & 15];
+    t += h[p[a + 1] >> 4];
+    t += h[p[a + 1] & 15];
+    out.emplace_back(t, std::make_pair(a + 6, a + 6 + n));
+    a += 6 + n;
+  }
+  return out;
+}
+
+// Tags parse_tlv_recursive treats as worth descending into when building
+// the real tree (mirrors Python's _PROP_CONTAINER_TAGS exactly) - anything
+// else's payload is raw data (a string, a number), never more nested TLV
+// structure, so recursing into it would misinterpret arbitrary bytes as
+// tags/lengths.
+static bool is_prop_container_tag(const std::string& t) {
+  return t == "DD05" || t == "B536" || t == "B136" || t == "B236" || t == "B336" || t == "B036" ||
+         t == "A438" || t == "AE38";
+}
+
+// A438 wraps exactly one attribute value: its payload holds a single
+// nested span whose OWN tag says the real type (AD38 string, A938/AF38
+// double, A738 int32, B438/B538 a 3xf64 point/vector, AE38 a nested
+// array) - matching Python's _decode_vff_attr_value exactly. Only AD38
+// (string) is decoded for now, matching this port's existing
+// string-only property support elsewhere; any other type is left
+// unset rather than guessed at.
+static bool decode_a438_string_value(const ByteBuffer& p, size_t a, size_t z, std::string& out) {
+  auto spans = parse_flat_spans(p, a, z);
+  if (spans.empty()) return false;
+  auto& [tag, span] = spans[0];
+  if (tag != "AD38") return false;
+  auto [sa, sz] = span;
+  out.assign(reinterpret_cast<const char*>(p.data() + sa), sz - sa);
+  return true;
+}
+
+// Extract every attribute dictionary attached to a DC05 payload, keyed by
+// the dictionary's own declared name (tag B436) rather than merged into
+// one flat map (matches _core.extract_attribute_dictionaries exactly).
+// Each dictionary is a B436 (name) node immediately followed by a sibling
+// entries container (typically B536) holding that dictionary's own B636
+// (key name) / A438 (value wrapper) pairs - and, same as Python, B436 can
+// occur at any depth reachable purely through container tags, not only at
+// the payload's own top level, so both the dictionary search and the
+// entries walk recurse into every container-tagged node, not just scan
+// one level.
+static void extract_attribute_dictionaries(
+    const ByteBuffer& p, std::map<std::string, std::map<std::string, std::string>>& out) {
+  std::function<void(size_t, size_t, std::map<std::string, std::string>&)> extract_entries;
+  extract_entries = [&](size_t a, size_t z, std::map<std::string, std::string>& entries) {
+    std::string key;
+    for (auto& [tag, span] : parse_flat_spans(p, a, z)) {
+      auto [sa, sz] = span;
+      if (tag == "B636") {
+        key = std::string(reinterpret_cast<const char*>(p.data() + sa), sz - sa);
+      } else if (tag == "A438" && !key.empty()) {
+        std::string value;
+        if (decode_a438_string_value(p, sa, sz, value)) entries[key] = std::move(value);
         key.clear();
-      } else if (t == "DD05" || t == "B536" || t == "B136" || t == "B236" || t == "B336" ||
-                 t == "B036" || t == "A438")
-        // Recurse into property sub-container tag
-        walk(a + 6, a + 6 + n);
-      a += 6 + n;
+      } else if (is_prop_container_tag(tag)) {
+        extract_entries(sa, sz, entries);
+      }
     }
   };
-  walk(0, p.size());
+
+  std::function<void(size_t, size_t)> walk_dicts;
+  walk_dicts = [&](size_t a, size_t z) {
+    auto here = parse_flat_spans(p, a, z);
+    for (std::size_t i = 0; i < here.size(); ++i) {
+      auto& [tag, span] = here[i];
+      auto [sa, sz] = span;
+      if (tag == "B436") {
+        std::string name(reinterpret_cast<const char*>(p.data() + sa), sz - sa);
+        std::map<std::string, std::string> entries;
+        if (i + 1 < here.size()) {
+          auto [ea, ez] = here[i + 1].second;
+          extract_entries(ea, ez, entries);
+        }
+        out[name] = std::move(entries);
+      } else if (is_prop_container_tag(tag)) {
+        walk_dicts(sa, sz);
+      }
+    }
+  };
+
+  walk_dicts(0, p.size());
 }
 
 void collect_geometry(const std::vector<TlvNode>& es, GeometryBuilder& b) {
@@ -217,8 +288,17 @@ void collect_geometry(const std::vector<TlvNode>& es, GeometryBuilder& b) {
               i.material_id = parse_varint(x.payload, 0, x.payload.size());
             else if (x.tag == "D207" && !x.payload.empty())
               i.layer = std::to_string(parse_varint(x.payload, 0, x.payload.size()));
-            else if (x.tag == "DC05")
-              scan_properties(x.payload, i.properties);
+            else if (x.tag == "DC05") {
+              std::map<std::string, std::map<std::string, std::string>> all_dicts;
+              extract_attribute_dictionaries(x.payload, all_dicts);
+              for (auto& [dict_name, entries] : all_dicts) {
+                if (dict_name == "dynamic_attributes") {
+                  i.properties = std::move(entries);
+                } else if (dict_name != "SU_InstanceSet") {
+                  i.attribute_dicts[dict_name] = std::move(entries);
+                }
+              }
+            }
             // D307 = display flags, same record edges/faces already read
             // (base 0x06, +0x01 hidden).
             else if (x.tag == "D307" && !x.payload.empty())

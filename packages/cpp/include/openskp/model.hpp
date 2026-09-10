@@ -157,8 +157,15 @@ struct Instance {
   /// that resolved value.
   std::string layer;
   /// Arbitrary key/value dynamic attributes attached directly to this
-  /// instance (SketchUp's Dynamic Components).
+  /// instance (SketchUp's Dynamic Components) - a backward-compatible
+  /// view of attribute_dictionaries["dynamic_attributes"].
   std::map<std::string, std::string> properties;
+  /// Every custom attribute dictionary attached to this instance, keyed
+  /// by the dictionary's own declared name - not just the one
+  /// SketchUp's own Dynamic Components extension uses. A real instance
+  /// routinely carries several at once (a plugin's own dictionary
+  /// alongside SketchUp's, or several of the plugin's own).
+  std::map<std::string, std::map<std::string, std::string>> attribute_dictionaries;
   /// Instance material override ID.
   std::optional<EntityId> material_id;
   /// Whether the instance itself is hidden (SketchUp's "Hide" on this
