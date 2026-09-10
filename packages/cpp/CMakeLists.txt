@@ -26,6 +26,7 @@ endif()
 
 option(OPENSKP_BUILD_TESTS "Build OpenSkp tests" ${_openskp_tests_default})
 option(OPENSKP_BUILD_EXAMPLES "Build OpenSkp examples" OFF)
+option(OPENSKP_BUILD_WASM "Build OpenSkp WebAssembly / Emscripten module" OFF)
 
 # Developer tooling
 
@@ -205,6 +206,43 @@ endif()
 
 if(MSVC)
   target_compile_definitions(OpenSkp PRIVATE _CRT_SECURE_NO_WARNINGS)
+endif()
+
+if(EMSCRIPTEN OR OPENSKP_BUILD_WASM)
+  target_compile_options(OpenSkp PRIVATE -O3 -fexceptions)
+  add_executable(openskp_wasm src/wasm_api.cpp)
+  target_compile_options(openskp_wasm PRIVATE -O3 -fexceptions)
+  target_link_libraries(openskp_wasm PRIVATE OpenSkp)
+  target_include_directories(
+    openskp_wasm
+    PRIVATE
+      "${CMAKE_CURRENT_SOURCE_DIR}/src"
+      "${OPENSKP_MINIZ_INCLUDE_DIR}"
+      "${miniz_SOURCE_DIR}"
+      "${tinygltf_SOURCE_DIR}"
+      "${flatbuffers_SOURCE_DIR}/include"
+  )
+  set_target_properties(
+    openskp_wasm
+    PROPERTIES
+      OUTPUT_NAME "openskp"
+      SUFFIX ".js"
+  )
+  target_link_options(
+    openskp_wasm
+    PRIVATE
+      "--bind"
+      "-sWASM=1"
+      "-sALLOW_MEMORY_GROWTH=1"
+      "-sMAXIMUM_MEMORY=4GB"
+      "-sMODULARIZE=1"
+      "-sEXPORT_ES6=1"
+      "-sEXPORT_NAME=OpenSkpModule"
+      "-sENVIRONMENT=web,worker,node"
+      "-sDYNAMIC_EXECUTION=0"
+      "-fexceptions"
+      "-O3"
+  )
 endif()
 
 # Installation and CMake package
