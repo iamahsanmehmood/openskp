@@ -5,6 +5,8 @@
 #include <tuple>
 #include <utility>
 
+#include <regex>
+
 #include "face_groups.hpp"
 #include "internal.hpp"
 
@@ -16,6 +18,17 @@ std::string safe(std::string s) {
   std::replace(s.begin(), s.end(), ' ', '_');
   if (s.size() > 80) s.resize(80);
   return s;
+}
+
+// Matches SketchUp's own auto-generated placeholder definition names
+// ("Group#1", "Component#12"), which carry no more meaning than the
+// internal index they'd otherwise fall back to - mirrors Python's
+// _is_generic_definition_name() exactly (same pattern, duplicated rather
+// than shared, exactly as openskp.scene.build_scene duplicates it from
+// openskp.instanced_scene - see instanced_scene.cpp's identical helper).
+bool is_generic_definition_name(const std::string& name) {
+  static const std::regex kPattern(R"(^(?:Group|Component)\d*#\d+$)");
+  return std::regex_match(name, kPattern);
 }
 }  // namespace
 
@@ -149,12 +162,44 @@ Scene build_scene_raw(RawParsed&& p, const ParseOptions& o) {
       }
       auto child_color = inherited;
       if (auto color = material_color(find_material(p, i.material_id))) child_color = color;
-      auto nm =
-          i.name.empty() ? "Component_" + (i.ref_idx ? std::to_string(*i.ref_idx) : "") : i.name;
-      auto child_path = path + " / " + nm;
+
+      // def_name is looked up before building the node, since the
+      // name-resolution fallback chain below needs it - same order as
+      // openskp.instanced_scene / openskp.scene's own build_scene.
+      std::string def_name;
+      if (i.ref_idx) {
+        auto dd = p.definitions.find(*i.ref_idx);
+        if (dd != p.definitions.end()) def_name = dd->second.name;
+      }
+      const bool def_name_is_real = !def_name.empty() && !is_generic_definition_name(def_name);
+
+      // Same fallback order as instanced_scene.cpp: attribute-dict
+      // override (any OTHER dictionary the instance carries, whichever
+      // plugin wrote it - "name"/"label"/"code", first dictionary and
+      // first key found wins), then the instance's own name, then the
+      // definition's own name if it's not itself an auto-generated
+      // "Group#1"-style placeholder, then finally the internal index.
+      std::optional<std::string> name_override;
+      for (auto& [dict_name, entries] : i.attribute_dicts) {
+        for (const char* key : {"name", "label", "code"}) {
+          auto it = entries.find(key);
+          if (it != entries.end() && !it->second.empty()) {
+            name_override = it->second;
+            break;
+          }
+        }
+        if (name_override) break;
+      }
+
+      const std::string inst_name =
+          !i.name.empty() ? i.name
+          : def_name_is_real ? def_name
+                              : ("Component_" + (i.ref_idx ? std::to_string(*i.ref_idx) : ""));
+      const std::string display_name = name_override.value_or(inst_name);
+
+      auto child_path = path + " / " + inst_name;
       auto mat = multiply_matrices(matrix, i.matrix);
       std::vector<InstanceNode> nested;
-      std::string child_def;
       if (i.ref_idx) {
         if (active.count(*i.ref_idx))
           throw SkpParseError("Recursive component definition", ParseStage::build_scene, {}, {}, {},
@@ -162,14 +207,13 @@ Scene build_scene_raw(RawParsed&& p, const ParseOptions& o) {
         auto d = p.definitions.find(*i.ref_idx);
         if (d != p.definitions.end()) {
           active.insert(*i.ref_idx);
-          child_def = d->second.name;
           nested = bake(d->second.builder, d->second.name, *i.ref_idx, mat, child_layer, child_path,
                         child_color);
           active.erase(*i.ref_idx);
         }
       }
-      InstanceNode node{i.name,
-                        child_def,
+      InstanceNode node{display_name,
+                        def_name,
                         child_layer,
                         {mat.size() > 9 ? mat[9] * 25.4 : 0, mat.size() > 10 ? mat[10] * 25.4 : 0,
                          mat.size() > 11 ? mat[11] * 25.4 : 0},

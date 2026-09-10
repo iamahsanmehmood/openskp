@@ -23,7 +23,7 @@ cross-language porting backlog) and [`ROADMAP.md`](../ROADMAP.md).
 | 📘 TypeScript | [npm](https://www.npmjs.com/package/openskp) | [![npm](https://img.shields.io/npm/v/openskp.svg?label=)](https://www.npmjs.com/package/openskp) | No |
 | 🚀 .NET | [NuGet](https://www.nuget.org/packages/OpenSkp) | [![NuGet](https://img.shields.io/nuget/v/OpenSkp.svg?label=)](https://www.nuget.org/packages/OpenSkp) | No |
 | 🎯 Dart | [pub.dev](https://pub.dev/packages/openskp) | [![Pub](https://img.shields.io/pub/v/openskp.svg?label=)](https://pub.dev/packages/openskp) | No |
-| ⚙️ C++ | [GitHub Releases](https://github.com/iamahsanmehmood/openskp/releases?q=cpp-) | [![C++](https://img.shields.io/github/v/release/iamahsanmehmood/openskp?filter=cpp-v*&label=)](https://github.com/iamahsanmehmood/openskp/releases?q=cpp-) | No |
+| ⚙️ C++ | [GitHub Releases](https://github.com/iamahsanmehmood/openskp/releases?q=cpp-) | [![C++](https://img.shields.io/github/v/release/iamahsanmehmood/openskp?filter=cpp-v*&label=)](https://github.com/iamahsanmehmood/openskp/releases?q=cpp-) | **Yes** — direct SketchUp → Fragments export, see [§3](#3-unreleased-on-main) |
 
 Each language releases independently — see
 [CONTRIBUTING.md § Releasing](../CONTRIBUTING.md#releasing-maintainers) for
@@ -47,8 +47,8 @@ Every feature OpenSKP has, across all 5 languages. ✅ = shipped and released.
 | Styles (front/back unpainted face color) | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Dynamic Component attributes | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Single attribute dictionary per entity | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Attribute dicts: full 9-value-type support (`Point3d`/`Vector3d`/`Length`/`Timestamp`/nested lists) | ✅ | ❌ str/int/float only | ❌ | ❌ | ❌ |
-| Attribute dicts: multiple dictionaries per entity | ✅ | ❌ single dict only | ❌ | ❌ | ❌ |
+| Attribute dicts: full 9-value-type support (`Point3d`/`Vector3d`/`Length`/`Timestamp`/nested lists) | ✅ | ❌ str/int/float only | ❌ | ❌ | ❌ str only |
+| Attribute dicts: multiple dictionaries per entity | ✅ | ❌ single dict only | ❌ | ❌ | ✅ |
 | VFF pages/scenes + dimension parsing | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Legacy (pre-2021) pages/scenes reading | ✅ | ❌ VFF only | ❌ VFF only | ❌ VFF only | ❌ VFF only |
 | Construction lines/points reading | ✅ | ❌ | ❌ | ❌ | ❌ |
@@ -77,7 +77,7 @@ Every feature OpenSKP has, across all 5 languages. ✅ = shipped and released.
 | **Export** | | | | | |
 | GLB / OBJ+MTL / STL / PLY / DXF 3D / IFC4 / JSON | ✅ | ✅ | ✅ | ✅ | ✅ |
 | IFC export: unit/axis fix, real names + layer visibility, plugin-attribute Psets, full-path classification | 🔶 on main | not checked for equivalent issues | not checked | not checked | not checked |
-| Direct SketchUp → Fragments (`.frag`) export | 🔶 on main, GitHub-only | 🔶 open [PR #276](https://github.com/iamahsanmehmood/openskp/pull/276), CI failing | ❌ not started | ❌ not started | ❌ not started |
+| Direct SketchUp → Fragments (`.frag`) export | 🔶 on main, GitHub-only | 🔶 open [PR #276](https://github.com/iamahsanmehmood/openskp/pull/276), CI failing | ❌ not started | ❌ not started | 🔶 on main, GitHub-only |
 
 ## 3. Unreleased on main
 
@@ -102,8 +102,22 @@ release (installable by pinning that tag directly — see the
 [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md#fragments-export)) — not on PyPI yet.
 It folds into a proper PyPI `1.3.0` once the cross-language porting items in
 [§2](#2-feature-matrix) and [issue #285](https://github.com/iamahsanmehmood/openskp/issues/285)
-catch up. TypeScript, .NET, Dart, and C++ currently have nothing unreleased —
+catch up. TypeScript, .NET, and Dart currently have nothing unreleased —
 their `main` matches what's published.
+
+C++ merged, not yet released:
+
+| Item | Where | Tracking |
+|:---|:---|:---|
+| Direct SketchUp → Fragments (`.frag`) export | `openskp::to_fragments`/`export_fragments` (`fragments_export.cpp`) | [CHANGELOG.md § Unreleased](../CHANGELOG.md) |
+| Multi-dictionary attribute extraction (`Instance::attribute_dictionaries` / `InstancedNode::attribute_dictionaries`) | `geometry.cpp`, `instanced_scene.cpp`, `scene.cpp` | [CHANGELOG.md § Unreleased](../CHANGELOG.md) |
+
+Known gaps in this C++ work, stated honestly rather than glossed over:
+attribute dictionary values decode as strings only (no `Point3d`/`Length`/
+nested-list support, matching C++'s existing string-only property handling
+elsewhere — see the feature matrix above); `mesh_index[...].properties` is
+still not backfilled in the baked (`build_scene`) path, a pre-existing gap
+this work did not close.
 
 ## 4. Real SketchUp file version support
 
