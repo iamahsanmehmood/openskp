@@ -1,11 +1,10 @@
 ﻿#ifdef __EMSCRIPTEN__
 
-#include <emscripten/bind.h>
-#include <emscripten/val.h>
-
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <emscripten/bind.h>
+#include <emscripten/val.h>
 #include <string>
 #include <utility>
 #include <vector>
@@ -13,6 +12,7 @@
 #include <openskp/fragments_export.hpp>
 #include <openskp/instanced_glb.hpp>
 #include <openskp/openskp.hpp>
+
 #include "internal.hpp"
 
 using namespace emscripten;
@@ -85,8 +85,7 @@ val parse_skp_to_fragments(const val& uint8_array, bool respect_edge_visibility)
     js_frag.call<void>("set", wasm_frag_view);
 
     auto end_time = std::chrono::high_resolution_clock::now();
-    double elapsed_ms =
-        std::chrono::duration<double, std::milli>(end_time - start_time).count();
+    double elapsed_ms = std::chrono::duration<double, std::milli>(end_time - start_time).count();
 
     result_obj.set("fragBytes", js_frag);
     result_obj.set("faceCount", static_cast<double>(total_faces));
@@ -140,8 +139,7 @@ val parse_skp_to_glb(const val& uint8_array, bool respect_edge_visibility) {
     js_glb.call<void>("set", wasm_glb_view);
 
     auto end_time = std::chrono::high_resolution_clock::now();
-    double elapsed_ms =
-        std::chrono::duration<double, std::milli>(end_time - start_time).count();
+    double elapsed_ms = std::chrono::duration<double, std::milli>(end_time - start_time).count();
 
     result_obj.set("glbBytes", js_glb);
     result_obj.set("faceCount", static_cast<double>(total_faces));
