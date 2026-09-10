@@ -20,10 +20,10 @@ cross-language porting backlog) and [`ROADMAP.md`](../ROADMAP.md).
 | Language | Registry | Released version | On `main`, not released yet |
 |:---|:---|:---:|:---|
 | 🐍 Python | [PyPI](https://pypi.org/project/openskp/) | [![PyPI](https://img.shields.io/pypi/v/openskp.svg?label=)](https://pypi.org/project/openskp/) | **Yes** — [`preview-python-v1.3.0`](https://github.com/iamahsanmehmood/openskp/releases/tag/preview-python-v1.3.0), GitHub-only, see [§3](#3-unreleased-on-main) |
-| 📘 TypeScript | [npm](https://www.npmjs.com/package/openskp) | [![npm](https://img.shields.io/npm/v/openskp.svg?label=)](https://www.npmjs.com/package/openskp) | No |
+| 📘 TypeScript | [npm](https://www.npmjs.com/package/openskp) | [![npm](https://img.shields.io/npm/v/openskp.svg?label=)](https://www.npmjs.com/package/openskp) | **Yes** — writer memory fix (`GrowableBytes`), see [CHANGELOG.md § Unreleased](../CHANGELOG.md) |
 | 🚀 .NET | [NuGet](https://www.nuget.org/packages/OpenSkp) | [![NuGet](https://img.shields.io/nuget/v/OpenSkp.svg?label=)](https://www.nuget.org/packages/OpenSkp) | No |
 | 🎯 Dart | [pub.dev](https://pub.dev/packages/openskp) | [![Pub](https://img.shields.io/pub/v/openskp.svg?label=)](https://pub.dev/packages/openskp) | No |
-| ⚙️ C++ | [GitHub Releases](https://github.com/iamahsanmehmood/openskp/releases?q=cpp-) | [![C++](https://img.shields.io/github/v/release/iamahsanmehmood/openskp?filter=cpp-v*&label=)](https://github.com/iamahsanmehmood/openskp/releases?q=cpp-) | **Yes** — direct SketchUp → Fragments export, see [§3](#3-unreleased-on-main) |
+| ⚙️ C++ | [GitHub Releases](https://github.com/iamahsanmehmood/openskp/releases?q=cpp-) | [![C++](https://img.shields.io/github/v/release/iamahsanmehmood/openskp?filter=cpp-v*&label=)](https://github.com/iamahsanmehmood/openskp/releases?q=cpp-) | **Yes** — [`preview-cpp-v1.3.0`](https://github.com/iamahsanmehmood/openskp/releases/tag/preview-cpp-v1.3.0), GitHub-only preview, see [§3](#3-unreleased-on-main) |
 
 Each language releases independently — see
 [CONTRIBUTING.md § Releasing](../CONTRIBUTING.md#releasing-maintainers) for
@@ -33,7 +33,8 @@ always moving in lockstep.
 ## 2. Feature matrix
 
 Every feature OpenSKP has, across all 5 languages. ✅ = shipped and released.
-🔶 = shipped on Python's `main` but not released; see [§3](#3-unreleased-on-main).
+🔶 = shipped on that language's `main` but not in a numbered release yet
+(may be in a preview tag); see [§3](#3-unreleased-on-main).
 
 | Feature | Python | TypeScript | .NET | Dart | C++ |
 |:---|:---:|:---:|:---:|:---:|:---:|
@@ -102,21 +103,35 @@ release (installable by pinning that tag directly — see the
 [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md#fragments-export)) — not on PyPI yet.
 It folds into a proper PyPI `1.3.0` once the cross-language porting items in
 [§2](#2-feature-matrix) and [issue #285](https://github.com/iamahsanmehmood/openskp/issues/285)
-catch up. TypeScript, .NET, and Dart currently have nothing unreleased —
-their `main` matches what's published.
+catch up.
 
-C++ merged, not yet released:
+TypeScript merged, not yet released: a writer memory fix (`ArchiveWriter`
+now keeps the archive in a growable `Uint8Array` instead of a `number[]`,
+cutting peak heap on a 62 MB write from ~2.1 GB to ~0.2 GB) — see
+[CHANGELOG.md § Unreleased](../CHANGELOG.md). .NET and Dart currently have
+nothing unreleased — their `main` matches what's published.
+
+C++:
 
 | Item | Where | Tracking |
 |:---|:---|:---|
-| Direct SketchUp → Fragments (`.frag`) export | `openskp::to_fragments`/`export_fragments` (`fragments_export.cpp`) | [CHANGELOG.md § Unreleased](../CHANGELOG.md) |
-| Multi-dictionary attribute extraction (`Instance::attribute_dictionaries` / `InstancedNode::attribute_dictionaries`) | `geometry.cpp`, `instanced_scene.cpp`, `scene.cpp` | [CHANGELOG.md § Unreleased](../CHANGELOG.md) |
-| 4 IFC export correctness fixes (units/axis, real names + layer visibility, plugin-attribute Psets, opt-in full-path classification) | `ifc_export.cpp` | [CHANGELOG.md § Unreleased](../CHANGELOG.md) |
-| `mesh_index[...].properties`/`.attribute_dictionaries` backfill in the baked (`build_scene`) path | `scene.cpp` | [CHANGELOG.md § Unreleased](../CHANGELOG.md) |
-| VFF (2021+) per-layer-hidden flag reading (`8E3C` tag) | `geometry.cpp`'s `collect_layers`, `core.cpp` | [CHANGELOG.md § Unreleased](../CHANGELOG.md) |
-| `model.layers` in source-file order, not alphabetical (`RawParsed::layer_order`) | `core.cpp`, `legacy.cpp`, `model.cpp` | [CHANGELOG.md § Unreleased](../CHANGELOG.md) |
-| Legacy (pre-2021) pages/scenes reading (`scan_pages_for_layers`) | `legacy.cpp` | [CHANGELOG.md § Unreleased](../CHANGELOG.md) |
-| Construction lines/points reading, legacy only (`ConstructionLine`/`ConstructionPoint`) | `legacy.cpp`, `model.hpp` | [CHANGELOG.md § Unreleased](../CHANGELOG.md) |
+| Direct SketchUp → Fragments (`.frag`) export | `openskp::to_fragments`/`export_fragments` (`fragments_export.cpp`) | [CHANGELOG.md § preview-cpp-v1.3.0](../CHANGELOG.md) |
+| Multi-dictionary attribute extraction (`Instance::attribute_dictionaries` / `InstancedNode::attribute_dictionaries`) | `geometry.cpp`, `instanced_scene.cpp`, `scene.cpp` | [CHANGELOG.md § preview-cpp-v1.3.0](../CHANGELOG.md) |
+| 4 IFC export correctness fixes (units/axis, real names + layer visibility, plugin-attribute Psets, opt-in full-path classification) | `ifc_export.cpp` | [CHANGELOG.md § preview-cpp-v1.3.0](../CHANGELOG.md) |
+| `mesh_index[...].properties`/`.attribute_dictionaries` backfill in the baked (`build_scene`) path | `scene.cpp` | [CHANGELOG.md § preview-cpp-v1.3.0](../CHANGELOG.md) |
+| VFF (2021+) per-layer-hidden flag reading (`8E3C` tag) | `geometry.cpp`'s `collect_layers`, `core.cpp` | [CHANGELOG.md § preview-cpp-v1.3.0](../CHANGELOG.md) |
+| `model.layers` in source-file order, not alphabetical (`RawParsed::layer_order`) | `core.cpp`, `legacy.cpp`, `model.cpp` | [CHANGELOG.md § preview-cpp-v1.3.0](../CHANGELOG.md) |
+| Legacy (pre-2021) pages/scenes reading (`scan_pages_for_layers`) | `legacy.cpp` | [CHANGELOG.md § preview-cpp-v1.3.0](../CHANGELOG.md) |
+| Construction lines/points reading, legacy only (`ConstructionLine`/`ConstructionPoint`) | `legacy.cpp`, `model.hpp` | [CHANGELOG.md § preview-cpp-v1.3.0](../CHANGELOG.md) |
+
+All of the above are on GitHub as the tagged
+[`preview-cpp-v1.3.0`](https://github.com/iamahsanmehmood/openskp/releases/tag/preview-cpp-v1.3.0)
+release (build it by checking out that tag directly — see
+[DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md)'s C++ install steps) — not the
+numbered `cpp-v1.3.0` release yet. It folds into that once the known gaps
+below are closed and the cross-language porting items in
+[§2](#2-feature-matrix) and [issue #285](https://github.com/iamahsanmehmood/openskp/issues/285)
+catch up.
 
 Known gaps in this C++ work, stated honestly rather than glossed over:
 - Attribute dictionary values decode as strings only (no `Point3d`/`Length`/

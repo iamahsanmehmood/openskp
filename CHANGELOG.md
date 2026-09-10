@@ -17,6 +17,18 @@ transient heap and took a browser tab down; it now peaks at ~0.2 GB. Output is
 byte-identical. No public API change (`_internal.GrowableBytes` is exposed for
 tests).
 
+## [preview-cpp-v1.3.0] — 2026-09-10 — C++ only, GitHub-only pre-release
+
+> **This is a preview tag, not the numbered `cpp-v1.3.0` release.** It's a
+> real, tested, tagged release (full suite passing, real-file-verified) —
+> build it by checking out this tag directly and following
+> [DEVELOPER_GUIDE.md](docs/DEVELOPER_GUIDE.md)'s C++ install steps
+> (build/install `packages/cpp`, then `find_package(OpenSkp CONFIG
+> REQUIRED)`). It folds into a proper numbered `cpp-v1.3.0` release once
+> the known gaps below are closed and cross-language parity work catches
+> up — tracked in [docs/LANGUAGE_PARITY.md](docs/LANGUAGE_PARITY.md) and
+> [issue #285](https://github.com/iamahsanmehmood/openskp/issues/285).
+
 ### Added — C++: Direct SketchUp → Fragments (.frag) export
 
 New `openskp::to_fragments()` / `openskp::export_fragments()`
