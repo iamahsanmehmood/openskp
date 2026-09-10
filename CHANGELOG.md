@@ -7,34 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed — `attribute_dictionaries` missing from GLB/JSON metadata export (Python, C++)
-
-Every attribute dictionary an instance carries (not just SketchUp's own
-`dynamic_attributes`, which `properties` is scoped to exclusively per
-[#254](https://github.com/iamahsanmehmood/openskp/issues/254)) was already
-correctly resolved by `build_scene()`/`build_instanced_scene()` in both
-languages, but was never written into any of the JSON-producing export
-paths — Python's `export/glb.py`, `export/json_export.py`, and
-`export/instanced_glb.py`; C++'s `json_export.cpp` (`instance_node_to_json`/
-`mesh_metadata_to_json`). Only the IFC exporter surfaced this data at all
-(as `Pset_<dict-name>` properties). A consumer reading GLB/JSON metadata
-instead of the derived `.ifc` — e.g. a third-party plugin's own named
-dictionary such as a steel-detailing tool's `steelframer-dict` — silently
-never saw it.
-
-Both `_instance_node_to_dict`/`mesh_index` (Python, all three export
-modules) and `instance_node_to_json`/`mesh_metadata_to_json` (C++) now
-include an `attribute_dictionaries` key alongside the existing `properties`
-key, keyed by each dictionary's own declared name. Verified against real
-plugin data on `Untitled.skp` (`steelframer-dict`, 45 entries) in both
-languages; no output shape change for models with no extra dictionaries
-(`attribute_dictionaries` is simply `{}`).
-
-TypeScript, .NET, and Dart don't have an `attribute_dictionaries` field at
-all yet (see [§2 of LANGUAGE_PARITY.md](docs/LANGUAGE_PARITY.md)) — out of
-scope here, tracked under the existing cross-language porting backlog
-([#285](https://github.com/iamahsanmehmood/openskp/issues/285)).
-
 ### Changed — TypeScript writer memory
 
 `ArchiveWriter` keeps the archive in a growable `Uint8Array` instead of a
@@ -249,6 +221,20 @@ Python's own parse of the same file. No construction lines were
 available in any fixture or real production file to verify against -
 stated honestly in `docs/LANGUAGE_PARITY.md` rather than glossed over.
 
+### Fixed — `attribute_dictionaries` missing from GLB/JSON metadata export
+
+`json_export.cpp`'s `instance_node_to_json`/`mesh_metadata_to_json`
+already had access to `attribute_dictionaries` (correctly resolved by
+`build_scene()`, added earlier in this same GitHub-only phase) but never
+wrote it into the JSON output — only the IFC exporter surfaced this data
+(as `Pset_<dict-name>` properties). Both functions now include an
+`attribute_dictionaries` key alongside `properties`, matching the same
+fix ported to Python's `export/glb.py`, `export/json_export.py`, and
+`export/instanced_glb.py` - see
+[§ 1.3.0](#130--2026-09-09--python-only-github-only-pre-release).
+Verified against real plugin data on `Untitled.skp` (`steelframer-dict`,
+45 entries); full suite green (217/217).
+
 ## [1.3.0] — 2026-09-09 — Python only, GitHub-only pre-release
 
 > **This tag is not published to PyPI.** It's a real, tested, tagged release
@@ -438,6 +424,25 @@ Measured through the SDK's own `SUMeshHelperGetFrontSTQCoords` (skp2dae) on 11 o
 after; new tests pin the invariant — what you pin is what the reader hands back at that point, on
 six orientations and vertex orders, and at applied size 10 — plus a real-SketchUp oracle test for the
 rotated vertex order (`TestRealSketchUpOracle`, needs the SDK DLL).
+
+### Fixed — `attribute_dictionaries` missing from GLB/JSON metadata export
+
+Every attribute dictionary an instance carries (not just SketchUp's own
+`dynamic_attributes`, which `properties` is scoped to exclusively per
+[#254](https://github.com/iamahsanmehmood/openskp/issues/254)) was already
+correctly resolved by `build_scene()`/`build_instanced_scene()`, but was
+never written into `export/glb.py`, `export/json_export.py`, or
+`export/instanced_glb.py`. Only the IFC exporter surfaced this data (as
+`Pset_<dict-name>` properties) — a consumer reading GLB/JSON metadata
+instead of the derived `.ifc` (e.g. a third-party plugin's own named
+dictionary, such as a steel-detailing tool's `steelframer-dict`) silently
+never saw it. `_instance_node_to_dict`/`mesh_index` in all three export
+modules now include an `attribute_dictionaries` key alongside the existing
+`properties` key, keyed by each dictionary's own declared name. Verified
+against real plugin data on `Untitled.skp` (`steelframer-dict`, 45
+entries); no output shape change for models with no extra dictionaries
+(`attribute_dictionaries` is simply `{}`). Same fix ported to C++, see
+[§ preview-cpp-v1.3.0](#preview-cpp-v130--2026-09-10--c-only-github-only-pre-release).
 
 ## [1.2.0] — 2026-09-04
 
