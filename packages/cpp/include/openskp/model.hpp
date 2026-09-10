@@ -219,6 +219,39 @@ struct Dimension {
   std::optional<Vec3> normal;
 };
 
+/// A construction/guide line (SketchUp's Construction Line tool).
+/// Legacy (pre-2021) files only - the VFF (2021+) reader does not
+/// currently recognize this entity.
+///
+/// Stored internally (and here, unchanged) as a point + normalized
+/// direction + two signed distance parameters along that direction
+/// marking where the visible segment starts/ends - the same shape
+/// `Sketchup::ConstructionLine`'s own `start`/`end`/`direction`
+/// properties expose. A parameter magnitude of `1e30` means unbounded
+/// in that direction (SketchUp draws this as an infinite guide line
+/// through `point`) - `start`/`end` come back unset in that case,
+/// matching the real API returning `nil`.
+struct ConstructionLine {
+  /// A point on the line, in inches (world space) - matches the bounded
+  /// case's own `start`, or the anchor point given for an infinite line.
+  Vec3 point{0.0, 0.0, 0.0};
+  /// The line's normalized direction vector.
+  Vec3 direction{1.0, 0.0, 0.0};
+  /// The bounded segment's start point, or unset if unbounded in this
+  /// direction.
+  std::optional<Vec3> start;
+  /// The bounded segment's end point, or unset if unbounded.
+  std::optional<Vec3> end;
+};
+
+/// A construction/guide point (SketchUp's Construction Point tool).
+/// Legacy (pre-2021) files only - the VFF (2021+) reader does not
+/// currently recognize this entity.
+struct ConstructionPoint {
+  /// The point's position, in inches (world space).
+  Vec3 position{0.0, 0.0, 0.0};
+};
+
 /// A saved scene (SketchUp's "Scenes" tabs; "pages" in the SDK).
 struct Page {
   /// Scene name as shown on its tab.
@@ -262,6 +295,10 @@ struct Definition {
   std::vector<TextEntity> texts;
   /// Dimensions placed inside this definition.
   std::vector<Dimension> dimensions;
+  /// Construction/guide lines placed inside this definition.
+  std::vector<ConstructionLine> construction_lines;
+  /// Construction/guide points placed inside this definition.
+  std::vector<ConstructionPoint> construction_points;
   /// Always faces camera behavior flag.
   bool always_faces_camera{};
   /// Shadows face sun behavior flag.

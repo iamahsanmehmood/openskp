@@ -78,6 +78,8 @@ static Definition definition(EntityId id, RawDefinition&& r) {
   d.section_planes = std::move(r.builder.section_planes);
   d.texts = std::move(r.builder.texts);
   d.dimensions = std::move(r.builder.dimensions);
+  d.construction_lines = std::move(r.builder.construction_lines);
+  d.construction_points = std::move(r.builder.construction_points);
   return d;
 }
 
