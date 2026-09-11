@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cctype>
+#include <limits>
 #include <miniz.h>
 #include <regex>
 
@@ -39,11 +40,8 @@ struct Zip {
     mz_zip_archive_file_stat s{};
     if (!mz_zip_reader_file_stat(&z, i, &s)) return {};
     validate_entry_size(s);
-    size_t n = 0;
-    void* p = mz_zip_reader_extract_to_heap(&z, i, &n, 0);
-    if (!p) return {};
-    ByteBuffer b(static_cast<std::uint8_t*>(p), static_cast<std::uint8_t*>(p) + n);
-    mz_free(p);
+    ByteBuffer b(static_cast<std::size_t>(s.m_uncomp_size));
+    if (!mz_zip_reader_extract_to_mem(&z, i, b.data(), b.size(), 0)) return {};
     return b;
   }
 
@@ -64,6 +62,13 @@ struct Zip {
   static void validate_entry_size(const mz_zip_archive_file_stat& s) {
     auto declared = s.m_uncomp_size;
     if (declared == 0) return;
+
+    if (declared > std::numeric_limits<std::size_t>::max()) {
+      throw SkpParseError("ZIP entry '" + std::string(s.m_filename) + "' declares " +
+                              std::to_string(declared) +
+                              " bytes, exceeding addressable memory limits",
+                          ParseStage::zip_extract);
+    }
 
     if (declared > kMaxUncompressedEntryBytes) {
       throw SkpParseError("ZIP entry '" + std::string(s.m_filename) + "' declares " +
@@ -227,6 +232,28 @@ std::optional<RawStyle> style_xml(const ByteBuffer& bytes) {
   }
   return o;
 }
+
+// VFF model.dat wraps the file's definition list inside container tags
+// F901 -> 7017 -> 7117 -> 7C15. We unwrap this container into individual
+// 7C15 headers upfront so memory is bounded to one definition at a time,
+// mirroring Python's _unwrap_definitions_container (Issue #264).
+std::vector<Header> unwrap_definitions_container(const ByteBuffer& data, std::size_t offset,
+                                                 std::size_t size) {
+  auto level = headers(data, offset + 6, offset + 6 + size);
+  for (const char* expected_tag : {"7017", "7117"}) {
+    auto it = std::find_if(level.begin(), level.end(),
+                           [&](const Header& h) { return tag_at(data, h.offset) == expected_tag; });
+    if (it == level.end()) return {};
+    level = headers(data, it->offset + 6, it->offset + 6 + it->size);
+  }
+  std::vector<Header> defs;
+  for (const auto& h : level) {
+    if (tag_at(data, h.offset) == "7C15") {
+      defs.push_back(h);
+    }
+  }
+  return defs;
+}
 }  // namespace
 
 // Decodes the 5 predefined XML entities plus numeric character references
@@ -334,16 +361,36 @@ RawParsed full_parse(const ByteBuffer& data, const ParseOptions& o) {
   auto hs = headers(*model, 0, model->size());
   if (hs.size() == 1 && model->at(hs[0].offset) == 0xf4 && model->at(hs[0].offset + 1) == 1)
     hs = headers(*model, hs[0].offset + 6, hs[0].offset + 6 + hs[0].size);
+
+  std::vector<Header> expanded_hs;
+  expanded_hs.reserve(hs.size());
+  for (const auto& h : hs) {
+    if (tag_at(*model, h.offset) == "F901") {
+      auto def_headers = unwrap_definitions_container(*model, h.offset, h.size);
+      if (!def_headers.empty()) {
+        expanded_hs.insert(expanded_hs.end(), def_headers.begin(), def_headers.end());
+        continue;
+      }
+    }
+    expanded_hs.push_back(h);
+  }
+  hs = std::move(expanded_hs);
+
   std::map<std::string, Vec3> vertex_positions;
   std::map<std::string, std::vector<double>> instance_world;
   const TlvNode* page_node = nullptr;
   std::vector<TlvNode> page_node_owner;  // keeps page_node's subtree alive past the loop
+
   auto total = hs.size();
   for (std::size_t i = 0; i < total; ++i) {
     std::string tag;
     try {
       auto one = parse_tlv_recursive(*model, hs[i].offset, hs[i].offset + 6 + hs[i].size);
-      if (one.empty()) continue;
+      if (one.empty()) {
+        emit_log(o, LogLevel::debug,
+                 "Failed to parse record at offset " + std::to_string(hs[i].offset));
+        continue;
+      }
       tag = one[0].tag;
       collect_layers(one, p.layer_id_to_name, p.layer_hidden);
       collect_material_ids(one, p.material_id_to_name);
@@ -360,8 +407,8 @@ RawParsed full_parse(const ByteBuffer& data, const ParseOptions& o) {
     } catch (const SkpParseError&) {
       throw;
     } catch (...) {
-      throw SkpParseError("Failed while processing top-level record", ParseStage::tlv_walk, i,
-                          total, tag, hs[i].offset, {}, std::current_exception());
+      throw SkpParseError("Failed while processing record", ParseStage::tlv_walk, i, total, tag,
+                          hs[i].offset, {}, std::current_exception());
     }
     if (i % progress_interval == 0 || i + 1 == total)
       emit_progress(o, ParseStage::tlv_walk, i + 1, total);
@@ -374,8 +421,19 @@ RawParsed full_parse(const ByteBuffer& data, const ParseOptions& o) {
     p.units = std::nullopt;
     emit_log(o, LogLevel::debug, "Failed to read units from meta/meta.dat");
   }
-  p.pages = parse_pages(page_node);
-  p.dimensions = parse_dimensions(*model, vertex_positions, instance_world);
+  try {
+    p.pages = parse_pages(page_node);
+  } catch (...) {
+    emit_log(o, LogLevel::debug, "Failed to parse pages");
+  }
+  if (!vertex_positions.empty()) {
+    try {
+      p.dimensions = parse_dimensions(*model, vertex_positions, instance_world);
+    } catch (...) {
+      emit_log(o, LogLevel::debug, "Failed to parse dimensions");
+    }
+  }
+  model.reset();
   if (!p.layer_id_to_name.count(1)) p.layer_id_to_name[1] = "Layer0";
   if (!p.layer_colors.count("Layer0")) {
     p.layer_order.push_back("Layer0");

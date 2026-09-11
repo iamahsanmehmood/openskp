@@ -41,7 +41,7 @@ std::uint64_t parse_varint(const ByteBuffer& d, std::size_t o, std::size_t n) {
   return v;
 }
 
-static std::string tag_at(const ByteBuffer& d, std::size_t o) {
+std::string tag_at(const ByteBuffer& d, std::size_t o) {
   require_range(d, o, 2);
   static const char h[] = "0123456789ABCDEF";
   std::string s(4, '0');
