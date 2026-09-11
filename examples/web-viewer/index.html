@@ -239,11 +239,13 @@
         parsing, which may freeze or crash this tab rather than showing a
         clean error. For large files, the
         <a href="https://github.com/iamahsanmehmood/openskp#-quick-start" target="_blank" rel="noopener">Python, .NET, or Dart packages</a>
-        don't have this limitation.
+        don't have this limitation - or try the fast WASM preview below,
+        which loads geometry only (no layers, properties, or export).
       </p>
       <div class="size-warning-actions">
         <button id="btn-size-cancel" class="btn btn-secondary">Cancel</button>
-        <button id="btn-size-proceed" class="btn btn-primary">Load anyway</button>
+        <button id="btn-size-proceed" class="btn btn-secondary">Load anyway (full features)</button>
+        <button id="btn-size-wasm" class="btn btn-primary">Load fast preview (WASM)</button>
       </div>
     </div>
   </div>
