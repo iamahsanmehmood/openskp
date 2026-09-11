@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as fflate from 'fflate';
 import * as flatbuffers from 'flatbuffers';
+import { SingleThreadedFragmentsModel } from '@thatopen/fragments';
 import {
   toFragments,
   buildInstancedScene,
@@ -619,3 +620,84 @@ describe('Real SketchUp Fixture Tests (No Silent Skips)', () => {
     expect(model.meshes()!.shellsLength()).toBeGreaterThan(0);
   });
 });
+
+describe('Real @thatopen/fragments npm package interop (SingleThreadedFragmentsModel)', () => {
+  it('loads deflated .frag buffer of SU_File.skp directly into SingleThreadedFragmentsModel', () => {
+    const fixturePath = path.join(__dirname, 'fixtures', 'SU_File.skp');
+    const skpFile = SkpFile.open(fixturePath);
+    const fragBytes = skpFile.toFragments();
+
+    const model = new SingleThreadedFragmentsModel('test-su-file', fragBytes);
+    expect(model.modelId).toBe('test-su-file');
+
+    const localIds = model.getLocalIds();
+    expect(localIds.length).toBeGreaterThan(0);
+
+    const itemsIds = model.getItemsIds();
+    expect(itemsIds.length).toBeGreaterThan(0);
+
+    // Verify geometry can be retrieved through ThatOpen's engine
+    const geometries = model.getItemsGeometry(itemsIds);
+    expect(geometries.length).toBeGreaterThan(0);
+    const firstGeomList = geometries[0];
+    expect(firstGeomList.length).toBeGreaterThan(0);
+    const chunk = firstGeomList[0];
+    expect(chunk.positions.length).toBeGreaterThan(0);
+    expect(chunk.indices.length).toBeGreaterThan(0);
+    expect(chunk.transform).toBeDefined();
+
+    // Verify item metadata/attributes through ThatOpen's engine
+    const itemsData = model.getItemsData(itemsIds);
+    expect(itemsData.length).toBe(itemsIds.length);
+    expect(itemsData[0]._localId.value).toBe(0);
+    expect(itemsData[0].Name?.value).toBe('ROOT');
+
+    model.dispose();
+  });
+
+  it('loads raw uncompressed .frag buffer into SingleThreadedFragmentsModel', () => {
+    const fixturePath = path.join(__dirname, 'fixtures', 'SU_File.skp');
+    const buffer = fs.readFileSync(fixturePath);
+    const scene = buildInstancedScene(buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength));
+    const rawFragBytes = toFragments(scene, { raw: true });
+
+    const model = new SingleThreadedFragmentsModel('test-raw', rawFragBytes, true);
+    expect(model.modelId).toBe('test-raw');
+    expect(model.getItemsIds().length).toBeGreaterThan(0);
+
+    const geometries = model.getItemsGeometry([0]);
+    expect(geometries.length).toBe(1);
+    expect(geometries[0][0].positions.length).toBeGreaterThan(0);
+
+    model.dispose();
+  });
+
+  it('loads complex model gondola_v20.skp and retrieves instanced item data and geometry chunks', () => {
+    const fixturePath = path.join(__dirname, 'fixtures', 'gondola_v20.skp');
+    const skpFile = SkpFile.open(fixturePath);
+    const fragBytes = skpFile.toFragments();
+
+    const model = new SingleThreadedFragmentsModel('test-gondola', fragBytes);
+    const itemsIds = model.getItemsIds();
+    expect(itemsIds.length).toBe(81);
+
+    // Retrieve multiple geometry chunks
+    const sampleIds = itemsIds.slice(0, 10);
+    const geoms = model.getItemsGeometry(sampleIds);
+    expect(geoms.length).toBeGreaterThanOrEqual(10);
+    for (const geomList of geoms) {
+      for (const geom of geomList) {
+        expect(geom.positions.length).toBeGreaterThan(0);
+        expect(geom.indices.length).toBeGreaterThan(0);
+        expect(geom.transform).toBeDefined();
+      }
+    }
+
+    // Check layer categories preserved in itemsData
+    const itemsData = model.getItemsData([0, 1]);
+    expect(itemsData[0]._category?.value).toBe('Gondulas Laterais');
+
+    model.dispose();
+  });
+});
+
