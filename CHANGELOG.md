@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — Python: pre-2014 legacy files could silently drop most of the root scene, or crash deep in a nested definition (#284)
+
+`_read_instance`'s trailing-GUID read for `CComponentInstance`/`CGroup` was gated on the class's own reported `schema` number (`schema >= 5` implies a GUID), which doesn't hold: a v7 file's `CComponentInstance` reports schema 6 - well above that threshold - yet has no GUID at all. Forcing the 16-byte read anyway silently consumed bytes belonging to the start of the next sibling entity's own tag. Two symptoms turned out to share this one cause: a `"class-ref to non-class slot N (CAttributeNamed)"` crash deep inside a nested `CComponentDefinition` (the originally-reported bug), and - more dangerous, since it never raised - the root-level entity list's own over-declared-count tolerance silently swallowing the resulting corruption and truncating a real scene from 10+ root instances down to 1 with no error at all. Root-caused with a byte-level trace on a real V7 file (not committed, private project content) and fixed by gating the GUID read on the file's own version number instead of schema, then re-verified byte-for-byte against V7/V8/2013 real files and a clean synthetic fixture pair. `is_legacy` detection, `expected a string record` (v3), `texture object is not a dib` (v4), and `definition list misaligned` (v6) remain separate, unrelated pre-existing bugs, still open.
+
 ### Added — Web viewer: WASM fast-preview path for files too large for the pure-JS parser
 
 `examples/web-viewer` bundles the C++ engine's WASM build (`wasm/openskp.js`/`openskp.wasm`) and offers it as an additional option on the existing large-file warning dialog - "Load fast preview (WASM)" alongside "Load anyway" and "Cancel". It hands the raw bytes to the native parser and renders the GLB it returns via Three.js's `GLTFLoader`, trading away layers, the properties inspector, and every export format (`parseSkpToGLB()`'s return value carries none of that metadata) for a load that actually finishes instead of freezing the tab.
