@@ -1,6 +1,7 @@
 import * as flatbuffers from 'flatbuffers';
 import * as fflate from 'fflate';
-import type { InstancedScene, InstancedNode } from './instanced';
+import type { InstancedScene, InstancedNode, LocalPrimitive, InstancedMeshResource } from './instanced';
+import { multiplyMatrices } from './transforms';
 import {
   Model,
   Meshes,
@@ -9,59 +10,189 @@ import {
   BigShellProfile,
   FloatVector,
   Representation,
+  RepresentationClass,
   Transform,
   Material,
   Sample,
   SpatialStructure,
   ShellType,
-} from './fragments-schema';
+  RenderedFaces,
+  Stroke,
+  Attribute,
+} from './_fragments_fb/index';
 
 /** Options for {@link toFragments}. */
 export interface FragmentExportOptions {
-  /** Model GUID / identifier. If omitted, a random UUID is generated. */
+  /** Model GUID / identifier. Default: "00000000-0000-0000-0000-000000000000". */
   modelId?: string;
   /** If true, returns raw uncompressed FlatBuffers buffer instead of zlib-deflated. Default: false. */
   raw?: boolean;
-  /** Whether to set materials to double-sided. Default: true. */
+  /** Whether to set materials to double-sided. Default: false. */
   doubleSided?: boolean;
 }
 
-/** Multiply two 4x4 column-major matrices: out = a * b */
-function multiply4x4(a: number[], b: number[]): number[] {
-  const out = new Array<number>(16);
-  for (let i = 0; i < 4; i++) {
-    for (let j = 0; j < 4; j++) {
-      out[j * 4 + i] =
-        a[i] * b[j * 4] +
-        a[4 + i] * b[j * 4 + 1] +
-        a[8 + i] * b[j * 4 + 2] +
-        a[12 + i] * b[j * 4 + 3];
-    }
-  }
-  return out;
+const USHORT_MAX = 65535;
+const SCALE_ROUND_NDIGITS = 4;
+
+const IDENTITY_MATRIX = [
+  1.0, 0.0, 0.0, 0.0,
+  0.0, 1.0, 0.0, 0.0,
+  0.0, 0.0, 1.0, 0.0,
+  0.0, 0.0, 0.0, 1.0,
+];
+
+interface Leaf {
+  node: InstancedNode;
+  world: number[];
 }
 
-function generateUUID(): string {
-  const hex = '0123456789abcdef';
-  let s = '';
-  for (let i = 0; i < 36; i++) {
-    if (i === 8 || i === 13 || i === 18 || i === 23) {
-      s += '-';
-    } else if (i === 14) {
-      s += '4';
-    } else {
-      s += hex[(Math.random() * 16) | 0];
+/**
+ * Walk the instanced scene's tree, accumulating each node's GLOBAL (world)
+ * transform, and return every node worth tracking as its own item - a leaf
+ * carrying geometry or a named organizational wrapper with no geometry.
+ * Mirrors Python's and C++'s collect_leaves exactly.
+ */
+function collectLeaves(
+  node: InstancedNode,
+  root: InstancedNode,
+  parentMatrix: number[],
+  out: Leaf[]
+): void {
+  const world = multiplyMatrices(parentMatrix, node.matrix);
+  const isNamedWrapper = node !== root && Boolean(node.name && node.name !== '' && node.name !== 'ROOT');
+  if (node.meshResourceId !== undefined || isNamedWrapper) {
+    out.push({ node, world });
+  }
+  if (node.children) {
+    for (const child of node.children) {
+      collectLeaves(child, root, world, out);
     }
   }
-  return s;
+}
+
+export interface TrsDecomposition {
+  position: [number, number, number];
+  xDir: [number, number, number];
+  yDir: [number, number, number];
+  scale: [number, number, number];
+  mirrored: boolean;
+}
+
+/**
+ * Decompose a column-major 4x4 instance transform into
+ * (position, x_direction, y_direction, scale, mirrored).
+ *
+ * x_direction/y_direction are normalized unit vectors - everything Fragments'
+ * Transform struct can hold. Scale (all positive magnitudes) and mirrored
+ * (whether the frame is left-handed) cannot be held in Transform; they are
+ * baked into geometry variants via bakePrimitive.
+ */
+export function decomposeTrs(m: number[]): TrsDecomposition {
+  const xAxis: [number, number, number] = [m[0], m[1], m[2]];
+  const yAxis: [number, number, number] = [m[4], m[5], m[6]];
+  const zAxis: [number, number, number] = [m[8], m[9], m[10]];
+  const pos: [number, number, number] = [m[12], m[13], m[14]];
+
+  const norm = (v: [number, number, number]) => {
+    const s = Math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+    return s > 0 ? s : 1.0;
+  };
+
+  const sx = norm(xAxis);
+  const sy = norm(yAxis);
+  const sz = norm(zAxis);
+
+  const det =
+    xAxis[0] * (yAxis[1] * zAxis[2] - yAxis[2] * zAxis[1]) -
+    xAxis[1] * (yAxis[0] * zAxis[2] - yAxis[2] * zAxis[0]) +
+    xAxis[2] * (yAxis[0] * zAxis[1] - yAxis[1] * zAxis[0]);
+  const mirrored = det < 0;
+
+  const cleanZero = (v: number) => (v === 0 ? 0 : v);
+  let xDir: [number, number, number] = [
+    cleanZero(xAxis[0] / sx),
+    cleanZero(xAxis[1] / sx),
+    cleanZero(xAxis[2] / sx),
+  ];
+  if (mirrored) {
+    xDir = [cleanZero(-xDir[0]), cleanZero(-xDir[1]), cleanZero(-xDir[2])];
+  }
+  const yDir: [number, number, number] = [
+    cleanZero(yAxis[0] / sy),
+    cleanZero(yAxis[1] / sy),
+    cleanZero(yAxis[2] / sy),
+  ];
+
+  return {
+    position: pos,
+    xDir,
+    yDir,
+    scale: [sx, sy, sz],
+    mirrored,
+  };
+}
+
+export interface BakedGeometry {
+  points: [number, number, number][];
+  triangles: [number, number, number][];
+}
+
+/**
+ * Apply an instance's scale/mirror directly to a copy of its resource's
+ * LOCAL points and triangle winding, so the resulting geometry is correct
+ * when placed by a purely rigid Transform.
+ */
+export function bakePrimitive(
+  prim: LocalPrimitive,
+  scale: [number, number, number],
+  mirrored: boolean
+): BakedGeometry {
+  const sx = mirrored ? -scale[0] : scale[0];
+  const sy = scale[1];
+  const sz = scale[2];
+
+  const positions = prim.positions;
+  const nVerts = Math.floor(positions.length / 3);
+  const points: [number, number, number][] = new Array(nVerts);
+  for (let i = 0; i < nVerts; i++) {
+    points[i] = [
+      positions[i * 3] * sx,
+      positions[i * 3 + 1] * sy,
+      positions[i * 3 + 2] * sz,
+    ];
+  }
+
+  const indices = prim.indices;
+  const nTris = Math.floor(indices.length / 3);
+  const triangles: [number, number, number][] = new Array(nTris);
+  for (let i = 0; i < nTris; i++) {
+    const a = indices[i * 3];
+    const b = indices[i * 3 + 1];
+    const c = indices[i * 3 + 2];
+    triangles[i] = mirrored ? [a, c, b] : [a, b, c];
+  }
+
+  return { points, triangles };
+}
+
+/**
+ * Round a (mirrored, scale) pair to a stable cache key. The mirror flag
+ * folds into the X component's sign, since bakePrimitive only ever negates
+ * X for a mirrored instance.
+ */
+export function scaleCacheKey(mirrored: boolean, scale: [number, number, number]): string {
+  const mult = Math.pow(10, SCALE_ROUND_NDIGITS);
+  const rnd = (v: number) => Math.round(v * mult) / mult;
+  const sx = mirrored ? -scale[0] : scale[0];
+  return `${rnd(sx)}_${rnd(scale[1])}_${rnd(scale[2])}`;
 }
 
 /**
  * Export an {@link InstancedScene} (from {@link buildInstancedScene}) directly to
  * ThatOpen Fragments (.frag) binary format.
  *
- * This performs zero ASCII string conversions and bypasses intermediate IFC generation,
- * enabling high-performance GPU-instanced 60 FPS rendering in ThatOpen Engine / IFC.js viewers.
+ * Uses official FlatBuffers bindings generated from ThatOpen's index.fbs schema,
+ * with TRS matrix decomposition and scale/mirror geometry baking for full visual parity.
  *
  * @param scene - The instanced scene from buildInstancedScene()
  * @param options - Fragment export options
@@ -71,391 +202,357 @@ export function toFragments(
   scene: InstancedScene,
   options: FragmentExportOptions = {}
 ): Uint8Array {
-  const builder = new flatbuffers.Builder(1024 * 1024);
-  const doubleSided = options.doubleSided ?? true;
-  let nextId = 1;
+  const leaves: Leaf[] = [];
+  collectLeaves(scene.sceneHierarchy, scene.sceneHierarchy, IDENTITY_MATRIX, leaves);
 
-  // 1. Process Materials
-  const materialMap = new Map<number, number>();
-  const materialsList: { r: number; g: number; b: number; a: number }[] = [];
+  const resourceById = new Map<string, InstancedMeshResource>();
+  for (const r of scene.meshResources) {
+    resourceById.set(r.id, r);
+  }
 
-  const getMaterialIndex = (gltfMatIdx: number): number => {
-    if (materialMap.has(gltfMatIdx)) return materialMap.get(gltfMatIdx)!;
+  const builder = new flatbuffers.Builder(1024 * 64);
 
-    let r = 200, g = 200, b = 200, a = 255;
-    const gltfMat = scene.gltfMaterials?.[gltfMatIdx] as any;
-    if (gltfMat?.pbrMetallicRoughness?.baseColorFactor) {
-      const col = gltfMat.pbrMetallicRoughness.baseColorFactor;
-      r = Math.min(255, Math.max(0, Math.round((col[0] ?? 0.8) * 255)));
-      g = Math.min(255, Math.max(0, Math.round((col[1] ?? 0.8) * 255)));
-      b = Math.min(255, Math.max(0, Math.round((col[2] ?? 0.8) * 255)));
-      a = Math.min(255, Math.max(0, Math.round((col[3] ?? 1.0) * 255)));
+  // Shells, representations, materials built lazily as leaves are walked
+  const shellKeyToIndex = new Map<string, number>();
+  const shellOffsets: flatbuffers.Offset[] = [];
+  const representationBounds: {
+    min: [number, number, number];
+    max: [number, number, number];
+  }[] = [];
+  const materialKeyToIndex = new Map<number, number>();
+  const materialRgba: [number, number, number, number][] = [];
+
+  const getMaterialIndex = (matIdx: number): number => {
+    if (materialKeyToIndex.has(matIdx)) {
+      return materialKeyToIndex.get(matIdx)!;
     }
-    const idx = materialsList.length;
-    materialsList.push({ r, g, b, a });
-    materialMap.set(gltfMatIdx, idx);
+    let r = 255, g = 255, b = 255, a = 255;
+    if (matIdx >= 0 && matIdx < scene.gltfMaterials.length) {
+      const gltfMat = scene.gltfMaterials[matIdx] as any;
+      const pbr = gltfMat?.pbrMetallicRoughness;
+      if (pbr?.baseColorFactor && Array.isArray(pbr.baseColorFactor)) {
+        const c = pbr.baseColorFactor;
+        r = Math.min(255, Math.max(0, Math.round((c[0] ?? 1.0) * 255)));
+        g = Math.min(255, Math.max(0, Math.round((c[1] ?? 1.0) * 255)));
+        b = Math.min(255, Math.max(0, Math.round((c[2] ?? 1.0) * 255)));
+        a = Math.min(255, Math.max(0, Math.round((c[3] ?? 1.0) * 255)));
+      }
+    }
+    const idx = materialRgba.length;
+    materialRgba.push([r, g, b, a]);
+    materialKeyToIndex.set(matIdx, idx);
     return idx;
   };
 
-  // Ensure default fallback material exists
-  if (scene.gltfMaterials.length === 0) {
-    getMaterialIndex(0);
-  }
+  const getOrBakeShell = (
+    resourceId: string,
+    primIdx: number,
+    prim: LocalPrimitive,
+    scale: [number, number, number],
+    mirrored: boolean
+  ): number => {
+    const sk = scaleCacheKey(mirrored, scale);
+    const key = `${resourceId}:${primIdx}:${sk}`;
+    if (shellKeyToIndex.has(key)) {
+      return shellKeyToIndex.get(key)!;
+    }
 
-  // 2. Process Geometries (Shells & Representations)
-  interface CompiledGeom {
-    shellOffset: flatbuffers.Offset;
-    bbox: { minX: number; minY: number; minZ: number; maxX: number; maxY: number; maxZ: number };
-    materialIdx: number;
-    reprIndex: number;
-  }
+    const baked = bakePrimitive(prim, scale, mirrored);
+    const isBig = baked.points.length > USHORT_MAX;
 
-  const resourceGeomMap = new Map<string, CompiledGeom[]>();
-  const allRepresentations: CompiledGeom[] = [];
+    const profileOffsets: flatbuffers.Offset[] = [];
+    const bigProfileOffsets: flatbuffers.Offset[] = [];
 
-  for (const res of scene.meshResources) {
-    const compiledList: CompiledGeom[] = [];
-
-    for (const prim of res.primitives) {
-      const positions = prim.positions;
-      const indices = prim.indices;
-      const vertexCount = positions.length / 3;
-      if (vertexCount === 0 || indices.length === 0) continue;
-
-      const isBig = vertexCount > 65535;
-
-      // Compute AABB Bounding Box
-      let minX = Infinity, minY = Infinity, minZ = Infinity;
-      let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
-
-      for (let i = 0; i < positions.length; i += 3) {
-        const x = positions[i], y = positions[i + 1], z = positions[i + 2];
-        if (x < minX) minX = x; if (x > maxX) maxX = x;
-        if (y < minY) minY = y; if (y > maxY) maxY = y;
-        if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
-      }
-      if (minX === Infinity) {
-        minX = minY = minZ = 0;
-        maxX = maxY = maxZ = 0.1;
-      }
-
-      // Build Points Vector (backwards as required by FlatBuffers)
-      Shell.startPointsVector(builder, vertexCount);
-      for (let i = vertexCount - 1; i >= 0; i--) {
-        builder.writeFloat32(positions[i * 3 + 2]);
-        builder.writeFloat32(positions[i * 3 + 1]);
-        builder.writeFloat32(positions[i * 3]);
-      }
-      const pointsOffset = builder.endVector();
-
-      // Build Profiles (each triangle is a profile of 3 indices)
-      const triangleCount = Math.floor(indices.length / 3);
-      let profilesVector: flatbuffers.Offset;
-      let bigProfilesVector: flatbuffers.Offset;
-
+    for (const tri of baked.triangles) {
       if (isBig) {
-        const bigProfileOffsets = new Array<flatbuffers.Offset>(triangleCount);
-        for (let t = 0; t < triangleCount; t++) {
-          builder.startVector(4, 3, 4);
-          builder.addInt32(indices[t * 3 + 2]);
-          builder.addInt32(indices[t * 3 + 1]);
-          builder.addInt32(indices[t * 3]);
-          const idxVector = builder.endVector();
-
-          BigShellProfile.startBigShellProfile(builder);
-          BigShellProfile.addIndices(builder, idxVector);
-          bigProfileOffsets[t] = BigShellProfile.endBigShellProfile(builder);
-        }
-        bigProfilesVector = Shell.createBigProfilesVector(builder, bigProfileOffsets);
-        profilesVector = Shell.createProfilesVector(builder, []);
+        BigShellProfile.startIndicesVector(builder, 3);
+        builder.addInt32(tri[2]);
+        builder.addInt32(tri[1]);
+        builder.addInt32(tri[0]);
+        const indicesVec = builder.endVector();
+        BigShellProfile.startBigShellProfile(builder);
+        BigShellProfile.addIndices(builder, indicesVec);
+        bigProfileOffsets.push(BigShellProfile.endBigShellProfile(builder));
       } else {
-        const profileOffsets = new Array<flatbuffers.Offset>(triangleCount);
-        for (let t = 0; t < triangleCount; t++) {
-          builder.startVector(2, 3, 2);
-          builder.addInt16(indices[t * 3 + 2]);
-          builder.addInt16(indices[t * 3 + 1]);
-          builder.addInt16(indices[t * 3]);
-          const idxVector = builder.endVector();
-
-          ShellProfile.startShellProfile(builder);
-          ShellProfile.addIndices(builder, idxVector);
-          profileOffsets[t] = ShellProfile.endShellProfile(builder);
-        }
-        profilesVector = Shell.createProfilesVector(builder, profileOffsets);
-        bigProfilesVector = Shell.createBigProfilesVector(builder, []);
-      }
-
-      const holesVector = Shell.createHolesVector(builder, []);
-      const bigHolesVector = Shell.createBigHolesVector(builder, []);
-
-      // Fast zero-fill faceIds vector (no intermediate arrays)
-      builder.startVector(2, triangleCount, 2);
-      builder.pad(triangleCount * 2);
-      const faceIdsVector = builder.endVector();
-
-      Shell.startShell(builder);
-      Shell.addProfiles(builder, profilesVector);
-      Shell.addHoles(builder, holesVector);
-      Shell.addPoints(builder, pointsOffset);
-      Shell.addBigProfiles(builder, bigProfilesVector);
-      Shell.addBigHoles(builder, bigHolesVector);
-      Shell.addType(builder, isBig ? ShellType.BIG : ShellType.NONE);
-      Shell.addProfilesFaceIds(builder, faceIdsVector);
-      const shellOffset = Shell.endShell(builder);
-
-      const geomItem: CompiledGeom = {
-        shellOffset,
-        bbox: { minX, minY, minZ, maxX, maxY, maxZ },
-        materialIdx: getMaterialIndex(prim.materialIndex),
-        reprIndex: allRepresentations.length,
-      };
-
-      compiledList.push(geomItem);
-      allRepresentations.push(geomItem);
-    }
-
-    resourceGeomMap.set(res.id, compiledList);
-  }
-
-  // 3. Walk Scene Graph & Collect Placed Instances
-  interface PlacedInstance {
-    itemId: number;
-    matrix: number[];
-    resourceId: string;
-    name: string;
-  }
-
-  const placedInstances: PlacedInstance[] = [];
-  let itemCounter = 0;
-
-  function walk(node: InstancedNode, parentMatrix: number[]): void {
-    const worldMatrix = multiply4x4(parentMatrix, node.matrix);
-
-    if (node.meshResourceId && resourceGeomMap.has(node.meshResourceId)) {
-      placedInstances.push({
-        itemId: itemCounter++,
-        matrix: worldMatrix,
-        resourceId: node.meshResourceId,
-        name: node.name || node.definitionName || `Item_${itemCounter}`,
-      });
-    }
-
-    if (node.children) {
-      for (const child of node.children) {
-        walk(child, worldMatrix);
+        ShellProfile.startIndicesVector(builder, 3);
+        builder.addInt16(tri[2]);
+        builder.addInt16(tri[1]);
+        builder.addInt16(tri[0]);
+        const indicesVec = builder.endVector();
+        ShellProfile.startShellProfile(builder);
+        ShellProfile.addIndices(builder, indicesVec);
+        profileOffsets.push(ShellProfile.endShellProfile(builder));
       }
     }
-  }
 
-  const identity = [
-    1, 0, 0, 0,
-    0, 1, 0, 0,
-    0, 0, 1, 0,
-    0, 0, 0, 1,
-  ];
-  walk(scene.sceneHierarchy, identity);
+    const profilesVec = Shell.createProfilesVector(builder, isBig ? [] : profileOffsets);
+    const bigProfilesVec = Shell.createBigProfilesVector(builder, isBig ? bigProfileOffsets : []);
 
-  // If no instances were placed (loose geometry fallback)
-  if (placedInstances.length === 0 && allRepresentations.length > 0) {
-    for (const [resId] of resourceGeomMap) {
-      placedInstances.push({
-        itemId: itemCounter++,
-        matrix: identity,
-        resourceId: resId,
-        name: 'Root_Geometry',
-      });
-    }
-  }
+    Shell.startHolesVector(builder, 0);
+    const holesVec = builder.endVector();
+    Shell.startBigHolesVector(builder, 0);
+    const bigHolesVec = builder.endVector();
 
-  // 4. Global Transforms Vector (Struct Vector: size 48 per transform)
-  const gtCount = placedInstances.length;
-  const gtLocalIds = new Array<number>(gtCount);
-  for (let i = 0; i < gtCount; i++) {
-    gtLocalIds[i] = nextId++;
-  }
-
-  Meshes.startGlobalTransformsVector(builder, gtCount);
-  for (let i = gtCount - 1; i >= 0; i--) {
-    const inst = placedInstances[i];
-    const m = inst.matrix;
-    // m is column-major:
-    // col 0: [m[0], m[1], m[2]] -> xDirection
-    // col 1: [m[4], m[5], m[6]] -> yDirection
-    // col 3: [m[12], m[13], m[14]] -> position
-    Transform.createTransform(
-      builder,
-      m[12], m[13], m[14],
-      m[0], m[1], m[2],
-      m[4], m[5], m[6]
-    );
-  }
-  const globalTransforms = builder.endVector();
-
-  // 5. Local Transforms (At least 1 identity transform for base samples)
-  Meshes.startLocalTransformsVector(builder, 1);
-  const ltLocalIds = [nextId++];
-  Transform.createTransform(builder, 0, 0, 0, 1, 0, 0, 0, 1, 0);
-  const localTransforms = builder.endVector();
-
-  // 6. Shells Vector (Offsets)
-  Meshes.startShellsVector(builder, allRepresentations.length);
-  for (let i = allRepresentations.length - 1; i >= 0; i--) {
-    builder.addOffset(allRepresentations[i].shellOffset);
-  }
-  const shellsVector = builder.endVector();
-
-  // 7. Representations Vector (Struct Vector: size 32 per representation)
-  const reprCount = allRepresentations.length;
-  const reprLocalIds = new Array<number>(reprCount);
-  for (let i = 0; i < reprCount; i++) {
-    reprLocalIds[i] = nextId++;
-  }
-
-  Meshes.startRepresentationsVector(builder, reprCount);
-  for (let i = reprCount - 1; i >= 0; i--) {
-    const geom = allRepresentations[i];
-    Representation.createRepresentation(
-      builder,
-      i, // geomIndex
-      geom.bbox.minX, geom.bbox.minY, geom.bbox.minZ,
-      geom.bbox.maxX, geom.bbox.maxY, geom.bbox.maxZ,
-      1 // RepresentationClass.SHELL
-    );
-  }
-  const representationsVector = builder.endVector();
-
-  // 8. Materials Vector (Struct Vector: size 6 per material)
-  const matCount = materialsList.length;
-  const matLocalIds = new Array<number>(matCount);
-  for (let i = 0; i < matCount; i++) {
-    matLocalIds[i] = nextId++;
-  }
-
-  Meshes.startMaterialsVector(builder, matCount);
-  for (let i = matCount - 1; i >= 0; i--) {
-    const m = materialsList[i];
-    Material.createMaterial(
-      builder,
-      m.r, m.g, m.b, m.a,
-      doubleSided ? 2 : 1, // 2 = RenderedFaces.TWO
-      0
-    );
-  }
-  const materialsVector = builder.endVector();
-
-  // 9. Samples Vector (Struct Vector: size 16 per sample)
-  let totalSamples = 0;
-  for (let i = 0; i < gtCount; i++) {
-    const geoms = resourceGeomMap.get(placedInstances[i].resourceId);
-    if (geoms) totalSamples += geoms.length;
-  }
-
-  const sampleLocalIds = new Array<number>(totalSamples);
-  for (let i = 0; i < totalSamples; i++) {
-    sampleLocalIds[i] = nextId++;
-  }
-
-  Meshes.startSamplesVector(builder, totalSamples);
-  for (let instIdx = gtCount - 1; instIdx >= 0; instIdx--) {
-    const inst = placedInstances[instIdx];
-    const geoms = resourceGeomMap.get(inst.resourceId);
-    if (!geoms) continue;
-
-    for (let g = geoms.length - 1; g >= 0; g--) {
-      const geom = geoms[g];
-      Sample.createSample(
+    Shell.startPointsVector(builder, baked.points.length);
+    for (let i = baked.points.length - 1; i >= 0; i--) {
+      FloatVector.createFloatVector(
         builder,
-        inst.itemId,
-        geom.materialIdx,
-        geom.reprIndex,
-        0 // localTransform index 0
+        baked.points[i][0],
+        baked.points[i][1],
+        baked.points[i][2]
       );
     }
+    const pointsVec = builder.endVector();
+
+    const faceIds = new Uint16Array(baked.triangles.length);
+    for (let i = 0; i < baked.triangles.length; i++) {
+      faceIds[i] = i & 0xffff;
+    }
+    const faceIdsVec = Shell.createProfilesFaceIdsVector(builder, faceIds);
+
+    Shell.startShell(builder);
+    Shell.addProfiles(builder, profilesVec);
+    Shell.addBigProfiles(builder, bigProfilesVec);
+    Shell.addHoles(builder, holesVec);
+    Shell.addBigHoles(builder, bigHolesVec);
+    Shell.addPoints(builder, pointsVec);
+    Shell.addType(builder, isBig ? ShellType.BIG : ShellType.NONE);
+    Shell.addProfilesFaceIds(builder, faceIdsVec);
+    const shellOff = Shell.endShell(builder);
+
+    const index = shellOffsets.length;
+    shellOffsets.push(shellOff);
+
+    let minX = Infinity, minY = Infinity, minZ = Infinity;
+    let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+    for (const p of baked.points) {
+      if (p[0] < minX) minX = p[0]; if (p[0] > maxX) maxX = p[0];
+      if (p[1] < minY) minY = p[1]; if (p[1] > maxY) maxY = p[1];
+      if (p[2] < minZ) minZ = p[2]; if (p[2] > maxZ) maxZ = p[2];
+    }
+    if (minX === Infinity) {
+      minX = minY = minZ = 0;
+      maxX = maxY = maxZ = 0;
+    }
+    representationBounds.push({
+      min: [minX, minY, minZ],
+      max: [maxX, maxY, maxZ],
+    });
+
+    shellKeyToIndex.set(key, index);
+    return index;
+  };
+
+  const localIds: number[] = [];
+  const categories: string[] = [];
+  const names: string[] = [];
+  const guids: string[] = [];
+  const sampleMaterial: number[] = [];
+  const sampleRepresentation: number[] = [];
+  const meshesItems: number[] = [];
+  const globalTransformData: {
+    pos: [number, number, number];
+    xDir: [number, number, number];
+    yDir: [number, number, number];
+  }[] = [];
+  const itemIndexByNode = new Map<InstancedNode, number>();
+  const seenGuids = new Set<string>();
+
+  for (let itemIndex = 0; itemIndex < leaves.length; itemIndex++) {
+    const { node, world } = leaves[itemIndex];
+    const resourceId = node.meshResourceId;
+    const res = resourceId !== undefined ? resourceById.get(resourceId) : undefined;
+
+    if (resourceId !== undefined && res === undefined) {
+      continue;
+    }
+
+    localIds.push(itemIndex);
+    categories.push(node.layer || 'Layer0');
+    names.push(node.name || '');
+
+    const rawGuid = (node as any).guid || '';
+    const itemGuid =
+      rawGuid && !seenGuids.has(rawGuid) ? rawGuid : `openskp-${itemIndex}`;
+    seenGuids.add(itemGuid);
+    guids.push(itemGuid);
+
+    itemIndexByNode.set(node, itemIndex);
+
+    if (res !== undefined) {
+      const trs = decomposeTrs(world);
+      for (let primIdx = 0; primIdx < res.primitives.length; primIdx++) {
+        const prim = res.primitives[primIdx];
+        sampleMaterial.push(getMaterialIndex(prim.materialIndex));
+        sampleRepresentation.push(
+          getOrBakeShell(resourceId!, primIdx, prim, trs.scale, trs.mirrored)
+        );
+        meshesItems.push(itemIndex);
+        globalTransformData.push({
+          pos: trs.position,
+          xDir: trs.xDir,
+          yDir: trs.yDir,
+        });
+      }
+    }
   }
-  const samplesVector = builder.endVector();
 
-  // 10. Meshes items vector (itemId indices: 0..placedInstances.length-1)
-  const itemIdsArray: number[] = [];
-  for (let i = 0; i < placedInstances.length; i++) {
-    itemIdsArray.push(i);
+  const nSamples = sampleMaterial.length;
+
+  Meshes.startShellsVector(builder, shellOffsets.length);
+  for (let i = shellOffsets.length - 1; i >= 0; i--) {
+    builder.addOffset(shellOffsets[i]);
   }
-  const meshesItemsVector = Meshes.createMeshesItemsVector(builder, itemIdsArray);
+  const shellsVec = builder.endVector();
 
-  // Representation IDs, Sample IDs, Material IDs, Transform IDs
-  const reprIdsVector = Meshes.createRepresentationIdsVector(builder, reprLocalIds);
-  const sampleIdsVector = Meshes.createSampleIdsVector(builder, sampleLocalIds);
-  const matIdsVector = Meshes.createMaterialIdsVector(builder, matLocalIds);
-  const ltIdsVector = Meshes.createLocalTransformIdsVector(builder, ltLocalIds);
-  const gtIdsVector = Meshes.createGlobalTransformIdsVector(builder, gtLocalIds);
+  const renderedFaces = (options.doubleSided ?? false)
+    ? RenderedFaces.TWO
+    : RenderedFaces.ONE;
 
-  // Circle extrusions vector (empty vector required by Meshes table)
-  const circleExtrusionsVector = Meshes.createCircleExtrusionsVector(builder, []);
+  Meshes.startMaterialsVector(builder, materialRgba.length);
+  for (let i = materialRgba.length - 1; i >= 0; i--) {
+    const rgba = materialRgba[i];
+    Material.createMaterial(
+      builder,
+      rgba[0],
+      rgba[1],
+      rgba[2],
+      rgba[3],
+      renderedFaces,
+      Stroke.DEFAULT
+    );
+  }
+  const materialsVec = builder.endVector();
 
-  // Default coordinate frame (must be serialized immediately before Meshes.startMeshes)
+  Meshes.startRepresentationsVector(builder, representationBounds.length);
+  for (let i = representationBounds.length - 1; i >= 0; i--) {
+    const { min, max } = representationBounds[i];
+    Representation.createRepresentation(
+      builder,
+      i,
+      min[0], min[1], min[2],
+      max[0], max[1], max[2],
+      RepresentationClass.SHELL
+    );
+  }
+  const representationsVec = builder.endVector();
+
+  Meshes.startSamplesVector(builder, nSamples);
+  for (let i = nSamples - 1; i >= 0; i--) {
+    Sample.createSample(builder, i, sampleMaterial[i], sampleRepresentation[i], 0);
+  }
+  const samplesVec = builder.endVector();
+
+  Meshes.startMeshesItemsVector(builder, nSamples);
+  for (let i = nSamples - 1; i >= 0; i--) {
+    builder.addInt32(meshesItems[i]);
+  }
+  const meshesItemsVec = builder.endVector();
+
+  Meshes.startGlobalTransformsVector(builder, nSamples);
+  for (let i = nSamples - 1; i >= 0; i--) {
+    const gt = globalTransformData[i];
+    Transform.createTransform(
+      builder,
+      gt.pos[0], gt.pos[1], gt.pos[2],
+      gt.xDir[0], gt.xDir[1], gt.xDir[2],
+      gt.yDir[0], gt.yDir[1], gt.yDir[2]
+    );
+  }
+  const globalTransformsVec = builder.endVector();
+
+  Meshes.startLocalTransformsVector(builder, 1);
+  Transform.createTransform(builder, 0, 0, 0, 1, 0, 0, 0, 1, 0);
+  const localTransformsVec = builder.endVector();
+
+  Meshes.startCircleExtrusionsVector(builder, 0);
+  const circleExtrusionsVec = builder.endVector();
+
   const coordsOffset = Transform.createTransform(builder, 0, 0, 0, 1, 0, 0, 0, 1, 0);
 
-  // Meshes table
   Meshes.startMeshes(builder);
   Meshes.addCoordinates(builder, coordsOffset);
-  Meshes.addMeshesItems(builder, meshesItemsVector);
-  Meshes.addSamples(builder, samplesVector);
-  Meshes.addRepresentations(builder, representationsVector);
-  Meshes.addMaterials(builder, materialsVector);
-  Meshes.addCircleExtrusions(builder, circleExtrusionsVector);
-  Meshes.addShells(builder, shellsVector);
-  Meshes.addLocalTransforms(builder, localTransforms);
-  Meshes.addGlobalTransforms(builder, globalTransforms);
-  Meshes.addMaterialIds(builder, matIdsVector);
-  Meshes.addRepresentationIds(builder, reprIdsVector);
-  Meshes.addSampleIds(builder, sampleIdsVector);
-  Meshes.addLocalTransformIds(builder, ltIdsVector);
-  Meshes.addGlobalTransformIds(builder, gtIdsVector);
-  const meshesOffset = Meshes.endMeshes(builder);
+  Meshes.addMeshesItems(builder, meshesItemsVec);
+  Meshes.addSamples(builder, samplesVec);
+  Meshes.addRepresentations(builder, representationsVec);
+  Meshes.addMaterials(builder, materialsVec);
+  Meshes.addCircleExtrusions(builder, circleExtrusionsVec);
+  Meshes.addShells(builder, shellsVec);
+  Meshes.addLocalTransforms(builder, localTransformsVec);
+  Meshes.addGlobalTransforms(builder, globalTransformsVec);
+  const meshesOff = Meshes.endMeshes(builder);
 
-  // 11. Spatial Structure Table
-  const catProject = builder.createString('IFCPROJECT');
-  SpatialStructure.startSpatialStructure(builder);
-  SpatialStructure.addCategory(builder, catProject);
-  SpatialStructure.addLocalId(builder, nextId++);
-  const spatialStructureOffset = SpatialStructure.endSpatialStructure(builder);
+  const catOffsets = categories.map((c) => builder.createString(c));
+  const categoriesVec = Model.createCategoriesVector(builder, catOffsets);
 
-  // 12. Model Table (Root)
-  const guidStr = options.modelId || generateUUID();
-  const guidOffset = builder.createString(guidStr);
-  const metadataOffset = builder.createString(
-    JSON.stringify({ name: 'OpenSKP Export', schema: 'Fragments 3.4', instances: placedInstances.length })
+  const localIdsVec = Model.createLocalIdsVector(builder, localIds);
+
+  const guidStr = builder.createString(options.modelId || '00000000-0000-0000-0000-000000000000');
+
+  const guidOffsets = guids.map((g) => builder.createString(g));
+  const guidsVec = Model.createGuidsVector(builder, guidOffsets);
+
+  const guidsItemsVec = Model.createGuidsItemsVector(builder, localIds);
+
+  const attributeOffsets: flatbuffers.Offset[] = [];
+  for (const name of names) {
+    const dataOffsets: flatbuffers.Offset[] = [];
+    if (name) {
+      const entry = JSON.stringify(['Name', name, 'STRING']);
+      dataOffsets.push(builder.createString(entry));
+    }
+    const dataVec = Attribute.createDataVector(builder, dataOffsets);
+    Attribute.startAttribute(builder);
+    Attribute.addData(builder, dataVec);
+    attributeOffsets.push(Attribute.endAttribute(builder));
+  }
+  const attributesVec = Model.createAttributesVector(builder, attributeOffsets);
+
+  const metadataOff = builder.createString(
+    JSON.stringify({
+      layer_hidden: (scene as any).layerHidden || {},
+      generated_name_guids: [],
+    })
   );
 
-  const instCount = placedInstances.length;
-  const localIdsArray = new Array<number>(instCount);
-  const guidOffsets = new Array<flatbuffers.Offset>(instCount);
-  const guidItemsArray = new Array<number>(instCount);
-  for (let i = 0; i < instCount; i++) {
-    const locId = nextId++;
-    localIdsArray[i] = locId;
-    guidOffsets[i] = builder.createString(`${guidStr}_${locId}`);
-    guidItemsArray[i] = locId;
-  }
-  const localIdsVector = Model.createLocalIdsVector(builder, localIdsArray);
-  const guidsVector = Model.createGuidsVector(builder, guidOffsets);
-  const guidsItemsVector = Model.createGuidsItemsVector(builder, guidItemsArray);
+  function buildSpatialNode(node: InstancedNode): flatbuffers.Offset {
+    const childOffsets: flatbuffers.Offset[] = [];
+    if (node.children) {
+      for (const child of node.children) {
+        childOffsets.push(buildSpatialNode(child));
+      }
+    }
+    const childrenVec = SpatialStructure.createChildrenVector(builder, childOffsets);
+    const categoryOffset = node.layer ? builder.createString(node.layer) : null;
+    const itemIndex = itemIndexByNode.get(node);
 
-  const catSkp = builder.createString('SKPOBJECT');
-  const categoriesVector = Model.createCategoriesVector(builder, [catSkp]);
+    SpatialStructure.startSpatialStructure(builder);
+    if (itemIndex !== undefined) {
+      SpatialStructure.addLocalId(builder, itemIndex);
+    }
+    if (categoryOffset !== null) {
+      SpatialStructure.addCategory(builder, categoryOffset);
+    }
+    SpatialStructure.addChildren(builder, childrenVec);
+    return SpatialStructure.endSpatialStructure(builder);
+  }
+
+  const rootSpatial = buildSpatialNode(scene.sceneHierarchy);
 
   Model.startModel(builder);
-  Model.addMeshes(builder, meshesOffset);
-  Model.addMetadata(builder, metadataOffset);
-  Model.addGuid(builder, guidOffset);
-  Model.addGuids(builder, guidsVector);
-  Model.addGuidsItems(builder, guidsItemsVector);
-  Model.addLocalIds(builder, localIdsVector);
-  Model.addCategories(builder, categoriesVector);
-  Model.addSpatialStructure(builder, spatialStructureOffset);
-  Model.addMaxLocalId(builder, nextId);
-  const modelOffset = Model.endModel(builder);
+  Model.addMeshes(builder, meshesOff);
+  Model.addLocalIds(builder, localIdsVec);
+  Model.addCategories(builder, categoriesVec);
+  Model.addAttributes(builder, attributesVec);
+  Model.addGuids(builder, guidsVec);
+  Model.addGuidsItems(builder, guidsItemsVec);
+  Model.addGuid(builder, guidStr);
+  Model.addMaxLocalId(builder, localIds.length);
+  Model.addSpatialStructure(builder, rootSpatial);
+  Model.addMetadata(builder, metadataOff);
+  const modelOff = Model.endModel(builder);
 
-  Model.finishModelBuffer(builder, modelOffset);
+  Model.finishModelBuffer(builder, modelOff);
   const rawBytes = builder.asUint8Array();
 
   return options.raw ? rawBytes : fflate.zlibSync(rawBytes);
