@@ -1,4 +1,6 @@
 #include <algorithm>
+#include <array>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -44,6 +46,26 @@ tinygltf::Model load_glb(const ByteBuffer& bytes) {
 bool contains_bytes(const ByteBuffer& haystack, std::initializer_list<std::uint8_t> needle) {
   return std::search(haystack.begin(), haystack.end(), needle.begin(), needle.end()) !=
          haystack.end();
+}
+
+constexpr std::array<double, 16> kIdentity{
+    1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1,
+};
+
+InstancedMeshResource make_box_resource(const std::string& id) {
+  InstancedMeshResource r;
+  r.id = id;
+  r.definition_id = 1;
+  r.definition_name = "Box";
+  r.variant_key = "1|255,255,255";
+  LocalPrimitive prim;
+  prim.positions = {0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 1, 1, 0, 1, 1, 1, 1, 0, 1, 1};
+  prim.normals.assign(prim.positions.size(), 0.0f);
+  prim.uvs.assign((prim.positions.size() / 3) * 2, 0.0f);
+  prim.indices = {0, 1, 2, 0, 2, 3, 4, 6, 5, 4, 7, 6};
+  prim.material_index = 0;
+  r.primitives = {prim};
+  return r;
 }
 
 TEST(InstancedGlb, SerializesInstancedSceneWithSharedMesh) {
@@ -107,6 +129,51 @@ TEST(InstancedGlb, IsSmallerThanTheBakedExportOnAFileWithRepeatedGeometry) {
   const auto instanced_bytes = to_instanced_glb(instanced_scene);
 
   EXPECT_LT(instanced_bytes.size(), baked_bytes.size());
+}
+
+TEST(InstancedGlb, ManyDistinctMeshResourcesStayNearLinearNotQuadratic) {
+  // Regression test for openskp#305: make_model() reserved its shared
+  // binary buffer to exactly its own new size on every append_values()
+  // call (once per primitive per attribute array) instead of once
+  // upfront for the true final size, forcing a full copy of everything
+  // appended so far on every single call - turning what should be
+  // amortized-O(1) appends into O(resource count squared). On a real
+  // 65,000-resource file this was 713s under WASM (56.6x slower than
+  // the ~12.6s after the fix) and 39s even natively for just 10,000
+  // resources. 8,000 distinct tiny resources is calibrated to make the
+  // quadratic behavior obvious (~9.4s, measured against the pre-fix
+  // code) while staying comfortably fast when fixed (~0.3s) - a >10x
+  // margin either way, so this isn't sensitive to normal CI slowness.
+  InstancedScene scene;
+  scene.gltf_materials = {{}};
+  constexpr int kResourceCount = 8000;
+  scene.mesh_resources.reserve(kResourceCount);
+  InstancedNode root;
+  root.name = "ROOT";
+  root.matrix = kIdentity;
+  root.children.reserve(kResourceCount);
+  for (int i = 0; i < kResourceCount; ++i) {
+    const auto id = "mesh_" + std::to_string(i);
+    scene.mesh_resources.push_back(make_box_resource(id));
+    InstancedNode leaf;
+    leaf.name = "Box" + std::to_string(i);
+    leaf.matrix = kIdentity;
+    leaf.mesh_resource_id = id;
+    root.children.push_back(std::move(leaf));
+  }
+  scene.scene_hierarchy = std::move(root);
+
+  const auto start = std::chrono::steady_clock::now();
+  const auto bytes = to_instanced_glb(scene);
+  const auto elapsed_ms =
+      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+
+  EXPECT_GT(bytes.size(), 0u);
+  // Fixed: comfortably under a second. Quadratic-buggy: several seconds
+  // at this size and climbing fast with scene size - 5s leaves ample
+  // margin above real (fixed) runs without being able to hide a
+  // reintroduced O(n^2).
+  EXPECT_LT(elapsed_ms, 5000.0) << "took " << elapsed_ms << "ms - looks quadratic again";
 }
 
 TEST(InstancedGlb, ExportInstancedGlbFileRoundTrips) {
