@@ -1,14 +1,81 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
 using Xunit;
+using Xunit.Abstractions;
+using Xunit.Sdk;
 using OpenSkp;
 
 namespace OpenSkp.Tests
 {
+    /// <summary>Custom [Fact] attribute that dynamically skips SDK oracle tests
+    /// when the Trimble SketchUp SDK native library is absent or fails to initialize.</summary>
+    [AttributeUsage(AttributeTargets.Method, AllowMultiple = false)]
+    [XunitTestCaseDiscoverer("OpenSkp.Tests.SdkOracleFactDiscoverer", "OpenSkp.Tests")]
+    public sealed class SdkOracleFactAttribute : FactAttribute
+    {
+    }
+
+    /// <summary>Discoverer for <see cref="SdkOracleFactAttribute"/>.</summary>
+    public sealed class SdkOracleFactDiscoverer : FactDiscoverer
+    {
+        public SdkOracleFactDiscoverer(IMessageSink diagnosticMessageSink)
+            : base(diagnosticMessageSink)
+        {
+        }
+
+        protected override IXunitTestCase CreateTestCase(
+            ITestFrameworkDiscoveryOptions discoveryOptions,
+            ITestMethod testMethod,
+            IAttributeInfo factAttribute)
+            => new SdkOracleTestCase(
+                DiagnosticMessageSink,
+                discoveryOptions.MethodDisplayOrDefault(),
+                discoveryOptions.MethodDisplayOptionsOrDefault(),
+                testMethod);
+    }
+
+#nullable disable
+    /// <summary>Test case that reports skipped status when SketchUp SDK is not available.</summary>
+    public sealed class SdkOracleTestCase : XunitTestCase
+    {
+#pragma warning disable CS0618
+        [EditorBrowsable(EditorBrowsableState.Never)]
+        [Obsolete("Called by the de-serializer", true)]
+        public SdkOracleTestCase()
+        {
+        }
+#pragma warning restore CS0618
+
+        public SdkOracleTestCase(
+            IMessageSink diagnosticMessageSink,
+            TestMethodDisplay defaultMethodDisplay,
+            TestMethodDisplayOptions defaultMethodDisplayOptions,
+            ITestMethod testMethod,
+            object[] testMethodArguments = null)
+            : base(diagnosticMessageSink, defaultMethodDisplay, defaultMethodDisplayOptions, testMethod, testMethodArguments)
+        {
+        }
+
+        protected override string GetSkipReason(IAttributeInfo factAttribute)
+        {
+            var baseSkip = base.GetSkipReason(factAttribute);
+            if (!string.IsNullOrEmpty(baseSkip))
+            {
+                return baseSkip;
+            }
+
+            return RealSketchUpOracleTests.SdkAvailable
+                ? null
+                : "Trimble SketchUp SDK (SketchUpAPI.dll) is not available or failed to initialize.";
+        }
+    }
+#nullable restore
+
     /// <summary>Optional, local-only validation using the real Trimble
     /// SketchUp SDK (SketchUpAPI.dll) as an oracle - never a runtime
     /// dependency of Create.cs itself, purely an offline confidence check
@@ -16,23 +83,40 @@ namespace OpenSkp.Tests
     /// TestRealSketchUpOracle class (same skip-if-DLL-absent discipline,
     /// same environment variable override).
     ///
-    /// Every test here calls <see cref="SkipIfAbsent"/> first, which
-    /// triggers a dynamic xUnit skip via <see cref="Assert.Skip"/> when
-    /// the DLL isn't found or fails to initialize. Environments without
-    /// the SDK report these tests as skipped rather than falsely passing,
-    /// while CI machines without the DLL never fail.</summary>
+    /// Every test here is decorated with <see cref="SdkOracleFactAttribute"/>,
+    /// which dynamically skips the test when the SDK DLL isn't found or fails
+    /// to initialize. Environments without the SDK report these tests as
+    /// skipped rather than falsely passing, while CI machines without the DLL
+    /// never fail.</summary>
     public sealed class RealSketchUpOracleTests : IDisposable
     {
         private static readonly string DllPath = Environment.GetEnvironmentVariable("OPENSKP_TEST_SKETCHUP_SDK_DLL")
             ?? @"C:\Program Files\SketchUp\SketchUp 2025\SketchUp\SketchUpAPI.dll";
 
-        private static bool DllPresent => File.Exists(DllPath);
+        private static readonly Lazy<bool> SdkAvailableLazy = new Lazy<bool>(() =>
+        {
+            if (!File.Exists(DllPath))
+            {
+                return false;
+            }
+            try
+            {
+                using var probe = new SketchUpSdk(DllPath);
+                return true;
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+        });
+
+        public static bool SdkAvailable => SdkAvailableLazy.Value;
 
         private readonly SketchUpSdk? _sdk;
 
         public RealSketchUpOracleTests()
         {
-            if (!DllPresent)
+            if (!SdkAvailable)
             {
                 _sdk = null;
                 return;
@@ -41,32 +125,13 @@ namespace OpenSkp.Tests
             {
                 _sdk = new SketchUpSdk(DllPath);
             }
-            catch (InvalidOperationException)
+            catch (Exception)
             {
-                // SUInitialize() itself can fail even with the DLL file
-                // present - observed on this project's own dev machine
-                // with the desktop SketchUp 2025 install's bundled
-                // SketchUpAPI.dll (SUInitialize() -> 1, reproduced
-                // identically via plain ctypes from Python, so not a bug
-                // in this P/Invoke wrapper - Trimble's standalone
-                // redistributable SDK, a separate download from the full
-                // desktop app, is the officially supported artifact for
-                // this kind of out-of-process use). Skip rather than fail
-                // the whole suite in that case, the same discipline as the
-                // DLL-absent path.
                 _sdk = null;
             }
         }
 
         public void Dispose() => _sdk?.Dispose();
-
-        private void SkipIfAbsent()
-        {
-            if (_sdk == null)
-            {
-                Assert.Skip("Trimble SketchUp SDK (SketchUpAPI.dll) is not available or failed to initialize.");
-            }
-        }
 
         private static string TempSkpPath() => Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".skp");
 
@@ -75,10 +140,9 @@ namespace OpenSkp.Tests
             (0, 0, 0), (100, 0, 0), (100, 100, 0), (0, 100, 0),
         };
 
-        [Fact]
+        [SdkOracleFact]
         public void SingleFaceLoadsWithCorrectFaceCount()
         {
-            SkipIfAbsent();
             var builder = SkpCreate.NewFile();
             builder.AddFace(Square());
             string path = TempSkpPath();
@@ -95,10 +159,9 @@ namespace OpenSkp.Tests
             }
         }
 
-        [Fact]
+        [SdkOracleFact]
         public void MaterialColorsRoundTripThroughRealSketchUp()
         {
-            SkipIfAbsent();
             var builder = SkpCreate.NewFile();
             int red = builder.AddMaterial("Red", (255, 0, 0));
             int blue = builder.AddMaterial("Blue", (0, 0, 255));
@@ -123,10 +186,9 @@ namespace OpenSkp.Tests
             }
         }
 
-        [Fact]
+        [SdkOracleFact]
         public void BackMaterialRoundTripsThroughRealSketchUp()
         {
-            SkipIfAbsent();
             var builder = SkpCreate.NewFile();
             int red = builder.AddMaterial("Red", (255, 0, 0));
             int green = builder.AddMaterial("Green", (0, 255, 0));
@@ -147,10 +209,9 @@ namespace OpenSkp.Tests
             }
         }
 
-        [Fact]
+        [SdkOracleFact]
         public void MaterialsAndLayersRoundTripThroughRealSketchUp()
         {
-            SkipIfAbsent();
             var builder = SkpCreate.NewFile();
             int red = builder.AddMaterial("Red", (255, 0, 0));
             int blue = builder.AddMaterial("Blue", (0, 0, 255));
@@ -177,10 +238,9 @@ namespace OpenSkp.Tests
             }
         }
 
-        [Fact]
+        [SdkOracleFact]
         public void PngTextureMaterialRoundTripsThroughRealSketchUp()
         {
-            SkipIfAbsent();
             string pngPath = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".png");
             File.WriteAllBytes(pngPath, TinyPng8x8());
             var builder = SkpCreate.NewFile();
@@ -204,10 +264,9 @@ namespace OpenSkp.Tests
             }
         }
 
-        [Fact]
+        [SdkOracleFact]
         public void HiddenSoftSmoothFlagsRoundTripThroughRealSketchUp()
         {
-            SkipIfAbsent();
             var builder = SkpCreate.NewFile();
             builder.AddFace(Square(), hidden: true, softEdges: true, smoothEdges: true, hiddenEdges: true);
             string path = TempSkpPath();
@@ -233,10 +292,9 @@ namespace OpenSkp.Tests
             }
         }
 
-        [Fact]
+        [SdkOracleFact]
         public void ComponentInstancesRoundTripThroughRealSketchUp()
         {
-            SkipIfAbsent();
             var builder = SkpCreate.NewFile();
             ComponentDefinitionBuilder chair;
             using (chair = builder.AddComponentDefinition("Chair"))
@@ -264,10 +322,9 @@ namespace OpenSkp.Tests
             }
         }
 
-        [Fact]
+        [SdkOracleFact]
         public void GroupRoundTripsThroughRealSketchUp()
         {
-            SkipIfAbsent();
             var builder = SkpCreate.NewFile();
             using (var table = builder.AddGroup("Table", translation: (50.0, 0.0, 0.0)))
             {
@@ -290,7 +347,7 @@ namespace OpenSkp.Tests
             }
         }
 
-        [Fact]
+        [SdkOracleFact]
         public void CircleRecognizedAsTrueCurveByRealSketchUp()
         {
             // The key claim AddCircle makes beyond "N straight edges that
@@ -300,7 +357,6 @@ namespace OpenSkp.Tests
             // count - proof real SketchUp treats this as one editable arc
             // entity, not disconnected geometry that merely looks
             // circular.
-            SkipIfAbsent();
             var builder = SkpCreate.NewFile();
             builder.AddCircle((50.0, 50.0, 0.0), (0.0, 0.0, 1.0), 40.0, numSegments: 8);
             string path = TempSkpPath();
@@ -324,7 +380,7 @@ namespace OpenSkp.Tests
             }
         }
 
-        [Fact]
+        [SdkOracleFact]
         public void ModelCrossingTheSlotBoundaryOpensCleanlyInRealSketchUp()
         {
             // Before the Backref/NewOfKnownClass/ShiftRef fix (ported
@@ -336,7 +392,6 @@ namespace OpenSkp.Tests
             // sees in the SketchUp GUI). This is the single strongest
             // available validation of that fix: not just "our own reader
             // parses it back", but "the actual SketchUp engine accepts it".
-            SkipIfAbsent();
             const int n = 5000;
             var builder = SkpCreate.NewFile();
             for (int i = 0; i < n; i++)
