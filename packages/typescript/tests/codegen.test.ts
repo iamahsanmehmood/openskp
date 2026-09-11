@@ -229,6 +229,34 @@ describe('toTypeScriptCode', () => {
     expect(regen.root.faces).toHaveLength(1);
     expect(regen.root.faces[0].uvTransform).toEqual(original.root.faces[0].uvTransform);
   });
+
+  it('reproduces a textured material with applied width, height, and opacity', () => {
+    const png = makeTestPng();
+    const b = create();
+    const tex = b.addTextureMaterial('Brick', png, 'brick.png', 12.0, 24.0, 0.7);
+    b.addFace(
+      [
+        [0, 0, 0],
+        [100, 0, 0],
+        [100, 100, 0],
+        [0, 100, 0],
+      ],
+      { material: tex }
+    );
+
+    const original = parseSkp(toBuffer(b.toBytes()));
+    const code = toTypeScriptCode(original);
+    expect(code).toContain('12, 24, 0.7');
+
+    const regenBytes = runGeneratedCode(code);
+    const regen = parseSkp(toBuffer(regenBytes));
+
+    const regenMat = regen.materials.find((m) => m.name === 'Brick')!;
+    expect(regenMat.texture).not.toBeNull();
+    expect(regenMat.texture!.width).toBeCloseTo(24.0);
+    expect(regenMat.texture!.height).toBeCloseTo(12.0);
+    expect(regenMat.transparency).toBeCloseTo(0.7);
+  });
 });
 
 /**

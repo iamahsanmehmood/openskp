@@ -191,6 +191,40 @@ void main() {
         if (f.existsSync()) f.deleteSync();
       }
     });
+
+    test('reproduces a textured material with applied width, height, and opacity', () {
+      final tmpDir = Directory.systemTemp.createTempSync('openskp_codegen_tex_');
+      final pngPath = '${tmpDir.path}${Platform.pathSeparator}brick.png';
+      File(pngPath).writeAsBytesSync(makeFakePng());
+      final b = create();
+      final tex = b.addTextureMaterial('Brick', pngPath, appliedHeight: 12.0, appliedWidth: 24.0, opacity: 0.7);
+      b.addFace(
+        [(0.0, 0.0, 0.0), (100.0, 0.0, 0.0), (100.0, 100.0, 0.0), (0.0, 100.0, 0.0)],
+        material: tex,
+      );
+
+      final original = SkpFile.fromBuffer(Uint8List.fromList(b.toBytes())).parse();
+      final code = toDartCode(original);
+      expect(code, contains('appliedHeight: 12.0'));
+      expect(code, contains('appliedWidth: 24.0'));
+      expect(code, contains('opacity: 0.7'));
+
+      final tmpOut = '$packageRoot/.tmp_codegen_out_${DateTime.now().microsecondsSinceEpoch}.skp';
+      try {
+        final regenBytes = runGeneratedCode(code, tmpOut);
+        final regen = SkpFile.fromBuffer(Uint8List.fromList(regenBytes)).parse();
+
+        final regenMat = regen.materials.firstWhere((m) => m.name == 'Brick');
+        expect(regenMat.texture, isNotNull);
+        expect(regenMat.texture!.width, closeTo(24.0, 1e-4));
+        expect(regenMat.texture!.height, closeTo(12.0, 1e-4));
+        expect(regenMat.transparency, closeTo(0.7, 1e-4));
+      } finally {
+        tmpDir.deleteSync(recursive: true);
+        final f = File(tmpOut);
+        if (f.existsSync()) f.deleteSync();
+      }
+    });
   });
 
   // single_material_v17.skp is deliberately excluded: it declares one

@@ -75,7 +75,7 @@ Every feature OpenSKP has, across all 5 languages. ✅ = shipped and released.
 | Writer: construction lines/points | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Editor (`open_existing()`) | ✅ | ✅ | ✅ | ✅ | ✅ |
 | SKP-to-code generator (`to_*_code()`) | ✅ | ✅ | ✅ | ✅ | ✅ |
-| codegen round-trips `applied_width`/opacity | ❌ | ❌ | ❌ | ❌ | ❌ — gap in all 5 |
+| codegen round-trips `applied_width`/opacity | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Export** | | | | | |
 | GLB / OBJ+MTL / STL / PLY / DXF 3D / IFC4 / JSON | ✅ | ✅ | ✅ | ✅ | ✅ |
 | IFC export: unit/axis fix, real names + layer visibility, plugin-attribute Psets, full-path classification | 🔶 on main | not checked for equivalent issues | not checked | not checked | 🔶 on main, GitHub-only |
