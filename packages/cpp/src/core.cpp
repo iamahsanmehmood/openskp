@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cctype>
+#include <limits>
 #include <miniz.h>
 #include <regex>
 
@@ -61,6 +62,13 @@ struct Zip {
   static void validate_entry_size(const mz_zip_archive_file_stat& s) {
     auto declared = s.m_uncomp_size;
     if (declared == 0) return;
+
+    if (declared > std::numeric_limits<std::size_t>::max()) {
+      throw SkpParseError("ZIP entry '" + std::string(s.m_filename) + "' declares " +
+                              std::to_string(declared) +
+                              " bytes, exceeding addressable memory limits",
+                          ParseStage::zip_extract);
+    }
 
     if (declared > kMaxUncompressedEntryBytes) {
       throw SkpParseError("ZIP entry '" + std::string(s.m_filename) + "' declares " +
@@ -224,6 +232,28 @@ std::optional<RawStyle> style_xml(const ByteBuffer& bytes) {
   }
   return o;
 }
+
+// VFF model.dat wraps the file's definition list inside container tags
+// F901 -> 7017 -> 7117 -> 7C15. We unwrap this container into individual
+// 7C15 headers upfront so memory is bounded to one definition at a time,
+// mirroring Python's _unwrap_definitions_container (Issue #264).
+std::vector<Header> unwrap_definitions_container(const ByteBuffer& data, std::size_t offset,
+                                                 std::size_t size) {
+  auto level = headers(data, offset + 6, offset + 6 + size);
+  for (const char* expected_tag : {"7017", "7117"}) {
+    auto it = std::find_if(level.begin(), level.end(),
+                           [&](const Header& h) { return tag_at(data, h.offset) == expected_tag; });
+    if (it == level.end()) return {};
+    level = headers(data, it->offset + 6, it->offset + 6 + it->size);
+  }
+  std::vector<Header> defs;
+  for (const auto& h : level) {
+    if (tag_at(data, h.offset) == "7C15") {
+      defs.push_back(h);
+    }
+  }
+  return defs;
+}
 }  // namespace
 
 // Decodes the 5 predefined XML entities plus numeric character references
@@ -331,90 +361,36 @@ RawParsed full_parse(const ByteBuffer& data, const ParseOptions& o) {
   auto hs = headers(*model, 0, model->size());
   if (hs.size() == 1 && model->at(hs[0].offset) == 0xf4 && model->at(hs[0].offset + 1) == 1)
     hs = headers(*model, hs[0].offset + 6, hs[0].offset + 6 + hs[0].size);
+
+  std::vector<Header> expanded_hs;
+  expanded_hs.reserve(hs.size());
+  for (const auto& h : hs) {
+    if (tag_at(*model, h.offset) == "F901") {
+      auto def_headers = unwrap_definitions_container(*model, h.offset, h.size);
+      if (!def_headers.empty()) {
+        expanded_hs.insert(expanded_hs.end(), def_headers.begin(), def_headers.end());
+        continue;
+      }
+    }
+    expanded_hs.push_back(h);
+  }
+  hs = std::move(expanded_hs);
+
   std::map<std::string, Vec3> vertex_positions;
   std::map<std::string, std::vector<double>> instance_world;
   const TlvNode* page_node = nullptr;
   std::vector<TlvNode> page_node_owner;  // keeps page_node's subtree alive past the loop
 
-  // VFF model.dat stores definitions inside container tag F901 -> 7017 -> 7117.
-  // Instead of recursively expanding all definitions at once (which exhausts memory
-  // on models with millions of nodes, Issue #264), we walk the container levels using
-  // headers() and invoke parse_tlv_recursive on each individual definition record (7C15),
-  // immediately collecting geometry/metadata and releasing the per-definition AST.
-  auto parse_definitions_streaming = [&](std::size_t f901_offset, std::size_t f901_size) {
-    std::size_t def_count = 0;
-    for (const auto& h_70 : headers(*model, f901_offset + 6, f901_offset + 6 + f901_size)) {
-      auto tag_f901 = tag_at(*model, h_70.offset);
-      if (tag_f901 == "7017") {
-        for (const auto& h_71 : headers(*model, h_70.offset + 6, h_70.offset + 6 + h_70.size)) {
-          auto tag_70 = tag_at(*model, h_71.offset);
-          if (tag_70 == "7117") {
-            for (const auto& h_def :
-                 headers(*model, h_71.offset + 6, h_71.offset + 6 + h_71.size)) {
-              auto tag_71 = tag_at(*model, h_def.offset);
-              if (tag_71 == "6300") continue;
-              auto single =
-                  parse_tlv_recursive(*model, h_def.offset, h_def.offset + 6 + h_def.size);
-              if (single.empty()) {
-                emit_log(o, LogLevel::debug, "Failed to parse definition record in F901 container");
-                continue;
-              }
-              collect_layers(single, p.layer_id_to_name, p.layer_hidden);
-              collect_material_ids(single, p.material_id_to_name);
-              collect_definitions(single, p.definitions);
-              scan_vertex_positions(single[0], vertex_positions);
-              scan_instance_transforms(single[0], instance_world);
-              if (!page_node) {
-                if (auto* found = find_page_node(single[0])) {
-                  page_node_owner.push_back(*found);
-                  page_node = &page_node_owner.back();
-                }
-              }
-              if (tag_71 == "7C15") {
-                def_count++;
-                if (def_count % 1000 == 0) {
-                  emit_progress(o, ParseStage::tlv_walk, def_count, def_count + 1000);
-                }
-              }
-            }
-          } else if (tag_70 != "6300") {
-            auto other = parse_tlv_recursive(*model, h_71.offset, h_71.offset + 6 + h_71.size);
-            if (other.empty()) {
-              emit_log(o, LogLevel::debug, "Failed to parse sub-record in 7017 container");
-            } else {
-              collect_layers(other, p.layer_id_to_name, p.layer_hidden);
-              collect_material_ids(other, p.material_id_to_name);
-              collect_definitions(other, p.definitions);
-            }
-          }
-        }
-      } else if (tag_f901 != "6300") {
-        auto other = parse_tlv_recursive(*model, h_70.offset, h_70.offset + 6 + h_70.size);
-        if (other.empty()) {
-          emit_log(o, LogLevel::debug, "Failed to parse sub-record in F901 container");
-        } else {
-          collect_layers(other, p.layer_id_to_name, p.layer_hidden);
-          collect_material_ids(other, p.material_id_to_name);
-          collect_definitions(other, p.definitions);
-        }
-      }
-    }
-  };
-
   auto total = hs.size();
   for (std::size_t i = 0; i < total; ++i) {
     std::string tag;
     try {
-      auto cur_tag = tag_at(*model, hs[i].offset);
-      if (cur_tag == "F901") {
-        tag = "F901";
-        parse_definitions_streaming(hs[i].offset, hs[i].size);
-        if (i % progress_interval == 0 || i + 1 == total)
-          emit_progress(o, ParseStage::tlv_walk, i + 1, total);
+      auto one = parse_tlv_recursive(*model, hs[i].offset, hs[i].offset + 6 + hs[i].size);
+      if (one.empty()) {
+        emit_log(o, LogLevel::debug,
+                 "Failed to parse record at offset " + std::to_string(hs[i].offset));
         continue;
       }
-      auto one = parse_tlv_recursive(*model, hs[i].offset, hs[i].offset + 6 + hs[i].size);
-      if (one.empty()) continue;
       tag = one[0].tag;
       collect_layers(one, p.layer_id_to_name, p.layer_hidden);
       collect_material_ids(one, p.material_id_to_name);
@@ -431,8 +407,8 @@ RawParsed full_parse(const ByteBuffer& data, const ParseOptions& o) {
     } catch (const SkpParseError&) {
       throw;
     } catch (...) {
-      throw SkpParseError("Failed while processing top-level record", ParseStage::tlv_walk, i,
-                          total, tag, hs[i].offset, {}, std::current_exception());
+      throw SkpParseError("Failed while processing record", ParseStage::tlv_walk, i, total, tag,
+                          hs[i].offset, {}, std::current_exception());
     }
     if (i % progress_interval == 0 || i + 1 == total)
       emit_progress(o, ParseStage::tlv_walk, i + 1, total);

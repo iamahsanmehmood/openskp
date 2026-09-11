@@ -208,6 +208,10 @@ if(MSVC)
   target_compile_definitions(OpenSkp PRIVATE _CRT_SECURE_NO_WARNINGS)
 endif()
 
+if(OPENSKP_BUILD_WASM AND NOT EMSCRIPTEN)
+  message(FATAL_ERROR "Building WebAssembly target (OPENSKP_BUILD_WASM) requires the Emscripten toolchain (emcmake cmake ...).")
+endif()
+
 if(EMSCRIPTEN OR OPENSKP_BUILD_WASM)
   target_compile_options(OpenSkp PRIVATE -O3 -fexceptions)
   add_executable(openskp_wasm src/wasm_api.cpp)
@@ -234,7 +238,6 @@ if(EMSCRIPTEN OR OPENSKP_BUILD_WASM)
       "--bind"
       "-sWASM=1"
       "-sALLOW_MEMORY_GROWTH=1"
-      "-sMAXIMUM_MEMORY=4GB"
       "-sMODULARIZE=1"
       "-sEXPORT_ES6=1"
       "-sEXPORT_NAME=OpenSkpModule"

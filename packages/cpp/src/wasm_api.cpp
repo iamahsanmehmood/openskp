@@ -24,6 +24,11 @@ val parse_skp_to_fragments(const val& uint8_array) {
   auto start_time = std::chrono::high_resolution_clock::now();
   val result_obj = val::object();
 
+  if (uint8_array.isNull() || uint8_array.isUndefined()) {
+    result_obj.set("error", val("Invalid input: buffer is null or undefined"));
+    return result_obj;
+  }
+
   std::string stage = "init";
   try {
     // 1. Read buffer from JavaScript Uint8Array directly into native ByteBuffer
@@ -93,6 +98,11 @@ val parse_skp_to_fragments(const val& uint8_array) {
 val parse_skp_to_glb(const val& uint8_array) {
   auto start_time = std::chrono::high_resolution_clock::now();
   val result_obj = val::object();
+
+  if (uint8_array.isNull() || uint8_array.isUndefined()) {
+    result_obj.set("error", val("Invalid input: buffer is null or undefined"));
+    return result_obj;
+  }
 
   try {
     std::size_t length = uint8_array["byteLength"].as<std::size_t>();
