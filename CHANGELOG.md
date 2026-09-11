@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Web viewer: WASM fast-preview path for files too large for the pure-JS parser
+
+`examples/web-viewer` bundles the C++ engine's WASM build (`wasm/openskp.js`/`openskp.wasm`) and offers it as an additional option on the existing large-file warning dialog - "Load fast preview (WASM)" alongside "Load anyway" and "Cancel". It hands the raw bytes to the native parser and renders the GLB it returns via Three.js's `GLTFLoader`, trading away layers, the properties inspector, and every export format (`parseSkpToGLB()`'s return value carries none of that metadata) for a load that actually finishes instead of freezing the tab.
+
+Verified on a real 41MB production file that the existing pure-JS path cannot load at all (`Array buffer allocation failed` partway through parsing, a real, reproducible failure - not a synthetic edge case): the WASM path loaded it successfully in 14.9s (1,497,547 faces, 2,696 mesh resources, 32 materials), rendered correctly. Confirmed the existing full-featured path is unaffected for files under the warning threshold.
+
 ### Fixed — `to_instanced_glb()` was accidentally quadratic in mesh-resource count (not a WASM-specific issue)
 
 `make_model()`'s shared binary buffer was grown via `append_values()`
