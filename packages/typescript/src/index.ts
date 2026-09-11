@@ -33,6 +33,7 @@ import { scanVertexPositions, scanInstanceTransforms, findPageNode, parsePages, 
 import { encodeIndices } from './gltf-indices';
 import { buildInstancedSceneFromParsed, InstancedScene } from './instanced';
 import { extractThumbnail, SkpThumbnail } from './thumbnail';
+import { toFragments, FragmentExportOptions } from './fragments';
 
 export * from './model';
 export type {
@@ -42,6 +43,8 @@ export type {
   LocalPrimitive,
 } from './instanced';
 export { toInstancedGLB } from './instanced-glb';
+export { toFragments } from './fragments';
+export type { FragmentExportOptions } from './fragments';
 export { extractThumbnail } from './thumbnail';
 export type { SkpThumbnail } from './thumbnail';
 export type { InstancedGlbOptions } from './instanced-glb';
@@ -885,6 +888,13 @@ export class SkpFile {
    * @param options - Optional progress/log callbacks (see {@link ParseOptions}) */
   buildInstancedScene(options?: ParseOptions & SceneOptions): InstancedScene {
     return buildInstancedScene(this.buffer, options);
+  }
+
+  /** Convert to ThatOpen Fragments (.frag) binary format.
+   * @param options - Optional fragment export options (raw, doubleSided, modelId) */
+  toFragments(options?: FragmentExportOptions): Uint8Array {
+    const scene = this.buildInstancedScene();
+    return toFragments(scene, options);
   }
 
   /** The preview image SketchUp stored in the file, or null when it has

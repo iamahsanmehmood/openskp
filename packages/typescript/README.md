@@ -49,7 +49,8 @@ SDK (see [Writing](#writing) below).
   [Choosing an API](#choosing-an-api).
 - **Native multi-format conversion** — glTF (GLB), Wavefront OBJ/MTL, STL,
   PLY, AutoCAD DXF (3DFACE and Polyface Mesh), IFC4 (BIM/ISO 10303-21 STEP),
-  and JSON — all written from scratch, no third-party CAD/BIM SDK involved.
+  ThatOpen Fragments (.frag binary for high-speed Web BIM streaming), and
+  JSON — all written from scratch, no third-party CAD/BIM SDK involved.
   The DXF writer is verified against real desktop AutoCAD, not just lenient
   DXF readers.
 - **Runs anywhere JavaScript does** — zero native dependencies, works in
@@ -299,7 +300,7 @@ what they always have.
 ## Exporting
 
 ```typescript
-import { toGLB, toInstancedGLB, toOBJ, toMTL, exportOBJ, toSTLAscii, toSTLBinary, exportSTL, toPLYAscii, toPLYBinary, exportPLY, toDXF, exportDXF, toIFC, exportIFC, toJSON } from 'openskp';
+import { toGLB, toInstancedGLB, toOBJ, toMTL, exportOBJ, toSTLAscii, toSTLBinary, exportSTL, toPLYAscii, toPLYBinary, exportPLY, toDXF, exportDXF, toIFC, exportIFC, toFragments, toJSON } from 'openskp';
 
 // Serialize a built scene straight to .glb bytes (in-memory, no disk I/O).
 // Index buffers are written as UNSIGNED_SHORT when every index fits, which
@@ -333,6 +334,11 @@ exportDXF(scene, 'output.dxf');
 // Export to IFC4 / BIM (ISO 10303-21 STEP format string / file)
 const ifcText = toIFC(scene);
 exportIFC(scene, 'output.ifc');
+
+// Export to ThatOpen Fragments (.frag binary format for Web BIM 3D streaming)
+const fragBytes = toFragments(instanced);
+// Or directly via SkpFile:
+// const fragBytes = skp.toFragments();
 
 // Full metadata as a JSON-compatible object
 const meta = toJSON(model, scene);
