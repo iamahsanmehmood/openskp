@@ -16,13 +16,11 @@ namespace OpenSkp.Tests
     /// TestRealSketchUpOracle class (same skip-if-DLL-absent discipline,
     /// same environment variable override).
     ///
-    /// Every test here calls <see cref="SkipIfAbsent"/> first and returns
-    /// early when the DLL isn't found - there is no first-class "skipped"
-    /// status without an extra test-framework dependency this project
-    /// doesn't otherwise need, so an environment without the SDK reports
-    /// these as trivially passed rather than skipped; the important
-    /// property (CI machines without the DLL never fail here) still
-    /// holds.</summary>
+    /// Every test here calls <see cref="SkipIfAbsent"/> first, which
+    /// triggers a dynamic xUnit skip via <see cref="Assert.Skip"/> when
+    /// the DLL isn't found or fails to initialize. Environments without
+    /// the SDK report these tests as skipped rather than falsely passing,
+    /// while CI machines without the DLL never fail.</summary>
     public sealed class RealSketchUpOracleTests : IDisposable
     {
         private static readonly string DllPath = Environment.GetEnvironmentVariable("OPENSKP_TEST_SKETCHUP_SDK_DLL")
@@ -62,7 +60,13 @@ namespace OpenSkp.Tests
 
         public void Dispose() => _sdk?.Dispose();
 
-        private bool SkipIfAbsent() => _sdk == null;
+        private void SkipIfAbsent()
+        {
+            if (_sdk == null)
+            {
+                Assert.Skip("Trimble SketchUp SDK (SketchUpAPI.dll) is not available or failed to initialize.");
+            }
+        }
 
         private static string TempSkpPath() => Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".skp");
 
@@ -74,7 +78,7 @@ namespace OpenSkp.Tests
         [Fact]
         public void SingleFaceLoadsWithCorrectFaceCount()
         {
-            if (SkipIfAbsent()) return;
+            SkipIfAbsent();
             var builder = SkpCreate.NewFile();
             builder.AddFace(Square());
             string path = TempSkpPath();
@@ -94,7 +98,7 @@ namespace OpenSkp.Tests
         [Fact]
         public void MaterialColorsRoundTripThroughRealSketchUp()
         {
-            if (SkipIfAbsent()) return;
+            SkipIfAbsent();
             var builder = SkpCreate.NewFile();
             int red = builder.AddMaterial("Red", (255, 0, 0));
             int blue = builder.AddMaterial("Blue", (0, 0, 255));
@@ -122,7 +126,7 @@ namespace OpenSkp.Tests
         [Fact]
         public void BackMaterialRoundTripsThroughRealSketchUp()
         {
-            if (SkipIfAbsent()) return;
+            SkipIfAbsent();
             var builder = SkpCreate.NewFile();
             int red = builder.AddMaterial("Red", (255, 0, 0));
             int green = builder.AddMaterial("Green", (0, 255, 0));
@@ -146,7 +150,7 @@ namespace OpenSkp.Tests
         [Fact]
         public void MaterialsAndLayersRoundTripThroughRealSketchUp()
         {
-            if (SkipIfAbsent()) return;
+            SkipIfAbsent();
             var builder = SkpCreate.NewFile();
             int red = builder.AddMaterial("Red", (255, 0, 0));
             int blue = builder.AddMaterial("Blue", (0, 0, 255));
@@ -176,7 +180,7 @@ namespace OpenSkp.Tests
         [Fact]
         public void PngTextureMaterialRoundTripsThroughRealSketchUp()
         {
-            if (SkipIfAbsent()) return;
+            SkipIfAbsent();
             string pngPath = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".png");
             File.WriteAllBytes(pngPath, TinyPng8x8());
             var builder = SkpCreate.NewFile();
@@ -203,7 +207,7 @@ namespace OpenSkp.Tests
         [Fact]
         public void HiddenSoftSmoothFlagsRoundTripThroughRealSketchUp()
         {
-            if (SkipIfAbsent()) return;
+            SkipIfAbsent();
             var builder = SkpCreate.NewFile();
             builder.AddFace(Square(), hidden: true, softEdges: true, smoothEdges: true, hiddenEdges: true);
             string path = TempSkpPath();
@@ -232,7 +236,7 @@ namespace OpenSkp.Tests
         [Fact]
         public void ComponentInstancesRoundTripThroughRealSketchUp()
         {
-            if (SkipIfAbsent()) return;
+            SkipIfAbsent();
             var builder = SkpCreate.NewFile();
             ComponentDefinitionBuilder chair;
             using (chair = builder.AddComponentDefinition("Chair"))
@@ -263,7 +267,7 @@ namespace OpenSkp.Tests
         [Fact]
         public void GroupRoundTripsThroughRealSketchUp()
         {
-            if (SkipIfAbsent()) return;
+            SkipIfAbsent();
             var builder = SkpCreate.NewFile();
             using (var table = builder.AddGroup("Table", translation: (50.0, 0.0, 0.0)))
             {
@@ -296,7 +300,7 @@ namespace OpenSkp.Tests
             // count - proof real SketchUp treats this as one editable arc
             // entity, not disconnected geometry that merely looks
             // circular.
-            if (SkipIfAbsent()) return;
+            SkipIfAbsent();
             var builder = SkpCreate.NewFile();
             builder.AddCircle((50.0, 50.0, 0.0), (0.0, 0.0, 1.0), 40.0, numSegments: 8);
             string path = TempSkpPath();
@@ -332,7 +336,7 @@ namespace OpenSkp.Tests
             // sees in the SketchUp GUI). This is the single strongest
             // available validation of that fix: not just "our own reader
             // parses it back", but "the actual SketchUp engine accepts it".
-            if (SkipIfAbsent()) return;
+            SkipIfAbsent();
             const int n = 5000;
             var builder = SkpCreate.NewFile();
             for (int i = 0; i < n; i++)
