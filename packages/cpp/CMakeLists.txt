@@ -238,6 +238,13 @@ if(EMSCRIPTEN OR OPENSKP_BUILD_WASM)
       "--bind"
       "-sWASM=1"
       "-sALLOW_MEMORY_GROWTH=1"
+      # Without an explicit ceiling, the WASM heap hits an internal
+      # allocation failure - caught generically and surfaced as a
+      # misleading "legacy .skp parse failed" - at a MUCH lower size than
+      # the ~4GB a browser tab actually allows (openskp#305). A modest
+      # initial size avoids repeated grow-and-copy on any real file.
+      "-sMAXIMUM_MEMORY=4GB"
+      "-sINITIAL_MEMORY=268435456"
       "-sMODULARIZE=1"
       "-sEXPORT_ES6=1"
       "-sEXPORT_NAME=OpenSkpModule"

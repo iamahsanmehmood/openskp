@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — C++ WASM build hit an internal memory ceiling well below what a browser tab actually allows
+
+The `OPENSKP_BUILD_WASM` target set `-sALLOW_MEMORY_GROWTH=1` with no explicit
+`-sMAXIMUM_MEMORY`. Without one, the WASM heap hit an internal allocation
+failure - caught generically and surfaced as a misleading `legacy .skp parse
+failed` error, with the real exception type lost - well before a browser's
+own ~4GB ceiling would actually be reached. Confirmed directly: a synthetic
+125MB file with 65,000 component definitions failed outright under the old
+config; adding an explicit `-sMAXIMUM_MEMORY=4GB` (plus a 256MB
+`-sINITIAL_MEMORY` to avoid repeated grow-and-copy on real files) removed the
+failure. See [issue #305](https://github.com/iamahsanmehmood/openskp/issues/305)
+for the fuller investigation, including a separate, still-open WASM-vs-native
+performance gap this fix does not address.
+
 ### Fixed — Cross-language codegen textured material round-trip
 
 `to_*_code()` now preserves both `applied_width` and material `opacity` when regenerating textured materials across all 5 language ports (Python, TypeScript, .NET, Dart, C++).
