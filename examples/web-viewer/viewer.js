@@ -459,8 +459,30 @@ function zoomToFit() {
   const maxDim = Math.max(size.x, size.y, size.z);
   const fov = camera.fov * (Math.PI / 180);
   let cameraZ = Math.abs(maxDim / 2 / Math.tan(fov / 2));
-  
+
   cameraZ *= 1.35; // Add padding
+
+  // The camera's near/far planes and OrbitControls' zoom-out limit were
+  // fixed constants (near=0.1, far=1000, no maxDistance) sized for the
+  // small default sample model. Real models range from centimeter-scale
+  // furniture to buildings hundreds of units across - a fixed far=1000
+  // clips large models as soon as a user zooms out past that distance
+  // (looks like the model vanished, not like a normal clipping edge), and
+  // a fixed near=0.1 loses depth precision at large scale. Both now scale
+  // with the loaded model's own size, computed fresh on every load.
+  camera.near = Math.max(0.01, maxDim / 1000);
+  camera.far = Math.max(1000, cameraZ * 20);
+  camera.updateProjectionMatrix();
+  controls.minDistance = camera.near * 10;
+  controls.maxDistance = cameraZ * 15;
+
+  // FogExp2's falloff distance is roughly 1/density - the fixed 0.015
+  // (a ~65-unit falloff) was tuned for the same small default model and
+  // fogs out anything larger long before its own far plane would, making
+  // a big model look empty even where it isn't clipped. Tied to the far
+  // plane (already scaled above) rather than cameraZ directly, so small
+  // models keep roughly their original look instead of going darker.
+  if (scene.fog) scene.fog.density = 3 / camera.far;
 
   // Animate camera to look at the model center
   camera.position.set(center.x + cameraZ * 0.7, center.y + cameraZ * 0.5, center.z + cameraZ * 0.7);

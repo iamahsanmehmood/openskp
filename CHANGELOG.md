@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Verified on a real 41MB production file that the existing pure-JS path cannot load at all (`Array buffer allocation failed` partway through parsing, a real, reproducible failure - not a synthetic edge case): the WASM path loaded it successfully in 14.9s (1,497,547 faces, 2,696 mesh resources, 32 materials), rendered correctly. Confirmed the existing full-featured path is unaffected for files under the warning threshold.
 
+### Fixed — Web viewer: zooming out on a large model could clip the whole scene into nothing
+
+The camera's near/far clipping planes (`0.1`/`1000`) and OrbitControls' zoom distance were fixed constants sized for the small default sample model, with no `maxDistance` limit at all. A real building-scale model comfortably exceeds a 1000-unit far plane, so zooming out past that distance clipped the entire scene - it just vanished, with nothing to indicate why. `zoomToFit()` now computes near/far and `controls.minDistance`/`maxDistance` fresh from the loaded model's own bounding box on every load (also rescales fog density along with the far plane, so a large model doesn't fog out immediately either). Verified across a wide zoom range on a real 165MB production model: no clipping artifacts zoomed in close, and zooming out to the new (bounded) maximum keeps the model visible - small, correctly, at that distance - rather than clipped away. Confirmed the small default sample model's appearance is unaffected.
+
 ### Fixed — `to_instanced_glb()` was accidentally quadratic in mesh-resource count (not a WASM-specific issue)
 
 `make_model()`'s shared binary buffer was grown via `append_values()`
