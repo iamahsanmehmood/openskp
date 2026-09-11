@@ -231,6 +231,26 @@ gltf::Model make_model(const InstancedScene& scene, bool embed_textures) {
   model.buffers.emplace_back();
   auto& binary = model.buffers[0].data;
 
+  // append_values() below reserves the buffer to exactly its own new
+  // required size on every call (one call per primitive per attribute
+  // array) - std::vector::reserve() has no obligation to over-allocate,
+  // so a size that only ever grows by "just enough" forces a full
+  // reallocation-and-copy of everything appended so far, every single
+  // time. On a scene with many mesh resources this turns what should be
+  // amortized-O(1) appends into O(total resources squared) copying.
+  // Reserving the true final size once, upfront, is a pure amortized-cost
+  // fix - it changes no output, only how many times the buffer moves.
+  {
+    std::size_t total_bytes = 0;
+    for (const auto& resource : scene.mesh_resources) {
+      for (const auto& source : resource.primitives) {
+        total_bytes += source.positions.size() * 4 + source.normals.size() * 4 +
+                       source.uvs.size() * 4 + source.indices.size() * 4;
+      }
+    }
+    binary.reserve(total_bytes);
+  }
+
   std::map<std::string, int> mesh_index_by_id;
 
   for (const auto& resource : scene.mesh_resources) {

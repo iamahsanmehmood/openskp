@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — `to_instanced_glb()` was accidentally quadratic in mesh-resource count (not a WASM-specific issue)
+
+`make_model()`'s shared binary buffer was grown via `append_values()`
+calling `buffer.reserve(buffer.size() + delta)` once per primitive per
+attribute array (positions/normals/uvs/indices) - `std::vector::reserve()`
+has no obligation to over-allocate beyond what's asked, so a size that only
+ever grows by "just enough" forces a full reallocation-and-copy of
+everything appended so far, every single call. On a scene with many mesh
+resources this turned amortized-O(1) appends into O(resource count²)
+copying - **39,016ms → 485ms (an 80x speedup) at 10,000 resources, and
+713s → 12.6s (56.6x) at 65,000**, real numbers from a synthetic 125MB file,
+fixed by reserving the true final buffer size once, upfront (byte-identical
+output, confirmed on the same file before/after).
+
+This corrects a wrong conclusion from the memory-ceiling fix entry just
+below: profiling (not just black-box timing) found the real hot path was
+`to_instanced_glb()` itself, not the legacy parser - the earlier "WASM is
+12-13x slower than native" claim compared WASM's full parse+build+GLB
+pipeline against a native benchmark that never called `to_instanced_glb()`
+at all. Once compared correctly, this bug affected native and WASM
+equally; there was no WASM-specific slowdown. See
+[issue #305](https://github.com/iamahsanmehmood/openskp/issues/305) for
+the full corrected investigation.
+
 ### Fixed — C++ WASM build hit an internal memory ceiling well below what a browser tab actually allows
 
 The `OPENSKP_BUILD_WASM` target set `-sALLOW_MEMORY_GROWTH=1` with no explicit
