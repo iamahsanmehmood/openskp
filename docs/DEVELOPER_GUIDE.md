@@ -497,14 +497,10 @@ What's carried through from the source `.skp` file:
 - `Model.guid` — the single model-level identifier, distinct from each
   item's own per-instance guid above — is still an unpopulated placeholder.
 - Python and C++ have this today (both GitHub-only preview tags — see
-  above). TypeScript now has it too
-  ([#276](https://github.com/iamahsanmehmood/openskp/pull/276), merged on
-  `main`, not npm-published yet) — the real, canonical ThatOpen FlatBuffers
-  schema (not hand-rolled), TRS decomposition and scale/mirror baking
-  matching Python/C++, and verified via a real round-trip through the
-  `@thatopen/fragments` npm package's own `SingleThreadedFragmentsModel`,
-  not just this project's own generated bindings. .NET and Dart have no
-  work started on this.
+  above). A community TypeScript port is open
+  ([PR #276](https://github.com/iamahsanmehmood/openskp/pull/276)) but its
+  required CI lint check is currently failing, so it isn't usable yet.
+  .NET and Dart have no work started on this.
 - C++'s attribute dictionary values are strings only (no native
   `Point3d`/`Length`/nested-list types like Python has) — matches its
   existing string-only property handling elsewhere. See
