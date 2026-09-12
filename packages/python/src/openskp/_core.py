@@ -282,6 +282,98 @@ def _is_convex_2d(coords) -> bool:
     return sign != 0
 
 
+def _merge_overlapping_hole_loops(loops, v_id_to_2d, vertices_3d, normal, u_axis, v_axis):
+    """Detect holes that overlap each other with real shared area (not
+    just a shared boundary point/edge, which is a normal, valid pattern)
+    and replace them with the boundary of their union.
+
+    A face's holes are supposed to be simple and mutually disjoint -
+    that's what earcut's ring-based API assumes. A real file can still
+    carry two hole loops that genuinely overlap (observed on a real
+    fixture: two ~0.69"-radius circles only 0.33" apart, evidently meant
+    as one slotted/oval cutout but recorded as two separate full circles).
+    Feeding overlapping rings to earcut is undefined - both this
+    project's own triangulator and independently-implemented ports have
+    each picked SOME triangle count for such input, but never the same
+    one, since there's no single well-defined "correct" triangulation of
+    self-overlapping boundary input. Computing the union first restores a
+    normal, well-defined hole shape before triangulating, and is a no-op
+    (same object identity returned) for the overwhelming common case of
+    genuinely disjoint holes, so it costs nothing there.
+
+    Returns ``(loops, vertices_3d, v_id_to_2d)`` - the SAME objects,
+    unchanged, when no overlap is found (or fewer than 2 holes exist), or
+    new replacements with the overlapping holes merged into one when it
+    is.
+    """
+    if len(loops) < 3:
+        return loops, vertices_3d, v_id_to_2d
+
+    from shapely.geometry import Polygon as ShapelyPolygon
+    from shapely.ops import unary_union
+
+    hole_polys = []
+    for loop in loops[1:]:
+        coords = [v_id_to_2d[v_id] for v_id in loop]
+        try:
+            poly = ShapelyPolygon(coords)
+            if not poly.is_valid:
+                poly = poly.buffer(0)
+        except Exception:
+            return loops, vertices_3d, v_id_to_2d
+        hole_polys.append(poly)
+
+    overlap_found = False
+    for i in range(len(hole_polys)):
+        for j in range(i + 1, len(hole_polys)):
+            area_i = hole_polys[i].area
+            area_j = hole_polys[j].area
+            if area_i <= 0 or area_j <= 0:
+                continue
+            shared = hole_polys[i].intersection(hole_polys[j]).area
+            # a shared boundary edge/point contributes ~0 area; require a
+            # real fraction of the smaller hole's own area before treating
+            # this as a genuine overlap, not floating-point boundary noise
+            if shared > 1e-9 and shared / min(area_i, area_j) > 1e-6:
+                overlap_found = True
+                break
+        if overlap_found:
+            break
+
+    if not overlap_found:
+        return loops, vertices_3d, v_id_to_2d
+
+    merged = unary_union(hole_polys)
+    merged_polys = list(merged.geoms) if hasattr(merged, "geoms") else [merged]
+
+    # a 3D point on the face's plane, for reconstructing new (synthetic,
+    # intersection-derived) boundary points back from 2D - any real vertex
+    # works, since the whole face is coplanar
+    origin_3d = np.array(vertices_3d[loops[0][0]])
+    plane_offset = np.dot(origin_3d, normal)
+
+    new_vertices_3d = dict(vertices_3d)
+    new_v_id_to_2d = dict(v_id_to_2d)
+    new_hole_loops = []
+    next_synthetic_id = -1
+    for poly in merged_polys:
+        ext = list(poly.exterior.coords)
+        if len(ext) > 1 and ext[0] == ext[-1]:
+            ext = ext[:-1]
+        loop_ids = []
+        for u, v in ext:
+            p3d = u * u_axis + v * v_axis + plane_offset * normal
+            vid = next_synthetic_id
+            next_synthetic_id -= 1
+            new_vertices_3d[vid] = tuple(p3d)
+            new_v_id_to_2d[vid] = (u, v)
+            loop_ids.append(vid)
+        if len(loop_ids) >= 3:
+            new_hole_loops.append(loop_ids)
+
+    return [loops[0]] + new_hole_loops, new_vertices_3d, new_v_id_to_2d
+
+
 def triangulate_face_3d(vertices_3d, loops, normal):
     if not loops or not loops[0] or len(loops[0]) < 3:
         return []
@@ -322,6 +414,11 @@ def triangulate_face_3d(vertices_3d, loops, normal):
             v_id_to_2d[v_id] = (u, v)
         else:
             return []
+
+    if len(loops) > 2:
+        loops, vertices_3d, v_id_to_2d = _merge_overlapping_hole_loops(
+            loops, v_id_to_2d, vertices_3d, normal, u_axis, v_axis
+        )
 
     outer_coords = [v_id_to_2d[v_id] for v_id in loops[0]]
     if outer_coords[0] != outer_coords[-1]:
