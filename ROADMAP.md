@@ -130,6 +130,23 @@ a property of the format), but worth knowing before building against it.
 
 ---
 
+## Future ideas (not scheduled)
+
+Bigger, not-yet-committed ideas worth remembering. Nothing here has an owner or a
+timeline — they're parked, not planned.
+
+- **Semantic diff between two `.skp` files.** Since every language already parses a
+  file into a structured model, a tool comparing two versions and reporting real
+  changes ("Component X moved 3ft", "Material Y changed color", "2 groups added") is
+  far more useful than git's own byte-level diff on a binary file, and needs no new
+  format — just a comparison pass over two `parse()` outputs. The real design problem:
+  SketchUp's internal entity numbering isn't stable across saves (seen repeatedly this
+  project), so matching "the same" component/instance between two versions has to go
+  by name/definition-content, not raw internal IDs, or the diff reports false changes
+  on every save. Scoped deliberately as diff-only, not merge — true 3-way merge of
+  concurrent geometric edits is a much harder, different problem this project isn't
+  taking on.
+
 ## Documentation
 
 - [x] `CHANGELOG.md`'s `[Unreleased]` header, previously stale (everything
