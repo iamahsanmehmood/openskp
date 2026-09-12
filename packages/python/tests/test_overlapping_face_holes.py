@@ -29,6 +29,8 @@ from __future__ import annotations
 
 import math
 
+import pytest
+
 from openskp import create
 
 
@@ -100,8 +102,86 @@ class TestOverlappingHolesMergeIntoOneCorrectShape:
         # ignoring the overlap and feeding two raw rings again), the
         # invariant breaks even though a specific triangle count might
         # coincidentally still "look plausible."
+        #
+        # Bounds-checked explicitly (not folded into the invariant
+        # equation alone): a prior version of this fix silently produced
+        # tris=0, verts=0 here - `_merge_overlapping_hole_loops` computed
+        # the correct merged geometry but only added the new synthetic
+        # boundary points to a LOCAL copy of the vertex dict, never to
+        # `builder.vertices` itself (what `_add_face_side` actually reads
+        # positions from), so every triangle touching the merged hole
+        # boundary was silently dropped downstream - and 0 == 0 - 2 + 2*1
+        # is arithmetically true, so the invariant check alone did not
+        # catch it.
+        assert tris > 20
+        assert verts > 20
         n_total_boundary_verts = verts  # for a single-hole face, every baked vertex is a boundary vertex
         assert tris == n_total_boundary_verts - 2 + 2 * 1
+
+    def test_overlapping_holes_baked_area_matches_independent_analytical_union(self, tmp_path):
+        # Strongest possible check: computes the expected area a totally
+        # independent way (the standard closed-form circle-circle
+        # intersection formula, not earcut/shapely/anything this project's
+        # own pipeline touches) and compares against the actual baked
+        # triangle area. Catches wrong-but-plausible-looking output that a
+        # topology-only invariant check (above) would miss entirely - this
+        # is exactly the check that caught the real bug in this fix's
+        # first version (silently dropped triangles still satisfy N-2+2h
+        # for whatever N happened to survive).
+        r = 0.1969
+        gap = 0.33 - 2 * r
+        assert gap < 0  # confirms these really do overlap, not just sit close
+        w, h = 2.0, 4.0
+        outer = [(3.62, 0.0, 0.0), (3.62, w, 0.0), (3.62, w, h), (3.62, 0.0, h)]
+        c1 = (1.0, 1.8345)
+        c2 = (1.0, 2.1655)
+        hole1 = _circle(3.62, *c1, r)
+        hole2 = _circle(3.62, *c2, r)
+
+        skp = create()
+        with skp.add_component_definition("SlottedBoard2") as board:
+            board.add_face(outer, holes=[hole1, hole2])
+        skp.add_instance(board)
+
+        out = tmp_path / "test.skp"
+        out.write_bytes(skp.to_bytes())
+        from openskp import SkpFile
+
+        scene = SkpFile.open(str(out)).build_scene()
+        assert len(scene.glb_primitives) == 1
+        prim = scene.glb_primitives[0]
+        positions = prim.positions
+        indices = prim.indices
+        verts = [
+            (positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2])
+            for i in range(len(positions) // 3)
+        ]
+
+        def tri_area(a, b, c):
+            ux, uy, uz = b[0] - a[0], b[1] - a[1], b[2] - a[2]
+            vx, vy, vz = c[0] - a[0], c[1] - a[1], c[2] - a[2]
+            cx, cy, cz = uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx
+            return 0.5 * math.sqrt(cx * cx + cy * cy + cz * cz)
+
+        baked_area_m2 = sum(
+            tri_area(verts[indices[i]], verts[indices[i + 1]], verts[indices[i + 2]])
+            for i in range(0, len(indices), 3)
+        )
+        inches_to_meters = 0.0254
+        baked_area_in2 = baked_area_m2 / (inches_to_meters ** 2)
+
+        dist = math.hypot(c1[0] - c2[0], c1[1] - c2[1])
+        inter = 2 * r * r * math.acos(dist / (2 * r)) - (dist / 2) * math.sqrt(4 * r * r - dist * dist)
+        union_area = 2 * math.pi * r * r - inter
+        expected_area_in2 = w * h - union_area
+
+        # 24-gon holes approximate true circles slightly under their real
+        # area (vertices lie ON the circle, chords cut inside it), so the
+        # baked result is expected to be a hair LARGER than a true-circle
+        # analytical union would give - 1% tolerance comfortably covers
+        # that discretization gap while still catching a real regression
+        # (the pre-fix bug was off by ~2x, not ~1%).
+        assert baked_area_in2 == pytest.approx(expected_area_in2, rel=0.01)
 
     def test_real_fixture_group206_and_group211_hit_the_merged_invariant(self):
         # Direct regression check against the two real definitions the bug
@@ -132,5 +212,5 @@ class TestOverlappingHolesMergeIntoOneCorrectShape:
         # tests do (see test_legacy_v20.py) - re-derived and verified
         # against the geometric invariant (not just "whatever the code
         # currently outputs") when this test was written.
-        assert tris == 18628
-        assert verts == 14757
+        assert tris == 18756
+        assert verts == 14869

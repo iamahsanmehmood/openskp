@@ -301,13 +301,25 @@ def _merge_overlapping_hole_loops(loops, v_id_to_2d, vertices_3d, normal, u_axis
     (same object identity returned) for the overwhelming common case of
     genuinely disjoint holes, so it costs nothing there.
 
-    Returns ``(loops, vertices_3d, v_id_to_2d)`` - the SAME objects,
-    unchanged, when no overlap is found (or fewer than 2 holes exist), or
-    new replacements with the overlapping holes merged into one when it
-    is.
+    Mutates ``vertices_3d`` and ``v_id_to_2d`` IN PLACE to add the new
+    (synthetic, intersection-derived) boundary points when a merge
+    happens - ``vertices_3d`` in particular is the caller's own
+    ``builder.vertices``, which `_add_face_side` reads from directly to
+    resolve every triangle's vertex positions when building the actual
+    output mesh; a local copy here would silently vanish once this
+    function returns, leaving every triangle that touches the merged
+    hole boundary with an unresolvable vertex (found and fixed during
+    testing: it doesn't raise, `_add_face_side` just silently drops any
+    vertex ID not present in ``builder.vertices``, which drops nearly
+    every triangle of a hole-heavy face since almost all of them touch
+    the hole boundary).
+
+    Returns ``loops`` - the SAME list, unchanged, when no overlap is
+    found (or fewer than 2 holes exist), or a new list with the
+    overlapping holes replaced by one merged loop when it is.
     """
     if len(loops) < 3:
-        return loops, vertices_3d, v_id_to_2d
+        return loops
 
     from shapely.geometry import Polygon as ShapelyPolygon
     from shapely.ops import unary_union
@@ -320,7 +332,7 @@ def _merge_overlapping_hole_loops(loops, v_id_to_2d, vertices_3d, normal, u_axis
             if not poly.is_valid:
                 poly = poly.buffer(0)
         except Exception:
-            return loops, vertices_3d, v_id_to_2d
+            return loops
         hole_polys.append(poly)
 
     overlap_found = False
@@ -341,7 +353,7 @@ def _merge_overlapping_hole_loops(loops, v_id_to_2d, vertices_3d, normal, u_axis
             break
 
     if not overlap_found:
-        return loops, vertices_3d, v_id_to_2d
+        return loops
 
     merged = unary_union(hole_polys)
     merged_polys = list(merged.geoms) if hasattr(merged, "geoms") else [merged]
@@ -352,10 +364,13 @@ def _merge_overlapping_hole_loops(loops, v_id_to_2d, vertices_3d, normal, u_axis
     origin_3d = np.array(vertices_3d[loops[0][0]])
     plane_offset = np.dot(origin_3d, normal)
 
-    new_vertices_3d = dict(vertices_3d)
-    new_v_id_to_2d = dict(v_id_to_2d)
+    # IDs guaranteed not to collide with anything already in vertices_3d -
+    # real TLV entity IDs, and any synthetic ID a PREVIOUS call added for a
+    # different face earlier in the same definition's build (vertices_3d
+    # is the same dict, shared and growing across every face of one
+    # definition, not fresh per call).
+    next_synthetic_id = min(vertices_3d.keys(), default=0) - 1
     new_hole_loops = []
-    next_synthetic_id = -1
     for poly in merged_polys:
         ext = list(poly.exterior.coords)
         if len(ext) > 1 and ext[0] == ext[-1]:
@@ -365,13 +380,13 @@ def _merge_overlapping_hole_loops(loops, v_id_to_2d, vertices_3d, normal, u_axis
             p3d = u * u_axis + v * v_axis + plane_offset * normal
             vid = next_synthetic_id
             next_synthetic_id -= 1
-            new_vertices_3d[vid] = tuple(p3d)
-            new_v_id_to_2d[vid] = (u, v)
+            vertices_3d[vid] = tuple(p3d)
+            v_id_to_2d[vid] = (u, v)
             loop_ids.append(vid)
         if len(loop_ids) >= 3:
             new_hole_loops.append(loop_ids)
 
-    return [loops[0]] + new_hole_loops, new_vertices_3d, new_v_id_to_2d
+    return [loops[0]] + new_hole_loops
 
 
 def triangulate_face_3d(vertices_3d, loops, normal):
@@ -416,7 +431,7 @@ def triangulate_face_3d(vertices_3d, loops, normal):
             return []
 
     if len(loops) > 2:
-        loops, vertices_3d, v_id_to_2d = _merge_overlapping_hole_loops(
+        loops = _merge_overlapping_hole_loops(
             loops, v_id_to_2d, vertices_3d, normal, u_axis, v_axis
         )
 
