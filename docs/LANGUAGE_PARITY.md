@@ -79,7 +79,7 @@ Every feature OpenSKP has, across all 5 languages. ✅ = shipped and released.
 | **Export** | | | | | |
 | GLB / OBJ+MTL / STL / PLY / DXF 3D / IFC4 / JSON | ✅ | ✅ | ✅ | ✅ | ✅ |
 | IFC export: unit/axis fix, real names + layer visibility, plugin-attribute Psets, full-path classification | 🔶 on main | not checked for equivalent issues | not checked | not checked | 🔶 on main, GitHub-only |
-| Direct SketchUp → Fragments (`.frag`) export | 🔶 on main, GitHub-only | 🔶 open [PR #276](https://github.com/iamahsanmehmood/openskp/pull/276), CI failing | ❌ not started | ❌ not started | 🔶 on main, GitHub-only |
+| Direct SketchUp → Fragments (`.frag`) export | 🔶 on main, GitHub-only | 🔶 on `main`, [#276](https://github.com/iamahsanmehmood/openskp/pull/276) — verified against the real `@thatopen/fragments` runtime, not npm-published yet | ❌ not started | ❌ not started | 🔶 on main, GitHub-only |
 | **Import** | | | | | |
 | Read a `.frag` file back (6th input format alongside `.skp`) | 🔶 on main | ❌ not started | ❌ not started | ❌ not started | ❌ not started |
 
@@ -98,6 +98,7 @@ Python-only:
 | Section planes writer | `create.py` | [CHANGELOG.md § 1.3.0](../CHANGELOG.md) |
 | Construction lines/points read + write | `legacy.py`, `create.py` | [CHANGELOG.md § 1.3.0](../CHANGELOG.md) |
 | Large-file parser fix | `_core.py` | [#264](https://github.com/iamahsanmehmood/openskp/issues/264) |
+| Legacy pre-2014 `CComponentInstance`/`CGroup` GUID misread — fixed the V7/V8/2013 file-version-support gap (§4 below) | `legacy.py` | [#310](https://github.com/iamahsanmehmood/openskp/pull/310), [#284](https://github.com/iamahsanmehmood/openskp/issues/284) |
 | `attribute_dictionaries` surfaced in GLB/JSON metadata export (not just IFC Psets) | `export/glb.py`, `export/json_export.py`, `export/instanced_glb.py` | [CHANGELOG.md § 1.3.0](../CHANGELOG.md) |
 
 All of the above are on GitHub as the tagged
@@ -118,11 +119,20 @@ this project already has. See
 [CHANGELOG.md § 1.3.0](../CHANGELOG.md) and
 [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md#reading-a-frag-file-back).
 
-TypeScript merged, not yet released: a writer memory fix (`ArchiveWriter`
-now keeps the archive in a growable `Uint8Array` instead of a `number[]`,
-cutting peak heap on a 62 MB write from ~2.1 GB to ~0.2 GB) — see
-[CHANGELOG.md § Unreleased](../CHANGELOG.md). .NET and Dart currently have
-nothing unreleased — their `main` matches what's published.
+TypeScript merged, not yet released:
+
+| Item | Where | Tracking |
+|:---|:---|:---|
+| Direct SketchUp → Fragments (`.frag`) export | `toFragments()` / `SkpFile.prototype.toFragments()` (`fragments.ts`) | [#276](https://github.com/iamahsanmehmood/openskp/pull/276) |
+| Writer memory fix (`ArchiveWriter` now keeps the archive in a growable `Uint8Array` instead of a `number[]`, cutting peak heap on a 62 MB write from ~2.1 GB to ~0.2 GB) | `create.ts` | [CHANGELOG.md § Unreleased](../CHANGELOG.md) |
+
+The Fragments exporter uses the real, canonical ThatOpen FlatBuffers schema
+(generated bindings, not hand-rolled), includes TRS decomposition and
+scale/mirror baking matching Python/C++, and is verified via a real
+round-trip through the `@thatopen/fragments` npm package's own
+`SingleThreadedFragmentsModel` — not just against this project's own
+generated bindings. .NET and Dart currently have nothing unreleased — their
+`main` matches what's published.
 
 C++:
 
@@ -167,15 +177,16 @@ Known gaps in this C++ work, stated honestly rather than glossed over:
 ## 4. Real SketchUp file version support
 
 **Not every real old-format file parses today — stated plainly, not glossed
-over.** A real-world version-compatibility sweep (14 `.skp` files, the same
-project saved across its history from SketchUp version 3 up through 2025)
-found:
+over.** A real-world version-compatibility sweep (15 real `.skp` files —
+16 saves of the same project across its history from SketchUp version 3 up
+through 2025, one of which, V5, saved out corrupted/empty) found:
 
-**8 files parse, build, and export cleanly**: saves from **2014, 2015, 2016,
-2017, 2018, 2020, 2021, and 2025** — consistent output (146 definitions / 131
-mesh resources) across all of them.
+**11 files parse, build, and export cleanly**: saves from **2014, 2015,
+2016, 2017, 2018, 2020, 2021, 2025, and — as of [#310](https://github.com/iamahsanmehmood/openskp/pull/310) — V7, V8, and
+2013** — consistent output (146 definitions / 131 mesh resources) across all
+of them.
 
-**The remaining files hit 5 distinct error signatures**, investigated and
+**The remaining 4 files hit 4 distinct error signatures**, investigated and
 root-caused to varying depth (tracked in
 [issue #284](https://github.com/iamahsanmehmood/openskp/issues/284)):
 
@@ -184,8 +195,23 @@ root-caused to varying depth (tracked in
 | V3 | `expected a string record` | Not investigated further |
 | V4 | `texture object is not a dib` | Not investigated further |
 | V6 | `definition list misaligned` | Not investigated further |
-| V7, V8, 2013 | `class-ref to non-class slot N (CAttributeNamed)` | Root cause narrowed to inside one nested `CGroup`'s recursive content; exact byte-level origin not yet found. Two candidate fixes tested and disproven with evidence — not guessed at. |
 | 2019 | `implausible def entity count` | Not investigated further |
+
+~~V7, V8, 2013 — `class-ref to non-class slot N (CAttributeNamed)`~~ —
+**fixed in [#310](https://github.com/iamahsanmehmood/openskp/pull/310)**.
+Root cause: `_read_instance`'s trailing-GUID read for
+`CComponentInstance`/`CGroup` was gated on the class's own reported
+`schema` number (`schema >= 5` implies a GUID), which doesn't generalize —
+a real V7 file's `CComponentInstance` reports schema 6, well above that
+threshold, yet has no GUID at all. Forcing the read anyway silently ate
+into the next sibling entity's own tag bytes, which either crashed deep in
+a nested definition (the `CAttributeNamed` collision this row was
+originally about) or — the more dangerous variant, caught only while
+verifying the fix — got silently absorbed by the root entity list's own
+over-declared-count tolerance, truncating a real 18-instance root scene
+down to 1 with no error raised at all. Fixed by gating the GUID read on
+the file's real version number (`ar.ver >= 14`) instead of schema;
+verified byte-for-byte identical to the same files' 2014+ output.
 
 This was only investigated against the **Python** legacy MFC reader. Whether
 the other 4 languages' independently-implemented legacy readers hit the same

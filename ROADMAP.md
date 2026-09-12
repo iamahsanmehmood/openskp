@@ -17,7 +17,7 @@ languages currently supports).
 | Language | Latest release | Status |
 |:---|:---|:---|
 | Python | [1.2.0 on PyPI](https://pypi.org/project/openskp/) · [1.3.0 (preview) on GitHub](https://github.com/iamahsanmehmood/openskp/releases/tag/preview-python-v1.3.2) (not on PyPI yet) | Ahead of the other 4 — see [Cross-language porting backlog](#cross-language-porting-backlog) below |
-| TypeScript | [npm](https://www.npmjs.com/package/openskp) | At 1.2.0 parity, plus an unreleased writer memory fix — see [CHANGELOG.md](CHANGELOG.md) |
+| TypeScript | [npm](https://www.npmjs.com/package/openskp) | At 1.2.0 parity, plus Fragments (`.frag`) export ([#276](https://github.com/iamahsanmehmood/openskp/pull/276), verified against the real `@thatopen/fragments` runtime) and a writer memory fix, both merged and unreleased — see [CHANGELOG.md](CHANGELOG.md) |
 | .NET | [NuGet](https://www.nuget.org/packages/OpenSkp) | At 1.2.0 parity |
 | Dart | [pub.dev](https://pub.dev/packages/openskp) | At 1.2.0 parity |
 | C++ | [GitHub releases](https://github.com/iamahsanmehmood/openskp/releases?q=cpp-) · [1.3.0 (preview) on GitHub](https://github.com/iamahsanmehmood/openskp/releases/tag/preview-cpp-v1.3.1) | Closed most of the gap with Python this round — Fragments export, multi-dictionary attributes, 4 IFC export fixes, legacy pages/scenes reading, construction lines/points reading, and attribute-dictionary GLB/JSON metadata export all now shipped on a preview tag. Still behind on full 9-value-type attribute support and the writer's dimensions/section-planes/construction-geometry — see below |
@@ -64,10 +64,11 @@ line per feature, not one issue per language per feature. Summary:
   (2021+) files.
 - Direct SketchUp → Fragments (`.frag`) export — Python and C++ (both
   GitHub-only preview tags; C++ measured 5-9x faster end to end on real
-  files). A community TypeScript port is open
-  ([PR #276](https://github.com/iamahsanmehmood/openskp/pull/276)) but its
-  required CI check is currently failing. .NET and Dart have no work
-  started.
+  files). TypeScript now has it too — a community port
+  ([#276](https://github.com/iamahsanmehmood/openskp/pull/276), merged),
+  using the real canonical ThatOpen FlatBuffers schema and verified via a
+  round-trip through the actual `@thatopen/fragments` npm package, not just
+  this project's own bindings. .NET and Dart have no work started.
 - VFF per-layer-hidden flag reading — Python and C++ (both GitHub-only).
 - 4 IFC export correctness fixes (units/axis, real instance names + layer
   visibility, plugin-attribute property sets, full-path classification) —
@@ -105,10 +106,18 @@ implementation to port from — the hard research is already done. See
 
 Tracked in [issue #284](https://github.com/iamahsanmehmood/openskp/issues/284).
 A real-world version-compatibility sweep (the same project saved across
-SketchUp versions 3 through 2025) found 8 of 14 files parse and convert
-cleanly; 6 fail, most sharing one root cause narrowed down to a slot-collision
-bug inside the legacy MFC reader, not yet fixed. Stated here plainly rather
-than glossed over — this is a real gap in the classic MFC `CArchive` support
+SketchUp versions 3 through 2025, 15 usable files) found 11 of 15 files
+parse and convert cleanly; 4 fail, each with its own distinct, still-open
+error signature (V3, V4, V6, 2019) — see
+[docs/LANGUAGE_PARITY.md § 4](docs/LANGUAGE_PARITY.md#4-real-sketchup-file-version-support)
+for the full table. The three files that used to share one root cause (V7,
+V8, 2013 — a `class-ref to non-class slot N (CAttributeNamed)`
+slot-collision) are fixed as of
+[#310](https://github.com/iamahsanmehmood/openskp/pull/310): the trailing
+instance/group GUID read was gated on the class's own schema number, which
+doesn't actually track GUID presence across versions — fixed by gating on
+the file's real version instead. Stated here plainly rather than glossed
+over — the remaining 4 are a real gap in the classic MFC `CArchive` support
 some corners of the README describe as "full."
 
 ### Fragments export: no native visibility field
@@ -138,6 +147,14 @@ a property of the format), but worth knowing before building against it.
   legacy pages/scenes, construction lines/points, attribute-dictionary
   GLB/JSON metadata export) — `openskp.com` still needs the same pass
   manually, since it isn't in this repository.
+- [x] README.md, this page, `docs/LANGUAGE_PARITY.md`, and
+  `docs/DEVELOPER_GUIDE.md` swept after TypeScript's Fragments export
+  ([#276](https://github.com/iamahsanmehmood/openskp/pull/276), merged —
+  was showing as an open, CI-failing PR) and the legacy pre-2014
+  instance/group GUID fix
+  ([#310](https://github.com/iamahsanmehmood/openskp/pull/310), fixed the
+  V7/V8/2013 file-version-support gap) — `openskp.com` still needs its own
+  manual pass for both, not done here.
 
 ---
 
