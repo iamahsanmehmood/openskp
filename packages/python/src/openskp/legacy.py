@@ -399,10 +399,18 @@ def _read_edge(ar, r):
     db = _drawbase(ar, r)
     s1, _, _ = ar.read_object(r, expect='CVertex')
     s2, _, _ = ar.read_object(r, expect='CVertex')
-    cs, cn, _ = ar.read_object(r)
+    cs, cn, cv = ar.read_object(r)
     if cn not in (None, 'CCurve', 'CArcCurve'):
         raise LegacyParseError(f"edge curve pointer resolved to {cn} {r.ctx()}")
-    return {'k': 'edge', 'db': db, 'curve': cs, 'v1': s1, 'v2': s2}
+    # Keep the curve object's VALUE, not just its
+    # slot. An arc's CArcCurve is serialized on first reference and every
+    # later edge back-refs it, so the first edge of an arc carries the only
+    # inline copy of the frame -- this third return value was thrown away
+    # here, which is why ARC.SKP's arc decoded to a frame that nothing could
+    # reach (the definition/root entity lists never contain the CArcCurve
+    # itself, only the edges pointing at it).
+    return {'k': 'edge', 'db': db, 'curve': cs, 'curve_value': cv,
+            'v1': s1, 'v2': s2}
 
 
 def _read_curve(ar, r):
@@ -413,10 +421,49 @@ def _read_curve(ar, r):
 
 
 def _read_arccurve(ar, r):
+    """``CArcCurve`` (schema 3) - a Curve that is one analytic arc.
+
+    The 14 doubles below used to be read and
+    thrown away (``r.f64s(14)`` with no binding), so every arc in a classic
+    file arrived downstream as its tessellated chords and nothing else.
+
+    Layout, decoded against the COLLADA oracle in
+    ``hew3d/openskp``'s ``corpus/2017/arc.skp`` + ``arc.dae`` (SketchUp
+    17.3.116's own export of the same file, an independent reading):
+
+        center[3], normal[3], x_axis[3], start_angle, end_angle, y_axis[3]
+
+    with the curve being ``P(t) = center + cos(t)*x_axis + sin(t)*y_axis``
+    for ``t`` from ``start_angle`` to ``end_angle``. ``x_axis``/``y_axis``
+    are the parameterisation vectors - for a circle they are perpendicular
+    and both of length R, but they need not be: a SketchUp arc that has been
+    non-uniformly scaled keeps its arc identity and stores an affine image of
+    the circle, where ``|x_axis| != |y_axis|`` and the two are not
+    perpendicular (measured on ``gondola_v20.skp``: 105.25 vs 56.51 inches at
+    106 degrees). ``normal`` is then ``normalize(x_axis cross y_axis)``, not
+    the other way round - that relation held to 0.0 on all 17 circular
+    records in the corpus and to 1e-17 on the elliptical ones.
+
+    A full circle stores ``start_angle == end_angle`` (circle.skp: 0, 0);
+    a semicircle stores (0, pi) (arc.skp), a quarter (0, pi/2)
+    (create_reference/arc.skp).
+
+    Same field names as skppy's ``ArcGeometry`` (skppy/parser/entities.py,
+    ``_parse_radial_dimensions``), which decodes the identical 14 doubles
+    from a radial dimension's inline arc - two implementations, one layout.
+
+    Only schema 3 is decoded; there is no pre-2015 arc in the corpus to
+    validate schema 2 against and a changed layout must not be guessed at.
+    """
     _preamble(ar, r)
     r.raw(5)
-    r.f64s(14)                       # arc frame (center, axes, radius, sweep)
-    return {'k': 'arccurve'}
+    v = r.f64s(14)
+    return {'k': 'arccurve', 'params': {
+        'center': tuple(v[0:3]), 'normal': tuple(v[3:6]),
+        'x_axis': tuple(v[6:9]),
+        'start_angle': v[9], 'end_angle': v[10],
+        'y_axis': tuple(v[11:14]),
+    }}
 
 
 def _register_burn(ar, delta):
@@ -1503,6 +1550,25 @@ class _Builder:
         self.vertices = {}
         self.edges = {}
         self.edge_flags = {}      # edge id -> display flag byte (VFF D307 bits)
+        # edge slot -> raw layer id, mirroring
+        # _core._GeometryBuilder.edge_layers. The legacy drawbase already
+        # carries 'layer' (it is where face['layer'] comes from), it just was
+        # never captured for edges - so a curve-only model, which has no
+        # faces, had no layer information anywhere.
+        self.edge_layers = {}
+        # edge slot -> parent Curve's slot index,
+        # mirroring _core._GeometryBuilder.edge_curves (VFF's BB0B). Both
+        # parsers carry this; neither stored it. Absent = the edge is not in
+        # a curve (SketchUp's ``edge.curve == nil``).
+        self.edge_curves = {}
+        # Curve slot -> decoded arc frame, for the
+        # subset of Curves that are CArcCurve. Keyed by the same slot index
+        # that edge_curves stores, so an edge's analytic arc (if any) is one
+        # lookup away. The VFF parser has no counterpart: its arc-curve
+        # payload (skppy's ARC_SPECIFIC_PAYLOAD 0x4C2D) is not decoded here,
+        # and none of the 15 real models in the test corpus contains an
+        # ARC_CURVES section at all (checked structurally, see README).
+        self.arc_curves = {}
         self.faces = {}
         self.instances = []
         self.section_planes = []
@@ -1519,6 +1585,11 @@ def _fill_builder(builder, ents, slots):
         k = v.get('k')
         if k == 'edge':
             _add_edge(builder, s, v, slots)
+        elif k == 'arccurve':
+            # Keep the analytic arc. Edges point at
+            # this slot through edge_curves; without this the frame decoded in
+            # _read_arccurve would die here, one line later.
+            builder.arc_curves[s] = v['params']
         elif k == 'face':
             loops = []
             for lp in v['loops']:
@@ -1537,7 +1608,13 @@ def _fill_builder(builder, ents, slots):
             face = {'loops': loops, 'normal': tuple(v['plane'][:3]),
                     'material_id': v['db']['mat'] or None,
                     'back_material_id': v['back_mat'] or None,
-                    'hidden': bool(v['db']['hidden'])}
+                    'hidden': bool(v['db']['hidden']),
+                    # drawbase already carries the
+                    # face's layer id, but it was dropped here - so downstream
+                    # (scene.py -> MeshMetadata.layer -> export/ifc.py's
+                    # classifier) saw the inherited default for every face and
+                    # semantic typing could never fire on layer names.
+                    'layer': v['db'].get('layer')}
             attrs = v.get('attrs')
             if isinstance(attrs, dict):
                 for cn, cv in attrs.get('children', []):
@@ -1641,6 +1718,28 @@ def _add_edge(builder, slot, e, slots):
              | (0x01 if db.get('hidden') else 0))
     if flags:
         builder.edge_flags[slot] = flags
+    # The edge's own layer, from the same drawbase
+    # face['layer'] comes from. See _GeometryBuilder.edge_layers.
+    edge_layer = db.get('layer')
+    if edge_layer:
+        builder.edge_layers[slot] = edge_layer
+    # The edge's parent Curve. _read_edge has
+    # always returned this ('curve': the CCurve/CArcCurve slot index) and
+    # _add_edge has always received it - it was simply never stored, so the
+    # only remaining trace of SketchUp's own curve grouping was dropped
+    # here. The VFF parser reads the same thing as BB0B (Edge#curve); see
+    # _GeometryBuilder.edge_curves.
+    curve = e.get('curve')
+    if curve is not None:
+        builder.edge_curves[slot] = curve
+
+    # If that Curve is an analytic arc, keep the
+    # frame. It arrives on the edge that first referenced the CArcCurve
+    # (see _read_edge); every later edge on the same arc back-refs it and
+    # contributes nothing new here.
+    cv = e.get('curve_value')
+    if curve is not None and isinstance(cv, dict) and cv.get('k') == 'arccurve':
+        builder.arc_curves[curve] = cv['params']
 
 
 def full_parse_legacy(skp_path: str) -> Dict[str, Any]:
