@@ -227,8 +227,13 @@ def to_ifc(
         scale: Coordinate scale factor (default: METRES_TO_MM - matches the millimetre length unit this exporter always declares).
         schema: IFC schema version (default: "IFC4").
         classifier: Optional override for :func:`classify_element`, called
-            as ``classifier(geom_name, layer_name)`` and expected to return
-            the same ``(STEP_ENTITY_TYPE, IFC_CLASS_NAME)`` tuple - use this
+            as ``classifier(geom_name, layer_name)`` - or
+            ``classifier(geom_name, layer_name, path_name)`` if the callable
+            accepts a third parameter, in which case it also receives the
+            owning instance's full hierarchy path (the same string used as
+            the key in ``Scene.mesh_index`` / ``InstanceNode.path``) -
+            and expected to return the same
+            ``(STEP_ENTITY_TYPE, IFC_CLASS_NAME)`` tuple - use this
             to supply your own naming convention or metadata-driven typing
             instead of the built-in keyword/layer heuristic. Ignored (never
             called) when ``classify_using_full_path`` is set, since that
@@ -248,7 +253,25 @@ def to_ifc(
         raise TypeError("to_ifc requires a valid Scene instance")
 
     if classifier is not None:
+        # A caller-supplied classifier used to be
+        # called as classifier(name, layer) only - `path` was already
+        # resolved a few lines below (meta.path) and then thrown away. That
+        # path is the exact key into Scene.mesh_index / the InstanceNode
+        # tree, so dropping it made it impossible to write a classifier that
+        # consults the instance's definition name, node layer, or attribute
+        # dictionaries. Forward it when the callback accepts it.
+        #
+        # Arity is inspected rather than probed with try/except TypeError:
+        # a TypeError raised *inside* the classifier would otherwise be
+        # swallowed as "wrong arity" and re-run with wrong arguments.
+        try:
+            _arity = len(inspect.signature(classifier).parameters)
+        except (TypeError, ValueError):
+            _arity = 2
+
         def classify(name: str, layer: str, path: str) -> Tuple[str, str]:
+            if _arity >= 3:
+                return classifier(name, layer, path)
             return classifier(name, layer)
     else:
         def classify(name: str, layer: str, path: str) -> Tuple[str, str]:
@@ -368,6 +391,27 @@ def to_ifc(
         f"#{geom_ctx_id}=IFCGEOMETRICREPRESENTATIONCONTEXT($,'Model',3,1.0E-5,#{axis_placement_id},$);"
     )
 
+    # An Annotation sub-context for the loose-edge
+    # curves. Until now they rode on the Model context above, which is what a
+    # *body* belongs to; IFC puts line work in a sub-context instead, so a
+    # consumer can tell a 3D solid from an annotation without guessing from
+    # the representation identifier.
+    #
+    # Ten attributes, in schema order. The four derived ones - dimension,
+    # precision, world coordinate system, true north - are written as `*`
+    # because IFC4 declares them DERIVE FROM ParentContext, and writing real
+    # values there is both redundant and, per the derivation constraint,
+    # wrong. Verified against ifcopenshell's own serializer output rather
+    # than from memory. Parent is the Model context (not a 2D Plan context):
+    # these runs are 3D polylines and a sub-context cannot change
+    # CoordinateSpaceDimension, so a 2D parent would make the points
+    # semantically invalid.
+    ann_ctx_id = next_id()
+    lines.append(
+        f"#{ann_ctx_id}=IFCGEOMETRICREPRESENTATIONSUBCONTEXT('Annotation',"
+        f"'Model',*,*,*,*,#{geom_ctx_id},$,.MODEL_VIEW.,$);"
+    )
+
     # Spatial Hierarchy: Project -> Site -> Building -> BuildingStorey
     proj_id = next_id()
     proj_guid = generate_ifc_guid()
@@ -480,6 +524,141 @@ def to_ifc(
             walk_assemblies(child, own_assembly_id)
 
     walk_assemblies(scene.scene_hierarchy, None, is_root=True)
+
+    # Loose-edge curve sets -> IfcAnnotation.
+    #
+    # Runs of *loose* edges - edges no face uses. This is the
+    # only geometry a drawing-style model has: author a facade elevation in
+    # SketchUp and the file contains 1776 edges and 0 faces, so the mesh loop
+    # below contributes nothing and the export is a spatial skeleton with no
+    # elements at all.
+    #
+    # IfcAnnotation + IfcGeometricCurveSet is IFC4's shape for exactly this:
+    # zero-thickness line work. An IfcAnnotation is a real IfcProduct, so it
+    # anchors through IfcRelContainedInSpatialStructure and shows up in a
+    # viewer's model tree like any other element - but it carries no volume.
+    # Deliberately NOT extruded into a solid: these are 2D profiles, and
+    # inventing a thickness to force a "real" element would be fabricating
+    # data the file does not contain (Revit imports them as lines, correctly).
+    for cs in getattr(scene, "curve_sets", None) or []:
+        pts = cs.points_m
+        if len(pts) < 2:
+            continue
+
+        # Same glTF-Y-up -> IFC-Z-up conversion the mesh branch below uses
+        # (there: y = -z, z = y; here the same swap on the curve's points).
+        def _ifc_coord(p: Tuple[float, float, float]) -> str:
+            return (f"({round(p[0] * scale, 6)},{round(-p[2] * scale, 6)},"
+                    f"{round(p[1] * scale, 6)})")
+
+        arc = getattr(cs, "arc", None)
+        if arc and len(arc.get("points") or ()) >= 3:
+            # A run that provably IS one whole
+            # circular arc is emitted as an IfcIndexedPolyCurve with
+            # IfcArcIndex segments, not as a polyline of its tessellation.
+            #
+            # This is the only place in the export where the analytic curve
+            # survives: everything else is chords. It matters downstream -
+            # a Revit/Bonsai endpoint receives an arc it can dimension,
+            # snap to and re-fillet, where a 13-point polyline is just 13
+            # points. The arc is not approximated here; the three points of
+            # an IfcArcIndex are exact (they are the frame's own
+            # center + cos(t)*x_axis + sin(t)*y_axis at the two ends and the
+            # middle), verified against SketchUp's own COLLADA export of
+            # arc.skp to 4e-8 inch.
+            #
+            # IFC4 declarations, read off ifcopenshell 0.8.5 rather than
+            # from a secondhand table:
+            #   IfcIndexedPolyCurve(Points, Segments, SelfIntersect)
+            #   IfcCartesianPointList3D(CoordList) - Points is typed
+            #     IfcCartesianPointList, the abstract supertype, which is
+            #     exactly why no placement is needed: a standalone point
+            #     list is legal here and nowhere else.
+            #   IfcArcIndex = LIST [3:3] OF IfcPositiveInteger (start,
+            #     a point ON the arc, end), IfcLineIndex = LIST [2:?].
+            # CoordList is 1-based.
+            #
+            # IfcArcIndex is a DEFINED TYPE, not an entity, so it cannot
+            # take a line of its own - it is a typed parameter written
+            # inline inside Segments:
+            #   (IFCARCINDEX((1,2,3)),IFCARCINDEX((3,4,1)))
+            # Writing `#24=IFCARCINDEX((1,2,3));` is not merely unidiomatic,
+            # it is a syntax error, and ifcopenshell 0.8.5 reacts by
+            # truncating the file at that line WITHOUT a word: a 33-entity
+            # export parsed as 23 entities, with the IfcAnnotation, the
+            # layer assignment and the containment relationship all past the
+            # cut. Hence no ids for the segments.
+            segs = ",".join(
+                "IFCARCINDEX((%s))" % ",".join(str(i + 1) for i in seg)
+                for seg in arc["segments"]
+            )
+            pt_list_id = next_id()
+            lines.append(
+                f"#{pt_list_id}=IFCCARTESIANPOINTLIST3D("
+                f"({','.join(_ifc_coord(p) for p in arc['points'])}));"
+            )
+            curve_id = next_id()
+            lines.append(
+                f"#{curve_id}=IFCINDEXEDPOLYCURVE(#{pt_list_id},"
+                f"({segs}),.F.);"
+            )
+        else:
+            pt_refs: List[str] = []
+            coord_strs: List[str] = [_ifc_coord(p) for p in pts]
+            # IfcPolyline has no implicit closing segment - a closed run
+            # must repeat its first point or the last gap renders open.
+            if cs.closed:
+                coord_strs.append(coord_strs[0])
+            for c in coord_strs:
+                pt_id = next_id()
+                lines.append(f"#{pt_id}=IFCCARTESIANPOINT({c});")
+                pt_refs.append(f"#{pt_id}")
+
+            curve_id = next_id()
+            lines.append(
+                f"#{curve_id}=IFCPOLYLINE(({','.join(pt_refs)}));"
+            )
+
+        curve_set_id = next_id()
+        lines.append(f"#{curve_set_id}=IFCGEOMETRICCURVESET((#{curve_id}));")
+
+        # The layer assignment takes representation items, so the curve
+        # goes in - that is what carries the loose-edge layer (A-GLAZ-CWMG /
+        # A-GLAZ-CURT on a real facade drawing) across to the IFC.
+        layer_items.setdefault(cs.layer or "Layer0", []).append(curve_id)
+
+        ann_name = sanitize_name(cs.name or "Curve")
+        ann_rep_id = next_id()
+        lines.append(
+            f"#{ann_rep_id}=IFCSHAPEREPRESENTATION(#{ann_ctx_id},"
+            f"'Annotation','GeometricCurveSet',(#{curve_set_id}));"
+        )
+
+        ann_shape_id = next_id()
+        lines.append(
+            f"#{ann_shape_id}=IFCPRODUCTDEFINITIONSHAPE($,$,(#{ann_rep_id}));"
+        )
+
+        ann_placement_id = next_id()
+        lines.append(
+            f"#{ann_placement_id}=IFCLOCALPLACEMENT(#{storey_placement_id},#{axis_placement_id});"
+        )
+
+        ann_id = next_id()
+        lines.append(
+            f"#{ann_id}=IFCANNOTATION('{generate_ifc_guid()}',#{owner_hist_id},"
+            f"'{ann_name}',$,$,#{ann_placement_id},#{ann_shape_id});"
+        )
+        # Same property-set treatment the mesh branch gives its primitives:
+        # each attribute dictionary becomes its own named Pset. This is how
+        # ifc_classify's Pset_AI_Classification reaches a curve-only model
+        # (there are no meshes to hang it on, so without this the inference
+        # basis would silently not ship for such files).
+        for dict_name, entries in (getattr(cs, "attribute_dictionaries", None) or {}).items():
+            if entries:
+                write_pset(ann_id, f"Pset_{dict_name}", entries)
+
+        product_ids.append(ann_id)
 
     for prim in scene.glb_primitives:
         tri_count = len(prim.indices) // 3
