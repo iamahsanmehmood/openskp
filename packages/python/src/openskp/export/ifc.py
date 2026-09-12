@@ -12,6 +12,8 @@ Z-up convention.
 from __future__ import annotations
 
 import datetime
+import inspect
+import json
 import pathlib
 import uuid
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
@@ -40,12 +42,91 @@ def generate_ifc_guid() -> str:
     return "".join(reversed(chars))
 
 
+def _step_text(text: str) -> str:
+    """Escape a string for a STEP (ISO 10303-21) string literal.
+
+    Non-ASCII used to go out as raw UTF-8, which is not legal STEP - the
+    default character set is ISO 8859-1 - and conforming
+    readers disagree about what to do with it. ifcopenshell 0.8.5 *silently
+    drops every non-ASCII character*: a name like '剪力墙JLQ-1' reaches the
+    downstream tool as 'JLQ-1'. Measured, not guessed - the bytes were on
+    disk (4x UTF-8 剪) and gone after ifcopenshell.open().
+
+    The two escape forms below are copied from what ifcopenshell's own writer
+    emits, which is the authoritative reference (probed, not read off a spec):
+        '测试项目'          -> '\\X2\\6D4B8BD5987976EE\\X0\\'
+        'emoji\\U0001F600墙' -> 'emoji\\X4\\0001F60000005899\\X0\\'
+
+    Rule: maximal runs of non-ASCII are wrapped in \\X2\\ (UTF-16BE, 4 hex per
+    char), or \\X4\\ (8 hex per char) when the run contains a non-BMP char;
+    ASCII falls outside the runs; ' -> '' and \\ -> \\\\.
+    """
+    out: list = []
+    run: list = []
+    wide = False
+
+    def flush() -> None:
+        if not run:
+            return
+        fmt = "%08X" if wide else "%04X"
+        out.append("\\X%d\\" % (4 if wide else 2))
+        out.extend(fmt % ord(c) for c in run)
+        out.append("\\X0\\")
+        del run[:]
+
+    for ch in text:
+        o = ord(ch)
+        if o < 128:
+            flush()
+            if ch == "'":
+                out.append("''")
+            elif ch == "\\":
+                out.append("\\\\")
+            else:
+                out.append(ch)
+        else:
+            run.append(ch)
+            if o > 0xFFFF:
+                wide = True
+    flush()
+    return "".join(out)
+
+
 def sanitize_name(name: str) -> str:
     """Sanitize string for STEP text escaping."""
     if not name:
         return "Unnamed"
-    clean = name.replace("'", "''").replace("\\", "\\\\").strip()
-    return clean if clean else "Unnamed"
+    clean = name.strip()
+    if not clean:
+        return "Unnamed"
+    return _step_text(clean)
+
+
+_ATTR_COUNT_CACHE: Dict[str, Dict[str, int]] = {}
+
+
+def _attr_counts(schema: str) -> Dict[str, int]:
+    """{STEP 名: 属性总个数}，如 {"IFCDOOR": 13, "IFCWALL": 9}。
+
+    The table is needed because IFC entity types do NOT all have the same
+    number of attributes, while the product line was hardcoded at 9.
+    Values come from ifcopenshell's declaration.all_attributes(), cross-checked
+    against the official .skc ifcXML schema (651/653 IFC2X3 entities agree; the
+    2 exceptions are explained in gen_ifc_attr_counts.py). See that script.
+    """
+    key = (schema or "IFC4").upper()
+    if key not in _ATTR_COUNT_CACHE:
+        table: Dict[str, int] = {}
+        try:
+            path = pathlib.Path(__file__).with_name("ifc_attr_counts.json")
+            with open(path, encoding="utf-8") as fh:
+                data = json.load(fh)
+            src = data.get(key) or data.get("IFC4") or {}
+            table = {k.upper(): v for k, v in src.items()}
+        except (OSError, ValueError):
+            table = {}          # 缺表就退回老行为（9 个参数），不要炸掉导出
+        _ATTR_COUNT_CACHE[key] = table
+    return _ATTR_COUNT_CACHE[key]
 
 
 def _classify_by_keyword(name: str) -> Union[Tuple[str, str], None]:
@@ -212,9 +293,19 @@ def to_ifc(
         f"#{app_id}=IFCAPPLICATION(#{org_id},'0.3.1','OpenSKP Exporter','OpenSKP');"
     )
 
+    # `.READWRITE.` is not an IFC4 enumeration
+    # literal. IfcChangeActionEnum in IFC4 is exactly (NOCHANGE, MODIFIED,
+    # ADDED, DELETED, NOTDEFINED) - READWRITE only ever existed in the IFC2x3
+    # version of the enum. Every file this exporter produced carried the
+    # invalid literal, and ifcopenshell's validate() flags it under
+    # express_rules=True:
+    #   "An enumeration literal 'READWRITE' is not valid for type
+    #    'IfcChangeActionEnum'"
+    # The attribute is OPTIONAL, so `$` would also be legal; NOCHANGE is used
+    # because it is what an untouched, just-created entity actually is.
     owner_hist_id = next_id()
     lines.append(
-        f"#{owner_hist_id}=IFCOWNERHISTORY(#{person_org_id},#{app_id},$,.READWRITE.,$,$,$,{timestamp_epoch});"
+        f"#{owner_hist_id}=IFCOWNERHISTORY(#{person_org_id},#{app_id},$,.NOCHANGE.,$,$,$,{timestamp_epoch});"
     )
 
     def write_pset(product_id: int, pset_name: str, props: Dict[str, Any]) -> None:
@@ -253,7 +344,12 @@ def to_ifc(
     lines.append(f"#{angle_unit_id}=IFCSIUNIT(*,.PLANEANGLEUNIT.,$,.RADIAN.);")
 
     solid_unit_id = next_id()
-    lines.append(f"#{solid_unit_id}=IFCSIUNIT(*,.STERADIANUNIT.,$,.STERADIAN.);")
+    # .STERADIANUNIT. is not a value of IfcUnitEnum
+    # (the legal set is .LENGTHUNIT. .MASSUNIT. ... .PLANEANGLEUNIT.
+    #  .SOLIDANGLEUNIT. .AREAUNIT. .VOLUMEUNIT.). ifcopenshell validate
+    # flagged it as "Attribute not optional / IfcCorrectUnitAssignment".
+    # .STERADIAN. is a valid IfcSIUnitName, so only the type slot was wrong.
+    lines.append(f"#{solid_unit_id}=IFCSIUNIT(*,.SOLIDANGLEUNIT.,$,.STERADIAN.);")
 
     unit_assign_id = next_id()
     lines.append(
@@ -433,9 +529,49 @@ def to_ifc(
             idx2 = prim.indices[i * 3 + 2] + 1
             face_indices.append(f"({idx0},{idx1},{idx2})")
 
+        # `Closed` was a hardcoded `.TRUE.`.
+        #
+        # Two separate bugs in one token. (a) The literal: `Closed` is an
+        # IfcBoolean, whose STEP spelling in IFC4 is `.T.`/`.F.` - `.TRUE.`
+        # is the IFC2x spelling, and ifcopenshell's validate() flags it:
+        #   "An enumeration literal 'TRUE' is not expected at attribute
+        #    index '2'"
+        # (b) The *claim*: `.TRUE.` says every mesh this exporter ever wrote
+        # is a closed manifold. The exporter never checked. Now it is:
+        # a triangle mesh is closed iff every undirected edge is shared by
+        # exactly two triangles - no boundary edge, no edge used 3+ times.
+        #
+        # The weld-by-position step is not decoration. Reading closure off
+        # the index buffer directly reports False for *every* mesh this
+        # pipeline produces, because the vertices it emits are per-face, not
+        # shared - measured on mx_Primitives: 576 verts / 276 tris, 576
+        # boundary edges, i.e. no edge shared at all. That is a fact about
+        # this exporter's output layout, not about the geometry: weld by
+        # rounded position first and the same two models come out 1/1 and
+        # 16/16 closed. Rounding to 6 dp matches the coordinates written to
+        # IFCCARTESIANPOINTLIST3D above, so the two agree on what "same
+        # point" means.
+        _weld: Dict[Tuple[float, float, float], int] = {}
+        _remap = [0] * v_count
+        for i in range(v_count):
+            _key = (round(prim.positions[i * 3], 6),
+                    round(prim.positions[i * 3 + 1], 6),
+                    round(prim.positions[i * 3 + 2], 6))
+            _remap[i] = _weld.setdefault(_key, len(_weld))
+        _edge_use: Dict[Tuple[int, int], int] = {}
+        for i in range(tri_count):
+            _a = _remap[prim.indices[i * 3]]
+            _b = _remap[prim.indices[i * 3 + 1]]
+            _c = _remap[prim.indices[i * 3 + 2]]
+            for _u, _v in ((_a, _b), (_b, _c), (_c, _a)):
+                _k = (_u, _v) if _u < _v else (_v, _u)
+                _edge_use[_k] = _edge_use.get(_k, 0) + 1
+        _closed = bool(_edge_use) and all(n == 2 for n in _edge_use.values())
+
         face_set_id = next_id()
         lines.append(
-            f"#{face_set_id}=IFCTRIANGULATEDFACESET(#{pt_list_id},$,.TRUE.,({','.join(face_indices)}),$);"
+            f"#{face_set_id}=IFCTRIANGULATEDFACESET(#{pt_list_id},$,"
+            f"{'.T.' if _closed else '.F.'},({','.join(face_indices)}),$);"
         )
 
         layer_items.setdefault(layer_name, []).append(face_set_id)
@@ -489,14 +625,36 @@ def to_ifc(
 
         prod_guid = generate_ifc_guid()
         product_id = next_id()
-        if step_type == "IFCBUILDINGELEMENTPROXY":
-            lines.append(
-                f"#{product_id}={step_type}('{prod_guid}',#{owner_hist_id},'{display_name}',$,$,#{prod_placement_id},#{prod_shape_id},$,.NOTDEFINED.);"
-            )
-        else:
-            lines.append(
-                f"#{product_id}={step_type}('{prod_guid}',#{owner_hist_id},'{display_name}',$,$,#{prod_placement_id},#{prod_shape_id},$,$);"
-            )
+        # This used to write a hardcoded 9-argument
+        # line for every entity type. 9 happens to be right for IfcWall, but
+        # IFC4 IfcDoor/IfcWindow take 13 (OverallHeight, OverallWidth,
+        # PredefinedType, OperationType, UserDefinedOperationType), so those
+        # came out malformed - ifcopenshell reported
+        #   "Index 9 is out of range for variant of size 9"
+        # plus four "Invalid attribute value" per door/window. Pad to the
+        # type's real attribute count instead (see ifc_attr_counts.json, whose
+        # values come from ifcopenshell and were cross-checked against the
+        # official .skc ifcXML schema).
+        attrs = [
+            f"'{prod_guid}'",           # GlobalId
+            f"#{owner_hist_id}",        # OwnerHistory
+            f"'{display_name}'",        # Name
+            "$",                        # Description
+            "$",                        # ObjectType
+            f"#{prod_placement_id}",    # ObjectPlacement
+            f"#{prod_shape_id}",        # Representation
+            "$",                        # Tag
+        ]
+        total = _attr_counts(schema_str).get(step_type, 0) or 9
+        if total < len(attrs):
+            total = len(attrs)          # 表里没有这个类型就别写坏，至少不比原来差
+        while len(attrs) < total:
+            attrs.append("$")
+        # IfcBuildingElementProxy 的第 9 个属性正是 PredefinedType，写
+        # .NOTDEFINED. 比 $ 更明确（IFC4 里该属性可选，两者都合法）
+        if step_type == "IFCBUILDINGELEMENTPROXY" and total == 9:
+            attrs[8] = ".NOTDEFINED."
+        lines.append(f"#{product_id}={step_type}({','.join(attrs)});")
 
         assembly_id = nearest_assembly_by_path.get(path_name) if path_name else None
         if assembly_id is not None:
@@ -532,9 +690,13 @@ def to_ifc(
             item_refs = ",".join(f"#{iid}" for iid in item_ids)
             layer_on = ".F." if scene.layer_hidden.get(l_name) else ".T."
             layer_assign_id = next_id()
+            # l_name went out raw. Layer names are
+            # exactly where non-ASCII lives on a Chinese model (剪力墙, 框架柱,
+            # ...), so this was the widest hole for the STEP escaping bug.
             lines.append(
                 f"#{layer_assign_id}=IFCPRESENTATIONLAYERWITHSTYLE("
-                f"'{l_name}',$,({item_refs}),$,{layer_on},.F.,.F.,());"
+                f"'{sanitize_name(l_name)}',$,({item_refs}),$,{layer_on},"
+                f".F.,.F.,());"
             )
 
     # 7. Assembly Aggregation, then Containment Relation in Spatial
