@@ -51,7 +51,7 @@ OpenSKP is the **first and only** open-source, cross-platform toolkit for Sketch
 | Feature | Status | Description |
 |:--------|:------:|:------------|
 | **Parse SKP 2021+ (VFF)** | ✅ | Full support for the modern VFF binary container |
-| **Parse SKP 2013–2020 (legacy MFC)** | ✅ | Broad support for the classic MFC `CArchive` container — same output shape as VFF. A real version-compatibility sweep found 11/15 old-format test files parse cleanly (up from 8/15 — [#310](https://github.com/iamahsanmehmood/openskp/pull/310) fixed the V7/V8/2013 cluster); the remaining 4 hit a known, tracked parsing gap — see [ROADMAP.md](ROADMAP.md#known-bugs) |
+| **Parse SKP 2013–2020 (legacy MFC)** | ✅ | Broad support for the classic MFC `CArchive` container — same output shape as VFF. A real version-compatibility sweep found 8/14 old-format test files parse cleanly; the remaining 6 hit a known, tracked parsing gap — see [ROADMAP.md](ROADMAP.md#known-bugs) |
 | **3D Geometry Extraction** | ✅ | Vertices, edges, faces, normals, and UV coordinates |
 | **Component Hierarchy** | ✅ | Nested component definitions and instance transforms |
 | **Scene Baking / Triangulation** | ✅ | Opt-in scene baking: full placed scene graph resolved to world-space, triangulated, GLB-ready — in all five languages |
@@ -130,7 +130,7 @@ condensed version.
 | Editor (`open_existing()`), code generator | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Export: GLB / OBJ / STL / PLY / DXF / IFC4 / JSON | ✅ | ✅ | ✅ | ✅ | ✅ |
 | IFC export correctness fixes (units, layer visibility, Psets, classification) | 🔶 | not checked | not checked | not checked | 🔶 GitHub-only |
-| **Fragments (`.frag`) export** | 🔶 GitHub-only | 🔶 on `main`, npm-only pending | ❌ not started | ❌ not started | 🔶 GitHub-only |
+| **Fragments (`.frag`) export** | 🔶 GitHub-only | 🔶 [PR #276](https://github.com/iamahsanmehmood/openskp/pull/276) open, CI failing | ❌ not started | ❌ not started | 🔶 GitHub-only |
 | **Fragments (`.frag`) import** — 6th input format | 🔶 on `main` | ❌ not started | ❌ not started | ❌ not started | ❌ not started |
 
 ### Real SketchUp file version support
@@ -141,8 +141,8 @@ across its save history) found:
 
 | Result | Versions |
 |:---|:---|
-| ✅ Parse, build, and export cleanly | 2014, 2015, 2016, 2017, 2018, 2020, 2021, 2025, **V7, V8, 2013** (fixed in [#310](https://github.com/iamahsanmehmood/openskp/pull/310)) |
-| ❌ Fail — 4 distinct error signatures, root cause tracked in [issue #284](https://github.com/iamahsanmehmood/openskp/issues/284) | V3, V4, V6, 2019 |
+| ✅ Parse, build, and export cleanly | 2014, 2015, 2016, 2017, 2018, 2020, 2021, 2025 |
+| ❌ Fail — 5 distinct error signatures, root cause tracked in [issue #284](https://github.com/iamahsanmehmood/openskp/issues/284) | V3, V4, V6, V7, V8, 2013, 2019 |
 
 Full per-version error table and investigation notes: [docs/LANGUAGE_PARITY.md § 4](docs/LANGUAGE_PARITY.md#4-real-sketchup-file-version-support).
 
