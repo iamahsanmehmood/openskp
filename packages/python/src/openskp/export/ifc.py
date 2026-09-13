@@ -12,6 +12,8 @@ Z-up convention.
 from __future__ import annotations
 
 import datetime
+import inspect
+import json
 import pathlib
 import uuid
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
@@ -40,12 +42,91 @@ def generate_ifc_guid() -> str:
     return "".join(reversed(chars))
 
 
+def _step_text(text: str) -> str:
+    """Escape a string for a STEP (ISO 10303-21) string literal.
+
+    Non-ASCII used to go out as raw UTF-8, which is not legal STEP - the
+    default character set is ISO 8859-1 - and conforming
+    readers disagree about what to do with it. ifcopenshell 0.8.5 *silently
+    drops every non-ASCII character*: a name like '剪力墙JLQ-1' reaches the
+    downstream tool as 'JLQ-1'. Measured, not guessed - the bytes were on
+    disk (4x UTF-8 剪) and gone after ifcopenshell.open().
+
+    The two escape forms below are copied from what ifcopenshell's own writer
+    emits, which is the authoritative reference (probed, not read off a spec):
+        '测试项目'          -> '\\X2\\6D4B8BD5987976EE\\X0\\'
+        'emoji\\U0001F600墙' -> 'emoji\\X4\\0001F60000005899\\X0\\'
+
+    Rule: maximal runs of non-ASCII are wrapped in \\X2\\ (UTF-16BE, 4 hex per
+    char), or \\X4\\ (8 hex per char) when the run contains a non-BMP char;
+    ASCII falls outside the runs; ' -> '' and \\ -> \\\\.
+    """
+    out: list = []
+    run: list = []
+    wide = False
+
+    def flush() -> None:
+        if not run:
+            return
+        fmt = "%08X" if wide else "%04X"
+        out.append("\\X%d\\" % (4 if wide else 2))
+        out.extend(fmt % ord(c) for c in run)
+        out.append("\\X0\\")
+        del run[:]
+
+    for ch in text:
+        o = ord(ch)
+        if o < 128:
+            flush()
+            if ch == "'":
+                out.append("''")
+            elif ch == "\\":
+                out.append("\\\\")
+            else:
+                out.append(ch)
+        else:
+            run.append(ch)
+            if o > 0xFFFF:
+                wide = True
+    flush()
+    return "".join(out)
+
+
 def sanitize_name(name: str) -> str:
     """Sanitize string for STEP text escaping."""
     if not name:
         return "Unnamed"
-    clean = name.replace("'", "''").replace("\\", "\\\\").strip()
-    return clean if clean else "Unnamed"
+    clean = name.strip()
+    if not clean:
+        return "Unnamed"
+    return _step_text(clean)
+
+
+_ATTR_COUNT_CACHE: Dict[str, Dict[str, int]] = {}
+
+
+def _attr_counts(schema: str) -> Dict[str, int]:
+    """{STEP 名: 属性总个数}，如 {"IFCDOOR": 13, "IFCWALL": 9}。
+
+    The table is needed because IFC entity types do NOT all have the same
+    number of attributes, while the product line was hardcoded at 9.
+    Values come from ifcopenshell's declaration.all_attributes(), cross-checked
+    against the official .skc ifcXML schema (651/653 IFC2X3 entities agree; the
+    2 exceptions are explained in gen_ifc_attr_counts.py). See that script.
+    """
+    key = (schema or "IFC4").upper()
+    if key not in _ATTR_COUNT_CACHE:
+        table: Dict[str, int] = {}
+        try:
+            path = pathlib.Path(__file__).with_name("ifc_attr_counts.json")
+            with open(path, encoding="utf-8") as fh:
+                data = json.load(fh)
+            src = data.get(key) or data.get("IFC4") or {}
+            table = {k.upper(): v for k, v in src.items()}
+        except (OSError, ValueError):
+            table = {}          # 缺表就退回老行为（9 个参数），不要炸掉导出
+        _ATTR_COUNT_CACHE[key] = table
+    return _ATTR_COUNT_CACHE[key]
 
 
 def _classify_by_keyword(name: str) -> Union[Tuple[str, str], None]:
@@ -146,8 +227,13 @@ def to_ifc(
         scale: Coordinate scale factor (default: METRES_TO_MM - matches the millimetre length unit this exporter always declares).
         schema: IFC schema version (default: "IFC4").
         classifier: Optional override for :func:`classify_element`, called
-            as ``classifier(geom_name, layer_name)`` and expected to return
-            the same ``(STEP_ENTITY_TYPE, IFC_CLASS_NAME)`` tuple - use this
+            as ``classifier(geom_name, layer_name)`` - or
+            ``classifier(geom_name, layer_name, path_name)`` if the callable
+            accepts a third parameter, in which case it also receives the
+            owning instance's full hierarchy path (the same string used as
+            the key in ``Scene.mesh_index`` / ``InstanceNode.path``) -
+            and expected to return the same
+            ``(STEP_ENTITY_TYPE, IFC_CLASS_NAME)`` tuple - use this
             to supply your own naming convention or metadata-driven typing
             instead of the built-in keyword/layer heuristic. Ignored (never
             called) when ``classify_using_full_path`` is set, since that
@@ -167,7 +253,25 @@ def to_ifc(
         raise TypeError("to_ifc requires a valid Scene instance")
 
     if classifier is not None:
+        # A caller-supplied classifier used to be
+        # called as classifier(name, layer) only - `path` was already
+        # resolved a few lines below (meta.path) and then thrown away. That
+        # path is the exact key into Scene.mesh_index / the InstanceNode
+        # tree, so dropping it made it impossible to write a classifier that
+        # consults the instance's definition name, node layer, or attribute
+        # dictionaries. Forward it when the callback accepts it.
+        #
+        # Arity is inspected rather than probed with try/except TypeError:
+        # a TypeError raised *inside* the classifier would otherwise be
+        # swallowed as "wrong arity" and re-run with wrong arguments.
+        try:
+            _arity = len(inspect.signature(classifier).parameters)
+        except (TypeError, ValueError):
+            _arity = 2
+
         def classify(name: str, layer: str, path: str) -> Tuple[str, str]:
+            if _arity >= 3:
+                return classifier(name, layer, path)
             return classifier(name, layer)
     else:
         def classify(name: str, layer: str, path: str) -> Tuple[str, str]:
@@ -212,9 +316,19 @@ def to_ifc(
         f"#{app_id}=IFCAPPLICATION(#{org_id},'0.3.1','OpenSKP Exporter','OpenSKP');"
     )
 
+    # `.READWRITE.` is not an IFC4 enumeration
+    # literal. IfcChangeActionEnum in IFC4 is exactly (NOCHANGE, MODIFIED,
+    # ADDED, DELETED, NOTDEFINED) - READWRITE only ever existed in the IFC2x3
+    # version of the enum. Every file this exporter produced carried the
+    # invalid literal, and ifcopenshell's validate() flags it under
+    # express_rules=True:
+    #   "An enumeration literal 'READWRITE' is not valid for type
+    #    'IfcChangeActionEnum'"
+    # The attribute is OPTIONAL, so `$` would also be legal; NOCHANGE is used
+    # because it is what an untouched, just-created entity actually is.
     owner_hist_id = next_id()
     lines.append(
-        f"#{owner_hist_id}=IFCOWNERHISTORY(#{person_org_id},#{app_id},$,.READWRITE.,$,$,$,{timestamp_epoch});"
+        f"#{owner_hist_id}=IFCOWNERHISTORY(#{person_org_id},#{app_id},$,.NOCHANGE.,$,$,$,{timestamp_epoch});"
     )
 
     def write_pset(product_id: int, pset_name: str, props: Dict[str, Any]) -> None:
@@ -253,7 +367,12 @@ def to_ifc(
     lines.append(f"#{angle_unit_id}=IFCSIUNIT(*,.PLANEANGLEUNIT.,$,.RADIAN.);")
 
     solid_unit_id = next_id()
-    lines.append(f"#{solid_unit_id}=IFCSIUNIT(*,.STERADIANUNIT.,$,.STERADIAN.);")
+    # .STERADIANUNIT. is not a value of IfcUnitEnum
+    # (the legal set is .LENGTHUNIT. .MASSUNIT. ... .PLANEANGLEUNIT.
+    #  .SOLIDANGLEUNIT. .AREAUNIT. .VOLUMEUNIT.). ifcopenshell validate
+    # flagged it as "Attribute not optional / IfcCorrectUnitAssignment".
+    # .STERADIAN. is a valid IfcSIUnitName, so only the type slot was wrong.
+    lines.append(f"#{solid_unit_id}=IFCSIUNIT(*,.SOLIDANGLEUNIT.,$,.STERADIAN.);")
 
     unit_assign_id = next_id()
     lines.append(
@@ -270,6 +389,27 @@ def to_ifc(
     geom_ctx_id = next_id()
     lines.append(
         f"#{geom_ctx_id}=IFCGEOMETRICREPRESENTATIONCONTEXT($,'Model',3,1.0E-5,#{axis_placement_id},$);"
+    )
+
+    # An Annotation sub-context for the loose-edge
+    # curves. Until now they rode on the Model context above, which is what a
+    # *body* belongs to; IFC puts line work in a sub-context instead, so a
+    # consumer can tell a 3D solid from an annotation without guessing from
+    # the representation identifier.
+    #
+    # Ten attributes, in schema order. The four derived ones - dimension,
+    # precision, world coordinate system, true north - are written as `*`
+    # because IFC4 declares them DERIVE FROM ParentContext, and writing real
+    # values there is both redundant and, per the derivation constraint,
+    # wrong. Verified against ifcopenshell's own serializer output rather
+    # than from memory. Parent is the Model context (not a 2D Plan context):
+    # these runs are 3D polylines and a sub-context cannot change
+    # CoordinateSpaceDimension, so a 2D parent would make the points
+    # semantically invalid.
+    ann_ctx_id = next_id()
+    lines.append(
+        f"#{ann_ctx_id}=IFCGEOMETRICREPRESENTATIONSUBCONTEXT('Annotation',"
+        f"'Model',*,*,*,*,#{geom_ctx_id},$,.MODEL_VIEW.,$);"
     )
 
     # Spatial Hierarchy: Project -> Site -> Building -> BuildingStorey
@@ -385,6 +525,141 @@ def to_ifc(
 
     walk_assemblies(scene.scene_hierarchy, None, is_root=True)
 
+    # Loose-edge curve sets -> IfcAnnotation.
+    #
+    # Runs of *loose* edges - edges no face uses. This is the
+    # only geometry a drawing-style model has: author a facade elevation in
+    # SketchUp and the file contains 1776 edges and 0 faces, so the mesh loop
+    # below contributes nothing and the export is a spatial skeleton with no
+    # elements at all.
+    #
+    # IfcAnnotation + IfcGeometricCurveSet is IFC4's shape for exactly this:
+    # zero-thickness line work. An IfcAnnotation is a real IfcProduct, so it
+    # anchors through IfcRelContainedInSpatialStructure and shows up in a
+    # viewer's model tree like any other element - but it carries no volume.
+    # Deliberately NOT extruded into a solid: these are 2D profiles, and
+    # inventing a thickness to force a "real" element would be fabricating
+    # data the file does not contain (Revit imports them as lines, correctly).
+    for cs in getattr(scene, "curve_sets", None) or []:
+        pts = cs.points_m
+        if len(pts) < 2:
+            continue
+
+        # Same glTF-Y-up -> IFC-Z-up conversion the mesh branch below uses
+        # (there: y = -z, z = y; here the same swap on the curve's points).
+        def _ifc_coord(p: Tuple[float, float, float]) -> str:
+            return (f"({round(p[0] * scale, 6)},{round(-p[2] * scale, 6)},"
+                    f"{round(p[1] * scale, 6)})")
+
+        arc = getattr(cs, "arc", None)
+        if arc and len(arc.get("points") or ()) >= 3:
+            # A run that provably IS one whole
+            # circular arc is emitted as an IfcIndexedPolyCurve with
+            # IfcArcIndex segments, not as a polyline of its tessellation.
+            #
+            # This is the only place in the export where the analytic curve
+            # survives: everything else is chords. It matters downstream -
+            # a Revit/Bonsai endpoint receives an arc it can dimension,
+            # snap to and re-fillet, where a 13-point polyline is just 13
+            # points. The arc is not approximated here; the three points of
+            # an IfcArcIndex are exact (they are the frame's own
+            # center + cos(t)*x_axis + sin(t)*y_axis at the two ends and the
+            # middle), verified against SketchUp's own COLLADA export of
+            # arc.skp to 4e-8 inch.
+            #
+            # IFC4 declarations, read off ifcopenshell 0.8.5 rather than
+            # from a secondhand table:
+            #   IfcIndexedPolyCurve(Points, Segments, SelfIntersect)
+            #   IfcCartesianPointList3D(CoordList) - Points is typed
+            #     IfcCartesianPointList, the abstract supertype, which is
+            #     exactly why no placement is needed: a standalone point
+            #     list is legal here and nowhere else.
+            #   IfcArcIndex = LIST [3:3] OF IfcPositiveInteger (start,
+            #     a point ON the arc, end), IfcLineIndex = LIST [2:?].
+            # CoordList is 1-based.
+            #
+            # IfcArcIndex is a DEFINED TYPE, not an entity, so it cannot
+            # take a line of its own - it is a typed parameter written
+            # inline inside Segments:
+            #   (IFCARCINDEX((1,2,3)),IFCARCINDEX((3,4,1)))
+            # Writing `#24=IFCARCINDEX((1,2,3));` is not merely unidiomatic,
+            # it is a syntax error, and ifcopenshell 0.8.5 reacts by
+            # truncating the file at that line WITHOUT a word: a 33-entity
+            # export parsed as 23 entities, with the IfcAnnotation, the
+            # layer assignment and the containment relationship all past the
+            # cut. Hence no ids for the segments.
+            segs = ",".join(
+                "IFCARCINDEX((%s))" % ",".join(str(i + 1) for i in seg)
+                for seg in arc["segments"]
+            )
+            pt_list_id = next_id()
+            lines.append(
+                f"#{pt_list_id}=IFCCARTESIANPOINTLIST3D("
+                f"({','.join(_ifc_coord(p) for p in arc['points'])}));"
+            )
+            curve_id = next_id()
+            lines.append(
+                f"#{curve_id}=IFCINDEXEDPOLYCURVE(#{pt_list_id},"
+                f"({segs}),.F.);"
+            )
+        else:
+            pt_refs: List[str] = []
+            coord_strs: List[str] = [_ifc_coord(p) for p in pts]
+            # IfcPolyline has no implicit closing segment - a closed run
+            # must repeat its first point or the last gap renders open.
+            if cs.closed:
+                coord_strs.append(coord_strs[0])
+            for c in coord_strs:
+                pt_id = next_id()
+                lines.append(f"#{pt_id}=IFCCARTESIANPOINT({c});")
+                pt_refs.append(f"#{pt_id}")
+
+            curve_id = next_id()
+            lines.append(
+                f"#{curve_id}=IFCPOLYLINE(({','.join(pt_refs)}));"
+            )
+
+        curve_set_id = next_id()
+        lines.append(f"#{curve_set_id}=IFCGEOMETRICCURVESET((#{curve_id}));")
+
+        # The layer assignment takes representation items, so the curve
+        # goes in - that is what carries the loose-edge layer (A-GLAZ-CWMG /
+        # A-GLAZ-CURT on a real facade drawing) across to the IFC.
+        layer_items.setdefault(cs.layer or "Layer0", []).append(curve_id)
+
+        ann_name = sanitize_name(cs.name or "Curve")
+        ann_rep_id = next_id()
+        lines.append(
+            f"#{ann_rep_id}=IFCSHAPEREPRESENTATION(#{ann_ctx_id},"
+            f"'Annotation','GeometricCurveSet',(#{curve_set_id}));"
+        )
+
+        ann_shape_id = next_id()
+        lines.append(
+            f"#{ann_shape_id}=IFCPRODUCTDEFINITIONSHAPE($,$,(#{ann_rep_id}));"
+        )
+
+        ann_placement_id = next_id()
+        lines.append(
+            f"#{ann_placement_id}=IFCLOCALPLACEMENT(#{storey_placement_id},#{axis_placement_id});"
+        )
+
+        ann_id = next_id()
+        lines.append(
+            f"#{ann_id}=IFCANNOTATION('{generate_ifc_guid()}',#{owner_hist_id},"
+            f"'{ann_name}',$,$,#{ann_placement_id},#{ann_shape_id});"
+        )
+        # Same property-set treatment the mesh branch gives its primitives:
+        # each attribute dictionary becomes its own named Pset. This is how
+        # ifc_classify's Pset_AI_Classification reaches a curve-only model
+        # (there are no meshes to hang it on, so without this the inference
+        # basis would silently not ship for such files).
+        for dict_name, entries in (getattr(cs, "attribute_dictionaries", None) or {}).items():
+            if entries:
+                write_pset(ann_id, f"Pset_{dict_name}", entries)
+
+        product_ids.append(ann_id)
+
     for prim in scene.glb_primitives:
         tri_count = len(prim.indices) // 3
         v_count = len(prim.positions) // 3
@@ -433,9 +708,49 @@ def to_ifc(
             idx2 = prim.indices[i * 3 + 2] + 1
             face_indices.append(f"({idx0},{idx1},{idx2})")
 
+        # `Closed` was a hardcoded `.TRUE.`.
+        #
+        # Two separate bugs in one token. (a) The literal: `Closed` is an
+        # IfcBoolean, whose STEP spelling in IFC4 is `.T.`/`.F.` - `.TRUE.`
+        # is the IFC2x spelling, and ifcopenshell's validate() flags it:
+        #   "An enumeration literal 'TRUE' is not expected at attribute
+        #    index '2'"
+        # (b) The *claim*: `.TRUE.` says every mesh this exporter ever wrote
+        # is a closed manifold. The exporter never checked. Now it is:
+        # a triangle mesh is closed iff every undirected edge is shared by
+        # exactly two triangles - no boundary edge, no edge used 3+ times.
+        #
+        # The weld-by-position step is not decoration. Reading closure off
+        # the index buffer directly reports False for *every* mesh this
+        # pipeline produces, because the vertices it emits are per-face, not
+        # shared - measured on mx_Primitives: 576 verts / 276 tris, 576
+        # boundary edges, i.e. no edge shared at all. That is a fact about
+        # this exporter's output layout, not about the geometry: weld by
+        # rounded position first and the same two models come out 1/1 and
+        # 16/16 closed. Rounding to 6 dp matches the coordinates written to
+        # IFCCARTESIANPOINTLIST3D above, so the two agree on what "same
+        # point" means.
+        _weld: Dict[Tuple[float, float, float], int] = {}
+        _remap = [0] * v_count
+        for i in range(v_count):
+            _key = (round(prim.positions[i * 3], 6),
+                    round(prim.positions[i * 3 + 1], 6),
+                    round(prim.positions[i * 3 + 2], 6))
+            _remap[i] = _weld.setdefault(_key, len(_weld))
+        _edge_use: Dict[Tuple[int, int], int] = {}
+        for i in range(tri_count):
+            _a = _remap[prim.indices[i * 3]]
+            _b = _remap[prim.indices[i * 3 + 1]]
+            _c = _remap[prim.indices[i * 3 + 2]]
+            for _u, _v in ((_a, _b), (_b, _c), (_c, _a)):
+                _k = (_u, _v) if _u < _v else (_v, _u)
+                _edge_use[_k] = _edge_use.get(_k, 0) + 1
+        _closed = bool(_edge_use) and all(n == 2 for n in _edge_use.values())
+
         face_set_id = next_id()
         lines.append(
-            f"#{face_set_id}=IFCTRIANGULATEDFACESET(#{pt_list_id},$,.TRUE.,({','.join(face_indices)}),$);"
+            f"#{face_set_id}=IFCTRIANGULATEDFACESET(#{pt_list_id},$,"
+            f"{'.T.' if _closed else '.F.'},({','.join(face_indices)}),$);"
         )
 
         layer_items.setdefault(layer_name, []).append(face_set_id)
@@ -489,14 +804,36 @@ def to_ifc(
 
         prod_guid = generate_ifc_guid()
         product_id = next_id()
-        if step_type == "IFCBUILDINGELEMENTPROXY":
-            lines.append(
-                f"#{product_id}={step_type}('{prod_guid}',#{owner_hist_id},'{display_name}',$,$,#{prod_placement_id},#{prod_shape_id},$,.NOTDEFINED.);"
-            )
-        else:
-            lines.append(
-                f"#{product_id}={step_type}('{prod_guid}',#{owner_hist_id},'{display_name}',$,$,#{prod_placement_id},#{prod_shape_id},$,$);"
-            )
+        # This used to write a hardcoded 9-argument
+        # line for every entity type. 9 happens to be right for IfcWall, but
+        # IFC4 IfcDoor/IfcWindow take 13 (OverallHeight, OverallWidth,
+        # PredefinedType, OperationType, UserDefinedOperationType), so those
+        # came out malformed - ifcopenshell reported
+        #   "Index 9 is out of range for variant of size 9"
+        # plus four "Invalid attribute value" per door/window. Pad to the
+        # type's real attribute count instead (see ifc_attr_counts.json, whose
+        # values come from ifcopenshell and were cross-checked against the
+        # official .skc ifcXML schema).
+        attrs = [
+            f"'{prod_guid}'",           # GlobalId
+            f"#{owner_hist_id}",        # OwnerHistory
+            f"'{display_name}'",        # Name
+            "$",                        # Description
+            "$",                        # ObjectType
+            f"#{prod_placement_id}",    # ObjectPlacement
+            f"#{prod_shape_id}",        # Representation
+            "$",                        # Tag
+        ]
+        total = _attr_counts(schema_str).get(step_type, 0) or 9
+        if total < len(attrs):
+            total = len(attrs)          # 表里没有这个类型就别写坏，至少不比原来差
+        while len(attrs) < total:
+            attrs.append("$")
+        # IfcBuildingElementProxy 的第 9 个属性正是 PredefinedType，写
+        # .NOTDEFINED. 比 $ 更明确（IFC4 里该属性可选，两者都合法）
+        if step_type == "IFCBUILDINGELEMENTPROXY" and total == 9:
+            attrs[8] = ".NOTDEFINED."
+        lines.append(f"#{product_id}={step_type}({','.join(attrs)});")
 
         assembly_id = nearest_assembly_by_path.get(path_name) if path_name else None
         if assembly_id is not None:
@@ -532,9 +869,13 @@ def to_ifc(
             item_refs = ",".join(f"#{iid}" for iid in item_ids)
             layer_on = ".F." if scene.layer_hidden.get(l_name) else ".T."
             layer_assign_id = next_id()
+            # l_name went out raw. Layer names are
+            # exactly where non-ASCII lives on a Chinese model (剪力墙, 框架柱,
+            # ...), so this was the widest hole for the STEP escaping bug.
             lines.append(
                 f"#{layer_assign_id}=IFCPRESENTATIONLAYERWITHSTYLE("
-                f"'{l_name}',$,({item_refs}),$,{layer_on},.F.,.F.,());"
+                f"'{sanitize_name(l_name)}',$,({item_refs}),$,{layer_on},"
+                f".F.,.F.,());"
             )
 
     # 7. Assembly Aggregation, then Containment Relation in Spatial

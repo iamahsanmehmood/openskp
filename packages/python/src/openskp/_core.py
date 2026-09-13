@@ -515,6 +515,30 @@ class _GeometryBuilder:
         self.vertices = {}
         self.edges = {}
         self.edge_flags = {}      # edge id -> display flag byte (D307)
+        # edge id -> raw layer id (D007/D207).
+        # Same record faces now read; edges carry it too and nothing read it,
+        # so a curve-only model - which has NO faces at all, hence no other
+        # source of layer information - exported every element untyped.
+        # Kept as the raw id so scene.py resolves it through
+        # layer_id_to_name, exactly like face['layer'].
+        self.edge_layers = {}
+        # edge id -> parent Curve's entity id
+        # (BB0B), i.e. SketchUp's own ``Edge#curve``.
+        #
+        # Measured, not guessed. An edge record carries exactly three entity
+        # references - B90B, BA0B, BB0B. B90B/BA0B hit the vertex table on
+        # 100% of edges across four models (1776/1776, 90649/90649,
+        # 34324/34324, 46168/46168) -> Edge#start / Edge#end. BB0B never
+        # hits the vertex table nor the edge table on any of them, and its
+        # value range starts immediately past the highest edge id
+        # (magnetar: edges 23..3574, BB0B 3579..4022) -> the ids SketchUp
+        # handed out to the 444 Curve objects right after their edges.
+        #
+        # Absent means the edge is NOT in a curve (SketchUp's
+        # ``edge.curve == nil``): HyparHut has it on 0/90649 edges,
+        # SourceCity_Facade on 36/34324 (10 curves). Present means the
+        # grouping is authoritative - no chaining heuristic needed.
+        self.edge_curves = {}
         self.faces = {}
         self.instances = []
         self.section_planes = []
@@ -916,6 +940,20 @@ def _extract_geometry_from_nodes(elements, builder):
                     d307 = next((c for c in d007['children'] if c['tag'] == 'D307'), None)
                     if d307 is not None and d307['payload']:
                         builder.edge_flags[e_id] = d307['payload'][0]
+                    # D207 = layer id - the same
+                    # tag the face branch and the instance branch read. See
+                    # _GeometryBuilder.edge_layers.
+                    d207 = next((c for c in d007['children'] if c['tag'] == 'D207'), None)
+                    if d207 and d207['payload']:
+                        builder.edge_layers[e_id] = parse_var_int(
+                            d207['payload'], 0, len(d207['payload']))
+                # BB0B = the parent Curve's entity
+                # id (Edge#curve). See _GeometryBuilder.edge_curves.
+                bb0b = find_child_tag(el['children'], 'BB0B')
+                if bb0b is not None and bb0b['payload']:
+                    curve_id = parse_var_int(bb0b['payload'], 0, len(bb0b['payload']))
+                    if curve_id:
+                        builder.edge_curves[e_id] = curve_id
 
         elif tag == 'AC0D':
             f_id = extract_entity_id(el)
@@ -965,11 +1003,28 @@ def _extract_geometry_from_nodes(elements, builder):
                 face_mat_id = None
                 uv_front = uv_back = None
                 face_hidden = False
+                face_layer_id = None
                 d007 = next((c for c in el['children'] if c['tag'] == 'D007'), None)
                 if d007:
                     d107 = next((c for c in d007['children'] if c['tag'] == 'D107'), None)
                     if d107:
                         face_mat_id = parse_var_int(d107['payload'], 0, len(d107['payload']))
+                    # D207 is the face's LAYER id -
+                    # the instance branch below has always read it as such
+                    # (see `inst_layer_id`), but the face branch never did,
+                    # so every face silently fell back to the layer it
+                    # inherited from its placement. That starved
+                    # export/ifc.py's classifier of the one signal these
+                    # files actually carry: on magnetar_Facade_Drawing.skp the
+                    # 444 curtain-wall panel outlines sit on the AIA-coded
+                    # layers A-GLAZ-CWMG (mullions) and A-GLAZ-CURT (glass),
+                    # and both were invisible downstream. Stored as the raw
+                    # id to match the legacy walker's `face['layer']`, which
+                    # scene.py resolves through layer_id_to_name.
+                    d207 = next((c for c in d007['children'] if c['tag'] == 'D207'), None)
+                    if d207 and d207['payload']:
+                        face_layer_id = parse_var_int(
+                            d207['payload'], 0, len(d207['payload']))
                     dc05 = next((c for c in d007['children'] if c['tag'] == 'DC05'), None)
                     if dc05 is not None:
                         uv_front, uv_back = _extract_uv_transforms(dc05['payload'])
@@ -992,7 +1047,11 @@ def _extract_geometry_from_nodes(elements, builder):
                                        'back_material_id': back_mat_id,
                                        'uv_transform': uv_front,
                                        'uv_transform_back': uv_back,
-                                       'hidden': face_hidden}
+                                       'hidden': face_hidden,
+                                       # See the
+                                       # D207 comment above - matches the
+                                       # legacy walker's face['layer'].
+                                       'layer': face_layer_id}
 
         elif tag == '6419':
             nodes_to_search = el['children'] if el['children'] else [el]

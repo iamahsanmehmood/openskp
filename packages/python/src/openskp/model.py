@@ -792,6 +792,7 @@ class SkpFile:
     def build_scene(
         self,
         name_override_keys: Sequence[str] = ("name", "label", "code"),
+        include_curve_sets: bool = True,
     ) -> "scene.Scene":
         """Bake every instance actually placed in the model into
         world-space, triangulated mesh data - SketchUp's component/group
@@ -817,6 +818,12 @@ class SkpFile:
                 default ``("name", "label", "code")`` covers the common
                 convention - pass your own tuple if your plugin instead
                 uses a key like ``"mark"`` or ``"partNumber"``.
+            include_curve_sets: Bake loose edges (edges no face uses) into
+                :attr:`Scene.curve_sets` as polyline runs. Pass ``False``
+                to skip them - a pure cost lever (+5.7% of the IFC on a
+                model that has both solids and curves), not a correctness
+                one. On a curve-only model it is not a lever at all: the
+                curve sets are the entire content.
 
         Returns:
             A populated :class:`openskp.scene.Scene`.
@@ -825,7 +832,11 @@ class SkpFile:
         from . import scene as _scene
 
         parsed = _core.full_parse(str(self.path))
-        return _scene.build_scene(parsed, name_override_keys=name_override_keys)
+        return _scene.build_scene(
+            parsed,
+            name_override_keys=name_override_keys,
+            include_curve_sets=include_curve_sets,
+        )
 
     def build_instanced_scene(
         self,

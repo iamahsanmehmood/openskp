@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Curve-only models reach the IFC: loose-edge runs as `IfcAnnotation`, proven arcs as `IfcIndexedPolyCurve`
+
+A drawing-style model - a facade elevation, a section outline - is loose edges only, with no faces anywhere. `build_scene()` had nothing to bake, so the IFC export came out as a spatial skeleton with no elements in it at all: real line work, present in the file, absent from the output.
+
+Both places the information was dropped are fixed. `legacy.py` and `_core.py` now surface four values they were reading and then discarding: the edge's own layer (VFF `D207`, the classic drawbase - the *only* layer signal a curve-only model carries, since it has no faces to carry one), the file's own `Edge#curve` grouping (`BB0B`, the classic `CCurve` pointer), the 14 doubles of a classic `CArcCurve` (center, normal, x-axis, start, end, y-axis), and each face's own layer - the classic walker parsed the face drawbase and copied only material/hidden out of it, so every face arrived on whichever layer it happened to inherit. `scene.py` chains loose edges into world-space runs along the file's own curves rather than by a vertex-adjacency heuristic, and `export/ifc.py` writes each run as an `IfcAnnotation` holding an `IfcGeometricCurveSet` in an `Annotation` sub-context, with the layer assignment carrying the curve, so the layer the author drew on survives into the file.
+
+A run that is provably one whole circular arc stays an arc instead of its tessellation. Three things have to hold before a run is called one - it is the entire curve, its frame is a circle and not an ellipse (`|normal × x_axis - y_axis|` within tolerance), and every vertex lies on that circle - and the result goes out as an `IfcIndexedPolyCurve` with `IfcArcIndex` segments. A run that fails any of the three keeps the chords the file stores; the real case is gondola's 16 non-uniformly-scaled arc frames out of 30, which are genuinely elliptical. That is a floor rather than a gap: IFC4 has no elliptical-arc expression in this shape, so the chords are the file's own evidence, and inventing something else would be worse than keeping them.
+
+The extra geometry is opt-out via `build_scene(include_curve_sets=False)`, measured at +5.7% of the IFC on one model carrying both solids and curves. On a curve-only model there is nothing to opt out of - the curve sets are the entire content.
+
+Known limit, asserted in the tests rather than left implicit: a closed full turn goes out as two half-turn segments, and a run whose arc cannot be closed that way is conservatively left as chords rather than guessed at.
+
+Python-only. TypeScript/.NET/Dart/C++ have neither these reads nor the annotation path - no `IfcAnnotation`, no `IfcArcIndex`, no edge-layer surfacing in any of the four - tracked with the rest in [#285](https://github.com/iamahsanmehmood/openskp/issues/285).
+
+### Fixed — Python: the IFC4 writer emitted STEP that a conforming reader rejects (360 problems across 10 files → 0)
+
+Four independent defects, each found by reading what a real reader said about a real export rather than by guessing, and each verified afterwards against `ifcopenshell` 0.8.5 `validate(express_rules=True)`, which type-checks every attribute against the schema. Re-exporting the same ten files with the four fixes reverted and then in place gives 360 problems → 0.
+
+- **Non-ASCII text went out as raw UTF-8.** ISO 10303-21's default character set is ISO 8859-1, so anything outside it has to be escaped as `\X2\<UTF-16BE uppercase hex>\X0\`. A real model with Chinese element names (楼梯间, 楼板, 外墙…) exported 35 raw non-ASCII characters and 0 escapes before, 0 and 19 after. The trap is that nothing complains: `ifcopenshell` opens the file happily and silently drops the characters, so the names come back missing their text and no diagnostic anywhere says so.
+- **`.TRUE.`/`.FALSE.` are IFC2x spellings** - IFC4 is `.T.`/`.F.`. Same class of error in two more places: `.READWRITE.` is not a valid `IfcChangeActionEnum` (`NOCHANGE` is), and `.STERADIANUNIT.` is not a valid `IfcUnitEnum` (`SOLIDANGLEUNIT` is - the *unit name* stays `.STERADIAN.`). These two spellings put at least two problems into every one of the ten files.
+- **Every product line was written with 9 attributes.** IFC entity types do not share one attribute count - `IfcDoor` declares 13, `IfcWall` 9 - so shorter types were over-long and longer ones lost their trailing attributes. `export/ifc_attr_counts.json` now carries the count per type, generated from the schema rather than typed by hand.
+- **`IfcTriangulatedFaceSet.Closed` was a hardcoded claim.** It is now computed: coordinates welded at 6dp, then every undirected edge has to be used by exactly two triangles. A mesh with a boundary is reported open, as is one with an edge used three times; the previous value asserted closure about meshes that were not closed.
+
+The same class of silent failure bit the arc work above, and is worth recording because it is exactly how a writer's bug survives: `IfcArcIndex` is a *defined type*, not an entity, so a standalone `#n=IFCARCINDEX(...)` line is a syntax error - and `ifcopenshell` 0.8.5 answers a syntax error by truncating the file at that line without a word, its `validate()` still reporting "0 problems", because the entities it never read cannot be wrong. The segment is therefore emitted inline, and a test opens the file with an actual reader and counts what came back.
+
+Python-only, and all four are worth checking in the other four ports' IFC writers - tracked in [#285](https://github.com/iamahsanmehmood/openskp/issues/285).
+
 ### Fixed — Overlapping face holes triangulated to an arbitrary, undefined triangle count (#285)
 
 Root-caused the ".NET vs Python triangle/vertex-count divergence on a real file" item: a real fixture (`Untitled.skp`) has faces with two circular holes close enough together (centers 0.33" apart, radius 0.69" each — evidently one slotted/oval cutout recorded as two overlapping full circles) that they genuinely overlap. Feeding two overlapping rings to a hole-based earcut triangulator is undefined - there's no single well-defined triangulation of self-intersecting boundary input, so this project's own `mapbox_earcut` call and the independently-implemented .NET port each picked *some* triangle count for it, never the same one. It was never a case of one implementation needing to copy the other's number; neither was computing anything well-defined.
