@@ -71,7 +71,7 @@
     "three": "^0.186.0",
     "tsup": "^8.0.0",
     "typescript": "^5.3.0",
-    "typescript-eslint": "8.69.0",
+    "typescript-eslint": "8.70.0",
     "vite-node": "^6.0.0",
     "vitest": "^3.2.7",
     "web-ifc": "^0.0.77"
