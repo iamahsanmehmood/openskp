@@ -55,6 +55,7 @@ Every feature OpenSKP has, across all 5 languages. ✅ = shipped and released.
 | Legacy (pre-2021) pages/scenes reading | ✅ | ❌ VFF only | ❌ VFF only | ❌ VFF only | 🔶 on main, GitHub-only |
 | Construction lines/points reading | ✅ legacy only | ❌ | ❌ | ❌ | 🔶 legacy only, on main, GitHub-only |
 | VFF per-layer-hidden flag reading | 🔶 on main | ❌ | ❌ | ❌ | 🔶 on main, GitHub-only |
+| Per-edge/per-face layer, `Edge#curve` pointers, classic `CArcCurve` frames (legacy + VFF) | 🔶 on main | ❌ | ❌ | ❌ | ❌ |
 | `mesh_index[...].properties` populated | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `model.layers` in file order (not alphabetical) | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Scene building & observability** | | | | | |
@@ -79,6 +80,7 @@ Every feature OpenSKP has, across all 5 languages. ✅ = shipped and released.
 | **Export** | | | | | |
 | GLB / OBJ+MTL / STL / PLY / DXF 3D / IFC4 / JSON | ✅ | ✅ | ✅ | ✅ | ✅ |
 | IFC export: unit/axis fix, real names + layer visibility, plugin-attribute Psets, full-path classification | 🔶 on main | not checked for equivalent issues | not checked | not checked | 🔶 on main, GitHub-only |
+| IFC export: loose-edge curve sets + analytic arcs as `IfcAnnotation` / `IfcIndexedPolyCurve`, IFC4 STEP conformance fixes | 🔶 on main | ❌ | ❌ | ❌ | ❌ |
 | Direct SketchUp → Fragments (`.frag`) export | 🔶 on main, GitHub-only | 🔶 on `main`, [#276](https://github.com/iamahsanmehmood/openskp/pull/276) — verified against the real `@thatopen/fragments` runtime, not npm-published yet | ❌ not started | ❌ not started | 🔶 on main, GitHub-only |
 | **Import** | | | | | |
 | Read a `.frag` file back (6th input format alongside `.skp`) | 🔶 on main | ❌ not started | ❌ not started | ❌ not started | ❌ not started |
@@ -98,6 +100,9 @@ Python-only:
 | Section planes writer | `create.py` | [CHANGELOG.md § 1.3.0](../CHANGELOG.md) |
 | Construction lines/points read + write | `legacy.py`, `create.py` | [CHANGELOG.md § 1.3.0](../CHANGELOG.md) |
 | Large-file parser fix | `_core.py` | [#264](https://github.com/iamahsanmehmood/openskp/issues/264) |
+| Per-edge/face layer, `Edge#curve` and classic arc frames surfaced from both parsers | `legacy.py`, `_core.py` | [CHANGELOG.md § Unreleased](../CHANGELOG.md) |
+| Loose-edge curve sets → `IfcAnnotation`, proven arcs → `IfcIndexedPolyCurve` | `scene.py`, `export/ifc.py` | [CHANGELOG.md § Unreleased](../CHANGELOG.md) |
+| 4 IFC4 conformance fixes (STEP escaping, enum literals, per-type attribute counts, computed `Closed`) | `export/ifc.py` | [CHANGELOG.md § Unreleased](../CHANGELOG.md) |
 | Legacy pre-2014 `CComponentInstance`/`CGroup` GUID misread — fixed the V7/V8/2013 file-version-support gap (§4 below) | `legacy.py` | [#310](https://github.com/iamahsanmehmood/openskp/pull/310), [#284](https://github.com/iamahsanmehmood/openskp/issues/284) |
 | `attribute_dictionaries` surfaced in GLB/JSON metadata export (not just IFC Psets) | `export/glb.py`, `export/json_export.py`, `export/instanced_glb.py` | [CHANGELOG.md § 1.3.0](../CHANGELOG.md) |
 
