@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from . import _core
+from ._curves import _chain_loose_edges, _solve_run_arc
 from ._face_groups import FaceGroupContext, build_local_face_groups
 from .errors import SkpParseError
 from .scene import SceneTexture, _sniff_image_mime
@@ -97,6 +98,52 @@ class InstancedMeshResource:
 
 
 @dataclass
+class LocalCurve:
+    """One reusable, DEFINITION-LOCAL loose-edge run: the instanced
+    counterpart of :class:`openskp.scene.CurveSetMetadata`, minus the
+    world transform - same relationship :class:`LocalPrimitive` has to
+    :class:`openskp.scene.GlbPrimitive`.
+
+    Loose edges are how SketchUp stores drawing/construction geometry -
+    the light-gauge-steel/structural-framing case that motivated adding
+    this: a definition can be *entirely* loose edges, no faces at all, in
+    which case it would otherwise contribute nothing to the instanced
+    scene (see :func:`curve_resource_for`).
+    """
+
+    points_m: List[Tuple[float, float, float]] = field(default_factory=list)
+    closed: bool = False
+    # This run's own resolved layer - majority vote across its edges' own
+    # edge_layers, falling back to the resource's own fallback layer (the
+    # same rule mesh_resource_for's faces use for color). Individual runs
+    # within one definition can disagree, which is why this lives per-run
+    # rather than once on InstancedCurveResource.
+    layer: str = ""
+    # Same shape and meaning as openskp.scene.CurveSetMetadata.arc - set
+    # only when this run provably is one whole circular arc; None leaves
+    # it as the chords the file stores. See openskp._curves.solve_run_arc.
+    arc: Optional[Dict[str, Any]] = None
+
+
+@dataclass
+class InstancedCurveResource:
+    """A definition's loose-edge geometry, local space, ready to be
+    referenced by any number of :class:`InstancedNode`\\ s - the loose-edge
+    counterpart of :class:`InstancedMeshResource`.
+
+    Unlike a mesh resource, this has no color/material variant: loose
+    edges carry a LAYER (which can be inherited contextually, the same way
+    an unpainted face's color is), not a paint color, so the cache key is
+    (definition, effective layer) - see :func:`curve_resource_for`.
+    """
+
+    id: str
+    definition_id: Any
+    definition_name: str
+    curves: List[LocalCurve] = field(default_factory=list)
+
+
+@dataclass
 class InstancedNode:
     """One placed node in the instanced scene graph.
 
@@ -132,6 +179,7 @@ class InstancedNode:
     # See openskp.scene.InstanceNode.attribute_dictionaries.
     attribute_dictionaries: Dict[str, Dict[str, str]] = field(default_factory=dict)
     mesh_resource_id: Optional[str] = None
+    curve_resource_id: Optional[str] = None
     children: List["InstancedNode"] = field(default_factory=list)
 
 
@@ -152,10 +200,14 @@ class InstancedScene:
     bounds: Optional[SceneBounds]
     scene_hierarchy: InstancedNode
     mesh_resources: List[InstancedMeshResource]
-    gltf_materials: List[Dict[str, Any]]
+    # Loose-edge (construction-line/structural-framing) resources, one per
+    # unique (definition, effective layer). Empty for a model whose
+    # geometry is all faces - the common case. See InstancedCurveResource.
+    curve_resources: List[InstancedCurveResource] = field(default_factory=list)
+    gltf_materials: List[Dict[str, Any]] = field(default_factory=list)
     # Distinct texture images the placed materials use, deduplicated by
     # source bytes - same as Scene.textures.
-    textures: List[SceneTexture]
+    textures: List[SceneTexture] = field(default_factory=list)
     # The source file's own per-layer visibility, keyed by layer name -
     # same shape and source (parsed["layer_hidden"]) as Scene.layer_hidden;
     # this was never threaded through here even after that fix landed for
@@ -411,6 +463,123 @@ def build_instanced_scene(
         resource_id_by_key[key] = resource_id
         return resource_id
 
+    curve_resources: List[InstancedCurveResource] = []
+    curve_resource_id_by_key: Dict[str, str] = {}
+
+    def curve_resource_for(def_id: Any, layer: str) -> Optional[str]:
+        """Build (or reuse) the local-space loose-edge resource for a
+        definition in the given inherited-layer context. Returns ``None``
+        when the definition has no loose edges of its own.
+
+        Mirrors :func:`mesh_resource_for` exactly, one level simpler: a
+        loose edge has no paint-color equivalent to resolve, only a layer,
+        and that layer can be inherited the same contextual way an
+        unpainted face's color is - so the cache key is (definition,
+        effective fallback layer), same reasoning as the mesh case.
+
+        This is deliberately independent of whether the definition also
+        has face geometry (unlike the historical `if builder.faces:` gate
+        in ``scene.py``'s baked path before openskp#316): a definition can
+        be *entirely* loose edges (a structural-framing/light-gauge-steel
+        member drawn as a construction line, not a solid), and such a
+        definition contributing nothing to the instanced scene at all was
+        exactly the gap this closes.
+        """
+        d = defs_dict.get(def_id)
+        if d is None:
+            return None
+        builder = d["builder"]
+        runs = _chain_loose_edges(builder)
+        if not runs:
+            return None
+
+        key = f"{def_id}|{layer}"
+        hit = curve_resource_id_by_key.get(key)
+        if hit is not None:
+            return hit
+
+        # A definition's OWN faces (if any) carry their own layer and take
+        # priority over the caller's inherited one - the same override
+        # mesh_resource_for's caller applies before calling in here (see
+        # the `if builder.faces:` block in scene.py's instantiate(), which
+        # reassigns its local `parent_layer` the same way before ITS loose-
+        # edge block runs). Missing this produced a real, caught-by-testing
+        # bug: a mixed mesh+loose-edge definition's loose edges fell back to
+        # whatever layer the CALLING instance happened to inherit, instead
+        # of the definition's own dominant face layer - verified wrong
+        # against gondola_v20.skp ('Gondulas Laterais' expected, 'Layer0'
+        # produced) before this fallback was added.
+        effective_layer = layer
+        if builder.faces:
+            face_layer_counts: Dict[Any, int] = {}
+            for face in builder.faces.values():
+                face_layer = face.get("layer")
+                if face_layer:
+                    face_layer_counts[face_layer] = face_layer_counts.get(face_layer, 0) + 1
+            if face_layer_counts:
+                top_layer = max(face_layer_counts, key=face_layer_counts.get)
+                effective_layer = layer_id_to_name.get(top_layer, layer)
+
+        edge_layers = getattr(builder, "edge_layers", None) or {}
+        curves: List[LocalCurve] = []
+        for eids, chain, closed in runs:
+            pts: List[Tuple[float, float, float]] = []
+            complete = True
+            for vk in chain:
+                v = builder.vertices.get(vk)
+                if v is None:
+                    complete = False
+                    break
+                # Local space: no instance matrix, matching LocalPrimitive -
+                # only the inches->metres scale and SketchUp Z-up -> glTF
+                # Y-up axis swap, the same fixed conventions used there.
+                pts.append((round(v[0] * INCHES_TO_M, 6),
+                            round(v[2] * INCHES_TO_M, 6),
+                            round(-v[1] * INCHES_TO_M, 6)))
+            # A dangling vertex key would silently shorten the run, turning
+            # a parsing gap into a plausible-looking polyline. Drop the run
+            # instead - a missing curve is honest, a truncated one is not.
+            if not complete or len(pts) < 2:
+                continue
+
+            # A run whose edges disagree on layer resolves to the majority,
+            # same rule mesh_resource_for's faces use for the same reason.
+            lc: Dict[Any, int] = {}
+            for eid in eids:
+                edge_layer = edge_layers.get(eid)
+                if edge_layer:
+                    lc[edge_layer] = lc.get(edge_layer, 0) + 1
+            run_layer = effective_layer
+            if lc:
+                run_layer = layer_id_to_name.get(max(lc, key=lc.get), effective_layer)
+
+            curves.append(
+                LocalCurve(
+                    points_m=pts,
+                    closed=closed,
+                    layer=run_layer,
+                    # matrix=None: local space, same reasoning as the point
+                    # loop above - the frame's own axes get only the axis
+                    # swap, no per-instance transform.
+                    arc=_solve_run_arc(builder, eids, None, pts, closed),
+                )
+            )
+
+        if not curves:
+            return None
+
+        resource_id = f"curve_{len(curve_resources)}"
+        curve_resources.append(
+            InstancedCurveResource(
+                id=resource_id,
+                definition_id=def_id,
+                definition_name=d.get("name") or "",
+                curves=curves,
+            )
+        )
+        curve_resource_id_by_key[key] = resource_id
+        return resource_id
+
     def walk(
         def_id: Any,
         current_matrix: List[float],
@@ -523,6 +692,7 @@ def build_instanced_scene(
                     attribute_dictionaries=attribute_dicts,
                     guid=inst.get("ref_guid") or "",
                     mesh_resource_id=mesh_resource_for(ref_idx, inst_color, l_name),
+                    curve_resource_id=curve_resource_for(ref_idx, l_name),
                     children=children,
                 )
             )
@@ -534,8 +704,9 @@ def build_instanced_scene(
 
     # Loose geometry drawn straight into the model (not inside any
     # component/group) is kept, as the baked path keeps it: it becomes the
-    # root node's own mesh resource.
+    # root node's own mesh/curve resource.
     root_mesh_resource_id = mesh_resource_for("ROOT", None, "Layer0")
+    root_curve_resource_id = curve_resource_for("ROOT", "Layer0")
 
     scene_hierarchy = InstancedNode(
         name="ROOT",
@@ -545,6 +716,7 @@ def build_instanced_scene(
         position_mm=(0.0, 0.0, 0.0),
         properties={},
         mesh_resource_id=root_mesh_resource_id,
+        curve_resource_id=root_curve_resource_id,
         children=root_children,
     )
 
@@ -621,14 +793,17 @@ def build_instanced_scene(
         )
 
     logger.info(
-        "Instanced scene build complete: %d instances, %d mesh resources (%.2fs)",
-        instance_counter[0], len(mesh_resources), time.monotonic() - t0,
+        "Instanced scene build complete: %d instances, %d mesh resources, "
+        "%d curve resources (%.2fs)",
+        instance_counter[0], len(mesh_resources), len(curve_resources),
+        time.monotonic() - t0,
     )
 
     return InstancedScene(
         bounds=bounds,
         scene_hierarchy=scene_hierarchy,
         mesh_resources=mesh_resources,
+        curve_resources=curve_resources,
         gltf_materials=gltf_materials,
         textures=textures,
         layer_hidden=dict(parsed.get("layer_hidden") or {}),

@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Loose-edge/curve support in `build_instanced_scene()` (structural framing, light-gauge steel)
+
+`build_scene()` gained loose-edge curve sets in the entry below (openskp#316) - `build_instanced_scene()` had no equivalent at all, so a definition made entirely of loose edges (a light-gauge-steel or timber-framing member drawn as a construction line rather than a solid - exactly how a structural model routinely represents studs, king studs, header jack studs) contributed nothing to the instanced scene whatsoever. Found by a real user testing the [Blender addon](https://github.com/iamahsanmehmood/blender-openskp) against a real structural-framing file: 93 of the file's 145 definitions were entirely or partly loose-edge, invisible on import.
+
+Two new types mirror the existing mesh-resource shape: `InstancedCurveResource` (a definition's loose-edge runs, local space, built once) and `LocalCurve` (one run's points/closed flag/layer/arc), referenced from `InstancedNode.curve_resource_id` the same way `mesh_resource_id` already works. The underlying curve-chaining and analytic-arc-recovery logic (`_order_curve`/`_chain_loose_edges`/`_solve_run_arc`) was extracted from `scene.py` into a new internal `_curves.py` module rather than duplicated - both paths need the exact same math, none of it baked-vs-instanced-specific.
+
+Verified against real fixture files by cross-validating both code paths against each other: flattening the instanced output (composing node transforms) has to reproduce `build_scene()`'s own `curve_sets` exactly, on every fixture on hand (`test_reproduces_build_scenes_curve_sets`), the same strategy the existing triangle-equivalence test already uses. That cross-check caught a real bug before it shipped: a definition with BOTH faces and loose edges resolved the loose edges' fallback layer from the *calling instance's* inherited layer instead of the definition's own dominant face layer (scene.py's `instantiate()` reassigns its local `parent_layer` from the definition's own faces before its loose-edge block runs - a step this port initially missed). Confirmed on `gondola_v20.skp`: run 12 onward resolved `'Layer0'` where the baked path correctly resolved `'Gondulas Laterais'`, fixed, then re-verified point-for-point across all fixtures.
+
+Python-only. TypeScript/.NET/Dart/C++ have neither `build_instanced_scene()`'s curve support nor `build_scene()`'s (from #316) - tracked in [#285](https://github.com/iamahsanmehmood/openskp/issues/285).
+
 ### Added — Curve-only models reach the IFC: loose-edge runs as `IfcAnnotation`, proven arcs as `IfcIndexedPolyCurve`
 
 A drawing-style model - a facade elevation, a section outline - is loose edges only, with no faces anywhere. `build_scene()` had nothing to bake, so the IFC export came out as a spatial skeleton with no elements in it at all: real line work, present in the file, absent from the output.

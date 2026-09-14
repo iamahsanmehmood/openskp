@@ -224,6 +224,68 @@ def test_resolves_the_same_layers_and_dynamic_properties_per_node(fixture_name):
     _walk_metadata_parity(baked_scene.scene_hierarchy, instanced_scene.scene_hierarchy)
 
 
+def _flatten_instanced_curves(scene):
+    """Walk the instanced tree, composing node transforms, and emit every
+    curve run's points in world space - the loose-edge counterpart of
+    _flatten_instanced above, reconstructing what build_scene()'s
+    curve_sets bakes."""
+    by_id = {r.id: r for r in scene.curve_resources}
+    out = []
+
+    def visit(node, parent_matrix):
+        world = _mul4(parent_matrix, node.matrix)
+        if node.curve_resource_id is not None:
+            res = by_id.get(node.curve_resource_id)
+            if res:
+                for c in res.curves:
+                    world_pts = tuple(_apply_matrix(world, p) for p in c.points_m)
+                    out.append((world_pts, c.closed, c.layer, c.arc))
+        for child in node.children:
+            visit(child, world)
+
+    visit(scene.scene_hierarchy, _IDENTITY4)
+    return out
+
+
+def _flatten_baked_curves(scene):
+    return [
+        (tuple(cs.points_m), cs.closed, cs.layer, cs.arc) for cs in scene.curve_sets
+    ]
+
+
+@pytest.mark.parametrize("fixture_name", FIXTURES)
+def test_reproduces_build_scenes_curve_sets(fixture_name):
+    """openskp#316 added loose-edge curve sets to build_scene() only -
+    build_instanced_scene() had no equivalent at all, so a definition made
+    entirely of loose edges (a structural-framing/light-gauge-steel member
+    drawn as a construction line rather than a solid) contributed nothing
+    to the instanced scene whatsoever. Same cross-validation strategy as
+    the triangle-equivalence test above: both paths have to agree on
+    genuine fixture files, not just a synthetic case."""
+    path = os.path.join(FIXTURES_DIR, fixture_name)
+    baked = SkpFile.open(path)
+    baked.parse()
+    instanced = SkpFile.open(path)
+    instanced.parse()
+
+    baked_curves = _flatten_baked_curves(baked.build_scene())
+    instanced_curves = _flatten_instanced_curves(instanced.build_instanced_scene())
+
+    assert len(instanced_curves) == len(baked_curves)
+
+    for i, (inst, base) in enumerate(zip(instanced_curves, baked_curves)):
+        inst_pts, inst_closed, inst_layer, inst_arc = inst
+        base_pts, base_closed, base_layer, base_arc = base
+
+        assert len(inst_pts) == len(base_pts), f"run {i}: point count differs"
+        for pa, pe in zip(inst_pts, base_pts):
+            for k in range(3):
+                assert abs(pa[k] - pe[k]) < _TOLERANCE, f"run {i}: coordinate mismatch"
+        assert inst_closed == base_closed, f"run {i}: closed flag differs"
+        assert inst_layer == base_layer, f"run {i}: layer differs"
+        assert (inst_arc is None) == (base_arc is None), f"run {i}: arc-detection differs"
+
+
 class TestInstancedGlbExport:
     FIXTURE = os.path.join(FIXTURES_DIR, "capilla_quiroz_v17.skp")
 

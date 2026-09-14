@@ -62,6 +62,7 @@ Every feature OpenSKP has, across all 5 languages. ✅ = shipped and released.
 | **Scene building & observability** | | | | | |
 | Scene baking / triangulation (`buildScene()`) | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Instancing-preserving scene output (`build_instanced_scene()`) | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `build_instanced_scene()`: loose-edge curve support (structural framing/LGS) | 🔶 on main | ❌ | ❌ | ❌ | ❌ |
 | earcut-based triangulation (replaces Shapely + concave-face correctness fix) | 🔶 on main | n/a, own triangulator | n/a | n/a | n/a |
 | Large-file streaming fix ([#264](https://github.com/iamahsanmehmood/openskp/issues/264)) | 🔶 on main | not checked | not checked | not checked | not checked |
 | Opt-in progress reporting + structured errors | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -104,6 +105,7 @@ Python-only:
 | Per-edge/face layer, `Edge#curve` and classic arc frames surfaced from both parsers | `legacy.py`, `_core.py` | [CHANGELOG.md § Unreleased](../CHANGELOG.md) |
 | Loose-edge curve sets → `IfcAnnotation`, proven arcs → `IfcIndexedPolyCurve` | `scene.py`, `export/ifc.py` | [CHANGELOG.md § Unreleased](../CHANGELOG.md) |
 | 4 IFC4 conformance fixes (STEP escaping, enum literals, per-type attribute counts, computed `Closed`) | `export/ifc.py` | [CHANGELOG.md § Unreleased](../CHANGELOG.md) |
+| `build_instanced_scene()`: loose-edge curve support (`InstancedCurveResource`/`LocalCurve`), shared curve logic extracted to `_curves.py` | `instanced_scene.py`, `_curves.py`, `scene.py` | [CHANGELOG.md § Unreleased](../CHANGELOG.md) |
 | Legacy pre-2014 `CComponentInstance`/`CGroup` GUID misread — fixed the V7/V8/2013 file-version-support gap (§4 below) | `legacy.py` | [#310](https://github.com/iamahsanmehmood/openskp/pull/310), [#284](https://github.com/iamahsanmehmood/openskp/issues/284) |
 | `attribute_dictionaries` surfaced in GLB/JSON metadata export (not just IFC Psets) | `export/glb.py`, `export/json_export.py`, `export/instanced_glb.py` | [CHANGELOG.md § 1.3.0](../CHANGELOG.md) |
 
