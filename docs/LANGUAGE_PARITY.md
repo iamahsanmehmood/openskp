@@ -48,7 +48,8 @@ Every feature OpenSKP has, across all 5 languages. ✅ = shipped and released.
 | Styles (front/back unpainted face color) | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Dynamic Component attributes | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Single attribute dictionary per entity | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Attribute dicts: full 9-value-type support (`Point3d`/`Vector3d`/`Length`/`Timestamp`/nested lists) | ✅ | ❌ str/int/float only | ❌ | ❌ | ❌ str only |
+| Attribute dicts: full 9-value-type support, **legacy (pre-2021) format** (`Point3d`/`Vector3d`/`Length`/`Timestamp`/nested lists) | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Attribute dicts: full 9-value-type support, **VFF (2021+) format** | ✅ 7/9 — no native `bool`/`time_t` tag observed yet | ❌ `AD38` string only (1/9) | ❌ string only (1/9) | ❌ string only (1/9) | ❌ string only (1/9) |
 | Attribute dicts: multiple dictionaries per entity | ✅ | ❌ single dict only | ❌ | ❌ | ✅ |
 | Attribute dicts surfaced in GLB/JSON metadata export (not just IFC Psets) | 🔶 on main | n/a, no `attribute_dictionaries` field | n/a | n/a | 🔶 on main, GitHub-only |
 | VFF pages/scenes + dimension parsing | ✅ | ✅ | ✅ | ✅ | ✅ |

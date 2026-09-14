@@ -271,8 +271,20 @@ class Instance:
         ref_idx: Index into :attr:`SkpModel.definitions` for the
             referenced component definition.
         guid: Globally-unique identifier string.
-        matrix: 4×4 transformation matrix stored as a flat 16-element list
-            in **column-major** order.
+        matrix: Transformation matrix stored as a flat **13-element**
+            list, not a 4x4 in disguise: indices 0-8 are the 3x3
+            rotation/scale part in row-major order, 9-11 are the
+            translation, and 12 is a separate scale scalar that
+            :func:`openskp._core.transform_point` never reads (it
+            only uses 0-11). To transform a point ``(x, y, z)``::
+
+                tx = m[0]*x + m[1]*y + m[2]*z + m[9]
+                ty = m[3]*x + m[4]*y + m[5]*z + m[10]
+                tz = m[6]*x + m[7]*y + m[8]*z + m[11]
+
+            Verified directly against :func:`openskp._core.transform_point`
+            and :func:`openskp._core.multiply_matrices`, which are what
+            every internal code path actually uses.
         layer: This instance's own explicit layer override, or ``""``
             when it has none. An instance without an explicit override
             inherits its *placement's* layer, which can only be resolved
