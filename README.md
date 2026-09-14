@@ -86,6 +86,23 @@ Using OpenSKP in your own project? [Open an issue](https://github.com/iamahsanme
 
 ---
 
+## 🧩 CAD/DCC Integrations
+
+Native `.skp` import/export for other tools, built on this project — no
+Trimble SDK, no SketchUp install:
+
+| Addon | Status | Repo |
+|:------|:-------|:-----|
+| **FreeCAD** | Import + export, real B-rep geometry (not a triangulated mesh). Materials/layers not yet carried over. | [freecad-openskp](https://github.com/iamahsanmehmood/freecad-openskp) |
+| **Blender** | Import + export, collection-instancing architecture (a component placed 1,000 times costs one mesh, not 1,000). Materials/layers not yet carried over. | [blender-openskp](https://github.com/iamahsanmehmood/blender-openskp) |
+
+Both are early and under active development — real bugs get found and
+fixed by testing against real files, not by waiting until everything's
+perfect. Try them, and open an issue on the addon's own repo (not here)
+for anything specific to FreeCAD/Blender behavior.
+
+---
+
 ## 🖥️ Platform Support
 
 | Platform | Version | Status | Install | Unreleased on `main`? |
