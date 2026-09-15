@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Loose-edge grouping/layer on the public typed model (`Edge.layer`, `Edge.curve_id`, `Face.layer`, `loose_edge_runs()`)
+
+`SkpFile.parse()`'s typed `Definition`/`Edge`/`Face` model had no way to read a face's or edge's own layer, or SketchUp's own `Edge#curve` grouping - only `build_scene()`/`build_instanced_scene()` could reach that data, and only internally, since both bake it straight into triangulated mesh output. A consumer building real B-rep geometry rather than a render mesh (exactly what the FreeCAD addon needs for loose-edge/structural-framing import) had no way to get there at all.
+
+Added `Edge.layer`/`Edge.curve_id` and `Face.layer` (all `Optional[int]`, `None` when the file has no override), and a new public `openskp.loose_edge_runs(definition)` function that groups a definition's loose edges (edges no face uses) into ordered `(edge_ids, vertex_ids, closed)` runs - the same file-driven grouping `build_scene()`'s `curve_sets` and `build_instanced_scene()`'s `curve_resources` already use, now exposed for typed-model consumers directly, returning raw ids rather than baked/triangulated coordinates.
+
+Also exports `InstancedCurveResource`/`LocalCurve` from the package's top level (`import openskp`) - added alongside `build_instanced_scene()`'s curve-resource support earlier but never actually added to `__init__.py`'s public exports.
+
+Verified by cross-validating against `build_instanced_scene()`'s own (already-tested) `curve_resources` on every fixture on hand: the same run count, in the same order, with matching coordinates, comes out of both the baked-mesh path and this new raw-typed-model path for the same definition.
+
+Python-only. TypeScript/.NET/Dart/C++ don't have this on the typed model, or the underlying edge-layer/curve-grouping read at all - tracked with the rest in [#285](https://github.com/iamahsanmehmood/openskp/issues/285).
+
 ### Added — Loose-edge/curve support in `build_instanced_scene()` (structural framing, light-gauge steel)
 
 `build_scene()` gained loose-edge curve sets in the entry below (openskp#316) - `build_instanced_scene()` had no equivalent at all, so a definition made entirely of loose edges (a light-gauge-steel or timber-framing member drawn as a construction line rather than a solid - exactly how a structural model routinely represents studs, king studs, header jack studs) contributed nothing to the instanced scene whatsoever. Found by a real user testing the [Blender addon](https://github.com/iamahsanmehmood/blender-openskp) against a real structural-framing file: 93 of the file's 145 definitions were entirely or partly loose-edge, invisible on import.

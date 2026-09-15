@@ -24,13 +24,15 @@ from .create import ComponentDefinitionBuilder, SkpBuilder, SkpWriteError, creat
 from .edit import open_existing
 from .errors import SkpParseError
 from .instanced_scene import (
+    InstancedCurveResource,
     InstancedMeshResource,
     InstancedNode,
     InstancedScene,
+    LocalCurve,
     LocalPrimitive,
     SceneBounds,
 )
-from .model import SkpFile, SkpModel
+from .model import SkpFile, SkpModel, loose_edge_runs
 from .scene import Scene, InstanceNode, MeshMetadata, GlbPrimitive, SceneTexture
 
 try:
@@ -48,7 +50,9 @@ __all__: list[str] = [
     "InstancedScene",
     "InstancedNode",
     "InstancedMeshResource",
+    "InstancedCurveResource",
     "LocalPrimitive",
+    "LocalCurve",
     "SceneBounds",
     "SkpParseError",
     "create",
@@ -57,6 +61,7 @@ __all__: list[str] = [
     "SkpWriteError",
     "open_existing",
     "to_python_code",
+    "loose_edge_runs",
     "__version__",
 ]
 
