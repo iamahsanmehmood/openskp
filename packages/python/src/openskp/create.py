@@ -676,7 +676,18 @@ def _detect_image_subtype(image_bytes: bytes) -> int:
 def _load_scaffold() -> bytes:
     # _scaffold is a plain data subdirectory, not an importable package (no
     # __init__.py) - anchor on the openskp package itself and navigate in.
-    data = (resources.files("openskp") / "_scaffold" / _SCAFFOLD_FILE).read_bytes()
+    #
+    # Anchored via __package__ (this module's own containing package, e.g.
+    # "openskp" for a normal pip install) rather than the hardcoded string
+    # "openskp" - the hardcoded form breaks for anyone who vendors this
+    # package under a different dotted path (a Blender/FreeCAD addon
+    # bundling it as its own extension.vendor.openskp submodule, say),
+    # since resources.files() then looks for a top-level "openskp" that
+    # was never registered under that name. Caught by testing a vendored
+    # consumer end-to-end, not by reading this function in isolation -
+    # __package__ resolves correctly either way, with no behavior change
+    # for a normal top-level install.
+    data = (resources.files(__package__) / "_scaffold" / _SCAFFOLD_FILE).read_bytes()
     digest = hashlib.sha256(data).hexdigest()
     if digest != _SCAFFOLD_SHA256:
         raise SkpWriteError(
