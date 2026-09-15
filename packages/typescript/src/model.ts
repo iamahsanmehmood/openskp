@@ -1,5 +1,5 @@
 import { transformPoint, multiplyMatrices } from './transforms';
-import { extractDynamicProperties, ParsedDefinition } from './geometry';
+import { extractDynamicProperties, extractAttributeDictionaries, isGenericDefinitionName, findNameOverride, ParsedDefinition } from './geometry';
 import { buildLocalFaceGroups } from './face-groups';
 import { SkpParseError } from './errors';
 import { ParseOptions, PROGRESS_INTERVAL, emitLog, emitProgress } from './observability';
@@ -268,10 +268,19 @@ export interface Material {
 
 export interface InstanceNode {
   name: string;
+  /** Whether `name` is a synthetic fallback (SketchUp's own internal
+   * index, e.g. "Component_5") rather than a real name from the source
+   * file - see InstancedNode.nameIsGenerated (instanced.ts) for the full
+   * fallback-order rationale; both resolve a node's display name
+   * identically. */
+  nameIsGenerated: boolean;
   definitionName: string;
   layer: string;
   positionMm: [number, number, number];
   properties: Record<string, string>;
+  /** Real SketchUp instance GUID (VFF/2021+ files only), or `''` when the
+   * source file has none - see InstancedNode.guid (instanced.ts). */
+  guid: string;
   children: InstanceNode[];
 }
 
@@ -972,9 +981,11 @@ export function buildSceneFromParsed(
       // legacy instances, so this is a no-op there and the precomputed
       // `properties` seeded above survives unchanged.
       const d007 = inst.children.find((c) => c.tag === 'D007');
+      let attributeDicts: Record<string, Record<string, string>> | null = null;
       if (d007) {
         try {
           properties = extractDynamicProperties(d007, options);
+          attributeDicts = extractAttributeDictionaries(d007, options);
         } catch (e) {
           emitLog(
             options, 'debug',
@@ -1004,9 +1015,26 @@ export function buildSceneFromParsed(
       const ty = (newMatrix[10] ?? 0) * 25.4;
       const tz = (newMatrix[11] ?? 0) * 25.4;
 
+      // Fallback order: an attribute-dict name/label/code override, then
+      // the instance's own explicit name, then the definition's own name
+      // IF it's not itself just SketchUp's auto-generated
+      // "Group#1"/"Component#12" placeholder, then finally the internal
+      // index. Mirrors instanced.ts's identical resolution (and Python's/
+      // C++'s own scene.py/instanced_scene.py) - see
+      // instanced-fixture-parity.test.ts, which depends on both trees
+      // resolving display names identically.
+      const childDefName = defsDict.get(refIdx)?.name || '';
+      const defNameIsReal = !!childDefName && !isGenericDefinitionName(childDefName);
+      const nameOverride = findNameOverride(attributeDicts);
+      const instNameNonEmpty = !!inst.name;
+      const fallbackName = instNameNonEmpty ? inst.name : (defNameIsReal ? childDefName : `Component_${refIdx}`);
+      const displayName = nameOverride ?? fallbackName;
+      const nameIsGenerated = nameOverride === null && !instNameNonEmpty && !defNameIsReal;
+
       const instInfo: InstanceNode = {
-        name: inst.name || '',
-        definitionName: defsDict.get(refIdx)?.name || '',
+        name: displayName,
+        nameIsGenerated,
+        definitionName: childDefName,
         layer: lName,
         positionMm: [
           Math.round(tx * 100) / 100,
@@ -1014,6 +1042,7 @@ export function buildSceneFromParsed(
           Math.round(tz * 100) / 100,
         ],
         properties: properties,
+        guid: inst.refGuid || '',
         children: childNodes,
       };
       childInstancesInfo.push(instInfo);
@@ -1058,10 +1087,12 @@ export function buildSceneFromParsed(
 
   const sceneHierarchy: InstanceNode = {
     name: 'ROOT',
+    nameIsGenerated: false,
     definitionName: 'ROOT_MODEL',
     layer: 'Layer0',
     positionMm: [0, 0, 0],
     properties: {},
+    guid: '',
     children: rootChildren,
   };
 

@@ -1,5 +1,5 @@
 import { multiplyMatrices } from './transforms';
-import { extractDynamicProperties } from './geometry';
+import { extractDynamicProperties, extractAttributeDictionaries, isGenericDefinitionName, findNameOverride } from './geometry';
 import { ParseOptions, PROGRESS_INTERVAL, emitLog, emitProgress } from './observability';
 import { SkpParseError } from './errors';
 import { buildLocalFaceGroups } from './face-groups';
@@ -86,6 +86,13 @@ export interface InstancedMeshResource {
 export interface InstancedNode {
   /** The instance's own name, `''` when unnamed (`'ROOT'` for the root). */
   name: string;
+  /** Whether `name` is a synthetic fallback (SketchUp's own internal
+   * index, e.g. "Component_5") rather than a real name from the source
+   * file - no attribute-dictionary name/label/code override, no explicit
+   * instance name, and no non-generic definition name were found. Lets a
+   * consumer (e.g. Fragments export) avoid presenting a placeholder as if
+   * it were real data. Mirrors Python's/C++'s own field of the same name. */
+  nameIsGenerated: boolean;
   definitionName: string;
   /** Effective layer, with SketchUp's inheritance already resolved. */
   layer: string;
@@ -109,6 +116,13 @@ export interface InstancedNode {
   positionMm: [number, number, number];
   /** Dynamic Component attributes attached to this instance, or `{}`. */
   properties: Record<string, string>;
+  /** Real SketchUp instance GUID (VFF/2021+ files only - legacy pre-2021
+   * files carry no per-instance GUID here), or `''` when the source file
+   * has none. Mirrors Python's/C++'s own field; a consumer keying on this
+   * (e.g. Fragments export) is responsible for its own collision handling -
+   * see openskp#290's rationale in fragments.ts for why a duplicated real
+   * GUID needs the same synthetic-fallback treatment as a missing one. */
+  guid: string;
   /** The mesh resource this node renders, or undefined for a node that
    * only groups children. */
   meshResourceId?: string;
@@ -151,6 +165,11 @@ export interface InstancedScene {
   /** Distinct texture images, deduplicated by source bytes - same as
    * {@link SkpScene.textures}. */
   textures: SceneTexture[];
+  /** The source file's own per-layer visibility (VFF/2021+ only - see
+   * `ParsedRawData.layerHidden`'s own comment on why legacy files default
+   * every layer to visible), read straight from the raw parse. Mirrors
+   * Python's/C++'s own field of the same name. */
+  layerHidden: Record<string, boolean>;
 }
 
 /**
@@ -166,7 +185,7 @@ export function buildInstancedSceneFromParsed(
   options?: ParseOptions & SceneOptions
 ): InstancedScene {
   const t0 = Date.now();
-  const { layerColors, layerIdToName, materialIdToName, materialsMap, materialsByFolder, defsDict } =
+  const { layerColors, layerIdToName, materialIdToName, materialsMap, materialsByFolder, defsDict, layerHidden } =
     parsed;
 
   emitLog(options, 'info', `Building instanced scene: ${defsDict.size} definitions available`);
@@ -445,9 +464,11 @@ export function buildInstancedSceneFromParsed(
       // D007/DC05 TLV walk (VFF only); a no-op for legacy instances, whose
       // precomputed `properties` seeded above survives unchanged.
       const d007 = inst.children.find((c) => c.tag === 'D007');
+      let attributeDicts: Record<string, Record<string, string>> | null = null;
       if (d007) {
         try {
           properties = extractDynamicProperties(d007, options);
+          attributeDicts = extractAttributeDictionaries(d007, options);
         } catch (e) {
           emitLog(
             options, 'debug',
@@ -476,9 +497,27 @@ export function buildInstancedSceneFromParsed(
       const ty = (newMatrix[10] ?? 0) * 25.4;
       const tz = (newMatrix[11] ?? 0) * 25.4;
 
+      // Fallback order: an attribute-dict name/label/code override, then
+      // the instance's own explicit name, then the definition's own name
+      // IF it's not itself just SketchUp's auto-generated
+      // "Group#1"/"Component#12" placeholder, then finally the internal
+      // index - the only case with no real name anywhere in the source
+      // file. Mirrors Python's/C++'s own instanced_scene name resolution
+      // exactly, and model.ts's buildSceneFromParsed's identical
+      // resolution - see instanced-fixture-parity.test.ts, which depends
+      // on both trees resolving display names identically.
+      const childDefName = defsDict.get(refIdx)?.name || '';
+      const defNameIsReal = !!childDefName && !isGenericDefinitionName(childDefName);
+      const nameOverride = findNameOverride(attributeDicts);
+      const instNameNonEmpty = !!inst.name;
+      const fallbackName = instNameNonEmpty ? inst.name : (defNameIsReal ? childDefName : `Component_${refIdx}`);
+      const displayName = nameOverride ?? fallbackName;
+      const nameIsGenerated = nameOverride === null && !instNameNonEmpty && !defNameIsReal;
+
       nodes.push({
-        name: inst.name || '',
-        definitionName: defsDict.get(refIdx)?.name || '',
+        name: displayName,
+        nameIsGenerated,
+        definitionName: childDefName,
         layer: lName,
         matrix: toGltfMatrix(inst.matrix),
         positionMm: [
@@ -487,6 +526,7 @@ export function buildInstancedSceneFromParsed(
           Math.round(tz * 100) / 100,
         ],
         properties,
+        guid: inst.refGuid || '',
         meshResourceId: meshResourceFor(refIdx, instMaterial, lName),
         children,
       });
@@ -505,11 +545,13 @@ export function buildInstancedSceneFromParsed(
 
   const sceneHierarchy: InstancedNode = {
     name: 'ROOT',
+    nameIsGenerated: false,
     definitionName: 'ROOT_MODEL',
     layer: 'Layer0',
     matrix: [...IDENTITY_GLTF],
     positionMm: [0, 0, 0],
     properties: {},
+    guid: '',
     meshResourceId: rootMeshResourceId,
     children: rootChildren,
   };
@@ -601,5 +643,5 @@ export function buildInstancedSceneFromParsed(
       `${meshResources.length} mesh resources (${((Date.now() - t0) / 1000).toFixed(2)}s)`
   );
 
-  return { sceneHierarchy, meshResources, gltfMaterials, textures, bounds };
+  return { sceneHierarchy, meshResources, gltfMaterials, textures, bounds, layerHidden: Object.fromEntries(layerHidden) };
 }

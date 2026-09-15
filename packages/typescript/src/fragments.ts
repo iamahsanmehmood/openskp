@@ -50,7 +50,11 @@ interface Leaf {
  * Walk the instanced scene's tree, accumulating each node's GLOBAL (world)
  * transform, and return every node worth tracking as its own item - a leaf
  * carrying geometry or a named organizational wrapper with no geometry.
- * Mirrors Python's and C++'s collect_leaves exactly.
+ * Mirrors Python's and C++'s collect_leaves exactly, using the real
+ * nameIsGenerated flag (InstancedNode now carries it - see instanced.ts) -
+ * not an approximation of "has some non-empty name", which over-tracks
+ * every node that only ever got a synthetic "Component_N"/definition-name
+ * fallback, not a real one.
  */
 function collectLeaves(
   node: InstancedNode,
@@ -59,7 +63,7 @@ function collectLeaves(
   out: Leaf[]
 ): void {
   const world = multiplyMatrices(parentMatrix, node.matrix);
-  const isNamedWrapper = node !== root && Boolean(node.name && node.name !== '' && node.name !== 'ROOT');
+  const isNamedWrapper = node !== root && !node.nameIsGenerated;
   if (node.meshResourceId !== undefined || isNamedWrapper) {
     out.push({ node, world });
   }
@@ -347,6 +351,12 @@ export function toFragments(
   const categories: string[] = [];
   const names: string[] = [];
   const guids: string[] = [];
+  // GUIDs of items whose name is a fallback this project generated (no
+  // real name anywhere in the source file), not something a person or
+  // plugin actually named - see InstancedNode.nameIsGenerated. Carried in
+  // Model.metadata below, same mechanism as layerHidden, since the public
+  // Fragments schema has no field for this either.
+  const generatedNameGuids: string[] = [];
   const sampleMaterial: number[] = [];
   const sampleRepresentation: number[] = [];
   const meshesItems: number[] = [];
@@ -356,6 +366,14 @@ export function toFragments(
     yDir: [number, number, number];
   }[] = [];
   const itemIndexByNode = new Map<InstancedNode, number>();
+  // Real-world SketchUp files can carry a non-unique per-instance GUID:
+  // SketchUp's own native Copy/Move+Copy/Array tools carry an instance's
+  // attribute dictionaries - and whatever GUID a plugin wrote into one - to
+  // every copy verbatim, so several DIFFERENT physical instances can share
+  // the exact same non-empty InstancedNode.guid (openskp#290). The first
+  // instance to claim a real GUID keeps it; every later instance sharing
+  // that same value falls back to a synthetic one instead of silently
+  // colliding. Mirrors Python's/C++'s own seenGuids handling exactly.
   const seenGuids = new Set<string>();
 
   for (let itemIndex = 0; itemIndex < leaves.length; itemIndex++) {
@@ -371,11 +389,12 @@ export function toFragments(
     categories.push(node.layer || 'Layer0');
     names.push(node.name || '');
 
-    const rawGuid = (node as any).guid || '';
+    const rawGuid = node.guid || '';
     const itemGuid =
       rawGuid && !seenGuids.has(rawGuid) ? rawGuid : `openskp-${itemIndex}`;
     seenGuids.add(itemGuid);
     guids.push(itemGuid);
+    if (node.nameIsGenerated) generatedNameGuids.push(itemGuid);
 
     itemIndexByNode.set(node, itemIndex);
 
@@ -510,8 +529,8 @@ export function toFragments(
 
   const metadataOff = builder.createString(
     JSON.stringify({
-      layer_hidden: (scene as any).layerHidden || {},
-      generated_name_guids: [],
+      layer_hidden: scene.layerHidden || {},
+      generated_name_guids: generatedNameGuids,
     })
   );
 

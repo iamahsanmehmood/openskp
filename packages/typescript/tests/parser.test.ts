@@ -3,7 +3,16 @@ import { validateHeader, readVersion } from '../src/vff';
 import { readU32, readF64, parseVarInt, parseTlvRecursive } from '../src/parser';
 import { transformPoint, multiplyMatrices, isIdentity } from '../src/transforms';
 import { computeFaceNormal, triangulateFace3D } from '../src/triangulator';
-import { GeometryBuilder, extractGeometryFromNodes, extractUvTransforms, collectDefs, parseMaterialXml } from '../src/geometry';
+import {
+  GeometryBuilder,
+  extractGeometryFromNodes,
+  extractUvTransforms,
+  collectDefs,
+  parseMaterialXml,
+  extractAttributeDictionaries,
+  isGenericDefinitionName,
+  findNameOverride,
+} from '../src/geometry';
 
 /** Build a single TLV element: 2-byte tag (hex) + 4-byte LE size + payload. */
 function tlv(tagHex: string, payload: Uint8Array): Uint8Array {
@@ -405,5 +414,80 @@ describe('Section plane, text entity, and dimension defaults', () => {
     expect(builder.sectionPlanes).toEqual([]);
     expect(builder.texts).toEqual([]);
     expect(builder.dimensions).toEqual([]);
+  });
+});
+
+describe('extractAttributeDictionaries - dictionary-name-aware TLV walk (openskp#254/#285)', () => {
+  // Real B436(name)/B536(entries) dictionary-boundary shape - the TLV
+  // structure extractAttributeDictionaries needs but extractDynamicProperties
+  // never required, since it flattens regardless of dictionary boundaries.
+  // Confirmed byte-for-byte against a real FrameBuilder-authored production
+  // file (see Python's TestVffAttributeDictionaries for the full
+  // verification history this mirrors).
+  const enc = (s: string) => new TextEncoder().encode(s);
+
+  function entry(key: string, value: string): Uint8Array {
+    return concatBytes(tlv('B636', enc(key)), tlv('A438', tlv('AD38', enc(value))));
+  }
+
+  function namedDict(name: string, entriesBytes: Uint8Array): Uint8Array {
+    return concatBytes(tlv('B436', enc(name)), tlv('B536', entriesBytes));
+  }
+
+  function makeD007(dc05Payload: Uint8Array): ReturnType<typeof parseTlvRecursive>[number] {
+    const bytes = tlv('D007', tlv('DC05', dc05Payload));
+    const elements = parseTlvRecursive(bytes, 0, bytes.length);
+    return elements[0];
+  }
+
+  it('groups entries by their dictionary name', () => {
+    const d007 = makeD007(namedDict('fbd-einfo', entry('code', 'Ks')));
+    const dicts = extractAttributeDictionaries(d007);
+    expect(dicts['fbd-einfo']).toEqual({ code: 'Ks' });
+  });
+
+  it('keeps two dictionaries distinct', () => {
+    const dc05 = concatBytes(
+      namedDict('dynamic_attributes', entry('width', '10')),
+      namedDict('FrameBuilder', entry('name', 'W-2'))
+    );
+    const dicts = extractAttributeDictionaries(makeD007(dc05));
+    expect(dicts['dynamic_attributes']).toEqual({ width: '10' });
+    expect(dicts['FrameBuilder']).toEqual({ name: 'W-2' });
+    expect(dicts['dynamic_attributes']['name']).toBeUndefined();
+  });
+
+  it('returns {} when there is no DC05 child', () => {
+    const d007Bytes = tlv('D007', new Uint8Array(0));
+    const elements = parseTlvRecursive(d007Bytes, 0, d007Bytes.length);
+    expect(extractAttributeDictionaries(elements[0])).toEqual({});
+  });
+});
+
+describe('isGenericDefinitionName', () => {
+  it.each([
+    ['Group#1', true],
+    ['Component#12', true],
+    ['W-2', false],
+    ['Truss1', false],
+    ['', false],
+  ])('%s -> %s', (name, expected) => {
+    expect(isGenericDefinitionName(name)).toBe(expected);
+  });
+});
+
+describe('findNameOverride', () => {
+  it('skips dynamic_attributes and SU_InstanceSet', () => {
+    const dicts = {
+      dynamic_attributes: { name: 'should-be-ignored' },
+      SU_InstanceSet: { label: 'also-ignored' },
+      FrameBuilder: { name: 'W-2' },
+    };
+    expect(findNameOverride(dicts)).toBe('W-2');
+  });
+
+  it('returns null when no override is present', () => {
+    expect(findNameOverride(null)).toBeNull();
+    expect(findNameOverride({ dynamic_attributes: { width: '10' } })).toBeNull();
   });
 });
