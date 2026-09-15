@@ -37,13 +37,15 @@ byte[] fragBytes = FragmentsExport.ToFragments(scene);
 
 Export only (no `.frag` → `InstancedScene` reader yet), matching the
 [TypeScript port](https://github.com/iamahsanmehmood/openskp/tree/main/packages/typescript)'s
-own scope, not Python's/C++'s fuller read+write one. It also matches
-TypeScript's own GUID/layer-hidden fidelity: `InstancedNode`/`InstancedScene`
-in the core `OpenSkp` package don't carry a per-instance source GUID, a
-generated-name flag, or the source file's layer-hidden state yet, so every
-exported item's GUID is a stable synthetic `"openskp-{itemIndex}"` and
-`metadata.layer_hidden` is always empty — real, honestly-scoped gaps versus
-Python/C++, not bugs in this port.
+own scope, not Python's/C++'s fuller read+write one (TypeScript has no read
+side either — not a gap unique to .NET). GUID/name-is-generated/layer-hidden
+fidelity matches Python's/C++'s in full: `InstancedNode`/`InstancedScene` in
+the core `OpenSkp` package carry real per-instance source GUIDs (from the
+source file's own attribute dictionaries), a generated-name flag, and the
+source file's real per-layer visibility state — a duplicated real GUID
+(openskp#290 — SketchUp's own Copy/Array tools can carry one plugin-authored
+GUID to several distinct physical instances) gets the same synthetic-
+fallback treatment as a missing one, so IDs stay unique either way.
 
 Non-uniform scale and mirrored (negative-determinant) instance transforms
 ARE fully supported: Fragments' `Transform` struct has no scale field at

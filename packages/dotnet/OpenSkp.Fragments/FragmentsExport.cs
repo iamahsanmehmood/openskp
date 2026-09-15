@@ -17,17 +17,14 @@ namespace OpenSkp.Fragments
     /// ThatOpen Fragments schema (<c>_fragments_fb/index.fbs</c>).
     ///
     /// EXPORT ONLY, matching the TypeScript port (#276) - not Python's or
-    /// C++'s read side. It also matches TypeScript's own GUID/layer-hidden
-    /// fidelity rather than Python's/C++'s fuller one: <see cref="InstancedNode"/>
-    /// in this package doesn't carry a per-instance source GUID or a
-    /// generated-name flag yet (openskp#290's fix is Python/C++-only so
-    /// far), and <see cref="InstancedScene"/> doesn't carry the source
-    /// file's layer-hidden state either - confirmed by reading both types
-    /// directly, not assumed. So here, same as TypeScript: every item's
-    /// GUID is a stable synthetic <c>"openskp-{itemIndex}"</c>, and the
-    /// exported <c>metadata.layer_hidden</c> is always empty. Both are
-    /// real, honestly-scoped gaps versus Python/C++, not bugs in this
-    /// port - closing them is separate backlog (openskp#285).
+    /// C++'s read side (TypeScript has no read side either; this is a
+    /// smaller, still-open gap, not unique to .NET). GUID/name-is-generated/
+    /// layer-hidden fidelity now matches Python's/C++'s in full:
+    /// <see cref="InstancedNode"/>/<see cref="InstancedScene"/> carry real
+    /// per-instance source GUIDs, a generated-name flag, and the source
+    /// file's layer-hidden state (openskp#290's fix, ported here too - see
+    /// InstancedScene.cs's own name-resolution and Geometry.cs's
+    /// ExtractAttributeDictionaries in the core OpenSkp package).
     ///
     /// Ships as its own package (rather than living in the core OpenSkp
     /// package) because it needs Google.FlatBuffers - the core package has
@@ -89,19 +86,13 @@ namespace OpenSkp.Fragments
         // own item - a leaf carrying geometry, OR a real, named
         // organizational wrapper with no geometry of its own (e.g. a
         // SketchUp group like "W-2" that only exists to hold several
-        // separately-meshed parts). Mirrors Python's/C++'s/TypeScript's own
-        // collect_leaves/collectLeaves - see Python's docstring for the
-        // full rationale.
-        //
-        // "Named wrapper" here uses TypeScript's own approximation (a
-        // non-empty name that isn't the literal "ROOT"), not Python's/C++'s
-        // stricter `!name_is_generated` check - InstancedNode in this
-        // package has no such flag to check (see this class's own header
-        // comment).
+        // separately-meshed parts). Mirrors Python's/C++'s own
+        // collect_leaves exactly, using the real NameIsGenerated flag - see
+        // Python's docstring for the full rationale.
         private static void CollectLeaves(InstancedNode node, InstancedNode root, double[] parentMatrix, List<Leaf> outLeaves)
         {
             var world = Mat4Mul(parentMatrix, node.Matrix);
-            bool isNamedWrapper = !ReferenceEquals(node, root) && !string.IsNullOrEmpty(node.Name) && node.Name != "ROOT";
+            bool isNamedWrapper = !ReferenceEquals(node, root) && !node.NameIsGenerated;
             if (node.MeshResourceId != null || isNamedWrapper)
             {
                 outLeaves.Add(new Leaf { Node = node, World = world });
@@ -291,13 +282,19 @@ namespace OpenSkp.Fragments
         private static string NameAttributeJson(string name) =>
             "[\"Name\"," + JsonString(name) + ",\"STRING\"]";
 
-        private static string MetadataJson()
+        // The source file's own per-layer visibility has no equivalent
+        // field anywhere in the Fragments schema itself - visibility is a
+        // runtime/viewer concern there, not a persisted one. metadata is
+        // the schema's own general-purpose "JSON string for generic data
+        // about the file" field - exactly the right place for a consuming
+        // viewer to recover this and apply it on load. Matches Python's/
+        // C++'s own metadata shape exactly.
+        private static string MetadataJson(Dictionary<string, bool> layerHidden, List<string> generatedNameGuids)
         {
-            // layer_hidden is always empty and generated_name_guids is
-            // always empty here - see this class's own header comment for
-            // why (InstancedScene/InstancedNode in this package don't
-            // carry that data yet).
-            return "{\"layer_hidden\":{},\"generated_name_guids\":[]}";
+            var layerHiddenJson = string.Join(",", layerHidden.Select(kv =>
+                JsonString(kv.Key) + ":" + (kv.Value ? "true" : "false")));
+            var generatedGuidsJson = string.Join(",", generatedNameGuids.Select(JsonString));
+            return "{\"layer_hidden\":{" + layerHiddenJson + "},\"generated_name_guids\":[" + generatedGuidsJson + "]}";
         }
 
         // RFC 1950 (zlib) wrapper around .NET's own raw DEFLATE
@@ -480,11 +477,33 @@ namespace OpenSkp.Fragments
             var categories = new List<string>();
             var names = new List<string>();
             var guids = new List<string>();
+            // GUIDs of items whose Name is a fallback this project generated
+            // (no real name anywhere in the source file), not something a
+            // person or plugin actually named - see
+            // InstancedNode.NameIsGenerated. Carried in Model.metadata below,
+            // same mechanism as layer_hidden, since the public Fragments
+            // schema has no field for this either.
+            var generatedNameGuids = new List<string>();
             var sampleMaterial = new List<int>();
             var sampleRepresentation = new List<int>();
             var meshesItems = new List<uint>();
             var globalTransformData = new List<Trs>();
             var itemIndexByNode = new Dictionary<InstancedNode, uint>();
+
+            // Real-world SketchUp files can carry a non-unique per-instance
+            // GUID: an engineer authors one instance (a framing plugin
+            // writes its own identity into that instance's attribute
+            // dictionary), then duplicates it 10-20 times via SketchUp's own
+            // native Copy/Move+Copy/Array tools instead of re-running the
+            // plugin per placement. A plain SketchUp entity duplication
+            // carries the source instance's attribute dictionaries - and
+            // whatever GUID field a plugin wrote into one - to every copy
+            // verbatim; each copy gets its own distinct transform but not
+            // its own distinct identity (openskp#290). The first instance to
+            // claim a real GUID keeps it; every later instance sharing that
+            // same value falls back to a synthetic one instead. Mirrors
+            // Python's/C++'s own seen_guids handling exactly.
+            var seenGuids = new HashSet<string>();
 
             for (int itemIndex = 0; itemIndex < leaves.Count; itemIndex++)
             {
@@ -506,8 +525,13 @@ namespace OpenSkp.Fragments
                 localIds.Add((uint)itemIndex);
                 categories.Add(string.IsNullOrEmpty(node.Layer) ? "Layer0" : node.Layer);
                 names.Add(node.Name ?? "");
-                // Always synthetic - see this class's own header comment.
-                guids.Add($"openskp-{itemIndex}");
+                string rawGuid = node.Guid ?? "";
+                string itemGuid = (!string.IsNullOrEmpty(rawGuid) && !seenGuids.Contains(rawGuid))
+                    ? rawGuid
+                    : $"openskp-{itemIndex}";
+                seenGuids.Add(itemGuid);
+                guids.Add(itemGuid);
+                if (node.NameIsGenerated) generatedNameGuids.Add(itemGuid);
                 itemIndexByNode[node] = (uint)itemIndex;
 
                 if (res != null)
@@ -630,7 +654,7 @@ namespace OpenSkp.Fragments
             }
             var attributesVec = Fb.Model.CreateAttributesVector(builder, attributeOffsets.ToArray());
 
-            var metadataOff = builder.CreateString(MetadataJson());
+            var metadataOff = builder.CreateString(MetadataJson(scene.LayerHidden, generatedNameGuids));
 
             // Spatial structure: one SpatialStructure node per
             // InstancedNode in the ORIGINAL tree (not just leaves), so real

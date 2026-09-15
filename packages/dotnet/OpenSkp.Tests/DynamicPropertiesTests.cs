@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text;
 using Xunit;
 using OpenSkp;
@@ -124,6 +125,104 @@ namespace OpenSkp.Tests
             var dc05 = new TlvNode { Tag = "DC05", Payload = Array.Empty<byte>() };
             var d007 = new TlvNode { Tag = "D007", Children = new List<TlvNode> { dc05 } };
             Assert.Empty(Geometry.ExtractDynamicProperties(d007));
+        }
+
+        // Real B436(name)/B536(entries) dictionary-boundary shape - the
+        // TLV structure ExtractAttributeDictionaries needs but
+        // ExtractDynamicProperties above never required, since it flattens
+        // regardless of dictionary boundaries. Confirmed byte-for-byte
+        // against a real FrameBuilder-authored production file (see
+        // Python's TestVffAttributeDictionaries for the full verification
+        // history this mirrors).
+        private static TlvNode MakeD007WithNamedDictionary(string dictName, params (string Key, string Value)[] entries)
+        {
+            var entriesPayload = new List<byte>();
+            foreach (var (key, value) in entries)
+            {
+                entriesPayload.AddRange(Tlv("B636", Encoding.UTF8.GetBytes(key)));
+                entriesPayload.AddRange(Tlv("A438", Tlv("AD38", Encoding.UTF8.GetBytes(value))));
+            }
+            var dc05Payload = new List<byte>();
+            dc05Payload.AddRange(Tlv("B436", Encoding.UTF8.GetBytes(dictName)));
+            dc05Payload.AddRange(Tlv("B536", entriesPayload.ToArray()));
+            var dc05 = new TlvNode { Tag = "DC05", Payload = dc05Payload.ToArray() };
+            return new TlvNode { Tag = "D007", Children = new List<TlvNode> { dc05 } };
+        }
+
+        [Fact]
+        public void ExtractAttributeDictionaries_GroupsEntriesByDictionaryName()
+        {
+            var d007 = MakeD007WithNamedDictionary("fbd-einfo", ("code", "Ks"));
+
+            var dicts = Geometry.ExtractAttributeDictionaries(d007);
+
+            Assert.Equal(new Dictionary<string, string> { ["code"] = "Ks" }, dicts["fbd-einfo"]);
+        }
+
+        [Fact]
+        public void ExtractAttributeDictionaries_TwoDictionariesStayDistinct()
+        {
+            var widthEntry = new List<byte>();
+            widthEntry.AddRange(Tlv("B636", Encoding.UTF8.GetBytes("width")));
+            widthEntry.AddRange(Tlv("A438", Tlv("AD38", Encoding.UTF8.GetBytes("10"))));
+
+            var nameEntry = new List<byte>();
+            nameEntry.AddRange(Tlv("B636", Encoding.UTF8.GetBytes("name")));
+            nameEntry.AddRange(Tlv("A438", Tlv("AD38", Encoding.UTF8.GetBytes("W-2"))));
+
+            var dc05Payload = new List<byte>();
+            dc05Payload.AddRange(Tlv("B436", Encoding.UTF8.GetBytes("dynamic_attributes")));
+            dc05Payload.AddRange(Tlv("B536", widthEntry.ToArray()));
+            dc05Payload.AddRange(Tlv("B436", Encoding.UTF8.GetBytes("FrameBuilder")));
+            dc05Payload.AddRange(Tlv("B536", nameEntry.ToArray()));
+            var dc05 = new TlvNode { Tag = "DC05", Payload = dc05Payload.ToArray() };
+            var d007 = new TlvNode { Tag = "D007", Children = new List<TlvNode> { dc05 } };
+
+            var dicts = Geometry.ExtractAttributeDictionaries(d007);
+
+            Assert.Equal("10", dicts["dynamic_attributes"]["width"]);
+            Assert.Equal("W-2", dicts["FrameBuilder"]["name"]);
+            Assert.False(dicts["dynamic_attributes"].ContainsKey("name"));
+        }
+
+        [Fact]
+        public void ExtractAttributeDictionaries_ReturnsEmptyWhenNoDc05Child()
+        {
+            var d007 = new TlvNode { Tag = "D007", Children = new List<TlvNode>() };
+            Assert.Empty(Geometry.ExtractAttributeDictionaries(d007));
+        }
+
+        [Theory]
+        [InlineData("Group#1", true)]
+        [InlineData("Component#12", true)]
+        [InlineData("W-2", false)]
+        [InlineData("Truss1", false)]
+        [InlineData("", false)]
+        public void IsGenericDefinitionName_MatchesSketchUpsOwnPlaceholderPattern(string name, bool expected)
+        {
+            Assert.Equal(expected, Geometry.IsGenericDefinitionName(name));
+        }
+
+        [Fact]
+        public void FindNameOverride_SkipsDynamicAttributesAndSuInstanceSet()
+        {
+            var dicts = new Dictionary<string, Dictionary<string, string>>
+            {
+                ["dynamic_attributes"] = new Dictionary<string, string> { ["name"] = "should-be-ignored" },
+                ["SU_InstanceSet"] = new Dictionary<string, string> { ["label"] = "also-ignored" },
+                ["FrameBuilder"] = new Dictionary<string, string> { ["name"] = "W-2" },
+            };
+            Assert.Equal("W-2", Geometry.FindNameOverride(dicts));
+        }
+
+        [Fact]
+        public void FindNameOverride_ReturnsNullWhenNoOverridePresent()
+        {
+            Assert.Null(Geometry.FindNameOverride(null));
+            Assert.Null(Geometry.FindNameOverride(new Dictionary<string, Dictionary<string, string>>
+            {
+                ["dynamic_attributes"] = new Dictionary<string, string> { ["width"] = "10" },
+            }));
         }
 
         [Fact]

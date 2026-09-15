@@ -11,12 +11,12 @@ namespace OpenSkp.Fragments.Tests
 {
     /// <summary>Direct SKP -&gt; Fragments (.frag) export - C# port of
     /// Python's <c>openskp.export.fragments</c> (openskp#285/#276). See
-    /// that module's own tests (<c>packages/python/tests/test_fragments.py</c>)
+    /// that module's own tests (<c>packages/python/tests/test_fragments.py</c>),
+    /// the C++ port's (<c>packages/cpp/tests/fragments_export_test.cpp</c>),
     /// and the TypeScript port's (<c>packages/typescript/tests/fragments.test.ts</c>)
-    /// for the reference coverage this file mirrors - export-only, and
-    /// matching TypeScript's own GUID/layer-hidden fidelity rather than
-    /// Python's/C++'s fuller one (see FragmentsExport's own header
-    /// comment).</summary>
+    /// for the reference coverage this file mirrors - export-only, matching
+    /// Python's/C++'s full GUID/name-is-generated/layer-hidden fidelity
+    /// (see FragmentsExport's own header comment).</summary>
     public class FragmentsExportTests
     {
         private static readonly double[] Identity =
@@ -49,11 +49,12 @@ namespace OpenSkp.Fragments.Tests
             };
         }
 
-        private static InstancedNode MakeLeaf(string name, string meshResourceId, double[]? matrix = null) => new InstancedNode
+        private static InstancedNode MakeLeaf(string name, string meshResourceId, double[]? matrix = null, string? guid = null) => new InstancedNode
         {
             Name = name,
             Matrix = matrix ?? Identity,
             MeshResourceId = meshResourceId,
+            Guid = guid ?? "",
         };
 
         private static Fb.Model ParseRaw(byte[] raw) => Fb.Model.GetRootAsModel(new Google.FlatBuffers.ByteBuffer(raw));
@@ -164,6 +165,186 @@ namespace OpenSkp.Fragments.Tests
             Assert.Equal(1, model.GuidsLength);
             Assert.Equal(1, model.GuidsItemsLength);
             Assert.Equal(model.LocalIds(0), model.GuidsItems(0));
+        }
+
+        [Fact]
+        public void ItemsWithoutASourceGuidGetAUniqueSyntheticOne()
+        {
+            var scene = new InstancedScene
+            {
+                MeshResources = new List<InstancedMeshResource> { MakeBoxResource("mesh_0") },
+                GltfMaterials = new List<object> { new Dictionary<string, object>() },
+                SceneHierarchy = new InstancedNode
+                {
+                    Name = "ROOT",
+                    Matrix = Identity,
+                    Children = new List<InstancedNode> { MakeLeaf("Box1", "mesh_0"), MakeLeaf("Box2", "mesh_0") },
+                },
+            };
+
+            var raw = FragmentsExport.ToFragments(scene, raw: true);
+            var model = ParseRaw(raw);
+            var guids = new HashSet<string>();
+            for (int i = 0; i < model.GuidsLength; i++)
+            {
+                var g = model.Guids(i);
+                Assert.NotNull(g);
+                Assert.NotEmpty(g!);
+                guids.Add(g!);
+            }
+            Assert.Equal(model.GuidsLength, guids.Count);
+        }
+
+        [Fact]
+        public void ARealSourceGuidIsPreservedExactly()
+        {
+            const string realGuid = "F160C36229782F47A9857FC88DD1F2CB";
+            var scene = new InstancedScene
+            {
+                MeshResources = new List<InstancedMeshResource> { MakeBoxResource("mesh_0") },
+                GltfMaterials = new List<object> { new Dictionary<string, object>() },
+                SceneHierarchy = new InstancedNode
+                {
+                    Name = "ROOT",
+                    Matrix = Identity,
+                    Children = new List<InstancedNode> { MakeLeaf("Box", "mesh_0", guid: realGuid) },
+                },
+            };
+
+            var raw = FragmentsExport.ToFragments(scene, raw: true);
+            var model = ParseRaw(raw);
+            Assert.Equal(1, model.GuidsLength);
+            Assert.Equal(realGuid, model.Guids(0));
+        }
+
+        // openskp#290: SketchUp's own native Copy/Move+Copy/Array tools
+        // carry an instance's attribute dictionaries - and whatever GUID a
+        // framing plugin wrote into one - to every copy verbatim, so a real
+        // file can have several DIFFERENT physical instances all sharing the
+        // exact same non-empty InstancedNode.Guid. The first instance to
+        // claim a real GUID keeps it; every later instance sharing that same
+        // value must fall back to a synthetic one instead of silently
+        // colliding. Mirrors Python's/C++'s own equivalent test exactly.
+        [Fact]
+        public void ADuplicatedSourceGuidDoesNotCollide()
+        {
+            const string duplicatedGuid = "F160C36229782F47A9857FC88DD1F2CB";
+            var root = new InstancedNode { Name = "ROOT", Matrix = Identity, Children = new List<InstancedNode>() };
+            for (int i = 0; i < 3; i++)
+            {
+                root.Children.Add(MakeLeaf($"Truss{i}", "mesh_0", guid: duplicatedGuid));
+            }
+            var scene = new InstancedScene
+            {
+                MeshResources = new List<InstancedMeshResource> { MakeBoxResource("mesh_0") },
+                GltfMaterials = new List<object> { new Dictionary<string, object>() },
+                SceneHierarchy = root,
+            };
+
+            var raw = FragmentsExport.ToFragments(scene, raw: true);
+            var model = ParseRaw(raw);
+            Assert.Equal(3, model.GuidsLength);
+
+            var guids = new List<string>();
+            int realGuidCount = 0;
+            for (int i = 0; i < 3; i++)
+            {
+                var g = model.Guids(i)!;
+                guids.Add(g);
+                if (g == duplicatedGuid) realGuidCount++;
+            }
+            Assert.Equal(3, guids.Distinct().Count());
+            Assert.Equal(1, realGuidCount);
+        }
+
+        [Fact]
+        public void NamedWrapperWithNoGeometryGetsATrackedItem()
+        {
+            // A named organizational wrapper (NameIsGenerated = false, the
+            // real-name case) with no geometry of its own must still become
+            // a tracked item with its own local_id/Name/GUID; a generic,
+            // auto-generated wrapper (NameIsGenerated = true) must not -
+            // matches CollectLeaves' use of the real flag (not TypeScript's
+            // "non-empty name" heuristic .NET briefly used before
+            // InstancedNode gained NameIsGenerated).
+            var child = MakeLeaf("Stud1", "mesh_0");
+            var wrapper = new InstancedNode { Name = "W-2", NameIsGenerated = false, Matrix = Identity, Children = new List<InstancedNode> { child } };
+
+            var genericChild = MakeLeaf("Stud2", "mesh_0");
+            var genericWrapper = new InstancedNode { Name = "Component_5", NameIsGenerated = true, Matrix = Identity, Children = new List<InstancedNode> { genericChild } };
+
+            var root = new InstancedNode { Name = "ROOT", Matrix = Identity, Children = new List<InstancedNode> { wrapper, genericWrapper } };
+            var scene = new InstancedScene
+            {
+                MeshResources = new List<InstancedMeshResource> { MakeBoxResource("mesh_0") },
+                GltfMaterials = new List<object> { new Dictionary<string, object>() },
+                SceneHierarchy = root,
+            };
+
+            var raw = FragmentsExport.ToFragments(scene, raw: true);
+            var model = ParseRaw(raw);
+            // wrapper (W-2, named, no geometry) + Stud1 + Stud2 = 3 tracked
+            // items; genericWrapper itself (NameIsGenerated) is NOT tracked.
+            Assert.Equal(3, model.LocalIdsLength);
+
+            bool foundW2 = false;
+            for (int i = 0; i < model.AttributesLength; i++)
+            {
+                var attr = model.Attributes(i)!.Value;
+                for (int j = 0; j < attr.DataLength; j++)
+                {
+                    if (attr.Data(j).Contains("W-2")) foundW2 = true;
+                }
+            }
+            Assert.True(foundW2, "the named wrapper's own real name must reach the exported Attribute data");
+        }
+
+        [Fact]
+        public void MetadataCarriesTheSourceFilesLayerHiddenState()
+        {
+            var scene = new InstancedScene
+            {
+                MeshResources = new List<InstancedMeshResource> { MakeBoxResource("mesh_0") },
+                GltfMaterials = new List<object> { new Dictionary<string, object>() },
+                SceneHierarchy = new InstancedNode
+                {
+                    Name = "ROOT",
+                    Matrix = Identity,
+                    Children = new List<InstancedNode> { MakeLeaf("Box1", "mesh_0") },
+                },
+                LayerHidden = new Dictionary<string, bool> { ["Layer0"] = false, ["wall_cladding"] = true },
+            };
+
+            var raw = FragmentsExport.ToFragments(scene, raw: true);
+            var model = ParseRaw(raw);
+            Assert.Contains("\"wall_cladding\":true", model.Metadata);
+            Assert.Contains("\"Layer0\":false", model.Metadata);
+        }
+
+        [Fact]
+        public void GeneratedNameGuidsAreListedInMetadata()
+        {
+            var scene = new InstancedScene
+            {
+                MeshResources = new List<InstancedMeshResource> { MakeBoxResource("mesh_0") },
+                GltfMaterials = new List<object> { new Dictionary<string, object>() },
+                SceneHierarchy = new InstancedNode
+                {
+                    Name = "ROOT",
+                    Matrix = Identity,
+                    Children = new List<InstancedNode>
+                    {
+                        new InstancedNode { Name = "Component_7", NameIsGenerated = true, Matrix = Identity, MeshResourceId = "mesh_0" },
+                    },
+                },
+            };
+
+            var raw = FragmentsExport.ToFragments(scene, raw: true);
+            var model = ParseRaw(raw);
+            Assert.Equal(1, model.GuidsLength);
+            var guid = model.Guids(0)!;
+            Assert.Contains(guid, model.Metadata);
+            Assert.Contains("generated_name_guids", model.Metadata);
         }
 
         [Fact]
@@ -383,7 +564,7 @@ namespace OpenSkp.Fragments.Tests
         }
 
         [Fact]
-        public void MetadataIsAlwaysPresentAsAnEmptyLayerHiddenObject()
+        public void MetadataPresentEvenWithNoHiddenLayers()
         {
             var scene = new InstancedScene
             {

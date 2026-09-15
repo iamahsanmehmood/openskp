@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO.Compression;
 using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Xml.Linq;
 
 namespace OpenSkp
@@ -41,6 +42,15 @@ namespace OpenSkp
         /// (via ExtractDynamicProperties on this instance's own D007/DC05
         /// children).</summary>
         public Dictionary<string, string>? Properties;
+
+        /// <summary>Every attribute dictionary attached to this instance
+        /// (VFF only), keyed by the dictionary's own declared name, not just
+        /// the one "dynamic_attributes" dictionary Properties above covers -
+        /// see Geometry.ExtractAttributeDictionaries. Populated eagerly at
+        /// the same site as Properties, for the same reason (name-override
+        /// resolution in InstancedScene.cs needs to inspect whichever OTHER
+        /// dictionary a third-party plugin wrote, e.g. "FrameBuilder").</summary>
+        public Dictionary<string, Dictionary<string, string>>? AttributeDicts;
     }
 
     /// <summary>Accumulates the raw geometry extracted for one component
@@ -166,6 +176,100 @@ namespace OpenSkp
             "DD05", "B536", "B136", "B236", "B336", "B036", "A438",
         };
 
+        /// <summary>Extract EVERY attribute dictionary attached to a D007
+        /// container node, keyed by the dictionary's own declared name (tag
+        /// B436) rather than merged into one flat dict - mirrors Python's
+        /// <c>_core.extract_attribute_dictionaries</c> exactly (openskp#254).
+        /// String values only (tag AD38) - the other 8 VFF attribute value
+        /// types Python's own <c>_decode_vff_attr_value</c> decodes are not
+        /// read here yet (openskp#285's separate "full 9-value-type support"
+        /// backlog item, not touched by this).
+        ///
+        /// Each dictionary is a B436 (name) node immediately followed by a
+        /// sibling entries container (typically B536) holding that
+        /// dictionary's own B636 (key name) / AD38 (string value) pairs.
+        /// Returns an empty dict when the entity carries no DC05 subtree at
+        /// all.</summary>
+        public static Dictionary<string, Dictionary<string, string>> ExtractAttributeDictionaries(TlvNode d007)
+        {
+            var dictionaries = new Dictionary<string, Dictionary<string, string>>();
+            var dc05 = d007.Children.FirstOrDefault(c => c.Tag == "DC05");
+            if (dc05 == null) return dictionaries;
+            var buffer = ChunkedBuffer.FromArray(dc05.Payload);
+            var propElements = Tlv.ParseRecursive(buffer, 0, buffer.Length, PropContainerTags);
+
+            // currentKey lives OUTSIDE ExtractEntries (reset per dictionary
+            // by Walk below, right before each call) rather than as a local
+            // inside it - a B636/AD38 pair is often split across recursion
+            // levels (B636 as a direct sibling, AD38 nested one level deeper
+            // inside an A438 wrapper - see the real TLV shape in this
+            // method's own doc comment), so a fresh local per recursive call
+            // would lose the key set one level up, exactly the same
+            // still-in-scope-across-recursion requirement
+            // ExtractDynamicProperties's own ExtractProps relies on.
+            string? currentKey = null;
+            void ExtractEntries(List<TlvNode> nodes, Dictionary<string, string> entries)
+            {
+                foreach (var n in nodes)
+                {
+                    if (n.Tag == "B636")
+                    {
+                        // Property key name (UTF-8 string)
+                        currentKey = Encoding.UTF8.GetString(n.Payload);
+                    }
+                    else if (n.Tag == "AD38" && currentKey != null)
+                    {
+                        // Property value (UTF-8 string) matching preceding key
+                        entries[currentKey] = Encoding.UTF8.GetString(n.Payload);
+                        currentKey = null;
+                    }
+                    else
+                    {
+                        ExtractEntries(n.Children, entries);
+                    }
+                }
+            }
+
+            void Walk(List<TlvNode> nodes)
+            {
+                for (int i = 0; i < nodes.Count; i++)
+                {
+                    if (nodes[i].Tag == "B436")
+                    {
+                        var name = Encoding.UTF8.GetString(nodes[i].Payload);
+                        var entries = new Dictionary<string, string>();
+                        currentKey = null;
+                        if (i + 1 < nodes.Count)
+                        {
+                            ExtractEntries(nodes[i + 1].Children, entries);
+                        }
+                        dictionaries[name] = entries;
+                    }
+                    else
+                    {
+                        Walk(nodes[i].Children);
+                    }
+                }
+            }
+
+            Walk(propElements);
+            return dictionaries;
+        }
+
+        /// <summary>Extracts every B636 (key)/AD38 (string value) pair
+        /// found anywhere under a D007 node's DC05 subtree, merged into one
+        /// flat dict regardless of which named attribute dictionary (if
+        /// any) each pair belongs to - this is InstancedNode.Properties'/
+        /// Instance.Properties' own established contract (real-fixture
+        /// tests depend on it seeing entries from plugin-authored
+        /// dictionaries too, e.g. a SteelFramer-authored "generator" key
+        /// living under that plugin's own named dictionary, not
+        /// SketchUp's "dynamic_attributes"). NOT the same view as Python's
+        /// like-named extract_dynamic_properties, which isolates just
+        /// "dynamic_attributes" - seeing every dictionary's entries here
+        /// unfiltered predates this project's own dictionary-name-aware
+        /// ExtractAttributeDictionaries (below) and changing it now would
+        /// be a real behavior break for existing callers, not a fix.</summary>
         public static Dictionary<string, string> ExtractDynamicProperties(TlvNode d007)
         {
             var dc05 = d007.Children.FirstOrDefault(c => c.Tag == "DC05");
@@ -194,6 +298,45 @@ namespace OpenSkp
             }
             ExtractProps(propElements);
             return properties;
+        }
+
+        // Matches SketchUp's own auto-generated placeholder definition names
+        // ("Group#1", "Component#12"), which carry no more meaning than the
+        // internal index they'd otherwise fall back to - mirrors Python's
+        // _is_generic_definition_name()/C++'s is_generic_definition_name()
+        // exactly (same pattern, same purpose). Shared by Scene.cs's and
+        // InstancedScene.cs's own display-name resolution.
+        private static readonly Regex GenericDefinitionNamePattern =
+            new Regex(@"^(?:Group|Component)\d*#\d+$", RegexOptions.Compiled);
+
+        public static bool IsGenericDefinitionName(string name) =>
+            GenericDefinitionNamePattern.IsMatch(name);
+
+        // "name"/"label"/"code" checked in this order, first dictionary
+        // (other than dynamic_attributes/SU_InstanceSet) and first key found
+        // wins - mirrors Python's/C++'s own name_override_keys default.
+        private static readonly string[] NameOverrideKeys = { "name", "label", "code" };
+
+        /// <summary>Look for a display-name override in any attribute
+        /// dictionary the instance carries OTHER than "dynamic_attributes"
+        /// (SketchUp's own Dynamic Components dictionary, already surfaced
+        /// separately as Properties) or "SU_InstanceSet" - whichever
+        /// third-party plugin wrote it (FrameBuilder's "name", TechSteel's
+        /// "label", etc.), same fallback order and exclusions as Python's/
+        /// C++'s own instanced_scene/scene name-resolution. Returns null
+        /// when no override is present.</summary>
+        public static string? FindNameOverride(Dictionary<string, Dictionary<string, string>>? attributeDicts)
+        {
+            if (attributeDicts == null) return null;
+            foreach (var pair in attributeDicts)
+            {
+                if (pair.Key == "dynamic_attributes" || pair.Key == "SU_InstanceSet") continue;
+                foreach (var key in NameOverrideKeys)
+                {
+                    if (pair.Value.TryGetValue(key, out var val) && !string.IsNullOrEmpty(val)) return val;
+                }
+            }
+            return null;
         }
 
         public static void ExtractGeometryFromNodes(List<TlvNode> elements, GeometryBuilder builder)
@@ -372,6 +515,7 @@ namespace OpenSkp
                     bool instHidden = false;
                     long? instLayerId = null;
                     Dictionary<string, string>? instProperties = null;
+                    Dictionary<string, Dictionary<string, string>>? instAttributeDicts = null;
                     var instD007 = el.Children.FirstOrDefault(c => c.Tag == "D007");
                     if (instD007 != null)
                     {
@@ -386,6 +530,7 @@ namespace OpenSkp
                             instLayerId = Tlv.ParseVarInt(d207.Payload, 0, d207.Payload.Length);
                         }
                         instProperties = ExtractDynamicProperties(instD007);
+                        instAttributeDicts = ExtractAttributeDictionaries(instD007);
                         // D307 = display flags, same record edges/faces already
                         // read (base 0x06, +0x01 hidden).
                         var instD307 = instD007.Children.FirstOrDefault(c => c.Tag == "D307");
@@ -406,6 +551,7 @@ namespace OpenSkp
                         Hidden = instHidden,
                         LayerId = instLayerId,
                         Properties = instProperties,
+                        AttributeDicts = instAttributeDicts,
                         Children = el.Children,
                     });
                 }

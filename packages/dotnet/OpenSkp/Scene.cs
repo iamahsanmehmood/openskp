@@ -8,10 +8,24 @@ namespace OpenSkp
     public sealed class InstanceNode
     {
         public string Name { get; set; } = "";
+
+        /// <summary>Whether <see cref="Name"/> is a synthetic fallback
+        /// (SketchUp's own internal index, e.g. "Component_5") rather than a
+        /// real name from the source file - see InstancedNode.NameIsGenerated
+        /// (InstancedScene.cs) for the full fallback-order rationale; both
+        /// resolve a node's display name identically.</summary>
+        public bool NameIsGenerated { get; set; }
+
         public string DefinitionName { get; set; } = "";
         public string Layer { get; set; } = "";
         public (double X, double Y, double Z) PositionMm { get; set; }
         public Dictionary<string, string> Properties { get; set; } = new Dictionary<string, string>();
+
+        /// <summary>Real SketchUp instance GUID (VFF/2021+ files only), or
+        /// "" when the source file has none - see
+        /// InstancedNode.Guid (InstancedScene.cs).</summary>
+        public string Guid { get; set; } = "";
+
         public List<InstanceNode> Children { get; set; } = new List<InstanceNode>();
     }
 
@@ -445,13 +459,33 @@ namespace OpenSkp
                         childDefName = childDef.Name ?? "";
                     }
 
+                    // Fallback order: an attribute-dict name/label/code
+                    // override, then the instance's own explicit name, then
+                    // the definition's own name IF it's not itself just
+                    // SketchUp's auto-generated "Group#1"/"Component#12"
+                    // placeholder, then finally the internal index - the
+                    // only case with no real name anywhere in the source
+                    // file. Mirrors InstancedScene.cs's identical resolution
+                    // (and Python's/C++'s own scene.py/instanced_scene.py) -
+                    // see ResolvesTheSameLayersAndDynamicPropertiesPerNode in
+                    // OpenSkp.Tests, which depends on both trees resolving
+                    // display names identically.
+                    bool defNameIsReal = !string.IsNullOrEmpty(childDefName) && !Geometry.IsGenericDefinitionName(childDefName);
+                    string? nameOverride = Geometry.FindNameOverride(inst.AttributeDicts);
+                    bool instNameNonEmpty = !string.IsNullOrEmpty(inst.Name);
+                    string fallbackName = instNameNonEmpty ? inst.Name! : (defNameIsReal ? childDefName : $"Component_{refIdx}");
+                    string displayName = nameOverride ?? fallbackName;
+                    bool nameIsGenerated = nameOverride == null && !instNameNonEmpty && !defNameIsReal;
+
                     var instInfo = new InstanceNode
                     {
-                        Name = inst.Name ?? "",
+                        Name = displayName,
+                        NameIsGenerated = nameIsGenerated,
                         DefinitionName = childDefName,
                         Layer = lName,
                         PositionMm = (Math.Round(itx, 2), Math.Round(ity, 2), Math.Round(itz, 2)),
                         Properties = properties,
+                        Guid = inst.RefGuid ?? "",
                         Children = childNodes,
                     };
                     childInstancesInfo.Add(instInfo);
