@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <LangVersion>10.0</LangVersion>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\OpenSkp\OpenSkp.csproj" />
+    <ProjectReference Include="..\OpenSkp.Fragments\OpenSkp.Fragments.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Reuses OpenSkp.Tests' own fixtures rather than duplicating the
+         binary .skp files in a second location. -->
+    <None Include="..\OpenSkp.Tests\fixtures\*.skp" LinkBase="fixtures">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>fixtures\%(Filename)%(Extension)</Link>
+    </None>
+  </ItemGroup>
+</Project>

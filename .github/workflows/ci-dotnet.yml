@@ -38,13 +38,19 @@ jobs:
           dotnet-version: '9.0'
 
       - name: Restore
-        run: dotnet restore packages/dotnet/OpenSkp.Tests/OpenSkp.Tests.csproj
+        run: |
+          dotnet restore packages/dotnet/OpenSkp.Tests/OpenSkp.Tests.csproj
+          dotnet restore packages/dotnet/OpenSkp.Fragments.Tests/OpenSkp.Fragments.Tests.csproj
 
       - name: Build
-        run: dotnet build packages/dotnet/OpenSkp.Tests/OpenSkp.Tests.csproj --no-restore --configuration Release
+        run: |
+          dotnet build packages/dotnet/OpenSkp.Tests/OpenSkp.Tests.csproj --no-restore --configuration Release
+          dotnet build packages/dotnet/OpenSkp.Fragments.Tests/OpenSkp.Fragments.Tests.csproj --no-restore --configuration Release
 
       - name: Test
-        run: dotnet test packages/dotnet/OpenSkp.Tests/OpenSkp.Tests.csproj --no-build --configuration Release
+        run: |
+          dotnet test packages/dotnet/OpenSkp.Tests/OpenSkp.Tests.csproj --no-build --configuration Release
+          dotnet test packages/dotnet/OpenSkp.Fragments.Tests/OpenSkp.Fragments.Tests.csproj --no-build --configuration Release
 
   format:
     needs: changes
@@ -62,15 +68,20 @@ jobs:
         run: |
           dotnet restore packages/dotnet/OpenSkp/OpenSkp.csproj
           dotnet restore packages/dotnet/OpenSkp.Tests/OpenSkp.Tests.csproj
+          dotnet restore packages/dotnet/OpenSkp.Fragments/OpenSkp.Fragments.csproj
+          dotnet restore packages/dotnet/OpenSkp.Fragments.Tests/OpenSkp.Fragments.Tests.csproj
 
       - name: Verify formatting (.editorconfig)
         run: |
           dotnet format packages/dotnet/OpenSkp/OpenSkp.csproj --verify-no-changes
           dotnet format packages/dotnet/OpenSkp.Tests/OpenSkp.Tests.csproj --verify-no-changes
+          dotnet format packages/dotnet/OpenSkp.Fragments/OpenSkp.Fragments.csproj --verify-no-changes
+          dotnet format packages/dotnet/OpenSkp.Fragments.Tests/OpenSkp.Fragments.Tests.csproj --verify-no-changes
 
       - name: Build with analyzers as errors
         run: |
           dotnet build packages/dotnet/OpenSkp.Tests/OpenSkp.Tests.csproj --no-restore --configuration Release -warnaserror
+          dotnet build packages/dotnet/OpenSkp.Fragments.Tests/OpenSkp.Fragments.Tests.csproj --no-restore --configuration Release -warnaserror
 
   # Single stable check name for branch protection to require, regardless of
   # whether packages/dotnet/** changed - see ci-python.yml's `required` job

@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <LangVersion>10.0</LangVersion>
+    <Nullable>enable</Nullable>
+    <Version>1.2.0</Version>
+    <Authors>Ahsan Mehmood</Authors>
+    <Description>Direct SketchUp (.skp) -&gt; ThatOpen Fragments (.frag) export for OpenSkp - EXPERIMENTAL. Separate, opt-in package (mirrors Python's `pip install openskp[fragments]` extra) so the core OpenSkp package stays dependency-free for every other consumer; this one package takes the Google.FlatBuffers dependency Fragments export actually needs.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://openskp.com</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/iamahsanmehmood/openskp.git</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageTags>sketchup;skp;fragments;thatopen;flatbuffers;bim;converter;3d</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\"/>
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Google.FlatBuffers" Version="25.2.10" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\OpenSkp\OpenSkp.csproj" />
+  </ItemGroup>
+</Project>

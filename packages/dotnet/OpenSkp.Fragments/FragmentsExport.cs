@@ -1,0 +1,689 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.IO.Compression;
+using System.Linq;
+using System.Text;
+using Google.FlatBuffers;
+using OpenSkp;
+using Fb = openskp._fragments_fb;
+
+namespace OpenSkp.Fragments
+{
+    /// <summary>Direct SKP -&gt; ThatOpen Fragments (.frag) export - EXPERIMENTAL.
+    /// A port of Python's <c>openskp.export.fragments.to_fragments</c> (see
+    /// that module's own docstring for the full rationale and real-loader
+    /// verification status this port inherits) against the same vendored
+    /// ThatOpen Fragments schema (<c>_fragments_fb/index.fbs</c>).
+    ///
+    /// EXPORT ONLY, matching the TypeScript port (#276) - not Python's or
+    /// C++'s read side. It also matches TypeScript's own GUID/layer-hidden
+    /// fidelity rather than Python's/C++'s fuller one: <see cref="InstancedNode"/>
+    /// in this package doesn't carry a per-instance source GUID or a
+    /// generated-name flag yet (openskp#290's fix is Python/C++-only so
+    /// far), and <see cref="InstancedScene"/> doesn't carry the source
+    /// file's layer-hidden state either - confirmed by reading both types
+    /// directly, not assumed. So here, same as TypeScript: every item's
+    /// GUID is a stable synthetic <c>"openskp-{itemIndex}"</c>, and the
+    /// exported <c>metadata.layer_hidden</c> is always empty. Both are
+    /// real, honestly-scoped gaps versus Python/C++, not bugs in this
+    /// port - closing them is separate backlog (openskp#285).
+    ///
+    /// Ships as its own package (rather than living in the core OpenSkp
+    /// package) because it needs Google.FlatBuffers - the core package has
+    /// zero external dependencies today, and this mirrors Python's own
+    /// opt-in `pip install openskp[fragments]` extra instead of forcing
+    /// every OpenSkp.NET consumer to take a transitive dependency they
+    /// don't need.</summary>
+    public static class FragmentsExport
+    {
+        // Fragments' Shell uses `ushort` point indices by default; a shell
+        // with more points than this must use the wide BigShell encoding
+        // (`uint` indices) instead - confirmed against the real importer's
+        // own `points.length > ushortMaxValue` check.
+        private const int UshortMax = 65535;
+
+        // Per-axis scale magnitudes within this of 1.0 are treated as
+        // exactly unit scale for cache-key rounding purposes - matches
+        // typical floating-point accumulation noise from matrix
+        // composition, not a meaningful tolerance for an actually-intended
+        // resize. Matches Python's own value (C++'s port too); TypeScript
+        // independently chose 4, a harmless difference since the rounding
+        // only affects shell-dedup cache keys, never the written geometry.
+        private const int ScaleRoundNdigits = 6;
+
+        private static readonly double[] IdentityMatrix =
+        {
+            1.0, 0.0, 0.0, 0.0,
+            0.0, 1.0, 0.0, 0.0,
+            0.0, 0.0, 1.0, 0.0,
+            0.0, 0.0, 0.0, 1.0,
+        };
+
+        // Column-major 4x4 multiply, a*b - same convention as
+        // InstancedScene.cs's own internal matrix composition.
+        private static double[] Mat4Mul(double[] a, double[] b)
+        {
+            var outM = new double[16];
+            for (int col = 0; col < 4; col++)
+            {
+                for (int row = 0; row < 4; row++)
+                {
+                    double s = 0.0;
+                    for (int k = 0; k < 4; k++)
+                        s += a[k * 4 + row] * b[col * 4 + k];
+                    outM[col * 4 + row] = s;
+                }
+            }
+            return outM;
+        }
+
+        private sealed class Leaf
+        {
+            public InstancedNode Node = null!;
+            public double[] World = IdentityMatrix;
+        }
+
+        // Walk the instanced scene's tree, accumulating each node's GLOBAL
+        // (world) transform, and return every node worth tracking as its
+        // own item - a leaf carrying geometry, OR a real, named
+        // organizational wrapper with no geometry of its own (e.g. a
+        // SketchUp group like "W-2" that only exists to hold several
+        // separately-meshed parts). Mirrors Python's/C++'s/TypeScript's own
+        // collect_leaves/collectLeaves - see Python's docstring for the
+        // full rationale.
+        //
+        // "Named wrapper" here uses TypeScript's own approximation (a
+        // non-empty name that isn't the literal "ROOT"), not Python's/C++'s
+        // stricter `!name_is_generated` check - InstancedNode in this
+        // package has no such flag to check (see this class's own header
+        // comment).
+        private static void CollectLeaves(InstancedNode node, InstancedNode root, double[] parentMatrix, List<Leaf> outLeaves)
+        {
+            var world = Mat4Mul(parentMatrix, node.Matrix);
+            bool isNamedWrapper = !ReferenceEquals(node, root) && !string.IsNullOrEmpty(node.Name) && node.Name != "ROOT";
+            if (node.MeshResourceId != null || isNamedWrapper)
+            {
+                outLeaves.Add(new Leaf { Node = node, World = world });
+            }
+            foreach (var child in node.Children)
+            {
+                CollectLeaves(child, root, world, outLeaves);
+            }
+        }
+
+        /// <summary>Decompose a column-major 4x4 instance transform into
+        /// (position, x_direction, y_direction, scale, mirrored) - a direct
+        /// port of Python's <c>_decompose_trs</c>. See that function's own
+        /// docstring for why mirroring is resolved this way.</summary>
+        public readonly struct Trs
+        {
+            public readonly double[] Position;
+            public readonly double[] XDir;
+            public readonly double[] YDir;
+            public readonly double[] Scale;
+            public readonly bool Mirrored;
+
+            public Trs(double[] position, double[] xDir, double[] yDir, double[] scale, bool mirrored)
+            {
+                Position = position;
+                XDir = xDir;
+                YDir = yDir;
+                Scale = scale;
+                Mirrored = mirrored;
+            }
+        }
+
+        public static Trs DecomposeTrs(double[] m)
+        {
+            var xAxis = new[] { m[0], m[1], m[2] };
+            var yAxis = new[] { m[4], m[5], m[6] };
+            var zAxis = new[] { m[8], m[9], m[10] };
+            var pos = new[] { m[12], m[13], m[14] };
+
+            double Norm(double[] v)
+            {
+                var s = Math.Sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+                return s > 0.0 ? s : 1.0;
+            }
+            double sx = Norm(xAxis), sy = Norm(yAxis), sz = Norm(zAxis);
+
+            double det = xAxis[0] * (yAxis[1] * zAxis[2] - yAxis[2] * zAxis[1])
+                       - xAxis[1] * (yAxis[0] * zAxis[2] - yAxis[2] * zAxis[0])
+                       + xAxis[2] * (yAxis[0] * zAxis[1] - yAxis[1] * zAxis[0]);
+            bool mirrored = det < 0.0;
+
+            var xDir = new[] { xAxis[0] / sx, xAxis[1] / sx, xAxis[2] / sx };
+            if (mirrored)
+            {
+                xDir[0] = -xDir[0];
+                xDir[1] = -xDir[1];
+                xDir[2] = -xDir[2];
+            }
+            var yDir = new[] { yAxis[0] / sy, yAxis[1] / sy, yAxis[2] / sy };
+
+            return new Trs(pos, xDir, yDir, new[] { sx, sy, sz }, mirrored);
+        }
+
+        public readonly struct BakedGeometry
+        {
+            public readonly List<float[]> Points;
+            public readonly List<uint[]> Triangles;
+
+            public BakedGeometry(List<float[]> points, List<uint[]> triangles)
+            {
+                Points = points;
+                Triangles = triangles;
+            }
+        }
+
+        /// <summary>Apply an instance's scale/mirror directly to a copy of
+        /// its resource's LOCAL points and triangle winding, so the
+        /// resulting geometry is correct when placed by a purely rigid
+        /// (rotation + translation, no scale) Transform - a direct port of
+        /// Python's <c>_bake_primitive</c>.</summary>
+        public static BakedGeometry BakePrimitive(LocalPrimitive prim, double[] scale, bool mirrored)
+        {
+            double sx = mirrored ? -scale[0] : scale[0];
+            double sy = scale[1], sz = scale[2];
+
+            int nVerts = prim.Positions.Length / 3;
+            var points = new List<float[]>(nVerts);
+            for (int i = 0; i < nVerts; i++)
+            {
+                points.Add(new[]
+                {
+                    (float)(prim.Positions[i * 3] * sx),
+                    (float)(prim.Positions[i * 3 + 1] * sy),
+                    (float)(prim.Positions[i * 3 + 2] * sz),
+                });
+            }
+
+            int nTris = prim.Indices.Length / 3;
+            var triangles = new List<uint[]>(nTris);
+            for (int i = 0; i < nTris; i++)
+            {
+                var tri = new[] { prim.Indices[i * 3], prim.Indices[i * 3 + 1], prim.Indices[i * 3 + 2] };
+                if (mirrored)
+                {
+                    (tri[1], tri[2]) = (tri[2], tri[1]);
+                }
+                triangles.Add(tri);
+            }
+            return new BakedGeometry(points, triangles);
+        }
+
+        /// <summary>Round a (mirrored, scale) triple to a stable cache key -
+        /// the mirror flag folds into the X component's sign, since
+        /// <see cref="BakePrimitive"/> only ever negates X for a mirrored
+        /// instance. Matches Python's <c>_scale_cache_key</c>.</summary>
+        public static (double, double, double) ScaleCacheKey(bool mirrored, double[] scale)
+        {
+            double mult = Math.Pow(10, ScaleRoundNdigits);
+            double Rnd(double v) => Math.Round(v * mult) / mult;
+            double sx = mirrored ? -scale[0] : scale[0];
+            return (Rnd(sx), Rnd(scale[1]), Rnd(scale[2]));
+        }
+
+        private static byte ClampByte(double c) => (byte)Math.Min(255, Math.Max(0, (int)Math.Round(c * 255)));
+
+        // scene.GltfMaterials is publicly just List<object> (built as
+        // Dictionary<string,object> - see InstancedScene.cs's own
+        // GetMaterialIndex) so a hand-built scene using some other object
+        // shape doesn't crash export, just falls back to opaque white,
+        // same courtesy Glb.cs's own StripTextureRefs extends elsewhere in
+        // this project.
+        private static (byte R, byte G, byte B, byte A) ExtractBaseColor(object? gltfMat)
+        {
+            if (gltfMat is IDictionary<string, object> dict &&
+                dict.TryGetValue("pbrMetallicRoughness", out var pbrObj) &&
+                pbrObj is IDictionary<string, object> pbr &&
+                pbr.TryGetValue("baseColorFactor", out var bcfObj))
+            {
+                double[]? bcf = bcfObj switch
+                {
+                    double[] da => da,
+                    float[] fa => Array.ConvertAll(fa, x => (double)x),
+                    IEnumerable<object> en => en.Select(Convert.ToDouble).ToArray(),
+                    _ => null,
+                };
+                if (bcf != null && bcf.Length >= 3)
+                {
+                    return (
+                        ClampByte(bcf[0]),
+                        ClampByte(bcf[1]),
+                        ClampByte(bcf[2]),
+                        bcf.Length > 3 ? ClampByte(bcf[3]) : (byte)255);
+                }
+            }
+            return (255, 255, 255, 255);
+        }
+
+        // Minimal JSON string building for this module's own two small,
+        // fixed shapes (the Model.metadata sidecar object and each
+        // Attribute's `["Name", value, "STRING"]` triple) - not a general
+        // JSON writer. Glb.cs's own MiniJson does the same job for the rest
+        // of this project but is `internal` to the core OpenSkp assembly,
+        // unreachable from this separate package.
+        private static string JsonEscape(string s)
+        {
+            var sb = new StringBuilder(s.Length + 2);
+            foreach (var c in s)
+            {
+                switch (c)
+                {
+                    case '"': sb.Append("\\\""); break;
+                    case '\\': sb.Append("\\\\"); break;
+                    case '\n': sb.Append("\\n"); break;
+                    case '\r': sb.Append("\\r"); break;
+                    case '\t': sb.Append("\\t"); break;
+                    default:
+                        if (c < 0x20) sb.Append("\\u").Append(((int)c).ToString("x4"));
+                        else sb.Append(c);
+                        break;
+                }
+            }
+            return sb.ToString();
+        }
+
+        private static string JsonString(string s) => "\"" + JsonEscape(s) + "\"";
+
+        private static string NameAttributeJson(string name) =>
+            "[\"Name\"," + JsonString(name) + ",\"STRING\"]";
+
+        private static string MetadataJson()
+        {
+            // layer_hidden is always empty and generated_name_guids is
+            // always empty here - see this class's own header comment for
+            // why (InstancedScene/InstancedNode in this package don't
+            // carry that data yet).
+            return "{\"layer_hidden\":{},\"generated_name_guids\":[]}";
+        }
+
+        // RFC 1950 (zlib) wrapper around .NET's own raw DEFLATE
+        // (RFC 1951) stream: a 2-byte header (0x78 0x9C - CM=8/deflate,
+        // CINFO=7/32K window, FLEVEL=2/default, chosen so the 16-bit
+        // header value is a multiple of 31 as the spec requires) plus a
+        // big-endian Adler-32 trailer over the UNCOMPRESSED bytes. This is
+        // exactly the wire format `pako.deflate()`/Python's
+        // `zlib.compress()`/pako's own JS decoder (and the real Fragments
+        // loader, which auto-detects it) expect - .NET's own
+        // DeflateStream/GZipStream implement neither RFC 1950 directly,
+        // and this package deliberately doesn't take on SharpZipLib/
+        // System.IO.Compression.ZLibStream (net6.0+ only - the core
+        // package targets netstandard2.0) just for this one call site.
+        private static byte[] ZlibCompress(byte[] data)
+        {
+            using var output = new MemoryStream();
+            output.WriteByte(0x78);
+            output.WriteByte(0x9C);
+            using (var deflate = new DeflateStream(output, CompressionLevel.Optimal, leaveOpen: true))
+            {
+                deflate.Write(data, 0, data.Length);
+            }
+            uint adler = Adler32(data);
+            output.WriteByte((byte)(adler >> 24));
+            output.WriteByte((byte)(adler >> 16));
+            output.WriteByte((byte)(adler >> 8));
+            output.WriteByte((byte)adler);
+            return output.ToArray();
+        }
+
+        private static uint Adler32(byte[] data)
+        {
+            const uint Mod = 65521;
+            uint a = 1, b = 0;
+            foreach (var by in data)
+            {
+                a = (a + by) % Mod;
+                b = (b + a) % Mod;
+            }
+            return (b << 16) | a;
+        }
+
+        /// <summary>Builds a <c>.frag</c> (FlatBuffers) buffer from an
+        /// <see cref="InstancedScene"/>.</summary>
+        /// <param name="scene">The instanced scene, e.g. from
+        /// <c>InstancedSceneBuilder.Build</c>.</param>
+        /// <param name="raw">If <c>false</c> (the default, matching
+        /// ThatOpen's own <c>IfcImporter</c> convention), the output is
+        /// zlib-deflate-compressed - the real Fragments loader
+        /// auto-detects either form. Pass <c>true</c> for the uncompressed
+        /// FlatBuffers bytes directly.</param>
+        public static byte[] ToFragments(InstancedScene scene, bool raw = false)
+        {
+            if (scene == null) throw new ArgumentNullException(nameof(scene));
+
+            var leaves = new List<Leaf>();
+            CollectLeaves(scene.SceneHierarchy, scene.SceneHierarchy, IdentityMatrix, leaves);
+
+            var resourceById = new Dictionary<string, InstancedMeshResource>();
+            foreach (var r in scene.MeshResources) resourceById[r.Id] = r;
+
+            var builder = new FlatBufferBuilder(1024 * 64);
+
+            // ---- Shells/Representations/Materials, built lazily as leaves
+            // are walked below: keyed by (resource, primitive, baked scale)
+            // so every placement sharing the same definition AND the same
+            // scale/mirror state dedupes onto one Shell. ----
+            var shellKeyToIndex = new Dictionary<(string, int, double, double, double), int>();
+            var shellOffsets = new List<Offset<Fb.Shell>>();
+            var representationBounds = new List<(float[] Min, float[] Max)>();
+            var materialKeyToIndex = new Dictionary<int, int>();
+            var materialRgba = new List<(byte R, byte G, byte B, byte A)>();
+
+            int GetMaterialIndex(int materialIndex)
+            {
+                if (materialKeyToIndex.TryGetValue(materialIndex, out var existing)) return existing;
+                object? gltfMat = materialIndex >= 0 && materialIndex < scene.GltfMaterials.Count
+                    ? scene.GltfMaterials[materialIndex]
+                    : null;
+                var rgba = ExtractBaseColor(gltfMat);
+                int idx = materialRgba.Count;
+                materialRgba.Add(rgba);
+                materialKeyToIndex[materialIndex] = idx;
+                return idx;
+            }
+
+            int GetOrBakeShell(string resourceId, int primIdx, LocalPrimitive prim, double[] scale, bool mirrored)
+            {
+                var sk = ScaleCacheKey(mirrored, scale);
+                var key = (resourceId, primIdx, sk.Item1, sk.Item2, sk.Item3);
+                if (shellKeyToIndex.TryGetValue(key, out var existing)) return existing;
+
+                var baked = BakePrimitive(prim, scale, mirrored);
+                bool isBig = baked.Points.Count > UshortMax;
+
+                var profileOffsets = new List<Offset<Fb.ShellProfile>>();
+                var bigProfileOffsets = new List<Offset<Fb.BigShellProfile>>();
+                foreach (var tri in baked.Triangles)
+                {
+                    if (isBig)
+                    {
+                        var idxVec = Fb.BigShellProfile.CreateIndicesVector(builder, new[] { tri[0], tri[1], tri[2] });
+                        bigProfileOffsets.Add(Fb.BigShellProfile.CreateBigShellProfile(builder, idxVec));
+                    }
+                    else
+                    {
+                        var idxVec = Fb.ShellProfile.CreateIndicesVector(builder, new[]
+                        {
+                            (ushort)tri[0], (ushort)tri[1], (ushort)tri[2],
+                        });
+                        profileOffsets.Add(Fb.ShellProfile.CreateShellProfile(builder, idxVec));
+                    }
+                }
+
+                // profiles/big_profiles are BOTH required fields on Shell,
+                // but only one of the two encodings is ever real for a
+                // given shell (the other is just an empty vector).
+                VectorOffset profilesVec, bigProfilesVec;
+                if (isBig)
+                {
+                    bigProfilesVec = Fb.Shell.CreateBigProfilesVector(builder, bigProfileOffsets.ToArray());
+                    profilesVec = Fb.Shell.CreateProfilesVector(builder, profileOffsets.ToArray());
+                }
+                else
+                {
+                    profilesVec = Fb.Shell.CreateProfilesVector(builder, profileOffsets.ToArray());
+                    bigProfilesVec = Fb.Shell.CreateBigProfilesVector(builder, bigProfileOffsets.ToArray());
+                }
+
+                var holesVec = Fb.Shell.CreateHolesVector(builder, Array.Empty<Offset<Fb.ShellHole>>());
+                var bigHolesVec = Fb.Shell.CreateBigHolesVector(builder, Array.Empty<Offset<Fb.BigShellHole>>());
+
+                Fb.Shell.StartPointsVector(builder, baked.Points.Count);
+                for (int i = baked.Points.Count - 1; i >= 0; i--)
+                {
+                    var p = baked.Points[i];
+                    builder.Prep(4, 12);
+                    builder.PutFloat(p[2]);
+                    builder.PutFloat(p[1]);
+                    builder.PutFloat(p[0]);
+                }
+                var pointsVec = builder.EndVector();
+
+                var faceIds = new ushort[baked.Triangles.Count];
+                for (int i = 0; i < faceIds.Length; i++) faceIds[i] = (ushort)i;
+                var faceIdsVec = Fb.Shell.CreateProfilesFaceIdsVector(builder, faceIds);
+
+                Fb.Shell.StartShell(builder);
+                Fb.Shell.AddProfiles(builder, profilesVec);
+                Fb.Shell.AddBigProfiles(builder, bigProfilesVec);
+                Fb.Shell.AddHoles(builder, holesVec);
+                Fb.Shell.AddBigHoles(builder, bigHolesVec);
+                Fb.Shell.AddPoints(builder, pointsVec);
+                Fb.Shell.AddType(builder, isBig ? Fb.ShellType.BIG : Fb.ShellType.NONE);
+                Fb.Shell.AddProfilesFaceIds(builder, faceIdsVec);
+
+                int index = shellOffsets.Count;
+                shellOffsets.Add(Fb.Shell.EndShell(builder));
+
+                float minX = float.PositiveInfinity, minY = float.PositiveInfinity, minZ = float.PositiveInfinity;
+                float maxX = float.NegativeInfinity, maxY = float.NegativeInfinity, maxZ = float.NegativeInfinity;
+                foreach (var p in baked.Points)
+                {
+                    if (p[0] < minX) minX = p[0]; if (p[0] > maxX) maxX = p[0];
+                    if (p[1] < minY) minY = p[1]; if (p[1] > maxY) maxY = p[1];
+                    if (p[2] < minZ) minZ = p[2]; if (p[2] > maxZ) maxZ = p[2];
+                }
+                if (float.IsPositiveInfinity(minX)) { minX = minY = minZ = 0; maxX = maxY = maxZ = 0; }
+                representationBounds.Add((new[] { minX, minY, minZ }, new[] { maxX, maxY, maxZ }));
+
+                shellKeyToIndex[key] = index;
+                return index;
+            }
+
+            // ---- Model-level items + geometry samples: one item per leaf
+            // placement, one sample per (leaf, primitive-of-its-resource)
+            // pair. ----
+            var localIds = new List<uint>();
+            var categories = new List<string>();
+            var names = new List<string>();
+            var guids = new List<string>();
+            var sampleMaterial = new List<int>();
+            var sampleRepresentation = new List<int>();
+            var meshesItems = new List<uint>();
+            var globalTransformData = new List<Trs>();
+            var itemIndexByNode = new Dictionary<InstancedNode, uint>();
+
+            for (int itemIndex = 0; itemIndex < leaves.Count; itemIndex++)
+            {
+                var leaf = leaves[itemIndex];
+                var node = leaf.Node;
+                InstancedMeshResource? res = null;
+                if (node.MeshResourceId != null)
+                {
+                    if (!resourceById.TryGetValue(node.MeshResourceId, out res))
+                    {
+                        // Real error case: a leaf declared a resource that
+                        // never got baked - skip it rather than silently
+                        // tracking a nameless, geometry-less item, same as
+                        // Python/C++/TypeScript.
+                        continue;
+                    }
+                }
+
+                localIds.Add((uint)itemIndex);
+                categories.Add(string.IsNullOrEmpty(node.Layer) ? "Layer0" : node.Layer);
+                names.Add(node.Name ?? "");
+                // Always synthetic - see this class's own header comment.
+                guids.Add($"openskp-{itemIndex}");
+                itemIndexByNode[node] = (uint)itemIndex;
+
+                if (res != null)
+                {
+                    var trs = DecomposeTrs(leaf.World);
+                    for (int primIdx = 0; primIdx < res.Primitives.Count; primIdx++)
+                    {
+                        var prim = res.Primitives[primIdx];
+                        sampleMaterial.Add(GetMaterialIndex(prim.MaterialIndex));
+                        sampleRepresentation.Add(GetOrBakeShell(node.MeshResourceId!, primIdx, prim, trs.Scale, trs.Mirrored));
+                        meshesItems.Add((uint)itemIndex);
+                        globalTransformData.Add(trs);
+                    }
+                }
+            }
+
+            int nSamples = sampleMaterial.Count;
+
+            var shellsVec = Fb.Meshes.CreateShellsVector(builder, shellOffsets.ToArray());
+
+            Fb.Meshes.StartMaterialsVector(builder, materialRgba.Count);
+            for (int i = materialRgba.Count - 1; i >= 0; i--)
+            {
+                var rgba = materialRgba[i];
+                Fb.Material.CreateMaterial(builder, rgba.R, rgba.G, rgba.B, rgba.A, Fb.RenderedFaces.ONE, Fb.Stroke.DEFAULT);
+            }
+            var materialsVec = builder.EndVector();
+
+            Fb.Meshes.StartRepresentationsVector(builder, representationBounds.Count);
+            for (int i = representationBounds.Count - 1; i >= 0; i--)
+            {
+                var (min, max) = representationBounds[i];
+                Fb.Representation.CreateRepresentation(
+                    builder, (uint)i, min[0], min[1], min[2], max[0], max[1], max[2],
+                    Fb.RepresentationClass.SHELL);
+            }
+            var representationsVec = builder.EndVector();
+
+            Fb.Meshes.StartSamplesVector(builder, nSamples);
+            for (int i = nSamples - 1; i >= 0; i--)
+            {
+                Fb.Sample.CreateSample(builder, (uint)i, (uint)sampleMaterial[i], (uint)sampleRepresentation[i], 0u);
+            }
+            var samplesVec = builder.EndVector();
+
+            var meshesItemsVec = Fb.Meshes.CreateMeshesItemsVector(builder, meshesItems.ToArray());
+
+            Fb.Meshes.StartGlobalTransformsVector(builder, nSamples);
+            for (int i = nSamples - 1; i >= 0; i--)
+            {
+                var t = globalTransformData[i];
+                Fb.Transform.CreateTransform(
+                    builder, t.Position[0], t.Position[1], t.Position[2],
+                    (float)t.XDir[0], (float)t.XDir[1], (float)t.XDir[2],
+                    (float)t.YDir[0], (float)t.YDir[1], (float)t.YDir[2]);
+            }
+            var globalTransformsVec = builder.EndVector();
+
+            // One shared identity local transform - no per-geometry
+            // sub-offset is needed since every primitive's points are
+            // already in the resource's own local space (now with
+            // scale/mirror already baked in).
+            Fb.Meshes.StartLocalTransformsVector(builder, 1);
+            Fb.Transform.CreateTransform(builder, 0.0, 0.0, 0.0, 1f, 0f, 0f, 0f, 1f, 0f);
+            var localTransformsVec = builder.EndVector();
+
+            var circleExtrusionsVec = Fb.Meshes.CreateCircleExtrusionsVector(builder, Array.Empty<Offset<Fb.CircleExtrusion>>());
+
+            var coordinates = Fb.Transform.CreateTransform(builder, 0.0, 0.0, 0.0, 1f, 0f, 0f, 0f, 1f, 0f);
+
+            Fb.Meshes.StartMeshes(builder);
+            Fb.Meshes.AddCoordinates(builder, coordinates);
+            Fb.Meshes.AddMeshesItems(builder, meshesItemsVec);
+            Fb.Meshes.AddSamples(builder, samplesVec);
+            Fb.Meshes.AddRepresentations(builder, representationsVec);
+            Fb.Meshes.AddMaterials(builder, materialsVec);
+            Fb.Meshes.AddCircleExtrusions(builder, circleExtrusionsVec);
+            Fb.Meshes.AddShells(builder, shellsVec);
+            Fb.Meshes.AddLocalTransforms(builder, localTransformsVec);
+            Fb.Meshes.AddGlobalTransforms(builder, globalTransformsVec);
+            var meshesOff = Fb.Meshes.EndMeshes(builder);
+
+            var catOffsets = categories.Select(builder.CreateString).ToArray();
+            var categoriesVec = Fb.Model.CreateCategoriesVector(builder, catOffsets);
+
+            var localIdsVec = Fb.Model.CreateLocalIdsVector(builder, localIds.ToArray());
+
+            var guidStr = builder.CreateString("00000000-0000-0000-0000-000000000000");
+
+            // Per-item GUIDs: guids[i] is that item's identifier,
+            // guidsItems[i] is which local_id it belongs to - a real
+            // consumer's own id-bridge zips Model.getGuids() against
+            // Model.getLocalIds() index-for-index, so both vectors must be
+            // the same length, in the same order, one entry per tracked
+            // item (a zero-length guids vector, this export's behavior
+            // before this fix existed in Python, zips to an empty map
+            // regardless of how many real items exist).
+            var guidOffsets = guids.Select(builder.CreateString).ToArray();
+            var guidsVec = Fb.Model.CreateGuidsVector(builder, guidOffsets);
+            var guidsItemsVec = Fb.Model.CreateGuidsItemsVector(builder, localIds.ToArray());
+
+            // One Attribute per tracked item (same order as
+            // local_ids/categories), carrying the item's real display name
+            // encoded as a `["Name", value, "STRING"]` JSON triple - the
+            // exact convention the real IfcImporter uses for its own
+            // "Name" attribute (confirmed against real ground-truth .frag
+            // output, matching Python/C++/TypeScript exactly).
+            var attributeOffsets = new List<Offset<Fb.Attribute>>();
+            foreach (var name in names)
+            {
+                var dataOffsets = new List<StringOffset>();
+                if (!string.IsNullOrEmpty(name))
+                {
+                    dataOffsets.Add(builder.CreateString(NameAttributeJson(name)));
+                }
+                var dataVec = Fb.Attribute.CreateDataVector(builder, dataOffsets.ToArray());
+                Fb.Attribute.StartAttribute(builder);
+                Fb.Attribute.AddData(builder, dataVec);
+                attributeOffsets.Add(Fb.Attribute.EndAttribute(builder));
+            }
+            var attributesVec = Fb.Model.CreateAttributesVector(builder, attributeOffsets.ToArray());
+
+            var metadataOff = builder.CreateString(MetadataJson());
+
+            // Spatial structure: one SpatialStructure node per
+            // InstancedNode in the ORIGINAL tree (not just leaves), so real
+            // component nesting comes through, not just a flat list. A
+            // node gets a local_id only when it's one of the
+            // geometry-bearing/named-wrapper items tracked above; a pure
+            // organizational container just wraps its children. Matches
+            // Python's/C++'s/TypeScript's own build_spatial_node/
+            // buildSpatialNode exactly.
+            Offset<Fb.SpatialStructure> BuildSpatialNode(InstancedNode node)
+            {
+                var childOffsets = node.Children.Select(BuildSpatialNode).ToArray();
+                var childrenVec = Fb.SpatialStructure.CreateChildrenVector(builder, childOffsets);
+
+                StringOffset categoryOff = default;
+                bool hasCategory = !string.IsNullOrEmpty(node.Layer);
+                if (hasCategory) categoryOff = builder.CreateString(node.Layer);
+
+                uint? localId = itemIndexByNode.TryGetValue(node, out var idx) ? idx : (uint?)null;
+
+                Fb.SpatialStructure.StartSpatialStructure(builder);
+                if (localId.HasValue) Fb.SpatialStructure.AddLocalId(builder, localId);
+                if (hasCategory) Fb.SpatialStructure.AddCategory(builder, categoryOff);
+                Fb.SpatialStructure.AddChildren(builder, childrenVec);
+                return Fb.SpatialStructure.EndSpatialStructure(builder);
+            }
+            var rootSpatial = BuildSpatialNode(scene.SceneHierarchy);
+
+            var modelOff = Fb.Model.CreateModel(
+                builder,
+                metadataOffset: metadataOff,
+                guidsOffset: guidsVec,
+                guids_itemsOffset: guidsItemsVec,
+                max_local_id: (uint)localIds.Count,
+                local_idsOffset: localIdsVec,
+                categoriesOffset: categoriesVec,
+                meshesOffset: meshesOff,
+                attributesOffset: attributesVec,
+                guidOffset: guidStr,
+                spatial_structureOffset: rootSpatial);
+
+            builder.Finish(modelOff.Value, "0001");
+            var rawBytes = builder.SizedByteArray();
+
+            return raw ? rawBytes : ZlibCompress(rawBytes);
+        }
+
+        /// <summary>Exports an instanced scene to a <c>.frag</c> file.</summary>
+        public static void ExportFragments(InstancedScene scene, string outputPath, bool raw = false)
+        {
+            var dir = Path.GetDirectoryName(outputPath);
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir!);
+            File.WriteAllBytes(outputPath, ToFragments(scene, raw));
+        }
+    }
+}
