@@ -183,11 +183,15 @@ class Layer:
         color_r: Red channel (0–255).
         color_g: Green channel (0–255).
         color_b: Blue channel (0–255).
-        hidden: Whether the layer's visibility is switched off. Only
-            populated for legacy (pre-2021 MFC) files, where the byte is
-            read directly from the layer record — modern (VFF) files
-            derive layers from ``Layer_<name>``-prefixed materials, which
-            carry no visibility data, so this is always ``False`` there.
+        hidden: Whether the layer's visibility is switched off (SketchUp's
+            Tags panel eye icon). Read from the layer manager's own
+            visibility byte in ``model.dat`` (tag ``8E3C``, one of the
+            layer record's own child nodes) for both legacy and modern
+            (VFF) files alike — confirmed byte-for-byte against a real
+            production file's own Tags panel. A layer with no visibility
+            byte at all (e.g. one whose only trace is a
+            ``Layer_<name>``-prefixed material, with no corresponding
+            layer-manager record) defaults to ``False`` (visible).
     """
 
     name: str
