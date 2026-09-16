@@ -938,3 +938,98 @@ class TestFromFragments:
         # position instead would show the ORIGINAL, unswapped counts.
         assert vert_count(find(result.scene_hierarchy, "Item_Box")) == 3
         assert vert_count(find(result.scene_hierarchy, "Item_Flag")) == 8
+
+
+class TestOversizedShellSplitting:
+    """A single shell (Fragments' term for one baked triangle mesh) has no
+    representation for more than 65535 triangles: `profiles_face_ids` is a
+    plain `[ushort]` in the real schema (index.fbs), with no uint32 escape
+    hatch the way POINTS get past 65535 via BigShellProfile. A real
+    production model with one 222,000+-triangle primitive (a large
+    flattened/dense mesh) hit this in practice: `PrependUint16` raised
+    flatbuffers' own "bad number ... for type uint16" and the whole export
+    failed, even though every other shell in the same file - and the GLB
+    export of the identical model, which has no such limit - succeeded
+    fine. get_or_bake_shell now splits an oversized primitive's triangles
+    into multiple shells instead, each within the ushort limit."""
+
+    @staticmethod
+    def _grid_primitive(cols, rows, material_index=0):
+        """A flat cols x rows vertex grid (z=0 plane), triangulated as 2
+        triangles per quad cell - (cols-1)*(rows-1)*2 triangles total, a
+        plain synthetic stand-in for the kind of large flattened/dense
+        mesh that triggers this in real models."""
+        positions = array("f")
+        for j in range(rows):
+            for i in range(cols):
+                positions.extend((float(i), float(j), 0.0))
+        normals = array("f", [0.0, 0.0, 1.0] * (cols * rows))
+        uvs = array("f", [0.0, 0.0] * (cols * rows))
+        indices = array("I")
+        for j in range(rows - 1):
+            for i in range(cols - 1):
+                a = j * cols + i
+                b = a + 1
+                c = a + cols
+                d = c + 1
+                indices.extend((a, b, d, a, d, c))
+        return LocalPrimitive(
+            positions=positions, normals=normals, uvs=uvs, indices=indices, material_index=material_index
+        )
+
+    def test_splits_an_oversized_primitive_and_round_trips_every_triangle_and_vertex(self):
+        cols, rows = 210, 165
+        expected_triangles = (cols - 1) * (rows - 1) * 2
+        assert expected_triangles > 65535  # sanity-check the fixture itself exceeds the limit under test
+
+        prim = self._grid_primitive(cols, rows)
+        resource = InstancedMeshResource(
+            id="mesh_big", definition_id=1, definition_name="BigMesh",
+            variant_key="1|255,255,255", primitives=[prim],
+        )
+        node = InstancedNode(name="Big", layer="Framing", matrix=IDENTITY, mesh_resource_id="mesh_big")
+        root = InstancedNode(name="ROOT", matrix=IDENTITY, children=[node])
+        scene = InstancedScene(
+            bounds=None, scene_hierarchy=root, mesh_resources=[resource],
+            gltf_materials=[{"pbrMetallicRoughness": {"baseColorFactor": [1.0, 1.0, 1.0, 1.0]}}],
+            textures=[],
+        )
+
+        # This is the exact call that raised "bad number 222011 for type
+        # uint16" against the real production file before the fix - the
+        # primary regression check is simply that it no longer raises.
+        data = fragments.to_fragments(scene, raw=True)
+
+        model = Model.GetRootAsModel(bytearray(data), 0)
+        meshes = model.Meshes()
+        assert meshes.ShellsLength() > 1  # confirms the split actually happened, not a no-op
+        assert meshes.SamplesLength() == meshes.ShellsLength()  # one sample per split shell, same item/material
+
+        result = fragments.from_fragments(data)
+        rebuilt = result.mesh_resources[0].primitives
+        assert len(rebuilt) == meshes.ShellsLength()
+        for p in rebuilt:
+            assert len(p.indices) // 3 <= 65535  # every sub-shell itself stays within the ushort limit
+        assert sum(len(p.indices) // 3 for p in rebuilt) == expected_triangles  # no triangles lost or duplicated
+
+    def test_a_primitive_within_the_limit_still_produces_exactly_one_shell(self):
+        """Regression guard on the split path itself: a normal, non-huge
+        primitive must not be needlessly split into multiple shells."""
+        prim = self._grid_primitive(50, 50)  # 49*49*2 = 4802 triangles, comfortably under 65535
+        resource = InstancedMeshResource(
+            id="mesh_small", definition_id=1, definition_name="SmallMesh",
+            variant_key="1|255,255,255", primitives=[prim],
+        )
+        node = InstancedNode(name="Small", layer="Framing", matrix=IDENTITY, mesh_resource_id="mesh_small")
+        root = InstancedNode(name="ROOT", matrix=IDENTITY, children=[node])
+        scene = InstancedScene(
+            bounds=None, scene_hierarchy=root, mesh_resources=[resource],
+            gltf_materials=[{"pbrMetallicRoughness": {"baseColorFactor": [1.0, 1.0, 1.0, 1.0]}}],
+            textures=[],
+        )
+
+        data = fragments.to_fragments(scene, raw=True)
+        model = Model.GetRootAsModel(bytearray(data), 0)
+        meshes = model.Meshes()
+        assert meshes.ShellsLength() == 1
+        assert meshes.SamplesLength() == 1

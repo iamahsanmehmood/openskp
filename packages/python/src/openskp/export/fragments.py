@@ -353,12 +353,7 @@ def to_fragments(scene: "InstancedScene", *, raw: bool = False) -> bytes:
             material_rgba.append((rgba[0], rgba[1], rgba[2], alpha))
         return material_key_to_index[material_index]
 
-    def get_or_bake_shell(resource_id: str, prim_idx: int, prim: "LocalPrimitive", scale, mirrored: bool) -> int:
-        key = (resource_id, prim_idx) + _scale_cache_key(mirrored, scale)
-        if key in shell_key_to_index:
-            return shell_key_to_index[key]
-
-        points, triangles = _bake_primitive(prim, scale, mirrored)
+    def bake_one_shell(points, triangles) -> int:
         is_big = len(points) > _USHORT_MAX
 
         profile_offsets = []
@@ -411,6 +406,11 @@ def to_fragments(scene: "InstancedScene", *, raw: bool = False) -> bytes:
             builder.PrependFloat32(p[0])
         points_vec = builder.EndVector()
 
+        # Sequential per-shell profile ids (0..len(triangles)-1, not tied to
+        # any upstream SketchUp face identity - see the caller for how a
+        # too-large triangle list is chunked before reaching here), so
+        # re-numbering from 0 per shell is exactly consistent with the
+        # single-shell behavior this is a straight extraction of.
         face_ids = list(range(len(triangles)))
         Shell.StartProfilesFaceIdsVector(builder, len(face_ids))
         for fid in reversed(face_ids):
@@ -434,8 +434,44 @@ def to_fragments(scene: "InstancedScene", *, raw: bool = False) -> bytes:
         zs = [p[2] for p in points]
         representation_bounds.append(((min(xs), min(ys), min(zs)), (max(xs), max(ys), max(zs))))
 
-        shell_key_to_index[key] = index
         return index
+
+    def get_or_bake_shell(resource_id: str, prim_idx: int, prim: "LocalPrimitive", scale, mirrored: bool) -> List[int]:
+        key = (resource_id, prim_idx) + _scale_cache_key(mirrored, scale)
+        if key in shell_key_to_index:
+            return shell_key_to_index[key]
+
+        points, triangles = _bake_primitive(prim, scale, mirrored)
+
+        # `profiles_face_ids` (written above) has no "big"/uint32 counterpart
+        # anywhere in the real Fragments schema (index.fbs only declares
+        # `profiles_face_ids: [ushort]` - unlike points, which DO get a
+        # BigShellProfile/uint32-index escape hatch past 65535 of them). A
+        # single shell genuinely cannot represent more than 65535 triangles
+        # no matter how points are encoded - confirmed the hard way: a real
+        # production model with one 222,000+-triangle mesh (a large
+        # flattened/dense CAD import, most likely) hit
+        # `PrependUint16(222011)` and raised flatbuffers' own "bad number
+        # ... for type uint16" (openskp's Fragments export otherwise
+        # succeeded; only this one representation was unrepresentable).
+        # Splitting into multiple shells, each within the ushort limit, is
+        # the only way to represent this - the format has no cap on shell
+        # COUNT, just per-shell triangle count. Each sub-shell duplicates
+        # the full (shared) points array rather than remapping to a local
+        # subset: simpler and lower-risk than a vertex-remapping pass, at
+        # the cost of some extra file size in this rare oversized-mesh
+        # case - can be revisited if that cost turns out to matter in
+        # practice.
+        if len(triangles) > _USHORT_MAX:
+            indices = [
+                bake_one_shell(points, triangles[i:i + _USHORT_MAX])
+                for i in range(0, len(triangles), _USHORT_MAX)
+            ]
+        else:
+            indices = [bake_one_shell(points, triangles)]
+
+        shell_key_to_index[key] = indices
+        return indices
 
     # ---- Model-level items + geometry samples: one item per leaf
     # placement, one sample per (leaf, primitive-of-its-resource) pair.
@@ -526,10 +562,18 @@ def to_fragments(scene: "InstancedScene", *, raw: bool = False) -> bytes:
         if res is not None:
             pos, x_dir, y_dir, scale, mirrored = _decompose_trs(world_matrix)
             for prim_idx, prim in enumerate(res.primitives):
-                sample_material.append(get_material_index(prim.material_index))
-                sample_representation.append(get_or_bake_shell(resource_id, prim_idx, prim, scale, mirrored))
-                meshes_items.append(item_index)
-                global_transform_data.append((pos, x_dir, y_dir))
+                material_index = get_material_index(prim.material_index)
+                # Normally exactly one shell; more than one only when the
+                # primitive's own triangle count exceeded what a single
+                # shell can represent (see get_or_bake_shell) - each extra
+                # shell becomes its own additional Sample of the same item/
+                # material/transform, the same pattern this loop already
+                # uses for multiple primitives of one item.
+                for shell_index in get_or_bake_shell(resource_id, prim_idx, prim, scale, mirrored):
+                    sample_material.append(material_index)
+                    sample_representation.append(shell_index)
+                    meshes_items.append(item_index)
+                    global_transform_data.append((pos, x_dir, y_dir))
 
     n_samples = len(sample_material)
 
