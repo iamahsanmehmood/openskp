@@ -198,6 +198,8 @@ namespace OpenSkp
             defn.SectionPlanes.AddRange(d.Builder.SectionPlanes);
             defn.Texts.AddRange(d.Builder.Texts);
             defn.Dimensions.AddRange(d.Builder.Dimensions);
+            defn.ConstructionLines.AddRange(d.Builder.ConstructionLines);
+            defn.ConstructionPoints.AddRange(d.Builder.ConstructionPoints);
 
             return defn;
         }

@@ -12,12 +12,11 @@ namespace OpenSkp.Tests
     ///
     /// SectionPlane/Text/Dimension round-trip fully since Legacy.cs's own
     /// readers for them already expose real data on Model.Root (fixed in a
-    /// prior PR). ConstructionLine/ConstructionPoint only smoke-test here -
-    /// Legacy.cs's readers for those two currently discard the geometry
-    /// they parse rather than exposing it on Model.Root at all (a separate,
-    /// already-tracked openskp#285 item: "Writer + reader: construction
-    /// lines/points"), so there is nothing yet to assert on beyond "the
-    /// file still parses cleanly with these entities present".</summary>
+    /// prior PR). ConstructionLine/ConstructionPoint now round-trip fully
+    /// too - Legacy.cs's readers for those two used to parse the geometry
+    /// and then discard it rather than exposing it on Model.Root at all,
+    /// fixed alongside adding this writer (openskp#285's "Writer + reader:
+    /// construction lines/points").</summary>
     public class WriterAnnotationsTests
     {
         [Fact]
@@ -91,8 +90,14 @@ namespace OpenSkp.Tests
         }
 
         [Fact]
-        public void ConstructionLineAndPointDoNotCorruptTheFile()
+        public void ConstructionLineAndPointRoundTrip()
         {
+            // Legacy.cs's ReadConstructionLine used to parse point/direction/
+            // start/end into locals and then discard all of them (the same
+            // shape as the SectionPlane/Text/Dimension bugs fixed in a prior
+            // PR, just not yet ported for these two entities) - fixed
+            // alongside adding this writer, matching C++'s own reader, which
+            // already exposed this correctly.
             var builder = SkpCreate.NewFile();
             builder.AddFace(new (double, double, double)[]
             {
@@ -104,6 +109,24 @@ namespace OpenSkp.Tests
             builder.AddSectionPlane((10, 20, 30), (0, 0, 1)); // still readable afterwards
 
             var model = SkpFile.Parse(builder.ToBytes());
+
+            var cp = Assert.Single(model.Root.ConstructionPoints);
+            Assert.Equal((1.0, 2.0, 3.0), cp.Position);
+
+            Assert.Equal(2, model.Root.ConstructionLines.Count);
+            var bounded = model.Root.ConstructionLines[0];
+            Assert.Equal((0.0, 0.0, 0.0), bounded.Point);
+            Assert.Equal((1.0, 0.0, 0.0), bounded.Direction);
+            Assert.NotNull(bounded.Start);
+            Assert.NotNull(bounded.End);
+            Assert.Equal((0.0, 0.0, 0.0), bounded.Start!.Value);
+            Assert.Equal((10.0, 0.0, 0.0), bounded.End!.Value);
+
+            var unbounded = model.Root.ConstructionLines[1];
+            Assert.Equal((0.0, 0.0, 1.0), unbounded.Direction);
+            Assert.Null(unbounded.Start);
+            Assert.Null(unbounded.End);
+
             var sp = Assert.Single(model.Root.SectionPlanes);
             Assert.Equal(-30.0, sp.Plane[3], 6);
         }

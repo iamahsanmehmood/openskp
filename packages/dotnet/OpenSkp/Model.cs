@@ -183,6 +183,46 @@ namespace OpenSkp
         public (double X, double Y, double Z)? Normal { get; set; }
     }
 
+    /// <summary>A construction/guide line (SketchUp's Construction Line
+    /// tool). Legacy (pre-2021) files only - the VFF (2021+) reader does
+    /// not currently recognize this entity.
+    ///
+    /// Stored internally (and here, unchanged) as a point + normalized
+    /// direction + two signed distance parameters along that direction
+    /// marking where the visible segment starts/ends - the same shape
+    /// Sketchup::ConstructionLine's own start/end/direction properties
+    /// expose. A parameter magnitude of 1e30 means unbounded in that
+    /// direction (SketchUp draws this as an infinite guide line through
+    /// Point) - Start/End come back null in that case, matching the real
+    /// API returning nil.</summary>
+    public sealed class ConstructionLine
+    {
+        /// <summary>A point on the line, in inches (world space) - matches
+        /// the bounded case's own Start, or the anchor point given for an
+        /// infinite line.</summary>
+        public (double X, double Y, double Z) Point { get; set; }
+
+        /// <summary>The line's normalized direction vector.</summary>
+        public (double X, double Y, double Z) Direction { get; set; } = (1.0, 0.0, 0.0);
+
+        /// <summary>The bounded segment's start point, or null if
+        /// unbounded in this direction.</summary>
+        public (double X, double Y, double Z)? Start { get; set; }
+
+        /// <summary>The bounded segment's end point, or null if
+        /// unbounded.</summary>
+        public (double X, double Y, double Z)? End { get; set; }
+    }
+
+    /// <summary>A construction/guide point (SketchUp's Construction Point
+    /// tool). Legacy (pre-2021) files only - the VFF (2021+) reader does
+    /// not currently recognize this entity.</summary>
+    public sealed class ConstructionPoint
+    {
+        /// <summary>The point's position, in inches (world space).</summary>
+        public (double X, double Y, double Z) Position { get; set; }
+    }
+
     /// <summary>A saved scene (SketchUp's "Scenes" tabs; "pages" in the SDK).</summary>
     public sealed class Page
     {
@@ -224,6 +264,8 @@ namespace OpenSkp
         public List<SectionPlane> SectionPlanes { get; set; } = new List<SectionPlane>();
         public List<TextEntity> Texts { get; set; } = new List<TextEntity>();
         public List<Dimension> Dimensions { get; set; } = new List<Dimension>();
+        public List<ConstructionLine> ConstructionLines { get; set; } = new List<ConstructionLine>();
+        public List<ConstructionPoint> ConstructionPoints { get; set; } = new List<ConstructionPoint>();
         public bool AlwaysFacesCamera { get; set; }
         public bool ShadowsFaceSun { get; set; }
         public bool IsImage { get; set; }

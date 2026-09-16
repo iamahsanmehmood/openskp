@@ -571,7 +571,13 @@ namespace OpenSkp
     internal sealed class ThumbnailRec { public int? Dib; }
     internal sealed class ImageRec { public DrawBase Db = new DrawBase(); public int? Def; public double[] Xform = new double[12]; public string Guid = ""; }
     internal sealed class RelationshipRec { }
-    internal sealed class ConstructionLineRec { }
+    internal sealed class ConstructionLineRec
+    {
+        public (double X, double Y, double Z) Point;
+        public (double X, double Y, double Z) Direction = (1.0, 0.0, 0.0);
+        public (double X, double Y, double Z)? Start;
+        public (double X, double Y, double Z)? End;
+    }
     internal sealed class ConstructionPointRec { public DrawBase Db = new DrawBase(); public double[] Pos = new double[3]; }
     internal sealed class SectionPlaneRec { public DrawBase Db = new DrawBase(); public double[] Plane = new double[4]; public string Name = ""; public string Label = ""; }
     internal sealed class FontRec { }
@@ -1118,9 +1124,16 @@ namespace OpenSkp
         {
             Preamble(ar, r);
             Drawbase(ar, r);
-            r.F64s(3);
-            r.F64s(3);
-            r.F64s(2);                       // line params (+-~4.4e29 = infinite)
+            var point = r.F64s(3);
+            var direction = r.F64s(3);
+            // Signed distance along `direction` from `point` marking where the visible segment
+            // starts/ends - ground truth (real SketchUp 2025, SDK/Ruby cross-checked): a bounded
+            // segment's start/end exactly equal point/direction scaled by these two parameters
+            // (verified against Sketchup::ConstructionLine#start/#end/#direction byte-for-byte,
+            // including the segment LENGTH as end_param); an unbounded direction uses a +-1e30
+            // sentinel, matching Sketchup::ConstructionLine#start/#end returning nil for that side.
+            var lineParams = r.F64s(2);
+            double startParam = lineParams[0], endParam = lineParams[1];
             // The trailing block varies by the WRITING BUILD, not cleanly
             // by version: 7 bytes on the v17 calibration corpus, 4 on v16
             // and on a real v18, 0 on another real v17. Self-calibrate on
@@ -1153,7 +1166,21 @@ namespace OpenSkp
                 ar.ClineTail = k;
             }
             r.Raw(k.Value);
-            return new ConstructionLineRec();
+
+            const double huge = 1e20; // well below the real +-1e30 sentinel, far above any real geometry extent
+            (double, double, double)? start = Math.Abs(startParam) >= huge
+                ? ((double, double, double)?)null
+                : (point[0] + direction[0] * startParam, point[1] + direction[1] * startParam, point[2] + direction[2] * startParam);
+            (double, double, double)? end = Math.Abs(endParam) >= huge
+                ? ((double, double, double)?)null
+                : (point[0] + direction[0] * endParam, point[1] + direction[1] * endParam, point[2] + direction[2] * endParam);
+            return new ConstructionLineRec
+            {
+                Point = (point[0], point[1], point[2]),
+                Direction = (direction[0], direction[1], direction[2]),
+                Start = start,
+                End = end,
+            };
         }
 
         public static object ReadConstructionPoint(Archive ar, LR r)
@@ -1891,6 +1918,8 @@ namespace OpenSkp
             public List<SectionPlane> SectionPlanes = new List<SectionPlane>();
             public List<TextEntity> Texts = new List<TextEntity>();
             public List<Dimension> Dimensions = new List<Dimension>();
+            public List<ConstructionLine> ConstructionLines = new List<ConstructionLine>();
+            public List<ConstructionPoint> ConstructionPoints = new List<ConstructionPoint>();
         }
 
         private static void AddEdge(LegacyBuilder builder, int slot, EdgeRec e, Dictionary<int, SlotEntry> slots)
@@ -2034,6 +2063,23 @@ namespace OpenSkp
                     {
                         Text = dlRec.Text,
                         Hidden = dlRec.Db.Hidden != 0
+                    });
+                }
+                else if (v is ConstructionLineRec clRec)
+                {
+                    builder.ConstructionLines.Add(new ConstructionLine
+                    {
+                        Point = clRec.Point,
+                        Direction = clRec.Direction,
+                        Start = clRec.Start,
+                        End = clRec.End,
+                    });
+                }
+                else if (v is ConstructionPointRec cpRec)
+                {
+                    builder.ConstructionPoints.Add(new ConstructionPoint
+                    {
+                        Position = (cpRec.Pos[0], cpRec.Pos[1], cpRec.Pos[2]),
                     });
                 }
             }
@@ -2247,6 +2293,14 @@ namespace OpenSkp
             g.SectionPlanes = b.SectionPlanes;
             g.Texts = b.Texts;
             g.Dimensions = b.Dimensions;
+            // ConstructionLines/ConstructionPoints: same reader-already-
+            // captures-it-but-never-copies-it gap as SectionPlanes/Texts/
+            // Dimensions above - ReadConstructionLine/ReadConstructionPoint
+            // (and now the ConstructionLineRec/ConstructionPointRec dispatch
+            // in FillBuilder) already carried real point/direction/start/end
+            // data, but this conversion step never forwarded it (openskp#285).
+            g.ConstructionLines = b.ConstructionLines;
+            g.ConstructionPoints = b.ConstructionPoints;
             return g;
         }
     }

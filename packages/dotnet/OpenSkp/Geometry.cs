@@ -66,6 +66,8 @@ namespace OpenSkp
         public List<SectionPlane> SectionPlanes = new List<SectionPlane>();
         public List<TextEntity> Texts = new List<TextEntity>();
         public List<Dimension> Dimensions = new List<Dimension>();
+        public List<ConstructionLine> ConstructionLines = new List<ConstructionLine>();
+        public List<ConstructionPoint> ConstructionPoints = new List<ConstructionPoint>();
     }
 
     internal static class Geometry
