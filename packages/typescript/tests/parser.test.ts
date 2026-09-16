@@ -8,6 +8,7 @@ import {
   extractGeometryFromNodes,
   extractUvTransforms,
   collectDefs,
+  collectLayers,
   parseMaterialXml,
   extractAttributeDictionaries,
   isGenericDefinitionName,
@@ -579,5 +580,62 @@ describe('findNameOverride', () => {
   it('returns null when no override is present', () => {
     expect(findNameOverride(null)).toBeNull();
     expect(findNameOverride({ dynamic_attributes: { width: '10' } })).toBeNull();
+  });
+});
+
+describe('collectLayers - VFF per-layer-hidden flag (openskp#285)', () => {
+  // VFF layers derive their COLOR from Layer_<name>-prefixed materials,
+  // which carry no visibility flag of their own - real visibility lives on
+  // the model.dat layer manager's own 993A/8C3C node, as a single-byte
+  // 8E3C child sibling to the already-read DC05 (id) and 8D3C (name):
+  // 1 = hidden, 0 = visible. Byte shapes mirror Python's own
+  // TestVffLayerHidden exactly (confirmed against a real production file's
+  // Tags panel), also mirrored in the .NET port's LayerHiddenTests.cs.
+  const enc = (s: string) => new TextEncoder().encode(s);
+
+  function layerNode(id: number, name: string, hidden: boolean | null): Uint8Array {
+    const parts = [tlv('DC05', new Uint8Array([id])), tlv('8D3C', enc(name))];
+    if (hidden !== null) parts.push(tlv('8E3C', new Uint8Array([hidden ? 1 : 0])));
+    return tlv('8C3C', concatBytes(...parts));
+  }
+
+  function layerManager(...layers: Uint8Array[]): ReturnType<typeof parseTlvRecursive>[number] {
+    const bytes = tlv('993A', concatBytes(...layers));
+    return parseTlvRecursive(bytes, 0, bytes.length)[0];
+  }
+
+  it('reads hidden and visible layers correctly', () => {
+    const root = layerManager(
+      layerNode(5, 'wall_external_cladding_1', true),
+      layerNode(6, 'wall', false)
+    );
+
+    const layerIdToName = new Map<number, string>();
+    const layerHidden = new Map<string, boolean>();
+    collectLayers([root], layerIdToName, undefined, layerHidden);
+
+    expect(layerIdToName.get(5)).toBe('wall_external_cladding_1');
+    expect(layerIdToName.get(6)).toBe('wall');
+    expect(layerHidden.get('wall_external_cladding_1')).toBe(true);
+    expect(layerHidden.get('wall')).toBe(false);
+  });
+
+  it('leaves layerHidden unset when there is no 8E3C tag', () => {
+    const root = layerManager(layerNode(1, 'Layer0', null));
+
+    const layerIdToName = new Map<number, string>();
+    const layerHidden = new Map<string, boolean>();
+    collectLayers([root], layerIdToName, undefined, layerHidden);
+
+    expect(layerIdToName.get(1)).toBe('Layer0');
+    expect(layerHidden.has('Layer0')).toBe(false);
+  });
+
+  it('the layerHidden parameter is optional', () => {
+    const root = layerManager(layerNode(1, 'Layer0', true));
+
+    const layerIdToName = new Map<number, string>();
+    expect(() => collectLayers([root], layerIdToName)).not.toThrow();
+    expect(layerIdToName.get(1)).toBe('Layer0');
   });
 });

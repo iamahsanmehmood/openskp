@@ -387,7 +387,8 @@ export function extractGeometryFromNodes(
 export function collectLayers(
   nodes: TlvNode[],
   layerIdToName: Map<number, string> = new Map(),
-  options?: ParseOptions
+  options?: ParseOptions,
+  layerHidden?: Map<string, boolean>
 ): Map<number, string> {
   for (const el of nodes) {
     if (el.tag === '993A') {
@@ -412,12 +413,27 @@ export function collectLayers(
               emitLog(options, 'debug', `Failed to decode layer name for id ${lId}: ${(e as Error).message}`);
             }
             layerIdToName.set(lId, lName);
+
+            // 8E3C: a single byte, 1 = hidden / 0 = visible - confirmed
+            // byte-for-byte against a real production file's own Tags
+            // panel (openskp FrameSmart pipeline report, 2026-09-08):
+            // every layer showing a hollow (hidden) eye icon had
+            // 8E3C=01, every visible one had 8E3C=00. Mirrors Python's
+            // own collect_layers exactly (openskp#285) - the VFF-format
+            // counterpart of the legacy format's already-known
+            // layer-hidden flag.
+            if (layerHidden) {
+              const hiddenNode = findChildTag(child.children, '8E3C');
+              if (hiddenNode && hiddenNode.payload.length > 0) {
+                layerHidden.set(lName, hiddenNode.payload[0] === 1);
+              }
+            }
           }
         }
       }
     }
     if (el.children && el.children.length > 0) {
-      collectLayers(el.children, layerIdToName, options);
+      collectLayers(el.children, layerIdToName, options, layerHidden);
     }
   }
   return layerIdToName;

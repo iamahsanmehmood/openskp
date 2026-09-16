@@ -266,7 +266,7 @@ function parseToRaw(buffer: ArrayBuffer, options?: ParseOptions): ParsedRawData 
 
   for (const { index, total, node: el } of iterTopLevelLazy(modelData, 0, modelData.length)) {
     try {
-      collectLayers([el], layerIdToName, options);
+      collectLayers([el], layerIdToName, options, layerHidden);
       collectMaterialIds([el]);
       collectDefs([el], defsDict, options);
       scanVertexPositions(el, vertexPositions);
