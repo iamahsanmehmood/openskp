@@ -863,3 +863,141 @@ describe('Real @thatopen/fragments npm package interop (SingleThreadedFragmentsM
   });
 });
 
+describe('oversized shell splitting (openskp#285 / PR #355)', () => {
+  // A single shell (Fragments' term for one baked triangle mesh) has no
+  // representation for more than 65535 triangles: profilesFaceIds is a
+  // plain ushort array in the real schema (index.fbs), with no uint32
+  // escape hatch the way POINTS get past 65535 via BigShellProfile. A real
+  // production model with one 222,000+-triangle primitive (a large
+  // flattened/dense mesh) hit this in practice on the Python port - see
+  // PR #355 for the full incident. Unlike Python (which threw at write
+  // time), this port's old `faceIds[i] = i & 0xffff` silently WRAPPED
+  // instead of throwing - a worse bug in one sense: it wrote wrong/
+  // colliding face ids instead of failing loudly. getOrBakeShell now
+  // splits an oversized primitive's triangles into multiple shells
+  // instead, each within the ushort limit.
+
+  function gridPrimitive(cols: number, rows: number): LocalPrimitive {
+    const positions = new Float32Array(cols * rows * 3);
+    for (let j = 0; j < rows; j++) {
+      for (let i = 0; i < cols; i++) {
+        const v = j * cols + i;
+        positions[v * 3] = i;
+        positions[v * 3 + 1] = j;
+        positions[v * 3 + 2] = 0;
+      }
+    }
+    const triCells = (cols - 1) * (rows - 1);
+    const indices = new Uint32Array(triCells * 6);
+    let k = 0;
+    for (let j = 0; j < rows - 1; j++) {
+      for (let i = 0; i < cols - 1; i++) {
+        const a = j * cols + i;
+        const b = a + 1;
+        const c = a + cols;
+        const d = c + 1;
+        indices[k++] = a; indices[k++] = b; indices[k++] = d;
+        indices[k++] = a; indices[k++] = d; indices[k++] = c;
+      }
+    }
+    return {
+      positions,
+      normals: new Float32Array(cols * rows * 3),
+      uvs: new Float32Array(cols * rows * 2),
+      indices,
+      materialIndex: 0,
+    };
+  }
+
+  function sceneWithOnePrimitive(prim: LocalPrimitive, meshId: string): InstancedScene {
+    const resource: InstancedMeshResource = {
+      id: meshId,
+      definitionId: 1,
+      definitionName: 'BigMesh',
+      variantKey: '1|255,255,255',
+      primitives: [prim],
+    };
+    const node: InstancedNode = {
+      name: 'Big',
+      nameIsGenerated: false,
+      definitionName: 'BigMesh',
+      layer: 'Framing',
+      matrix: IDENTITY,
+      positionMm: [0, 0, 0],
+      properties: {},
+      guid: '',
+      meshResourceId: meshId,
+      children: [],
+    };
+    const root: InstancedNode = {
+      name: 'ROOT',
+      nameIsGenerated: false,
+      definitionName: 'ROOT_MODEL',
+      layer: 'Layer0',
+      matrix: IDENTITY,
+      positionMm: [0, 0, 0],
+      properties: {},
+      guid: '',
+      children: [node],
+    };
+    return {
+      bounds: null,
+      sceneHierarchy: root,
+      meshResources: [resource],
+      gltfMaterials: [{ pbrMetallicRoughness: { baseColorFactor: [1.0, 1.0, 1.0, 1.0] } }],
+      textures: [],
+      layerHidden: {},
+    };
+  }
+
+  it('splits an oversized primitive and every face id across every sub-shell is correct and sequential', () => {
+    const cols = 210, rows = 165;
+    const expectedTriangles = (cols - 1) * (rows - 1) * 2;
+    expect(expectedTriangles).toBeGreaterThan(65535); // sanity-check the fixture itself exceeds the limit under test
+
+    const scene = sceneWithOnePrimitive(gridPrimitive(cols, rows), 'mesh_big');
+
+    // This is the exact shape of call that, before the fix, silently wrote
+    // wrapped-around (wrong) face ids via `i & 0xffff` - the primary
+    // regression check is that the result is now actually correct, not
+    // just that it doesn't throw (unlike Python's own crash-shaped version
+    // of this bug).
+    const rawBytes = toFragments(scene, { raw: true });
+    const bb = new flatbuffers.ByteBuffer(rawBytes);
+    const model = Model.getRootAsModel(bb);
+    const meshes = model.meshes()!;
+
+    expect(meshes.shellsLength()).toBeGreaterThan(1); // confirms the split actually happened, not a no-op
+    expect(meshes.samplesLength()).toBe(meshes.shellsLength()); // one sample per split shell, same item/material
+
+    let totalTriangles = 0;
+    for (let i = 0; i < meshes.shellsLength(); i++) {
+      const shell = meshes.shells(i)!;
+      expect(shell.profilesFaceIdsLength()).toBeLessThanOrEqual(65535); // every sub-shell stays within the ushort limit
+      expect(shell.profilesLength()).toBe(shell.profilesFaceIdsLength());
+      // Every face id in a shell is a small, sequential, non-wrapped 0..N-1
+      // run - the exact thing the old `i & 0xffff` mask could silently
+      // violate once a shell's own triangle count exceeded 65535.
+      for (let j = 0; j < shell.profilesFaceIdsLength(); j++) {
+        expect(shell.profilesFaceIds(j)).toBe(j);
+      }
+      totalTriangles += shell.profilesFaceIdsLength();
+    }
+    expect(totalTriangles).toBe(expectedTriangles);
+  });
+
+  it('a primitive within the limit still produces exactly one shell', () => {
+    // Regression guard on the split path itself: a normal, non-huge
+    // primitive must not be needlessly split into multiple shells.
+    const scene = sceneWithOnePrimitive(gridPrimitive(50, 50), 'mesh_small'); // 49*49*2 = 4802 triangles
+
+    const rawBytes = toFragments(scene, { raw: true });
+    const bb = new flatbuffers.ByteBuffer(rawBytes);
+    const model = Model.getRootAsModel(bb);
+    const meshes = model.meshes()!;
+
+    expect(meshes.shellsLength()).toBe(1);
+    expect(meshes.samplesLength()).toBe(1);
+  });
+});
+

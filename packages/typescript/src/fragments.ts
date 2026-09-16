@@ -217,7 +217,7 @@ export function toFragments(
   const builder = new flatbuffers.Builder(1024 * 64);
 
   // Shells, representations, materials built lazily as leaves are walked
-  const shellKeyToIndex = new Map<string, number>();
+  const shellKeyToIndex = new Map<string, number[]>();
   const shellOffsets: flatbuffers.Offset[] = [];
   const representationBounds: {
     min: [number, number, number];
@@ -248,26 +248,16 @@ export function toFragments(
     return idx;
   };
 
-  const getOrBakeShell = (
-    resourceId: string,
-    primIdx: number,
-    prim: LocalPrimitive,
-    scale: [number, number, number],
-    mirrored: boolean
+  const bakeOneShell = (
+    points: [number, number, number][],
+    triangles: [number, number, number][]
   ): number => {
-    const sk = scaleCacheKey(mirrored, scale);
-    const key = `${resourceId}:${primIdx}:${sk}`;
-    if (shellKeyToIndex.has(key)) {
-      return shellKeyToIndex.get(key)!;
-    }
-
-    const baked = bakePrimitive(prim, scale, mirrored);
-    const isBig = baked.points.length > USHORT_MAX;
+    const isBig = points.length > USHORT_MAX;
 
     const profileOffsets: flatbuffers.Offset[] = [];
     const bigProfileOffsets: flatbuffers.Offset[] = [];
 
-    for (const tri of baked.triangles) {
+    for (const tri of triangles) {
       if (isBig) {
         BigShellProfile.startIndicesVector(builder, 3);
         builder.addInt32(tri[2]);
@@ -297,20 +287,22 @@ export function toFragments(
     Shell.startBigHolesVector(builder, 0);
     const bigHolesVec = builder.endVector();
 
-    Shell.startPointsVector(builder, baked.points.length);
-    for (let i = baked.points.length - 1; i >= 0; i--) {
-      FloatVector.createFloatVector(
-        builder,
-        baked.points[i][0],
-        baked.points[i][1],
-        baked.points[i][2]
-      );
+    Shell.startPointsVector(builder, points.length);
+    for (let i = points.length - 1; i >= 0; i--) {
+      FloatVector.createFloatVector(builder, points[i][0], points[i][1], points[i][2]);
     }
     const pointsVec = builder.endVector();
 
-    const faceIds = new Uint16Array(baked.triangles.length);
-    for (let i = 0; i < baked.triangles.length; i++) {
-      faceIds[i] = i & 0xffff;
+    // Sequential per-shell profile ids (0..triangles.length-1, not tied to
+    // any upstream SketchUp face identity - see the caller for how a
+    // too-large triangle list is chunked before reaching here), so
+    // re-numbering from 0 per shell is exactly consistent with the
+    // single-shell behavior this is a straight extraction of. Safe to
+    // store as Uint16Array unmasked now that triangles.length is always
+    // <= USHORT_MAX by construction.
+    const faceIds = new Uint16Array(triangles.length);
+    for (let i = 0; i < triangles.length; i++) {
+      faceIds[i] = i;
     }
     const faceIdsVec = Shell.createProfilesFaceIdsVector(builder, faceIds);
 
@@ -329,7 +321,7 @@ export function toFragments(
 
     let minX = Infinity, minY = Infinity, minZ = Infinity;
     let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
-    for (const p of baked.points) {
+    for (const p of points) {
       if (p[0] < minX) minX = p[0]; if (p[0] > maxX) maxX = p[0];
       if (p[1] < minY) minY = p[1]; if (p[1] > maxY) maxY = p[1];
       if (p[2] < minZ) minZ = p[2]; if (p[2] > maxZ) maxZ = p[2];
@@ -343,8 +335,49 @@ export function toFragments(
       max: [maxX, maxY, maxZ],
     });
 
-    shellKeyToIndex.set(key, index);
     return index;
+  };
+
+  const getOrBakeShell = (
+    resourceId: string,
+    primIdx: number,
+    prim: LocalPrimitive,
+    scale: [number, number, number],
+    mirrored: boolean
+  ): number[] => {
+    const sk = scaleCacheKey(mirrored, scale);
+    const key = `${resourceId}:${primIdx}:${sk}`;
+    if (shellKeyToIndex.has(key)) {
+      return shellKeyToIndex.get(key)!;
+    }
+
+    const baked = bakePrimitive(prim, scale, mirrored);
+
+    // `profilesFaceIds` (written above) has no "big"/uint32 counterpart
+    // anywhere in the real Fragments schema (index.fbs only declares
+    // `profiles_face_ids: [ushort]` - unlike points, which DO get a
+    // BigShellProfile/uint32-index escape hatch past 65535 of them). A
+    // single shell genuinely cannot represent more than 65535 triangles no
+    // matter how points are encoded - see Python's own fix (openskp#285/
+    // PR #355) for the real production incident this was ported from.
+    // Splitting into multiple shells, each within the ushort limit, is the
+    // only way to represent this - the format has no cap on shell COUNT,
+    // just per-shell triangle count. Each sub-shell duplicates the full
+    // (shared) points array rather than remapping to a local subset:
+    // simpler and lower-risk than a vertex-remapping pass, at the cost of
+    // some extra file size in this rare oversized-mesh case.
+    let indices: number[];
+    if (baked.triangles.length > USHORT_MAX) {
+      indices = [];
+      for (let i = 0; i < baked.triangles.length; i += USHORT_MAX) {
+        indices.push(bakeOneShell(baked.points, baked.triangles.slice(i, i + USHORT_MAX)));
+      }
+    } else {
+      indices = [bakeOneShell(baked.points, baked.triangles)];
+    }
+
+    shellKeyToIndex.set(key, indices);
+    return indices;
   };
 
   const localIds: number[] = [];
@@ -402,16 +435,23 @@ export function toFragments(
       const trs = decomposeTrs(world);
       for (let primIdx = 0; primIdx < res.primitives.length; primIdx++) {
         const prim = res.primitives[primIdx];
-        sampleMaterial.push(getMaterialIndex(prim.materialIndex));
-        sampleRepresentation.push(
-          getOrBakeShell(resourceId!, primIdx, prim, trs.scale, trs.mirrored)
-        );
-        meshesItems.push(itemIndex);
-        globalTransformData.push({
-          pos: trs.position,
-          xDir: trs.xDir,
-          yDir: trs.yDir,
-        });
+        const materialIndex = getMaterialIndex(prim.materialIndex);
+        // Normally exactly one shell; more than one only when the
+        // primitive's own triangle count exceeded what a single shell can
+        // represent (see getOrBakeShell) - each extra shell becomes its
+        // own additional Sample of the same item/material/transform, the
+        // same pattern this loop already uses for multiple primitives of
+        // one item.
+        for (const shellIndex of getOrBakeShell(resourceId!, primIdx, prim, trs.scale, trs.mirrored)) {
+          sampleMaterial.push(materialIndex);
+          sampleRepresentation.push(shellIndex);
+          meshesItems.push(itemIndex);
+          globalTransformData.push({
+            pos: trs.position,
+            xDir: trs.xDir,
+            yDir: trs.yDir,
+          });
+        }
       }
     }
   }
