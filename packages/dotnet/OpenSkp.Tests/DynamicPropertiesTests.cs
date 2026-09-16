@@ -156,7 +156,7 @@ namespace OpenSkp.Tests
 
             var dicts = Geometry.ExtractAttributeDictionaries(d007);
 
-            Assert.Equal(new Dictionary<string, string> { ["code"] = "Ks" }, dicts["fbd-einfo"]);
+            Assert.Equal(new Dictionary<string, object?> { ["code"] = "Ks" }, dicts["fbd-einfo"]);
         }
 
         [Fact]
@@ -192,6 +192,154 @@ namespace OpenSkp.Tests
             Assert.Empty(Geometry.ExtractAttributeDictionaries(d007));
         }
 
+        // --- Multi-value-type decoding (openskp#285's VFF 9-value-type
+        // item). Byte shapes mirror Python's TestVffAttributeDictionaries
+        // exactly - same fixture-construction helpers, same real tag
+        // pairings, ground-truthed there first.
+
+        private static byte[] Concat(params byte[][] parts)
+        {
+            var result = new List<byte>();
+            foreach (var p in parts) result.AddRange(p);
+            return result.ToArray();
+        }
+
+        private static byte[] EntryValue(byte[] innerTlv) => Tlv("A438", innerTlv);
+
+        private static byte[] Entry(string key, byte[] innerValueTlv) =>
+            Concat(Tlv("B636", Encoding.UTF8.GetBytes(key)), EntryValue(innerValueTlv));
+
+        private static TlvNode MakeD007WithRawEntries(string dictName, byte[] entriesPayload)
+        {
+            var dc05Payload = new List<byte>();
+            dc05Payload.AddRange(Tlv("B436", Encoding.UTF8.GetBytes(dictName)));
+            dc05Payload.AddRange(Tlv("B536", entriesPayload));
+            var dc05 = new TlvNode { Tag = "DC05", Payload = dc05Payload.ToArray() };
+            return new TlvNode { Tag = "D007", Children = new List<TlvNode> { dc05 } };
+        }
+
+        [Fact]
+        public void ExtractAttributeDictionaries_LengthAndFloatAreDistinctTagsBothF64()
+        {
+            // AF38 (Length) and A938 (plain Float) both encode as a flat
+            // 8-byte float64 but are genuinely different tags - real
+            // SketchUp/FrameBuilder data uses both for different keys.
+            var entries = Concat(
+                Entry("depth", Tlv("AF38", BitConverter.GetBytes(15.5))),
+                Entry("price", Tlv("A938", BitConverter.GetBytes(120.0))));
+            var d007 = MakeD007WithRawEntries("fbd-einfo", entries);
+
+            var result = Geometry.ExtractAttributeDictionaries(d007)["fbd-einfo"];
+
+            Assert.Equal(15.5, Assert.IsType<double>(result["depth"]));
+            Assert.Equal(120.0, Assert.IsType<double>(result["price"]));
+        }
+
+        [Fact]
+        public void ExtractAttributeDictionaries_IntegerValueRoundTrips()
+        {
+            var entries = Entry("angle", Tlv("A738", BitConverter.GetBytes(-7)));
+            var d007 = MakeD007WithRawEntries("fbd-einfo", entries);
+
+            var result = Geometry.ExtractAttributeDictionaries(d007)["fbd-einfo"];
+
+            Assert.Equal(-7, Assert.IsType<int>(result["angle"]));
+        }
+
+        [Fact]
+        public void ExtractAttributeDictionaries_NullValueRoundTrips()
+        {
+            // A438 with no children at all.
+            var entries = Entry("child_thickness", Array.Empty<byte>());
+            var d007 = MakeD007WithRawEntries("fbd-einfo", entries);
+
+            var dicts = Geometry.ExtractAttributeDictionaries(d007);
+
+            Assert.Null(dicts["fbd-einfo"]["child_thickness"]);
+        }
+
+        [Fact]
+        public void ExtractAttributeDictionaries_Point3dAndVector3dRoundTrip()
+        {
+            var pointBytes = Tlv("B438", Concat(
+                BitConverter.GetBytes(0.0), BitConverter.GetBytes(0.807085), BitConverter.GetBytes(14.6551)));
+            var vectorBytes = Tlv("B538", Concat(
+                BitConverter.GetBytes(1.0), BitConverter.GetBytes(0.0), BitConverter.GetBytes(0.0)));
+            var entries = Concat(Entry("end_pos", pointBytes), Entry("vector_new", vectorBytes));
+            var d007 = MakeD007WithRawEntries("fbd-einfo", entries);
+
+            var result = Geometry.ExtractAttributeDictionaries(d007)["fbd-einfo"];
+
+            Assert.Equal(new double[] { 0.0, 0.807085, 14.6551 }, Assert.IsType<double[]>(result["end_pos"]));
+            Assert.Equal(new double[] { 1.0, 0.0, 0.0 }, Assert.IsType<double[]>(result["vector_new"]));
+        }
+
+        [Fact]
+        public void ExtractAttributeDictionaries_EmptyArrayRoundTrips()
+        {
+            var entries = Entry("added_bolt_holes", Tlv("AE38", Array.Empty<byte>()));
+            var d007 = MakeD007WithRawEntries("fbd-einfo", entries);
+
+            var result = Geometry.ExtractAttributeDictionaries(d007)["fbd-einfo"];
+
+            Assert.Empty(Assert.IsType<List<object?>>(result["added_bolt_holes"]));
+        }
+
+        [Fact]
+        public void ExtractAttributeDictionaries_ArrayOfFloatsRoundTrips()
+        {
+            var elems = Concat(
+                EntryValue(Tlv("A938", BitConverter.GetBytes(0.728))),
+                EntryValue(Tlv("A938", BitConverter.GetBytes(11.358))),
+                EntryValue(Tlv("A938", BitConverter.GetBytes(14.655))));
+            var entries = Entry("flangeholes", Tlv("AE38", elems));
+            var d007 = MakeD007WithRawEntries("fbd-einfo", entries);
+
+            var result = Geometry.ExtractAttributeDictionaries(d007)["fbd-einfo"];
+
+            Assert.Equal(new List<object?> { 0.728, 11.358, 14.655 }, result["flangeholes"]);
+        }
+
+        [Fact]
+        public void ExtractAttributeDictionaries_NestedArrayRoundTrips()
+        {
+            // openskp#253's motivating case mirrored on the read side:
+            // fbd-profile-cords style [[x, y], [x, y]] - an array whose
+            // elements are themselves arrays.
+            var inner1 = Concat(
+                EntryValue(Tlv("A938", BitConverter.GetBytes(25.17))),
+                EntryValue(Tlv("A938", BitConverter.GetBytes(0.07))));
+            var inner2 = Concat(
+                EntryValue(Tlv("A938", BitConverter.GetBytes(25.17))),
+                EntryValue(Tlv("A938", BitConverter.GetBytes(15.35))));
+            var outer = Concat(EntryValue(Tlv("AE38", inner1)), EntryValue(Tlv("AE38", inner2)));
+            var entries = Entry("lip_side1_cords", Tlv("AE38", outer));
+            var d007 = MakeD007WithRawEntries("fbd-einfo", entries);
+
+            var result = Geometry.ExtractAttributeDictionaries(d007)["fbd-einfo"];
+
+            Assert.Equal(
+                new List<object?>
+                {
+                    new List<object?> { 25.17, 0.07 },
+                    new List<object?> { 25.17, 15.35 },
+                },
+                result["lip_side1_cords"]);
+        }
+
+        [Fact]
+        public void ExtractAttributeDictionaries_UnrecognizedValueTagIsSkippedNotGuessed()
+        {
+            // A type tag this decoder doesn't (yet) know is left as null
+            // rather than misinterpreted - safer than a wrong guess.
+            var entries = Entry("mystery", Tlv("EE99", new byte[] { 0x01, 0x02 }));
+            var d007 = MakeD007WithRawEntries("fbd-einfo", entries);
+
+            var result = Geometry.ExtractAttributeDictionaries(d007)["fbd-einfo"];
+
+            Assert.Null(result["mystery"]);
+        }
+
         [Theory]
         [InlineData("Group#1", true)]
         [InlineData("Component#12", true)]
@@ -206,11 +354,11 @@ namespace OpenSkp.Tests
         [Fact]
         public void FindNameOverride_SkipsDynamicAttributesAndSuInstanceSet()
         {
-            var dicts = new Dictionary<string, Dictionary<string, string>>
+            var dicts = new Dictionary<string, Dictionary<string, object?>>
             {
-                ["dynamic_attributes"] = new Dictionary<string, string> { ["name"] = "should-be-ignored" },
-                ["SU_InstanceSet"] = new Dictionary<string, string> { ["label"] = "also-ignored" },
-                ["FrameBuilder"] = new Dictionary<string, string> { ["name"] = "W-2" },
+                ["dynamic_attributes"] = new Dictionary<string, object?> { ["name"] = "should-be-ignored" },
+                ["SU_InstanceSet"] = new Dictionary<string, object?> { ["label"] = "also-ignored" },
+                ["FrameBuilder"] = new Dictionary<string, object?> { ["name"] = "W-2" },
             };
             Assert.Equal("W-2", Geometry.FindNameOverride(dicts));
         }
@@ -219,9 +367,9 @@ namespace OpenSkp.Tests
         public void FindNameOverride_ReturnsNullWhenNoOverridePresent()
         {
             Assert.Null(Geometry.FindNameOverride(null));
-            Assert.Null(Geometry.FindNameOverride(new Dictionary<string, Dictionary<string, string>>
+            Assert.Null(Geometry.FindNameOverride(new Dictionary<string, Dictionary<string, object?>>
             {
-                ["dynamic_attributes"] = new Dictionary<string, string> { ["width"] = "10" },
+                ["dynamic_attributes"] = new Dictionary<string, object?> { ["width"] = "10" },
             }));
         }
 
