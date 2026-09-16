@@ -247,6 +247,35 @@ const int _ftcSchema = 4;
 const int _arcCurveSchema = 3;
 const int _ccurveSchema = 4;
 
+const int _sectionPlaneSchema = 3;
+const int _dimensionLinearSchema = 6;
+const int _skFontSchema = 1;
+const int _textSchema = 9;
+const int _constructionLineSchema = 1;
+const int _constructionPointSchema = 0;
+
+/// Byte-exact templates harvested from a real SketchUp 2017 file (28
+/// dimensions, capilla quiroz corpus model); see
+/// docs/dimension-record-notes.md for the full layout. Ported verbatim
+/// from create.py's own `_DIM_FONT_PAYLOAD`/`_TEXT_DELIM`.
+final List<int> _dimFontPayload = _hexBytes(
+  '000000' // preamble: null attrs + pid mask 0
+  'fffeff065400610068006f006d006100' // "Tahoma"
+  '0000'
+  '08000000'
+  '00'
+  'ecf57abd5eaf2340', // height f64
+);
+
+/// Leader-text delimiter block: `[u32 1][u8 flag=1][u8 0][u32 ARROW=3 closed][u8 1]`
+final List<int> _textDelim = _hexBytes('0100000001000300000001');
+
+/// Sentinel a CConstructionLine's start/end distance-parameter carries when
+/// unbounded in that direction - real SketchUp's own value, ground-truth
+/// verified against `Sketchup::ConstructionLine#start`/`#end` returning nil
+/// for that side.
+const double _clineInfinite = 1e30;
+
 /// A face with no explicit texture positioning stores no CFaceTextureCoords
 /// at all, so this identity is only ever used to fill the *other* side's
 /// slot when just one of front/back is explicitly positioned.
@@ -715,6 +744,11 @@ class _ArchiveWriter {
   int nextPid;
   final List<int> buf = <int>[];
 
+  /// One CSkFont per file, serialized inline at the first dimension/text's
+  /// font field (exactly as SketchUp writes it) and re-used by back-ref
+  /// afterwards - see [writeDimension]/[writeText].
+  int? _dimFontSlot;
+
   _ArchiveWriter({
     required this.nextSlot,
     required Map<String, int> classSlot,
@@ -1016,6 +1050,196 @@ class _ArchiveWriter {
     for (final u in units) {
       buf.addAll(_u16(u));
     }
+  }
+
+  /// Write the first dimension/text's CSkFont record inline, or back-ref
+  /// the one already written earlier in this file - shared 1-per-file
+  /// state, same as create.py's own `_dim_font_slot`.
+  void _writeDimFontRef() {
+    if (_dimFontSlot == null) {
+      _dimFontSlot = _newOfKnownClass('CSkFont', schema: _skFontSchema);
+      buf.addAll(_dimFontPayload);
+    } else {
+      _backref(_dimFontSlot!);
+    }
+  }
+
+  /// Add a FREE linear dimension between two explicit points (inches,
+  /// world space). [offset] is the dimension line's offset from the
+  /// measured segment, in inches (signed).
+  ///
+  /// The record layout is the byte-exact one the real SketchUp SDK writes
+  /// for free dimensions (generated via SketchUpAPI and harvested - see
+  /// docs/dimension-record-notes.md): connection type 1 with the point
+  /// stored inline in each connection block and null object refs. Free
+  /// dimensions render in any orientation; anchored (type 2) dimensions
+  /// are a future refinement.
+  void writeDimension(Point3 p1, Point3 p2, {double offset = 10.0}) {
+    if (p1.$1 == p2.$1 && p1.$2 == p2.$2 && p1.$3 == p2.$3) {
+      throw SkpWriteError('addDimension endpoints coincide');
+    }
+    _newOfKnownClass('CDimensionLinear', schema: _dimensionLinearSchema);
+    _preamble();
+    _drawbase();
+    _writeStr(''); // auto-computed measurement text
+    _writeDimFontRef();
+    // connection 1: [u8 0][u32 0][u32 type=1][u32 4][point A], null ref
+    buf.addAll(List<int>.filled(5, 0));
+    buf.addAll(_u32(1));
+    buf.addAll(_u32(4));
+    buf.addAll(_f64(p1.$1));
+    buf.addAll(_f64(p1.$2));
+    buf.addAll(_f64(p1.$3));
+    buf.addAll(_u16(0));
+    // connection 2: [u16 0][f64 0][u32 type=1][u32 4][point B], null ref
+    buf.addAll(List<int>.filled(10, 0));
+    buf.addAll(_u32(1));
+    buf.addAll(_u32(4));
+    buf.addAll(_f64(p2.$1));
+    buf.addAll(_f64(p2.$2));
+    buf.addAll(_f64(p2.$3));
+    buf.addAll(_u16(0));
+    // placement block: SDK free-dimension defaults + our offset
+    buf.addAll(List<int>.filled(2, 0));
+    for (final v in [0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0]) {
+      buf.addAll(_f64(v));
+    }
+    buf.addAll(_u32(0));
+    buf.addAll(_f64(offset));
+    buf.addAll(_f64(0.0));
+    buf.addAll(_u32(1));
+  }
+
+  /// Add a leader text (SketchUp's Text tool) anchored at [point] (inches,
+  /// world space), with the label floating at `point + leader` and a
+  /// leader line joining them.
+  ///
+  /// The record mirrors human-drawn leader texts harvested from real files
+  /// (the SDK's own create only produces SCREEN texts - its two 0.5
+  /// doubles are screen fractions): screen slot zeroed, the free-
+  /// connection block dimensions use `([u32 1][u32 4][point3d])`, the
+  /// label's world position in the placement tail, and leader type 2
+  /// (pushpin) before the arrow delimiter.
+  void writeText(String text, Point3 point, {Point3 leader = (15.0, 15.0, 15.0)}) {
+    final lb = (point.$1 + leader.$1, point.$2 + leader.$2, point.$3 + leader.$3);
+    _newOfKnownClass('CText', schema: _textSchema);
+    _preamble();
+    _drawbase();
+    _writeDimFontRef();
+    buf.addAll(_f64(0.0));
+    buf.addAll(_f64(0.0)); // screen-fraction slot (unused)
+    buf.addAll(_u32(1));
+    buf.addAll(_u32(4)); // free connection + constant
+    buf.addAll(_f64(point.$1));
+    buf.addAll(_f64(point.$2));
+    buf.addAll(_f64(point.$3));
+    buf.addAll(List<int>.filled(12, 0));
+    buf.addAll(_f64(lb.$1));
+    buf.addAll(_f64(lb.$2));
+    buf.addAll(_f64(lb.$3)); // label position
+    buf.addAll(List<int>.filled(16, 0));
+    buf.addAll(_f64(1.0));
+    buf.addAll(_u32(2)); // leader type: pushpin
+    buf.addAll(_textDelim);
+    _writeStr(text);
+    buf.addAll(List<int>.filled(5, 0));
+  }
+
+  /// Add a construction/guide line (SketchUp's Construction Line tool).
+  /// Pass exactly one of [point2] (a bounded segment between [point] and
+  /// [point2]) or [direction] (an unbounded guide line through [point]).
+  ///
+  /// Ground truth (real SketchUp 2025, SDK/Ruby cross-checked against both
+  /// a v2020-downgrade save and a genuinely v17-native save): the record
+  /// stores a point + normalized direction + two signed distance
+  /// parameters along that direction marking the visible segment's
+  /// start/end. An unbounded direction is written as the real ±1e30
+  /// sentinel SketchUp itself uses.
+  void writeConstructionLine(Point3 point, {Point3? point2, Point3? direction}) {
+    if ((point2 == null) == (direction == null)) {
+      throw SkpWriteError('addConstructionLine: pass exactly one of point2 or direction');
+    }
+    double dx, dy, dz, startParam, endParam;
+    if (point2 != null) {
+      dx = point2.$1 - point.$1;
+      dy = point2.$2 - point.$2;
+      dz = point2.$3 - point.$3;
+      final length = sqrt(dx * dx + dy * dy + dz * dz);
+      if (length == 0.0) {
+        throw SkpWriteError('addConstructionLine: point and point2 coincide');
+      }
+      dx /= length;
+      dy /= length;
+      dz /= length;
+      startParam = 0.0;
+      endParam = length;
+    } else {
+      final d = direction!;
+      final dlen = sqrt(d.$1 * d.$1 + d.$2 * d.$2 + d.$3 * d.$3);
+      if (dlen == 0.0) {
+        throw SkpWriteError('addConstructionLine: direction must be nonzero');
+      }
+      dx = d.$1 / dlen;
+      dy = d.$2 / dlen;
+      dz = d.$3 / dlen;
+      startParam = -_clineInfinite;
+      endParam = _clineInfinite;
+    }
+    _newOfKnownClass('CConstructionLine', schema: _constructionLineSchema);
+    _preamble();
+    _drawbase();
+    for (final v in [point.$1, point.$2, point.$3, dx, dy, dz, startParam, endParam]) {
+      buf.addAll(_f64(v));
+    }
+    buf.addAll(List<int>.filled(4, 0)); // trailer
+  }
+
+  /// Add a construction/guide point (SketchUp's Construction Point tool)
+  /// at [position] (inches, world space).
+  ///
+  /// Ground truth (real SketchUp 2025, SDK/Ruby cross-checked): a second,
+  /// always-zero 3-double block and a trailing zero byte follow the
+  /// position - reserved/unused, written as zero to match every real-file
+  /// sample seen.
+  void writeConstructionPoint(Point3 position) {
+    _newOfKnownClass('CConstructionPoint', schema: _constructionPointSchema);
+    _preamble();
+    _drawbase();
+    for (final v in [position.$1, position.$2, position.$3, 0.0, 0.0, 0.0]) {
+      buf.addAll(_f64(v));
+    }
+    buf.addAll(List<int>.filled(1, 0));
+  }
+
+  /// Add a section plane (SketchUp's Section Plane tool) through [point]
+  /// with the given [normal] (need not be unit length), matching
+  /// `Entities#add_section_plane([point, normal])`.
+  ///
+  /// Ground truth (real SketchUp 2025, SDK/Ruby cross-checked against a
+  /// genuinely v17-native save): the record is preamble + drawbase + the
+  /// plane as 4 doubles `(a, b, c, d)` satisfying `a*x + b*y + c*z + d = 0`
+  /// for every point on the plane - the same implicit form
+  /// `Sketchup::SectionPlane#get_plane` returns (normal normalized,
+  /// `d = -(normal . point)`). A name/short-label pair can follow on v18+
+  /// saves per the reader (legacy.dart's `_readSectionPlane`) - omitted
+  /// here since this writer only ever produces v17-tagged files, same
+  /// scope as [writeDimension]/[writeText]/[writeConstructionLine].
+  void writeSectionPlane(Point3 point, Point3 normal) {
+    final nlen = sqrt(normal.$1 * normal.$1 + normal.$2 * normal.$2 + normal.$3 * normal.$3);
+    if (nlen == 0.0) {
+      throw SkpWriteError('addSectionPlane: normal must be nonzero');
+    }
+    final a = normal.$1 / nlen;
+    final b = normal.$2 / nlen;
+    final c = normal.$3 / nlen;
+    final d = -(a * point.$1 + b * point.$2 + c * point.$3);
+    _newOfKnownClass('CSectionPlane', schema: _sectionPlaneSchema);
+    _preamble();
+    _drawbase();
+    buf.addAll(_f64(a));
+    buf.addAll(_f64(b));
+    buf.addAll(_f64(c));
+    buf.addAll(_f64(d));
   }
 
   /// Write one solid-color `CMaterial` record and return its slot.
@@ -2741,6 +2965,62 @@ class SkpBuilder implements GeometryHost {
       softEdges: softEdges,
       smoothEdges: smoothEdges,
     );
+    _faceCount++; // reuses the "at least one root entity" check in toBytes
+  }
+
+  /// Add a FREE linear dimension between two explicit points (inches,
+  /// world space). [offset] is the dimension line's offset from the
+  /// measured segment, in inches (signed). See
+  /// [_ArchiveWriter.writeDimension] for the record's ground truth.
+  void addDimension(Point3 p1, Point3 p2, {double offset = 10.0}) {
+    _ensureGeometryWriter();
+    _geometryWriter!.writeDimension(p1, p2, offset: offset);
+    _newEntityCount++;
+    _faceCount++; // reuses the "at least one root entity" check in toBytes
+  }
+
+  /// Add a leader text (SketchUp's Text tool) anchored at [point] (inches,
+  /// world space), with the label floating at `point + leader` and a
+  /// leader line joining them. See [_ArchiveWriter.writeText] for the
+  /// record's ground truth.
+  void addText(String text, Point3 point, {Point3 leader = (15.0, 15.0, 15.0)}) {
+    _ensureGeometryWriter();
+    _geometryWriter!.writeText(text, point, leader: leader);
+    _newEntityCount++;
+    _faceCount++; // reuses the "at least one root entity" check in toBytes
+  }
+
+  /// Add a construction/guide line (SketchUp's Construction Line tool).
+  /// Pass exactly one of [point2] (a bounded segment between [point] and
+  /// [point2], matching `Entities#add_cline(p1, p2)`) or [direction] (an
+  /// unbounded guide line through [point], matching
+  /// `Entities#add_cline(point, vector)`). See
+  /// [_ArchiveWriter.writeConstructionLine] for the record's ground truth.
+  void addConstructionLine(Point3 point, {Point3? point2, Point3? direction}) {
+    _ensureGeometryWriter();
+    _geometryWriter!.writeConstructionLine(point, point2: point2, direction: direction);
+    _newEntityCount++;
+    _faceCount++; // reuses the "at least one root entity" check in toBytes
+  }
+
+  /// Add a construction/guide point (SketchUp's Construction Point tool)
+  /// at [position] (inches, world space). See
+  /// [_ArchiveWriter.writeConstructionPoint] for the record's ground truth.
+  void addConstructionPoint(Point3 position) {
+    _ensureGeometryWriter();
+    _geometryWriter!.writeConstructionPoint(position);
+    _newEntityCount++;
+    _faceCount++; // reuses the "at least one root entity" check in toBytes
+  }
+
+  /// Add a section plane (SketchUp's Section Plane tool) through [point]
+  /// with the given [normal] (need not be unit length), matching
+  /// `Entities#add_section_plane([point, normal])`. See
+  /// [_ArchiveWriter.writeSectionPlane] for the record's ground truth.
+  void addSectionPlane(Point3 point, Point3 normal) {
+    _ensureGeometryWriter();
+    _geometryWriter!.writeSectionPlane(point, normal);
+    _newEntityCount++;
     _faceCount++; // reuses the "at least one root entity" check in toBytes
   }
 
