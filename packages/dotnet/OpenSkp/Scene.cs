@@ -21,6 +21,17 @@ namespace OpenSkp
         public (double X, double Y, double Z) PositionMm { get; set; }
         public Dictionary<string, string> Properties { get; set; } = new Dictionary<string, string>();
 
+        /// <summary>Every OTHER attribute dictionary this instance carries,
+        /// keyed by the dictionary's own name, values stringified the same
+        /// way <see cref="Properties"/> already is - <see cref="Properties"/>
+        /// stays exactly SketchUp's own Dynamic Components data
+        /// ("dynamic_attributes") for backward compatibility; third-party
+        /// plugins (BIM/steel-detailing tools, etc.) commonly attach their
+        /// own richer per-instance data under their own dictionary name
+        /// instead, which this project never surfaced before (openskp#285).
+        /// Mirrors Python's InstanceNode.attribute_dictionaries exactly.</summary>
+        public Dictionary<string, Dictionary<string, string>> AttributeDictionaries { get; set; } = new Dictionary<string, Dictionary<string, string>>();
+
         /// <summary>Real SketchUp instance GUID (VFF/2021+ files only), or
         /// "" when the source file has none - see
         /// InstancedNode.Guid (InstancedScene.cs).</summary>
@@ -38,6 +49,10 @@ namespace OpenSkp
         public string Layer { get; set; } = "";
         public (double X, double Y, double Z) PositionMm { get; set; }
         public Dictionary<string, string> Properties { get; set; } = new Dictionary<string, string>();
+
+        /// <summary>See InstanceNode.AttributeDictionaries.</summary>
+        public Dictionary<string, Dictionary<string, string>> AttributeDictionaries { get; set; } = new Dictionary<string, Dictionary<string, string>>();
+
         public string Path { get; set; } = "";
     }
 
@@ -142,7 +157,7 @@ namespace OpenSkp
             // loop below). Replaces the previous per-instance full meshIndex
             // scan, which was O(instances x meshes) and dominated BuildScene on
             // models with tens or hundreds of thousands of placed instances.
-            var pathUpdates = new Dictionary<string, (Dictionary<string, string> Props, string Name)>();
+            var pathUpdates = new Dictionary<string, (Dictionary<string, string> Props, string Name, Dictionary<string, Dictionary<string, string>> AttrDicts)>();
 
             // Textures deduplicated by bytes: the same image routinely backs
             // several materials, and re-embedding it per material would
@@ -477,6 +492,25 @@ namespace OpenSkp
                     string displayName = nameOverride ?? fallbackName;
                     bool nameIsGenerated = nameOverride == null && !instNameNonEmpty && !defNameIsReal;
 
+                    // Every OTHER attribute dictionary this instance carries -
+                    // dynamic_attributes is already surfaced separately as
+                    // Properties above, and SU_InstanceSet is SketchUp's own
+                    // always-present, always-empty Owner/Status boilerplate,
+                    // not worth surfacing. Mirrors Python's own
+                    // attribute_dictionaries construction in scene.py exactly
+                    // (openskp#285).
+                    var attributeDictionaries = new Dictionary<string, Dictionary<string, string>>();
+                    if (inst.AttributeDicts != null)
+                    {
+                        foreach (var kv in inst.AttributeDicts)
+                        {
+                            if (kv.Key == "dynamic_attributes" || kv.Key == "SU_InstanceSet") continue;
+                            var stringified = new Dictionary<string, string>();
+                            foreach (var entry in kv.Value) stringified[entry.Key] = Geometry.StringifyVffAttrValue(entry.Value);
+                            attributeDictionaries[kv.Key] = stringified;
+                        }
+                    }
+
                     var instInfo = new InstanceNode
                     {
                         Name = displayName,
@@ -485,20 +519,22 @@ namespace OpenSkp
                         Layer = lName,
                         PositionMm = (Math.Round(itx, 2), Math.Round(ity, 2), Math.Round(itz, 2)),
                         Properties = properties,
+                        AttributeDictionaries = attributeDictionaries,
                         Guid = inst.RefGuid ?? "",
                         Children = childNodes,
                     };
                     childInstancesInfo.Add(instInfo);
 
-                    // Record this instance's (Properties, Name) for the deferred
-                    // mesh back-fill below. The scan this replaces iterated the
-                    // entire meshIndex per placed instance (string Contains per
-                    // mesh), i.e. O(instances x meshes); with hundreds of
-                    // thousands of both this alone took tens of minutes on real
-                    // production files. The final state is identical: an
-                    // instance's update is applied to every mesh under its path,
-                    // and the outermost (most shallow) ancestor's update wins.
-                    pathUpdates[fullPathName] = (properties, inst.Name ?? "");
+                    // Record this instance's (Properties, Name, AttributeDictionaries)
+                    // for the deferred mesh back-fill below. The scan this
+                    // replaces iterated the entire meshIndex per placed
+                    // instance (string Contains per mesh), i.e. O(instances x
+                    // meshes); with hundreds of thousands of both this alone
+                    // took tens of minutes on real production files. The final
+                    // state is identical: an instance's update is applied to
+                    // every mesh under its path, and the outermost (most
+                    // shallow) ancestor's update wins.
+                    pathUpdates[fullPathName] = (properties, inst.Name ?? "", attributeDictionaries);
                 }
 
                 return childInstancesInfo;
@@ -527,6 +563,7 @@ namespace OpenSkp
                 {
                     mesh.Properties = u.Props;
                     mesh.Name = u.Name;
+                    mesh.AttributeDictionaries = u.AttrDicts;
                 }
             }
 
@@ -540,6 +577,7 @@ namespace OpenSkp
                     existing.Layer = "Layer0";
                     existing.PositionMm = (0, 0, 0);
                     existing.Properties = new Dictionary<string, string>();
+                    existing.AttributeDictionaries = new Dictionary<string, Dictionary<string, string>>();
                 }
             }
 
@@ -550,6 +588,7 @@ namespace OpenSkp
                 Layer = "Layer0",
                 PositionMm = (0, 0, 0),
                 Properties = new Dictionary<string, string>(),
+                AttributeDictionaries = new Dictionary<string, Dictionary<string, string>>(),
                 Children = rootChildren,
             };
 

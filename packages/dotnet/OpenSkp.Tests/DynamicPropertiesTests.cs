@@ -393,5 +393,103 @@ namespace OpenSkp.Tests
 
             Walk(scene.SceneHierarchy);
         }
+
+        // AttributeDictionaries exposure (openskp#285: "multiple dictionaries
+        // per entity" - the reader side). Real fixture Untitled.skp: its "W1"
+        // instance carries a SteelFramer-authored "steelframer-dict"
+        // dictionary (not SketchUp's own "dynamic_attributes"), which
+        // Properties (the backward-compatible dynamic_attributes-only view)
+        // correctly leaves empty - AttributeDictionaries is the only way to
+        // reach this third-party data. Mirrors Python's own
+        // test_untitled_skp/test_untitled_skp_attribute_dictionaries_reach_glb_and_json_export
+        // ground truth exactly (packages/python/tests/test_parser.py).
+        private static InstanceNode? FindByName(InstanceNode node, string name)
+        {
+            if (node.Name == name) return node;
+            foreach (var child in node.Children)
+            {
+                var found = FindByName(child, name);
+                if (found != null) return found;
+            }
+            return null;
+        }
+
+        [Fact]
+        public void RealFixture_Scene_ExposesThirdPartyAttributeDictionaryByName()
+        {
+            var scene = SkpFile.BuildScene(FixturePath("Untitled.skp"));
+            var w1 = FindByName(scene.SceneHierarchy, "W1");
+
+            Assert.NotNull(w1);
+            // NOTE: unlike Python (whose properties is scoped to only the
+            // "dynamic_attributes" dict), .NET's Properties is populated via
+            // the pre-existing, deliberately flatten-everything
+            // Geometry.ExtractDynamicProperties - a real, established
+            // divergence predating this change, not something this task
+            // touches. AttributeDictionaries (below) is the actually-correct,
+            // dictionary-scoped way to reach steelframer-dict's own data.
+            Assert.True(w1!.AttributeDictionaries.ContainsKey("steelframer-dict"));
+            var steelframer = w1.AttributeDictionaries["steelframer-dict"];
+            Assert.Equal("SteelFramer::Engine::PanelGenerator", steelframer["generator"]);
+            Assert.Equal("362S200-43", steelframer["profile"]);
+        }
+
+        [Fact]
+        public void RealFixture_InstancedScene_ExposesThirdPartyAttributeDictionaryByName()
+        {
+            var instancedScene = SkpFile.BuildInstancedScene(FixturePath("Untitled.skp"));
+
+            InstancedNode? FindInstanced(InstancedNode node, string name)
+            {
+                if (node.Name == name) return node;
+                foreach (var child in node.Children)
+                {
+                    var found = FindInstanced(child, name);
+                    if (found != null) return found;
+                }
+                return null;
+            }
+
+            var w1 = FindInstanced(instancedScene.SceneHierarchy, "W1");
+
+            Assert.NotNull(w1);
+            Assert.True(w1!.AttributeDictionaries.ContainsKey("steelframer-dict"));
+            var steelframer = w1.AttributeDictionaries["steelframer-dict"];
+            Assert.Equal("SteelFramer::Engine::PanelGenerator", steelframer["generator"]);
+            Assert.Equal("362S200-43", steelframer["profile"]);
+        }
+
+        [Fact]
+        public void RealFixture_MeshIndex_AlsoExposesThirdPartyAttributeDictionary()
+        {
+            // MeshMetadata.AttributeDictionaries mirrors InstanceNode's -
+            // both are backfilled from the same pathUpdates entry per
+            // instance (see SceneBuilder.Build's deferred mesh back-fill),
+            // keyed by exact instance path. W1 itself is a geometry-less
+            // organizational wrapper (no mesh sits at its own path), so -
+            // matching Python's own equally loose
+            // test_untitled_skp_attribute_dictionaries_reach_glb_and_json_export
+            // check - this only confirms SOME mesh in the tree carries a
+            // non-empty "steelframer-dict", not necessarily W1's own.
+            var scene = SkpFile.BuildScene(FixturePath("Untitled.skp"));
+            var meshWithDict = scene.MeshIndex.Values.FirstOrDefault(
+                m => m.AttributeDictionaries.TryGetValue("steelframer-dict", out var d) && d.Count > 0);
+
+            Assert.NotNull(meshWithDict);
+        }
+
+        [Fact]
+        public void ExtractAttributeDictionaries_SyntheticMultiDict_SurvivesToInstanceNode()
+        {
+            // Synthetic, byte-level equivalent of the real-fixture tests
+            // above, isolating the exact TLV shape being exercised (two
+            // named dictionaries on one D007, one of them the SketchUp
+            // boilerplate that must NOT leak into AttributeDictionaries).
+            var d007 = MakeD007WithNamedDictionary("FrameBuilder", ("mark", "W-2"));
+            var dicts = Geometry.ExtractAttributeDictionaries(d007);
+
+            Assert.Equal("W-2", dicts["FrameBuilder"]["mark"]);
+            Assert.False(dicts.ContainsKey("dynamic_attributes"));
+        }
     }
 }

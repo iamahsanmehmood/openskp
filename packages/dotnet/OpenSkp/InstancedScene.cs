@@ -70,6 +70,11 @@ namespace OpenSkp
         public (double X, double Y, double Z) PositionMm { get; set; }
         public Dictionary<string, string> Properties { get; set; } = new Dictionary<string, string>();
 
+        /// <summary>See Scene.cs's InstanceNode.AttributeDictionaries -
+        /// every OTHER attribute dictionary this instance carries, keyed by
+        /// the dictionary's own name (openskp#285).</summary>
+        public Dictionary<string, Dictionary<string, string>> AttributeDictionaries { get; set; } = new Dictionary<string, Dictionary<string, string>>();
+
         /// <summary>Real SketchUp instance GUID (VFF/2021+ files only -
         /// legacy pre-2021 files carry no per-instance GUID here), or ""
         /// when the source file has none. Mirrors Python's/C++'s own field;
@@ -500,6 +505,25 @@ namespace OpenSkp
                     string displayName = nameOverride ?? instName;
                     bool nameIsGenerated = nameOverride == null && !instNameNonEmpty && !defNameIsReal;
 
+                    // Every OTHER attribute dictionary this instance carries -
+                    // dynamic_attributes is already surfaced separately as
+                    // Properties above, and SU_InstanceSet is SketchUp's own
+                    // always-present, always-empty Owner/Status boilerplate,
+                    // not worth surfacing. Mirrors Scene.cs's InstanceNode
+                    // (and Python's own attribute_dictionaries) exactly
+                    // (openskp#285).
+                    var attributeDictionaries = new Dictionary<string, Dictionary<string, string>>();
+                    if (inst.AttributeDicts != null)
+                    {
+                        foreach (var kv in inst.AttributeDicts)
+                        {
+                            if (kv.Key == "dynamic_attributes" || kv.Key == "SU_InstanceSet") continue;
+                            var stringified = new Dictionary<string, string>();
+                            foreach (var entry in kv.Value) stringified[entry.Key] = Geometry.StringifyVffAttrValue(entry.Value);
+                            attributeDictionaries[kv.Key] = stringified;
+                        }
+                    }
+
                     nodes.Add(new InstancedNode
                     {
                         Name = displayName,
@@ -509,6 +533,7 @@ namespace OpenSkp
                         Matrix = ToGltfMatrix(inst.Matrix),
                         PositionMm = (Math.Round(itx, 2), Math.Round(ity, 2), Math.Round(itz, 2)),
                         Properties = properties,
+                        AttributeDictionaries = attributeDictionaries,
                         Guid = inst.RefGuid ?? "",
                         MeshResourceId = refIdx.HasValue ? MeshResourceFor(refIdx.Value, instColor, lName) : null,
                         Children = children,
