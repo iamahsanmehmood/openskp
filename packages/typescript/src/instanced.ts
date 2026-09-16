@@ -1,5 +1,5 @@
 import { multiplyMatrices } from './transforms';
-import { extractDynamicProperties, extractAttributeDictionaries, isGenericDefinitionName, findNameOverride } from './geometry';
+import { extractDynamicProperties, extractAttributeDictionaries, isGenericDefinitionName, findNameOverride, VffAttrValue } from './geometry';
 import { ParseOptions, PROGRESS_INTERVAL, emitLog, emitProgress } from './observability';
 import { SkpParseError } from './errors';
 import { buildLocalFaceGroups } from './face-groups';
@@ -464,7 +464,7 @@ export function buildInstancedSceneFromParsed(
       // D007/DC05 TLV walk (VFF only); a no-op for legacy instances, whose
       // precomputed `properties` seeded above survives unchanged.
       const d007 = inst.children.find((c) => c.tag === 'D007');
-      let attributeDicts: Record<string, Record<string, string>> | null = null;
+      let attributeDicts: Record<string, Record<string, VffAttrValue>> | null = null;
       if (d007) {
         try {
           properties = extractDynamicProperties(d007, options);

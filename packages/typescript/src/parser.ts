@@ -41,6 +41,14 @@ export function readF64(data: Uint8Array, offset: number): number {
   return view.getFloat64(0, true);
 }
 
+export function readI32(data: Uint8Array, offset: number): number {
+  if (offset + 4 > data.length) {
+    throw new Error('Out of bounds readI32');
+  }
+  const view = new DataView(data.buffer, data.byteOffset + offset, 4);
+  return view.getInt32(0, true);
+}
+
 export function parseVarInt(data: Uint8Array, offset: number, length: number): number {
   let val = 0;
   for (let i = 0; i < length; i++) {

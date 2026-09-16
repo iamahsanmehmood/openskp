@@ -1,5 +1,5 @@
 import { transformPoint, multiplyMatrices } from './transforms';
-import { extractDynamicProperties, extractAttributeDictionaries, isGenericDefinitionName, findNameOverride, ParsedDefinition } from './geometry';
+import { extractDynamicProperties, extractAttributeDictionaries, isGenericDefinitionName, findNameOverride, ParsedDefinition, VffAttrValue } from './geometry';
 import { buildLocalFaceGroups } from './face-groups';
 import { SkpParseError } from './errors';
 import { ParseOptions, PROGRESS_INTERVAL, emitLog, emitProgress } from './observability';
@@ -981,7 +981,7 @@ export function buildSceneFromParsed(
       // legacy instances, so this is a no-op there and the precomputed
       // `properties` seeded above survives unchanged.
       const d007 = inst.children.find((c) => c.tag === 'D007');
-      let attributeDicts: Record<string, Record<string, string>> | null = null;
+      let attributeDicts: Record<string, Record<string, VffAttrValue>> | null = null;
       if (d007) {
         try {
           properties = extractDynamicProperties(d007, options);

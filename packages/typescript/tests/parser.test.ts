@@ -462,6 +462,96 @@ describe('extractAttributeDictionaries - dictionary-name-aware TLV walk (openskp
     const elements = parseTlvRecursive(d007Bytes, 0, d007Bytes.length);
     expect(extractAttributeDictionaries(elements[0])).toEqual({});
   });
+
+  // Multi-value-type decoding (openskp#285's VFF 9-value-type item). Byte
+  // shapes mirror Python's TestVffAttributeDictionaries exactly - same
+  // fixture-construction approach, same real tag pairings, ground-truthed
+  // there first (also mirrored in .NET's DynamicPropertiesTests).
+  function f64(n: number): Uint8Array {
+    const b = new Uint8Array(8);
+    new DataView(b.buffer).setFloat64(0, n, true);
+    return b;
+  }
+  function i32(n: number): Uint8Array {
+    const b = new Uint8Array(4);
+    new DataView(b.buffer).setInt32(0, n, true);
+    return b;
+  }
+  function entryValue(innerTlv: Uint8Array): Uint8Array {
+    return tlv('A438', innerTlv);
+  }
+  function entryRaw(key: string, innerValueTlv: Uint8Array): Uint8Array {
+    return concatBytes(tlv('B636', enc(key)), entryValue(innerValueTlv));
+  }
+
+  it('decodes AF38 (Length) and A938 (plain Float) as distinct tags, both f64', () => {
+    const entries = concatBytes(
+      entryRaw('depth', tlv('AF38', f64(15.5))),
+      entryRaw('price', tlv('A938', f64(120.0)))
+    );
+    const dicts = extractAttributeDictionaries(makeD007(namedDict('fbd-einfo', entries)));
+    expect(dicts['fbd-einfo']).toEqual({ depth: 15.5, price: 120.0 });
+  });
+
+  it('decodes A738 as a round-tripped integer', () => {
+    const entries = entryRaw('angle', tlv('A738', i32(-7)));
+    const dicts = extractAttributeDictionaries(makeD007(namedDict('fbd-einfo', entries)));
+    expect(dicts['fbd-einfo']).toEqual({ angle: -7 });
+  });
+
+  it('decodes an A438 with no children as null', () => {
+    const entries = entryRaw('child_thickness', new Uint8Array(0));
+    const dicts = extractAttributeDictionaries(makeD007(namedDict('fbd-einfo', entries)));
+    expect(dicts['fbd-einfo']).toEqual({ child_thickness: null });
+  });
+
+  it('decodes B438 Point3d and B538 Vector3d as flat 3-tuples', () => {
+    const pointBytes = tlv('B438', concatBytes(f64(0.0), f64(0.807085), f64(14.6551)));
+    const vectorBytes = tlv('B538', concatBytes(f64(1.0), f64(0.0), f64(0.0)));
+    const entries = concatBytes(entryRaw('end_pos', pointBytes), entryRaw('vector_new', vectorBytes));
+    const dicts = extractAttributeDictionaries(makeD007(namedDict('fbd-einfo', entries)));
+    expect(dicts['fbd-einfo']).toEqual({
+      end_pos: [0.0, 0.807085, 14.6551],
+      vector_new: [1.0, 0.0, 0.0],
+    });
+  });
+
+  it('decodes an empty AE38 array as []', () => {
+    const entries = entryRaw('added_bolt_holes', tlv('AE38', new Uint8Array(0)));
+    const dicts = extractAttributeDictionaries(makeD007(namedDict('fbd-einfo', entries)));
+    expect(dicts['fbd-einfo']).toEqual({ added_bolt_holes: [] });
+  });
+
+  it('decodes an AE38 array of floats', () => {
+    const elems = concatBytes(
+      entryValue(tlv('A938', f64(0.728))),
+      entryValue(tlv('A938', f64(11.358))),
+      entryValue(tlv('A938', f64(14.655)))
+    );
+    const entries = entryRaw('flangeholes', tlv('AE38', elems));
+    const dicts = extractAttributeDictionaries(makeD007(namedDict('fbd-einfo', entries)));
+    expect(dicts['fbd-einfo']).toEqual({ flangeholes: [0.728, 11.358, 14.655] });
+  });
+
+  it('decodes a nested AE38 array (openskp#253 mirrored on the read side)', () => {
+    const inner1 = concatBytes(entryValue(tlv('A938', f64(25.17))), entryValue(tlv('A938', f64(0.07))));
+    const inner2 = concatBytes(entryValue(tlv('A938', f64(25.17))), entryValue(tlv('A938', f64(15.35))));
+    const outer = concatBytes(entryValue(tlv('AE38', inner1)), entryValue(tlv('AE38', inner2)));
+    const entries = entryRaw('lip_side1_cords', tlv('AE38', outer));
+    const dicts = extractAttributeDictionaries(makeD007(namedDict('fbd-einfo', entries)));
+    expect(dicts['fbd-einfo']).toEqual({
+      lip_side1_cords: [
+        [25.17, 0.07],
+        [25.17, 15.35],
+      ],
+    });
+  });
+
+  it('leaves an unrecognized value tag as null rather than guessing', () => {
+    const entries = entryRaw('mystery', tlv('EE99', new Uint8Array([0x01, 0x02])));
+    const dicts = extractAttributeDictionaries(makeD007(namedDict('fbd-einfo', entries)));
+    expect(dicts['fbd-einfo']).toEqual({ mystery: null });
+  });
 });
 
 describe('isGenericDefinitionName', () => {

@@ -1,4 +1,4 @@
-import { TlvNode, readF64, readU32, parseVarInt, parseTlvRecursive } from './parser';
+import { TlvNode, readF64, readI32, readU32, parseVarInt, parseTlvRecursive } from './parser';
 import { ParseOptions, emitLog } from './observability';
 import { EdgeFlagStore } from './edge-flags';
 import { DefaultVertexStore, type VertexStore } from './vertex-store';
@@ -563,19 +563,78 @@ export function extractDynamicProperties(d007: TlvNode, options?: ParseOptions):
   return properties;
 }
 
+// A decoded VFF attribute value - whichever of the 7 documented types
+// (of 9 total; no native bool/time_t tag has ever been observed in real
+// data, so 7/9 is Python's own real ceiling) `decodeVffAttrValue` below
+// recognized: string (AD38), number (AF38/A938 double, A738 int32), a
+// flat 3-tuple (B438 Point3d / B538 Vector3d), a recursively-decoded
+// array (AE38), or null (an unrecognized tag, or an A438 with no value
+// child at all).
+export type VffAttrValue = string | number | [number, number, number] | VffAttrValue[] | null;
+
+// AF38 (Length) and A938 (plain Float) both encode as a flat 8-byte
+// float64 but are genuinely different tags - real SketchUp/FrameBuilder
+// data uses both for different keys.
+const VFF_ATTR_DOUBLE_TAGS = new Set<string>(['AF38', 'A938']);
+
+/**
+ * Decode one A438-wrapped attribute value node into a native JS value.
+ * A438 with no children is null; otherwise it has exactly one child
+ * holding the value's own type tag. An unrecognized type tag (or a
+ * payload of the wrong size for its tag) is left undecoded (returns
+ * null) rather than guessed at - matching this project's standing rule
+ * to never assume an unverified binary layout. Mirrors Python's
+ * `_decode_vff_attr_value` exactly.
+ */
+export function decodeVffAttrValue(a438Node: TlvNode): VffAttrValue {
+  if (!a438Node.children || a438Node.children.length === 0) return null;
+  const child = a438Node.children[0];
+  const tag = child.tag;
+  const payload = child.payload;
+  if (tag === 'AD38') {
+    try {
+      return new TextDecoder('utf-8').decode(payload).replace(/\0/g, '').trim();
+    } catch {
+      return null;
+    }
+  }
+  if (VFF_ATTR_DOUBLE_TAGS.has(tag) && payload.length === 8) return readF64(payload, 0);
+  if (tag === 'A738' && payload.length === 4) return readI32(payload, 0);
+  if ((tag === 'B438' || tag === 'B538') && payload.length === 24) {
+    return [readF64(payload, 0), readF64(payload, 8), readF64(payload, 16)];
+  }
+  if (tag === 'AE38') {
+    return (child.children ?? []).map(decodeVffAttrValue);
+  }
+  return null;
+}
+
+/**
+ * Render an already-typed VFF attribute value as a string, matching
+ * `extractDynamicProperties`'s pre-existing `Record<string, string>`
+ * contract - mirrors Python's `_stringify_vff_attr_value` exactly.
+ */
+export function stringifyVffAttrValue(value: VffAttrValue): string {
+  if (value === null || value === undefined) return '';
+  if (Array.isArray(value)) {
+    return value.map((v) => stringifyVffAttrValue(v)).join(',');
+  }
+  return String(value);
+}
+
 /**
  * Extract EVERY attribute dictionary attached to a D007 container node,
  * keyed by the dictionary's own declared name (tag B436) rather than
  * merged into one flat dict - mirrors Python's
- * `_core.extract_attribute_dictionaries` exactly (openskp#254). String
- * values only (tag AD38) - the other 8 VFF attribute value types Python's
- * own `_decode_vff_attr_value` decodes are not read here yet (openskp#285's
- * separate "full 9-value-type support" backlog item, not touched by this).
+ * `_core.extract_attribute_dictionaries` exactly (openskp#254), decoding
+ * every value type the format carries rather than only strings
+ * (openskp#285) - see `decodeVffAttrValue` for the full type table this
+ * project has ground-truthed.
  *
  * Each dictionary is a B436 (name) node immediately followed by a sibling
  * entries container (typically B536) holding that dictionary's own B636
- * (key name) / AD38 (string value) pairs, nested through an A438 value
- * wrapper. Returns `{}` when the entity carries no DC05 subtree at all.
+ * (key name) / A438 (type-tagged value) pairs. Returns `{}` when the
+ * entity carries no DC05 subtree at all.
  *
  * NOT the same view as `extractDynamicProperties` above, which flattens
  * every dictionary's entries into one bag regardless of which named
@@ -585,8 +644,8 @@ export function extractDynamicProperties(d007: TlvNode, options?: ParseOptions):
 export function extractAttributeDictionaries(
   d007: TlvNode,
   options?: ParseOptions
-): Record<string, Record<string, string>> {
-  const dictionaries: Record<string, Record<string, string>> = {};
+): Record<string, Record<string, VffAttrValue>> {
+  const dictionaries: Record<string, Record<string, VffAttrValue>> = {};
   const dc05 = d007.children.find((c) => c.tag === 'DC05');
   if (!dc05) {
     return dictionaries;
@@ -599,17 +658,19 @@ export function extractAttributeDictionaries(
     'B336',
     'B036',
     'A438',
+    'AE38',
   ]);
   const propElements = parseTlvRecursive(dc05.payload, 0, dc05.payload.length, propContainerTags);
 
   // currentKey lives OUTSIDE extractEntries (reset per dictionary right
-  // before each call, in walk below) rather than as a local inside it - a
-  // B636/AD38 pair is often split across recursion levels (B636 as a
-  // direct sibling, AD38 nested one level deeper inside an A438 wrapper -
-  // the actual real TLV shape), so a fresh local per recursive call would
-  // lose the key set one level up.
+  // before each call, in walk below) rather than as a local inside it -
+  // kept for the same defensive reason as extractDynamicProperties's own
+  // extractProps: a real file's exact nesting isn't something to assume
+  // beyond what's been ground-truthed, even though B636/A438 are direct
+  // siblings here (unlike that function's B636/AD38, which can be split
+  // across a recursion level).
   let currentKey: string | null = null;
-  function extractEntries(nodes: TlvNode[], entries: Record<string, string>) {
+  function extractEntries(nodes: TlvNode[], entries: Record<string, VffAttrValue>) {
     for (const n of nodes) {
       const tag = n.tag;
       if (tag === 'B636') {
@@ -620,19 +681,10 @@ export function extractAttributeDictionaries(
           currentKey = null;
           emitLog(options, 'debug', `Failed to decode attribute dictionary key: ${(e as Error).message}`);
         }
-      } else if (tag === 'AD38' && currentKey) {
-        try {
-          const decoder = new TextDecoder('utf-8');
-          entries[currentKey] = decoder.decode(n.payload).replace(/\0/g, '').trim();
-        } catch (e) {
-          emitLog(
-            options, 'debug',
-            `Failed to decode attribute dictionary value for key ${currentKey}: ${(e as Error).message}`
-          );
-        }
+      } else if (tag === 'A438' && currentKey) {
+        entries[currentKey] = decodeVffAttrValue(n);
         currentKey = null;
-      }
-      if (n.children && n.children.length > 0) {
+      } else if (n.children && n.children.length > 0) {
         extractEntries(n.children, entries);
       }
     }
@@ -648,7 +700,7 @@ export function extractAttributeDictionaries(
         } catch (e) {
           emitLog(options, 'debug', `Failed to decode attribute dictionary name: ${(e as Error).message}`);
         }
-        const entries: Record<string, string> = {};
+        const entries: Record<string, VffAttrValue> = {};
         currentKey = null;
         if (i + 1 < nodes.length && nodes[i + 1].children) {
           extractEntries(nodes[i + 1].children, entries);
@@ -691,14 +743,15 @@ const NAME_OVERRIDE_KEYS = ['name', 'label', 'code'];
  * `null` when no override is present.
  */
 export function findNameOverride(
-  attributeDicts: Record<string, Record<string, string>> | null | undefined
+  attributeDicts: Record<string, Record<string, VffAttrValue>> | null | undefined
 ): string | null {
   if (!attributeDicts) return null;
   for (const dictName of Object.keys(attributeDicts)) {
     if (dictName === 'dynamic_attributes' || dictName === 'SU_InstanceSet') continue;
     const entries = attributeDicts[dictName];
     for (const key of NAME_OVERRIDE_KEYS) {
-      const val = entries[key];
+      if (!(key in entries)) continue;
+      const val = stringifyVffAttrValue(entries[key]);
       if (val) return val;
     }
   }
