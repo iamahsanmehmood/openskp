@@ -2236,6 +2236,17 @@ namespace OpenSkp
             foreach (var kv in b.EdgeFlags) g.EdgeFlags[kv.Key] = kv.Value;
             foreach (var kv in b.Faces) g.Faces[kv.Key] = kv.Value;
             g.Instances = b.Instances;
+            // SectionPlanes/Texts/Dimensions were already correctly read
+            // into LegacyBuilder (see FillBuilder's own dispatch for
+            // SectionPlaneRec/TextRec/DimRec above) but never copied across
+            // this conversion - the same "already-decoded-but-discarded"
+            // shape as this file's earlier layer/face/instance-hidden and
+            // attribute-container fixes, just one level deeper. Legacy-only
+            // by design (matching Python's own legacy.py; VFF/2021+ files
+            // don't extract these at all yet in any language - openskp#285).
+            g.SectionPlanes = b.SectionPlanes;
+            g.Texts = b.Texts;
+            g.Dimensions = b.Dimensions;
             return g;
         }
     }
