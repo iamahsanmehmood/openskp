@@ -391,7 +391,15 @@ TEST(Parser, StreamingDefinitionsPreservesGeometryAndHierarchy) {
       total_faces += prim.indices.size() / 3;
     }
   }
-  EXPECT_EQ(total_faces, 16949u);
+  // 16883, not the long-pinned 16949: this fixture is the same real file
+  // openskp#285's overlapping-hole-triangulation fix targets (two
+  // ~0.69"-radius circular holes 0.33in apart on several definitions).
+  // 16949 was earcut_2d's pre-fix, undefined-behavior-for-self-
+  // intersecting-input count; the fix (see triangulator_test.cpp's
+  // OverlappingHolesMatchIndependentAnalyticalCircleUnionArea) changed it
+  // to the new, actually-well-defined value - a real, intentional
+  // behavior change, not a regression.
+  EXPECT_EQ(total_faces, 16883u);
 }
 
 }  // namespace

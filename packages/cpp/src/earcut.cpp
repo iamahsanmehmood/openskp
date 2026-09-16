@@ -61,10 +61,84 @@ std::vector<std::array<EntityId, 3>> clip(std::vector<EarPoint> p) {
     out.push_back({p[0].id, p[1].id, p[2].id});
   return out;
 }
+
+// Standard ray-casting point-in-polygon test (even-odd rule) - true when
+// (x, y) lies strictly inside the given closed 2D ring. Mirrors the
+// Python/.NET/TypeScript/Dart ports' identical check exactly (openskp#285).
+bool point_in_polygon(double x, double y, const std::vector<EarPoint>& polygon) {
+  bool inside_result = false;
+  const size_t n = polygon.size();
+  for (size_t i = 0, j = n - 1; i < n; j = i++) {
+    double xi = polygon[i].x, yi = polygon[i].y;
+    double xj = polygon[j].x, yj = polygon[j].y;
+    bool intersects = ((yi > y) != (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
+    if (intersects) inside_result = !inside_result;
+  }
+  return inside_result;
+}
+
+bool any_vertex_inside(const std::vector<EarPoint>& points, const std::vector<EarPoint>& polygon) {
+  for (auto& p : points)
+    if (point_in_polygon(p.x, p.y, polygon)) return true;
+  return false;
+}
+
+// True when at least one pair of hole loops (index 1+ in `loops`) shares
+// real area - not just a boundary point or edge, which is a normal,
+// common pattern (e.g. two holes sharing a cut line). Detected via a
+// vertex-containment test: for genuinely overlapping simple polygons (in
+// particular the convex/circular holes real drilled geometry produces),
+// the overlap region always contains at least one polygon's own vertex
+// inside the other. Mirrors the Python/.NET/TypeScript/Dart ports'
+// identical check exactly (openskp#285).
+bool holes_overlap(const std::vector<std::vector<EarPoint>>& loops) {
+  for (size_t i = 1; i < loops.size(); ++i)
+    for (size_t j = i + 1; j < loops.size(); ++j)
+      if (any_vertex_inside(loops[i], loops[j]) || any_vertex_inside(loops[j], loops[i]))
+        return true;
+  return false;
+}
+
+// Fallback path when two or more hole loops genuinely overlap: bridging
+// each hole into the outer boundary independently (earcut_2d's normal
+// strategy) assumes disjoint holes - bridging a second hole into a
+// polygon a first, overlapping hole has already been spliced into can
+// produce a self-intersecting merged ring, which clip()'s degenerate-
+// vertex fallback then silently erodes far beyond the affected holes
+// (observed on a real fixture: triangle count dropped by ~10%, not just
+// the handful of triangles near the two overlapping holes). Ported from
+// the same fix already shipped in Python/.NET/TypeScript/Dart
+// (openskp#285): triangulate the outer boundary ALONE (no holes bridged
+// in at all) and discard any resulting triangle whose centroid falls
+// inside ANY hole - the same "triangulate then filter" strategy this
+// project's own Python pipeline used before its earcut migration.
+std::vector<std::array<EntityId, 3>> triangulate_by_filtering_holes(
+    const std::vector<std::vector<EarPoint>>& loops) {
+  auto outer_tris = clip(loops[0]);
+  std::vector<std::array<EntityId, 3>> result;
+  std::map<EntityId, EarPoint> by_id;
+  for (auto& p : loops[0]) by_id[p.id] = p;
+  for (auto& tri : outer_tris) {
+    auto& a = by_id.at(tri[0]);
+    auto& b = by_id.at(tri[1]);
+    auto& c = by_id.at(tri[2]);
+    double cx = (a.x + b.x + c.x) / 3.0;
+    double cy = (a.y + b.y + c.y) / 3.0;
+    bool inside_any_hole = false;
+    for (size_t h = 1; h < loops.size(); ++h)
+      if (point_in_polygon(cx, cy, loops[h])) {
+        inside_any_hole = true;
+        break;
+      }
+    if (!inside_any_hole) result.push_back(tri);
+  }
+  return result;
+}
 }  // namespace
 
 std::vector<std::array<EntityId, 3>> earcut_2d(std::vector<std::vector<EarPoint>> loops) {
   if (loops.empty()) return {};
+  if (loops.size() > 2 && holes_overlap(loops)) return triangulate_by_filtering_holes(loops);
   auto poly = std::move(loops[0]);
   if (area(poly) < 0) std::reverse(poly.begin(), poly.end());
   for (size_t h = 1; h < loops.size(); ++h) {
