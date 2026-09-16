@@ -271,6 +271,32 @@ namespace OpenSkp
         internal const int ArcCurveSchema = 3;
         internal const int CCurveSchema = 4;
 
+        internal const int SectionPlaneSchema = 3;
+        internal const int DimensionLinearSchema = 6;
+        internal const int SkFontSchema = 1;
+        internal const int TextSchema = 9;
+        internal const int ConstructionLineSchema = 1;
+        internal const int ConstructionPointSchema = 0;
+
+        // Byte-exact templates harvested from a real SketchUp 2017 file (28
+        // dimensions, capilla quiroz corpus model); see
+        // docs/dimension-record-notes.md for the full layout. Ported
+        // verbatim from create.py's own _DIM_FONT_PAYLOAD/_TEXT_DELIM.
+        internal static readonly byte[] DimFontPayload = FromHex(
+            "000000"                             // preamble: null attrs + pid mask 0
+            + "fffeff065400610068006f006d006100"  // "Tahoma"
+            + "0000" + "08000000" + "00"
+            + "ecf57abd5eaf2340");                // height f64
+
+        // Leader-text delimiter block: [u32 1][u8 flag=1][u8 0][u32 ARROW=3 closed][u8 1]
+        internal static readonly byte[] TextDelim = FromHex("0100000001000300000001");
+
+        // Sentinel a CConstructionLine's start/end distance-parameter
+        // carries when unbounded in that direction - real SketchUp's own
+        // value, ground-truth verified against
+        // Sketchup::ConstructionLine#start/#end returning nil for that side.
+        internal const double ClineInfinite = 1e30;
+
         // A face with no explicit texture positioning stores no
         // CFaceTextureCoords at all, so this identity is only ever used to
         // fill the *other* side's slot when just one of front/back is
@@ -2067,6 +2093,11 @@ namespace OpenSkp
         private int _newEntityCount;
         private int _faceCount;
 
+        // One CSkFont per file, serialized inline at the first
+        // dimension/text's font field (exactly as SketchUp writes it) and
+        // re-used by back-ref afterwards - see AddDimension/AddText.
+        private int? _dimFontSlot;
+
         private static readonly int?[] ClayerPattern = BuildClayerPattern();
 
         private static int?[] BuildClayerPattern()
@@ -2773,6 +2804,242 @@ namespace OpenSkp
             }
             EnsureGeometryWriter();
             _newEntityCount += _geometryWriter!.WritePolyline(points, _vertexSlots, _edgeRegistry, closed, hiddenEdges, softEdges, smoothEdges);
+            _faceCount += 1; // reuses the "at least one root entity" check in ToBytes
+        }
+
+        /// <summary>Add a FREE linear dimension between two explicit points
+        /// (inches, world space). offset is the dimension line's offset
+        /// from the measured segment, in inches (signed).
+        ///
+        /// The record layout is the byte-exact one the real SketchUp SDK
+        /// writes for free dimensions (generated via SketchUpAPI and
+        /// harvested - see docs/dimension-record-notes.md): connection type
+        /// 1 with the point stored inline in each connection block and null
+        /// object refs. Free dimensions render in any orientation; anchored
+        /// (type 2) dimensions are a future refinement.</summary>
+        public void AddDimension(
+            (double X, double Y, double Z) p1, (double X, double Y, double Z) p2, double offset = 10.0)
+        {
+            if (p1 == p2)
+            {
+                throw new SkpWriteException("AddDimension endpoints coincide");
+            }
+            EnsureGeometryWriter();
+            var w = _geometryWriter!;
+            w.NewOfKnownClass("CDimensionLinear", CreateConstants.DimensionLinearSchema);
+            w.Preamble();
+            w.Drawbase();
+            w.WriteStr(""); // auto-computed measurement text
+            if (_dimFontSlot == null)
+            {
+                _dimFontSlot = w.NewOfKnownClass("CSkFont", CreateConstants.SkFontSchema);
+                w.AddRaw(CreateConstants.DimFontPayload);
+            }
+            else
+            {
+                w.Backref(_dimFontSlot.Value);
+            }
+            // connection 1: [u8 0][u32 0][u32 type=1][u32 4][point A], null ref
+            w.AddZeros(5);
+            w.AddU32(1);
+            w.AddU32(4);
+            w.AddF64(p1.X);
+            w.AddF64(p1.Y);
+            w.AddF64(p1.Z);
+            w.AddU16(0);
+            // connection 2: [u16 0][f64 0][u32 type=1][u32 4][point B], null ref
+            w.AddZeros(10);
+            w.AddU32(1);
+            w.AddU32(4);
+            w.AddF64(p2.X);
+            w.AddF64(p2.Y);
+            w.AddF64(p2.Z);
+            w.AddU16(0);
+            // placement block: SDK free-dimension defaults + our offset
+            w.AddZeros(2);
+            foreach (var val in new[] { 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0 })
+            {
+                w.AddF64(val);
+            }
+            w.AddU32(0);
+            w.AddF64(offset);
+            w.AddF64(0.0);
+            w.AddU32(1);
+            _newEntityCount += 1;
+            _faceCount += 1; // reuses the "at least one root entity" check in ToBytes
+        }
+
+        /// <summary>Add a leader text (SketchUp's Text tool) anchored at
+        /// point (inches, world space), with the label floating at
+        /// point + leader and a leader line joining them.
+        ///
+        /// The record mirrors human-drawn leader texts harvested from real
+        /// files (the SDK's own create only produces SCREEN texts - its two
+        /// 0.5 doubles are screen fractions and SketchUp renders them
+        /// superimposed at view centre): screen slot zeroed, the free-
+        /// connection block dimensions use ([u32 1][u32 4][point3d]), the
+        /// label's world position in the placement tail, and leader type 2
+        /// (pushpin) before the arrow delimiter.</summary>
+        public void AddText(
+            string text, (double X, double Y, double Z) point,
+            (double X, double Y, double Z)? leader = null)
+        {
+            var lv = leader ?? (15.0, 15.0, 15.0);
+            var lb = (point.X + lv.X, point.Y + lv.Y, point.Z + lv.Z);
+            EnsureGeometryWriter();
+            var w = _geometryWriter!;
+            w.NewOfKnownClass("CText", CreateConstants.TextSchema);
+            w.Preamble();
+            w.Drawbase();
+            if (_dimFontSlot == null)
+            {
+                _dimFontSlot = w.NewOfKnownClass("CSkFont", CreateConstants.SkFontSchema);
+                w.AddRaw(CreateConstants.DimFontPayload);
+            }
+            else
+            {
+                w.Backref(_dimFontSlot.Value);
+            }
+            w.AddF64(0.0);
+            w.AddF64(0.0); // screen-fraction slot (unused)
+            w.AddU32(1);
+            w.AddU32(4); // free connection + constant
+            w.AddF64(point.X);
+            w.AddF64(point.Y);
+            w.AddF64(point.Z);
+            w.AddZeros(12);
+            w.AddF64(lb.Item1);
+            w.AddF64(lb.Item2);
+            w.AddF64(lb.Item3); // label position
+            w.AddZeros(16);
+            w.AddF64(1.0);
+            w.AddU32(2); // leader type: pushpin
+            w.AddRaw(CreateConstants.TextDelim);
+            w.WriteStr(text);
+            w.AddZeros(5);
+            _newEntityCount += 1;
+            _faceCount += 1; // reuses the "at least one root entity" check in ToBytes
+        }
+
+        /// <summary>Add a construction/guide line (SketchUp's Construction
+        /// Line tool). Pass exactly one of point2 (a bounded segment
+        /// between point and point2, matching Entities#add_cline(p1, p2))
+        /// or direction (an unbounded guide line through point, matching
+        /// Entities#add_cline(point, vector)).
+        ///
+        /// Ground truth (real SketchUp 2025, SDK/Ruby cross-checked against
+        /// both a v2020-downgrade save and a genuinely v17-native save):
+        /// the record stores a point + normalized direction + two signed
+        /// distance parameters along that direction marking the visible
+        /// segment's start/end. An unbounded direction is written as the
+        /// real ±1e30 sentinel SketchUp itself uses.</summary>
+        public void AddConstructionLine(
+            (double X, double Y, double Z) point,
+            (double X, double Y, double Z)? point2 = null,
+            (double X, double Y, double Z)? direction = null)
+        {
+            if ((point2 == null) == (direction == null))
+            {
+                throw new SkpWriteException("AddConstructionLine: pass exactly one of point2 or direction");
+            }
+            double dx, dy, dz, startParam, endParam;
+            if (point2 != null)
+            {
+                var p2 = point2.Value;
+                dx = p2.X - point.X;
+                dy = p2.Y - point.Y;
+                dz = p2.Z - point.Z;
+                double length = Math.Sqrt(dx * dx + dy * dy + dz * dz);
+                if (length == 0.0)
+                {
+                    throw new SkpWriteException("AddConstructionLine: point and point2 coincide");
+                }
+                dx /= length; dy /= length; dz /= length;
+                startParam = 0.0;
+                endParam = length;
+            }
+            else
+            {
+                var d = direction!.Value;
+                double dlen = Math.Sqrt(d.X * d.X + d.Y * d.Y + d.Z * d.Z);
+                if (dlen == 0.0)
+                {
+                    throw new SkpWriteException("AddConstructionLine: direction must be nonzero");
+                }
+                dx = d.X / dlen; dy = d.Y / dlen; dz = d.Z / dlen;
+                startParam = -CreateConstants.ClineInfinite;
+                endParam = CreateConstants.ClineInfinite;
+            }
+            EnsureGeometryWriter();
+            var w = _geometryWriter!;
+            w.NewOfKnownClass("CConstructionLine", CreateConstants.ConstructionLineSchema);
+            w.Preamble();
+            w.Drawbase();
+            foreach (var v in new[] { point.X, point.Y, point.Z, dx, dy, dz, startParam, endParam })
+            {
+                w.AddF64(v);
+            }
+            w.AddZeros(4); // trailer - see docstring
+            _newEntityCount += 1;
+            _faceCount += 1; // reuses the "at least one root entity" check in ToBytes
+        }
+
+        /// <summary>Add a construction/guide point (SketchUp's Construction
+        /// Point tool) at position (inches, world space).
+        ///
+        /// Ground truth (real SketchUp 2025, SDK/Ruby cross-checked): a
+        /// second, always-zero 3-double block and a trailing zero byte
+        /// follow the position - reserved/unused, written as zero to match
+        /// every real-file sample seen.</summary>
+        public void AddConstructionPoint((double X, double Y, double Z) position)
+        {
+            EnsureGeometryWriter();
+            var w = _geometryWriter!;
+            w.NewOfKnownClass("CConstructionPoint", CreateConstants.ConstructionPointSchema);
+            w.Preamble();
+            w.Drawbase();
+            foreach (var v in new[] { position.X, position.Y, position.Z, 0.0, 0.0, 0.0 })
+            {
+                w.AddF64(v);
+            }
+            w.AddZeros(1);
+            _newEntityCount += 1;
+            _faceCount += 1; // reuses the "at least one root entity" check in ToBytes
+        }
+
+        /// <summary>Add a section plane (SketchUp's Section Plane tool)
+        /// through point with the given normal (need not be unit length),
+        /// matching Entities#add_section_plane([point, normal]).
+        ///
+        /// Ground truth (real SketchUp 2025, SDK/Ruby cross-checked against
+        /// a genuinely v17-native save): the record is preamble + drawbase
+        /// + the plane as 4 doubles (a, b, c, d) satisfying
+        /// a*x + b*y + c*z + d = 0 for every point on the plane - the same
+        /// implicit form Sketchup::SectionPlane#get_plane returns (normal
+        /// normalized, d = -(normal . point)). A name/short-label pair can
+        /// follow on v18+ saves per the reader (Legacy.cs's
+        /// ReadSectionPlane) - omitted here since this writer only ever
+        /// produces v17-tagged files, same scope as AddDimension/AddText/
+        /// AddConstructionLine.</summary>
+        public void AddSectionPlane((double X, double Y, double Z) point, (double X, double Y, double Z) normal)
+        {
+            double nlen = Math.Sqrt(normal.X * normal.X + normal.Y * normal.Y + normal.Z * normal.Z);
+            if (nlen == 0.0)
+            {
+                throw new SkpWriteException("AddSectionPlane: normal must be nonzero");
+            }
+            double a = normal.X / nlen, b = normal.Y / nlen, c = normal.Z / nlen;
+            double d = -(a * point.X + b * point.Y + c * point.Z);
+            EnsureGeometryWriter();
+            var w = _geometryWriter!;
+            w.NewOfKnownClass("CSectionPlane", CreateConstants.SectionPlaneSchema);
+            w.Preamble();
+            w.Drawbase();
+            w.AddF64(a);
+            w.AddF64(b);
+            w.AddF64(c);
+            w.AddF64(d);
+            _newEntityCount += 1;
             _faceCount += 1; // reuses the "at least one root entity" check in ToBytes
         }
 
