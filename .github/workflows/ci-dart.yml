@@ -20,6 +20,7 @@ jobs:
           filters: |
             dart:
               - 'packages/dart/**'
+              - 'packages/dart_fragments/**'
 
   test:
     needs: changes
@@ -39,15 +40,21 @@ jobs:
         run: |
           cd packages/dart
           dart pub get
+          cd ../dart_fragments
+          dart pub get
 
       - name: Analyze
         run: |
           cd packages/dart
           dart analyze --fatal-infos
+          cd ../dart_fragments
+          dart analyze --fatal-infos
 
       - name: Test
         run: |
           cd packages/dart
+          dart test
+          cd ../dart_fragments
           dart test
 
   # Single stable check name for branch protection to require, regardless of
@@ -62,7 +69,7 @@ jobs:
       - name: Check outcome
         run: |
           if [ "${{ needs.changes.outputs.dart }}" != "true" ]; then
-            echo "packages/dart/** unchanged - nothing to verify"
+            echo "packages/dart/** and packages/dart_fragments/** unchanged - nothing to verify"
             exit 0
           fi
           if [ "${{ needs.test.result }}" != "success" ]; then

@@ -71,6 +71,15 @@ const List<double> identityGltf = [
 /// into vertex data.
 class InstancedNode {
   String name;
+
+  /// Whether [name] is a synthetic fallback (SketchUp's own internal
+  /// index, e.g. "Component_5") rather than a real name from the source
+  /// file - no attribute-dictionary name/label/code override, no explicit
+  /// instance name, and no non-generic definition name were found. Lets a
+  /// consumer (e.g. Fragments export) avoid presenting a placeholder as if
+  /// it were real data. Mirrors Python's/C++'s own field of the same name.
+  bool nameIsGenerated;
+
   String definitionName;
   String layer;
 
@@ -81,16 +90,27 @@ class InstancedNode {
 
   (double, double, double) positionMm;
   Map<String, String> properties;
+
+  /// Real SketchUp instance GUID (VFF/2021+ files only - legacy pre-2021
+  /// files carry no per-instance GUID here), or `''` when the source file
+  /// has none. Mirrors Python's/C++'s own field; a consumer keying on this
+  /// (e.g. Fragments export) is responsible for its own collision
+  /// handling - see openskp#290's rationale for why a duplicated real GUID
+  /// needs the same synthetic-fallback treatment as a missing one.
+  String guid;
+
   String? meshResourceId;
   List<InstancedNode> children;
 
   InstancedNode({
     this.name = '',
+    this.nameIsGenerated = false,
     this.definitionName = '',
     this.layer = '',
     List<double>? matrix,
     this.positionMm = (0.0, 0.0, 0.0),
     Map<String, String>? properties,
+    this.guid = '',
     this.meshResourceId,
     List<InstancedNode>? children,
   })  : matrix = matrix ?? identityGltf,
@@ -119,13 +139,21 @@ class InstancedScene {
   /// source bytes - same as Scene.textures.
   List<SceneTexture> textures;
 
+  /// The source file's own per-layer visibility (VFF/2021+ only - see
+  /// RawParsed.layerHidden's own comment on why legacy files default every
+  /// layer to visible), read straight from the raw parse. Mirrors
+  /// Python's/C++'s own field of the same name.
+  Map<String, bool> layerHidden;
+
   InstancedScene({
     this.bounds,
     required this.sceneHierarchy,
     required this.meshResources,
     required this.gltfMaterials,
     List<SceneTexture>? textures,
-  }) : textures = textures ?? [];
+    Map<String, bool>? layerHidden,
+  })  : textures = textures ?? [],
+        layerHidden = layerHidden ?? {};
 }
 
 const double _inchesToMm = 25.4;
@@ -377,6 +405,7 @@ class InstancedSceneBuilder {
         var lName = parentLayer;
         (int, int, int)? instColor = inheritedColor;
         var properties = Map<String, String>.from(inst.properties ?? {});
+        Map<String, Map<String, String>>? instAttributeDicts;
 
         final d007 = inst.children.where((c) => c.tag == 'D007').firstOrNull;
         if (d007 != null) {
@@ -397,6 +426,7 @@ class InstancedSceneBuilder {
           }
           try {
             properties = Geometry.extractDynamicProperties(d007);
+            instAttributeDicts = Geometry.extractAttributeDictionaries(d007);
           } catch (e) {
             emitLog(
               options, SkpLogLevel.debug,
@@ -433,13 +463,32 @@ class InstancedSceneBuilder {
         final ity = newMatrix.length > 10 ? newMatrix[10] * _inchesToMm : 0.0;
         final itz = newMatrix.length > 11 ? newMatrix[11] * _inchesToMm : 0.0;
 
+        // Fallback order: an attribute-dict name/label/code override, then
+        // the instance's own explicit name, then the definition's own
+        // name IF it's not itself just SketchUp's auto-generated
+        // "Group#1"/"Component#12" placeholder, then finally the internal
+        // index - the only case with no real name anywhere in the source
+        // file. Mirrors Python's/C++'s own instanced_scene name
+        // resolution exactly, and scene.dart's identical resolution - see
+        // instanced_fixture_parity_test.dart, which depends on both trees
+        // resolving display names identically.
+        final childDefName = childDef?.name ?? '';
+        final defNameIsReal = childDefName.isNotEmpty && !Geometry.isGenericDefinitionName(childDefName);
+        final nameOverride = Geometry.findNameOverride(instAttributeDicts);
+        final instNameNonEmpty = inst.name != null && inst.name!.isNotEmpty;
+        final fallbackName = instNameNonEmpty ? inst.name! : (defNameIsReal ? childDefName : 'Component_$refIdx');
+        final displayName = nameOverride ?? fallbackName;
+        final nameIsGenerated = nameOverride == null && !instNameNonEmpty && !defNameIsReal;
+
         nodes.add(InstancedNode(
-          name: inst.name ?? '',
-          definitionName: childDef?.name ?? '',
+          name: displayName,
+          nameIsGenerated: nameIsGenerated,
+          definitionName: childDefName,
           layer: lName,
           matrix: toGltfMatrix(inst.matrix),
           positionMm: (_round2(itx), _round2(ity), _round2(itz)),
           properties: properties,
+          guid: inst.refGuid ?? '',
           meshResourceId: (refIdx != null && childDef != null)
               ? meshResourceForBuilder(childDef.builder, childDef.name ?? '', refIdx, instColor, lName)
               : null,
@@ -562,6 +611,7 @@ class InstancedSceneBuilder {
       meshResources: meshResources,
       gltfMaterials: gltfMaterials,
       textures: textures,
+      layerHidden: Map<String, bool>.from(parsed.layerHidden),
     );
   }
 

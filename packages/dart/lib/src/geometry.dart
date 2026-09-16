@@ -229,6 +229,107 @@ class Geometry {
     return properties;
   }
 
+  /// Extract EVERY attribute dictionary attached to a D007 container node,
+  /// keyed by the dictionary's own declared name (tag B436) rather than
+  /// merged into one flat dict - mirrors Python's
+  /// `_core.extract_attribute_dictionaries` exactly (openskp#254). String
+  /// values only (tag AD38) - the other 8 VFF attribute value types
+  /// Python's own `_decode_vff_attr_value` decodes are not read here yet
+  /// (openskp#285's separate "full 9-value-type support" backlog item, not
+  /// touched by this).
+  ///
+  /// Each dictionary is a B436 (name) node immediately followed by a
+  /// sibling entries container (typically B536) holding that dictionary's
+  /// own B636 (key name) / AD38 (string value) pairs, nested through an
+  /// A438 value wrapper. Returns `{}` when the entity carries no DC05
+  /// subtree at all.
+  ///
+  /// NOT the same view as [extractDynamicProperties] above, which flattens
+  /// every dictionary's entries into one bag regardless of which named
+  /// dictionary each pair came from - that established, if non-
+  /// canonically-named, contract is left untouched since real callers
+  /// depend on it.
+  static Map<String, Map<String, String>> extractAttributeDictionaries(TlvNode d007) {
+    final dictionaries = <String, Map<String, String>>{};
+    final dc05 = d007.children.where((c) => c.tag == 'DC05').firstOrNull;
+    if (dc05 == null) return dictionaries;
+    final propElements =
+        Tlv.parseRecursive(dc05.payload, 0, dc05.payload.length, _propContainerTags);
+
+    // currentKey lives OUTSIDE extractEntries (reset per dictionary right
+    // before each call, in walk below) rather than as a local inside it -
+    // a B636/AD38 pair is often split across recursion levels (B636 as a
+    // direct sibling, AD38 nested one level deeper inside an A438 wrapper -
+    // the actual real TLV shape), so a fresh local per recursive call
+    // would lose the key set one level up.
+    String? currentKey;
+    void extractEntries(List<TlvNode> nodes, Map<String, String> entries) {
+      for (final n in nodes) {
+        if (n.tag == 'B636') {
+          currentKey = utf8.decode(n.payload, allowMalformed: true);
+        } else if (n.tag == 'AD38' && currentKey != null) {
+          entries[currentKey!] = utf8.decode(n.payload, allowMalformed: true);
+          currentKey = null;
+        }
+        extractEntries(n.children, entries);
+      }
+    }
+
+    void walk(List<TlvNode> nodes) {
+      for (var i = 0; i < nodes.length; i++) {
+        if (nodes[i].tag == 'B436') {
+          final name = utf8.decode(nodes[i].payload, allowMalformed: true);
+          final entries = <String, String>{};
+          currentKey = null;
+          if (i + 1 < nodes.length) {
+            extractEntries(nodes[i + 1].children, entries);
+          }
+          dictionaries[name] = entries;
+        } else {
+          walk(nodes[i].children);
+        }
+      }
+    }
+
+    walk(propElements);
+    return dictionaries;
+  }
+
+  // Matches SketchUp's own auto-generated placeholder definition names
+  // ("Group#1", "Component#12"), which carry no more meaning than the
+  // internal index they'd otherwise fall back to - mirrors Python's
+  // _is_generic_definition_name()/C++'s is_generic_definition_name()
+  // exactly (same pattern, same purpose). Shared by scene.dart's and
+  // instanced_scene.dart's own display-name resolution.
+  static final RegExp _genericDefinitionNamePattern = RegExp(r'^(?:Group|Component)\d*#\d+$');
+
+  static bool isGenericDefinitionName(String name) => _genericDefinitionNamePattern.hasMatch(name);
+
+  // "name"/"label"/"code" checked in this order, first dictionary (other
+  // than dynamic_attributes/SU_InstanceSet) and first key found wins -
+  // mirrors Python's/C++'s own name_override_keys default.
+  static const List<String> _nameOverrideKeys = ['name', 'label', 'code'];
+
+  /// Look for a display-name override in any attribute dictionary the
+  /// instance carries OTHER than "dynamic_attributes" (SketchUp's own
+  /// Dynamic Components dictionary, already surfaced separately as
+  /// `properties`) or "SU_InstanceSet" - whichever third-party plugin
+  /// wrote it (FrameBuilder's "name", TechSteel's "label", etc.), same
+  /// fallback order and exclusions as Python's/C++'s own instanced_scene/
+  /// scene name-resolution. Returns `null` when no override is present.
+  static String? findNameOverride(Map<String, Map<String, String>>? attributeDicts) {
+    if (attributeDicts == null) return null;
+    for (final dictName in attributeDicts.keys) {
+      if (dictName == 'dynamic_attributes' || dictName == 'SU_InstanceSet') continue;
+      final entries = attributeDicts[dictName]!;
+      for (final key in _nameOverrideKeys) {
+        final val = entries[key];
+        if (val != null && val.isNotEmpty) return val;
+      }
+    }
+    return null;
+  }
+
   static void extractGeometryFromNodes(
       List<TlvNode> elements, GeometryBuilder builder) {
     for (final el in elements) {

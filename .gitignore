@@ -51,6 +51,10 @@ packages/dart/.dart_tool/
 packages/dart/.packages
 packages/dart/build/
 packages/dart/pubspec.lock
+packages/dart_fragments/.dart_tool/
+packages/dart_fragments/.packages
+packages/dart_fragments/build/
+packages/dart_fragments/pubspec.lock
 
 # SKP test files (don't commit binary models)
 *.skp
@@ -60,6 +64,7 @@ packages/dart/pubspec.lock
 !packages/typescript/tests/fixtures/*.skp
 !packages/dotnet/OpenSkp.Tests/fixtures/*.skp
 !packages/dart/test/fixtures/*.skp
+!packages/dart_fragments/test/fixtures/*.skp
 !packages/cpp/tests/fixtures/*.skp
 !packages/python/src/openskp/_scaffold/*.skp
 !examples/web-viewer/samples/*.skp

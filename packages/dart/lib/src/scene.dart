@@ -11,18 +11,33 @@ import 'transforms.dart';
 /// One node in the baked, world-space instance tree.
 class InstanceNode {
   String name;
+
+  /// Whether [name] is a synthetic fallback (SketchUp's own internal
+  /// index, e.g. "Component_5") rather than a real name from the source
+  /// file - see InstancedNode.nameIsGenerated (instanced_scene.dart) for
+  /// the full fallback-order rationale; both resolve a node's display
+  /// name identically.
+  bool nameIsGenerated;
+
   String definitionName;
   String layer;
   (double, double, double) positionMm;
   Map<String, String> properties;
+
+  /// Real SketchUp instance GUID (VFF/2021+ files only), or `''` when the
+  /// source file has none - see InstancedNode.guid (instanced_scene.dart).
+  String guid;
+
   List<InstanceNode> children;
 
   InstanceNode({
     this.name = '',
+    this.nameIsGenerated = false,
     this.definitionName = '',
     this.layer = '',
     this.positionMm = (0.0, 0.0, 0.0),
     Map<String, String>? properties,
+    this.guid = '',
     List<InstanceNode>? children,
   })  : properties = properties ?? {},
         children = children ?? [];
@@ -404,6 +419,7 @@ class SceneBuilder {
         // instances don't set this, so this stays {} for them and gets
         // overwritten below via the D007/DC05 TLV walk instead.
         var properties = Map<String, String>.from(inst.properties ?? {});
+        Map<String, Map<String, String>>? instAttributeDicts;
 
         final d007 = inst.children.where((c) => c.tag == 'D007').firstOrNull;
         if (d007 != null) {
@@ -424,6 +440,7 @@ class SceneBuilder {
           }
           try {
             properties = Geometry.extractDynamicProperties(d007);
+            instAttributeDicts = Geometry.extractAttributeDictionaries(d007);
           } catch (e) {
             emitLog(
               options, SkpLogLevel.debug,
@@ -462,12 +479,30 @@ class SceneBuilder {
         final ity = newMatrix.length > 10 ? newMatrix[10] * _inchesToMm : 0.0;
         final itz = newMatrix.length > 11 ? newMatrix[11] * _inchesToMm : 0.0;
 
+        // Fallback order: an attribute-dict name/label/code override, then
+        // the instance's own explicit name, then the definition's own
+        // name IF it's not itself just SketchUp's auto-generated
+        // "Group#1"/"Component#12" placeholder, then finally the internal
+        // index. Mirrors instanced_scene.dart's identical resolution (and
+        // Python's/C++'s own scene.py/instanced_scene.py) - see
+        // instanced_fixture_parity_test.dart, which depends on both trees
+        // resolving display names identically.
+        final childDefName = childDef?.name ?? '';
+        final defNameIsReal = childDefName.isNotEmpty && !Geometry.isGenericDefinitionName(childDefName);
+        final nameOverride = Geometry.findNameOverride(instAttributeDicts);
+        final instNameNonEmpty = inst.name != null && inst.name!.isNotEmpty;
+        final fallbackName = instNameNonEmpty ? inst.name! : (defNameIsReal ? childDefName : 'Component_$refIdx');
+        final displayName = nameOverride ?? fallbackName;
+        final nameIsGenerated = nameOverride == null && !instNameNonEmpty && !defNameIsReal;
+
         final instInfo = InstanceNode(
-          name: inst.name ?? '',
-          definitionName: childDef?.name ?? '',
+          name: displayName,
+          nameIsGenerated: nameIsGenerated,
+          definitionName: childDefName,
           layer: lName,
           positionMm: (_round2(itx), _round2(ity), _round2(itz)),
           properties: properties,
+          guid: inst.refGuid ?? '',
           children: childNodes,
         );
         childInstancesInfo.add(instInfo);

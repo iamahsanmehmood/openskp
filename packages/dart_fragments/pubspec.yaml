@@ -1,0 +1,34 @@
+name: openskp_fragments
+description: Direct SketchUp (.skp) -> ThatOpen Fragments (.frag) export for OpenSkp - EXPERIMENTAL. Separate, opt-in package (mirrors Python's `pip install openskp[fragments]` extra) so the core openskp package stays dependency-free for every other consumer; this one package takes the flat_buffers dependency Fragments export actually needs.
+version: 1.2.0
+# TODO(release): remove once the path dependency below is switched to a
+# hosted openskp version (see that dependency's own comment) - a
+# publish_to: none package can't be published to pub.dev.
+publish_to: none
+homepage: https://openskp.com
+repository: https://github.com/iamahsanmehmood/openskp/tree/main/packages/dart_fragments
+issue_tracker: https://github.com/iamahsanmehmood/openskp/issues
+topics:
+  - sketchup
+  - fragments
+  - thatopen
+  - flatbuffers
+  - bim
+
+environment:
+  sdk: ^3.0.0
+
+dependencies:
+  # TODO(release): path dependency for local dev/CI only - `dart pub
+  # publish` refuses a package with a path dependency. Switch this to a
+  # hosted `openskp: ^<next-version>` constraint once the core `openskp`
+  # package's next version (carrying InstancedNode.guid/nameIsGenerated
+  # and InstancedScene.layerHidden - see openskp#285) is itself published
+  # to pub.dev, then this package can be published too.
+  openskp:
+    path: ../dart
+  flat_buffers: ^25.9.23
+
+dev_dependencies:
+  lints: ">=3.0.0 <7.0.0"
+  test: ^1.24.0
