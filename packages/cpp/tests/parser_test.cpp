@@ -434,5 +434,32 @@ TEST(Parser, StreamingDefinitionsPreservesGeometryAndHierarchy) {
   EXPECT_EQ(total_faces, 16883u);
 }
 
+// legacy_annotations.skp was generated with Python's own create() API
+// (add_face + add_section_plane + add_text + add_dimension) and its
+// values cross-checked against Python's own reader as ground truth -
+// shared with the equivalent .NET/TypeScript fixes' own fixture
+// (openskp#285). Confirms C++'s CSectionPlane reader already carries
+// plane/name/label/hidden correctly (unlike TypeScript's own
+// readSectionPlane, which discarded all four entirely until fixed) -
+// had no dedicated coverage anywhere before this, added alongside that
+// investigation.
+TEST(Parser, LegacySectionPlaneTextDimension) {
+  auto model = SkpFile::open(test::fixture("legacy_annotations.skp")).parse();
+
+  ASSERT_EQ(model.root().section_planes.size(), 1u);
+  const auto& sp = model.root().section_planes[0];
+  EXPECT_NEAR(sp.plane[0], 0.0, 1e-6);
+  EXPECT_NEAR(sp.plane[1], 0.0, 1e-6);
+  EXPECT_NEAR(sp.plane[2], 1.0, 1e-6);
+  EXPECT_NEAR(sp.plane[3], -30.0, 1e-6);
+  EXPECT_FALSE(sp.hidden);
+
+  ASSERT_EQ(model.root().texts.size(), 1u);
+  EXPECT_EQ(model.root().texts[0].text, "Hello");
+  EXPECT_FALSE(model.root().texts[0].hidden);
+
+  EXPECT_EQ(model.root().dimensions.size(), 1u);
+}
+
 }  // namespace
 }  // namespace openskp
