@@ -978,7 +978,7 @@ function readConstructionPoint(ar: Archive, r: R): any {
 
 function readSectionPlane(ar: Archive, r: R): any {
   preamble(ar, r);
-  drawbase(ar, r);
+  const db = drawbase(ar, r);
   // optional object pointer before the plane; a real plane starts with a
   // unit-normal component (|x| <= 1) - a tag word does not decode as one
   const view = new DataView(r.data.buffer, r.data.byteOffset, r.data.byteLength);
@@ -986,13 +986,15 @@ function readSectionPlane(ar: Archive, r: R): any {
   if (!(Math.abs(first) <= 1.0001)) {
     ar.readObject(r);
   }
-  r.f64s(4);
+  const plane = r.f64s(4);
+  let name = '';
+  let label = '';
   if (bytesEqual(r.peek(3), STR_MARKER)) {
     // v18: name + short label
-    r.utf16();
-    r.utf16();
+    name = r.utf16();
+    label = r.utf16();
   }
-  return { k: 'sectionplane' };
+  return { k: 'sectionplane', plane, name, label, db };
 }
 
 function readSkFont(ar: Archive, r: R): any {
