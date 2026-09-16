@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <charconv>
 #include <sstream>
 
 #include "internal.hpp"
@@ -129,21 +130,69 @@ static bool is_prop_container_tag(const std::string& t) {
          t == "A438" || t == "AE38";
 }
 
+// Shortest decimal string that round-trips exactly back to v - the same
+// "clean" formatting Python's str(float)/.NET's ToString()/TypeScript's/
+// Dart's toString() all produce naturally (15.5 -> "15.5", not
+// "15.500000" or 17-digit noise like "15.500000000000000"). Deliberately
+// NOT json_export.cpp's own "%.17g" convention: that call site needs
+// lossless machine round-tripping for a JSON *number*, this one needs a
+// human-readable attribute *string* comparable to what the other 4 ports
+// produce for the same value - different jobs, different formatting.
+static std::string format_double(double v) {
+  char buf[32];
+  auto result = std::to_chars(buf, buf + sizeof(buf), v);
+  return std::string(buf, result.ptr);
+}
+
 // A438 wraps exactly one attribute value: its payload holds a single
 // nested span whose OWN tag says the real type (AD38 string, A938/AF38
 // double, A738 int32, B438/B538 a 3xf64 point/vector, AE38 a nested
-// array) - matching Python's _decode_vff_attr_value exactly. Only AD38
-// (string) is decoded for now, matching this port's existing
-// string-only property support elsewhere; any other type is left
-// unset rather than guessed at.
-static bool decode_a438_string_value(const ByteBuffer& p, size_t a, size_t z, std::string& out) {
+// array) - matching Python's _decode_vff_attr_value exactly (openskp#285).
+// No native bool/time_t tag has ever been observed in real data, so 7/9
+// is the real ceiling, not an arbitrary stopping point.
+//
+// Unlike the other 4 ports, this one never exposes a richer-than-string
+// decoded value anywhere (attribute_dictionaries is std::map<std::string,
+// std::string> by design here) - matching Python's/every other port's own
+// PUBLIC attribute_dictionaries contract, which is string-valued too
+// (scene.py stringifies via _stringify_vff_attr_value before ever storing
+// into InstanceNode.attribute_dictionaries; the richer typed value only
+// exists in each port's internal decode step). So this function decodes
+// AND stringifies in one pass rather than keeping the two steps separate.
+// An A438 with no children (Python: None) or an unrecognized value tag
+// both stringify to "" - a real, present key with an empty value, not a
+// missing key, matching extract_entries's own unconditional assignment.
+static std::string decode_a438_value(const ByteBuffer& p, size_t a, size_t z) {
   auto spans = parse_flat_spans(p, a, z);
-  if (spans.empty()) return false;
+  if (spans.empty()) return "";
   auto& [tag, span] = spans[0];
-  if (tag != "AD38") return false;
   auto [sa, sz] = span;
-  out.assign(reinterpret_cast<const char*>(p.data() + sa), sz - sa);
-  return true;
+  if (tag == "AD38") {
+    return std::string(reinterpret_cast<const char*>(p.data() + sa), sz - sa);
+  }
+  if ((tag == "AF38" || tag == "A938") && sz - sa == 8) {
+    return format_double(read_f64(p, sa));
+  }
+  if (tag == "A738" && sz - sa == 4) {
+    return std::to_string(read_i32(p, sa));
+  }
+  if ((tag == "B438" || tag == "B538") && sz - sa == 24) {
+    return format_double(read_f64(p, sa)) + "," + format_double(read_f64(p, sa + 8)) + "," +
+           format_double(read_f64(p, sa + 16));
+  }
+  if (tag == "AE38") {
+    std::string joined;
+    bool first = true;
+    for (auto& [ctag, cspan] : parse_flat_spans(p, sa, sz)) {
+      if (ctag != "A438") continue;
+      auto [ca, cz] = cspan;
+      if (!first) joined += ",";
+      joined += decode_a438_value(p, ca, cz);
+      first = false;
+    }
+    return joined;
+  }
+  return "";
 }
 
 // Extract every attribute dictionary attached to a DC05 payload, keyed by
@@ -166,8 +215,7 @@ static void extract_attribute_dictionaries(
       if (tag == "B636") {
         key = std::string(reinterpret_cast<const char*>(p.data() + sa), sz - sa);
       } else if (tag == "A438" && !key.empty()) {
-        std::string value;
-        if (decode_a438_string_value(p, sa, sz, value)) entries[key] = std::move(value);
+        entries[key] = decode_a438_value(p, sa, sz);
         key.clear();
       } else if (is_prop_container_tag(tag)) {
         extract_entries(sa, sz, entries);
