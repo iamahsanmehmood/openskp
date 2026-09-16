@@ -176,7 +176,7 @@ std::vector<std::uint8_t> to_fragments(const InstancedScene& scene, bool raw) {
   // dedupes onto one Shell - only a genuinely distinct scale factor pays
   // for its own geometry copy. ----
   using ShellKey = std::tuple<std::string, int, double, double, double>;
-  std::map<ShellKey, std::size_t> shell_key_to_index;
+  std::map<ShellKey, std::vector<std::size_t>> shell_key_to_index;
   std::vector<::flatbuffers::Offset<fb::Shell>> shell_offsets;
   std::vector<std::pair<std::array<float, 3>, std::array<float, 3>>> representation_bounds;
   std::map<int, std::size_t> material_key_to_index;
@@ -203,20 +203,14 @@ std::vector<std::uint8_t> to_fragments(const InstancedScene& scene, bool raw) {
     return idx;
   };
 
-  auto get_or_bake_shell = [&](const std::string& resource_id, int prim_idx,
-                               const LocalPrimitive& prim, const std::array<double, 3>& scale,
-                               bool mirrored) -> std::size_t {
-    const auto sk = scale_cache_key(mirrored, scale);
-    const ShellKey key{resource_id, prim_idx, sk[0], sk[1], sk[2]};
-    auto found = shell_key_to_index.find(key);
-    if (found != shell_key_to_index.end()) return found->second;
-
-    const auto baked = bake_primitive(prim, scale, mirrored);
-    const bool is_big = baked.points.size() > kUshortMax;
+  auto bake_one_shell =
+      [&](const std::vector<std::array<float, 3>>& points,
+          const std::vector<std::array<std::uint32_t, 3>>& triangles) -> std::size_t {
+    const bool is_big = points.size() > kUshortMax;
 
     std::vector<::flatbuffers::Offset<fb::ShellProfile>> profile_offsets;
     std::vector<::flatbuffers::Offset<fb::BigShellProfile>> big_profile_offsets;
-    for (auto& tri : baked.triangles) {
+    for (auto& tri : triangles) {
       if (is_big) {
         std::vector<std::uint32_t> idx{tri[0], tri[1], tri[2]};
         big_profile_offsets.push_back(fb::CreateBigShellProfileDirect(fbb, &idx));
@@ -229,10 +223,15 @@ std::vector<std::uint8_t> to_fragments(const InstancedScene& scene, bool raw) {
     }
 
     std::vector<fb::FloatVector> points_struct;
-    points_struct.reserve(baked.points.size());
-    for (auto& p : baked.points) points_struct.emplace_back(p[0], p[1], p[2]);
+    points_struct.reserve(points.size());
+    for (auto& p : points) points_struct.emplace_back(p[0], p[1], p[2]);
 
-    std::vector<std::uint16_t> face_ids(baked.triangles.size());
+    // Sequential per-shell profile ids (0..triangles.size()-1, not tied to
+    // any upstream SketchUp face identity - see the caller for how a
+    // too-large triangle list is chunked before reaching here), so
+    // re-numbering from 0 per shell is exactly consistent with the
+    // single-shell behavior this is a straight extraction of.
+    std::vector<std::uint16_t> face_ids(triangles.size());
     for (std::size_t i = 0; i < face_ids.size(); ++i) face_ids[i] = static_cast<std::uint16_t>(i);
 
     std::vector<::flatbuffers::Offset<fb::ShellHole>> no_holes;
@@ -251,7 +250,7 @@ std::vector<std::uint8_t> to_fragments(const InstancedScene& scene, bool raw) {
     std::array<float, 3> hi{-std::numeric_limits<float>::infinity(),
                             -std::numeric_limits<float>::infinity(),
                             -std::numeric_limits<float>::infinity()};
-    for (auto& p : baked.points) {
+    for (auto& p : points) {
       for (int k = 0; k < 3; ++k) {
         if (p[static_cast<std::size_t>(k)] < lo[static_cast<std::size_t>(k)])
           lo[static_cast<std::size_t>(k)] = p[static_cast<std::size_t>(k)];
@@ -261,8 +260,47 @@ std::vector<std::uint8_t> to_fragments(const InstancedScene& scene, bool raw) {
     }
     representation_bounds.emplace_back(lo, hi);
 
-    shell_key_to_index[key] = index;
     return index;
+  };
+
+  auto get_or_bake_shell = [&](const std::string& resource_id, int prim_idx,
+                               const LocalPrimitive& prim, const std::array<double, 3>& scale,
+                               bool mirrored) -> std::vector<std::size_t> {
+    const auto sk = scale_cache_key(mirrored, scale);
+    const ShellKey key{resource_id, prim_idx, sk[0], sk[1], sk[2]};
+    auto found = shell_key_to_index.find(key);
+    if (found != shell_key_to_index.end()) return found->second;
+
+    const auto baked = bake_primitive(prim, scale, mirrored);
+
+    // `profiles_face_ids` (written above) has no "big"/uint32 counterpart
+    // anywhere in the real Fragments schema (index.fbs only declares
+    // `profiles_face_ids: [ushort]` - unlike points, which DO get a
+    // BigShellProfile/uint32-index escape hatch past 65535 of them). A
+    // single shell genuinely cannot represent more than 65535 triangles no
+    // matter how points are encoded - see Python's own fix (openskp#285/
+    // PR #355) for the real production incident this was ported from.
+    // Splitting into multiple shells, each within the ushort limit, is the
+    // only way to represent this - the format has no cap on shell COUNT,
+    // just per-shell triangle count. Each sub-shell duplicates the full
+    // (shared) points array rather than remapping to a local subset:
+    // simpler and lower-risk than a vertex-remapping pass, at the cost of
+    // some extra file size in this rare oversized-mesh case.
+    std::vector<std::size_t> indices;
+    if (baked.triangles.size() > kUshortMax) {
+      for (std::size_t i = 0; i < baked.triangles.size(); i += kUshortMax) {
+        const std::size_t end = std::min(i + kUshortMax, baked.triangles.size());
+        std::vector<std::array<std::uint32_t, 3>> chunk(
+            baked.triangles.begin() + static_cast<std::ptrdiff_t>(i),
+            baked.triangles.begin() + static_cast<std::ptrdiff_t>(end));
+        indices.push_back(bake_one_shell(baked.points, chunk));
+      }
+    } else {
+      indices.push_back(bake_one_shell(baked.points, baked.triangles));
+    }
+
+    shell_key_to_index[key] = indices;
+    return indices;
   };
 
   // ---- Model-level items + geometry samples ----
@@ -314,11 +352,21 @@ std::vector<std::uint8_t> to_fragments(const InstancedScene& scene, bool raw) {
       const auto trs = decompose_trs(leaf.world);
       for (std::size_t prim_idx = 0; prim_idx < res->primitives.size(); ++prim_idx) {
         const auto& prim = res->primitives[prim_idx];
-        sample_material.push_back(get_material_index(static_cast<int>(prim.material_index)));
-        sample_representation.push_back(get_or_bake_shell(
-            *node.mesh_resource_id, static_cast<int>(prim_idx), prim, trs.scale, trs.mirrored));
-        meshes_items.push_back(static_cast<std::uint32_t>(item_index));
-        global_transform_data.push_back(trs);
+        const auto material_index = get_material_index(static_cast<int>(prim.material_index));
+        // Normally exactly one shell; more than one only when the
+        // primitive's own triangle count exceeded what a single shell can
+        // represent (see get_or_bake_shell) - each extra shell becomes its
+        // own additional Sample of the same item/material/transform, the
+        // same pattern this loop already uses for multiple primitives of
+        // one item.
+        for (auto shell_index :
+             get_or_bake_shell(*node.mesh_resource_id, static_cast<int>(prim_idx), prim, trs.scale,
+                               trs.mirrored)) {
+          sample_material.push_back(material_index);
+          sample_representation.push_back(shell_index);
+          meshes_items.push_back(static_cast<std::uint32_t>(item_index));
+          global_transform_data.push_back(trs);
+        }
       }
     }
   }

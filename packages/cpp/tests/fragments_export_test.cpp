@@ -242,5 +242,131 @@ TEST(FragmentsExport, CompressedOutputIsSmallerAndDecompresses) {
   EXPECT_EQ(compressed[0], 0x78);
 }
 
+// ---------------------------------------------------------------------------------------------
+// Oversized shell splitting (openskp#285 / PR #355).
+//
+// A single shell (Fragments' term for one baked triangle mesh) has no representation for more
+// than 65535 triangles: profiles_face_ids is a plain ushort array in the real schema (index.fbs),
+// with no uint32 escape hatch the way POINTS get past 65535 via BigShellProfile. A real
+// production model with one 222,000+-triangle primitive (a large flattened/dense mesh) hit this
+// in practice on the Python port - see PR #355 for the full incident. Unlike Python (which threw
+// at write time), this port's old `static_cast<std::uint16_t>(i)` silently WRAPPED instead of
+// throwing - a worse bug in one sense: it wrote wrong/colliding face ids instead of failing
+// loudly. get_or_bake_shell now splits an oversized primitive's triangles into multiple shells
+// instead, each within the ushort limit.
+// ---------------------------------------------------------------------------------------------
+
+LocalPrimitive grid_primitive(int cols, int rows) {
+  LocalPrimitive prim;
+  prim.positions.resize(static_cast<std::size_t>(cols) * static_cast<std::size_t>(rows) * 3);
+  for (int j = 0; j < rows; ++j) {
+    for (int i = 0; i < cols; ++i) {
+      const std::size_t v = static_cast<std::size_t>(j) * static_cast<std::size_t>(cols) +
+                            static_cast<std::size_t>(i);
+      prim.positions[v * 3] = static_cast<float>(i);
+      prim.positions[v * 3 + 1] = static_cast<float>(j);
+      prim.positions[v * 3 + 2] = 0.0f;
+    }
+  }
+  prim.normals.assign(prim.positions.size(), 0.0f);
+  prim.uvs.assign((prim.positions.size() / 3) * 2, 0.0f);
+
+  const int tri_cells = (cols - 1) * (rows - 1);
+  prim.indices.resize(static_cast<std::size_t>(tri_cells) * 6);
+  std::size_t k = 0;
+  for (int j = 0; j < rows - 1; ++j) {
+    for (int i = 0; i < cols - 1; ++i) {
+      const std::uint32_t a = static_cast<std::uint32_t>(j * cols + i);
+      const std::uint32_t b = a + 1;
+      const std::uint32_t c = a + static_cast<std::uint32_t>(cols);
+      const std::uint32_t d = c + 1;
+      prim.indices[k++] = a;
+      prim.indices[k++] = b;
+      prim.indices[k++] = d;
+      prim.indices[k++] = a;
+      prim.indices[k++] = d;
+      prim.indices[k++] = c;
+    }
+  }
+  prim.material_index = 0;
+  return prim;
+}
+
+InstancedScene scene_with_one_primitive(const LocalPrimitive& prim, const std::string& mesh_id) {
+  InstancedScene scene;
+  InstancedMeshResource r;
+  r.id = mesh_id;
+  r.definition_id = 1;
+  r.definition_name = "BigMesh";
+  r.variant_key = "1|255,255,255";
+  r.primitives = {prim};
+  scene.mesh_resources = {r};
+  scene.gltf_materials = {{}};
+
+  InstancedNode leaf;
+  leaf.name = "Big";
+  leaf.matrix = kIdentity;
+  leaf.mesh_resource_id = mesh_id;
+  InstancedNode root;
+  root.name = "ROOT";
+  root.matrix = kIdentity;
+  root.children = {leaf};
+  scene.scene_hierarchy = root;
+  return scene;
+}
+
+TEST(FragmentsExport, SplitsAnOversizedPrimitiveAndEveryFaceIdIsCorrectAndSequential) {
+  constexpr int kCols = 210, kRows = 165;
+  constexpr int kExpectedTriangles = (kCols - 1) * (kRows - 1) * 2;
+  static_assert(kExpectedTriangles > 65535, "fixture must exceed the limit under test");
+
+  const auto scene = scene_with_one_primitive(grid_primitive(kCols, kRows), "mesh_big");
+
+  // This is the exact shape of call that, before the fix, silently wrote wrapped-around (wrong)
+  // face ids via static_cast<uint16_t> - the primary regression check is that the result is now
+  // actually correct, not just that it doesn't throw (unlike Python's own crash-shaped version of
+  // this bug).
+  const auto raw = to_fragments(scene, /*raw=*/true);
+  const auto* model = parse_raw(raw);
+  ASSERT_NE(model, nullptr);
+  const auto* meshes = model->meshes();
+  ASSERT_NE(meshes, nullptr);
+
+  ASSERT_GT(meshes->shells()->size(), 1u);  // confirms the split actually happened, not a no-op
+  EXPECT_EQ(meshes->samples()->size(), meshes->shells()->size());  // one sample per split shell
+
+  std::size_t total_triangles = 0;
+  for (const auto* shell : *meshes->shells()) {
+    const auto* face_ids = shell->profiles_face_ids();
+    ASSERT_NE(face_ids, nullptr);
+    EXPECT_LE(face_ids->size(), 65535u);  // every sub-shell stays within the ushort limit
+    ASSERT_NE(shell->profiles(), nullptr);
+    EXPECT_EQ(shell->profiles()->size(), face_ids->size());
+    // Every face id in a shell is a small, sequential, non-wrapped 0..N-1 run - the exact thing
+    // the old static_cast<uint16_t> could silently violate once a shell's own triangle count
+    // exceeded 65535.
+    for (::flatbuffers::uoffset_t j = 0; j < face_ids->size(); ++j) {
+      EXPECT_EQ(face_ids->Get(j), j);
+    }
+    total_triangles += face_ids->size();
+  }
+  EXPECT_EQ(total_triangles, static_cast<std::size_t>(kExpectedTriangles));
+}
+
+TEST(FragmentsExport, APrimitiveWithinTheLimitStillProducesExactlyOneShell) {
+  // Regression guard on the split path itself: a normal, non-huge primitive must not be
+  // needlessly split into multiple shells.
+  const auto scene =
+      scene_with_one_primitive(grid_primitive(50, 50), "mesh_small");  // 49*49*2 = 4802 triangles
+
+  const auto raw = to_fragments(scene, /*raw=*/true);
+  const auto* model = parse_raw(raw);
+  ASSERT_NE(model, nullptr);
+  const auto* meshes = model->meshes();
+  ASSERT_NE(meshes, nullptr);
+  EXPECT_EQ(meshes->shells()->size(), 1u);
+  EXPECT_EQ(meshes->samples()->size(), 1u);
+}
+
 }  // namespace
 }  // namespace openskp
