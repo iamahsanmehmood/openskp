@@ -91,6 +91,11 @@ class InstancedNode {
   (double, double, double) positionMm;
   Map<String, String> properties;
 
+  /// See scene.dart's InstanceNode.attributeDictionaries - every OTHER
+  /// attribute dictionary this instance carries, keyed by the dictionary's
+  /// own name (openskp#285).
+  Map<String, Map<String, String>> attributeDictionaries;
+
   /// Real SketchUp instance GUID (VFF/2021+ files only - legacy pre-2021
   /// files carry no per-instance GUID here), or `''` when the source file
   /// has none. Mirrors Python's/C++'s own field; a consumer keying on this
@@ -110,11 +115,13 @@ class InstancedNode {
     List<double>? matrix,
     this.positionMm = (0.0, 0.0, 0.0),
     Map<String, String>? properties,
+    Map<String, Map<String, String>>? attributeDictionaries,
     this.guid = '',
     this.meshResourceId,
     List<InstancedNode>? children,
   })  : matrix = matrix ?? identityGltf,
         properties = properties ?? {},
+        attributeDictionaries = attributeDictionaries ?? {},
         children = children ?? [];
 }
 
@@ -480,6 +487,22 @@ class InstancedSceneBuilder {
         final displayName = nameOverride ?? fallbackName;
         final nameIsGenerated = nameOverride == null && !instNameNonEmpty && !defNameIsReal;
 
+        // Every OTHER attribute dictionary this instance carries -
+        // dynamic_attributes is already surfaced separately as properties
+        // above, and SU_InstanceSet is SketchUp's own always-present,
+        // always-empty Owner/Status boilerplate, not worth surfacing.
+        // Mirrors scene.dart's InstanceNode (and Python's own
+        // attribute_dictionaries) exactly (openskp#285).
+        final attributeDictionaries = <String, Map<String, String>>{};
+        if (instAttributeDicts != null) {
+          for (final entry in instAttributeDicts.entries) {
+            if (entry.key == 'dynamic_attributes' || entry.key == 'SU_InstanceSet') continue;
+            attributeDictionaries[entry.key] = {
+              for (final e in entry.value.entries) e.key: Geometry.stringifyVffAttrValue(e.value),
+            };
+          }
+        }
+
         nodes.add(InstancedNode(
           name: displayName,
           nameIsGenerated: nameIsGenerated,
@@ -488,6 +511,7 @@ class InstancedSceneBuilder {
           matrix: toGltfMatrix(inst.matrix),
           positionMm: (_round2(itx), _round2(ity), _round2(itz)),
           properties: properties,
+          attributeDictionaries: attributeDictionaries,
           guid: inst.refGuid ?? '',
           meshResourceId: (refIdx != null && childDef != null)
               ? meshResourceForBuilder(childDef.builder, childDef.name ?? '', refIdx, instColor, lName)

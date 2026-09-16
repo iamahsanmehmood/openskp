@@ -24,6 +24,15 @@ class InstanceNode {
   (double, double, double) positionMm;
   Map<String, String> properties;
 
+  /// Every OTHER attribute dictionary this instance carries, keyed by the
+  /// dictionary's own name, values stringified the same way [properties]
+  /// already is - [properties] stays exactly SketchUp's own Dynamic
+  /// Components data ("dynamic_attributes") for backward compatibility;
+  /// third-party plugins (BIM/steel-detailing tools, etc.) commonly attach
+  /// their own richer per-instance data under their own dictionary name
+  /// instead, which this project never surfaced before (openskp#285).
+  Map<String, Map<String, String>> attributeDictionaries;
+
   /// Real SketchUp instance GUID (VFF/2021+ files only), or `''` when the
   /// source file has none - see InstancedNode.guid (instanced_scene.dart).
   String guid;
@@ -37,9 +46,11 @@ class InstanceNode {
     this.layer = '',
     this.positionMm = (0.0, 0.0, 0.0),
     Map<String, String>? properties,
+    Map<String, Map<String, String>>? attributeDictionaries,
     this.guid = '',
     List<InstanceNode>? children,
   })  : properties = properties ?? {},
+        attributeDictionaries = attributeDictionaries ?? {},
         children = children ?? [];
 }
 
@@ -51,6 +62,10 @@ class MeshMetadata {
   String layer;
   (double, double, double) positionMm;
   Map<String, String> properties;
+
+  /// See InstanceNode.attributeDictionaries.
+  Map<String, Map<String, String>> attributeDictionaries;
+
   String path;
 
   MeshMetadata({
@@ -59,8 +74,10 @@ class MeshMetadata {
     this.layer = '',
     this.positionMm = (0.0, 0.0, 0.0),
     Map<String, String>? properties,
+    Map<String, Map<String, String>>? attributeDictionaries,
     this.path = '',
-  }) : properties = properties ?? {};
+  })  : properties = properties ?? {},
+        attributeDictionaries = attributeDictionaries ?? {};
 }
 
 /// One triangulated, world-space mesh: all faces sharing a single resolved
@@ -188,7 +205,7 @@ class SceneBuilder {
     // could match the wrong meshes (a shallow instance's path is always a
     // string prefix of every deeper descendant's path too, so `contains`
     // matched far more than intended - see openskp#240).
-    final pathUpdates = <String, (Map<String, String>, String)>{};
+    final pathUpdates = <String, (Map<String, String>, String, Map<String, Map<String, String>>)>{};
 
     // Textures deduplicated by bytes: the same image routinely backs
     // several materials, and re-embedding it per material would multiply
@@ -495,6 +512,22 @@ class SceneBuilder {
         final displayName = nameOverride ?? fallbackName;
         final nameIsGenerated = nameOverride == null && !instNameNonEmpty && !defNameIsReal;
 
+        // Every OTHER attribute dictionary this instance carries -
+        // dynamic_attributes is already surfaced separately as properties
+        // above, and SU_InstanceSet is SketchUp's own always-present,
+        // always-empty Owner/Status boilerplate, not worth surfacing.
+        // Mirrors Python's own attribute_dictionaries construction in
+        // scene.py exactly (openskp#285).
+        final attributeDictionaries = <String, Map<String, String>>{};
+        if (instAttributeDicts != null) {
+          for (final entry in instAttributeDicts.entries) {
+            if (entry.key == 'dynamic_attributes' || entry.key == 'SU_InstanceSet') continue;
+            attributeDictionaries[entry.key] = {
+              for (final e in entry.value.entries) e.key: Geometry.stringifyVffAttrValue(e.value),
+            };
+          }
+        }
+
         final instInfo = InstanceNode(
           name: displayName,
           nameIsGenerated: nameIsGenerated,
@@ -502,12 +535,13 @@ class SceneBuilder {
           layer: lName,
           positionMm: (_round2(itx), _round2(ity), _round2(itz)),
           properties: properties,
+          attributeDictionaries: attributeDictionaries,
           guid: inst.refGuid ?? '',
           children: childNodes,
         );
         childInstancesInfo.add(instInfo);
 
-        pathUpdates[fullPathName] = (properties, inst.name ?? '');
+        pathUpdates[fullPathName] = (properties, inst.name ?? '', attributeDictionaries);
       }
 
       return childInstancesInfo;
@@ -529,6 +563,7 @@ class SceneBuilder {
       if (update != null) {
         entry.value.properties = update.$1;
         entry.value.name = update.$2;
+        entry.value.attributeDictionaries = update.$3;
       }
     }
 
@@ -540,6 +575,7 @@ class SceneBuilder {
         existing.layer = 'Layer0';
         existing.positionMm = (0.0, 0.0, 0.0);
         existing.properties = {};
+        existing.attributeDictionaries = {};
       }
     }
 

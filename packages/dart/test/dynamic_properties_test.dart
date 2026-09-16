@@ -281,6 +281,78 @@ void main() {
     });
   });
 
+  group('attributeDictionaries - real fixture (openskp#285)', () {
+    // Real-fixture coverage for InstanceNode/InstancedNode/MeshMetadata's
+    // attributeDictionaries field (the "multiple dictionaries per entity"
+    // reader side). Untitled.skp is a genuine SteelFramer-authored file
+    // whose "W1" instance carries a "steelframer-dict" dictionary - NOT
+    // SketchUp's own "dynamic_attributes" - cross-checked against Python's
+    // own test_untitled_skp ground truth (packages/python/tests/
+    // test_parser.py), also mirrored in the .NET/TypeScript ports.
+    final fixturePath = '${Directory.current.path}/test/fixtures/Untitled.skp';
+
+    InstanceNode? findByName(InstanceNode node, String name) {
+      if (node.name == name) return node;
+      for (final child in node.children) {
+        final found = findByName(child, name);
+        if (found != null) return found;
+      }
+      return null;
+    }
+
+    InstancedNode? findInstancedByName(InstancedNode node, String name) {
+      if (node.name == name) return node;
+      for (final child in node.children) {
+        final found = findInstancedByName(child, name);
+        if (found != null) return found;
+      }
+      return null;
+    }
+
+    test('Scene: exposes the third-party dictionary by its own name on the baked tree', () {
+      final scene = SkpFile.open(fixturePath).buildScene();
+      final w1 = findByName(scene.sceneHierarchy, 'W1');
+
+      expect(w1, isNotNull);
+      // NOTE: unlike Python (whose properties is scoped to only the
+      // "dynamic_attributes" dict), Dart's properties is populated via the
+      // pre-existing, deliberately flatten-everything
+      // extractDynamicProperties - a real, established divergence
+      // predating this change. attributeDictionaries is the actually-
+      // correct, dictionary-scoped way to reach steelframer-dict's data.
+      expect(w1!.attributeDictionaries['steelframer-dict'], isNotNull);
+      expect(w1.attributeDictionaries['steelframer-dict']!['generator'],
+          'SteelFramer::Engine::PanelGenerator');
+      expect(w1.attributeDictionaries['steelframer-dict']!['profile'], '362S200-43');
+    });
+
+    test('InstancedScene: exposes the third-party dictionary by its own name on the instanced tree', () {
+      final instanced = SkpFile.open(fixturePath).buildInstancedScene();
+      final w1 = findInstancedByName(instanced.sceneHierarchy, 'W1');
+
+      expect(w1, isNotNull);
+      expect(w1!.attributeDictionaries['steelframer-dict'], isNotNull);
+      expect(w1.attributeDictionaries['steelframer-dict']!['generator'],
+          'SteelFramer::Engine::PanelGenerator');
+      expect(w1.attributeDictionaries['steelframer-dict']!['profile'], '362S200-43');
+    });
+
+    test('meshIndex: MeshMetadata also carries a non-empty steelframer-dict somewhere in the tree', () {
+      // Several distinct instances each carry their own "steelframer-dict"
+      // (with different keys per part type); W1 itself is a geometry-less
+      // organizational wrapper (no mesh sits at its own path), so -
+      // matching Python's own equally loose check - this only confirms
+      // SOME mesh carries a non-empty "steelframer-dict", not necessarily
+      // W1's own.
+      final scene = SkpFile.open(fixturePath).buildScene();
+      final meshWithDict = scene.meshIndex.values.where(
+        (m) => (m.attributeDictionaries['steelframer-dict'] ?? {}).isNotEmpty,
+      );
+
+      expect(meshWithDict, isNotEmpty);
+    });
+  });
+
   group('legacy real-fixture wiring', () {
     test('does not crash and reports {} for a fixture with no Dynamic Component data', () {
       // capilla_quiroz_v17.skp (a plain chapel model) has no Dynamic
