@@ -419,7 +419,7 @@ class SceneBuilder {
         // instances don't set this, so this stays {} for them and gets
         // overwritten below via the D007/DC05 TLV walk instead.
         var properties = Map<String, String>.from(inst.properties ?? {});
-        Map<String, Map<String, String>>? instAttributeDicts;
+        Map<String, Map<String, Object?>>? instAttributeDicts;
 
         final d007 = inst.children.where((c) => c.tag == 'D007').firstOrNull;
         if (d007 != null) {

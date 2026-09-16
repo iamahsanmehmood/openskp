@@ -405,7 +405,7 @@ class InstancedSceneBuilder {
         var lName = parentLayer;
         (int, int, int)? instColor = inheritedColor;
         var properties = Map<String, String>.from(inst.properties ?? {});
-        Map<String, Map<String, String>>? instAttributeDicts;
+        Map<String, Map<String, Object?>>? instAttributeDicts;
 
         final d007 = inst.children.where((c) => c.tag == 'D007').firstOrNull;
         if (d007 != null) {
