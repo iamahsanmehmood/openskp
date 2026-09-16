@@ -240,7 +240,7 @@ Uint8List toFragments(InstancedScene scene, [FragmentExportOptions options = con
   // placement sharing the same definition AND the same scale/mirror
   // state dedupes onto one Shell - only a genuinely distinct scale
   // factor pays for its own geometry copy. ----
-  final shellKeyToIndex = <String, int>{};
+  final shellKeyToIndex = <String, List<int>>{};
   final shellOffsets = <int>[];
   final representationBoundsMin = <List<double>>[];
   final representationBoundsMax = <List<double>>[];
@@ -261,18 +261,12 @@ Uint8List toFragments(InstancedScene scene, [FragmentExportOptions options = con
     return idx;
   }
 
-  int getOrBakeShell(String resourceId, int primIdx, LocalPrimitive prim, List<double> scale, bool mirrored) {
-    final sk = scaleCacheKey(mirrored, scale);
-    final key = '$resourceId:$primIdx:$sk';
-    final cached = shellKeyToIndex[key];
-    if (cached != null) return cached;
-
-    final baked = bakePrimitive(prim, scale, mirrored);
-    final isBig = baked.points.length > _ushortMax;
+  int bakeOneShell(List<List<double>> points, List<List<int>> triangles) {
+    final isBig = points.length > _ushortMax;
 
     final profileOffsets = <int>[];
     final bigProfileOffsets = <int>[];
-    for (final tri in baked.triangles) {
+    for (final tri in triangles) {
       if (isBig) {
         final idxVecOffset = builder.writeListUint32(tri);
         final b = ffb.BigShellProfileBuilder(builder);
@@ -297,11 +291,16 @@ Uint8List toFragments(InstancedScene scene, [FragmentExportOptions options = con
     final bigHolesVec = builder.writeList(const []);
 
     final pointBuilders = [
-      for (final p in baked.points) ffb.FloatVectorObjectBuilder(x: p[0], y: p[1], z: p[2]),
+      for (final p in points) ffb.FloatVectorObjectBuilder(x: p[0], y: p[1], z: p[2]),
     ];
     final pointsVec = builder.writeListOfStructs(pointBuilders);
 
-    final faceIds = [for (var i = 0; i < baked.triangles.length; i++) i];
+    // Sequential per-shell profile ids (0..triangles.length-1, not tied to
+    // any upstream SketchUp face identity - see the caller for how a
+    // too-large triangle list is chunked before reaching here), so
+    // re-numbering from 0 per shell is exactly consistent with the
+    // single-shell behavior this is a straight extraction of.
+    final faceIds = [for (var i = 0; i < triangles.length; i++) i];
     final faceIdsVec = builder.writeListUint16(faceIds);
 
     final shellB = ffb.ShellBuilder(builder);
@@ -319,7 +318,7 @@ Uint8List toFragments(InstancedScene scene, [FragmentExportOptions options = con
 
     var minX = double.infinity, minY = double.infinity, minZ = double.infinity;
     var maxX = double.negativeInfinity, maxY = double.negativeInfinity, maxZ = double.negativeInfinity;
-    for (final p in baked.points) {
+    for (final p in points) {
       if (p[0] < minX) minX = p[0];
       if (p[0] > maxX) maxX = p[0];
       if (p[1] < minY) minY = p[1];
@@ -334,8 +333,43 @@ Uint8List toFragments(InstancedScene scene, [FragmentExportOptions options = con
     representationBoundsMin.add([minX, minY, minZ]);
     representationBoundsMax.add([maxX, maxY, maxZ]);
 
-    shellKeyToIndex[key] = index;
     return index;
+  }
+
+  List<int> getOrBakeShell(String resourceId, int primIdx, LocalPrimitive prim, List<double> scale, bool mirrored) {
+    final sk = scaleCacheKey(mirrored, scale);
+    final key = '$resourceId:$primIdx:$sk';
+    final cached = shellKeyToIndex[key];
+    if (cached != null) return cached;
+
+    final baked = bakePrimitive(prim, scale, mirrored);
+
+    // `profilesFaceIds` (written above) has no "big"/uint32 counterpart
+    // anywhere in the real Fragments schema (index.fbs only declares
+    // `profiles_face_ids: [ushort]` - unlike points, which DO get a
+    // BigShellProfile/uint32-index escape hatch past 65535 of them). A
+    // single shell genuinely cannot represent more than 65535 triangles no
+    // matter how points are encoded - see Python's own fix (openskp#285/
+    // PR #355) for the real production incident this was ported from.
+    // Splitting into multiple shells, each within the ushort limit, is the
+    // only way to represent this - the format has no cap on shell COUNT,
+    // just per-shell triangle count. Each sub-shell duplicates the full
+    // (shared) points array rather than remapping to a local subset:
+    // simpler and lower-risk than a vertex-remapping pass, at the cost of
+    // some extra file size in this rare oversized-mesh case.
+    List<int> indices;
+    if (baked.triangles.length > _ushortMax) {
+      indices = [];
+      for (var i = 0; i < baked.triangles.length; i += _ushortMax) {
+        final end = (i + _ushortMax < baked.triangles.length) ? i + _ushortMax : baked.triangles.length;
+        indices.add(bakeOneShell(baked.points, baked.triangles.sublist(i, end)));
+      }
+    } else {
+      indices = [bakeOneShell(baked.points, baked.triangles)];
+    }
+
+    shellKeyToIndex[key] = indices;
+    return indices;
   }
 
   // ---- Model-level items + geometry samples: one item per leaf
@@ -398,10 +432,19 @@ Uint8List toFragments(InstancedScene scene, [FragmentExportOptions options = con
       final trs = decomposeTrs(leaf.world);
       for (var primIdx = 0; primIdx < res.primitives.length; primIdx++) {
         final prim = res.primitives[primIdx];
-        sampleMaterial.add(getMaterialIndex(prim.materialIndex));
-        sampleRepresentation.add(getOrBakeShell(node.meshResourceId!, primIdx, prim, trs.scale, trs.mirrored));
-        meshesItems.add(itemIndex);
-        globalTransformData.add(trs);
+        final materialIndex = getMaterialIndex(prim.materialIndex);
+        // Normally exactly one shell; more than one only when the
+        // primitive's own triangle count exceeded what a single shell can
+        // represent (see getOrBakeShell) - each extra shell becomes its
+        // own additional Sample of the same item/material/transform, the
+        // same pattern this loop already uses for multiple primitives of
+        // one item.
+        for (final shellIndex in getOrBakeShell(node.meshResourceId!, primIdx, prim, trs.scale, trs.mirrored)) {
+          sampleMaterial.add(materialIndex);
+          sampleRepresentation.add(shellIndex);
+          meshesItems.add(itemIndex);
+          globalTransformData.add(trs);
+        }
       }
     }
   }
