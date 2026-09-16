@@ -363,7 +363,7 @@ namespace OpenSkp.Fragments
             // are walked below: keyed by (resource, primitive, baked scale)
             // so every placement sharing the same definition AND the same
             // scale/mirror state dedupes onto one Shell. ----
-            var shellKeyToIndex = new Dictionary<(string, int, double, double, double), int>();
+            var shellKeyToIndex = new Dictionary<(string, int, double, double, double), List<int>>();
             var shellOffsets = new List<Offset<Fb.Shell>>();
             var representationBounds = new List<(float[] Min, float[] Max)>();
             var materialKeyToIndex = new Dictionary<int, int>();
@@ -382,18 +382,13 @@ namespace OpenSkp.Fragments
                 return idx;
             }
 
-            int GetOrBakeShell(string resourceId, int primIdx, LocalPrimitive prim, double[] scale, bool mirrored)
+            int BakeOneShell(List<float[]> points, List<uint[]> triangles)
             {
-                var sk = ScaleCacheKey(mirrored, scale);
-                var key = (resourceId, primIdx, sk.Item1, sk.Item2, sk.Item3);
-                if (shellKeyToIndex.TryGetValue(key, out var existing)) return existing;
-
-                var baked = BakePrimitive(prim, scale, mirrored);
-                bool isBig = baked.Points.Count > UshortMax;
+                bool isBig = points.Count > UshortMax;
 
                 var profileOffsets = new List<Offset<Fb.ShellProfile>>();
                 var bigProfileOffsets = new List<Offset<Fb.BigShellProfile>>();
-                foreach (var tri in baked.Triangles)
+                foreach (var tri in triangles)
                 {
                     if (isBig)
                     {
@@ -428,10 +423,10 @@ namespace OpenSkp.Fragments
                 var holesVec = Fb.Shell.CreateHolesVector(builder, Array.Empty<Offset<Fb.ShellHole>>());
                 var bigHolesVec = Fb.Shell.CreateBigHolesVector(builder, Array.Empty<Offset<Fb.BigShellHole>>());
 
-                Fb.Shell.StartPointsVector(builder, baked.Points.Count);
-                for (int i = baked.Points.Count - 1; i >= 0; i--)
+                Fb.Shell.StartPointsVector(builder, points.Count);
+                for (int i = points.Count - 1; i >= 0; i--)
                 {
-                    var p = baked.Points[i];
+                    var p = points[i];
                     builder.Prep(4, 12);
                     builder.PutFloat(p[2]);
                     builder.PutFloat(p[1]);
@@ -439,7 +434,13 @@ namespace OpenSkp.Fragments
                 }
                 var pointsVec = builder.EndVector();
 
-                var faceIds = new ushort[baked.Triangles.Count];
+                // Sequential per-shell profile ids (0..triangles.Count-1, not
+                // tied to any upstream SketchUp face identity - see the
+                // caller for how a too-large triangle list is chunked
+                // before reaching here), so re-numbering from 0 per shell is
+                // exactly consistent with the single-shell behavior this is
+                // a straight extraction of.
+                var faceIds = new ushort[triangles.Count];
                 for (int i = 0; i < faceIds.Length; i++) faceIds[i] = (ushort)i;
                 var faceIdsVec = Fb.Shell.CreateProfilesFaceIdsVector(builder, faceIds);
 
@@ -457,7 +458,7 @@ namespace OpenSkp.Fragments
 
                 float minX = float.PositiveInfinity, minY = float.PositiveInfinity, minZ = float.PositiveInfinity;
                 float maxX = float.NegativeInfinity, maxY = float.NegativeInfinity, maxZ = float.NegativeInfinity;
-                foreach (var p in baked.Points)
+                foreach (var p in points)
                 {
                     if (p[0] < minX) minX = p[0]; if (p[0] > maxX) maxX = p[0];
                     if (p[1] < minY) minY = p[1]; if (p[1] > maxY) maxY = p[1];
@@ -466,8 +467,50 @@ namespace OpenSkp.Fragments
                 if (float.IsPositiveInfinity(minX)) { minX = minY = minZ = 0; maxX = maxY = maxZ = 0; }
                 representationBounds.Add((new[] { minX, minY, minZ }, new[] { maxX, maxY, maxZ }));
 
-                shellKeyToIndex[key] = index;
                 return index;
+            }
+
+            List<int> GetOrBakeShell(string resourceId, int primIdx, LocalPrimitive prim, double[] scale, bool mirrored)
+            {
+                var sk = ScaleCacheKey(mirrored, scale);
+                var key = (resourceId, primIdx, sk.Item1, sk.Item2, sk.Item3);
+                if (shellKeyToIndex.TryGetValue(key, out var existing)) return existing;
+
+                var baked = BakePrimitive(prim, scale, mirrored);
+
+                // `profiles_face_ids` (written above) has no "big"/uint32
+                // counterpart anywhere in the real Fragments schema
+                // (index.fbs only declares `profiles_face_ids: [ushort]` -
+                // unlike points, which DO get a BigShellProfile/uint32-index
+                // escape hatch past 65535 of them). A single shell genuinely
+                // cannot represent more than 65535 triangles no matter how
+                // points are encoded - confirmed the hard way against a real
+                // production model with one 222,000+-triangle mesh (see
+                // Python's own fix for the full incident writeup). Splitting
+                // into multiple shells, each within the ushort limit, is the
+                // only way to represent this - the format has no cap on
+                // shell COUNT, just per-shell triangle count. Each sub-shell
+                // duplicates the full (shared) points array rather than
+                // remapping to a local subset: simpler and lower-risk than a
+                // vertex-remapping pass, at the cost of some extra file size
+                // in this rare oversized-mesh case.
+                List<int> indices;
+                if (baked.Triangles.Count > UshortMax)
+                {
+                    indices = new List<int>();
+                    for (int i = 0; i < baked.Triangles.Count; i += UshortMax)
+                    {
+                        int count = Math.Min(UshortMax, baked.Triangles.Count - i);
+                        indices.Add(BakeOneShell(baked.Points, baked.Triangles.GetRange(i, count)));
+                    }
+                }
+                else
+                {
+                    indices = new List<int> { BakeOneShell(baked.Points, baked.Triangles) };
+                }
+
+                shellKeyToIndex[key] = indices;
+                return indices;
             }
 
             // ---- Model-level items + geometry samples: one item per leaf
@@ -540,10 +583,21 @@ namespace OpenSkp.Fragments
                     for (int primIdx = 0; primIdx < res.Primitives.Count; primIdx++)
                     {
                         var prim = res.Primitives[primIdx];
-                        sampleMaterial.Add(GetMaterialIndex(prim.MaterialIndex));
-                        sampleRepresentation.Add(GetOrBakeShell(node.MeshResourceId!, primIdx, prim, trs.Scale, trs.Mirrored));
-                        meshesItems.Add((uint)itemIndex);
-                        globalTransformData.Add(trs);
+                        int materialIndex = GetMaterialIndex(prim.MaterialIndex);
+                        // Normally exactly one shell; more than one only
+                        // when the primitive's own triangle count exceeded
+                        // what a single shell can represent (see
+                        // GetOrBakeShell) - each extra shell becomes its own
+                        // additional Sample of the same item/material/
+                        // transform, the same pattern this loop already
+                        // uses for multiple primitives of one item.
+                        foreach (int shellIndex in GetOrBakeShell(node.MeshResourceId!, primIdx, prim, trs.Scale, trs.Mirrored))
+                        {
+                            sampleMaterial.Add(materialIndex);
+                            sampleRepresentation.Add(shellIndex);
+                            meshesItems.Add((uint)itemIndex);
+                            globalTransformData.Add(trs);
+                        }
                     }
                 }
             }

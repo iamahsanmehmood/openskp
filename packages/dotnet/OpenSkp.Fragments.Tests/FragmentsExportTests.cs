@@ -685,4 +685,180 @@ namespace OpenSkp.Fragments.Tests
             }
         }
     }
+
+    /// <summary>A single shell (Fragments' term for one baked triangle
+    /// mesh) has no representation for more than 65535 triangles:
+    /// ProfilesFaceIds is a plain ushort array in the real schema
+    /// (index.fbs), with no uint32 escape hatch the way POINTS get past
+    /// 65535 via BigShellProfile. A real production model with one
+    /// 222,000+-triangle primitive (a large flattened/dense mesh) hit this
+    /// in practice on the Python port - see openskp#285/PR #355 for the
+    /// full incident. Unlike Python (which threw at write time),
+    /// GetOrBakeShell's old <c>(ushort)i</c> cast silently WRAPPED instead
+    /// of throwing - a worse bug in one sense: it wrote wrong/colliding
+    /// face ids instead of failing loudly. GetOrBakeShell now splits an
+    /// oversized primitive's triangles into multiple shells instead, each
+    /// within the ushort limit.</summary>
+    public class FragmentsOversizedShellTests
+    {
+        private static readonly double[] Identity =
+        {
+            1, 0, 0, 0,
+            0, 1, 0, 0,
+            0, 0, 1, 0,
+            0, 0, 0, 1,
+        };
+
+        private const int UshortMax = 65535;
+
+        /// <summary>A flat cols x rows vertex grid (z=0 plane),
+        /// triangulated as 2 triangles per quad cell - (cols-1)*(rows-1)*2
+        /// triangles total, a plain synthetic stand-in for the kind of
+        /// large flattened/dense mesh that triggers this in real
+        /// models.</summary>
+        private static LocalPrimitive GridPrimitive(int cols, int rows)
+        {
+            var positions = new float[cols * rows * 3];
+            for (int j = 0; j < rows; j++)
+            {
+                for (int i = 0; i < cols; i++)
+                {
+                    int v = j * cols + i;
+                    positions[v * 3] = i;
+                    positions[v * 3 + 1] = j;
+                    positions[v * 3 + 2] = 0;
+                }
+            }
+
+            var triCells = (cols - 1) * (rows - 1);
+            var indices = new uint[triCells * 6];
+            int k = 0;
+            for (int j = 0; j < rows - 1; j++)
+            {
+                for (int i = 0; i < cols - 1; i++)
+                {
+                    uint a = (uint)(j * cols + i);
+                    uint b = a + 1;
+                    uint c = a + (uint)cols;
+                    uint d = c + 1;
+                    indices[k++] = a; indices[k++] = b; indices[k++] = d;
+                    indices[k++] = a; indices[k++] = d; indices[k++] = c;
+                }
+            }
+
+            return new LocalPrimitive
+            {
+                Positions = positions,
+                Normals = new float[cols * rows * 3],
+                Uvs = new float[cols * rows * 2],
+                Indices = indices,
+                MaterialIndex = 0,
+            };
+        }
+
+        [Fact]
+        public void SplitsAnOversizedPrimitiveAcrossMultipleShellsWithoutLosingTriangles()
+        {
+            const int cols = 210, rows = 165;
+            int expectedTriangles = (cols - 1) * (rows - 1) * 2;
+            Assert.True(expectedTriangles > UshortMax); // sanity-check the fixture itself exceeds the limit under test
+
+            var scene = new InstancedScene
+            {
+                MeshResources = new List<InstancedMeshResource>
+                {
+                    new InstancedMeshResource
+                    {
+                        Id = "mesh_big",
+                        DefinitionId = 1,
+                        DefinitionName = "BigMesh",
+                        VariantKey = "1|255,255,255",
+                        Primitives = new List<LocalPrimitive> { GridPrimitive(cols, rows) },
+                    },
+                },
+                GltfMaterials = new List<object> { new Dictionary<string, object>() },
+                SceneHierarchy = new InstancedNode
+                {
+                    Name = "ROOT",
+                    Matrix = Identity,
+                    Children = new List<InstancedNode>
+                    {
+                        new InstancedNode { Name = "Big", Matrix = Identity, MeshResourceId = "mesh_big", Guid = "" },
+                    },
+                },
+            };
+
+            // This is the exact shape of call that, before the fix, either
+            // silently wrote wrapped-around (wrong) face ids via
+            // `(ushort)i` truncation - the primary regression check is
+            // that the result is now actually correct, not just that it
+            // doesn't throw (unlike Python's own crash-shaped version of
+            // this bug).
+            var raw = FragmentsExport.ToFragments(scene, raw: true);
+            var model = Fb.Model.GetRootAsModel(new Google.FlatBuffers.ByteBuffer(raw));
+            var meshes = model.Meshes!.Value;
+
+            Assert.True(meshes.ShellsLength > 1); // confirms the split actually happened, not a no-op
+            Assert.Equal(meshes.ShellsLength, meshes.SamplesLength); // one sample per split shell, same item/material
+
+            int totalTriangles = 0;
+            for (int i = 0; i < meshes.ShellsLength; i++)
+            {
+                var shell = meshes.Shells(i)!.Value;
+                Assert.True(shell.ProfilesFaceIdsLength <= UshortMax); // every sub-shell itself stays within the ushort limit
+                Assert.Equal(shell.ProfilesLength, shell.ProfilesFaceIdsLength);
+                // Every face id in a shell is a small, sequential, non-wrapped
+                // 0..N-1 run - the exact thing the old (ushort)i truncation
+                // could silently violate once a shell's own triangle count
+                // (here, per sub-shell after the split, never more than
+                // UshortMax) exceeded 65535.
+                for (int j = 0; j < shell.ProfilesFaceIdsLength; j++)
+                {
+                    Assert.Equal((ushort)j, shell.ProfilesFaceIds(j));
+                }
+                totalTriangles += shell.ProfilesFaceIdsLength;
+            }
+
+            Assert.Equal(expectedTriangles, totalTriangles);
+        }
+
+        [Fact]
+        public void APrimitiveWithinTheLimitStillProducesExactlyOneShell()
+        {
+            // Regression guard on the split path itself: a normal, non-huge
+            // primitive must not be needlessly split into multiple shells.
+            const int cols = 50, rows = 50; // 49*49*2 = 4802 triangles, comfortably under 65535
+
+            var scene = new InstancedScene
+            {
+                MeshResources = new List<InstancedMeshResource>
+                {
+                    new InstancedMeshResource
+                    {
+                        Id = "mesh_small",
+                        DefinitionId = 1,
+                        DefinitionName = "SmallMesh",
+                        VariantKey = "1|255,255,255",
+                        Primitives = new List<LocalPrimitive> { GridPrimitive(cols, rows) },
+                    },
+                },
+                GltfMaterials = new List<object> { new Dictionary<string, object>() },
+                SceneHierarchy = new InstancedNode
+                {
+                    Name = "ROOT",
+                    Matrix = Identity,
+                    Children = new List<InstancedNode>
+                    {
+                        new InstancedNode { Name = "Small", Matrix = Identity, MeshResourceId = "mesh_small", Guid = "" },
+                    },
+                },
+            };
+
+            var raw = FragmentsExport.ToFragments(scene, raw: true);
+            var model = Fb.Model.GetRootAsModel(new Google.FlatBuffers.ByteBuffer(raw));
+            var meshes = model.Meshes!.Value;
+            Assert.Equal(1, meshes.ShellsLength);
+            Assert.Equal(1, meshes.SamplesLength);
+        }
+    }
 }
