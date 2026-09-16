@@ -54,6 +54,8 @@ class GeometryBuilder {
   final List<SectionPlane> sectionPlanes = [];
   final List<TextEntity> texts = [];
   final List<Dimension> dimensions = [];
+  final List<ConstructionLine> constructionLines = [];
+  final List<ConstructionPoint> constructionPoints = [];
 }
 
 class RawTexture {

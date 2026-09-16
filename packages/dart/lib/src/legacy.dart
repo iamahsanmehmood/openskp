@@ -569,7 +569,13 @@ class ImageRec {
 
 class RelationshipRec {}
 
-class ConstructionLineRec {}
+class ConstructionLineRec {
+  List<double> point;
+  List<double> direction;
+  List<double>? start;
+  List<double>? end;
+  ConstructionLineRec(this.point, this.direction, this.start, this.end);
+}
 
 class ConstructionPointRec {
   DrawBase db;
@@ -1115,9 +1121,17 @@ class LegacyReaders {
   static Object readConstructionLine(Archive ar, LR r) {
     preamble(ar, r);
     drawbase(ar, r);
-    r.f64s(3);
-    r.f64s(3);
-    r.f64s(2); // line params (+-~4.4e29 = infinite)
+    final point = r.f64s(3);
+    final direction = r.f64s(3);
+    // Signed distance along `direction` from `point` marking where the visible segment
+    // starts/ends - ground truth (real SketchUp 2025, SDK/Ruby cross-checked): a bounded
+    // segment's start/end exactly equal point/direction scaled by these two parameters
+    // (verified against Sketchup::ConstructionLine#start/#end/#direction byte-for-byte,
+    // including the segment LENGTH as end_param); an unbounded direction uses a +-1e30
+    // sentinel, matching Sketchup::ConstructionLine#start/#end returning nil for that side.
+    final lineParams = r.f64s(2); // line params (+-~4.4e29 = infinite)
+    final startParam = lineParams[0];
+    final endParam = lineParams[1];
     // The trailing block varies by the WRITING BUILD, not cleanly by
     // version: 7 bytes on the v17 calibration corpus, 4 on v16 and on a
     // real v18, 0 on another real v17. Self-calibrate on the first guide
@@ -1146,7 +1160,23 @@ class LegacyReaders {
       ar.clineTail = k;
     }
     r.raw(k);
-    return ConstructionLineRec();
+
+    const huge = 1e20; // well below the real +-1e30 sentinel, far above any real geometry extent
+    final start = startParam.abs() >= huge
+        ? null
+        : [
+            point[0] + direction[0] * startParam,
+            point[1] + direction[1] * startParam,
+            point[2] + direction[2] * startParam,
+          ];
+    final end = endParam.abs() >= huge
+        ? null
+        : [
+            point[0] + direction[0] * endParam,
+            point[1] + direction[1] * endParam,
+            point[2] + direction[2] * endParam,
+          ];
+    return ConstructionLineRec(point, direction, start, end);
   }
 
   static Object readConstructionPoint(Archive ar, LR r) {
@@ -1871,6 +1901,17 @@ class Legacy {
         builder.dimensions.add(Dimension(
           text: v.text,
           hidden: v.db.hidden != 0,
+        ));
+      } else if (v is ConstructionLineRec) {
+        builder.constructionLines.add(ConstructionLine(
+          point: (v.point[0], v.point[1], v.point[2]),
+          direction: (v.direction[0], v.direction[1], v.direction[2]),
+          start: v.start == null ? null : (v.start![0], v.start![1], v.start![2]),
+          end: v.end == null ? null : (v.end![0], v.end![1], v.end![2]),
+        ));
+      } else if (v is ConstructionPointRec) {
+        builder.constructionPoints.add(ConstructionPoint(
+          position: (v.pos[0], v.pos[1], v.pos[2]),
         ));
       }
     }

@@ -234,6 +234,51 @@ class Dimension {
   });
 }
 
+/// A construction/guide line (SketchUp's Construction Line tool). Legacy
+/// (pre-2021) files only - the VFF (2021+) reader does not currently
+/// recognize this entity.
+///
+/// Stored internally (and here, unchanged) as a point + normalized
+/// direction + two signed distance parameters along that direction
+/// marking where the visible segment starts/ends - the same shape
+/// `Sketchup::ConstructionLine`'s own `start`/`end`/`direction`
+/// properties expose. A parameter magnitude of `1e30` means unbounded
+/// in that direction (SketchUp draws this as an infinite guide line
+/// through [point]) - [start]/[end] come back null in that case,
+/// matching the real API returning `nil`.
+class ConstructionLine {
+  /// A point on the line, in inches (world space) - matches the bounded
+  /// case's own [start], or the anchor point given for an infinite line.
+  final (double, double, double) point;
+
+  /// The line's normalized direction vector.
+  final (double, double, double) direction;
+
+  /// The bounded segment's start point, or null if unbounded in this
+  /// direction.
+  final (double, double, double)? start;
+
+  /// The bounded segment's end point, or null if unbounded.
+  final (double, double, double)? end;
+
+  const ConstructionLine({
+    this.point = (0.0, 0.0, 0.0),
+    this.direction = (1.0, 0.0, 0.0),
+    this.start,
+    this.end,
+  });
+}
+
+/// A construction/guide point (SketchUp's Construction Point tool).
+/// Legacy (pre-2021) files only - the VFF (2021+) reader does not
+/// currently recognize this entity.
+class ConstructionPoint {
+  /// The point's position, in inches (world space).
+  final (double, double, double) position;
+
+  const ConstructionPoint({this.position = (0.0, 0.0, 0.0)});
+}
+
 /// A saved scene (SketchUp's "Scenes" tabs; "pages" in the SDK).
 class Page {
   /// Scene name as shown on its tab.
@@ -284,6 +329,8 @@ class Definition {
   final List<SectionPlane> sectionPlanes = [];
   final List<TextEntity> texts = [];
   final List<Dimension> dimensions = [];
+  final List<ConstructionLine> constructionLines = [];
+  final List<ConstructionPoint> constructionPoints = [];
   final bool alwaysFacesCamera;
   final bool shadowsFaceSun;
   final bool isImage;

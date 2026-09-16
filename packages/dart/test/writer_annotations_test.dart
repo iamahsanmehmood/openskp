@@ -10,12 +10,10 @@ import 'package:test/test.dart';
 ///
 /// SectionPlane/Text/Dimension round-trip fully since legacy.dart's own
 /// readers for them already expose real data on model.root. Construction
-/// Line/Point only smoke-test here - legacy.dart's readers for those two
-/// currently discard the geometry they parse rather than exposing it on
-/// model.root at all (a separate, already-tracked openskp#285 item:
-/// "Writer + reader: construction lines/points"), so there is nothing yet
-/// to assert on beyond "the file still parses cleanly with these entities
-/// present".
+/// Line/Point now round-trip fully too - legacy.dart's readers for those
+/// two used to parse the geometry and then discard it rather than
+/// exposing it on model.root at all, fixed alongside adding this writer
+/// (openskp#285's "Writer + reader: construction lines/points").
 void main() {
   const square = [
     (0.0, 0.0, 0.0), (10.0, 0.0, 0.0), (10.0, 10.0, 0.0), (0.0, 10.0, 0.0),
@@ -74,7 +72,12 @@ void main() {
       expect(model.root.texts, hasLength(1));
     });
 
-    test('construction line and point do not corrupt the file', () {
+    test('construction line and point round trip', () {
+      // legacy.dart's readConstructionLine used to parse point/direction/
+      // start/end into locals and then discard all of them (the same
+      // shape as the SectionPlane/Text/Dimension bugs fixed in a prior
+      // session) - fixed alongside adding this writer, matching C++'s own
+      // reader, which already exposed this correctly.
       final builder = create();
       builder.addFace(square);
       builder.addConstructionPoint((1.0, 2.0, 3.0));
@@ -83,6 +86,22 @@ void main() {
       builder.addSectionPlane((10.0, 20.0, 30.0), (0.0, 0.0, 1.0)); // still readable afterwards
 
       final model = SkpFile.fromBuffer(builder.toBytes()).parse();
+
+      expect(model.root.constructionPoints, hasLength(1));
+      expect(model.root.constructionPoints[0].position, (1.0, 2.0, 3.0));
+
+      expect(model.root.constructionLines, hasLength(2));
+      final bounded = model.root.constructionLines[0];
+      expect(bounded.point, (0.0, 0.0, 0.0));
+      expect(bounded.direction, (1.0, 0.0, 0.0));
+      expect(bounded.start, (0.0, 0.0, 0.0));
+      expect(bounded.end, (10.0, 0.0, 0.0));
+
+      final unbounded = model.root.constructionLines[1];
+      expect(unbounded.direction, (0.0, 0.0, 1.0));
+      expect(unbounded.start, isNull);
+      expect(unbounded.end, isNull);
+
       expect(model.root.sectionPlanes[0].plane[3], closeTo(-30.0, 1e-6));
     });
 

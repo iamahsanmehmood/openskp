@@ -230,6 +230,8 @@ class SkpFile {
     defn.sectionPlanes.addAll(d.builder.sectionPlanes);
     defn.texts.addAll(d.builder.texts);
     defn.dimensions.addAll(d.builder.dimensions);
+    defn.constructionLines.addAll(d.builder.constructionLines);
+    defn.constructionPoints.addAll(d.builder.constructionPoints);
 
     return defn;
   }
