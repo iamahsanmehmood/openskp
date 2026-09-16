@@ -39,17 +39,28 @@ TEST(Parser, ModernUntitled) {
   EXPECT_EQ(model.materials.size(), 15);
   EXPECT_EQ(model.definitions.size(), 46);
 
-  const std::set<std::string> expected_layers{
+  // Exact FILE order, not alphabetical/map-keyed - openskp#285 had flagged
+  // "model.layers is alphabetical (map-keyed) instead of file order" as an
+  // open C++ gap; source-level + real-fixture verification (2026-09-16)
+  // found model.cpp's build already iterates RawParsed::layer_order (a
+  // std::vector populated in encounter order, not a sorted map) - this
+  // was already correct, just untested against real ground truth. Cross-
+  // checked byte-for-byte against Python's own layer order for the
+  // identical fixture.
+  const std::vector<std::string> expected_layer_order{
       "Layer0",       "BottomPlate",  "TopPlate",           "Stud",
       "Nog",          "KingStud",     "HeaderJackStud",     "HeaderPlate1",
       "HeaderPlate2", "SillPlate1",   "VerticalHeaderStud", "generic_frame",
       "dimension",    "Hat Sections",
   };
-  for (const auto& layer : model.layers) {
-    EXPECT_TRUE(expected_layers.count(layer.name));
-    // VFF files carry no known layer-visibility tag - always false here.
-    EXPECT_FALSE(layer.hidden);
-  }
+  std::vector<std::string> actual_layer_order;
+  for (const auto& layer : model.layers) actual_layer_order.push_back(layer.name);
+  EXPECT_EQ(actual_layer_order, expected_layer_order);
+  // None of this fixture's layers are actually hidden in its own Tags
+  // panel (confirmed against Python's own parse of the identical file) -
+  // collect_layers itself already reads the real 8E3C flag (openskp#285),
+  // this fixture's own data just happens to have none set.
+  for (const auto& layer : model.layers) EXPECT_FALSE(layer.hidden);
 
   const auto& definition = model.definitions.at(66);
   EXPECT_EQ(definition.name, "Group200#2");
@@ -369,6 +380,27 @@ TEST(Parser, MaterialsByIdMap) {
     EXPECT_EQ(*mat->id, id);
     EXPECT_EQ(const_model.material_by_id(id), mat);
   }
+}
+
+TEST(Parser, MeshIndexPropertiesArePopulated) {
+  // openskp#285 had flagged "mesh_index[...].properties is never
+  // populated" as an open C++ gap; source-level + real-fixture
+  // verification (2026-09-16) found scene.cpp's build_scene already
+  // backfills MeshMetadata::properties/attribute_dictionaries from the
+  // same path_updates mechanism the instance tree itself uses (see the
+  // "Apply the deferred backfill" comment in scene.cpp) - this was
+  // already correct, just untested against real ground truth.
+  auto scene = SkpFile::open(test::fixture("Untitled.skp")).build_scene();
+  ASSERT_FALSE(scene.mesh_index.empty());
+  std::size_t with_props = 0;
+  for (const auto& [name, meta] : scene.mesh_index) {
+    if (!meta.properties.empty() || !meta.attribute_dictionaries.empty()) ++with_props;
+  }
+  // Not every mesh's owning instance carries Dynamic Component data on
+  // this real file, but the overwhelming majority do - a regression that
+  // silently dropped the backfill (leaving every MeshMetadata blank)
+  // would fail this outright.
+  EXPECT_GT(with_props, scene.mesh_index.size() / 2);
 }
 
 TEST(Parser, StreamingDefinitionsPreservesGeometryAndHierarchy) {
