@@ -118,6 +118,18 @@ constexpr int kFtcSchema = 4;
 constexpr int kArcCurveSchema = 3;
 constexpr int kCCurveSchema = 4;
 
+constexpr int kSectionPlaneSchema = 3;
+constexpr int kDimensionLinearSchema = 6;
+constexpr int kSkFontSchema = 1;
+constexpr int kTextSchema = 9;
+constexpr int kConstructionLineSchema = 1;
+constexpr int kConstructionPointSchema = 0;
+
+// Sentinel a CConstructionLine's start/end distance-parameter carries when unbounded in that
+// direction - real SketchUp's own value, ground-truth verified against
+// Sketchup::ConstructionLine#start/#end returning nil for that side.
+constexpr double kClineInfinite = 1e30;
+
 // CCamera's class is declared inside the scaffold's own style/scene-manager prefix - ground-truth
 // confirmed fixed at slot 7 for this exact bundled scaffold file.
 constexpr int kCCameraSlot = 7;
@@ -218,6 +230,32 @@ void append_f64(ByteBuffer& buf, double v) {
 void append_bytes(ByteBuffer& buf, const std::uint8_t* data, std::size_t n) {
   buf.insert(buf.end(), data, data + n);
 }
+
+void append_zeros(ByteBuffer& buf, std::size_t n) { buf.insert(buf.end(), n, 0); }
+
+// Parses a hex string into a ByteBuffer - used only for the handful of byte-exact templates
+// below, ported verbatim (same hex text) from create.py's own bytes.fromhex(...) constants.
+ByteBuffer from_hex(const std::string& hex) {
+  ByteBuffer out(hex.size() / 2);
+  for (std::size_t i = 0; i < out.size(); ++i) {
+    out[i] = static_cast<std::uint8_t>(std::stoul(hex.substr(i * 2, 2), nullptr, 16));
+  }
+  return out;
+}
+
+// Byte-exact templates harvested from a real SketchUp 2017 file (28 dimensions, capilla quiroz
+// corpus model); see docs/dimension-record-notes.md for the full layout. Ported verbatim from
+// create.py's own _DIM_FONT_PAYLOAD/_TEXT_DELIM.
+const ByteBuffer kDimFontPayload = from_hex(
+    "000000"                            // preamble: null attrs + pid mask 0
+    "fffeff065400610068006f006d006100"  // "Tahoma"
+    "0000"
+    "08000000"
+    "00"
+    "ecf57abd5eaf2340");  // height f64
+
+// Leader-text delimiter block: [u32 1][u8 flag=1][u8 0][u32 ARROW=3 closed][u8 1]
+const ByteBuffer kTextDelim = from_hex("0100000001000300000001");
 
 std::uint16_t read_u16_le(const ByteBuffer& buf, std::size_t pos) {
   return static_cast<std::uint16_t>(buf[pos]) | static_cast<std::uint16_t>(buf[pos + 1] << 8);
@@ -586,6 +624,10 @@ class ArchiveWriter {
   std::uint64_t next_pid;
   ByteBuffer buf;
 
+  // One CSkFont per file, serialized inline at the first dimension/text's font field (exactly as
+  // SketchUp writes it) and re-used by back-ref afterwards - see write_dimension/write_text.
+  std::optional<int> dim_font_slot_;
+
   explicit ArchiveWriter(int next_slot_, std::map<std::string, int> class_slot_ = {},
                          std::uint64_t next_pid_ = 1)
       : next_slot(next_slot_), class_slot(std::move(class_slot_)), next_pid(next_pid_) {}
@@ -756,6 +798,169 @@ class ArchiveWriter {
       buf.push_back(static_cast<std::uint8_t>(c & 0xFF));
       buf.push_back(static_cast<std::uint8_t>((c >> 8) & 0xFF));
     }
+  }
+
+  // Write the first dimension/text's CSkFont record inline, or back-ref the one already written
+  // earlier in this file - shared 1-per-file state, same as create.py's own `_dim_font_slot`.
+  void write_dim_font_ref() {
+    if (!dim_font_slot_) {
+      dim_font_slot_ = new_of_known_class("CSkFont", kSkFontSchema);
+      buf.insert(buf.end(), kDimFontPayload.begin(), kDimFontPayload.end());
+    } else {
+      backref(*dim_font_slot_);
+    }
+  }
+
+  // Add a FREE linear dimension between two explicit points (inches, world space). `offset` is
+  // the dimension line's offset from the measured segment, in inches (signed).
+  //
+  // The record layout is the byte-exact one the real SketchUp SDK writes for free dimensions
+  // (generated via SketchUpAPI and harvested - see docs/dimension-record-notes.md): connection
+  // type 1 with the point stored inline in each connection block and null object refs. Free
+  // dimensions render in any orientation; anchored (type 2) dimensions are a future refinement.
+  void write_dimension(Point3 p1, Point3 p2, double offset = 10.0) {
+    if (p1 == p2) throw SkpWriteError("add_dimension endpoints coincide");
+    new_of_known_class("CDimensionLinear", kDimensionLinearSchema);
+    preamble();
+    drawbase();
+    write_str("");  // auto-computed measurement text
+    write_dim_font_ref();
+    // connection 1: [u8 0][u32 0][u32 type=1][u32 4][point A], null ref
+    append_zeros(buf, 5);
+    append_u32(buf, 1);
+    append_u32(buf, 4);
+    append_f64(buf, p1[0]);
+    append_f64(buf, p1[1]);
+    append_f64(buf, p1[2]);
+    append_u16(buf, 0);
+    // connection 2: [u16 0][f64 0][u32 type=1][u32 4][point B], null ref
+    append_zeros(buf, 10);
+    append_u32(buf, 1);
+    append_u32(buf, 4);
+    append_f64(buf, p2[0]);
+    append_f64(buf, p2[1]);
+    append_f64(buf, p2[2]);
+    append_u16(buf, 0);
+    // placement block: SDK free-dimension defaults + our offset
+    append_zeros(buf, 2);
+    for (double v : {0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0}) append_f64(buf, v);
+    append_u32(buf, 0);
+    append_f64(buf, offset);
+    append_f64(buf, 0.0);
+    append_u32(buf, 1);
+  }
+
+  // Add a leader text (SketchUp's Text tool) anchored at `point` (inches, world space), with the
+  // label floating at `point + leader` and a leader line joining them.
+  //
+  // The record mirrors human-drawn leader texts harvested from real files (the SDK's own create
+  // only produces SCREEN texts - its two 0.5 doubles are screen fractions): screen slot zeroed,
+  // the free-connection block dimensions use ([u32 1][u32 4][point3d]), the label's world
+  // position in the placement tail, and leader type 2 (pushpin) before the arrow delimiter.
+  void write_text(const std::string& text, Point3 point, Point3 leader = {15.0, 15.0, 15.0}) {
+    Point3 lb = {point[0] + leader[0], point[1] + leader[1], point[2] + leader[2]};
+    new_of_known_class("CText", kTextSchema);
+    preamble();
+    drawbase();
+    write_dim_font_ref();
+    append_f64(buf, 0.0);
+    append_f64(buf, 0.0);  // screen-fraction slot (unused)
+    append_u32(buf, 1);
+    append_u32(buf, 4);  // free connection + constant
+    append_f64(buf, point[0]);
+    append_f64(buf, point[1]);
+    append_f64(buf, point[2]);
+    append_zeros(buf, 12);
+    append_f64(buf, lb[0]);
+    append_f64(buf, lb[1]);
+    append_f64(buf, lb[2]);  // label position
+    append_zeros(buf, 16);
+    append_f64(buf, 1.0);
+    append_u32(buf, 2);  // leader type: pushpin
+    buf.insert(buf.end(), kTextDelim.begin(), kTextDelim.end());
+    write_str(text);
+    append_zeros(buf, 5);
+  }
+
+  // Add a construction/guide line (SketchUp's Construction Line tool). Pass exactly one of
+  // `point2` (a bounded segment between `point` and `point2`) or `direction` (an unbounded guide
+  // line through `point`).
+  //
+  // Ground truth (real SketchUp 2025, SDK/Ruby cross-checked against both a v2020-downgrade save
+  // and a genuinely v17-native save): the record stores a point + normalized direction + two
+  // signed distance parameters along that direction marking the visible segment's start/end. An
+  // unbounded direction is written as the real +/-1e30 sentinel SketchUp itself uses.
+  void write_construction_line(Point3 point, std::optional<Point3> point2 = std::nullopt,
+                               std::optional<Point3> direction = std::nullopt) {
+    if (point2.has_value() == direction.has_value()) {
+      throw SkpWriteError("add_construction_line: pass exactly one of point2 or direction");
+    }
+    double dx, dy, dz, start_param, end_param;
+    if (point2) {
+      dx = (*point2)[0] - point[0];
+      dy = (*point2)[1] - point[1];
+      dz = (*point2)[2] - point[2];
+      double length = std::sqrt(dx * dx + dy * dy + dz * dz);
+      if (length == 0.0) throw SkpWriteError("add_construction_line: point and point2 coincide");
+      dx /= length;
+      dy /= length;
+      dz /= length;
+      start_param = 0.0;
+      end_param = length;
+    } else {
+      const Point3& d = *direction;
+      double dlen = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+      if (dlen == 0.0) throw SkpWriteError("add_construction_line: direction must be nonzero");
+      dx = d[0] / dlen;
+      dy = d[1] / dlen;
+      dz = d[2] / dlen;
+      start_param = -kClineInfinite;
+      end_param = kClineInfinite;
+    }
+    new_of_known_class("CConstructionLine", kConstructionLineSchema);
+    preamble();
+    drawbase();
+    for (double v : {point[0], point[1], point[2], dx, dy, dz, start_param, end_param})
+      append_f64(buf, v);
+    append_zeros(buf, 4);  // trailer
+  }
+
+  // Add a construction/guide point (SketchUp's Construction Point tool) at `position` (inches,
+  // world space).
+  //
+  // Ground truth (real SketchUp 2025, SDK/Ruby cross-checked): a second, always-zero 3-double
+  // block and a trailing zero byte follow the position - reserved/unused, written as zero to
+  // match every real-file sample seen.
+  void write_construction_point(Point3 position) {
+    new_of_known_class("CConstructionPoint", kConstructionPointSchema);
+    preamble();
+    drawbase();
+    for (double v : {position[0], position[1], position[2], 0.0, 0.0, 0.0}) append_f64(buf, v);
+    append_zeros(buf, 1);
+  }
+
+  // Add a section plane (SketchUp's Section Plane tool) through `point` with the given `normal`
+  // (need not be unit length), matching Entities#add_section_plane([point, normal]).
+  //
+  // Ground truth (real SketchUp 2025, SDK/Ruby cross-checked against a genuinely v17-native
+  // save): the record is preamble + drawbase + the plane as 4 doubles (a, b, c, d) satisfying
+  // a*x + b*y + c*z + d = 0 for every point on the plane - the same implicit form
+  // Sketchup::SectionPlane#get_plane returns (normal normalized, d = -(normal . point)). A
+  // name/short-label pair can follow on v18+ saves per the reader (legacy.cpp's
+  // read_section_plane) - omitted here since this writer only ever produces v17-tagged files,
+  // same scope as write_dimension/write_text/write_construction_line.
+  void write_section_plane(Point3 point, Point3 normal) {
+    double nlen = std::sqrt(normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]);
+    if (nlen == 0.0) throw SkpWriteError("add_section_plane: normal must be nonzero");
+    double a = normal[0] / nlen, b = normal[1] / nlen, c = normal[2] / nlen;
+    double d = -(a * point[0] + b * point[1] + c * point[2]);
+    new_of_known_class("CSectionPlane", kSectionPlaneSchema);
+    preamble();
+    drawbase();
+    append_f64(buf, a);
+    append_f64(buf, b);
+    append_f64(buf, c);
+    append_f64(buf, d);
   }
 
   int write_material(const std::string& name, Color4 rgba,
@@ -1907,6 +2112,42 @@ void SkpBuilder::add_polyline(const std::vector<Point3>& points, const PolylineO
   impl_->ensure_geometry_writer();
   impl_->new_entity_count += detail::do_add_polyline(*impl_->geometry_writer, impl_->vertex_slots,
                                                      impl_->edge_registry, points, options);
+  impl_->face_count += 1;  // reuses the "at least one root entity" check in to_bytes
+}
+
+void SkpBuilder::add_dimension(Point3 p1, Point3 p2, double offset) {
+  impl_->ensure_geometry_writer();
+  impl_->geometry_writer->write_dimension(p1, p2, offset);
+  impl_->new_entity_count += 1;
+  impl_->face_count += 1;  // reuses the "at least one root entity" check in to_bytes
+}
+
+void SkpBuilder::add_text(const std::string& text, Point3 point, Point3 leader) {
+  impl_->ensure_geometry_writer();
+  impl_->geometry_writer->write_text(text, point, leader);
+  impl_->new_entity_count += 1;
+  impl_->face_count += 1;  // reuses the "at least one root entity" check in to_bytes
+}
+
+void SkpBuilder::add_construction_line(Point3 point, std::optional<Point3> point2,
+                                       std::optional<Point3> direction) {
+  impl_->ensure_geometry_writer();
+  impl_->geometry_writer->write_construction_line(point, point2, direction);
+  impl_->new_entity_count += 1;
+  impl_->face_count += 1;  // reuses the "at least one root entity" check in to_bytes
+}
+
+void SkpBuilder::add_construction_point(Point3 position) {
+  impl_->ensure_geometry_writer();
+  impl_->geometry_writer->write_construction_point(position);
+  impl_->new_entity_count += 1;
+  impl_->face_count += 1;  // reuses the "at least one root entity" check in to_bytes
+}
+
+void SkpBuilder::add_section_plane(Point3 point, Point3 normal) {
+  impl_->ensure_geometry_writer();
+  impl_->geometry_writer->write_section_plane(point, normal);
+  impl_->new_entity_count += 1;
   impl_->face_count += 1;  // reuses the "at least one root entity" check in to_bytes
 }
 

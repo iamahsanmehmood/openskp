@@ -857,5 +857,97 @@ TEST(Create, LargeModelCrossingTheSlotBoundaryRoundTrips) {
   EXPECT_EQ(model.root().faces.size(), static_cast<std::size_t>(kTriangles));
 }
 
+// ---------------------------------------------------------------------------------------------
+// Writer: section plane / dimension / text / construction line / construction point.
+//
+// Ports create.py's add_section_plane/add_dimension/add_text/add_construction_line/
+// add_construction_point, byte-exact against the same real-SketchUp-harvested record templates
+// (see docs/dimension-record-notes.md) Python's own writer already uses.
+//
+// SectionPlane/Text/Dimension round-trip fully - legacy.cpp's readers for them already expose
+// real data on model.root() (confirmed correct in a prior PR/test, before this writer existed).
+// ConstructionLine/ConstructionPoint only smoke-test for now: legacy.cpp's readers for those two
+// currently discard the geometry they parse rather than exposing it on model.root() at all, a
+// separate, already-tracked openskp#285 item ("Writer + reader: construction lines/points").
+// ---------------------------------------------------------------------------------------------
+
+TEST(Create, SectionPlaneTextDimensionRoundTrip) {
+  auto builder = create();
+  builder->add_face({{0, 0, 0}, {10, 0, 0}, {10, 10, 0}, {0, 10, 0}});
+  builder->add_section_plane({10, 20, 30}, {0, 0, 1});
+  builder->add_text("Hello", {5, 5, 5});
+  builder->add_dimension({0, 0, 0}, {10, 0, 0});
+
+  SkpModel model = round_trip(*builder);
+
+  ASSERT_EQ(model.root().section_planes.size(), 1u);
+  const auto& sp = model.root().section_planes[0];
+  EXPECT_NEAR(sp.plane[0], 0.0, 1e-6);
+  EXPECT_NEAR(sp.plane[1], 0.0, 1e-6);
+  EXPECT_NEAR(sp.plane[2], 1.0, 1e-6);
+  EXPECT_NEAR(sp.plane[3], -30.0, 1e-6);
+  EXPECT_FALSE(sp.hidden);
+
+  ASSERT_EQ(model.root().texts.size(), 1u);
+  EXPECT_EQ(model.root().texts[0].text, "Hello");
+  EXPECT_FALSE(model.root().texts[0].hidden);
+
+  EXPECT_EQ(model.root().dimensions.size(), 1u);
+}
+
+TEST(Create, SectionPlaneNormalizesANonUnitNormal) {
+  auto builder = create();
+  builder->add_face({{0, 0, 0}, {10, 0, 0}, {10, 10, 0}, {0, 10, 0}});
+  builder->add_section_plane({0, 0, 5}, {0, 0, 2});
+
+  SkpModel model = round_trip(*builder);
+  ASSERT_EQ(model.root().section_planes.size(), 1u);
+  EXPECT_NEAR(model.root().section_planes[0].plane[2], 1.0, 1e-6);
+  EXPECT_NEAR(model.root().section_planes[0].plane[3], -5.0, 1e-6);
+}
+
+TEST(Create, TwoDimensionsShareOneEmbeddedFont) {
+  // add_dimension/add_text only ever embed the CSkFont payload inline on the FIRST call and
+  // back-ref it afterwards - exercise that shared-state path across a call pair without
+  // asserting on font bytes directly (the point here is that a second dimension doesn't corrupt
+  // the archive's slot numbering).
+  auto builder = create();
+  builder->add_face({{0, 0, 0}, {10, 0, 0}, {10, 10, 0}, {0, 10, 0}});
+  builder->add_dimension({0, 0, 0}, {10, 0, 0});
+  builder->add_dimension({0, 5, 0}, {10, 5, 0});
+  builder->add_text("First", {1, 1, 1});
+
+  SkpModel model = round_trip(*builder);
+  EXPECT_EQ(model.root().dimensions.size(), 2u);
+  EXPECT_EQ(model.root().texts.size(), 1u);
+}
+
+TEST(Create, ConstructionLineAndPointDoNotCorruptTheFile) {
+  auto builder = create();
+  builder->add_face({{0, 0, 0}, {10, 0, 0}, {10, 10, 0}, {0, 10, 0}});
+  builder->add_construction_point({1, 2, 3});
+  builder->add_construction_line({0, 0, 0}, Point3{10, 0, 0});
+  builder->add_construction_line({0, 0, 0}, std::nullopt, Point3{0, 0, 1});
+  builder->add_section_plane({10, 20, 30}, {0, 0, 1});  // still readable afterwards
+
+  SkpModel model = round_trip(*builder);
+  ASSERT_EQ(model.root().section_planes.size(), 1u);
+  EXPECT_NEAR(model.root().section_planes[0].plane[3], -30.0, 1e-6);
+}
+
+TEST(Create, AddSectionPlaneRejectsAZeroNormal) {
+  auto builder = create();
+  builder->add_face({{0, 0, 0}, {10, 0, 0}, {10, 10, 0}, {0, 10, 0}});
+  EXPECT_THROW(builder->add_section_plane({0, 0, 0}, {0, 0, 0}), SkpWriteError);
+}
+
+TEST(Create, AddConstructionLineRequiresExactlyOneOfPoint2OrDirection) {
+  auto builder = create();
+  builder->add_face({{0, 0, 0}, {10, 0, 0}, {10, 10, 0}, {0, 10, 0}});
+  EXPECT_THROW(builder->add_construction_line({0, 0, 0}), SkpWriteError);
+  EXPECT_THROW(builder->add_construction_line({0, 0, 0}, Point3{1, 0, 0}, Point3{0, 1, 0}),
+               SkpWriteError);
+}
+
 }  // namespace
 }  // namespace openskp

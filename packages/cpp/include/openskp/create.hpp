@@ -488,6 +488,29 @@ class OPENSKP_EXPORT SkpBuilder {
   /// merely happen to connect end-to-end. No face, unlike `add_face`.
   void add_polyline(const std::vector<Point3>& points, const PolylineOptions& options = {});
 
+  /// Add a FREE linear dimension between two explicit points (inches, world space). `offset` is
+  /// the dimension line's offset from the measured segment, in inches (signed).
+  void add_dimension(Point3 p1, Point3 p2, double offset = 10.0);
+
+  /// Add a leader text (SketchUp's Text tool) anchored at `point` (inches, world space), with the
+  /// label floating at `point + leader` and a leader line joining them.
+  void add_text(const std::string& text, Point3 point, Point3 leader = {15.0, 15.0, 15.0});
+
+  /// Add a construction/guide line (SketchUp's Construction Line tool). Pass exactly one of
+  /// `point2` (a bounded segment between `point` and `point2`, matching
+  /// `Entities#add_cline(p1, p2)`) or `direction` (an unbounded guide line through `point`,
+  /// matching `Entities#add_cline(point, vector)`).
+  void add_construction_line(Point3 point, std::optional<Point3> point2 = std::nullopt,
+                             std::optional<Point3> direction = std::nullopt);
+
+  /// Add a construction/guide point (SketchUp's Construction Point tool) at `position` (inches,
+  /// world space).
+  void add_construction_point(Point3 position);
+
+  /// Add a section plane (SketchUp's Section Plane tool) through `point` with the given `normal`
+  /// (need not be unit length), matching `Entities#add_section_plane([point, normal])`.
+  void add_section_plane(Point3 point, Point3 normal);
+
   /// Return the finished file's bytes.
   ByteBuffer to_bytes();
   /// Write the finished file to `path`.
