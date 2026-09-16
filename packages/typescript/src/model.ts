@@ -1,5 +1,5 @@
 import { transformPoint, multiplyMatrices } from './transforms';
-import { extractDynamicProperties, extractAttributeDictionaries, isGenericDefinitionName, findNameOverride, ParsedDefinition, VffAttrValue } from './geometry';
+import { extractDynamicProperties, extractAttributeDictionaries, isGenericDefinitionName, findNameOverride, stringifyVffAttrValue, ParsedDefinition, VffAttrValue } from './geometry';
 import { buildLocalFaceGroups } from './face-groups';
 import { SkpParseError } from './errors';
 import { ParseOptions, PROGRESS_INTERVAL, emitLog, emitProgress } from './observability';
@@ -278,6 +278,14 @@ export interface InstanceNode {
   layer: string;
   positionMm: [number, number, number];
   properties: Record<string, string>;
+  /** Every OTHER attribute dictionary this instance carries, keyed by the
+   * dictionary's own name, values stringified the same way `properties`
+   * already is - `properties` stays exactly SketchUp's own Dynamic
+   * Components data (`dynamic_attributes`) for backward compatibility;
+   * third-party plugins (BIM/steel-detailing tools, etc.) commonly attach
+   * their own richer per-instance data under their own dictionary name
+   * instead, which this project never surfaced before (openskp#285). */
+  attributeDictionaries: Record<string, Record<string, string>>;
   /** Real SketchUp instance GUID (VFF/2021+ files only), or `''` when the
    * source file has none - see InstancedNode.guid (instanced.ts). */
   guid: string;
@@ -290,6 +298,8 @@ export interface MeshMetadata {
   layer: string;
   positionMm: [number, number, number];
   properties: Record<string, string>;
+  /** See InstanceNode.attributeDictionaries. */
+  attributeDictionaries: Record<string, Record<string, string>>;
   path: string;
 }
 
@@ -710,7 +720,10 @@ export function buildSceneFromParsed(
   // match the wrong meshes (a shallow instance's path is always a string
   // prefix of every deeper descendant's path too, so `includes()` matched
   // far more than intended - see openskp#240).
-  const pathUpdates = new Map<string, { properties: Record<string, string>; name: string }>();
+  const pathUpdates = new Map<
+    string,
+    { properties: Record<string, string>; name: string; attributeDictionaries: Record<string, Record<string, string>> }
+  >();
 
   const getLayerColor = (name: string) => {
     const c = layerColors.get(name) || [136, 136, 136];
@@ -870,6 +883,7 @@ export function buildSceneFromParsed(
           layer: parentLayer,
           positionMm: [Math.round(tx * 100) / 100, Math.round(ty * 100) / 100, Math.round(tz * 100) / 100],
           properties: {},
+          attributeDictionaries: {},
           path: pathName,
         };
 
@@ -1031,6 +1045,23 @@ export function buildSceneFromParsed(
       const displayName = nameOverride ?? fallbackName;
       const nameIsGenerated = nameOverride === null && !instNameNonEmpty && !defNameIsReal;
 
+      // Every OTHER attribute dictionary this instance carries -
+      // dynamic_attributes is already surfaced separately as `properties`
+      // above, and SU_InstanceSet is SketchUp's own always-present,
+      // always-empty Owner/Status boilerplate, not worth surfacing.
+      // Mirrors Python's own attribute_dictionaries construction in
+      // scene.py exactly (openskp#285).
+      const attributeDictionaries: Record<string, Record<string, string>> = {};
+      if (attributeDicts) {
+        for (const dictName of Object.keys(attributeDicts)) {
+          if (dictName === 'dynamic_attributes' || dictName === 'SU_InstanceSet') continue;
+          const entries = attributeDicts[dictName];
+          const stringified: Record<string, string> = {};
+          for (const key of Object.keys(entries)) stringified[key] = stringifyVffAttrValue(entries[key]);
+          attributeDictionaries[dictName] = stringified;
+        }
+      }
+
       const instInfo: InstanceNode = {
         name: displayName,
         nameIsGenerated,
@@ -1042,12 +1073,13 @@ export function buildSceneFromParsed(
           Math.round(tz * 100) / 100,
         ],
         properties: properties,
+        attributeDictionaries,
         guid: inst.refGuid || '',
         children: childNodes,
       };
       childInstancesInfo.push(instInfo);
 
-      pathUpdates.set(fullPathName, { properties, name: inst.name || '' });
+      pathUpdates.set(fullPathName, { properties, name: inst.name || '', attributeDictionaries });
     }
 
     return childInstancesInfo;
@@ -1070,6 +1102,7 @@ export function buildSceneFromParsed(
     if (existing && update) {
       existing.properties = update.properties;
       existing.name = update.name;
+      existing.attributeDictionaries = update.attributeDictionaries;
     }
   }
 
@@ -1082,6 +1115,7 @@ export function buildSceneFromParsed(
       existing.layer = 'Layer0';
       existing.positionMm = [0, 0, 0];
       existing.properties = {};
+      existing.attributeDictionaries = {};
     }
   }
 
@@ -1092,6 +1126,7 @@ export function buildSceneFromParsed(
     layer: 'Layer0',
     positionMm: [0, 0, 0],
     properties: {},
+    attributeDictionaries: {},
     guid: '',
     children: rootChildren,
   };

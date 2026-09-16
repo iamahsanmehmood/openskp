@@ -1,5 +1,5 @@
 import { multiplyMatrices } from './transforms';
-import { extractDynamicProperties, extractAttributeDictionaries, isGenericDefinitionName, findNameOverride, VffAttrValue } from './geometry';
+import { extractDynamicProperties, extractAttributeDictionaries, isGenericDefinitionName, findNameOverride, stringifyVffAttrValue, VffAttrValue } from './geometry';
 import { ParseOptions, PROGRESS_INTERVAL, emitLog, emitProgress } from './observability';
 import { SkpParseError } from './errors';
 import { buildLocalFaceGroups } from './face-groups';
@@ -116,6 +116,10 @@ export interface InstancedNode {
   positionMm: [number, number, number];
   /** Dynamic Component attributes attached to this instance, or `{}`. */
   properties: Record<string, string>;
+  /** See model.ts's InstanceNode.attributeDictionaries - every OTHER
+   * attribute dictionary this instance carries, keyed by the dictionary's
+   * own name (openskp#285). */
+  attributeDictionaries: Record<string, Record<string, string>>;
   /** Real SketchUp instance GUID (VFF/2021+ files only - legacy pre-2021
    * files carry no per-instance GUID here), or `''` when the source file
    * has none. Mirrors Python's/C++'s own field; a consumer keying on this
@@ -514,6 +518,23 @@ export function buildInstancedSceneFromParsed(
       const displayName = nameOverride ?? fallbackName;
       const nameIsGenerated = nameOverride === null && !instNameNonEmpty && !defNameIsReal;
 
+      // Every OTHER attribute dictionary this instance carries -
+      // dynamic_attributes is already surfaced separately as `properties`
+      // above, and SU_InstanceSet is SketchUp's own always-present,
+      // always-empty Owner/Status boilerplate, not worth surfacing.
+      // Mirrors model.ts's InstanceNode (and Python's own
+      // attribute_dictionaries) exactly (openskp#285).
+      const attributeDictionaries: Record<string, Record<string, string>> = {};
+      if (attributeDicts) {
+        for (const dictName of Object.keys(attributeDicts)) {
+          if (dictName === 'dynamic_attributes' || dictName === 'SU_InstanceSet') continue;
+          const entries = attributeDicts[dictName];
+          const stringified: Record<string, string> = {};
+          for (const key of Object.keys(entries)) stringified[key] = stringifyVffAttrValue(entries[key]);
+          attributeDictionaries[dictName] = stringified;
+        }
+      }
+
       nodes.push({
         name: displayName,
         nameIsGenerated,
@@ -526,6 +547,7 @@ export function buildInstancedSceneFromParsed(
           Math.round(tz * 100) / 100,
         ],
         properties,
+        attributeDictionaries,
         guid: inst.refGuid || '',
         meshResourceId: meshResourceFor(refIdx, instMaterial, lName),
         children,
@@ -551,6 +573,7 @@ export function buildInstancedSceneFromParsed(
     matrix: [...IDENTITY_GLTF],
     positionMm: [0, 0, 0],
     properties: {},
+    attributeDictionaries: {},
     guid: '',
     meshResourceId: rootMeshResourceId,
     children: rootChildren,
