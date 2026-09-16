@@ -124,6 +124,40 @@ export function triangulateFace3D(
     return pt;
   };
 
+  // 2D (u, v) projection for every loop, kept as parallel per-loop arrays
+  // so overlap detection below can work in plain {u, v} coordinates
+  // without touching vertex IDs at all.
+  const loops2d: { u: number; v: number }[][] = [];
+  for (const loop of loops) {
+    const pts: { u: number; v: number }[] = [];
+    for (const vId of loop) {
+      const pt = getVertex(vId);
+      if (!pt) {
+        return []; // missing vertex
+      }
+      pts.push({ u: pt.x * ux + pt.y * uy + pt.z * uz, v: pt.x * vx + pt.y * vy + pt.z * vz });
+    }
+    loops2d.push(pts);
+  }
+
+  // Holes are supposed to be simple and mutually disjoint - that's what
+  // earcut's ring-based API assumes. A real file can carry two hole loops
+  // that genuinely overlap (observed on a real fixture: two ~0.69"-radius
+  // circles only 0.33" apart, evidently meant as one slotted/oval cutout
+  // recorded as two separate full circles). Feeding overlapping rings to
+  // earcut is undefined - ported from the same fix in the Python/.NET
+  // ports (openskp#285): rather than compute an explicit union boundary
+  // (which would need a general polygon-clipping routine this project
+  // doesn't otherwise need), fall back to triangulating the outer
+  // boundary alone and discarding any triangle whose centroid falls
+  // inside ANY hole - the same "triangulate then filter" strategy this
+  // project's own Python port used before its earcut migration, applied
+  // narrowly only when real overlap is detected. A no-op for the
+  // overwhelming common case of genuinely disjoint holes.
+  if (loops.length > 2 && holesOverlap(loops2d)) {
+    return triangulateByFilteringHoles(loops, loops2d);
+  }
+
   const allVIds: number[] = [];
   const holeIndices: number[] = [];
   let currentOffset = 0;
@@ -140,14 +174,10 @@ export function triangulateFace3D(
   }
 
   const flatCoords: number[] = [];
-  for (const vId of allVIds) {
-    const pt = getVertex(vId);
-    if (!pt) {
-      return []; // missing vertex
+  for (const pts of loops2d) {
+    for (const { u, v } of pts) {
+      flatCoords.push(u, v);
     }
-    const u = pt.x * ux + pt.y * uy + pt.z * uz;
-    const v = pt.x * vx + pt.y * vy + pt.z * vz;
-    flatCoords.push(u, v);
   }
 
   let triIndices: number[];
@@ -175,5 +205,97 @@ export function triangulateFace3D(
     ]);
   }
 
+  return result;
+}
+
+/**
+ * True when at least one pair of hole loops (index 1+ in `loops2d`) shares
+ * real area - not just a boundary point or edge, which is a normal, common
+ * pattern (e.g. two holes sharing a cut line). Detected via a
+ * vertex-containment test: for genuinely overlapping simple polygons (in
+ * particular the convex/circular holes real drilled geometry produces), the
+ * overlap region always contains at least one polygon's own vertex inside
+ * the other - a pathological overlap with no vertex crossing either
+ * boundary is possible in principle for very concave shapes but not
+ * observed in any real file so far. Mirrors the .NET/Python ports'
+ * identical check exactly (openskp#285).
+ */
+function holesOverlap(loops2d: { u: number; v: number }[][]): boolean {
+  for (let i = 1; i < loops2d.length; i++) {
+    for (let j = i + 1; j < loops2d.length; j++) {
+      if (anyVertexInside(loops2d[i], loops2d[j]) || anyVertexInside(loops2d[j], loops2d[i])) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function anyVertexInside(points: { u: number; v: number }[], polygon: { u: number; v: number }[]): boolean {
+  for (const p of points) {
+    if (pointInPolygon(p.u, p.v, polygon)) return true;
+  }
+  return false;
+}
+
+/** Standard ray-casting point-in-polygon test (even-odd rule) - true when
+ * (u, v) lies strictly inside the given closed 2D ring. */
+function pointInPolygon(u: number, v: number, polygon: { u: number; v: number }[]): boolean {
+  let inside = false;
+  const n = polygon.length;
+  for (let i = 0, j = n - 1; i < n; j = i++) {
+    const ui = polygon[i].u, vi = polygon[i].v;
+    const uj = polygon[j].u, vj = polygon[j].v;
+    const intersects = vi > v !== vj > v && u < ((uj - ui) * (v - vi)) / (vj - vi) + ui;
+    if (intersects) inside = !inside;
+  }
+  return inside;
+}
+
+/**
+ * Fallback path when two or more hole loops genuinely overlap: triangulate
+ * the outer boundary alone (ignoring hole rings entirely), then discard any
+ * resulting triangle whose centroid falls inside ANY hole. Mirrors the
+ * .NET/Python ports' identical fallback exactly (openskp#285).
+ */
+function triangulateByFilteringHoles(
+  loops: number[][],
+  loops2d: { u: number; v: number }[][]
+): number[][] {
+  const outerLoop = loops[0];
+  const outer2d = loops2d[0];
+  const flatOuter: number[] = [];
+  for (const { u, v } of outer2d) {
+    flatOuter.push(u, v);
+  }
+
+  let triIndices: number[];
+  try {
+    triIndices = earcut(flatOuter, [], 2);
+  } catch {
+    const fallback: number[][] = [];
+    for (let i = 1; i < outerLoop.length - 1; i++) {
+      fallback.push([outerLoop[0], outerLoop[i], outerLoop[i + 1]]);
+    }
+    return fallback;
+  }
+
+  const result: number[][] = [];
+  for (let i = 0; i < triIndices.length; i += 3) {
+    const ia = triIndices[i], ib = triIndices[i + 1], ic = triIndices[i + 2];
+    const cu = (outer2d[ia].u + outer2d[ib].u + outer2d[ic].u) / 3.0;
+    const cv = (outer2d[ia].v + outer2d[ib].v + outer2d[ic].v) / 3.0;
+
+    let insideAnyHole = false;
+    for (let h = 1; h < loops2d.length; h++) {
+      if (pointInPolygon(cu, cv, loops2d[h])) {
+        insideAnyHole = true;
+        break;
+      }
+    }
+    if (insideAnyHole) continue;
+
+    result.push([outerLoop[ia], outerLoop[ib], outerLoop[ic]]);
+  }
   return result;
 }
