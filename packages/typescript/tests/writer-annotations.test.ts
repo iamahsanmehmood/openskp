@@ -11,12 +11,11 @@ import { parseSkp } from '../src/index';
  *
  * SectionPlane/Text/Dimension round-trip fully since legacy.ts's own
  * readers for them already expose real data on model.root (fixed in a
- * prior PR). ConstructionLine/ConstructionPoint only smoke-test here -
- * legacy.ts's readers for those two currently discard the geometry they
- * parse rather than exposing it on model.root at all (a separate, already-
- * tracked openskp#285 item: "Writer + reader: construction lines/points"),
- * so there is nothing yet to assert on beyond "the file still parses
- * cleanly with these entities present".
+ * prior PR). ConstructionLine/ConstructionPoint now round-trip fully too -
+ * legacy.ts's readers for those two used to parse the geometry and then
+ * discard it rather than exposing it on model.root at all, fixed alongside
+ * adding this writer (openskp#285's "Writer + reader: construction
+ * lines/points").
  */
 
 const SQUARE: Point3[] = [
@@ -83,7 +82,13 @@ describe('writer: section plane / text / dimension round trip', () => {
     expect(model.root.texts).toHaveLength(1);
   });
 
-  it('construction line and point do not corrupt the file', () => {
+  it('construction line and point round trip', () => {
+    // legacy.ts's readConstructionLine used to parse point/direction/
+    // start/end into locals and then discard all of them (the same shape
+    // as the SectionPlane/Text/Dimension bugs fixed in a prior PR, just
+    // not yet ported for these two entities) - fixed alongside adding
+    // this writer, matching C++'s own reader, which already exposed this
+    // correctly.
     const builder = create();
     builder.addFace(SQUARE);
     builder.addConstructionPoint([1, 2, 3]);
@@ -92,6 +97,22 @@ describe('writer: section plane / text / dimension round trip', () => {
     builder.addSectionPlane([10, 20, 30], [0, 0, 1]); // still readable afterwards
 
     const model = parseSkp(toBuffer(builder.toBytes()));
+
+    expect(model.root.constructionPoints).toHaveLength(1);
+    expect(model.root.constructionPoints[0].position).toEqual([1, 2, 3]);
+
+    expect(model.root.constructionLines).toHaveLength(2);
+    const bounded = model.root.constructionLines[0];
+    expect(bounded.point).toEqual([0, 0, 0]);
+    expect(bounded.direction).toEqual([1, 0, 0]);
+    expect(bounded.start).toEqual([0, 0, 0]);
+    expect(bounded.end).toEqual([10, 0, 0]);
+
+    const unbounded = model.root.constructionLines[1];
+    expect(unbounded.direction).toEqual([0, 0, 1]);
+    expect(unbounded.start).toBeNull();
+    expect(unbounded.end).toBeNull();
+
     expect(model.root.sectionPlanes[0].plane[3]).toBeCloseTo(-30.0, 6);
   });
 

@@ -69,6 +69,41 @@ export interface Dimension {
   normal: [number, number, number] | null;
 }
 
+/**
+ * A construction/guide line (SketchUp's Construction Line tool). Legacy
+ * (pre-2021) files only - the VFF (2021+) reader does not currently
+ * recognize this entity.
+ *
+ * Stored internally (and here, unchanged) as a point + normalized
+ * direction + two signed distance parameters along that direction marking
+ * where the visible segment starts/ends - the same shape
+ * `Sketchup::ConstructionLine`'s own `start`/`end`/`direction` properties
+ * expose. A parameter magnitude of `1e30` means unbounded in that
+ * direction (SketchUp draws this as an infinite guide line through
+ * `point`) - `start`/`end` come back null in that case, matching the real
+ * API returning `nil`.
+ */
+export interface ConstructionLine {
+  /** A point on the line, in inches (world space) - matches the bounded
+   * case's own `start`, or the anchor point given for an infinite line. */
+  point: [number, number, number];
+  /** The line's normalized direction vector. */
+  direction: [number, number, number];
+  /** The bounded segment's start point, or null if unbounded in this
+   * direction. */
+  start: [number, number, number] | null;
+  /** The bounded segment's end point, or null if unbounded. */
+  end: [number, number, number] | null;
+}
+
+/** A construction/guide point (SketchUp's Construction Point tool).
+ * Legacy (pre-2021) files only - the VFF (2021+) reader does not
+ * currently recognize this entity. */
+export interface ConstructionPoint {
+  /** The point's position, in inches (world space). */
+  position: [number, number, number];
+}
+
 /** A saved scene (SketchUp's "Scenes" tabs; "pages" in the SDK). */
 export interface Page {
   /** Scene name as shown on its tab. */
@@ -101,6 +136,8 @@ export interface Definition {
   sectionPlanes: SectionPlane[];
   texts: TextEntity[];
   dimensions: Dimension[];
+  constructionLines: ConstructionLine[];
+  constructionPoints: ConstructionPoint[];
   isImage: boolean;
   alwaysFacesCamera: boolean;
   shadowsFaceSun: boolean;
@@ -537,7 +574,7 @@ export function buildModelFromParsed(parsed: ParsedRawData): SkpModel {
     // group). Kept out of `definitions` (which is numeric-ID-only, one
     // entry per real component/group definition) and exposed here instead,
     // matching the .NET and Dart ports' `Root`/`root` field.
-    root: rootDefinition ?? { id: 0, guid: 'ROOT', name: 'ROOT_MODEL', vertices: [], edges: [], faces: [], instances: [], sectionPlanes: [], texts: [], dimensions: [], isImage: false, alwaysFacesCamera: false, shadowsFaceSun: false },
+    root: rootDefinition ?? { id: 0, guid: 'ROOT', name: 'ROOT_MODEL', vertices: [], edges: [], faces: [], instances: [], sectionPlanes: [], texts: [], dimensions: [], constructionLines: [], constructionPoints: [], isImage: false, alwaysFacesCamera: false, shadowsFaceSun: false },
     layers: finalLayersList,
     pages: finalPagesList,
     dimensions: finalDimensionsList,
@@ -608,6 +645,15 @@ function buildDefinition(id: number, d: ParsedDefinition, layerIdToName?: Map<nu
     planeX: null,
     normal: null,
   }));
+  const constructionLines: ConstructionLine[] = (d.builder.constructionLines || []).map((cl) => ({
+    point: cl.point,
+    direction: cl.direction,
+    start: cl.start,
+    end: cl.end,
+  }));
+  const constructionPoints: ConstructionPoint[] = (d.builder.constructionPoints || []).map((cp) => ({
+    position: cp.position,
+  }));
 
   return {
     id,
@@ -620,6 +666,8 @@ function buildDefinition(id: number, d: ParsedDefinition, layerIdToName?: Map<nu
     sectionPlanes,
     texts,
     dimensions,
+    constructionLines,
+    constructionPoints,
     isImage: d.isImage,
     alwaysFacesCamera: d.alwaysFacesCamera,
     shadowsFaceSun: d.shadowsFaceSun || false,

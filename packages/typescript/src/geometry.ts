@@ -47,6 +47,13 @@ export class GeometryBuilder {
   sectionPlanes: { plane: [number, number, number, number]; name: string; label: string; hidden: boolean }[] = [];
   texts: { text: string; hidden: boolean }[] = [];
   dimensions: { text: string; hidden: boolean }[] = [];
+  constructionLines: {
+    point: [number, number, number];
+    direction: [number, number, number];
+    start: [number, number, number] | null;
+    end: [number, number, number] | null;
+  }[] = [];
+  constructionPoints: { position: [number, number, number] }[] = [];
 }
 
 export interface ParsedDefinition {
@@ -58,6 +65,13 @@ export interface ParsedDefinition {
   sectionPlanes?: { plane: [number, number, number, number]; name: string; label: string; hidden: boolean }[];
   texts?: { text: string; hidden: boolean }[];
   dimensions?: { text: string; hidden: boolean }[];
+  constructionLines?: {
+    point: [number, number, number];
+    direction: [number, number, number];
+    start: [number, number, number] | null;
+    end: [number, number, number] | null;
+  }[];
+  constructionPoints?: { position: [number, number, number] }[];
   builder: GeometryBuilder;
 }
 
