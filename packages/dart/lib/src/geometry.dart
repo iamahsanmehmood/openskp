@@ -579,7 +579,8 @@ class Geometry {
   // ── Layer / material ID lookups (used by Core.fullParse) ────────────────
 
   static void collectLayers(
-      List<TlvNode> nodes, Map<int, String> layerIdToName) {
+      List<TlvNode> nodes, Map<int, String> layerIdToName,
+      [Map<String, bool>? layerHidden]) {
     for (final el in nodes) {
       if (el.tag == '993A') {
         for (final child in el.children) {
@@ -590,11 +591,26 @@ class Geometry {
               final lId = _parseIdFromDc05(dc05.payload);
               final lName = Tlv.decodeUtf8(nameNode.payload);
               layerIdToName[lId] = lName;
+
+              // 8E3C: a single byte, 1 = hidden / 0 = visible - confirmed
+              // byte-for-byte against a real production file's own Tags
+              // panel (openskp FrameSmart pipeline report, 2026-09-08):
+              // every layer showing a hollow (hidden) eye icon had
+              // 8E3C=01, every visible one had 8E3C=00. Mirrors Python's
+              // own collect_layers exactly (openskp#285) - the VFF-format
+              // counterpart of the legacy format's already-known
+              // layer-hidden flag.
+              if (layerHidden != null) {
+                final hiddenNode = findChildTag(child.children, '8E3C');
+                if (hiddenNode != null && hiddenNode.payload.isNotEmpty) {
+                  layerHidden[lName] = hiddenNode.payload[0] == 1;
+                }
+              }
             }
           }
         }
       }
-      collectLayers(el.children, layerIdToName);
+      collectLayers(el.children, layerIdToName, layerHidden);
     }
   }
 

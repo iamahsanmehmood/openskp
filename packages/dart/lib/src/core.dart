@@ -144,7 +144,7 @@ class Core {
     for (final (index, total, el) in Tlv.iterTopLevelLazy(
         modelDat, 0, modelDat.length, Tlv.containerTags)) {
       try {
-        Geometry.collectLayers([el], layerIdToName);
+        Geometry.collectLayers([el], layerIdToName, layerHidden);
         Geometry.collectMaterialIds([el], materialIdToName);
         Geometry.collectDefs([el], defsDictRaw);
         scanVertexPositions(el, vertexPositions);
