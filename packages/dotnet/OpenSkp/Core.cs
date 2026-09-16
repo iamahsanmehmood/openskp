@@ -181,7 +181,7 @@ namespace OpenSkp
                 try
                 {
                     var single = new List<TlvNode> { el };
-                    Geometry.CollectLayers(single, layerIdToName);
+                    Geometry.CollectLayers(single, layerIdToName, layerHidden);
                     Geometry.CollectMaterialIds(single, materialIdToName);
                     Geometry.CollectDefs(single, defsDictRaw);
                     PagesDimensions.ScanVertexPositions(el, vertexPositions);

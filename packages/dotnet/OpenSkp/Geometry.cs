@@ -637,7 +637,7 @@ namespace OpenSkp
 
         // ── Layer / material ID lookups (used by Core.FullParse) ──────────
 
-        public static void CollectLayers(List<TlvNode> nodes, Dictionary<long, string> layerIdToName)
+        public static void CollectLayers(List<TlvNode> nodes, Dictionary<long, string> layerIdToName, Dictionary<string, bool>? layerHidden = null)
         {
             foreach (var el in nodes)
             {
@@ -654,11 +654,30 @@ namespace OpenSkp
                                 long lId = ParseIdFromDc05(dc05.Payload);
                                 string lName = Encoding.UTF8.GetString(nameNode.Payload);
                                 layerIdToName[lId] = lName;
+
+                                // 8E3C: a single byte, 1 = hidden / 0 = visible -
+                                // confirmed byte-for-byte against a real
+                                // production file's own Tags panel (openskp
+                                // FrameSmart pipeline report, 2026-09-08): every
+                                // layer showing a hollow (hidden) eye icon had
+                                // 8E3C=01, every visible one had 8E3C=00. Mirrors
+                                // Python's own collect_layers exactly
+                                // (openskp#285) - the VFF-format counterpart of
+                                // the legacy format's already-known layer-hidden
+                                // flag (see LegacyReaders' own LayerRec.Hidden).
+                                if (layerHidden != null)
+                                {
+                                    var hiddenNode = FindChildTag(child.Children, "8E3C");
+                                    if (hiddenNode != null && hiddenNode.Payload.Length > 0)
+                                    {
+                                        layerHidden[lName] = hiddenNode.Payload[0] == 1;
+                                    }
+                                }
                             }
                         }
                     }
                 }
-                CollectLayers(el.Children, layerIdToName);
+                CollectLayers(el.Children, layerIdToName, layerHidden);
             }
         }
 
