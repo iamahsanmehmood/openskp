@@ -9,20 +9,22 @@ import 'package:openskp/openskp.dart';
 
 import 'fragments_fb/fragments_generated.dart' as ffb;
 
-/// Direct SKP -> ThatOpen Fragments (.frag) export - EXPERIMENTAL. A port
-/// of Python's `openskp.export.fragments.to_fragments` (see that module's
-/// own docstring for the full rationale and real-loader verification
-/// status this port inherits) against the same vendored ThatOpen
-/// Fragments schema (`fragments_fb/index.fbs`).
+/// Direct SKP <-> ThatOpen Fragments (.frag) conversion. A port of
+/// Python's `openskp.export.fragments` (see that module's own docstring
+/// for the full rationale and real-loader verification status this port
+/// inherits) against the same vendored ThatOpen Fragments schema
+/// (`fragments_fb/index.fbs`). Write side ([toFragments]/
+/// [exportFragments]) matches TypeScript/.NET/C++/Python; read side
+/// ([fromFragments]/[readFragments], openskp#285) brings Dart to parity
+/// with Python/TypeScript/.NET - only C++ still lacks it as of this port
+/// landing.
 ///
-/// EXPORT ONLY, matching the TypeScript/.NET ports - not Python's or
-/// C++'s read side (neither of those two has it either, so this isn't a
-/// gap unique to Dart). Built at full Python/C++/TypeScript/.NET GUID/
-/// name-is-generated/layer-hidden fidelity from the start:
-/// InstancedNode/InstancedScene in the core openskp package already carry
-/// real per-instance source GUIDs, a generated-name flag, and the source
-/// file's layer-hidden state (added alongside this port - see the core
-/// package's Geometry.extractAttributeDictionaries).
+/// Built at full Python/C++/TypeScript/.NET GUID/name-is-generated/
+/// layer-hidden fidelity from the start: InstancedNode/InstancedScene in
+/// the core openskp package already carry real per-instance source
+/// GUIDs, a generated-name flag, and the source file's layer-hidden
+/// state (added alongside this port - see the core package's
+/// Geometry.extractAttributeDictionaries).
 ///
 /// Ships as its own package (rather than living in the core openskp
 /// package) because it needs `package:flat_buffers` - the core package
@@ -32,8 +34,10 @@ import 'fragments_fb/fragments_generated.dart' as ffb;
 ///
 /// See `lib/src/fragments_fb/index.fbs`'s own comment for why the Dart
 /// bindings are generated from a locally-patched schema copy (flatc's
-/// Dart backend doesn't support FlatBuffers' optional-scalar feature) -
-/// wire-format-safe for this write-only module.
+/// Dart backend doesn't support FlatBuffers' optional-scalar feature),
+/// and [fromFragments]'s own note on the SpatialStructure.localId
+/// consequence that patch has for reading (fixed via a hand-added
+/// `localIdOrNull` getter in fragments_generated.dart).
 
 // Fragments' Shell uses `ushort` point indices by default; a shell with
 // more points than this must use the wide BigShell encoding (`uint`
@@ -460,6 +464,28 @@ Uint8List toFragments(InstancedScene scene, [FragmentExportOptions options = con
         renderedFaces: ffb.RenderedFaces.ONE, stroke: ffb.Stroke.DEFAULT,
       ),
   ];
+  // Real, previously-undetected bug, found while adding the Dart Fragments
+  // READER (openskp#285) - nothing before this read the materials vector
+  // back, so it went unnoticed. package:flat_buffers's writeListOfStructs
+  // writes struct elements FIRST, then endStructVector's putUint32(count)
+  // LAST - and that final putUint32 call aligns its OWN 4-byte write by
+  // inserting padding immediately before itself if needed, which (since
+  // the elements are already fixed at their positions) lands the padding
+  // BETWEEN the length prefix and element 0, not before the vector as a
+  // whole. Every other struct type in this schema (FloatVector 12 bytes,
+  // Transform 48, Representation 32, Sample 16) is already a multiple of
+  // 4 regardless of count, so this never manifested until Material (6
+  // bytes/element - NOT a multiple of 4): an ODD material count leaves 2
+  // such bytes unaccounted for, which the standard `count + 4` read-side
+  // offset (used by every language's generated reader, including this
+  // one) doesn't know to skip. Confirmed directly: a 1-material scene
+  // read back r=0/g=0/b=255/a=255/renderedFaces=-1 (a real crash) instead
+  // of the correct r=255/g=255/b=255/a=255/renderedFaces=ONE; a
+  // 2-material scene (12 bytes, already 4-aligned) read back correctly
+  // with no fix at all. Pre-padding by exactly the shortfall before the
+  // elements are written gives endStructVector's own alignment nothing
+  // left to do, closing the gap. An EVEN material count needs no pad.
+  if ((materialBuilders.length * 6) % 4 != 0) builder.pad(2);
   final materialsVec = builder.writeListOfStructs(materialBuilders);
 
   final representationBuilders = [
@@ -623,3 +649,330 @@ void exportFragments(InstancedScene scene, String outputPath, [FragmentExportOpt
   file.parent.createSync(recursive: true);
   file.writeAsBytesSync(toFragments(scene, options));
 }
+
+// RepresentationClass values this module can read geometry for today -
+// mirrors Python's own _SUPPORTED_REPRESENTATION_CLASSES and its note on
+// why (only SHELL is written by any of this project's own exporters yet).
+const Set<ffb.RepresentationClass> _supportedRepresentationClasses = {ffb.RepresentationClass.SHELL};
+
+(double, double, double) _cross3((double, double, double) a, (double, double, double) b) => (
+      a.$2 * b.$3 - a.$3 * b.$2,
+      a.$3 * b.$1 - a.$1 * b.$3,
+      a.$1 * b.$2 - a.$2 * b.$1,
+    );
+
+/// One normal per vertex, flat-shaded: each triangle's own face normal,
+/// duplicated across its 3 vertices - the most a Shell (points + indices,
+/// nothing else) can ever give back. Mirrors Python's `_compute_flat_normals`.
+List<(double, double, double)> _computeFlatNormals(
+    List<(double, double, double)> points, List<(int, int, int)> triangles) {
+  final normals = List<(double, double, double)>.filled(points.length, (0.0, 0.0, 1.0));
+  for (final (a, b, c) in triangles) {
+    final pa = points[a], pb = points[b], pc = points[c];
+    final u = (pb.$1 - pa.$1, pb.$2 - pa.$2, pb.$3 - pa.$3);
+    final v = (pc.$1 - pa.$1, pc.$2 - pa.$2, pc.$3 - pa.$3);
+    var n = _cross3(u, v);
+    final length = sqrt(n.$1 * n.$1 + n.$2 * n.$2 + n.$3 * n.$3);
+    if (length > 1e-12) n = (n.$1 / length, n.$2 / length, n.$3 / length);
+    normals[a] = n;
+    normals[b] = n;
+    normals[c] = n;
+  }
+  return normals;
+}
+
+/// Reassemble a glTF-style column-major 4x4 matrix from a Fragments
+/// `Transform` struct (position + x/y direction unit vectors). The struct
+/// never stores a Z direction - reconstructed here as `xDir cross yDir`,
+/// matching the same right-handed orthonormal frame export's TRS
+/// decomposition produces. Mirrors Python's `_transform_to_matrix16`.
+List<double> _transformToMatrix16(ffb.Transform transform) {
+  final pos = transform.position;
+  final xDirS = transform.xDirection;
+  final yDirS = transform.yDirection;
+  final xDir = (xDirS.x, xDirS.y, xDirS.z);
+  final yDir = (yDirS.x, yDirS.y, yDirS.z);
+  final zDir = _cross3(xDir, yDir);
+  return [
+    xDir.$1, xDir.$2, xDir.$3, 0.0,
+    yDir.$1, yDir.$2, yDir.$3, 0.0,
+    zDir.$1, zDir.$2, zDir.$3, 0.0,
+    pos.x, pos.y, pos.z, 1.0,
+  ];
+}
+
+/// Pull the `["Name", value, "STRING"]` entry out of an item's
+/// `Attribute.data`, matching the exact convention [toFragments] (and the
+/// real `IfcImporter`) writes. Mirrors Python's `_extract_name_attribute`.
+String _extractNameAttribute(ffb.Attribute? attribute) {
+  if (attribute == null) return '';
+  for (final raw in attribute.data ?? const <String>[]) {
+    try {
+      final triple = jsonDecode(raw);
+      if (triple is List && triple.length >= 2 && triple[0] == 'Name') {
+        return triple[1]?.toString() ?? '';
+      }
+    } catch (_) {
+      continue;
+    }
+  }
+  return '';
+}
+
+/// Parses a real `.frag` file's bytes into an [InstancedScene] - the
+/// mirror of [toFragments]. Accepts either the zlib-compressed wire
+/// format (the default [toFragments]/real loader convention) or raw,
+/// uncompressed FlatBuffers bytes; detected automatically the same way
+/// the real `@thatopen/fragments` loader does, by attempting zlib
+/// inflation first.
+///
+/// Known gaps, matching Python's own read side exactly (not
+/// independently improved on here - see openskp#285): `positionMm`/
+/// `properties`/`attributeDictionaries` on each node are left at their
+/// defaults, since the Fragments format doesn't carry them separately
+/// from the `Name` attribute this function does extract.
+InstancedScene fromFragments(Uint8List data) {
+  Uint8List rawBytes;
+  try {
+    rawBytes = const ZLibDecoder().decodeBytes(data);
+  } catch (_) {
+    rawBytes = data;
+  }
+
+  final model = ffb.Model(rawBytes);
+  final meshes = model.meshes;
+
+  // ---- Materials (flat RGBA - no texture concept exists in this format
+  // at all). ----
+  final gltfMaterials = <Map<String, dynamic>>[];
+  if (meshes != null) {
+    for (final mat in meshes.materials ?? const <ffb.Material>[]) {
+      gltfMaterials.add({
+        'pbrMetallicRoughness': {
+          'baseColorFactor': [mat.r / 255.0, mat.g / 255.0, mat.b / 255.0, mat.a / 255.0],
+          'metallicFactor': 0.0,
+          'roughnessFactor': 1.0,
+        },
+        'doubleSided': mat.renderedFaces != ffb.RenderedFaces.ONE,
+      });
+    }
+  }
+  if (gltfMaterials.isEmpty) {
+    gltfMaterials.add({
+      'pbrMetallicRoughness': {
+        'baseColorFactor': [0.8, 0.8, 0.8, 1.0],
+        'metallicFactor': 0.0,
+        'roughnessFactor': 1.0,
+      },
+    });
+  }
+
+  // ---- Shells -> (points, triangles), decoded once per shell index,
+  // reused by every sample referencing it. ----
+  final shellList = meshes?.shells ?? const <ffb.Shell>[];
+  final shellGeometry = List<List<(double, double, double)>?>.filled(shellList.length, null);
+  final shellTriangles = List<List<(int, int, int)>>.filled(shellList.length, const []);
+
+  (List<(double, double, double)>, List<(int, int, int)>) decodeShell(int shellIdx) {
+    final cached = shellGeometry[shellIdx];
+    if (cached != null) return (cached, shellTriangles[shellIdx]);
+    final shell = shellList[shellIdx];
+    final points = (shell.points ?? const <ffb.FloatVector>[]).map((p) => (p.x.toDouble(), p.y.toDouble(), p.z.toDouble())).toList();
+
+    final isBig = shell.type == ffb.ShellType.BIG;
+    final triangles = <(int, int, int)>[];
+    if (isBig) {
+      for (final profile in shell.bigProfiles ?? const <ffb.BigShellProfile>[]) {
+        final indices = profile.indices;
+        if (indices != null && indices.length >= 3) triangles.add((indices[0], indices[1], indices[2]));
+      }
+    } else {
+      for (final profile in shell.profiles ?? const <ffb.ShellProfile>[]) {
+        final indices = profile.indices;
+        if (indices != null && indices.length >= 3) triangles.add((indices[0], indices[1], indices[2]));
+      }
+    }
+
+    shellGeometry[shellIdx] = points;
+    shellTriangles[shellIdx] = triangles;
+    return (points, triangles);
+  }
+
+  // ---- Group samples by item (Meshes.meshesItems[k] -> item index, NOT
+  // Sample.item - see toFragments's own comment on why the two differ;
+  // Sample.item is just the sample's own position, always). ----
+  final sampleList = meshes?.samples ?? const <ffb.Sample>[];
+  final meshesItems = meshes?.meshesItems ?? const <int>[];
+  final samplesByItem = <int, List<int>>{};
+  for (var k = 0; k < sampleList.length; k++) {
+    final itemIdx = meshesItems[k];
+    samplesByItem.putIfAbsent(itemIdx, () => []).add(k);
+  }
+
+  // ---- Per-item metadata: name, guid, category, world transform.
+  // localIds[i] IS the item index space - see toFragments's own
+  // localIds.add(itemIndex). ----
+  final localIds = model.localIds ?? const <int>[];
+  final localIdToItemIndex = <int, int>{for (var i = 0; i < localIds.length; i++) localIds[i]: i};
+
+  final guidByItem = <int, String>{};
+  final guidsItems = model.guidsItems ?? const <int>[];
+  final guids = model.guids ?? const <String>[];
+  for (var i = 0; i < guidsItems.length; i++) {
+    final itemIdx = localIdToItemIndex[guidsItems[i]];
+    if (itemIdx != null && i < guids.length) guidByItem[itemIdx] = guids[i];
+  }
+
+  var layerHidden = <String, bool>{};
+  var generatedNameGuids = <String>{};
+  final metadataRaw = model.metadata;
+  if (metadataRaw != null && metadataRaw.isNotEmpty) {
+    try {
+      final metadata = jsonDecode(metadataRaw);
+      if (metadata is Map) {
+        final lh = metadata['layer_hidden'];
+        if (lh is Map) {
+          layerHidden = lh.map((k, v) => MapEntry(k.toString(), v == true));
+        }
+        final gn = metadata['generated_name_guids'];
+        if (gn is List) {
+          generatedNameGuids = gn.whereType<String>().toSet();
+        }
+      }
+    } catch (_) {
+      // leave layerHidden/generatedNameGuids empty
+    }
+  }
+
+  final meshResources = <InstancedMeshResource>[];
+  final resourceBySignature = <String, String>{};
+  var warnedUnsupported = false;
+
+  final representationList = meshes?.representations ?? const <ffb.Representation>[];
+  final globalTransforms = meshes?.globalTransforms ?? const <ffb.Transform>[];
+
+  String buildResourceForItem(int itemIdx, String itemName) {
+    final sampleIndices = samplesByItem[itemIdx] ?? const <int>[];
+    final signature = <(int, int)>[];
+    final primitives = <LocalPrimitive>[];
+    for (final k in sampleIndices) {
+      final sample = sampleList[k];
+      final repIdx = sample.representation;
+      final matIdx = sample.material;
+      final representation = repIdx < representationList.length ? representationList[repIdx] : null;
+      final repClass = representation?.representationClass ?? ffb.RepresentationClass.SHELL;
+      if (!_supportedRepresentationClasses.contains(repClass)) {
+        if (!warnedUnsupported) {
+          stderr.writeln(
+              'openskp fromFragments: skipping a sample with unsupported RepresentationClass=$repClass (only SHELL is read today).');
+          warnedUnsupported = true;
+        }
+        continue;
+      }
+      signature.add((repIdx, matIdx));
+      // Representation.id is the index into Meshes.shells - NOT the
+      // representation's own position in the representations list. See
+      // Python's from_fragments's own comment on why this must follow
+      // id, matching the real reader's own fetch-functions.ts.
+      final shellIdx = representation!.id;
+      if (shellIdx >= shellList.length) continue;
+      final (points, triangles) = decodeShell(shellIdx);
+      final normals = _computeFlatNormals(points, triangles);
+      final positions = <double>[];
+      final normalsFlat = <double>[];
+      for (var i = 0; i < points.length; i++) {
+        positions.addAll([points[i].$1, points[i].$2, points[i].$3]);
+        normalsFlat.addAll([normals[i].$1, normals[i].$2, normals[i].$3]);
+      }
+      final uvs = List<double>.filled(points.length * 2, 0.0);
+      final indicesFlat = <int>[];
+      for (final tri in triangles) {
+        indicesFlat.addAll([tri.$1, tri.$2, tri.$3]);
+      }
+      primitives.add(LocalPrimitive(
+        positions: positions,
+        normals: normalsFlat,
+        uvs: uvs,
+        indices: indicesFlat,
+        materialIndex: matIdx < gltfMaterials.length ? matIdx : 0,
+      ));
+    }
+
+    final sigKey = signature.map((s) => '${s.$1}:${s.$2}').join(',');
+    if (sigKey.isNotEmpty && resourceBySignature.containsKey(sigKey)) {
+      return resourceBySignature[sigKey]!;
+    }
+
+    final resourceId = 'frag-$itemIdx';
+    meshResources.add(InstancedMeshResource(
+      id: resourceId,
+      definitionId: itemIdx,
+      definitionName: itemName.isEmpty ? resourceId : itemName,
+      variantKey: 'default',
+      primitives: primitives,
+    ));
+    if (sigKey.isNotEmpty) resourceBySignature[sigKey] = resourceId;
+    return resourceId;
+  }
+
+  final attributesList = model.attributes ?? const <ffb.Attribute>[];
+
+  // ---- Spatial structure -> InstancedNode tree. ----
+  InstancedNode buildNode(ffb.SpatialStructure spatial) {
+    // See fragments_fb/index.fbs's own comment on why this reads
+    // localIdOrNull (hand-added) rather than the generated localId -
+    // absent and genuinely-0 are NOT the same thing here.
+    final localId = spatial.localIdOrNull;
+    final category = spatial.category ?? '';
+
+    var name = '';
+    var guid = '';
+    String? meshResourceId;
+    var matrix = _identityMatrix;
+    var nameIsGenerated = false;
+
+    if (localId != null) {
+      final itemIdx = localIdToItemIndex[localId];
+      if (itemIdx != null) {
+        final attribute = itemIdx < attributesList.length ? attributesList[itemIdx] : null;
+        name = _extractNameAttribute(attribute);
+        guid = guidByItem[itemIdx] ?? '';
+        nameIsGenerated = guid.isNotEmpty && generatedNameGuids.contains(guid);
+        if (samplesByItem.containsKey(itemIdx)) {
+          meshResourceId = buildResourceForItem(itemIdx, name.isEmpty ? category : name);
+          final transform = globalTransforms[samplesByItem[itemIdx]![0]];
+          matrix = _transformToMatrix16(transform);
+        }
+      }
+    }
+
+    final children = (spatial.children ?? const <ffb.SpatialStructure>[]).map(buildNode).toList();
+
+    return InstancedNode(
+      name: name,
+      nameIsGenerated: nameIsGenerated,
+      definitionName: category,
+      layer: category,
+      matrix: matrix,
+      guid: guid,
+      meshResourceId: meshResourceId,
+      children: children,
+    );
+  }
+
+  final rootSpatial = model.spatialStructure;
+  final sceneHierarchy = rootSpatial != null ? buildNode(rootSpatial) : InstancedNode(name: 'ROOT', definitionName: 'ROOT');
+
+  return InstancedScene(
+    bounds: null,
+    sceneHierarchy: sceneHierarchy,
+    meshResources: meshResources,
+    gltfMaterials: gltfMaterials,
+    textures: [],
+    layerHidden: layerHidden,
+  );
+}
+
+/// Reads a `.frag` file from disk into an [InstancedScene]. See
+/// [fromFragments] for the full contract and known gaps.
+InstancedScene readFragments(String path) => fromFragments(File(path).readAsBytesSync());

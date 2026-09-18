@@ -7,14 +7,15 @@
 // not yet supported in at least one of the specified programming
 // languages."), so this file exists purely to make `flatc --dart` happy.
 //
-// This is wire-format-safe for this package's WRITE-ONLY use: the
-// generated `SpatialStructureBuilder.addLocalId` still takes a nullable
-// `int?`, and (matching every FlatBuffers language binding) only writes
-// the field into the table when it's actually called - omitting the
-// call, not the schema's declared default, is what makes a field absent
-// on the wire. It only affects a hypothetical Dart READER, which isn't
-// part of this port's scope - see ../fragments_export.dart's own header
-// comment.
+// This is wire-format-safe for writing: the generated
+// `SpatialStructureBuilder.addLocalId` still takes a nullable `int?`,
+// and (matching every FlatBuffers language binding) only writes the
+// field into the table when it's actually called - omitting the call,
+// not the schema's declared default, is what makes a field absent on
+// the wire. It DOES affect reading (openskp#285's Fragments-reading
+// port) - see ./index.fbs's fuller comment and
+// fragments_generated.dart's hand-added `localIdOrNull` getter, which
+// has to be re-added if this file is ever regenerated.
 //
 // If index.fbs ever changes, copy it here again and reapply this one
 // edit, then regenerate: `flatc --dart -o . index_dart_gen.fbs` from this

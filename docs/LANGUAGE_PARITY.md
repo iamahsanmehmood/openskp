@@ -98,7 +98,7 @@ released. ❌ = not yet ported to that language; see
 | IFC export: loose-edge curve sets + analytic arcs as `IfcAnnotation` / `IfcIndexedPolyCurve`, IFC4 STEP conformance fixes | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Direct SketchUp → Fragments (`.frag`) export | ✅ | ✅ — verified against the real `@thatopen/fragments` runtime | ✅ | ✅ | ✅ |
 | **Import** | | | | | |
-| Read a `.frag` file back (6th input format alongside `.skp`) | ✅ | ✅ | ✅ | ❌ not started | ❌ not started |
+| Read a `.frag` file back (6th input format alongside `.skp`) | ✅ | ✅ | ✅ | ✅ | ❌ not started |
 
 ## 3. What's still outstanding after 1.3.0
 
@@ -109,7 +109,7 @@ genuine cross-language porting work, not a release-timing gap:
 
 | Item | Python has it via | Needs porting to |
 |:---|:---|:---|
-| Read a `.frag` file back (`from_fragments`/`read`) | `export/fragments.py` | **TypeScript and .NET: done** (`fromFragments()`/`FragmentsExport.FromFragments()`). Dart, C++ — none started |
+| Read a `.frag` file back (`from_fragments`/`read`) | `export/fragments.py` | **TypeScript, .NET, and Dart: done** (`fromFragments()`/`FragmentsExport.FromFragments()`/`fromFragments()`). Dart's port also found and fixed a real, previously-undetected write-side bug: an odd material count silently corrupted the materials vector (`flat_buffers` struct-vector alignment padding landing in the wrong place) - see `fragments_export.dart`'s own comment. **C++ — not started.** |
 | `build_instanced_scene()` loose-edge curve support + public typed-model `Edge.layer`/`Edge.curve_id`/`Face.layer`/`loose_edge_runs()` | `_curves.py`, `instanced_scene.py`, `model.py` | TypeScript, .NET, Dart, C++ — none started |
 | IFC export: loose-edge curve sets + analytic arcs as `IfcAnnotation`/`IfcIndexedPolyCurve`, plus the 4 IFC4 STEP-conformance fixes | `scene.py`, `export/ifc.py` | TypeScript, .NET, Dart, C++ — none started |
 | Legacy (pre-2021) pages/scenes reading | `legacy.py` (also in C++, released) | TypeScript, .NET, Dart |

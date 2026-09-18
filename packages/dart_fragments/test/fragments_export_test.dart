@@ -584,4 +584,235 @@ void main() {
       expect(meshes.samples!.length, 1);
     });
   });
+
+  group('fromFragments (openskp#285: reading a .frag file back)', () {
+    InstancedScene makeTwoInstanceScene() {
+      final resource = InstancedMeshResource(
+        id: 'mesh_0',
+        definitionId: 1,
+        definitionName: 'Box',
+        variantKey: '1|255,255,255',
+        primitives: [
+          LocalPrimitive(
+            positions: [0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 1, 1, 0, 1, 1, 1, 1, 0, 1, 1],
+            normals: List<double>.filled(24, 0.0),
+            uvs: List<double>.filled(16, 0.0),
+            indices: [0, 1, 2, 0, 2, 3, 4, 6, 5, 4, 7, 6],
+            materialIndex: 0,
+          ),
+        ],
+      );
+      final nodeA = InstancedNode(name: 'Box_A', layer: 'Framing', matrix: identity, meshResourceId: 'mesh_0', guid: '');
+      final nodeB = InstancedNode(name: 'Box_B', layer: 'Framing', matrix: identity, meshResourceId: 'mesh_0', guid: '');
+      return InstancedScene(
+        meshResources: [resource],
+        gltfMaterials: [{}],
+        sceneHierarchy: InstancedNode(name: 'ROOT', matrix: identity, children: [nodeA, nodeB]),
+      );
+    }
+
+    test('a scene with an ODD number of distinct materials round-trips its colors exactly', () {
+      // Regression guard for a real bug this reader found in the WRITER
+      // (fragments_export.dart's own materials-vector build): Material is
+      // 6 bytes/element, the only struct in this schema not a multiple of
+      // 4, so an odd material count left package:flat_buffers's
+      // writeListOfStructs+endStructVector inserting 2 bytes of alignment
+      // padding between the vector's length prefix and its first element
+      // - invisible to every OTHER existing test here (none previously
+      // read materials back), but a real, silent corruption: reading it
+      // back before the fix gave r=0/g=0/b=255/a=255/renderedFaces=-1
+      // (an invalid enum value, threw) instead of the real
+      // r=255/g=255/b=255/a=255/renderedFaces=ONE. 3 materials (18 bytes,
+      // same misalignment class as 1) is the case exercised here; the
+      // fix itself lives in fragments_export.dart right before
+      // writeListOfStructs is called for materials.
+      InstancedMeshResource singleTriResource(String id, int materialIndex) => InstancedMeshResource(
+            id: id,
+            definitionId: 1,
+            definitionName: 'Tri',
+            variantKey: '$materialIndex',
+            primitives: [
+              LocalPrimitive(
+                positions: [0, 0, 0, 1, 0, 0, 0, 1, 0],
+                normals: List<double>.filled(9, 0.0),
+                uvs: List<double>.filled(6, 0.0),
+                indices: [0, 1, 2],
+                materialIndex: materialIndex,
+              ),
+            ],
+          );
+      final colors = [
+        (255, 0, 0, 255), // red
+        (0, 255, 0, 255), // green
+        (0, 0, 255, 255), // blue
+      ];
+      final scene = InstancedScene(
+        meshResources: [
+          singleTriResource('mesh_0', 0),
+          singleTriResource('mesh_1', 1),
+          singleTriResource('mesh_2', 2),
+        ],
+        gltfMaterials: [
+          for (final (r, g, b, a) in colors)
+            {
+              'pbrMetallicRoughness': {
+                'baseColorFactor': [r / 255.0, g / 255.0, b / 255.0, a / 255.0],
+              },
+            },
+        ],
+        sceneHierarchy: InstancedNode(
+          name: 'ROOT',
+          matrix: identity,
+          children: [
+            InstancedNode(name: 'A', matrix: identity, meshResourceId: 'mesh_0', guid: ''),
+            InstancedNode(name: 'B', matrix: identity, meshResourceId: 'mesh_1', guid: ''),
+            InstancedNode(name: 'C', matrix: identity, meshResourceId: 'mesh_2', guid: ''),
+          ],
+        ),
+      );
+
+      final raw = toFragments(scene, const FragmentExportOptions(raw: true));
+      final model = parseRaw(raw);
+      final materials = model.meshes!.materials!;
+      expect(materials.length, 3);
+      for (var i = 0; i < 3; i++) {
+        expect(materials[i].r, colors[i].$1);
+        expect(materials[i].g, colors[i].$2);
+        expect(materials[i].b, colors[i].$3);
+        expect(materials[i].a, colors[i].$4);
+        expect(materials[i].renderedFaces, ffb.RenderedFaces.ONE);
+      }
+
+      final back = fromFragments(raw);
+      expect(back.gltfMaterials.length, 3);
+      for (var i = 0; i < 3; i++) {
+        final bcf = (back.gltfMaterials[i]['pbrMetallicRoughness'] as Map)['baseColorFactor'] as List;
+        expect((bcf[0] * 255).round(), colors[i].$1);
+        expect((bcf[1] * 255).round(), colors[i].$2);
+        expect((bcf[2] * 255).round(), colors[i].$3);
+      }
+    });
+
+    test('round-trips a basic two-instance scene through toFragments -> fromFragments', () {
+      final scene = makeTwoInstanceScene();
+      final raw = toFragments(scene, const FragmentExportOptions(raw: true));
+      final back = fromFragments(raw);
+
+      expect(back.meshResources.length, 1);
+      expect(back.meshResources[0].primitives.length, 1);
+      // The box resource above carries 8 vertices but only 4 triangles
+      // (2 of the cube's 6 faces), matching makeBoxResource's own shape.
+      expect(back.meshResources[0].primitives[0].positions.length, 8 * 3);
+      expect(back.meshResources[0].primitives[0].indices.length, 4 * 3);
+
+      expect(back.sceneHierarchy.children.length, 2);
+      final a = back.sceneHierarchy.children[0];
+      final b = back.sceneHierarchy.children[1];
+      expect(a.name, 'Box_A');
+      expect(b.name, 'Box_B');
+      expect(a.layer, 'Framing');
+      expect(a.meshResourceId, b.meshResourceId);
+      expect(back.gltfMaterials, isNotEmpty);
+    });
+
+    test('round-trips both the raw and zlib-compressed wire formats, auto-detected', () {
+      final scene = makeTwoInstanceScene();
+      final rawBytes = toFragments(scene, const FragmentExportOptions(raw: true));
+      final compressedBytes = toFragments(scene, const FragmentExportOptions(raw: false));
+      expect(rawBytes, isNot(equals(compressedBytes)));
+
+      final backFromRaw = fromFragments(rawBytes);
+      final backFromCompressed = fromFragments(compressedBytes);
+
+      expect(
+        backFromRaw.meshResources[0].primitives[0].indices.length,
+        backFromCompressed.meshResources[0].primitives[0].indices.length,
+      );
+      expect(
+        backFromRaw.sceneHierarchy.children.map((c) => c.name).toList(),
+        backFromCompressed.sceneHierarchy.children.map((c) => c.name).toList(),
+      );
+    });
+
+    test('preserves real source guids and layer_hidden metadata across the round-trip', () {
+      final scene = makeTwoInstanceScene();
+      scene.sceneHierarchy.children[0].guid = 'F160C36229782F47A9857FC88DD1F2CB';
+      scene.layerHidden = {'Framing': false, 'Cladding': true};
+      final raw = toFragments(scene, const FragmentExportOptions(raw: true));
+      final back = fromFragments(raw);
+
+      expect(back.sceneHierarchy.children[0].guid, 'F160C36229782F47A9857FC88DD1F2CB');
+      expect(back.layerHidden, {'Framing': false, 'Cladding': true});
+    });
+
+    test('reconstructs every triangle of a primitive split across multiple shells on export', () {
+      // Same grid-primitive shape as the oversized-shell-splitting tests
+      // above, forcing the export side to split into several shells - the
+      // read side has to walk every sample for the item and reassemble
+      // them into the ONE mesh resource, not just read the first shell.
+      LocalPrimitive gridPrimitive(int cols, int rows) {
+        final positions = List<double>.filled(cols * rows * 3, 0.0);
+        for (var j = 0; j < rows; j++) {
+          for (var i = 0; i < cols; i++) {
+            final v = j * cols + i;
+            positions[v * 3] = i.toDouble();
+            positions[v * 3 + 1] = j.toDouble();
+            positions[v * 3 + 2] = 0.0;
+          }
+        }
+        final triCells = (cols - 1) * (rows - 1);
+        final indices = List<int>.filled(triCells * 6, 0);
+        var k = 0;
+        for (var j = 0; j < rows - 1; j++) {
+          for (var i = 0; i < cols - 1; i++) {
+            final a = j * cols + i;
+            final b = a + 1;
+            final c = a + cols;
+            final d = c + 1;
+            indices[k++] = a; indices[k++] = b; indices[k++] = d;
+            indices[k++] = a; indices[k++] = d; indices[k++] = c;
+          }
+        }
+        return LocalPrimitive(
+          positions: positions,
+          normals: List<double>.filled(cols * rows * 3, 0.0),
+          uvs: List<double>.filled(cols * rows * 2, 0.0),
+          indices: indices,
+          materialIndex: 0,
+        );
+      }
+
+      const cols = 210, rows = 165; // 209*164*2 = 68,552 triangles - forces a split (> 65535)
+      final prim = gridPrimitive(cols, rows);
+      final expectedTriangles = (cols - 1) * (rows - 1) * 2;
+
+      final scene = InstancedScene(
+        meshResources: [
+          InstancedMeshResource(
+            id: 'mesh_big',
+            definitionId: 1,
+            definitionName: 'BigMesh',
+            variantKey: '1|255,255,255',
+            primitives: [prim],
+          ),
+        ],
+        gltfMaterials: [{}],
+        sceneHierarchy: InstancedNode(
+          name: 'ROOT',
+          matrix: identity,
+          children: [InstancedNode(name: 'BigMesh1', matrix: identity, meshResourceId: 'mesh_big', guid: '')],
+        ),
+      );
+
+      final raw = toFragments(scene, const FragmentExportOptions(raw: true));
+
+      final model = parseRaw(raw);
+      expect(model.meshes!.shells!.length, greaterThan(1));
+
+      final back = fromFragments(raw);
+      expect(back.meshResources.length, 1);
+      final totalTrianglesBack = back.meshResources[0].primitives.fold<int>(0, (sum, p) => sum + p.indices.length ~/ 3);
+      expect(totalTrianglesBack, expectedTriangles);
+    });
+  });
 }

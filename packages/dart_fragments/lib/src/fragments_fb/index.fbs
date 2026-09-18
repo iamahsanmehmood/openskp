@@ -21,13 +21,22 @@
 // `= null;`) - regenerate from THAT file instead:
 // `flatc --dart -o . index_dart_gen.fbs`, then rename the output to
 // fragments_generated.dart (flatc names it after the source filename).
-// This is wire-format-safe for our WRITE-ONLY use here: the generated
+// This is wire-format-safe for writing: the generated
 // `SpatialStructureBuilder.addLocalId` still takes a nullable `int?` and
 // (matching every FlatBuffers language binding) only writes the field
 // into the table when it's actually called - omitting the call, not the
 // schema's declared default, is what makes a field absent on the wire.
-// It only affects a hypothetical Dart READER, which isn't part of this
-// port's scope - see fragments_export.dart's own header comment.
+//
+// It DOES affect reading, though - openskp#285 added a Dart Fragments
+// reader (fragments_export.dart's fromFragments), and the generated
+// `SpatialStructure.localId` getter this patch produces can't tell
+// "field absent" from "field genuinely 0" (both read back as 0). Rather
+// than regenerate (flatc --dart still can't handle the true schema at
+// all), a small hand-written `localIdOrNull` getter was added directly to
+// fragments_generated.dart, using the same `vTableGetNullable` the real
+// optional-scalar codegen would have produced - see that getter's own
+// comment for the full explanation. Re-add it if this file is ever
+// regenerated.
 
 namespace openskp._fragments_fb;
 

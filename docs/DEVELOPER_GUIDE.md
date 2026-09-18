@@ -504,11 +504,11 @@ What's carried through from the source `.skp` file:
 
 ### Reading a `.frag` file back
 
-> **Python, TypeScript, and .NET.** Not yet ported to Dart or C++; see
+> **Python, TypeScript, .NET, and Dart.** Not yet ported to C++; see
 > [docs/LANGUAGE_PARITY.md](LANGUAGE_PARITY.md).
 
 The mirror direction: `openskp.export.fragments.read()`/`from_fragments()`
-(Python), `fromFragments()` (TypeScript), or
+(Python), `fromFragments()` (TypeScript and Dart, same name in both), or
 `FragmentsExport.FromFragments()` (.NET) parse a real `.frag` file
 straight into an `InstancedScene` — OpenSKP's 6th input format alongside
 `.skp`. Any file works, not just one this project wrote — ThatOpen's own
@@ -543,6 +543,14 @@ var scene = FragmentsExport.ReadFragments("model.frag");
 // buffer. Rides every other export this project already has.
 ```
 
+```dart
+import 'package:openskp_fragments/openskp_fragments.dart';
+
+final scene = readFragments('model.frag');
+// ...or fromFragments(bytes) directly from an in-memory buffer. Rides
+// every other export this project already has.
+```
+
 **Python** verified two ways: round-trips this project's own output
 exactly (world-space vertex positions match to the last bit, not just
 object counts — see `tests/test_fragments.py`'s `TestFromFragments`), and
@@ -552,16 +560,23 @@ file through this same module and loading the result back through the
 actual `@thatopen/fragments` runtime preserves real IFC GUIDs and
 category names.
 
-**TypeScript and .NET** both verified round-trips this project's own
-output exactly (including a primitive large enough to force the export
-side to split across multiple shells — the read side has to walk every
-sample for an item and reassemble them, not just read the first one) —
-not yet tested against a real ThatOpen-produced file the way Python's
-port was, stated honestly rather than implied equivalent.
+**TypeScript, .NET, and Dart** all verified round-trips this project's
+own output exactly (including a primitive large enough to force the
+export side to split across multiple shells — the read side has to walk
+every sample for an item and reassemble them, not just read the first
+one) — not yet tested against a real ThatOpen-produced file the way
+Python's port was, stated honestly rather than implied equivalent.
+Dart's port additionally found and fixed a real, previously-undetected
+bug in Dart's own Fragments *writer*: an odd number of distinct
+materials silently corrupted the materials vector on export (a
+`package:flat_buffers` struct-vector alignment quirk - Material is the
+only struct in this schema whose size isn't a multiple of 4 bytes, so
+this never surfaced until something finally read materials back). See
+`fragments_export.dart`'s own comment on the fix.
 
 **Known limitations, stated plainly** (apply identically to Python,
-TypeScript, and .NET — both ports mirror Python's exact read-side
-behavior, not an independently-improved version):
+TypeScript, .NET, and Dart — all four ports mirror Python's exact
+read-side behavior, not an independently-improved version):
 
 - No UVs anywhere in the schema (`Shell` is points + triangle indices
   only) — every reconstructed primitive gets an all-zero UV band.

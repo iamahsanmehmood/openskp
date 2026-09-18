@@ -1970,6 +1970,18 @@ class SpatialStructure {
   final int _bcOffset;
 
   int get localId => const fb.Uint32Reader().vTableGet(_bc, _bcOffset, 4, 0);
+  // Hand-added, not flatc output - see index.fbs's own comment on why
+  // local_id had to be patched from an optional scalar (`= null`) to a
+  // defaulted one (`= 0`) for flatc's Dart backend to generate anything
+  // at all. That patch is wire-format-safe for writing (an omitted field
+  // and an explicit 0 are indistinguishable on the wire either way), but
+  // the generated `localId` getter above can no longer tell "absent"
+  // from "genuinely 0" - a real correctness problem for a reader, since
+  // item index 0 is a completely ordinary, frequently-occurring value.
+  // Needed once this schema gained a real reader (openskp#285's Fragments
+  // -reading port) - not needed for the write-only module that shipped
+  // first, which is why this wasn't added until now.
+  int? get localIdOrNull => const fb.Uint32Reader().vTableGetNullable(_bc, _bcOffset, 4);
   String? get category => const fb.StringReader().vTableGetNullable(_bc, _bcOffset, 6);
   List<SpatialStructure>? get children => const fb.ListReader<SpatialStructure>(SpatialStructure.reader).vTableGetNullable(_bc, _bcOffset, 8);
 

@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Read a `.frag` file back (TypeScript, .NET, Dart)
+
+Ports Python's `from_fragments()`/`read()` to TypeScript (`fromFragments()`,
+#362), .NET (`FragmentsExport.FromFragments()`/`ReadFragments()`, #363), and
+Dart (`fromFragments()`/`readFragments()`, same package as the writer).
+Materials, shell/big-shell geometry (including the multi-shell case for
+oversized primitives), per-item name/guid/layer, and the spatial-structure
+tree - matching Python's own known gaps exactly (`positionMm`/`properties`/
+`attributeDictionaries` left at defaults, no UVs/stored normals, only
+`RepresentationClass.SHELL` read), not independently improved on. Verified
+via self-round-trip for all three (basic scene, both wire formats, real
+guids/`layer_hidden`, the multi-shell read path) - not yet tested against a
+real externally-produced `.frag` file the way Python's own read side was.
+C++ is now the only language without this. See
+[docs/LANGUAGE_PARITY.md](docs/LANGUAGE_PARITY.md).
+
+### Fixed — Dart: odd material counts silently corrupted the Fragments materials vector
+
+Found while adding Dart's Fragments reader above - nothing previously read
+the materials vector back, so this went undetected. `Material` (6 bytes:
+r/g/b/a + renderedFaces + stroke) is the only struct in the Fragments schema
+whose size isn't a multiple of 4 bytes; `package:flat_buffers`'s
+`writeListOfStructs`+`endStructVector` writes struct elements first and the
+length-prefix uint32 last, so aligning that final uint32 write can insert
+padding between the length prefix and element 0 - invisible for every other
+struct type in this schema (all already 4-byte multiples regardless of
+count), but a real, silent corruption whenever the material count was odd
+- any real file with an odd number of distinct materials would have been
+affected, though export-only consumers (the only ones that existed before
+this fix) never noticed since nothing decoded the bytes back to check.
+Fixed by pre-padding to the correct alignment before the elements are
+written, closing the gap; regression test confirmed to fail without the fix
+and pass with it.
+
 ## [1.3.0] — 2026-09-18 — synchronized release, all 5 languages
 
 > **Same version number across all 5 languages, not identical capability.**
