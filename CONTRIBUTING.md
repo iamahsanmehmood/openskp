@@ -341,6 +341,22 @@ when releasing 0.3.0). No other workflow in this repo listens for bare
 true (`grep -A2 "tags:" .github/workflows/*.yml`) before relying on it,
 in case a future workflow adds its own bare-`v*` trigger.
 
+**Push tags one at a time, not batched in one `git push`.** Confirmed
+directly when releasing 1.3.0 across all 5 languages: `git push origin
+python-v1.3.0 typescript-v1.3.0 nuget-v1.3.0 cpp-v1.3.0 v1.3.0` in a
+single command succeeded at the git level (all 5 landed on the remote,
+confirmed via `git ls-remote --tags`) but triggered **zero** workflow
+runs — no push event fired for any of them. Deleting and re-pushing each
+tag individually (`git push origin :refs/tags/<tag>` then `git push
+origin <tag>`) triggered the corresponding release workflow correctly
+every time. Root cause not confirmed (a GitHub webhook-batching quirk on
+multi-ref pushes is the leading suspect), but the workaround is simple:
+one `git push origin <tag>` per tag, checking each one actually queued a
+run before moving to the next - `gh run list --branch <tag>` does **not**
+reliably show tag-triggered runs (confirmed empty even for runs that did
+fire), use `gh api repos/<owner>/<repo>/actions/runs?event=push` and
+filter `.head_branch` instead.
+
 ---
 
 ## Reporting Bugs
