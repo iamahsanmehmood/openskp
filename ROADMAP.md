@@ -43,10 +43,12 @@ still open after 1.3.0 (most of what used to be listed here is now
 shipped everywhere — see [docs/LANGUAGE_PARITY.md](docs/LANGUAGE_PARITY.md)
 for the full, current matrix):
 
-- Reading a `.frag` file back (`from_fragments`/`read`, TypeScript's and
-  Dart's `fromFragments()`, .NET's `FragmentsExport.FromFragments()`) —
-  **Python, TypeScript, .NET, and Dart done.** Only C++ can write
-  Fragments but not read one back now.
+- ~~Reading a `.frag` file back~~ — **done in all 5 languages** (Python,
+  TypeScript #362, .NET #363, Dart #364, C++ #365). The last item from
+  the original 1.3.0 gap list; found and fixed two real, previously-
+  undetected write-side bugs along the way (Dart's material-vector
+  alignment padding, C++'s dangling-reference JSON parser) - see
+  [CHANGELOG.md](CHANGELOG.md).
 - Loose-edge/curve support in `build_instanced_scene()`, plus the public
   typed model's `Edge.layer`/`Edge.curve_id`/`Face.layer`/
   `loose_edge_runs()` — Python only.

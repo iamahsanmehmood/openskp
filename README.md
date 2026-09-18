@@ -62,7 +62,7 @@ OpenSKP is the **first and only** open-source, cross-platform toolkit for Sketch
 | **Observability** | ✅ | Opt-in progress reporting + structured, location-carrying parse errors — see [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md) |
 | **Convert to GLB / OBJ / STL / PLY / DXF 3D / IFC4 / JSON** | ✅ | Native, from-scratch conversion to glTF (GLB), Wavefront OBJ, STL, PLY, DXF 3D (AutoCAD Polyface Mesh), IFC4 (BIM), and JSON metadata — available in all five languages, no third-party CAD/BIM SDK involved — see [Export capabilities](docs/DEVELOPER_GUIDE.md#export-capabilities) |
 | **Convert to Fragments (.frag)** | ✅ | Direct SketchUp → [ThatOpen Fragments](https://github.com/ThatOpen/engine_fragment) export for BIM web viewers, no IFC intermediate. Available in all five languages as of 1.3.0. See [Fragments export](docs/DEVELOPER_GUIDE.md#fragments-export) |
-| **Read a Fragments (.frag) file back** | 🐍📘🚀🎯 | OpenSKP's 6th input format alongside `.skp` — parses any real `.frag` file (this project's own output, ThatOpen's real `IfcImporter` output, or anyone else's) into a scene that rides every other export above for free. **Python, TypeScript, .NET, and Dart** — not yet ported to C++. See [Reading a .frag file back](docs/DEVELOPER_GUIDE.md#reading-a-frag-file-back) |
+| **Read a Fragments (.frag) file back** | ✅ | OpenSKP's 6th input format alongside `.skp` — parses any real `.frag` file (this project's own output, ThatOpen's real `IfcImporter` output, or anyone else's) into a scene that rides every other export above for free. Available in **all five languages**. See [Reading a .frag file back](docs/DEVELOPER_GUIDE.md#reading-a-frag-file-back) |
 | **Write native `.skp` files** | ✅ | Build new `.skp` files from scratch — geometry (including genuine circular/arc curves, freeform polylines, faces with holes cut out, and non-planar auto-triangulation), solid/textured materials, layers, nested component definitions and groups, instance rotation/visibility, and custom attribute dictionaries. No SDK involved — every feature validated against the real SketchUp SDK, in all five languages. See [Write capabilities](docs/DEVELOPER_GUIDE.md#write-capabilities) |
 | **Edit existing `.skp` files** | ✅ | Load an existing legacy-format file and extend it — reuses its materials, layers, and component definitions, adds new geometry or instances, and saves a new file. All five languages. See [Editing an existing file](docs/DEVELOPER_GUIDE.md#editing-an-existing-file) |
 | **Generate rebuild code from a file** | ✅ | Turn a parsed `.skp` file into a human-readable, re-runnable source-code transcript that calls the same language's own writer API to rebuild it — materials, textures, layers, nested definitions, holes, instance-level paint and names. All five languages. See [Generating code from a file](docs/DEVELOPER_GUIDE.md#generating-code-from-a-file) |
@@ -150,7 +150,7 @@ condensed version.
 | IFC export correctness fixes (units, layer visibility, Psets, classification) | ✅ | not checked | not checked | not checked | ✅ |
 | IFC curve/arc annotations (`IfcAnnotation`/`IfcArcIndex`) | ✅ | ❌ | ❌ | ❌ | ❌ |
 | **Fragments (`.frag`) export** | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **Fragments (`.frag`) import** — 6th input format | ✅ | ✅ | ✅ | ✅ | ❌ not started |
+| **Fragments (`.frag`) import** — 6th input format | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 ### Real SketchUp file version support
 

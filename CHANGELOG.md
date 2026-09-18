@@ -7,20 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added — Read a `.frag` file back (TypeScript, .NET, Dart)
+### Added — Read a `.frag` file back (TypeScript, .NET, Dart, C++) - all 5 languages now
 
 Ports Python's `from_fragments()`/`read()` to TypeScript (`fromFragments()`,
-#362), .NET (`FragmentsExport.FromFragments()`/`ReadFragments()`, #363), and
-Dart (`fromFragments()`/`readFragments()`, same package as the writer).
-Materials, shell/big-shell geometry (including the multi-shell case for
-oversized primitives), per-item name/guid/layer, and the spatial-structure
-tree - matching Python's own known gaps exactly (`positionMm`/`properties`/
-`attributeDictionaries` left at defaults, no UVs/stored normals, only
-`RepresentationClass.SHELL` read), not independently improved on. Verified
-via self-round-trip for all three (basic scene, both wire formats, real
-guids/`layer_hidden`, the multi-shell read path) - not yet tested against a
-real externally-produced `.frag` file the way Python's own read side was.
-C++ is now the only language without this. See
+#362), .NET (`FragmentsExport.FromFragments()`/`ReadFragments()`, #363),
+Dart (`fromFragments()`/`readFragments()`, same package as the writer, #364),
+and C++ (`openskp::from_fragments()`/`read_fragments()`, #365) - closing out
+the last remaining cross-language gap tracked since the 1.3.0 synchronized
+release. Materials, shell/big-shell geometry (including the multi-shell case
+for oversized primitives), per-item name/guid/layer, and the
+spatial-structure tree - matching Python's own known gaps exactly
+(`positionMm`/`properties`/`attributeDictionaries` left at defaults, no
+UVs/stored normals, only `RepresentationClass.SHELL` read), not
+independently improved on. Verified via self-round-trip for all four (basic
+scene, both wire formats, real guids/`layer_hidden`, the multi-shell read
+path) - not yet tested against a real externally-produced `.frag` file the
+way Python's own read side was. See
 [docs/LANGUAGE_PARITY.md](docs/LANGUAGE_PARITY.md).
 
 ### Fixed — Dart: odd material counts silently corrupted the Fragments materials vector
@@ -40,6 +42,25 @@ this fix) never noticed since nothing decoded the bytes back to check.
 Fixed by pre-padding to the correct alignment before the elements are
 written, closing the gap; regression test confirmed to fail without the fix
 and pass with it.
+
+### Fixed — C++: dangling-reference bug in the new Fragments JSON parser
+
+Found while writing C++'s Fragments reader above, in the new code itself
+rather than something pre-existing: `MinimalJsonParser` (a small
+dependency-free JSON reader, needed since this package takes on no JSON
+library beyond FlatBuffers/miniz) stored its input as a `const
+std::string&` member. The metadata-parsing call site passed
+`model->metadata()->str()` directly - a temporary `std::string` returned
+by value - which is destroyed at the end of that full expression, the
+instant the constructor returns; a reference *member* (unlike a local
+`const std::string&` variable) does nothing to extend a temporary's
+lifetime. Every subsequent read through that dangling reference was
+undefined behavior, which manifested here as `layer_hidden` silently
+coming back empty instead of crashing outright - exactly the kind of UB
+that doesn't reliably announce itself. Caught by the real round-trip
+test for that exact field, not by inspection. Fixed by having the parser
+own a copy (`std::string`, constructed by value and moved in) instead of
+referencing the caller's.
 
 ## [1.3.0] — 2026-09-18 — synchronized release, all 5 languages
 

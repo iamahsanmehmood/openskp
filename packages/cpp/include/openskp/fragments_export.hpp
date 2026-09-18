@@ -27,4 +27,21 @@ OPENSKP_EXPORT std::vector<std::uint8_t> to_fragments(const InstancedScene& scen
 OPENSKP_EXPORT void export_fragments(const InstancedScene& scene,
                                      const std::filesystem::path& output_path, bool raw = false);
 
+/// Parses a real `.frag` file's bytes into an InstancedScene - the mirror
+/// of to_fragments(). Accepts either the zlib-compressed wire format (the
+/// default to_fragments()/real loader convention) or raw, uncompressed
+/// FlatBuffers bytes; detected automatically the same way the real
+/// @thatopen/fragments loader does, by attempting zlib inflation first.
+///
+/// Known gaps, matching Python's/TypeScript's/.NET's/Dart's own read side
+/// exactly (not independently improved on here - see openskp#285):
+/// InstancedNode::position_mm/properties/attribute_dictionaries are left
+/// at their defaults, since the Fragments format doesn't carry them
+/// separately from the `Name` attribute this function does extract.
+OPENSKP_EXPORT InstancedScene from_fragments(const std::vector<std::uint8_t>& data);
+
+/// Reads a `.frag` file from disk into an InstancedScene. See
+/// from_fragments() for the full contract and known gaps.
+OPENSKP_EXPORT InstancedScene read_fragments(const std::filesystem::path& path);
+
 }  // namespace openskp

@@ -368,5 +368,175 @@ TEST(FragmentsExport, APrimitiveWithinTheLimitStillProducesExactlyOneShell) {
   EXPECT_EQ(meshes->samples()->size(), 1u);
 }
 
+// ---- from_fragments (openskp#285: reading a .frag file back) ----
+
+InstancedScene make_two_instance_scene() {
+  InstancedMeshResource resource = make_box_resource("mesh_0");
+  InstancedNode node_a;
+  node_a.name = "Box_A";
+  node_a.layer = "Framing";
+  node_a.matrix = kIdentity;
+  node_a.mesh_resource_id = "mesh_0";
+  InstancedNode node_b;
+  node_b.name = "Box_B";
+  node_b.layer = "Framing";
+  node_b.matrix = kIdentity;
+  node_b.mesh_resource_id = "mesh_0";
+
+  InstancedScene scene;
+  scene.mesh_resources = {resource};
+  scene.gltf_materials = {{}};
+  scene.scene_hierarchy.name = "ROOT";
+  scene.scene_hierarchy.matrix = kIdentity;
+  scene.scene_hierarchy.children = {node_a, node_b};
+  return scene;
+}
+
+TEST(FromFragments, RoundTripsABasicTwoInstanceScene) {
+  const auto scene = make_two_instance_scene();
+  const auto raw = to_fragments(scene, /*raw=*/true);
+  const auto back = from_fragments(raw);
+
+  ASSERT_EQ(back.mesh_resources.size(), 1u);
+  ASSERT_EQ(back.mesh_resources[0].primitives.size(), 1u);
+  // make_box_resource's box carries 8 vertices but only 4 triangles (2 of
+  // the cube's 6 faces), matching its own shape exactly.
+  EXPECT_EQ(back.mesh_resources[0].primitives[0].positions.size(), 8u * 3);
+  EXPECT_EQ(back.mesh_resources[0].primitives[0].indices.size(), 4u * 3);
+
+  ASSERT_EQ(back.scene_hierarchy.children.size(), 2u);
+  const auto& a = back.scene_hierarchy.children[0];
+  const auto& b = back.scene_hierarchy.children[1];
+  EXPECT_EQ(a.name, "Box_A");
+  EXPECT_EQ(b.name, "Box_B");
+  EXPECT_EQ(a.layer, "Framing");
+  ASSERT_TRUE(a.mesh_resource_id.has_value());
+  ASSERT_TRUE(b.mesh_resource_id.has_value());
+  EXPECT_EQ(*a.mesh_resource_id, *b.mesh_resource_id);
+  EXPECT_FALSE(back.gltf_materials.empty());
+}
+
+TEST(FromFragments, RoundTripsBothRawAndZlibCompressedWireFormats) {
+  const auto scene = make_two_instance_scene();
+  const auto raw_bytes = to_fragments(scene, /*raw=*/true);
+  const auto compressed_bytes = to_fragments(scene, /*raw=*/false);
+  EXPECT_NE(raw_bytes, compressed_bytes);
+
+  const auto back_from_raw = from_fragments(raw_bytes);
+  const auto back_from_compressed = from_fragments(compressed_bytes);
+
+  EXPECT_EQ(back_from_raw.mesh_resources[0].primitives[0].indices.size(),
+            back_from_compressed.mesh_resources[0].primitives[0].indices.size());
+  ASSERT_EQ(back_from_raw.scene_hierarchy.children.size(),
+            back_from_compressed.scene_hierarchy.children.size());
+  for (std::size_t i = 0; i < back_from_raw.scene_hierarchy.children.size(); ++i) {
+    EXPECT_EQ(back_from_raw.scene_hierarchy.children[i].name,
+              back_from_compressed.scene_hierarchy.children[i].name);
+  }
+}
+
+TEST(FromFragments, PreservesRealSourceGuidsAndLayerHiddenMetadata) {
+  auto scene = make_two_instance_scene();
+  scene.scene_hierarchy.children[0].guid = "F160C36229782F47A9857FC88DD1F2CB";
+  scene.layer_hidden = {{"Framing", false}, {"Cladding", true}};
+  const auto raw = to_fragments(scene, /*raw=*/true);
+  const auto back = from_fragments(raw);
+
+  EXPECT_EQ(back.scene_hierarchy.children[0].guid, "F160C36229782F47A9857FC88DD1F2CB");
+  EXPECT_EQ(back.layer_hidden, scene.layer_hidden);
+}
+
+TEST(FromFragments, AnOddMaterialCountRoundTripsColorsExactly) {
+  // Cross-language regression guard: Dart's own port of this exact
+  // feature (openskp#285) found a real write-side bug where an odd
+  // material count corrupted the materials vector - see
+  // packages/dart_fragments's own CHANGELOG entry. C++'s canonical flatc
+  // codegen (unlike Dart's community `flat_buffers` package) uses fixed
+  // manually-aligned structs for Material with no equivalent length-
+  // prefix/element gap, so this is not expected to be affected - this
+  // test exists to confirm that directly rather than assume it from the
+  // architecture alone.
+  InstancedScene scene;
+  const std::array<std::array<double, 4>, 3> colors{{
+      {1.0, 0.0, 0.0, 1.0},
+      {0.0, 1.0, 0.0, 1.0},
+      {0.0, 0.0, 1.0, 1.0},
+  }};
+  for (std::size_t i = 0; i < colors.size(); ++i) {
+    InstancedMeshResource r;
+    r.id = "mesh_" + std::to_string(i);
+    r.definition_id = static_cast<EntityId>(i + 1);
+    r.definition_name = "Tri";
+    r.variant_key = std::to_string(i);
+    LocalPrimitive prim;
+    prim.positions = {0, 0, 0, 1, 0, 0, 0, 1, 0};
+    prim.normals.assign(9, 0.0f);
+    prim.uvs.assign(6, 0.0f);
+    prim.indices = {0, 1, 2};
+    prim.material_index = i;
+    r.primitives = {prim};
+    scene.mesh_resources.push_back(r);
+
+    GltfMaterial gm;
+    gm.pbr_metallic_roughness.base_color_factor = colors[i];
+    scene.gltf_materials.push_back(gm);
+
+    InstancedNode node;
+    node.name = std::string(1, static_cast<char>('A' + i));
+    node.matrix = kIdentity;
+    node.mesh_resource_id = r.id;
+    scene.scene_hierarchy.children.push_back(node);
+  }
+  scene.scene_hierarchy.name = "ROOT";
+  scene.scene_hierarchy.matrix = kIdentity;
+
+  const auto raw = to_fragments(scene, /*raw=*/true);
+  const auto* model = parse_raw(raw);
+  const auto* materials = model->meshes()->materials();
+  ASSERT_NE(materials, nullptr);
+  ASSERT_EQ(materials->size(), 3u);
+  for (std::size_t i = 0; i < 3; ++i) {
+    const auto* mat = materials->Get(static_cast<::flatbuffers::uoffset_t>(i));
+    EXPECT_EQ(mat->r(), static_cast<std::uint8_t>(colors[i][0] * 255));
+    EXPECT_EQ(mat->g(), static_cast<std::uint8_t>(colors[i][1] * 255));
+    EXPECT_EQ(mat->b(), static_cast<std::uint8_t>(colors[i][2] * 255));
+    EXPECT_EQ(mat->rendered_faces(), fb::RenderedFaces_ONE);
+  }
+
+  const auto back = from_fragments(raw);
+  ASSERT_EQ(back.gltf_materials.size(), 3u);
+  for (std::size_t i = 0; i < 3; ++i) {
+    const auto& bcf = back.gltf_materials[i].pbr_metallic_roughness.base_color_factor;
+    EXPECT_NEAR(bcf[0], colors[i][0], 1.0 / 255.0);
+    EXPECT_NEAR(bcf[1], colors[i][1], 1.0 / 255.0);
+    EXPECT_NEAR(bcf[2], colors[i][2], 1.0 / 255.0);
+  }
+}
+
+TEST(FromFragments, ReconstructsEveryTriangleOfAPrimitiveSplitAcrossMultipleShells) {
+  // Same grid-primitive shape as the oversized-shell-splitting tests
+  // above, forcing the export side to split into several shells - the
+  // read side has to walk every sample for the item and reassemble them
+  // into the ONE mesh resource, not just read the first shell.
+  constexpr int kCols = 210,
+                kRows = 165;  // 209*164*2 = 68,552 triangles - forces a split (> 65535)
+  const auto scene = scene_with_one_primitive(grid_primitive(kCols, kRows), "mesh_big");
+  constexpr long long kExpectedTriangles =
+      static_cast<long long>(kCols - 1) * static_cast<long long>(kRows - 1) * 2;
+
+  const auto raw = to_fragments(scene, /*raw=*/true);
+
+  const auto* model = parse_raw(raw);
+  ASSERT_GT(model->meshes()->shells()->size(), 1u);
+
+  const auto back = from_fragments(raw);
+  ASSERT_EQ(back.mesh_resources.size(), 1u);
+  long long total_triangles_back = 0;
+  for (const auto& prim : back.mesh_resources[0].primitives) {
+    total_triangles_back += static_cast<long long>(prim.indices.size() / 3);
+  }
+  EXPECT_EQ(total_triangles_back, kExpectedTriangles);
+}
+
 }  // namespace
 }  // namespace openskp

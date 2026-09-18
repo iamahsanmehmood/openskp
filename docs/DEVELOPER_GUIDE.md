@@ -504,15 +504,17 @@ What's carried through from the source `.skp` file:
 
 ### Reading a `.frag` file back
 
-> **Python, TypeScript, .NET, and Dart.** Not yet ported to C++; see
+> **All five languages.** The last remaining cross-language gap from the
+> 1.3.0 synchronized release - see
 > [docs/LANGUAGE_PARITY.md](LANGUAGE_PARITY.md).
 
 The mirror direction: `openskp.export.fragments.read()`/`from_fragments()`
-(Python), `fromFragments()` (TypeScript and Dart, same name in both), or
-`FragmentsExport.FromFragments()` (.NET) parse a real `.frag` file
-straight into an `InstancedScene` — OpenSKP's 6th input format alongside
-`.skp`. Any file works, not just one this project wrote — ThatOpen's own
-real `IfcImporter` output, or anyone else's:
+(Python), `fromFragments()` (TypeScript and Dart, same name in both),
+`FragmentsExport.FromFragments()` (.NET), or `openskp::from_fragments()`
+(C++) parse a real `.frag` file straight into an `InstancedScene` —
+OpenSKP's 6th input format alongside `.skp`. Any file works, not just one
+this project wrote — ThatOpen's own real `IfcImporter` output, or anyone
+else's:
 
 ```python
 from openskp.export import fragments
@@ -551,6 +553,15 @@ final scene = readFragments('model.frag');
 // every other export this project already has.
 ```
 
+```cpp
+#include <openskp/fragments_export.hpp>
+
+auto scene = openskp::read_fragments("model.frag");
+// ...or openskp::from_fragments(data) directly from an in-memory
+// std::vector<std::uint8_t>. Rides every other export this project
+// already has.
+```
+
 **Python** verified two ways: round-trips this project's own output
 exactly (world-space vertex positions match to the last bit, not just
 object counts — see `tests/test_fragments.py`'s `TestFromFragments`), and
@@ -560,23 +571,30 @@ file through this same module and loading the result back through the
 actual `@thatopen/fragments` runtime preserves real IFC GUIDs and
 category names.
 
-**TypeScript, .NET, and Dart** all verified round-trips this project's
-own output exactly (including a primitive large enough to force the
-export side to split across multiple shells — the read side has to walk
-every sample for an item and reassemble them, not just read the first
-one) — not yet tested against a real ThatOpen-produced file the way
-Python's port was, stated honestly rather than implied equivalent.
-Dart's port additionally found and fixed a real, previously-undetected
-bug in Dart's own Fragments *writer*: an odd number of distinct
-materials silently corrupted the materials vector on export (a
-`package:flat_buffers` struct-vector alignment quirk - Material is the
-only struct in this schema whose size isn't a multiple of 4 bytes, so
-this never surfaced until something finally read materials back). See
-`fragments_export.dart`'s own comment on the fix.
+**TypeScript, .NET, Dart, and C++** all verified round-trips this
+project's own output exactly (including a primitive large enough to
+force the export side to split across multiple shells — the read side
+has to walk every sample for an item and reassemble them, not just read
+the first one) — not yet tested against a real ThatOpen-produced file
+the way Python's port was, stated honestly rather than implied
+equivalent. Two ports additionally found and fixed real, previously-
+undetected bugs their own write sides had:
 
-**Known limitations, stated plainly** (apply identically to Python,
-TypeScript, .NET, and Dart — all four ports mirror Python's exact
-read-side behavior, not an independently-improved version):
+- **Dart's writer**: an odd number of distinct materials silently
+  corrupted the materials vector on export (a `package:flat_buffers`
+  struct-vector alignment quirk - `Material` is the only struct in this
+  schema whose size isn't a multiple of 4 bytes, so this never surfaced
+  until something finally read materials back). See
+  `fragments_export.dart`'s own comment on the fix.
+- **C++'s new reader itself**: a dangling-reference bug in a hand-written
+  JSON parser (`MinimalJsonParser` stored a `const std::string&` member,
+  which one call site fed a temporary that was destroyed before the
+  parser ever read it - silently came back empty instead of crashing).
+  See `fragments_export.cpp`'s own comment on the fix.
+
+**Known limitations, stated plainly** (apply identically across all 5
+languages — every port mirrors Python's exact read-side behavior, not an
+independently-improved version):
 
 - No UVs anywhere in the schema (`Shell` is points + triangle indices
   only) — every reconstructed primitive gets an all-zero UV band.

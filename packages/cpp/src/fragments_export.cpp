@@ -1,13 +1,16 @@
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <flatbuffers/flatbuffers.h>
 #include <fstream>
 #include <functional>
+#include <iostream>
 #include <map>
 #include <miniz.h>
 #include <set>
 #include <sstream>
+#include <stdexcept>
 #include <tuple>
 #include <vector>
 
@@ -157,6 +160,343 @@ std::array<double, 3> scale_cache_key(bool mirrored, const std::array<double, 3>
   const double mult = std::pow(10.0, kScaleRoundNdigits);
   auto rnd = [&](double v) { return std::round(v * mult) / mult; };
   return {rnd(mirrored ? -scale[0] : scale[0]), rnd(scale[1]), rnd(scale[2])};
+}
+
+// ---- Read side (openskp#285) below ----
+
+// RepresentationClass values this module can read geometry for today -
+// mirrors Python's own _SUPPORTED_REPRESENTATION_CLASSES and its note on
+// why (only SHELL is written by any of this project's own exporters yet).
+bool is_supported_representation_class(fb::RepresentationClass cls) {
+  return cls == fb::RepresentationClass_SHELL;
+}
+
+std::array<double, 3> cross3(const std::array<double, 3>& a, const std::array<double, 3>& b) {
+  return {a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]};
+}
+
+// One normal per vertex, flat-shaded: each triangle's own face normal,
+// duplicated across its 3 vertices - the most a Shell (points + indices,
+// nothing else) can ever give back. Mirrors Python's
+// _compute_flat_normals.
+std::vector<std::array<double, 3>> compute_flat_normals(
+    const std::vector<std::array<double, 3>>& points,
+    const std::vector<std::array<std::uint32_t, 3>>& triangles) {
+  std::vector<std::array<double, 3>> normals(points.size(), std::array<double, 3>{0.0, 0.0, 1.0});
+  for (const auto& tri : triangles) {
+    const auto& pa = points[tri[0]];
+    const auto& pb = points[tri[1]];
+    const auto& pc = points[tri[2]];
+    const std::array<double, 3> u{pb[0] - pa[0], pb[1] - pa[1], pb[2] - pa[2]};
+    const std::array<double, 3> v{pc[0] - pa[0], pc[1] - pa[1], pc[2] - pa[2]};
+    auto n = cross3(u, v);
+    const double length = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+    if (length > 1e-12) {
+      n = {n[0] / length, n[1] / length, n[2] / length};
+    }
+    normals[tri[0]] = n;
+    normals[tri[1]] = n;
+    normals[tri[2]] = n;
+  }
+  return normals;
+}
+
+// Reassemble a glTF-style column-major 4x4 matrix from a Fragments
+// Transform struct (position + x/y direction unit vectors). The struct
+// never stores a Z direction - reconstructed here as `x_dir cross
+// y_dir`, matching the same right-handed orthonormal frame
+// decompose_trs() produces on export. Mirrors Python's
+// _transform_to_matrix16.
+Mat4 transform_to_matrix16(const fb::Transform& transform) {
+  const auto& pos = transform.position();
+  const auto& x_dir_s = transform.x_direction();
+  const auto& y_dir_s = transform.y_direction();
+  const std::array<double, 3> x_dir{x_dir_s.x(), x_dir_s.y(), x_dir_s.z()};
+  const std::array<double, 3> y_dir{y_dir_s.x(), y_dir_s.y(), y_dir_s.z()};
+  const auto z_dir = cross3(x_dir, y_dir);
+  return {
+      x_dir[0], x_dir[1], x_dir[2], 0.0, y_dir[0], y_dir[1], y_dir[2], 0.0,
+      z_dir[0], z_dir[1], z_dir[2], 0.0, pos.x(),  pos.y(),  pos.z(),  1.0,
+  };
+}
+
+// Minimal recursive-descent JSON reader for the read side (from_fragments)
+// - the mirror of the JSON-writing helpers this file's write side uses
+// (JsonValue, in json_export.hpp) - needed because this package
+// deliberately takes on no JSON library dependency (miniz/flatbuffers are
+// its only ones). Handles the full JSON value grammar (null/bool/number/
+// string/array/object) since a real .frag file's Attribute::data()/
+// Model::metadata() strings aren't guaranteed to come from this project's
+// own writer - a genuine ThatOpen IfcImporter export is a valid input
+// too.
+class MinimalJsonValue {
+ public:
+  enum class Kind { Null, Bool, Number, String, Array, Object };
+
+  MinimalJsonValue() : kind_(Kind::Null) {}
+
+  static MinimalJsonValue make_bool(bool b) {
+    MinimalJsonValue v;
+    v.kind_ = Kind::Bool;
+    v.bool_ = b;
+    return v;
+  }
+
+  static MinimalJsonValue make_string(std::string s) {
+    MinimalJsonValue v;
+    v.kind_ = Kind::String;
+    v.string_ = std::move(s);
+    return v;
+  }
+
+  static MinimalJsonValue make_array(std::vector<MinimalJsonValue> a) {
+    MinimalJsonValue v;
+    v.kind_ = Kind::Array;
+    v.array_ = std::move(a);
+    return v;
+  }
+
+  static MinimalJsonValue make_object(std::map<std::string, MinimalJsonValue> o) {
+    MinimalJsonValue v;
+    v.kind_ = Kind::Object;
+    v.object_ = std::move(o);
+    return v;
+  }
+
+  Kind kind() const { return kind_; }
+
+  bool as_bool() const { return bool_; }
+
+  const std::string& as_string() const { return string_; }
+
+  const std::vector<MinimalJsonValue>& as_array() const { return array_; }
+
+  const std::map<std::string, MinimalJsonValue>& as_object() const { return object_; }
+
+ private:
+  Kind kind_;
+  bool bool_{false};
+  double number_{0.0};
+  std::string string_;
+  std::vector<MinimalJsonValue> array_;
+  std::map<std::string, MinimalJsonValue> object_;
+};
+
+class MinimalJsonParser {
+ public:
+  // Owns a copy rather than storing a `const std::string&` - a caller
+  // passing a temporary (e.g. FlatBuffers' own `String::str()`, which
+  // returns by value) would otherwise leave this dangling the instant the
+  // constructor call's full expression ends, since a reference member
+  // isn't a binding that extends a temporary's lifetime the way a local
+  // `const std::string&` variable is. Caught directly: a real test
+  // (metadata's layer_hidden round-trip) silently came back empty
+  // instead of crashing outright, exactly the kind of UB that doesn't
+  // reliably announce itself.
+  explicit MinimalJsonParser(std::string s) : s_(std::move(s)), i_(0) {}
+
+  MinimalJsonValue parse() { return parse_value(); }
+
+ private:
+  std::string s_;
+  std::size_t i_;
+
+  void skip_ws() {
+    while (i_ < s_.size() && std::isspace(static_cast<unsigned char>(s_[i_]))) ++i_;
+  }
+
+  MinimalJsonValue parse_value() {
+    skip_ws();
+    if (i_ >= s_.size()) throw std::runtime_error("unexpected end of JSON");
+    const char c = s_[i_];
+    if (c == '"') return parse_string_value();
+    if (c == '{') return parse_object();
+    if (c == '[') return parse_array();
+    if (c == 't' && s_.compare(i_, 4, "true") == 0) {
+      i_ += 4;
+      return MinimalJsonValue::make_bool(true);
+    }
+    if (c == 'f' && s_.compare(i_, 5, "false") == 0) {
+      i_ += 5;
+      return MinimalJsonValue::make_bool(false);
+    }
+    if (c == 'n' && s_.compare(i_, 4, "null") == 0) {
+      i_ += 4;
+      return MinimalJsonValue();
+    }
+    // number - skip over it, this module never needs a parsed number value
+    while (i_ < s_.size() && (std::isdigit(static_cast<unsigned char>(s_[i_])) || s_[i_] == '-' ||
+                              s_[i_] == '+' || s_[i_] == '.' || s_[i_] == 'e' || s_[i_] == 'E')) {
+      ++i_;
+    }
+    return MinimalJsonValue();
+  }
+
+  std::string parse_raw_string() {
+    ++i_;  // opening quote
+    std::string out;
+    while (i_ < s_.size() && s_[i_] != '"') {
+      char c = s_[i_];
+      if (c == '\\') {
+        ++i_;
+        switch (s_[i_]) {
+          case '"':
+            out.push_back('"');
+            break;
+          case '\\':
+            out.push_back('\\');
+            break;
+          case '/':
+            out.push_back('/');
+            break;
+          case 'n':
+            out.push_back('\n');
+            break;
+          case 'r':
+            out.push_back('\r');
+            break;
+          case 't':
+            out.push_back('\t');
+            break;
+          case 'b':
+            out.push_back('\b');
+            break;
+          case 'f':
+            out.push_back('\f');
+            break;
+          case 'u': {
+            const unsigned code =
+                static_cast<unsigned>(std::stoul(s_.substr(i_ + 1, 4), nullptr, 16));
+            if (code < 0x80) {
+              out.push_back(static_cast<char>(code));
+            } else if (code < 0x800) {
+              out.push_back(static_cast<char>(0xC0 | (code >> 6)));
+              out.push_back(static_cast<char>(0x80 | (code & 0x3F)));
+            } else {
+              out.push_back(static_cast<char>(0xE0 | (code >> 12)));
+              out.push_back(static_cast<char>(0x80 | ((code >> 6) & 0x3F)));
+              out.push_back(static_cast<char>(0x80 | (code & 0x3F)));
+            }
+            i_ += 4;
+            break;
+          }
+          default:
+            break;
+        }
+        ++i_;
+      } else {
+        out.push_back(c);
+        ++i_;
+      }
+    }
+    ++i_;  // closing quote
+    return out;
+  }
+
+  MinimalJsonValue parse_string_value() {
+    return MinimalJsonValue::make_string(parse_raw_string());
+  }
+
+  MinimalJsonValue parse_array() {
+    std::vector<MinimalJsonValue> items;
+    ++i_;  // '['
+    skip_ws();
+    if (i_ < s_.size() && s_[i_] == ']') {
+      ++i_;
+      return MinimalJsonValue::make_array(std::move(items));
+    }
+    while (true) {
+      items.push_back(parse_value());
+      skip_ws();
+      if (i_ < s_.size() && s_[i_] == ',') {
+        ++i_;
+        continue;
+      }
+      if (i_ < s_.size() && s_[i_] == ']') {
+        ++i_;
+        break;
+      }
+      throw std::runtime_error("malformed JSON array");
+    }
+    return MinimalJsonValue::make_array(std::move(items));
+  }
+
+  MinimalJsonValue parse_object() {
+    std::map<std::string, MinimalJsonValue> obj;
+    ++i_;  // '{'
+    skip_ws();
+    if (i_ < s_.size() && s_[i_] == '}') {
+      ++i_;
+      return MinimalJsonValue::make_object(std::move(obj));
+    }
+    while (true) {
+      skip_ws();
+      const std::string key = parse_raw_string();
+      skip_ws();
+      ++i_;  // ':'
+      obj.emplace(key, parse_value());
+      skip_ws();
+      if (i_ < s_.size() && s_[i_] == ',') {
+        ++i_;
+        continue;
+      }
+      if (i_ < s_.size() && s_[i_] == '}') {
+        ++i_;
+        break;
+      }
+      throw std::runtime_error("malformed JSON object");
+    }
+    return MinimalJsonValue::make_object(std::move(obj));
+  }
+};
+
+// Pull the `["Name", value, "STRING"]` entry out of an item's
+// Attribute::data() strings, matching the exact convention to_fragments()
+// (and the real IfcImporter) writes. Mirrors Python's
+// _extract_name_attribute.
+std::string extract_name_attribute(const fb::Attribute* attribute) {
+  if (attribute == nullptr || attribute->data() == nullptr) return "";
+  for (const auto* raw_offset : *attribute->data()) {
+    const std::string raw = raw_offset->str();
+    try {
+      MinimalJsonParser parser(raw);
+      const MinimalJsonValue parsed = parser.parse();
+      if (parsed.kind() == MinimalJsonValue::Kind::Array) {
+        const auto& arr = parsed.as_array();
+        if (arr.size() >= 2 && arr[0].kind() == MinimalJsonValue::Kind::String &&
+            arr[0].as_string() == "Name" && arr[1].kind() == MinimalJsonValue::Kind::String) {
+          return arr[1].as_string();
+        }
+      }
+    } catch (const std::exception&) {
+      continue;
+    }
+  }
+  return "";
+}
+
+// RFC 1950 (zlib) inflate via miniz's mz_uncompress, growing the
+// destination buffer and retrying on MZ_BUF_ERROR since (unlike
+// compression) the decompressed size isn't known upfront.
+std::vector<std::uint8_t> zlib_decompress(const std::vector<std::uint8_t>& data) {
+  mz_ulong dest_cap = static_cast<mz_ulong>(std::max<std::size_t>(data.size() * 4, 4096));
+  for (int attempt = 0; attempt < 20; ++attempt) {
+    std::vector<std::uint8_t> dest(dest_cap);
+    mz_ulong dest_len = dest_cap;
+    const int rc =
+        mz_uncompress(dest.data(), &dest_len, data.data(), static_cast<mz_ulong>(data.size()));
+    if (rc == MZ_OK) {
+      dest.resize(dest_len);
+      return dest;
+    }
+    if (rc != MZ_BUF_ERROR) {
+      throw std::runtime_error("Fragments import: zlib decompression failed (miniz error " +
+                               std::to_string(rc) + ")");
+    }
+    dest_cap *= 2;
+  }
+  throw std::runtime_error(
+      "Fragments import: zlib decompression failed (destination buffer never large enough)");
 }
 
 }  // namespace
@@ -532,6 +872,293 @@ void export_fragments(const InstancedScene& scene, const std::filesystem::path& 
   const auto data = to_fragments(scene, raw);
   std::ofstream out(output_path, std::ios::binary);
   out.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
+}
+
+InstancedScene from_fragments(const std::vector<std::uint8_t>& data) {
+  std::vector<std::uint8_t> raw_bytes;
+  try {
+    raw_bytes = zlib_decompress(data);
+  } catch (const std::exception&) {
+    raw_bytes = data;
+  }
+
+  const fb::Model* model = fb::GetModel(raw_bytes.data());
+  const fb::Meshes* meshes = model->meshes();
+
+  // ---- Materials (flat RGBA - no texture concept exists in this format
+  // at all). ----
+  std::vector<GltfMaterial> gltf_materials;
+  if (meshes != nullptr && meshes->materials() != nullptr) {
+    for (const auto* mat : *meshes->materials()) {
+      GltfMaterial gm;
+      gm.pbr_metallic_roughness.base_color_factor = {mat->r() / 255.0, mat->g() / 255.0,
+                                                     mat->b() / 255.0, mat->a() / 255.0};
+      gm.pbr_metallic_roughness.metallic_factor = 0.0;
+      gm.pbr_metallic_roughness.roughness_factor = 1.0;
+      gm.double_sided = mat->rendered_faces() != fb::RenderedFaces_ONE;
+      gltf_materials.push_back(std::move(gm));
+    }
+  }
+  if (gltf_materials.empty()) {
+    GltfMaterial gm;
+    gm.pbr_metallic_roughness.base_color_factor = {0.8, 0.8, 0.8, 1.0};
+    gm.pbr_metallic_roughness.metallic_factor = 0.0;
+    gm.pbr_metallic_roughness.roughness_factor = 1.0;
+    gltf_materials.push_back(std::move(gm));
+  }
+
+  // ---- Shells -> (points, triangles), decoded once per shell index,
+  // reused by every sample referencing it. ----
+  const std::size_t n_shells =
+      (meshes != nullptr && meshes->shells() != nullptr) ? meshes->shells()->size() : 0;
+  std::vector<std::vector<std::array<double, 3>>> shell_points(n_shells);
+  std::vector<std::vector<std::array<std::uint32_t, 3>>> shell_triangles(n_shells);
+  std::vector<bool> shell_decoded(n_shells, false);
+
+  auto decode_shell = [&](std::size_t shell_idx) -> void {
+    if (shell_decoded[shell_idx]) return;
+    const fb::Shell* shell = meshes->shells()->Get(static_cast<flatbuffers::uoffset_t>(shell_idx));
+    auto& points = shell_points[shell_idx];
+    if (shell->points() != nullptr) {
+      points.reserve(shell->points()->size());
+      for (const auto* p : *shell->points()) {
+        points.push_back({p->x(), p->y(), p->z()});
+      }
+    }
+
+    auto& triangles = shell_triangles[shell_idx];
+    const bool is_big = shell->type() == fb::ShellType_BIG;
+    if (is_big) {
+      if (shell->big_profiles() != nullptr) {
+        for (const auto* profile : *shell->big_profiles()) {
+          if (profile->indices() != nullptr && profile->indices()->size() >= 3) {
+            triangles.push_back({profile->indices()->Get(0), profile->indices()->Get(1),
+                                 profile->indices()->Get(2)});
+          }
+        }
+      }
+    } else {
+      if (shell->profiles() != nullptr) {
+        for (const auto* profile : *shell->profiles()) {
+          if (profile->indices() != nullptr && profile->indices()->size() >= 3) {
+            triangles.push_back({profile->indices()->Get(0), profile->indices()->Get(1),
+                                 profile->indices()->Get(2)});
+          }
+        }
+      }
+    }
+    shell_decoded[shell_idx] = true;
+  };
+
+  // ---- Group samples by item (Meshes::meshes_items()[k] -> item index,
+  // NOT Sample::item() - see to_fragments's own comment on why the two
+  // differ; Sample::item() is just the sample's own position, always). ----
+  const std::size_t n_samples =
+      (meshes != nullptr && meshes->samples() != nullptr) ? meshes->samples()->size() : 0;
+  std::map<std::uint32_t, std::vector<std::size_t>> samples_by_item;
+  for (std::size_t k = 0; k < n_samples; ++k) {
+    const std::uint32_t item_idx =
+        meshes->meshes_items()->Get(static_cast<flatbuffers::uoffset_t>(k));
+    samples_by_item[item_idx].push_back(k);
+  }
+
+  // ---- Per-item metadata: name, guid, category, world transform.
+  // local_ids[i] IS the item index space - see to_fragments's own
+  // local_ids.push_back(item_index). ----
+  const std::size_t n_items = (model->local_ids() != nullptr) ? model->local_ids()->size() : 0;
+  std::map<std::uint32_t, std::size_t> local_id_to_item_index;
+  for (std::size_t i = 0; i < n_items; ++i) {
+    local_id_to_item_index[model->local_ids()->Get(static_cast<flatbuffers::uoffset_t>(i))] = i;
+  }
+
+  std::map<std::size_t, std::string> guid_by_item;
+  const std::size_t n_guid_items =
+      (model->guids_items() != nullptr) ? model->guids_items()->size() : 0;
+  for (std::size_t i = 0; i < n_guid_items; ++i) {
+    const std::uint32_t lid = model->guids_items()->Get(static_cast<flatbuffers::uoffset_t>(i));
+    const auto it = local_id_to_item_index.find(lid);
+    if (it != local_id_to_item_index.end() && model->guids() != nullptr &&
+        i < model->guids()->size()) {
+      guid_by_item[it->second] = model->guids()->Get(static_cast<flatbuffers::uoffset_t>(i))->str();
+    }
+  }
+
+  std::map<std::string, bool> layer_hidden;
+  std::set<std::string> generated_name_guids;
+  if (model->metadata() != nullptr) {
+    try {
+      MinimalJsonParser parser(model->metadata()->str());
+      const MinimalJsonValue metadata = parser.parse();
+      if (metadata.kind() == MinimalJsonValue::Kind::Object) {
+        const auto& obj = metadata.as_object();
+        const auto lh_it = obj.find("layer_hidden");
+        if (lh_it != obj.end() && lh_it->second.kind() == MinimalJsonValue::Kind::Object) {
+          for (const auto& [key, value] : lh_it->second.as_object()) {
+            if (value.kind() == MinimalJsonValue::Kind::Bool) layer_hidden[key] = value.as_bool();
+          }
+        }
+        const auto gn_it = obj.find("generated_name_guids");
+        if (gn_it != obj.end() && gn_it->second.kind() == MinimalJsonValue::Kind::Array) {
+          for (const auto& item : gn_it->second.as_array()) {
+            if (item.kind() == MinimalJsonValue::Kind::String)
+              generated_name_guids.insert(item.as_string());
+          }
+        }
+      }
+    } catch (const std::exception&) {
+      // leave layer_hidden/generated_name_guids empty
+    }
+  }
+
+  std::vector<InstancedMeshResource> mesh_resources;
+  std::map<std::string, std::string> resource_by_signature;
+  bool warned_unsupported = false;
+
+  std::function<std::string(std::size_t, const std::string&)> build_resource_for_item =
+      [&](std::size_t item_idx, const std::string& item_name) -> std::string {
+    const auto sample_it = samples_by_item.find(static_cast<std::uint32_t>(item_idx));
+    std::vector<std::size_t> sample_indices =
+        sample_it != samples_by_item.end() ? sample_it->second : std::vector<std::size_t>{};
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> signature;
+    std::vector<LocalPrimitive> primitives;
+    for (const auto k : sample_indices) {
+      const fb::Sample* sample = meshes->samples()->Get(static_cast<flatbuffers::uoffset_t>(k));
+      const std::uint32_t rep_idx = sample->representation();
+      const std::uint32_t mat_idx = sample->material();
+      const fb::Representation* representation =
+          (meshes->representations() != nullptr && rep_idx < meshes->representations()->size())
+              ? meshes->representations()->Get(static_cast<flatbuffers::uoffset_t>(rep_idx))
+              : nullptr;
+      const fb::RepresentationClass rep_class = representation != nullptr
+                                                    ? representation->representation_class()
+                                                    : fb::RepresentationClass_SHELL;
+      if (!is_supported_representation_class(rep_class)) {
+        if (!warned_unsupported) {
+          std::cerr
+              << "openskp from_fragments: skipping a sample with unsupported RepresentationClass="
+              << static_cast<int>(rep_class) << " (only SHELL is read today).\n";
+          warned_unsupported = true;
+        }
+        continue;
+      }
+      signature.emplace_back(rep_idx, mat_idx);
+      // Representation::id() is the index into Meshes::shells() - NOT the
+      // representation's own position in the representations vector. See
+      // Python's from_fragments's own comment on why this must follow
+      // id(), matching the real reader's own fetch-functions.ts.
+      const std::uint32_t shell_idx = representation->id();
+      if (shell_idx >= n_shells) continue;
+      decode_shell(shell_idx);
+      const auto& points = shell_points[shell_idx];
+      const auto& triangles = shell_triangles[shell_idx];
+      const auto normals = compute_flat_normals(points, triangles);
+
+      LocalPrimitive prim;
+      prim.positions.reserve(points.size() * 3);
+      prim.normals.reserve(points.size() * 3);
+      for (std::size_t i = 0; i < points.size(); ++i) {
+        prim.positions.push_back(static_cast<float>(points[i][0]));
+        prim.positions.push_back(static_cast<float>(points[i][1]));
+        prim.positions.push_back(static_cast<float>(points[i][2]));
+        prim.normals.push_back(static_cast<float>(normals[i][0]));
+        prim.normals.push_back(static_cast<float>(normals[i][1]));
+        prim.normals.push_back(static_cast<float>(normals[i][2]));
+      }
+      prim.uvs.assign(points.size() * 2, 0.0f);
+      prim.indices.reserve(triangles.size() * 3);
+      for (const auto& tri : triangles) {
+        prim.indices.push_back(tri[0]);
+        prim.indices.push_back(tri[1]);
+        prim.indices.push_back(tri[2]);
+      }
+      prim.material_index = mat_idx < gltf_materials.size() ? mat_idx : 0;
+      primitives.push_back(std::move(prim));
+    }
+
+    std::string sig_key;
+    for (const auto& [r, m] : signature) {
+      sig_key += std::to_string(r) + ":" + std::to_string(m) + ",";
+    }
+    if (!sig_key.empty()) {
+      const auto found = resource_by_signature.find(sig_key);
+      if (found != resource_by_signature.end()) return found->second;
+    }
+
+    const std::string resource_id = "frag-" + std::to_string(item_idx);
+    InstancedMeshResource resource;
+    resource.id = resource_id;
+    resource.definition_id = static_cast<EntityId>(item_idx);
+    resource.definition_name = item_name.empty() ? resource_id : item_name;
+    resource.variant_key = "default";
+    resource.primitives = std::move(primitives);
+    mesh_resources.push_back(std::move(resource));
+    if (!sig_key.empty()) resource_by_signature[sig_key] = resource_id;
+    return resource_id;
+  };
+
+  // ---- Spatial structure -> InstancedNode tree. ----
+  std::function<InstancedNode(const fb::SpatialStructure*)> build_node =
+      [&](const fb::SpatialStructure* spatial) -> InstancedNode {
+    const auto local_id = spatial->local_id();
+    std::string category = spatial->category() != nullptr ? spatial->category()->str() : "";
+
+    InstancedNode node;
+    node.definition_name = category;
+    node.layer = category;
+
+    if (local_id.has_value()) {
+      const auto item_it = local_id_to_item_index.find(local_id.value());
+      if (item_it != local_id_to_item_index.end()) {
+        const std::size_t item_idx = item_it->second;
+        const fb::Attribute* attribute =
+            (model->attributes() != nullptr && item_idx < model->attributes()->size())
+                ? model->attributes()->Get(static_cast<flatbuffers::uoffset_t>(item_idx))
+                : nullptr;
+        node.name = extract_name_attribute(attribute);
+        const auto guid_it = guid_by_item.find(item_idx);
+        node.guid = guid_it != guid_by_item.end() ? guid_it->second : "";
+        node.name_is_generated = !node.guid.empty() && generated_name_guids.count(node.guid) > 0;
+        const auto sample_it = samples_by_item.find(static_cast<std::uint32_t>(item_idx));
+        if (sample_it != samples_by_item.end()) {
+          node.mesh_resource_id =
+              build_resource_for_item(item_idx, node.name.empty() ? category : node.name);
+          const fb::Transform* transform = meshes->global_transforms()->Get(
+              static_cast<flatbuffers::uoffset_t>(sample_it->second[0]));
+          node.matrix = transform_to_matrix16(*transform);
+        }
+      }
+    }
+
+    if (spatial->children() != nullptr) {
+      node.children.reserve(spatial->children()->size());
+      for (const auto* child : *spatial->children()) {
+        node.children.push_back(build_node(child));
+      }
+    }
+    return node;
+  };
+
+  InstancedScene scene;
+  scene.bounds = std::nullopt;
+  if (model->spatial_structure() != nullptr) {
+    scene.scene_hierarchy = build_node(model->spatial_structure());
+  } else {
+    scene.scene_hierarchy.name = "ROOT";
+    scene.scene_hierarchy.definition_name = "ROOT";
+  }
+  scene.mesh_resources = std::move(mesh_resources);
+  scene.gltf_materials = std::move(gltf_materials);
+  scene.layer_hidden = std::move(layer_hidden);
+
+  return scene;
+}
+
+InstancedScene read_fragments(const std::filesystem::path& path) {
+  std::ifstream in(path, std::ios::binary);
+  if (!in) throw std::runtime_error("Fragments import: could not open " + path.string());
+  std::vector<std::uint8_t> data((std::istreambuf_iterator<char>(in)),
+                                 std::istreambuf_iterator<char>());
+  return from_fragments(data);
 }
 
 }  // namespace openskp
