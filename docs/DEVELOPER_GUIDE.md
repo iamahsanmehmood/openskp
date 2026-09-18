@@ -504,11 +504,12 @@ What's carried through from the source `.skp` file:
 
 ### Reading a `.frag` file back
 
-> **Python and TypeScript.** Not yet ported to .NET, Dart, or C++; see
+> **Python, TypeScript, and .NET.** Not yet ported to Dart or C++; see
 > [docs/LANGUAGE_PARITY.md](LANGUAGE_PARITY.md).
 
 The mirror direction: `openskp.export.fragments.read()`/`from_fragments()`
-(Python) or `fromFragments()` (TypeScript) parse a real `.frag` file
+(Python), `fromFragments()` (TypeScript), or
+`FragmentsExport.FromFragments()` (.NET) parse a real `.frag` file
 straight into an `InstancedScene` — OpenSKP's 6th input format alongside
 `.skp`. Any file works, not just one this project wrote — ThatOpen's own
 real `IfcImporter` output, or anyone else's:
@@ -534,6 +535,14 @@ const scene = fromFragments(fs.readFileSync('model.frag'));
 // from buildInstancedScene() would.
 ```
 
+```csharp
+using OpenSkp.Fragments;
+
+var scene = FragmentsExport.ReadFragments("model.frag");
+// ...or FragmentsExport.FromFragments(bytes) directly from an in-memory
+// buffer. Rides every other export this project already has.
+```
+
 **Python** verified two ways: round-trips this project's own output
 exactly (world-space vertex positions match to the last bit, not just
 object counts — see `tests/test_fragments.py`'s `TestFromFragments`), and
@@ -543,15 +552,15 @@ file through this same module and loading the result back through the
 actual `@thatopen/fragments` runtime preserves real IFC GUIDs and
 category names.
 
-**TypeScript** verified round-trips this project's own output exactly
-(including a primitive large enough to force the export side to split
-across multiple shells — the read side has to walk every sample for an
-item and reassemble them, not just read the first one) — not yet tested
-against a real ThatOpen-produced file the way Python's port was, stated
-honestly rather than implied equivalent.
+**TypeScript and .NET** both verified round-trips this project's own
+output exactly (including a primitive large enough to force the export
+side to split across multiple shells — the read side has to walk every
+sample for an item and reassemble them, not just read the first one) —
+not yet tested against a real ThatOpen-produced file the way Python's
+port was, stated honestly rather than implied equivalent.
 
-**Known limitations, stated plainly** (apply identically to both Python
-and TypeScript — the TypeScript port mirrors Python's exact read-side
+**Known limitations, stated plainly** (apply identically to Python,
+TypeScript, and .NET — both ports mirror Python's exact read-side
 behavior, not an independently-improved version):
 
 - No UVs anywhere in the schema (`Shell` is points + triangle indices

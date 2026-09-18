@@ -861,4 +861,198 @@ namespace OpenSkp.Fragments.Tests
             Assert.Equal(1, meshes.SamplesLength);
         }
     }
+
+    /// <summary>C# port of TypeScript's <c>fromFragments</c> tests
+    /// (<c>packages/typescript/tests/fragments.test.ts</c>'s "fromFragments"
+    /// describe block) - reading a .frag file back (openskp#285).</summary>
+    public class FromFragmentsTests
+    {
+        private static readonly double[] Identity =
+        {
+            1, 0, 0, 0,
+            0, 1, 0, 0,
+            0, 0, 1, 0,
+            0, 0, 0, 1,
+        };
+
+        private static InstancedScene MakeTwoInstanceScene()
+        {
+            var resource = new InstancedMeshResource
+            {
+                Id = "mesh_0",
+                DefinitionId = 1,
+                DefinitionName = "Box",
+                VariantKey = "1|255,255,255",
+                Primitives = new List<LocalPrimitive>
+                {
+                    new LocalPrimitive
+                    {
+                        Positions = new float[] { 0,0,0, 1,0,0, 1,1,0, 0,1,0, 0,0,1, 1,0,1, 1,1,1, 0,1,1 },
+                        Normals = new float[24],
+                        Uvs = new float[16],
+                        Indices = new uint[] { 0,1,2, 0,2,3, 4,6,5, 4,7,6 },
+                        MaterialIndex = 0,
+                    },
+                },
+            };
+            var nodeA = new InstancedNode { Name = "Box_A", Layer = "Framing", Matrix = Identity, MeshResourceId = "mesh_0", Guid = "" };
+            var nodeB = new InstancedNode { Name = "Box_B", Layer = "Framing", Matrix = Identity, MeshResourceId = "mesh_0", Guid = "" };
+            return new InstancedScene
+            {
+                MeshResources = new List<InstancedMeshResource> { resource },
+                GltfMaterials = new List<object> { new Dictionary<string, object>() },
+                SceneHierarchy = new InstancedNode
+                {
+                    Name = "ROOT",
+                    Matrix = Identity,
+                    Children = new List<InstancedNode> { nodeA, nodeB },
+                },
+            };
+        }
+
+        [Fact]
+        public void RoundTripsABasicTwoInstanceScene()
+        {
+            var scene = MakeTwoInstanceScene();
+            var raw = FragmentsExport.ToFragments(scene, raw: true);
+            var back = FragmentsExport.FromFragments(raw);
+
+            Assert.Single(back.MeshResources);
+            Assert.Single(back.MeshResources[0].Primitives);
+            // MakeTwoInstanceScene's box resource carries 8 vertices but
+            // only 4 triangles (2 of the cube's 6 faces) - matches this
+            // file's own MakeBoxResource shape exactly, not a full cube.
+            Assert.Equal(8 * 3, back.MeshResources[0].Primitives[0].Positions.Length);
+            Assert.Equal(4 * 3, back.MeshResources[0].Primitives[0].Indices.Length);
+
+            Assert.Equal(2, back.SceneHierarchy.Children.Count);
+            var a = back.SceneHierarchy.Children[0];
+            var b = back.SceneHierarchy.Children[1];
+            Assert.Equal("Box_A", a.Name);
+            Assert.Equal("Box_B", b.Name);
+            Assert.Equal("Framing", a.Layer);
+            Assert.Equal(a.MeshResourceId, b.MeshResourceId);
+            Assert.NotEmpty(back.GltfMaterials);
+        }
+
+        [Fact]
+        public void RoundTripsBothRawAndZlibCompressedWireFormats()
+        {
+            var scene = MakeTwoInstanceScene();
+            var rawBytes = FragmentsExport.ToFragments(scene, raw: true);
+            var compressedBytes = FragmentsExport.ToFragments(scene, raw: false);
+            Assert.NotEqual(rawBytes, compressedBytes);
+
+            var backFromRaw = FragmentsExport.FromFragments(rawBytes);
+            var backFromCompressed = FragmentsExport.FromFragments(compressedBytes);
+
+            Assert.Equal(
+                backFromRaw.MeshResources[0].Primitives[0].Indices.Length,
+                backFromCompressed.MeshResources[0].Primitives[0].Indices.Length);
+            Assert.Equal(
+                backFromRaw.SceneHierarchy.Children.Select(c => c.Name),
+                backFromCompressed.SceneHierarchy.Children.Select(c => c.Name));
+        }
+
+        [Fact]
+        public void PreservesRealSourceGuidsAndLayerHiddenMetadata()
+        {
+            var scene = MakeTwoInstanceScene();
+            scene.SceneHierarchy.Children[0].Guid = "F160C36229782F47A9857FC88DD1F2CB";
+            scene.LayerHidden = new Dictionary<string, bool> { ["Framing"] = false, ["Cladding"] = true };
+            var raw = FragmentsExport.ToFragments(scene, raw: true);
+            var back = FragmentsExport.FromFragments(raw);
+
+            Assert.Equal("F160C36229782F47A9857FC88DD1F2CB", back.SceneHierarchy.Children[0].Guid);
+            Assert.Equal(scene.LayerHidden, back.LayerHidden);
+        }
+
+        private static LocalPrimitive GridPrimitive(int cols, int rows)
+        {
+            var positions = new float[cols * rows * 3];
+            for (int j = 0; j < rows; j++)
+            {
+                for (int i = 0; i < cols; i++)
+                {
+                    int v = j * cols + i;
+                    positions[v * 3] = i;
+                    positions[v * 3 + 1] = j;
+                    positions[v * 3 + 2] = 0;
+                }
+            }
+
+            var triCells = (cols - 1) * (rows - 1);
+            var indices = new uint[triCells * 6];
+            int k = 0;
+            for (int j = 0; j < rows - 1; j++)
+            {
+                for (int i = 0; i < cols - 1; i++)
+                {
+                    uint a = (uint)(j * cols + i);
+                    uint b = a + 1;
+                    uint c = a + (uint)cols;
+                    uint d = c + 1;
+                    indices[k++] = a; indices[k++] = b; indices[k++] = d;
+                    indices[k++] = a; indices[k++] = d; indices[k++] = c;
+                }
+            }
+
+            return new LocalPrimitive
+            {
+                Positions = positions,
+                Normals = new float[cols * rows * 3],
+                Uvs = new float[cols * rows * 2],
+                Indices = indices,
+                MaterialIndex = 0,
+            };
+        }
+
+        [Fact]
+        public void ReconstructsEveryTriangleOfAPrimitiveSplitAcrossMultipleShells()
+        {
+            // Same grid-primitive shape as the oversized-shell-splitting
+            // tests, forcing the export side to split into several shells -
+            // the read side has to walk every sample for the item and
+            // reassemble them into the ONE mesh resource, not just read the
+            // first shell.
+            const int cols = 210, rows = 165; // 209*164*2 = 68,552 triangles - forces a split (> 65535)
+            var prim = GridPrimitive(cols, rows);
+            long expectedTriangles = (long)(cols - 1) * (rows - 1) * 2;
+
+            var scene = new InstancedScene
+            {
+                MeshResources = new List<InstancedMeshResource>
+                {
+                    new InstancedMeshResource
+                    {
+                        Id = "mesh_big",
+                        DefinitionId = 1,
+                        DefinitionName = "BigMesh",
+                        VariantKey = "1|255,255,255",
+                        Primitives = new List<LocalPrimitive> { prim },
+                    },
+                },
+                GltfMaterials = new List<object> { new Dictionary<string, object>() },
+                SceneHierarchy = new InstancedNode
+                {
+                    Name = "ROOT",
+                    Matrix = Identity,
+                    Children = new List<InstancedNode>
+                    {
+                        new InstancedNode { Name = "BigMesh1", Matrix = Identity, MeshResourceId = "mesh_big", Guid = "" },
+                    },
+                },
+            };
+
+            var raw = FragmentsExport.ToFragments(scene, raw: true);
+
+            var model = Fb.Model.GetRootAsModel(new Google.FlatBuffers.ByteBuffer(raw));
+            Assert.True(model.Meshes!.Value.ShellsLength > 1);
+
+            var back = FragmentsExport.FromFragments(raw);
+            Assert.Single(back.MeshResources);
+            long totalTrianglesBack = back.MeshResources[0].Primitives.Sum(p => (long)p.Indices.Length / 3);
+            Assert.Equal(expectedTriangles, totalTrianglesBack);
+        }
+    }
 }

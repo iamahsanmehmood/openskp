@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
@@ -295,6 +296,127 @@ namespace OpenSkp.Fragments
                 JsonString(kv.Key) + ":" + (kv.Value ? "true" : "false")));
             var generatedGuidsJson = string.Join(",", generatedNameGuids.Select(JsonString));
             return "{\"layer_hidden\":{" + layerHiddenJson + "},\"generated_name_guids\":[" + generatedGuidsJson + "]}";
+        }
+
+        // Minimal recursive-descent JSON reader for the read side
+        // (FromFragments) - the mirror of JsonEscape/JsonString/
+        // MetadataJson above, needed because those only write JSON and
+        // this package deliberately takes on no JSON library dependency
+        // (see the class-level doc comment on why - Google.FlatBuffers is
+        // this package's only one). Handles the full JSON value grammar
+        // (null/bool/number/string/array/object) since a real .frag file's
+        // Attribute.Data/Metadata strings aren't guaranteed to come from
+        // this project's own writer - any real @thatopen/fragments-derived
+        // file (e.g. a genuine IfcImporter export) is a valid input too.
+        private static class MinimalJson
+        {
+            public static object? Parse(string s)
+            {
+                int i = 0;
+                var value = ParseValue(s, ref i);
+                return value;
+            }
+
+            private static void SkipWhitespace(string s, ref int i)
+            {
+                while (i < s.Length && char.IsWhiteSpace(s[i])) i++;
+            }
+
+            private static object? ParseValue(string s, ref int i)
+            {
+                SkipWhitespace(s, ref i);
+                if (i >= s.Length) throw new FormatException("unexpected end of JSON");
+                char c = s[i];
+                if (c == '"') return ParseString(s, ref i);
+                if (c == '{') return ParseObject(s, ref i);
+                if (c == '[') return ParseArray(s, ref i);
+                if (c == 't' && s.Substring(i, 4) == "true") { i += 4; return true; }
+                if (c == 'f' && s.Substring(i, 5) == "false") { i += 5; return false; }
+                if (c == 'n' && s.Substring(i, 4) == "null") { i += 4; return null; }
+                return ParseNumber(s, ref i);
+            }
+
+            private static string ParseString(string s, ref int i)
+            {
+                i++; // opening quote
+                var sb = new StringBuilder();
+                while (s[i] != '"')
+                {
+                    char c = s[i];
+                    if (c == '\\')
+                    {
+                        i++;
+                        switch (s[i])
+                        {
+                            case '"': sb.Append('"'); break;
+                            case '\\': sb.Append('\\'); break;
+                            case '/': sb.Append('/'); break;
+                            case 'n': sb.Append('\n'); break;
+                            case 'r': sb.Append('\r'); break;
+                            case 't': sb.Append('\t'); break;
+                            case 'b': sb.Append('\b'); break;
+                            case 'f': sb.Append('\f'); break;
+                            case 'u':
+                                sb.Append((char)Convert.ToInt32(s.Substring(i + 1, 4), 16));
+                                i += 4;
+                                break;
+                        }
+                        i++;
+                    }
+                    else
+                    {
+                        sb.Append(c);
+                        i++;
+                    }
+                }
+                i++; // closing quote
+                return sb.ToString();
+            }
+
+            private static double ParseNumber(string s, ref int i)
+            {
+                int start = i;
+                while (i < s.Length && (char.IsDigit(s[i]) || s[i] == '-' || s[i] == '+' || s[i] == '.' || s[i] == 'e' || s[i] == 'E')) i++;
+                return double.Parse(s.Substring(start, i - start), CultureInfo.InvariantCulture);
+            }
+
+            private static List<object?> ParseArray(string s, ref int i)
+            {
+                var list = new List<object?>();
+                i++; // '['
+                SkipWhitespace(s, ref i);
+                if (s[i] == ']') { i++; return list; }
+                while (true)
+                {
+                    list.Add(ParseValue(s, ref i));
+                    SkipWhitespace(s, ref i);
+                    if (s[i] == ',') { i++; continue; }
+                    if (s[i] == ']') { i++; break; }
+                    throw new FormatException("malformed JSON array");
+                }
+                return list;
+            }
+
+            private static Dictionary<string, object?> ParseObject(string s, ref int i)
+            {
+                var dict = new Dictionary<string, object?>();
+                i++; // '{'
+                SkipWhitespace(s, ref i);
+                if (s[i] == '}') { i++; return dict; }
+                while (true)
+                {
+                    SkipWhitespace(s, ref i);
+                    var key = ParseString(s, ref i);
+                    SkipWhitespace(s, ref i);
+                    i++; // ':'
+                    dict[key] = ParseValue(s, ref i);
+                    SkipWhitespace(s, ref i);
+                    if (s[i] == ',') { i++; continue; }
+                    if (s[i] == '}') { i++; break; }
+                    throw new FormatException("malformed JSON object");
+                }
+                return dict;
+            }
         }
 
         // RFC 1950 (zlib) wrapper around .NET's own raw DEFLATE
@@ -763,5 +885,410 @@ namespace OpenSkp.Fragments
             if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir!);
             File.WriteAllBytes(outputPath, ToFragments(scene, raw));
         }
+
+        // RepresentationClass values this module can read geometry for
+        // today - mirrors Python's own _SUPPORTED_REPRESENTATION_CLASSES
+        // and its note on why (only SHELL is written by any of this
+        // project's own exporters yet).
+        private static readonly HashSet<Fb.RepresentationClass> SupportedRepresentationClasses =
+            new HashSet<Fb.RepresentationClass> { Fb.RepresentationClass.SHELL };
+
+        private static (double, double, double) Cross3((double, double, double) a, (double, double, double) b) =>
+            (a.Item2 * b.Item3 - a.Item3 * b.Item2,
+             a.Item3 * b.Item1 - a.Item1 * b.Item3,
+             a.Item1 * b.Item2 - a.Item2 * b.Item1);
+
+        /// <summary>One normal per vertex, flat-shaded: each triangle's own
+        /// face normal, duplicated across its 3 vertices - the most a Shell
+        /// (points + indices, nothing else) can ever give back. Mirrors
+        /// Python's <c>_compute_flat_normals</c>.</summary>
+        private static (double, double, double)[] ComputeFlatNormals(
+            (double, double, double)[] points, (uint, uint, uint)[] triangles)
+        {
+            var normals = new (double, double, double)[points.Length];
+            for (int i = 0; i < normals.Length; i++) normals[i] = (0.0, 0.0, 1.0);
+            foreach (var (a, b, c) in triangles)
+            {
+                var pa = points[a]; var pb = points[b]; var pc = points[c];
+                var u = (pb.Item1 - pa.Item1, pb.Item2 - pa.Item2, pb.Item3 - pa.Item3);
+                var v = (pc.Item1 - pa.Item1, pc.Item2 - pa.Item2, pc.Item3 - pa.Item3);
+                var n = Cross3(u, v);
+                double length = Math.Sqrt(n.Item1 * n.Item1 + n.Item2 * n.Item2 + n.Item3 * n.Item3);
+                if (length > 1e-12) n = (n.Item1 / length, n.Item2 / length, n.Item3 / length);
+                normals[a] = n; normals[b] = n; normals[c] = n;
+            }
+            return normals;
+        }
+
+        /// <summary>Reassemble a glTF-style column-major 4x4 matrix from a
+        /// Fragments <c>Transform</c> struct (position + x/y direction unit
+        /// vectors). The struct never stores a Z direction - reconstructed
+        /// here as <c>xDir cross yDir</c>, matching the same right-handed
+        /// orthonormal frame <see cref="DecomposeTrs"/> produces on export.
+        /// Mirrors Python's <c>_transform_to_matrix16</c>.</summary>
+        private static double[] TransformToMatrix16(Fb.Transform transform)
+        {
+            var pos = transform.Position;
+            var xDirS = transform.XDirection;
+            var yDirS = transform.YDirection;
+            var xDir = ((double)xDirS.X, (double)xDirS.Y, (double)xDirS.Z);
+            var yDir = ((double)yDirS.X, (double)yDirS.Y, (double)yDirS.Z);
+            var zDir = Cross3(xDir, yDir);
+            return new[]
+            {
+                xDir.Item1, xDir.Item2, xDir.Item3, 0.0,
+                yDir.Item1, yDir.Item2, yDir.Item3, 0.0,
+                zDir.Item1, zDir.Item2, zDir.Item3, 0.0,
+                pos.X, pos.Y, pos.Z, 1.0,
+            };
+        }
+
+        /// <summary>Pull the <c>["Name", value, "STRING"]</c> entry out of
+        /// an item's <c>Attribute.Data</c> strings, matching the exact
+        /// convention <see cref="ToFragments"/> (and the real
+        /// <c>IfcImporter</c>) writes. Mirrors Python's
+        /// <c>_extract_name_attribute</c>.</summary>
+        private static string ExtractNameAttribute(Fb.Attribute? attribute)
+        {
+            if (attribute == null) return "";
+            var attr = attribute.Value;
+            for (int i = 0; i < attr.DataLength; i++)
+            {
+                var raw = attr.Data(i);
+                if (raw == null) continue;
+                object? parsed;
+                try { parsed = MinimalJson.Parse(raw); }
+                catch { continue; }
+                if (parsed is List<object?> triple && triple.Count >= 2 && (triple[0] as string) == "Name")
+                {
+                    return triple[1]?.ToString() ?? "";
+                }
+            }
+            return "";
+        }
+
+        // RFC 1950 (zlib) inflate: skip the 2-byte header, run the rest
+        // through .NET's own raw-DEFLATE DeflateStream, ignore the trailing
+        // 4-byte Adler-32 (DeflateStream stops at the deflate stream's own
+        // end marker regardless of what follows). Mirror of ZlibCompress
+        // above, for the same netstandard2.0-compatibility reason.
+        private static byte[] ZlibDecompress(byte[] data)
+        {
+            using var input = new MemoryStream(data, 2, data.Length - 2);
+            using var deflate = new DeflateStream(input, CompressionMode.Decompress);
+            using var output = new MemoryStream();
+            deflate.CopyTo(output);
+            return output.ToArray();
+        }
+
+        /// <summary>Parses a real <c>.frag</c> file's bytes into an
+        /// <see cref="InstancedScene"/> - the mirror of
+        /// <see cref="ToFragments"/>. Accepts either the zlib-compressed
+        /// wire format (the default <see cref="ToFragments"/>/real loader
+        /// convention) or raw, uncompressed FlatBuffers bytes; detected
+        /// automatically the same way the real <c>@thatopen/fragments</c>
+        /// loader does, by attempting zlib inflation first.
+        ///
+        /// Known gaps, matching Python's own read side exactly (not
+        /// independently improved on here - see openskp#285):
+        /// <see cref="InstancedNode.PositionMm"/>/<see cref="InstancedNode.Properties"/>/
+        /// <see cref="InstancedNode.AttributeDictionaries"/> are left at
+        /// their defaults, since the Fragments format doesn't carry them
+        /// separately from the <c>Name</c> attribute this does extract.</summary>
+        public static InstancedScene FromFragments(byte[] data)
+        {
+            byte[] rawBytes;
+            try { rawBytes = data.Length > 2 ? ZlibDecompress(data) : data; }
+            catch { rawBytes = data; }
+
+            var bb = new ByteBuffer(rawBytes);
+            var model = Fb.Model.GetRootAsModel(bb);
+            var meshes = model.Meshes;
+
+            // ---- Materials (flat RGBA - no texture concept exists in this
+            // format at all). ----
+            var gltfMaterials = new List<object>();
+            if (meshes != null)
+            {
+                var m = meshes.Value;
+                for (int i = 0; i < m.MaterialsLength; i++)
+                {
+                    var mat = m.Materials(i)!.Value;
+                    gltfMaterials.Add(new Dictionary<string, object>
+                    {
+                        ["pbrMetallicRoughness"] = new Dictionary<string, object>
+                        {
+                            ["baseColorFactor"] = new[] { mat.R / 255.0, mat.G / 255.0, mat.B / 255.0, mat.A / 255.0 },
+                            ["metallicFactor"] = 0.0,
+                            ["roughnessFactor"] = 1.0,
+                        },
+                        ["doubleSided"] = mat.RenderedFaces != Fb.RenderedFaces.ONE,
+                    });
+                }
+            }
+            if (gltfMaterials.Count == 0)
+            {
+                gltfMaterials.Add(new Dictionary<string, object>
+                {
+                    ["pbrMetallicRoughness"] = new Dictionary<string, object>
+                    {
+                        ["baseColorFactor"] = new[] { 0.8, 0.8, 0.8, 1.0 },
+                        ["metallicFactor"] = 0.0,
+                        ["roughnessFactor"] = 1.0,
+                    },
+                });
+            }
+
+            // ---- Shells -> (points, triangles), decoded once per shell
+            // index, reused by every sample referencing it. ----
+            int nShells = meshes?.ShellsLength ?? 0;
+            var shellPoints = new (double, double, double)[nShells][];
+            var shellTriangles = new (uint, uint, uint)[nShells][];
+            var shellDecoded = new bool[nShells];
+
+            ((double, double, double)[] points, (uint, uint, uint)[] triangles) DecodeShell(int shellIdx)
+            {
+                if (shellDecoded[shellIdx]) return (shellPoints[shellIdx], shellTriangles[shellIdx]);
+                var shell = meshes!.Value.Shells(shellIdx)!.Value;
+                int nPoints = shell.PointsLength;
+                var pts = new (double, double, double)[nPoints];
+                for (int j = 0; j < nPoints; j++)
+                {
+                    var p = shell.Points(j)!.Value;
+                    pts[j] = (p.X, p.Y, p.Z);
+                }
+
+                bool isBig = shell.Type == Fb.ShellType.BIG;
+                var tris = new List<(uint, uint, uint)>();
+                if (isBig)
+                {
+                    for (int j = 0; j < shell.BigProfilesLength; j++)
+                    {
+                        var profile = shell.BigProfiles(j)!.Value;
+                        if (profile.IndicesLength >= 3)
+                            tris.Add((profile.Indices(0), profile.Indices(1), profile.Indices(2)));
+                    }
+                }
+                else
+                {
+                    for (int j = 0; j < shell.ProfilesLength; j++)
+                    {
+                        var profile = shell.Profiles(j)!.Value;
+                        if (profile.IndicesLength >= 3)
+                            tris.Add((profile.Indices(0), profile.Indices(1), profile.Indices(2)));
+                    }
+                }
+
+                shellPoints[shellIdx] = pts;
+                shellTriangles[shellIdx] = tris.ToArray();
+                shellDecoded[shellIdx] = true;
+                return (pts, shellTriangles[shellIdx]);
+            }
+
+            // ---- Group samples by item (Meshes.MeshesItems[k] -> item
+            // index, NOT Sample.Item() - see ToFragments's own comment on
+            // why the two differ; Sample.Item() is just the sample's own
+            // position, always). ----
+            int nSamples = meshes?.SamplesLength ?? 0;
+            var samplesByItem = new Dictionary<uint, List<int>>();
+            for (int k = 0; k < nSamples; k++)
+            {
+                uint itemIdx = meshes!.Value.MeshesItems(k);
+                if (!samplesByItem.TryGetValue(itemIdx, out var list))
+                {
+                    list = new List<int>();
+                    samplesByItem[itemIdx] = list;
+                }
+                list.Add(k);
+            }
+
+            // ---- Per-item metadata: name, guid, category, world
+            // transform. localIds[i] IS the item index space - see
+            // ToFragments's own localIds.Add(itemIndex). ----
+            int nItems = model.LocalIdsLength;
+            var localIdToItemIndex = new Dictionary<uint, int>();
+            for (int i = 0; i < nItems; i++) localIdToItemIndex[model.LocalIds(i)] = i;
+
+            var guidByItem = new Dictionary<int, string>();
+            int nGuidItems = model.GuidsItemsLength;
+            for (int i = 0; i < nGuidItems; i++)
+            {
+                uint lid = model.GuidsItems(i);
+                if (localIdToItemIndex.TryGetValue(lid, out var itemIdx) && i < model.GuidsLength)
+                {
+                    guidByItem[itemIdx] = model.Guids(i) ?? "";
+                }
+            }
+
+            var layerHidden = new Dictionary<string, bool>();
+            var generatedNameGuids = new HashSet<string>();
+            var metadataRaw = model.Metadata;
+            if (!string.IsNullOrEmpty(metadataRaw))
+            {
+                try
+                {
+                    if (MinimalJson.Parse(metadataRaw) is Dictionary<string, object?> meta)
+                    {
+                        if (meta.TryGetValue("layer_hidden", out var lhObj) && lhObj is Dictionary<string, object?> lh)
+                        {
+                            foreach (var kv in lh)
+                                if (kv.Value is bool b) layerHidden[kv.Key] = b;
+                        }
+                        if (meta.TryGetValue("generated_name_guids", out var gnObj) && gnObj is List<object?> gn)
+                        {
+                            foreach (var v in gn)
+                                if (v is string s) generatedNameGuids.Add(s);
+                        }
+                    }
+                }
+                catch { /* leave layerHidden/generatedNameGuids empty */ }
+            }
+
+            var meshResources = new List<InstancedMeshResource>();
+            var resourceBySignature = new Dictionary<string, string>();
+            bool warnedUnsupported = false;
+
+            string BuildResourceForItem(int itemIdx, string itemName)
+            {
+                var sampleIndices = samplesByItem.TryGetValue((uint)itemIdx, out var l) ? l : new List<int>();
+                var signature = new List<(uint, uint)>();
+                var primitives = new List<LocalPrimitive>();
+                foreach (var k in sampleIndices)
+                {
+                    var sample = meshes!.Value.Samples(k)!.Value;
+                    uint repIdx = sample.Representation;
+                    uint matIdx = sample.Material;
+                    Fb.Representation? representation = repIdx < meshes.Value.RepresentationsLength
+                        ? meshes.Value.Representations((int)repIdx) : null;
+                    var repClass = representation?.RepresentationClass ?? Fb.RepresentationClass.SHELL;
+                    if (!SupportedRepresentationClasses.Contains(repClass))
+                    {
+                        if (!warnedUnsupported)
+                        {
+                            Console.Error.WriteLine(
+                                $"OpenSkp.Fragments.FromFragments: skipping a sample with unsupported " +
+                                $"RepresentationClass={repClass} (only SHELL is read today).");
+                            warnedUnsupported = true;
+                        }
+                        continue;
+                    }
+                    signature.Add((repIdx, matIdx));
+                    // Representation.Id is the index into Meshes.Shells -
+                    // NOT the representation's own position in the
+                    // Representations vector. See Python's
+                    // from_fragments's own comment on why this must follow
+                    // Id, matching the real reader's own fetch-functions.ts.
+                    uint shellIdx = representation!.Value.Id;
+                    if (shellIdx >= nShells) continue;
+                    var (points, triangles) = DecodeShell((int)shellIdx);
+                    var normals = ComputeFlatNormals(points, triangles);
+                    var positions = new float[points.Length * 3];
+                    var normalsArr = new float[points.Length * 3];
+                    for (int i = 0; i < points.Length; i++)
+                    {
+                        positions[i * 3] = (float)points[i].Item1;
+                        positions[i * 3 + 1] = (float)points[i].Item2;
+                        positions[i * 3 + 2] = (float)points[i].Item3;
+                        normalsArr[i * 3] = (float)normals[i].Item1;
+                        normalsArr[i * 3 + 1] = (float)normals[i].Item2;
+                        normalsArr[i * 3 + 2] = (float)normals[i].Item3;
+                    }
+                    var uvs = new float[points.Length * 2];
+                    var indices = new uint[triangles.Length * 3];
+                    for (int i = 0; i < triangles.Length; i++)
+                    {
+                        indices[i * 3] = triangles[i].Item1;
+                        indices[i * 3 + 1] = triangles[i].Item2;
+                        indices[i * 3 + 2] = triangles[i].Item3;
+                    }
+                    primitives.Add(new LocalPrimitive
+                    {
+                        Positions = positions,
+                        Normals = normalsArr,
+                        Uvs = uvs,
+                        Indices = indices,
+                        MaterialIndex = matIdx < gltfMaterials.Count ? (int)matIdx : 0,
+                    });
+                }
+
+                string sigKey = string.Join(",", signature.Select(s => $"{s.Item1}:{s.Item2}"));
+                if (sigKey.Length > 0 && resourceBySignature.TryGetValue(sigKey, out var existing))
+                    return existing;
+
+                string resourceId = $"frag-{itemIdx}";
+                meshResources.Add(new InstancedMeshResource
+                {
+                    Id = resourceId,
+                    DefinitionId = itemIdx,
+                    DefinitionName = string.IsNullOrEmpty(itemName) ? resourceId : itemName,
+                    VariantKey = "default",
+                    Primitives = primitives,
+                });
+                if (sigKey.Length > 0) resourceBySignature[sigKey] = resourceId;
+                return resourceId;
+            }
+
+            // ---- Spatial structure -> InstancedNode tree. ----
+            InstancedNode BuildNode(Fb.SpatialStructure spatial)
+            {
+                uint? localId = spatial.LocalId;
+                string category = spatial.Category ?? "";
+
+                string name = "";
+                string guid = "";
+                string? meshResourceId = null;
+                double[] matrix = IdentityMatrix;
+                bool nameIsGenerated = false;
+
+                if (localId.HasValue && localIdToItemIndex.TryGetValue(localId.Value, out var itemIdx))
+                {
+                    Fb.Attribute? attribute = itemIdx < model.AttributesLength ? model.Attributes(itemIdx) : null;
+                    name = ExtractNameAttribute(attribute);
+                    guid = guidByItem.TryGetValue(itemIdx, out var g) ? g : "";
+                    nameIsGenerated = !string.IsNullOrEmpty(guid) && generatedNameGuids.Contains(guid);
+                    if (samplesByItem.TryGetValue((uint)itemIdx, out var sIndices))
+                    {
+                        meshResourceId = BuildResourceForItem(itemIdx, string.IsNullOrEmpty(name) ? category : name);
+                        var transform = meshes!.Value.GlobalTransforms(sIndices[0])!.Value;
+                        matrix = TransformToMatrix16(transform);
+                    }
+                }
+
+                var children = new List<InstancedNode>();
+                for (int i = 0; i < spatial.ChildrenLength; i++) children.Add(BuildNode(spatial.Children(i)!.Value));
+
+                return new InstancedNode
+                {
+                    Name = name,
+                    NameIsGenerated = nameIsGenerated,
+                    DefinitionName = category,
+                    Layer = category,
+                    Matrix = matrix,
+                    Guid = guid,
+                    MeshResourceId = meshResourceId,
+                    Children = children,
+                };
+            }
+
+            Fb.SpatialStructure? rootSpatial = model.SpatialStructure;
+            InstancedNode sceneHierarchy = rootSpatial != null
+                ? BuildNode(rootSpatial.Value)
+                : new InstancedNode { Name = "ROOT", DefinitionName = "ROOT" };
+
+            return new InstancedScene
+            {
+                Bounds = null,
+                SceneHierarchy = sceneHierarchy,
+                MeshResources = meshResources,
+                GltfMaterials = gltfMaterials,
+                Textures = new List<SceneTexture>(),
+                LayerHidden = layerHidden,
+            };
+        }
+
+        /// <summary>Reads a <c>.frag</c> file from disk into an
+        /// <see cref="InstancedScene"/>. See <see cref="FromFragments"/> for
+        /// the full contract and known gaps.</summary>
+        public static InstancedScene ReadFragments(string path) => FromFragments(File.ReadAllBytes(path));
     }
 }
