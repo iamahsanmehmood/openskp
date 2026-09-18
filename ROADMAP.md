@@ -14,36 +14,23 @@ languages currently supports).
 
 ## Where each language stands
 
+All 5 languages released **1.3.0** together on 2026-09-18 — same version
+number, not identical capability. See
+[CHANGELOG.md § 1.3.0](CHANGELOG.md) for what shipped and why Python/C++
+carry a bit more than the others rather than holding real, tested work
+back purely for symmetry.
+
 | Language | Latest release | Status |
 |:---|:---|:---|
-| Python | [1.2.0 on PyPI](https://pypi.org/project/openskp/) · [1.3.0 (preview) on GitHub](https://github.com/iamahsanmehmood/openskp/releases/tag/preview-python-v1.3.2) (not on PyPI yet) | Ahead of the other 4 — see [Cross-language porting backlog](#cross-language-porting-backlog) below |
-| TypeScript | [npm](https://www.npmjs.com/package/openskp) | At 1.2.0 parity, plus Fragments (`.frag`) export ([#276](https://github.com/iamahsanmehmood/openskp/pull/276), verified against the real `@thatopen/fragments` runtime) and a writer memory fix, both merged and unreleased — see [CHANGELOG.md](CHANGELOG.md) |
-| .NET | [NuGet](https://www.nuget.org/packages/OpenSkp) | At 1.2.0 parity |
-| Dart | [pub.dev](https://pub.dev/packages/openskp) | At 1.2.0 parity |
-| C++ | [GitHub releases](https://github.com/iamahsanmehmood/openskp/releases?q=cpp-) · [1.3.0 (preview) on GitHub](https://github.com/iamahsanmehmood/openskp/releases/tag/preview-cpp-v1.3.1) | Closed most of the gap with Python this round — Fragments export, multi-dictionary attributes, 4 IFC export fixes, legacy pages/scenes reading, construction lines/points reading, and attribute-dictionary GLB/JSON metadata export all now shipped on a preview tag. Still behind on full 9-value-type attribute support and the writer's dimensions/section-planes/construction-geometry — see below |
+| Python | [1.3.0 on PyPI](https://pypi.org/project/openskp/) | Ahead of the other 4 on a few items — see [Cross-language porting backlog](#cross-language-porting-backlog) below |
+| TypeScript | [1.3.0 on npm](https://www.npmjs.com/package/openskp) | At parity except the backlog items below |
+| .NET | [1.3.0 on NuGet](https://www.nuget.org/packages/OpenSkp) | At parity except the backlog items below |
+| Dart | [1.3.0 on pub.dev](https://pub.dev/packages/openskp) | At parity except the backlog items below |
+| C++ | [1.3.0 on GitHub releases](https://github.com/iamahsanmehmood/openskp/releases?q=cpp-) | Closest to Python — only missing Fragments reading, loose-edge/curve support, and IFC curve annotations |
 
 Each language is released independently — see
-[CONTRIBUTING.md § Releasing](CONTRIBUTING.md#releasing-maintainers) for why,
-and why version numbers across languages can legitimately diverge rather
-than always moving in lockstep.
-
-### Why Python 1.3.0 isn't on PyPI yet
-
-It's a real, fully tested release (538 tests passing, lint clean) — headlined
-by direct SketchUp → ThatOpen Fragments (`.frag`) export, a new capability
-that was Python-only when 1.3.0 first shipped and is now also in C++ (see
-the table above). Rather than publish a PyPI version that's immediately out
-of parity with the rest of the project, it's tagged on GitHub only,
-installable by pinning the tag directly:
-
-```bash
-pip install "openskp[fragments] @ git+https://github.com/iamahsanmehmood/openskp.git@preview-python-v1.3.2#subdirectory=packages/python"
-```
-
-It folds into a proper PyPI `1.3.0` once the items below catch up. Likewise,
-C++'s own preview tag (`preview-cpp-v1.3.1`) folds into a numbered
-`cpp-v1.3.0` release once its own remaining gaps close — see
-[CHANGELOG.md](CHANGELOG.md) and [docs/LANGUAGE_PARITY.md](docs/LANGUAGE_PARITY.md).
+[CONTRIBUTING.md § Releasing](CONTRIBUTING.md#releasing-maintainers) for
+the tag format per language.
 
 ---
 
@@ -51,48 +38,31 @@ C++'s own preview tag (`preview-cpp-v1.3.1`) folds into a numbered
 
 Tracked in full, with checkboxes, in
 [issue #285](https://github.com/iamahsanmehmood/openskp/issues/285) — one
-line per feature, not one issue per language per feature. Summary:
+line per feature, not one issue per language per feature. What's actually
+still open after 1.3.0 (most of what used to be listed here is now
+shipped everywhere — see [docs/LANGUAGE_PARITY.md](docs/LANGUAGE_PARITY.md)
+for the full, current matrix):
 
-- Attribute dictionaries: full 9-value-type support — Python only today; C++
-  decodes values as strings only (multiple dictionaries per entity itself is
-  now also in C++, see below).
-- Writer: linear dimensions + leader text, section planes, construction
-  lines/points — Python only; TypeScript/.NET/Dart/C++ writers don't have
-  these entity types yet.
-- Legacy (pre-2021) pages/scenes reading — Python and C++ (GitHub-only
-  preview tag); TypeScript/.NET/Dart only read pages/scenes from VFF
-  (2021+) files.
-- Direct SketchUp → Fragments (`.frag`) export — Python and C++ (both
-  GitHub-only preview tags; C++ measured 5-9x faster end to end on real
-  files). TypeScript now has it too — a community port
-  ([#276](https://github.com/iamahsanmehmood/openskp/pull/276), merged),
-  using the real canonical ThatOpen FlatBuffers schema and verified via a
-  round-trip through the actual `@thatopen/fragments` npm package, not just
-  this project's own bindings. .NET and Dart have no work started.
-- VFF per-layer-hidden flag reading — Python and C++ (both GitHub-only).
-- 4 IFC export correctness fixes (units/axis, real instance names + layer
-  visibility, plugin-attribute property sets, full-path classification) —
-  Python and C++ (both GitHub-only); not yet checked whether TypeScript/
-  .NET/Dart's IFC exporters have equivalent issues.
-- Attribute dictionaries surfaced in GLB/JSON metadata export, not just IFC
-  Psets — Python and C++ (both GitHub-only); every attribute dictionary an
-  instance carries was already resolved internally in both languages but
-  never reached export until this fix. TypeScript/.NET/Dart don't have an
-  `attribute_dictionaries` field at all yet.
-- Construction lines/points reading — Python (all files) and C++ (legacy
-  files only, GitHub-only); TypeScript/.NET/Dart have neither.
-- earcut-based triangulation (replacing Shapely, with a real concave-face
-  correctness fix) — Python only; other languages use their own
-  triangulators, not independently checked for the same fidelity bug.
-- Large-file parser fix ([#264](https://github.com/iamahsanmehmood/openskp/issues/264)) — Python only; each other language has its own independent parser, not assumed fixed.
+- Reading a `.frag` file back (`from_fragments`/`read`) — Python only;
+  TypeScript/.NET/Dart/C++ can write Fragments but not read one back.
+- Loose-edge/curve support in `build_instanced_scene()`, plus the public
+  typed model's `Edge.layer`/`Edge.curve_id`/`Face.layer`/
+  `loose_edge_runs()` — Python only.
+- IFC export: loose-edge curve sets + analytic arcs as
+  `IfcAnnotation`/`IfcIndexedPolyCurve`, plus 4 IFC4 STEP-conformance
+  fixes — Python only.
+- Legacy (pre-2021) pages/scenes reading — Python and C++; TypeScript/
+  .NET/Dart only read pages/scenes from VFF (2021+) files.
+- Per-edge/per-face layer, `Edge#curve` pointers, classic `CArcCurve`
+  frames — Python only.
+- Attribute dictionaries: full 9-value-type support for VFF (2021+) format
+  — Python (7/9) only; not independently re-checked this round for the
+  other 4 languages, so treat as needing a fresh look rather than a
+  confirmed gap.
 
-Smaller, related items also in that same tracking issue: codegen not
-round-tripping `applied_width`/opacity (affects all 5 languages), a .NET test
-that soft-skips instead of reporting skipped, and an unexplained .NET/Python
-triangle-count divergence on one real file. C++'s `model.layers` ordering and
-`mesh_index[...].properties`/`.attribute_dictionaries` gap mentioned in
-earlier versions of this page is now fixed — see
-[docs/LANGUAGE_PARITY.md](docs/LANGUAGE_PARITY.md).
+**Good first contribution?** Most of these have a real, SDK-verified Python
+implementation to port from — the hard research is already done. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for the workflow.
 
 **Good first contribution?** Most of these have a real, SDK-verified Python
 implementation to port from — the hard research is already done. See

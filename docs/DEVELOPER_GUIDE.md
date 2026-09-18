@@ -26,7 +26,7 @@ others, that's stated plainly rather than smoothed over.
 - [Observability: progress and errors](#observability)
 - [Error handling](#error-handling)
 - [Export capabilities](#export-capabilities)
-  - [Fragments export](#fragments-export) — Python only, not on PyPI yet
+  - [Fragments export](#fragments-export)
 - [Write capabilities](#write-capabilities)
 - [The web viewer](#the-web-viewer)
 - [Known cross-language differences](#known-cross-language-differences)
@@ -412,19 +412,14 @@ case without writing that loop yourself.
 
 ### Fragments export
 
-> **Python and C++ only, neither on a package registry yet.** See
-> [ROADMAP.md](../ROADMAP.md#cross-language-porting-backlog) for TypeScript/
-> .NET/Dart's status and
-> [docs/LANGUAGE_PARITY.md](LANGUAGE_PARITY.md) for the full parity picture.
-> Install Python with:
-> ```bash
-> pip install "openskp[fragments] @ git+https://github.com/iamahsanmehmood/openskp.git@preview-python-v1.3.2#subdirectory=packages/python"
-> ```
-> Build C++ from the [`preview-cpp-v1.3.1`](https://github.com/iamahsanmehmood/openskp/releases/tag/preview-cpp-v1.3.1)
-> tag — check it out directly and follow the C++17/CMake Quick Start in
-> [README.md](../README.md) (`find_package(OpenSkp CONFIG REQUIRED)`). C++
-> measured roughly 5-9x faster end to end than the Python pipeline on the
-> same real files (parse + scene build + export).
+> **Available in all 5 languages as of 1.3.0** (`pip install openskp`,
+> `npm install openskp`, `dotnet add package OpenSkp`, `dart pub add
+> openskp`, or the C++17/CMake Quick Start in [README.md](../README.md)).
+> See [docs/LANGUAGE_PARITY.md](LANGUAGE_PARITY.md) for the full parity
+> picture, including the one thing not yet ported anywhere but Python:
+> reading a `.frag` file back. C++ measured roughly 5-9x faster end to end
+> than the Python pipeline on the same real files (parse + scene build +
+> export).
 
 `openskp.export.fragments` / `openskp::to_fragments()` write [ThatOpen's Fragments](https://github.com/ThatOpen/engine_fragment)
 format — a public FlatBuffers-based binary format designed for fast loading
@@ -496,15 +491,12 @@ What's carried through from the source `.skp` file:
   the format.
 - `Model.guid` — the single model-level identifier, distinct from each
   item's own per-instance guid above — is still an unpopulated placeholder.
-- Python and C++ have this today (both GitHub-only preview tags — see
-  above). TypeScript now has it too
-  ([#276](https://github.com/iamahsanmehmood/openskp/pull/276), merged on
-  `main`, not npm-published yet) — the real, canonical ThatOpen FlatBuffers
-  schema (not hand-rolled), TRS decomposition and scale/mirror baking
-  matching Python/C++, and verified via a real round-trip through the
-  `@thatopen/fragments` npm package's own `SingleThreadedFragmentsModel`,
-  not just this project's own generated bindings. .NET and Dart have no
-  work started on this.
+- All 5 languages have this as of 1.3.0. TypeScript uses the real,
+  canonical ThatOpen FlatBuffers schema (not hand-rolled), with TRS
+  decomposition and scale/mirror baking matching Python/C++, verified via
+  a real round-trip through the `@thatopen/fragments` npm package's own
+  `SingleThreadedFragmentsModel`, not just this project's own generated
+  bindings.
 - C++'s attribute dictionary values are strings only (no native
   `Point3d`/`Length`/nested-list types like Python has) — matches its
   existing string-only property handling elsewhere. See
@@ -512,8 +504,9 @@ What's carried through from the source `.skp` file:
 
 ### Reading a `.frag` file back
 
-> **Python only, and not on PyPI yet** — same preview tag as the export
-> side above. See [Fragments export](#fragments-export) for install steps.
+> **Python only** — available via `pip install openskp` as of 1.3.0. Not
+> yet ported to TypeScript, .NET, Dart, or C++; see
+> [docs/LANGUAGE_PARITY.md](LANGUAGE_PARITY.md).
 
 The mirror direction: `openskp.export.fragments.read()`/`from_fragments()`
 parse a real `.frag` file straight into an `InstancedScene` — OpenSKP's

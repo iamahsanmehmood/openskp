@@ -3,7 +3,7 @@
     <TargetFramework>netstandard2.0</TargetFramework>
     <LangVersion>10.0</LangVersion>
     <Nullable>enable</Nullable>
-    <Version>1.2.0</Version>
+    <Version>1.3.0</Version>
     <Authors>Ahsan Mehmood</Authors>
     <Description>Direct SketchUp (.skp) -&gt; ThatOpen Fragments (.frag) export for OpenSkp - EXPERIMENTAL. Separate, opt-in package (mirrors Python's `pip install openskp[fragments]` extra) so the core OpenSkp package stays dependency-free for every other consumer; this one package takes the Google.FlatBuffers dependency Fragments export actually needs.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>

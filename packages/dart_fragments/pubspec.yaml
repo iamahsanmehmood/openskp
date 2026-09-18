@@ -1,6 +1,6 @@
 name: openskp_fragments
 description: Direct SketchUp (.skp) -> ThatOpen Fragments (.frag) export for OpenSkp - EXPERIMENTAL. Separate, opt-in package (mirrors Python's `pip install openskp[fragments]` extra) so the core openskp package stays dependency-free for every other consumer; this one package takes the flat_buffers dependency Fragments export actually needs.
-version: 1.2.0
+version: 1.3.0
 # TODO(release): remove once the path dependency below is switched to a
 # hosted openskp version (see that dependency's own comment) - a
 # publish_to: none package can't be published to pub.dev.
