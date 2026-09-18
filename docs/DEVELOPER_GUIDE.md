@@ -504,15 +504,14 @@ What's carried through from the source `.skp` file:
 
 ### Reading a `.frag` file back
 
-> **Python only** — available via `pip install openskp` as of 1.3.0. Not
-> yet ported to TypeScript, .NET, Dart, or C++; see
+> **Python and TypeScript.** Not yet ported to .NET, Dart, or C++; see
 > [docs/LANGUAGE_PARITY.md](LANGUAGE_PARITY.md).
 
 The mirror direction: `openskp.export.fragments.read()`/`from_fragments()`
-parse a real `.frag` file straight into an `InstancedScene` — OpenSKP's
-6th input format alongside `.skp`. Any file works, not just one this
-project wrote — ThatOpen's own real `IfcImporter` output, or anyone
-else's:
+(Python) or `fromFragments()` (TypeScript) parse a real `.frag` file
+straight into an `InstancedScene` — OpenSKP's 6th input format alongside
+`.skp`. Any file works, not just one this project wrote — ThatOpen's own
+real `IfcImporter` output, or anyone else's:
 
 ```python
 from openskp.export import fragments
@@ -526,15 +525,34 @@ from openskp.export import instanced_glb
 # STL/PLY/DXF/IFC4/JSON — whatever the file needs next.
 ```
 
-Verified two ways: round-trips this project's own output exactly (world-
-space vertex positions match to the last bit, not just object counts —
-see `tests/test_fragments.py`'s `TestFromFragments`), and reads a real
-ThatOpen-produced production file (a genuine IFC-derived building, 5,751
-nodes / 100,332 vertices) cleanly — re-exporting that file through this
-same module and loading the result back through the actual
-`@thatopen/fragments` runtime preserves real IFC GUIDs and category names.
+```typescript
+import { fromFragments, toInstancedGLB } from 'openskp';
+import * as fs from 'fs';
 
-**Known limitations, stated plainly:**
+const scene = fromFragments(fs.readFileSync('model.frag'));
+// Rides every other export this project already has, same as a scene
+// from buildInstancedScene() would.
+```
+
+**Python** verified two ways: round-trips this project's own output
+exactly (world-space vertex positions match to the last bit, not just
+object counts — see `tests/test_fragments.py`'s `TestFromFragments`), and
+reads a real ThatOpen-produced production file (a genuine IFC-derived
+building, 5,751 nodes / 100,332 vertices) cleanly — re-exporting that
+file through this same module and loading the result back through the
+actual `@thatopen/fragments` runtime preserves real IFC GUIDs and
+category names.
+
+**TypeScript** verified round-trips this project's own output exactly
+(including a primitive large enough to force the export side to split
+across multiple shells — the read side has to walk every sample for an
+item and reassemble them, not just read the first one) — not yet tested
+against a real ThatOpen-produced file the way Python's port was, stated
+honestly rather than implied equivalent.
+
+**Known limitations, stated plainly** (apply identically to both Python
+and TypeScript — the TypeScript port mirrors Python's exact read-side
+behavior, not an independently-improved version):
 
 - No UVs anywhere in the schema (`Shell` is points + triangle indices
   only) — every reconstructed primitive gets an all-zero UV band.
@@ -554,6 +572,12 @@ same module and loading the result back through the actual
   has no reader yet, only `SHELL`. A real `IfcImporter`-produced file can
   contain these; such samples are skipped with a warning rather than
   silently dropped or misread as shells.
+- **Not previously documented here**: `positionMm`/`properties`/
+  `attributeDictionaries` on each reconstructed node are left at their
+  defaults (`[0,0,0]`/`{}`/`{}`) — the Fragments format doesn't carry
+  these separately from the `Name` attribute this function does extract
+  (see `from_fragments`'s source directly; Python's own dataclass
+  defaults confirm this isn't overridden anywhere in the read path).
 
 ## Write capabilities
 

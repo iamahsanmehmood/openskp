@@ -43,7 +43,7 @@ export type {
   LocalPrimitive,
 } from './instanced';
 export { toInstancedGLB } from './instanced-glb';
-export { toFragments } from './fragments';
+export { toFragments, fromFragments } from './fragments';
 export type { FragmentExportOptions } from './fragments';
 export { extractThumbnail } from './thumbnail';
 export type { SkpThumbnail } from './thumbnail';

@@ -9,6 +9,7 @@ import {
   ShellProfile,
   BigShellProfile,
   FloatVector,
+  DoubleVector,
   Representation,
   RepresentationClass,
   Transform,
@@ -615,4 +616,355 @@ export function toFragments(
   const rawBytes = builder.asUint8Array();
 
   return options.raw ? rawBytes : fflate.zlibSync(rawBytes);
+}
+
+// RepresentationClass values this module can read geometry for today -
+// mirrors Python's own `_SUPPORTED_REPRESENTATION_CLASSES` and its note on
+// why (only SHELL is written by any of this project's own exporters yet).
+const SUPPORTED_REPRESENTATION_CLASSES = new Set<number>([RepresentationClass.SHELL]);
+
+function cross3(a: [number, number, number], b: [number, number, number]): [number, number, number] {
+  return [
+    a[1] * b[2] - a[2] * b[1],
+    a[2] * b[0] - a[0] * b[2],
+    a[0] * b[1] - a[1] * b[0],
+  ];
+}
+
+/** One normal per vertex, flat-shaded: each triangle's own face normal,
+ * duplicated across its 3 vertices - the most a Shell (points + indices,
+ * nothing else) can ever give back. Mirrors Python's `_compute_flat_normals`. */
+function computeFlatNormals(
+  points: [number, number, number][],
+  triangles: [number, number, number][]
+): [number, number, number][] {
+  const normals: [number, number, number][] = points.map(() => [0, 0, 1]);
+  for (const [a, b, c] of triangles) {
+    const pa = points[a];
+    const pb = points[b];
+    const pc = points[c];
+    const u: [number, number, number] = [pb[0] - pa[0], pb[1] - pa[1], pb[2] - pa[2]];
+    const v: [number, number, number] = [pc[0] - pa[0], pc[1] - pa[1], pc[2] - pa[2]];
+    let n = cross3(u, v);
+    const length = Math.sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+    if (length > 1e-12) {
+      n = [n[0] / length, n[1] / length, n[2] / length];
+    }
+    normals[a] = n;
+    normals[b] = n;
+    normals[c] = n;
+  }
+  return normals;
+}
+
+/** Reassemble a glTF-style column-major 4x4 matrix from a Fragments
+ * `Transform` struct (position + x/y direction unit vectors). The struct
+ * never stores a Z direction - reconstructed here as `xDir cross yDir`,
+ * matching the same right-handed orthonormal frame {@link decomposeTrs}
+ * produces on export. Mirrors Python's `_transform_to_matrix16`. */
+function transformToMatrix16(transform: Transform): number[] {
+  const pos = transform.position(new DoubleVector())!;
+  const xDirS = transform.xDirection(new FloatVector())!;
+  const yDirS = transform.yDirection(new FloatVector())!;
+  const xDir: [number, number, number] = [xDirS.x(), xDirS.y(), xDirS.z()];
+  const yDir: [number, number, number] = [yDirS.x(), yDirS.y(), yDirS.z()];
+  const zDir = cross3(xDir, yDir);
+  return [
+    xDir[0], xDir[1], xDir[2], 0.0,
+    yDir[0], yDir[1], yDir[2], 0.0,
+    zDir[0], zDir[1], zDir[2], 0.0,
+    pos.x(), pos.y(), pos.z(), 1.0,
+  ];
+}
+
+/** Pull the `["Name", value, "STRING"]` entry out of an item's
+ * `Attribute.data`, matching the exact convention {@link toFragments} (and
+ * the real `IfcImporter`) writes. Mirrors Python's `_extract_name_attribute`. */
+function extractNameAttribute(attribute: Attribute | null): string {
+  if (attribute === null) return '';
+  for (let i = 0; i < attribute.dataLength(); i++) {
+    const raw = attribute.data(i);
+    try {
+      const triple = JSON.parse(raw);
+      if (Array.isArray(triple) && triple.length >= 2 && triple[0] === 'Name') {
+        return String(triple[1]);
+      }
+    } catch {
+      continue;
+    }
+  }
+  return '';
+}
+
+/**
+ * Parse a real `.frag` file's bytes into an {@link InstancedScene} - the
+ * mirror of {@link toFragments}. Accepts either the zlib-compressed wire
+ * format (the default `toFragments`/real loader convention) or raw,
+ * uncompressed FlatBuffers bytes; detected automatically the same way the
+ * real `@thatopen/fragments` loader does, by attempting zlib inflation
+ * first.
+ *
+ * Known gaps, matching Python's own read-side exactly (not independently
+ * improved on here - see openskp#285): `positionMm`/`properties`/
+ * `attributeDictionaries` on each node are left at their defaults, since
+ * the Fragments format itself doesn't carry them separately from the
+ * `Name` attribute this function does extract.
+ */
+export function fromFragments(data: Uint8Array): InstancedScene {
+  let rawBytes: Uint8Array;
+  try {
+    rawBytes = fflate.unzlibSync(data);
+  } catch {
+    rawBytes = data;
+  }
+
+  const bb = new flatbuffers.ByteBuffer(rawBytes);
+  const model = Model.getRootAsModel(bb);
+  const meshes = model.meshes();
+
+  // ---- Materials (flat RGBA - no texture concept exists in this format
+  // at all). ----
+  const gltfMaterials: Record<string, unknown>[] = [];
+  if (meshes !== null) {
+    for (let i = 0; i < meshes.materialsLength(); i++) {
+      const mat = meshes.materials(i)!;
+      gltfMaterials.push({
+        pbrMetallicRoughness: {
+          baseColorFactor: [mat.r() / 255.0, mat.g() / 255.0, mat.b() / 255.0, mat.a() / 255.0],
+          metallicFactor: 0.0,
+          roughnessFactor: 1.0,
+        },
+        doubleSided: mat.renderedFaces() !== RenderedFaces.ONE,
+      });
+    }
+  }
+  if (gltfMaterials.length === 0) {
+    gltfMaterials.push({
+      pbrMetallicRoughness: { baseColorFactor: [0.8, 0.8, 0.8, 1.0], metallicFactor: 0.0, roughnessFactor: 1.0 },
+    });
+  }
+
+  // ---- Shells -> (points, triangles), decoded once per shell index,
+  // reused by every sample referencing it. ----
+  const nShells = meshes !== null ? meshes.shellsLength() : 0;
+  const shellGeometry: ([number, number, number][] | null)[] = new Array(nShells).fill(null);
+  const shellTriangles: [number, number, number][][] = new Array(nShells).fill(null);
+
+  function decodeShell(shellIdx: number): { points: [number, number, number][]; triangles: [number, number, number][] } {
+    if (shellGeometry[shellIdx] !== null) {
+      return { points: shellGeometry[shellIdx]!, triangles: shellTriangles[shellIdx] };
+    }
+    const shell = meshes!.shells(shellIdx)!;
+    const nPoints = shell.pointsLength();
+    const points: [number, number, number][] = [];
+    for (let j = 0; j < nPoints; j++) {
+      const p = shell.points(j)!;
+      points.push([p.x(), p.y(), p.z()]);
+    }
+
+    const isBig = shell.type() === ShellType.BIG;
+    const triangles: [number, number, number][] = [];
+    if (isBig) {
+      for (let j = 0; j < shell.bigProfilesLength(); j++) {
+        const profile = shell.bigProfiles(j)!;
+        if (profile.indicesLength() >= 3) {
+          triangles.push([profile.indices(0)!, profile.indices(1)!, profile.indices(2)!]);
+        }
+      }
+    } else {
+      for (let j = 0; j < shell.profilesLength(); j++) {
+        const profile = shell.profiles(j)!;
+        if (profile.indicesLength() >= 3) {
+          triangles.push([profile.indices(0)!, profile.indices(1)!, profile.indices(2)!]);
+        }
+      }
+    }
+
+    shellGeometry[shellIdx] = points;
+    shellTriangles[shellIdx] = triangles;
+    return { points, triangles };
+  }
+
+  // ---- Group samples by item (Meshes.meshesItems[k] -> item index, NOT
+  // Sample.item() - see toFragments's own comment on why the two differ;
+  // Sample.item() is just the sample's own position, always). ----
+  const nSamples = meshes !== null ? meshes.samplesLength() : 0;
+  const samplesByItem = new Map<number, number[]>();
+  for (let k = 0; k < nSamples; k++) {
+    const itemIdx = meshes!.meshesItems(k)!;
+    if (!samplesByItem.has(itemIdx)) samplesByItem.set(itemIdx, []);
+    samplesByItem.get(itemIdx)!.push(k);
+  }
+
+  // ---- Per-item metadata: name, guid, category, world transform.
+  // localIds[i] IS the item index space - see toFragments's own
+  // `localIds.push(itemIndex)`. ----
+  const nItems = model.localIdsLength();
+  const localIdToItemIndex = new Map<number, number>();
+  for (let i = 0; i < nItems; i++) {
+    localIdToItemIndex.set(model.localIds(i)!, i);
+  }
+
+  const guidByItem = new Map<number, string>();
+  const nGuidItems = model.guidsItemsLength();
+  for (let i = 0; i < nGuidItems; i++) {
+    const lid = model.guidsItems(i)!;
+    const itemIdx = localIdToItemIndex.get(lid);
+    if (itemIdx !== undefined && i < model.guidsLength()) {
+      guidByItem.set(itemIdx, model.guids(i) as string);
+    }
+  }
+
+  let metadata: Record<string, unknown> = {};
+  const metadataRaw = model.metadata();
+  if (metadataRaw) {
+    try {
+      metadata = JSON.parse(metadataRaw as string);
+    } catch {
+      metadata = {};
+    }
+  }
+  const layerHidden: Record<string, boolean> = { ...((metadata.layer_hidden as Record<string, boolean>) || {}) };
+  const generatedNameGuids = new Set<string>((metadata.generated_name_guids as string[]) || []);
+
+  const meshResources: InstancedMeshResource[] = [];
+  const resourceBySignature = new Map<string, string>();
+  let warnedUnsupported = false;
+
+  function buildResourceForItem(itemIdx: number, itemName: string): string {
+    const sampleIndices = samplesByItem.get(itemIdx) || [];
+    const signature: [number, number][] = [];
+    const primitives: LocalPrimitive[] = [];
+    for (const k of sampleIndices) {
+      const sample = meshes!.samples(k)!;
+      const repIdx = sample.representation();
+      const matIdx = sample.material();
+      const representation = repIdx < meshes!.representationsLength() ? meshes!.representations(repIdx) : null;
+      const repClass = representation !== null ? representation.representationClass() : RepresentationClass.SHELL;
+      if (!SUPPORTED_REPRESENTATION_CLASSES.has(repClass)) {
+        if (!warnedUnsupported) {
+          console.warn(
+            `openskp fromFragments: skipping a sample with unsupported RepresentationClass=${repClass} ` +
+            '(only SHELL is read today).'
+          );
+          warnedUnsupported = true;
+        }
+        continue;
+      }
+      signature.push([repIdx, matIdx]);
+      // Representation.id() is the index into Meshes.shells - NOT the
+      // representation's own position in the representations vector. See
+      // Python's from_fragments's own comment on why this must follow
+      // id(), matching the real reader's own fetch-functions.ts.
+      const shellIdx = representation!.id();
+      if (shellIdx >= nShells) continue;
+      const { points, triangles } = decodeShell(shellIdx);
+      const normals = computeFlatNormals(points, triangles);
+      const positions = new Float32Array(points.length * 3);
+      const normalsArr = new Float32Array(points.length * 3);
+      for (let i = 0; i < points.length; i++) {
+        positions[i * 3] = points[i][0];
+        positions[i * 3 + 1] = points[i][1];
+        positions[i * 3 + 2] = points[i][2];
+        normalsArr[i * 3] = normals[i][0];
+        normalsArr[i * 3 + 1] = normals[i][1];
+        normalsArr[i * 3 + 2] = normals[i][2];
+      }
+      const uvs = new Float32Array(points.length * 2);
+      const indices = new Uint32Array(triangles.length * 3);
+      for (let i = 0; i < triangles.length; i++) {
+        indices[i * 3] = triangles[i][0];
+        indices[i * 3 + 1] = triangles[i][1];
+        indices[i * 3 + 2] = triangles[i][2];
+      }
+      primitives.push({ positions, normals: normalsArr, uvs, indices, materialIndex: matIdx < gltfMaterials.length ? matIdx : 0 });
+    }
+
+    const sigKey = signature.map(([r, m]) => `${r}:${m}`).join(',');
+    if (sigKey && resourceBySignature.has(sigKey)) {
+      return resourceBySignature.get(sigKey)!;
+    }
+
+    const resourceId = `frag-${itemIdx}`;
+    meshResources.push({
+      id: resourceId,
+      definitionId: itemIdx,
+      definitionName: itemName || resourceId,
+      variantKey: 'default',
+      primitives,
+    });
+    if (sigKey) resourceBySignature.set(sigKey, resourceId);
+    return resourceId;
+  }
+
+  // ---- Spatial structure -> InstancedNode tree. ----
+  function buildNode(spatial: SpatialStructure): InstancedNode {
+    const localId = spatial.localId();
+    const category = spatial.category() || '';
+
+    let name = '';
+    let guid = '';
+    let meshResourceId: string | undefined;
+    let matrix: number[] = IDENTITY_MATRIX;
+    let nameIsGenerated = false;
+
+    if (localId !== null) {
+      const itemIdx = localIdToItemIndex.get(localId);
+      if (itemIdx !== undefined) {
+        const attribute = itemIdx < model.attributesLength() ? model.attributes(itemIdx) : null;
+        name = extractNameAttribute(attribute);
+        guid = guidByItem.get(itemIdx) || '';
+        nameIsGenerated = Boolean(guid) && generatedNameGuids.has(guid);
+        if (samplesByItem.has(itemIdx)) {
+          meshResourceId = buildResourceForItem(itemIdx, name || category);
+          const transform = meshes!.globalTransforms(samplesByItem.get(itemIdx)![0])!;
+          matrix = transformToMatrix16(transform);
+        }
+      }
+    }
+
+    const children: InstancedNode[] = [];
+    for (let i = 0; i < spatial.childrenLength(); i++) {
+      children.push(buildNode(spatial.children(i)!));
+    }
+
+    return {
+      name,
+      nameIsGenerated,
+      definitionName: category,
+      layer: category,
+      matrix,
+      positionMm: [0, 0, 0],
+      properties: {},
+      attributeDictionaries: {},
+      guid,
+      meshResourceId,
+      children,
+    };
+  }
+
+  const rootSpatial = model.spatialStructure();
+  const sceneHierarchy: InstancedNode = rootSpatial !== null
+    ? buildNode(rootSpatial)
+    : {
+        name: 'ROOT',
+        nameIsGenerated: false,
+        definitionName: 'ROOT',
+        layer: '',
+        matrix: IDENTITY_MATRIX,
+        positionMm: [0, 0, 0],
+        properties: {},
+        attributeDictionaries: {},
+        guid: '',
+        children: [],
+      };
+
+  return {
+    bounds: null,
+    sceneHierarchy,
+    meshResources,
+    gltfMaterials,
+    textures: [],
+    layerHidden,
+  };
 }

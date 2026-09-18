@@ -6,6 +6,7 @@ import * as flatbuffers from 'flatbuffers';
 import { SingleThreadedFragmentsModel } from '@thatopen/fragments';
 import {
   toFragments,
+  fromFragments,
   buildInstancedScene,
   buildInstancedSceneFromParsed,
   SkpFile,
@@ -998,6 +999,120 @@ describe('oversized shell splitting (openskp#285 / PR #355)', () => {
 
     expect(meshes.shellsLength()).toBe(1);
     expect(meshes.samplesLength()).toBe(1);
+  });
+});
+
+describe('fromFragments (openskp#285: reading a .frag file back)', () => {
+  it('round-trips a basic two-instance scene through toFragments -> fromFragments', () => {
+    const scene = makeTwoInstanceScene();
+    const rawBytes = toFragments(scene, { raw: true });
+    const back = fromFragments(rawBytes);
+
+    expect(back.meshResources.length).toBe(1);
+    expect(back.meshResources[0].primitives.length).toBe(1);
+    // boxPrimitive() is a unit cube: 8 vertices, 12 triangles (36 indices)
+    expect(back.meshResources[0].primitives[0].positions.length).toBe(8 * 3);
+    expect(back.meshResources[0].primitives[0].indices.length).toBe(12 * 3);
+
+    expect(back.sceneHierarchy.children.length).toBe(2);
+    const [a, b] = back.sceneHierarchy.children;
+    expect(a.name).toBe('Box_A');
+    expect(b.name).toBe('Box_B');
+    expect(a.layer).toBe('Framing');
+    expect(a.meshResourceId).toBe(b.meshResourceId); // both placements share the one resource
+
+    expect(back.gltfMaterials.length).toBeGreaterThan(0);
+  });
+
+  it('round-trips both the raw and zlib-compressed wire formats, auto-detected', () => {
+    const scene = makeTwoInstanceScene();
+    const rawBytes = toFragments(scene, { raw: true });
+    const compressedBytes = toFragments(scene, { raw: false });
+    expect(compressedBytes).not.toEqual(rawBytes); // sanity: actually different bytes
+
+    const backFromRaw = fromFragments(rawBytes);
+    const backFromCompressed = fromFragments(compressedBytes);
+
+    expect(backFromRaw.meshResources[0].primitives[0].indices.length).toBe(
+      backFromCompressed.meshResources[0].primitives[0].indices.length
+    );
+    expect(backFromRaw.sceneHierarchy.children.map((c) => c.name)).toEqual(
+      backFromCompressed.sceneHierarchy.children.map((c) => c.name)
+    );
+  });
+
+  it('preserves real source guids and layer_hidden metadata across the round-trip', () => {
+    const scene = makeTwoInstanceScene();
+    scene.sceneHierarchy.children[0].guid = 'F160C36229782F47A9857FC88DD1F2CB';
+    scene.layerHidden = { Framing: false, Cladding: true };
+    const rawBytes = toFragments(scene, { raw: true });
+    const back = fromFragments(rawBytes);
+
+    expect(back.sceneHierarchy.children[0].guid).toBe('F160C36229782F47A9857FC88DD1F2CB');
+    expect(back.layerHidden).toEqual({ Framing: false, Cladding: true });
+  });
+
+  it('reconstructs every triangle of a primitive that was split across multiple shells on export', () => {
+    // Same grid-primitive shape as the oversized-shell-splitting tests
+    // above, forcing the export side to split into several shells - the
+    // read side has to walk every sample for the item and reassemble them
+    // into the ONE mesh resource, not just read the first shell.
+    function gridPrimitive(cols: number, rows: number): LocalPrimitive {
+      const positions = new Float32Array(cols * rows * 3);
+      for (let j = 0; j < rows; j++) {
+        for (let i = 0; i < cols; i++) {
+          const v = j * cols + i;
+          positions[v * 3] = i;
+          positions[v * 3 + 1] = j;
+          positions[v * 3 + 2] = 0;
+        }
+      }
+      const triCells = (cols - 1) * (rows - 1);
+      const indices = new Uint32Array(triCells * 6);
+      let k = 0;
+      for (let j = 0; j < rows - 1; j++) {
+        for (let i = 0; i < cols - 1; i++) {
+          const a = j * cols + i;
+          const b = a + 1;
+          const c = a + cols;
+          const d = c + 1;
+          indices[k++] = a; indices[k++] = b; indices[k++] = d;
+          indices[k++] = a; indices[k++] = d; indices[k++] = c;
+        }
+      }
+      return { positions, normals: new Float32Array(cols * rows * 3), uvs: new Float32Array(cols * rows * 2), indices, materialIndex: 0 };
+    }
+
+    const cols = 210, rows = 165; // 209*164*2 = 68,552 triangles - forces a split (> 65535)
+    const prim = gridPrimitive(cols, rows);
+    const expectedTriangles = (cols - 1) * (rows - 1) * 2;
+
+    const resource: InstancedMeshResource = {
+      id: 'mesh_big', definitionId: 1, definitionName: 'BigMesh', variantKey: '1|255,255,255', primitives: [prim],
+    };
+    const node: InstancedNode = {
+      name: 'BigMesh1', nameIsGenerated: false, definitionName: 'BigMesh', layer: 'Layer0',
+      matrix: IDENTITY, positionMm: [0, 0, 0], properties: {}, guid: '', meshResourceId: 'mesh_big', children: [],
+    };
+    const root: InstancedNode = {
+      name: 'ROOT', nameIsGenerated: false, definitionName: 'ROOT_MODEL', layer: 'Layer0',
+      matrix: IDENTITY, positionMm: [0, 0, 0], properties: {}, guid: '', children: [node],
+    };
+    const scene: InstancedScene = { bounds: null, sceneHierarchy: root, meshResources: [resource], gltfMaterials: [], textures: [], layerHidden: {} };
+
+    const rawBytes = toFragments(scene, { raw: true });
+
+    // Confirm the export really did split (multiple shells), otherwise this
+    // test isn't exercising the multi-shell read path at all.
+    const bb = new flatbuffers.ByteBuffer(rawBytes);
+    const model = Model.getRootAsModel(bb);
+    expect(model.meshes()!.shellsLength()).toBeGreaterThan(1);
+
+    const back = fromFragments(rawBytes);
+    expect(back.meshResources.length).toBe(1);
+    // One primitive per shell/sample the item was split into, on the way back.
+    const totalTrianglesBack = back.meshResources[0].primitives.reduce((sum, p) => sum + p.indices.length / 3, 0);
+    expect(totalTrianglesBack).toBe(expectedTriangles);
   });
 });
 
