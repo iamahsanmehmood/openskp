@@ -1,12 +1,9 @@
 name: Deploy Web Viewer to GitHub Pages
 
+# Dispatch-only in this fork. On a push trigger, syncing from upstream touches
+# packages/typescript/** and publishes upstream's web viewer as a GitHub Pages
+# site under this organisation, which is not something this fork exists to do.
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'packages/typescript/**'
-      - 'examples/web-viewer/**'
-      - '.github/workflows/deploy-pages.yml'
   workflow_dispatch:
 
 # Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages

@@ -311,6 +311,7 @@ namespace OpenSkp
                     TextureIndexFor = TextureIndexFor,
                     FallbackColor = fallbackColor,
                     DefinitionId = defId,
+                    RespectVisibility = options?.RespectVisibility == true,
                 });
 
                 var primitives = new List<LocalPrimitive>();
@@ -430,6 +431,13 @@ namespace OpenSkp
                 var nodes = new List<InstancedNode>();
                 foreach (var inst in builder.Instances)
                 {
+                    // Matches Scene.InstantiateBuilder: skipped before the node is built, so the
+                    // two scene APIs return the same geometry for one file.
+                    if (options?.RespectVisibility == true && inst.Hidden)
+                    {
+                        continue;
+                    }
+
                     long? refIdx = inst.RefIdx;
                     var newMatrix = Transforms.MultiplyMatrices(currentMatrix, inst.Matrix);
 

@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — .NET: opt-in visibility filtering for hidden faces and instances
+
+`SkpParseOptions.RespectVisibility` leaves geometry the file marks hidden
+out of a built scene. Off by default, matching TypeScript's
+`respectEdgeVisibility`: what SketchUp draws is a display policy, not a
+parsing fact. The raw parse still reports the flags either way.
+
+Both readers already decoded a face's and an instance's own hidden bit, but
+`BuildLocalFaceGroups` and both scene walkers ignored them, so every
+exporter emitted geometry the file hides.
+
+.NET goes one step past TypeScript, which filters faces only: a hidden
+group or component instance is skipped with its whole subtree, out of the
+instance hierarchy and mesh index as well as the triangles. `BuildScene`
+and `BuildInstancedScene` return the same geometry for one file. Python,
+Dart and C++ are unchanged and still emit hidden geometry.
+
 ### Added — C++: write construction lines/points inside component definitions
 
 `ComponentDefinitionBuilder` now has `add_construction_point` /

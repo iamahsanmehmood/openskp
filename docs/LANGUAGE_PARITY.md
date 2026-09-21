@@ -45,7 +45,8 @@ the pub.dev upload step).
 ## 2. Feature matrix
 
 Every feature OpenSKP has, across all 5 languages. ✅ = shipped and
-released. ❌ = not yet ported to that language; see
+released. 🚧 = merged but still under `[Unreleased]` in the changelog.
+❌ = not yet ported to that language; see
 [§3](#3-whats-still-outstanding-after-130) for what's tracked there.
 
 | Feature | Python | TypeScript | .NET | Dart | C++ |
@@ -79,6 +80,8 @@ released. ❌ = not yet ported to that language; see
 | earcut-based triangulation (replaces Shapely + concave-face correctness fix) | ✅ | n/a, own triangulator | n/a | n/a | n/a |
 | Large-file streaming fix ([#264](https://github.com/iamahsanmehmood/openskp/issues/264)) | ✅ | not checked | not checked | not checked | not checked |
 | Opt-in progress reporting + structured errors | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Opt-in visibility filtering: hidden faces (TS `respectEdgeVisibility`, .NET `RespectVisibility`) | ❌ | ✅ | 🚧 | ❌ | ❌ |
+| Opt-in visibility filtering: hidden group/component instances (.NET only, same flag; skips the subtree, hierarchy included) | ❌ | ❌ | 🚧 | ❌ | ❌ |
 | **Writing** | | | | | |
 | Writer base (`create()`): materials, layers, definitions, groups, faces, holes, auto-triangulate | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Writer: circular/arc curves + polylines | ✅ | ✅ | ✅ | ✅ | ✅ |

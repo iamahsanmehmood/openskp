@@ -51,6 +51,23 @@ namespace OpenSkp
 
         /// <summary>Called for start/stage/completion messages.</summary>
         public Action<SkpLogLevel, string>? OnLog { get; set; }
+
+        /// <summary>Leaves geometry the file marks hidden out of a built
+        /// scene - a face carrying SketchUp's Hide flag, and a group or
+        /// component instance carrying it.
+        ///
+        /// Off by default, matching TypeScript's respectEdgeVisibility: what
+        /// SketchUp draws is a display policy, not a parsing fact, and some
+        /// consumers legitimately want every face regardless. The raw parse
+        /// always reports the flags, whatever this is set to.
+        ///
+        /// A hidden instance takes its whole subtree with it, out of the
+        /// instance hierarchy and the mesh index as well as out of the
+        /// triangles - hiding a group in SketchUp hides everything it
+        /// places, so a scene built this way holds only what is drawn. A
+        /// caller that needs the hierarchy to stay complete leaves this off
+        /// and filters downstream.</summary>
+        public bool RespectVisibility { get; set; }
     }
 
     /// <summary>Shared tuning constants for progress reporting.</summary>

@@ -1,18 +1,10 @@
 name: Release NuGet Package
 
+# Dispatch-only in this fork. This publishes the OpenSkp id to public
+# nuget.org, which this organisation does not own and does not publish to -
+# see release-innergy-nuget.yml for the feed this fork actually uses.
 on:
-  push:
-    branches: [main]
-    paths:
-      - '**/*.csproj'
-      - '**/*.cs'
-    tags:
-      - 'nuget-v*'
-  pull_request:
-    branches: [main]
-    paths:
-      - '**/*.csproj'
-      - '**/*.cs'
+  workflow_dispatch:
 
 permissions:
   contents: write

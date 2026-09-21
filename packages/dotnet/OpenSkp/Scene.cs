@@ -295,6 +295,7 @@ namespace OpenSkp
                         TextureIndexFor = TextureIndexFor,
                         FallbackColor = fallbackColor,
                         DefinitionId = defId,
+                        RespectVisibility = options?.RespectVisibility == true,
                     });
 
                     bool isRootPath = pathName == "ROOT";
@@ -400,6 +401,13 @@ namespace OpenSkp
                 var childInstancesInfo = new List<InstanceNode>();
                 foreach (var inst in builder.Instances)
                 {
+                    // Skipped before the InstanceNode is built, so a hidden group leaves the
+                    // hierarchy too, not just the triangles - see SkpParseOptions.RespectVisibility.
+                    if (options?.RespectVisibility == true && inst.Hidden)
+                    {
+                        continue;
+                    }
+
                     long? refIdx = inst.RefIdx;
                     var newMatrix = Transforms.MultiplyMatrices(currentMatrix, inst.Matrix);
 

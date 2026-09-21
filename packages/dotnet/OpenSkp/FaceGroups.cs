@@ -69,6 +69,10 @@ namespace OpenSkp
             /// <summary>Identifies the definition in a triangulation
             /// failure.</summary>
             public long? DefinitionId;
+
+            /// <summary>Leaves faces carrying SketchUp's Hide flag out of
+            /// the groups. See SkpParseOptions.RespectVisibility.</summary>
+            public bool RespectVisibility;
         }
 
         /// <summary>Inverse of a row-major 3x3 matrix, via the
@@ -250,6 +254,11 @@ namespace OpenSkp
             foreach (var faceKv in builder.Faces)
             {
                 var fData = faceKv.Value;
+
+                if (ctx.RespectVisibility && fData.Hidden)
+                {
+                    continue;
+                }
 
                 var (frontMat, frontMatColor) = ctx.ResolveMaterial(fData.MaterialId);
                 var (backMat, backMatColor) = ctx.ResolveMaterial(fData.BackMaterialId);
