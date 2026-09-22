@@ -144,6 +144,8 @@ struct RawParsed {
   // visibility comes from the model.dat layer manager's own 8E3C byte
   // (see geometry.cpp's collect_layers), read here into this same map.
   std::map<std::string, bool> layer_hidden;
+  std::map<std::string, std::map<std::string, std::map<std::string, std::string>>>
+      layer_attribute_dictionaries;
   std::map<EntityId, std::string> layer_id_to_name;
   std::vector<RawPage> pages;
   std::vector<RawDimension> dimensions;

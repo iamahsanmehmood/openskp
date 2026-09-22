@@ -57,9 +57,10 @@ std::string tag_at(const ByteBuffer& d, std::size_t o) {
 // nested sub-TLV nodes (e.g. definitions, drawing elements, component instances).
 // containers lists every tag hex ID that the TLV parser must recursively traverse.
 static const std::set<std::string> containers = {
-    "F401", "F701", "D430", "D530", "C832", "7C15", "8813", "8913", "8A13", "8B13", "8C13", "8D13",
-    "4C1D", "6419", "F901", "7017", "7117", "D007", "C409", "9411", "9511", "0F01", "384A", "B80B",
-    "9713", "2C4C", "AC0D", "AE0D", "F601", "F801", "983A", "993A", "8C3C", "8D3C", "9013", "401F"};
+    "F401", "F701", "D430", "D530", "C832", "7C15", "8813", "8913", "8A13", "8B13", "8C13",
+    "8D13", "4C1D", "6419", "F901", "7017", "7117", "D007", "C409", "9411", "9511", "0F01",
+    "384A", "B80B", "9713", "2C4C", "AC0D", "AE0D", "F601", "F801", "983A", "993A", "8C3C",
+    "8D3C", "9013", "401F", "9113", "9213", "6942", "6C42", "6842"};
 
 std::vector<TlvNode> parse_tlv_recursive(const ByteBuffer& d, std::size_t start, std::size_t end) {
   if (end > d.size() || start > end) throw std::out_of_range("invalid TLV range");

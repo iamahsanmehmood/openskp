@@ -72,12 +72,18 @@ F901  7017  7117  D007  C409  9411  9511  0F01
 384A  B80B  9713  2C4C  AC0D  AE0D  F601  F801
 983A  993A  8C3C  8D3C
 9013  401F
+9113  9213  6942  6C42  6842
 ```
 
 `9013`/`401F` are the pair of containers an Image entity's placement is
 wrapped in: a placed Image wraps a standard `6419` Instance node inside
 `9013` → `401F`. Without treating both as containers, that inner instance
 stays buried in an opaque payload and the image looks never placed.
+
+`9113`/`9213` are the per-definition lists of construction/guide lines
+(`6942`) and points (`6C42`). `6842` is the drawbase wrapper those
+entities share (`D007` / entity id / `D307` flags). `6A42` (8×f64 line
+body) and `6D42` (3×f64 point) are leaves, not containers.
 
 ## 3. Tag Reference
 
@@ -93,6 +99,12 @@ stays buried in an opaque payload and the image looks never placed.
 | `AC0D` | **Face** | Container | Planar face polygon |
 | `AD0D` | Face Normal | 24B: 3×`float64` | Normal vector (nx, ny, nz) |
 | `AE0D` | Face Loops | Container | Outer boundary + holes |
+| `9113` | **CLine list** | Container | Construction/guide lines in this definition |
+| `6942` | **CConstructionLine** | Container | Guide line entity |
+| `6A42` | Line params | 64B: 8×`float64` | Point, unit direction, start/end params (inches; `|param|≥1e20` unbounded) |
+| `9213` | **CPoint list** | Container | Construction/guide points in this definition |
+| `6C42` | **CConstructionPoint** | Container | Guide point entity |
+| `6D42` | Point position | 24B: 3×`float64` | X, Y, Z (inches) |
 
 ### 3.2 Topology Tags
 

@@ -140,7 +140,7 @@ condensed version.
 | Attribute dicts surfaced in GLB/JSON metadata export (not just IFC Psets) | ✅ | n/a | n/a | n/a | ✅ |
 | VFF pages/scenes + dimension parsing | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Legacy (pre-2021) pages/scenes reading | ✅ | ❌ | ❌ | ❌ | ✅ |
-| Construction lines/points reading | ✅ | ✅ | ✅ | ✅ | ✅ legacy only |
+| Construction lines/points reading | ✅ legacy + VFF | ✅ | ✅ | ✅ | ✅ legacy + VFF |
 | Scene baking, instancing-preserving scene output | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Loose-edge curve support (structural framing) | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Writer: materials/layers/definitions/groups/faces/curves/images | ✅ | ✅ | ✅ | ✅ | ✅ |

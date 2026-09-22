@@ -26,6 +26,77 @@ never updated when `flatbuffers` became a real dependency for Fragments
 export/import - added the missing entry. Verified all three fixes
 together in a real browser: the viewer now loads a sample file and
 renders it with zero console errors.
+### Fixed — legacy: zero-material v18 files with a custom layer ahead of Layer0
+
+Legacy files with fewer than two materials bootstrap the slot base by walking
+the layer list and treating the next object as a back-ref to the active layer.
+Some SketchUp 2018 saves list a custom tag first (`layer_count` = 1) and write
+Layer0 after a 16-byte colour-layer extension (12 zero bytes + u32). The
+reader consumed only the 21-byte colour tail, so the probe landed on padding
+and failed with `base probe: anchor resolved to` before any geometry. Colour
+`CLayer` records now skip that extension when it precedes another `CLayer`,
+and both the probe and the model walk keep reading `CLayer` records past the
+declared count (same trailing skip the walk already used for v20 separators).
+Python, TypeScript, .NET, Dart, and C++.
+
+### Added — C++: write construction lines/points inside component definitions
+
+`ComponentDefinitionBuilder` now has `add_construction_point` /
+`add_construction_line` with the same signatures as `SkpBuilder` (Python's
+writer is still root-level only). `open_existing()` replays both, including
+inside nested definitions that previously counted as "no replayable
+geometry" when they had no faces. Half-bounded lines (one end unset) are
+skipped with a warning — the public writer API is still fully finite or
+fully infinite.
+
+### Fixed — construction-line trailer calibration when the guide is last in a definition
+
+A `CConstructionLine` that is the last entity in a `CComponentDefinition`
+is followed by `nrel=0`, which looks like a null MFC tag. The v17
+calibrator preferred a 7-byte trailer on that weak match, swallowed three
+bytes of the definition tail, and then cached that 7 for every later
+guide in the file (this project's writer, and real SketchUp 2025, use 4).
+The strong-tag pass is unchanged; the null pass now prefers 4. Same
+change in Python's `legacy._read_constructionline`.
+### Added — Read VFF (2021+) construction lines/points (Python + C++)
+
+VFF files store guide lines under definition list `9113` → `6942` / `6A42`
+(same 8 doubles as classic `CConstructionLine`) and guide points under
+`9213` → `6C42` / `6D42`. Those tags are now containers in the TLV walker
+(`_core.CONTAINER_TAGS` / `tlv.cpp`), and the geometry collectors fill
+`Definition.construction_lines` / `.construction_points`. Ground-truthed
+against a SketchUp-authored VFF layout; tests lock the tag layout with
+synthetic TLV so the fixture does not have to carry a real document path
+or template.
+### Fixed — C++: face UV basis and pin scale now match Python / real SketchUp
+
+Python's writer already parameterized a face's texture matrix in SketchUp's
+normal-derived basis (`U = normalize(Z × n)`, `V = n × U`; horizontal `(X, Y)`,
+downward `(−X, +Y)`; tilt sine below `1e-3` stays on the world axes) and scaled
+`front_uv`/`back_uv` pins from tiles into texture-inches using the material's
+applied size before the fit. The C++ port still solved the matrix in a
+first-edge basis (`points[1] − points[0]`), which agreed with SketchUp only
+when that edge happened to run along `Z × n` and otherwise turned the mapping
+90° or 180° (a square listed from a different corner, every underside, a
+faceted curve of small quads). Its reader copies (`face_groups` / `edit` /
+`codegen`) used a `1e-9` snap and the `(X, −Y)` downward mirror, so a
+near-horizontal normal's float noise flipped the basis and every downward face
+read back upside-down. Pins were also left in tiles, so a material applied at
+anything other than 1 in per tile came out that many times too big. C++ now
+matches Python on all four copies of the basis, stores applied size per
+textured-material slot, and scales pins in both `SkpBuilder::add_face` and
+`ComponentDefinitionBuilder::add_face`. Regression tests lock the vertex-order
+matrix, the downward `(−X, +Y)` matrix, and a 10-inch tile's 5× scale.
+### Added — C++: named dictionaries on `CLayer`
+
+`SkpBuilder::add_layer` now accepts `LayerOptions::extra_dictionaries` and
+writes them as `CAttributeNamed` records on the layer. `parse()` copies
+every named dictionary on a legacy `CLayer` onto
+`Layer::attribute_dictionaries` (string maps, same contract as
+`Instance::attribute_dictionaries`). The reader does not special-case
+dictionary names. VFF layers still have no attribute slot, so this is
+empty there. `edit()` replays the dictionaries so a round-trip through
+the writer keeps them.
 
 ### Added — Read a `.frag` file back (TypeScript, .NET, Dart, C++) - all 5 languages now
 

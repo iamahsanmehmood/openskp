@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <charconv>
+#include <cmath>
 #include <sstream>
 
 #include "internal.hpp"
@@ -353,6 +354,38 @@ void collect_geometry(const std::vector<TlvNode>& es, GeometryBuilder& b) {
               i.hidden = (x.payload[0] & 0x01) != 0;
           }
       b.instances.push_back(std::move(i));
+    } else if (e.tag == "6942") {
+      // VFF CConstructionLine (list `9113`). Same 8-double body as legacy:
+      // point + unit direction + start/end params; |param| ≥ 1e20 is unbounded.
+      auto* p = find_node(e.children, "6A42");
+      if (p && p->payload.size() >= 64) {
+        ConstructionLine cl;
+        cl.point = {read_f64(p->payload, 0), read_f64(p->payload, 8), read_f64(p->payload, 16)};
+        cl.direction = {read_f64(p->payload, 24), read_f64(p->payload, 32),
+                        read_f64(p->payload, 40)};
+        constexpr double kHugeParam = 1e20;
+        const double start_param = read_f64(p->payload, 48);
+        const double end_param = read_f64(p->payload, 56);
+        if (std::abs(start_param) < kHugeParam) {
+          cl.start = Vec3{cl.point[0] + cl.direction[0] * start_param,
+                          cl.point[1] + cl.direction[1] * start_param,
+                          cl.point[2] + cl.direction[2] * start_param};
+        }
+        if (std::abs(end_param) < kHugeParam) {
+          cl.end = Vec3{cl.point[0] + cl.direction[0] * end_param,
+                        cl.point[1] + cl.direction[1] * end_param,
+                        cl.point[2] + cl.direction[2] * end_param};
+        }
+        b.construction_lines.push_back(std::move(cl));
+      }
+    } else if (e.tag == "6C42") {
+      // VFF CConstructionPoint (list `9213`): 6D42 position, 6E42 unused zeros, 6F42 u8.
+      auto* p = find_node(e.children, "6D42");
+      if (p && p->payload.size() >= 24) {
+        ConstructionPoint cp;
+        cp.position = {read_f64(p->payload, 0), read_f64(p->payload, 8), read_f64(p->payload, 16)};
+        b.construction_points.push_back(std::move(cp));
+      }
     } else if (!e.children.empty())
       collect_geometry(e.children, b);
   }

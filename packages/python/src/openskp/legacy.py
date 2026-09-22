@@ -127,6 +127,7 @@ class _Archive:
         self.class_slot: Dict[str, int] = {}
         self.class_schema: Dict[str, int] = {}
         self.current_class: Optional[str] = None  # class of the object being read
+        self.current_obj_slot: Optional[int] = None
         self.next_slot = 0
         self.walk_base = 0            # slots below this are unwalked pre-model
         self.readers: Dict[str, Any] = {}
@@ -199,11 +200,14 @@ class _Archive:
         if reader is None:
             raise LegacyParseError(f"no reader for class {name} {r.ctx()}")
         prev_class = self.current_class
+        prev_slot = self.current_obj_slot
         self.current_class = name
+        self.current_obj_slot = slot
         try:
             value = reader(self, r)
         finally:
             self.current_class = prev_class
+            self.current_obj_slot = prev_slot
         self.slots[slot] = ('obj', name, value)
         if name in ('CDimensionLinear', 'CText'):
             self.annot_watermark = self.next_slot
@@ -240,6 +244,77 @@ class _Archive:
         if ent[0] == 'class':
             raise LegacyParseError(f"back-ref to class slot {slot} {r.ctx()}")
         return slot, ent[1], ent[2]
+
+    # 0xffff CLayer, a class-ref to a CLayer already in class_slot, or —
+    # when ``unmatched_class_ref`` — any short 0x8000 class-ref. The last
+    # form is only for the throwaway slot-base probe, which numbers from
+    # 1<<20 so the file's 0x8000|real_slot will not match class_slot.
+    def _clayer_record_at(self, at: int, unmatched_class_ref: bool = False) -> bool:
+        if at + 2 > len(self.data):
+            return False
+        tag = struct.unpack_from('<H', self.data, at)[0]
+        if (tag == 0xFFFF and at + 12 <= len(self.data)
+                and struct.unpack_from('<H', self.data, at + 4)[0] == 6
+                and self.data[at + 6:at + 12] == b'CLayer'):
+            return True
+        lay_cs = self.class_slot.get('CLayer')
+        if lay_cs is not None and _is_class_ref(self.data, at, lay_cs):
+            return True
+        return unmatched_class_ref and (tag & 0x8000) != 0 and tag != 0xFFFF
+
+    # Colour CLayer ends in a 21-byte tail. Some v18 zero-material files
+    # (custom tag listed first, then Layer0) write 12 zero bytes + u32
+    # after that, then another CLayer. Skip those 16 bytes only when they
+    # precede a CLayer; leave a definition-list back-ref alone.
+    def _skip_clayer_colour_ext(self, r: _R) -> None:
+        pad, ext = 12, 16
+        if r.pos + ext + 2 > len(self.data):
+            return
+        if any(self.data[r.pos + i] != 0 for i in range(pad)):
+            return
+        if self._clayer_record_at(r.pos + ext, True):
+            r.pos += ext
+
+    # v18 template Layer0 after a custom tag: <parent u16><active u16><dc
+    # u32>. Consume parent only when both u16s are already CLayer objects.
+    # A lone back-ref then a definition count (usual layout) stays put.
+    def _skip_clayer_parent_ref(self, r: _R, self_slot: Optional[int]) -> None:
+        if r.pos + 4 > len(self.data) or self_slot is None:
+            return
+        a = struct.unpack_from('<H', self.data, r.pos)[0]
+        b = struct.unpack_from('<H', self.data, r.pos + 2)[0]
+        if not a or (a & 0x8000) or a == 0x7FFF or a == self_slot:
+            return
+        if not b or (b & 0x8000) or b == 0x7FFF:
+            return
+        ea = self.slots.get(a)
+        eb = self.slots.get(b)
+        if ea is None or eb is None:
+            return
+        if ea[0] == 'class' or eb[0] == 'class':
+            return
+        if ea[1] != 'CLayer' or eb[1] != 'CLayer':
+            return
+        r.pos += 2
+
+    # Extra CLayer records past declared layer_count (v18: count=1 custom
+    # tag, then Layer0). Skip null separators; stop at the definition-list
+    # anchor. ``unmatched_class_ref`` only on the throwaway probe.
+    def _collect_trailing_layers(self, r: _R, slots_out=None, layers_out=None,
+                                 unmatched_class_ref: bool = False) -> None:
+        while r.pos + 2 <= len(self.data):
+            tag = r.peek_u16()
+            if tag == 0:
+                r.pos += 2
+                continue
+            if not self._clayer_record_at(r.pos, unmatched_class_ref):
+                break
+            s, _, v = self.read_object(r, expect='CLayer')
+            if v is not None:
+                if slots_out is not None:
+                    slots_out.append(s)
+                if layers_out is not None:
+                    layers_out.append((s, v))
 
 
 def _plausible_list_tag(ar, data, at) -> bool:
@@ -631,6 +706,8 @@ def _read_layer(ar, r):
     rgba = r.raw(4)
     r.utf16()
     r.raw(21)
+    ar._skip_clayer_colour_ext(r)
+    ar._skip_clayer_parent_ref(r, ar.current_obj_slot)
     return {'k': 'layer', 'name': name, 'hidden': mid[0] if mid else 0,
             'rgba': tuple(rgba)}
 
@@ -803,19 +880,27 @@ def _read_constructionline(ar, r):
     if k is None:
         default = 7 if ar.ver == 17 else 4
         order = [default] + [c for c in (0, 4, 7) if c != default]
-        # two passes: a zero tail full of padding can mimic a null tag, so
-        # only accept a null-anchored candidate when no candidate lands on
-        # a STRONG form (escape / known class / class definition)
-        for allow_null in (False, True):
-            for cand in order:
-                if _strict_next_tag(ar, r.data, r.pos + cand,
-                                    allow_null=allow_null):
-                    k = cand
-                    break
-            if k is not None:
+        # Strong tags first (escape / known class / class definition). A
+        # following entity at +4 or +7 is unambiguous. The weak (null) pass
+        # is the last-in-list case: a construction line that is the last
+        # entity in a CComponentDefinition is followed by nrel=0, which
+        # looks like a null tag at every candidate including v17's preferred
+        # 7. Preferring 7 there swallows three bytes of the definition tail
+        # and then caches that 7 for every later guide in the file - this
+        # project's own writer (and real SketchUp 2025) uses a 4-byte
+        # trailer, so the weak pass prefers 4.
+        k = None
+        for cand in order:
+            if _strict_next_tag(ar, r.data, r.pos + cand, allow_null=False):
+                k = cand
                 break
         if k is None:
-            k = default
+            for cand in (4, 0, 7):
+                if _strict_next_tag(ar, r.data, r.pos + cand, allow_null=True):
+                    k = cand
+                    break
+        if k is None:
+            k = 4
         ar._cline_tail = k
     r.raw(k)
     huge = 1e20  # well below the real ±1e30 sentinel, far above any real geometry extent
@@ -1384,6 +1469,8 @@ def _probe_layer_anchor_bases(data: bytes, ver: int, start: int,
     for _ in range(layer_count):
         s, _, _ = boot.read_object(boot.r, expect='CLayer')
         layer_slots.append(s)
+    boot._collect_trailing_layers(boot.r, slots_out=layer_slots,
+                                  unmatched_class_ref=True)
     s, n, _ = boot.read_object(boot.r)
     if n != 'premodel':
         # under the throwaway base every absolute back-ref classifies as
@@ -1434,18 +1521,7 @@ def _walk_model(data: bytes, ver: int, start: int, mat_count: int,
             continue
         layers.append((s, v))
     # trailing separators (and any layer records past the declared count)
-    lay_cls = ar.class_slot.get('CLayer')
-    while True:
-        tag = r.peek_u16()
-        if tag == 0:
-            r.pos += 2
-            continue
-        if lay_cls is not None and tag == (0x8000 | lay_cls):
-            s, _, v = ar.read_object(r, expect='CLayer')
-            if v is not None:
-                layers.append((s, v))
-            continue
-        break
+    ar._collect_trailing_layers(r, layers_out=layers)
 
     # definition list: object pointer to the ACTIVE layer, then count
     _, dn, _ = ar.read_object(r)

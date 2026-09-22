@@ -66,7 +66,7 @@ released. ❌ = not yet ported to that language; see
 | Attribute dicts surfaced in GLB/JSON metadata export (not just IFC Psets) | ✅ | n/a, not independently re-checked this cycle | n/a, not independently re-checked this cycle | n/a, not independently re-checked this cycle | ✅ |
 | VFF pages/scenes + dimension parsing | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Legacy (pre-2021) pages/scenes reading | ✅ | ❌ VFF only | ❌ VFF only | ❌ VFF only | ✅ |
-| Construction lines/points reading | ✅ legacy only | ✅ | ✅ | ✅ | ✅ legacy only |
+| Construction lines/points reading | ✅ legacy + VFF | ✅ | ✅ | ✅ | ✅ legacy + VFF |
 | VFF per-layer-hidden flag reading | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Per-edge/per-face layer, `Edge#curve` pointers, classic `CArcCurve` frames (legacy + VFF) | ✅ | ❌ | ❌ | ❌ | ❌ |
 | `mesh_index[...].properties` populated | ✅ | ✅ | ✅ | ✅ | ✅ |

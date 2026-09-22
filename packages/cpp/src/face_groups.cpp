@@ -32,12 +32,19 @@ std::array<double, 9> invert_3x3(const std::array<double, 9>& m) {
   };
 }
 
-// Face-plane basis vectors (xr, yr) for UV projection, from a face normal.
+// Face-plane basis vectors (xr, yr) for UV projection, from a unit face normal.
+// See packages/python/src/openskp/_face_groups.py::face_uv_basis - U = normalize(Z × n),
+// V = n × U. Horizontal (X, Y); downward (−X, +Y). Tilt sine below 1e-3 snaps to those
+// world axes (SDK-measured); a 1e-9 cutoff let float noise on a near-horizontal normal
+// flip the basis, and (X, −Y) for downward turned every underside.
+constexpr double kUvVerticalTolerance = 1e-3;
+
 std::pair<Vec3, Vec3> face_uv_basis(const Vec3& n) {
   double cx = -n[1], cy = n[0];
   double clen = std::sqrt(cx * cx + cy * cy);
-  if (clen < 1e-9) {
-    return {Vec3{1, 0, 0}, Vec3{0, n[2] >= 0 ? 1.0 : -1.0, 0}};
+  if (clen < kUvVerticalTolerance) {
+    Vec3 xr = n[2] >= 0 ? Vec3{1, 0, 0} : Vec3{-1, 0, 0};
+    return {xr, Vec3{0, 1, 0}};
   }
   Vec3 xr{cx / clen, cy / clen, 0};
   Vec3 yr{n[1] * xr[2] - n[2] * xr[1], n[2] * xr[0] - n[0] * xr[2], n[0] * xr[1] - n[1] * xr[0]};

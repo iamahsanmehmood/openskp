@@ -7,7 +7,9 @@
 // already-trusted reader" validation strategy this project already uses on the read side.
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <filesystem>
 #include <fstream>
 #include <gtest/gtest.h>
 
@@ -798,6 +800,23 @@ TEST(Create, InstanceAttributesRoundTrip) {
   ASSERT_EQ(model.root().instances.size(), 1u);
 }
 
+TEST(Create, LayerExtraDictionariesRoundTrip) {
+  auto builder = create();
+  LayerOptions opts;
+  opts.extra_dictionaries["plugin"]["n"] = std::int32_t{7};
+  builder->add_layer("Walls", opts);
+  builder->add_face({{0, 0, 0}, {10, 0, 0}, {10, 10, 0}, {0, 10, 0}});
+
+  SkpModel model = round_trip(*builder);
+  const Layer* walls = nullptr;
+  for (const auto& layer : model.layers) {
+    if (layer.name == "Walls") walls = &layer;
+  }
+  ASSERT_NE(walls, nullptr);
+  ASSERT_TRUE(walls->attribute_dictionaries.count("plugin"));
+  EXPECT_EQ(walls->attribute_dictionaries.at("plugin").at("n"), "7");
+}
+
 TEST(Create, FaceAndDefinitionAttributesDoNotThrow) {
   // The reader's public model doesn't expose face/definition-level attributes (see edit.hpp's
   // own documented gap), so this is a smoke test that writing them at least succeeds and
@@ -819,6 +838,19 @@ TEST(Create, FaceAndDefinitionAttributesDoNotThrow) {
 // Explicit texture positioning (front_uv/back_uv).
 // ---------------------------------------------------------------------------------------------
 
+std::filesystem::path write_fake_png(const char* name) {
+  auto path = std::filesystem::temp_directory_path() / name;
+  std::ofstream f(path, std::ios::binary);
+  ByteBuffer png = fake_png_bytes();
+  f.write(reinterpret_cast<const char*>(png.data()), static_cast<std::streamsize>(png.size()));
+  return path;
+}
+
+void expect_matrix(const std::array<double, 9>& m, const std::array<double, 9>& expected,
+                   double abs = 1e-9) {
+  for (int i = 0; i < 9; ++i) EXPECT_NEAR(m[i], expected[i], abs) << "m[" << i << "]";
+}
+
 TEST(Create, ExplicitFrontUvRoundTrips) {
   auto builder = create();
   int brick = builder->add_material("Brick", Color3{150, 100, 50});
@@ -835,6 +867,104 @@ TEST(Create, ExplicitFrontUvRoundTrips) {
   ASSERT_EQ(model.root().faces.size(), 1u);
   const Face& f = model.root().faces.begin()->second;
   EXPECT_TRUE(f.uv_transform.has_value());
+}
+
+TEST(Create, VertexOrderDoesNotTurnTheMapping) {
+  // Same 100×100 square listed from a different corner so the first edge runs +Y,
+  // pinned to u = x/50, v = y/50. SketchUp's basis is the normal alone ((X, Y)
+  // for a horizontal face), so the stored matrix must stay diag(50, 50). The
+  // writer used to solve in a first-edge basis and turned this face 90°.
+  auto png = write_fake_png("openskp_uv_vertex_order.png");
+  auto builder = create();
+  int tex = builder->add_texture_material("Brick", png);
+  FaceOptions opts;
+  opts.material = tex;
+  opts.front_uv = UvCorrespondence{
+      {Point3{0, 0, 0}, {0.0, 0.0}},
+      {Point3{50, 0, 0}, {1.0, 0.0}},
+      {Point3{0, 50, 0}, {0.0, 1.0}},
+  };
+  builder->add_face({{100, 0, 0}, {100, 100, 0}, {0, 100, 0}, {0, 0, 0}}, opts);
+
+  SkpModel model = round_trip(*builder);
+  std::filesystem::remove(png);
+  ASSERT_EQ(model.root().faces.size(), 1u);
+  const Face& f = model.root().faces.begin()->second;
+  ASSERT_TRUE(f.uv_transform.has_value());
+  expect_matrix(*f.uv_transform, {50.0, 0.0, 0.0, 0.0, 50.0, 0.0, 0.0, 0.0, 1.0});
+}
+
+TEST(Create, DownwardFaceUsesMinusXPlusY) {
+  // Clockwise XY loop → normal −Z. Pins (0,0)→(0,0), (2,0)→(1,0), (0,2)→(0,1)
+  // in SketchUp's downward (−X, +Y) basis store xf = diag(−2, 2). The old
+  // first-edge writer produced diag(2, −2); the (X, −Y) reader mirror turned
+  // every underside.
+  auto png = write_fake_png("openskp_uv_downward.png");
+  auto builder = create();
+  int tex = builder->add_texture_material("Brick", png);
+  FaceOptions opts;
+  opts.material = tex;
+  opts.front_uv = UvCorrespondence{
+      {Point3{0, 0, 0}, {0.0, 0.0}},
+      {Point3{2, 0, 0}, {1.0, 0.0}},
+      {Point3{0, 2, 0}, {0.0, 1.0}},
+  };
+  builder->add_face({{0, 2, 0}, {2, 2, 0}, {2, 0, 0}, {0, 0, 0}}, opts);
+
+  SkpModel model = round_trip(*builder);
+  std::filesystem::remove(png);
+  ASSERT_EQ(model.root().faces.size(), 1u);
+  const Face& f = model.root().faces.begin()->second;
+  ASSERT_TRUE(f.normal.has_value());
+  EXPECT_NEAR((*f.normal)[2], -1.0, 1e-9);
+  ASSERT_TRUE(f.uv_transform.has_value());
+  expect_matrix(*f.uv_transform, {-2.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 1.0});
+}
+
+TEST(Create, PinsAreInTilesWhateverTheAppliedSize) {
+  // Pins are in tiles; SketchUp stores the matrix in texture-inches. A 10 in
+  // tile with (50,0)→(1,0) must store a 5× scale, not the unscaled 50 that
+  // made a 2 m water tile 78.74× too big.
+  auto png = write_fake_png("openskp_uv_tile_size.png");
+  auto builder = create();
+  int tex = builder->add_texture_material("Brick", png, 10.0, 10.0);
+  FaceOptions opts;
+  opts.material = tex;
+  opts.front_uv = UvCorrespondence{
+      {Point3{0, 0, 0}, {0.0, 0.0}},
+      {Point3{50, 0, 0}, {1.0, 0.0}},
+      {Point3{0, 50, 0}, {0.0, 1.0}},
+  };
+  builder->add_face({{0, 0, 0}, {100, 0, 0}, {100, 100, 0}, {0, 100, 0}}, opts);
+
+  SkpModel model = round_trip(*builder);
+  std::filesystem::remove(png);
+  ASSERT_EQ(model.root().faces.size(), 1u);
+  const Face& f = model.root().faces.begin()->second;
+  ASSERT_TRUE(f.uv_transform.has_value());
+  expect_matrix(*f.uv_transform, {5.0, 0.0, 0.0, 0.0, 5.0, 0.0, 0.0, 0.0, 1.0});
+}
+
+TEST(Create, TiltedFaceEdgeAlignedMappingIsAPureScale) {
+  auto png = write_fake_png("openskp_uv_tilted.png");
+  auto builder = create();
+  int tex = builder->add_texture_material("Brick", png);
+  constexpr double s = 70.71067811865476;  // 100 / sqrt(2)
+  FaceOptions opts;
+  opts.material = tex;
+  opts.front_uv = UvCorrespondence{
+      {Point3{0, 0, 0}, {0.0, 0.0}},
+      {Point3{100, 0, 0}, {1.0, 0.0}},
+      {Point3{0, s, s}, {0.0, 1.0}},
+  };
+  builder->add_face({{0, 0, 0}, {100, 0, 0}, {100, s, s}, {0, s, s}}, opts);
+
+  SkpModel model = round_trip(*builder);
+  std::filesystem::remove(png);
+  ASSERT_EQ(model.root().faces.size(), 1u);
+  const Face& f = model.root().faces.begin()->second;
+  ASSERT_TRUE(f.uv_transform.has_value());
+  expect_matrix(*f.uv_transform, {100.0, 0.0, 0.0, 0.0, 100.0, 0.0, 0.0, 0.0, 1.0}, 1e-6);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -947,6 +1077,46 @@ TEST(Create, AddConstructionLineRequiresExactlyOneOfPoint2OrDirection) {
   EXPECT_THROW(builder->add_construction_line({0, 0, 0}), SkpWriteError);
   EXPECT_THROW(builder->add_construction_line({0, 0, 0}, Point3{1, 0, 0}, Point3{0, 1, 0}),
                SkpWriteError);
+}
+
+TEST(Create, NestedDefinitionConstructionRoundTrips) {
+  // Construction is last in the nested definition on purpose: that is the
+  // case that used to desync legacy_walk (cline trailer calibration
+  // against the definition's nrel=0 tail). Root-level guides follow, so
+  // a wrong cached trailer length would also corrupt those.
+  auto builder = create();
+  auto& nested = builder->add_component_definition("GuideGroup");
+  nested.add_face({{0, 0, 0}, {10, 0, 0}, {10, 10, 0}, {0, 10, 0}});
+  nested.add_construction_point({4.0, 5.0, 6.0});
+  nested.add_construction_line({1.0, 1.0, 1.0}, Point3{2.0, 2.0, 2.0});
+  nested.close();
+  builder->add_instance(nested);
+  builder->add_construction_point({1.0, 2.0, 3.0});
+  builder->add_construction_line({0.0, 0.0, 0.0}, Point3{12.0, 0.0, 0.0});
+  builder->add_construction_line({0.0, 0.0, 4.0}, std::nullopt, Point3{0.0, 0.0, 1.0});
+
+  SkpModel model = round_trip(*builder);
+  ASSERT_EQ(model.root().construction_points.size(), 1u);
+  EXPECT_NEAR(model.root().construction_points[0].position[0], 1.0, 1e-9);
+  EXPECT_NEAR(model.root().construction_points[0].position[1], 2.0, 1e-9);
+  EXPECT_NEAR(model.root().construction_points[0].position[2], 3.0, 1e-9);
+
+  ASSERT_EQ(model.root().construction_lines.size(), 2u);
+  ASSERT_TRUE(model.root().construction_lines[0].start && model.root().construction_lines[0].end);
+  EXPECT_NEAR((*model.root().construction_lines[0].end)[0], 12.0, 1e-9);
+  EXPECT_FALSE(model.root().construction_lines[1].start);
+  EXPECT_FALSE(model.root().construction_lines[1].end);
+  EXPECT_NEAR(model.root().construction_lines[1].point[2], 4.0, 1e-9);
+
+  const Definition* group = nullptr;
+  for (const auto& kv : model.definitions) {
+    if (kv.second.name == "GuideGroup") group = &kv.second;
+  }
+  ASSERT_NE(group, nullptr);
+  ASSERT_EQ(group->construction_points.size(), 1u);
+  EXPECT_NEAR(group->construction_points[0].position[0], 4.0, 1e-9);
+  ASSERT_EQ(group->construction_lines.size(), 1u);
+  ASSERT_TRUE(group->construction_lines[0].start && group->construction_lines[0].end);
 }
 
 }  // namespace

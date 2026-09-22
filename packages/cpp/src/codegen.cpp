@@ -76,11 +76,13 @@ std::optional<std::array<Point3, 3>> non_collinear_triple(const std::vector<Poin
   return std::nullopt;
 }
 
+constexpr double kUvVerticalTolerance = 1e-3;
+
 std::pair<Point3, Point3> face_uv_basis(Point3 n) {
   double cx = -n[1], cy = n[0];
   double clen = std::sqrt(cx * cx + cy * cy);
-  if (clen < 1e-9) {
-    return {{1.0, 0.0, 0.0}, {0.0, n[2] >= 0 ? 1.0 : -1.0, 0.0}};
+  if (clen < kUvVerticalTolerance) {
+    return {n[2] >= 0 ? Point3{1.0, 0.0, 0.0} : Point3{-1.0, 0.0, 0.0}, {0.0, 1.0, 0.0}};
   }
   Point3 xr{cx / clen, cy / clen, 0.0};
   Point3 yr{n[1] * xr[2] - n[2] * xr[1], n[2] * xr[0] - n[0] * xr[2], n[0] * xr[1] - n[1] * xr[0]};

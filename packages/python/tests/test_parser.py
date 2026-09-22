@@ -1237,6 +1237,43 @@ class TestInstanceMaterial:
 
         assert builder.instances[0]['material_id'] is None
 
+# ── VFF construction / guide geometry ────────────────────────────────────
+
+
+class TestVffConstructionGeometry:
+    """VFF (2021+) construction/guide points and lines (`9213`/`9113`)."""
+
+    @staticmethod
+    def _tlv(tag_hex: str, payload: bytes) -> bytes:
+        return bytes.fromhex(tag_hex) + struct.pack('<I', len(payload)) + payload
+
+    def test_extracts_construction_point_and_line(self) -> None:
+        from openskp import _core
+
+        def f64s(*vals: float) -> bytes:
+            return struct.pack('<' + 'd' * len(vals), *vals)
+
+        point = self._tlv(
+            '6C42',
+            self._tlv('6D42', f64s(1, 2, 3))
+            + self._tlv('6E42', f64s(0, 0, 0))
+            + self._tlv('6F42', b'\x00'),
+        )
+        finite = self._tlv('6942', self._tlv('6A42', f64s(0, 0, 0, 1, 0, 0, 0, 12)))
+        inf = self._tlv('6942', self._tlv('6A42', f64s(0, 0, 4, 0, 0, 1, -1e30, 1e30)))
+        buf = self._tlv('9213', point) + self._tlv('9113', finite + inf)
+        elements = _core.parse_tlv_recursive(buf, 0, len(buf))
+        builder = _core._GeometryBuilder()
+        _core._extract_geometry_from_nodes(elements, builder)
+
+        assert len(builder.construction_points) == 1
+        assert builder.construction_points[0]['position'] == pytest.approx((1.0, 2.0, 3.0))
+        assert len(builder.construction_lines) == 2
+        assert builder.construction_lines[0]['end'][0] == pytest.approx(12.0)
+        assert builder.construction_lines[1]['start'] is None
+        assert builder.construction_lines[1]['end'] is None
+        assert builder.construction_lines[1]['point'][2] == pytest.approx(4.0)
+
 
 # ── Style tests ──────────────────────────────────────────────────────────
 

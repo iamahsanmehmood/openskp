@@ -237,5 +237,25 @@ TEST(Geometry, AttributeDictionariesLeaveUnrecognizedValueTagAsEmptyString) {
   EXPECT_EQ(dicts.at("fbd-einfo").at("mystery"), "");
 }
 
+TEST(Geometry, ExtractsVffConstructionPointAndLine) {
+  using test::f64s;
+  auto builder = geometry(concat({
+      tlv("9213", tlv("6C42", concat({tlv("6D42", f64s({1, 2, 3})), tlv("6E42", f64s({0, 0, 0})),
+                                      tlv("6F42", {0})}))),
+      tlv("9113", concat({tlv("6942", tlv("6A42", f64s({0, 0, 0, 1, 0, 0, 0, 12}))),
+                          tlv("6942", tlv("6A42", f64s({0, 0, 4, 0, 0, 1, -1e30, 1e30})))})),
+  }));
+  ASSERT_EQ(builder.construction_points.size(), 1u);
+  EXPECT_NEAR(builder.construction_points[0].position[0], 1.0, 1e-9);
+  EXPECT_NEAR(builder.construction_points[0].position[1], 2.0, 1e-9);
+  EXPECT_NEAR(builder.construction_points[0].position[2], 3.0, 1e-9);
+  ASSERT_EQ(builder.construction_lines.size(), 2u);
+  ASSERT_TRUE(builder.construction_lines[0].start && builder.construction_lines[0].end);
+  EXPECT_NEAR((*builder.construction_lines[0].end)[0], 12.0, 1e-9);
+  EXPECT_FALSE(builder.construction_lines[1].start);
+  EXPECT_FALSE(builder.construction_lines[1].end);
+  EXPECT_NEAR(builder.construction_lines[1].point[2], 4.0, 1e-9);
+}
+
 }  // namespace
 }  // namespace openskp

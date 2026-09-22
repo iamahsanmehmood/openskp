@@ -17,6 +17,7 @@ add_executable(
   json_export_test.cpp
   layer_hidden_test.cpp
   legacy_single_material_test.cpp
+  legacy_zero_material_custom_layer_test.cpp
   legacy_v20_filler_test.cpp
   legacy_v20_test.cpp
   lowlevel_test.cpp

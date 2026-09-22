@@ -292,6 +292,7 @@ class Archive {
   classSlot = new Map<string, number>();
   classSchema = new Map<string, number>();
   currentClass: string | null = null;
+  currentObjSlot: number | null = null;
   nextSlot = 0;
   walkBase = 0;
   readers: Record<string, (ar: Archive, r: R) => any> = {};
@@ -383,18 +384,95 @@ class Archive {
       throw new LegacyParseError(`no reader for class ${name} ${r.ctx()}`);
     }
     const prevClass = this.currentClass;
+    const prevSlot = this.currentObjSlot;
     this.currentClass = name;
+    this.currentObjSlot = slot;
     let value: any;
     try {
       value = reader(this, r);
     } finally {
       this.currentClass = prevClass;
+      this.currentObjSlot = prevSlot;
     }
     this.slots.set(slot, ['obj', name, value]);
     if (name === 'CDimensionLinear' || name === 'CText') {
       this.annotWatermark = this.nextSlot;
     }
     return [slot, name, value];
+  }
+
+  // 0xffff CLayer, a class-ref to a CLayer already in classSlot, or —
+  // when `unmatchedClassRef` — any short 0x8000 class-ref. The last form
+  // is only for the throwaway slot-base probe, which numbers from 1<<20 so
+  // the file's 0x8000|real_slot will not match classSlot.
+  clayerRecordAt(at: number, unmatchedClassRef = false): boolean {
+    if (at + 2 > this.data.length) return false;
+    const tag = this.data[at] | (this.data[at + 1] << 8);
+    if (
+      tag === 0xffff &&
+      at + 12 <= this.data.length &&
+      (this.data[at + 4] | (this.data[at + 5] << 8)) === 6 &&
+      matchesAscii(this.data, at + 6, 'CLayer')
+    ) {
+      return true;
+    }
+    const layCs = this.classSlot.get('CLayer');
+    if (layCs !== undefined && isClassRef(this.data, at, layCs)) return true;
+    return unmatchedClassRef && (tag & 0x8000) !== 0 && tag !== 0xffff;
+  }
+
+  // Colour CLayer ends in a 21-byte tail. Some v18 zero-material files
+  // (custom tag listed first, then Layer0) write 12 zero bytes + u32 after
+  // that, then another CLayer. Skip those 16 bytes only when they precede
+  // a CLayer; leave a definition-list back-ref alone.
+  skipClayerColourExt(): void {
+    const pad = 12;
+    const ext = 16;
+    if (this.r.pos + ext + 2 > this.data.length) return;
+    for (let i = 0; i < pad; i++) {
+      if (this.data[this.r.pos + i] !== 0) return;
+    }
+    if (this.clayerRecordAt(this.r.pos + ext, true)) this.r.pos += ext;
+  }
+
+  // v18 template Layer0 after a custom tag: <parent u16><active u16><dc u32>.
+  // Consume parent only when both u16s are already CLayer objects. A lone
+  // back-ref then a definition count (usual layout) stays put.
+  skipClayerParentRef(selfSlot: number | null): void {
+    if (this.r.pos + 4 > this.data.length || selfSlot === null) return;
+    const a = this.data[this.r.pos] | (this.data[this.r.pos + 1] << 8);
+    const b = this.data[this.r.pos + 2] | (this.data[this.r.pos + 3] << 8);
+    if (!a || a & 0x8000 || a === 0x7fff || a === selfSlot) return;
+    if (!b || b & 0x8000 || b === 0x7fff) return;
+    const ea = this.slots.get(a);
+    const eb = this.slots.get(b);
+    if (ea === undefined || eb === undefined) return;
+    if (ea[0] === 'class' || eb[0] === 'class') return;
+    if (ea[1] !== 'CLayer' || eb[1] !== 'CLayer') return;
+    this.r.pos += 2;
+  }
+
+  // Extra CLayer records past declared layerCount (v18: count=1 custom
+  // tag, then Layer0). Skip null separators; stop at the definition-list
+  // anchor. `unmatchedClassRef` only on the throwaway probe.
+  collectTrailingLayers(
+    slotsOut: number[] | null,
+    layersOut: [number, any][] | null,
+    unmatchedClassRef = false
+  ): void {
+    while (this.r.pos + 2 <= this.data.length) {
+      const tag = this.r.peekU16();
+      if (tag === 0) {
+        this.r.pos += 2;
+        continue;
+      }
+      if (!this.clayerRecordAt(this.r.pos, unmatchedClassRef)) break;
+      const [s, , v] = this.readObject(this.r, 'CLayer');
+      if (v != null) {
+        if (slotsOut) slotsOut.push(s as number);
+        if (layersOut) layersOut.push([s as number, v]);
+      }
+    }
   }
 
   /** Map a FILE store-map index to the walker's numbering through the burn
@@ -728,6 +806,8 @@ function readLayer(ar: Archive, r: R): any {
   const rgba = r.raw(4);
   r.utf16();
   r.raw(21);
+  ar.skipClayerColourExt();
+  ar.skipClayerParentRef(ar.currentObjSlot);
   return { k: 'layer', name, hidden: mid.length ? mid[0] : 0, rgba: Array.from(rgba) };
 }
 
@@ -1408,6 +1488,7 @@ function probeLayerAnchorBases(data: Uint8Array, ver: number, start: number, mat
     const [s] = boot.readObject(boot.r, 'CLayer');
     layerSlots.push(s as number);
   }
+  boot.collectTrailingLayers(layerSlots, null, true);
   const [s, n] = boot.readObject(boot.r);
   if (n !== 'premodel') {
     // under the throwaway base every absolute back-ref classifies as
@@ -1509,20 +1590,7 @@ function walkModel(data: Uint8Array, ver: number, start: number, matCount: numbe
     layers.push([s as number, v]);
   }
   // trailing separators (and any layer records past the declared count)
-  const layCls = ar.classSlot.get('CLayer');
-  while (true) {
-    const tag = r.peekU16();
-    if (tag === 0) {
-      r.pos += 2;
-      continue;
-    }
-    if (layCls !== undefined && tag === (0x8000 | layCls)) {
-      const [s, , v] = ar.readObject(r, 'CLayer');
-      if (v !== null) layers.push([s as number, v]);
-      continue;
-    }
-    break;
-  }
+  ar.collectTrailingLayers(null, layers);
 
   // definition list: object pointer to the ACTIVE layer, then count
   const [, dn] = ar.readObject(r);

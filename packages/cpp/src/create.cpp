@@ -37,6 +37,7 @@
 #include <ctime>
 #include <fstream>
 #include <iterator>
+#include <map>
 #include <random>
 #include <utility>
 
@@ -403,8 +404,7 @@ Point3 cross3(Point3 a, Point3 b) {
 Point3 normalize3(Point3 v) {
   double length = std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
   if (length < 1e-9) {
-    throw SkpWriteError(
-        "cannot determine a texture-positioning basis: the face's first edge is degenerate");
+    throw SkpWriteError("cannot normalize a zero-length vector");
   }
   return {v[0] / length, v[1] / length, v[2] / length};
 }
@@ -435,14 +435,28 @@ std::optional<Matrix3x3> resolve_matrix3x3(std::optional<Matrix3x3> matrix3x3,
   return matrix3x3;
 }
 
-// The in-plane 2D basis (U, W) real SketchUp uses to parameterize a face's texture mapping, for
-// a face of ANY orientation - the face's own first edge direction (points[1] - points[0],
-// normalized) as U, and the plane normal crossed with that as W.
-std::pair<Point3, Point3> face_uv_basis(const std::vector<Point3>& points, Point3 normal) {
-  Point3 u = normalize3(
-      {points[1][0] - points[0][0], points[1][1] - points[0][1], points[1][2] - points[0][2]});
-  Point3 w = normalize3(cross3(normal, u));
-  return {u, w};
+// Face-plane UV basis (xr, yr) from a unit face normal - the same recipe Python's
+// `_face_groups.face_uv_basis` implements, measured against the SDK (2026-09-04).
+//
+// U = normalize(Z × n), V = n × U. A horizontal face uses world (X, Y); a face looking
+// DOWN uses (−X, +Y), the 180-degree turn of the upward basis - not the (X, −Y) mirror a
+// first-edge writer produced. Z × n is discontinuous at vertical, so a tilt sine below
+// 1e-3 (VERTICAL_TOLERANCE) snaps to those world axes rather than flipping with float
+// noise. The face's vertex order does not enter: solving in a first-edge basis agreed
+// with SketchUp only when that edge happened to run along Z × n, and turned the mapping
+// 90°/180° otherwise.
+constexpr double kUvVerticalTolerance = 1e-3;
+
+std::pair<Point3, Point3> face_uv_basis(Point3 n) {
+  double cx = -n[1], cy = n[0];
+  double clen = std::sqrt(cx * cx + cy * cy);
+  if (clen < kUvVerticalTolerance) {
+    Point3 xr = n[2] >= 0 ? Point3{1.0, 0.0, 0.0} : Point3{-1.0, 0.0, 0.0};
+    return {xr, Point3{0.0, 1.0, 0.0}};
+  }
+  Point3 xr{cx / clen, cy / clen, 0.0};
+  Point3 yr{n[1] * xr[2] - n[2] * xr[1], n[2] * xr[0] - n[0] * xr[2], n[0] * xr[1] - n[1] * xr[0]};
+  return {xr, yr};
 }
 
 // An arbitrary orthonormal in-plane basis (U, W) for a circle/arc's plane, given only its
@@ -510,9 +524,8 @@ Matrix3x3 solve_uv_matrix(const UvCorrespondence& pairs, const std::pair<Point3,
   return {a0, b0, 0.0, c0, d0, 0.0, e0, f0, 1.0};
 }
 
-Matrix3x3 uv_matrix_for_face(const std::vector<Point3>& points, const UvCorrespondence& pairs,
-                             Point3 normal) {
-  return solve_uv_matrix(pairs, face_uv_basis(points, normal));
+Matrix3x3 uv_matrix_for_face(const UvCorrespondence& pairs, Point3 normal) {
+  return solve_uv_matrix(pairs, face_uv_basis(normal));
 }
 
 double polygon_span(const std::vector<Point3>& points) {
@@ -1041,10 +1054,15 @@ class ArchiveWriter {
   // visible name, so each layer consumes 2 pids, not 1. `with_pids=false` (used only for the
   // layer a component definition embeds internally) omits both.
   int write_layer(const std::string& name, bool with_pids = true, bool hidden = false,
-                  std::optional<Color4> rgba = std::nullopt) {
+                  std::optional<Color4> rgba = std::nullopt, AttributeDictList dicts = {}) {
     int slot = new_of_known_class("CLayer", kLayerSchema);
-    preamble(with_pids ? std::optional<std::uint64_t>(std::nullopt)
-                       : std::optional<std::uint64_t>(0));
+    std::optional<std::uint64_t> pid =
+        with_pids ? std::optional<std::uint64_t>(std::nullopt) : std::optional<std::uint64_t>(0);
+    if (!dicts.empty()) {
+      preamble_with_real_attrs(std::nullopt, std::nullopt, dicts, pid);
+    } else {
+      preamble(pid);
+    }
     write_str(name);
     std::uint64_t pid2 = with_pids ? alloc_pid() : 0;
     buf.push_back(hidden ? 1 : 0);
@@ -1289,9 +1307,8 @@ class ArchiveWriter {
     // those caller-owned, shared-across-calls containers as it goes, with no rollback.
     PlaneResult plane = plane_from_polygon(points);
     std::optional<Matrix3x3> front_matrix, back_matrix;
-    if (front_uv)
-      front_matrix = uv_matrix_for_face(points, *front_uv, {plane.nx, plane.ny, plane.nz});
-    if (back_uv) back_matrix = uv_matrix_for_face(points, *back_uv, {plane.nx, plane.ny, plane.nz});
+    if (front_uv) front_matrix = uv_matrix_for_face(*front_uv, {plane.nx, plane.ny, plane.nz});
+    if (back_uv) back_matrix = uv_matrix_for_face(*back_uv, {plane.nx, plane.ny, plane.nz});
     double tol = std::max(polygon_span(points), 1.0) * 1e-6;
     for (const auto& hole : holes) {
       if (hole.size() < 3) throw SkpWriteError("a hole needs at least 3 points");
@@ -1491,6 +1508,28 @@ int do_add_polyline(ArchiveWriter& writer, std::map<Point3, int>& vertex_slots,
                                options.hidden_edges, options.soft_edges, options.smooth_edges);
 }
 
+// A caller's front_uv/back_uv pins are in TILES of the image ((1, 0) = one full repeat
+// along U, however big the material's applied size makes a tile). The matrix real SketchUp
+// stores is in INCHES of texture space - it divides by the material's applied width/height
+// when it reads a face's UV back (compute_face_uv, calibrated against SDK-authored files,
+// does the same) - so the pins are scaled up by that size before the fit. Without this a
+// texture applied at 2 m per tile (78.74 in) came out 78.74× too big on every pinned face.
+std::optional<UvCorrespondence> scale_pins(const std::optional<UvCorrespondence>& pins,
+                                           const std::map<int, std::pair<double, double>>& sizes,
+                                           int slot) {
+  if (!pins) return pins;
+  auto it = sizes.find(slot);
+  if (it == sizes.end()) return pins;
+  double w = it->second.first, h = it->second.second;
+  if (w == 1.0 && h == 1.0) return pins;
+  UvCorrespondence out = *pins;
+  for (auto& pair : out) {
+    pair.second[0] *= w;
+    pair.second[1] *= h;
+  }
+  return out;
+}
+
 // Reject a material/back_material option that isn't a handle `skp`'s own add_material()/
 // add_texture_material() actually returned. Without this, a stray value - most commonly a layer
 // handle passed to the wrong option by mistake - gets written straight into the file as a
@@ -1566,6 +1605,9 @@ struct ComponentDefinitionBuilder::Impl {
 struct SkpBuilder::Impl {
   detail::ArchiveWriter material_writer;
   int material_count = 0;
+  // Applied size (inches) each TEXTURED material slot was written with - add_face scales
+  // its front_uv/back_uv pins by it (see scale_pins).
+  std::map<int, std::pair<double, double>> applied_sizes;
 
   std::optional<detail::ArchiveWriter> layer_writer;
   int layer_writer_start = 0;
@@ -1794,11 +1836,15 @@ void ComponentDefinitionBuilder::add_face(const std::vector<Point3>& points,
   detail::AttributeDictList dicts;
   if (!options.attributes.empty())
     dicts.emplace_back(options.attribute_dict_name, options.attributes);
+  auto front_uv = detail::scale_pins(options.front_uv, impl_->skp->impl_->applied_sizes,
+                                     options.material.value_or(0));
+  auto back_uv = detail::scale_pins(options.back_uv, impl_->skp->impl_->applied_sizes,
+                                    options.back_material.value_or(0));
   impl_->new_entity_count += detail::write_face_or_triangulate(
       *impl_->writer, points, impl_->vertex_slots, impl_->edge_registry,
       options.material.value_or(0), options.layer.value_or(0), options.back_material.value_or(0),
-      options.hidden, options.soft_edges, options.smooth_edges, options.hidden_edges,
-      options.front_uv, options.back_uv, dicts, options.auto_triangulate, options.holes);
+      options.hidden, options.soft_edges, options.smooth_edges, options.hidden_edges, front_uv,
+      back_uv, dicts, options.auto_triangulate, options.holes);
 }
 
 void ComponentDefinitionBuilder::add_circle(Point3 center, Point3 normal, double radius,
@@ -1825,6 +1871,19 @@ void ComponentDefinitionBuilder::add_polyline(const std::vector<Point3>& points,
   check_writable("polylines");
   impl_->new_entity_count += detail::do_add_polyline(*impl_->writer, impl_->vertex_slots,
                                                      impl_->edge_registry, points, options);
+}
+
+void ComponentDefinitionBuilder::add_construction_line(Point3 point, std::optional<Point3> point2,
+                                                       std::optional<Point3> direction) {
+  check_writable("construction lines");
+  impl_->writer->write_construction_line(point, point2, direction);
+  impl_->new_entity_count += 1;
+}
+
+void ComponentDefinitionBuilder::add_construction_point(Point3 position) {
+  check_writable("construction points");
+  impl_->writer->write_construction_point(position);
+  impl_->new_entity_count += 1;
 }
 
 void ComponentDefinitionBuilder::add_instance(const ComponentDefinitionBuilder& definition,
@@ -1946,6 +2005,7 @@ int SkpBuilder::add_texture_material(const std::string& name,
   int slot = impl_->material_writer.write_textured_material(
       name, image_bytes, image_path.string(), subtype, applied_height, applied_width, opacity);
   materials_by_name[name] = slot;
+  impl_->applied_sizes[slot] = {applied_width.value_or(1.0), applied_height.value_or(1.0)};
   impl_->material_count += 1;
   return slot;
 }
@@ -1962,7 +2022,9 @@ int SkpBuilder::add_layer(const std::string& name, const LayerOptions& options) 
     impl_->layer_writer_start = detail::kLayerWriterBase + impl_->material_shift();
     impl_->layer_writer.emplace(impl_->layer_writer_start, impl_->material_shifted_class_slot());
   }
-  int slot = impl_->layer_writer->write_layer(name, true, options.hidden, options.color);
+  detail::AttributeDictList dicts;
+  for (const auto& kv : options.extra_dictionaries) dicts.emplace_back(kv.first, kv.second);
+  int slot = impl_->layer_writer->write_layer(name, true, options.hidden, options.color, dicts);
   layers_by_name[name] = slot;
   impl_->layer_count += 1;
   return slot;
@@ -2079,11 +2141,15 @@ void SkpBuilder::add_face(const std::vector<Point3>& points, const FaceOptions& 
   detail::AttributeDictList dicts;
   if (!options.attributes.empty())
     dicts.emplace_back(options.attribute_dict_name, options.attributes);
+  auto front_uv =
+      detail::scale_pins(options.front_uv, impl_->applied_sizes, options.material.value_or(0));
+  auto back_uv =
+      detail::scale_pins(options.back_uv, impl_->applied_sizes, options.back_material.value_or(0));
   impl_->new_entity_count += detail::write_face_or_triangulate(
       *impl_->geometry_writer, points, impl_->vertex_slots, impl_->edge_registry,
       options.material.value_or(0), options.layer.value_or(0), options.back_material.value_or(0),
-      options.hidden, options.soft_edges, options.smooth_edges, options.hidden_edges,
-      options.front_uv, options.back_uv, dicts, options.auto_triangulate, options.holes);
+      options.hidden, options.soft_edges, options.smooth_edges, options.hidden_edges, front_uv,
+      back_uv, dicts, options.auto_triangulate, options.holes);
   impl_->face_count += 1;
 }
 

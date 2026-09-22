@@ -333,6 +333,7 @@ namespace OpenSkp
         public Dictionary<string, int> ClassSlot = new Dictionary<string, int>();
         public Dictionary<string, int> ClassSchema = new Dictionary<string, int>();
         public string? CurrentClass;
+        public int? CurrentObjSlot;
         public int NextSlot;
         public int WalkBase;
         public Dictionary<string, LegacyReader> Readers = new Dictionary<string, LegacyReader>();
@@ -437,7 +438,9 @@ namespace OpenSkp
                 throw new LegacyParseError($"no reader for class {name} {r.Ctx()}");
             }
             string? prevClass = CurrentClass;
+            int? prevSlot = CurrentObjSlot;
             CurrentClass = name;
+            CurrentObjSlot = slot;
             object? value;
             try
             {
@@ -446,6 +449,7 @@ namespace OpenSkp
             finally
             {
                 CurrentClass = prevClass;
+                CurrentObjSlot = prevSlot;
             }
             Slots[slot] = new SlotEntry { Kind = "obj", Name = name, Value = value };
             if (name == "CDimensionLinear" || name == "CText")
@@ -453,6 +457,84 @@ namespace OpenSkp
                 AnnotWatermark = NextSlot;
             }
             return (slot, name, value);
+        }
+
+        // 0xffff CLayer, a class-ref to a CLayer already in ClassSlot, or —
+        // when unmatchedClassRef — any short 0x8000 class-ref. The last form
+        // is only for the throwaway slot-base probe, which numbers from
+        // 1<<20 so the file's 0x8000|real_slot will not match ClassSlot.
+        public bool ClayerRecordAt(int at, bool unmatchedClassRef = false)
+        {
+            if (at + 2 > Data.Length) return false;
+            ushort tag = Tlv.ReadU16(Data, at);
+            if (tag == 0xFFFF && at + 12 <= Data.Length && Tlv.ReadU16(Data, at + 4) == 6
+                && Data[at + 6] == (byte)'C' && Data[at + 7] == (byte)'L'
+                && Data[at + 8] == (byte)'a' && Data[at + 9] == (byte)'y'
+                && Data[at + 10] == (byte)'e' && Data[at + 11] == (byte)'r')
+            {
+                return true;
+            }
+            if (ClassSlot.TryGetValue("CLayer", out int layCs) && LegacyBytes.IsClassRef(Data, at, layCs))
+            {
+                return true;
+            }
+            return unmatchedClassRef && (tag & 0x8000) != 0 && tag != 0xFFFF;
+        }
+
+        // Colour CLayer ends in a 21-byte tail. Some v18 zero-material files
+        // (custom tag listed first, then Layer0) write 12 zero bytes + u32
+        // after that, then another CLayer. Skip those 16 bytes only when they
+        // precede a CLayer; leave a definition-list back-ref alone.
+        public void SkipClayerColourExt()
+        {
+            const int pad = 12;
+            const int ext = 16;
+            if (R.Pos + ext + 2 > Data.Length) return;
+            for (int i = 0; i < pad; i++)
+            {
+                if (Data[R.Pos + i] != 0) return;
+            }
+            if (ClayerRecordAt(R.Pos + ext, true)) R.Pos += ext;
+        }
+
+        // v18 template Layer0 after a custom tag: <parent u16><active u16><dc u32>.
+        // Consume parent only when both u16s are already CLayer objects. A lone
+        // back-ref then a definition count (usual layout) stays put.
+        public void SkipClayerParentRef(int? selfSlot)
+        {
+            if (R.Pos + 4 > Data.Length || selfSlot == null) return;
+            ushort a = Tlv.ReadU16(Data, R.Pos);
+            ushort b = Tlv.ReadU16(Data, R.Pos + 2);
+            if (a == 0 || (a & 0x8000) != 0 || a == 0x7FFF || a == selfSlot.Value) return;
+            if (b == 0 || (b & 0x8000) != 0 || b == 0x7FFF) return;
+            if (!Slots.TryGetValue(a, out var ea) || !Slots.TryGetValue(b, out var eb)) return;
+            if (ea.Kind == "class" || eb.Kind == "class") return;
+            if (ea.Name != "CLayer" || eb.Name != "CLayer") return;
+            R.Pos += 2;
+        }
+
+        // Extra CLayer records past declared layer_count (v18: count=1 custom
+        // tag, then Layer0). Skip null separators; stop at the definition-list
+        // anchor. unmatchedClassRef only on the throwaway probe.
+        public void CollectTrailingLayers(List<int>? slotsOut, List<(int Slot, object? Value)>? layersOut,
+            bool unmatchedClassRef = false)
+        {
+            while (R.Pos + 2 <= Data.Length)
+            {
+                ushort tag = R.PeekU16();
+                if (tag == 0)
+                {
+                    R.Pos += 2;
+                    continue;
+                }
+                if (!ClayerRecordAt(R.Pos, unmatchedClassRef)) break;
+                var (s, _, v) = ReadObject(R, "CLayer");
+                if (v != null)
+                {
+                    if (slotsOut != null && s.HasValue) slotsOut.Add(s.Value);
+                    if (layersOut != null && s.HasValue) layersOut.Add((s.Value, v));
+                }
+            }
         }
 
         /// <summary>Map a FILE store-map index to the walker's numbering
@@ -901,6 +983,8 @@ namespace OpenSkp
             var rgba = r.Raw(4);
             r.Utf16();
             r.Raw(21);
+            ar.SkipClayerColourExt();
+            ar.SkipClayerParentRef(ar.CurrentObjSlot);
             return new LayerRec { Name = name, Hidden = mid.Count > 0 ? mid[0] : 0, Rgba = rgba };
         }
 
@@ -1716,6 +1800,7 @@ namespace OpenSkp
                 var (s, _, _) = boot.ReadObject(boot.R, "CLayer");
                 layerSlots.Add(s!.Value);
             }
+            boot.CollectTrailingLayers(layerSlots, null, true);
             var (anchorSlot, anchorName, _) = boot.ReadObject(boot.R);
             if (anchorName != "premodel")
             {
@@ -1838,23 +1923,7 @@ namespace OpenSkp
                 layers.Add((s!.Value, v));
             }
             // trailing separators (and any layer records past the declared count)
-            bool haveTrailingLayCls = ar.ClassSlot.TryGetValue("CLayer", out int trailingLayCls);
-            while (true)
-            {
-                ushort tag = r.PeekU16();
-                if (tag == 0)
-                {
-                    r.Pos += 2;
-                    continue;
-                }
-                if (haveTrailingLayCls && tag == (0x8000 | trailingLayCls))
-                {
-                    var (s, _, v) = ar.ReadObject(r, "CLayer");
-                    if (v != null) layers.Add((s!.Value, v));
-                    continue;
-                }
-                break;
-            }
+            ar.CollectTrailingLayers(null, layers);
 
             var (_, dn, _) = ar.ReadObject(r);
             if (dn != "CLayer")

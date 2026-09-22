@@ -153,7 +153,8 @@ from-scratch binary writer for the legacy MFC `CArchive` format (SketchUp
 feature set as the Python package's writer: geometry (including true,
 editable circular/arc curves, freeform polylines, faces with holes cut
 out, and non-planar auto-triangulation), materials (solid + PNG/JPEG
-textures), layers (with color and default visibility), component
+textures), layers (with color, default visibility, and named extra
+dictionaries), component
 definitions with multiple instances, groups, nested definitions and
 nested group instances, per-instance rotation and visibility, explicit
 per-side texture positioning, and custom key/value attribute

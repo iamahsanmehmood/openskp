@@ -107,7 +107,11 @@ SkpModel build_model(RawParsed&& p, const ParseOptions& o) {
     if (color_it == p.layer_colors.end()) continue;
     auto hidden_it = p.layer_hidden.find(name);
     bool hidden = hidden_it != p.layer_hidden.end() && hidden_it->second;
-    m.layers.push_back({name, color_it->second, hidden});
+    Layer layer{name, color_it->second, hidden};
+    auto dicts_it = p.layer_attribute_dictionaries.find(name);
+    if (dicts_it != p.layer_attribute_dictionaries.end())
+      layer.attribute_dictionaries = dicts_it->second;
+    m.layers.push_back(std::move(layer));
   }
   // Convert pages (saved scenes) - hidden layer ids resolve to names;
   // unknown ids (stale refs) are dropped.

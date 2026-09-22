@@ -71,6 +71,10 @@ CONTAINER_TAGS = {
     # that inner instance stays buried in an opaque payload and the image
     # definition looks "never placed".
     '9013', '401F',
+    # Construction/guide lines and points: list 9113 → entity 6942, list
+    # 9213 → entity 6C42. 6842 is the drawbase wrapper those entities share.
+    # 6A42 / 6D42 / 6E42 / 6F42 stay leaves.
+    '9113', '9213', '6942', '6C42', '6842',
 }
 
 # Every byte value's 2-character uppercase hex form, precomputed once.
@@ -544,6 +548,8 @@ class _GeometryBuilder:
         self.section_planes = []
         self.texts = []
         self.dimensions = []
+        self.construction_lines = []
+        self.construction_points = []
 
 
 def find_child_tag(nodes, target):
@@ -1127,6 +1133,49 @@ def _extract_geometry_from_nodes(elements, builder):
                 'attribute_dictionaries': inst_attribute_dicts,
                 'children': el['children']
             })
+
+        elif tag == '6942':
+            # VFF CConstructionLine (list 9113). Same 8-double body as
+            # classic CConstructionLine: point + unit direction + start/end
+            # params; |param| >= 1e20 is unbounded (SketchUp's own sentinel
+            # is ±1e30).
+            body = find_child_tag(el['children'], '6A42')
+            if body and len(body['payload']) >= 64:
+                p = body['payload']
+                point = (read_f64(p, 0), read_f64(p, 8), read_f64(p, 16))
+                direction = (read_f64(p, 24), read_f64(p, 32), read_f64(p, 40))
+                start_param = read_f64(p, 48)
+                end_param = read_f64(p, 56)
+                huge = 1e20
+                start = None
+                end = None
+                if abs(start_param) < huge:
+                    start = (
+                        point[0] + direction[0] * start_param,
+                        point[1] + direction[1] * start_param,
+                        point[2] + direction[2] * start_param,
+                    )
+                if abs(end_param) < huge:
+                    end = (
+                        point[0] + direction[0] * end_param,
+                        point[1] + direction[1] * end_param,
+                        point[2] + direction[2] * end_param,
+                    )
+                builder.construction_lines.append({
+                    'point': point,
+                    'direction': direction,
+                    'start': start,
+                    'end': end,
+                })
+
+        elif tag == '6C42':
+            # VFF CConstructionPoint (list 9213): 6D42 position.
+            pos = find_child_tag(el['children'], '6D42')
+            if pos and len(pos['payload']) >= 24:
+                p = pos['payload']
+                builder.construction_points.append({
+                    'position': (read_f64(p, 0), read_f64(p, 8), read_f64(p, 16)),
+                })
 
         elif el['children']:
             _extract_geometry_from_nodes(el['children'], builder)

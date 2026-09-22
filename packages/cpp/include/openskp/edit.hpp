@@ -14,9 +14,9 @@
 /// This header takes the other viable approach instead: fully parse the existing file with this
 /// project's own reader (`parser.hpp`/`legacy.cpp`, already comprehensive), then *replay*
 /// everything it understood back through `create.hpp`'s own public API (materials, layers, every
-/// component definition, every face/instance) to produce a brand-new file - not a byte-patched
-/// copy of the original, but a freshly-built one with equivalent content, to which the caller can
-/// add more geometry before saving.
+/// component definition, every face/instance, construction points and lines) to produce a
+/// brand-new file - not a byte-patched copy of the original, but a freshly-built one with
+/// equivalent content, to which the caller can add more geometry before saving.
 ///
 /// **Adding more geometry after the fact.** The returned builder can take more `add_face`/
 /// `add_circle`/`add_instance`/etc. calls, and every material/layer the source had is already

@@ -263,5 +263,36 @@ TEST(Edit, RealFixtureRoundTripsWithConsistentTopLevelCounts) {
   EXPECT_LE(rebuilt.definitions.size(), original.definitions.size());
 }
 
+TEST(Edit, ReplaysNestedDefinitionConstruction) {
+  auto path = temp_skp("nested_construction");
+  {
+    auto builder = create();
+    auto& nested = builder->add_component_definition("GuideGroup");
+    nested.add_face({{0, 0, 0}, {10, 0, 0}, {10, 10, 0}, {0, 10, 0}});
+    nested.add_construction_point({4.0, 5.0, 6.0});
+    nested.add_construction_line({1.0, 1.0, 1.0}, Point3{2.0, 2.0, 2.0});
+    nested.close();
+    builder->add_instance(nested);
+    builder->add_face({{0, 0, 0}, {1, 0, 0}, {0, 1, 0}});
+    builder->save(path);
+  }
+
+  OpenExistingResult result = open_existing(path);
+  ASSERT_NE(result.builder, nullptr);
+  ByteBuffer rebuilt_bytes = result.builder->to_bytes();
+  SkpModel rebuilt = SkpFile::from_buffer(rebuilt_bytes).parse();
+  std::filesystem::remove(path);
+
+  const Definition* group = nullptr;
+  for (const auto& kv : rebuilt.definitions) {
+    if (kv.second.name == "GuideGroup") group = &kv.second;
+  }
+  ASSERT_NE(group, nullptr);
+  ASSERT_EQ(group->construction_points.size(), 1u);
+  EXPECT_NEAR(group->construction_points[0].position[0], 4.0, 1e-9);
+  ASSERT_EQ(group->construction_lines.size(), 1u);
+  ASSERT_TRUE(group->construction_lines[0].start && group->construction_lines[0].end);
+}
+
 }  // namespace
 }  // namespace openskp

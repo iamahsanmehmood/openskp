@@ -286,6 +286,7 @@ class Archive {
   final Map<String, int> classSlot = {};
   final Map<String, int> classSchema = {};
   String? currentClass;
+  int? currentObjSlot;
   int nextSlot = 0;
   int walkBase = 0;
   final Map<String, LegacyReader> readers = {};
@@ -374,18 +375,94 @@ class Archive {
       throw LegacyParseError('no reader for class $name ${r.ctx()}');
     }
     final prevClass = currentClass;
+    final prevSlot = currentObjSlot;
     currentClass = name;
+    currentObjSlot = slot;
     Object? value;
     try {
       value = reader(this, r);
     } finally {
       currentClass = prevClass;
+      currentObjSlot = prevSlot;
     }
     slots[slot] = SlotEntry(kind: 'obj', name: name, value: value);
     if (name == 'CDimensionLinear' || name == 'CText') {
       annotWatermark = nextSlot;
     }
     return (slot, name, value);
+  }
+
+  // 0xffff CLayer, a class-ref to a CLayer already in classSlot, or —
+  // when [unmatchedClassRef] — any short 0x8000 class-ref. The last form
+  // is only for the throwaway slot-base probe, which numbers from 1<<20 so
+  // the file's 0x8000|real_slot will not match classSlot.
+  bool clayerRecordAt(int at, {bool unmatchedClassRef = false}) {
+    if (at + 2 > data.length) return false;
+    final tag = Tlv.readU16(data, at);
+    if (tag == 0xFFFF &&
+        at + 12 <= data.length &&
+        Tlv.readU16(data, at + 4) == 6 &&
+        ascii.decode(data.sublist(at + 6, at + 12)) == 'CLayer') {
+      return true;
+    }
+    final layCs = classSlot['CLayer'];
+    if (layCs != null && isClassRef(data, at, layCs)) return true;
+    return unmatchedClassRef && (tag & 0x8000) != 0 && tag != 0xFFFF;
+  }
+
+  // Colour CLayer ends in a 21-byte tail. Some v18 zero-material files
+  // (custom tag listed first, then Layer0) write 12 zero bytes + u32 after
+  // that, then another CLayer. Skip those 16 bytes only when they precede
+  // a CLayer; leave a definition-list back-ref alone.
+  void skipClayerColourExt() {
+    const pad = 12;
+    const ext = 16;
+    if (r.pos + ext + 2 > data.length) return;
+    for (int i = 0; i < pad; i++) {
+      if (data[r.pos + i] != 0) return;
+    }
+    if (clayerRecordAt(r.pos + ext, unmatchedClassRef: true)) r.pos += ext;
+  }
+
+  // v18 template Layer0 after a custom tag: <parent u16><active u16><dc u32>.
+  // Consume parent only when both u16s are already CLayer objects. A lone
+  // back-ref then a definition count (usual layout) stays put.
+  void skipClayerParentRef(int? selfSlot) {
+    if (r.pos + 4 > data.length || selfSlot == null) return;
+    final a = Tlv.readU16(data, r.pos);
+    final b = Tlv.readU16(data, r.pos + 2);
+    if (a == 0 || (a & 0x8000) != 0 || a == 0x7FFF || a == selfSlot) return;
+    if (b == 0 || (b & 0x8000) != 0 || b == 0x7FFF) return;
+    final ea = slots[a];
+    final eb = slots[b];
+    if (ea == null || eb == null) return;
+    if (ea.kind == 'class' || eb.kind == 'class') return;
+    if (ea.name != 'CLayer' || eb.name != 'CLayer') return;
+    r.pos += 2;
+  }
+
+  // Extra CLayer records past declared layerCount (v18: count=1 custom
+  // tag, then Layer0). Skip null separators; stop at the definition-list
+  // anchor. unmatchedClassRef only on the throwaway probe.
+  void collectTrailingLayers(
+      {List<int>? slotsOut,
+      List<(int, Object?)>? layersOut,
+      bool unmatchedClassRef = false}) {
+    while (r.pos + 2 <= data.length) {
+      final tag = r.peekU16();
+      if (tag == 0) {
+        r.pos += 2;
+        continue;
+      }
+      if (!clayerRecordAt(r.pos, unmatchedClassRef: unmatchedClassRef)) {
+        break;
+      }
+      final (s, _, v) = readObject(r, 'CLayer');
+      if (v != null) {
+        if (slotsOut != null && s != null) slotsOut.add(s);
+        if (layersOut != null && s != null) layersOut.add((s, v));
+      }
+    }
   }
 
   /// Map a FILE store-map index to the walker's numbering through the burn
@@ -925,6 +1002,8 @@ class LegacyReaders {
     final rgba = r.raw(4);
     r.utf16();
     r.raw(21);
+    ar.skipClayerColourExt();
+    ar.skipClayerParentRef(ar.currentObjSlot);
     return LayerRec(
         name: name, hidden: mid.isNotEmpty ? mid[0] : 0, rgba: rgba);
   }
@@ -1610,6 +1689,7 @@ class Legacy {
       final (s, _, __) = boot.readObject(boot.r, 'CLayer');
       layerSlots.add(s!);
     }
+    boot.collectTrailingLayers(slotsOut: layerSlots, unmatchedClassRef: true);
     final (s, n, __) = boot.readObject(boot.r);
     if (n != 'premodel') {
       // under the throwaway base every absolute back-ref classifies as
@@ -1727,20 +1807,7 @@ class Legacy {
       layers.add((s!, v));
     }
     // trailing separators (and any layer records past the declared count)
-    final layCls = ar.classSlot['CLayer'];
-    while (true) {
-      final tag = r.peekU16();
-      if (tag == 0) {
-        r.pos += 2;
-        continue;
-      }
-      if (layCls != null && tag == (0x8000 | layCls)) {
-        final (s, _, v) = ar.readObject(r, 'CLayer');
-        if (v != null) layers.add((s!, v));
-        continue;
-      }
-      break;
-    }
+    ar.collectTrailingLayers(layersOut: layers);
 
     final (_, dn, __) = ar.readObject(r);
     if (dn != 'CLayer') {
