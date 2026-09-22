@@ -17,6 +17,7 @@
   },
   "scripts": {
     "build": "tsup src/index.ts --format cjs,esm --dts",
+    "postbuild": "node copy-dist.js",
     "copy-dist": "node copy-dist.js",
     "test": "vitest run",
     "bench:instanced": "vite-node tests/bench/instanced-bench.ts",

@@ -33,6 +33,18 @@ dependencies = [
 dev = [
     "pytest>=7.0",
     "pytest-cov>=7.1.0",
+    # Same specifiers as the textures/fragments extras below - duplicated
+    # (not cross-referenced via "openskp[textures,fragments]") so the dev
+    # extra installs cleanly under `pip install -e ".[dev]"` on any pip
+    # version. The test suite exercises texture decoding and Fragments
+    # export/import, and previously failed with a hard ModuleNotFoundError/
+    # ImportError on a fresh `pip install -e ".[dev]"` setup rather than
+    # skipping gracefully (openskp#375) - installing everything the
+    # documented dev setup command needs is the more contributor-friendly
+    # fix than adding skip markers to every test that happens to touch
+    # either optional feature.
+    "pillow>=12.3.0",
+    "flatbuffers>=24.0",
 ]
 textures = [
     "pillow>=12.3.0",

@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — `pip install -e ".[dev]"` and the web viewer's "Upload SKP" both broken on a fresh clone
+
+Reported (openskp#375): following this project's own documented setup
+steps failed twice. `pip install -e ".[dev]"` didn't pull in `flatbuffers`/
+`pillow`, so `pytest` hard-failed with `ModuleNotFoundError`/`ImportError`
+instead of running (or skipping) - `dev` now installs the same specifiers
+as the `fragments`/`textures` extras, so the documented one-line setup
+actually works. Separately, `examples/web-viewer`'s "Upload SKP" was
+completely non-functional on a clean checkout: `npm run build` never
+populated the (gitignored) `examples/web-viewer/dist/` the viewer loads
+from - `copy-dist.js` existed but had to be run as a second, undocumented
+manual step (only `deploy-pages.yml`'s own CI knew to call it) - fixed via
+a `postbuild` npm script. Even after that, the browser threw
+`Uncaught TypeError: Failed to resolve module specifier "flatbuffers"`:
+the viewer's `index.html` import map (added for `fflate`/`earcut`) was
+never updated when `flatbuffers` became a real dependency for Fragments
+export/import - added the missing entry. Verified all three fixes
+together in a real browser: the viewer now loads a sample file and
+renders it with zero console errors.
+
 ### Added — Read a `.frag` file back (TypeScript, .NET, Dart, C++) - all 5 languages now
 
 Ports Python's `from_fragments()`/`read()` to TypeScript (`fromFragments()`,
