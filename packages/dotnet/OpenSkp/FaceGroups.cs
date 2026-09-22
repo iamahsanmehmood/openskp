@@ -17,15 +17,10 @@ namespace OpenSkp
     /// two paths agree on triangulation, UV seams, normals and front/back
     /// handling by construction rather than by parallel maintenance.
     ///
-    /// Faithful to the pre-existing baked behavior it was extracted from:
-    /// an unpainted face falls back to the caller-supplied FallbackColor
-    /// for color, but its material (and therefore texture tile size) is
-    /// resolved from the face's OWN MaterialId/BackMaterialId only - an
-    /// instance's painted material is not consulted for texture purposes
-    /// here. That is an existing characteristic of this port (TypeScript's
-    /// reference additionally falls back to the inherited material itself
-    /// for texture tile size on unpainted faces), preserved rather than
-    /// changed by this extraction.</summary>
+    /// A face with no material of its own is painted by the instance that
+    /// places it - SketchUp's "paint the component". The whole inherited
+    /// material is consulted, not just its color, because the texture and
+    /// its tile size come from there too.</summary>
     internal static class FaceGroups
     {
         /// <summary>The resolved material's overall opacity: 1.0 fully
@@ -60,11 +55,17 @@ namespace OpenSkp
             public Func<long?, (Geometry.RawMaterial? Mat, (int R, int G, int B)? Color)> ResolveMaterial = _ => (null, null);
             public Func<Geometry.RawTexture?, int?> TextureIndexFor = _ => null;
 
-            /// <summary>Color an unpainted face falls back to (already
-            /// resolved by the caller: the instance's inherited paint
-            /// color, or the effective layer's color when nothing is
-            /// inherited).</summary>
+            /// <summary>Color an unpainted face falls back to when it
+            /// inherits no material either: the effective tag's color, or
+            /// the style's front face color under
+            /// SkpParseOptions.UseStyleFaceColor.</summary>
             public (int R, int G, int B) FallbackColor;
+
+            /// <summary>Material painted onto the instance that places
+            /// this geometry, inherited by any face that carries none of
+            /// its own. Null at the root, and wherever nothing up the
+            /// placement chain is painted.</summary>
+            public Geometry.RawMaterial? InheritedMaterial;
 
             /// <summary>Identifies the definition in a triangulation
             /// failure.</summary>
@@ -260,10 +261,16 @@ namespace OpenSkp
                     continue;
                 }
 
-                var (frontMat, frontMatColor) = ctx.ResolveMaterial(fData.MaterialId);
-                var (backMat, backMatColor) = ctx.ResolveMaterial(fData.BackMaterialId);
-                var frontColor = frontMatColor ?? ctx.FallbackColor;
-                var backColor = backMatColor ?? ctx.FallbackColor;
+                // Inheriting the whole material rather than only its color is what gives
+                // ComputeFaceUv the texture's tile size: without it tileW/tileH stay 1 and the
+                // UVs come out in raw inches, so a 1.9 m decor sheet tiles about 150 times
+                // across a 600 mm panel instead of covering a third of it.
+                var (ownFrontMat, _) = ctx.ResolveMaterial(fData.MaterialId);
+                var (ownBackMat, _) = ctx.ResolveMaterial(fData.BackMaterialId);
+                var frontMat = ownFrontMat ?? ctx.InheritedMaterial;
+                var backMat = ownBackMat ?? ctx.InheritedMaterial;
+                var frontColor = frontMat != null ? (frontMat.R, frontMat.G, frontMat.B) : ctx.FallbackColor;
+                var backColor = backMat != null ? (backMat.R, backMat.G, backMat.B) : ctx.FallbackColor;
 
                 var loops = new List<List<long>>();
                 foreach (var loop in fData.Loops)

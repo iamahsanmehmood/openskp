@@ -216,6 +216,15 @@ namespace OpenSkp
             (int R, int G, int B) GetLayerColor(string name) =>
                 layerColors.TryGetValue(name, out var c) ? c : (136, 136, 136);
 
+            // See SceneBuilder.FallbackColorFor - both builders resolve this the same way, or
+            // the two scene APIs would disagree on the color of an unpainted face.
+            var styleFaceColor = parsed.Styles
+                .Select(style => style.FrontColor)
+                .FirstOrDefault(color => color.HasValue) ?? (255, 255, 255);
+
+            (int R, int G, int B) FallbackColorFor(string layer) =>
+                options?.UseStyleFaceColor == true ? styleFaceColor : GetLayerColor(layer);
+
             var textures = new List<SceneTexture>();
             var textureIndexByKey = new Dictionary<string, int>();
 
@@ -284,25 +293,23 @@ namespace OpenSkp
             var meshResources = new List<InstancedMeshResource>();
             var resourceIdByKey = new Dictionary<string, string>();
 
-            // Identity of a mesh resource: (definition, effective fallback
-            // color) - the ONLY inputs that can change what
-            // FaceGroups.BuildLocalFaceGroups produces for this definition,
-            // since (faithfully to the baked path this was extracted from -
-            // see FaceGroups.cs's own docs) it resolves each face's
-            // material from the face's OWN material id only, never from an
-            // instance's painted material. Caching on the definition id
-            // alone would still be wrong: the same definition renders a
-            // different fallback color depending on the layer/paint
-            // context it's placed in, and merging those would silently
-            // repaint geometry.
+            // Identity of a mesh resource: (definition, effective fallback color, inherited
+            // material) - the only inputs that can change what
+            // FaceGroups.BuildLocalFaceGroups produces for this definition. Caching on the
+            // definition id alone would be wrong: the same definition renders differently
+            // depending on the tag/paint context it is placed in, and merging those would
+            // silently repaint geometry.
             string? MeshResourceForBuilder(
                 GeometryBuilder builder, string defName, long? defId,
-                (int R, int G, int B)? inheritedColor, string layer)
+                Geometry.RawMaterial? inheritedMaterial, string layer)
             {
                 if (builder.Faces.Count == 0) return null;
 
-                var fallbackColor = inheritedColor ?? GetLayerColor(layer);
-                var key = $"{(defId.HasValue ? defId.Value.ToString() : "ROOT")}|{fallbackColor.R},{fallbackColor.G},{fallbackColor.B}";
+                var fallbackColor = FallbackColorFor(layer);
+                // The inherited material is part of the variant, not just the fallback color:
+                // two textured materials can average to the same RGB, and keying on color alone
+                // would hand one placement the other's image.
+                var key = $"{(defId.HasValue ? defId.Value.ToString() : "ROOT")}|{fallbackColor.R},{fallbackColor.G},{fallbackColor.B}|{inheritedMaterial?.Name ?? ""}";
                 if (resourceIdByKey.TryGetValue(key, out var hit)) return hit;
 
                 var faceGroups = FaceGroups.BuildLocalFaceGroups(builder, new FaceGroups.Context
@@ -310,6 +317,7 @@ namespace OpenSkp
                     ResolveMaterial = ResolveMaterial,
                     TextureIndexFor = TextureIndexFor,
                     FallbackColor = fallbackColor,
+                    InheritedMaterial = inheritedMaterial,
                     DefinitionId = defId,
                     RespectVisibility = options?.RespectVisibility == true,
                 });
@@ -396,14 +404,14 @@ namespace OpenSkp
                 return resourceId;
             }
 
-            string? MeshResourceFor(long defId, (int R, int G, int B)? inheritedColor, string layer)
+            string? MeshResourceFor(long defId, Geometry.RawMaterial? inheritedMaterial, string layer)
             {
                 if (!defsDict.TryGetValue(defId, out var d)) return null;
-                return MeshResourceForBuilder(d.Builder, d.Name ?? "", defId, inheritedColor, layer);
+                return MeshResourceForBuilder(d.Builder, d.Name ?? "", defId, inheritedMaterial, layer);
             }
 
             List<InstancedNode> Walk(
-                long defId, List<double> currentMatrix, string parentLayer, (int R, int G, int B)? inheritedColor)
+                long defId, List<double> currentMatrix, string parentLayer, Geometry.RawMaterial? inheritedMaterial)
             {
                 if (!defsDict.TryGetValue(defId, out var d))
                 {
@@ -417,7 +425,7 @@ namespace OpenSkp
                 }
                 try
                 {
-                    return WalkBuilder(d.Builder, currentMatrix, parentLayer, inheritedColor);
+                    return WalkBuilder(d.Builder, currentMatrix, parentLayer, inheritedMaterial);
                 }
                 finally
                 {
@@ -426,7 +434,7 @@ namespace OpenSkp
             }
 
             List<InstancedNode> WalkBuilder(
-                GeometryBuilder builder, List<double> currentMatrix, string parentLayer, (int R, int G, int B)? inheritedColor)
+                GeometryBuilder builder, List<double> currentMatrix, string parentLayer, Geometry.RawMaterial? inheritedMaterial)
             {
                 var nodes = new List<InstancedNode>();
                 foreach (var inst in builder.Instances)
@@ -441,44 +449,22 @@ namespace OpenSkp
                     long? refIdx = inst.RefIdx;
                     var newMatrix = Transforms.MultiplyMatrices(currentMatrix, inst.Matrix);
 
-                    string lName = parentLayer;
-                    (int R, int G, int B)? instColor = inheritedColor;
+                    // See SceneBuilder's note: read off the instance, not out of its D007.
+                    string lName = inst.LayerId is long layerId && layerIdToName.TryGetValue(layerId, out var ln)
+                        ? ln
+                        : parentLayer;
+
+                    var instMaterial = inheritedMaterial;
+                    if (inst.MaterialId is long instMatId && materialIdToName.TryGetValue(instMatId, out var matName))
+                    {
+                        var mat = materials.TryGetValue(matName, out var m1) ? m1
+                            : materialsByFolder.TryGetValue(matName, out var m2) ? m2 : null;
+                        if (mat != null) instMaterial = mat;
+                    }
+
                     var properties = inst.Properties != null
                         ? new Dictionary<string, string>(inst.Properties)
                         : new Dictionary<string, string>();
-
-                    var d007 = inst.Children.FirstOrDefault(c => c.Tag == "D007");
-                    if (d007 != null)
-                    {
-                        var d207 = d007.Children.FirstOrDefault(c => c.Tag == "D207");
-                        if (d207 != null && d207.Payload.Length > 0)
-                        {
-                            var p = d207.Payload;
-                            long lId = p.Length == 1 ? p[0] : Tlv.ParseVarInt(p, 0, p.Length);
-                            lName = layerIdToName.TryGetValue(lId, out var ln) ? ln : parentLayer;
-                        }
-                        var d107 = d007.Children.FirstOrDefault(c => c.Tag == "D107");
-                        if (d107 != null)
-                        {
-                            long instMatId = Tlv.ParseVarInt(d107.Payload, 0, d107.Payload.Length);
-                            if (materialIdToName.TryGetValue(instMatId, out var matName))
-                            {
-                                var mat = materials.TryGetValue(matName, out var m1) ? m1
-                                    : materialsByFolder.TryGetValue(matName, out var m2) ? m2 : null;
-                                if (mat != null) instColor = (mat.R, mat.G, mat.B);
-                            }
-                        }
-                        try
-                        {
-                            properties = Geometry.ExtractDynamicProperties(d007);
-                        }
-                        catch (Exception e)
-                        {
-                            Observability.Log(
-                                options, SkpLogLevel.Debug,
-                                $"Failed to extract dynamic properties for instance {inst.Name} (refIdx={refIdx}): {e.Message}");
-                        }
-                    }
 
                     instanceCounter++;
                     if (instanceCounter % ParseTuning.ProgressInterval == 0)
@@ -488,7 +474,7 @@ namespace OpenSkp
                     }
 
                     var children = refIdx.HasValue
-                        ? Walk(refIdx.Value, newMatrix, lName, instColor)
+                        ? Walk(refIdx.Value, newMatrix, lName, instMaterial)
                         : new List<InstancedNode>();
 
                     double itx = newMatrix.Count > 9 ? newMatrix[9] * InchesToMm : 0.0;
@@ -543,7 +529,7 @@ namespace OpenSkp
                         Properties = properties,
                         AttributeDictionaries = attributeDictionaries,
                         Guid = inst.RefGuid ?? "",
-                        MeshResourceId = refIdx.HasValue ? MeshResourceFor(refIdx.Value, instColor, lName) : null,
+                        MeshResourceId = refIdx.HasValue ? MeshResourceFor(refIdx.Value, instMaterial, lName) : null,
                         Children = children,
                     });
                 }

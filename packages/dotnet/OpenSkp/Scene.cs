@@ -197,6 +197,17 @@ namespace OpenSkp
                 return layerColors.TryGetValue(name, out var c) ? c : (136, 136, 136);
             }
 
+            // A tag color renders the model the way "Color by Tag" does, not the way the
+            // modeller sees it. The style's front face color is what SketchUp paints an
+            // unpainted face with. No file records which style is active, so this takes the
+            // first that declares one, and white when none does.
+            var styleFaceColor = parsed.Styles
+                .Select(style => style.FrontColor)
+                .FirstOrDefault(color => color.HasValue) ?? (255, 255, 255);
+
+            (int R, int G, int B) FallbackColorFor(string layer) =>
+                options?.UseStyleFaceColor == true ? styleFaceColor : GetLayerColor(layer);
+
             int GetMaterialIndex((int R, int G, int B) color, bool doubleSided, int? textureIndex, double transparency = 1.0)
             {
                 // The texture is part of the identity, not just the color:
@@ -255,7 +266,7 @@ namespace OpenSkp
 
             List<InstanceNode> Instantiate(
                 long defId, bool isRoot, List<double> currentMatrix,
-                string parentLayer, string pathName, (int R, int G, int B)? inheritedColor)
+                string parentLayer, string pathName, Geometry.RawMaterial? inheritedMaterial)
             {
                 if (!defsDict.TryGetValue(defId, out var d))
                 {
@@ -269,7 +280,7 @@ namespace OpenSkp
                 }
                 try
                 {
-                    return InstantiateBuilder(d.Builder, d.Name ?? "", defId, currentMatrix, parentLayer, pathName, inheritedColor);
+                    return InstantiateBuilder(d.Builder, d.Name ?? "", defId, currentMatrix, parentLayer, pathName, inheritedMaterial);
                 }
                 finally
                 {
@@ -284,16 +295,17 @@ namespace OpenSkp
 
             List<InstanceNode> InstantiateBuilder(
                 GeometryBuilder builder, string defName, long? defId, List<double> currentMatrix,
-                string parentLayer, string pathName, (int R, int G, int B)? inheritedColor)
+                string parentLayer, string pathName, Geometry.RawMaterial? inheritedMaterial)
             {
                 if (builder.Faces.Count > 0)
                 {
-                    var fallbackColor = inheritedColor ?? GetLayerColor(parentLayer);
+                    var fallbackColor = FallbackColorFor(parentLayer);
                     var faceGroups = FaceGroups.BuildLocalFaceGroups(builder, new FaceGroups.Context
                     {
                         ResolveMaterial = ResolveMaterial,
                         TextureIndexFor = TextureIndexFor,
                         FallbackColor = fallbackColor,
+                        InheritedMaterial = inheritedMaterial,
                         DefinitionId = defId,
                         RespectVisibility = options?.RespectVisibility == true,
                     });
@@ -411,54 +423,27 @@ namespace OpenSkp
                     long? refIdx = inst.RefIdx;
                     var newMatrix = Transforms.MultiplyMatrices(currentMatrix, inst.Matrix);
 
-                    string lName = parentLayer;
-                    (int R, int G, int B)? instColor = inheritedColor;
-                    // Legacy (pre-2021 MFC) instances carry a precomputed
-                    // Properties dict (see Legacy.ExtractLegacyDynamicProperties)
-                    // - VFF instances don't set this, so this stays {} for
-                    // them and gets overwritten below via the D007/DC05 TLV
-                    // walk instead.
+                    // Tag and paint come from the fields the readers already put on the
+                    // instance, the way TypeScript reads inst.layerId/inst.materialId. Walking
+                    // this instance's own D007 again instead would see only what a VFF file
+                    // stores there: a legacy instance, and one this library writes itself,
+                    // records both directly and carries no D007, so its paint and its tag
+                    // override went missing.
+                    string lName = inst.LayerId is long layerId && layerIdToName.TryGetValue(layerId, out var ln)
+                        ? ln
+                        : parentLayer;
+
+                    var instMaterial = inheritedMaterial;
+                    if (inst.MaterialId is long instMatId && materialIdToName.TryGetValue(instMatId, out var matName))
+                    {
+                        var mat = materials.TryGetValue(matName, out var m1) ? m1
+                            : materialsByFolder.TryGetValue(matName, out var m2) ? m2 : null;
+                        if (mat != null) instMaterial = mat;
+                    }
+
                     var properties = inst.Properties != null
                         ? new Dictionary<string, string>(inst.Properties)
                         : new Dictionary<string, string>();
-
-                    // Layer/material resolution mirrors
-                    // Geometry.ExtractGeometryFromNodes's D007 handling;
-                    // re-derived here (from inst.Children) to match the
-                    // Python/TS reference exactly rather than needing a
-                    // new field threaded through GeometryBuilderInstance.
-                    var d007 = inst.Children.FirstOrDefault(c => c.Tag == "D007");
-                    if (d007 != null)
-                    {
-                        var d207 = d007.Children.FirstOrDefault(c => c.Tag == "D207");
-                        if (d207 != null && d207.Payload.Length > 0)
-                        {
-                            var p = d207.Payload;
-                            long lId = p.Length == 1 ? p[0] : Tlv.ParseVarInt(p, 0, p.Length);
-                            lName = layerIdToName.TryGetValue(lId, out var ln) ? ln : parentLayer;
-                        }
-                        var d107 = d007.Children.FirstOrDefault(c => c.Tag == "D107");
-                        if (d107 != null)
-                        {
-                            long instMatId = Tlv.ParseVarInt(d107.Payload, 0, d107.Payload.Length);
-                            if (materialIdToName.TryGetValue(instMatId, out var matName))
-                            {
-                                var mat = materials.TryGetValue(matName, out var m1) ? m1
-                                    : materialsByFolder.TryGetValue(matName, out var m2) ? m2 : null;
-                                if (mat != null) instColor = (mat.R, mat.G, mat.B);
-                            }
-                        }
-                        try
-                        {
-                            properties = Geometry.ExtractDynamicProperties(d007);
-                        }
-                        catch (Exception e)
-                        {
-                            Observability.Log(
-                                options, SkpLogLevel.Debug,
-                                $"Failed to extract dynamic properties for instance {inst.Name} (refIdx={refIdx}): {e.Message}");
-                        }
-                    }
 
                     string instName = !string.IsNullOrEmpty(inst.Name) ? inst.Name! : $"Component_{refIdx}";
                     string fullPathName = $"{pathName} / {instName}";
@@ -469,7 +454,7 @@ namespace OpenSkp
                         Observability.Log(options, SkpLogLevel.Debug, $"Processed {instanceCounter} placed instances");
                     }
                     var childNodes = refIdx.HasValue
-                        ? Instantiate(refIdx.Value, false, newMatrix, lName, fullPathName, instColor)
+                        ? Instantiate(refIdx.Value, false, newMatrix, lName, fullPathName, instMaterial)
                         : new List<InstanceNode>();
 
                     double itx = newMatrix.Count > 9 ? newMatrix[9] * InchesToMm : 0.0;

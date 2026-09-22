@@ -68,6 +68,24 @@ namespace OpenSkp
         /// caller that needs the hierarchy to stay complete leaves this off
         /// and filters downstream.</summary>
         public bool RespectVisibility { get; set; }
+
+        /// <summary>Paints a face that carries no material, and inherits
+        /// none, with the active style's front face color instead of the
+        /// color of its tag (layer).
+        ///
+        /// A tag color exists so SketchUp can render a model in "Color by
+        /// Tag" mode, where every object takes the color of the tag it is
+        /// labelled with. It is a review mode. Normal display paints an
+        /// unpainted face with the style's front face color, so a scene
+        /// built with this off reproduces "Color by Tag" rather than what
+        /// the modeller sees - the default tag is usually an arbitrary
+        /// bright color, which then covers every unpainted surface.
+        ///
+        /// Off by default, matching TypeScript's fallbackLayerColor, which
+        /// resolves the tag color the same way. A file records no active
+        /// style, so this takes the first style that declares a front
+        /// color, and white when none does.</summary>
+        public bool UseStyleFaceColor { get; set; }
     }
 
     /// <summary>Shared tuning constants for progress reporting.</summary>
