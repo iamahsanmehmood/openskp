@@ -19,9 +19,11 @@ struct InstanceNode {
   std::array<double, 3> position_mm{};
   std::map<std::string, std::string> properties;
   std::vector<InstanceNode> children;
-  // Every attribute dictionary this instance carries, keyed by the
-  // dictionary's own declared name - not just SketchUp's own
-  // dynamic_attributes (which is what `properties` above holds).
+  // Every attribute dictionary other than SketchUp's own
+  // dynamic_attributes (already on `properties`) and SU_InstanceSet
+  // (always-present Owner/Status boilerplate). Values are stringified.
+  // Model-level Instance::attribute_dictionaries keeps both, with
+  // native types.
   std::map<std::string, std::map<std::string, std::string>> attribute_dictionaries;
 };
 

@@ -22,6 +22,94 @@ using Vec3 = std::array<double, 3>;
 using Color3 = std::array<std::uint8_t, 3>;
 using Color4 = std::array<std::uint8_t, 4>;
 
+/// One attribute-dictionary value, matching Python's
+/// `_decode_vff_attr_value` / `_read_attr_named`: `None`, `str`, `int`,
+/// `float` (both VFF `A938` Float and `AF38` Length), a 3-tuple for
+/// Point3d/Vector3d, or a nested list. Scene / JSON / IFC stringify
+/// every named dictionary; the model keeps types.
+/// `Instance::properties` stays a `map<string,string>` view of a
+/// dictionary named `dynamic_attributes` when that name is present
+/// (existing OpenSKP API).
+struct ParsedAttribute {
+  enum class Kind : std::uint8_t { Null, String, Integer, Float, Vec, Array };
+  Kind kind = Kind::Null;
+  std::string text;
+  std::int64_t integer = 0;
+  double number = 0;
+  Vec3 vec{};
+  std::vector<ParsedAttribute> array;
+
+  static ParsedAttribute null() { return {}; }
+
+  static ParsedAttribute from_string(std::string s) {
+    ParsedAttribute v;
+    v.kind = Kind::String;
+    v.text = std::move(s);
+    return v;
+  }
+
+  static ParsedAttribute from_integer(std::int64_t n) {
+    ParsedAttribute v;
+    v.kind = Kind::Integer;
+    v.integer = n;
+    return v;
+  }
+
+  static ParsedAttribute from_float(double n) {
+    ParsedAttribute v;
+    v.kind = Kind::Float;
+    v.number = n;
+    return v;
+  }
+
+  static ParsedAttribute from_vec(Vec3 p) {
+    ParsedAttribute v;
+    v.kind = Kind::Vec;
+    v.vec = p;
+    return v;
+  }
+
+  static ParsedAttribute from_array(std::vector<ParsedAttribute> items) {
+    ParsedAttribute v;
+    v.kind = Kind::Array;
+    v.array = std::move(items);
+    return v;
+  }
+
+  /// Same formatting as Python's `_stringify_vff_attr_value`.
+  std::string to_string() const;
+  bool operator==(const ParsedAttribute& o) const;
+
+  bool operator!=(const ParsedAttribute& o) const { return !(*this == o); }
+};
+
+inline bool operator==(const ParsedAttribute& a, const std::string& s) {
+  return a.kind == ParsedAttribute::Kind::String && a.text == s;
+}
+
+inline bool operator==(const std::string& s, const ParsedAttribute& a) { return a == s; }
+
+inline bool operator==(const ParsedAttribute& a, const char* s) {
+  return s != nullptr && a == std::string(s);
+}
+
+inline bool operator==(const char* s, const ParsedAttribute& a) { return a == s; }
+
+inline bool operator!=(const ParsedAttribute& a, const std::string& s) { return !(a == s); }
+
+inline bool operator!=(const std::string& s, const ParsedAttribute& a) { return !(a == s); }
+
+inline bool operator!=(const ParsedAttribute& a, const char* s) { return !(a == s); }
+
+inline bool operator!=(const char* s, const ParsedAttribute& a) { return !(a == s); }
+
+using ParsedAttrDict = std::map<std::string, ParsedAttribute>;
+using ParsedAttrDictionaries = std::map<std::string, ParsedAttrDict>;
+
+std::map<std::string, std::string> stringify_attr_dict(const ParsedAttrDict& src);
+std::map<std::string, std::map<std::string, std::string>> stringify_attr_dictionaries(
+    const ParsedAttrDictionaries& src);
+
 // 1 metre = 39.37007874015748 inches (SketchUp native unit). Shared by
 // every exporter that takes a coordinate scale factor (dxf_export.hpp,
 // ifc_export.hpp, ...) - defined once here rather than duplicated per
@@ -176,7 +264,11 @@ struct Instance {
   /// SketchUp's own Dynamic Components extension uses. A real instance
   /// routinely carries several at once (a plugin's own dictionary
   /// alongside SketchUp's, or several of the plugin's own).
-  std::map<std::string, std::map<std::string, std::string>> attribute_dictionaries;
+  /// Unlike `properties`, values keep their real type (`String` /
+  /// `Integer` / `Float` / `Null` / a 3-vector / a possibly-nested
+  /// `Array`) rather than being stringified - matching Python's
+  /// `Instance.attribute_dictionaries`.
+  ParsedAttrDictionaries attribute_dictionaries;
   /// Instance material override ID.
   std::optional<EntityId> material_id;
   /// Whether the instance itself is hidden (SketchUp's "Hide" on this

@@ -1,6 +1,6 @@
 #include <algorithm>
-#include <charconv>
 #include <cmath>
+#include <functional>
 #include <sstream>
 
 #include "internal.hpp"
@@ -131,69 +131,49 @@ static bool is_prop_container_tag(const std::string& t) {
          t == "A438" || t == "AE38";
 }
 
-// Shortest decimal string that round-trips exactly back to v - the same
-// "clean" formatting Python's str(float)/.NET's ToString()/TypeScript's/
-// Dart's toString() all produce naturally (15.5 -> "15.5", not
-// "15.500000" or 17-digit noise like "15.500000000000000"). Deliberately
-// NOT json_export.cpp's own "%.17g" convention: that call site needs
-// lossless machine round-tripping for a JSON *number*, this one needs a
-// human-readable attribute *string* comparable to what the other 4 ports
-// produce for the same value - different jobs, different formatting.
-static std::string format_double(double v) {
-  char buf[32];
-  auto result = std::to_chars(buf, buf + sizeof(buf), v);
-  return std::string(buf, result.ptr);
-}
-
 // A438 wraps exactly one attribute value: its payload holds a single
 // nested span whose OWN tag says the real type (AD38 string, A938/AF38
 // double, A738 int32, B438/B538 a 3xf64 point/vector, AE38 a nested
 // array) - matching Python's _decode_vff_attr_value exactly (openskp#285).
-// No native bool/time_t tag has ever been observed in real data, so 7/9
-// is the real ceiling, not an arbitrary stopping point.
+// No native bool/time_t tag has ever been observed in real VFF data, so
+// 7/9 is the real ceiling, not an arbitrary stopping point.
 //
-// Unlike the other 4 ports, this one never exposes a richer-than-string
-// decoded value anywhere (attribute_dictionaries is std::map<std::string,
-// std::string> by design here) - matching Python's/every other port's own
-// PUBLIC attribute_dictionaries contract, which is string-valued too
-// (scene.py stringifies via _stringify_vff_attr_value before ever storing
-// into InstanceNode.attribute_dictionaries; the richer typed value only
-// exists in each port's internal decode step). So this function decodes
-// AND stringifies in one pass rather than keeping the two steps separate.
-// An A438 with no children (Python: None) or an unrecognized value tag
-// both stringify to "" - a real, present key with an empty value, not a
-// missing key, matching extract_entries's own unconditional assignment.
-static std::string decode_a438_value(const ByteBuffer& p, size_t a, size_t z) {
+// Python's SkpModel.Instance.attribute_dictionaries keeps these native
+// types (`int`/`float`/`None`/3-tuple/list). C++ used to decode AND
+// stringify in one pass because scene/JSON/IFC take strings - that
+// discarded the type SketchUp stored (A738 integer became "-7"). The
+// typed value lives on Instance::attribute_dictionaries;
+// stringify_attr_dictionaries() is for scene/JSON/IFC strings. An A438
+// with no children (Python: None) or an unrecognized value tag is Null
+// - a real, present key, not a missing key.
+static ParsedAttribute decode_a438_value(const ByteBuffer& p, size_t a, size_t z) {
   auto spans = parse_flat_spans(p, a, z);
-  if (spans.empty()) return "";
+  if (spans.empty()) return ParsedAttribute::null();
   auto& [tag, span] = spans[0];
   auto [sa, sz] = span;
   if (tag == "AD38") {
-    return std::string(reinterpret_cast<const char*>(p.data() + sa), sz - sa);
+    return ParsedAttribute::from_string(
+        std::string(reinterpret_cast<const char*>(p.data() + sa), sz - sa));
   }
   if ((tag == "AF38" || tag == "A938") && sz - sa == 8) {
-    return format_double(read_f64(p, sa));
+    return ParsedAttribute::from_float(read_f64(p, sa));
   }
   if (tag == "A738" && sz - sa == 4) {
-    return std::to_string(read_i32(p, sa));
+    return ParsedAttribute::from_integer(read_i32(p, sa));
   }
   if ((tag == "B438" || tag == "B538") && sz - sa == 24) {
-    return format_double(read_f64(p, sa)) + "," + format_double(read_f64(p, sa + 8)) + "," +
-           format_double(read_f64(p, sa + 16));
+    return ParsedAttribute::from_vec({read_f64(p, sa), read_f64(p, sa + 8), read_f64(p, sa + 16)});
   }
   if (tag == "AE38") {
-    std::string joined;
-    bool first = true;
+    std::vector<ParsedAttribute> items;
     for (auto& [ctag, cspan] : parse_flat_spans(p, sa, sz)) {
       if (ctag != "A438") continue;
       auto [ca, cz] = cspan;
-      if (!first) joined += ",";
-      joined += decode_a438_value(p, ca, cz);
-      first = false;
+      items.push_back(decode_a438_value(p, ca, cz));
     }
-    return joined;
+    return ParsedAttribute::from_array(std::move(items));
   }
-  return "";
+  return ParsedAttribute::null();
 }
 
 // Extract every attribute dictionary attached to a DC05 payload, keyed by
@@ -206,10 +186,9 @@ static std::string decode_a438_value(const ByteBuffer& p, size_t a, size_t z) {
 // the payload's own top level, so both the dictionary search and the
 // entries walk recurse into every container-tagged node, not just scan
 // one level.
-static void extract_attribute_dictionaries(
-    const ByteBuffer& p, std::map<std::string, std::map<std::string, std::string>>& out) {
-  std::function<void(size_t, size_t, std::map<std::string, std::string>&)> extract_entries;
-  extract_entries = [&](size_t a, size_t z, std::map<std::string, std::string>& entries) {
+static void extract_attribute_dictionaries(const ByteBuffer& p, ParsedAttrDictionaries& out) {
+  std::function<void(size_t, size_t, ParsedAttrDict&)> extract_entries;
+  extract_entries = [&](size_t a, size_t z, ParsedAttrDict& entries) {
     std::string key;
     for (auto& [tag, span] : parse_flat_spans(p, a, z)) {
       auto [sa, sz] = span;
@@ -232,7 +211,7 @@ static void extract_attribute_dictionaries(
       auto [sa, sz] = span;
       if (tag == "B436") {
         std::string name(reinterpret_cast<const char*>(p.data() + sa), sz - sa);
-        std::map<std::string, std::string> entries;
+        ParsedAttrDict entries;
         if (i + 1 < here.size()) {
           auto [ea, ez] = here[i + 1].second;
           extract_entries(ea, ez, entries);
@@ -338,14 +317,13 @@ void collect_geometry(const std::vector<TlvNode>& es, GeometryBuilder& b) {
             else if (x.tag == "D207" && !x.payload.empty())
               i.layer = std::to_string(parse_varint(x.payload, 0, x.payload.size()));
             else if (x.tag == "DC05") {
-              std::map<std::string, std::map<std::string, std::string>> all_dicts;
+              ParsedAttrDictionaries all_dicts;
               extract_attribute_dictionaries(x.payload, all_dicts);
               for (auto& [dict_name, entries] : all_dicts) {
                 if (dict_name == "dynamic_attributes") {
-                  i.properties = std::move(entries);
-                } else if (dict_name != "SU_InstanceSet") {
-                  i.attribute_dicts[dict_name] = std::move(entries);
+                  i.properties = stringify_attr_dict(entries);
                 }
+                i.attribute_dicts[dict_name] = std::move(entries);
               }
             }
             // D307 = display flags, same record edges/faces already read

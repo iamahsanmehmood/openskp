@@ -22,6 +22,13 @@ bool is_generic_definition_name(const std::string& name) {
   return std::regex_match(name, kPattern);
 }
 
+// Same exclusions as scene.cpp / scene.py: dynamic_attributes is already
+// on `properties`, and SU_InstanceSet is SketchUp's Owner/Status
+// boilerplate. The model keeps both dictionaries unfiltered.
+bool omitted_from_scene(const std::string& dict_name) {
+  return dict_name == "dynamic_attributes" || dict_name == "SU_InstanceSet";
+}
+
 constexpr double kInchesToMm = 25.4;
 constexpr double kInchesToM = 0.0254;
 
@@ -277,18 +284,23 @@ InstancedScene build_instanced_scene_raw(RawParsed&& p, const ParseOptions& o) {
       const bool def_name_is_real = !def_name.empty() && !is_generic_definition_name(def_name);
 
       // Same fallback order as openskp.instanced_scene: attribute-dict
-      // override (any OTHER dictionary the instance carries, whichever
-      // plugin wrote it - "name"/"label"/"code", first dictionary and
+      // override ("name"/"label"/"code" on any dictionary except
+      // dynamic_attributes and SU_InstanceSet, first dictionary and
       // first key found wins), then the instance's own name, then the
       // definition's own name if it's not itself an auto-generated
       // "Group#1"-style placeholder, then finally the internal index.
       std::optional<std::string> name_override;
-      for (auto& [dict_name, entries] : i.attribute_dicts) {
+      for (const auto& dict : i.attribute_dicts) {
+        if (omitted_from_scene(dict.first)) continue;
+        const auto& entries = dict.second;
         for (const char* key : {"name", "label", "code"}) {
           auto it = entries.find(key);
-          if (it != entries.end() && !it->second.empty()) {
-            name_override = it->second;
-            break;
+          if (it != entries.end()) {
+            std::string s = it->second.to_string();
+            if (!s.empty()) {
+              name_override = std::move(s);
+              break;
+            }
           }
         }
         if (name_override) break;
@@ -311,7 +323,10 @@ InstancedScene build_instanced_scene_raw(RawParsed&& p, const ParseOptions& o) {
                           new_matrix.size() > 10 ? new_matrix[10] * kInchesToMm : 0,
                           new_matrix.size() > 11 ? new_matrix[11] * kInchesToMm : 0};
       node.properties = i.properties;
-      node.attribute_dictionaries = i.attribute_dicts;
+      for (const auto& dict : i.attribute_dicts) {
+        if (omitted_from_scene(dict.first)) continue;
+        node.attribute_dictionaries.emplace(dict.first, stringify_attr_dict(dict.second));
+      }
 
       if (i.ref_idx) {
         if (active.count(*i.ref_idx)) {

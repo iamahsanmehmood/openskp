@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — C++: VFF/legacy attribute dictionaries keep native types
+
+Python's `Instance.attribute_dictionaries` already returns the types
+SketchUp stored (`int`/`float`/`None`/3-tuple/nested list) and only
+stringifies for `properties` and the baked scene. The C++ reader decoded
+the same VFF tags (`A738` int32, `A938`/`AF38` float64, `B438`/`B538`
+point/vector, `AE38` array) then immediately formatted them as strings,
+so a file that saved `angle = -7` came back as `"-7"`. Legacy
+`CAttributeNamed` did the same, and never copied non-DC dictionaries onto
+the instance at all. `Instance::attribute_dictionaries` is now
+`ParsedAttrDictionaries` (a breaking C++ type change for callers that
+treated every value as a string — use `to_string()` / `kind`);
+scene/JSON/IFC still stringify every named dictionary (the reader does
+not skip dictionaries by name). Regression tests lock VFF
+integer/float/point/array decode and a writer round-trip of
+int32/double/string.
 ### Fixed — `pip install -e ".[dev]"` and the web viewer's "Upload SKP" both broken on a fresh clone
 
 Reported (openskp#375): following this project's own documented setup

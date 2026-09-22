@@ -131,6 +131,88 @@ TEST(Scene, LeavesFullyOpaqueRawAlphaByteForByteUnchanged) {
   EXPECT_DOUBLE_EQ(scene.gltf_materials[0].pbr_metallic_roughness.base_color_factor[3], 1.0);
 }
 
+const std::vector<double> kIdentityMatrix{1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1};
+
+RawParsed placed_instance(std::string instance_name, std::string def_name,
+                          ParsedAttrDictionaries dicts,
+                          std::map<std::string, std::string> properties) {
+  RawParsed parsed;
+  RawDefinition definition;
+  definition.name = std::move(def_name);
+  parsed.definitions.emplace(1, std::move(definition));
+  RawInstance instance;
+  instance.name = std::move(instance_name);
+  instance.ref_idx = 1;
+  instance.matrix = kIdentityMatrix;
+  instance.properties = std::move(properties);
+  instance.attribute_dicts = std::move(dicts);
+  parsed.root.builder.instances.push_back(std::move(instance));
+  return parsed;
+}
+
+ParsedAttrDictionaries sketchup_and_plugin_dicts() {
+  ParsedAttrDictionaries dicts;
+  dicts["dynamic_attributes"] = {{"name", ParsedAttribute::from_string("FromDC")},
+                                 {"width", ParsedAttribute::from_string("10")}};
+  dicts["SU_InstanceSet"] = {{"Owner", ParsedAttribute::from_string("")}};
+  dicts["fbd-einfo"] = {{"name", ParsedAttribute::from_string("FromPlugin")}};
+  return dicts;
+}
+
+// Model-level Instance::attribute_dictionaries keeps every dictionary.
+// Scene nodes drop dynamic_attributes (already on properties) and
+// SU_InstanceSet, and neither name may override the display name.
+// Mirrors scene.py / instanced_scene.py.
+TEST(Scene, SceneOmitsSketchUpDictionariesTheModelKeeps) {
+  const std::map<std::string, std::string> properties{{"name", "FromDC"}, {"width", "10"}};
+  auto model = build_model(
+      placed_instance("GLB-12", "wall_def", sketchup_and_plugin_dicts(), properties), {});
+  ASSERT_EQ(model.root().instances.size(), 1u);
+  const auto& inst = model.root().instances[0];
+  EXPECT_EQ(inst.attribute_dictionaries.at("dynamic_attributes").at("name"), "FromDC");
+  EXPECT_EQ(inst.attribute_dictionaries.at("dynamic_attributes").at("width"), "10");
+  EXPECT_EQ(inst.attribute_dictionaries.at("SU_InstanceSet").at("Owner"), "");
+  EXPECT_EQ(inst.attribute_dictionaries.at("fbd-einfo").at("name"), "FromPlugin");
+
+  auto scene = build_scene_raw(
+      placed_instance("GLB-12", "wall_def", sketchup_and_plugin_dicts(), properties), {});
+  ASSERT_EQ(scene.scene_hierarchy.children.size(), 1u);
+  const auto& baked = scene.scene_hierarchy.children[0];
+  EXPECT_EQ(baked.name, "FromPlugin");
+  EXPECT_EQ(baked.properties, properties);
+  EXPECT_EQ(baked.attribute_dictionaries,
+            (std::map<std::string, std::map<std::string, std::string>>{
+                {"fbd-einfo", {{"name", "FromPlugin"}}}}));
+
+  auto instanced = build_instanced_scene_raw(
+      placed_instance("GLB-12", "wall_def", sketchup_and_plugin_dicts(), properties), {});
+  ASSERT_EQ(instanced.scene_hierarchy.children.size(), 1u);
+  const auto& node = instanced.scene_hierarchy.children[0];
+  EXPECT_EQ(node.name, "FromPlugin");
+  EXPECT_FALSE(node.name_is_generated);
+  EXPECT_EQ(node.properties, properties);
+  EXPECT_EQ(node.attribute_dictionaries, baked.attribute_dictionaries);
+}
+
+TEST(Scene, DynamicAttributesNameDoesNotOverrideDisplayName) {
+  ParsedAttrDictionaries dicts;
+  dicts["dynamic_attributes"] = {{"name", ParsedAttribute::from_string("FromDC")}};
+  dicts["SU_InstanceSet"] = {{"Owner", ParsedAttribute::from_string("")}};
+  const std::map<std::string, std::string> properties{{"name", "FromDC"}};
+
+  auto scene = build_scene_raw(placed_instance("", "Group#1", dicts, properties), {});
+  ASSERT_EQ(scene.scene_hierarchy.children.size(), 1u);
+  EXPECT_EQ(scene.scene_hierarchy.children[0].name, "Component_1");
+  EXPECT_TRUE(scene.scene_hierarchy.children[0].attribute_dictionaries.empty());
+  EXPECT_EQ(scene.scene_hierarchy.children[0].properties, properties);
+
+  auto instanced = build_instanced_scene_raw(placed_instance("", "Group#1", dicts, properties), {});
+  ASSERT_EQ(instanced.scene_hierarchy.children.size(), 1u);
+  EXPECT_EQ(instanced.scene_hierarchy.children[0].name, "Component_1");
+  EXPECT_TRUE(instanced.scene_hierarchy.children[0].name_is_generated);
+  EXPECT_TRUE(instanced.scene_hierarchy.children[0].attribute_dictionaries.empty());
+}
+
 TEST(Scene, KeepsWindingAndNormalsAlignedForMirroredInstances) {
   auto parsed = triangle_with_materials(true);
   RawDefinition definition;

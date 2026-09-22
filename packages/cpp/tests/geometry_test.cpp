@@ -137,8 +137,7 @@ ByteBuffer named_dict(const char* name, ByteBuffer entries_payload) {
   return concat({tlv("B436", test::bytes(name)), tlv("B536", std::move(entries_payload))});
 }
 
-std::map<std::string, std::map<std::string, std::string>> attribute_dicts_for(
-    ByteBuffer dc05_payload) {
+ParsedAttrDictionaries attribute_dicts_for(ByteBuffer dc05_payload) {
   auto builder = geometry(tlv("6419", tlv("D007", tlv("DC05", std::move(dc05_payload)))));
   return builder.instances.at(0).attribute_dicts;
 }
@@ -150,22 +149,25 @@ TEST(Geometry, AttributeDictionariesGroupEntriesByDictionaryName) {
 }
 
 TEST(Geometry, AttributeDictionariesKeepTwoDictionariesDistinct) {
-  // dynamic_attributes is SketchUp's own Dynamic Components dictionary -
-  // collect_geometry redirects it to RawInstance::properties (the
-  // backward-compatible view), not attribute_dicts, same as every other
-  // port. attribute_dicts only ever holds every OTHER named dictionary.
+  // Every named dictionary lands on attribute_dicts with native types.
+  // properties remains the existing stringified view of a dictionary
+  // named dynamic_attributes when that name happens to be present.
   auto builder = geometry(tlv(
       "6419",
       tlv("D007",
           tlv("DC05",
               concat({
                   named_dict("dynamic_attributes", entry("width", tlv("AD38", test::bytes("10")))),
+                  named_dict("SU_InstanceSet", entry("Owner", tlv("AD38", test::bytes("")))),
                   named_dict("FrameBuilder", entry("name", tlv("AD38", test::bytes("W-2")))),
               })))));
   const auto& instance = builder.instances.at(0);
   EXPECT_EQ(instance.properties.at("width"), "10");
   EXPECT_EQ(instance.attribute_dicts.at("FrameBuilder").at("name"), "W-2");
-  EXPECT_EQ(instance.attribute_dicts.count("dynamic_attributes"), 0u);
+  ASSERT_EQ(instance.attribute_dicts.count("dynamic_attributes"), 1u);
+  EXPECT_EQ(instance.attribute_dicts.at("dynamic_attributes").at("width"), "10");
+  ASSERT_EQ(instance.attribute_dicts.count("SU_InstanceSet"), 1u);
+  EXPECT_EQ(instance.attribute_dicts.at("SU_InstanceSet").at("Owner"), "");
 }
 
 TEST(Geometry, AttributeDictionariesDecodeLengthAndFloatAsDistinctTagsBothF64) {
@@ -174,19 +176,29 @@ TEST(Geometry, AttributeDictionariesDecodeLengthAndFloatAsDistinctTagsBothF64) {
       entry("price", tlv("A938", test::f64s({120.0}))),
   });
   auto dicts = attribute_dicts_for(named_dict("fbd-einfo", entries));
-  EXPECT_EQ(dicts.at("fbd-einfo").at("depth"), "15.5");
-  EXPECT_EQ(dicts.at("fbd-einfo").at("price"), "120");
+  const auto& depth = dicts.at("fbd-einfo").at("depth");
+  const auto& price = dicts.at("fbd-einfo").at("price");
+  EXPECT_EQ(depth.kind, ParsedAttribute::Kind::Float);
+  EXPECT_DOUBLE_EQ(depth.number, 15.5);
+  EXPECT_EQ(price.kind, ParsedAttribute::Kind::Float);
+  EXPECT_DOUBLE_EQ(price.number, 120.0);
+  EXPECT_EQ(depth.to_string(), "15.5");
+  EXPECT_EQ(price.to_string(), "120");
 }
 
 TEST(Geometry, AttributeDictionariesDecodeIntegerValue) {
   auto dicts =
       attribute_dicts_for(named_dict("fbd-einfo", entry("angle", tlv("A738", i32_bytes(-7)))));
-  EXPECT_EQ(dicts.at("fbd-einfo").at("angle"), "-7");
+  const auto& angle = dicts.at("fbd-einfo").at("angle");
+  EXPECT_EQ(angle.kind, ParsedAttribute::Kind::Integer);
+  EXPECT_EQ(angle.integer, -7);
+  EXPECT_EQ(angle.to_string(), "-7");
 }
 
-TEST(Geometry, AttributeDictionariesDecodeEmptyA438AsEmptyString) {
+TEST(Geometry, AttributeDictionariesDecodeEmptyA438AsNull) {
   auto dicts = attribute_dicts_for(named_dict("fbd-einfo", entry("child_thickness", {})));
-  EXPECT_EQ(dicts.at("fbd-einfo").at("child_thickness"), "");
+  EXPECT_EQ(dicts.at("fbd-einfo").at("child_thickness").kind, ParsedAttribute::Kind::Null);
+  EXPECT_EQ(dicts.at("fbd-einfo").at("child_thickness").to_string(), "");
 }
 
 TEST(Geometry, AttributeDictionariesDecodePoint3dAndVector3d) {
@@ -194,14 +206,25 @@ TEST(Geometry, AttributeDictionariesDecodePoint3dAndVector3d) {
   auto vector_bytes = tlv("B538", test::f64s({1.0, 0.0, 0.0}));
   auto entries = concat({entry("end_pos", point_bytes), entry("vector_new", vector_bytes)});
   auto dicts = attribute_dicts_for(named_dict("fbd-einfo", entries));
-  EXPECT_EQ(dicts.at("fbd-einfo").at("end_pos"), "0,0.807085,14.6551");
-  EXPECT_EQ(dicts.at("fbd-einfo").at("vector_new"), "1,0,0");
+  const auto& end_pos = dicts.at("fbd-einfo").at("end_pos");
+  const auto& vector_new = dicts.at("fbd-einfo").at("vector_new");
+  EXPECT_EQ(end_pos.kind, ParsedAttribute::Kind::Vec);
+  EXPECT_DOUBLE_EQ(end_pos.vec[0], 0.0);
+  EXPECT_DOUBLE_EQ(end_pos.vec[1], 0.807085);
+  EXPECT_DOUBLE_EQ(end_pos.vec[2], 14.6551);
+  EXPECT_EQ(vector_new.kind, ParsedAttribute::Kind::Vec);
+  EXPECT_DOUBLE_EQ(vector_new.vec[0], 1.0);
+  EXPECT_EQ(end_pos.to_string(), "0,0.807085,14.6551");
+  EXPECT_EQ(vector_new.to_string(), "1,0,0");
 }
 
-TEST(Geometry, AttributeDictionariesDecodeEmptyArrayAsEmptyString) {
+TEST(Geometry, AttributeDictionariesDecodeEmptyArray) {
   auto dicts =
       attribute_dicts_for(named_dict("fbd-einfo", entry("added_bolt_holes", tlv("AE38", {}))));
-  EXPECT_EQ(dicts.at("fbd-einfo").at("added_bolt_holes"), "");
+  const auto& holes = dicts.at("fbd-einfo").at("added_bolt_holes");
+  EXPECT_EQ(holes.kind, ParsedAttribute::Kind::Array);
+  EXPECT_TRUE(holes.array.empty());
+  EXPECT_EQ(holes.to_string(), "");
 }
 
 TEST(Geometry, AttributeDictionariesDecodeArrayOfFloats) {
@@ -212,7 +235,11 @@ TEST(Geometry, AttributeDictionariesDecodeArrayOfFloats) {
   });
   auto dicts =
       attribute_dicts_for(named_dict("fbd-einfo", entry("flangeholes", tlv("AE38", elems))));
-  EXPECT_EQ(dicts.at("fbd-einfo").at("flangeholes"), "0.728,11.358,14.655");
+  const auto& holes = dicts.at("fbd-einfo").at("flangeholes");
+  ASSERT_EQ(holes.kind, ParsedAttribute::Kind::Array);
+  ASSERT_EQ(holes.array.size(), 3u);
+  EXPECT_DOUBLE_EQ(holes.array[0].number, 0.728);
+  EXPECT_EQ(holes.to_string(), "0.728,11.358,14.655");
 }
 
 TEST(Geometry, AttributeDictionariesDecodeNestedArray) {
@@ -226,15 +253,20 @@ TEST(Geometry, AttributeDictionariesDecodeNestedArray) {
   auto outer = concat({entry_value(tlv("AE38", inner1)), entry_value(tlv("AE38", inner2))});
   auto dicts =
       attribute_dicts_for(named_dict("fbd-einfo", entry("lip_side1_cords", tlv("AE38", outer))));
-  EXPECT_EQ(dicts.at("fbd-einfo").at("lip_side1_cords"), "25.17,0.07,25.17,15.35");
+  const auto& cords = dicts.at("fbd-einfo").at("lip_side1_cords");
+  ASSERT_EQ(cords.kind, ParsedAttribute::Kind::Array);
+  ASSERT_EQ(cords.array.size(), 2u);
+  EXPECT_EQ(cords.array[0].kind, ParsedAttribute::Kind::Array);
+  EXPECT_EQ(cords.to_string(), "25.17,0.07,25.17,15.35");
 }
 
-TEST(Geometry, AttributeDictionariesLeaveUnrecognizedValueTagAsEmptyString) {
-  // A type tag this decoder doesn't (yet) know is left as "" rather than
+TEST(Geometry, AttributeDictionariesLeaveUnrecognizedValueTagAsNull) {
+  // A type tag this decoder doesn't (yet) know is left as Null rather than
   // misinterpreted - safer than a wrong guess.
   auto dicts = attribute_dicts_for(
       named_dict("fbd-einfo", entry("mystery", tlv("EE99", ByteBuffer{0x01, 0x02}))));
-  EXPECT_EQ(dicts.at("fbd-einfo").at("mystery"), "");
+  EXPECT_EQ(dicts.at("fbd-einfo").at("mystery").kind, ParsedAttribute::Kind::Null);
+  EXPECT_EQ(dicts.at("fbd-einfo").at("mystery").to_string(), "");
 }
 
 TEST(Geometry, ExtractsVffConstructionPointAndLine) {

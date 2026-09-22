@@ -973,42 +973,40 @@ struct Archive {
     return v;
   }
 
-  // Reads one typed CAttributeNamed value off the stream and returns its
-  // string representation, matching the string-valued properties contract
-  // extract_legacy_dynamic_properties() (below) produces.
-  std::string typed(uint8_t t) {
+  // Reads one typed CAttributeNamed value off the stream. Matches Python's
+  // `_read_attr_named.read_typed` - int/float/str/None/3-tuple/list, not a
+  // stringified view. `properties` still stringifies via stringify_attr_dict.
+  ParsedAttribute typed(uint8_t t) {
     switch (t) {
       case 0:
-        return "";
+        return ParsedAttribute::null();
       case 4:
-        return std::to_string(read_i32(r.raw(4), 0));
+        return ParsedAttribute::from_integer(read_i32(r.raw(4), 0));
       case 6:
-        return std::to_string(r.f64());
+        return ParsedAttribute::from_float(r.f64());
       case 7:
-        return std::to_string(r.u8());
+        return ParsedAttribute::from_integer(r.u8());
       case 9:
-        return std::to_string(r.u32());
+        return ParsedAttribute::from_integer(static_cast<std::int64_t>(r.u32()));
       case 10:
-        return r.utf16();
+        return ParsedAttribute::from_string(r.utf16());
       case 12:
-        return std::to_string(r.f64());  // Length (a double, inches)
+        return ParsedAttribute::from_float(r.f64());  // Length (a double, inches)
       case 11: {
         auto n = r.u32();
         if (n > 100000) throw std::runtime_error("attr array too large");
-        std::string joined;
-        while (n--) {
-          if (!joined.empty()) joined += ",";
-          joined += typed(r.u8());
-        }
-        return joined;
+        std::vector<ParsedAttribute> items;
+        items.reserve(n);
+        while (n--) items.push_back(typed(r.u8()));
+        return ParsedAttribute::from_array(std::move(items));
       }
       case 17: {  // 3D point (Geom::Point3d)
         auto v = r.f64s(3);
-        return std::to_string(v[0]) + "," + std::to_string(v[1]) + "," + std::to_string(v[2]);
+        return ParsedAttribute::from_vec({v[0], v[1], v[2]});
       }
       case 18: {  // 3D vector (Geom::Vector3d)
         auto v = r.f64s(3);
-        return std::to_string(v[0]) + "," + std::to_string(v[1]) + "," + std::to_string(v[2]);
+        return ParsedAttribute::from_vec({v[0], v[1], v[2]});
       }
       default:
         throw std::runtime_error("unknown legacy attribute type");
@@ -1275,27 +1273,16 @@ void add_edge(GeometryBuilder& b, uint64_t s, const V& e,
 // faces) - this just looks up that one dictionary by name, mirroring what
 // the VFF path's dynamic-properties extraction does for D007/DC05 TLV
 // data.
-std::map<std::string, std::string> extract_legacy_dynamic_properties(
+ParsedAttrDictionaries extract_legacy_attribute_dictionaries(
     std::optional<uint64_t> attrs_slot, const std::unordered_map<uint64_t, Entry>& slots) {
-  if (!attrs_slot) return {};
+  ParsedAttrDictionaries out;
+  if (!attrs_slot) return out;
   auto ai = slots.find(*attrs_slot);
-  if (ai == slots.end() || !ai->second.v) return {};
+  if (ai == slots.end() || !ai->second.v) return out;
   for (auto& ent : ai->second.v->ents) {
     auto& ev = std::get<2>(ent);
-    if (ev && ev->k == "dict" && ev->name == "dynamic_attributes") return ev->entries;
-  }
-  return {};
-}
-
-std::map<std::string, std::map<std::string, std::string>> extract_legacy_attribute_dictionaries(
-    std::optional<uint64_t> attrs_slot, const std::unordered_map<uint64_t, Entry>& slots) {
-  if (!attrs_slot) return {};
-  auto ai = slots.find(*attrs_slot);
-  if (ai == slots.end() || !ai->second.v) return {};
-  std::map<std::string, std::map<std::string, std::string>> out;
-  for (auto& ent : ai->second.v->ents) {
-    auto& ev = std::get<2>(ent);
-    if (ev && ev->k == "dict" && !ev->name.empty()) out[ev->name] = ev->entries;
+    if (!ev || ev->k != "dict" || ev->name.empty()) continue;
+    out[ev->name] = ev->entries;
   }
   return out;
 }
@@ -1361,7 +1348,10 @@ void fill(GeometryBuilder& b,
       if (v->mat) i.material_id = v->mat;
       if (v->layer) i.layer = std::to_string(v->layer);
       i.hidden = v->hidden != 0;
-      i.properties = extract_legacy_dynamic_properties(v->attrs, slots);
+      auto dicts = extract_legacy_attribute_dictionaries(v->attrs, slots);
+      auto dc = dicts.find("dynamic_attributes");
+      if (dc != dicts.end()) i.properties = stringify_attr_dict(dc->second);
+      i.attribute_dicts = std::move(dicts);
       b.instances.push_back(std::move(i));
     } else if (v->k == "image") {
       // Placed exactly like an ordinary component instance - same
@@ -1690,7 +1680,13 @@ RawParsed parse_legacy(const ByteBuffer& data, const ParseOptions& o) {
                                           uint8_t(l.second->b)};
       out.layer_hidden[l.second->name] = l.second->hidden != 0;
       auto dicts = extract_legacy_attribute_dictionaries(l.second->attrs, ar.slots);
-      if (!dicts.empty()) out.layer_attribute_dictionaries[l.second->name] = std::move(dicts);
+      // Layer::attribute_dictionaries stays string-typed by design (matches
+      // Instance's own pre-#368 contract for the model-level scene/JSON/IFC
+      // consumers PR #369 wired it into) - the shared extraction above
+      // returns typed ParsedAttrDictionaries now, so stringify here rather
+      // than keeping a second, near-duplicate string-typed extractor.
+      if (!dicts.empty())
+        out.layer_attribute_dictionaries[l.second->name] = stringify_attr_dictionaries(dicts);
     }
     if (!out.layer_colors.count("Layer0")) {
       out.layer_order.push_back("Layer0");

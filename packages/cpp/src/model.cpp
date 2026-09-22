@@ -1,8 +1,74 @@
+#include <charconv>
 #include <fstream>
 
 #include "internal.hpp"
 
 namespace openskp {
+namespace {
+
+std::string format_double(double v) {
+  char buf[32];
+  auto result = std::to_chars(buf, buf + sizeof(buf), v);
+  return std::string(buf, result.ptr);
+}
+
+}  // namespace
+
+std::string ParsedAttribute::to_string() const {
+  switch (kind) {
+    case Kind::Null:
+      return "";
+    case Kind::String:
+      return text;
+    case Kind::Integer:
+      return std::to_string(integer);
+    case Kind::Float:
+      return format_double(number);
+    case Kind::Vec:
+      return format_double(vec[0]) + "," + format_double(vec[1]) + "," + format_double(vec[2]);
+    case Kind::Array: {
+      std::string joined;
+      for (const auto& item : array) {
+        if (!joined.empty()) joined += ",";
+        joined += item.to_string();
+      }
+      return joined;
+    }
+  }
+  return "";
+}
+
+bool ParsedAttribute::operator==(const ParsedAttribute& o) const {
+  if (kind != o.kind) return false;
+  switch (kind) {
+    case Kind::Null:
+      return true;
+    case Kind::String:
+      return text == o.text;
+    case Kind::Integer:
+      return integer == o.integer;
+    case Kind::Float:
+      return number == o.number;
+    case Kind::Vec:
+      return vec == o.vec;
+    case Kind::Array:
+      return array == o.array;
+  }
+  return false;
+}
+
+std::map<std::string, std::string> stringify_attr_dict(const ParsedAttrDict& src) {
+  std::map<std::string, std::string> out;
+  for (const auto& kv : src) out.emplace(kv.first, kv.second.to_string());
+  return out;
+}
+
+std::map<std::string, std::map<std::string, std::string>> stringify_attr_dictionaries(
+    const ParsedAttrDictionaries& src) {
+  std::map<std::string, std::map<std::string, std::string>> out;
+  for (const auto& d : src) out.emplace(d.first, stringify_attr_dict(d.second));
+  return out;
+}
 
 Definition& SkpModel::root() noexcept { return root_; }
 
