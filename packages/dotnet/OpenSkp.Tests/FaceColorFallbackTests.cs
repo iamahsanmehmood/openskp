@@ -31,6 +31,14 @@ namespace OpenSkp.Tests
         private static byte[] TinyPng() => Convert.FromBase64String(
             "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=");
 
+        // Textures deduplicate on their source bytes, so a test that needs two of them needs two
+        // images that genuinely differ - same bytes under two names collapse to one.
+        private static byte[] RedPng() => Convert.FromBase64String(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC");
+
+        private static byte[] BluePng() => Convert.FromBase64String(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNgYPgPAAEDAQAIicLsAAAAAElFTkSuQmCC");
+
         private static SkpParseOptions StyleColor() => new SkpParseOptions { UseStyleFaceColor = true };
 
         private sealed record Pbr(double[] BaseColorFactor, int? TextureIndex);
@@ -188,30 +196,70 @@ namespace OpenSkp.Tests
         }
 
         [Fact]
-        public void TwoInstancesPaintedWithDifferentTexturesDoNotShareAMeshResource()
+        public void TwoDifferentImagesOfEqualLengthStayTwoTextures()
         {
-            // The instanced builder caches a definition's mesh by its placement context. The
-            // inherited material has to be part of that key: these two share a definition and
-            // an average color, and differ only by image.
-            var first = Path.Combine(Path.GetTempPath(), $"openskp_a_{Guid.NewGuid():N}.png");
-            var second = Path.Combine(Path.GetTempPath(), $"openskp_b_{Guid.NewGuid():N}.png");
-            File.WriteAllBytes(first, TinyPng());
-            File.WriteAllBytes(second, TinyPng());
+            // Both images are valid PNGs of exactly the same byte length, and every PNG opens
+            // with the same 16 bytes. A texture key built from the length and a short prefix
+            // cannot tell them apart, and merges them into one.
+            Assert.Equal(RedPng().Length, BluePng().Length);
+            Assert.NotEqual(RedPng(), BluePng());
+
+            var red = Path.Combine(Path.GetTempPath(), $"openskp_eq_red_{Guid.NewGuid():N}.png");
+            var blue = Path.Combine(Path.GetTempPath(), $"openskp_eq_blue_{Guid.NewGuid():N}.png");
+            File.WriteAllBytes(red, RedPng());
+            File.WriteAllBytes(blue, BluePng());
             try
             {
                 var builder = SkpCreate.NewFile();
-                var matA = builder.AddTextureMaterial("A", first);
-                var matB = builder.AddTextureMaterial("B", second);
+                var redMat = builder.AddTextureMaterial("Red", red);
+                var blueMat = builder.AddTextureMaterial("Blue", blue);
+                builder.AddFace(_quad, material: redMat);
+                builder.AddFace(
+                    new[] { (0.0, 0.0, 5.0), (10.0, 0.0, 5.0), (10.0, 10.0, 5.0), (0.0, 10.0, 5.0) },
+                    material: blueMat);
+
+                var scene = SkpFile.BuildScene(builder.ToBytes(), new SkpParseOptions());
+
+                Assert.Equal(2, scene.Textures.Count);
+                Assert.NotEqual(scene.Textures[0].Data, scene.Textures[1].Data);
+            }
+            finally
+            {
+                File.Delete(red);
+                File.Delete(blue);
+            }
+        }
+
+        [Fact]
+        public void TwoInstancesPaintedWithDifferentTexturesGetTheirOwnImage()
+        {
+            // The instanced builder caches a definition's mesh by its placement context. The
+            // inherited material has to be part of that key: these two share a definition and
+            // differ only by the image painted on them, so a key that misses it would hand one
+            // placement the other's texture.
+            var red = Path.Combine(Path.GetTempPath(), $"openskp_red_{Guid.NewGuid():N}.png");
+            var blue = Path.Combine(Path.GetTempPath(), $"openskp_blue_{Guid.NewGuid():N}.png");
+            File.WriteAllBytes(red, RedPng());
+            File.WriteAllBytes(blue, BluePng());
+            try
+            {
+                var builder = SkpCreate.NewFile();
+                var redMat = builder.AddTextureMaterial("Red", red);
+                var blueMat = builder.AddTextureMaterial("Blue", blue);
                 ComponentDefinitionBuilder panel;
                 using (panel = builder.AddComponentDefinition("panel"))
                 {
                     panel.AddFace(_quad);
                 }
 
-                builder.AddInstance(panel, "a", material: matA);
-                builder.AddInstance(panel, "b", translation: (0.0, 0.0, 20.0), material: matB);
+                builder.AddInstance(panel, "red", material: redMat);
+                builder.AddInstance(panel, "blue", translation: (0.0, 0.0, 20.0), material: blueMat);
 
                 var scene = SkpFile.BuildInstancedScene(builder.ToBytes(), new SkpParseOptions());
+
+                // Two distinct images, so neither the texture store nor the mesh cache may merge them.
+                Assert.Equal(2, scene.Textures.Count);
+                Assert.NotEqual(scene.Textures[0].Data, scene.Textures[1].Data);
 
                 var placed = new List<string>();
                 void Walk(InstancedNode node)
@@ -222,11 +270,23 @@ namespace OpenSkp.Tests
 
                 Walk(scene.SceneHierarchy);
                 Assert.Equal(2, placed.Distinct().Count());
+
+                var materials = Materials(scene);
+                var byResource = scene.MeshResources.ToDictionary(
+                    resource => resource.Id,
+                    resource => resource.Primitives
+                        .Select(primitive => materials[primitive.MaterialIndex].TextureIndex)
+                        .Distinct()
+                        .ToList());
+
+                var textureIndices = placed.Distinct().Select(id => Assert.Single(byResource[id])).ToList();
+                Assert.All(textureIndices, index => Assert.NotNull(index));
+                Assert.Equal(2, textureIndices.Distinct().Count());
             }
             finally
             {
-                File.Delete(first);
-                File.Delete(second);
+                File.Delete(red);
+                File.Delete(blue);
             }
         }
     }

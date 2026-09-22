@@ -162,24 +162,9 @@ namespace OpenSkp
             // Textures deduplicated by bytes: the same image routinely backs
             // several materials, and re-embedding it per material would
             // multiply the export size for nothing.
-            var textures = new List<SceneTexture>();
-            var textureIndexByKey = new Dictionary<string, int>();
+            var textureRegistry = new TextureRegistry();
 
-            int? TextureIndexFor(Geometry.RawTexture? tex)
-            {
-                if (tex?.Data == null || tex.Data.Length == 0) return null;
-                var mimeType = SniffImageMime(tex.Data);
-                if (mimeType == null) return null; // a format glTF cannot carry
-                // length plus a short byte prefix is enough to tell real
-                // images apart without hashing megabytes on every face
-                var head = BitConverter.ToString(tex.Data, 0, Math.Min(16, tex.Data.Length));
-                var key = $"{tex.Data.Length}:{head}";
-                if (textureIndexByKey.TryGetValue(key, out var hit)) return hit;
-                var idx = textures.Count;
-                textures.Add(new SceneTexture { Data = tex.Data, MimeType = mimeType, Filename = tex.Filename });
-                textureIndexByKey[key] = idx;
-                return idx;
-            }
+            int? TextureIndexFor(Geometry.RawTexture? tex) => textureRegistry.IndexFor(tex);
 
             var colorToMaterialIndex = new Dictionary<((int, int, int) Color, bool DoubleSided, int? TextureIndex, double Transparency), int>();
             var gltfMaterials = new List<object>();
@@ -596,28 +581,13 @@ namespace OpenSkp
                 MeshIndex = meshIndex,
                 GlbPrimitives = glbPrimitives,
                 GltfMaterials = gltfMaterials,
-                Textures = textures,
+                Textures = textureRegistry.Textures,
             };
         }
 
         /// <summary>Identifies an image's MIME type from its magic bytes.
         /// Returns null for anything glTF cannot carry (glTF only allows
         /// PNG and JPEG).</summary>
-        private static string? SniffImageMime(byte[] data)
-        {
-            if (data.Length >= 3 && data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF)
-            {
-                return "image/jpeg";
-            }
-            if (data.Length >= 8 &&
-                data[0] == 0x89 && data[1] == 0x50 && data[2] == 0x4E && data[3] == 0x47 &&
-                data[4] == 0x0D && data[5] == 0x0A && data[6] == 0x1A && data[7] == 0x0A)
-            {
-                return "image/png";
-            }
-            return null;
-        }
-
         /// <summary>Internal (not private) so Edit.cs can reuse this same
         /// loop-walk when replaying a source face's boundary/hole loops
         /// into the point lists SkpBuilder.AddFace expects.</summary>
