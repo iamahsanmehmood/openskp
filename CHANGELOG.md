@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — Python: legacy definition names could fail to anchor when the GUID prefix runs shorter than expected
+
+`_read_definition` reads a 16-byte GUID immediately followed by the name
+string's marker; some files skew that fixed width. SketchUp 2020 files
+carrying 2 extra bytes ahead of the GUID were already handled by scanning
+forward. Reported (openskp#377, with an excellent, self-diagnosed writeup
+and a verified fix from the reporter): a definition imported from DWG in a
+SketchUp 2018 file skews the *other* way - the prefix runs shorter, so the
+marker sits a few bytes *before* the assumed position, which the
+forward-only scan couldn't find, aborting the whole parse. The scan is now
+symmetric (nearest offset first, in both directions), extracted into a
+directly unit-tested `_reanchor_on_string_marker` helper. Verified by the
+reporter against the real SketchUp SDK's own output (glTF bounding boxes
+matched on every axis) and their own real-file regression corpus, which is
+unaffected since the fallback only ever runs where the strict read would
+otherwise raise.
+
+TypeScript/.NET/Dart carry the identical forward-only scan (confirmed by
+inspection) and would hit the same failure mode on an equivalently-skewed
+file - not yet ported, tracked in openskp#285. C++'s legacy reader has no
+equivalent mechanism at all; unclear yet whether it needs one or already
+handles both files' layout some other way - needs its own look.
+
 ### Fixed — C++: VFF/legacy attribute dictionaries keep native types
 
 Python's `Instance.attribute_dictionaries` already returns the types
