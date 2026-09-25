@@ -57,7 +57,7 @@
   "homepage": "https://openskp.com",
   "bugs": "https://github.com/iamahsanmehmood/openskp/issues",
   "engines": {
-    "node": ">=20"
+    "node": ">=22.12.0"
   },
   "dependencies": {
     "earcut": "^3.0.0",
