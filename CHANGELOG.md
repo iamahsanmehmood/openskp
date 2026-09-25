@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — TypeScript: dropped Node 20 from CI/release after the vitest 5 bump
+
+Following up on the vitest 4→5 Dependabot bump (#366): vitest 5 requires
+Node `^22.12.0 || ^24.0.0 || >=26.0.0` and does not support Node 20 at
+all - `npm ci` on Node 20 already showed `npm warn EBADENGINE` for
+`vitest@5.0.1`, silently tolerated only because npm treats `engines`
+mismatches as non-fatal by default, not because it actually works by
+design. Node 20 itself [reached end-of-life on 2026-04-30](https://nodejs.org/en/about/previous-releases),
+so there's no real reason to keep it as a declared/tested target going
+forward. Removed `'20'` from `ci-typescript.yml`'s test matrix, bumped
+`deploy-pages.yml`/`release-typescript.yml` from Node 20 to 22 (both run
+`npm ci`, so they'd hit the same warning), and updated
+`packages/typescript/package.json`'s `engines.node` from `>=20` to
+`>=22.12.0` to match reality. Checked the actual test suite first: no
+`test.sequential`/`describe.sequential` usage, no mocking at all (so
+vitest 5's `clearMocks: true` default doesn't change anything here), and
+no separate vitest/vite config file (so the parent-directory config
+search change doesn't apply either) - the whole suite (446 tests) passes
+unchanged against vitest 5.0.1.
+
 ### Added — Python: `add_text`/`add_construction_point` now work inside a component definition or group
 
 Requested (openskp#380): SketchUp's own Text and Construction Point tools
