@@ -647,6 +647,88 @@ class TestComponentDefinitions:
         assert kinds.count("CEdge") == 4  # its own 4 edges, not shared with the definition's
 
 
+class TestComponentDefinitionTextAndConstructionPoints:
+    # openskp#380: add_text/add_construction_point were root-only, so
+    # SketchUp's own Text/Construction Point tools could label geometry
+    # while editing a component in place, but this writer couldn't.
+
+    def test_add_text_inside_definition_round_trips(self, tmp_path):
+        builder = create()
+        with builder.add_component_definition("Cabinet") as cab:
+            cab.add_face(SQUARE)
+            cab.add_text("Inside the group!", (5.0, 5.0, 2.0), leader=(10.0, 10.0, 10.0))
+        builder.add_instance(cab)
+        out = tmp_path / "def_text.skp"
+        builder.save(str(out))
+
+        model = SkpFile.open(str(out)).parse()
+        cab_def = model.definitions[cab.slot]
+        assert len(cab_def.texts) == 1
+        text = cab_def.texts[0]
+        assert text.text == "Inside the group!"
+        assert text.point == pytest.approx((5.0, 5.0, 2.0))
+        assert text.label_point == pytest.approx((15.0, 15.0, 12.0))
+        # Never leaks onto the root model.
+        assert len(model.root.texts) == 0
+
+    def test_add_construction_point_inside_definition_round_trips(self, tmp_path):
+        builder = create()
+        with builder.add_component_definition("Cabinet") as cab:
+            cab.add_face(SQUARE)
+            cab.add_construction_point((15.0, 15.0, 0.0))
+        builder.add_instance(cab)
+        out = tmp_path / "def_cpoint.skp"
+        builder.save(str(out))
+
+        model = SkpFile.open(str(out)).parse()
+        cab_def = model.definitions[cab.slot]
+        assert len(cab_def.construction_points) == 1
+        assert cab_def.construction_points[0].position == pytest.approx((15.0, 15.0, 0.0))
+        assert len(model.root.construction_points) == 0
+
+    def test_add_text_default_leader(self, tmp_path):
+        builder = create()
+        with builder.add_component_definition("Cabinet") as cab:
+            cab.add_face(SQUARE)
+            cab.add_text("Default leader", (0.0, 0.0, 0.0))
+        builder.add_instance(cab)
+        out = tmp_path / "def_text_default.skp"
+        builder.save(str(out))
+
+        model = SkpFile.open(str(out)).parse()
+        cab_def = model.definitions[cab.slot]
+        assert cab_def.texts[0].label_point == pytest.approx((15.0, 15.0, 15.0))
+
+    def test_add_text_and_construction_point_share_one_font_slot_with_root(self, tmp_path):
+        # _dim_font_slot is cached on the shared SkpBuilder, not the
+        # per-definition builder - a definition-level add_text followed by
+        # a root-level one must reuse the same CSkFont record (matching
+        # SkpBuilder.add_text's own root-to-root caching) rather than
+        # writing (and back-referencing) a second, redundant one.
+        builder = create()
+        with builder.add_component_definition("Cabinet") as cab:
+            cab.add_face(SQUARE)
+            cab.add_text("In definition", (0.0, 0.0, 0.0))
+        builder.add_instance(cab)
+        builder.add_text("At root", (50.0, 50.0, 0.0))
+        data = builder.to_bytes()
+        assert data.count("CSkFont".encode("utf-16-le")) == 1
+
+    def test_add_text_after_definition_closed_raises(self):
+        builder = create()
+        with builder.add_component_definition("Cabinet") as cab:
+            cab.add_face(SQUARE)
+        with pytest.raises(SkpWriteError, match="already closed"):
+            cab.add_text("Too late", (0.0, 0.0, 0.0))
+
+    def test_add_construction_point_after_definition_closed_raises(self):
+        builder = create()
+        with builder.add_component_definition("Cabinet") as cab:
+            cab.add_face(SQUARE)
+        with pytest.raises(SkpWriteError, match="already closed"):
+            cab.add_construction_point((0.0, 0.0, 0.0))
+
+
 class TestGroups:
     def test_basic_group_places_itself_on_close(self):
         builder = create()

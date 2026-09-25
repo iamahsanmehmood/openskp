@@ -2133,6 +2133,56 @@ class ComponentDefinitionBuilder:
             attribute_dicts=resolved_attribute_dicts, hidden=hidden,
         )
 
+    def add_text(self, text: str, point: Point3,
+                 leader: Point3 = (15.0, 15.0, 15.0)) -> None:
+        """Add a leader text (SketchUp's Text tool) anchored at ``point``
+        (inches, local to this definition), with the label floating at
+        ``point + leader`` and a leader line joining them - same
+        signature and behavior as :meth:`SkpBuilder.add_text`, so it
+        belongs to the group/instance the way SketchUp's own Text tool
+        lets it when drawn while editing a component in place
+        (openskp#380)."""
+        self._check_writable("text")
+        writer = self._skp._definition_writer
+        p = (float(point[0]), float(point[1]), float(point[2]))
+        lb = tuple(p[i] + float(leader[i]) for i in range(3))
+        writer._new_of_known_class("CText", schema=9)
+        writer._preamble()
+        writer.buf += _DIM_DRAWBASE
+        if self._skp._dim_font_slot is None:
+            self._skp._dim_font_slot = writer._new_of_known_class("CSkFont", schema=1)
+            writer.buf += _DIM_FONT_PAYLOAD
+        else:
+            writer._backref(self._skp._dim_font_slot)
+        writer.buf += _f64(0.0) + _f64(0.0)  # screen-fraction slot (unused)
+        writer.buf += _u32(1) + _u32(4)      # free connection + constant
+        writer.buf += _f64(p[0]) + _f64(p[1]) + _f64(p[2])
+        writer.buf += bytes(12)
+        writer.buf += _f64(lb[0]) + _f64(lb[1]) + _f64(lb[2])  # label position
+        writer.buf += bytes(16)
+        writer.buf += _f64(1.0)
+        writer.buf += _u32(2)                # leader type: pushpin
+        writer.buf += _TEXT_DELIM
+        writer._write_str(text)
+        writer.buf += bytes(5)
+        self._new_entity_count += 1
+
+    def add_construction_point(self, position: Point3) -> None:
+        """Add a construction/guide point (SketchUp's Construction Point
+        tool) at ``position`` (inches, local to this definition) - same
+        signature and behavior as :meth:`SkpBuilder.add_construction_point`
+        (openskp#380)."""
+        self._check_writable("construction points")
+        writer = self._skp._definition_writer
+        p = (float(position[0]), float(position[1]), float(position[2]))
+        writer._new_of_known_class("CConstructionPoint", schema=0)
+        writer._preamble()
+        writer.buf += _DIM_DRAWBASE
+        for v in (p[0], p[1], p[2], 0.0, 0.0, 0.0):
+            writer.buf += _f64(v)
+        writer.buf += bytes(1)
+        self._new_entity_count += 1
+
     def __enter__(self) -> "ComponentDefinitionBuilder":
         return self
 
