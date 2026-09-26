@@ -1104,24 +1104,72 @@ def _read_dimlinear(ar, r):
     # escape kicks in — so a fixed-size skip walks off the rails exactly
     # on large models (found on a real 17 MB SketchUp 2018 file whose
     # dimension sat past object #517k).
+    #
+    # Each connection ref is followed by a second entity ref and two ref
+    # lists, [ref][u32 n1][n1 refs][u32 n2][n2 refs] — the INSTANCE PATHS of
+    # the anchored entity: the groups/components it lives in. A dimension
+    # on loose geometry has a null ref and two empty lists (the zeros the
+    # fixed 42/82-byte blocks used to skip, i.e. every sample that layout
+    # was written from); one anchored to a vertex inside nested groups
+    # carries a ref per group, and the fixed-size read slid off the record
+    # by exactly those refs — silently truncating the ROOT entity list
+    # after it, because the root reader stops at the first unreadable item
+    # (a SketchUp 2018 house: 70 of its 72 root entities lost, 948
+    # definitions left unplaced). Measured on 42 dimensions in 23 legacy
+    # files: every record is 161 fixed bytes plus its refs.
     b37 = r.raw(37)
     c1 = _entity_ref(ar, r)          # connection point 1 (may be null)
-    b42 = r.raw(42)
+    path1 = _connection_paths(ar, r)
+    b32 = r.raw(32)
     c2 = _entity_ref(ar, r)          # connection point 2 (may be null)
-    b82 = r.raw(82)
+    path2 = _connection_paths(ar, r)
+    b72 = r.raw(72)
     # the dimension-line offset (inches, signed) sits at a fixed position
     # of the trailing block on every sample (v17 and v18 alike)
-    offset = struct.unpack_from('<d', b82, 62)[0]
+    offset = struct.unpack_from('<d', b72, 52)[0]
     out = {'k': 'dimension', 'db': db, 'text': text,
-           'connect': (c1, c2), 'offset': offset}
+           'connect': (c1, c2), 'paths': (path1, path2), 'offset': offset}
     # connection blocks: [.. u32 TYPE ..][u32 4][point3d]. Type 1 = a FREE
     # point stored inline (SDK-generated ground truth); type 2 = anchored
     # to the referenced entity, point zeroed.
     if struct.unpack_from('<I', b37, 5)[0] == 1:
         out['a'] = struct.unpack_from('<3d', b37, 13)
-    if struct.unpack_from('<I', b42, 10)[0] == 1:
-        out['b'] = struct.unpack_from('<3d', b42, 18)
+    if struct.unpack_from('<I', b32, 0)[0] == 1:
+        out['b'] = struct.unpack_from('<3d', b32, 8)
     return out
+
+
+def _connection_paths(ar, r):
+    """What follows a dimension connection ref (see ``_read_dimlinear``):
+    [entity ref][u32 n1][n1 refs][u32 n2][n2 refs]. Returns
+    ``(ref, refs1, refs2)``."""
+    extra = _entity_ref(ar, r)
+    lists = []
+    for _ in range(2):
+        count = r.u32()
+        if count > 1000:
+            raise LegacyParseError(
+                f"implausible dimension path length {r.ctx()}")
+        lists.append([_path_ref(ar, r) for _ in range(count)])
+    return extra, lists[0], lists[1]
+
+
+def _path_ref(ar, r):
+    """One instance of a dimension's path. Usually a reference, but MFC
+    writes an object IN FULL the first time anything points at it — and a
+    dimension serialized before the group it is anchored in carries that
+    whole group right here (the root list later holds a back-reference).
+    Read it like any object then, so it is registered and the stream stays
+    aligned; return its slot either way."""
+    tag = r.peek_u16()
+    new = tag == 0xFFFF or (tag != 0x7FFF and tag & 0x8000)
+    if tag == 0x7FFF:
+        big = struct.unpack_from('<I', r.data, r.pos + 2)[0]
+        new = bool(big & 0x80000000)
+    if new:
+        slot, _name, _value = ar.read_object(r)
+        return slot
+    return _entity_ref(ar, r)
 
 
 def _read_text(ar, r):
