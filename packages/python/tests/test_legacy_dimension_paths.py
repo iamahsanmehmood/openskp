@@ -11,7 +11,6 @@ so a path can also hold a whole NEW object.
 """
 import struct
 
-from openskp import legacy
 from openskp.legacy import _R, _connection_paths
 
 
