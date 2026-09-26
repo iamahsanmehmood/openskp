@@ -680,7 +680,20 @@ def _read_attr_named(ar, r):
         if key == '':
             break
         entries[key] = read_typed(r.u8())
-    r.u32()
+    # CAttributeNamed's own trailing u32 (seen zero on every real file
+    # checked) is a v7+ addition - a real SketchUp 6 file ends the record
+    # at the empty-key terminator with no trailer at all. Reading it
+    # unconditionally eats 4 bytes that belong to the START of whatever
+    # follows (a sibling entity's own tag), which doesn't raise here - it
+    # just hands a corrupted tag to the walker a few reads later, surfacing
+    # as an unrelated "back-ref to unwalked slot" deep in the object graph
+    # (openskp#284's V6 signature). CAttributeNamed's class is always
+    # learned from the unwalked pre-model region (see _new_of_class), so
+    # its own schema is never observed and can't gate this - the file's
+    # own version number is the only signal available, same as the
+    # instance GUID gate below.
+    if ar.ver >= 7:
+        r.u32()
     return {'k': 'dict', 'name': dictname, 'entries': entries}
 
 
