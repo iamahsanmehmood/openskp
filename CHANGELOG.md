@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — C++: legacy reader ports of two Python fixes (openskp#284, #390, #391)
+
+Two bugs in `legacy.cpp` that Python's `legacy.py` already had fixed
+(#310, #385), never ported:
+
+- `CAttributeNamed`'s trailing `u32` is a v7+ addition - a real SketchUp 6
+  file ends the record at the empty-key terminator with nothing after it.
+  Reading it unconditionally ate 4 bytes belonging to the next sibling's
+  own tag. Gated on `ver >= 7`, same as the Python fix.
+- The instance/group GUID read (`legacy_instance_has_guid`) was still
+  gated on the class's own reported schema number - `CGroup` reports
+  schema 1 on every version tested (v3 through 2025), so that gate was
+  always true and forced a phantom 16-byte read on *every* `CGroup` in
+  *every* pre-2014 file. Replaced with the same file-version gate
+  (`ver >= 14`) Python's #310 fix established; the now-dead
+  `class_schema` bookkeeping this schema check was the only reader of is
+  removed.
+
+Found while porting #385 to C++: the new `legacy_v6_synthetic.skp`
+fixture (a nested `CGroup` carrying an attribute dictionary, reused
+as-is from #385) tripped both bugs at once, since either one alone
+corrupts the same record. Full C++ suite (263 tests) passes with both
+fixes; `lowlevel_test.cpp`'s `legacy_instance_has_guid` unit test
+updated to assert the version gate instead of the disproven schema gate.
+
 ### Fixed — C++: boolean and Length attribute values keep their types through write and read
 
 The C++ writer's `AttributeValue` only had `std::string` / `std::int32_t` /

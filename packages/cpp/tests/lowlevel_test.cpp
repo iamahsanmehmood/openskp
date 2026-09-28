@@ -44,12 +44,16 @@ TEST(Legacy, DetectsClassicContainer) {
   EXPECT_FALSE(is_legacy(test::read_fixture("Untitled.skp")));
 }
 
-TEST(Legacy, GatesInstanceGuidByClassSchema) {
-  EXPECT_FALSE(legacy_instance_has_guid("CComponentInstance", 4));
-  EXPECT_TRUE(legacy_instance_has_guid("CComponentInstance", 5));
-  EXPECT_FALSE(legacy_instance_has_guid("CGroup", 0));
-  EXPECT_TRUE(legacy_instance_has_guid("CGroup", 1));
-  EXPECT_TRUE(legacy_instance_has_guid("CComponentInstance", std::nullopt));
+TEST(Legacy, GatesInstanceGuidByFileVersion) {
+  // A class-schema gate looked plausible but doesn't hold across real
+  // files (openskp#284/#391) - the file's own version is the only signal
+  // that does: pre-2014 files never carry the trailing GUID, 2014+ always
+  // do, regardless of what CComponentInstance/CGroup report as their own
+  // schema number.
+  EXPECT_FALSE(legacy_instance_has_guid(7));
+  EXPECT_FALSE(legacy_instance_has_guid(13));
+  EXPECT_TRUE(legacy_instance_has_guid(14));
+  EXPECT_TRUE(legacy_instance_has_guid(25));
 }
 
 TEST(Transforms, Composition) {

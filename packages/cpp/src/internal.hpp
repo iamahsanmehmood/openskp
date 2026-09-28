@@ -166,7 +166,7 @@ std::optional<std::string> read_meta_units(const ByteBuffer&);
 std::string extract_version(const ByteBuffer&);
 bool valid_header(const ByteBuffer&);
 bool is_legacy(const ByteBuffer&);
-bool legacy_instance_has_guid(const std::string&, std::optional<int>);
+bool legacy_instance_has_guid(int ver);
 
 /// Result of `find_count_after_v20_filler`: the recovered count and the
 /// offset just past it.

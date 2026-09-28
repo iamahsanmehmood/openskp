@@ -10,10 +10,17 @@
 #include "internal.hpp"
 
 namespace openskp {
-bool legacy_instance_has_guid(const std::string& class_name, std::optional<int> schema) {
-  if (!schema) return true;
-  return *schema >= (class_name == "CGroup" ? 1 : 5);
-}
+// The trailing GUID looked plausible as a class-schema gate at first
+// (CComponentInstance schema >= 5, CGroup schema >= 1), but it doesn't
+// generalize: a v7 file's CComponentInstance reports schema 6, well above
+// that threshold, yet has no GUID; CGroup reports schema 1 on every
+// version tested (v3 through 2025), so a schema gate is always true for it
+// and would force the read even on pre-2014 files. Forcing the 16-byte
+// read anyway silently eats bytes belonging to the next sibling's own
+// tag - the exact bug openskp#284/#310 root-caused in the Python reader.
+// The file's own version number is the only signal that actually holds
+// (matches Python's legacy.py `_read_instance`; openskp#391).
+bool legacy_instance_has_guid(int ver) { return ver >= 14; }
 
 // Widest zero padding seen between the v20 filler's empty string and the
 // count that follows it (9 and 13 bytes occur in real files; the ceiling
@@ -216,7 +223,6 @@ struct Archive {
   bool in_entity_list{};
   std::unordered_map<uint64_t, Entry> slots;
   std::unordered_map<std::string, uint64_t> class_slot;
-  std::unordered_map<std::string, int> class_schema;
 
   // Burned store-map indices (see the CEdgeUse branch of read()): the
   // writer maps an annotation's connection points into the store map
@@ -258,7 +264,6 @@ struct Archive {
       std::string name(b.begin(), b.end());
       auto cs = alloc({true, name, int(schema), {}});
       class_slot[name] = cs;
-      class_schema[name] = int(schema);
       return new_obj(name);
     }
     if (tag & 0x8000) return new_class_ref(tag & 0x7fff, expect);
@@ -603,7 +608,16 @@ struct Archive {
         if (key.empty()) break;
         v->entries[key] = typed(r.u8());
       }
-      r.u32();
+      // Trailing u32 is a v7+ addition - a real SketchUp 6 file ends the
+      // record at the empty-key terminator with nothing after it. Reading
+      // it unconditionally eats 4 bytes belonging to the next sibling's
+      // own tag, surfacing many reads later as an unrelated error deep in
+      // the object graph (openskp#284's V6 signature; see Python's
+      // legacy.py `_read_attr_named` for the full trace - openskp#385).
+      // CAttributeNamed's class is always learned from the unwalked
+      // pre-model region, so its schema is never observed and can't gate
+      // this - the file's own version is the only signal available.
+      if (ver >= 7) r.u32();
     } else if (n == "CLayer") {
       v->attrs = preamble();
       v->k = "layer";
@@ -961,13 +975,7 @@ struct Archive {
       v->def = std::get<0>(q);
       v->xf = r.f64s(13);
       v->name = r.utf16();
-      // The trailing GUID was introduced in CComponentInstance schema 5 and
-      // CGroup schema 1. SketchUp 2013 writes component-instance schema 4,
-      // whose record ends at the name.
-      auto schema = class_schema.find(n);
-      std::optional<int> schema_number;
-      if (schema != class_schema.end()) schema_number = schema->second;
-      if (legacy_instance_has_guid(n, schema_number)) r.raw(16);
+      if (legacy_instance_has_guid(ver)) r.raw(16);
     } else
       throw std::runtime_error("no legacy reader for " + n);
     return v;
