@@ -29,6 +29,23 @@ inspection) and would hit the same failure mode on an equivalently-skewed
 file - not yet ported, tracked in openskp#285. C++'s legacy reader has no
 equivalent mechanism at all; unclear yet whether it needs one or already
 handles both files' layout some other way - needs its own look.
+### Fixed — Python: legacy V6 files with attribute dictionaries failed to parse
+
+Part of openskp#284's version-compatibility sweep: a SketchUp 6 file's
+`CAttributeNamed` record has no trailing field, unlike v7+ - but
+`_read_attr_named` read one unconditionally. On a file with any attribute
+dictionary (e.g. a nested group's custom attributes), that phantom
+4-byte read silently ate into the next sibling's own tag, which didn't
+raise there - it surfaced many reads later, deep in the object graph, as
+an unrelated `back-ref to unwalked slot N` error (the same
+misleading-error-site pattern as the V7/V8/2013 GUID bug fixed in #310,
+but a distinct cause: `CAttributeNamed`'s class is always learned from
+the unwalked pre-model region, so its schema is never observed and can't
+gate this the way the instance-GUID fix did). Gated the trailing read on
+`ar.ver >= 7` instead, confirmed against a real SketchUp-6-downgraded
+fixture and cross-checked for no regression on the existing v7/2014
+fixtures.
+
 ### Changed — TypeScript: dropped Node 20 from CI/release after the vitest 5 bump
 
 Following up on the vitest 4→5 Dependabot bump (#366): vitest 5 requires
