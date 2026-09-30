@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — C++: model attribute dictionaries, instance entity IDs, and face layers (VFF)
+
+Three things a renderer importing `.skp` files needs to match what the
+SketchUp SDK reports, all read from records the VFF reader already walks:
+
+- `SkpModel::attribute_dictionaries` - the dictionaries attached to the
+  model itself (Ruby's `Sketchup::Model#attribute_dictionaries`), where
+  SketchUp (`GeoReference`, ...) and extensions keep model-wide settings.
+  Read from the model record's `F601 -> 8813 -> D007 -> DC05` container,
+  with the same decoder `Instance::attribute_dictionaries` uses, so values
+  keep their native types.
+- `Instance::id` - the placement's own TLV entity ID, i.e. the ID SketchUp
+  persists across sessions (`Sketchup::Entity#persistent_id`). Extensions
+  key per-instance data on it; checked against real files where it matches
+  the persistent IDs a SketchUp extension saved for those instances.
+- `Face::layer` - the name of the layer (tag) a face is on, resolved from
+  its `D207` layer reference the same way instance layers already are.
+  Faces on the default layer (Layer0) carry no reference and stay `""`.
+
+All three are VFF-only for now; legacy (pre-2021 MFC) files leave them
+empty/unset. New `parser_test.cpp` tests cover the model dictionaries on
+`SU_File.skp` (typed `GeoReference`, `GSU_ContributorsInfo`, `IfcGUIDs`
+values), unique instance IDs on `Untitled.skp`, and the legacy fallbacks.
+Face layers are verified on real files outside the fixture set - none of
+the current VFF fixtures has a face on a non-default layer.
+
 ### Fixed — C++: legacy reader ports of two Python fixes (openskp#284, #390, #391)
 
 Two bugs in `legacy.cpp` that Python's `legacy.py` already had fixed

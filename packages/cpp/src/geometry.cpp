@@ -298,6 +298,8 @@ void collect_geometry(const std::vector<TlvNode>& es, GeometryBuilder& b) {
               // their own D007 container.
               else if (x.tag == "D307" && !x.payload.empty())
                 f.hidden = (x.payload[0] & 0x01) != 0;
+              else if (x.tag == "D207" && !x.payload.empty())
+                f.layer = std::to_string(parse_varint(x.payload, 0, x.payload.size()));
             }
         for (auto& x : e.children)
           if (x.tag == "AF0D" && !x.payload.empty())
@@ -307,6 +309,7 @@ void collect_geometry(const std::vector<TlvNode>& es, GeometryBuilder& b) {
     } else if (e.tag == "6419") {
       RawInstance i;
       i.offset = e.offset;
+      i.id = entity_id(e);
       i.children = e.children;
       auto* g = find_node(e.children, "6819");
       if (g && g->payload.size() == 16) i.ref_guid = hex(g->payload);
@@ -396,6 +399,18 @@ void collect_layers(const std::vector<TlvNode>& ns, std::map<EntityId, std::stri
         }
     collect_layers(e.children, out, hidden);
   }
+}
+
+// The model record (F601) carries the model entity's own attributes the same
+// way an instance does: an 8813 entity base holding a D007 container whose
+// DC05 payload lists the named dictionaries.
+void collect_model_attribute_dictionaries(const TlvNode& model, ParsedAttrDictionaries& out) {
+  auto* entity = find_node(model.children, "8813");
+  if (!entity) return;
+  for (auto& d : entity->children)
+    if (d.tag == "D007")
+      for (auto& x : d.children)
+        if (x.tag == "DC05") extract_attribute_dictionaries(x.payload, out);
 }
 
 void collect_material_ids(const std::vector<TlvNode>& ns, std::map<EntityId, std::string>& out) {

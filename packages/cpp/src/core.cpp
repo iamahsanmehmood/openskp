@@ -403,7 +403,10 @@ RawParsed full_parse(const ByteBuffer& data, const ParseOptions& o) {
           page_node = &page_node_owner.back();
         }
       }
-      if (one[0].tag == "F601") collect_geometry(one[0].children, p.root.builder);
+      if (one[0].tag == "F601") {
+        collect_geometry(one[0].children, p.root.builder);
+        collect_model_attribute_dictionaries(one[0], p.model_attribute_dicts);
+      }
     } catch (const SkpParseError&) {
       throw;
     } catch (...) {

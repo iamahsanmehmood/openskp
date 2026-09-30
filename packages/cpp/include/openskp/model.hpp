@@ -197,6 +197,10 @@ struct Face {
   /// Whether the face is hidden (SketchUp's "Hide" on this specific face,
   /// not a layer/tag visibility toggle).
   bool hidden{};
+  /// Name of the layer (tag) the face is assigned to. "" for faces on the
+  /// default layer (Layer0), which VFF files don't record per face, and for
+  /// every face in legacy (pre-2021 MFC) files.
+  std::string layer;
 };
 
 /// Organization layer (tag) for model elements.
@@ -295,6 +299,10 @@ struct Instance {
   /// specific component/group placement, not a layer/tag visibility
   /// toggle).
   bool hidden{};
+  /// Unique TLV entity ID of the placement itself (the ID SketchUp persists
+  /// across sessions, `Sketchup::Entity#persistent_id`). Populated for
+  /// modern (VFF) files; unset for legacy (pre-2021 MFC) files.
+  std::optional<EntityId> id;
 };
 
 /// Section plane entity.
@@ -448,6 +456,13 @@ class OPENSKP_EXPORT SkpModel {
   std::deque<Material> materials;
   /// Model rendering styles.
   std::vector<Style> styles;
+  /// Every attribute dictionary attached to the model itself (Ruby's
+  /// `Sketchup::Model#attribute_dictionaries`), keyed by the dictionary's
+  /// own declared name - where extensions typically persist model-wide
+  /// settings. Values keep their native types, same as
+  /// `Instance::attribute_dictionaries`. Populated for modern (VFF) files;
+  /// empty for legacy (pre-2021 MFC) files.
+  ParsedAttrDictionaries attribute_dictionaries;
 
   /// Access the implicit root model definition.
   Definition& root() noexcept;

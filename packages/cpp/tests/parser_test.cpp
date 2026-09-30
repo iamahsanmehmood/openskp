@@ -158,6 +158,57 @@ TEST(Parser, ModernRootOnly) {
   EXPECT_EQ(scene.mesh_index.begin()->second.definition_name, "ROOT_MODEL");
 }
 
+TEST(Parser, ModernModelAttributeDictionaries) {
+  const auto model = SkpFile::open(test::fixture("SU_File.skp")).parse();
+  // Dictionaries on the model itself, not on anything placed in it - these
+  // are where SketchUp and extensions keep model-wide settings.
+  const auto& geo = model.attribute_dictionaries.at("GeoReference");
+  EXPECT_EQ(geo.at("LocationSource"), "Manual");
+  EXPECT_EQ(geo.at("Latitude").kind, ParsedAttribute::Kind::Float);
+  EXPECT_NEAR(geo.at("Latitude").number, 40.0183, 1e-4);
+  EXPECT_EQ(geo.at("UsesGeoReferencing").kind, ParsedAttribute::Kind::Boolean);
+  EXPECT_EQ(geo.at("UsesGeoReferencing").integer, 0);
+  EXPECT_EQ(model.attribute_dictionaries.at("GSU_ContributorsInfo").at("VersionKey").integer, 1000);
+  EXPECT_EQ(model.attribute_dictionaries.at("IfcGUIDs").at("ModelGUID"), "0Fvty1LOz2pP0l6Q3tLacy");
+}
+
+TEST(Parser, LegacyModelAttributeDictionariesAreEmpty) {
+  const auto model = SkpFile::open(test::fixture("capilla_quiroz_v17.skp")).parse();
+  EXPECT_TRUE(model.attribute_dictionaries.empty());
+}
+
+TEST(Parser, ModernInstancesCarryUniqueEntityIds) {
+  const auto model = SkpFile::open(test::fixture("Untitled.skp")).parse();
+  const auto& root_instances = model.root().instances;
+  const auto w1 = std::find_if(root_instances.begin(), root_instances.end(),
+                               [](const Instance& i) { return i.name == "W1"; });
+  ASSERT_NE(w1, root_instances.end());
+  EXPECT_EQ(w1->id, EntityId{26135});
+
+  std::set<EntityId> ids;
+  auto collect = [&](const Definition& definition) {
+    for (const auto& instance : definition.instances) {
+      ASSERT_TRUE(instance.id.has_value()) << instance.name;
+      EXPECT_TRUE(ids.insert(*instance.id).second) << "duplicate id " << *instance.id;
+    }
+  };
+  collect(model.root());
+  for (const auto& [definition_id, definition] : model.definitions) {
+    (void)definition_id;
+    collect(definition);
+  }
+  EXPECT_EQ(ids.size(), 46u);
+}
+
+TEST(Parser, LegacyInstancesHaveNoEntityId) {
+  const auto model = SkpFile::open(test::fixture("gondola_v20.skp")).parse();
+  for (const auto& [definition_id, definition] : model.definitions) {
+    (void)definition_id;
+    for (const auto& instance : definition.instances) EXPECT_FALSE(instance.id.has_value());
+  }
+  for (const auto& instance : model.root().instances) EXPECT_FALSE(instance.id.has_value());
+}
+
 TEST(Parser, CoedgeOrientationsAreNormalizedAndConnected) {
   const auto model = SkpFile::open(test::fixture("coedge_orientation_regression.skp")).parse();
   ExpectConnectedNormalizedLoops(model.root());

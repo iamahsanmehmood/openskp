@@ -139,12 +139,13 @@ static Definition definition(EntityId id, RawDefinition&& r) {
     x.uv_projected = f.second.uv_projected;
     x.uv_projected_back = f.second.uv_projected_back;
     x.hidden = f.second.hidden;
+    x.layer = std::move(f.second.layer);
     d.faces.emplace(f.first, std::move(x));
   }
   for (auto& i : r.builder.instances)
     d.instances.push_back({std::move(i.name), i.ref_idx, std::move(i.ref_guid), std::move(i.matrix),
                            std::move(i.layer), std::move(i.properties),
-                           std::move(i.attribute_dicts), i.material_id, i.hidden});
+                           std::move(i.attribute_dicts), i.material_id, i.hidden, i.id});
   d.section_planes = std::move(r.builder.section_planes);
   d.texts = std::move(r.builder.texts);
   d.dimensions = std::move(r.builder.dimensions);
@@ -157,14 +158,18 @@ SkpModel build_model(RawParsed&& p, const ParseOptions& o) {
   SkpModel m;
   m.version = std::move(p.version);
   m.units = std::move(p.units);
+  m.attribute_dictionaries = std::move(p.model_attribute_dicts);
+  auto resolve_layer = [&](std::string& layer) {
+    if (!layer.empty()) try {
+        auto l = p.layer_id_to_name.find(std::stoll(layer));
+        if (l != p.layer_id_to_name.end()) layer = l->second;
+      } catch (...) {
+        emit_log(o, LogLevel::debug, "Failed to resolve layer id '" + layer + "' to a name");
+      };
+  };
   auto resolve_layers = [&](RawDefinition& d) {
-    for (auto& i : d.builder.instances)
-      if (!i.layer.empty()) try {
-          auto l = p.layer_id_to_name.find(std::stoll(i.layer));
-          if (l != p.layer_id_to_name.end()) i.layer = l->second;
-        } catch (...) {
-          emit_log(o, LogLevel::debug, "Failed to resolve layer id '" + i.layer + "' to a name");
-        };
+    for (auto& i : d.builder.instances) resolve_layer(i.layer);
+    for (auto& f : d.builder.faces) resolve_layer(f.second.layer);
   };
   for (auto& d : p.definitions) {
     resolve_layers(d.second);
