@@ -366,8 +366,16 @@ struct Archive {
   // source file name, average colour, and opacity. Shared verbatim
   // between a CMaterial with a texture and a colour-by-layer CLayer that
   // carries a textured material.
+  //
+  // The texture is an entity in its own right, so right after the u8
+  // "has texture" flag it opens with the standard entity preamble: an
+  // attribute-container ref (null unless an extension stored a dictionary
+  // on the Texture itself, as render plugins do) and, from v17 on, the
+  // persistent-id mask. Callers read the flag as a u16, so step back over
+  // its high byte - the first byte of that preamble.
   void texture_block(V& v) {
-    r.raw(ver >= 17 ? 2 : 1);  // texture flag pad
+    r.p -= 1;
+    preamble();
     auto q = object("CDib");
     v.tex_dib = std::get<0>(q);
     auto begin = r.p, limit = std::min(r.d.size(), r.p + 28);

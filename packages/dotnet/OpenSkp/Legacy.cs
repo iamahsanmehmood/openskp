@@ -991,10 +991,19 @@ namespace OpenSkp
         /// <summary>The textured-material payload: an embedded CDib plus
         /// applied size, source file name, average colour, and opacity.
         /// Shared verbatim between a CMaterial with a texture and a
-        /// colour-by-layer CLayer that carries a textured material.</summary>
+        /// colour-by-layer CLayer that carries a textured material.
+        ///
+        /// The texture is an entity in its own right, so right after the
+        /// u8 "has texture" flag it opens with the standard entity
+        /// preamble: an attribute-container ref (null unless an extension
+        /// stored a dictionary on the Texture itself, as render plugins
+        /// do) and, from v17 on, the persistent-id mask. Callers read the
+        /// flag as a u16, so step back over its high byte - the first byte
+        /// of that preamble.</summary>
         public static TextureBlockRec TextureBlock(Archive ar, LR r)
         {
-            r.Raw(ar.Ver >= 17 ? 2 : 1);        // texture flag pad
+            r.Pos -= 1;
+            Preamble(ar, r);
             var (s, _, dib) = ar.ReadObject(r, "CDib");
             if (!(dib is DibRec))
             {
