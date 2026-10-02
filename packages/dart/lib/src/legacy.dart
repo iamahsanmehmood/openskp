@@ -1012,8 +1012,16 @@ class LegacyReaders {
   /// source file name, average colour, and opacity. Shared verbatim
   /// between a CMaterial with a texture and a colour-by-layer CLayer that
   /// carries a textured material.
+  ///
+  /// The texture is an entity in its own right, so right after the u8 "has
+  /// texture" flag it opens with the standard entity preamble: an
+  /// attribute-container ref (null unless an extension stored a dictionary
+  /// on the Texture itself, as render plugins do) and, from v17 on, the
+  /// persistent-id mask. Callers read the flag as a u16, so step back over
+  /// its high byte - the first byte of that preamble.
   static TextureBlockRec _textureBlock(Archive ar, LR r) {
-    r.raw(ar.ver >= 17 ? 2 : 1); // texture flag pad
+    r.pos -= 1;
+    preamble(ar, r);
     final (s, _, dib) = ar.readObject(r, 'CDib');
     if (dib is! DibRec) {
       throw LegacyParseError('texture object is not a dib ${r.ctx()}');

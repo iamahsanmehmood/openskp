@@ -729,8 +729,16 @@ def _texture_block(ar, r):
     """The textured-material payload: an embedded CDib plus applied size,
     source file name, average colour, and opacity. Shared verbatim between
     a CMaterial with a texture and a colour-by-layer CLayer that carries a
-    textured material."""
-    r.raw(2 if ar.ver >= 17 else 1)     # texture flag pad
+    textured material.
+
+    The texture is an entity in its own right, so right after the u8 "has
+    texture" flag it opens with the standard entity preamble: an
+    attribute-container ref (null unless an extension stored a dictionary
+    on the Texture itself, as render plugins do) and, from v17 on, the
+    persistent-id mask. Callers read the flag as a u16, so step back over
+    its high byte - the first byte of that preamble."""
+    r.pos -= 1
+    _preamble(ar, r)
     s, n, dib = ar.read_object(r, expect='CDib')
     if not (isinstance(dib, dict) and dib.get('k') == 'dib'):
         raise LegacyParseError(f"texture object is not a dib {r.ctx()}")

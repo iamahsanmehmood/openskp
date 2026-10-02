@@ -814,7 +814,14 @@ function readLayer(ar: Archive, r: R): any {
 /** The textured-material payload: an embedded CDib plus applied size,
  * source file name, average colour, and opacity. Shared verbatim between a
  * CMaterial with a texture and a colour-by-layer CLayer that carries a
- * textured material. */
+ * textured material.
+ *
+ * The texture is an entity in its own right, so right after the u8 "has
+ * texture" flag it opens with the standard entity preamble: an
+ * attribute-container ref (null unless an extension stored a dictionary on
+ * the Texture itself, as render plugins do) and, from v17 on, the
+ * persistent-id mask. Callers read the flag as a u16, so step back over
+ * its high byte - the first byte of that preamble. */
 function textureBlock(
   ar: Archive,
   r: R
@@ -828,7 +835,8 @@ function textureBlock(
   tex_file: string;
   colorized: boolean;
 } {
-  r.raw(ar.ver >= 17 ? 2 : 1); // texture flag pad
+  r.pos -= 1;
+  preamble(ar, r);
   const [s, , dib] = ar.readObject(r, 'CDib');
   if (!(dib && typeof dib === 'object' && dib.k === 'dib')) {
     throw new LegacyParseError(`texture object is not a dib ${r.ctx()}`);
