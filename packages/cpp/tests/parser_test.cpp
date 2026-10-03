@@ -113,7 +113,7 @@ TEST(Parser, ModernUntitled) {
   ASSERT_EQ(model.styles.size(), 2);
   EXPECT_EQ(model.styles[0].name, "[Construction Documentation Style]");
   EXPECT_EQ(model.styles[0].front_color, (Color3{255, 255, 255}));
-  EXPECT_EQ(model.styles[0].back_color, (Color3{208, 209, 189}));
+  EXPECT_EQ(model.styles[0].back_color, (Color3{189, 209, 208}));
 
   // Instance layer/properties (item 17): populated from each instance's
   // own D207 (layer override)/DC05 (dynamic properties) TLV children -

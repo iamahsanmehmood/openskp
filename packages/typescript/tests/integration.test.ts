@@ -140,7 +140,7 @@ describe('SketchUp Parser Integration Test', () => {
     expect(model.styles.length).toBe(2);
     expect(model.styles[0].name).toBe('[Construction Documentation Style]');
     expect(model.styles[0].frontColor).toEqual([255, 255, 255]);
-    expect(model.styles[0].backColor).toEqual([208, 209, 189]);
+    expect(model.styles[0].backColor).toEqual([189, 209, 208]);
 
     // 8. Assert Scene Hierarchy & Mesh Index - now a separate, opt-in step
     // (buildScene()) from parse(), so it never costs a plain parse() call

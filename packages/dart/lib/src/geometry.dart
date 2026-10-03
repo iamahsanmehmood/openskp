@@ -834,7 +834,7 @@ class Geometry {
         final signed = int.tryParse(variant.innerText);
         if (signed != null) {
           final v = signed & 0xFFFFFFFF;
-          colors[iid!] = ((v >> 16) & 255, (v >> 8) & 255, v & 255);
+          colors[iid!] = (v & 255, (v >> 8) & 255, (v >> 16) & 255);
         }
       }
     }

@@ -138,7 +138,7 @@ void main() {
     expect(model.styles.length, 2);
     expect(model.styles[0].name, '[Construction Documentation Style]');
     expect(model.styles[0].frontColor, (255, 255, 255));
-    expect(model.styles[0].backColor, (208, 209, 189));
+    expect(model.styles[0].backColor, (189, 209, 208));
 
     // buildScene()/meshIndex - a separate, opt-in step from parse(), so it
     // never costs a plain parse() call anything. TS/.NET/C++ all have this

@@ -223,7 +223,7 @@ std::optional<RawStyle> style_xml(const ByteBuffer& bytes) {
     auto body = (*i)[2].str();
     if (std::regex_search(body, v, vr)) {
       auto n = static_cast<std::uint32_t>(std::stoll(v[1].str()));
-      Color3 c{std::uint8_t(n >> 16), std::uint8_t(n >> 8), std::uint8_t(n)};
+      Color3 c{std::uint8_t(n), std::uint8_t(n >> 8), std::uint8_t(n >> 16)};
       if (id == "4000")
         o.front_color = c;
       else

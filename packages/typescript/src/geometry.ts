@@ -940,7 +940,7 @@ export function parseMaterialXml(xmlText: string): {
 
 /**
  * Parse a styles/*\/style.xml document: face colors live as signed-int32
- * ARGB variants under item id 4000 (front / default face color) and 4001
+ * ABGR variants under item id 4000 (front / default face color) and 4001
  * (back face color). Viewers need them to shade unpainted faces the way
  * SketchUp does.
  */
@@ -968,7 +968,7 @@ export function parseStyleXml(xmlText: string): {
     const raw = parseInt(variantMatch[1], 10);
     if (Number.isNaN(raw)) continue;
     const v = raw >>> 0; // reinterpret as unsigned 32-bit, matches Python's `& 0xFFFFFFFF`
-    colors[id] = [(v >> 16) & 255, (v >> 8) & 255, v & 255];
+    colors[id] = [v & 255, (v >> 8) & 255, (v >> 16) & 255];
   }
 
   return {

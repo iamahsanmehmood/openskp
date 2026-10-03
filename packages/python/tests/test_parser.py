@@ -1306,11 +1306,11 @@ class TestStyles:
         assert len(model.styles) == 1
         st = model.styles[0]
         assert st.name == "Verde"
-        # -3552052 -> 0xFFC9CCCC-ish ARGB: decode matches int32 & 0xFFFFFF
+        # -3552052 -> 0xFFC9CCCC ABGR: R in low byte
         v = (-3552052) & 0xFFFFFFFF
-        assert st.front_color == ((v >> 16) & 255, (v >> 8) & 255, v & 255)
+        assert st.front_color == (v & 255, (v >> 8) & 255, (v >> 16) & 255)
         v2 = (-3093050) & 0xFFFFFFFF
-        assert st.back_color == ((v2 >> 16) & 255, (v2 >> 8) & 255, v2 & 255)
+        assert st.back_color == (v2 & 255, (v2 >> 8) & 255, (v2 >> 16) & 255)
 
 
 class TestXmlEntityExpansion:
@@ -2189,7 +2189,7 @@ class TestModernRealFile:
         assert len(model.styles) == 2
         assert model.styles[0].name == "[Construction Documentation Style]"
         assert model.styles[0].front_color == (255, 255, 255)
-        assert model.styles[0].back_color == (208, 209, 189)
+        assert model.styles[0].back_color == (189, 209, 208)
 
         # NOTE: build_scene()/mesh_index is deliberately NOT asserted here.
         # Adding this fixture surfaced a real, pre-existing bug: triangulating

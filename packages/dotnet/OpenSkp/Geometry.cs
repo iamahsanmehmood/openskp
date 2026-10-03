@@ -982,7 +982,7 @@ namespace OpenSkp
                     if (long.TryParse(variant.Value, out long signed))
                     {
                         uint v = unchecked((uint)signed);
-                        colors[iid] = ((int)((v >> 16) & 255), (int)((v >> 8) & 255), (int)(v & 255));
+                        colors[iid] = ((int)(v & 255), (int)((v >> 8) & 255), (int)((v >> 16) & 255));
                     }
                 }
             }

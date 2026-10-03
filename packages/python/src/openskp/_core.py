@@ -1625,7 +1625,7 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
             units = None
             logger.debug("Failed to read units from meta/meta.dat", exc_info=True)
 
-    # Styles: face colors live in styles/*/style.xml as signed-int32 ARGB
+    # Styles: face colors live in styles/*/style.xml as signed-int32 ABGR
     # variants — item id 4000 is the front (default) face color, 4001 the
     # back face color. Viewers need them to shade unpainted faces the way
     # SketchUp does (an author may e.g. set a green back color so unpainted
@@ -1653,7 +1653,7 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
                     v = int(var.text) & 0xFFFFFFFF
                 except ValueError:
                     continue
-                colors[iid] = ((v >> 16) & 255, (v >> 8) & 255, v & 255)
+                colors[iid] = (v & 255, (v >> 8) & 255, (v >> 16) & 255)
         styles.append({'name': style_el.get('name', ''),
                        'front_color': colors.get('4000'),
                        'back_color': colors.get('4001')})
