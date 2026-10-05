@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — Python: SketchUp 3 files parse (openskp#284's V3 signature)
+
+A SketchUp 3 `.skp` died on its very first material (`expected a string record`).
+Unlike the V6/V7 signatures, this wasn't one wrong field: V3's layout differs from
+every later era in about a dozen small ways, found by byte-tracing a real V3 file
+(a synthetic model saved down through SketchUp's own version export). All are gated
+on the header version being below 4: no attribute-container pointer on vertex /
+loop / edge-use / material / layer records; a 5-byte draw block; a 4-byte-shorter
+layer tail and a 13-byte definition base block; textures stored as a bare inline
+image (no preamble, no store-map slot); a fixed 129-byte thumbnail; no layer count
+before the layer records; no name string on instances. In V3 a face's leading
+pointer is its *front material*, not an attribute container, so painted faces now
+resolve their material. Not decoded: the draw-block flags (hidden/soft/smooth are
+reported unset) and anything SketchUp 3 can't store (attribute dictionaries,
+instance names).
+
+The first working parse was misleadingly *successful* - one definition of four, a
+phantom layer, zero root instances - so the new tests assert the parsed structure
+and cross-check it against the V6 fixture built from the same source, rather than
+only that nothing raises. Honest limits: calibrated on one file; V4 needs none of
+this (a real V4 file already parses); V3 files with a single material (the
+slot-base probe path) are untouched and unverified. The other four ports are not
+yet updated.
+
 ### Fixed — Python: `import openskp` no longer fails where `mapbox_earcut` can't be installed (freecad-openskp#3)
 
 `mapbox_earcut` is a compiled dependency, and `_core` imported it at module

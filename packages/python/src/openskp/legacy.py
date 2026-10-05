@@ -431,11 +431,35 @@ def _preamble(ar, r):
         for bit in range(8):
             if mask & (1 << bit):
                 pid |= r.u8() << (8 * bit)
-    return {'attrs': attrs, 'pid': pid}
+    return {'attrs': attrs, 'pid': pid, 'attrs_slot': slot}
+
+
+# SketchUp 3 (header "{3.0.x}") predates several fields every later file
+# carries. The differences below are gated on ``ar.ver < _FIRST_V4`` and were
+# calibrated byte-by-byte on one real SketchUp-written V3 file (a synthetic
+# model saved down through SketchUp's own version export) - not on a corpus -
+# so they are exactly what that file proves and no more. SketchUp 4 needs
+# none of them: a real V4 file already parses with the later layout.
+_FIRST_V4 = 4
+
+
+def _early_preamble(ar, r):
+    """``_preamble`` for the entity types that carry NO attribute-container
+    pointer in a SketchUp 3 file: vertex, loop, edge-use, material, layer.
+    (Edge, face, definition, instance and thumbnail still open with one.)"""
+    if ar.ver < _FIRST_V4:
+        return {'attrs': None, 'pid': 0}
+    return _preamble(ar, r)
 
 
 def _drawbase(ar, r):
-    b = r.raw(8)
+    # SketchUp 3's draw block is 5 bytes, and they were identical for every
+    # entity in the calibration file - painted and unpainted faces, edges,
+    # groups - so nothing in them is decodable from what we have. Material
+    # comes from the face's own pointer instead (see _read_face); report the
+    # rest as unset rather than the meaningless 0x0100 / "hidden" the 8-byte
+    # layout would read out of them.
+    b = r.raw(5) if ar.ver < _FIRST_V4 else r.raw(8)
     # The layer field is normally a u16 id, but an entity can carry the
     # layer BY OBJECT instead (seen on real 2018 instances): a full
     # inline CLayer record on first use, an escaped back-ref to it on
@@ -457,6 +481,8 @@ def _drawbase(ar, r):
         layer = 0                    # by-object layer (back-ref)
     else:
         layer = r.u16()
+    if ar.ver < _FIRST_V4:
+        return {'mat': 0, 'hidden': 0, 'soft': 0, 'smooth': 0, 'layer': layer}
     return {'mat': struct.unpack_from('<H', b, 0)[0],
             'hidden': b[2], 'soft': b[5], 'smooth': b[6],
             'layer': layer}
@@ -465,7 +491,7 @@ def _drawbase(ar, r):
 # ── entity readers ───────────────────────────────────────────────────────
 
 def _read_vertex(ar, r):
-    _preamble(ar, r)
+    _early_preamble(ar, r)
     return {'k': 'vertex', 'xyz': r.f64s(3)}
 
 
@@ -564,7 +590,7 @@ def _register_burn(ar, delta):
 
 
 def _read_edgeuse(ar, r):
-    _preamble(ar, r)
+    _early_preamble(ar, r)
     es, _, _ = ar.read_object(r, expect='CEdge')
     sense = r.u8()
     # parent-loop back-ref: the alignment oracle. Read as a RAW file index
@@ -599,7 +625,7 @@ def _read_loop(ar, r):
     my_slot = ar.next_slot - 1
     prev = ar.current_loop
     ar.current_loop = my_slot
-    _preamble(ar, r)
+    _early_preamble(ar, r)
     r.raw(2)                         # 2 flag bytes
     uses = []
     while True:
@@ -615,6 +641,13 @@ def _read_loop(ar, r):
 def _read_face(ar, r):
     pre = _preamble(ar, r)
     db = _drawbase(ar, r)
+    attrs = pre['attrs']
+    if (ar.ver < _FIRST_V4 and isinstance(attrs, dict)
+            and attrs.get('k') == 'material'):
+        # SketchUp 3: the pointer that opens a face is its FRONT MATERIAL
+        # (null for an unpainted face), not an attribute container.
+        db['mat'] = pre['attrs_slot']
+        attrs = None
     plane = r.f64s(4)
     nloops = r.u32()
     if nloops > 10000:
@@ -628,7 +661,7 @@ def _read_face(ar, r):
     # the edges' entity-list entries) — the list loop consumes them.
     back_mat = r.u16()
     return {'k': 'face', 'db': db, 'plane': plane, 'loops': loops,
-            'back_mat': back_mat, 'attrs': pre['attrs']}
+            'back_mat': back_mat, 'attrs': attrs}
 
 
 def _read_attr_container(ar, r):
@@ -698,7 +731,7 @@ def _read_attr_named(ar, r):
 
 
 def _read_layer(ar, r):
-    _preamble(ar, r)
+    _early_preamble(ar, r)
     name = r.utf16()
     mid = b''
     while len(mid) < 8 and r.peek(3) != _STR_MARKER:
@@ -718,7 +751,7 @@ def _read_layer(ar, r):
                 'rgba': tex['rgba']}
     rgba = r.raw(4)
     r.utf16()
-    r.raw(21)
+    r.raw(17 if ar.ver < _FIRST_V4 else 21)  # SketchUp 3's tail is 4 bytes shorter
     ar._skip_clayer_colour_ext(r)
     ar._skip_clayer_parent_ref(r, ar.current_obj_slot)
     return {'k': 'layer', 'name': name, 'hidden': mid[0] if mid else 0,
@@ -736,12 +769,21 @@ def _texture_block(ar, r):
     attribute-container ref (null unless an extension stored a dictionary
     on the Texture itself, as render plugins do) and, from v17 on, the
     persistent-id mask. Callers read the flag as a u16, so step back over
-    its high byte - the first byte of that preamble."""
-    r.pos -= 1
-    _preamble(ar, r)
-    s, n, dib = ar.read_object(r, expect='CDib')
-    if not (isinstance(dib, dict) and dib.get('k') == 'dib'):
-        raise LegacyParseError(f"texture object is not a dib {r.ctx()}")
+    its high byte - the first byte of that preamble.
+
+    SketchUp 3 has neither: the image follows the flag directly as a bare
+    subtype/length/bytes record - no preamble, no object tag, and so no
+    store-map slot (``tex_dib`` is ``None``; the bytes ride along as
+    ``tex_data`` instead)."""
+    if ar.ver < _FIRST_V4:
+        s = None
+        dib = _read_dib(ar, r)
+    else:
+        r.pos -= 1
+        _preamble(ar, r)
+        s, n, dib = ar.read_object(r, expect='CDib')
+        if not (isinstance(dib, dict) and dib.get('k') == 'dib'):
+            raise LegacyParseError(f"texture object is not a dib {r.ctx()}")
     # optional u32 between the dib and the 2 x f64 applied size
     marker = r.data.find(_STR_MARKER, r.pos, r.pos + 28)
     if marker - r.pos == 20:
@@ -761,12 +803,13 @@ def _texture_block(ar, r):
     # or by alpha 0xFF on the stored colour.
     colorized = bool(blob[4]) or avg[3] == 0xFF
     return {'rgba': tuple(avg[:4]), 'opacity': opacity, 'use_opacity': use_op,
-            'tex_dib': s, 'tex_w': w, 'tex_h': h, 'tex_file': fname,
+            'tex_dib': s, 'tex_data': dib['data'] if s is None else None,
+            'tex_w': w, 'tex_h': h, 'tex_file': fname,
             'colorized': colorized}
 
 
 def _read_material(ar, r):
-    _preamble(ar, r)
+    _early_preamble(ar, r)
     name = r.utf16()
     texflag = r.u16()
     out: Dict[str, Any] = {'k': 'material', 'name': name}
@@ -819,6 +862,10 @@ def _read_camera(ar, r):
 
 def _read_thumbnail(ar, r):
     _preamble(ar, r)
+    if ar.ver < _FIRST_V4:
+        # SketchUp 3: a fixed 129-byte camera block, no name, no image.
+        r.raw(129)
+        return {'k': 'thumbnail', 'dib': None}
     ar.read_object(r, expect='CCamera')
     _, _, dib = ar.read_object(r, expect='CDib')
     return {'k': 'thumbnail', 'dib': dib}
@@ -1324,7 +1371,8 @@ def _reanchor_on_string_marker(data: bytes, pos: int) -> int:
 
 def _read_definition(ar, r):
     _preamble(ar, r)
-    r.raw(22 if ar.ver >= 17 else 20)         # undecoded base block
+    # undecoded base block (13 bytes in SketchUp 3)
+    r.raw(22 if ar.ver >= 17 else (20 if ar.ver >= _FIRST_V4 else 13))
     nlayers = r.u32()
     if nlayers > 10000:
         raise LegacyParseError(f"implausible def layer count {r.ctx()}")
@@ -1408,7 +1456,8 @@ def _read_instance(ar, r):
     if dn != 'CComponentDefinition':
         raise LegacyParseError(f"instance definition ref is {dn} {r.ctx()}")
     xf = r.f64s(13)
-    name = r.utf16()
+    # SketchUp 3 instances carry no name string.
+    name = r.utf16() if (ar.ver >= _FIRST_V4 or r.peek(3) == _STR_MARKER) else ''
     # The trailing instance GUID is a pre-2014 (ver < 14) thing, full stop -
     # for BOTH CComponentInstance and CGroup, gated by real file version,
     # not by the class's own schema number.
@@ -1588,8 +1637,14 @@ def _walk_model(data: bytes, ver: int, start: int, mat_count: int,
     r.u32()
     if ver >= 17:
         r.u8()
-    layer_count = r.u32()
-    if layer_count > 100000:
+    if ver < _FIRST_V4:
+        # SketchUp 3 writes no layer count: the layer records simply run
+        # until the definition-list anchor, which the loop below already
+        # stops at (a back-ref, not a layer record).
+        layer_count = 1 << 30
+    else:
+        layer_count = r.u32()
+    if layer_count > 100000 and ver >= _FIRST_V4:
         raise LegacyParseError("implausible layer count")
     # ``layer_count`` counts REAL layers. SketchUp 2020 interleaves a null
     # object-ref after each layer record (a separator, not a layer), so
@@ -1965,8 +2020,8 @@ def full_parse_legacy(skp_path: str) -> Dict[str, Any]:
             'colorized': colorized, 'colorize_type': 1 if colorized else 0,
         }
         if 'tex_dib' in v:
-            dib = slots.get(v['tex_dib'])
-            tex_data = dib[2]['data'] if dib and dib[2] else None
+            dib = slots.get(v['tex_dib']) if v['tex_dib'] is not None else None
+            tex_data = dib[2]['data'] if dib and dib[2] else v.get('tex_data')
             ext = '.png' if (tex_data or b'')[:4] == b'\x89PNG' else '.jpg'
             fname = v.get('tex_file') or (v['name'] + ext)
             mat_obj['texture'] = {'filename': fname,
