@@ -24,6 +24,16 @@ New Python regression test (`test_legacy_texture_attributes.py`) patches the
 writer to emit a real container on a texture - the byte shape of the
 reporter's private files - and fails with the reported error on the previous
 code.
+### Fixed — All languages: style face colors read from the wrong items, with R and B swapped
+
+`styles[].front_color` / `back_color` came from style.xml items 4000/4001,
+which are the background and sky colors, not face colors; the face colors
+are items 2002 (front) and 2003 (back). The values were also decoded as
+ARGB, but SketchUp stores them as signed-int32 ABGR (R in the low byte),
+so R and B came out swapped. Verified against SketchUp 2026's own
+`rendering_options` on a model with a custom style; the `Untitled.skp`
+fixture's back color now decodes to SketchUp's default (164, 178, 187).
+The synthetic Python test pins literal colors and adds 4000/4001 decoys.
 
 ### Fixed — TypeScript: `EdgeFlagStore` could abort the process on descending edge ids (#393)
 

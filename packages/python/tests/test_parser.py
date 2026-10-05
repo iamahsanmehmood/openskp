@@ -1279,7 +1279,7 @@ class TestVffConstructionGeometry:
 
 
 class TestStyles:
-    """Face colors from styles/*/style.xml (items 4000 front / 4001 back)."""
+    """Face colors from styles/*/style.xml (items 2002 front / 2003 back)."""
 
     def test_style_colors_via_synthetic_skp(self, tmp_path: pathlib.Path) -> None:
         import io
@@ -1290,8 +1290,10 @@ class TestStyles:
 <styleDocument xmlns="http://sketchup.google.com/schemas/sketchup/1.0/style"
                xmlns:sty="http://sketchup.google.com/schemas/sketchup/1.0/style">
   <sty:style xmlns:t="http://sketchup.google.com/schemas/1.0/types" name="Verde">
-    <sty:item id="4000"><t:variant type="4">-3552052</t:variant></sty:item>
-    <sty:item id="4001"><t:variant type="4">-3093050</t:variant></sty:item>
+    <sty:item id="2002"><t:variant type="4">-3552052</t:variant></sty:item>
+    <sty:item id="2003"><t:variant type="4">-3093050</t:variant></sty:item>
+    <sty:item id="4000"><t:variant type="4">-1</t:variant></sty:item>
+    <sty:item id="4001"><t:variant type="4">-16777216</t:variant></sty:item>
   </sty:style>
 </styleDocument>
 """
@@ -1306,11 +1308,11 @@ class TestStyles:
         assert len(model.styles) == 1
         st = model.styles[0]
         assert st.name == "Verde"
-        # -3552052 -> 0xFFC9CCCC-ish ARGB: decode matches int32 & 0xFFFFFF
-        v = (-3552052) & 0xFFFFFFFF
-        assert st.front_color == ((v >> 16) & 255, (v >> 8) & 255, v & 255)
-        v2 = (-3093050) & 0xFFFFFFFF
-        assert st.back_color == ((v2 >> 16) & 255, (v2 >> 8) & 255, v2 & 255)
+        # Signed-int32 ABGR, R in the low byte: -3552052 = 0xFFC9CCCC and
+        # -3093050 = 0xFFD0CDC6. The 4000/4001 decoys (background/sky
+        # colors) must not leak into the face colors.
+        assert st.front_color == (204, 204, 201)
+        assert st.back_color == (198, 205, 208)
 
 
 class TestXmlEntityExpansion:
@@ -2189,7 +2191,7 @@ class TestModernRealFile:
         assert len(model.styles) == 2
         assert model.styles[0].name == "[Construction Documentation Style]"
         assert model.styles[0].front_color == (255, 255, 255)
-        assert model.styles[0].back_color == (208, 209, 189)
+        assert model.styles[0].back_color == (164, 178, 187)
 
         # NOTE: build_scene()/mesh_index is deliberately NOT asserted here.
         # Adding this fixture surfaced a real, pre-existing bug: triangulating

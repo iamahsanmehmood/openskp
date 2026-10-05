@@ -131,6 +131,11 @@ std::map<GroupKey, Group> build_local_face_groups(const RawParsed& parsed, const
                                                   const FaceGroupContext& ctx) {
   std::map<GroupKey, Group> groups;
 
+  // Built once per definition, not per face: rebuilding it inside the loop
+  // makes the whole pass O(faces x vertices).
+  std::map<EntityId, Vertex> vv;
+  for (auto& x : b.vertices) vv[x.first] = {x.first, x.second[0], x.second[1], x.second[2]};
+
   for (auto& fv : b.faces) {
     auto& f = fv.second;
     const auto front_mat = find_material(parsed, f.material_id);
@@ -145,8 +150,6 @@ std::map<GroupKey, Group> build_local_face_groups(const RawParsed& parsed, const
     }
     if (loops.empty()) continue;
 
-    std::map<EntityId, Vertex> vv;
-    for (auto& x : b.vertices) vv[x.first] = {x.first, x.second[0], x.second[1], x.second[2]};
     const auto triangles = triangulate_face_3d(vv, loops, f.normal);
 
     // Not a structured binding: those can't be captured by the nested

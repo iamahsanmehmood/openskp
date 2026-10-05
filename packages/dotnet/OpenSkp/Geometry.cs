@@ -977,12 +977,12 @@ namespace OpenSkp
             {
                 string? iid = (string?)item.Attribute("id");
                 var variant = item.Element(TypesNs + "variant");
-                if ((iid == "4000" || iid == "4001") && variant != null && !string.IsNullOrEmpty(variant.Value))
+                if ((iid == "2002" || iid == "2003") && variant != null && !string.IsNullOrEmpty(variant.Value))
                 {
                     if (long.TryParse(variant.Value, out long signed))
                     {
                         uint v = unchecked((uint)signed);
-                        colors[iid] = ((int)((v >> 16) & 255), (int)((v >> 8) & 255), (int)(v & 255));
+                        colors[iid] = ((int)(v & 255), (int)((v >> 8) & 255), (int)((v >> 16) & 255));
                     }
                 }
             }
@@ -990,8 +990,8 @@ namespace OpenSkp
             return new RawStyle
             {
                 Name = (string?)styleEl.Attribute("name") ?? "",
-                FrontColor = colors.TryGetValue("4000", out var fc) ? fc : ((int, int, int)?)null,
-                BackColor = colors.TryGetValue("4001", out var bc) ? bc : ((int, int, int)?)null,
+                FrontColor = colors.TryGetValue("2002", out var fc) ? fc : ((int, int, int)?)null,
+                BackColor = colors.TryGetValue("2003", out var bc) ? bc : ((int, int, int)?)null,
             };
         }
     }

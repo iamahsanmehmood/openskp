@@ -195,7 +195,7 @@ function parseToRaw(buffer: ArrayBuffer, options?: ParseOptions): ParsedRawData 
   }
 
   // 2b. Parse styles/*/style.xml: face colors for unpainted faces, stored as
-  // signed-int32 ARGB variants under item id 4000 (front) / 4001 (back).
+  // signed-int32 ABGR variants under item id 2002 (front) / 2003 (back).
   const styles: Style[] = [];
   for (const [name, xmlBytes] of Object.entries(materialFiles)) {
     const lowerName = name.toLowerCase();

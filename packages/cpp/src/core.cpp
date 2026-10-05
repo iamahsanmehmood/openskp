@@ -217,14 +217,14 @@ std::optional<RawStyle> style_xml(const ByteBuffer& bytes) {
   for (auto i = std::sregex_iterator(xml.begin(), xml.end(), item); i != std::sregex_iterator();
        ++i) {
     auto id = attr((*i)[1].str(), "id");
-    if (id != "4000" && id != "4001") continue;
+    if (id != "2002" && id != "2003") continue;
     std::regex vr("<(?:[A-Za-z_][\\w.-]*:)?variant[^>]*>\\s*(-?\\d+)", std::regex::icase);
     std::smatch v;
     auto body = (*i)[2].str();
     if (std::regex_search(body, v, vr)) {
       auto n = static_cast<std::uint32_t>(std::stoll(v[1].str()));
-      Color3 c{std::uint8_t(n >> 16), std::uint8_t(n >> 8), std::uint8_t(n)};
-      if (id == "4000")
+      Color3 c{std::uint8_t(n), std::uint8_t(n >> 8), std::uint8_t(n >> 16)};
+      if (id == "2002")
         o.front_color = c;
       else
         o.back_color = c;

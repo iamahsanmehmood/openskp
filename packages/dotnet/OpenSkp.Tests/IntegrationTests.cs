@@ -126,7 +126,7 @@ namespace OpenSkp.Tests
             Assert.Equal(2, model.Styles.Count);
             Assert.Equal("[Construction Documentation Style]", model.Styles[0].Name);
             Assert.Equal((255, 255, 255), model.Styles[0].FrontColor);
-            Assert.Equal((208, 209, 189), model.Styles[0].BackColor);
+            Assert.Equal((164, 178, 187), model.Styles[0].BackColor);
 
             // BuildScene/MeshIndex - a separate, opt-in step from Parse(), so
             // it never costs a plain Parse() call anything. TS/Dart/C++ all

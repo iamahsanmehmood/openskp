@@ -1625,10 +1625,10 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
             units = None
             logger.debug("Failed to read units from meta/meta.dat", exc_info=True)
 
-    # Styles: face colors live in styles/*/style.xml as signed-int32 ARGB
-    # variants — item id 4000 is the front (default) face color, 4001 the
-    # back face color. Viewers need them to shade unpainted faces the way
-    # SketchUp does (an author may e.g. set a green back color so unpainted
+    # Styles: face colors live in styles/*/style.xml as signed-int32 ABGR
+    # variants — item id 2002 is the front (default) face color, 2003 the
+    # back face color (the 4000-series items are background/sky/ground).
+    # Viewers need them to shade unpainted faces the way SketchUp does (an author may e.g. set a green back color so unpainted
     # garden faces read as grass).
     styles = []
     for name in zf.namelist():
@@ -1648,15 +1648,15 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
         for item in style_el.findall(f'{STY}item'):
             iid = item.get('id')
             var = item.find(f'{TYP}variant')
-            if iid in ('4000', '4001') and var is not None and var.text:
+            if iid in ('2002', '2003') and var is not None and var.text:
                 try:
                     v = int(var.text) & 0xFFFFFFFF
                 except ValueError:
                     continue
-                colors[iid] = ((v >> 16) & 255, (v >> 8) & 255, v & 255)
+                colors[iid] = (v & 255, (v >> 8) & 255, (v >> 16) & 255)
         styles.append({'name': style_el.get('name', ''),
-                       'front_color': colors.get('4000'),
-                       'back_color': colors.get('4001')})
+                       'front_color': colors.get('2002'),
+                       'back_color': colors.get('2003')})
 
     logger.debug("Parsed %d materials, %d styles", len(materials), len(styles))
 
