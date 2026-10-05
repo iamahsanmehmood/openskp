@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — Python: `import openskp` no longer fails where `mapbox_earcut` can't be installed (freecad-openskp#3)
+
+`mapbox_earcut` is a compiled dependency, and `_core` imported it at module
+top level, so `import openskp` itself died with `ModuleNotFoundError` in
+interpreters that can't install it - FreeCAD's bundled Python, for one, where
+two users hit it immediately on opening any `.skp`. Only `triangulate_face_3d`
+(the scene/mesh path) needs it; parsing, loops/edges, the writer and the editor
+don't. The import is now optional: that one path falls back to fan
+triangulation - only correct for convex outlines - and logs a one-time warning
+saying so, instead of the whole package failing to import. `pip install
+openskp` still installs `mapbox_earcut` as before, so normal installs are
+unchanged. Tests block the module in a fresh interpreter to reproduce the real
+import failure, and check the fallback and the warn-once behaviour.
+
 ### Added — C++: the model's saved view and the selected scene
 
 SketchUp reopens a file at the view it was saved with, whichever scene is

@@ -26,10 +26,22 @@ from typing import Any, Dict
 import defusedxml.ElementTree as ET
 from defusedxml.common import DefusedXmlException
 
-import mapbox_earcut
 import numpy as np
 
 from .errors import SkpParseError
+
+try:
+    import mapbox_earcut
+except ImportError:
+    # A declared dependency, but a compiled one: hosts that embed their own
+    # Python (FreeCAD's bundled interpreter, for one) often can't install
+    # it, and a hard top-level import made `import openskp` itself fail
+    # there - even for callers that never triangulate a face. Only
+    # triangulate_face_3d (the scene/mesh path) needs it; parsing, the
+    # loop/edge data, the writer and editor all work without. That path
+    # degrades to fan triangulation and says so once (see
+    # _warn_earcut_missing).
+    mapbox_earcut = None
 
 # Silent by default (standard library convention: a library never installs
 # its own handler or configures a level - the host application decides
@@ -393,6 +405,23 @@ def _merge_overlapping_hole_loops(loops, v_id_to_2d, vertices_3d, normal, u_axis
     return [loops[0]] + new_hole_loops
 
 
+_earcut_warned = False
+
+
+def _warn_earcut_missing() -> None:
+    """Say, once, that concave and holed faces are being fan-triangulated
+    because mapbox_earcut isn't importable - a fan is only correct for a
+    convex outline, so the mesh path's output quietly degrades otherwise."""
+    global _earcut_warned
+    if not _earcut_warned:
+        _earcut_warned = True
+        logger.warning(
+            "mapbox_earcut is not installed: concave and holed faces fall back to fan "
+            "triangulation, which is only correct for convex outlines. "
+            "Install it (pip install mapbox_earcut) for correct meshes."
+        )
+
+
 def triangulate_face_3d(vertices_3d, loops, normal):
     if not loops or not loops[0] or len(loops[0]) < 3:
         return []
@@ -493,6 +522,10 @@ def triangulate_face_3d(vertices_3d, loops, normal):
         if len(flat_v_ids) < 3:
             return []
 
+        if mapbox_earcut is None:
+            _warn_earcut_missing()
+            raise ImportError("mapbox_earcut is not installed")
+
         flat_coords = np.array([v_id_to_2d[v_id] for v_id in flat_v_ids], dtype=np.float64)
         tri_indices = mapbox_earcut.triangulate_float64(flat_coords, np.array(ring_ends, dtype=np.uint32))
 
@@ -502,6 +535,8 @@ def triangulate_face_3d(vertices_3d, loops, normal):
         ]
         if earcut_triangles:
             return earcut_triangles
+    except ImportError:
+        pass  # mapbox_earcut missing; already warned once - fan fallback below
     except Exception:
         logger.debug("earcut triangulation failed for face, falling back to fan triangulation", exc_info=True)
 
