@@ -312,6 +312,14 @@ class Archive {
   cumDelta = 0;
   annotWatermark: number | null = null;
   burnStack: number[] = []; // per-entity-list burned-item credits
+  // Called as each CComponentDefinition record completes. walkModel uses it
+  // to build that definition's geometry right away and release its entity
+  // objects, so the walk never holds the whole model's entity graph (see
+  // releaseDefinitionEntities). Probe archives leave it null.
+  onDefinitionDone: ((slot: number, def: any) => void) | null = null;
+  prebuilt = new Map<number, LegacyBuilder>();
+  // [first, end) slot range of each built definition's own records.
+  releasedSpans: [number, number][] = [];
   clineTail: number | null = null;
 
   constructor(data: Uint8Array, ver: number) {
@@ -395,6 +403,9 @@ class Archive {
       this.currentObjSlot = prevSlot;
     }
     this.slots.set(slot, ['obj', name, value]);
+    if (name === 'CComponentDefinition' && value && this.onDefinitionDone) {
+      this.onDefinitionDone(slot, value);
+    }
     if (name === 'CDimensionLinear' || name === 'CText') {
       this.annotWatermark = this.nextSlot;
     }
@@ -1442,7 +1453,7 @@ function findVersionMajor(data: Uint8Array): number | null {
   return parseInt(m[1], 10);
 }
 
-interface WalkResult {
+export interface WalkResult {
   ar: Archive;
   root: [number, string | null, any][];
   layers: [number, any][];
@@ -1508,7 +1519,7 @@ function probeLayerAnchorBases(data: Uint8Array, ver: number, start: number, mat
     .filter((cand) => cand > 0 && cand < b0);
 }
 
-function walk(data: Uint8Array): WalkResult {
+export function walk(data: Uint8Array): WalkResult {
   const ver = findVersionMajor(data);
   if (ver === null) {
     throw new LegacyParseError('no version string in header');
@@ -1553,11 +1564,51 @@ function walk(data: Uint8Array): WalkResult {
   throw new LegacyParseError('no viable slot base candidate');
 }
 
+/** Entity kinds whose objects only the owning definition's geometry needs.
+ * Once that definition is built (fillBuilder) their slot values are swapped
+ * for one shared placeholder per class - same tag and class name, value
+ * null - so later back-refs still resolve and type-check, but the objects
+ * themselves (and the definition's `ents` graph) can be collected.
+ *
+ * Why: the walk used to keep every face, loop, edge-use, edge and vertex of
+ * the model alive until the end, and only then build each definition. On a
+ * real 411 MB SketchUp 2020 file that was 11.4 million slots and ~3.5 GB of
+ * live heap before a single builder existed; nearly all of them sat inside
+ * 4,113 definitions, the largest holding 100k slots. */
+const RELEASED_ENTITIES = new Map<string, SlotEntry>(
+  ['CVertex', 'CEdge', 'CEdgeUse', 'CLoop', 'CFace'].map((name) => [name, ['obj', name, null] as SlotEntry])
+);
+
+/** Build definition `slot`'s geometry now and release its entity objects
+ * (every RELEASED_ENTITIES slot allocated since the definition began). */
+function buildAndReleaseDefinition(ar: Archive, slot: number, def: any): void {
+  const builder = new LegacyBuilder();
+  try {
+    fillBuilder(builder, def.ents, ar.slots);
+  } catch (e) {
+    throw new SkpParseError(`Failed while building component definitions: ${(e as Error).message}`, {
+      stage: 'legacy_defs',
+      definitionId: slot,
+      cause: e,
+    });
+  }
+  ar.prebuilt.set(slot, builder);
+  def.ents = [];
+  ar.releasedSpans.push([slot + 1, ar.nextSlot]);
+  for (let k = slot + 1; k < ar.nextSlot; k++) {
+    const ent = ar.slots.get(k);
+    if (ent === undefined || ent[0] !== 'obj' || ent[2] === null || ent[1] === null) continue;
+    const placeholder = RELEASED_ENTITIES.get(ent[1]);
+    if (placeholder !== undefined) ar.slots.set(k, placeholder);
+  }
+}
+
 function walkModel(data: Uint8Array, ver: number, start: number, matCount: number, base: number): WalkResult {
   const ar = new Archive(data, ver);
   Object.assign(ar.readers, READERS);
   ar.nextSlot = base;
   ar.walkBase = base;
+  ar.onDefinitionDone = (slot, def) => buildAndReleaseDefinition(ar, slot, def);
   const r = ar.r;
 
   // material manager
@@ -1909,8 +1960,12 @@ export function parseLegacyToRaw(data: Uint8Array, options?: ParseOptions): Pars
       lastSlot = s;
       if (ent[0] === 'obj' && ent[1] === 'CComponentDefinition' && ent[2]) {
         const d = ent[2];
-        const b = new LegacyBuilder();
-        fillBuilder(b, d.ents, slots);
+        // Built (and its entities released) as the walk completed it.
+        let b = ar.prebuilt.get(s);
+        if (b === undefined) {
+          b = new LegacyBuilder();
+          fillBuilder(b, d.ents, slots);
+        }
         defsDict.set(s, {
           guid: d.guid,
           name: d.name,
