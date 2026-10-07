@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — TypeScript, .NET, Dart, C++: the legacy readers get the pre-2014 fixes the Python reader already had (openskp#410)
+
+Three layout fixes found while chasing openskp#284 had only landed in Python;
+each port has its own independently written parser, so none of them benefited.
+Now ported, gated on the file's own version exactly as in Python:
+
+- **Instance GUID (#310)**: the trailing 16-byte GUID on `CComponentInstance` /
+  `CGroup` is read only for files at version 14 or later, not by the class's
+  reported schema (a v7 `CComponentInstance` reports schema 6 yet has none, and
+  `CGroup` reports schema 1 everywhere). The schema gate silently ate bytes from
+  the next sibling and could truncate a root scene to one instance without
+  raising. TypeScript, .NET and Dart; C++ already had it.
+- **`CAttributeNamed` trailer (#385)**: the trailing `u32` exists from v7; a
+  SketchUp 6 file has none, and reading it surfaced much later as
+  `back-ref to unwalked slot`. TypeScript, .NET and Dart; C++ already had it.
+- **SketchUp 3 layout (#407)**: all five readers now parse SketchUp 3 files
+  (see the Python entry below for the full list of layout differences).
+
+Each language gets the same synthetic fixtures and structural tests (parsed
+definitions, root-instance placement, face material, textures), with V3
+cross-checked against V6 from the same source; the new tests fail against the
+previous TypeScript, .NET and Dart readers. In TypeScript, whose full parsed
+output was hashed before and after, every existing fixture is byte-identical;
+the other ports' existing suites pass unchanged. Same honest limits as the Python entry:
+calibrated on one V3 file, and single-material V3 files are unverified.
+
 ### Fixed — TypeScript: the legacy (pre-2021) reader no longer holds the whole model's entities until the end
 
 The legacy walk kept every face, loop, edge-use, edge and vertex of the
@@ -40,8 +66,8 @@ phantom layer, zero root instances - so the new tests assert the parsed structur
 and cross-check it against the V6 fixture built from the same source, rather than
 only that nothing raises. Honest limits: calibrated on one file; V4 needs none of
 this (a real V4 file already parses); V3 files with a single material (the
-slot-base probe path) are untouched and unverified. The other four ports are not
-yet updated.
+slot-base probe path) are untouched and unverified. The other four ports are
+updated in the entry below.
 
 ### Fixed — Python: `import openskp` no longer fails where `mapbox_earcut` can't be installed (freecad-openskp#3)
 

@@ -20,6 +20,7 @@ add_executable(
   legacy_zero_material_custom_layer_test.cpp
   legacy_v20_filler_test.cpp
   legacy_v20_test.cpp
+  legacy_v3_format_test.cpp
   legacy_v6_attribute_trailer_test.cpp
   lowlevel_test.cpp
   meta_units_test.cpp

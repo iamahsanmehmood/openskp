@@ -596,6 +596,7 @@ namespace OpenSkp
     {
         public object? Attrs;
         public int Pid;
+        public int? AttrsSlot;
     }
 
     internal sealed class VertexRec { public double[] Xyz = new double[3]; }
@@ -621,6 +622,7 @@ namespace OpenSkp
         public double Opacity;
         public int UseOpacity;
         public int? TexDib;
+        public byte[]? TexData;
         public double TexW;
         public double TexH;
         public string TexFile = "";
@@ -633,6 +635,7 @@ namespace OpenSkp
         public double Opacity;
         public int UseOpacity;
         public int? TexDib;
+        public byte[]? TexData;
         public double TexW;
         public double TexH;
         public string TexFile = "";
@@ -685,9 +688,29 @@ namespace OpenSkp
 
     internal static class LegacyReaders
     {
+        // SketchUp 3 (header "{3.0.x}") predates several fields every later
+        // file carries. The differences are gated on `ar.Ver < FirstV4` and
+        // were calibrated byte-by-byte on one real SketchUp-written V3 file
+        // (a synthetic model saved down through SketchUp's own version
+        // export) - not on a corpus - so they are exactly what that file
+        // proves and no more (openskp#284, #407; matches Python's legacy.py
+        // `_FIRST_V4`). SketchUp 4 needs none of them: a real V4 file parses
+        // with the later layout.
+        public const int FirstV4 = 4;
+
+        /// <summary><see cref="Preamble"/> for the entity types that carry NO
+        /// attribute-container pointer in a SketchUp 3 file: vertex, loop,
+        /// edge-use, material, layer. (Edge, face, definition, instance and
+        /// thumbnail still open with one.)</summary>
+        public static PreambleResult EarlyPreamble(Archive ar, LR r)
+        {
+            if (ar.Ver < FirstV4) return new PreambleResult();
+            return Preamble(ar, r);
+        }
+
         public static PreambleResult Preamble(Archive ar, LR r)
         {
-            var (_, _, attrs) = ar.ReadObject(r, "CAttributeContainer");
+            var (attrsSlot, _, attrs) = ar.ReadObject(r, "CAttributeContainer");
             int pid = 0;
             if (ar.HasPid)
             {
@@ -700,12 +723,19 @@ namespace OpenSkp
                     }
                 }
             }
-            return new PreambleResult { Attrs = attrs, Pid = pid };
+            return new PreambleResult { Attrs = attrs, Pid = pid, AttrsSlot = attrsSlot };
         }
 
         public static DrawBase Drawbase(Archive ar, LR r)
         {
-            var b = r.Raw(8);
+            // SketchUp 3's draw block is 5 bytes, and they were identical
+            // for every entity in the calibration file - painted and
+            // unpainted faces, edges, groups - so nothing in them is
+            // decodable from what we have. Material comes from the face's
+            // own pointer instead (see ReadFace); report the rest as unset
+            // rather than the meaningless 0x0100 / "hidden" the 8-byte
+            // layout would read out of them.
+            var b = ar.Ver < FirstV4 ? r.Raw(5) : r.Raw(8);
             // The layer field is normally a u16 id, but an entity can carry
             // the layer BY OBJECT instead (seen on real 2018 instances): a
             // full inline CLayer record on first use, an escaped back-ref
@@ -736,6 +766,10 @@ namespace OpenSkp
             {
                 layer = r.U16();
             }
+            if (ar.Ver < FirstV4)
+            {
+                return new DrawBase { Layer = layer };
+            }
             return new DrawBase
             {
                 Mat = Tlv.ReadU16(b, 0),
@@ -748,7 +782,7 @@ namespace OpenSkp
 
         public static object ReadVertex(Archive ar, LR r)
         {
-            Preamble(ar, r);
+            EarlyPreamble(ar, r);
             return new VertexRec { Xyz = r.F64s(3) };
         }
 
@@ -811,7 +845,7 @@ namespace OpenSkp
 
         public static object ReadEdgeUse(Archive ar, LR r)
         {
-            Preamble(ar, r);
+            EarlyPreamble(ar, r);
             var (es, _, _) = ar.ReadObject(r, "CEdge");
             byte sense = r.U8();
             // parent-loop back-ref: the alignment oracle. Read as a RAW
@@ -861,7 +895,7 @@ namespace OpenSkp
             int mySlot = ar.NextSlot - 1;
             var prev = ar.CurrentLoop;
             ar.CurrentLoop = mySlot;
-            Preamble(ar, r);
+            EarlyPreamble(ar, r);
             r.Raw(2);
             var uses = new List<EdgeUseRec>();
             while (true)
@@ -882,6 +916,15 @@ namespace OpenSkp
         {
             var pre = Preamble(ar, r);
             var db = Drawbase(ar, r);
+            var attrs = pre.Attrs as AttrsRec;
+            if (ar.Ver < FirstV4 && pre.Attrs is MaterialRec && pre.AttrsSlot != null)
+            {
+                // SketchUp 3: the pointer that opens a face is its FRONT
+                // MATERIAL (null for an unpainted face), not an attribute
+                // container.
+                db.Mat = pre.AttrsSlot.Value;
+                attrs = null;
+            }
             var plane = r.F64s(4);
             uint nloops = r.U32();
             if (nloops > 10000)
@@ -895,7 +938,7 @@ namespace OpenSkp
                 loops.Add((LoopRec)v!);
             }
             ushort backMat = r.U16();
-            return new FaceRec { Db = db, Plane = plane, Loops = loops, BackMat = backMat, Attrs = pre.Attrs as AttrsRec };
+            return new FaceRec { Db = db, Plane = plane, Loops = loops, BackMat = backMat, Attrs = attrs };
         }
 
         public static object ReadAttrContainer(Archive ar, LR r)
@@ -952,13 +995,21 @@ namespace OpenSkp
                 if (key == "") break;
                 entries[key] = ReadTyped(r, r.U8());
             }
-            r.U32();
+            // CAttributeNamed's own trailing u32 is a v7+ addition: a real
+            // SketchUp 6 file ends the record at the empty-key terminator
+            // with nothing after it. Reading it unconditionally eats 4 bytes
+            // belonging to the next sibling's own tag, which surfaces many
+            // reads later as an unrelated "back-ref to unwalked slot"
+            // (openskp#284 / #385). The class's own schema is never observed
+            // (it is learned from the unwalked pre-model region), so the
+            // file's version is the only signal available.
+            if (ar.Ver >= 7) r.U32();
             return new DictRec { Name = dictname, Entries = entries };
         }
 
         public static object ReadLayer(Archive ar, LR r)
         {
-            Preamble(ar, r);
+            EarlyPreamble(ar, r);
             string name = r.Utf16();
             var mid = new List<byte>();
             while (mid.Count < 8 && !LegacyBytes.BytesEqual(r.Peek(3), 0, LegacyBytes.StrMarker))
@@ -982,7 +1033,7 @@ namespace OpenSkp
             }
             var rgba = r.Raw(4);
             r.Utf16();
-            r.Raw(21);
+            r.Raw(ar.Ver < FirstV4 ? 17 : 21);   // SketchUp 3's tail is 4 bytes shorter
             ar.SkipClayerColourExt();
             ar.SkipClayerParentRef(ar.CurrentObjSlot);
             return new LayerRec { Name = name, Hidden = mid.Count > 0 ? mid[0] : 0, Rgba = rgba };
@@ -999,15 +1050,31 @@ namespace OpenSkp
         /// stored a dictionary on the Texture itself, as render plugins
         /// do) and, from v17 on, the persistent-id mask. Callers read the
         /// flag as a u16, so step back over its high byte - the first byte
-        /// of that preamble.</summary>
+        /// of that preamble.
+        ///
+        /// SketchUp 3 has neither: the image follows the flag directly as a
+        /// bare subtype/length/bytes record - no preamble, no object tag, and
+        /// so no store-map slot (<c>TexDib</c> is null; the bytes ride along
+        /// as <c>TexData</c> instead).</summary>
         public static TextureBlockRec TextureBlock(Archive ar, LR r)
         {
-            r.Pos -= 1;
-            Preamble(ar, r);
-            var (s, _, dib) = ar.ReadObject(r, "CDib");
-            if (!(dib is DibRec))
+            int? s;
+            byte[]? inlineData = null;
+            if (ar.Ver < FirstV4)
             {
-                throw new LegacyParseError($"texture object is not a dib {r.Ctx()}");
+                s = null;
+                inlineData = ((DibRec)ReadDib(ar, r)).Data;
+            }
+            else
+            {
+                r.Pos -= 1;
+                Preamble(ar, r);
+                var (slot, _, dib) = ar.ReadObject(r, "CDib");
+                if (!(dib is DibRec))
+                {
+                    throw new LegacyParseError($"texture object is not a dib {r.Ctx()}");
+                }
+                s = slot;
             }
             // optional u32 between the dib and the 2 x f64 applied size
             int marker = LegacyBytes.FindBytes(r.Data, LegacyBytes.StrMarker, r.Pos, r.Pos + 28);
@@ -1037,6 +1104,7 @@ namespace OpenSkp
                 Opacity = opacity,
                 UseOpacity = useOp,
                 TexDib = s,
+                TexData = inlineData,
                 TexW = w,
                 TexH = h,
                 TexFile = fname,
@@ -1046,7 +1114,7 @@ namespace OpenSkp
 
         public static object ReadMaterial(Archive ar, LR r)
         {
-            Preamble(ar, r);
+            EarlyPreamble(ar, r);
             string name = r.Utf16();
             ushort texflag = r.U16();
             var outRec = new MaterialRec { Name = name };
@@ -1068,6 +1136,7 @@ namespace OpenSkp
                 outRec.Opacity = tex.Opacity;
                 outRec.UseOpacity = tex.UseOpacity;
                 outRec.TexDib = tex.TexDib;
+                outRec.TexData = tex.TexData;
                 outRec.TexW = tex.TexW;
                 outRec.TexH = tex.TexH;
                 outRec.TexFile = tex.TexFile;
@@ -1125,6 +1194,12 @@ namespace OpenSkp
         public static object ReadThumbnail(Archive ar, LR r)
         {
             Preamble(ar, r);
+            if (ar.Ver < FirstV4)
+            {
+                // SketchUp 3: a fixed 129-byte camera block, no name, no image.
+                r.Raw(129);
+                return new ThumbnailRec { Dib = null };
+            }
             ar.ReadObject(r, "CCamera");
             var (dibSlot, _, _) = ar.ReadObject(r, "CDib");
             return new ThumbnailRec { Dib = dibSlot };
@@ -1459,7 +1534,8 @@ namespace OpenSkp
         public static object ReadDefinition(Archive ar, LR r)
         {
             Preamble(ar, r);
-            r.Raw(ar.Ver >= 17 ? 22 : 20);
+            // undecoded base block (13 bytes in SketchUp 3)
+            r.Raw(ar.Ver >= 17 ? 22 : ar.Ver >= FirstV4 ? 20 : 13);
             uint nlayers = r.U32();
             if (nlayers > 10000)
             {
@@ -1590,7 +1666,6 @@ namespace OpenSkp
 
         public static object ReadInstance(Archive ar, LR r)
         {
-            string? cls = ar.CurrentClass;
             var pre = Preamble(ar, r);
             var db = Drawbase(ar, r);
             var (ds, dn, _) = ar.ReadObject(r, "CComponentDefinition");
@@ -1599,14 +1674,17 @@ namespace OpenSkp
                 throw new LegacyParseError($"instance definition ref is {dn} {r.Ctx()}");
             }
             var xf = r.F64s(13);
-            string name = r.Utf16();
+            // SketchUp 3 instances carry no name string.
+            string name = ar.Ver >= FirstV4 || LegacyBytes.BytesEqual(r.Peek(3), 0, LegacyBytes.StrMarker) ? r.Utf16() : "";
 
-            // The trailing instance GUID arrives with CComponentInstance schema 5 /
-            // CGroup schema 1; SketchUp 2013 writes CComponentInstance schema 4,
-            // whose record ends at the name (see openskp#38 / #40).
-            int minSchema = cls == "CGroup" ? 1 : 5;
-            int? schema = (cls != null && ar.ClassSchema.TryGetValue(cls, out int s)) ? s : (int?)null;
-            byte[] guid = (schema == null || schema >= minSchema) ? r.Raw(16) : Array.Empty<byte>();
+            // The trailing instance GUID is a version-14 (SketchUp 2014)
+            // addition for BOTH CComponentInstance and CGroup - gated by the
+            // file's own version, not by the class's reported schema. Schema
+            // doesn't generalize: a v7 file's CComponentInstance reports
+            // schema 6, and CGroup reports schema 1 on every version, so a
+            // schema gate is always true for it and forces a phantom 16-byte
+            // read on every pre-2014 group (openskp#284 / #310).
+            byte[] guid = ar.Ver >= 14 ? r.Raw(16) : Array.Empty<byte>();
 
             return new InstanceRec { Db = db, Def = ds, Xf = xf, Name = name, Guid = LegacyBytes.ToHex(guid), Attrs = pre.Attrs as AttrsRec };
         }
@@ -1902,8 +1980,11 @@ namespace OpenSkp
             {
                 r.U8();
             }
-            uint layerCount = r.U32();
-            if (layerCount > 100000)
+            // SketchUp 3 writes no layer count: the layer records simply run
+            // until the definition-list anchor, which the loop below already
+            // stops at (a back-ref, not a layer record).
+            uint layerCount = ver < LegacyReaders.FirstV4 ? 1u << 30 : r.U32();
+            if (layerCount > 100000 && ver >= LegacyReaders.FirstV4)
             {
                 throw new LegacyParseError("implausible layer count");
             }
@@ -2218,6 +2299,10 @@ namespace OpenSkp
                     if (v.TexDib != null && slots.TryGetValue(v.TexDib.Value, out var dibEnt) && dibEnt.Value is DibRec dibRec)
                     {
                         texData = dibRec.Data;
+                    }
+                    else if (v.TexData != null)
+                    {
+                        texData = v.TexData;
                     }
                     bool isPng = texData != null && texData.Length >= 4
                         && texData[0] == 0x89 && texData[1] == 0x50 && texData[2] == 0x4E && texData[3] == 0x47;
