@@ -525,8 +525,8 @@ class Archive {
 
 // ── shared record blocks ─────────────────────────────────────────────────
 
-function preamble(ar: Archive, r: R): { attrs: any; pid: number } {
-  const [, , attrs] = ar.readObject(r, 'CAttributeContainer');
+function preamble(ar: Archive, r: R): { attrs: any; pid: number; attrsSlot: number | null } {
+  const [attrsSlot, , attrs] = ar.readObject(r, 'CAttributeContainer');
   let pid = 0;
   if (ar.hasPid) {
     const mask = r.u8();
@@ -536,11 +536,33 @@ function preamble(ar: Archive, r: R): { attrs: any; pid: number } {
       }
     }
   }
-  return { attrs, pid };
+  return { attrs, pid, attrsSlot: attrsSlot as number | null };
+}
+
+// SketchUp 3 (header "{3.0.x}") predates several fields every later file
+// carries. The differences are gated on `ar.ver < FIRST_V4` and were
+// calibrated byte-by-byte on one real SketchUp-written V3 file (a synthetic
+// model saved down through SketchUp's own version export) - not on a corpus -
+// so they are exactly what that file proves and no more (openskp#284, #407).
+// SketchUp 4 needs none of them: a real V4 file parses with the later layout.
+const FIRST_V4 = 4;
+
+/** `preamble` for the entity types that carry NO attribute-container
+ * pointer in a SketchUp 3 file: vertex, loop, edge-use, material, layer.
+ * (Edge, face, definition, instance and thumbnail still open with one.) */
+function earlyPreamble(ar: Archive, r: R): { attrs: any; pid: number; attrsSlot: number | null } {
+  if (ar.ver < FIRST_V4) return { attrs: null, pid: 0, attrsSlot: null };
+  return preamble(ar, r);
 }
 
 function drawbase(ar: Archive, r: R): { mat: number; hidden: number; soft: number; smooth: number; layer: number } {
-  const b = r.raw(8);
+  // SketchUp 3's draw block is 5 bytes, and they were identical for every
+  // entity in the calibration file - painted and unpainted faces, edges,
+  // groups - so nothing in them is decodable from what we have. Material
+  // comes from the face's own pointer instead (see readFace); report the
+  // rest as unset rather than the meaningless 0x0100 / "hidden" the 8-byte
+  // layout would read out of them.
+  const b = ar.ver < FIRST_V4 ? r.raw(5) : r.raw(8);
   const view = new DataView(b.buffer, b.byteOffset, b.byteLength);
   // The layer field is normally a u16 id, but an entity can carry the
   // layer BY OBJECT instead (seen on real 2018 instances): a full inline
@@ -563,6 +585,9 @@ function drawbase(ar: Archive, r: R): { mat: number; hidden: number; soft: numbe
   } else {
     layer = r.u16();
   }
+  if (ar.ver < FIRST_V4) {
+    return { mat: 0, hidden: 0, soft: 0, smooth: 0, layer };
+  }
   return {
     mat: view.getUint16(0, true),
     hidden: b[2],
@@ -575,7 +600,7 @@ function drawbase(ar: Archive, r: R): { mat: number; hidden: number; soft: numbe
 // ── entity readers ───────────────────────────────────────────────────────
 
 function readVertex(ar: Archive, r: R): any {
-  preamble(ar, r);
+  earlyPreamble(ar, r);
   return { k: 'vertex', xyz: r.f64s(3) };
 }
 
@@ -629,7 +654,7 @@ function registerBurn(ar: Archive, delta: number): void {
 }
 
 function readEdgeUse(ar: Archive, r: R): any {
-  preamble(ar, r);
+  earlyPreamble(ar, r);
   const [es] = ar.readObject(r, 'CEdge');
   const sense = r.u8();
   // parent-loop back-ref: the alignment oracle. Read as a RAW file index -
@@ -667,7 +692,7 @@ function readLoop(ar: Archive, r: R): any {
   const mySlot = ar.nextSlot - 1;
   const prev = ar.currentLoop;
   ar.currentLoop = mySlot;
-  preamble(ar, r);
+  earlyPreamble(ar, r);
   r.raw(2); // 2 flag bytes
   const uses: any[] = [];
   while (true) {
@@ -685,6 +710,13 @@ function readLoop(ar: Archive, r: R): any {
 function readFace(ar: Archive, r: R): any {
   const pre = preamble(ar, r);
   const db = drawbase(ar, r);
+  let attrs = pre.attrs;
+  if (ar.ver < FIRST_V4 && attrs && typeof attrs === 'object' && attrs.k === 'material') {
+    // SketchUp 3: the pointer that opens a face is its FRONT MATERIAL
+    // (null for an unpainted face), not an attribute container.
+    db.mat = pre.attrsSlot as number;
+    attrs = null;
+  }
   const plane = r.f64s(4);
   const nloops = r.u32();
   if (nloops > 10000) {
@@ -699,7 +731,7 @@ function readFace(ar: Archive, r: R): any {
   // the back-material word as redundant back-ref LIST ITEMS - the list loop
   // consumes them (handled by the CLoop/CEdgeUse readers themselves).
   const backMat = r.u16();
-  return { k: 'face', db, plane, loops, back_mat: backMat, attrs: pre.attrs };
+  return { k: 'face', db, plane, loops, back_mat: backMat, attrs };
 }
 
 function readAttrContainer(ar: Archive, r: R): any {
@@ -749,7 +781,14 @@ function readAttrNamed(ar: Archive, r: R): any {
     if (key === '') break;
     entries[key] = readTyped(r.u8());
   }
-  r.u32();
+  // CAttributeNamed's own trailing u32 is a v7+ addition: a real SketchUp 6
+  // file ends the record at the empty-key terminator with nothing after it.
+  // Reading it unconditionally eats 4 bytes belonging to the next sibling's
+  // own tag, which surfaces many reads later as an unrelated "back-ref to
+  // unwalked slot" (openskp#284 / #385). The class's own schema is never
+  // observed (it is learned from the unwalked pre-model region), so the
+  // file's version is the only signal available.
+  if (ar.ver >= 7) r.u32();
   return { k: 'dict', name: dictname, entries };
 }
 
@@ -795,7 +834,7 @@ export function extractLegacyDynamicProperties(attrs: any): Record<string, strin
 }
 
 function readLayer(ar: Archive, r: R): any {
-  preamble(ar, r);
+  earlyPreamble(ar, r);
   const name = r.utf16();
   const mid: number[] = [];
   while (mid.length < 8 && !bytesEqual(r.peek(3), STR_MARKER)) {
@@ -816,7 +855,7 @@ function readLayer(ar: Archive, r: R): any {
   }
   const rgba = r.raw(4);
   r.utf16();
-  r.raw(21);
+  r.raw(ar.ver < FIRST_V4 ? 17 : 21); // SketchUp 3's tail is 4 bytes shorter
   ar.skipClayerColourExt();
   ar.skipClayerParentRef(ar.currentObjSlot);
   return { k: 'layer', name, hidden: mid.length ? mid[0] : 0, rgba: Array.from(rgba) };
@@ -832,7 +871,11 @@ function readLayer(ar: Archive, r: R): any {
  * attribute-container ref (null unless an extension stored a dictionary on
  * the Texture itself, as render plugins do) and, from v17 on, the
  * persistent-id mask. Callers read the flag as a u16, so step back over
- * its high byte - the first byte of that preamble. */
+ * its high byte - the first byte of that preamble.
+ *
+ * SketchUp 3 has neither: the image follows the flag directly as a bare
+ * subtype/length/bytes record - no preamble, no object tag, and so no
+ * store-map slot (`tex_dib` is null; the bytes ride along as `tex_data`). */
 function textureBlock(
   ar: Archive,
   r: R
@@ -840,17 +883,25 @@ function textureBlock(
   rgba: number[];
   opacity: number;
   use_opacity: number;
-  tex_dib: number;
+  tex_dib: number | null;
+  tex_data: Uint8Array | null;
   tex_w: number;
   tex_h: number;
   tex_file: string;
   colorized: boolean;
 } {
-  r.pos -= 1;
-  preamble(ar, r);
-  const [s, , dib] = ar.readObject(r, 'CDib');
-  if (!(dib && typeof dib === 'object' && dib.k === 'dib')) {
-    throw new LegacyParseError(`texture object is not a dib ${r.ctx()}`);
+  let s: number | null;
+  let dib: any;
+  if (ar.ver < FIRST_V4) {
+    s = null;
+    dib = readDib(ar, r);
+  } else {
+    r.pos -= 1;
+    preamble(ar, r);
+    [s, , dib] = ar.readObject(r, 'CDib') as [number, string | null, any];
+    if (!(dib && typeof dib === 'object' && dib.k === 'dib')) {
+      throw new LegacyParseError(`texture object is not a dib ${r.ctx()}`);
+    }
   }
   // optional u32 between the dib and the 2 x f64 applied size
   const marker = findBytes(r.data, STR_MARKER, r.pos, r.pos + 28);
@@ -875,7 +926,8 @@ function textureBlock(
     rgba: Array.from(avg.subarray(0, 4)),
     opacity,
     use_opacity: useOp,
-    tex_dib: s as number,
+    tex_dib: s,
+    tex_data: s === null ? (dib.data as Uint8Array) : null,
     tex_w: w,
     tex_h: h,
     tex_file: fname,
@@ -884,7 +936,7 @@ function textureBlock(
 }
 
 function readMaterial(ar: Archive, r: R): any {
-  preamble(ar, r);
+  earlyPreamble(ar, r);
   const name = r.utf16();
   const texflag = r.u16();
   const out: Record<string, any> = { k: 'material', name };
@@ -903,6 +955,7 @@ function readMaterial(ar: Archive, r: R): any {
     out.opacity = tex.opacity;
     out.use_opacity = tex.use_opacity;
     out.tex_dib = tex.tex_dib;
+    out.tex_data = tex.tex_data;
     out.tex_w = tex.tex_w;
     out.tex_h = tex.tex_h;
     out.tex_file = tex.tex_file;
@@ -957,6 +1010,11 @@ function readCamera(ar: Archive, r: R): any {
 
 function readThumbnail(ar: Archive, r: R): any {
   preamble(ar, r);
+  if (ar.ver < FIRST_V4) {
+    // SketchUp 3: a fixed 129-byte camera block, no name, no image.
+    r.raw(129);
+    return { k: 'thumbnail', dib: null };
+  }
   ar.readObject(r, 'CCamera');
   const [, , dib] = ar.readObject(r, 'CDib');
   return { k: 'thumbnail', dib };
@@ -1253,7 +1311,7 @@ function readEntityListInner(
 
 function readDefinition(ar: Archive, r: R): any {
   preamble(ar, r);
-  r.raw(ar.ver >= 17 ? 22 : 20); // undecoded base block
+  r.raw(ar.ver >= 17 ? 22 : ar.ver >= FIRST_V4 ? 20 : 13); // undecoded base block (13 in SketchUp 3)
   const nlayers = r.u32();
   if (nlayers > 10000) {
     throw new LegacyParseError(`implausible def layer count ${r.ctx()}`);
@@ -1366,7 +1424,6 @@ function readDefinition(ar: Archive, r: R): any {
 }
 
 function readInstance(ar: Archive, r: R): any {
-  const cls = ar.currentClass;
   const pre = preamble(ar, r);
   const db = drawbase(ar, r);
   const [ds, dn] = ar.readObject(r, 'CComponentDefinition');
@@ -1374,14 +1431,16 @@ function readInstance(ar: Archive, r: R): any {
     throw new LegacyParseError(`instance definition ref is ${dn} ${r.ctx()}`);
   }
   const xf = r.f64s(13);
-  const name = r.utf16();
+  // SketchUp 3 instances carry no name string.
+  const name = ar.ver >= FIRST_V4 || bytesEqual(r.peek(3), STR_MARKER) ? r.utf16() : '';
 
-  // The trailing instance GUID arrives with CComponentInstance schema 5 /
-  // CGroup schema 1; SketchUp 2013 writes CComponentInstance schema 4,
-  // whose record ends at the name (see openskp#38 / #40).
-  const minSchema = cls === 'CGroup' ? 1 : 5;
-  const schema = cls !== null ? ar.classSchema.get(cls) : undefined;
-  const guid = schema === undefined || schema >= minSchema ? r.raw(16) : new Uint8Array(0);
+  // The trailing instance GUID is a version-14 (SketchUp 2014) addition for
+  // BOTH CComponentInstance and CGroup - gated by the file's own version,
+  // not by the class's reported schema. Schema doesn't generalize: a v7
+  // file's CComponentInstance reports schema 6, and CGroup reports schema 1
+  // on every version, so a schema gate is always true for it and forces a
+  // phantom 16-byte read on every pre-2014 group (openskp#284 / #310).
+  const guid = ar.ver >= 14 ? r.raw(16) : new Uint8Array(0);
 
   return { k: 'instance', db, def: ds, xf, name, guid: toHex(guid), attrs: pre.attrs };
 }
@@ -1624,8 +1683,11 @@ function walkModel(data: Uint8Array, ver: number, start: number, matCount: numbe
   if (ver >= 17) {
     r.u8();
   }
-  const layerCount = r.u32();
-  if (layerCount > 100000) {
+  // SketchUp 3 writes no layer count: the layer records simply run until the
+  // definition-list anchor, which the loop below already stops at (a
+  // back-ref, not a layer record).
+  const layerCount = ver < FIRST_V4 ? 2 ** 30 : r.u32();
+  if (layerCount > 100000 && ver >= FIRST_V4) {
     throw new LegacyParseError('implausible layer count');
   }
   // layerCount counts REAL layers. SketchUp 2020 interleaves a null
@@ -1911,8 +1973,8 @@ export function parseLegacyToRaw(data: Uint8Array, options?: ParseOptions): Pars
     const colorized: boolean = v.colorized || false;
     let texture: Texture | null = null;
     if ('tex_dib' in v) {
-      const dib = slots.get(v.tex_dib);
-      const texData: Uint8Array | null = dib && dib[2] ? (dib[2].data as Uint8Array) : null;
+      const dib = v.tex_dib !== null ? slots.get(v.tex_dib) : undefined;
+      const texData: Uint8Array | null = dib && dib[2] ? (dib[2].data as Uint8Array) : (v.tex_data ?? null);
       const isPng = texData && texData.length >= 4 &&
         texData[0] === 0x89 && texData[1] === 0x50 && texData[2] === 0x4e && texData[3] === 0x47;
       const ext = isPng ? '.png' : '.jpg';

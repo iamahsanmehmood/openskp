@@ -22,6 +22,15 @@ namespace openskp {
 // (matches Python's legacy.py `_read_instance`; openskp#391).
 bool legacy_instance_has_guid(int ver) { return ver >= 14; }
 
+// SketchUp 3 (header "{3.0.x}") predates several fields every later file
+// carries. The differences are gated on `ver < kFirstV4` and were calibrated
+// byte-by-byte on one real SketchUp-written V3 file (a synthetic model saved
+// down through SketchUp's own version export) - not on a corpus - so they are
+// exactly what that file proves and no more (openskp#284, #407; matches
+// Python's legacy.py `_FIRST_V4`). SketchUp 4 needs none of them: a real V4
+// file parses with the later layout.
+constexpr int kFirstV4 = 4;
+
 // Widest zero padding seen between the v20 filler's empty string and the
 // count that follows it (9 and 13 bytes occur in real files; the ceiling
 // leaves room without letting the probe wander into unrelated records).
@@ -373,11 +382,24 @@ struct Archive {
   // on the Texture itself, as render plugins do) and, from v17 on, the
   // persistent-id mask. Callers read the flag as a u16, so step back over
   // its high byte - the first byte of that preamble.
+  //
+  // SketchUp 3 has neither: the image follows the flag directly as a bare
+  // subtype/length/bytes record - no preamble, no object tag, and so no
+  // store-map slot (the bytes ride along in `v.blob`, flagged by
+  // `v.inline_tex`).
   void texture_block(V& v) {
-    r.p -= 1;
-    preamble();
-    auto q = object("CDib");
-    v.tex_dib = std::get<0>(q);
+    if (ver < kFirstV4) {
+      r.u32();
+      auto z = r.u32();
+      if (z > r.d.size()) throw std::runtime_error("implausible dib length");
+      v.blob = r.raw(z);
+      v.inline_tex = true;
+    } else {
+      r.p -= 1;
+      preamble();
+      auto q = object("CDib");
+      v.tex_dib = std::get<0>(q);
+    }
     auto begin = r.p, limit = std::min(r.d.size(), r.p + 28);
     size_t marker = begin;
     for (; marker + 3 <= limit; ++marker)
@@ -407,23 +429,41 @@ struct Archive {
   // Returns the CAttributeContainer's slot, or nullopt when this entity
   // has none (a null object reference: tag 0, Archive::object() returns a
   // default-constructed tuple with an empty class name).
-  std::optional<std::uint64_t> preamble() {
+  std::optional<std::uint64_t> preamble(std::string* cls = nullptr) {
     auto attrs = object("CAttributeContainer");
     if (pid) {
       auto mask = r.u8();
       for (int i = 0; i < 8; ++i)
         if (mask & (1 << i)) r.u8();
     }
+    if (cls) *cls = std::get<1>(attrs);
     if (std::get<1>(attrs).empty()) return std::nullopt;
     return std::get<0>(attrs);
   }
 
+  // `preamble` for the entity types that carry NO attribute-container
+  // pointer in a SketchUp 3 file: vertex, loop, edge-use, material, layer.
+  // (Edge, face, definition, instance and thumbnail still open with one.)
+  std::optional<std::uint64_t> early_preamble() {
+    if (ver < kFirstV4) return std::nullopt;
+    return preamble();
+  }
+
   void draw(V& v) {
-    auto b = r.raw(8);
-    v.mat = int(b[0] | b[1] << 8);
-    v.hidden = b[2];
-    v.soft = b[5];
-    v.smooth = b[6];
+    // SketchUp 3's draw block is 5 bytes, and they were identical for every
+    // entity in the calibration file - painted and unpainted faces, edges,
+    // groups - so nothing in them is decodable from what we have. Material
+    // comes from the face's own pointer instead (see the CFace reader);
+    // report the rest as unset rather than the meaningless 0x0100 / "hidden"
+    // the 8-byte layout would read out of them.
+    const bool v3 = ver < kFirstV4;
+    auto b = r.raw(v3 ? 5 : 8);
+    if (!v3) {
+      v.mat = int(b[0] | b[1] << 8);
+      v.hidden = b[2];
+      v.soft = b[5];
+      v.smooth = b[6];
+    }
     // The layer field is normally a u16 id, but an entity can carry the
     // layer BY OBJECT instead (seen on real 2018 instances): a full
     // inline CLayer record on first use, an escaped back-ref to it on
@@ -524,7 +564,7 @@ struct Archive {
   std::shared_ptr<V> read(const std::string& n, uint64_t self) {
     auto v = std::make_shared<V>();
     if (n == "CVertex") {
-      preamble();
+      early_preamble();
       v->k = "vertex";
       auto a = r.f64s(3);
       v->xyz = {a[0], a[1], a[2]};
@@ -546,7 +586,7 @@ struct Archive {
       r.raw(5);
       r.f64s(14);
     } else if (n == "CEdgeUse") {
-      preamble();
+      early_preamble();
       v->k = "edgeuse";
       v->edge = std::get<0>(object("CEdge"));
       v->sense = r.u8() != 0;
@@ -579,7 +619,7 @@ struct Archive {
     } else if (n == "CLoop") {
       auto old = current_loop;
       current_loop = self;
-      preamble();
+      early_preamble();
       r.raw(2);
       v->k = "loop";
       while (r.p + 2 <= r.d.size() && read_u16(r.d, r.p)) {
@@ -589,9 +629,16 @@ struct Archive {
       r.u16();
       current_loop = old;
     } else if (n == "CFace") {
-      v->attrs = preamble();
+      std::string lead_cls;
+      v->attrs = preamble(&lead_cls);
       v->k = "face";
       draw(*v);
+      if (ver < kFirstV4 && v->attrs && lead_cls == "CMaterial") {
+        // SketchUp 3: the pointer that opens a face is its FRONT MATERIAL
+        // (null for an unpainted face), not an attribute container.
+        v->mat = int(*v->attrs);
+        v->attrs.reset();
+      }
       v->plane = r.f64s(4);
       auto count = r.u32();
       if (count > 10000) throw std::runtime_error("implausible loop count");
@@ -627,7 +674,7 @@ struct Archive {
       // this - the file's own version is the only signal available.
       if (ver >= 7) r.u32();
     } else if (n == "CLayer") {
-      v->attrs = preamble();
+      v->attrs = early_preamble();
       v->k = "layer";
       v->name = r.utf16();
       ByteBuffer mid;
@@ -650,12 +697,12 @@ struct Archive {
         v->g = c[1];
         v->b = c[2];
         r.utf16();
-        r.raw(21);
+        r.raw(ver < kFirstV4 ? 17 : 21);  // SketchUp 3's tail is 4 bytes shorter
         skip_clayer_colour_ext();
         skip_clayer_parent_ref(self);
       }
     } else if (n == "CMaterial") {
-      preamble();
+      early_preamble();
       v->k = "material";
       v->name = r.utf16();
       auto flag = r.u16();
@@ -700,8 +747,13 @@ struct Archive {
       r.raw(33);
     } else if (n == "CThumbnail") {
       preamble();
-      object("CCamera");
-      object("CDib");
+      if (ver < kFirstV4) {
+        // SketchUp 3: a fixed 129-byte camera block, no name, no image.
+        r.raw(129);
+      } else {
+        object("CCamera");
+        object("CDib");
+      }
     } else if (n == "CImage") {
       // CImage: an Image entity - instance-shaped: a back-ref to the
       // (already walked) CComponentDefinition holding the image's face
@@ -875,7 +927,8 @@ struct Archive {
     } else if (n == "CComponentDefinition") {
       preamble();
       v->k = "definition";
-      r.raw(ver >= 17 ? 22 : 20);
+      // undecoded base block (13 bytes in SketchUp 3)
+      r.raw(ver >= 17 ? 22 : ver >= kFirstV4 ? 20 : 13);
       auto nl = r.u32();
       if (nl > 10000) throw std::runtime_error("implausible def layers");
       // like the model-level layer list, the count is REAL layers (new
@@ -982,7 +1035,8 @@ struct Archive {
       auto q = object("CComponentDefinition");
       v->def = std::get<0>(q);
       v->xf = r.f64s(13);
-      v->name = r.utf16();
+      // SketchUp 3 instances carry no name string.
+      if (ver >= kFirstV4 || r.marker()) v->name = r.utf16();
       if (legacy_instance_has_guid(ver)) r.raw(16);
     } else
       throw std::runtime_error("no legacy reader for " + n);
@@ -1216,8 +1270,11 @@ WalkResult walk_model(const ByteBuffer& data, int ver, size_t start, uint32_t ma
   }
   ar.r.u32();
   if (ver >= 17) ar.r.u8();
-  auto lc = ar.r.u32();
-  if (lc > 100000) throw std::runtime_error("invalid layer count");
+  // SketchUp 3 writes no layer count: the layer records simply run until the
+  // definition-list anchor, which the loop below already stops at (a
+  // back-ref, not a layer record).
+  uint32_t lc = ver < kFirstV4 ? (1u << 30) : ar.r.u32();
+  if (lc > 100000 && ver >= kFirstV4) throw std::runtime_error("invalid layer count");
   // lc counts REAL layers. SketchUp 2020 interleaves a null object-ref
   // after each layer record (a separator, not a layer), so counting reads
   // walks off mid-list on files with several layers; count parsed layers
@@ -1674,13 +1731,17 @@ RawParsed parse_legacy(const ByteBuffer& data, const ParseOptions& o) {
       x->transparency = std::clamp(1.0 - v->opacity, 0.0, 1.0);
       x->colorized = v->colorized;
       x->colorize_type = v->colorized ? 1 : 0;
-      if (v->tex_dib) {
+      if (v->tex_dib || v->inline_tex) {
         RawTexture t;
         t.filename = v->tex_file;
         t.x_scale = v->tw;
         t.y_scale = v->th;
-        auto di = ar.slots.find(v->tex_dib);
-        if (di != ar.slots.end() && di->second.v) t.data = di->second.v->blob;
+        if (v->inline_tex) {
+          t.data = v->blob;
+        } else {
+          auto di = ar.slots.find(v->tex_dib);
+          if (di != ar.slots.end() && di->second.v) t.data = di->second.v->blob;
+        }
         if (t.filename.empty())
           t.filename =
               v->name + (t.data && t.data->size() >= 4 && (*t.data)[0] == 0x89 ? ".png" : ".jpg");

@@ -511,7 +511,8 @@ class DrawBase {
 class PreambleResult {
   final Object? attrs;
   final int pid;
-  PreambleResult(this.attrs, this.pid);
+  final int? attrsSlot;
+  PreambleResult(this.attrs, this.pid, [this.attrsSlot]);
 }
 
 class VertexRec {
@@ -581,6 +582,7 @@ class MaterialRec {
   double opacity = 0;
   int useOpacity = 0;
   int? texDib;
+  Uint8List? texData;
   double texW = 0, texH = 0;
   String texFile = '';
   bool colorized = false;
@@ -592,7 +594,8 @@ class TextureBlockRec {
   Uint8List rgba;
   double opacity;
   int useOpacity;
-  int texDib;
+  int? texDib;
+  Uint8List? texData;
   double texW, texH;
   String texFile;
   bool colorized;
@@ -601,6 +604,7 @@ class TextureBlockRec {
     required this.opacity,
     required this.useOpacity,
     required this.texDib,
+    this.texData,
     required this.texW,
     required this.texH,
     required this.texFile,
@@ -713,8 +717,25 @@ class InstanceRec {
 }
 
 class LegacyReaders {
+  // SketchUp 3 (header "{3.0.x}") predates several fields every later file
+  // carries. The differences are gated on `ar.ver < firstV4` and were
+  // calibrated byte-by-byte on one real SketchUp-written V3 file (a
+  // synthetic model saved down through SketchUp's own version export) - not
+  // on a corpus - so they are exactly what that file proves and no more
+  // (openskp#284, #407; matches Python's legacy.py `_FIRST_V4`). SketchUp 4
+  // needs none of them: a real V4 file parses with the later layout.
+  static const int firstV4 = 4;
+
+  /// [preamble] for the entity types that carry NO attribute-container
+  /// pointer in a SketchUp 3 file: vertex, loop, edge-use, material, layer.
+  /// (Edge, face, definition, instance and thumbnail still open with one.)
+  static PreambleResult earlyPreamble(Archive ar, LR r) {
+    if (ar.ver < firstV4) return PreambleResult(null, 0);
+    return preamble(ar, r);
+  }
+
   static PreambleResult preamble(Archive ar, LR r) {
-    final (_, __, attrs) = ar.readObject(r, 'CAttributeContainer');
+    final (attrsSlot, __, attrs) = ar.readObject(r, 'CAttributeContainer');
     int pid = 0;
     if (ar.hasPid) {
       final mask = r.u8();
@@ -724,11 +745,17 @@ class LegacyReaders {
         }
       }
     }
-    return PreambleResult(attrs, pid);
+    return PreambleResult(attrs, pid, attrsSlot);
   }
 
   static DrawBase drawbase(Archive ar, LR r) {
-    final b = r.raw(8);
+    // SketchUp 3's draw block is 5 bytes, and they were identical for every
+    // entity in the calibration file - painted and unpainted faces, edges,
+    // groups - so nothing in them is decodable from what we have. Material
+    // comes from the face's own pointer instead (see readFace); report the
+    // rest as unset rather than the meaningless 0x0100 / "hidden" the 8-byte
+    // layout would read out of them.
+    final b = ar.ver < firstV4 ? r.raw(5) : r.raw(8);
     // The layer field is normally a u16 id, but an entity can carry the
     // layer BY OBJECT instead (seen on real 2018 instances): a full inline
     // CLayer record on first use, an escaped back-ref to it on later
@@ -750,6 +777,7 @@ class LegacyReaders {
     } else {
       layer = r.u16();
     }
+    if (ar.ver < firstV4) return DrawBase()..layer = layer;
     return DrawBase()
       ..mat = Tlv.readU16(b, 0)
       ..hidden = b[2]
@@ -759,7 +787,7 @@ class LegacyReaders {
   }
 
   static Object readVertex(Archive ar, LR r) {
-    preamble(ar, r);
+    earlyPreamble(ar, r);
     return VertexRec(r.f64s(3));
   }
 
@@ -813,7 +841,7 @@ class LegacyReaders {
   }
 
   static Object readEdgeUse(Archive ar, LR r) {
-    preamble(ar, r);
+    earlyPreamble(ar, r);
     final (es, _, __) = ar.readObject(r, 'CEdge');
     final sense = r.u8();
     // parent-loop back-ref: the alignment oracle. Read as a RAW file index
@@ -853,7 +881,7 @@ class LegacyReaders {
     final mySlot = ar.nextSlot - 1;
     final prev = ar.currentLoop;
     ar.currentLoop = mySlot;
-    preamble(ar, r);
+    earlyPreamble(ar, r);
     r.raw(2);
     final uses = <EdgeUseRec>[];
     while (true) {
@@ -871,6 +899,13 @@ class LegacyReaders {
   static Object readFace(Archive ar, LR r) {
     final pre = preamble(ar, r);
     final db = drawbase(ar, r);
+    var attrs = pre.attrs;
+    if (ar.ver < firstV4 && attrs is MaterialRec && pre.attrsSlot != null) {
+      // SketchUp 3: the pointer that opens a face is its FRONT MATERIAL
+      // (null for an unpainted face), not an attribute container.
+      db.mat = pre.attrsSlot!;
+      attrs = null;
+    }
     final plane = r.f64s(4);
     final nloops = r.u32();
     if (nloops > 10000) {
@@ -887,7 +922,7 @@ class LegacyReaders {
         plane: plane,
         loops: loops,
         backMat: backMat,
-        attrs: pre.attrs as AttrsRec?);
+        attrs: attrs as AttrsRec?);
   }
 
   static Object readAttrContainer(Archive ar, LR r) {
@@ -935,7 +970,14 @@ class LegacyReaders {
       if (key == '') break;
       entries[key] = _readTyped(r, r.u8());
     }
-    r.u32();
+    // CAttributeNamed's own trailing u32 is a v7+ addition: a real SketchUp
+    // 6 file ends the record at the empty-key terminator with nothing after
+    // it. Reading it unconditionally eats 4 bytes belonging to the next
+    // sibling's own tag, which surfaces many reads later as an unrelated
+    // "back-ref to unwalked slot" (openskp#284 / #385). The class's own
+    // schema is never observed (it is learned from the unwalked pre-model
+    // region), so the file's version is the only signal available.
+    if (ar.ver >= 7) r.u32();
     return DictRec(dictname, entries);
   }
 
@@ -979,7 +1021,7 @@ class LegacyReaders {
   }
 
   static Object readLayer(Archive ar, LR r) {
-    preamble(ar, r);
+    earlyPreamble(ar, r);
     final name = r.utf16();
     final mid = <int>[];
     while (mid.length < 8 && !_bytesEqualAt(r.peek(3), 0, _strMarker)) {
@@ -1001,7 +1043,7 @@ class LegacyReaders {
     }
     final rgba = r.raw(4);
     r.utf16();
-    r.raw(21);
+    r.raw(ar.ver < firstV4 ? 17 : 21); // SketchUp 3's tail is 4 bytes shorter
     ar.skipClayerColourExt();
     ar.skipClayerParentRef(ar.currentObjSlot);
     return LayerRec(
@@ -1019,12 +1061,23 @@ class LegacyReaders {
   /// on the Texture itself, as render plugins do) and, from v17 on, the
   /// persistent-id mask. Callers read the flag as a u16, so step back over
   /// its high byte - the first byte of that preamble.
+  ///
+  /// SketchUp 3 has neither: the image follows the flag directly as a bare
+  /// subtype/length/bytes record - no preamble, no object tag, and so no
+  /// store-map slot (`texDib` is null; the bytes ride along as `texData`).
   static TextureBlockRec _textureBlock(Archive ar, LR r) {
-    r.pos -= 1;
-    preamble(ar, r);
-    final (s, _, dib) = ar.readObject(r, 'CDib');
-    if (dib is! DibRec) {
-      throw LegacyParseError('texture object is not a dib ${r.ctx()}');
+    int? s;
+    Uint8List? inlineData;
+    if (ar.ver < firstV4) {
+      inlineData = (readDib(ar, r) as DibRec).data;
+    } else {
+      r.pos -= 1;
+      preamble(ar, r);
+      final (slot, _, dib) = ar.readObject(r, 'CDib');
+      if (dib is! DibRec) {
+        throw LegacyParseError('texture object is not a dib ${r.ctx()}');
+      }
+      s = slot;
     }
     // optional u32 between the dib and the 2 x f64 applied size
     final marker = _findBytes(r.data, _strMarker, r.pos, r.pos + 28);
@@ -1049,7 +1102,8 @@ class LegacyReaders {
       rgba: Uint8List.sublistView(avg, 0, 4),
       opacity: opacity,
       useOpacity: useOp,
-      texDib: s!,
+      texDib: s,
+      texData: inlineData,
       texW: w,
       texH: h,
       texFile: fname,
@@ -1058,7 +1112,7 @@ class LegacyReaders {
   }
 
   static Object readMaterial(Archive ar, LR r) {
-    preamble(ar, r);
+    earlyPreamble(ar, r);
     final name = r.utf16();
     final texflag = r.u16();
     final out =
@@ -1078,6 +1132,7 @@ class LegacyReaders {
       out.opacity = tex.opacity;
       out.useOpacity = tex.useOpacity;
       out.texDib = tex.texDib;
+      out.texData = tex.texData;
       out.texW = tex.texW;
       out.texH = tex.texH;
       out.texFile = tex.texFile;
@@ -1129,6 +1184,11 @@ class LegacyReaders {
 
   static Object readThumbnail(Archive ar, LR r) {
     preamble(ar, r);
+    if (ar.ver < firstV4) {
+      // SketchUp 3: a fixed 129-byte camera block, no name, no image.
+      r.raw(129);
+      return ThumbnailRec(null);
+    }
     ar.readObject(r, 'CCamera');
     final (dibSlot, _, __) = ar.readObject(r, 'CDib');
     return ThumbnailRec(dibSlot);
@@ -1428,7 +1488,8 @@ class LegacyReaders {
 
   static Object readDefinition(Archive ar, LR r) {
     preamble(ar, r);
-    r.raw(ar.ver >= 17 ? 22 : 20);
+    // undecoded base block (13 bytes in SketchUp 3)
+    r.raw(ar.ver >= 17 ? 22 : (ar.ver >= firstV4 ? 20 : 13));
     final nlayers = r.u32();
     if (nlayers > 10000) {
       throw LegacyParseError('implausible def layer count ${r.ctx()}');
@@ -1542,7 +1603,6 @@ class LegacyReaders {
   }
 
   static Object readInstance(Archive ar, LR r) {
-    final cls = ar.currentClass;
     final pre = preamble(ar, r);
     final db = drawbase(ar, r);
     final (ds, dn, _) = ar.readObject(r, 'CComponentDefinition');
@@ -1550,15 +1610,18 @@ class LegacyReaders {
       throw LegacyParseError('instance definition ref is $dn ${r.ctx()}');
     }
     final xf = r.f64s(13);
-    final name = r.utf16();
+    // SketchUp 3 instances carry no name string.
+    final name = (ar.ver >= firstV4 || _bytesEqualAt(r.peek(3), 0, _strMarker))
+        ? r.utf16()
+        : '';
 
-    // The trailing instance GUID arrives with CComponentInstance schema 5 /
-    // CGroup schema 1; SketchUp 2013 writes CComponentInstance schema 4,
-    // whose record ends at the name (see openskp#38 / #40).
-    final minSchema = cls == 'CGroup' ? 1 : 5;
-    final schema = cls != null ? ar.classSchema[cls] : null;
-    final guid =
-        (schema == null || schema >= minSchema) ? r.raw(16) : Uint8List(0);
+    // The trailing instance GUID is a version-14 (SketchUp 2014) addition for
+    // BOTH CComponentInstance and CGroup - gated by the file's own version,
+    // not by the class's reported schema. Schema doesn't generalize: a v7
+    // file's CComponentInstance reports schema 6, and CGroup reports schema 1
+    // on every version, so a schema gate is always true for it and forces a
+    // phantom 16-byte read on every pre-2014 group (openskp#284 / #310).
+    final guid = ar.ver >= 14 ? r.raw(16) : Uint8List(0);
 
     return InstanceRec(
         db: db,
@@ -1790,8 +1853,11 @@ class Legacy {
     if (ver >= 17) {
       r.u8();
     }
-    final layerCount = r.u32();
-    if (layerCount > 100000) {
+    // SketchUp 3 writes no layer count: the layer records simply run until
+    // the definition-list anchor, which the loop below already stops at (a
+    // back-ref, not a layer record).
+    final layerCount = ver < LegacyReaders.firstV4 ? (1 << 30) : r.u32();
+    if (layerCount > 100000 && ver >= LegacyReaders.firstV4) {
       throw LegacyParseError('implausible layer count');
     }
     // layerCount counts REAL layers. SketchUp 2020 interleaves a null
@@ -2051,6 +2117,8 @@ class Legacy {
         final dibEnt = v.texDib != null ? slots[v.texDib] : null;
         if (dibEnt != null && dibEnt.value is DibRec) {
           texData = (dibEnt.value as DibRec).data;
+        } else if (v.texData != null) {
+          texData = v.texData;
         }
         final isPng = texData != null &&
             texData.length >= 4 &&

@@ -149,9 +149,9 @@ root-caused to varying depth (tracked in
 
 | SketchUp version | Error | Status |
 |:---|:---|:---|
-| V3 | `expected a string record` | Not investigated further |
+| V3 | `expected a string record` | **Fixed in all 5 languages** ([#407](https://github.com/iamahsanmehmood/openskp/pull/407), ported in [#410](https://github.com/iamahsanmehmood/openskp/issues/410)) - calibrated on one real V3 file; single-material V3 files unverified |
 | V4 | `texture object is not a dib` | Not investigated further |
-| V6 | `definition list misaligned` | Not investigated further |
+| V6 | `definition list misaligned` | **Fixed in all 5 languages** ([#385](https://github.com/iamahsanmehmood/openskp/pull/385), ported in [#410](https://github.com/iamahsanmehmood/openskp/issues/410)) |
 | 2019 | `implausible def entity count` | Not investigated further |
 
 ~~V7, V8, 2013 — `class-ref to non-class slot N (CAttributeNamed)`~~ —
@@ -170,10 +170,13 @@ down to 1 with no error raised at all. Fixed by gating the GUID read on
 the file's real version number (`ar.ver >= 14`) instead of schema;
 verified byte-for-byte identical to the same files' 2014+ output.
 
-This was only investigated against the **Python** legacy MFC reader. Whether
-the other 4 languages' independently-implemented legacy readers hit the same
-files the same way has not been checked — each has its own parser, so a fix
-in one does not imply a fix in the others.
+The three fixes above (the V7/V8/2013 instance-GUID gate, the V6
+attribute-dictionary trailer, and the V3 layout) were first made in the
+**Python** legacy MFC reader. Each language has its own independently
+implemented parser, so a fix in one does not carry over: they were ported to
+the TypeScript, .NET, Dart and C++ readers separately (C++ already had the
+first two), and each port is checked against the same synthetic V3/V6/V7/2014
+fixtures.
 
 If you hit one of these versions (or a new one) in your own files, a real
 repro `.skp` file dramatically speeds up narrowing this down further — see

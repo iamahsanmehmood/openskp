@@ -239,6 +239,8 @@ struct V {
   // dictionary's own key/value pairs, already typed (see Archive::typed()).
   ParsedAttrDict entries;
   std::uint64_t tex_dib{};
+  // SketchUp 3: the texture image sits inline (bytes in `blob`), no store slot.
+  bool inline_tex{};
   bool sense{};
   bool faces_camera{};
   bool shadows_face_sun{};
