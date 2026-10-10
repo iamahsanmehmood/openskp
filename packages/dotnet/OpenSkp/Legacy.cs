@@ -1234,7 +1234,7 @@ namespace OpenSkp
         /// when both live in the same entity list, so the reference can
         /// legitimately point forward. Returns the slot number, or null
         /// for a null reference.</summary>
-        private static int? EntityRef(Archive ar, LR r)
+        internal static int? EntityRef(Archive? ar, LR r)
         {
             ushort tag = r.U16();
             if (tag == 0) return null;
@@ -1407,12 +1407,71 @@ namespace OpenSkp
             // fixed-size skip walks off the rails exactly on large models
             // (found on a real 17 MB SketchUp 2018 file whose dimension
             // sat past object #517k).
+            //
+            // Each connection ref is followed by a second entity ref and two
+            // ref lists, [ref][u32 n1][n1 refs][u32 n2][n2 refs] - the
+            // INSTANCE PATHS of the anchored entity: the groups/components it
+            // lives in. A dimension on loose geometry has a null ref and two
+            // empty lists (the zeros the fixed 42/82-byte blocks used to
+            // skip); one anchored to a vertex inside nested groups carries a
+            // ref per group, and the fixed-size read slid off the record by
+            // exactly those refs - silently truncating the ROOT entity list
+            // after it, because the root reader stops at the first
+            // unreadable item. Every record is 161 fixed bytes plus its refs
+            // (openskp#384, the Python fix; found again on a real SketchUp
+            // 2017 cabinet, openskp#412).
             r.Raw(37);
             EntityRef(ar, r);                // connection point 1 (may be null)
-            r.Raw(42);
+            ConnectionPaths(rr => ar.ReadObject(rr).Slot, r);
+            r.Raw(32);
             EntityRef(ar, r);                // connection point 2 (may be null)
-            r.Raw(82);
+            ConnectionPaths(rr => ar.ReadObject(rr).Slot, r);
+            r.Raw(72);
             return new DimLinearRec { Db = db, Text = text };
+        }
+
+        /// <summary>What follows a dimension connection ref (see
+        /// <see cref="ReadDimLinear"/>): [entity ref][u32 n1][n1 refs][u32 n2]
+        /// [n2 refs]. <paramref name="readNewObject"/> reads a path entry that
+        /// MFC wrote in full (the first time anything pointed at it) and
+        /// returns its slot.</summary>
+        internal static (int? Extra, List<int?> First, List<int?> Second) ConnectionPaths(
+            Func<LR, int?> readNewObject, LR r)
+        {
+            int? extra = EntityRef(null, r);
+            var lists = new List<int?>[2];
+            for (int k = 0; k < 2; k++)
+            {
+                uint count = r.U32();
+                if (count > 1000)
+                {
+                    throw new LegacyParseError($"implausible dimension path length {r.Ctx()}");
+                }
+                var refs = new List<int?>();
+                for (uint i = 0; i < count; i++)
+                {
+                    refs.Add(PathRef(readNewObject, r));
+                }
+                lists[k] = refs;
+            }
+            return (extra, lists[0], lists[1]);
+        }
+
+        /// <summary>One instance of a dimension's path. Usually a reference,
+        /// but MFC writes an object IN FULL the first time anything points at
+        /// it - and a dimension serialized before the group it is anchored in
+        /// carries that whole group right here (the root list later holds a
+        /// back-reference). Read it like any object then, so it is registered
+        /// and the stream stays aligned; return its slot either way.</summary>
+        private static int? PathRef(Func<LR, int?> readNewObject, LR r)
+        {
+            ushort tag = r.PeekU16();
+            bool isNew = tag == 0xFFFF || (tag != 0x7FFF && (tag & 0x8000) != 0);
+            if (tag == 0x7FFF)
+            {
+                isNew = (Tlv.ReadU32(r.Data, r.Pos + 2) & 0x80000000) != 0;
+            }
+            return isNew ? readNewObject(r) : EntityRef(null, r);
         }
 
         public static object ReadText(Archive ar, LR r)

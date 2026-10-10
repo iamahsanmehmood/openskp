@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <cstring>
+#include <functional>
 #include <limits>
 #include <map>
 #include <memory>
@@ -183,6 +184,22 @@ std::string extract_version(const ByteBuffer&);
 bool valid_header(const ByteBuffer&);
 bool is_legacy(const ByteBuffer&);
 bool legacy_instance_has_guid(int ver);
+
+/// What follows a legacy linear dimension's connection ref (openskp#384 /
+/// #412): [entity ref][u32 n1][n1 refs][u32 n2][n2 refs] - the instance paths
+/// of the anchored entity. Read from `pos`; `read_new_object(at)` is called
+/// for a path entry MFC wrote in full (the first time anything pointed at it)
+/// and returns {slot, position just past the object}.
+struct LegacyPathResult {
+  std::optional<std::uint64_t> extra;
+  std::vector<std::optional<std::uint64_t>> first;
+  std::vector<std::optional<std::uint64_t>> second;
+  std::size_t next{};
+};
+
+LegacyPathResult legacy_connection_paths(
+    const ByteBuffer& data, std::size_t pos,
+    const std::function<std::pair<std::uint64_t, std::size_t>(std::size_t)>& read_new_object);
 
 /// Result of `find_count_after_v20_filler`: the recovered count and the
 /// offset just past it.

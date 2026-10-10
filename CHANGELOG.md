@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — TypeScript, .NET, Dart, C++: legacy dimensions anchored inside components no longer cut the root entity list short (openskp#412)
+
+A legacy (pre-2021) linear dimension stores, after each connection ref, a second
+entity ref and two ref lists - the instance paths of the anchored entity, i.e. the
+groups/components it lives in. On loose geometry those are ten zero bytes; anchored
+to geometry inside components they carry a ref per component. The four readers
+still skipped them as fixed 42/82-byte blocks (the Python reader got the real
+layout in #384), so the first path-carrying dimension left the cursor mid-record
+and the root entity list stopped there - with no error, because the root reader
+treats an unreadable item as the end of an over-declared list.
+
+Reported against a real SketchUp 2017 cabinet whose imports into the web viewer
+and FreeCAD were "missing random components": 75 of 96 root instances read, 1,338
+of 2,354 faces, 66 dimensions read as 1. All four readers now match SketchUp's own
+Model Info counts exactly on that file (96 root instances, 175 instances including
+nested, 2,354 faces, 5,671 edges, 66 dimensions). Tests use synthetic bytes - the
+real file is private - covering loose geometry, paths through nested components,
+and a path entry that is a whole newly serialized object (MFC writes an object in
+full the first time anything points at it). The parsed output of every existing
+TypeScript fixture is byte-identical before and after. Note for the FreeCAD
+add-on: its vendored copy of openskp predates #384, so it needs re-vendoring from
+a release that contains this fix.
+
 ### Fixed — TypeScript, .NET, Dart, C++: the legacy readers get the pre-2014 fixes the Python reader already had (openskp#410)
 
 Three layout fixes found while chasing openskp#284 had only landed in Python;
