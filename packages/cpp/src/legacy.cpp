@@ -31,6 +31,76 @@ bool legacy_instance_has_guid(int ver) { return ver >= 14; }
 // file parses with the later layout.
 constexpr int kFirstV4 = 4;
 
+namespace {
+
+// One entity-reference tag at `q`, advancing it: null, a plain 2-byte
+// back-reference, or the 0x7fff big-tag escape. A "new object" form is an
+// error here.
+std::optional<std::uint64_t> read_plain_entity_ref(const ByteBuffer& d, size_t& q) {
+  if (q + 2 > d.size()) throw std::runtime_error("legacy archive truncated");
+  auto tag = read_u16(d, q);
+  q += 2;
+  if (!tag) return std::nullopt;
+  if (tag == 0x7fff) {
+    if (q + 4 > d.size()) throw std::runtime_error("legacy archive truncated");
+    auto big = read_u32(d, q);
+    q += 4;
+    if (big & 0x80000000) throw std::runtime_error("entity ref is a new object");
+    return big;
+  }
+  if (tag == 0xffff || (tag & 0x8000)) throw std::runtime_error("entity ref is a new object");
+  return tag;
+}
+
+}  // namespace
+
+// What follows a legacy linear dimension's connection ref: a second entity
+// ref and two ref lists, [ref][u32 n1][n1 refs][u32 n2][n2 refs] - the
+// INSTANCE PATHS of the anchored entity, i.e. the groups/components it lives
+// in. A dimension on loose geometry has a null ref and two empty lists (ten
+// zero bytes, which the old fixed 42/82-byte blocks skipped); one anchored to
+// a vertex inside nested components carries a ref per component, and a
+// fixed-size read slid off the record by exactly those refs - silently
+// truncating the ROOT entity list after it, because the root reader stops at
+// the first unreadable item. Matches Python's `_connection_paths`
+// (openskp#384; found again on a real SketchUp 2017 cabinet, #412).
+LegacyPathResult legacy_connection_paths(
+    const ByteBuffer& data, std::size_t pos,
+    const std::function<std::pair<std::uint64_t, std::size_t>(std::size_t)>& read_new_object) {
+  LegacyPathResult out;
+  size_t q = pos;
+  out.extra = read_plain_entity_ref(data, q);
+  for (int list = 0; list < 2; ++list) {
+    if (q + 4 > data.size()) throw std::runtime_error("legacy archive truncated");
+    auto count = read_u32(data, q);
+    q += 4;
+    if (count > 1000) throw std::runtime_error("implausible dimension path length");
+    auto& refs = list == 0 ? out.first : out.second;
+    for (uint32_t i = 0; i < count; ++i) {
+      if (q + 2 > data.size()) throw std::runtime_error("legacy archive truncated");
+      // MFC writes an object IN FULL the first time anything points at it, so
+      // a path entry can be a whole NEW object (a dimension serialized before
+      // the group it is anchored in). Read it like any object so it is
+      // registered and the stream stays aligned.
+      auto tag = read_u16(data, q);
+      bool is_new = tag == 0xffff || (tag != 0x7fff && (tag & 0x8000));
+      if (tag == 0x7fff) {
+        if (q + 6 > data.size()) throw std::runtime_error("legacy archive truncated");
+        is_new = (read_u32(data, q + 2) & 0x80000000) != 0;
+      }
+      if (is_new) {
+        auto [slot, next] = read_new_object(q);
+        refs.push_back(slot);
+        q = next;
+      } else {
+        refs.push_back(read_plain_entity_ref(data, q));
+      }
+    }
+  }
+  out.next = q;
+  return out;
+}
+
 // Widest zero padding seen between the v20 filler's empty string and the
 // count that follows it (9 and 13 bytes occur in real files; the ceiling
 // leaves room without letting the probe wander into unrelated records).
@@ -352,6 +422,18 @@ struct Archive {
     }
     if (tag == 0xffff || (tag & 0x8000)) throw std::runtime_error("entity ref is a new object");
     return tag;
+  }
+
+  // The instance paths that follow each connection ref (see
+  // legacy_connection_paths): consumes them, reading a path entry that MFC
+  // wrote in full as a real object.
+  void connection_paths() {
+    auto res = legacy_connection_paths(r.d, r.p, [this](std::size_t at) {
+      r.p = at;
+      auto q = object();
+      return std::make_pair(std::get<0>(q), r.p);
+    });
+    r.p = res.next;
   }
 
   // True when the u16 at `at` starts an object read in one of the
@@ -891,9 +973,11 @@ struct Archive {
       // the rails exactly on large models.
       r.raw(37);
       entity_ref();  // connection point 1 (may be null)
-      r.raw(42);
+      connection_paths();
+      r.raw(32);
       entity_ref();  // connection point 2 (may be null)
-      r.raw(82);
+      connection_paths();
+      r.raw(72);
     } else if (n == "CText") {
       preamble();
       v->k = "text";

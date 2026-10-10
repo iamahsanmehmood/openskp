@@ -1218,7 +1218,7 @@ class LegacyReaders {
   /// label/dimension BEFORE the entity it anchors to when both live in the
   /// same entity list, so the reference can legitimately point forward.
   /// Returns the slot number, or null for a null reference.
-  static int? _entityRef(Archive ar, LR r) {
+  static int? _entityRef(Archive? ar, LR r) {
     final tag = r.u16();
     if (tag == 0) return null;
     if (tag == 0x7FFF) {
@@ -1373,12 +1373,58 @@ class LegacyReaders {
     // the archive holds more than 0x7FFE objects and the 0x7FFF big-tag
     // escape kicks in - so a fixed-size skip walks off the rails exactly
     // on large models.
+    //
+    // Each connection ref is followed by a second entity ref and two ref
+    // lists, [ref][u32 n1][n1 refs][u32 n2][n2 refs] - the INSTANCE PATHS of
+    // the anchored entity: the groups/components it lives in. A dimension on
+    // loose geometry has a null ref and two empty lists (the zeros the fixed
+    // 42/82-byte blocks used to skip); one anchored to a vertex inside nested
+    // groups carries a ref per group, and the fixed-size read slid off the
+    // record by exactly those refs - silently truncating the ROOT entity list
+    // after it, because the root reader stops at the first unreadable item.
+    // Every record is 161 fixed bytes plus its refs (openskp#384, the Python
+    // fix; found again on a real SketchUp 2017 cabinet, openskp#412).
     r.raw(37);
     _entityRef(ar, r); // connection point 1 (may be null)
-    r.raw(42);
+    connectionPaths((rr) => ar.readObject(rr).$1, r);
+    r.raw(32);
     _entityRef(ar, r); // connection point 2 (may be null)
-    r.raw(82);
+    connectionPaths((rr) => ar.readObject(rr).$1, r);
+    r.raw(72);
     return DimLinearRec(db, text);
+  }
+
+  /// What follows a dimension connection ref (see [readDimLinear]):
+  /// `[entity ref][u32 n1][n1 refs][u32 n2][n2 refs]`. [readNewObject] reads a
+  /// path entry that MFC wrote in full (the first time anything pointed at it)
+  /// and returns its slot.
+  static (int?, List<int?>, List<int?>) connectionPaths(
+      int? Function(LR r) readNewObject, LR r) {
+    final extra = _entityRef(null, r);
+    final lists = <List<int?>>[];
+    for (int k = 0; k < 2; k++) {
+      final count = r.u32();
+      if (count > 1000) {
+        throw LegacyParseError('implausible dimension path length ${r.ctx()}');
+      }
+      lists.add([for (int i = 0; i < count; i++) _pathRef(readNewObject, r)]);
+    }
+    return (extra, lists[0], lists[1]);
+  }
+
+  /// One instance of a dimension's path. Usually a reference, but MFC writes
+  /// an object IN FULL the first time anything points at it - and a dimension
+  /// serialized before the group it is anchored in carries that whole group
+  /// right here (the root list later holds a back-reference). Read it like
+  /// any object then, so it is registered and the stream stays aligned;
+  /// return its slot either way.
+  static int? _pathRef(int? Function(LR r) readNewObject, LR r) {
+    final tag = r.peekU16();
+    var isNew = tag == 0xFFFF || (tag != 0x7FFF && (tag & 0x8000) != 0);
+    if (tag == 0x7FFF) {
+      isNew = (Tlv.readU32(r.data, r.pos + 2) & 0x80000000) != 0;
+    }
+    return isNew ? readNewObject(r) : _entityRef(null, r);
   }
 
   static Object readText(Archive ar, LR r) {

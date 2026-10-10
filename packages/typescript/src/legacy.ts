@@ -195,7 +195,8 @@ export function isClassRef(data: Uint8Array, p: number, slot: number): boolean {
 }
 
 /** Byte cursor, matching Python's `_R`. */
-class R {
+/** @internal exported for the dimension-path tests */
+export class R {
   data: Uint8Array;
   pos: number;
   private view: DataView;
@@ -1060,6 +1061,52 @@ function entityRef(ar: Archive, r: R): number | null {
   return tag;
 }
 
+/**
+ * What follows a dimension connection ref (see readDimLinear):
+ * [entity ref][u32 n1][n1 refs][u32 n2][n2 refs]. Returns
+ * [ref, refs1, refs2].
+ * @internal exported for the dimension-path tests
+ */
+export function connectionPaths(
+  ar: Archive,
+  r: R
+): [number | null, number[], number[]] {
+  const extra = entityRef(ar, r);
+  const lists: number[][] = [];
+  for (let k = 0; k < 2; k++) {
+    const count = r.u32();
+    if (count > 1000) {
+      throw new LegacyParseError(`implausible dimension path length ${r.ctx()}`);
+    }
+    const refs: number[] = [];
+    for (let i = 0; i < count; i++) refs.push(pathRef(ar, r));
+    lists.push(refs);
+  }
+  return [extra, lists[0], lists[1]];
+}
+
+/**
+ * One instance of a dimension's path. Usually a reference, but MFC writes an
+ * object IN FULL the first time anything points at it - and a dimension
+ * serialized before the group it is anchored in carries that whole group
+ * right here (the root list later holds a back-reference). Read it like any
+ * object then, so it is registered and the stream stays aligned; return its
+ * slot either way.
+ */
+function pathRef(ar: Archive, r: R): number {
+  const tag = r.peekU16();
+  let isNew = tag === 0xffff || (tag !== 0x7fff && (tag & 0x8000) !== 0);
+  if (tag === 0x7fff) {
+    const view = new DataView(r.data.buffer, r.data.byteOffset, r.data.byteLength);
+    isNew = (view.getUint32(r.pos + 2, true) & 0x80000000) !== 0;
+  }
+  if (isNew) {
+    const [slot] = ar.readObject(r);
+    return slot as number;
+  }
+  return entityRef(ar, r) as number;
+}
+
 function readRelationship(ar: Archive, r: R): any {
   // two object pointers (small maps: two u16 back-refs - which read like
   // the "u32" of the public notes; big maps escalate them to big-tags).
@@ -1189,12 +1236,25 @@ function readDimLinear(ar: Archive, r: R): any {
   // the archive holds more than 0x7FFE objects and the 0x7FFF big-tag
   // escape kicks in - so a fixed-size skip walks off the rails exactly on
   // large models.
+  //
+  // Each connection ref is followed by a second entity ref and two ref
+  // lists, [ref][u32 n1][n1 refs][u32 n2][n2 refs] - the INSTANCE PATHS of
+  // the anchored entity: the groups/components it lives in. A dimension on
+  // loose geometry has a null ref and two empty lists (the zeros the fixed
+  // 42/82-byte blocks used to skip); one anchored to a vertex inside nested
+  // groups carries a ref per group, and the fixed-size read slid off the
+  // record by exactly those refs - silently truncating the ROOT entity list
+  // after it, because the root reader stops at the first unreadable item.
+  // Every record is 161 fixed bytes plus its refs (openskp#384, the Python
+  // fix; found again on a real SketchUp 2017 cabinet, openskp#412).
   r.raw(37);
   const c1 = entityRef(ar, r); // connection point 1 (may be null)
-  r.raw(42);
+  const path1 = connectionPaths(ar, r);
+  r.raw(32);
   const c2 = entityRef(ar, r); // connection point 2 (may be null)
-  r.raw(82);
-  return { k: 'dimension', db, text, connect: [c1, c2] };
+  const path2 = connectionPaths(ar, r);
+  r.raw(72);
+  return { k: 'dimension', db, text, connect: [c1, c2], paths: [path1, path2] };
 }
 
 function readText(ar: Archive, r: R): any {
