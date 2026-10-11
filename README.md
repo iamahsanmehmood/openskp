@@ -81,6 +81,8 @@ OpenSKP isn't just a library — it's the SketchUp-parsing engine behind real, a
 |:--------|:-------------|:---------------------|
 | <img width="82" height="69" alt="image" src="https://frame-smart.com/assets/img/logo.png" /> [FrameSmart](https://frame-smart.com/) | A 3D collaboration platform for viewing, sharing, and collaborating on 3D models together with their metadata (IFC, SketchUp, and more) — hosted on Linux, with nearly 200 active users. | Powers FrameSmart's entire SketchUp import pipeline, end to end. |
 |<img width="82" height="69" alt="image" src="https://ingetrazo.com/images/logo.png" /> [IngeTrazo](https://ingetrazo.com/) | A free, Linux-first 3D modeler for civil engineering and architecture — a SketchUp alternative with a BIM → IFC bridge. | Replaced IngeTrazo's Wine + proprietary SketchUp DLL dependency as its native `.skp` import backend. |
+| <picture><source media="(prefers-color-scheme: dark)" srcset="assets/users/rayscaper-dark.svg" /><img width="120" alt="Rayscaper" src="assets/users/rayscaper-light.svg" /></picture> [Rayscaper](https://rayscaper.com/) | A photorealistic render plugin for SketchUp that updates live as you model. | Reads `.skp` models through OpenSKP. |
+| <picture><source media="(prefers-color-scheme: dark)" srcset="assets/users/modlumi-dark.svg" /><img width="120" alt="Modlumi" src="assets/users/modlumi-light.svg" /></picture> [Modlumi](https://modlumi.com/) | A practical 3D modeling app for independent designers and craftspeople, on Windows and in the browser. | Opens and imports existing `.skp` models through OpenSKP. |
 
 Using OpenSKP in your own project? [Open an issue](https://github.com/iamahsanmehmood/openskp/issues) or a PR to add it here.
 
