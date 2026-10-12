@@ -216,7 +216,6 @@ namespace OpenSkp.Tests
                 for (int k = 0; k < a.Matrix.Count; k++) Assert.True(Math.Abs(a.Matrix[k] - b.Matrix[k]) < 1e-9);
             }
         }
-    
 
         // ── single-material V3 (slot-base probe path) ─────────────────
 
@@ -239,5 +238,5 @@ namespace OpenSkp.Tests
             Assert.Single(faces);
             Assert.Equal(model.Materials[0].Id, faces[0].MaterialId);
         }
-}
+    }
 }
