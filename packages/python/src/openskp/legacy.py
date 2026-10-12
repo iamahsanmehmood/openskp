@@ -1600,9 +1600,16 @@ def _probe_layer_anchor_bases(data: bytes, ver: int, start: int,
     boot.r.u32()
     if ver >= 17:
         boot.r.u8()
-    layer_count = boot.r.u32()
-    if not 1 <= layer_count <= 100000:
-        raise LegacyParseError("implausible layer count in base probe")
+    if ver < _FIRST_V4:
+        # SketchUp 3 writes no layer count: the layer records simply run
+        # until the definition-list anchor, which _collect_trailing_layers
+        # (below) already stops at. Reading a count here would consume the
+        # first layer record and reject every single-material V3 file.
+        layer_count = 0
+    else:
+        layer_count = boot.r.u32()
+        if not 1 <= layer_count <= 100000:
+            raise LegacyParseError("implausible layer count in base probe")
     layer_slots = []
     for _ in range(layer_count):
         s, _, _ = boot.read_object(boot.r, expect='CLayer')

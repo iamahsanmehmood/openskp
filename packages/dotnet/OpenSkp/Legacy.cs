@@ -1935,10 +1935,18 @@ namespace OpenSkp
             {
                 boot.R.U8();
             }
-            uint layerCount = boot.R.U32();
-            if (layerCount < 1 || layerCount > 100000)
+            // SketchUp 3 writes no layer count: the layer records simply run
+            // until the definition-list anchor, which CollectTrailingLayers
+            // (below) already stops at. Reading a count here would consume the
+            // first layer record and reject every single-material V3 file.
+            uint layerCount = 0;
+            if (ver >= LegacyReaders.FirstV4)
             {
-                throw new LegacyParseError("implausible layer count in base probe");
+                layerCount = boot.R.U32();
+                if (layerCount < 1 || layerCount > 100000)
+                {
+                    throw new LegacyParseError("implausible layer count in base probe");
+                }
             }
             var layerSlots = new List<int>();
             for (int i = 0; i < layerCount; i++)

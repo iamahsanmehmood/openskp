@@ -1297,9 +1297,16 @@ std::vector<uint64_t> probe_layer_anchor_bases(const ByteBuffer& data, int ver, 
   for (uint32_t i = 0; i < mat_count; ++i) boot.object("CMaterial");
   boot.r.u32();
   if (ver >= 17) boot.r.u8();
-  auto layer_count = boot.r.u32();
-  if (layer_count < 1 || layer_count > 100000)
-    throw std::runtime_error("implausible layer count in base probe");
+  // SketchUp 3 writes no layer count: the layer records simply run until the
+  // definition-list anchor, which collect_trailing_layers (below) already stops
+  // at. Reading a count here would consume the first layer record and reject
+  // every single-material V3 file.
+  uint32_t layer_count = 0;
+  if (ver >= kFirstV4) {
+    layer_count = boot.r.u32();
+    if (layer_count < 1 || layer_count > 100000)
+      throw std::runtime_error("implausible layer count in base probe");
+  }
   std::vector<uint64_t> layer_slots;
   for (uint32_t i = 0; i < layer_count; ++i) {
     auto q = boot.object("CLayer");

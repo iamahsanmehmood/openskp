@@ -1797,9 +1797,16 @@ class Legacy {
     if (ver >= 17) {
       boot.r.u8();
     }
-    final layerCount = boot.r.u32();
-    if (layerCount < 1 || layerCount > 100000) {
-      throw LegacyParseError('implausible layer count in base probe');
+    // SketchUp 3 writes no layer count: the layer records simply run until the
+    // definition-list anchor, which collectTrailingLayers (below) already stops
+    // at. Reading a count here would consume the first layer record and reject
+    // every single-material V3 file.
+    var layerCount = 0;
+    if (ver >= LegacyReaders.firstV4) {
+      layerCount = boot.r.u32();
+      if (layerCount < 1 || layerCount > 100000) {
+        throw LegacyParseError('implausible layer count in base probe');
+      }
     }
     final layerSlots = <int>[];
     for (int i = 0; i < layerCount; i++) {
