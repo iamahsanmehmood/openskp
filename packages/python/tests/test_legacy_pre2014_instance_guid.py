@@ -83,7 +83,7 @@ class TestPre2014InstanceGuidParse:
         v7 = SkpFile.open(str(V7)).parse()
         v14 = SkpFile.open(str(V2014)).parse()
 
-        assert len(v7.definitions) == len(v14.definitions) == 3
+        assert len(v7.definitions) == len(v14.definitions) == 4
         assert len(v7.layers) == len(v14.layers) == 2
 
         assert [i.name for i in v7.root.instances] == \
@@ -91,7 +91,7 @@ class TestPre2014InstanceGuidParse:
 
         v7_defs = {d.name: d for d in v7.definitions.values()}
         v14_defs = {d.name: d for d in v14.definitions.values()}
-        assert set(v7_defs) == set(v14_defs) == {"Frame", "Panel", "Post"}
+        assert set(v7_defs) == set(v14_defs) == {"Frame", "InnerFrame", "Panel", "Post"}
         for name, v7_def in v7_defs.items():
             v14_def = v14_defs[name]
             assert len(v7_def.faces) == len(v14_def.faces)
@@ -110,7 +110,7 @@ class TestPre2014InstanceGuidParse:
         inner = panel.instances[0]
         assert inner.name == "InnerFrame"
         assert inner.attribute_dictionaries == {
-            "test-info": {"role": "brace", "count": 3, "length": 12.5},
+            "fbd-info": {"role": "bracing", "count": 3},
         }
 
     def test_v2014_instance_guids_are_still_read(self):

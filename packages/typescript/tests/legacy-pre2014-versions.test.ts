@@ -12,10 +12,11 @@ import { isLegacy } from "../src/legacy";
  * Fixtures are one small synthetic model (4 component definitions
  * InnerFrame / Frame / Panel / Post; InnerFrame placed as a nested group
  * inside Panel; 10 root instances; a custom "Roof" layer; Frame's face
- * painted flat red) built with the OpenSKP writer and saved down through a
- * real SketchUp version-downgrade export - to v3, v6, v7, and left at 2014.
- * SketchUp's default template rides along as extra materials/layers. No
- * private content.
+ * painted flat red) built with the OpenSKP writer. The v6 file is a real
+ * SketchUp version-downgrade export of it; the v3, v7 and 2014 files are that
+ * v6 file re-saved at each version through the installed SketchUp library, so
+ * they are small (8-12 KB) and carry no default-template materials or
+ * images. No private content.
  *
  * Each of these used to either throw or - worse - "succeed" with most of the
  * model silently missing, so the tests assert parsed structure, not just the
@@ -75,13 +76,13 @@ describe("pre-2014 instance GUID gate (version >= 14, not class schema)", () => 
   it("v7 and 2014 parse to the same structure", () => {
     const v7 = parse("legacy_v7_synthetic.skp");
     const v14 = parse("legacy_v2014_synthetic.skp");
-    expect(v7.definitions.size).toBe(3);
-    expect(v14.definitions.size).toBe(3);
+    expect(v7.definitions.size).toBe(4);
+    expect(v14.definitions.size).toBe(4);
     expect(instanceNames(v7)).toEqual(instanceNames(v14));
     const d7 = defsByName(v7);
     const d14 = defsByName(v14);
-    expect([...d7.keys()].sort()).toEqual(["Frame", "Panel", "Post"]);
-    expect([...d14.keys()].sort()).toEqual(["Frame", "Panel", "Post"]);
+    expect([...d7.keys()].sort()).toEqual(["Frame", "InnerFrame", "Panel", "Post"]);
+    expect([...d14.keys()].sort()).toEqual(["Frame", "InnerFrame", "Panel", "Post"]);
     for (const [name, def] of d7) {
       const other = d14.get(name)!;
       expect(def.faces.size).toBe(other.faces.size);
@@ -204,18 +205,6 @@ describe("SketchUp 3 layout", () => {
     const names = parse("legacy_v3_synthetic.skp").layers.map((l) => l.name);
     expect(names).toContain("Layer0");
     expect(names).toContain("Roof");
-  });
-
-  it("reads the embedded template textures as inline JPEGs", () => {
-    const model = parse("legacy_v3_synthetic.skp");
-    expect(model.materials.length).toBe(35);
-    const textured = model.materials.filter((m) => m.texture);
-    expect(textured.length).toBe(10);
-    for (const m of textured) {
-      const data = m.texture!.data;
-      expect(Array.from(data.slice(0, 3))).toEqual([0xff, 0xd8, 0xff]);
-      expect(Array.from(data.slice(-2))).toEqual([0xff, 0xd9]);
-    }
   });
 
   it("matches the v6 file built from the same source", () => {

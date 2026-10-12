@@ -16,9 +16,9 @@ namespace {
 // as legacy_v6_synthetic.skp (4 component definitions - InnerFrame, Frame,
 // Panel, Post; InnerFrame also placed as a nested group inside Panel; 10 root
 // instances; a custom "Roof" layer; Frame's face painted flat red) built with
-// the OpenSKP writer and saved down to SketchUp 3 through a real SketchUp
-// version-downgrade export. SketchUp's default template rides along: ~35
-// materials, 10 of them with embedded JPEG textures. No private content.
+// the OpenSKP writer and re-saved at SketchUp 3 through the installed
+// SketchUp library. It is small (8 KB) and carries no default-template
+// materials or images. No private content.
 //
 // A V3 file differs from every later era in a dozen small ways (see
 // `kFirstV4` in legacy.cpp). Parsing without an exception was NOT enough to
@@ -109,26 +109,6 @@ TEST(LegacyV3Format, KeepsTheCustomLayer) {
   for (const auto& l : model.layers) names.insert(l.name);
   EXPECT_TRUE(names.count("Layer0"));
   EXPECT_TRUE(names.count("Roof"));
-}
-
-TEST(LegacyV3Format, EmbeddedTemplateTexturesAreReadAsInlineImages) {
-  auto model = SkpFile::open(test::fixture("legacy_v3_synthetic.skp")).parse();
-  EXPECT_EQ(model.materials.size(), 35u);
-  int textured = 0;
-  for (const auto& m : model.materials) {
-    if (!m.texture) continue;
-    ++textured;
-    ASSERT_TRUE(m.texture->data.has_value());
-    const auto& d = *m.texture->data;
-    ASSERT_GE(d.size(), 5u);
-    // a real JPEG, not skipped bytes - ends exactly at its end-of-image marker
-    EXPECT_EQ(d[0], 0xff);
-    EXPECT_EQ(d[1], 0xd8);
-    EXPECT_EQ(d[2], 0xff);
-    EXPECT_EQ(d[d.size() - 2], 0xff);
-    EXPECT_EQ(d[d.size() - 1], 0xd9);
-  }
-  EXPECT_EQ(textured, 10);
 }
 
 TEST(LegacyV3Format, MatchesSketchUp6BuiltFromTheSameSource) {

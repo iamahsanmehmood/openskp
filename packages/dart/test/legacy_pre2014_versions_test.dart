@@ -12,10 +12,11 @@ import 'package:test/test.dart';
 /// Fixtures are one small synthetic model (4 component definitions
 /// InnerFrame / Frame / Panel / Post; InnerFrame placed as a nested group
 /// inside Panel; 10 root instances; a custom "Roof" layer; Frame's face
-/// painted flat red) built with the OpenSKP writer and saved down through a
-/// real SketchUp version-downgrade export - to v3, v6, v7, and left at 2014.
-/// SketchUp's default template rides along as extra materials/layers. No
-/// private content.
+/// painted flat red) built with the OpenSKP writer. The v6 file is a real
+/// SketchUp version-downgrade export of it; the v3, v7 and 2014 files are that
+/// v6 file re-saved at each version through the installed SketchUp library, so
+/// they are small (8-12 KB) and carry no default-template materials or
+/// images. No private content.
 ///
 /// Each of these used to either throw or - worse - "succeed" with most of
 /// the model silently missing, so the tests assert parsed structure, not
@@ -64,13 +65,13 @@ void main() {
     test('v7 and 2014 parse to the same structure', () {
       final v7 = parse('legacy_v7_synthetic.skp');
       final v14 = parse('legacy_v2014_synthetic.skp');
-      expect(v7.definitions.length, 3);
-      expect(v14.definitions.length, 3);
+      expect(v7.definitions.length, 4);
+      expect(v14.definitions.length, 4);
       expect(instanceNames(v7), instanceNames(v14));
       final d7 = byName(v7);
       final d14 = byName(v14);
-      expect(sorted(d7.keys), ['Frame', 'Panel', 'Post']);
-      expect(sorted(d14.keys), ['Frame', 'Panel', 'Post']);
+      expect(sorted(d7.keys), ['Frame', 'InnerFrame', 'Panel', 'Post']);
+      expect(sorted(d14.keys), ['Frame', 'InnerFrame', 'Panel', 'Post']);
       d7.forEach((name, def) {
         expect(def.faces.length, d14[name]!.faces.length);
         expect(def.instances.map((i) => i.name).toList(),
@@ -177,18 +178,6 @@ void main() {
           parse('legacy_v3_synthetic.skp').layers.map((l) => l.name).toList();
       expect(names, contains('Layer0'));
       expect(names, contains('Roof'));
-    });
-
-    test('reads the embedded template textures as inline JPEGs', () {
-      final model = parse('legacy_v3_synthetic.skp');
-      expect(model.materials.length, 35);
-      final textured = model.materials.where((m) => m.texture != null).toList();
-      expect(textured.length, 10);
-      for (final m in textured) {
-        final data = m.texture!.data!;
-        expect(data.sublist(0, 3), [0xff, 0xd8, 0xff]);
-        expect(data.sublist(data.length - 2), [0xff, 0xd9]);
-      }
     });
 
     test('matches the v6 file built from the same source', () {

@@ -16,10 +16,11 @@ namespace OpenSkp.Tests
     /// Fixtures are one small synthetic model (4 component definitions
     /// InnerFrame / Frame / Panel / Post; InnerFrame placed as a nested group
     /// inside Panel; 10 root instances; a custom "Roof" layer; Frame's face
-    /// painted flat red) built with the OpenSKP writer and saved down through
-    /// a real SketchUp version-downgrade export - to v3, v6, v7, and left at
-    /// 2014. SketchUp's default template rides along as extra
-    /// materials/layers. No private content.
+    /// painted flat red) built with the OpenSKP writer. The v6 file is a real
+    /// SketchUp version-downgrade export of it; the v3, v7 and 2014 files are
+    /// that v6 file re-saved at each version through the installed SketchUp
+    /// library, so they are small (8-12 KB) and carry no default-template
+    /// materials or images. No private content.
     ///
     /// Each of these used to either throw or - worse - "succeed" with most of
     /// the model silently missing, so the tests assert parsed structure, not
@@ -57,13 +58,13 @@ namespace OpenSkp.Tests
         {
             var v7 = Parse("legacy_v7_synthetic.skp");
             var v14 = Parse("legacy_v2014_synthetic.skp");
-            Assert.Equal(3, v7.Definitions.Count);
-            Assert.Equal(3, v14.Definitions.Count);
+            Assert.Equal(4, v7.Definitions.Count);
+            Assert.Equal(4, v14.Definitions.Count);
             Assert.Equal(InstanceNames(v7), InstanceNames(v14));
             var d7 = ByName(v7);
             var d14 = ByName(v14);
-            Assert.Equal(new[] { "Frame", "Panel", "Post" }, d7.Keys.OrderBy(k => k));
-            Assert.Equal(new[] { "Frame", "Panel", "Post" }, d14.Keys.OrderBy(k => k));
+            Assert.Equal(new[] { "Frame", "InnerFrame", "Panel", "Post" }, d7.Keys.OrderBy(k => k, StringComparer.Ordinal));
+            Assert.Equal(new[] { "Frame", "InnerFrame", "Panel", "Post" }, d14.Keys.OrderBy(k => k, StringComparer.Ordinal));
             foreach (var kv in d7)
             {
                 Assert.Equal(kv.Value.Faces.Count, d14[kv.Key].Faces.Count);
@@ -174,22 +175,6 @@ namespace OpenSkp.Tests
             var names = Parse("legacy_v3_synthetic.skp").Layers.Select(l => l.Name).ToList();
             Assert.Contains("Layer0", names);
             Assert.Contains("Roof", names);
-        }
-
-        [Fact]
-        public void V3ReadsEmbeddedTemplateTexturesAsInlineJpegs()
-        {
-            var model = Parse("legacy_v3_synthetic.skp");
-            Assert.Equal(35, model.Materials.Count);
-            var textured = model.Materials.Where(m => m.Texture != null).ToList();
-            Assert.Equal(10, textured.Count);
-            foreach (var m in textured)
-            {
-                var data = m.Texture!.Data;
-                Assert.NotNull(data);
-                Assert.Equal(new byte[] { 0xFF, 0xD8, 0xFF }, data!.Take(3));
-                Assert.Equal(new byte[] { 0xFF, 0xD9 }, data.Skip(data.Length - 2));
-            }
         }
 
         [Fact]

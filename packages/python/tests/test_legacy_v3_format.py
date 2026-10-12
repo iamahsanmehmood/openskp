@@ -6,9 +6,9 @@ legacy_v6_synthetic.skp (4 component definitions - InnerFrame, Frame, Panel,
 Post; InnerFrame also placed as a nested group inside Panel; 10 root
 instances; a custom "Roof" layer; Frame's face painted with a flat red
 material) built with ``openskp.create()`` and saved down to SketchUp 3 through
-a real SketchUp version-downgrade export. SketchUp's default template rides
-along: ~35 materials, 10 of them with embedded JPEG textures, plus a
-"group_label" layer that SketchUp itself added. No private content.
+the installed SketchUp library (re-saved from legacy_v6_synthetic.skp at
+SketchUp 3). It is small (8 KB) and carries no default-template materials or
+images. No private content.
 
 A V3 file differs from every later era in a dozen small ways (see the
 ``_FIRST_V4`` comment in legacy.py). Before this, the very first material
@@ -103,18 +103,9 @@ class TestSketchUp3Parse:
             for f in d.faces.values():
                 assert f.hidden is False
 
-    def test_embedded_template_textures_are_read_as_inline_images(self):
-        model = SkpFile.open(str(V3)).parse()
-        textured = [m for m in model.materials if m.texture is not None]
-        assert len(textured) == 10
-        for m in textured:
-            data = m.texture.data
-            assert data and data[:3] == b"\xff\xd8\xff"  # a real JPEG, not skipped bytes
-            assert data[-2:] == b"\xff\xd9"  # ends exactly at its end-of-image marker
-
     def test_materials_are_all_read(self):
         model = SkpFile.open(str(V3)).parse()
-        assert len(model.materials) == 35
+        assert len(model.materials) == 24
         assert "Red" in {m.name for m in model.materials}
 
 

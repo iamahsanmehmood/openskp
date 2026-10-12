@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — tests: the legacy v3 / v7 / 2014 fixtures shrink from 1.6 MB to 8-12 KB and drop SketchUp's default-template images
+
+The three fixtures added with the pre-2014 fixes were real SketchUp saves, so each
+carried SketchUp's default template along with our test model: ~35 materials, 10
+with embedded JPEG textures (15 JPEG signatures in total), 1.6 MB apiece, copied
+into every language's test folder. Third-party image assets have no business in a
+test fixture. They are now re-saved from the lean `legacy_v6_synthetic.skp` (11 KB,
+no textures) at SketchUp 3, 7 and 2014 through the installed SketchUp library, so
+they hold only our own geometry plus the format's structural bytes. Nothing the
+tests prove is lost: against the pre-fix readers the lean files fail exactly as the
+old ones did (v7 "definition list misaligned", v3 "expected a string record"; 11 of 14
+TypeScript tests fail on the old reader either way). V3's inline-image path is now
+covered by `legacy_v3_textured.skp`, whose image is an 8x8 PNG this project
+generated. The model behind the three files now has 4 definitions and an
+`fbd-info` dictionary where the old v7/2014 pair had 3 definitions and `test-info`;
+expectations were updated to match. Note: removing the files from the tree does not
+remove them from git history.
+
 ### Fixed — all five legacy readers: SketchUp 3 files with fewer than two materials now parse
 
 A legacy file with zero or one material can't use the two-material bootstrap for
