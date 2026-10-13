@@ -7,17 +7,46 @@ String _sanitizeMaterialName(String name) {
   return clean.isEmpty ? 'default_material' : clean;
 }
 
+List<String> _materialNames(Scene scene) {
+  final bases = <String>[];
+  for (var i = 0; i < scene.gltfMaterials.length; i++) {
+    final mat = scene.gltfMaterials[i];
+    bases.add(_sanitizeMaterialName(mat['name'] as String? ?? 'Material_' + i.toString()));
+  }
+  final reserved = bases.toSet();
+  final used = <String>{};
+  final names = <String>[];
+  for (var i = 0; i < bases.length; i++) {
+    final base = bases[i];
+    var name = base;
+    if (used.contains(name)) {
+      final stem = base + '_' + (i + 1).toString();
+      name = stem;
+      var suffix = 1;
+      while (used.contains(name) || reserved.contains(name)) {
+        name = stem + '_' + suffix.toString();
+        suffix++;
+      }
+    }
+    used.add(name);
+    names.add(name);
+  }
+  return names;
+}
+
 /// Convert a baked [Scene]'s materials into Wavefront MTL text representation.
+/// Names are case-sensitive. Collisions gain _<1-based material index>
+/// and, when needed, an additional _<n> suffix. Other names stay unchanged.
 String toMtl(Scene scene) {
   final buffer = StringBuffer();
   buffer.writeln('# OpenSKP MTL Material Library Export');
   buffer.writeln('# Materials: ${scene.gltfMaterials.length}');
   buffer.writeln();
 
+  final names = _materialNames(scene);
   for (var idx = 0; idx < scene.gltfMaterials.length; idx++) {
     final mat = scene.gltfMaterials[idx];
-    final rawName = mat['name'] as String? ?? 'Material_$idx';
-    final matName = _sanitizeMaterialName(rawName);
+    final matName = names[idx];
 
     final pbr = mat['pbrMetallicRoughness'] as Map<String, dynamic>? ?? {};
     final baseColor = (pbr['baseColorFactor'] as List?)?.cast<num>() ?? [0.8, 0.8, 0.8, 1.0];
@@ -47,6 +76,8 @@ String toMtl(Scene scene) {
 }
 
 /// Convert a baked [Scene] into Wavefront OBJ text representation.
+/// Names are case-sensitive. Collisions gain _<1-based material index>
+/// and, when needed, an additional _<n> suffix. Other names stay unchanged.
 String toObj(Scene scene, {String? mtlFilename}) {
   final buffer = StringBuffer();
   buffer.writeln('# OpenSKP OBJ Export');
@@ -56,6 +87,7 @@ String toObj(Scene scene, {String? mtlFilename}) {
   }
   buffer.writeln();
 
+  final names = _materialNames(scene);
   var vertOffset = 1;
   var uvOffset = 1;
   var normOffset = 1;
@@ -90,8 +122,7 @@ String toObj(Scene scene, {String? mtlFilename}) {
 
     final matIdx = prim.materialIndex;
     if (matIdx >= 0 && matIdx < scene.gltfMaterials.length) {
-      final matRaw = scene.gltfMaterials[matIdx]['name'] as String? ?? 'Material_$matIdx';
-      buffer.writeln('usemtl ${_sanitizeMaterialName(matRaw)}');
+      buffer.writeln('usemtl ${names[matIdx]}');
     }
 
     final triCount = prim.indices.length ~/ 3;

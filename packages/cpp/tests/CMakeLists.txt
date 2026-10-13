@@ -26,6 +26,7 @@ add_executable(
   lowlevel_test.cpp
   meta_units_test.cpp
   obj_export_test.cpp
+  obj_material_names_test.cpp
   observability_test.cpp
   pages_dimensions_test.cpp
   parser_test.cpp

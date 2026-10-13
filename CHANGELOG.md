@@ -25,6 +25,16 @@ generated. The model behind the three files now has 4 definitions and an
 expectations were updated to match. Note: removing the files from the tree does not
 remove them from git history.
 
+### Fixed — all five ports: OBJ material identifiers remain distinct after sanitization (#423)
+
+OBJ/MTL export now reserves sanitized source names before assigning unique
+material identifiers. A colliding name gains `_<1-based material index>`,
+with an additional `_<n>` when that identifier is already used or reserved.
+Both `newmtl` and `usemtl` use the same resolved names. Non-conflicting
+names stay unchanged; comparisons remain case-sensitive. Blank names after
+trimming fall back to `default_material`, while punctuation is replaced with
+underscores as before.
+
 ### Fixed — all five legacy readers: SketchUp 3 files with fewer than two materials now parse
 
 A legacy file with zero or one material can't use the two-material bootstrap for

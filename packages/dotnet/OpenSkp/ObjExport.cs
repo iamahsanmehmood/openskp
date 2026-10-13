@@ -19,8 +19,43 @@ namespace OpenSkp
             return string.IsNullOrEmpty(clean) ? "default_material" : clean;
         }
 
+        private static List<string> MaterialNames(Scene scene)
+        {
+            var bases = new List<string>();
+            for (int i = 0; i < scene.GltfMaterials.Count; i++)
+            {
+                var mat = scene.GltfMaterials[i] as Dictionary<string, object>;
+                string rawName = mat != null && mat.TryGetValue("name", out object? nameObj) && nameObj != null
+                    ? nameObj.ToString()! : $"Material_{i}";
+                bases.Add(SanitizeMaterialName(rawName));
+            }
+
+            var reserved = new HashSet<string>(bases, StringComparer.Ordinal);
+            var used = new HashSet<string>(StringComparer.Ordinal);
+            var names = new List<string>();
+            for (int i = 0; i < bases.Count; i++)
+            {
+                string name = bases[i];
+                if (used.Contains(name))
+                {
+                    string stem = $"{name}_{i + 1}";
+                    name = stem;
+                    int suffix = 1;
+                    while (used.Contains(name) || reserved.Contains(name))
+                    {
+                        name = $"{stem}_{suffix++}";
+                    }
+                }
+                used.Add(name);
+                names.Add(name);
+            }
+            return names;
+        }
+
         /// <summary>
         /// Convert a baked <see cref="Scene"/>'s materials into Wavefront MTL text format.
+        /// Identifiers are case-sensitive; collisions gain _&lt;1-based material index&gt;,
+        /// then an additional _&lt;n&gt; if necessary. Other names remain unchanged.
         /// </summary>
         /// <param name="scene">The baked scene returned by <see cref="SkpFile.BuildScene(string, SkpParseOptions?)"/>.</param>
         /// <returns>The formatted Wavefront MTL text string.</returns>
@@ -33,13 +68,13 @@ namespace OpenSkp
             sb.AppendLine($"# Materials: {scene.GltfMaterials.Count}");
             sb.AppendLine();
 
+            var names = MaterialNames(scene);
             for (int idx = 0; idx < scene.GltfMaterials.Count; idx++)
             {
                 var mat = scene.GltfMaterials[idx] as Dictionary<string, object>;
                 if (mat == null) continue;
 
-                string rawName = mat.TryGetValue("name", out object? nameObj) && nameObj != null ? nameObj.ToString()! : $"Material_{idx}";
-                string matName = SanitizeMaterialName(rawName);
+                string matName = names[idx];
 
                 float r = 0.8f, g = 0.8f, b = 0.8f, a = 1.0f;
                 if (mat.TryGetValue("pbrMetallicRoughness", out object? pbrObj) && pbrObj is Dictionary<string, object> pbr)
@@ -83,6 +118,7 @@ namespace OpenSkp
 
         /// <summary>
         /// Convert a baked <see cref="Scene"/> into Wavefront OBJ text format.
+        /// Material references use the same unique identifiers as the MTL library.
         /// </summary>
         /// <param name="scene">The baked scene returned by <see cref="SkpFile.BuildScene(string, SkpParseOptions?)"/>.</param>
         /// <param name="mtlFilename">Optional companion .mtl filename to reference.</param>
@@ -102,6 +138,7 @@ namespace OpenSkp
 
             sb.AppendLine();
 
+            var names = MaterialNames(scene);
             int vertOffset = 1;
             int uvOffset = 1;
             int normOffset = 1;
@@ -142,8 +179,7 @@ namespace OpenSkp
                     var mat = scene.GltfMaterials[matIdx] as Dictionary<string, object>;
                     if (mat != null)
                     {
-                        string matRaw = mat.TryGetValue("name", out object? nameObj) && nameObj != null ? nameObj.ToString()! : $"Material_{matIdx}";
-                        sb.AppendLine($"usemtl {SanitizeMaterialName(matRaw)}");
+                        sb.AppendLine($"usemtl {names[matIdx]}");
                     }
                 }
 

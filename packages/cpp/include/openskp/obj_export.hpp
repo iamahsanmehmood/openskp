@@ -10,12 +10,15 @@
 namespace openskp {
 
 /// Serialize a baked \ref Scene's materials to Wavefront MTL text representation.
+/// Names are case-sensitive; collisions gain _<1-based material index>
+/// and, if needed, an additional _<n> suffix. Other names stay unchanged.
 ///
 /// \param scene The baked scene returned by \ref SkpFile::build_scene.
 /// \return The formatted MTL text string.
 std::string to_mtl(const Scene& scene);
 
 /// Serialize a baked \ref Scene to Wavefront OBJ text representation.
+/// Material references use the same unique identifiers as the MTL library.
 ///
 /// \param scene The baked scene returned by \ref SkpFile::build_scene.
 /// \param mtl_filename Optional companion .mtl filename to reference.

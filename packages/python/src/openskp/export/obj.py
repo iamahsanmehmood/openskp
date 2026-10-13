@@ -20,8 +20,38 @@ def sanitize_material_name(name: str) -> str:
     return clean or "default_material"
 
 
+def _material_names(scene: Scene) -> list[str]:
+    """Assign unique, case-sensitive MTL identifiers without stealing reserved names.
+
+    A colliding name gains ``_<1-based material index>`` and, if needed,
+    an additional ``_<n>`` suffix. Non-colliding names stay unchanged.
+    """
+    bases = [
+        sanitize_material_name(mat.get("name") or f"Material_{i}")
+        for i, mat in enumerate(scene.gltf_materials)
+    ]
+    reserved = set(bases)
+    used: set[str] = set()
+    result = []
+    for i, base in enumerate(bases):
+        name = base
+        if name in used:
+            stem = f"{base}_{i + 1}"
+            name = stem
+            suffix = 1
+            while name in used or name in reserved:
+                name = f"{stem}_{suffix}"
+                suffix += 1
+        used.add(name)
+        result.append(name)
+    return result
+
+
 def to_mtl(scene: Scene) -> str:
     """Return Wavefront MTL material library text representation for a baked scene.
+
+    Material names are case-sensitive; collisions use ``_<1-based material index>``
+    followed by ``_<n>`` when that candidate is also reserved.
 
     Args:
         scene: The result of :meth:`SkpFile.build_scene`.
@@ -35,9 +65,9 @@ def to_mtl(scene: Scene) -> str:
         "",
     ]
 
+    names = _material_names(scene)
     for idx, mat in enumerate(scene.gltf_materials):
-        raw_name = mat.get("name") or f"Material_{idx}"
-        mat_name = sanitize_material_name(raw_name)
+        mat_name = names[idx]
 
         pbr = mat.get("pbrMetallicRoughness", {})
         base_color = pbr.get("baseColorFactor", [0.8, 0.8, 0.8, 1.0])
@@ -69,6 +99,9 @@ def to_mtl(scene: Scene) -> str:
 def to_obj(scene: Scene, mtl_filename: str | None = None) -> str:
     """Return Wavefront OBJ text representation for a baked scene.
 
+    Material names are case-sensitive; collisions use ``_<1-based material index>``
+    followed by ``_<n>`` when that candidate is also reserved.
+
     Args:
         scene: The result of :meth:`SkpFile.build_scene`.
         mtl_filename: Optional companion `.mtl` filename to reference.
@@ -86,6 +119,7 @@ def to_obj(scene: Scene, mtl_filename: str | None = None) -> str:
 
     lines.append("")
 
+    names = _material_names(scene)
     vert_offset = 1
     uv_offset = 1
     norm_offset = 1
@@ -115,8 +149,7 @@ def to_obj(scene: Scene, mtl_filename: str | None = None) -> str:
 
         mat_idx = prim.material_index
         if 0 <= mat_idx < len(scene.gltf_materials):
-            mat_raw = scene.gltf_materials[mat_idx].get("name") or f"Material_{mat_idx}"
-            lines.append(f"usemtl {sanitize_material_name(mat_raw)}")
+            lines.append(f"usemtl {names[mat_idx]}")
 
         tri_count = len(prim.indices) // 3
         has_uvs = uv_count == vert_count

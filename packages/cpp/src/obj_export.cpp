@@ -1,10 +1,13 @@
 #include "openskp/obj_export.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <fstream>
 #include <iomanip>
 #include <sstream>
 #include <stdexcept>
+#include <unordered_set>
+#include <vector>
 
 namespace openskp {
 
@@ -20,16 +23,45 @@ static std::string sanitize_material_name(const std::string& name) {
   return clean.empty() ? "default_material" : clean;
 }
 
+static std::vector<std::string> unique_material_names(const Scene& scene) {
+  std::vector<std::string> bases;
+  bases.reserve(scene.gltf_materials.size());
+  for (std::size_t i = 0; i < scene.gltf_materials.size(); ++i) {
+    const auto& mat = scene.gltf_materials[i];
+    const std::string raw_name = mat.name.empty() ? "Material_" + std::to_string(i) : mat.name;
+    bases.push_back(sanitize_material_name(raw_name));
+  }
+
+  const std::unordered_set<std::string> reserved(bases.begin(), bases.end());
+  std::unordered_set<std::string> used;
+  std::vector<std::string> names;
+  names.reserve(bases.size());
+  for (std::size_t i = 0; i < bases.size(); ++i) {
+    std::string name = bases[i];
+    if (used.find(name) != used.end()) {
+      const std::string stem = name + "_" + std::to_string(i + 1);
+      name = stem;
+      std::size_t suffix = 1;
+      while (used.find(name) != used.end() || reserved.find(name) != reserved.end()) {
+        name = stem + "_" + std::to_string(suffix++);
+      }
+    }
+    used.insert(name);
+    names.push_back(std::move(name));
+  }
+  return names;
+}
+
 std::string to_mtl(const Scene& scene) {
   std::ostringstream ss;
   ss.imbue(std::locale::classic());
   ss << "# OpenSKP MTL Material Library Export\n";
   ss << "# Materials: " << scene.gltf_materials.size() << "\n\n";
 
+  const auto names = unique_material_names(scene);
   for (std::size_t idx = 0; idx < scene.gltf_materials.size(); ++idx) {
     const auto& mat = scene.gltf_materials[idx];
-    std::string raw_name = mat.name.empty() ? ("Material_" + std::to_string(idx)) : mat.name;
-    std::string mat_name = sanitize_material_name(raw_name);
+    const std::string& mat_name = names[idx];
 
     float r = mat.pbr_metallic_roughness.base_color_factor[0];
     float g = mat.pbr_metallic_roughness.base_color_factor[1];
@@ -66,6 +98,7 @@ std::string to_obj(const Scene& scene, const std::string& mtl_filename) {
   }
   ss << "\n";
 
+  const auto names = unique_material_names(scene);
   std::uint32_t vert_offset = 1;
   std::uint32_t uv_offset = 1;
   std::uint32_t norm_offset = 1;
@@ -93,10 +126,7 @@ std::string to_obj(const Scene& scene, const std::string& mtl_filename) {
 
     std::int32_t mat_idx = prim.material_index;
     if (mat_idx >= 0 && static_cast<std::size_t>(mat_idx) < scene.gltf_materials.size()) {
-      std::string mat_raw = scene.gltf_materials[mat_idx].name.empty()
-                                ? ("Material_" + std::to_string(mat_idx))
-                                : scene.gltf_materials[mat_idx].name;
-      ss << "usemtl " << sanitize_material_name(mat_raw) << "\n";
+      ss << "usemtl " << names[mat_idx] << "\n";
     }
 
     std::size_t tri_count = prim.indices.size() / 3;
