@@ -2,6 +2,7 @@ import { TlvNode, readF64, readI32, readU32, parseVarInt, parseTlvRecursive } fr
 import { ParseOptions, emitLog } from './observability';
 import { EdgeFlagStore } from './edge-flags';
 import { DefaultVertexStore, type VertexStore } from './vertex-store';
+import { DefaultEdgeStore, type EdgeStore } from './edge-store';
 
 export interface GeometryBuilderInstance {
   offset: number;
@@ -38,7 +39,9 @@ export class GeometryBuilder {
   /** id -> [x, y, z]. Backed by a flat Float64Array rather than a Map of
    * boxed arrays: see vertex-store.ts for the memory rationale. */
   vertices: VertexStore = new DefaultVertexStore();
-  edges = new Map<number, [number | null, number | null]>(); // id -> [v1, v2]
+  /** id -> [v1, v2]. Backed by flat typed arrays rather than a Map of
+   * boxed pairs: see edge-store.ts for the memory rationale. */
+  edges: EdgeStore = new DefaultEdgeStore();
   /** Edge id -> display flag byte (D307). Backed by a Uint8Array rather
    * than a Map: the value is one byte, and a Map entry costs ~30. */
   edgeFlags = new EdgeFlagStore();
@@ -790,19 +793,28 @@ export function findNameOverride(
 
 export function reconstructLoopVertices(
   loop: { edgeId: number; orientation: number }[],
-  edges: Map<number, [number | null, number | null]>
+  edges: EdgeStore | Map<number, [number | null, number | null]>
 ): number[] {
   const loopVerts: number[] = [];
-  for (const { edgeId, orientation } of loop) {
-    const edge = edges.get(edgeId);
-    if (edge) {
-      const [v1, v2] = edge;
-      const vStart = orientation === 1 ? v1 : v2;
-      if (vStart !== null) {
-        if (loopVerts.length === 0 || loopVerts[loopVerts.length - 1] !== vStart) {
-          loopVerts.push(vStart);
-        }
+  const pushStart = (vStart: number | null): void => {
+    if (vStart !== null) {
+      if (loopVerts.length === 0 || loopVerts[loopVerts.length - 1] !== vStart) {
+        loopVerts.push(vStart);
       }
+    }
+  };
+  if (edges instanceof Map) {
+    for (const { edgeId, orientation } of loop) {
+      const edge = edges.get(edgeId);
+      if (edge) pushStart(orientation === 1 ? edge[0] : edge[1]);
+    }
+  } else {
+    // The builder's store: read the one endpoint needed without
+    // allocating a tuple per edge use (this runs once per face loop per
+    // instantiation). `undefined` = edge absent, skipped like a Map miss.
+    for (const { edgeId, orientation } of loop) {
+      const vStart = orientation === 1 ? edges.v1(edgeId) : edges.v2(edgeId);
+      if (vStart !== undefined) pushStart(vStart);
     }
   }
   if (loopVerts.length > 1 && loopVerts[0] === loopVerts[loopVerts.length - 1]) {

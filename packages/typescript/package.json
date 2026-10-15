@@ -22,6 +22,7 @@
     "test": "vitest run",
     "bench:instanced": "vite-node tests/bench/instanced-bench.ts",
     "bench:vertex-store": "node --expose-gc ./node_modules/vite-node/dist/cli.mjs tests/bench/vertex-store-bench.ts",
+    "bench:edge-store": "node --expose-gc ./node_modules/vite-node/dist/cli.mjs tests/bench/edge-store-bench.ts",
     "lint": "eslint src/",
     "typecheck": "tsc --noEmit"
   },
