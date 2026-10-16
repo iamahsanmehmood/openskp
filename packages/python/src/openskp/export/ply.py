@@ -17,7 +17,8 @@ def _get_material_rgba(scene: Scene, mat_idx: int) -> tuple[int, int, int, int]:
     """Extract 0-255 uchar RGBA color tuple for a primitive's material index."""
     if 0 <= mat_idx < len(scene.gltf_materials):
         mat = scene.gltf_materials[mat_idx]
-        color = mat.get("baseColorFactor") if isinstance(mat, dict) else getattr(mat, "base_color_factor", None)
+        pbr = mat.get("pbrMetallicRoughness") if isinstance(mat, dict) else None
+        color = pbr.get("baseColorFactor") if isinstance(pbr, dict) else None
         if color and isinstance(color, (list, tuple)) and len(color) >= 4:
             r = max(0, min(255, int(round(color[0] * 255.0))))
             g = max(0, min(255, int(round(color[1] * 255.0))))

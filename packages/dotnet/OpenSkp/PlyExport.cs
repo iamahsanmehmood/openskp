@@ -16,7 +16,9 @@ namespace OpenSkp
             if (matIdx >= 0 && scene.GltfMaterials != null && matIdx < scene.GltfMaterials.Count)
             {
                 var mat = scene.GltfMaterials[matIdx];
-                if (mat is System.Collections.IDictionary dict && dict.Contains("baseColorFactor") && dict["baseColorFactor"] is System.Collections.IEnumerable enumerable)
+                if (mat is System.Collections.IDictionary dict && dict.Contains("pbrMetallicRoughness") &&
+                    dict["pbrMetallicRoughness"] is System.Collections.IDictionary pbr &&
+                    pbr.Contains("baseColorFactor") && pbr["baseColorFactor"] is System.Collections.IEnumerable enumerable)
                 {
                     var list = new System.Collections.Generic.List<float>();
                     foreach (var item in enumerable)

@@ -6,7 +6,8 @@ import 'scene.dart';
 (int, int, int, int) _getMaterialRgba(Scene scene, int matIdx) {
   if (matIdx >= 0 && matIdx < scene.gltfMaterials.length) {
     final mat = scene.gltfMaterials[matIdx];
-    final color = mat['baseColorFactor'];
+    final pbr = mat['pbrMetallicRoughness'];
+    final color = pbr is Map ? pbr['baseColorFactor'] : null;
     if (color is List && color.length >= 4) {
       final r = (color[0] * 255.0).round().clamp(0, 255);
       final g = (color[1] * 255.0).round().clamp(0, 255);

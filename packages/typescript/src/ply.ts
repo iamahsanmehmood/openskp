@@ -13,11 +13,12 @@ function getMaterialRGBA(
     matIdx < scene.gltfMaterials.length
   ) {
     const mat: any = scene.gltfMaterials[matIdx];
-    if (mat && mat.baseColorFactor && Array.isArray(mat.baseColorFactor) && mat.baseColorFactor.length >= 4) {
-      const r = Math.max(0, Math.min(255, Math.round(mat.baseColorFactor[0] * 255)));
-      const g = Math.max(0, Math.min(255, Math.round(mat.baseColorFactor[1] * 255)));
-      const b = Math.max(0, Math.min(255, Math.round(mat.baseColorFactor[2] * 255)));
-      const a = Math.max(0, Math.min(255, Math.round(mat.baseColorFactor[3] * 255)));
+    const color = mat?.pbrMetallicRoughness?.baseColorFactor;
+    if (Array.isArray(color) && color.length >= 4) {
+      const r = Math.max(0, Math.min(255, Math.round(color[0] * 255)));
+      const g = Math.max(0, Math.min(255, Math.round(color[1] * 255)));
+      const b = Math.max(0, Math.min(255, Math.round(color[2] * 255)));
+      const a = Math.max(0, Math.min(255, Math.round(color[3] * 255)));
       return [r, g, b, a];
     }
   }
