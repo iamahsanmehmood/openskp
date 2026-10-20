@@ -16,7 +16,7 @@ import os
 import struct
 import time
 import zipfile
-from typing import Any, Dict
+from typing import Any, Dict, List
 # material.xml/style.xml come from inside the .skp's ZIP container, which is
 # fully attacker-controlled input - stdlib ElementTree expands internal
 # general entities with no limit, making a "billion laughs" DoS payload
@@ -63,6 +63,10 @@ def read_f64(data: bytes, offset: int) -> float:
     return struct.unpack_from('<d', data, offset)[0]
 
 def parse_var_int(data: bytes, offset: int, length: int) -> int:
+    if offset >= 0 and length >= 0 and offset + length <= len(data):
+        return int.from_bytes(data[offset:offset + length], 'little')
+    # Out-of-range read: keep the byte-at-a-time loop so it raises exactly
+    # as it always has.
     val = 0
     for i in range(length):
         val |= data[offset + i] << (8 * i)
@@ -96,6 +100,24 @@ CONTAINER_TAGS = {
 # concat produce the identical 4-char string with no slice and no second
 # pass - see openskp#244.
 _HEX_UPPER = [format(i, '02X') for i in range(256)]
+
+# One C call reads a TLV record header - the 2-byte tag as a little-endian u16
+# plus the u32 length - instead of two byte-index lookups, a string concat and
+# a separate ``read_u32`` -> ``struct.unpack_from`` round trip per record.
+_unpack_header = struct.Struct('<HI').unpack_from
+
+# u16 tag value -> its 4-character uppercase hex tag, i.e. the same string
+# ``_HEX_UPPER[b0] + _HEX_UPPER[b1]`` builds for the two raw tag bytes. Built on
+# first use (about 5 ms, 3 MB) and shared: every node carrying a given tag then
+# points at one string object instead of allocating its own.
+_TAG_STRINGS: List[str] = []
+
+
+def _tag_strings() -> List[str]:
+    if not _TAG_STRINGS:
+        _TAG_STRINGS.extend(
+            _HEX_UPPER[v & 0xFF] + _HEX_UPPER[v >> 8] for v in range(0x10000))
+    return _TAG_STRINGS
 
 
 class _TlvNode:
@@ -156,17 +178,23 @@ def parse_tlv_recursive(data, start, end, container_tags=None, depth=0):
         container_tags = CONTAINER_TAGS
     pos = start
     elements = []
-    while pos <= end - 6:
-        tag_hex = _HEX_UPPER[data[pos]] + _HEX_UPPER[data[pos + 1]]
-        size = read_u32(data, pos+2)
-        if pos + 6 + size > end:
+    append = elements.append
+    tag_strings = _TAG_STRINGS or _tag_strings()
+    unpack_header = _unpack_header
+    last_header = end - 6
+    while pos <= last_header:
+        tag_value, size = unpack_header(data, pos)
+        tag_hex = tag_strings[tag_value]
+        payload_start = pos + 6
+        payload_end = payload_start + size
+        if payload_end > end:
             break
-        children = []
-        is_container = tag_hex in container_tags
-        if is_container and size > 0:
-            children = parse_tlv_recursive(data, pos+6, pos+6+size, container_tags, depth+1)
-        elements.append(_TlvNode(pos, tag_hex, size, children, data, pos + 6, pos + 6 + size))
-        pos += 6 + size
+        if size > 0 and tag_hex in container_tags:
+            children = parse_tlv_recursive(data, payload_start, payload_end, container_tags, depth+1)
+        else:
+            children = []
+        append(_TlvNode(pos, tag_hex, size, children, data, payload_start, payload_end))
+        pos = payload_end
     return elements
 
 
@@ -178,12 +206,12 @@ def _flat_headers(data, start, end):
     once (real production files can have 100k+ top-level definitions)."""
     headers = []
     pos = start
+    tag_strings = _TAG_STRINGS or _tag_strings()
     while pos <= end - 6:
-        tag_hex = _HEX_UPPER[data[pos]] + _HEX_UPPER[data[pos + 1]]
-        size = read_u32(data, pos+2)
+        tag_value, size = _unpack_header(data, pos)
         if pos + 6 + size > end:
             break
-        headers.append((tag_hex, pos, size))
+        headers.append((tag_strings[tag_value], pos, size))
         pos += 6 + size
     return headers
 
@@ -587,7 +615,25 @@ class _GeometryBuilder:
         self.construction_points = []
 
 
+def _find_tag(nodes, target):
+    """``find_child_tag`` for ``_TlvNode`` trees: same pre-order search, but
+    plain attribute reads instead of a ``__getitem__`` call per access."""
+    for n in nodes:
+        if n.tag == target:
+            return n
+        children = n.children
+        if children:
+            res = _find_tag(children, target)
+            if res is not None:
+                return res
+    return None
+
+
 def find_child_tag(nodes, target):
+    for n in nodes:
+        if n.__class__ is _TlvNode:
+            return _find_tag(nodes, target)
+        break
     for n in nodes:
         if n['tag'] == target:
             return n
@@ -622,73 +668,6 @@ def _tlv_find(items, tag):
         if t == tag:
             return p
     return None
-
-
-def _scan_vertex_positions(top, id2pos):
-    """Accumulate every vertex's persistent id (hex) → ``(x, y, z)`` inches.
-
-    A vertex is a ``C409`` record: ``DC05`` holds its persistent id (the
-    ``DE05`` var-int payload), ``C509`` its 3×f64 position. Dimension
-    connection points reference geometry by this id (see
-    :func:`_parse_dimensions`). Ids are unique file-wide, so a single flat map
-    resolves a reference to the exact vertex regardless of which context holds
-    it — model-root dimensions reference model-root vertices (world space).
-    Called once per top-level record: full_parse streams the TLV tree and
-    never holds it whole."""
-
-    def walk(nodes):
-        for el in nodes:
-            if el['tag'] == 'C409':
-                dc05 = find_child_tag(el['children'], 'DC05')
-                c509 = find_child_tag(el['children'], 'C509')
-                if dc05 and c509 and len(c509['payload']) == 24:
-                    p = dc05['payload']
-                    if p[:2] == b'\xde\x05':
-                        idlen = read_u32(p, 2)
-                        idb = p[6:6 + idlen]
-                    else:
-                        idb = p
-                    id2pos[idb.hex()] = struct.unpack('<3d', c509['payload'])
-            if el['children']:
-                walk(el['children'])
-
-    walk([top])
-
-
-def _scan_instance_transforms(top, world):
-    """Accumulate each instance's persistent id (hex) → its WORLD transform
-    (a 13-float matrix), walking the instance tree and composing
-    parent × local at every ``6419``.  Per top-level record, like
-    :func:`_scan_vertex_positions` — an instance chain never crosses
-    top-level records.
-
-    A dimension connects to geometry INSIDE a placed component; its connection
-    reference names the vertex AND the instance holding it (see
-    :func:`_parse_dimensions`). The vertex position is definition-local, so it
-    must be lifted to world by the instance's transform for the dimension to
-    land where the author drew it."""
-
-    def walk(nodes, parent):
-        for el in nodes:
-            if el['tag'] == '6419':
-                d007 = find_child_tag(el['children'], 'D007')
-                dc05 = find_child_tag(d007['children'], 'DC05') if d007 else None
-                iid = None
-                if dc05:
-                    p = dc05['payload']
-                    idb = p[6:6 + read_u32(p, 2)] if p[:2] == b'\xde\x05' else p
-                    iid = idb.hex()
-                m = find_child_tag(el['children'], '6619')
-                mat = list(struct.unpack('<13d', m['payload'])) \
-                    if m and len(m['payload']) == 104 else None
-                here = multiply_matrices(parent, mat) if mat else parent
-                if iid:
-                    world[iid] = here
-                walk(el['children'], here)
-            elif el['children']:
-                walk(el['children'], parent)
-
-    walk([top], None)
 
 
 def _parse_dimensions(model_dat, id2pos, inst_world):
@@ -779,22 +758,6 @@ def _parse_dimensions(model_dat, id2pos, inst_world):
     return dims
 
 
-def _find_page_node(top):
-    """Return the ``0702`` scenes node inside *top*'s subtree, or ``None``.
-
-    Called per top-level record; retaining the (small) 0702 subtree is the
-    only thing kept alive past the streaming loop."""
-    def find(nodes):
-        for el in nodes:
-            if el['tag'] == '0702':
-                return el
-            r = find(el['children'])
-            if r is not None:
-                return r
-        return None
-    return find([top])
-
-
 def _parse_pages(node):
     """Scenes ("pages"). The 0702 node's payload nests 6D60 > 6D61 > one
     7148 record per page:
@@ -869,13 +832,50 @@ def _parse_pages(node):
                     pages.append(page)
     return pages
 
+def _find_all(nodes, target_tag, results):
+    """``find_all_nodes_rec`` for ``_TlvNode`` trees (attribute access)."""
+    for n in nodes:
+        if n.tag == target_tag:
+            results.append(n)
+        children = n.children
+        if children:
+            _find_all(children, target_tag, results)
+
+
 def find_all_nodes_rec(nodes, target_tag, results):
+    for n in nodes:
+        if n.__class__ is _TlvNode:
+            _find_all(nodes, target_tag, results)
+            return
+        break
     for n in nodes:
         if n['tag'] == target_tag:
             results.append(n)
         find_all_nodes_rec(n['children'], target_tag, results)
 
+def _entity_id(node):
+    """``extract_entity_id`` for ``_TlvNode`` trees (attribute access)."""
+    children = node.children
+    for child in children:
+        tag = child.tag
+        if tag == 'DE05':
+            payload = child.payload
+            return parse_var_int(payload, 0, len(payload))
+        if tag == 'DC05':
+            payload = child.payload
+            if payload.startswith(bytes([0xDE, 0x05])):
+                de05_len = read_u32(payload, 2)
+                return parse_var_int(payload, 6, de05_len)
+    for child in children:
+        res = _entity_id(child)
+        if res is not None:
+            return res
+    return None
+
+
 def extract_entity_id(node):
+    if node.__class__ is _TlvNode:
+        return _entity_id(node)
     for child in node['children']:
         if child['tag'] == 'DE05':
             return parse_var_int(child['payload'], 0, len(child['payload']))
@@ -951,85 +951,119 @@ def _extract_uv_transforms(dc05_payload):
     return result[0], result[1]
 
 
+def _node_from_dict(d):
+    """Build a ``_TlvNode`` from a plain ``{'tag', 'children', 'payload', ...}``
+    dict - the shape hand-built nodes (tests, tools) use."""
+    kids = [_node_from_dict(c) for c in d.get('children') or ()]
+    node = _TlvNode(d.get('offset', 0), d['tag'], d.get('size', 0), kids,
+                    None, 0, 0)
+    if 'payload' in d:
+        node._payload = d['payload']
+    elif not kids:
+        node._payload = b''
+    return node
+
+
 def _extract_geometry_from_nodes(elements, builder):
+    """Fill *builder* from a list of TLV nodes. Accepts ``_TlvNode`` trees
+    (the parser's own, read by attribute) or equivalent plain dicts."""
+    if elements and elements[0].__class__ is not _TlvNode:
+        elements = [_node_from_dict(e) for e in elements]
+    _extract_geometry_nodes(elements, builder)
+
+
+# CoEdge sub-record tags inside an A00F payload: A10F = edge id, A20F = orientation.
+_COEDGE_EDGE_TAG = bytes([0xA1, 0x0F])
+_COEDGE_ORIENT_TAG = bytes([0xA2, 0x0F])
+
+
+def _direct_child(children, tag):
+    """First direct child with ``tag``, or ``None`` (no recursion)."""
+    for c in children:
+        if c.tag == tag:
+            return c
+    return None
+
+
+def _extract_geometry_nodes(elements, builder):
     for el in elements:
-        tag = el['tag']
+        tag = el.tag
 
         if tag == 'C409':
-            v_id = extract_entity_id(el)
-            c509 = find_child_tag(el['children'], 'C509')
-            if v_id is not None and c509 and len(c509['payload']) >= 24:
-                x = read_f64(c509['payload'], 0)
-                y = read_f64(c509['payload'], 8)
-                z = read_f64(c509['payload'], 16)
+            v_id = _entity_id(el)
+            c509 = _find_tag(el.children, 'C509')
+            if v_id is not None and c509 and len(c509.payload) >= 24:
+                x = read_f64(c509.payload, 0)
+                y = read_f64(c509.payload, 8)
+                z = read_f64(c509.payload, 16)
                 builder.vertices[v_id] = (x, y, z)
 
         elif tag == 'B80B':
-            e_id = extract_entity_id(el)
+            e_id = _entity_id(el)
             if e_id is not None:
-                v1_node = find_child_tag(el['children'], 'B90B')
-                v2_node = find_child_tag(el['children'], 'BA0B')
-                v1 = parse_var_int(v1_node['payload'], 0, len(v1_node['payload'])) if v1_node else None
-                v2 = parse_var_int(v2_node['payload'], 0, len(v2_node['payload'])) if v2_node else None
+                v1_node = _find_tag(el.children, 'B90B')
+                v2_node = _find_tag(el.children, 'BA0B')
+                v1 = parse_var_int(v1_node.payload, 0, len(v1_node.payload)) if v1_node else None
+                v2 = parse_var_int(v2_node.payload, 0, len(v2_node.payload)) if v2_node else None
                 builder.edges[e_id] = (v1, v2)
                 # D007 -> D307 = edge display flags: base 0x06, plus
                 # 0x01 hidden, 0x08|0x10 soft/smooth (cross-validated
                 # against the same models in the classic MFC format,
                 # 26k edges: 0x06 plain, 0x07 hidden, 0x1E soft+smooth)
-                d007 = next((c for c in el['children'] if c['tag'] == 'D007'), None)
+                d007 = _direct_child(el.children, 'D007')
                 if d007:
-                    d307 = next((c for c in d007['children'] if c['tag'] == 'D307'), None)
-                    if d307 is not None and d307['payload']:
-                        builder.edge_flags[e_id] = d307['payload'][0]
+                    d307 = _direct_child(d007.children, 'D307')
+                    if d307 is not None and d307.payload:
+                        builder.edge_flags[e_id] = d307.payload[0]
                     # D207 = layer id - the same
                     # tag the face branch and the instance branch read. See
                     # _GeometryBuilder.edge_layers.
-                    d207 = next((c for c in d007['children'] if c['tag'] == 'D207'), None)
-                    if d207 and d207['payload']:
+                    d207 = _direct_child(d007.children, 'D207')
+                    if d207 and d207.payload:
                         builder.edge_layers[e_id] = parse_var_int(
-                            d207['payload'], 0, len(d207['payload']))
+                            d207.payload, 0, len(d207.payload))
                 # BB0B = the parent Curve's entity
                 # id (Edge#curve). See _GeometryBuilder.edge_curves.
-                bb0b = find_child_tag(el['children'], 'BB0B')
-                if bb0b is not None and bb0b['payload']:
-                    curve_id = parse_var_int(bb0b['payload'], 0, len(bb0b['payload']))
+                bb0b = _find_tag(el.children, 'BB0B')
+                if bb0b is not None and bb0b.payload:
+                    curve_id = parse_var_int(bb0b.payload, 0, len(bb0b.payload))
                     if curve_id:
                         builder.edge_curves[e_id] = curve_id
 
         elif tag == 'AC0D':
-            f_id = extract_entity_id(el)
+            f_id = _entity_id(el)
             if f_id is not None:
                 normal = (0.0, 0.0, 1.0)
-                ad0d = find_child_tag(el['children'], 'AD0D')
-                if ad0d and len(ad0d['payload']) >= 24:
-                    nx = read_f64(ad0d['payload'], 0)
-                    ny = read_f64(ad0d['payload'], 8)
-                    nz = read_f64(ad0d['payload'], 16)
+                ad0d = _find_tag(el.children, 'AD0D')
+                if ad0d and len(ad0d.payload) >= 24:
+                    nx = read_f64(ad0d.payload, 0)
+                    ny = read_f64(ad0d.payload, 8)
+                    nz = read_f64(ad0d.payload, 16)
                     normal = (nx, ny, nz)
 
-                ae0d = find_child_tag(el['children'], 'AE0D')
+                ae0d = _find_tag(el.children, 'AE0D')
                 loops = []
                 if ae0d:
                     loop_nodes = []
-                    find_all_nodes_rec(ae0d['children'], '9411', loop_nodes)
+                    _find_all(ae0d.children, '9411', loop_nodes)
                     for ln in loop_nodes:
                         co_edges = []
                         co_nodes = []
-                        find_all_nodes_rec(ln['children'], 'A00F', co_nodes)
+                        _find_all(ln.children, 'A00F', co_nodes)
                         for cn in co_nodes:
-                            payload = cn['payload']
+                            payload = cn.payload
+                            payload_len = len(payload)
                             edge_id = None
                             orient = None
                             sub_pos = 0
-                            while sub_pos < len(payload) - 6:
+                            while sub_pos < payload_len - 6:
                                 sub_tag = payload[sub_pos:sub_pos+2]
                                 sub_size = read_u32(payload, sub_pos+2)
-                                if sub_pos + 6 + sub_size <= len(payload):
-                                    val = parse_var_int(payload, sub_pos+6, sub_size)
-                                    if sub_tag == bytes([0xA1, 0x0F]):
-                                        edge_id = val
-                                    elif sub_tag == bytes([0xA2, 0x0F]):
-                                        orient = val
+                                if sub_pos + 6 + sub_size <= payload_len:
+                                    if sub_tag == _COEDGE_EDGE_TAG:
+                                        edge_id = parse_var_int(payload, sub_pos+6, sub_size)
+                                    elif sub_tag == _COEDGE_ORIENT_TAG:
+                                        orient = parse_var_int(payload, sub_pos+6, sub_size)
                                 sub_pos += 6 + sub_size
                             if edge_id is not None and orient is not None:
                                 # Normalize to the documented CoEdge
@@ -1045,11 +1079,11 @@ def _extract_geometry_from_nodes(elements, builder):
                 uv_front = uv_back = None
                 face_hidden = False
                 face_layer_id = None
-                d007 = next((c for c in el['children'] if c['tag'] == 'D007'), None)
+                d007 = _direct_child(el.children, 'D007')
                 if d007:
-                    d107 = next((c for c in d007['children'] if c['tag'] == 'D107'), None)
+                    d107 = _direct_child(d007.children, 'D107')
                     if d107:
-                        face_mat_id = parse_var_int(d107['payload'], 0, len(d107['payload']))
+                        face_mat_id = parse_var_int(d107.payload, 0, len(d107.payload))
                     # D207 is the face's LAYER id -
                     # the instance branch below has always read it as such
                     # (see `inst_layer_id`), but the face branch never did,
@@ -1062,27 +1096,27 @@ def _extract_geometry_from_nodes(elements, builder):
                     # and both were invisible downstream. Stored as the raw
                     # id to match the legacy walker's `face['layer']`, which
                     # scene.py resolves through layer_id_to_name.
-                    d207 = next((c for c in d007['children'] if c['tag'] == 'D207'), None)
-                    if d207 and d207['payload']:
+                    d207 = _direct_child(d007.children, 'D207')
+                    if d207 and d207.payload:
                         face_layer_id = parse_var_int(
-                            d207['payload'], 0, len(d207['payload']))
-                    dc05 = next((c for c in d007['children'] if c['tag'] == 'DC05'), None)
+                            d207.payload, 0, len(d207.payload))
+                    dc05 = _direct_child(d007.children, 'DC05')
                     if dc05 is not None:
-                        uv_front, uv_back = _extract_uv_transforms(dc05['payload'])
+                        uv_front, uv_back = _extract_uv_transforms(dc05.payload)
                     # D307 = display flags, same record edges already read
                     # (base 0x06, +0x01 hidden) - faces carry the identical
                     # tag under their own D007 container.
-                    d307 = next((c for c in d007['children'] if c['tag'] == 'D307'), None)
-                    if d307 is not None and d307['payload']:
-                        face_hidden = bool(d307['payload'][0] & 0x01)
+                    d307 = _direct_child(d007.children, 'D307')
+                    if d307 is not None and d307.payload:
+                        face_hidden = bool(d307.payload[0] & 0x01)
                 # Back-side material: the AF0D child of the face node (a face
                 # painted only on its back — common when the author paints the
                 # visible side of a downward-facing cap — carries AF0D but no
                 # D107).
                 back_mat_id = None
-                af0d = next((c for c in el['children'] if c['tag'] == 'AF0D'), None)
-                if af0d and af0d['payload']:
-                    back_mat_id = parse_var_int(af0d['payload'], 0, len(af0d['payload']))
+                af0d = _direct_child(el.children, 'AF0D')
+                if af0d and af0d.payload:
+                    back_mat_id = parse_var_int(af0d.payload, 0, len(af0d.payload))
                 builder.faces[f_id] = {'loops': loops, 'normal': normal,
                                        'material_id': face_mat_id,
                                        'back_material_id': back_mat_id,
@@ -1095,24 +1129,24 @@ def _extract_geometry_from_nodes(elements, builder):
                                        'layer': face_layer_id}
 
         elif tag == '6419':
-            nodes_to_search = el['children'] if el['children'] else [el]
+            nodes_to_search = el.children if el.children else [el]
             guid = None
             def_idx = None
             name = None
             matrix = []
-            guid_node = find_child_tag(nodes_to_search, '6819')
-            if guid_node and len(guid_node['payload']) == 16:
-                guid = guid_node['payload'].hex().upper()
-            def_idx_node = find_child_tag(nodes_to_search, '6719')
+            guid_node = _find_tag(nodes_to_search, '6819')
+            if guid_node and len(guid_node.payload) == 16:
+                guid = guid_node.payload.hex().upper()
+            def_idx_node = _find_tag(nodes_to_search, '6719')
             if def_idx_node:
-                def_idx = parse_var_int(def_idx_node['payload'], 0, len(def_idx_node['payload']))
-            name_node = find_child_tag(nodes_to_search, '6519')
+                def_idx = parse_var_int(def_idx_node.payload, 0, len(def_idx_node.payload))
+            name_node = _find_tag(nodes_to_search, '6519')
             if name_node:
-                name = name_node['payload'].decode('utf-8', errors='replace')
-            mat_node = find_child_tag(nodes_to_search, '6619')
-            if mat_node and len(mat_node['payload']) >= 104:
+                name = name_node.payload.decode('utf-8', errors='replace')
+            mat_node = _find_tag(nodes_to_search, '6619')
+            if mat_node and len(mat_node.payload) >= 104:
                 for idx in range(13):
-                    matrix.append(read_f64(mat_node['payload'], idx * 8))
+                    matrix.append(read_f64(mat_node.payload, idx * 8))
 
             # Instance-level material (SketchUp "paint the component"):
             # same D007/D107 structure faces use. Faces whose own material
@@ -1130,30 +1164,26 @@ def _extract_geometry_from_nodes(elements, builder):
             # SkpFile.build_scene()'s InstanceNode.layer for that).
             inst_layer_id = None
             inst_attribute_dicts = {}
-            d007 = next((c for c in el['children'] if c['tag'] == 'D007'),
-                        None)
+            d007 = _direct_child(el.children, 'D007')
             if d007:
-                d107 = next((c for c in d007['children']
-                             if c['tag'] == 'D107'), None)
+                d107 = _direct_child(d007.children, 'D107')
                 if d107:
                     inst_mat_id = parse_var_int(
-                        d107['payload'], 0, len(d107['payload']))
-                d207 = next((c for c in d007['children']
-                             if c['tag'] == 'D207'), None)
-                if d207 and d207['payload']:
+                        d107.payload, 0, len(d107.payload))
+                d207 = _direct_child(d007.children, 'D207')
+                if d207 and d207.payload:
                     inst_layer_id = parse_var_int(
-                        d207['payload'], 0, len(d207['payload']))
+                        d207.payload, 0, len(d207.payload))
                 inst_attribute_dicts = extract_attribute_dictionaries(d007)
                 # D307 = display flags, same record edges/faces already
                 # read (base 0x06, +0x01 hidden).
-                d307 = next((c for c in d007['children']
-                             if c['tag'] == 'D307'), None)
-                if d307 is not None and d307['payload']:
-                    inst_hidden = bool(d307['payload'][0] & 0x01)
+                d307 = _direct_child(d007.children, 'D307')
+                if d307 is not None and d307.payload:
+                    inst_hidden = bool(d307.payload[0] & 0x01)
 
             dynamic = inst_attribute_dicts.get('dynamic_attributes', {})
             builder.instances.append({
-                'offset': el['offset'],
+                'offset': el.offset,
                 'ref_guid': guid,
                 'ref_idx': def_idx,
                 'name': name,
@@ -1166,7 +1196,7 @@ def _extract_geometry_from_nodes(elements, builder):
                 # dictionary by name, real (non-stringified) types.
                 'properties': {k: _stringify_vff_attr_value(v) for k, v in dynamic.items()},
                 'attribute_dictionaries': inst_attribute_dicts,
-                'children': el['children']
+                'children': el.children
             })
 
         elif tag == '6942':
@@ -1174,9 +1204,9 @@ def _extract_geometry_from_nodes(elements, builder):
             # classic CConstructionLine: point + unit direction + start/end
             # params; |param| >= 1e20 is unbounded (SketchUp's own sentinel
             # is ±1e30).
-            body = find_child_tag(el['children'], '6A42')
-            if body and len(body['payload']) >= 64:
-                p = body['payload']
+            body = _find_tag(el.children, '6A42')
+            if body and len(body.payload) >= 64:
+                p = body.payload
                 point = (read_f64(p, 0), read_f64(p, 8), read_f64(p, 16))
                 direction = (read_f64(p, 24), read_f64(p, 32), read_f64(p, 40))
                 start_param = read_f64(p, 48)
@@ -1205,15 +1235,15 @@ def _extract_geometry_from_nodes(elements, builder):
 
         elif tag == '6C42':
             # VFF CConstructionPoint (list 9213): 6D42 position.
-            pos = find_child_tag(el['children'], '6D42')
-            if pos and len(pos['payload']) >= 24:
-                p = pos['payload']
+            pos = _find_tag(el.children, '6D42')
+            if pos and len(pos.payload) >= 24:
+                p = pos.payload
                 builder.construction_points.append({
                     'position': (read_f64(p, 0), read_f64(p, 8), read_f64(p, 16)),
                 })
 
-        elif el['children']:
-            _extract_geometry_from_nodes(el['children'], builder)
+        elif el.children:
+            _extract_geometry_nodes(el.children, builder)
 
 
 # ── Transforms ───────────────────────────────────────────────────────────
@@ -1709,23 +1739,46 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
     # the (comparatively modest, ~1x) cost of decompressing model.dat
     # itself. See iter_top_level_lazy() for the mechanics.
 
-    # Layer ID -> name
     layer_id_to_name = {}
-    def collect_layers(nodes):
+    material_id_to_name = {}
+    defs_dict = {}
+    root_builder = _GeometryBuilder()
+    vertex_positions = {}
+    instance_world = {}
+    page_node = None
+
+    def entity_key(payload):
+        # DC05 payload -> persistent id: either a DE05 var-int wrapper or the
+        # bare var-int itself.
+        if payload.startswith(bytes([0xDE, 0x05])):
+            de05_len = read_u32(payload, 2)
+            return parse_var_int(payload, 6, de05_len)
+        return parse_var_int(payload, 0, len(payload))
+
+    def walk(nodes, parent):
+        """One pre-order pass over a top-level record's subtree, doing the
+        work that used to take six separate full traversals: layers
+        (993A), materials (C832), component definitions (7C15), vertex
+        positions (C409), instance world transforms (6419, carrying the
+        composed ``parent`` matrix) and the first scenes node (0702).
+        Each output is independent of the others, so folding the passes
+        together changes no result - only how often the tree is walked."""
+        nonlocal page_node
         for el in nodes:
-            if el['tag'] == '993A':
-                for child in el['children']:
-                    if child['tag'] == '8C3C':
-                        dc05 = find_child_tag(child['children'], 'DC05')
-                        name_node = find_child_tag(child['children'], '8D3C')
+            tag = el.tag
+            children = el.children
+            here = parent
+
+            if tag == '993A':
+                # Layer ID -> name
+                for child in children:
+                    if child.tag == '8C3C':
+                        kids = child.children
+                        dc05 = _find_tag(kids, 'DC05')
+                        name_node = _find_tag(kids, '8D3C')
                         if dc05 and name_node:
-                            payload = dc05['payload']
-                            if payload.startswith(bytes([0xDE, 0x05])):
-                                de05_len = read_u32(payload, 2)
-                                l_id = parse_var_int(payload, 6, de05_len)
-                            else:
-                                l_id = parse_var_int(payload, 0, len(payload))
-                            l_name = name_node['payload'].decode('utf-8', errors='replace')
+                            l_id = entity_key(dc05.payload)
+                            l_name = name_node.payload.decode('utf-8', errors='replace')
                             layer_id_to_name[l_id] = l_name
                             # 8E3C: a single byte, 1 = hidden / 0 = visible -
                             # confirmed byte-for-byte against a real
@@ -1735,50 +1788,37 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
                             # 8E3C=01, every visible one had 8E3C=00. This is
                             # the VFF-format counterpart of the legacy
                             # format's already-known layer-hidden flag.
-                            hidden_node = find_child_tag(child['children'], '8E3C')
-                            if hidden_node and hidden_node['payload']:
-                                layer_hidden[l_name] = hidden_node['payload'][0] == 1
-            collect_layers(el['children'])
+                            hidden_node = _find_tag(kids, '8E3C')
+                            if hidden_node and hidden_node.payload:
+                                layer_hidden[l_name] = hidden_node.payload[0] == 1
 
-    # Material ID -> name
-    material_id_to_name = {}
-    def collect_material_ids(nodes):
-        for el in nodes:
-            if el['tag'] == 'C832':
-                dc05 = find_child_tag(el['children'], 'DC05')
-                name_node = find_child_tag(el['children'], 'CC32')
+            elif tag == 'C832':
+                # Material ID -> name
+                dc05 = _find_tag(children, 'DC05')
+                name_node = _find_tag(children, 'CC32')
                 if dc05 and name_node:
-                    payload = dc05['payload']
-                    if payload.startswith(bytes([0xDE, 0x05])):
-                        de05_len = read_u32(payload, 2)
-                        m_id = parse_var_int(payload, 6, de05_len)
-                    else:
-                        m_id = parse_var_int(payload, 0, len(payload))
-                    m_name = name_node['payload'].decode('utf-8', errors='replace')
-                    material_id_to_name[m_id] = m_name
-            collect_material_ids(el['children'])
+                    m_id = entity_key(dc05.payload)
+                    material_id_to_name[m_id] = name_node.payload.decode('utf-8', errors='replace')
 
-    # Component definitions
-    defs_dict = {}
-    def collect_defs(nodes):
-        for el in nodes:
-            if el['tag'] == '7C15':
+            elif tag == '7C15':
+                # Component definitions
                 guid = None
                 name = None
                 faces_camera = False
                 shadows_face_sun = False
                 is_image = False
-                for child in el['children']:
-                    if child['tag'] == '7D15' and len(child['payload']) == 16:
-                        guid = child['payload'].hex().upper()
-                    elif child['tag'] == '7E15':
-                        name = child['payload'].decode('utf-8', errors='replace')
-                    elif child['tag'] == '581B':
+                for child in children:
+                    ctag = child.tag
+                    if ctag == '7D15' and len(child.payload) == 16:
+                        guid = child.payload.hex().upper()
+                    elif ctag == '7E15':
+                        name = child.payload.decode('utf-8', errors='replace')
+                    elif ctag == '581B':
                         # Component behavior flags: sub-TLV 5D1B == 1 marks
                         # "always faces camera" (2D people/tree cut-outs);
                         # its companion 5E1B is "shadows face sun".
                         pos = 0
-                        pl = child['payload']
+                        pl = child.payload
                         while pos <= len(pl) - 6:
                             sub_tag = pl[pos:pos+2].hex().upper()
                             sub_size = read_u32(pl, pos+2)
@@ -1791,37 +1831,68 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
                                 shadows_face_sun = parse_var_int(
                                     pl, pos+6, sub_size) == 1
                             pos += 6 + sub_size
-                    elif child['tag'] == '8315' and child['payload']:
+                    elif ctag == '8315' and child.payload:
                         # Definition kind: observed 0/1 for ordinary
                         # component/group definitions, 2 for the quad
                         # definition backing an Image entity.
                         is_image = parse_var_int(
-                            child['payload'], 0, len(child['payload'])) == 2
-                ent_id = extract_entity_id(el)
+                            child.payload, 0, len(child.payload)) == 2
+                ent_id = _entity_id(el)
                 builder = _GeometryBuilder()
-                _extract_geometry_from_nodes(el['children'], builder)
+                _extract_geometry_nodes(children, builder)
                 defs_dict[ent_id] = {'guid': guid, 'name': name,
                                      'always_faces_camera': faces_camera,
                                      'shadows_face_sun': shadows_face_sun,
                                      'is_image': is_image, 'builder': builder}
-            collect_defs(el['children'])
 
-    root_builder = _GeometryBuilder()
-    vertex_positions = {}
-    instance_world = {}
-    page_node = None
+            elif tag == 'C409':
+                # Vertex persistent id (hex) -> (x, y, z) inches, for
+                # dimensions: C409's DC05 holds the id, C509 the 3 x f64
+                # position. Ids are unique file-wide, so one flat map
+                # resolves a connection point whichever context holds it.
+                dc05 = _find_tag(children, 'DC05')
+                c509 = _find_tag(children, 'C509')
+                if dc05 and c509 and len(c509.payload) == 24:
+                    p = dc05.payload
+                    if p[:2] == b'\xde\x05':
+                        idlen = read_u32(p, 2)
+                        idb = p[6:6 + idlen]
+                    else:
+                        idb = p
+                    vertex_positions[idb.hex()] = struct.unpack('<3d', c509.payload)
+
+            elif tag == '6419':
+                # Instance persistent id (hex) -> WORLD transform (13-float
+                # matrix), composing parent x local at every 6419. A
+                # dimension's connection point is definition-local, so
+                # _parse_dimensions lifts it to world with this. An instance
+                # chain never crosses top-level records.
+                d007 = _find_tag(children, 'D007')
+                dc05 = _find_tag(d007.children, 'DC05') if d007 else None
+                iid = None
+                if dc05:
+                    p = dc05.payload
+                    idb = p[6:6 + read_u32(p, 2)] if p[:2] == b'\xde\x05' else p
+                    iid = idb.hex()
+                m = _find_tag(children, '6619')
+                mat = list(struct.unpack('<13d', m.payload)) \
+                    if m and len(m.payload) == 104 else None
+                here = multiply_matrices(parent, mat) if mat else parent
+                if iid:
+                    instance_world[iid] = here
+
+            elif tag == '0702':
+                if page_node is None:
+                    page_node = el
+
+            if children:
+                walk(children, here)
 
     for index, total, el in iter_top_level_lazy(model_dat, 0, len(model_dat), CONTAINER_TAGS):
         try:
-            collect_layers([el])
-            collect_material_ids([el])
-            collect_defs([el])
-            _scan_vertex_positions(el, vertex_positions)
-            _scan_instance_transforms(el, instance_world)
-            if page_node is None:
-                page_node = _find_page_node(el)
-            if el['tag'] == 'F601':
-                _extract_geometry_from_nodes(el['children'], root_builder)
+            walk([el], None)
+            if el.tag == 'F601':
+                _extract_geometry_nodes(el.children, root_builder)
         except Exception as e:
             raise SkpParseError(
                 f"Failed while processing top-level record: {e}",

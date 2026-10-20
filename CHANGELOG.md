@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — Python: `full_parse` is about 1.8× faster on large VFF models (#431)
+
+`full_parse` used to walk every top-level record's TLV tree six separate times
+(layers, materials, component definitions, vertex positions, instance
+transforms, scenes node). It now does all of that in one pass, reads node
+fields as attributes instead of through `__getitem__`, decodes each record
+header with a single `struct` call, and shares one string per tag. The parsed
+result is unchanged: the full output was compared against the previous code,
+including dictionary order, on six real production models (13 to 359 MB) and a
+98-file local corpus, and was identical in every case. On those six models
+parse time drops from 17.7 / 56 / 64 / 185 / 271 / 256 s to 9.6 / 32 / 36 /
+101 / 156 / 138 s. Peak memory is essentially unchanged, since it is dominated
+by the parsed result rather than the traversal.
+
 ### Changed — TypeScript: minimum `earcut` is now 3.1.0, and the `@types/earcut` dev dependency is gone
 
 `earcut` ships its own type definitions from 3.1.0 on (3.0.x did not), and
