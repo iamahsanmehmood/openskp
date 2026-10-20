@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — TypeScript: minimum `earcut` is now 3.1.0, and the `@types/earcut` dev dependency is gone
+
+`earcut` ships its own type definitions from 3.1.0 on (3.0.x did not), and
+`@types/earcut` is now a deprecated empty stub that points there. The package
+declared `earcut ^3.0.0` and carried `@types/earcut` for the types, so the
+dev dependency is removed and the minimum `earcut` is raised to `^3.1.0`, which
+guarantees the bundled types. The lockfile already resolved 3.2.4, so installs
+from the lockfile are unchanged. Anyone who had pinned `earcut` to 3.0.x
+alongside this package will get a second, newer copy.
+
 ### Fixed — all five ports: OBJ material identifiers remain distinct after sanitization (#423)
 
 OBJ/MTL export now reserves sanitized source names before assigning unique
