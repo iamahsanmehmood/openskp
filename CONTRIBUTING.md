@@ -35,7 +35,7 @@ This project follows the [Contributor Covenant v2.1](CODE_OF_CONDUCT.md). By par
 | Platform | Requirements |
 |:---------|:------------|
 | Python | Python 3.10+, pip |
-| TypeScript | Node.js 18+, npm or pnpm |
+| TypeScript | Node.js 22.18+, 24.11+ or 26+ (the build and test tooling needs it; the published package itself runs on 22.12+), npm or pnpm |
 | .NET | .NET SDK 8.0+ |
 | Dart | Dart SDK 3.0+ |
 | C++ | CMake 3.21+, a C++17 compiler |
@@ -247,7 +247,7 @@ def parse_vertex(data: bytes, offset: int = 0) -> tuple[float, float, float]:
 | Linter | `eslint` |
 | Type checking | `strict: true` in tsconfig |
 | Module system | ESM |
-| Minimum version | Node.js 18 |
+| Minimum version | Node.js 22.12 to use the package; building from source needs 22.18+, 24.11+ or 26+ |
 
 ### C++
 
