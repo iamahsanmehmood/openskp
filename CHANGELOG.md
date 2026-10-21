@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — .NET: OBJ, MTL, ASCII PLY and ASCII STL exports use LF line endings on every platform (#424, #434)
+
+The four text exporters built their output with `StringBuilder.AppendLine()`,
+which writes CRLF on Windows and LF on Linux and macOS, so the same model
+produced different bytes depending on where it was exported - unlike the
+other four ports, which always write LF. All 56 calls now append an explicit
+`\n`, and the tests assert that no `\r` appears. **Behaviour change:** text
+exports written on Windows by this package now contain LF instead of CRLF.
+
+### Added — TypeScript, .NET, Dart: construction lines and points are read from VFF (2021+) files (#285, #435, #436, #437)
+
+These three readers already surfaced construction lines and points from
+legacy files but treated the VFF records as opaque. They now decode them the
+way Python and C++ do: the guide containers are traversed, a `6A42` record
+gives a line's point, direction and start/end parameters (an end whose
+distance is at or beyond the `1e20` sentinel is reported as unbounded),
+and a `6D42` record gives a point's position; truncated payloads are
+ignored. Covered by synthetic-record tests in each port, mirroring Python's.
+
 ### Fixed — Python: legacy SketchUp 4, 5 and 2019 files now parse correctly, and two silent data losses are gone (#284)
 
 Three of the signatures still open on #284 are fixed in the Python legacy

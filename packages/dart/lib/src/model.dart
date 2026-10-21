@@ -234,9 +234,8 @@ class Dimension {
   });
 }
 
-/// A construction/guide line (SketchUp's Construction Line tool). Legacy
-/// (pre-2021) files only - the VFF (2021+) reader does not currently
-/// recognize this entity.
+/// A construction/guide line (SketchUp's Construction Line tool). Read from
+/// both legacy (pre-2021) and VFF (2021+) files.
 ///
 /// Stored internally (and here, unchanged) as a point + normalized
 /// direction + two signed distance parameters along that direction
