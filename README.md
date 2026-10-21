@@ -162,8 +162,8 @@ across its save history) found:
 
 | Result | Versions |
 |:---|:---|
-| ✅ Parse, build, and export cleanly | 2014, 2015, 2016, 2017, 2018, 2020, 2021, 2025, **V7, V8, 2013** (fixed in [#310](https://github.com/iamahsanmehmood/openskp/pull/310)) |
-| ❌ Fail — 4 distinct error signatures, root cause tracked in [issue #284](https://github.com/iamahsanmehmood/openskp/issues/284) | V3, V4, V6, 2019 |
+| ✅ Parse, build, and export cleanly | 2014, 2015, 2016, 2017, 2018, 2020, 2021, 2025, **V6**, **V7, V8, 2013** (fixed in [#385](https://github.com/iamahsanmehmood/openskp/pull/385) and [#310](https://github.com/iamahsanmehmood/openskp/pull/310)) |
+| ❌ Fail — root causes tracked in [issue #284](https://github.com/iamahsanmehmood/openskp/issues/284) | V3 (the real project; synthetic V3 files parse), and V4, V5 and 2019 in the TypeScript, .NET, Dart and C++ readers (fixed in the Python reader only so far) |
 
 Full per-version error table and investigation notes: [docs/LANGUAGE_PARITY.md § 4](docs/LANGUAGE_PARITY.md#4-real-sketchup-file-version-support).
 

@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — Python: legacy SketchUp 4, 5 and 2019 files now parse correctly, and two silent data losses are gone (#284)
+
+Three of the signatures still open on #284 are fixed in the Python legacy
+reader, found by byte-tracing each failure against the same model saved at a
+neighbouring version:
+
+- **SketchUp 4 and 5** (`texture object is not a dib`, and a longer chain behind
+  it). Everything below the CDib-object era differs in small fixed ways:
+  textures are a bare inline image (no object, no store-map slot) before
+  version 6; the draw block is 7 bytes in V4 and 8 from V5; the definition
+  header is 19 bytes in V4 and 20 from V5; the camera tail and thumbnail
+  are shorter and the thumbnail has no trailing image pointer before 6;
+  SketchUp 3 and 4 store no instance names; and linear dimensions have no
+  font object and a shorter lead-in and tail before 6. A real 5 MB, 146-
+  definition textured project saved at SketchUp 4 now parses identically to
+  its SketchUp 6 save (geometry, materials, texture bytes, layers, dimensions,
+  instance transforms - only the instance names, which a V4 file does not
+  carry, differ).
+- **SketchUp 2019** (`implausible def entity count`). 2019 follows the last
+  layer in a definition with a separator null, which shifted the entity count
+  by two bytes. The same real project saved at 2019 now parses identically to
+  its 2018 save.
+- **Silent data loss, no error raised:** the real SketchUp 4 sample used to parse
+  to an empty model instead of its 8 vertices, 12 edges and 6 faces, and a
+  SketchUp 2020 model with no component definitions lost every root entity
+  (they were read as "definitions"); both now come out complete.
+
+When none of the slot-base candidates parses, the error now comes from the
+candidate that got furthest into the file rather than the last one tried. The
+last one is the earliest to fail, so it used to point at the layer list for
+files that actually broke much later.
+
+A 1 MB model with 47 definitions, 14 layers and 13 dimensions, saved at
+SketchUp 4 and 5, also parses identically to its SketchUp 6 save.
+
+Not covered: the real SketchUp 3 project from the same sweep still fails
+(`edge-use parent slot None != current loop`; the synthetic V3 fixtures from
+#407 are fine), and the project's own SketchUp 5 save is a 0-byte file, so V5
+has only been checked on SketchUp-written synthetic files. The other four
+readers are not changed by this entry.
+
 ### Changed — Python: `full_parse` is about 1.8× faster on large VFF models (#431)
 
 `full_parse` used to walk every top-level record's TLV tree six separate times

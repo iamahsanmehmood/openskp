@@ -150,9 +150,9 @@ root-caused to varying depth (tracked in
 | SketchUp version | Error | Status |
 |:---|:---|:---|
 | V3 | `expected a string record` | **Fixed in all 5 languages** ([#407](https://github.com/iamahsanmehmood/openskp/pull/407), ported in [#410](https://github.com/iamahsanmehmood/openskp/issues/410)) - calibrated on one real V3 file; single-material V3 files unverified |
-| V4 | `texture object is not a dib` | Not investigated further |
+| V4, V5 | `texture object is not a dib` | **Fixed in Python** (V4 and V5 differ from V6 in about a dozen small layout details - see the CHANGELOG); the TypeScript, .NET, Dart and C++ readers are not yet ported. A real V4 project parses identically to its V6 save; the project's own V5 save is a 0-byte file, so V5 is checked on SketchUp-written synthetic files only |
 | V6 | `definition list misaligned` | **Fixed in all 5 languages** ([#385](https://github.com/iamahsanmehmood/openskp/pull/385), ported in [#410](https://github.com/iamahsanmehmood/openskp/issues/410)) |
-| 2019 | `implausible def entity count` | Not investigated further |
+| 2019 | `implausible def entity count` | **Fixed in Python** (a separator null after the last layer of a definition shifted the entity count); not yet ported to the other four readers. The real 2019 save now parses identically to its 2018 save |
 
 ~~V7, V8, 2013 — `class-ref to non-class slot N (CAttributeNamed)`~~ —
 **fixed in [#310](https://github.com/iamahsanmehmood/openskp/pull/310)**.

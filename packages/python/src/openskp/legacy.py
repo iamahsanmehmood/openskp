@@ -442,6 +442,15 @@ def _preamble(ar, r):
 # none of them: a real V4 file already parses with the later layout.
 _FIRST_V4 = 4
 
+# The texture image became a first-class CDib object (store-map slot, entity
+# preamble) in SketchUp 6. SketchUp 3, 4 and 5 write it as a bare inline
+# subtype/length/bytes record straight after the material's flag word.
+_FIRST_DIB_OBJECT = 6
+
+# First version whose instances and groups carry a name string (SketchUp 3 and
+# 4 files have none; where the name is optional the reader checks for one).
+_FIRST_NAMED_INSTANCE = 5
+
 
 def _early_preamble(ar, r):
     """``_preamble`` for the entity types that carry NO attribute-container
@@ -459,7 +468,7 @@ def _drawbase(ar, r):
     # comes from the face's own pointer instead (see _read_face); report the
     # rest as unset rather than the meaningless 0x0100 / "hidden" the 8-byte
     # layout would read out of them.
-    b = r.raw(5) if ar.ver < _FIRST_V4 else r.raw(8)
+    b = r.raw(5 if ar.ver < _FIRST_V4 else (7 if ar.ver < 5 else 8))
     # The layer field is normally a u16 id, but an entity can carry the
     # layer BY OBJECT instead (seen on real 2018 instances): a full
     # inline CLayer record on first use, an escaped back-ref to it on
@@ -775,7 +784,7 @@ def _texture_block(ar, r):
     subtype/length/bytes record - no preamble, no object tag, and so no
     store-map slot (``tex_dib`` is ``None``; the bytes ride along as
     ``tex_data`` instead)."""
-    if ar.ver < _FIRST_V4:
+    if ar.ver < _FIRST_DIB_OBJECT:
         s = None
         dib = _read_dib(ar, r)
     else:
@@ -856,7 +865,7 @@ def _read_camera(ar, r):
     r.raw(137)
     r.u16()
     r.utf16()
-    r.raw(33)
+    r.raw(33 if ar.ver >= 6 else 10)
     return {'k': 'camera'}
 
 
@@ -867,6 +876,10 @@ def _read_thumbnail(ar, r):
         r.raw(129)
         return {'k': 'thumbnail', 'dib': None}
     ar.read_object(r, expect='CCamera')
+    if ar.ver < 6:
+        # SketchUp 4 and 5 end the thumbnail with its camera: no trailing
+        # image pointer (not even a null one).
+        return {'k': 'thumbnail', 'dib': None}
     _, _, dib = ar.read_object(r, expect='CDib')
     return {'k': 'thumbnail', 'dib': dib}
 
@@ -1164,7 +1177,8 @@ def _read_dimlinear(ar, r):
     _preamble(ar, r)
     db = _drawbase(ar, r)
     text = r.utf16()
-    ar.read_object(r, expect='CSkFont')
+    if ar.ver >= 6:
+        ar.read_object(r, expect='CSkFont')
     # The tail is NOT a fixed 165-byte blob: it embeds two object
     # references (the dimension's connection points into the geometry).
     # Each is a normal MFC tag — 2 bytes in small files, but 6 bytes once
@@ -1185,13 +1199,16 @@ def _read_dimlinear(ar, r):
     # (a SketchUp 2018 house: 70 of its 72 root entities lost, 948
     # definitions left unplaced). Measured on 42 dimensions in 23 legacy
     # files: every record is 161 fixed bytes plus its refs.
-    b37 = r.raw(37)
+    # SketchUp 4 and 5 write neither the font object above nor the 5 bytes in
+    # front of the first connection block; keep the block's later offsets
+    # the same by supplying them as zeros.
+    b37 = (b'\x00' * 5 if ar.ver < 6 else b'') + r.raw(32 if ar.ver < 6 else 37)
     c1 = _entity_ref(ar, r)          # connection point 1 (may be null)
     path1 = _connection_paths(ar, r)
     b32 = r.raw(32)
     c2 = _entity_ref(ar, r)          # connection point 2 (may be null)
     path2 = _connection_paths(ar, r)
-    b72 = r.raw(72)
+    b72 = r.raw(72 if ar.ver >= 6 else 68)   # SketchUp 4 and 5: no trailing u32
     # the dimension-line offset (inches, signed) sits at a fixed position
     # of the trailing block on every sample (v17 and v18 alike)
     offset = struct.unpack_from('<d', b72, 52)[0]
@@ -1372,7 +1389,7 @@ def _reanchor_on_string_marker(data: bytes, pos: int) -> int:
 def _read_definition(ar, r):
     _preamble(ar, r)
     # undecoded base block (13 bytes in SketchUp 3)
-    r.raw(22 if ar.ver >= 17 else (20 if ar.ver >= _FIRST_V4 else 13))
+    r.raw(22 if ar.ver >= 17 else (20 if ar.ver >= 5 else (19 if ar.ver >= _FIRST_V4 else 13)))
     nlayers = r.u32()
     if nlayers > 10000:
         raise LegacyParseError(f"implausible def layer count {r.ctx()}")
@@ -1385,6 +1402,10 @@ def _read_definition(ar, r):
             continue
         ar.read_object(r, expect='CLayer')
         got += 1
+    if ar.ver == 19 and nlayers and r.peek_u16() == 0:
+        # SketchUp 2019 follows the LAST layer with a separator null too
+        # (2020 does as well, but its count recovery already absorbs it).
+        r.pos += 2
     decl = r.u16()
     if decl == 0x7FFF:
         decl = r.u32()
@@ -1456,8 +1477,9 @@ def _read_instance(ar, r):
     if dn != 'CComponentDefinition':
         raise LegacyParseError(f"instance definition ref is {dn} {r.ctx()}")
     xf = r.f64s(13)
-    # SketchUp 3 instances carry no name string.
-    name = r.utf16() if (ar.ver >= _FIRST_V4 or r.peek(3) == _STR_MARKER) else ''
+    # SketchUp 3 and 4 instances carry no name string (5 is the first to
+    # write one); where it is optional, take it only if a string is there.
+    name = r.utf16() if (ar.ver >= _FIRST_NAMED_INSTANCE or r.peek(3) == _STR_MARKER) else ''
     # The trailing instance GUID is a pre-2014 (ver < 14) thing, full stop -
     # for BOTH CComponentInstance and CGroup, gated by real file version,
     # not by the class's own schema number.
@@ -1551,15 +1573,24 @@ def _walk(data: bytes):
         # definition-list anchor, a back-ref to the ACTIVE layer object
         bases = _probe_layer_anchor_bases(data, ver, start, mat_count)
 
-    last_exc = None
+    # Every candidate but the right one dies almost immediately (the slot
+    # numbers it hands out disagree with the file's own class-refs), while the
+    # right one only fails where the file really differs from what we know.
+    # So report the failure that got FURTHEST into the file - not the last
+    # candidate's, which is the earliest-failing one and says nothing useful.
+    best_exc = None
+    best_at = -1
     for base in bases:
         try:
             return _walk_model(data, ver, start, mat_count, base)
         except (LegacyParseError, struct.error, IndexError,
                 UnicodeDecodeError) as exc:
-            last_exc = exc
-    if last_exc is not None:
-        raise last_exc
+            m = re.search(r'@0x([0-9a-f]+)', str(exc))
+            at = int(m.group(1), 16) if m else -1
+            if best_exc is None or at > best_at:
+                best_exc, best_at = exc, at
+    if best_exc is not None:
+        raise best_exc
     raise LegacyParseError("no viable slot base candidate")
 
 
@@ -1625,6 +1656,16 @@ def _probe_layer_anchor_bases(data: bytes, ver: int, start: int,
             if 0 < s - (rel - b0) < b0]
 
 
+def _definition_starts_at(ar, at: int) -> bool:
+    """True when the bytes at *at* begin a CComponentDefinition record: its
+    first-use class declaration, or a class-ref to its known slot."""
+    data = ar.data
+    if data[at:at + 2] == bytes([0xFF, 0xFF]) and data[at + 6:at + 26] == b'CComponentDefinition':
+        return True
+    def_cls = ar.class_slot.get('CComponentDefinition')
+    return def_cls is not None and _is_class_ref(data, at, def_cls)
+
+
 def _walk_model(data: bytes, ver: int, start: int, mat_count: int,
                 base: int):
     ar = _Archive(data, ver)
@@ -1683,6 +1724,18 @@ def _walk_model(data: bytes, ver: int, start: int, mat_count: int,
         retry = _retry_count_after_v20_filler(r, r.pos - 4, 1_000_000, ar)
         if retry is not None:
             def_count = retry
+            if not _definition_starts_at(ar, r.pos):
+                # A model with NO component definitions has no definition
+                # count to find: SketchUp 2020 writes its filler where the
+                # count would be, and the first count behind it is the ROOT
+                # entity count. The retry cannot tell the two apart, so it
+                # handed the root count over as a definition count - and the
+                # root entities were then read (and silently dropped) as
+                # "definitions". A real definition count is always followed
+                # by a definition record; anything else means this is the
+                # root count, so put it back.
+                def_count = 0
+                r.pos -= 4
     if def_count > 1_000_000:
         raise LegacyParseError("implausible definition count")
     for _ in range(def_count):
