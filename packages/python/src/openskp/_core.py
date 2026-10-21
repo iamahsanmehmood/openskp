@@ -16,7 +16,7 @@ import os
 import struct
 import time
 import zipfile
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 # material.xml/style.xml come from inside the .skp's ZIP container, which is
 # fully attacker-controlled input - stdlib ElementTree expands internal
 # general entities with no limit, making a "billion laughs" DoS payload
@@ -110,14 +110,19 @@ _unpack_header = struct.Struct('<HI').unpack_from
 # ``_HEX_UPPER[b0] + _HEX_UPPER[b1]`` builds for the two raw tag bytes. Built on
 # first use (about 5 ms, 3 MB) and shared: every node carrying a given tag then
 # points at one string object instead of allocating its own.
-_TAG_STRINGS: List[str] = []
+_TAG_STRINGS: Optional[List[str]] = None
 
 
 def _tag_strings() -> List[str]:
-    if not _TAG_STRINGS:
-        _TAG_STRINGS.extend(
-            _HEX_UPPER[v & 0xFF] + _HEX_UPPER[v >> 8] for v in range(0x10000))
-    return _TAG_STRINGS
+    """The shared table, built in full and only then published, so a thread
+    that races the first call sees either nothing or the complete table."""
+    global _TAG_STRINGS
+    table = _TAG_STRINGS
+    if table is None:
+        table = [_HEX_UPPER[v & 0xFF] + _HEX_UPPER[v >> 8]
+                 for v in range(0x10000)]
+        _TAG_STRINGS = table
+    return table
 
 
 class _TlvNode:
@@ -967,6 +972,8 @@ def _node_from_dict(d):
 def _extract_geometry_from_nodes(elements, builder):
     """Fill *builder* from a list of TLV nodes. Accepts ``_TlvNode`` trees
     (the parser's own, read by attribute) or equivalent plain dicts."""
+    if not isinstance(elements, (list, tuple)):
+        elements = list(elements)
     if elements and elements[0].__class__ is not _TlvNode:
         elements = [_node_from_dict(e) for e in elements]
     _extract_geometry_nodes(elements, builder)
