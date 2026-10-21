@@ -138,7 +138,7 @@ over.** A real-world version-compatibility sweep (15 real `.skp` files —
 16 saves of the same project across its history from SketchUp version 3 up
 through 2025, one of which, V5, saved out corrupted/empty) found:
 
-**11 files parse, build, and export cleanly**: saves from **2014, 2015,
+**In the Python reader, 11 files parse, build, and export cleanly** (the sweep was run with Python; the other four readers cannot read the legacy saves of this project yet - [#442](https://github.com/iamahsanmehmood/openskp/issues/442)): saves from **2014, 2015,
 2016, 2017, 2018, 2020, 2021, 2025, and — as of [#310](https://github.com/iamahsanmehmood/openskp/pull/310) — V7, V8, and
 2013** — consistent output (146 definitions / 131 mesh resources) across all
 of them.
@@ -150,9 +150,9 @@ root-caused to varying depth (tracked in
 | SketchUp version | Error | Status |
 |:---|:---|:---|
 | V3 | `expected a string record` | **Fixed in all 5 languages** ([#407](https://github.com/iamahsanmehmood/openskp/pull/407), ported in [#410](https://github.com/iamahsanmehmood/openskp/issues/410)) - calibrated on one real V3 file; single-material V3 files unverified |
-| V4, V5 | `texture object is not a dib` | **Fixed in Python** (V4 and V5 differ from V6 in about a dozen small layout details - see the CHANGELOG); the TypeScript, .NET, Dart and C++ readers are not yet ported. A real V4 project parses identically to its V6 save; the project's own V5 save is a 0-byte file, so V5 is checked on SketchUp-written synthetic files only |
+| V4, V5 | `texture object is not a dib` | **Fixed in all 5 languages** (V4 and V5 differ from V6 in about a dozen small layout details - see the CHANGELOG): Python in [#440](https://github.com/iamahsanmehmood/openskp/pull/440), the other four in the follow-up port. The real V4 project parses identically to its V6 save in Python; the other four readers match V6 on SketchUp-written files (including a 47-definition, 13-dimension model) and on the real V4 sample, but cannot yet read the real project at all ([#442](https://github.com/iamahsanmehmood/openskp/issues/442)). The project's own V5 save is a 0-byte file |
 | V6 | `definition list misaligned` | **Fixed in all 5 languages** ([#385](https://github.com/iamahsanmehmood/openskp/pull/385), ported in [#410](https://github.com/iamahsanmehmood/openskp/issues/410)) |
-| 2019 | `implausible def entity count` | **Fixed in Python** (a separator null after the last layer of a definition shifted the entity count); not yet ported to the other four readers. The real 2019 save now parses identically to its 2018 save |
+| 2019 | `implausible def entity count` | **Fixed in all 5 languages** (a separator null after the last layer of a definition shifted the entity count). The real 2019 save parses identically to its 2018 save in Python; the other four readers are checked on a SketchUp-written 2019 file ([#442](https://github.com/iamahsanmehmood/openskp/issues/442) for the real project) |
 
 ~~V7, V8, 2013 — `class-ref to non-class slot N (CAttributeNamed)`~~ —
 **fixed in [#310](https://github.com/iamahsanmehmood/openskp/pull/310)**.

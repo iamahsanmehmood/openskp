@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — TypeScript, .NET, Dart, C++: legacy SketchUp 4, 5 and 2019 files parse correctly, and a 2020 model with no definitions keeps its root entities (#284)
+
+The four other readers now carry the fixes the Python reader got in #440: the
+bare inline texture image, the 7-byte (V4) and 8-byte (V5) draw block, the 19-
+and 20-byte definition headers, the shorter camera tail and the thumbnail
+without a trailing image pointer, no instance names in SketchUp 3 and 4,
+dimensions without the font object and trailing u32, the separator null after
+the last layer of a 2019 definition, and the 2020 root-count recovery.
+TypeScript, .NET and Dart also report the slot-base failure that got furthest
+into the file instead of the last candidate's (C++ gets the same through the
+reader position it reached). Each port is checked against the same
+SketchUp-written fixtures as Python, with tests that fail on the old code,
+and against a richer model with 47 definitions, 14 layers
+and 13 dimensions saved at V4 and V5; the real V4 sample parses to its cube
+(8 vertices, 12 edges, 6 faces) instead of nothing.
+
+Not covered, and tracked in #442: on the real multi-version project from the
+original sweep, these four readers still fail every legacy version (they only
+read `CText` entities with one arrow type, and stop at a 2017+ record Python
+reads), so the V4 and 2019 fixes could not be confirmed on it directly. With
+that one comparison relaxed locally, the TypeScript reader's V4 parse of the
+real project is identical to its V6 parse.
+
 ### Fixed — .NET: OBJ, MTL, ASCII PLY and ASCII STL exports use LF line endings on every platform (#424, #434)
 
 The four text exporters built their output with `StringBuilder.AppendLine()`,

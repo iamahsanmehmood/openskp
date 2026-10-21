@@ -694,9 +694,22 @@ namespace OpenSkp
         // (a synthetic model saved down through SketchUp's own version
         // export) - not on a corpus - so they are exactly what that file
         // proves and no more (openskp#284, #407; matches Python's legacy.py
-        // `_FIRST_V4`). SketchUp 4 needs none of them: a real V4 file parses
-        // with the later layout.
+        // `_FIRST_V4`). SketchUp 4 and 5 have layout differences of their own
+        // (openskp#284): see FirstDibObject, FirstNamedInstance and the
+        // version checks in Drawbase, ReadCamera, ReadThumbnail,
+        // ReadDimLinear and ReadDefinition.
         public const int FirstV4 = 4;
+
+        /// <summary>The texture image became a first-class CDib object
+        /// (store-map slot, entity preamble) in SketchUp 6. SketchUp 3, 4 and
+        /// 5 write it as a bare inline subtype/length/bytes record straight
+        /// after the material's flag word.</summary>
+        public const int FirstDibObject = 6;
+
+        /// <summary>First version whose instances and groups carry a name
+        /// string (SketchUp 3 and 4 files have none; where the name is
+        /// optional the reader checks for one).</summary>
+        public const int FirstNamedInstance = 5;
 
         /// <summary><see cref="Preamble"/> for the entity types that carry NO
         /// attribute-container pointer in a SketchUp 3 file: vertex, loop,
@@ -735,7 +748,8 @@ namespace OpenSkp
             // own pointer instead (see ReadFace); report the rest as unset
             // rather than the meaningless 0x0100 / "hidden" the 8-byte
             // layout would read out of them.
-            var b = ar.Ver < FirstV4 ? r.Raw(5) : r.Raw(8);
+            // 5 bytes in V3, 7 in V4, 8 from V5.
+            var b = r.Raw(ar.Ver < FirstV4 ? 5 : ar.Ver < 5 ? 7 : 8);
             // The layer field is normally a u16 id, but an entity can carry
             // the layer BY OBJECT instead (seen on real 2018 instances): a
             // full inline CLayer record on first use, an escaped back-ref
@@ -1060,7 +1074,7 @@ namespace OpenSkp
         {
             int? s;
             byte[]? inlineData = null;
-            if (ar.Ver < FirstV4)
+            if (ar.Ver < FirstDibObject)
             {
                 s = null;
                 inlineData = ((DibRec)ReadDib(ar, r)).Data;
@@ -1187,7 +1201,7 @@ namespace OpenSkp
             r.Raw(137);
             r.U16();
             r.Utf16();
-            r.Raw(33);
+            r.Raw(ar.Ver >= 6 ? 33 : 10);
             return new CameraRec();
         }
 
@@ -1201,6 +1215,12 @@ namespace OpenSkp
                 return new ThumbnailRec { Dib = null };
             }
             ar.ReadObject(r, "CCamera");
+            if (ar.Ver < 6)
+            {
+                // SketchUp 4 and 5 end the thumbnail with its camera: no
+                // trailing image pointer (not even a null one).
+                return new ThumbnailRec { Dib = null };
+            }
             var (dibSlot, _, _) = ar.ReadObject(r, "CDib");
             return new ThumbnailRec { Dib = dibSlot };
         }
@@ -1398,7 +1418,7 @@ namespace OpenSkp
             Preamble(ar, r);
             var db = Drawbase(ar, r);
             string text = r.Utf16();
-            ar.ReadObject(r, "CSkFont");
+            if (ar.Ver >= 6) ar.ReadObject(r, "CSkFont");
             // The tail is NOT a fixed 165-byte blob: it embeds two object
             // references (the dimension's connection points into the
             // geometry). Each is a normal MFC tag - 2 bytes in small
@@ -1420,13 +1440,16 @@ namespace OpenSkp
             // unreadable item. Every record is 161 fixed bytes plus its refs
             // (openskp#384, the Python fix; found again on a real SketchUp
             // 2017 cabinet, openskp#412).
-            r.Raw(37);
+            // SketchUp 4 and 5 write neither the font object above nor the 5
+            // bytes in front of the first connection block, nor the trailing
+            // u32 of the last one.
+            r.Raw(ar.Ver >= 6 ? 37 : 32);
             EntityRef(ar, r);                // connection point 1 (may be null)
             ConnectionPaths(rr => ar.ReadObject(rr).Slot, r);
             r.Raw(32);
             EntityRef(ar, r);                // connection point 2 (may be null)
             ConnectionPaths(rr => ar.ReadObject(rr).Slot, r);
-            r.Raw(72);
+            r.Raw(ar.Ver >= 6 ? 72 : 68);
             return new DimLinearRec { Db = db, Text = text };
         }
 
@@ -1593,8 +1616,9 @@ namespace OpenSkp
         public static object ReadDefinition(Archive ar, LR r)
         {
             Preamble(ar, r);
-            // undecoded base block (13 bytes in SketchUp 3)
-            r.Raw(ar.Ver >= 17 ? 22 : ar.Ver >= FirstV4 ? 20 : 13);
+            // undecoded base block: 13 bytes in SketchUp 3, 19 in 4, 20 from 5,
+            // 22 from 2017
+            r.Raw(ar.Ver >= 17 ? 22 : ar.Ver >= 5 ? 20 : ar.Ver >= FirstV4 ? 19 : 13);
             uint nlayers = r.U32();
             if (nlayers > 10000)
             {
@@ -1613,6 +1637,13 @@ namespace OpenSkp
                 }
                 ar.ReadObject(r, "CLayer");
                 got++;
+            }
+            if (ar.Ver == 19 && nlayers > 0 && r.PeekU16() == 0)
+            {
+                // SketchUp 2019 follows the LAST layer with a separator null
+                // too (2020 does as well, but its count recovery already
+                // absorbs it).
+                r.Pos += 2;
             }
             uint decl = r.U16();
             if (decl == 0x7FFF)
@@ -1733,8 +1764,10 @@ namespace OpenSkp
                 throw new LegacyParseError($"instance definition ref is {dn} {r.Ctx()}");
             }
             var xf = r.F64s(13);
-            // SketchUp 3 instances carry no name string.
-            string name = ar.Ver >= FirstV4 || LegacyBytes.BytesEqual(r.Peek(3), 0, LegacyBytes.StrMarker) ? r.Utf16() : "";
+            // SketchUp 3 and 4 instances carry no name string (5 is the first
+            // to write one); where it is optional, take it only if a string
+            // is there.
+            string name = ar.Ver >= FirstNamedInstance || LegacyBytes.BytesEqual(r.Peek(3), 0, LegacyBytes.StrMarker) ? r.Utf16() : "";
 
             // The trailing instance GUID is a version-14 (SketchUp 2014)
             // addition for BOTH CComponentInstance and CGroup - gated by the
@@ -2010,7 +2043,14 @@ namespace OpenSkp
                 ? new List<int> { BootstrapTwoMaterials(data, ver.Value, start) }
                 : ProbeLayerAnchorBases(data, ver.Value, start, matCount);
 
-            LegacyParseError? lastExc = null;
+            // Every candidate but the right one dies almost immediately (the
+            // slot numbers it hands out disagree with the file's own
+            // class-refs), while the right one only fails where the file
+            // really differs from what we know. So report the failure that
+            // got FURTHEST into the file - not the last candidate's, which is
+            // the earliest to fail and says nothing useful.
+            LegacyParseError? bestExc = null;
+            int bestAt = -1;
             foreach (var b in bases)
             {
                 try
@@ -2019,11 +2059,31 @@ namespace OpenSkp
                 }
                 catch (LegacyParseError e)
                 {
-                    lastExc = e;
+                    var m = System.Text.RegularExpressions.Regex.Match(e.Message, "@0x([0-9a-f]+)");
+                    int at = m.Success ? System.Convert.ToInt32(m.Groups[1].Value, 16) : -1;
+                    if (bestExc == null || at > bestAt)
+                    {
+                        bestExc = e;
+                        bestAt = at;
+                    }
                 }
             }
-            if (lastExc != null) throw lastExc;
+            if (bestExc != null) throw bestExc;
             throw new LegacyParseError("no viable slot base candidate");
+        }
+
+        /// <summary>True when the bytes at <paramref name="at"/> begin a
+        /// CComponentDefinition record: its first-use class declaration, or a
+        /// class-ref to its known slot.</summary>
+        private static bool DefinitionStartsAt(Archive ar, byte[] data, int at)
+        {
+            if (at + 26 <= data.Length && data[at] == 0xFF && data[at + 1] == 0xFF
+                && LegacyBytes.MatchesAscii(data, at + 6, "CComponentDefinition"))
+            {
+                return true;
+            }
+            return ar.ClassSlot.TryGetValue("CComponentDefinition", out int defCls)
+                && LegacyBytes.IsClassRef(data, at, defCls);
         }
 
         private static WalkResult WalkModel(byte[] data, int ver, int start, uint matCount, int baseSlot)
@@ -2091,7 +2151,25 @@ namespace OpenSkp
             if (defCount > 1_000_000)
             {
                 var retry = LegacyBytes.RetryCountAfterV20Filler(r, r.Pos - 4, 1_000_000, ar);
-                if (retry.HasValue) defCount = retry.Value;
+                if (retry.HasValue)
+                {
+                    defCount = retry.Value;
+                    if (!DefinitionStartsAt(ar, r.Data, r.Pos))
+                    {
+                        // A model with NO component definitions has no
+                        // definition count to find: SketchUp 2020 writes its
+                        // filler where the count would be, and the first
+                        // count behind it is the ROOT entity count. The retry
+                        // cannot tell the two apart, so it handed the root
+                        // count over as a definition count - and the root
+                        // entities were then read (and silently dropped) as
+                        // "definitions". A real definition count is always
+                        // followed by a definition record; anything else
+                        // means this is the root count, so put it back.
+                        defCount = 0;
+                        r.Pos -= 4;
+                    }
+                }
             }
             if (defCount > 1_000_000)
             {

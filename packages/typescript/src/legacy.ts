@@ -285,7 +285,7 @@ export class R {
 type SlotEntry = ['class', string, number | null] | ['obj', string | null, any];
 
 /** MFC CArchive store-map bookkeeping and object-graph walk, matching Python's `_Archive`. */
-class Archive {
+export class Archive {
   data: Uint8Array;
   ver: number;
   hasPid: boolean;
@@ -546,8 +546,19 @@ function preamble(ar: Archive, r: R): { attrs: any; pid: number; attrsSlot: numb
 // calibrated byte-by-byte on one real SketchUp-written V3 file (a synthetic
 // model saved down through SketchUp's own version export) - not on a corpus -
 // so they are exactly what that file proves and no more (openskp#284, #407).
-// SketchUp 4 needs none of them: a real V4 file parses with the later layout.
+// SketchUp 4 and 5 have layout differences of their own (openskp#284): see
+// FIRST_DIB_OBJECT, FIRST_NAMED_INSTANCE and the version checks in drawbase,
+// readCamera, readThumbnail, readDimLinear and readDefinition.
 const FIRST_V4 = 4;
+
+/** The texture image became a first-class CDib object (store-map slot, entity
+ * preamble) in SketchUp 6. SketchUp 3, 4 and 5 write it as a bare inline
+ * subtype/length/bytes record straight after the material's flag word. */
+const FIRST_DIB_OBJECT = 6;
+
+/** First version whose instances and groups carry a name string (SketchUp 3
+ * and 4 files have none; where the name is optional the reader checks for one). */
+const FIRST_NAMED_INSTANCE = 5;
 
 /** `preamble` for the entity types that carry NO attribute-container
  * pointer in a SketchUp 3 file: vertex, loop, edge-use, material, layer.
@@ -564,7 +575,8 @@ function drawbase(ar: Archive, r: R): { mat: number; hidden: number; soft: numbe
   // comes from the face's own pointer instead (see readFace); report the
   // rest as unset rather than the meaningless 0x0100 / "hidden" the 8-byte
   // layout would read out of them.
-  const b = ar.ver < FIRST_V4 ? r.raw(5) : r.raw(8);
+  // 5 bytes in V3, 7 in V4, 8 from V5.
+  const b = r.raw(ar.ver < FIRST_V4 ? 5 : ar.ver < 5 ? 7 : 8);
   const view = new DataView(b.buffer, b.byteOffset, b.byteLength);
   // The layer field is normally a u16 id, but an entity can carry the
   // layer BY OBJECT instead (seen on real 2018 instances): a full inline
@@ -894,7 +906,7 @@ function textureBlock(
 } {
   let s: number | null;
   let dib: any;
-  if (ar.ver < FIRST_V4) {
+  if (ar.ver < FIRST_DIB_OBJECT) {
     s = null;
     dib = readDib(ar, r);
   } else {
@@ -1006,7 +1018,7 @@ function readCamera(ar: Archive, r: R): any {
   r.raw(137);
   r.u16();
   r.utf16();
-  r.raw(33);
+  r.raw(ar.ver >= 6 ? 33 : 10);
   return { k: 'camera' };
 }
 
@@ -1018,6 +1030,11 @@ function readThumbnail(ar: Archive, r: R): any {
     return { k: 'thumbnail', dib: null };
   }
   ar.readObject(r, 'CCamera');
+  if (ar.ver < 6) {
+    // SketchUp 4 and 5 end the thumbnail with its camera: no trailing image
+    // pointer (not even a null one).
+    return { k: 'thumbnail', dib: null };
+  }
   const [, , dib] = ar.readObject(r, 'CDib');
   return { k: 'thumbnail', dib };
 }
@@ -1226,11 +1243,11 @@ function readSkFont(ar: Archive, r: R): any {
   return { k: 'font' };
 }
 
-function readDimLinear(ar: Archive, r: R): any {
+export function readDimLinear(ar: Archive, r: R): any {
   preamble(ar, r);
   const db = drawbase(ar, r);
   const text = r.utf16();
-  ar.readObject(r, 'CSkFont');
+  if (ar.ver >= 6) ar.readObject(r, 'CSkFont');
   // The tail is NOT a fixed 165-byte blob: it embeds two object
   // references (the dimension's connection points into the geometry).
   // Each is a normal MFC tag - 2 bytes in small files, but 6 bytes once
@@ -1248,13 +1265,15 @@ function readDimLinear(ar: Archive, r: R): any {
   // after it, because the root reader stops at the first unreadable item.
   // Every record is 161 fixed bytes plus its refs (openskp#384, the Python
   // fix; found again on a real SketchUp 2017 cabinet, openskp#412).
-  r.raw(37);
+  // SketchUp 4 and 5 write neither the font object above nor the 5 bytes in
+  // front of the first connection block, nor the trailing u32 of the last one.
+  r.raw(ar.ver >= 6 ? 37 : 32);
   const c1 = entityRef(ar, r); // connection point 1 (may be null)
   const path1 = connectionPaths(ar, r);
   r.raw(32);
   const c2 = entityRef(ar, r); // connection point 2 (may be null)
   const path2 = connectionPaths(ar, r);
-  r.raw(72);
+  r.raw(ar.ver >= 6 ? 72 : 68);
   return { k: 'dimension', db, text, connect: [c1, c2], paths: [path1, path2] };
 }
 
@@ -1372,7 +1391,8 @@ function readEntityListInner(
 
 function readDefinition(ar: Archive, r: R): any {
   preamble(ar, r);
-  r.raw(ar.ver >= 17 ? 22 : ar.ver >= FIRST_V4 ? 20 : 13); // undecoded base block (13 in SketchUp 3)
+  // undecoded base block: 13 bytes in SketchUp 3, 19 in 4, 20 from 5, 22 from 2017
+  r.raw(ar.ver >= 17 ? 22 : ar.ver >= 5 ? 20 : ar.ver >= FIRST_V4 ? 19 : 13);
   const nlayers = r.u32();
   if (nlayers > 10000) {
     throw new LegacyParseError(`implausible def layer count ${r.ctx()}`);
@@ -1388,6 +1408,11 @@ function readDefinition(ar: Archive, r: R): any {
     }
     ar.readObject(r, 'CLayer');
     got += 1;
+  }
+  if (ar.ver === 19 && nlayers > 0 && r.peekU16() === 0) {
+    // SketchUp 2019 follows the LAST layer with a separator null too (2020
+    // does as well, but its count recovery already absorbs it).
+    r.pos += 2;
   }
   const decl = r.u16();
   if (decl === 0x7fff) {
@@ -1492,8 +1517,9 @@ function readInstance(ar: Archive, r: R): any {
     throw new LegacyParseError(`instance definition ref is ${dn} ${r.ctx()}`);
   }
   const xf = r.f64s(13);
-  // SketchUp 3 instances carry no name string.
-  const name = ar.ver >= FIRST_V4 || bytesEqual(r.peek(3), STR_MARKER) ? r.utf16() : '';
+  // SketchUp 3 and 4 instances carry no name string (5 is the first to write
+  // one); where it is optional, take it only if a string is there.
+  const name = ar.ver >= FIRST_NAMED_INSTANCE || bytesEqual(r.peek(3), STR_MARKER) ? r.utf16() : '';
 
   // The trailing instance GUID is a version-14 (SketchUp 2014) addition for
   // BOTH CComponentInstance and CGroup - gated by the file's own version,
@@ -1506,7 +1532,7 @@ function readInstance(ar: Archive, r: R): any {
   return { k: 'instance', db, def: ds, xf, name, guid: toHex(guid), attrs: pre.attrs };
 }
 
-const READERS: Record<string, (ar: Archive, r: R) => any> = {
+export const READERS: Record<string, (ar: Archive, r: R) => any> = {
   CVertex: readVertex,
   CEdge: readEdge,
   CCurve: readCurve,
@@ -1678,16 +1704,27 @@ export function walk(data: Uint8Array): WalkResult {
   const bases =
     matCount >= 2 ? [bootstrapTwoMaterials(data, ver, start)] : probeLayerAnchorBases(data, ver, start, matCount);
 
-  let lastExc: unknown = null;
+  // Every candidate but the right one dies almost immediately (the slot
+  // numbers it hands out disagree with the file's own class-refs), while the
+  // right one only fails where the file really differs from what we know. So
+  // report the failure that got FURTHEST into the file - not the last
+  // candidate's, which is the earliest to fail and says nothing useful.
+  let bestExc: unknown = null;
+  let bestAt = -1;
   for (const base of bases) {
     try {
       return walkModel(data, ver, start, matCount, base);
     } catch (exc) {
       if (!(exc instanceof LegacyParseError)) throw exc;
-      lastExc = exc;
+      const m = /@0x([0-9a-f]+)/.exec(exc.message);
+      const at = m ? parseInt(m[1], 16) : -1;
+      if (bestExc === null || at > bestAt) {
+        bestExc = exc;
+        bestAt = at;
+      }
     }
   }
-  if (lastExc !== null) throw lastExc;
+  if (bestExc !== null) throw bestExc;
   throw new LegacyParseError('no viable slot base candidate');
 }
 
@@ -1728,6 +1765,16 @@ function buildAndReleaseDefinition(ar: Archive, slot: number, def: any): void {
     const placeholder = RELEASED_ENTITIES.get(ent[1]);
     if (placeholder !== undefined) ar.slots.set(k, placeholder);
   }
+}
+
+/** True when the bytes at `at` begin a CComponentDefinition record: its
+ * first-use class declaration, or a class-ref to its known slot. */
+function definitionStartsAt(ar: Archive, data: Uint8Array, at: number): boolean {
+  if (data[at] === 0xff && data[at + 1] === 0xff && matchesAscii(data.subarray(at, at + 26), 6, 'CComponentDefinition')) {
+    return true;
+  }
+  const defCls = ar.classSlot.get('CComponentDefinition');
+  return defCls !== undefined && isClassRef(data, at, defCls);
 }
 
 function walkModel(data: Uint8Array, ver: number, start: number, matCount: number, base: number): WalkResult {
@@ -1789,7 +1836,21 @@ function walkModel(data: Uint8Array, ver: number, start: number, matCount: numbe
   let defCount = r.u32();
   if (defCount > 1_000_000) {
     const retry = retryCountAfterV20Filler(r, r.pos - 4, 1_000_000, ar);
-    if (retry !== null) defCount = retry;
+    if (retry !== null) {
+      defCount = retry;
+      if (!definitionStartsAt(ar, r.data, r.pos)) {
+        // A model with NO component definitions has no definition count to
+        // find: SketchUp 2020 writes its filler where the count would be, and
+        // the first count behind it is the ROOT entity count. The retry cannot
+        // tell the two apart, so it handed the root count over as a definition
+        // count - and the root entities were then read (and silently dropped)
+        // as "definitions". A real definition count is always followed by a
+        // definition record; anything else means this is the root count, so
+        // put it back.
+        defCount = 0;
+        r.pos -= 4;
+      }
+    }
   }
   if (defCount > 1_000_000) {
     throw new LegacyParseError('implausible definition count');

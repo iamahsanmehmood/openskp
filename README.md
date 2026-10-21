@@ -162,8 +162,10 @@ across its save history) found:
 
 | Result | Versions |
 |:---|:---|
-| ✅ Parse, build, and export cleanly | 2014, 2015, 2016, 2017, 2018, 2020, 2021, 2025, **V6**, **V7, V8, 2013** (fixed in [#385](https://github.com/iamahsanmehmood/openskp/pull/385) and [#310](https://github.com/iamahsanmehmood/openskp/pull/310)) |
-| ❌ Fail — root causes tracked in [issue #284](https://github.com/iamahsanmehmood/openskp/issues/284) | V3 (the real project; synthetic V3 files parse), and V4, V5 and 2019 in the TypeScript, .NET, Dart and C++ readers (fixed in the Python reader only so far) |
+| ✅ Parse, build, and export cleanly — **Python reader** | 2014, 2015, 2016, 2017, 2018, 2020, 2021, 2025, **V4**, **V6**, **V7, V8, 2013**, **2019** (fixed in [#385](https://github.com/iamahsanmehmood/openskp/pull/385), [#310](https://github.com/iamahsanmehmood/openskp/pull/310) and [#440](https://github.com/iamahsanmehmood/openskp/pull/440)) |
+| ❌ Fail — root causes tracked in [issue #284](https://github.com/iamahsanmehmood/openskp/issues/284) | V3 in every reader (synthetic V3 files parse); and, in the TypeScript, .NET, Dart and C++ readers, every legacy version of this real project (see below) |
+
+That sweep was run with the Python reader. The other four readers parse the SketchUp-written synthetic fixtures (V3, V4, V5, V6, V7, 2014, 2019), but stop on the real project's text entities: [#442](https://github.com/iamahsanmehmood/openskp/issues/442).
 
 Full per-version error table and investigation notes: [docs/LANGUAGE_PARITY.md § 4](docs/LANGUAGE_PARITY.md#4-real-sketchup-file-version-support).
 

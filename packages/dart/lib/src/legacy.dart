@@ -182,6 +182,19 @@ bool isClassRef(Uint8List data, int p, int slot) {
       Tlv.readU32(data, p + 2) == (0x80000000 | slot);
 }
 
+/// True when the bytes at [at] begin a CComponentDefinition record: its
+/// first-use class declaration, or a class-ref to its known slot.
+bool definitionStartsAt(Archive ar, Uint8List data, int at) {
+  if (at + 26 <= data.length &&
+      data[at] == 0xFF &&
+      data[at + 1] == 0xFF &&
+      _matchesAscii(data, at + 6, 'CComponentDefinition')) {
+    return true;
+  }
+  final defCls = ar.classSlot['CComponentDefinition'];
+  return defCls != null && isClassRef(data, at, defCls);
+}
+
 /// Byte cursor, matching Python's _R.
 class LR {
   final Uint8List data;
@@ -723,8 +736,21 @@ class LegacyReaders {
   // synthetic model saved down through SketchUp's own version export) - not
   // on a corpus - so they are exactly what that file proves and no more
   // (openskp#284, #407; matches Python's legacy.py `_FIRST_V4`). SketchUp 4
-  // needs none of them: a real V4 file parses with the later layout.
+  // and 5 have layout differences of their own (openskp#284): see
+  // firstDibObject, firstNamedInstance and the version checks in drawbase,
+  // readCamera, readThumbnail, readDimLinear and readDefinition.
   static const int firstV4 = 4;
+
+  /// The texture image became a first-class CDib object (store-map slot,
+  /// entity preamble) in SketchUp 6. SketchUp 3, 4 and 5 write it as a bare
+  /// inline subtype/length/bytes record straight after the material's flag
+  /// word.
+  static const int firstDibObject = 6;
+
+  /// First version whose instances and groups carry a name string (SketchUp
+  /// 3 and 4 files have none; where the name is optional the reader checks
+  /// for one).
+  static const int firstNamedInstance = 5;
 
   /// [preamble] for the entity types that carry NO attribute-container
   /// pointer in a SketchUp 3 file: vertex, loop, edge-use, material, layer.
@@ -755,7 +781,8 @@ class LegacyReaders {
     // comes from the face's own pointer instead (see readFace); report the
     // rest as unset rather than the meaningless 0x0100 / "hidden" the 8-byte
     // layout would read out of them.
-    final b = ar.ver < firstV4 ? r.raw(5) : r.raw(8);
+    // 5 bytes in V3, 7 in V4, 8 from V5.
+    final b = r.raw(ar.ver < firstV4 ? 5 : (ar.ver < 5 ? 7 : 8));
     // The layer field is normally a u16 id, but an entity can carry the
     // layer BY OBJECT instead (seen on real 2018 instances): a full inline
     // CLayer record on first use, an escaped back-ref to it on later
@@ -1068,7 +1095,7 @@ class LegacyReaders {
   static TextureBlockRec _textureBlock(Archive ar, LR r) {
     int? s;
     Uint8List? inlineData;
-    if (ar.ver < firstV4) {
+    if (ar.ver < firstDibObject) {
       inlineData = (readDib(ar, r) as DibRec).data;
     } else {
       r.pos -= 1;
@@ -1178,7 +1205,7 @@ class LegacyReaders {
     r.raw(137);
     r.u16();
     r.utf16();
-    r.raw(33);
+    r.raw(ar.ver >= 6 ? 33 : 10);
     return CameraRec();
   }
 
@@ -1190,6 +1217,11 @@ class LegacyReaders {
       return ThumbnailRec(null);
     }
     ar.readObject(r, 'CCamera');
+    if (ar.ver < 6) {
+      // SketchUp 4 and 5 end the thumbnail with its camera: no trailing
+      // image pointer (not even a null one).
+      return ThumbnailRec(null);
+    }
     final (dibSlot, _, __) = ar.readObject(r, 'CDib');
     return ThumbnailRec(dibSlot);
   }
@@ -1366,7 +1398,7 @@ class LegacyReaders {
     preamble(ar, r);
     final db = drawbase(ar, r);
     final text = r.utf16();
-    ar.readObject(r, 'CSkFont');
+    if (ar.ver >= 6) ar.readObject(r, 'CSkFont');
     // The tail is NOT a fixed 165-byte blob: it embeds two object
     // references (the dimension's connection points into the geometry).
     // Each is a normal MFC tag - 2 bytes in small files, but 6 bytes once
@@ -1384,13 +1416,16 @@ class LegacyReaders {
     // after it, because the root reader stops at the first unreadable item.
     // Every record is 161 fixed bytes plus its refs (openskp#384, the Python
     // fix; found again on a real SketchUp 2017 cabinet, openskp#412).
-    r.raw(37);
+    // SketchUp 4 and 5 write neither the font object above nor the 5 bytes in
+    // front of the first connection block, nor the trailing u32 of the last
+    // one.
+    r.raw(ar.ver >= 6 ? 37 : 32);
     _entityRef(ar, r); // connection point 1 (may be null)
     connectionPaths((rr) => ar.readObject(rr).$1, r);
     r.raw(32);
     _entityRef(ar, r); // connection point 2 (may be null)
     connectionPaths((rr) => ar.readObject(rr).$1, r);
-    r.raw(72);
+    r.raw(ar.ver >= 6 ? 72 : 68);
     return DimLinearRec(db, text);
   }
 
@@ -1534,8 +1569,9 @@ class LegacyReaders {
 
   static Object readDefinition(Archive ar, LR r) {
     preamble(ar, r);
-    // undecoded base block (13 bytes in SketchUp 3)
-    r.raw(ar.ver >= 17 ? 22 : (ar.ver >= firstV4 ? 20 : 13));
+    // undecoded base block: 13 bytes in SketchUp 3, 19 in 4, 20 from 5, 22
+    // from 2017
+    r.raw(ar.ver >= 17 ? 22 : (ar.ver >= 5 ? 20 : (ar.ver >= firstV4 ? 19 : 13)));
     final nlayers = r.u32();
     if (nlayers > 10000) {
       throw LegacyParseError('implausible def layer count ${r.ctx()}');
@@ -1551,6 +1587,11 @@ class LegacyReaders {
       }
       ar.readObject(r, 'CLayer');
       got += 1;
+    }
+    if (ar.ver == 19 && nlayers > 0 && r.peekU16() == 0) {
+      // SketchUp 2019 follows the LAST layer with a separator null too (2020
+      // does as well, but its count recovery already absorbs it).
+      r.pos += 2;
     }
     var decl = r.u16();
     if (decl == 0x7FFF) {
@@ -1656,8 +1697,10 @@ class LegacyReaders {
       throw LegacyParseError('instance definition ref is $dn ${r.ctx()}');
     }
     final xf = r.f64s(13);
-    // SketchUp 3 instances carry no name string.
-    final name = (ar.ver >= firstV4 || _bytesEqualAt(r.peek(3), 0, _strMarker))
+    // SketchUp 3 and 4 instances carry no name string (5 is the first to
+    // write one); where it is optional, take it only if a string is there.
+    final name = (ar.ver >= firstNamedInstance ||
+            _bytesEqualAt(r.peek(3), 0, _strMarker))
         ? r.utf16()
         : '';
 
@@ -1871,15 +1914,26 @@ class Legacy {
         ? [_bootstrapTwoMaterials(data, ver, start)]
         : _probeLayerAnchorBases(data, ver, start, matCount);
 
-    LegacyParseError? lastExc;
+    // Every candidate but the right one dies almost immediately (the slot
+    // numbers it hands out disagree with the file's own class-refs), while
+    // the right one only fails where the file really differs from what we
+    // know. So report the failure that got FURTHEST into the file - not the
+    // last candidate's, which is the earliest to fail and says nothing useful.
+    LegacyParseError? bestExc;
+    var bestAt = -1;
     for (final base in bases) {
       try {
         return _walkModel(data, ver, start, matCount, base);
       } on LegacyParseError catch (e) {
-        lastExc = e;
+        final m = RegExp(r'@0x([0-9a-f]+)').firstMatch(e.message);
+        final at = m != null ? int.parse(m.group(1)!, radix: 16) : -1;
+        if (bestExc == null || at > bestAt) {
+          bestExc = e;
+          bestAt = at;
+        }
       }
     }
-    if (lastExc != null) throw lastExc;
+    if (bestExc != null) throw bestExc;
     throw LegacyParseError('no viable slot base candidate');
   }
 
@@ -1943,7 +1997,21 @@ class Legacy {
     var defCount = r.u32();
     if (defCount > 1000000) {
       final retry = retryCountAfterV20Filler(r, r.pos - 4, 1000000, ar);
-      if (retry != null) defCount = retry;
+      if (retry != null) {
+        defCount = retry;
+        if (!definitionStartsAt(ar, r.data, r.pos)) {
+          // A model with NO component definitions has no definition count to
+          // find: SketchUp 2020 writes its filler where the count would be,
+          // and the first count behind it is the ROOT entity count. The retry
+          // cannot tell the two apart, so it handed the root count over as a
+          // definition count - and the root entities were then read (and
+          // silently dropped) as "definitions". A real definition count is
+          // always followed by a definition record; anything else means this
+          // is the root count, so put it back.
+          defCount = 0;
+          r.pos -= 4;
+        }
+      }
     }
     if (defCount > 1000000) {
       throw LegacyParseError('implausible definition count');

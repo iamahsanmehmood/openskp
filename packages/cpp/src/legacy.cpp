@@ -27,9 +27,21 @@ bool legacy_instance_has_guid(int ver) { return ver >= 14; }
 // byte-by-byte on one real SketchUp-written V3 file (a synthetic model saved
 // down through SketchUp's own version export) - not on a corpus - so they are
 // exactly what that file proves and no more (openskp#284, #407; matches
-// Python's legacy.py `_FIRST_V4`). SketchUp 4 needs none of them: a real V4
-// file parses with the later layout.
+// Python's legacy.py `_FIRST_V4`). SketchUp 4 and 5 have layout differences of
+// their own (openskp#284): see kFirstDibObject, kFirstNamedInstance and the
+// version checks in draw(), the CCamera/CThumbnail/CDimensionLinear/
+// CComponentDefinition readers.
 constexpr int kFirstV4 = 4;
+
+// The texture image became a first-class CDib object (store-map slot, entity
+// preamble) in SketchUp 6. SketchUp 3, 4 and 5 write it as a bare inline
+// subtype/length/bytes record straight after the material's flag word.
+constexpr int kFirstDibObject = 6;
+
+// First version whose instances and groups carry a name string (SketchUp 3
+// and 4 files have none; where the name is optional the reader checks for
+// one).
+constexpr int kFirstNamedInstance = 5;
 
 namespace {
 
@@ -470,7 +482,7 @@ struct Archive {
   // store-map slot (the bytes ride along in `v.blob`, flagged by
   // `v.inline_tex`).
   void texture_block(V& v) {
-    if (ver < kFirstV4) {
+    if (ver < kFirstDibObject) {
       r.u32();
       auto z = r.u32();
       if (z > r.d.size()) throw std::runtime_error("implausible dib length");
@@ -539,7 +551,8 @@ struct Archive {
     // report the rest as unset rather than the meaningless 0x0100 / "hidden"
     // the 8-byte layout would read out of them.
     const bool v3 = ver < kFirstV4;
-    auto b = r.raw(v3 ? 5 : 8);
+    // 5 bytes in V3, 7 in V4, 8 from V5.
+    auto b = r.raw(v3 ? 5 : (ver < 5 ? 7 : 8));
     if (!v3) {
       v.mat = int(b[0] | b[1] << 8);
       v.hidden = b[2];
@@ -826,7 +839,7 @@ struct Archive {
       r.raw(137);
       r.u16();
       r.utf16();
-      r.raw(33);
+      r.raw(ver >= 6 ? 33 : 10);
     } else if (n == "CThumbnail") {
       preamble();
       if (ver < kFirstV4) {
@@ -834,7 +847,9 @@ struct Archive {
         r.raw(129);
       } else {
         object("CCamera");
-        object("CDib");
+        // SketchUp 4 and 5 end the thumbnail with its camera: no trailing
+        // image pointer (not even a null one).
+        if (ver >= 6) object("CDib");
       }
     } else if (n == "CImage") {
       // CImage: an Image entity - instance-shaped: a back-ref to the
@@ -964,20 +979,23 @@ struct Archive {
       v->k = "dimension";
       draw(*v);
       v->text = r.utf16();
-      object("CSkFont");
+      if (ver >= 6) object("CSkFont");
       // The tail is NOT a fixed 165-byte blob: it embeds two object
       // references (the dimension's connection points into the
       // geometry). Each is a normal MFC tag - 2 bytes in small files, but
       // 6 bytes once the archive holds more than 0x7ffe objects and the
       // 0x7fff big-tag escape kicks in - so a fixed-size skip walks off
       // the rails exactly on large models.
-      r.raw(37);
+      // SketchUp 4 and 5 write neither the font object above nor the 5 bytes
+      // in front of the first connection block, nor the trailing u32 of the
+      // last one.
+      r.raw(ver >= 6 ? 37 : 32);
       entity_ref();  // connection point 1 (may be null)
       connection_paths();
       r.raw(32);
       entity_ref();  // connection point 2 (may be null)
       connection_paths();
-      r.raw(72);
+      r.raw(ver >= 6 ? 72 : 68);
     } else if (n == "CText") {
       preamble();
       v->k = "text";
@@ -1011,8 +1029,9 @@ struct Archive {
     } else if (n == "CComponentDefinition") {
       preamble();
       v->k = "definition";
-      // undecoded base block (13 bytes in SketchUp 3)
-      r.raw(ver >= 17 ? 22 : ver >= kFirstV4 ? 20 : 13);
+      // undecoded base block: 13 bytes in SketchUp 3, 19 in 4, 20 from 5, 22
+      // from 2017
+      r.raw(ver >= 17 ? 22 : ver >= 5 ? 20 : ver >= kFirstV4 ? 19 : 13);
       auto nl = r.u32();
       if (nl > 10000) throw std::runtime_error("implausible def layers");
       // like the model-level layer list, the count is REAL layers (new
@@ -1028,6 +1047,11 @@ struct Archive {
           object("CLayer");
           got++;
         }
+      }
+      if (ver == 19 && nl > 0 && r.p + 2 <= r.d.size() && read_u16(r.d, r.p) == 0) {
+        // SketchUp 2019 follows the LAST layer with a separator null too
+        // (2020 does as well, but its count recovery already absorbs it).
+        r.p += 2;
       }
       auto decl = r.u16();
       if (decl == 0x7fff) r.u32();
@@ -1119,8 +1143,9 @@ struct Archive {
       auto q = object("CComponentDefinition");
       v->def = std::get<0>(q);
       v->xf = r.f64s(13);
-      // SketchUp 3 instances carry no name string.
-      if (ver >= kFirstV4 || r.marker()) v->name = r.utf16();
+      // SketchUp 3 and 4 instances carry no name string (5 is the first to
+      // write one); where it is optional, take it only if a string is there.
+      if (ver >= kFirstNamedInstance || r.marker()) v->name = r.utf16();
       if (legacy_instance_has_guid(ver)) r.raw(16);
     } else
       throw std::runtime_error("no legacy reader for " + n);
@@ -1327,31 +1352,56 @@ std::vector<uint64_t> probe_layer_anchor_bases(const ByteBuffer& data, int ver, 
   return result;
 }
 
+// `failed_at`, when given, receives the reader position the walk had reached
+// if it throws - how far into the file this slot-base candidate got.
 WalkResult walk_model(const ByteBuffer& data, int ver, size_t start, uint32_t mat_count,
-                      uint64_t base);
+                      uint64_t base, size_t* failed_at = nullptr);
 
 // Tries each candidate base in turn, returning the first one that walks
 // cleanly. WalkResult holds an Archive whose R holds a reference member, so
 // it's move-constructible but not assignable - built via a direct `return`
 // from inside the loop (RVO/move-construction) rather than storing into an
 // outer-scope optional/variable, which would need assignment instead.
+//
+// Every candidate but the right one dies almost immediately (the slot numbers
+// it hands out disagree with the file's own class-refs), while the right one
+// only fails where the file really differs from what we know. So when none
+// parses, rethrow the failure that got FURTHEST into the file - not the last
+// candidate's, which is the earliest to fail and says nothing useful.
 WalkResult walk_with_bases(const ByteBuffer& data, int ver, size_t start, uint32_t mat_count,
                            const std::vector<uint64_t>& bases) {
-  std::exception_ptr last_exc;
+  std::exception_ptr best_exc;
+  size_t best_at = 0;
   for (auto base : bases) {
+    size_t at = 0;
     try {
-      return walk_model(data, ver, start, mat_count, base);
+      return walk_model(data, ver, start, mat_count, base, &at);
     } catch (const std::exception&) {
-      last_exc = std::current_exception();
+      if (!best_exc || at > best_at) {
+        best_exc = std::current_exception();
+        best_at = at;
+      }
     }
   }
-  if (last_exc) std::rethrow_exception(last_exc);
+  if (best_exc) std::rethrow_exception(best_exc);
   throw std::runtime_error("no viable slot base candidate");
 }
 
-WalkResult walk_model(const ByteBuffer& data, int ver, size_t start, uint32_t mat_count,
-                      uint64_t base) {
-  Archive ar(data, ver);
+// True when the bytes at `at` begin a CComponentDefinition record: its
+// first-use class declaration, or a class-ref to its known slot.
+bool definition_starts_at(Archive& ar, size_t at) {
+  const auto& d = ar.r.d;
+  if (at + 26 <= d.size() && d[at] == 0xff && d[at + 1] == 0xff &&
+      std::equal(d.begin() + at + 6, d.begin() + at + 26, "CComponentDefinition"))
+    return true;
+  auto cs = ar.class_slot.find("CComponentDefinition");
+  return cs != ar.class_slot.end() && is_class_ref(d, at, cs->second);
+}
+
+// The walk proper, on a caller-owned archive so walk_model can report how far
+// it got when it throws.
+WalkResult walk_model_on(Archive& ar, const ByteBuffer& data, int ver, size_t start,
+                         uint32_t mat_count, uint64_t base) {
   ar.next = ar.base = base;
   ar.r.p = start;
   std::vector<std::pair<uint64_t, std::shared_ptr<V>>> mats, layers;
@@ -1391,7 +1441,21 @@ WalkResult walk_model(const ByteBuffer& data, int ver, size_t start, uint32_t ma
   auto dc = ar.r.u32();
   if (dc > 1000000) {
     auto retry = retry_count_after_v20_filler(ar.r, ar.r.p - 4, 1000000, &ar);
-    if (retry) dc = *retry;
+    if (retry) {
+      dc = *retry;
+      if (!definition_starts_at(ar, ar.r.p)) {
+        // A model with NO component definitions has no definition count to
+        // find: SketchUp 2020 writes its filler where the count would be, and
+        // the first count behind it is the ROOT entity count. The retry
+        // cannot tell the two apart, so it handed the root count over as a
+        // definition count - and the root entities were then read (and
+        // silently dropped) as "definitions". A real definition count is
+        // always followed by a definition record; anything else means this is
+        // the root count, so put it back.
+        dc = 0;
+        ar.r.p -= 4;
+      }
+    }
   }
   if (dc > 1000000) throw std::runtime_error("invalid definition count");
   while (dc--) ar.object("CComponentDefinition");
@@ -1413,6 +1477,17 @@ WalkResult walk_model(const ByteBuffer& data, int ver, size_t start, uint32_t ma
   if (root_count > 5000000) throw std::runtime_error("implausible root entity count");
   auto root = ar.entity_list(root_count, true);
   return {std::move(ar), std::move(root), std::move(layers), std::move(mats)};
+}
+
+WalkResult walk_model(const ByteBuffer& data, int ver, size_t start, uint32_t mat_count,
+                      uint64_t base, size_t* failed_at) {
+  Archive ar(data, ver);
+  try {
+    return walk_model_on(ar, data, ver, start, mat_count, base);
+  } catch (...) {
+    if (failed_at) *failed_at = ar.r.p;
+    throw;
+  }
 }
 
 void add_edge(GeometryBuilder& b, uint64_t s, const V& e,
@@ -1661,11 +1736,11 @@ void skip_typed_ref(LegacySlotTable& slots, R& r, const std::string& cls_name,
 // (see its own comment) but still needs to consume the exact same bytes
 // when a page candidate's camera/thumbnail happens to be a fresh
 // declaration or class-ref rather than the usual null tag.
-void read_camera_body(R& r) {
+void read_camera_body(R& r, int ver) {
   r.raw(137);
   r.u16();
   r.utf16();
-  r.raw(33);
+  r.raw(ver >= 6 ? 33 : 10);
 }
 
 void read_dib_body(R& r) {
@@ -1697,6 +1772,16 @@ std::vector<RawPage> scan_pages_for_layers(const ByteBuffer& data, std::size_t s
   std::vector<RawPage> pages;
   size_t pos = start_pos;
   const size_t n = data.size();
+  // The header version decides the camera layout below; a buffer with no
+  // header (unit tests feed bare record runs) is read as the current layout.
+  int scan_ver = 99;
+  {
+    std::string ascii;
+    for (size_t i = 0; i < std::min<size_t>(96, n); ++i)
+      if (data[i]) ascii += char(data[i]);
+    std::smatch vm;
+    if (std::regex_search(ascii, vm, std::regex("\\{(\\d+)\\."))) scan_ver = std::stoi(vm[1]);
+  }
   while (true) {
     size_t idx = std::string::npos;
     for (size_t i = pos; i + 3 <= n; ++i) {
@@ -1724,7 +1809,7 @@ std::vector<RawPage> scan_pages_for_layers(const ByteBuffer& data, std::size_t s
     std::string name = decode_utf16le_range(data, name_start, nlen);
     try {
       R r{data, flags_pos + 4};
-      skip_typed_ref(slots, r, "CCamera", read_camera_body);
+      skip_typed_ref(slots, r, "CCamera", [scan_ver](R& rr) { read_camera_body(rr, scan_ver); });
       skip_typed_ref(slots, r, "CDib", read_dib_body);
       std::vector<EntityId> hidden_ids;
       if (flags & kPageHiddenLayersBit) {
