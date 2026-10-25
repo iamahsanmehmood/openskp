@@ -28,6 +28,7 @@ from defusedxml.common import DefusedXmlException
 import numpy as np
 
 from .errors import SkpParseError
+from ._vff_records import decode_record as _decode_geometry_record
 
 try:
     import mapbox_earcut
@@ -215,6 +216,69 @@ def parse_tlv_recursive(data, start, end, container_tags=None, depth=0):
     return elements
 
 
+class _GeometryRecordNode(_TlvNode):
+    """Internal-only decoded geometry; never used in retained instance trees."""
+
+    __slots__ = ('_children', '_container_tags', 'record')
+
+    def __init__(self, offset, tag, size, record, data, container_tags):
+        self.offset = offset
+        self.tag = tag
+        self.size = size
+        self._children = None
+        self._data = data
+        self._payload_start = offset + 6
+        self._payload_end = offset + 6 + size
+        self._payload = b''
+        self._container_tags = container_tags
+        self.record = record
+
+    @property
+    def children(self):
+        # Generic searches still see the original tree. For example, a
+        # definition missing its own id may resolve one inside its geometry.
+        if self._children is None:
+            self._children = parse_tlv_recursive(
+                self._data, self._payload_start, self._payload_end,
+                self._container_tags)
+        return self._children
+
+
+def _parse_tlv_geometry(data, start, end, container_tags):
+    """Build the structural tree, decoding exact common geometry in place.
+
+    The public TLV parser is unchanged. Unknown layouts take its usual node
+    path, and instance subtrees always use it because raw builders expose
+    their complete children (including any geometry and opaque records).
+    """
+    elements = []
+    tag_strings = _TAG_STRINGS or _tag_strings()
+    pos = start
+    while pos <= end - 6:
+        tag_value, size = _unpack_header(data, pos)
+        tag = tag_strings[tag_value]
+        payload_start = pos + 6
+        payload_end = payload_start + size
+        if payload_end > end:
+            break
+        if tag in ('C409', 'B80B', 'AC0D'):
+            record = _decode_geometry_record(data, payload_start, size, tag)
+            if record is not None:
+                elements.append(_GeometryRecordNode(
+                    pos, tag, size, record, data, container_tags))
+                pos = payload_end
+                continue
+        if size > 0 and tag in container_tags:
+            parser = parse_tlv_recursive if tag == '6419' else _parse_tlv_geometry
+            children = parser(data, payload_start, payload_end, container_tags)
+        else:
+            children = []
+        elements.append(_TlvNode(pos, tag, size, children, data,
+                                 payload_start, payload_end))
+        pos = payload_end
+    return elements
+
+
 def _flat_headers(data, start, end):
     """Scan [start, end) for direct-child (tag, offset, size) headers only,
     without recursing into any container - O(sibling count), not
@@ -260,7 +324,7 @@ def _unwrap_definitions_container(data, offset, size):
     return defs if defs else None
 
 
-def iter_top_level_lazy(data, start, end, container_tags=None):
+def iter_top_level_lazy(data, start, end, container_tags=None, *, _geometry=False):
     """Yield ``(index, total, node)`` for each top-level TLV record, fully
     recursed, one at a time - transparently unwrapping a lone 'F401'
     wrapper (matching the shape parse_tlv_recursive's callers already
@@ -309,7 +373,8 @@ def iter_top_level_lazy(data, start, end, container_tags=None):
     total = len(headers)
     for index, (tag_hex, offset, size) in enumerate(headers):
         record_end = offset + 6 + size
-        nodes = parse_tlv_recursive(data, offset, record_end, container_tags)
+        parser = _parse_tlv_geometry if _geometry else parse_tlv_recursive
+        nodes = parser(data, offset, record_end, container_tags)
         if nodes:
             yield index, total, nodes[0]
 
@@ -1010,6 +1075,25 @@ def _direct_child(children, tag):
 def _extract_geometry_nodes(elements, builder):
     for el in elements:
         tag = el.tag
+
+        if isinstance(el, _GeometryRecordNode):
+            if tag == 'C409':
+                v_id, position, _ = el.record
+                builder.vertices[v_id] = position
+            elif tag == 'B80B':
+                e_id, flags, v1, v2 = el.record
+                builder.edges[e_id] = (v1, v2)
+                builder.edge_flags[e_id] = flags
+            else:
+                f_id, normal, loop, hidden = el.record
+                # A subtree can be extracted into more than one builder.
+                # Each gets its own mutable face dictionary and loop lists.
+                builder.faces[f_id] = {
+                    'loops': [list(loop)], 'normal': normal,
+                    'material_id': None, 'back_material_id': None,
+                    'uv_transform': None, 'uv_transform_back': None,
+                    'hidden': hidden, 'layer': None}
+            continue
 
         if tag == 'C409':
             v_id = _entity_id(el)
@@ -1809,7 +1893,7 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
         nonlocal page_node
         for el in nodes:
             tag = el.tag
-            children = el.children
+            children = () if isinstance(el, _GeometryRecordNode) else el.children
             here = parent
 
             if tag == '993A':
@@ -1893,16 +1977,20 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
                 # dimensions: C409's DC05 holds the id, C509 the 3 x f64
                 # position. Ids are unique file-wide, so one flat map
                 # resolves a connection point whichever context holds it.
-                dc05 = _find_tag(children, 'DC05')
-                c509 = _find_tag(children, 'C509')
-                if dc05 and c509 and len(c509.payload) == 24:
-                    p = dc05.payload
-                    if p[:2] == b'\xde\x05':
-                        idlen = read_u32(p, 2)
-                        idb = p[6:6 + idlen]
-                    else:
-                        idb = p
-                    vertex_positions[idb.hex()] = struct.unpack('<3d', c509.payload)
+                if isinstance(el, _GeometryRecordNode):
+                    _, position, key = el.record
+                    vertex_positions[key] = position
+                else:
+                    dc05 = _find_tag(children, 'DC05')
+                    c509 = _find_tag(children, 'C509')
+                    if dc05 and c509 and len(c509.payload) == 24:
+                        p = dc05.payload
+                        if p[:2] == b'\xde\x05':
+                            idlen = read_u32(p, 2)
+                            idb = p[6:6 + idlen]
+                        else:
+                            idb = p
+                        vertex_positions[idb.hex()] = struct.unpack('<3d', c509.payload)
 
             elif tag == '6419':
                 # Instance persistent id (hex) -> WORLD transform (13-float
@@ -1931,7 +2019,8 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
             if children:
                 walk(children, here)
 
-    for index, total, el in iter_top_level_lazy(model_dat, 0, len(model_dat), CONTAINER_TAGS):
+    for index, total, el in iter_top_level_lazy(
+            model_dat, 0, len(model_dat), CONTAINER_TAGS, _geometry=True):
         try:
             walk([el], None)
             if el.tag == 'F601':
