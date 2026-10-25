@@ -177,6 +177,19 @@ class _TlvNode:
         return getattr(self, key, default)
 
 
+def _detach_tlv_payloads(nodes):
+    """Resolve the small subtrees retained by instances, releasing model.dat.
+
+    An unread leaf otherwise keeps the entire decompressed model alive even
+    after full_parse returns. Preserve all node fields, including opaque tags;
+    only the private lazy payload cache changes.
+    """
+    for node in nodes:
+        _ = node.payload
+        if node.children:
+            _detach_tlv_payloads(node.children)
+
+
 def parse_tlv_recursive(data, start, end, container_tags=None, depth=0):
     if container_tags is None:
         container_tags = CONTAINER_TAGS
@@ -697,6 +710,7 @@ def _parse_dimensions(model_dat, id2pos, inst_world):
     dims = []
     i = 0
     n = len(model_dat)
+    view = memoryview(model_dat)
     while True:
         j = model_dat.find(b'\xcc\x5b', i)
         if j < 0:
@@ -707,7 +721,9 @@ def _parse_dimensions(model_dat, id2pos, inst_world):
         ln = struct.unpack_from('<I', model_dat, j + 2)[0]
         if ln < 40 or j + 6 + ln > n:
             continue
-        body = _tlv_items(model_dat[j + 6:j + 6 + ln])
+        # A coincidental marker in geometry can advertise hundreds of MB.
+        # Validate candidates through views before copying any payloads.
+        body = _tlv_items(view[j + 6:j + 6 + ln])
         if body is None:
             continue
         tags = [t for t, _ in body]
@@ -1188,6 +1204,7 @@ def _extract_geometry_nodes(elements, builder):
                     inst_hidden = bool(d307.payload[0] & 0x01)
 
             dynamic = inst_attribute_dicts.get('dynamic_attributes', {})
+            _detach_tlv_payloads(el.children)
             builder.instances.append({
                 'offset': el.offset,
                 'ref_guid': guid,
