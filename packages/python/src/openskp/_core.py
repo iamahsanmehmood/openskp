@@ -29,6 +29,7 @@ import numpy as np
 
 from .errors import SkpParseError
 from ._vff_records import decode_record as _decode_geometry_record
+from ._packed_geometry import PackedVertices, PackedEdges, PackedFaces, _PackedTable
 
 try:
     import mapbox_earcut
@@ -52,6 +53,9 @@ logger = logging.getLogger("openskp")
 # How often (in top-level records) to emit a DEBUG progress log during the
 # main walk - coarse enough that it costs nothing on a 300k-definition file.
 _PROGRESS_INTERVAL = 500
+
+# Packing small models costs time without a material reduction in peak memory.
+_COMPACT_MODEL_BYTES = 256 * 1024 * 1024
 
 
 # ── TLV Parsing ──────────────────────────────────────────────────────────
@@ -660,6 +664,36 @@ def triangulate_face_3d(vertices_3d, loops, normal):
 # ── Geometry builder ─────────────────────────────────────────────────────
 
 class _GeometryBuilder:
+    def __getattribute__(self, name):
+        value = object.__getattribute__(self, name)
+        if name == '__dict__':
+            # Introspection and snapshots retain the original raw dict shape.
+            for key in ('vertices', 'edges', 'faces'):
+                table = value.get(key)
+                if isinstance(table, _PackedTable):
+                    value[key] = table.materialize()
+        elif isinstance(value, _PackedTable):
+            value = value.materialize()
+            object.__getattribute__(self, '__dict__')[name] = value
+        return value
+
+    def __getstate__(self):
+        return self.__dict__
+
+    def _geometry_tables(self):
+        """Sequential private readers; public attribute access stays a dict."""
+        values = object.__getattribute__(self, '__dict__')
+        return values['vertices'], values['edges'], values['faces']
+
+    def _compact_geometry(self):
+        """Compact completed large tables before building the public model."""
+        values = object.__getattribute__(self, '__dict__')
+        for name, storage in (('vertices', PackedVertices), ('edges', PackedEdges),
+                              ('faces', PackedFaces)):
+            table = values[name]
+            if type(table) is dict and len(table) >= 1024:
+                values[name] = storage(table)
+
     def __init__(self):
         self.vertices = {}
         self.edges = {}
@@ -1073,24 +1107,26 @@ def _direct_child(children, tag):
 
 
 def _extract_geometry_nodes(elements, builder):
+    vertices, edges, faces = builder.vertices, builder.edges, builder.faces
+    edge_flags = builder.edge_flags
     for el in elements:
         tag = el.tag
 
         if isinstance(el, _GeometryRecordNode):
             if tag == 'C409':
                 v_id, position, _ = el.record
-                builder.vertices[v_id] = position
+                vertices[v_id] = position
             elif tag == 'B80B':
                 e_id, flags, v1, v2, curve_id = el.record
-                builder.edges[e_id] = (v1, v2)
-                builder.edge_flags[e_id] = flags
+                edges[e_id] = (v1, v2)
+                edge_flags[e_id] = flags
                 if curve_id is not None:
                     builder.edge_curves[e_id] = curve_id
             else:
                 f_id, normal, loop, hidden, material_id, back_material_id = el.record
                 # A subtree can be extracted into more than one builder.
                 # Each gets its own mutable face dictionary and loop lists.
-                builder.faces[f_id] = {
+                faces[f_id] = {
                     'loops': [list(loop)], 'normal': normal,
                     'material_id': material_id, 'back_material_id': back_material_id,
                     'uv_transform': None, 'uv_transform_back': None,
@@ -1104,7 +1140,7 @@ def _extract_geometry_nodes(elements, builder):
                 x = read_f64(c509.payload, 0)
                 y = read_f64(c509.payload, 8)
                 z = read_f64(c509.payload, 16)
-                builder.vertices[v_id] = (x, y, z)
+                vertices[v_id] = (x, y, z)
 
         elif tag == 'B80B':
             e_id = _entity_id(el)
@@ -1113,7 +1149,7 @@ def _extract_geometry_nodes(elements, builder):
                 v2_node = _find_tag(el.children, 'BA0B')
                 v1 = parse_var_int(v1_node.payload, 0, len(v1_node.payload)) if v1_node else None
                 v2 = parse_var_int(v2_node.payload, 0, len(v2_node.payload)) if v2_node else None
-                builder.edges[e_id] = (v1, v2)
+                edges[e_id] = (v1, v2)
                 # D007 -> D307 = edge display flags: base 0x06, plus
                 # 0x01 hidden, 0x08|0x10 soft/smooth (cross-validated
                 # against the same models in the classic MFC format,
@@ -1122,7 +1158,7 @@ def _extract_geometry_nodes(elements, builder):
                 if d007:
                     d307 = _direct_child(d007.children, 'D307')
                     if d307 is not None and d307.payload:
-                        builder.edge_flags[e_id] = d307.payload[0]
+                        edge_flags[e_id] = d307.payload[0]
                     # D207 = layer id - the same
                     # tag the face branch and the instance branch read. See
                     # _GeometryBuilder.edge_layers.
@@ -1225,7 +1261,7 @@ def _extract_geometry_nodes(elements, builder):
                 af0d = _direct_child(el.children, 'AF0D')
                 if af0d and af0d.payload:
                     back_mat_id = parse_var_int(af0d.payload, 0, len(af0d.payload))
-                builder.faces[f_id] = {'loops': loops, 'normal': normal,
+                faces[f_id] = {'loops': loops, 'normal': normal,
                                        'material_id': face_mat_id,
                                        'back_material_id': back_mat_id,
                                        'uv_transform': uv_front,
@@ -1859,6 +1895,8 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
         model_dat = zf.read('model.dat')
     logger.debug("Read model.dat: %d bytes", len(model_dat))
 
+    compact_geometry = len(model_dat) >= _COMPACT_MODEL_BYTES
+
     # 3. Walk the TLV tree one top-level record at a time (instead of
     # building the whole file's tree at once) so peak memory is bounded by
     # the single largest definition/layer-manager/material-manager/root
@@ -1969,6 +2007,8 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
                 ent_id = _entity_id(el)
                 builder = _GeometryBuilder()
                 _extract_geometry_nodes(children, builder)
+                if compact_geometry:
+                    builder._compact_geometry()
                 defs_dict[ent_id] = {'guid': guid, 'name': name,
                                      'always_faces_camera': faces_camera,
                                      'shadows_face_sun': shadows_face_sun,
@@ -2050,6 +2090,8 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
     if 'Layer0' not in layer_hidden:
         layer_hidden['Layer0'] = False
 
+    if compact_geometry:
+        root_builder._compact_geometry()
     defs_dict['ROOT'] = {'guid': 'ROOT', 'name': 'ROOT_MODEL', 'builder': root_builder}
 
     return {

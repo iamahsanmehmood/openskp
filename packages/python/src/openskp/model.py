@@ -727,14 +727,20 @@ class SkpFile:
                 shadows_face_sun=d.get("shadows_face_sun", False),
                 is_image=d.get("is_image", False),
             )
+            # Completed VFF builders can retain dense private tables. Iterate
+            # those directly; their public accessors still return cached dicts.
+            if isinstance(builder, _core._GeometryBuilder):
+                vertices, edges, faces = builder._geometry_tables()
+            else:
+                vertices, edges, faces = builder.vertices, builder.edges, builder.faces
             # Populate vertices
-            for v_id, (x, y, z) in builder.vertices.items():
+            for v_id, (x, y, z) in vertices.items():
                 defn.vertices[v_id] = Vertex(id=v_id, x=x, y=y, z=z)
             # Populate edges
             flags_map = getattr(builder, "edge_flags", {})
             edge_layers_map = getattr(builder, "edge_layers", None) or {}
             edge_curves_map = getattr(builder, "edge_curves", None) or {}
-            for e_id, (v1, v2) in builder.edges.items():
+            for e_id, (v1, v2) in edges.items():
                 flags = flags_map.get(e_id, 0)
                 defn.edges[e_id] = Edge(id=e_id, v1_id=v1 or 0, v2_id=v2 or 0,
                                         soft=bool(flags & 0x08),
@@ -743,7 +749,7 @@ class SkpFile:
                                         layer=edge_layers_map.get(e_id),
                                         curve_id=edge_curves_map.get(e_id))
             # Populate faces
-            for f_id, f_data in builder.faces.items():
+            for f_id, f_data in faces.items():
                 defn.faces[f_id] = Face(
                     id=f_id,
                     loops=f_data.get("loops", []),
