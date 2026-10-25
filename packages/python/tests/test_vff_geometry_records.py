@@ -121,7 +121,7 @@ def test_retained_instance_subtrees_never_contain_fast_nodes():
     assert all(type(n) is _core._TlvNode for n in builder.instances[0]["children"])
 
 
-@pytest.mark.parametrize("tag", ["D107", "D207", "AF0D", "BB0B", "0702"])
+@pytest.mark.parametrize("tag", ["D107", "D207", "AF0D", "0702"])
 def test_additional_fields_take_the_general_path(tag):
     _, edge, face = records()
     data = edge if tag == "BB0B" else face
@@ -133,10 +133,61 @@ def test_additional_fields_take_the_general_path(tag):
     assert vars(fast) == vars(slow)
 
 
+def painted_records(width, front=True, back=True, curve=True):
+    _, edge, face = records()
+    base_size = struct.unpack_from("<I", edge, 8)[0]
+    base = edge[12 : 12 + base_size]
+    extra = tlv("D107", ((1 << (8 * width)) - 1).to_bytes(width, "little"))
+    # The common order is identity, material, flags. Layers/UVs stay generic.
+    base = tlv("D007", base[:-7] + (extra if front else b"") + base[-7:])
+    edge_body = base + edge[12 + base_size :]
+    if curve:
+        edge_body += tlv("BB0B", (73).to_bytes(width, "little"))
+    face_base = face[12 : 12 + base_size]
+    face_body = tlv("D007", face_base[:-7] + (extra if front else b"") + face_base[-7:])
+    if back:
+        face_body += tlv("AF0D", (0).to_bytes(width, "little"))
+    face_body += face[12 + base_size :]
+    return tlv("B80B", edge_body), tlv("AC0D", face_body)
+
+
+@pytest.mark.parametrize("width", range(1, 9))
+@pytest.mark.parametrize(
+    "front,back,curve", [(True, True, True), (False, True, False), (True, False, False)]
+)
+def test_painted_faces_and_curve_edges_match_generic(width, front, back, curve):
+    data = b"".join(painted_records(width, front, back, curve))
+    nodes, fast = extract(data, True)
+    _, slow = extract(data, False)
+    assert all(isinstance(n, _core._GeometryRecordNode) for n in nodes)
+    assert vars(fast) == vars(slow)
+    assert fast.faces[23]["material_id"] == ((1 << (8 * width)) - 1 if front else None)
+    assert fast.faces[23]["back_material_id"] == (0 if back else None)
+    assert fast.edge_curves == ({19: 73} if curve else {})
+
+
+def test_zero_curve_id_is_absent_and_unknown_extensions_fall_back():
+    _, edge, _ = records()
+    zero_curve = tlv("B80B", edge[6:] + tlv("BB0B", b"\0"))
+    nodes, fast = extract(zero_curve, True)
+    assert isinstance(nodes[0], _core._GeometryRecordNode)
+    assert fast.edge_curves == {}
+    for record in painted_records(4):
+        data = tlv(record[:2].hex(), record[6:] + tlv("0702", b"\1"))
+        nodes, fast = extract(data, True)
+        _, slow = extract(data, False)
+        assert type(nodes[0]) is _core._TlvNode
+        assert vars(fast) == vars(slow)
+
+
 def test_mutated_records_match_general_decoder_results_or_errors():
     rng = random.Random(20261025)
-    samples = tuple(record for width in range(1, 9) for record in records(width))
-    for _ in range(500):
+    samples = tuple(
+        record
+        for width in range(1, 9)
+        for record in (*records(width), *painted_records(width))
+    )
+    for _ in range(2000):
         data = bytearray(rng.choice(samples))
         if rng.randrange(3) == 0:
             del data[rng.randrange(len(data)) :]

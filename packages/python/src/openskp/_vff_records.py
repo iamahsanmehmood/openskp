@@ -1,7 +1,7 @@
 """Decode common geometry layouts without their temporary TLV trees.
 
 These are exact layout recognizers, not a second general parser. Additional
-fields, materials, UVs, layers, holes, mixed coedge integer widths and malformed
+fields, UVs, layers, holes, mixed coedge integer widths and malformed
 lengths fall back to the existing tree decoder. Integer widths 1..8 are handled.
 """
 
@@ -51,15 +51,31 @@ def decode_record(data, start, size, tag):
         return None
     width = _U32(data, start + 14)[0]
     prefix = _DRAWBASES.get(width)
-    if (
-        prefix is None
-        or data[start : start + 18] != prefix
-        or data[start + 18 + width : start + 24 + width] != _FLAGS
-    ):
+    if prefix is None:
         return None
     end = start + size
-    flags = data[start + 24 + width]
-    following = start + 25 + width
+    material_id = None
+    flag_start = start + 18 + width
+    if data[start : start + 18] != prefix:
+        # Painted drawbase: exactly identity, front material, display flags.
+        # Extended DC05 payloads (UVs/attributes) still use the general path.
+        if data[start + 6 : start + 18] != _IDS[width]:
+            return None
+        if flag_start + 6 > end:
+            return None
+        mat_tag, mat_width = _HEADER(data, flag_start)
+        if mat_tag != 0x07D1 or not 1 <= mat_width <= 8:
+            return None
+        if _HEADER(data, start) != (0x07D0, 25 + width + mat_width):
+            return None
+        flag_start += 6 + mat_width
+        if flag_start + 7 > end:
+            return None
+        material_id = _integer(data, start + 24 + width, mat_width)
+    if data[flag_start : flag_start + 6] != _FLAGS:
+        return None
+    flags = data[flag_start + 6]
+    following = flag_start + 7
 
     if tag == "B80B":
         if following + 6 > end:
@@ -74,18 +90,41 @@ def decode_record(data, start, size, tag):
         if (
             second_tag != 0x0BBA
             or not 1 <= second_width <= 8
-            or second + 6 + second_width != end
+            or second + 6 + second_width > end
         ):
             return None
+        curve_id = None
+        curve_start = second + 6 + second_width
+        if curve_start != end:
+            if curve_start + 6 > end:
+                return None
+            curve_tag, curve_width = _HEADER(data, curve_start)
+            if (
+                curve_tag != 0x0BBB
+                or not 1 <= curve_width <= 8
+                or curve_start + 6 + curve_width != end
+            ):
+                return None
+            curve_id = _integer(data, curve_start + 6, curve_width) or None
         return (
             _integer(data, start + 18, width),
             flags,
             _integer(data, following + 6, first_width),
             _integer(data, second + 6, second_width),
+            curve_id,
         )
 
     if size < 94:
         return None
+    back_material_id = None
+    if following + 6 > end:
+        return None
+    if data[following : following + 2] == b"\xaf\x0d":
+        back_width = _U32(data, following + 2)[0]
+        if not 1 <= back_width <= 8 or following + 6 + back_width > end:
+            return None
+        back_material_id = _integer(data, following + 6, back_width)
+        following += 6 + back_width
     normal_header = data[following : following + 6]
     if normal_header == b"\xad\x0d\x20\0\0\0":
         loops_start = following + 38
@@ -124,4 +163,6 @@ def decode_record(data, start, size, tag):
         _NORMAL(data, following + 6),
         tuple(loop),
         bool(flags & 0x01),
+        material_id,
+        back_material_id,
     )

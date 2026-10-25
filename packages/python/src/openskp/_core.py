@@ -1081,16 +1081,18 @@ def _extract_geometry_nodes(elements, builder):
                 v_id, position, _ = el.record
                 builder.vertices[v_id] = position
             elif tag == 'B80B':
-                e_id, flags, v1, v2 = el.record
+                e_id, flags, v1, v2, curve_id = el.record
                 builder.edges[e_id] = (v1, v2)
                 builder.edge_flags[e_id] = flags
+                if curve_id is not None:
+                    builder.edge_curves[e_id] = curve_id
             else:
-                f_id, normal, loop, hidden = el.record
+                f_id, normal, loop, hidden, material_id, back_material_id = el.record
                 # A subtree can be extracted into more than one builder.
                 # Each gets its own mutable face dictionary and loop lists.
                 builder.faces[f_id] = {
                     'loops': [list(loop)], 'normal': normal,
-                    'material_id': None, 'back_material_id': None,
+                    'material_id': material_id, 'back_material_id': back_material_id,
                     'uv_transform': None, 'uv_transform_back': None,
                     'hidden': hidden, 'layer': None}
             continue
