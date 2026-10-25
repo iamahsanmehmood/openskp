@@ -9,12 +9,36 @@ namespace OpenSkp
     /// layout unless noted.</summary>
     internal static class Transforms
     {
+        /// <summary>Fold a 13-value instance matrix's scale term (index 12)
+        /// into its rotation and translation, so index 12 is 1.
+        ///
+        /// SketchUp can keep a uniform scale in the transformation's
+        /// homogeneous term: the 3x3 stays as it is, the translation is in
+        /// the scaled units, and the 16th value <c>w</c> is the divisor
+        /// (<c>Transformation#to_a</c>'s w = 100 means 1/100). The 13-value
+        /// matrix stores <c>1/w</c> at index 12, so a point transforms as
+        /// <c>s * (R p + t)</c> with <c>s = m[12]</c>; folding gives the
+        /// equivalent <c>(s R) p + s t</c> with <c>s = 1</c>, which every
+        /// consumer that reads only indices 0-11 handles correctly
+        /// (openskp#444). A matrix whose scale is already 1 - everything
+        /// SketchUp writes except that case - is returned unchanged.</summary>
+        public static double[] FoldScale(double[] m)
+        {
+            if (m.Length < 13 || m[12] == 1.0) return m;
+            double s = m[12];
+            var outArr = new double[13];
+            for (int i = 0; i < 12; i++) outArr[i] = m[i] * s;
+            outArr[12] = 1.0;
+            return outArr;
+        }
+
         public static (double X, double Y, double Z) TransformPoint(double[] matrix, (double X, double Y, double Z) point)
         {
             if (matrix == null || matrix.Length < 12)
             {
                 return point;
             }
+            matrix = FoldScale(matrix);
             double x = point.X, y = point.Y, z = point.Z;
             double tx = matrix[0] * x + matrix[1] * y + matrix[2] * z + matrix[9];
             double ty = matrix[3] * x + matrix[4] * y + matrix[5] * z + matrix[10];
@@ -24,11 +48,12 @@ namespace OpenSkp
 
         public static List<double> MultiplyMatrices(List<double> parent, List<double> child)
         {
-            if (parent == null || parent.Count == 0) return child;
-            if (child == null || child.Count == 0) return parent;
+            if (parent == null || parent.Count == 0) return child == null || child.Count == 0 ? child! : new List<double>(FoldScale(Pad13(child)));
+            if (child == null || child.Count == 0) return new List<double>(FoldScale(Pad13(parent)));
 
-            double[] p = Pad13(parent);
-            double[] c = Pad13(child);
+            // Both operands' scale terms are folded in first, so the product's own is 1.
+            double[] p = FoldScale(Pad13(parent));
+            double[] c = FoldScale(Pad13(child));
 
             double[] pR0 = { p[0], p[1], p[2], p[9] };
             double[] pR1 = { p[3], p[4], p[5], p[10] };
@@ -55,7 +80,7 @@ namespace OpenSkp
             outArr[9] = Dot(pR0, cC3);
             outArr[10] = Dot(pR1, cC3);
             outArr[11] = Dot(pR2, cC3);
-            outArr[12] = p[12] * c[12];
+            outArr[12] = 1.0;                // both operands were folded (index 12 is 1)
             return new List<double>(outArr);
         }
 

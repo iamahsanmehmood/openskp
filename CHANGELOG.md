@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — all five ports: an instance scaled through the matrix's scale term is placed and sized correctly (#444)
+
+SketchUp can keep a uniform scale in the homogeneous term of an instance's
+transformation instead of in the 3x3: the 3x3 stays as it is, the translation
+is in the scaled units, and the 16th value `w` is the divisor (SketchUp's own
+library reports a 100 in cube placed with `w = 100` and a translation of 2000
+in as a 1 in cube at x = 20 in). The 13-value matrix stores `1/w` at index 12.
+The parse read it correctly, but `build_scene` / `build_instanced_scene` and
+every export built on them ignored it, so such an instance came out 100x its
+size and 100x its distance from its parent (a SpaceClaim export of a staircase
+landed about 76 m from the stair). The point transform, the matrix product and
+the glTF node-matrix conversion now fold the scale term into the rotation and
+translation first, so a composed matrix always has index 12 equal to 1.
+`Instance.matrix` itself still reports the raw 13 values. Checked against SketchUp's own bounding boxes
+for the same file saved in the SketchUp 6 and 2021 formats, and against 126
+local legacy and VFF files, none of which carries a scale term other than 1:
+their scene output is unchanged.
+
 ### Fixed — TypeScript, .NET, Dart, C++: legacy SketchUp 4, 5 and 2019 files parse correctly, and a 2020 model with no definitions keeps its root entities (#284)
 
 The four other readers now carry the fixes the Python reader got in #440: the

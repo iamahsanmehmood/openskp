@@ -1255,9 +1255,29 @@ def _extract_geometry_nodes(elements, builder):
 
 # ── Transforms ───────────────────────────────────────────────────────────
 
+def _fold_scale(mat):
+    """Return *mat* with its scale term (index 12) folded into the rotation and
+    translation, so index 12 is 1.
+
+    SketchUp can keep a uniform scale in the transformation's homogeneous
+    term: the 3x3 stays as it is, the translation is in the scaled units, and
+    the 16th value ``w`` is the divisor (``Transformation#to_a``'s w = 100
+    means 1/100). The 13-value matrix stores ``1/w`` at index 12, so a point
+    transforms as ``s * (R p + t)`` with ``s = mat[12]``. Folding gives the
+    equivalent ``(s R) p + s t`` with ``s = 1``, which every consumer that only
+    reads indices 0-11 handles correctly (openskp#444). A matrix whose scale is
+    already 1 - everything SketchUp writes except this case - is returned
+    unchanged."""
+    if len(mat) < 13 or mat[12] == 1.0:
+        return mat
+    s = mat[12]
+    return [v * s for v in mat[:12]] + [1.0]
+
+
 def transform_point(p, mat):
     if not mat or len(mat) < 12:
         return p
+    mat = _fold_scale(mat)
     x, y, z = p
     tx = mat[0]*x + mat[1]*y + mat[2]*z + mat[9]
     ty = mat[3]*x + mat[4]*y + mat[5]*z + mat[10]
@@ -1266,9 +1286,11 @@ def transform_point(p, mat):
 
 def multiply_matrices(parent, child):
     if not parent:
-        return child
+        return _fold_scale(child) if child else child
     if not child:
-        return parent
+        return _fold_scale(parent)
+    parent = _fold_scale(parent)
+    child = _fold_scale(child)
     p_r0 = [parent[0], parent[1], parent[2], parent[9]]
     p_r1 = [parent[3], parent[4], parent[5], parent[10]]
     p_r2 = [parent[6], parent[7], parent[8], parent[11]]
@@ -1291,7 +1313,7 @@ def multiply_matrices(parent, child):
     out[9] = dot(p_r0, c_c3)
     out[10] = dot(p_r1, c_c3)
     out[11] = dot(p_r2, c_c3)
-    out[12] = parent[12] * child[12]
+    out[12] = 1.0               # both operands were folded (index 12 is 1)
     return out
 
 

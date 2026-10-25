@@ -374,7 +374,11 @@ class InstancedSceneBuilder {
     /// result as converting the fully-composed SketchUp matrix.
     /// Translation is scaled to metres; the rotation/scale block is
     /// unitless and is not.
-    List<double> toGltfMatrix(List<double> m) {
+    List<double> toGltfMatrix(List<double> raw) {
+      // Fold the matrix's scale term (index 12, SketchUp's homogeneous 1/w)
+      // into the rotation and translation first, so an instance scaled
+      // through it is placed and sized correctly (openskp#444).
+      final m = Transforms.foldScale(raw);
       final a = m[0], b = m[1], c = m[2];
       final d = m[3], e = m[4], f = m[5];
       final g = m[6], h = m[7], i = m[8];

@@ -44,7 +44,11 @@ constexpr std::array<double, 16> kIdentityGltf{
 // converting each level and multiplying gives the same result as
 // converting the fully-composed SketchUp matrix. Translation is scaled to
 // metres; the rotation/scale block is unitless and is not.
-std::array<double, 16> to_gltf_matrix(const std::vector<double>& m) {
+std::array<double, 16> to_gltf_matrix(const std::vector<double>& raw) {
+  // Fold the matrix's scale term (index 12, SketchUp's homogeneous 1/w) into
+  // the rotation and translation first, so an instance scaled through it is
+  // placed and sized correctly (openskp#444).
+  const auto m = fold_scale(raw);
   double a = m[0], b = m[1], c = m[2];
   double d = m[3], e = m[4], f = m[5];
   double g = m[6], h = m[7], i = m[8];

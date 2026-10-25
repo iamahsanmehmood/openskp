@@ -1,4 +1,4 @@
-import { multiplyMatrices } from './transforms';
+import { foldScale, multiplyMatrices } from './transforms';
 import { extractDynamicProperties, extractAttributeDictionaries, isGenericDefinitionName, findNameOverride, stringifyVffAttrValue, VffAttrValue } from './geometry';
 import { ParseOptions, PROGRESS_INTERVAL, emitLog, emitProgress } from './observability';
 import { SkpParseError } from './errors';
@@ -401,8 +401,12 @@ export function buildInstancedSceneFromParsed(
    * converting the fully-composed SketchUp matrix. Translation is scaled to
    * metres; the rotation/scale block is unitless and is not.
    */
-  function toGltfMatrix(m: number[]): number[] {
+  function toGltfMatrix(raw: number[]): number[] {
     const scale = 0.0254;
+    // Fold the matrix's scale term (index 12, SketchUp's homogeneous 1/w) into
+    // the rotation and translation first, so an instance scaled through it is
+    // placed and sized correctly (openskp#444).
+    const m = foldScale(raw);
     // SketchUp basis (row-major 3x3 in elements 0..8, translation in 9..11).
     const a = m[0], b = m[1], c = m[2];
     const d = m[3], e = m[4], f = m[5];

@@ -333,6 +333,7 @@ void collect_model_attribute_dictionaries(const TlvNode&, ParsedAttrDictionaries
 SkpModel build_model(RawParsed&&, const ParseOptions& = {});
 Scene build_scene_raw(RawParsed&&, const ParseOptions&);
 InstancedScene build_instanced_scene_raw(RawParsed&&, const ParseOptions&);
+std::vector<double> fold_scale(const std::vector<double>&);
 std::array<double, 3> transform_point(const std::vector<double>&, const std::array<double, 3>&);
 std::array<double, 3> transform_normal(const std::vector<double>&, const std::array<double, 3>&);
 double transform_determinant(const std::vector<double>&);

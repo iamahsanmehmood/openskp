@@ -3,8 +3,27 @@
 /// SketchUp's 13-element [3x3 rotation/scale | translation | 1.0] layout
 /// unless noted.
 class Transforms {
+  /// Fold a 13-value instance matrix's scale term (index 12) into its
+  /// rotation and translation, so index 12 is 1.
+  ///
+  /// SketchUp can keep a uniform scale in the transformation's homogeneous
+  /// term: the 3x3 stays as it is, the translation is in the scaled units,
+  /// and the 16th value `w` is the divisor (`Transformation#to_a`'s w = 100
+  /// means 1/100). The 13-value matrix stores `1/w` at index 12, so a point
+  /// transforms as `s * (R p + t)` with `s = m[12]`; folding gives the
+  /// equivalent `(s R) p + s t` with `s = 1`, which every consumer that reads
+  /// only indices 0-11 handles correctly (openskp#444). A matrix whose scale
+  /// is already 1 - everything SketchUp writes except that case - is
+  /// returned unchanged.
+  static List<double> foldScale(List<double> m) {
+    if (m.length < 13 || m[12] == 1.0) return m;
+    final s = m[12];
+    return [for (var i = 0; i < 12; i++) m[i] * s, 1.0];
+  }
+
   static (double, double, double) transformPoint(List<double> matrix, (double, double, double) point) {
     if (matrix.length < 12) return point;
+    matrix = foldScale(matrix);
     final (x, y, z) = point;
     final tx = matrix[0] * x + matrix[1] * y + matrix[2] * z + matrix[9];
     final ty = matrix[3] * x + matrix[4] * y + matrix[5] * z + matrix[10];
@@ -13,11 +32,12 @@ class Transforms {
   }
 
   static List<double> multiplyMatrices(List<double> parent, List<double> child) {
-    if (parent.isEmpty) return child;
-    if (child.isEmpty) return parent;
+    if (parent.isEmpty) return child.isEmpty ? child : foldScale(_pad13(child));
+    if (child.isEmpty) return foldScale(_pad13(parent));
 
-    final p = _pad13(parent);
-    final c = _pad13(child);
+    // Both operands' scale terms are folded in first, so the product's own is 1.
+    final p = foldScale(_pad13(parent));
+    final c = foldScale(_pad13(child));
 
     final pR0 = [p[0], p[1], p[2], p[9]];
     final pR1 = [p[3], p[4], p[5], p[10]];
@@ -43,7 +63,7 @@ class Transforms {
     out[9] = dot(pR0, cC3);
     out[10] = dot(pR1, cC3);
     out[11] = dot(pR2, cC3);
-    out[12] = p[12] * c[12];
+    out[12] = 1.0; // both operands were folded (index 12 is 1)
     return out;
   }
 

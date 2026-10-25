@@ -224,7 +224,13 @@ def _to_gltf_matrix(m: List[float]) -> Tuple[float, ...]:
     converting each level and multiplying gives the same result as
     converting the fully-composed SketchUp matrix. Translation is scaled to
     metres; the rotation/scale block is unitless and is not.
+
+    The matrix's scale term (index 12, SketchUp's homogeneous ``1/w``) is
+    folded into the rotation and translation first, so an instance scaled
+    through it - rather than through the 3x3 - is placed and sized correctly
+    (openskp#444).
     """
+    m = _core._fold_scale(m)
     a, b, c = m[0], m[1], m[2]
     d, e, f = m[3], m[4], m[5]
     g, h, i = m[6], m[7], m[8]
