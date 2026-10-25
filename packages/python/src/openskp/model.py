@@ -18,6 +18,8 @@ Typical usage::
 
 from __future__ import annotations
 
+import contextlib
+import gc
 import pathlib
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple
@@ -645,6 +647,28 @@ class SkpModel:
 # ── SkpFile entry-point ──────────────────────────────────────────────────
 
 
+@contextlib.contextmanager
+def _paused_cyclic_gc():
+    """Pause automatic cyclic garbage collection for a large allocation burst.
+
+    Parsing builds millions of small vertex, edge, loop and face objects that
+    the model keeps alive, so every automatic generation scan walks a growing
+    object graph and frees nothing. Reference counting is unaffected; only the
+    automatic scans are deferred, and the caller's collector state is restored
+    on every exit, including exceptions and KeyboardInterrupt.
+
+    Space_AsBuilt_Track.skp (442 MB, 3.6 M faces) parse: 95.9 s -> 61.8 s on
+    CPython 3.13, max RSS 8.24 -> 8.51 GB.
+    """
+    enabled = gc.isenabled()
+    gc.disable()
+    try:
+        yield
+    finally:
+        if enabled:
+            gc.enable()
+
+
 class SkpFile:
     """High-level entry point for opening and parsing ``.skp`` files.
 
@@ -690,6 +714,15 @@ class SkpFile:
 
     def parse(self) -> SkpModel:
         """Run the full parsing pipeline and return a populated model.
+
+        The automatic cyclic garbage collector is paused for the duration of
+        the parse (see :func:`_paused_cyclic_gc`) and restored afterwards.
+        """
+        with _paused_cyclic_gc():
+            return self._parse_pipeline()
+
+    def _parse_pipeline(self) -> SkpModel:
+        """The parsing pipeline proper, run by :meth:`parse`.
 
         The pipeline:
 
