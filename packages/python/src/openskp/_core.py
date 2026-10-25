@@ -381,6 +381,9 @@ def iter_top_level_lazy(data, start, end, container_tags=None, *, _geometry=Fals
         nodes = parser(data, offset, record_end, container_tags)
         if nodes:
             yield index, total, nodes[0]
+        # Assignment evaluates the next parser call before replacing `nodes`.
+        # Release this tree now, rather than overlapping two large definitions.
+        del nodes
 
 
 # ── 3D planar triangulation ──────────────────────────────────────────────
@@ -2073,10 +2076,11 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
                 stage="tlv_walk", record_index=index, total_records=total,
                 tag=el['tag'],
             ) from e
-        # `el` (and its whole subtree) is now unreferenced and eligible for
-        # garbage collection before the next top-level record is built.
         if index % _PROGRESS_INTERVAL == 0 or index == total - 1:
             logger.debug("Processed %d/%d top-level records", index + 1, total)
+        # Drop the consumer's reference as well as the generator's. Otherwise
+        # the for-loop retains this tree until the next one has been decoded.
+        del el
 
     logger.info(
         "Parse complete: %s (%d defs, %.2fs)",
