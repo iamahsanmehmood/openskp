@@ -10,7 +10,6 @@ this module provides the working implementation.
 
 from __future__ import annotations
 
-import io
 import logging
 import os
 import struct
@@ -1634,129 +1633,127 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
         raise SkpParseError(
             "No ZIP container found", stage="zip_extract")
 
-    # 2. Extract ZIP contents
-    with open(skp_path, 'rb') as f:
-        f.seek(pk_pos)
-        zip_bytes = f.read()
-    zf = zipfile.ZipFile(io.BytesIO(zip_bytes), 'r')
-    logger.debug("Opened ZIP container: %d entries", len(zf.namelist()))
+    # ZipFile accounts for a prepended SKP header when locating entries.
+    # Reading the file directly avoids retaining a second, file-sized ZIP
+    # buffer throughout parsing. Close it on malformed members as well.
+    with zipfile.ZipFile(skp_path, 'r') as zf:
+        logger.debug("Opened ZIP container: %d entries", len(zf.namelist()))
 
-    # Materials & layer colors
-    layer_colors = {}
-    # Modern (VFF) files derive layer COLOR from Layer_<name>-prefixed
-    # materials, which carry no visibility flag of their own - real
-    # visibility comes from the model.dat layer manager's own 8E3C byte,
-    # read in collect_layers() below. Seeded to False (visible) here so a
-    # layer that never went through collect_layers (e.g. a layer with no
-    # painted material at all) still gets a sane default.
-    layer_hidden = {}
-    materials = {}
-    materials_by_folder = {}
-    MAT_NS = {'mat': 'http://sketchup.google.com/schemas/sketchup/1.0/material'}
-    for name in zf.namelist():
-        if name.endswith('material.xml') and name.startswith('materials/'):
-            _validate_zip_entry_size(zf, name)
-            xml_data = zf.read(name)
-            try:
-                root = ET.fromstring(xml_data)
-                mat_elem = root.find('.//mat:material', MAT_NS)
-                if mat_elem is not None:
-                    mat_name = mat_elem.get('name', 'unknown')
-                    r = int(mat_elem.get('colorRed', 128))
-                    g = int(mat_elem.get('colorGreen', 128))
-                    b = int(mat_elem.get('colorBlue', 128))
-                    # 'trans' only applies when useTrans="1"; otherwise the
-                    # attribute is a leftover default and the material is
-                    # fully opaque. Without this check most materials read
-                    # as 50% transparent (or fully invisible for trans="0").
-                    # The stored value is a TRANSPARENCY (0 = opaque,
-                    # 1 = fully transparent) — e.g. SketchUp's library
-                    # "Translucent Glass Blue" (70% opacity) stores
-                    # trans="0.3" — so the exposed opacity is 1 - trans.
-                    if mat_elem.get('useTrans') == '1':
-                        trans = 1.0 - float(mat_elem.get('trans', 0.0))
-                        trans = min(max(trans, 0.0), 1.0)
-                    else:
-                        trans = 1.0
-                    folder_name = name.split('/')[1] if len(name.split('/')) > 1 else ''
-                    # type="2" marks a colourized copy ("[Name]1"): the
-                    # shared texture must be re-tinted toward the material
-                    # colour before display. colorizeType 0 = hue shift,
-                    # 1 = tint (greyscale then colour).
-                    colorized = mat_elem.get('type') == '2'
-                    try:
-                        colorize_type = int(mat_elem.get('colorizeType', 0) or 0)
-                    except ValueError:
-                        colorize_type = 0
-                    mat_obj = {'name': mat_name, 'color': {'r': r, 'g': g, 'b': b}, 'transparency': trans,
-                               'colorized': colorized, 'colorize_type': colorize_type}
-                    tex = _extract_texture(zf, name, mat_elem, MAT_NS)
-                    if tex is not None:
-                        mat_obj['texture'] = tex
-                    materials[mat_name] = mat_obj
-                    if folder_name:
-                        materials_by_folder[folder_name] = mat_obj
-                    if mat_name.startswith('Layer_'):
-                        layer_colors[mat_name[6:]] = (r, g, b)
-                        layer_hidden[mat_name[6:]] = False
-            except Exception:
-                logger.debug("Failed to parse material.xml %r", name, exc_info=True)
-
-    # Thumbnail
-    thumbnail_data = None
-    if 'meta/model_thumbnail.png' in zf.namelist():
-        _validate_zip_entry_size(zf, 'meta/model_thumbnail.png')
-        thumbnail_data = zf.read('meta/model_thumbnail.png')
-
-    # Units (meta/meta.dat) - VFF-only; legacy files carry no equivalent
-    # container.
-    units = None
-    if 'meta/meta.dat' in zf.namelist():
-        try:
-            _validate_zip_entry_size(zf, 'meta/meta.dat')
-            units = _read_meta_units(zf.read('meta/meta.dat'))
-        except Exception:
-            units = None
-            logger.debug("Failed to read units from meta/meta.dat", exc_info=True)
-
-    # Styles: face colors live in styles/*/style.xml as signed-int32 ABGR
-    # variants — item id 2002 is the front (default) face color, 2003 the
-    # back face color (the 4000-series items are background/sky/ground).
-    # Viewers need them to shade unpainted faces the way SketchUp does (an author may e.g. set a green back color so unpainted
-    # garden faces read as grass).
-    styles = []
-    for name in zf.namelist():
-        if not (name.startswith('styles/') and name.endswith('style.xml')):
-            continue
-        try:
-            _validate_zip_entry_size(zf, name)
-            sroot = ET.fromstring(zf.read(name))
-        except (ET.ParseError, DefusedXmlException):
-            continue
-        STY = '{http://sketchup.google.com/schemas/sketchup/1.0/style}'
-        TYP = '{http://sketchup.google.com/schemas/1.0/types}'
-        style_el = sroot.find(f'{STY}style')
-        if style_el is None:
-            continue
-        colors = {}
-        for item in style_el.findall(f'{STY}item'):
-            iid = item.get('id')
-            var = item.find(f'{TYP}variant')
-            if iid in ('2002', '2003') and var is not None and var.text:
+        # Materials & layer colors
+        layer_colors = {}
+        # Modern (VFF) files derive layer COLOR from Layer_<name>-prefixed
+        # materials, which carry no visibility flag of their own - real
+        # visibility comes from the model.dat layer manager's own 8E3C byte,
+        # read in collect_layers() below. Seeded to False (visible) here so a
+        # layer that never went through collect_layers (e.g. a layer with no
+        # painted material at all) still gets a sane default.
+        layer_hidden = {}
+        materials = {}
+        materials_by_folder = {}
+        MAT_NS = {'mat': 'http://sketchup.google.com/schemas/sketchup/1.0/material'}
+        for name in zf.namelist():
+            if name.endswith('material.xml') and name.startswith('materials/'):
+                _validate_zip_entry_size(zf, name)
+                xml_data = zf.read(name)
                 try:
-                    v = int(var.text) & 0xFFFFFFFF
-                except ValueError:
-                    continue
-                colors[iid] = (v & 255, (v >> 8) & 255, (v >> 16) & 255)
-        styles.append({'name': style_el.get('name', ''),
-                       'front_color': colors.get('2002'),
-                       'back_color': colors.get('2003')})
+                    root = ET.fromstring(xml_data)
+                    mat_elem = root.find('.//mat:material', MAT_NS)
+                    if mat_elem is not None:
+                        mat_name = mat_elem.get('name', 'unknown')
+                        r = int(mat_elem.get('colorRed', 128))
+                        g = int(mat_elem.get('colorGreen', 128))
+                        b = int(mat_elem.get('colorBlue', 128))
+                        # 'trans' only applies when useTrans="1"; otherwise the
+                        # attribute is a leftover default and the material is
+                        # fully opaque. Without this check most materials read
+                        # as 50% transparent (or fully invisible for trans="0").
+                        # The stored value is a TRANSPARENCY (0 = opaque,
+                        # 1 = fully transparent) — e.g. SketchUp's library
+                        # "Translucent Glass Blue" (70% opacity) stores
+                        # trans="0.3" — so the exposed opacity is 1 - trans.
+                        if mat_elem.get('useTrans') == '1':
+                            trans = 1.0 - float(mat_elem.get('trans', 0.0))
+                            trans = min(max(trans, 0.0), 1.0)
+                        else:
+                            trans = 1.0
+                        folder_name = name.split('/')[1] if len(name.split('/')) > 1 else ''
+                        # type="2" marks a colourized copy ("[Name]1"): the
+                        # shared texture must be re-tinted toward the material
+                        # colour before display. colorizeType 0 = hue shift,
+                        # 1 = tint (greyscale then colour).
+                        colorized = mat_elem.get('type') == '2'
+                        try:
+                            colorize_type = int(mat_elem.get('colorizeType', 0) or 0)
+                        except ValueError:
+                            colorize_type = 0
+                        mat_obj = {'name': mat_name, 'color': {'r': r, 'g': g, 'b': b}, 'transparency': trans,
+                                   'colorized': colorized, 'colorize_type': colorize_type}
+                        tex = _extract_texture(zf, name, mat_elem, MAT_NS)
+                        if tex is not None:
+                            mat_obj['texture'] = tex
+                        materials[mat_name] = mat_obj
+                        if folder_name:
+                            materials_by_folder[folder_name] = mat_obj
+                        if mat_name.startswith('Layer_'):
+                            layer_colors[mat_name[6:]] = (r, g, b)
+                            layer_hidden[mat_name[6:]] = False
+                except Exception:
+                    logger.debug("Failed to parse material.xml %r", name, exc_info=True)
 
-    logger.debug("Parsed %d materials, %d styles", len(materials), len(styles))
+        # Thumbnail
+        thumbnail_data = None
+        if 'meta/model_thumbnail.png' in zf.namelist():
+            _validate_zip_entry_size(zf, 'meta/model_thumbnail.png')
+            thumbnail_data = zf.read('meta/model_thumbnail.png')
 
-    _validate_zip_entry_size(zf, 'model.dat')
-    model_dat = zf.read('model.dat')
-    zf.close()
+        # Units (meta/meta.dat) - VFF-only; legacy files carry no equivalent
+        # container.
+        units = None
+        if 'meta/meta.dat' in zf.namelist():
+            try:
+                _validate_zip_entry_size(zf, 'meta/meta.dat')
+                units = _read_meta_units(zf.read('meta/meta.dat'))
+            except Exception:
+                units = None
+                logger.debug("Failed to read units from meta/meta.dat", exc_info=True)
+
+        # Styles: face colors live in styles/*/style.xml as signed-int32 ABGR
+        # variants — item id 2002 is the front (default) face color, 2003 the
+        # back face color (the 4000-series items are background/sky/ground).
+        # Viewers need them to shade unpainted faces the way SketchUp does (an author may e.g. set a green back color so unpainted
+        # garden faces read as grass).
+        styles = []
+        for name in zf.namelist():
+            if not (name.startswith('styles/') and name.endswith('style.xml')):
+                continue
+            try:
+                _validate_zip_entry_size(zf, name)
+                sroot = ET.fromstring(zf.read(name))
+            except (ET.ParseError, DefusedXmlException):
+                continue
+            STY = '{http://sketchup.google.com/schemas/sketchup/1.0/style}'
+            TYP = '{http://sketchup.google.com/schemas/1.0/types}'
+            style_el = sroot.find(f'{STY}style')
+            if style_el is None:
+                continue
+            colors = {}
+            for item in style_el.findall(f'{STY}item'):
+                iid = item.get('id')
+                var = item.find(f'{TYP}variant')
+                if iid in ('2002', '2003') and var is not None and var.text:
+                    try:
+                        v = int(var.text) & 0xFFFFFFFF
+                    except ValueError:
+                        continue
+                    colors[iid] = (v & 255, (v >> 8) & 255, (v >> 16) & 255)
+            styles.append({'name': style_el.get('name', ''),
+                           'front_color': colors.get('2002'),
+                           'back_color': colors.get('2003')})
+
+        logger.debug("Parsed %d materials, %d styles", len(materials), len(styles))
+
+        _validate_zip_entry_size(zf, 'model.dat')
+        model_dat = zf.read('model.dat')
     logger.debug("Read model.dat: %d bytes", len(model_dat))
 
     # 3. Walk the TLV tree one top-level record at a time (instead of
