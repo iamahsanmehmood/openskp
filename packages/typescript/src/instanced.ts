@@ -174,6 +174,13 @@ export interface InstancedScene {
    * every layer to visible), read straight from the raw parse. Mirrors
    * Python's/C++'s own field of the same name. */
   layerHidden: Record<string, boolean>;
+  /** Every layer the file defines - used by a placement or not - with its
+   * RGB colour (0-255), read straight from the raw parse. Lets a consumer
+   * rebuild the file's tag list next to {@link InstancedNode.layer} and
+   * {@link layerHidden} without a second, full `parseSkp` pass. Absent on
+   * a scene read back with `fromFragments`, whose format carries no layer
+   * colours. */
+  layerColors?: Record<string, [number, number, number]>;
 }
 
 /**
@@ -670,5 +677,5 @@ export function buildInstancedSceneFromParsed(
       `${meshResources.length} mesh resources (${((Date.now() - t0) / 1000).toFixed(2)}s)`
   );
 
-  return { sceneHierarchy, meshResources, gltfMaterials, textures, bounds, layerHidden: Object.fromEntries(layerHidden) };
+  return { sceneHierarchy, meshResources, gltfMaterials, textures, bounds, layerHidden: Object.fromEntries(layerHidden), layerColors: Object.fromEntries(layerColors) };
 }

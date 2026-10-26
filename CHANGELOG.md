@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — TypeScript: `InstancedScene.layerColors`
+
+`buildInstancedScene` already reports each node's effective layer and each
+layer's visibility (`layerHidden`), but not the layers' colours, so a consumer
+rebuilding the file's tag list had to run a second, full `parseSkp` (about as
+long as the scene build itself on a large model). The colours come from the
+same raw parse, so the scene now carries them too, for every layer the file
+defines whether a placement uses it or not. Optional in the type: a scene read
+back with `fromFragments` has none.
+
 ### Fixed — all five ports: an instance scaled through the matrix's scale term is placed and sized correctly (#444)
 
 SketchUp can keep a uniform scale in the homogeneous term of an instance's
