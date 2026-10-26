@@ -34,6 +34,16 @@ for the same file saved in the SketchUp 6 and 2021 formats, and against 126
 local legacy and VFF files, none of which carries a scale term other than 1:
 their scene output is unchanged.
 
+### Fixed — Python: a file saved through SketchUp's C API as 2019 or 2020 parses
+
+Such a file has a null entry in its layer list. The probe that works out the
+archive's slot base subtracted from that entry's missing slot and raised
+`TypeError: unsupported operand type(s) for -: 'NoneType' and 'int'`, so
+`parse()` failed on every one of them that had a layer besides the default. The
+null entry is now skipped. The TypeScript port already read these files. Fixtures: `sdk_saved_2019.skp` and
+`sdk_saved_2020.skp` (a layer, a face and three scenes, built and saved through
+the installed SketchUp library).
+
 ### Fixed — TypeScript, .NET, Dart, C++: legacy SketchUp 4, 5 and 2019 files parse correctly, and a 2020 model with no definitions keeps its root entities (#284)
 
 The four other readers now carry the fixes the Python reader got in #440: the

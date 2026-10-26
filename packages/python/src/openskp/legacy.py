@@ -1652,8 +1652,10 @@ def _probe_layer_anchor_bases(data: bytes, ver: int, start: int,
         # under the throwaway base every absolute back-ref classifies as
         # premodel; anything else means the prefix did not parse
         raise LegacyParseError(f"base probe: anchor resolved to {n}")
+    # a null entry in the layer list has no slot, so it is no candidate (files
+    # saved through SketchUp's C API as 2019 or 2020 have one)
     return [s - (rel - b0) for rel in layer_slots
-            if 0 < s - (rel - b0) < b0]
+            if rel is not None and 0 < s - (rel - b0) < b0]
 
 
 def _definition_starts_at(ar, at: int) -> bool:
