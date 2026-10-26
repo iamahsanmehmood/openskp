@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — TypeScript: `SceneOptions.frontSideOnly`
+
+A face whose front and back resolve to different colours is emitted as a front
+plus a reversed back-side copy, which is right for a viewer. A modeler or CAD
+tool that rebuilds faces from the mesh reads that copy as a second, coincident
+face: the shared edges turn non-manifold and the two z-fight. With
+`frontSideOnly`, `buildScene` and `buildInstancedScene` emit every face once,
+double-sided with its front material. Off by default.
+
 ### Fixed — all five ports: an instance scaled through the matrix's scale term is placed and sized correctly (#444)
 
 SketchUp can keep a uniform scale in the homogeneous term of an instance's
