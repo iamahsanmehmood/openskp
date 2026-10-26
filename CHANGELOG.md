@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — TypeScript: curved surfaces shade smoothly across smooth edges
+
+SketchUp draws the faces either side of an edge flagged smooth (Soften/Smooth
+Edges) as one continuous surface, but `buildScene`/`buildInstancedScene` gave
+every face its own flat normal, so cylinders, terrain and other curved models
+came out faceted in GLB and every other mesh export. Corners joined through a
+smooth edge between two faces that face the same way now share one vertex
+normal, the normalised sum of their faces' normals; hard edges keep their
+crease, and a definition without smooth edges is unchanged.
+
 ### Fixed — all five ports: an instance scaled through the matrix's scale term is placed and sized correctly (#444)
 
 SketchUp can keep a uniform scale in the homogeneous term of an instance's
