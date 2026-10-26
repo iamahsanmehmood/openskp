@@ -923,12 +923,12 @@ def _parse_pages(node):
                 page = {'name': '', 'eye': None, 'target': None, 'up': None,
                         'fov': 35.0, 'parallel': False, 'ortho_height': 0.0,
                         'hidden_layer_ids': []}
-                head = _tlv_items(sub(items, 0x6F54))
+                head = _tlv_items(sub(items, 0x6F54) or b'')
                 name = sub(head, 0x6F55)
                 if name:
                     page['name'] = name.decode('utf-8', errors='replace')
-                cam_wrap = _tlv_items(sub(items, 0x714A))
-                cam = _tlv_items(sub(cam_wrap, 0x34BC)) if cam_wrap else None
+                cam_wrap = _tlv_items(sub(items, 0x714A) or b'')
+                cam = _tlv_items(sub(cam_wrap, 0x34BC) or b'') if cam_wrap else None
                 if cam:
                     page['eye'] = vec3(sub(cam, 0x34BD))
                     page['target'] = vec3(sub(cam, 0x34BE))
@@ -950,8 +950,10 @@ def _parse_pages(node):
                     page['hidden_layer_ids'].append(
                         parse_var_int(hidden, off + 1, ln))
                     off += 1 + ln
-                if page['eye'] is not None and page['target'] is not None:
-                    pages.append(page)
+                # A scene that doesn't save its camera ("Camera Location"
+                # unticked) is still a scene: it keeps its name and hidden
+                # layers, with eye/target/up left None.
+                pages.append(page)
     return pages
 
 def _find_all(nodes, target_tag, results):

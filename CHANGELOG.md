@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — all five ports: a VFF (2021+) scene that doesn't save its camera is kept (#447)
+
+SketchUp lets a scene leave "Camera Location" unticked. Such a scene saves no
+camera, but it still has a name and the layers it hides. All five ports dropped
+a scene unless they had found a camera for it, so those scenes disappeared (on
+a real 2024 model, 13 of 35). The Python port went further: a scene with no
+camera record at all made `parse()` raise a `TypeError`. A scene without a
+camera now comes back with its name and hidden layers and `eye`, `target` and
+`up` unset (`None`, `null`, or an empty optional). Fixture:
+`scene_without_camera_2021.skp`, three scenes built through SketchUp's own
+library (one with a camera, one without that hides a layer, one plain), which
+SketchUp reads back as the same three. Reported by @JFrancu.
+
 ### Added — TypeScript: `SceneOptions.frontSideOnly`
 
 A face whose front and back resolve to different colours is emitted as a front

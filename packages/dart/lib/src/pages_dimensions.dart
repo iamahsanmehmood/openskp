@@ -346,7 +346,9 @@ List<RawPage> parsePages(TlvNode? node) {
           off += 1 + ln;
         }
 
-        if (page.eye != null && page.target != null) pages.add(page);
+        // A scene that doesn't save its camera ("Camera Location" unticked) is
+        // still a scene: it keeps its name and hidden layers, eye/target/up null.
+        pages.add(page);
       }
     }
   }
