@@ -1032,15 +1032,12 @@ def _read_skfont(ar, r):
 
 # ── pages (scenes) ──────────────────────────────────────────────────────
 #
-# CViewPage's full record embeds a camera, an optional thumbnail image, a
-# font, and — whenever any of its several independent "use_*" capture
-# flags beyond hidden-layers is set — an entire Style sub-object with no
-# documented fixed size. Reverse engineering that is out of scope, matching
-# this project's existing CCamera precedent, so only the narrow case is
-# supported: a page whose captured flags are exactly the baseline (nothing
-# captured) or baseline + hidden-layers. Ground truth for both was captured
-# from real v17-native SketchUp saves; ``_PAGE_ALLOWED_FLAGS`` and the
-# 0x20 hidden-layers bit are empirical, not documented by SketchUp.
+# The fallback scan: _read_page_list (below) reads whole scene records and
+# runs first; this narrow scan only runs when that reader gives up on a
+# record. It supports a page whose captured flags are exactly the baseline
+# (nothing captured) or baseline + hidden-layers. Ground truth for both was
+# captured from real v17-native SketchUp saves; ``_PAGE_ALLOWED_FLAGS`` and
+# the 0x20 hidden-layers bit are empirical, not documented by SketchUp.
 _PAGE_ALLOWED_FLAGS = (0xc00, 0xc20)
 _PAGE_HIDDEN_LAYERS_BIT = 0x20
 
@@ -1150,6 +1147,235 @@ def _scan_pages(data: bytes, ar) -> list:
         except (LegacyParseError, struct.error, IndexError):
             continue
         pages.append({'name': name, 'hidden_layer_ids': hidden_ids})
+    return pages
+
+
+# ── full scene records ───────────────────────────────────────────────────
+#
+# Ground truth, all read byte-exactly by _read_page_list:
+# - the gondola_v20.skp fixture (SketchUp 2020, one scene, flags 0x1FF);
+# - SketchUp's own 3D Warehouse model "Skill Builder: Creating Section
+#   Animations with Scenes" in its SketchUp 2017 format (eight scenes,
+#   0x7F) and SketchUp 2015 saves (nine scenes, 0x7F) - not
+#   redistributable, so not committed;
+# - files written by openskp.create, which SketchUp Free opens with
+#   working scenes.
+#
+# The scene list sits in the document tail as a u32 count right before the
+# first record (which declares the CViewPage class), then one record per
+# scene, then a ref to the selected scene. A record is: the class tag | a
+# null attribute ref | (schema 13, SketchUp 2016+, only) a pid | name |
+# description | u32 capture flags | the camera (CCamera, or null) | the
+# thumbnail (CDib, or null) | (schema 13) a byte | then one section per
+# capture flag that is set:
+#
+#   0x02 style       the rendering options (length by file version, see
+#                    _RENDERING_OPTIONS_LEN) + a CSkpStyle ref or object
+#   0x04 shadows     2 bytes (schema 13: 3) + the shadow info
+#   0x08 axes        (schema 13: a flag byte +) 110 bytes
+#   0x10 hidden      a byte, u32 n, n entity refs
+#   0x20 layers      u32 n, n refs to the layers (tags) the scene hides
+#   0x40 sections    u32 n, n section-plane refs
+#
+# | 22 bytes (transition and delay time, flags) | u32 n + an n-byte PNG.
+# 0x80 and 0x100 (SketchUp 2020's split of "hidden" into geometry and
+# objects) add no section. The samples only have 0x7F and 0x1FF; that a
+# section is absent when its flag is clear is this reader's assumption for
+# the others. A record it can't fully read, or flags outside 0x1FF, make
+# _read_page_list give up, and the narrow _scan_pages above takes over.
+_PAGE_DECL_RE = re.compile(rb'\xff\xff(\x0c|\x0d)\x00\x09\x00CViewPage')
+_PAGE_KNOWN_FLAGS = 0x1FF
+# The rendering options' length by SketchUp major version, measured on the
+# model-level copy of the same block in every fixture from 2014 to 2020
+# (and in the 2020 scene); other versions aren't known, so give up there.
+_RENDERING_OPTIONS_LEN = {14: 206, 15: 206, 16: 206, 17: 206, 18: 211, 19: 212, 20: 213}
+_PAGE_AXES_LEN = 110
+_PAGE_TRAILER_LEN = 22
+_SHADOW_INFO_FIXED_LEN = 60  # after the city and country strings
+# CSkpStyle option values: type tag -> byte size
+_STYLE_VALUE_SIZES = {1: 1, 4: 4, 6: 4, 7: 8}
+
+
+def _read_tag(r):
+    """One archive tag, with the 0x7FFF escape to 32 bits resolved:
+    ``('null', 0)``, ``('decl', 0)``, ``('class', slot)`` (a new object
+    of an already-declared class) or ``('obj', slot)`` (a back-ref)."""
+    v = r.u16()
+    if v == 0:
+        return 'null', 0
+    if v == 0xFFFF:
+        return 'decl', 0
+    if v == 0x7FFF:
+        v = r.u32()
+        return ('class', v & 0x7FFFFFFF) if v & 0x80000000 else ('obj', v)
+    return ('class', v & 0x7FFF) if v & 0x8000 else ('obj', v)
+
+
+def _skip_pid(r):
+    mask = r.u8()
+    r.raw(bin(mask).count('1'))
+
+
+class _PageClasses:
+    """The classes the scene records declare or refer to: the schema each
+    was declared with and, once seen, the slot its class-refs use - every
+    class-ref to one class must carry the same slot, which catches a
+    record read from the wrong offset early."""
+
+    def __init__(self):
+        # CCamera and CDib are declared in the document prefix; the scene
+        # records only refer to them, at the schemas every v6+ file uses.
+        self.schema = {'CCamera': 5, 'CDib': 3}
+        self.slot = {}
+
+    def object(self, r, kind, slot, name):
+        """After a 'decl' or 'class' tag: the declaration's header (if
+        any); returns the schema the object was written with."""
+        if kind == 'decl':
+            schema = r.u16()
+            n = r.u16()
+            if n != len(name) or r.raw(n) != name.encode('ascii'):
+                raise LegacyParseError(f"expected a {name} declaration {r.ctx()}")
+            self.schema[name] = schema
+        elif self.slot.setdefault(name, slot) != slot:
+            raise LegacyParseError(f"{name} class-ref to another slot {r.ctx()}")
+        if name not in self.schema:
+            raise LegacyParseError(f"{name} object of an unknown schema {r.ctx()}")
+        return self.schema[name]
+
+
+def _read_page_camera(r):
+    eye = r.f64s(3)
+    target = r.f64s(3)
+    up = r.f64s(3)
+    r.f64s(2)                     # constants 1.0, 1000.0
+    perspective = r.u8()
+    fov = r.f64()
+    ortho_height = r.f64()
+    r.raw(137 - 105)
+    r.u16()
+    r.utf16()
+    r.raw(33)
+    return {'eye': eye, 'target': target, 'up': up, 'fov': fov,
+            'parallel': perspective == 0, 'ortho_height': ortho_height}
+
+
+def _skip_style(r, schema):
+    """A CSkpStyle object's body: no attributes, a pid (schema 2+), GUID,
+    a string, u32, name, description, then its options - each a u32 key
+    and a u32 count of (u32 type, value) pairs."""
+    if r.u16() != 0:
+        raise LegacyParseError(f"style with attributes {r.ctx()}")
+    if schema >= 2:
+        _skip_pid(r)
+    r.raw(16)
+    r.utf16()
+    r.u32()
+    r.utf16()
+    r.utf16()
+    for _ in range(r.u32()):
+        r.u32()
+        for _ in range(r.u32()):
+            size = _STYLE_VALUE_SIZES.get(r.u32())
+            if size is None:
+                raise LegacyParseError(f"unknown style value type {r.ctx()}")
+            r.raw(size)
+
+
+def _read_refs(r, n):
+    if n > (len(r.data) - r.pos) // 2:
+        raise LegacyParseError(f"implausible ref count {n} {r.ctx()}")
+    refs = []
+    for _ in range(n):
+        kind, v = _read_tag(r)
+        if kind != 'obj':
+            raise LegacyParseError(f"expected a back-ref {r.ctx()}")
+        refs.append(v)
+    return refs
+
+
+def _read_page_record(r, classes, ver):
+    kind, slot = _read_tag(r)
+    if kind not in ('decl', 'class'):
+        raise LegacyParseError(f"expected a CViewPage record {r.ctx()}")
+    schema = classes.object(r, kind, slot, 'CViewPage')
+    if r.u16() != 0:
+        raise LegacyParseError(f"scene with attributes {r.ctx()}")
+    if schema >= 13:
+        _skip_pid(r)
+    page = {'name': r.utf16(), 'hidden_layer_ids': []}
+    r.utf16()                                     # description
+    flags = r.u32()
+    if flags & ~_PAGE_KNOWN_FLAGS:
+        raise LegacyParseError(f"scene capture flags {flags:#x} {r.ctx()}")
+    kind, slot = _read_tag(r)
+    if kind in ('decl', 'class'):
+        classes.object(r, kind, slot, 'CCamera')
+        page.update(_read_page_camera(r))
+    kind, slot = _read_tag(r)
+    if kind in ('decl', 'class'):
+        classes.object(r, kind, slot, 'CDib')
+        _read_dib(None, r)
+    if schema >= 13:
+        r.u8()
+    if flags & 0x02:
+        if ver not in _RENDERING_OPTIONS_LEN:
+            raise LegacyParseError(f"rendering options of a v{ver} scene")
+        r.raw(_RENDERING_OPTIONS_LEN[ver])
+        kind, slot = _read_tag(r)
+        if kind in ('decl', 'class'):
+            _skip_style(r, classes.object(r, kind, slot, 'CSkpStyle'))
+    if flags & 0x04:
+        r.raw(3 if schema >= 13 else 2)
+        r.u32()                                   # time
+        r.u8()
+        r.utf16()                                 # city
+        r.utf16()                                 # country
+        r.raw(_SHADOW_INFO_FIXED_LEN)
+    if flags & 0x08:
+        r.raw(_PAGE_AXES_LEN + (1 if schema >= 13 else 0))
+    if flags & 0x10:
+        r.u8()
+        _read_refs(r, r.u32())
+    if flags & 0x20:
+        page['hidden_layer_ids'] = _read_refs(r, r.u32())
+    if flags & 0x40:
+        _read_refs(r, r.u32())
+    r.raw(_PAGE_TRAILER_LEN)
+    png = r.u32()
+    if png > len(r.data) - r.pos:
+        raise LegacyParseError(f"implausible thumbnail length {png} {r.ctx()}")
+    r.raw(png)
+    return page
+
+
+def _read_page_list(data: bytes, ar):
+    """Every scene, with its camera and hidden layers, read as a sequence
+    from the scene list in the file tail. ``None`` when there is a scene
+    list this reader can't fully read (the caller then falls back to
+    _scan_pages); ``[]`` when there is none."""
+    m = _PAGE_DECL_RE.search(data, ar.r.pos)
+    if m is None:
+        # a scene list in a schema this reader doesn't know: let the
+        # narrow scan try
+        return None if data.find(b'CViewPage', ar.r.pos) >= 0 else []
+    try:
+        count = struct.unpack_from('<I', data, m.start() - 4)[0]
+        if not 1 <= count <= 10000:
+            raise LegacyParseError(f"implausible scene count {count}")
+        r = _R(data, m.start())
+        classes = _PageClasses()
+        pages = [_read_page_record(r, classes, ar.ver) for _ in range(count)]
+        # the list ends with a ref to the selected scene (or a null ref)
+        if _read_tag(r)[0] not in ('obj', 'null'):
+            raise LegacyParseError(f"no selected-scene ref after the scenes {r.ctx()}")
+        for page in pages:
+            page['hidden_layer_ids'] = [
+                i for i in page['hidden_layer_ids']
+                if (ar.slots.get(i) or ('',))[0] == 'obj' and ar.slots[i][1] == 'CLayer']
+    except (LegacyParseError, struct.error, IndexError, ValueError) as e:
+        logger.debug("scene list not fully readable, falling back to the scan: %s", e)
+        return None
     return pages
 
 
@@ -2133,8 +2359,10 @@ def full_parse_legacy(skp_path: str) -> Dict[str, Any]:
                          'builder': root_builder}
 
     try:
-        pages = _scan_pages(data, ar)
-    except (LegacyParseError, struct.error, IndexError):
+        pages = _read_page_list(data, ar)
+        if pages is None:
+            pages = _scan_pages(data, ar)
+    except (LegacyParseError, struct.error, IndexError, ValueError):
         pages = []
 
     logger.info(

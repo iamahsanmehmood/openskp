@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Python: write scenes into legacy files, and read legacy scenes with their cameras
+
+`SkpBuilder.add_scene(name, eye, target, up=None, *, perspective, fov,
+ortho_height, hidden_layers)` adds a scene: a named camera plus the layers it
+hides, one click apart in SketchUp's Scenes tabs. Each scene is written the
+way SketchUp writes a new scene: `CViewPage` schema 13 (SketchUp 2016+; the
+version map still says 12), capturing everything (flags `0x7F`). The model's
+style moves into the first scene and the style manager refers back to it, as
+in SketchUp's own files. Scenes take pids from the shared sequence and slots
+from where the scaffold's font manager started; references past `0x7FFF` use
+the escape form. The ground truth is SketchUp's own 3D Warehouse model with
+eight scenes in its SketchUp 2017 format, plus SketchUp 2015 saves (neither
+redistributable, so not committed). Files written this way open in SketchUp
+Free (web) with working scenes. A file whose scenes left the style section
+out was rejected, which is why every scene captures everything.
+
+The legacy reader now reads whole scene records (`_read_page_list`) for
+schema 12 and 13: name, camera (eye, target, up, fov, parallel, ortho height)
+and hidden layers, the fields `Page` already had. That includes the common
+case the narrow scan skipped, a scene that saves its camera and style
+(#445). The `gondola_v20.skp` fixture (SketchUp 2020, flags `0x1FF`) now comes
+back with its scene, as do SketchUp's eight-scene sample, SketchUp 2015 saves
+and openskp's own output. The rendering options a scene carries grow with the
+file version (206 bytes up to SketchUp 2017, 211, 212 and 213 for 2018-2020,
+measured on the fixtures), so files from SketchUp 2014 to 2020 are covered;
+for other versions the reader gives up. The hidden-layer list is a `u32`
+count followed by the refs; the narrow scan's "refs, then a `u32` 1" reading
+takes a count of 1 for its end marker, so a scene hiding one layer came back
+with none. A record the new reader can't fully read (for example one with an
+attribute dictionary, or capture flags beyond `0x1FF`) falls back to the
+narrow scan.
+
 ### Fixed — all five ports: an instance scaled through the matrix's scale term is placed and sized correctly (#444)
 
 SketchUp can keep a uniform scale in the homogeneous term of an instance's

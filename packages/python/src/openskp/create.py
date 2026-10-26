@@ -60,6 +60,10 @@ are involved, and how.
   looking at the origin from the (1, -1, 1) octant) rather than the
   blank scaffold's own arbitrary default camera - see
   ``_ISO_CAMERA_PREFIX_PATCH`` below. Not configurable yet.
+* Scenes - a named camera plus the layers it hides, switched with one
+  click in SketchUp's Scenes tabs - via :meth:`SkpBuilder.add_scene`.
+  Each captures everything, as SketchUp's own new scenes do; the file
+  still opens in the model camera above, with the first scene selected.
 * This module itself only ever builds a brand-new file from its own
   blank scaffold - it has no notion of an existing input file at all
   (real SketchUp does not simply append to a file on save, it
@@ -104,6 +108,7 @@ import re
 import struct
 import time
 import uuid
+import zlib
 from importlib import resources
 from typing import Dict, FrozenSet, Iterator, List, NamedTuple, Optional, Sequence, Tuple, Union
 
@@ -339,6 +344,117 @@ _CAMERA_TEMPLATE = bytes.fromhex(
     "0000000000000000000100fffeff00000000000000000000000000000000f03f"
     "00000000000000000000000000000000"
 )
+
+# ── scenes (CViewPage) ──────────────────────────────────────────────────
+#
+# Ground truth: a SketchUp-written v17 file with eight scenes (SketchUp's
+# own "Skill Builder: Creating Section Animations with Scenes" model on 3D
+# Warehouse, downloaded in its SketchUp 2017 format - not redistributable,
+# so not committed as a fixture), cross-checked against SketchUp 2015
+# saves, plus files written by this module that SketchUp Free (web) opens
+# with working scenes. SketchUp 2016+ writes CViewPage with schema 13; the
+# version map still says 12, the class declaration is what counts. Every
+# scene in the sample captures everything (flags 0x7F, SketchUp's default
+# for a new scene), and a test file that left the style section out was
+# rejected by SketchUp Free - so this writer always captures everything.
+_VIEW_PAGE_SCHEMA = 13
+_PAGE_CAPTURE_ALL = 0x7F  # camera, style, shadows, axes, hidden, layers, sections
+
+# The scene list lives in the document tail right after the model's shadow
+# info (tail-relative offset 112 in this scaffold): 4 bytes, a u32 scene
+# count, the scenes, a back-ref to the selected scene, 6 bytes. The blank
+# scaffold has a count of 0 and a null selection there.
+_PAGE_LIST_TAIL_REL = 112
+_SHADOW_INFO_LEN = 103  # the scaffold's own shadow info ("Boulder (CO)"), copied into each scene
+
+# _TAIL_REF_POSITIONS split by what they point at: the first four are the
+# font manager's (CSkFont class + the Arial and Tahoma objects), the last
+# two the style manager's active style (back-ref) and its "current style"
+# copy (a new object of the CSkpStyle class). A scene list inserted before
+# them shifts the font refs; the style refs are re-pointed instead, see
+# _STYLE_OBJECT_TAIL_REL.
+_FONT_TAIL_REFS = (409, 468, 477, 479)
+_STYLE_TAIL_REFS = (1383, 1385)
+
+# A scene that captures its style embeds a CSkpStyle. SketchUp declares it
+# inline in the first scene and the style manager (later in the tail) then
+# only refers back to it: its style list holds a back-ref, followed by the
+# active-style back-ref and the class-ref of its "current style" copy. The
+# scaffold declares its one style inline in the manager instead, as the
+# span [490, 1383) of the tail - so writing scenes moves that span into the
+# first scene and leaves a back-ref behind, exactly SketchUp's own shape.
+_STYLE_OBJECT_TAIL_REL = 490
+
+# The model's rendering options, which every scene that captures its style
+# carries a copy of (206 bytes, same layout in the scene record). Lives in
+# the scaffold prefix, before _material_insert_pos, so it never moves.
+_RENDERING_OPTIONS_OFFSET = 3166
+_RENDERING_OPTIONS_LEN = 206
+
+
+def _page_camera(eye: Point3, target: Point3, up: Point3, perspective: bool,
+                 fov: float, ortho_height: float) -> bytes:
+    """The 176 bytes after a scene camera's class-ref: eye, target and up
+    (inches), two constants (1.0, 1000.0), the projection flag (1 =
+    perspective), field of view in degrees and the visible height of the
+    parallel view in inches - then the rest of _CAMERA_TEMPLATE, which is
+    byte-identical to what SketchUp writes there in a real scene."""
+    head = struct.pack("<9d", *eye, *target, *up)
+    head += struct.pack("<2dBdd", 1.0, 1000.0, 1 if perspective else 0, fov, ortho_height)
+    return head + _CAMERA_TEMPLATE[len(head):]
+
+
+def _default_up(eye: Point3, target: Point3) -> Point3:
+    """World Z made orthogonal to the view direction - SketchUp's own up
+    vector for an unrolled camera. Looking straight down, +Y."""
+    d = [t - e for t, e in zip(target, eye)]
+    n = math.sqrt(sum(c * c for c in d))
+    if n == 0:
+        raise SkpWriteError("scene camera eye and target coincide")
+    d = [c / n for c in d]
+    up = [-d[2] * d[0], -d[2] * d[1], 1 - d[2] * d[2]]
+    n = math.sqrt(sum(c * c for c in up))
+    if n < 1e-9:
+        return (0.0, 1.0, 0.0)
+    return (up[0] / n, up[1] / n, up[2] / n)
+
+
+def _scene_thumbnail_png(width: int = 64, height: int = 32) -> bytes:
+    """The thumbnail every scene record ends with: a small plain PNG.
+    SketchUp re-renders scene thumbnails itself; it only needs a valid
+    image here."""
+    raw = b"".join(b"\x00" + b"\xc8\xc8\xc8" * width for _ in range(height))
+
+    def chunk(kind: bytes, payload: bytes) -> bytes:
+        crc = zlib.crc32(kind + payload)
+        return struct.pack(">I", len(payload)) + kind + payload + struct.pack(">I", crc)
+
+    return (b"\x89PNG\r\n\x1a\n"
+            + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(raw))
+            + chunk(b"IEND", b""))
+
+
+class _Scene(NamedTuple):
+    name: str
+    eye: Point3
+    target: Point3
+    up: Point3
+    perspective: bool
+    fov: float
+    ortho_height: float
+    hidden_layers: Tuple[int, ...]
+
+
+class _SceneBlock(NamedTuple):
+    """The serialized scene list, as SkpBuilder._write_scenes returns it."""
+    data: bytes
+    slots_used: int
+    first_scene_slot: int
+    style_slot: int
+    style_class_slot: int
+    next_pid: int
+
 
 # The definition record's 22-byte "base block" (immediately after its own
 # preamble, before the embedded layer list) - all zero except offsets 3-4,
@@ -656,6 +772,14 @@ def _shift_ref(buf: bytearray, pos: int, shift: int) -> int:
     val = (0x80000000 | new_slot) if tag_bit else new_slot
     buf[pos : pos + 2] = struct.pack("<H", 0x7FFF) + _u32(val)
     return 4
+
+
+def _backref_bytes(slot: int) -> bytes:
+    """A plain object back-ref to ``slot``, in the 2-byte form or the
+    6-byte escape form - same rule as `_ArchiveWriter._backref`."""
+    w = _ArchiveWriter(next_slot=0, class_slot={})
+    w._backref(slot)
+    return bytes(w.buf)
 
 
 def _detect_image_subtype(image_bytes: bytes) -> int:
@@ -2302,6 +2426,9 @@ class SkpBuilder:
         #: `materials_by_name`, populated automatically by `add_layer`.
         self.layers_by_name: Dict[str, int] = {}
         self._layer_count = 0
+        # Scenes are only collected here; to_bytes splices them into the
+        # document tail (see _write_scenes).
+        self._scenes: List[_Scene] = []
         # Deferred the same way as the layer writer: component definitions
         # splice in after layers, before root-level geometry, so their
         # starting slot depends on the final material+layer shift.
@@ -3123,6 +3250,134 @@ class SkpBuilder:
         )
         self._face_count += 1  # reuses the "at least one root entity" check in to_bytes
 
+    def add_scene(
+        self,
+        name: str,
+        eye: Point3,
+        target: Point3,
+        up: Optional[Point3] = None,
+        *,
+        perspective: bool = True,
+        fov: float = 35.0,
+        ortho_height: float = 200.0,
+        hidden_layers: Sequence[int] = (),
+    ) -> None:
+        """Add a scene (SketchUp's Scenes tabs; a "page" in the SDK): a
+        named camera plus the layers (tags) it hides. Clicking its tab in
+        SketchUp switches to that camera and shows every layer except
+        ``hidden_layers``.
+
+        Args:
+            name: The scene's tab label.
+            eye: Camera position, inches.
+            target: Point the camera looks at, inches.
+            up: Camera up vector; by default world Z made orthogonal to
+                the view direction (+Y when looking straight down).
+            perspective: ``False`` for a parallel (orthographic) view.
+            fov: Field of view in degrees, for a perspective view.
+            ortho_height: Visible height in inches, for a parallel view.
+            hidden_layers: Layer handles (from :meth:`add_layer`) this
+                scene hides.
+
+        Like SketchUp's own default for a new scene, the scene also
+        captures the model's style, shadow settings and axes. Scenes keep
+        the order they were added in, and the file has the first one
+        selected. The file's start view stays the model camera, which this
+        method doesn't change.
+        """
+        if not name:
+            raise SkpWriteError("a scene needs a name")
+        try:
+            units = len(name.encode("utf-16-le")) // 2   # what _write_str stores
+        except UnicodeEncodeError as e:
+            raise SkpWriteError(f"scene name is not valid text: {e}") from None
+        if units >= 0xFF:
+            raise SkpWriteError("scene name too long to encode (255 char limit)")
+        if any(s.name == name for s in self._scenes):
+            raise SkpWriteError(f"a scene named {name!r} already exists")
+        hidden = tuple(dict.fromkeys(hidden_layers))      # once each, any iterable
+        known = set(self.layers_by_name.values())
+        unknown = [h for h in hidden if h not in known]
+        if unknown:
+            raise SkpWriteError(f"hidden_layers has handles add_layer never returned: {unknown}")
+        eye = (float(eye[0]), float(eye[1]), float(eye[2]))
+        target = (float(target[0]), float(target[1]), float(target[2]))
+        numbers = eye + target + (fov, ortho_height) + (tuple(up) if up is not None else ())
+        if not all(math.isfinite(float(v)) for v in numbers):
+            raise SkpWriteError("scene camera values must be finite numbers")
+        d = [t - e for t, e in zip(target, eye)]
+        if not any(d):
+            raise SkpWriteError("scene camera eye and target coincide")
+        up = _default_up(eye, target) if up is None else (float(up[0]), float(up[1]), float(up[2]))
+        cross =(d[1] * up[2] - d[2] * up[1], d[2] * up[0] - d[0] * up[2], d[0] * up[1] - d[1] * up[0])
+        if math.hypot(*cross) <= 1e-9 * math.hypot(*d) * max(math.hypot(*up), 1e-300):
+            raise SkpWriteError("scene up vector is zero or parallel to the view direction")
+        if not 0 < fov < 180:
+            raise SkpWriteError("scene field of view must be between 0 and 180 degrees")
+        if ortho_height <= 0:
+            raise SkpWriteError("scene ortho_height must be positive")
+        self._scenes.append(_Scene(name, eye, target, up, perspective, float(fov),
+                                   float(ortho_height), hidden))
+
+    def _write_scenes(self, first_slot: int, next_pid: int, tail: bytes) -> "_SceneBlock":
+        """Serialize the collected scenes, numbering their archive objects
+        from ``first_slot`` (where the scene list sits in the tail) and
+        their persistent IDs from ``next_pid``.
+
+        The first scene declares the scaffold's style object inline - its
+        bytes come from ``tail``, which must already carry the ISO camera
+        patch (one of its patches rewrites that style's GUID) - and
+        to_bytes re-points the style manager at it, see
+        _STYLE_OBJECT_TAIL_REL.
+        """
+        w = _ArchiveWriter(next_slot=first_slot, class_slot={}, next_pid=next_pid)
+        rendering = self._data[_RENDERING_OPTIONS_OFFSET:_RENDERING_OPTIONS_OFFSET + _RENDERING_OPTIONS_LEN]
+        shadow = tail[_PAGE_LIST_TAIL_REL - _SHADOW_INFO_LEN:_PAGE_LIST_TAIL_REL]
+        style_object = tail[_STYLE_OBJECT_TAIL_REL:_STYLE_TAIL_REFS[0]]
+        # The same guard _SCAFFOLD_SHA256 gives the other offsets, spelled out
+        # for the three spans copied from: each must look like what it is.
+        if not (rendering.startswith(b"\x02\x00\x00\x00\x00\x01\x00\x01")
+                and shadow.endswith(b"\x50\x00\x00\x00\x14\x00\x00\x00")
+                and style_object.startswith(b"\xff\xff\x02\x00\x09\x00CSkpStyle")):
+            raise SkpWriteError("scaffold layout not as expected for scenes")
+        thumbnail = _scene_thumbnail_png()
+        style_slot = style_class_slot = first_scene_slot = 0
+        for i, scene in enumerate(self._scenes):
+            scene_slot = w._new_of_known_class("CViewPage", schema=_VIEW_PAGE_SCHEMA)
+            if i == 0:
+                first_scene_slot = scene_slot
+            w._preamble()  # no attributes, then the scene's persistent ID
+            w._write_str(scene.name)
+            w._write_str("")  # description
+            w.buf += _u32(_PAGE_CAPTURE_ALL)
+            w.buf += struct.pack("<H", 0x8000 | _CCAMERA_SLOT)
+            w._alloc()  # a class-ref always allocates a new object slot
+            w.buf += _page_camera(scene.eye, scene.target, scene.up, scene.perspective,
+                                  scene.fov, scene.ortho_height)
+            w._null()  # no thumbnail CDib
+            w.buf += bytes(1)
+            w.buf += rendering
+            if i == 0:  # the style object itself: class declaration + object
+                w.buf += style_object
+                style_class_slot = w._alloc()
+                style_slot = w._alloc()
+            else:
+                w._backref(style_slot)
+            w.buf += bytes(3) + shadow
+            # axes: a flag, 7 bytes, two flags, 5 bytes, then origin, x, y, z
+            w.buf += b"\x01" + bytes(7) + b"\x01\x01" + bytes(5)
+            w.buf += struct.pack("<12d", 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1)
+            w.buf += bytes(1) + _u32(0)  # no hidden entities
+            w.buf += _u32(len(scene.hidden_layers))
+            for handle in scene.hidden_layers:
+                w._backref(handle)
+            w.buf += _u32(0)  # no section planes
+            # transition and delay time (-1: the model's defaults), flags
+            w.buf += b"\x01" + _f64(-1.0) + _f64(-1.0) + b"\x00\x00\x01\x01\x01"
+            w.buf += _u32(len(thumbnail)) + thumbnail
+        return _SceneBlock(bytes(w.buf), w.next_slot - first_slot, first_scene_slot,
+                           style_slot, style_class_slot, w.next_pid)
+
     def add_dimension(self, p1: Point3, p2: Point3, offset: float = 10.0) -> None:
         """Add a FREE linear dimension between two explicit points (inches,
         world space). ``offset`` is the dimension line's offset from the
@@ -3344,6 +3599,18 @@ class SkpBuilder:
         geometry_initial_slot = self._scaffold_next_slot + material_shift + layer_shift + definition_shift
         geometry_shift = self._geometry_writer.next_slot - geometry_initial_slot
         new_root_count = self._orig_root_count + self._new_entity_count
+        total_tail_shift = material_shift + layer_shift + definition_shift + geometry_shift
+
+        # Scenes go first in the tail's slot order (right after the shadow
+        # info), so they are numbered from the slot the scaffold's font
+        # manager would otherwise start at, and take the next pids.
+        scenes = None
+        if self._scenes:
+            patched_tail = bytearray(self._data[self._tail_pos :])
+            for pos, patch in _ISO_CAMERA_TAIL_PATCHES:
+                patched_tail[pos : pos + len(patch)] = patch
+            scenes = self._write_scenes(self._scaffold_next_slot + total_tail_shift,
+                                        self._next_pid(), bytes(patched_tail))
 
         out = bytearray()
 
@@ -3359,7 +3626,8 @@ class SkpBuilder:
         # section. A 32-bit field (the two bytes after the old u16 are part
         # of it - a counter of 2 000 000 round-trips through the SDK), so a
         # model with more than 65 535 entities keeps a truthful counter.
-        struct.pack_into("<I", prefix, _PID_COUNTER_POS, self._next_pid() - 1)
+        last_pid = (scenes.next_pid if scenes else self._next_pid()) - 1
+        struct.pack_into("<I", prefix, _PID_COUNTER_POS, last_pid)
         prefix[_ISO_CAMERA_PREFIX_OFFSET : _ISO_CAMERA_PREFIX_OFFSET + len(_ISO_CAMERA_PREFIX_PATCH)] = (
             _ISO_CAMERA_PREFIX_PATCH
         )
@@ -3398,7 +3666,6 @@ class SkpBuilder:
         out += self._geometry_writer.buf
 
         tail = bytearray(self._data[self._tail_pos :])
-        total_tail_shift = material_shift + layer_shift + definition_shift + geometry_shift
         # _TAIL_REF_POSITIONS and _ISO_CAMERA_TAIL_PATCHES's positions both
         # index into this same tail buffer. A ref-shift that widens to the
         # 6-byte escape form (see _shift_ref) grows the buffer at that
@@ -3411,14 +3678,44 @@ class SkpBuilder:
             + [(pos, "patch") for pos in iso_patches],
             key=lambda a: a[0],
         )
+        # With scenes, the font refs also move past the scene list, and the
+        # style manager's two refs are re-pointed at the style object the
+        # first scene now declares (scaffold values: style 15, class 14).
+        shifts = dict.fromkeys(_TAIL_REF_POSITIONS, total_tail_shift)
+        if scenes:
+            for pos in _FONT_TAIL_REFS:
+                shifts[pos] += scenes.slots_used
+            scaffold_style = struct.unpack_from("<H", self._data, self._tail_pos + _STYLE_TAIL_REFS[0])[0]
+            scaffold_class = struct.unpack_from("<H", self._data, self._tail_pos + _STYLE_TAIL_REFS[1])[0] & 0x7FFF
+            shifts[_STYLE_TAIL_REFS[0]] = scenes.style_slot - scaffold_style
+            shifts[_STYLE_TAIL_REFS[1]] = scenes.style_class_slot - scaffold_class
         growth = 0
+        style_start = style_end = 0
         for pos, kind in actions:
             here = pos + growth
+            if pos == _STYLE_TAIL_REFS[0]:
+                style_end = here
             if kind == "ref":
-                growth += _shift_ref(tail, here, total_tail_shift)
+                growth += _shift_ref(tail, here, shifts[pos])
             else:
                 patch = iso_patches[pos]
                 tail[here : here + len(patch)] = patch
+            if pos < _STYLE_OBJECT_TAIL_REL:
+                style_start = _STYLE_OBJECT_TAIL_REL + growth
+        if scenes:
+            # Later offsets first, so the earlier ones stay valid: the style
+            # manager's list keeps only a back-ref to the moved style object,
+            # then the scene list goes in, with its count and the selected
+            # scene (the first) replacing the scaffold's 0 and null ref.
+            if not (_PAGE_LIST_TAIL_REL < style_start < style_end
+                    and tail[style_start : style_start + 2] == b"\xff\xff"):
+                raise SkpWriteError("scaffold style object not where expected")
+            tail[style_start:style_end] = _backref_bytes(scenes.style_slot)
+            count_pos = _PAGE_LIST_TAIL_REL + 4
+            if tail[count_pos : count_pos + 6] != bytes(6):
+                raise SkpWriteError("scaffold scene list is not empty where expected")
+            struct.pack_into("<I", tail, count_pos, len(self._scenes))
+            tail[count_pos + 4 : count_pos + 6] = scenes.data + _backref_bytes(scenes.first_scene_slot)
         out += tail
         return bytes(out)
 

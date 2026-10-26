@@ -141,12 +141,13 @@ condensed version.
 | Attribute dicts: full 9-value-type support (`Point3d`/`Length`/nested lists) | ✅ | ❌ | ❌ | ❌ | ❌ str only |
 | Attribute dicts surfaced in GLB/JSON metadata export (not just IFC Psets) | ✅ | n/a | n/a | n/a | ✅ |
 | VFF pages/scenes + dimension parsing | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Legacy (pre-2021) pages/scenes reading | ✅ | ❌ | ❌ | ❌ | ✅ |
+| Legacy (pre-2021) pages/scenes reading | ✅ with cameras (2014–2020) | ❌ | ❌ | ❌ | ✅ |
 | Construction lines/points reading | ✅ legacy + VFF | ✅ | ✅ | ✅ | ✅ legacy + VFF |
 | Scene baking, instancing-preserving scene output | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Loose-edge curve support (structural framing) | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Writer: materials/layers/definitions/groups/faces/curves/images | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Writer: dimensions, section planes, construction geometry | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Writer: scenes (camera + hidden layers) | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Editor (`open_existing()`), code generator | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Export: GLB / OBJ / STL / PLY / DXF / IFC4 / JSON | ✅ | ✅ | ✅ | ✅ | ✅ |
 | IFC export correctness fixes (units, layer visibility, Psets, classification) | ✅ | not checked | not checked | not checked | ✅ |
