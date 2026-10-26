@@ -96,6 +96,11 @@ export interface InstancedNode {
   definitionName: string;
   /** Effective layer, with SketchUp's inheritance already resolved. */
   layer: string;
+  /** The layer the instance carries itself, absent when it has none and
+   * {@link layer} is inherited from its parent. Tells apart a child that
+   * inherits its parent's layer from one explicitly assigned the same
+   * layer, which `layer` alone cannot. */
+  ownLayer?: string;
   /**
    * This node's transform RELATIVE TO ITS PARENT, as a 16-element
    * column-major glTF matrix (metres, Y-up) - directly usable as a glTF
@@ -459,11 +464,13 @@ export function buildInstancedSceneFromParsed(
       const newMatrix = multiplyMatrices(currentMatrix, inst.matrix);
 
       let lName = parentLayer;
+      let ownLayer: string | undefined;
       let instMaterial = inheritedMaterial;
       let properties: Record<string, string> = { ...(inst.properties || {}) };
 
       if (inst.layerId !== null && inst.layerId !== undefined) {
-        lName = layerIdToName.get(inst.layerId) || parentLayer;
+        ownLayer = layerIdToName.get(inst.layerId);
+        lName = ownLayer || parentLayer;
       }
 
       if (inst.materialId !== null && inst.materialId !== undefined) {
@@ -551,6 +558,7 @@ export function buildInstancedSceneFromParsed(
         nameIsGenerated,
         definitionName: childDefName,
         layer: lName,
+        ...(ownLayer ? { ownLayer } : {}),
         matrix: toGltfMatrix(inst.matrix),
         positionMm: [
           Math.round(tx * 100) / 100,
