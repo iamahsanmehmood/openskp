@@ -38,6 +38,14 @@ takes a count of 1 for its end marker, so a scene hiding one layer came back
 with none. A record the new reader can't fully read (for example one with an
 attribute dictionary, or capture flags beyond `0x1FF`) falls back to the
 narrow scan.
+### Added — TypeScript: `SceneOptions.frontSideOnly`
+
+A face whose front and back resolve to different colours is emitted as a front
+plus a reversed back-side copy, which is right for a viewer. A modeler or CAD
+tool that rebuilds faces from the mesh reads that copy as a second, coincident
+face: the shared edges turn non-manifold and the two z-fight. With
+`frontSideOnly`, `buildScene` and `buildInstancedScene` emit every face once,
+double-sided with its front material. Off by default.
 
 ### Fixed — all five ports: an instance scaled through the matrix's scale term is placed and sized correctly (#444)
 

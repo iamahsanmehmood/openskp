@@ -10,7 +10,6 @@ this module provides the working implementation.
 
 from __future__ import annotations
 
-import io
 import logging
 import os
 import struct
@@ -29,6 +28,8 @@ from defusedxml.common import DefusedXmlException
 import numpy as np
 
 from .errors import SkpParseError
+from ._vff_records import decode_record as _decode_geometry_record
+from ._packed_geometry import PackedVertices, PackedEdges, PackedFaces, _PackedTable
 
 try:
     import mapbox_earcut
@@ -52,6 +53,9 @@ logger = logging.getLogger("openskp")
 # How often (in top-level records) to emit a DEBUG progress log during the
 # main walk - coarse enough that it costs nothing on a 300k-definition file.
 _PROGRESS_INTERVAL = 500
+
+# Packing small models costs time without a material reduction in peak memory.
+_COMPACT_MODEL_BYTES = 256 * 1024 * 1024
 
 
 # ── TLV Parsing ──────────────────────────────────────────────────────────
@@ -178,6 +182,19 @@ class _TlvNode:
         return getattr(self, key, default)
 
 
+def _detach_tlv_payloads(nodes):
+    """Resolve the small subtrees retained by instances, releasing model.dat.
+
+    An unread leaf otherwise keeps the entire decompressed model alive even
+    after full_parse returns. Preserve all node fields, including opaque tags;
+    only the private lazy payload cache changes.
+    """
+    for node in nodes:
+        _ = node.payload
+        if node.children:
+            _detach_tlv_payloads(node.children)
+
+
 def parse_tlv_recursive(data, start, end, container_tags=None, depth=0):
     if container_tags is None:
         container_tags = CONTAINER_TAGS
@@ -199,6 +216,69 @@ def parse_tlv_recursive(data, start, end, container_tags=None, depth=0):
         else:
             children = []
         append(_TlvNode(pos, tag_hex, size, children, data, payload_start, payload_end))
+        pos = payload_end
+    return elements
+
+
+class _GeometryRecordNode(_TlvNode):
+    """Internal-only decoded geometry; never used in retained instance trees."""
+
+    __slots__ = ('_children', '_container_tags', 'record')
+
+    def __init__(self, offset, tag, size, record, data, container_tags):
+        self.offset = offset
+        self.tag = tag
+        self.size = size
+        self._children = None
+        self._data = data
+        self._payload_start = offset + 6
+        self._payload_end = offset + 6 + size
+        self._payload = b''
+        self._container_tags = container_tags
+        self.record = record
+
+    @property
+    def children(self):
+        # Generic searches still see the original tree. For example, a
+        # definition missing its own id may resolve one inside its geometry.
+        if self._children is None:
+            self._children = parse_tlv_recursive(
+                self._data, self._payload_start, self._payload_end,
+                self._container_tags)
+        return self._children
+
+
+def _parse_tlv_geometry(data, start, end, container_tags):
+    """Build the structural tree, decoding exact common geometry in place.
+
+    The public TLV parser is unchanged. Unknown layouts take its usual node
+    path, and instance subtrees always use it because raw builders expose
+    their complete children (including any geometry and opaque records).
+    """
+    elements = []
+    tag_strings = _TAG_STRINGS or _tag_strings()
+    pos = start
+    while pos <= end - 6:
+        tag_value, size = _unpack_header(data, pos)
+        tag = tag_strings[tag_value]
+        payload_start = pos + 6
+        payload_end = payload_start + size
+        if payload_end > end:
+            break
+        if tag in ('C409', 'B80B', 'AC0D'):
+            record = _decode_geometry_record(data, payload_start, size, tag)
+            if record is not None:
+                elements.append(_GeometryRecordNode(
+                    pos, tag, size, record, data, container_tags))
+                pos = payload_end
+                continue
+        if size > 0 and tag in container_tags:
+            parser = parse_tlv_recursive if tag == '6419' else _parse_tlv_geometry
+            children = parser(data, payload_start, payload_end, container_tags)
+        else:
+            children = []
+        elements.append(_TlvNode(pos, tag, size, children, data,
+                                 payload_start, payload_end))
         pos = payload_end
     return elements
 
@@ -248,7 +328,7 @@ def _unwrap_definitions_container(data, offset, size):
     return defs if defs else None
 
 
-def iter_top_level_lazy(data, start, end, container_tags=None):
+def iter_top_level_lazy(data, start, end, container_tags=None, *, _geometry=False):
     """Yield ``(index, total, node)`` for each top-level TLV record, fully
     recursed, one at a time - transparently unwrapping a lone 'F401'
     wrapper (matching the shape parse_tlv_recursive's callers already
@@ -297,9 +377,13 @@ def iter_top_level_lazy(data, start, end, container_tags=None):
     total = len(headers)
     for index, (tag_hex, offset, size) in enumerate(headers):
         record_end = offset + 6 + size
-        nodes = parse_tlv_recursive(data, offset, record_end, container_tags)
+        parser = _parse_tlv_geometry if _geometry else parse_tlv_recursive
+        nodes = parser(data, offset, record_end, container_tags)
         if nodes:
             yield index, total, nodes[0]
+        # Assignment evaluates the next parser call before replacing `nodes`.
+        # Release this tree now, rather than overlapping two large definitions.
+        del nodes
 
 
 # ── 3D planar triangulation ──────────────────────────────────────────────
@@ -583,6 +667,36 @@ def triangulate_face_3d(vertices_3d, loops, normal):
 # ── Geometry builder ─────────────────────────────────────────────────────
 
 class _GeometryBuilder:
+    def __getattribute__(self, name):
+        value = object.__getattribute__(self, name)
+        if name == '__dict__':
+            # Introspection and snapshots retain the original raw dict shape.
+            for key in ('vertices', 'edges', 'faces'):
+                table = value.get(key)
+                if isinstance(table, _PackedTable):
+                    value[key] = table.materialize()
+        elif isinstance(value, _PackedTable):
+            value = value.materialize()
+            object.__getattribute__(self, '__dict__')[name] = value
+        return value
+
+    def __getstate__(self):
+        return self.__dict__
+
+    def _geometry_tables(self):
+        """Sequential private readers; public attribute access stays a dict."""
+        values = object.__getattribute__(self, '__dict__')
+        return values['vertices'], values['edges'], values['faces']
+
+    def _compact_geometry(self):
+        """Compact completed large tables before building the public model."""
+        values = object.__getattribute__(self, '__dict__')
+        for name, storage in (('vertices', PackedVertices), ('edges', PackedEdges),
+                              ('faces', PackedFaces)):
+            table = values[name]
+            if type(table) is dict and len(table) >= 1024:
+                values[name] = storage(table)
+
     def __init__(self):
         self.vertices = {}
         self.edges = {}
@@ -698,6 +812,7 @@ def _parse_dimensions(model_dat, id2pos, inst_world):
     dims = []
     i = 0
     n = len(model_dat)
+    view = memoryview(model_dat)
     while True:
         j = model_dat.find(b'\xcc\x5b', i)
         if j < 0:
@@ -708,7 +823,9 @@ def _parse_dimensions(model_dat, id2pos, inst_world):
         ln = struct.unpack_from('<I', model_dat, j + 2)[0]
         if ln < 40 or j + 6 + ln > n:
             continue
-        body = _tlv_items(model_dat[j + 6:j + 6 + ln])
+        # A coincidental marker in geometry can advertise hundreds of MB.
+        # Validate candidates through views before copying any payloads.
+        body = _tlv_items(view[j + 6:j + 6 + ln])
         if body is None:
             continue
         tags = [t for t, _ in body]
@@ -993,8 +1110,31 @@ def _direct_child(children, tag):
 
 
 def _extract_geometry_nodes(elements, builder):
+    vertices, edges, faces = builder.vertices, builder.edges, builder.faces
+    edge_flags = builder.edge_flags
     for el in elements:
         tag = el.tag
+
+        if isinstance(el, _GeometryRecordNode):
+            if tag == 'C409':
+                v_id, position, _ = el.record
+                vertices[v_id] = position
+            elif tag == 'B80B':
+                e_id, flags, v1, v2, curve_id = el.record
+                edges[e_id] = (v1, v2)
+                edge_flags[e_id] = flags
+                if curve_id is not None:
+                    builder.edge_curves[e_id] = curve_id
+            else:
+                f_id, normal, loop, hidden, material_id, back_material_id = el.record
+                # A subtree can be extracted into more than one builder.
+                # Each gets its own mutable face dictionary and loop lists.
+                faces[f_id] = {
+                    'loops': [list(loop)], 'normal': normal,
+                    'material_id': material_id, 'back_material_id': back_material_id,
+                    'uv_transform': None, 'uv_transform_back': None,
+                    'hidden': hidden, 'layer': None}
+            continue
 
         if tag == 'C409':
             v_id = _entity_id(el)
@@ -1003,7 +1143,7 @@ def _extract_geometry_nodes(elements, builder):
                 x = read_f64(c509.payload, 0)
                 y = read_f64(c509.payload, 8)
                 z = read_f64(c509.payload, 16)
-                builder.vertices[v_id] = (x, y, z)
+                vertices[v_id] = (x, y, z)
 
         elif tag == 'B80B':
             e_id = _entity_id(el)
@@ -1012,7 +1152,7 @@ def _extract_geometry_nodes(elements, builder):
                 v2_node = _find_tag(el.children, 'BA0B')
                 v1 = parse_var_int(v1_node.payload, 0, len(v1_node.payload)) if v1_node else None
                 v2 = parse_var_int(v2_node.payload, 0, len(v2_node.payload)) if v2_node else None
-                builder.edges[e_id] = (v1, v2)
+                edges[e_id] = (v1, v2)
                 # D007 -> D307 = edge display flags: base 0x06, plus
                 # 0x01 hidden, 0x08|0x10 soft/smooth (cross-validated
                 # against the same models in the classic MFC format,
@@ -1021,7 +1161,7 @@ def _extract_geometry_nodes(elements, builder):
                 if d007:
                     d307 = _direct_child(d007.children, 'D307')
                     if d307 is not None and d307.payload:
-                        builder.edge_flags[e_id] = d307.payload[0]
+                        edge_flags[e_id] = d307.payload[0]
                     # D207 = layer id - the same
                     # tag the face branch and the instance branch read. See
                     # _GeometryBuilder.edge_layers.
@@ -1124,7 +1264,7 @@ def _extract_geometry_nodes(elements, builder):
                 af0d = _direct_child(el.children, 'AF0D')
                 if af0d and af0d.payload:
                     back_mat_id = parse_var_int(af0d.payload, 0, len(af0d.payload))
-                builder.faces[f_id] = {'loops': loops, 'normal': normal,
+                faces[f_id] = {'loops': loops, 'normal': normal,
                                        'material_id': face_mat_id,
                                        'back_material_id': back_mat_id,
                                        'uv_transform': uv_front,
@@ -1189,6 +1329,7 @@ def _extract_geometry_nodes(elements, builder):
                     inst_hidden = bool(d307.payload[0] & 0x01)
 
             dynamic = inst_attribute_dicts.get('dynamic_attributes', {})
+            _detach_tlv_payloads(el.children)
             builder.instances.append({
                 'offset': el.offset,
                 'ref_guid': guid,
@@ -1634,130 +1775,130 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
         raise SkpParseError(
             "No ZIP container found", stage="zip_extract")
 
-    # 2. Extract ZIP contents
-    with open(skp_path, 'rb') as f:
-        f.seek(pk_pos)
-        zip_bytes = f.read()
-    zf = zipfile.ZipFile(io.BytesIO(zip_bytes), 'r')
-    logger.debug("Opened ZIP container: %d entries", len(zf.namelist()))
+    # ZipFile accounts for a prepended SKP header when locating entries.
+    # Reading the file directly avoids retaining a second, file-sized ZIP
+    # buffer throughout parsing. Close it on malformed members as well.
+    with zipfile.ZipFile(skp_path, 'r') as zf:
+        logger.debug("Opened ZIP container: %d entries", len(zf.namelist()))
 
-    # Materials & layer colors
-    layer_colors = {}
-    # Modern (VFF) files derive layer COLOR from Layer_<name>-prefixed
-    # materials, which carry no visibility flag of their own - real
-    # visibility comes from the model.dat layer manager's own 8E3C byte,
-    # read in collect_layers() below. Seeded to False (visible) here so a
-    # layer that never went through collect_layers (e.g. a layer with no
-    # painted material at all) still gets a sane default.
-    layer_hidden = {}
-    materials = {}
-    materials_by_folder = {}
-    MAT_NS = {'mat': 'http://sketchup.google.com/schemas/sketchup/1.0/material'}
-    for name in zf.namelist():
-        if name.endswith('material.xml') and name.startswith('materials/'):
-            _validate_zip_entry_size(zf, name)
-            xml_data = zf.read(name)
-            try:
-                root = ET.fromstring(xml_data)
-                mat_elem = root.find('.//mat:material', MAT_NS)
-                if mat_elem is not None:
-                    mat_name = mat_elem.get('name', 'unknown')
-                    r = int(mat_elem.get('colorRed', 128))
-                    g = int(mat_elem.get('colorGreen', 128))
-                    b = int(mat_elem.get('colorBlue', 128))
-                    # 'trans' only applies when useTrans="1"; otherwise the
-                    # attribute is a leftover default and the material is
-                    # fully opaque. Without this check most materials read
-                    # as 50% transparent (or fully invisible for trans="0").
-                    # The stored value is a TRANSPARENCY (0 = opaque,
-                    # 1 = fully transparent) — e.g. SketchUp's library
-                    # "Translucent Glass Blue" (70% opacity) stores
-                    # trans="0.3" — so the exposed opacity is 1 - trans.
-                    if mat_elem.get('useTrans') == '1':
-                        trans = 1.0 - float(mat_elem.get('trans', 0.0))
-                        trans = min(max(trans, 0.0), 1.0)
-                    else:
-                        trans = 1.0
-                    folder_name = name.split('/')[1] if len(name.split('/')) > 1 else ''
-                    # type="2" marks a colourized copy ("[Name]1"): the
-                    # shared texture must be re-tinted toward the material
-                    # colour before display. colorizeType 0 = hue shift,
-                    # 1 = tint (greyscale then colour).
-                    colorized = mat_elem.get('type') == '2'
-                    try:
-                        colorize_type = int(mat_elem.get('colorizeType', 0) or 0)
-                    except ValueError:
-                        colorize_type = 0
-                    mat_obj = {'name': mat_name, 'color': {'r': r, 'g': g, 'b': b}, 'transparency': trans,
-                               'colorized': colorized, 'colorize_type': colorize_type}
-                    tex = _extract_texture(zf, name, mat_elem, MAT_NS)
-                    if tex is not None:
-                        mat_obj['texture'] = tex
-                    materials[mat_name] = mat_obj
-                    if folder_name:
-                        materials_by_folder[folder_name] = mat_obj
-                    if mat_name.startswith('Layer_'):
-                        layer_colors[mat_name[6:]] = (r, g, b)
-                        layer_hidden[mat_name[6:]] = False
-            except Exception:
-                logger.debug("Failed to parse material.xml %r", name, exc_info=True)
-
-    # Thumbnail
-    thumbnail_data = None
-    if 'meta/model_thumbnail.png' in zf.namelist():
-        _validate_zip_entry_size(zf, 'meta/model_thumbnail.png')
-        thumbnail_data = zf.read('meta/model_thumbnail.png')
-
-    # Units (meta/meta.dat) - VFF-only; legacy files carry no equivalent
-    # container.
-    units = None
-    if 'meta/meta.dat' in zf.namelist():
-        try:
-            _validate_zip_entry_size(zf, 'meta/meta.dat')
-            units = _read_meta_units(zf.read('meta/meta.dat'))
-        except Exception:
-            units = None
-            logger.debug("Failed to read units from meta/meta.dat", exc_info=True)
-
-    # Styles: face colors live in styles/*/style.xml as signed-int32 ABGR
-    # variants — item id 2002 is the front (default) face color, 2003 the
-    # back face color (the 4000-series items are background/sky/ground).
-    # Viewers need them to shade unpainted faces the way SketchUp does (an author may e.g. set a green back color so unpainted
-    # garden faces read as grass).
-    styles = []
-    for name in zf.namelist():
-        if not (name.startswith('styles/') and name.endswith('style.xml')):
-            continue
-        try:
-            _validate_zip_entry_size(zf, name)
-            sroot = ET.fromstring(zf.read(name))
-        except (ET.ParseError, DefusedXmlException):
-            continue
-        STY = '{http://sketchup.google.com/schemas/sketchup/1.0/style}'
-        TYP = '{http://sketchup.google.com/schemas/1.0/types}'
-        style_el = sroot.find(f'{STY}style')
-        if style_el is None:
-            continue
-        colors = {}
-        for item in style_el.findall(f'{STY}item'):
-            iid = item.get('id')
-            var = item.find(f'{TYP}variant')
-            if iid in ('2002', '2003') and var is not None and var.text:
+        # Materials & layer colors
+        layer_colors = {}
+        # Modern (VFF) files derive layer COLOR from Layer_<name>-prefixed
+        # materials, which carry no visibility flag of their own - real
+        # visibility comes from the model.dat layer manager's own 8E3C byte,
+        # read in collect_layers() below. Seeded to False (visible) here so a
+        # layer that never went through collect_layers (e.g. a layer with no
+        # painted material at all) still gets a sane default.
+        layer_hidden = {}
+        materials = {}
+        materials_by_folder = {}
+        MAT_NS = {'mat': 'http://sketchup.google.com/schemas/sketchup/1.0/material'}
+        for name in zf.namelist():
+            if name.endswith('material.xml') and name.startswith('materials/'):
+                _validate_zip_entry_size(zf, name)
+                xml_data = zf.read(name)
                 try:
-                    v = int(var.text) & 0xFFFFFFFF
-                except ValueError:
-                    continue
-                colors[iid] = (v & 255, (v >> 8) & 255, (v >> 16) & 255)
-        styles.append({'name': style_el.get('name', ''),
-                       'front_color': colors.get('2002'),
-                       'back_color': colors.get('2003')})
+                    root = ET.fromstring(xml_data)
+                    mat_elem = root.find('.//mat:material', MAT_NS)
+                    if mat_elem is not None:
+                        mat_name = mat_elem.get('name', 'unknown')
+                        r = int(mat_elem.get('colorRed', 128))
+                        g = int(mat_elem.get('colorGreen', 128))
+                        b = int(mat_elem.get('colorBlue', 128))
+                        # 'trans' only applies when useTrans="1"; otherwise the
+                        # attribute is a leftover default and the material is
+                        # fully opaque. Without this check most materials read
+                        # as 50% transparent (or fully invisible for trans="0").
+                        # The stored value is a TRANSPARENCY (0 = opaque,
+                        # 1 = fully transparent) — e.g. SketchUp's library
+                        # "Translucent Glass Blue" (70% opacity) stores
+                        # trans="0.3" — so the exposed opacity is 1 - trans.
+                        if mat_elem.get('useTrans') == '1':
+                            trans = 1.0 - float(mat_elem.get('trans', 0.0))
+                            trans = min(max(trans, 0.0), 1.0)
+                        else:
+                            trans = 1.0
+                        folder_name = name.split('/')[1] if len(name.split('/')) > 1 else ''
+                        # type="2" marks a colourized copy ("[Name]1"): the
+                        # shared texture must be re-tinted toward the material
+                        # colour before display. colorizeType 0 = hue shift,
+                        # 1 = tint (greyscale then colour).
+                        colorized = mat_elem.get('type') == '2'
+                        try:
+                            colorize_type = int(mat_elem.get('colorizeType', 0) or 0)
+                        except ValueError:
+                            colorize_type = 0
+                        mat_obj = {'name': mat_name, 'color': {'r': r, 'g': g, 'b': b}, 'transparency': trans,
+                                   'colorized': colorized, 'colorize_type': colorize_type}
+                        tex = _extract_texture(zf, name, mat_elem, MAT_NS)
+                        if tex is not None:
+                            mat_obj['texture'] = tex
+                        materials[mat_name] = mat_obj
+                        if folder_name:
+                            materials_by_folder[folder_name] = mat_obj
+                        if mat_name.startswith('Layer_'):
+                            layer_colors[mat_name[6:]] = (r, g, b)
+                            layer_hidden[mat_name[6:]] = False
+                except Exception:
+                    logger.debug("Failed to parse material.xml %r", name, exc_info=True)
 
-    logger.debug("Parsed %d materials, %d styles", len(materials), len(styles))
+        # Thumbnail
+        thumbnail_data = None
+        if 'meta/model_thumbnail.png' in zf.namelist():
+            _validate_zip_entry_size(zf, 'meta/model_thumbnail.png')
+            thumbnail_data = zf.read('meta/model_thumbnail.png')
 
-    _validate_zip_entry_size(zf, 'model.dat')
-    model_dat = zf.read('model.dat')
-    zf.close()
+        # Units (meta/meta.dat) - VFF-only; legacy files carry no equivalent
+        # container.
+        units = None
+        if 'meta/meta.dat' in zf.namelist():
+            try:
+                _validate_zip_entry_size(zf, 'meta/meta.dat')
+                units = _read_meta_units(zf.read('meta/meta.dat'))
+            except Exception:
+                units = None
+                logger.debug("Failed to read units from meta/meta.dat", exc_info=True)
+
+        # Styles: face colors live in styles/*/style.xml as signed-int32 ABGR
+        # variants — item id 2002 is the front (default) face color, 2003 the
+        # back face color (the 4000-series items are background/sky/ground).
+        # Viewers need them to shade unpainted faces the way SketchUp does (an author may e.g. set a green back color so unpainted
+        # garden faces read as grass).
+        styles = []
+        for name in zf.namelist():
+            if not (name.startswith('styles/') and name.endswith('style.xml')):
+                continue
+            try:
+                _validate_zip_entry_size(zf, name)
+                sroot = ET.fromstring(zf.read(name))
+            except (ET.ParseError, DefusedXmlException):
+                continue
+            STY = '{http://sketchup.google.com/schemas/sketchup/1.0/style}'
+            TYP = '{http://sketchup.google.com/schemas/1.0/types}'
+            style_el = sroot.find(f'{STY}style')
+            if style_el is None:
+                continue
+            colors = {}
+            for item in style_el.findall(f'{STY}item'):
+                iid = item.get('id')
+                var = item.find(f'{TYP}variant')
+                if iid in ('2002', '2003') and var is not None and var.text:
+                    try:
+                        v = int(var.text) & 0xFFFFFFFF
+                    except ValueError:
+                        continue
+                    colors[iid] = (v & 255, (v >> 8) & 255, (v >> 16) & 255)
+            styles.append({'name': style_el.get('name', ''),
+                           'front_color': colors.get('2002'),
+                           'back_color': colors.get('2003')})
+
+        logger.debug("Parsed %d materials, %d styles", len(materials), len(styles))
+
+        _validate_zip_entry_size(zf, 'model.dat')
+        model_dat = zf.read('model.dat')
     logger.debug("Read model.dat: %d bytes", len(model_dat))
+
+    compact_geometry = len(model_dat) >= _COMPACT_MODEL_BYTES
 
     # 3. Walk the TLV tree one top-level record at a time (instead of
     # building the whole file's tree at once) so peak memory is bounded by
@@ -1795,7 +1936,7 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
         nonlocal page_node
         for el in nodes:
             tag = el.tag
-            children = el.children
+            children = () if isinstance(el, _GeometryRecordNode) else el.children
             here = parent
 
             if tag == '993A':
@@ -1869,6 +2010,8 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
                 ent_id = _entity_id(el)
                 builder = _GeometryBuilder()
                 _extract_geometry_nodes(children, builder)
+                if compact_geometry:
+                    builder._compact_geometry()
                 defs_dict[ent_id] = {'guid': guid, 'name': name,
                                      'always_faces_camera': faces_camera,
                                      'shadows_face_sun': shadows_face_sun,
@@ -1879,16 +2022,20 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
                 # dimensions: C409's DC05 holds the id, C509 the 3 x f64
                 # position. Ids are unique file-wide, so one flat map
                 # resolves a connection point whichever context holds it.
-                dc05 = _find_tag(children, 'DC05')
-                c509 = _find_tag(children, 'C509')
-                if dc05 and c509 and len(c509.payload) == 24:
-                    p = dc05.payload
-                    if p[:2] == b'\xde\x05':
-                        idlen = read_u32(p, 2)
-                        idb = p[6:6 + idlen]
-                    else:
-                        idb = p
-                    vertex_positions[idb.hex()] = struct.unpack('<3d', c509.payload)
+                if isinstance(el, _GeometryRecordNode):
+                    _, position, key = el.record
+                    vertex_positions[key] = position
+                else:
+                    dc05 = _find_tag(children, 'DC05')
+                    c509 = _find_tag(children, 'C509')
+                    if dc05 and c509 and len(c509.payload) == 24:
+                        p = dc05.payload
+                        if p[:2] == b'\xde\x05':
+                            idlen = read_u32(p, 2)
+                            idb = p[6:6 + idlen]
+                        else:
+                            idb = p
+                        vertex_positions[idb.hex()] = struct.unpack('<3d', c509.payload)
 
             elif tag == '6419':
                 # Instance persistent id (hex) -> WORLD transform (13-float
@@ -1917,7 +2064,8 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
             if children:
                 walk(children, here)
 
-    for index, total, el in iter_top_level_lazy(model_dat, 0, len(model_dat), CONTAINER_TAGS):
+    for index, total, el in iter_top_level_lazy(
+            model_dat, 0, len(model_dat), CONTAINER_TAGS, _geometry=True):
         try:
             walk([el], None)
             if el.tag == 'F601':
@@ -1928,10 +2076,11 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
                 stage="tlv_walk", record_index=index, total_records=total,
                 tag=el['tag'],
             ) from e
-        # `el` (and its whole subtree) is now unreferenced and eligible for
-        # garbage collection before the next top-level record is built.
         if index % _PROGRESS_INTERVAL == 0 or index == total - 1:
             logger.debug("Processed %d/%d top-level records", index + 1, total)
+        # Drop the consumer's reference as well as the generator's. Otherwise
+        # the for-loop retains this tree until the next one has been decoded.
+        del el
 
     logger.info(
         "Parse complete: %s (%d defs, %.2fs)",
@@ -1945,6 +2094,8 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
     if 'Layer0' not in layer_hidden:
         layer_hidden['Layer0'] = False
 
+    if compact_geometry:
+        root_builder._compact_geometry()
     defs_dict['ROOT'] = {'guid': 'ROOT', 'name': 'ROOT_MODEL', 'builder': root_builder}
 
     return {
