@@ -14,19 +14,20 @@ languages currently supports).
 
 ## Where each language stands
 
-All 5 languages released **1.3.0** together on 2026-09-18 — same version
+All 5 languages released **1.4.0** together on 2026-10-27 — same version
 number, not identical capability. See
-[CHANGELOG.md § 1.3.0](CHANGELOG.md) for what shipped and why Python/C++
-carry a bit more than the others rather than holding real, tested work
-back purely for symmetry.
+[CHANGELOG.md § 1.4.0](CHANGELOG.md) for what shipped; the previous
+synchronized release was 1.3.0 (2026-09-18). Python carries a few things the
+other four do not (see the backlog below), rather than holding real, tested
+work back purely for symmetry.
 
 | Language | Latest release | Status |
 |:---|:---|:---|
-| Python | [1.3.0 on PyPI](https://pypi.org/project/openskp/) | Ahead of the other 4 on a few items — see [Cross-language porting backlog](#cross-language-porting-backlog) below |
-| TypeScript | [1.3.0 on npm](https://www.npmjs.com/package/openskp) | At parity except the backlog items below |
-| .NET | [1.3.0 on NuGet](https://www.nuget.org/packages/OpenSkp) | At parity except the backlog items below |
-| Dart | [1.3.0 on pub.dev](https://pub.dev/packages/openskp) | At parity except the backlog items below |
-| C++ | [1.3.0 on GitHub releases](https://github.com/iamahsanmehmood/openskp/releases?q=cpp-) | Closest to Python — only missing Fragments reading, loose-edge/curve support, and IFC curve annotations |
+| Python | [1.4.0 on PyPI](https://pypi.org/project/openskp/) | Ahead of the other 4 on a few items — see [Cross-language porting backlog](#cross-language-porting-backlog) below |
+| TypeScript | [1.4.0 on npm](https://www.npmjs.com/package/openskp) | At parity except the backlog items below |
+| .NET | [1.4.0 on NuGet](https://www.nuget.org/packages/OpenSkp) | At parity except the backlog items below |
+| Dart | [1.4.0 on pub.dev](https://pub.dev/packages/openskp) | At parity except the backlog items below |
+| C++ | [1.4.0 on GitHub releases](https://github.com/iamahsanmehmood/openskp/releases?q=cpp-) | Closest to Python — only missing Fragments reading, loose-edge/curve support, and IFC curve annotations |
 
 Each language is released independently — see
 [CONTRIBUTING.md § Releasing](CONTRIBUTING.md#releasing-maintainers) for

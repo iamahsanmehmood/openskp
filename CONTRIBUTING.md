@@ -355,7 +355,13 @@ one `git push origin <tag>` per tag, checking each one actually queued a
 run before moving to the next - `gh run list --branch <tag>` does **not**
 reliably show tag-triggered runs (confirmed empty even for runs that did
 fire), use `gh api repos/<owner>/<repo>/actions/runs?event=push` and
-filter `.head_branch` instead.
+filter `.head_branch` instead. Releasing 1.4.0 this way (one tag per push,
+`python-v1.4.0`, `typescript-v1.4.0`, `nuget-v1.4.0`, `cpp-v1.4.0`, then the
+bare `v1.4.0`, each checked) queued every release workflow, and all five
+packages appeared on their registries. NuGet is the slow one: both packages
+were pushed and answered "Created" but the package pages returned 404 for
+about half an hour while NuGet validated them, so a green workflow is not the
+same as a visible package; check the registry before announcing.
 
 ---
 

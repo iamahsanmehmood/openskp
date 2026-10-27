@@ -17,15 +17,16 @@ cross-language porting backlog) and [`ROADMAP.md`](../ROADMAP.md).
 
 ## 1. Package versions
 
-As of the 2026-09-18 synchronized release, all 5 languages are on
-**1.3.0** — but same version number does not mean identical capability.
-Python and C++ carry real, additional capability (Fragments reading,
-loose-edge/curve support, IFC curve annotations) that TypeScript, .NET, and Dart do not have yet - see
-[§2](#2-feature-matrix) for exactly what differs. This was a deliberate
-choice, not an oversight: that work was real, tested, and ready, and
-holding it back purely to keep every language byte-for-byte equal would
-have wasted it for no real benefit. See
-[CHANGELOG.md § 1.3.0](../CHANGELOG.md) for the full picture.
+As of the 2026-10-27 synchronized release, all 5 languages are on
+**1.4.0** — but same version number does not mean identical capability.
+Python carries a few things the other four do not (writing scenes,
+per-edge and per-face layer ids, loose-edge/curve scene support, IFC curve
+annotations) - see [§2](#2-feature-matrix) for exactly what differs. This is
+a deliberate choice, not an oversight: that work is real, tested and ready,
+and holding it back purely to keep every language byte-for-byte equal would
+waste it for no real benefit. See
+[CHANGELOG.md § 1.4.0](../CHANGELOG.md) for the full picture (and § 1.3.0 for
+the release before it).
 
 | Language | Registry | Released version | On `main`, not released yet |
 |:---|:---|:---:|:---|
@@ -99,11 +100,11 @@ released. ❌ = not yet ported to that language; see
 | **Import** | | | | | |
 | Read a `.frag` file back (6th input format alongside `.skp`) | ✅ | ✅ | ✅ | ✅ | ✅ |
 
-## 3. What's still outstanding after 1.3.0
+## 3. What's still outstanding after 1.4.0
 
 Everything that was tracked here as "unreleased on main" as of the previous
-update to this page is now released as part of the 2026-09-18 synchronized
-1.3.0 (see [CHANGELOG.md § 1.3.0](../CHANGELOG.md)). What remains open is
+update to this page is now released as part of the 2026-10-27 synchronized
+1.4.0 (see [CHANGELOG.md § 1.4.0](../CHANGELOG.md)). What remains open is
 genuine cross-language porting work, not a release-timing gap:
 
 **Closed**: reading a `.frag` file back (`from_fragments`/`read`) is now
