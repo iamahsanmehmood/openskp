@@ -38,6 +38,20 @@ takes a count of 1 for its end marker, so a scene hiding one layer came back
 with none. A record the new reader can't fully read (for example one with an
 attribute dictionary, or capture flags beyond `0x1FF`) falls back to the
 narrow scan.
+### Added — TypeScript: `InstancedScene.layerColors` and `InstancedNode.ownLayer`
+
+`buildInstancedScene` already reports each node's effective layer and each
+layer's visibility (`layerHidden`), but not the layers' colours, so a consumer
+rebuilding the file's tag list had to run a second, full `parseSkp` (about as
+long as the scene build itself on a large model). The colours come from the
+same raw parse, so the scene now carries them too, for every layer the file
+defines whether a placement uses it or not. Optional in the type: a scene read
+back with `fromFragments` has none.
+
+Each node's `layer` is the effective one, inherited from its parent when the
+instance has none, so it cannot tell an inherited layer from an explicit
+assignment of the same layer. `ownLayer` is the layer the instance carries
+itself, absent when it inherits.
 ### Fixed — all five ports: a VFF (2021+) scene that doesn't save its camera is kept (#447)
 
 SketchUp lets a scene leave "Camera Location" unticked. Such a scene saves no
