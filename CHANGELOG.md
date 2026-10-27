@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — Python: scenes in a legacy file saved through SketchUp's C API are read (#445)
+
+A model saved through the SketchUp library (`SUModelSaveToFileWithVersion`) as
+2017 to 2020 declares its `CViewPage` class at schema 15, and the scene
+reader only knew 12 and 13, so such a file came back with no scenes. Schema 15
+is read now: name, camera, hidden layers. Measured on files built and saved
+through SketchUp 2025's library, which reads the same names, cameras and
+hidden layers back: the camera is only there when its capture flag is, there
+is no thumbnail, the trailer is a byte shorter, the rendering options are 3
+bytes longer, and the style options use two more value types. A scene that
+captures everything (flags `0x1FF`) is read to its last byte, so the layout of
+every section is measured rather than assumed. Scenes of other schemas read as
+before: the scene output of every fixture and of 26 older models is
+unchanged. Files saved through the C API as SketchUp 2016 or older still fall
+back to the narrow scan, as before.
+
 ### Added — Python: write scenes into legacy files, and read legacy scenes with their cameras
 
 `SkpBuilder.add_scene(name, eye, target, up=None, *, perspective, fov,
@@ -27,7 +43,8 @@ The legacy reader now reads whole scene records (`_read_page_list`) for
 schema 12 and 13: name, camera (eye, target, up, fov, parallel, ortho height)
 and hidden layers, the fields `Page` already had. That includes the common
 case the narrow scan skipped, a scene that saves its camera and style
-(#445). The `gondola_v20.skp` fixture (SketchUp 2020, flags `0x1FF`) now comes
+(#445 is only partly covered here: files saved through SketchUp's C API are
+the next entry). The `gondola_v20.skp` fixture (SketchUp 2020, flags `0x1FF`) now comes
 back with its scene, as do SketchUp's eight-scene sample, SketchUp 2015 saves
 and openskp's own output. The rendering options a scene carries grow with the
 file version (206 bytes up to SketchUp 2017, 211, 212 and 213 for 2018-2020,

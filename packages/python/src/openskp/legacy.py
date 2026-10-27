@@ -1179,11 +1179,20 @@ def _scan_pages(data: bytes, ar) -> list:
 #
 # | 22 bytes (transition and delay time, flags) | u32 n + an n-byte PNG.
 # 0x80 and 0x100 (SketchUp 2020's split of "hidden" into geometry and
-# objects) add no section. The samples only have 0x7F and 0x1FF; that a
+# objects) add no section.
+#
+# Files saved through SketchUp's C API (SUModelSaveToFileWithVersion as 2017
+# to 2020) declare the class at schema 15. Measured on those files: flag
+# 0x01 is the camera, which is only there when it is set, with no CDib tag, no
+# byte after it and no thumbnail; the rendering options are 3 bytes longer;
+# the style options have two more value types (3: 2 bytes, 5: 4 bytes); and
+# the trailer is 21 bytes with no PNG after it. Built with every flag set
+# (0x1FF), so the 0x04/0x08/0x10/0x40 sections of this layout are measured,
+# not assumed. The samples only have 0x7F and 0x1FF; that a
 # section is absent when its flag is clear is this reader's assumption for
 # the others. A record it can't fully read, or flags outside 0x1FF, make
 # _read_page_list give up, and the narrow _scan_pages above takes over.
-_PAGE_DECL_RE = re.compile(rb'\xff\xff(\x0c|\x0d)\x00\x09\x00CViewPage')
+_PAGE_DECL_RE = re.compile(rb'\xff\xff(\x0c|\x0d|\x0f)\x00\x09\x00CViewPage')
 _PAGE_KNOWN_FLAGS = 0x1FF
 # The rendering options' length by SketchUp major version, measured on the
 # model-level copy of the same block in every fixture from 2014 to 2020
@@ -1193,7 +1202,7 @@ _PAGE_AXES_LEN = 110
 _PAGE_TRAILER_LEN = 22
 _SHADOW_INFO_FIXED_LEN = 60  # after the city and country strings
 # CSkpStyle option values: type tag -> byte size
-_STYLE_VALUE_SIZES = {1: 1, 4: 4, 6: 4, 7: 8}
+_STYLE_VALUE_SIZES = {1: 1, 3: 2, 4: 4, 5: 4, 6: 4, 7: 8}
 
 
 def _read_tag(r):
@@ -1308,20 +1317,30 @@ def _read_page_record(r, classes, ver):
     flags = r.u32()
     if flags & ~_PAGE_KNOWN_FLAGS:
         raise LegacyParseError(f"scene capture flags {flags:#x} {r.ctx()}")
-    kind, slot = _read_tag(r)
-    if kind in ('decl', 'class'):
-        classes.object(r, kind, slot, 'CCamera')
-        page.update(_read_page_camera(r))
-    kind, slot = _read_tag(r)
-    if kind in ('decl', 'class'):
-        classes.object(r, kind, slot, 'CDib')
-        _read_dib(None, r)
-    if schema >= 13:
-        r.u8()
+    if schema >= 15:
+        # saved through SketchUp's C API: the camera is there when its flag
+        # is, and there is no thumbnail
+        if flags & 0x01:
+            kind, slot = _read_tag(r)
+            if kind not in ('decl', 'class'):
+                raise LegacyParseError(f"expected a camera {r.ctx()}")
+            classes.object(r, kind, slot, 'CCamera')
+            page.update(_read_page_camera(r))
+    else:
+        kind, slot = _read_tag(r)
+        if kind in ('decl', 'class'):
+            classes.object(r, kind, slot, 'CCamera')
+            page.update(_read_page_camera(r))
+        kind, slot = _read_tag(r)
+        if kind in ('decl', 'class'):
+            classes.object(r, kind, slot, 'CDib')
+            _read_dib(None, r)
+        if schema >= 13:
+            r.u8()
     if flags & 0x02:
         if ver not in _RENDERING_OPTIONS_LEN:
             raise LegacyParseError(f"rendering options of a v{ver} scene")
-        r.raw(_RENDERING_OPTIONS_LEN[ver])
+        r.raw(_RENDERING_OPTIONS_LEN[ver] + (3 if schema >= 15 else 0))
         kind, slot = _read_tag(r)
         if kind in ('decl', 'class'):
             _skip_style(r, classes.object(r, kind, slot, 'CSkpStyle'))
@@ -1341,6 +1360,9 @@ def _read_page_record(r, classes, ver):
         page['hidden_layer_ids'] = _read_refs(r, r.u32())
     if flags & 0x40:
         _read_refs(r, r.u32())
+    if schema >= 15:
+        r.raw(_PAGE_TRAILER_LEN - 1)
+        return page
     r.raw(_PAGE_TRAILER_LEN)
     png = r.u32()
     if png > len(r.data) - r.pos:
