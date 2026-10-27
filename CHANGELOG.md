@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — all five ports: `Definition.is_group` tells a group from a component (#446)
+
+Groups and component instances are both an `Instance` of a `Definition`, and
+nothing in the model said which SketchUp made, so a reader that wanted
+SketchUp's own tree had to guess ("a definition placed once is a group" files a
+component placed once as a group). `Definition.is_group` (`isGroup`, `IsGroup`)
+is `True` for the definition SketchUp made for a group, which is what its API
+reports as `SUComponentType_Group`. It is read from the file, not inferred from
+how often a definition is placed: the definition kind (`8315`: 0 component, 1
+group, 2 image) in a 2021+ file, and in a classic file the last `u32` of the
+definition record before its thumbnail (1 for a group, 0 for a component). The
+placing record is not the signal there: `CGroup` over a definition SketchUp
+calls a component is what `openskp.create` writes, and what SketchUp reports
+for those files is "component".
+
+Checked against SketchUp 2025's own `SUModelGetNumGroupDefinitions` on 50
+files: the 36 repository fixtures and older models that SketchUp opens (14
+groups and 6 components on `gondola_v20.skp`, 46 groups on `Untitled.skp`), and
+14 saves of one model with 144 groups and 1 component, SketchUp 4 to 2025. The
+counts agree on every one. New fixtures `nesting_v6/2013/2017/2020/2021.skp` (a group holding a
+component holding a group, built through the library) test each port.
+
+Files written by `openskp.create` read back with `is_group` false for their
+groups, because the writer puts the group flag in no definition (SketchUp
+reports those as components too); writing it is a separate change.
+
 ### Fixed — Python: scenes in a legacy file saved through SketchUp's C API are read (#445)
 
 A model saved through the SketchUp library (`SUModelSaveToFileWithVersion`) as

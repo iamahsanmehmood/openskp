@@ -705,12 +705,14 @@ class DefinitionRec {
   List<(int, String?, Object?)> ents;
   bool facesCamera;
   bool shadowsFaceSun;
+  bool isGroup;
   DefinitionRec(
       {required this.name,
       required this.guid,
       required this.ents,
       required this.facesCamera,
-      required this.shadowsFaceSun});
+      required this.shadowsFaceSun,
+      this.isGroup = false});
 }
 
 class InstanceRec {
@@ -1679,6 +1681,15 @@ class LegacyReaders {
     }
     final gap = r.raw(tpos - r.pos);
     final behavior = gap.length >= 9 ? gap[gap.length - 9] : 0;
+    // the last u32 before the thumbnail is 1 for the definition of a group
+    // and 0 for a component's (what SketchUp's SUComponentDefinitionGetType
+    // reports), measured against SketchUp 2025's own counts
+    final isGroup = gap.length >= 4 &&
+        (gap[gap.length - 4] |
+                (gap[gap.length - 3] << 8) |
+                (gap[gap.length - 2] << 16) |
+                (gap[gap.length - 1] << 24)) ==
+            1;
     ar.readObject(r, 'CThumbnail');
     return DefinitionRec(
       name: name,
@@ -1686,6 +1697,7 @@ class LegacyReaders {
       ents: ents,
       facesCamera: (behavior & 1) != 0,
       shadowsFaceSun: (behavior & 2) != 0,
+      isGroup: isGroup,
     );
   }
 
@@ -2315,6 +2327,7 @@ class Legacy {
             guid: d.guid,
             name: d.name,
             isImage: imageDefIds.contains(entry.key),
+            isGroup: d.isGroup,
             alwaysFacesCamera: d.facesCamera,
             shadowsFaceSun: d.shadowsFaceSun,
             builder: b,

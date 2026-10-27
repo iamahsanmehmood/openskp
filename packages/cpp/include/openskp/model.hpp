@@ -497,6 +497,13 @@ struct Definition {
   bool shadows_face_sun{};
   /// Image entity flag.
   bool is_image{};
+  /// True when SketchUp made this definition for a group rather than a component
+  /// (what its own API reports as SUComponentType_Group). Groups and component
+  /// instances are both Instance placements of a Definition; this is the only thing
+  /// that tells them apart. It comes from the file itself - the definition kind in a
+  /// 2021+ file, a flag in the definition record in an older one - not from how often
+  /// the definition is placed.
+  bool is_group{};
 };
 
 /// Top-level model container holding all definitions, layers, materials, and styles.

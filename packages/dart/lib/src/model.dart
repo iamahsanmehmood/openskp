@@ -333,6 +333,15 @@ class Definition {
   final bool shadowsFaceSun;
   final bool isImage;
 
+  /// True when SketchUp made this definition for a group rather than a
+  /// component (what its own API reports as `SUComponentType_Group`). Groups
+  /// and component instances are both [Instance] placements of a
+  /// [Definition]; this is the only thing that tells them apart. It comes from
+  /// the file itself - the definition kind in a 2021+ file, a flag in the
+  /// definition record in an older one - not from how often the definition is
+  /// placed.
+  final bool isGroup;
+
   Definition({
     this.id = 0,
     this.guid = '',
@@ -340,6 +349,7 @@ class Definition {
     this.alwaysFacesCamera = false,
     this.shadowsFaceSun = false,
     this.isImage = false,
+    this.isGroup = false,
   });
 }
 

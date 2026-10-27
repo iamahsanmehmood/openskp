@@ -137,6 +137,13 @@ export interface Definition {
   constructionLines: ConstructionLine[];
   constructionPoints: ConstructionPoint[];
   isImage: boolean;
+  /** True when SketchUp made this definition for a group rather than a
+   * component (what its own API reports as `SUComponentType_Group`). Groups
+   * and component instances are both `Instance` placements of a `Definition`;
+   * this is the only thing that tells them apart. It comes from the file
+   * itself - the definition kind in a 2021+ file, a flag in the definition
+   * record in an older one - not from how often the definition is placed. */
+  isGroup: boolean;
   alwaysFacesCamera: boolean;
   shadowsFaceSun: boolean;
 }
@@ -585,7 +592,7 @@ export function buildModelFromParsed(parsed: ParsedRawData): SkpModel {
     // group). Kept out of `definitions` (which is numeric-ID-only, one
     // entry per real component/group definition) and exposed here instead,
     // matching the .NET and Dart ports' `Root`/`root` field.
-    root: rootDefinition ?? { id: 0, guid: 'ROOT', name: 'ROOT_MODEL', vertices: [], edges: [], faces: [], instances: [], sectionPlanes: [], texts: [], dimensions: [], constructionLines: [], constructionPoints: [], isImage: false, alwaysFacesCamera: false, shadowsFaceSun: false },
+    root: rootDefinition ?? { id: 0, guid: 'ROOT', name: 'ROOT_MODEL', vertices: [], edges: [], faces: [], instances: [], sectionPlanes: [], texts: [], dimensions: [], constructionLines: [], constructionPoints: [], isImage: false, isGroup: false, alwaysFacesCamera: false, shadowsFaceSun: false },
     layers: finalLayersList,
     pages: finalPagesList,
     dimensions: finalDimensionsList,
@@ -680,6 +687,7 @@ function buildDefinition(id: number, d: ParsedDefinition, layerIdToName?: Map<nu
     constructionLines,
     constructionPoints,
     isImage: d.isImage,
+    isGroup: d.isGroup || false,
     alwaysFacesCamera: d.alwaysFacesCamera,
     shadowsFaceSun: d.shadowsFaceSun || false,
   };

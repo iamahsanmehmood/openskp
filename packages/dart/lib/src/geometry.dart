@@ -103,6 +103,7 @@ class RawDefinition {
   bool alwaysFacesCamera;
   bool shadowsFaceSun;
   bool isImage;
+  bool isGroup;
   GeometryBuilder builder;
   RawDefinition({
     this.guid,
@@ -110,6 +111,7 @@ class RawDefinition {
     this.alwaysFacesCamera = false,
     this.shadowsFaceSun = false,
     this.isImage = false,
+    this.isGroup = false,
     GeometryBuilder? builder,
   }) : builder = builder ?? GeometryBuilder();
 }
@@ -684,6 +686,7 @@ class Geometry {
         bool facesCamera = false;
         bool shadowsFaceSun = false;
         bool isImage = false;
+        bool isGroup = false;
         for (final child in el.children) {
           if (child.tag == '7D15' && child.payload.length == 16) {
             guid = Tlv.toHexUpper(child.payload);
@@ -705,8 +708,13 @@ class Geometry {
               pos += 6 + subSize;
             }
           } else if (child.tag == '8315' && child.payload.isNotEmpty) {
-            isImage =
-                Tlv.parseVarInt(child.payload, 0, child.payload.length) == 2;
+            // Definition kind: 0 for a component, 1 for a group (what
+            // SketchUp's own API reports too), 2 for the quad definition
+            // backing an Image entity.
+            final kind =
+                Tlv.parseVarInt(child.payload, 0, child.payload.length);
+            isImage = kind == 2;
+            isGroup = kind == 1;
           }
         }
         final entId = extractEntityId(el);
@@ -719,6 +727,7 @@ class Geometry {
             alwaysFacesCamera: facesCamera,
             shadowsFaceSun: shadowsFaceSun,
             isImage: isImage,
+            isGroup: isGroup,
             builder: builder,
           );
         }

@@ -177,6 +177,7 @@ class SkpFile {
       alwaysFacesCamera: d.alwaysFacesCamera,
       shadowsFaceSun: d.shadowsFaceSun,
       isImage: d.isImage,
+      isGroup: d.isGroup,
     );
 
     for (final entry in d.builder.vertices.entries) {

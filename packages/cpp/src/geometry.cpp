@@ -432,9 +432,13 @@ void collect_definitions(const std::vector<TlvNode>& ns, std::map<EntityId, RawD
           d.guid = hex(c.payload);
         else if (c.tag == "7E15")
           d.name = text(c.payload);
-        else if (c.tag == "8315" && !c.payload.empty())
-          d.is_image = parse_varint(c.payload, 0, c.payload.size()) == 2;
-        else if (c.tag == "581B")
+        else if (c.tag == "8315" && !c.payload.empty()) {
+          // Definition kind: 0 for a component, 1 for a group (what SketchUp's own
+          // API reports too), 2 for the quad definition backing an Image entity.
+          auto kind = parse_varint(c.payload, 0, c.payload.size());
+          d.is_image = kind == 2;
+          d.is_group = kind == 1;
+        } else if (c.tag == "581B")
           for (auto& v : parse_flat(c.payload)) {
             if (v.first == "5D1B" && !v.second.empty())
               d.always_faces_camera = parse_varint(v.second, 0, v.second.size()) == 1;

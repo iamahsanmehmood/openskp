@@ -63,6 +63,7 @@ export interface ParsedDefinition {
   guid: string;
   name: string;
   isImage: boolean;
+  isGroup?: boolean;
   alwaysFacesCamera: boolean;
   shadowsFaceSun?: boolean;
   sectionPlanes?: { plane: [number, number, number, number]; name: string; label: string; hidden: boolean }[];
@@ -497,6 +498,7 @@ export function collectDefs(
       let guid: string | null = null;
       let name: string | null = null;
       let isImage = false;
+      let isGroup = false;
       let facesCamera = false;
       let shadowsFaceSun = false;
       for (const child of el.children) {
@@ -516,9 +518,12 @@ export function collectDefs(
             emitLog(options, 'debug', `Failed to decode definition name: ${(e as Error).message}`);
           }
         } else if (child.tag === '8315' && child.payload.length > 0) {
-          // Definition kind: observed 0/1 for ordinary component/group
-          // definitions, 2 for the quad definition backing an Image entity.
-          isImage = parseVarInt(child.payload, 0, child.payload.length) === 2;
+          // Definition kind: 0 for a component, 1 for a group (what
+          // SketchUp's own API reports too), 2 for the quad definition
+          // backing an Image entity.
+          const kind = parseVarInt(child.payload, 0, child.payload.length);
+          isImage = kind === 2;
+          isGroup = kind === 1;
         } else if (child.tag === '581B') {
           // Component behavior flags: sub-TLV 5D1B == 1 marks "always
           // faces camera" (2D people/tree cut-outs); its companion 5E1B
@@ -546,6 +551,7 @@ export function collectDefs(
           guid: guid || '',
           name: name || '',
           isImage,
+          isGroup,
           alwaysFacesCamera: facesCamera,
           shadowsFaceSun,
           builder,
