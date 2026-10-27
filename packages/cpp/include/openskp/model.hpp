@@ -163,6 +163,37 @@ struct Edge {
   bool smooth{};
   /// Hidden edge flag (explicit "Hide" bit on this edge).
   bool hidden{};
+  /// SketchUp's own Edge#curve grouping: the id of the Curve this edge belongs to, or nullopt when
+  /// it belongs to none. Edges sharing a curve_id were drawn as one continuous multi-segment line
+  /// or arc; if the curve is an arc, Definition::arcs has it under the same id.
+  std::optional<EntityId> curve_id;
+};
+
+/// The analytic arc behind a curve: SketchUp's own ArcCurve.
+///
+/// A curve SketchUp drew as an arc or a circle is a run of straight edges (Edge::curve_id) and also
+/// this exact description. The arc is the set of points center + cos(t) * x_axis + sin(t) * y_axis
+/// for t from start_angle to end_angle. For a circle x_axis and y_axis are perpendicular and both
+/// of length radius(); an arc scaled non-uniformly keeps its arc identity and stores an affine
+/// image of a circle, where they are not (then radius() is the length of x_axis only). Arcs and
+/// circles that bound a face are arcs too. Lengths are in the model's units (inches), in the
+/// definition's local space, like Vertex::x.
+struct ArcCurve {
+  Vec3 center{};
+  /// Unit normal of the arc's plane.
+  Vec3 normal{};
+  /// Vector from the centre to the arc's start (length = radius).
+  Vec3 x_axis{};
+  /// normal x x_axis.
+  Vec3 y_axis{};
+  /// Start parameter in radians.
+  double start_angle{};
+  /// End parameter in radians. A full circle has end_angle == start_angle in a classic (pre-2021)
+  /// file and start_angle + 2 pi in a 2021+ file; is_full_circle() covers both.
+  double end_angle{};
+  /// Length of x_axis.
+  double radius() const;
+  bool is_full_circle() const;
 };
 
 /// Oriented edge reference within a face loop.
@@ -495,6 +526,9 @@ struct Definition {
   bool always_faces_camera{};
   /// Shadows face sun behavior flag.
   bool shadows_face_sun{};
+  /// The analytic arc of every curve that is one, keyed by curve id - the Edge::curve_id of the
+  /// edges that form it. A curve that is not an arc (a freehand or polygon curve) has no entry.
+  std::map<EntityId, ArcCurve> arcs;
   /// Image entity flag.
   bool is_image{};
   /// True when SketchUp made this definition for a group rather than a component

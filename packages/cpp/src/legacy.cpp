@@ -669,7 +669,11 @@ struct Archive {
       draw(*v);
       v->v1 = std::get<0>(object("CVertex"));
       v->v2 = std::get<0>(object("CVertex"));
-      object();
+      auto curve = object();
+      if (!std::get<1>(curve).empty()) {
+        v->curve = std::get<0>(curve);
+        v->curve_value = std::get<2>(curve);
+      }
     } else if (n == "CCurve") {
       preamble();
       v->k = "curve";
@@ -677,9 +681,16 @@ struct Archive {
       r.u32();
     } else if (n == "CArcCurve") {
       preamble();
-      v->k = "curve";
+      v->k = "arccurve";
       r.raw(5);
-      r.f64s(14);
+      // center[3], normal[3], x_axis[3], start_angle, end_angle, y_axis[3]
+      auto a = r.f64s(14);
+      v->arc.center = {a[0], a[1], a[2]};
+      v->arc.normal = {a[3], a[4], a[5]};
+      v->arc.x_axis = {a[6], a[7], a[8]};
+      v->arc.start_angle = a[9];
+      v->arc.end_angle = a[10];
+      v->arc.y_axis = {a[11], a[12], a[13]};
     } else if (n == "CEdgeUse") {
       early_preamble();
       v->k = "edgeuse";
@@ -1506,6 +1517,14 @@ void add_edge(GeometryBuilder& b, uint64_t s, const V& e,
   b.edges[s] = {EntityId(e.v1), EntityId(e.v2)};
   int f = (e.soft ? 8 : 0) | (e.smooth ? 16 : 0) | (e.hidden ? 1 : 0);
   if (f) b.edge_flags[s] = f;
+  // The edge's parent Curve (the CCurve/CArcCurve slot) and, if that curve is an analytic arc, its
+  // frame: it arrives on the edge that first references the CArcCurve; every later edge on the arc
+  // back-refs it.
+  if (e.curve) {
+    b.edge_curves[s] = EntityId(*e.curve);
+    if (e.curve_value && e.curve_value->k == "arccurve")
+      b.arc_curves[EntityId(*e.curve)] = e.curve_value->arc;
+  }
 }
 
 // SketchUp's Dynamic Components extension stores its data in an attribute
@@ -1540,6 +1559,8 @@ void fill(GeometryBuilder& b,
     if (!v) continue;
     if (v->k == "edge")
       add_edge(b, s, *v, slots);
+    else if (v->k == "arccurve")
+      b.arc_curves[EntityId(s)] = v->arc;
     else if (v->k == "face") {
       RawFace f;
       f.normal = {v->plane[0], v->plane[1], v->plane[2]};

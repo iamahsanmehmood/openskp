@@ -536,7 +536,12 @@ class VertexRec {
 class EdgeRec {
   DrawBase db;
   int? curve, v1, v2;
-  EdgeRec({required this.db, this.curve, this.v1, this.v2});
+
+  /// The curve itself, on the edge that first points at it (a back-ref to a
+  /// curve already read carries none).
+  Object? curveValue;
+  EdgeRec(
+      {required this.db, this.curve, this.curveValue, this.v1, this.v2});
 }
 
 class CurveRec {
@@ -544,7 +549,12 @@ class CurveRec {
   CurveRec(this.n);
 }
 
-class ArcCurveRec {}
+/// A CArcCurve: the points `center + cos(t) * xAxis + sin(t) * yAxis` for `t`
+/// from startAngle to endAngle.
+class ArcCurveRec {
+  final ArcFrame frame;
+  ArcCurveRec(this.frame);
+}
 
 class EdgeUseRec {
   int? edge;
@@ -825,11 +835,11 @@ class LegacyReaders {
     final db = drawbase(ar, r);
     final (s1, _, __) = ar.readObject(r, 'CVertex');
     final (s2, _2, __2) = ar.readObject(r, 'CVertex');
-    final (cs, cn, _3) = ar.readObject(r);
+    final (cs, cn, cv) = ar.readObject(r);
     if (cn != null && cn != 'CCurve' && cn != 'CArcCurve') {
       throw LegacyParseError('edge curve pointer resolved to $cn ${r.ctx()}');
     }
-    return EdgeRec(db: db, curve: cs, v1: s1, v2: s2);
+    return EdgeRec(db: db, curve: cs, curveValue: cv, v1: s1, v2: s2);
   }
 
   static Object readCurve(Archive ar, LR r) {
@@ -842,8 +852,16 @@ class LegacyReaders {
   static Object readArcCurve(Archive ar, LR r) {
     preamble(ar, r);
     r.raw(5);
-    r.f64s(14);
-    return ArcCurveRec();
+    // center[3], normal[3], x_axis[3], start_angle, end_angle, y_axis[3]
+    final v = r.f64s(14);
+    return ArcCurveRec(ArcFrame(
+      center: (v[0], v[1], v[2]),
+      normal: (v[3], v[4], v[5]),
+      xAxis: (v[6], v[7], v[8]),
+      startAngle: v[9],
+      endAngle: v[10],
+      yAxis: (v[11], v[12], v[13]),
+    ));
   }
 
   /// Record that the writer burned [delta] store-map indices without
@@ -2081,6 +2099,15 @@ class Legacy {
     if (flags != 0) {
       builder.edgeFlags[slot] = flags;
     }
+    // The edge's parent Curve (the CCurve/CArcCurve slot) and, if that curve
+    // is an analytic arc, its frame: it arrives on the edge that first
+    // references the CArcCurve; every later edge on the arc back-refs it.
+    final curve = e.curve;
+    if (curve != null) {
+      builder.edgeCurves[slot] = curve;
+      final cv = e.curveValue;
+      if (cv is ArcCurveRec) builder.arcCurves[curve] = cv.frame;
+    }
   }
 
   static void _fillBuilder(GeometryBuilder builder,
@@ -2089,6 +2116,8 @@ class Legacy {
       if (v == null) continue;
       if (v is EdgeRec) {
         _addEdge(builder, s, v, slots);
+      } else if (v is ArcCurveRec) {
+        builder.arcCurves[s] = v.frame;
       } else if (v is FaceRec) {
         final loops = <List<(int, int)>>[];
         for (final lp in v.loops) {

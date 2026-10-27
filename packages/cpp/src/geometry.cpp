@@ -254,6 +254,32 @@ void collect_geometry(const std::vector<TlvNode>& es, GeometryBuilder& b) {
           if (z.tag == "D007")
             for (auto& w : z.children)
               if (w.tag == "D307" && !w.payload.empty()) b.edge_flags[*id] = w.payload[0];
+        // BB0B = the parent Curve's entity id (Edge#curve).
+        auto* bb = find_node(e.children, "BB0B");
+        if (bb && !bb->payload.empty()) {
+          auto curve_id = parse_varint(bb->payload, 0, bb->payload.size());
+          if (curve_id) b.edge_curves[*id] = curve_id;
+        }
+      }
+    } else if (e.tag == "2C4C") {
+      // A Curve (384A: its entity id and edge count) and, when the curve is an arc, 2D4C: 16
+      // doubles - center, normal, the plane constant, x axis, y axis, radius, start angle, end
+      // angle. Checked against SketchUp 2025's own SUArcCurve getters.
+      auto* curve = find_node(e.children, "384A");
+      auto* arc = find_node(e.children, "2D4C");
+      if (curve && arc && arc->payload.size() == 128) {
+        auto id = entity_id(*curve);
+        if (id) {
+          auto f = [&](int i) { return read_f64(arc->payload, i * 8); };
+          RawArcFrame a;
+          a.center = {f(0), f(1), f(2)};
+          a.normal = {f(3), f(4), f(5)};
+          a.x_axis = {f(7), f(8), f(9)};
+          a.y_axis = {f(10), f(11), f(12)};
+          a.start_angle = f(14);
+          a.end_angle = f(15);
+          b.arc_curves[*id] = a;
+        }
       }
     } else if (e.tag == "AC0D") {
       auto id = entity_id(e);

@@ -600,9 +600,14 @@ namespace OpenSkp
     }
 
     internal sealed class VertexRec { public double[] Xyz = new double[3]; }
-    internal sealed class EdgeRec { public DrawBase Db = new DrawBase(); public int? Curve; public int? V1; public int? V2; }
+    internal sealed class EdgeRec { public DrawBase Db = new DrawBase(); public int? Curve; public object? CurveValue; public int? V1; public int? V2; }
     internal sealed class CurveRec { public uint N; }
-    internal sealed class ArcCurveRec { }
+    /// <summary>A CArcCurve: the points center + cos(t) * XAxis + sin(t) * YAxis for t from
+    /// StartAngle to EndAngle.</summary>
+    internal sealed class ArcCurveRec
+    {
+        public ArcFrame Frame = new ArcFrame();
+    }
     internal sealed class EdgeUseRec { public int? Edge; public int Sense; }
     internal sealed class LoopRec { public List<EdgeUseRec> Uses = new List<EdgeUseRec>(); }
     internal sealed class FaceRec
@@ -807,12 +812,14 @@ namespace OpenSkp
             var db = Drawbase(ar, r);
             var (s1, _, _) = ar.ReadObject(r, "CVertex");
             var (s2, _, _) = ar.ReadObject(r, "CVertex");
-            var (cs, cn, _) = ar.ReadObject(r);
+            var (cs, cn, cv) = ar.ReadObject(r);
             if (cn != null && cn != "CCurve" && cn != "CArcCurve")
             {
                 throw new LegacyParseError($"edge curve pointer resolved to {cn} {r.Ctx()}");
             }
-            return new EdgeRec { Db = db, Curve = cs, V1 = s1, V2 = s2 };
+            // cv is the curve itself on the edge that first points at it (a back-ref to a
+            // curve already read carries none)
+            return new EdgeRec { Db = db, Curve = cs, CurveValue = cv, V1 = s1, V2 = s2 };
         }
 
         public static object ReadCurve(Archive ar, LR r)
@@ -827,8 +834,20 @@ namespace OpenSkp
         {
             Preamble(ar, r);
             r.Raw(5);
-            r.F64s(14);
-            return new ArcCurveRec();
+            // center[3], normal[3], x_axis[3], start_angle, end_angle, y_axis[3]
+            var v = r.F64s(14);
+            return new ArcCurveRec
+            {
+                Frame = new ArcFrame
+                {
+                    Center = (v[0], v[1], v[2]),
+                    Normal = (v[3], v[4], v[5]),
+                    XAxis = (v[6], v[7], v[8]),
+                    StartAngle = v[9],
+                    EndAngle = v[10],
+                    YAxis = (v[11], v[12], v[13]),
+                },
+            };
         }
 
         /// <summary>Record that the writer burned <paramref name="delta"/>
@@ -2223,6 +2242,8 @@ namespace OpenSkp
             public Dictionary<long, (double X, double Y, double Z)> Vertices = new Dictionary<long, (double, double, double)>();
             public Dictionary<long, (long? V1, long? V2)> Edges = new Dictionary<long, (long?, long?)>();
             public Dictionary<long, int> EdgeFlags = new Dictionary<long, int>();
+            public Dictionary<long, long> EdgeCurves = new Dictionary<long, long>();
+            public Dictionary<long, ArcFrame> ArcCurves = new Dictionary<long, ArcFrame>();
             public Dictionary<long, GeometryBuilderFace> Faces = new Dictionary<long, GeometryBuilderFace>();
             public List<GeometryBuilderInstance> Instances = new List<GeometryBuilderInstance>();
             public List<SectionPlane> SectionPlanes = new List<SectionPlane>();
@@ -2251,6 +2272,17 @@ namespace OpenSkp
             {
                 builder.EdgeFlags[slot] = flags;
             }
+            // The edge's parent Curve (the CCurve/CArcCurve slot) and, if that curve is an
+            // analytic arc, its frame: it arrives on the edge that first references the
+            // CArcCurve; every later edge on the arc back-refs it.
+            if (e.Curve != null)
+            {
+                builder.EdgeCurves[slot] = e.Curve.Value;
+                if (e.CurveValue is ArcCurveRec arc)
+                {
+                    builder.ArcCurves[e.Curve.Value] = arc.Frame;
+                }
+            }
         }
 
         private static void FillBuilder(LegacyBuilder builder, List<(int Slot, string? Name, object? Value)> ents, Dictionary<int, SlotEntry> slots)
@@ -2261,6 +2293,10 @@ namespace OpenSkp
                 if (v is EdgeRec edgeRec)
                 {
                     AddEdge(builder, s, edgeRec, slots);
+                }
+                else if (v is ArcCurveRec arcRec)
+                {
+                    builder.ArcCurves[s] = arcRec.Frame;
                 }
                 else if (v is FaceRec faceRec)
                 {
@@ -2595,6 +2631,8 @@ namespace OpenSkp
             foreach (var kv in b.Vertices) g.Vertices[kv.Key] = kv.Value;
             foreach (var kv in b.Edges) g.Edges[kv.Key] = kv.Value;
             foreach (var kv in b.EdgeFlags) g.EdgeFlags[kv.Key] = kv.Value;
+            foreach (var kv in b.EdgeCurves) g.EdgeCurves[kv.Key] = kv.Value;
+            foreach (var kv in b.ArcCurves) g.ArcCurves[kv.Key] = kv.Value;
             foreach (var kv in b.Faces) g.Faces[kv.Key] = kv.Value;
             g.Instances = b.Instances;
             // SectionPlanes/Texts/Dimensions were already correctly read

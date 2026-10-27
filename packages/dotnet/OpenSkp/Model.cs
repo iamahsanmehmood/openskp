@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 
 namespace OpenSkp
@@ -18,6 +19,46 @@ namespace OpenSkp
         public bool Soft { get; set; }
         public bool Smooth { get; set; }
         public bool Hidden { get; set; }
+        /// <summary>SketchUp's own <c>Edge#curve</c> grouping: the id of the Curve this edge belongs
+        /// to, or null when it belongs to none. Edges sharing a CurveId were drawn as one continuous
+        /// multi-segment line or arc; if the curve is an arc, <see cref="Definition.Arcs"/> has it
+        /// under the same id.</summary>
+        public long? CurveId { get; set; }
+    }
+
+    /// <summary>The analytic arc behind a curve: SketchUp's own <c>ArcCurve</c>. A curve SketchUp drew
+    /// as an arc or a circle is a run of straight edges (<see cref="Edge.CurveId"/>) and also this
+    /// exact description. The arc is the set of points <c>Center + cos(t) * XAxis + sin(t) * YAxis</c>
+    /// for t from <see cref="StartAngle"/> to <see cref="EndAngle"/>. For a circle XAxis and YAxis
+    /// are perpendicular and both of length <see cref="Radius"/>; an arc scaled non-uniformly keeps
+    /// its arc identity and stores an affine image of a circle, where they are not (then Radius is
+    /// the length of XAxis only). Arcs and circles that bound a face are arcs too. Lengths are in
+    /// the model's units (inches), in the definition's local space, like <see cref="Vertex.X"/>.</summary>
+    public sealed class ArcCurve
+    {
+        public (double X, double Y, double Z) Center { get; set; }
+        /// <summary>Unit normal of the arc's plane.</summary>
+        public (double X, double Y, double Z) Normal { get; set; }
+        /// <summary>Vector from the centre to the arc's start (length = radius).</summary>
+        public (double X, double Y, double Z) XAxis { get; set; }
+        /// <summary><c>Normal x XAxis</c>.</summary>
+        public (double X, double Y, double Z) YAxis { get; set; }
+        /// <summary>Start parameter in radians.</summary>
+        public double StartAngle { get; set; }
+        /// <summary>End parameter in radians. A full circle has EndAngle == StartAngle in a classic
+        /// (pre-2021) file and StartAngle + 2 pi in a 2021+ file; <see cref="IsFullCircle"/> covers
+        /// both.</summary>
+        public double EndAngle { get; set; }
+        public double Radius => Math.Sqrt(XAxis.X * XAxis.X + XAxis.Y * XAxis.Y + XAxis.Z * XAxis.Z);
+        public bool IsFullCircle
+        {
+            get
+            {
+                double sweep = (EndAngle - StartAngle) % (2.0 * Math.PI);
+                if (sweep < 0) sweep += 2.0 * Math.PI;
+                return Math.Min(sweep, 2.0 * Math.PI - sweep) < 1e-9;
+            }
+        }
     }
 
     public sealed class Face
@@ -264,6 +305,10 @@ namespace OpenSkp
         public List<Dimension> Dimensions { get; set; } = new List<Dimension>();
         public List<ConstructionLine> ConstructionLines { get; set; } = new List<ConstructionLine>();
         public List<ConstructionPoint> ConstructionPoints { get; set; } = new List<ConstructionPoint>();
+        /// <summary>The analytic arc of every curve that is one, keyed by curve id - the
+        /// <see cref="Edge.CurveId"/> of the edges that form it. A curve that is not an arc (a
+        /// freehand or polygon curve) has no entry.</summary>
+        public Dictionary<long, ArcCurve> Arcs { get; set; } = new Dictionary<long, ArcCurve>();
         public bool AlwaysFacesCamera { get; set; }
         public bool ShadowsFaceSun { get; set; }
         public bool IsImage { get; set; }

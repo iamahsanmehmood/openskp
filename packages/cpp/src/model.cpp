@@ -1,9 +1,23 @@
+#include <algorithm>
 #include <charconv>
+#include <cmath>
 #include <fstream>
 
 #include "internal.hpp"
 
 namespace openskp {
+
+double ArcCurve::radius() const {
+  return std::sqrt(x_axis[0] * x_axis[0] + x_axis[1] * x_axis[1] + x_axis[2] * x_axis[2]);
+}
+
+bool ArcCurve::is_full_circle() const {
+  const double two_pi = 2.0 * std::acos(-1.0);
+  double sweep = std::fmod(end_angle - start_angle, two_pi);
+  if (sweep < 0) sweep += two_pi;
+  return std::min(sweep, two_pi - sweep) < 1e-9;
+}
+
 namespace {
 
 std::string format_double(double v) {
@@ -125,8 +139,21 @@ static Definition definition(EntityId id, RawDefinition&& r) {
     d.vertices.emplace(v.first, Vertex{v.first, v.second[0], v.second[1], v.second[2]});
   for (auto& e : r.builder.edges) {
     auto flags = r.builder.edge_flags[e.first];
-    d.edges.emplace(e.first, Edge{e.first, e.second.first.value_or(0), e.second.second.value_or(0),
-                                  bool(flags & 8), bool(flags & 16), bool(flags & 1)});
+    Edge edge{e.first,         e.second.first.value_or(0), e.second.second.value_or(0),
+              bool(flags & 8), bool(flags & 16),           bool(flags & 1)};
+    auto curve = r.builder.edge_curves.find(e.first);
+    if (curve != r.builder.edge_curves.end()) edge.curve_id = curve->second;
+    d.edges.emplace(e.first, edge);
+  }
+  for (auto& a : r.builder.arc_curves) {
+    ArcCurve arc;
+    arc.center = a.second.center;
+    arc.normal = a.second.normal;
+    arc.x_axis = a.second.x_axis;
+    arc.y_axis = a.second.y_axis;
+    arc.start_angle = a.second.start_angle;
+    arc.end_angle = a.second.end_angle;
+    d.arcs.emplace(a.first, arc);
   }
   for (auto& f : r.builder.faces) {
     Face x;

@@ -60,10 +60,25 @@ struct RawInstance {
   bool hidden{};
 };
 
+// The analytic frame of a Curve that is one arc: the points
+// center + cos(t) * x_axis + sin(t) * y_axis for t from start_angle to end_angle.
+struct RawArcFrame {
+  Vec3 center{};
+  Vec3 normal{};
+  Vec3 x_axis{};
+  Vec3 y_axis{};
+  double start_angle{};
+  double end_angle{};
+};
+
 struct GeometryBuilder {
   std::map<EntityId, Vec3> vertices;
   std::map<EntityId, std::pair<std::optional<EntityId>, std::optional<EntityId>>> edges;
   std::map<EntityId, int> edge_flags;
+  // Edge id -> entity id of the Curve the edge belongs to (SketchUp's Edge#curve).
+  std::map<EntityId, EntityId> edge_curves;
+  // Curve id -> its analytic arc, for the curves that are arcs.
+  std::map<EntityId, RawArcFrame> arc_curves;
   std::map<EntityId, RawFace> faces;
   std::vector<RawInstance> instances;
   std::vector<SectionPlane> section_planes;
@@ -246,6 +261,12 @@ struct V {
   bool back_projected{};
   std::uint64_t v1{};
   std::uint64_t v2{};
+  // Only for k == "edge": the slot of its parent Curve, and the curve itself on the edge that
+  // first points at it (a back-ref to a curve already read carries none).
+  std::optional<std::uint64_t> curve;
+  std::shared_ptr<V> curve_value;
+  // Only for k == "arccurve".
+  RawArcFrame arc;
   std::uint64_t edge{};
   std::uint64_t def{};
   // Slot of this entity's CAttributeContainer (resolved through

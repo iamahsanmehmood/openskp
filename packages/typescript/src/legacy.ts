@@ -15,7 +15,7 @@
  * that differ from the public 2017 format notes.
  */
 
-import { GeometryBuilderFace, GeometryBuilderInstance, ParsedDefinition } from './geometry';
+import { ArcFrame, GeometryBuilderFace, GeometryBuilderInstance, ParsedDefinition } from './geometry';
 import { EdgeFlagStore } from './edge-flags';
 import { DefaultVertexStore, type VertexStore } from './vertex-store';
 import { DefaultEdgeStore, type EdgeStore } from './edge-store';
@@ -623,11 +623,13 @@ function readEdge(ar: Archive, r: R): any {
   const db = drawbase(ar, r);
   const [s1] = ar.readObject(r, 'CVertex');
   const [s2] = ar.readObject(r, 'CVertex');
-  const [cs, cn] = ar.readObject(r);
+  const [cs, cn, cv] = ar.readObject(r);
   if (cn !== null && cn !== 'CCurve' && cn !== 'CArcCurve') {
     throw new LegacyParseError(`edge curve pointer resolved to ${cn} ${r.ctx()}`);
   }
-  return { k: 'edge', db, curve: cs, v1: s1, v2: s2 };
+  // cv is the curve itself on the edge that first points at it (a back-ref
+  // to a curve already read carries none)
+  return { k: 'edge', db, curve: cs, curve_value: cv, v1: s1, v2: s2 };
 }
 
 function readCurve(ar: Archive, r: R): any {
@@ -640,8 +642,20 @@ function readCurve(ar: Archive, r: R): any {
 function readArcCurve(ar: Archive, r: R): any {
   preamble(ar, r);
   r.raw(5);
-  r.f64s(14); // arc frame (center, axes, radius, sweep)
-  return { k: 'arccurve' };
+  // center[3], normal[3], x_axis[3], start_angle, end_angle, y_axis[3]; the
+  // arc is center + cos(t) * x_axis + sin(t) * y_axis
+  const v = r.f64s(14);
+  return {
+    k: 'arccurve',
+    params: {
+      center: [v[0], v[1], v[2]],
+      normal: [v[3], v[4], v[5]],
+      xAxis: [v[6], v[7], v[8]],
+      startAngle: v[9],
+      endAngle: v[10],
+      yAxis: [v[11], v[12], v[13]],
+    },
+  };
 }
 
 /** Record that the writer burned `delta` store-map indices without
@@ -1912,6 +1926,8 @@ class LegacyBuilder {
     end: [number, number, number] | null;
   }[] = [];
   constructionPoints: { position: [number, number, number] }[] = [];
+  edgeCurves = new Map<number, number>();
+  arcCurves = new Map<number, ArcFrame>();
 }
 
 function addEdge(builder: LegacyBuilder, slot: number, e: any, slots: Map<number, SlotEntry>): void {
@@ -1932,6 +1948,16 @@ function addEdge(builder: LegacyBuilder, slot: number, e: any, slots: Map<number
   if (flags) {
     builder.edgeFlags.set(slot, flags);
   }
+  // The edge's parent Curve (the CCurve/CArcCurve slot), and, if that curve
+  // is an analytic arc, its frame: it arrives on the edge that first
+  // references the CArcCurve; every later edge on the arc back-refs it.
+  if (e.curve !== null && e.curve !== undefined) {
+    builder.edgeCurves.set(slot, e.curve);
+    const cv = e.curve_value;
+    if (cv && typeof cv === 'object' && cv.k === 'arccurve') {
+      builder.arcCurves.set(e.curve, cv.params);
+    }
+  }
 }
 
 function fillBuilder(builder: LegacyBuilder, ents: [number, string | null, any][], slots: Map<number, SlotEntry>): void {
@@ -1940,6 +1966,8 @@ function fillBuilder(builder: LegacyBuilder, ents: [number, string | null, any][
     const k = v.k;
     if (k === 'edge') {
       addEdge(builder, s, v, slots);
+    } else if (k === 'arccurve') {
+      builder.arcCurves.set(s, v.params);
     } else if (k === 'face') {
       const loops: { edgeId: number; orientation: number }[][] = [];
       for (const lp of v.loops) {
