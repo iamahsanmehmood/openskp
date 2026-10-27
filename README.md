@@ -115,10 +115,10 @@ for anything specific to FreeCAD/Blender behavior.
 | 🎯 **Dart / Flutter** | [![Pub](https://img.shields.io/pub/v/openskp.svg?label=)](https://pub.dev/packages/openskp) | ✅ Available | `dart pub add openskp` |
 | ⚙️ **C++17** | [![C++](https://img.shields.io/github/v/release/iamahsanmehmood/openskp?filter=cpp-v*&label=)](https://github.com/iamahsanmehmood/openskp/releases?q=cpp-) | ✅ Source package | `find_package(OpenSkp CONFIG REQUIRED)` |
 
-All five languages are on **1.3.0** as of the 2026-09-18 synchronized
-release — same version number, not identical capability: Python and C++
-carry a few things (Fragments reading, loose-edge/curve support) the
-other three don't have yet. All five parse both the modern VFF (2021+)
+All five languages are on **1.4.0** as of the 2026-10-27 synchronized
+release — same version number, not identical capability: Python carries a
+few things (writing scenes, per-edge and per-face layer ids, loose-edge
+curve scene support) the other four don't have yet. All five parse both the modern VFF (2021+)
 and classic MFC (2013–2020) `.skp` containers, and support the same
 opt-in scene-baking (`buildScene()`) and observability APIs. Full detail
 on what differs between languages, and which real SketchUp file versions

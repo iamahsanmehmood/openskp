@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.0] — 2026-10-27 — all 5 languages
+
+> What most readers will notice, from the entries below (everything since 1.3.0):
+>
+> - **Reading, now in all five languages:** a classic (pre-2021) file's scenes with their
+>   cameras and hidden layers; `Definition.is_group`, which says whether SketchUp made a
+>   definition for a group or a component; `Definition.arcs`, the exact centre, radius and
+>   angles of every arc and circle (including ones that bound a face, and from 2021+ files,
+>   where they were stored but never read), with `Edge.curveId` to join them to their edges.
+> - **Fixes that change what a model looks like:** an instance scaled through the matrix's
+>   scale term is placed and sized correctly (it came out 100x too big), and a 2021+ scene
+>   that saves no camera is kept. TypeScript, .NET, Dart and C++ now read every legacy save
+>   of a real multi-version project (SketchUp 4 through 2020); they stopped on it before.
+> - **Writing:** the writers mark a group's definition as a group (SketchUp counted written
+>   groups as components); Python writes scenes into legacy files.
+> - Much faster 2021+ parsing in Python, and a long list of smaller fixes below.
+>
+> Not identical capability: Python still has a few things the other four do not (writing
+> scenes, the per-edge and per-face layer ids, loose-edge curve scene support), tracked in
+> [docs/LANGUAGE_PARITY.md](docs/LANGUAGE_PARITY.md) and
+> [issue #285](https://github.com/iamahsanmehmood/openskp/issues/285).
+>
+> **Upgrade notes:** in TypeScript, `Edge.curveId` is optional but `Definition.isGroup` and
+> `Definition.arcs` are required, so code that builds `Definition` objects by hand needs the
+> two new fields (parsed models already carry them). A file written by an earlier version keeps
+> the old group flag on its definitions and reads back with `is_group` false for its groups.
+
 ### Fixed — all five ports: a group the writer makes is a group to SketchUp (#446)
 
 A file written by `openskp.create` (or the TypeScript, .NET, Dart and C++ writers) placed a group
