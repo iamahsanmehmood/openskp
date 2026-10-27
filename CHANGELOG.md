@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Python: `Definition.arcs`, the analytic arc of every arc and circle (#462)
+
+A curve SketchUp drew as an arc or a circle is a run of straight edges and
+also an exact description: centre, plane, axes, radius and start and end
+angle. `Definition.arcs` maps a curve id (the `Edge.curve_id` of the edges
+that form it) to an `ArcCurve` with those, from classic and 2021+ files alike.
+It covers every arc, including a circle or an arc that bounds a face, which the
+scene's `curve_sets[].arc` (loose curves only) never reached.
+
+Classic files already carried the arc inside the reader; 2021+ files store it
+as a 128-byte record (`2D4C`: 16 doubles - centre, normal, a plane constant,
+x axis, y axis, radius, start and end angle) beside each curve's record
+(`384A`), and the reader skipped it. It is read now. Checked against SketchUp
+2025's own `SUArcCurve` getters: a loose arc, a circle and an arc closed by its
+chord (the last two bounding faces), saved as SketchUp 2017, 2020 and 2021,
+read back identically in all three; and the 368 arcs of `Untitled.skp`
+(24-edge circles) agree to 5e-6 inches, each joined to the 24 edges SketchUp
+reports.
+
+One visible change: `curve_sets[].arc` is now filled for loose arcs in 2021+
+files too, as it already was in classic ones, so a loose arc in a 2021+ file
+exports as an arc rather than as segments. The scene output of every other
+fixture and of 26 older models is unchanged. TypeScript, .NET, Dart and C++ are
+tracked in #462.
+
 ### Added — all five ports: `Definition.is_group` tells a group from a component (#446)
 
 Groups and component instances are both an `Instance` of a `Definition`, and
