@@ -38,6 +38,15 @@ takes a count of 1 for its end marker, so a scene hiding one layer came back
 with none. A record the new reader can't fully read (for example one with an
 attribute dictionary, or capture flags beyond `0x1FF`) falls back to the
 narrow scan.
+### Fixed — TypeScript: curved surfaces shade smoothly across smooth edges
+
+SketchUp draws the faces either side of an edge flagged smooth (Soften/Smooth
+Edges) as one continuous surface, but `buildScene`/`buildInstancedScene` gave
+every face its own flat normal, so cylinders, terrain and other curved models
+came out faceted in GLB and every other mesh export. Corners joined through a
+smooth edge between two faces that face the same way now share one vertex
+normal, the normalised sum of their faces' normals; hard edges keep their
+crease, and a definition without smooth edges is unchanged.
 ### Added — TypeScript: `InstancedScene.layerColors` and `InstancedNode.ownLayer`
 
 `buildInstancedScene` already reports each node's effective layer and each

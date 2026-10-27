@@ -28,7 +28,9 @@ export interface LocalFaceGroup {
   /** Local-space vertex positions, inches, SketchUp Z-up. */
   localVerts: [number, number, number][];
   localUvs: [number, number][];
-  /** Un-normalised summed face normals per vertex, local space. */
+  /** Un-normalised summed face normals per vertex, local space. A corner
+   * on a smoothed surface carries that surface's averaged normal instead
+   * (see {@link smoothCornerNormals}). */
   normalsAccum: number[][];
   localFaces: number[][];
   localVMap: Map<string, number>;
@@ -57,6 +59,101 @@ export interface FaceGroupContext {
   frontSideOnly?: boolean;
 }
 
+/** A corner (vertex of one face) on a smoothed surface: the surface it
+ * belongs to and that surface's unit normal at the vertex. */
+interface SmoothCorner {
+  root: string;
+  n: [number, number, number];
+}
+
+/** Edge display-flag bit SketchUp sets on an edge whose faces render as one
+ * smooth surface (Soften/Smooth Edges' "Smooth normals"). */
+const SMOOTH_EDGE = 0x10;
+
+/**
+ * Per-corner normals across smooth edges.
+ *
+ * SketchUp renders the faces either side of an edge flagged smooth as one
+ * continuous surface: their shared vertices get the average of the faces'
+ * normals, while a hard edge keeps a crease. Corners (vertex, face) joined
+ * through a smooth edge between two faces that face the same way are merged
+ * into one surface, and each surface's normal at a vertex is the normalised
+ * sum of its faces' normals. Returns null when the definition has no smooth
+ * edge, so a faceted model pays nothing.
+ */
+function smoothCornerNormals(
+  builder: GeometryBuilder,
+  ctx: FaceGroupContext
+): ((vId: number, fId: number) => SmoothCorner | null) | null {
+  const edgeFaces = new Map<number, number[]>();
+  for (const [fId, face] of builder.faces.entries()) {
+    if (ctx.respectVisibility && face.hidden) continue;
+    for (const loop of face.loops) {
+      for (const { edgeId } of loop) {
+        if (((builder.edgeFlags.get(edgeId) ?? 0) & SMOOTH_EDGE) === 0) continue;
+        let faces = edgeFaces.get(edgeId);
+        if (!faces) edgeFaces.set(edgeId, (faces = []));
+        if (!faces.includes(fId)) faces.push(fId);
+      }
+    }
+  }
+  if (edgeFaces.size === 0) return null;
+
+  const parent = new Map<string, string>();
+  const touch = (key: string): string => {
+    if (!parent.has(key)) parent.set(key, key);
+    return key;
+  };
+  const find = (key: string): string => {
+    let root = key;
+    while (parent.get(root) !== root) root = parent.get(root)!;
+    while (parent.get(key) !== root) {
+      const next = parent.get(key)!;
+      parent.set(key, root);
+      key = next;
+    }
+    return root;
+  };
+  for (const [edgeId, faces] of edgeFaces) {
+    if (faces.length !== 2) continue;
+    const ends = builder.edges.get(edgeId);
+    if (!ends) continue;
+    const a = builder.faces.get(faces[0])!.normal;
+    const b = builder.faces.get(faces[1])!.normal;
+    // Faces that face opposite ways across the edge (a fold or a reversed
+    // face) would cancel each other's normal out.
+    if (a[0] * b[0] + a[1] * b[1] + a[2] * b[2] <= 0) continue;
+    for (const vId of ends) {
+      if (vId === null) continue;
+      const left = find(touch(`${vId}:${faces[0]}`));
+      const right = find(touch(`${vId}:${faces[1]}`));
+      if (left !== right) parent.set(left, right);
+    }
+  }
+
+  const sums = new Map<string, [number, number, number]>();
+  for (const key of parent.keys()) {
+    const normal = builder.faces.get(Number(key.slice(key.indexOf(':') + 1)))!.normal;
+    const root = find(key);
+    const sum = sums.get(root);
+    if (sum) {
+      sum[0] += normal[0];
+      sum[1] += normal[1];
+      sum[2] += normal[2];
+    } else {
+      sums.set(root, [normal[0], normal[1], normal[2]]);
+    }
+  }
+  return (vId, fId) => {
+    const key = `${vId}:${fId}`;
+    if (!parent.has(key)) return null;
+    const root = find(key);
+    const sum = sums.get(root)!;
+    const length = Math.hypot(sum[0], sum[1], sum[2]) || 1;
+    return { root, n: [sum[0] / length, sum[1] / length, sum[2] / length] };
+  };
+}
+
 /**
  * Group a definition's faces by resolved material identity, in local space.
  *
@@ -65,12 +162,16 @@ export interface FaceGroupContext {
  * single-sided triangle sets (one normal-wound front, one reverse-wound
  * back) so each side keeps its own colour - unless `ctx.frontSideOnly`,
  * which always takes the first branch with the front material.
+ *
+ * Vertices on a surface SketchUp smooths take that surface's normal, so
+ * curved geometry shades smoothly instead of faceted.
  */
 export function buildLocalFaceGroups(
   builder: GeometryBuilder,
   ctx: FaceGroupContext
 ): Map<string, LocalFaceGroup> {
   const faceGroups = new Map<string, LocalFaceGroup>();
+  const smoothCorner = smoothCornerNormals(builder, ctx);
 
   const addSide = (
     triangles: number[][],
@@ -81,7 +182,8 @@ export function buildLocalFaceGroups(
     mat: Material | undefined,
     uvTransform: number[] | null | undefined,
     xr: [number, number, number],
-    yr: [number, number, number]
+    yr: [number, number, number],
+    fId: number
   ) => {
     // faces are batched per emitted material, so the texture has to be
     // part of the key too - otherwise two differently-textured faces with
@@ -137,19 +239,28 @@ export function buildLocalFaceGroups(
         if (idx === undefined) {
           const p = builder.vertices.get(vId)!;
           const [u, v] = computeFaceUv(p, xr, yr, uvTransform, tileW, tileH);
-          const key = `${vId},${u},${v}`;
+          // A smoothed corner shares its vertex only with corners of the
+          // same surface: a hard edge between two smoothed surfaces still
+          // splits the vertex so each side keeps its own normal.
+          const smooth = smoothCorner?.(vId, fId) ?? null;
+          const normal: [number, number, number] = smooth
+            ? reverse
+              ? [-smooth.n[0], -smooth.n[1], -smooth.n[2]]
+              : smooth.n
+            : sideNormal;
+          const key = smooth ? `${vId},${u},${v},${smooth.root}` : `${vId},${u},${v}`;
           idx = group.localVMap.get(key);
           if (idx === undefined) {
             group.localVerts.push(p);
             group.localUvs.push([u, v]);
-            group.normalsAccum.push([sideNormal[0], sideNormal[1], sideNormal[2]]);
+            group.normalsAccum.push([normal[0], normal[1], normal[2]]);
             idx = group.localVerts.length - 1;
             group.localVMap.set(key, idx);
           } else {
             const accum = group.normalsAccum[idx];
-            accum[0] += sideNormal[0];
-            accum[1] += sideNormal[1];
-            accum[2] += sideNormal[2];
+            accum[0] += normal[0];
+            accum[1] += normal[1];
+            accum[2] += normal[2];
           }
           faceLocalMap.set(vId, idx);
         }
@@ -161,7 +272,7 @@ export function buildLocalFaceGroups(
     }
   };
 
-  for (const [_fId, fData] of builder.faces.entries()) {
+  for (const [fId, fData] of builder.faces.entries()) {
     // A face explicitly hidden in SketchUp. Skipped only on request: the
     // baked output every existing consumer reads includes these, so
     // filtering by default would silently change what they render.
@@ -208,10 +319,10 @@ export function buildLocalFaceGroups(
     const sameColor =
       frontColor.r === backColor.r && frontColor.g === backColor.g && frontColor.b === backColor.b;
     if (sameColor || ctx.frontSideOnly) {
-      addSide(triangles, fn, frontColor, true, false, frontMat, uvTransform, xr, yr);
+      addSide(triangles, fn, frontColor, true, false, frontMat, uvTransform, xr, yr, fId);
     } else {
-      addSide(triangles, fn, frontColor, false, false, frontMat, uvTransform, xr, yr);
-      addSide(triangles, fn, backColor, false, true, backMat, uvTransformBack, xr, yr);
+      addSide(triangles, fn, frontColor, false, false, frontMat, uvTransform, xr, yr, fId);
+      addSide(triangles, fn, backColor, false, true, backMat, uvTransformBack, xr, yr, fId);
     }
   }
 
