@@ -75,6 +75,25 @@ def test_an_image_is_not_a_group():
             assert not (definition.is_image and definition.is_group), path.name
 
 
+def test_a_group_placed_inside_a_component_is_a_group(tmp_path):
+    # the way to write a nested group is add_component_definition + add_group_instance; SketchUp 2025's
+    # own library reports the placed definition as a group definition and the enclosing one as a
+    # component (openskp#467)
+    from openskp import create
+
+    builder = create()
+    with builder.add_component_definition("Engine") as engine:
+        engine.add_face([(0, 0, 0), (30, 0, 0), (30, 30, 0), (0, 30, 0)])
+    with builder.add_component_definition("Car") as car:
+        car.add_face([(0, 0, 0), (150, 0, 0), (150, 60, 0), (0, 60, 0)])
+        car.add_group_instance(engine, translation=(50, 0, 10))
+    builder.add_instance(car)
+    path = tmp_path / "nested.skp"
+    builder.save(str(path))
+    model = SkpFile.open(str(path)).parse()
+    assert {d.name: d.is_group for d in model.definitions.values()} == {"Engine": True, "Car": False}
+
+
 def test_a_group_written_by_the_builder_is_a_group(tmp_path):
     # SketchUp 2025's own library reports one group definition and one component definition for a
     # file like this; the flag is the definition's own, not inferred from how it is placed

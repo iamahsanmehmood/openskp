@@ -518,6 +518,28 @@ TEST(Create, AGroupIsWrittenAsAGroupAndAComponentAsAComponent) {
   EXPECT_EQ(groups, 1);
 }
 
+TEST(Create, AGroupPlacedInsideAComponentIsAGroup) {
+  // SketchUp 2025's own library reports the placed definition as a group definition and the
+  // enclosing one as a component (openskp#467)
+  auto builder = create();
+  auto& engine = builder->add_component_definition("Engine");
+  engine.add_face(square_pts());
+  engine.close();
+  auto& car = builder->add_component_definition("Car");
+  car.add_face(square_pts());
+  GroupInstanceOptions gopts;
+  gopts.translation = {50, 0, 10};
+  car.add_group_instance(engine, gopts);
+  car.close();
+  builder->add_instance(car);
+
+  SkpModel model = round_trip(*builder);
+  for (const auto& d : model.definitions) {
+    if (d.second.name == "Engine") EXPECT_TRUE(d.second.is_group);
+    if (d.second.name == "Car") EXPECT_FALSE(d.second.is_group);
+  }
+}
+
 TEST(Create, GroupAttributesRoundTrip) {
   // Groups used to hardcode a null attribute pointer on the belief that a CGroup never carries a
   // CAttributeContainer - real production files (SketchUp 2020-legacy export, ground truth)

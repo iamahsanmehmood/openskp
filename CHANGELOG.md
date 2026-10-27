@@ -13,9 +13,12 @@ A file written by `openskp.create` (or the TypeScript, .NET, Dart and C++ writer
 with a `CGroup` record but wrote its definition as a component's: the flag in the definition record
 that SketchUp's own API reports as a group (`SUComponentType_Group`) was 0, so SketchUp counted
 every such group as a component and `Definition.is_group` read back false. The writers now set it
-for the definition `add_group` makes, and only for it: a component placed with `add_group_instance`
-stays a component's. Checked with SketchUp 2025's own library: a file with one group and one
-component reports one group definition and one component definition, and OpenSKP reads the same;
+for the definition `add_group` makes and for the definition `add_group_instance` places, which is
+the way to write a group nested inside a component (the first version of this fix covered only
+`add_group`, so a nested group still read back as a component, #467). A definition placed both as a
+group and as a component instance reads as a group. Checked with SketchUp 2025's own library: a file
+with one group and one component, and one with a group nested in a component, each report one group
+definition and one component definition, and OpenSKP reads the same;
 an existing test that asked SketchUp to count the definitions of a file with 20 components and 10
 groups used to expect 30 components and now expects 20 components and 10 groups. Each port tests it.
 

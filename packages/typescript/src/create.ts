@@ -1137,7 +1137,7 @@ class ArchiveWriter {
 
   /** Close out a CComponentDefinition record: relationship count, GUID,
    * name, timestamp, behavior flags, and a default thumbnail. */
-  writeDefinitionTail(name: string, isGroup = false): void {
+  writeDefinitionTail(name: string, isGroup = false): number {
     this.pushU32(0); // nrel: CRelationship count - always 0, not supported
     this.pushU16(0);
     this.pushBytes(randomGuidBytes());
@@ -1149,9 +1149,13 @@ class ArchiveWriter {
     // behavior flags - both left off, matching neither being exposed yet.
     // The last u32 is 1 for the definition of a group and 0 for a component's
     // (what SketchUp's own API reports as SUComponentType_Group).
+    const groupFlagPos = this.bytes.length + 39;
     this.pushZeros(39);
     this.pushU32(isGroup ? 1 : 0);
     this.writeThumbnail();
+    // where that u32 sits, so a definition first closed as a component can be flagged later, when
+    // it is placed as a group
+    return groupFlagPos;
   }
 
   private writeInstanceLike(
@@ -1687,6 +1691,7 @@ export class ComponentDefinitionBuilder {
   private newEntityCount = 0;
   private closed = false;
   private groupPlacement?: GroupPlacement;
+  private groupFlagPos?: number;
 
   /** @internal */
   constructor(skp: SkpBuilder, slot: number, name: string, countPatchPos: number, groupPlacement?: GroupPlacement) {
@@ -1825,6 +1830,8 @@ export class ComponentDefinitionBuilder {
       definition.slot, options.name ?? definition.name, options.translation ?? [0, 0, 0], matrix3x3,
       options.material ?? 0, options.layer ?? 0, attributeDicts, options.hidden ?? false
     );
+    // the definition behind a group is a group's definition to SketchUp: flag it (it closed earlier in the same definition buffer, which is only copied out on save). A definition placed both as a group and as a component instance reads as a group.
+    if (definition.groupFlagPos !== undefined) this._skp._patchDefinitionCount(definition.groupFlagPos, 1);
   }
 
   /** @internal called automatically once the defining callback (passed
@@ -1835,7 +1842,7 @@ export class ComponentDefinitionBuilder {
     }
     const writer = this._skp._definitionWriter();
     this._skp._patchDefinitionCount(this.countPatchPos, this.newEntityCount);
-    writer.writeDefinitionTail(this.name, this.groupPlacement !== undefined);
+    this.groupFlagPos = writer.writeDefinitionTail(this.name, this.groupPlacement !== undefined);
     this.closed = true;
     this._skp._clearOpenDefinition();
     if (this.groupPlacement !== undefined) {

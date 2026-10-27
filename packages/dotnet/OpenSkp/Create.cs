@@ -1260,7 +1260,7 @@ namespace OpenSkp
         /// <summary>Close out a CComponentDefinition record: relationship
         /// count, GUID, name, timestamp, behavior flags, and a default
         /// thumbnail.</summary>
-        internal void WriteDefinitionTail(string name, bool isGroup = false)
+        internal int WriteDefinitionTail(string name, bool isGroup = false)
         {
             AddU32(0); // nrel: CRelationship count - always 0, not supported
             AddU16(0);
@@ -1274,9 +1274,13 @@ namespace OpenSkp
             // neither being exposed by this writer yet. The last u32 is 1 for the
             // definition of a group and 0 for a component's (what SketchUp's own API
             // reports as SUComponentType_Group).
+            int groupFlagPos = Buf.Count + 39;
             AddZeros(39);
             AddU32(isGroup ? 1u : 0u);
             WriteThumbnail();
+            // where that u32 sits, so a definition first closed as a component can be flagged later,
+            // when it is placed as a group
+            return groupFlagPos;
         }
 
         private void WriteInstanceLike(
@@ -1774,6 +1778,7 @@ namespace OpenSkp
         // immediately on close, unlike a plain component definition, which
         // needs an explicit later AddInstance call.
         private readonly GroupPlacement? _groupPlacement;
+        private int? _groupFlagPos;
 
         internal ComponentDefinitionBuilder(SkpBuilder skp, int slot, string name, int countPatchPos, GroupPlacement? groupPlacement)
         {
@@ -1970,6 +1975,8 @@ namespace OpenSkp
             var resolved = CreateMath.ResolveMatrix3x3(matrix3x3, rotation);
             var attributeDicts = BuildAttributeDicts(attributes, attributeDictName);
             _newEntityCount += Skp.DefinitionWriter!.WriteGroup(definition.Slot, name ?? definition.Name, translation, resolved, material ?? 0, layer ?? 0, attributeDicts, hidden);
+            // the definition behind a group is a group's definition to SketchUp: flag it (it closed earlier in the same definition buffer, which is only copied out on save). A definition placed both as a group and as a component instance reads as a group.
+            if (definition._groupFlagPos.HasValue) Skp.DefinitionWriter!.PatchU32(definition._groupFlagPos.Value, 1u);
         }
 
         private static List<AttributeDict>? BuildAttributeDicts(IReadOnlyDictionary<string, object>? attributes, string dictName)
@@ -1987,7 +1994,7 @@ namespace OpenSkp
             }
             var writer = Skp.DefinitionWriter!;
             writer.PatchU32(_countPatchPos, (uint)_newEntityCount);
-            writer.WriteDefinitionTail(Name, _groupPlacement.HasValue);
+            _groupFlagPos = writer.WriteDefinitionTail(Name, _groupPlacement.HasValue);
             _closed = true;
             Skp.ClearOpenDefinition(this);
             if (_groupPlacement.HasValue)

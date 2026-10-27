@@ -1360,7 +1360,7 @@ class _ArchiveWriter:
         self.buf += _u32(0)  # placeholder entity count, patched by the caller
         return slot, count_patch_pos
 
-    def write_definition_tail(self, name: str, behavior: int = 0, is_group: bool = False) -> None:
+    def write_definition_tail(self, name: str, behavior: int = 0, is_group: bool = False) -> int:
         """Close out a ``CComponentDefinition`` record: relationship count,
         GUID, name, timestamp, behavior flags, and a default thumbnail.
 
@@ -1371,7 +1371,9 @@ class _ArchiveWriter:
 
         ``is_group`` marks the definition SketchUp makes for a group: the last
         u32 of the gap is 1 for a group's definition and 0 for a component's
-        (what SketchUp's own API reports as ``SUComponentType_Group``)."""
+        (what SketchUp's own API reports as ``SUComponentType_Group``). Returns
+        the buffer offset of that u32, so a definition first closed as a
+        component can be flagged later, when it is placed as a group."""
         self.buf += _u32(0)  # nrel: CRelationship count - always 0, not supported
         self.buf += struct.pack("<H", 0)
         self.buf += uuid.uuid4().bytes
@@ -1385,8 +1387,10 @@ class _ArchiveWriter:
         gap = bytearray(43)
         gap[43 - 9] = behavior & 0xFF
         gap[43 - 4] = 1 if is_group else 0
+        group_flag_pos = len(self.buf) + 43 - 4
         self.buf += bytes(gap)
         self.write_thumbnail()
+        return group_flag_pos
 
     def _write_instance_like(
         self,
@@ -1985,6 +1989,9 @@ class ComponentDefinitionBuilder:
         #: SketchUp's behavior byte, set by `SkpBuilder.add_component_definition`
         #: (bit 0 always-faces-camera, bit 1 shadows-face-sun).
         self.behavior = 0
+        #: Offset of this definition's group flag in the definition buffer, set when
+        #: it closes; `add_group_instance` flags it as a group's definition.
+        self._group_flag_pos: Optional[int] = None
         self._count_patch_pos = count_patch_pos
         self._vertex_slots: Dict[Point3, int] = {}
         self._edge_registry: Dict[FrozenSet[int], Tuple[int, int]] = {}
@@ -2261,6 +2268,11 @@ class ComponentDefinitionBuilder:
             definition.slot, name or definition.name, translation, matrix3x3, material or 0, layer or 0,
             attribute_dicts=resolved_attribute_dicts, hidden=hidden,
         )
+        # the definition behind a group is a group's definition to SketchUp: flag it (it closed
+        # earlier in the same definition buffer, which is only copied out on save). A definition
+        # placed both as a group and as a component instance reads as a group.
+        if definition._group_flag_pos is not None:
+            struct.pack_into("<I", self._skp._definition_writer.buf, definition._group_flag_pos, 1)
 
     def add_text(self, text: str, point: Point3,
                  leader: Point3 = (15.0, 15.0, 15.0)) -> None:
@@ -2322,7 +2334,7 @@ class ComponentDefinitionBuilder:
             raise SkpWriteError(f"component definition {self.name!r} has no geometry - add at least one face")
         writer = self._skp._definition_writer
         struct.pack_into("<I", writer.buf, self._count_patch_pos, self._new_entity_count)
-        writer.write_definition_tail(
+        self._group_flag_pos = writer.write_definition_tail(
             self.name, behavior=self.behavior, is_group=self._group_placement is not None)
         self._closed = True
         self._skp._open_definition = None

@@ -1392,7 +1392,7 @@ class _ArchiveWriter {
 
   /// Close out a `CComponentDefinition` record: relationship count, GUID,
   /// name, timestamp, behavior flags, and a default thumbnail.
-  void writeDefinitionTail(String name, {bool isGroup = false}) {
+  int writeDefinitionTail(String name, {bool isGroup = false}) {
     buf.addAll(_u32(0)); // nrel: CRelationship count - always 0, not supported
     buf.addAll(_u16(0));
     buf.addAll(_uuid4Bytes());
@@ -1404,9 +1404,13 @@ class _ArchiveWriter {
     // behavior flags, both left off (neither exposed by this writer yet). The
     // last u32 is 1 for the definition of a group and 0 for a component's (what
     // SketchUp's own API reports as SUComponentType_Group).
+    final groupFlagPos = buf.length + 39;
     buf.addAll(List<int>.filled(39, 0));
     buf.addAll(_u32(isGroup ? 1 : 0));
     writeThumbnail();
+    // where that u32 sits, so a definition first closed as a component can be flagged later, when
+    // it is placed as a group
+    return groupFlagPos;
   }
 
   void _writeInstanceLike({
@@ -1963,6 +1967,7 @@ class ComponentDefinitionBuilder implements GeometryHost {
   /// definition, which needs an explicit later [SkpBuilder.addInstance]
   /// call.
   final GroupPlacement? _groupPlacement;
+  int? _groupFlagPos;
 
   ComponentDefinitionBuilder._(this._skp, this.slot, this.name, this._countPatchPos, this._groupPlacement);
 
@@ -2218,6 +2223,9 @@ class ComponentDefinitionBuilder implements GeometryHost {
       attributeDicts: attributeDicts,
       hidden: hidden,
     );
+    // the definition behind a group is a group's definition to SketchUp: flag it (it closed earlier in the same definition buffer, which is only copied out on save). A definition placed both as a group and as a component instance reads as a group.
+    final flagPos = definition._groupFlagPos;
+    if (flagPos != null) _patchU32(_skp._definitionWriter!.buf, flagPos, 1);
   }
 
   void _close() {
@@ -2226,7 +2234,7 @@ class ComponentDefinitionBuilder implements GeometryHost {
     }
     final writer = _skp._definitionWriter!;
     _patchU32(writer.buf, _countPatchPos, _newEntityCount);
-    writer.writeDefinitionTail(name, isGroup: _groupPlacement != null);
+    _groupFlagPos = writer.writeDefinitionTail(name, isGroup: _groupPlacement != null);
     _closed = true;
     _skp._openDefinition = null;
     final gp = _groupPlacement;

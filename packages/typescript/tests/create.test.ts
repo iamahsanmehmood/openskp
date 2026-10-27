@@ -705,6 +705,22 @@ describe('Groups', () => {
     expect([...model.definitions.values()].filter((d) => d.isGroup).length).toBe(1);
   });
 
+  it('a group placed inside a component is a group (openskp#467)', () => {
+    // SketchUp 2025's own library reports the placed definition as a group definition and the
+    // enclosing one as a component
+    const builder = create();
+    const engine = builder.addComponentDefinition('Engine', (def) => def.addFace(SQUARE));
+    const car = builder.addComponentDefinition('Car', (def) => {
+      def.addFace(SQUARE);
+      def.addGroupInstance(engine, { translation: [50, 0, 10] });
+    });
+    builder.addInstance(car);
+    const model = parseSkp(toBuffer(builder.toBytes()));
+    const byName = (n: string) => [...model.definitions.values()].find((d) => d.name === n)!;
+    expect(byName('Engine').isGroup).toBe(true);
+    expect(byName('Car').isGroup).toBe(false);
+  });
+
   it('a hidden group round-trips its hidden flag', () => {
     const builder = create();
     builder.addGroup((table) => table.addFace(SQUARE), { name: 'Table', hidden: true });

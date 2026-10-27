@@ -1121,7 +1121,7 @@ class ArchiveWriter {
 
   // Close out a CComponentDefinition record: relationship count, GUID, name, timestamp,
   // behavior flags, and a default thumbnail.
-  void write_definition_tail(const std::string& name, bool is_group = false) {
+  std::size_t write_definition_tail(const std::string& name, bool is_group = false) {
     append_u32(buf, 0);  // nrel: CRelationship count - always 0, not supported
     append_u16(buf, 0);
     auto guid = random_uuid_bytes();
@@ -1134,9 +1134,13 @@ class ArchiveWriter {
     // left off (matching neither being exposed by this writer yet). The last u32 is 1 for the
     // definition of a group and 0 for a component's (what SketchUp's own API reports as
     // SUComponentType_Group).
+    const std::size_t group_flag_pos = buf.size() + 39;
     buf.insert(buf.end(), 39, 0);
     append_u32(buf, is_group ? 1u : 0u);
     write_thumbnail();
+    // where that u32 sits, so a definition first closed as a component can be flagged later, when
+    // it is placed as a group
+    return group_flag_pos;
   }
 
   void write_instance_like(const std::string& class_name, int schema, bool real_attrs,
@@ -1597,6 +1601,8 @@ struct ComponentDefinitionBuilder::Impl {
   detail::EdgeRegistry edge_registry;
   int new_entity_count = 0;
   bool closed = false;
+  // Offset of this definition's group flag in the definition buffer, set when it closes.
+  std::optional<std::size_t> group_flag_pos;
 
   struct GroupPlacement {
     Point3 translation;
@@ -1941,6 +1947,11 @@ void ComponentDefinitionBuilder::add_group_instance(const ComponentDefinitionBui
   impl_->new_entity_count += impl_->writer->write_group(
       definition.slot(), options.name.value_or(definition.name()), options.translation, matrix,
       options.material.value_or(0), options.layer.value_or(0), dicts, options.hidden);
+  // the definition behind a group is a group's definition to SketchUp: flag it (it closed earlier
+  // in the same definition buffer, which is only copied out on save). A definition placed both as a
+  // group and as a component instance reads as a group.
+  if (definition.impl_->group_flag_pos)
+    detail::write_u32_at(impl_->writer->buf, *definition.impl_->group_flag_pos, 1);
 }
 
 int ComponentDefinitionBuilder::slot() const noexcept { return impl_->slot; }
@@ -1954,7 +1965,8 @@ void ComponentDefinitionBuilder::close() {
   }
   detail::write_u32_at(impl_->writer->buf, impl_->count_patch_pos,
                        static_cast<std::uint32_t>(impl_->new_entity_count));
-  impl_->writer->write_definition_tail(impl_->name, impl_->group_placement.has_value());
+  impl_->group_flag_pos =
+      impl_->writer->write_definition_tail(impl_->name, impl_->group_placement.has_value());
   impl_->closed = true;
   // ComponentDefinitionBuilder is a friend of SkpBuilder (create.hpp), so this is allowed to
   // reach into a *different* SkpBuilder's private impl_ - access control in C++ is per-class,
