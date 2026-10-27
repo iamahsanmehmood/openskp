@@ -28,7 +28,7 @@ reports.
 
 One visible change: `curve_sets[].arc` is now filled for loose arcs in 2021+
 files too, as it already was in classic ones, so a loose arc in a 2021+ file
-exports as an arc rather than as segments. The scene output of every other
+reaches a scene consumer as an arc and not only as segments. The scene output of every other
 fixture and of 26 older models is unchanged. TypeScript, .NET, Dart and C++ are
 tracked in #462.
 
