@@ -50,13 +50,24 @@ namespace OpenSkp
         // versions aren't known, so give up there.
         private static readonly Dictionary<int, int> RenderingOptionsLen = new Dictionary<int, int>
         {
-            [14] = 206, [15] = 206, [16] = 206, [17] = 206, [18] = 211, [19] = 212, [20] = 213,
+            [14] = 206,
+            [15] = 206,
+            [16] = 206,
+            [17] = 206,
+            [18] = 211,
+            [19] = 212,
+            [20] = 213,
         };
 
         // CSkpStyle option values: type tag -> byte size
         private static readonly Dictionary<uint, int> StyleValueSizes = new Dictionary<uint, int>
         {
-            [1] = 1, [3] = 2, [4] = 4, [5] = 4, [6] = 4, [7] = 8,
+            [1] = 1,
+            [3] = 2,
+            [4] = 4,
+            [5] = 4,
+            [6] = 4,
+            [7] = 8,
         };
 
         private static readonly byte[] ClassName = Encoding.ASCII.GetBytes("CViewPage");
