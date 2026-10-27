@@ -347,8 +347,7 @@ namespace OpenSkp
 
         public List<Layer> Layers { get; set; } = new List<Layer>();
 
-        /// <summary>The file's saved scenes (VFF files; classic pre-2021
-        /// files import with none).</summary>
+        /// <summary>The file's saved scenes, from VFF files and from classic pre-2021 files.</summary>
         public List<Page> Pages { get; set; } = new List<Page>();
 
         /// <summary>Model-level linear dimensions with world-space endpoints

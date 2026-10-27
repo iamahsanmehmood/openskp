@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'core.dart';
 import 'errors.dart';
 import 'geometry.dart';
+import 'legacy_pages.dart';
 import 'model.dart';
 import 'observability.dart';
 import 'tlv.dart';
@@ -1891,7 +1892,9 @@ class Legacy {
     final layerSlots = <int>[];
     for (int i = 0; i < layerCount; i++) {
       final (s, _, __) = boot.readObject(boot.r, 'CLayer');
-      layerSlots.add(s!);
+      // a null entry in the layer list has no slot, so it is no candidate
+      // (files saved through SketchUp's C API as 2019 or 2020 have one)
+      if (s != null) layerSlots.add(s);
     }
     boot.collectTrailingLayers(slotsOut: layerSlots, unmatchedClassRef: true);
     final (s, n, __) = boot.readObject(boot.r);
@@ -2400,6 +2403,9 @@ class Legacy {
       // that's a VFF/ZIP-only construct - so there is no known source for
       // the model's unit-system string here.
       ..units = null
+      // Scenes come from the scene list in the document tail (see
+      // legacy_pages.dart).
+      ..pages.addAll(readPageList(data, ar) ?? const [])
       ..layerColors.addAll(layerColors)
       ..layerHidden.addAll(layerHidden)
       ..layerIdToName.addAll(layerIdToName)

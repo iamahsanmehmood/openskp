@@ -20,8 +20,7 @@ cross-language porting backlog) and [`ROADMAP.md`](../ROADMAP.md).
 As of the 2026-09-18 synchronized release, all 5 languages are on
 **1.3.0** — but same version number does not mean identical capability.
 Python and C++ carry real, additional capability (Fragments reading,
-loose-edge/curve support, IFC curve annotations, legacy pages/scenes
-reading) that TypeScript, .NET, and Dart do not have yet - see
+loose-edge/curve support, IFC curve annotations) that TypeScript, .NET, and Dart do not have yet - see
 [§2](#2-feature-matrix) for exactly what differs. This was a deliberate
 choice, not an oversight: that work was real, tested, and ready, and
 holding it back purely to keep every language byte-for-byte equal would
@@ -65,7 +64,7 @@ released. ❌ = not yet ported to that language; see
 | Attribute dicts: multiple dictionaries per entity | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Attribute dicts surfaced in GLB/JSON metadata export (not just IFC Psets) | ✅ | n/a, not independently re-checked this cycle | n/a, not independently re-checked this cycle | n/a, not independently re-checked this cycle | ✅ |
 | VFF pages/scenes + dimension parsing | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Legacy (pre-2021) pages/scenes reading | ✅ | ❌ VFF only | ❌ VFF only | ❌ VFF only | ✅ |
+| Legacy (pre-2021) pages/scenes reading | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Construction lines/points reading | ✅ legacy + VFF | ✅ legacy + VFF | ✅ legacy + VFF | ✅ legacy + VFF | ✅ legacy + VFF |
 | VFF per-layer-hidden flag reading | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Per-edge/per-face layer, `Edge#curve` pointers, classic `CArcCurve` frames (legacy + VFF) | ✅ | ❌ | ❌ | ❌ | ❌ |
@@ -121,10 +120,9 @@ path's own output.
 
 | Item | Python has it via | Needs porting to |
 |:---|:---|:---|
-| `build_instanced_scene()` loose-edge curve support + public typed-model `Edge.layer`/`Edge.curve_id`/`Face.layer`/`loose_edge_runs()` | `_curves.py`, `instanced_scene.py`, `model.py` | TypeScript, .NET, Dart, C++ — none started |
+| `build_instanced_scene()` loose-edge curve support + public typed-model `Edge.layer`/`Face.layer`/`loose_edge_runs()` | `_curves.py`, `instanced_scene.py`, `model.py` | TypeScript, .NET, Dart, C++ — none started |
 | IFC export: loose-edge curve sets + analytic arcs as `IfcAnnotation`/`IfcIndexedPolyCurve`, plus the 4 IFC4 STEP-conformance fixes | `scene.py`, `export/ifc.py` | TypeScript, .NET, Dart, C++ — none started |
-| Legacy (pre-2021) pages/scenes reading | `legacy.py` (also in C++, released) | TypeScript, .NET, Dart |
-| Per-edge/per-face layer, `Edge#curve` pointers, classic `CArcCurve` frames | `legacy.py`/`_core.py` | TypeScript, .NET, Dart, C++ |
+| Per-edge/per-face layer | `legacy.py`/`_core.py` | TypeScript, .NET, Dart, C++ |
 | Attribute dicts: full 9-value-type decoding for VFF (2021+) format (Python: 7/9, others: string-only) — not independently re-verified this cycle for TS/.NET/Dart/C++, carried over from the prior version of this page rather than asserted fresh | `_core.py` | TypeScript, .NET, Dart, C++ — status needs a fresh check |
 
 All tracked in [issue #285](https://github.com/iamahsanmehmood/openskp/issues/285).

@@ -14,8 +14,7 @@ export interface SkpModel {
    * at the top level. Corresponds to .NET/Dart's `Root`/`root`. */
   root: Definition;
   layers: Layer[];
-  /** The file's saved scenes (VFF files; classic pre-2021 files import
-   * with none). */
+  /** The file's saved scenes, from VFF files and from classic pre-2021 files. */
   pages: Page[];
   /** Model-level linear dimensions with world-space endpoints (VFF
    * files). Legacy files surface text-only dimensions per definition

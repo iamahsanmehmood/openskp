@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — TypeScript, .NET, Dart, C++: scenes in classic files, with their cameras (#445)
+
+The Python reader (#454, #460) ported: `SkpModel.pages` is filled from a classic (pre-2021)
+file's scene list in these four ports as well, with each scene's name, camera (eye, target, up,
+field of view, projection, parallel height) and the layers it hides. They returned no scenes before
+(C++ found names and hidden layers only, with a narrow scan that still runs when the full reader
+gives up on a record). SketchUp 2015 to 2020 desktop saves (record schema 12 and 13) and files saved
+through SketchUp's C API as 2017 to 2020 (schema 15) are read; a scene that captures everything
+(flags `0x1FF`) is read to its last byte.
+
+Checked by comparing all four against the Python reader on 78 files (every fixture of the five
+ports, the older models, the SketchUp-library saves and the VFF scene files; 29 scenes in 11 files):
+name, eye, target, up, field of view, projection, parallel height and hidden layers are identical
+in every scene, and the files that fail to parse fail in all of them. The files saved through the C
+API as 2019 and 2020 surfaced a second thing: .NET and Dart crashed opening them at all, on the null
+entry such a file has in its layer list that #459 fixed in Python; TypeScript and C++ were not
+affected. Both are fixed here. New tests in each port read `gondola_v20.skp`'s scene and the four
+`sdk_saved_*` fixtures (three scenes, one without a camera, one hiding a layer, and a scene
+capturing every property followed by a plain one).
+
+Not ported: Python's narrow scan fallback (scene names and hidden layers only, for records the full
+reader gives up on) in TypeScript, .NET and Dart, which return no scenes there. This is the
+reading half of #445; writing scenes into a file (`SkpBuilder.add_scene`) stays Python-only.
+
 ### Fixed — TypeScript, .NET, Dart, C++: the real multi-version project reads in every legacy version (#442)
 
 On the real multi-version project from the #284 sweep (a 5 MB, 146-definition, textured model

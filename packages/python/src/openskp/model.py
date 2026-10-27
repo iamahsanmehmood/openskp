@@ -668,7 +668,7 @@ class SkpModel:
             TypeScript/.NET/Dart/C++'s ``root``/``Root``.
         layers: List of :class:`Layer` objects found in the file.
         pages: List of :class:`Page` objects — the file's saved scenes
-            (VFF files; classic pre-2021 files import with none).
+            (from VFF files and from classic pre-2021 files).
         dimensions: Model-level linear dimensions with world-space
             endpoints (VFF files). Legacy files surface text-only
             dimensions per definition instead (``Definition.dimensions``).

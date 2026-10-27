@@ -2014,7 +2014,9 @@ namespace OpenSkp
             for (int i = 0; i < layerCount; i++)
             {
                 var (s, _, _) = boot.ReadObject(boot.R, "CLayer");
-                layerSlots.Add(s!.Value);
+                // a null entry in the layer list has no slot, so it is no candidate (files saved
+                // through SketchUp's C API as 2019 or 2020 have one)
+                if (s != null) layerSlots.Add(s.Value);
             }
             boot.CollectTrailingLayers(layerSlots, null, true);
             var (anchorSlot, anchorName, _) = boot.ReadObject(boot.R);
@@ -2599,9 +2601,13 @@ namespace OpenSkp
                 options, SkpLogLevel.Information,
                 $"Parse complete: {defsDict.Count} defs ({sw.Elapsed.TotalSeconds:F2}s)");
 
+            // Scenes come from the scene list in the document tail (see LegacyPages).
+            var pages = LegacyPages.ReadPageList(data, ar) ?? new List<RawPage>();
+
             return new Core.RawParsed
             {
                 Version = version,
+                Pages = pages,
                 // Legacy (pre-2021 MFC) files carry no meta/meta.dat
                 // container - that's a VFF/ZIP-only construct - so there
                 // is no known source for the model's unit-system string

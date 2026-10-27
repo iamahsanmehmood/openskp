@@ -439,8 +439,7 @@ class SkpModel {
 
   final List<Layer> layers = [];
 
-  /// The file's saved scenes (VFF files; classic pre-2021 files import
-  /// with none).
+  /// The file's saved scenes, from VFF files and from classic pre-2021 files.
   final List<Page> pages = [];
 
   /// Model-level linear dimensions with world-space endpoints (VFF

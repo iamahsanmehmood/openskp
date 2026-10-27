@@ -554,8 +554,7 @@ class OPENSKP_EXPORT SkpModel {
   std::map<EntityId, Definition> definitions;
   /// Model layers.
   std::vector<Layer> layers;
-  /// The file's saved scenes (VFF files; classic pre-2021 files import
-  /// with none).
+  /// The file's saved scenes, from VFF files and from classic pre-2021 files.
   std::vector<Page> pages;
   /// The view the model was saved with (VFF `FA01` > `34BC`). SketchUp reopens
   /// the file at this view whichever scene is selected, even when the scene

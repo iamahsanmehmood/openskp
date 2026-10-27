@@ -15,6 +15,7 @@
  * that differ from the public 2017 format notes.
  */
 
+import { RawPage } from './pages-dimensions';
 import { ArcFrame, GeometryBuilderFace, GeometryBuilderInstance, ParsedDefinition } from './geometry';
 import { EdgeFlagStore } from './edge-flags';
 import { DefaultVertexStore, type VertexStore } from './vertex-store';
@@ -1915,6 +1916,316 @@ function walkModel(data: Uint8Array, ver: number, start: number, matCount: numbe
 
 /** Mirror of geometry.ts's GeometryBuilder (structurally compatible, kept
  * dependency-free from the VFF-specific TLV machinery). */
+// ── full scene records ───────────────────────────────────────────────────
+//
+// Ground truth, all read byte-exactly: the gondola_v20.skp fixture (SketchUp 2020, one scene,
+// flags 0x1FF); SketchUp's own 3D Warehouse model "Skill Builder: Creating Section Animations
+// with Scenes" in its SketchUp 2017 format (eight scenes, 0x7F) and SketchUp 2015 saves (nine
+// scenes, 0x7F) - not redistributable, so not committed; files written by openskp.create, which
+// SketchUp Free opens with working scenes; and files built and saved through SketchUp's C API as
+// 2017 to 2020 (schema 15), whose names, cameras and hidden layers SketchUp's own library reads
+// back identically.
+//
+// The scene list sits in the document tail as a u32 count right before the first record (which
+// declares the CViewPage class), then one record per scene, then a ref to the selected scene. A
+// record is: the class tag | a null attribute ref | (schema 13+, SketchUp 2016+, only) a pid | name
+// | description | u32 capture flags | the camera (CCamera, or null) | the thumbnail (CDib, or
+// null) | (schema 13) a byte | then one section per capture flag that is set:
+//
+//   0x02 style       the rendering options (length by file version, see RENDERING_OPTIONS_LEN)
+//                    + a CSkpStyle ref or object
+//   0x04 shadows     2 bytes (schema 13+: 3) + the shadow info
+//   0x08 axes        (schema 13+: a flag byte +) 110 bytes
+//   0x10 hidden      a byte, u32 n, n entity refs
+//   0x20 layers      u32 n, n refs to the layers (tags) the scene hides
+//   0x40 sections    u32 n, n section-plane refs
+//
+// | 22 bytes (transition and delay time, flags) | u32 n + an n-byte PNG.
+//
+// Schema 15 (a file saved through the C API as 2017 to 2020) differs: flag 0x01 is the camera,
+// which is only there when the flag is set, with no CDib tag, no byte after it and no thumbnail;
+// the rendering options are 3 bytes longer; the style options have two more value types
+// (3: 2 bytes, 5: 4 bytes); and the trailer is 21 bytes with no PNG after it.
+//
+// A record this reader can't fully read, or flags outside 0x1FF, make readPageList give up (it
+// returns null). Python then falls back to a narrow scan of the file tail that finds scene names
+// and hidden layers only; that fallback is not ported, so these readers return no scenes there.
+const PAGE_DECL_RE = [0xff, 0xff, null, 0x00, 0x09, 0x00, 0x43, 0x56, 0x69, 0x65, 0x77, 0x50, 0x61, 0x67, 0x65];
+const PAGE_KNOWN_FLAGS = 0x1ff;
+// The rendering options' length by SketchUp major version, measured on the model-level copy of the
+// same block in every fixture from 2014 to 2020 (and in the 2020 scene); other versions aren't
+// known, so give up there.
+const RENDERING_OPTIONS_LEN: Record<number, number> = { 14: 206, 15: 206, 16: 206, 17: 206, 18: 211, 19: 212, 20: 213 };
+const PAGE_AXES_LEN = 110;
+const PAGE_TRAILER_LEN = 22;
+const SHADOW_INFO_FIXED_LEN = 60; // after the city and country strings
+// CSkpStyle option values: type tag -> byte size
+const STYLE_VALUE_SIZES: Record<number, number> = { 1: 1, 3: 2, 4: 4, 5: 4, 6: 4, 7: 8 };
+
+/** The first CViewPage declaration at or after `from`: `ff ff <schema 12|13|15> 00 09 00 CViewPage`. */
+function findPageDecl(data: Uint8Array, from: number): number {
+  const n = PAGE_DECL_RE.length;
+  for (let i = from; i + n <= data.length; i++) {
+    let ok = true;
+    for (let j = 0; j < n; j++) {
+      const want = PAGE_DECL_RE[j];
+      if (want === null) {
+        const v = data[i + j];
+        if (v !== 0x0c && v !== 0x0d && v !== 0x0f) {
+          ok = false;
+          break;
+        }
+      } else if (data[i + j] !== want) {
+        ok = false;
+        break;
+      }
+    }
+    if (ok) return i;
+  }
+  return -1;
+}
+
+type PageTagKind = 'null' | 'decl' | 'class' | 'obj';
+
+/** One archive tag, with the 0x7FFF escape to 32 bits resolved. */
+function readTag(r: R): [PageTagKind, number] {
+  const v = r.u16();
+  if (v === 0) return ['null', 0];
+  if (v === 0xffff) return ['decl', 0];
+  if (v === 0x7fff) {
+    const w = r.u32();
+    return (w & 0x80000000) !== 0 ? ['class', w & 0x7fffffff] : ['obj', w];
+  }
+  return (v & 0x8000) !== 0 ? ['class', v & 0x7fff] : ['obj', v];
+}
+
+function popcount8(mask: number): number {
+  let n = 0;
+  for (let bit = 0; bit < 8; bit++) if (mask & (1 << bit)) n++;
+  return n;
+}
+
+function skipPid(r: R): void {
+  r.raw(popcount8(r.u8()));
+}
+
+/** The classes the scene records declare or refer to: the schema each was declared with and, once
+ * seen, the slot its class-refs use - every class-ref to one class must carry the same slot, which
+ * catches a record read from the wrong offset early. */
+class PageClasses {
+  // CCamera and CDib are declared in the document prefix; the scene records only refer to them, at
+  // the schemas every v6+ file uses.
+  schema = new Map<string, number>([
+    ['CCamera', 5],
+    ['CDib', 3],
+  ]);
+  slot = new Map<string, number>();
+
+  /** After a 'decl' or 'class' tag: the declaration's header (if any); returns the schema the
+   * object was written with. */
+  object(r: R, kind: PageTagKind, slot: number, name: string): number {
+    if (kind === 'decl') {
+      const schema = r.u16();
+      const n = r.u16();
+      const got = new TextDecoder('ascii').decode(r.raw(n));
+      if (n !== name.length || got !== name) {
+        throw new LegacyParseError(`expected a ${name} declaration ${r.ctx()}`);
+      }
+      this.schema.set(name, schema);
+    } else {
+      const have = this.slot.get(name);
+      if (have === undefined) this.slot.set(name, slot);
+      else if (have !== slot) throw new LegacyParseError(`${name} class-ref to another slot ${r.ctx()}`);
+    }
+    const schema = this.schema.get(name);
+    if (schema === undefined) throw new LegacyParseError(`${name} object of an unknown schema ${r.ctx()}`);
+    return schema;
+  }
+}
+
+interface PageCamera {
+  eye: [number, number, number];
+  target: [number, number, number];
+  up: [number, number, number];
+  fov: number;
+  parallel: boolean;
+  orthoHeight: number;
+}
+
+function readPageCamera(r: R): PageCamera {
+  const eye = r.f64s(3) as [number, number, number];
+  const target = r.f64s(3) as [number, number, number];
+  const up = r.f64s(3) as [number, number, number];
+  r.f64s(2); // constants 1.0, 1000.0
+  const perspective = r.u8();
+  const fov = r.f64();
+  const orthoHeight = r.f64();
+  r.raw(137 - 105);
+  r.u16();
+  r.utf16();
+  r.raw(33);
+  return { eye, target, up, fov, parallel: perspective === 0, orthoHeight };
+}
+
+/** A CSkpStyle object's body: no attributes, a pid (schema 2+), GUID, a string, u32, name,
+ * description, then its options - each a u32 key and a u32 count of (u32 type, value) pairs. */
+function skipPageStyle(r: R, schema: number): void {
+  if (r.u16() !== 0) throw new LegacyParseError(`style with attributes ${r.ctx()}`);
+  if (schema >= 2) skipPid(r);
+  r.raw(16);
+  r.utf16();
+  r.u32();
+  r.utf16();
+  r.utf16();
+  const n = r.u32();
+  for (let i = 0; i < n; i++) {
+    r.u32();
+    const m = r.u32();
+    for (let j = 0; j < m; j++) {
+      const size = STYLE_VALUE_SIZES[r.u32()];
+      if (size === undefined) throw new LegacyParseError(`unknown style value type ${r.ctx()}`);
+      r.raw(size);
+    }
+  }
+}
+
+function readPageRefs(r: R, n: number): number[] {
+  if (n > Math.floor((r.data.length - r.pos) / 2)) {
+    throw new LegacyParseError(`implausible ref count ${n} ${r.ctx()}`);
+  }
+  const refs: number[] = [];
+  for (let i = 0; i < n; i++) {
+    const [kind, v] = readTag(r);
+    if (kind !== 'obj') throw new LegacyParseError(`expected a back-ref ${r.ctx()}`);
+    refs.push(v);
+  }
+  return refs;
+}
+
+function readPageRecord(ar: Archive, r: R, classes: PageClasses): RawPage {
+  let [kind, slot] = readTag(r);
+  if (kind !== 'decl' && kind !== 'class') throw new LegacyParseError(`expected a CViewPage record ${r.ctx()}`);
+  const schema = classes.object(r, kind, slot, 'CViewPage');
+  if (r.u16() !== 0) throw new LegacyParseError(`scene with attributes ${r.ctx()}`);
+  if (schema >= 13) skipPid(r);
+  const page: RawPage = {
+    name: r.utf16(),
+    eye: null,
+    target: null,
+    up: null,
+    fov: 35.0,
+    parallel: false,
+    orthoHeight: 0.0,
+    hiddenLayerIds: [],
+  };
+  r.utf16(); // description
+  const flags = r.u32();
+  if (flags & ~PAGE_KNOWN_FLAGS) throw new LegacyParseError(`scene capture flags 0x${flags.toString(16)} ${r.ctx()}`);
+  const takeCamera = (): void => {
+    [kind, slot] = readTag(r);
+    if (kind === 'decl' || kind === 'class') {
+      classes.object(r, kind, slot, 'CCamera');
+      const c = readPageCamera(r);
+      page.eye = c.eye;
+      page.target = c.target;
+      page.up = c.up;
+      page.fov = c.fov;
+      page.parallel = c.parallel;
+      page.orthoHeight = c.orthoHeight;
+    }
+  };
+  if (schema >= 15) {
+    // saved through SketchUp's C API: the camera is there when its flag is, and there is no
+    // thumbnail
+    if (flags & 0x01) {
+      [kind, slot] = readTag(r);
+      if (kind !== 'decl' && kind !== 'class') throw new LegacyParseError(`expected a camera ${r.ctx()}`);
+      classes.object(r, kind, slot, 'CCamera');
+      const c = readPageCamera(r);
+      page.eye = c.eye;
+      page.target = c.target;
+      page.up = c.up;
+      page.fov = c.fov;
+      page.parallel = c.parallel;
+      page.orthoHeight = c.orthoHeight;
+    }
+  } else {
+    takeCamera();
+    [kind, slot] = readTag(r);
+    if (kind === 'decl' || kind === 'class') {
+      classes.object(r, kind, slot, 'CDib');
+      readDib(ar, r);
+    }
+    if (schema >= 13) r.u8();
+  }
+  if (flags & 0x02) {
+    const base = RENDERING_OPTIONS_LEN[ar.ver];
+    if (base === undefined) throw new LegacyParseError(`rendering options of a v${ar.ver} scene`);
+    r.raw(base + (schema >= 15 ? 3 : 0));
+    [kind, slot] = readTag(r);
+    if (kind === 'decl' || kind === 'class') skipPageStyle(r, classes.object(r, kind, slot, 'CSkpStyle'));
+  }
+  if (flags & 0x04) {
+    r.raw(schema >= 13 ? 3 : 2);
+    r.u32(); // time
+    r.u8();
+    r.utf16(); // city
+    r.utf16(); // country
+    r.raw(SHADOW_INFO_FIXED_LEN);
+  }
+  if (flags & 0x08) r.raw(PAGE_AXES_LEN + (schema >= 13 ? 1 : 0));
+  if (flags & 0x10) {
+    r.u8();
+    readPageRefs(r, r.u32());
+  }
+  if (flags & 0x20) page.hiddenLayerIds = readPageRefs(r, r.u32());
+  if (flags & 0x40) readPageRefs(r, r.u32());
+  if (schema >= 15) {
+    r.raw(PAGE_TRAILER_LEN - 1);
+    return page;
+  }
+  r.raw(PAGE_TRAILER_LEN);
+  const png = r.u32();
+  if (png > r.data.length - r.pos) throw new LegacyParseError(`implausible thumbnail length ${png} ${r.ctx()}`);
+  r.raw(png);
+  return page;
+}
+
+/** Every scene, with its camera and hidden layers, read as a sequence from the scene list in the
+ * file tail. `null` when there is a scene list this reader can't fully read; `[]` when there is
+ * none. */
+function readPageList(data: Uint8Array, ar: Archive): RawPage[] | null {
+  const start = findPageDecl(data, ar.r.pos);
+  if (start < 0) {
+    // a scene list in a schema this reader doesn't know
+    return findBytes(data, new TextEncoder().encode('CViewPage'), ar.r.pos, data.length) >= 0 ? null : [];
+  }
+  try {
+    const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+    const count = view.getUint32(start - 4, true);
+    if (count < 1 || count > 10000) throw new LegacyParseError(`implausible scene count ${count}`);
+    const r = new R(data, start);
+    const classes = new PageClasses();
+    const pages: RawPage[] = [];
+    for (let i = 0; i < count; i++) pages.push(readPageRecord(ar, r, classes));
+    // the list ends with a ref to the selected scene (or a null ref)
+    const [kind] = readTag(r);
+    if (kind !== 'obj' && kind !== 'null') {
+      throw new LegacyParseError(`no selected-scene ref after the scenes ${r.ctx()}`);
+    }
+    for (const page of pages) {
+      page.hiddenLayerIds = page.hiddenLayerIds.filter((id) => {
+        const ent = ar.slots.get(id);
+        return ent !== undefined && ent[0] === 'obj' && ent[1] === 'CLayer';
+      });
+    }
+    return pages;
+  } catch (e) {
+    if (e instanceof LegacyParseError || e instanceof RangeError) return null;
+    throw e;
+  }
+}
+
 class LegacyBuilder {
   vertices: VertexStore = new DefaultVertexStore();
   edges: EdgeStore = new DefaultEdgeStore();
@@ -2233,6 +2544,8 @@ export function parseLegacyToRaw(data: Uint8Array, options?: ParseOptions): Pars
     builder: rootBuilder,
   });
 
+  const pages = readPageList(data, ar) ?? [];
+
   emitLog(
     options,
     'info',
@@ -2248,11 +2561,11 @@ export function parseLegacyToRaw(data: Uint8Array, options?: ParseOptions): Pars
     layerColors,
     layerHidden,
     layerIdToName,
-    // Classic (pre-2021) files carry no equivalent VFF entity families -
-    // the legacy CArchive walker never surfaces scenes or model-level
-    // linear dimensions (legacy files still surface text-only dimensions
-    // per definition, via each entity list's own CDimensionLinear reads).
-    pages: [],
+    // Scenes come from the scene list in the document tail (see readPageList).
+    // Classic files carry no model-level linear dimensions - they surface as
+    // text-only dimensions per definition, via each entity list's own
+    // CDimensionLinear reads.
+    pages,
     dimensions: [],
     materialIdToName,
     materialsMap,
