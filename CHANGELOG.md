@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — TypeScript, .NET, Dart, C++: the real multi-version project reads in every legacy version (#442)
+
+On the real multi-version project from the #284 sweep (a 5 MB, 146-definition, textured model
+saved from SketchUp V3 through 2025) these four readers failed every legacy save. Two causes,
+both already handled in Python:
+
+- A `CText` is found by an 11-byte block just before its string, `01 00 00 00 ?? 00 <arrow type>
+  00 00 00 01`, and the four readers required arrow type 3. The type is 0 to 8 (a dot, a closed
+  or open arrow, a slash, none); one text with another stopped the walk (`text delimiter not
+  found` on V4 to 2016).
+- The text font (`CSkFont`) reads its pid as a mask byte plus the bytes the mask declares; the four
+  readers read only the mask byte. SketchUp 2017 to 2020 write two pid bytes once a model has more
+  than 255 entities, which threw every later field off (`expected a string record`).
+
+All four now parse every save of the project from V4 through 2020, 2021 and 2025, with
+identical totals: 32,982 vertices, 40,925 edges, 9,652 faces and 150 instances in each,
+the same as the 2021 and 2025 saves. V3 stays a failure in every reader (#284), and V5 is a
+corrupted 0-byte save. A new fixture, `legacy_text_arrows_2017.skp`, covers both causes in
+every port (three leader texts with arrow types 1, 2 and 4 and a two-byte font pid, from
+`openskp.create` plus two documented byte edits; SketchUp 2025 opens it and reports the same
+texts and arrow types), and its test fails on the old code (in TypeScript the old code did not
+even raise: the file parsed with no texts at all).
+
 ### Added — Python: `Definition.arcs`, the analytic arc of every arc and circle (#462)
 
 A curve SketchUp drew as an arc or a circle is a run of straight edges and
@@ -195,12 +218,8 @@ and against a richer model with 47 definitions, 14 layers
 and 13 dimensions saved at V4 and V5; the real V4 sample parses to its cube
 (8 vertices, 12 edges, 6 faces) instead of nothing.
 
-Not covered, and tracked in #442: on the real multi-version project from the
-original sweep, these four readers still fail every legacy version (they only
-read `CText` entities with one arrow type, and stop at a 2017+ record Python
-reads), so the V4 and 2019 fixes could not be confirmed on it directly. With
-that one comparison relaxed locally, the TypeScript reader's V4 parse of the
-real project is identical to its V6 parse.
+Confirmed on the real multi-version project since #442: the four readers now
+parse its V4 and 2019 saves with the same totals as its V6 and 2018 saves.
 
 ### Fixed — .NET: OBJ, MTL, ASCII PLY and ASCII STL exports use LF line endings on every platform (#424, #434)
 

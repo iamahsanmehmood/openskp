@@ -971,7 +971,14 @@ struct Archive {
       }
     } else if (n == "CSkFont") {
       object("CAttributeContainer");
-      if (pid) r.u8();
+      if (pid) {
+        // the mask byte says how many pid bytes follow (SketchUp 2017+ writes two or more here)
+        const int mask = r.u8();
+        int n = 0;
+        for (int bit = 0; bit < 8; ++bit)
+          if (mask & (1 << bit)) ++n;
+        r.raw(n);
+      }
       r.utf16();
       r.raw(15);
     } else if (n == "CDimensionLinear") {
@@ -1004,7 +1011,7 @@ struct Archive {
       size_t found = std::string::npos;
       for (size_t q = r.p; q + 14 <= std::min(r.d.size(), r.p + 512); ++q)
         if (r.d[q] == 1 && r.d[q + 1] == 0 && r.d[q + 2] == 0 && r.d[q + 3] == 0 &&
-            r.d[q + 6] == 3 && r.d[q + 7] == 0 && r.d[q + 8] == 0 && r.d[q + 9] == 0 &&
+            r.d[q + 6] <= 8 && r.d[q + 7] == 0 && r.d[q + 8] == 0 && r.d[q + 9] == 0 &&
             r.d[q + 10] == 1 && r.d[q + 11] == 255 && r.d[q + 12] == 254 && r.d[q + 13] == 255) {
           found = q + 11;
           break;

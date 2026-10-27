@@ -1389,7 +1389,14 @@ class LegacyReaders {
   static Object readSkFont(Archive ar, LR r) {
     ar.readObject(r, 'CAttributeContainer');
     if (ar.hasPid) {
-      r.u8();
+      // the mask byte says how many pid bytes follow (SketchUp 2017+ writes
+      // two or more here)
+      final mask = r.u8();
+      var n = 0;
+      for (var bit = 0; bit < 8; bit++) {
+        if ((mask & (1 << bit)) != 0) n++;
+      }
+      r.raw(n);
     }
     r.utf16();
     r.raw(15);
@@ -1480,7 +1487,7 @@ class LegacyReaders {
           blk[1] == 0x00 &&
           blk[2] == 0x00 &&
           blk[3] == 0x00 &&
-          blk[6] == 0x03 &&
+          blk[6] <= 8 &&
           blk[7] == 0x00 &&
           blk[8] == 0x00 &&
           blk[9] == 0x00 &&

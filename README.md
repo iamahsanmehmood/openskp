@@ -163,10 +163,10 @@ across its save history) found:
 
 | Result | Versions |
 |:---|:---|
-| ✅ Parse, build, and export cleanly — **Python reader** | 2014, 2015, 2016, 2017, 2018, 2020, 2021, 2025, **V4**, **V6**, **V7, V8, 2013**, **2019** (fixed in [#385](https://github.com/iamahsanmehmood/openskp/pull/385), [#310](https://github.com/iamahsanmehmood/openskp/pull/310) and [#440](https://github.com/iamahsanmehmood/openskp/pull/440)) |
-| ❌ Fail — root causes tracked in [issue #284](https://github.com/iamahsanmehmood/openskp/issues/284) | V3 in every reader (synthetic V3 files parse); and, in the TypeScript, .NET, Dart and C++ readers, every legacy version of this real project (see below) |
+| ✅ Parse, build, and export cleanly — **Python reader** (TypeScript, .NET, Dart and C++ parse these saves too, since [#442](https://github.com/iamahsanmehmood/openskp/issues/442), with identical totals) | 2014, 2015, 2016, 2017, 2018, 2020, 2021, 2025, **V4**, **V6**, **V7, V8, 2013**, **2019** (fixed in [#385](https://github.com/iamahsanmehmood/openskp/pull/385), [#310](https://github.com/iamahsanmehmood/openskp/pull/310) and [#440](https://github.com/iamahsanmehmood/openskp/pull/440)) |
+| ❌ Fail — root causes tracked in [issue #284](https://github.com/iamahsanmehmood/openskp/issues/284) | V3 in every reader (synthetic V3 files parse); V5 is a corrupted, 0-byte save |
 
-That sweep was run with the Python reader. The other four readers parse the SketchUp-written synthetic fixtures (V3, V4, V5, V6, V7, 2014, 2019), but stop on the real project's text entities: [#442](https://github.com/iamahsanmehmood/openskp/issues/442).
+That sweep was run with the Python reader. Since [#442](https://github.com/iamahsanmehmood/openskp/issues/442) the other four readers parse every legacy save of the same project as well (all but V3 and the corrupted V5), with identical vertex, edge, face and instance totals - 32,982 / 40,925 / 9,652 / 150 - on each, equal to its 2021 and 2025 saves; the build and export checks above were run with Python only.
 
 Full per-version error table and investigation notes: [docs/LANGUAGE_PARITY.md § 4](docs/LANGUAGE_PARITY.md#4-real-sketchup-file-version-support).
 

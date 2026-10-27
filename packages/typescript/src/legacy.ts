@@ -1236,7 +1236,11 @@ function readSectionPlane(ar: Archive, r: R): any {
 function readSkFont(ar: Archive, r: R): any {
   ar.readObject(r, 'CAttributeContainer');
   if (ar.hasPid) {
-    r.u8();
+    // the mask byte says how many pid bytes follow (SketchUp 2017+ writes two or more here)
+    const mask = r.u8();
+    let n = 0;
+    for (let bit = 0; bit < 8; bit++) if (mask & (1 << bit)) n++;
+    r.raw(n);
   }
   r.utf16();
   r.raw(15);
@@ -1282,7 +1286,8 @@ function readText(ar: Archive, r: R): any {
   const db = drawbase(ar, r);
   ar.readObject(r, 'CSkFont');
   // variable-length variant middle, delimited by an 11-byte block
-  // `01 00 00 00 ?? 00 03 00 00 00 01` right before the text string
+  // `01 00 00 00 ?? 00 <arrow type> 00 00 00 01` right before the text string;
+  // the arrow type is 0-8 (Python's reader accepts the same range)
   let p = r.pos;
   let idx: number;
   while (true) {
@@ -1293,7 +1298,7 @@ function readText(ar: Archive, r: R): any {
     const blk = r.data.subarray(idx - 11, idx);
     if (
       blk[0] === 0x01 && blk[1] === 0x00 && blk[2] === 0x00 && blk[3] === 0x00 &&
-      blk[6] === 0x03 && blk[7] === 0x00 && blk[8] === 0x00 && blk[9] === 0x00 &&
+      blk[6] <= 8 && blk[7] === 0x00 && blk[8] === 0x00 && blk[9] === 0x00 &&
       blk[10] === 1
     ) {
       break;

@@ -1407,7 +1407,11 @@ namespace OpenSkp
             ar.ReadObject(r, "CAttributeContainer");
             if (ar.HasPid)
             {
-                r.U8();
+                // the mask byte says how many pid bytes follow (SketchUp 2017+ writes two or more here)
+                int mask = r.U8();
+                int n = 0;
+                for (int bit = 0; bit < 8; bit++) if ((mask & (1 << bit)) != 0) n++;
+                r.Raw(n);
             }
             r.Utf16();
             r.Raw(15);
@@ -1515,7 +1519,7 @@ namespace OpenSkp
                 var blk = new byte[11];
                 Array.Copy(r.Data, idx - 11, blk, 0, 11);
                 if (blk[0] == 0x01 && blk[1] == 0x00 && blk[2] == 0x00 && blk[3] == 0x00
-                    && blk[6] == 0x03 && blk[7] == 0x00 && blk[8] == 0x00 && blk[9] == 0x00
+                    && blk[6] <= 8 && blk[7] == 0x00 && blk[8] == 0x00 && blk[9] == 0x00
                     && blk[10] == 1)
                 {
                     break;
