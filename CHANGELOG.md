@@ -38,6 +38,19 @@ takes a count of 1 for its end marker, so a scene hiding one layer came back
 with none. A record the new reader can't fully read (for example one with an
 attribute dictionary, or capture flags beyond `0x1FF`) falls back to the
 narrow scan.
+### Fixed — all five ports: a VFF (2021+) scene that doesn't save its camera is kept (#447)
+
+SketchUp lets a scene leave "Camera Location" unticked. Such a scene saves no
+camera, but it still has a name and the layers it hides. All five ports dropped
+a scene unless they had found a camera for it, so those scenes disappeared (on
+a real 2024 model, 13 of 35). The Python port went further: a scene with no
+camera record at all made `parse()` raise a `TypeError`. A scene without a
+camera now comes back with its name and hidden layers and `eye`, `target` and
+`up` unset (`None`, `null`, or an empty optional). Fixture:
+`scene_without_camera_2021.skp`, three scenes built through SketchUp's own
+library (one with a camera, one without that hides a layer, one plain), which
+SketchUp reads back as the same three. Reported by @JFrancu.
+
 ### Added — TypeScript: `SceneOptions.frontSideOnly`
 
 A face whose front and back resolve to different colours is emitted as a front
@@ -64,6 +77,16 @@ translation first, so a composed matrix always has index 12 equal to 1.
 for the same file saved in the SketchUp 6 and 2021 formats, and against 126
 local legacy and VFF files, none of which carries a scale term other than 1:
 their scene output is unchanged.
+
+### Fixed — Python: a file saved through SketchUp's C API as 2019 or 2020 parses
+
+Such a file has a null entry in its layer list. The probe that works out the
+archive's slot base subtracted from that entry's missing slot and raised
+`TypeError: unsupported operand type(s) for -: 'NoneType' and 'int'`, so
+`parse()` failed on every one of them that had a layer besides the default. The
+null entry is now skipped. The TypeScript port already read these files.
+Fixtures: `sdk_saved_2019.skp` and `sdk_saved_2020.skp` (a layer, a face and
+three scenes, built and saved through the installed SketchUp library).
 
 ### Fixed — TypeScript, .NET, Dart, C++: legacy SketchUp 4, 5 and 2019 files parse correctly, and a 2020 model with no definitions keeps its root entities (#284)
 

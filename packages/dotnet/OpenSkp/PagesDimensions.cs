@@ -354,7 +354,10 @@ namespace OpenSkp
                             off += 1 + ln;
                         }
 
-                        if (page.Eye != null && page.Target != null) pages.Add(page);
+                        // A scene that doesn't save its camera ("Camera Location" unticked)
+                        // is still a scene: it keeps its name and hidden layers, with
+                        // Eye/Target/Up null.
+                        pages.Add(page);
                     }
                 }
             }
