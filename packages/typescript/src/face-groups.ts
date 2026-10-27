@@ -54,6 +54,9 @@ export interface FaceGroupContext {
    * {@link SceneOptions.respectEdgeVisibility}). Off by default, matching
    * the behaviour every existing consumer already relies on. */
   respectVisibility?: boolean;
+  /** Emit each face once with its front material (see
+   * {@link SceneOptions.frontSideOnly}). */
+  frontSideOnly?: boolean;
 }
 
 /** A corner (vertex of one face) on a smoothed surface: the surface it
@@ -157,7 +160,8 @@ function smoothCornerNormals(
  * A face whose front/back resolve to the SAME colour is emitted once with
  * `doubleSided` set; a face whose sides genuinely differ is emitted as two
  * single-sided triangle sets (one normal-wound front, one reverse-wound
- * back) so each side keeps its own colour.
+ * back) so each side keeps its own colour - unless `ctx.frontSideOnly`,
+ * which always takes the first branch with the front material.
  *
  * Vertices on a surface SketchUp smooths take that surface's normal, so
  * curved geometry shades smoothly instead of faceted.
@@ -314,7 +318,7 @@ export function buildLocalFaceGroups(
 
     const sameColor =
       frontColor.r === backColor.r && frontColor.g === backColor.g && frontColor.b === backColor.b;
-    if (sameColor) {
+    if (sameColor || ctx.frontSideOnly) {
       addSide(triangles, fn, frontColor, true, false, frontMat, uvTransform, xr, yr, fId);
     } else {
       addSide(triangles, fn, frontColor, false, false, frontMat, uvTransform, xr, yr, fId);

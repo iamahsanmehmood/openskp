@@ -14,6 +14,7 @@ add_executable(
   ifc_export_test.cpp
   instanced_glb_test.cpp
   instance_scale_term_test.cpp
+  scene_without_camera_test.cpp
   instanced_scene_test.cpp
   json_export_test.cpp
   layer_hidden_test.cpp

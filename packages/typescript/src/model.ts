@@ -434,6 +434,19 @@ export interface SceneOptions {
    * fact, and some consumers legitimately want every face regardless.
    */
   respectEdgeVisibility?: boolean;
+  /**
+   * Emit every face once, double-sided with its FRONT material, instead of
+   * adding a reversed back-side copy when the face's two sides resolve to
+   * different colours.
+   *
+   * For consumers that treat a face as one unoriented surface - modelers,
+   * CAD and editing tools that rebuild topology from the mesh - where the
+   * coincident reversed copy reads as a second face: it makes the shared
+   * edges non-manifold and z-fights with the front. Back-side paint is lost.
+   *
+   * Off by default: a viewer wants each side's own colour.
+   */
+  frontSideOnly?: boolean;
 }
 
 /**
@@ -903,6 +916,7 @@ export function buildSceneFromParsed(
         fallbackLayerColor: getLayerColor(parentLayer),
         definitionId: defId,
         respectVisibility: options?.respectEdgeVisibility,
+        frontSideOnly: options?.frontSideOnly,
       });
 
       for (const group of faceGroups.values()) {
