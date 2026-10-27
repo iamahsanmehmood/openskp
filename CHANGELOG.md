@@ -18,8 +18,8 @@ both already handled in Python:
   or open arrow, a slash, none); one text with another stopped the walk (`text delimiter not
   found` on V4 to 2016).
 - The text font (`CSkFont`) reads its pid as a mask byte plus the bytes the mask declares; the four
-  readers read only the mask byte. SketchUp 2017 to 2020 write two pid bytes once a model has more
-  than 255 entities, which threw every later field off (`expected a string record`).
+  readers read only the mask byte. A pid above 255 takes two bytes, and the real project's 2017 to
+  2020 saves have one on the font, which threw every later field off (`expected a string record`).
 
 All four now parse every save of the project from V4 through 2020, 2021 and 2025, with
 identical totals: 32,982 vertices, 40,925 edges, 9,652 faces and 150 instances in each,

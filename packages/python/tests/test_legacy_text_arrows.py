@@ -2,8 +2,7 @@
 
 Fixture ``legacy_text_arrows_2017.skp``: three leader texts written by ``openskp.create`` with
 arrow types 1 (dot), 2 (closed arrow) and 4 (open arrow) instead of the writer's 3, and a text
-font whose pid is two bytes, as in the SketchUp 2017 to 2020 saves of a project with more than
-255 entities. SketchUp 2025 opens it and reports the same three texts with arrow types 1, 2 and
+font whose pid is two bytes, as in the real project's SketchUp 2017 to 2020 saves (a pid above 255 takes two bytes). SketchUp 2025 opens it and reports the same three texts with arrow types 1, 2 and
 4. Before #442 the TypeScript, .NET, Dart and C++ readers stopped on the first text. No private
 content.
 """
