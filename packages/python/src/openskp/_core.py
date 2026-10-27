@@ -725,6 +725,11 @@ class _GeometryBuilder:
         # SourceCity_Facade on 36/34324 (10 curves). Present means the
         # grouping is authoritative - no chaining heuristic needed.
         self.edge_curves = {}
+        # curve id -> the analytic frame of a Curve that is one arc
+        # (center, normal, x_axis, y_axis, start_angle, end_angle), the same
+        # shape the classic reader keeps. Only curves that are arcs have an
+        # entry; a polyline curve has none.
+        self.arc_curves = {}
         self.faces = {}
         self.instances = []
         self.section_planes = []
@@ -1391,6 +1396,23 @@ def _extract_geometry_nodes(elements, builder):
                 builder.construction_points.append({
                     'position': (read_f64(p, 0), read_f64(p, 8), read_f64(p, 16)),
                 })
+
+        elif tag == '2C4C':
+            # A Curve (384A: its entity id and edge count) and, when the curve
+            # is an arc, 2D4C: 16 doubles - center, normal, the plane
+            # constant, x axis, y axis, radius, start angle, end angle.
+            # Checked against SketchUp 2025's own SUArcCurve getters on a
+            # loose arc, a circle and an arc, the latter two bounding a face.
+            curve = _direct_child(el.children, '384A')
+            arc = _direct_child(el.children, '2D4C')
+            if curve is not None and arc is not None and len(arc.payload) == 128:
+                curve_id = _entity_id(curve)
+                if curve_id is not None:
+                    v = struct.unpack('<16d', arc.payload)
+                    builder.arc_curves[curve_id] = {
+                        'center': v[0:3], 'normal': v[3:6],
+                        'x_axis': v[7:10], 'y_axis': v[10:13],
+                        'start_angle': v[14], 'end_angle': v[15]}
 
         elif el.children:
             _extract_geometry_nodes(el.children, builder)

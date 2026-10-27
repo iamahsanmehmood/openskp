@@ -32,7 +32,7 @@ from .instanced_scene import (
     LocalPrimitive,
     SceneBounds,
 )
-from .model import SkpFile, SkpModel, loose_edge_runs
+from .model import ArcCurve, SkpFile, SkpModel, loose_edge_runs
 from .scene import Scene, InstanceNode, MeshMetadata, GlbPrimitive, SceneTexture
 
 try:
@@ -42,6 +42,7 @@ except PackageNotFoundError:
 __all__: list[str] = [
     "SkpFile",
     "SkpModel",
+    "ArcCurve",
     "Scene",
     "InstanceNode",
     "MeshMetadata",

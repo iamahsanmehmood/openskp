@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import contextlib
 import gc
+import math
 import pathlib
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple
@@ -487,6 +488,50 @@ class ConstructionLine:
 
 
 @dataclass
+class ArcCurve:
+    """The analytic arc behind a curve: SketchUp's own ``ArcCurve``.
+
+    A curve that SketchUp drew as an arc or a circle is a run of straight
+    edges (:attr:`Edge.curve_id`) *and* this exact description. The arc is
+    the set of points ``center + cos(t) * x_axis + sin(t) * y_axis`` for ``t``
+    from :attr:`start_angle` to :attr:`end_angle`. For a circle
+    ``x_axis`` and ``y_axis`` are perpendicular and both of length
+    :attr:`radius`; an arc that has been scaled non-uniformly keeps its arc
+    identity and stores an affine image of a circle, where they are not (then
+    :attr:`radius` is the length of ``x_axis`` only). Arcs and circles that
+    bound a face are arcs too. Lengths are in the model's units (inches), in
+    the definition's local space, like :attr:`Vertex.x`.
+
+    Attributes:
+        center: ``(x, y, z)`` of the arc's centre.
+        normal: Unit normal of the arc's plane.
+        x_axis: Vector from the centre to the arc's start (length = radius).
+        y_axis: ``normal x x_axis``.
+        start_angle: Start parameter in radians.
+        end_angle: End parameter in radians. A full circle has
+            ``end_angle == start_angle`` in a classic (pre-2021) file and
+            ``start_angle + 2 pi`` in a 2021+ file; :attr:`is_full_circle`
+            covers both.
+    """
+
+    center: Tuple[float, float, float]
+    normal: Tuple[float, float, float]
+    x_axis: Tuple[float, float, float]
+    y_axis: Tuple[float, float, float]
+    start_angle: float
+    end_angle: float
+
+    @property
+    def radius(self) -> float:
+        return math.sqrt(sum(c * c for c in self.x_axis))
+
+    @property
+    def is_full_circle(self) -> bool:
+        sweep = (self.end_angle - self.start_angle) % (2.0 * math.pi)
+        return min(sweep, 2.0 * math.pi - sweep) < 1e-9
+
+
+@dataclass
 class ConstructionPoint:
     """A construction/guide point (SketchUp's Construction Point tool).
 
@@ -513,6 +558,9 @@ class Definition:
             :class:`ConstructionLine`.
         construction_points: Construction/guide points - see
             :class:`ConstructionPoint`.
+        arcs: The analytic arc of every curve that is one, keyed by curve id
+            - the :attr:`Edge.curve_id` of the edges that form it. A curve
+            that is not an arc (a freehand or polygon curve) has no entry.
         always_faces_camera: SketchUp's "always face camera" component
             behavior (2D people / tree cut-outs that rotate to face the
             viewer). Consumers typically render such instances as
@@ -536,6 +584,7 @@ class Definition:
     dimensions: List[Dimension] = field(default_factory=list)
     construction_lines: List[ConstructionLine] = field(default_factory=list)
     construction_points: List[ConstructionPoint] = field(default_factory=list)
+    arcs: Dict[int, ArcCurve] = field(default_factory=dict)
     always_faces_camera: bool = False
     shadows_face_sun: bool = False
     is_image: bool = False
@@ -840,6 +889,11 @@ class SkpFile:
                     start=cl.get("start"),
                     end=cl.get("end"),
                 ))
+            for curve_id, frame in (getattr(builder, "arc_curves", None) or {}).items():
+                defn.arcs[curve_id] = ArcCurve(
+                    center=tuple(frame["center"]), normal=tuple(frame["normal"]),
+                    x_axis=tuple(frame["x_axis"]), y_axis=tuple(frame["y_axis"]),
+                    start_angle=frame["start_angle"], end_angle=frame["end_angle"])
             for cp in getattr(builder, "construction_points", []):
                 defn.construction_points.append(ConstructionPoint(
                     position=cp.get("position", (0.0, 0.0, 0.0)),

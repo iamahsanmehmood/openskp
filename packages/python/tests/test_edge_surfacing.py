@@ -243,12 +243,20 @@ class TestVffParserSurfacing:
                 assert "layer" in face
         assert _face_layers(UNTITLED) == {None: 1588}
 
-    def test_no_arc_frames_are_decoded(self):
-        # An honest limit, asserted rather than left implicit so it cannot be
-        # mistaken for coverage: the VFF arc payload is not decoded here, and
-        # no file in this corpus carries an ARC_CURVES section to decode. A
-        # future implementation should delete this test, not work around it.
-        assert _table(UNTITLED, "arc_curves") == {}
+    def test_arc_frames_are_decoded(self):
+        # The VFF arc payload (2D4C, beside each curve's 384A) is decoded:
+        # Untitled carries 368 arcs, every one a 24-edge circle, and each
+        # agrees with SketchUp 2025's own SUArcCurve getters to 5e-6 inches.
+        # Every arc is keyed by a curve id some edge points at (BB0B), and the
+        # curve has exactly the edges SketchUp reports for it.
+        arcs = _table(UNTITLED, "arc_curves")
+        assert len(arcs) == 368
+        edge_counts: Dict[Any, int] = {}
+        for builder in _builders(UNTITLED):
+            for curve_id in (getattr(builder, "edge_curves", None) or {}).values():
+                edge_counts[curve_id] = edge_counts.get(curve_id, 0) + 1
+        assert all(edge_counts.get(curve_id) == 24 for curve_id in arcs)
+        assert {frame["start_angle"] for frame in arcs.values()} == {0.0}
 
 
 class TestVffElementRecords:
