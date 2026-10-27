@@ -675,6 +675,7 @@ namespace OpenSkp
         public List<(int Slot, string? Name, object? Value)> Ents = new List<(int, string?, object?)>();
         public bool FacesCamera;
         public bool ShadowsFaceSun;
+        public bool IsGroup;
     }
     internal sealed class InstanceRec
     {
@@ -1743,6 +1744,10 @@ namespace OpenSkp
             }
             var gap = r.Raw(tpos.Value - r.Pos);
             int behavior = gap.Length >= 9 ? gap[gap.Length - 9] : 0;
+            // the last u32 before the thumbnail is 1 for the definition of a group
+            // and 0 for a component's (what SketchUp's SUComponentDefinitionGetType
+            // reports), measured against SketchUp 2025's own counts
+            bool isGroup = gap.Length >= 4 && (gap[gap.Length - 4] | (gap[gap.Length - 3] << 8) | (gap[gap.Length - 2] << 16) | (gap[gap.Length - 1] << 24)) == 1;
             ar.ReadObject(r, "CThumbnail");
             return new DefinitionRec
             {
@@ -1751,6 +1756,7 @@ namespace OpenSkp
                 Ents = ents,
                 FacesCamera = (behavior & 1) != 0,
                 ShadowsFaceSun = (behavior & 2) != 0,
+                IsGroup = isGroup,
             };
         }
 
@@ -2525,6 +2531,7 @@ namespace OpenSkp
                             Guid = d.Guid,
                             Name = d.Name,
                             IsImage = imageDefIds.Contains((int)kv.Key),
+                            IsGroup = d.IsGroup,
                             AlwaysFacesCamera = d.FacesCamera,
                             ShadowsFaceSun = d.ShadowsFaceSun,
                             Builder = ToGeometryBuilder(b),

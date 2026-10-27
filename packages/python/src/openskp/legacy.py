@@ -1712,10 +1712,18 @@ def _read_definition(ar, r):
     # component-behavior flags sit 9 bytes before the thumbnail:
     # bit 0 = always-faces-camera, bit 1 = shadows-face-sun
     behavior = gap[-9] if len(gap) >= 9 else 0
+    # the last u32 before the thumbnail is 1 for the definition of a group and
+    # 0 for a component's (what SketchUp's SUComponentDefinitionGetType
+    # reports). Checked against SketchUp 2025's own counts on gondola_v20
+    # (14 groups, 6 components) and Untitled (46 groups), and on a model with
+    # 144 groups and 1 component saved by SketchUp 3 to 2020; the CGroup
+    # record that places a definition is no substitute: openskp's own writer
+    # puts one over a component definition, which SketchUp calls a component.
+    is_group = len(gap) >= 4 and int.from_bytes(gap[-4:], 'little') == 1
     ar.read_object(r, expect='CThumbnail')
     return {'k': 'definition', 'name': name, 'guid': guid.hex().upper(),
             'ents': ents, 'faces_camera': bool(behavior & 1),
-            'shadows_face_sun': bool(behavior & 2)}
+            'shadows_face_sun': bool(behavior & 2), 'is_group': is_group}
 
 
 def _read_instance(ar, r):
@@ -2365,6 +2373,7 @@ def full_parse_legacy(skp_path: str) -> Dict[str, Any]:
                 _fill_builder(b, d['ents'], slots)
                 defs_dict[s] = {'guid': d['guid'], 'name': d['name'],
                                 'is_image': s in image_def_ids,
+                                'is_group': d.get('is_group', False),
                                 'always_faces_camera': d.get('faces_camera', False),
                                 'shadows_face_sun': d.get('shadows_face_sun', False),
                                 'builder': b}

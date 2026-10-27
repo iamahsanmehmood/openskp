@@ -79,6 +79,7 @@ struct RawDefinition {
   bool always_faces_camera{};
   bool shadows_face_sun{};
   bool is_image{};
+  bool is_group{};
   GeometryBuilder builder;
 };
 
@@ -261,6 +262,7 @@ struct V {
   bool sense{};
   bool faces_camera{};
   bool shadows_face_sun{};
+  bool is_group{};
   bool colorized{};
   int mat{};
   int back_mat{};

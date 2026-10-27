@@ -133,6 +133,7 @@ namespace OpenSkp
                 AlwaysFacesCamera = d.AlwaysFacesCamera,
                 ShadowsFaceSun = d.ShadowsFaceSun,
                 IsImage = d.IsImage,
+                IsGroup = d.IsGroup,
             };
 
             foreach (var kv in d.Builder.Vertices)

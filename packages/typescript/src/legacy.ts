@@ -1498,6 +1498,12 @@ function readDefinition(ar: Archive, r: R): any {
   // component-behavior flags sit 9 bytes before the thumbnail:
   // bit 0 = always-faces-camera, bit 1 = shadows-face-sun
   const behavior = gap.length >= 9 ? gap[gap.length - 9] : 0;
+  // the last u32 before the thumbnail is 1 for the definition of a group and
+  // 0 for a component's (what SketchUp's SUComponentDefinitionGetType
+  // reports), measured against SketchUp 2025's own counts
+  const isGroup =
+    gap.length >= 4 &&
+    (gap[gap.length - 4] | (gap[gap.length - 3] << 8) | (gap[gap.length - 2] << 16) | (gap[gap.length - 1] << 24)) === 1;
   ar.readObject(r, 'CThumbnail');
   return {
     k: 'definition',
@@ -1506,6 +1512,7 @@ function readDefinition(ar: Archive, r: R): any {
     ents,
     faces_camera: Boolean(behavior & 1),
     shadows_face_sun: Boolean(behavior & 2),
+    is_group: isGroup,
   };
 }
 
@@ -2161,6 +2168,7 @@ export function parseLegacyToRaw(data: Uint8Array, options?: ParseOptions): Pars
           guid: d.guid,
           name: d.name,
           isImage: imageDefIds.has(s),
+          isGroup: d.is_group || false,
           alwaysFacesCamera: d.faces_camera || false,
           shadowsFaceSun: d.shadows_face_sun || false,
           builder: b,
@@ -2186,6 +2194,7 @@ export function parseLegacyToRaw(data: Uint8Array, options?: ParseOptions): Pars
     guid: 'ROOT',
     name: 'ROOT_MODEL',
     isImage: false,
+    isGroup: false,
     alwaysFacesCamera: false,
     shadowsFaceSun: false,
     builder: rootBuilder,

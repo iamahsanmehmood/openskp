@@ -746,6 +746,7 @@ namespace OpenSkp
             public bool AlwaysFacesCamera;
             public bool ShadowsFaceSun;
             public bool IsImage;
+            public bool IsGroup;
             public GeometryBuilder Builder = new GeometryBuilder();
         }
 
@@ -760,6 +761,7 @@ namespace OpenSkp
                     bool facesCamera = false;
                     bool shadowsFaceSun = false;
                     bool isImage = false;
+                    bool isGroup = false;
                     foreach (var child in el.Children)
                     {
                         if (child.Tag == "7D15" && child.Payload.Length == 16)
@@ -792,7 +794,12 @@ namespace OpenSkp
                         }
                         else if (child.Tag == "8315" && child.Payload.Length > 0)
                         {
-                            isImage = Tlv.ParseVarInt(child.Payload, 0, child.Payload.Length) == 2;
+                            // Definition kind: 0 for a component, 1 for a group (what
+                            // SketchUp's own API reports too), 2 for the quad definition
+                            // backing an Image entity.
+                            long kind = Tlv.ParseVarInt(child.Payload, 0, child.Payload.Length);
+                            isImage = kind == 2;
+                            isGroup = kind == 1;
                         }
                     }
                     long? entId = ExtractEntityId(el);
@@ -807,6 +814,7 @@ namespace OpenSkp
                             AlwaysFacesCamera = facesCamera,
                             ShadowsFaceSun = shadowsFaceSun,
                             IsImage = isImage,
+                            IsGroup = isGroup,
                             Builder = builder,
                         };
                     }

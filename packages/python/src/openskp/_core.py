@@ -1979,6 +1979,7 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
                 faces_camera = False
                 shadows_face_sun = False
                 is_image = False
+                is_group = False
                 for child in children:
                     ctag = child.tag
                     if ctag == '7D15' and len(child.payload) == 16:
@@ -2004,11 +2005,13 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
                                     pl, pos+6, sub_size) == 1
                             pos += 6 + sub_size
                     elif ctag == '8315' and child.payload:
-                        # Definition kind: observed 0/1 for ordinary
-                        # component/group definitions, 2 for the quad
-                        # definition backing an Image entity.
-                        is_image = parse_var_int(
-                            child.payload, 0, len(child.payload)) == 2
+                        # Definition kind: 0 for a component, 1 for a
+                        # group (SketchUp's own API reports the same
+                        # split), 2 for the quad definition backing an
+                        # Image entity.
+                        kind = parse_var_int(child.payload, 0, len(child.payload))
+                        is_image = kind == 2
+                        is_group = kind == 1
                 ent_id = _entity_id(el)
                 builder = _GeometryBuilder()
                 _extract_geometry_nodes(children, builder)
@@ -2017,7 +2020,8 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
                 defs_dict[ent_id] = {'guid': guid, 'name': name,
                                      'always_faces_camera': faces_camera,
                                      'shadows_face_sun': shadows_face_sun,
-                                     'is_image': is_image, 'builder': builder}
+                                     'is_image': is_image, 'is_group': is_group,
+                                     'builder': builder}
 
             elif tag == 'C409':
                 # Vertex persistent id (hex) -> (x, y, z) inches, for

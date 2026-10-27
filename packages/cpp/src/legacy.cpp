@@ -1135,6 +1135,11 @@ struct Archive {
       auto gap = r.raw(tpos - r.p);
       v->faces_camera = gap.size() >= 9 && (gap[gap.size() - 9] & 1);
       v->shadows_face_sun = gap.size() >= 9 && (gap[gap.size() - 9] & 2);
+      // the last u32 before the thumbnail is 1 for the definition of a group and 0
+      // for a component's (what SketchUp's SUComponentDefinitionGetType reports),
+      // measured against SketchUp 2025's own counts
+      v->is_group = gap.size() >= 4 && gap[gap.size() - 4] == 1 && gap[gap.size() - 3] == 0 &&
+                    gap[gap.size() - 2] == 0 && gap[gap.size() - 1] == 0;
       object("CThumbnail");
     } else if (n == "CComponentInstance" || n == "CGroup") {
       v->attrs = preamble();
@@ -1962,6 +1967,7 @@ RawParsed parse_legacy(const ByteBuffer& data, const ParseOptions& o) {
         d.always_faces_camera = s.second.v->faces_camera;
         d.shadows_face_sun = s.second.v->shadows_face_sun;
         d.is_image = image_def_ids.count(s.first) != 0;
+        d.is_group = s.second.v->is_group;
         fill(d.builder, s.second.v->ents, ar.slots);
         out.definitions[s.first] = std::move(d);
       }

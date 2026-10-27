@@ -314,6 +314,7 @@ function parseToRaw(buffer: ArrayBuffer, options?: ParseOptions): ParsedRawData 
     guid: 'ROOT',
     name: 'ROOT_MODEL',
     isImage: false,
+    isGroup: false,
     alwaysFacesCamera: false,
     shadowsFaceSun: false,
     builder: rootBuilder,

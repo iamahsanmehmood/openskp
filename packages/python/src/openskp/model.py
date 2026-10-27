@@ -522,6 +522,14 @@ class Definition:
             quad, placed through an image-specific wrapper node. Useful for
             consumers that give images special treatment (e.g. billboard
             cut-outs).
+        is_group: ``True`` when SketchUp made this definition for a *group*
+            rather than a component (what its own API reports as
+            ``SUComponentType_Group``). Groups and component instances are
+            both :class:`Instance` placements of a :class:`Definition`;
+            this is the only thing that tells them apart. It comes from the
+            file itself - the definition kind in a 2021+ file, the group
+            record that places it in an older one - not from how often the
+            definition is placed.
     """
 
     id: int = 0
@@ -539,6 +547,7 @@ class Definition:
     always_faces_camera: bool = False
     shadows_face_sun: bool = False
     is_image: bool = False
+    is_group: bool = False
 
 
 def loose_edge_runs(definition: "Definition") -> List[Tuple[List[int], List[int], bool]]:
@@ -759,6 +768,7 @@ class SkpFile:
                 always_faces_camera=d.get("always_faces_camera", False),
                 shadows_face_sun=d.get("shadows_face_sun", False),
                 is_image=d.get("is_image", False),
+                is_group=d.get("is_group", False),
             )
             # Completed VFF builders can retain dense private tables. Iterate
             # those directly; their public accessors still return cached dicts.

@@ -267,6 +267,14 @@ namespace OpenSkp
         public bool AlwaysFacesCamera { get; set; }
         public bool ShadowsFaceSun { get; set; }
         public bool IsImage { get; set; }
+        /// <summary>True when SketchUp made this definition for a group rather than a
+        /// component (what its own API reports as <c>SUComponentType_Group</c>). Groups and
+        /// component instances are both <see cref="Instance"/> placements of a
+        /// <see cref="Definition"/>; this is the only thing that tells them apart. It comes
+        /// from the file itself - the definition kind in a 2021+ file, a flag in the
+        /// definition record in an older one - not from how often the definition is
+        /// placed.</summary>
+        public bool IsGroup { get; set; }
     }
 
     /// <summary>Complete parsed representation of a SketchUp file, mirroring
