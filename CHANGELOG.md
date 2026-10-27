@@ -21,6 +21,27 @@ Each node's `layer` is the effective one, inherited from its parent when the
 instance has none, so it cannot tell an inherited layer from an explicit
 assignment of the same layer. `ownLayer` is the layer the instance carries
 itself, absent when it inherits.
+### Fixed — all five ports: a VFF (2021+) scene that doesn't save its camera is kept (#447)
+
+SketchUp lets a scene leave "Camera Location" unticked. Such a scene saves no
+camera, but it still has a name and the layers it hides. All five ports dropped
+a scene unless they had found a camera for it, so those scenes disappeared (on
+a real 2024 model, 13 of 35). The Python port went further: a scene with no
+camera record at all made `parse()` raise a `TypeError`. A scene without a
+camera now comes back with its name and hidden layers and `eye`, `target` and
+`up` unset (`None`, `null`, or an empty optional). Fixture:
+`scene_without_camera_2021.skp`, three scenes built through SketchUp's own
+library (one with a camera, one without that hides a layer, one plain), which
+SketchUp reads back as the same three. Reported by @JFrancu.
+
+### Added — TypeScript: `SceneOptions.frontSideOnly`
+
+A face whose front and back resolve to different colours is emitted as a front
+plus a reversed back-side copy, which is right for a viewer. A modeler or CAD
+tool that rebuilds faces from the mesh reads that copy as a second, coincident
+face: the shared edges turn non-manifold and the two z-fight. With
+`frontSideOnly`, `buildScene` and `buildInstancedScene` emit every face once,
+double-sided with its front material. Off by default.
 
 ### Fixed — all five ports: an instance scaled through the matrix's scale term is placed and sized correctly (#444)
 
@@ -39,6 +60,16 @@ translation first, so a composed matrix always has index 12 equal to 1.
 for the same file saved in the SketchUp 6 and 2021 formats, and against 126
 local legacy and VFF files, none of which carries a scale term other than 1:
 their scene output is unchanged.
+
+### Fixed — Python: a file saved through SketchUp's C API as 2019 or 2020 parses
+
+Such a file has a null entry in its layer list. The probe that works out the
+archive's slot base subtracted from that entry's missing slot and raised
+`TypeError: unsupported operand type(s) for -: 'NoneType' and 'int'`, so
+`parse()` failed on every one of them that had a layer besides the default. The
+null entry is now skipped. The TypeScript port already read these files.
+Fixtures: `sdk_saved_2019.skp` and `sdk_saved_2020.skp` (a layer, a face and
+three scenes, built and saved through the installed SketchUp library).
 
 ### Fixed — TypeScript, .NET, Dart, C++: legacy SketchUp 4, 5 and 2019 files parse correctly, and a 2020 model with no definitions keeps its root entities (#284)
 

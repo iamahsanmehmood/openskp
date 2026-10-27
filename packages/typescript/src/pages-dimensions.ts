@@ -348,7 +348,9 @@ export function parsePages(node: TlvNode | null): RawPage[] {
           off += 1 + ln;
         }
 
-        if (page.eye !== null && page.target !== null) pages.push(page);
+        // A scene that doesn't save its camera ("Camera Location" unticked) is
+        // still a scene: it keeps its name and hidden layers, eye/target/up null.
+        pages.push(page);
       }
     }
   }

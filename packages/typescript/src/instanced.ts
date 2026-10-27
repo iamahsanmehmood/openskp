@@ -332,6 +332,7 @@ export function buildInstancedSceneFromParsed(
       fallbackLayerColor: getLayerColor(layer),
       definitionId: defId,
       respectVisibility: options?.respectEdgeVisibility,
+      frontSideOnly: options?.frontSideOnly,
     });
 
     const primitives: LocalPrimitive[] = [];

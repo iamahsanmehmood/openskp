@@ -352,7 +352,9 @@ std::vector<RawPage> parse_pages(const TlvNode* node) {
           off += 1 + ln;
         }
 
-        if (page.eye && page.target) pages.push_back(std::move(page));
+        // A scene that doesn't save its camera ("Camera Location" unticked) is
+        // still a scene: it keeps its name and hidden layers, eye/target/up unset.
+        pages.push_back(std::move(page));
       }
     }
   }
