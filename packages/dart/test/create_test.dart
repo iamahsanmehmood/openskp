@@ -829,6 +829,22 @@ void main() {
       expect(inst.properties, isEmpty);
     });
 
+    test('a group is written as a group and a component as a component (openskp#446)', () {
+      // SketchUp 2025's own library reports one group definition and one
+      // component definition for a file like this
+      final builder = create();
+      builder.addGroup((def) {
+        def.addFace(square);
+      }, name: 'Table');
+      final chair = builder.addComponentDefinition('Chair', (def) {
+        def.addFace(square);
+      });
+      builder.addInstance(chair);
+      final model = SkpFile.fromBuffer(builder.toBytes()).parse();
+      expect(model.definitions.values.where((d) => d.isGroup).length, 1);
+      expect(model.definitions.values.firstWhere((d) => d.name == 'Chair').isGroup, isFalse);
+    });
+
     test('group attribute dicts round-trip through Instance.properties (openskp#261)', () {
       // Groups used to hardcode a null attribute pointer on the belief that
       // a CGroup never carries a CAttributeContainer - real production

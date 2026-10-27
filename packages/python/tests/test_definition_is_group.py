@@ -73,3 +73,21 @@ def test_an_image_is_not_a_group():
             continue
         for definition in model.definitions.values():
             assert not (definition.is_image and definition.is_group), path.name
+
+
+def test_a_group_written_by_the_builder_is_a_group(tmp_path):
+    # SketchUp 2025's own library reports one group definition and one component definition for a
+    # file like this; the flag is the definition's own, not inferred from how it is placed
+    from openskp import create
+
+    builder = create()
+    with builder.add_group("Table", translation=(50, 0, 0)) as table:
+        table.add_face([(0, 0, 0), (30, 0, 0), (30, 30, 0), (0, 30, 0)])
+    with builder.add_component_definition("Chair") as chair:
+        chair.add_face([(0, 0, 0), (10, 0, 0), (10, 10, 0), (0, 10, 0)])
+    builder.add_instance(chair)
+    path = tmp_path / "written.skp"
+    builder.save(str(path))
+    model = SkpFile.open(str(path)).parse()
+    by_name = {d.name: d.is_group for d in model.definitions.values()}
+    assert by_name == {"Table": True, "Chair": False}

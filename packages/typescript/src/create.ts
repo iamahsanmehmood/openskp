@@ -1137,7 +1137,7 @@ class ArchiveWriter {
 
   /** Close out a CComponentDefinition record: relationship count, GUID,
    * name, timestamp, behavior flags, and a default thumbnail. */
-  writeDefinitionTail(name: string): void {
+  writeDefinitionTail(name: string, isGroup = false): void {
     this.pushU32(0); // nrel: CRelationship count - always 0, not supported
     this.pushU16(0);
     this.pushBytes(randomGuidBytes());
@@ -1147,7 +1147,10 @@ class ArchiveWriter {
     this.pushU32(Math.floor(Date.now() / 1000));
     // 43-byte gap; byte -9 carries the always-faces-camera/shadows-face-sun
     // behavior flags - both left off, matching neither being exposed yet.
-    this.pushZeros(43);
+    // The last u32 is 1 for the definition of a group and 0 for a component's
+    // (what SketchUp's own API reports as SUComponentType_Group).
+    this.pushZeros(39);
+    this.pushU32(isGroup ? 1 : 0);
     this.writeThumbnail();
   }
 
@@ -1832,7 +1835,7 @@ export class ComponentDefinitionBuilder {
     }
     const writer = this._skp._definitionWriter();
     this._skp._patchDefinitionCount(this.countPatchPos, this.newEntityCount);
-    writer.writeDefinitionTail(this.name);
+    writer.writeDefinitionTail(this.name, this.groupPlacement !== undefined);
     this.closed = true;
     this._skp._clearOpenDefinition();
     if (this.groupPlacement !== undefined) {

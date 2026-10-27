@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — all five ports: a group the writer makes is a group to SketchUp (#446)
+
+A file written by `openskp.create` (or the TypeScript, .NET, Dart and C++ writers) placed a group
+with a `CGroup` record but wrote its definition as a component's: the flag in the definition record
+that SketchUp's own API reports as a group (`SUComponentType_Group`) was 0, so SketchUp counted
+every such group as a component and `Definition.is_group` read back false. The writers now set it
+for the definition `add_group` makes, and only for it: a component placed with `add_group_instance`
+stays a component's. Checked with SketchUp 2025's own library: a file with one group and one
+component reports one group definition and one component definition, and OpenSKP reads the same;
+an existing test that asked SketchUp to count the definitions of a file with 20 components and 10
+groups used to expect 30 components and now expects 20 components and 10 groups. Each port tests it.
+
 ### Added — TypeScript, .NET, Dart, C++: scenes in classic files, with their cameras (#445)
 
 The Python reader (#454, #460) ported: `SkpModel.pages` is filled from a classic (pre-2021)
@@ -116,8 +128,8 @@ counts agree on every one. New fixtures `nesting_v6/2013/2017/2020/2021.skp` (a 
 component holding a group, built through the library) test each port.
 
 Files written by `openskp.create` read back with `is_group` false for their
-groups, because the writer puts the group flag in no definition (SketchUp
-reports those as components too); writing it is a separate change.
+groups in this entry's release, because the writer put the group flag in no
+definition (SketchUp reported those as components too); the next entry fixes it.
 
 ### Fixed — Python: scenes in a legacy file saved through SketchUp's C API are read (#445)
 

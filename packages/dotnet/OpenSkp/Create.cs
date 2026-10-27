@@ -1260,7 +1260,7 @@ namespace OpenSkp
         /// <summary>Close out a CComponentDefinition record: relationship
         /// count, GUID, name, timestamp, behavior flags, and a default
         /// thumbnail.</summary>
-        internal void WriteDefinitionTail(string name)
+        internal void WriteDefinitionTail(string name, bool isGroup = false)
         {
             AddU32(0); // nrel: CRelationship count - always 0, not supported
             AddU16(0);
@@ -1271,8 +1271,11 @@ namespace OpenSkp
             AddU32((uint)DateTimeOffset.UtcNow.ToUnixTimeSeconds());
             // 43-byte gap; byte -9 carries the always-faces-camera/
             // shadows-face-sun behavior flags, both left off, matching
-            // neither being exposed by this writer yet.
-            AddZeros(43);
+            // neither being exposed by this writer yet. The last u32 is 1 for the
+            // definition of a group and 0 for a component's (what SketchUp's own API
+            // reports as SUComponentType_Group).
+            AddZeros(39);
+            AddU32(isGroup ? 1u : 0u);
             WriteThumbnail();
         }
 
@@ -1984,7 +1987,7 @@ namespace OpenSkp
             }
             var writer = Skp.DefinitionWriter!;
             writer.PatchU32(_countPatchPos, (uint)_newEntityCount);
-            writer.WriteDefinitionTail(Name);
+            writer.WriteDefinitionTail(Name, _groupPlacement.HasValue);
             _closed = true;
             Skp.ClearOpenDefinition(this);
             if (_groupPlacement.HasValue)

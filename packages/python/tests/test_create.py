@@ -3699,6 +3699,7 @@ class TestRealSketchUpOracle:
         dll.SUEntitiesGetNumInstances.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_long)]
         dll.SUEntitiesGetNumGroups.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_size_t)]
         dll.SUModelGetNumComponentDefinitions.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_size_t)]
+        dll.SUModelGetNumGroupDefinitions.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_size_t)]
         try:
             model = ctypes.c_void_p()
             err = dll.SUModelCreateFromFile(ctypes.byref(model), str(out).encode())
@@ -3713,7 +3714,13 @@ class TestRealSketchUpOracle:
             assert ng.value == 10
             ndef = ctypes.c_size_t()
             dll.SUModelGetNumComponentDefinitions(model, ctypes.byref(ndef))
-            assert ndef.value == 30  # 20 explicit + 10 backing the groups
+            # the 20 explicit definitions are components; the 10 the groups sit on are group
+            # definitions (SketchUp used to count all 30 as components, before the writer set
+            # the definition's group flag - openskp#446)
+            assert ndef.value == 20
+            ngdef = ctypes.c_size_t()
+            dll.SUModelGetNumGroupDefinitions(model, ctypes.byref(ngdef))
+            assert ngdef.value == 10
             dll.SUModelRelease(ctypes.byref(model))
         finally:
             dll.SUTerminate()

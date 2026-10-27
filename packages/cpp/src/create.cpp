@@ -1121,7 +1121,7 @@ class ArchiveWriter {
 
   // Close out a CComponentDefinition record: relationship count, GUID, name, timestamp,
   // behavior flags, and a default thumbnail.
-  void write_definition_tail(const std::string& name) {
+  void write_definition_tail(const std::string& name, bool is_group = false) {
     append_u32(buf, 0);  // nrel: CRelationship count - always 0, not supported
     append_u16(buf, 0);
     auto guid = random_uuid_bytes();
@@ -1131,8 +1131,11 @@ class ArchiveWriter {
     write_str("");  // second name field - empty in ground truth
     append_u32(buf, static_cast<std::uint32_t>(std::time(nullptr)));
     // 43-byte gap; byte -9 carries the always-faces-camera/shadows-face-sun behavior flags, both
-    // left off (matching neither being exposed by this writer yet).
-    buf.insert(buf.end(), 43, 0);
+    // left off (matching neither being exposed by this writer yet). The last u32 is 1 for the
+    // definition of a group and 0 for a component's (what SketchUp's own API reports as
+    // SUComponentType_Group).
+    buf.insert(buf.end(), 39, 0);
+    append_u32(buf, is_group ? 1u : 0u);
     write_thumbnail();
   }
 
@@ -1951,7 +1954,7 @@ void ComponentDefinitionBuilder::close() {
   }
   detail::write_u32_at(impl_->writer->buf, impl_->count_patch_pos,
                        static_cast<std::uint32_t>(impl_->new_entity_count));
-  impl_->writer->write_definition_tail(impl_->name);
+  impl_->writer->write_definition_tail(impl_->name, impl_->group_placement.has_value());
   impl_->closed = true;
   // ComponentDefinitionBuilder is a friend of SkpBuilder (create.hpp), so this is allowed to
   // reach into a *different* SkpBuilder's private impl_ - access control in C++ is per-class,

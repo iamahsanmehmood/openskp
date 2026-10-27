@@ -501,6 +501,25 @@ namespace OpenSkp.Tests
         }
 
         [Fact]
+        public void AGroupIsWrittenAsAGroupAndAComponentAsAComponent()
+        {
+            // SketchUp 2025's own library reports one group definition and one component
+            // definition for a file like this (openskp#446)
+            var builder = SkpCreate.NewFile();
+            using (var table = builder.AddGroup("Table"))
+            {
+                table.AddFace(Square());
+            }
+            var chair = builder.AddComponentDefinition("Chair");
+            chair.AddFace(Square());
+            chair.Dispose();
+            builder.AddInstance(chair);
+            var model = SkpFile.Parse(builder.ToBytes());
+            Assert.Equal(1, model.Definitions.Values.Count(d => d.IsGroup));
+            Assert.False(model.Definitions.Values.Single(d => d.Name == "Chair").IsGroup);
+        }
+
+        [Fact]
         public void GroupOnlyFileStillFlushesPendingGroup()
         {
             var builder = SkpCreate.NewFile();

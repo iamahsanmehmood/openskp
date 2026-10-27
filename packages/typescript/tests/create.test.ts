@@ -692,6 +692,19 @@ describe('Groups', () => {
     expect(inst.matrix.slice(9, 12)).toEqual([50, 0, 0]);
   });
 
+  it('a group is written as a group and a component as a component (openskp#446)', () => {
+    // SketchUp 2025's own library reports one group definition and one component definition for a
+    // file like this; the group flag is the definition's own, not inferred from how it is placed
+    const builder = create();
+    builder.addGroup((table) => table.addFace(SQUARE), { name: 'Table' });
+    const chair = builder.addComponentDefinition('Chair', (def) => def.addFace(SQUARE));
+    builder.addInstance(chair);
+    const model = parseSkp(toBuffer(builder.toBytes()));
+    const byName = (n: string) => [...model.definitions.values()].find((d) => d.name === n)!;
+    expect(byName('Chair').isGroup).toBe(false);
+    expect([...model.definitions.values()].filter((d) => d.isGroup).length).toBe(1);
+  });
+
   it('a hidden group round-trips its hidden flag', () => {
     const builder = create();
     builder.addGroup((table) => table.addFace(SQUARE), { name: 'Table', hidden: true });

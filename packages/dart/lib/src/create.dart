@@ -1392,7 +1392,7 @@ class _ArchiveWriter {
 
   /// Close out a `CComponentDefinition` record: relationship count, GUID,
   /// name, timestamp, behavior flags, and a default thumbnail.
-  void writeDefinitionTail(String name) {
+  void writeDefinitionTail(String name, {bool isGroup = false}) {
     buf.addAll(_u32(0)); // nrel: CRelationship count - always 0, not supported
     buf.addAll(_u16(0));
     buf.addAll(_uuid4Bytes());
@@ -1401,8 +1401,11 @@ class _ArchiveWriter {
     _writeStr(''); // second name field - empty in ground truth
     buf.addAll(_u32(DateTime.now().toUtc().millisecondsSinceEpoch ~/ 1000));
     // 43-byte gap; byte -9 carries the always-faces-camera/shadows-face-sun
-    // behavior flags, both left off (neither exposed by this writer yet).
-    buf.addAll(List<int>.filled(43, 0));
+    // behavior flags, both left off (neither exposed by this writer yet). The
+    // last u32 is 1 for the definition of a group and 0 for a component's (what
+    // SketchUp's own API reports as SUComponentType_Group).
+    buf.addAll(List<int>.filled(39, 0));
+    buf.addAll(_u32(isGroup ? 1 : 0));
     writeThumbnail();
   }
 
@@ -2223,7 +2226,7 @@ class ComponentDefinitionBuilder implements GeometryHost {
     }
     final writer = _skp._definitionWriter!;
     _patchU32(writer.buf, _countPatchPos, _newEntityCount);
-    writer.writeDefinitionTail(name);
+    writer.writeDefinitionTail(name, isGroup: _groupPlacement != null);
     _closed = true;
     _skp._openDefinition = null;
     final gp = _groupPlacement;
