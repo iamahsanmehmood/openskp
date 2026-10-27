@@ -154,6 +154,21 @@ namespace OpenSkp
                     Soft = (flags & 0x08) != 0,
                     Smooth = (flags & 0x10) != 0,
                     Hidden = (flags & 0x01) != 0,
+                    CurveId = d.Builder.EdgeCurves.TryGetValue(kv.Key, out var curveId) ? curveId : (long?)null,
+                };
+            }
+
+            foreach (var kv in d.Builder.ArcCurves)
+            {
+                var f = kv.Value;
+                defn.Arcs[kv.Key] = new ArcCurve
+                {
+                    Center = f.Center,
+                    Normal = f.Normal,
+                    XAxis = f.XAxis,
+                    YAxis = f.YAxis,
+                    StartAngle = f.StartAngle,
+                    EndAngle = f.EndAngle,
                 };
             }
 

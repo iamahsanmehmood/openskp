@@ -35,6 +35,18 @@ export interface GeometryBuilderFace {
   hidden?: boolean;
 }
 
+/** The analytic frame of a Curve that is one arc: the points
+ * `center + cos(t) * xAxis + sin(t) * yAxis` for `t` from `startAngle` to
+ * `endAngle`. */
+export interface ArcFrame {
+  center: [number, number, number];
+  normal: [number, number, number];
+  xAxis: [number, number, number];
+  yAxis: [number, number, number];
+  startAngle: number;
+  endAngle: number;
+}
+
 export class GeometryBuilder {
   /** id -> [x, y, z]. Backed by a flat Float64Array rather than a Map of
    * boxed arrays: see vertex-store.ts for the memory rationale. */
@@ -45,6 +57,11 @@ export class GeometryBuilder {
   /** Edge id -> display flag byte (D307). Backed by a Uint8Array rather
    * than a Map: the value is one byte, and a Map entry costs ~30. */
   edgeFlags = new EdgeFlagStore();
+  /** Edge id -> the entity id of the Curve the edge belongs to (SketchUp's
+   * `Edge#curve`). Absent means the edge belongs to no curve. */
+  edgeCurves = new Map<number, number>();
+  /** Curve id -> its analytic arc, for the curves that are arcs. */
+  arcCurves = new Map<number, ArcFrame>();
   faces = new Map<number, GeometryBuilderFace>(); // id -> face data
   instances: GeometryBuilderInstance[] = [];
   sectionPlanes: { plane: [number, number, number, number]; name: string; label: string; hidden: boolean }[] = [];
@@ -226,6 +243,34 @@ export function extractGeometryFromNodes(
           if (d307 && d307.payload.length > 0) {
             builder.edgeFlags.set(eId, d307.payload[0]);
           }
+        }
+
+        // BB0B = the parent Curve's entity id (Edge#curve).
+        const bb0b = findChildTag(el.children, 'BB0B');
+        if (bb0b && bb0b.payload.length > 0) {
+          const curveId = parseVarInt(bb0b.payload, 0, bb0b.payload.length);
+          if (curveId) builder.edgeCurves.set(eId, curveId);
+        }
+      }
+    } else if (tag === '2C4C') {
+      // A Curve (384A: its entity id and edge count) and, when the curve is an
+      // arc, 2D4C: 16 doubles - center, normal, the plane constant, x axis,
+      // y axis, radius, start angle, end angle. Checked against SketchUp
+      // 2025's own SUArcCurve getters.
+      const curve = findChildTag(el.children, '384A');
+      const arc = findChildTag(el.children, '2D4C');
+      if (curve && arc && arc.payload.length === 128) {
+        const curveId = extractEntityId(curve);
+        if (curveId !== null) {
+          const f = (i: number) => readF64(arc.payload, i * 8);
+          builder.arcCurves.set(curveId, {
+            center: [f(0), f(1), f(2)],
+            normal: [f(3), f(4), f(5)],
+            xAxis: [f(7), f(8), f(9)],
+            yAxis: [f(10), f(11), f(12)],
+            startAngle: f(14),
+            endAngle: f(15),
+          });
         }
       }
     } else if (tag === 'AC0D') {

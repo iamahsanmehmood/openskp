@@ -136,6 +136,10 @@ export interface Definition {
   dimensions: Dimension[];
   constructionLines: ConstructionLine[];
   constructionPoints: ConstructionPoint[];
+  /** The analytic arc of every curve that is one, keyed by curve id - the
+   * {@link Edge.curveId} of the edges that form it. A curve that is not an
+   * arc (a freehand or polygon curve) has no entry. */
+  arcs: Map<number, ArcCurve>;
   isImage: boolean;
   /** True when SketchUp made this definition for a group rather than a
    * component (what its own API reports as `SUComponentType_Group`). Groups
@@ -162,6 +166,43 @@ export interface Edge {
   soft: boolean;
   smooth: boolean;
   hidden: boolean;
+  /** SketchUp's own `Edge#curve` grouping: the id of the Curve this edge
+   * belongs to, or null when it belongs to none. Edges sharing a `curveId`
+   * were drawn as one continuous multi-segment line or arc; if the curve is
+   * an arc, {@link Definition.arcs} has it under the same id. */
+  curveId?: number | null;
+}
+
+/**
+ * The analytic arc behind a curve: SketchUp's own `ArcCurve`.
+ *
+ * A curve SketchUp drew as an arc or a circle is a run of straight edges
+ * ({@link Edge.curveId}) and also this exact description. The arc is the set
+ * of points `center + cos(t) * xAxis + sin(t) * yAxis` for `t` from
+ * `startAngle` to `endAngle`. For a circle `xAxis` and `yAxis` are
+ * perpendicular and both of length `radius`; an arc scaled non-uniformly keeps
+ * its arc identity and stores an affine image of a circle, where they are not
+ * (then `radius` is the length of `xAxis` only). Arcs and circles that bound a
+ * face are arcs too. Lengths are in the model's units (inches), in the
+ * definition's local space, like {@link Vertex.x}.
+ */
+export interface ArcCurve {
+  center: [number, number, number];
+  /** Unit normal of the arc's plane. */
+  normal: [number, number, number];
+  /** Vector from the centre to the arc's start (length = radius). */
+  xAxis: [number, number, number];
+  /** `normal x xAxis`. */
+  yAxis: [number, number, number];
+  /** Start parameter in radians. */
+  startAngle: number;
+  /** End parameter in radians. A full circle has `endAngle === startAngle`
+   * in a classic (pre-2021) file and `startAngle + 2 pi` in a 2021+ file;
+   * {@link ArcCurve.isFullCircle} covers both. */
+  endAngle: number;
+  /** Length of `xAxis`. */
+  radius: number;
+  isFullCircle: boolean;
 }
 
 export interface Face {
@@ -592,7 +633,7 @@ export function buildModelFromParsed(parsed: ParsedRawData): SkpModel {
     // group). Kept out of `definitions` (which is numeric-ID-only, one
     // entry per real component/group definition) and exposed here instead,
     // matching the .NET and Dart ports' `Root`/`root` field.
-    root: rootDefinition ?? { id: 0, guid: 'ROOT', name: 'ROOT_MODEL', vertices: [], edges: [], faces: [], instances: [], sectionPlanes: [], texts: [], dimensions: [], constructionLines: [], constructionPoints: [], isImage: false, isGroup: false, alwaysFacesCamera: false, shadowsFaceSun: false },
+    root: rootDefinition ?? { id: 0, guid: 'ROOT', name: 'ROOT_MODEL', vertices: [], edges: [], faces: [], instances: [], sectionPlanes: [], texts: [], dimensions: [], constructionLines: [], constructionPoints: [], arcs: new Map(), isImage: false, isGroup: false, alwaysFacesCamera: false, shadowsFaceSun: false },
     layers: finalLayersList,
     pages: finalPagesList,
     dimensions: finalDimensionsList,
@@ -619,8 +660,24 @@ function buildDefinition(id: number, d: ParsedDefinition, layerIdToName?: Map<nu
       soft: (flags & 0x08) !== 0,
       smooth: (flags & 0x10) !== 0,
       hidden: (flags & 0x01) !== 0,
+      curveId: d.builder.edgeCurves?.get(eId) ?? null,
     };
   });
+  const arcs = new Map<number, ArcCurve>();
+  for (const [curveId, f] of d.builder.arcCurves ?? []) {
+    const radius = Math.hypot(f.xAxis[0], f.xAxis[1], f.xAxis[2]);
+    const sweep = (((f.endAngle - f.startAngle) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+    arcs.set(curveId, {
+      center: [...f.center] as [number, number, number],
+      normal: [...f.normal] as [number, number, number],
+      xAxis: [...f.xAxis] as [number, number, number],
+      yAxis: [...f.yAxis] as [number, number, number],
+      startAngle: f.startAngle,
+      endAngle: f.endAngle,
+      radius,
+      isFullCircle: Math.min(sweep, 2 * Math.PI - sweep) < 1e-9,
+    });
+  }
   const faces: Face[] = Array.from(d.builder.faces.entries()).map(([fId, fData]) => ({
     id: fId,
     loops: fData.loops,
@@ -686,6 +743,7 @@ function buildDefinition(id: number, d: ParsedDefinition, layerIdToName?: Map<nu
     dimensions,
     constructionLines,
     constructionPoints,
+    arcs,
     isImage: d.isImage,
     isGroup: d.isGroup || false,
     alwaysFacesCamera: d.alwaysFacesCamera,

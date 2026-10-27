@@ -195,6 +195,19 @@ class SkpFile {
         soft: (flags & 0x08) != 0,
         smooth: (flags & 0x10) != 0,
         hidden: (flags & 0x01) != 0,
+        curveId: d.builder.edgeCurves[entry.key],
+      );
+    }
+
+    for (final entry in d.builder.arcCurves.entries) {
+      final f = entry.value;
+      defn.arcs[entry.key] = ArcCurve(
+        center: f.center,
+        normal: f.normal,
+        xAxis: f.xAxis,
+        yAxis: f.yAxis,
+        startAngle: f.startAngle,
+        endAngle: f.endAngle,
       );
     }
 

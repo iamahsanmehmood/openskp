@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 class Vertex {
@@ -14,6 +15,12 @@ class Edge {
   final bool soft;
   final bool smooth;
   final bool hidden;
+
+  /// SketchUp's own `Edge#curve` grouping: the id of the Curve this edge
+  /// belongs to, or null when it belongs to none. Edges sharing a [curveId]
+  /// were drawn as one continuous multi-segment line or arc; if the curve is
+  /// an arc, [Definition.arcs] has it under the same id.
+  final int? curveId;
   Edge({
     required this.id,
     required this.v1Id,
@@ -21,7 +28,57 @@ class Edge {
     this.soft = false,
     this.smooth = false,
     this.hidden = false,
+    this.curveId,
   });
+}
+
+/// The analytic arc behind a curve: SketchUp's own `ArcCurve`.
+///
+/// A curve SketchUp drew as an arc or a circle is a run of straight edges
+/// ([Edge.curveId]) and also this exact description. The arc is the set of
+/// points `center + cos(t) * xAxis + sin(t) * yAxis` for `t` from [startAngle]
+/// to [endAngle]. For a circle [xAxis] and [yAxis] are perpendicular and both
+/// of length [radius]; an arc scaled non-uniformly keeps its arc identity and
+/// stores an affine image of a circle, where they are not (then [radius] is
+/// the length of [xAxis] only). Arcs and circles that bound a face are arcs
+/// too. Lengths are in the model's units (inches), in the definition's local
+/// space, like [Vertex.x].
+class ArcCurve {
+  final (double, double, double) center;
+
+  /// Unit normal of the arc's plane.
+  final (double, double, double) normal;
+
+  /// Vector from the centre to the arc's start (length = radius).
+  final (double, double, double) xAxis;
+
+  /// `normal x xAxis`.
+  final (double, double, double) yAxis;
+
+  /// Start parameter in radians.
+  final double startAngle;
+
+  /// End parameter in radians. A full circle has `endAngle == startAngle` in
+  /// a classic (pre-2021) file and `startAngle + 2 pi` in a 2021+ file;
+  /// [isFullCircle] covers both.
+  final double endAngle;
+  ArcCurve({
+    required this.center,
+    required this.normal,
+    required this.xAxis,
+    required this.yAxis,
+    required this.startAngle,
+    required this.endAngle,
+  });
+
+  double get radius =>
+      math.sqrt(xAxis.$1 * xAxis.$1 + xAxis.$2 * xAxis.$2 + xAxis.$3 * xAxis.$3);
+
+  bool get isFullCircle {
+    final twoPi = 2 * math.pi;
+    final sweep = (endAngle - startAngle) % twoPi;
+    return math.min(sweep, twoPi - sweep) < 1e-9;
+  }
 }
 
 class Face {
@@ -329,6 +386,11 @@ class Definition {
   final List<Dimension> dimensions = [];
   final List<ConstructionLine> constructionLines = [];
   final List<ConstructionPoint> constructionPoints = [];
+
+  /// The analytic arc of every curve that is one, keyed by curve id - the
+  /// [Edge.curveId] of the edges that form it. A curve that is not an arc (a
+  /// freehand or polygon curve) has no entry.
+  final Map<int, ArcCurve> arcs = {};
   final bool alwaysFacesCamera;
   final bool shadowsFaceSun;
   final bool isImage;

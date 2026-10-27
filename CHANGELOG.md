@@ -29,6 +29,21 @@ every port (three leader texts with arrow types 1, 2 and 4 and a two-byte font p
 `openskp.create` plus two documented byte edits; SketchUp 2025 opens it and reports the same
 texts and arrow types), and its test fails on the old code (in TypeScript the old code did not
 even raise: the file parsed with no texts at all).
+### Added — TypeScript, .NET, Dart, C++: `Definition.arcs` and `Edge.curveId` (#462)
+
+The Python entry below, ported: `Definition.arcs` (`arcs`, `Arcs`) maps a curve id
+to an `ArcCurve` - centre, normal, x and y axis, start and end angle, plus
+`radius` and `isFullCircle` - for every arc and circle, including ones that bound
+a face, from classic and 2021+ files. These four ports did not expose which
+curve an edge belongs to at all, so `Edge.curveId` (`CurveId`, `curve_id`) comes
+with it: the id of the curve, or null/none, the same grouping Python's
+`Edge.curve_id` carries, and the key into `arcs`.
+
+2021+ files store the arc in a 128-byte `2D4C` record beside each curve's record;
+classic files in the `CArcCurve` the readers already stepped over. Checked in each
+port against the fixtures the Python entry used (a loose arc, a disc and a half disc
+saved as SketchUp 2017, 2020 and 2021, read back identically) and on the 368
+circles of `Untitled.skp`, each joined to the 24 edges SketchUp reports.
 
 ### Added — Python: `Definition.arcs`, the analytic arc of every arc and circle (#462)
 
@@ -52,8 +67,7 @@ reports.
 One visible change: `curve_sets[].arc` is now filled for loose arcs in 2021+
 files too, as it already was in classic ones, so a loose arc in a 2021+ file
 reaches a scene consumer as an arc and not only as segments. The scene output of every other
-fixture and of 26 older models is unchanged. TypeScript, .NET, Dart and C++ are
-tracked in #462.
+fixture and of 26 older models is unchanged.
 
 ### Added — all five ports: `Definition.is_group` tells a group from a component (#446)
 
