@@ -64,6 +64,17 @@ std::optional<std::uint64_t> read_plain_entity_ref(const ByteBuffer& d, size_t& 
   return tag;
 }
 
+// Whether the text whose font ends at `pos` is anchored to an entity: after
+// the two screen-fraction f64s comes the connection block, [u32 type][u32 4]
+// [point3d], and a type other than 0 or 1 (2, 4, 5 and 7 seen; see
+// docs/dimension-record-notes.md) anchors the label. Matches Python's
+// `_anchored_connection`.
+bool anchored_text_connection(const ByteBuffer& d, size_t pos) {
+  if (pos + 24 > d.size() || read_u32(d, pos + 20) != 4) return false;
+  auto type = read_u32(d, pos + 16);
+  return type >= 2 && type <= 15;
+}
+
 }  // namespace
 
 // What follows a legacy linear dimension's connection ref: a second entity
@@ -88,6 +99,7 @@ LegacyPathResult legacy_connection_paths(
     q += 4;
     if (count > 1000) throw std::runtime_error("implausible dimension path length");
     auto& refs = list == 0 ? out.first : out.second;
+    auto& written = list == 0 ? out.first_new : out.second_new;
     for (uint32_t i = 0; i < count; ++i) {
       if (q + 2 > data.size()) throw std::runtime_error("legacy archive truncated");
       // MFC writes an object IN FULL the first time anything points at it, so
@@ -107,6 +119,7 @@ LegacyPathResult legacy_connection_paths(
       } else {
         refs.push_back(read_plain_entity_ref(data, q));
       }
+      written.push_back(is_new);
     }
   }
   out.next = q;
@@ -328,6 +341,9 @@ struct Archive {
   uint64_t cum_delta{};
   std::optional<uint64_t> annot_watermark;
   std::vector<int> burn_stack;  // per-entity-list burned-item credits
+  // per-entity-list instances an annotation's path wrote in full (see
+  // connection_paths) that the list has not listed yet, in order
+  std::vector<std::vector<uint64_t>> inline_stack;
   std::optional<size_t> cline_tail;
 
   Archive(const ByteBuffer& d, int v) : r{d}, ver(v), pid(v >= 17) {}
@@ -438,7 +454,9 @@ struct Archive {
 
   // The instance paths that follow each connection ref (see
   // legacy_connection_paths): consumes them, reading a path entry that MFC
-  // wrote in full as a real object.
+  // wrote in full as a real object. A path runs from the outermost instance
+  // in, so its first one is an entity of the list the annotation is in; one
+  // written here in full is noted for that list (see entity_list).
   void connection_paths() {
     auto res = legacy_connection_paths(r.d, r.p, [this](std::size_t at) {
       r.p = at;
@@ -446,6 +464,25 @@ struct Archive {
       return std::make_pair(std::get<0>(q), r.p);
     });
     r.p = res.next;
+    if (inline_stack.empty()) return;
+    if (!res.first.empty() && res.first_new[0]) inline_stack.back().push_back(*res.first[0]);
+    if (!res.second.empty() && res.second_new[0]) inline_stack.back().push_back(*res.second[0]);
+  }
+
+  // The walker slot of the back-reference at the cursor, without moving it;
+  // nullopt when the next tag is anything else.
+  std::optional<uint64_t> peek_backref() {
+    if (r.p + 2 > r.d.size()) return std::nullopt;
+    uint64_t slot = read_u16(r.d, r.p);
+    if (slot == 0x7fff) {
+      if (r.p + 6 > r.d.size()) return std::nullopt;
+      slot = read_u32(r.d, r.p + 2);
+      if (slot & 0x80000000) return std::nullopt;
+    } else if (!slot || (slot & 0x8000)) {
+      return std::nullopt;
+    }
+    if (!burns.empty() && slot >= burns[0].first) return translate_ref(slot);
+    return slot;
   }
 
   // True when the u16 at `at` starts an object read in one of the
@@ -1019,6 +1056,18 @@ struct Archive {
       v->k = "text";
       draw(*v);
       object("CSkFont");
+      if (anchored_text_connection(r.d, r.p)) {
+        // An anchored connection block is followed, as a dimension's is, by
+        // the anchored entity's ref and its instance paths - and MFC writes a
+        // path instance IN FULL there when nothing has pointed at it before
+        // (a label anchored to a component instance serialized after it, its
+        // class declaration included when it is the file's first instance).
+        // Skipped as bytes, that instance never gets its store-map slots and
+        // every later reference is off by them; read it instead.
+        r.raw(16 + 32);
+        entity_ref();
+        connection_paths();
+      }
       size_t found = std::string::npos;
       for (size_t q = r.p; q + 14 <= std::min(r.d.size(), r.p + 512); ++q)
         if (r.d[q] == 1 && r.d[q + 1] == 0 && r.d[q + 2] == 0 && r.d[q + 3] == 0 &&
@@ -1218,16 +1267,30 @@ struct Archive {
   std::vector<std::tuple<uint64_t, std::string, std::shared_ptr<V>>> entity_list(uint32_t n,
                                                                                  bool root) {
     burn_stack.push_back(0);
+    inline_stack.emplace_back();
+    // indexed, not held by reference: nested lists grow the stack
+    const auto depth = inline_stack.size() - 1;
 
     struct PopGuard {
       Archive* a;
 
-      ~PopGuard() { a->burn_stack.pop_back(); }
+      ~PopGuard() {
+        a->burn_stack.pop_back();
+        a->inline_stack.pop_back();
+      }
     } pop_guard{this};
 
     std::vector<std::tuple<uint64_t, std::string, std::shared_ptr<V>>> v;
     while (v.size() < n) {
       auto save = r.p;
+      const auto& pending = inline_stack[depth];
+      if (!pending.empty() && v.size() + pending.size() >= n) {
+        // every item left is an instance an annotation already wrote in
+        // full and the list does not list again (see below)
+        auto next_ref = peek_backref();
+        if (!next_ref || std::find(pending.begin(), pending.end(), *next_ref) == pending.end())
+          break;
+      }
       bool has_burn_credit = !root && !burn_stack.empty() && burn_stack.back() > 0;
       if (has_burn_credit && save + 25 <= r.d.size() && read_u32(r.d, save) == 0 &&
           r.d[save + 22] == 255 && r.d[save + 23] == 254 && r.d[save + 24] == 255) {
@@ -1238,7 +1301,10 @@ struct Archive {
         break;
       }
       try {
-        v.push_back(object());
+        auto item = object();
+        auto& listed = inline_stack[depth];
+        listed.erase(std::remove(listed.begin(), listed.end(), std::get<0>(item)), listed.end());
+        v.push_back(std::move(item));
       } catch (...) {
         if (root) {
           // over-declared root counts run into the document tail - stop
@@ -1256,6 +1322,17 @@ struct Archive {
         }
         throw;
       }
+    }
+    // An instance an annotation wrote in full is one of this list's items,
+    // and the declared count holds it - but SketchUp does not always list it
+    // again with a back-reference (labels anchored to the loudspeakers of an
+    // auditorium: of five instances written in a definition's labels, three
+    // were listed again, two not). Keep the ones never listed, as the list's
+    // own entities.
+    for (auto slot : inline_stack[depth]) {
+      if (v.size() >= n) break;
+      const auto& e = slots.at(slot);
+      v.emplace_back(slot, e.name, e.v);
     }
     return v;
   }
@@ -1784,6 +1861,24 @@ void read_dib_body(R& r) {
 }
 
 }  // namespace
+
+// Declared in internal.hpp so the entity list's bookkeeping is unit-testable
+// without the full Archive type (see LegacySlotTable).
+LegacyEntityListResult read_legacy_entity_list(const ByteBuffer& data, std::size_t pos, int ver,
+                                               std::uint32_t count, LegacySlotTable table) {
+  Archive ar(data, ver);
+  ar.r.p = pos;
+  ar.slots = table.slots;
+  ar.class_slot = table.class_slot;
+  ar.next = table.next;
+  LegacyEntityListResult out;
+  for (auto& [slot, name, value] : ar.entity_list(count, false)) out.items.emplace_back(slot, name);
+  out.next = ar.r.p;
+  table.slots = std::move(ar.slots);
+  table.class_slot = std::move(ar.class_slot);
+  table.next = ar.next;
+  return out;
+}
 
 // Best-effort scan for CViewPage (scene) records: name + hidden-layer
 // slot ids only, for the narrow flag combinations this reader

@@ -210,6 +210,9 @@ struct LegacyPathResult {
   std::optional<std::uint64_t> extra;
   std::vector<std::optional<std::uint64_t>> first;
   std::vector<std::optional<std::uint64_t>> second;
+  /// Whether each entry of `first` / `second` was an object written in full.
+  std::vector<bool> first_new;
+  std::vector<bool> second_new;
   std::size_t next{};
 };
 
@@ -347,6 +350,20 @@ struct LegacySlotTable {
 /// point in a real parse).
 std::vector<RawPage> scan_pages_for_layers(const ByteBuffer& data, std::size_t start_pos,
                                            LegacySlotTable slots);
+
+/// Reads a legacy definition's entity list of `count` items at `pos`, with
+/// an archive of SketchUp version `ver` over `slots`: each item's slot and
+/// class name, and the offset just past the list. Exposed, like
+/// scan_pages_for_layers, so the list's bookkeeping is unit-testable: an
+/// instance a text label's connection path writes in full is one of the
+/// list's items whether or not the list names it again.
+struct LegacyEntityListResult {
+  std::vector<std::pair<std::uint64_t, std::string>> items;
+  std::size_t next{};
+};
+
+LegacyEntityListResult read_legacy_entity_list(const ByteBuffer& data, std::size_t pos, int ver,
+                                               std::uint32_t count, LegacySlotTable slots);
 void collect_geometry(const std::vector<TlvNode>&, GeometryBuilder&);
 void collect_layers(const std::vector<TlvNode>&, std::map<EntityId, std::string>&,
                     std::map<std::string, bool>&);
