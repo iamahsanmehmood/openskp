@@ -147,6 +147,9 @@ class _Archive:
         self.cum_delta = 0
         self.annot_watermark: Optional[int] = None
         self.burn_stack: list = []    # per-entity-list burned-item credits
+        # per-entity-list instances an annotation's path wrote in full (see
+        # _path_ref) that the list has not listed yet, slot -> None in order
+        self.inline_stack: list = []
 
     def alloc(self, entry) -> int:
         s = self.next_slot
@@ -1483,17 +1486,20 @@ def _connection_paths(ar, r):
         if count > 1000:
             raise LegacyParseError(
                 f"implausible dimension path length {r.ctx()}")
-        lists.append([_path_ref(ar, r) for _ in range(count)])
+        lists.append([_path_ref(ar, r, member=not i) for i in range(count)])
     return extra, lists[0], lists[1]
 
 
-def _path_ref(ar, r):
+def _path_ref(ar, r, member=False):
     """One instance of a dimension's path. Usually a reference, but MFC
     writes an object IN FULL the first time anything points at it — and a
     dimension serialized before the group it is anchored in carries that
     whole group right here (the root list later holds a back-reference).
     Read it like any object then, so it is registered and the stream stays
-    aligned; return its slot either way."""
+    aligned; return its slot either way. A path runs from the outermost
+    instance in, so its first one (*member*) is an entity of the list the
+    annotation is in; one written here in full is noted for that list
+    (see _read_entity_list)."""
     tag = r.peek_u16()
     new = tag == 0xFFFF or (tag != 0x7FFF and tag & 0x8000)
     if tag == 0x7FFF:
@@ -1501,16 +1507,17 @@ def _path_ref(ar, r):
         new = bool(big & 0x80000000)
     if new:
         slot, _name, _value = ar.read_object(r)
+        inline = getattr(ar, 'inline_stack', None)
+        if member and inline:
+            inline[-1][slot] = None
         return slot
     return _entity_ref(ar, r)
 
 
-def _read_text(ar, r):
-    _preamble(ar, r)
-    db = _drawbase(ar, r)
-    ar.read_object(r, expect='CSkFont')
-    # variable-length variant middle, delimited by an 11-byte block
-    # `01 00 00 00 ?? 00 03 00 00 00 01` right before the text string
+def _text_delimiter(r):
+    """Where a text's string starts: the variable-length variant middle
+    ends in an 11-byte block `01 00 00 00 ?? 00 03 00 00 00 01` right
+    before it."""
     p = r.pos
     while True:
         idx = r.data.find(_STR_MARKER, p, r.pos + 512)
@@ -1520,16 +1527,49 @@ def _read_text(ar, r):
         arrow = struct.unpack_from('<I', blk, 6)[0]
         if (blk[:4] == b'\x01\x00\x00\x00'
                 and arrow <= 8 and blk[10] == 1):
-            break                    # blk[6:10] is the ARROW TYPE (0-4 seen)
+            return idx               # blk[6:10] is the ARROW TYPE (0-4 seen)
         p = idx + 3
-    # The variant middle carries the same free-connection block dimensions
-    # use: [u32 type=1][u32 4][point3d]. Type 1 stores the anchor inline
-    # (world inches); anchored texts (type 2) zero the point, so only
-    # type 1 is trusted.
+
+
+def _anchored_connection(data, pos):
+    """Whether the text whose font ends at *pos* is anchored to an entity:
+    after the two screen-fraction f64s comes the connection block,
+    [u32 type][u32 4][point3d], and a type other than 0 or 1 (2, 4, 5 and 7
+    seen; see docs/dimension-record-notes.md) anchors the label."""
+    if data[pos + 20:pos + 24] != b'\x04\x00\x00\x00':
+        return False
+    return 2 <= struct.unpack_from('<I', data, pos + 16)[0] <= 15
+
+
+def _read_text(ar, r):
+    _preamble(ar, r)
+    db = _drawbase(ar, r)
+    ar.read_object(r, expect='CSkFont')
     point = None
     label = None
+    connect = None
+    paths = None
+    anchored = _anchored_connection(r.data, r.pos)
+    if anchored:
+        # An anchored connection block is followed, as a dimension's is
+        # (see _read_dimlinear), by the anchored entity's ref and its
+        # instance paths — and MFC writes a path instance IN FULL there
+        # when nothing has pointed at it before (a label anchored to a
+        # component instance serialized after it, its class declaration
+        # included when it is the file's first instance). Skipped as
+        # bytes, that instance never gets its store-map slots and every
+        # later reference is off by them ("class-ref to non-class slot");
+        # read it instead. The block's point is zero (types 2 and 4) or
+        # not known to be a world position (5, and 7's face fractions), so
+        # it is not kept.
+        r.raw(16 + 32)
+        connect = _entity_ref(ar, r)
+        paths = _connection_paths(ar, r)
+    idx = _text_delimiter(r)
+    # A free text's block has type 1 and its anchor inline (world inches),
+    # followed by the null ref and empty paths (the 12 zero bytes below).
     mid = r.data[r.pos:idx]
-    off = mid.find(b'\x01\x00\x00\x00\x04\x00\x00\x00')
+    off = -1 if anchored else mid.find(b'\x01\x00\x00\x00\x04\x00\x00\x00')
     if off >= 0 and off + 32 <= len(mid):
         point = struct.unpack_from('<3d', mid, off + 8)
         # placement tail: [12B zeros][point3d LABEL][16B zeros][f64 1.0]
@@ -1557,21 +1597,61 @@ def _read_text(ar, r):
         r.raw(6)
         attach.append(val)
     return {'k': 'text', 'text': text, 'db': db, 'attach': attach,
-            'p': point, 'lp': label}
+            'p': point, 'lp': label, 'connect': connect, 'paths': paths}
 
 
 def _read_entity_list(ar, r, count, owner):
     ents = []
     ar.burn_stack.append(0)
+    ar.inline_stack.append({})
     try:
-        return _read_entity_list_inner(ar, r, count, owner, ents)
+        ents = _read_entity_list_inner(ar, r, count, owner, ents)
+        # An instance an annotation wrote in full (see _path_ref) is one of
+        # this list's items, and the declared count holds it — but SketchUp
+        # does not always list it again with a back-reference (labels
+        # anchored to the loudspeakers of an auditorium: of five instances
+        # written in a definition's labels, three were listed again, two
+        # not). Keep the ones never listed, as the list's own entities.
+        for slot in ar.inline_stack[-1]:
+            if len(ents) < count:
+                _, name, value = ar.slots[slot]
+                ents.append((slot, name, value))
+        return ents
     finally:
         ar.burn_stack.pop()
+        ar.inline_stack.pop()
+
+
+def _peek_backref(ar, r):
+    """The walker slot of the back-reference at the cursor, without moving
+    it; ``None`` when the next tag is anything else."""
+    if r.pos + 2 > len(r.data):
+        return None
+    tag = struct.unpack_from('<H', r.data, r.pos)[0]
+    if tag == 0x7FFF:
+        if r.pos + 6 > len(r.data):
+            return None
+        slot = struct.unpack_from('<I', r.data, r.pos + 2)[0]
+        if slot & 0x80000000:
+            return None
+    elif tag == 0 or tag & 0x8000:
+        return None
+    else:
+        slot = tag
+    if ar.burns and slot >= ar.burns[0][0]:
+        return ar._translate_ref(slot)
+    return slot
 
 
 def _read_entity_list_inner(ar, r, count, owner, ents):
     while len(ents) < count:
         p = r.pos
+        inline = ar.inline_stack[-1] if ar.inline_stack else {}
+        if (inline and len(ents) + len(inline) >= count
+                and _peek_backref(ar, r) not in inline):
+            # every item left is an instance an annotation already wrote in
+            # full and the list does not list again (see _read_entity_list)
+            break
         if (owner == 'def' and ar.burn_stack and ar.burn_stack[-1]
                 and struct.unpack_from('<I', r.data, p)[0] == 0
                 and r.data[p + 22:p + 25] == _STR_MARKER):
@@ -1600,6 +1680,7 @@ def _read_entity_list_inner(ar, r, count, owner, ents):
             raise
         finally:
             ar.in_entity_list = prev_flag
+        inline.pop(s, None)
         ents.append((s, n, v))
     return ents
 

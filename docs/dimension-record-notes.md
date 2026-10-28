@@ -108,3 +108,15 @@ A second SDK helper (`mktext`) settled the text record. Key findings:
   screen slot zeroed, free connection with the anchor, label position
   at ``point + leader``, leader type 2, closed arrow (3). The reader
   extracts both points (``TextEntity.point`` / ``label_point``).
+- Every connection type is followed, as in a dimension, by the
+  anchored entity's ref and its instance paths: `[entity ref][entity
+  ref][u32 n][n path refs][u32 n][n refs]` — the placement tail's 12
+  zero bytes for types 0 and 1. Anchored labels carry
+  real refs there (types 2, 4, 5 and 7 in the 25 SketchUp 2015 models
+  of the BRAS room-acoustics benchmark, 2026-10-28), and a path
+  instance not written yet comes IN FULL, class declaration included
+  when it is the file's first instance. Every port's reader reads the block
+  for types other than 0 and 1; skipped as bytes, it shifted every later
+  store-map slot. The entity list's declared count holds such an
+  instance even where SketchUp never lists it again (no back-ref), so
+  the list keeps it as its own entity.

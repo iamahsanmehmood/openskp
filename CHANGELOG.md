@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — all five ports: a legacy text label anchored to an entity no longer throws off the rest of the file
+
+A text label anchored to an entity (connection types 2, 4, 5 and 7 seen; types 0 and 1 anchor to
+nothing) carries, after its connection block, the anchored entity's reference and its instance
+paths, as a dimension does (openskp#412). MFC writes a path instance in full the first time anything
+references it, with its class declaration when it is the file's first instance. Every reader skipped
+those bytes, so the instance got no store-map slots and every later reference was off by them: a
+file whose labels come before the components they are anchored to stopped with "class-ref to
+non-class slot … (CText)", or silently lost the rest of its root entity list. The block is read now.
+An instance written in a label that its entity list never lists again is kept as one of that list's
+entities: the list's declared count holds it, but SketchUp does not always list it again.
+
+Measured on the 25 SketchUp 2015 models of the BRAS room-acoustics benchmark:
+
+- the four auditorium (CR4) models open; they failed before;
+- two coupled-room (CR1) models read their whole root entity list: 5 of 318 and 361 of 370
+  entities before; Python's scene has 11,626 and 18,928 triangles now (460 and 1,216 before);
+- a loudspeaker-setup model reads all 12 of its root instances: Python, TypeScript and C++ read
+  11, and .NET and Dart stopped on it;
+- every entity list in these models and in the sample files reads exactly its declared count
+  (counted in Python).
+
+The other 18 models, and the 48 sample files in this repository, parse to the same faces, edges,
+instances, dimensions and texts as before. Each port changes on the same 7 models, in the same way,
+and the five ports now read the same faces, edges, instances, dimensions and texts from all 73
+files, per definition and in the root.
+
 ## [1.4.0] — 2026-10-27 — all 5 languages
 
 > What most readers will notice, from the entries below (everything since 1.3.0):
