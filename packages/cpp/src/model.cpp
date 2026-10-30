@@ -126,7 +126,9 @@ std::map<EntityId, const Material*> SkpModel::materials_by_id() const {
   return result;
 }
 
-static Definition definition(EntityId id, RawDefinition&& r) {
+// Takes the raw definition by value so its builder maps are freed as soon as this one is
+// converted: holding every raw definition until build_model returns doubles peak memory.
+static Definition definition(EntityId id, RawDefinition r) {
   Definition d;
   d.id = id;
   d.guid = std::move(r.guid);
@@ -198,6 +200,8 @@ SkpModel build_model(RawParsed&& p, const ParseOptions& o) {
   auto resolve_layers = [&](RawDefinition& d) {
     for (auto& i : d.builder.instances) resolve_layer(i.layer);
     for (auto& f : d.builder.faces) resolve_layer(f.second.layer);
+    for (auto& cl : d.builder.construction_lines) resolve_layer(cl.layer);
+    for (auto& cp : d.builder.construction_points) resolve_layer(cp.layer);
   };
   for (auto& d : p.definitions) {
     resolve_layers(d.second);

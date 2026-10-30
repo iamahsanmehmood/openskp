@@ -1669,10 +1669,14 @@ void fill(GeometryBuilder& b,
       cl.direction = v->direction;
       cl.start = v->start;
       cl.end = v->end;
+      if (v->layer) cl.layer = std::to_string(v->layer);
+      cl.hidden = v->hidden != 0;
       b.construction_lines.push_back(std::move(cl));
     } else if (v->k == "constructionpoint") {
       ConstructionPoint cp;
       cp.position = v->xyz;
+      if (v->layer) cp.layer = std::to_string(v->layer);
+      cp.hidden = v->hidden != 0;
       b.construction_points.push_back(std::move(cp));
     }
   }

@@ -36,6 +36,17 @@ static std::optional<EntityId> entity_id(const TlvNode& n) {
   return {};
 }
 
+// Guides (6942 / 6C42) wrap the usual drawing-element base in 6842: its
+// D007 container holds D307 (display flags, base 0x06, +0x01 hidden) and
+// D207 (layer entity id), the same leaves edges/faces/instances carry.
+template <typename Guide>
+static void read_guide_drawbase(const TlvNode& e, Guide& g) {
+  if (auto* flags = find_node(e.children, "D307"); flags && !flags->payload.empty())
+    g.hidden = (flags->payload[0] & 0x01) != 0;
+  if (auto* layer = find_node(e.children, "D207"); layer && !layer->payload.empty())
+    g.layer = std::to_string(parse_varint(layer->payload, 0, layer->payload.size()));
+}
+
 static EntityId dc_id(const ByteBuffer& p) {
   if (p.size() >= 6 && p[0] == 0xde && p[1] == 5) {
     auto z = read_u32(p, 2);
@@ -336,7 +347,6 @@ void collect_geometry(const std::vector<TlvNode>& es, GeometryBuilder& b) {
       RawInstance i;
       i.offset = e.offset;
       i.id = entity_id(e);
-      i.children = e.children;
       auto* g = find_node(e.children, "6819");
       if (g && g->payload.size() == 16) i.ref_guid = hex(g->payload);
       auto* r = find_node(e.children, "6719");
@@ -391,14 +401,17 @@ void collect_geometry(const std::vector<TlvNode>& es, GeometryBuilder& b) {
                         cl.point[1] + cl.direction[1] * end_param,
                         cl.point[2] + cl.direction[2] * end_param};
         }
+        read_guide_drawbase(e, cl);
         b.construction_lines.push_back(std::move(cl));
       }
     } else if (e.tag == "6C42") {
-      // VFF CConstructionPoint (list `9213`): 6D42 position, 6E42 unused zeros, 6F42 u8.
+      // VFF CConstructionPoint (list `9213`): 6D42 position, 6E42 a second
+      // 3×f64 block (often zeros, not decoded), 6F42 u8.
       auto* p = find_node(e.children, "6D42");
       if (p && p->payload.size() >= 24) {
         ConstructionPoint cp;
         cp.position = {read_f64(p->payload, 0), read_f64(p->payload, 8), read_f64(p->payload, 16)};
+        read_guide_drawbase(e, cp);
         b.construction_points.push_back(std::move(cp));
       }
     } else if (!e.children.empty())

@@ -1148,6 +1148,35 @@ TEST(Create, ConstructionLineAndPointDoNotCorruptTheFile) {
   EXPECT_NEAR(model.root().section_planes[0].plane[3], -30.0, 1e-6);
 }
 
+TEST(Create, GuideOptionsRoundTripHiddenFlagAndLayer) {
+  auto builder = create();
+  const int guides = builder->add_layer("Guides");
+  builder->add_face({{0, 0, 0}, {10, 0, 0}, {10, 10, 0}, {0, 10, 0}});
+  builder->add_construction_point({1, 2, 3}, GuideOptions{std::nullopt, true});
+  builder->add_construction_point({4, 5, 6}, GuideOptions{guides, false});
+  builder->add_construction_line({0, 0, 0}, Point3{10, 0, 0}, std::nullopt,
+                                 GuideOptions{guides, true});
+  builder->add_construction_line({0, 0, 4}, std::nullopt, Point3{0, 0, 1});
+
+  SkpModel model = round_trip(*builder);
+  ASSERT_EQ(model.root().construction_points.size(), 2u);
+  EXPECT_TRUE(model.root().construction_points[0].hidden);
+  EXPECT_TRUE(model.root().construction_points[0].layer.empty());
+  EXPECT_FALSE(model.root().construction_points[1].hidden);
+  EXPECT_EQ(model.root().construction_points[1].layer, "Guides");
+  ASSERT_EQ(model.root().construction_lines.size(), 2u);
+  EXPECT_TRUE(model.root().construction_lines[0].hidden);
+  EXPECT_EQ(model.root().construction_lines[0].layer, "Guides");
+  EXPECT_FALSE(model.root().construction_lines[1].hidden);
+  EXPECT_TRUE(model.root().construction_lines[1].layer.empty());
+}
+
+TEST(Create, GuideOptionsRejectAForeignLayerHandle) {
+  auto builder = create();
+  builder->add_face({{0, 0, 0}, {10, 0, 0}, {10, 10, 0}, {0, 10, 0}});
+  EXPECT_THROW(builder->add_construction_point({1, 2, 3}, GuideOptions{42, false}), SkpWriteError);
+}
+
 TEST(Create, AddSectionPlaneRejectsAZeroNormal) {
   auto builder = create();
   builder->add_face({{0, 0, 0}, {10, 0, 0}, {10, 10, 0}, {0, 10, 0}});

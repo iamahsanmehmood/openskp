@@ -906,7 +906,8 @@ class ArchiveWriter {
   // signed distance parameters along that direction marking the visible segment's start/end. An
   // unbounded direction is written as the real +/-1e30 sentinel SketchUp itself uses.
   void write_construction_line(Point3 point, std::optional<Point3> point2 = std::nullopt,
-                               std::optional<Point3> direction = std::nullopt) {
+                               std::optional<Point3> direction = std::nullopt,
+                               const GuideOptions& options = {}) {
     if (point2.has_value() == direction.has_value()) {
       throw SkpWriteError("add_construction_line: pass exactly one of point2 or direction");
     }
@@ -934,7 +935,7 @@ class ArchiveWriter {
     }
     new_of_known_class("CConstructionLine", kConstructionLineSchema);
     preamble();
-    drawbase();
+    drawbase(0, options.layer.value_or(0), options.hidden);
     for (double v : {point[0], point[1], point[2], dx, dy, dz, start_param, end_param})
       append_f64(buf, v);
     append_zeros(buf, 4);  // trailer
@@ -946,10 +947,10 @@ class ArchiveWriter {
   // Ground truth (real SketchUp 2025, SDK/Ruby cross-checked): a second, always-zero 3-double
   // block and a trailing zero byte follow the position - reserved/unused, written as zero to
   // match every real-file sample seen.
-  void write_construction_point(Point3 position) {
+  void write_construction_point(Point3 position, const GuideOptions& options = {}) {
     new_of_known_class("CConstructionPoint", kConstructionPointSchema);
     preamble();
-    drawbase();
+    drawbase(0, options.layer.value_or(0), options.hidden);
     for (double v : {position[0], position[1], position[2], 0.0, 0.0, 0.0}) append_f64(buf, v);
     append_zeros(buf, 1);
   }
@@ -1891,15 +1892,19 @@ void ComponentDefinitionBuilder::add_polyline(const std::vector<Point3>& points,
 }
 
 void ComponentDefinitionBuilder::add_construction_line(Point3 point, std::optional<Point3> point2,
-                                                       std::optional<Point3> direction) {
+                                                       std::optional<Point3> direction,
+                                                       const GuideOptions& options) {
   check_writable("construction lines");
-  impl_->writer->write_construction_line(point, point2, direction);
+  detail::check_layer_handle(*impl_->skp, options.layer);
+  impl_->writer->write_construction_line(point, point2, direction, options);
   impl_->new_entity_count += 1;
 }
 
-void ComponentDefinitionBuilder::add_construction_point(Point3 position) {
+void ComponentDefinitionBuilder::add_construction_point(Point3 position,
+                                                        const GuideOptions& options) {
   check_writable("construction points");
-  impl_->writer->write_construction_point(position);
+  detail::check_layer_handle(*impl_->skp, options.layer);
+  impl_->writer->write_construction_point(position, options);
   impl_->new_entity_count += 1;
 }
 
@@ -2219,16 +2224,19 @@ void SkpBuilder::add_text(const std::string& text, Point3 point, Point3 leader) 
 }
 
 void SkpBuilder::add_construction_line(Point3 point, std::optional<Point3> point2,
-                                       std::optional<Point3> direction) {
+                                       std::optional<Point3> direction,
+                                       const GuideOptions& options) {
+  detail::check_layer_handle(*this, options.layer);
   impl_->ensure_geometry_writer();
-  impl_->geometry_writer->write_construction_line(point, point2, direction);
+  impl_->geometry_writer->write_construction_line(point, point2, direction, options);
   impl_->new_entity_count += 1;
   impl_->face_count += 1;  // reuses the "at least one root entity" check in to_bytes
 }
 
-void SkpBuilder::add_construction_point(Point3 position) {
+void SkpBuilder::add_construction_point(Point3 position, const GuideOptions& options) {
+  detail::check_layer_handle(*this, options.layer);
   impl_->ensure_geometry_writer();
-  impl_->geometry_writer->write_construction_point(position);
+  impl_->geometry_writer->write_construction_point(position, options);
   impl_->new_entity_count += 1;
   impl_->face_count += 1;  // reuses the "at least one root entity" check in to_bytes
 }

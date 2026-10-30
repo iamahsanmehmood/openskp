@@ -138,6 +138,15 @@ using AttributeDict = std::map<std::string, AttributeValue>;
 
 class ComponentDefinitionBuilder;
 
+/// Options for `add_construction_line` / `add_construction_point` on `SkpBuilder` and
+/// `ComponentDefinitionBuilder`.
+struct GuideOptions {
+  /// Layer slot (from `add_layer`); unset = default (Layer0).
+  std::optional<int> layer;
+  /// Hides the guide itself (SketchUp's "Hide" on this specific guide).
+  bool hidden = false;
+};
+
 /// Options for `SkpBuilder::add_face` / `ComponentDefinitionBuilder::add_face`.
 struct FaceOptions {
   /// Front-side material slot (from `add_material`/`add_texture_material`); unset = default.
@@ -334,10 +343,11 @@ class OPENSKP_EXPORT ComponentDefinitionBuilder {
   /// Add a construction/guide line - same behavior as `SkpBuilder::add_construction_line`
   /// (coordinates are definition-local inches, like `add_face`).
   void add_construction_line(Point3 point, std::optional<Point3> point2 = std::nullopt,
-                             std::optional<Point3> direction = std::nullopt);
+                             std::optional<Point3> direction = std::nullopt,
+                             const GuideOptions& options = {});
   /// Add a construction/guide point - same behavior as `SkpBuilder::add_construction_point`
   /// (coordinates are definition-local inches, like `add_face`).
-  void add_construction_point(Point3 position);
+  void add_construction_point(Point3 position, const GuideOptions& options = {});
 
   /// Place one instance of another, already-closed component definition inside this one - the
   /// same nesting real SketchUp supports (an assembly definition containing instances of its own
@@ -522,13 +532,15 @@ class OPENSKP_EXPORT SkpBuilder {
   /// Add a construction/guide line (SketchUp's Construction Line tool). Pass exactly one of
   /// `point2` (a bounded segment between `point` and `point2`, matching
   /// `Entities#add_cline(p1, p2)`) or `direction` (an unbounded guide line through `point`,
-  /// matching `Entities#add_cline(point, vector)`).
+  /// matching `Entities#add_cline(point, vector)`). `options` places the guide on a layer and/or
+  /// hides it.
   void add_construction_line(Point3 point, std::optional<Point3> point2 = std::nullopt,
-                             std::optional<Point3> direction = std::nullopt);
+                             std::optional<Point3> direction = std::nullopt,
+                             const GuideOptions& options = {});
 
   /// Add a construction/guide point (SketchUp's Construction Point tool) at `position` (inches,
-  /// world space).
-  void add_construction_point(Point3 position);
+  /// world space). `options` places the guide on a layer and/or hides it.
+  void add_construction_point(Point3 position, const GuideOptions& options = {});
 
   /// Add a section plane (SketchUp's Section Plane tool) through `point` with the given `normal`
   /// (need not be unit length), matching `Entities#add_section_plane([point, normal])`.

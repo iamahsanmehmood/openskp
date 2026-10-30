@@ -295,12 +295,43 @@ TEST(Geometry, ExtractsVffConstructionPointAndLine) {
   EXPECT_NEAR(builder.construction_points[0].position[0], 1.0, 1e-9);
   EXPECT_NEAR(builder.construction_points[0].position[1], 2.0, 1e-9);
   EXPECT_NEAR(builder.construction_points[0].position[2], 3.0, 1e-9);
+  // No drawing-element base: visible, default layer.
+  EXPECT_FALSE(builder.construction_points[0].hidden);
+  EXPECT_TRUE(builder.construction_points[0].layer.empty());
   ASSERT_EQ(builder.construction_lines.size(), 2u);
   ASSERT_TRUE(builder.construction_lines[0].start && builder.construction_lines[0].end);
   EXPECT_NEAR((*builder.construction_lines[0].end)[0], 12.0, 1e-9);
   EXPECT_FALSE(builder.construction_lines[1].start);
   EXPECT_FALSE(builder.construction_lines[1].end);
   EXPECT_NEAR(builder.construction_lines[1].point[2], 4.0, 1e-9);
+  EXPECT_FALSE(builder.construction_lines[0].hidden);
+  EXPECT_TRUE(builder.construction_lines[0].layer.empty());
+}
+
+TEST(Geometry, ReadsVffGuideHiddenFlagAndLayer) {
+  using test::f64s;
+  // 6842 > D007 > D307 display flags (0x06 base, +0x01 hidden), D207 layer id.
+  const auto drawbase = [](std::uint8_t flags, std::optional<std::uint8_t> layer) {
+    ByteBuffer d007 = tlv("D307", {flags});
+    if (layer) d007 = concat({tlv("D207", {*layer}), std::move(d007)});
+    return tlv("6842", tlv("D007", d007));
+  };
+  auto builder = geometry(concat({
+      tlv("9213",
+          concat({tlv("6C42", concat({drawbase(0x07, std::nullopt), tlv("6D42", f64s({1, 2, 3}))})),
+                  tlv("6C42",
+                      concat({drawbase(0x06, std::uint8_t{4}), tlv("6D42", f64s({4, 5, 6}))}))})),
+      tlv("9113", tlv("6942", concat({drawbase(0x07, std::uint8_t{3}),
+                                      tlv("6A42", f64s({0, 0, 0, 1, 0, 0, 0, 12}))}))),
+  }));
+  ASSERT_EQ(builder.construction_points.size(), 2u);
+  EXPECT_TRUE(builder.construction_points[0].hidden);
+  EXPECT_TRUE(builder.construction_points[0].layer.empty());
+  EXPECT_FALSE(builder.construction_points[1].hidden);
+  EXPECT_EQ(builder.construction_points[1].layer, "4");
+  ASSERT_EQ(builder.construction_lines.size(), 1u);
+  EXPECT_TRUE(builder.construction_lines[0].hidden);
+  EXPECT_EQ(builder.construction_lines[0].layer, "3");
 }
 
 }  // namespace

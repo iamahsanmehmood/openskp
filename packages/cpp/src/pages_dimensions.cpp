@@ -85,6 +85,26 @@ std::optional<Vec3> vec3_of(const std::optional<ByteBuffer>& p) {
   return std::nullopt;
 }
 
+// Header-only check that buf[begin, end) is the same well-formed flat TLV
+// tlv_items_int accepts, carrying both dimension ends (5BCD, 5BCE). The
+// "cc 5b" byte search hits mesh/float data far more often than real 5BCC
+// records, and those false hits can claim lengths of hundreds of MB; this
+// rejects them before anything is copied.
+bool flat_tlv_has_dimension_ends(const ByteBuffer& buf, std::size_t begin, std::size_t end) {
+  bool has_5bcd = false, has_5bce = false;
+  std::size_t off = begin;
+  while (off < end) {
+    if (off + 6 > end) return false;
+    const auto tag = static_cast<std::uint16_t>(buf[off] | (buf[off + 1] << 8));
+    const auto ln = read_u32(buf, off + 2);
+    if (tag == 0 || ln > end - off - 6) return false;
+    if (tag == 0x5bcd) has_5bcd = true;
+    if (tag == 0x5bce) has_5bce = true;
+    off += 6 + ln;
+  }
+  return has_5bcd && has_5bce;
+}
+
 }  // namespace
 
 // Accumulate every vertex's persistent id (hex) -> (x, y, z) inches. A
@@ -225,15 +245,9 @@ std::vector<RawDimension> parse_dimensions(
     if (j + 6 > n) continue;
     auto ln = read_u32(model_dat, j + 2);
     if (ln < 40 || j + 6 + ln > n) continue;
+    if (!flat_tlv_has_dimension_ends(model_dat, j + 6, j + 6 + ln)) continue;
     ByteBuffer body_bytes(model_dat.begin() + j + 6, model_dat.begin() + j + 6 + ln);
     auto body = tlv_items_int(body_bytes);
-    if (body.empty()) continue;
-    bool has_5bcd = false, has_5bce = false;
-    for (auto& it : body) {
-      if (it.tag == 0x5bcd) has_5bcd = true;
-      if (it.tag == 0x5bce) has_5bce = true;
-    }
-    if (!has_5bcd || !has_5bce) continue;
 
     auto a = point(tlv_find_int(body, 0x5bcd));
     auto b = point(tlv_find_int(body, 0x5bce));
