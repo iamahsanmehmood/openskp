@@ -83,10 +83,10 @@ constexpr std::size_t kTailPos = 3515;
 // copied) layer/definition/root-entity region - Python's `_scaffold_next_slot`.
 constexpr int kScaffoldNextSlot = 11;
 
-// Absolute offset (BEFORE the material insertion point, so only its value needs correction, not
-// its position) of a u16 "next available pid" counter. Increments by exactly the material count
-// (one pid consumed per material object).
+// Absolute offset of the uint64 next persistent entity ID. IDs are document-wide,
+// not per archive section; the scaffold has already consumed IDs below 18.
 constexpr std::size_t kPidCounterPos = 1987;
+constexpr std::uint64_t kFirstNewPid = 18;
 
 // Offsets (relative to the start of the document "tail") of internal references that must be
 // renumbered by the same amount as the number of new archive slots inserted before them. See
@@ -271,6 +271,76 @@ void write_u16_at(ByteBuffer& buf, std::size_t pos, std::uint16_t v) {
 
 void write_u32_at(ByteBuffer& buf, std::size_t pos, std::uint32_t v) {
   for (int i = 0; i < 4; ++i) buf[pos + i] = static_cast<std::uint8_t>((v >> (8 * i)) & 0xFF);
+}
+
+// The two style item tables belong to the fixed scaffold (working and saved style).
+// Patch before archive references are widened, so all offsets still refer to that scaffold.
+void patch_style_items(ByteBuffer& tail, std::size_t pos, const DocumentOptions& options) {
+  for (int i = 0; i < 56; ++i) {
+    const auto read32 = [&](std::size_t p) {
+      return std::uint32_t(read_u16_le(tail, p)) | (std::uint32_t(read_u16_le(tail, p + 2)) << 16);
+    };
+    const int id = static_cast<int>(read32(pos));
+    const bool valid = read32(pos + 4) != 0;
+    pos += 8;
+    if (!valid) continue;  // e.g. the empty watermark list has no variant payload
+    const auto type = read32(pos);
+    pos += 4;
+    const std::size_t size = type == 1 ? 1 : type == 7 ? 8 : 4;
+    const auto it = options.style_items.find(id);
+    if (it != options.style_items.end()) {
+      const double v = it->second;
+      if (type == 1)
+        tail[pos] = v != 0.0;
+      else if (type == 4)
+        write_u32_at(tail, pos, static_cast<std::uint32_t>(static_cast<std::int64_t>(v)));
+      else if (type == 6) {
+        const float f = static_cast<float>(v);
+        std::uint32_t bits;
+        std::memcpy(&bits, &f, sizeof(bits));
+        write_u32_at(tail, pos, bits);
+      } else if (type == 7) {
+        ByteBuffer bytes;
+        append_f64(bytes, v);
+        std::copy(bytes.begin(), bytes.end(), tail.begin() + pos);
+      }
+    }
+    pos += size;
+  }
+}
+
+// Current rendering options are also stored outside the style manager. These
+// scaffold offsets were cross-checked by changing one option at a time with the
+// SketchUp 2026 C API, saving as v17, and reading the resulting file with that API.
+void patch_rendering_options(ByteBuffer& prefix, const DocumentOptions& options) {
+  struct Field {
+    int id;
+    std::size_t offset;
+    bool boolean;
+  };
+
+  const Field fields[] = {
+      {1000, 3173, false}, {1001, 3279, false}, {1002, 3197, false}, {1004, 3201, true},
+      {1005, 3202, false}, {1006, 3206, true},  {1007, 3207, false}, {1008, 3211, true},
+      {1009, 3212, false}, {1010, 3216, true},  {1011, 3217, false}, {1012, 3172, true},
+      {1014, 3181, false}, {1015, 3353, true},  {2001, 3166, false}, {2002, 3227, false},
+      {2003, 3231, false}, {2004, 3170, true},  {2005, 3171, true},  {2006, 3326, false},
+      {2007, 3196, true},  {4000, 3177, false}, {4001, 3287, false}, {4002, 3299, true},
+      {4003, 3295, false}, {4004, 3300, true},  {4005, 3302, false}, {4006, 3301, true},
+      {4007, 3291, false}, {5000, 3344, true},  {7000, 3185, false}, {7001, 3340, false},
+      {7002, 3189, false}, {7003, 3306, false}, {7004, 3310, false}, {7005, 3314, false},
+      {7008, 3283, true},  {7010, 3222, true},  {7011, 3195, true},  {7012, 3286, true},
+      {7014, 3318, false},
+  };
+  for (const auto& field : fields) {
+    const auto it = options.style_items.find(field.id);
+    if (it == options.style_items.end()) continue;
+    if (field.boolean)
+      prefix[field.offset] = it->second != 0.0;
+    else
+      write_u32_at(prefix, field.offset,
+                   static_cast<std::uint32_t>(static_cast<std::int64_t>(it->second)));
+  }
 }
 
 // UTF-8 (as held by std::string, this project's convention) -> UTF-16LE code units, matching
@@ -1034,14 +1104,12 @@ class ArchiveWriter {
     append_f64(buf, applied_width.value_or(1.0));
     append_f64(buf, applied_height.value_or(1.0));
     write_str(texture_path);
-    // avg color: neutral near-opaque white. Alpha is 254, not fully-opaque 255 - the reader
-    // treats alpha=255 here as one of its two "this material is colorized" signals; a plain
-    // texture's placeholder must not trip that.
-    const std::uint8_t avg[9] = {255, 255, 255, 254, 0, 255, 255, 255, 254};
+    // Image average and paint color are separate fields. Neither alpha is a colorize flag.
+    const std::uint8_t avg[9] = {255, 255, 255, 255, 0, 255, 255, 255, 255};
     append_bytes(buf, avg, sizeof(avg));
-    write_str("");  // second name field - empty in ground truth
-    append_u32(buf, 1);
-    append_u32(buf, 0);  // blob (colorize-related, ground truth: 1, 0)
+    write_str("");
+    append_u32(buf, 1);  // material type: plain texture (2 = colorized texture)
+    append_u32(buf, 0);  // colorize mode: shift (1 = tint)
     // Opacity, and the u8 that GATES it. The stored f64 is TRANSPARENCY (0 = opaque) - the reader
     // turns it into the opacity factor exposed with `1.0 - stored`, and only when the flag is
     // set - so an `opacity` argument here is written inverted and round-trips as itself.
@@ -1352,7 +1420,8 @@ class ArchiveWriter {
     append_f64(buf, plane.nx);
     append_f64(buf, plane.ny);
     append_f64(buf, plane.nz);
-    append_f64(buf, plane.d);
+    // The fit uses n.p = distance; native CFace stores ax + by + cz + d = 0.
+    append_f64(buf, -plane.d);
     append_u32(buf, static_cast<std::uint32_t>(1 + holes.size()));  // nloops
 
     int loop_slot = new_of_known_class("CLoop", 1);
@@ -1464,12 +1533,29 @@ int write_face_or_triangulate(ArchiveWriter& writer, const std::vector<Point3>& 
   if (front_uv || back_uv) {
     throw SkpWriteError("auto_triangulate cannot be combined with front_uv/back_uv positioning");
   }
-  int total = 0;
+  // Collinear fan wedges have no surface to emit. Validate all remaining wedges
+  // before mutating the archive: a later failure must not leave earlier triangles
+  // serialized without their entity counts (SketchUp rejects the whole document).
+  std::vector<std::vector<Point3>> triangles;
+  for (const auto& p : points)
+    for (double v : p)
+      if (!std::isfinite(v)) throw SkpWriteError("face contains non-finite coordinates");
   for (std::size_t i = 1; i + 1 < points.size(); ++i) {
-    total += writer.write_face({points[0], points[i], points[i + 1]}, vertex_slots, edge_registry,
-                               material, layer, back_material, hidden, soft_edges, smooth_edges,
-                               hidden_edges, std::nullopt, std::nullopt, attribute_dicts,
-                               std::nullopt, {});
+    std::vector<Point3> triangle{points[0], points[i], points[i + 1]};
+    try {
+      newell_normal(triangle);
+    } catch (const SkpWriteError&) {
+      continue;
+    }
+    plane_from_polygon(triangle);
+    triangles.push_back(std::move(triangle));
+  }
+  if (triangles.empty()) throw SkpWriteError("triangulation has no non-degenerate faces");
+  int total = 0;
+  for (const auto& triangle : triangles) {
+    total += writer.write_face(triangle, vertex_slots, edge_registry, material, layer,
+                               back_material, hidden, soft_edges, smooth_edges, hidden_edges,
+                               std::nullopt, std::nullopt, attribute_dicts, std::nullopt, {});
   }
   return total;
 }
@@ -1620,6 +1706,7 @@ struct ComponentDefinitionBuilder::Impl {
 };
 
 struct SkpBuilder::Impl {
+  std::optional<DocumentOptions> document_options;
   detail::ArchiveWriter material_writer;
   int material_count = 0;
   // Applied size (inches) each TEXTURED material slot was written with - add_face scales
@@ -1646,7 +1733,7 @@ struct SkpBuilder::Impl {
   int new_entity_count = 0;
   int face_count = 0;
 
-  Impl() : material_writer(detail::kBase, {}) {}
+  Impl() : material_writer(detail::kBase, {}, detail::kFirstNewPid) {}
 
   int material_shift() const { return material_writer.next_slot - detail::kBase; }
 
@@ -1686,8 +1773,12 @@ struct SkpBuilder::Impl {
                           "' is still open - call close() on it before adding root-level geometry");
     }
     int mshift = material_shift();
+    const auto next_pid = definition_writer ? definition_writer->next_pid
+                          : layer_writer    ? layer_writer->next_pid
+                                            : material_writer.next_pid;
     geometry_writer.emplace(detail::kScaffoldNextSlot + mshift + layer_shift() + definition_shift(),
-                            post_definition_class_slot());
+                            post_definition_class_slot(), next_pid);
+
     // Flush any groups that closed earlier, in the order they were created - deferred until now
     // so closing one group doesn't lock in root-level slot numbering before a later
     // add_group/add_component_definition call has had a chance to run.
@@ -1718,7 +1809,8 @@ struct SkpBuilder::Impl {
     }
     if (!definition_writer) {
       definition_writer_start = detail::kScaffoldNextSlot + material_shift() + layer_shift();
-      definition_writer.emplace(definition_writer_start, post_layer_class_slot());
+      definition_writer.emplace(definition_writer_start, post_layer_class_slot(),
+                                layer_writer ? layer_writer->next_pid : material_writer.next_pid);
     }
     auto header = definition_writer->write_definition_header(attribute_dicts);
     definition_count += 1;
@@ -1744,16 +1836,19 @@ struct SkpBuilder::Impl {
     ByteBuffer out;
     const std::uint8_t* data = detail::kScaffoldBlankV17;
 
-    // Each layer's record embeds 2 pids (write_layer); materials use 1 pid each.
-    int layer_pids = layer_writer ? static_cast<int>(layer_writer->next_pid - 1) : 0;
-    int pid_delta = material_count + layer_pids;
-
     ByteBuffer prefix(data, data + (detail::kMaterialInsertPos - 4));
-    if (pid_delta) {
-      std::uint16_t u16 = detail::read_u16_le(prefix, detail::kPidCounterPos);
-      detail::write_u16_at(prefix, detail::kPidCounterPos,
-                           static_cast<std::uint16_t>(u16 + pid_delta));
+    if (document_options) {
+      // Native named UnitsOptions, fixed offsets in the immutable v17 scaffold.
+      detail::write_u32_at(prefix, 2327, document_options->length_precision);
+      detail::write_u32_at(prefix, 2360, 0);  // LengthFormat: decimal
+      detail::write_u32_at(prefix, 2389, document_options->length_unit);
+      detail::write_u32_at(prefix, 2689, document_options->length_unit);  // AreaUnit
+      detail::write_u32_at(prefix, 2718, document_options->length_unit);  // VolumeUnit
+      detail::patch_rendering_options(prefix, *document_options);
     }
+    for (int i = 0; i < 8; ++i)
+      prefix[detail::kPidCounterPos + i] =
+          static_cast<std::uint8_t>(geometry_writer->next_pid >> (8 * i));
     std::copy(std::begin(detail::kIsoCameraPrefixPatch), std::end(detail::kIsoCameraPrefixPatch),
               prefix.begin() + static_cast<std::ptrdiff_t>(detail::kIsoCameraPrefixOffset));
     out.insert(out.end(), prefix.begin(), prefix.end());
@@ -1789,6 +1884,10 @@ struct SkpBuilder::Impl {
     out.insert(out.end(), geometry_writer->buf.begin(), geometry_writer->buf.end());
 
     ByteBuffer tail(data + detail::kTailPos, data + detail::kScaffoldBlankV17Size);
+    if (document_options) {
+      detail::patch_style_items(tail, 4070 - detail::kTailPos, *document_options);
+      detail::patch_style_items(tail, 4951 - detail::kTailPos, *document_options);
+    }
     int total_tail_shift = mshift + lshift + dshift + geometry_shift;
 
     // _TAIL_REF_POSITIONS and the iso-camera tail patches both index into this same tail buffer.
@@ -2043,7 +2142,8 @@ int SkpBuilder::add_layer(const std::string& name, const LayerOptions& options) 
   if (it != layers_by_name.end()) return it->second;
   if (!impl_->layer_writer) {
     impl_->layer_writer_start = detail::kLayerWriterBase + impl_->material_shift();
-    impl_->layer_writer.emplace(impl_->layer_writer_start, impl_->material_shifted_class_slot());
+    impl_->layer_writer.emplace(impl_->layer_writer_start, impl_->material_shifted_class_slot(),
+                                impl_->material_writer.next_pid);
   }
   detail::AttributeDictList dicts;
   for (const auto& kv : options.extra_dictionaries) dicts.emplace_back(kv.first, kv.second);
@@ -2241,6 +2341,16 @@ void SkpBuilder::add_section_plane(Point3 point, Point3 normal) {
 }
 
 ByteBuffer SkpBuilder::to_bytes() { return impl_->to_bytes(); }
+
+void SkpBuilder::set_document_options(const DocumentOptions& options) {
+  if (options.length_unit < 0 || options.length_unit > 5 || options.length_precision < 0 ||
+      options.length_precision > 6)
+    throw SkpWriteError("invalid decimal display units or precision");
+  for (const auto& item : options.style_items)
+    if (!std::isfinite(item.second) || item.second < -2147483648.0 || item.second > 4294967295.0)
+      throw SkpWriteError("style scalar is out of range");
+  impl_->document_options = options;
+}
 
 void SkpBuilder::save(const std::filesystem::path& path) {
   ByteBuffer bytes = to_bytes();

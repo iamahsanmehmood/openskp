@@ -285,6 +285,7 @@ struct V {
   bool shadows_face_sun{};
   bool is_group{};
   bool colorized{};
+  int colorize_type{};
   int mat{};
   int back_mat{};
   int layer{};

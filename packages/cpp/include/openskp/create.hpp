@@ -375,6 +375,16 @@ class OPENSKP_EXPORT ComponentDefinitionBuilder {
   std::unique_ptr<Impl> impl_;
 };
 
+/// Display settings supported by the legacy document scaffold.
+struct DocumentOptions {
+  /// Native UnitsOptions values: inches=0, feet=1, mm=2, cm=3, metres=4, yards=5.
+  int length_unit = 0;
+  int length_precision = 3;
+  /// Native style item IDs and scalar values (colors are packed ABGR uint32 values).
+  /// Only items present in the bundled legacy style are updated; newer items are ignored.
+  std::map<int, double> style_items;
+};
+
 /// Accumulates geometry and writes it into a new legacy-format (v17) `.skp` file. Construct via
 /// `create()`, not directly.
 class OPENSKP_EXPORT SkpBuilder {
@@ -385,6 +395,9 @@ class OPENSKP_EXPORT SkpBuilder {
   SkpBuilder& operator=(const SkpBuilder&) = delete;
   SkpBuilder(SkpBuilder&&) = delete;
   SkpBuilder& operator=(SkpBuilder&&) = delete;
+
+  /// Set decimal display units and basic working/saved style values without scaling geometry.
+  void set_document_options(const DocumentOptions& options);
 
   /// Every material registered so far, by name - populated by `add_material`/
   /// `add_texture_material` as a side effect (they already de-dupe by name through this same

@@ -505,19 +505,18 @@ struct Archive {
     v.tw = r.f64();
     v.th = r.f64();
     v.tex_file = r.utf16();
-    auto c = r.raw(9);  // RGBA + 00 + RGBA (colour stored twice)
-    v.r = c[0];
-    v.g = c[1];
-    v.b = c[2];
-    // c[3] here is not a colour alpha byte - it feeds the colorized check
-    // below alongside blob[4]. v.a keeps its default (255); textured
-    // materials/layers carry no separate alpha channel in this record
-    // shape.
+    auto c = r.raw(9);  // image average RGBA + 00 + material paint RGBA
+    v.r = c[5];
+    v.g = c[6];
+    v.b = c[7];
+    // c[3] is the image average alpha, not the material opacity. Textured
+    // materials/layers use the separate opacity field; v.a stays 255.
     r.utf16();
-    auto blob = r.raw(8);  // u32 + u32 colorized flag
+    auto blob = r.raw(8);  // u32 material type + u32 colorize mode
     v.opacity = r.f64();
     if (!r.u8()) v.opacity = 0;
-    v.colorized = blob[4] != 0 || c[3] == 255;
+    v.colorized = blob[0] == 2;
+    v.colorize_type = blob[4] == 1 ? 1 : 0;
   }
 
   // Returns the CAttributeContainer's slot, or nullopt when this entity
@@ -2253,7 +2252,7 @@ RawParsed parse_legacy(const ByteBuffer& data, const ParseOptions& o) {
       x->a = v->a;
       x->transparency = std::clamp(1.0 - v->opacity, 0.0, 1.0);
       x->colorized = v->colorized;
-      x->colorize_type = v->colorized ? 1 : 0;
+      x->colorize_type = v->colorize_type;
       if (v->tex_dib || v->inline_tex) {
         RawTexture t;
         t.filename = v->tex_file;
