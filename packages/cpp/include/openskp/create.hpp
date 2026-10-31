@@ -210,6 +210,9 @@ struct DefinitionOptions {
   /// `attribute_dict_name`.
   AttributeDict attributes;
   std::string attribute_dict_name = "attributes";
+  /// Canonical UUID: 32 hex digits or 8-4-4-4-12, case-insensitive. Empty creates a new identity.
+  /// Invalid non-empty values throw SkpWriteError before the definition is added.
+  std::string guid;
 };
 
 /// Options for `SkpBuilder::add_layer`.
@@ -385,6 +388,11 @@ class OPENSKP_EXPORT SkpBuilder {
   SkpBuilder& operator=(const SkpBuilder&) = delete;
   SkpBuilder(SkpBuilder&&) = delete;
   SkpBuilder& operator=(SkpBuilder&&) = delete;
+
+  /// Set the file/model UUID (also its identity when imported as a component).
+  /// Accepts 32 hex digits or 8-4-4-4-12, case-insensitive; invalid values throw SkpWriteError.
+  /// Empty generates a new UUID. By default each builder gets its own UUID, stable across writes.
+  void set_guid(const std::string& guid);
 
   /// Every material registered so far, by name - populated by `add_material`/
   /// `add_texture_material` as a side effect (they already de-dupe by name through this same

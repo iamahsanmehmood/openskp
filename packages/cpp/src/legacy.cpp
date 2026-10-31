@@ -881,6 +881,9 @@ struct Archive {
       r.f64();    // constant 1.0
       r.utf16();  // source path
       auto g = r.raw(16);
+      std::reverse(g.begin(), g.begin() + 4);
+      std::reverse(g.begin() + 4, g.begin() + 6);
+      std::reverse(g.begin() + 6, g.begin() + 8);
       static char h[] = "0123456789ABCDEF";
       for (auto x : g) {
         v->guid += h[x >> 4];
@@ -1126,6 +1129,9 @@ struct Archive {
         }
       }
       auto g = r.raw(16);
+      std::reverse(g.begin(), g.begin() + 4);
+      std::reverse(g.begin() + 4, g.begin() + 6);
+      std::reverse(g.begin() + 6, g.begin() + 8);
       static char h[] = "0123456789ABCDEF";
       for (auto x : g) {
         v->guid += h[x >> 4];

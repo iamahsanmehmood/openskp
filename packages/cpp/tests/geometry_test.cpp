@@ -303,5 +303,46 @@ TEST(Geometry, ExtractsVffConstructionPointAndLine) {
   EXPECT_NEAR(builder.construction_lines[1].point[2], 4.0, 1e-9);
 }
 
+TEST(Geometry, DefinitionDictionariesKeepNativeTypesWithoutChildAttributes) {
+  const auto values = concat({
+      entry("flag", tlv("AA38", {1})),
+      entry("count", tlv("A738", i32_bytes(-7))),
+      entry("nothing", {}),
+      entry("values", tlv("AE38", concat({entry_value(tlv("A938", test::f64s({2.5}))),
+                                          entry_value(tlv("AD38", test::bytes("abc")))}))),
+  });
+  const auto own = tlv("8813", tlv("D007", tlv("DC05", named_dict("Plugin", values))));
+  const auto child = tlv(
+      "6419",
+      concat({tlv("6719", {2}),
+              tlv("D007", tlv("DC05", named_dict("Plugin", entry("flag", tlv("AA38", {0})))))}));
+  const auto bytes = concat({
+      tlv("7C15", concat({tlv("DE05", {1}), own, child})),
+      tlv("7C15", concat({tlv("DE05", {2}), child})),
+  });
+  RawParsed raw;
+  collect_definitions(parse_tlv_recursive(bytes, 0, bytes.size()), raw.definitions);
+  ASSERT_EQ(raw.definitions.size(), 2u);
+  const auto model = build_model(std::move(raw));
+  const auto& attrs = model.definitions.at(1).parsed_dictionaries.at("Plugin");
+  EXPECT_EQ(attrs.at("flag").kind, ParsedAttribute::Kind::Boolean);
+  EXPECT_EQ(attrs.at("flag").integer, 1);
+  EXPECT_EQ(attrs.at("count").kind, ParsedAttribute::Kind::Integer);
+  EXPECT_EQ(attrs.at("count").integer, -7);
+  EXPECT_EQ(attrs.at("nothing").kind, ParsedAttribute::Kind::Null);
+  const auto& array = attrs.at("values");
+  ASSERT_EQ(array.kind, ParsedAttribute::Kind::Array);
+  ASSERT_EQ(array.array.size(), 2u);
+  EXPECT_EQ(array.array[0].kind, ParsedAttribute::Kind::Float);
+  EXPECT_DOUBLE_EQ(array.array[0].number, 2.5);
+  EXPECT_EQ(array.array[1].kind, ParsedAttribute::Kind::String);
+  EXPECT_EQ(array.array[1].to_string(), "abc");
+  EXPECT_TRUE(model.definitions.at(2).parsed_dictionaries.empty());
+  ASSERT_EQ(model.definitions.at(1).instances.size(), 1u);
+  EXPECT_EQ(
+      model.definitions.at(1).instances[0].attribute_dictionaries.at("Plugin").at("flag").integer,
+      0);
+}
+
 }  // namespace
 }  // namespace openskp

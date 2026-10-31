@@ -135,6 +135,7 @@ static Definition definition(EntityId id, RawDefinition&& r) {
   d.shadows_face_sun = r.shadows_face_sun;
   d.is_image = r.is_image;
   d.is_group = r.is_group;
+  d.parsed_dictionaries = std::move(r.parsed_dictionaries);
   for (auto& v : r.builder.vertices)
     d.vertices.emplace(v.first, Vertex{v.first, v.second[0], v.second[1], v.second[2]});
   for (auto& e : r.builder.edges) {

@@ -473,6 +473,8 @@ void collect_definitions(const std::vector<TlvNode>& ns, std::map<EntityId, RawD
           }
       }
       collect_geometry(e.children, d.builder);
+      // Only the definition's own entity base, never dictionaries on child instances/faces.
+      collect_model_attribute_dictionaries(e, d.parsed_dictionaries);
       if (auto id = entity_id(e)) out[*id] = std::move(d);
     }
     collect_definitions(e.children, out);

@@ -538,6 +538,8 @@ struct Definition {
   /// 2021+ file, a flag in the definition record in an older one - not from how often
   /// the definition is placed.
   bool is_group{};
+  /// Native definition attributes from VFF files, preserving booleans, nil and arrays.
+  ParsedAttrDictionaries parsed_dictionaries;
 };
 
 /// Top-level model container holding all definitions, layers, materials, and styles.

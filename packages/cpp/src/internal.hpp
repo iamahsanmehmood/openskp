@@ -96,6 +96,7 @@ struct RawDefinition {
   bool is_image{};
   bool is_group{};
   GeometryBuilder builder;
+  ParsedAttrDictionaries parsed_dictionaries;
 };
 
 struct RawTexture {

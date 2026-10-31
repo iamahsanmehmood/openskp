@@ -1202,5 +1202,101 @@ TEST(Create, NestedDefinitionConstructionRoundTrips) {
   ASSERT_TRUE(group->construction_lines[0].start && group->construction_lines[0].end);
 }
 
+TEST(Create, ModelGuidIsUniquePerBuilderAndStableAcrossWrites) {
+  auto first = create();
+  auto second = create();
+  first->add_face(square_pts());
+  second->add_face(square_pts());
+  const auto a = first->to_bytes(), b = second->to_bytes(), again = first->to_bytes();
+  ASSERT_GE(a.size(), 68u);
+  ASSERT_GE(b.size(), 68u);
+  ASSERT_GE(again.size(), 68u);
+  const ByteBuffer guid(a.begin() + 52, a.begin() + 68);
+  EXPECT_NE(guid, ByteBuffer(b.begin() + 52, b.begin() + 68));
+  EXPECT_EQ(guid, ByteBuffer(again.begin() + 52, again.begin() + 68));
+  // Version/variant bits in Windows GUID order.
+  EXPECT_EQ(guid[7] & 0xf0, 0x40);
+  EXPECT_EQ(guid[8] & 0xc0, 0x80);
+}
+
+TEST(Create, ExplicitModelGuidUsesNativeByteOrder) {
+  auto builder = create();
+  builder->add_face(square_pts());
+  const ByteBuffer native{0x33, 0x22, 0x11, 0x00, 0x55, 0x44, 0x77, 0x46,
+                          0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff};
+  for (const auto* guid :
+       {"00112233-4455-4677-8899-aabbccddeeff", "00112233445546778899AABBCCDDEEFF"}) {
+    builder->set_guid(guid);
+    const auto data = builder->to_bytes();
+    ASSERT_GE(data.size(), 68u);
+    EXPECT_EQ(ByteBuffer(data.begin() + 52, data.begin() + 68), native);
+  }
+  EXPECT_THROW(builder->set_guid("not-a-guid"), SkpWriteError);
+  EXPECT_THROW(builder->set_guid("00112233445546778899AABBCCDDEEFZ"), SkpWriteError);
+  EXPECT_THROW(builder->set_guid("00112233-4455-4677-8899a-abbccddeeff"), SkpWriteError);
+  const auto unchanged = builder->to_bytes();
+  EXPECT_EQ(ByteBuffer(unchanged.begin() + 52, unchanged.begin() + 68), native);
+  builder->set_guid("");
+  const auto reset = builder->to_bytes();
+  EXPECT_NE(ByteBuffer(reset.begin() + 52, reset.begin() + 68), native);
+}
+
+TEST(Create, DefinitionGuidPreservedInArchiveAndPublicModel) {
+  for (const auto* guid :
+       {"00112233-4455-4677-8899-aabbccddeeff", "00112233445546778899AABBCCDDEEFF"}) {
+    auto builder = create();
+    DefinitionOptions options;
+    options.guid = guid;
+    auto& def = builder->add_component_definition("Identified", options);
+    def.add_face(square_pts());
+    def.close();
+    builder->add_instance(def);
+    const auto data = builder->to_bytes();
+    const ByteBuffer native{0x33, 0x22, 0x11, 0x00, 0x55, 0x44, 0x77, 0x46,
+                            0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff};
+    EXPECT_NE(std::search(data.begin(), data.end(), native.begin(), native.end()), data.end());
+    const auto model = SkpFile::from_buffer(data).parse();
+    ASSERT_EQ(model.definitions.size(), 1u);
+    EXPECT_EQ(model.definitions.begin()->second.guid, "00112233445546778899AABBCCDDEEFF");
+    ASSERT_EQ(model.root().instances.size(), 1u);
+    ASSERT_TRUE(model.root().instances[0].ref_idx.has_value());
+    EXPECT_EQ(model.definitions.at(*model.root().instances[0].ref_idx).guid,
+              "00112233445546778899AABBCCDDEEFF");
+  }
+}
+
+TEST(Create, InvalidDefinitionGuidDoesNotPartiallyAddDefinition) {
+  auto builder = create();
+  DefinitionOptions options;
+  options.guid = "not-a-guid";
+  EXPECT_THROW(builder->add_component_definition("Invalid", options), SkpWriteError);
+  auto& good = builder->add_component_definition("Valid");
+  good.add_face(square_pts());
+  good.close();
+  builder->add_instance(good);
+  const auto model = round_trip(*builder);
+  ASSERT_EQ(model.definitions.size(), 1u);
+  EXPECT_EQ(model.definitions.begin()->second.name, "Valid");
+}
+
+TEST(Create, DefaultDefinitionGuidsAreDistinctAndStable) {
+  auto builder = create();
+  auto& a = builder->add_component_definition("Same name");
+  a.add_face(square_pts());
+  a.close();
+  auto& b = builder->add_component_definition("Same name");
+  b.add_face(square_pts());
+  b.close();
+  builder->add_instance(a);
+  builder->add_instance(b);
+  const auto first = round_trip(*builder), second = round_trip(*builder);
+  ASSERT_EQ(first.definitions.size(), 2u);
+  auto it = first.definitions.begin();
+  const auto guid = it++->second.guid;
+  EXPECT_NE(guid, it->second.guid);
+  for (const auto& entry : first.definitions)
+    EXPECT_EQ(entry.second.guid, second.definitions.at(entry.first).guid);
+}
+
 }  // namespace
 }  // namespace openskp
