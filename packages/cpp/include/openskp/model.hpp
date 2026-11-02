@@ -401,16 +401,16 @@ struct TextEntity {
 
 /// A linear dimension (SketchUp's Dimension tool).
 ///
-/// The legacy (pre-2021) reader recovers only `text`/`hidden`. The VFF
-/// reader (2021+) recovers the full geometry - see `SkpModel::dimensions`
-/// for the model-level, world-space list.
+/// The legacy reader recovers free endpoints and vertex attachments in the
+/// owning entities. Unresolved attachments remain unset. See `SkpModel::dimensions`
+/// for the VFF model-level, world-space list.
 struct Dimension {
   /// The displayed text. Empty when the dimension shows its auto-computed
   /// measured value (the caller formats |b - a|).
   std::string text;
   bool hidden{false};
-  /// First measured point (x, y, z) in inches (world space), or unset when
-  /// only the text was recovered.
+  /// First measured point (x, y, z) in inches in the owning entities' space
+  /// (definition-local, or world at the model root), or unset when unresolved.
   std::optional<Vec3> a;
   /// Second measured point.
   std::optional<Vec3> b;
@@ -421,6 +421,9 @@ struct Dimension {
   std::optional<Vec3> plane_x;
   /// The dimension plane's normal, or unset.
   std::optional<Vec3> normal;
+  /// Explicit offset for legacy dimensions constrained to a plane axis. This
+  /// preserves the side of the line independently of endpoint ordering.
+  std::optional<Vec3> offset_vector;
 };
 
 /// A construction/guide line (SketchUp's Construction Line tool).

@@ -108,3 +108,28 @@ A second SDK helper (`mktext`) settled the text record. Key findings:
   screen slot zeroed, free connection with the anchor, label position
   at ``point + leader``, leader type 2, closed arrow (3). The reader
   extracts both points (``TextEntity.point`` / ``label_point``).
+
+## Legacy C++ reader: inline vertices and plane offsets
+
+A connection reference can be a complete `CVertex` object, including a new
+class declaration or a short/escaped class reference. It is not always a
+back-reference. Reading it into the archive preserves the slot numbering for
+later dimensions and edges. Plain forward references are resolved after the
+archive walk. Free connections store their xyz directly after type 1 and the
+constant 4. Connections with instance paths still consume those variable-length
+paths, but leave endpoints unset until those paths can be resolved in owner
+coordinates.
+
+After the second connection's path lists, the remaining placement block is
+72 bytes (68 before version 6): three doubles for the plane normal, three for
+the X axis, a u32 constrained axis, the signed offset double, a reserved double,
+and the version-dependent trailing u32. SDK comparisons on axis-constrained
+SU2018 dimensions identify mode 1 as offset along `normal × X` and mode 2 as
+offset along `-X`. Multiplying by the stored signed distance preserves the
+line's side even when measured endpoints are reversed. Other modes retain their
+frame and scalar offset without inventing an explicit offset vector.
+
+`LegacyDimensionGeometry` tests use generated records with synthetic vertices,
+short and escaped references, forward references, variable-length paths and
+plane frames. No user model is required. The existing scalar-only
+`add_dimension` writer does not yet preserve arbitrary planes on re-export.
