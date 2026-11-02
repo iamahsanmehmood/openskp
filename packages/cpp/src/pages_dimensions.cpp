@@ -164,7 +164,7 @@ void scan_instance_transforms(const TlvNode& top,
 //   length-prefixed persistent id of the INSTANCE holding it - the vertex
 //   position is definition-local, so it is lifted to world by that
 //   instance's transform).
-// * 5BCF - the dimension plane's x-axis; 5BD0 - its normal.
+// * 5BCF - the dimension plane normal; 5BD0 - its X axis; 5BD1 - constrained axis.
 // * 5BD2 - the offset distance (inches): how far the dimension line sits
 //   from the measured segment, along the in-plane perpendicular.
 //
@@ -249,6 +249,22 @@ std::vector<RawDimension> parse_dimensions(
     d.plane_x = vec3_of(xaxis_b);
     d.normal = vec3_of(normal_b);
     d.offset = (off_b && off_b->size() == 8) ? read_f64(*off_b, 0) : 0.0;
+    // VFF 5BCF is the plane normal, 5BD0 its X axis, and 5BD1 the
+    // constrained axis. Retain the historical public frame fields, but resolve
+    // placement explicitly so clients need not guess the side from endpoints.
+    const auto axis_bytes = tlv_find_int(body, 0x5bd1);
+    if (axis_bytes && axis_bytes->size() == 4 && d.plane_x && d.normal) {
+      const auto axis = read_u32(*axis_bytes, 0);
+      const Vec3& normal = *d.plane_x;
+      const Vec3& x = *d.normal;
+      if (axis == 1) {
+        d.offset_vector = Vec3{(normal[1] * x[2] - normal[2] * x[1]) * d.offset,
+                               (normal[2] * x[0] - normal[0] * x[2]) * d.offset,
+                               (normal[0] * x[1] - normal[1] * x[0]) * d.offset};
+      } else if (axis == 2) {
+        d.offset_vector = Vec3{-x[0] * d.offset, -x[1] * d.offset, -x[2] * d.offset};
+      }
+    }
     dims.push_back(std::move(d));
   }
   return dims;

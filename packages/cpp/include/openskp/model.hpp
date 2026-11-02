@@ -417,11 +417,11 @@ struct Dimension {
   /// Offset distance (inches) - how far the dimension line sits from the
   /// a-b segment, along the in-plane perpendicular.
   double offset{};
-  /// The dimension plane's x-axis, or unset.
+  /// Historical frame field: VFF 5BCF (plane normal), legacy X axis, or unset.
   std::optional<Vec3> plane_x;
-  /// The dimension plane's normal, or unset.
+  /// Historical frame field: VFF 5BD0 (X axis), legacy plane normal, or unset.
   std::optional<Vec3> normal;
-  /// Explicit offset for legacy dimensions constrained to a plane axis. This
+  /// Explicit offset for legacy or VFF dimensions constrained to a plane axis. This
   /// preserves the side of the line independently of endpoint ordering.
   std::optional<Vec3> offset_vector;
 };

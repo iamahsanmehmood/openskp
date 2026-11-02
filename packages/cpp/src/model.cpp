@@ -243,6 +243,7 @@ SkpModel build_model(RawParsed&& p, const ParseOptions& o) {
     dim.offset = dm.offset;
     dim.plane_x = dm.plane_x;
     dim.normal = dm.normal;
+    dim.offset_vector = dm.offset_vector;
     dim.text = dm.text;
     m.dimensions.push_back(std::move(dim));
   }

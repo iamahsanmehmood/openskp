@@ -148,3 +148,24 @@ Tests cover root and nested dimensions, reversed endpoints, oblique planes,
 zero/parallel offsets and invalid inputs followed by valid records. Independent
 SketchUp SDK reads of an SU2018 accessory and its re-export agree on all three
 dimensions' endpoints and bounding boxes.
+
+## VFF reader: constrained plane offsets
+
+Modern SKP dimensions store the plane normal in `5BCF`, the plane X axis in
+`5BD0`, the constraint mode in `5BD1`, and the signed distance in `5BD2`.
+Modes 1 and 2 use the same `normal × X` and `-X` offset directions as legacy
+records. In particular, a vertical measurement with reversed endpoints must
+not reverse the side of its offset. Ignoring `5BD1` let downstream geometric
+heuristics flip an inward height annotation to the outside of the component.
+
+The C++ reader now exposes `offset_vector` for these VFF modes as well, both
+through raw dimensions and public model dimensions. The historical `plane_x`
+and `normal` fields retain their original VFF tag assignments for compatibility;
+use `offset_vector` for resolved placement. Missing, malformed, or unsupported
+constraint modes keep the existing scalar/frame fallback.
+
+Synthetic tests exercise both constraint modes, positive and negative distances,
+reversed endpoints, public-model conversion, and invalid/missing mode records.
+A downstream modern SKP reproduction additionally tests definition-local
+annotations on direct load and re-export; SDK bounds put all three annotations
+inside an 800 × 560 × 645 mm box.

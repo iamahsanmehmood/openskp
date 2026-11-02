@@ -148,6 +148,7 @@ struct RawDimension {
   double offset{};
   std::optional<Vec3> plane_x;
   std::optional<Vec3> normal;
+  std::optional<Vec3> offset_vector;
   std::string text;
 };
 
