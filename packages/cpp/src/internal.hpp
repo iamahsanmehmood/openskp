@@ -147,6 +147,7 @@ struct RawDimension {
   double offset{};
   std::optional<Vec3> plane_x;
   std::optional<Vec3> normal;
+  std::optional<Vec3> offset_vector;
   std::string text;
 };
 
@@ -242,11 +243,19 @@ RawParsed parse_legacy(const ByteBuffer&, const ParseOptions&);
 // one - two same-named types in nested scopes are different types in
 // C++, so this can't be split into "forward-declared here, defined
 // there" without every V-typed field silently binding to the wrong one.
+struct LegacyDimension {
+  Dimension geometry;
+  std::optional<std::uint64_t> connect1;
+  std::optional<std::uint64_t> connect2;
+};
+
 struct V {
   std::string k;
   std::string name;
   std::string label;
   std::string text;
+  // Allocate annotation geometry only for dimensions, not for every mesh vertex.
+  std::shared_ptr<LegacyDimension> dimension;
   std::string guid;
   Vec3 xyz{};
   // Only populated for k == "constructionline": the line's normalized

@@ -94,6 +94,59 @@ TEST(PagesDimensions, DimensionFreePointsSynthetic) {
   EXPECT_EQ(*d.normal, (Vec3{0.0, 0.0, 1.0}));
 }
 
+TEST(PagesDimensions, ConstrainedOffsetsPreservePlaneSideAndEndpointOrder) {
+  auto point = [](std::uint16_t tag, Vec3 p) {
+    return tlv(tag, tlv(0x5208, test::concat({tlv(0x5209, {1, 0, 0, 0}),
+                                              tlv(0x520a, vec3(p[0], p[1], p[2]))})));
+  };
+  for (std::uint8_t axis : {1, 2}) {
+    for (double distance : {-4.0, 4.0}) {
+      for (bool reversed : {false, true}) {
+        SCOPED_TRACE(axis);
+        SCOPED_TRACE(distance);
+        SCOPED_TRACE(reversed);
+        const Vec3 a{1, 2, 3}, b{1, 2, 13};
+        auto body =
+            test::concat({point(0x5bcd, reversed ? b : a), point(0x5bce, reversed ? a : b),
+                          tlv(0x5bcf, vec3(0, -1, 0)),  // actual plane normal
+                          tlv(0x5bd0, vec3(1, 0, 0)),   // actual plane X axis
+                          tlv(0x5bd1, {axis, 0, 0, 0}), tlv(0x5bd2, test::f64s({distance}))});
+        RawParsed parsed;
+        parsed.dimensions = parse_dimensions(tlv(0x5bcc, body), {}, {});
+        const auto model = build_model(std::move(parsed));
+        ASSERT_EQ(model.dimensions.size(), 1u);
+        const auto& dim = model.dimensions[0];
+        ASSERT_TRUE(dim.offset_vector);
+        const Vec3 expected = axis == 1 ? Vec3{0, 0, distance} : Vec3{-distance, 0, 0};
+        EXPECT_EQ(*dim.offset_vector, expected);
+        EXPECT_EQ(*dim.a, reversed ? b : a);
+        EXPECT_EQ(*dim.b, reversed ? a : b);
+      }
+    }
+  }
+}
+
+TEST(PagesDimensions, UnsupportedOrMalformedConstraintKeepsScalarFallback) {
+  auto point = [](std::uint16_t tag, Vec3 p) {
+    return tlv(tag, tlv(0x5208, test::concat({tlv(0x5209, {1, 0, 0, 0}),
+                                              tlv(0x520a, vec3(p[0], p[1], p[2]))})));
+  };
+  for (const ByteBuffer axis :
+       {ByteBuffer{}, ByteBuffer{2}, ByteBuffer{0, 0, 0, 0}, ByteBuffer{3, 0, 0, 0}}) {
+    auto body = test::concat({point(0x5bcd, {1, 2, 3}), point(0x5bce, {1, 2, 13}),
+                              tlv(0x5bcf, vec3(0, -1, 0)), tlv(0x5bd0, vec3(1, 0, 0)),
+                              tlv(0x5bd2, test::f64s({-4}))});
+    if (!axis.empty()) {
+      const auto tag = tlv(0x5bd1, axis);
+      body.insert(body.end(), tag.begin(), tag.end());
+    }
+    const auto dims = parse_dimensions(tlv(0x5bcc, body), {}, {});
+    ASSERT_EQ(dims.size(), 1u);
+    EXPECT_FALSE(dims[0].offset_vector);
+    EXPECT_EQ(dims[0].offset, -4);
+  }
+}
+
 TEST(PagesDimensions, DimensionConnectedPointResolvesThroughInstance) {
   // A type-2 connection (vertex id + instance id): the vertex position is
   // definition-local and must be lifted to world by the instance's
