@@ -320,6 +320,9 @@ class Archive {
   int cumDelta = 0;
   int? annotWatermark;
   final List<int> burnStack = []; // per-entity-list burned-item credits
+  // per-entity-list instances an annotation's path wrote in full (see
+  // _pathRef) that the list has not listed yet, in order
+  final List<Set<int>> inlineStack = [];
   int? clineTail;
 
   Archive(this.data, this.ver) : hasPid = ver >= 17 {
@@ -490,6 +493,27 @@ class Archive {
       offset += width;
     }
     return slot - offset;
+  }
+
+  /// The walker slot of the back-reference at the cursor, without moving
+  /// it; null when the next tag is anything else.
+  int? peekBackref(LR r) {
+    if (r.pos + 2 > r.data.length) return null;
+    final tag = r.data[r.pos] | (r.data[r.pos + 1] << 8);
+    int slot;
+    if (tag == 0x7FFF) {
+      if (r.pos + 6 > r.data.length) return null;
+      slot = Tlv.readU32(r.data, r.pos + 2);
+      if ((slot & 0x80000000) != 0) return null;
+    } else if (tag == 0 || (tag & 0x8000) != 0) {
+      return null;
+    } else {
+      slot = tag;
+    }
+    if (burns.isNotEmpty && slot >= burns[0].$1) {
+      return _translateRef(slot);
+    }
+    return slot;
   }
 
   (int?, String?, Object?) _backref(int slot, LR r) {
@@ -1449,10 +1473,10 @@ class LegacyReaders {
     // one.
     r.raw(ar.ver >= 6 ? 37 : 32);
     _entityRef(ar, r); // connection point 1 (may be null)
-    connectionPaths((rr) => ar.readObject(rr).$1, r);
+    connectionPaths((rr) => ar.readObject(rr).$1, r, ar);
     r.raw(32);
     _entityRef(ar, r); // connection point 2 (may be null)
-    connectionPaths((rr) => ar.readObject(rr).$1, r);
+    connectionPaths((rr) => ar.readObject(rr).$1, r, ar);
     r.raw(ar.ver >= 6 ? 72 : 68);
     return DimLinearRec(db, text);
   }
@@ -1460,9 +1484,11 @@ class LegacyReaders {
   /// What follows a dimension connection ref (see [readDimLinear]):
   /// `[entity ref][u32 n1][n1 refs][u32 n2][n2 refs]`. [readNewObject] reads a
   /// path entry that MFC wrote in full (the first time anything pointed at it)
-  /// and returns its slot.
+  /// and returns its slot; [ar], when given, notes such an entry for the
+  /// entity list being read (see [_pathRef]).
   static (int?, List<int?>, List<int?>) connectionPaths(
-      int? Function(LR r) readNewObject, LR r) {
+      int? Function(LR r) readNewObject, LR r,
+      [Archive? ar]) {
     final extra = _entityRef(null, r);
     final lists = <List<int?>>[];
     for (int k = 0; k < 2; k++) {
@@ -1470,7 +1496,10 @@ class LegacyReaders {
       if (count > 1000) {
         throw LegacyParseError('implausible dimension path length ${r.ctx()}');
       }
-      lists.add([for (int i = 0; i < count; i++) _pathRef(readNewObject, r)]);
+      lists.add([
+        for (int i = 0; i < count; i++)
+          _pathRef(readNewObject, r, i == 0 ? ar : null)
+      ]);
     }
     return (extra, lists[0], lists[1]);
   }
@@ -1480,24 +1509,32 @@ class LegacyReaders {
   /// serialized before the group it is anchored in carries that whole group
   /// right here (the root list later holds a back-reference). Read it like
   /// any object then, so it is registered and the stream stays aligned;
-  /// return its slot either way.
-  static int? _pathRef(int? Function(LR r) readNewObject, LR r) {
+  /// return its slot either way. A path runs from the outermost instance in,
+  /// so its first one is an entity of the list the annotation is in: [member]
+  /// is given for it, and one written here in full is noted for that list
+  /// (see [readEntityList]).
+  static int? _pathRef(int? Function(LR r) readNewObject, LR r,
+      [Archive? member]) {
     final tag = r.peekU16();
     var isNew = tag == 0xFFFF || (tag != 0x7FFF && (tag & 0x8000) != 0);
     if (tag == 0x7FFF) {
       isNew = (Tlv.readU32(r.data, r.pos + 2) & 0x80000000) != 0;
     }
-    return isNew ? readNewObject(r) : _entityRef(null, r);
+    if (!isNew) return _entityRef(null, r);
+    final slot = readNewObject(r);
+    if (member != null && slot != null && member.inlineStack.isNotEmpty) {
+      member.inlineStack.last.add(slot);
+    }
+    return slot;
   }
 
-  static Object readText(Archive ar, LR r) {
-    preamble(ar, r);
-    final db = drawbase(ar, r);
-    ar.readObject(r, 'CSkFont');
+  /// The text's string start: the variable-length variant middle ends in an
+  /// 11-byte block `01 00 00 00 ?? 00 <arrow type> 00 00 00 01` right before
+  /// it.
+  static int _textDelimiter(LR r) {
     int p = r.pos;
-    int idx;
     while (true) {
-      idx = _findBytes(r.data, _strMarker, p, r.pos + 512);
+      final idx = _findBytes(r.data, _strMarker, p, r.pos + 512);
       if (idx < 0) {
         throw LegacyParseError('text delimiter not found ${r.ctx()}');
       }
@@ -1511,10 +1548,41 @@ class LegacyReaders {
           blk[8] == 0x00 &&
           blk[9] == 0x00 &&
           blk[10] == 1) {
-        break;
+        return idx;
       }
       p = idx + 3;
     }
+  }
+
+  /// Whether the text whose font ends at [pos] is anchored to an entity:
+  /// after the two screen-fraction f64s comes the connection block,
+  /// `[u32 type][u32 4][point3d]`, and a type other than 0 or 1 (2, 4, 5 and
+  /// 7 seen; see docs/dimension-record-notes.md) anchors the label.
+  static bool _anchoredConnection(Uint8List data, int pos) {
+    if (pos + 24 > data.length) return false;
+    if (Tlv.readU32(data, pos + 20) != 4) return false;
+    final kind = Tlv.readU32(data, pos + 16);
+    return kind >= 2 && kind <= 15;
+  }
+
+  static Object readText(Archive ar, LR r) {
+    preamble(ar, r);
+    final db = drawbase(ar, r);
+    ar.readObject(r, 'CSkFont');
+    if (_anchoredConnection(r.data, r.pos)) {
+      // An anchored connection block is followed, as a dimension's is (see
+      // readDimLinear), by the anchored entity's ref and its instance paths -
+      // and MFC writes a path instance IN FULL there when nothing has pointed
+      // at it before (a label anchored to a component instance serialized
+      // after it, its class declaration included when it is the file's first
+      // instance). Skipped as bytes, that instance never gets its store-map
+      // slots and every later reference is off by them ("class-ref to
+      // non-class slot"); read it instead.
+      r.raw(16 + 32);
+      _entityRef(ar, r);
+      connectionPaths((rr) => ar.readObject(rr).$1, r, ar);
+    }
+    final idx = _textDelimiter(r);
     r.raw(idx - r.pos);
     final text = r.utf16();
     r.raw(5);
@@ -1541,17 +1609,42 @@ class LegacyReaders {
       Archive ar, LR r, int count, String owner) {
     final ents = <(int, String?, Object?)>[];
     ar.burnStack.add(0);
+    ar.inlineStack.add(<int>{});
     try {
-      return _readEntityListInner(ar, r, count, owner, ents);
+      _readEntityListInner(ar, r, count, owner, ents);
+      // An instance an annotation wrote in full (see _pathRef) is one of this
+      // list's items, and the declared count holds it - but SketchUp does not
+      // always list it again with a back-reference (labels anchored to the
+      // loudspeakers of an auditorium: of five instances written in a
+      // definition's labels, three were listed again, two not). Keep the ones
+      // never listed, as the list's own entities.
+      for (final slot in ar.inlineStack.last) {
+        if (ents.length >= count) break;
+        final ent = ar.slots[slot];
+        ents.add((slot, ent?.name, ent?.value));
+      }
+      return ents;
     } finally {
       ar.burnStack.removeLast();
+      ar.inlineStack.removeLast();
     }
   }
 
   static List<(int, String?, Object?)> _readEntityListInner(Archive ar, LR r,
       int count, String owner, List<(int, String?, Object?)> ents) {
+    final inline = ar.inlineStack.isNotEmpty ? ar.inlineStack.last : null;
     while (ents.length < count) {
       final p = r.pos;
+      if (inline != null &&
+          inline.isNotEmpty &&
+          ents.length + inline.length >= count) {
+        final next = ar.peekBackref(r);
+        if (next == null || !inline.contains(next)) {
+          // every item left is an instance an annotation already wrote in
+          // full and the list does not list again (see readEntityList)
+          break;
+        }
+      }
       final hasBurnCredit =
           owner == 'def' && ar.burnStack.isNotEmpty && ar.burnStack.last > 0;
       if (hasBurnCredit &&
@@ -1590,6 +1683,7 @@ class LegacyReaders {
         rethrow;
       }
       ar.inEntityList = prevFlag;
+      inline?.remove(s!);
       ents.add((s!, n, v));
     }
     return ents;

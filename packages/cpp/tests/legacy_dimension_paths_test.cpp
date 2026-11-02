@@ -56,6 +56,8 @@ TEST(LegacyDimensionPaths, PathsInsideNestedComponentsAreReadRefByRef) {
   ASSERT_EQ(res.second.size(), 2u);
   EXPECT_EQ(*res.second[0], 0x166157ULL);
   EXPECT_EQ(*res.second[1], 0x165bbdULL);
+  EXPECT_EQ(res.first_new, (std::vector<bool>{false, false}));
+  EXPECT_EQ(res.second_new, (std::vector<bool>{false, false}));
   EXPECT_EQ(ByteBuffer(data.begin() + res.next, data.end()), kTail);
 }
 
@@ -72,6 +74,7 @@ TEST(LegacyDimensionPaths, APathCanHoldAWholeNewObject) {
   EXPECT_FALSE(res.extra.has_value());
   ASSERT_EQ(res.first.size(), 1u);
   EXPECT_EQ(*res.first[0], 4242ULL);
+  EXPECT_EQ(res.first_new, std::vector<bool>{true});
   EXPECT_TRUE(res.second.empty());
   EXPECT_EQ(ByteBuffer(data.begin() + res.next, data.end()), kTail);
 }

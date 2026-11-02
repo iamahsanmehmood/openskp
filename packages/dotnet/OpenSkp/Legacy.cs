@@ -352,6 +352,9 @@ namespace OpenSkp
         public int CumDelta;
         public int? AnnotWatermark;
         public List<int> BurnStack = new List<int>();  // per-entity-list burned-item credits
+        // per-entity-list instances an annotation's path wrote in full (see
+        // PathRef) that the list has not listed yet, in order
+        public List<List<int>> InlineStack = new List<List<int>>();
         // Cached CConstructionLine trailer width, self-calibrated on the
         // first guide line of the file (see ReadConstructionLine).
         public int? ClineTail;
@@ -550,6 +553,36 @@ namespace OpenSkp
                 offset += width;
             }
             return slot - offset;
+        }
+
+        /// <summary>The walker slot of the back-reference at the cursor,
+        /// without moving it; null when the next tag is anything
+        /// else.</summary>
+        public int? PeekBackref(LR r)
+        {
+            if (r.Pos + 2 > r.Data.Length) return null;
+            int tag = r.Data[r.Pos] | (r.Data[r.Pos + 1] << 8);
+            int slot;
+            if (tag == 0x7FFF)
+            {
+                if (r.Pos + 6 > r.Data.Length) return null;
+                uint big = Tlv.ReadU32(r.Data, r.Pos + 2);
+                if ((big & 0x80000000) != 0) return null;
+                slot = (int)big;
+            }
+            else if (tag == 0 || (tag & 0x8000) != 0)
+            {
+                return null;
+            }
+            else
+            {
+                slot = tag;
+            }
+            if (Burns.Count > 0 && slot >= Burns[0].Start)
+            {
+                return TranslateRef(slot);
+            }
+            return slot;
         }
 
         private (int?, string?, object?) Backref(int slot, LR r)
@@ -1469,10 +1502,10 @@ namespace OpenSkp
             // u32 of the last one.
             r.Raw(ar.Ver >= 6 ? 37 : 32);
             EntityRef(ar, r);                // connection point 1 (may be null)
-            ConnectionPaths(rr => ar.ReadObject(rr).Slot, r);
+            ConnectionPaths(rr => ar.ReadObject(rr).Slot, r, ar);
             r.Raw(32);
             EntityRef(ar, r);                // connection point 2 (may be null)
-            ConnectionPaths(rr => ar.ReadObject(rr).Slot, r);
+            ConnectionPaths(rr => ar.ReadObject(rr).Slot, r, ar);
             r.Raw(ar.Ver >= 6 ? 72 : 68);
             return new DimLinearRec { Db = db, Text = text };
         }
@@ -1481,9 +1514,10 @@ namespace OpenSkp
         /// <see cref="ReadDimLinear"/>): [entity ref][u32 n1][n1 refs][u32 n2]
         /// [n2 refs]. <paramref name="readNewObject"/> reads a path entry that
         /// MFC wrote in full (the first time anything pointed at it) and
-        /// returns its slot.</summary>
+        /// returns its slot; <paramref name="ar"/>, when given, notes such an
+        /// entry for the entity list being read (see PathRef).</summary>
         internal static (int? Extra, List<int?> First, List<int?> Second) ConnectionPaths(
-            Func<LR, int?> readNewObject, LR r)
+            Func<LR, int?> readNewObject, LR r, Archive? ar = null)
         {
             int? extra = EntityRef(null, r);
             var lists = new List<int?>[2];
@@ -1497,7 +1531,7 @@ namespace OpenSkp
                 var refs = new List<int?>();
                 for (uint i = 0; i < count; i++)
                 {
-                    refs.Add(PathRef(readNewObject, r));
+                    refs.Add(PathRef(readNewObject, r, i == 0 ? ar : null));
                 }
                 lists[k] = refs;
             }
@@ -1509,8 +1543,12 @@ namespace OpenSkp
         /// it - and a dimension serialized before the group it is anchored in
         /// carries that whole group right here (the root list later holds a
         /// back-reference). Read it like any object then, so it is registered
-        /// and the stream stays aligned; return its slot either way.</summary>
-        private static int? PathRef(Func<LR, int?> readNewObject, LR r)
+        /// and the stream stays aligned; return its slot either way. A path
+        /// runs from the outermost instance in, so its first one is an entity
+        /// of the list the annotation is in: <paramref name="member"/> is
+        /// given for it, and one written here in full is noted for that list
+        /// (see ReadEntityList).</summary>
+        private static int? PathRef(Func<LR, int?> readNewObject, LR r, Archive? member = null)
         {
             ushort tag = r.PeekU16();
             bool isNew = tag == 0xFFFF || (tag != 0x7FFF && (tag & 0x8000) != 0);
@@ -1518,19 +1556,24 @@ namespace OpenSkp
             {
                 isNew = (Tlv.ReadU32(r.Data, r.Pos + 2) & 0x80000000) != 0;
             }
-            return isNew ? readNewObject(r) : EntityRef(null, r);
+            if (!isNew) return EntityRef(null, r);
+            int? slot = readNewObject(r);
+            if (member != null && slot != null && member.InlineStack.Count > 0)
+            {
+                member.InlineStack[member.InlineStack.Count - 1].Add(slot.Value);
+            }
+            return slot;
         }
 
-        public static object ReadText(Archive ar, LR r)
+        /// <summary>The text's string start: the variable-length variant
+        /// middle ends in an 11-byte block `01 00 00 00 ?? 00 &lt;arrow type&gt;
+        /// 00 00 00 01` right before it.</summary>
+        private static int TextDelimiter(LR r)
         {
-            Preamble(ar, r);
-            var db = Drawbase(ar, r);
-            ar.ReadObject(r, "CSkFont");
             int p = r.Pos;
-            int idx;
             while (true)
             {
-                idx = LegacyBytes.FindBytes(r.Data, LegacyBytes.StrMarker, p, r.Pos + 512);
+                int idx = LegacyBytes.FindBytes(r.Data, LegacyBytes.StrMarker, p, r.Pos + 512);
                 if (idx < 0)
                 {
                     throw new LegacyParseError($"text delimiter not found {r.Ctx()}");
@@ -1541,10 +1584,46 @@ namespace OpenSkp
                     && blk[6] <= 8 && blk[7] == 0x00 && blk[8] == 0x00 && blk[9] == 0x00
                     && blk[10] == 1)
                 {
-                    break;
+                    return idx;
                 }
                 p = idx + 3;
             }
+        }
+
+        /// <summary>Whether the text whose font ends at <paramref name="pos"/>
+        /// is anchored to an entity: after the two screen-fraction f64s comes
+        /// the connection block, [u32 type][u32 4][point3d], and a type other
+        /// than 0 or 1 (2, 4, 5 and 7 seen; see
+        /// docs/dimension-record-notes.md) anchors the label.</summary>
+        private static bool AnchoredConnection(byte[] data, int pos)
+        {
+            if (pos + 24 > data.Length) return false;
+            if (Tlv.ReadU32(data, pos + 20) != 4) return false;
+            uint kind = Tlv.ReadU32(data, pos + 16);
+            return kind >= 2 && kind <= 15;
+        }
+
+        public static object ReadText(Archive ar, LR r)
+        {
+            Preamble(ar, r);
+            var db = Drawbase(ar, r);
+            ar.ReadObject(r, "CSkFont");
+            if (AnchoredConnection(r.Data, r.Pos))
+            {
+                // An anchored connection block is followed, as a dimension's
+                // is (see ReadDimLinear), by the anchored entity's ref and
+                // its instance paths - and MFC writes a path instance IN FULL
+                // there when nothing has pointed at it before (a label
+                // anchored to a component instance serialized after it, its
+                // class declaration included when it is the file's first
+                // instance). Skipped as bytes, that instance never gets its
+                // store-map slots and every later reference is off by them
+                // ("class-ref to non-class slot"); read it instead.
+                r.Raw(16 + 32);
+                EntityRef(ar, r);
+                ConnectionPaths(rr => ar.ReadObject(rr).Slot, r, ar);
+            }
+            int idx = TextDelimiter(r);
             r.Raw(idx - r.Pos);
             string text = r.Utf16();
             r.Raw(5);
@@ -1568,22 +1647,50 @@ namespace OpenSkp
         public static List<(int Slot, string? Name, object? Value)> ReadEntityList(Archive ar, LR r, long count, string owner)
         {
             ar.BurnStack.Add(0);
+            ar.InlineStack.Add(new List<int>());
             try
             {
-                return ReadEntityListInner(ar, r, count, owner);
+                var ents = ReadEntityListInner(ar, r, count, owner);
+                // An instance an annotation wrote in full (see PathRef) is one
+                // of this list's items, and the declared count holds it - but
+                // SketchUp does not always list it again with a back-reference
+                // (labels anchored to the loudspeakers of an auditorium: of
+                // five instances written in a definition's labels, three were
+                // listed again, two not). Keep the ones never listed, as the
+                // list's own entities.
+                foreach (int slot in ar.InlineStack[ar.InlineStack.Count - 1])
+                {
+                    if (ents.Count >= count) break;
+                    ar.Slots.TryGetValue(slot, out var ent);
+                    ents.Add((slot, ent?.Name, ent?.Value));
+                }
+                return ents;
             }
             finally
             {
                 ar.BurnStack.RemoveAt(ar.BurnStack.Count - 1);
+                ar.InlineStack.RemoveAt(ar.InlineStack.Count - 1);
             }
         }
 
         private static List<(int Slot, string? Name, object? Value)> ReadEntityListInner(Archive ar, LR r, long count, string owner)
         {
             var ents = new List<(int, string?, object?)>();
+            var inline = ar.InlineStack.Count > 0 ? ar.InlineStack[ar.InlineStack.Count - 1] : null;
             while (ents.Count < count)
             {
                 int p = r.Pos;
+                if (inline != null && inline.Count > 0 && ents.Count + inline.Count >= count)
+                {
+                    int? next = ar.PeekBackref(r);
+                    if (next == null || !inline.Contains(next.Value))
+                    {
+                        // every item left is an instance an annotation already
+                        // wrote in full and the list does not list again (see
+                        // ReadEntityList)
+                        break;
+                    }
+                }
                 bool hasBurnCredit = owner == "def" && ar.BurnStack.Count > 0 && ar.BurnStack[ar.BurnStack.Count - 1] > 0;
                 if (hasBurnCredit
                     && p + 25 <= r.Data.Length
@@ -1632,6 +1739,7 @@ namespace OpenSkp
                     r.Pos = p;
                     break;
                 }
+                inline?.Remove(s!.Value);
                 ents.Add((s!.Value, n, v));
             }
             return ents;
