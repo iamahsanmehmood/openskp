@@ -1177,6 +1177,46 @@ TEST(Create, AnnotationDrawingPropertiesRoundTrip) {
   EXPECT_EQ(*screen.screen_position, (std::array<double, 2>{0.23, 0.67}));
 }
 
+TEST(Create, LeaderlessModelTextRetainsBothPointsAndVisibility) {
+  auto builder = create();
+  const auto add = [](auto& sink) {
+    for (int type : {0, 1, 2}) {
+      for (bool display : {false, true}) {
+        TextOptions options;
+        options.leader_type = type;
+        options.display_leader = display;
+        sink.add_text("Model label", {5, 6, 7}, {2, 3, 4}, options);
+      }
+    }
+    TextOptions screen;
+    screen.screen_position = std::array<double, 2>{0.23, 0.67};
+    sink.add_text("Screen label", {0, 0, 0}, {0, 0, 0}, screen);
+  };
+  auto& nested = builder->add_component_definition("Leader visibility");
+  add(nested);
+  nested.close();
+  builder->add_instance(nested);
+  add(*builder);
+  const auto model = round_trip(*builder);
+  const auto verify = [](const Definition& owner) {
+    ASSERT_EQ(owner.texts.size(), 7u);
+    for (std::size_t i = 0; i < 6; ++i) {
+      const auto& text = owner.texts[i];
+      ASSERT_TRUE(text.point && text.label_point);
+      EXPECT_EQ(*text.point, (Vec3{5, 6, 7}));
+      EXPECT_EQ(*text.label_point, (Vec3{7, 9, 11}));
+      EXPECT_NE(text.leader_type, 0);  // zero would turn it into screen text in SketchUp
+      EXPECT_EQ(text.display_leader, i == 3 || i == 5);
+    }
+    EXPECT_EQ(owner.texts[6].leader_type, 0);
+    ASSERT_TRUE(owner.texts[6].screen_position);
+    EXPECT_EQ(*owner.texts[6].screen_position, (std::array<double, 2>{0.23, 0.67}));
+  };
+  verify(model.root());
+  ASSERT_EQ(model.definitions.size(), 1u);
+  verify(model.definitions.begin()->second);
+}
+
 TEST(Create, InvalidAnnotationOptionsLeaveArchiveUsable) {
   auto builder = create();
   DimensionOptions dim_options;

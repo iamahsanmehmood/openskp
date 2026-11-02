@@ -213,3 +213,18 @@ fixtures saved as 2019 and current VFF formats. They extend the repository's pub
 and screen text on three named tags, including hidden elements. They contain no
 user model data. Tests verify each owner's tags, hidden states and text placement,
 as well as writer round trips and invalid-options recovery.
+
+
+### Text leader visibility
+
+Native leader type 0 denotes screen text, even when a free 3D connection is present.
+`TextOptions::leader_type == 0` without `screen_position` is therefore written as
+model text (type 2) with `display_leader=false`. This canonicalization preserves
+both the world anchor and label position without moving the note to the screen.
+
+The independent display switch is the last byte of the legacy arrow delimiter
+(immediately before the text string), and VFF field `55FC`. It must be accepted
+as either 0 or 1 by the legacy reader. The SDK-generated annotation fixtures now
+hide the first root text's leader while retaining its model placement. Tests cover
+visible/hidden View and Model leaders, leaderless model text, root/component
+ownership and unchanged screen fractions.

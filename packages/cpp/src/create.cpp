@@ -997,11 +997,17 @@ class ArchiveWriter {
     for (double value : label) append_f64(buf, value);
     buf.insert(buf.end(), 16, 0);
     append_f64(buf, 1.0);
-    append_u32(buf, options.screen_position ? 0 : options.leader_type);
+    // Native type 0 is screen text. A leaderless owner-local label must remain
+    // type 2 with its independent display flag cleared, preserving both points.
+    const int leader_type =
+        options.screen_position ? 0 : (options.leader_type == 0 ? 2 : options.leader_type);
+    const bool display_leader =
+        options.display_leader && (options.screen_position || options.leader_type != 0);
+    append_u32(buf, leader_type);
     append_u32(buf, 1);
     append_u16(buf, 1);
     append_u32(buf, options.arrow_type);
-    buf.push_back(1);
+    buf.push_back(display_leader ? 1 : 0);
     write_str(text);
     buf.insert(buf.end(), 5, 0);
   }

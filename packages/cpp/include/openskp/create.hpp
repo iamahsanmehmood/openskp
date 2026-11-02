@@ -158,10 +158,13 @@ struct DimensionOptions {
 struct TextOptions {
   std::optional<int> layer;
   bool hidden = false;
+  /// Zero with no screen position writes model text with a hidden leader (native type 2).
   int leader_type = 2;
   int arrow_type = 3;
   /// Normalized screen fractions for screen text; overrides the leader type.
   std::optional<std::array<double, 2>> screen_position;
+  /// Hide the leader without turning owner-local text into screen text.
+  bool display_leader = true;
 };
 
 /// Options for `SkpBuilder::add_face` / `ComponentDefinitionBuilder::add_face`.

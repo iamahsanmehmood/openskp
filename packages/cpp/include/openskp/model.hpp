@@ -406,6 +406,7 @@ struct TextEntity {
   std::optional<std::array<double, 2>> screen_position;
   int leader_type{2};
   int arrow_type{3};
+  bool display_leader{true};
 };
 
 /// A linear dimension (SketchUp's Dimension tool).

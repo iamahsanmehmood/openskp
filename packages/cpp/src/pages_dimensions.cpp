@@ -240,6 +240,8 @@ std::optional<TextEntity> parse_text(const ByteBuffer& model_dat, std::size_t j,
     text.leader_type = static_cast<int>(read_u32(*type, 0));
   if (const auto arrow = tlv_find_int(fields, 0x55fa); arrow && arrow->size() == 4)
     text.arrow_type = static_cast<int>(read_u32(*arrow, 0));
+  if (const auto display = tlv_find_int(fields, 0x55fc); display && display->size() == 1)
+    text.display_leader = (*display)[0] != 0;
   if (const auto draw = tlv_find_int(fields, 0x07d0)) {
     const auto properties = tlv_items_int(*draw);
     if (const auto layer = tlv_find_int(properties, 0x07d2); layer && !layer->empty())

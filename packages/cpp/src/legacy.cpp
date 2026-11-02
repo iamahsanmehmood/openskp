@@ -1107,13 +1107,14 @@ struct Archive {
       for (size_t q = r.p; q + 14 <= std::min(r.d.size(), r.p + 512); ++q)
         if (r.d[q] == 1 && r.d[q + 1] == 0 && r.d[q + 2] == 0 && r.d[q + 3] == 0 &&
             r.d[q + 6] <= 8 && r.d[q + 7] == 0 && r.d[q + 8] == 0 && r.d[q + 9] == 0 &&
-            r.d[q + 10] == 1 && r.d[q + 11] == 255 && r.d[q + 12] == 254 && r.d[q + 13] == 255) {
+            r.d[q + 10] <= 1 && r.d[q + 11] == 255 && r.d[q + 12] == 254 && r.d[q + 13] == 255) {
           found = q + 11;
           break;
         }
       if (found == std::string::npos) throw std::runtime_error("text delimiter not found");
       v->annotation_text = std::make_shared<LegacyText>();
       TextEntity annotation;
+      annotation.display_leader = r.d[found - 1] != 0;
       if (found >= r.p + 63) {
         annotation.leader_type = static_cast<int>(read_u32(r.d, found - 15));
         annotation.arrow_type = static_cast<int>(read_u32(r.d, found - 5));

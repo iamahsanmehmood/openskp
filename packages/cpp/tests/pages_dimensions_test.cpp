@@ -495,6 +495,7 @@ TEST(PagesDimensions, SdkAnnotationTagsRetainOwnerAndVisibility) {
       tagged(owner.construction_lines, "参考元素", 2, 1);
       tagged(owner.texts, "引注文字", nested ? 1 : 3, nested ? 0 : 1);
       for (const auto& text : owner.texts) {
+        EXPECT_EQ(text.display_leader, text.text != "Dot");
         if (nested) {
           EXPECT_EQ(text.leader_type, 0);
           ASSERT_TRUE(text.screen_position);
