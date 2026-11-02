@@ -1135,6 +1135,68 @@ TEST(Create, TwoDimensionsShareOneEmbeddedFont) {
   EXPECT_EQ(model.root().texts.size(), 1u);
 }
 
+TEST(Create, AnnotationDrawingPropertiesRoundTrip) {
+  auto builder = create();
+  const int layer = builder->add_layer("Annotations");
+  DimensionOptions dim_options;
+  dim_options.layer = layer;
+  dim_options.hidden = true;
+  TextOptions text_options;
+  text_options.layer = layer;
+  text_options.hidden = true;
+  auto& nested = builder->add_component_definition("TextOnly");
+  text_options.screen_position = std::array<double, 2>{0.23, 0.67};
+  nested.add_text("Screen label", {0, 0, 0}, {0, 0, 0}, text_options);
+  nested.close();
+  builder->add_instance(nested);
+  text_options.screen_position.reset();
+  builder->add_text("Root label", {2, 3, 4}, {0, 0, 5}, text_options);
+  builder->add_dimension({0, 0, 0}, {10, 0, 0}, Point3{0, 3, 0}, dim_options);
+
+  const auto model = round_trip(*builder);
+  ASSERT_EQ(model.root().dimensions.size(), 1u);
+  EXPECT_EQ(model.root().dimensions[0].layer, "Annotations");
+  EXPECT_TRUE(model.root().dimensions[0].hidden);
+  ASSERT_EQ(model.root().texts.size(), 1u);
+  const auto& text = model.root().texts[0];
+  EXPECT_EQ(text.layer, "Annotations");
+  EXPECT_TRUE(text.hidden);
+  ASSERT_TRUE(text.point && text.label_point);
+  EXPECT_EQ(*text.point, (Vec3{2, 3, 4}));
+  EXPECT_EQ(*text.label_point, (Vec3{2, 3, 9}));
+  const Definition* definition = nullptr;
+  for (const auto& pair : model.definitions)
+    if (pair.second.name == "TextOnly") definition = &pair.second;
+  ASSERT_NE(definition, nullptr);
+  ASSERT_EQ(definition->texts.size(), 1u);
+  const auto& screen = definition->texts[0];
+  EXPECT_EQ(screen.layer, "Annotations");
+  EXPECT_TRUE(screen.hidden);
+  EXPECT_EQ(screen.leader_type, 0);
+  ASSERT_TRUE(screen.screen_position);
+  EXPECT_EQ(*screen.screen_position, (std::array<double, 2>{0.23, 0.67}));
+}
+
+TEST(Create, InvalidAnnotationOptionsLeaveArchiveUsable) {
+  auto builder = create();
+  DimensionOptions dim_options;
+  dim_options.layer = 999;
+  EXPECT_THROW(builder->add_dimension({0, 0, 0}, {10, 0, 0}, Point3{0, 3, 0}, dim_options),
+               SkpWriteError);
+  TextOptions text_options;
+  text_options.layer = 999;
+  EXPECT_THROW(builder->add_text("Bad layer", {0, 0, 0}, {1, 0, 0}, text_options), SkpWriteError);
+  text_options.layer.reset();
+  text_options.screen_position = std::array<double, 2>{-1, 0.5};
+  EXPECT_THROW(builder->add_text("Bad position", {0, 0, 0}, {1, 0, 0}, text_options),
+               SkpWriteError);
+  builder->add_text("Valid", {0, 0, 0}, {1, 0, 0});
+  const auto model = round_trip(*builder);
+  EXPECT_TRUE(model.root().dimensions.empty());
+  ASSERT_EQ(model.root().texts.size(), 1u);
+  EXPECT_EQ(model.root().texts[0].text, "Valid");
+}
+
 TEST(Create, ConstructionLineAndPointDoNotCorruptTheFile) {
   auto builder = create();
   builder->add_face({{0, 0, 0}, {10, 0, 0}, {10, 10, 0}, {0, 10, 0}});

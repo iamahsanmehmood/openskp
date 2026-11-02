@@ -1112,6 +1112,37 @@ struct Archive {
           break;
         }
       if (found == std::string::npos) throw std::runtime_error("text delimiter not found");
+      v->annotation_text = std::make_shared<LegacyText>();
+      TextEntity annotation;
+      if (found >= r.p + 63) {
+        annotation.leader_type = static_cast<int>(read_u32(r.d, found - 15));
+        annotation.arrow_type = static_cast<int>(read_u32(r.d, found - 5));
+        annotation.label_point =
+            Vec3{read_f64(r.d, found - 63), read_f64(r.d, found - 55), read_f64(r.d, found - 47)};
+        // Same free/vertex connection header used by linear dimensions. Font
+        // schema tails vary, so locate the validated connection before the label.
+        for (std::size_t q = r.p; q + 32 <= found - 63; ++q) {
+          const auto type = read_u32(r.d, q);
+          if ((type > 2) || read_u32(r.d, q + 4) != 4) continue;
+          if (q >= r.p + 16)
+            annotation.screen_position =
+                std::array<double, 2>{read_f64(r.d, q - 16), read_f64(r.d, q - 8)};
+          if (type == 0 || type == 1) {
+            annotation.point =
+                Vec3{read_f64(r.d, q + 8), read_f64(r.d, q + 16), read_f64(r.d, q + 24)};
+          } else {
+            const auto ref = read_u16(r.d, q + 32);
+            if (ref > 0 && ref < 0x7fff)
+              v->annotation_text->vertex = ref;
+            else if (ref == 0x7fff && q + 38 <= found - 63) {
+              const auto large = read_u32(r.d, q + 34);
+              if (!(large & 0x80000000)) v->annotation_text->vertex = large;
+            }
+          }
+          break;
+        }
+      }
+      v->annotation_text->geometry = std::move(annotation);
       r.raw(found - r.p);
       v->text = r.utf16();
       r.raw(5);
@@ -1766,7 +1797,13 @@ void fill(GeometryBuilder& b,
       sp.hidden = v->hidden != 0;
       b.section_planes.push_back(std::move(sp));
     } else if (v->k == "text") {
-      TextEntity te;
+      TextEntity te = v->annotation_text ? v->annotation_text->geometry : TextEntity{};
+      if (!te.point && v->annotation_text && v->annotation_text->vertex) {
+        const auto it = slots.find(*v->annotation_text->vertex);
+        if (it != slots.end() && it->second.v && it->second.v->k == "vertex")
+          te.point = it->second.v->xyz;
+      }
+      if (v->layer) te.layer = std::to_string(v->layer);
       te.text = v->text;
       te.hidden = v->hidden != 0;
       b.texts.push_back(std::move(te));
@@ -1780,6 +1817,7 @@ void fill(GeometryBuilder& b,
       };
       resolve(dim.a, v->dimension->connect1);
       resolve(dim.b, v->dimension->connect2);
+      if (v->layer) dim.layer = std::to_string(v->layer);
       dim.text = v->text;
       dim.hidden = v->hidden != 0;
       b.dimensions.push_back(std::move(dim));

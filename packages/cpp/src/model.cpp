@@ -202,6 +202,8 @@ SkpModel build_model(RawParsed&& p, const ParseOptions& o) {
     for (auto& f : d.builder.faces) resolve_layer(f.second.layer);
     for (auto& cl : d.builder.construction_lines) resolve_layer(cl.layer);
     for (auto& cp : d.builder.construction_points) resolve_layer(cp.layer);
+    for (auto& dim : d.builder.dimensions) resolve_layer(dim.layer);
+    for (auto& text : d.builder.texts) resolve_layer(text.layer);
   };
   for (auto& d : p.definitions) {
     resolve_layers(d.second);
@@ -249,6 +251,9 @@ SkpModel build_model(RawParsed&& p, const ParseOptions& o) {
     dim.normal = dm.normal;
     dim.offset_vector = dm.offset_vector;
     dim.text = dm.text;
+    dim.layer = dm.layer;
+    resolve_layer(dim.layer);
+    dim.hidden = dm.hidden;
     m.dimensions.push_back(std::move(dim));
   }
   std::map<const RawMaterial*, std::size_t> raw_index;

@@ -181,3 +181,35 @@ reversed endpoints, public-model conversion, and invalid/missing mode records.
 A downstream modern SKP reproduction additionally tests definition-local
 annotations on direct load and re-export; SDK bounds put all three annotations
 inside an 800 × 560 × 645 mm box.
+
+
+## C++ annotation drawing properties and ownership
+
+Dimensions and text now expose their own `layer` and `hidden` drawing properties.
+Legacy annotations retain the drawing base already consumed by the archive walker.
+VFF dimensions read `59D8 > 07D0 > 07D2/07D3`; text reads its own `07D0` base.
+A referenced vertex or other connection target must not override these properties.
+Numeric layer references are resolved to names alongside guide and instance layers.
+
+VFF records inside a `7C15` definition populate that definition's annotations in
+local coordinates. Root annotations populate `root()`. The existing world-space
+`SkpModel::dimensions` view remains available for compatibility. Definition spans
+are read only from the actual definition catalog, and candidate annotation records
+must contain a complete, valid TLV field list before their payloads are copied.
+
+Text retains free anchors or resolvable vertex attachments, label positions,
+leader/arrow types and screen fractions. Legacy nested/inline text attachments
+remain unresolved when their owner-local point cannot be established. This does
+not add font/style or attachment-relationship preservation to the writer.
+
+`DimensionOptions` and `TextOptions` allow root and component writers to preserve
+tags and hidden state. Existing dimension overloads and the root three-argument
+`add_text` overload remain available. A screen position overrides the text leader
+type; invalid positions and layer handles are rejected before writing a record.
+
+`annotation_layers_legacy.skp` and `annotation_layers_vff.skp` are SDK-generated
+fixtures saved as 2019 and current VFF formats. They extend the repository's public
+`legacy_text_arrows_2017.skp` fixture with root/nested dimensions, guide lines/points,
+and screen text on three named tags, including hidden elements. They contain no
+user model data. Tests verify each owner's tags, hidden states and text placement,
+as well as writer round trips and invalid-options recovery.
