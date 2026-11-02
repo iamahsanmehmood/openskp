@@ -217,10 +217,10 @@ namespace OpenSkp
         /// sits from the A-B segment, along the in-plane perpendicular.</summary>
         public double Offset { get; set; }
 
-        /// <summary>The dimension plane's x-axis, or null.</summary>
+        /// <summary>Historical name: for a VFF dimension this is tag 5BCF, which is the plane NORMAL (SketchUp's SUDimensionLinearGetNormal equals it), or null.</summary>
         public (double X, double Y, double Z)? PlaneX { get; set; }
 
-        /// <summary>The dimension plane's normal, or null.</summary>
+        /// <summary>Historical name: for a VFF dimension this is tag 5BD0, the plane's X axis, or null.</summary>
         public (double X, double Y, double Z)? Normal { get; set; }
     }
 

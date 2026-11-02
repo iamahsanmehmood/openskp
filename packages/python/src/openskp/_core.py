@@ -806,7 +806,9 @@ def _parse_dimensions(model_dat, id2pos, inst_world):
       persistent id, ``53FE`` = a length-prefixed persistent id of the
       INSTANCE holding it — the vertex position is definition-local, so it is
       lifted to world by that instance's transform).
-    * ``5BCF`` — the dimension plane's x-axis; ``5BD0`` — its normal.
+    * ``5BCF`` — the dimension plane's NORMAL (SketchUp's
+      ``SUDimensionLinearGetNormal`` equals it); ``5BD0`` — its X axis. Kept in
+      the ``plane_x`` and ``normal`` fields, whose names say the opposite.
     * ``5BD2`` — the offset distance (inches): how far the dimension line sits
       from the measured segment, along the in-plane perpendicular.
 

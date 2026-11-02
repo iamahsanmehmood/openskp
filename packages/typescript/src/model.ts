@@ -62,9 +62,9 @@ export interface Dimension {
   /** Offset distance (inches) - how far the dimension line sits from the
    * a-b segment, along the in-plane perpendicular. */
   offset: number;
-  /** The dimension plane's x-axis, or null. */
+  /** Historical name: for a VFF dimension this is tag 5BCF, which is the plane NORMAL (SketchUp's SUDimensionLinearGetNormal equals it), or null. */
   planeX: [number, number, number] | null;
-  /** The dimension plane's normal, or null. */
+  /** Historical name: for a VFF dimension this is tag 5BD0, the plane's X axis, or null. */
   normal: [number, number, number] | null;
 }
 

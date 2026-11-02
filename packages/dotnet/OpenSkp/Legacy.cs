@@ -1501,10 +1501,10 @@ namespace OpenSkp
             // bytes in front of the first connection block, nor the trailing
             // u32 of the last one.
             r.Raw(ar.Ver >= 6 ? 37 : 32);
-            EntityRef(ar, r);                // connection point 1 (may be null)
+            PathRef(rr => ar.ReadObject(rr).Slot, r);   // connection point 1 (may be null; may be written in full)
             ConnectionPaths(rr => ar.ReadObject(rr).Slot, r, ar);
             r.Raw(32);
-            EntityRef(ar, r);                // connection point 2 (may be null)
+            PathRef(rr => ar.ReadObject(rr).Slot, r);   // connection point 2 (may be null; may be written in full)
             ConnectionPaths(rr => ar.ReadObject(rr).Slot, r, ar);
             r.Raw(ar.Ver >= 6 ? 72 : 68);
             return new DimLinearRec { Db = db, Text = text };

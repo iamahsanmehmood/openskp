@@ -274,10 +274,12 @@ class Dimension {
   /// a-b segment, along the in-plane perpendicular.
   final double offset;
 
-  /// The dimension plane's x-axis, or null.
+  /// Historical name: for a VFF dimension this is tag 5BCF, which is the plane
+  /// NORMAL (SketchUp's SUDimensionLinearGetNormal equals it), or null.
   final (double, double, double)? planeX;
 
-  /// The dimension plane's normal, or null.
+  /// Historical name: for a VFF dimension this is tag 5BD0, the plane's X
+  /// axis, or null.
   final (double, double, double)? normal;
 
   const Dimension({

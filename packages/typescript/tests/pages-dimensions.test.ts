@@ -100,8 +100,8 @@ describe('linear dimensions', () => {
     const body = concat(
       pointBlock(0x5bcd, 0.0, 0.0, 0.0),
       pointBlock(0x5bce, 100.0, 0.0, 0.0),
-      tlv(0x5bcf, vec3(1.0, 0.0, 0.0)), // plane x-axis
-      tlv(0x5bd0, vec3(0.0, 0.0, 1.0)), // plane normal
+      tlv(0x5bcf, vec3(1.0, 0.0, 0.0)), // 5BCF: read into planeX
+      tlv(0x5bd0, vec3(0.0, 0.0, 1.0)), // 5BD0: read into normal
       tlv(0x5bd2, f64le(15.5)) // offset
     );
     const blob = concat(new Uint8Array(8), tlv(0x5bcc, body), new Uint8Array(8));
