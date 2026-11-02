@@ -340,6 +340,13 @@ class OPENSKP_EXPORT ComponentDefinitionBuilder {
   /// Add one freeform polyline curve - same behavior as `SkpBuilder::add_polyline`.
   void add_polyline(const std::vector<Point3>& points, const PolylineOptions& options = {});
 
+  /// Add a free linear dimension - same behavior as `SkpBuilder::add_dimension`.
+  void add_dimension(Point3 p1, Point3 p2, double offset = 10.0);
+  /// Place the line using an offset vector (inches, in the same space as the endpoints).
+  /// Its component perpendicular to p1->p2 determines the plane and side of the line.
+  /// Coordinates must be finite and endpoints distinct. Zero offset is supported.
+  void add_dimension(Point3 p1, Point3 p2, Point3 offset_vector);
+
   /// Add a construction/guide line - same behavior as `SkpBuilder::add_construction_line`
   /// (coordinates are definition-local inches, like `add_face`).
   void add_construction_line(Point3 point, std::optional<Point3> point2 = std::nullopt,
@@ -537,6 +544,10 @@ class OPENSKP_EXPORT SkpBuilder {
   /// Add a FREE linear dimension between two explicit points (inches, world space). `offset` is
   /// the dimension line's offset from the measured segment, in inches (signed).
   void add_dimension(Point3 p1, Point3 p2, double offset = 10.0);
+  /// Place the line using an offset vector (inches, in the same space as the endpoints).
+  /// Its component perpendicular to p1->p2 determines the plane and side of the line.
+  /// Coordinates must be finite and endpoints distinct. Zero offset is supported.
+  void add_dimension(Point3 p1, Point3 p2, Point3 offset_vector);
 
   /// Add a leader text (SketchUp's Text tool) anchored at `point` (inches, world space), with the
   /// label floating at `point + leader` and a leader line joining them.

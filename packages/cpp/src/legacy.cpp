@@ -440,33 +440,39 @@ struct Archive {
   // slot the walk has not reached yet - SketchUp serializes a
   // label/dimension BEFORE the entity it anchors to when both live in the
   // same entity list, so the reference can legitimately point forward.
-  std::optional<uint64_t> entity_ref() {
+  std::optional<uint64_t> entity_ref(bool allow_inline = false) {
+    const auto start = r.p;
     auto tag = r.u16();
     if (!tag) return std::nullopt;
     if (tag == 0x7fff) {
       auto big = r.u32();
-      if (big & 0x80000000) throw std::runtime_error("entity ref is a new object");
-      return big;
+      if (!(big & 0x80000000)) return big;
+    } else if (tag != 0xffff && !(tag & 0x8000)) {
+      return tag;
     }
-    if (tag == 0xffff || (tag & 0x8000)) throw std::runtime_error("entity ref is a new object");
-    return tag;
+    if (!allow_inline) throw std::runtime_error("entity ref is a new object");
+    r.p = start;
+    return std::get<0>(object());
   }
 
   // The instance paths that follow each connection ref (see
   // legacy_connection_paths): consumes them, reading a path entry that MFC
   // wrote in full as a real object. A path runs from the outermost instance
   // in, so its first one is an entity of the list the annotation is in; one
-  // written here in full is noted for that list (see entity_list).
-  void connection_paths() {
+  // written here in full is noted for that list (see entity_list). Returns
+  // false when the connection carries any instance path.
+  bool connection_paths() {
     auto res = legacy_connection_paths(r.d, r.p, [this](std::size_t at) {
       r.p = at;
       auto q = object();
       return std::make_pair(std::get<0>(q), r.p);
     });
     r.p = res.next;
-    if (inline_stack.empty()) return;
-    if (!res.first.empty() && res.first_new[0]) inline_stack.back().push_back(*res.first[0]);
-    if (!res.second.empty() && res.second_new[0]) inline_stack.back().push_back(*res.second[0]);
+    if (!inline_stack.empty()) {
+      if (!res.first.empty() && res.first_new[0]) inline_stack.back().push_back(*res.first[0]);
+      if (!res.second.empty() && res.second_new[0]) inline_stack.back().push_back(*res.second[0]);
+    }
+    return !res.extra && res.first.empty() && res.second.empty();
   }
 
   // The walker slot of the back-reference at the cursor, without moving it;
@@ -1043,13 +1049,43 @@ struct Archive {
       // SketchUp 4 and 5 write neither the font object above nor the 5 bytes
       // in front of the first connection block, nor the trailing u32 of the
       // last one.
-      r.raw(ver >= 6 ? 37 : 32);
-      entity_ref();  // connection point 1 (may be null)
-      connection_paths();
-      r.raw(32);
-      entity_ref();  // connection point 2 (may be null)
-      connection_paths();
-      r.raw(ver >= 6 ? 72 : 68);
+      v->dimension = std::make_shared<LegacyDimension>();
+      auto& decoded = *v->dimension;
+      auto connection = [&](std::optional<Vec3>& point, std::optional<uint64_t>& ref) {
+        const auto block = r.raw(32);
+        if (read_u32(block, 0) == 1)
+          point = Vec3{read_f64(block, 8), read_f64(block, 16), read_f64(block, 24)};
+        // The first reference to an anchored vertex can serialize it in full.
+        // Keep forward references unresolved until the complete archive is read.
+        ref = entity_ref(true);
+        if (!connection_paths()) {
+          // Do not expose definition-local vertex coordinates as owner/world
+          // points until the nested instance path can also be resolved.
+          point.reset();
+          ref.reset();
+        }
+      };
+      if (ver >= 6) r.raw(5);
+      connection(decoded.geometry.a, decoded.connect1);
+      connection(decoded.geometry.b, decoded.connect2);
+      const auto placement = r.raw(ver >= 6 ? 72 : 68);
+      const Vec3 normal{read_f64(placement, 0), read_f64(placement, 8), read_f64(placement, 16)};
+      const Vec3 x{read_f64(placement, 24), read_f64(placement, 32), read_f64(placement, 40)};
+      const auto axis = read_u32(placement, 48);
+      auto& geometry = decoded.geometry;
+      geometry.normal = normal;
+      geometry.plane_x = x;
+      geometry.offset = read_f64(placement, 52);
+      // X/Y-constrained dimensions use their plane frame, independent of the
+      // order of the measured endpoints. Preserve other modes without guessing.
+      if (axis == 1) {
+        geometry.offset_vector = Vec3{(normal[1] * x[2] - normal[2] * x[1]) * geometry.offset,
+                                      (normal[2] * x[0] - normal[0] * x[2]) * geometry.offset,
+                                      (normal[0] * x[1] - normal[1] * x[0]) * geometry.offset};
+      } else if (axis == 2) {
+        geometry.offset_vector =
+            Vec3{-x[0] * geometry.offset, -x[1] * geometry.offset, -x[2] * geometry.offset};
+      }
     } else if (n == "CText") {
       preamble();
       v->k = "text";
@@ -1735,7 +1771,15 @@ void fill(GeometryBuilder& b,
       te.hidden = v->hidden != 0;
       b.texts.push_back(std::move(te));
     } else if (v->k == "dimension") {
-      Dimension dim;
+      Dimension dim = v->dimension->geometry;
+      const auto resolve = [&](std::optional<Vec3>& point, const std::optional<uint64_t>& ref) {
+        if (point || !ref) return;
+        const auto it = slots.find(*ref);
+        if (it != slots.end() && it->second.v && it->second.v->k == "vertex")
+          point = it->second.v->xyz;
+      };
+      resolve(dim.a, v->dimension->connect1);
+      resolve(dim.b, v->dimension->connect2);
       dim.text = v->text;
       dim.hidden = v->hidden != 0;
       b.dimensions.push_back(std::move(dim));

@@ -120,3 +120,64 @@ A second SDK helper (`mktext`) settled the text record. Key findings:
   store-map slot. The entity list's declared count holds such an
   instance even where SketchUp never lists it again (no back-ref), so
   the list keeps it as its own entity.
+
+## Legacy C++ reader: inline vertices and plane offsets
+
+A connection reference can be a complete `CVertex` object, including a new
+class declaration or a short/escaped class reference. It is not always a
+back-reference. Reading it into the archive preserves the slot numbering for
+later dimensions and edges. Plain forward references are resolved after the
+archive walk. Free connections store their xyz directly after type 1 and the
+constant 4. Connections with instance paths still consume those variable-length
+paths, but leave endpoints unset until those paths can be resolved in owner
+coordinates.
+
+After the second connection's path lists, the remaining placement block is
+72 bytes (68 before version 6): three doubles for the plane normal, three for
+the X axis, a u32 constrained axis, the signed offset double, a reserved double,
+and the version-dependent trailing u32. SDK comparisons on axis-constrained
+SU2018 dimensions identify mode 1 as offset along `normal × X` and mode 2 as
+offset along `-X`. Multiplying by the stored signed distance preserves the
+line's side even when measured endpoints are reversed. Other modes retain their
+frame and scalar offset without inventing an explicit offset vector.
+
+`LegacyDimensionGeometry` tests use generated records with synthetic vertices,
+short and escaped references, forward references, variable-length paths and
+plane frames. No user model is required.
+
+## C++ writer: vector offsets
+
+`SkpBuilder::add_dimension(p1, p2, offset_vector)` and the matching component
+builder overload preserve a three-dimensional line offset. The X axis follows
+the measured segment; its cross product with the offset determines the plane
+normal and perpendicular distance. Mode 1 encodes the side in the normal, so
+vertical and reversed segments retain their placement. Any component parallel
+to the segment is discarded. Zero perpendicular offset uses a stable plane.
+The scalar overload retains its existing default frame and mode 0.
+
+Vector inputs are validated before any dimension record bytes are appended.
+Tests cover root and nested dimensions, reversed endpoints, oblique planes,
+zero/parallel offsets and invalid inputs followed by valid records. Independent
+SketchUp SDK reads of an SU2018 accessory and its re-export agree on all three
+dimensions' endpoints and bounding boxes.
+
+## VFF reader: constrained plane offsets
+
+Modern SKP dimensions store the plane normal in `5BCF`, the plane X axis in
+`5BD0`, the constraint mode in `5BD1`, and the signed distance in `5BD2`.
+Modes 1 and 2 use the same `normal × X` and `-X` offset directions as legacy
+records. In particular, a vertical measurement with reversed endpoints must
+not reverse the side of its offset. Ignoring `5BD1` let downstream geometric
+heuristics flip an inward height annotation to the outside of the component.
+
+The C++ reader now exposes `offset_vector` for these VFF modes as well, both
+through raw dimensions and public model dimensions. The historical `plane_x`
+and `normal` fields retain their original VFF tag assignments for compatibility;
+use `offset_vector` for resolved placement. Missing, malformed, or unsupported
+constraint modes keep the existing scalar/frame fallback.
+
+Synthetic tests exercise both constraint modes, positive and negative distances,
+reversed endpoints, public-model conversion, and invalid/missing mode records.
+A downstream modern SKP reproduction additionally tests definition-local
+annotations on direct load and re-export; SDK bounds put all three annotations
+inside an 800 × 560 × 645 mm box.
