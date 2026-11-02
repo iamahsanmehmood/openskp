@@ -665,6 +665,7 @@ namespace OpenSkp
         public double TexH;
         public string TexFile = "";
         public bool Colorized;
+        public int ColorizeType;
     }
     internal sealed class MaterialRec
     {
@@ -678,6 +679,7 @@ namespace OpenSkp
         public double TexH;
         public string TexFile = "";
         public bool Colorized;
+        public int ColorizeType;
         public bool HasTexture;
     }
     internal sealed class DibRec { public uint Subtype; public byte[] Data = Array.Empty<byte>(); }
@@ -1156,18 +1158,21 @@ namespace OpenSkp
             double w = r.F64();
             double h = r.F64();
             string fname = r.Utf16();
-            var avg = r.Raw(9);              // RGBA + 00 + RGBA (colour stored twice)
+            var avg = r.Raw(9);              // image average RGBA + 00 + the material's paint RGBA
             r.Utf16();
-            var blob = r.Raw(8);             // u32 + u32 colorized flag
+            var blob = r.Raw(8);             // u32 material type (1 textured, 2 colorized) + u32 colorize mode
             double opacity = r.F64();
             byte useOp = r.U8();
-            // A colourized (re-tinted) texture stores the ORIGINAL image
-            // plus the tint as the average colour; flagged by the second
-            // blob u32 or by alpha 0xFF on the stored colour.
-            bool colorized = blob[4] != 0 || avg[3] == 0xFF;
+            // Checked against materials written by SketchUp's own library:
+            // the first blob u32 is SUMaterialGetType (2 = a colorized
+            // texture, which keeps the ORIGINAL image and stores the tint as
+            // the paint colour) and the second is SUMaterialGetColorizeType
+            // (0 shift, 1 tint). The alpha byte of the image average says
+            // nothing about either - it is 0xFF on plain textures too.
+            bool colorized = blob[0] == 2;
             return new TextureBlockRec
             {
-                Rgba = avg.Take(4).ToArray(),
+                Rgba = new byte[] { avg[5], avg[6], avg[7], 255 },
                 Opacity = opacity,
                 UseOpacity = useOp,
                 TexDib = s,
@@ -1176,6 +1181,7 @@ namespace OpenSkp
                 TexH = h,
                 TexFile = fname,
                 Colorized = colorized,
+                ColorizeType = blob[4] == 1 ? 1 : 0,
             };
         }
 
@@ -1208,6 +1214,7 @@ namespace OpenSkp
                 outRec.TexH = tex.TexH;
                 outRec.TexFile = tex.TexFile;
                 outRec.Colorized = tex.Colorized;
+                outRec.ColorizeType = tex.ColorizeType;
                 outRec.HasTexture = true;
             }
             return outRec;
@@ -2620,10 +2627,7 @@ namespace OpenSkp
                     A = rgba.Length > 3 ? rgba[3] : 255,
                     Transparency = trans,
                     Colorized = colorized,
-                    // colourize type is not decoded in the legacy record;
-                    // tint (1) is the correct rendering for the grey base
-                    // textures observed.
-                    ColorizeType = colorized ? 1 : 0,
+                    ColorizeType = v.ColorizeType,
                     Texture = texture,
                 };
                 materialsMap[v.Name] = matObj;

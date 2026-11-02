@@ -634,6 +634,7 @@ class MaterialRec {
   double texW = 0, texH = 0;
   String texFile = '';
   bool colorized = false;
+  int colorizeType = 0;
   bool hasTexture = false;
   MaterialRec({required this.name, required this.rgba});
 }
@@ -647,6 +648,7 @@ class TextureBlockRec {
   double texW, texH;
   String texFile;
   bool colorized;
+  int colorizeType;
   TextureBlockRec({
     required this.rgba,
     required this.opacity,
@@ -657,6 +659,7 @@ class TextureBlockRec {
     required this.texH,
     required this.texFile,
     required this.colorized,
+    required this.colorizeType,
   });
 }
 
@@ -1161,17 +1164,22 @@ class LegacyReaders {
     final w = r.f64();
     final h = r.f64();
     final fname = r.utf16();
-    final avg = r.raw(9); // RGBA + 00 + RGBA (colour stored twice)
+    // Image average RGBA + 00 + the material's paint RGBA.
+    final avg = r.raw(9);
     r.utf16();
-    final blob = r.raw(8); // u32 + u32 colorized flag
+    // u32 material type (1 textured, 2 colorized) + u32 colorize mode.
+    final blob = r.raw(8);
     final opacity = r.f64();
     final useOp = r.u8();
-    // A colourized (re-tinted) texture stores the ORIGINAL image plus the
-    // tint as the average colour; flagged by the second blob u32 or by
-    // alpha 0xFF on the stored colour.
-    final colorized = blob[4] != 0 || avg[3] == 0xFF;
+    // Checked against materials written by SketchUp's own library: the first
+    // blob u32 is SUMaterialGetType (2 = a colorized texture, which keeps the
+    // ORIGINAL image and stores the tint as the paint colour) and the second
+    // is SUMaterialGetColorizeType (0 shift, 1 tint). The alpha byte of the
+    // image average says nothing about either - it is 0xFF on plain textures
+    // too.
+    final colorized = blob[0] == 2;
     return TextureBlockRec(
-      rgba: Uint8List.sublistView(avg, 0, 4),
+      rgba: Uint8List.fromList([avg[5], avg[6], avg[7], 255]),
       opacity: opacity,
       useOpacity: useOp,
       texDib: s,
@@ -1180,6 +1188,7 @@ class LegacyReaders {
       texH: h,
       texFile: fname,
       colorized: colorized,
+      colorizeType: blob[4] == 1 ? 1 : 0,
     );
   }
 
@@ -1209,6 +1218,7 @@ class LegacyReaders {
       out.texH = tex.texH;
       out.texFile = tex.texFile;
       out.colorized = tex.colorized;
+      out.colorizeType = tex.colorizeType;
       out.hasTexture = true;
     }
     return out;
@@ -2405,9 +2415,7 @@ class Legacy {
         a: rgba[3],
         transparency: trans,
         colorized: colorized,
-        // colourize type is not decoded in the legacy record; tint (1) is
-        // the correct rendering for the grey base textures observed.
-        colorizeType: colorized ? 1 : 0,
+        colorizeType: v.colorizeType,
         texture: texture,
       );
       materialsMap[v.name] = matObj;

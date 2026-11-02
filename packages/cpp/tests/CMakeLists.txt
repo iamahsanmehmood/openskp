@@ -19,6 +19,7 @@ add_executable(
   instance_scale_term_test.cpp
   legacy_scenes_test.cpp
   legacy_text_arrows_test.cpp
+  legacy_textured_colorize_test.cpp
   scene_without_camera_test.cpp
   instanced_scene_test.cpp
   json_export_test.cpp
