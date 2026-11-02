@@ -1318,10 +1318,10 @@ export function readDimLinear(ar: Archive, r: R): any {
   // SketchUp 4 and 5 write neither the font object above nor the 5 bytes in
   // front of the first connection block, nor the trailing u32 of the last one.
   r.raw(ar.ver >= 6 ? 37 : 32);
-  const c1 = entityRef(ar, r); // connection point 1 (may be null)
+  const c1 = pathRef(ar, r); // connection point 1 (may be null; may be written in full)
   const path1 = connectionPaths(ar, r);
   r.raw(32);
-  const c2 = entityRef(ar, r); // connection point 2 (may be null)
+  const c2 = pathRef(ar, r); // connection point 2 (may be null; may be written in full)
   const path2 = connectionPaths(ar, r);
   r.raw(ar.ver >= 6 ? 72 : 68);
   return { k: 'dimension', db, text, connect: [c1, c2], paths: [path1, path2] };

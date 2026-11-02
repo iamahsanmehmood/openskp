@@ -48,8 +48,8 @@ def test_dimension_free_points_synthetic():
 
     body = (point_block(0x5BCD, 0.0, 0.0, 0.0)
             + point_block(0x5BCE, 100.0, 0.0, 0.0)
-            + tlv(0x5BCF, vec3(1.0, 0.0, 0.0))         # plane x-axis
-            + tlv(0x5BD0, vec3(0.0, 0.0, 1.0))         # plane normal
+            + tlv(0x5BCF, vec3(1.0, 0.0, 0.0))         # 5BCF: read into plane_x
+            + tlv(0x5BD0, vec3(0.0, 0.0, 1.0))         # 5BD0: read into normal
             + tlv(0x5BD2, struct.pack('<d', 15.5)))    # offset
     blob = b'\x00' * 8 + tlv(0x5BCC, body) + b'\x00' * 8
 

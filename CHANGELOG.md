@@ -35,6 +35,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `add_dimension(p1, p2, offset_vector)` on root and component builders; rewriting the real
   dimensions through it reproduces SketchUp's own world bounding boxes.
 
+### Fixed — Python, TypeScript, .NET, Dart: a dimension whose connection point is a vertex written in full no longer ends the entity list (#474)
+
+MFC writes an object in full the first time anything references it, and a dimension comes before the
+geometry it is attached to in its entity list, so a dimension's connection point can be a whole
+`CVertex` (class declaration included). The readers took that for the end of the list: a SketchUp
+2016 file kept all 15 of its definitions and none of its 148 root entities, so nothing was placed and
+the scene had no bounds. The connection points are read like path entries now, which reads and
+registers such an object. C++ was fixed by #481. Each port tests it with a small synthetic file that
+fails without the fix; every existing test still passes, and Python reads 63 differential-test files
+(every legacy version from 2013 to V8, and 2021+) to the same model as before.
+
+Also corrected, in the documentation of the four ports: `5BCF` is the dimension plane's **normal**
+and `5BD0` its X axis (the `planeX` / `normal` fields keep their old names).
+
 ### Fixed — Dart: `fromFragments` reads uncompressed `.frag` files again with `archive` 4.6
 
 `fromFragments` told a zlib stream from raw FlatBuffers by letting `ZLibDecoder.decodeBytes` throw
