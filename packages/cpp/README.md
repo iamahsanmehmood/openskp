@@ -265,3 +265,38 @@ or a PR to get added here.
 
 MIT — see the [root repository](https://github.com/iamahsanmehmood/openskp) for
 full documentation and multi-language packages.
+
+### Native v17 display settings and compatibility
+
+`SkpBuilder::set_document_options(DocumentOptions)` sets decimal length units and
+precision without rescaling geometry (coordinates remain inches). `length_unit`
+uses SketchUp values: 0 inches, 1 feet, 2 millimeters, 3 centimeters, 4 meters,
+5 yards. `length_precision` ranges from 0 to 6. Defaults are unchanged unless
+this method is called.
+
+`style_items` maps native style item IDs to scalar values. Colors use packed
+ABGR integers; booleans use 0 or 1. For example, `{{4000, 0xff563412u},
+{1006, 0}, {1007, 5}}` sets background RGB(18,52,86), disables profile edges,
+and sets profile width to 5. Supported fields update current rendering options
+and the scaffold's saved and working styles. Items absent from the fixed v17
+scaffold are ignored. This does not add scene, watermark-image, or modern SKP
+compression support. These display-setting additions are currently C++ only.
+
+Native compatibility tests inspect serialized face equations and persistent IDs,
+not only OpenSKP self round-trips. Face planes use `ax+by+cz+d=0`; persistent IDs
+are document-wide and the next-ID header is 64-bit. Nonplanar fan triangulation
+skips degenerate wedges before writing any valid triangles. Legacy textured
+materials store image-average and paint colors separately, followed by material
+type (1 textured / 2 colorized) and colorize mode (0 shift / 1 tint); image alpha
+is not a colorization flag. Other language implementations may need matching
+corrections to these fields. No proprietary SDK is needed at runtime or in CI.
+
+For optional independent validation with your own locally installed SketchUp C API:
+
+```sh
+python3 packages/cpp/tools/check_native_skp.py generated.skp \
+  --library /path/to/SketchUpAPI --unit mm --precision 2 \
+  --background 18,52,86 --textured-material paint --resave new-modern.skp
+```
+
+The checker validates native units, background, group definition types and named\ntexture dimensions. `--resave` exercises the SDK's modern-format serialization,\nwhich can expose persistent-ID conflicts that a self round-trip misses. The SDK\nis optional and is neither downloaded nor redistributed by this project.
