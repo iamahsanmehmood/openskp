@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <gtest/gtest.h>
 #include <map>
 
@@ -37,6 +38,27 @@ TEST(LegacyTexturedColorize, TextureTypeColorizeModeAndPaintColour) {
   expect("tint", {30, 160, 60}, true, 1, 1.0);
   expect("shift", {200, 90, 20}, true, 0, 1.0);
   expect("tint_half", {10, 20, 230}, true, 1, 0.5);
+}
+
+// blender-openskp#9: a SketchUp 2017 textured material stores two colours side by side and the
+// first one's alpha byte can be 0 (as in the box the report attached). Taking the colour and its
+// alpha from the first made every textured material fully transparent in the Blender add-on. Here
+// the first colour of "plain" (120, 40, 120) gets alpha 0, as in that file.
+TEST(LegacyTexturedColorize, ColourAlphaIsTheMaterialColoursNotTheImageAverages) {
+  auto data = test::read_fixture("legacy_textured_colorize_2017.skp");
+  const ByteBuffer pair{0x78, 0x28, 0x78, 0xff, 0x00,
+                        0x78, 0x28, 0x78, 0xff};  // image average, 00, colour
+  const auto at = std::search(data.begin(), data.end(), pair.begin(), pair.end());
+  ASSERT_NE(at, data.end());
+  ASSERT_EQ(std::search(at + 1, data.end(), pair.begin(), pair.end()), data.end());
+  *(at + 3) = 0;
+  const auto model = SkpFile::from_buffer(std::move(data)).parse();
+  for (const auto& m : model.materials)
+    if (m.name == "plain") {
+      EXPECT_EQ(m.color, (Color4{120, 40, 120, 255}));
+      return;
+    }
+  FAIL() << "no material named plain";
 }
 
 }  // namespace

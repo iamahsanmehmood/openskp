@@ -28,3 +28,17 @@ def test_texture_type_colorize_mode_and_paint_colour():
         "shift": ((200, 90, 20), True, 0, 1.0),
         "tint_half": ((10, 20, 230), True, 1, 0.5),
     }
+
+
+def test_colour_alpha_is_the_material_colours_not_the_image_averages(tmp_path):
+    """blender-openskp#9: a SketchUp 2017 textured material stores two colours side by side and the
+    first one's alpha byte can be 0 (as in the box the report attached). Taking the colour and its alpha
+    from the first made every textured material fully transparent in the Blender add-on. Here the first
+    colour of ``plain`` (120, 40, 120) gets alpha 0, as in that file."""
+    data = FIXTURE.read_bytes()
+    pair = bytes.fromhex("782878ff00782878ff")      # image average, 00, material colour (alpha 255)
+    assert data.count(pair) == 1
+    patched = tmp_path / "alpha0.skp"
+    patched.write_bytes(data.replace(pair, bytes.fromhex("7828780000782878ff")))
+    plain = {m.name: m for m in SkpFile.open(str(patched)).parse().materials}["plain"]
+    assert tuple(plain.color) == (120, 40, 120, 255)
