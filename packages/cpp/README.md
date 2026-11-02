@@ -168,8 +168,13 @@ model identity, and set `DefinitionOptions::guid` when recreating an existing
 component. Both accept 32 hexadecimal digits or the hyphenated UUID form; empty
 means a new identity, and malformed non-empty input throws `SkpWriteError`.
 Reuse an identity only for the same unchanged component; names or identical
-geometry alone do not establish identity. Legacy `Definition::guid` now uses canonical UUID byte order (uppercase, without
-hyphens), matching the VFF reader rather than exposing Windows GUID storage order.
+geometry alone do not establish identity.
+
+**Behavior change:** classic and VFF readers now return canonical UUID byte order
+(uppercase, without hyphens) for definition GUIDs and instance GUID references,
+instead of exposing Windows GUID storage order. Consumers that persisted old
+raw-order strings should migrate or normalize them before comparing identities.
+The same component now retains the same GUID across classic and VFF containers.
 
 For VFF files, `Definition::parsed_dictionaries` exposes the definition's own
 attribute dictionaries with native value types, including booleans, integers,
