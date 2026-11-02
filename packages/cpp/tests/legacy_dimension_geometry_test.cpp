@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <gtest/gtest.h>
+#include <limits>
 
 #include <openskp/openskp.hpp>
 
@@ -162,6 +163,64 @@ TEST(LegacyDimensionGeometry, NestedPathsAreConsumedWithoutPublishingLocalCoordi
   expect_point(model.root().dimensions[0].b, kB);
   expect_point(model.root().dimensions[1].a, kC);
   expect_tail(model);
+}
+
+TEST(LegacyDimensionGeometry, VectorOffsetsSurviveRootAndNestedRoundTrips) {
+  struct Sample {
+    Point3 a, b, offset, expected;
+  };
+
+  const Sample samples[] = {
+      {{1, 2, 3}, {11, 2, 3}, {0, 0, 4}, {0, 0, 4}},
+      {{11, 2, 3}, {1, 2, 3}, {0, 0, -4}, {0, 0, -4}},
+      {{1, 2, 3}, {1, 2, 13}, {-4, 0, 0}, {-4, 0, 0}},
+      {{1, 2, 3}, {4, 6, 8}, {-4, 3, 0}, {-4, 3, 0}},
+      {{1, 2, 3}, {11, 2, 3}, {7, -4, 0}, {0, -4, 0}},
+      {{1, 2, 3}, {1, 2, 13}, {0, 0, 0}, {0, 0, 0}},
+      {{1, 2, 3}, {11, 2, 3}, {7, 0, 0}, {0, 0, 0}},
+      {{1, 2, 3}, {4, 6, 8}, {3, 4, 5}, {0, 0, 0}},
+      {{1, 2, 3}, {11, 2, 3}, {0, 0, 1e-12}, {0, 0, 1e-12}},
+  };
+  auto builder = create();
+  auto& definition = builder->add_component_definition("Dimensions");
+  for (const auto& sample : samples) definition.add_dimension(sample.a, sample.b, sample.offset);
+  definition.close();
+  builder->add_instance(definition);
+  for (const auto& sample : samples) builder->add_dimension(sample.a, sample.b, sample.offset);
+  auto model = SkpFile::from_buffer(builder->to_bytes()).parse();
+  ASSERT_EQ(model.root().dimensions.size(), std::size(samples));
+  ASSERT_EQ(model.definitions.size(), 1u);
+  ASSERT_EQ(model.definitions.begin()->second.dimensions.size(), std::size(samples));
+  for (const auto* dimensions :
+       {&model.root().dimensions, &model.definitions.begin()->second.dimensions}) {
+    for (size_t i = 0; i < std::size(samples); ++i) {
+      const auto& dim = (*dimensions)[i];
+      expect_point(dim.a, samples[i].a);
+      expect_point(dim.b, samples[i].b);
+      expect_point(dim.offset_vector, samples[i].expected);
+    }
+  }
+}
+
+TEST(LegacyDimensionGeometry, InvalidVectorDimensionDoesNotCorruptFollowingRecords) {
+  auto builder = create();
+  auto& definition = builder->add_component_definition("Dimensions");
+  for (double bad :
+       {std::numeric_limits<double>::infinity(), std::numeric_limits<double>::quiet_NaN()}) {
+    EXPECT_THROW(definition.add_dimension(kA, kB, Point3{bad, 0, 0}), SkpWriteError);
+    EXPECT_THROW(builder->add_dimension(Point3{bad, 0, 0}, kB, Point3{0, 0, 1}), SkpWriteError);
+  }
+  EXPECT_THROW(definition.add_dimension(kA, kA, Point3{0, 0, 1}), SkpWriteError);
+  definition.add_dimension(kA, kB, Point3{0, 0, 2});
+  definition.close();
+  builder->add_instance(definition);
+  builder->add_dimension(kA, kB, Point3{0, 0, 3});
+  const auto model = SkpFile::from_buffer(builder->to_bytes()).parse();
+  ASSERT_EQ(model.root().dimensions.size(), 1u);
+  ASSERT_EQ(model.definitions.size(), 1u);
+  ASSERT_EQ(model.definitions.begin()->second.dimensions.size(), 1u);
+  expect_point(model.root().dimensions[0].offset_vector, {0, 0, 3});
+  expect_point(model.definitions.begin()->second.dimensions[0].offset_vector, {0, 0, 2});
 }
 
 }  // namespace

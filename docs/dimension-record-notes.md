@@ -131,5 +131,20 @@ frame and scalar offset without inventing an explicit offset vector.
 
 `LegacyDimensionGeometry` tests use generated records with synthetic vertices,
 short and escaped references, forward references, variable-length paths and
-plane frames. No user model is required. The existing scalar-only
-`add_dimension` writer does not yet preserve arbitrary planes on re-export.
+plane frames. No user model is required.
+
+## C++ writer: vector offsets
+
+`SkpBuilder::add_dimension(p1, p2, offset_vector)` and the matching component
+builder overload preserve a three-dimensional line offset. The X axis follows
+the measured segment; its cross product with the offset determines the plane
+normal and perpendicular distance. Mode 1 encodes the side in the normal, so
+vertical and reversed segments retain their placement. Any component parallel
+to the segment is discarded. Zero perpendicular offset uses a stable plane.
+The scalar overload retains its existing default frame and mode 0.
+
+Vector inputs are validated before any dimension record bytes are appended.
+Tests cover root and nested dimensions, reversed endpoints, oblique planes,
+zero/parallel offsets and invalid inputs followed by valid records. Independent
+SketchUp SDK reads of an SU2018 accessory and its re-export agree on all three
+dimensions' endpoints and bounding boxes.

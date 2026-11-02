@@ -833,8 +833,32 @@ class ArchiveWriter {
   // (generated via SketchUpAPI and harvested - see docs/dimension-record-notes.md): connection
   // type 1 with the point stored inline in each connection block and null object refs. Free
   // dimensions render in any orientation; anchored (type 2) dimensions are a future refinement.
-  void write_dimension(Point3 p1, Point3 p2, double offset = 10.0) {
+  void write_dimension(Point3 p1, Point3 p2, double offset,
+                       std::optional<Point3> offset_vector = std::nullopt) {
     if (p1 == p2) throw SkpWriteError("add_dimension endpoints coincide");
+    Point3 normal{0, 0, 1}, xaxis{1, 0, 0};
+    if (offset_vector) {
+      for (int i = 0; i < 3; ++i) {
+        if (!std::isfinite(p1[i]) || !std::isfinite(p2[i]) || !std::isfinite((*offset_vector)[i]))
+          throw SkpWriteError("add_dimension coordinates must be finite");
+        xaxis[i] = p2[i] - p1[i];
+      }
+      const double length = std::hypot(xaxis[0], xaxis[1], xaxis[2]);
+      if (!std::isfinite(length) || length == 0)
+        throw SkpWriteError("add_dimension segment length must be finite and nonzero");
+      for (double& v : xaxis) v /= length;
+      // Only the component perpendicular to the measured segment places the line.
+      normal = cross3(xaxis, *offset_vector);
+      offset = std::hypot(normal[0], normal[1], normal[2]);
+      if (!std::isfinite(offset)) throw SkpWriteError("add_dimension offset must be finite");
+      if (offset > 0) {
+        for (double& v : normal) v /= offset;
+      } else {
+        // A stable plane is still needed when the dimension line has zero offset.
+        const Point3 seed = std::abs(xaxis[2]) < 0.9 ? Point3{0, 0, 1} : Point3{0, 1, 0};
+        normal = normalize3(cross3(xaxis, seed));
+      }
+    }
     new_of_known_class("CDimensionLinear", kDimensionLinearSchema);
     preamble();
     drawbase();
@@ -858,8 +882,11 @@ class ArchiveWriter {
     append_u16(buf, 0);
     // placement block: SDK free-dimension defaults + our offset
     append_zeros(buf, 2);
-    for (double v : {0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0}) append_f64(buf, v);
-    append_u32(buf, 0);
+    append_f64(buf, 0.0);
+    for (double v : normal) append_f64(buf, v);
+    for (double v : xaxis) append_f64(buf, v);
+    // Constrain to the plane X axis: the signed side is encoded by its normal.
+    append_u32(buf, offset_vector ? 1 : 0);
     append_f64(buf, offset);
     append_f64(buf, 0.0);
     append_u32(buf, 1);
@@ -1897,6 +1924,18 @@ void ComponentDefinitionBuilder::add_construction_line(Point3 point, std::option
   impl_->new_entity_count += 1;
 }
 
+void ComponentDefinitionBuilder::add_dimension(Point3 p1, Point3 p2, double offset) {
+  check_writable("dimensions");
+  impl_->writer->write_dimension(p1, p2, offset);
+  impl_->new_entity_count += 1;
+}
+
+void ComponentDefinitionBuilder::add_dimension(Point3 p1, Point3 p2, Point3 offset_vector) {
+  check_writable("dimensions");
+  impl_->writer->write_dimension(p1, p2, 0.0, offset_vector);
+  impl_->new_entity_count += 1;
+}
+
 void ComponentDefinitionBuilder::add_construction_point(Point3 position) {
   check_writable("construction points");
   impl_->writer->write_construction_point(position);
@@ -2207,6 +2246,13 @@ void SkpBuilder::add_polyline(const std::vector<Point3>& points, const PolylineO
 void SkpBuilder::add_dimension(Point3 p1, Point3 p2, double offset) {
   impl_->ensure_geometry_writer();
   impl_->geometry_writer->write_dimension(p1, p2, offset);
+  impl_->new_entity_count += 1;
+  impl_->face_count += 1;  // reuses the "at least one root entity" check in to_bytes
+}
+
+void SkpBuilder::add_dimension(Point3 p1, Point3 p2, Point3 offset_vector) {
+  impl_->ensure_geometry_writer();
+  impl_->geometry_writer->write_dimension(p1, p2, 0.0, offset_vector);
   impl_->new_entity_count += 1;
   impl_->face_count += 1;  // reuses the "at least one root entity" check in to_bytes
 }
