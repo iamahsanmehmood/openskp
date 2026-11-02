@@ -1456,10 +1456,10 @@ def _read_dimlinear(ar, r):
     # front of the first connection block; keep the block's later offsets
     # the same by supplying them as zeros.
     b37 = (b'\x00' * 5 if ar.ver < 6 else b'') + r.raw(32 if ar.ver < 6 else 37)
-    c1 = _entity_ref(ar, r)          # connection point 1 (may be null)
+    c1 = _path_ref(ar, r)            # connection point 1 (may be null; may be written in full)
     path1 = _connection_paths(ar, r)
     b32 = r.raw(32)
-    c2 = _entity_ref(ar, r)          # connection point 2 (may be null)
+    c2 = _path_ref(ar, r)            # connection point 2 (may be null; may be written in full)
     path2 = _connection_paths(ar, r)
     b72 = r.raw(72 if ar.ver >= 6 else 68)   # SketchUp 4 and 5: no trailing u32
     # the dimension-line offset (inches, signed) sits at a fixed position

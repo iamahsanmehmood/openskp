@@ -1482,10 +1482,10 @@ class LegacyReaders {
     // front of the first connection block, nor the trailing u32 of the last
     // one.
     r.raw(ar.ver >= 6 ? 37 : 32);
-    _entityRef(ar, r); // connection point 1 (may be null)
+    _pathRef((rr) => ar.readObject(rr).$1, r); // connection point 1 (may be null; may be written in full)
     connectionPaths((rr) => ar.readObject(rr).$1, r, ar);
     r.raw(32);
-    _entityRef(ar, r); // connection point 2 (may be null)
+    _pathRef((rr) => ar.readObject(rr).$1, r); // connection point 2 (may be null; may be written in full)
     connectionPaths((rr) => ar.readObject(rr).$1, r, ar);
     r.raw(ar.ver >= 6 ? 72 : 68);
     return DimLinearRec(db, text);

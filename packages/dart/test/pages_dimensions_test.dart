@@ -89,8 +89,8 @@ void main() {
       final body = concatBytes([
         pointBlock(0x5BCD, 0.0, 0.0, 0.0),
         pointBlock(0x5BCE, 100.0, 0.0, 0.0),
-        tlv(0x5BCF, vec3(1.0, 0.0, 0.0)), // plane x-axis
-        tlv(0x5BD0, vec3(0.0, 0.0, 1.0)), // plane normal
+        tlv(0x5BCF, vec3(1.0, 0.0, 0.0)), // 5BCF: read into planeX
+        tlv(0x5BD0, vec3(0.0, 0.0, 1.0)), // 5BD0: read into normal
         tlv(0x5BD2, f64le(15.5)), // offset
       ]);
       final blob = concatBytes([Uint8List(8), tlv(0x5BCC, body), Uint8List(8)]);

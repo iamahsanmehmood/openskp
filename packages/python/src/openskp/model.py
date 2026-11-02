@@ -419,8 +419,11 @@ class Dimension:
         b: Second measured point.
         offset: Offset distance (inches) — how far the dimension line sits
             from the ``a``–``b`` segment, along the in-plane perpendicular.
-        plane_x: The dimension plane's x-axis, or ``None``.
-        normal: The dimension plane's normal, or ``None``.
+        plane_x: Historical name: for a VFF dimension this is tag ``5BCF``, which
+            is the plane NORMAL (SketchUp's ``SUDimensionLinearGetNormal``
+            equals it), or ``None``.
+        normal: Historical name: for a VFF dimension this is tag ``5BD0``, the
+            plane's X axis, or ``None``.
     """
 
     text: str = ""
