@@ -47,7 +47,6 @@ struct RawInstance {
   std::optional<EntityId> ref_idx;
   std::optional<EntityId> material_id;
   std::vector<double> matrix;
-  std::vector<TlvNode> children;
   std::string layer;
   // The "dynamic_attributes" dictionary only (SketchUp's own Dynamic
   // Components data) - the same backward-compatible view Python's

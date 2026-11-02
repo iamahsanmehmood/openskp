@@ -450,9 +450,18 @@ void replay_body(Target& target, const Definition& defn,
     replay_instance(target, inst, def_builders, by_id, material_slots, layer_slots, warnings,
                     context);
   }
+  auto guide_options = [&](const std::string& layer, bool hidden) {
+    GuideOptions options;
+    if (!layer.empty()) {
+      auto it = layer_slots.find(layer);
+      if (it != layer_slots.end()) options.layer = it->second;
+    }
+    options.hidden = hidden;
+    return options;
+  };
   for (const auto& cp : defn.construction_points) {
     try {
-      target.add_construction_point(cp.position);
+      target.add_construction_point(cp.position, guide_options(cp.layer, cp.hidden));
     } catch (const SkpWriteError& exc) {
       warnings.push_back(context + ": construction point skipped (" + std::string(exc.what()) +
                          ")");
@@ -461,9 +470,11 @@ void replay_body(Target& target, const Definition& defn,
   for (const auto& cl : defn.construction_lines) {
     try {
       if (cl.start && cl.end) {
-        target.add_construction_line(*cl.start, *cl.end);
+        target.add_construction_line(*cl.start, *cl.end, std::nullopt,
+                                     guide_options(cl.layer, cl.hidden));
       } else if (!cl.start && !cl.end) {
-        target.add_construction_line(cl.point, std::nullopt, cl.direction);
+        target.add_construction_line(cl.point, std::nullopt, cl.direction,
+                                     guide_options(cl.layer, cl.hidden));
       } else {
         warnings.push_back(context + ": half-bounded construction line skipped");
       }

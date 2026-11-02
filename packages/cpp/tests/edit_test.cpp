@@ -294,5 +294,30 @@ TEST(Edit, ReplaysNestedDefinitionConstruction) {
   ASSERT_TRUE(group->construction_lines[0].start && group->construction_lines[0].end);
 }
 
+TEST(Edit, ReplaysGuideHiddenFlagAndLayer) {
+  auto path = temp_skp("guide_hidden_layer");
+  {
+    auto builder = create();
+    const int guides = builder->add_layer("Guides");
+    builder->add_face({{0, 0, 0}, {1, 0, 0}, {0, 1, 0}});
+    builder->add_construction_point({1.0, 2.0, 3.0}, GuideOptions{std::nullopt, true});
+    builder->add_construction_line({0.0, 0.0, 0.0}, Point3{12.0, 0.0, 0.0}, std::nullopt,
+                                   GuideOptions{guides, true});
+    builder->save(path);
+  }
+
+  OpenExistingResult result = open_existing(path);
+  ASSERT_NE(result.builder, nullptr);
+  ByteBuffer rebuilt_bytes = result.builder->to_bytes();
+  SkpModel rebuilt = SkpFile::from_buffer(rebuilt_bytes).parse();
+  std::filesystem::remove(path);
+
+  ASSERT_EQ(rebuilt.root().construction_points.size(), 1u);
+  EXPECT_TRUE(rebuilt.root().construction_points[0].hidden);
+  ASSERT_EQ(rebuilt.root().construction_lines.size(), 1u);
+  EXPECT_TRUE(rebuilt.root().construction_lines[0].hidden);
+  EXPECT_EQ(rebuilt.root().construction_lines[0].layer, "Guides");
+}
+
 }  // namespace
 }  // namespace openskp

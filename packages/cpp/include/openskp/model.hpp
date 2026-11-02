@@ -446,6 +446,12 @@ struct ConstructionLine {
   std::optional<Vec3> start;
   /// The bounded segment's end point, or unset if unbounded.
   std::optional<Vec3> end;
+  /// Name of the layer (tag) the guide is assigned to, or "" for the
+  /// default layer (Layer0).
+  std::string layer;
+  /// Whether the guide is hidden (SketchUp's "Hide" on this specific
+  /// guide, not a layer/tag visibility toggle).
+  bool hidden{};
 };
 
 /// A construction/guide point (SketchUp's Construction Point tool).
@@ -454,6 +460,12 @@ struct ConstructionLine {
 struct ConstructionPoint {
   /// The point's position, in inches (world space).
   Vec3 position{0.0, 0.0, 0.0};
+  /// Name of the layer (tag) the guide is assigned to, or "" for the
+  /// default layer (Layer0).
+  std::string layer;
+  /// Whether the guide is hidden (SketchUp's "Hide" on this specific
+  /// guide, not a layer/tag visibility toggle).
+  bool hidden{};
 };
 
 /// A saved scene (SketchUp's "Scenes" tabs; "pages" in the SDK).

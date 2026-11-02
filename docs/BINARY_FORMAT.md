@@ -85,6 +85,12 @@ stays buried in an opaque payload and the image looks never placed.
 entities share (`D007` / entity id / `D307` flags). `6A42` (8×f64 line
 body) and `6D42` (3×f64 point) are leaves, not containers.
 
+A guide's own Hide and tag live in that `6842` → `D007` container, the
+same leaves edges, faces and instances use: `D307` display flags (base
+`0x06`, `+0x01` = hidden) and `D207` (layer entity id). Large models can
+carry tens of thousands of hidden guide points; reading `6D42` alone
+draws every one of them.
+
 ## 3. Tag Reference
 
 ### 3.1 Geometry Tags
