@@ -35,6 +35,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `add_dimension(p1, p2, offset_vector)` on root and component builders; rewriting the real
   dimensions through it reproduces SketchUp's own world bounding boxes.
 
+### Fixed — Python, TypeScript, .NET, Dart: classic textured materials are no longer all "colorized"
+
+In a classic (pre-2021) file a textured material's record holds the image's average colour and the
+material's paint colour side by side, and two words: the material type (1 textured, 2 colorized) and
+the colorize mode (0 shift, 1 tint). The readers took any material whose alpha byte was `0xFF` as
+colorized and always reported tint, so every plain textured material read as colorized: 96 of the 117
+textured materials in the repository's sample files and the differential-test files disagreed with
+SketchUp's own `SUMaterialGetType`. They now read `colorized` from the material type, `colorize_type` from the mode,
+and the colour from the paint colour (its alpha is 255, as C++ reads it since #477; a plain texture
+used to report 254 in one file). Against SketchUp's library the type, mode and colour of all 117
+agree, including the colorized ones; a fixture written by that library (plain, tint, shift and a
+half-opaque tint) is read the same by all five ports.
+
 ### Fixed — Dart: `fromFragments` reads uncompressed `.frag` files again with `archive` 4.6
 
 `fromFragments` told a zlib stream from raw FlatBuffers by letting `ZLibDecoder.decodeBytes` throw

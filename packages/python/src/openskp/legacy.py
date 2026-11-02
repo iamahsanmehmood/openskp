@@ -805,19 +805,21 @@ def _texture_block(ar, r):
     w = r.f64()
     h = r.f64()
     fname = r.utf16()
-    avg = r.raw(9)               # RGBA + 00 + RGBA (colour stored twice)
+    avg = r.raw(9)               # image average RGBA + 00 + the material's paint RGBA
     r.utf16()
-    blob = r.raw(8)              # u32 + u32 colorized flag
+    blob = r.raw(8)              # u32 material type (1 textured, 2 colorized) + u32 colorize mode
     opacity = r.f64()
     use_op = r.u8()
-    # A colourized (re-tinted) texture stores the ORIGINAL image plus
-    # the tint as the average colour; flagged by the second blob u32
-    # or by alpha 0xFF on the stored colour.
-    colorized = bool(blob[4]) or avg[3] == 0xFF
-    return {'rgba': tuple(avg[:4]), 'opacity': opacity, 'use_opacity': use_op,
+    # Checked against materials written by SketchUp's own library: the first
+    # blob u32 is SUMaterialGetType (2 = a colorized texture, which keeps the
+    # ORIGINAL image and stores the tint as the paint colour) and the second is
+    # SUMaterialGetColorizeType (0 shift, 1 tint). The alpha byte of the image
+    # average says nothing about either - it is 0xFF on plain textures too.
+    colorized = blob[0] == 2
+    return {'rgba': (avg[5], avg[6], avg[7], 255), 'opacity': opacity, 'use_opacity': use_op,
             'tex_dib': s, 'tex_data': dib['data'] if s is None else None,
             'tex_w': w, 'tex_h': h, 'tex_file': fname,
-            'colorized': colorized}
+            'colorized': colorized, 'colorize_type': 1 if blob[4] == 1 else 0}
 
 
 def _read_material(ar, r):
@@ -2414,9 +2416,7 @@ def full_parse_legacy(skp_path: str) -> Dict[str, Any]:
             'name': v['name'],
             'color': {'r': rgba[0], 'g': rgba[1], 'b': rgba[2], 'a': rgba[3]},
             'transparency': trans,
-            # colourize type is not decoded in the legacy record; tint is
-            # the correct rendering for the grey base textures observed
-            'colorized': colorized, 'colorize_type': 1 if colorized else 0,
+            'colorized': colorized, 'colorize_type': v.get('colorize_type', 0),
         }
         if 'tex_dib' in v:
             dib = slots.get(v['tex_dib']) if v['tex_dib'] is not None else None

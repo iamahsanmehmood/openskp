@@ -943,6 +943,7 @@ function textureBlock(
   tex_h: number;
   tex_file: string;
   colorized: boolean;
+  colorize_type: number;
 } {
   let s: number | null;
   let dib: any;
@@ -967,17 +968,19 @@ function textureBlock(
   const w = r.f64();
   const h = r.f64();
   const fname = r.utf16();
-  const avg = r.raw(9); // RGBA + 00 + RGBA (colour stored twice)
+  const avg = r.raw(9); // image average RGBA + 00 + the material's paint RGBA
   r.utf16();
-  const blob = r.raw(8); // u32 + u32 colorized flag
+  const blob = r.raw(8); // u32 material type (1 textured, 2 colorized) + u32 colorize mode
   const opacity = r.f64();
   const useOp = r.u8();
-  // A colourized (re-tinted) texture stores the ORIGINAL image plus the
-  // tint as the average colour; flagged by the second blob u32 or by alpha
-  // 0xFF on the stored colour.
-  const colorized = Boolean(blob[4]) || avg[3] === 0xff;
+  // Checked against materials written by SketchUp's own library: the first
+  // blob u32 is SUMaterialGetType (2 = a colorized texture, which keeps the
+  // ORIGINAL image and stores the tint as the paint colour) and the second is
+  // SUMaterialGetColorizeType (0 shift, 1 tint). The alpha byte of the image
+  // average says nothing about either - it is 0xFF on plain textures too.
+  const colorized = blob[0] === 2;
   return {
-    rgba: Array.from(avg.subarray(0, 4)),
+    rgba: [avg[5], avg[6], avg[7], 255],
     opacity,
     use_opacity: useOp,
     tex_dib: s,
@@ -986,6 +989,7 @@ function textureBlock(
     tex_h: h,
     tex_file: fname,
     colorized,
+    colorize_type: blob[4] === 1 ? 1 : 0,
   };
 }
 
@@ -1014,6 +1018,7 @@ function readMaterial(ar: Archive, r: R): any {
     out.tex_h = tex.tex_h;
     out.tex_file = tex.tex_file;
     out.colorized = tex.colorized;
+    out.colorize_type = tex.colorize_type;
   }
   return out;
 }
@@ -2553,10 +2558,8 @@ export function parseLegacyToRaw(data: Uint8Array, options?: ParseOptions): Pars
       transparency: trans,
       id: null,
       texture,
-      // colourize type is not decoded in the legacy record; tint (1) is
-      // the correct rendering for the grey base textures observed.
       colorized,
-      colorizeType: colorized ? 1 : 0,
+      colorizeType: v.colorize_type ?? 0,
     };
     materialsMap.set(v.name, matObj);
     materialIdToName.set(s, v.name);
