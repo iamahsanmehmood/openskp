@@ -11,6 +11,38 @@
 namespace openskp {
 namespace {
 
+TEST(Parser, ComponentGuidMatchesAcrossClassicAndVffContainers) {
+  for (const char* filename : {"nesting_2017.skp", "nesting_2020.skp", "nesting_2021.skp"}) {
+    SCOPED_TRACE(filename);
+    const auto model = SkpFile::open(test::fixture(filename)).parse();
+    std::size_t shelves = 0;
+    for (const auto& pair : model.definitions) {
+      if (pair.second.name == "Shelf") {
+        EXPECT_EQ(pair.second.guid, "1614E9C58C0B40338881DDE62E6E2D80");
+        ++shelves;
+      }
+    }
+    EXPECT_EQ(shelves, 1u);
+    std::size_t references = 0;
+    const auto verify = [&](const Definition& definition) {
+      for (const auto& instance : definition.instances) {
+        if (!instance.ref_idx) continue;
+        EXPECT_EQ(model.definitions.count(*instance.ref_idx), 1u);
+        ++references;
+      }
+    };
+    verify(model.root());
+    for (const auto& pair : model.definitions) verify(pair.second);
+    EXPECT_GT(references, 0u);
+    if (std::string(filename) == "nesting_2021.skp") {
+      ASSERT_EQ(model.root().instances.size(), 1u);
+      // Real 6819 UUIDs may identify the instance, while 6719 identifies its
+      // definition. Normalize the UUID without changing numeric reference resolution.
+      EXPECT_EQ(model.root().instances[0].guid, "0BFF75653E97458E9B7238A6E9CF1A99");
+    }
+  }
+}
+
 void ExpectConnectedNormalizedLoops(const Definition& definition) {
   for (const auto& [face_id, face] : definition.faces) {
     (void)face_id;

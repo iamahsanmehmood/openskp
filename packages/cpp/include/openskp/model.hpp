@@ -349,7 +349,7 @@ struct Instance {
   std::string name;
   /// Reference index to the target definition.
   std::optional<EntityId> ref_idx;
-  /// GUID string of target definition.
+  /// Canonical instance/reference UUID (uppercase, without hyphens).
   std::string guid;
   /// 4x4 column-major affine transformation matrix (16 floats).
   std::vector<double> matrix;
@@ -515,7 +515,7 @@ struct ViewCamera {
 struct Definition {
   /// Unique TLV entity ID.
   EntityId id{};
-  /// GUID string identifier.
+  /// Canonical UUID identifier (uppercase, without hyphens) in classic and VFF files.
   std::string guid;
   /// Definition name.
   std::string name;
