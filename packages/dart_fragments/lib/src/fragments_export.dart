@@ -719,6 +719,21 @@ String _extractNameAttribute(ffb.Attribute? attribute) {
   return '';
 }
 
+/// The inflated bytes when [data] is a zlib stream, or `null` when it is not one.
+///
+/// Bytes that are not a zlib stream make `package:archive` throw a [FormatException] in
+/// some releases (4.0.x) and silently return an empty list in others (4.6.0), so both are
+/// read as "not zlib" here; relying on the throw alone made [fromFragments] hand an empty
+/// buffer to the FlatBuffers reader for every uncompressed file.
+Uint8List? _inflateIfZlib(Uint8List data) {
+  try {
+    final inflated = const ZLibDecoder().decodeBytes(data);
+    return inflated.isEmpty ? null : Uint8List.fromList(inflated);
+  } catch (_) {
+    return null;
+  }
+}
+
 /// Parses a real `.frag` file's bytes into an [InstancedScene] - the
 /// mirror of [toFragments]. Accepts either the zlib-compressed wire
 /// format (the default [toFragments]/real loader convention) or raw,
@@ -732,12 +747,7 @@ String _extractNameAttribute(ffb.Attribute? attribute) {
 /// defaults, since the Fragments format doesn't carry them separately
 /// from the `Name` attribute this function does extract.
 InstancedScene fromFragments(Uint8List data) {
-  Uint8List rawBytes;
-  try {
-    rawBytes = const ZLibDecoder().decodeBytes(data);
-  } catch (_) {
-    rawBytes = data;
-  }
+  final rawBytes = _inflateIfZlib(data) ?? data;
 
   final model = ffb.Model(rawBytes);
   final meshes = model.meshes;
