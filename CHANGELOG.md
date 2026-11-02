@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed and added — C++ (contributed by @modraup, #475, #477, #481)
+
+- **Guides.** A construction line or point keeps its layer and its hidden flag when read, written
+  (`GuideOptions{layer, hidden}` on `add_construction_line` / `add_construction_point`) and replayed
+  by `open_existing()` (#475).
+- **Files the writer produces are closer to what SketchUp itself writes (#477).** A face's stored
+  plane constant had the wrong sign (SketchUp stores `n·p + d = 0`; every face of two real files
+  checked agrees); the persistent-id counter is now the 8-byte field it is, instead of wrapping at
+  16 bits; the texture average colour block is the one SketchUp writes. A fan triangulation is
+  validated before anything is written, so a degenerate polygon throws instead of corrupting the
+  entities after it. New `set_document_options(DocumentOptions)` sets the length unit and
+  precision and a few style items (e.g. the background colour) without scaling geometry; the
+  bundled `tools/check_native_skp.py` re-opens a file with SketchUp's own library to check them.
+- **Legacy texture materials.** The paint colour is read from the material colour, not the image
+  average, `colorized` is `true` only for a colorized texture (it was also `true` for every plain
+  textured material), and `colorize_type` distinguishes tint from shift. Checked against materials
+  written by SketchUp's library; the other four ports still read the old way (tracked for the next
+  parity pass).
+- **Dimensions (#481).** A legacy dimension whose end vertex is written inline no longer stops the
+  rest of the entity list from being read, so annotation-only components are no longer empty. The
+  endpoints and plane offset are recovered for legacy dimensions (34 of 34 on the Vigors models,
+  equal to SketchUp's own values), `Dimension::offset_vector` gives the side of the dimension line
+  independently of the order of the endpoints, and VFF dimensions decode the constrained axis
+  (`5BD1`). `5BCF` is the plane **normal** (SketchUp's `SUDimensionLinearGetNormal` equals it) and
+  `5BD0` its X axis, the other way round from what the earlier notes said. New
+  `add_dimension(p1, p2, offset_vector)` on root and component builders; rewriting the real
+  dimensions through it reproduces SketchUp's own world bounding boxes.
+
+### Fixed — Dart: `fromFragments` reads uncompressed `.frag` files again with `archive` 4.6
+
+`fromFragments` told a zlib stream from raw FlatBuffers by letting `ZLibDecoder.decodeBytes` throw
+on bytes that are not zlib. `archive` 4.6.0 returns an empty list instead, so every uncompressed
+file reached the FlatBuffers reader empty (five tests failed, and so did every pull request that
+touched Dart). Both outcomes now mean "not zlib" (#482).
+
 ### Fixed — all five ports: a legacy text label anchored to an entity no longer throws off the rest of the file
 
 A text label anchored to an entity (connection types 2, 4, 5 and 7 seen; types 0 and 1 anchor to
