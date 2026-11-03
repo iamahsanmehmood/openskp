@@ -183,6 +183,31 @@ std::optional<V20FillerHit> find_count_after_v20_filler(const ByteBuffer& d, siz
   return std::nullopt;
 }
 
+// The SketchUp 2020 layout of a model with NO component definitions AND no root entities.
+// find_count_after_v20_filler cannot see it: behind the filler (an empty string record, then 13
+// bytes of padding) the only count is the ROOT entity count, and it is 0, which that search skips
+// as "no count".
+//
+// Returns the offset of that root count (so the caller can put the cursor there and read the zero),
+// or nullopt when the bytes are not that layout: the empty string record has to sit within 12 bytes
+// of count_pos, and the 13 padding bytes and the count behind it have to be all zero.
+std::optional<size_t> find_empty_root_after_v20_filler(const ByteBuffer& d, size_t count_pos) {
+  size_t marker_at = std::string::npos;
+  for (size_t i = count_pos; i + 4 <= d.size() && i < count_pos + 12; ++i) {
+    if (d[i] == 255 && d[i + 1] == 254 && d[i + 2] == 255) {
+      marker_at = i;
+      break;
+    }
+  }
+  if (marker_at == std::string::npos) return std::nullopt;
+  if (d[marker_at + 3] != 0) return std::nullopt;  // non-empty string: real data
+  const size_t root_count_at = marker_at + 4 + 13;
+  if (root_count_at + 4 > d.size()) return std::nullopt;
+  for (size_t i = marker_at + 3; i < root_count_at + 4; ++i)
+    if (d[i] != 0) return std::nullopt;
+  return root_count_at;
+}
+
 namespace {
 struct R {
   const ByteBuffer& d;
@@ -1590,6 +1615,11 @@ WalkResult walk_model_on(Archive& ar, const ByteBuffer& data, int ver, size_t st
         dc = 0;
         ar.r.p -= 4;
       }
+    } else if (auto root_count_at = find_empty_root_after_v20_filler(data, ar.r.p - 4)) {
+      // No count behind the filler at all: an entirely empty model, whose root count is 0 (the
+      // retry only accepts counts > 0).
+      dc = 0;
+      ar.r.p = *root_count_at;
     }
   }
   if (dc > 1000000) throw std::runtime_error("invalid definition count");

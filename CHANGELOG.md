@@ -35,6 +35,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `add_dimension(p1, p2, offset_vector)` on root and component builders; rewriting the real
   dimensions through it reproduces SketchUp's own world bounding boxes.
 
+### Fixed — all five ports: a SketchUp 2020 model with nothing in it opens (#486)
+
+- A model saved by SketchUp 2020 with no entities and no component definitions (a blank template)
+  was rejected with "implausible definition count". SketchUp 2020 writes an empty string record and
+  zero padding where the definition count would be, and with nothing in the model the only count
+  behind it is the root entity count, which is 0; the search for that count skipped it. It now
+  reads as an empty model. Files that already opened read exactly as before: nothing changes
+  unless that search found no count at all and the filler is followed only by zeros.
+
 ### Fixed — Python, TypeScript, .NET, Dart: classic textured materials are no longer all "colorized"
 
 In a classic (pre-2021) file a textured material's record holds the image's average colour and the
