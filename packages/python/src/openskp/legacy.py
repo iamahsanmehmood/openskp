@@ -402,6 +402,30 @@ def _retry_count_after_v20_filler(r: _R, count_pos: int, limit: int, ar=None) ->
     return None
 
 
+def _v20_filler_before_empty_root(data: bytes, count_pos: int) -> Optional[int]:
+    """The SketchUp 2020 layout of a model with NO component definitions AND no
+    root entities. ``_retry_count_after_v20_filler`` cannot see it: behind the
+    filler (an empty string record, then 13 bytes of padding) the only count is
+    the ROOT entity count, and it is 0, which that search skips as "no count".
+
+    Returns the offset of that root count (so the caller can put the cursor
+    there and read the zero), or ``None`` when the bytes are not that layout:
+    the empty string record has to sit within 12 bytes of *count_pos*, and the
+    13 padding bytes and the count behind it have to be all zero.
+    """
+    for i in range(count_pos, min(count_pos + 12, len(data) - 3)):
+        if data[i:i + 3] == _STR_MARKER:
+            break
+    else:
+        return None
+    if data[i + 3] != 0:                  # non-empty string: real data
+        return None
+    root_count_at = i + 4 + 13
+    if root_count_at + 4 > len(data) or any(data[i + 3:root_count_at + 4]):
+        return None
+    return root_count_at
+
+
 # ── shared record blocks ─────────────────────────────────────────────────
 
 def _is_class_ref(data: bytes, p: int, slot: int) -> bool:
@@ -2077,6 +2101,13 @@ def _walk_model(data: bytes, ver: int, start: int, mat_count: int,
                 # root count, so put it back.
                 def_count = 0
                 r.pos -= 4
+        else:
+            # No count behind the filler at all: an entirely empty model,
+            # whose root count is 0 (the retry only accepts counts > 0).
+            root_count_at = _v20_filler_before_empty_root(r.data, r.pos - 4)
+            if root_count_at is not None:
+                def_count = 0
+                r.pos = root_count_at
     if def_count > 1_000_000:
         raise LegacyParseError("implausible definition count")
     for _ in range(def_count):

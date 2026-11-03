@@ -115,6 +115,32 @@ function retryCountAfterV20Filler(r: R, countPos: number, limit: number, ar?: Ar
   return hit.count;
 }
 
+/**
+ * The SketchUp 2020 layout of a model with NO component definitions AND no root
+ * entities. `findCountAfterV20Filler` cannot see it: behind the filler (an empty
+ * string record, then 13 bytes of padding) the only count is the ROOT entity
+ * count, and it is 0, which that search skips as "no count".
+ *
+ * Returns the offset of that root count (so the caller can put the cursor there
+ * and read the zero), or null when the bytes are not that layout: the empty
+ * string record has to sit within 12 bytes of `countPos`, and the 13 padding
+ * bytes and the count behind it have to be all zero.
+ */
+export function findEmptyRootAfterV20Filler(data: Uint8Array, countPos: number): number | null {
+  let markerAt = -1;
+  for (let i = countPos; i < countPos + 12 && i + 4 <= data.length; i++) {
+    if (data[i] === 0xff && data[i + 1] === 0xfe && data[i + 2] === 0xff) {
+      markerAt = i;
+      break;
+    }
+  }
+  if (markerAt < 0 || data[markerAt + 3] !== 0) return null; // none, or a non-empty string: real data
+  const rootCountAt = markerAt + 4 + 13;
+  if (rootCountAt + 4 > data.length) return null;
+  for (let i = markerAt + 3; i < rootCountAt + 4; i++) if (data[i] !== 0) return null;
+  return rootCountAt;
+}
+
 /** True when the u16 at `at` can legally start an object read: a null, an
  * escape, a class definition, a class-ref to a KNOWN class, or an object
  * back-ref within the allocated range. */
@@ -1967,6 +1993,14 @@ function walkModel(data: Uint8Array, ver: number, start: number, matCount: numbe
         // put it back.
         defCount = 0;
         r.pos -= 4;
+      }
+    } else {
+      // No count behind the filler at all: an entirely empty model, whose root
+      // count is 0 (the retry only accepts counts > 0).
+      const rootCountAt = findEmptyRootAfterV20Filler(r.data, r.pos - 4);
+      if (rootCountAt !== null) {
+        defCount = 0;
+        r.pos = rootCountAt;
       }
     }
   }

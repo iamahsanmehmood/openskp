@@ -229,6 +229,9 @@ struct V20FillerHit {
 
 std::optional<V20FillerHit> find_count_after_v20_filler(const ByteBuffer&, std::size_t,
                                                         std::uint32_t);
+/// The offset of the root entity count behind a 2020 filler when the model has no definitions and
+/// no root entities (that count is 0, which `find_count_after_v20_filler` skips), else nullopt.
+std::optional<std::size_t> find_empty_root_after_v20_filler(const ByteBuffer&, std::size_t);
 RawParsed full_parse(const ByteBuffer&, const ParseOptions&);
 std::string decode_xml_entities(const std::string&);
 RawParsed parse_legacy(const ByteBuffer&, const ParseOptions&);
