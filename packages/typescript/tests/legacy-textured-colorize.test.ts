@@ -31,4 +31,21 @@ describe('a classic file with textured and colorized materials', () => {
       tint_half: [[10, 20, 230], true, 1, 0.5],
     });
   });
+
+  // blender-openskp#9: a SketchUp 2017 textured material stores two colours side by side and the first
+  // one's alpha byte can be 0 (as in the box the report attached). Taking the colour and its alpha from
+  // the first made every textured material fully transparent in the Blender add-on. Here the first colour
+  // of `plain` (120, 40, 120) gets alpha 0, as in that file.
+  it('takes the colour alpha from the material colour, not the image average', () => {
+    const b = fs.readFileSync(path.join(__dirname, 'fixtures', 'legacy_textured_colorize_2017.skp'));
+    const data = new Uint8Array(b);
+    const pair = Buffer.from('782878ff00782878ff', 'hex'); // image average, 00, material colour (alpha 255)
+    const at = b.indexOf(pair);
+    expect(at).toBeGreaterThan(0);
+    expect(b.indexOf(pair, at + 1)).toBe(-1);
+    data[at + 3] = 0;
+    const model = parseSkp(data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer);
+    const plain = model.materials.find((m) => m.name === 'plain')!;
+    expect(plain.color).toEqual({ r: 120, g: 40, b: 120, a: 255 });
+  });
 });

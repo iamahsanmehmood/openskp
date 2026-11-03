@@ -30,5 +30,33 @@ namespace OpenSkp.Tests
             Assert.Equal((200, 90, 20, true, 0, 1.0), got["shift"]);
             Assert.Equal((10, 20, 230, true, 1, 0.5), got["tint_half"]);
         }
+
+        // blender-openskp#9: a SketchUp 2017 textured material stores two colours side by side and the first
+        // one's alpha byte can be 0 (as in the box the report attached). Taking the colour and its alpha from
+        // the first made every textured material fully transparent in the Blender add-on. Here the first
+        // colour of "plain" (120, 40, 120) gets alpha 0, as in that file.
+        [Fact]
+        public void ColourAlphaIsTheMaterialColoursNotTheImageAverages()
+        {
+            var data = File.ReadAllBytes(Path.Combine(AppContext.BaseDirectory, "fixtures", "legacy_textured_colorize_2017.skp"));
+            var pair = new byte[] { 0x78, 0x28, 0x78, 0xFF, 0x00, 0x78, 0x28, 0x78, 0xFF }; // image average, 00, material colour
+            int at = IndexOf(data, pair, 0);
+            Assert.True(at > 0);
+            Assert.Equal(-1, IndexOf(data, pair, at + 1));
+            data[at + 3] = 0;
+            var plain = SkpFile.Parse(data).Materials.Single(m => m.Name == "plain");
+            Assert.Equal((120, 40, 120, 255), plain.Color);
+        }
+
+        private static int IndexOf(byte[] haystack, byte[] needle, int from)
+        {
+            for (int i = from; i + needle.Length <= haystack.Length; i++)
+            {
+                bool match = true;
+                for (int j = 0; j < needle.Length && match; j++) match = haystack[i + j] == needle[j];
+                if (match) return i;
+            }
+            return -1;
+        }
     }
 }
