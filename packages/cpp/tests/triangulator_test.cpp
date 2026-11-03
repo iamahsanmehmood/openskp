@@ -42,6 +42,15 @@ TEST(Triangulator, Concave) {
   EXPECT_NEAR(tri_area(t, v), 12, 1e-6);
 }
 
+TEST(Triangulator, ConcaveQuadSplitsAlongInsideDiagonal) {
+  // A dart of area 4 whose reflex corner is vertex 1: the 0-2 diagonal runs outside it.
+  std::map<EntityId, Vertex> v{
+      {0, {0, 4, 0, 0}}, {1, {1, 1, 1, 0}}, {2, {2, 0, 4, 0}}, {3, {3, 0, 0, 0}}};
+  auto t = triangulate_face_3d(v, {{0, 1, 2, 3}}, {0, 0, 1});
+  EXPECT_EQ(t.size(), 2);
+  EXPECT_NEAR(tri_area(t, v), 4, 1e-9);
+}
+
 TEST(Triangulator, Hole) {
   std::map<EntityId, Vertex> v{{0, {0, 0, 0, 0}},   {1, {1, 10, 0, 0}},  {2, {2, 10, 10, 0}},
                                {3, {3, 0, 10, 0}},  {10, {10, 4, 4, 0}}, {11, {11, 6, 4, 0}},
