@@ -1605,7 +1605,9 @@ namespace OpenSkp
                 Preamble();
             }
             Drawbase(mat: faceMaterial, layer: faceLayer, hidden: hidden);
-            AddF64(nx); AddF64(ny); AddF64(nz); AddF64(d);
+            // SketchUp stores a face's plane as n.p + d = 0 (checked on real files), so d is minus the
+            // fitted n.centroid; PlaneFromPolygon returns +n.centroid.
+            AddF64(nx); AddF64(ny); AddF64(nz); AddF64(-d);
             AddU32((uint)(1 + holes.Count)); // nloops
 
             int loopSlot = NewOfKnownClass("CLoop", 1);
