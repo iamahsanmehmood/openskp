@@ -61,6 +61,15 @@ fails without the fix; every existing test still passes, and Python reads 63 dif
 Also corrected, in the documentation of the four ports: `5BCF` is the dimension plane's **normal**
 and `5BD0` its X axis (the `planeX` / `normal` fields keep their old names).
 
+### Fixed — Python, TypeScript, .NET, Dart writers: a face's stored plane has the sign SketchUp uses
+
+SketchUp stores a face's plane as `n·p + d = 0` (every face of two real files agrees); the writers
+stored `d` with the opposite sign (`+n·centroid`), the defect @modraup found in the C++ writer in #477.
+openskp's readers only use the plane's normal and SketchUp's own API recomputes the plane, so nothing
+noticed. Each writer now stores `-d`, with a test on the raw record that fails without the change. The
+Dart `create_reference` files (written by an older Python writer) get the same change to each face's
+plane constant (3,210 faces), and nothing else in them changes.
+
 ### Fixed — Dart: `fromFragments` reads uncompressed `.frag` files again with `archive` 4.6
 
 `fromFragments` told a zlib stream from raw FlatBuffers by letting `ZLibDecoder.decodeBytes` throw

@@ -1804,7 +1804,9 @@ class _ArchiveWriter:
         else:
             self._preamble()
         self._drawbase(mat=face_material, layer=face_layer, hidden=hidden)
-        self.buf += _f64(nx) + _f64(ny) + _f64(nz) + _f64(d)
+        # SketchUp stores a face's plane as n.p + d = 0 (checked on real files), so d is minus the
+        # fitted n.centroid; the fit above returns +n.centroid.
+        self.buf += _f64(nx) + _f64(ny) + _f64(nz) + _f64(-d)
         self.buf += _u32(1 + len(holes))  # nloops
 
         loop_slot = self._new_of_known_class("CLoop", schema=1)

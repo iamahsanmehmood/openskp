@@ -1402,7 +1402,9 @@ class ArchiveWriter {
     this.pushF64(nx);
     this.pushF64(ny);
     this.pushF64(nz);
-    this.pushF64(d);
+    // SketchUp stores a face's plane as n.p + d = 0 (checked on real files), so d is minus the
+    // fitted n.centroid; planeFromPolygon returns +n.centroid.
+    this.pushF64(-d);
     this.pushU32(1 + holes.length); // nloops
 
     const loopSlot = this.newOfKnownClass('CLoop', 1);

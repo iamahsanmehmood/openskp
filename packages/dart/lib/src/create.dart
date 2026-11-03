@@ -1784,7 +1784,9 @@ class _ArchiveWriter {
     buf.addAll(_f64(nx));
     buf.addAll(_f64(ny));
     buf.addAll(_f64(nz));
-    buf.addAll(_f64(d));
+    // SketchUp stores a face's plane as n.p + d = 0 (checked on real files), so d is minus the
+    // fitted n.centroid; _planeFromPolygon returns +n.centroid.
+    buf.addAll(_f64(-d));
     buf.addAll(_u32(1 + holes.length)); // nloops
 
     final loopSlot = _newOfKnownClass('CLoop', schema: 1);
