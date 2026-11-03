@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0] — 2026-11-03 — all 5 languages
+
+> What most readers will notice, from the entries below (everything since 1.4.0):
+>
+> - **Files that failed, or read wrong, now read, in all five languages:** a SketchUp 2016
+>   model with a dimension attached to a vertex written in full lost all 148 of its root
+>   entities (#474); a legacy text label anchored to an entity no longer throws off the rest of
+>   the file, so four more room-acoustics benchmark models open (#473); a saved blank SketchUp
+>   2020 template opens as an empty model (#486).
+> - **Textured materials in classic (pre-2021) files:** Python, TypeScript, .NET and Dart read
+>   every plain textured material as colorized, and took the colour's alpha from the image
+>   average, which is `0` in some files. That is why the Blender add-on drew such faces as if
+>   they had no material (blender-openskp#9). They now read the material type, the colorize
+>   mode (new field `colorize_type`) and the paint colour the way C++ does, checked against
+>   SketchUp's own library on all 117 textured materials of the test files.
+> - **Writing:** all five writers store a face's plane with the sign SketchUp uses. C++ (from
+>   @modraup) also keeps a guide's layer and hidden flag, sets document options, adds
+>   dimensions with an offset vector, and writes files closer to what SketchUp itself writes.
+> - **Dart:** `fromFragments` reads uncompressed `.frag` files again with `archive` 4.6, which
+>   had also broken every Dart CI run.
+>
+> Upgrade notes: in a classic file `colorized` is now `false` for a plain textured material
+> and a material's colour has alpha 255 (it was `0`, or `254`, in some files), so code that
+> used `colorized` to tell whether a material has a texture should look at the texture
+> itself. Files the Python, TypeScript, .NET and Dart writers made before this release store
+> the face plane constant with the opposite sign; every reader ignores it, so they still open
+> everywhere. C++ has writer options the other four do not (guide options, document options),
+> tracked in the porting backlog (#285).
+
 ### Fixed and added — C++ (contributed by @modraup, #475, #477, #481)
 
 - **Guides.** A construction line or point keeps its layer and its hidden flag when read, written
@@ -23,8 +52,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Legacy texture materials.** The paint colour is read from the material colour, not the image
   average, `colorized` is `true` only for a colorized texture (it was also `true` for every plain
   textured material), and `colorize_type` distinguishes tint from shift. Checked against materials
-  written by SketchUp's library; the other four ports still read the old way (tracked for the next
-  parity pass).
+  written by SketchUp's library; the other four ports read it the same way now (next entry).
 - **Dimensions (#481).** A legacy dimension whose end vertex is written inline no longer stops the
   rest of the entity list from being read, so annotation-only components are no longer empty. The
   endpoints and plane offset are recovered for legacy dimensions (34 of 34 on the Vigors models,
@@ -56,6 +84,7 @@ and the colour from the paint colour (its alpha is 255, as C++ reads it since #4
 used to report 254 in one file). Against SketchUp's library the type, mode and colour of all 117
 agree, including the colorized ones; a fixture written by that library (plain, tint, shift and a
 half-opaque tint) is read the same by all five ports.
+
 ### Fixed — Python, TypeScript, .NET, Dart: a dimension whose connection point is a vertex written in full no longer ends the entity list (#474)
 
 MFC writes an object in full the first time anything references it, and a dimension comes before the
