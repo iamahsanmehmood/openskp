@@ -26,10 +26,20 @@ static std::u16string layer_name_utf16(const std::string& name) {
     uint32_t cp = lead;
     unsigned extra = 0;
     uint32_t minimum = 0;
-    if (lead >= 0xC2 && lead <= 0xDF) { cp = lead & 0x1F; extra = 1; minimum = 0x80; }
-    else if (lead >= 0xE0 && lead <= 0xEF) { cp = lead & 0x0F; extra = 2; minimum = 0x800; }
-    else if (lead >= 0xF0 && lead <= 0xF4) { cp = lead & 0x07; extra = 3; minimum = 0x10000; }
-    else if (lead >= 0x80) throw std::invalid_argument("DXF layer name contains invalid UTF-8");
+    if (lead >= 0xC2 && lead <= 0xDF) {
+      cp = lead & 0x1F;
+      extra = 1;
+      minimum = 0x80;
+    } else if (lead >= 0xE0 && lead <= 0xEF) {
+      cp = lead & 0x0F;
+      extra = 2;
+      minimum = 0x800;
+    } else if (lead >= 0xF0 && lead <= 0xF4) {
+      cp = lead & 0x07;
+      extra = 3;
+      minimum = 0x10000;
+    } else if (lead >= 0x80)
+      throw std::invalid_argument("DXF layer name contains invalid UTF-8");
     for (unsigned j = 0; j < extra; ++j) {
       if (i == name.size() || (static_cast<unsigned char>(name[i]) & 0xC0) != 0x80)
         throw std::invalid_argument("DXF layer name contains invalid UTF-8");
@@ -41,13 +51,14 @@ static std::u16string layer_name_utf16(const std::string& name) {
       cp -= 0x10000;
       result.push_back(static_cast<char16_t>(0xD800 + (cp >> 10)));
       result.push_back(static_cast<char16_t>(0xDC00 + (cp & 0x3FF)));
-    } else result.push_back(static_cast<char16_t>(cp));
+    } else
+      result.push_back(static_cast<char16_t>(cp));
   }
   return result;
 }
 
 static std::string layer_name_hash(const std::string& name) {
-  uint32_t hash = 2166136261u; // Stable across platforms and standard libraries.
+  uint32_t hash = 2166136261u;  // Stable across platforms and standard libraries.
   for (unsigned char c : name) hash = (hash ^ c) * 16777619u;
   std::ostringstream out;
   out.imbue(std::locale::classic());
@@ -58,8 +69,9 @@ static std::string layer_name_hash(const std::string& name) {
 static std::string sanitize_layer_name(const std::string& name, std::string suffix = {}) {
   auto clean = layer_name_utf16(name);
   const auto first = clean.find_first_not_of(u" \t\r\n");
-  clean = first == std::u16string::npos ? u"0" :
-      clean.substr(first, clean.find_last_not_of(u" \t\r\n") - first + 1);
+  clean = first == std::u16string::npos
+              ? u"0"
+              : clean.substr(first, clean.find_last_not_of(u" \t\r\n") - first + 1);
   const std::u16string illegal = u"<>/\\\"~:;?*=`|";
   for (char16_t& c : clean) {
     if (c < 32 || (c >= 127 && c <= 159) || illegal.find(c) != std::u16string::npos) c = u'_';
@@ -76,14 +88,17 @@ static std::string sanitize_layer_name(const std::string& name, std::string suff
   out.imbue(std::locale::classic());
   out << std::hex << std::uppercase << std::setfill('0');
   for (char16_t c : clean) {
-    if (c < 128) out << static_cast<char>(c);
-    else out << "\\U+" << std::setw(4) << static_cast<unsigned>(c);
+    if (c < 128)
+      out << static_cast<char>(c);
+    else
+      out << "\\U+" << std::setw(4) << static_cast<unsigned>(c);
   }
   return out.str();
 }
 
 static std::string layer_name_key(std::string name) {
-  for (char& c : name) if (c >= 'A' && c <= 'Z') c += 'a' - 'A';
+  for (char& c : name)
+    if (c >= 'A' && c <= 'Z') c += 'a' - 'A';
   return name;
 }
 
@@ -2957,7 +2972,7 @@ std::string to_dxf(const Scene& scene, double scale, const std::string& mode) {
     std::string l_name = sanitize_layer_name(prim.geom_name);
     for (size_t attempt = 0; !used_names.insert(layer_name_key(l_name)).second; ++attempt) {
       const auto suffix = "_" + layer_name_hash(prim.geom_name) +
-          (attempt == 0 ? std::string{} : "_" + std::to_string(attempt));
+                          (attempt == 0 ? std::string{} : "_" + std::to_string(attempt));
       l_name = sanitize_layer_name(prim.geom_name, suffix);
     }
     layer_names.emplace(prim.geom_name, l_name);
