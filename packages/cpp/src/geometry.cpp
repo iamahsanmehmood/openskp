@@ -336,6 +336,16 @@ void collect_geometry(const std::vector<TlvNode>& es, GeometryBuilder& b) {
       RawInstance i;
       i.offset = e.offset;
       i.id = entity_id(e);
+      auto* d007 = find_node(e.children, "D007");
+      auto* dc05 = d007 ? find_node(d007->children, "DC05") : nullptr;
+      if (dc05 && !dc05->payload.empty()) {
+        ByteBuffer idb = dc05->payload;
+        if (idb.size() >= 6 && idb[0] == 0xde && idb[1] == 5) {
+          const auto z = read_u32(idb, 2);
+          if (z <= idb.size() - 6) idb = ByteBuffer(idb.begin() + 6, idb.begin() + 6 + z);
+        }
+        i.persistent_id = hex(idb);
+      }
       auto* g = find_node(e.children, "6819");
       if (g && g->payload.size() == 16) i.ref_guid = guid_from_windows_bytes(g->payload);
       auto* r = find_node(e.children, "6719");

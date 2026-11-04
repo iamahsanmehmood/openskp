@@ -147,6 +147,26 @@ struct GuideOptions {
   bool hidden = false;
 };
 
+/// Drawing properties for linear dimensions.
+struct DimensionOptions {
+  /// Layer slot (from add_layer); unset = Layer0.
+  std::optional<int> layer;
+  bool hidden = false;
+};
+
+/// Text placement and drawing properties; point/leader are in owner-local inches.
+struct TextOptions {
+  std::optional<int> layer;
+  bool hidden = false;
+  /// Zero with no screen position writes model text with a hidden leader (native type 2).
+  int leader_type = 2;
+  int arrow_type = 3;
+  /// Normalized screen fractions for screen text; overrides the leader type.
+  std::optional<std::array<double, 2>> screen_position;
+  /// Hide the leader without turning owner-local text into screen text.
+  bool display_leader = true;
+};
+
 /// Options for `SkpBuilder::add_face` / `ComponentDefinitionBuilder::add_face`.
 struct FaceOptions {
   /// Front-side material slot (from `add_material`/`add_texture_material`); unset = default.
@@ -349,7 +369,11 @@ class OPENSKP_EXPORT ComponentDefinitionBuilder {
   /// Its component perpendicular to p1->p2 determines the plane and side of the line.
   /// Coordinates must be finite and endpoints distinct. Zero offset is supported.
   void add_dimension(Point3 p1, Point3 p2, Point3 offset_vector);
+  void add_dimension(Point3 p1, Point3 p2, Point3 offset_vector, const DimensionOptions& options);
 
+  /// Add owner-local leader or screen text, with optional tag and hidden state.
+  void add_text(const std::string& text, Point3 point, Point3 leader,
+                const TextOptions& options = {});
   /// Add a construction/guide line - same behavior as `SkpBuilder::add_construction_line`
   /// (coordinates are definition-local inches, like `add_face`).
   void add_construction_line(Point3 point, std::optional<Point3> point2 = std::nullopt,
@@ -556,10 +580,12 @@ class OPENSKP_EXPORT SkpBuilder {
   /// Its component perpendicular to p1->p2 determines the plane and side of the line.
   /// Coordinates must be finite and endpoints distinct. Zero offset is supported.
   void add_dimension(Point3 p1, Point3 p2, Point3 offset_vector);
+  void add_dimension(Point3 p1, Point3 p2, Point3 offset_vector, const DimensionOptions& options);
 
   /// Add a leader text (SketchUp's Text tool) anchored at `point` (inches, world space), with the
   /// label floating at `point + leader` and a leader line joining them.
   void add_text(const std::string& text, Point3 point, Point3 leader = {15.0, 15.0, 15.0});
+  void add_text(const std::string& text, Point3 point, Point3 leader, const TextOptions& options);
 
   /// Add a construction/guide line (SketchUp's Construction Line tool). Pass exactly one of
   /// `point2` (a bounded segment between `point` and `point2`, matching

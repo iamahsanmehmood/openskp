@@ -258,7 +258,6 @@ const ByteBuffer kDimFontPayload = from_hex(
     "ecf57abd5eaf2340");  // height f64
 
 // Leader-text delimiter block: [u32 1][u8 flag=1][u8 0][u32 ARROW=3 closed][u8 1]
-const ByteBuffer kTextDelim = from_hex("0100000001000300000001");
 
 std::uint16_t read_u16_le(const ByteBuffer& buf, std::size_t pos) {
   return static_cast<std::uint16_t>(buf[pos]) | static_cast<std::uint16_t>(buf[pos + 1] << 8);
@@ -936,7 +935,8 @@ class ArchiveWriter {
   // type 1 with the point stored inline in each connection block and null object refs. Free
   // dimensions render in any orientation; anchored (type 2) dimensions are a future refinement.
   void write_dimension(Point3 p1, Point3 p2, double offset,
-                       std::optional<Point3> offset_vector = std::nullopt) {
+                       std::optional<Point3> offset_vector = std::nullopt,
+                       const DimensionOptions& options = {}) {
     if (p1 == p2) throw SkpWriteError("add_dimension endpoints coincide");
     Point3 normal{0, 0, 1}, xaxis{1, 0, 0};
     if (offset_vector) {
@@ -963,7 +963,7 @@ class ArchiveWriter {
     }
     new_of_known_class("CDimensionLinear", kDimensionLinearSchema);
     preamble();
-    drawbase();
+    drawbase(0, options.layer.value_or(0), options.hidden);
     write_str("");  // auto-computed measurement text
     write_dim_font_ref();
     // connection 1: [u8 0][u32 0][u32 type=1][u32 4][point A], null ref
@@ -1001,29 +1001,47 @@ class ArchiveWriter {
   // only produces SCREEN texts - its two 0.5 doubles are screen fractions): screen slot zeroed,
   // the free-connection block dimensions use ([u32 1][u32 4][point3d]), the label's world
   // position in the placement tail, and leader type 2 (pushpin) before the arrow delimiter.
-  void write_text(const std::string& text, Point3 point, Point3 leader = {15.0, 15.0, 15.0}) {
-    Point3 lb = {point[0] + leader[0], point[1] + leader[1], point[2] + leader[2]};
+  void write_text(const std::string& text, Point3 point, Point3 leader,
+                  const TextOptions& options) {
+    Point3 label{};
+    for (int i = 0; i < 3; ++i) {
+      label[i] = point[i] + leader[i];
+      if (!std::isfinite(point[i]) || !std::isfinite(label[i]))
+        throw SkpWriteError("add_text coordinates must be finite");
+    }
+    if (options.leader_type < 0 || options.leader_type > 2 || options.arrow_type < 0 ||
+        options.arrow_type > 4)
+      throw SkpWriteError("add_text invalid leader or arrow type");
+    if (options.screen_position)
+      for (double value : *options.screen_position)
+        if (!std::isfinite(value) || value < 0 || value > 1)
+          throw SkpWriteError("add_text screen position must be between zero and one");
     new_of_known_class("CText", kTextSchema);
     preamble();
-    drawbase();
+    drawbase(0, options.layer.value_or(0), options.hidden);
     write_dim_font_ref();
-    append_f64(buf, 0.0);
-    append_f64(buf, 0.0);  // screen-fraction slot (unused)
+    const auto screen = options.screen_position.value_or(std::array<double, 2>{0, 0});
+    for (double value : screen) append_f64(buf, value);
     append_u32(buf, 1);
-    append_u32(buf, 4);  // free connection + constant
-    append_f64(buf, point[0]);
-    append_f64(buf, point[1]);
-    append_f64(buf, point[2]);
-    append_zeros(buf, 12);
-    append_f64(buf, lb[0]);
-    append_f64(buf, lb[1]);
-    append_f64(buf, lb[2]);  // label position
-    append_zeros(buf, 16);
+    append_u32(buf, 4);
+    for (double value : point) append_f64(buf, value);
+    buf.insert(buf.end(), 12, 0);
+    for (double value : label) append_f64(buf, value);
+    buf.insert(buf.end(), 16, 0);
     append_f64(buf, 1.0);
-    append_u32(buf, 2);  // leader type: pushpin
-    buf.insert(buf.end(), kTextDelim.begin(), kTextDelim.end());
+    // Native type 0 is screen text. A leaderless owner-local label must remain
+    // type 2 with its independent display flag cleared, preserving both points.
+    const int leader_type =
+        options.screen_position ? 0 : (options.leader_type == 0 ? 2 : options.leader_type);
+    const bool display_leader =
+        options.display_leader && (options.screen_position || options.leader_type != 0);
+    append_u32(buf, leader_type);
+    append_u32(buf, 1);
+    append_u16(buf, 1);
+    append_u32(buf, options.arrow_type);
+    buf.push_back(display_leader ? 1 : 0);
     write_str(text);
-    append_zeros(buf, 5);
+    buf.insert(buf.end(), 5, 0);
   }
 
   // Add a construction/guide line (SketchUp's Construction Line tool). Pass exactly one of
@@ -2069,8 +2087,22 @@ void ComponentDefinitionBuilder::add_dimension(Point3 p1, Point3 p2, double offs
 }
 
 void ComponentDefinitionBuilder::add_dimension(Point3 p1, Point3 p2, Point3 offset_vector) {
+  add_dimension(p1, p2, offset_vector, {});
+}
+
+void ComponentDefinitionBuilder::add_dimension(Point3 p1, Point3 p2, Point3 offset_vector,
+                                               const DimensionOptions& options) {
+  detail::check_layer_handle(*impl_->skp, options.layer);
   check_writable("dimensions");
-  impl_->writer->write_dimension(p1, p2, 0.0, offset_vector);
+  impl_->writer->write_dimension(p1, p2, 0.0, offset_vector, options);
+  impl_->new_entity_count += 1;
+}
+
+void ComponentDefinitionBuilder::add_text(const std::string& text, Point3 point, Point3 leader,
+                                          const TextOptions& options) {
+  check_writable("text");
+  detail::check_layer_handle(*impl_->skp, options.layer);
+  impl_->writer->write_text(text, point, leader, options);
   impl_->new_entity_count += 1;
 }
 
@@ -2398,15 +2430,27 @@ void SkpBuilder::add_dimension(Point3 p1, Point3 p2, double offset) {
 }
 
 void SkpBuilder::add_dimension(Point3 p1, Point3 p2, Point3 offset_vector) {
+  add_dimension(p1, p2, offset_vector, {});
+}
+
+void SkpBuilder::add_dimension(Point3 p1, Point3 p2, Point3 offset_vector,
+                               const DimensionOptions& options) {
+  detail::check_layer_handle(*this, options.layer);
   impl_->ensure_geometry_writer();
-  impl_->geometry_writer->write_dimension(p1, p2, 0.0, offset_vector);
+  impl_->geometry_writer->write_dimension(p1, p2, 0.0, offset_vector, options);
   impl_->new_entity_count += 1;
   impl_->face_count += 1;  // reuses the "at least one root entity" check in to_bytes
 }
 
 void SkpBuilder::add_text(const std::string& text, Point3 point, Point3 leader) {
+  add_text(text, point, leader, {});
+}
+
+void SkpBuilder::add_text(const std::string& text, Point3 point, Point3 leader,
+                          const TextOptions& options) {
+  detail::check_layer_handle(*this, options.layer);
   impl_->ensure_geometry_writer();
-  impl_->geometry_writer->write_text(text, point, leader);
+  impl_->geometry_writer->write_text(text, point, leader, options);
   impl_->new_entity_count += 1;
   impl_->face_count += 1;  // reuses the "at least one root entity" check in to_bytes
 }

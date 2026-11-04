@@ -40,6 +40,7 @@ struct RawFace {
 };
 
 struct RawInstance {
+  std::string persistent_id;
   std::uint64_t offset{};
   std::optional<EntityId> id;
   std::string ref_guid;
@@ -149,6 +150,8 @@ struct RawDimension {
   std::optional<Vec3> plane_x;
   std::optional<Vec3> normal;
   std::optional<Vec3> offset_vector;
+  std::string layer;
+  bool hidden{};
   std::string text;
 };
 
@@ -255,6 +258,11 @@ struct LegacyDimension {
   std::optional<std::uint64_t> connect2;
 };
 
+struct LegacyText {
+  TextEntity geometry;
+  std::optional<std::uint64_t> vertex;
+};
+
 struct V {
   std::string k;
   std::string name;
@@ -262,6 +270,7 @@ struct V {
   std::string text;
   // Allocate annotation geometry only for dimensions, not for every mesh vertex.
   std::shared_ptr<LegacyDimension> dimension;
+  std::shared_ptr<LegacyText> annotation_text;
   std::string guid;
   Vec3 xyz{};
   // Only populated for k == "constructionline": the line's normalized
@@ -395,6 +404,10 @@ double transform_determinant(const std::vector<double>&);
 std::vector<double> multiply_matrices(const std::vector<double>&, const std::vector<double>&);
 void scan_vertex_positions(const TlvNode&, std::map<std::string, Vec3>&);
 void scan_instance_transforms(const TlvNode&, std::map<std::string, std::vector<double>>&);
+void assign_vff_annotations(const ByteBuffer&, const std::map<std::string, Vec3>&,
+                            const std::map<std::string, std::vector<double>>&, RawParsed&);
+void compose_instance_world(const RawDefinition&, const std::map<EntityId, RawDefinition>&,
+                            std::map<std::string, std::vector<double>>&);
 std::vector<RawDimension> parse_dimensions(const ByteBuffer&, const std::map<std::string, Vec3>&,
                                            const std::map<std::string, std::vector<double>>&);
 const TlvNode* find_page_node(const TlvNode&);
