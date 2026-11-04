@@ -288,13 +288,19 @@ TEST(Parser, ModernInstancesCarryUniqueEntityIds) {
   EXPECT_EQ(ids.size(), 46u);
 }
 
-TEST(Parser, LegacyInstancesHaveNoEntityId) {
+TEST(Parser, LegacyInstancesExposeNativePersistentIds) {
   const auto model = SkpFile::open(test::fixture("gondola_v20.skp")).parse();
   for (const auto& [definition_id, definition] : model.definitions) {
     (void)definition_id;
-    for (const auto& instance : definition.instances) EXPECT_FALSE(instance.id.has_value());
+    for (const auto& instance : definition.instances) {
+      ASSERT_TRUE(instance.id.has_value());
+      EXPECT_GT(*instance.id, 0);
+    }
   }
-  for (const auto& instance : model.root().instances) EXPECT_FALSE(instance.id.has_value());
+  for (const auto& instance : model.root().instances) {
+    ASSERT_TRUE(instance.id.has_value());
+    EXPECT_GT(*instance.id, 0);
+  }
 }
 
 TEST(Parser, CoedgeOrientationsAreNormalizedAndConnected) {

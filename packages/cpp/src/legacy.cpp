@@ -221,13 +221,13 @@ std::string decode_utf16le_range(const ByteBuffer& d, size_t pos, size_t char_co
       if (++i == char_count) throw std::runtime_error("incomplete UTF-16 surrogate pair");
       const auto low = read_u16(d, pos);
       pos += 2;
-      if (low < 0xDC00 || low > 0xDFFF)
-        throw std::runtime_error("invalid UTF-16 surrogate pair");
+      if (low < 0xDC00 || low > 0xDFFF) throw std::runtime_error("invalid UTF-16 surrogate pair");
       c = 0x10000 + ((c - 0xD800) << 10) + (low - 0xDC00);
     } else if (c >= 0xDC00 && c <= 0xDFFF) {
       throw std::runtime_error("unpaired UTF-16 low surrogate");
     }
-    if (c < 0x80) s += char(c);
+    if (c < 0x80)
+      s += char(c);
     else if (c < 0x800) {
       s += char(0xC0 | (c >> 6));
       s += char(0x80 | (c & 63));
@@ -612,12 +612,14 @@ struct Archive {
   // Returns the CAttributeContainer's slot, or nullopt when this entity
   // has none (a null object reference: tag 0, Archive::object() returns a
   // default-constructed tuple with an empty class name).
-  std::optional<std::uint64_t> preamble(std::string* cls = nullptr) {
+  std::optional<std::uint64_t> preamble(V* value = nullptr, std::string* cls = nullptr) {
     auto attrs = object("CAttributeContainer");
     if (pid) {
       auto mask = r.u8();
+      std::uint64_t id = 0;
       for (int i = 0; i < 8; ++i)
-        if (mask & (1 << i)) r.u8();
+        if (mask & (1 << i)) id |= std::uint64_t(r.u8()) << (8 * i);
+      if (value) value->native_pid = id;
     }
     if (cls) *cls = std::get<1>(attrs);
     if (std::get<1>(attrs).empty()) return std::nullopt;
@@ -627,9 +629,9 @@ struct Archive {
   // `preamble` for the entity types that carry NO attribute-container
   // pointer in a SketchUp 3 file: vertex, loop, edge-use, material, layer.
   // (Edge, face, definition, instance and thumbnail still open with one.)
-  std::optional<std::uint64_t> early_preamble() {
+  std::optional<std::uint64_t> early_preamble(V* value = nullptr) {
     if (ver < kFirstV4) return std::nullopt;
-    return preamble();
+    return preamble(value);
   }
 
   void draw(V& v) {
@@ -645,6 +647,9 @@ struct Archive {
     if (!v3) {
       v.mat = int(b[0] | b[1] << 8);
       v.hidden = b[2];
+      v.casts_shadows = b[3] != 0;
+      v.receives_shadows = b[4] != 0;
+      v.locked = b.size() > 7 && b[7] != 0;
       v.soft = b[5];
       v.smooth = b[6];
     }
@@ -748,12 +753,12 @@ struct Archive {
   std::shared_ptr<V> read(const std::string& n, uint64_t self) {
     auto v = std::make_shared<V>();
     if (n == "CVertex") {
-      early_preamble();
+      early_preamble(v.get());
       v->k = "vertex";
       auto a = r.f64s(3);
       v->xyz = {a[0], a[1], a[2]};
     } else if (n == "CEdge") {
-      preamble();
+      v->attrs = preamble(v.get());
       v->k = "edge";
       draw(*v);
       v->v1 = std::get<0>(object("CVertex"));
@@ -764,12 +769,12 @@ struct Archive {
         v->curve_value = std::get<2>(curve);
       }
     } else if (n == "CCurve") {
-      preamble();
+      preamble(v.get());
       v->k = "curve";
       r.u8();
       r.u32();
     } else if (n == "CArcCurve") {
-      preamble();
+      preamble(v.get());
       v->k = "arccurve";
       r.raw(5);
       // center[3], normal[3], x_axis[3], start_angle, end_angle, y_axis[3]
@@ -781,7 +786,7 @@ struct Archive {
       v->arc.end_angle = a[10];
       v->arc.y_axis = {a[11], a[12], a[13]};
     } else if (n == "CEdgeUse") {
-      early_preamble();
+      early_preamble(v.get());
       v->k = "edgeuse";
       v->edge = std::get<0>(object("CEdge"));
       v->sense = r.u8() != 0;
@@ -814,7 +819,7 @@ struct Archive {
     } else if (n == "CLoop") {
       auto old = current_loop;
       current_loop = self;
-      early_preamble();
+      early_preamble(v.get());
       r.raw(2);
       v->k = "loop";
       while (r.p + 2 <= r.d.size() && read_u16(r.d, r.p)) {
@@ -825,7 +830,7 @@ struct Archive {
       current_loop = old;
     } else if (n == "CFace") {
       std::string lead_cls;
-      v->attrs = preamble(&lead_cls);
+      v->attrs = preamble(v.get(), &lead_cls);
       v->k = "face";
       draw(*v);
       if (ver < kFirstV4 && v->attrs && lead_cls == "CMaterial") {
@@ -843,13 +848,13 @@ struct Archive {
       }
       v->back_mat = r.u16();
     } else if (n == "CAttributeContainer") {
-      preamble();
+      preamble(v.get());
       v->k = "attrs";
       while (r.p + 2 <= r.d.size() && read_u16(r.d, r.p))
         v->ents.push_back(object("CAttributeNamed"));
       r.u16();
     } else if (n == "CAttributeNamed") {
-      preamble();
+      preamble(v.get());
       v->k = "dict";
       r.raw(4);
       v->name = r.utf16();
@@ -869,7 +874,7 @@ struct Archive {
       // this - the file's own version is the only signal available.
       if (ver >= 7) r.u32();
     } else if (n == "CLayer") {
-      v->attrs = early_preamble();
+      v->attrs = early_preamble(v.get());
       v->k = "layer";
       v->name = r.utf16();
       ByteBuffer mid;
@@ -897,7 +902,7 @@ struct Archive {
         skip_clayer_parent_ref(self);
       }
     } else if (n == "CMaterial") {
-      early_preamble();
+      early_preamble(v.get());
       v->k = "material";
       v->name = r.utf16();
       auto flag = r.u16();
@@ -921,7 +926,7 @@ struct Archive {
       if (z > r.d.size()) throw std::runtime_error("implausible dib length");
       v->blob = r.raw(z);
     } else if (n == "CFaceTextureCoords") {
-      preamble();
+      preamble(v.get());
       v->k = "ftc";
       r.u32();
       auto a = r.f64s(24);
@@ -936,17 +941,25 @@ struct Archive {
       v->front_projected = (fflags & 2) != 0;
       v->back_projected = (bflags & 2) != 0;
     } else if (n == "CCamera") {
-      r.raw(137);
+      auto camera = r.raw(137);
+      ThumbnailCamera view;
+      view.eye = {read_f64(camera, 0), read_f64(camera, 8), read_f64(camera, 16)};
+      view.target = {read_f64(camera, 24), read_f64(camera, 32), read_f64(camera, 40)};
+      view.up = {read_f64(camera, 48), read_f64(camera, 56), read_f64(camera, 64)};
+      view.perspective = camera[80] != 0;
+      view.fov_y_deg = read_f64(camera, 72);
+      v->camera = view;
       r.u16();
       r.utf16();
       r.raw(ver >= 6 ? 33 : 10);
     } else if (n == "CThumbnail") {
-      preamble();
+      preamble(v.get());
       if (ver < kFirstV4) {
         // SketchUp 3: a fixed 129-byte camera block, no name, no image.
         r.raw(129);
       } else {
-        object("CCamera");
+        auto camera = object("CCamera");
+        if (std::get<2>(camera)) v->camera = std::get<2>(camera)->camera;
         // SketchUp 4 and 5 end the thumbnail with its camera: no trailing
         // image pointer (not even a null one).
         if (ver >= 6) object("CDib");
@@ -961,7 +974,7 @@ struct Archive {
       // ordinary definition reader then consumes. Its parsed value is
       // never consumed downstream - it exists purely so the byte stream
       // stays aligned.
-      preamble();
+      preamble(v.get());
       v->k = "image";
       draw(*v);
       auto q = object();
@@ -978,12 +991,12 @@ struct Archive {
       // side - so these can point forward, past the walk cursor;
       // entity_ref() tolerates that where object()'s back-ref path
       // (rightly) does not.
-      preamble();
+      preamble(v.get());
       v->k = "relationship";
       entity_ref();
       entity_ref();
     } else if (n == "CConstructionLine") {
-      preamble();
+      preamble(v.get());
       v->k = "constructionline";
       draw(*v);
       // point(3) + direction(3) + two signed distance params along
@@ -1045,7 +1058,7 @@ struct Archive {
       }
       r.raw(*cline_tail);
     } else if (n == "CConstructionPoint") {
-      preamble();
+      preamble(v.get());
       v->k = "constructionpoint";
       draw(*v);
       auto pos = r.f64s(3);
@@ -1054,7 +1067,7 @@ struct Archive {
                   // Sketchup::ConstructionPoint property to name it after
       r.u8();     // reserved/unused (observed 0)
     } else if (n == "CSectionPlane") {
-      preamble();
+      preamble(v.get());
       v->k = "sectionplane";
       draw(*v);
       auto first = read_f64(r.d, r.p);
@@ -1077,7 +1090,7 @@ struct Archive {
       r.utf16();
       r.raw(15);
     } else if (n == "CDimensionLinear") {
-      preamble();
+      preamble(v.get());
       v->k = "dimension";
       draw(*v);
       v->text = r.utf16();
@@ -1129,7 +1142,7 @@ struct Archive {
             Vec3{-x[0] * geometry.offset, -x[1] * geometry.offset, -x[2] * geometry.offset};
       }
     } else if (n == "CText") {
-      preamble();
+      preamble(v.get());
       v->k = "text";
       draw(*v);
       object("CSkFont");
@@ -1203,11 +1216,12 @@ struct Archive {
         r.raw(6);
       }
     } else if (n == "CComponentDefinition") {
-      preamble();
+      v->attrs = preamble(v.get());
       v->k = "definition";
       // undecoded base block: 13 bytes in SketchUp 3, 19 in 4, 20 from 5, 22
       // from 2017
-      r.raw(ver >= 17 ? 22 : ver >= 5 ? 20 : ver >= kFirstV4 ? 19 : 13);
+      auto definition_base = r.raw(ver >= 17 ? 22 : ver >= 5 ? 20 : ver >= kFirstV4 ? 19 : 13);
+      if (ver >= kFirstV4) v->hidden = definition_base[2] != 0;
       auto nl = r.u32();
       if (nl > 10000) throw std::runtime_error("implausible def layers");
       // like the model-level layer list, the count is REAL layers (new
@@ -1285,9 +1299,9 @@ struct Archive {
       }
       v->guid = guid_from_windows_bytes(r.raw(16));
       v->name = r.utf16();
-      r.utf16();
-      r.utf16();
-      r.u32();
+      v->description = r.utf16();
+      v->path = r.utf16();
+      v->load_time = r.u32();
       size_t tpos = std::string::npos;
       auto thumb_cs = class_slot.find("CThumbnail");
       for (size_t off = 0; off < 96 && r.p + off + 26 <= r.d.size(); ++off) {
@@ -1309,11 +1323,13 @@ struct Archive {
       // the last u32 before the thumbnail is 1 for the definition of a group and 0
       // for a component's (what SketchUp's SUComponentDefinitionGetType reports),
       // measured against SketchUp 2025's own counts
+      v->type_known = gap.size() >= 4;
       v->is_group = gap.size() >= 4 && gap[gap.size() - 4] == 1 && gap[gap.size() - 3] == 0 &&
                     gap[gap.size() - 2] == 0 && gap[gap.size() - 1] == 0;
-      object("CThumbnail");
+      auto thumbnail = object("CThumbnail");
+      if (std::get<2>(thumbnail)) v->camera = std::get<2>(thumbnail)->camera;
     } else if (n == "CComponentInstance" || n == "CGroup") {
-      v->attrs = preamble();
+      v->attrs = preamble(v.get());
       v->k = "instance";
       draw(*v);
       auto q = object("CComponentDefinition");
@@ -1699,36 +1715,6 @@ WalkResult walk_model(const ByteBuffer& data, int ver, size_t start, uint32_t ma
   }
 }
 
-void add_edge(GeometryBuilder& b, uint64_t s, const V& e,
-              const std::unordered_map<uint64_t, Entry>& slots) {
-  if (b.edges.count(s)) return;
-  for (auto id : {e.v1, e.v2}) {
-    auto i = slots.find(id);
-    if (i != slots.end() && i->second.v && i->second.v->k == "vertex")
-      b.vertices[id] = i->second.v->xyz;
-  }
-  b.edges[s] = {EntityId(e.v1), EntityId(e.v2)};
-  int f = (e.soft ? 8 : 0) | (e.smooth ? 16 : 0) | (e.hidden ? 1 : 0);
-  if (f) b.edge_flags[s] = f;
-  // The edge's parent Curve (the CCurve/CArcCurve slot) and, if that curve is an analytic arc, its
-  // frame: it arrives on the edge that first references the CArcCurve; every later edge on the arc
-  // back-refs it.
-  if (e.curve) {
-    b.edge_curves[s] = EntityId(*e.curve);
-    if (e.curve_value && e.curve_value->k == "arccurve")
-      b.arc_curves[EntityId(*e.curve)] = e.curve_value->arc;
-  }
-}
-
-// SketchUp's Dynamic Components extension stores its data in an attribute
-// dictionary literally named "dynamic_attributes" - a stable, publicly
-// documented part of the SketchUp Ruby API
-// (Entity#attribute_dictionary("dynamic_attributes")). CAttributeContainer/
-// CAttributeNamed reading above already fully decodes an entity's
-// attribute dictionaries for other purposes (CFaceTextureCoords lookup on
-// faces) - this just looks up that one dictionary by name, mirroring what
-// the VFF path's dynamic-properties extraction does for D007/DC05 TLV
-// data.
 ParsedAttrDictionaries extract_legacy_attribute_dictionaries(
     std::optional<uint64_t> attrs_slot, const std::unordered_map<uint64_t, Entry>& slots) {
   ParsedAttrDictionaries out;
@@ -1743,6 +1729,44 @@ ParsedAttrDictionaries extract_legacy_attribute_dictionaries(
   return out;
 }
 
+void add_edge(GeometryBuilder& b, uint64_t s, const V& e,
+              const std::unordered_map<uint64_t, Entry>& slots) {
+  if (b.edges.count(s)) return;
+  for (auto id : {e.v1, e.v2}) {
+    auto i = slots.find(id);
+    if (i != slots.end() && i->second.v && i->second.v->k == "vertex") {
+      b.vertices[id] = i->second.v->xyz;
+      b.persistent_ids[id] = i->second.v->native_pid;
+    }
+  }
+  b.edges[s] = {EntityId(e.v1), EntityId(e.v2)};
+  b.persistent_ids[s] = e.native_pid;
+  b.edge_flags[s] =
+      pack_draw(e.hidden, e.soft, e.smooth, e.locked, e.casts_shadows, e.receives_shadows);
+  b.edge_dictionaries[s] = extract_legacy_attribute_dictionaries(e.attrs, slots);
+  // The edge's parent Curve (the CCurve/CArcCurve slot) and, if that curve is an analytic arc, its
+  // frame: it arrives on the edge that first references the CArcCurve; every later edge on the arc
+  // back-refs it.
+  if (e.curve) {
+    b.edge_curves[s] = EntityId(*e.curve);
+    auto curve = slots.find(*e.curve);
+    if (curve != slots.end() && curve->second.v)
+      b.persistent_ids[*e.curve] = curve->second.v->native_pid;
+    if (e.curve_value && e.curve_value->k == "arccurve")
+      b.arc_curves[EntityId(*e.curve)] = e.curve_value->arc;
+  }
+}
+
+// SketchUp's Dynamic Components extension stores its data in an attribute
+// dictionary literally named "dynamic_attributes" - a stable, publicly
+// documented part of the SketchUp Ruby API
+// (Entity#attribute_dictionary("dynamic_attributes")). CAttributeContainer/
+// CAttributeNamed reading above already fully decodes an entity's
+// attribute dictionaries for other purposes (CFaceTextureCoords lookup on
+// faces) - this just looks up that one dictionary by name, mirroring what
+// the VFF path's dynamic-properties extraction does for D007/DC05 TLV
+// data.
+
 void fill(GeometryBuilder& b,
           const std::vector<std::tuple<uint64_t, std::string, std::shared_ptr<V>>>& ents,
           const std::unordered_map<uint64_t, Entry>& slots) {
@@ -1750,6 +1774,7 @@ void fill(GeometryBuilder& b,
     auto s = std::get<0>(x);
     auto v = std::get<2>(x);
     if (!v) continue;
+    b.persistent_ids[s] = v->native_pid;
     if (v->k == "edge")
       add_edge(b, s, *v, slots);
     else if (v->k == "arccurve")
@@ -1760,6 +1785,11 @@ void fill(GeometryBuilder& b,
       if (v->mat) f.material_id = v->mat;
       if (v->back_mat) f.back_material_id = v->back_mat;
       f.hidden = v->hidden != 0;
+      f.locked = v->locked;
+      f.casts_shadows = v->casts_shadows;
+      f.receives_shadows = v->receives_shadows;
+      f.attribute_dictionaries = extract_legacy_attribute_dictionaries(v->attrs, slots);
+      if (v->layer) f.layer = std::to_string(v->layer);
       for (auto& lp : v->loops) {
         std::vector<CoEdge> co;
         for (auto& u : lp->uses) {
@@ -1800,6 +1830,10 @@ void fill(GeometryBuilder& b,
       b.faces[s] = std::move(f);
     } else if (v->k == "instance") {
       RawInstance i;
+      if (v->native_pid) i.id = v->native_pid;
+      i.locked = v->locked;
+      i.casts_shadows = v->casts_shadows;
+      i.receives_shadows = v->receives_shadows;
       i.name = v->name;
       i.ref_idx = v->def;
       i.matrix = v->xf;
@@ -1823,6 +1857,10 @@ void fill(GeometryBuilder& b,
       // Image entity parsed without error but never appeared anywhere a
       // caller could see it.
       RawInstance i;
+      if (v->native_pid) i.id = v->native_pid;
+      i.locked = v->locked;
+      i.casts_shadows = v->casts_shadows;
+      i.receives_shadows = v->receives_shadows;
       i.ref_idx = v->def;
       i.ref_guid = v->guid;
       i.matrix = v->xf;
@@ -1835,8 +1873,10 @@ void fill(GeometryBuilder& b,
       if (v->plane.size() == 4) {
         sp.plane = {v->plane[0], v->plane[1], v->plane[2], v->plane[3]};
       }
+      if (v->layer) sp.layer = std::to_string(v->layer);
       sp.name = v->name;
       sp.label = v->label;
+      sp.persistent_id = v->native_pid;
       sp.hidden = v->hidden != 0;
       b.section_planes.push_back(std::move(sp));
     } else if (v->k == "text") {
@@ -1848,6 +1888,7 @@ void fill(GeometryBuilder& b,
       }
       if (v->layer) te.layer = std::to_string(v->layer);
       te.text = v->text;
+      te.persistent_id = v->native_pid;
       te.hidden = v->hidden != 0;
       b.texts.push_back(std::move(te));
     } else if (v->k == "dimension") {
@@ -1862,6 +1903,7 @@ void fill(GeometryBuilder& b,
       resolve(dim.b, v->dimension->connect2);
       if (v->layer) dim.layer = std::to_string(v->layer);
       dim.text = v->text;
+      dim.persistent_id = v->native_pid;
       dim.hidden = v->hidden != 0;
       b.dimensions.push_back(std::move(dim));
     } else if (v->k == "constructionline") {
@@ -1871,12 +1913,14 @@ void fill(GeometryBuilder& b,
       cl.start = v->start;
       cl.end = v->end;
       if (v->layer) cl.layer = std::to_string(v->layer);
+      cl.persistent_id = v->native_pid;
       cl.hidden = v->hidden != 0;
       b.construction_lines.push_back(std::move(cl));
     } else if (v->k == "constructionpoint") {
       ConstructionPoint cp;
       cp.position = v->xyz;
       if (v->layer) cp.layer = std::to_string(v->layer);
+      cp.persistent_id = v->native_pid;
       cp.hidden = v->hidden != 0;
       b.construction_points.push_back(std::move(cp));
     }
@@ -2445,6 +2489,7 @@ RawParsed parse_legacy(const ByteBuffer& data, const ParseOptions& o) {
     for (auto& m : mats) {
       auto v = m.second;
       auto x = std::make_shared<RawMaterial>();
+      x->native_pid = v->native_pid;
       x->name = v->name;
       x->r = v->r;
       x->g = v->g;
@@ -2473,12 +2518,16 @@ RawParsed parse_legacy(const ByteBuffer& data, const ParseOptions& o) {
       out.material_id_to_name[m.first] = x->name;
     }
     for (auto& l : layers) {
+      out.layer_persistent_ids[l.second->name] = l.second->native_pid;
+      if (l.second->native_pid)
+        out.layer_persistent_id_aliases[l.second->name].insert(l.second->native_pid);
       out.layer_id_to_name[l.first] = l.second->name;
       if (!out.layer_colors.count(l.second->name)) out.layer_order.push_back(l.second->name);
       out.layer_colors[l.second->name] = {uint8_t(l.second->r), uint8_t(l.second->g),
                                           uint8_t(l.second->b)};
       out.layer_hidden[l.second->name] = l.second->hidden != 0;
       auto dicts = extract_legacy_attribute_dictionaries(l.second->attrs, ar.slots);
+      out.layer_parsed_dictionaries[l.second->name] = dicts;
       // Layer::attribute_dictionaries stays string-typed by design (matches
       // Instance's own pre-#368 contract for the model-level scene/JSON/IFC
       // consumers PR #369 wired it into) - the shared extraction above
@@ -2503,12 +2552,20 @@ RawParsed parse_legacy(const ByteBuffer& data, const ParseOptions& o) {
     for (auto& s : ar.slots)
       if (!s.second.cls && s.second.name == "CComponentDefinition" && s.second.v) {
         RawDefinition d;
+        d.native_pid = s.second.v->native_pid;
+        d.description = s.second.v->description;
+        d.path = s.second.v->path;
+        d.load_time = s.second.v->load_time;
+        d.hidden = s.second.v->hidden != 0;
+        d.thumbnail_camera = s.second.v->camera;
+        d.parsed_dictionaries = extract_legacy_attribute_dictionaries(s.second.v->attrs, ar.slots);
         d.name = s.second.v->name;
         d.guid = s.second.v->guid;
         d.always_faces_camera = s.second.v->faces_camera;
         d.shadows_face_sun = s.second.v->shadows_face_sun;
         d.is_image = image_def_ids.count(s.first) != 0;
         d.is_group = s.second.v->is_group;
+        d.type_known = s.second.v->type_known;
         fill(d.builder, s.second.v->ents, ar.slots);
         out.definitions[s.first] = std::move(d);
       }

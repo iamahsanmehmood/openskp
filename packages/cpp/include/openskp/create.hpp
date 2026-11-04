@@ -200,6 +200,11 @@ struct FaceOptions {
   /// direction doesn't matter. Every hole's points must lie on the same plane as the outer
   /// boundary. Not combined with `auto_triangulate`.
   std::vector<std::vector<Point3>> holes;
+  bool locked = false;
+  bool casts_shadows = true;
+  bool receives_shadows = true;
+  /// Named dictionaries; when nonempty, take precedence over attributes.
+  std::map<std::string, AttributeDict> dictionaries;
 };
 
 /// Options for `SkpBuilder::add_circle` / `ComponentDefinitionBuilder::add_circle`.
@@ -214,6 +219,14 @@ struct CircleOptions {
   std::optional<UvCorrespondence> back_uv;
   AttributeDict attributes;
   std::string attribute_dict_name = "attributes";
+  bool locked = false;
+  bool casts_shadows = true;
+  bool receives_shadows = true;
+  /// Optional zero-angle reference direction in the arc plane.
+  std::optional<Point3> xaxis;
+  /// Optional original tessellation, preserving edited/rounded vertex positions.
+  /// Circle: num_segments points; arc: num_segments + 1 points in curve order.
+  std::vector<Point3> vertices;
 };
 
 /// Options for `SkpBuilder::add_arc` / `ComponentDefinitionBuilder::add_arc`.
@@ -222,6 +235,14 @@ struct ArcOptions {
   bool hidden_edges = false;
   bool soft_edges = false;
   bool smooth_edges = false;
+  bool locked = false;
+  bool casts_shadows = true;
+  bool receives_shadows = true;
+  /// Optional zero-angle reference direction in the arc plane.
+  std::optional<Point3> xaxis;
+  /// Optional original tessellation, preserving edited/rounded vertex positions.
+  /// Circle: num_segments points; arc: num_segments + 1 points in curve order.
+  std::vector<Point3> vertices;
 };
 
 /// Options for `SkpBuilder::add_polyline` / `ComponentDefinitionBuilder::add_polyline`.
@@ -231,6 +252,12 @@ struct PolylineOptions {
   bool hidden_edges = false;
   bool soft_edges = false;
   bool smooth_edges = false;
+  bool locked = false;
+  bool casts_shadows = true;
+  bool receives_shadows = true;
+  AttributeDict attributes;
+  std::string attribute_dict_name = "attributes";
+  std::map<std::string, AttributeDict> dictionaries;
 };
 
 /// Options for `SkpBuilder::add_component_definition`.
@@ -242,9 +269,36 @@ struct DefinitionOptions {
   /// Canonical UUID: 32 hex digits or 8-4-4-4-12, case-insensitive. Empty creates a new identity.
   /// Invalid non-empty values throw SkpWriteError before the definition is added.
   std::string guid;
+  /// Named dictionaries; when nonempty, take precedence over attributes.
+  std::map<std::string, AttributeDict> dictionaries;
+  std::string description;
+  std::string path;
+  std::uint32_t load_time = 0;
+  bool hidden = false;
+  bool always_faces_camera = false;
+  bool shadows_face_sun = false;
+  std::optional<ThumbnailCamera> thumbnail_camera;
+  bool is_group = false;
 };
 
 /// Options for `SkpBuilder::add_layer`.
+struct TextureMaterialOptions {
+  /// Material paint/tint RGB. Opacity and colorization are stored separately below.
+  Color3 color{255, 255, 255};
+  /// SketchUp material opacity (1 = opaque). Written through the CMaterial opacity flag.
+  double transparency = 1.0;
+  bool colorized = false;
+  /// SketchUp `Material#colorize_type` (`COLORIZE_SHIFT=0`, `COLORIZE_TINT=1`).
+  /// Second u32 of the CMaterial extra blob; the first u32 is the material type.
+  std::int32_t colorize_type = 0;
+  /// Texture tile size in inches (`Sketchup::Texture#width` / `height`).
+  double width = 1.0;
+  /// Unset keeps the legacy unscaled-height sentinel (image aspect).
+  std::optional<double> height;
+  /// Stored `CTexture` path. Empty = the image file path passed to `add_texture_material`.
+  std::string filename;
+};
+
 struct LayerOptions {
   /// This layer's own display color; unset keeps the previous all-zero-byte default.
   std::optional<Color4> color;
@@ -273,6 +327,9 @@ struct InstanceOptions {
   /// Hides this specific placement (SketchUp's "Hide" on the instance) - its contents still
   /// exist in the file, just not shown by default.
   bool hidden = false;
+  bool locked = false;
+  bool casts_shadows = true;
+  bool receives_shadows = true;
 };
 
 /// Options for `SkpBuilder::add_group`.
@@ -290,6 +347,9 @@ struct GroupOptions {
   AttributeDict attributes;
   std::string attribute_dict_name = "attributes";
   bool hidden = false;
+  bool locked = false;
+  bool casts_shadows = true;
+  bool receives_shadows = true;
 };
 
 /// Options for `ComponentDefinitionBuilder::add_group_instance`. Same shape as `GroupOptions`.
@@ -303,6 +363,9 @@ struct GroupInstanceOptions {
   AttributeDict attributes;
   std::string attribute_dict_name = "attributes";
   bool hidden = false;
+  bool locked = false;
+  bool casts_shadows = true;
+  bool receives_shadows = true;
 };
 
 /// Options for `SkpBuilder::add_image`.
@@ -314,6 +377,9 @@ struct ImageOptions {
   std::optional<Rotation> rotation;
   std::optional<int> layer;
   bool hidden = false;
+  bool locked = false;
+  bool casts_shadows = true;
+  bool receives_shadows = true;
 };
 
 /// Accumulates one component/group definition's geometry. Construct via
@@ -382,6 +448,9 @@ class OPENSKP_EXPORT ComponentDefinitionBuilder {
   /// Add a construction/guide point - same behavior as `SkpBuilder::add_construction_point`
   /// (coordinates are definition-local inches, like `add_face`).
   void add_construction_point(Point3 position, const GuideOptions& options = {});
+  /// Raw normalized guide parameters, including half-bounded guides.
+  void add_construction_line(Point3 point, Point3 direction, double start_param, double end_param,
+                             const GuideOptions& options = {});
 
   /// Place one instance of another, already-closed component definition inside this one - the
   /// same nesting real SketchUp supports (an assembly definition containing instances of its own
@@ -427,6 +496,8 @@ struct DocumentOptions {
   /// Native style item IDs and scalar values (colors are packed ABGR uint32 values).
   /// Only items present in the bundled legacy style are updated; newer items are ignored.
   std::map<int, double> style_items;
+  /// Reserve IDs below this bound for imported entities; configure before adding content.
+  std::uint64_t next_persistent_id = 0;
 };
 
 /// Accumulates geometry and writes it into a new legacy-format (v17) `.skp` file. Construct via
@@ -442,6 +513,14 @@ class OPENSKP_EXPORT SkpBuilder {
 
   /// Set decimal display units and basic working/saved style values without scaling geometry.
   void set_document_options(const DocumentOptions& options);
+  /// Set the native identity of the next entity of this archive class. Zero allocates.
+  /// Configure DocumentOptions::next_persistent_id first, above every preserved ID.
+  /// IDs must be unique across entity classes. Structural records are allocated separately.
+  void set_next_persistent_id(const std::string& entity_class, std::uint64_t id);
+  /// Replace the current owner's vertex/edge identity map. Edge endpoints must be
+  /// lexicographically sorted. Exact positions are used; no coordinate welding occurs.
+  void set_geometry_persistent_ids(const std::map<Point3, std::uint64_t>& vertices,
+                                   const std::map<std::pair<Point3, Point3>, std::uint64_t>& edges);
 
   /// Set the file/model UUID (also its identity when imported as a component).
   /// Accepts 32 hex digits or 8-4-4-4-12, case-insensitive; invalid values throw SkpWriteError.
@@ -486,6 +565,8 @@ class OPENSKP_EXPORT SkpBuilder {
                            std::optional<double> applied_height = std::nullopt,
                            std::optional<double> applied_width = std::nullopt,
                            std::optional<double> opacity = std::nullopt);
+  int add_texture_material(const std::string& name, const std::filesystem::path& image_path,
+                           const TextureMaterialOptions& options);
 
   /// Register a layer and return a handle to pass as `FaceOptions::layer`. Calling this again
   /// with a name already registered returns the same handle (`options` are ignored on a repeat
@@ -513,6 +594,8 @@ class OPENSKP_EXPORT SkpBuilder {
   /// after it, in inches.
   void add_instance(const ComponentDefinitionBuilder& definition,
                     const InstanceOptions& options = {});
+  void add_group_instance(const ComponentDefinitionBuilder& definition,
+                          const GroupInstanceOptions& options = {});
 
   /// Place a SketchUp Image entity (File > Import > Image) - a picture placed as its own object,
   /// distinct from painting a texture material onto an ordinary face (an Image gets its own
@@ -599,6 +682,9 @@ class OPENSKP_EXPORT SkpBuilder {
   /// Add a construction/guide point (SketchUp's Construction Point tool) at `position` (inches,
   /// world space). `options` places the guide on a layer and/or hides it.
   void add_construction_point(Point3 position, const GuideOptions& options = {});
+  /// Raw normalized guide parameters, including half-bounded guides.
+  void add_construction_line(Point3 point, Point3 direction, double start_param, double end_param,
+                             const GuideOptions& options = {});
 
   /// Add a section plane (SketchUp's Section Plane tool) through `point` with the given `normal`
   /// (need not be unit length), matching `Entities#add_section_plane([point, normal])`.
