@@ -1233,3 +1233,25 @@ TEST(Create, NestedDefinitionConstructionRoundTrips) {
 
 }  // namespace
 }  // namespace openskp
+
+TEST(Create, AttributeStringsCrossMfcLengthBoundaries) {
+  for (const std::size_t length : {254u, 255u, 256u, 65533u, 65534u, 65535u, 65536u}) {
+    SCOPED_TRACE(length);
+    auto builder = openskp::create();
+    auto& definition = builder->add_component_definition("TextCarrier");
+    definition.add_face({{0, 0, 0}, {1, 0, 0}, {0, 1, 0}});
+    definition.close();
+    openskp::InstanceOptions options;
+    options.attribute_dict_name = "RoundTrip";
+    const std::string ascii(length, 'x');
+    const std::string unicode = std::string(length - 2, 'x') + u8"😀";
+    options.attributes["ascii"] = ascii;
+    options.attributes["unicode"] = unicode;
+    builder->add_instance(definition, options);
+    auto model = openskp::SkpFile::from_buffer(builder->to_bytes()).parse();
+    ASSERT_EQ(model.root().instances.size(), 1u);
+    const auto& attrs = model.root().instances.front().attribute_dictionaries.at("RoundTrip");
+    EXPECT_EQ(attrs.at("ascii").text, ascii);
+    EXPECT_EQ(attrs.at("unicode").text, unicode);
+  }
+}
