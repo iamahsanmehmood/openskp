@@ -116,10 +116,15 @@ draws every one of them.
 
 | Tag | Name | Payload | Description |
 |-----|------|---------|-------------|
-| `9411` | **Loop** | Container | Ordered sequence of coedges |
+| `9411` | **Loop** | Container | One loop of the face (first = outer, rest = holes) |
+| `9511` | Loop CoEdges | Container | Ordered sequence of coedges |
 | `A00F` | CoEdge | Inline TLV | Edge reference + orientation |
 | `A10F` | Edge Ref | var_int | Referenced edge entity ID |
-| `A20F` | Orientation | var_int | `1` = forward, `0` = reversed |
+| `A20F` | Orientation | var_int | `0` = along the edge (start → end), `1` = against it |
+
+A face's coedges sit one level below its loop: `AC0D` → `AE0D` → `9411` →
+`9511` → `A00F`. The readers map `A20F` to `CoEdge.orientation` as `0` → `+1`
+and `1` → `-1`.
 
 ### 3.3 Component Tags
 
