@@ -539,6 +539,29 @@ def _warn_earcut_missing() -> None:
         )
 
 
+def _split_quad_along_02(vertices_3d, quad) -> bool:
+    """Whether to split the quad along its 0-2 diagonal. A concave quad whose
+    reflex corner is 1 or 3 has that diagonal outside it: triangles (0,1,2)
+    and (0,2,3) then turn opposite ways and cover more than the face, and the
+    1-3 split covers exactly the face. A self-intersecting or warped quad can
+    fail the turn test with the 1-3 split no better, so 1-3 is taken only when
+    it covers less area."""
+    try:
+        p = [np.asarray(vertices_3d[v], dtype=float) for v in quad]
+    except KeyError:
+        return True
+
+    def area2(a, b, c):
+        return np.cross(p[b] - p[a], p[c] - p[a])
+
+    t012, t023 = area2(0, 1, 2), area2(0, 2, 3)
+    if float(np.dot(t012, t023)) >= 0.0:
+        return True
+    t123, t130 = area2(1, 2, 3), area2(1, 3, 0)
+    return float(np.linalg.norm(t123) + np.linalg.norm(t130)) >= float(
+        np.linalg.norm(t012) + np.linalg.norm(t023))
+
+
 def triangulate_face_3d(vertices_3d, loops, normal):
     if not loops or not loops[0] or len(loops[0]) < 3:
         return []
@@ -546,7 +569,9 @@ def triangulate_face_3d(vertices_3d, loops, normal):
         return [loops[0]]
     if len(loops) == 1 and len(loops[0]) == 4:
         v = loops[0]
-        return [[v[0], v[1], v[2]], [v[0], v[2], v[3]]]
+        if _split_quad_along_02(vertices_3d, v):
+            return [[v[0], v[1], v[2]], [v[0], v[2], v[3]]]
+        return [[v[1], v[2], v[3]], [v[1], v[3], v[0]]]
 
     normal = np.array(normal)
     norm_val = np.linalg.norm(normal)

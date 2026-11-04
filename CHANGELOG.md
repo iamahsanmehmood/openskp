@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — all five ports: a concave four-sided face is no longer triangulated across its outside (#493)
+
+- `triangulate_face_3d` split every single-loop quad along its 0-2 diagonal without checking
+  that the quad is convex. When the reflex corner is 1 or 3, that diagonal runs outside the
+  face and the mesh covered area the face does not have (a dart of area 4 came out as 12).
+  Such a quad is now split along its 1-3 diagonal. A convex quad is split exactly as before,
+  and so is a self-intersecting or warped quad unless the 1-3 split covers less area. On
+  `coedge_orientation_regression.skp` this corrects 45 quads; the sum over all faces of the
+  difference between triangle area and loop area drops from 1.58 in² to 0.23 in².
+
 ## [1.5.0] — 2026-11-03 — all 5 languages
 
 > What most readers will notice, from the entries below (everything since 1.4.0):
