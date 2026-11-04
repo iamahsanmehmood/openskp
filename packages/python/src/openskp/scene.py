@@ -27,7 +27,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from . import _core
 from ._curves import _chain_loose_edges, _solve_run_arc
-from ._face_groups import FaceGroupContext, build_local_face_groups
+from ._face_groups import FaceGroupContext, FaceGroupKey, build_local_face_groups
 from .errors import SkpParseError
 
 logger = logging.getLogger("openskp.scene")
@@ -339,7 +339,7 @@ def build_scene(
         texture_index_by_key[key] = idx
         return idx
 
-    color_to_material_index: Dict[Tuple[Tuple[int, int, int], bool, Optional[int], float], int] = {}
+    color_to_material_index: Dict[FaceGroupKey, int] = {}
     gltf_materials: List[Dict[str, Any]] = []
 
     # Definitions currently being instantiated on the active recursion
@@ -357,12 +357,16 @@ def build_scene(
         double_sided: bool,
         texture_index: Optional[int],
         transparency: float = 1.0,
+        material_name: Optional[str] = None,
+        colorized: bool = False,
+        colorize_type: int = 0,
     ) -> int:
         # The texture is part of the identity, not just the color: two
         # different images can average to the same RGB (real files do
         # this), and keying on color alone would merge them into one
-        # material and lose one of the images.
-        key = (color, double_sided, texture_index, transparency)
+        # material and lose one of the images. The name is too, so two
+        # differently named SketchUp materials stay two materials.
+        key = (color, double_sided, texture_index, transparency, material_name)
         if key in color_to_material_index:
             return color_to_material_index[key]
         idx = len(gltf_materials)
@@ -378,6 +382,11 @@ def build_scene(
         if texture_index is not None:
             pbr["baseColorTexture"] = {"index": texture_index}
         mat_dict: Dict[str, Any] = {"pbrMetallicRoughness": pbr}
+        if material_name:
+            mat_dict["name"] = material_name
+        if colorized:
+            # See openskp.instanced_scene's get_material_index.
+            mat_dict["extras"] = {"sketchup": {"colorized": True, "colorize_type": colorize_type}}
         if double_sided:
             mat_dict["doubleSided"] = True
         # glTF's default alphaMode is OPAQUE, which tells a conformant
@@ -407,6 +416,7 @@ def build_scene(
         parent_layer: str = "Layer0",
         path_name: str = "ROOT",
         inherited_color: Optional[Tuple[int, int, int]] = None,
+        inherited_material: Optional[Dict[str, Any]] = None,
     ) -> List[InstanceNode]:
         d = defs_dict.get(def_id)
         if d is None:
@@ -449,10 +459,11 @@ def build_scene(
                     texture_index_for=texture_index_for,
                     fallback_color=fallback_color,
                     definition_id=def_id,
+                    fallback_material=inherited_material,
                 ),
             )
 
-            for (face_color, double_sided, tex_index, transparency), group in face_groups.items():
+            for (face_color, double_sided, tex_index, transparency, material_name), group in face_groups.items():
                 local_faces = group["local_faces"]
                 if not local_faces:
                     continue
@@ -521,7 +532,10 @@ def build_scene(
                     indices[i * 3 + 1] = tri[1]
                     indices[i * 3 + 2] = tri[2]
 
-                material_index = get_material_index(face_color, double_sided, tex_index, transparency)
+                material_index = get_material_index(
+                    face_color, double_sided, tex_index, transparency,
+                    material_name, group["colorized"], group["colorize_type"],
+                )
                 glb_primitives.append(
                     GlbPrimitive(
                         positions=positions,
@@ -604,6 +618,7 @@ def build_scene(
 
             l_name = parent_layer
             inst_color = inherited_color
+            inst_material = inherited_material
             # Legacy (pre-2021 MFC) instances carry a precomputed
             # "properties" dict (see legacy._extract_legacy_dynamic_
             # properties) - VFF instances don't set this key at all, so
@@ -629,6 +644,7 @@ def build_scene(
                     if mat:
                         c = mat["color"]
                         inst_color = (c["r"], c["g"], c["b"])
+                        inst_material = mat
 
                 try:
                     all_dicts = _core.extract_attribute_dictionaries(d007)
@@ -687,7 +703,7 @@ def build_scene(
                     stage="build_scene", definition_id=ref_idx,
                 )
             active_definitions.add(ref_idx)
-            child_nodes = instantiate(ref_idx, new_matrix, l_name, full_path_name, inst_color)
+            child_nodes = instantiate(ref_idx, new_matrix, l_name, full_path_name, inst_color, inst_material)
             active_definitions.discard(ref_idx)
 
             tx = new_matrix[9] * INCHES_TO_MM if len(new_matrix) > 9 else 0.0

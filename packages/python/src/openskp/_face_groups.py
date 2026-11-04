@@ -10,14 +10,18 @@ builder keeps local and puts on the node instead. Keeping one implementation
 is what makes the two paths agree on triangulation, UV seams, normals and
 front/back handling by construction rather than by parallel maintenance.
 
-Faithful to the pre-existing baked behavior it was extracted from: an
-unpainted face falls back to the caller-supplied ``fallback_color`` for
-color, but its material (and therefore texture tile size) is resolved from
-the face's OWN ``material_id``/``back_material_id`` only - an instance's
-painted material is not consulted for texture purposes here. That is an
-existing characteristic of this port (TypeScript's reference additionally
-falls back to the inherited material itself for texture tile size on
-unpainted faces), preserved rather than changed by this extraction.
+An unpainted face side inherits the material painted on its enclosing
+group/component (``FaceGroupContext.fallback_material``) as a whole -
+colour, texture, transparency and name - the way SketchUp renders it, not
+just that material's colour. Only when nothing up the instance path is
+painted does it fall back to the plain ``fallback_color`` (the layer's
+colour). Before this, a group painted with a textured or translucent
+material (a wood floor, a glass pane) imported as a flat, opaque average
+colour.
+
+Faces are grouped by (color, double_sided, texture, transparency, material
+name): two differently named materials that happen to share a colour stay
+separate groups, so a consumer can keep the SketchUp material names.
 """
 
 from __future__ import annotations
@@ -156,8 +160,8 @@ def resolve_transparency(mat: Optional[Dict[str, Any]]) -> float:
     return color_alpha * mat.get("transparency", 1.0)
 
 
-# Key: (color, double_sided, texture_index, transparency).
-FaceGroupKey = Tuple[Tuple[int, int, int], bool, Optional[int], float]
+# Key: (color, double_sided, texture_index, transparency, material_name).
+FaceGroupKey = Tuple[Tuple[int, int, int], bool, Optional[int], float, Optional[str]]
 
 
 @dataclass
@@ -175,6 +179,14 @@ class FaceGroupContext:
     fallback_color: Tuple[int, int, int]
     # Identifies the definition in a triangulation failure.
     definition_id: Any
+    # Material painted on the enclosing group/component, inherited whole
+    # (texture, transparency, name) by every unpainted face side. ``None``
+    # when nothing up the instance path is painted.
+    fallback_material: Optional[Dict[str, Any]] = None
+    # Material painted on the nearest enclosing instance (SketchUp's "paint
+    # the group"), or None. An unpainted face side uses it whole - texture
+    # and transparency included - before falling back to fallback_color.
+    fallback_material: Optional[Dict[str, Any]] = None
 
 
 def _add_face_side(
@@ -197,7 +209,8 @@ def _add_face_side(
     # the same average color end up in one group with one image
     tex_index = texture_index_for(tex)
     transparency = resolve_transparency(mat)
-    key = (color, double_sided, tex_index, transparency)
+    material_name = mat.get("name") if mat else None
+    key = (color, double_sided, tex_index, transparency, material_name)
     group = face_groups.get(key)
     if group is None:
         group = {
@@ -205,6 +218,9 @@ def _add_face_side(
             "transparency": transparency,
             "double_sided": double_sided,
             "texture_index": tex_index,
+            "material_name": material_name,
+            "colorized": bool(mat.get("colorized")) if mat and tex_index is not None else False,
+            "colorize_type": int(mat.get("colorize_type") or 0) if mat else 0,
             "local_verts": [],
             "local_uvs": [],
             "normals_accum": [],
@@ -270,10 +286,10 @@ def build_local_face_groups(builder: Any, ctx: FaceGroupContext) -> Dict[FaceGro
     for f_id, f_data in builder.faces.items():
         front_mat = resolve_material(
             f_data.get("material_id"), ctx.material_id_to_name, ctx.materials, ctx.materials_by_folder
-        )
+        ) or ctx.fallback_material
         back_mat = resolve_material(
             f_data.get("back_material_id"), ctx.material_id_to_name, ctx.materials, ctx.materials_by_folder
-        )
+        ) or ctx.fallback_material
         front_color = resolve_color(front_mat) or ctx.fallback_color
         back_color = resolve_color(back_mat) or ctx.fallback_color
 
