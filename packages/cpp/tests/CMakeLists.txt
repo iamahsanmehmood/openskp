@@ -6,6 +6,7 @@ add_executable(
   create_test.cpp
   native_compatibility_test.cpp
   dxf_export_test.cpp
+  dxf_unicode_safety_test.cpp
   edit_test.cpp
   face_instance_hidden_test.cpp
   fragments_export_test.cpp
