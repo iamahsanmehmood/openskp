@@ -95,6 +95,7 @@ struct RawDefinition {
   bool is_image{};
   bool is_group{};
   GeometryBuilder builder;
+  ParsedAttrDictionaries parsed_dictionaries;
 };
 
 struct RawTexture {
@@ -193,6 +194,8 @@ std::int32_t read_i32(const ByteBuffer&, std::size_t);
 double read_f64(const ByteBuffer&, std::size_t);
 std::uint64_t parse_varint(const ByteBuffer&, std::size_t, std::size_t);
 std::string tag_at(const ByteBuffer&, std::size_t);
+// Exactly 16 Windows-order bytes to canonical uppercase, unhyphenated UUID.
+std::string guid_from_windows_bytes(const ByteBuffer&);
 std::vector<TlvNode> parse_tlv_recursive(const ByteBuffer&, std::size_t, std::size_t);
 std::vector<std::pair<std::string, ByteBuffer>> parse_flat(const ByteBuffer&);
 std::optional<std::string> read_meta_units(const ByteBuffer&);

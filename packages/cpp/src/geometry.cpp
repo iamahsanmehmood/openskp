@@ -59,17 +59,6 @@ static std::string text(const ByteBuffer& p) {
   return {reinterpret_cast<const char*>(p.data()), p.size()};
 }
 
-static std::string hex(const ByteBuffer& p) {
-  static char h[] = "0123456789ABCDEF";
-  std::string s;
-  s.reserve(p.size() * 2);
-  for (auto b : p) {
-    s += h[b >> 4];
-    s += h[b & 15];
-  }
-  return s;
-}
-
 static const ByteBuffer* flat_find(const std::vector<std::pair<std::string, ByteBuffer>>& s,
                                    const std::string& t) {
   for (auto& v : s)
@@ -348,7 +337,7 @@ void collect_geometry(const std::vector<TlvNode>& es, GeometryBuilder& b) {
       i.offset = e.offset;
       i.id = entity_id(e);
       auto* g = find_node(e.children, "6819");
-      if (g && g->payload.size() == 16) i.ref_guid = hex(g->payload);
+      if (g && g->payload.size() == 16) i.ref_guid = guid_from_windows_bytes(g->payload);
       auto* r = find_node(e.children, "6719");
       if (r && !r->payload.empty()) i.ref_idx = parse_varint(r->payload, 0, r->payload.size());
       auto* n = find_node(e.children, "6519");
@@ -468,7 +457,7 @@ void collect_definitions(const std::vector<TlvNode>& ns, std::map<EntityId, RawD
       RawDefinition d;
       for (auto& c : e.children) {
         if (c.tag == "7D15" && c.payload.size() == 16)
-          d.guid = hex(c.payload);
+          d.guid = guid_from_windows_bytes(c.payload);
         else if (c.tag == "7E15")
           d.name = text(c.payload);
         else if (c.tag == "8315" && !c.payload.empty()) {
@@ -486,6 +475,8 @@ void collect_definitions(const std::vector<TlvNode>& ns, std::map<EntityId, RawD
           }
       }
       collect_geometry(e.children, d.builder);
+      // Only the definition's own entity base, never dictionaries on child instances/faces.
+      collect_model_attribute_dictionaries(e, d.parsed_dictionaries);
       if (auto id = entity_id(e)) out[*id] = std::move(d);
     }
     collect_definitions(e.children, out);
