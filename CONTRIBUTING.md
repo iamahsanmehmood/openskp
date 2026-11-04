@@ -361,7 +361,13 @@ bare `v1.4.0`, each checked) queued every release workflow, and all five
 packages appeared on their registries. NuGet is the slow one: both packages
 were pushed and answered "Created" but the package pages returned 404 for
 about half an hour while NuGet validated them, so a green workflow is not the
-same as a visible package; check the registry before announcing.
+same as a visible package; check the registry before announcing. If the
+NuGet step fails with `403 (The specified API key has expired)` the build is
+fine and nothing was pushed: create a new key on nuget.org (Push scope, glob
+`OpenSkp*`, 365 days), set it with `gh secret set NUGET_TOKEN`, and re-run only
+the failed job (`gh run rerun <run-id> --failed`); no new tag is needed, and
+the push uses `--skip-duplicate`. Copy the key when nuget.org shows it, right
+after creating it; it is shown only once.
 
 ---
 
