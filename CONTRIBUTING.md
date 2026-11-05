@@ -39,6 +39,7 @@ This project follows the [Contributor Covenant v2.1](CODE_OF_CONDUCT.md). By par
 | .NET | .NET SDK 8.0+ |
 | Dart | Dart SDK 3.0+ |
 | C++ | CMake 3.21+, a C++17 compiler |
+| Rust | Rust stable (via `rustup`); the `wasm32-unknown-unknown` target only for the viewer |
 | All | Git, a good hex editor (recommended) |
 
 ### Understanding the Codebase
@@ -106,6 +107,13 @@ cmake --build build/cpp
 ctest --test-dir build/cpp --output-on-failure
 ```
 
+### Rust
+
+```bash
+cd packages/rust
+cargo test --release
+```
+
 ---
 
 ## Running Tests
@@ -129,7 +137,7 @@ pytest -k "test_vertex"
 ```
 
 See [Development Setup](#development-setup) above for the equivalent test
-commands in TypeScript, .NET, Dart, and C++.
+commands in TypeScript, .NET, Dart, C++, and Rust.
 
 ### Test Fixtures
 
@@ -262,6 +270,15 @@ def parse_vertex(data: bytes, offset: int = 0) -> tuple[float, float, float]:
 Formatting is enforced by C++ CI. Configure with
 `-DOPENSKP_CLANG_FORMAT_EXECUTABLE=/path/to/clang-format` to select a specific
 local executable.
+
+### Rust
+
+| Rule | Standard |
+|:-----|:---------|
+| Edition | 2021 |
+| Formatter | `rustfmt` (default settings, 100-column limit), enforced by Rust CI |
+| Linter | `cargo clippy --all-targets -- -D warnings` (enforced by Rust CI) |
+| Dependencies | None: the crate uses `std` only |
 
 ### General Principles
 

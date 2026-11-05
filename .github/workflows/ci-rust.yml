@@ -1,0 +1,72 @@
+name: Rust CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dorny/paths-filter@v4
+        id: filter
+        with:
+          filters: |
+            rust:
+              - 'packages/rust/**'
+
+  test:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Rust
+        run: rustup toolchain install stable --profile minimal --component clippy,rustfmt && rustup default stable
+
+      - name: Format
+        run: |
+          cd packages/rust
+          cargo fmt --check
+
+      - name: Clippy
+        run: |
+          cd packages/rust
+          cargo clippy --release --all-targets --locked -- -D warnings
+
+      - name: Test
+        run: |
+          cd packages/rust
+          cargo test --release --locked
+
+  # Single stable check name for branch protection to require, regardless of
+  # whether packages/rust/** changed - see ci-python.yml's `required` job
+  # for why this exists.
+  required:
+    name: Rust CI required
+    needs: [changes, test]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check outcome
+        run: |
+          if [ "${{ needs.changes.outputs.rust }}" != "true" ]; then
+            echo "packages/rust/** unchanged - nothing to verify"
+            exit 0
+          fi
+          if [ "${{ needs.test.result }}" != "success" ]; then
+            echo "Rust CI failed"
+            exit 1
+          fi
+          echo "Rust CI passed"
