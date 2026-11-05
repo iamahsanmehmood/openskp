@@ -19,6 +19,8 @@ namespace openskp {
 // AC1015 uses ANSI_1252 plus CIF Unicode escapes, not raw UTF-8 (which
 // requires AC1021+). Work in UTF-16 before escaping so the 255-character
 // symbol-name limit cannot split a UTF-8 sequence or a surrogate pair.
+// Group codes 2/8 allow 2049 file bytes in R2000, so even 255 escaped
+// UTF-16 units (1785 bytes) fit. See Autodesk DXF: Group Code Value Types.
 static std::u16string layer_name_utf16(const std::string& name) {
   std::u16string result;
   for (size_t i = 0; i < name.size();) {
@@ -38,15 +40,24 @@ static std::u16string layer_name_utf16(const std::string& name) {
       cp = lead & 0x07;
       extra = 3;
       minimum = 0x10000;
-    } else if (lead >= 0x80)
-      throw std::invalid_argument("DXF layer name contains invalid UTF-8");
+    } else if (lead >= 0x80) {
+      result.push_back(u'_');
+      continue;
+    }
+    bool valid = true;
     for (unsigned j = 0; j < extra; ++j) {
-      if (i == name.size() || (static_cast<unsigned char>(name[i]) & 0xC0) != 0x80)
-        throw std::invalid_argument("DXF layer name contains invalid UTF-8");
+      if (i == name.size() || (static_cast<unsigned char>(name[i]) & 0xC0) != 0x80) {
+        valid = false;
+        break;
+      }
       cp = (cp << 6) | (static_cast<unsigned char>(name[i++]) & 0x3F);
     }
-    if (cp < minimum || cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF))
-      throw std::invalid_argument("DXF layer name contains invalid UTF-8");
+    if (!valid || cp < minimum || cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) {
+      // Model names are user data: replace the malformed sequence and keep
+      // exporting. Leave the first non-continuation byte for the next pass.
+      result.push_back(u'_');
+      continue;
+    }
     if (cp > 0xFFFF) {
       cp -= 0x10000;
       result.push_back(static_cast<char16_t>(0xD800 + (cp >> 10)));

@@ -6,6 +6,7 @@
 #include <set>
 #include <sstream>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 #include "openskp/dxf_export.hpp"
@@ -53,6 +54,7 @@ static Parsed inspect(const std::string& dxf) {
     if (record == "TABLE" && layerTable && group == 70) tableCount = std::stoul(value);
     if (record == "LAYER" && group == 2) {
       check(parsed.layers.insert(value).second, "duplicate LAYER name");
+      check(value.size() <= 2049, "encoded layer exceeds R2000 string limit");
       std::u16string decoded;
       for (std::size_t i = 0; i < value.size();) {
         if (value[i] == '\\') {
@@ -174,19 +176,57 @@ void verify_dxf_contract() {
       check(rejected, "malformed geometry accepted");
     }
   }
-  for (const auto& bad : {std::string("\xC0\xAF"), std::string("\xE4\xB8"),
-                          std::string("\xED\xA0\x80"), std::string("\xF4\x90\x80\x80")}) {
-    scene.glb_primitives = {triangle(bad)};
-    bool rejected = false;
-    try {
-      openskp::to_dxf(scene);
-    } catch (const std::invalid_argument&) {
-      rejected = true;
-    }
-    check(rejected, "invalid UTF-8 accepted");
-  }
 }
 
 }  // namespace
 
 TEST(DxfExport, UnicodeNamesLocaleAndMalformedMeshes) { EXPECT_NO_THROW(verify_dxf_contract()); }
+
+TEST(DxfExport, MalformedUtf8NamesKeepGeometryAndValidText) {
+  const std::vector<std::pair<std::string, std::string>> cases = {
+      {"\x80", "_"},              // Stray continuation.
+      {"\xFF", "_"},              // Invalid lead byte.
+      {"\xC0\xAF", "__"},         // Overlong two-byte encoding.
+      {"\xE0\x80\xAF", "_"},      // Overlong three-byte encoding.
+      {"\xF0\x80\x80\xAF", "_"},  // Overlong four-byte encoding.
+      {"\xC2", "_"},              // Truncated sequences.
+      {"\xE4\xB8", "_"},
+      {"\xF0\x9F\x98", "_"},
+      {"\xED\xA0\x80", "_"},      // UTF-16 surrogate.
+      {"\xF4\x90\x80\x80", "_"},  // Beyond U+10FFFF.
+      {"\xE4"
+       "ok",
+       "_ok"},  // Do not consume valid ASCII.
+      {"\xE4\xB8"
+       "ok",
+       "_ok"},
+      {"\xE4"
+       u8"柜",
+       "_\\U+67DC"},  // Preserve the next valid sequence.
+      {"\x80"
+       u8"😀",
+       "_\\U+D83D\\U+DE00"},
+  };
+  for (const auto* mode : {"polyface", "3dface"}) {
+    for (const auto& [input, replacement] : cases) {
+      SCOPED_TRACE(mode);
+      SCOPED_TRACE(replacement);
+      const auto name = "before" + input + "after";
+      openskp::Scene scene;
+      scene.glb_primitives = {triangle(name), triangle("unaffected"), triangle(name)};
+      const auto dxf = openskp::to_dxf(scene, 1.0, mode);
+      const auto parsed = inspect(dxf);
+      EXPECT_EQ(parsed.meshLayers,
+                (std::vector<std::string>{"before" + replacement + "after", "unaffected",
+                                          "before" + replacement + "after"}));
+      EXPECT_EQ(dxf, openskp::to_dxf(scene, 1.0, mode));
+    }
+    openskp::Scene scene;
+    scene.glb_primitives = {triangle("bad_"), triangle("bad\xFF"), triangle("bad\x80"),
+                            triangle("bad\xFF")};
+    const auto parsed = inspect(openskp::to_dxf(scene, 1.0, mode));
+    ASSERT_EQ(parsed.meshLayers.size(), 4u);
+    EXPECT_EQ(std::set<std::string>(parsed.meshLayers.begin(), parsed.meshLayers.end()).size(), 3u);
+    EXPECT_EQ(parsed.meshLayers[1], parsed.meshLayers[3]);
+  }
+}
