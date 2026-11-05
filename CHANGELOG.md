@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — files the TypeScript, .NET and Dart writers produced could not be saved by SketchUp for Web (#492)
+
+The Python and C++ writers already gave every entity in a file its own persistent id. The other
+three did not: each section (materials, layers, definitions, root geometry) numbered its ids from 1
+again, and the header's id counter stayed at the blank scaffold's 18 unless the file had materials
+or layers. A model with two groups therefore had a definition and a root instance with the same id,
+and ids up to 20 against a counter of 18. SketchUp for Web opens such a file but cannot save it
+("Save Failed"): it renumbers the repeated ids starting at the counter, and the new numbers clash
+with ids already in use. Ids now run in one sequence across the sections, continuing from the
+scaffold's counter, and the counter holds the last id handed out, as Python's does (it is a 32-bit
+field; these three treated it as 16-bit). The three writers now produce the same ids as Python: the
+Dart reference files under `test/fixtures/create_reference` were regenerated with the current
+Python writer (they carried the old numbering), and the Dart, TypeScript and .NET writers produce
+those eight files byte for byte. Found by Aleksei Gurianov, who traced the repeated ids and tested
+a corrected counter in SketchUp for Web.
+
+### Fixed — .NET writer: a large file used the wrong escape marker for a renumbered reference
+
+When a model is big enough that a reference in the blank scaffold lands at or past slot 32,767,
+the .NET writer widened it to the long form with the marker `0xFFFF`, which is the "new class
+declaration" tag. Our readers load such a file, but SketchUp's own library refuses it
+(`SU_ERROR_SERIALIZATION` on load; a 3,200-face model is enough). The marker is `0x7FFF`, as in the
+other four writers; the 3,200-face file the Dart suite compares is now byte-identical from .NET and
+loads in SketchUp's library.
+
 ### Fixed — all five ports: a concave four-sided face is no longer triangulated across its outside (#493)
 
 - `triangulate_face_3d` split every single-loop quad along its 0-2 diagonal without checking
