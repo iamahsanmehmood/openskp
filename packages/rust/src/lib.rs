@@ -10,6 +10,9 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
+pub mod codegen;
+pub mod create;
+pub mod edit;
 pub mod errors;
 pub mod instanced_scene;
 pub mod model;
@@ -40,6 +43,8 @@ pub mod legacy;
 #[doc(hidden)]
 pub mod scene_build;
 
+pub use codegen::to_rust_code;
+pub use edit::{open_existing, OpenExistingError, OpenExistingResult};
 pub use errors::SkpParseError;
 pub use instanced_scene::{
     InstancedCurveResource, InstancedMeshResource, InstancedNode, InstancedScene, LocalCurve,
@@ -61,3 +66,10 @@ pub use scene::{
     PbrMetallicRoughness, Scene, SceneTexture,
 };
 pub use triangulator::{compute_face_normal, triangulate_face_3d};
+
+pub use create::{
+    create, ArcOptions, AttributeDict, AttributeValue, CircleOptions, ComponentDefinitionBuilder,
+    DefinitionHandle, DefinitionOptions, DocumentOptions, FaceOptions, GroupInstanceOptions,
+    GroupOptions, GuideOptions, ImageOptions, InstanceOptions, LayerOptions, PolylineOptions,
+    SkpBuilder, SkpWriteError,
+};
