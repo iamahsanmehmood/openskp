@@ -205,12 +205,12 @@ TEST(IoFidelity, AffineArcAxesSurviveCircleAndArcRoundTrip) {
       ASSERT_EQ(part.arcs.size(), 1u);
       const auto& arc = part.arcs.begin()->second;
       EXPECT_EQ(arc.x_axis, (Vec3{5, 0, 0}));
-      for (int j = 0; j < 3; ++j) EXPECT_NEAR(arc.y_axis[j], 5*y[j], 1e-12);
+      for (int j = 0; j < 3; ++j) EXPECT_NEAR(arc.y_axis[j], 5 * y[j], 1e-12);
       // Sampling must use the same affine basis as the serialized metadata.
       for (const auto& [id, v] : part.vertices) {
-        const double sine = (v.y - 20) / (5*y[1]);
-        const double cosine = (v.x - 10 - 5*y[0]*sine) / 5;
-        EXPECT_NEAR(cosine*cosine + sine*sine, 1, 1e-10);
+        const double sine = (v.y - 20) / (5 * y[1]);
+        const double cosine = (v.x - 10 - 5 * y[0] * sine) / 5;
+        EXPECT_NEAR(cosine * cosine + sine * sine, 1, 1e-10);
         if (!closed) EXPECT_GE(sine, -1e-10);
       }
     }
@@ -219,18 +219,18 @@ TEST(IoFidelity, AffineArcAxesSurviveCircleAndArcRoundTrip) {
 
 TEST(IoFidelity, RejectsInvalidAffineArcAxesBeforeWriting) {
   for (Point3 y : {Point3{0, 0, 0}, Point3{1, 0, 0}, Point3{0, 1, 1},
-                  Point3{0, std::numeric_limits<double>::infinity(), 0}}) {
+                   Point3{0, std::numeric_limits<double>::infinity(), 0}}) {
     auto builder = create();
     builder->add_face({{20, 0, 0}, {22, 0, 0}, {20, 2, 0}});
     const auto before = builder->to_bytes();
     ArcOptions arc;
     arc.xaxis = Point3{1, 0, 0};
     arc.yaxis = y;
-    EXPECT_THROW(builder->add_arc({0,0,0}, {0,0,1}, 5, 0, 1, arc), SkpWriteError);
+    EXPECT_THROW(builder->add_arc({0, 0, 0}, {0, 0, 1}, 5, 0, 1, arc), SkpWriteError);
     CircleOptions circle;
     circle.xaxis = arc.xaxis;
     circle.yaxis = y;
-    EXPECT_THROW(builder->add_circle({0,0,0}, {0,0,1}, 5, circle), SkpWriteError);
+    EXPECT_THROW(builder->add_circle({0, 0, 0}, {0, 0, 1}, 5, circle), SkpWriteError);
     EXPECT_EQ(builder->to_bytes(), before);
   }
 }

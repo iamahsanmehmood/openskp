@@ -599,8 +599,9 @@ Point3 arc_yaxis(Point3 normal, Point3 x, Point3 fallback, const std::optional<P
   const double length = std::hypot(y[0], y[1], y[2]);
   const auto cross = cross3(x, y);
   const double area = std::hypot(cross[0], cross[1], cross[2]);
-  const double dot = normal[0]*y[0] + normal[1]*y[1] + normal[2]*y[2];
-  if (!std::isfinite(length) || length < 1e-12 || area <= 1e-12 * length || std::abs(dot) > 1e-10 * length)
+  const double dot = normal[0] * y[0] + normal[1] * y[1] + normal[2] * y[2];
+  if (!std::isfinite(length) || length < 1e-12 || area <= 1e-12 * length ||
+      std::abs(dot) > 1e-10 * length)
     throw SkpWriteError("arc yaxis must be nonzero, in-plane and independent of xaxis");
   return y;
 }
@@ -966,18 +967,9 @@ class ArchiveWriter {
     buf.push_back(0);
     buf.push_back(static_cast<std::uint8_t>(num_segments));
     append_bytes(buf, reinterpret_cast<const std::uint8_t*>("\0\0\0"), 3);
-    const double vals[14] = {center[0],
-                             center[1],
-                             center[2],
-                             normal[0],
-                             normal[1],
-                             normal[2],
-                             xaxis[0],
-                             xaxis[1],
-                             xaxis[2],
-                             start_angle,
-                             end_angle,
-                             yaxis[0], yaxis[1], yaxis[2]};
+    const double vals[14] = {center[0], center[1], center[2], normal[0], normal[1],
+                             normal[2], xaxis[0],  xaxis[1],  xaxis[2],  start_angle,
+                             end_angle, yaxis[0],  yaxis[1],  yaxis[2]};
     for (double v : vals) append_f64(buf, v);
     return slot;
   }
@@ -1834,8 +1826,14 @@ int do_add_circle(ArchiveWriter& writer, std::map<Point3, int>& vertex_slots,
   auto [u, w] = arc_frame(n, options.xaxis);
   w = arc_yaxis(n, u, w, options.yaxis);
   Point3 xaxis = {radius * u[0], radius * u[1], radius * u[2]};
-  ArcCurveParams curve_params{center, n, xaxis, 0.0, 2.0 * kPi, radius, options.num_segments,
-                              {radius*w[0], radius*w[1], radius*w[2]}};
+  ArcCurveParams curve_params{center,
+                              n,
+                              xaxis,
+                              0.0,
+                              2.0 * kPi,
+                              radius,
+                              options.num_segments,
+                              {radius * w[0], radius * w[1], radius * w[2]}};
   auto points = circle_points(center, n, radius, options.num_segments, u, w);
   if (!options.vertices.empty()) {
     if (options.vertices.size() != static_cast<std::size_t>(options.num_segments))
@@ -1866,9 +1864,14 @@ int do_add_arc(ArchiveWriter& writer, std::map<Point3, int>& vertex_slots,
   auto [u, w] = arc_frame(n, options.xaxis);
   w = arc_yaxis(n, u, w, options.yaxis);
   Point3 xaxis = {radius * u[0], radius * u[1], radius * u[2]};
-  ArcCurveParams curve_params{
-      center, n, xaxis, start_angle, end_angle, radius, options.num_segments,
-      {radius*w[0], radius*w[1], radius*w[2]}};
+  ArcCurveParams curve_params{center,
+                              n,
+                              xaxis,
+                              start_angle,
+                              end_angle,
+                              radius,
+                              options.num_segments,
+                              {radius * w[0], radius * w[1], radius * w[2]}};
   auto points = arc_points(center, n, radius, options.num_segments, u, w, start_angle, end_angle);
   if (!options.vertices.empty()) {
     if (options.vertices.size() != static_cast<std::size_t>(options.num_segments + 1))
