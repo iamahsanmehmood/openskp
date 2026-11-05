@@ -1,0 +1,584 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenSKP Viewer</title>
+<style>
+  :root {
+    --bg: #eef0f3; --panel: #ffffff; --ink: #1d2330; --muted: #6b7385; --line: #dde1e8;
+    --accent: #2f6fde; --sky-top: #c9dcf2; --sky-bottom: #f4f6f9; --err: #c0392b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #15181e; --panel: #1d2129; --ink: #e6e9ef; --muted: #8b93a5; --line: #2c323d;
+      --accent: #6c9dff; --sky-top: #263449; --sky-bottom: #14171c; --err: #ff6b5b;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink);
+    font: 13px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  #app { display: flex; height: 100%; }
+  aside { width: 280px; flex: none; background: var(--panel); border-right: 1px solid var(--line);
+    display: flex; flex-direction: column; overflow: hidden; }
+  aside header { padding: 14px 16px 10px; border-bottom: 1px solid var(--line); }
+  aside header h1 { margin: 0; font-size: 15px; font-weight: 650; }
+  aside header p { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
+  .scroll { overflow: auto; flex: 1; padding: 6px 0 12px; }
+  section { padding: 8px 16px; }
+  section h2 { margin: 6px 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
+    color: var(--muted); font-weight: 600; }
+  button, .file { font: inherit; color: var(--ink); background: transparent; border: 1px solid var(--line);
+    border-radius: 6px; padding: 5px 10px; cursor: pointer; }
+  button:hover, .file:hover { border-color: var(--accent); }
+  .file { display: inline-block; background: var(--accent); color: #fff; border-color: var(--accent); }
+  .file input { display: none; }
+  .row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  label.check { display: flex; gap: 8px; align-items: center; padding: 3px 0; cursor: pointer;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .swatch { width: 10px; height: 10px; border-radius: 2px; flex: none; border: 1px solid var(--line); }
+  dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; margin: 0; }
+  dt { color: var(--muted); } dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+  main { flex: 1; position: relative; min-width: 0; }
+  canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+  #drop { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none;
+    color: var(--muted); font-size: 15px; text-align: center; }
+  #drop[hidden] { display: none; }
+  #drop.over { background: color-mix(in srgb, var(--accent) 12%, transparent);
+    outline: 2px dashed var(--accent); outline-offset: -12px; }
+  #status { position: absolute; left: 12px; bottom: 10px; color: var(--muted); font-size: 12px; }
+  #status.err { color: var(--err); }
+  .hint { color: var(--muted); font-size: 12px; }
+  @media (max-width: 700px) {
+    #app { flex-direction: column-reverse; }
+    aside { width: 100%; height: 42%; border-right: 0; border-top: 1px solid var(--line); }
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <aside>
+    <header>
+      <h1>OpenSKP Viewer</h1>
+      <p>Rust → WebAssembly · WebGL2 · sem dependências</p>
+    </header>
+    <div class="scroll">
+      <section>
+        <div class="row">
+          <label class="file">Abrir .skp<input id="file" type="file" accept=".skp"></label>
+          <button id="fit" title="Enquadrar (F)">Enquadrar</button>
+        </div>
+        <p class="hint">Ou arraste um arquivo para a área de visualização.</p>
+      </section>
+      <section>
+        <h2>Exibição</h2>
+        <label class="check"><input type="checkbox" id="showEdges" checked> Arestas</label>
+        <label class="check"><input type="checkbox" id="showLines" checked> Linhas soltas</label>
+        <label class="check"><input type="checkbox" id="xray"> Raio-X</label>
+      </section>
+      <section id="pagesSec" hidden>
+        <h2>Cenas</h2>
+        <div class="row" id="pages"></div>
+      </section>
+      <section id="infoSec" hidden>
+        <h2>Modelo</h2>
+        <dl id="info"></dl>
+      </section>
+      <section id="layersSec" hidden>
+        <h2>Camadas (tags)</h2>
+        <div id="layers"></div>
+      </section>
+      <section>
+        <h2>Controles</h2>
+        <p class="hint">Arrastar: orbitar · Botão direito / Shift+arrastar: mover · Roda: zoom · F: enquadrar</p>
+      </section>
+    </div>
+  </aside>
+  <main>
+    <canvas id="gl"></canvas>
+    <div id="drop">Arraste um arquivo .skp aqui</div>
+    <div id="status"></div>
+  </main>
+</div>
+
+<script>
+// Filled in by build script: the openskp-viewer .wasm, base64-encoded.
+const WASM_BASE64 = "__WASM_BASE64__";
+</script>
+<script>
+"use strict";
+
+// ---------- small math (column-major mat4) ----------
+const V = {
+  sub: (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]],
+  add: (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]],
+  scale: (a, s) => [a[0] * s, a[1] * s, a[2] * s],
+  dot: (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2],
+  cross: (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]],
+  len: a => Math.hypot(a[0], a[1], a[2]),
+  norm: a => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; },
+};
+function perspective(fovy, aspect, near, far) {
+  const f = 1 / Math.tan(fovy / 2), nf = 1 / (near - far);
+  return [f / aspect, 0, 0, 0, 0, f, 0, 0, 0, 0, (far + near) * nf, -1, 0, 0, 2 * far * near * nf, 0];
+}
+function lookAt(eye, target, up) {
+  const z = V.norm(V.sub(eye, target));
+  let x = V.cross(up, z);
+  if (V.len(x) < 1e-9) x = V.cross([0, 0, 1], z);
+  x = V.norm(x);
+  const y = V.cross(z, x);
+  return [x[0], y[0], z[0], 0, x[1], y[1], z[1], 0, x[2], y[2], z[2], 0,
+    -V.dot(x, eye), -V.dot(y, eye), -V.dot(z, eye), 1];
+}
+function mul(a, b) {
+  const o = new Array(16);
+  for (let c = 0; c < 4; c++) for (let r = 0; r < 4; r++) {
+    let s = 0;
+    for (let k = 0; k < 4; k++) s += a[k * 4 + r] * b[c * 4 + k];
+    o[c * 4 + r] = s;
+  }
+  return o;
+}
+
+// ---------- wasm ----------
+let wasm = null;
+async function wasmBytes() {
+  // Built page: the module is embedded. The template itself still holds the
+  // placeholder, so fall back to the cargo output (works over http://).
+  if (!WASM_BASE64.startsWith("__")) return Uint8Array.from(atob(WASM_BASE64), c => c.charCodeAt(0));
+  try {
+    const r = await fetch("../target/wasm32-unknown-unknown/release/openskp_viewer.wasm");
+    if (r.ok) return new Uint8Array(await r.arrayBuffer());
+  } catch (_) { /* file:// blocks fetch */ }
+  throw new Error("este é o modelo da página. Abra dist/openskp-viewer.html (gerado por build.ps1 / build.sh).");
+}
+async function initWasm() {
+  const { instance } = await WebAssembly.instantiate(await wasmBytes(), {});
+  wasm = instance.exports;
+}
+function convert(data) {
+  const ptr = wasm.alloc(data.length);
+  new Uint8Array(wasm.memory.buffer, ptr, data.length).set(data);
+  const status = wasm.load(ptr, data.length);
+  wasm.dealloc(ptr, data.length);
+  // Re-read memory.buffer after load: the wasm memory may have grown.
+  const mem = wasm.memory.buffer;
+  const header = JSON.parse(new TextDecoder().decode(new Uint8Array(mem, wasm.json_ptr(), wasm.json_len())));
+  if (status !== 0) throw new Error(header.error || "falha ao ler o arquivo");
+  // Copy the blob out so later loads can't invalidate it.
+  const bin = new Uint8Array(mem, wasm.bin_ptr(), wasm.bin_len()).slice().buffer;
+  return { header, bin };
+}
+
+// ---------- GL ----------
+const canvas = document.getElementById("gl");
+const gl = canvas.getContext("webgl2", { antialias: true });
+if (!gl) document.getElementById("drop").textContent = "Este navegador não suporta WebGL2.";
+
+function shader(type, src) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src); gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+  return s;
+}
+function program(vs, fs) {
+  const p = gl.createProgram();
+  gl.attachShader(p, shader(gl.VERTEX_SHADER, vs));
+  gl.attachShader(p, shader(gl.FRAGMENT_SHADER, fs));
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+  const u = {};
+  for (let i = 0, n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS); i < n; i++) {
+    const name = gl.getActiveUniform(p, i).name;
+    u[name] = gl.getUniformLocation(p, name);
+  }
+  return { p, u };
+}
+
+const meshProg = gl && program(`#version 300 es
+layout(location=0) in vec3 aPos;
+layout(location=1) in vec3 aNrm;
+layout(location=2) in vec2 aUv;
+uniform mat4 uMvp;
+out vec3 vNrm; out vec2 vUv; out vec3 vPos;
+void main() { vNrm = aNrm; vUv = aUv; vPos = aPos; gl_Position = uMvp * vec4(aPos, 1.0); }`,
+`#version 300 es
+precision highp float;
+in vec3 vNrm; in vec2 vUv; in vec3 vPos;
+uniform vec4 uColor; uniform bool uTex; uniform sampler2D uSampler;
+uniform vec3 uEye; uniform float uAlphaScale;
+out vec4 frag;
+void main() {
+  vec4 base = uColor;
+  if (uTex) base *= texture(uSampler, vUv);
+  vec3 n = normalize(vNrm);
+  vec3 v = normalize(uEye - vPos);
+  if (dot(n, v) < 0.0) n = -n;            // two-sided lighting
+  float head = max(dot(n, v), 0.0);       // headlight
+  float sun = max(dot(n, normalize(vec3(0.35, 0.8, 0.45))), 0.0);
+  float sky = 0.5 + 0.5 * n.y;
+  float light = 0.38 + 0.22 * sky + 0.25 * sun + 0.22 * head;
+  frag = vec4(base.rgb * min(light, 1.08), base.a * uAlphaScale);
+}`);
+
+const lineProg = gl && program(`#version 300 es
+layout(location=0) in vec3 aPos;
+uniform mat4 uMvp;
+void main() { gl_Position = uMvp * vec4(aPos, 1.0); gl_Position.z -= 0.0004 * gl_Position.w; }`,
+`#version 300 es
+precision mediump float;
+uniform vec4 uColor;
+out vec4 frag;
+void main() { frag = uColor; }`);
+
+const skyProg = gl && program(`#version 300 es
+const vec2 P[3] = vec2[3](vec2(-1.,-1.), vec2(3.,-1.), vec2(-1.,3.));
+out float vY;
+void main() { vec2 p = P[gl_VertexID]; vY = p.y * 0.5 + 0.5; gl_Position = vec4(p, 0.9999, 1.); }`,
+`#version 300 es
+precision mediump float;
+in float vY; uniform vec3 uTop; uniform vec3 uBottom;
+out vec4 frag;
+void main() { frag = vec4(mix(uBottom, uTop, clamp(vY, 0., 1.)), 1.); }`);
+
+function cssColor(name) {
+  const s = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  const n = parseInt(s.slice(1), 16);
+  return [(n >> 16 & 255) / 255, (n >> 8 & 255) / 255, (n & 255) / 255];
+}
+
+// ---------- scene state ----------
+let model = null;           // { draws, lines, bounds, header }
+const cam = { target: [0, 0, 0], dist: 10, yaw: 0.8, pitch: 0.5, fov: 35, up: [0, 1, 0] };
+const hiddenLayers = new Set();
+
+function buffer(target, data) {
+  const b = gl.createBuffer();
+  gl.bindBuffer(target, b);
+  gl.bufferData(target, data, gl.STATIC_DRAW);
+  return b;
+}
+
+// Face edges are not in the baked scene, so derive them: an edge is drawn
+// where only one triangle of a primitive uses it (a boundary) or where the two
+// triangles meeting there bend by more than ~20 degrees. Triangulation
+// diagonals inside a planar face are coplanar and stay hidden.
+function creaseEdges(pos, idx) {
+  const key = i => Math.round(pos[i * 3] * 1e4) + "," + Math.round(pos[i * 3 + 1] * 1e4) + "," + Math.round(pos[i * 3 + 2] * 1e4);
+  const vkey = new Array(pos.length / 3);
+  for (let i = 0; i < vkey.length; i++) vkey[i] = key(i);
+  const edges = new Map();
+  for (let t = 0; t < idx.length; t += 3) {
+    const a = idx[t], b = idx[t + 1], c = idx[t + 2];
+    const p = i => [pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]];
+    const n = V.norm(V.cross(V.sub(p(b), p(a)), V.sub(p(c), p(a))));
+    for (const [i, j] of [[a, b], [b, c], [c, a]]) {
+      const ki = vkey[i], kj = vkey[j];
+      const k = ki < kj ? ki + "|" + kj : kj + "|" + ki;
+      const e = edges.get(k);
+      if (e) { e.count++; e.dot = Math.min(e.dot, Math.abs(V.dot(e.n, n))); }
+      else edges.set(k, { i, j, n, count: 1, dot: 1 });
+    }
+  }
+  const out = [];
+  for (const e of edges.values()) {
+    if (e.count === 1 || e.dot < 0.94) {
+      out.push(pos[e.i * 3], pos[e.i * 3 + 1], pos[e.i * 3 + 2], pos[e.j * 3], pos[e.j * 3 + 1], pos[e.j * 3 + 2]);
+    }
+  }
+  return new Float32Array(out);
+}
+
+async function makeTexture(bytes, mime) {
+  const bmp = await createImageBitmap(new Blob([bytes], { type: mime }), { imageOrientation: "flipY" });
+  const t = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, bmp);
+  gl.generateMipmap(gl.TEXTURE_2D);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+  return t;
+}
+
+function disposeModel() {
+  if (!model) return;
+  for (const d of model.draws) { gl.deleteVertexArray(d.vao); gl.deleteVertexArray(d.edgeVao); }
+  for (const b of model.buffers) gl.deleteBuffer(b);
+  for (const t of model.textures) if (t) gl.deleteTexture(t);
+  if (model.lines) gl.deleteVertexArray(model.lines.vao);
+  model = null;
+}
+
+async function upload({ header, bin }) {
+  disposeModel();
+  const buffers = [];
+  const f32 = (off, n) => new Float32Array(bin, off, n);
+  const textures = await Promise.all(header.textures.map(t =>
+    makeTexture(new Uint8Array(bin, t.offset, t.length), t.mime).catch(() => null)));
+
+  const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
+  const grow = (arr) => {
+    for (let i = 0; i < arr.length; i += 3) for (let k = 0; k < 3; k++) {
+      if (arr[i + k] < min[k]) min[k] = arr[i + k];
+      if (arr[i + k] > max[k]) max[k] = arr[i + k];
+    }
+  };
+
+  const draws = header.primitives.map(p => {
+    const pos = f32(p.positions, p.vertexCount * 3);
+    const idx = new Uint32Array(bin, p.indices, p.indexCount);
+    grow(pos);
+    const vao = gl.createVertexArray();
+    gl.bindVertexArray(vao);
+    const attr = (loc, data, size) => {
+      buffers.push(buffer(gl.ARRAY_BUFFER, data));
+      gl.enableVertexAttribArray(loc);
+      gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 0, 0);
+    };
+    attr(0, pos, 3);
+    attr(1, f32(p.normals, p.vertexCount * 3), 3);
+    if (p.uvs !== undefined) attr(2, f32(p.uvs, p.vertexCount * 2), 2);
+    else gl.vertexAttrib2f(2, 0, 0);
+    buffers.push(buffer(gl.ELEMENT_ARRAY_BUFFER, idx));
+
+    const edges = creaseEdges(pos, idx);
+    const edgeVao = gl.createVertexArray();
+    gl.bindVertexArray(edgeVao);
+    attr(0, edges, 3);
+    gl.bindVertexArray(null);
+
+    const m = header.materials[p.material] || { color: [0.8, 0.8, 0.8, 1], texture: null };
+    return { vao, edgeVao, edgeCount: edges.length / 3, count: p.indexCount, layer: p.layer,
+      color: m.color, texture: m.texture == null ? null : textures[m.texture],
+      transparent: m.color[3] < 0.999, doubleSided: !!m.doubleSided };
+  });
+
+  let lines = null;
+  if (header.lines.vertexCount > 0) {
+    const pos = f32(header.lines.positions, header.lines.vertexCount * 3);
+    grow(pos);
+    const vao = gl.createVertexArray();
+    gl.bindVertexArray(vao);
+    buffers.push(buffer(gl.ARRAY_BUFFER, pos));
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+    gl.bindVertexArray(null);
+    lines = { vao, runs: header.lines.runs };
+  }
+
+  if (!isFinite(min[0])) { min.fill(-1); max.fill(1); }
+  model = { header, draws, lines, buffers, textures, bounds: { min, max } };
+}
+
+// ---------- camera ----------
+function eyePos() {
+  const cp = Math.cos(cam.pitch);
+  return V.add(cam.target, V.scale([Math.sin(cam.yaw) * cp, Math.sin(cam.pitch), Math.cos(cam.yaw) * cp], cam.dist));
+}
+function fit() {
+  if (!model) return;
+  const { min, max } = model.bounds;
+  cam.target = V.scale(V.add(min, max), 0.5);
+  const radius = Math.max(V.len(V.sub(max, min)) / 2, 0.01);
+  cam.fov = 35;
+  cam.dist = radius / Math.sin(cam.fov * Math.PI / 360) * 1.05;
+  cam.yaw = 0.75; cam.pitch = 0.45;
+}
+function applyView(v) {
+  const d = V.sub(v.eye, v.target);
+  cam.target = v.target.slice();
+  cam.dist = Math.max(V.len(d), 0.01);
+  cam.pitch = Math.asin(Math.max(-1, Math.min(1, d[1] / cam.dist)));
+  cam.yaw = Math.atan2(d[0], d[2]);
+  cam.fov = v.fov;
+}
+
+// ---------- render ----------
+function render() {
+  requestAnimationFrame(render);
+  if (!gl) return;
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const w = Math.round(canvas.clientWidth * dpr), h = Math.round(canvas.clientHeight * dpr);
+  if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+  gl.viewport(0, 0, w, h);
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+  gl.disable(gl.DEPTH_TEST);
+  gl.useProgram(skyProg.p);
+  gl.uniform3fv(skyProg.u.uTop, cssColor("--sky-top"));
+  gl.uniform3fv(skyProg.u.uBottom, cssColor("--sky-bottom"));
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  if (!model) return;
+
+  const eye = eyePos();
+  const { min, max } = model.bounds;
+  const radius = Math.max(V.len(V.sub(max, min)) / 2, 0.01);
+  const near = Math.max(cam.dist - radius * 2, cam.dist * 0.001, 0.001);
+  const far = cam.dist + radius * 2;
+  const up = Math.abs(Math.cos(cam.pitch)) < 1e-4 ? [0, 0, -1] : [0, 1, 0];
+  const mvp = mul(perspective(cam.fov * Math.PI / 180, w / h, near, far), lookAt(eye, cam.target, up));
+
+  const xray = document.getElementById("xray").checked;
+  gl.enable(gl.DEPTH_TEST);
+  gl.disable(gl.CULL_FACE);
+  gl.useProgram(meshProg.p);
+  gl.uniformMatrix4fv(meshProg.u.uMvp, false, mvp);
+  gl.uniform3fv(meshProg.u.uEye, eye);
+  gl.uniform1i(meshProg.u.uSampler, 0);
+  gl.enable(gl.POLYGON_OFFSET_FILL);
+  gl.polygonOffset(1, 1);
+
+  const visible = model.draws.filter(d => !hiddenLayers.has(d.layer));
+  const passes = xray ? [[visible, true]] :
+    [[visible.filter(d => !d.transparent), false], [visible.filter(d => d.transparent), true]];
+  for (const [list, blend] of passes) {
+    if (blend) { gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA); gl.depthMask(false); }
+    gl.uniform1f(meshProg.u.uAlphaScale, xray ? 0.35 : 1);
+    for (const d of list) {
+      // SketchUp back faces come as their own primitives with reversed
+      // winding, so single-sided materials must cull or the two coplanar
+      // sides z-fight. X-ray shows everything.
+      if (d.doubleSided || xray) gl.disable(gl.CULL_FACE); else gl.enable(gl.CULL_FACE);
+      gl.uniform4fv(meshProg.u.uColor, d.color);
+      gl.uniform1i(meshProg.u.uTex, d.texture ? 1 : 0);
+      if (d.texture) { gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, d.texture); }
+      gl.bindVertexArray(d.vao);
+      gl.drawElements(gl.TRIANGLES, d.count, gl.UNSIGNED_INT, 0);
+    }
+    gl.disable(gl.BLEND); gl.depthMask(true);
+  }
+  gl.disable(gl.CULL_FACE);
+  gl.disable(gl.POLYGON_OFFSET_FILL);
+
+  gl.useProgram(lineProg.p);
+  gl.uniformMatrix4fv(lineProg.u.uMvp, false, mvp);
+  const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+  gl.uniform4fv(lineProg.u.uColor, dark ? [0.05, 0.06, 0.08, 1] : [0.1, 0.11, 0.13, 1]);
+  if (document.getElementById("showEdges").checked) {
+    for (const d of visible) {
+      if (!d.edgeCount) continue;
+      gl.bindVertexArray(d.edgeVao);
+      gl.drawArrays(gl.LINES, 0, d.edgeCount);
+    }
+  }
+  if (model.lines && document.getElementById("showLines").checked) {
+    gl.bindVertexArray(model.lines.vao);
+    for (const r of model.lines.runs) if (!hiddenLayers.has(r.layer)) gl.drawArrays(gl.LINES, r.first, r.count);
+  }
+  gl.bindVertexArray(null);
+}
+
+// ---------- UI ----------
+const statusEl = document.getElementById("status");
+function setStatus(msg, err) { statusEl.textContent = msg; statusEl.className = err ? "err" : ""; }
+
+function fillPanels(h, name, ms) {
+  const fmt = n => n.toLocaleString("pt-BR");
+  const rows = [["Arquivo", name], ["Versão", h.version.replace(/[{}]/g, "")], ["Unidades", h.units || "—"],
+    ["Definições", fmt(h.stats.definitions)], ["Instâncias", fmt(h.stats.instances)],
+    ["Faces", fmt(h.stats.faces)], ["Arestas", fmt(h.stats.edges)],
+    ["Triângulos", fmt(h.stats.triangles)], ["Materiais", fmt(h.stats.materials)], ["Leitura", ms + " ms"]];
+  const info = document.getElementById("info");
+  info.replaceChildren(...rows.flatMap(([k, v]) => {
+    const dt = document.createElement("dt"); dt.textContent = k;
+    const dd = document.createElement("dd"); dd.textContent = v; dd.title = v;
+    return [dt, dd];
+  }));
+  document.getElementById("infoSec").hidden = false;
+
+  hiddenLayers.clear();
+  const layers = document.getElementById("layers");
+  layers.replaceChildren(...h.layers.map(l => {
+    if (l.hidden) hiddenLayers.add(l.name);
+    const lab = document.createElement("label"); lab.className = "check"; lab.title = l.name;
+    const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = !l.hidden;
+    cb.onchange = () => cb.checked ? hiddenLayers.delete(l.name) : hiddenLayers.add(l.name);
+    const sw = document.createElement("span"); sw.className = "swatch";
+    sw.style.background = `rgb(${l.color.join(",")})`;
+    lab.append(cb, sw, document.createTextNode(l.name || "(sem nome)"));
+    return lab;
+  }));
+  document.getElementById("layersSec").hidden = h.layers.length === 0;
+
+  const views = [...(h.camera ? [h.camera] : []), ...h.pages];
+  const pages = document.getElementById("pages");
+  pages.replaceChildren(...views.map(v => {
+    const b = document.createElement("button"); b.textContent = v.name || "Cena";
+    b.onclick = () => applyView(v);
+    return b;
+  }));
+  document.getElementById("pagesSec").hidden = views.length === 0;
+  return views;
+}
+
+async function openFile(file) {
+  if (!wasm) return;
+  setStatus("Lendo " + file.name + "…");
+  try {
+    const data = new Uint8Array(await file.arrayBuffer());
+    const t0 = performance.now();
+    const result = convert(data);
+    const ms = Math.round(performance.now() - t0);
+    await upload(result);
+    const views = fillPanels(result.header, file.name, ms);
+    fit();
+    if (result.header.camera) applyView(result.header.camera);
+    document.getElementById("drop").hidden = true;
+    setStatus(file.name);
+  } catch (e) {
+    console.error(e);
+    setStatus("Erro: " + e.message, true);
+  }
+}
+
+document.getElementById("file").onchange = e => e.target.files[0] && openFile(e.target.files[0]);
+document.getElementById("fit").onclick = fit;
+const main = document.querySelector("main"), drop = document.getElementById("drop");
+main.addEventListener("dragover", e => { e.preventDefault(); drop.hidden = false; drop.classList.add("over"); });
+main.addEventListener("dragleave", () => { drop.classList.remove("over"); if (model) drop.hidden = true; });
+main.addEventListener("drop", e => {
+  e.preventDefault(); drop.classList.remove("over");
+  const f = e.dataTransfer.files[0];
+  if (f) openFile(f); else if (model) drop.hidden = true;
+});
+
+// Orbit / pan / zoom.
+let drag = null;
+canvas.addEventListener("contextmenu", e => e.preventDefault());
+canvas.addEventListener("pointerdown", e => {
+  canvas.setPointerCapture(e.pointerId);
+  drag = { x: e.clientX, y: e.clientY, pan: e.button === 2 || e.button === 1 || e.shiftKey };
+});
+canvas.addEventListener("pointerup", () => drag = null);
+canvas.addEventListener("pointermove", e => {
+  if (!drag) return;
+  const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+  drag.x = e.clientX; drag.y = e.clientY;
+  if (drag.pan) {
+    const eye = eyePos();
+    const fwd = V.norm(V.sub(cam.target, eye));
+    const right = V.norm(V.cross(fwd, [0, 1, 0]));
+    const up = V.cross(right, fwd);
+    const k = 2 * cam.dist * Math.tan(cam.fov * Math.PI / 360) / canvas.clientHeight;
+    cam.target = V.add(cam.target, V.add(V.scale(right, -dx * k), V.scale(up, dy * k)));
+  } else {
+    cam.yaw -= dx * 0.008;
+    cam.pitch = Math.max(-1.55, Math.min(1.55, cam.pitch + dy * 0.008));
+  }
+});
+canvas.addEventListener("wheel", e => {
+  e.preventDefault();
+  cam.dist *= Math.exp(e.deltaY * 0.0012);
+}, { passive: false });
+window.addEventListener("keydown", e => { if (e.key === "f" || e.key === "F") fit(); });
+
+if (gl) {
+  initWasm().then(() => setStatus("Pronto. Abra um arquivo .skp."))
+    .catch(e => setStatus("Falha ao iniciar o WebAssembly: " + e.message, true));
+  render();
+}
+</script>
+</body>
+</html>
