@@ -192,7 +192,7 @@ struct ArcCurve {
   Vec3 normal{};
   /// Vector from the centre to the arc's start (length = radius).
   Vec3 x_axis{};
-  /// normal x x_axis.
+  /// Independent affine y basis (normal x x_axis for an untransformed circle).
   Vec3 y_axis{};
   /// Start parameter in radians.
   double start_angle{};

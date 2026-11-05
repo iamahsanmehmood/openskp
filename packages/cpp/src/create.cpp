@@ -589,6 +589,22 @@ std::pair<Point3, Point3> arc_frame(Point3 normal, const std::optional<Point3>& 
   return circle_basis(normal);
 }
 
+// An affine y basis may be longer, sheared or reflected relative to x. Validate
+// it before creating any archive records, and do not orthogonalize it.
+Point3 arc_yaxis(Point3 normal, Point3 x, Point3 fallback, const std::optional<Point3>& yaxis) {
+  if (!yaxis) return fallback;
+  const auto y = *yaxis;
+  for (double v : y)
+    if (!std::isfinite(v)) throw SkpWriteError("arc yaxis must be finite");
+  const double length = std::hypot(y[0], y[1], y[2]);
+  const auto cross = cross3(x, y);
+  const double area = std::hypot(cross[0], cross[1], cross[2]);
+  const double dot = normal[0]*y[0] + normal[1]*y[1] + normal[2]*y[2];
+  if (!std::isfinite(length) || length < 1e-12 || area <= 1e-12 * length || std::abs(dot) > 1e-10 * length)
+    throw SkpWriteError("arc yaxis must be nonzero, in-plane and independent of xaxis");
+  return y;
+}
+
 std::vector<Point3> circle_points(Point3 center, Point3 /*normal*/, double radius, int num_segments,
                                   Point3 u, Point3 w) {
   std::vector<Point3> pts;
@@ -737,6 +753,7 @@ struct ArcCurveParams {
   double end_angle;
   double radius;
   int num_segments;
+  Point3 yaxis;
 };
 
 using AttributeDictList = std::vector<std::pair<std::string, AttributeDict>>;
@@ -937,9 +954,9 @@ class ArchiveWriter {
   // Write one CArcCurve record and return its slot - the shared geometric-parameter object a
   // circle/arc's straight CEdge segments each carry a backref to. `xaxis` is the arc's own fixed
   // 0-angle reference direction (a unit vector times radius); start_angle/end_angle are offsets
-  // from it. The last three doubles are the y-axis vector (normal cross xaxis).
+  // from it. The last three doubles preserve the affine y-axis vector independently.
   int write_arc_curve(Point3 center, Point3 normal, Point3 xaxis, double start_angle,
-                      double end_angle, double radius, int num_segments) {
+                      double end_angle, double radius, int num_segments, Point3 yaxis) {
     if (num_segments < 0 || num_segments > 0xFF) {
       throw SkpWriteError("num_segments must be between 0 and 255, got " +
                           std::to_string(num_segments));
@@ -960,9 +977,7 @@ class ArchiveWriter {
                              xaxis[2],
                              start_angle,
                              end_angle,
-                             normal[1] * xaxis[2] - normal[2] * xaxis[1],
-                             normal[2] * xaxis[0] - normal[0] * xaxis[2],
-                             normal[0] * xaxis[1] - normal[1] * xaxis[0]};
+                             yaxis[0], yaxis[1], yaxis[2]};
     for (double v : vals) append_f64(buf, v);
     return slot;
   }
@@ -1545,7 +1560,7 @@ class ArchiveWriter {
         curve_slot =
             write_arc_curve(curve_params->center, curve_params->normal, curve_params->xaxis,
                             curve_params->start_angle, curve_params->end_angle,
-                            curve_params->radius, curve_params->num_segments);
+                            curve_params->radius, curve_params->num_segments, curve_params->yaxis);
       } else if (polyline_num_edges) {
         curve_slot = write_curve(*polyline_num_edges);
       } else {
@@ -1817,8 +1832,10 @@ int do_add_circle(ArchiveWriter& writer, std::map<Point3, int>& vertex_slots,
   }
   Point3 n = normalize3(normal);
   auto [u, w] = arc_frame(n, options.xaxis);
+  w = arc_yaxis(n, u, w, options.yaxis);
   Point3 xaxis = {radius * u[0], radius * u[1], radius * u[2]};
-  ArcCurveParams curve_params{center, n, xaxis, 0.0, 2.0 * kPi, radius, options.num_segments};
+  ArcCurveParams curve_params{center, n, xaxis, 0.0, 2.0 * kPi, radius, options.num_segments,
+                              {radius*w[0], radius*w[1], radius*w[2]}};
   auto points = circle_points(center, n, radius, options.num_segments, u, w);
   if (!options.vertices.empty()) {
     if (options.vertices.size() != static_cast<std::size_t>(options.num_segments))
@@ -1847,9 +1864,11 @@ int do_add_arc(ArchiveWriter& writer, std::map<Point3, int>& vertex_slots,
   }
   Point3 n = normalize3(normal);
   auto [u, w] = arc_frame(n, options.xaxis);
+  w = arc_yaxis(n, u, w, options.yaxis);
   Point3 xaxis = {radius * u[0], radius * u[1], radius * u[2]};
   ArcCurveParams curve_params{
-      center, n, xaxis, start_angle, end_angle, radius, options.num_segments};
+      center, n, xaxis, start_angle, end_angle, radius, options.num_segments,
+      {radius*w[0], radius*w[1], radius*w[2]}};
   auto points = arc_points(center, n, radius, options.num_segments, u, w, start_angle, end_angle);
   if (!options.vertices.empty()) {
     if (options.vertices.size() != static_cast<std::size_t>(options.num_segments + 1))
