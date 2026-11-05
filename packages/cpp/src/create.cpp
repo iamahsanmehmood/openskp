@@ -1339,8 +1339,9 @@ class ArchiveWriter {
       put(48, (*camera).up[0]);
       put(56, (*camera).up[1]);
       put(64, (*camera).up[2]);
-      put(72, (*camera).fov_y_deg);
-      payload[80] = (*camera).perspective ? 1 : 0;
+      put(89, (*camera).fov_y_deg);
+      payload[88] = (*camera).perspective ? 1 : 0;
+      put(97, (*camera).ortho_height);
       append_bytes(buf, payload, sizeof(payload));
     }
     write_null();  // no thumbnail image

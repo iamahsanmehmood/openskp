@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cstring>
 #include <gtest/gtest.h>
 #include <limits>
 #include <set>
@@ -107,6 +108,55 @@ TEST(IoFidelity, NamedDictionariesKeepTypesAndOwners) {
     if (l.name == "Details")
       EXPECT_EQ(l.parsed_dictionaries.at("TagData").at("enabled"),
                 ParsedAttribute::from_boolean(true));
+}
+
+TEST(IoFidelity, ThumbnailCameraPreservesNativeProjectionFields) {
+  for (bool perspective : {false, true}) {
+    auto builder = create();
+    DefinitionOptions options;
+    options.thumbnail_camera =
+        ThumbnailCamera{{123, -456, 789}, {12, 34, 56}, {0, 0, 1}, 42, perspective, 10};
+    auto& part = builder->add_component_definition("Camera part", options);
+    part.add_face({{0, 0, 0}, {2, 0, 0}, {0, 2, 0}});
+    part.close();
+    builder->add_instance(part);
+    const auto bytes = builder->to_bytes();
+    const auto model = SkpFile::from_buffer(bytes).parse();
+    ASSERT_EQ(model.definitions.size(), 1u);
+    const auto& camera = model.definitions.begin()->second.thumbnail_camera;
+    ASSERT_TRUE(camera);
+    EXPECT_EQ(camera->eye, options.thumbnail_camera->eye);
+    EXPECT_EQ(camera->target, options.thumbnail_camera->target);
+    EXPECT_EQ(camera->up, options.thumbnail_camera->up);
+    EXPECT_EQ(camera->perspective, perspective);
+    EXPECT_EQ(camera->fov_y_deg, 42);
+    EXPECT_EQ(camera->ortho_height, 10);
+
+    // Check the native CCamera layout independently of our reader. A symmetric
+    // reader/writer bug at offsets 72/80 previously passed round-trip tests.
+    ByteBuffer prefix;
+    for (const auto& vector : {camera->eye, camera->target, camera->up})
+      for (double value : vector) {
+        std::uint64_t bits;
+        std::memcpy(&bits, &value, sizeof(bits));
+        for (int i = 0; i < 8; ++i) prefix.push_back(static_cast<std::uint8_t>(bits >> (8 * i)));
+      }
+    const auto found = std::search(bytes.begin(), bytes.end(), prefix.begin(), prefix.end());
+    ASSERT_NE(found, bytes.end());
+    ASSERT_GE(std::distance(found, bytes.end()), 105);
+    EXPECT_EQ(found[88], perspective ? 1 : 0);
+    auto scalar = [&](int offset) {
+      std::uint64_t bits = 0;
+      for (int i = 0; i < 8; ++i) bits |= std::uint64_t(found[offset + i]) << (8 * i);
+      double value;
+      std::memcpy(&value, &bits, sizeof(value));
+      return value;
+    };
+    EXPECT_EQ(scalar(72), 0);  // The native thumbnail template's aspect metadata is untouched.
+    EXPECT_EQ(scalar(80), 0);
+    EXPECT_EQ(scalar(89), 42);
+    EXPECT_EQ(scalar(97), 10);
+  }
 }
 
 TEST(IoFidelity, DefinitionBrowserMetadataAndSharedGroups) {
