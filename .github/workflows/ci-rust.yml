@@ -39,6 +39,8 @@ jobs:
         run: |
           cd packages/rust
           cargo fmt --check
+          cd viewer
+          cargo fmt --check
 
       - name: Clippy
         run: |
