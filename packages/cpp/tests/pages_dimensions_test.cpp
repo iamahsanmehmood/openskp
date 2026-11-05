@@ -1,6 +1,8 @@
 #include <cstring>
 #include <gtest/gtest.h>
 
+#include <openskp/parser.hpp>
+
 #include "internal.hpp"
 #include "test_helpers.hpp"
 
@@ -185,6 +187,130 @@ TEST(PagesDimensions, DimensionConnectedPointResolvesThroughInstance) {
   EXPECT_TRUE(empty_dims.empty());
 }
 
+TEST(PagesDimensions, ComposeInstanceWorldNestsParentTimesLocal) {
+  RawDefinition panel;
+  RawDefinition cabinet;
+  RawInstance panelInst;
+  panelInst.persistent_id = "AA";
+  panelInst.ref_idx = 2;
+  panelInst.matrix = {1, 0, 0, 0, 1, 0, 0, 0, 1, 1.0, 2.0, 3.0, 1.0};
+  cabinet.builder.instances.push_back(panelInst);
+
+  RawDefinition root;
+  RawInstance cabInst;
+  cabInst.persistent_id = "BB";
+  cabInst.ref_idx = 1;
+  cabInst.matrix = {1, 0, 0, 0, 1, 0, 0, 0, 1, 10.0, 20.0, 30.0, 1.0};
+  root.builder.instances.push_back(cabInst);
+
+  std::map<EntityId, RawDefinition> defs;
+  defs[1] = std::move(cabinet);
+  defs[2] = std::move(panel);
+
+  std::map<std::string, std::vector<double>> world;
+  compose_instance_world(root, defs, world);
+  ASSERT_EQ(world.count("BB"), 1u);
+  ASSERT_EQ(world.count("AA"), 1u);
+  EXPECT_EQ(transform_point(world["BB"], Vec3{0, 0, 0}), (Vec3{10.0, 20.0, 30.0}));
+  EXPECT_EQ(transform_point(world["AA"], Vec3{0, 0, 0}), (Vec3{11.0, 22.0, 33.0}));
+}
+
+TEST(PagesDimensions, DimensionConnectedPointUsesComposedNestedWorld) {
+  const ByteBuffer vid{0xaa, 0xbb, 0x01};
+  const ByteBuffer iid{0xcc, 0xdd, 0x02};
+
+  auto connected = [&](std::uint16_t wrap_tag) {
+    ByteBuffer id_len_prefixed{static_cast<std::uint8_t>(iid.size())};
+    id_len_prefixed.insert(id_len_prefixed.end(), iid.begin(), iid.end());
+    auto ref_tlv = tlv(0x53fc, test::concat({tlv(0x53fd, vid), tlv(0x53fe, id_len_prefixed)}));
+    auto inner = test::concat({tlv(0x5209, ByteBuffer{2, 0, 0, 0}), tlv(0x520b, ref_tlv)});
+    return tlv(wrap_tag, tlv(0x5208, inner));
+  };
+  auto free = [&](std::uint16_t wrap_tag) {
+    auto inner =
+        test::concat({tlv(0x5209, ByteBuffer{1, 0, 0, 0}), tlv(0x520a, vec3(0.0, 0.0, 0.0))});
+    return tlv(wrap_tag, tlv(0x5208, inner));
+  };
+  auto body = test::concat({connected(0x5bcd), free(0x5bce), tlv(0x5bd2, test::f64s({0.0}))});
+  auto blob = tlv(0x5bcc, body);
+
+  RawDefinition leaf;
+  RawDefinition parentDef;
+  RawInstance leafInst;
+  leafInst.persistent_id = hex_upper(iid);
+  leafInst.ref_idx = 2;
+  leafInst.matrix = {1, 0, 0, 0, 1, 0, 0, 0, 1, 1.0, 2.0, 3.0, 1.0};
+  parentDef.builder.instances.push_back(leafInst);
+  RawDefinition root;
+  RawInstance parentInst;
+  parentInst.persistent_id = "PARENT";
+  parentInst.ref_idx = 1;
+  parentInst.matrix = {1, 0, 0, 0, 1, 0, 0, 0, 1, 10.0, 20.0, 30.0, 1.0};
+  root.builder.instances.push_back(parentInst);
+  std::map<EntityId, RawDefinition> defs;
+  defs[1] = std::move(parentDef);
+  defs[2] = std::move(leaf);
+
+  std::map<std::string, std::vector<double>> world;
+  compose_instance_world(root, defs, world);
+  std::map<std::string, Vec3> id2pos{{hex_upper(vid), Vec3{0.0, 0.0, 0.0}}};
+  auto dims = parse_dimensions(blob, id2pos, world);
+  ASSERT_EQ(dims.size(), 1u);
+  EXPECT_EQ(dims[0].a, (Vec3{11.0, 22.0, 33.0}));
+}
+
+TEST(PagesDimensions, DimensionConnectedPointUsesInnermostInstanceInPath) {
+  // SketchUp stores 53FE as an instance path (outer → inner). A root-level
+  // dimension on nested groups names the outer component first; the vertex
+  // lives in the innermost definition and must use that placement's world xf.
+  const ByteBuffer vid{0xaa, 0xbb, 0x01};
+  const ByteBuffer outer_id{0x11, 0x01};
+  const ByteBuffer inner_id{0x22, 0x02};
+
+  ByteBuffer path;
+  path.push_back(static_cast<std::uint8_t>(outer_id.size()));
+  path.insert(path.end(), outer_id.begin(), outer_id.end());
+  path.push_back(static_cast<std::uint8_t>(inner_id.size()));
+  path.insert(path.end(), inner_id.begin(), inner_id.end());
+
+  auto connected = [&](std::uint16_t wrap_tag) {
+    auto ref_tlv = tlv(0x53fc, test::concat({tlv(0x53fd, vid), tlv(0x53fe, path)}));
+    auto inner = test::concat({tlv(0x5209, ByteBuffer{2, 0, 0, 0}), tlv(0x520b, ref_tlv)});
+    return tlv(wrap_tag, tlv(0x5208, inner));
+  };
+  auto free = [&](std::uint16_t wrap_tag) {
+    auto inner =
+        test::concat({tlv(0x5209, ByteBuffer{1, 0, 0, 0}), tlv(0x520a, vec3(0.0, 0.0, 0.0))});
+    return tlv(wrap_tag, tlv(0x5208, inner));
+  };
+  auto blob =
+      tlv(0x5bcc, test::concat({connected(0x5bcd), free(0x5bce), tlv(0x5bd2, test::f64s({0.0}))}));
+
+  RawDefinition leaf;
+  RawDefinition parentDef;
+  RawInstance leafInst;
+  leafInst.persistent_id = hex_upper(inner_id);
+  leafInst.ref_idx = 2;
+  leafInst.matrix = {1, 0, 0, 0, 1, 0, 0, 0, 1, 100.0, 0.0, 0.0, 1.0};
+  parentDef.builder.instances.push_back(leafInst);
+  RawDefinition root;
+  RawInstance parentInst;
+  parentInst.persistent_id = hex_upper(outer_id);
+  parentInst.ref_idx = 1;
+  parentInst.matrix = {1, 0, 0, 0, 1, 0, 0, 0, 1, 10.0, 0.0, 0.0, 1.0};
+  root.builder.instances.push_back(parentInst);
+  std::map<EntityId, RawDefinition> defs;
+  defs[1] = std::move(parentDef);
+  defs[2] = std::move(leaf);
+
+  std::map<std::string, std::vector<double>> world;
+  compose_instance_world(root, defs, world);
+  std::map<std::string, Vec3> id2pos{{hex_upper(vid), Vec3{0.0, 0.0, 0.0}}};
+  auto dims = parse_dimensions(blob, id2pos, world);
+  ASSERT_EQ(dims.size(), 1u);
+  EXPECT_EQ(dims[0].a, (Vec3{110.0, 0.0, 0.0}));
+}
+
 // ── scenes (pages) ──────────────────────────────────────────────────────
 
 ByteBuffer page_record(const std::string& name, bool parallel, std::vector<int> hidden_ids = {},
@@ -349,4 +475,71 @@ TEST(PagesDimensions, ScanPagesLegacyIgnoresUnrelatedNoise) {
 
   EXPECT_TRUE(pages.empty());
 }
+
+TEST(PagesDimensions, SdkAnnotationTagsRetainOwnerAndVisibility) {
+  for (const char* name : {"annotation_layers_legacy.skp", "annotation_layers_vff.skp"}) {
+    SCOPED_TRACE(name);
+    const auto model = SkpFile::open(test::fixture(name)).parse();
+    const auto verify = [](const Definition& owner, bool nested) {
+      const auto tagged = [](const auto& entities, const char* tag, std::size_t count, int hidden) {
+        ASSERT_EQ(entities.size(), count);
+        int actual_hidden = 0;
+        for (const auto& entity : entities) {
+          EXPECT_EQ(entity.layer, tag);
+          actual_hidden += entity.hidden;
+        }
+        EXPECT_EQ(actual_hidden, hidden);
+      };
+      tagged(owner.dimensions, "尺寸标注", 2, 1);
+      tagged(owner.construction_points, "参考元素", 2, 1);
+      tagged(owner.construction_lines, "参考元素", 2, 1);
+      tagged(owner.texts, "引注文字", nested ? 1 : 3, nested ? 0 : 1);
+      for (const auto& text : owner.texts) {
+        EXPECT_EQ(text.display_leader, text.text != "Dot");
+        if (nested) {
+          EXPECT_EQ(text.leader_type, 0);
+          ASSERT_TRUE(text.screen_position);
+          EXPECT_EQ(*text.screen_position, (std::array<double, 2>{0.23, 0.67}));
+        } else {
+          ASSERT_TRUE(text.point && text.label_point);
+          for (int axis = 0; axis < 3; ++axis)
+            EXPECT_DOUBLE_EQ((*text.label_point)[axis] - (*text.point)[axis], axis == 2 ? 10 : 0);
+        }
+      }
+    };
+    verify(model.root(), false);
+    std::size_t annotated = 0;
+    for (const auto& pair : model.definitions) {
+      if (pair.second.texts.empty()) continue;
+      verify(pair.second, true);
+      ++annotated;
+    }
+    EXPECT_EQ(annotated, 1u);
+    if (std::string(name) == "annotation_layers_vff.skp") {
+      // The existing model-level world-space list remains available as before.
+      ASSERT_EQ(model.dimensions.size(), 4u);
+      for (const auto& dim : model.dimensions) EXPECT_EQ(dim.layer, "尺寸标注");
+    }
+  }
+}
+
+TEST(PagesDimensions, DrawingPropertiesComeFromDimensionNotItsConnections) {
+  const auto free_point = [](double x, double y, double z) {
+    return tlv(0x5208, test::concat({tlv(0x5209, {1, 0, 0, 0}), tlv(0x520a, vec3(x, y, z)),
+                                     tlv(0x07d0, tlv(0x07d2, ByteBuffer{99}))}));
+  };
+  auto connection = free_point(0, 0, 0);
+  auto body = test::concat({
+      tlv(0x59d8,
+          tlv(0x07d0, test::concat({tlv(0x07d2, ByteBuffer{12}), tlv(0x07d3, ByteBuffer{7})}))),
+      tlv(0x5bcd, connection),
+      tlv(0x5bce, free_point(10, 0, 0)),
+      tlv(0x5bd2, test::f64s({3})),
+  });
+  const auto dims = parse_dimensions(tlv(0x5bcc, body), {}, {});
+  ASSERT_EQ(dims.size(), 1u);
+  EXPECT_EQ(dims[0].layer, "12");
+  EXPECT_TRUE(dims[0].hidden);
+}
+
 }  // namespace openskp

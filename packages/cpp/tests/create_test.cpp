@@ -1135,6 +1135,108 @@ TEST(Create, TwoDimensionsShareOneEmbeddedFont) {
   EXPECT_EQ(model.root().texts.size(), 1u);
 }
 
+TEST(Create, AnnotationDrawingPropertiesRoundTrip) {
+  auto builder = create();
+  const int layer = builder->add_layer("Annotations");
+  DimensionOptions dim_options;
+  dim_options.layer = layer;
+  dim_options.hidden = true;
+  TextOptions text_options;
+  text_options.layer = layer;
+  text_options.hidden = true;
+  auto& nested = builder->add_component_definition("TextOnly");
+  text_options.screen_position = std::array<double, 2>{0.23, 0.67};
+  nested.add_text("Screen label", {0, 0, 0}, {0, 0, 0}, text_options);
+  nested.close();
+  builder->add_instance(nested);
+  text_options.screen_position.reset();
+  builder->add_text("Root label", {2, 3, 4}, {0, 0, 5}, text_options);
+  builder->add_dimension({0, 0, 0}, {10, 0, 0}, Point3{0, 3, 0}, dim_options);
+
+  const auto model = round_trip(*builder);
+  ASSERT_EQ(model.root().dimensions.size(), 1u);
+  EXPECT_EQ(model.root().dimensions[0].layer, "Annotations");
+  EXPECT_TRUE(model.root().dimensions[0].hidden);
+  ASSERT_EQ(model.root().texts.size(), 1u);
+  const auto& text = model.root().texts[0];
+  EXPECT_EQ(text.layer, "Annotations");
+  EXPECT_TRUE(text.hidden);
+  ASSERT_TRUE(text.point && text.label_point);
+  EXPECT_EQ(*text.point, (Vec3{2, 3, 4}));
+  EXPECT_EQ(*text.label_point, (Vec3{2, 3, 9}));
+  const Definition* definition = nullptr;
+  for (const auto& pair : model.definitions)
+    if (pair.second.name == "TextOnly") definition = &pair.second;
+  ASSERT_NE(definition, nullptr);
+  ASSERT_EQ(definition->texts.size(), 1u);
+  const auto& screen = definition->texts[0];
+  EXPECT_EQ(screen.layer, "Annotations");
+  EXPECT_TRUE(screen.hidden);
+  EXPECT_EQ(screen.leader_type, 0);
+  ASSERT_TRUE(screen.screen_position);
+  EXPECT_EQ(*screen.screen_position, (std::array<double, 2>{0.23, 0.67}));
+}
+
+TEST(Create, LeaderlessModelTextRetainsBothPointsAndVisibility) {
+  auto builder = create();
+  const auto add = [](auto& sink) {
+    for (int type : {0, 1, 2}) {
+      for (bool display : {false, true}) {
+        TextOptions options;
+        options.leader_type = type;
+        options.display_leader = display;
+        sink.add_text("Model label", {5, 6, 7}, {2, 3, 4}, options);
+      }
+    }
+    TextOptions screen;
+    screen.screen_position = std::array<double, 2>{0.23, 0.67};
+    sink.add_text("Screen label", {0, 0, 0}, {0, 0, 0}, screen);
+  };
+  auto& nested = builder->add_component_definition("Leader visibility");
+  add(nested);
+  nested.close();
+  builder->add_instance(nested);
+  add(*builder);
+  const auto model = round_trip(*builder);
+  const auto verify = [](const Definition& owner) {
+    ASSERT_EQ(owner.texts.size(), 7u);
+    for (std::size_t i = 0; i < 6; ++i) {
+      const auto& text = owner.texts[i];
+      ASSERT_TRUE(text.point && text.label_point);
+      EXPECT_EQ(*text.point, (Vec3{5, 6, 7}));
+      EXPECT_EQ(*text.label_point, (Vec3{7, 9, 11}));
+      EXPECT_NE(text.leader_type, 0);  // zero would turn it into screen text in SketchUp
+      EXPECT_EQ(text.display_leader, i == 3 || i == 5);
+    }
+    EXPECT_EQ(owner.texts[6].leader_type, 0);
+    ASSERT_TRUE(owner.texts[6].screen_position);
+    EXPECT_EQ(*owner.texts[6].screen_position, (std::array<double, 2>{0.23, 0.67}));
+  };
+  verify(model.root());
+  ASSERT_EQ(model.definitions.size(), 1u);
+  verify(model.definitions.begin()->second);
+}
+
+TEST(Create, InvalidAnnotationOptionsLeaveArchiveUsable) {
+  auto builder = create();
+  DimensionOptions dim_options;
+  dim_options.layer = 999;
+  EXPECT_THROW(builder->add_dimension({0, 0, 0}, {10, 0, 0}, Point3{0, 3, 0}, dim_options),
+               SkpWriteError);
+  TextOptions text_options;
+  text_options.layer = 999;
+  EXPECT_THROW(builder->add_text("Bad layer", {0, 0, 0}, {1, 0, 0}, text_options), SkpWriteError);
+  text_options.layer.reset();
+  text_options.screen_position = std::array<double, 2>{-1, 0.5};
+  EXPECT_THROW(builder->add_text("Bad position", {0, 0, 0}, {1, 0, 0}, text_options),
+               SkpWriteError);
+  builder->add_text("Valid", {0, 0, 0}, {1, 0, 0});
+  const auto model = round_trip(*builder);
+  EXPECT_TRUE(model.root().dimensions.empty());
+  ASSERT_EQ(model.root().texts.size(), 1u);
+  EXPECT_EQ(model.root().texts[0].text, "Valid");
+}
+
 TEST(Create, ConstructionLineAndPointDoNotCorruptTheFile) {
   auto builder = create();
   builder->add_face({{0, 0, 0}, {10, 0, 0}, {10, 10, 0}, {0, 10, 0}});
@@ -1231,5 +1333,123 @@ TEST(Create, NestedDefinitionConstructionRoundTrips) {
   ASSERT_TRUE(group->construction_lines[0].start && group->construction_lines[0].end);
 }
 
+TEST(Create, ModelGuidIsUniquePerBuilderAndStableAcrossWrites) {
+  auto first = create();
+  auto second = create();
+  first->add_face(square_pts());
+  second->add_face(square_pts());
+  const auto a = first->to_bytes(), b = second->to_bytes(), again = first->to_bytes();
+  ASSERT_GE(a.size(), 68u);
+  ASSERT_GE(b.size(), 68u);
+  ASSERT_GE(again.size(), 68u);
+  const ByteBuffer guid(a.begin() + 52, a.begin() + 68);
+  EXPECT_NE(guid, ByteBuffer(b.begin() + 52, b.begin() + 68));
+  EXPECT_EQ(guid, ByteBuffer(again.begin() + 52, again.begin() + 68));
+  // Version/variant bits in Windows GUID order.
+  EXPECT_EQ(guid[7] & 0xf0, 0x40);
+  EXPECT_EQ(guid[8] & 0xc0, 0x80);
+}
+
+TEST(Create, ExplicitModelGuidUsesNativeByteOrder) {
+  auto builder = create();
+  builder->add_face(square_pts());
+  const ByteBuffer native{0x33, 0x22, 0x11, 0x00, 0x55, 0x44, 0x77, 0x46,
+                          0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff};
+  for (const auto* guid :
+       {"00112233-4455-4677-8899-aabbccddeeff", "00112233445546778899AABBCCDDEEFF"}) {
+    builder->set_guid(guid);
+    const auto data = builder->to_bytes();
+    ASSERT_GE(data.size(), 68u);
+    EXPECT_EQ(ByteBuffer(data.begin() + 52, data.begin() + 68), native);
+  }
+  EXPECT_THROW(builder->set_guid("not-a-guid"), SkpWriteError);
+  EXPECT_THROW(builder->set_guid("00112233445546778899AABBCCDDEEFZ"), SkpWriteError);
+  EXPECT_THROW(builder->set_guid("00112233-4455-4677-8899a-abbccddeeff"), SkpWriteError);
+  const auto unchanged = builder->to_bytes();
+  EXPECT_EQ(ByteBuffer(unchanged.begin() + 52, unchanged.begin() + 68), native);
+  builder->set_guid("");
+  const auto reset = builder->to_bytes();
+  EXPECT_NE(ByteBuffer(reset.begin() + 52, reset.begin() + 68), native);
+}
+
+TEST(Create, DefinitionGuidPreservedInArchiveAndPublicModel) {
+  for (const auto* guid :
+       {"00112233-4455-4677-8899-aabbccddeeff", "00112233445546778899AABBCCDDEEFF"}) {
+    auto builder = create();
+    DefinitionOptions options;
+    options.guid = guid;
+    auto& def = builder->add_component_definition("Identified", options);
+    def.add_face(square_pts());
+    def.close();
+    builder->add_instance(def);
+    const auto data = builder->to_bytes();
+    const ByteBuffer native{0x33, 0x22, 0x11, 0x00, 0x55, 0x44, 0x77, 0x46,
+                            0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff};
+    EXPECT_NE(std::search(data.begin(), data.end(), native.begin(), native.end()), data.end());
+    const auto model = SkpFile::from_buffer(data).parse();
+    ASSERT_EQ(model.definitions.size(), 1u);
+    EXPECT_EQ(model.definitions.begin()->second.guid, "00112233445546778899AABBCCDDEEFF");
+    ASSERT_EQ(model.root().instances.size(), 1u);
+    ASSERT_TRUE(model.root().instances[0].ref_idx.has_value());
+    EXPECT_EQ(model.definitions.at(*model.root().instances[0].ref_idx).guid,
+              "00112233445546778899AABBCCDDEEFF");
+  }
+}
+
+TEST(Create, InvalidDefinitionGuidDoesNotPartiallyAddDefinition) {
+  auto builder = create();
+  DefinitionOptions options;
+  options.guid = "not-a-guid";
+  EXPECT_THROW(builder->add_component_definition("Invalid", options), SkpWriteError);
+  auto& good = builder->add_component_definition("Valid");
+  good.add_face(square_pts());
+  good.close();
+  builder->add_instance(good);
+  const auto model = round_trip(*builder);
+  ASSERT_EQ(model.definitions.size(), 1u);
+  EXPECT_EQ(model.definitions.begin()->second.name, "Valid");
+}
+
+TEST(Create, DefaultDefinitionGuidsAreDistinctAndStable) {
+  auto builder = create();
+  auto& a = builder->add_component_definition("Same name");
+  a.add_face(square_pts());
+  a.close();
+  auto& b = builder->add_component_definition("Same name");
+  b.add_face(square_pts());
+  b.close();
+  builder->add_instance(a);
+  builder->add_instance(b);
+  const auto first = round_trip(*builder), second = round_trip(*builder);
+  ASSERT_EQ(first.definitions.size(), 2u);
+  auto it = first.definitions.begin();
+  const auto guid = it++->second.guid;
+  EXPECT_NE(guid, it->second.guid);
+  for (const auto& entry : first.definitions)
+    EXPECT_EQ(entry.second.guid, second.definitions.at(entry.first).guid);
+}
+
 }  // namespace
 }  // namespace openskp
+
+TEST(Create, AttributeStringsCrossMfcLengthBoundaries) {
+  for (const std::size_t length : {254u, 255u, 256u, 65533u, 65534u, 65535u, 65536u}) {
+    SCOPED_TRACE(length);
+    auto builder = openskp::create();
+    auto& definition = builder->add_component_definition("TextCarrier");
+    definition.add_face({{0, 0, 0}, {1, 0, 0}, {0, 1, 0}});
+    definition.close();
+    openskp::InstanceOptions options;
+    options.attribute_dict_name = "RoundTrip";
+    const std::string ascii(length, 'x');
+    const std::string unicode = std::string(length - 2, 'x') + u8"😀";
+    options.attributes["ascii"] = ascii;
+    options.attributes["unicode"] = unicode;
+    builder->add_instance(definition, options);
+    auto model = openskp::SkpFile::from_buffer(builder->to_bytes()).parse();
+    ASSERT_EQ(model.root().instances.size(), 1u);
+    const auto& attrs = model.root().instances.front().attribute_dictionaries.at("RoundTrip");
+    EXPECT_EQ(attrs.at("ascii").text, ascii);
+    EXPECT_EQ(attrs.at("unicode").text, unicode);
+  }
+}

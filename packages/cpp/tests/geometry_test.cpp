@@ -334,5 +334,66 @@ TEST(Geometry, ReadsVffGuideHiddenFlagAndLayer) {
   EXPECT_EQ(builder.construction_lines[0].layer, "3");
 }
 
+TEST(Geometry, VffDefinitionAndInstanceGuidsUseCanonicalUuidOrder) {
+  // SDK's decoded Shelf UUID vs the same 16 bytes stored by classic and VFF SKP.
+  const ByteBuffer native{0xc5, 0xe9, 0x14, 0x16, 0x0b, 0x8c, 0x33, 0x40,
+                          0x88, 0x81, 0xdd, 0xe6, 0x2e, 0x6e, 0x2d, 0x80};
+  const std::string canonical = "1614E9C58C0B40338881DDE62E6E2D80";
+  const auto bytes = tlv(
+      "7C15", concat({tlv("DE05", {1}), tlv("7D15", native), tlv("7E15", test::bytes("Shelf"))}));
+  RawParsed raw;
+  collect_definitions(parse_tlv_recursive(bytes, 0, bytes.size()), raw.definitions);
+  // No numeric definition reference: consumers must match by ref_guid alone.
+  raw.root.builder = geometry(tlv("6419", tlv("6819", native)));
+  ASSERT_EQ(raw.definitions.size(), 1u);
+  EXPECT_EQ(raw.definitions.at(1).guid, canonical);
+  ASSERT_EQ(raw.root.builder.instances.size(), 1u);
+  EXPECT_EQ(raw.root.builder.instances[0].ref_guid, canonical);
+  EXPECT_FALSE(raw.root.builder.instances[0].ref_idx);
+  const auto model = build_model(std::move(raw));
+  EXPECT_EQ(model.root().instances[0].guid, model.definitions.at(1).guid);
+}
+
+TEST(Geometry, DefinitionDictionariesKeepNativeTypesWithoutChildAttributes) {
+  const auto values = concat({
+      entry("flag", tlv("AA38", {1})),
+      entry("count", tlv("A738", i32_bytes(-7))),
+      entry("nothing", {}),
+      entry("values", tlv("AE38", concat({entry_value(tlv("A938", test::f64s({2.5}))),
+                                          entry_value(tlv("AD38", test::bytes("abc")))}))),
+  });
+  const auto own = tlv("8813", tlv("D007", tlv("DC05", named_dict("Plugin", values))));
+  const auto child = tlv(
+      "6419",
+      concat({tlv("6719", {2}),
+              tlv("D007", tlv("DC05", named_dict("Plugin", entry("flag", tlv("AA38", {0})))))}));
+  const auto bytes = concat({
+      tlv("7C15", concat({tlv("DE05", {1}), own, child})),
+      tlv("7C15", concat({tlv("DE05", {2}), child})),
+  });
+  RawParsed raw;
+  collect_definitions(parse_tlv_recursive(bytes, 0, bytes.size()), raw.definitions);
+  ASSERT_EQ(raw.definitions.size(), 2u);
+  const auto model = build_model(std::move(raw));
+  const auto& attrs = model.definitions.at(1).parsed_dictionaries.at("Plugin");
+  EXPECT_EQ(attrs.at("flag").kind, ParsedAttribute::Kind::Boolean);
+  EXPECT_EQ(attrs.at("flag").integer, 1);
+  EXPECT_EQ(attrs.at("count").kind, ParsedAttribute::Kind::Integer);
+  EXPECT_EQ(attrs.at("count").integer, -7);
+  EXPECT_EQ(attrs.at("nothing").kind, ParsedAttribute::Kind::Null);
+  const auto& array = attrs.at("values");
+  ASSERT_EQ(array.kind, ParsedAttribute::Kind::Array);
+  ASSERT_EQ(array.array.size(), 2u);
+  EXPECT_EQ(array.array[0].kind, ParsedAttribute::Kind::Float);
+  EXPECT_DOUBLE_EQ(array.array[0].number, 2.5);
+  EXPECT_EQ(array.array[1].kind, ParsedAttribute::Kind::String);
+  EXPECT_EQ(array.array[1].to_string(), "abc");
+  EXPECT_TRUE(model.definitions.at(2).parsed_dictionaries.empty());
+  ASSERT_EQ(model.definitions.at(1).instances.size(), 1u);
+  EXPECT_EQ(
+      model.definitions.at(1).instances[0].attribute_dictionaries.at("Plugin").at("flag").integer,
+      0);
+}
+
 }  // namespace
 }  // namespace openskp

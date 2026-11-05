@@ -133,22 +133,38 @@ static Definition definition(EntityId id, RawDefinition r) {
   d.id = id;
   d.guid = std::move(r.guid);
   d.name = std::move(r.name);
+  d.persistent_id = r.native_pid;
+  d.description = std::move(r.description);
+  d.path = std::move(r.path);
+  d.load_time = r.load_time;
+  d.hidden = r.hidden;
+  d.thumbnail_camera = r.thumbnail_camera;
   d.always_faces_camera = r.always_faces_camera;
   d.shadows_face_sun = r.shadows_face_sun;
   d.is_image = r.is_image;
   d.is_group = r.is_group;
+  d.type_known = r.type_known;
+  d.parsed_dictionaries = std::move(r.parsed_dictionaries);
   for (auto& v : r.builder.vertices)
-    d.vertices.emplace(v.first, Vertex{v.first, v.second[0], v.second[1], v.second[2]});
+    d.vertices.emplace(v.first, Vertex{v.first, v.second[0], v.second[1], v.second[2],
+                                       r.builder.persistent_ids[v.first]});
   for (auto& e : r.builder.edges) {
-    auto flags = r.builder.edge_flags[e.first];
+    auto flags =
+        r.builder.edge_flags.count(e.first) ? r.builder.edge_flags.at(e.first) : kDrawDefault;
     Edge edge{e.first,         e.second.first.value_or(0), e.second.second.value_or(0),
               bool(flags & 8), bool(flags & 16),           bool(flags & 1)};
+    edge.persistent_id = r.builder.persistent_ids[e.first];
+    edge.locked = (flags & kDrawLocked) != 0;
+    edge.casts_shadows = (flags & kDrawCastsShadows) != 0;
+    edge.receives_shadows = (flags & kDrawReceivesShadows) != 0;
+    edge.attribute_dictionaries = std::move(r.builder.edge_dictionaries[e.first]);
     auto curve = r.builder.edge_curves.find(e.first);
     if (curve != r.builder.edge_curves.end()) edge.curve_id = curve->second;
     d.edges.emplace(e.first, edge);
   }
   for (auto& a : r.builder.arc_curves) {
     ArcCurve arc;
+    arc.persistent_id = r.builder.persistent_ids[a.first];
     arc.center = a.second.center;
     arc.normal = a.second.normal;
     arc.x_axis = a.second.x_axis;
@@ -160,6 +176,11 @@ static Definition definition(EntityId id, RawDefinition r) {
   for (auto& f : r.builder.faces) {
     Face x;
     x.id = f.first;
+    x.persistent_id = r.builder.persistent_ids[f.first];
+    x.locked = f.second.locked;
+    x.casts_shadows = f.second.casts_shadows;
+    x.receives_shadows = f.second.receives_shadows;
+    x.attribute_dictionaries = std::move(f.second.attribute_dictionaries);
     x.loops = std::move(f.second.loops);
     x.normal = f.second.normal;
     x.material_id = f.second.material_id;
@@ -175,7 +196,8 @@ static Definition definition(EntityId id, RawDefinition r) {
   for (auto& i : r.builder.instances)
     d.instances.push_back({std::move(i.name), i.ref_idx, std::move(i.ref_guid), std::move(i.matrix),
                            std::move(i.layer), std::move(i.properties),
-                           std::move(i.attribute_dicts), i.material_id, i.hidden, i.id});
+                           std::move(i.attribute_dicts), i.material_id, i.hidden, i.id, i.locked,
+                           i.casts_shadows, i.receives_shadows});
   d.section_planes = std::move(r.builder.section_planes);
   d.texts = std::move(r.builder.texts);
   d.dimensions = std::move(r.builder.dimensions);
@@ -200,8 +222,11 @@ SkpModel build_model(RawParsed&& p, const ParseOptions& o) {
   auto resolve_layers = [&](RawDefinition& d) {
     for (auto& i : d.builder.instances) resolve_layer(i.layer);
     for (auto& f : d.builder.faces) resolve_layer(f.second.layer);
+    for (auto& section : d.builder.section_planes) resolve_layer(section.layer);
     for (auto& cl : d.builder.construction_lines) resolve_layer(cl.layer);
     for (auto& cp : d.builder.construction_points) resolve_layer(cp.layer);
+    for (auto& dim : d.builder.dimensions) resolve_layer(dim.layer);
+    for (auto& text : d.builder.texts) resolve_layer(text.layer);
   };
   for (auto& d : p.definitions) {
     resolve_layers(d.second);
@@ -215,6 +240,11 @@ SkpModel build_model(RawParsed&& p, const ParseOptions& o) {
     auto hidden_it = p.layer_hidden.find(name);
     bool hidden = hidden_it != p.layer_hidden.end() && hidden_it->second;
     Layer layer{name, color_it->second, hidden};
+    layer.persistent_id = p.layer_persistent_ids[name];
+    const auto& aliases = p.layer_persistent_id_aliases[name];
+    layer.persistent_id_aliases.assign(aliases.begin(), aliases.end());
+    layer.parsed_dictionaries = std::move(p.layer_parsed_dictionaries[name]);
+    layer.line_style = p.layer_line_styles[name];
     auto dicts_it = p.layer_attribute_dictionaries.find(name);
     if (dicts_it != p.layer_attribute_dictionaries.end())
       layer.attribute_dictionaries = dicts_it->second;
@@ -242,6 +272,7 @@ SkpModel build_model(RawParsed&& p, const ParseOptions& o) {
   // Convert model-level linear dimensions (VFF; world space).
   for (auto& dm : p.dimensions) {
     Dimension dim;
+    dim.persistent_id = dm.native_pid;
     dim.a = dm.a;
     dim.b = dm.b;
     dim.offset = dm.offset;
@@ -249,12 +280,16 @@ SkpModel build_model(RawParsed&& p, const ParseOptions& o) {
     dim.normal = dm.normal;
     dim.offset_vector = dm.offset_vector;
     dim.text = dm.text;
+    dim.layer = dm.layer;
+    resolve_layer(dim.layer);
+    dim.hidden = dm.hidden;
     m.dimensions.push_back(std::move(dim));
   }
   std::map<const RawMaterial*, std::size_t> raw_index;
   for (auto& v : p.materials) {
     auto& r = *v.second;
     Material x;
+    x.persistent_id = r.native_pid;
     x.name = r.name;
     x.color = {std::uint8_t(r.r), std::uint8_t(r.g), std::uint8_t(r.b), std::uint8_t(r.a)};
     x.transparency = r.transparency;
