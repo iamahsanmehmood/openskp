@@ -4,9 +4,10 @@
 #include <cmath>
 #include <cstdint>
 #include <fstream>
-#include <functional>
 #include <iomanip>
+#include <locale>
 #include <map>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -15,35 +16,90 @@
 
 namespace openskp {
 
-static std::string sanitize_layer_name(const std::string& name) {
-  if (name.empty()) return "0";
-  std::string clean = name;
-  const std::string illegal = "<>/\\\"~:;?*=`|";
-  for (char& c : clean) {
-    if (illegal.find(c) != std::string::npos) {
-      c = '_';
+// AC1015 uses ANSI_1252 plus CIF Unicode escapes, not raw UTF-8 (which
+// requires AC1021+). Work in UTF-16 before escaping so the 255-character
+// symbol-name limit cannot split a UTF-8 sequence or a surrogate pair.
+static std::u16string layer_name_utf16(const std::string& name) {
+  std::u16string result;
+  for (size_t i = 0; i < name.size();) {
+    const auto lead = static_cast<unsigned char>(name[i++]);
+    uint32_t cp = lead;
+    unsigned extra = 0;
+    uint32_t minimum = 0;
+    if (lead >= 0xC2 && lead <= 0xDF) {
+      cp = lead & 0x1F;
+      extra = 1;
+      minimum = 0x80;
+    } else if (lead >= 0xE0 && lead <= 0xEF) {
+      cp = lead & 0x0F;
+      extra = 2;
+      minimum = 0x800;
+    } else if (lead >= 0xF0 && lead <= 0xF4) {
+      cp = lead & 0x07;
+      extra = 3;
+      minimum = 0x10000;
+    } else if (lead >= 0x80)
+      throw std::invalid_argument("DXF layer name contains invalid UTF-8");
+    for (unsigned j = 0; j < extra; ++j) {
+      if (i == name.size() || (static_cast<unsigned char>(name[i]) & 0xC0) != 0x80)
+        throw std::invalid_argument("DXF layer name contains invalid UTF-8");
+      cp = (cp << 6) | (static_cast<unsigned char>(name[i++]) & 0x3F);
     }
+    if (cp < minimum || cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF))
+      throw std::invalid_argument("DXF layer name contains invalid UTF-8");
+    if (cp > 0xFFFF) {
+      cp -= 0x10000;
+      result.push_back(static_cast<char16_t>(0xD800 + (cp >> 10)));
+      result.push_back(static_cast<char16_t>(0xDC00 + (cp & 0x3FF)));
+    } else
+      result.push_back(static_cast<char16_t>(cp));
   }
-  size_t first = clean.find_first_not_of(" \t\r\n");
-  if (first == std::string::npos) return "0";
-  size_t last = clean.find_last_not_of(" \t\r\n");
-  clean = clean.substr(first, last - first + 1);
-  // R2000 extended symbol names (enabled by $EXTNAMES=1 in the header
-  // scaffold) support up to 255 characters, but AutoCAD desktop has been
-  // reported to reject long table entry names in practice - cap
-  // defensively and append a short content hash on truncation so two
-  // different long names sharing a common prefix don't collide.
+  return result;
+}
+
+static std::string layer_name_hash(const std::string& name) {
+  uint32_t hash = 2166136261u;  // Stable across platforms and standard libraries.
+  for (unsigned char c : name) hash = (hash ^ c) * 16777619u;
+  std::ostringstream out;
+  out.imbue(std::locale::classic());
+  out << std::hex << std::uppercase << std::setw(8) << std::setfill('0') << hash;
+  return out.str();
+}
+
+static std::string sanitize_layer_name(const std::string& name, std::string suffix = {}) {
+  auto clean = layer_name_utf16(name);
+  const auto first = clean.find_first_not_of(u" \t\r\n");
+  clean = first == std::u16string::npos
+              ? u"0"
+              : clean.substr(first, clean.find_last_not_of(u" \t\r\n") - first + 1);
+  const std::u16string illegal = u"<>/\\\"~:;?*=`|";
+  for (char16_t& c : clean) {
+    if (c < 32 || (c >= 127 && c <= 159) || illegal.find(c) != std::u16string::npos) c = u'_';
+  }
   constexpr size_t kMaxLen = 255;
-  if (clean.size() > kMaxLen) {
-    std::size_t hash = std::hash<std::string>{}(clean);
-    std::stringstream hs;
-    hs << std::hex << (hash & 0xFFFFFFFFu);
-    std::string suffix = hs.str();
-    while (suffix.size() < 8) suffix = "0" + suffix;
-    suffix = suffix.substr(suffix.size() - 8);
-    clean = clean.substr(0, kMaxLen - suffix.size() - 1) + "_" + suffix;
+  if (clean.size() > kMaxLen && suffix.empty()) suffix = "_" + layer_name_hash(name);
+  if (clean.size() + suffix.size() > kMaxLen) {
+    size_t end = kMaxLen - suffix.size();
+    if (end > 0 && clean[end - 1] >= 0xD800 && clean[end - 1] <= 0xDBFF) --end;
+    clean.resize(end);
   }
-  return clean;
+  for (unsigned char c : suffix) clean.push_back(c);
+  std::ostringstream out;
+  out.imbue(std::locale::classic());
+  out << std::hex << std::uppercase << std::setfill('0');
+  for (char16_t c : clean) {
+    if (c < 128)
+      out << static_cast<char>(c);
+    else
+      out << "\\U+" << std::setw(4) << static_cast<unsigned>(c);
+  }
+  return out.str();
+}
+
+static std::string layer_name_key(std::string name) {
+  for (char& c : name)
+    if (c >= 'A' && c <= 'Z') c += 'a' - 'A';
+  return name;
 }
 
 static int rgb_to_aci(int r, int g, int b) {
@@ -2896,16 +2952,31 @@ static const std::vector<std::string> kObjectsStatic = [] {
 }();
 
 std::string to_dxf(const Scene& scene, double scale, const std::string& mode) {
+  if (!std::isfinite(scale)) throw std::invalid_argument("DXF scale must be finite");
   std::map<std::string, std::tuple<int, int, int>> layer_colors;
+  std::map<std::string, std::string> layer_names;
+  std::set<std::string> used_names = {"0", "defpoints"};
   for (const auto& prim : scene.glb_primitives) {
-    std::string l_name = sanitize_layer_name(prim.geom_name);
-    if (layer_colors.find(l_name) == layer_colors.end()) {
-      layer_colors[l_name] = get_prim_rgb(scene, prim);
+    if (prim.indices.empty()) continue;
+    if (prim.positions.size() % 3 != 0 || prim.indices.size() % 3 != 0)
+      throw std::invalid_argument("DXF mesh has incomplete coordinates or triangles");
+    for (auto index : prim.indices) {
+      if (index >= prim.positions.size() / 3)
+        throw std::invalid_argument("DXF mesh index is outside the vertex array");
     }
-  }
-
-  if (layer_colors.empty()) {
-    layer_colors["0"] = {200, 200, 200};
+    for (auto coordinate : prim.positions) {
+      if (!std::isfinite(coordinate * scale))
+        throw std::invalid_argument("DXF mesh coordinates must be finite");
+    }
+    if (layer_names.count(prim.geom_name)) continue;
+    std::string l_name = sanitize_layer_name(prim.geom_name);
+    for (size_t attempt = 0; !used_names.insert(layer_name_key(l_name)).second; ++attempt) {
+      const auto suffix = "_" + layer_name_hash(prim.geom_name) +
+                          (attempt == 0 ? std::string{} : "_" + std::to_string(attempt));
+      l_name = sanitize_layer_name(prim.geom_name, suffix);
+    }
+    layer_names.emplace(prim.geom_name, l_name);
+    layer_colors.emplace(l_name, get_prim_rgb(scene, prim));
   }
 
   // Every static handle in kHeaderStatic*/kObjectsStatic is well below
@@ -2915,15 +2986,10 @@ std::string to_dxf(const Scene& scene, double scale, const std::string& mode) {
   uint64_t handle_id = 0x691;
   auto next_handle = [&handle_id]() -> std::string {
     std::stringstream ss_h;
+    ss_h.imbue(std::locale::classic());
     ss_h << std::hex << std::uppercase << handle_id++;
     return ss_h.str();
   };
-
-  std::map<std::string, std::string> layer_handles;
-  for (const auto& [l_name, rgb] : layer_colors) {
-    (void)rgb;
-    layer_handles[l_name] = next_handle();
-  }
 
   std::vector<std::string> lines = kHeaderStaticA;
   // LAYER table record count: built-in "0" + "Defpoints" + this scene's layers.
@@ -2943,7 +3009,7 @@ std::string to_dxf(const Scene& scene, double scale, const std::string& mode) {
     lines.push_back("  0");
     lines.push_back("LAYER");
     lines.push_back("  5");
-    lines.push_back(layer_handles[l_name]);
+    lines.push_back(next_handle());
     lines.push_back("330");
     lines.push_back("1");
     lines.push_back("100");
@@ -2971,6 +3037,7 @@ std::string to_dxf(const Scene& scene, double scale, const std::string& mode) {
   lines.push_back("ENTITIES");
 
   std::ostringstream num;
+  num.imbue(std::locale::classic());
   num << std::fixed << std::setprecision(6);
   auto fmt6 = [&num](double v) -> std::string {
     num.str("");
@@ -2980,14 +3047,17 @@ std::string to_dxf(const Scene& scene, double scale, const std::string& mode) {
   };
 
   for (const auto& prim : scene.glb_primitives) {
-    std::string l_name = sanitize_layer_name(prim.geom_name);
     size_t tri_count = prim.indices.size() / 3;
     if (tri_count == 0) continue;
+    const std::string& l_name = layer_names.at(prim.geom_name);
 
     auto [pr, pg, pb] = get_prim_rgb(scene, prim);
     int aci = rgb_to_aci(pr, pg, pb);
 
-    if (mode == "polyface") {
+    // Polyface counts (71/72) and vertex indices (71-74) are signed
+    // 16-bit fields. Larger meshes use independent 3DFACE triangles.
+    const size_t vert_count = prim.positions.size() / 3;
+    if (mode == "polyface" && vert_count <= 32767 && tri_count <= 32767) {
       // Structure verified against real ezdxf's own render_polyface()
       // output byte-for-byte, not guessed: face-record VERTEX entries
       // carry a color (62) and dummy 0/0/0 coordinates but NOT the
@@ -2996,7 +3066,6 @@ std::string to_dxf(const Scene& scene, double scale, const std::string& mode) {
       // Model_Space's - both were wrong here before and are exactly why
       // AutoCAD desktop rejected polyface-mode output while accepting
       // 3dface-mode output using the same scaffold.
-      std::size_t vert_count = prim.positions.size() / 3;
       std::string polyline_handle = next_handle();
 
       lines.push_back("  0");
@@ -3104,9 +3173,9 @@ std::string to_dxf(const Scene& scene, double scale, const std::string& mode) {
     }
 
     for (size_t i = 0; i < tri_count; ++i) {
-      uint32_t i0 = prim.indices[i * 3];
-      uint32_t i1 = prim.indices[i * 3 + 1];
-      uint32_t i2 = prim.indices[i * 3 + 2];
+      size_t i0 = prim.indices[i * 3];
+      size_t i1 = prim.indices[i * 3 + 1];
+      size_t i2 = prim.indices[i * 3 + 2];
 
       std::string v0x = fmt6(prim.positions[i0 * 3] * scale);
       std::string v0y = fmt6(prim.positions[i0 * 3 + 1] * scale);
@@ -3172,6 +3241,7 @@ std::string to_dxf(const Scene& scene, double scale, const std::string& mode) {
   }
 
   std::stringstream hs_stream;
+  hs_stream.imbue(std::locale::classic());
   hs_stream << std::hex << std::uppercase << (handle_id + 0x10);
   std::string handseed_str = hs_stream.str();
   std::size_t pos = text.find("__HANDSEED__");
