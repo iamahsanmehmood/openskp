@@ -4,14 +4,16 @@
 // src/create.cpp) and dumps each result to <outdir>/<name>.skp. tests/create_reference_test.rs
 // replays the same scenarios through the Rust port and asserts byte equality.
 //
-// To regenerate: copy create.cpp/create.hpp/model.hpp/observability.hpp/scaffold_blank_v17.hpp,
-// add an `export.hpp` defining an empty OPENSKP_EXPORT, and patch create.cpp so it is
-// reproducible - `random_uuid_bytes()` returns GUID n (a global counter `oracle_guid_counter`,
-// reset per scenario) as bytes (n*16 + i) & 0xFF with the v4 version/variant bits applied, and
-// `std::time(nullptr)` becomes 1700000000 - which is exactly what
-// `SkpBuilder::use_deterministic_ids(1700000000)` does on the Rust side. Build (MSVC:
-// `cl /std:c++17 /EHsc /O2 /I include create.cpp oracle_driver.cpp`) and run it from the crate
-// root (texture paths are relative and embedded verbatim in the files).
+// To regenerate, from the repository root:
+//
+//   python packages/rust/tests/fixtures/create_reference/regenerate.py
+//
+// It builds this driver against a copy of packages/cpp/src/create.cpp patched to be reproducible
+// - `random_uuid_bytes()` returns GUID n (a global counter `oracle_guid_counter`, reset per
+// scenario) as bytes (n*16 + i) & 0xFF with the v4 version/variant bits applied, and
+// `std::time(nullptr)` becomes 1700000000, which is exactly what
+// `SkpBuilder::use_deterministic_ids(1700000000)` does on the Rust side - then runs it from the
+// crate root (texture paths are relative and embedded verbatim in the files).
 //
 // The files are generated with the C++ writer of openskp v1.5.0. (Run against v1.4.0, this same
 // driver reproduces the earlier files byte for byte, minus the 1.5.0-only scenarios at the end.)
