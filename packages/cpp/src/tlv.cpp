@@ -62,7 +62,13 @@ static const std::set<std::string> containers = {
     "384A", "B80B", "9713", "2C4C", "AC0D", "AE0D", "F601", "F801", "983A", "993A", "8C3C",
     "8D3C", "9013", "401F", "9113", "9213", "6942", "6C42", "6842"};
 
-std::vector<TlvNode> parse_tlv_recursive(const ByteBuffer& d, std::size_t start, std::size_t end) {
+void throw_tlv_too_deep(const std::string& tag, std::size_t offset) {
+  throw SkpParseError("TLV records nest deeper than " + std::to_string(kMaxTlvDepth) + " levels",
+                      ParseStage::tlv_walk, {}, {}, tag, offset);
+}
+
+std::vector<TlvNode> parse_tlv_recursive(const ByteBuffer& d, std::size_t start, std::size_t end,
+                                         int depth) {
   if (end > d.size() || start > end) throw std::out_of_range("invalid TLV range");
   std::vector<TlvNode> out;
   std::size_t p = start;
@@ -74,7 +80,10 @@ std::vector<TlvNode> parse_tlv_recursive(const ByteBuffer& d, std::size_t start,
     n.offset = p;
     n.size = size;
     n.tag = tag;
-    if (size && containers.count(tag)) n.children = parse_tlv_recursive(d, p + 6, p + 6 + size);
+    if (size && containers.count(tag)) {
+      if (depth >= kMaxTlvDepth) throw_tlv_too_deep(tag, p);
+      n.children = parse_tlv_recursive(d, p + 6, p + 6 + size, depth + 1);
+    }
     if (n.children.empty() && size)
       n.payload.assign(d.begin() + static_cast<std::ptrdiff_t>(p + 6),
                        d.begin() + static_cast<std::ptrdiff_t>(p + 6 + size));

@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — hostile files: deep nesting, deep `meta.dat` wrappers and truncated `model.dat` (#496, #497, #498)
+
+All five readers handled three kinds of damaged or hostile input badly. They now behave the same way.
+
+- **Deeply nested `model.dat` (#496).** The TLV parser descended into every container with no depth
+  limit. A 157 KB file nesting containers 100,000 deep killed the C++ process (SIGSEGV) and aborted
+  the .NET process ("Stack overflow", which no `catch` can intercept), and gave `RangeError`,
+  `RecursionError` or `StackOverflowError` in TypeScript, Python and Dart. Containers now nest at
+  most 64 levels, and deeper input raises the library's own parse error (stage `tlv_walk`, with the
+  tag and offset). Real files nest about a dozen levels at most: the deepest of the 53 modern-format
+  files checked (the repository's fixtures and other real files) reaches 11. The same limit applies to nested attribute dictionaries (C++ walked those with its own
+  recursion) and to nested definition-list wrappers (`F901`, TypeScript).
+- **Nested `6400` records in `meta/meta.dat` (#497).** `read_meta_units` called itself on every
+  `6400` wrapper, so the stack grew with the depth (and C++, .NET and Python copied nearly the whole
+  payload at every level: 3.4 s and 5.9 GB in .NET for 100,000 levels). The wrappers are now
+  followed in a loop over offsets, with no copies, and more than 64 of them gives unknown units
+  (`units` is `None`/`null`) instead of an error: the units are optional information, so a bad
+  `meta.dat` does not reject an otherwise valid model. TypeScript used to fail the whole parse here.
+- **Truncated `model.dat` (#498).** A `model.dat` cut short anywhere inside its single top-level
+  `F401` record used to parse as a model with no geometry and no error. It now raises a parse error
+  saying the record declares more bytes than the data holds. Only the top-level record is checked:
+  in real files some container payloads end with bytes that are not records (text that parses as
+  headers whose lengths overrun the container, found at the same depth in all 53 files checked), so the nested records stay lenient. Every real file ends exactly on its top-level record.
 ### Fixed — files the TypeScript, .NET and Dart writers produced could not be saved by SketchUp for Web (#492)
 
 The Python and C++ writers already gave every entity in a file its own persistent id. The other
