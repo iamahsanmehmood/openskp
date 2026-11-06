@@ -114,6 +114,12 @@ cd packages/rust
 cargo test --release
 ```
 
+The writer's reference files (`packages/rust/tests/fixtures/create_reference/*.skp`) come from
+the C++ writer. After a change to `packages/cpp/src/create.cpp`, regenerate them with
+`python packages/rust/tests/fixtures/create_reference/regenerate.py` (needs a C++17 compiler),
+then run `cargo test --release --test create_reference_test` to see what the Rust writer must
+follow.
+
 ---
 
 ## Running Tests
