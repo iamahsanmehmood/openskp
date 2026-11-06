@@ -201,10 +201,10 @@ TEST(DxfExport, MalformedUtf8NamesKeepGeometryAndValidText) {
        "ok",
        "_ok"},
       {"\xE4"
-       u8"柜",
+       "\xE6\x9F\x9C",
        "_\\U+67DC"},  // Preserve the next valid sequence.
       {"\x80"
-       u8"😀",
+       "\xF0\x9F\x98\x80",
        "_\\U+D83D\\U+DE00"},
   };
   for (const auto* mode : {"polyface", "3dface"}) {
