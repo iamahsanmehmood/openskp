@@ -1,3 +1,5 @@
+import { SkpParseError } from './errors';
+
 export interface TlvNode {
   offset: number;
   tag: string;
@@ -59,6 +61,22 @@ export function parseVarInt(data: Uint8Array, offset: number, length: number): n
   return val;
 }
 
+/**
+ * Deepest container nesting the parser follows. A real model.dat nests about
+ * a dozen levels (the deepest file checked reaches 11); a hostile file can
+ * nest tens of thousands, which would overflow the call stack before any
+ * error could be reported, so deeper input throws a {@link SkpParseError}.
+ */
+export const MAX_TLV_DEPTH = 64;
+
+function nestingError(tag: string, offset: number): SkpParseError {
+  return new SkpParseError(`TLV records nest deeper than ${MAX_TLV_DEPTH} levels`, {
+    stage: 'tlv_walk',
+    tag,
+    offset,
+  });
+}
+
 export function parseTlvRecursive(
   data: Uint8Array,
   start: number,
@@ -88,6 +106,7 @@ export function parseTlvRecursive(
     const isContainer = containerTags.has(tagHex);
 
     if (isContainer && size > 0) {
+      if (depth >= MAX_TLV_DEPTH) throw nestingError(tagHex, pos);
       children = parseTlvRecursive(
         data,
         pos + 6,
@@ -135,6 +154,29 @@ function flatHeaders(data: Uint8Array, start: number, end: number): [string, num
   return headers;
 }
 
+/** Throw if a top-level record declares more bytes than the data holds.
+ *
+ * `flatHeaders` stops quietly at such a record, so a model.dat cut short
+ * anywhere inside its single F401 record would parse as a model with no
+ * geometry and no error. Real files end exactly where their last top-level
+ * record does. Records nested inside it are deliberately left lenient: in
+ * real files some container payloads end with bytes that are not records,
+ * and a strict check there would reject valid models. */
+function requireCompleteTopLevel(data: Uint8Array, start: number, end: number): void {
+  let pos = start;
+  while (pos <= end - 6) {
+    const size = readU32(data, pos + 2);
+    if (pos + 6 + size > end) {
+      const tag = ((data[pos] << 8) | data[pos + 1]).toString(16).toUpperCase().padStart(4, '0');
+      throw new SkpParseError(
+        `model.dat is truncated: the top-level record declares ${size} bytes but only ${end - pos - 6} remain`,
+        { stage: 'tlv_walk', tag, offset: pos }
+      );
+    }
+    pos += 6 + size;
+  }
+}
+
 export interface TopLevelRecord {
   index: number;
   total: number;
@@ -156,13 +198,17 @@ const PASS_THROUGH_WRAPPERS = new Set<string>(['F901', '7017', '7117']);
 function expandWrappers(
   data: Uint8Array,
   headers: [string, number, number][],
-  containerTags: Set<string>
+  containerTags: Set<string>,
+  depth: number = 0
 ): [string, number, number][] {
   const out: [string, number, number][] = [];
   for (const header of headers) {
     const [tag, offset, size] = header;
     if (PASS_THROUGH_WRAPPERS.has(tag) && containerTags.has(tag)) {
-      out.push(...expandWrappers(data, flatHeaders(data, offset + 6, offset + 6 + size), containerTags));
+      if (depth >= MAX_TLV_DEPTH) throw nestingError(tag, offset);
+      out.push(
+        ...expandWrappers(data, flatHeaders(data, offset + 6, offset + 6 + size), containerTags, depth + 1)
+      );
     } else {
       out.push(header);
     }
@@ -187,6 +233,7 @@ export function* iterTopLevelLazy(
   end: number,
   containerTags: Set<string> = CONTAINER_TAGS
 ): Generator<TopLevelRecord> {
+  requireCompleteTopLevel(data, start, end);
   let headers = flatHeaders(data, start, end);
   if (headers.length === 1 && headers[0][0] === 'F401') {
     const [, f401Offset, f401Size] = headers[0];

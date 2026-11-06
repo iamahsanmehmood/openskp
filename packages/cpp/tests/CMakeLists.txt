@@ -41,6 +41,7 @@ add_executable(
   obj_material_names_test.cpp
   observability_test.cpp
   pages_dimensions_test.cpp
+  parser_limits_test.cpp
   parser_test.cpp
   ply_export_test.cpp
   scene_test.cpp

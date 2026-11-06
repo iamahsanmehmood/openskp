@@ -195,6 +195,20 @@ def _detach_tlv_payloads(nodes):
             _detach_tlv_payloads(node.children)
 
 
+# A real model.dat nests TLV containers about a dozen levels deep (the deepest
+# file checked reaches 11). A hostile file can nest them tens of thousands of
+# levels deep, which exhausts the stack before anything can be reported, so
+# the parser stops at this depth with a parse error instead.
+_MAX_TLV_DEPTH = 64
+
+
+def _nesting_error(tag, offset):
+    return SkpParseError(
+        f"TLV records nest deeper than {_MAX_TLV_DEPTH} levels",
+        stage="tlv_walk", tag=tag, offset=offset,
+    )
+
+
 def parse_tlv_recursive(data, start, end, container_tags=None, depth=0):
     if container_tags is None:
         container_tags = CONTAINER_TAGS
@@ -212,6 +226,8 @@ def parse_tlv_recursive(data, start, end, container_tags=None, depth=0):
         if payload_end > end:
             break
         if size > 0 and tag_hex in container_tags:
+            if depth >= _MAX_TLV_DEPTH:
+                raise _nesting_error(tag_hex, pos)
             children = parse_tlv_recursive(data, payload_start, payload_end, container_tags, depth+1)
         else:
             children = []
@@ -248,7 +264,7 @@ class _GeometryRecordNode(_TlvNode):
         return self._children
 
 
-def _parse_tlv_geometry(data, start, end, container_tags):
+def _parse_tlv_geometry(data, start, end, container_tags, depth=0):
     """Build the structural tree, decoding exact common geometry in place.
 
     The public TLV parser is unchanged. Unknown layouts take its usual node
@@ -273,8 +289,10 @@ def _parse_tlv_geometry(data, start, end, container_tags):
                 pos = payload_end
                 continue
         if size > 0 and tag in container_tags:
+            if depth >= _MAX_TLV_DEPTH:
+                raise _nesting_error(tag, pos)
             parser = parse_tlv_recursive if tag == '6419' else _parse_tlv_geometry
-            children = parser(data, payload_start, payload_end, container_tags)
+            children = parser(data, payload_start, payload_end, container_tags, depth + 1)
         else:
             children = []
         elements.append(_TlvNode(pos, tag, size, children, data,
@@ -299,6 +317,29 @@ def _flat_headers(data, start, end):
         headers.append((tag_strings[tag_value], pos, size))
         pos += 6 + size
     return headers
+
+
+def _require_complete_top_level(data, start, end):
+    """Raise if a top-level record declares more bytes than the data holds.
+
+    ``_flat_headers`` stops quietly at such a record, so a ``model.dat`` cut
+    short anywhere inside its single ``F401`` record would parse as a model
+    with no geometry and no error. Real files end exactly where their last
+    top-level record does. Records nested inside it are deliberately left
+    lenient: in real files some container payloads end with bytes that are
+    not records, and a strict check there would reject valid models.
+    """
+    tag_strings = _TAG_STRINGS or _tag_strings()
+    pos = start
+    while pos <= end - 6:
+        tag_value, size = _unpack_header(data, pos)
+        if pos + 6 + size > end:
+            raise SkpParseError(
+                f"model.dat is truncated: the top-level record declares {size} "
+                f"bytes but only {end - pos - 6} remain",
+                stage="tlv_walk", tag=tag_strings[tag_value], offset=pos,
+            )
+        pos += 6 + size
 
 
 _DEFINITION_LIST_WRAPPER_CHAIN = ('7017', '7117')
@@ -359,6 +400,7 @@ def iter_top_level_lazy(data, start, end, container_tags=None, *, _geometry=Fals
     if container_tags is None:
         container_tags = CONTAINER_TAGS
 
+    _require_complete_top_level(data, start, end)
     headers = _flat_headers(data, start, end)
     if len(headers) == 1 and headers[0][0] == 'F401':
         _, f401_offset, f401_size = headers[0]
@@ -1689,17 +1731,29 @@ def _read_meta_units(meta_bytes: bytes):
     """Extract the model's unit-system string from a VFF file's
     meta/meta.dat contents, or ``None`` if the expected tags aren't
     found."""
-    pos = 0
-    while pos + 6 <= len(meta_bytes):
-        tag = meta_bytes[pos:pos + 2]
-        size = struct.unpack_from('<I', meta_bytes, pos + 2)[0]
-        if pos + 6 + size > len(meta_bytes):
-            break
-        if tag == _META_WRAPPER_TAG:
-            return _read_meta_units(meta_bytes[pos + 6:pos + 6 + size])
-        if tag == _META_UNITS_TAG:
-            return meta_bytes[pos + 6:pos + 6 + size].decode('utf-8', errors='replace')
-        pos += 6 + size
+    # Real files have one wrapper record around the units. Follow wrappers
+    # in a loop over (start, end) offsets, not by recursing on slices: a
+    # file with thousands of nested wrappers would otherwise exhaust the
+    # stack and copy almost the whole payload at every level. Deeper than
+    # _MAX_TLV_DEPTH wrappers is not a real file; the units are then unknown.
+    start, end = 0, len(meta_bytes)
+    for _ in range(_MAX_TLV_DEPTH + 1):
+        pos = start
+        inner = None
+        while pos + 6 <= end:
+            tag = meta_bytes[pos:pos + 2]
+            size = struct.unpack_from('<I', meta_bytes, pos + 2)[0]
+            if pos + 6 + size > end:
+                break
+            if tag == _META_WRAPPER_TAG:
+                inner = (pos + 6, pos + 6 + size)
+                break
+            if tag == _META_UNITS_TAG:
+                return meta_bytes[pos + 6:pos + 6 + size].decode('utf-8', errors='replace')
+            pos += 6 + size
+        if inner is None:
+            return None
+        start, end = inner
     return None
 
 
