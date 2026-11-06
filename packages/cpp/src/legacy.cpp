@@ -217,14 +217,15 @@ std::string decode_utf16le_range(const ByteBuffer& d, size_t pos, size_t char_co
   for (size_t i = 0; i < char_count; ++i) {
     uint32_t c = read_u16(d, pos);
     pos += 2;
-    if (c >= 0xD800 && c <= 0xDBFF) {
-      if (++i == char_count) throw std::runtime_error("incomplete UTF-16 surrogate pair");
-      const auto low = read_u16(d, pos);
-      pos += 2;
-      if (low < 0xDC00 || low > 0xDFFF) throw std::runtime_error("invalid UTF-16 surrogate pair");
-      c = 0x10000 + ((c - 0xD800) << 10) + (low - 0xDC00);
-    } else if (c >= 0xDC00 && c <= 0xDFFF) {
-      throw std::runtime_error("unpaired UTF-16 low surrogate");
+    if (c >= 0xD800 && c <= 0xDFFF) {
+      const auto low = c <= 0xDBFF && i + 1 < char_count ? read_u16(d, pos) : 0;
+      if (low >= 0xDC00 && low <= 0xDFFF) {
+        c = 0x10000 + ((c - 0xD800) << 10) + (low - 0xDC00);
+        ++i;
+        pos += 2;
+      } else {
+        c = 0xFFFD;
+      }
     }
     if (c < 0x80)
       s += char(c);
