@@ -906,11 +906,20 @@ class ArchiveWriter {
   void write_str(const std::string& s) {
     std::u16string encoded = utf8_to_utf16(s);
     std::size_t n = encoded.size();
-    if (n >= 0xFF) throw SkpWriteError("string too long to encode (255 char limit)");
+    if (n >= 0xFFFFFFFFu) throw SkpWriteError("string too long to encode");
     buf.push_back(0xFF);
     buf.push_back(0xFE);
     buf.push_back(0xFF);
-    buf.push_back(static_cast<std::uint8_t>(n));
+    if (n < 0xFF) {
+      buf.push_back(static_cast<std::uint8_t>(n));
+    } else if (n < 0xFFFE) {
+      buf.push_back(0xFF);
+      append_u16(buf, static_cast<std::uint32_t>(n));
+    } else {
+      buf.push_back(0xFF);
+      append_u16(buf, 0xFFFFu);
+      append_u32(buf, static_cast<std::uint32_t>(n));
+    }
     for (char16_t c : encoded) {
       buf.push_back(static_cast<std::uint8_t>(c & 0xFF));
       buf.push_back(static_cast<std::uint8_t>((c >> 8) & 0xFF));
