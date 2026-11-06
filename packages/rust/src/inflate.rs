@@ -424,6 +424,11 @@ fn zlib_inner(input: &[u8], limit: usize) -> Result<Vec<u8>, InflateError> {
 }
 
 /// Decodes a complete zlib stream (RFC 1950), verifying the Adler-32 trailer.
+///
+/// The output size is **not** limited: a small hostile stream can expand to
+/// gigabytes. Use this only on input you trust (for example, data you just
+/// compressed yourself); for untrusted input use [`zlib_decompress_capped`].
+/// The library itself never calls this on file data.
 pub fn zlib_decompress(input: &[u8]) -> Result<Vec<u8>, InflateError> {
     zlib_inner(input, usize::MAX)
 }

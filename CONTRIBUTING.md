@@ -39,7 +39,7 @@ This project follows the [Contributor Covenant v2.1](CODE_OF_CONDUCT.md). By par
 | .NET | .NET SDK 8.0+ |
 | Dart | Dart SDK 3.0+ |
 | C++ | CMake 3.21+, a C++17 compiler |
-| Rust | Rust stable (via `rustup`); the `wasm32-unknown-unknown` target only for the viewer |
+| Rust | Rust 1.88 or newer (via `rustup`; CI tests stable and 1.88); the `wasm32-unknown-unknown` target only for the viewer |
 | All | Git, a good hex editor (recommended) |
 
 ### Understanding the Codebase

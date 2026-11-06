@@ -2,6 +2,8 @@
 name = "openskp"
 version = "1.5.0"
 edition = "2021"
+# Oldest toolchain supported; CI tests it (`msrv` job in ci-rust.yml).
+rust-version = "1.88"
 description = "Open-source SketchUp (.skp) binary file parser, writer, and converter - pure Rust port of OpenSKP"
 license = "MIT"
 
