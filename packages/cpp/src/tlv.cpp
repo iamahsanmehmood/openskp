@@ -9,6 +9,20 @@ static void require_range(const ByteBuffer& d, std::size_t o, std::size_t n) {
   if (o > d.size() || n > d.size() - o) throw std::out_of_range("binary read exceeds buffer");
 }
 
+// Classic CArchive and VFF both store UUID Data1/Data2/Data3 in Windows order.
+std::string guid_from_windows_bytes(const ByteBuffer& bytes) {
+  if (bytes.size() != 16) throw std::invalid_argument("GUID must contain exactly 16 bytes");
+  constexpr std::size_t order[]{3, 2, 1, 0, 5, 4, 7, 6, 8, 9, 10, 11, 12, 13, 14, 15};
+  constexpr char hex[] = "0123456789ABCDEF";
+  std::string result;
+  result.reserve(32);
+  for (const auto i : order) {
+    result += hex[bytes[i] >> 4];
+    result += hex[bytes[i] & 15];
+  }
+  return result;
+}
+
 std::uint16_t read_u16(const ByteBuffer& d, std::size_t o) {
   require_range(d, o, 2);
   return std::uint16_t(d[o]) | std::uint16_t(d[o + 1]) << 8;
