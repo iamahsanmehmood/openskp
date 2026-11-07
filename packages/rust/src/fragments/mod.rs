@@ -48,9 +48,16 @@ const MODEL_GUID: &str = "00000000-0000-0000-0000-000000000000";
 /// C++ recurses without a limit; a hostile buffer could exhaust the stack).
 const MAX_SPATIAL_DEPTH: usize = 256;
 
-/// Maximum total spatial structure nodes expanded on read (guards against
-/// exponential DAG offset aliasing in hostile FlatBuffers).
+/// Maximum total spatial structure nodes read. Every node must also be its
+/// own table (see `FragReader::build_node`), so a buffer cannot alias one
+/// subtree from many parents to expand exponentially.
 const MAX_SPATIAL_NODES: usize = 10_000_000;
+
+/// Children slots reserved up front, whatever length the buffer claims: a
+/// node is far larger than the 4-byte offset that names it, so trusting the
+/// length would let a small buffer request a huge allocation. (No test can
+/// see the difference: 64-bit allocators commit such a reservation lazily.)
+const MAX_CHILDREN_RESERVE: usize = 1024;
 
 /// Maximum decompressed `.frag` payload size (2 GiB).
 const MAX_FRAGMENTS_DECOMPRESSED_BYTES: usize = 2 * 1024 * 1024 * 1024;
@@ -770,8 +777,13 @@ struct FragReader<'a> {
     generated_name_guids: BTreeSet<String>,
     mesh_resources: Vec<InstancedMeshResource>,
     resource_by_signature: HashMap<String, String>,
+    /// The resource each item resolved to, so an item named by several
+    /// spatial nodes is built once.
+    resource_by_item: HashMap<usize, String>,
     warned_unsupported: bool,
     visited_nodes: usize,
+    /// Buffer positions of the spatial nodes read so far.
+    visited_tables: HashSet<usize>,
 }
 
 impl<'a> FragReader<'a> {
@@ -789,6 +801,15 @@ impl<'a> FragReader<'a> {
     /// The mesh resource for one item's samples; items whose samples
     /// reference the same (representation, material) pairs share one.
     fn build_resource_for_item(&mut self, item_idx: usize, item_name: &str) -> ReadResult<String> {
+        if let Some(found) = self.resource_by_item.get(&item_idx) {
+            return Ok(found.clone());
+        }
+        let resource_id = self.build_resource_uncached(item_idx, item_name)?;
+        self.resource_by_item.insert(item_idx, resource_id.clone());
+        Ok(resource_id)
+    }
+
+    fn build_resource_uncached(&mut self, item_idx: usize, item_name: &str) -> ReadResult<String> {
         let sample_indices = self
             .samples_by_item
             .get(&(item_idx as u32))
@@ -889,6 +910,16 @@ impl<'a> FragReader<'a> {
                 "spatial structure exceeds maximum of {MAX_SPATIAL_NODES} nodes"
             )));
         }
+        // A spatial structure is a tree. Offsets come from the buffer, so a
+        // hostile one can point many parents at one subtree (a DAG that
+        // expands exponentially within the depth limit); every writer gives
+        // each node its own table, so a second visit is rejected.
+        if !self.visited_tables.insert(spatial.0.pos()) {
+            return Err(InvalidFlatbuffer::new(format!(
+                "spatial structure node at {} has more than one parent",
+                spatial.0.pos()
+            )));
+        }
         let category = spatial
             .category()?
             .map(|s| s.to_string_lossy())
@@ -936,7 +967,8 @@ impl<'a> FragReader<'a> {
         }
 
         if let Some(children) = spatial.children()? {
-            node.children.reserve(children.len());
+            node.children
+                .reserve(children.len().min(MAX_CHILDREN_RESERVE));
             for child in children.iter() {
                 node.children.push(self.build_node(child?, depth + 1)?);
             }
@@ -1063,8 +1095,10 @@ fn read_model(raw: &[u8]) -> ReadResult<InstancedScene> {
         generated_name_guids,
         mesh_resources: Vec::new(),
         resource_by_signature: HashMap::new(),
+        resource_by_item: HashMap::new(),
         warned_unsupported: false,
         visited_nodes: 0,
+        visited_tables: HashSet::new(),
     };
 
     let scene_hierarchy = match model.spatial_structure()? {
@@ -1098,16 +1132,23 @@ fn read_model(raw: &[u8]) -> ReadResult<InstancedScene> {
 /// flat-shaded with zero UVs; samples of a non-SHELL representation (e.g.
 /// CIRCLE_EXTRUSION) are skipped with a one-time warning on stderr.
 pub fn from_fragments(data: &[u8]) -> Result<InstancedScene, FragmentsError> {
-    let inflated =
-        match crate::inflate::zlib_decompress_capped(data, MAX_FRAGMENTS_DECOMPRESSED_BYTES) {
-            Ok(buf) => Some(buf),
-            Err(crate::inflate::InflateError::OutputLimit) => {
-                return Err(FragmentsError::InvalidBuffer(InvalidFlatbuffer::new(
-                    "decompressed fragments payload exceeds safety limit",
-                )));
-            }
-            Err(_) => None,
-        };
+    from_fragments_capped(data, MAX_FRAGMENTS_DECOMPRESSED_BYTES)
+}
+
+/// [`from_fragments`] with the decompressed size capped at `max_inflated`.
+fn from_fragments_capped(
+    data: &[u8],
+    max_inflated: usize,
+) -> Result<InstancedScene, FragmentsError> {
+    let inflated = match crate::inflate::zlib_decompress_capped(data, max_inflated) {
+        Ok(buf) => Some(buf),
+        Err(crate::inflate::InflateError::OutputLimit) => {
+            return Err(FragmentsError::InvalidBuffer(InvalidFlatbuffer::new(
+                "decompressed fragments payload exceeds safety limit",
+            )));
+        }
+        Err(_) => None,
+    };
     let raw = inflated.as_deref().unwrap_or(data);
     Ok(read_model(raw)?)
 }
@@ -1200,5 +1241,19 @@ mod tests {
         let e = read_fragments("definitely/not/here.frag").unwrap_err();
         assert!(matches!(e, FragmentsError::Io { .. }));
         assert!(e.to_string().contains("could not open"));
+    }
+
+    #[test]
+    fn a_payload_that_inflates_past_the_cap_is_rejected() {
+        // The real cap is 2 GiB (the largest FlatBuffer); the same path at 1 MiB.
+        let bomb = crate::deflate::zlib_compress(&vec![0u8; 4 << 20], ZLIB_LEVEL);
+        assert!(bomb.len() < 64 << 10);
+        let err = from_fragments_capped(&bomb, 1 << 20).unwrap_err();
+        assert!(err.to_string().contains("exceeds safety limit"), "{err}");
+        // Under the cap the zeros inflate, and are then not a FlatBuffer.
+        assert!(matches!(
+            from_fragments_capped(&bomb, 8 << 20),
+            Err(FragmentsError::InvalidBuffer(e)) if !e.message().contains("safety limit")
+        ));
     }
 }
