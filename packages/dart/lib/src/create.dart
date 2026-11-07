@@ -158,11 +158,9 @@ final List<(int, List<int>)> _isoCameraTailPatches = [
 /// are appended after it).
 const int _activeLayerAnchorRel = 0;
 
-/// Absolute offset of a u16 "next available pid" counter that lives BEFORE
-/// the material insertion point (so only its value, not its position,
-/// needs correction). Increments by exactly the material COUNT (one pid
-/// consumed per material object; the material class declaration itself
-/// doesn't consume a pid). Confirmed up to N=300.
+/// Absolute offset of the u32 persistent-id counter that lives BEFORE the
+/// material insertion point (so only its value, not its position, needs
+/// correction): the last pid handed out, in every section of the file.
 const int _pidCounterPos = 1987;
 
 const int _materialSchema = 12;
@@ -317,10 +315,8 @@ List<int> _f64(double v) {
 
 int _readU16At(List<int> buf, int pos) => buf[pos] | (buf[pos + 1] << 8);
 
-void _patchU16(List<int> buf, int pos, int val) {
-  buf[pos] = val & 0xFF;
-  buf[pos + 1] = (val >> 8) & 0xFF;
-}
+int _readU32At(List<int> buf, int pos) =>
+    buf[pos] | (buf[pos + 1] << 8) | (buf[pos + 2] << 16) | (buf[pos + 3] << 24);
 
 void _patchU32(List<int> buf, int pos, int val) {
   buf[pos] = val & 0xFF;
@@ -1784,7 +1780,9 @@ class _ArchiveWriter {
     buf.addAll(_f64(nx));
     buf.addAll(_f64(ny));
     buf.addAll(_f64(nz));
-    buf.addAll(_f64(d));
+    // SketchUp stores a face's plane as n.p + d = 0 (checked on real files), so d is minus the
+    // fitted n.centroid; _planeFromPolygon returns +n.centroid.
+    buf.addAll(_f64(-d));
     buf.addAll(_u32(1 + holes.length)); // nloops
 
     final loopSlot = _newOfKnownClass('CLoop', schema: 1);
@@ -2272,6 +2270,15 @@ class SkpBuilder implements GeometryHost {
   /// (possibly absent) material section would have occupied.
   late final _ArchiveWriter _materialWriter;
 
+  /// First persistent id this builder hands out: one past the scaffold's own
+  /// counter.
+  late final int _pidStart;
+
+  /// The next free persistent ID: sections are written in order (materials,
+  /// layers, definitions, root geometry), each continuing where the previous
+  /// one stopped.
+  int _nextPid() => (_geometryWriter ?? _definitionWriter ?? _layerWriter ?? _materialWriter).nextPid;
+
   /// Every material registered so far, by name - populated by
   /// [addMaterial]/[addTextureMaterial] as a side effect (they already
   /// de-dupe by name through this same map). Useful for reusing a handle
@@ -2363,7 +2370,14 @@ class SkpBuilder implements GeometryHost {
     _tailPos = tailPos;
     _scaffoldNextSlot = ar.nextSlot;
     _scaffoldClassSlot = Map<String, int>.from(ar.classSlot);
-    _materialWriter = _ArchiveWriter(nextSlot: base, classSlot: {});
+    // Persistent IDs run in ONE sequence across every section of the file,
+    // continuing from the scaffold's own counter (a u32 at _pidCounterPos).
+    // Each section's writer used to start at 1 again, so a definition, a root
+    // instance and a material could all carry pid 1: SketchUp loads such a
+    // file, renumbers the duplicates, and then cannot SAVE it (SketchUp for
+    // Web: "Save Failed") once ids above the header counter are in use.
+    _pidStart = _readU32At(data, _pidCounterPos) + 1;
+    _materialWriter = _ArchiveWriter(nextSlot: base, classSlot: {}, nextPid: _pidStart);
     _layerWriterBase = layerWriterBase;
   }
 
@@ -2463,7 +2477,11 @@ class SkpBuilder implements GeometryHost {
       // shifts by materialShift. The scaffold-derived classSlot map still
       // has its raw, unshifted value, so correct every entry before
       // handing it to a writer that might look one up.
-      _layerWriter = _ArchiveWriter(nextSlot: _layerWriterStart!, classSlot: _materialShiftedClassSlot());
+      _layerWriter = _ArchiveWriter(
+        nextSlot: _layerWriterStart!,
+        classSlot: _materialShiftedClassSlot(),
+        nextPid: _materialWriter.nextPid,
+      );
     }
     final slot = _layerWriter!.writeLayer(name, hidden: hidden, rgba: rgba);
     layersByName[name] = slot;
@@ -2536,7 +2554,11 @@ class SkpBuilder implements GeometryHost {
     }
     if (_definitionWriter == null) {
       _definitionWriterStart = _scaffoldNextSlot + (_materialWriter.nextSlot - _base) + _layerShift();
-      _definitionWriter = _ArchiveWriter(nextSlot: _definitionWriterStart!, classSlot: _postLayerClassSlot());
+      _definitionWriter = _ArchiveWriter(
+        nextSlot: _definitionWriterStart!,
+        classSlot: _postLayerClassSlot(),
+        nextPid: _nextPid(),
+      );
     }
     final (slot, countPatchPos) = _definitionWriter!.writeDefinitionHeader(attributeDicts);
     _definitionCount++;
@@ -2775,6 +2797,7 @@ class SkpBuilder implements GeometryHost {
     _geometryWriter = _ArchiveWriter(
       nextSlot: _scaffoldNextSlot + materialShift + _layerShift() + _definitionShift(),
       classSlot: _postDefinitionClassSlot(),
+      nextPid: _nextPid(),
     );
     // Flush any groups that closed earlier, in the order they were created
     // - deferred until now so closing one group doesn't lock in root-level
@@ -3060,21 +3083,16 @@ class SkpBuilder implements GeometryHost {
 
     final out = <int>[];
 
-    // Each layer's record embeds 2 pids (see writeLayer); materials use 1
-    // pid each (writeMaterial).
-    final layerPids = _layerWriter != null ? (_layerWriter!.nextPid - 1) : 0;
-    final pidDelta = _materialCount + layerPids;
-
     // The 4 bytes right before the material insertion point are a reserved
     // (always-present) mat_count field - zero/implicit in the zero-
     // material scaffold, not a gap that needs new bytes inserted. Real
     // SketchUp overwrites them in place rather than growing the file by 4
     // extra bytes here.
     final prefix = List<int>.from(_data.sublist(0, _materialInsertPos - 4));
-    if (pidDelta != 0) {
-      final cur = _readU16At(prefix, _pidCounterPos);
-      _patchU16(prefix, _pidCounterPos, cur + pidDelta);
-    }
+    // The model's pid counter: the last pid handed out, in every section. A
+    // 32-bit field, so a model with more than 65 535 entities keeps a truthful
+    // counter.
+    _patchU32(prefix, _pidCounterPos, _nextPid() - 1);
     prefix.setRange(
       _isoCameraPrefixOffset,
       _isoCameraPrefixOffset + _isoCameraPrefixPatch.length,

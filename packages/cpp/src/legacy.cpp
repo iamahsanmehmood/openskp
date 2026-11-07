@@ -183,7 +183,69 @@ std::optional<V20FillerHit> find_count_after_v20_filler(const ByteBuffer& d, siz
   return std::nullopt;
 }
 
+// The SketchUp 2020 layout of a model with NO component definitions AND no root entities.
+// find_count_after_v20_filler cannot see it: behind the filler (an empty string record, then 13
+// bytes of padding) the only count is the ROOT entity count, and it is 0, which that search skips
+// as "no count".
+//
+// Returns the offset of that root count (so the caller can put the cursor there and read the zero),
+// or nullopt when the bytes are not that layout: the empty string record has to sit within 12 bytes
+// of count_pos, and the 13 padding bytes and the count behind it have to be all zero.
+std::optional<size_t> find_empty_root_after_v20_filler(const ByteBuffer& d, size_t count_pos) {
+  size_t marker_at = std::string::npos;
+  for (size_t i = count_pos; i + 4 <= d.size() && i < count_pos + 12; ++i) {
+    if (d[i] == 255 && d[i + 1] == 254 && d[i + 2] == 255) {
+      marker_at = i;
+      break;
+    }
+  }
+  if (marker_at == std::string::npos) return std::nullopt;
+  if (d[marker_at + 3] != 0) return std::nullopt;  // non-empty string: real data
+  const size_t root_count_at = marker_at + 4 + 13;
+  if (root_count_at + 4 > d.size()) return std::nullopt;
+  for (size_t i = marker_at + 3; i < root_count_at + 4; ++i)
+    if (d[i] != 0) return std::nullopt;
+  return root_count_at;
+}
+
 namespace {
+// Decode a bounded UTF-16 range for both archive strings and page names.
+std::string decode_utf16le_range(const ByteBuffer& d, size_t pos, size_t char_count) {
+  if (pos > d.size() || char_count > (d.size() - pos) / 2)
+    throw std::out_of_range("legacy UTF-16 string truncated");
+  std::string s;
+  for (size_t i = 0; i < char_count; ++i) {
+    uint32_t c = read_u16(d, pos);
+    pos += 2;
+    if (c >= 0xD800 && c <= 0xDFFF) {
+      const auto low = c <= 0xDBFF && i + 1 < char_count ? read_u16(d, pos) : 0;
+      if (low >= 0xDC00 && low <= 0xDFFF) {
+        c = 0x10000 + ((c - 0xD800) << 10) + (low - 0xDC00);
+        ++i;
+        pos += 2;
+      } else {
+        c = 0xFFFD;
+      }
+    }
+    if (c < 0x80)
+      s += char(c);
+    else if (c < 0x800) {
+      s += char(0xC0 | (c >> 6));
+      s += char(0x80 | (c & 63));
+    } else if (c < 0x10000) {
+      s += char(0xE0 | (c >> 12));
+      s += char(0x80 | ((c >> 6) & 63));
+      s += char(0x80 | (c & 63));
+    } else {
+      s += char(0xF0 | (c >> 18));
+      s += char(0x80 | ((c >> 12) & 63));
+      s += char(0x80 | ((c >> 6) & 63));
+      s += char(0x80 | (c & 63));
+    }
+  }
+  return s;
+}
+
 struct R {
   const ByteBuffer& d;
   size_t p{};
@@ -247,22 +309,8 @@ struct R {
       z = u16();
       if (z == 65535) z = u32();
     }
-    need(size_t(z) * 2);
-    std::string s;
-    for (uint32_t i = 0; i < z; ++i) {
-      uint16_t c = uint16_t(d[p]) | uint16_t(d[p + 1]) << 8;
-      p += 2;
-      if (c < 0x80)
-        s += char(c);
-      else if (c < 0x800) {
-        s += char(0xc0 | (c >> 6));
-        s += char(0x80 | (c & 63));
-      } else {
-        s += char(0xe0 | (c >> 12));
-        s += char(0x80 | ((c >> 6) & 63));
-        s += char(0x80 | (c & 63));
-      }
-    }
+    auto s = decode_utf16le_range(d, p, z);
+    p += size_t(z) * 2;
     return s;
   }
 };
@@ -922,12 +970,7 @@ struct Archive {
       v->xf = r.f64s(12);
       r.f64();    // constant 1.0
       r.utf16();  // source path
-      auto g = r.raw(16);
-      static char h[] = "0123456789ABCDEF";
-      for (auto x : g) {
-        v->guid += h[x >> 4];
-        v->guid += h[x & 15];
-      }
+      v->guid = guid_from_windows_bytes(r.raw(16));
     } else if (n == "CRelationship") {
       // two object pointers (small maps: two u16 back-refs - which read
       // like the "u32" of the public notes; big maps escalate them to
@@ -1241,12 +1284,7 @@ struct Archive {
           }
         }
       }
-      auto g = r.raw(16);
-      static char h[] = "0123456789ABCDEF";
-      for (auto x : g) {
-        v->guid += h[x >> 4];
-        v->guid += h[x & 15];
-      }
+      v->guid = guid_from_windows_bytes(r.raw(16));
       v->name = r.utf16();
       r.utf16();
       r.utf16();
@@ -1622,6 +1660,11 @@ WalkResult walk_model_on(Archive& ar, const ByteBuffer& data, int ver, size_t st
         dc = 0;
         ar.r.p -= 4;
       }
+    } else if (auto root_count_at = find_empty_root_after_v20_filler(data, ar.r.p - 4)) {
+      // No count behind the filler at all: an entirely empty model, whose root count is 0 (the
+      // retry only accepts counts > 0).
+      dc = 0;
+      ar.r.p = *root_count_at;
     }
   }
   if (dc > 1000000) throw std::runtime_error("invalid definition count");
@@ -1859,30 +1902,6 @@ bool is_allowed_page_flags(uint32_t flags) {
   for (auto f : kPageAllowedFlags)
     if (f == flags) return true;
   return false;
-}
-
-// Same conversion R::utf16() applies per UTF-16 code unit (no surrogate
-// pairing - matches this file's existing, already-shipped string
-// decoding elsewhere), just addressed by a raw (pos, char_count) range
-// instead of a cursor, since the page scan below needs to decode a name
-// it has already found the bounds of without re-walking a marker.
-std::string decode_utf16le_range(const ByteBuffer& d, size_t pos, size_t char_count) {
-  std::string s;
-  for (size_t i = 0; i < char_count; ++i) {
-    uint16_t c = uint16_t(d[pos]) | uint16_t(d[pos + 1]) << 8;
-    pos += 2;
-    if (c < 0x80) {
-      s += char(c);
-    } else if (c < 0x800) {
-      s += char(0xc0 | (c >> 6));
-      s += char(0x80 | (c & 63));
-    } else {
-      s += char(0xe0 | (c >> 12));
-      s += char(0x80 | ((c >> 6) & 63));
-      s += char(0x80 | (c & 63));
-    }
-  }
-  return s;
 }
 
 // Consume one reference to an object of `cls_name` - a null tag, a

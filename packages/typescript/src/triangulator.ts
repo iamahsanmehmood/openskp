@@ -32,6 +32,35 @@ export function computeFaceNormal(
 }
 
 /**
+ * Whether to split the quad along its 0-2 diagonal. A concave quad whose
+ * reflex corner is 1 or 3 has that diagonal outside it: triangles (0,1,2)
+ * and (0,2,3) then turn opposite ways and cover more than the face, and the
+ * 1-3 split covers exactly the face. A self-intersecting or warped quad can
+ * fail the turn test with the 1-3 split no better, so 1-3 is taken only when
+ * it covers less area.
+ */
+function splitQuadAlong02(p: ({ x: number; y: number; z: number } | null)[]): boolean {
+  if (p.some((q) => !q)) return true;
+  const q = p as { x: number; y: number; z: number }[];
+  // Twice the area vector of triangle (a, b, c).
+  const area2 = (a: number, b: number, c: number): [number, number, number] => {
+    const ux = q[b].x - q[a].x, uy = q[b].y - q[a].y, uz = q[b].z - q[a].z;
+    const vx = q[c].x - q[a].x, vy = q[c].y - q[a].y, vz = q[c].z - q[a].z;
+    return [uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx];
+  };
+  const dot = (a: number[], b: number[]) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  const t012 = area2(0, 1, 2);
+  const t023 = area2(0, 2, 3);
+  if (dot(t012, t023) >= 0) return true;
+  const t123 = area2(1, 2, 3);
+  const t130 = area2(1, 3, 0);
+  return (
+    Math.sqrt(dot(t123, t123)) + Math.sqrt(dot(t130, t130)) >=
+    Math.sqrt(dot(t012, t012)) + Math.sqrt(dot(t023, t023))
+  );
+}
+
+/**
  * Projects 3D loop vertices onto a 2D plane using the face normal,
  * runs 'earcut' on the flat coordinates, and maps the resulting triangle indices
  * back to the original 3D vertex IDs.
@@ -52,15 +81,39 @@ export function triangulateFace3D(
 ): number[][] {
   if (loops.length === 0) return [];
 
+  const getVertex = (id: number): { x: number; y: number; z: number } | null => {
+    let pt: any;
+    // Anything exposing a Map-shaped `get` is queried through it; only a
+    // plain Record falls back to index access. Checking for the method
+    // rather than `instanceof Map` is what lets a VertexStore be passed
+    // here without the Record branch silently returning undefined.
+    if (typeof (vertices3D as any).get === 'function') {
+      pt = (vertices3D as any).get(id);
+    } else {
+      pt = (vertices3D as any)[id];
+    }
+    if (!pt) return null;
+    if (Array.isArray(pt)) {
+      return { x: pt[0], y: pt[1], z: pt[2] };
+    }
+    return pt;
+  };
+
   // Trivial optimization for simple triangles and quads (no holes)
   if (loops.length === 1 && loops[0].length === 3) {
     return [loops[0]];
   }
   if (loops.length === 1 && loops[0].length === 4) {
     const v = loops[0];
+    if (splitQuadAlong02(v.map(getVertex))) {
+      return [
+        [v[0], v[1], v[2]],
+        [v[0], v[2], v[3]],
+      ];
+    }
     return [
-      [v[0], v[1], v[2]],
-      [v[0], v[2], v[3]],
+      [v[1], v[2], v[3]],
+      [v[1], v[3], v[0]],
     ];
   }
 
@@ -105,24 +158,6 @@ export function triangulateFace3D(
   if (vLen > 1e-12) {
     vx /= vLen; vy /= vLen; vz /= vLen;
   }
-
-  const getVertex = (id: number): { x: number; y: number; z: number } | null => {
-    let pt: any;
-    // Anything exposing a Map-shaped `get` is queried through it; only a
-    // plain Record falls back to index access. Checking for the method
-    // rather than `instanceof Map` is what lets a VertexStore be passed
-    // here without the Record branch silently returning undefined.
-    if (typeof (vertices3D as any).get === 'function') {
-      pt = (vertices3D as any).get(id);
-    } else {
-      pt = (vertices3D as any)[id];
-    }
-    if (!pt) return null;
-    if (Array.isArray(pt)) {
-      return { x: pt[0], y: pt[1], z: pt[2] };
-    }
-    return pt;
-  };
 
   // 2D (u, v) projection for every loop, kept as parallel per-loop arrays
   // so overlap detection below can work in plain {u, v} coordinates

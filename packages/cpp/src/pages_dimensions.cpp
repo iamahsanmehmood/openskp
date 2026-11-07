@@ -54,17 +54,6 @@ std::optional<ByteBuffer> tlv_find_int(const std::vector<FlatTlvItem>& items, st
   return std::nullopt;
 }
 
-std::string hex_upper(const ByteBuffer& p) {
-  static char h[] = "0123456789ABCDEF";
-  std::string s;
-  s.reserve(p.size() * 2);
-  for (auto b : p) {
-    s += h[b >> 4];
-    s += h[b & 15];
-  }
-  return s;
-}
-
 // 53FE stores SketchUp's instance path as repeated (u8 length, id bytes),
 // outer placement first. A root-level dimension on nested groups names the
 // cabinet AND each inner instance; the vertex is in the innermost definition.
@@ -74,7 +63,7 @@ std::vector<std::string> length_prefixed_ids(const ByteBuffer& p) {
   while (off < p.size()) {
     const std::uint8_t ln = p[off];
     if (ln == 0 || off + 1 + ln > p.size()) break;
-    ids.push_back(hex_upper(ByteBuffer(p.begin() + off + 1, p.begin() + off + 1 + ln)));
+    ids.push_back(bytes_to_upper_hex(ByteBuffer(p.begin() + off + 1, p.begin() + off + 1 + ln)));
     off += 1 + ln;
   }
   return ids;
@@ -127,11 +116,11 @@ std::optional<Vec3> dimension_connection_point(
   auto vid = tlv_find_int(fi, 0x53fd);
   auto iid = tlv_find_int(fi, 0x53fe);
   if (!vid) return std::nullopt;
-  auto local_it = id2pos.find(hex_upper(*vid));
+  auto local_it = id2pos.find(bytes_to_upper_hex(*vid));
   if (local_it == id2pos.end()) return std::nullopt;
   if (iid && !iid->empty()) {
     auto path = length_prefixed_ids(*iid);
-    if (path.empty()) path.push_back(hex_upper(*iid));
+    if (path.empty()) path.push_back(bytes_to_upper_hex(*iid));
     for (auto it = path.rbegin(); it != path.rend(); ++it) {
       auto w_it = inst_world.find(*it);
       if (w_it != inst_world.end() && !w_it->second.empty()) {
@@ -416,8 +405,8 @@ void scan_vertex_positions(const TlvNode& top, std::map<std::string, Vec3>& id2p
       auto* c509 = find_child_tag(el.children, "C509");
       if (dc05 && c509 && c509->payload.size() == 24) {
         auto idb = strip_de05(dc05->payload);
-        id2pos[hex_upper(idb)] = {read_f64(c509->payload, 0), read_f64(c509->payload, 8),
-                                  read_f64(c509->payload, 16)};
+        id2pos[bytes_to_upper_hex(idb)] = {read_f64(c509->payload, 0), read_f64(c509->payload, 8),
+                                           read_f64(c509->payload, 16)};
       }
     }
     for (auto& c : el.children) visit(c);
@@ -446,7 +435,7 @@ void scan_instance_transforms(const TlvNode& top,
           auto* d007 = find_child_tag(el.children, "D007");
           auto* dc05 = d007 ? find_child_tag(d007->children, "DC05") : nullptr;
           std::optional<std::string> iid;
-          if (dc05) iid = hex_upper(strip_de05(dc05->payload));
+          if (dc05) iid = bytes_to_upper_hex(strip_de05(dc05->payload));
 
           auto* m = find_child_tag(el.children, "6619");
           std::optional<std::vector<double>> mat;

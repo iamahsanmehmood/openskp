@@ -131,16 +131,40 @@ namespace OpenSkp
         /// aren't found.</summary>
         public static string? ReadMetaUnits(byte[] metaBytes)
         {
-            var records = Tlv.ParseFlat(metaBytes);
-            var wrapper = Tlv.FindFlat(records, MetaWrapperTag);
-            if (wrapper != null)
+            // Real files have one wrapper record around the units. Wrappers
+            // are followed in a loop over (start, end) offsets, not by
+            // recursing on copies of the body: a file with thousands of
+            // nested wrappers would otherwise overflow the stack, or copy
+            // almost the whole payload at every level (3.4 s and 5.9 GB for
+            // 100,000 levels). More than Tlv.MaxDepth wrappers is not a real
+            // file; the units are then unknown, which is not an error.
+            int start = 0;
+            int end = metaBytes.Length;
+            for (int level = 0; level <= Tlv.MaxDepth; level++)
             {
-                return ReadMetaUnits(wrapper);
-            }
-            var units = Tlv.FindFlat(records, MetaUnitsTag);
-            if (units != null)
-            {
-                return Encoding.UTF8.GetString(units);
+                int pos = start;
+                int innerStart = -1;
+                int innerEnd = -1;
+                while (pos <= end - 6)
+                {
+                    string tag = metaBytes[pos].ToString("X2") + metaBytes[pos + 1].ToString("X2");
+                    long size = Tlv.ReadU32(metaBytes, pos + 2);
+                    if (pos + 6 + size > end) break;
+                    if (tag == MetaWrapperTag)
+                    {
+                        innerStart = pos + 6;
+                        innerEnd = pos + 6 + (int)size;
+                        break;
+                    }
+                    if (tag == MetaUnitsTag)
+                    {
+                        return Encoding.UTF8.GetString(metaBytes, pos + 6, (int)size);
+                    }
+                    pos += 6 + (int)size;
+                }
+                if (innerStart < 0) return null;
+                start = innerStart;
+                end = innerEnd;
             }
             return null;
         }

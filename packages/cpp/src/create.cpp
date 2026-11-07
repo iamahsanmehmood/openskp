@@ -398,6 +398,38 @@ std::array<std::uint8_t, 16> random_uuid_bytes() {
   return b;
 }
 
+// Legacy CArchive UUID fields use Windows GUID byte order, unlike the canonical string.
+std::array<std::uint8_t, 16> archive_uuid(const std::string& value) {
+  auto bytes = random_uuid_bytes();
+  if (!value.empty()) {
+    std::string hex;
+    if (value.size() == 32) {
+      hex = value;
+    } else if (value.size() == 36 && value[8] == '-' && value[13] == '-' && value[18] == '-' &&
+               value[23] == '-') {
+      for (std::size_t i = 0; i < value.size(); ++i)
+        if (i != 8 && i != 13 && i != 18 && i != 23) hex += value[i];
+    } else {
+      throw SkpWriteError("GUID must contain 32 hex digits or use 8-4-4-4-12 notation");
+    }
+    const auto digit = [](char c) -> int {
+      if (c >= '0' && c <= '9') return c - '0';
+      if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+      if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+      return -1;
+    };
+    for (std::size_t i = 0; i < bytes.size(); ++i) {
+      const int a = digit(hex[2 * i]), b = digit(hex[2 * i + 1]);
+      if (a < 0 || b < 0) throw SkpWriteError("GUID contains a non-hex digit");
+      bytes[i] = static_cast<std::uint8_t>((a << 4) | b);
+    }
+  }
+  std::reverse(bytes.begin(), bytes.begin() + 4);
+  std::reverse(bytes.begin() + 4, bytes.begin() + 6);
+  std::reverse(bytes.begin() + 6, bytes.begin() + 8);
+  return bytes;
+}
+
 // Renumber the u16 archive slot-reference at `pos` (within `buf`) by `shift`, preserving the
 // 0x8000 class-ref tag bit if the reference carries one. Widens to the 6-byte escape form (same
 // encoding ArchiveWriter::new_of_known_class/backref use, and the same `< 0x7FFF` boundary) if
@@ -873,11 +905,20 @@ class ArchiveWriter {
   void write_str(const std::string& s) {
     std::u16string encoded = utf8_to_utf16(s);
     std::size_t n = encoded.size();
-    if (n >= 0xFF) throw SkpWriteError("string too long to encode (255 char limit)");
+    if (n >= 0xFFFFFFFFu) throw SkpWriteError("string too long to encode");
     buf.push_back(0xFF);
     buf.push_back(0xFE);
     buf.push_back(0xFF);
-    buf.push_back(static_cast<std::uint8_t>(n));
+    if (n < 0xFF) {
+      buf.push_back(static_cast<std::uint8_t>(n));
+    } else if (n < 0xFFFE) {
+      buf.push_back(0xFF);
+      append_u16(buf, static_cast<std::uint32_t>(n));
+    } else {
+      buf.push_back(0xFF);
+      append_u16(buf, 0xFFFFu);
+      append_u32(buf, static_cast<std::uint32_t>(n));
+    }
     for (char16_t c : encoded) {
       buf.push_back(static_cast<std::uint8_t>(c & 0xFF));
       buf.push_back(static_cast<std::uint8_t>((c >> 8) & 0xFF));
@@ -1235,10 +1276,11 @@ class ArchiveWriter {
 
   // Close out a CComponentDefinition record: relationship count, GUID, name, timestamp,
   // behavior flags, and a default thumbnail.
-  std::size_t write_definition_tail(const std::string& name, bool is_group = false) {
+  std::size_t write_definition_tail(const std::string& name,
+                                    const std::array<std::uint8_t, 16>& guid,
+                                    bool is_group = false) {
     append_u32(buf, 0);  // nrel: CRelationship count - always 0, not supported
     append_u16(buf, 0);
-    auto guid = random_uuid_bytes();
     buf.insert(buf.end(), guid.begin(), guid.end());
     write_str(name);
     write_str("");  // description - empty in ground truth
@@ -1724,6 +1766,7 @@ void check_layer_handle(const SkpBuilder& skp, const std::optional<int>& value,
 // ===============================================================================================
 
 struct ComponentDefinitionBuilder::Impl {
+  std::array<std::uint8_t, 16> guid = detail::archive_uuid({});
   SkpBuilder* skp = nullptr;
   int slot = 0;
   std::string name;
@@ -1753,6 +1796,7 @@ struct ComponentDefinitionBuilder::Impl {
 
 struct SkpBuilder::Impl {
   std::optional<DocumentOptions> document_options;
+  std::array<std::uint8_t, 16> model_guid = detail::archive_uuid({});
   detail::ArchiveWriter material_writer;
   int material_count = 0;
   // Applied size (inches) each TEXTURED material slot was written with - add_face scales
@@ -1883,6 +1927,7 @@ struct SkpBuilder::Impl {
     const std::uint8_t* data = detail::kScaffoldBlankV17;
 
     ByteBuffer prefix(data, data + (detail::kMaterialInsertPos - 4));
+    std::copy(model_guid.begin(), model_guid.end(), prefix.begin() + 52);
     if (document_options) {
       // Native named UnitsOptions, fixed offsets in the immutable v17 scaffold.
       detail::write_u32_at(prefix, 2327, document_options->length_precision);
@@ -2140,8 +2185,8 @@ void ComponentDefinitionBuilder::close() {
   }
   detail::write_u32_at(impl_->writer->buf, impl_->count_patch_pos,
                        static_cast<std::uint32_t>(impl_->new_entity_count));
-  impl_->group_flag_pos =
-      impl_->writer->write_definition_tail(impl_->name, impl_->group_placement.has_value());
+  impl_->group_flag_pos = impl_->writer->write_definition_tail(impl_->name, impl_->guid,
+                                                               impl_->group_placement.has_value());
   impl_->closed = true;
   // ComponentDefinitionBuilder is a friend of SkpBuilder (create.hpp), so this is allowed to
   // reach into a *different* SkpBuilder's private impl_ - access control in C++ is per-class,
@@ -2160,6 +2205,10 @@ void ComponentDefinitionBuilder::close() {
 SkpBuilder::SkpBuilder() : impl_(std::make_unique<Impl>()) {}
 
 SkpBuilder::~SkpBuilder() = default;
+
+void SkpBuilder::set_guid(const std::string& guid) {
+  impl_->model_guid = detail::archive_uuid(guid);
+}
 
 int SkpBuilder::add_material(const std::string& name, Color4 rgba, std::optional<double> opacity) {
   if (impl_->geometry_writer)
@@ -2239,6 +2288,7 @@ int SkpBuilder::add_layer(const std::string& name, const LayerOptions& options) 
 
 ComponentDefinitionBuilder& SkpBuilder::add_component_definition(const std::string& name,
                                                                  const DefinitionOptions& options) {
+  const auto guid = detail::archive_uuid(options.guid);
   detail::AttributeDictList dicts;
   if (!options.attributes.empty())
     dicts.emplace_back(options.attribute_dict_name, options.attributes);
@@ -2247,6 +2297,7 @@ ComponentDefinitionBuilder& SkpBuilder::add_component_definition(const std::stri
   cdb_impl->skp = this;
   cdb_impl->slot = slot;
   cdb_impl->name = name;
+  cdb_impl->guid = guid;
   cdb_impl->count_patch_pos = count_patch_pos;
   cdb_impl->writer = &*impl_->definition_writer;
   impl_->definitions.push_back(std::unique_ptr<ComponentDefinitionBuilder>(

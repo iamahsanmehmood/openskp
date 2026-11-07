@@ -156,6 +156,33 @@ int? retryCountAfterV20Filler(LR r, int countPos, int limit, [Archive? ar]) {
   return hit.count;
 }
 
+/// The SketchUp 2020 layout of a model with NO component definitions AND no
+/// root entities. [findCountAfterV20Filler] cannot see it: behind the filler
+/// (an empty string record, then 13 bytes of padding) the only count is the
+/// ROOT entity count, and it is 0, which that search skips as "no count".
+///
+/// Returns the offset of that root count (so the caller can put the cursor
+/// there and read the zero), or null when the bytes are not that layout: the
+/// empty string record has to sit within 12 bytes of [countPos], and the 13
+/// padding bytes and the count behind it have to be all zero.
+int? findEmptyRootAfterV20Filler(Uint8List data, int countPos) {
+  var markerAt = -1;
+  for (var i = countPos; i < countPos + 12 && i + 4 <= data.length; i++) {
+    if (data[i] == 0xFF && data[i + 1] == 0xFE && data[i + 2] == 0xFF) {
+      markerAt = i;
+      break;
+    }
+  }
+  // none, or a non-empty string: real data
+  if (markerAt < 0 || data[markerAt + 3] != 0) return null;
+  final rootCountAt = markerAt + 4 + 13;
+  if (rootCountAt + 4 > data.length) return null;
+  for (var i = markerAt + 3; i < rootCountAt + 4; i++) {
+    if (data[i] != 0) return null;
+  }
+  return rootCountAt;
+}
+
 /// True when the u16 at [at] can legally start an object read: a null, an
 /// escape, a class definition, a class-ref to a KNOWN class, or an object
 /// back-ref within the allocated range.
@@ -2154,6 +2181,14 @@ class Legacy {
           // is the root count, so put it back.
           defCount = 0;
           r.pos -= 4;
+        }
+      } else {
+        // No count behind the filler at all: an entirely empty model, whose
+        // root count is 0 (the retry only accepts counts > 0).
+        final rootCountAt = findEmptyRootAfterV20Filler(r.data, r.pos - 4);
+        if (rootCountAt != null) {
+          defCount = 0;
+          r.pos = rootCountAt;
         }
       }
     }

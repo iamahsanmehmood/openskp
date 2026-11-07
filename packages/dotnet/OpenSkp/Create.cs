@@ -177,11 +177,10 @@ namespace OpenSkp
 
         internal const int LayerSchema = 3;
 
-        // Absolute offset of a u16 "next available pid" counter that lives
-        // BEFORE the material insertion point (so only its value, not its
-        // position, needs correction). Increments by exactly the material
-        // COUNT (one pid consumed per material object; the material class
-        // declaration itself doesn't consume a pid). Confirmed up to N=300.
+        // Absolute offset of the u32 persistent-id counter that lives BEFORE
+        // the material insertion point (so only its value, not its position,
+        // needs correction): the last pid handed out, in every section of the
+        // file.
         internal const int PidCounterPos = 1987;
 
         internal const int MaterialSchema = 12;
@@ -1605,7 +1604,9 @@ namespace OpenSkp
                 Preamble();
             }
             Drawbase(mat: faceMaterial, layer: faceLayer, hidden: hidden);
-            AddF64(nx); AddF64(ny); AddF64(nz); AddF64(d);
+            // SketchUp stores a face's plane as n.p + d = 0 (checked on real files), so d is minus the
+            // fitted n.centroid; PlaneFromPolygon returns +n.centroid.
+            AddF64(nx); AddF64(ny); AddF64(nz); AddF64(-d);
             AddU32((uint)(1 + holes.Count)); // nloops
 
             int loopSlot = NewOfKnownClass("CLoop", 1);
@@ -2067,6 +2068,16 @@ namespace OpenSkp
         // (possibly absent) material section would have occupied.
         private readonly ArchiveWriter _materialWriter;
 
+        // First persistent id this builder hands out: one past the scaffold's
+        // own counter.
+        internal readonly long _pidStart;
+
+        /// <summary>The next free persistent ID: sections are written in order
+        /// (materials, layers, definitions, root geometry), each continuing
+        /// where the previous one stopped.</summary>
+        internal long NextPid() =>
+            (_geometryWriter ?? DefinitionWriter ?? _layerWriter ?? _materialWriter).NextPid;
+
         /// <summary>Every material registered so far, by name - populated
         /// by AddMaterial/AddTextureMaterial as a side effect (they
         /// already de-dupe by name through this same dictionary), not
@@ -2195,7 +2206,15 @@ namespace OpenSkp
             _tailPos = tailPos;
             _scaffoldNextSlot = ar.NextSlot;
             _scaffoldClassSlot = new Dictionary<string, int>(ar.ClassSlot);
-            _materialWriter = new ArchiveWriter(@base, new Dictionary<string, int>());
+            // Persistent IDs run in ONE sequence across every section of the
+            // file, continuing from the scaffold's own counter (a u32 at
+            // PidCounterPos). Each section's writer used to start at 1 again,
+            // so a definition, a root instance and a material could all carry
+            // pid 1: SketchUp loads such a file, renumbers the duplicates, and
+            // then cannot SAVE it (SketchUp for Web: "Save Failed") once ids
+            // above the header counter are in use.
+            _pidStart = Tlv.ReadU32(data, CreateConstants.PidCounterPos) + 1;
+            _materialWriter = new ArchiveWriter(@base, new Dictionary<string, int>(), _pidStart);
             _layerWriterBase = layerWriterBase;
         }
 
@@ -2328,7 +2347,7 @@ namespace OpenSkp
                 // scaffold-derived class_slot dict still has its raw,
                 // unshifted value, so correct every entry before handing
                 // it to a writer that might look one up.
-                _layerWriter = new ArchiveWriter(_layerWriterStart, MaterialShiftedClassSlot());
+                _layerWriter = new ArchiveWriter(_layerWriterStart, MaterialShiftedClassSlot(), _materialWriter.NextPid);
             }
             int slot = _layerWriter.WriteLayer(name, hidden: hidden, rgba: rgba);
             LayersByName[name] = slot;
@@ -2404,7 +2423,7 @@ namespace OpenSkp
             if (DefinitionWriter == null)
             {
                 _definitionWriterStart = _scaffoldNextSlot + (_materialWriter.NextSlot - _base) + LayerShift();
-                DefinitionWriter = new ArchiveWriter(_definitionWriterStart, PostLayerClassSlot());
+                DefinitionWriter = new ArchiveWriter(_definitionWriterStart, PostLayerClassSlot(), NextPid());
             }
             var (slot, countPatchPos) = DefinitionWriter.WriteDefinitionHeader(attributeDicts);
             _definitionCount += 1;
@@ -2631,7 +2650,8 @@ namespace OpenSkp
             int materialShift = _materialWriter.NextSlot - _base;
             _geometryWriter = new ArchiveWriter(
                 _scaffoldNextSlot + materialShift + LayerShift() + DefinitionShift(),
-                PostDefinitionClassSlot());
+                PostDefinitionClassSlot(),
+                NextPid());
             // Flush any groups that closed earlier, in the order they
             // were created - deferred until now so closing one group
             // doesn't lock in root-level slot numbering before a later
@@ -3087,20 +3107,16 @@ namespace OpenSkp
             // the zero-material scaffold, not a gap that needs new bytes
             // inserted. Real SketchUp overwrites them in place rather than
             // growing the file by 4 extra bytes here.
-            // Each layer's record embeds 2 pids (see WriteLayer);
-            // materials use 1 pid each (WriteMaterial).
-            long layerPids = _layerWriter != null ? _layerWriter.NextPid - 1 : 0;
-            long pidDelta = _materialCount + layerPids;
-
             var prefix = new byte[_materialInsertPos - 4];
             Array.Copy(_data, 0, prefix, 0, prefix.Length);
-            if (pidDelta != 0)
-            {
-                ushort u16 = Tlv.ReadU16(prefix, CreateConstants.PidCounterPos);
-                int newVal = u16 + (int)pidDelta;
-                prefix[CreateConstants.PidCounterPos] = (byte)(newVal & 0xFF);
-                prefix[CreateConstants.PidCounterPos + 1] = (byte)((newVal >> 8) & 0xFF);
-            }
+            // The model's pid counter: the last pid handed out, in every
+            // section. A 32-bit field, so a model with more than 65 535
+            // entities keeps a truthful counter.
+            uint lastPid = (uint)(NextPid() - 1);
+            prefix[CreateConstants.PidCounterPos] = (byte)(lastPid & 0xFF);
+            prefix[CreateConstants.PidCounterPos + 1] = (byte)((lastPid >> 8) & 0xFF);
+            prefix[CreateConstants.PidCounterPos + 2] = (byte)((lastPid >> 16) & 0xFF);
+            prefix[CreateConstants.PidCounterPos + 3] = (byte)((lastPid >> 24) & 0xFF);
             Array.Copy(
                 CreateConstants.IsoCameraPrefixPatch, 0, prefix, CreateConstants.IsoCameraPrefixOffset,
                 CreateConstants.IsoCameraPrefixPatch.Length);
@@ -3195,7 +3211,7 @@ namespace OpenSkp
         /// silently renumber it to the wrong slot entirely, corrupting
         /// whatever it points to. Returns the number of bytes the field
         /// grew by (0 or 4).</summary>
-        private static int ShiftRef(List<byte> buf, int pos, int shift)
+        internal static int ShiftRef(List<byte> buf, int pos, int shift)
         {
             ushort u16 = (ushort)(buf[pos] | (buf[pos + 1] << 8));
             int tagBit = u16 & 0x8000;
@@ -3211,7 +3227,11 @@ namespace OpenSkp
             uint val = tagBit != 0 ? (0x80000000u | (uint)newSlot) : (uint)newSlot;
             var replacement = new byte[]
             {
-                0xFF, 0xFF,
+                // 0x7FFF is the big-tag escape marker. 0xFFFF is the "new class
+                // declaration" tag, which the reader dispatches on first: a file
+                // with this marker loads in our readers but SketchUp's own
+                // library rejects it.
+                0xFF, 0x7F,
                 (byte)(val & 0xFF), (byte)((val >> 8) & 0xFF), (byte)((val >> 16) & 0xFF), (byte)((val >> 24) & 0xFF),
             };
             buf.RemoveRange(pos, 2);

@@ -7,6 +7,93 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — hostile files: deep nesting, deep `meta.dat` wrappers and truncated `model.dat` (#496, #497, #498)
+
+All five readers handled three kinds of damaged or hostile input badly. They now behave the same way.
+
+- **Deeply nested `model.dat` (#496).** The TLV parser descended into every container with no depth
+  limit. A 157 KB file nesting containers 100,000 deep killed the C++ process (SIGSEGV) and aborted
+  the .NET process ("Stack overflow", which no `catch` can intercept), and gave `RangeError`,
+  `RecursionError` or `StackOverflowError` in TypeScript, Python and Dart. Containers now nest at
+  most 64 levels, and deeper input raises the library's own parse error (stage `tlv_walk`, with the
+  tag and offset). Real files nest about a dozen levels at most: the deepest of the 53 modern-format
+  files checked (the repository's fixtures and other real files) reaches 11. The same limit applies to nested attribute dictionaries (C++ walked those with its own
+  recursion) and to nested definition-list wrappers (`F901`, TypeScript).
+- **Nested `6400` records in `meta/meta.dat` (#497).** `read_meta_units` called itself on every
+  `6400` wrapper, so the stack grew with the depth (and C++, .NET and Python copied nearly the whole
+  payload at every level: 3.4 s and 5.9 GB in .NET for 100,000 levels). The wrappers are now
+  followed in a loop over offsets, with no copies, and more than 64 of them gives unknown units
+  (`units` is `None`/`null`) instead of an error: the units are optional information, so a bad
+  `meta.dat` does not reject an otherwise valid model. TypeScript used to fail the whole parse here.
+- **Truncated `model.dat` (#498).** A `model.dat` cut short anywhere inside its single top-level
+  `F401` record used to parse as a model with no geometry and no error. It now raises a parse error
+  saying the record declares more bytes than the data holds. Only the top-level record is checked:
+  in real files some container payloads end with bytes that are not records (text that parses as
+  headers whose lengths overrun the container, found at the same depth in all 53 files checked), so the nested records stay lenient. Every real file ends exactly on its top-level record.
+### Fixed — files the TypeScript, .NET and Dart writers produced could not be saved by SketchUp for Web (#492)
+
+The Python and C++ writers already gave every entity in a file its own persistent id. The other
+three did not: each section (materials, layers, definitions, root geometry) numbered its ids from 1
+again, and the header's id counter stayed at the blank scaffold's 18 unless the file had materials
+or layers. A model with two groups therefore had a definition and a root instance with the same id,
+and ids up to 20 against a counter of 18. SketchUp for Web opens such a file but cannot save it
+("Save Failed"): it renumbers the repeated ids starting at the counter, and the new numbers clash
+with ids already in use. Ids now run in one sequence across the sections, continuing from the
+scaffold's counter, and the counter holds the last id handed out, as Python's does (it is a 32-bit
+field; these three treated it as 16-bit). The three writers now produce the same ids as Python: the
+Dart reference files under `test/fixtures/create_reference` were regenerated with the current
+Python writer (they carried the old numbering), and the Dart, TypeScript and .NET writers produce
+those eight files byte for byte. Found by Aleksei Gurianov, who traced the repeated ids and tested
+a corrected counter in SketchUp for Web.
+
+### Fixed — .NET writer: a large file used the wrong escape marker for a renumbered reference
+
+When a model is big enough that a reference in the blank scaffold lands at or past slot 32,767,
+the .NET writer widened it to the long form with the marker `0xFFFF`, which is the "new class
+declaration" tag. Our readers load such a file, but SketchUp's own library refuses it
+(`SU_ERROR_SERIALIZATION` on load; a 3,200-face model is enough). The marker is `0x7FFF`, as in the
+other four writers; the 3,200-face file the Dart suite compares is now byte-identical from .NET and
+loads in SketchUp's library.
+
+### Fixed — all five ports: a concave four-sided face is no longer triangulated across its outside (#493)
+
+- `triangulate_face_3d` split every single-loop quad along its 0-2 diagonal without checking
+  that the quad is convex. When the reflex corner is 1 or 3, that diagonal runs outside the
+  face and the mesh covered area the face does not have (a dart of area 4 came out as 12).
+  Such a quad is now split along its 1-3 diagonal. A convex quad is split exactly as before,
+  and so is a self-intersecting or warped quad unless the 1-3 split covers less area. On
+  `coedge_orientation_regression.skp` this corrects 45 quads; the sum over all faces of the
+  difference between triangle area and loop area drops from 1.58 in² to 0.23 in².
+
+## [1.5.0] — 2026-11-03 — all 5 languages
+
+> What most readers will notice, from the entries below (everything since 1.4.0):
+>
+> - **Files that failed, or read wrong, now read, in all five languages:** a SketchUp 2016
+>   model with a dimension attached to a vertex written in full lost all 148 of its root
+>   entities (#474); a legacy text label anchored to an entity no longer throws off the rest of
+>   the file, so four more room-acoustics benchmark models open (#473); a saved blank SketchUp
+>   2020 template opens as an empty model (#486).
+> - **Textured materials in classic (pre-2021) files:** Python, TypeScript, .NET and Dart read
+>   every plain textured material as colorized, and took the colour's alpha from the image
+>   average, which is `0` in some files. That is why the Blender add-on drew such faces as if
+>   they had no material (blender-openskp#9). They now read the material type, the colorize
+>   mode (new field `colorize_type`) and the paint colour the way C++ does, checked against
+>   SketchUp's own library on all 117 textured materials of the test files.
+> - **Writing:** all five writers store a face's plane with the sign SketchUp uses. C++ (from
+>   @modraup) also keeps a guide's layer and hidden flag, sets document options, adds
+>   dimensions with an offset vector, and writes files closer to what SketchUp itself writes.
+> - **Dart:** `fromFragments` reads uncompressed `.frag` files again with `archive` 4.6, which
+>   had also broken every Dart CI run.
+>
+> Upgrade notes: in a classic file `colorized` is now `false` for a plain textured material
+> and a material's colour has alpha 255 (it was `0`, or `254`, in some files), so code that
+> used `colorized` to tell whether a material has a texture should look at the texture
+> itself. Files the Python, TypeScript, .NET and Dart writers made before this release store
+> the face plane constant with the opposite sign; every reader ignores it, so they still open
+> everywhere. C++ has writer options the other four do not (guide options, document options),
+> tracked in the porting backlog (#285).
+
 ### Fixed and added — C++ (contributed by @modraup, #475, #477, #481)
 
 - **Guides.** A construction line or point keeps its layer and its hidden flag when read, written
@@ -23,8 +110,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Legacy texture materials.** The paint colour is read from the material colour, not the image
   average, `colorized` is `true` only for a colorized texture (it was also `true` for every plain
   textured material), and `colorize_type` distinguishes tint from shift. Checked against materials
-  written by SketchUp's library; the other four ports still read the old way (tracked for the next
-  parity pass).
+  written by SketchUp's library; the other four ports read it the same way now (next entry).
 - **Dimensions (#481).** A legacy dimension whose end vertex is written inline no longer stops the
   rest of the entity list from being read, so annotation-only components are no longer empty. The
   endpoints and plane offset are recovered for legacy dimensions (34 of 34 on the Vigors models,
@@ -34,6 +120,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `5BD0` its X axis, the other way round from what the earlier notes said. New
   `add_dimension(p1, p2, offset_vector)` on root and component builders; rewriting the real
   dimensions through it reproduces SketchUp's own world bounding boxes.
+
+### Fixed — all five ports: a SketchUp 2020 model with nothing in it opens (#486)
+
+- A model saved by SketchUp 2020 with no entities and no component definitions (a blank template)
+  was rejected with "implausible definition count". SketchUp 2020 writes an empty string record and
+  zero padding where the definition count would be, and with nothing in the model the only count
+  behind it is the root entity count, which is 0; the search for that count skipped it. It now
+  reads as an empty model. Files that already opened read exactly as before: nothing changes
+  unless that search found no count at all and the filler is followed only by zeros.
 
 ### Fixed — Python, TypeScript, .NET, Dart: classic textured materials are no longer all "colorized"
 
@@ -47,6 +142,7 @@ and the colour from the paint colour (its alpha is 255, as C++ reads it since #4
 used to report 254 in one file). Against SketchUp's library the type, mode and colour of all 117
 agree, including the colorized ones; a fixture written by that library (plain, tint, shift and a
 half-opaque tint) is read the same by all five ports.
+
 ### Fixed — Python, TypeScript, .NET, Dart: a dimension whose connection point is a vertex written in full no longer ends the entity list (#474)
 
 MFC writes an object in full the first time anything references it, and a dimension comes before the
@@ -60,6 +156,15 @@ fails without the fix; every existing test still passes, and Python reads 63 dif
 
 Also corrected, in the documentation of the four ports: `5BCF` is the dimension plane's **normal**
 and `5BD0` its X axis (the `planeX` / `normal` fields keep their old names).
+
+### Fixed — Python, TypeScript, .NET, Dart writers: a face's stored plane has the sign SketchUp uses
+
+SketchUp stores a face's plane as `n·p + d = 0` (every face of two real files agrees); the writers
+stored `d` with the opposite sign (`+n·centroid`), the defect @modraup found in the C++ writer in #477.
+openskp's readers only use the plane's normal and SketchUp's own API recomputes the plane, so nothing
+noticed. Each writer now stores `-d`, with a test on the raw record that fails without the change. The
+Dart `create_reference` files (written by an older Python writer) get the same change to each face's
+plane constant (3,210 faces), and nothing else in them changes.
 
 ### Fixed — Dart: `fromFragments` reads uncompressed `.frag` files again with `archive` 4.6
 
