@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — Python: SketchUp 2019 and 2020 models whose tags have a line style (#514)
+
+- A SketchUp 2019 or 2020 file in which a tag carries a line style ("Dash", "Dot", ...) failed to
+  open with `no reader for class CCustomLineStyle`. The style is stored inline where a tag first
+  uses it, takes an object slot between the tags, and is pointed at again by later tags that share
+  it; the reader now reads it and counts the slot, so every face stays on its own tag. Models
+  without tag line styles are unchanged (all 200+ sample files parse to identical results).
+  Reported by @mschache. The other four readers have the same gap and are tracked in #285.
+
 ### Fixed and added — C++ (contributed by @modraup, #478, #488, #499, #500)
 
 - **Component identity and definition attributes (#478).** Every exported definition used to get a

@@ -125,6 +125,7 @@ class _Archive:
         self.r = _R(data)
         self.slots: Dict[int, tuple] = {}    # slot -> ('class'|'obj', name, value)
         self.class_slot: Dict[str, int] = {}
+        self.first_class_slot: Dict[str, int] = {}   # slot of the class record, as written
         self.class_schema: Dict[str, int] = {}
         self.current_class: Optional[str] = None  # class of the object being read
         self.current_obj_slot: Optional[int] = None
@@ -134,6 +135,7 @@ class _Archive:
         self.current_loop: Optional[int] = None
         self.in_entity_list = False
         self._as_item = False
+        self.seen_line_style = False  # a CCustomLineStyle has been read
         # Burned store-map indices (see _read_edgeuse): the writer maps an
         # annotation's connection points into the store map WITHOUT writing
         # bytes, so file back-references beyond each burn run ahead of the
@@ -174,6 +176,7 @@ class _Archive:
             name = r.raw(namelen).decode('ascii')
             self.alloc(('class', name, schema))
             self.class_slot[name] = self.next_slot - 1
+            self.first_class_slot.setdefault(name, self.next_slot - 1)
             self.class_schema[name] = schema
             return self._new_obj(r, name)
         if tag & 0x8000:                       # class ref -> new object
@@ -264,6 +267,46 @@ class _Archive:
         if lay_cs is not None and _is_class_ref(self.data, at, lay_cs):
             return True
         return unmatched_class_ref and (tag & 0x8000) != 0 and tag != 0xFFFF
+
+    # A tag may point at a line style right after its 21-byte tail: nothing
+    # (u16 0) for a plain tag, the style written in full on first use (a new
+    # CCustomLineStyle class record, or a class-ref once the class is known),
+    # or a back-ref to the style object a previous tag already wrote. Only
+    # these forms are consumed; everything else is left for the callers below.
+    #
+    # The slot-base probe (single- and no-material files) numbers from 1<<20,
+    # so the file's own class-refs and back-refs cannot be looked up there:
+    # a class-ref is matched through its distance from the CLayer class-ref
+    # (the same in both numberings), and once a style has been read, any
+    # other plain object ref at this position is the style's back-ref.
+    def _read_clayer_line_style(self, r: _R) -> None:
+        if r.pos + 2 > len(self.data):
+            return
+        tag = r.peek_u16()
+        cls = 'CCustomLineStyle'
+        probing = self.walk_base >= (1 << 20)
+        if tag == 0xFFFF:
+            at = r.pos + 4
+            if (self.data[at:at + 2] != struct.pack('<H', len(cls))
+                    or self.data[at + 2:at + 2 + len(cls)] != cls.encode('ascii')):
+                return
+        elif tag & 0x8000:
+            cs = self.class_slot.get(cls)
+            lay, lay0 = self.class_slot.get('CLayer'), self.first_class_slot.get('CLayer')
+            if cs is not None and lay is not None and lay0 is not None:
+                cs += lay - lay0
+            if cs != (tag & 0x7FFF):
+                return
+        elif tag == 0 or tag == 0x7FFF:
+            return
+        elif probing:
+            if not self.seen_line_style:
+                return
+        else:
+            ent = self.slots.get(tag)
+            if ent is None or ent[0] != 'obj' or ent[1] != cls:
+                return
+        self.read_object(r, expect=cls)
 
     # Colour CLayer ends in a 21-byte tail. Some v18 zero-material files
     # (custom tag listed first, then Layer0) write 12 zero bytes + u32
@@ -473,6 +516,10 @@ _FIRST_V4 = 4
 # preamble) in SketchUp 6. SketchUp 3, 4 and 5 write it as a bare inline
 # subtype/length/bytes record straight after the material's flag word.
 _FIRST_DIB_OBJECT = 6
+
+# A tag's custom line style (CCustomLineStyle) first appears in SketchUp 2019,
+# which writes its entity preamble twice; SketchUp 2020 and later write it once.
+_FIRST_SINGLE_PREAMBLE_LINE_STYLE = 20
 
 # First version whose instances and groups carry a name string (SketchUp 3 and
 # 4 files have none; where the name is optional the reader checks for one).
@@ -788,10 +835,29 @@ def _read_layer(ar, r):
     rgba = r.raw(4)
     r.utf16()
     r.raw(17 if ar.ver < _FIRST_V4 else 21)  # SketchUp 3's tail is 4 bytes shorter
+    ar._read_clayer_line_style(r)
     ar._skip_clayer_colour_ext(r)
     ar._skip_clayer_parent_ref(r, ar.current_obj_slot)
     return {'k': 'layer', 'name': name, 'hidden': mid[0] if mid else 0,
             'rgba': tuple(rgba)}
+
+
+def _read_customlinestyle(ar, r):
+    """A tag's line style (SketchUp 2019 and 2020, "Dash", "Solid Basic", ...).
+
+    It is written inline at the point where a tag first uses it, so it is an
+    object in the walk like any other and takes a store-map slot. SketchUp
+    2020 opens it with one entity preamble; SketchUp 2019 writes the
+    preamble twice. After the preamble come the style's name, its dash
+    pattern as text ("12.0, -6.0") and three doubles."""
+    _early_preamble(ar, r)
+    if ar.ver < _FIRST_SINGLE_PREAMBLE_LINE_STYLE:
+        _early_preamble(ar, r)
+    name = r.utf16()
+    pattern = r.utf16()
+    values = (r.f64(), r.f64(), r.f64())
+    ar.seen_line_style = True
+    return {'k': 'linestyle', 'name': name, 'pattern': pattern, 'values': values}
 
 
 def _texture_block(ar, r):
@@ -1889,6 +1955,7 @@ _READERS = {
     'CConstructionPoint': _read_constructionpoint,
     'CSectionPlane': _read_sectionplane, 'CSkFont': _read_skfont,
     'CDimensionLinear': _read_dimlinear, 'CText': _read_text,
+    'CCustomLineStyle': _read_customlinestyle,
 }
 
 
