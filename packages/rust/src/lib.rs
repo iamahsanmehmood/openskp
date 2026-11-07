@@ -58,7 +58,7 @@ pub mod legacy;
 pub mod scene_build;
 
 pub use codegen::to_rust_code;
-pub use dxf_export::{export_dxf, to_dxf};
+pub use dxf_export::{export_dxf, to_dxf, DxfError};
 pub use edit::{open_existing, OpenExistingError, OpenExistingResult};
 pub use errors::SkpParseError;
 pub use fragments::{

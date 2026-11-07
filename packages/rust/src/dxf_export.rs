@@ -5,70 +5,141 @@
 //! in desktop AutoCAD: same static scaffold, same handle numbering, same
 //! `\r\n` line endings and the same `%.6f` coordinate formatting.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::fmt;
 use std::io;
 use std::path::Path;
 
 use crate::scene::{GlbPrimitive, Scene};
 
-/// Characters AutoCAD rejects in a symbol-table (LAYER) name.
-const ILLEGAL_LAYER_CHARS: &[char] = &[
-    '<', '>', '/', '\\', '"', '~', ':', ';', '?', '*', '=', '`', '|',
-];
-
-fn is_trim_char(c: char) -> bool {
-    matches!(c, ' ' | '\t' | '\r' | '\n')
+/// Why a scene cannot be written as DXF (the C++ throws
+/// `std::invalid_argument` with the same messages).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DxfError {
+    /// `scale` is infinite or NaN.
+    NonFiniteScale,
+    /// A primitive's positions or indices are not a whole number of
+    /// coordinates or triangles.
+    IncompleteMesh,
+    /// A primitive's index points past its vertex array.
+    IndexOutOfRange,
+    /// A scaled vertex coordinate is infinite or NaN.
+    NonFiniteCoordinate,
 }
 
-/// 64-bit FNV-1a: what MSVC's `std::hash<std::string>` computes, so a
-/// truncated layer name gets the same suffix the C++ port's Windows build
-/// gives it (libstdc++/libc++ use other, equally implementation-defined
-/// hashes; no one value can match every C++ build).
-fn fnv1a64(bytes: &[u8]) -> u64 {
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for &b in bytes {
-        hash ^= u64::from(b);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    hash
-}
-
-fn sanitize_layer_name(name: &str) -> String {
-    if name.is_empty() {
-        return "0".to_string();
-    }
-    let clean: String = name
-        .chars()
-        .map(|c| {
-            if ILLEGAL_LAYER_CHARS.contains(&c) {
-                '_'
-            } else {
-                c
-            }
+impl fmt::Display for DxfError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            DxfError::NonFiniteScale => "DXF scale must be finite",
+            DxfError::IncompleteMesh => "DXF mesh has incomplete coordinates or triangles",
+            DxfError::IndexOutOfRange => "DXF mesh index is outside the vertex array",
+            DxfError::NonFiniteCoordinate => "DXF mesh coordinates must be finite",
         })
-        .collect();
-    let clean = clean.trim_matches(is_trim_char);
-    if clean.is_empty() {
-        return "0".to_string();
     }
-    // R2000 extended symbol names (enabled by $EXTNAMES=1 in the header
-    // scaffold) support up to 255 characters, but AutoCAD desktop has been
-    // reported to reject long table entry names in practice - cap
-    // defensively and append a short content hash on truncation so two
-    // different long names sharing a common prefix don't collide.
-    const MAX_LEN: usize = 255;
-    if clean.len() > MAX_LEN {
-        let suffix = format!("{:08x}", fnv1a64(clean.as_bytes()) & 0xFFFF_FFFF);
-        // The C++ cuts at a byte offset; a Rust string has to stay valid
-        // UTF-8, so the cut backs off to the previous character boundary
-        // (only ever different for a non-ASCII name).
-        let mut cut = MAX_LEN - suffix.len() - 1;
-        while !clean.is_char_boundary(cut) {
-            cut -= 1;
+}
+
+impl std::error::Error for DxfError {}
+
+/// Characters AutoCAD rejects in a symbol-table (LAYER) name.
+const ILLEGAL_LAYER_CHARS: &[u8] = b"<>/\\\"~:;?*=`|";
+
+/// The longest LAYER name, in UTF-16 units.
+const MAX_LAYER_NAME_LEN: usize = 255;
+
+fn is_trim_unit(c: u16) -> bool {
+    matches!(c, 0x20 | 0x09 | 0x0D | 0x0A)
+}
+
+fn is_high_surrogate(c: u16) -> bool {
+    (0xD800..=0xDBFF).contains(&c)
+}
+
+/// 32-bit FNV-1a of the source name's bytes, as eight upper-case hex
+/// digits: the same value on every platform (the C++ used `std::hash`
+/// before #499, which differs between standard libraries).
+fn layer_name_hash(name: &str) -> String {
+    let mut hash: u32 = 2_166_136_261;
+    for &b in name.as_bytes() {
+        hash = (hash ^ u32::from(b)).wrapping_mul(16_777_619);
+    }
+    format!("{hash:08X}")
+}
+
+/// The LAYER name written for `name`, with `suffix` (plain ASCII) at the end.
+///
+/// AC1015 stores text as ANSI_1252 plus `\U+XXXX` escapes, not raw UTF-8
+/// (that needs AC1021+), so every non-ASCII UTF-16 unit is escaped. The
+/// work is done in UTF-16 so the 255-character limit counts what AutoCAD
+/// counts and a cut never splits a surrogate pair. Group codes 2/8 allow
+/// 2049 bytes in R2000, so even 255 escaped units (1785 bytes) fit. A Rust
+/// `&str` is always valid UTF-8, so the C++'s replacement of malformed byte
+/// sequences with `_` has no counterpart here.
+fn sanitize_layer_name(name: &str, suffix: &str) -> String {
+    let units: Vec<u16> = name.encode_utf16().collect();
+    let mut clean: Vec<u16> = match units.iter().position(|&c| !is_trim_unit(c)) {
+        None => vec![u16::from(b'0')],
+        Some(first) => {
+            let last = units
+                .iter()
+                .rposition(|&c| !is_trim_unit(c))
+                .unwrap_or(first);
+            units[first..=last].to_vec()
         }
-        return format!("{}_{}", &clean[..cut], suffix);
+    };
+    for c in &mut clean {
+        let illegal = u8::try_from(*c).is_ok_and(|b| ILLEGAL_LAYER_CHARS.contains(&b));
+        if *c < 32 || (127..=159).contains(c) || illegal {
+            *c = u16::from(b'_');
+        }
     }
-    clean.to_string()
+    let hash_suffix;
+    let suffix = if clean.len() > MAX_LAYER_NAME_LEN && suffix.is_empty() {
+        hash_suffix = format!("_{}", layer_name_hash(name));
+        hash_suffix.as_str()
+    } else {
+        suffix
+    };
+    if clean.len() + suffix.len() > MAX_LAYER_NAME_LEN {
+        let mut end = MAX_LAYER_NAME_LEN - suffix.len();
+        if end > 0 && is_high_surrogate(clean[end - 1]) {
+            end -= 1;
+        }
+        clean.truncate(end);
+    }
+    clean.extend(suffix.bytes().map(u16::from));
+    let mut out = String::with_capacity(clean.len());
+    for c in clean {
+        match u8::try_from(c) {
+            Ok(b) if b.is_ascii() => out.push(char::from(b)),
+            _ => out.push_str(&format!("\\U+{c:04X}")),
+        }
+    }
+    out
+}
+
+/// The key two LAYER names collide under: AutoCAD compares them
+/// ASCII-case-insensitively.
+fn layer_name_key(name: &str) -> String {
+    name.to_ascii_lowercase()
+}
+
+/// Checks one primitive the way the C++ does before anything is written.
+fn validate_primitive(prim: &GlbPrimitive, scale: f64) -> Result<(), DxfError> {
+    if !prim.positions.len().is_multiple_of(3) || !prim.indices.len().is_multiple_of(3) {
+        return Err(DxfError::IncompleteMesh);
+    }
+    let vert_count = prim.positions.len() / 3;
+    if prim.indices.iter().any(|&i| i as usize >= vert_count) {
+        return Err(DxfError::IndexOutOfRange);
+    }
+    if prim
+        .positions
+        .iter()
+        .any(|&c| !(f64::from(c) * scale).is_finite())
+    {
+        return Err(DxfError::NonFiniteCoordinate);
+    }
+    Ok(())
 }
 
 fn rgb_to_aci(r: i32, g: i32, b: i32) -> i32 {
@@ -112,12 +183,10 @@ fn get_prim_rgb(scene: &Scene, prim: &GlbPrimitive) -> (i32, i32, i32) {
 }
 
 /// `std::fixed << std::setprecision(6)`: Rust's `{:.6}` matches it digit for
-/// digit (exact decimal expansion, `-0.000000` for negative zero, `inf`);
-/// only NaN is spelled differently, so it is spelled the glibc way here.
+/// digit (exact decimal expansion, `-0.000000` for negative zero). Every
+/// coordinate is checked to be finite first, so NaN and infinity never
+/// reach it.
 fn fmt6(v: f64) -> String {
-    if v.is_nan() {
-        return if v.is_sign_negative() { "-nan" } else { "nan" }.to_string();
-    }
     format!("{v:.6}")
 }
 
@@ -152,15 +221,48 @@ impl Lines {
 /// Every primitive goes on a layer named after its `geom_name`, colored by
 /// its material's nearest ACI color. `scale` multiplies every vertex
 /// coordinate; the C++ default is [`METRES_TO_INCHES`](crate::METRES_TO_INCHES).
-pub fn to_dxf(scene: &Scene, scale: f64, mode: &str) -> String {
-    let mut layer_colors: BTreeMap<String, (i32, i32, i32)> = BTreeMap::new();
-    for prim in &scene.glb_primitives {
-        layer_colors
-            .entry(sanitize_layer_name(&prim.geom_name))
-            .or_insert_with(|| get_prim_rgb(scene, prim));
+///
+/// Layer names are written as ASCII with `\U+XXXX` escapes for everything
+/// else, cut to 255 characters, and made unique ignoring ASCII case (a
+/// clash, including with the built-in `0` and `Defpoints`, gets a
+/// `_XXXXXXXX` hash suffix). A primitive without triangles adds no layer.
+/// A primitive larger than polyface's signed 16-bit counts allow (32767
+/// vertices or faces) is written as 3DFACEs even in `"polyface"` mode.
+///
+/// # Errors
+///
+/// [`DxfError`] when `scale` is not finite, or a primitive with triangles
+/// has incomplete coordinates or triangles, an index past its vertices,
+/// or a coordinate that is not finite once scaled.
+pub fn to_dxf(scene: &Scene, scale: f64, mode: &str) -> Result<String, DxfError> {
+    if !scale.is_finite() {
+        return Err(DxfError::NonFiniteScale);
     }
-    if layer_colors.is_empty() {
-        layer_colors.insert("0".to_string(), (200, 200, 200));
+    let mut layer_colors: BTreeMap<String, (i32, i32, i32)> = BTreeMap::new();
+    let mut layer_names: HashMap<&str, String> = HashMap::new();
+    let mut used_names: HashSet<String> = ["0", "defpoints"].map(String::from).into();
+    for prim in &scene.glb_primitives {
+        if prim.indices.is_empty() {
+            continue;
+        }
+        validate_primitive(prim, scale)?;
+        if layer_names.contains_key(prim.geom_name.as_str()) {
+            continue;
+        }
+        let mut l_name = sanitize_layer_name(&prim.geom_name, "");
+        let mut attempt = 0usize;
+        while !used_names.insert(layer_name_key(&l_name)) {
+            let mut suffix = format!("_{}", layer_name_hash(&prim.geom_name));
+            if attempt > 0 {
+                suffix.push_str(&format!("_{attempt}"));
+            }
+            l_name = sanitize_layer_name(&prim.geom_name, &suffix);
+            attempt += 1;
+        }
+        layer_colors
+            .entry(l_name.clone())
+            .or_insert_with(|| get_prim_rgb(scene, prim));
+        layer_names.insert(&prim.geom_name, l_name);
     }
 
     // Every static handle in HEADER_STATIC_*/OBJECTS_STATIC is well below
@@ -168,10 +270,6 @@ pub fn to_dxf(scene: &Scene, scale: f64, mode: &str) -> String {
     // own first entity handle) keeps every handle in the file globally
     // unique.
     let mut handle_id: u64 = 0x691;
-    let layer_handles: BTreeMap<&str, String> = layer_colors
-        .keys()
-        .map(|name| (name.as_str(), next_handle(&mut handle_id)))
-        .collect();
 
     let mut lines = Lines(String::new());
     lines.extend(HEADER_STATIC_A);
@@ -191,7 +289,7 @@ pub fn to_dxf(scene: &Scene, scale: f64, mode: &str) -> String {
         lines.push("  0");
         lines.push("LAYER");
         lines.push("  5");
-        lines.push(&layer_handles[l_name.as_str()]);
+        lines.push(&next_handle(&mut handle_id));
         lines.push("330");
         lines.push("1");
         lines.push("100");
@@ -219,16 +317,19 @@ pub fn to_dxf(scene: &Scene, scale: f64, mode: &str) -> String {
     lines.push("ENTITIES");
 
     for prim in &scene.glb_primitives {
-        let l_name = sanitize_layer_name(&prim.geom_name);
         let tri_count = prim.indices.len() / 3;
         if tri_count == 0 {
             continue;
         }
+        let l_name = &layer_names[prim.geom_name.as_str()];
 
         let (pr, pg, pb) = get_prim_rgb(scene, prim);
         let aci = rgb_to_aci(pr, pg, pb).to_string();
 
-        if mode == "polyface" {
+        // Polyface counts (71/72) and vertex indices (71-74) are signed
+        // 16-bit fields. Larger meshes use independent 3DFACE triangles.
+        let vert_count = prim.positions.len() / 3;
+        if mode == "polyface" && vert_count <= 32767 && tri_count <= 32767 {
             // Structure verified against real ezdxf's own render_polyface()
             // output byte-for-byte, not guessed: face-record VERTEX entries
             // carry a color (62) and dummy 0/0/0 coordinates but NOT the
@@ -237,7 +338,6 @@ pub fn to_dxf(scene: &Scene, scale: f64, mode: &str) -> String {
             // Model_Space's - both were wrong here before and are exactly why
             // AutoCAD desktop rejected polyface-mode output while accepting
             // 3dface-mode output using the same scaffold.
-            let vert_count = prim.positions.len() / 3;
             let polyline_handle = next_handle(&mut handle_id);
 
             lines.push("  0");
@@ -249,7 +349,7 @@ pub fn to_dxf(scene: &Scene, scale: f64, mode: &str) -> String {
             lines.push("100");
             lines.push("AcDbEntity");
             lines.push("  8");
-            lines.push(&l_name);
+            lines.push(l_name);
             lines.push(" 62");
             lines.push(&aci);
             lines.push("100");
@@ -279,7 +379,7 @@ pub fn to_dxf(scene: &Scene, scale: f64, mode: &str) -> String {
                 lines.push("100");
                 lines.push("AcDbEntity");
                 lines.push("  8");
-                lines.push(&l_name);
+                lines.push(l_name);
                 lines.push("100");
                 lines.push("AcDbVertex");
                 lines.push("100");
@@ -304,7 +404,7 @@ pub fn to_dxf(scene: &Scene, scale: f64, mode: &str) -> String {
                 lines.push("100");
                 lines.push("AcDbEntity");
                 lines.push("  8");
-                lines.push(&l_name);
+                lines.push(l_name);
                 lines.push(" 62");
                 lines.push(&aci);
                 lines.push("100");
@@ -318,11 +418,11 @@ pub fn to_dxf(scene: &Scene, scale: f64, mode: &str) -> String {
                 lines.push(" 70");
                 lines.push("128");
                 lines.push(" 71");
-                lines.push(&tri[0].wrapping_add(1).to_string());
+                lines.push(&(tri[0] + 1).to_string());
                 lines.push(" 72");
-                lines.push(&tri[1].wrapping_add(1).to_string());
+                lines.push(&(tri[1] + 1).to_string());
                 lines.push(" 73");
-                lines.push(&tri[2].wrapping_add(1).to_string());
+                lines.push(&(tri[2] + 1).to_string());
             }
 
             lines.push("  0");
@@ -334,18 +434,13 @@ pub fn to_dxf(scene: &Scene, scale: f64, mode: &str) -> String {
             lines.push("100");
             lines.push("AcDbEntity");
             lines.push("  8");
-            lines.push(&l_name);
+            lines.push(l_name);
             continue;
         }
 
-        // One coordinate of vertex `index`, scaled. An index past the end of
-        // `positions` (undefined behavior in the C++) reads as 0 here.
+        // One coordinate of vertex `index`, scaled (indices were validated).
         let coord = |index: u32, axis: usize| -> String {
-            let v = (index as usize)
-                .checked_mul(3)
-                .and_then(|i| prim.positions.get(i + axis))
-                .copied();
-            fmt6(f64::from(v.unwrap_or(0.0)) * scale)
+            fmt6(f64::from(prim.positions[index as usize * 3 + axis]) * scale)
         };
 
         for tri in prim.indices.as_chunks::<3>().0 {
@@ -363,7 +458,7 @@ pub fn to_dxf(scene: &Scene, scale: f64, mode: &str) -> String {
             lines.push("100");
             lines.push("AcDbEntity");
             lines.push("  8");
-            lines.push(&l_name);
+            lines.push(l_name);
             lines.push(" 62");
             lines.push(&aci);
             lines.push("100");
@@ -404,17 +499,20 @@ pub fn to_dxf(scene: &Scene, scale: f64, mode: &str) -> String {
     if let Some(pos) = text.find(HANDSEED_PLACEHOLDER) {
         text.replace_range(pos..pos + HANDSEED_PLACEHOLDER.len(), &handseed);
     }
-    text
+    Ok(text)
 }
 
 /// Exports a baked [`Scene`] directly to an AutoCAD R2000 3D DXF file (see
-/// [`to_dxf`]), creating the parent directory if needed.
+/// [`to_dxf`]), creating the parent directory if needed. A [`DxfError`]
+/// comes back as an [`io::ErrorKind::InvalidInput`] error, before anything
+/// is created on disk.
 pub fn export_dxf(scene: &Scene, path: impl AsRef<Path>, scale: f64, mode: &str) -> io::Result<()> {
     let path = path.as_ref();
+    let content =
+        to_dxf(scene, scale, mode).map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
     if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent)?;
     }
-    let content = to_dxf(scene, scale, mode);
     std::fs::write(path, content.as_bytes()).map_err(|e| {
         io::Error::new(
             e.kind(),
@@ -672,38 +770,55 @@ mod tests {
 
     #[test]
     fn layer_names_lose_illegal_characters_and_surrounding_space() {
-        assert_eq!(sanitize_layer_name(""), "0");
-        assert_eq!(sanitize_layer_name(" \t\r\n"), "0");
+        assert_eq!(sanitize_layer_name("", ""), "0");
+        assert_eq!(sanitize_layer_name(" \t\r\n", ""), "0");
         assert_eq!(
-            sanitize_layer_name("  a<b>c/d\\e\"f~g:h;i?j*k=l`m|n  "),
+            sanitize_layer_name("  a<b>c/d\\e\"f~g:h;i?j*k=l`m|n  ", ""),
             "a_b_c_d_e_f_g_h_i_j_k_l_m_n"
         );
-        assert_eq!(sanitize_layer_name("Walls"), "Walls");
+        assert_eq!(sanitize_layer_name("Walls", ""), "Walls");
+        // Control characters, C1 controls included, become underscores.
+        assert_eq!(sanitize_layer_name("a\u{1}b\u{7f}c\u{85}d", ""), "a_b_c_d");
+    }
+
+    #[test]
+    fn non_ascii_is_escaped_per_utf16_unit() {
+        assert_eq!(sanitize_layer_name("Caf\u{e9}", ""), "Caf\\U+00E9");
+        assert_eq!(
+            sanitize_layer_name("\u{67dc}\u{1f600}", ""),
+            "\\U+67DC\\U+D83D\\U+DE00"
+        );
+        // The suffix is appended after the name, before escaping.
+        assert_eq!(sanitize_layer_name("\u{e9}", "_1"), "\\U+00E9_1");
     }
 
     #[test]
     fn long_layer_names_are_capped_with_a_hash_suffix() {
         let long = "x".repeat(300);
-        let clean = sanitize_layer_name(&long);
+        let clean = sanitize_layer_name(&long, "");
         assert_eq!(clean.len(), 255);
         assert_eq!(&clean[..247], &format!("{}_", "x".repeat(246)));
-        assert_eq!(
-            &clean[247..],
-            &format!("{:08x}", fnv1a64(long.as_bytes()) & 0xFFFF_FFFF)
-        );
-        // Two names sharing their first 246 bytes still differ.
+        assert_eq!(&clean[247..], layer_name_hash(&long));
+        // Two names sharing their first 246 characters still differ.
         let other = format!("{}y", "x".repeat(299));
-        assert_ne!(sanitize_layer_name(&other), clean);
-        // A multi-byte name never splits a character.
+        assert_ne!(sanitize_layer_name(&other, ""), clean);
+        // The limit counts UTF-16 units, not escaped bytes.
         let wide = "\u{00e9}".repeat(200);
-        assert!(sanitize_layer_name(&wide).len() <= 255);
+        assert_eq!(sanitize_layer_name(&wide, ""), "\\U+00E9".repeat(200));
+        // A cut never splits a surrogate pair: unit 246 is a high surrogate,
+        // so the name keeps 245 units, not 246.
+        let emoji = format!("{}\u{1f600}{}", "x".repeat(245), "x".repeat(20));
+        assert_eq!(
+            sanitize_layer_name(&emoji, ""),
+            format!("{}_{}", "x".repeat(245), layer_name_hash(&emoji))
+        );
     }
 
     #[test]
-    fn fnv1a_matches_the_reference_vectors() {
-        assert_eq!(fnv1a64(b""), 0xcbf2_9ce4_8422_2325);
-        assert_eq!(fnv1a64(b"a"), 0xaf63_dc4c_8601_ec8c);
-        assert_eq!(fnv1a64(b"foobar"), 0x8594_4171_f739_67e8);
+    fn the_hash_is_32_bit_fnv1a_in_upper_case_hex() {
+        assert_eq!(layer_name_hash(""), "811C9DC5");
+        assert_eq!(layer_name_hash("a"), "E40C292C");
+        assert_eq!(layer_name_hash("foobar"), "BF9CF968");
     }
 
     #[test]
@@ -723,9 +838,6 @@ mod tests {
         assert_eq!(fmt6(-1e-9), "-0.000000");
         assert_eq!(fmt6(39.37007874015748), "39.370079");
         assert_eq!(fmt6(1e20), "100000000000000000000.000000");
-        assert_eq!(fmt6(f64::INFINITY), "inf");
-        assert_eq!(fmt6(f64::NEG_INFINITY), "-inf");
-        assert_eq!(fmt6(f64::NAN), "nan");
     }
 
     #[test]
