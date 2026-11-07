@@ -39,6 +39,7 @@ This project follows the [Contributor Covenant v2.1](CODE_OF_CONDUCT.md). By par
 | .NET | .NET SDK 8.0+ |
 | Dart | Dart SDK 3.0+ |
 | C++ | CMake 3.21+, a C++17 compiler |
+| Rust | Rust 1.88 or newer (via `rustup`; CI tests stable and 1.88); the `wasm32-unknown-unknown` target only for the viewer |
 | All | Git, a good hex editor (recommended) |
 
 ### Understanding the Codebase
@@ -106,6 +107,19 @@ cmake --build build/cpp
 ctest --test-dir build/cpp --output-on-failure
 ```
 
+### Rust
+
+```bash
+cd packages/rust
+cargo test --release
+```
+
+The writer's reference files (`packages/rust/tests/fixtures/create_reference/*.skp`) come from
+the C++ writer. After a change to `packages/cpp/src/create.cpp`, regenerate them with
+`python packages/rust/tests/fixtures/create_reference/regenerate.py` (needs a C++17 compiler),
+then run `cargo test --release --test create_reference_test` to see what the Rust writer must
+follow.
+
 ---
 
 ## Running Tests
@@ -129,7 +143,7 @@ pytest -k "test_vertex"
 ```
 
 See [Development Setup](#development-setup) above for the equivalent test
-commands in TypeScript, .NET, Dart, and C++.
+commands in TypeScript, .NET, Dart, C++, and Rust.
 
 ### Test Fixtures
 
@@ -262,6 +276,15 @@ def parse_vertex(data: bytes, offset: int = 0) -> tuple[float, float, float]:
 Formatting is enforced by C++ CI. Configure with
 `-DOPENSKP_CLANG_FORMAT_EXECUTABLE=/path/to/clang-format` to select a specific
 local executable.
+
+### Rust
+
+| Rule | Standard |
+|:-----|:---------|
+| Edition | 2021 |
+| Formatter | `rustfmt` (default settings, 100-column limit), enforced by Rust CI |
+| Linter | `cargo clippy --all-targets -- -D warnings` (enforced by Rust CI) |
+| Dependencies | None: the crate uses `std` only |
 
 ### General Principles
 

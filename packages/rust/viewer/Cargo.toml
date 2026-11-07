@@ -1,0 +1,24 @@
+[package]
+name = "openskp-viewer"
+version = "0.1.0"
+edition = "2021"
+description = "Small in-browser SketchUp (.skp) viewer: openskp compiled to WebAssembly, rendered with WebGL2"
+license = "MIT"
+publish = false
+
+# Standalone: not a member of the library's (non-existent) workspace.
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[dependencies]
+openskp = { path = ".." }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
