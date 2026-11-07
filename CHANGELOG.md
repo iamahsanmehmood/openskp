@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed and added — C++ (contributed by @modraup, #478, #488, #499, #500)
+
+- **Component identity and definition attributes (#478).** Every exported definition used to get a
+  new GUID, and independent files shared the blank scaffold's model GUID. `DefinitionOptions::guid`
+  now keeps a component's UUID (an empty value generates one), `SkpBuilder::set_guid()` sets the
+  file's, and each builder gets its own default that stays the same across repeated writes. Compact
+  and hyphenated UUID strings are accepted and checked before anything is written.
+  `Definition::parsed_dictionaries` exposes a VFF definition's own attribute dictionaries (empty for
+  classic files).
+  **Behaviour change:** definition and instance GUID strings are now in canonical UUID byte order
+  (uppercase, no hyphens) in classic and VFF files alike; before, they were in Windows storage byte
+  order. The same `Shelf` component in the 2017, 2020 and 2021 fixtures now has one GUID in all
+  three formats. Anything that stored the old strings has to normalise them before comparing.
+- **Annotation tags and visibility (#488).** Dimensions and text keep their own tag and hidden state
+  in classic and VFF files (the reader used to show them all on the default layer), along with their
+  anchors, label positions, screen fractions and leader types. Annotations belong to the definition
+  that owns them and are read in its coordinates; the model-level list of VFF dimensions stays for
+  compatibility. `DimensionOptions` and `TextOptions` write tags, hidden state, component text and
+  screen placement, and the existing overloads are unchanged. Leaderless model text is written as
+  model text with a hidden leader. The default tag is reported as `""`, as for faces and guides.
+- **DXF export (#499).** Layer names with characters outside ASCII were written as UTF-8 into an
+  ANSI file and came out wrong. They are now written as `\U+XXXX` escapes, cut at 255 UTF-16 units
+  without splitting a character, and kept unique after sanitising. A polyface whose counts exceed
+  the signed 16-bit limit is written as `3DFACE`s, and malformed mesh input is rejected. Numbers are
+  formatted the same way in every locale.
+- **Long attribute strings (#500).** An attribute value of 255 UTF-16 units or more was rejected, so
+  plugin JSON and other long metadata could not be saved. The writer now emits the 16-bit and 32-bit
+  MFC length forms. The classic reader joins UTF-16 surrogate pairs into valid UTF-8, and a
+  malformed surrogate reads as U+FFFD instead of ending the string.
+
+The other four languages have not been checked against these four changes; they are listed in #285.
+
 ### Fixed — hostile files: deep nesting, deep `meta.dat` wrappers and truncated `model.dat` (#496, #497, #498)
 
 All five readers handled three kinds of damaged or hostile input badly. They now behave the same way.
