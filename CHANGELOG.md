@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   uses it, takes an object slot between the tags, and is pointed at again by later tags that share
   it; the reader now reads it and counts the slot, so every face stays on its own tag. Models
   without tag line styles are unchanged (all 200+ sample files parse to identical results).
-  Reported by @mschache. The other four readers have the same gap and are tracked in #285.
+  Reported by @mschache. The other readers do not handle the class either (TypeScript fails on the same models) and are tracked in #285.
 
 ### Fixed and added — C++ (contributed by @modraup, #478, #488, #499, #500)
 
