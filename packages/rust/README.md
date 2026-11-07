@@ -26,13 +26,20 @@ println!("{} {} definitions", model.version, model.definitions.len());
 
 Both containers are read: VFF (SketchUp 2021+) and the classic MFC `CArchive` (2013–2020).
 
+## Writing, editing and code generation
+
+- `openskp::create()` returns an `SkpBuilder` for a new file from scratch.
+- `openskp::open_existing()` loads a classic-format file to extend it.
+- `openskp::to_rust_code()` turns a parsed model into Rust source that rebuilds it.
+
 ## Tests
 
 ```sh
 cargo test --release
 ```
 
-Fixtures live in `tests/fixtures`.
+Fixtures live in `tests/fixtures`. `tests/fixtures/create_reference` holds files written by the C++
+writer (from `oracle_driver.cpp`); the Rust writer must reproduce them byte for byte.
 
 ## License
 
