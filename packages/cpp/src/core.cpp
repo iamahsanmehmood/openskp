@@ -586,12 +586,14 @@ RawParsed full_parse(const ByteBuffer& data, const ParseOptions& o) {
   } catch (...) {
     emit_log(o, LogLevel::debug, "Failed to parse pages");
   }
-  if (!vertex_positions.empty()) {
-    try {
-      p.dimensions = parse_dimensions(*model, vertex_positions, instance_world);
-    } catch (...) {
-      emit_log(o, LogLevel::debug, "Failed to parse dimensions");
-    }
+  try {
+    // Definition-local annotations need only transforms below their owning definition.
+    // Keep the historical world-space model list for existing clients as well.
+    compose_instance_world(p.root, p.definitions, instance_world);
+    p.dimensions = parse_dimensions(*model, vertex_positions, instance_world);
+    assign_vff_annotations(*model, vertex_positions, instance_world, p);
+  } catch (...) {
+    emit_log(o, LogLevel::debug, "Failed to parse annotations");
   }
   model.reset();
   if (!p.layer_id_to_name.count(1)) p.layer_id_to_name[1] = "Layer0";

@@ -9,6 +9,17 @@ static void require_range(const ByteBuffer& d, std::size_t o, std::size_t n) {
   if (o > d.size() || n > d.size() - o) throw std::out_of_range("binary read exceeds buffer");
 }
 
+std::string bytes_to_upper_hex(const ByteBuffer& bytes) {
+  constexpr char hex[] = "0123456789ABCDEF";
+  std::string result;
+  result.reserve(bytes.size() * 2);
+  for (const auto byte : bytes) {
+    result += hex[byte >> 4];
+    result += hex[byte & 15];
+  }
+  return result;
+}
+
 // Classic CArchive and VFF both store UUID Data1/Data2/Data3 in Windows order.
 std::string guid_from_windows_bytes(const ByteBuffer& bytes) {
   if (bytes.size() != 16) throw std::invalid_argument("GUID must contain exactly 16 bytes");

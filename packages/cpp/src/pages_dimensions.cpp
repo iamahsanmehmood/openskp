@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <functional>
+#include <optional>
 
 #include "internal.hpp"
 
@@ -53,15 +54,19 @@ std::optional<ByteBuffer> tlv_find_int(const std::vector<FlatTlvItem>& items, st
   return std::nullopt;
 }
 
-std::string hex_upper(const ByteBuffer& p) {
-  static char h[] = "0123456789ABCDEF";
-  std::string s;
-  s.reserve(p.size() * 2);
-  for (auto b : p) {
-    s += h[b >> 4];
-    s += h[b & 15];
+// 53FE stores SketchUp's instance path as repeated (u8 length, id bytes),
+// outer placement first. A root-level dimension on nested groups names the
+// cabinet AND each inner instance; the vertex is in the innermost definition.
+std::vector<std::string> length_prefixed_ids(const ByteBuffer& p) {
+  std::vector<std::string> ids;
+  std::size_t off = 0;
+  while (off < p.size()) {
+    const std::uint8_t ln = p[off];
+    if (ln == 0 || off + 1 + ln > p.size()) break;
+    ids.push_back(bytes_to_upper_hex(ByteBuffer(p.begin() + off + 1, p.begin() + off + 1 + ln)));
+    off += 1 + ln;
   }
-  return s;
+  return ids;
 }
 
 ByteBuffer strip_de05(const ByteBuffer& p) {
@@ -85,24 +90,300 @@ std::optional<Vec3> vec3_of(const std::optional<ByteBuffer>& p) {
   return std::nullopt;
 }
 
+std::optional<Vec3> dimension_connection_point(
+    const std::optional<ByteBuffer>& block_payload, const std::map<std::string, Vec3>& id2pos,
+    const std::map<std::string, std::vector<double>>& inst_world) {
+  if (!block_payload) return std::nullopt;
+  auto blk_items = tlv_items_int(*block_payload);
+  auto blk = tlv_find_int(blk_items, 0x5208);
+  if (!blk) return std::nullopt;
+  auto sub = tlv_items_int(*blk);
+  auto typ_b = tlv_find_int(sub, 0x5209);
+  std::optional<std::uint32_t> typ;
+  if (typ_b && typ_b->size() == 4) typ = read_u32(*typ_b, 0);
+  if (typ == 1u) {
+    auto pos = tlv_find_int(sub, 0x520a);
+    return vec3_of(pos);
+  }
+  auto ref_b = tlv_find_int(sub, 0x520b);
+  std::optional<ByteBuffer> f53fc;
+  if (ref_b) {
+    auto ref_items = tlv_items_int(*ref_b);
+    f53fc = tlv_find_int(ref_items, 0x53fc);
+  }
+  std::vector<FlatTlvItem> fi;
+  if (f53fc) fi = tlv_items_int(*f53fc);
+  auto vid = tlv_find_int(fi, 0x53fd);
+  auto iid = tlv_find_int(fi, 0x53fe);
+  if (!vid) return std::nullopt;
+  auto local_it = id2pos.find(bytes_to_upper_hex(*vid));
+  if (local_it == id2pos.end()) return std::nullopt;
+  if (iid && !iid->empty()) {
+    auto path = length_prefixed_ids(*iid);
+    if (path.empty()) path.push_back(bytes_to_upper_hex(*iid));
+    for (auto it = path.rbegin(); it != path.rend(); ++it) {
+      auto w_it = inst_world.find(*it);
+      if (w_it != inst_world.end() && !w_it->second.empty()) {
+        return transform_point(w_it->second, local_it->second);
+      }
+    }
+  }
+  return local_it->second;
+}
+
 // Header-only check that buf[begin, end) is the same well-formed flat TLV
 // tlv_items_int accepts, carrying both dimension ends (5BCD, 5BCE). The
 // "cc 5b" byte search hits mesh/float data far more often than real 5BCC
 // records, and those false hits can claim lengths of hundreds of MB; this
 // rejects them before anything is copied.
-bool flat_tlv_has_dimension_ends(const ByteBuffer& buf, std::size_t begin, std::size_t end) {
-  bool has_5bcd = false, has_5bce = false;
+bool flat_tlv_has_fields(const ByteBuffer& buf, std::size_t begin, std::size_t end,
+                         std::uint16_t first = 0x5bcd, std::uint16_t second = 0x5bce) {
+  bool has_first = false, has_second = false;
   std::size_t off = begin;
   while (off < end) {
     if (off + 6 > end) return false;
     const auto tag = static_cast<std::uint16_t>(buf[off] | (buf[off + 1] << 8));
     const auto ln = read_u32(buf, off + 2);
     if (tag == 0 || ln > end - off - 6) return false;
-    if (tag == 0x5bcd) has_5bcd = true;
-    if (tag == 0x5bce) has_5bce = true;
+    if (tag == first) has_first = true;
+    if (tag == second) has_second = true;
     off += 6 + ln;
   }
-  return has_5bcd && has_5bce;
+  return has_first && has_second;
+}
+
+std::optional<RawDimension> parse_one_5bcc(
+    const ByteBuffer& model_dat, std::size_t j, const std::map<std::string, Vec3>& id2pos,
+    const std::map<std::string, std::vector<double>>& inst_world) {
+  const std::size_t n = model_dat.size();
+  if (j + 6 > n) return std::nullopt;
+  auto ln = read_u32(model_dat, j + 2);
+  if (ln < 40 || j + 6 + ln > n) return std::nullopt;
+  if (!flat_tlv_has_fields(model_dat, j + 6, j + 6 + ln)) return std::nullopt;
+  ByteBuffer body_bytes(model_dat.begin() + j + 6, model_dat.begin() + j + 6 + ln);
+  auto body = tlv_items_int(body_bytes);
+  if (body.empty()) return std::nullopt;
+  bool has_first = false, has_second = false;
+  for (auto& it : body) {
+    if (it.tag == 0x5bcd) has_first = true;
+    if (it.tag == 0x5bce) has_second = true;
+  }
+  if (!has_first || !has_second) return std::nullopt;
+  auto a = dimension_connection_point(tlv_find_int(body, 0x5bcd), id2pos, inst_world);
+  auto b = dimension_connection_point(tlv_find_int(body, 0x5bce), id2pos, inst_world);
+  if (!a || !b) return std::nullopt;
+  RawDimension d;
+  d.a = *a;
+  d.b = *b;
+  // Dimension base (59D8) owns the drawing properties. Connection targets may
+  // contain other entities: never search those for the dimension's tag/flags.
+  if (const auto base = tlv_find_int(body, 0x59d8)) {
+    if (const auto draw = tlv_find_int(tlv_items_int(*base), 0x07d0)) {
+      const auto properties = tlv_items_int(*draw);
+      if (const auto layer = tlv_find_int(properties, 0x07d2); layer && !layer->empty())
+        d.layer = std::to_string(parse_varint(*layer, 0, layer->size()));
+      if (const auto flags = tlv_find_int(properties, 0x07d3); flags && !flags->empty())
+        d.hidden = ((*flags)[0] & 0x01) != 0;
+    }
+  }
+  d.plane_x = vec3_of(tlv_find_int(body, 0x5bcf));
+  d.normal = vec3_of(tlv_find_int(body, 0x5bd0));
+  auto off_b = tlv_find_int(body, 0x5bd2);
+  d.offset = (off_b && off_b->size() == 8) ? read_f64(*off_b, 0) : 0.0;
+  // VFF 5BCF is the plane normal, 5BD0 its X axis, and 5BD1 the
+  // constrained axis. Retain the historical public frame fields, but resolve
+  // placement explicitly so clients need not guess the side from endpoints.
+  const auto axis_bytes = tlv_find_int(body, 0x5bd1);
+  if (axis_bytes && axis_bytes->size() == 4 && d.plane_x && d.normal) {
+    const auto axis = read_u32(*axis_bytes, 0);
+    const Vec3& normal = *d.plane_x;
+    const Vec3& x = *d.normal;
+    if (axis == 1) {
+      d.offset_vector = Vec3{(normal[1] * x[2] - normal[2] * x[1]) * d.offset,
+                             (normal[2] * x[0] - normal[0] * x[2]) * d.offset,
+                             (normal[0] * x[1] - normal[1] * x[0]) * d.offset};
+    } else if (axis == 2) {
+      d.offset_vector = Vec3{-x[0] * d.offset, -x[1] * d.offset, -x[2] * d.offset};
+    }
+  }
+  return d;
+}
+
+std::optional<TextEntity> parse_text(const ByteBuffer& model_dat, std::size_t j,
+                                     const std::map<std::string, Vec3>& id2pos,
+                                     const std::map<std::string, std::vector<double>>& transforms) {
+  const auto size = read_u32(model_dat, j + 2);
+  const auto fields =
+      tlv_items_int(ByteBuffer(model_dat.begin() + j + 6, model_dat.begin() + j + 6 + size));
+  const auto value = tlv_find_int(fields, 0x55f1);
+  const auto connection = tlv_find_int(fields, 0x55f4);
+  if (!value || !connection) return std::nullopt;
+  TextEntity text;
+  text.text.assign(value->begin(), value->end());
+  text.point = dimension_connection_point(connection, id2pos, transforms);
+  text.label_point = vec3_of(tlv_find_int(fields, 0x55f5));
+  const auto x = tlv_find_int(fields, 0x55f2), y = tlv_find_int(fields, 0x55f3);
+  if (x && y && x->size() == 8 && y->size() == 8)
+    text.screen_position = std::array<double, 2>{read_f64(*x, 0), read_f64(*y, 0)};
+  if (const auto type = tlv_find_int(fields, 0x55fd); type && type->size() == 4)
+    text.leader_type = static_cast<int>(read_u32(*type, 0));
+  if (const auto arrow = tlv_find_int(fields, 0x55fa); arrow && arrow->size() == 4)
+    text.arrow_type = static_cast<int>(read_u32(*arrow, 0));
+  if (const auto display = tlv_find_int(fields, 0x55fc); display && display->size() == 1)
+    text.display_leader = (*display)[0] != 0;
+  if (const auto draw = tlv_find_int(fields, 0x07d0)) {
+    const auto properties = tlv_items_int(*draw);
+    if (const auto layer = tlv_find_int(properties, 0x07d2); layer && !layer->empty())
+      text.layer = std::to_string(parse_varint(*layer, 0, layer->size()));
+    if (const auto flags = tlv_find_int(properties, 0x07d3); flags && !flags->empty())
+      text.hidden = ((*flags)[0] & 0x01) != 0;
+  }
+  return text;
+}
+
+Dimension public_dimension(const RawDimension& d) {
+  Dimension dim;
+  dim.a = d.a;
+  dim.b = d.b;
+  dim.offset = d.offset;
+  dim.plane_x = d.plane_x;
+  dim.normal = d.normal;
+  dim.offset_vector = d.offset_vector;
+  dim.layer = d.layer;
+  dim.hidden = d.hidden;
+  return dim;
+}
+
+struct DefSpan {
+  std::size_t begin{};
+  std::size_t end{};
+  EntityId id{};
+};
+
+struct TlvHeader {
+  std::size_t offset{};
+  std::size_t size{};
+};
+
+std::vector<TlvHeader> tlv_headers(const ByteBuffer& md, std::size_t start, std::size_t end) {
+  std::vector<TlvHeader> out;
+  for (std::size_t p = start; p + 6 <= end;) {
+    const auto n = read_u32(md, p + 2);
+    if (n > end - p - 6) break;
+    out.push_back({p, n});
+    p += 6 + n;
+  }
+  return out;
+}
+
+// Same first-id rule as collect_definitions: direct DE05 or DC05, then
+// recurse only dictionary / entity-header containers. Walking C409/6419
+// would steal a vertex or instance id.
+std::optional<EntityId> entity_id_from_tlv(const ByteBuffer& md, std::size_t rec,
+                                           std::size_t rec_end, int depth = 0) {
+  if (depth > 24 || rec + 6 > rec_end) return std::nullopt;
+  const auto kids = tlv_headers(md, rec + 6, rec_end);
+  for (const auto& k : kids) {
+    const std::string t = tag_at(md, k.offset);
+    try {
+      if (t == "DE05" && k.size > 0 && k.size <= 8) {
+        return static_cast<EntityId>(parse_varint(md, k.offset + 6, k.size));
+      }
+      if (t == "DC05" && k.size >= 6 && md[k.offset + 6] == 0xde && md[k.offset + 7] == 5) {
+        const auto z = read_u32(md, k.offset + 8);
+        if (z > 0 && z <= 8 && z <= k.size - 6) {
+          return static_cast<EntityId>(parse_varint(md, k.offset + 12, z));
+        }
+      }
+    } catch (...) {
+      continue;
+    }
+  }
+  for (const auto& k : kids) {
+    const std::string t = tag_at(md, k.offset);
+    // Same containers collect_definitions actually walks for a 7C15 id
+    // (8813 dictionaries / D007). Recursing C409/6419 would bake a vertex
+    // or instance id and park 5BCC on the wrong definition.
+    if (t != "8813" && t != "D007" && t != "8913" && t != "8A13" && t != "8B13" && t != "8C13" &&
+        t != "8D13") {
+      continue;
+    }
+    if (auto id = entity_id_from_tlv(md, k.offset, k.offset + 6 + k.size, depth + 1)) return id;
+  }
+  return std::nullopt;
+}
+
+// Only the F901 → 7017 → 7117 definition list. A raw `7c 15` hunt inside
+// F601/geometry false-matches and parks model-root (or in-group) 5BCC on
+// the wrong definition.
+std::vector<DefSpan> scan_definition_spans(const ByteBuffer& md,
+                                           const std::map<EntityId, RawDefinition>& defs) {
+  std::vector<DefSpan> spans;
+  if (md.size() < 6) return spans;
+  auto hs = tlv_headers(md, 0, md.size());
+  if (hs.size() == 1 && md[hs[0].offset] == 0xf4 && md[hs[0].offset + 1] == 1) {
+    hs = tlv_headers(md, hs[0].offset + 6, hs[0].offset + 6 + hs[0].size);
+  }
+  for (const auto& h : hs) {
+    if (tag_at(md, h.offset) != "F901") continue;
+    auto level = tlv_headers(md, h.offset + 6, h.offset + 6 + h.size);
+    bool ok = true;
+    for (const char* expected : {"7017", "7117"}) {
+      auto it = std::find_if(level.begin(), level.end(), [&](const TlvHeader& rec) {
+        return tag_at(md, rec.offset) == expected;
+      });
+      if (it == level.end()) {
+        ok = false;
+        break;
+      }
+      level = tlv_headers(md, it->offset + 6, it->offset + 6 + it->size);
+    }
+    if (!ok) continue;
+    for (const auto& rec : level) {
+      if (tag_at(md, rec.offset) != "7C15") continue;
+      auto id = entity_id_from_tlv(md, rec.offset, rec.offset + 6 + rec.size);
+      if (!id || !defs.count(*id)) continue;
+      spans.push_back({rec.offset, rec.offset + 6 + rec.size, *id});
+    }
+  }
+  return spans;
+}
+
+std::optional<EntityId> owning_definition(const std::vector<DefSpan>& spans, std::size_t off) {
+  std::optional<EntityId> best;
+  std::size_t best_len = static_cast<std::size_t>(-1);
+  for (const auto& s : spans) {
+    if (off < s.begin || off >= s.end) continue;
+    const std::size_t len = s.end - s.begin;
+    if (len < best_len) {
+      best_len = len;
+      best = s.id;
+    }
+  }
+  return best;
+}
+
+// Recursive tag search over buf[begin, end), in place. Same acceptance as
+// walking tlv_items_int level by level (a malformed level contributes
+// nothing), without copying every nested payload.
+bool tlv_contains_tag(const ByteBuffer& buf, std::size_t begin, std::size_t end, std::uint16_t tag,
+                      int depth = 0) {
+  if (depth > 64) return false;
+  std::size_t off = begin;
+  while (off < end) {
+    if (off + 6 > end) return false;
+    const auto t = static_cast<std::uint16_t>(buf[off] | (buf[off + 1] << 8));
+    const auto ln = read_u32(buf, off + 2);
+    if (t == 0 || ln > end - off - 6) return false;
+    off += 6 + ln;
+  }
+  for (off = begin; off < end;) {
+    const auto t = static_cast<std::uint16_t>(buf[off] | (buf[off + 1] << 8));
+    const auto ln = read_u32(buf, off + 2);
+    if (t == tag || tlv_contains_tag(buf, off + 6, off + 6 + ln, tag, depth + 1)) return true;
+    off += 6 + ln;
+  }
+  return false;
 }
 
 }  // namespace
@@ -124,8 +405,8 @@ void scan_vertex_positions(const TlvNode& top, std::map<std::string, Vec3>& id2p
       auto* c509 = find_child_tag(el.children, "C509");
       if (dc05 && c509 && c509->payload.size() == 24) {
         auto idb = strip_de05(dc05->payload);
-        id2pos[hex_upper(idb)] = {read_f64(c509->payload, 0), read_f64(c509->payload, 8),
-                                  read_f64(c509->payload, 16)};
+        id2pos[bytes_to_upper_hex(idb)] = {read_f64(c509->payload, 0), read_f64(c509->payload, 8),
+                                           read_f64(c509->payload, 16)};
       }
     }
     for (auto& c : el.children) visit(c);
@@ -154,7 +435,7 @@ void scan_instance_transforms(const TlvNode& top,
           auto* d007 = find_child_tag(el.children, "D007");
           auto* dc05 = d007 ? find_child_tag(d007->children, "DC05") : nullptr;
           std::optional<std::string> iid;
-          if (dc05) iid = hex_upper(strip_de05(dc05->payload));
+          if (dc05) iid = bytes_to_upper_hex(strip_de05(dc05->payload));
 
           auto* m = find_child_tag(el.children, "6619");
           std::optional<std::vector<double>> mat;
@@ -173,115 +454,106 @@ void scan_instance_transforms(const TlvNode& top,
   visit(top, {});
 }
 
-// Linear dimensions (SketchUp's Dimension tool).
-//
-// A dimension entity is a "5BCC" record (raw bytes cc 5b) holding:
-//
-// * 5BCD / 5BCE - the two connection points. Each wraps a 5208 whose 5209
-//   is the connection TYPE (1 = a free explicit point in 520A, already
-//   world space; 2 = connected to geometry, 520A is zero and 520B -> 53FC
-//   names the target: 53FD = the vertex by persistent id, 53FE = a
-//   length-prefixed persistent id of the INSTANCE holding it - the vertex
-//   position is definition-local, so it is lifted to world by that
-//   instance's transform).
-// * 5BCF - the dimension plane normal; 5BD0 - its X axis; 5BD1 - constrained axis.
-// * 5BD2 - the offset distance (inches): how far the dimension line sits
-//   from the measured segment, along the in-plane perpendicular.
-//
-// The measured value is auto-computed from the two points (no cached text
-// on the samples seen), so callers format it themselves. Endpoints come
-// out in WORLD space (inches). A connection point that cannot be resolved
-// drops the whole dimension (fail-safe).
+void compose_instance_world(const RawDefinition& root,
+                            const std::map<EntityId, RawDefinition>& definitions,
+                            std::map<std::string, std::vector<double>>& world) {
+  std::function<void(const RawDefinition&, const std::vector<double>&, int)> walk =
+      [&](const RawDefinition& def, const std::vector<double>& parent, int depth) {
+        if (depth > 64) return;
+        for (const auto& inst : def.builder.instances) {
+          const std::vector<double> here =
+              inst.matrix.empty() ? parent : multiply_matrices(parent, inst.matrix);
+          if (!inst.persistent_id.empty()) world[inst.persistent_id] = here;
+          if (!inst.ref_idx) continue;
+          const auto it = definitions.find(*inst.ref_idx);
+          if (it != definitions.end()) walk(it->second, here, depth + 1);
+        }
+      };
+  walk(root, {}, 0);
+}
+
+// Linear dimensions (SketchUp's Dimension tool). 5BCC records inside a
+// 7C15 component/group belong to that definition (local space); records
+// outside any definition are model-root (world space). See
+// assign_vff_annotations. parse_dimensions keeps the older "every 5BCC
+// against one xf map" behaviour for unit tests.
 std::vector<RawDimension> parse_dimensions(
     const ByteBuffer& model_dat, const std::map<std::string, Vec3>& id2pos,
     const std::map<std::string, std::vector<double>>& inst_world) {
   std::vector<RawDimension> dims;
   const ByteBuffer needle{0xcc, 0x5b};
   std::size_t i = 0;
-  std::size_t n = model_dat.size();
-
-  auto point = [&](const std::optional<ByteBuffer>& block_payload) -> std::optional<Vec3> {
-    if (!block_payload) return std::nullopt;
-    auto blk_items = tlv_items_int(*block_payload);
-    auto blk = tlv_find_int(blk_items, 0x5208);
-    if (!blk) return std::nullopt;
-    auto sub = tlv_items_int(*blk);
-    auto typ_b = tlv_find_int(sub, 0x5209);
-    std::optional<std::uint32_t> typ;
-    if (typ_b && typ_b->size() == 4) typ = read_u32(*typ_b, 0);
-    if (typ == 1u) {
-      auto pos = tlv_find_int(sub, 0x520a);
-      return vec3_of(pos);
-    }
-    // type 2: resolve the geometry reference (vertex + instance).
-    auto ref_b = tlv_find_int(sub, 0x520b);
-    std::optional<ByteBuffer> f53fc;
-    if (ref_b) {
-      auto ref_items = tlv_items_int(*ref_b);
-      f53fc = tlv_find_int(ref_items, 0x53fc);
-    }
-    std::vector<FlatTlvItem> fi;
-    if (f53fc) fi = tlv_items_int(*f53fc);
-    auto vid = tlv_find_int(fi, 0x53fd);
-    auto iid = tlv_find_int(fi, 0x53fe);
-    if (!vid) return std::nullopt;
-    auto local_it = id2pos.find(hex_upper(*vid));
-    if (local_it == id2pos.end()) return std::nullopt;
-    if (iid && !iid->empty() && (*iid)[0] > 0 && std::size_t(1 + (*iid)[0]) <= iid->size()) {
-      ByteBuffer id_bytes(iid->begin() + 1, iid->begin() + 1 + (*iid)[0]);
-      auto w_it = inst_world.find(hex_upper(id_bytes));
-      if (w_it != inst_world.end() && !w_it->second.empty()) {
-        return transform_point(w_it->second, local_it->second);
-      }
-    }
-    return local_it->second;  // model-root vertex - already world
-  };
-
   while (true) {
     auto found = std::search(model_dat.begin() + i, model_dat.end(), needle.begin(), needle.end());
     if (found == model_dat.end()) break;
     std::size_t j = static_cast<std::size_t>(found - model_dat.begin());
     i = j + 1;
-    if (j + 6 > n) continue;
-    auto ln = read_u32(model_dat, j + 2);
-    if (ln < 40 || j + 6 + ln > n) continue;
-    if (!flat_tlv_has_dimension_ends(model_dat, j + 6, j + 6 + ln)) continue;
-    ByteBuffer body_bytes(model_dat.begin() + j + 6, model_dat.begin() + j + 6 + ln);
-    auto body = tlv_items_int(body_bytes);
-
-    auto a = point(tlv_find_int(body, 0x5bcd));
-    auto b = point(tlv_find_int(body, 0x5bce));
-    if (!a || !b) continue;
-
-    auto xaxis_b = tlv_find_int(body, 0x5bcf);
-    auto normal_b = tlv_find_int(body, 0x5bd0);
-    auto off_b = tlv_find_int(body, 0x5bd2);
-
-    RawDimension d;
-    d.a = *a;
-    d.b = *b;
-    d.plane_x = vec3_of(xaxis_b);
-    d.normal = vec3_of(normal_b);
-    d.offset = (off_b && off_b->size() == 8) ? read_f64(*off_b, 0) : 0.0;
-    // VFF 5BCF is the plane normal, 5BD0 its X axis, and 5BD1 the
-    // constrained axis. Retain the historical public frame fields, but resolve
-    // placement explicitly so clients need not guess the side from endpoints.
-    const auto axis_bytes = tlv_find_int(body, 0x5bd1);
-    if (axis_bytes && axis_bytes->size() == 4 && d.plane_x && d.normal) {
-      const auto axis = read_u32(*axis_bytes, 0);
-      const Vec3& normal = *d.plane_x;
-      const Vec3& x = *d.normal;
-      if (axis == 1) {
-        d.offset_vector = Vec3{(normal[1] * x[2] - normal[2] * x[1]) * d.offset,
-                               (normal[2] * x[0] - normal[0] * x[2]) * d.offset,
-                               (normal[0] * x[1] - normal[1] * x[0]) * d.offset};
-      } else if (axis == 2) {
-        d.offset_vector = Vec3{-x[0] * d.offset, -x[1] * d.offset, -x[2] * d.offset};
-      }
-    }
-    dims.push_back(std::move(d));
+    if (auto d = parse_one_5bcc(model_dat, j, id2pos, inst_world)) dims.push_back(std::move(*d));
   }
   return dims;
+}
+
+void assign_vff_annotations(const ByteBuffer& model_dat, const std::map<std::string, Vec3>& id2pos,
+                            const std::map<std::string, std::vector<double>>& model_world,
+                            RawParsed& parsed) {
+  const auto spans = scan_definition_spans(model_dat, parsed.definitions);
+  // One definition's composed instance transforms at a time. A definition's 5BCC records sit
+  // inside its own 7C15 span, so they arrive together; keeping a composed map for every owner
+  // grew by gigabytes on large models with many dimensioned components.
+  std::optional<EntityId> composed_owner;
+  std::map<std::string, std::vector<double>> local_world;
+  const std::map<std::string, std::vector<double>> no_xf;
+  std::size_t i = 0;
+  while (true) {
+    auto found = model_dat.begin() + i;
+    for (; found != model_dat.end(); ++found) {
+      if (model_dat.end() - found < 2) {
+        found = model_dat.end();
+        break;
+      }
+      if ((found[0] == 0xcc && found[1] == 0x5b) || (found[0] == 0xf0 && found[1] == 0x55)) break;
+    }
+    if (found == model_dat.end()) break;
+    std::size_t j = static_cast<std::size_t>(found - model_dat.begin());
+    i = j + 1;
+    if (j + 6 > model_dat.size()) continue;
+    const auto ln = read_u32(model_dat, j + 2);
+    if (ln < 40 || j + 6 + ln > model_dat.size()) continue;
+    const bool is_text = model_dat[j] == 0xf0;
+    if (!flat_tlv_has_fields(model_dat, j + 6, j + 6 + ln, is_text ? 0x55f1 : 0x5bcd,
+                             is_text ? 0x55f4 : 0x5bce))
+      continue;
+    const auto owner = owning_definition(spans, j);
+    const std::map<std::string, std::vector<double>>* xf = &model_world;
+    if (owner) {
+      // Same-def type-2 5BCC has no 53FE; don't compose an instance-xf map
+      // that parse_one_5bcc would never consult.
+      if (tlv_contains_tag(model_dat, j + 6, j + 6 + ln, 0x53fe)) {
+        if (composed_owner != owner) {
+          local_world.clear();
+          compose_instance_world(parsed.definitions[*owner], parsed.definitions, local_world);
+          composed_owner = owner;
+        }
+        xf = &local_world;
+      } else {
+        xf = &no_xf;
+      }
+    }
+    if (is_text) {
+      if (auto text = parse_text(model_dat, j, id2pos, *xf)) {
+        auto& builder = owner ? parsed.definitions[*owner].builder : parsed.root.builder;
+        builder.texts.push_back(std::move(*text));
+      }
+      continue;
+    }
+    auto d = parse_one_5bcc(model_dat, j, id2pos, *xf);
+    if (!d) continue;
+    if (owner) {
+      parsed.definitions[*owner].builder.dimensions.push_back(public_dimension(*d));
+    } else {
+      parsed.root.builder.dimensions.push_back(public_dimension(*d));
+    }
+  }
 }
 
 // Return the "0702" scenes node inside top's subtree, or nullptr. Called

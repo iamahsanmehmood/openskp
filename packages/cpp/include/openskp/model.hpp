@@ -397,6 +397,16 @@ struct SectionPlane {
 struct TextEntity {
   std::string text;
   bool hidden{false};
+  /// Explicit tag name, or empty for the default tag.
+  std::string layer;
+  /// Anchor and label positions in owner-local inches; unset when unresolved.
+  std::optional<Vec3> point;
+  std::optional<Vec3> label_point;
+  /// Normalized screen fractions (used when leader_type is zero).
+  std::optional<std::array<double, 2>> screen_position;
+  int leader_type{2};
+  int arrow_type{3};
+  bool display_leader{true};
 };
 
 /// A linear dimension (SketchUp's Dimension tool).
@@ -424,6 +434,8 @@ struct Dimension {
   /// Explicit offset for legacy or VFF dimensions constrained to a plane axis. This
   /// preserves the side of the line independently of endpoint ordering.
   std::optional<Vec3> offset_vector;
+  /// Explicit tag name, or empty for the default tag.
+  std::string layer;
 };
 
 /// A construction/guide line (SketchUp's Construction Line tool).
@@ -577,9 +589,9 @@ class OPENSKP_EXPORT SkpModel {
   /// the file at this view whichever scene is selected, even when the scene
   /// was not updated. Unset for classic pre-2021 files.
   std::optional<ViewCamera> camera;
-  /// Model-level linear dimensions with world-space endpoints (VFF
-  /// files). Legacy files surface text-only dimensions per definition
-  /// instead (`Definition::dimensions`).
+  /// All VFF linear dimensions with world-space endpoints (compatibility view).
+  /// Both VFF and legacy also expose owner-local geometry and drawing properties
+  /// through `root().dimensions` and `Definition::dimensions`.
   std::vector<Dimension> dimensions;
   /// Model materials sequence.
   std::deque<Material> materials;
