@@ -506,6 +506,9 @@ OpenExistingResult open_existing(const std::filesystem::path& path) {
 
   OpenExistingResult result;
   result.builder = create();
+  DocumentOptions document;
+  document.no_scale_mask = model.root().no_scale_mask;
+  result.builder->set_document_options(document);
   SkpBuilder& builder = *result.builder;
 
   std::map<EntityId, const Material*> by_id = model.materials_by_id();
@@ -531,7 +534,9 @@ OpenExistingResult open_existing(const std::filesystem::path& path) {
     // in real files - same reasoning as replay_instance's own name
     // handling below. context_name stays fallback-safe since it's only
     // ever used for a human-readable warning message.
-    ComponentDefinitionBuilder& db = builder.add_component_definition(defn.name);
+    DefinitionOptions options;
+    options.no_scale_mask = defn.no_scale_mask;
+    ComponentDefinitionBuilder& db = builder.add_component_definition(defn.name, options);
     replay_body(db, defn, by_id, material_slots, layer_slots, result.warnings, context,
                 def_builders);
     db.close();

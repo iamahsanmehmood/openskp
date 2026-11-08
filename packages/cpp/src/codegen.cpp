@@ -234,6 +234,11 @@ std::string to_cpp_code(const SkpModel& model) {
   }
   push("ByteBuffer build() {");
   push("  auto builder = create();");
+  if (model.root().no_scale_mask != 0) {
+    push("  openskp::DocumentOptions document;");
+    push("  document.no_scale_mask = " + std::to_string(model.root().no_scale_mask) + "u;");
+    push("  builder->set_document_options(document);");
+  }
   push("");
   push("  // --- Materials (" + std::to_string(model.materials.size()) + ") ---");
   {
@@ -483,8 +488,12 @@ std::string to_cpp_code(const SkpModel& model) {
     push("");
     push("  // " + defn.name + " - " + std::to_string(defn.faces.size()) + " faces, " +
          std::to_string(defn.instances.size()) + " nested instances");
+    if (defn.no_scale_mask != 0) {
+      push("  openskp::DefinitionOptions " + var_name + "_options;");
+      push("  " + var_name + "_options.no_scale_mask = " + std::to_string(defn.no_scale_mask) + "u;");
+    }
     push("  auto& " + var_name + " = builder->add_component_definition(" + cpp_string(def_name) +
-         ");");
+         (defn.no_scale_mask != 0 ? ", " + var_name + "_options" : "") + ");");
     emit_faces(defn, var_name, ".", "  ");
     for (const auto& inst : defn.instances) {
       if (!inst.ref_idx) continue;

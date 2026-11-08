@@ -285,6 +285,8 @@ struct DefinitionOptions {
   bool hidden = false;
   bool always_faces_camera = false;
   bool shadows_face_sun = false;
+  /// Native scale-grip suppression mask; unknown bits are preserved.
+  std::uint32_t no_scale_mask = 0;
   std::optional<ThumbnailCamera> thumbnail_camera;
   bool is_group = false;
 };
@@ -498,6 +500,8 @@ class OPENSKP_EXPORT ComponentDefinitionBuilder {
 
 /// Display settings supported by the legacy document scaffold.
 struct DocumentOptions {
+  /// Root model behavior, used when a file is loaded as a component.
+  std::uint32_t no_scale_mask = 0;
   /// Native UnitsOptions values: inches=0, feet=1, mm=2, cm=3, metres=4, yards=5.
   int length_unit = 0;
   int length_precision = 3;

@@ -558,7 +558,9 @@ void collect_definitions(const std::vector<TlvNode>& ns, std::map<EntityId, RawD
           d.is_group = kind == 1;
         } else if (c.tag == "581B")
           for (auto& v : parse_flat(c.payload)) {
-            if (v.first == "5D1B" && !v.second.empty())
+            if (v.first == "5A1B" && v.second.size() == 4)
+              d.no_scale_mask = read_u32(v.second, 0);
+            else if (v.first == "5D1B" && !v.second.empty())
               d.always_faces_camera = parse_varint(v.second, 0, v.second.size()) == 1;
             else if (v.first == "5E1B" && !v.second.empty())
               d.shadows_face_sun = parse_varint(v.second, 0, v.second.size()) == 1;
