@@ -10,6 +10,18 @@ namespace openskp {
 namespace {
 SkpModel read(SkpBuilder& builder) { return SkpFile::from_buffer(builder.to_bytes()).parse(); }
 
+TEST(IoFidelity, ScaleMaskDoesNotShiftExistingAggregateOptions) {
+  DocumentOptions document{2, 6, {}, 256};
+  EXPECT_EQ(document.length_unit, 2);
+  EXPECT_EQ(document.length_precision, 6);
+  EXPECT_EQ(document.next_persistent_id, 256u);
+  EXPECT_EQ(document.no_scale_mask, 0u);
+  DefinitionOptions definition{{}, "attributes", "",    {},    "",           "",
+                               0,  false,        false, false, std::nullopt, true};
+  EXPECT_TRUE(definition.is_group);
+  EXPECT_EQ(definition.no_scale_mask, 0u);
+}
+
 TEST(IoFidelity, NativeScaleMaskRoundTrip) {
   for (std::uint32_t mask : {0u, 1u, 2u, 4u, 8u, 16u, 32u, 64u, 127u, 0x12345678u}) {
     auto builder = create();
@@ -21,7 +33,7 @@ TEST(IoFidelity, NativeScaleMaskRoundTrip) {
     options.always_faces_camera = true;
     options.shadows_face_sun = true;
     auto& def = builder->add_component_definition("MaskProbe", options);
-    def.add_face({{0,0,0},{10,0,0},{0,10,0}});
+    def.add_face({{0, 0, 0}, {10, 0, 0}, {0, 10, 0}});
     def.close();
     builder->add_instance(def);
     auto model = read(*builder);
@@ -44,9 +56,11 @@ TEST(IoFidelity, ReadsSdkScaleMaskFixtures) {
 }
 
 TEST(IoFidelity, ReadsSdkRootScaleMaskFixtures) {
-  for (const auto* name : {"root_behavior_mask_2013.skp", "root_behavior_mask_2017.skp", "root_behavior_mask_2021.skp"}) {
+  for (const auto* name : {"root_behavior_mask_2013.skp", "root_behavior_mask_2017.skp",
+                           "root_behavior_mask_2021.skp"}) {
     auto model = SkpFile::open(std::string(OPENSKP_FIXTURES) + "/" + name).parse();
-    EXPECT_EQ(model.root().no_scale_mask, std::string(name).find("2021") != std::string::npos ? 127u : 2u);
+    EXPECT_EQ(model.root().no_scale_mask,
+              std::string(name).find("2021") != std::string::npos ? 127u : 2u);
     ASSERT_EQ(model.definitions.size(), 1u);
     EXPECT_EQ(model.definitions.begin()->second.no_scale_mask, 0u);
   }
@@ -54,12 +68,15 @@ TEST(IoFidelity, ReadsSdkRootScaleMaskFixtures) {
 
 TEST(IoFidelity, ScaleMaskSurvivesEditAndCodeGeneration) {
   auto builder = create();
-  DocumentOptions document; document.no_scale_mask = 16;
+  DocumentOptions document;
+  document.no_scale_mask = 16;
   builder->set_document_options(document);
-  DefinitionOptions options; options.no_scale_mask = 64;
+  DefinitionOptions options;
+  options.no_scale_mask = 64;
   auto& def = builder->add_component_definition("Masked", options);
-  def.add_face({{0,0,0},{10,0,0},{0,10,0}});
-  def.close(); builder->add_instance(def);
+  def.add_face({{0, 0, 0}, {10, 0, 0}, {0, 10, 0}});
+  def.close();
+  builder->add_instance(def);
   const auto path = std::filesystem::temp_directory_path() / "openskp_scale_mask_edit.skp";
   builder->save(path);
   auto edited = open_existing(path);

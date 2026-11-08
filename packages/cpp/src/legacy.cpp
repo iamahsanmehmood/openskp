@@ -2461,8 +2461,8 @@ RawParsed parse_legacy(const ByteBuffer& data, const ParseOptions& o) {
       }
       auto found = std::search(data.begin(), data.end(), marker.begin(), marker.end());
       if (found != data.end()) {
-        const auto pos = static_cast<std::size_t>(found - data.begin()) + marker.size() +
-                         (ver >= 17 ? 37 : 28);
+        const auto pos =
+            static_cast<std::size_t>(found - data.begin()) + marker.size() + (ver >= 17 ? 37 : 28);
         if (pos <= data.size() && data.size() - pos >= 4)
           out.root.no_scale_mask = read_u32(data, pos);
       }

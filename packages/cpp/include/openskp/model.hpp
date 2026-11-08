@@ -604,8 +604,6 @@ struct Definition {
   bool always_faces_camera{};
   /// Shadows face sun behavior flag.
   bool shadows_face_sun{};
-  /// Native scale-grip suppression bits: X, Y, Z, XZ, YZ, XY, XYZ (bits 0-6).
-  std::uint32_t no_scale_mask{};
   /// The analytic arc of every curve that is one, keyed by curve id - the Edge::curve_id of the
   /// edges that form it. A curve that is not an arc (a freehand or polygon curve) has no entry.
   std::map<EntityId, ArcCurve> arcs;
@@ -629,6 +627,8 @@ struct Definition {
   std::optional<ThumbnailCamera> thumbnail_camera;
   /// Whether the file explicitly supplied component/group type information.
   bool type_known{};
+  /// Native scale-grip suppression bits: X, Y, Z, XZ, YZ, XY, XYZ (bits 0-6).
+  std::uint32_t no_scale_mask{};
 };
 
 /// Top-level model container holding all definitions, layers, materials, and styles.

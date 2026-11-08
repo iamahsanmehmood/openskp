@@ -28,9 +28,9 @@ ByteBuffer uv_payload(const std::vector<double>* front, const std::vector<double
 
 TEST(Geometry, ScaleMaskIsFixedWidthAndDefaultsToZero) {
   std::map<EntityId, RawDefinition> definitions;
-  const auto bytes = concat({
-    tlv("7C15", concat({tlv("DE05", {1}), tlv("581B", tlv("5A1B", {0x78,0x56,0x34,0x12}))})),
-    tlv("7C15", tlv("DE05", {2}))});
+  const auto bytes = concat(
+      {tlv("7C15", concat({tlv("DE05", {1}), tlv("581B", tlv("5A1B", {0x78, 0x56, 0x34, 0x12}))})),
+       tlv("7C15", tlv("DE05", {2}))});
   collect_definitions(parse_tlv_recursive(bytes, 0, bytes.size()), definitions);
   EXPECT_EQ(definitions.at(1).no_scale_mask, 0x12345678u);
   EXPECT_EQ(definitions.at(2).no_scale_mask, 0u);

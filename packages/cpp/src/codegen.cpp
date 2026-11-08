@@ -490,7 +490,8 @@ std::string to_cpp_code(const SkpModel& model) {
          std::to_string(defn.instances.size()) + " nested instances");
     if (defn.no_scale_mask != 0) {
       push("  openskp::DefinitionOptions " + var_name + "_options;");
-      push("  " + var_name + "_options.no_scale_mask = " + std::to_string(defn.no_scale_mask) + "u;");
+      push("  " + var_name + "_options.no_scale_mask = " + std::to_string(defn.no_scale_mask) +
+           "u;");
     }
     push("  auto& " + var_name + " = builder->add_component_definition(" + cpp_string(def_name) +
          (defn.no_scale_mask != 0 ? ", " + var_name + "_options" : "") + ");");
