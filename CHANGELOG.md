@@ -7,6 +7,105 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — Python: SketchUp 2019 and 2020 models whose tags have a line style (#514)
+
+- A SketchUp 2019 or 2020 file in which a tag carries a line style ("Dash", "Dot", ...) failed to
+  open with `no reader for class CCustomLineStyle`. The style is stored inline where a tag first
+  uses it, takes an object slot between the tags, and is pointed at again by later tags that share
+  it; the reader now reads it and counts the slot, so every face stays on its own tag. Models
+  without tag line styles are unchanged (all 200+ sample files parse to identical results).
+  Reported by @mschache. The other readers do not handle the class either (TypeScript fails on the same models) and are tracked in #285.
+
+### Fixed and added — C++ (contributed by @modraup, #478, #488, #499, #500)
+
+- **Component identity and definition attributes (#478).** Every exported definition used to get a
+  new GUID, and independent files shared the blank scaffold's model GUID. `DefinitionOptions::guid`
+  now keeps a component's UUID (an empty value generates one), `SkpBuilder::set_guid()` sets the
+  file's, and each builder gets its own default that stays the same across repeated writes. Compact
+  and hyphenated UUID strings are accepted and checked before anything is written.
+  `Definition::parsed_dictionaries` exposes a VFF definition's own attribute dictionaries (empty for
+  classic files).
+  **Behaviour change:** definition and instance GUID strings are now in canonical UUID byte order
+  (uppercase, no hyphens) in classic and VFF files alike; before, they were in Windows storage byte
+  order. The same `Shelf` component in the 2017, 2020 and 2021 fixtures now has one GUID in all
+  three formats. Anything that stored the old strings has to normalise them before comparing.
+- **Annotation tags and visibility (#488).** Dimensions and text keep their own tag and hidden state
+  in classic and VFF files (the reader used to show them all on the default layer), along with their
+  anchors, label positions, screen fractions and leader types. Annotations belong to the definition
+  that owns them and are read in its coordinates; the model-level list of VFF dimensions stays for
+  compatibility. `DimensionOptions` and `TextOptions` write tags, hidden state, component text and
+  screen placement, and the existing overloads are unchanged. Leaderless model text is written as
+  model text with a hidden leader. The default tag is reported as `""`, as for faces and guides.
+- **DXF export (#499).** Layer names with characters outside ASCII were written as UTF-8 into an
+  ANSI file and came out wrong. They are now written as `\U+XXXX` escapes, cut at 255 UTF-16 units
+  without splitting a character, and kept unique after sanitising. A polyface whose counts exceed
+  the signed 16-bit limit is written as `3DFACE`s, and malformed mesh input is rejected. Numbers are
+  formatted the same way in every locale.
+- **Long attribute strings (#500).** An attribute value of 255 UTF-16 units or more was rejected, so
+  plugin JSON and other long metadata could not be saved. The writer now emits the 16-bit and 32-bit
+  MFC length forms. The classic reader joins UTF-16 surrogate pairs into valid UTF-8, and a
+  malformed surrogate reads as U+FFFD instead of ending the string.
+
+The other four languages have not been checked against these four changes; they are listed in #285.
+
+### Fixed — hostile files: deep nesting, deep `meta.dat` wrappers and truncated `model.dat` (#496, #497, #498)
+
+All five readers handled three kinds of damaged or hostile input badly. They now behave the same way.
+
+- **Deeply nested `model.dat` (#496).** The TLV parser descended into every container with no depth
+  limit. A 157 KB file nesting containers 100,000 deep killed the C++ process (SIGSEGV) and aborted
+  the .NET process ("Stack overflow", which no `catch` can intercept), and gave `RangeError`,
+  `RecursionError` or `StackOverflowError` in TypeScript, Python and Dart. Containers now nest at
+  most 64 levels, and deeper input raises the library's own parse error (stage `tlv_walk`, with the
+  tag and offset). Real files nest about a dozen levels at most: the deepest of the 53 modern-format
+  files checked (the repository's fixtures and other real files) reaches 11. The same limit applies to nested attribute dictionaries (C++ walked those with its own
+  recursion) and to nested definition-list wrappers (`F901`, TypeScript).
+- **Nested `6400` records in `meta/meta.dat` (#497).** `read_meta_units` called itself on every
+  `6400` wrapper, so the stack grew with the depth (and C++, .NET and Python copied nearly the whole
+  payload at every level: 3.4 s and 5.9 GB in .NET for 100,000 levels). The wrappers are now
+  followed in a loop over offsets, with no copies, and more than 64 of them gives unknown units
+  (`units` is `None`/`null`) instead of an error: the units are optional information, so a bad
+  `meta.dat` does not reject an otherwise valid model. TypeScript used to fail the whole parse here.
+- **Truncated `model.dat` (#498).** A `model.dat` cut short anywhere inside its single top-level
+  `F401` record used to parse as a model with no geometry and no error. It now raises a parse error
+  saying the record declares more bytes than the data holds. Only the top-level record is checked:
+  in real files some container payloads end with bytes that are not records (text that parses as
+  headers whose lengths overrun the container, found at the same depth in all 53 files checked), so the nested records stay lenient. Every real file ends exactly on its top-level record.
+### Fixed — files the TypeScript, .NET and Dart writers produced could not be saved by SketchUp for Web (#492)
+
+The Python and C++ writers already gave every entity in a file its own persistent id. The other
+three did not: each section (materials, layers, definitions, root geometry) numbered its ids from 1
+again, and the header's id counter stayed at the blank scaffold's 18 unless the file had materials
+or layers. A model with two groups therefore had a definition and a root instance with the same id,
+and ids up to 20 against a counter of 18. SketchUp for Web opens such a file but cannot save it
+("Save Failed"): it renumbers the repeated ids starting at the counter, and the new numbers clash
+with ids already in use. Ids now run in one sequence across the sections, continuing from the
+scaffold's counter, and the counter holds the last id handed out, as Python's does (it is a 32-bit
+field; these three treated it as 16-bit). The three writers now produce the same ids as Python: the
+Dart reference files under `test/fixtures/create_reference` were regenerated with the current
+Python writer (they carried the old numbering), and the Dart, TypeScript and .NET writers produce
+those eight files byte for byte. Found by Aleksei Gurianov, who traced the repeated ids and tested
+a corrected counter in SketchUp for Web.
+
+### Fixed — .NET writer: a large file used the wrong escape marker for a renumbered reference
+
+When a model is big enough that a reference in the blank scaffold lands at or past slot 32,767,
+the .NET writer widened it to the long form with the marker `0xFFFF`, which is the "new class
+declaration" tag. Our readers load such a file, but SketchUp's own library refuses it
+(`SU_ERROR_SERIALIZATION` on load; a 3,200-face model is enough). The marker is `0x7FFF`, as in the
+other four writers; the 3,200-face file the Dart suite compares is now byte-identical from .NET and
+loads in SketchUp's library.
+
+### Fixed — all five ports: a concave four-sided face is no longer triangulated across its outside (#493)
+
+- `triangulate_face_3d` split every single-loop quad along its 0-2 diagonal without checking
+  that the quad is convex. When the reflex corner is 1 or 3, that diagonal runs outside the
+  face and the mesh covered area the face does not have (a dart of area 4 came out as 12).
+  Such a quad is now split along its 1-3 diagonal. A convex quad is split exactly as before,
+  and so is a self-intersecting or warped quad unless the 1-3 split covers less area. On
+  `coedge_orientation_regression.skp` this corrects 45 quads; the sum over all faces of the
+  difference between triangle area and loop area drops from 1.58 in² to 0.23 in².
+
 ## [1.5.0] — 2026-11-03 — all 5 languages
 
 > What most readers will notice, from the entries below (everything since 1.4.0):

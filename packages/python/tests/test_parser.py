@@ -3642,6 +3642,28 @@ class TestTriangulateFace3dConvexFastPath:
         )
         assert total_area == pytest.approx(15.0)
 
+    def test_concave_quad_splits_along_the_diagonal_inside_it(self) -> None:
+        from openskp._core import triangulate_face_3d
+
+        # A dart of area 4 whose reflex corner is vertex 1: the 0-2
+        # diagonal runs outside it.
+        vertices_3d = {
+            0: (4.0, 0.0, 0.0), 1: (1.0, 1.0, 0.0), 2: (0.0, 4.0, 0.0), 3: (0.0, 0.0, 0.0),
+        }
+
+        triangles = triangulate_face_3d(vertices_3d, [[0, 1, 2, 3]], (0.0, 0.0, 1.0))
+
+        total_area = sum(
+            0.5 * abs(
+                (b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1])
+            )
+            for a, b, c in (
+                [vertices_3d[i][:2] for i in tri] for tri in triangles
+            )
+        )
+        assert len(triangles) == 2
+        assert total_area == pytest.approx(4.0)
+
 
 class TestTriangulateFace3dMatchesTrueArea:
     """A real face from production data (gondola_v20.skp) where the

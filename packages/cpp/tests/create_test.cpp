@@ -1429,27 +1429,60 @@ TEST(Create, DefaultDefinitionGuidsAreDistinctAndStable) {
     EXPECT_EQ(entry.second.guid, second.definitions.at(entry.first).guid);
 }
 
-}  // namespace
-}  // namespace openskp
-
 TEST(Create, AttributeStringsCrossMfcLengthBoundaries) {
   for (const std::size_t length : {254u, 255u, 256u, 65533u, 65534u, 65535u, 65536u}) {
     SCOPED_TRACE(length);
-    auto builder = openskp::create();
+    auto builder = create();
     auto& definition = builder->add_component_definition("TextCarrier");
     definition.add_face({{0, 0, 0}, {1, 0, 0}, {0, 1, 0}});
     definition.close();
-    openskp::InstanceOptions options;
+    InstanceOptions options;
     options.attribute_dict_name = "RoundTrip";
     const std::string ascii(length, 'x');
-    const std::string unicode = std::string(length - 2, 'x') + u8"😀";
+    const std::string unicode = std::string(length - 2, 'x') + u8"\U0001F600";
     options.attributes["ascii"] = ascii;
     options.attributes["unicode"] = unicode;
     builder->add_instance(definition, options);
-    auto model = openskp::SkpFile::from_buffer(builder->to_bytes()).parse();
+    const auto model = round_trip(*builder);
     ASSERT_EQ(model.root().instances.size(), 1u);
     const auto& attrs = model.root().instances.front().attribute_dictionaries.at("RoundTrip");
     EXPECT_EQ(attrs.at("ascii").text, ascii);
     EXPECT_EQ(attrs.at("unicode").text, unicode);
   }
 }
+
+TEST(Create, MalformedUtf16AttributeStringsUseReplacementCharacters) {
+  auto builder = create();
+  auto& definition = builder->add_component_definition("TextCarrier");
+  definition.add_face({{0, 0, 0}, {1, 0, 0}, {0, 1, 0}});
+  definition.close();
+  InstanceOptions options;
+  options.attribute_dict_name = "RoundTrip";
+  options.attributes["damaged"] = "WXYZQ";
+  options.attributes["intact"] = "still readable";
+  builder->add_instance(definition, options);
+
+  auto bytes = builder->to_bytes();
+  const ByteBuffer original = {'W', 0, 'X', 0, 'Y', 0, 'Z', 0, 'Q', 0};
+  // Lone low surrogate, high followed by ASCII, then a valid pair at the end.
+  const ByteBuffer malformed = {0x00, 0xDC, 0x00, 0xD8, 'Y', 0, 0x3D, 0xD8, 0x00, 0xDE};
+  const auto start = std::search(bytes.begin(), bytes.end(), original.begin(), original.end());
+  ASSERT_NE(start, bytes.end());
+  std::copy(malformed.begin(), malformed.end(), start);
+  const auto parsed = SkpFile::from_buffer(bytes).parse();
+  ASSERT_EQ(parsed.root().instances.size(), 1u);
+  const auto& attrs = parsed.root().instances.front().attribute_dictionaries.at("RoundTrip");
+  EXPECT_EQ(attrs.at("damaged").text, u8"\uFFFD\uFFFDY\U0001F600");
+  EXPECT_EQ(attrs.at("intact").text, "still readable");
+
+  // A trailing high surrogate cannot read into the next archive field.
+  *(start + 9) = 0xD8;
+  const auto trailing = SkpFile::from_buffer(bytes).parse();
+  ASSERT_EQ(trailing.root().instances.size(), 1u);
+  EXPECT_EQ(
+      trailing.root().instances.front().attribute_dictionaries.at("RoundTrip").at("damaged").text,
+      u8"\uFFFD\uFFFDY\uFFFD\uFFFD");
+}
+
+}  // namespace
+}  // namespace openskp
