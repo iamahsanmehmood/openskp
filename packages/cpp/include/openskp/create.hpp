@@ -281,11 +281,12 @@ struct DefinitionOptions {
   bool is_group = false;
 };
 
-/// Options for `SkpBuilder::add_layer`.
+/// Options for `SkpBuilder::add_texture_material`.
 struct TextureMaterialOptions {
   /// Material paint/tint RGB. Opacity and colorization are stored separately below.
   Color3 color{255, 255, 255};
-  /// SketchUp material opacity (1 = opaque). Written through the CMaterial opacity flag.
+  /// Opacity factor (1 = opaque), as in `Material::transparency`. Written through the CMaterial
+  /// opacity flag.
   double transparency = 1.0;
   bool colorized = false;
   /// SketchUp `Material#colorize_type` (`COLORIZE_SHIFT=0`, `COLORIZE_TINT=1`).
@@ -293,12 +294,13 @@ struct TextureMaterialOptions {
   std::int32_t colorize_type = 0;
   /// Texture tile size in inches (`Sketchup::Texture#width` / `height`).
   double width = 1.0;
-  /// Unset keeps the legacy unscaled-height sentinel (image aspect).
+  /// Texture tile height in inches. Unset is 1 inch, like `width`.
   std::optional<double> height;
   /// Stored `CTexture` path. Empty = the image file path passed to `add_texture_material`.
   std::string filename;
 };
 
+/// Options for `SkpBuilder::add_layer`.
 struct LayerOptions {
   /// This layer's own display color; unset keeps the previous all-zero-byte default.
   std::optional<Color4> color;
