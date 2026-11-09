@@ -239,8 +239,8 @@ struct Face {
   /// not a layer/tag visibility toggle).
   bool hidden{};
   /// Name of the layer (tag) the face is assigned to. "" for faces on the
-  /// default layer (Layer0), which VFF files don't record per face, and for
-  /// every face in legacy (pre-2021 MFC) files.
+  /// default layer (Layer0), and for every face in a VFF file, which does
+  /// not record it per face.
   std::string layer;
   /// Native persistent ID; zero when absent. Legacy archive slots are not persistent IDs.
   std::uint64_t persistent_id{};
@@ -406,8 +406,8 @@ struct Instance {
   /// toggle).
   bool hidden{};
   /// Unique TLV entity ID of the placement itself (the ID SketchUp persists
-  /// across sessions, `Sketchup::Entity#persistent_id`). Populated for
-  /// modern (VFF) files; unset for legacy (pre-2021 MFC) files.
+  /// across sessions, `Sketchup::Entity#persistent_id`). Populated when the
+  /// file records one (VFF files and the legacy files that carry one).
   std::optional<EntityId> id;
   bool locked{};
   bool casts_shadows{true};
@@ -564,7 +564,7 @@ struct ViewCamera {
   double ortho_height{};
 };
 
-/// Reusable geometry container (component definition or group).
+/// Camera behind a definition's thumbnail.
 struct ThumbnailCamera {
   Vec3 eye{0.0, 0.0, 1.0};
   Vec3 target{0.0, 0.0, 0.0};
@@ -575,6 +575,7 @@ struct ThumbnailCamera {
   double ortho_height = 1.0;
 };
 
+/// Reusable geometry container (component definition or group).
 struct Definition {
   /// Unique TLV entity ID.
   EntityId id{};
