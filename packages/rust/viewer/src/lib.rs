@@ -266,7 +266,7 @@ fn pack(model: &SkpModel, scene: &Scene) -> Output {
     // frame: SketchUp inches Z-up -> metres Y-up, same as the meshes.
     j.push_str(",\"camera\":");
     match &model.camera {
-        Some(c) => push_camera(&mut j, "Câmera do arquivo", c.eye, c.target, c.up, c.fov),
+        Some(c) => push_camera(&mut j, "Model camera", c.eye, c.target, c.up, c.fov),
         None => j.push_str("null"),
     }
     j.push_str(",\"pages\":[");

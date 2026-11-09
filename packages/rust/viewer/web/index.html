@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="pt-BR">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -60,43 +60,43 @@
   <aside>
     <header>
       <h1>OpenSKP Viewer</h1>
-      <p>Rust → WebAssembly · WebGL2 · sem dependências</p>
+      <p>Rust → WebAssembly · WebGL2 · no dependencies</p>
     </header>
     <div class="scroll">
       <section>
         <div class="row">
-          <label class="file">Abrir .skp<input id="file" type="file" accept=".skp"></label>
-          <button id="fit" title="Enquadrar (F)">Enquadrar</button>
+          <label class="file">Open .skp<input id="file" type="file" accept=".skp"></label>
+          <button id="fit" title="Zoom to fit (F)">Fit</button>
         </div>
-        <p class="hint">Ou arraste um arquivo para a área de visualização.</p>
+        <p class="hint">Or drop a file onto the view.</p>
       </section>
       <section>
-        <h2>Exibição</h2>
-        <label class="check"><input type="checkbox" id="showEdges" checked> Arestas</label>
-        <label class="check"><input type="checkbox" id="showLines" checked> Linhas soltas</label>
-        <label class="check"><input type="checkbox" id="xray"> Raio-X</label>
+        <h2>Display</h2>
+        <label class="check"><input type="checkbox" id="showEdges" checked> Edges</label>
+        <label class="check"><input type="checkbox" id="showLines" checked> Loose lines</label>
+        <label class="check"><input type="checkbox" id="xray"> X-ray</label>
       </section>
       <section id="pagesSec" hidden>
-        <h2>Cenas</h2>
+        <h2>Scenes</h2>
         <div class="row" id="pages"></div>
       </section>
       <section id="infoSec" hidden>
-        <h2>Modelo</h2>
+        <h2>Model</h2>
         <dl id="info"></dl>
       </section>
       <section id="layersSec" hidden>
-        <h2>Camadas (tags)</h2>
+        <h2>Tags (layers)</h2>
         <div id="layers"></div>
       </section>
       <section>
-        <h2>Controles</h2>
-        <p class="hint">Arrastar: orbitar · Botão direito / Shift+arrastar: mover · Roda: zoom · F: enquadrar</p>
+        <h2>Controls</h2>
+        <p class="hint">Drag: orbit · Right-drag / Shift+drag: pan · Wheel: zoom · F: fit</p>
       </section>
     </div>
   </aside>
   <main>
     <canvas id="gl"></canvas>
-    <div id="drop">Arraste um arquivo .skp aqui</div>
+    <div id="drop">Drop a .skp file here</div>
     <div id="status"></div>
   </main>
 </div>
@@ -142,7 +142,8 @@ function mul(a, b) {
 }
 
 // ---------- wasm ----------
-let wasm = null;
+let wasm = null;        // exports of the live instance; null while (re)starting
+let wasmModule = null;  // compiled once, so a restart is just a new instance
 async function wasmBytes() {
   // Built page: the module is embedded. The template itself still holds the
   // placeholder, so fall back to the cargo output (works over http://).
@@ -151,21 +152,35 @@ async function wasmBytes() {
     const r = await fetch("../target/wasm32-unknown-unknown/release/openskp_viewer.wasm");
     if (r.ok) return new Uint8Array(await r.arrayBuffer());
   } catch (_) { /* file:// blocks fetch */ }
-  throw new Error("este é o modelo da página. Abra dist/openskp-viewer.html (gerado por build.ps1 / build.sh).");
+  throw new Error("this is the page template. Open dist/openskp-viewer.html (made by build.ps1 / build.sh).");
 }
 async function initWasm() {
-  const { instance } = await WebAssembly.instantiate(await wasmBytes(), {});
-  wasm = instance.exports;
+  wasmModule ??= await WebAssembly.compile(await wasmBytes());
+  wasm = (await WebAssembly.instantiate(wasmModule, {})).exports;
 }
+// The module is built with panic = "abort", so a Rust panic (or running out
+// of memory) traps and throws out of the export. The instance is unusable
+// after that: its heap and stack pointer are left mid-call. Any throw from
+// inside the module therefore drops the instance, and openFile starts a
+// fresh one before reporting the error.
+class WasmCrash extends Error {}
 function convert(data) {
-  const ptr = wasm.alloc(data.length);
-  new Uint8Array(wasm.memory.buffer, ptr, data.length).set(data);
-  const status = wasm.load(ptr, data.length);
-  wasm.dealloc(ptr, data.length);
-  // Re-read memory.buffer after load: the wasm memory may have grown.
-  const mem = wasm.memory.buffer;
-  const header = JSON.parse(new TextDecoder().decode(new Uint8Array(mem, wasm.json_ptr(), wasm.json_len())));
-  if (status !== 0) throw new Error(header.error || "falha ao ler o arquivo");
+  let status, header, mem;
+  try {
+    const ptr = wasm.alloc(data.length);
+    new Uint8Array(wasm.memory.buffer, ptr, data.length).set(data);
+    status = wasm.load(ptr, data.length);
+    wasm.dealloc(ptr, data.length);
+    // Re-read memory.buffer after load: the wasm memory may have grown.
+    mem = wasm.memory.buffer;
+    header = new TextDecoder().decode(new Uint8Array(mem, wasm.json_ptr(), wasm.json_len()));
+  } catch (e) {
+    console.error(e);
+    wasm = null;
+    throw new WasmCrash("the parser crashed on this file (" + e.message + ")");
+  }
+  header = JSON.parse(header);
+  if (status !== 0) throw new Error(header.error || "could not read the file");
   // Copy the blob out so later loads can't invalidate it.
   const bin = new Uint8Array(mem, wasm.bin_ptr(), wasm.bin_len()).slice().buffer;
   return { header, bin };
@@ -174,7 +189,7 @@ function convert(data) {
 // ---------- GL ----------
 const canvas = document.getElementById("gl");
 const gl = canvas.getContext("webgl2", { antialias: true });
-if (!gl) document.getElementById("drop").textContent = "Este navegador não suporta WebGL2.";
+if (!gl) document.getElementById("drop").textContent = "This browser does not support WebGL2.";
 
 function shader(type, src) {
   const s = gl.createShader(type);
@@ -475,11 +490,11 @@ const statusEl = document.getElementById("status");
 function setStatus(msg, err) { statusEl.textContent = msg; statusEl.className = err ? "err" : ""; }
 
 function fillPanels(h, name, ms) {
-  const fmt = n => n.toLocaleString("pt-BR");
-  const rows = [["Arquivo", name], ["Versão", h.version.replace(/[{}]/g, "")], ["Unidades", h.units || "—"],
-    ["Definições", fmt(h.stats.definitions)], ["Instâncias", fmt(h.stats.instances)],
-    ["Faces", fmt(h.stats.faces)], ["Arestas", fmt(h.stats.edges)],
-    ["Triângulos", fmt(h.stats.triangles)], ["Materiais", fmt(h.stats.materials)], ["Leitura", ms + " ms"]];
+  const fmt = n => n.toLocaleString("en-US");
+  const rows = [["File", name], ["Version", h.version.replace(/[{}]/g, "")], ["Units", h.units || "—"],
+    ["Definitions", fmt(h.stats.definitions)], ["Instances", fmt(h.stats.instances)],
+    ["Faces", fmt(h.stats.faces)], ["Edges", fmt(h.stats.edges)],
+    ["Triangles", fmt(h.stats.triangles)], ["Materials", fmt(h.stats.materials)], ["Parse time", ms + " ms"]];
   const info = document.getElementById("info");
   info.replaceChildren(...rows.flatMap(([k, v]) => {
     const dt = document.createElement("dt"); dt.textContent = k;
@@ -497,7 +512,7 @@ function fillPanels(h, name, ms) {
     cb.onchange = () => cb.checked ? hiddenLayers.delete(l.name) : hiddenLayers.add(l.name);
     const sw = document.createElement("span"); sw.className = "swatch";
     sw.style.background = `rgb(${l.color.join(",")})`;
-    lab.append(cb, sw, document.createTextNode(l.name || "(sem nome)"));
+    lab.append(cb, sw, document.createTextNode(l.name || "(unnamed)"));
     return lab;
   }));
   document.getElementById("layersSec").hidden = h.layers.length === 0;
@@ -505,7 +520,7 @@ function fillPanels(h, name, ms) {
   const views = [...(h.camera ? [h.camera] : []), ...h.pages];
   const pages = document.getElementById("pages");
   pages.replaceChildren(...views.map(v => {
-    const b = document.createElement("button"); b.textContent = v.name || "Cena";
+    const b = document.createElement("button"); b.textContent = v.name || "Scene";
     b.onclick = () => applyView(v);
     return b;
   }));
@@ -515,7 +530,7 @@ function fillPanels(h, name, ms) {
 
 async function openFile(file) {
   if (!wasm) return;
-  setStatus("Lendo " + file.name + "…");
+  setStatus("Reading " + file.name + "…");
   try {
     const data = new Uint8Array(await file.arrayBuffer());
     const t0 = performance.now();
@@ -529,7 +544,13 @@ async function openFile(file) {
     setStatus(file.name);
   } catch (e) {
     console.error(e);
-    setStatus("Erro: " + e.message, true);
+    if (e instanceof WasmCrash) {
+      try { await initWasm(); } catch (e2) {
+        setStatus("Error: " + e.message + "; restarting WebAssembly failed: " + e2.message, true);
+        return;
+      }
+    }
+    setStatus("Error: " + e.message, true);
   }
 }
 
@@ -575,8 +596,8 @@ canvas.addEventListener("wheel", e => {
 window.addEventListener("keydown", e => { if (e.key === "f" || e.key === "F") fit(); });
 
 if (gl) {
-  initWasm().then(() => setStatus("Pronto. Abra um arquivo .skp."))
-    .catch(e => setStatus("Falha ao iniciar o WebAssembly: " + e.message, true));
+  initWasm().then(() => setStatus("Ready. Open a .skp file."))
+    .catch(e => setStatus("Could not start WebAssembly: " + e.message, true));
   render();
 }
 </script>
