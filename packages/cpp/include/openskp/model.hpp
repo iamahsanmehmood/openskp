@@ -571,6 +571,8 @@ struct ThumbnailCamera {
   Vec3 up{0.0, 1.0, 0.0};
   double fov_y_deg = 35.0;
   bool perspective = true;
+  /// Visible height in inches for parallel projection, independent of eye/target.
+  double ortho_height = 1.0;
 };
 
 /// Reusable geometry container (component definition or group).

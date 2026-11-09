@@ -947,8 +947,11 @@ struct Archive {
       view.eye = {read_f64(camera, 0), read_f64(camera, 8), read_f64(camera, 16)};
       view.target = {read_f64(camera, 24), read_f64(camera, 32), read_f64(camera, 40)};
       view.up = {read_f64(camera, 48), read_f64(camera, 56), read_f64(camera, 64)};
-      view.perspective = camera[80] != 0;
-      view.fov_y_deg = read_f64(camera, 72);
+      // CCamera uses the same body layout as scene cameras: two doubles
+      // after up, followed by projection, FOV and orthographic height.
+      view.perspective = camera[88] != 0;
+      view.fov_y_deg = read_f64(camera, 89);
+      view.ortho_height = read_f64(camera, 97);
       v->camera = view;
       r.u16();
       r.utf16();
