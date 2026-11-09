@@ -628,6 +628,8 @@ struct Definition {
   std::optional<ThumbnailCamera> thumbnail_camera;
   /// Whether the file explicitly supplied component/group type information.
   bool type_known{};
+  /// Native scale-grip suppression bits: X, Y, Z, XZ, YZ, XY, XYZ (bits 0-6).
+  std::uint32_t no_scale_mask{};
 };
 
 /// Top-level model container holding all definitions, layers, materials, and styles.

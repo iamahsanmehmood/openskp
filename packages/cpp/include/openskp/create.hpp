@@ -287,6 +287,8 @@ struct DefinitionOptions {
   bool shadows_face_sun = false;
   std::optional<ThumbnailCamera> thumbnail_camera;
   bool is_group = false;
+  /// Native scale-grip suppression mask; unknown bits are preserved.
+  std::uint32_t no_scale_mask = 0;
 };
 
 /// Options for `SkpBuilder::add_texture_material`.
@@ -508,6 +510,8 @@ struct DocumentOptions {
   std::map<int, double> style_items;
   /// Reserve IDs below this bound for imported entities; configure before adding content.
   std::uint64_t next_persistent_id = 0;
+  /// Root model behavior, used when a file is loaded as a component.
+  std::uint32_t no_scale_mask = 0;
 };
 
 /// Accumulates geometry and writes it into a new legacy-format (v17) `.skp` file. Construct via

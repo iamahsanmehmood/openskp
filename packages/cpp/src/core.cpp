@@ -543,6 +543,11 @@ RawParsed full_parse(const ByteBuffer& data, const ParseOptions& o) {
       if (tag == "FA01")
         for (auto& [t, record] : parse_flat(one[0].payload))
           if (t == "BC34") p.camera = view_camera(record);
+      if (tag == "0E02")
+        for (const auto& [t, behavior] : parse_flat(one[0].payload))
+          if (t == "581B")
+            for (const auto& [field, value] : parse_flat(behavior))
+              if (field == "5A1B" && value.size() == 4) p.root.no_scale_mask = read_u32(value, 0);
       if (tag == "0602")
         for (auto& [t, catalog] : parse_flat(one[0].payload))
           if (t == "7869") current = current_style(catalog);

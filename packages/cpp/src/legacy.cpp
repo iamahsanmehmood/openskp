@@ -1324,6 +1324,9 @@ struct Archive {
       auto gap = r.raw(tpos - r.p);
       v->faces_camera = gap.size() >= 9 && (gap[gap.size() - 9] & 1);
       v->shadows_face_sun = gap.size() >= 9 && (gap[gap.size() - 9] & 2);
+      // SDK-generated legacy definitions store a little-endian u32 immediately
+      // before the final definition-kind u32 (eight bytes before CThumbnail).
+      v->no_scale_mask = ver >= 7 && gap.size() >= 8 ? read_u32(gap, gap.size() - 8) : 0;
       // the last u32 before the thumbnail is 1 for the definition of a group and 0
       // for a component's (what SketchUp's SUComponentDefinitionGetType reports),
       // measured against SketchUp 2025's own counts
@@ -2447,6 +2450,24 @@ RawParsed parse_legacy(const ByteBuffer& data, const ParseOptions& o) {
     std::regex_search(ascii, vm, std::regex("\\{(\\d+)\\."));
     int ver = std::stoi(vm[1]);
 
+    // Root behavior follows the version-map terminator. SDK-authored samples
+    // for SU7..2016 place the u32 at +28; SU2017..2020 add nine prefix bytes.
+    // SU3..6 predate scale-handle masks and have no such field.
+    if (ver >= 7) {
+      ByteBuffer marker;
+      for (const char ch : std::string("End-Of-Version-Map")) {
+        marker.push_back(static_cast<std::uint8_t>(ch));
+        marker.push_back(0);
+      }
+      auto found = std::search(data.begin(), data.end(), marker.begin(), marker.end());
+      if (found != data.end()) {
+        const auto pos =
+            static_cast<std::size_t>(found - data.begin()) + marker.size() + (ver >= 17 ? 37 : 28);
+        if (pos <= data.size() && data.size() - pos >= 4)
+          out.root.no_scale_mask = read_u32(data, pos);
+      }
+    }
+
     // anchor: the material manager (u32 count right before the first
     // CMaterial new-class record); zero-material files have no CMaterial
     // record anywhere, so fall back to the first CLayer class record and
@@ -2567,6 +2588,7 @@ RawParsed parse_legacy(const ByteBuffer& data, const ParseOptions& o) {
         d.guid = s.second.v->guid;
         d.always_faces_camera = s.second.v->faces_camera;
         d.shadows_face_sun = s.second.v->shadows_face_sun;
+        d.no_scale_mask = s.second.v->no_scale_mask;
         d.is_image = image_def_ids.count(s.first) != 0;
         d.is_group = s.second.v->is_group;
         d.type_known = s.second.v->type_known;
