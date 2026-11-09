@@ -88,7 +88,10 @@ TEST(ZipEntrySizeCap, AllowsARealisticCompressionRatio) {
   std::mt19937 rng(42);
   std::uniform_int_distribution<int> dist(0, 255);
   for (auto& b : random) b = static_cast<std::uint8_t>(dist(rng));
-  auto skp_bytes = wrap_vff(build_zip_with_entry("model.dat", random, MZ_BEST_COMPRESSION));
+  // Inside a well-formed top-level record: a model.dat whose own first record
+  // overruns the data is a truncated file, which is rejected separately.
+  auto skp_bytes =
+      wrap_vff(build_zip_with_entry("model.dat", tlv("F401", random), MZ_BEST_COMPRESSION));
 
   EXPECT_NO_THROW(full_parse(skp_bytes, ParseOptions{}));
 }

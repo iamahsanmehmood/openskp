@@ -1162,7 +1162,7 @@ class ArchiveWriter {
     } else {
       const Point3& d = *direction;
       double dlen = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
-      for (double v : {point[0], point[1], point[2], start_param, end_param})
+      for (double v : {point[0], point[1], point[2]})
         if (!std::isfinite(v)) throw SkpWriteError("construction line must be finite");
       if (!std::isfinite(dlen) || dlen == 0.0)
         throw SkpWriteError("add_construction_line: direction must be finite and nonzero");

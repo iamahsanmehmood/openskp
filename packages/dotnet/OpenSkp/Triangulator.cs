@@ -13,6 +13,38 @@ namespace OpenSkp
     /// ports.</summary>
     internal static class Triangulator
     {
+        /// <summary>Whether to split the quad along its 0-2 diagonal. A concave quad whose
+        /// reflex corner is 1 or 3 has that diagonal outside it: triangles (0,1,2)
+        /// and (0,2,3) then turn opposite ways and cover more than the face, and the
+        /// 1-3 split covers exactly the face. A self-intersecting or warped quad can
+        /// fail the turn test with the 1-3 split no better, so 1-3 is taken only when
+        /// it covers less area.</summary>
+        private static bool SplitQuadAlong02(
+            Dictionary<long, (double X, double Y, double Z)> vertices3d, List<long> quad)
+        {
+            var p = new (double X, double Y, double Z)[4];
+            for (int i = 0; i < 4; i++)
+            {
+                if (!vertices3d.TryGetValue(quad[i], out p[i])) return true;
+            }
+            // Twice the area vector of triangle (a, b, c).
+            (double X, double Y, double Z) Area2(int a, int b, int c)
+            {
+                double ux = p[b].X - p[a].X, uy = p[b].Y - p[a].Y, uz = p[b].Z - p[a].Z;
+                double vx = p[c].X - p[a].X, vy = p[c].Y - p[a].Y, vz = p[c].Z - p[a].Z;
+                return (uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx);
+            }
+            static double Dot((double X, double Y, double Z) a, (double X, double Y, double Z) b)
+                => a.X * b.X + a.Y * b.Y + a.Z * b.Z;
+            var t012 = Area2(0, 1, 2);
+            var t023 = Area2(0, 2, 3);
+            if (Dot(t012, t023) >= 0) return true;
+            var t123 = Area2(1, 2, 3);
+            var t130 = Area2(1, 3, 0);
+            return Math.Sqrt(Dot(t123, t123)) + Math.Sqrt(Dot(t130, t130))
+                >= Math.Sqrt(Dot(t012, t012)) + Math.Sqrt(Dot(t023, t023));
+        }
+
         public static List<long[]> TriangulateFace3D(
             Dictionary<long, (double X, double Y, double Z)> vertices3d,
             List<List<long>> loops,
@@ -29,10 +61,18 @@ namespace OpenSkp
             if (loops.Count == 1 && loops[0].Count == 4)
             {
                 var v = loops[0];
+                if (SplitQuadAlong02(vertices3d, v))
+                {
+                    return new List<long[]>
+                    {
+                        new[] { v[0], v[1], v[2] },
+                        new[] { v[0], v[2], v[3] },
+                    };
+                }
                 return new List<long[]>
                 {
-                    new[] { v[0], v[1], v[2] },
-                    new[] { v[0], v[2], v[3] },
+                    new[] { v[1], v[2], v[3] },
+                    new[] { v[1], v[3], v[0] },
                 };
             }
 
