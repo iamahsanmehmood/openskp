@@ -527,6 +527,8 @@ RawParsed full_parse(const ByteBuffer& data, const ParseOptions& o) {
 
   auto total = hs.size();
   CurrentStyle current;
+  std::map<EntityId, std::string> line_styles;
+  std::map<std::string, EntityId> layer_styles;
   for (std::size_t i = 0; i < total; ++i) {
     std::string tag;
     try {
@@ -544,7 +546,8 @@ RawParsed full_parse(const ByteBuffer& data, const ParseOptions& o) {
       if (tag == "0602")
         for (auto& [t, catalog] : parse_flat(one[0].payload))
           if (t == "7869") current = current_style(catalog);
-      collect_layers(one, p.layer_id_to_name, p.layer_hidden);
+      collect_layers(one, p.layer_id_to_name, p.layer_hidden, layer_styles);
+      collect_line_styles(one, line_styles);
       collect_material_ids(one, p.material_id_to_name);
       collect_definitions(one, p.definitions);
       scan_vertex_positions(one[0], vertex_positions);
@@ -594,6 +597,24 @@ RawParsed full_parse(const ByteBuffer& data, const ParseOptions& o) {
     assign_vff_annotations(*model, vertex_positions, instance_world, p);
   } catch (...) {
     emit_log(o, LogLevel::debug, "Failed to parse annotations");
+  }
+  try {
+    assign_vff_sections(*model, p);
+  } catch (...) {
+    emit_log(o, LogLevel::debug, "Failed to parse section planes");
+  }
+  for (const auto& item : layer_styles)
+    if (line_styles.count(item.second))
+      p.layer_line_styles[item.first] = line_styles.at(item.second);
+  for (const auto& item : p.layer_id_to_name) {
+    p.layer_persistent_ids[item.second] = item.first;
+    if (item.first) p.layer_persistent_id_aliases[item.second].insert(item.first);
+  }
+  for (const auto& item : p.material_id_to_name) {
+    auto material = p.materials.find(item.second);
+    if (material != p.materials.end()) material->second->native_pid = item.first;
+    auto folder = p.materials_by_folder.find(item.second);
+    if (folder != p.materials_by_folder.end()) folder->second->native_pid = item.first;
   }
   model.reset();
   if (!p.layer_id_to_name.count(1)) p.layer_id_to_name[1] = "Layer0";

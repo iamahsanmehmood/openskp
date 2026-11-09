@@ -16,6 +16,21 @@
 #include <openskp/openskp.hpp>
 
 namespace openskp {
+// Packed D307 / `edge_flags` (VFF). Default 0x06 = casts + receives shadows.
+constexpr int kDrawHidden = 1;
+constexpr int kDrawCastsShadows = 2;
+constexpr int kDrawReceivesShadows = 4;
+constexpr int kDrawSoft = 8;
+constexpr int kDrawSmooth = 16;
+constexpr int kDrawLocked = 32;
+constexpr int kDrawDefault = kDrawCastsShadows | kDrawReceivesShadows;
+
+inline int pack_draw(bool hidden, bool soft, bool smooth, bool locked, bool casts, bool receives) {
+  return (hidden ? kDrawHidden : 0) | (casts ? kDrawCastsShadows : 0) |
+         (receives ? kDrawReceivesShadows : 0) | (soft ? kDrawSoft : 0) |
+         (smooth ? kDrawSmooth : 0) | (locked ? kDrawLocked : 0);
+}
+
 struct TlvNode {
   std::uint64_t offset{};
   std::uint64_t size{};
@@ -37,6 +52,10 @@ struct RawFace {
   // Layer entity id as a string until build_model resolves it to a name,
   // same as RawInstance::layer.
   std::string layer;
+  bool locked{};
+  bool casts_shadows{true};
+  bool receives_shadows{true};
+  ParsedAttrDictionaries attribute_dictionaries;
 };
 
 struct RawInstance {
@@ -58,6 +77,9 @@ struct RawInstance {
   // The reader does not special-case dictionary names.
   ParsedAttrDictionaries attribute_dicts;
   bool hidden{};
+  bool locked{};
+  bool casts_shadows{true};
+  bool receives_shadows{true};
 };
 
 // The analytic frame of a Curve that is one arc: the points
@@ -86,6 +108,8 @@ struct GeometryBuilder {
   std::vector<Dimension> dimensions;
   std::vector<ConstructionLine> construction_lines;
   std::vector<ConstructionPoint> construction_points;
+  std::map<EntityId, std::uint64_t> persistent_ids;
+  std::map<EntityId, ParsedAttrDictionaries> edge_dictionaries;
 };
 
 struct RawDefinition {
@@ -97,6 +121,14 @@ struct RawDefinition {
   bool is_group{};
   GeometryBuilder builder;
   ParsedAttrDictionaries parsed_dictionaries;
+  std::uint64_t native_pid{};
+  std::string description;
+  std::string path;
+  std::uint32_t load_time{};
+  bool hidden{};
+  std::optional<ThumbnailCamera> thumbnail_camera;
+  /// Whether the file explicitly supplied component/group type information.
+  bool type_known{};
 };
 
 struct RawTexture {
@@ -116,6 +148,7 @@ struct RawMaterial {
   bool colorized{};
   int colorize_type{};
   std::optional<RawTexture> texture;
+  std::uint64_t native_pid{};
 };
 
 struct RawStyle {
@@ -153,6 +186,7 @@ struct RawDimension {
   std::string layer;
   bool hidden{};
   std::string text;
+  std::uint64_t native_pid{};
 };
 
 struct RawParsed {
@@ -189,6 +223,10 @@ struct RawParsed {
   // Dictionaries attached to the model entity itself (F601 -> 8813 -> D007
   // -> DC05), not to anything placed in it.
   ParsedAttrDictionaries model_attribute_dicts;
+  std::map<std::string, std::uint64_t> layer_persistent_ids;
+  std::map<std::string, std::set<std::uint64_t>> layer_persistent_id_aliases;
+  std::map<std::string, std::string> layer_line_styles;
+  std::map<std::string, ParsedAttrDictionaries> layer_parsed_dictionaries;
 };
 
 std::uint16_t read_u16(const ByteBuffer&, std::size_t);
@@ -339,6 +377,16 @@ struct V {
   std::vector<std::shared_ptr<V>> loops;
   std::vector<std::shared_ptr<V>> uses;
   std::vector<std::tuple<uint64_t, std::string, std::shared_ptr<V>>> ents;
+  std::uint64_t native_pid{};
+  std::string description;
+  std::string path;
+  std::uint32_t load_time{};
+  std::optional<ThumbnailCamera> camera;
+  bool locked{};
+  bool casts_shadows{true};
+  bool receives_shadows{true};
+  /// Whether the file explicitly supplied component/group type information.
+  bool type_known{};
 };
 
 /// One legacy MFC archive slot-table entry: either a class declaration
@@ -400,6 +448,10 @@ LegacyEntityListResult read_legacy_entity_list(const ByteBuffer& data, std::size
 void collect_geometry(const std::vector<TlvNode>&, GeometryBuilder&);
 void collect_layers(const std::vector<TlvNode>&, std::map<EntityId, std::string>&,
                     std::map<std::string, bool>&);
+void collect_line_styles(const std::vector<TlvNode>&, std::map<EntityId, std::string>&);
+void collect_layers(const std::vector<TlvNode>&, std::map<EntityId, std::string>&,
+                    std::map<std::string, bool>&, std::map<std::string, EntityId>&);
+void assign_vff_sections(const ByteBuffer&, RawParsed&);
 void collect_material_ids(const std::vector<TlvNode>&, std::map<EntityId, std::string>&);
 void collect_definitions(const std::vector<TlvNode>&, std::map<EntityId, RawDefinition>&);
 void collect_model_attribute_dictionaries(const TlvNode&, ParsedAttrDictionaries&);

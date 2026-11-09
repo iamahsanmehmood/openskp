@@ -152,6 +152,13 @@ bool flat_tlv_has_fields(const ByteBuffer& buf, std::size_t begin, std::size_t e
   return has_first && has_second;
 }
 
+std::uint64_t drawing_pid(const std::vector<FlatTlvItem>& fields) {
+  const auto base = tlv_find_int(fields, 0x05dc);
+  if (!base) return 0;
+  const auto id = tlv_find_int(tlv_items_int(*base), 0x05de);
+  return id && !id->empty() && id->size() <= 8 ? parse_varint(*id, 0, id->size()) : 0;
+}
+
 std::optional<RawDimension> parse_one_5bcc(
     const ByteBuffer& model_dat, std::size_t j, const std::map<std::string, Vec3>& id2pos,
     const std::map<std::string, std::vector<double>>& inst_world) {
@@ -180,6 +187,7 @@ std::optional<RawDimension> parse_one_5bcc(
   if (const auto base = tlv_find_int(body, 0x59d8)) {
     if (const auto draw = tlv_find_int(tlv_items_int(*base), 0x07d0)) {
       const auto properties = tlv_items_int(*draw);
+      d.native_pid = drawing_pid(properties);
       if (const auto layer = tlv_find_int(properties, 0x07d2); layer && !layer->empty())
         d.layer = std::to_string(parse_varint(*layer, 0, layer->size()));
       if (const auto flags = tlv_find_int(properties, 0x07d3); flags && !flags->empty())
@@ -233,6 +241,7 @@ std::optional<TextEntity> parse_text(const ByteBuffer& model_dat, std::size_t j,
     text.display_leader = (*display)[0] != 0;
   if (const auto draw = tlv_find_int(fields, 0x07d0)) {
     const auto properties = tlv_items_int(*draw);
+    text.persistent_id = drawing_pid(properties);
     if (const auto layer = tlv_find_int(properties, 0x07d2); layer && !layer->empty())
       text.layer = std::to_string(parse_varint(*layer, 0, layer->size()));
     if (const auto flags = tlv_find_int(properties, 0x07d3); flags && !flags->empty())
@@ -243,6 +252,7 @@ std::optional<TextEntity> parse_text(const ByteBuffer& model_dat, std::size_t j,
 
 Dimension public_dimension(const RawDimension& d) {
   Dimension dim;
+  dim.persistent_id = d.native_pid;
   dim.a = d.a;
   dim.b = d.b;
   dim.offset = d.offset;
@@ -554,6 +564,58 @@ void assign_vff_annotations(const ByteBuffer& model_dat, const std::map<std::str
       parsed.root.builder.dimensions.push_back(public_dimension(*d));
     }
   }
+}
+
+void assign_vff_sections(const ByteBuffer& md, RawParsed& parsed) {
+  const auto read_owner = [&](std::size_t begin, std::size_t end, GeometryBuilder& builder) {
+    for (const auto& container : tlv_headers(md, begin, end)) {
+      if (tag_at(md, container.offset) != "8813") continue;
+      const auto fields =
+          tlv_headers(md, container.offset + 6, container.offset + 6 + container.size);
+      std::optional<EntityId> active;
+      for (const auto& field : fields) {
+        if (tag_at(md, field.offset) == "9413" && field.size > 0 && field.size <= 8)
+          active = static_cast<EntityId>(parse_varint(md, field.offset + 6, field.size));
+      }
+      for (const auto& field : fields) {
+        if (tag_at(md, field.offset) != "9313") continue;
+        for (const auto& record :
+             tlv_headers(md, field.offset + 6, field.offset + 6 + field.size)) {
+          if (tag_at(md, record.offset) != "5C44") continue;
+          const auto body = tlv_items_int(ByteBuffer(md.begin() + record.offset + 6,
+                                                     md.begin() + record.offset + 6 + record.size));
+          const auto plane = tlv_find_int(body, 0x445d);
+          if (!plane || plane->size() != 32) continue;
+          SectionPlane section;
+          for (int i = 0; i < 4; ++i) section.plane[i] = read_f64(*plane, i * 8);
+          if (auto name = tlv_find_int(body, 0x445e))
+            section.name.assign(name->begin(), name->end());
+          if (auto label = tlv_find_int(body, 0x445f))
+            section.label.assign(label->begin(), label->end());
+          if (auto draw = tlv_find_int(body, 0x07d0)) {
+            const auto properties = tlv_items_int(*draw);
+            section.persistent_id = drawing_pid(properties);
+            if (auto layer = tlv_find_int(properties, 0x07d2);
+                layer && !layer->empty() && layer->size() <= 8)
+              section.layer = std::to_string(parse_varint(*layer, 0, layer->size()));
+            if (auto flags = tlv_find_int(properties, 0x07d3); flags && !flags->empty())
+              section.hidden = ((*flags)[0] & kDrawHidden) != 0;
+          }
+          const auto id = entity_id_from_tlv(md, record.offset, record.offset + 6 + record.size);
+          section.active = active && id && *active == *id;
+          builder.section_planes.push_back(std::move(section));
+        }
+      }
+    }
+  };
+  for (const auto& span : scan_definition_spans(md, parsed.definitions))
+    read_owner(span.begin + 6, span.end, parsed.definitions.at(span.id).builder);
+  auto top = tlv_headers(md, 0, md.size());
+  if (top.size() == 1 && tag_at(md, top[0].offset) == "F401")
+    top = tlv_headers(md, top[0].offset + 6, top[0].offset + 6 + top[0].size);
+  for (const auto& record : top)
+    if (tag_at(md, record.offset) == "F601")
+      read_owner(record.offset + 6, record.offset + 6 + record.size, parsed.root.builder);
 }
 
 // Return the "0702" scenes node inside top's subtree, or nullptr. Called

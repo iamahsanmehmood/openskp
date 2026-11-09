@@ -4,6 +4,7 @@ add_executable(
   openskp_tests
   codegen_test.cpp
   create_test.cpp
+  io_fidelity_test.cpp
   native_compatibility_test.cpp
   dxf_export_test.cpp
   dxf_unicode_safety_test.cpp
