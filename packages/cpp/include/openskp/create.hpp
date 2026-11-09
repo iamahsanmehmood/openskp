@@ -227,6 +227,10 @@ struct CircleOptions {
   /// Optional original tessellation, preserving edited/rounded vertex positions.
   /// Circle: num_segments points; arc: num_segments + 1 points in curve order.
   std::vector<Point3> vertices;
+  /// Optional in-plane y basis, multiplied by radius. Defaults to normal cross the
+  /// normalized xaxis. Its length, shear and handedness are preserved, allowing
+  /// affine circles/ellipses and reflected arcs without losing analytic metadata.
+  std::optional<Point3> yaxis;
 };
 
 /// Options for `SkpBuilder::add_arc` / `ComponentDefinitionBuilder::add_arc`.
@@ -243,6 +247,10 @@ struct ArcOptions {
   /// Optional original tessellation, preserving edited/rounded vertex positions.
   /// Circle: num_segments points; arc: num_segments + 1 points in curve order.
   std::vector<Point3> vertices;
+  /// Optional in-plane y basis, multiplied by radius. Defaults to normal cross the
+  /// normalized xaxis. Its length, shear and handedness are preserved, allowing
+  /// affine circles/ellipses and reflected arcs without losing analytic metadata.
+  std::optional<Point3> yaxis;
 };
 
 /// Options for `SkpBuilder::add_polyline` / `ComponentDefinitionBuilder::add_polyline`.
