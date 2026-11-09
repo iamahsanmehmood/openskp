@@ -2,8 +2,8 @@
 
 **The open-source SketchUp (`.skp`) file parser, writer, and converter — Rust edition.**
 
-A pure Rust port of the [C++ package](../cpp), with no external crates: DEFLATE and ZIP are
-implemented in-tree.
+A pure Rust port of the [C++ package](../cpp), with no external crates: DEFLATE, ZIP and
+FlatBuffers are implemented in-tree.
 
 > [!IMPORTANT]
 > This project was built by reverse engineering a proprietary binary format. It is not affiliated with or endorsed by Trimble Inc. or SketchUp.
@@ -31,6 +31,12 @@ Both containers are read: VFF (SketchUp 2021+) and the classic MFC `CArchive` (2
 - `openskp::create()` returns an `SkpBuilder` for a new file from scratch.
 - `openskp::open_existing()` loads a classic-format file to extend it.
 - `openskp::to_rust_code()` turns a parsed model into Rust source that rebuilds it.
+
+## Converting
+
+`to_glb` / `export_glb`, `to_instanced_glb`, `to_obj` + `to_mtl`, `to_stl_ascii` / `to_stl_binary`,
+`to_ply_ascii` / `to_ply_binary`, `to_dxf`, `to_ifc`, `to_json`, and `to_fragments`. `read_fragments`
+reads a `.frag` file back.
 
 ## Tests
 

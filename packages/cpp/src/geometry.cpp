@@ -59,6 +59,17 @@ static std::string text(const ByteBuffer& p) {
   return {reinterpret_cast<const char*>(p.data()), p.size()};
 }
 
+static std::string hex(const ByteBuffer& p) {
+  static char h[] = "0123456789ABCDEF";
+  std::string s;
+  s.reserve(p.size() * 2);
+  for (auto b : p) {
+    s += h[b >> 4];
+    s += h[b & 15];
+  }
+  return s;
+}
+
 static const ByteBuffer* flat_find(const std::vector<std::pair<std::string, ByteBuffer>>& s,
                                    const std::string& t) {
   for (auto& v : s)

@@ -603,7 +603,11 @@ RawParsed full_parse(const ByteBuffer& data, const ParseOptions& o) {
   } catch (...) {
     emit_log(o, LogLevel::debug, "Failed to parse annotations");
   }
-  assign_vff_sections(*model, p);
+  try {
+    assign_vff_sections(*model, p);
+  } catch (...) {
+    emit_log(o, LogLevel::debug, "Failed to parse section planes");
+  }
   for (const auto& item : layer_styles)
     if (line_styles.count(item.second))
       p.layer_line_styles[item.first] = line_styles.at(item.second);

@@ -791,8 +791,8 @@ struct PersistentIds {
   void validate(std::uint64_t id) const {
     if (id && (!reserved_end || id >= reserved_end))
       throw SkpWriteError("persistent ID " + std::to_string(id) +
-                          " requires next_persistent_id greater than " +
-                          std::to_string(reserved_end));
+                          " must be below next_persistent_id (" + std::to_string(reserved_end) +
+                          "), which must be set first");
   }
 };
 
@@ -1169,7 +1169,7 @@ class ArchiveWriter {
     } else {
       const Point3& d = *direction;
       double dlen = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
-      for (double v : {point[0], point[1], point[2], start_param, end_param})
+      for (double v : {point[0], point[1], point[2]})
         if (!std::isfinite(v)) throw SkpWriteError("construction line must be finite");
       if (!std::isfinite(dlen) || dlen == 0.0)
         throw SkpWriteError("add_construction_line: direction must be finite and nonzero");
