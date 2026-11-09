@@ -113,6 +113,25 @@ std::vector<Header> headers(const ByteBuffer& d, std::size_t start, std::size_t 
   return h;
 }
 
+// Throws if a top-level record declares more bytes than the data holds.
+// headers() stops quietly at such a record, so a model.dat cut short anywhere
+// inside its single F401 record would parse as a model with no geometry and
+// no error. Real files end exactly where their last top-level record does.
+// Records nested inside it are deliberately left lenient: in real files some
+// container payloads end with bytes that are not records, and a strict check
+// there would reject valid models.
+void require_complete_top_level(const ByteBuffer& d) {
+  for (std::size_t p = 0; p + 6 <= d.size();) {
+    auto n = read_u32(d, p + 2);
+    if (n > d.size() - p - 6)
+      throw SkpParseError("model.dat is truncated: the top-level record declares " +
+                              std::to_string(n) + " bytes but only " +
+                              std::to_string(d.size() - p - 6) + " remain",
+                          ParseStage::tlv_walk, {}, {}, tag_at(d, p), p);
+    p += 6 + n;
+  }
+}
+
 std::string str(const ByteBuffer& b) { return {reinterpret_cast<const char*>(b.data()), b.size()}; }
 
 // Decodes the 5 predefined XML entities plus numeric character references
@@ -482,6 +501,7 @@ RawParsed full_parse(const ByteBuffer& data, const ParseOptions& o) {
         }
   auto model = zip.get("model.dat");
   if (!model) throw SkpParseError("model.dat not found in ZIP container", ParseStage::zip_extract);
+  require_complete_top_level(*model);
   auto hs = headers(*model, 0, model->size());
   if (hs.size() == 1 && model->at(hs[0].offset) == 0xf4 && model->at(hs[0].offset + 1) == 1)
     hs = headers(*model, hs[0].offset + 6, hs[0].offset + 6 + hs[0].size);
@@ -578,7 +598,11 @@ RawParsed full_parse(const ByteBuffer& data, const ParseOptions& o) {
   } catch (...) {
     emit_log(o, LogLevel::debug, "Failed to parse annotations");
   }
-  assign_vff_sections(*model, p);
+  try {
+    assign_vff_sections(*model, p);
+  } catch (...) {
+    emit_log(o, LogLevel::debug, "Failed to parse section planes");
+  }
   for (const auto& item : layer_styles)
     if (line_styles.count(item.second))
       p.layer_line_styles[item.first] = line_styles.at(item.second);

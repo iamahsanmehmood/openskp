@@ -23,13 +23,47 @@ std::optional<Vec3> compute_face_normal(const std::vector<Vec3>& points) {
   return normal;
 }
 
+namespace {
+// Whether to split the quad along its 0-2 diagonal. A concave quad whose
+// reflex corner is 1 or 3 has that diagonal outside it: triangles (0,1,2)
+// and (0,2,3) then turn opposite ways and cover more than the face, and the
+// 1-3 split covers exactly the face. A self-intersecting or warped quad can
+// fail the turn test with the 1-3 split no better, so 1-3 is taken only when
+// it covers less area.
+bool split_quad_along_02(const std::map<EntityId, Vertex>& verts,
+                         const std::vector<EntityId>& quad) {
+  std::array<Vec3, 4> p;
+  for (std::size_t i = 0; i < 4; ++i) {
+    auto it = verts.find(quad[i]);
+    if (it == verts.end()) return true;
+    p[i] = {it->second.x, it->second.y, it->second.z};
+  }
+  // Twice the area vector of triangle (a, b, c).
+  const auto area2 = [&](int a, int b, int c) {
+    const Vec3 u{p[b][0] - p[a][0], p[b][1] - p[a][1], p[b][2] - p[a][2]};
+    const Vec3 v{p[c][0] - p[a][0], p[c][1] - p[a][1], p[c][2] - p[a][2]};
+    return Vec3{u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]};
+  };
+  const auto dot = [](const Vec3& a, const Vec3& b) {
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  };
+  const auto t012 = area2(0, 1, 2), t023 = area2(0, 2, 3);
+  if (dot(t012, t023) >= 0) return true;
+  const auto t123 = area2(1, 2, 3), t130 = area2(1, 3, 0);
+  return std::sqrt(dot(t123, t123)) + std::sqrt(dot(t130, t130)) >=
+         std::sqrt(dot(t012, t012)) + std::sqrt(dot(t023, t023));
+}
+}  // namespace
+
 std::vector<std::array<EntityId, 3>> triangulate_face_3d(
     const std::map<EntityId, Vertex>& verts, const std::vector<std::vector<EntityId>>& loops,
     Vec3 n) {
   if (loops.empty()) return {};
   if (loops.size() == 1 && loops[0].size() == 3) return {{loops[0][0], loops[0][1], loops[0][2]}};
   if (loops.size() == 1 && loops[0].size() == 4) {
-    return {{{loops[0][0], loops[0][1], loops[0][2]}}, {{loops[0][0], loops[0][2], loops[0][3]}}};
+    const auto& q = loops[0];
+    if (split_quad_along_02(verts, q)) return {{{q[0], q[1], q[2]}}, {{q[0], q[2], q[3]}}};
+    return {{{q[1], q[2], q[3]}}, {{q[1], q[3], q[0]}}};
   }
   double len = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
   if (len < 1e-6)
