@@ -299,3 +299,74 @@ fn legacy_mfc_object_recursion_and_attr_bombs_are_rejected() {
         .unwrap();
     handle.join().unwrap();
 }
+
+// ---------------------------------------------------------------------------
+// Fragments (.frag) FlatBuffers. Every offset in the buffer is untrusted: the
+// reader bounds-checks each access (fragments_export_test.rs patches every
+// byte of a real buffer), caps nesting at 256 levels (the same as
+// MAX_COMPONENT_DEPTH; tested there with a 300-level chain), caps the nodes
+// read at 10 million and the inflated payload at 2 GiB (unit-tested in
+// fragments/mod.rs with a smaller cap). The test below builds a hostile
+// buffer by hand.
+// ---------------------------------------------------------------------------
+
+/// A model whose only content is `spatial_structure`.
+fn fragments_model(
+    build: impl FnOnce(&mut openskp::flatbuffers::Builder) -> openskp::flatbuffers::Offset,
+) -> Vec<u8> {
+    use openskp::fragments::schema::{create_model, finish_model_buffer, ModelArgs};
+    let mut fbb = openskp::flatbuffers::Builder::default();
+    let spatial_structure = build(&mut fbb);
+    let model = create_model(
+        &mut fbb,
+        &ModelArgs {
+            spatial_structure,
+            ..ModelArgs::default()
+        },
+    );
+    finish_model_buffer(&mut fbb, model);
+    fbb.into_finished_data()
+}
+
+#[test]
+fn fragments_spatial_dag_aliasing_is_rejected_in_linear_time() {
+    use openskp::flatbuffers::Offset;
+    use openskp::fragments::schema::create_spatial_structure;
+    use std::time::Instant;
+
+    // 64 levels (within the depth limit), each listing the level below
+    // twice: under 2 KB of buffer that would expand to 2^64 nodes.
+    let buf = fragments_model(|fbb| {
+        let mut node = create_spatial_structure(fbb, None, Offset::NULL, Offset::NULL);
+        for _ in 0..64 {
+            let children = fbb.create_vector_of_offsets(&[node, node]);
+            node = create_spatial_structure(fbb, None, Offset::NULL, children);
+        }
+        node
+    });
+    assert!(buf.len() < 2048, "{} bytes", buf.len());
+    let start = Instant::now();
+    let err = openskp::from_fragments(&buf).unwrap_err();
+    assert!(
+        err.to_string().contains("more than one parent"),
+        "unexpected error: {err}"
+    );
+    assert!(
+        start.elapsed().as_millis() < 500,
+        "aliased spatial structure took too long: {:?}",
+        start.elapsed()
+    );
+
+    // The same shape without aliasing (a real tree) still reads.
+    let buf = fragments_model(|fbb| {
+        let mut node = create_spatial_structure(fbb, None, Offset::NULL, Offset::NULL);
+        for _ in 0..64 {
+            let sibling = create_spatial_structure(fbb, None, Offset::NULL, Offset::NULL);
+            let children = fbb.create_vector_of_offsets(&[node, sibling]);
+            node = create_spatial_structure(fbb, None, Offset::NULL, children);
+        }
+        node
+    });
+    let scene = openskp::from_fragments(&buf).unwrap();
+    assert_eq!(scene.scene_hierarchy.children.len(), 2);
+}
