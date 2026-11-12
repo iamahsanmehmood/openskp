@@ -124,6 +124,38 @@ TEST(WrappedTlv, BoundsFailedAlternativesAndPreservesTheOriginalPartition) {
   EXPECT_LT(reads, 600u);
 }
 
+TEST(WrappedTlv, ReusesOverlappingInvalidSuffixes) {
+  if (sizeof(std::size_t) < 8) GTEST_SKIP();
+  for (std::size_t count : {100000u, 1000000u}) {
+    std::size_t reads = 0;
+    const auto records = tlv_headers(
+        0, wrap + 6 * count + 1,
+        [&](std::size_t p) -> std::uint32_t {
+          ++reads;
+          if (p < 1536 || p >= wrap) return 0;
+          return UINT32_MAX;
+        },
+        [](std::size_t p) { return p < 1536; });
+    // 256 possible containers precede a large opaque leaf. Their extended
+    // endpoints land on overlapping zero-filled tails, each with one spare
+    // byte. Scan each alignment once, not once per candidate (256 times).
+    ASSERT_EQ(records.size(), count);
+    EXPECT_EQ(records.front().size, 0u);
+    EXPECT_EQ(records[256].size, UINT32_MAX);
+    EXPECT_LT(reads, 2 * count + 1024);
+  }
+}
+
+TEST(WrappedTlv, CachedFailureDoesNotHideAnExpandableContainer) {
+  if (sizeof(std::size_t) < 8) GTEST_SKIP();
+  // The ordinary root walk reaches a broken suffix through a short wrapper.
+  // That suffix is invalid, but the wrapper can skip it and still be valid.
+  SparseRecords d{{{0, 11}, {6, 5}, {12, UINT32_MAX}}, {0, 6}};
+  const auto records = d.scan(wrap + 17);
+  ASSERT_EQ(records.size(), 1u);
+  EXPECT_EQ(records.front().size, wrap + 11);
+}
+
 TEST(WrappedTlv, PreservesExactAndSmallLenientRanges) {
   SparseRecords d{{{0, 3}, {9, 0}}, {0}};
   EXPECT_EQ(d.scan(15).size(), 2u);

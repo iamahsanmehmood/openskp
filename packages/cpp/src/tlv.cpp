@@ -99,16 +99,43 @@ class HeaderResolver {
   // opaque zero-filled data containing arbitrarily many apparent empty TLVs.
   std::size_t attempts = 256;
 
+  // Cache one intrinsically invalid ordinary suffix, keyed by its parent end.
+  // Only boundaries after the last expandable container are safe to reuse:
+  // an earlier container might still jump across the invalid suffix.
+  std::size_t failed_end = 0;
+  std::vector<std::size_t> failed_offsets;
+
+  bool failed_suffix(std::size_t start, std::size_t end) const {
+    return end == failed_end &&
+           std::binary_search(failed_offsets.begin(), failed_offsets.end(), start);
+  }
+
+  void remember_failure(std::size_t end, const std::vector<TlvHeader>& records, std::size_t stop) {
+    constexpr std::uint64_t wrap = std::uint64_t{1} << 32;
+    std::size_t first = 0;
+    for (std::size_t i = 0; i < records.size(); ++i) {
+      const auto h = records[i];
+      if (end - h.offset - 6 - h.size >= wrap && container(h.offset)) first = i + 1;
+    }
+    failed_end = end;
+    failed_offsets.clear();
+    for (std::size_t i = first; i < records.size(); ++i)
+      failed_offsets.push_back(records[i].offset);
+    failed_offsets.push_back(stop);
+  }
+
   bool exact(std::size_t start, std::size_t end, std::vector<TlvHeader>& out, int depth) {
     if (depth >= kMaxTlvDepth) return false;
     auto p = start;
     while (end - p >= 6) {
+      if (failed_suffix(p, end)) return repair(end, out, depth);
       const std::size_t n = length(p);
       if (n > end - p - 6) break;
       out.push_back({p, n});
       p += 6 + n;
     }
     if (p == end) return true;
+    remember_failure(end, out, p);
     return repair(end, out, depth);
   }
 
@@ -154,6 +181,7 @@ std::vector<TlvHeader> tlv_headers(std::size_t start, std::size_t end,
   }
   if (p != end && std::uint64_t(end - start) >= (std::uint64_t{1} << 32)) {
     HeaderResolver resolver{length, container};
+    resolver.remember_failure(end, out, p);
     resolver.repair(end, out, 0);
   }
   return out;  // Preserve legacy leniency for ordinary nested records.
