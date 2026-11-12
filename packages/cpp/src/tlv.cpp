@@ -95,36 +95,44 @@ class HeaderResolver {
  public:
   const std::function<std::uint32_t(std::size_t)>& length;
   const std::function<bool(std::size_t)>& container;
-  std::size_t budget = 1000000;
+  // Charge branching, not the linear walk: a wrapped endpoint can land in
+  // opaque zero-filled data containing arbitrarily many apparent empty TLVs.
+  std::size_t attempts = 256;
 
   bool exact(std::size_t start, std::size_t end, std::vector<TlvHeader>& out, int depth) {
     if (depth >= kMaxTlvDepth) return false;
     auto p = start;
     while (end - p >= 6) {
-      if (budget == 0) return false;
-      --budget;
       const std::size_t n = length(p);
       if (n > end - p - 6) break;
       out.push_back({p, n});
       p += 6 + n;
     }
     if (p == end) return true;
+    return repair(end, out, depth);
+  }
+
+  // The caller has already established that the ordinary partition is inexact.
+  // Reuse it, and try earlier containers before records found inside payloads.
+  bool repair(std::size_t end, std::vector<TlvHeader>& out, int depth) {
+    if (depth >= kMaxTlvDepth || attempts == 0) return false;
     constexpr std::uint64_t wrap = std::uint64_t{1} << 32;
-    // Earlier records may have ended inside a later leaf payload.
-    for (auto i = out.size(); i > 0; --i) {
-      const auto h = out[i - 1];
+    for (std::size_t i = 0; i < out.size(); ++i) {
+      const auto h = out[i];
       const auto available = end - h.offset - 6;
       if (available - h.size < wrap || !container(h.offset)) continue;
       for (std::uint64_t n = std::uint64_t(h.size) + wrap; n <= available; n += wrap) {
+        if (attempts == 0) return false;
+        --attempts;
         const auto next = h.offset + 6 + static_cast<std::size_t>(n);
         std::vector<TlvHeader> suffix, children;
         if (exact(next, end, suffix, depth + 1) && exact(h.offset + 6, next, children, depth + 1)) {
-          out.resize(i);
+          out.resize(i + 1);
           out.back().size = static_cast<std::size_t>(n);
           out.insert(out.end(), suffix.begin(), suffix.end());
           return true;
         }
-        if (budget == 0 || available - n < wrap) break;
+        if (available - n < wrap) break;
       }
     }
     return false;
@@ -146,8 +154,7 @@ std::vector<TlvHeader> tlv_headers(std::size_t start, std::size_t end,
   }
   if (p != end && std::uint64_t(end - start) >= (std::uint64_t{1} << 32)) {
     HeaderResolver resolver{length, container};
-    std::vector<TlvHeader> repaired;
-    if (resolver.exact(start, end, repaired, 0)) return repaired;
+    resolver.repair(end, out, 0);
   }
   return out;  // Preserve legacy leniency for ordinary nested records.
 }

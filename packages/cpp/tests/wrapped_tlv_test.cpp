@@ -80,6 +80,50 @@ TEST(WrappedTlv, KeepsAnExactLargePartitionAndNonzeroStart) {
   EXPECT_EQ(nested.front().size, wrap + 5);
 }
 
+TEST(WrappedTlv, ZeroFilledPayloadDoesNotExhaustRecovery) {
+  if (sizeof(std::size_t) < 8) GTEST_SKIP();
+  constexpr std::size_t padding_headers = 1000005;
+  for (bool nested : {false, true}) {
+    std::size_t reads = 0;
+    const std::size_t leaf = nested ? 12 : 6;
+    const auto records = tlv_headers(
+        0, wrap + leaf + 5,
+        [&](std::size_t p) -> std::uint32_t {
+          ++reads;
+          if (p == 0) return static_cast<std::uint32_t>(leaf - 1);
+          if (nested && p == 6) return 5;
+          if (p == leaf) return UINT32_MAX;
+          // Both short endpoints land here, inside the single opaque leaf.
+          if (p >= leaf + 5 && p < leaf + 5 + 6 * padding_headers) return 0;
+          return UINT32_MAX;
+        },
+        [&](std::size_t p) { return p == 0 || (nested && p == 6); });
+    ASSERT_EQ(records.size(), 1u);
+    EXPECT_EQ(records.front().size, wrap + leaf - 1);
+    // Each inexact level is walked once, rather than rescanning its fake heads.
+    EXPECT_LT(reads, (nested ? 2 : 1) * padding_headers + 20);
+  }
+}
+
+TEST(WrappedTlv, BoundsFailedAlternativesAndPreservesTheOriginalPartition) {
+  if (sizeof(std::size_t) < 8) GTEST_SKIP();
+  std::size_t reads = 0;
+  const auto records = tlv_headers(
+      0, wrap + 1801,
+      [&](std::size_t p) -> std::uint32_t {
+        ++reads;
+        return p < 1800 ? 0 : UINT32_MAX;
+      },
+      [](std::size_t) { return true; });
+  ASSERT_EQ(records.size(), 300u);
+  EXPECT_EQ(records.front().offset, 0u);
+  EXPECT_EQ(records.back().offset, 1794u);
+  EXPECT_EQ(records.front().size, 0u);
+  EXPECT_EQ(records.back().size, 0u);
+  // A malformed range must not try every candidate indefinitely.
+  EXPECT_LT(reads, 600u);
+}
+
 TEST(WrappedTlv, PreservesExactAndSmallLenientRanges) {
   SparseRecords d{{{0, 3}, {9, 0}}, {0}};
   EXPECT_EQ(d.scan(15).size(), 2u);
