@@ -87,6 +87,78 @@ static const std::set<std::string> containers = {
     "384A", "B80B", "9713", "2C4C", "AC0D", "AE0D", "F601", "F801", "983A", "993A", "8C3C",
     "8D3C", "9013", "401F", "9113", "9213", "6942", "6C42", "6842"};
 
+namespace {
+// Only repair an inexact range. Each enlarged container must have an exact
+// child partition and an exact remaining sibling partition. Never scan payload
+// bytes for plausible tags. Bound speculative work on adversarial inputs.
+class HeaderResolver {
+ public:
+  const std::function<std::uint32_t(std::size_t)>& length;
+  const std::function<bool(std::size_t)>& container;
+  std::size_t budget = 1000000;
+
+  bool exact(std::size_t start, std::size_t end, std::vector<TlvHeader>& out, int depth) {
+    if (depth >= kMaxTlvDepth) return false;
+    auto p = start;
+    while (end - p >= 6) {
+      if (budget == 0) return false;
+      --budget;
+      const std::size_t n = length(p);
+      if (n > end - p - 6) break;
+      out.push_back({p, n});
+      p += 6 + n;
+    }
+    if (p == end) return true;
+    constexpr std::uint64_t wrap = std::uint64_t{1} << 32;
+    // Earlier records may have ended inside a later leaf payload.
+    for (auto i = out.size(); i > 0; --i) {
+      const auto h = out[i - 1];
+      const auto available = end - h.offset - 6;
+      if (available - h.size < wrap || !container(h.offset)) continue;
+      for (std::uint64_t n = std::uint64_t(h.size) + wrap; n <= available; n += wrap) {
+        const auto next = h.offset + 6 + static_cast<std::size_t>(n);
+        std::vector<TlvHeader> suffix, children;
+        if (exact(next, end, suffix, depth + 1) && exact(h.offset + 6, next, children, depth + 1)) {
+          out.resize(i);
+          out.back().size = static_cast<std::size_t>(n);
+          out.insert(out.end(), suffix.begin(), suffix.end());
+          return true;
+        }
+        if (budget == 0 || available - n < wrap) break;
+      }
+    }
+    return false;
+  }
+};
+}  // namespace
+
+std::vector<TlvHeader> tlv_headers(std::size_t start, std::size_t end,
+                                   const std::function<std::uint32_t(std::size_t)>& length,
+                                   const std::function<bool(std::size_t)>& container) {
+  if (start > end) throw std::out_of_range("invalid TLV range");
+  std::vector<TlvHeader> out;
+  auto p = start;
+  while (end - p >= 6) {
+    const std::size_t n = length(p);
+    if (n > end - p - 6) break;
+    out.push_back({p, n});
+    p += 6 + n;
+  }
+  if (p != end && std::uint64_t(end - start) >= (std::uint64_t{1} << 32)) {
+    HeaderResolver resolver{length, container};
+    std::vector<TlvHeader> repaired;
+    if (resolver.exact(start, end, repaired, 0)) return repaired;
+  }
+  return out;  // Preserve legacy leniency for ordinary nested records.
+}
+
+std::vector<TlvHeader> tlv_headers(const ByteBuffer& d, std::size_t start, std::size_t end) {
+  if (end > d.size()) throw std::out_of_range("invalid TLV range");
+  return tlv_headers(
+      start, end, [&](std::size_t p) { return read_u32(d, p + 2); },
+      [&](std::size_t p) { return containers.count(tag_at(d, p)) != 0; });
+}
+
 void throw_tlv_too_deep(const std::string& tag, std::size_t offset) {
   throw SkpParseError("TLV records nest deeper than " + std::to_string(kMaxTlvDepth) + " levels",
                       ParseStage::tlv_walk, {}, {}, tag, offset);
@@ -96,11 +168,10 @@ std::vector<TlvNode> parse_tlv_recursive(const ByteBuffer& d, std::size_t start,
                                          int depth) {
   if (end > d.size() || start > end) throw std::out_of_range("invalid TLV range");
   std::vector<TlvNode> out;
-  std::size_t p = start;
-  while (p <= end && end - p >= 6) {
+  for (const auto& header : tlv_headers(d, start, end)) {
+    const auto p = header.offset;
+    const auto size = header.size;
     auto tag = tag_at(d, p);
-    auto size = read_u32(d, p + 2);
-    if (size > end - p - 6) break;
     TlvNode n;
     n.offset = p;
     n.size = size;
@@ -113,7 +184,6 @@ std::vector<TlvNode> parse_tlv_recursive(const ByteBuffer& d, std::size_t start,
       n.payload.assign(d.begin() + static_cast<std::ptrdiff_t>(p + 6),
                        d.begin() + static_cast<std::ptrdiff_t>(p + 6 + size));
     out.push_back(std::move(n));
-    p += 6 + size;
   }
   return out;
 }
@@ -122,7 +192,7 @@ std::vector<std::pair<std::string, ByteBuffer>> parse_flat(const ByteBuffer& d) 
   std::vector<std::pair<std::string, ByteBuffer>> out;
   std::size_t p = 0;
   while (d.size() - std::min(p, d.size()) >= 6) {
-    auto n = read_u32(d, p + 2);
+    const std::size_t n = read_u32(d, p + 2);
     if (n > d.size() - p - 6) break;
     out.push_back({tag_at(d, p), ByteBuffer(d.begin() + p + 6, d.begin() + p + 6 + n)});
     p += 6 + n;
