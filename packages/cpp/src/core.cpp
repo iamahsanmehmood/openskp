@@ -97,38 +97,22 @@ std::size_t zip_offset(const ByteBuffer& d) {
   return std::string::npos;
 }
 
-struct Header {
-  std::size_t offset;
-  std::size_t size;
-};
-
-std::vector<Header> headers(const ByteBuffer& d, std::size_t start, std::size_t end) {
-  std::vector<Header> h;
-  for (auto p = start; p + 6 <= end;) {
-    auto n = read_u32(d, p + 2);
-    if (n > end - p - 6) break;
-    h.push_back({p, n});
-    p += 6 + n;
-  }
-  return h;
-}
-
 // Throws if a top-level record declares more bytes than the data holds.
-// headers() stops quietly at such a record, so a model.dat cut short anywhere
+// tlv_headers() stops quietly at such a record, so a model.dat cut short anywhere
 // inside its single F401 record would parse as a model with no geometry and
 // no error. Real files end exactly where their last top-level record does.
 // Records nested inside it are deliberately left lenient: in real files some
 // container payloads end with bytes that are not records, and a strict check
 // there would reject valid models.
 void require_complete_top_level(const ByteBuffer& d) {
-  for (std::size_t p = 0; p + 6 <= d.size();) {
-    auto n = read_u32(d, p + 2);
-    if (n > d.size() - p - 6)
-      throw SkpParseError("model.dat is truncated: the top-level record declares " +
-                              std::to_string(n) + " bytes but only " +
-                              std::to_string(d.size() - p - 6) + " remain",
-                          ParseStage::tlv_walk, {}, {}, tag_at(d, p), p);
-    p += 6 + n;
+  const auto records = tlv_headers(d, 0, d.size());
+  const auto p = records.empty() ? 0 : records.back().offset + 6 + records.back().size;
+  if (d.size() - p >= 6) {
+    const auto n = read_u32(d, p + 2);
+    throw SkpParseError("model.dat is truncated: the top-level record declares " +
+                            std::to_string(n) + " bytes but only " +
+                            std::to_string(d.size() - p - 6) + " remain",
+                        ParseStage::tlv_walk, {}, {}, tag_at(d, p), p);
   }
 }
 
@@ -367,16 +351,17 @@ std::optional<ViewCamera> view_camera(const ByteBuffer& record) {
 // F901 -> 7017 -> 7117 -> 7C15. We unwrap this container into individual
 // 7C15 headers upfront so memory is bounded to one definition at a time,
 // mirroring Python's _unwrap_definitions_container (Issue #264).
-std::vector<Header> unwrap_definitions_container(const ByteBuffer& data, std::size_t offset,
-                                                 std::size_t size) {
-  auto level = headers(data, offset + 6, offset + 6 + size);
+std::vector<TlvHeader> unwrap_definitions_container(const ByteBuffer& data, std::size_t offset,
+                                                    std::size_t size) {
+  auto level = tlv_headers(data, offset + 6, offset + 6 + size);
   for (const char* expected_tag : {"7017", "7117"}) {
-    auto it = std::find_if(level.begin(), level.end(),
-                           [&](const Header& h) { return tag_at(data, h.offset) == expected_tag; });
+    auto it = std::find_if(level.begin(), level.end(), [&](const TlvHeader& h) {
+      return tag_at(data, h.offset) == expected_tag;
+    });
     if (it == level.end()) return {};
-    level = headers(data, it->offset + 6, it->offset + 6 + it->size);
+    level = tlv_headers(data, it->offset + 6, it->offset + 6 + it->size);
   }
-  std::vector<Header> defs;
+  std::vector<TlvHeader> defs;
   for (const auto& h : level) {
     if (tag_at(data, h.offset) == "7C15") {
       defs.push_back(h);
@@ -502,11 +487,11 @@ RawParsed full_parse(const ByteBuffer& data, const ParseOptions& o) {
   auto model = zip.get("model.dat");
   if (!model) throw SkpParseError("model.dat not found in ZIP container", ParseStage::zip_extract);
   require_complete_top_level(*model);
-  auto hs = headers(*model, 0, model->size());
+  auto hs = tlv_headers(*model, 0, model->size());
   if (hs.size() == 1 && model->at(hs[0].offset) == 0xf4 && model->at(hs[0].offset + 1) == 1)
-    hs = headers(*model, hs[0].offset + 6, hs[0].offset + 6 + hs[0].size);
+    hs = tlv_headers(*model, hs[0].offset + 6, hs[0].offset + 6 + hs[0].size);
 
-  std::vector<Header> expanded_hs;
+  std::vector<TlvHeader> expanded_hs;
   expanded_hs.reserve(hs.size());
   for (const auto& h : hs) {
     if (tag_at(*model, h.offset) == "F901") {
