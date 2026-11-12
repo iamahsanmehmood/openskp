@@ -88,81 +88,200 @@ static const std::set<std::string> containers = {
     "8D3C", "9013", "401F", "9113", "9213", "6942", "6C42", "6842"};
 
 namespace {
-// Only repair an inexact range. Each enlarged container must have an exact
-// child partition and an exact remaining sibling partition. Never scan payload
-// bytes for plausible tags. Bound speculative work on adversarial inputs.
+constexpr std::uint64_t kTlvWrap = std::uint64_t{1} << 32;
+
+// Recovery operates on views of ordinary record chains, not copied header
+// lists. The same chain answers both successful and failed range queries,
+// including queries with different parent ends. Equal-sized records form runs
+// so zero-filled opaque data does not allocate a node for every six bytes.
 class HeaderResolver {
- public:
-  const std::function<std::uint32_t(std::size_t)>& length;
-  const std::function<bool(std::size_t)>& container;
-  // Charge branching, not the linear walk: a wrapped endpoint can land in
-  // opaque zero-filled data containing arbitrarily many apparent empty TLVs.
-  std::size_t attempts = 256;
+  struct Run {
+    std::size_t offset, size, count;
 
-  // Cache one intrinsically invalid ordinary suffix, keyed by its parent end.
-  // Only boundaries after the last expandable container are safe to reuse:
-  // an earlier container might still jump across the invalid suffix.
-  std::size_t failed_end = 0;
-  std::vector<std::size_t> failed_offsets;
+    std::size_t step() const { return size + 6; }
 
-  bool failed_suffix(std::size_t start, std::size_t end) const {
-    return end == failed_end &&
-           std::binary_search(failed_offsets.begin(), failed_offsets.end(), start);
-  }
+    std::size_t end() const { return offset + count * step(); }
+  };
 
-  void remember_failure(std::size_t end, const std::vector<TlvHeader>& records, std::size_t stop) {
-    constexpr std::uint64_t wrap = std::uint64_t{1} << 32;
-    std::size_t first = 0;
-    for (std::size_t i = 0; i < records.size(); ++i) {
-      const auto h = records[i];
-      if (end - h.offset - 6 - h.size >= wrap && container(h.offset)) first = i + 1;
+  struct Chain {
+    std::vector<Run> runs;
+    std::vector<TlvHeader> candidates;
+    bool indexed = false;
+
+    std::size_t end() const { return runs.back().end(); }
+
+    std::size_t run_at(std::size_t p) const {
+      auto it = std::upper_bound(runs.begin(), runs.end(), p,
+                                 [](std::size_t v, const Run& r) { return v < r.offset; });
+      return static_cast<std::size_t>(it - runs.begin() - 1);
     }
-    failed_end = end;
-    failed_offsets.clear();
-    for (std::size_t i = first; i < records.size(); ++i)
-      failed_offsets.push_back(records[i].offset);
-    failed_offsets.push_back(stop);
+
+    bool contains(std::size_t p) const {
+      if (p < runs.front().offset || p >= end()) return false;
+      const auto& r = runs[run_at(p)];
+      return (p - r.offset) % r.step() == 0;
+    }
+
+    std::size_t clip(std::size_t limit) const {
+      if (limit >= end()) return end();
+      const auto& r = runs[run_at(limit)];
+      return r.offset + (limit - r.offset) / r.step() * r.step();
+    }
+
+    void append(std::size_t p, std::size_t size) {
+      if (!runs.empty() && runs.back().size == size && end() == p)
+        ++runs.back().count;
+      else
+        runs.push_back({p, size, 1});
+    }
+  };
+
+  struct View {
+    std::shared_ptr<Chain> chain;
+    std::size_t begin, end;
+  };
+
+  struct Plan {
+    std::vector<View> views;
+    std::size_t stop;
+  };
+
+  const std::function<std::uint32_t(std::size_t)>& length_;
+  const std::function<bool(std::size_t)>& container_;
+  const std::size_t limit_;
+  std::size_t attempts_ = 256;
+  std::vector<std::shared_ptr<Chain>> chains_;
+  // Only completed decisions are cached. Resource-limit errors propagate;
+  // they are never converted into an ordinary invalid partition.
+  std::map<std::tuple<std::size_t, std::size_t, int>, std::optional<Plan>> decisions_;
+
+  std::shared_ptr<Chain> chain_at(std::size_t p) const {
+    for (auto it = chains_.rbegin(); it != chains_.rend(); ++it)
+      if ((*it)->contains(p)) return *it;
+    return {};
   }
 
-  bool exact(std::size_t start, std::size_t end, std::vector<TlvHeader>& out, int depth) {
-    if (depth >= kMaxTlvDepth) return false;
-    auto p = start;
+  Plan ordinary(std::size_t start, std::size_t end) {
+    Plan plan{{}, start};
+    auto& p = plan.stop;
     while (end - p >= 6) {
-      if (failed_suffix(p, end)) return repair(end, out, depth);
-      const std::size_t n = length(p);
-      if (n > end - p - 6) break;
-      out.push_back({p, n});
-      p += 6 + n;
+      if (auto chain = chain_at(p)) {
+        const auto next = chain->clip(end);
+        if (next > p) plan.views.push_back({chain, p, next});
+        p = next;
+        if (p < chain->end()) return plan;  // A record crosses this parent end.
+        continue;
+      }
+      auto chain = std::make_shared<Chain>();
+      const auto begin = p;
+      std::size_t probes = 0;
+      bool joined = false;
+      while (end - p >= 6) {
+        // A new alignment can converge on a cached chain. Check periodically
+        // to bound duplicate reads without searching every chain per record.
+        if (probes && probes % 1024 == 0 && chain_at(p)) {
+          joined = true;
+          break;
+        }
+        const std::size_t size = length_(p);
+        if (size > end - p - 6) break;
+        chain->append(p, size);
+        p += 6 + size;
+        ++probes;
+      }
+      if (p > begin) {
+        chains_.push_back(chain);
+        plan.views.push_back({chain, begin, p});
+      }
+      if (!joined) return plan;
     }
-    if (p == end) return true;
-    remember_failure(end, out, p);
-    return repair(end, out, depth);
+    return plan;
   }
 
-  // The caller has already established that the ordinary partition is inexact.
-  // Reuse it, and try earlier containers before records found inside payloads.
-  bool repair(std::size_t end, std::vector<TlvHeader>& out, int depth) {
-    if (depth >= kMaxTlvDepth || attempts == 0) return false;
-    constexpr std::uint64_t wrap = std::uint64_t{1} << 32;
-    for (std::size_t i = 0; i < out.size(); ++i) {
-      const auto h = out[i];
-      const auto available = end - h.offset - 6;
-      if (available - h.size < wrap || !container(h.offset)) continue;
-      for (std::uint64_t n = std::uint64_t(h.size) + wrap; n <= available; n += wrap) {
-        if (attempts == 0) return false;
-        --attempts;
-        const auto next = h.offset + 6 + static_cast<std::size_t>(n);
-        std::vector<TlvHeader> suffix, children;
-        if (exact(next, end, suffix, depth + 1) && exact(h.offset + 6, next, children, depth + 1)) {
-          out.resize(i + 1);
-          out.back().size = static_cast<std::size_t>(n);
-          out.insert(out.end(), suffix.begin(), suffix.end());
-          return true;
-        }
-        if (available - n < wrap) break;
+  void index(Chain& chain) {
+    if (chain.indexed) return;
+    chain.indexed = true;
+    for (const auto& r : chain.runs) {
+      for (auto p = r.offset; p < r.end(); p += r.step()) {
+        if (limit_ - p - r.step() < kTlvWrap) return;
+        if (container_(p)) chain.candidates.push_back({p, r.size});
       }
     }
-    return false;
+  }
+
+  static Plan replace(const Plan& original, const TlvHeader& h, std::size_t size,
+                      const Plan& suffix, std::size_t end) {
+    Plan result{{}, end};
+    for (const auto& v : original.views) {
+      if (v.begin >= h.offset) break;
+      result.views.push_back({v.chain, v.begin, std::min(v.end, h.offset)});
+      if (v.end >= h.offset) break;
+    }
+    auto extended = std::make_shared<Chain>();
+    extended->append(h.offset, size);
+    // A corrected header belongs only to the selected plan, never to the raw
+    // chain cache (its stored 32-bit length still has the original value).
+    result.views.push_back({extended, h.offset, h.offset + 6 + size});
+    result.views.insert(result.views.end(), suffix.views.begin(), suffix.views.end());
+    return result;
+  }
+
+  std::optional<Plan> solve(std::size_t start, std::size_t end, int depth) {
+    auto normal = ordinary(start, end);
+    if (normal.stop == end) return normal;  // Prefer an exact stored partition.
+    const auto key = std::make_tuple(start, end, depth);
+    if (auto it = decisions_.find(key); it != decisions_.end()) return it->second;
+    for (const auto& v : normal.views) {
+      index(*v.chain);
+      const auto& candidates = v.chain->candidates;
+      auto it = std::lower_bound(candidates.begin(), candidates.end(), v.begin,
+                                 [](const TlvHeader& h, std::size_t p) { return h.offset < p; });
+      for (; it != candidates.end() && it->offset < v.end; ++it) {
+        const auto h = *it;
+        const auto available = end - h.offset - 6;
+        if (available - h.size < kTlvWrap) break;
+        for (std::uint64_t n = std::uint64_t(h.size) + kTlvWrap; n <= available; n += kTlvWrap) {
+          if (depth >= kMaxTlvDepth || attempts_ == 0)
+            throw SkpParseError("TLV length recovery exceeded its depth or attempt limit",
+                                ParseStage::tlv_walk, {}, {}, {}, h.offset);
+          --attempts_;
+          const auto next = h.offset + 6 + static_cast<std::size_t>(n);
+          auto suffix = solve(next, end, depth + 1);
+          if (suffix && solve(h.offset + 6, next, depth + 1)) {
+            auto result = replace(normal, h, static_cast<std::size_t>(n), *suffix, end);
+            decisions_.emplace(key, result);
+            return result;
+          }
+          if (available - n < kTlvWrap) break;
+        }
+      }
+    }
+    decisions_.emplace(key, std::nullopt);
+    return std::nullopt;
+  }
+
+  static std::vector<TlvHeader> materialize(const Plan& plan) {
+    std::vector<TlvHeader> out;
+    for (const auto& v : plan.views) {
+      auto i = v.chain->run_at(v.begin);
+      while (i < v.chain->runs.size() && v.chain->runs[i].offset < v.end) {
+        const auto& r = v.chain->runs[i++];
+        const auto end = std::min(v.end, r.end());
+        for (auto p = std::max(v.begin, r.offset); p < end; p += r.step())
+          out.push_back({p, r.size});
+      }
+    }
+    return out;
+  }
+
+ public:
+  HeaderResolver(const std::function<std::uint32_t(std::size_t)>& length,
+                 const std::function<bool(std::size_t)>& container, std::size_t end)
+      : length_(length), container_(container), limit_(end) {}
+
+  std::vector<TlvHeader> headers(std::size_t start, std::size_t end) {
+    if (auto plan = solve(start, end, 0)) return materialize(*plan);
+    return materialize(ordinary(start, end));  // Preserve nested leniency.
   }
 };
 }  // namespace
@@ -171,6 +290,8 @@ std::vector<TlvHeader> tlv_headers(std::size_t start, std::size_t end,
                                    const std::function<std::uint32_t(std::size_t)>& length,
                                    const std::function<bool(std::size_t)>& container) {
   if (start > end) throw std::out_of_range("invalid TLV range");
+  if (std::uint64_t(end - start) >= kTlvWrap)
+    return HeaderResolver(length, container, end).headers(start, end);
   std::vector<TlvHeader> out;
   auto p = start;
   while (end - p >= 6) {
@@ -179,12 +300,7 @@ std::vector<TlvHeader> tlv_headers(std::size_t start, std::size_t end,
     out.push_back({p, n});
     p += 6 + n;
   }
-  if (p != end && std::uint64_t(end - start) >= (std::uint64_t{1} << 32)) {
-    HeaderResolver resolver{length, container};
-    resolver.remember_failure(end, out, p);
-    resolver.repair(end, out, 0);
-  }
-  return out;  // Preserve legacy leniency for ordinary nested records.
+  return out;
 }
 
 std::vector<TlvHeader> tlv_headers(const ByteBuffer& d, std::size_t start, std::size_t end) {

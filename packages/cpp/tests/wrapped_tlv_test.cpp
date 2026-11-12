@@ -105,44 +105,183 @@ TEST(WrappedTlv, ZeroFilledPayloadDoesNotExhaustRecovery) {
   }
 }
 
-TEST(WrappedTlv, BoundsFailedAlternativesAndPreservesTheOriginalPartition) {
+TEST(WrappedTlv, ReportsAttemptExhaustionInsteadOfTruncation) {
   if (sizeof(std::size_t) < 8) GTEST_SKIP();
   std::size_t reads = 0;
-  const auto records = tlv_headers(
-      0, wrap + 1801,
-      [&](std::size_t p) -> std::uint32_t {
-        ++reads;
-        return p < 1800 ? 0 : UINT32_MAX;
-      },
-      [](std::size_t) { return true; });
-  ASSERT_EQ(records.size(), 300u);
-  EXPECT_EQ(records.front().offset, 0u);
-  EXPECT_EQ(records.back().offset, 1794u);
-  EXPECT_EQ(records.front().size, 0u);
-  EXPECT_EQ(records.back().size, 0u);
-  // A malformed range must not try every candidate indefinitely.
-  EXPECT_LT(reads, 600u);
-}
-
-TEST(WrappedTlv, ReusesOverlappingInvalidSuffixes) {
-  if (sizeof(std::size_t) < 8) GTEST_SKIP();
-  for (std::size_t count : {100000u, 1000000u}) {
-    std::size_t reads = 0;
-    const auto records = tlv_headers(
-        0, wrap + 6 * count + 1,
+  try {
+    tlv_headers(
+        0, wrap + 1801,
         [&](std::size_t p) -> std::uint32_t {
           ++reads;
-          if (p < 1536 || p >= wrap) return 0;
-          return UINT32_MAX;
+          return p < 1800 ? 0 : UINT32_MAX;
         },
-        [](std::size_t p) { return p < 1536; });
-    // 256 possible containers precede a large opaque leaf. Their extended
-    // endpoints land on overlapping zero-filled tails, each with one spare
-    // byte. Scan each alignment once, not once per candidate (256 times).
-    ASSERT_EQ(records.size(), count);
-    EXPECT_EQ(records.front().size, 0u);
-    EXPECT_EQ(records[256].size, UINT32_MAX);
-    EXPECT_LT(reads, 2 * count + 1024);
+        [](std::size_t) { return true; });
+    FAIL() << "expected a distinct recovery-limit error";
+  } catch (const SkpParseError& e) {
+    EXPECT_NE(std::string(e.what()).find("recovery exceeded"), std::string::npos);
+  }
+  EXPECT_LT(reads, 1000u);
+}
+
+TEST(WrappedTlv, ReusesSuccessfulAndFailedSuffixesAcrossParentEnds) {
+  if (sizeof(std::size_t) < 8) GTEST_SKIP();
+  for (std::size_t count : {100000u, 1000000u}) {
+    for (std::size_t trailing = 0; trailing < 6; ++trailing) {
+      for (std::size_t start : {0u, 7u}) {
+        SCOPED_TRACE(std::to_string(count) + ":" + std::to_string(trailing) + ":" +
+                     std::to_string(start));
+        std::size_t reads = 0;
+        const auto records = tlv_headers(
+            start, start + wrap + 6 * count + trailing,
+            [&](std::size_t p) -> std::uint32_t {
+              ++reads;
+              p -= start;
+              if (p < 1536 || p >= wrap) return 0;
+              return UINT32_MAX;
+            },
+            [&](std::size_t p) { return p - start < 1536; });
+        // Both exact and inexact suffixes must be reused. Child validation
+        // uses a different end for every candidate, and must also reuse data.
+        ASSERT_EQ(records.size(), count + (trailing == 5 ? 1 : 0));
+        EXPECT_EQ(records.front().size, 0u);
+        EXPECT_EQ(records[256].size, UINT32_MAX);
+        EXPECT_LT(reads, 2 * count + 4096);
+      }
+    }
+  }
+}
+
+TEST(WrappedTlv, ReusesLongChildrenAsWellAsLongSuffixes) {
+  if (sizeof(std::size_t) < 8) GTEST_SKIP();
+  constexpr std::size_t count = 100000;
+  std::size_t reads = 0;
+  const auto records = tlv_headers(
+      0, wrap + 12 * count + 1542,
+      [&](std::size_t p) -> std::uint32_t {
+        ++reads;
+        if (p < 6 * count + 1536 || p >= wrap) return 0;
+        return UINT32_MAX;
+      },
+      [](std::size_t p) { return p < 1536; });
+  ASSERT_FALSE(records.empty());
+  EXPECT_EQ(records.front().size, 0u);
+  EXPECT_LT(reads, 4 * count + 4096);
+}
+
+TEST(WrappedTlv, RecoveryNearSizeTMaximum) {
+  if (sizeof(std::size_t) < 8) GTEST_SKIP();
+  const auto end = std::numeric_limits<std::size_t>::max();
+  const auto start = end - wrap - 11;
+  const auto records = tlv_headers(
+      start, end, [&](std::size_t p) -> std::uint32_t { return p == start ? 5 : UINT32_MAX; },
+      [&](std::size_t p) { return p == start; });
+  ASSERT_EQ(records.size(), 1u);
+  EXPECT_EQ(records[0].offset, start);
+  EXPECT_EQ(records[0].size, wrap + 5);
+}
+
+TEST(WrappedTlv, RecoveryDepthBoundaryIsExplicit) {
+  if (sizeof(std::size_t) < 8) GTEST_SKIP();
+  for (std::size_t depth : {64u, 65u}) {
+    const auto end = wrap + 6 * depth + 5;
+    const auto scan = [&] {
+      return tlv_headers(
+          0, end,
+          [&](std::size_t p) -> std::uint32_t {
+            if (p < 6 * depth && p % 6 == 0) return static_cast<std::uint32_t>(end - p - 6);
+            return UINT32_MAX;
+          },
+          [&](std::size_t p) { return p < 6 * depth && p % 6 == 0; });
+    };
+    if (depth == 64) {
+      const auto records = scan();
+      ASSERT_EQ(records.size(), 1u);
+      EXPECT_EQ(records[0].size, end - 6);
+    } else {
+      EXPECT_THROW(scan(), SkpParseError);
+    }
+  }
+}
+
+// Small, deliberately uncached exhaustive reference for the recovery contract.
+// It validates both partitions and never shares state across parent ranges.
+std::optional<std::vector<TlvHeader>> reference_partition(const SparseRecords& d, std::size_t start,
+                                                          std::size_t end) {
+  std::vector<TlvHeader> ordinary;
+  auto p = start;
+  while (end - p >= 6) {
+    auto it = d.lengths.find(p);
+    const std::size_t n = it == d.lengths.end() ? UINT32_MAX : it->second;
+    if (n > end - p - 6) break;
+    ordinary.push_back({p, n});
+    p += 6 + n;
+  }
+  if (p == end) return ordinary;
+  for (std::size_t i = 0; i < ordinary.size(); ++i) {
+    const auto h = ordinary[i];
+    if (!d.containers.count(h.offset)) continue;
+    const auto available = end - h.offset - 6;
+    if (available - h.size < wrap) continue;
+    for (auto n = h.size + wrap; n <= available;) {
+      const auto next = h.offset + 6 + n;
+      const auto suffix = reference_partition(d, next, end);
+      if (suffix && reference_partition(d, h.offset + 6, next)) {
+        ordinary.resize(i + 1);
+        ordinary.back().size = n;
+        ordinary.insert(ordinary.end(), suffix->begin(), suffix->end());
+        return ordinary;
+      }
+      if (available - n < wrap) break;
+      n += wrap;
+    }
+  }
+  return std::nullopt;
+}
+
+TEST(WrappedTlv, MatchesUncachedReferenceAcrossNestedAndCorruptRanges) {
+  if (sizeof(std::size_t) < 8) GTEST_SKIP();
+  for (std::size_t depth = 1; depth <= 3; ++depth) {
+    for (std::size_t wraps = 1; wraps <= 3; ++wraps) {
+      for (bool sibling : {false, true}) {
+        for (int corruption : {-1, 0, 1}) {
+          SCOPED_TRACE(std::to_string(depth) + ":" + std::to_string(wraps) + ":" +
+                       std::to_string(sibling) + ":" + std::to_string(corruption));
+          SparseRecords d;
+          auto p = 6 * depth;
+          for (std::size_t i = 0; i < wraps; ++i) {
+            d.lengths[p] = UINT32_MAX;
+            p += wrap + 5;
+          }
+          d.lengths[p] = 7;
+          const auto inner_end = p + 13;
+          for (std::size_t i = 0; i < depth; ++i) {
+            d.lengths[6 * i] = static_cast<std::uint32_t>(inner_end - 6 * i - 6);
+            d.containers.insert(6 * i);
+          }
+          if (sibling) d.lengths[inner_end] = 3;
+          d.lengths[p] = static_cast<std::uint32_t>(7 + corruption);
+          const auto end = inner_end + (sibling ? 9 : 0);
+          auto expected = reference_partition(d, 0, end);
+          if (!expected) {
+            std::vector<TlvHeader> ordinary;
+            for (std::size_t q = 0; end - q >= 6;) {
+              const auto it = d.lengths.find(q);
+              const std::size_t n = it == d.lengths.end() ? UINT32_MAX : it->second;
+              if (n > end - q - 6) break;
+              ordinary.push_back({q, n});
+              q += 6 + n;
+            }
+            expected = ordinary;
+          }
+          const auto actual = d.scan(end);
+          ASSERT_EQ(actual.size(), expected->size());
+          for (std::size_t i = 0; i < actual.size(); ++i) {
+            EXPECT_EQ(actual[i].offset, expected->at(i).offset);
+            EXPECT_EQ(actual[i].size, expected->at(i).size);
+          }
+        }
+      }
+    }
   }
 }
 
