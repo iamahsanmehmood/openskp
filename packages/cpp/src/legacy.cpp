@@ -2136,8 +2136,12 @@ std::vector<RawPage> scan_pages_for_layers(const ByteBuffer& data, std::size_t s
 //   0x02 style       the rendering options (length by file version, see rendering_options_len)
 //                    + a CSkpStyle ref or object
 //   0x04 shadows     2 bytes (schema 13+: 3) + the shadow info
-//   0x08 axes        (schema 13+: a flag byte +) 110 bytes
-//   0x10 hidden      a byte, u32 n, n entity refs
+//   0x08 axes        (schema 13+: a flag byte +) 110 bytes + a closing byte. That byte was read
+//                    as the start of the hidden section; a scene that saves hidden objects but
+//                    not the axes (openskp#472) shows it belongs here
+//   0x10 hidden      u32 n, n refs to the entities the scene hides (groups, component
+//                    instances, and edges or faces hidden as geometry); 2017 to 2019 files list
+//                    only those at model level
 //   0x20 layers      u32 n, n refs to the layers (tags) the scene hides
 //   0x40 sections    u32 n, n section-plane refs
 //
@@ -2361,11 +2365,8 @@ RawPage read_page_record(Archive& ar, R& r, PageClasses& classes) {
     r.utf16();  // country
     r.raw(kShadowInfoFixedLen);
   }
-  if (flags & 0x08) r.raw(kPageAxesLen + (schema >= 13 ? 1 : 0));
-  if (flags & 0x10) {
-    r.u8();
-    read_page_refs(r, r.u32());
-  }
+  if (flags & 0x08) r.raw(kPageAxesLen + 1 + (schema >= 13 ? 1 : 0));
+  if (flags & 0x10) page.hidden_entity_ids = read_page_refs(r, r.u32());
   if (flags & 0x20) page.hidden_layer_ids = read_page_refs(r, r.u32());
   if (flags & 0x40) read_page_refs(r, r.u32());
   if (schema >= 15) {
@@ -2422,6 +2423,18 @@ std::optional<std::vector<RawPage>> read_page_list(const ByteBuffer& data, Archi
           kept.push_back(id);
       }
       page.hidden_layer_ids = std::move(kept);
+      // hidden entities: archive slots to the persistent ids the entities carry (2017+ files);
+      // a ref to a slot with no entity or no persistent id is dropped
+      std::vector<EntityId> pids;
+      for (auto id : page.hidden_entity_ids) {
+        std::optional<uint64_t> walker = id;
+        if (!ar.burns.empty() && id >= ar.burns[0].first) walker = ar.translate_ref(id);
+        if (!walker) continue;
+        auto it = ar.slots.find(*walker);
+        if (it == ar.slots.end() || it->second.cls || !it->second.v) continue;
+        if (it->second.v->native_pid) pids.push_back(EntityId(it->second.v->native_pid));
+      }
+      page.hidden_entity_ids = std::move(pids);
     }
     return pages;
   } catch (const std::exception&) {

@@ -173,6 +173,8 @@ struct RawPage {
   bool parallel{};
   double ortho_height{};
   std::vector<EntityId> hidden_layer_ids;
+  // persistent ids (VFF: as stored; legacy: archive slots until read_page_list resolves them)
+  std::vector<EntityId> hidden_entity_ids;
   bool selected{};
 };
 

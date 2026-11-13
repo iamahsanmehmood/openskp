@@ -266,6 +266,7 @@ SkpModel build_model(RawParsed&& p, const ParseOptions& o) {
       auto it = p.layer_id_to_name.find(id);
       if (it != p.layer_id_to_name.end()) page.hidden_layers.push_back(it->second);
     }
+    page.hidden_entity_ids = pg.hidden_entity_ids;
     m.pages.push_back(std::move(page));
   }
   m.camera = p.camera;
