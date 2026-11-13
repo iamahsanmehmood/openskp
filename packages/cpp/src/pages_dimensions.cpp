@@ -658,9 +658,24 @@ RawCamera parse_camera(const ByteBuffer& record) {
 // * 6F54 > 6F55 - page name (UTF-8)
 // * 714A > 34BC - camera (see parse_camera)
 // * 7150 - layers hidden in this page: (u8 length, var-int layer id) runs
+// * 714B - entities hidden in this page, as their persistent ids, in the same runs (empty, or
+//   absent, when the page hides none)
 //
 // Each page's 6F54 also carries its entity id (DC05 > DE05), and 6D62 next to
 // 6D61 holds the id of the scene selected when the model was saved.
+// (u8 length, var-int id) runs, as 7150 and 714B store them.
+std::vector<EntityId> parse_id_runs(const std::optional<ByteBuffer>& runs) {
+  std::vector<EntityId> ids;
+  std::size_t off = 0;
+  while (runs && off + 1 <= runs->size()) {
+    std::uint8_t ln = (*runs)[off];
+    if (ln == 0 || off + 1 + ln > runs->size()) break;
+    ids.push_back(static_cast<EntityId>(parse_varint(*runs, off + 1, ln)));
+    off += 1 + ln;
+  }
+  return ids;
+}
+
 std::vector<RawPage> parse_pages(const TlvNode* node) {
   std::vector<RawPage> pages;
   if (!node) return pages;
@@ -706,15 +721,8 @@ std::vector<RawPage> parse_pages(const TlvNode* node) {
           page.ortho_height = cam.ortho_height;
         }
 
-        auto hidden = tlv_find_int(items, 0x7150);
-        std::size_t off = 0;
-        while (hidden && off + 1 <= hidden->size()) {
-          std::uint8_t ln = (*hidden)[off];
-          if (ln == 0 || off + 1 + ln > hidden->size()) break;
-          page.hidden_layer_ids.push_back(
-              static_cast<EntityId>(parse_varint(*hidden, off + 1, ln)));
-          off += 1 + ln;
-        }
+        page.hidden_layer_ids = parse_id_runs(tlv_find_int(items, 0x7150));
+        page.hidden_entity_ids = parse_id_runs(tlv_find_int(items, 0x714b));
 
         // A scene that doesn't save its camera ("Camera Location" unticked) is
         // still a scene: it keeps its name and hidden layers, eye/target/up unset.
