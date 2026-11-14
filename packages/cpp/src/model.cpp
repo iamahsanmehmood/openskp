@@ -269,6 +269,7 @@ SkpModel build_model(RawParsed&& p, const ParseOptions& o) {
     m.pages.push_back(std::move(page));
   }
   m.camera = p.camera;
+  m.unread_root_entities = p.unread_root_entities;
   // Convert model-level linear dimensions (VFF; world space).
   for (auto& dm : p.dimensions) {
     Dimension dim;

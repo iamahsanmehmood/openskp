@@ -650,6 +650,13 @@ class OPENSKP_EXPORT SkpModel {
   /// the file at this view whichever scene is selected, even when the scene
   /// was not updated. Unset for classic pre-2021 files.
   std::optional<ViewCamera> camera;
+  /// How many top-level entities of a classic (pre-2021) file the reader
+  /// couldn't read. It keeps what it read before the first root record it
+  /// can't parse and drops that record and everything after it, so a nonzero
+  /// count means the model lost geometry, components, groups, text or
+  /// dimensions. Phantom entries the root count includes but the file never
+  /// writes are not counted. Always 0 for VFF files.
+  std::size_t unread_root_entities{};
   /// All VFF linear dimensions with world-space endpoints (compatibility view).
   /// Both VFF and legacy also expose owner-local geometry and drawing properties
   /// through `root().dimensions` and `Definition::dimensions`.
