@@ -213,6 +213,8 @@ struct RawParsed {
   std::map<EntityId, std::string> layer_id_to_name;
   std::vector<RawPage> pages;
   std::optional<ViewCamera> camera;
+  // See SkpModel::unread_root_entities.
+  std::size_t unread_root_entities{};
   std::vector<RawDimension> dimensions;
   std::map<EntityId, std::string> material_id_to_name;
   std::map<std::string, std::shared_ptr<RawMaterial>> materials;

@@ -389,6 +389,10 @@ struct Archive {
   uint64_t cum_delta{};
   std::optional<uint64_t> annot_watermark;
   std::vector<int> burn_stack;  // per-entity-list burned-item credits
+  // Set when the root list stopped at a record it couldn't read, and how many
+  // of its declared entities that left out (see SkpModel::unread_root_entities).
+  bool root_stopped_early{};
+  std::size_t unread_root_entities{};
   // per-entity-list instances an annotation's path wrote in full (see
   // connection_paths) that the list has not listed yet, in order
   std::vector<std::vector<uint64_t>> inline_stack;
@@ -1433,6 +1437,7 @@ struct Archive {
         if (root) {
           // over-declared root counts run into the document tail - stop
           r.p = save;
+          root_stopped_early = true;
           break;
         }
         if (has_burn_credit) {
@@ -1457,6 +1462,14 @@ struct Archive {
       if (v.size() >= n) break;
       const auto& e = slots.at(slot);
       v.emplace_back(slot, e.name, e.v);
+    }
+    if (root && root_stopped_early) {
+      // Burned indices count phantom entries the stream never carries (see
+      // register_burn()); the rest of the shortfall is entities the reader
+      // couldn't read and dropped.
+      const uint64_t phantoms = uint64_t(std::max(0, burn_stack.back()));
+      const uint64_t missing = n > v.size() ? n - v.size() : 0;
+      unread_root_entities = missing > phantoms ? missing - phantoms : 0;
     }
     return v;
   }
@@ -2488,6 +2501,7 @@ RawParsed parse_legacy(const ByteBuffer& data, const ParseOptions& o) {
     WalkResult walked = walk_with_bases(data, ver, start, mc, bases);
     Archive& ar = walked.ar;
     auto& root = walked.root;
+    out.unread_root_entities = ar.unread_root_entities;
     auto& layers = walked.layers;
     auto& mats = walked.materials;
     for (auto& m : mats) {
