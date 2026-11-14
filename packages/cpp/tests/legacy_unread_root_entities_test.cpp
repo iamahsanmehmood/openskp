@@ -1,6 +1,6 @@
+#include <algorithm>
 #include <gtest/gtest.h>
 
-#include <algorithm>
 #include <openskp/openskp.hpp>
 
 #include "test_helpers.hpp"
