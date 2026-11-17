@@ -1748,6 +1748,7 @@ void add_edge(GeometryBuilder& b, uint64_t s, const V& e,
   b.edge_flags[s] =
       pack_draw(e.hidden, e.soft, e.smooth, e.locked, e.casts_shadows, e.receives_shadows);
   b.edge_dictionaries[s] = extract_legacy_attribute_dictionaries(e.attrs, slots);
+  if (e.layer) b.edge_layers[s] = std::to_string(e.layer);
   // The edge's parent Curve (the CCurve/CArcCurve slot) and, if that curve is an analytic arc, its
   // frame: it arrives on the edge that first references the CArcCurve; every later edge on the arc
   // back-refs it.

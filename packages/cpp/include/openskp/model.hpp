@@ -175,6 +175,10 @@ struct Edge {
   bool casts_shadows{true};
   bool receives_shadows{true};
   ParsedAttrDictionaries attribute_dictionaries;
+  /// Name of the layer (tag) the edge is assigned to, resolved like Face::layer; "" when the edge
+  /// carries no layer reference. An edge's layer is its own: it can differ from the layers of the
+  /// faces it bounds, as on a sky dome whose rim edges sit on its layer.
+  std::string layer;
 };
 
 /// The analytic arc behind a curve: SketchUp's own ArcCurve.

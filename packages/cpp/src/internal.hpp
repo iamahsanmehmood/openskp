@@ -110,6 +110,8 @@ struct GeometryBuilder {
   std::vector<ConstructionPoint> construction_points;
   std::map<EntityId, std::uint64_t> persistent_ids;
   std::map<EntityId, ParsedAttrDictionaries> edge_dictionaries;
+  // Edge id -> layer entity id (VFF D207) or legacy layer id, as text until resolved to a name.
+  std::map<EntityId, std::string> edge_layers;
 };
 
 struct RawDefinition {
