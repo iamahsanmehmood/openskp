@@ -29,6 +29,7 @@ add_executable(
   layer_hidden_test.cpp
   legacy_anchored_texts_test.cpp
   legacy_dimension_paths_test.cpp
+  legacy_unread_root_entities_test.cpp
   legacy_dimension_geometry_test.cpp
   legacy_single_material_test.cpp
   legacy_zero_material_custom_layer_test.cpp
