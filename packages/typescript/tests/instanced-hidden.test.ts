@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { create } from '../src/create';
+import { create, type ComponentDefinitionBuilder } from '../src/create';
 import { buildInstancedScene } from '../src/index';
 
 /**
@@ -10,8 +10,9 @@ import { buildInstancedScene } from '../src/index';
 describe('buildInstancedScene instance hidden flag', () => {
   it('reports each placement\'s own Hide flag, nested ones included', () => {
     const builder = create();
-    const square = (def: { addFace: (pts: [number, number, number][]) => unknown }) =>
+    const square = (def: ComponentDefinitionBuilder) => {
       def.addFace([[0, 0, 0], [10, 0, 0], [10, 10, 0], [0, 10, 0]]);
+    };
     const box = builder.addComponentDefinition('Box', square);
     const inner = builder.addComponentDefinition('Inner', square);
     const outer = builder.addComponentDefinition('Outer', (def) => {
