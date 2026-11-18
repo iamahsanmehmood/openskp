@@ -270,22 +270,6 @@ struct DefSpan {
   EntityId id{};
 };
 
-struct TlvHeader {
-  std::size_t offset{};
-  std::size_t size{};
-};
-
-std::vector<TlvHeader> tlv_headers(const ByteBuffer& md, std::size_t start, std::size_t end) {
-  std::vector<TlvHeader> out;
-  for (std::size_t p = start; p + 6 <= end;) {
-    const auto n = read_u32(md, p + 2);
-    if (n > end - p - 6) break;
-    out.push_back({p, n});
-    p += 6 + n;
-  }
-  return out;
-}
-
 // Same first-id rule as collect_definitions: direct DE05 or DC05, then
 // recurse only dictionary / entity-header containers. Walking C409/6419
 // would steal a vertex or instance id.
