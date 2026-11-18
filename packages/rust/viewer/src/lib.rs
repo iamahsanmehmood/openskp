@@ -110,9 +110,7 @@ fn push_u32(bin: &mut Vec<u8>, values: &[u32]) -> usize {
 fn push_bytes(bin: &mut Vec<u8>, bytes: &[u8]) -> usize {
     let off = bin.len();
     bin.extend_from_slice(bytes);
-    while bin.len() % 4 != 0 {
-        bin.push(0);
-    }
+    bin.resize(bin.len().next_multiple_of(4), 0);
     off
 }
 
