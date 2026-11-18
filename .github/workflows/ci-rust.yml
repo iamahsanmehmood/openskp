@@ -39,6 +39,8 @@ jobs:
         run: |
           cd packages/rust
           cargo fmt --check
+          cd viewer
+          cargo fmt --check
 
       - name: Clippy
         run: |
@@ -73,12 +75,35 @@ jobs:
           cd packages/rust
           cargo test --release --locked
 
+  # The in-browser viewer is a separate crate (packages/rust/viewer) that only
+  # builds for wasm32, so the jobs above never compile it.
+  viewer:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Rust
+        run: rustup toolchain install stable --profile minimal --component clippy --target wasm32-unknown-unknown && rustup default stable
+
+      - name: Clippy
+        run: |
+          cd packages/rust/viewer
+          cargo clippy --release --locked --target wasm32-unknown-unknown -- -D warnings
+
+      - name: Build
+        run: |
+          cd packages/rust/viewer
+          cargo build --release --locked --target wasm32-unknown-unknown
+
   # Single stable check name for branch protection to require, regardless of
   # whether packages/rust/** changed - see ci-python.yml's `required` job
   # for why this exists.
   required:
     name: Rust CI required
-    needs: [changes, test, msrv]
+    needs: [changes, test, msrv, viewer]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -88,7 +113,7 @@ jobs:
             echo "packages/rust/** unchanged - nothing to verify"
             exit 0
           fi
-          if [ "${{ needs.test.result }}" != "success" ] || [ "${{ needs.msrv.result }}" != "success" ]; then
+          if [ "${{ needs.test.result }}" != "success" ] || [ "${{ needs.msrv.result }}" != "success" ] || [ "${{ needs.viewer.result }}" != "success" ]; then
             echo "Rust CI failed"
             exit 1
           fi
