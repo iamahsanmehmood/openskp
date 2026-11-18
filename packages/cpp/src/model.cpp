@@ -141,6 +141,7 @@ static Definition definition(EntityId id, RawDefinition r) {
   d.thumbnail_camera = r.thumbnail_camera;
   d.always_faces_camera = r.always_faces_camera;
   d.shadows_face_sun = r.shadows_face_sun;
+  d.no_scale_mask = r.no_scale_mask;
   d.is_image = r.is_image;
   d.is_group = r.is_group;
   d.type_known = r.type_known;

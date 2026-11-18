@@ -1324,6 +1324,9 @@ struct Archive {
       auto gap = r.raw(tpos - r.p);
       v->faces_camera = gap.size() >= 9 && (gap[gap.size() - 9] & 1);
       v->shadows_face_sun = gap.size() >= 9 && (gap[gap.size() - 9] & 2);
+      // SDK-generated legacy definitions store a little-endian u32 immediately
+      // before the final definition-kind u32 (eight bytes before CThumbnail).
+      v->no_scale_mask = ver >= 7 && gap.size() >= 8 ? read_u32(gap, gap.size() - 8) : 0;
       // the last u32 before the thumbnail is 1 for the definition of a group and 0
       // for a component's (what SketchUp's SUComponentDefinitionGetType reports),
       // measured against SketchUp 2025's own counts
@@ -2447,6 +2450,41 @@ RawParsed parse_legacy(const ByteBuffer& data, const ParseOptions& o) {
     std::regex_search(ascii, vm, std::regex("\\{(\\d+)\\."));
     int ver = std::stoi(vm[1]);
 
+    // Root behavior (the scale-grip mask) is the u32 right before the first
+    // UTF-16 CString header (ff fe ff) after the version-map terminator. A file
+    // saved by SketchUp itself puts a CDib thumbnail (PNG) in between, so the
+    // distance from the terminator is not fixed: skip the thumbnail first, then
+    // anchor on the string header. SU3..6 predate scale-handle masks.
+    if (ver >= 7) {
+      ByteBuffer marker;
+      for (const char ch : std::string("End-Of-Version-Map")) {
+        marker.push_back(static_cast<std::uint8_t>(ch));
+        marker.push_back(0);
+      }
+      auto found = std::search(data.begin(), data.end(), marker.begin(), marker.end());
+      if (found != data.end()) {
+        const auto start = static_cast<std::size_t>(found - data.begin()) + marker.size();
+        auto scan = data.begin() + static_cast<std::ptrdiff_t>(start);
+        const auto window = [&](std::size_t from, std::size_t n) {
+          return data.begin() + static_cast<std::ptrdiff_t>(std::min(data.size(), from + n));
+        };
+        const std::string cdib = "CDib", iend = "IEND";
+        if (std::search(scan, window(start, 64), cdib.begin(), cdib.end()) != window(start, 64)) {
+          // Skip the PNG: IEND plus its four-byte CRC.
+          auto end_chunk = std::search(scan, data.end(), iend.begin(), iend.end());
+          if (end_chunk != data.end())
+            scan = end_chunk + std::min<std::ptrdiff_t>(8, data.end() - end_chunk);
+        }
+        const std::uint8_t header[] = {0xff, 0xfe, 0xff};
+        const auto from = static_cast<std::size_t>(scan - data.begin());
+        auto str = std::search(scan, window(from, 96), header, header + 3);
+        if (str != window(from, 96)) {
+          const auto at = static_cast<std::size_t>(str - data.begin());
+          if (at >= start + 4) out.root.no_scale_mask = read_u32(data, at - 4);
+        }
+      }
+    }
+
     // anchor: the material manager (u32 count right before the first
     // CMaterial new-class record); zero-material files have no CMaterial
     // record anywhere, so fall back to the first CLayer class record and
@@ -2567,6 +2605,7 @@ RawParsed parse_legacy(const ByteBuffer& data, const ParseOptions& o) {
         d.guid = s.second.v->guid;
         d.always_faces_camera = s.second.v->faces_camera;
         d.shadows_face_sun = s.second.v->shadows_face_sun;
+        d.no_scale_mask = s.second.v->no_scale_mask;
         d.is_image = image_def_ids.count(s.first) != 0;
         d.is_group = s.second.v->is_group;
         d.type_known = s.second.v->type_known;
