@@ -27,6 +27,7 @@ add_executable(
   scene_hidden_entities_test.cpp
   instanced_scene_test.cpp
   json_export_test.cpp
+  edge_layer_test.cpp
   layer_hidden_test.cpp
   legacy_anchored_texts_test.cpp
   legacy_dimension_paths_test.cpp
