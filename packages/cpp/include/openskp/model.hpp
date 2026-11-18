@@ -547,6 +547,13 @@ struct Page {
   double ortho_height{};
   /// Names of the layers this scene hides.
   std::vector<std::string> hidden_layers;
+  /// Persistent ids of the entities this scene hides (SketchUp's "Hidden Objects" and "Hidden
+  /// Geometry" scene properties), in file order: groups and component instances, and edges or
+  /// faces a scene hides as geometry. They resolve through Instance::id and the entities'
+  /// persistent_id, nested placements included. Empty when the scene saves no hidden objects,
+  /// and in a pre-2017 file, which stores no persistent ids. SketchUp 2017 to 2019 files keep
+  /// only the model-level entities a scene hides (SketchUp itself reads no more from them).
+  std::vector<EntityId> hidden_entity_ids;
   /// The scene selected when the model was saved (at most one).
   bool selected{};
 };
@@ -632,6 +639,8 @@ struct Definition {
   std::optional<ThumbnailCamera> thumbnail_camera;
   /// Whether the file explicitly supplied component/group type information.
   bool type_known{};
+  /// Native scale-grip suppression bits: X, Y, Z, XZ, YZ, XY, XYZ (bits 0-6).
+  std::uint32_t no_scale_mask{};
 };
 
 /// Top-level model container holding all definitions, layers, materials, and styles.
@@ -654,6 +663,13 @@ class OPENSKP_EXPORT SkpModel {
   /// the file at this view whichever scene is selected, even when the scene
   /// was not updated. Unset for classic pre-2021 files.
   std::optional<ViewCamera> camera;
+  /// How many top-level entities of a classic (pre-2021) file the reader
+  /// couldn't read. It keeps what it read before the first root record it
+  /// can't parse and drops that record and everything after it, so a nonzero
+  /// count means the model lost geometry, components, groups, text or
+  /// dimensions. Phantom entries the root count includes but the file never
+  /// writes are not counted. Always 0 for VFF files.
+  std::size_t unread_root_entities{};
   /// All VFF linear dimensions with world-space endpoints (compatibility view).
   /// Both VFF and legacy also expose owner-local geometry and drawing properties
   /// through `root().dimensions` and `Definition::dimensions`.

@@ -119,6 +119,7 @@ struct RawDefinition {
   std::string name;
   bool always_faces_camera{};
   bool shadows_face_sun{};
+  std::uint32_t no_scale_mask{};
   bool is_image{};
   bool is_group{};
   GeometryBuilder builder;
@@ -175,6 +176,8 @@ struct RawPage {
   bool parallel{};
   double ortho_height{};
   std::vector<EntityId> hidden_layer_ids;
+  // persistent ids (VFF: as stored; legacy: archive slots until read_page_list resolves them)
+  std::vector<EntityId> hidden_entity_ids;
   bool selected{};
 };
 
@@ -215,6 +218,8 @@ struct RawParsed {
   std::map<EntityId, std::string> layer_id_to_name;
   std::vector<RawPage> pages;
   std::optional<ViewCamera> camera;
+  // See SkpModel::unread_root_entities.
+  std::size_t unread_root_entities{};
   std::vector<RawDimension> dimensions;
   std::map<EntityId, std::string> material_id_to_name;
   std::map<std::string, std::shared_ptr<RawMaterial>> materials;
@@ -247,6 +252,17 @@ std::string guid_from_windows_bytes(const ByteBuffer&);
 // before anything can be reported, so deeper input throws a SkpParseError.
 inline constexpr int kMaxTlvDepth = 64;
 [[noreturn]] void throw_tlv_too_deep(const std::string& tag, std::size_t offset);
+
+struct TlvHeader {
+  std::size_t offset{};
+  std::size_t size{};
+};
+
+// The reader overload permits sparse logical inputs in large-range tests.
+std::vector<TlvHeader> tlv_headers(std::size_t start, std::size_t end,
+                                   const std::function<std::uint32_t(std::size_t)>& length,
+                                   const std::function<bool(std::size_t)>& container);
+std::vector<TlvHeader> tlv_headers(const ByteBuffer&, std::size_t, std::size_t);
 std::vector<TlvNode> parse_tlv_recursive(const ByteBuffer&, std::size_t, std::size_t,
                                          int depth = 0);
 std::vector<std::pair<std::string, ByteBuffer>> parse_flat(const ByteBuffer&);
@@ -358,6 +374,7 @@ struct V {
   bool sense{};
   bool faces_camera{};
   bool shadows_face_sun{};
+  std::uint32_t no_scale_mask{};
   bool is_group{};
   bool colorized{};
   int colorize_type{};

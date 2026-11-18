@@ -389,6 +389,10 @@ struct Archive {
   uint64_t cum_delta{};
   std::optional<uint64_t> annot_watermark;
   std::vector<int> burn_stack;  // per-entity-list burned-item credits
+  // Set when the root list stopped at a record it couldn't read, and how many
+  // of its declared entities that left out (see SkpModel::unread_root_entities).
+  bool root_stopped_early{};
+  std::size_t unread_root_entities{};
   // per-entity-list instances an annotation's path wrote in full (see
   // connection_paths) that the list has not listed yet, in order
   std::vector<std::vector<uint64_t>> inline_stack;
@@ -1324,6 +1328,9 @@ struct Archive {
       auto gap = r.raw(tpos - r.p);
       v->faces_camera = gap.size() >= 9 && (gap[gap.size() - 9] & 1);
       v->shadows_face_sun = gap.size() >= 9 && (gap[gap.size() - 9] & 2);
+      // SDK-generated legacy definitions store a little-endian u32 immediately
+      // before the final definition-kind u32 (eight bytes before CThumbnail).
+      v->no_scale_mask = ver >= 7 && gap.size() >= 8 ? read_u32(gap, gap.size() - 8) : 0;
       // the last u32 before the thumbnail is 1 for the definition of a group and 0
       // for a component's (what SketchUp's SUComponentDefinitionGetType reports),
       // measured against SketchUp 2025's own counts
@@ -1433,6 +1440,7 @@ struct Archive {
         if (root) {
           // over-declared root counts run into the document tail - stop
           r.p = save;
+          root_stopped_early = true;
           break;
         }
         if (has_burn_credit) {
@@ -1457,6 +1465,14 @@ struct Archive {
       if (v.size() >= n) break;
       const auto& e = slots.at(slot);
       v.emplace_back(slot, e.name, e.v);
+    }
+    if (root && root_stopped_early) {
+      // Burned indices count phantom entries the stream never carries (see
+      // register_burn()); the rest of the shortfall is entities the reader
+      // couldn't read and dropped.
+      const uint64_t phantoms = uint64_t(std::max(0, burn_stack.back()));
+      const uint64_t missing = n > v.size() ? n - v.size() : 0;
+      unread_root_entities = missing > phantoms ? missing - phantoms : 0;
     }
     return v;
   }
@@ -2137,8 +2153,12 @@ std::vector<RawPage> scan_pages_for_layers(const ByteBuffer& data, std::size_t s
 //   0x02 style       the rendering options (length by file version, see rendering_options_len)
 //                    + a CSkpStyle ref or object
 //   0x04 shadows     2 bytes (schema 13+: 3) + the shadow info
-//   0x08 axes        (schema 13+: a flag byte +) 110 bytes
-//   0x10 hidden      a byte, u32 n, n entity refs
+//   0x08 axes        (schema 13+: a flag byte +) 110 bytes + a closing byte. That byte was read
+//                    as the start of the hidden section; a scene that saves hidden objects but
+//                    not the axes (openskp#472) shows it belongs here
+//   0x10 hidden      u32 n, n refs to the entities the scene hides (groups, component
+//                    instances, and edges or faces hidden as geometry); 2017 to 2019 files list
+//                    only those at model level
 //   0x20 layers      u32 n, n refs to the layers (tags) the scene hides
 //   0x40 sections    u32 n, n section-plane refs
 //
@@ -2362,11 +2382,8 @@ RawPage read_page_record(Archive& ar, R& r, PageClasses& classes) {
     r.utf16();  // country
     r.raw(kShadowInfoFixedLen);
   }
-  if (flags & 0x08) r.raw(kPageAxesLen + (schema >= 13 ? 1 : 0));
-  if (flags & 0x10) {
-    r.u8();
-    read_page_refs(r, r.u32());
-  }
+  if (flags & 0x08) r.raw(kPageAxesLen + 1 + (schema >= 13 ? 1 : 0));
+  if (flags & 0x10) page.hidden_entity_ids = read_page_refs(r, r.u32());
   if (flags & 0x20) page.hidden_layer_ids = read_page_refs(r, r.u32());
   if (flags & 0x40) read_page_refs(r, r.u32());
   if (schema >= 15) {
@@ -2423,6 +2440,18 @@ std::optional<std::vector<RawPage>> read_page_list(const ByteBuffer& data, Archi
           kept.push_back(id);
       }
       page.hidden_layer_ids = std::move(kept);
+      // hidden entities: archive slots to the persistent ids the entities carry (2017+ files);
+      // a ref to a slot with no entity or no persistent id is dropped
+      std::vector<EntityId> pids;
+      for (auto id : page.hidden_entity_ids) {
+        std::optional<uint64_t> walker = id;
+        if (!ar.burns.empty() && id >= ar.burns[0].first) walker = ar.translate_ref(id);
+        if (!walker) continue;
+        auto it = ar.slots.find(*walker);
+        if (it == ar.slots.end() || it->second.cls || !it->second.v) continue;
+        if (it->second.v->native_pid) pids.push_back(EntityId(it->second.v->native_pid));
+      }
+      page.hidden_entity_ids = std::move(pids);
     }
     return pages;
   } catch (const std::exception&) {
@@ -2447,6 +2476,41 @@ RawParsed parse_legacy(const ByteBuffer& data, const ParseOptions& o) {
     std::smatch vm;
     std::regex_search(ascii, vm, std::regex("\\{(\\d+)\\."));
     int ver = std::stoi(vm[1]);
+
+    // Root behavior (the scale-grip mask) is the u32 right before the first
+    // UTF-16 CString header (ff fe ff) after the version-map terminator. A file
+    // saved by SketchUp itself puts a CDib thumbnail (PNG) in between, so the
+    // distance from the terminator is not fixed: skip the thumbnail first, then
+    // anchor on the string header. SU3..6 predate scale-handle masks.
+    if (ver >= 7) {
+      ByteBuffer marker;
+      for (const char ch : std::string("End-Of-Version-Map")) {
+        marker.push_back(static_cast<std::uint8_t>(ch));
+        marker.push_back(0);
+      }
+      auto found = std::search(data.begin(), data.end(), marker.begin(), marker.end());
+      if (found != data.end()) {
+        const auto start = static_cast<std::size_t>(found - data.begin()) + marker.size();
+        auto scan = data.begin() + static_cast<std::ptrdiff_t>(start);
+        const auto window = [&](std::size_t from, std::size_t n) {
+          return data.begin() + static_cast<std::ptrdiff_t>(std::min(data.size(), from + n));
+        };
+        const std::string cdib = "CDib", iend = "IEND";
+        if (std::search(scan, window(start, 64), cdib.begin(), cdib.end()) != window(start, 64)) {
+          // Skip the PNG: IEND plus its four-byte CRC.
+          auto end_chunk = std::search(scan, data.end(), iend.begin(), iend.end());
+          if (end_chunk != data.end())
+            scan = end_chunk + std::min<std::ptrdiff_t>(8, data.end() - end_chunk);
+        }
+        const std::uint8_t header[] = {0xff, 0xfe, 0xff};
+        const auto from = static_cast<std::size_t>(scan - data.begin());
+        auto str = std::search(scan, window(from, 96), header, header + 3);
+        if (str != window(from, 96)) {
+          const auto at = static_cast<std::size_t>(str - data.begin());
+          if (at >= start + 4) out.root.no_scale_mask = read_u32(data, at - 4);
+        }
+      }
+    }
 
     // anchor: the material manager (u32 count right before the first
     // CMaterial new-class record); zero-material files have no CMaterial
@@ -2489,6 +2553,7 @@ RawParsed parse_legacy(const ByteBuffer& data, const ParseOptions& o) {
     WalkResult walked = walk_with_bases(data, ver, start, mc, bases);
     Archive& ar = walked.ar;
     auto& root = walked.root;
+    out.unread_root_entities = ar.unread_root_entities;
     auto& layers = walked.layers;
     auto& mats = walked.materials;
     for (auto& m : mats) {
@@ -2568,6 +2633,7 @@ RawParsed parse_legacy(const ByteBuffer& data, const ParseOptions& o) {
         d.guid = s.second.v->guid;
         d.always_faces_camera = s.second.v->faces_camera;
         d.shadows_face_sun = s.second.v->shadows_face_sun;
+        d.no_scale_mask = s.second.v->no_scale_mask;
         d.is_image = image_def_ids.count(s.first) != 0;
         d.is_group = s.second.v->is_group;
         d.type_known = s.second.v->type_known;

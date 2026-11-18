@@ -141,6 +141,7 @@ static Definition definition(EntityId id, RawDefinition r) {
   d.thumbnail_camera = r.thumbnail_camera;
   d.always_faces_camera = r.always_faces_camera;
   d.shadows_face_sun = r.shadows_face_sun;
+  d.no_scale_mask = r.no_scale_mask;
   d.is_image = r.is_image;
   d.is_group = r.is_group;
   d.type_known = r.type_known;
@@ -269,9 +270,11 @@ SkpModel build_model(RawParsed&& p, const ParseOptions& o) {
       auto it = p.layer_id_to_name.find(id);
       if (it != p.layer_id_to_name.end()) page.hidden_layers.push_back(it->second);
     }
+    page.hidden_entity_ids = pg.hidden_entity_ids;
     m.pages.push_back(std::move(page));
   }
   m.camera = p.camera;
+  m.unread_root_entities = p.unread_root_entities;
   // Convert model-level linear dimensions (VFF; world space).
   for (auto& dm : p.dimensions) {
     Dimension dim;
