@@ -66,6 +66,19 @@ TEST(IoFidelity, ReadsSdkRootScaleMaskFixtures) {
   }
 }
 
+// Files saved by SketchUp itself carry a CDib thumbnail between the version map and the root
+// behavior, so a fixed offset from the terminator lands inside the PNG (it read 3399680,
+// 4700928 and 425216 here; the SDK reports 0 for all three).
+TEST(IoFidelity, AppSavedFilesHaveNoScaleMask) {
+  for (const auto* name :
+       {"capilla_quiroz_v17.skp", "gondola_v20.skp", "zero_material_custom_layer_v18.skp"}) {
+    auto model = SkpFile::open(std::string(OPENSKP_FIXTURES) + "/" + name).parse();
+    EXPECT_EQ(model.root().no_scale_mask, 0u) << name;
+    for (const auto& [id, definition] : model.definitions)
+      EXPECT_EQ(definition.no_scale_mask, 0u) << name;
+  }
+}
+
 TEST(IoFidelity, ScaleMaskSurvivesEditAndCodeGeneration) {
   auto builder = create();
   DocumentOptions document;

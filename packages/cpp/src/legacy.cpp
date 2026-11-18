@@ -2450,9 +2450,11 @@ RawParsed parse_legacy(const ByteBuffer& data, const ParseOptions& o) {
     std::regex_search(ascii, vm, std::regex("\\{(\\d+)\\."));
     int ver = std::stoi(vm[1]);
 
-    // Root behavior follows the version-map terminator. SDK-authored samples
-    // for SU7..2016 place the u32 at +28; SU2017..2020 add nine prefix bytes.
-    // SU3..6 predate scale-handle masks and have no such field.
+    // Root behavior (the scale-grip mask) is the u32 right before the first
+    // UTF-16 CString header (ff fe ff) after the version-map terminator. A file
+    // saved by SketchUp itself puts a CDib thumbnail (PNG) in between, so the
+    // distance from the terminator is not fixed: skip the thumbnail first, then
+    // anchor on the string header. SU3..6 predate scale-handle masks.
     if (ver >= 7) {
       ByteBuffer marker;
       for (const char ch : std::string("End-Of-Version-Map")) {
@@ -2461,10 +2463,25 @@ RawParsed parse_legacy(const ByteBuffer& data, const ParseOptions& o) {
       }
       auto found = std::search(data.begin(), data.end(), marker.begin(), marker.end());
       if (found != data.end()) {
-        const auto pos =
-            static_cast<std::size_t>(found - data.begin()) + marker.size() + (ver >= 17 ? 37 : 28);
-        if (pos <= data.size() && data.size() - pos >= 4)
-          out.root.no_scale_mask = read_u32(data, pos);
+        const auto start = static_cast<std::size_t>(found - data.begin()) + marker.size();
+        auto scan = data.begin() + static_cast<std::ptrdiff_t>(start);
+        const auto window = [&](std::size_t from, std::size_t n) {
+          return data.begin() + static_cast<std::ptrdiff_t>(std::min(data.size(), from + n));
+        };
+        const std::string cdib = "CDib", iend = "IEND";
+        if (std::search(scan, window(start, 64), cdib.begin(), cdib.end()) != window(start, 64)) {
+          // Skip the PNG: IEND plus its four-byte CRC.
+          auto end_chunk = std::search(scan, data.end(), iend.begin(), iend.end());
+          if (end_chunk != data.end())
+            scan = end_chunk + std::min<std::ptrdiff_t>(8, data.end() - end_chunk);
+        }
+        const std::uint8_t header[] = {0xff, 0xfe, 0xff};
+        const auto from = static_cast<std::size_t>(scan - data.begin());
+        auto str = std::search(scan, window(from, 96), header, header + 3);
+        if (str != window(from, 96)) {
+          const auto at = static_cast<std::size_t>(str - data.begin());
+          if (at >= start + 4) out.root.no_scale_mask = read_u32(data, at - 4);
+        }
       }
     }
 
