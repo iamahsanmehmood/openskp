@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { create, type ComponentDefinitionBuilder } from '../src/create';
+import { create } from '../src/create';
 import { buildScene, buildInstancedScene, toGLB, toInstancedGLB } from '../src/index';
 
 /**
@@ -11,7 +11,7 @@ import { buildScene, buildInstancedScene, toGLB, toInstancedGLB } from '../src/i
 function nonAsciiModel(): ArrayBuffer {
   const builder = create();
   const wood = builder.addMaterial('Kayu ñ 木材', [200, 150, 100, 255]);
-  const chair = builder.addComponentDefinition('Kursi ñ 椅子', (def: ComponentDefinitionBuilder) => {
+  const chair = builder.addComponentDefinition('Kursi ñ 椅子', (def) => {
     def.addFace([[0, 0, 0], [10, 0, 0], [10, 10, 0], [0, 10, 0]], { material: wood });
   });
   builder.addInstance(chair, { name: 'Kursi ñ 椅子' });
@@ -29,7 +29,7 @@ function expectAlignedChunks(glb: Uint8Array): void {
   // The JSON still parses with the padding, and the names survive.
   const jsonText = new TextDecoder().decode(glb.subarray(20, 20 + jsonLength));
   expect(jsonText).toContain('Kursi ñ 椅子');
-  JSON.parse(jsonText);
+  expect(() => JSON.parse(jsonText)).not.toThrow();
 
   const binHeader = 20 + jsonLength;
   expect(binHeader % 4).toBe(0);

@@ -31,6 +31,7 @@ import {
 import { isLegacy, parseLegacyToRaw } from './legacy';
 import { scanVertexPositions, scanInstanceTransforms, findPageNode, parsePages, parseDimensions } from './pages-dimensions';
 import { encodeIndices } from './gltf-indices';
+import { createGlb } from './instanced-glb';
 import { buildInstancedSceneFromParsed, InstancedScene } from './instanced';
 import { extractThumbnail, SkpThumbnail } from './thumbnail';
 import { toFragments, FragmentExportOptions } from './fragments';
@@ -411,45 +412,6 @@ export function buildInstancedScene(
   options?: ParseOptions & SceneOptions
 ): InstancedScene {
   return buildInstancedSceneFromParsed(parseToRaw(buffer, options), options);
-}
-
-function createGlb(json: any, binaryBuffer: Uint8Array): Uint8Array {
-  // Pad by UTF-8 byte length, not string length: a non-ASCII name takes
-  // more than one byte per character, and glTF needs each chunk 4-byte
-  // aligned. Trailing spaces (0x20) are the padding the spec asks for.
-  const jsonBytes = new TextEncoder().encode(JSON.stringify(json));
-  const jsonBuffer = new Uint8Array((jsonBytes.length + 3) & ~3).fill(0x20);
-  jsonBuffer.set(jsonBytes);
-
-  let paddedBinaryBuffer = binaryBuffer;
-  const binaryRemainder = binaryBuffer.length % 4;
-  if (binaryRemainder !== 0) {
-    const padLength = 4 - binaryRemainder;
-    paddedBinaryBuffer = new Uint8Array(binaryBuffer.length + padLength);
-    paddedBinaryBuffer.set(binaryBuffer);
-  }
-
-  const totalLength = 12 + 8 + jsonBuffer.length + 8 + paddedBinaryBuffer.length;
-  const glb = new Uint8Array(totalLength);
-  const view = new DataView(glb.buffer);
-
-  // Magic 'glTF', version 2, total length
-  view.setUint32(0, 0x46546C67, true);
-  view.setUint32(4, 2, true);
-  view.setUint32(8, totalLength, true);
-
-  // JSON chunk
-  view.setUint32(12, jsonBuffer.length, true);
-  view.setUint32(16, 0x4E4F534A, true);
-  glb.set(jsonBuffer, 20);
-
-  // Binary chunk
-  const binHeaderOffset = 20 + jsonBuffer.length;
-  view.setUint32(binHeaderOffset, paddedBinaryBuffer.length, true);
-  view.setUint32(binHeaderOffset + 4, 0x004E4942, true);
-  glb.set(paddedBinaryBuffer, binHeaderOffset + 8);
-
-  return glb;
 }
 
 /**
