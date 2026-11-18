@@ -67,6 +67,13 @@ flag on the scene material).
 - Fixtures `scene_hidden_entities_2017/2019/2020/2024.skp`, built and saved through SketchUp
   2024's library with `SUSceneSetDrawingElementHidden`; `SUSceneGetHiddenEntities` reads the same
   sets back from each.
+### Fixed — TypeScript: GLB files with non-ASCII names are 4-byte aligned again
+
+- `toGLB` and `toInstancedGLB` padded the JSON chunk by the JavaScript string's length instead of
+  its UTF-8 byte length. A node, mesh or material name with characters outside ASCII ("Kursi ñ 椅子")
+  then left the JSON chunk's length off a multiple of 4 and the BIN chunk misaligned, which glTF
+  2.0 does not allow and strict loaders and validators reject. The JSON is now encoded first and
+  padded with spaces to a multiple of 4 bytes. The other ports already padded by bytes.
 
 ### Fixed — Python: SketchUp 2019 and 2020 models whose tags have a line style (#514)
 

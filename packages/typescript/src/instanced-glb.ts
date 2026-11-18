@@ -34,12 +34,12 @@ function stripTextureRefs(materials: unknown[]): unknown[] {
 }
 
 function createGlb(json: any, binaryBuffer: Uint8Array): Uint8Array {
-  let jsonString = JSON.stringify(json);
-  const jsonRemainder = jsonString.length % 4;
-  if (jsonRemainder !== 0) {
-    jsonString += ' '.repeat(4 - jsonRemainder);
-  }
-  const jsonBuffer = new TextEncoder().encode(jsonString);
+  // Pad by UTF-8 byte length, not string length: a non-ASCII name takes
+  // more than one byte per character, and glTF needs each chunk 4-byte
+  // aligned. Trailing spaces (0x20) are the padding the spec asks for.
+  const jsonBytes = new TextEncoder().encode(JSON.stringify(json));
+  const jsonBuffer = new Uint8Array((jsonBytes.length + 3) & ~3).fill(0x20);
+  jsonBuffer.set(jsonBytes);
 
   let paddedBinaryBuffer = binaryBuffer;
   const binaryRemainder = binaryBuffer.length % 4;
