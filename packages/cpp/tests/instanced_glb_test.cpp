@@ -172,8 +172,21 @@ TEST(InstancedGlb, ManyDistinctMeshResourcesStayNearLinearNotQuadratic) {
   // Fixed: comfortably under a second. Quadratic-buggy: several seconds
   // at this size and climbing fast with scene size - 5s leaves ample
   // margin above real (fixed) runs without being able to hide a
-  // reintroduced O(n^2).
-  EXPECT_LT(elapsed_ms, 5000.0) << "took " << elapsed_ms << "ms - looks quadratic again";
+  // reintroduced O(n^2). Under a sanitizer everything runs ~10-20x slower
+  // (a fixed run took 5-6.5s on CI's sanitizers job) and the quadratic
+  // version slower still (minutes), so the limit scales with it.
+#if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__)
+  constexpr double kLimitMs = 40000.0;
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer) || __has_feature(thread_sanitizer)
+  constexpr double kLimitMs = 40000.0;
+#else
+  constexpr double kLimitMs = 5000.0;
+#endif
+#else
+  constexpr double kLimitMs = 5000.0;
+#endif
+  EXPECT_LT(elapsed_ms, kLimitMs) << "took " << elapsed_ms << "ms - looks quadratic again";
 }
 
 TEST(InstancedGlb, ExportInstancedGlbFileRoundTrips) {
