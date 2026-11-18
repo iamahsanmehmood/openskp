@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — C++: the entities a scene hides (#472)
+
+- `Page::hidden_entity_ids` lists the persistent ids of the entities a scene hides (SketchUp's
+  "Hidden Objects" and "Hidden Geometry" scene properties): groups and component instances, and the
+  edges or faces a scene hides as geometry, nested placements included. The ids resolve through
+  `Instance::id` and the entities' `persistent_id`, the same name in both containers. 2021+ files
+  store them as tag `714B` of the scene's `7148` record, in the runs `7150` uses; classic files as
+  the capture-flag `0x10` section, whose archive references are resolved to the persistent ids
+  their entities carry (2017+ files; a 2016 or older file lists none). The list is empty when the
+  scene saves no hidden objects. SketchUp 2017 to 2019 files keep only the model-level entities a
+  scene hides; SketchUp's own library reads no more from them.
+- Fixed with it: a classic scene that saves hidden objects but not the axes made the scene reader
+  give up on the file's whole scene list, so such a file came with no scenes at all (one written
+  through SketchUp's C API, as every one of the new fixtures is). The byte the reader took as the
+  start of the `0x10` section closes the axes section instead; files that save both, or neither,
+  read as before.
+- Fixtures `scene_hidden_entities_2017/2019/2020/2024.skp`, built and saved through SketchUp
+  2024's library with `SUSceneSetDrawingElementHidden`; `SUSceneGetHiddenEntities` reads the same
+  sets back from each.
+
 ### Fixed — Python: SketchUp 2019 and 2020 models whose tags have a line style (#514)
 
 - A SketchUp 2019 or 2020 file in which a tag carries a line style ("Dash", "Dot", ...) failed to

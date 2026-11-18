@@ -543,6 +543,13 @@ struct Page {
   double ortho_height{};
   /// Names of the layers this scene hides.
   std::vector<std::string> hidden_layers;
+  /// Persistent ids of the entities this scene hides (SketchUp's "Hidden Objects" and "Hidden
+  /// Geometry" scene properties), in file order: groups and component instances, and edges or
+  /// faces a scene hides as geometry. They resolve through Instance::id and the entities'
+  /// persistent_id, nested placements included. Empty when the scene saves no hidden objects,
+  /// and in a pre-2017 file, which stores no persistent ids. SketchUp 2017 to 2019 files keep
+  /// only the model-level entities a scene hides (SketchUp itself reads no more from them).
+  std::vector<EntityId> hidden_entity_ids;
   /// The scene selected when the model was saved (at most one).
   bool selected{};
 };
