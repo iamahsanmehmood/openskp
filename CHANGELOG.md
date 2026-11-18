@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — TypeScript: the instanced scene keeps an instance's Hide flag
+
+- `buildInstancedScene` / `buildInstancedSceneFromParsed` now set `InstancedNode.hidden` from the
+  instance's own SketchUp "Hide" flag, as `Instance.hidden` already reports it for `parseSkp`.
+  Before, the flag was dropped, so a consumer of the instanced scene could not tell a hidden
+  placement from a visible one. The field is optional: a scene read back with `fromFragments` has
+  none, because the format carries no per-instance visibility.
+
 ### Fixed — Python: SketchUp 2019 and 2020 models whose tags have a line style (#514)
 
 - A SketchUp 2019 or 2020 file in which a tag carries a line style ("Dash", "Dot", ...) failed to
