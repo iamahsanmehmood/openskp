@@ -33,10 +33,10 @@ function stripTextureRefs(materials: unknown[]): unknown[] {
   });
 }
 
-function createGlb(json: any, binaryBuffer: Uint8Array): Uint8Array {
-  // Pad by UTF-8 byte length, not string length: a non-ASCII name takes
-  // more than one byte per character, and glTF needs each chunk 4-byte
-  // aligned. Trailing spaces (0x20) are the padding the spec asks for.
+/** Wrap glTF JSON and a binary buffer into a GLB container. Shared by
+ * {@link toInstancedGLB} and index.ts's `toGLB`. */
+export function createGlb(json: any, binaryBuffer: Uint8Array): Uint8Array {
+  // Pad by UTF-8 byte length (not string length) with spaces, per the GLB spec.
   const jsonBytes = new TextEncoder().encode(JSON.stringify(json));
   const jsonBuffer = new Uint8Array((jsonBytes.length + 3) & ~3).fill(0x20);
   jsonBuffer.set(jsonBytes);
