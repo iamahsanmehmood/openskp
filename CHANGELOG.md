@@ -7,13 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed — TypeScript: GLB files with non-ASCII names are 4-byte aligned again
-
-- `toGLB` and `toInstancedGLB` padded the JSON chunk by the JavaScript string's length instead of
-  its UTF-8 byte length. A node, mesh or material name with characters outside ASCII ("Kursi ñ 椅子")
-  then left the JSON chunk's length off a multiple of 4 and the BIN chunk misaligned, which glTF
-  2.0 does not allow and strict loaders and validators reject. The JSON is now encoded first and
-  padded with spaces to a multiple of 4 bytes. The other ports already padded by bytes.
 ### Fixed — Python
 
 - **A painted group or component passes its whole material to the faces inside it**, in
@@ -154,6 +147,14 @@ loads in SketchUp's library.
   and so is a self-intersecting or warped quad unless the 1-3 split covers less area. On
   `coedge_orientation_regression.skp` this corrects 45 quads; the sum over all faces of the
   difference between triangle area and loop area drops from 1.58 in² to 0.23 in².
+
+### Fixed — TypeScript: GLB files with non-ASCII names are 4-byte aligned again
+
+- `toGLB` and `toInstancedGLB` padded the JSON chunk by the JavaScript string's length instead of
+  its UTF-8 byte length. A node, mesh or material name with characters outside ASCII ("Kursi ñ 椅子")
+  then left the JSON chunk's length off a multiple of 4 and the BIN chunk misaligned, which glTF
+  2.0 does not allow and strict loaders and validators reject. The JSON is now encoded first and
+  padded with spaces to a multiple of 4 bytes. The other ports already padded by bytes.
 
 ## [1.5.0] — 2026-11-03 — all 5 languages
 
