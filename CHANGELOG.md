@@ -14,6 +14,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Before, the flag was dropped, so a consumer of the instanced scene could not tell a hidden
   placement from a visible one. The field is optional: a scene read back with `fromFragments` has
   none, because the format carries no per-instance visibility.
+### Fixed — Python
+
+- **A painted group or component passes its whole material to the faces inside it**, in
+  `build_scene` and `build_instanced_scene`: an unpainted face now gets the group's texture and
+  transparency, not only its colour, as SketchUp draws it. A group painted with a wood floor
+  texture or a translucent glass came out as a flat, opaque average colour before (seen on a
+  real 2026 studio model: `[Wood_ Floor]`, `[Suede Green]` and a 59%-opaque glass).
+- **Scene materials keep their SketchUp names.** Each glTF material in `gltf_materials` carries
+  the SketchUp material's `name`, and two differently named materials that share a colour stay
+  two materials instead of being merged into one. On that model, 82 of 87 scene materials now
+  have a name (the other 5 are unpainted faces drawn in their layer's colour); before, none
+  had one.
+- **A colorized texture is flagged** in its glTF material, as
+  `extras: {"sketchup": {"colorized": true, "colorize_type": 0 | 1}}`, so a viewer can re-tint
+  the shared image toward `baseColorFactor` (`0` shifts hue, `1` greyscales then tints). The
+  Blender add-on drew SketchUp's darkened "[Wood Veneer 01]1" with the untinted, much lighter
+  image.
+
+Porting note: same behaviour expected in the other four languages (inherit the painted
+instance's material, not its colour; material name in the scene-material identity; colorize
+flag on the scene material).
 
 ### Added — C++: the entities a scene hides (#472)
 
