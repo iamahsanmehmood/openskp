@@ -17,6 +17,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed — Python
 
+- **A classic (pre-2021) file keeps its definitions' and its model's own attribute
+  dictionaries.** `Definition.attribute_dictionaries`, `SkpModel.attribute_dictionaries` and
+  `InstanceNode.definition_attribute_dictionaries` (#530) came back empty for every file saved
+  before 2021: the definition's attribute container was read and discarded, and the model's sits
+  in the header region the object walk never visits. A dynamic component saved as a file keeps
+  its top level (`dynamic_attributes` with the formulas and options its parts refer to as
+  `Name!Attr`) there, so it reached a reader without them. The region is now read for the
+  model's dictionaries. Checked against 92 real SketchUp 8 to 2018 component files: none read worse,
+  9 gain model dictionaries and 17 gain definition ones.
 - **A painted group or component passes its whole material to the faces inside it**, in
   `build_scene` and `build_instanced_scene`: an unpainted face now gets the group's texture and
   transparency, not only its colour, as SketchUp draws it. A group painted with a wood floor
