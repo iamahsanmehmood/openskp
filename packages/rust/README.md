@@ -38,6 +38,15 @@ Both containers are read: VFF (SketchUp 2021+) and the classic MFC `CArchive` (2
 `to_ply_ascii` / `to_ply_binary`, `to_dxf`, `to_ifc`, `to_json`, and `to_fragments`. `read_fragments`
 reads a `.frag` file back.
 
+## Viewer
+
+`viewer/` is a small in-browser `.skp` viewer (Rust → `wasm32`, WebGL2) built into a single HTML file:
+
+```sh
+rustup target add wasm32-unknown-unknown
+./viewer/build.sh   # or viewer\build.ps1 on Windows
+```
+
 ## Tests
 
 ```sh

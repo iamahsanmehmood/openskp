@@ -1403,6 +1403,9 @@ class ArchiveWriter {
       flags |= 2;
     }
     buf[gap + 43 - 9] = flags;
+    // SDK oracle: native u32 scale mask precedes the definition-kind field.
+    for (int i = 0; i < 4; ++i)
+      buf[gap + 43 - 8 + i] = static_cast<std::uint8_t>(options.no_scale_mask >> (8 * i));
     // Native group definitions have a separate flag four bytes before CThumbnail.
     // A CGroup pointing at an ordinary definition opens, but editing it in SketchUp
     // can leave picking and push/pull updates inconsistent.
@@ -2138,6 +2141,8 @@ struct SkpBuilder::Impl {
     ByteBuffer prefix(data, data + (detail::kMaterialInsertPos - 4));
     std::copy(model_guid.begin(), model_guid.end(), prefix.begin() + 52);
     if (document_options) {
+      // Root CComponentBehavior in the immutable SDK-authored v17 scaffold.
+      detail::write_u32_at(prefix, 2008, document_options->no_scale_mask);
       // Native named UnitsOptions, fixed offsets in the immutable v17 scaffold.
       detail::write_u32_at(prefix, 2327, document_options->length_precision);
       detail::write_u32_at(prefix, 2360, 0);  // LengthFormat: decimal

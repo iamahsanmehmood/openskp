@@ -141,6 +141,7 @@ static Definition definition(EntityId id, RawDefinition r) {
   d.thumbnail_camera = r.thumbnail_camera;
   d.always_faces_camera = r.always_faces_camera;
   d.shadows_face_sun = r.shadows_face_sun;
+  d.no_scale_mask = r.no_scale_mask;
   d.is_image = r.is_image;
   d.is_group = r.is_group;
   d.type_known = r.type_known;
@@ -160,7 +161,9 @@ static Definition definition(EntityId id, RawDefinition r) {
     edge.attribute_dictionaries = std::move(r.builder.edge_dictionaries[e.first]);
     auto curve = r.builder.edge_curves.find(e.first);
     if (curve != r.builder.edge_curves.end()) edge.curve_id = curve->second;
-    d.edges.emplace(e.first, edge);
+    if (auto layer = r.builder.edge_layers.find(e.first); layer != r.builder.edge_layers.end())
+      edge.layer = std::move(layer->second);
+    d.edges.emplace(e.first, std::move(edge));
   }
   for (auto& a : r.builder.arc_curves) {
     ArcCurve arc;
@@ -222,6 +225,7 @@ SkpModel build_model(RawParsed&& p, const ParseOptions& o) {
   auto resolve_layers = [&](RawDefinition& d) {
     for (auto& i : d.builder.instances) resolve_layer(i.layer);
     for (auto& f : d.builder.faces) resolve_layer(f.second.layer);
+    for (auto& e : d.builder.edge_layers) resolve_layer(e.second);
     for (auto& section : d.builder.section_planes) resolve_layer(section.layer);
     for (auto& cl : d.builder.construction_lines) resolve_layer(cl.layer);
     for (auto& cp : d.builder.construction_points) resolve_layer(cp.layer);
@@ -266,9 +270,11 @@ SkpModel build_model(RawParsed&& p, const ParseOptions& o) {
       auto it = p.layer_id_to_name.find(id);
       if (it != p.layer_id_to_name.end()) page.hidden_layers.push_back(it->second);
     }
+    page.hidden_entity_ids = pg.hidden_entity_ids;
     m.pages.push_back(std::move(page));
   }
   m.camera = p.camera;
+  m.unread_root_entities = p.unread_root_entities;
   // Convert model-level linear dimensions (VFF; world space).
   for (auto& dm : p.dimensions) {
     Dimension dim;

@@ -274,7 +274,10 @@ void collect_geometry(const std::vector<TlvNode>& es, GeometryBuilder& b) {
         for (auto& z : e.children)
           if (z.tag == "D007")
             for (auto& w : z.children)
-              if (w.tag == "D307" && !w.payload.empty()) b.edge_flags[*id] = w.payload[0];
+              if (w.tag == "D307" && !w.payload.empty())
+                b.edge_flags[*id] = w.payload[0];
+              else if (w.tag == "D207" && !w.payload.empty())
+                b.edge_layers[*id] = std::to_string(parse_varint(w.payload, 0, w.payload.size()));
         // BB0B = the parent Curve's entity id (Edge#curve).
         auto* bb = find_node(e.children, "BB0B");
         if (bb && !bb->payload.empty()) {
@@ -563,7 +566,9 @@ void collect_definitions(const std::vector<TlvNode>& ns, std::map<EntityId, RawD
           d.is_group = kind == 1;
         } else if (c.tag == "581B")
           for (auto& v : parse_flat(c.payload)) {
-            if (v.first == "5D1B" && !v.second.empty())
+            if (v.first == "5A1B" && v.second.size() == 4)
+              d.no_scale_mask = read_u32(v.second, 0);
+            else if (v.first == "5D1B" && !v.second.empty())
               d.always_faces_camera = parse_varint(v.second, 0, v.second.size()) == 1;
             else if (v.first == "5E1B" && !v.second.empty())
               d.shadows_face_sun = parse_varint(v.second, 0, v.second.size()) == 1;

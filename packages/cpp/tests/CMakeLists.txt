@@ -24,11 +24,14 @@ add_executable(
   legacy_textured_colorize_test.cpp
   legacy_empty_model_test.cpp
   scene_without_camera_test.cpp
+  scene_hidden_entities_test.cpp
   instanced_scene_test.cpp
   json_export_test.cpp
+  edge_layer_test.cpp
   layer_hidden_test.cpp
   legacy_anchored_texts_test.cpp
   legacy_dimension_paths_test.cpp
+  legacy_unread_root_entities_test.cpp
   legacy_dimension_geometry_test.cpp
   legacy_single_material_test.cpp
   legacy_zero_material_custom_layer_test.cpp
@@ -52,6 +55,7 @@ add_executable(
   triangulator_test.cpp
   vff_layer_hidden_test.cpp
   xml_entities_test.cpp
+  wrapped_tlv_test.cpp
   zip_entry_size_cap_test.cpp
 )
 
