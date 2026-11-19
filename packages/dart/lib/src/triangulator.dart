@@ -10,6 +10,40 @@ import 'earcut.dart';
 /// flattened 2D coordinates - correctly handling concave outlines and
 /// holes, same as the Python/TypeScript ports.
 class Triangulator {
+  /// Whether to split the quad along its 0-2 diagonal. A concave quad whose
+  /// reflex corner is 1 or 3 has that diagonal outside it: triangles (0,1,2)
+  /// and (0,2,3) then turn opposite ways and cover more than the face, and the
+  /// 1-3 split covers exactly the face. A self-intersecting or warped quad can
+  /// fail the turn test with the 1-3 split no better, so 1-3 is taken only when
+  /// it covers less area.
+  static bool _splitQuadAlong02(
+    Map<int, (double, double, double)> vertices3d,
+    List<int> quad,
+  ) {
+    final p = quad.map((id) => vertices3d[id]).toList();
+    if (p.any((q) => q == null)) return true;
+    // Twice the area vector of triangle (a, b, c).
+    (double, double, double) area2(int a, int b, int c) {
+      final (ax, ay, az) = p[a]!;
+      final (bx, by, bz) = p[b]!;
+      final (cx, cy, cz) = p[c]!;
+      final (ux, uy, uz) = (bx - ax, by - ay, bz - az);
+      final (vx, vy, vz) = (cx - ax, cy - ay, cz - az);
+      return (uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx);
+    }
+
+    double dot((double, double, double) a, (double, double, double) b) =>
+        a.$1 * b.$1 + a.$2 * b.$2 + a.$3 * b.$3;
+
+    final t012 = area2(0, 1, 2);
+    final t023 = area2(0, 2, 3);
+    if (dot(t012, t023) >= 0) return true;
+    final t123 = area2(1, 2, 3);
+    final t130 = area2(1, 3, 0);
+    return sqrt(dot(t123, t123)) + sqrt(dot(t130, t130)) >=
+        sqrt(dot(t012, t012)) + sqrt(dot(t023, t023));
+  }
+
   static List<List<int>> triangulateFace3D(
     Map<int, (double, double, double)> vertices3d,
     List<List<int>> loops,
@@ -24,9 +58,15 @@ class Triangulator {
     }
     if (loops.length == 1 && loops[0].length == 4) {
       final v = loops[0];
+      if (_splitQuadAlong02(vertices3d, v)) {
+        return [
+          [v[0], v[1], v[2]],
+          [v[0], v[2], v[3]],
+        ];
+      }
       return [
-        [v[0], v[1], v[2]],
-        [v[0], v[2], v[3]],
+        [v[1], v[2], v[3]],
+        [v[1], v[3], v[0]],
       ];
     }
 

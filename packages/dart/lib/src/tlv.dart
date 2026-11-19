@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'errors.dart';
+
 /// A single Tag-Length-Value node in the binary parse tree.
 class TlvNode {
   final int offset;
@@ -82,8 +84,15 @@ class Tlv {
         data[offset + 1].toRadixString(16).padLeft(2, '0').toUpperCase();
   }
 
+  /// Deepest container nesting the parser follows. A real model.dat nests
+  /// about a dozen levels (the deepest file checked reaches 11). A hostile
+  /// file can nest tens of thousands, which would overflow the stack before
+  /// anything could be reported, so deeper input throws a
+  /// [SkpParseException] instead.
+  static const int maxDepth = 64;
+
   static List<TlvNode> parseRecursive(Uint8List data, int start, int end,
-      [Set<String>? tags]) {
+      [Set<String>? tags, int depth = 0]) {
     final containerTagsSet = tags ?? containerTags;
     final elements = <TlvNode>[];
     int pos = start;
@@ -96,8 +105,16 @@ class Tlv {
       final isContainer = containerTagsSet.contains(tagHex);
       List<TlvNode> children = const [];
       if (isContainer && size > 0) {
-        children =
-            parseRecursive(data, pos + 6, pos + 6 + size, containerTagsSet);
+        if (depth >= maxDepth) {
+          throw SkpParseException(
+            'TLV records nest deeper than $maxDepth levels',
+            stage: 'tlv_walk',
+            tag: tagHex,
+            offset: pos,
+          );
+        }
+        children = parseRecursive(
+            data, pos + 6, pos + 6 + size, containerTagsSet, depth + 1);
       }
       Uint8List payload = Uint8List(0);
       if (children.isEmpty && size > 0) {
@@ -158,6 +175,31 @@ class Tlv {
     return headers;
   }
 
+  /// Throw if a top-level record declares more bytes than the data holds.
+  ///
+  /// [_flatHeaders] stops quietly at such a record, so a model.dat cut short
+  /// anywhere inside its single F401 record would parse as a model with no
+  /// geometry and no error. Real files end exactly where their last
+  /// top-level record does. Records nested inside it are deliberately left
+  /// lenient: in real files some container payloads end with bytes that are
+  /// not records, and a strict check there would reject valid models.
+  static void _requireCompleteTopLevel(Uint8List data, int start, int end) {
+    int pos = start;
+    while (pos <= end - 6) {
+      final size = readU32(data, pos + 2);
+      if (pos + 6 + size > end) {
+        throw SkpParseException(
+          'model.dat is truncated: the top-level record declares $size bytes '
+          'but only ${end - pos - 6} remain',
+          stage: 'tlv_walk',
+          tag: _tagHex(data, pos),
+          offset: pos,
+        );
+      }
+      pos += 6 + size;
+    }
+  }
+
   /// Yield `(index, total, node)` for each top-level TLV record's
   /// fully-recursed node one at a time, transparently unwrapping a lone
   /// "F401" wrapper - without ever materializing more than one top-level
@@ -172,6 +214,7 @@ class Tlv {
   static Iterable<(int, int, TlvNode)> iterTopLevelLazy(Uint8List data, int start, int end, [Set<String>? tags]) sync* {
     final containerTagsSet = tags ?? containerTags;
 
+    _requireCompleteTopLevel(data, start, end);
     var headers = _flatHeaders(data, start, end);
     if (headers.length == 1 && headers[0].$1 == 'F401') {
       final (_, f401Offset, f401Size) = headers[0];

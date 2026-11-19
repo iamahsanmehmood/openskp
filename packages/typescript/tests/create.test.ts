@@ -1071,3 +1071,68 @@ describe('Scaffold integrity', () => {
     expect(Array.from(scaffold)).toEqual(Array.from(fixture));
   });
 });
+
+describe('Persistent ids', () => {
+  const COUNTER_POS = 1987;
+  const readCounter = (data: Uint8Array): number =>
+    (data[COUNTER_POS] | (data[COUNTER_POS + 1] << 8) | (data[COUNTER_POS + 2] << 16) | (data[COUNTER_POS + 3] << 24)) >>> 0;
+  type Sections = {
+    pidStart: number;
+    materialWriter: { nextPid: number };
+    layerWriter: { nextPid: number } | null;
+    definitionWriterInstance: { nextPid: number } | null;
+    geometryWriter: { nextPid: number } | null;
+  };
+
+  it('run in one sequence across materials, layers, definitions and root geometry', () => {
+    // Every section's writer used to hand out pids from 1 again, so a
+    // definition and a root instance could carry the same pid, and the header
+    // counter only grew by the material and layer count. SketchUp loads such a
+    // file and renumbers the duplicates, after which SketchUp for Web cannot
+    // save it (openskp#492).
+    const builder = create();
+    const red = builder.addMaterial('Rojo', [255, 0, 0, 255]);
+    const layer = builder.addLayer('Estructura');
+    const a = builder.addComponentDefinition('A', (d) => {
+      d.addFace(SQUARE, { material: red, layer });
+      d.addFace(SQUARE.map(([x, y, z]): Point3 => [x + 300, y, z]));
+    });
+    const b = builder.addComponentDefinition('B', (d) => {
+      d.addFace(SQUARE.map(([x, y, z]): Point3 => [x, y, z + 50]));
+    });
+    builder.addInstance(a);
+    builder.addInstance(b, { translation: [0, 0, 100] });
+    const data = builder.toBytes();
+
+    const s = builder as unknown as Sections;
+    const starts = [
+      s.pidStart,
+      s.materialWriter.nextPid,
+      s.layerWriter!.nextPid,
+      s.definitionWriterInstance!.nextPid,
+      s.geometryWriter!.nextPid,
+    ];
+    expect(starts).toEqual([...starts].sort((x, y) => x - y));
+    expect(starts[0]).toBeLessThan(starts[starts.length - 1]);
+    // the counter is the last pid handed out, and far more than materials + layers
+    expect(readCounter(data)).toBe(s.geometryWriter!.nextPid - 1);
+    expect(readCounter(data)).toBeGreaterThan(s.pidStart + 2);
+    // The Python, .NET and Dart writers pin the same number for this model.
+    expect(readCounter(data)).toBe(52);
+  });
+
+  it('a file with groups but no materials or layers still raises the header counter', () => {
+    // The scaffold's counter is 18; a file of two groups used ids up to 20 with
+    // the counter left at 18, and SketchUp for Web could not save it (openskp#492).
+    const builder = create();
+    builder.addGroup((d) => d.addFace(SQUARE), { name: 'one' });
+    builder.addGroup((d) => d.addFace(SQUARE.map(([x, y, z]): Point3 => [x + 60, y, z])), { name: 'two' });
+    const data = builder.toBytes();
+    const s = builder as unknown as Sections;
+    expect(readCounter(data)).toBeGreaterThan(18);
+    expect(readCounter(data)).toBe(40);
+    expect(readCounter(data)).toBe(s.geometryWriter!.nextPid - 1);
+    expect(s.definitionWriterInstance!.nextPid).toBeGreaterThan(s.pidStart);
+    expect(s.geometryWriter!.nextPid).toBeGreaterThan(s.definitionWriterInstance!.nextPid);
+  });
+});

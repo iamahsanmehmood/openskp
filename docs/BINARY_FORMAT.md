@@ -63,7 +63,9 @@ Each TLV element:
 
 ### 2.2 Container Tags
 
-These tags contain nested child TLV elements:
+These tags contain nested child TLV elements. Real files nest them about a dozen levels deep
+(the deepest of the files checked reaches 11); the readers stop at 64 levels and raise a parse
+error, so a hostile file cannot exhaust the stack:
 
 ```
 F401  F701  D430  D530  C832

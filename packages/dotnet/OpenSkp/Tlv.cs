@@ -98,7 +98,15 @@ namespace OpenSkp
             return data[offset].ToString("X2") + data[offset + 1].ToString("X2");
         }
 
-        public static List<TlvNode> ParseRecursive(ChunkedBuffer data, long start, long end, HashSet<string>? containerTags = null)
+        /// <summary>Deepest container nesting the parser follows. A real
+        /// model.dat nests about a dozen levels (the deepest file checked
+        /// reaches 11). A hostile file can nest tens of thousands, which
+        /// aborts the whole process with a stack overflow that no catch can
+        /// intercept, so deeper input throws a SkpParseException
+        /// instead.</summary>
+        public const int MaxDepth = 64;
+
+        public static List<TlvNode> ParseRecursive(ChunkedBuffer data, long start, long end, HashSet<string>? containerTags = null, int depth = 0)
         {
             containerTags ??= ContainerTags;
             var elements = new List<TlvNode>();
@@ -115,7 +123,13 @@ namespace OpenSkp
                 List<TlvNode> children = new List<TlvNode>();
                 if (isContainer && size > 0)
                 {
-                    children = ParseRecursive(data, pos + 6, pos + 6 + size, containerTags);
+                    if (depth >= MaxDepth)
+                    {
+                        throw new SkpParseException(
+                            $"TLV records nest deeper than {MaxDepth} levels",
+                            stage: "tlv_walk", tag: tagHex, offset: pos);
+                    }
+                    children = ParseRecursive(data, pos + 6, pos + 6 + size, containerTags, depth + 1);
                 }
                 byte[] payload = Array.Empty<byte>();
                 if (children.Count == 0 && size > 0)
@@ -182,6 +196,30 @@ namespace OpenSkp
             return headers;
         }
 
+        /// <summary>Throw if a top-level record declares more bytes than the
+        /// data holds. FlatHeaders stops quietly at such a record, so a
+        /// model.dat cut short anywhere inside its single F401 record would
+        /// parse as a model with no geometry and no error. Real files end
+        /// exactly where their last top-level record does. Records nested
+        /// inside it are deliberately left lenient: in real files some
+        /// container payloads end with bytes that are not records, and a
+        /// strict check there would reject valid models.</summary>
+        private static void RequireCompleteTopLevel(ChunkedBuffer data, long start, long end)
+        {
+            long pos = start;
+            while (pos <= end - 6)
+            {
+                uint size = data.ReadU32(pos + 2);
+                if (pos + 6 + size > end)
+                {
+                    throw new SkpParseException(
+                        $"model.dat is truncated: the top-level record declares {size} bytes but only {end - pos - 6} remain",
+                        stage: "tlv_walk", tag: TagHex(data, pos), offset: pos);
+                }
+                pos += 6 + size;
+            }
+        }
+
         /// <summary>One top-level TLV record yielded by IterTopLevelLazy,
         /// with its position among the file's top-level siblings.</summary>
         public readonly struct TopLevelRecord
@@ -212,6 +250,7 @@ namespace OpenSkp
         {
             containerTags ??= ContainerTags;
 
+            RequireCompleteTopLevel(data, start, end);
             var headers = FlatHeaders(data, start, end);
             if (headers.Count == 1 && headers[0].Tag == "F401")
             {

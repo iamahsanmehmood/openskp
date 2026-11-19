@@ -4555,6 +4555,23 @@ def test_persistent_ids_run_in_one_sequence_across_sections():
     assert starts == sorted(starts) and starts[0] < starts[-1]
     assert counter == builder._geometry_writer.next_pid - 1
     assert counter > builder._pid_start + 2          # far more than materials + layers
+    # The TypeScript, .NET and Dart writers pin the same number for this model:
+    # the ids are part of the format, so the ports must agree on them.
+    assert counter == 52
+
+
+def test_header_counter_for_two_groups_matches_the_other_ports():
+    """The scaffold's counter is 18. A file of two groups, with no materials or
+    layers, uses ids up to 40, and the counter says so. (The TypeScript writer
+    left it at 18, and SketchUp for Web could not save such a file: openskp#492.)"""
+    import struct
+    from openskp.create import _PID_COUNTER_POS
+    builder = create()
+    with builder.add_group("one") as g:
+        g.add_face(SQUARE)
+    with builder.add_group("two") as g:
+        g.add_face([(x + 60.0, y, z) for x, y, z in SQUARE])
+    assert struct.unpack_from("<I", builder.to_bytes(), _PID_COUNTER_POS)[0] == 40
 
 
 def test_a_small_definition_before_a_bigger_one_saves_through_real_sketchup(tmp_path):

@@ -37,12 +37,32 @@ constexpr const char* kMetaUnitsTag = "6D00";
 // Extract the model's unit-system string from a VFF file's meta/meta.dat
 // contents, or nullopt if the expected tags aren't found.
 std::optional<std::string> read_meta_units(const ByteBuffer& meta_bytes) {
-  auto records = parse_flat(meta_bytes);
-  for (auto& [tag, body] : records) {
-    if (tag == kMetaWrapperTag) return read_meta_units(body);
-  }
-  for (auto& [tag, body] : records) {
-    if (tag == kMetaUnitsTag) return std::string(body.begin(), body.end());
+  // Real files have one wrapper record around the units. Wrappers are
+  // followed in a loop over (start, end) offsets, not by recursing on copies
+  // of the body: a file with thousands of nested wrappers would otherwise
+  // overflow the stack and copy almost the whole payload at every level.
+  // More than kMaxTlvDepth wrappers is not a real file; the units are then
+  // unknown, which is not an error.
+  std::size_t start = 0, end = meta_bytes.size();
+  for (int level = 0; level <= kMaxTlvDepth; ++level) {
+    std::size_t pos = start;
+    bool descended = false;
+    while (pos + 6 <= end) {
+      auto size = read_u32(meta_bytes, pos + 2);
+      if (size > end - pos - 6) break;
+      auto tag = tag_at(meta_bytes, pos);
+      if (tag == kMetaWrapperTag) {
+        start = pos + 6;
+        end = pos + 6 + size;
+        descended = true;
+        break;
+      }
+      if (tag == kMetaUnitsTag)
+        return std::string(meta_bytes.begin() + static_cast<std::ptrdiff_t>(pos + 6),
+                           meta_bytes.begin() + static_cast<std::ptrdiff_t>(pos + 6 + size));
+      pos += 6 + size;
+    }
+    if (!descended) return std::nullopt;
   }
   return std::nullopt;
 }

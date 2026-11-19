@@ -97,20 +97,23 @@ std::size_t zip_offset(const ByteBuffer& d) {
   return std::string::npos;
 }
 
-struct Header {
-  std::size_t offset;
-  std::size_t size;
-};
-
-std::vector<Header> headers(const ByteBuffer& d, std::size_t start, std::size_t end) {
-  std::vector<Header> h;
-  for (auto p = start; p + 6 <= end;) {
-    auto n = read_u32(d, p + 2);
-    if (n > end - p - 6) break;
-    h.push_back({p, n});
-    p += 6 + n;
+// Throws if a top-level record declares more bytes than the data holds.
+// tlv_headers() stops quietly at such a record, so a model.dat cut short anywhere
+// inside its single F401 record would parse as a model with no geometry and
+// no error. Real files end exactly where their last top-level record does.
+// Records nested inside it are deliberately left lenient: in real files some
+// container payloads end with bytes that are not records, and a strict check
+// there would reject valid models.
+void require_complete_top_level(const ByteBuffer& d) {
+  const auto records = tlv_headers(d, 0, d.size());
+  const auto p = records.empty() ? 0 : records.back().offset + 6 + records.back().size;
+  if (d.size() - p >= 6) {
+    const auto n = read_u32(d, p + 2);
+    throw SkpParseError("model.dat is truncated: the top-level record declares " +
+                            std::to_string(n) + " bytes but only " +
+                            std::to_string(d.size() - p - 6) + " remain",
+                        ParseStage::tlv_walk, {}, {}, tag_at(d, p), p);
   }
-  return h;
 }
 
 std::string str(const ByteBuffer& b) { return {reinterpret_cast<const char*>(b.data()), b.size()}; }
@@ -348,16 +351,17 @@ std::optional<ViewCamera> view_camera(const ByteBuffer& record) {
 // F901 -> 7017 -> 7117 -> 7C15. We unwrap this container into individual
 // 7C15 headers upfront so memory is bounded to one definition at a time,
 // mirroring Python's _unwrap_definitions_container (Issue #264).
-std::vector<Header> unwrap_definitions_container(const ByteBuffer& data, std::size_t offset,
-                                                 std::size_t size) {
-  auto level = headers(data, offset + 6, offset + 6 + size);
+std::vector<TlvHeader> unwrap_definitions_container(const ByteBuffer& data, std::size_t offset,
+                                                    std::size_t size) {
+  auto level = tlv_headers(data, offset + 6, offset + 6 + size);
   for (const char* expected_tag : {"7017", "7117"}) {
-    auto it = std::find_if(level.begin(), level.end(),
-                           [&](const Header& h) { return tag_at(data, h.offset) == expected_tag; });
+    auto it = std::find_if(level.begin(), level.end(), [&](const TlvHeader& h) {
+      return tag_at(data, h.offset) == expected_tag;
+    });
     if (it == level.end()) return {};
-    level = headers(data, it->offset + 6, it->offset + 6 + it->size);
+    level = tlv_headers(data, it->offset + 6, it->offset + 6 + it->size);
   }
-  std::vector<Header> defs;
+  std::vector<TlvHeader> defs;
   for (const auto& h : level) {
     if (tag_at(data, h.offset) == "7C15") {
       defs.push_back(h);
@@ -482,11 +486,12 @@ RawParsed full_parse(const ByteBuffer& data, const ParseOptions& o) {
         }
   auto model = zip.get("model.dat");
   if (!model) throw SkpParseError("model.dat not found in ZIP container", ParseStage::zip_extract);
-  auto hs = headers(*model, 0, model->size());
+  require_complete_top_level(*model);
+  auto hs = tlv_headers(*model, 0, model->size());
   if (hs.size() == 1 && model->at(hs[0].offset) == 0xf4 && model->at(hs[0].offset + 1) == 1)
-    hs = headers(*model, hs[0].offset + 6, hs[0].offset + 6 + hs[0].size);
+    hs = tlv_headers(*model, hs[0].offset + 6, hs[0].offset + 6 + hs[0].size);
 
-  std::vector<Header> expanded_hs;
+  std::vector<TlvHeader> expanded_hs;
   expanded_hs.reserve(hs.size());
   for (const auto& h : hs) {
     if (tag_at(*model, h.offset) == "F901") {
@@ -507,6 +512,8 @@ RawParsed full_parse(const ByteBuffer& data, const ParseOptions& o) {
 
   auto total = hs.size();
   CurrentStyle current;
+  std::map<EntityId, std::string> line_styles;
+  std::map<std::string, EntityId> layer_styles;
   for (std::size_t i = 0; i < total; ++i) {
     std::string tag;
     try {
@@ -521,10 +528,16 @@ RawParsed full_parse(const ByteBuffer& data, const ParseOptions& o) {
       if (tag == "FA01")
         for (auto& [t, record] : parse_flat(one[0].payload))
           if (t == "BC34") p.camera = view_camera(record);
+      if (tag == "0E02")
+        for (const auto& [t, behavior] : parse_flat(one[0].payload))
+          if (t == "581B")
+            for (const auto& [field, value] : parse_flat(behavior))
+              if (field == "5A1B" && value.size() == 4) p.root.no_scale_mask = read_u32(value, 0);
       if (tag == "0602")
         for (auto& [t, catalog] : parse_flat(one[0].payload))
           if (t == "7869") current = current_style(catalog);
-      collect_layers(one, p.layer_id_to_name, p.layer_hidden);
+      collect_layers(one, p.layer_id_to_name, p.layer_hidden, layer_styles);
+      collect_line_styles(one, line_styles);
       collect_material_ids(one, p.material_id_to_name);
       collect_definitions(one, p.definitions);
       scan_vertex_positions(one[0], vertex_positions);
@@ -566,12 +579,32 @@ RawParsed full_parse(const ByteBuffer& data, const ParseOptions& o) {
   } catch (...) {
     emit_log(o, LogLevel::debug, "Failed to parse pages");
   }
-  if (!vertex_positions.empty()) {
-    try {
-      p.dimensions = parse_dimensions(*model, vertex_positions, instance_world);
-    } catch (...) {
-      emit_log(o, LogLevel::debug, "Failed to parse dimensions");
-    }
+  try {
+    // Definition-local annotations need only transforms below their owning definition.
+    // Keep the historical world-space model list for existing clients as well.
+    compose_instance_world(p.root, p.definitions, instance_world);
+    p.dimensions = parse_dimensions(*model, vertex_positions, instance_world);
+    assign_vff_annotations(*model, vertex_positions, instance_world, p);
+  } catch (...) {
+    emit_log(o, LogLevel::debug, "Failed to parse annotations");
+  }
+  try {
+    assign_vff_sections(*model, p);
+  } catch (...) {
+    emit_log(o, LogLevel::debug, "Failed to parse section planes");
+  }
+  for (const auto& item : layer_styles)
+    if (line_styles.count(item.second))
+      p.layer_line_styles[item.first] = line_styles.at(item.second);
+  for (const auto& item : p.layer_id_to_name) {
+    p.layer_persistent_ids[item.second] = item.first;
+    if (item.first) p.layer_persistent_id_aliases[item.second].insert(item.first);
+  }
+  for (const auto& item : p.material_id_to_name) {
+    auto material = p.materials.find(item.second);
+    if (material != p.materials.end()) material->second->native_pid = item.first;
+    auto folder = p.materials_by_folder.find(item.second);
+    if (folder != p.materials_by_folder.end()) folder->second->native_pid = item.first;
   }
   model.reset();
   if (!p.layer_id_to_name.count(1)) p.layer_id_to_name[1] = "Layer0";

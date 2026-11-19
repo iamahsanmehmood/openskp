@@ -69,6 +69,37 @@ namespace OpenSkp.Tests
             Assert.NotEqual((ushort)0xFFFF, tag);
         }
 
+        // The scaffold's own references are renumbered when materials, layers,
+        // definitions and geometry splice in before them. One that lands at or
+        // past 0x7FFF is widened to the escape form, which must use the 0x7FFF
+        // marker as well: SketchUp's own library rejects a file with 0xFFFF
+        // (the "new class declaration" tag) there, although our readers load it.
+        [Fact]
+        public void ShiftedPlainRefPastTheBoundaryUsesTheBigTagEscape()
+        {
+            var buf = new List<byte> { 0x00, 0x70 };   // plain back-ref to slot 0x7000
+            int growth = SkpBuilder.ShiftRef(buf, 0, 0x1000);
+            Assert.Equal(4, growth);
+            Assert.Equal(new byte[] { 0xFF, 0x7F, 0x00, 0x80, 0x00, 0x00 }, buf.ToArray());
+        }
+
+        [Fact]
+        public void ShiftedClassRefPastTheBoundaryUsesTheBigTagEscape()
+        {
+            var buf = new List<byte> { 0x00, 0xF0 };   // class-ref (0x8000 bit) to slot 0x7000
+            int growth = SkpBuilder.ShiftRef(buf, 0, 0x1000);
+            Assert.Equal(4, growth);
+            Assert.Equal(new byte[] { 0xFF, 0x7F, 0x00, 0x80, 0x00, 0x80 }, buf.ToArray());
+        }
+
+        [Fact]
+        public void ShiftedRefBelowTheBoundaryStaysShort()
+        {
+            var buf = new List<byte> { 0x00, 0xF0 };
+            Assert.Equal(0, SkpBuilder.ShiftRef(buf, 0, 0x0FFE));
+            Assert.Equal(new byte[] { 0xFE, 0xFF }, buf.ToArray());   // 0x8000 | 0x7FFE
+        }
+
         [Fact]
         public void SlotBoundaryCrossingRoundTripsWithExactFaceCount()
         {

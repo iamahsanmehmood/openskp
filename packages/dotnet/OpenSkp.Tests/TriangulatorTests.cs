@@ -73,6 +73,26 @@ namespace OpenSkp.Tests
         }
 
         [Fact]
+        public void ConcaveQuadSplitsAlongInsideDiagonal()
+        {
+            // A dart of area 4 whose reflex corner is vertex 1: the 0-2
+            // diagonal runs outside it.
+            var vertices = new Dictionary<long, (double X, double Y, double Z)>
+            {
+                [0] = (4, 0, 0),
+                [1] = (1, 1, 0),
+                [2] = (0, 4, 0),
+                [3] = (0, 0, 0),
+            };
+            var loops = new List<List<long>> { new List<long> { 0, 1, 2, 3 } };
+
+            var triangles = Triangulator.TriangulateFace3D(vertices, loops, (0, 0, 1));
+
+            Assert.Equal(2, triangles.Count);
+            Assert.Equal(4.0, TrianglesArea(triangles, vertices), 6);
+        }
+
+        [Fact]
         public void SquareWithHoleExcludesHoleArea()
         {
             // Outer 10x10 square (0..10), inner 2x2 hole square (4..6) - area

@@ -45,6 +45,25 @@ void main() {
     }
   });
 
+  test('concave quad splits along the diagonal inside it', () {
+    // A dart of area 4 whose reflex corner is vertex 1: the 0-2 diagonal
+    // runs outside it.
+    final vertices = <int, (double, double, double)>{
+      0: (4, 0, 0),
+      1: (1, 1, 0),
+      2: (0, 4, 0),
+      3: (0, 0, 0),
+    };
+    final loops = [
+      [0, 1, 2, 3],
+    ];
+
+    final triangles = Triangulator.triangulateFace3D(vertices, loops, (0, 0, 1));
+
+    expect(triangles.length, 2);
+    expect(_trianglesArea(triangles, vertices), closeTo(4.0, 1e-6));
+  });
+
   test('square with hole excludes hole area', () {
     // Outer 10x10 square (0..10), inner 2x2 hole square (4..6) - area must
     // be 100 - 4 = 96, and no triangle may cover the hole's interior.

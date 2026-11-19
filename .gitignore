@@ -56,6 +56,11 @@ packages/dart_fragments/.packages
 packages/dart_fragments/build/
 packages/dart_fragments/pubspec.lock
 
+# Rust
+packages/rust/target/
+packages/rust/viewer/target/
+packages/rust/viewer/dist/
+
 # SKP test files (don't commit binary models)
 *.skp
 # …except the checked-in regression fixtures (small real models) and the
@@ -66,6 +71,9 @@ packages/dart_fragments/pubspec.lock
 !packages/dart/test/fixtures/*.skp
 !packages/dart_fragments/test/fixtures/*.skp
 !packages/cpp/tests/fixtures/*.skp
+!packages/rust/tests/fixtures/*.skp
+!packages/rust/tests/fixtures/create_reference/*.skp
+!packages/rust/src/create/*.skp
 !packages/python/src/openskp/_scaffold/*.skp
 !examples/web-viewer/samples/*.skp
 *.glb

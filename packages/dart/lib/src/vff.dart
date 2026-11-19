@@ -108,14 +108,36 @@ class Vff {
   /// Extract the model's unit-system string from a VFF file's
   /// meta/meta.dat contents, or null if the expected tags aren't found.
   static String? readMetaUnits(Uint8List metaBytes) {
-    final records = Tlv.parseFlat(metaBytes);
-    final wrapper = Tlv.findFlat(records, _metaWrapperTag);
-    if (wrapper != null) {
-      return readMetaUnits(wrapper);
-    }
-    final units = Tlv.findFlat(records, _metaUnitsTag);
-    if (units != null) {
-      return Tlv.decodeUtf8(units);
+    // Real files have one wrapper record around the units. Wrappers are
+    // followed in a loop over (start, end) offsets, not by recursing: a file
+    // with thousands of nested wrappers would otherwise overflow the stack.
+    // More than Tlv.maxDepth wrappers is not a real file; the units are then
+    // unknown, which is not an error.
+    var start = 0;
+    var end = metaBytes.length;
+    for (var level = 0; level <= Tlv.maxDepth; level++) {
+      var pos = start;
+      int? innerStart;
+      int? innerEnd;
+      while (pos <= end - 6) {
+        final tag = metaBytes[pos].toRadixString(16).padLeft(2, '0').toUpperCase() +
+            metaBytes[pos + 1].toRadixString(16).padLeft(2, '0').toUpperCase();
+        final size = Tlv.readU32(metaBytes, pos + 2);
+        if (pos + 6 + size > end) break;
+        if (tag == _metaWrapperTag) {
+          innerStart = pos + 6;
+          innerEnd = pos + 6 + size;
+          break;
+        }
+        if (tag == _metaUnitsTag) {
+          return Tlv.decodeUtf8(
+              Uint8List.sublistView(metaBytes, pos + 6, pos + 6 + size));
+        }
+        pos += 6 + size;
+      }
+      if (innerStart == null || innerEnd == null) return null;
+      start = innerStart;
+      end = innerEnd;
     }
     return null;
   }

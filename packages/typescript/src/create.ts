@@ -131,9 +131,9 @@ const ISO_CAMERA_TAIL_PATCHES: Array<[number, number[]]> = [
  * anchor - a back-reference to the model's first layer (Layer0). */
 const ACTIVE_LAYER_ANCHOR_REL = 0;
 
-/** Absolute offset of a u16 "next available pid" counter that lives
- * before the material insertion point. Increments by exactly the
- * material COUNT (one pid consumed per material object). */
+/** Absolute offset of the u32 persistent-id counter that lives before the
+ * material insertion point: the last pid handed out, in every section of
+ * the file. */
 const PID_COUNTER_POS = 1987;
 
 const MATERIAL_SCHEMA = 12;
@@ -443,6 +443,10 @@ function u32Bytes(v: number): number[] {
 
 function readU16(buf: number[], pos: number): number {
   return (buf[pos] | (buf[pos + 1] << 8)) & 0xffff;
+}
+
+function readU32(buf: ArrayLike<number>, pos: number): number {
+  return (buf[pos] | (buf[pos + 1] << 8) | (buf[pos + 2] << 16) | (buf[pos + 3] << 24)) >>> 0;
 }
 
 function writeU16At(buf: number[], pos: number, v: number): void {
@@ -1898,11 +1902,29 @@ export class SkpBuilder {
   private newEntityCount = 0;
   private faceCount = 0;
 
+  /** First persistent id this builder hands out: one past the scaffold's own counter. */
+  private pidStart: number;
+
   constructor() {
     this.data = loadScaffold();
     // Materials always start allocating at `base`, the same slot the
     // (possibly absent) material section would have occupied.
-    this.materialWriter = new ArchiveWriter(this.base, {});
+    //
+    // Persistent IDs run in ONE sequence across every section of the file,
+    // continuing from the scaffold's own counter (a u32 at PID_COUNTER_POS).
+    // Each section's writer used to start at 1 again, so a definition, a root
+    // instance and a material could all carry pid 1: SketchUp loads such a
+    // file, renumbers the duplicates, and then cannot SAVE it (SketchUp for
+    // Web: "Save Failed") once ids above the header counter are in use.
+    this.pidStart = readU32(this.data, PID_COUNTER_POS) + 1;
+    this.materialWriter = new ArchiveWriter(this.base, {}, this.pidStart);
+  }
+
+  /** The next free persistent ID: sections are written in order (materials,
+   * layers, definitions, root geometry), each continuing where the previous
+   * one stopped. */
+  private nextPid(): number {
+    return (this.geometryWriter ?? this.definitionWriterInstance ?? this.layerWriter ?? this.materialWriter).nextPid;
   }
 
   addMaterial(name: string, rgba: readonly number[], opacity?: number): number {
@@ -1983,7 +2005,7 @@ export class SkpBuilder {
     if (this.layerWriter === null) {
       const materialShift = this.materialWriter.nextSlot - this.base;
       this.layerWriterStart = this.layerWriterBase + materialShift;
-      this.layerWriter = new ArchiveWriter(this.layerWriterStart, this.materialShiftedClassSlot());
+      this.layerWriter = new ArchiveWriter(this.layerWriterStart, this.materialShiftedClassSlot(), this.materialWriter.nextPid);
     }
     const slot = this.layerWriter.writeLayer(name, true, options.hidden ?? false, rgba);
     this.layersByName.set(name, slot);
@@ -2053,7 +2075,11 @@ export class SkpBuilder {
     if (this.definitionWriterInstance === null) {
       this.definitionWriterStart =
         this.scaffoldNextSlot + (this.materialWriter.nextSlot - this.base) + this.layerShift();
-      this.definitionWriterInstance = new ArchiveWriter(this.definitionWriterStart, this.postLayerClassSlot());
+      this.definitionWriterInstance = new ArchiveWriter(
+        this.definitionWriterStart,
+        this.postLayerClassSlot(),
+        this.nextPid()
+      );
     }
     const [slot, countPatchPos] = this.definitionWriterInstance.writeDefinitionHeader(attributeDicts);
     this.definitionCount += 1;
@@ -2223,7 +2249,8 @@ export class SkpBuilder {
     const materialShift = this.materialWriter.nextSlot - this.base;
     this.geometryWriter = new ArchiveWriter(
       this.scaffoldNextSlot + materialShift + this.layerShift() + this.definitionShift(),
-      this.postDefinitionClassSlot()
+      this.postDefinitionClassSlot(),
+      this.nextPid()
     );
     // Flush any groups that closed earlier, in the order they were
     // created - deferred until now so closing one group doesn't lock in
@@ -2415,14 +2442,11 @@ export class SkpBuilder {
     // zero-material scaffold, not a gap that needs new bytes inserted.
     // Real SketchUp overwrites them in place rather than growing the
     // file by 4 extra bytes here.
-    const layerPids = this.layerWriter ? this.layerWriter.nextPid - 1 : 0;
-    const pidDelta = this.materialCount + layerPids;
-
     const prefix = Array.from(this.data.subarray(0, this.materialInsertPos - 4));
-    if (pidDelta) {
-      const u16 = readU16(prefix, PID_COUNTER_POS);
-      writeU16At(prefix, PID_COUNTER_POS, u16 + pidDelta);
-    }
+    // The model's pid counter: the last pid handed out, in every section. A
+    // 32-bit field, so a model with more than 65 535 entities keeps a truthful
+    // counter.
+    writeU32At(prefix, PID_COUNTER_POS, this.nextPid() - 1);
     for (let i = 0; i < ISO_CAMERA_PREFIX_PATCH.length; i++) {
       prefix[ISO_CAMERA_PREFIX_OFFSET + i] = ISO_CAMERA_PREFIX_PATCH[i];
     }

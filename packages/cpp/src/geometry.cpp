@@ -159,7 +159,10 @@ static bool is_prop_container_tag(const std::string& t) {
 // stringify_attr_dictionaries() is for scene/JSON/IFC strings. An A438
 // with no children (Python: None) or an unrecognized value tag is Null
 // - a real, present key, not a missing key.
-static ParsedAttribute decode_a438_value(const ByteBuffer& p, size_t a, size_t z) {
+static ParsedAttribute decode_a438_value(const ByteBuffer& p, size_t a, size_t z, int depth = 0) {
+  // Arrays nest A438 inside AE38 inside A438 ...; a hostile payload can nest
+  // them tens of thousands deep, so stop at the same limit as the TLV tree.
+  if (depth > kMaxTlvDepth) throw_tlv_too_deep("A438", a);
   auto spans = parse_flat_spans(p, a, z);
   if (spans.empty()) return ParsedAttribute::null();
   auto& [tag, span] = spans[0];
@@ -188,7 +191,7 @@ static ParsedAttribute decode_a438_value(const ByteBuffer& p, size_t a, size_t z
     for (auto& [ctag, cspan] : parse_flat_spans(p, sa, sz)) {
       if (ctag != "A438") continue;
       auto [ca, cz] = cspan;
-      items.push_back(decode_a438_value(p, ca, cz));
+      items.push_back(decode_a438_value(p, ca, cz, depth + 1));
     }
     return ParsedAttribute::from_array(std::move(items));
   }
@@ -206,8 +209,9 @@ static ParsedAttribute decode_a438_value(const ByteBuffer& p, size_t a, size_t z
 // entries walk recurse into every container-tagged node, not just scan
 // one level.
 static void extract_attribute_dictionaries(const ByteBuffer& p, ParsedAttrDictionaries& out) {
-  std::function<void(size_t, size_t, ParsedAttrDict&)> extract_entries;
-  extract_entries = [&](size_t a, size_t z, ParsedAttrDict& entries) {
+  std::function<void(size_t, size_t, ParsedAttrDict&, int)> extract_entries;
+  extract_entries = [&](size_t a, size_t z, ParsedAttrDict& entries, int depth) {
+    if (depth > kMaxTlvDepth) throw_tlv_too_deep("B536", a);
     std::string key;
     for (auto& [tag, span] : parse_flat_spans(p, a, z)) {
       auto [sa, sz] = span;
@@ -217,13 +221,14 @@ static void extract_attribute_dictionaries(const ByteBuffer& p, ParsedAttrDictio
         entries[key] = decode_a438_value(p, sa, sz);
         key.clear();
       } else if (is_prop_container_tag(tag)) {
-        extract_entries(sa, sz, entries);
+        extract_entries(sa, sz, entries, depth + 1);
       }
     }
   };
 
-  std::function<void(size_t, size_t)> walk_dicts;
-  walk_dicts = [&](size_t a, size_t z) {
+  std::function<void(size_t, size_t, int)> walk_dicts;
+  walk_dicts = [&](size_t a, size_t z, int depth) {
+    if (depth > kMaxTlvDepth) throw_tlv_too_deep("DD05", a);
     auto here = parse_flat_spans(p, a, z);
     for (std::size_t i = 0; i < here.size(); ++i) {
       auto& [tag, span] = here[i];
@@ -233,38 +238,46 @@ static void extract_attribute_dictionaries(const ByteBuffer& p, ParsedAttrDictio
         ParsedAttrDict entries;
         if (i + 1 < here.size()) {
           auto [ea, ez] = here[i + 1].second;
-          extract_entries(ea, ez, entries);
+          extract_entries(ea, ez, entries, depth + 1);
         }
         out[name] = std::move(entries);
       } else if (is_prop_container_tag(tag)) {
-        walk_dicts(sa, sz);
+        walk_dicts(sa, sz, depth + 1);
       }
     }
   };
 
-  walk_dicts(0, p.size());
+  walk_dicts(0, p.size(), 0);
 }
 
 void collect_geometry(const std::vector<TlvNode>& es, GeometryBuilder& b) {
   for (auto& e : es) {
     if (e.tag == "C409") {
       auto id = entity_id(e);
+      if (id) b.persistent_ids[*id] = *id;
       auto* p = find_node(e.children, "C509");
       if (id && p && p->payload.size() >= 24)
         b.vertices[*id] = {read_f64(p->payload, 0), read_f64(p->payload, 8),
                            read_f64(p->payload, 16)};
     } else if (e.tag == "B80B") {
       auto id = entity_id(e);
+      if (id) b.persistent_ids[*id] = *id;
       if (id) {
         auto *x = find_node(e.children, "B90B"), *y = find_node(e.children, "BA0B");
         std::optional<EntityId> a, c;
         if (x && !x->payload.empty()) a = parse_varint(x->payload, 0, x->payload.size());
         if (y && !y->payload.empty()) c = parse_varint(y->payload, 0, y->payload.size());
         b.edges[*id] = {a, c};
+        if (auto* drawing = find_node(e.children, "D007"))
+          if (auto* attrs = find_node(drawing->children, "DC05"))
+            extract_attribute_dictionaries(attrs->payload, b.edge_dictionaries[*id]);
         for (auto& z : e.children)
           if (z.tag == "D007")
             for (auto& w : z.children)
-              if (w.tag == "D307" && !w.payload.empty()) b.edge_flags[*id] = w.payload[0];
+              if (w.tag == "D307" && !w.payload.empty())
+                b.edge_flags[*id] = w.payload[0];
+              else if (w.tag == "D207" && !w.payload.empty())
+                b.edge_layers[*id] = std::to_string(parse_varint(w.payload, 0, w.payload.size()));
         // BB0B = the parent Curve's entity id (Edge#curve).
         auto* bb = find_node(e.children, "BB0B");
         if (bb && !bb->payload.empty()) {
@@ -290,10 +303,12 @@ void collect_geometry(const std::vector<TlvNode>& es, GeometryBuilder& b) {
           a.start_angle = f(14);
           a.end_angle = f(15);
           b.arc_curves[*id] = a;
+          b.persistent_ids[*id] = *id;
         }
       }
     } else if (e.tag == "AC0D") {
       auto id = entity_id(e);
+      if (id) b.persistent_ids[*id] = *id;
       if (id) {
         RawFace f;
         auto* n = find_node(e.children, "AD0D");
@@ -328,14 +343,19 @@ void collect_geometry(const std::vector<TlvNode>& es, GeometryBuilder& b) {
             for (auto& x : d.children) {
               if (x.tag == "D107" && !x.payload.empty())
                 f.material_id = parse_varint(x.payload, 0, x.payload.size());
-              else if (x.tag == "DC05")
+              else if (x.tag == "DC05") {
                 std::tie(f.uv_transform, f.uv_transform_back) = uv(x.payload);
+                extract_attribute_dictionaries(x.payload, f.attribute_dictionaries);
+              }
               // D307 = display flags, same record edges already read (base
               // 0x06, +0x01 hidden) - faces carry the identical tag under
               // their own D007 container.
-              else if (x.tag == "D307" && !x.payload.empty())
-                f.hidden = (x.payload[0] & 0x01) != 0;
-              else if (x.tag == "D207" && !x.payload.empty())
+              else if (x.tag == "D307" && !x.payload.empty()) {
+                f.hidden = (x.payload[0] & kDrawHidden) != 0;
+                f.locked = (x.payload[0] & kDrawLocked) != 0;
+                f.casts_shadows = (x.payload[0] & kDrawCastsShadows) != 0;
+                f.receives_shadows = (x.payload[0] & kDrawReceivesShadows) != 0;
+              } else if (x.tag == "D207" && !x.payload.empty())
                 f.layer = std::to_string(parse_varint(x.payload, 0, x.payload.size()));
             }
         for (auto& x : e.children)
@@ -347,8 +367,18 @@ void collect_geometry(const std::vector<TlvNode>& es, GeometryBuilder& b) {
       RawInstance i;
       i.offset = e.offset;
       i.id = entity_id(e);
+      auto* d007 = find_node(e.children, "D007");
+      auto* dc05 = d007 ? find_node(d007->children, "DC05") : nullptr;
+      if (dc05 && !dc05->payload.empty()) {
+        ByteBuffer idb = dc05->payload;
+        if (idb.size() >= 6 && idb[0] == 0xde && idb[1] == 5) {
+          const auto z = read_u32(idb, 2);
+          if (z <= idb.size() - 6) idb = ByteBuffer(idb.begin() + 6, idb.begin() + 6 + z);
+        }
+        i.persistent_id = bytes_to_upper_hex(idb);
+      }
       auto* g = find_node(e.children, "6819");
-      if (g && g->payload.size() == 16) i.ref_guid = hex(g->payload);
+      if (g && g->payload.size() == 16) i.ref_guid = guid_from_windows_bytes(g->payload);
       auto* r = find_node(e.children, "6719");
       if (r && !r->payload.empty()) i.ref_idx = parse_varint(r->payload, 0, r->payload.size());
       auto* n = find_node(e.children, "6519");
@@ -375,8 +405,12 @@ void collect_geometry(const std::vector<TlvNode>& es, GeometryBuilder& b) {
             }
             // D307 = display flags, same record edges/faces already read
             // (base 0x06, +0x01 hidden).
-            else if (x.tag == "D307" && !x.payload.empty())
-              i.hidden = (x.payload[0] & 0x01) != 0;
+            else if (x.tag == "D307" && !x.payload.empty()) {
+              i.hidden = (x.payload[0] & kDrawHidden) != 0;
+              i.locked = (x.payload[0] & kDrawLocked) != 0;
+              i.casts_shadows = (x.payload[0] & kDrawCastsShadows) != 0;
+              i.receives_shadows = (x.payload[0] & kDrawReceivesShadows) != 0;
+            }
           }
       b.instances.push_back(std::move(i));
     } else if (e.tag == "6942") {
@@ -385,6 +419,7 @@ void collect_geometry(const std::vector<TlvNode>& es, GeometryBuilder& b) {
       auto* p = find_node(e.children, "6A42");
       if (p && p->payload.size() >= 64) {
         ConstructionLine cl;
+        cl.persistent_id = entity_id(e).value_or(0);
         cl.point = {read_f64(p->payload, 0), read_f64(p->payload, 8), read_f64(p->payload, 16)};
         cl.direction = {read_f64(p->payload, 24), read_f64(p->payload, 32),
                         read_f64(p->payload, 40)};
@@ -410,6 +445,7 @@ void collect_geometry(const std::vector<TlvNode>& es, GeometryBuilder& b) {
       auto* p = find_node(e.children, "6D42");
       if (p && p->payload.size() >= 24) {
         ConstructionPoint cp;
+        cp.persistent_id = entity_id(e).value_or(0);
         cp.position = {read_f64(p->payload, 0), read_f64(p->payload, 8), read_f64(p->payload, 16)};
         read_guide_drawbase(e, cp);
         b.construction_points.push_back(std::move(cp));
@@ -421,22 +457,67 @@ void collect_geometry(const std::vector<TlvNode>& es, GeometryBuilder& b) {
 
 void collect_layers(const std::vector<TlvNode>& ns, std::map<EntityId, std::string>& out,
                     std::map<std::string, bool>& hidden) {
+  std::map<std::string, EntityId> unused;
+  collect_layers(ns, out, hidden, unused);
+}
+
+void collect_layers(const std::vector<TlvNode>& ns, std::map<EntityId, std::string>& out,
+                    std::map<std::string, bool>& hidden,
+                    std::map<std::string, EntityId>& style_ids) {
   for (auto& e : ns) {
-    if (e.tag == "993A")
+    if (e.tag == "993A") {
       for (auto& c : e.children)
         if (c.tag == "8C3C") {
-          auto *d = find_node(c.children, "DC05"), *n = find_node(c.children, "8D3C");
-          if (d && n && !d->payload.empty()) out[dc_id(d->payload)] = text(n->payload);
-          // 8E3C: a single byte, 1 = hidden / 0 = visible - the VFF-format
-          // counterpart of the legacy format's already-known layer-hidden
-          // flag, confirmed byte-for-byte against a real production
-          // file's own Tags panel (matches Python's _core.py exactly).
-          if (n) {
-            auto* h = find_node(c.children, "8E3C");
-            if (h && !h->payload.empty()) hidden[text(n->payload)] = h->payload[0] == 1;
+          const TlvNode *d = nullptr, *n = nullptr, *h = nullptr, *s = nullptr;
+          for (auto& x : c.children) {
+            if (x.tag == "DC05")
+              d = &x;
+            else if (x.tag == "8D3C")
+              n = &x;
+            else if (x.tag == "8E3C")
+              h = &x;
+            else if (x.tag == "903C")
+              s = &x;
+          }
+          if (d && n && !d->payload.empty()) {
+            const std::string name = text(n->payload);
+            out[dc_id(d->payload)] = name;
+            if (h && !h->payload.empty()) hidden[name] = h->payload[0] == 1;
+            if (s && s->payload.size() >= 4) {
+              const auto sid = read_u32(s->payload, 0);
+              if (sid) style_ids[name] = static_cast<EntityId>(sid);
+            }
           }
         }
-    collect_layers(e.children, out, hidden);
+      continue;
+    }
+    collect_layers(e.children, out, hidden, style_ids);
+  }
+}
+
+static void collect_line_styles_buf(const ByteBuffer& p, std::map<EntityId, std::string>& out) {
+  for (auto& rec : parse_flat(p)) {
+    if (rec.first == "7640") {
+      EntityId id = 0;
+      std::string name;
+      for (auto& c : parse_flat(rec.second)) {
+        if (c.first == "DC05")
+          id = dc_id(c.second);
+        else if (c.first == "7740")
+          name = text(c.second);
+      }
+      if (id && !name.empty()) out[id] = std::move(name);
+    } else if (!rec.second.empty())
+      collect_line_styles_buf(rec.second, out);
+  }
+}
+
+void collect_line_styles(const std::vector<TlvNode>& ns, std::map<EntityId, std::string>& out) {
+  for (auto& e : ns) {
+    if (e.tag == "0802" && !e.payload.empty())
+      collect_line_styles_buf(e.payload, out);
+    else
+      collect_line_styles(e.children, out);
   }
 }
 
@@ -466,26 +547,36 @@ void collect_definitions(const std::vector<TlvNode>& ns, std::map<EntityId, RawD
   for (auto& e : ns) {
     if (e.tag == "7C15") {
       RawDefinition d;
+      d.native_pid = entity_id(e).value_or(0);
       for (auto& c : e.children) {
         if (c.tag == "7D15" && c.payload.size() == 16)
-          d.guid = hex(c.payload);
+          d.guid = guid_from_windows_bytes(c.payload);
         else if (c.tag == "7E15")
           d.name = text(c.payload);
+        else if (c.tag == "7F15")
+          d.description = text(c.payload);
+        else if (c.tag == "8015")
+          d.path = text(c.payload);
         else if (c.tag == "8315" && !c.payload.empty()) {
           // Definition kind: 0 for a component, 1 for a group (what SketchUp's own
           // API reports too), 2 for the quad definition backing an Image entity.
+          d.type_known = true;
           auto kind = parse_varint(c.payload, 0, c.payload.size());
           d.is_image = kind == 2;
           d.is_group = kind == 1;
         } else if (c.tag == "581B")
           for (auto& v : parse_flat(c.payload)) {
-            if (v.first == "5D1B" && !v.second.empty())
+            if (v.first == "5A1B" && v.second.size() == 4)
+              d.no_scale_mask = read_u32(v.second, 0);
+            else if (v.first == "5D1B" && !v.second.empty())
               d.always_faces_camera = parse_varint(v.second, 0, v.second.size()) == 1;
             else if (v.first == "5E1B" && !v.second.empty())
               d.shadows_face_sun = parse_varint(v.second, 0, v.second.size()) == 1;
           }
       }
       collect_geometry(e.children, d.builder);
+      // Only the definition's own entity base, never dictionaries on child instances/faces.
+      collect_model_attribute_dictionaries(e, d.parsed_dictionaries);
       if (auto id = entity_id(e)) out[*id] = std::move(d);
     }
     collect_definitions(e.children, out);

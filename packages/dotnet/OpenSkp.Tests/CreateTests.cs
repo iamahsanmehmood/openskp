@@ -868,6 +868,51 @@ namespace OpenSkp.Tests
             Assert.True(builder.ToBytes().Length > 0);
         }
 
+        private static uint PidCounter(byte[] data) => BitConverter.ToUInt32(data, CreateConstants.PidCounterPos);
+
+        // Every section's writer used to hand out persistent ids from 1 again, so
+        // a definition and a root instance could carry the same pid, and the header
+        // counter only grew by the material and layer count. SketchUp loads such a
+        // file and renumbers the duplicates, after which SketchUp for Web cannot
+        // save it (openskp#492). Ids now run in one sequence and the counter is the
+        // last id handed out - the same numbers the Python writer produces.
+        [Fact]
+        public void PersistentIdsRunInOneSequenceAcrossSections()
+        {
+            var builder = SkpCreate.NewFile();
+            int red = builder.AddMaterial("Rojo", (255, 0, 0, 255));
+            int layer = builder.AddLayer("Estructura");
+            var a = builder.AddComponentDefinition("A");
+            a.AddFace(Square(), material: red, layer: layer);
+            a.AddFace(Square(x0: 300));
+            a.Dispose();
+            var b = builder.AddComponentDefinition("B");
+            b.AddFace(Square(z: 50));
+            b.Dispose();
+            builder.AddInstance(a);
+            builder.AddInstance(b, translation: (0, 0, 100));
+            var data = builder.ToBytes();
+
+            Assert.True(builder._pidStart < builder.NextPid());
+            Assert.Equal(builder.NextPid() - 1, (long)PidCounter(data));
+            Assert.Equal(52u, PidCounter(data));
+        }
+
+        [Fact]
+        public void GroupsWithoutMaterialsOrLayersStillRaiseTheHeaderCounter()
+        {
+            // The scaffold's counter is 18; a file of two groups used ids up to 20
+            // with the counter left at 18, and SketchUp for Web could not save it.
+            var builder = SkpCreate.NewFile();
+            using (var one = builder.AddGroup("one")) one.AddFace(Square());
+            using (var two = builder.AddGroup("two")) two.AddFace(Square(x0: 60));
+            var data = builder.ToBytes();
+
+            Assert.True(PidCounter(data) > 18u);
+            Assert.Equal(builder.NextPid() - 1, (long)PidCounter(data));
+            Assert.Equal(40u, PidCounter(data));
+        }
+
         // 1x1 transparent PNG.
         private static byte[] TinyPng() => Convert.FromBase64String(
             "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=");

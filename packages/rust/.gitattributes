@@ -1,0 +1,5 @@
+# Fixtures and the embedded writer scaffold are byte-exact binary data: never let
+# core.autocrlf rewrite them (a PNG signature even contains CRLF and a lone LF).
+*.skp binary
+*.png binary
+*.jpg binary

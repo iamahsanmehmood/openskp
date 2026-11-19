@@ -1270,4 +1270,44 @@ void main() {
       expect(fromLib, equals(fromFixture));
     });
   });
+
+  group('PersistentIds', () {
+    // Every section's writer used to hand out persistent ids from 1 again, so a
+    // definition and a root instance could carry the same pid, and the header
+    // counter only grew by the material and layer count. SketchUp loads such a
+    // file and renumbers the duplicates, after which SketchUp for Web cannot
+    // save it (openskp#492). Ids now run in one sequence and the counter is the
+    // last id handed out - the same numbers the Python writer produces.
+    const counterPos = 1987;
+    int counter(List<int> b) =>
+        b[counterPos] | (b[counterPos + 1] << 8) | (b[counterPos + 2] << 16) | (b[counterPos + 3] << 24);
+
+    List<(double, double, double)> shifted(double dx, double dy, double dz) =>
+        [for (final (x, y, z) in square) (x + dx, y + dy, z + dz)];
+
+    test('run in one sequence across materials, layers, definitions and root geometry', () {
+      final builder = create();
+      final red = builder.addMaterial('Rojo', [255, 0, 0, 255]);
+      final layer = builder.addLayer('Estructura');
+      final a = builder.addComponentDefinition('A', (def) {
+        def.addFace(square, material: red, layer: layer);
+        def.addFace(shifted(300, 0, 0));
+      });
+      final b = builder.addComponentDefinition('B', (def) {
+        def.addFace(shifted(0, 0, 50));
+      });
+      builder.addInstance(a);
+      builder.addInstance(b, translation: (0.0, 0.0, 100.0));
+      expect(counter(builder.toBytes()), 52);
+    });
+
+    test('a file with groups but no materials or layers still raises the header counter', () {
+      // The scaffold's counter is 18; a file of two groups used ids up to 20
+      // with the counter left at 18.
+      final builder = create();
+      builder.addGroup((def) => def.addFace(square), name: 'one');
+      builder.addGroup((def) => def.addFace(shifted(60, 0, 0)), name: 'two');
+      expect(counter(builder.toBytes()), 40);
+    });
+  });
 }

@@ -17,6 +17,7 @@ from __future__ import annotations
 import struct
 from typing import List, Optional, Set
 
+from .errors import SkpParseError
 from .model import TlvNode
 
 # ---------------------------------------------------------------------------
@@ -88,6 +89,12 @@ def parse_var_int(data: bytes, offset: int, length: int) -> int:
 
 # ── Recursive TLV parser ──────────────────────────────────────────────────
 
+#: Deepest container nesting the parser follows. A real model.dat nests about
+#: a dozen levels (the deepest file checked reaches 11); a hostile file can
+#: nest tens of thousands, which would exhaust the stack, so deeper input
+#: raises :class:`~openskp.errors.SkpParseError` instead.
+MAX_TLV_DEPTH: int = 64
+
 
 def parse_tlv_recursive(
     data: bytes,
@@ -118,6 +125,9 @@ def parse_tlv_recursive(
     Returns:
         A list of :class:`TlvNode` objects found in the range
         ``[start, end)``.
+
+    Raises:
+        SkpParseError: If containers nest deeper than :data:`MAX_TLV_DEPTH`.
     """
     if container_tags is None:
         container_tags = CONTAINER_TAGS
@@ -137,6 +147,11 @@ def parse_tlv_recursive(
         is_container: bool = tag_hex in container_tags
 
         if is_container and size > 0:
+            if depth >= MAX_TLV_DEPTH:
+                raise SkpParseError(
+                    f"TLV records nest deeper than {MAX_TLV_DEPTH} levels",
+                    stage="tlv_walk", tag=tag_hex, offset=pos,
+                )
             children = parse_tlv_recursive(
                 data, pos + 6, pos + 6 + size, container_tags, depth + 1
             )

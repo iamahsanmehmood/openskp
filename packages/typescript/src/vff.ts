@@ -1,5 +1,6 @@
 import { unzipSync, UnzipFileInfo } from 'fflate';
 import { ParseOptions, emitLog } from './observability';
+import { MAX_TLV_DEPTH } from './parser';
 
 export interface SkpContents {
   version: string;
@@ -117,18 +118,30 @@ const META_UNITS_TAG = [0x6d, 0x00];
  * or null if the expected tags aren't found. */
 export function readMetaUnits(metaBytes: Uint8Array): string | null {
   const view = new DataView(metaBytes.buffer, metaBytes.byteOffset, metaBytes.byteLength);
-  let pos = 0;
-  while (pos + 6 <= metaBytes.length) {
-    const tag = [metaBytes[pos], metaBytes[pos + 1]];
-    const size = view.getUint32(pos + 2, true);
-    if (pos + 6 + size > metaBytes.length) break;
-    if (tag[0] === META_WRAPPER_TAG[0] && tag[1] === META_WRAPPER_TAG[1]) {
-      return readMetaUnits(metaBytes.subarray(pos + 6, pos + 6 + size));
+  // Real files have one wrapper record around the units. Wrappers are
+  // followed in a loop over (start, end) offsets, not by recursing: a file
+  // with thousands of nested wrappers would otherwise overflow the stack.
+  // More than MAX_TLV_DEPTH wrappers is not a real file; the units are then
+  // unknown, which is not an error.
+  let start = 0;
+  let end = metaBytes.length;
+  for (let level = 0; level <= MAX_TLV_DEPTH; level++) {
+    let pos = start;
+    let inner: [number, number] | null = null;
+    while (pos + 6 <= end) {
+      const size = view.getUint32(pos + 2, true);
+      if (pos + 6 + size > end) break;
+      if (metaBytes[pos] === META_WRAPPER_TAG[0] && metaBytes[pos + 1] === META_WRAPPER_TAG[1]) {
+        inner = [pos + 6, pos + 6 + size];
+        break;
+      }
+      if (metaBytes[pos] === META_UNITS_TAG[0] && metaBytes[pos + 1] === META_UNITS_TAG[1]) {
+        return new TextDecoder('utf-8').decode(metaBytes.subarray(pos + 6, pos + 6 + size));
+      }
+      pos += 6 + size;
     }
-    if (tag[0] === META_UNITS_TAG[0] && tag[1] === META_UNITS_TAG[1]) {
-      return new TextDecoder('utf-8').decode(metaBytes.subarray(pos + 6, pos + 6 + size));
-    }
-    pos += 6 + size;
+    if (inner === null) return null;
+    [start, end] = inner;
   }
   return null;
 }

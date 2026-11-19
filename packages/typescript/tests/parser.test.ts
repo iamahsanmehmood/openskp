@@ -174,6 +174,26 @@ describe('Triangulation', () => {
     expect(triangles[0]).toEqual([0, 1, 2]);
     expect(triangles[1]).toEqual([0, 2, 3]);
   });
+
+  it('splits a concave quad along the diagonal inside it', () => {
+    // A dart of area 4 whose reflex corner is vertex 1: the 0-2 diagonal runs outside it.
+    const vertices = new Map<number, [number, number, number]>([
+      [0, [4, 0, 0]],
+      [1, [1, 1, 0]],
+      [2, [0, 4, 0]],
+      [3, [0, 0, 0]]
+    ]);
+    const triangles = triangulateFace3D(vertices, [[0, 1, 2, 3]], [0, 0, 1]);
+    let area = 0;
+    for (const [a, b, c] of triangles) {
+      const [ax, ay] = vertices.get(a)!;
+      const [bx, by] = vertices.get(b)!;
+      const [cx, cy] = vertices.get(c)!;
+      area += Math.abs((bx - ax) * (cy - ay) - (cx - ax) * (by - ay)) / 2;
+    }
+    expect(triangles.length).toBe(2);
+    expect(area).toBeCloseTo(4);
+  });
 });
 
 describe('Instance material (paint the component)', () => {
