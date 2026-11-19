@@ -564,6 +564,12 @@ class Definition:
         arcs: The analytic arc of every curve that is one, keyed by curve id
             - the :attr:`Edge.curve_id` of the edges that form it. A curve
             that is not an arc (a freehand or polygon curve) has no entry.
+        attribute_dictionaries: The definition's OWN attribute
+            dictionaries, keyed by dictionary name, values in their real
+            types (2021+ files; not read from classic files yet). SketchUp's
+            Dynamic Components keep a component's attributes, formulas and
+            option definitions here (``"dynamic_attributes"``), while each
+            placement only stores its current values on the instance.
         always_faces_camera: SketchUp's "always face camera" component
             behavior (2D people / tree cut-outs that rotate to face the
             viewer). Consumers typically render such instances as
@@ -600,6 +606,7 @@ class Definition:
     shadows_face_sun: bool = False
     is_image: bool = False
     is_group: bool = False
+    attribute_dictionaries: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
 
 def loose_edge_runs(definition: "Definition") -> List[Tuple[List[int], List[int], bool]]:
@@ -680,6 +687,10 @@ class SkpModel:
             the join table for :attr:`Face.material_id`.  Several IDs may
             alias the same :class:`Material` object.
         styles: List of :class:`Style` objects found in the file.
+        attribute_dictionaries: The model entity's own attribute
+            dictionaries (2021+ files; not read from classic files yet). A
+            component saved as its own file keeps its Dynamic Components
+            attributes here.
         units: The model's unit-system string (e.g. ``"Millimeter"``),
             read from ``meta/meta.dat`` in modern (VFF) files.  ``None``
             for legacy (pre-2021 MFC) files, which carry no equivalent
@@ -703,6 +714,7 @@ class SkpModel:
     materials_by_id: Dict[int, Material] = field(default_factory=dict)
     styles: List[Style] = field(default_factory=list)
     units: Optional[str] = None
+    attribute_dictionaries: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
 
 # ── SkpFile entry-point ──────────────────────────────────────────────────
@@ -807,6 +819,7 @@ class SkpFile:
         model = SkpModel()
         model.version = parsed.get("version", "unknown")
         model.units = parsed.get("units")
+        model.attribute_dictionaries = parsed.get("model_attribute_dictionaries") or {}
 
         layer_id_to_name = parsed.get("layer_id_to_name", {})
 
@@ -821,6 +834,7 @@ class SkpFile:
                 shadows_face_sun=d.get("shadows_face_sun", False),
                 is_image=d.get("is_image", False),
                 is_group=d.get("is_group", False),
+                attribute_dictionaries=d.get("attribute_dictionaries") or {},
             )
             # Completed VFF builders can retain dense private tables. Iterate
             # those directly; their public accessors still return cached dicts.

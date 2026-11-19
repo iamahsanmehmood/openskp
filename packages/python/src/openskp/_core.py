@@ -1662,6 +1662,30 @@ def _stringify_vff_attr_value(value):
     return str(value)
 
 
+def entity_attribute_dictionaries(nodes):
+    """Every attribute dictionary on the entity whose record children are
+    ``nodes`` - a component definition (7C15) or the model itself (F601).
+
+    Both carry their own attributes the way an instance does: an 8813
+    entity base holding a D007 container (see
+    :func:`extract_attribute_dictionaries`). Only the entity's DIRECT 8813
+    child is read, never the dictionaries of the instances, faces or edges
+    nested further down. Returns {} when the entity carries none.
+
+    SketchUp's Dynamic Components keep a component's own attributes,
+    formulas and option definitions here, on the definition, while each
+    instance stores only its current values: without this, a placed
+    dynamic component reaches a reader with its options missing.
+    """
+    entity = next((n for n in nodes if n['tag'] == '8813'), None)
+    if entity is None:
+        return {}
+    d007 = next((n for n in entity['children'] if n['tag'] == 'D007'), None)
+    if d007 is None:
+        return {}
+    return extract_attribute_dictionaries(d007)
+
+
 def extract_dynamic_properties(d007):
     """Extract Dynamic Component attribute key-value pairs from a D007
     container node - a backward-compatible view of just the one
@@ -2018,6 +2042,7 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
     material_id_to_name = {}
     defs_dict = {}
     root_builder = _GeometryBuilder()
+    model_attribute_dicts = {}
     vertex_positions = {}
     instance_world = {}
     page_node = None
@@ -2124,6 +2149,8 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
                                      'always_faces_camera': faces_camera,
                                      'shadows_face_sun': shadows_face_sun,
                                      'is_image': is_image, 'is_group': is_group,
+                                     'attribute_dictionaries':
+                                         entity_attribute_dictionaries(children),
                                      'builder': builder}
 
             elif tag == 'C409':
@@ -2179,6 +2206,7 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
             walk([el], None)
             if el.tag == 'F601':
                 _extract_geometry_nodes(el.children, root_builder)
+                model_attribute_dicts = entity_attribute_dictionaries(el.children)
         except Exception as e:
             raise SkpParseError(
                 f"Failed while processing top-level record: {e}",
@@ -2205,9 +2233,11 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
 
     if compact_geometry:
         root_builder._compact_geometry()
-    defs_dict['ROOT'] = {'guid': 'ROOT', 'name': 'ROOT_MODEL', 'builder': root_builder}
+    defs_dict['ROOT'] = {'guid': 'ROOT', 'name': 'ROOT_MODEL', 'builder': root_builder,
+                         'attribute_dictionaries': model_attribute_dicts}
 
     return {
+        'model_attribute_dictionaries': model_attribute_dicts,
         'version': version,
         'layer_colors': layer_colors,
         'layer_hidden': layer_hidden,

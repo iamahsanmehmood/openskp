@@ -72,6 +72,14 @@ class InstanceNode:
     # attach their own richer per-instance data under their own dictionary
     # name instead, which this project never surfaced before.
     attribute_dictionaries: Dict[str, Dict[str, str]] = field(default_factory=dict)
+    # The attribute dictionaries of the DEFINITION this instance places,
+    # every one by name (``dynamic_attributes`` included), values
+    # stringified like `properties`. SketchUp's Dynamic Components keep a
+    # component's attributes, formulas and options on the definition and
+    # only the current values on each instance, so a reader needs both.
+    # Shared by every placement of the same definition. Empty for classic
+    # (pre-2021) files.
+    definition_attribute_dictionaries: Dict[str, Dict[str, str]] = field(default_factory=dict)
     children: List["InstanceNode"] = field(default_factory=list)
     # Same full-path string that scoping instance's own meshes (and every
     # nested descendant's meshes) carry as MeshMetadata.path - lets a
@@ -293,6 +301,22 @@ def build_scene(
     materials_by_folder = parsed.get("materials_by_folder", {})
 
     logger.info("Building scene: %d definitions available", len(defs_dict))
+
+    # Each definition's own dictionaries, stringified once and shared by
+    # every InstanceNode that places it (see
+    # InstanceNode.definition_attribute_dictionaries).
+    definition_dicts_cache: Dict[Any, Dict[str, Dict[str, str]]] = {}
+
+    def _definition_dicts(ref_idx) -> Dict[str, Dict[str, str]]:
+        cached = definition_dicts_cache.get(ref_idx)
+        if cached is None:
+            raw = (defs_dict.get(ref_idx) or {}).get("attribute_dictionaries") or {}
+            cached = {
+                name: {k: _core._stringify_vff_attr_value(v) for k, v in entries.items()}
+                for name, entries in raw.items()
+            }
+            definition_dicts_cache[ref_idx] = cached
+        return cached
 
     instance_counter = [0]
     mesh_counter = [0]
@@ -718,6 +742,7 @@ def build_scene(
                 position_mm=(round(tx, 2), round(ty, 2), round(tz, 2)),
                 properties=properties,
                 attribute_dictionaries=attribute_dicts,
+                definition_attribute_dictionaries=_definition_dicts(ref_idx),
                 children=child_nodes,
                 path=full_path_name,
             )
