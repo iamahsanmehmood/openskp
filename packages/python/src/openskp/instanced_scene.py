@@ -29,7 +29,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from . import _core
 from ._curves import _chain_loose_edges, _solve_run_arc
-from ._face_groups import FaceGroupContext, build_local_face_groups
+from ._face_groups import FaceGroupContext, FaceGroupKey, build_local_face_groups
 from .errors import SkpParseError
 from .scene import SceneTexture, _sniff_image_mime
 
@@ -321,7 +321,7 @@ def build_instanced_scene(
         texture_index_by_key[key] = idx
         return idx
 
-    color_to_material_index: Dict[Tuple[Tuple[int, int, int], bool, Optional[int], float], int] = {}
+    color_to_material_index: Dict[FaceGroupKey, int] = {}
     gltf_materials: List[Dict[str, Any]] = []
 
     def get_material_index(
@@ -329,8 +329,11 @@ def build_instanced_scene(
         double_sided: bool,
         texture_index: Optional[int],
         transparency: float = 1.0,
+        material_name: Optional[str] = None,
+        colorized: bool = False,
+        colorize_type: int = 0,
     ) -> int:
-        key = (color, double_sided, texture_index, transparency)
+        key = (color, double_sided, texture_index, transparency, material_name)
         if key in color_to_material_index:
             return color_to_material_index[key]
         idx = len(gltf_materials)
@@ -343,6 +346,13 @@ def build_instanced_scene(
         if texture_index is not None:
             pbr["baseColorTexture"] = {"index": texture_index}
         mat_dict: Dict[str, Any] = {"pbrMetallicRoughness": pbr}
+        if material_name:
+            mat_dict["name"] = material_name
+        if colorized:
+            # A colourized copy shares its source material's image untinted;
+            # baseColorFactor is the target colour to re-tint it toward
+            # (colorize_type 0 = hue shift, 1 = greyscale then tint).
+            mat_dict["extras"] = {"sketchup": {"colorized": True, "colorize_type": colorize_type}}
         if double_sided:
             mat_dict["doubleSided"] = True
         # See scene.py's get_material_index for why: BLEND for genuinely
@@ -360,22 +370,24 @@ def build_instanced_scene(
     resource_id_by_key: Dict[str, str] = {}
 
     def mesh_resource_for(
-        def_id: Any, inherited_color: Optional[Tuple[int, int, int]], layer: str
+        def_id: Any,
+        inherited_color: Optional[Tuple[int, int, int]],
+        layer: str,
+        inherited_material: Optional[Dict[str, Any]] = None,
     ) -> Optional[str]:
         """Build (or reuse) the local-space mesh resource for a definition
         rendered in the given context. Returns ``None`` when the definition
         has no face geometry of its own.
 
-        Identity of a mesh resource: (definition, effective fallback color)
-        - the ONLY inputs that can change what
+        Identity of a mesh resource: (definition, effective fallback color,
+        inherited material name) - the ONLY inputs that can change what
         ``_face_groups.build_local_face_groups`` produces for this
-        definition, since (faithfully to the baked path this was extracted
-        from - see ``_face_groups.py``'s own docstring) it resolves each
-        face's material from the face's OWN material id only, never from an
-        instance's painted material. Caching on the definition id alone
-        would still be wrong: the same definition renders a different
-        fallback color depending on the layer/paint context it's placed in,
-        and merging those would silently repaint geometry.
+        definition. Caching on the definition id alone would be wrong: the
+        same definition renders differently depending on the layer/paint
+        context it's placed in, and merging those would silently repaint
+        geometry. The material name is needed on top of the colour because
+        two painted materials can share a colour but differ in texture or
+        transparency.
         """
         d = defs_dict.get(def_id)
         if d is None or not d["builder"].faces:
@@ -383,6 +395,8 @@ def build_instanced_scene(
 
         fallback_color = inherited_color if inherited_color is not None else get_layer_color(layer)
         key = f"{def_id}|{fallback_color[0]},{fallback_color[1]},{fallback_color[2]}"
+        if inherited_material is not None:
+            key += f"|{inherited_material.get('name', '')}"
         hit = resource_id_by_key.get(key)
         if hit is not None:
             return hit
@@ -396,11 +410,12 @@ def build_instanced_scene(
                 texture_index_for=texture_index_for,
                 fallback_color=fallback_color,
                 definition_id=def_id,
+                fallback_material=inherited_material,
             ),
         )
 
         primitives: List[LocalPrimitive] = []
-        for (color, double_sided, tex_index, transparency), group in face_groups.items():
+        for (color, double_sided, tex_index, transparency, material_name), group in face_groups.items():
             local_faces = group["local_faces"]
             if not local_faces:
                 continue
@@ -449,7 +464,10 @@ def build_instanced_scene(
                     normals=normals,
                     uvs=uvs,
                     indices=indices,
-                    material_index=get_material_index(color, double_sided, tex_index, transparency),
+                    material_index=get_material_index(
+                        color, double_sided, tex_index, transparency,
+                        material_name, group["colorized"], group["colorize_type"],
+                    ),
                 )
             )
 
@@ -591,6 +609,7 @@ def build_instanced_scene(
         current_matrix: List[float],
         parent_layer: str,
         inherited_color: Optional[Tuple[int, int, int]],
+        inherited_material: Optional[Dict[str, Any]] = None,
     ) -> List[InstancedNode]:
         """Walk a definition's placed instances, emitting one node each.
 
@@ -609,6 +628,7 @@ def build_instanced_scene(
 
             l_name = parent_layer
             inst_color = inherited_color
+            inst_material = inherited_material
             properties: Dict[str, str] = dict(inst.get("properties") or {})
             attribute_dicts: Dict[str, Dict[str, str]] = {}
             name_override: Optional[str] = None
@@ -629,6 +649,7 @@ def build_instanced_scene(
                     if mat:
                         c = mat["color"]
                         inst_color = (c["r"], c["g"], c["b"])
+                        inst_material = mat
 
                 try:
                     all_dicts = _core.extract_attribute_dictionaries(d007)
@@ -679,7 +700,7 @@ def build_instanced_scene(
                     stage="build_scene", definition_id=ref_idx,
                 )
             active_definitions.add(ref_idx)
-            children = walk(ref_idx, new_matrix, l_name, inst_color)
+            children = walk(ref_idx, new_matrix, l_name, inst_color, inst_material)
             active_definitions.discard(ref_idx)
 
             tx = new_matrix[9] * INCHES_TO_MM if len(new_matrix) > 9 else 0.0
@@ -697,7 +718,7 @@ def build_instanced_scene(
                     properties=properties,
                     attribute_dictionaries=attribute_dicts,
                     guid=inst.get("ref_guid") or "",
-                    mesh_resource_id=mesh_resource_for(ref_idx, inst_color, l_name),
+                    mesh_resource_id=mesh_resource_for(ref_idx, inst_color, l_name, inst_material),
                     curve_resource_id=curve_resource_for(ref_idx, l_name),
                     children=children,
                 )
