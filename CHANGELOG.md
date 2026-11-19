@@ -28,6 +28,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Porting note: same behaviour expected in the other four languages (inherit the painted
 instance's material, not its colour; material name in the scene-material identity; colorize
 flag on the scene material).
+### Added — Python: a definition's and the model's own attribute dictionaries (2021+ files)
+
+- SketchUp's Dynamic Components keep a component's attributes, formulas and option definitions
+  (labels, `_access`, `_options`, units) on its **definition**, and only the current values on each
+  instance. Python read the instance's dictionaries alone, so a placed dynamic component came without
+  its options: on a real model with four dynamic components, about a third of the formulas and every
+  top-level option were missing. The C++ port already reads them (`Definition::parsed_dictionaries`,
+  #478).
+- `Definition.attribute_dictionaries` holds a definition's own dictionaries by name, values in their
+  real types; only the definition's direct entity base (`8813` → `D007`) is read, never the
+  dictionaries of the instances, faces or edges inside it. `SkpModel.attribute_dictionaries` (and
+  `SkpModel.root.attribute_dictionaries`) hold the model entity's own, where a component saved as its
+  own file keeps its Dynamic Components attributes.
+- `InstanceNode.definition_attribute_dictionaries` gives every node of `build_scene()` the
+  dictionaries of the definition it places, stringified like `properties`; `properties` itself is
+  unchanged. Checked against SketchUp's Ruby API on that model: all 11,400 attribute values of its
+  209 placements match.
+- Not read from classic (pre-2021) files yet (the C++ reader reads them from some, such as `gondola_v20.skp`). Fixture: `definition_attribute_dictionaries_2026.skp`
+  (synthetic, saved by SketchUp 2026).
 
 ### Added — C++: the entities a scene hides (#472)
 
