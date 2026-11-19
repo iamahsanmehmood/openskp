@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Porting note: same behaviour expected in the other four languages (inherit the painted
 instance's material, not its colour; material name in the scene-material identity; colorize
 flag on the scene material).
+
 ### Added — C++: the entities a scene hides (#472)
 
 - `Page::hidden_entity_ids` lists the persistent ids of the entities a scene hides (SketchUp's

@@ -183,10 +183,6 @@ class FaceGroupContext:
     # (texture, transparency, name) by every unpainted face side. ``None``
     # when nothing up the instance path is painted.
     fallback_material: Optional[Dict[str, Any]] = None
-    # Material painted on the nearest enclosing instance (SketchUp's "paint
-    # the group"), or None. An unpainted face side uses it whole - texture
-    # and transparency included - before falling back to fallback_color.
-    fallback_material: Optional[Dict[str, Any]] = None
 
 
 def _add_face_side(
