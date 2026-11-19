@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — TypeScript: GLB files with non-ASCII names are 4-byte aligned again
+
+- `toGLB` and `toInstancedGLB` padded the JSON chunk by the JavaScript string's length instead of
+  its UTF-8 byte length. A node, mesh or material name with characters outside ASCII ("Kursi ñ 椅子")
+  then left the JSON chunk's length off a multiple of 4 and the BIN chunk misaligned, which glTF
+  2.0 does not allow and strict loaders and validators reject. The JSON is now encoded first and
+  padded with spaces to a multiple of 4 bytes. The other ports already padded by bytes.
+
 ### Fixed — Python
 
 - **A painted group or component passes its whole material to the faces inside it**, in
