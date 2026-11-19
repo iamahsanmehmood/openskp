@@ -33,13 +33,13 @@ function stripTextureRefs(materials: unknown[]): unknown[] {
   });
 }
 
-function createGlb(json: any, binaryBuffer: Uint8Array): Uint8Array {
-  let jsonString = JSON.stringify(json);
-  const jsonRemainder = jsonString.length % 4;
-  if (jsonRemainder !== 0) {
-    jsonString += ' '.repeat(4 - jsonRemainder);
-  }
-  const jsonBuffer = new TextEncoder().encode(jsonString);
+/** Wrap glTF JSON and a binary buffer into a GLB container. Shared by
+ * {@link toInstancedGLB} and index.ts's `toGLB`. */
+export function createGlb(json: any, binaryBuffer: Uint8Array): Uint8Array {
+  // Pad by UTF-8 byte length (not string length) with spaces, per the GLB spec.
+  const jsonBytes = new TextEncoder().encode(JSON.stringify(json));
+  const jsonBuffer = new Uint8Array((jsonBytes.length + 3) & ~3).fill(0x20);
+  jsonBuffer.set(jsonBytes);
 
   let paddedBinaryBuffer = binaryBuffer;
   const binaryRemainder = binaryBuffer.length % 4;
