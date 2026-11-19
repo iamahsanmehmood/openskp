@@ -148,6 +148,14 @@ loads in SketchUp's library.
   `coedge_orientation_regression.skp` this corrects 45 quads; the sum over all faces of the
   difference between triangle area and loop area drops from 1.58 in² to 0.23 in².
 
+### Fixed — TypeScript: the instanced scene keeps an instance's Hide flag
+
+- `buildInstancedScene` / `buildInstancedSceneFromParsed` now set `InstancedNode.hidden` from the
+  instance's own SketchUp "Hide" flag, as `Instance.hidden` already reports it for `parseSkp`.
+  Before, the flag was dropped, so a consumer of the instanced scene could not tell a hidden
+  placement from a visible one. The field is optional: a scene read back with `fromFragments` has
+  none, because the format carries no per-instance visibility.
+
 ## [1.5.0] — 2026-11-03 — all 5 languages
 
 > What most readers will notice, from the entries below (everything since 1.4.0):

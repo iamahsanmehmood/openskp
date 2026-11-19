@@ -132,6 +132,12 @@ export interface InstancedNode {
    * see openskp#290's rationale in fragments.ts for why a duplicated real
    * GUID needs the same synthetic-fallback treatment as a missing one. */
   guid: string;
+  /** Whether the instance itself is hidden (SketchUp's "Hide" on this
+   * placement, not a layer/tag visibility toggle) - the same flag the baked
+   * path's `Instance.hidden` reports. `false` for the root. Absent on a
+   * scene read back with `fromFragments`, whose format carries no
+   * per-instance visibility. */
+  hidden?: boolean;
   /** The mesh resource this node renders, or undefined for a node that
    * only groups children. */
   meshResourceId?: string;
@@ -569,6 +575,7 @@ export function buildInstancedSceneFromParsed(
         properties,
         attributeDictionaries,
         guid: inst.refGuid || '',
+        hidden: inst.hidden ?? false,
         meshResourceId: meshResourceFor(refIdx, instMaterial, lName),
         children,
       });
@@ -595,6 +602,7 @@ export function buildInstancedSceneFromParsed(
     properties: {},
     attributeDictionaries: {},
     guid: '',
+    hidden: false,
     meshResourceId: rootMeshResourceId,
     children: rootChildren,
   };
