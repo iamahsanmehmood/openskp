@@ -81,6 +81,16 @@ def test_scene_nodes_carry_their_definitions_dictionaries_stringified(version):
         "note": "definition-level custom dictionary"}
 
 
+@pytest.mark.parametrize("version", VERSIONS)
+def test_the_models_info_record_is_not_listed_as_a_dictionary(version):
+    # SketchUp stores the model info (Name, Description, ...) in a container
+    # named "ModelProperties" but its API does not list it as a dictionary.
+    model = SkpFile.open(_path(version)).parse()
+    assert "ModelProperties" not in model.attribute_dictionaries
+    other = SkpFile.open(str(FIXTURES / "legacy_v2019_synthetic.skp")).parse()
+    assert "ModelProperties" not in other.attribute_dictionaries
+
+
 def test_a_classic_file_without_dynamic_attributes_has_none():
     model = SkpFile.open(str(FIXTURES / "legacy_v2019_synthetic.skp")).parse()
     assert "dynamic_attributes" not in model.attribute_dictionaries

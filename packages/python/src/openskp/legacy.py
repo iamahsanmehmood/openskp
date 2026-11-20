@@ -2542,6 +2542,12 @@ def _premodel_attribute_dictionaries(data: bytes) -> Dict[str, Dict[str, Any]]:
     for c in containers:
         for name, entries in _extract_legacy_attribute_dictionaries(c).items():
             out.setdefault(name, {}).update(entries)
+    # ``ModelProperties`` (Name, Description, IsDynamic, ...) is SketchUp's own
+    # model-info record. It is stored in a container, but SketchUp's API does
+    # not list it among the model's attribute dictionaries (checked with the
+    # SDK on 440 corpus files: absent every time it is stored), so it is not
+    # one here either.
+    out.pop('ModelProperties', None)
     return out
 
 
