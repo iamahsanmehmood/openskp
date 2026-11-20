@@ -1808,7 +1808,10 @@ def _reanchor_on_string_marker(data: bytes, pos: int) -> int:
 
 
 def _read_definition(ar, r):
-    _preamble(ar, r)
+    # The preamble's attribute container is the DEFINITION's own attribute
+    # dictionaries (where SketchUp keeps a dynamic component's formulas and
+    # options); kept for full_parse_legacy.
+    pre = _preamble(ar, r)
     # undecoded base block (13 bytes in SketchUp 3)
     r.raw(22 if ar.ver >= 17 else (20 if ar.ver >= 5 else (19 if ar.ver >= _FIRST_V4 else 13)))
     nlayers = r.u32()
@@ -1896,7 +1899,8 @@ def _read_definition(ar, r):
     ar.read_object(r, expect='CThumbnail')
     return {'k': 'definition', 'name': name, 'guid': guid.hex().upper(),
             'ents': ents, 'faces_camera': bool(behavior & 1),
-            'shadows_face_sun': bool(behavior & 2), 'is_group': is_group}
+            'shadows_face_sun': bool(behavior & 2), 'is_group': is_group,
+            'attrs': pre['attrs']}
 
 
 def _read_instance(ar, r):
@@ -2461,6 +2465,92 @@ def _add_edge(builder, slot, e, slots):
         builder.arc_curves[curve] = cv['params']
 
 
+def _premodel_attribute_dictionaries(data: bytes) -> Dict[str, Dict[str, Any]]:
+    """The MODEL's own attribute dictionaries of a classic file.
+
+    They sit in the region before the material manager that ``_walk`` never
+    walks (the model header: thumbnail, attribute containers, camera,
+    rendering options …). A component saved as its own file keeps there what
+    SketchUp's Dynamic Components extension stored on the component's
+    definition — ``dynamic_attributes`` with the formulas and options the
+    parts refer to as ``Name!Attr`` — so a file of a dynamic component read
+    without them loses its top level.
+
+    The region is not walked, so the store-map numbering is learned from the
+    bytes: the first CAttributeContainer is a new-class record, followed by
+    its first CAttributeNamed new-class record (slots b, b+1, b+2); every
+    later dictionary is a class-ref to b+2, which gives b. Later containers
+    are the class-refs to b that read as one. Returns ``{name: {key: value}}``
+    with the dictionaries of every container found, ``{}`` when none."""
+    ver_m = re.search(rb'\{(\d+)\.', data[:0x60].replace(b'\x00', b''))
+    if not ver_m:
+        return {}
+    ver = int(ver_m.group(1))
+    end = len(data)
+    for name in (b'CMaterial', b'CLayer', b'CComponentDefinition'):
+        m = re.search(re.escape(b'\xff\xff') + b'..'
+                      + re.escape(struct.pack('<H', len(name)) + name),
+                      data, re.DOTALL)
+        if m:
+            end = min(end, m.start())
+    cls = data.find(b'\xff\xff', 0, end)
+    while cls >= 0 and data[cls + 4:cls + 25] != b'\x13\x00CAttributeContainer':
+        cls = data.find(b'\xff\xff', cls + 1, end)
+    if cls < 0:
+        return {}
+
+    pid = rb'\x00' if ver >= 17 else b''
+    named_refs: Dict[int, int] = {}
+    for m in re.finditer(rb'(?=([\x01-\xff][\x80-\xff])\x00\x00' + pid
+                         + rb'....\xff\xfe\xff)', data[cls:end], re.DOTALL):
+        tag = int.from_bytes(m.group(1), 'little') & 0x7FFF
+        named_refs[tag] = named_refs.get(tag, 0) + 1
+    named = max(named_refs, key=named_refs.get) if named_refs else 3
+    base = max(named - 2, 1)
+
+    ar = _Archive(data, ver)
+    ar.readers.update(_READERS)
+    ar.next_slot = base
+    ar.walk_base = base
+    r = ar.r
+    containers = []
+    r.pos = cls
+    _, n, v = ar.read_object(r)
+    if n == 'CAttributeContainer' and isinstance(v, dict):
+        containers.append(v)
+    cslot = ar.class_slot.get('CAttributeContainer')
+    if cslot is not None:
+        tag = struct.pack('<H', 0x8000 | cslot)
+        pos = r.pos
+        while True:
+            pos = data.find(tag, pos, end)
+            if pos < 0:
+                break
+            saved = ar.next_slot
+            try:
+                r.pos = pos
+                _, n, v = ar.read_object(r)
+            except (LegacyParseError, struct.error, IndexError,
+                    UnicodeDecodeError, ValueError):
+                ar.next_slot = saved
+                pos += 1
+                continue
+            if n == 'CAttributeContainer' and isinstance(v, dict):
+                containers.append(v)
+            pos = max(r.pos, pos + 1)
+    out: Dict[str, Dict[str, Any]] = {}
+    for c in containers:
+        for name, entries in _extract_legacy_attribute_dictionaries(c).items():
+            out.setdefault(name, {}).update(entries)
+    # ``ModelProperties`` (Name, Description, IsDynamic, ...) is SketchUp's own
+    # model-info record. It is stored in a container, but SketchUp's API does
+    # not list it among the model's attribute dictionaries (checked with the
+    # SDK on 440 corpus files: absent every time it is stored), so it is not
+    # one here either.
+    out.pop('ModelProperties', None)
+    return out
+
+
 def full_parse_legacy(skp_path: str) -> Dict[str, Any]:
     """Parse a classic MFC ``.skp`` into the ``full_parse`` dict shape."""
     t0 = time.monotonic()
@@ -2555,6 +2645,8 @@ def full_parse_legacy(skp_path: str) -> Dict[str, Any]:
                                 'is_group': d.get('is_group', False),
                                 'always_faces_camera': d.get('faces_camera', False),
                                 'shadows_face_sun': d.get('shadows_face_sun', False),
+                                'attribute_dictionaries':
+                                    _extract_legacy_attribute_dictionaries(d.get('attrs')),
                                 'builder': b}
                 processed += 1
                 if processed % _PROGRESS_INTERVAL == 0:
@@ -2567,8 +2659,14 @@ def full_parse_legacy(skp_path: str) -> Dict[str, Any]:
 
     root_builder = _Builder()
     _fill_builder(root_builder, root, slots)
+    try:
+        model_attribute_dicts = _premodel_attribute_dictionaries(data)
+    except Exception:  # noqa: BLE001 - the model's dictionaries are optional
+        logger.debug("model attribute dictionaries unreadable", exc_info=True)
+        model_attribute_dicts = {}
     defs_dict['ROOT'] = {'guid': 'ROOT', 'name': 'ROOT_MODEL',
-                         'builder': root_builder}
+                         'builder': root_builder,
+                         'attribute_dictionaries': model_attribute_dicts}
 
     try:
         pages = _read_page_list(data, ar)
@@ -2583,6 +2681,7 @@ def full_parse_legacy(skp_path: str) -> Dict[str, Any]:
     )
 
     return {
+        'model_attribute_dictionaries': model_attribute_dicts,
         'version': version,
         'dimensions': [d for d in root_builder.dimensions
                        if d.get('a') and d.get('b')],
