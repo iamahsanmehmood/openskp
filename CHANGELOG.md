@@ -17,6 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed — Python
 
+- **A classic file whose definition count matches a tag's slot reads again.** After the last
+  tag the reader took the definition-list anchor for a SketchUp 2018 "parent" back-ref whenever
+  the low half of the definition count equalled a tag's object slot, landed two bytes early and
+  failed with `class-ref to non-class slot N (CLayer)`. Files written by `openskp.create` with one
+  or two tags and 11 to 13 component definitions hit it. The bytes are now left in place when a
+  definition already starts right after the anchor and the count.
 - **A classic (pre-2021) file keeps its definitions' and its model's own attribute
   dictionaries.** `Definition.attribute_dictionaries`, `SkpModel.attribute_dictionaries` and
   `InstanceNode.definition_attribute_dictionaries` (#530) came back empty for every file saved
