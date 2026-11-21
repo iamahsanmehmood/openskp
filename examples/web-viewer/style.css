@@ -275,8 +275,9 @@ body.embed .status-bar,body.embed .mobile-toggles,
 body.embed #btn-export,body.embed .dropdown{display:none!important}
 body.embed #ui-container{grid-template-columns:1fr;grid-template-areas:"header" "." "footer";
   grid-template-rows:52px 1fr 0;padding:12px}
-body.embed .main-header{background:rgba(13,14,17,0.72);backdrop-filter:blur(8px);
-  -webkit-backdrop-filter:blur(8px)}
+/* No bar in embed mode: just the two buttons floating top-right over the model. */
+body.embed .main-header{background:none;border:0;box-shadow:none;padding:0;justify-content:flex-end}
+body.embed .main-header .logo{display:none}
 body.embed .view-tools{bottom:14px}
 a.btn{text-decoration:none}
 
@@ -291,6 +292,4 @@ a.btn{text-decoration:none}
   .vtool span{display:none}
   .vtool{padding:8px 10px}
   .sidebar-left,.sidebar-right{bottom:60px}
-  body.embed .main-header .logo{display:none}
-  body.embed .main-header{justify-content:flex-end}
 }
