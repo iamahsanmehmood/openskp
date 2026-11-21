@@ -254,3 +254,43 @@ input:checked + .slider:before{transform:translateX(13px)}
   .drop-overlay-content{padding:36px 28px;max-width:88vw}
   .size-warning-content{padding:30px 22px;max-width:90vw}
 }
+
+/* ── View toolbar (fit / edges) ───────────────────────────────────── */
+.view-tools{position:fixed;left:50%;bottom:64px;transform:translateX(-50%);z-index:30;
+  display:flex;gap:6px;padding:5px;pointer-events:auto;background:var(--bg-1);
+  border:1px solid var(--border);border-radius:var(--r-md);box-shadow:0 12px 32px -8px rgba(0,0,0,0.5)}
+.vtool{display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border-radius:var(--r-sm);
+  border:1px solid transparent;background:transparent;color:var(--text-1);font-size:0.8rem;
+  font-weight:600;cursor:pointer;font-family:var(--font-ui);transition:all .15s ease}
+.vtool:hover{background:var(--bg-3);color:var(--text-0)}
+.vtool.active{color:var(--accent);background:var(--accent-dim);border-color:var(--accent-line)}
+.vtool:focus-visible,.btn:focus-visible,.mtoggle:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+/* ── Embed mode (?embed=1): canvas-first, no side panels ──────────── */
+.embed-only{display:none!important}
+body.embed .embed-only{display:inline-flex!important}
+body.embed .package-links,
+body.embed .sidebar-left,body.embed .sidebar-right,
+body.embed .status-bar,body.embed .mobile-toggles,
+body.embed #btn-export,body.embed .dropdown{display:none!important}
+body.embed #ui-container{grid-template-columns:1fr;grid-template-areas:"header" "." "footer";
+  grid-template-rows:52px 1fr 0;padding:12px}
+body.embed .main-header{background:rgba(13,14,17,0.72);backdrop-filter:blur(8px);
+  -webkit-backdrop-filter:blur(8px)}
+body.embed .view-tools{bottom:14px}
+a.btn{text-decoration:none}
+
+@media (max-width:768px){
+  /* The status line and the Layers/Inspect toggles used to share the same
+     strip of screen and overlap; on phones the status line is dropped
+     (the same numbers are one tap away in the panels) and the view tools
+     sit to the right of the toggles instead of floating over the model. */
+  .status-bar{display:none}
+  #ui-container{grid-template-rows:56px 1fr 0}
+  .view-tools{left:auto;right:10px;bottom:10px;transform:none}
+  .vtool span{display:none}
+  .vtool{padding:8px 10px}
+  .sidebar-left,.sidebar-right{bottom:60px}
+  body.embed .main-header .logo{display:none}
+  body.embed .main-header{justify-content:flex-end}
+}
