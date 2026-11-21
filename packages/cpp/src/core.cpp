@@ -104,8 +104,7 @@ std::size_t zip_offset(const ByteBuffer& d) {
 // Records nested inside it are deliberately left lenient: in real files some
 // container payloads end with bytes that are not records, and a strict check
 // there would reject valid models.
-void require_complete_top_level(const ByteBuffer& d) {
-  const auto records = tlv_headers(d, 0, d.size());
+void require_complete_top_level(const ByteBuffer& d, const std::vector<TlvHeader>& records) {
   const auto p = records.empty() ? 0 : records.back().offset + 6 + records.back().size;
   if (d.size() - p >= 6) {
     const auto n = read_u32(d, p + 2);
@@ -375,8 +374,8 @@ std::vector<TlvHeader> model_records(const ByteBuffer& data) {
           data.size(), [&](std::size_t p) { return read_u16(data, p); },
           [&](std::size_t p) { return read_u32(data, p + 2); }))
     return std::move(*wrapped);
-  require_complete_top_level(data);
   auto hs = tlv_headers(data, 0, data.size());
+  require_complete_top_level(data, hs);
   if (hs.size() == 1 && data.at(hs[0].offset) == 0xf4 && data.at(hs[0].offset + 1) == 1)
     hs = tlv_headers(data, hs[0].offset + 6, hs[0].offset + 6 + hs[0].size);
 

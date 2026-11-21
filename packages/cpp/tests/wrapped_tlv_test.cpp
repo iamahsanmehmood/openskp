@@ -59,6 +59,75 @@ TEST(WrappedTlv, ModelCatalogDisambiguatesTwoExactPartitions) {
   EXPECT_FALSE(read());
 }
 
+TEST(WrappedTlv, SmallCatalogInsideWrappedModel) {
+  if (sizeof(std::size_t) < 8) GTEST_SKIP();
+  const auto entities = wrap - 16;
+  const auto end = entities + 70;
+  // The catalog fits in 32 bits. Adding root geometry wraps the outer size,
+  // making its stored end land in a definition payload.
+  SparseRecords d{{{0, 48},
+                   {6, static_cast<std::uint32_t>(entities - 12)},
+                   {12, static_cast<std::uint32_t>(entities - 18)},
+                   {18, static_cast<std::uint32_t>(entities - 24)},
+                   {24, static_cast<std::uint32_t>(entities - 30)},
+                   {entities, 64},
+                   {54, UINT32_MAX - 5}},
+                  {0, 6, 12, 18}};
+  std::map<std::size_t, std::uint16_t> tags{{0, 0x01f4},  {6, 0x01f9},  {12, 0x1770},
+                                            {18, 0x1771}, {24, 0x157c}, {entities, 0x01f6}};
+  const auto ordinary = d.scan(end);
+  ASSERT_EQ(ordinary.size(), 2u);
+  EXPECT_EQ(ordinary.back().offset, 54u);
+  const auto records = wrapped_model_records(
+      end, [&](auto p) { return tags.at(p); }, [&](auto p) { return d.lengths.at(p); });
+  ASSERT_TRUE(records);
+  ASSERT_EQ(records->size(), 2u);
+  EXPECT_EQ(records->front().offset, 24u);
+  EXPECT_EQ(records->back().offset, entities);
+}
+
+TEST(WrappedTlv, PreservesCompleteShortModelFollowedByTopLevelRecords) {
+  if (sizeof(std::size_t) < 8) GTEST_SKIP();
+  // The short model ends with its complete catalog. One more top-level record
+  // occupies exactly 4 GiB; the file size alone also matches a wrapped model.
+  const auto end = wrap + 54;
+  SparseRecords d{{{0, 48}, {6, 42}, {12, 36}, {18, 30}, {24, 24}, {54, UINT32_MAX - 5}},
+                  {0, 6, 12, 18}};
+  std::map<std::size_t, std::uint16_t> tags{{0, 0x01f4},  {6, 0x01f9},  {12, 0x1770},
+                                            {18, 0x1771}, {24, 0x157c}, {54, 0x01f6}};
+  const auto ordinary = d.scan(end);
+  ASSERT_EQ(ordinary.size(), 2u);
+  EXPECT_EQ(ordinary.back().offset, 54u);
+  const auto records = wrapped_model_records(
+      end, [&](auto p) { return tags.at(p); }, [&](auto p) { return d.lengths.at(p); });
+  EXPECT_FALSE(records);
+}
+
+TEST(WrappedTlv, ExtraTopLevelDefinitionsDoNotExtendACompleteCatalog) {
+  if (sizeof(std::size_t) < 8) GTEST_SKIP();
+  // A complete definition ends the catalog at 48. Two more definitions
+  // following the catalog can look like part of it modulo 2^32.
+  const auto entities = wrap + 48;
+  const auto end = entities + 6;
+  SparseRecords d{{{0, 48},
+                   {6, 36},
+                   {12, 30},
+                   {18, 24},
+                   {24, 18},
+                   {48, 0},
+                   {54, UINT32_MAX - 11},
+                   {entities, 0}},
+                  {0, 6, 12, 18}};
+  std::map<std::size_t, std::uint16_t> tags{{0, 0x01f4},  {6, 0x01f9},       {12, 0x1770},
+                                            {18, 0x1771}, {24, 0x157c},      {48, 0x157c},
+                                            {54, 0x157c}, {entities, 0x01f6}};
+  const auto ordinary = d.scan(end);
+  ASSERT_EQ(ordinary.size(), 3u);
+  EXPECT_EQ(ordinary[1].offset, 54u);
+  EXPECT_FALSE(wrapped_model_records(
+      end, [&](auto p) { return tags.at(p); }, [&](auto p) { return d.lengths.at(p); }));
+}
+
 TEST(WrappedTlv, NestedContainersAndFollowingSibling) {
   if (sizeof(std::size_t) < 8) GTEST_SKIP();
   // Four wrapped containers, a large opaque leaf and a final empty sibling.

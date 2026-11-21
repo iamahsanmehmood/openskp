@@ -297,11 +297,24 @@ std::optional<std::vector<TlvHeader>> wrapped_model_records(
       length(0) != static_cast<std::uint32_t>(end - 6))
     return std::nullopt;
 
+  const std::size_t stored_root_end = 6 + static_cast<std::size_t>(length(0));
+  std::size_t stored_parent_end = stored_root_end;
+  bool contradicts_stored_lengths = false;
   std::size_t pos = 6;
+  // Prefer a valid short model and its top-level siblings. Only override it
+  // when a complete child header declares data past its stored parent end.
+  auto checked_length = [&]() -> std::size_t {
+    const std::size_t size = length(pos);
+    auto crosses = [&](std::size_t limit) {
+      return pos <= limit && limit - pos >= 6 && size > limit - pos - 6;
+    };
+    if (crosses(stored_root_end) || crosses(stored_parent_end)) contradicts_stored_lengths = true;
+    return size;
+  };
   auto has = [&](std::uint16_t expected) { return end - pos >= 6 && tag(pos) == expected; };
   auto advance = [&]() {
     if (end - pos < 6) return false;
-    const std::size_t size = length(pos);
+    const std::size_t size = checked_length();
     if (size > end - pos - 6) return false;
     pos += 6 + size;
     return true;
@@ -315,6 +328,10 @@ std::optional<std::vector<TlvHeader>> wrapped_model_records(
   for (std::size_t i = 0; i < wrappers.size(); ++i) {
     if (!has(path[i])) return std::nullopt;
     wrappers[i] = pos;
+    const auto size = checked_length();
+    if (pos <= stored_parent_end && stored_parent_end - pos >= 6 &&
+        size <= stored_parent_end - pos - 6)
+      stored_parent_end = pos + 6 + size;
     pos += 6;
     if (has(0x0063) && !advance()) return std::nullopt;  // optional version record
   }
@@ -322,12 +339,13 @@ std::optional<std::vector<TlvHeader>> wrapped_model_records(
   while (has(0x157c))
     if (!advance()) return std::nullopt;
   const auto entities = pos;
-  if (entities - catalog - 6 < kTlvWrap || definitions == entities || !has(0x01f6))
-    return std::nullopt;
+  if (definitions == entities || !has(0x01f6)) return std::nullopt;
   for (const auto offset : wrappers)
     if (length(offset) != static_cast<std::uint32_t>(entities - offset - 6)) return std::nullopt;
+  stored_parent_end = stored_root_end;
   while (pos < end)
     if (!advance()) return std::nullopt;
+  if (!contradicts_stored_lengths) return std::nullopt;
 
   std::vector<TlvHeader> records;
   auto append = [&](std::size_t begin, std::size_t stop) {
