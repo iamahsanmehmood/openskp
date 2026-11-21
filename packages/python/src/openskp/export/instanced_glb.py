@@ -131,7 +131,10 @@ def export(
         )
 
     parsed = skp_file._parsed
-    scene_obj = _instanced_scene_mod.build_instanced_scene(parsed)
+    # Embedding textures decodes them with Pillow, which reads a TIFF, TGA or GIF
+    # texture as well as a PNG or JPEG one, so keep those in the scene (it would
+    # otherwise drop them) and let the GLB carry them re-encoded.
+    scene_obj = _instanced_scene_mod.build_instanced_scene(parsed, original_textures=textures)
 
     trimesh_scene = trimesh.Scene()
 

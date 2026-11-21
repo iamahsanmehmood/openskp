@@ -31,7 +31,7 @@ from . import _core
 from ._curves import _chain_loose_edges, _solve_run_arc
 from ._face_groups import FaceGroupContext, FaceGroupKey, build_local_face_groups
 from .errors import SkpParseError
-from .scene import SceneTexture, _sniff_image_mime, _warn_skipped_texture
+from .scene import SceneTexture, _original_image_mime, _sniff_image_mime, _warn_skipped_texture
 
 logger = logging.getLogger("openskp.instanced_scene")
 
@@ -265,6 +265,7 @@ def _mul4(a: Tuple[float, ...], b: Tuple[float, ...]) -> Tuple[float, ...]:
 def build_instanced_scene(
     parsed: Dict[str, Any],
     name_override_keys: Sequence[str] = ("name", "label", "code"),
+    original_textures: bool = False,
 ) -> InstancedScene:
     """Build an instanced scene from already-parsed raw data.
 
@@ -311,6 +312,8 @@ def build_instanced_scene(
         if not data:
             return None
         mime_type = _sniff_image_mime(data)
+        if mime_type is None and original_textures:
+            mime_type = _original_image_mime(data)
         if mime_type is None:
             # a format glTF cannot carry: leave it out, but say so
             _warn_skipped_texture(logger, skipped_textures, material_name, tex, data)

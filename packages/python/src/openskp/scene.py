@@ -151,7 +151,11 @@ class SceneTexture:
         data: The image file's raw bytes, exactly as stored in the .skp.
         mime_type: Sniffed from the bytes, not from ``filename`` -
             SketchUp records the authoring machine's path, whose
-            extension can disagree with the content.
+            extension can disagree with the content. ``image/png`` or
+            ``image/jpeg``, the two formats glTF holds, unless the scene
+            was built with ``original_textures=True``: then also the real
+            type of a TIFF, GIF, BMP, TGA, WebP, PSD, DDS or JPEG 2000
+            texture (``image/tiff``, ...), kept as SketchUp stores it.
         filename: Best-effort original filename, for diagnostics only.
     """
 
@@ -282,6 +286,29 @@ def _describe_image_format(data: bytes, filename: str = "") -> str:
     return ext.upper() if 0 < len(ext) <= 5 else "an unrecognized format"
 
 
+# The real MIME type of an image format a scene cannot carry as glTF but a consumer
+# may well read (Blender reads all of these), by the name _describe_image_format gives it.
+_ORIGINAL_IMAGE_MIME = {
+    "TIFF": "image/tiff",
+    "GIF": "image/gif",
+    "BMP": "image/bmp",
+    "TGA": "image/x-tga",
+    "WebP": "image/webp",
+    "PSD": "image/vnd.adobe.photoshop",
+    "DDS": "image/vnd.ms-dds",
+    "JPEG 2000": "image/jp2",
+}
+
+
+def _original_image_mime(data: bytes) -> Optional[str]:
+    """The MIME type of an image that is not PNG or JPEG, from its signature
+    (or, for a TGA, its footer), or ``None`` when the format is not one of
+    the known ones. A format named only by the source file's extension is not
+    trusted: the bytes could be anything."""
+    name = _describe_image_format(data)
+    return _ORIGINAL_IMAGE_MIME.get(name)
+
+
 def _warn_skipped_texture(
     log: logging.Logger,
     warned: set,
@@ -298,12 +325,14 @@ def _warn_skipped_texture(
         return
     warned.add((material_name, fmt))
     base = filename.replace("\\", "/").rsplit("/", 1)[-1]
+    keepable = _original_image_mime(data) is not None
     log.warning(
         "Texture of material %r%s is %s, which a scene cannot carry (only PNG and JPEG): "
-        "the material is built without its texture",
+        "the material is built without its texture%s",
         material_name or "(unnamed)",
         f" ({base})" if base else "",
         fmt,
+        " (pass original_textures=True to keep it in its own format)" if keepable else "",
     )
 
 
@@ -311,6 +340,7 @@ def build_scene(
     parsed: Dict[str, Any],
     name_override_keys: Sequence[str] = ("name", "label", "code"),
     include_curve_sets: bool = True,
+    original_textures: bool = False,
 ) -> Scene:
     """Bake every instance actually placed in ``parsed`` (the output of
     :func:`openskp._core.full_parse` / ``full_parse_legacy``) into
@@ -402,6 +432,8 @@ def build_scene(
         if not data:
             return None
         mime_type = _sniff_image_mime(data)
+        if mime_type is None and original_textures:
+            mime_type = _original_image_mime(data)
         if mime_type is None:
             # a format glTF cannot carry: leave it out, but say so
             _warn_skipped_texture(logger, skipped_textures, material_name, tex, data)
