@@ -259,6 +259,9 @@ struct TlvHeader {
 };
 
 // The reader overload permits sparse logical inputs in large-range tests.
+std::optional<std::vector<TlvHeader>> wrapped_model_records(
+    std::size_t end, const std::function<std::uint16_t(std::size_t)>& tag,
+    const std::function<std::uint32_t(std::size_t)>& length);
 std::vector<TlvHeader> tlv_headers(std::size_t start, std::size_t end,
                                    const std::function<std::uint32_t(std::size_t)>& length,
                                    const std::function<bool(std::size_t)>& container);
@@ -470,7 +473,7 @@ void collect_layers(const std::vector<TlvNode>&, std::map<EntityId, std::string>
 void collect_line_styles(const std::vector<TlvNode>&, std::map<EntityId, std::string>&);
 void collect_layers(const std::vector<TlvNode>&, std::map<EntityId, std::string>&,
                     std::map<std::string, bool>&, std::map<std::string, EntityId>&);
-void assign_vff_sections(const ByteBuffer&, RawParsed&);
+void assign_vff_sections(const ByteBuffer&, const std::vector<TlvHeader>&, RawParsed&);
 void collect_material_ids(const std::vector<TlvNode>&, std::map<EntityId, std::string>&);
 void collect_definitions(const std::vector<TlvNode>&, std::map<EntityId, RawDefinition>&);
 void collect_model_attribute_dictionaries(const TlvNode&, ParsedAttrDictionaries&);
@@ -484,7 +487,8 @@ double transform_determinant(const std::vector<double>&);
 std::vector<double> multiply_matrices(const std::vector<double>&, const std::vector<double>&);
 void scan_vertex_positions(const TlvNode&, std::map<std::string, Vec3>&);
 void scan_instance_transforms(const TlvNode&, std::map<std::string, std::vector<double>>&);
-void assign_vff_annotations(const ByteBuffer&, const std::map<std::string, Vec3>&,
+void assign_vff_annotations(const ByteBuffer&, const std::vector<TlvHeader>&,
+                            const std::map<std::string, Vec3>&,
                             const std::map<std::string, std::vector<double>>&, RawParsed&);
 void compose_instance_world(const RawDefinition&, const std::map<EntityId, RawDefinition>&,
                             std::map<std::string, std::vector<double>>&);

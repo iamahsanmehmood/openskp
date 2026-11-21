@@ -369,6 +369,31 @@ std::vector<TlvHeader> unwrap_definitions_container(const ByteBuffer& data, std:
   }
   return defs;
 }
+
+std::vector<TlvHeader> model_records(const ByteBuffer& data) {
+  if (auto wrapped = wrapped_model_records(
+          data.size(), [&](std::size_t p) { return read_u16(data, p); },
+          [&](std::size_t p) { return read_u32(data, p + 2); }))
+    return std::move(*wrapped);
+  require_complete_top_level(data);
+  auto hs = tlv_headers(data, 0, data.size());
+  if (hs.size() == 1 && data.at(hs[0].offset) == 0xf4 && data.at(hs[0].offset + 1) == 1)
+    hs = tlv_headers(data, hs[0].offset + 6, hs[0].offset + 6 + hs[0].size);
+
+  std::vector<TlvHeader> expanded_hs;
+  expanded_hs.reserve(hs.size());
+  for (const auto& h : hs) {
+    if (tag_at(data, h.offset) == "F901") {
+      auto def_headers = unwrap_definitions_container(data, h.offset, h.size);
+      if (!def_headers.empty()) {
+        expanded_hs.insert(expanded_hs.end(), def_headers.begin(), def_headers.end());
+        continue;
+      }
+    }
+    expanded_hs.push_back(h);
+  }
+  return expanded_hs;
+}
 }  // namespace
 
 // Decodes the 5 predefined XML entities plus numeric character references
@@ -486,24 +511,7 @@ RawParsed full_parse(const ByteBuffer& data, const ParseOptions& o) {
         }
   auto model = zip.get("model.dat");
   if (!model) throw SkpParseError("model.dat not found in ZIP container", ParseStage::zip_extract);
-  require_complete_top_level(*model);
-  auto hs = tlv_headers(*model, 0, model->size());
-  if (hs.size() == 1 && model->at(hs[0].offset) == 0xf4 && model->at(hs[0].offset + 1) == 1)
-    hs = tlv_headers(*model, hs[0].offset + 6, hs[0].offset + 6 + hs[0].size);
-
-  std::vector<TlvHeader> expanded_hs;
-  expanded_hs.reserve(hs.size());
-  for (const auto& h : hs) {
-    if (tag_at(*model, h.offset) == "F901") {
-      auto def_headers = unwrap_definitions_container(*model, h.offset, h.size);
-      if (!def_headers.empty()) {
-        expanded_hs.insert(expanded_hs.end(), def_headers.begin(), def_headers.end());
-        continue;
-      }
-    }
-    expanded_hs.push_back(h);
-  }
-  hs = std::move(expanded_hs);
+  auto hs = model_records(*model);
 
   std::map<std::string, Vec3> vertex_positions;
   std::map<std::string, std::vector<double>> instance_world;
@@ -584,12 +592,12 @@ RawParsed full_parse(const ByteBuffer& data, const ParseOptions& o) {
     // Keep the historical world-space model list for existing clients as well.
     compose_instance_world(p.root, p.definitions, instance_world);
     p.dimensions = parse_dimensions(*model, vertex_positions, instance_world);
-    assign_vff_annotations(*model, vertex_positions, instance_world, p);
+    assign_vff_annotations(*model, hs, vertex_positions, instance_world, p);
   } catch (...) {
     emit_log(o, LogLevel::debug, "Failed to parse annotations");
   }
   try {
-    assign_vff_sections(*model, p);
+    assign_vff_sections(*model, hs, p);
   } catch (...) {
     emit_log(o, LogLevel::debug, "Failed to parse section planes");
   }

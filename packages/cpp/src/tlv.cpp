@@ -286,6 +286,63 @@ class HeaderResolver {
 };
 }  // namespace
 
+// A complete ordinary header walk can start in attribute text and eventually
+// land on a real record. For a wrapped model, the definition catalog provides
+// independent evidence: each wrapper names the same end (modulo 2^32), the
+// intervening records are complete definitions, and the root entities follow.
+std::optional<std::vector<TlvHeader>> wrapped_model_records(
+    std::size_t end, const std::function<std::uint16_t(std::size_t)>& tag,
+    const std::function<std::uint32_t(std::size_t)>& length) {
+  if (end < 6 || end - 6 < kTlvWrap || tag(0) != 0x01f4 ||
+      length(0) != static_cast<std::uint32_t>(end - 6))
+    return std::nullopt;
+
+  std::size_t pos = 6;
+  auto has = [&](std::uint16_t expected) { return end - pos >= 6 && tag(pos) == expected; };
+  auto advance = [&]() {
+    if (end - pos < 6) return false;
+    const std::size_t size = length(pos);
+    if (size > end - pos - 6) return false;
+    pos += 6 + size;
+    return true;
+  };
+  // Scan without allocating a header per record until the layout is proven.
+  while (!has(0x01f9))
+    if (!advance()) return std::nullopt;
+  const auto catalog = pos;
+  std::array<std::size_t, 3> wrappers;
+  const std::uint16_t path[] = {0x01f9, 0x1770, 0x1771};
+  for (std::size_t i = 0; i < wrappers.size(); ++i) {
+    if (!has(path[i])) return std::nullopt;
+    wrappers[i] = pos;
+    pos += 6;
+    if (has(0x0063) && !advance()) return std::nullopt;  // optional version record
+  }
+  const auto definitions = pos;
+  while (has(0x157c))
+    if (!advance()) return std::nullopt;
+  const auto entities = pos;
+  if (entities - catalog - 6 < kTlvWrap || definitions == entities || !has(0x01f6))
+    return std::nullopt;
+  for (const auto offset : wrappers)
+    if (length(offset) != static_cast<std::uint32_t>(entities - offset - 6)) return std::nullopt;
+  while (pos < end)
+    if (!advance()) return std::nullopt;
+
+  std::vector<TlvHeader> records;
+  auto append = [&](std::size_t begin, std::size_t stop) {
+    for (auto p = begin; p < stop;) {
+      const std::size_t size = length(p);
+      records.push_back({p, size});
+      p += 6 + size;
+    }
+  };
+  append(6, catalog);
+  append(definitions, entities);
+  append(entities, end);
+  return records;
+}
+
 std::vector<TlvHeader> tlv_headers(std::size_t start, std::size_t end,
                                    const std::function<std::uint32_t(std::size_t)>& length,
                                    const std::function<bool(std::size_t)>& container) {

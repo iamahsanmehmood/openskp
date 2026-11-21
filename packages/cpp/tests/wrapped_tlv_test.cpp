@@ -21,6 +21,44 @@ struct SparseRecords {
   }
 };
 
+TEST(WrappedTlv, ModelCatalogDisambiguatesTwoExactPartitions) {
+  if (sizeof(std::size_t) < 8) GTEST_SKIP();
+  const auto entities = wrap + 48;
+  const auto end = entities + 6;
+  // An ordinary top-level walk reads the short wrapper and a spurious leaf
+  // inside the first definition. Both that walk and the real model end at EOF.
+  SparseRecords d{{{0, 48},
+                   {6, 36},
+                   {12, 30},
+                   {18, 24},
+                   {24, UINT32_MAX},
+                   {wrap + 29, 13},
+                   {entities, 0},
+                   {54, UINT32_MAX - 5}},
+                  {0, 6, 12, 18}};
+  const auto ordinary = d.scan(end);
+  ASSERT_EQ(ordinary.size(), 2u);
+  EXPECT_EQ(ordinary.back().offset, 54u);
+  std::map<std::size_t, std::uint16_t> tags{{0, 0x01f4},       {6, 0x01f9},  {12, 0x1770},
+                                            {18, 0x1771},      {24, 0x157c}, {wrap + 29, 0x157c},
+                                            {entities, 0x01f6}};
+  auto read = [&] {
+    return wrapped_model_records(
+        end, [&](auto p) { return tags.at(p); }, [&](auto p) { return d.lengths.at(p); });
+  };
+  const auto records = read();
+  ASSERT_TRUE(records);
+  ASSERT_EQ(records->size(), 3u);
+  EXPECT_EQ(records->at(0).offset, 24u);
+  EXPECT_EQ(records->at(1).offset, wrap + 29);
+  EXPECT_EQ(records->at(2).offset, entities);
+  ++d.lengths[12];
+  EXPECT_FALSE(read());
+  --d.lengths[12];
+  tags[entities] = 0x157e;
+  EXPECT_FALSE(read());
+}
+
 TEST(WrappedTlv, NestedContainersAndFollowingSibling) {
   if (sizeof(std::size_t) < 8) GTEST_SKIP();
   // Four wrapped containers, a large opaque leaf and a final empty sibling.
