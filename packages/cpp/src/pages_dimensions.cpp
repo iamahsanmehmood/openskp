@@ -311,34 +311,13 @@ std::optional<EntityId> entity_id_from_tlv(const ByteBuffer& md, std::size_t rec
 // F601/geometry false-matches and parks model-root (or in-group) 5BCC on
 // the wrong definition.
 std::vector<DefSpan> scan_definition_spans(const ByteBuffer& md,
+                                           const std::vector<TlvHeader>& records,
                                            const std::map<EntityId, RawDefinition>& defs) {
   std::vector<DefSpan> spans;
-  if (md.size() < 6) return spans;
-  auto hs = tlv_headers(md, 0, md.size());
-  if (hs.size() == 1 && md[hs[0].offset] == 0xf4 && md[hs[0].offset + 1] == 1) {
-    hs = tlv_headers(md, hs[0].offset + 6, hs[0].offset + 6 + hs[0].size);
-  }
-  for (const auto& h : hs) {
-    if (tag_at(md, h.offset) != "F901") continue;
-    auto level = tlv_headers(md, h.offset + 6, h.offset + 6 + h.size);
-    bool ok = true;
-    for (const char* expected : {"7017", "7117"}) {
-      auto it = std::find_if(level.begin(), level.end(), [&](const TlvHeader& rec) {
-        return tag_at(md, rec.offset) == expected;
-      });
-      if (it == level.end()) {
-        ok = false;
-        break;
-      }
-      level = tlv_headers(md, it->offset + 6, it->offset + 6 + it->size);
-    }
-    if (!ok) continue;
-    for (const auto& rec : level) {
-      if (tag_at(md, rec.offset) != "7C15") continue;
-      auto id = entity_id_from_tlv(md, rec.offset, rec.offset + 6 + rec.size);
-      if (!id || !defs.count(*id)) continue;
-      spans.push_back({rec.offset, rec.offset + 6 + rec.size, *id});
-    }
+  for (const auto& rec : records) {
+    if (tag_at(md, rec.offset) != "7C15") continue;
+    auto id = entity_id_from_tlv(md, rec.offset, rec.offset + 6 + rec.size);
+    if (id && defs.count(*id)) spans.push_back({rec.offset, rec.offset + 6 + rec.size, *id});
   }
   return spans;
 }
@@ -487,10 +466,11 @@ std::vector<RawDimension> parse_dimensions(
   return dims;
 }
 
-void assign_vff_annotations(const ByteBuffer& model_dat, const std::map<std::string, Vec3>& id2pos,
+void assign_vff_annotations(const ByteBuffer& model_dat, const std::vector<TlvHeader>& records,
+                            const std::map<std::string, Vec3>& id2pos,
                             const std::map<std::string, std::vector<double>>& model_world,
                             RawParsed& parsed) {
-  const auto spans = scan_definition_spans(model_dat, parsed.definitions);
+  const auto spans = scan_definition_spans(model_dat, records, parsed.definitions);
   // One definition's composed instance transforms at a time. A definition's 5BCC records sit
   // inside its own 7C15 span, so they arrive together; keeping a composed map for every owner
   // grew by gigabytes on large models with many dimensioned components.
@@ -550,7 +530,8 @@ void assign_vff_annotations(const ByteBuffer& model_dat, const std::map<std::str
   }
 }
 
-void assign_vff_sections(const ByteBuffer& md, RawParsed& parsed) {
+void assign_vff_sections(const ByteBuffer& md, const std::vector<TlvHeader>& records,
+                         RawParsed& parsed) {
   const auto read_owner = [&](std::size_t begin, std::size_t end, GeometryBuilder& builder) {
     for (const auto& container : tlv_headers(md, begin, end)) {
       if (tag_at(md, container.offset) != "8813") continue;
@@ -592,12 +573,9 @@ void assign_vff_sections(const ByteBuffer& md, RawParsed& parsed) {
       }
     }
   };
-  for (const auto& span : scan_definition_spans(md, parsed.definitions))
+  for (const auto& span : scan_definition_spans(md, records, parsed.definitions))
     read_owner(span.begin + 6, span.end, parsed.definitions.at(span.id).builder);
-  auto top = tlv_headers(md, 0, md.size());
-  if (top.size() == 1 && tag_at(md, top[0].offset) == "F401")
-    top = tlv_headers(md, top[0].offset + 6, top[0].offset + 6 + top[0].size);
-  for (const auto& record : top)
+  for (const auto& record : records)
     if (tag_at(md, record.offset) == "F601")
       read_owner(record.offset + 6, record.offset + 6 + record.size, parsed.root.builder);
 }
