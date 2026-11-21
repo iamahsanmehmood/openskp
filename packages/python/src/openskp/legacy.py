@@ -341,6 +341,11 @@ class _Archive:
             return
         if ea[1] != 'CLayer' or eb[1] != 'CLayer':
             return
+        # <anchor u16><def_count u32><definition> is already the usual
+        # layout: a def_count whose low u16 matches a CLayer slot is not a
+        # parent back-ref.
+        if r.pos + 6 < len(self.data) and _definition_starts_at(self, r.pos + 6):
+            return
         r.pos += 2
 
     # Extra CLayer records past declared layer_count (v18: count=1 custom
