@@ -31,7 +31,7 @@ from . import _core
 from ._curves import _chain_loose_edges, _solve_run_arc
 from ._face_groups import FaceGroupContext, FaceGroupKey, build_local_face_groups
 from .errors import SkpParseError
-from .scene import SceneTexture, _sniff_image_mime
+from .scene import SceneTexture, _sniff_image_mime, _warn_skipped_texture
 
 logger = logging.getLogger("openskp.instanced_scene")
 
@@ -302,8 +302,9 @@ def build_instanced_scene(
     # Textures deduplicated by bytes, exactly as the baked path does.
     textures: List[SceneTexture] = []
     texture_index_by_key: Dict[str, int] = {}
+    skipped_textures: set = set()
 
-    def texture_index_for(tex: Optional[Dict[str, Any]]) -> Optional[int]:
+    def texture_index_for(tex: Optional[Dict[str, Any]], material_name: Optional[str] = None) -> Optional[int]:
         if not tex:
             return None
         data = tex.get("data")
@@ -311,7 +312,9 @@ def build_instanced_scene(
             return None
         mime_type = _sniff_image_mime(data)
         if mime_type is None:
-            return None  # a format glTF cannot carry
+            # a format glTF cannot carry: leave it out, but say so
+            _warn_skipped_texture(logger, skipped_textures, material_name, tex, data)
+            return None
         key = f"{len(data)}:{data[:16].hex()}"
         hit = texture_index_by_key.get(key)
         if hit is not None:

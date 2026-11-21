@@ -256,6 +256,57 @@ def _sniff_image_mime(data: bytes) -> Optional[str]:
     return None
 
 
+def _describe_image_format(data: bytes, filename: str = "") -> str:
+    """A short name for an image's format, for a message about a texture the
+    scene cannot carry: from the bytes' own signature, else from the source
+    file name's extension (TGA has no signature at the start), else a plain
+    "unrecognized format"."""
+    head = data[:16]
+    if head[:4] in (b"II*\x00", b"MM\x00*"):
+        return "TIFF"
+    if head[:2] == b"BM":
+        return "BMP"
+    if head[:6] in (b"GIF87a", b"GIF89a"):
+        return "GIF"
+    if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        return "WebP"
+    if head[:4] == b"8BPS":
+        return "PSD"
+    if head[:4] == b"DDS ":
+        return "DDS"
+    if head[:8] == b"\x00\x00\x00\x0cjP  ":
+        return "JPEG 2000"
+    if b"TRUEVISION-XFILE" in data[-26:]:
+        return "TGA"
+    ext = filename.replace("\\", "/").rsplit("/", 1)[-1].rsplit(".", 1)[-1] if "." in filename else ""
+    return ext.upper() if 0 < len(ext) <= 5 else "an unrecognized format"
+
+
+def _warn_skipped_texture(
+    log: logging.Logger,
+    warned: set,
+    material_name: Optional[str],
+    tex: Dict[str, Any],
+    data: bytes,
+) -> None:
+    """Say, once per material and format, that a texture the scene cannot
+    carry (anything but PNG and JPEG) was left out, so the material is built
+    without it. Before, the texture just vanished."""
+    filename = tex.get("filename") or ""
+    fmt = _describe_image_format(data, filename)
+    if (material_name, fmt) in warned:
+        return
+    warned.add((material_name, fmt))
+    base = filename.replace("\\", "/").rsplit("/", 1)[-1]
+    log.warning(
+        "Texture of material %r%s is %s, which a scene cannot carry (only PNG and JPEG): "
+        "the material is built without its texture",
+        material_name or "(unnamed)",
+        f" ({base})" if base else "",
+        fmt,
+    )
+
+
 def build_scene(
     parsed: Dict[str, Any],
     name_override_keys: Sequence[str] = ("name", "label", "code"),
@@ -342,8 +393,9 @@ def build_scene(
     # the export size for nothing.
     textures: List[SceneTexture] = []
     texture_index_by_key: Dict[str, int] = {}
+    skipped_textures: set = set()
 
-    def texture_index_for(tex: Optional[Dict[str, Any]]) -> Optional[int]:
+    def texture_index_for(tex: Optional[Dict[str, Any]], material_name: Optional[str] = None) -> Optional[int]:
         if not tex:
             return None
         data = tex.get("data")
@@ -351,7 +403,9 @@ def build_scene(
             return None
         mime_type = _sniff_image_mime(data)
         if mime_type is None:
-            return None  # a format glTF cannot carry
+            # a format glTF cannot carry: leave it out, but say so
+            _warn_skipped_texture(logger, skipped_textures, material_name, tex, data)
+            return None
         # length plus a short byte prefix is enough to tell real images
         # apart without hashing megabytes on every face
         key = f"{len(data)}:{data[:16].hex()}"

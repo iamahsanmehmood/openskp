@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Python: a texture a scene cannot carry is reported
+
+- `build_scene` and `build_instanced_scene` leave out a texture that is not PNG or JPEG, because a scene is
+  glTF-shaped and glTF holds only those two. They did it silently: the material came out untextured with no
+  hint why (a TIFF-textured material, blender-openskp#17). They now log a warning on the `openskp.scene` or
+  `openskp.instanced_scene` logger, once per material and format, naming the material, the format and the image's
+  file name (not its path): `Texture of material 'Tex_TIF' (tex.tif) is TIFF, which a scene cannot carry (only
+  PNG and JPEG): the material is built without its texture`. The format is read from the image's own bytes, else
+  from the file name's extension. Nothing else changes: the scene is the same as before.
+- Checked with SketchUp's own library, one model per format: SketchUp keeps a texture in the format it was
+  imported in (TIFF, TGA and GIF stay as they are, and `parse()` still returns them with the material), except
+  BMP, which it converts to PNG, so a BMP-textured material needs no warning. Carrying the original bytes through
+  the scene for the consumers that can read them (openskp#511) is still open. Fixtures:
+  `texture_tiff_2017.skp`, `texture_tiff_2021.skp`, `texture_bmp_2021.skp`.
+
 ### Fixed — TypeScript: GLB files with non-ASCII names are 4-byte aligned again
 
 - `toGLB` and `toInstancedGLB` padded the JSON chunk by the JavaScript string's length instead of

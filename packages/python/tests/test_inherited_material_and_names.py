@@ -55,7 +55,7 @@ def _square_builder(*face_materials):
 def _groups(builder, fallback_material=None, fallback_color=(136, 136, 136)):
     textures = []
 
-    def texture_index_for(tex):
+    def texture_index_for(tex, material_name=None):
         if not tex:
             return None
         if tex not in textures:
