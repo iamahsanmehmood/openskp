@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.0] — 2026-11-22 — all 5 languages
+
+> What most readers will notice, from the entries below (everything since 1.5.0):
+>
+> - **Files that failed now read.** Python reads SketchUp 2019 and 2020 models whose tags have a
+>   line style (#514, reported by @mschache) and classic files whose definition count happens to
+>   match a tag's slot. Damaged or hostile input now fails the same clean way in all five
+>   languages: very deep nesting, deeply nested `meta.dat` wrappers and a truncated `model.dat`
+>   (#496, #497, #498) no longer crash a process or parse as an empty model.
+> - **Python scenes are closer to what SketchUp shows.** A painted group or component passes its
+>   whole material (texture, transparency) to the faces inside it, materials keep their SketchUp
+>   names, colorized textures are flagged, and a definition's and the model's own attribute
+>   dictionaries (the Dynamic Components formulas and options) are read, in classic files too.
+>   A texture a scene cannot carry (TIFF, TGA, GIF) is now reported, and kept in its own format
+>   with `original_textures=True`.
+> - **All five:** a concave four-sided face is no longer triangulated across its outside (#493).
+> - **Writers:** files from the TypeScript, .NET and Dart writers can be saved by SketchUp for
+>   Web (#492, found by Aleksei Gurianov), and the .NET writer's large-file marker is right.
+> - **C++ (contributed by @modraup):** component GUIDs, annotation tags and visibility, DXF layer
+>   names and long attribute strings; C++ also reads the entities a scene hides (#472).
+> - **TypeScript:** GLB files with non-ASCII names are aligned again (@Goodsmileduck), and the
+>   instanced scene keeps an instance's Hide flag.
+> - **Rust:** a sixth package, in `packages/rust` (not published yet), contributed by
+>   @francisreboucas.
+>
+> Upgrade notes: in C++, definition and instance GUID strings are now in canonical UUID byte order
+> (a behaviour change; anything that stored the old strings has to normalise them). In Python
+> scenes, an unpainted face inside a painted group now takes the group's material, and two
+> differently named materials of one colour stay two materials, so a scene can have more
+> `gltf_materials` than before. A texture kept with `original_textures=True` can be any image
+> type, so a consumer that assumes PNG or JPEG should leave the option off (it is off by default).
+> The other four languages have not been checked against the Python and C++ changes listed here;
+> they are in the porting backlog (#285).
+
+### Added — Rust: the sixth package, `packages/rust` (not published yet)
+
+- A pure Rust port of the C++ package with no external crates (DEFLATE, ZIP and FlatBuffers are
+  implemented in the tree), contributed by @francisreboucas in four parts (#506, #507, #508, #509)
+  and accepted as a sixth language. It reads both containers (VFF, SketchUp 2021+, and the classic
+  2013-2020 one), writes and edits (`create()`, `open_existing()`, `to_rust_code()`), and converts to
+  GLB (flat and instanced), OBJ/MTL, STL, PLY, DXF, IFC4, JSON and Fragments. It is not on crates.io
+  yet; depend on it by path or by git. Its version follows the other five.
+
 ### Added — Python: a texture can stay in its own format (`original_textures=True`)
 
 - `SkpFile.build_scene`, `SkpFile.build_instanced_scene` and the two module-level builders take
@@ -34,7 +77,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Checked with SketchUp's own library, one model per format: SketchUp keeps a texture in the format it was
   imported in (TIFF, TGA and GIF stay as they are, and `parse()` still returns them with the material), except
   BMP, which it converts to PNG, so a BMP-textured material needs no warning. Carrying the original bytes through
-  the scene for the consumers that can read them (openskp#511) is still open. Fixtures:
+  the scene is the entry above (`original_textures=True`). Fixtures:
   `texture_tiff_2017.skp`, `texture_tiff_2021.skp`, `texture_bmp_2021.skp`.
 
 ### Fixed — TypeScript: GLB files with non-ASCII names are 4-byte aligned again
@@ -81,6 +124,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Porting note: same behaviour expected in the other four languages (inherit the painted
 instance's material, not its colour; material name in the scene-material identity; colorize
 flag on the scene material).
+
 ### Added — Python: a definition's and the model's own attribute dictionaries (2021+ files)
 
 - SketchUp's Dynamic Components keep a component's attributes, formulas and option definitions
@@ -98,7 +142,8 @@ flag on the scene material).
   dictionaries of the definition it places, stringified like `properties`; `properties` itself is
   unchanged. Checked against SketchUp's Ruby API on that model: all 11,400 attribute values of its
   209 placements match.
-- Not read from classic (pre-2021) files yet (the C++ reader reads them from some, such as `gondola_v20.skp`). Fixture: `definition_attribute_dictionaries_2026.skp`
+- Classic (pre-2021) files are read too, see the entry "A classic (pre-2021) file keeps its definitions' and its
+  model's own attribute dictionaries" above (#532). Fixture: `definition_attribute_dictionaries_2026.skp`
   (synthetic, saved by SketchUp 2026).
 
 ### Added — C++: the entities a scene hides (#472)
@@ -120,13 +165,6 @@ flag on the scene material).
 - Fixtures `scene_hidden_entities_2017/2019/2020/2024.skp`, built and saved through SketchUp
   2024's library with `SUSceneSetDrawingElementHidden`; `SUSceneGetHiddenEntities` reads the same
   sets back from each.
-### Fixed — TypeScript: GLB files with non-ASCII names are 4-byte aligned again
-
-- `toGLB` and `toInstancedGLB` padded the JSON chunk by the JavaScript string's length instead of
-  its UTF-8 byte length. A node, mesh or material name with characters outside ASCII ("Kursi ñ 椅子")
-  then left the JSON chunk's length off a multiple of 4 and the BIN chunk misaligned, which glTF
-  2.0 does not allow and strict loaders and validators reject. The JSON is now encoded first and
-  padded with spaces to a multiple of 4 bytes. The other ports already padded by bytes.
 
 ### Fixed — Python: SketchUp 2019 and 2020 models whose tags have a line style (#514)
 
@@ -192,6 +230,7 @@ All five readers handled three kinds of damaged or hostile input badly. They now
   saying the record declares more bytes than the data holds. Only the top-level record is checked:
   in real files some container payloads end with bytes that are not records (text that parses as
   headers whose lengths overrun the container, found at the same depth in all 53 files checked), so the nested records stay lenient. Every real file ends exactly on its top-level record.
+
 ### Fixed — files the TypeScript, .NET and Dart writers produced could not be saved by SketchUp for Web (#492)
 
 The Python and C++ writers already gave every entity in a file its own persistent id. The other

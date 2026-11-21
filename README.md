@@ -115,7 +115,7 @@ for anything specific to FreeCAD/Blender behavior.
 | 🎯 **Dart / Flutter** | [![Pub](https://img.shields.io/pub/v/openskp.svg?label=)](https://pub.dev/packages/openskp) | ✅ Available | `dart pub add openskp` |
 | ⚙️ **C++17** | [![C++](https://img.shields.io/github/v/release/iamahsanmehmood/openskp?filter=cpp-v*&label=)](https://github.com/iamahsanmehmood/openskp/releases?q=cpp-) | ✅ Source package | `find_package(OpenSkp CONFIG REQUIRED)` |
 
-All five languages are on **1.5.0** as of the 2026-11-03 synchronized
+All five languages are on **1.6.0** as of the 2026-11-22 synchronized
 release — same version number, not identical capability: Python carries a
 few things (writing scenes, per-edge and per-face layer ids, loose-edge
 curve scene support) the other four don't have yet, and C++ has a few
