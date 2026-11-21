@@ -594,10 +594,12 @@ impl<'a> Archive<'a> {
             schema: 0,
             v: None,
         });
+        let mut boxed = Box::new(LegacyValue::default());
         self.depth += 1;
-        let read_res = self.read(&n, slot);
+        let read_res = self.read(&n, slot, &mut boxed);
         self.depth -= 1;
-        let v = Rc::new(read_res?);
+        read_res?;
+        let v: Rc<LegacyValue> = Rc::from(boxed);
         self.slots.entry(slot).or_default().v = Some(v.clone());
         if &*n == "CDimensionLinear" || &*n == "CText" {
             self.annot_watermark = Some(self.next);
@@ -609,8 +611,7 @@ impl<'a> Archive<'a> {
         })
     }
 
-    fn read(&mut self, n: &str, this: u64) -> Result<LegacyValue> {
-        let mut v = LegacyValue::default();
+    fn read(&mut self, n: &str, this: u64, v: &mut LegacyValue) -> Result<()> {
         match n {
             "CVertex" => {
                 self.early_preamble()?;
@@ -620,7 +621,7 @@ impl<'a> Archive<'a> {
             "CEdge" => {
                 self.preamble()?;
                 v.k = LegacyKind::Edge;
-                self.draw(&mut v)?;
+                self.draw(v)?;
                 v.v1 = self.object(Some("CVertex"))?.slot;
                 v.v2 = self.object(Some("CVertex"))?.slot;
                 let curve = self.object(None)?;
@@ -647,42 +648,7 @@ impl<'a> Archive<'a> {
                 v.arc.end_angle = self.r.f64()?;
                 v.arc.y_axis = self.r.vec3()?;
             }
-            "CEdgeUse" => {
-                self.early_preamble()?;
-                v.k = LegacyKind::EdgeUse;
-                v.edge = self.object(Some("CEdge"))?.slot;
-                v.sense = self.r.u8()? != 0;
-                // parent-loop back-ref: the alignment oracle. Read as a RAW
-                // file index - after annotations the claimed index can sit
-                // AHEAD of the walker's numbering (burned MapObject indices,
-                // see register_burn()), which is a correction signal, not a
-                // mis-parse.
-                let p0 = self.r.p;
-                let tag = self.r.u16()?;
-                let parent = if tag == 0x7fff {
-                    let big = self.r.u32()?;
-                    if big & 0x8000_0000 != 0 {
-                        return Err(Error::runtime("edge-use parent is a new object"));
-                    }
-                    Some(u64::from(big))
-                } else if tag == 0xffff || tag & 0x8000 != 0 {
-                    return Err(Error::runtime("edge-use parent is a new object"));
-                } else if tag != 0 {
-                    Some(u64::from(tag))
-                } else {
-                    None
-                };
-                let expected = self.current_loop + self.cum_delta;
-                if parent != Some(expected) {
-                    let delta = parent.map_or(0, |p| p as i64 - expected as i64);
-                    if delta > 0 && delta <= 4096 && self.annot_watermark.is_some() {
-                        self.register_burn(delta as u64);
-                    } else {
-                        self.r.p = p0;
-                        return Err(Error::runtime("edge-use parent mismatch"));
-                    }
-                }
-            }
+            "CEdgeUse" => self.read_edge_use(v)?,
             "CLoop" => {
                 let old = self.current_loop;
                 self.current_loop = this;
@@ -697,115 +663,11 @@ impl<'a> Archive<'a> {
                 self.r.u16()?;
                 self.current_loop = old;
             }
-            "CFace" => {
-                let (attrs, lead_cls) = self.preamble_cls()?;
-                v.attrs = attrs;
-                v.k = LegacyKind::Face;
-                self.draw(&mut v)?;
-                if self.ver < FIRST_V4 && &*lead_cls == "CMaterial" {
-                    if let Some(a) = v.attrs {
-                        // SketchUp 3: the pointer that opens a face is its
-                        // FRONT MATERIAL (null for an unpainted face), not an
-                        // attribute container.
-                        v.mat = a as i32;
-                        v.attrs = None;
-                    }
-                }
-                v.plane = self.r.f64s(4)?;
-                let count = self.r.u32()?;
-                if count > 10000 {
-                    return Err(Error::runtime("implausible loop count"));
-                }
-                for _ in 0..count {
-                    if let Some(q) = self.object(Some("CLoop"))?.v {
-                        v.loops.push(q);
-                    }
-                }
-                v.back_mat = i32::from(self.r.u16()?);
-            }
-            "CAttributeContainer" => {
-                self.preamble()?;
-                v.k = LegacyKind::Attrs;
-                while self.r.p + 2 <= self.r.d.len() && read_u16(self.r.d, self.r.p)? != 0 {
-                    let q = self.object(Some("CAttributeNamed"))?;
-                    v.ents.push(q);
-                }
-                self.r.u16()?;
-            }
-            "CAttributeNamed" => {
-                self.preamble()?;
-                v.k = LegacyKind::Dict;
-                self.r.skip(4)?;
-                v.name = self.r.utf16()?;
-                loop {
-                    let key = self.r.utf16()?;
-                    if key.is_empty() {
-                        break;
-                    }
-                    let t = self.r.u8()?;
-                    let value = self.r.attr_value(t)?;
-                    v.entries.insert(key, value);
-                }
-                // Trailing u32 is a v7+ addition - a real SketchUp 6 file ends
-                // the record at the empty-key terminator with nothing after
-                // it (openskp#284's V6 signature; openskp#385). The class is
-                // always learned from the unwalked pre-model region, so its
-                // schema can't gate this - the file's version is the only
-                // signal available.
-                if self.ver >= 7 {
-                    self.r.u32()?;
-                }
-            }
-            "CLayer" => {
-                v.attrs = self.early_preamble()?;
-                v.k = LegacyKind::Layer;
-                v.name = self.r.utf16()?;
-                let mut mid = Vec::new();
-                while mid.len() < 8 && !self.r.marker() {
-                    mid.push(self.r.u8()?);
-                }
-                v.hidden = mid.first().map_or(0, |&b| i32::from(b));
-                self.r.utf16()?;
-                let flags = self.r.u16()?;
-                if flags & 0x00ff != 0 {
-                    // Colour-by-layer with a TEXTURED material: the layer
-                    // embeds the same texture block a CMaterial carries. Low
-                    // byte of the flag word set = textured.
-                    self.texture_block(&mut v)?;
-                    self.r.skip(4)?; // trailing u32
-                } else {
-                    let c = self.r.raw(4)?;
-                    v.r = i32::from(c[0]);
-                    v.g = i32::from(c[1]);
-                    v.b = i32::from(c[2]);
-                    self.r.utf16()?;
-                    // SketchUp 3's tail is 4 bytes shorter
-                    self.r.skip(if self.ver < FIRST_V4 { 17 } else { 21 })?;
-                    self.skip_clayer_colour_ext();
-                    self.skip_clayer_parent_ref(this);
-                }
-            }
-            "CMaterial" => {
-                self.early_preamble()?;
-                v.k = LegacyKind::Material;
-                v.name = self.r.utf16()?;
-                let flag = self.r.u16()?;
-                if flag == 0 {
-                    let c = self.r.raw(4)?;
-                    v.r = i32::from(c[0]);
-                    v.g = i32::from(c[1]);
-                    v.b = i32::from(c[2]);
-                    v.a = i32::from(c[3]);
-                    self.r.utf16()?;
-                    self.r.skip(8)?;
-                    v.opacity = self.r.f64()?;
-                    if self.r.u8()? == 0 {
-                        v.opacity = 0.0;
-                    }
-                } else {
-                    self.texture_block(&mut v)?;
-                }
-            }
+            "CFace" => self.read_face(v)?,
+            "CAttributeContainer" => self.read_attribute_container(v)?,
+            "CAttributeNamed" => self.read_attribute_named(v)?,
+            "CLayer" => self.read_layer(this, v)?,
+            "CMaterial" => self.read_material(v)?,
             "CDib" => {
                 v.k = LegacyKind::Dib;
                 self.r.u32()?;
@@ -815,25 +677,7 @@ impl<'a> Archive<'a> {
                 }
                 v.blob = self.r.raw(z as usize)?.to_vec();
             }
-            "CFaceTextureCoords" => {
-                self.preamble()?;
-                v.k = LegacyKind::Ftc;
-                self.r.u32()?;
-                let a = self.r.f64s(24)?;
-                v.uvf = a[0..9].to_vec();
-                v.uvb = a[12..21].to_vec();
-                for _ in 0..2 {
-                    let mut z = self.r.u32()?;
-                    while z > 0 {
-                        z -= 1;
-                        self.r.f64s(4)?;
-                    }
-                }
-                let fflags = self.r.u32()?;
-                let bflags = self.r.u32()?;
-                v.front_projected = fflags & 2 != 0;
-                v.back_projected = bflags & 2 != 0;
-            }
+            "CFaceTextureCoords" => self.read_ftc(v)?,
             "CCamera" => {
                 self.r.skip(137)?;
                 self.r.u16()?;
@@ -862,7 +706,7 @@ impl<'a> Archive<'a> {
                 // source path string, and a 16-byte GUID.
                 self.preamble()?;
                 v.k = LegacyKind::Image;
-                self.draw(&mut v)?;
+                self.draw(v)?;
                 v.def = self.object(None)?.slot;
                 v.xf = self.r.f64s(12)?;
                 self.r.f64()?; // constant 1.0
@@ -878,66 +722,11 @@ impl<'a> Archive<'a> {
                 self.entity_ref(false)?;
                 self.entity_ref(false)?;
             }
-            "CConstructionLine" => {
-                self.preamble()?;
-                v.k = LegacyKind::ConstructionLine;
-                self.draw(&mut v)?;
-                // point(3) + direction(3) + two signed distance params along
-                // direction marking where the visible segment starts/ends. A
-                // parameter magnitude past HUGE_PARAM means unbounded in that
-                // direction (matches the real API returning nil).
-                let lp = self.r.f64s(8)?;
-                v.xyz = [lp[0], lp[1], lp[2]];
-                v.direction = [lp[3], lp[4], lp[5]];
-                const HUGE_PARAM: f64 = 1e20;
-                let (start_param, end_param) = (lp[6], lp[7]);
-                let at = |t: f64| -> [f64; 3] {
-                    [lp[0] + lp[3] * t, lp[1] + lp[4] * t, lp[2] + lp[5] * t]
-                };
-                if start_param.abs() < HUGE_PARAM {
-                    v.start = Some(at(start_param));
-                }
-                if end_param.abs() < HUGE_PARAM {
-                    v.end = Some(at(end_param));
-                }
-                // The trailing block varies by the WRITING BUILD, not cleanly
-                // by version: 7 bytes on the v17 calibration corpus, 4 on v16
-                // and on a real v18, 0 on another real v17. Self-calibrate on
-                // the first guide line of the file - the length that lands on
-                // a legitimate next tag (strict forms only) - and cache it for
-                // the rest of the file.
-                if self.cline_tail.is_none() {
-                    let dflt: usize = if self.ver == 17 { 7 } else { 4 };
-                    let mut order = vec![dflt];
-                    for c in [0usize, 4, 7] {
-                        if c != dflt {
-                            order.push(c);
-                        }
-                    }
-                    // Strong tags first (escape / known class / class
-                    // definition). The weak (null) pass is the last-in-list
-                    // case: a construction line that is the last entity in a
-                    // CComponentDefinition is followed by nrel=0, which looks
-                    // like a null tag at every candidate - prefer 4 there.
-                    let p = self.r.p;
-                    let k = order
-                        .iter()
-                        .copied()
-                        .find(|&c| self.strict_next_tag(p + c, false))
-                        .or_else(|| {
-                            [4usize, 0, 7]
-                                .into_iter()
-                                .find(|&c| self.strict_next_tag(p + c, true))
-                        });
-                    self.cline_tail = Some(k.unwrap_or(4));
-                }
-                let tail = self.cline_tail.unwrap_or(4);
-                self.r.skip(tail)?;
-            }
+            "CConstructionLine" => self.read_construction_line(v)?,
             "CConstructionPoint" => {
                 self.preamble()?;
                 v.k = LegacyKind::ConstructionPoint;
-                self.draw(&mut v)?;
+                self.draw(v)?;
                 v.xyz = self.r.vec3()?;
                 self.r.vec3()?; // reserved/unused (observed all-zero)
                 self.r.u8()?; // reserved/unused (observed 0)
@@ -945,7 +734,7 @@ impl<'a> Archive<'a> {
             "CSectionPlane" => {
                 self.preamble()?;
                 v.k = LegacyKind::SectionPlane;
-                self.draw(&mut v)?;
+                self.draw(v)?;
                 let first = read_f64(self.r.d, self.r.p)?;
                 if first.abs() > 1.0001 {
                     self.object(None)?;
@@ -967,150 +756,404 @@ impl<'a> Archive<'a> {
                 self.r.utf16()?;
                 self.r.skip(15)?;
             }
-            "CDimensionLinear" => {
-                self.preamble()?;
-                v.k = LegacyKind::Dimension;
-                self.draw(&mut v)?;
-                v.text = self.r.utf16()?;
-                if self.ver >= 6 {
-                    self.object(Some("CSkFont"))?;
-                }
-                // The tail embeds two connection points into the geometry,
-                // each a normal MFC tag (2 bytes, or 6 once the big-tag escape
-                // kicks in) followed by its instance paths, so a fixed-size
-                // skip walks off the rails on large models. SketchUp 4 and 5
-                // write neither the font above nor the 5 bytes in front of the
-                // first connection block, nor the trailing u32 of the last.
-                let mut decoded = LegacyDimension::default();
-                if self.ver >= 6 {
-                    self.r.skip(5)?;
-                }
-                for second in [false, true] {
-                    // [u32 type][u32 4][point3d]: type 1 stores the point
-                    // inline.
-                    let block = self.r.raw(32)?;
-                    let mut point = (read_u32(block, 0)? == 1).then_some([
-                        read_f64(block, 8)?,
-                        read_f64(block, 16)?,
-                        read_f64(block, 24)?,
-                    ]);
-                    // The first reference to an anchored vertex can serialize
-                    // it in full. Keep forward references unresolved until the
-                    // complete archive is read (see fill).
-                    let mut r = self.entity_ref(true)?;
-                    if !self.connection_paths()? {
-                        // Do not expose definition-local vertex coordinates as
-                        // owner/world points until the nested instance path
-                        // can also be resolved.
-                        point = None;
-                        r = None;
-                    }
-                    if second {
-                        decoded.geometry.b = point;
-                        decoded.connect2 = r;
-                    } else {
-                        decoded.geometry.a = point;
-                        decoded.connect1 = r;
-                    }
-                }
-                let placement = self.r.raw(if self.ver >= 6 { 72 } else { 68 })?;
-                let f = |at| read_f64(placement, at);
-                let normal = [f(0)?, f(8)?, f(16)?];
-                let x = [f(24)?, f(32)?, f(40)?];
-                let axis = read_u32(placement, 48)?;
-                let g = &mut decoded.geometry;
-                g.normal = Some(normal);
-                g.plane_x = Some(x);
-                g.offset = f(52)?;
-                // X/Y-constrained dimensions use their plane frame,
-                // independent of the order of the measured endpoints.
-                // Preserve other modes without guessing.
-                g.offset_vector = constrained_offset_vector(axis, normal, x, g.offset);
-                v.dimension = Some(Box::new(decoded));
-            }
-            "CText" => {
-                self.preamble()?;
-                v.k = LegacyKind::Text;
-                self.draw(&mut v)?;
-                self.object(Some("CSkFont"))?;
-                if anchored_text_connection(self.r.d, self.r.p) {
-                    // An anchored connection block is followed, as a
-                    // dimension's is, by the anchored entity's ref and its
-                    // instance paths - and MFC writes a path instance IN FULL
-                    // there when nothing has pointed at it before (a label
-                    // anchored to a component instance serialized after it,
-                    // its class declaration included when it is the file's
-                    // first instance). Skipped as bytes, that instance never
-                    // gets its store-map slots and every later reference is
-                    // off by them; read it instead.
-                    self.r.skip(16 + 32)?;
-                    self.entity_ref(false)?;
-                    self.connection_paths()?;
-                }
-                let d = self.r.d;
-                let lim = d.len().min(self.r.p + 512);
-                let mut found = None;
-                let mut q = self.r.p;
-                while q + 14 <= lim {
-                    if d[q] == 1
-                        && d[q + 1] == 0
-                        && d[q + 2] == 0
-                        && d[q + 3] == 0
-                        && d[q + 6] <= 8
-                        && d[q + 7] == 0
-                        && d[q + 8] == 0
-                        && d[q + 9] == 0
-                        && d[q + 10] == 1
-                        && d[q + 11] == 255
-                        && d[q + 12] == 254
-                        && d[q + 13] == 255
-                    {
-                        found = Some(q + 11);
-                        break;
-                    }
-                    q += 1;
-                }
-                let Some(found) = found else {
-                    return Err(Error::runtime("text delimiter not found"));
-                };
-                self.r.skip(found - self.r.p)?;
-                v.text = self.r.utf16()?;
-                self.r.skip(5)?;
-                // Optional leader-attachment refs follow the fixed tail. Only
-                // the escaped 6-byte form is recognisable without risk: a
-                // 2-byte back-ref here would be indistinguishable from the
-                // next list item's tag.
-                while self.r.p + 2 <= d.len() && d[self.r.p] == 255 && d[self.r.p + 1] == 127 {
-                    if self.r.p + 6 > d.len() {
-                        break;
-                    }
-                    let val = read_u32(d, self.r.p + 2)?;
-                    if val & 0x8000_0000 != 0 {
-                        break; // new-object tag - the next entity
-                    }
-                    self.r.skip(6)?;
-                }
-            }
-            "CComponentDefinition" => self.read_definition(&mut v)?,
-            "CComponentInstance" | "CGroup" => {
-                v.attrs = self.preamble()?;
-                v.k = LegacyKind::Instance;
-                self.draw(&mut v)?;
-                v.def = self.object(Some("CComponentDefinition"))?.slot;
-                v.xf = self.r.f64s(13)?;
-                // SketchUp 3 and 4 instances carry no name string (5 is the
-                // first to write one); where it is optional, take it only if a
-                // string is there.
-                if self.ver >= FIRST_NAMED_INSTANCE || self.r.marker() {
-                    v.name = self.r.utf16()?;
-                }
-                if legacy_instance_has_guid(self.ver) {
-                    self.r.skip(16)?;
-                }
-            }
+            "CDimensionLinear" => self.read_dimension_linear(v)?,
+            "CText" => self.read_text(v)?,
+            "CComponentDefinition" => self.read_definition(v)?,
+            "CComponentInstance" | "CGroup" => self.read_instance(v)?,
             _ => return Err(Error::runtime(format!("no legacy reader for {n}"))),
         }
-        Ok(v)
+        Ok(())
+    }
+
+    #[inline(never)]
+    fn read_edge_use(&mut self, v: &mut LegacyValue) -> Result<()> {
+        self.early_preamble()?;
+        v.k = LegacyKind::EdgeUse;
+        v.edge = self.object(Some("CEdge"))?.slot;
+        v.sense = self.r.u8()? != 0;
+        // parent-loop back-ref: the alignment oracle. Read as a RAW
+        // file index - after annotations the claimed index can sit
+        // AHEAD of the walker's numbering (burned MapObject indices,
+        // see register_burn()), which is a correction signal, not a
+        // mis-parse.
+        let p0 = self.r.p;
+        let tag = self.r.u16()?;
+        let parent = if tag == 0x7fff {
+            let big = self.r.u32()?;
+            if big & 0x8000_0000 != 0 {
+                return Err(Error::runtime("edge-use parent is a new object"));
+            }
+            Some(u64::from(big))
+        } else if tag == 0xffff || tag & 0x8000 != 0 {
+            return Err(Error::runtime("edge-use parent is a new object"));
+        } else if tag != 0 {
+            Some(u64::from(tag))
+        } else {
+            None
+        };
+        let expected = self.current_loop + self.cum_delta;
+        if parent != Some(expected) {
+            let delta = parent.map_or(0, |p| p as i64 - expected as i64);
+            if delta > 0 && delta <= 4096 && self.annot_watermark.is_some() {
+                self.register_burn(delta as u64);
+            } else {
+                self.r.p = p0;
+                return Err(Error::runtime("edge-use parent mismatch"));
+            }
+        }
+        Ok(())
+    }
+
+    #[inline(never)]
+    fn read_face(&mut self, v: &mut LegacyValue) -> Result<()> {
+        let (attrs, lead_cls) = self.preamble_cls()?;
+        v.attrs = attrs;
+        v.k = LegacyKind::Face;
+        self.draw(v)?;
+        if self.ver < FIRST_V4 && &*lead_cls == "CMaterial" {
+            if let Some(a) = v.attrs {
+                // SketchUp 3: the pointer that opens a face is its
+                // FRONT MATERIAL (null for an unpainted face), not an
+                // attribute container.
+                v.mat = a as i32;
+                v.attrs = None;
+            }
+        }
+        v.plane = self.r.f64s(4)?;
+        let count = self.r.u32()?;
+        if count > 10000 {
+            return Err(Error::runtime("implausible loop count"));
+        }
+        for _ in 0..count {
+            if let Some(q) = self.object(Some("CLoop"))?.v {
+                v.loops.push(q);
+            }
+        }
+        v.back_mat = i32::from(self.r.u16()?);
+        Ok(())
+    }
+
+    #[inline(never)]
+    fn read_attribute_container(&mut self, v: &mut LegacyValue) -> Result<()> {
+        self.preamble()?;
+        v.k = LegacyKind::Attrs;
+        while self.r.p + 2 <= self.r.d.len() && read_u16(self.r.d, self.r.p)? != 0 {
+            let q = self.object(Some("CAttributeNamed"))?;
+            v.ents.push(q);
+        }
+        self.r.u16()?;
+        Ok(())
+    }
+
+    #[inline(never)]
+    fn read_attribute_named(&mut self, v: &mut LegacyValue) -> Result<()> {
+        self.preamble()?;
+        v.k = LegacyKind::Dict;
+        self.r.skip(4)?;
+        v.name = self.r.utf16()?;
+        loop {
+            let key = self.r.utf16()?;
+            if key.is_empty() {
+                break;
+            }
+            let t = self.r.u8()?;
+            let value = self.r.attr_value(t)?;
+            v.entries.insert(key, value);
+        }
+        // Trailing u32 is a v7+ addition - a real SketchUp 6 file ends
+        // the record at the empty-key terminator with nothing after
+        // it (openskp#284's V6 signature; openskp#385). The class is
+        // always learned from the unwalked pre-model region, so its
+        // schema can't gate this - the file's version is the only
+        // signal available.
+        if self.ver >= 7 {
+            self.r.u32()?;
+        }
+        Ok(())
+    }
+
+    #[inline(never)]
+    fn read_layer(&mut self, this: u64, v: &mut LegacyValue) -> Result<()> {
+        v.attrs = self.early_preamble()?;
+        v.k = LegacyKind::Layer;
+        v.name = self.r.utf16()?;
+        let mut mid = Vec::new();
+        while mid.len() < 8 && !self.r.marker() {
+            mid.push(self.r.u8()?);
+        }
+        v.hidden = mid.first().map_or(0, |&b| i32::from(b));
+        self.r.utf16()?;
+        let flags = self.r.u16()?;
+        if flags & 0x00ff != 0 {
+            // Colour-by-layer with a TEXTURED material: the layer
+            // embeds the same texture block a CMaterial carries. Low
+            // byte of the flag word set = textured.
+            self.texture_block(v)?;
+            self.r.skip(4)?; // trailing u32
+        } else {
+            let c = self.r.raw(4)?;
+            v.r = i32::from(c[0]);
+            v.g = i32::from(c[1]);
+            v.b = i32::from(c[2]);
+            self.r.utf16()?;
+            // SketchUp 3's tail is 4 bytes shorter
+            self.r.skip(if self.ver < FIRST_V4 { 17 } else { 21 })?;
+            self.skip_clayer_colour_ext();
+            self.skip_clayer_parent_ref(this);
+        }
+        Ok(())
+    }
+
+    #[inline(never)]
+    fn read_material(&mut self, v: &mut LegacyValue) -> Result<()> {
+        self.early_preamble()?;
+        v.k = LegacyKind::Material;
+        v.name = self.r.utf16()?;
+        let flag = self.r.u16()?;
+        if flag == 0 {
+            let c = self.r.raw(4)?;
+            v.r = i32::from(c[0]);
+            v.g = i32::from(c[1]);
+            v.b = i32::from(c[2]);
+            v.a = i32::from(c[3]);
+            self.r.utf16()?;
+            self.r.skip(8)?;
+            v.opacity = self.r.f64()?;
+            if self.r.u8()? == 0 {
+                v.opacity = 0.0;
+            }
+        } else {
+            self.texture_block(v)?;
+        }
+        Ok(())
+    }
+
+    #[inline(never)]
+    fn read_ftc(&mut self, v: &mut LegacyValue) -> Result<()> {
+        self.preamble()?;
+        v.k = LegacyKind::Ftc;
+        self.r.u32()?;
+        let a = self.r.f64s(24)?;
+        v.uvf = a[0..9].to_vec();
+        v.uvb = a[12..21].to_vec();
+        for _ in 0..2 {
+            let mut z = self.r.u32()?;
+            while z > 0 {
+                z -= 1;
+                self.r.f64s(4)?;
+            }
+        }
+        let fflags = self.r.u32()?;
+        let bflags = self.r.u32()?;
+        v.front_projected = fflags & 2 != 0;
+        v.back_projected = bflags & 2 != 0;
+        Ok(())
+    }
+
+    #[inline(never)]
+    fn read_construction_line(&mut self, v: &mut LegacyValue) -> Result<()> {
+        self.preamble()?;
+        v.k = LegacyKind::ConstructionLine;
+        self.draw(v)?;
+        // point(3) + direction(3) + two signed distance params along
+        // direction marking where the visible segment starts/ends. A
+        // parameter magnitude past HUGE_PARAM means unbounded in that
+        // direction (matches the real API returning nil).
+        let lp = self.r.f64s(8)?;
+        v.xyz = [lp[0], lp[1], lp[2]];
+        v.direction = [lp[3], lp[4], lp[5]];
+        const HUGE_PARAM: f64 = 1e20;
+        let (start_param, end_param) = (lp[6], lp[7]);
+        let at = |t: f64| -> [f64; 3] { [lp[0] + lp[3] * t, lp[1] + lp[4] * t, lp[2] + lp[5] * t] };
+        if start_param.abs() < HUGE_PARAM {
+            v.start = Some(at(start_param));
+        }
+        if end_param.abs() < HUGE_PARAM {
+            v.end = Some(at(end_param));
+        }
+        // The trailing block varies by the WRITING BUILD, not cleanly
+        // by version: 7 bytes on the v17 calibration corpus, 4 on v16
+        // and on a real v18, 0 on another real v17. Self-calibrate on
+        // the first guide line of the file - the length that lands on
+        // a legitimate next tag (strict forms only) - and cache it for
+        // the rest of the file.
+        if self.cline_tail.is_none() {
+            let dflt: usize = if self.ver == 17 { 7 } else { 4 };
+            let mut order = vec![dflt];
+            for c in [0usize, 4, 7] {
+                if c != dflt {
+                    order.push(c);
+                }
+            }
+            // Strong tags first (escape / known class / class
+            // definition). The weak (null) pass is the last-in-list
+            // case: a construction line that is the last entity in a
+            // CComponentDefinition is followed by nrel=0, which looks
+            // like a null tag at every candidate - prefer 4 there.
+            let p = self.r.p;
+            let k = order
+                .iter()
+                .copied()
+                .find(|&c| self.strict_next_tag(p + c, false))
+                .or_else(|| {
+                    [4usize, 0, 7]
+                        .into_iter()
+                        .find(|&c| self.strict_next_tag(p + c, true))
+                });
+            self.cline_tail = Some(k.unwrap_or(4));
+        }
+        let tail = self.cline_tail.unwrap_or(4);
+        self.r.skip(tail)?;
+        Ok(())
+    }
+
+    #[inline(never)]
+    fn read_dimension_linear(&mut self, v: &mut LegacyValue) -> Result<()> {
+        self.preamble()?;
+        v.k = LegacyKind::Dimension;
+        self.draw(v)?;
+        v.text = self.r.utf16()?;
+        if self.ver >= 6 {
+            self.object(Some("CSkFont"))?;
+        }
+        // The tail embeds two connection points into the geometry,
+        // each a normal MFC tag (2 bytes, or 6 once the big-tag escape
+        // kicks in) followed by its instance paths, so a fixed-size
+        // skip walks off the rails on large models. SketchUp 4 and 5
+        // write neither the font above nor the 5 bytes in front of the
+        // first connection block, nor the trailing u32 of the last.
+        let mut decoded = LegacyDimension::default();
+        if self.ver >= 6 {
+            self.r.skip(5)?;
+        }
+        for second in [false, true] {
+            // [u32 type][u32 4][point3d]: type 1 stores the point
+            // inline.
+            let block = self.r.raw(32)?;
+            let mut point = (read_u32(block, 0)? == 1).then_some([
+                read_f64(block, 8)?,
+                read_f64(block, 16)?,
+                read_f64(block, 24)?,
+            ]);
+            // The first reference to an anchored vertex can serialize
+            // it in full. Keep forward references unresolved until the
+            // complete archive is read (see fill).
+            let mut r = self.entity_ref(true)?;
+            if !self.connection_paths()? {
+                // Do not expose definition-local vertex coordinates as
+                // owner/world points until the nested instance path
+                // can also be resolved.
+                point = None;
+                r = None;
+            }
+            if second {
+                decoded.geometry.b = point;
+                decoded.connect2 = r;
+            } else {
+                decoded.geometry.a = point;
+                decoded.connect1 = r;
+            }
+        }
+        let placement = self.r.raw(if self.ver >= 6 { 72 } else { 68 })?;
+        let f = |at| read_f64(placement, at);
+        let normal = [f(0)?, f(8)?, f(16)?];
+        let x = [f(24)?, f(32)?, f(40)?];
+        let axis = read_u32(placement, 48)?;
+        let g = &mut decoded.geometry;
+        g.normal = Some(normal);
+        g.plane_x = Some(x);
+        g.offset = f(52)?;
+        // X/Y-constrained dimensions use their plane frame,
+        // independent of the order of the measured endpoints.
+        // Preserve other modes without guessing.
+        g.offset_vector = constrained_offset_vector(axis, normal, x, g.offset);
+        v.dimension = Some(Box::new(decoded));
+        Ok(())
+    }
+
+    #[inline(never)]
+    fn read_text(&mut self, v: &mut LegacyValue) -> Result<()> {
+        self.preamble()?;
+        v.k = LegacyKind::Text;
+        self.draw(v)?;
+        self.object(Some("CSkFont"))?;
+        if anchored_text_connection(self.r.d, self.r.p) {
+            // An anchored connection block is followed, as a
+            // dimension's is, by the anchored entity's ref and its
+            // instance paths - and MFC writes a path instance IN FULL
+            // there when nothing has pointed at it before (a label
+            // anchored to a component instance serialized after it,
+            // its class declaration included when it is the file's
+            // first instance). Skipped as bytes, that instance never
+            // gets its store-map slots and every later reference is
+            // off by them; read it instead.
+            self.r.skip(16 + 32)?;
+            self.entity_ref(false)?;
+            self.connection_paths()?;
+        }
+        let d = self.r.d;
+        let lim = d.len().min(self.r.p + 512);
+        let mut found = None;
+        let mut q = self.r.p;
+        while q + 14 <= lim {
+            if d[q] == 1
+                && d[q + 1] == 0
+                && d[q + 2] == 0
+                && d[q + 3] == 0
+                && d[q + 6] <= 8
+                && d[q + 7] == 0
+                && d[q + 8] == 0
+                && d[q + 9] == 0
+                && d[q + 10] == 1
+                && d[q + 11] == 255
+                && d[q + 12] == 254
+                && d[q + 13] == 255
+            {
+                found = Some(q + 11);
+                break;
+            }
+            q += 1;
+        }
+        let Some(found) = found else {
+            return Err(Error::runtime("text delimiter not found"));
+        };
+        self.r.skip(found - self.r.p)?;
+        v.text = self.r.utf16()?;
+        self.r.skip(5)?;
+        // Optional leader-attachment refs follow the fixed tail. Only
+        // the escaped 6-byte form is recognisable without risk: a
+        // 2-byte back-ref here would be indistinguishable from the
+        // next list item's tag.
+        while self.r.p + 2 <= d.len() && d[self.r.p] == 255 && d[self.r.p + 1] == 127 {
+            if self.r.p + 6 > d.len() {
+                break;
+            }
+            let val = read_u32(d, self.r.p + 2)?;
+            if val & 0x8000_0000 != 0 {
+                break; // new-object tag - the next entity
+            }
+            self.r.skip(6)?;
+        }
+        Ok(())
+    }
+
+    #[inline(never)]
+    fn read_instance(&mut self, v: &mut LegacyValue) -> Result<()> {
+        v.attrs = self.preamble()?;
+        v.k = LegacyKind::Instance;
+        self.draw(v)?;
+        v.def = self.object(Some("CComponentDefinition"))?.slot;
+        v.xf = self.r.f64s(13)?;
+        // SketchUp 3 and 4 instances carry no name string (5 is the
+        // first to write one); where it is optional, take it only if a
+        // string is there.
+        if self.ver >= FIRST_NAMED_INSTANCE || self.r.marker() {
+            v.name = self.r.utf16()?;
+        }
+        if legacy_instance_has_guid(self.ver) {
+            self.r.skip(16)?;
+        }
+        Ok(())
     }
 
     fn read_definition(&mut self, v: &mut LegacyValue) -> Result<()> {
