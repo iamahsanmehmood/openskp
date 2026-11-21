@@ -27,6 +27,31 @@ let currentScene = null;
 let currentLoadedFilename = '';
 let layerVisibility = {};
 
+// SketchUp-style edge lines drawn over every face. One shared material so the
+// toggle is a single visibility flip per overlay; overlays never take part in
+// raycasting (see buildEdgeOverlay), so selection still hits the face mesh.
+let showEdges = true;
+const edgeMaterial = new THREE.LineBasicMaterial({ color: 0x0b0c0f, transparent: true, opacity: 0.85 });
+// Edges whose two faces meet at less than this angle are treated as smooth
+// (curved, tessellated surfaces) and hidden - the same idea as SketchUp's
+// "soften edges", so a round table leg doesn't render as a cage of lines.
+const EDGE_THRESHOLD_DEGREES = 30;
+
+// Colour for faces that have no material of their own. The library colours
+// those by layer (the same choice every port makes - useful for "colour by
+// tag" exports), but SketchUp itself draws them in the style's default face
+// colour, so that's what a viewer should show: a Layer0 colour of
+// (255, 84, 84) otherwise paints every unpainted face bright red.
+const DEFAULT_FACE_SRGB = [236 / 255, 234 / 255, 228 / 255];
+
+// ?embed=1 renders a minimal, chrome-free viewer for embedding in another
+// page (openskp.com uses it for its hero): no sidebars or status bar, a gentle
+// auto-rotate until the visitor touches the model, and an "open full viewer"
+// link. Everything else - parsing, rendering, drag-and-drop - is identical.
+const isEmbed = new URLSearchParams(window.location.search).get('embed') === '1';
+if (isEmbed) document.body.classList.add('embed');
+let axesHelper = null;
+
 // Three.js Texture objects decoded from currentScene.textures, keyed by index
 // into that array - built lazily so a texture shared by several materials is
 // only decoded once. Reset (and its object URLs revoked) on every new load.
@@ -135,10 +160,21 @@ function initViewport() {
   controls.enableDamping = true;
   controls.dampingFactor = 0.05;
   controls.maxPolarAngle = Math.PI / 2 + 0.1; // allow looking slightly below ground
+  if (isEmbed) {
+    controls.autoRotate = true;
+    controls.autoRotateSpeed = 0.8;
+    // Stop for good the moment the visitor takes control.
+    controls.addEventListener('start', () => { controls.autoRotate = false; });
+  }
 
   // Lighting
-  const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+  const ambientLight = new THREE.AmbientLight(0xffffff, 0.35);
   scene.add(ambientLight);
+
+  // Sky/ground light: lifts faces turned away from the key light so unlit
+  // sides read as a darker shade of the material, not as near-black.
+  const hemiLight = new THREE.HemisphereLight(0xdfe8ff, 0x3a3428, 0.75);
+  scene.add(hemiLight);
 
   const mainLight = new THREE.DirectionalLight(0xffffff, 0.8);
   mainLight.position.set(20, 40, 20);
@@ -157,7 +193,8 @@ function initViewport() {
   gridHelper.position.y = -0.01; // slightly lower than ground
   scene.add(gridHelper);
 
-  const axesHelper = new THREE.AxesHelper(5);
+  axesHelper = new THREE.AxesHelper(5);
+  axesHelper.visible = !isEmbed;
   scene.add(axesHelper);
 
   // Model Group Container
@@ -317,6 +354,9 @@ function clearScene() {
 
   // Traverse model group and dispose geometry & material
   modelGroup.traverse((child) => {
+    if (child.isLineSegments && child.userData && child.userData.isEdgeOverlay) {
+      child.geometry.dispose();
+    }
     if (child.isMesh) {
       if (child.geometry) child.geometry.dispose();
       if (child.material) {
@@ -457,10 +497,15 @@ function zoomToFit() {
   const size = box.getSize(new THREE.Vector3());
 
   const maxDim = Math.max(size.x, size.y, size.z);
-  const fov = camera.fov * (Math.PI / 180);
-  let cameraZ = Math.abs(maxDim / 2 / Math.tan(fov / 2));
+  // Fit the model's bounding sphere inside the narrower of the vertical and
+  // horizontal fields of view. Using only the vertical FOV (as before) crops
+  // the model on portrait screens, where the horizontal FOV is the smaller.
+  const sphere = box.getBoundingSphere(new THREE.Sphere());
+  const vfov = camera.fov * (Math.PI / 180);
+  const hfov = 2 * Math.atan(Math.tan(vfov / 2) * camera.aspect);
+  let cameraZ = sphere.radius / Math.sin(Math.min(vfov, hfov) / 2);
 
-  cameraZ *= 1.35; // Add padding
+  cameraZ *= 1.05; // a little breathing room around the sphere
 
   // The camera's near/far planes and OrbitControls' zoom-out limit were
   // fixed constants (near=0.1, far=1000, no maxDistance) sized for the
@@ -485,10 +530,45 @@ function zoomToFit() {
   if (scene.fog) scene.fog.density = 3 / camera.far;
 
   // Animate camera to look at the model center
-  camera.position.set(center.x + cameraZ * 0.7, center.y + cameraZ * 0.5, center.z + cameraZ * 0.7);
+  const viewDir = new THREE.Vector3(0.7, 0.5, 0.7).normalize();
+  camera.position.copy(center).addScaledVector(viewDir, cameraZ);
   controls.target.copy(center);
   camera.lookAt(center);
   controls.update();
+}
+
+// True when a primitive's colour is the library's layer-colour fallback for
+// an unpainted face (see DEFAULT_FACE_SRGB): it equals the colour of the
+// layer the mesh was built on and matches none of the file's own materials.
+function isLayerFallbackColor(colorFactor, layerName) {
+  if (!currentModel || !colorFactor) return false;
+  const key = colorFactor.slice(0, 3).map((v) => Math.round(v * 255)).join(',');
+  const materials = currentModel.materials || [];
+  if (materials.some((m) => m.color && `${m.color.r},${m.color.g},${m.color.b}` === key)) return false;
+  const layer = (currentModel.layers || []).find((l) => l.name === (layerName || 'Layer0'));
+  return !!layer && `${layer.color.r},${layer.color.g},${layer.color.b}` === key;
+}
+
+// SketchUp-style outline for one mesh: only hard edges (see
+// EDGE_THRESHOLD_DEGREES). Excluded from raycasting so clicks select faces.
+function buildEdgeOverlay(geometry) {
+  const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geometry, EDGE_THRESHOLD_DEGREES), edgeMaterial);
+  edges.userData = { isEdgeOverlay: true };
+  edges.raycast = () => {};
+  edges.visible = showEdges;
+  return edges;
+}
+
+function setEdgesVisible(visible) {
+  showEdges = visible;
+  modelGroup.traverse((child) => {
+    if (child.userData && child.userData.isEdgeOverlay) child.visible = visible;
+  });
+  const btn = document.getElementById('btn-edges');
+  if (btn) {
+    btn.classList.toggle('active', visible);
+    btn.setAttribute('aria-pressed', String(visible));
+  }
 }
 
 // Load and Parse SKP ArrayBuffer
@@ -553,8 +633,16 @@ function loadSkpBuffer(arrayBuffer, filename) {
           }
         }
 
+        // OpenSKP's material colours are the file's own sRGB values scaled
+        // to 0-1 (not linear-light values as glTF factors usually are), so
+        // they're read as sRGB here. Reading them as linear washed every
+        // colour out - a walnut brown rendered as a pale salmon.
+        if (baseColorTextureIndex === null && isLayerFallbackColor(colorFactor, metadata.layer)) {
+          colorFactor = [...DEFAULT_FACE_SRGB, 1.0];
+        }
+
         const materialOptions = {
-          color: new THREE.Color(colorFactor[0], colorFactor[1], colorFactor[2]),
+          color: new THREE.Color().setRGB(colorFactor[0], colorFactor[1], colorFactor[2], THREE.SRGBColorSpace),
           roughness: 0.6,
           metalness: 0.1,
           side: THREE.DoubleSide
@@ -585,6 +673,7 @@ function loadSkpBuffer(arrayBuffer, filename) {
         const mesh = new THREE.Mesh(geometry, material);
         mesh.castShadow = true;
         mesh.receiveShadow = true;
+        mesh.add(buildEdgeOverlay(geometry));
 
         // Store metadata details
         mesh.userData = {
@@ -652,6 +741,9 @@ function loadSkpBufferViaWasm(arrayBuffer, filename) {
 
       const gltf = await new Promise((resolve, reject) => {
         new GLTFLoader().parse(result.glbBytes.buffer, '', resolve, reject);
+      });
+      gltf.scene.traverse((child) => {
+        if (child.isMesh) child.add(buildEdgeOverlay(child.geometry));
       });
       modelGroup.add(gltf.scene);
 
@@ -903,17 +995,30 @@ mtoggleInspector.addEventListener('click', () => {
 btnCloseLayers.addEventListener('click', () => setDrawer(panelLayers, mtoggleLayers, false));
 btnCloseInspector.addEventListener('click', () => setDrawer(panelInspector, mtoggleInspector, false));
 
+// View toolbar: zoom-to-fit and edge toggle, plus F / E keyboard shortcuts.
+const btnFit = document.getElementById('btn-fit');
+const btnEdges = document.getElementById('btn-edges');
+if (btnFit) btnFit.addEventListener('click', () => zoomToFit());
+if (btnEdges) btnEdges.addEventListener('click', () => setEdgesVisible(!showEdges));
+window.addEventListener('keydown', (e) => {
+  if (e.target && /INPUT|TEXTAREA|SELECT/.test(e.target.tagName)) return;
+  if (e.key === 'f' || e.key === 'F') zoomToFit();
+  if (e.key === 'e' || e.key === 'E') setEdgesVisible(!showEdges);
+});
+
 // Kickstart
 initViewport();
 initDragAndDrop();
 setLoader(false);
 
-// Load a real, non-trivial sample model by default so a first-time visitor
-// sees something rendered immediately instead of an empty drop zone - the
-// AI-generated chair + table showcase model (see docs/AI_MODELING.md).
+// Load a real sample model by default so a first-time visitor sees something
+// rendered immediately instead of an empty drop zone: a small house written
+// by OpenSKP's own writer (samples/make_modern_house.py), so the first thing
+// on screen is a file this project both wrote and read back. Every face has
+// an explicit material, so it renders the same in SketchUp and here.
 // Failure here (e.g. a deployment that doesn't bundle samples/) just falls
 // back to the normal empty "drop a file" state, silently.
-fetch('samples/chair_and_table.skp')
+fetch('samples/modern_house.skp')
   .then((res) => (res.ok ? res.arrayBuffer() : Promise.reject(res.status)))
-  .then((buffer) => loadSkpBuffer(buffer, 'chair_and_table.skp'))
+  .then((buffer) => loadSkpBuffer(buffer, 'modern_house.skp'))
   .catch((err) => console.warn('Default sample model did not load:', err));

@@ -3,7 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>OpenSKP Premium Web Viewer</title>
+  <title>OpenSKP Web Viewer — open SketchUp (.skp) files in your browser</title>
+  <meta name="description" content="Open, inspect and convert SketchUp (.skp) files in your browser. Parsed locally by OpenSKP: nothing is uploaded.">
   <link rel="icon" type="image/png" href="assets/favicon.png">
   <link rel="stylesheet" href="style.css">
   
@@ -43,6 +44,10 @@
       </div>
       
       <div class="actions">
+        <a href="./" target="_blank" rel="noopener" class="btn btn-secondary embed-only" id="btn-open-full">
+          Open full viewer
+          <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round" class="btn-icon"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
+        </a>
         <button id="btn-load" class="btn btn-primary">
           <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" class="btn-icon"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
           Upload SKP
@@ -194,6 +199,18 @@
       </div>
     </footer>
 
+    <!-- View toolbar: zoom-to-fit and SketchUp-style edge lines (F / E). -->
+    <div class="view-tools" role="toolbar" aria-label="View">
+      <button class="vtool" id="btn-fit" title="Zoom to fit (F)" aria-label="Zoom to fit">
+        <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3"></path><path d="M21 8V5a2 2 0 0 0-2-2h-3"></path><path d="M3 16v3a2 2 0 0 0 2 2h3"></path><path d="M16 21h3a2 2 0 0 0 2-2v-3"></path></svg>
+        <span>Fit</span>
+      </button>
+      <button class="vtool active" id="btn-edges" title="Show edges (E)" aria-label="Show edges" aria-pressed="true">
+        <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 3 7v10l9 5 9-5V7z"></path><path d="M3 7l9 5 9-5"></path><path d="M12 12v10"></path></svg>
+        <span>Edges</span>
+      </button>
+    </div>
+
     <!-- Mobile-only panel toggles: keeps the canvas full-screen and
          interactive by default; Layers/Inspector open as dismissible
          drawers instead of permanently sharing screen space. -->
@@ -215,7 +232,7 @@
     <div class="drop-overlay-content">
       <svg viewBox="0 0 24 24" width="64" height="64" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round" class="drop-icon"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
       <h2>Drop your SketchUp (.skp) file</h2>
-      <p>Supports files up to SketchUp v2021/v2022 VFF format</p>
+      <p>SketchUp 2013 and later. Parsed in your browser: nothing is uploaded.</p>
     </div>
   </div>
 
