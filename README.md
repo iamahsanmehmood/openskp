@@ -21,7 +21,7 @@
 
 *Open-source SketchUp binary file parser, writer, and converter for Python, TypeScript, .NET, Dart, and C++*
 
-[Quick Start](#-quick-start) · [Features](#-features) · [Built by AI](#-built-by-ai-too) · [Used in Production](#-used-in-production) · [Documentation](#-documentation) · [Contributing](#-contributing)
+[Quick Start](#-quick-start) · [Features](#-features) · [Built by AI](#-built-by-ai-too) · [Featured](#-featured) · [Used in Production](#-used-in-production) · [Documentation](#-documentation) · [Contributing](#-contributing)
 
 </div>
 
@@ -73,6 +73,33 @@ OpenSKP is the **first and only** open-source, cross-platform toolkit for Sketch
 
 ---
 
+## 📺 Featured
+
+OpenSKP and its Blender and FreeCAD add-ons have been covered by [Blender 3D Architect](https://www.youtube.com/@blender3darchitect), a YouTube channel about Blender for architecture:
+
+<table>
+<tr>
+<td align="center" width="50%">
+<a href="https://www.youtube.com/watch?v=q-Gjsa4tuPU"><img src="https://img.youtube.com/vi/q-Gjsa4tuPU/mqdefault.jpg" alt="Blender and FreeCAD Can Now Read and Write SketchUp Files (video)" width="100%"></a><br>
+<b>Blender and FreeCAD Can Now Read and Write SketchUp Files</b><br>
+<sub>Blender 3D Architect · October 2026</sub>
+</td>
+<td align="center" width="50%">
+<a href="https://www.youtube.com/watch?v=M43s__dC3FM"><img src="https://img.youtube.com/vi/M43s__dC3FM/mqdefault.jpg" alt="Blender 5.3 Just Made Importing SketchUp Files Easier Than Ever (video)" width="100%"></a><br>
+<b>Blender 5.3 Just Made Importing SketchUp Files Easier Than Ever</b><br>
+<sub>Blender 3D Architect · November 2026</sub>
+</td>
+</tr>
+</table>
+
+Also mentioned in:
+
+- **Blender 3D Architect:** [BIMCraft Just Broke Revit's File Lock-In](https://www.youtube.com/watch?v=0uX-DMzZo10), which compares BIMCraft to "the same kind of breakthrough that OpenSKP brought to the SketchUp world"
+- **Hacker News:** the front-page thread on [KetchUp, an open-source SketchUp alternative](https://news.ycombinator.com/item?id=50418176), where a commenter notes it reads SketchUp files with OpenSKP
+- **Digital Production:** [IngeTrazo: A Home for the Render Farm](https://digitalproduction.com/2026/10/08/ingetrazo-open-source-architectural-modelling/), covering IngeTrazo's `.skp` import through OpenSKP
+
+---
+
 ## 🏭 Used in Production
 
 OpenSKP isn't just a library — it's the SketchUp-parsing engine behind real, actively-used production applications:
@@ -83,6 +110,7 @@ OpenSKP isn't just a library — it's the SketchUp-parsing engine behind real, a
 |<img width="82" height="69" alt="image" src="https://ingetrazo.com/images/logo.png" /> [IngeTrazo](https://ingetrazo.com/) | A free, Linux-first 3D modeler for civil engineering and architecture — a SketchUp alternative with a BIM → IFC bridge. | Replaced IngeTrazo's Wine + proprietary SketchUp DLL dependency as its native `.skp` import backend. |
 | <picture><source media="(prefers-color-scheme: dark)" srcset="assets/users/rayscaper-dark.svg" /><img width="120" alt="Rayscaper" src="assets/users/rayscaper-light.svg" /></picture> [Rayscaper](https://rayscaper.com/) | A photorealistic render plugin for SketchUp that updates live as you model. | Reads `.skp` models through OpenSKP. |
 | <picture><source media="(prefers-color-scheme: dark)" srcset="assets/users/modlumi-dark.svg" /><img width="120" alt="Modlumi" src="assets/users/modlumi-light.svg" /></picture> [Modlumi](https://modlumi.com/) | A practical 3D modeling app for independent designers and craftspeople, on Windows and in the browser. | Opens and imports existing `.skp` models through OpenSKP. |
+| [Sawhorse](https://sawhorse3d.com/) | A free, local-first, SketchUp-style push/pull modeler for woodworkers and makers, in the browser and on the desktop. | Opens `.skp` files through the `openskp` npm package. |
 
 Using OpenSKP in your own project? [Open an issue](https://github.com/iamahsanmehmood/openskp/issues) or a PR to add it here.
 
@@ -96,7 +124,7 @@ Trimble SDK, no SketchUp install:
 | Addon | Status | Repo |
 |:------|:-------|:-----|
 | **FreeCAD** | Import + export, real B-rep geometry (not a triangulated mesh). Materials/layers not yet carried over. | [freecad-openskp](https://github.com/iamahsanmehmood/freecad-openskp) |
-| **Blender** | Import + export, collection-instancing architecture (a component placed 1,000 times costs one mesh, not 1,000). Materials/layers not yet carried over. | [blender-openskp](https://github.com/iamahsanmehmood/blender-openskp) |
+| **Blender** | Import + export, collection-instancing architecture (a component placed 1,000 times costs one mesh, not 1,000). Materials/layers not yet carried over. | [blender-openskp](https://github.com/iamahsanmehmood/blender-openskp) · [Blender Extensions](https://extensions.blender.org/add-ons/openskp-import-export/) |
 
 Both are early and under active development — real bugs get found and
 fixed by testing against real files, not by waiting until everything's
