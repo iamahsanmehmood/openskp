@@ -1017,6 +1017,7 @@ class SkpFile:
         self,
         name_override_keys: Sequence[str] = ("name", "label", "code"),
         include_curve_sets: bool = True,
+        original_textures: bool = False,
     ) -> "scene.Scene":
         """Bake every instance actually placed in the model into
         world-space, triangulated mesh data - SketchUp's component/group
@@ -1048,6 +1049,14 @@ class SkpFile:
                 model that has both solids and curves), not a correctness
                 one. On a curve-only model it is not a lever at all: the
                 curve sets are the entire content.
+            original_textures: Keep a texture that is not PNG or JPEG
+                (SketchUp stores TIFF, TGA and GIF textures as they were
+                imported) in its own format, with its real
+                :attr:`SceneTexture.mime_type` (``image/tiff``, ...),
+                instead of leaving it out with a warning. Off by default:
+                a consumer that assumes every texture is PNG or JPEG (a
+                glTF writer of its own) would break on the others. The
+                GLB exporters need no change: they decode through Pillow.
 
         Returns:
             A populated :class:`openskp.scene.Scene`.
@@ -1060,11 +1069,13 @@ class SkpFile:
             parsed,
             name_override_keys=name_override_keys,
             include_curve_sets=include_curve_sets,
+            original_textures=original_textures,
         )
 
     def build_instanced_scene(
         self,
         name_override_keys: Sequence[str] = ("name", "label", "code"),
+        original_textures: bool = False,
     ) -> "instanced_scene.InstancedScene":
         """Build the placed scene graph with SketchUp's component/group
         INSTANCING PRESERVED, instead of baked into world-space vertex data.
@@ -1083,6 +1094,9 @@ class SkpFile:
             name_override_keys: See :meth:`build_scene` - same meaning,
                 same default, same generic (not tied to any one plugin's
                 own dictionary name) lookup.
+            original_textures: Keep a texture that is not PNG or JPEG in
+                its own format, with its real MIME type; see
+                :meth:`build_scene`.
 
         Returns:
             A populated :class:`openskp.instanced_scene.InstancedScene`.
@@ -1091,5 +1105,7 @@ class SkpFile:
         from . import instanced_scene
 
         parsed = _core.full_parse(str(self.path))
-        return instanced_scene.build_instanced_scene(parsed, name_override_keys=name_override_keys)
+        return instanced_scene.build_instanced_scene(
+            parsed, name_override_keys=name_override_keys, original_textures=original_textures
+        )
 

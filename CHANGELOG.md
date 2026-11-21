@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Python: a texture can stay in its own format (`original_textures=True`)
+
+- `SkpFile.build_scene`, `SkpFile.build_instanced_scene` and the two module-level builders take
+  `original_textures=False`. SketchUp keeps a TIFF, TGA or GIF texture as the file it was imported from (it
+  converts BMP to PNG), and a scene holds only PNG and JPEG, so such a texture was left out (with the warning of
+  #538). With `original_textures=True` it stays in `scene.textures` with its real `mime_type` (`image/tiff`,
+  `image/gif`, `image/x-tga`, also BMP, WebP, PSD, DDS and JPEG 2000 when one is stored that way), exactly the bytes
+  SketchUp stored, and the material's `baseColorTexture` points at it. Off by default, so a consumer that assumes
+  every texture is PNG or JPEG is not affected; a format that is not one of the known ones is still left out with
+  the warning, which now names the option when it would help.
+- The two GLB exporters pass `textures` on as `original_textures`: embedding textures decodes them with Pillow, which
+  reads those formats, so a TIFF, TGA or GIF texture now reaches the GLB (re-encoded as PNG) where it used to be
+  dropped. Without `textures=True` nothing changes. Fixtures `texture_tga_2021.skp` and `texture_gif_2021.skp`
+  join the two TIFF ones. That is the second item of #511, for Python; the other ports are on #285.
+
 ### Added — Python: a texture a scene cannot carry is reported
 
 - `build_scene` and `build_instanced_scene` leave out a texture that is not PNG or JPEG, because a scene is
