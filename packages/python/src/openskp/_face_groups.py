@@ -172,7 +172,9 @@ class FaceGroupContext:
     material_id_to_name: Dict[int, str]
     materials: Dict[str, Any]
     materials_by_folder: Dict[str, Any]
-    texture_index_for: Callable[[Optional[Dict[str, Any]]], Optional[int]]
+    # (texture, material name) -> index into the scene's textures, or None
+    # when the texture is left out (a format glTF cannot carry)
+    texture_index_for: Callable[..., Optional[int]]
     # Color an unpainted face falls back to (already resolved by the
     # caller: the instance's inherited paint color, or the effective
     # layer's color when nothing is inherited).
@@ -197,15 +199,15 @@ def _add_face_side(
     uv_transform: Optional[Tuple[float, ...]],
     xr: Tuple[float, float, float],
     yr: Tuple[float, float, float],
-    texture_index_for: Callable[[Optional[Dict[str, Any]]], Optional[int]],
+    texture_index_for: Callable[..., Optional[int]],
 ) -> None:
     tex = mat.get("texture") if mat else None
+    material_name = mat.get("name") if mat else None
     # faces are batched per emitted material, so the texture has to be
     # part of the key too - otherwise two differently-textured faces with
     # the same average color end up in one group with one image
-    tex_index = texture_index_for(tex)
+    tex_index = texture_index_for(tex, material_name)
     transparency = resolve_transparency(mat)
-    material_name = mat.get("name") if mat else None
     key = (color, double_sided, tex_index, transparency, material_name)
     group = face_groups.get(key)
     if group is None:
