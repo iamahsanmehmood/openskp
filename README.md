@@ -21,7 +21,7 @@
 
 *Open-source SketchUp binary file parser, writer, and converter for Python, TypeScript, .NET, Dart, and C++*
 
-[Quick Start](#-quick-start) · [Features](#-features) · [Built by AI](#-built-by-ai-too) · [Featured](#-featured) · [Used in Production](#-used-in-production) · [Documentation](#-documentation) · [Contributing](#-contributing)
+[Quick Start](#-quick-start) · [Features](#-features) · [Built by AI](#-built-by-ai-too) · [Featured](#-featured) · [Used in Production](#-used-in-production) · [Built with OpenSKP](#-built-with-openskp) · [Documentation](#-documentation) · [Contributing](#-contributing)
 
 </div>
 
@@ -106,13 +106,62 @@ OpenSKP isn't just a library — it's the SketchUp-parsing engine behind real, a
 
 | Project | Description | How it uses OpenSKP |
 |:--------|:-------------|:---------------------|
-| <img width="82" height="69" alt="image" src="https://frame-smart.com/assets/img/logo.png" /> [FrameSmart](https://frame-smart.com/) | A 3D collaboration platform for viewing, sharing, and collaborating on 3D models together with their metadata (IFC, SketchUp, and more) — hosted on Linux, with nearly 200 active users. | Powers FrameSmart's entire SketchUp import pipeline, end to end. |
+| <img width="82" height="69" alt="image" src="https://frame-smart.com/assets/img/logo.png" /> [FrameSmart](https://frame-smart.com/) | A 3D collaboration platform for viewing, sharing, and collaborating on 3D models together with their metadata (IFC, SketchUp, and more) — hosted on Linux, with 300+ users. | Powers FrameSmart's entire SketchUp import pipeline, end to end. |
 |<img width="82" height="69" alt="image" src="https://ingetrazo.com/images/logo.png" /> [IngeTrazo](https://ingetrazo.com/) | A free, Linux-first 3D modeler for civil engineering and architecture — a SketchUp alternative with a BIM → IFC bridge. | Replaced IngeTrazo's Wine + proprietary SketchUp DLL dependency as its native `.skp` import backend. |
 | <picture><source media="(prefers-color-scheme: dark)" srcset="assets/users/rayscaper-dark.svg" /><img width="120" alt="Rayscaper" src="assets/users/rayscaper-light.svg" /></picture> [Rayscaper](https://rayscaper.com/) | A photorealistic render plugin for SketchUp that updates live as you model. | Reads `.skp` models through OpenSKP. |
 | <picture><source media="(prefers-color-scheme: dark)" srcset="assets/users/modlumi-dark.svg" /><img width="120" alt="Modlumi" src="assets/users/modlumi-light.svg" /></picture> [Modlumi](https://modlumi.com/) | A practical 3D modeling app for independent designers and craftspeople, on Windows and in the browser. | Opens and imports existing `.skp` models through OpenSKP. |
 | [Sawhorse](https://sawhorse3d.com/) | A free, local-first, SketchUp-style push/pull modeler for woodworkers and makers, in the browser and on the desktop. | Opens `.skp` files through the `openskp` npm package. |
 
 Using OpenSKP in your own project? [Open an issue](https://github.com/iamahsanmehmood/openskp/issues) or a PR to add it here.
+
+---
+
+## 🌍 Built with OpenSKP
+
+Beyond the production apps above, other developers have built OpenSKP into their own software. These are the public projects we could find on GitHub in November 2026; each one names OpenSKP in its code, notices or docs.
+
+### Apps that open or save `.skp` through OpenSKP
+
+| Project | What it is | How it uses OpenSKP |
+|:--------|:-----------|:--------------------|
+| [Rodeo](https://rodeo.build) | Free, open-source drawing and 3D modelling in the browser | Opens `.skp` files and saves the 3D model as `.skp` with the npm package (reader and writer) |
+| [Hestia BIM](https://www.hestiabim.com) | Browser-based BIM for residential architecture | Imports SketchUp furniture with the npm package |
+| [Serpentine3D](https://github.com/chisomobanzi/Serpentine3D) | Open-source NURBS surface modeller on OpenCASCADE | Imports `.skp` on Linux, Windows and Mac with the Python package |
+| [ToonStudio](https://www.toonstudio.cloud/) | Webtoon and web-novel creation platform | Imports SketchUp models as 3D backgrounds with the npm package |
+| [DeepDraw](https://github.com/lihang185/deepdraw) | Lightweight SketchUp alternative from China ([archieast.com](http://www.archieast.com)) | Its `.skp` import is the OpenSKP C++ library, built in through pybind11 |
+| [PushForm](https://github.com/PushForm/pushform-app) | 2D/3D push/pull modeller for carpenters, architects and landscapers | Depends on the npm package for `.skp` files |
+| [Arch3D](https://dsalesarchitect.github.io/arch3d/) | Lightweight BIM authoring in Rust and OpenGL | Reads `.skp` meshes through OpenSKP |
+| [SketchyUp](https://github.com/zygote55/sketchyup) | Native Linux 3D modeller (C++20, Qt 6) | Bundles a pinned copy of OpenSKP for `.skp` import |
+| [Workbench3D](https://github.com/drakeg/workbench3d) | 3D modeller | Depends on the npm package |
+| [ARCA](https://github.com/enygma-id/arca) | BIM-to-GIS converter (GeoJSON, GLB, CityJSON, CityGML) | Converts SketchUp models through an OpenSKP adapter |
+| [acoustic-spaces](https://github.com/naelolaiz/acoustic-spaces) | Room-acoustics simulation research | Reads the SketchUp room models of an acoustics dataset |
+| [sketchup-to-pdf-converter](https://helggaa.github.io/sketchup-to-pdf-converter/) | Browser `.skp` viewer and PDF exporter | Built with React, Three.js and OpenSKP |
+
+### Readers ported from OpenSKP or checked against it
+
+| Project | What it is | Link to OpenSKP |
+|:--------|:-----------|:----------------|
+| [ConstructCraft](https://constructcraft.net) | Open-source BIM authoring in Rust | Its `.skp` reader and writer are a Rust port of OpenSKP |
+| [Curiosity XRay.3D](https://github.com/curiosity-ai/x-ray-others) | 3D file reading for Curiosity's search platform | Its C# SketchUp reader follows OpenSKP's record layout, credited in its third-party notices |
+| [TeamCraft](https://warr-ev.github.io/TeamCraft/) | Open-source PDM/PLM in Rust | Vendors a Rust port of OpenSKP for SketchUp previews |
+| [Hoard](https://azazel-labs.github.io/Hoard/) | Game asset manager | Reads `.skp` with a Rust port of OpenSKP |
+| [ModelCraft](https://getcadcraft.com/apps/modelcraft) | Push/pull 3D modelling (CadCraft suite) | Its own reader, checked against OpenSKP's npm package |
+| [CivilKit CAD](https://civilkit.io/cad/) | B-rep CAD kernel in Rust and WebAssembly | Its `.skp` reader is checked against OpenSKP's output |
+| [skp2ifc](https://github.com/MTPython406/skp2ifc) | SketchUp to IFC4 converter in Python | Its reader is derived from OpenSKP |
+
+### Add-ons by other developers
+
+| Add-on | For | What it does |
+|:-------|:----|:-------------|
+| [SketchUp Imparator](https://github.com/gurkanerol/sketchup-imparator) | Blender | Native `.skp` importer with OpenSKP bundled inside |
+| [freecad_sketchup_plugin](https://github.com/djbarrow/freecad_sketchup_plugin) | FreeCAD | Opens `.skp` models with groups, components, colours and tags |
+| [ingetrazo-skp-dc-import](https://github.com/moominot/ingetrazo-skp-dc-import) | IngeTrazo | Imports SketchUp dynamic components |
+
+### Listed in
+
+[awesome-reverse-engineered](https://github.com/alexgaoth/awesome-reverse-engineered) · [3d-resources](https://github.com/devanshutak25/3d-resources) · [Awesome-AECO](https://github.com/osama-ata/Awesome-AECO) · [awesome-digital-built-environment](https://github.com/Z-Arghavan/awesome-digital-built-environment) · the [OSArch](https://osarch.org) software list
+
+Built something with OpenSKP that isn't here? [Open an issue](https://github.com/iamahsanmehmood/openskp/issues) or a PR to add it.
 
 ---
 
