@@ -2470,6 +2470,40 @@ def _add_edge(builder, slot, e, slots):
         builder.arc_curves[curve] = cv['params']
 
 
+# Where a classic file keeps the model's face colours (openskp#533): the
+# rendering options in the model header hold the front face colour and the
+# back face colour as two RGBA values side by side, at a fixed distance after
+# the end of the file's first CCamera record (the model's own camera). The
+# distance by SketchUp major version, measured on files written by SketchUp's
+# own library in every version it saves (4 to 2020) with distinctive colours,
+# and checked against SketchUp's own FaceFrontColor / FaceBackColor on every
+# classic file of the test corpus (74 files, 4 to 2020). SketchUp 3 keeps its
+# camera elsewhere (a fixed block in the thumbnail) and is not read.
+_FACE_COLORS_AFTER_CAMERA = {4: 50, 5: 61, 17: 64, 18: 64, 19: 65, 20: 66}
+_FACE_COLORS_AFTER_CAMERA.update({v: 63 for v in range(6, 17)})
+_CAMERA_DECL_RE = re.compile(rb'\xff\xff..\x07\x00CCamera', re.DOTALL)
+
+
+def _model_face_colors(data: bytes, ver: int):
+    """``(front, back)`` - the model's face colours as SketchUp shows them on
+    an unpainted face's front and back side, each ``(r, g, b)`` - or ``None``
+    when this reader does not know where the file keeps them."""
+    distance = _FACE_COLORS_AFTER_CAMERA.get(ver)
+    m = _CAMERA_DECL_RE.search(data) if distance is not None else None
+    if m is None:
+        return None
+    r = _R(data, m.end())
+    r.raw(137)
+    r.u16()
+    r.utf16()
+    r.raw(33 if ver >= 6 else 10)
+    at = r.pos + distance
+    rgba = data[at:at + 8]
+    if len(rgba) != 8 or rgba[3] != 0xFF or rgba[7] != 0xFF:
+        return None  # not the two opaque colours this layout puts there
+    return tuple(rgba[0:3]), tuple(rgba[4:7])
+
+
 def _premodel_attribute_dictionaries(data: bytes) -> Dict[str, Dict[str, Any]]:
     """The MODEL's own attribute dictionaries of a classic file.
 
@@ -2672,6 +2706,11 @@ def full_parse_legacy(skp_path: str) -> Dict[str, Any]:
     defs_dict['ROOT'] = {'guid': 'ROOT', 'name': 'ROOT_MODEL',
                          'builder': root_builder,
                          'attribute_dictionaries': model_attribute_dicts}
+    try:
+        face_colors = _model_face_colors(data, ar.ver)
+    except (struct.error, IndexError, UnicodeDecodeError):  # optional, like the dictionaries
+        logger.debug("model face colours unreadable", exc_info=True)
+        face_colors = None
 
     try:
         pages = _read_page_list(data, ar)
@@ -2701,6 +2740,7 @@ def full_parse_legacy(skp_path: str) -> Dict[str, Any]:
         'pages': pages,
         'thumbnail_data': None,
         'styles': [],
+        'face_colors': face_colors,
         # Legacy (pre-2021 MFC) files carry no meta/meta.dat container -
         # that's a VFF/ZIP-only construct - so there is no known source
         # for the model's unit-system string here.

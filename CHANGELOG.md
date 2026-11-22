@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Python: the model's face colours (`SkpModel.face_front_color` / `face_back_color`)
+
+- The colours SketchUp shows on the front and the back side of a face with no paint on that side,
+  `(r, g, b)`: the first step of #533, which needs them to colour unpainted faces the way SketchUp
+  does (today they take their tag's colour on both sides). They are the model's current rendering
+  options, which is what SketchUp displays even when the style was changed and not saved, so they
+  can differ from every entry in `styles`.
+- Read from 2021+ files (items 0x735C / 0x735D of `model.dat`) and from classic files of SketchUp 4
+  to 2020 (two RGBA values at a version-dependent distance after the model's camera); `None` for
+  SketchUp 3. Checked against SketchUp's own `FaceFrontColor` / `FaceBackColor` on every file of
+  the test corpus (82 files, SketchUp 4 to 2025), and on files written by SketchUp's library with
+  changed colours in every version it saves. Fixtures `face_colors_<version>.skp`.
+- Nothing else changes yet: scenes still colour unpainted faces as before. The other four languages
+  follow through #285.
+
 ## [1.6.0] — 2026-11-22 — all 5 languages
 
 > What most readers will notice, from the entries below (everything since 1.5.0):

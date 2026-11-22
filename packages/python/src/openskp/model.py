@@ -687,6 +687,14 @@ class SkpModel:
             the join table for :attr:`Face.material_id`.  Several IDs may
             alias the same :class:`Material` object.
         styles: List of :class:`Style` objects found in the file.
+        face_front_color: The colour SketchUp shows on the front side of
+            a face with no paint on that side, ``(r, g, b)`` 0-255: the
+            model's current rendering options, which is what SketchUp
+            displays even when the style was changed and not saved (so it
+            can differ from every entry in :attr:`styles`). Read from 2021+
+            files and from classic files of SketchUp 4 to 2020; ``None``
+            when the file does not give it (SketchUp 3).
+        face_back_color: The same for the back side of a face.
         attribute_dictionaries: The model entity's own attribute
             dictionaries (2021+ files; not read from classic files yet). A
             component saved as its own file keeps its Dynamic Components
@@ -713,6 +721,8 @@ class SkpModel:
     materials: List[Material] = field(default_factory=list)
     materials_by_id: Dict[int, Material] = field(default_factory=dict)
     styles: List[Style] = field(default_factory=list)
+    face_front_color: Optional[Tuple[int, int, int]] = None
+    face_back_color: Optional[Tuple[int, int, int]] = None
     units: Optional[str] = None
     attribute_dictionaries: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
@@ -1007,6 +1017,10 @@ class SkpFile:
                 front_color=st.get("front_color"),
                 back_color=st.get("back_color"),
             ))
+
+        face_colors = parsed.get("face_colors")
+        if face_colors:
+            model.face_front_color, model.face_back_color = face_colors
 
         # Store raw parsed data for export use
         self._parsed = parsed
