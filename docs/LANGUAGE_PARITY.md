@@ -17,15 +17,20 @@ cross-language porting backlog) and [`ROADMAP.md`](../ROADMAP.md).
 
 ## 1. Package versions
 
-As of the 2026-11-03 synchronized release, all 5 languages are on
-**1.5.0** — but same version number does not mean identical capability.
+As of the 2026-11-22 synchronized release, all 5 languages are on
+**1.6.0** — but same version number does not mean identical capability.
 Python carries a few things the other four do not (writing scenes,
 per-edge and per-face layer ids, loose-edge/curve scene support, IFC curve
-annotations) - see [§2](#2-feature-matrix) for exactly what differs. This is
+annotations, and since 1.6.0 painted-group materials in scenes, definition
+and model attribute dictionaries, and textures kept in their own format) -
+see [§2](#2-feature-matrix) and [§3](#3-whats-still-outstanding-after-160)
+for exactly what differs. A sixth package, Rust (`packages/rust`), carries the
+same version number but is not published yet, so it is not in the table
+below. This is
 a deliberate choice, not an oversight: that work is real, tested and ready,
 and holding it back purely to keep every language byte-for-byte equal would
 waste it for no real benefit. See
-[CHANGELOG.md § 1.5.0](../CHANGELOG.md) for the full picture (and § 1.4.0 for
+[CHANGELOG.md § 1.6.0](../CHANGELOG.md) for the full picture (and § 1.5.0 for
 the release before it).
 
 | Language | Registry | Released version | On `main`, not released yet |
@@ -46,7 +51,7 @@ the pub.dev upload step).
 
 Every feature OpenSKP has, across all 5 languages. ✅ = shipped and
 released. ❌ = not yet ported to that language; see
-[§3](#3-whats-still-outstanding-after-130) for what's tracked there.
+[§3](#3-whats-still-outstanding-after-160) for what's tracked there.
 
 | Feature | Python | TypeScript | .NET | Dart | C++ |
 |:---|:---:|:---:|:---:|:---:|:---:|
@@ -100,12 +105,12 @@ released. ❌ = not yet ported to that language; see
 | **Import** | | | | | |
 | Read a `.frag` file back (6th input format alongside `.skp`) | ✅ | ✅ | ✅ | ✅ | ✅ |
 
-## 3. What's still outstanding after 1.5.0
+## 3. What's still outstanding after 1.6.0
 
-Everything that was tracked here as "unreleased on main" as of the previous
-update to this page is now released as part of the 2026-11-03 synchronized
-1.5.0 (see [CHANGELOG.md § 1.5.0](../CHANGELOG.md)). What remains open is
-genuine cross-language porting work, not a release-timing gap:
+Nothing is unreleased on main: the 2026-11-22 synchronized 1.6.0 (see
+[CHANGELOG.md § 1.6.0](../CHANGELOG.md)) released everything merged before it.
+What remains open is genuine cross-language porting work, not a
+release-timing gap:
 
 **Closed**: reading a `.frag` file back (`from_fragments`/`read`) is now
 done in all 5 languages (TypeScript #362, .NET #363, Dart #364, C++ #365)
@@ -124,6 +129,8 @@ path's own output.
 | `build_instanced_scene()` loose-edge curve support + public typed-model `Edge.layer`/`Face.layer`/`loose_edge_runs()` | `_curves.py`, `instanced_scene.py`, `model.py` | TypeScript, .NET, Dart, C++ — none started |
 | IFC export: loose-edge curve sets + analytic arcs as `IfcAnnotation`/`IfcIndexedPolyCurve`, plus the 4 IFC4 STEP-conformance fixes | `scene.py`, `export/ifc.py` | TypeScript, .NET, Dart, C++ — none started |
 | Per-edge/per-face layer | `legacy.py`/`_core.py` | TypeScript, .NET, Dart, C++ |
+| Python scenes since 1.6.0: a painted group or component passes its whole material to the faces inside it, material names are kept, colorized textures are flagged, a texture a scene cannot carry is reported, and `original_textures=True` keeps it | `scene.py`, `instanced_scene.py`, `_face_groups.py` | TypeScript, .NET, Dart, C++ — not checked against these changes |
+| A definition's and the model's own attribute dictionaries (Dynamic Components), in VFF and classic files (1.6.0) | `_core.py`, `legacy.py`, `model.py` | TypeScript, .NET, Dart, C++ — not checked |
 | Attribute dicts: full 9-value-type decoding for VFF (2021+) format (Python: 7/9, others: string-only) — not independently re-verified this cycle for TS/.NET/Dart/C++, carried over from the prior version of this page rather than asserted fresh | `_core.py` | TypeScript, .NET, Dart, C++ — status needs a fresh check |
 
 All tracked in [issue #285](https://github.com/iamahsanmehmood/openskp/issues/285).
