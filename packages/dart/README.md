@@ -16,7 +16,7 @@ Parse, write, and convert `.skp` files without SketchUp. No SDK. No license. Jus
 
 ## 🌟 What is OpenSKP?
 
-OpenSKP is the first and only open-source, cross-platform parser for
+OpenSKP is an open-source, cross-platform parser for
 SketchUp binary files — reverse-engineered from both the modern **VFF
 container** (SketchUp 2021+) and the classic **MFC `CArchive`** container
 (SketchUp 2013–2020). It gives Dart and Flutter developers full

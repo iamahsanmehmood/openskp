@@ -29,7 +29,7 @@
 
 ## 🌟 What is OpenSKP?
 
-OpenSKP is the **first and only** open-source, cross-platform toolkit for SketchUp (`.skp`) binary files — built entirely through reverse engineering, with no SketchUp application or proprietary SDK required at any point.
+OpenSKP is an open-source, cross-platform toolkit for SketchUp (`.skp`) binary files — built entirely through reverse engineering, with no SketchUp application or proprietary SDK required at any point.
 
 **Reading** is available in **five languages** — Python, TypeScript, .NET, Dart, and C++ — parsing both the modern **VFF container** (2021+) and the classic **MFC `CArchive`** container (2013–2020) into full programmatic access: geometry, materials, components, layers, and more.
 
