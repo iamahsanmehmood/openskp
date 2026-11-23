@@ -21,7 +21,7 @@ serialization, so it runs anywhere JavaScript does: Node.js or the browser.
 OpenSKP is an open-source, cross-platform parser for
 SketchUp binary files — reverse-engineered from both the modern **VFF
 container** (SketchUp 2021+) and the classic **MFC `CArchive`** container
-(SketchUp 2013–2020). It gives you full programmatic access to geometry,
+(SketchUp 4–2020; see [version support](https://github.com/iamahsanmehmood/openskp/blob/main/docs/LANGUAGE_PARITY.md#4-real-sketchup-file-version-support)). It gives you full programmatic access to geometry,
 materials, components, layers, and metadata, with no SketchUp installation
 and no proprietary SDK required. The same parser and export API also ship
 as first-class packages for Python, .NET, Dart, and C++ — see the
@@ -38,8 +38,8 @@ Python writer (see [Writing](#writing) below and
 - **Full-fidelity parsing** — vertices, edges, faces, normals, UV
   coordinates, nested component hierarchies, layers/tags, materials,
   textures, styles, and dynamic-component attributes.
-- **Both SketchUp file generations** — modern VFF (2021+) and legacy MFC
-  (2013–2020) containers, transparently, behind one `parseSkp()`/`.parse()`
+- **Both SketchUp file generations** — modern VFF (2021+) and classic MFC
+  (SketchUp 4–2020) containers, transparently, behind one `parseSkp()`/`.parse()`
   call.
 - **Scene baking** — an opt-in `buildScene()` pass resolves the full placed
   scene graph to world-space, triangulated, export-ready geometry.
@@ -350,8 +350,9 @@ const meta = toJSON(model, scene);
 ## Writing
 
 OpenSKP can also *create* new `.skp` files from scratch — a genuine,
-from-scratch binary writer for the legacy MFC `CArchive` format (SketchUp
-2013–2020), with no SketchUp SDK involved at any point. Ports the same
+from-scratch binary writer that emits a **SketchUp 2017 (`{17.0.1}`)** classic
+MFC `CArchive` file (spliced into a bundled blank-document scaffold, readable in
+SketchUp 2017+), with no SketchUp SDK involved at any point. Ports the same
 feature set as the Python package's writer, verified byte-identical to
 Python's own output on the same input: geometry, materials (solid +
 PNG/JPEG textures), layers (with color and default visibility),
@@ -462,7 +463,7 @@ verified numbers before parsing very large files in this package.
 |---|---|
 | `parser.ts` | TLV binary parser for SketchUp's internal format |
 | `model.ts` | Interfaces for geometry, layers, materials, scenes |
-| `legacy.ts` | Legacy MFC container support (SketchUp 2013–2020) |
+| `legacy.ts` | Classic MFC container support (SketchUp 4–2020) |
 | `vff.ts` | VFF/ZIP container handling (`fflate`-based) |
 | `triangulator.ts` | Planar polygon triangulation (`earcut`) |
 | `transforms.ts` | 3D matrix transforms and coordinate conversions |

@@ -21,7 +21,7 @@ others, that's stated plainly rather than smoothed over.
 - [Installation](#installation)
 - [Two entry points: parse() and buildScene()](#two-entry-points-parse-and-buildscene)
 - [The data model](#the-data-model)
-- [Legacy format support (SketchUp 2013–2020)](#legacy-format-support-sketchup-20132020)
+- [Legacy format support (SketchUp 4–2020)](#legacy-format-support-sketchup-42020)
 - [Memory and performance](#performance)
 - [Observability: progress and errors](#observability)
 - [Error handling](#error-handling)
@@ -161,11 +161,14 @@ uniform** — see [Known cross-language differences](#known-cross-language-diffe
 below for the full, honest breakdown; don't assume the shape from one
 language's docs applies to another's.
 
-## Legacy format support (SketchUp 2013–2020)
+<a id="legacy-format-support-sketchup-20132020"></a>
+## Legacy format support (SketchUp 4–2020)
 
 SketchUp 2021 switched `.skp`'s container from a classic MFC `CArchive`
-object-graph serialization (versions 8 through 2020, internally versions
-13–20) to the VFF/ZIP container the rest of this guide describes. OpenSKP
+object-graph serialization (SketchUp 3 through 2020; OpenSKP supports SketchUp
+4–2020 across all ports — see [LANGUAGE_PARITY.md § 4](LANGUAGE_PARITY.md#4-real-sketchup-file-version-support)
+for per-version status and open gaps) to the VFF/ZIP container the rest of this
+guide describes. OpenSKP
 reads **both**, transparently — `SkpFile.open()`/`.parse()` auto-detects
 which era a file uses (by header bytes) and routes to the matching walker.
 There is no separate API to call for old files; the same code path handles
@@ -641,22 +644,23 @@ writing scenes is Python-only today).
 
 | Language | Write new `.skp` files | Start building | Edit an existing file |
 |---|---|---|---|
-| Python | ✅ legacy-format (2013–2020) only | `openskp.create()` | `openskp.open_existing()` |
-| TypeScript | ✅ legacy-format (2013–2020) only | `create()` | `openExisting()` |
-| .NET | ✅ legacy-format (2013–2020) only | `SkpCreate.NewFile()` | `SkpEdit.OpenExisting()` |
-| Dart | ✅ legacy-format (2013–2020) only | `create()` | `openExisting()` |
-| C++ | ✅ legacy-format (2013–2020) only | `openskp::create()` | `openskp::open_existing()` |
+| Python | ✅ SketchUp 2017 classic (`{17.0.1}` scaffold) | `openskp.create()` | `openskp.open_existing()` |
+| TypeScript | ✅ SketchUp 2017 classic (`{17.0.1}` scaffold) | `create()` | `openExisting()` |
+| .NET | ✅ SketchUp 2017 classic (`{17.0.1}` scaffold) | `SkpCreate.NewFile()` | `SkpEdit.OpenExisting()` |
+| Dart | ✅ SketchUp 2017 classic (`{17.0.1}` scaffold) | `create()` | `openExisting()` |
+| C++ | ✅ SketchUp 2017 classic (`{17.0.1}` scaffold) | `openskp::create()` | `openskp::open_existing()` |
 
 Every language's entry point returns an `SkpBuilder` that assembles a
-legacy MFC `CArchive`-format `.skp` file byte-for-byte — geometry,
+classic MFC `CArchive`-format `.skp` file byte-for-byte — geometry,
 materials (solid-color and PNG/JPEG-textured), named layers, reusable
 component definitions with multiple positioned instances, and groups —
 then a save call writes it to disk. No SketchUp SDK is involved at
 import, build, or save time; the writer works by inverting this project's
 own reader logic (the same class-ref/back-ref object-graph protocol and
-entity encodings documented in [BINARY_FORMAT.md](BINARY_FORMAT.md)),
-against a small bundled blank-document scaffold it splices new entities
-into.
+entity encodings), against a small bundled **SketchUp 2017 (`{17.0.1}`)**
+blank-document scaffold (`blank_v17.skp`) it splices new entities into
+(readable natively by SketchUp 2017 and newer; see
+[LANGUAGE_PARITY.md § 4](LANGUAGE_PARITY.md#4-real-sketchup-file-version-support)).
 
 Method names follow each language's own convention on top of the same
 underlying shape — the examples below are all Python, but the mapping is
@@ -1006,8 +1010,10 @@ builder.add_circle((0, 0, 100), (0, 0, 1), radius=50)
 builder.save("building_edited.skp")
 ```
 
-Only a legacy-format (SketchUp 2013-2020) source file is accepted, for
-the same reason `openskp.create` only ever writes that format. The
+Only a classic MFC (pre-2021) source file is accepted (see
+[LANGUAGE_PARITY.md § 4](LANGUAGE_PARITY.md#4-real-sketchup-file-version-support)
+for supported classic versions), and the saved output is always a fresh
+SketchUp 2017 (`{17.0.1}`) classic file. The
 returned `warnings` list is the honest account of what couldn't be
 faithfully reproduced for that specific file - per-edge flags collapsed
 to a per-face approximation, a projected/distorted texture falling back

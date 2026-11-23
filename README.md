@@ -30,7 +30,7 @@
 
 OpenSKP is an open-source, cross-platform toolkit for SketchUp (`.skp`) binary files — built entirely through reverse engineering, with no SketchUp application or proprietary SDK required at any point.
 
-**Reading** is available in **five languages** — Python, TypeScript, .NET, Dart, and C++ — parsing both the modern **VFF container** (2021+) and the classic **MFC `CArchive`** container (2013–2020) into full programmatic access: geometry, materials, components, layers, and more.
+**Reading** is available in **five languages** — Python, TypeScript, .NET, Dart, and C++ — parsing both the modern **VFF container** (2021+) and the classic **MFC `CArchive`** container (SketchUp 4–2020; see [version support](docs/LANGUAGE_PARITY.md#4-real-sketchup-file-version-support)) into full programmatic access: geometry, materials, components, layers, and more.
 
 **Writing** is available in **all five languages**: a from-scratch legacy-format writer (`openskp.create()` / `create()` / `SkpCreate.NewFile()` / `openskp::create()` — see the [Quick Start](#-quick-start) below for the exact call per language) that produces real, editable geometry — materials and textures, layers, nested component definitions and groups, circular/arc curves, freeform polylines, faces with holes cut out — plus an editor (`openskp.open_existing()` / `openExisting()` / `SkpEdit.OpenExisting()` / `openskp::open_existing()`) that loads a file that already exists and extends it. Python's writer is validated against SketchUp's C library (and C++ independently via `check_native_skp.py`), while TypeScript, .NET, and Dart are checked byte-for-byte against Python in CI (and Rust against C++) — see [Writer validation](docs/LANGUAGE_PARITY.md#writer-validation) for how each port is checked and the [feature parity table](docs/LANGUAGE_PARITY.md#2-feature-matrix) for per-port differences (for example, writing scenes is Python-only today). See [Write capabilities](docs/DEVELOPER_GUIDE.md#write-capabilities) in the Developer Guide for the full API and naming convention per language.
 
@@ -48,14 +48,14 @@ OpenSKP is an open-source, cross-platform toolkit for SketchUp (`.skp`) binary f
 | Feature | Status | Description |
 |:--------|:------:|:------------|
 | **Parse SKP 2021+ (VFF)** | ✅ | Full support for the modern VFF binary container |
-| **Parse SKP 2013–2020 (legacy MFC)** | ✅ | Broad support for the classic MFC `CArchive` container — same output shape as VFF. A real version-compatibility sweep found 11/15 old-format test files parse cleanly (up from 8/15 — [#310](https://github.com/iamahsanmehmood/openskp/pull/310) fixed the V7/V8/2013 cluster); the remaining 4 hit a known, tracked parsing gap — see [ROADMAP.md](ROADMAP.md#known-bugs) |
+| **Parse classic SKP 4–2020 (MFC)** | ✅ | Classic MFC `CArchive` container — same output shape as VFF. SketchUp 4–2020 are supported, with known gaps on real V3 and wild V5 files — see [docs/LANGUAGE_PARITY.md § 4](docs/LANGUAGE_PARITY.md#4-real-sketchup-file-version-support) |
 | **3D Geometry Extraction** | ✅ | Vertices, edges, faces, normals, and UV coordinates |
 | **Component Hierarchy** | ✅ | Nested component definitions and instance transforms |
 | **Scene Baking / Triangulation** | ✅ | Opt-in scene baking: full placed scene graph resolved to world-space, triangulated, GLB-ready — in all five languages |
 | **Layers / Tags** | ✅ | Layer definitions with colors and visibility (`hidden` state) — fully exposed across all five languages |
 | **Materials & Textures** | ✅ | Material properties, colors, transparency, colorized materials, and embedded texture images |
 | **Styles** | ✅ | Front/back face colors for unpainted faces |
-| **Dynamic Components** | ✅ | Extracts dynamic component attribute key-value pairs for both modern (2021+) and legacy (2013–2020) files, in all five languages |
+| **Dynamic Components** | ✅ | Extracts dynamic component attribute key-value pairs for both modern (2021+) and classic (pre-2021) files, in all five languages |
 | **Observability** | ✅ | Opt-in progress reporting + structured, location-carrying parse errors — see [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md) |
 | **Convert to GLB / OBJ / STL / PLY / DXF 3D / IFC4 / JSON** | ✅ | Native, from-scratch conversion to glTF (GLB), Wavefront OBJ, STL, PLY, DXF 3D (AutoCAD Polyface Mesh), IFC4 (BIM), and JSON metadata — available in all five languages, no third-party CAD/BIM SDK involved — see [Export capabilities](docs/DEVELOPER_GUIDE.md#export-capabilities) |
 | **Convert to Fragments (.frag)** | ✅ | Direct SketchUp → [ThatOpen Fragments](https://github.com/ThatOpen/engine_fragment) export for BIM web viewers, no IFC intermediate. Published in Python (`openskp[fragments]`), TypeScript, .NET (`OpenSkp.Fragments`), and C++; on `main` (not published to pub.dev) in Dart (`openskp_fragments`). See [docs/LANGUAGE_PARITY.md § Fragments](docs/LANGUAGE_PARITY.md#fragments-frag-support) and [Fragments export](docs/DEVELOPER_GUIDE.md#fragments-export) |
@@ -194,7 +194,7 @@ release — same version number, not identical capability: Python carries a
 few things (writing scenes, per-edge and per-face layer ids, loose-edge
 curve scene support) the other four don't have yet, and C++ has a few
 writer options (guides, document options) the other four don't. All five parse both the modern VFF (2021+)
-and classic MFC (2013–2020) `.skp` containers, and support the same
+and classic MFC (SketchUp 4–2020) `.skp` containers, and support the same
 opt-in scene-baking (`buildScene()`) and observability APIs. Full detail
 on what differs between languages, and which real SketchUp file versions
 actually parse today, is in the section right below.
@@ -210,7 +210,7 @@ condensed version.
 
 | Feature | Python | TypeScript | .NET | Dart | C++ |
 |:---|:---:|:---:|:---:|:---:|:---:|
-| Parse VFF (2021+) & legacy MFC (2013–2020) | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Parse VFF (2021+) & classic MFC (SketchUp 4–2020; [§4](docs/LANGUAGE_PARITY.md#4-real-sketchup-file-version-support)) | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Geometry, layers, materials/textures, styles, Dynamic Components | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Attribute dicts: multiple dictionaries per entity | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Attribute dicts: full 9-value-type support (`Point3d`/`Length`/nested lists) | ✅ | ❌ | ❌ | ❌ | ❌ str only |
@@ -232,18 +232,9 @@ condensed version.
 
 ### Real SketchUp file version support
 
-**Not every real old-format file parses today — stated plainly.** A
-14-file real-world version sweep (versions 3 through 2025, same project
-across its save history) found:
+Classic MFC files from **SketchUp 4 through 2020** and modern VFF files from **SketchUp 2021+** are read across all five languages, with known exceptions (real SketchUp 3 files fail in every reader; a real SketchUp 5 file in the wild fails in TypeScript; 2019–2020 `CCustomLineStyle` tag line styles fail in the 1.6.0 releases outside Python and are fixed on `main` via [#579](https://github.com/iamahsanmehmood/openskp/pull/579)). For writing, `create()` and `open_existing()` emit a **SketchUp 2017** (`{17.0.1}`) classic MFC scaffold (`blank_v17.skp`) that SketchUp 2017 and newer open natively.
 
-| Result | Versions |
-|:---|:---|
-| ✅ Parse, build, and export cleanly — **Python reader** (TypeScript, .NET, Dart and C++ parse these saves too, since [#442](https://github.com/iamahsanmehmood/openskp/issues/442), with identical totals) | 2014, 2015, 2016, 2017, 2018, 2020, 2021, 2025, **V4**, **V6**, **V7, V8, 2013**, **2019** (fixed in [#385](https://github.com/iamahsanmehmood/openskp/pull/385), [#310](https://github.com/iamahsanmehmood/openskp/pull/310) and [#440](https://github.com/iamahsanmehmood/openskp/pull/440)) |
-| ❌ Fail — root causes tracked in [issue #284](https://github.com/iamahsanmehmood/openskp/issues/284) | V3 in every reader (synthetic V3 files parse); V5 is a corrupted, 0-byte save |
-
-That sweep was run with the Python reader. Since [#442](https://github.com/iamahsanmehmood/openskp/issues/442) the other four readers parse every legacy save of the same project as well (all but V3 and the corrupted V5), with identical vertex, edge, face and instance totals - 32,982 / 40,925 / 9,652 / 150 - on each, equal to its 2021 and 2025 saves; the build and export checks above were run with Python only.
-
-Full per-version error table and investigation notes: [docs/LANGUAGE_PARITY.md § 4](docs/LANGUAGE_PARITY.md#4-real-sketchup-file-version-support).
+Full per-version, per-language status table and evidence (synthetic fixtures, SDK-written files, and the real-world multi-version sweep): **[docs/LANGUAGE_PARITY.md § 4](docs/LANGUAGE_PARITY.md#4-real-sketchup-file-version-support)**.
 
 ---
 
@@ -503,7 +494,7 @@ editing an existing one) from nothing but the same public API.
 graph TB
     subgraph read[" Reading and converting "]
         direction LR
-        SKP1[".skp file<br/>VFF 2021+ or<br/>legacy MFC 2013-2020"] --> WALK["Streaming TLV walk<br/>one top-level record<br/>at a time"]
+        SKP1[".skp file<br/>VFF 2021+ or<br/>classic MFC 4-2020"] --> WALK["Streaming TLV walk<br/>one top-level record<br/>at a time"]
         WALK --> RAW["Raw parsed data<br/>defs · layers ·<br/>materials · styles"]
         RAW --> PARSE["parse()<br/>-> SkpModel<br/>no scene resolution"]
         RAW --> SCENE["buildScene()<br/>-> Scene<br/>triangulated, world-space"]
@@ -512,7 +503,7 @@ graph TB
 
     subgraph write[" Writing and editing "]
         direction LR
-        NEW["create()"] --> SPLICE["Splice new entities into<br/>the blank-document scaffold"]
+        NEW["create()"] --> SPLICE["Splice new entities into<br/>SketchUp 2017 scaffold"]
         SKP2[".skp file<br/>to extend"] --> EDIT["open_existing()<br/>parse -> replay -> extend"]
         EDIT --> SPLICE
         SPLICE --> OUT["New .skp file"]
@@ -647,21 +638,22 @@ metadata for placement/inspection rather than renderer-facing vertex data.
 
 > 📖 The above covers the modern VFF (2021+) container. Pre-2021 files use a
 > completely different container (a classic MFC `CArchive` object-graph
-> stream, no ZIP involved) — OpenSKP detects and handles both
+> stream, no ZIP involved) — OpenSKP detects and handles SketchUp 4–2020
 > transparently behind the same `parse()` call. See
-> [the Developer Guide's legacy-format section](docs/DEVELOPER_GUIDE.md#legacy-format-support-sketchup-20132020)
+> [docs/LANGUAGE_PARITY.md § 4](docs/LANGUAGE_PARITY.md#4-real-sketchup-file-version-support)
+> for per-version support, [the Developer Guide's legacy-format section](docs/DEVELOPER_GUIDE.md#legacy-format-support-sketchup-42020)
 > for details, and [docs/BINARY_FORMAT.md](docs/BINARY_FORMAT.md) for the
 > full VFF/TLV specification.
 
 ### Writing
 
-Every writer only ever produces the **legacy MFC** container above, never
-VFF — real SketchUp itself still writes MFC-format files when saving as an
-older version, and it's the format this project's writer/editor logic was
-reverse-engineered against first. Rather than synthesizing a file from
-nothing, each language's writer bundles a small, disclosed
-[SDK-authored blank-document scaffold](packages/python/src/openskp/create.py)
-and splices new class-ref/back-ref object-graph entities into it — the
+Every writer only ever produces a **SketchUp 2017 (`{17.0.1}`) classic MFC**
+container, never VFF — SketchUp 2017 and newer open it natively, and it is
+the format this project's writer/editor logic was reverse-engineered
+against. Rather than synthesizing a file from nothing, each language's
+writer bundles a small, disclosed
+[SDK-authored SketchUp 2017 blank-document scaffold](packages/python/src/openskp/create.py)
+(`blank_v17.skp`) and splices new class-ref/back-ref object-graph entities into it — the
 same encoding [docs/BINARY_FORMAT.md](docs/BINARY_FORMAT.md) documents for
 reading, just inverted. See
 [Write capabilities](docs/DEVELOPER_GUIDE.md#write-capabilities) in the
@@ -755,7 +747,7 @@ OpenSKP is released under the [MIT License](LICENSE). You are free to use, modif
 This project would not be possible without:
 
 - [Noor Ali Qureshi](https://github.com/nooraliqureshi) — SketchUp 2025 support, older SKP version fixes, materials rendering support, and the TypeScript UTF-8 decoding fix.
-- [Marco Sumari](https://github.com/tuxiasumari) — material fidelity (textures, colourized materials, instance and back-side materials, per-face UV mapping), Image entities, styles, edge display flags, and full legacy MFC (SketchUp v8–v20) format support.
+- [Marco Sumari](https://github.com/tuxiasumari) — material fidelity (textures, colourized materials, instance and back-side materials, per-face UV mapping), Image entities, styles, edge display flags, and the initial classic MFC format reader.
 - [Thomas Loockx](https://github.com/thomasloockx) — the C++17 port, including the CMake package, cross-platform CI, and test suite.
 - The open-source community for inspiration and feedback
 - [Kaitai Struct](https://kaitai.io/) for binary format analysis patterns

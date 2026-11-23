@@ -58,7 +58,7 @@ released. 🔶 = implemented on `main`, not published to a package registry.
 |:---|:---:|:---:|:---:|:---:|:---:|
 | **Reading** | | | | | |
 | Parse VFF (2021+) | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Parse legacy MFC (2013–2020) | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Parse classic MFC (SketchUp 4–2020; [§4](#4-real-sketchup-file-version-support)) | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Geometry (vertices/edges/faces/UVs) | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Component hierarchy / nested definitions | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Layers/tags (color + visibility) | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -165,53 +165,48 @@ None of this blocked the 1.3.0 release — see the note at the top of
 
 ## 4. Real SketchUp file version support
 
-**Not every real old-format file parses today — stated plainly, not glossed
-over.** A real-world version-compatibility sweep (15 real `.skp` files —
-16 saves of the same project across its history from SketchUp version 3 up
-through 2025, one of which, V5, saved out corrupted/empty) found:
+**Reading:** OpenSKP reads both the modern **VFF** container (SketchUp 2021+)
+and the classic **MFC `CArchive`** container (SketchUp 4–2020; SketchUp
+numbering jumps from `8` directly to `2013` / header `13`, with no `9`–`12`
+releases). SketchUp 3 parses on synthetic SDK-downgraded fixtures only and
+fails on the real V3 project in every reader. Every classic version SketchUp's
+own C library saves (SketchUp 4 through 2020, plus 2021+) is read by Python
+with matching rendering-options face colours ([#550](https://github.com/iamahsanmehmood/openskp/pull/550)).
 
-**In the Python reader, 11 files parse, build, and export cleanly** (the sweep was run with Python; TypeScript, .NET, Dart and C++ read the same saves since [#442](https://github.com/iamahsanmehmood/openskp/issues/442) and give identical totals on every one of them - 32,982 vertices, 40,925 edges, 9,652 faces and 150 instances, the same as its 2021 and 2025 saves): saves from **2014, 2015,
-2016, 2017, 2018, 2020, 2021, 2025, and — as of [#310](https://github.com/iamahsanmehmood/openskp/pull/310) — V7, V8, and
-2013** — consistent output (146 definitions / 131 mesh resources) across all
-of them.
+**Writing (`create()` and `open_existing()`):** Every port's writer splices
+entities into the same bundled **SketchUp 2017 (`{17.0.1}`)** classic MFC
+`CArchive` blank-document scaffold (`blank_v17.skp`). Writers never emit VFF
+(2021+) or any classic version other than SketchUp 2017; SketchUp 2017 and
+every newer SketchUp release open that output natively. `open_existing()`
+accepts any classic MFC (pre-2021) file `parse()` reads, replays it through
+`create()`, and writes a new SketchUp 2017 (`{17.0.1}`) file (rejecting VFF
+2021+ inputs). The unpublished Rust port (`packages/rust`) carries the same
+classic version gates and the same `blank_v17.skp` scaffold.
 
-**The remaining 4 files hit 4 distinct error signatures**, investigated and
-root-caused to varying depth (tracked in
-[issue #284](https://github.com/iamahsanmehmood/openskp/issues/284)):
+### Reader support by SketchUp version
 
-| SketchUp version | Error | Status |
-|:---|:---|:---|
-| V3 | `expected a string record` | **Fixed in all 5 languages** ([#407](https://github.com/iamahsanmehmood/openskp/pull/407), ported in [#410](https://github.com/iamahsanmehmood/openskp/issues/410)) - calibrated on one real V3 file; single-material V3 files unverified |
-| V4, V5 | `texture object is not a dib` | **Fixed in all 5 languages** (V4 and V5 differ from V6 in about a dozen small layout details - see the CHANGELOG): Python in [#440](https://github.com/iamahsanmehmood/openskp/pull/440), the other four in the follow-up port. The real V4 project parses identically to its V6 save in Python; the other four readers match V6 on SketchUp-written files (including a 47-definition, 13-dimension model) and on the real V4 sample, and, since [#442](https://github.com/iamahsanmehmood/openskp/issues/442), read the real project's V4 save with the same totals as its V6 save. The project's own V5 save is a 0-byte file |
-| V6 | `definition list misaligned` | **Fixed in all 5 languages** ([#385](https://github.com/iamahsanmehmood/openskp/pull/385), ported in [#410](https://github.com/iamahsanmehmood/openskp/issues/410)) |
-| 2019 | `implausible def entity count` | **Fixed in all 5 languages** (a separator null after the last layer of a definition shifted the entity count). The real 2019 save parses identically to its 2018 save in Python; the other four readers are checked on a SketchUp-written 2019 file and, since [#442](https://github.com/iamahsanmehmood/openskp/issues/442), read the real project's 2019 save with the same totals as its 2018 save |
+| SketchUp version (header) | Container | Python | TS / .NET / Dart / C++ | Synthetic & SDK-written files | Real files & open gaps |
+|:---|:---|:---:|:---:|:---|:---|
+| **3** (`{3.0.*}`) | Classic MFC | ⚠️ | ⚠️ | **All 5 (tests):** `legacy_v3_synthetic.skp`, `legacy_v3_textured.skp` (saved via SketchUp's C library; [#407](https://github.com/iamahsanmehmood/openskp/pull/407), [#411](https://github.com/iamahsanmehmood/openskp/pull/411)). **Python (tests):** `face_front_color`/`face_back_color` return `None` ([#550](https://github.com/iamahsanmehmood/openskp/pull/550)). Single-material V3 files and draw-block flags are unverified. | ❌ The real multi-version project's V3 save fails in **all 5** readers (`edge-use parent slot None != current loop`, [#284](https://github.com/iamahsanmehmood/openskp/issues/284)). |
+| **4** (`{4.0.*}`) | Classic MFC | ✅ | ✅ | **All 5 (tests):** `legacy_v4_synthetic.skp`, `legacy_v4_textured.skp` (plus a 47-definition / 13-dimension SDK-written model checked across all 5 in [#440](https://github.com/iamahsanmehmood/openskp/pull/440), [#443](https://github.com/iamahsanmehmood/openskp/pull/443)). **Python (tests):** `face_colors_v4.skp` ([#550](https://github.com/iamahsanmehmood/openskp/pull/550); not in TS/.NET/Dart/C++ tests yet). (V4 stores no instance/group names.) | ✅ Real V4 cube sample and the real multi-version project's V4 save parse in all 5 readers with totals matching V6/2021/2025 ([#440](https://github.com/iamahsanmehmood/openskp/pull/440), [#465](https://github.com/iamahsanmehmood/openskp/pull/465)). |
+| **5** (`{5.0.*}`) | Classic MFC | ✅ (SDK) | ⚠️ TS fails wild file; .NET / Dart / C++ ✅ (SDK) | **All 5 (tests):** `legacy_v5_synthetic.skp`, `legacy_v5_textured.skp` (plus the 47-definition SDK-written model in [#440](https://github.com/iamahsanmehmood/openskp/pull/440), [#443](https://github.com/iamahsanmehmood/openskp/pull/443)). **Python (tests):** `face_colors_v5.skp` ([#550](https://github.com/iamahsanmehmood/openskp/pull/550); not in TS/.NET/Dart/C++ tests yet). | ⚠️ The multi-version sweep's V5 save is a corrupted 0-byte file ([#440](https://github.com/iamahsanmehmood/openskp/pull/440)). A real wild V5 file (`{5.0.262}`, reported by boardfoot on [#284](https://github.com/iamahsanmehmood/openskp/issues/284)) fails in TypeScript (`back-ref to unwalked slot 20617` on an inline PNG) and has not been tested in the other four readers. |
+| **6** (`{6.0.*}`) | Classic MFC | ✅ | ✅ | **All 5 (tests):** `legacy_v6_synthetic.skp`, `nesting_v6.skp`, `instance_scale_term_v6.skp` ([#385](https://github.com/iamahsanmehmood/openskp/pull/385), [#392](https://github.com/iamahsanmehmood/openskp/pull/392), [#411](https://github.com/iamahsanmehmood/openskp/pull/411)). **Python (tests):** `face_colors_v6.skp` ([#550](https://github.com/iamahsanmehmood/openskp/pull/550); not in TS/.NET/Dart/C++ tests yet). | ✅ Real multi-version project's V6 save parses in all 5 readers with identical totals ([#385](https://github.com/iamahsanmehmood/openskp/pull/385), [#465](https://github.com/iamahsanmehmood/openskp/pull/465)). |
+| **7, 8, 2013** (`{7.0.*}`, `{8.0.*}`, `{13.0.*}`) | Classic MFC | ✅ | ✅ | **All 5 (tests):** `nesting_2013.skp`. **Python, TS, .NET, Dart (tests):** `legacy_v7_synthetic.skp` ([#310](https://github.com/iamahsanmehmood/openskp/pull/310), [#411](https://github.com/iamahsanmehmood/openskp/pull/411); C++ ported the same GUID gate in [#392](https://github.com/iamahsanmehmood/openskp/pull/392)). **Python:** SDK-written 7/8/2013 saves match SketchUp face colours ([#550](https://github.com/iamahsanmehmood/openskp/pull/550)). | ✅ Real multi-version project's V7, V8, and 2013 saves parse in all 5 readers with identical totals ([#310](https://github.com/iamahsanmehmood/openskp/pull/310), [#465](https://github.com/iamahsanmehmood/openskp/pull/465)). |
+| **2014–2018** (`{14.0.*}`–`{18.*}`) | Classic MFC | ✅ | ✅ | **All 5 (tests):** `arcs_2017.skp`, `nesting_2017.skp`, `legacy_text_arrows_2017.skp`, `legacy_textured_colorize_2017.skp`, `single_material_v17.skp` ([#465](https://github.com/iamahsanmehmood/openskp/pull/465)). **Python, TS, .NET, Dart (tests):** `legacy_v2014_synthetic.skp` ([#310](https://github.com/iamahsanmehmood/openskp/pull/310), [#411](https://github.com/iamahsanmehmood/openskp/pull/411)). **Python (tests):** `legacy_attribute_dictionaries_{2017,2018}.skp`, `face_colors_{2016,2017,2018}.skp`, `texture_tiff_2017.skp` ([#550](https://github.com/iamahsanmehmood/openskp/pull/550); not in TS/.NET/Dart/C++ tests yet). *(Files with one or two tags and 11–13 component definitions — a file `openskp.create` can produce — trigger a `CLayer` parent back-ref count collision: fixed in Python in [#534](https://github.com/iamahsanmehmood/openskp/pull/534); TypeScript and the other 1.6.0 releases fail such files with `class-ref to non-class slot N (CLayer)`, fixed on `main` across TS, .NET, Dart, C++, and Rust in [#577](https://github.com/iamahsanmehmood/openskp/pull/577).)* | ✅ Real multi-version project's 2014–2018 saves plus committed app-saved fixtures `capilla_quiroz_v17.skp` (`{17.0.18899}`) and `zero_material_custom_layer_v18.skp` (`{18.0.16975}`) parse in all 5 (tests; [#465](https://github.com/iamahsanmehmood/openskp/pull/465)). |
+| **2019–2020** (`{19.0.*}`, `{20.*}`) | Classic MFC | ✅ | ✅ | **All 5 (tests):** `legacy_v2019_synthetic.skp`, `legacy_v2020_textured.skp`, `legacy_empty_2020.skp`, `arcs_2020.skp`, `nesting_2020.skp`, `sdk_saved_{2019,2020}.skp`, `sdk_saved_sections_{2019,2020}.skp`, `sdk_saved_tag_line_styles_{2019,2020,materials_2020}.skp` ([#440](https://github.com/iamahsanmehmood/openskp/pull/440), [#443](https://github.com/iamahsanmehmood/openskp/pull/443), [#515](https://github.com/iamahsanmehmood/openskp/pull/515), [#579](https://github.com/iamahsanmehmood/openskp/pull/579)). **Python (tests):** `face_colors_{2019,2020}.skp` ([#550](https://github.com/iamahsanmehmood/openskp/pull/550); not in TS/.NET/Dart/C++ tests yet). *(Tags carrying a custom line style — `CCustomLineStyle`, [#514](https://github.com/iamahsanmehmood/openskp/issues/514) — landed in Python in [#515](https://github.com/iamahsanmehmood/openskp/pull/515); the 1.6.0 releases of TypeScript, .NET, Dart, and C++ fail such files with `no reader for class CCustomLineStyle`, fixed on `main` across TS, .NET, Dart, C++, and Rust in [#579](https://github.com/iamahsanmehmood/openskp/pull/579).)* | ✅ Real multi-version project's 2019 and 2020 saves plus committed app-saved fixture `gondola_v20.skp` (`{20.1.235}`) parse in all 5 (tests; [#440](https://github.com/iamahsanmehmood/openskp/pull/440), [#465](https://github.com/iamahsanmehmood/openskp/pull/465)). |
+| **2021+** (`{21.*}`–`{26.*}`) | VFF (ZIP + TLV) | ✅ | ✅ | **All 5 (tests):** `arcs_2021.skp`, `nesting_2021.skp`, `scene_without_camera_2021.skp`, `instance_scale_term_2021.skp`. **Python (tests):** `face_colors_2021.skp` ([#550](https://github.com/iamahsanmehmood/openskp/pull/550)), `texture_{bmp,gif,tga,tiff}_2021.skp`, `definition_attribute_dictionaries_2026.skp` (`{26.2.243}`) (not in TS/.NET/Dart/C++ tests yet). | ✅ Real multi-version project's 2021 and 2025 saves plus committed app-saved fixtures `SU_File.skp` and `Untitled.skp` parse in all 5 (tests; [#465](https://github.com/iamahsanmehmood/openskp/pull/465)). |
 
-~~V7, V8, 2013 — `class-ref to non-class slot N (CAttributeNamed)`~~ —
-**fixed in [#310](https://github.com/iamahsanmehmood/openskp/pull/310)**.
-Root cause: `_read_instance`'s trailing-GUID read for
-`CComponentInstance`/`CGroup` was gated on the class's own reported
-`schema` number (`schema >= 5` implies a GUID), which doesn't generalize —
-a real V7 file's `CComponentInstance` reports schema 6, well above that
-threshold, yet has no GUID at all. Forcing the read anyway silently ate
-into the next sibling entity's own tag bytes, which either crashed deep in
-a nested definition (the `CAttributeNamed` collision this row was
-originally about) or — the more dangerous variant, caught only while
-verifying the fix — got silently absorbed by the root entity list's own
-over-declared-count tolerance, truncating a real 18-instance root scene
-down to 1 with no error raised at all. Fixed by gating the GUID read on
-the file's real version number (`ar.ver >= 14`) instead of schema;
-verified byte-for-byte identical to the same files' 2014+ output.
+### Note on the multi-version real-project sweep ([#284](https://github.com/iamahsanmehmood/openskp/issues/284))
 
-The three fixes above (the V7/V8/2013 instance-GUID gate, the V6
-attribute-dictionary trailer, and the V3 layout) were first made in the
-**Python** legacy MFC reader. Each language has its own independently
-implemented parser, so a fix in one does not carry over: they were ported to
-the TypeScript, .NET, Dart and C++ readers separately (C++ already had the
-first two), and each port is checked against the same synthetic V3/V6/V7/2014
-fixtures.
-
-If you hit one of these versions (or a new one) in your own files, a real
-repro `.skp` file dramatically speeds up narrowing this down further — see
+The real-world sweep consists of 16 saves of one 5 MB, 146-definition textured
+project across SketchUp 3 through 2025; its V5 save is a corrupted 0-byte file,
+leaving **15 usable files**. **14 of those 15 usable saves** (V4, V6, V7, V8,
+2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, and 2025) parse in all
+five published readers with identical geometry and placement totals (32,982
+vertices, 40,925 edges, 9,652 faces, and 150 instances; full scene-build and
+export verification on that project was run in Python). Only **1 of the 15**
+(**V3**) still fails across all five readers. If you hit an unparsed classic
+file in the wild, please report it on
 [issue #284](https://github.com/iamahsanmehmood/openskp/issues/284).
 
 ## Reporting a gap

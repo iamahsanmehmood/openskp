@@ -19,7 +19,7 @@ Parse, write, and convert `.skp` files without SketchUp. No SDK. No license. Jus
 OpenSKP is an open-source, cross-platform parser for
 SketchUp binary files — reverse-engineered from both the modern **VFF
 container** (SketchUp 2021+) and the classic **MFC `CArchive`** container
-(SketchUp 2013–2020). It gives .NET developers (desktop, cloud, and
+(SketchUp 4–2020; see [version support](https://github.com/iamahsanmehmood/openskp/blob/main/docs/LANGUAGE_PARITY.md#4-real-sketchup-file-version-support)). It gives .NET developers (desktop, cloud, and
 mobile) full programmatic access to geometry, materials, components,
 layers, and metadata, with no SketchUp installation and no proprietary SDK
 required. The same parser and export API also ship as first-class packages
@@ -37,8 +37,8 @@ Python writer (see [Writing](#-writing) below and
 - **Full-fidelity parsing** — vertices, edges, faces, normals, UV
   coordinates, nested component hierarchies, layers/tags, materials,
   textures, styles, and dynamic-component attributes.
-- **Both SketchUp file generations** — modern VFF (2021+) and legacy MFC
-  (2013–2020) containers, transparently, behind one `SkpFile.Open()` call.
+- **Both SketchUp file generations** — modern VFF (2021+) and classic MFC
+  (SketchUp 4–2020) containers, transparently, behind one `SkpFile.Open()` call.
 - **Scene baking** — an opt-in `SkpFile.BuildScene()` pass resolves the
   full placed scene graph to world-space, triangulated, export-ready
   geometry.
@@ -143,8 +143,9 @@ class Program
 ## ✏️ Writing
 
 OpenSKP can also *create* new `.skp` files from scratch — a genuine,
-from-scratch binary writer for the legacy MFC `CArchive` format (SketchUp
-2013–2020), with no SketchUp SDK involved at any point. Ports the same
+from-scratch binary writer that emits a **SketchUp 2017 (`{17.0.1}`)** classic
+MFC `CArchive` file (spliced into a bundled blank-document scaffold, readable in
+SketchUp 2017+), with no SketchUp SDK involved at any point. Ports the same
 feature set as the Python package's writer, verified byte-identical to
 Python's own output on the same input: geometry, materials (solid +
 PNG/JPEG textures), layers (with color and default visibility),
