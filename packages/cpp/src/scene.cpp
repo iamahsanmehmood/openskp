@@ -4,8 +4,10 @@
 #include <set>
 #include <sstream>
 #include <tuple>
+#include <unordered_map>
 #include <utility>
 
+#include "curves.hpp"
 #include "face_groups.hpp"
 #include "internal.hpp"
 
@@ -49,6 +51,7 @@ Scene build_scene_raw(RawParsed&& p, const ParseOptions& o) {
   std::map<GroupKey, size_t> materials;
   size_t mesh_counter = 0, instance_counter = 0;
   std::set<EntityId> active;
+  std::unordered_map<std::string, std::size_t> curve_seq;
 
   // Deferred mesh backfill: a mesh's own path is recorded verbatim as a
   // path_updates key by the exact instance that placed the definition
@@ -171,6 +174,45 @@ Scene build_scene_raw(RawParsed&& p, const ParseOptions& o) {
       }
       prim.material_index = mi->second;
       scene.glb_primitives.push_back(std::move(prim));
+    }
+    if (o.include_curve_sets) {
+      auto runs = chain_loose_edges(b);
+      for (const auto& run : runs) {
+        std::vector<std::array<double, 3>> pts;
+        pts.reserve(run.vertex_ids.size());
+        for (EntityId vk : run.vertex_ids) {
+          auto vi = b.vertices.find(vk);
+          if (vi == b.vertices.end()) break;
+          const auto pt = transform_point(matrix, vi->second);
+          pts.push_back({round6(pt[0] * kCurvesInchesToM), round6(pt[2] * kCurvesInchesToM),
+                         round6(-pt[1] * kCurvesInchesToM)});
+        }
+        if (pts.size() != run.vertex_ids.size() || pts.size() < 2) continue;
+        const std::string run_layer = resolve_run_layer(p, b, run.edge_ids, layer, o);
+        std::string cname;
+        bool cgen = false;
+        if (path == "ROOT") {
+          const std::size_t seq = ++curve_seq[run_layer];
+          cname = run_layer + "_" + std::to_string(seq);
+          cgen = true;
+        } else {
+          const auto slash = path.rfind(" / ");
+          cname = slash == std::string::npos ? path : path.substr(slash + 3);
+          cgen = false;
+        }
+        auto arc = solve_run_arc(b, run.edge_ids, &matrix, pts, run.closed);
+        scene.curve_sets.push_back(CurveSetMetadata{
+            std::move(cname),
+            defname,
+            run_layer,
+            path,
+            cgen,
+            std::move(pts),
+            run.closed,
+            std::move(arc),
+            {},
+        });
+      }
     }
     std::vector<InstanceNode> children;
     for (auto& i : b.instances) {

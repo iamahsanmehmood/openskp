@@ -327,12 +327,80 @@ namespace OpenSkp
         /// definition record in an older one - not from how often the definition is
         /// placed.</summary>
         public bool IsGroup { get; set; }
+
+        /// <summary>Groups this definition's LOOSE edges (edges no face uses)
+        /// into ordered polyline runs using SketchUp's own Edge#curve
+        /// (<see cref="Edge.CurveId"/>) grouping.</summary>
+        public List<LooseEdgeRun> LooseEdgeRuns() => SkpModel.LooseEdgeRuns(this);
     }
 
     /// <summary>Complete parsed representation of a SketchUp file, mirroring
     /// the shape of Python's public SkpFile.parse() result.</summary>
     public sealed class SkpModel
     {
+        /// <summary>Groups a definition's LOOSE edges (edges no face uses)
+        /// into ordered polyline runs using SketchUp's own Edge#curve
+        /// (<see cref="Edge.CurveId"/>) grouping.</summary>
+        public static List<LooseEdgeRun> LooseEdgeRuns(Definition definition)
+        {
+            if (definition == null)
+            {
+                throw new ArgumentNullException(nameof(definition));
+            }
+
+            var used = new HashSet<long>();
+            foreach (var face in definition.Faces.Values)
+            {
+                foreach (var loop in face.Loops)
+                {
+                    foreach (var co in loop)
+                    {
+                        used.Add(co.EdgeId);
+                    }
+                }
+            }
+
+            var edgesById = new Dictionary<long, (long V1, long V2)>();
+            var groupOrder = new List<long>();
+            var groups = new Dictionary<long, List<long>>();
+            var runs = new List<LooseEdgeRun>();
+
+            foreach (var kv in definition.Edges)
+            {
+                var e = kv.Value;
+                edgesById[e.Id] = (e.V1Id, e.V2Id);
+                if (used.Contains(e.Id) || e.V1Id == e.V2Id)
+                {
+                    continue;
+                }
+                if (e.CurveId is long cid && cid != 0)
+                {
+                    if (!groups.TryGetValue(cid, out var grp))
+                    {
+                        grp = new List<long>();
+                        groups[cid] = grp;
+                        groupOrder.Add(cid);
+                    }
+                    grp.Add(e.Id);
+                }
+                else
+                {
+                    runs.Add(new LooseEdgeRun
+                    {
+                        EdgeIds = new List<long> { e.Id },
+                        VertexIds = new List<long> { e.V1Id, e.V2Id },
+                        Closed = false,
+                    });
+                }
+            }
+
+            foreach (var cid in groupOrder)
+            {
+                runs.AddRange(Curves.OrderCurveEdges(edgesById, groups[cid]));
+            }
+
+            return runs;
+        }
         public string Version { get; set; } = "unknown";
 
         /// <summary>The model's unit-system string (e.g. "Millimeter"),

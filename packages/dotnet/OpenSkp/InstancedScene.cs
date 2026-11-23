@@ -40,6 +40,26 @@ namespace OpenSkp
         public List<LocalPrimitive> Primitives { get; set; } = new List<LocalPrimitive>();
     }
 
+    /// <summary>One loose-edge run in definition-local space (metres, glTF Y-up).</summary>
+    public sealed class LocalCurve
+    {
+        public List<(double X, double Y, double Z)> PointsM { get; set; } = new List<(double X, double Y, double Z)>();
+        public bool Closed { get; set; }
+        public string Layer { get; set; } = "";
+        public CurveArc? Arc { get; set; }
+    }
+
+    /// <summary>A definition's loose edges, ready to be referenced by any
+    /// number of <see cref="InstancedNode"/>s - the loose-edge counterpart of
+    /// <see cref="InstancedMeshResource"/>.</summary>
+    public sealed class InstancedCurveResource
+    {
+        public string Id { get; set; } = "";
+        public long? DefinitionId { get; set; }
+        public string DefinitionName { get; set; } = "";
+        public List<LocalCurve> Curves { get; set; } = new List<LocalCurve>();
+    }
+
     /// <summary>One placed node in the instanced scene graph.
     ///
     /// Carries the transform that places its <see cref="MeshResourceId"/>
@@ -85,6 +105,7 @@ namespace OpenSkp
         public string Guid { get; set; } = "";
 
         public string? MeshResourceId { get; set; }
+        public string? CurveResourceId { get; set; }
         public List<InstancedNode> Children { get; set; } = new List<InstancedNode>();
     }
 
@@ -104,6 +125,7 @@ namespace OpenSkp
         public SceneBounds? Bounds { get; set; }
         public InstancedNode SceneHierarchy { get; set; } = new InstancedNode();
         public List<InstancedMeshResource> MeshResources { get; set; } = new List<InstancedMeshResource>();
+        public List<InstancedCurveResource> CurveResources { get; set; } = new List<InstancedCurveResource>();
         public List<object> GltfMaterials { get; set; } = new List<object>();
 
         /// <summary>Distinct texture images the placed materials use,
@@ -287,6 +309,85 @@ namespace OpenSkp
 
             var meshResources = new List<InstancedMeshResource>();
             var resourceIdByKey = new Dictionary<string, string>();
+            var curveResources = new List<InstancedCurveResource>();
+            var curveResourceIdByKey = new Dictionary<string, string>();
+            bool includeCurveSets = options?.IncludeCurveSets ?? true;
+
+            string? CurveResourceForBuilder(GeometryBuilder builder, string defName, long? defId, string layer)
+            {
+                if (!includeCurveSets)
+                {
+                    return null;
+                }
+                var runs = Curves.ChainLooseEdges(builder);
+                if (runs.Count == 0)
+                {
+                    return null;
+                }
+
+                string key = $"{(defId.HasValue ? defId.Value.ToString() : "ROOT")}|{layer}";
+                if (curveResourceIdByKey.TryGetValue(key, out var hit))
+                {
+                    return hit;
+                }
+
+                string effectiveLayer = Geometry.MajorityFaceLayer(builder, layerIdToName, layer);
+                var localCurves = new List<LocalCurve>();
+                foreach (var run in runs)
+                {
+                    var pts = new List<(double X, double Y, double Z)>(run.VertexIds.Count);
+                    bool complete = true;
+                    foreach (var vk in run.VertexIds)
+                    {
+                        if (!builder.Vertices.TryGetValue(vk, out var v))
+                        {
+                            complete = false;
+                            break;
+                        }
+                        pts.Add((
+                            Curves.Round6(v.X * Curves.InchesToM),
+                            Curves.Round6(v.Z * Curves.InchesToM),
+                            Curves.Round6(-v.Y * Curves.InchesToM)));
+                    }
+                    if (!complete || pts.Count < 2)
+                    {
+                        continue;
+                    }
+
+                    string runLayer = Curves.ResolveRunLayer(builder, layerIdToName, run.EdgeIds, effectiveLayer);
+                    localCurves.Add(new LocalCurve
+                    {
+                        PointsM = pts,
+                        Closed = run.Closed,
+                        Layer = runLayer,
+                        Arc = Curves.SolveRunArc(builder, run.EdgeIds, null, pts, run.Closed),
+                    });
+                }
+                if (localCurves.Count == 0)
+                {
+                    return null;
+                }
+
+                string id = $"curve_{curveResources.Count}";
+                curveResources.Add(new InstancedCurveResource
+                {
+                    Id = id,
+                    DefinitionId = defId,
+                    DefinitionName = defName ?? "",
+                    Curves = localCurves,
+                });
+                curveResourceIdByKey[key] = id;
+                return id;
+            }
+
+            string? CurveResourceFor(long defId, string layer)
+            {
+                if (!defsDict.TryGetValue(defId, out var d))
+                {
+                    return null;
+                }
+                return CurveResourceForBuilder(d.Builder, d.Name ?? "", defId, layer);
+            }
 
             // Identity of a mesh resource: (definition, effective fallback
             // color) - the ONLY inputs that can change what
@@ -496,9 +597,15 @@ namespace OpenSkp
                         Observability.Log(options, SkpLogLevel.Debug, $"Processed {instanceCounter} placed instances");
                     }
 
+                    var meshResourceId = refIdx.HasValue
+                        ? MeshResourceFor(refIdx.Value, instColor, lName)
+                        : null;
                     var children = refIdx.HasValue
                         ? Walk(refIdx.Value, newMatrix, lName, instColor)
                         : new List<InstancedNode>();
+                    var curveResourceId = refIdx.HasValue
+                        ? CurveResourceFor(refIdx.Value, lName)
+                        : null;
 
                     double itx = newMatrix.Count > 9 ? newMatrix[9] * InchesToMm : 0.0;
                     double ity = newMatrix.Count > 10 ? newMatrix[10] * InchesToMm : 0.0;
@@ -552,7 +659,8 @@ namespace OpenSkp
                         Properties = properties,
                         AttributeDictionaries = attributeDictionaries,
                         Guid = inst.RefGuid ?? "",
-                        MeshResourceId = refIdx.HasValue ? MeshResourceFor(refIdx.Value, instColor, lName) : null,
+                        MeshResourceId = meshResourceId,
+                        CurveResourceId = curveResourceId,
                         Children = children,
                     });
                 }
@@ -566,6 +674,7 @@ namespace OpenSkp
             // component/group) is kept, as the baked path keeps it: it
             // becomes the root node's own mesh resource.
             var rootMeshResourceId = MeshResourceForBuilder(parsed.Root.Builder, "ROOT_MODEL", null, null, "Layer0");
+            var rootCurveResourceId = CurveResourceForBuilder(parsed.Root.Builder, "ROOT_MODEL", null, "Layer0");
 
             var sceneHierarchy = new InstancedNode
             {
@@ -576,6 +685,7 @@ namespace OpenSkp
                 PositionMm = (0, 0, 0),
                 Properties = new Dictionary<string, string>(),
                 MeshResourceId = rootMeshResourceId,
+                CurveResourceId = rootCurveResourceId,
                 Children = rootChildren,
             };
 
@@ -669,6 +779,7 @@ namespace OpenSkp
                 Bounds = bounds,
                 SceneHierarchy = sceneHierarchy,
                 MeshResources = meshResources,
+                CurveResources = curveResources,
                 GltfMaterials = gltfMaterials,
                 Textures = textures,
                 LayerHidden = new Dictionary<string, bool>(parsed.LayerHidden),

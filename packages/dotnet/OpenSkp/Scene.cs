@@ -108,6 +108,21 @@ namespace OpenSkp
         public string Filename { get; set; } = "";
     }
 
+    /// <summary>Metadata for one run of *loose* edges (edges no face uses), in
+    /// world-space metres in glTF's Y-up frame.</summary>
+    public sealed class CurveSetMetadata
+    {
+        public string Name { get; set; } = "";
+        public string DefinitionName { get; set; } = "";
+        public string Layer { get; set; } = "";
+        public string Path { get; set; } = "";
+        public bool NameIsGenerated { get; set; }
+        public List<(double X, double Y, double Z)> PointsM { get; set; } = new List<(double X, double Y, double Z)>();
+        public bool Closed { get; set; }
+        public CurveArc? Arc { get; set; }
+        public Dictionary<string, Dictionary<string, string>> AttributeDictionaries { get; set; } = new Dictionary<string, Dictionary<string, string>>();
+    }
+
     /// <summary>The result of baking a parsed file's placed instances into
     /// a flat, world-space 3D scene.</summary>
     public sealed class Scene
@@ -115,6 +130,7 @@ namespace OpenSkp
         public InstanceNode SceneHierarchy { get; set; } = new InstanceNode();
         public Dictionary<string, MeshMetadata> MeshIndex { get; set; } = new Dictionary<string, MeshMetadata>();
         public List<GlbPrimitive> GlbPrimitives { get; set; } = new List<GlbPrimitive>();
+        public List<CurveSetMetadata> CurveSets { get; set; } = new List<CurveSetMetadata>();
         public List<object> GltfMaterials { get; set; } = new List<object>();
 
         /// <summary>Distinct texture images the placed materials use,
@@ -183,6 +199,9 @@ namespace OpenSkp
 
             var colorToMaterialIndex = new Dictionary<((int, int, int) Color, bool DoubleSided, int? TextureIndex, double Transparency), int>();
             var gltfMaterials = new List<object>();
+            var curveSets = new List<CurveSetMetadata>();
+            var curveSeq = new Dictionary<string, int>();
+            bool includeCurveSets = options?.IncludeCurveSets ?? true;
 
             // Definitions currently being instantiated on the active
             // recursion path (not "ever visited" - the same definition
@@ -398,6 +417,66 @@ namespace OpenSkp
                     }
                 }
 
+                if (includeCurveSets)
+                {
+                    string curveFallbackLayer = builder.Faces.Count > 0
+                        ? parentLayer
+                        : Geometry.MajorityFaceLayer(builder, layerIdToName, parentLayer);
+                    var runs = Curves.ChainLooseEdges(builder);
+                    foreach (var run in runs)
+                    {
+                        var pts = new List<(double X, double Y, double Z)>(run.VertexIds.Count);
+                        bool complete = true;
+                        double[] matArr = currentMatrix.ToArray();
+                        foreach (var vk in run.VertexIds)
+                        {
+                            if (!builder.Vertices.TryGetValue(vk, out var v))
+                            {
+                                complete = false;
+                                break;
+                            }
+                            var pt = Transforms.TransformPoint(matArr, v);
+                            pts.Add((
+                                Curves.Round6(pt.X * InchesToM),
+                                Curves.Round6(pt.Z * InchesToM),
+                                Curves.Round6(-pt.Y * InchesToM)));
+                        }
+                        if (!complete || pts.Count < 2)
+                        {
+                            continue;
+                        }
+
+                        string runLayer = Curves.ResolveRunLayer(builder, layerIdToName, run.EdgeIds, curveFallbackLayer);
+                        string cname;
+                        bool cgen;
+                        if (pathName == "ROOT")
+                        {
+                            int seq = (curveSeq.TryGetValue(runLayer, out var s) ? s : 0) + 1;
+                            curveSeq[runLayer] = seq;
+                            cname = $"{runLayer}_{seq}";
+                            cgen = true;
+                        }
+                        else
+                        {
+                            cname = pathName.Split(new[] { " / " }, StringSplitOptions.None).LastOrDefault() ?? "";
+                            cgen = false;
+                        }
+
+                        curveSets.Add(new CurveSetMetadata
+                        {
+                            Name = cname,
+                            NameIsGenerated = cgen,
+                            DefinitionName = defName ?? "",
+                            Layer = runLayer,
+                            Path = pathName,
+                            PointsM = pts,
+                            Closed = run.Closed,
+                            Arc = Curves.SolveRunArc(builder, run.EdgeIds, currentMatrix, pts, run.Closed),
+                            AttributeDictionaries = new Dictionary<string, Dictionary<string, string>>(),
+                        });
+                    }
+                }
+
                 var childInstancesInfo = new List<InstanceNode>();
                 foreach (var inst in builder.Instances)
                 {
@@ -464,7 +543,14 @@ namespace OpenSkp
                         }
                     }
 
-                    string instName = !string.IsNullOrEmpty(inst.Name) ? inst.Name! : $"Component_{refIdx}";
+                    string childDefName = "";
+                    if (refIdx.HasValue && defsDict.TryGetValue(refIdx.Value, out var childDef))
+                    {
+                        childDefName = childDef.Name ?? "";
+                    }
+                    bool defNameIsReal = !string.IsNullOrEmpty(childDefName) && !Geometry.IsGenericDefinitionName(childDefName);
+                    bool instNameNonEmpty = !string.IsNullOrEmpty(inst.Name);
+                    string instName = instNameNonEmpty ? inst.Name! : (defNameIsReal ? childDefName : $"Component_{refIdx}");
                     string fullPathName = $"{pathName} / {instName}";
                     instanceCounter++;
                     if (instanceCounter % ParseTuning.ProgressInterval == 0)
@@ -480,28 +566,8 @@ namespace OpenSkp
                     double ity = newMatrix.Count > 10 ? newMatrix[10] * InchesToMm : 0.0;
                     double itz = newMatrix.Count > 11 ? newMatrix[11] * InchesToMm : 0.0;
 
-                    string childDefName = "";
-                    if (refIdx.HasValue && defsDict.TryGetValue(refIdx.Value, out var childDef))
-                    {
-                        childDefName = childDef.Name ?? "";
-                    }
-
-                    // Fallback order: an attribute-dict name/label/code
-                    // override, then the instance's own explicit name, then
-                    // the definition's own name IF it's not itself just
-                    // SketchUp's auto-generated "Group#1"/"Component#12"
-                    // placeholder, then finally the internal index - the
-                    // only case with no real name anywhere in the source
-                    // file. Mirrors InstancedScene.cs's identical resolution
-                    // (and Python's/C++'s own scene.py/instanced_scene.py) -
-                    // see ResolvesTheSameLayersAndDynamicPropertiesPerNode in
-                    // OpenSkp.Tests, which depends on both trees resolving
-                    // display names identically.
-                    bool defNameIsReal = !string.IsNullOrEmpty(childDefName) && !Geometry.IsGenericDefinitionName(childDefName);
                     string? nameOverride = Geometry.FindNameOverride(inst.AttributeDicts);
-                    bool instNameNonEmpty = !string.IsNullOrEmpty(inst.Name);
-                    string fallbackName = instNameNonEmpty ? inst.Name! : (defNameIsReal ? childDefName : $"Component_{refIdx}");
-                    string displayName = nameOverride ?? fallbackName;
+                    string displayName = nameOverride ?? instName;
                     bool nameIsGenerated = nameOverride == null && !instNameNonEmpty && !defNameIsReal;
 
                     // Every OTHER attribute dictionary this instance carries -
@@ -614,6 +680,7 @@ namespace OpenSkp
                 SceneHierarchy = sceneHierarchy,
                 MeshIndex = meshIndex,
                 GlbPrimitives = glbPrimitives,
+                CurveSets = curveSets,
                 GltfMaterials = gltfMaterials,
                 Textures = textures,
             };

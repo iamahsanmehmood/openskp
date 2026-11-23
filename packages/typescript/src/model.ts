@@ -4,6 +4,18 @@ import { buildLocalFaceGroups } from './face-groups';
 import { SkpParseError } from './errors';
 import { ParseOptions, PROGRESS_INTERVAL, emitLog, emitProgress } from './observability';
 import { RawPage, RawDimension } from './pages-dimensions';
+import {
+  CurveArc,
+  LooseEdgeRun,
+  INCHES_TO_M,
+  chainLooseEdges,
+  orderCurveEdges,
+  resolveRunLayer,
+  round6,
+  solveRunArc,
+} from './curves';
+
+export type { CurveArc, LooseEdgeRun };
 
 export interface SkpModel {
   version: string;
@@ -156,6 +168,49 @@ export interface Definition {
   isGroup: boolean;
   alwaysFacesCamera: boolean;
   shadowsFaceSun: boolean;
+}
+
+/**
+ * Groups a definition's LOOSE edges (edges no face uses) into ordered
+ * polyline runs, using the file's own `Edge#curve` (`Edge.curveId`) grouping.
+ *
+ * Returns `{ edgeIds, vertexIds, closed }` runs in the same order as
+ * {@link buildInstancedScene}'s `curveResources`, so B-rep consumers working
+ * directly with {@link parseSkp}'s typed model can resolve raw vertex/edge IDs.
+ */
+export function looseEdgeRuns(definition: Definition): LooseEdgeRun[] {
+  const used = new Set<number>();
+  for (const face of definition.faces) {
+    for (const loop of face.loops) {
+      for (const co of loop) {
+        used.add(co.edgeId);
+      }
+    }
+  }
+
+  const edgesById = new Map<number, [number, number]>();
+  const groups = new Map<number, number[]>();
+  const runs: LooseEdgeRun[] = [];
+  for (const e of definition.edges) {
+    edgesById.set(e.id, [e.v1Id, e.v2Id]);
+    if (used.has(e.id) || e.v1Id === e.v2Id) continue;
+    if (e.curveId) {
+      let grp = groups.get(e.curveId);
+      if (!grp) {
+        grp = [];
+        groups.set(e.curveId, grp);
+      }
+      grp.push(e.id);
+    } else {
+      runs.push({ edgeIds: [e.id], vertexIds: [e.v1Id, e.v2Id], closed: false });
+    }
+  }
+
+  const endsOf = (eid: number) => edgesById.get(eid);
+  for (const eids of groups.values()) {
+    runs.push(...orderCurveEdges(endsOf, eids));
+  }
+  return runs;
 }
 
 export interface Vertex {
@@ -450,6 +505,20 @@ export interface SceneBounds {
   center: [number, number, number];
 }
 
+/** Metadata for one run of *loose* edges (edges no face uses), in world-space
+ * metres in glTF's Y-up frame. */
+export interface CurveSetMetadata {
+  name: string;
+  definitionName: string;
+  layer: string;
+  path: string;
+  nameIsGenerated: boolean;
+  pointsM: [number, number, number][];
+  closed: boolean;
+  arc: CurveArc | null;
+  attributeDictionaries: Record<string, Record<string, string>>;
+}
+
 export interface SkpScene {
   /** The root of the world-space instance tree. */
   sceneHierarchy: InstanceNode;
@@ -459,6 +528,9 @@ export interface SkpScene {
   /** The actual triangulated mesh data, one entry per unique
    * (definition, resolved color) combination actually placed in the scene. */
   glbPrimitives: GlbPrimitive[];
+  /** Loose-edge runs, one entry per chained polyline. Empty when all geometry
+   * is face-bounded or `includeCurveSets` is `false`. */
+  curveSets: CurveSetMetadata[];
   /** glTF PBR material definitions referenced by `GlbPrimitive.materialIndex`.
    * A material whose source had a texture image carries a `baseColorTexture`
    * whose `index` points into {@link SkpScene.textures}. */
@@ -480,6 +552,12 @@ export interface SkpScene {
 
 /** Options shared by {@link buildScene} and {@link buildInstancedScene}. */
 export interface SceneOptions {
+  /**
+   * Bake loose edges (edges no face uses) into {@link SkpScene.curveSets} /
+   * {@link InstancedScene.curveResources}. Defaults to `true`; pass `false`
+   * to skip loose-edge chaining and arc solving.
+   */
+  includeCurveSets?: boolean;
   /**
    * Skip geometry SketchUp itself would not draw.
    *
@@ -853,6 +931,9 @@ export function buildSceneFromParsed(
   const meshCounter = { count: 0 };
   const meshIndex: Record<string, MeshMetadata> = {};
   const glbPrimitives: any[] = [];
+  const curveSets: CurveSetMetadata[] = [];
+  const curveSeq = new Map<string, number>();
+  const includeCurveSets = options?.includeCurveSets !== false;
 
   // Instance path -> (properties, name) updates, recorded in O(1) per
   // instance and applied once after instantiation completes (see the
@@ -1102,6 +1183,55 @@ export function buildSceneFromParsed(
       }
     }
 
+    if (includeCurveSets) {
+      const curveFallbackLayer =
+        builder.faces.size > 0 ? parentLayer : majorityFaceLayer(builder, layerIdToName, parentLayer);
+      const runs = chainLooseEdges(builder);
+      for (const run of runs) {
+        const pts: [number, number, number][] = [];
+        let complete = true;
+        for (const vk of run.vertexIds) {
+          const v = builder.vertices.get(vk);
+          if (!v) {
+            complete = false;
+            break;
+          }
+          const pt = transformPoint(currentMatrix, v);
+          pts.push([
+            round6(pt[0] * INCHES_TO_M),
+            round6(pt[2] * INCHES_TO_M),
+            round6(-pt[1] * INCHES_TO_M),
+          ]);
+        }
+        if (!complete || pts.length < 2) continue;
+
+        const runLayer = resolveRunLayer(builder, layerIdToName, run.edgeIds, curveFallbackLayer);
+        let cname: string;
+        let cgen: boolean;
+        if (pathName === 'ROOT') {
+          const seq = (curveSeq.get(runLayer) ?? 0) + 1;
+          curveSeq.set(runLayer, seq);
+          cname = `${runLayer}_${seq}`;
+          cgen = true;
+        } else {
+          cname = pathName.split(' / ').pop() || '';
+          cgen = false;
+        }
+
+        curveSets.push({
+          name: cname,
+          nameIsGenerated: cgen,
+          definitionName: d.name || '',
+          layer: runLayer,
+          path: pathName,
+          pointsM: pts,
+          closed: run.closed,
+          arc: solveRunArc(builder, run.edgeIds, currentMatrix, pts, run.closed),
+          attributeDictionaries: {},
+        });
+      }
+    }
+
     const childInstancesInfo: InstanceNode[] = [];
 
     for (const inst of builder.instances) {
@@ -1152,7 +1282,10 @@ export function buildSceneFromParsed(
         }
       }
 
-      const instName = inst.name || `Component_${refIdx}`;
+      const childDefName = defsDict.get(refIdx)?.name || '';
+      const defNameIsReal = !!childDefName && !isGenericDefinitionName(childDefName);
+      const instNameNonEmpty = !!inst.name;
+      const instName = instNameNonEmpty ? inst.name : (defNameIsReal ? childDefName : `Component_${refIdx}`);
       const fullPathName = `${pathName} / ${instName}`;
       instanceCounter.count++;
       if (instanceCounter.count % PROGRESS_INTERVAL === 0) {
@@ -1181,12 +1314,8 @@ export function buildSceneFromParsed(
       // C++'s own scene.py/instanced_scene.py) - see
       // instanced-fixture-parity.test.ts, which depends on both trees
       // resolving display names identically.
-      const childDefName = defsDict.get(refIdx)?.name || '';
-      const defNameIsReal = !!childDefName && !isGenericDefinitionName(childDefName);
       const nameOverride = findNameOverride(attributeDicts);
-      const instNameNonEmpty = !!inst.name;
-      const fallbackName = instNameNonEmpty ? inst.name : (defNameIsReal ? childDefName : `Component_${refIdx}`);
-      const displayName = nameOverride ?? fallbackName;
+      const displayName = nameOverride ?? instName;
       const nameIsGenerated = nameOverride === null && !instNameNonEmpty && !defNameIsReal;
 
       // Every OTHER attribute dictionary this instance carries -
@@ -1299,7 +1428,7 @@ export function buildSceneFromParsed(
       }
     : null;
 
-  return { sceneHierarchy, meshIndex, glbPrimitives, gltfMaterials, textures, bounds };
+  return { sceneHierarchy, meshIndex, glbPrimitives, curveSets, gltfMaterials, textures, bounds };
 }
 
 export function resolveMaterialFromMaps(

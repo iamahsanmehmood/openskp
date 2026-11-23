@@ -966,6 +966,7 @@ export function fromFragments(data: Uint8Array, options?: ParseOptions): Instanc
     bounds: null,
     sceneHierarchy,
     meshResources,
+    curveResources: [],
     gltfMaterials,
     textures: [],
     layerHidden,

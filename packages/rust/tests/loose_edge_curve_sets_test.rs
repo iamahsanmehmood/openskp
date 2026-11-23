@@ -346,6 +346,19 @@ fn a_classic_file_bakes_its_loose_edges() {
         .curve_sets
         .iter()
         .all(|cs| !cs.closed && cs.arc.is_none()));
+
+    let off = ParseOptions::default().with_include_curve_sets(false);
+    let sc_off = SkpFile::open(fixture("capilla_quiroz_v17.skp"))
+        .unwrap()
+        .build_scene(&off)
+        .unwrap();
+    assert!(sc_off.curve_sets.is_empty());
+    assert_eq!(sc_off.glb_primitives.len(), sc.glb_primitives.len());
+    let inst_off = SkpFile::open(fixture("capilla_quiroz_v17.skp"))
+        .unwrap()
+        .build_instanced_scene(&off)
+        .unwrap();
+    assert!(inst_off.curve_resources.is_empty());
 }
 
 // Root-level loose geometry has no name in the file: it is named from its

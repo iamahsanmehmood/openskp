@@ -88,6 +88,33 @@ struct SceneTexture {
   std::string filename;
 };
 
+/// An analytic arc recovered for a loose-edge run: points in the run's own
+/// frame (metres, glTF Y-up) plus 0-based [start, mid, end] index triples into
+/// them, ready for IFC4 IfcArcIndex.
+struct CurveArc {
+  std::vector<std::array<double, 3>> points;
+  std::vector<std::array<std::size_t, 3>> segments;
+
+  bool operator==(const CurveArc& other) const {
+    return points == other.points && segments == other.segments;
+  }
+
+  bool operator!=(const CurveArc& other) const { return !(*this == other); }
+};
+
+/// One world-space polyline run of loose edges (edges no face uses).
+struct CurveSetMetadata {
+  std::string name;
+  std::string definition_name;
+  std::string layer;
+  std::string path;
+  bool name_is_generated{};
+  std::vector<std::array<double, 3>> points_m;
+  bool closed{};
+  std::optional<CurveArc> arc;
+  std::map<std::string, std::map<std::string, std::string>> attribute_dictionaries;
+};
+
 struct OPENSKP_EXPORT Scene {
   InstanceNode scene_hierarchy;
   std::map<std::string, MeshMetadata> mesh_index;
@@ -102,5 +129,8 @@ struct OPENSKP_EXPORT Scene {
   // not yet read here (open gap, see docs/LANGUAGE_PARITY.md), so every
   // VFF layer is absent from this map (treated as visible by consumers).
   std::map<std::string, bool> layer_hidden;
+  /// World-space polyline runs of loose edges (edges no face uses), when
+  /// ParseOptions::include_curve_sets is true.
+  std::vector<CurveSetMetadata> curve_sets;
 };
 }  // namespace openskp

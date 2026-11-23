@@ -411,7 +411,9 @@ impl<'a> Baker<'a> {
             self.scene.glb_primitives.push(prim);
         }
 
-        self.bake_curves(b, defname, matrix, layer, path);
+        if self.o.include_curve_sets {
+            self.bake_curves(b, defname, matrix, layer, path);
+        }
 
         let mut children = Vec::new();
         for i in &b.instances {

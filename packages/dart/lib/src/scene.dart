@@ -1,6 +1,7 @@
 import 'dart:math';
 
 import 'core.dart';
+import 'curves.dart';
 import 'errors.dart';
 import 'face_groups.dart';
 import 'geometry.dart';
@@ -135,12 +136,40 @@ class SceneTexture {
   SceneTexture({required this.data, required this.mimeType, this.filename = ''});
 }
 
+/// Metadata for one run of *loose* edges (edges no face uses) in world-space
+/// metres, glTF Y-up.
+class CurveSetMetadata {
+  String name;
+  bool nameIsGenerated;
+  String definitionName;
+  String layer;
+  String path;
+  List<(double, double, double)> pointsM;
+  bool closed;
+  CurveArc? arc;
+  Map<String, Map<String, String>> attributeDictionaries;
+
+  CurveSetMetadata({
+    this.name = '',
+    this.nameIsGenerated = false,
+    this.definitionName = '',
+    this.layer = '',
+    this.path = '',
+    List<(double, double, double)>? pointsM,
+    this.closed = false,
+    this.arc,
+    Map<String, Map<String, String>>? attributeDictionaries,
+  })  : pointsM = pointsM ?? [],
+        attributeDictionaries = attributeDictionaries ?? {};
+}
+
 /// The result of baking a parsed file's placed instances into a flat,
 /// world-space 3D scene.
 class Scene {
   InstanceNode sceneHierarchy;
   Map<String, MeshMetadata> meshIndex;
   List<GlbPrimitive> glbPrimitives;
+  List<CurveSetMetadata> curveSets;
   List<Map<String, dynamic>> gltfMaterials;
 
   /// Distinct texture images the placed materials use, deduplicated by
@@ -151,9 +180,11 @@ class Scene {
     required this.sceneHierarchy,
     required this.meshIndex,
     required this.glbPrimitives,
+    List<CurveSetMetadata>? curveSets,
     required this.gltfMaterials,
     List<SceneTexture>? textures,
-  }) : textures = textures ?? [];
+  })  : curveSets = curveSets ?? [],
+        textures = textures ?? [];
 }
 
 /// Identifies an image's MIME type from its magic bytes. Returns null for
@@ -290,6 +321,10 @@ class SceneBuilder {
       return idx;
     }
 
+    final curveSets = <CurveSetMetadata>[];
+    final curveSeq = <String, int>{};
+    final includeCurveSets = options?.includeCurveSets ?? true;
+
     List<InstanceNode> instantiateBuilder(
       GeometryBuilder builder,
       String defName,
@@ -425,6 +460,53 @@ class SceneBuilder {
         }
       }
 
+      if (includeCurveSets) {
+        final runs = chainLooseEdges(builder);
+        for (final run in runs) {
+          final pts = <(double, double, double)>[];
+          var complete = true;
+          for (final vk in run.vertexIds) {
+            final v = builder.vertices[vk];
+            if (v == null) {
+              complete = false;
+              break;
+            }
+            final pt = Transforms.transformPoint(currentMatrix, v);
+            pts.add((
+              round6(pt.$1 * _inchesToM),
+              round6(pt.$3 * _inchesToM),
+              round6(-pt.$2 * _inchesToM),
+            ));
+          }
+          if (!complete || pts.length < 2) continue;
+
+          final runLayer = resolveRunLayer(builder, layerIdToName, run.edgeIds, parentLayer);
+          String cname;
+          bool cgen;
+          if (pathName == 'ROOT') {
+            final seq = (curveSeq[runLayer] ?? 0) + 1;
+            curveSeq[runLayer] = seq;
+            cname = '${runLayer}_$seq';
+            cgen = true;
+          } else {
+            cname = pathName.split(' / ').last;
+            cgen = false;
+          }
+
+          curveSets.add(CurveSetMetadata(
+            name: cname,
+            nameIsGenerated: cgen,
+            definitionName: defName,
+            layer: runLayer,
+            path: pathName,
+            pointsM: pts,
+            closed: run.closed,
+            arc: solveRunArc(builder, run.edgeIds, currentMatrix, pts, closed: run.closed),
+            attributeDictionaries: <String, Map<String, String>>{},
+          ));
+        }
+      }
+
       final childInstancesInfo = <InstanceNode>[];
       for (final inst in builder.instances) {
         final refIdx = inst.refIdx;
@@ -478,14 +560,17 @@ class SceneBuilder {
           }
         }
 
-        final instName = (inst.name != null && inst.name!.isNotEmpty) ? inst.name! : 'Component_$refIdx';
+        final childDef = refIdx != null ? defsDict[refIdx] : null;
+        final childDefName = childDef?.name ?? '';
+        final defNameIsReal = childDefName.isNotEmpty && !Geometry.isGenericDefinitionName(childDefName);
+        final instNameNonEmpty = inst.name != null && inst.name!.isNotEmpty;
+        final instName = instNameNonEmpty ? inst.name! : (defNameIsReal ? childDefName : 'Component_$refIdx');
         final fullPathName = '$pathName / $instName';
         instanceCounter++;
         if (instanceCounter % progressInterval == 0) {
           emitProgress(options, 'build_scene', instanceCounter, instanceCounter);
           emitLog(options, SkpLogLevel.debug, 'Processed $instanceCounter placed instances');
         }
-        final childDef = refIdx != null ? defsDict[refIdx] : null;
         List<InstanceNode> childNodes;
         if (refIdx != null && childDef != null) {
           if (!activeDefinitions.add(refIdx)) {
@@ -516,12 +601,8 @@ class SceneBuilder {
         // Python's/C++'s own scene.py/instanced_scene.py) - see
         // instanced_fixture_parity_test.dart, which depends on both trees
         // resolving display names identically.
-        final childDefName = childDef?.name ?? '';
-        final defNameIsReal = childDefName.isNotEmpty && !Geometry.isGenericDefinitionName(childDefName);
         final nameOverride = Geometry.findNameOverride(instAttributeDicts);
-        final instNameNonEmpty = inst.name != null && inst.name!.isNotEmpty;
-        final fallbackName = instNameNonEmpty ? inst.name! : (defNameIsReal ? childDefName : 'Component_$refIdx');
-        final displayName = nameOverride ?? fallbackName;
+        final displayName = nameOverride ?? instName;
         final nameIsGenerated = nameOverride == null && !instNameNonEmpty && !defNameIsReal;
 
         // Every OTHER attribute dictionary this instance carries -
@@ -609,6 +690,7 @@ class SceneBuilder {
       sceneHierarchy: sceneHierarchy,
       meshIndex: meshIndex,
       glbPrimitives: glbPrimitives,
+      curveSets: curveSets,
       gltfMaterials: gltfMaterials,
       textures: textures,
     );

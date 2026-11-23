@@ -41,7 +41,9 @@ export type {
   InstancedScene,
   InstancedNode,
   InstancedMeshResource,
+  InstancedCurveResource,
   LocalPrimitive,
+  LocalCurve,
 } from './instanced';
 export { toInstancedGLB } from './instanced-glb';
 export { toFragments, fromFragments } from './fragments';

@@ -36,6 +36,9 @@ struct ParseProgress {
 struct ParseOptions {
   std::function<void(const ParseProgress&)> progress;
   std::function<void(LogLevel, std::string_view)> log;
+  /// Bake loose edges (edges no face uses) into Scene::curve_sets and
+  /// InstancedScene::curve_resources. Defaults to true.
+  bool include_curve_sets = true;
 };
 
 inline constexpr std::uint64_t progress_interval = 500;

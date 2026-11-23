@@ -53,6 +53,11 @@ namespace OpenSkp
 
         /// <summary>Called for start/stage/completion messages.</summary>
         public Action<SkpLogLevel, string>? OnLog { get; set; }
+
+        /// <summary>Bake loose edges (edges no face uses) into
+        /// <see cref="Scene.CurveSets"/> / <see cref="InstancedScene.CurveResources"/>.
+        /// Defaults to true; set to false to skip loose-edge chaining and arc solving.</summary>
+        public bool IncludeCurveSets { get; set; } = true;
     }
 
     /// <summary>Shared tuning constants for progress reporting.</summary>

@@ -2,6 +2,8 @@ import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
+import 'curves.dart' as curves;
+
 class Vertex {
   final int id;
   final double x, y, z;
@@ -425,6 +427,10 @@ class Definition {
     this.isImage = false,
     this.isGroup = false,
   });
+
+  /// Chained polyline runs of loose edges (edges no face uses), grouped by
+  /// [Edge.curveId].
+  List<curves.LooseEdgeRun> looseEdgeRuns() => curves.looseEdgeRuns(this);
 }
 
 /// Complete parsed representation of a SketchUp file, mirroring the shape

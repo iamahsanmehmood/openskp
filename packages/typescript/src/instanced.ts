@@ -4,6 +4,14 @@ import { ParseOptions, PROGRESS_INTERVAL, emitLog, emitProgress } from './observ
 import { SkpParseError } from './errors';
 import { buildLocalFaceGroups } from './face-groups';
 import {
+  CurveArc,
+  INCHES_TO_M,
+  chainLooseEdges,
+  resolveRunLayer,
+  round6,
+  solveRunArc,
+} from './curves';
+import {
   Material,
   Texture,
   SceneTexture,
@@ -76,6 +84,24 @@ export interface InstancedMeshResource {
   primitives: LocalPrimitive[];
 }
 
+/** One loose-edge run in definition-local space (metres, glTF Y-up). */
+export interface LocalCurve {
+  pointsM: [number, number, number][];
+  closed: boolean;
+  layer: string;
+  arc: CurveArc | null;
+}
+
+/** A definition's loose edges, ready to be referenced by any number of
+ * {@link InstancedNode}s - the loose-edge counterpart of
+ * {@link InstancedMeshResource}. */
+export interface InstancedCurveResource {
+  id: string;
+  definitionId: number | string;
+  definitionName: string;
+  curves: LocalCurve[];
+}
+
 /**
  * One placed node in the instanced scene graph.
  *
@@ -141,6 +167,9 @@ export interface InstancedNode {
   /** The mesh resource this node renders, or undefined for a node that
    * only groups children. */
   meshResourceId?: string;
+  /** The loose-edge curve resource this node places, or undefined when its
+   * definition has no loose edges. */
+  curveResourceId?: string;
   children: InstancedNode[];
 }
 
@@ -174,6 +203,9 @@ export interface InstancedScene {
   /** Every distinct (definition, rendering-context) mesh actually placed,
    * in deterministic first-encounter order. */
   meshResources: InstancedMeshResource[];
+  /** Loose-edge resources, one per (definition, effective layer). Empty for
+   * a model whose geometry is all face-bounded. */
+  curveResources: InstancedCurveResource[];
   /** glTF PBR materials referenced by {@link LocalPrimitive.materialIndex}.
    * Same shape and construction as {@link SkpScene.gltfMaterials}. */
   gltfMaterials: unknown[];
@@ -275,6 +307,60 @@ export function buildInstancedSceneFromParsed(
 
   const meshResources: InstancedMeshResource[] = [];
   const resourceIdByKey = new Map<string, string>();
+  const curveResources: InstancedCurveResource[] = [];
+  const curveResourceIdByKey = new Map<string, string>();
+  const includeCurveSets = options?.includeCurveSets !== false;
+
+  function curveResourceFor(defId: number | string, layer: string): string | undefined {
+    if (!includeCurveSets) return undefined;
+    const d = defsDict.get(defId);
+    if (!d) return undefined;
+    const runs = chainLooseEdges(d.builder);
+    if (runs.length === 0) return undefined;
+
+    const key = `${String(defId)}|${layer}`;
+    const hit = curveResourceIdByKey.get(key);
+    if (hit !== undefined) return hit;
+
+    const effectiveLayer = majorityFaceLayer(d.builder, layerIdToName, layer);
+    const curves: LocalCurve[] = [];
+    for (const run of runs) {
+      const pts: [number, number, number][] = [];
+      let complete = true;
+      for (const vk of run.vertexIds) {
+        const v = d.builder.vertices.get(vk);
+        if (!v) {
+          complete = false;
+          break;
+        }
+        pts.push([
+          round6(v[0] * INCHES_TO_M),
+          round6(v[2] * INCHES_TO_M),
+          round6(-v[1] * INCHES_TO_M),
+        ]);
+      }
+      if (!complete || pts.length < 2) continue;
+
+      const runLayer = resolveRunLayer(d.builder, layerIdToName, run.edgeIds, effectiveLayer);
+      curves.push({
+        pointsM: pts,
+        closed: run.closed,
+        layer: runLayer,
+        arc: solveRunArc(d.builder, run.edgeIds, null, pts, run.closed),
+      });
+    }
+    if (curves.length === 0) return undefined;
+
+    const id = `curve_${curveResources.length}`;
+    curveResources.push({
+      id,
+      definitionId: defId,
+      definitionName: d.name || '',
+      curves,
+    });
+    curveResourceIdByKey.set(key, id);
+    return id;
+  }
 
   /**
    * Identity of a mesh resource. Caching on the definition id ALONE would
@@ -521,7 +607,9 @@ export function buildInstancedSceneFromParsed(
         });
       }
       activeDefinitions.add(refIdx);
+      const meshResourceId = meshResourceFor(refIdx, instMaterial, lName);
       const children = walk(refIdx, newMatrix, lName, instMaterial);
+      const curveResourceId = curveResourceFor(refIdx, lName);
       activeDefinitions.delete(refIdx);
 
       const tx = (newMatrix[9] ?? 0) * 25.4;
@@ -578,7 +666,8 @@ export function buildInstancedSceneFromParsed(
         attributeDictionaries,
         guid: inst.refGuid || '',
         hidden: inst.hidden ?? false,
-        meshResourceId: meshResourceFor(refIdx, instMaterial, lName),
+        meshResourceId,
+        ...(curveResourceId !== undefined ? { curveResourceId } : {}),
         children,
       });
     }
@@ -593,6 +682,7 @@ export function buildInstancedSceneFromParsed(
   // component/group) is kept, as the baked path keeps it: it becomes the
   // root node's own mesh resource.
   const rootMeshResourceId = meshResourceFor('ROOT', undefined, 'Layer0');
+  const rootCurveResourceId = curveResourceFor('ROOT', 'Layer0');
 
   const sceneHierarchy: InstancedNode = {
     name: 'ROOT',
@@ -606,6 +696,7 @@ export function buildInstancedSceneFromParsed(
     guid: '',
     hidden: false,
     meshResourceId: rootMeshResourceId,
+    ...(rootCurveResourceId !== undefined ? { curveResourceId: rootCurveResourceId } : {}),
     children: rootChildren,
   };
 
@@ -696,5 +787,5 @@ export function buildInstancedSceneFromParsed(
       `${meshResources.length} mesh resources (${((Date.now() - t0) / 1000).toFixed(2)}s)`
   );
 
-  return { sceneHierarchy, meshResources, gltfMaterials, textures, bounds, layerHidden: Object.fromEntries(layerHidden), layerColors: Object.fromEntries(layerColors) };
+  return { sceneHierarchy, meshResources, curveResources, gltfMaterials, textures, bounds, layerHidden: Object.fromEntries(layerHidden), layerColors: Object.fromEntries(layerColors) };
 }

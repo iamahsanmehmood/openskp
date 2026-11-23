@@ -40,7 +40,15 @@ class ParseOptions {
   /// Called for start/stage/completion messages.
   final void Function(SkpLogLevel level, String message)? onLog;
 
-  const ParseOptions({this.onProgress, this.onLog});
+  /// Bake loose edges (edges no face uses) into `Scene.curveSets` /
+  /// `InstancedScene.curveResources`. Defaults to `true`.
+  final bool includeCurveSets;
+
+  const ParseOptions({
+    this.onProgress,
+    this.onLog,
+    this.includeCurveSets = true,
+  });
 }
 
 /// How often (in records/definitions/instances) to call onProgress during a

@@ -375,8 +375,10 @@ impl<'a> Instancer<'a> {
                     node.children = self.walk(&d.builder, &new_matrix, &l_name, inst_color)?;
                     // After the children, as in the Python reference, so curve
                     // resource ids number the same there and here.
-                    node.curve_resource_id =
-                        self.curve_resource_for(&d.builder, &d.name, Some(r), &l_name);
+                    if self.o.include_curve_sets {
+                        node.curve_resource_id =
+                            self.curve_resource_for(&d.builder, &d.name, Some(r), &l_name);
+                    }
                     self.active.remove(&r);
                 }
             }
@@ -430,8 +432,11 @@ pub fn build_instanced_scene_raw(
     // own mesh (and curve) resource.
     let root_mesh_resource_id =
         inst.mesh_resource_for_builder(&p.root.builder, "ROOT_MODEL", None, None, "Layer0")?;
-    let root_curve_resource_id =
-        inst.curve_resource_for(&p.root.builder, "ROOT_MODEL", None, "Layer0");
+    let root_curve_resource_id = if o.include_curve_sets {
+        inst.curve_resource_for(&p.root.builder, "ROOT_MODEL", None, "Layer0")
+    } else {
+        None
+    };
 
     let scene_hierarchy = InstancedNode {
         name: "ROOT".into(),

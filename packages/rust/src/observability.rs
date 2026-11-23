@@ -62,14 +62,27 @@ pub type LogFn = dyn Fn(LogLevel, &str) + Send + Sync;
 
 /// Optional progress and logging callbacks. Both are invoked synchronously on
 /// the calling thread.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct ParseOptions {
     pub progress: Option<Arc<ProgressFn>>,
     pub log: Option<Arc<LogFn>>,
+    /// Bake loose edges (edges no face uses) into [`crate::Scene::curve_sets`]
+    /// and [`crate::InstancedScene::curve_resources`]. Defaults to `true`.
+    pub include_curve_sets: bool,
+}
+
+impl Default for ParseOptions {
+    fn default() -> Self {
+        Self {
+            progress: None,
+            log: None,
+            include_curve_sets: true,
+        }
+    }
 }
 
 impl ParseOptions {
-    /// Options with no callbacks.
+    /// Options with no callbacks and default flags.
     pub fn new() -> Self {
         Self::default()
     }
@@ -85,6 +98,13 @@ impl ParseOptions {
         self.log = Some(Arc::new(f));
         self
     }
+
+    /// Enables or disables baking loose edges into scene curve sets / curve
+    /// resources (`true` by default).
+    pub fn with_include_curve_sets(mut self, include: bool) -> Self {
+        self.include_curve_sets = include;
+        self
+    }
 }
 
 impl fmt::Debug for ParseOptions {
@@ -92,6 +112,7 @@ impl fmt::Debug for ParseOptions {
         f.debug_struct("ParseOptions")
             .field("progress", &self.progress.is_some())
             .field("log", &self.log.is_some())
+            .field("include_curve_sets", &self.include_curve_sets)
             .finish()
     }
 }

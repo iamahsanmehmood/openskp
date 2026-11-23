@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — TypeScript, .NET, Dart, C++ & Rust: loose-edge curve sets, curve resources, and analytic arc recovery (#285)
+
+- **TypeScript, .NET, Dart & C++**: Ported loose-edge chaining and analytic-arc recovery from Python (`openskp._curves`) and Rust across the model and scene layers:
+  - `Definition.looseEdgeRuns()` / `looseEdgeRuns(def)` (TypeScript, Dart), `Definition.LooseEdgeRuns()` / `SkpModel.LooseEdgeRuns(def)` (.NET), and `Definition::loose_edge_runs()` / `loose_edge_runs(def)` (C++) group edges unused by any face into ordered polyline runs (`LooseEdgeRun`: `edgeIds`, `vertexIds`, `closed`) using SketchUp's own `Edge#curve` (`curve_id`) grouping rather than vertex-adjacency heuristics.
+  - `Scene.curveSets` / `Scene.CurveSets` / `Scene::curve_sets` (`CurveSetMetadata`) bake loose edges into world-space glTF-Y-up metre polylines (`points_m`, `closed`, per-run majority edge `layer`, generated `Layer_N` root names vs. component instance names, and `arc`), gated by `includeCurveSets` / `IncludeCurveSets` / `include_curve_sets` (`true` by default).
+  - `InstancedScene.curveResources` / `InstancedScene.CurveResources` / `InstancedScene::curve_resources` (`InstancedCurveResource` / `LocalCurve`) and `InstancedNode.curveResourceId` / `CurveResourceId` / `curve_resource_id` preserve local-space loose-edge runs per `(definition, layer)` context.
+  - `CurveArc` recovers exact 3-point (`[0, 1, 2]`) or full-turn two-half-turn (`[[0, 1, 2], [2, 3, 0]]`) circular arcs when a loose-edge run covers its whole `ArcCurve`, its frame is circular (`y_axis == normal x x_axis`), and all vertices lie on the circle within relative tolerance.
+- **Rust**: Added `ParseOptions::include_curve_sets` (`true` by default) and `ParseOptions::with_include_curve_sets(bool)` to match Python, TypeScript, .NET, Dart, and C++.
+
 ### Added & Fixed — All 6 languages: per-edge and per-face layers, and majority-face-layer scene fallback (#285, #526, #543)
 
 - **TypeScript, .NET & Dart**: `Edge` and `Face` now expose their own resolved `layer` / `Layer` name (`""` when the element carries no explicit layer reference), read from VFF `D007 > D207` and the classic drawbase layer id, matching C++ (#526) and Rust.
