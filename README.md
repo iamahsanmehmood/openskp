@@ -68,7 +68,7 @@ OpenSKP is an open-source, cross-platform toolkit for SketchUp (`.skp`) binary f
 | **Generate rebuild code from a file** | ✅ | Turn a parsed `.skp` file into a human-readable, re-runnable source-code transcript that calls the same language's own writer API to rebuild it — materials, textures, layers, nested definitions, holes, instance-level paint and names. All five languages. See [Generating code from a file](docs/DEVELOPER_GUIDE.md#generating-code-from-a-file) |
 | **AI coding-agent ready** | ✅ | A generic, well-documented writer API (no object-specific helpers needed) that AI coding agents can compose freely — proven on real generated models (furniture, a house, an executive desk, a smartphone modeled from a photo) across two independent AI agents, each built from a natural-language prompt with no primitives library involved. See [AI-Generated Models](docs/AI_MODELING.md) |
 | **Streaming / low-memory parsing** | ✅ | Peak memory bounded by the largest single definition, not the whole file — see [Memory architecture](docs/ARCHITECTURE.md#memory-architecture) |
-| **Pure Implementation** | ✅ | No SketchUp SDK, no native dependencies, no license required |
+| **No SketchUp SDK** | ✅ | No SketchUp install or license required. TypeScript, .NET, Dart, and Rust use no native dependencies; C++ builds `miniz`, `TinyGLTF`, and `FlatBuffers` headers privately via CMake; Python requires `numpy`, `shapely`, `mapbox_earcut` (prebuilt native wheels), `trimesh`, and `defusedxml` |
 | **Cross-Platform** | ✅ | Works on Linux, macOS, and Windows |
 
 ---
