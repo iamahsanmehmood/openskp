@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added & Fixed — TypeScript, .NET, Dart & C++: IFC curve annotations (`IfcAnnotation` / `IfcIndexedPolyCurve`) and IFC4 STEP conformance (#285)
+
+- **Loose-edge curves & analytic arcs**: `toIFC` (TypeScript), `IfcExport.ToIfc` (.NET), `toIfc` (Dart), and `to_ifc` (C++) now export `Scene.curve_sets` (`curveSets` / `CurveSets`) as `IfcAnnotation` products in an `'Annotation'` `IfcGeometricRepresentationSubContext`: circular arcs (`CurveArc`) write `IfcIndexedPolyCurve` over `IfcCartesianPointList3D` with inline 1-based `IFCARCINDEX` segments, non-arc runs write `IfcPolyline` (repeating the start coordinate when `closed`), curve representations register on `IfcPresentationLayerWithStyle`, and per-curve `attribute_dictionaries` write `Pset_<dict>` property sets, matching Python and Rust.
+- **IFC4 STEP conformance**:
+  - Escapes non-ASCII characters in STEP string literals via ISO 10303-21 `\X2\...\X0\` (UTF-16BE) and `\X4\...\X0\` (UCS-4) runs instead of raw UTF-8, while keeping raw layer names for `layer_hidden` lookups.
+  - Emits IFC4 enumeration literals (`.NOCHANGE.` on `IfcOwnerHistory`, `.SOLIDANGLEUNIT.` on `IfcSIUnit`, `.T.`/`.F.` booleans) and RFC 4122 v4 128-bit compressed IFC GUIDs (`0`–`3` leading base64 digit).
+  - Pads every product entity to its schema-declared attribute count (`IFC4` / `IFC2X3`, e.g. 13 attributes for `IFCDOOR` in IFC4 vs. 9 for `IFCWALL`) using the generated `ifc_attr_counts` tables.
+  - Computes `IfcTriangulatedFaceSet.Closed` from 6-decimal position-welded manifold edge topology instead of hardcoding `.TRUE.`.
+
 ### Added — TypeScript, .NET, Dart, C++ & Rust: loose-edge curve sets, curve resources, and analytic arc recovery (#285)
 
 - **TypeScript, .NET, Dart & C++**: Ported loose-edge chaining and analytic-arc recovery from Python (`openskp._curves`) and Rust across the model and scene layers:

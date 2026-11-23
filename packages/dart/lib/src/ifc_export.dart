@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:math' as math;
+import 'ifc_attr_counts.dart';
 import 'scene.dart';
 
 const double metresToInches = 39.37007874015748;
@@ -9,17 +10,64 @@ const _ifcBase64 =
 
 String generateIfcGuid() {
   final rand = math.Random();
-  final buffer = StringBuffer();
-  for (int i = 0; i < 22; i++) {
-    buffer.write(_ifcBase64[rand.nextInt(64)]);
+  final bytes = List<int>.generate(16, (_) => rand.nextInt(256));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40; // version 4
+  bytes[8] = (bytes[8] & 0x3f) | 0x80; // RFC 4122 variant
+  var u = BigInt.zero;
+  for (final b in bytes) {
+    u = (u << 8) | BigInt.from(b);
   }
-  return buffer.toString();
+  final chars = List<String>.filled(22, '');
+  final mask = BigInt.from(63);
+  for (var i = 21; i >= 0; i--) {
+    chars[i] = _ifcBase64[(u & mask).toInt()];
+    u >>= 6;
+  }
+  return chars.join();
+}
+
+String stepText(String text) {
+  final out = StringBuffer();
+  final run = <int>[];
+  var wide = false;
+
+  void flush() {
+    if (run.isEmpty) return;
+    out.write(wide ? r'\X4\' : r'\X2\');
+    final width = wide ? 8 : 4;
+    for (final cp in run) {
+      out.write(cp.toRadixString(16).toUpperCase().padLeft(width, '0'));
+    }
+    out.write(r'\X0\');
+    run.clear();
+  }
+
+  for (final cp in text.runes) {
+    if (cp < 128) {
+      flush();
+      if (cp == 0x27) {
+        out.write("''");
+      } else if (cp == 0x5c) {
+        out.write(r'\\');
+      } else {
+        out.writeCharCode(cp);
+      }
+    } else {
+      run.add(cp);
+      if (cp > 0xffff) {
+        wide = true;
+      }
+    }
+  }
+  flush();
+  return out.toString();
 }
 
 String sanitizeName(String? name) {
   if (name == null || name.isEmpty) return 'Unnamed';
-  final clean = name.replaceAll("'", "''").replaceAll('\\', '\\\\').trim();
-  return clean.isEmpty ? 'Unnamed' : clean;
+  final clean = name.replaceAll(RegExp(r'^[ \t\r\n]+|[ \t\r\n]+$'), '');
+  if (clean.isEmpty) return 'Unnamed';
+  return stepText(clean);
 }
 
 List<String>? _classifyByKeyword(String name) {
@@ -28,18 +76,15 @@ List<String>? _classifyByKeyword(String name) {
   if (l.contains('door')) return ['IFCDOOR', 'IfcDoor'];
   if (l.contains('window')) return ['IFCWINDOW', 'IfcWindow'];
   if (l.contains('slab') || l.contains('floor')) return ['IFCSLAB', 'IfcSlab'];
-  if (l.contains('column') || l.contains('pillar'))
+  if (l.contains('column') || l.contains('pillar')) {
     return ['IFCCOLUMN', 'IfcColumn'];
+  }
   if (l.contains('beam') || l.contains('joist')) return ['IFCBEAM', 'IfcBeam'];
   if (l.contains('roof')) return ['IFCROOF', 'IfcRoof'];
   return null;
 }
 
 /// Maps a geometry/component name to an IFC4 entity type and constructor.
-///
-/// Tries [geomName] first, then falls back to [layerName], then (when
-/// [classifyUsingFullPath] is `true`) to [pathName], and finally to a
-/// generic, untyped element if nothing matches.
 List<String> classifyElement(
   String geomName, [
   String layerName = '',
@@ -81,9 +126,50 @@ List<double> getPrimRgb(Scene scene, int primMatIdx) {
   return [r, g, b, a];
 }
 
-/**
- * Serialize a baked Scene into ISO-10303-21 STEP ASCII IFC4 format.
- */
+String _weldKey(double v) {
+  final r = (v * 1e6).roundToDouble() / 1e6;
+  return (r == 0.0 ? 0.0 : r).toStringAsFixed(6);
+}
+
+bool _meshIsClosed(GlbPrimitive prim) {
+  final vCount = prim.positions.length ~/ 3;
+  final triCount = prim.indices.length ~/ 3;
+  if (vCount == 0 || triCount == 0) return false;
+
+  final weld = <String, int>{};
+  final remap = List<int>.filled(vCount, 0);
+  for (var i = 0; i < vCount; i++) {
+    final key =
+        '${_weldKey(prim.positions[i * 3])},${_weldKey(prim.positions[i * 3 + 1])},${_weldKey(prim.positions[i * 3 + 2])}';
+    remap[i] = weld.putIfAbsent(key, () => weld.length);
+  }
+
+  final edgeUse = <(int, int), int>{};
+  for (var i = 0; i < triCount; i++) {
+    final i0 = prim.indices[i * 3];
+    final i1 = prim.indices[i * 3 + 1];
+    final i2 = prim.indices[i * 3 + 2];
+    if (i0 >= vCount || i1 >= vCount || i2 >= vCount) return false;
+    final a = remap[i0];
+    final b = remap[i1];
+    final c = remap[i2];
+    for (final (u, v) in [(a, b), (b, c), (c, a)]) {
+      final ek = u < v ? (u, v) : (v, u);
+      edgeUse[ek] = (edgeUse[ek] ?? 0) + 1;
+    }
+  }
+
+  return edgeUse.isNotEmpty && edgeUse.values.every((n) => n == 2);
+}
+
+String _ifcCoord(double x, double y, double z, double scale) {
+  final vx = (x * scale).toStringAsFixed(6);
+  final vy = (-z * scale).toStringAsFixed(6);
+  final vz = (y * scale).toStringAsFixed(6);
+  return '($vx,$vy,$vz)';
+}
+
+/// Serializes a baked [Scene] into ISO-10303-21 STEP ASCII IFC4 format.
 String toIfc(
   Scene scene, {
   double scale = metresToMm,
@@ -91,10 +177,12 @@ String toIfc(
   List<String> Function(String geomName, String layerName)? classifier,
   bool classifyUsingFullPath = false,
 }) {
-  final List<String> Function(String, String, String) classify = classifier != null
-      ? (name, layer, _) => classifier(name, layer)
-      : (name, layer, path) => classifyElement(name, layer, path, classifyUsingFullPath);
-  final schemaStr = schema.toUpperCase();
+  final List<String> Function(String, String, String) classify =
+      classifier != null
+          ? (name, layer, _) => classifier(name, layer)
+          : (name, layer, path) =>
+              classifyElement(name, layer, path, classifyUsingFullPath);
+  final schemaStr = schema.isEmpty ? 'IFC4' : schema.toUpperCase();
   final nowIso = DateTime.now().toUtc().toIso8601String().split('.').first;
   final timestampEpoch = DateTime.now().toUtc().millisecondsSinceEpoch ~/ 1000;
 
@@ -105,10 +193,10 @@ String toIfc(
     "FILE_NAME('model.ifc','$nowIso',('OpenSKP Author'),('OpenSKP Organization'),'OpenSKP IFC Exporter','OpenSKP','');",
     "FILE_SCHEMA(('$schemaStr'));",
     'ENDSEC;',
-    'DATA;'
+    'DATA;',
   ];
 
-  int entityId = 1;
+  var entityId = 1;
   int nextId() => entityId++;
 
   final personId = nextId();
@@ -126,7 +214,7 @@ String toIfc(
 
   final ownerHistId = nextId();
   lines.add(
-      '#$ownerHistId=IFCOWNERHISTORY(#$personOrgId,#$appId,\$,.READWRITE.,\$,\$,\$,$timestampEpoch);');
+      '#$ownerHistId=IFCOWNERHISTORY(#$personOrgId,#$appId,\$,.NOCHANGE.,\$,\$,\$,$timestampEpoch);');
 
   final lengthUnitId = nextId();
   lines.add('#$lengthUnitId=IFCSIUNIT(*,.LENGTHUNIT.,.MILLI.,.METRE.);');
@@ -135,7 +223,7 @@ String toIfc(
   lines.add('#$angleUnitId=IFCSIUNIT(*,.PLANEANGLEUNIT.,\$,.RADIAN.);');
 
   final solidUnitId = nextId();
-  lines.add('#$solidUnitId=IFCSIUNIT(*,.STERADIANUNIT.,\$,.STERADIAN.);');
+  lines.add('#$solidUnitId=IFCSIUNIT(*,.SOLIDANGLEUNIT.,\$,.STERADIAN.);');
 
   final unitAssignId = nextId();
   lines.add(
@@ -150,6 +238,10 @@ String toIfc(
   final geomCtxId = nextId();
   lines.add(
       '#$geomCtxId=IFCGEOMETRICREPRESENTATIONCONTEXT(\$,\'Model\',3,1.0E-5,#$axisPlacementId,\$);');
+
+  final annCtxId = nextId();
+  lines.add(
+      '#$annCtxId=IFCGEOMETRICREPRESENTATIONSUBCONTEXT(\'Annotation\',\'Model\',*,*,*,*,#$geomCtxId,\$,.MODEL_VIEW.,\$);');
 
   final projId = nextId();
   lines.add(
@@ -186,8 +278,14 @@ String toIfc(
       '#${nextId()}=IFCRELAGGREGATES(\'${generateIfcGuid()}\',#$ownerHistId,\$,\$,#$bldgId,(#$storeyId));');
 
   final productIds = <int>[];
-  final layerItems = <String, List<int>>{};
+  final layerItems = <String, (String, List<int>)>{};
   final matStyleCache = <String, int>{};
+
+  void addLayerItem(String rawLayer, int itemId) {
+    final raw = rawLayer.isEmpty ? 'Layer0' : rawLayer;
+    final key = rawLayer.isEmpty ? 'Layer0' : sanitizeName(rawLayer);
+    layerItems.putIfAbsent(key, () => (raw, <int>[])).$2.add(itemId);
+  }
 
   void writePset(int productId, String psetName, Map<String, String> props) {
     if (props.isEmpty) return;
@@ -210,6 +308,62 @@ String toIfc(
         '#${nextId()}=IFCRELDEFINESBYPROPERTIES(\'${generateIfcGuid()}\',#$ownerHistId,\$,\$,(#$productId),#$psetId);');
   }
 
+  for (final cs in scene.curveSets) {
+    if (cs.pointsM.length < 2) continue;
+
+    int curveId;
+    final arc = cs.arc;
+    if (arc != null && arc.points.length >= 3) {
+      final segs = arc.segments
+          .map((s) => 'IFCARCINDEX((${s.$1 + 1},${s.$2 + 1},${s.$3 + 1}))')
+          .join(',');
+      final coords =
+          arc.points.map((p) => _ifcCoord(p.$1, p.$2, p.$3, scale)).join(',');
+      final ptListId = nextId();
+      lines.add('#$ptListId=IFCCARTESIANPOINTLIST3D(($coords));');
+      curveId = nextId();
+      lines.add('#$curveId=IFCINDEXEDPOLYCURVE(#$ptListId,($segs),.F.);');
+    } else {
+      final coords =
+          cs.pointsM.map((p) => _ifcCoord(p.$1, p.$2, p.$3, scale)).toList();
+      if (cs.closed) {
+        coords.add(coords.first);
+      }
+      final ptIds = <int>[];
+      for (final c in coords) {
+        final ptId = nextId();
+        lines.add('#$ptId=IFCCARTESIANPOINT($c);');
+        ptIds.add(ptId);
+      }
+      curveId = nextId();
+      final ptRefs = ptIds.map((pid) => '#$pid').join(',');
+      lines.add('#$curveId=IFCPOLYLINE(($ptRefs));');
+    }
+
+    final curveSetId = nextId();
+    lines.add('#$curveSetId=IFCGEOMETRICCURVESET((#$curveId));');
+
+    addLayerItem(cs.layer, curveId);
+
+    final annName = sanitizeName(cs.name.isEmpty ? 'Curve' : cs.name);
+    final annRepId = nextId();
+    lines.add(
+        '#$annRepId=IFCSHAPEREPRESENTATION(#$annCtxId,\'Annotation\',\'GeometricCurveSet\',(#$curveSetId));');
+    final annShapeId = nextId();
+    lines.add('#$annShapeId=IFCPRODUCTDEFINITIONSHAPE(\$,\$,(#$annRepId));');
+    final annPlacementId = nextId();
+    lines.add(
+        '#$annPlacementId=IFCLOCALPLACEMENT(#$storeyPlacementId,#$axisPlacementId);');
+    final annId = nextId();
+    lines.add(
+        '#$annId=IFCANNOTATION(\'${generateIfcGuid()}\',#$ownerHistId,\'$annName\',\$,\$,#$annPlacementId,#$annShapeId);');
+
+    for (final dictEntry in cs.attributeDictionaries.entries) {
+      writePset(annId, 'Pset_${dictEntry.key}', dictEntry.value);
+    }
+    productIds.add(annId);
+  }
+
   for (final prim in scene.glbPrimitives) {
     final triCount = prim.indices.length ~/ 3;
     final vCount = prim.positions.length ~/ 3;
@@ -219,37 +373,39 @@ String toIfc(
     final displayName = (meta != null && meta.name.isNotEmpty)
         ? sanitizeName(meta.name)
         : sanitizeName(prim.geomName);
-    final layerName = (meta != null && meta.layer.isNotEmpty)
-        ? sanitizeName(meta.layer)
-        : 'Layer0';
+    final rawLayer = (meta != null && meta.layer.isNotEmpty) ? meta.layer : '';
+    final layerName = rawLayer.isNotEmpty ? sanitizeName(rawLayer) : 'Layer0';
     final pathName = meta?.path ?? '';
     final classification = classify(displayName, layerName, pathName);
     final stepType = classification[0];
 
     final ptCoords = <String>[];
-    for (int i = 0; i < vCount; i++) {
-      final vx = (prim.positions[i * 3] * scale).toStringAsFixed(6);
-      final vy = (-prim.positions[i * 3 + 2] * scale).toStringAsFixed(6);
-      final vz = (prim.positions[i * 3 + 1] * scale).toStringAsFixed(6);
-      ptCoords.add('($vx,$vy,$vz)');
+    for (var i = 0; i < vCount; i++) {
+      ptCoords.add(_ifcCoord(
+        prim.positions[i * 3],
+        prim.positions[i * 3 + 1],
+        prim.positions[i * 3 + 2],
+        scale,
+      ));
     }
 
     final ptListId = nextId();
     lines.add('#$ptListId=IFCCARTESIANPOINTLIST3D((${ptCoords.join(',')}));');
 
     final faceIndices = <String>[];
-    for (int i = 0; i < triCount; i++) {
+    for (var i = 0; i < triCount; i++) {
       final idx0 = prim.indices[i * 3] + 1;
       final idx1 = prim.indices[i * 3 + 1] + 1;
       final idx2 = prim.indices[i * 3 + 2] + 1;
       faceIndices.add('($idx0,$idx1,$idx2)');
     }
 
+    final closed = _meshIsClosed(prim) ? '.T.' : '.F.';
     final faceSetId = nextId();
     lines.add(
-        '#$faceSetId=IFCTRIANGULATEDFACESET(#$ptListId,\$,.TRUE.,(${faceIndices.join(',')}),\$);');
+        '#$faceSetId=IFCTRIANGULATEDFACESET(#$ptListId,\$,$closed,(${faceIndices.join(',')}),\$);');
 
-    layerItems.putIfAbsent(layerName, () => []).add(faceSetId);
+    addLayerItem(rawLayer, faceSetId);
 
     final rgba = getPrimRgb(scene, prim.materialIndex);
     final r = rgba[0], g = rgba[1], b = rgba[2], a = rgba[3];
@@ -294,14 +450,26 @@ String toIfc(
         '#$prodPlacementId=IFCLOCALPLACEMENT(#$storeyPlacementId,#$axisPlacementId);');
 
     final productId = nextId();
-    final prodGuid = generateIfcGuid();
-    if (stepType == 'IFCBUILDINGELEMENTPROXY') {
-      lines.add(
-          '#$productId=$stepType(\'$prodGuid\',#$ownerHistId,\'$displayName\',\$,\$,#$prodPlacementId,#$prodShapeId,\$,.NOTDEFINED.);');
-    } else {
-      lines.add(
-          '#$productId=$stepType(\'$prodGuid\',#$ownerHistId,\'$displayName\',\$,\$,#$prodPlacementId,#$prodShapeId,\$,\$);');
+    final attrs = <String>[
+      '\'${generateIfcGuid()}\'',
+      '#$ownerHistId',
+      '\'$displayName\'',
+      '\$',
+      '\$',
+      '#$prodPlacementId',
+      '#$prodShapeId',
+      '\$',
+    ];
+    final declared = ifcAttrCount(schemaStr, stepType);
+    final total = math.max(
+        attrs.length, (declared != null && declared > 0) ? declared : 9);
+    while (attrs.length < total) {
+      attrs.add('\$');
     }
+    if (stepType == 'IFCBUILDINGELEMENTPROXY' && total == 9) {
+      attrs[8] = '.NOTDEFINED.';
+    }
+    lines.add('#$productId=$stepType(${attrs.join(',')});');
     productIds.add(productId);
 
     if (meta != null) {
@@ -314,10 +482,10 @@ String toIfc(
 
   final sortedLayerNames = layerItems.keys.toList()..sort();
   for (final lName in sortedLayerNames) {
-    final itemIds = layerItems[lName]!;
-    if (itemIds.isNotEmpty) {
-      final itemRefs = itemIds.map((iid) => '#$iid').join(',');
-      final layerOn = scene.layerHidden[lName] == true ? '.F.' : '.T.';
+    final entry = layerItems[lName]!;
+    if (entry.$2.isNotEmpty) {
+      final itemRefs = entry.$2.map((iid) => '#$iid').join(',');
+      final layerOn = scene.layerHidden[entry.$1] == true ? '.F.' : '.T.';
       lines.add(
           '#${nextId()}=IFCPRESENTATIONLAYERWITHSTYLE(\'$lName\',\$,($itemRefs),\$,$layerOn,.F.,.F.,());');
     }
@@ -331,7 +499,7 @@ String toIfc(
 
   lines.add('ENDSEC;');
   lines.add('END-ISO-10303-21;');
-  return lines.join('\r\n') + '\r\n';
+  return '${lines.join('\r\n')}\r\n';
 }
 
 void exportIfc(

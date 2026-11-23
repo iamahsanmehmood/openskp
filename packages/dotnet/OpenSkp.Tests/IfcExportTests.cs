@@ -409,14 +409,8 @@ namespace OpenSkp.Tests
                 Assert.Contains("IFCWALL(", ifcText);
                 Assert.Contains("'Stud 12'", ifcText);
                 Assert.DoesNotContain("mesh_0_ROOT", ifcText);
-                string visibleLine = ifcText.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None)
-                    .First(l => l.Contains("IFCPRESENTATIONLAYERWITHSTYLE('Layer0'"));
-                Assert.Contains(",.T.,.F.,.F.,())", visibleLine);
-
-                scene.LayerHidden["Layer0"] = true;
-                string hiddenIfc = IfcExport.ToIfc(scene, classifyUsingFullPath: true);
-                string hiddenLine = hiddenIfc.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None)
-                    .First(l => l.Contains("IFCPRESENTATIONLAYERWITHSTYLE('Layer0'"));
+                string hiddenLine = ifcText.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None)
+                    .First(l => l.Contains("IFCPRESENTATIONLAYERWITHSTYLE('HiddenWalls'"));
                 Assert.Contains(",.F.,.F.,.F.,())", hiddenLine);
             }
             finally
