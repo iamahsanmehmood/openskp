@@ -99,21 +99,7 @@ class SkpFile {
 
     // Convert pages (saved scenes) - hidden layer ids resolve to names;
     // unknown ids (stale refs) are dropped.
-    for (final pg in parsed.pages) {
-      model.pages.add(Page(
-        name: pg.name,
-        eye: pg.eye,
-        target: pg.target,
-        up: pg.up,
-        fov: pg.fov,
-        parallel: pg.parallel,
-        orthoHeight: pg.orthoHeight,
-        hiddenLayers: [
-          for (final id in pg.hiddenLayerIds)
-            if (parsed.layerIdToName[id] != null) parsed.layerIdToName[id]!
-        ],
-      ));
-    }
+    model.pages.addAll(buildPagesFromRaw(parsed));
 
     // Convert model-level linear dimensions (VFF; world space).
     for (final dm in parsed.dimensions) {
@@ -250,4 +236,23 @@ class SkpFile {
 
     return defn;
   }
+}
+
+List<Page> buildPagesFromRaw(RawParsed parsed) {
+  return [
+    for (final pg in parsed.pages)
+      Page(
+        name: pg.name,
+        eye: pg.eye,
+        target: pg.target,
+        up: pg.up,
+        fov: pg.fov,
+        parallel: pg.parallel,
+        orthoHeight: pg.orthoHeight,
+        hiddenLayers: [
+          for (final id in pg.hiddenLayerIds)
+            if (parsed.layerIdToName[id] != null) parsed.layerIdToName[id]!
+        ],
+      ),
+  ];
 }

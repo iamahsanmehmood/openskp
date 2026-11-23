@@ -37,6 +37,7 @@ from ._face_groups import (
     resolve_material,
 )
 from .errors import SkpParseError
+from .model import Page, _convert_pages
 from .scene import SceneTexture, _original_image_mime, _sniff_image_mime, _warn_skipped_texture
 
 logger = logging.getLogger("openskp.instanced_scene")
@@ -220,6 +221,10 @@ class InstancedScene:
     # the baked path (openskp#272).
     layer_hidden: Dict[str, bool] = field(default_factory=dict)
     unread_root_entities: int = 0
+    # Saved scenes (SketchUp's "Scenes" tabs), identical to SkpModel.pages.
+    # Camera eye/target/up and ortho_height stay in SketchUp's native Z-up
+    # frame and inches (unlike mesh_resources/matrix, which are Y-up metres).
+    pages: List[Page] = field(default_factory=list)
 
 
 def _to_gltf_matrix(m: List[float]) -> Tuple[float, ...]:
@@ -858,4 +863,5 @@ def build_instanced_scene(
         textures=textures,
         layer_hidden=dict(parsed.get("layer_hidden") or {}),
         unread_root_entities=int(parsed.get("unread_root_entities", 0)),
+        pages=_convert_pages(parsed),
     )

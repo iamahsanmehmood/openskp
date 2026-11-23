@@ -45,6 +45,7 @@ Scene build_scene_raw(RawParsed&& p, const ParseOptions& o) {
   scene.scene_hierarchy = {"ROOT", "ROOT_MODEL", "Layer0", {0, 0, 0}, {}, {}, {}};
   scene.layer_hidden = p.layer_hidden;
   scene.unread_root_entities = p.unread_root_entities;
+  scene.pages = build_pages(p);
   emit_log(o, LogLevel::information,
            "Building scene: " + std::to_string(p.definitions.size()) + " definitions available");
   std::map<GroupKey, size_t> materials;

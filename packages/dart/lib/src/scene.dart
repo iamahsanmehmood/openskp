@@ -4,7 +4,9 @@ import 'core.dart';
 import 'errors.dart';
 import 'face_groups.dart';
 import 'geometry.dart';
+import 'model.dart' show Page;
 import 'observability.dart';
+import 'parser.dart' show buildPagesFromRaw;
 import 'tlv.dart';
 import 'transforms.dart';
 
@@ -151,6 +153,12 @@ class Scene {
   /// entity walk stopped early (`0` for complete classic files and VFF files).
   int unreadRootEntities;
 
+  /// Saved scenes (SketchUp's "Scenes" tabs), identical to [SkpModel.pages].
+  /// Camera [Page.eye], [Page.target], [Page.up] and [Page.orthoHeight] stay
+  /// in SketchUp's native Z-up frame and inches (unlike [glbPrimitives], which
+  /// are Y-up metres).
+  List<Page> pages;
+
   Scene({
     required this.sceneHierarchy,
     required this.meshIndex,
@@ -158,7 +166,9 @@ class Scene {
     required this.gltfMaterials,
     List<SceneTexture>? textures,
     this.unreadRootEntities = 0,
-  }) : textures = textures ?? [];
+    List<Page>? pages,
+  })  : textures = textures ?? [],
+        pages = pages ?? [];
 }
 
 /// Identifies an image's MIME type from its magic bytes. Returns null for
@@ -605,6 +615,7 @@ class SceneBuilder {
       gltfMaterials: gltfMaterials,
       textures: textures,
       unreadRootEntities: parsed.unreadRootEntities,
+      pages: buildPagesFromRaw(parsed),
     );
   }
 

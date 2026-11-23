@@ -556,6 +556,15 @@ struct Page {
   std::vector<EntityId> hidden_entity_ids;
   /// The scene selected when the model was saved (at most one).
   bool selected{};
+
+  bool operator==(const Page& o) const {
+    return name == o.name && eye == o.eye && target == o.target && up == o.up && fov == o.fov &&
+           parallel == o.parallel && ortho_height == o.ortho_height &&
+           hidden_layers == o.hidden_layers && hidden_entity_ids == o.hidden_entity_ids &&
+           selected == o.selected;
+  }
+
+  bool operator!=(const Page& o) const { return !(*this == o); }
 };
 
 /// A view camera (VFF `34BC` record), as scenes and the model's current view

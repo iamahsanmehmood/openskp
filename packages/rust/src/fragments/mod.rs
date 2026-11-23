@@ -1123,6 +1123,7 @@ fn read_model(raw: &[u8], options: &ParseOptions) -> ReadResult<InstancedScene> 
         layer_hidden,
         curve_resources: Vec::new(),
         unread_root_entities: 0,
+        pages: Vec::new(),
     })
 }
 

@@ -121,6 +121,13 @@ namespace OpenSkp
         /// (pre-2021) root entity walk stopped early (0 for complete classic
         /// files, VFF files, and scenes read back from .frag).</summary>
         public int UnreadRootEntities { get; set; }
+
+        /// <summary>Saved scenes (SketchUp's "Scenes" tabs), identical to
+        /// <see cref="SkpModel.Pages"/>. Camera Eye/Target/Up and OrthoHeight
+        /// stay in SketchUp's native Z-up frame and inches (unlike
+        /// MeshResources and node matrices, which are Y-up metres). Empty on
+        /// scenes read back from .frag.</summary>
+        public List<Page> Pages { get; set; } = new List<Page>();
     }
 
     /// <summary>Builds the placed scene graph with SketchUp's
@@ -665,6 +672,7 @@ namespace OpenSkp
                 Textures = textures,
                 LayerHidden = new Dictionary<string, bool>(parsed.LayerHidden),
                 UnreadRootEntities = parsed.UnreadRootEntities,
+                Pages = SkpFile.BuildPages(parsed),
             };
         }
 

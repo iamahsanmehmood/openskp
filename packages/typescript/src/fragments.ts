@@ -970,5 +970,6 @@ export function fromFragments(data: Uint8Array, options?: ParseOptions): Instanc
     textures: [],
     layerHidden,
     unreadRootEntities: 0,
+    pages: [],
   };
 }

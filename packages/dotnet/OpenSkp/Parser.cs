@@ -45,28 +45,7 @@ namespace OpenSkp
 
             // Convert pages (saved scenes) - hidden layer ids resolve to
             // names; unknown ids (stale refs) are dropped.
-            foreach (var pg in parsed.Pages)
-            {
-                var hiddenLayers = new List<string>();
-                foreach (var id in pg.HiddenLayerIds)
-                {
-                    if (parsed.LayerIdToName.TryGetValue(id, out var layerName))
-                    {
-                        hiddenLayers.Add(layerName);
-                    }
-                }
-                model.Pages.Add(new Page
-                {
-                    Name = pg.Name,
-                    Eye = pg.Eye,
-                    Target = pg.Target,
-                    Up = pg.Up,
-                    Fov = pg.Fov,
-                    Parallel = pg.Parallel,
-                    OrthoHeight = pg.OrthoHeight,
-                    HiddenLayers = hiddenLayers,
-                });
-            }
+            model.Pages.AddRange(BuildPages(parsed));
 
             // Convert model-level linear dimensions (VFF; world space).
             foreach (var dm in parsed.Dimensions)
@@ -126,6 +105,34 @@ namespace OpenSkp
             }
 
             return model;
+        }
+
+        internal static List<Page> BuildPages(Core.RawParsed parsed)
+        {
+            var pages = new List<Page>(parsed.Pages.Count);
+            foreach (var pg in parsed.Pages)
+            {
+                var hiddenLayers = new List<string>();
+                foreach (var id in pg.HiddenLayerIds)
+                {
+                    if (parsed.LayerIdToName.TryGetValue(id, out var layerName))
+                    {
+                        hiddenLayers.Add(layerName);
+                    }
+                }
+                pages.Add(new Page
+                {
+                    Name = pg.Name,
+                    Eye = pg.Eye,
+                    Target = pg.Target,
+                    Up = pg.Up,
+                    Fov = pg.Fov,
+                    Parallel = pg.Parallel,
+                    OrthoHeight = pg.OrthoHeight,
+                    HiddenLayers = hiddenLayers,
+                });
+            }
+            return pages;
         }
 
         private static Definition BuildDefinition(long defId, Geometry.RawDefinition d, Dictionary<long, string> layerIdToName)

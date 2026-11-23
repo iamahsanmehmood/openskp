@@ -263,7 +263,7 @@ namespace OpenSkp
     }
 
     /// <summary>A saved scene (SketchUp's "Scenes" tabs; "pages" in the SDK).</summary>
-    public sealed class Page
+    public sealed class Page : IEquatable<Page>
     {
         /// <summary>Scene name as shown on its tab.</summary>
         public string Name { get; set; } = "";
@@ -289,6 +289,41 @@ namespace OpenSkp
 
         /// <summary>Names of the layers this scene hides.</summary>
         public List<string> HiddenLayers { get; set; } = new List<string>();
+
+        public bool Equals(Page? other)
+        {
+            if (ReferenceEquals(this, other)) return true;
+            if (other is null) return false;
+            return Name == other.Name
+                && Nullable.Equals(Eye, other.Eye)
+                && Nullable.Equals(Target, other.Target)
+                && Nullable.Equals(Up, other.Up)
+                && Fov.Equals(other.Fov)
+                && Parallel == other.Parallel
+                && OrthoHeight.Equals(other.OrthoHeight)
+                && System.Linq.Enumerable.SequenceEqual(HiddenLayers, other.HiddenLayers);
+        }
+
+        public override bool Equals(object? obj) => Equals(obj as Page);
+
+        public override int GetHashCode()
+        {
+            unchecked
+            {
+                int hash = Name.GetHashCode();
+                hash = (hash * 397) ^ Eye.GetHashCode();
+                hash = (hash * 397) ^ Target.GetHashCode();
+                hash = (hash * 397) ^ Up.GetHashCode();
+                hash = (hash * 397) ^ Fov.GetHashCode();
+                hash = (hash * 397) ^ Parallel.GetHashCode();
+                hash = (hash * 397) ^ OrthoHeight.GetHashCode();
+                foreach (var layer in HiddenLayers)
+                {
+                    hash = (hash * 397) ^ (layer?.GetHashCode() ?? 0);
+                }
+                return hash;
+            }
+        }
     }
 
     public sealed class Definition

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — All 6 languages: saved scenes (`pages`) on `Scene` and `InstancedScene` (#593)
+
+- `build_scene()` and `build_instanced_scene()` (`buildScene` / `buildInstancedScene` / `BuildScene` / `BuildInstancedScene`) now carry the model's saved scenes (`Scene.pages` / `InstancedScene.pages` in Python, Dart, C++ and Rust; optional `SkpScene.pages` / `InstancedScene.pages` in TypeScript; `Scene.Pages` / `InstancedScene.Pages` in .NET), matching `SkpModel.pages` in SketchUp's native Z-up axes and inches (`[]` when a scene is read back from `.frag`), so consumers that build a scene and import cameras do not need a second `parse()` pass.
+
 ### Fixed — Python: scenes use a component instance's own paint and tag in classic files (#596)
 
 - `build_scene()` and `build_instanced_scene()` read an instance's paint and tag from its 2021+ `D007` record only. In classic (pre-2021) files a painted component came out in its tag's colour, and every instance sat on its parent's tag. Both now come from the instance itself, and nested components inherit the paint.

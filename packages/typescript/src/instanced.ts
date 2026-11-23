@@ -5,11 +5,13 @@ import { SkpParseError } from './errors';
 import { buildLocalFaceGroups } from './face-groups';
 import {
   Material,
+  Page,
   Texture,
   SceneTexture,
   SceneOptions,
   SceneBounds,
   ParsedRawData,
+  buildPagesFromRaw,
   sniffImageMime,
   resolveMaterialFromMaps,
 } from './model';
@@ -198,6 +200,13 @@ export interface InstancedScene {
    * {@link buildInstancedScene} and `fromFragments`; optional so
    * hand-constructed scene literals for exporters do not need to supply it. */
   unreadRootEntities?: number;
+  /** Saved scenes (SketchUp's "Scenes" tabs), identical to {@link SkpModel.pages}.
+   * Camera `eye`, `target`, `up` and `orthoHeight` stay in SketchUp's native
+   * Z-up frame and inches (unlike `meshResources` and `matrix`, which are Y-up
+   * metres). Always populated by {@link buildInstancedScene} (`[]` on scenes
+   * read back from `.frag`); optional so hand-constructed scene literals for
+   * exporters do not need to supply it. */
+  pages?: Page[];
 }
 
 /**
@@ -709,5 +718,6 @@ export function buildInstancedSceneFromParsed(
     layerHidden: Object.fromEntries(layerHidden),
     layerColors: Object.fromEntries(layerColors),
     unreadRootEntities: parsed.unreadRootEntities ?? 0,
+    pages: buildPagesFromRaw(parsed),
   };
 }

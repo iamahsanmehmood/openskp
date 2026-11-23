@@ -126,6 +126,11 @@ struct OPENSKP_EXPORT InstancedScene {
   /// entity walk stopped early (0 for complete classic files, VFF files,
   /// and scenes read back from .frag).
   std::size_t unread_root_entities{};
+  /// Saved scenes (SketchUp's "Scenes" tabs), identical to SkpModel::pages.
+  /// Camera eye/target/up and ortho_height stay in SketchUp's native Z-up
+  /// frame and inches (unlike mesh_resources and node matrices, which are
+  /// Y-up metres). Empty on scenes read back from .frag.
+  std::vector<Page> pages;
 };
 
 }  // namespace openskp

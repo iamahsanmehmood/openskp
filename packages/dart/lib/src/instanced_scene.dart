@@ -4,7 +4,9 @@ import 'core.dart';
 import 'errors.dart';
 import 'face_groups.dart';
 import 'geometry.dart';
+import 'model.dart' show Page;
 import 'observability.dart';
+import 'parser.dart' show buildPagesFromRaw;
 import 'scene.dart' show SceneTexture, sniffImageMime;
 import 'tlv.dart';
 import 'transforms.dart';
@@ -157,6 +159,13 @@ class InstancedScene {
   /// and scenes read back from `.frag`).
   int unreadRootEntities;
 
+  /// Saved scenes (SketchUp's "Scenes" tabs), identical to [SkpModel.pages].
+  /// Camera [Page.eye], [Page.target], [Page.up] and [Page.orthoHeight] stay
+  /// in SketchUp's native Z-up frame and inches (unlike [meshResources] and
+  /// node matrices, which are Y-up metres). Empty on scenes read back from
+  /// `.frag`.
+  List<Page> pages;
+
   InstancedScene({
     this.bounds,
     required this.sceneHierarchy,
@@ -165,8 +174,10 @@ class InstancedScene {
     List<SceneTexture>? textures,
     Map<String, bool>? layerHidden,
     this.unreadRootEntities = 0,
+    List<Page>? pages,
   })  : textures = textures ?? [],
-        layerHidden = layerHidden ?? {};
+        layerHidden = layerHidden ?? {},
+        pages = pages ?? [];
 }
 
 const double _inchesToMm = 25.4;
@@ -647,6 +658,7 @@ class InstancedSceneBuilder {
       textures: textures,
       layerHidden: Map<String, bool>.from(parsed.layerHidden),
       unreadRootEntities: parsed.unreadRootEntities,
+      pages: buildPagesFromRaw(parsed),
     );
   }
 
