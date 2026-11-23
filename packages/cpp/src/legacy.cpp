@@ -2554,6 +2554,12 @@ RawParsed parse_legacy(const ByteBuffer& data, const ParseOptions& o) {
     Archive& ar = walked.ar;
     auto& root = walked.root;
     out.unread_root_entities = ar.unread_root_entities;
+    if (out.unread_root_entities != 0) {
+      emit_log(o, LogLevel::warning,
+               "Classic .skp root entity list stopped early after " + std::to_string(root.size()) +
+                   " entities (" + std::to_string(out.unread_root_entities) +
+                   " unread): this file was read only in part");
+    }
     auto& layers = walked.layers;
     auto& mats = walked.materials;
     for (auto& m : mats) {

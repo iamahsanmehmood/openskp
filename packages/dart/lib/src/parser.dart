@@ -81,7 +81,8 @@ class SkpFile {
 
     final model = SkpModel()
       ..version = parsed.version
-      ..units = parsed.units;
+      ..units = parsed.units
+      ..unreadRootEntities = parsed.unreadRootEntities;
 
     for (final entry in parsed.defsDict.entries) {
       model.definitions[entry.key] =

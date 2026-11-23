@@ -334,6 +334,7 @@ function parseToRaw(buffer: ArrayBuffer, options?: ParseOptions): ParsedRawData 
     materialsByFolder,
     styles,
     defsDict,
+    unreadRootEntities: 0,
   };
 }
 

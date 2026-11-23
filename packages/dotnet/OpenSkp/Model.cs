@@ -363,5 +363,14 @@ namespace OpenSkp
         public Dictionary<long, Material> MaterialsById { get; set; } = new Dictionary<long, Material>();
 
         public List<Style> Styles { get; set; } = new List<Style>();
+
+        /// <summary>How many top-level entities of a classic (pre-2021) file
+        /// the reader couldn't read. It keeps what it read before the first
+        /// root record it can't parse and drops that record and everything
+        /// after it, so a nonzero count means the model lost geometry,
+        /// components, groups, text or dimensions. Phantom entries the root
+        /// count includes but the file never writes are not counted. Always 0
+        /// for VFF files.</summary>
+        public int UnreadRootEntities { get; set; }
     }
 }

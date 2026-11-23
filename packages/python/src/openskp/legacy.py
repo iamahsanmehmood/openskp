@@ -149,6 +149,11 @@ class _Archive:
         self.cum_delta = 0
         self.annot_watermark: Optional[int] = None
         self.burn_stack: list = []    # per-entity-list burned-item credits
+        # Set when the root list stopped at a record it couldn't read, and how
+        # many of its declared entities that left out (see
+        # SkpModel.unread_root_entities).
+        self.root_stopped_early: bool = False
+        self.unread_root_entities: int = 0
         # per-entity-list instances an annotation's path wrote in full (see
         # _path_ref) that the list has not listed yet, slot -> None in order
         self.inline_stack: list = []
@@ -1699,6 +1704,9 @@ def _read_text(ar, r):
 
 def _read_entity_list(ar, r, count, owner):
     ents = []
+    if owner == 'root':
+        ar.root_stopped_early = False
+        ar.unread_root_entities = 0
     ar.burn_stack.append(0)
     ar.inline_stack.append({})
     try:
@@ -1713,6 +1721,13 @@ def _read_entity_list(ar, r, count, owner):
             if len(ents) < count:
                 _, name, value = ar.slots[slot]
                 ents.append((slot, name, value))
+        if owner == 'root' and ar.root_stopped_early:
+            # Burned indices count phantom entries the stream never carries
+            # (see _register_burn); the rest of the shortfall is entities the
+            # reader couldn't read and dropped.
+            phantoms = max(0, ar.burn_stack[-1])
+            missing = max(0, count - len(ents))
+            ar.unread_root_entities = max(0, missing - phantoms)
         return ents
     finally:
         ar.burn_stack.pop()
@@ -1765,6 +1780,7 @@ def _read_entity_list_inner(ar, r, count, owner, ents):
             if owner == 'root':
                 # over-declared root counts run into the document tail — stop
                 r.pos = p
+                ar.root_stopped_early = True
                 break
             if owner == 'def' and ar.burn_stack and ar.burn_stack[-1]:
                 # this list had burned MapObject indices (see _register_burn):
@@ -2612,6 +2628,13 @@ def full_parse_legacy(skp_path: str) -> Dict[str, Any]:
             f"legacy .skp parse failed: {e}", stage="legacy_walk") from e
     logger.debug(
         "Legacy walk complete: %d materials, %d layers", len(materials), len(layers))
+    if ar.unread_root_entities:
+        logger.warning(
+            "Classic .skp root entity list stopped early after %d entities "
+            "(%d unread): this file was read only in part",
+            len(root),
+            ar.unread_root_entities,
+        )
 
     slots = ar.slots
 
@@ -2741,6 +2764,7 @@ def full_parse_legacy(skp_path: str) -> Dict[str, Any]:
         'thumbnail_data': None,
         'styles': [],
         'face_colors': face_colors,
+        'unread_root_entities': ar.unread_root_entities,
         # Legacy (pre-2021 MFC) files carry no meta/meta.dat container -
         # that's a VFF/ZIP-only construct - so there is no known source
         # for the model's unit-system string here.

@@ -341,6 +341,10 @@ export class Archive {
   cumDelta = 0;
   annotWatermark: number | null = null;
   burnStack: number[] = []; // per-entity-list burned-item credits
+  // Set when the root list stopped at a record it couldn't read, and how many
+  // of its declared entities that left out (see SkpModel.unreadRootEntities).
+  rootStoppedEarly = false;
+  unreadRootEntities = 0;
   // per-entity-list instances an annotation's path wrote in full (see
   // pathRef) that the list has not listed yet, in order
   inlineStack: Set<number>[] = [];
@@ -1440,6 +1444,10 @@ function readText(ar: Archive, r: R): any {
 /** @internal exported for the anchored-text tests */
 export function readEntityList(ar: Archive, r: R, count: number, owner: string): [number, string | null, any][] {
   const ents: [number, string | null, any][] = [];
+  if (owner === 'root') {
+    ar.rootStoppedEarly = false;
+    ar.unreadRootEntities = 0;
+  }
   ar.burnStack.push(0);
   ar.inlineStack.push(new Set<number>());
   try {
@@ -1454,6 +1462,14 @@ export function readEntityList(ar: Archive, r: R, count: number, owner: string):
       if (ents.length >= count) break;
       const ent = ar.slots.get(slot);
       ents.push([slot, ent ? ent[1] : null, ent ? ent[2] : null]);
+    }
+    if (owner === 'root' && ar.rootStoppedEarly) {
+      // Burned indices count phantom entries the stream never carries (see
+      // registerBurn); the rest of the shortfall is entities the reader
+      // couldn't read and dropped.
+      const phantoms = Math.max(0, ar.burnStack[ar.burnStack.length - 1]);
+      const missing = Math.max(0, count - ents.length);
+      ar.unreadRootEntities = Math.max(0, missing - phantoms);
     }
     return ents;
   } finally {
@@ -1509,6 +1525,7 @@ function readEntityListInner(
       if (owner === 'root') {
         // over-declared root counts run into the document tail - stop
         r.pos = p;
+        ar.rootStoppedEarly = true;
         break;
       }
       if (hasBurnCredit) {
@@ -2551,6 +2568,13 @@ export function parseLegacyToRaw(data: Uint8Array, options?: ParseOptions): Pars
   const { ar, root, layers, materials } = walkResult;
   const slots = ar.slots;
   emitLog(options, 'debug', `Legacy walk complete: ${materials.length} materials, ${layers.length} layers`);
+  if (ar.unreadRootEntities > 0) {
+    emitLog(
+      options,
+      'warn',
+      `Classic .skp root entity list stopped early after ${root.length} entities (${ar.unreadRootEntities} unread): this file was read only in part`
+    );
+  }
 
   // Scanned before the definitions loop below so isImage can be set
   // correctly the first time a definition is built, matching the VFF
@@ -2695,5 +2719,6 @@ export function parseLegacyToRaw(data: Uint8Array, options?: ParseOptions): Pars
     materialsByFolder: new Map(),
     styles: [],
     defsDict,
+    unreadRootEntities: ar.unreadRootEntities,
   };
 }

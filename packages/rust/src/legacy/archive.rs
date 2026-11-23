@@ -65,6 +65,11 @@ pub(crate) struct Archive<'a> {
     cum_delta: u64,
     annot_watermark: Option<u64>,
     burn_stack: Vec<i32>, // per-entity-list burned-item credits
+    // Set when the root list stopped at a record it couldn't read, and how
+    // many of its declared entities that left out (see
+    // SkpModel::unread_root_entities).
+    root_stopped_early: bool,
+    pub unread_root_entities: usize,
     // per-entity-list instances an annotation's path wrote in full (see
     // connection_paths) that the list has not listed yet, in order
     inline_stack: Vec<Vec<u64>>,
@@ -87,6 +92,8 @@ impl<'a> Archive<'a> {
             cum_delta: 0,
             annot_watermark: None,
             burn_stack: Vec::new(),
+            root_stopped_early: false,
+            unread_root_entities: 0,
             inline_stack: Vec::new(),
             cline_tail: None,
             depth: 0,
@@ -1305,6 +1312,10 @@ impl<'a> Archive<'a> {
     }
 
     fn entity_list_inner(&mut self, n: u32, root: bool) -> Result<Vec<LegacyObject>> {
+        if root {
+            self.root_stopped_early = false;
+            self.unread_root_entities = 0;
+        }
         // indexed, not held by reference: nested lists grow the stack
         let depth = self.inline_stack.len() - 1;
         let mut v: Vec<LegacyObject> = Vec::new();
@@ -1344,6 +1355,7 @@ impl<'a> Archive<'a> {
                         // over-declared root counts run into the document
                         // tail - stop
                         self.r.p = save;
+                        self.root_stopped_early = true;
                         break;
                     }
                     if has_burn_credit {
@@ -1378,6 +1390,14 @@ impl<'a> Archive<'a> {
                 name: e.name.clone(),
                 v: e.v.clone(),
             });
+        }
+        if root && self.root_stopped_early {
+            // Burned indices count phantom entries the stream never carries
+            // (see register_burn()); the rest of the shortfall is entities the
+            // reader couldn't read and dropped.
+            let phantoms = self.burn_stack.last().copied().unwrap_or(0).max(0) as usize;
+            let missing = (n as usize).saturating_sub(v.len());
+            self.unread_root_entities = missing.saturating_sub(phantoms);
         }
         Ok(v)
     }

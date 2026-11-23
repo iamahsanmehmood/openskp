@@ -5,11 +5,13 @@ namespace OpenSkp
     /// <summary>Mirrors Microsoft.Extensions.Logging's LogLevel split without
     /// taking a dependency on it: "Debug" for fine-grained per-record/
     /// per-instance detail, "Information" for start/stage/completion
-    /// summaries.</summary>
+    /// summaries, and "Warning" for non-fatal partial-read or export
+    /// warnings.</summary>
     public enum SkpLogLevel
     {
         Debug,
         Information,
+        Warning,
     }
 
     /// <summary>One progress update during a long parse/scene-bake walk.</summary>

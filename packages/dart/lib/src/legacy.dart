@@ -347,6 +347,10 @@ class Archive {
   int cumDelta = 0;
   int? annotWatermark;
   final List<int> burnStack = []; // per-entity-list burned-item credits
+  // Set when the root list stopped at a record it couldn't read, and how many
+  // of its declared entities that left out (see [SkpModel.unreadRootEntities]).
+  bool rootStoppedEarly = false;
+  int unreadRootEntities = 0;
   // per-entity-list instances an annotation's path wrote in full (see
   // _pathRef) that the list has not listed yet, in order
   final List<Set<int>> inlineStack = [];
@@ -1645,6 +1649,10 @@ class LegacyReaders {
   static List<(int, String?, Object?)> readEntityList(
       Archive ar, LR r, int count, String owner) {
     final ents = <(int, String?, Object?)>[];
+    if (owner == 'root') {
+      ar.rootStoppedEarly = false;
+      ar.unreadRootEntities = 0;
+    }
     ar.burnStack.add(0);
     ar.inlineStack.add(<int>{});
     try {
@@ -1659,6 +1667,14 @@ class LegacyReaders {
         if (ents.length >= count) break;
         final ent = ar.slots[slot];
         ents.add((slot, ent?.name, ent?.value));
+      }
+      if (owner == 'root' && ar.rootStoppedEarly) {
+        // Burned indices count phantom entries the stream never carries (see
+        // _registerBurn); the rest of the shortfall is entities the reader
+        // couldn't read and dropped.
+        final phantoms = ar.burnStack.last > 0 ? ar.burnStack.last : 0;
+        final missing = count > ents.length ? count - ents.length : 0;
+        ar.unreadRootEntities = missing > phantoms ? missing - phantoms : 0;
       }
       return ents;
     } finally {
@@ -1706,6 +1722,7 @@ class LegacyReaders {
         if (owner == 'root') {
           // over-declared root counts run into the document tail - stop
           r.pos = p;
+          ar.rootStoppedEarly = true;
           break;
         }
         if (hasBurnCredit) {
@@ -2414,6 +2431,13 @@ class Legacy {
       SkpLogLevel.debug,
       'Legacy walk complete: ${walkResult.materials.length} materials, ${walkResult.layers.length} layers',
     );
+    if (ar.unreadRootEntities > 0) {
+      emitLog(
+        options,
+        SkpLogLevel.warning,
+        'Classic .skp root entity list stopped early after ${walkResult.root.length} entities (${ar.unreadRootEntities} unread): this file was read only in part',
+      );
+    }
 
     final materialsMap = <String, RawMaterial>{};
     final materialIdToName = <int, String>{};
@@ -2550,6 +2574,7 @@ class Legacy {
       ..materials.addAll(materialsMap)
       ..styles.addAll(const [])
       ..defsDict.addAll(defsDict)
+      ..unreadRootEntities = ar.unreadRootEntities
       ..root =
           RawDefinition(guid: 'ROOT', name: 'ROOT_MODEL', builder: rootBuilder);
   }

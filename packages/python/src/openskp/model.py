@@ -703,6 +703,13 @@ class SkpModel:
             read from ``meta/meta.dat`` in modern (VFF) files.  ``None``
             for legacy (pre-2021 MFC) files, which carry no equivalent
             container, or when the tag isn't found.
+        unread_root_entities: How many top-level entities of a classic
+            (pre-2021) file the reader couldn't read. It keeps what it
+            read before the first root record it can't parse and drops
+            that record and everything after it, so a nonzero count means
+            the model lost geometry, components, groups, text or
+            dimensions. Phantom entries the root count includes but the
+            file never writes are not counted. Always ``0`` for VFF files.
 
     Note:
         The resolved, world-space scene graph (with baked instance
@@ -724,6 +731,7 @@ class SkpModel:
     face_front_color: Optional[Tuple[int, int, int]] = None
     face_back_color: Optional[Tuple[int, int, int]] = None
     units: Optional[str] = None
+    unread_root_entities: int = 0
     attribute_dictionaries: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
 
@@ -829,6 +837,7 @@ class SkpFile:
         model = SkpModel()
         model.version = parsed.get("version", "unknown")
         model.units = parsed.get("units")
+        model.unread_root_entities = parsed.get("unread_root_entities", 0)
         model.attribute_dictionaries = parsed.get("model_attribute_dictionaries") or {}
 
         layer_id_to_name = parsed.get("layer_id_to_name", {})

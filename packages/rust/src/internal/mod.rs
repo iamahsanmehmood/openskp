@@ -446,6 +446,7 @@ pub struct RawParsed {
     pub layer_id_to_name: BTreeMap<EntityId, String>,
     pub pages: Vec<RawPage>,
     pub camera: Option<ViewCamera>,
+    pub unread_root_entities: usize,
     pub dimensions: Vec<RawDimension>,
     pub material_id_to_name: BTreeMap<EntityId, String>,
     /// Materials by name. The same `Arc` may also sit in
@@ -472,6 +473,7 @@ impl Default for RawParsed {
             layer_id_to_name: BTreeMap::new(),
             pages: Vec::new(),
             camera: None,
+            unread_root_entities: 0,
             dimensions: Vec::new(),
             material_id_to_name: BTreeMap::new(),
             materials: BTreeMap::new(),

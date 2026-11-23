@@ -6,7 +6,7 @@
 
 namespace openskp {
 
-enum class LogLevel { debug, information };
+enum class LogLevel { debug, information, warning };
 enum class ParseStage { header, zip_extract, tlv_walk, legacy_walk, legacy_defs, build_scene };
 
 constexpr std::string_view stage_name(ParseStage s) noexcept {

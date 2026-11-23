@@ -34,6 +34,7 @@ namespace OpenSkp
             public List<Geometry.RawStyle> Styles = new List<Geometry.RawStyle>();
             public Dictionary<long, Geometry.RawDefinition> DefsDict = new Dictionary<long, Geometry.RawDefinition>();
             public Geometry.RawDefinition Root = new Geometry.RawDefinition { Guid = "ROOT", Name = "ROOT_MODEL" };
+            public int UnreadRootEntities = 0;
         }
 
         public static RawParsed FullParse(byte[] data, SkpParseOptions? options = null)

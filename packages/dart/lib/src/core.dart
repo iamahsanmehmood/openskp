@@ -32,6 +32,7 @@ class RawParsed {
   final List<RawStyle> styles = [];
   final Map<int, RawDefinition> defsDict = {};
   RawDefinition root = RawDefinition(guid: 'ROOT', name: 'ROOT_MODEL');
+  int unreadRootEntities = 0;
 }
 
 /// Orchestrates the full parsing pipeline for both container eras,
