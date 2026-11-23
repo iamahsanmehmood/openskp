@@ -34,9 +34,13 @@ def test_complete_files_report_no_unread_root_entities(caplog, name: str) -> Non
     if not path.exists():
         pytest.skip(f"fixture {name} not present")
     with caplog.at_level(logging.WARNING, logger="openskp.legacy"):
-        model = SkpFile.open(path).parse()
+        skp = SkpFile.open(path)
+        model = skp.parse()
     assert model.unread_root_entities == 0
     assert caplog.records == []
+    if name == "SU_File.skp":
+        assert skp.build_scene().unread_root_entities == 0
+        assert skp.build_instanced_scene().unread_root_entities == 0
 
 
 def test_unreadable_text_drops_rest_of_root_and_warns(tmp_path, caplog) -> None:

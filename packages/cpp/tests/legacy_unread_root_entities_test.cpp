@@ -20,10 +20,15 @@ TEST(LegacyUnreadRootEntities, CompleteFilesReportNone) {
     options.log = [&](LogLevel level, std::string_view message) {
       logs.emplace_back(level, message);
     };
-    EXPECT_EQ(SkpFile::open(test::fixture(name)).parse(options).unread_root_entities, 0u) << name;
+    const auto skp = SkpFile::open(test::fixture(name));
+    EXPECT_EQ(skp.parse(options).unread_root_entities, 0u) << name;
     EXPECT_TRUE(std::none_of(logs.begin(), logs.end(), [](const auto& entry) {
       return entry.first == LogLevel::warning;
     })) << name;
+    if (std::string(name) == "SU_File.skp") {
+      EXPECT_EQ(skp.build_scene().unread_root_entities, 0u) << name;
+      EXPECT_EQ(skp.build_instanced_scene().unread_root_entities, 0u) << name;
+    }
   }
 }
 

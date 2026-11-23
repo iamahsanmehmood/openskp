@@ -194,8 +194,10 @@ export interface InstancedScene {
   layerColors?: Record<string, [number, number, number]>;
   /** Number of top-level entities dropped when a classic (pre-2021) root
    * entity walk stopped early (`0` for complete classic files, VFF files, and
-   * scenes read back from `.frag`). */
-  unreadRootEntities: number;
+   * scenes read back from `.frag`). Always populated by
+   * {@link buildInstancedScene} and `fromFragments`; optional so
+   * hand-constructed scene literals for exporters do not need to supply it. */
+  unreadRootEntities?: number;
 }
 
 /**

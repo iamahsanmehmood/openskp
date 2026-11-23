@@ -24,10 +24,8 @@ fn complete_files_report_none() {
         let l = Arc::clone(&logs);
         let options = ParseOptions::default()
             .with_log(move |level, message| l.lock().unwrap().push((level, message.to_owned())));
-        let model = SkpFile::open(common::fixture(name))
-            .unwrap()
-            .parse(&options)
-            .unwrap();
+        let skp = SkpFile::open(common::fixture(name)).unwrap();
+        let model = skp.parse(&options).unwrap();
         assert_eq!(model.unread_root_entities, 0, "{name}");
         assert!(
             logs.lock()
@@ -36,6 +34,22 @@ fn complete_files_report_none() {
                 .all(|(level, _)| *level != LogLevel::Warning),
             "{name}"
         );
+        if name == "SU_File.skp" {
+            assert_eq!(
+                skp.build_scene(&ParseOptions::default())
+                    .unwrap()
+                    .unread_root_entities,
+                0,
+                "{name}"
+            );
+            assert_eq!(
+                skp.build_instanced_scene(&ParseOptions::default())
+                    .unwrap()
+                    .unread_root_entities,
+                0,
+                "{name}"
+            );
+        }
     }
 }
 

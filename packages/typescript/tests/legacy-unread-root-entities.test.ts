@@ -34,11 +34,16 @@ describe('Legacy unreadRootEntities', () => {
     ]) {
       const buf = fs.readFileSync(path.join(__dirname, 'fixtures', name));
       const logs: { level: LogLevel; message: string }[] = [];
-      const model = parseSkp(toArrayBuffer(buf), {
+      const ab = toArrayBuffer(buf);
+      const model = parseSkp(ab, {
         onLog: (level, message) => logs.push({ level, message }),
       });
       expect(model.unreadRootEntities, name).toBe(0);
       expect(logs.some((entry) => entry.level === 'warn'), name).toBe(false);
+      if (name === 'SU_File.skp') {
+        expect(buildScene(ab).unreadRootEntities, name).toBe(0);
+        expect(buildInstancedScene(ab).unreadRootEntities, name).toBe(0);
+      }
     }
   });
 

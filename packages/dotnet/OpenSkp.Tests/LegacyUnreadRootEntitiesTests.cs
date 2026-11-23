@@ -54,9 +54,15 @@ namespace OpenSkp.Tests
                 {
                     OnLog = (level, message) => logs.Add((level, message)),
                 };
-                var model = SkpFile.Open(FixturePath(name), options);
+                var path = FixturePath(name);
+                var model = SkpFile.Open(path, options);
                 Assert.Equal(0, model.UnreadRootEntities);
                 Assert.DoesNotContain(logs, entry => entry.Level == SkpLogLevel.Warning);
+                if (name == "SU_File.skp")
+                {
+                    Assert.Equal(0, SkpFile.BuildScene(path).UnreadRootEntities);
+                    Assert.Equal(0, SkpFile.BuildInstancedScene(path).UnreadRootEntities);
+                }
             }
         }
 

@@ -34,12 +34,17 @@ void main() {
     ]) {
       final path = '${Directory.current.path}/test/fixtures/$name';
       final logs = <(SkpLogLevel, String)>[];
-      final model = SkpFile.open(path).parse(
+      final skp = SkpFile.open(path);
+      final model = skp.parse(
         ParseOptions(onLog: (level, message) => logs.add((level, message))),
       );
       expect(model.unreadRootEntities, 0, reason: name);
       expect(logs.any((entry) => entry.$1 == SkpLogLevel.warning), isFalse,
           reason: name);
+      if (name == 'SU_File.skp') {
+        expect(skp.buildScene().unreadRootEntities, 0, reason: name);
+        expect(skp.buildInstancedScene().unreadRootEntities, 0, reason: name);
+      }
     }
   });
 
