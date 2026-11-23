@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — TypeScript, .NET, Dart, C++ & Rust: SketchUp 2019 and 2020 files whose tags carry a line style (#514, #285)
+
+- Ports Python's `CCustomLineStyle` reader (#515) to TypeScript, .NET, Dart, C++ and Rust. Since
+  SketchUp 2019 a tag can carry a line style (`"Dash"`, `"Dot"`, `"Solid Basic"`, …), written inline
+  at the first tag that uses it (a new-class record, a class-ref on a second style, and a back-ref
+  when a later tag reuses it, with a single entity preamble in SketchUp 2020 and a double preamble
+  in SketchUp 2019). Previously all five ports failed with `no reader for class CCustomLineStyle`.
+- Each inline `CCustomLineStyle` is read and counted in the archive store map — including during the
+  slot-base probe for zero- and single-material files — so every tag and face keeps its right slot.
+
 ### Fixed — All 6 languages: partial reads of classic `.skp` files are reported (#552)
 
 - The classic (pre-2021 MFC) root entity reader stops at the first top-level record it cannot
