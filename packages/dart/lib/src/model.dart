@@ -275,12 +275,18 @@ class Dimension {
   final double offset;
 
   /// Historical name: for a VFF dimension this is tag 5BCF, which is the plane
-  /// NORMAL (SketchUp's SUDimensionLinearGetNormal equals it), or null.
+  /// NORMAL (SketchUp's SUDimensionLinearGetNormal equals it); for a legacy
+  /// dimension this is the plane's X axis, or null.
   final (double, double, double)? planeX;
 
   /// Historical name: for a VFF dimension this is tag 5BD0, the plane's X
-  /// axis, or null.
+  /// axis; for a legacy dimension this is the plane normal, or null.
   final (double, double, double)? normal;
+
+  /// Explicit offset vector (inches) for legacy or VFF dimensions constrained
+  /// to a plane axis, preserving the side of the line independently of
+  /// endpoint ordering, or null.
+  final (double, double, double)? offsetVector;
 
   const Dimension({
     this.text = '',
@@ -290,6 +296,7 @@ class Dimension {
     this.offset = 0.0,
     this.planeX,
     this.normal,
+    this.offsetVector,
   });
 }
 

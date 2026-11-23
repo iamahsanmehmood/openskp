@@ -114,6 +114,61 @@ describe('linear dimensions', () => {
     expect(d.offset).toBe(15.5);
     expect(d.planeX).toEqual([1.0, 0.0, 0.0]);
     expect(d.normal).toEqual([0.0, 0.0, 1.0]);
+    expect(d.offsetVector).toBeNull();
+  });
+
+  it('constrained offsets preserve plane side and endpoint order', () => {
+    function pointBlock(wrapTag: number, p: [number, number, number]): Uint8Array {
+      const inner = concat(tlv(0x5209, u32le(1)), tlv(0x520a, vec3(p[0], p[1], p[2])));
+      return tlv(wrapTag, tlv(0x5208, inner));
+    }
+    const a: [number, number, number] = [1, 2, 3];
+    const b: [number, number, number] = [1, 2, 13];
+    for (const axis of [1, 2]) {
+      for (const distance of [-4.0, 4.0]) {
+        for (const reversed of [false, true]) {
+          const p1 = reversed ? b : a;
+          const p2 = reversed ? a : b;
+          const body = concat(
+            pointBlock(0x5bcd, p1),
+            pointBlock(0x5bce, p2),
+            tlv(0x5bcf, vec3(0, -1, 0)),
+            tlv(0x5bd0, vec3(1, 0, 0)),
+            tlv(0x5bd1, u32le(axis)),
+            tlv(0x5bd2, f64le(distance))
+          );
+          const dims = parseDimensions(tlv(0x5bcc, body), new Map(), new Map());
+          expect(dims).toHaveLength(1);
+          const expected = axis === 1 ? [0, 0, distance] : [-distance, 0, 0];
+          expect(dims[0].offsetVector).toEqual(expected);
+          expect(dims[0].a).toEqual(p1);
+          expect(dims[0].b).toEqual(p2);
+        }
+      }
+    }
+  });
+
+  it('unsupported or malformed constraint keeps scalar fallback', () => {
+    function pointBlock(wrapTag: number, p: [number, number, number]): Uint8Array {
+      const inner = concat(tlv(0x5209, u32le(1)), tlv(0x520a, vec3(p[0], p[1], p[2])));
+      return tlv(wrapTag, tlv(0x5208, inner));
+    }
+    for (const axisPayload of [new Uint8Array(0), new Uint8Array([2]), u32le(0), u32le(3)]) {
+      let body = concat(
+        pointBlock(0x5bcd, [1, 2, 3]),
+        pointBlock(0x5bce, [1, 2, 13]),
+        tlv(0x5bcf, vec3(0, -1, 0)),
+        tlv(0x5bd0, vec3(1, 0, 0)),
+        tlv(0x5bd2, f64le(-4))
+      );
+      if (axisPayload.length > 0) {
+        body = concat(body, tlv(0x5bd1, axisPayload));
+      }
+      const dims = parseDimensions(tlv(0x5bcc, body), new Map(), new Map());
+      expect(dims).toHaveLength(1);
+      expect(dims[0].offsetVector).toBeNull();
+      expect(dims[0].offset).toBe(-4);
+    }
   });
 
   it('resolves a connected point through its instance transform, and drops an unresolvable one', () => {

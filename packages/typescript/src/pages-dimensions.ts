@@ -25,6 +25,7 @@ export interface RawDimension {
   offset: number;
   planeX: [number, number, number] | null;
   normal: [number, number, number] | null;
+  offsetVector?: [number, number, number] | null;
   text: string;
 }
 
@@ -247,18 +248,45 @@ export function parseDimensions(
 
     const xaxisB = tlvFindInt(body, 0x5bcf);
     const normalB = tlvFindInt(body, 0x5bd0);
+    const axisB = tlvFindInt(body, 0x5bd1);
     const offB = tlvFindInt(body, 0x5bd2);
+
+    const planeX: [number, number, number] | null =
+      xaxisB !== null && xaxisB.length === 24
+        ? [readF64(xaxisB, 0), readF64(xaxisB, 8), readF64(xaxisB, 16)]
+        : null;
+    const normal: [number, number, number] | null =
+      normalB !== null && normalB.length === 24
+        ? [readF64(normalB, 0), readF64(normalB, 8), readF64(normalB, 16)]
+        : null;
+    const offset = offB !== null && offB.length === 8 ? readF64(offB, 0) : 0.0;
+    let offsetVector: [number, number, number] | null = null;
+    if (axisB !== null && axisB.length === 4 && planeX !== null && normal !== null) {
+      const axis = readU32(axisB, 0);
+      const n = planeX;
+      const x = normal;
+      if (axis === 1) {
+        offsetVector = [
+          (n[1] * x[2] - n[2] * x[1]) * offset + 0,
+          (n[2] * x[0] - n[0] * x[2]) * offset + 0,
+          (n[0] * x[1] - n[1] * x[0]) * offset + 0,
+        ];
+      } else if (axis === 2) {
+        offsetVector = [
+          -x[0] * offset + 0,
+          -x[1] * offset + 0,
+          -x[2] * offset + 0,
+        ];
+      }
+    }
 
     dims.push({
       a,
       b,
-      planeX: xaxisB !== null && xaxisB.length === 24
-        ? [readF64(xaxisB, 0), readF64(xaxisB, 8), readF64(xaxisB, 16)]
-        : null,
-      normal: normalB !== null && normalB.length === 24
-        ? [readF64(normalB, 0), readF64(normalB, 8), readF64(normalB, 16)]
-        : null,
-      offset: offB !== null && offB.length === 8 ? readF64(offB, 0) : 0.0,
+      planeX,
+      normal,
+      offset,
+      offsetVector,
       text: '',
     });
   }

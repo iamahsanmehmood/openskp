@@ -123,6 +123,7 @@ class SkpFile {
         offset: dm.offset,
         planeX: dm.planeX,
         normal: dm.normal,
+        offsetVector: dm.offsetVector,
         text: dm.text,
       ));
     }

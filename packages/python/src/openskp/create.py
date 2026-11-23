@@ -2276,6 +2276,23 @@ class ComponentDefinitionBuilder:
         if definition._group_flag_pos is not None:
             struct.pack_into("<I", self._skp._definition_writer.buf, definition._group_flag_pos, 1)
 
+    def add_dimension(
+        self,
+        p1: Point3,
+        p2: Point3,
+        offset: Union[float, Point3] = 10.0,
+        *,
+        offset_vector: Optional[Point3] = None,
+    ) -> None:
+        """Add a FREE linear dimension between two explicit points (inches,
+        local to this definition) - same signature and behavior as
+        :meth:`SkpBuilder.add_dimension`."""
+        self._check_writable("dimensions")
+        self._skp._write_dimension(
+            self._skp._definition_writer, p1, p2, offset=offset, offset_vector=offset_vector,
+        )
+        self._new_entity_count += 1
+
     def add_text(self, text: str, point: Point3,
                  leader: Point3 = (15.0, 15.0, 15.0)) -> None:
         """Add a leader text (SketchUp's Text tool) anchored at ``point``
@@ -3398,24 +3415,56 @@ class SkpBuilder:
         return _SceneBlock(bytes(w.buf), w.next_slot - first_slot, first_scene_slot,
                            style_slot, style_class_slot, w.next_pid)
 
-    def add_dimension(self, p1: Point3, p2: Point3, offset: float = 10.0) -> None:
-        """Add a FREE linear dimension between two explicit points (inches,
-        world space). ``offset`` is the dimension line's offset from the
-        measured segment, in inches (signed).
+    def _write_dimension(
+        self,
+        w: _ArchiveWriter,
+        p1: Point3,
+        p2: Point3,
+        offset: Union[float, Point3] = 10.0,
+        offset_vector: Optional[Point3] = None,
+    ) -> None:
+        if offset_vector is not None and not isinstance(offset, (int, float)):
+            raise SkpWriteError("pass either offset or offset_vector, not both")
+        if not isinstance(offset, (int, float)):
+            offset_vector = offset
+            scalar_offset = 0.0
+        else:
+            scalar_offset = float(offset)
 
-        The record layout is the byte-exact one the REAL SketchUp SDK
-        writes for free dimensions (generated via SketchUpAPI and
-        harvested — see docs/dimension-record-notes.md): connection type 1
-        with the point stored inline in each connection block and null
-        object refs. Free dimensions render in any orientation; anchored
-        (type 2) dimensions are a future refinement.
-        """
-        self._ensure_geometry_writer()
-        w = self._geometry_writer
         k1 = (float(p1[0]), float(p1[1]), float(p1[2]))
         k2 = (float(p2[0]), float(p2[1]), float(p2[2]))
-        if k1 == k2:
-            raise SkpWriteError("add_dimension endpoints coincide")
+        if offset_vector is not None:
+            ov = (float(offset_vector[0]), float(offset_vector[1]), float(offset_vector[2]))
+            if not all(math.isfinite(c) for c in (*k1, *k2, *ov)):
+                raise SkpWriteError("add_dimension coordinates must be finite")
+            if k1 == k2:
+                raise SkpWriteError("add_dimension endpoints coincide")
+            dx, dy, dz = k2[0] - k1[0], k2[1] - k1[1], k2[2] - k1[2]
+            length = math.hypot(dx, dy, dz)
+            if not math.isfinite(length) or length == 0.0:
+                raise SkpWriteError("add_dimension segment length must be finite and nonzero")
+            xaxis = (dx / length, dy / length, dz / length)
+            nx = xaxis[1] * ov[2] - xaxis[2] * ov[1]
+            ny = xaxis[2] * ov[0] - xaxis[0] * ov[2]
+            nz = xaxis[0] * ov[1] - xaxis[1] * ov[0]
+            scalar_offset = math.hypot(nx, ny, nz)
+            if not math.isfinite(scalar_offset):
+                raise SkpWriteError("add_dimension offset must be finite")
+            if scalar_offset > 0.0:
+                normal = (nx / scalar_offset, ny / scalar_offset, nz / scalar_offset)
+            else:
+                seed = (0.0, 0.0, 1.0) if abs(xaxis[2]) < 0.9 else (0.0, 1.0, 0.0)
+                cx = xaxis[1] * seed[2] - xaxis[2] * seed[1]
+                cy = xaxis[2] * seed[0] - xaxis[0] * seed[2]
+                cz = xaxis[0] * seed[1] - xaxis[1] * seed[0]
+                clen = math.hypot(cx, cy, cz)
+                normal = (cx / clen, cy / clen, cz / clen)
+        else:
+            if k1 == k2:
+                raise SkpWriteError("add_dimension endpoints coincide")
+            normal = (0.0, 0.0, 1.0)
+            xaxis = (1.0, 0.0, 0.0)
+
         w._new_of_known_class("CDimensionLinear", schema=6)
         w._preamble()
         w.buf += _DIM_DRAWBASE
@@ -3436,12 +3485,38 @@ class SkpBuilder:
         w.buf += bytes(10) + _u32(1) + _u32(4)
         w.buf += _f64(k2[0]) + _f64(k2[1]) + _f64(k2[2])
         w.buf += struct.pack("<H", 0)
-        # placement block: SDK free-dimension defaults + our offset
-        w.buf += bytes(2)
-        for val in (0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0):
+        # placement block: SDK free-dimension defaults or constrained plane + offset
+        w.buf += bytes(2) + _f64(0.0)
+        for val in (*normal, *xaxis):
             w.buf += _f64(val)
-        w.buf += _u32(0)
-        w.buf += _f64(float(offset)) + _f64(0.0) + _u32(1)
+        w.buf += _u32(1 if offset_vector is not None else 0)
+        w.buf += _f64(scalar_offset) + _f64(0.0) + _u32(1)
+
+    def add_dimension(
+        self,
+        p1: Point3,
+        p2: Point3,
+        offset: Union[float, Point3] = 10.0,
+        *,
+        offset_vector: Optional[Point3] = None,
+    ) -> None:
+        """Add a FREE linear dimension between two explicit points (inches,
+        world space). ``offset`` is either a signed scalar distance in inches
+        or a 3D offset vector (whose component perpendicular to ``p1 -> p2``
+        determines the plane and side of the dimension line); ``offset_vector``
+        can also be passed by keyword.
+
+        The record layout is the byte-exact one the REAL SketchUp SDK
+        writes for free dimensions (generated via SketchUpAPI and
+        harvested — see docs/dimension-record-notes.md): connection type 1
+        with the point stored inline in each connection block and null
+        object refs. Free dimensions render in any orientation; anchored
+        (type 2) dimensions are a future refinement.
+        """
+        self._ensure_geometry_writer()
+        self._write_dimension(
+            self._geometry_writer, p1, p2, offset=offset, offset_vector=offset_vector,
+        )
         self._new_entity_count += 1
         self._face_count += 1  # reuses the "at least one root entity" check in to_bytes
 

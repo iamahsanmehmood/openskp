@@ -66,7 +66,16 @@ export class GeometryBuilder {
   instances: GeometryBuilderInstance[] = [];
   sectionPlanes: { plane: [number, number, number, number]; name: string; label: string; hidden: boolean }[] = [];
   texts: { text: string; hidden: boolean }[] = [];
-  dimensions: { text: string; hidden: boolean }[] = [];
+  dimensions: {
+    text: string;
+    hidden: boolean;
+    a?: [number, number, number] | null;
+    b?: [number, number, number] | null;
+    offset?: number;
+    planeX?: [number, number, number] | null;
+    normal?: [number, number, number] | null;
+    offsetVector?: [number, number, number] | null;
+  }[] = [];
   constructionLines: {
     point: [number, number, number];
     direction: [number, number, number];
@@ -85,7 +94,16 @@ export interface ParsedDefinition {
   shadowsFaceSun?: boolean;
   sectionPlanes?: { plane: [number, number, number, number]; name: string; label: string; hidden: boolean }[];
   texts?: { text: string; hidden: boolean }[];
-  dimensions?: { text: string; hidden: boolean }[];
+  dimensions?: {
+    text: string;
+    hidden: boolean;
+    a?: [number, number, number] | null;
+    b?: [number, number, number] | null;
+    offset?: number;
+    planeX?: [number, number, number] | null;
+    normal?: [number, number, number] | null;
+    offsetVector?: [number, number, number] | null;
+  }[];
   constructionLines?: {
     point: [number, number, number];
     direction: [number, number, number];

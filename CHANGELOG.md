@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — Python, TypeScript, .NET & Dart: legacy dimension endpoints/plane offsets, VFF `0x5BD1` constrained offsets, and writer `offset_vector` (#481, #285)
+
+- Classic `CDimensionLinear` readers now decode inline free endpoints, inline and forward-referenced `CVertex` attachments (whilst withholding local coordinates on nested instance paths), plane frame (`normal`, `plane_x`, `offset`), and `offset_vector` for X/Y-constrained dimensions across Python, TypeScript, .NET, and Dart, exposing the full `Dimension` geometry on `Definition.dimensions` (`Dimensions`).
+- VFF `5BCC` dimension parsing (`_parse_dimensions` / `parseDimensions` / `ParseDimensions`) decodes `0x5BD1` constrained axes into `Dimension.offset_vector` (`offsetVector` / `OffsetVector`) independently of endpoint ordering.
+- `add_dimension` (`addDimension` / `AddDimension`) is now available on `ComponentDefinitionBuilder` as well as `SkpBuilder` across Python, TypeScript, .NET, and Dart, and accepts a 3D `offset_vector` (`offsetVector` / `OffsetVector`) with upfront finite-coordinate and segment-length validation.
+
 ### Fixed — Python: scenes use a component instance's own paint and tag in classic files (#596)
 
 - `build_scene()` and `build_instanced_scene()` read an instance's paint and tag from its 2021+ `D007` record only. In classic (pre-2021) files a painted component came out in its tag's colour, and every instance sat on its parent's tag. Both now come from the instance itself, and nested components inherit the paint.

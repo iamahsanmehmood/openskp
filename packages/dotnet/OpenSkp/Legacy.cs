@@ -808,7 +808,19 @@ namespace OpenSkp
     internal sealed class SectionPlaneRec { public DrawBase Db = new DrawBase(); public double[] Plane = new double[4]; public string Name = ""; public string Label = ""; }
     internal sealed class FontRec { }
     internal sealed class LineStyleRec { public string Name = ""; public string Pattern = ""; public double[] Values = new double[3]; }
-    internal sealed class DimLinearRec { public DrawBase Db = new DrawBase(); public string Text = ""; }
+    internal sealed class DimLinearRec
+    {
+        public DrawBase Db = new DrawBase();
+        public string Text = "";
+        public (double X, double Y, double Z)? A;
+        public (double X, double Y, double Z)? B;
+        public int? Connect1;
+        public int? Connect2;
+        public double Offset;
+        public (double X, double Y, double Z)? PlaneX;
+        public (double X, double Y, double Z)? Normal;
+        public (double X, double Y, double Z)? OffsetVector;
+    }
     internal sealed class TextRec { public DrawBase Db = new DrawBase(); public string Text = ""; }
     internal sealed class DefinitionRec
     {
@@ -1642,14 +1654,59 @@ namespace OpenSkp
             // SketchUp 4 and 5 write neither the font object above nor the 5
             // bytes in front of the first connection block, nor the trailing
             // u32 of the last one.
-            r.Raw(ar.Ver >= 6 ? 37 : 32);
-            PathRef(rr => ar.ReadObject(rr).Slot, r);   // connection point 1 (may be null; may be written in full)
-            ConnectionPaths(rr => ar.ReadObject(rr).Slot, r, ar);
-            r.Raw(32);
-            PathRef(rr => ar.ReadObject(rr).Slot, r);   // connection point 2 (may be null; may be written in full)
-            ConnectionPaths(rr => ar.ReadObject(rr).Slot, r, ar);
-            r.Raw(ar.Ver >= 6 ? 72 : 68);
-            return new DimLinearRec { Db = db, Text = text };
+            if (ar.Ver >= 6) r.Raw(5);
+            ((double X, double Y, double Z)? Pt, int? Ref) ReadConnection()
+            {
+                byte[] block = r.Raw(32);
+                (double X, double Y, double Z)? pt = Tlv.ReadU32(block, 0) == 1
+                    ? (Tlv.ReadF64(block, 8), Tlv.ReadF64(block, 16), Tlv.ReadF64(block, 24))
+                    : ((double X, double Y, double Z)?)null;
+                int? cref = PathRef(rr => ar.ReadObject(rr).Slot, r);
+                var paths = ConnectionPaths(rr => ar.ReadObject(rr).Slot, r, ar);
+                if (paths.Extra.HasValue || paths.First.Count > 0 || paths.Second.Count > 0)
+                {
+                    // Do not expose definition-local vertex coordinates as owner/world
+                    // points until the nested instance path can also be resolved.
+                    pt = null;
+                    cref = null;
+                }
+                return (pt, cref);
+            }
+            var (a, c1) = ReadConnection();
+            var (b, c2) = ReadConnection();
+            byte[] placement = r.Raw(ar.Ver >= 6 ? 72 : 68);
+            var normal = (Tlv.ReadF64(placement, 0), Tlv.ReadF64(placement, 8), Tlv.ReadF64(placement, 16));
+            var planeX = (Tlv.ReadF64(placement, 24), Tlv.ReadF64(placement, 32), Tlv.ReadF64(placement, 40));
+            uint axis = Tlv.ReadU32(placement, 48);
+            double offset = Tlv.ReadF64(placement, 52);
+            (double X, double Y, double Z)? offsetVector = null;
+            if (axis == 1)
+            {
+                offsetVector = (
+                    (normal.Item2 * planeX.Item3 - normal.Item3 * planeX.Item2) * offset + 0.0,
+                    (normal.Item3 * planeX.Item1 - normal.Item1 * planeX.Item3) * offset + 0.0,
+                    (normal.Item1 * planeX.Item2 - normal.Item2 * planeX.Item1) * offset + 0.0);
+            }
+            else if (axis == 2)
+            {
+                offsetVector = (
+                    -planeX.Item1 * offset + 0.0,
+                    -planeX.Item2 * offset + 0.0,
+                    -planeX.Item3 * offset + 0.0);
+            }
+            return new DimLinearRec
+            {
+                Db = db,
+                Text = text,
+                A = a,
+                B = b,
+                Connect1 = c1,
+                Connect2 = c2,
+                Offset = offset,
+                PlaneX = planeX,
+                Normal = normal,
+                OffsetVector = offsetVector,
+            };
         }
 
         /// <summary>What follows a dimension connection ref (see
@@ -2691,10 +2748,25 @@ namespace OpenSkp
                 }
                 else if (v is DimLinearRec dlRec)
                 {
+                    (double X, double Y, double Z)? ResolveEndpoint((double X, double Y, double Z)? pt, int? cref)
+                    {
+                        if (pt.HasValue || !cref.HasValue) return pt;
+                        if (slots.TryGetValue(cref.Value, out var ent) && ent.Kind == "obj" && ent.Value is VertexRec vr && vr.Xyz.Length >= 3)
+                        {
+                            return (vr.Xyz[0], vr.Xyz[1], vr.Xyz[2]);
+                        }
+                        return null;
+                    }
                     builder.Dimensions.Add(new Dimension
                     {
                         Text = dlRec.Text,
-                        Hidden = dlRec.Db.Hidden != 0
+                        Hidden = dlRec.Db.Hidden != 0,
+                        A = ResolveEndpoint(dlRec.A, dlRec.Connect1),
+                        B = ResolveEndpoint(dlRec.B, dlRec.Connect2),
+                        Offset = dlRec.Offset,
+                        PlaneX = dlRec.PlaneX,
+                        Normal = dlRec.Normal,
+                        OffsetVector = dlRec.OffsetVector,
                     });
                 }
                 else if (v is ConstructionLineRec clRec)

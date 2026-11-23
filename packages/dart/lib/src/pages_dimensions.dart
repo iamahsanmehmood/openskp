@@ -27,6 +27,7 @@ class RawDimension {
   double offset = 0.0;
   (double, double, double)? planeX;
   (double, double, double)? normal;
+  (double, double, double)? offsetVector;
   String text = '';
 
   RawDimension({required this.a, required this.b});
@@ -250,25 +251,50 @@ List<RawDimension> parseDimensions(
 
     final xaxisB = _tlvFindInt(body, 0x5BCF);
     final normalB = _tlvFindInt(body, 0x5BD0);
+    final axisB = _tlvFindInt(body, 0x5BD1);
     final offB = _tlvFindInt(body, 0x5BD2);
 
+    final planeX = (xaxisB != null && xaxisB.length == 24)
+        ? (
+            Tlv.readF64(xaxisB, 0),
+            Tlv.readF64(xaxisB, 8),
+            Tlv.readF64(xaxisB, 16)
+          )
+        : null;
+    final normal = (normalB != null && normalB.length == 24)
+        ? (
+            Tlv.readF64(normalB, 0),
+            Tlv.readF64(normalB, 8),
+            Tlv.readF64(normalB, 16)
+          )
+        : null;
+    final offset =
+        (offB != null && offB.length == 8) ? Tlv.readF64(offB, 0) : 0.0;
+    (double, double, double)? offsetVector;
+    if (axisB != null && axisB.length == 4 && planeX != null && normal != null) {
+      final axis = Tlv.readU32(axisB, 0);
+      final n = planeX;
+      final x = normal;
+      if (axis == 1) {
+        offsetVector = (
+          (n.$2 * x.$3 - n.$3 * x.$2) * offset + 0.0,
+          (n.$3 * x.$1 - n.$1 * x.$3) * offset + 0.0,
+          (n.$1 * x.$2 - n.$2 * x.$1) * offset + 0.0,
+        );
+      } else if (axis == 2) {
+        offsetVector = (
+          -x.$1 * offset + 0.0,
+          -x.$2 * offset + 0.0,
+          -x.$3 * offset + 0.0,
+        );
+      }
+    }
+
     dims.add(RawDimension(a: a, b: b)
-      ..planeX = (xaxisB != null && xaxisB.length == 24)
-          ? (
-              Tlv.readF64(xaxisB, 0),
-              Tlv.readF64(xaxisB, 8),
-              Tlv.readF64(xaxisB, 16)
-            )
-          : null
-      ..normal = (normalB != null && normalB.length == 24)
-          ? (
-              Tlv.readF64(normalB, 0),
-              Tlv.readF64(normalB, 8),
-              Tlv.readF64(normalB, 16)
-            )
-          : null
-      ..offset =
-          (offB != null && offB.length == 8) ? Tlv.readF64(offB, 0) : 0.0);
+      ..planeX = planeX
+      ..normal = normal
+      ..offset = offset
+      ..offsetVector = offsetVector);
   }
   return dims;
 }

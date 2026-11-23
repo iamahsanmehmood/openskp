@@ -1446,14 +1446,67 @@ export function readDimLinear(ar: Archive, r: R): any {
   // fix; found again on a real SketchUp 2017 cabinet, openskp#412).
   // SketchUp 4 and 5 write neither the font object above nor the 5 bytes in
   // front of the first connection block, nor the trailing u32 of the last one.
-  r.raw(ar.ver >= 6 ? 37 : 32);
-  const c1 = pathRef(ar, r); // connection point 1 (may be null; may be written in full)
-  const path1 = connectionPaths(ar, r);
-  r.raw(32);
-  const c2 = pathRef(ar, r); // connection point 2 (may be null; may be written in full)
-  const path2 = connectionPaths(ar, r);
-  r.raw(ar.ver >= 6 ? 72 : 68);
-  return { k: 'dimension', db, text, connect: [c1, c2], paths: [path1, path2] };
+  if (ar.ver >= 6) r.raw(5);
+  function readConnection(): [[number, number, number] | null, number | null, [number | null, number[], number[]]] {
+    const block = r.raw(32);
+    const dv = new DataView(block.buffer, block.byteOffset, block.byteLength);
+    let pt: [number, number, number] | null =
+      dv.getUint32(0, true) === 1
+        ? [dv.getFloat64(8, true), dv.getFloat64(16, true), dv.getFloat64(24, true)]
+        : null;
+    let ref: number | null = pathRef(ar, r);
+    const path = connectionPaths(ar, r);
+    if (path[0] !== null || path[1].length > 0 || path[2].length > 0) {
+      // Do not expose definition-local vertex coordinates as owner/world
+      // points until the nested instance path can also be resolved.
+      pt = null;
+      ref = null;
+    }
+    return [pt, ref, path];
+  }
+  const [a, c1, path1] = readConnection();
+  const [b, c2, path2] = readConnection();
+  const placement = r.raw(ar.ver >= 6 ? 72 : 68);
+  const pdv = new DataView(placement.buffer, placement.byteOffset, placement.byteLength);
+  const normal: [number, number, number] = [
+    pdv.getFloat64(0, true),
+    pdv.getFloat64(8, true),
+    pdv.getFloat64(16, true),
+  ];
+  const planeX: [number, number, number] = [
+    pdv.getFloat64(24, true),
+    pdv.getFloat64(32, true),
+    pdv.getFloat64(40, true),
+  ];
+  const axis = pdv.getUint32(48, true);
+  const offset = pdv.getFloat64(52, true);
+  let offsetVector: [number, number, number] | null = null;
+  if (axis === 1) {
+    offsetVector = [
+      (normal[1] * planeX[2] - normal[2] * planeX[1]) * offset + 0,
+      (normal[2] * planeX[0] - normal[0] * planeX[2]) * offset + 0,
+      (normal[0] * planeX[1] - normal[1] * planeX[0]) * offset + 0,
+    ];
+  } else if (axis === 2) {
+    offsetVector = [
+      -planeX[0] * offset + 0,
+      -planeX[1] * offset + 0,
+      -planeX[2] * offset + 0,
+    ];
+  }
+  return {
+    k: 'dimension',
+    db,
+    text,
+    a,
+    b,
+    offset,
+    planeX,
+    normal,
+    offsetVector,
+    connect: [c1, c2],
+    paths: [path1, path2],
+  };
 }
 
 /** The text's string start: the variable-length variant middle ends in an
@@ -2478,7 +2531,16 @@ class LegacyBuilder {
   instances: GeometryBuilderInstance[] = [];
   sectionPlanes: { plane: [number, number, number, number]; name: string; label: string; hidden: boolean }[] = [];
   texts: { text: string; hidden: boolean }[] = [];
-  dimensions: { text: string; hidden: boolean }[] = [];
+  dimensions: {
+    text: string;
+    hidden: boolean;
+    a?: [number, number, number] | null;
+    b?: [number, number, number] | null;
+    offset?: number;
+    planeX?: [number, number, number] | null;
+    normal?: [number, number, number] | null;
+    offsetVector?: [number, number, number] | null;
+  }[] = [];
   constructionLines: {
     point: [number, number, number];
     direction: [number, number, number];
@@ -2615,9 +2677,29 @@ function fillBuilder(builder: LegacyBuilder, ents: [number, string | null, any][
         hidden: Boolean(v.db && v.db.hidden),
       });
     } else if (k === 'dimension') {
+      const resolveEndpoint = (
+        pt: [number, number, number] | null | undefined,
+        cs: number | null | undefined
+      ): [number, number, number] | null => {
+        if (pt !== null && pt !== undefined) return pt;
+        if (cs === null || cs === undefined) return null;
+        const ent = slots.get(cs);
+        const val = ent !== undefined && ent[0] === 'obj' ? ent[2] : null;
+        if (val && typeof val === 'object' && Array.isArray(val.xyz) && val.xyz.length >= 3) {
+          return [val.xyz[0], val.xyz[1], val.xyz[2]];
+        }
+        return null;
+      };
+      const connect: [number | null, number | null] = v.connect || [null, null];
       builder.dimensions.push({
         text: v.text || '',
         hidden: Boolean(v.db && v.db.hidden),
+        a: resolveEndpoint(v.a, connect[0]),
+        b: resolveEndpoint(v.b, connect[1]),
+        offset: typeof v.offset === 'number' ? v.offset : 0,
+        planeX: v.planeX ?? null,
+        normal: v.normal ?? null,
+        offsetVector: v.offsetVector ?? null,
       });
     } else if (k === 'cline') {
       builder.constructionLines.push({

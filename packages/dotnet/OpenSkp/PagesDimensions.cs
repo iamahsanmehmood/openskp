@@ -27,6 +27,7 @@ namespace OpenSkp
         public double Offset;
         public (double X, double Y, double Z)? PlaneX;
         public (double X, double Y, double Z)? Normal;
+        public (double X, double Y, double Z)? OffsetVector;
         public string Text = "";
     }
 
@@ -257,19 +258,46 @@ namespace OpenSkp
 
                 var xaxisB = TlvFindInt(body, 0x5BCF);
                 var normalB = TlvFindInt(body, 0x5BD0);
+                var axisB = TlvFindInt(body, 0x5BD1);
                 var offB = TlvFindInt(body, 0x5BD2);
+
+                var planeX = (xaxisB != null && xaxisB.Length == 24)
+                    ? (Tlv.ReadF64(xaxisB, 0), Tlv.ReadF64(xaxisB, 8), Tlv.ReadF64(xaxisB, 16))
+                    : ((double X, double Y, double Z)?)null;
+                var normal = (normalB != null && normalB.Length == 24)
+                    ? (Tlv.ReadF64(normalB, 0), Tlv.ReadF64(normalB, 8), Tlv.ReadF64(normalB, 16))
+                    : ((double X, double Y, double Z)?)null;
+                double offset = (offB != null && offB.Length == 8) ? Tlv.ReadF64(offB, 0) : 0.0;
+                (double X, double Y, double Z)? offsetVector = null;
+                if (axisB != null && axisB.Length == 4 && planeX.HasValue && normal.HasValue)
+                {
+                    uint axis = Tlv.ReadU32(axisB, 0);
+                    var pNorm = planeX.Value;
+                    var pX = normal.Value;
+                    if (axis == 1)
+                    {
+                        offsetVector = (
+                            (pNorm.Y * pX.Z - pNorm.Z * pX.Y) * offset + 0.0,
+                            (pNorm.Z * pX.X - pNorm.X * pX.Z) * offset + 0.0,
+                            (pNorm.X * pX.Y - pNorm.Y * pX.X) * offset + 0.0);
+                    }
+                    else if (axis == 2)
+                    {
+                        offsetVector = (
+                            -pX.X * offset + 0.0,
+                            -pX.Y * offset + 0.0,
+                            -pX.Z * offset + 0.0);
+                    }
+                }
 
                 dims.Add(new RawDimension
                 {
                     A = a.Value,
                     B = b.Value,
-                    PlaneX = (xaxisB != null && xaxisB.Length == 24)
-                        ? (Tlv.ReadF64(xaxisB, 0), Tlv.ReadF64(xaxisB, 8), Tlv.ReadF64(xaxisB, 16))
-                        : ((double, double, double)?)null,
-                    Normal = (normalB != null && normalB.Length == 24)
-                        ? (Tlv.ReadF64(normalB, 0), Tlv.ReadF64(normalB, 8), Tlv.ReadF64(normalB, 16))
-                        : ((double, double, double)?)null,
-                    Offset = (offB != null && offB.Length == 8) ? Tlv.ReadF64(offB, 0) : 0.0,
+                    PlaneX = planeX,
+                    Normal = normal,
+                    Offset = offset,
+                    OffsetVector = offsetVector,
                 });
             }
             return dims;

@@ -60,6 +60,49 @@ def test_dimension_free_points_synthetic():
     assert d['offset'] == 15.5
     assert d['plane_x'] == (1.0, 0.0, 0.0)
     assert d['normal'] == (0.0, 0.0, 1.0)
+    assert d['offset_vector'] is None
+
+
+def test_constrained_offsets_preserve_plane_side_and_endpoint_order():
+    def point_block(wrap_tag: int, p: tuple[float, float, float]) -> bytes:
+        inner = tlv(0x5209, struct.pack('<I', 1)) + tlv(0x520A, vec3(*p))
+        return tlv(wrap_tag, tlv(0x5208, inner))
+
+    a, b = (1.0, 2.0, 3.0), (1.0, 2.0, 13.0)
+    for axis in (1, 2):
+        for distance in (-4.0, 4.0):
+            for reversed_pts in (False, True):
+                p1, p2 = (b, a) if reversed_pts else (a, b)
+                body = (point_block(0x5BCD, p1)
+                        + point_block(0x5BCE, p2)
+                        + tlv(0x5BCF, vec3(0.0, -1.0, 0.0))  # actual plane normal
+                        + tlv(0x5BD0, vec3(1.0, 0.0, 0.0))   # actual plane X axis
+                        + tlv(0x5BD1, struct.pack('<I', axis))
+                        + tlv(0x5BD2, struct.pack('<d', distance)))
+                dims = _core._parse_dimensions(tlv(0x5BCC, body), {}, {})
+                assert len(dims) == 1
+                expected = (0.0, 0.0, distance) if axis == 1 else (-distance, 0.0, 0.0)
+                assert dims[0]['offset_vector'] == expected
+                assert dims[0]['a'] == p1 and dims[0]['b'] == p2
+
+
+def test_unsupported_or_malformed_constraint_keeps_scalar_fallback():
+    def point_block(wrap_tag: int, p: tuple[float, float, float]) -> bytes:
+        inner = tlv(0x5209, struct.pack('<I', 1)) + tlv(0x520A, vec3(*p))
+        return tlv(wrap_tag, tlv(0x5208, inner))
+
+    for axis_payload in (b'', b'\x02', struct.pack('<I', 0), struct.pack('<I', 3)):
+        body = (point_block(0x5BCD, (1.0, 2.0, 3.0))
+                + point_block(0x5BCE, (1.0, 2.0, 13.0))
+                + tlv(0x5BCF, vec3(0.0, -1.0, 0.0))
+                + tlv(0x5BD0, vec3(1.0, 0.0, 0.0))
+                + tlv(0x5BD2, struct.pack('<d', -4.0)))
+        if axis_payload:
+            body += tlv(0x5BD1, axis_payload)
+        dims = _core._parse_dimensions(tlv(0x5BCC, body), {}, {})
+        assert len(dims) == 1
+        assert dims[0]['offset_vector'] is None
+        assert dims[0]['offset'] == -4.0
 
 
 def test_dimension_connected_point_resolves_through_instance():
