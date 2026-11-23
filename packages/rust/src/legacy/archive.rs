@@ -18,6 +18,9 @@ use crate::model::constrained_offset_vector;
 /// A decoded value (always present for an object read in full).
 pub(crate) type Value = Rc<LegacyValue>;
 
+/// Maximum nesting depth for MFC archive objects and attribute arrays (#557).
+pub(crate) const MAX_LEGACY_DEPTH: usize = 64;
+
 // True when the bytes at p are an MFC class-ref to class `slot`. Mirrors both
 // encodings Archive::object() decodes: the short 16-bit form (0x8000|slot)
 // and, for slots past 0x7fff, the big-tag escape (0x7fff followed by a u32 of
@@ -113,16 +116,6 @@ impl<'a> Archive<'a> {
     }
 
     pub fn object(&mut self, expect: Option<&str>) -> Result<LegacyObject> {
-        // Measured on Windows with a hostile chain of nested class refs: an optimized build
-        // reaches 256 within a 1 MiB stack (the Windows main thread) but not 512. Debug builds
-        // use far bigger frames and overflow even 2 MiB before reaching 256, so the limit only
-        // keeps release builds safe on default stacks.
-        const MAX_OBJECT_DEPTH: usize = 256;
-        if self.depth >= MAX_OBJECT_DEPTH {
-            return Err(Error::runtime(
-                "legacy archive object nesting exceeds maximum depth",
-            ));
-        }
         let tag = self.r.u16()?;
         if tag == 0 {
             return Ok(LegacyObject::null());
@@ -666,6 +659,11 @@ impl<'a> Archive<'a> {
     }
 
     fn new_obj(&mut self, n: Rc<str>) -> Result<LegacyObject> {
+        if self.depth >= MAX_LEGACY_DEPTH {
+            return Err(Error::depth_limit(
+                "legacy archive object nesting exceeds maximum depth (64)",
+            ));
+        }
         let slot = self.alloc(LegacySlotEntry {
             cls: false,
             name: n.clone(),
@@ -1437,6 +1435,9 @@ impl<'a> Archive<'a> {
                     v.push(o);
                 }
                 Err(e) => {
+                    if e.kind == crate::internal::ErrorKind::DepthLimit {
+                        return Err(e);
+                    }
                     if root {
                         // over-declared root counts run into the document
                         // tail - stop
@@ -1651,6 +1652,9 @@ pub(crate) fn walk_with_bases<'a>(
                 })
             }
             Err(e) => {
+                if e.kind == crate::internal::ErrorKind::DepthLimit {
+                    return Err(e);
+                }
                 let at = ar.r.p;
                 if best.as_ref().is_none_or(|(_, best_at)| at > *best_at) {
                     best = Some((e, at));

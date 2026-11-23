@@ -403,6 +403,8 @@ struct Archive {
   // connection_paths) that the list has not listed yet, in order
   std::vector<std::vector<uint64_t>> inline_stack;
   std::optional<size_t> cline_tail;
+  static constexpr std::size_t kMaxLegacyDepth = 64;
+  std::size_t depth{};
 
   Archive(const ByteBuffer& d, int v) : r{d}, ver(v), pid(v >= 17) {}
 
@@ -810,7 +812,19 @@ struct Archive {
   }
 
   std::tuple<uint64_t, std::string, std::shared_ptr<V>> new_obj(const std::string& n) {
+    if (depth >= kMaxLegacyDepth) {
+      throw SkpParseError("legacy archive object nesting exceeds maximum depth (" +
+                              std::to_string(kMaxLegacyDepth) + ")",
+                          ParseStage::legacy_walk, {}, {}, {}, r.p);
+    }
     auto slot = alloc({false, n, 0, {}});
+
+    struct DepthGuard {
+      std::size_t& d;
+
+      ~DepthGuard() { --d; }
+    } depth_guard{++depth};
+
     auto v = read(n, slot);
     slots[slot].v = v;
     if (n == "CDimensionLinear" || n == "CText") {
@@ -1435,7 +1449,7 @@ struct Archive {
   // Reads one typed CAttributeNamed value off the stream. Matches Python's
   // `_read_attr_named.read_typed` - int/float/str/None/3-tuple/list, not a
   // stringified view. `properties` still stringifies via stringify_attr_dict.
-  ParsedAttribute typed(uint8_t t) {
+  ParsedAttribute typed(uint8_t t, std::size_t attr_depth = 0) {
     switch (t) {
       case 0:
         return ParsedAttribute::null();
@@ -1452,11 +1466,16 @@ struct Archive {
       case 12:
         return ParsedAttribute::from_length(r.f64());  // Length (a double, inches)
       case 11: {
+        if (attr_depth >= kMaxLegacyDepth) {
+          throw SkpParseError("legacy attribute array nesting exceeds maximum depth (" +
+                                  std::to_string(kMaxLegacyDepth) + ")",
+                              ParseStage::legacy_walk, {}, {}, {}, r.p);
+        }
         auto n = r.u32();
         if (n > 100000) throw std::runtime_error("attr array too large");
         std::vector<ParsedAttribute> items;
         items.reserve(n);
-        while (n--) items.push_back(typed(r.u8()));
+        while (n--) items.push_back(typed(r.u8(), attr_depth + 1));
         return ParsedAttribute::from_array(std::move(items));
       }
       case 17: {  // 3D point (Geom::Point3d)
@@ -1513,6 +1532,8 @@ struct Archive {
         auto& listed = inline_stack[depth];
         listed.erase(std::remove(listed.begin(), listed.end(), std::get<0>(item)), listed.end());
         v.push_back(std::move(item));
+      } catch (const SkpParseError&) {
+        throw;
       } catch (...) {
         if (root) {
           // over-declared root counts run into the document tail - stop
@@ -1693,6 +1714,8 @@ WalkResult walk_with_bases(const ByteBuffer& data, int ver, size_t start, uint32
     size_t at = 0;
     try {
       return walk_model(data, ver, start, mat_count, base, &at);
+    } catch (const SkpParseError&) {
+      throw;
     } catch (const std::exception&) {
       if (!best_exc || at > best_at) {
         best_exc = std::current_exception();

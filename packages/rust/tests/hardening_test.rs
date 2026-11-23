@@ -258,7 +258,7 @@ fn deep_component_chain_and_exponential_dag_are_rejected() {
 #[test]
 fn legacy_mfc_object_recursion_and_attr_bombs_are_rejected() {
     // Run on a thread with 8 MiB stack (matching Linux default) so unoptimized
-    // Windows debug builds can traverse down to MAX_OBJECT_DEPTH (256)
+    // Windows debug builds can traverse down to MAX_LEGACY_DEPTH (64)
     // without exhausting the smaller Windows MSVC stack.
     let handle = std::thread::Builder::new()
         .stack_size(8 * 1024 * 1024)

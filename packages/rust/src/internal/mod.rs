@@ -61,6 +61,8 @@ pub enum ErrorKind {
     Overflow,
     /// `std::invalid_argument`
     InvalidArgument,
+    /// Hard recursion/nesting depth limit exceeded
+    DepthLimit,
     /// `std::runtime_error` (and anything else)
     Runtime,
 }
@@ -92,6 +94,10 @@ impl Error {
 
     pub fn invalid_argument(message: impl Into<Cow<'static, str>>) -> Self {
         Self::new(ErrorKind::InvalidArgument, message)
+    }
+
+    pub fn depth_limit(message: impl Into<Cow<'static, str>>) -> Self {
+        Self::new(ErrorKind::DepthLimit, message)
     }
 
     pub fn runtime(message: impl Into<Cow<'static, str>>) -> Self {

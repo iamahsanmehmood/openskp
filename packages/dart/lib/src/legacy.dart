@@ -357,6 +357,8 @@ class Archive {
   // _pathRef) that the list has not listed yet, in order
   final List<Set<int>> inlineStack = [];
   int? clineTail;
+  static const int maxLegacyDepth = 64;
+  int depth = 0;
 
   Archive(this.data, this.ver) : hasPid = ver >= 17 {
     r = LR(data);
@@ -419,6 +421,13 @@ class Archive {
   }
 
   (int, String, Object?) _newObj(LR r, String name) {
+    if (depth >= maxLegacyDepth) {
+      throw SkpParseException(
+        'legacy archive object nesting exceeds maximum depth ($maxLegacyDepth)',
+        stage: 'legacy_walk',
+        offset: r.pos,
+      );
+    }
     inEntityList = false;
     final slot = alloc(SlotEntry(kind: 'obj', name: name, value: null));
     final reader = readers[name];
@@ -429,10 +438,12 @@ class Archive {
     final prevSlot = currentObjSlot;
     currentClass = name;
     currentObjSlot = slot;
+    depth += 1;
     Object? value;
     try {
       value = reader(this, r);
     } finally {
+      depth -= 1;
       currentClass = prevClass;
       currentObjSlot = prevSlot;
     }
@@ -1107,7 +1118,7 @@ class LegacyReaders {
     return AttrsRec(children);
   }
 
-  static Object? _readTyped(LR r, int t) {
+  static Object? _readTyped(LR r, int t, [int depth = 0]) {
     if (t == 0x00) return null;
     if (t == 0x04) return r.i32();
     if (t == 0x06) return r.f64();
@@ -1116,11 +1127,18 @@ class LegacyReaders {
     if (t == 0x0a) return r.utf16();
     if (t == 0x0c) return r.f64(); // Length (a double, inches)
     if (t == 0x0b) {
+      if (depth >= Archive.maxLegacyDepth) {
+        throw SkpParseException(
+          'legacy attribute array nesting exceeds maximum depth (${Archive.maxLegacyDepth})',
+          stage: 'legacy_walk',
+          offset: r.pos,
+        );
+      }
       final n = r.u32();
       if (n > 100000) {
         throw LegacyParseError('implausible attr array count ${r.ctx()}');
       }
-      return [for (int i = 0; i < n; i++) _readTyped(r, r.u8())];
+      return [for (int i = 0; i < n; i++) _readTyped(r, r.u8(), depth + 1)];
     }
     if (t == 0x11) return r.f64s(3); // 3D point (Geom::Point3d)
     if (t == 0x12) return r.f64s(3); // 3D vector (Geom::Vector3d)
