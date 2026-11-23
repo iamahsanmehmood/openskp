@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { create, SkpWriteError, _internal, Point3 } from '../src/create';
 import { parseSkp, buildScene } from '../src/index';
+import { walk } from '../src/legacy';
 
 /**
  * Tests for create.ts - the from-scratch legacy (v17) .skp writer, ported
@@ -518,6 +519,135 @@ describe('Attribute dicts', () => {
   it('a boolean attribute value throws', () => {
     const builder = create();
     expect(() => builder.addFace(SQUARE, { attributes: { flag: true as unknown as number } })).toThrow(/bool/);
+  });
+
+  it('multiple attributeDicts on an instance preserve order and round-trip dynamic_attributes (openskp#285)', () => {
+    const builder = create();
+    const stud = builder.addComponentDefinition('Stud', (def) => def.addFace(SQUARE));
+    builder.addInstance(stud, {
+      attributeDicts: [
+        ['z_first', { part: 'Stud', depth: 94.92 }],
+        ['dynamic_attributes', { count: 4 }],
+        ['a_third', { guide: 1 }],
+      ],
+    });
+    const bytes = builder.toBytes();
+    const walked = walk(bytes);
+    const children = walked.root[0][2].attrs.children as [string, { name: string; entries: Record<string, unknown> }][];
+    expect(children.map(([, v]) => v.name)).toEqual(['z_first', 'dynamic_attributes', 'a_third']);
+    expect(children[0][1].entries).toEqual({ part: 'Stud', depth: 94.92 });
+    expect(children[2][1].entries).toEqual({ guide: 1 });
+    const model = parseSkp(toBuffer(bytes));
+    expect(model.root.instances[0].properties).toEqual({ count: '4' });
+  });
+
+  it('multiple attributeDicts on a group preserve order and create a real container', () => {
+    const builder = create();
+    builder.addGroup((grp) => grp.addFace(SQUARE), {
+      name: 'W-1',
+      attributeDicts: [
+        ['fbd-einfo', { depth: 15.5 }],
+        ['dynamic_attributes', { sku: 'GRP-1' }],
+        ['fbd-profile', { guide: 1 }],
+      ],
+    });
+    const bytes = builder.toBytes();
+    const walked = walk(bytes);
+    const children = walked.root[0][2].attrs.children as [string, { name: string; entries: Record<string, unknown> }][];
+    expect(children.map(([, v]) => v.name)).toEqual(['fbd-einfo', 'dynamic_attributes', 'fbd-profile']);
+    const model = parseSkp(toBuffer(bytes));
+    expect(model.root.instances[0].properties).toEqual({ sku: 'GRP-1' });
+  });
+
+  it('multiple attributeDicts work on faces, circles, definitions, and nested placements', () => {
+    const utf16Ascii = (s: string): Uint8Array => {
+      const out = new Uint8Array(s.length * 2);
+      for (let i = 0; i < s.length; i++) out[i * 2] = s.charCodeAt(i);
+      return out;
+    };
+    const containsSubarray = (haystack: Uint8Array, needle: Uint8Array): boolean => {
+      for (let i = 0; i + needle.length <= haystack.length; i++) {
+        let match = true;
+        for (let j = 0; j < needle.length; j++) {
+          if (haystack[i + j] !== needle[j]) {
+            match = false;
+            break;
+          }
+        }
+        if (match) return true;
+      }
+      return false;
+    };
+
+    const builder = create();
+    const part = builder.addComponentDefinition(
+      'Part',
+      (def) => {
+        def.addFace(SQUARE, { attributeDicts: [['def_face_a', { x: 1 }], ['def_face_b', { y: 2 }]] });
+        def.addCircle([0, 0, 10], [0, 0, 1], 5, {
+          attributeDicts: [['def_circ_a', { r: 5 }], ['def_circ_b', { seg: 24 }]],
+        });
+      },
+      { attributeDicts: [['def_meta_a', { k: 'v1' }], ['def_meta_b', { k: 'v2' }]] }
+    );
+    const assembly = builder.addComponentDefinition('Assembly', (def) => {
+      def.addInstance(part, { attributeDicts: [['nest_inst_a', { a: 1 }], ['nest_inst_b', { b: 2 }]] });
+      def.addGroupInstance(part, {
+        name: 'NestedGroup',
+        attributeDicts: [['nest_grp_a', { g: 1 }], ['nest_grp_b', { h: 2 }]],
+      });
+    });
+    builder.addInstance(assembly);
+    builder.addFace(SQUARE, { attributeDicts: [['root_face_a', { x: 1 }], ['root_face_b', { y: 2 }]] });
+    builder.addCircle([50, 50, 0], [0, 0, 1], 10, {
+      attributeDicts: [['root_circ_a', { c: 1 }], ['root_circ_b', { d: 2 }]],
+    });
+
+    const bytes = builder.toBytes();
+    for (const marker of [
+      'def_face_a', 'def_face_b', 'def_circ_a', 'def_circ_b',
+      'def_meta_a', 'def_meta_b', 'nest_inst_a', 'nest_inst_b',
+      'nest_grp_a', 'nest_grp_b', 'root_face_a', 'root_face_b',
+      'root_circ_a', 'root_circ_b',
+    ]) {
+      expect(containsSubarray(bytes, utf16Ascii(marker))).toBe(true);
+    }
+    const model = parseSkp(toBuffer(bytes));
+    expect(model.root.faces.length).toBe(2);
+    expect(model.root.instances.length).toBe(1);
+  });
+
+  it('passing both attributes and attributeDicts throws SkpWriteError', () => {
+    const builder = create();
+    const chair = builder.addComponentDefinition('Chair', (def) => def.addFace(SQUARE));
+    const both = { attributes: { a: 1 }, attributeDicts: [['b', { c: 2 }]] as const };
+    expect(() => builder.addInstance(chair, both)).toThrow(/not both/);
+    expect(() => builder.addGroup((g) => g.addFace(SQUARE), both)).toThrow(/not both/);
+    expect(() => builder.addFace(SQUARE, both)).toThrow(/not both/);
+    expect(() => builder.addCircle([0, 0, 0], [0, 0, 1], 10, both)).toThrow(/not both/);
+    expect(() => builder.addComponentDefinition('Bad', (d) => d.addFace(SQUARE), both)).toThrow(/not both/);
+    expect(() =>
+      builder.addComponentDefinition('NestBad', (d) => {
+        d.addInstance(chair, both);
+      })
+    ).toThrow(/not both/);
+    const builder2 = create();
+    const part2 = builder2.addComponentDefinition('Part2', (def) => def.addFace(SQUARE));
+    expect(() =>
+      builder2.addComponentDefinition('NestGroupBad', (d) => {
+        d.addGroupInstance(part2, both);
+      })
+    ).toThrow(/not both/);
+  });
+
+  it('empty attributeDicts behaves like no attributes', () => {
+    const builder = create();
+    const chair = builder.addComponentDefinition('Chair', (def) => def.addFace(SQUARE));
+    builder.addGroup((g) => g.addFace(SQUARE), { name: 'PlainGroup', attributeDicts: [] });
+    builder.addInstance(chair, { attributeDicts: [] });
+    const walked = walk(builder.toBytes());
+    expect(walked.root[0][2].attrs).toBeNull();
+    expect(walked.root[1][2].attrs).toEqual({ k: 'attrs', children: [] });
   });
 });
 

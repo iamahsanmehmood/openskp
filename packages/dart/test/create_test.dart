@@ -1,7 +1,9 @@
 import 'dart:io';
 import 'dart:math';
+import 'dart:typed_data';
 
 import 'package:openskp/openskp.dart';
+import 'package:openskp/src/legacy.dart' show AttrsRec, DictRec, InstanceRec, Legacy;
 import 'package:test/test.dart';
 
 /// Tests for the `create.dart` from-scratch legacy (v17) `.skp` writer -
@@ -716,6 +718,195 @@ void main() {
       final model = SkpFile.fromBuffer(builder.toBytes()).parse();
       expect(model.root.instances.single.name, 'Chair');
       expect(model.root.instances.single.properties, {'sku': 'CH-1', 'qty': '3'});
+    });
+
+    test('multiple attributeDicts on an instance preserve order and round-trip dynamic_attributes (openskp#285)', () {
+      final builder = create();
+      final stud = builder.addComponentDefinition('Stud', (def) {
+        def.addFace(square);
+      });
+      builder.addInstance(
+        stud,
+        attributeDicts: [
+          ('z_first', {'part': 'Stud', 'depth': 94.92}),
+          ('dynamic_attributes', {'count': 4}),
+          ('a_third', {'guide': 1}),
+        ],
+      );
+      final bytes = builder.toBytes();
+      final walked = Legacy.walk(bytes);
+      final instRec = walked.root[0].$3 as InstanceRec;
+      final children = instRec.attrs!.children;
+      expect(children.map((c) => (c.$2 as DictRec).name).toList(), [
+        'z_first',
+        'dynamic_attributes',
+        'a_third',
+      ]);
+      expect((children[0].$2 as DictRec).entries, {'part': 'Stud', 'depth': 94.92});
+      expect((children[2].$2 as DictRec).entries, {'guide': 1});
+
+      final model = SkpFile.fromBuffer(bytes).parse();
+      expect(model.root.instances.single.properties, {'count': '4'});
+    });
+
+    test('multiple attributeDicts on a group preserve order and create a real container', () {
+      final builder = create();
+      builder.addGroup(
+        (grp) {
+          grp.addFace(square);
+        },
+        name: 'W-1',
+        attributeDicts: [
+          ('fbd-einfo', {'depth': 15.5}),
+          ('dynamic_attributes', {'sku': 'GRP-1'}),
+          ('fbd-profile', {'guide': 1}),
+        ],
+      );
+      final bytes = builder.toBytes();
+      final walked = Legacy.walk(bytes);
+      final instRec = walked.root[0].$3 as InstanceRec;
+      final children = instRec.attrs!.children;
+      expect(children.map((c) => (c.$2 as DictRec).name).toList(), [
+        'fbd-einfo',
+        'dynamic_attributes',
+        'fbd-profile',
+      ]);
+      final model = SkpFile.fromBuffer(bytes).parse();
+      expect(model.root.instances.single.properties, {'sku': 'GRP-1'});
+    });
+
+    test('multiple attributeDicts work on faces, circles, definitions, and nested placements', () {
+      Uint8List utf16Ascii(String s) {
+        final out = Uint8List(s.length * 2);
+        for (var i = 0; i < s.length; i++) {
+          out[i * 2] = s.codeUnitAt(i);
+        }
+        return out;
+      }
+
+      bool containsBytes(Uint8List haystack, Uint8List needle) {
+        for (var i = 0; i + needle.length <= haystack.length; i++) {
+          var ok = true;
+          for (var j = 0; j < needle.length; j++) {
+            if (haystack[i + j] != needle[j]) {
+              ok = false;
+              break;
+            }
+          }
+          if (ok) return true;
+        }
+        return false;
+      }
+
+      final builder = create();
+      final part = builder.addComponentDefinition(
+        'Part',
+        (def) {
+          def.addFace(square, attributeDicts: [
+            ('def_face_a', {'x': 1}),
+            ('def_face_b', {'y': 2}),
+          ]);
+          def.addCircle((0.0, 0.0, 10.0), (0.0, 0.0, 1.0), 5.0, attributeDicts: [
+            ('def_circ_a', {'r': 5}),
+            ('def_circ_b', {'seg': 24}),
+          ]);
+        },
+        attributeDicts: [
+          ('def_meta_a', {'k': 'v1'}),
+          ('def_meta_b', {'k': 'v2'}),
+        ],
+      );
+      final assembly = builder.addComponentDefinition('Assembly', (def) {
+        def.addInstance(part, attributeDicts: [
+          ('nest_inst_a', {'a': 1}),
+          ('nest_inst_b', {'b': 2}),
+        ]);
+        def.addGroupInstance(
+          part,
+          name: 'NestedGroup',
+          attributeDicts: [
+            ('nest_grp_a', {'g': 1}),
+            ('nest_grp_b', {'h': 2}),
+          ],
+        );
+      });
+      builder.addInstance(assembly);
+      builder.addFace(square, attributeDicts: [
+        ('root_face_a', {'x': 1}),
+        ('root_face_b', {'y': 2}),
+      ]);
+      builder.addCircle((50.0, 50.0, 0.0), (0.0, 0.0, 1.0), 10.0, attributeDicts: [
+        ('root_circ_a', {'c': 1}),
+        ('root_circ_b', {'d': 2}),
+      ]);
+
+      final bytes = builder.toBytes();
+      for (final marker in const [
+        'def_meta_a', 'def_meta_b', 'def_face_a', 'def_face_b',
+        'def_circ_a', 'def_circ_b', 'nest_inst_a', 'nest_inst_b',
+        'nest_grp_a', 'nest_grp_b', 'root_face_a', 'root_face_b',
+        'root_circ_a', 'root_circ_b',
+      ]) {
+        expect(containsBytes(bytes, utf16Ascii(marker)), isTrue, reason: marker);
+      }
+
+      final model = SkpFile.fromBuffer(bytes).parse();
+      expect(model.root.faces.length, 2);
+      expect(model.root.instances.length, 1);
+    });
+
+    test('passing both attributes and attributeDicts throws SkpWriteError', () {
+      final builder = create();
+      final chair = builder.addComponentDefinition('Chair', (def) {
+        def.addFace(square);
+      });
+      const single = <String, Object>{'a': 1};
+      const multi = <(String, Map<String, Object>)>[
+        ('b', {'c': 2}),
+      ];
+
+      Matcher throwsNotBoth() => throwsA(
+            isA<SkpWriteError>().having((e) => e.message, 'message', contains('not both')),
+          );
+
+      expect(() => builder.addInstance(chair, attributes: single, attributeDicts: multi), throwsNotBoth());
+      expect(
+        () => builder.addGroup((g) => g.addFace(square), attributes: single, attributeDicts: multi),
+        throwsNotBoth(),
+      );
+      expect(() => builder.addFace(square, attributes: single, attributeDicts: multi), throwsNotBoth());
+      expect(
+        () => builder.addCircle((0.0, 0.0, 0.0), (0.0, 0.0, 1.0), 10.0, attributes: single, attributeDicts: multi),
+        throwsNotBoth(),
+      );
+      expect(
+        () => builder.addComponentDefinition('Bad', (d) => d.addFace(square), attributes: single, attributeDicts: multi),
+        throwsNotBoth(),
+      );
+
+      final builder2 = create();
+      final part = builder2.addComponentDefinition('Part', (def) => def.addFace(square));
+      builder2.addComponentDefinition('Outer', (outer) {
+        outer.addFace(square);
+        expect(() => outer.addInstance(part, attributes: single, attributeDicts: multi), throwsNotBoth());
+        expect(() => outer.addGroupInstance(part, attributes: single, attributeDicts: multi), throwsNotBoth());
+      });
+    });
+
+    test('empty attributeDicts behaves like no attributes', () {
+      final builder = create();
+      final chair = builder.addComponentDefinition('Chair', (def) {
+        def.addFace(square);
+      });
+      builder.addGroup((g) => g.addFace(square), name: 'PlainGroup', attributeDicts: const []);
+      builder.addInstance(chair, attributeDicts: const []);
+
+      final walked = Legacy.walk(builder.toBytes());
+      final grpRec = walked.root[0].$3 as InstanceRec;
+      final instRec = walked.root[1].$3 as InstanceRec;
+      expect(grpRec.attrs, isNull);
+      expect(instRec.attrs, isA<AttrsRec>());
+      expect(instRec.attrs!.children, isEmpty);
     });
   });
 

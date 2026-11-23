@@ -1579,6 +1579,7 @@ export interface AddFaceOptions {
   backUv?: UvPair[];
   attributes?: AttributeDict;
   attributeDictName?: string;
+  attributeDicts?: ReadonlyArray<readonly [string, AttributeDict]>;
   /** Fan-triangulate a non-coplanar polygon instead of throwing. */
   autoTriangulate?: boolean;
   holes?: Point3[][];
@@ -1594,6 +1595,7 @@ export interface AddCircleOptions {
   backUv?: UvPair[];
   attributes?: AttributeDict;
   attributeDictName?: string;
+  attributeDicts?: ReadonlyArray<readonly [string, AttributeDict]>;
 }
 
 export interface AddArcOptions {
@@ -1619,6 +1621,7 @@ export interface AddInstanceOptions {
   layer?: number;
   attributes?: AttributeDict;
   attributeDictName?: string;
+  attributeDicts?: ReadonlyArray<readonly [string, AttributeDict]>;
   hidden?: boolean;
 }
 
@@ -1643,12 +1646,14 @@ export interface AddGroupInstanceOptions {
   layer?: number;
   attributes?: AttributeDict;
   attributeDictName?: string;
+  attributeDicts?: ReadonlyArray<readonly [string, AttributeDict]>;
   hidden?: boolean;
 }
 
 export interface AddComponentDefinitionOptions {
   attributes?: AttributeDict;
   attributeDictName?: string;
+  attributeDicts?: ReadonlyArray<readonly [string, AttributeDict]>;
 }
 
 export interface AddGroupOptions {
@@ -1660,6 +1665,7 @@ export interface AddGroupOptions {
   layer?: number;
   attributes?: AttributeDict;
   attributeDictName?: string;
+  attributeDicts?: ReadonlyArray<readonly [string, AttributeDict]>;
   hidden?: boolean;
 }
 
@@ -1669,7 +1675,22 @@ function toPoint3(p: readonly [number, number, number]): Point3 {
   return [Number(p[0]), Number(p[1]), Number(p[2])];
 }
 
-function attributeDictsFrom(attributes: AttributeDict | undefined, name: string): Array<[string, AttributeDict]> {
+function attributeDictsFrom(
+  attributes: AttributeDict | undefined,
+  name: string,
+  attributeDicts?: ReadonlyArray<readonly [string, AttributeDict]>
+): Array<[string, AttributeDict]> {
+  const hasAttributes = attributes !== undefined && Object.keys(attributes).length > 0;
+  const hasAttributeDicts = attributeDicts !== undefined && attributeDicts.length > 0;
+  if (hasAttributes && hasAttributeDicts) {
+    throw new SkpWriteError('pass either attributes/attributeDictName or attributeDicts, not both');
+  }
+  if (hasAttributes) {
+    return [[name, attributes]];
+  }
+  if (attributeDicts !== undefined) {
+    return attributeDicts.map(([dictName, entries]) => [dictName, entries]);
+  }
   return attributes ? [[name, attributes]] : [];
 }
 
@@ -1724,7 +1745,7 @@ export class ComponentDefinitionBuilder {
     const pts = points.map(toPoint3);
     if (pts.length < 3) throw new SkpWriteError('a face needs at least 3 points');
     const holes = (options.holes ?? []).map((h) => h.map(toPoint3));
-    const attributeDicts = attributeDictsFrom(options.attributes, options.attributeDictName ?? 'attributes');
+    const attributeDicts = attributeDictsFrom(options.attributes, options.attributeDictName ?? 'attributes', options.attributeDicts);
     this.newEntityCount += writeFaceOrTriangulate({
       writer: this._skp._definitionWriter(),
       points: pts, vertexSlots: this.vertexSlots, edgeRegistry: this.edgeRegistry,
@@ -1750,7 +1771,7 @@ export class ComponentDefinitionBuilder {
     const xaxis: Point3 = [radius * u[0], radius * u[1], radius * u[2]];
     const curveParams: CurveParams = { center: c, normal: n, xaxis, startAngle: 0, endAngle: 2 * Math.PI, radius, numSegments };
     const points = circlePoints(c, radius, numSegments, u, w);
-    const attributeDicts = attributeDictsFrom(options.attributes, options.attributeDictName ?? 'attributes');
+    const attributeDicts = attributeDictsFrom(options.attributes, options.attributeDictName ?? 'attributes', options.attributeDicts);
     this.newEntityCount += this._skp._definitionWriter().writeFace(
       points, this.vertexSlots, this.edgeRegistry,
       options.material ?? 0, options.layer ?? 0, options.backMaterial ?? 0,
@@ -1807,7 +1828,7 @@ export class ComponentDefinitionBuilder {
       throw new SkpWriteError(`component definition ${JSON.stringify(this.name)} cannot nest an instance of itself`);
     }
     const matrix3x3 = resolveMatrix3x3(options.matrix3x3, options.rotation);
-    const attributeDicts = attributeDictsFrom(options.attributes, options.attributeDictName ?? 'attributes');
+    const attributeDicts = attributeDictsFrom(options.attributes, options.attributeDictName ?? 'attributes', options.attributeDicts);
     this.newEntityCount += this._skp._definitionWriter().writeInstance(
       definition.slot, options.name ?? definition.name, options.translation ?? [0, 0, 0], matrix3x3,
       options.material ?? 0, options.layer ?? 0, attributeDicts, options.hidden ?? false
@@ -1831,7 +1852,7 @@ export class ComponentDefinitionBuilder {
       throw new SkpWriteError(`component definition ${JSON.stringify(this.name)} cannot nest a group instance of itself`);
     }
     const matrix3x3 = resolveMatrix3x3(options.matrix3x3, options.rotation);
-    const attributeDicts = attributeDictsFrom(options.attributes, options.attributeDictName ?? 'attributes');
+    const attributeDicts = attributeDictsFrom(options.attributes, options.attributeDictName ?? 'attributes', options.attributeDicts);
     this.newEntityCount += this._skp._definitionWriter().writeGroup(
       definition.slot, options.name ?? definition.name, options.translation ?? [0, 0, 0], matrix3x3,
       options.material ?? 0, options.layer ?? 0, attributeDicts, options.hidden ?? false
@@ -2106,7 +2127,7 @@ export class SkpBuilder {
   addComponentDefinition(
     name: string, build: (def: ComponentDefinitionBuilder) => void, options: AddComponentDefinitionOptions = {}
   ): ComponentDefinitionBuilder {
-    const attributeDicts = attributeDictsFrom(options.attributes, options.attributeDictName ?? 'attributes');
+    const attributeDicts = attributeDictsFrom(options.attributes, options.attributeDictName ?? 'attributes', options.attributeDicts);
     const def = this.startDefinition(name, 'addComponentDefinition', undefined, attributeDicts);
     build(def);
     def._close();
@@ -2127,7 +2148,7 @@ export class SkpBuilder {
     this._checkMaterialHandle(options.material, 'material');
     this._checkLayerHandle(options.layer);
     const matrix3x3 = resolveMatrix3x3(options.matrix3x3, options.rotation);
-    const attributeDicts = attributeDictsFrom(options.attributes, options.attributeDictName ?? 'attributes');
+    const attributeDicts = attributeDictsFrom(options.attributes, options.attributeDictName ?? 'attributes', options.attributeDicts);
     const placement: GroupPlacement = [
       options.translation ?? [0, 0, 0], matrix3x3, options.material ?? 0, options.layer ?? 0, attributeDicts, options.hidden ?? false,
     ];
@@ -2159,8 +2180,8 @@ export class SkpBuilder {
       );
     }
     const matrix3x3 = resolveMatrix3x3(options.matrix3x3, options.rotation);
+    const attributeDicts = attributeDictsFrom(options.attributes, options.attributeDictName ?? 'attributes', options.attributeDicts);
     this.ensureGeometryWriter();
-    const attributeDicts = attributeDictsFrom(options.attributes, options.attributeDictName ?? 'attributes');
     this.newEntityCount += (this.geometryWriter as ArchiveWriter).writeInstance(
       definition.slot, options.name ?? definition.name, options.translation ?? [0, 0, 0], matrix3x3,
       options.material ?? 0, options.layer ?? 0, attributeDicts, options.hidden ?? false
@@ -2274,8 +2295,8 @@ export class SkpBuilder {
     const pts = points.map(toPoint3);
     if (pts.length < 3) throw new SkpWriteError('a face needs at least 3 points');
     const holes = (options.holes ?? []).map((h) => h.map(toPoint3));
+    const attributeDicts = attributeDictsFrom(options.attributes, options.attributeDictName ?? 'attributes', options.attributeDicts);
     this.ensureGeometryWriter();
-    const attributeDicts = attributeDictsFrom(options.attributes, options.attributeDictName ?? 'attributes');
     this.newEntityCount += writeFaceOrTriangulate({
       writer: this.geometryWriter as ArchiveWriter,
       points: pts, vertexSlots: this.vertexSlots, edgeRegistry: this.edgeRegistry,
@@ -2299,12 +2320,12 @@ export class SkpBuilder {
     }
     const c = toPoint3(center);
     const n = normalize3(toPoint3(normal));
+    const attributeDicts = attributeDictsFrom(options.attributes, options.attributeDictName ?? 'attributes', options.attributeDicts);
     this.ensureGeometryWriter();
     const [u, w] = circleBasis(n);
     const xaxis: Point3 = [radius * u[0], radius * u[1], radius * u[2]];
     const curveParams: CurveParams = { center: c, normal: n, xaxis, startAngle: 0, endAngle: 2 * Math.PI, radius, numSegments };
     const points = circlePoints(c, radius, numSegments, u, w);
-    const attributeDicts = attributeDictsFrom(options.attributes, options.attributeDictName ?? 'attributes');
     this.newEntityCount += (this.geometryWriter as ArchiveWriter).writeFace(
       points, this.vertexSlots, this.edgeRegistry,
       options.material ?? 0, options.layer ?? 0, options.backMaterial ?? 0,

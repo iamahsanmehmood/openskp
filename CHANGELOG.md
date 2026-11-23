@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — TypeScript, .NET, Dart, C++ & Rust: multiple attribute dictionaries per entity in `create` (#285)
+
+- Ports Python's `attribute_dicts` writer parameter (#256) to TypeScript (`attributeDicts` on
+  `AddFaceOptions`, `AddCircleOptions`, `AddInstanceOptions`, `AddGroupInstanceOptions`,
+  `AddComponentDefinitionOptions` and `AddGroupOptions`), .NET (`attributeDicts` on `AddFace`,
+  `AddCircle`, `AddInstance`, `AddGroupInstance`, `AddComponentDefinition` and `AddGroup`), Dart
+  (`attributeDicts` on `addFace`, `addCircle`, `addInstance`, `addGroupInstance`,
+  `addComponentDefinition` and `addGroup`), C++ (`attribute_dicts` on `FaceOptions`,
+  `CircleOptions`, `PolylineOptions`, `DefinitionOptions`, `InstanceOptions`, `GroupOptions` and
+  `GroupInstanceOptions`) and Rust (`attribute_dicts` on `FaceOptions`, `CircleOptions`,
+  `DefinitionOptions`, `InstanceOptions`, `GroupOptions` and `GroupInstanceOptions`), preserving
+  exact caller-supplied dictionary order and rejecting calls that pass both `attributes` and
+  `attribute_dicts`.
+
 ### Fixed — Python: scenes use a component instance's own paint and tag in classic files (#596)
 
 - `build_scene()` and `build_instanced_scene()` read an instance's paint and tag from its 2021+ `D007` record only. In classic (pre-2021) files a painted component came out in its tag's colour, and every instance sat on its parent's tag. Both now come from the instance itself, and nested components inherit the paint.

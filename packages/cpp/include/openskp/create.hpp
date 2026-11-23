@@ -135,6 +135,8 @@ using AttributeValue =
 /// each of their `attributes`/`attribute_dict_name` options - the same mechanism SketchUp's own
 /// "dynamic component" attributes use.
 using AttributeDict = std::map<std::string, AttributeValue>;
+/// An ordered sequence of `(dict_name, entries)` attribute dictionaries attached to an entity.
+using AttributeDictList = std::vector<std::pair<std::string, AttributeDict>>;
 
 class ComponentDefinitionBuilder;
 
@@ -205,6 +207,9 @@ struct FaceOptions {
   bool receives_shadows = true;
   /// Named dictionaries; when nonempty, take precedence over attributes.
   std::map<std::string, AttributeDict> dictionaries;
+  /// Ordered sequence of named attribute dictionaries attached to this face (mutually exclusive
+  /// with `attributes`).
+  AttributeDictList attribute_dicts;
 };
 
 /// Options for `SkpBuilder::add_circle` / `ComponentDefinitionBuilder::add_circle`.
@@ -231,6 +236,7 @@ struct CircleOptions {
   /// normalized xaxis. Its length, shear and handedness are preserved, allowing
   /// affine circles/ellipses and reflected arcs without losing analytic metadata.
   std::optional<Point3> yaxis;
+  AttributeDictList attribute_dicts;
 };
 
 /// Options for `SkpBuilder::add_arc` / `ComponentDefinitionBuilder::add_arc`.
@@ -266,6 +272,7 @@ struct PolylineOptions {
   AttributeDict attributes;
   std::string attribute_dict_name = "attributes";
   std::map<std::string, AttributeDict> dictionaries;
+  AttributeDictList attribute_dicts;
 };
 
 /// Options for `SkpBuilder::add_component_definition`.
@@ -289,6 +296,7 @@ struct DefinitionOptions {
   bool is_group = false;
   /// Native scale-grip suppression mask; unknown bits are preserved.
   std::uint32_t no_scale_mask = 0;
+  AttributeDictList attribute_dicts;
 };
 
 /// Options for `SkpBuilder::add_texture_material`.
@@ -342,6 +350,7 @@ struct InstanceOptions {
   bool locked = false;
   bool casts_shadows = true;
   bool receives_shadows = true;
+  AttributeDictList attribute_dicts;
 };
 
 /// Options for `SkpBuilder::add_group`.
@@ -362,6 +371,7 @@ struct GroupOptions {
   bool locked = false;
   bool casts_shadows = true;
   bool receives_shadows = true;
+  AttributeDictList attribute_dicts;
 };
 
 /// Options for `ComponentDefinitionBuilder::add_group_instance`. Same shape as `GroupOptions`.
@@ -378,6 +388,7 @@ struct GroupInstanceOptions {
   bool locked = false;
   bool casts_shadows = true;
   bool receives_shadows = true;
+  AttributeDictList attribute_dicts;
 };
 
 /// Options for `SkpBuilder::add_image`.

@@ -339,6 +339,9 @@ pub struct FaceOptions {
     /// Custom metadata, written under a dictionary named `attribute_dict_name`.
     pub attributes: AttributeDict,
     pub attribute_dict_name: String,
+    /// Ordered sequence of `(dict_name, entries)` attribute dictionaries (mutually exclusive with
+    /// `attributes`).
+    pub attribute_dicts: Vec<(String, AttributeDict)>,
     /// Fan-triangulate a non-coplanar polygon from `points[0]` into real triangles instead of
     /// failing. Already-planar input is still written as one face. Not compatible with
     /// `front_uv`/`back_uv`; ignored when `holes` is non-empty.
@@ -361,6 +364,7 @@ impl Default for FaceOptions {
             back_uv: None,
             attributes: AttributeDict::new(),
             attribute_dict_name: DEFAULT_ATTRIBUTE_DICT_NAME.to_owned(),
+            attribute_dicts: Vec::new(),
             auto_triangulate: false,
             holes: Vec::new(),
         }
@@ -382,6 +386,7 @@ pub struct CircleOptions {
     pub back_uv: Option<UvCorrespondence>,
     pub attributes: AttributeDict,
     pub attribute_dict_name: String,
+    pub attribute_dicts: Vec<(String, AttributeDict)>,
 }
 
 impl Default for CircleOptions {
@@ -396,6 +401,7 @@ impl Default for CircleOptions {
             back_uv: None,
             attributes: AttributeDict::new(),
             attribute_dict_name: DEFAULT_ATTRIBUTE_DICT_NAME.to_owned(),
+            attribute_dicts: Vec::new(),
         }
     }
 }
@@ -437,6 +443,7 @@ pub struct DefinitionOptions {
     /// Custom metadata on the definition itself, under `attribute_dict_name`.
     pub attributes: AttributeDict,
     pub attribute_dict_name: String,
+    pub attribute_dicts: Vec<(String, AttributeDict)>,
 }
 
 impl Default for DefinitionOptions {
@@ -444,6 +451,7 @@ impl Default for DefinitionOptions {
         DefinitionOptions {
             attributes: AttributeDict::new(),
             attribute_dict_name: DEFAULT_ATTRIBUTE_DICT_NAME.to_owned(),
+            attribute_dicts: Vec::new(),
         }
     }
 }
@@ -475,6 +483,7 @@ pub struct InstanceOptions {
     /// Custom metadata on this placement (not its definition), under `attribute_dict_name`.
     pub attributes: AttributeDict,
     pub attribute_dict_name: String,
+    pub attribute_dicts: Vec<(String, AttributeDict)>,
     /// Hides this placement; its contents still exist in the file.
     pub hidden: bool,
 }
@@ -490,6 +499,7 @@ impl Default for InstanceOptions {
             layer: None,
             attributes: AttributeDict::new(),
             attribute_dict_name: DEFAULT_ATTRIBUTE_DICT_NAME.to_owned(),
+            attribute_dicts: Vec::new(),
             hidden: false,
         }
     }
@@ -509,6 +519,7 @@ pub struct GroupOptions {
     /// (openskp#261).
     pub attributes: AttributeDict,
     pub attribute_dict_name: String,
+    pub attribute_dicts: Vec<(String, AttributeDict)>,
     pub hidden: bool,
 }
 
@@ -523,6 +534,7 @@ impl Default for GroupOptions {
             layer: None,
             attributes: AttributeDict::new(),
             attribute_dict_name: DEFAULT_ATTRIBUTE_DICT_NAME.to_owned(),
+            attribute_dicts: Vec::new(),
             hidden: false,
         }
     }
@@ -540,6 +552,7 @@ pub struct GroupInstanceOptions {
     pub layer: Option<i32>,
     pub attributes: AttributeDict,
     pub attribute_dict_name: String,
+    pub attribute_dicts: Vec<(String, AttributeDict)>,
     pub hidden: bool,
 }
 
@@ -554,6 +567,7 @@ impl Default for GroupInstanceOptions {
             layer: None,
             attributes: AttributeDict::new(),
             attribute_dict_name: DEFAULT_ATTRIBUTE_DICT_NAME.to_owned(),
+            attribute_dicts: Vec::new(),
             hidden: false,
         }
     }
@@ -666,12 +680,20 @@ pub fn create() -> SkpBuilder {
     SkpBuilder::new()
 }
 
-fn single_dict(name: &str, attributes: &AttributeDict) -> AttributeDictList {
-    if attributes.is_empty() {
-        Vec::new()
-    } else {
-        vec![(name.to_owned(), attributes.clone())]
+fn resolve_attribute_dicts(
+    attributes: &AttributeDict,
+    name: &str,
+    attribute_dicts: &[(String, AttributeDict)],
+) -> Result<AttributeDictList, SkpWriteError> {
+    if !attributes.is_empty() && !attribute_dicts.is_empty() {
+        return Err(SkpWriteError::new(
+            "pass either attributes/attribute_dict_name or attribute_dicts, not both",
+        ));
     }
+    if !attributes.is_empty() {
+        return Ok(vec![(name.to_owned(), attributes.clone())]);
+    }
+    Ok(attribute_dicts.to_vec())
 }
 
 fn check_segments(num_segments: u32) -> Result<(), SkpWriteError> {
@@ -778,7 +800,11 @@ fn add_face_to(
     for hole in options.holes.iter() {
         check_finite_points(hole, "hole")?;
     }
-    let dicts = single_dict(&options.attribute_dict_name, &options.attributes);
+    let dicts = resolve_attribute_dicts(
+        &options.attributes,
+        &options.attribute_dict_name,
+        &options.attribute_dicts,
+    )?;
     let front_uv = scale_pins(
         options.front_uv.as_deref(),
         applied_sizes,
@@ -834,7 +860,11 @@ fn add_circle_to(
         num_segments: options.num_segments,
     };
     let points = circle_points(center, radius, options.num_segments, u, w);
-    let dicts = single_dict(&options.attribute_dict_name, &options.attributes);
+    let dicts = resolve_attribute_dicts(
+        &options.attributes,
+        &options.attribute_dict_name,
+        &options.attribute_dicts,
+    )?;
     let spec = FaceSpec {
         material: options.material.unwrap_or(0),
         layer: options.layer.unwrap_or(0),
@@ -1309,7 +1339,11 @@ impl SkpBuilder {
         name: &str,
         options: &DefinitionOptions,
     ) -> Result<ComponentDefinitionBuilder<'_>, SkpWriteError> {
-        let dicts = single_dict(&options.attribute_dict_name, &options.attributes);
+        let dicts = resolve_attribute_dicts(
+            &options.attributes,
+            &options.attribute_dict_name,
+            &options.attribute_dicts,
+        )?;
         let header = self.begin_definition_header("add_component_definition", &dicts)?;
         Ok(self.push_definition(header, name.to_owned(), None))
     }
@@ -1324,13 +1358,18 @@ impl SkpBuilder {
         self.check_material_handle(options.material, "material")?;
         self.check_layer_handle(options.layer)?;
         let matrix3x3 = resolve_matrix3x3(options.matrix3x3, options.rotation)?;
+        let attribute_dicts = resolve_attribute_dicts(
+            &options.attributes,
+            &options.attribute_dict_name,
+            &options.attribute_dicts,
+        )?;
         let header = self.begin_definition_header("add_group", &[])?;
         let placement = GroupPlacement {
             translation: options.translation,
             matrix3x3,
             material: options.material.unwrap_or(0),
             layer: options.layer.unwrap_or(0),
-            attribute_dicts: single_dict(&options.attribute_dict_name, &options.attributes),
+            attribute_dicts,
             hidden: options.hidden,
         };
         let name = options.name.clone().unwrap_or_else(|| "Group".to_owned());
@@ -1362,8 +1401,12 @@ impl SkpBuilder {
             )));
         }
         let matrix3x3 = resolve_matrix3x3(options.matrix3x3, options.rotation)?;
+        let dicts = resolve_attribute_dicts(
+            &options.attributes,
+            &options.attribute_dict_name,
+            &options.attribute_dicts,
+        )?;
         self.ensure_geometry_writer()?;
-        let dicts = single_dict(&options.attribute_dict_name, &options.attributes);
         let def = &self.definitions[index];
         let placement = Placement {
             definition_slot: def.slot,
@@ -1458,6 +1501,11 @@ impl SkpBuilder {
         if points.len() < 3 {
             return Err(SkpWriteError::new("a face needs at least 3 points"));
         }
+        resolve_attribute_dicts(
+            &options.attributes,
+            &options.attribute_dict_name,
+            &options.attribute_dicts,
+        )?;
         self.ensure_geometry_writer()?;
         let writer = self.geometry_writer.as_mut().expect("ensured above");
         self.new_entity_count += add_face_to(
@@ -1483,6 +1531,11 @@ impl SkpBuilder {
         self.check_material_handle(options.material, "material")?;
         self.check_material_handle(options.back_material, "back_material")?;
         self.check_layer_handle(options.layer)?;
+        resolve_attribute_dicts(
+            &options.attributes,
+            &options.attribute_dict_name,
+            &options.attribute_dicts,
+        )?;
         self.ensure_geometry_writer()?;
         let writer = self.geometry_writer.as_mut().expect("ensured above");
         self.new_entity_count += add_circle_to(
@@ -2068,7 +2121,11 @@ impl ComponentDefinitionBuilder<'_> {
         self.skp.check_layer_handle(options.layer)?;
         let target = self.nested_target(definition, "an instance")?;
         let matrix3x3 = resolve_matrix3x3(options.matrix3x3, options.rotation)?;
-        let dicts = single_dict(&options.attribute_dict_name, &options.attributes);
+        let dicts = resolve_attribute_dicts(
+            &options.attributes,
+            &options.attribute_dict_name,
+            &options.attribute_dicts,
+        )?;
         let nested = NestedPlacement {
             name: options.name.as_deref(),
             translation: options.translation,
@@ -2096,7 +2153,11 @@ impl ComponentDefinitionBuilder<'_> {
         self.skp.check_layer_handle(options.layer)?;
         let target = self.nested_target(definition, "a group instance")?;
         let matrix3x3 = resolve_matrix3x3(options.matrix3x3, options.rotation)?;
-        let dicts = single_dict(&options.attribute_dict_name, &options.attributes);
+        let dicts = resolve_attribute_dicts(
+            &options.attributes,
+            &options.attribute_dict_name,
+            &options.attribute_dicts,
+        )?;
         let nested = NestedPlacement {
             name: options.name.as_deref(),
             translation: options.translation,
