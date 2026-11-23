@@ -43,6 +43,10 @@ constexpr int kFirstDibObject = 6;
 // one).
 constexpr int kFirstNamedInstance = 5;
 
+// CCustomLineStyle was added with tag line styles in SketchUp 2019, which
+// writes its entity preamble twice; SketchUp 2020 and later write it once.
+constexpr int kFirstSinglePreambleLineStyle = 20;
+
 namespace {
 
 // One entity-reference tag at `q`, advancing it: null, a plain 2-byte
@@ -373,8 +377,10 @@ struct Archive {
   uint64_t base{};
   uint64_t current_loop{};
   bool in_entity_list{};
+  bool seen_line_style{};
   std::unordered_map<uint64_t, Entry> slots;
   std::unordered_map<std::string, uint64_t> class_slot;
+  std::unordered_map<std::string, uint64_t> first_class_slot;
 
   // Burned store-map indices (see the CEdgeUse branch of read()): the
   // writer maps an annotation's connection points into the store map
@@ -423,6 +429,7 @@ struct Archive {
       std::string name(b.begin(), b.end());
       auto cs = alloc({true, name, int(schema), {}});
       class_slot[name] = cs;
+      first_class_slot.emplace(name, cs);
       return new_obj(name);
     }
     if (tag & 0x8000) return new_class_ref(tag & 0x7fff, expect);
@@ -693,6 +700,49 @@ struct Archive {
     return unmatched_class_ref && (tag & 0x8000) && tag != 0xffff;
   }
 
+  // A tag may point at a line style right after its 21-byte tail: nothing
+  // (u16 0) for a plain tag, the style written in full on first use (a new
+  // CCustomLineStyle class record, or a class-ref once the class is known),
+  // or a back-ref to the style object a previous tag already wrote. Only
+  // these forms are consumed; everything else is left for the callers below.
+  //
+  // The slot-base probe (single- and no-material files) numbers from 1<<20,
+  // so the file's own class-refs and back-refs cannot be looked up there:
+  // a class-ref is matched through its distance from the CLayer class-ref
+  // (the same in both numberings), and once a style has been read, any
+  // other plain object ref at this position is the style's back-ref.
+  void read_clayer_line_style() {
+    if (r.p + 2 > r.d.size()) return;
+    auto tag = read_u16(r.d, r.p);
+    constexpr std::string_view kCls = "CCustomLineStyle";
+    bool probing = base >= (uint64_t(1) << 20);
+    if (tag == 0xffff) {
+      size_t at = r.p + 4;
+      if (at + 2 + kCls.size() > r.d.size() || read_u16(r.d, at) != kCls.size() ||
+          !std::equal(kCls.begin(), kCls.end(), r.d.begin() + at + 2)) {
+        return;
+      }
+    } else if (tag & 0x8000) {
+      auto cs_it = class_slot.find(std::string(kCls));
+      if (cs_it == class_slot.end()) return;
+      int64_t cs = int64_t(cs_it->second);
+      auto lay_it = class_slot.find("CLayer");
+      auto lay0_it = first_class_slot.find("CLayer");
+      if (lay_it != class_slot.end() && lay0_it != first_class_slot.end()) {
+        cs += int64_t(lay_it->second) - int64_t(lay0_it->second);
+      }
+      if (cs != int64_t(tag & 0x7fff)) return;
+    } else if (tag == 0 || tag == 0x7fff) {
+      return;
+    } else if (probing) {
+      if (!seen_line_style) return;
+    } else {
+      auto it = slots.find(tag);
+      if (it == slots.end() || it->second.cls || it->second.name != kCls) return;
+    }
+    object(std::string(kCls));
+  }
+
   // Colour CLayer ends in a 21-byte tail. Some v18 zero-material files
   // (custom tag listed first, then Layer0) write 12 zero bytes + u32 after
   // that, then another CLayer. Skip those 16 bytes only when they precede
@@ -705,6 +755,17 @@ struct Archive {
       if (r.d[r.p + i] != 0) return;
     }
     if (clayer_record_at(r.p + kExt, true)) r.p += kExt;
+  }
+
+  // True when the bytes at `at` begin a CComponentDefinition record: its
+  // first-use class declaration, or a class-ref to its known slot.
+  bool definition_starts_at(size_t at) const {
+    if (at + 26 <= r.d.size() && r.d[at] == 0xff && r.d[at + 1] == 0xff &&
+        std::equal(r.d.begin() + at + 6, r.d.begin() + at + 26, "CComponentDefinition")) {
+      return true;
+    }
+    auto cs = class_slot.find("CComponentDefinition");
+    return cs != class_slot.end() && is_class_ref(r.d, at, cs->second);
   }
 
   // v18 template Layer0 after a custom tag: <parent u16><active u16><dc u32>.
@@ -721,6 +782,9 @@ struct Archive {
     if (ia == slots.end() || ib == slots.end()) return;
     if (ia->second.cls || ib->second.cls) return;
     if (ia->second.name != "CLayer" || ib->second.name != "CLayer") return;
+    // <anchor u16><def_count u32><definition> is already the usual layout: a
+    // def_count whose low u16 matches a CLayer slot is not a parent back-ref.
+    if (r.p + 6 < r.d.size() && definition_starts_at(r.p + 6)) return;
     r.p += 2;
   }
 
@@ -903,6 +967,7 @@ struct Archive {
         v->b = c[2];
         r.utf16();
         r.raw(ver < kFirstV4 ? 17 : 21);  // SketchUp 3's tail is 4 bytes shorter
+        read_clayer_line_style();
         skip_clayer_colour_ext();
         skip_clayer_parent_ref(self);
       }
@@ -1350,6 +1415,18 @@ struct Archive {
       // write one); where it is optional, take it only if a string is there.
       if (ver >= kFirstNamedInstance || r.marker()) v->name = r.utf16();
       if (legacy_instance_has_guid(ver)) r.raw(16);
+    } else if (n == "CCustomLineStyle") {
+      // A tag's line style (SketchUp 2019 and 2020, "Dash", "Solid Basic", ...).
+      // Written inline where a tag first uses it, taking a store-map slot.
+      // SketchUp 2020 opens it with one entity preamble; SketchUp 2019 writes
+      // the preamble twice, followed by name, dash pattern and three doubles.
+      early_preamble(v.get());
+      if (ver < kFirstSinglePreambleLineStyle) early_preamble(v.get());
+      v->k = "linestyle";
+      v->name = r.utf16();
+      v->label = r.utf16();
+      r.f64s(3);
+      seen_line_style = true;
     } else
       throw std::runtime_error("no legacy reader for " + n);
     return v;
@@ -1575,7 +1652,7 @@ std::vector<uint64_t> probe_layer_anchor_bases(const ByteBuffer& data, int ver, 
   std::vector<uint64_t> layer_slots;
   for (uint32_t i = 0; i < layer_count; ++i) {
     auto q = boot.object("CLayer");
-    layer_slots.push_back(std::get<0>(q));
+    if (!std::get<1>(q).empty()) layer_slots.push_back(std::get<0>(q));
   }
   boot.collect_trailing_layers(&layer_slots, nullptr, true);
   auto anchor = boot.object();
@@ -1629,14 +1706,7 @@ WalkResult walk_with_bases(const ByteBuffer& data, int ver, size_t start, uint32
 
 // True when the bytes at `at` begin a CComponentDefinition record: its
 // first-use class declaration, or a class-ref to its known slot.
-bool definition_starts_at(Archive& ar, size_t at) {
-  const auto& d = ar.r.d;
-  if (at + 26 <= d.size() && d[at] == 0xff && d[at + 1] == 0xff &&
-      std::equal(d.begin() + at + 6, d.begin() + at + 26, "CComponentDefinition"))
-    return true;
-  auto cs = ar.class_slot.find("CComponentDefinition");
-  return cs != ar.class_slot.end() && is_class_ref(d, at, cs->second);
-}
+bool definition_starts_at(Archive& ar, size_t at) { return ar.definition_starts_at(at); }
 
 // The walk proper, on a caller-owned archive so walk_model can report how far
 // it got when it throws.

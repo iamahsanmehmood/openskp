@@ -31,9 +31,11 @@ add_executable(
   layer_hidden_test.cpp
   legacy_anchored_texts_test.cpp
   legacy_dimension_paths_test.cpp
+  legacy_layer_anchor_def_count_test.cpp
   legacy_unread_root_entities_test.cpp
   legacy_dimension_geometry_test.cpp
   legacy_single_material_test.cpp
+  legacy_tag_line_styles_test.cpp
   legacy_zero_material_custom_layer_test.cpp
   legacy_v20_filler_test.cpp
   legacy_v20_test.cpp
