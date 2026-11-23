@@ -319,6 +319,7 @@ export class Archive {
   r: R;
   slots = new Map<number, SlotEntry>();
   classSlot = new Map<string, number>();
+  firstClassSlot = new Map<string, number>();
   classSchema = new Map<string, number>();
   currentClass: string | null = null;
   currentObjSlot: number | null = null;
@@ -327,6 +328,7 @@ export class Archive {
   readers: Record<string, (ar: Archive, r: R) => any> = {};
   currentLoop: number | null = null;
   inEntityList = false;
+  seenLineStyle = false;
 
   // Burned store-map indices (see readEdgeUse): the writer maps an
   // annotation's connection points into the store map WITHOUT writing
@@ -394,6 +396,9 @@ export class Archive {
       const name = new TextDecoder('utf-8').decode(nameBytes);
       this.alloc(['class', name, schema]);
       this.classSlot.set(name, this.nextSlot - 1);
+      if (!this.firstClassSlot.has(name)) {
+        this.firstClassSlot.set(name, this.nextSlot - 1);
+      }
       this.classSchema.set(name, schema);
       return this.newObj(r, name);
     }
@@ -466,6 +471,50 @@ export class Archive {
     const layCs = this.classSlot.get('CLayer');
     if (layCs !== undefined && isClassRef(this.data, at, layCs)) return true;
     return unmatchedClassRef && (tag & 0x8000) !== 0 && tag !== 0xffff;
+  }
+
+  // A tag may point at a line style right after its 21-byte tail: nothing
+  // (u16 0) for a plain tag, the style written in full on first use (a new
+  // CCustomLineStyle class record, or a class-ref once the class is known),
+  // or a back-ref to the style object a previous tag already wrote. Only
+  // these forms are consumed; everything else is left for the callers below.
+  //
+  // The slot-base probe (single- and no-material files) numbers from 1<<20,
+  // so the file's own class-refs and back-refs cannot be looked up there:
+  // a class-ref is matched through its distance from the CLayer class-ref
+  // (the same in both numberings), and once a style has been read, any
+  // other plain object ref at this position is the style's back-ref.
+  readClayerLineStyle(r: R): void {
+    if (r.pos + 2 > this.data.length) return;
+    const tag = r.peekU16();
+    const cls = 'CCustomLineStyle';
+    const probing = this.walkBase >= (1 << 20);
+    if (tag === 0xffff) {
+      const at = r.pos + 4;
+      if (
+        at + 2 + cls.length > this.data.length ||
+        (this.data[at] | (this.data[at + 1] << 8)) !== cls.length ||
+        !matchesAscii(this.data, at + 2, cls)
+      ) {
+        return;
+      }
+    } else if (tag & 0x8000) {
+      let cs = this.classSlot.get(cls);
+      const lay = this.classSlot.get('CLayer');
+      const lay0 = this.firstClassSlot.get('CLayer');
+      if (cs !== undefined && lay !== undefined && lay0 !== undefined) {
+        cs += lay - lay0;
+      }
+      if (cs !== (tag & 0x7fff)) return;
+    } else if (tag === 0 || tag === 0x7fff) {
+      return;
+    } else if (probing) {
+      if (!this.seenLineStyle) return;
+    } else {
+      const ent = this.slots.get(tag);
+      if (ent === undefined || ent[0] !== 'obj' || ent[1] !== cls) return;
+    }
+    this.readObject(r, cls);
   }
 
   // Colour CLayer ends in a 21-byte tail. Some v18 zero-material files
@@ -615,6 +664,10 @@ const FIRST_DIB_OBJECT = 6;
 /** First version whose instances and groups carry a name string (SketchUp 3
  * and 4 files have none; where the name is optional the reader checks for one). */
 const FIRST_NAMED_INSTANCE = 5;
+
+/** CCustomLineStyle was added with tag line styles in SketchUp 2019, which
+ * writes its entity preamble twice; SketchUp 2020 and later write it once. */
+const FIRST_SINGLE_PREAMBLE_LINE_STYLE = 20;
 
 /** `preamble` for the entity types that carry NO attribute-container
  * pointer in a SketchUp 3 file: vertex, loop, edge-use, material, layer.
@@ -940,9 +993,29 @@ function readLayer(ar: Archive, r: R): any {
   const rgba = r.raw(4);
   r.utf16();
   r.raw(ar.ver < FIRST_V4 ? 17 : 21); // SketchUp 3's tail is 4 bytes shorter
+  ar.readClayerLineStyle(r);
   ar.skipClayerColourExt();
   ar.skipClayerParentRef(ar.currentObjSlot);
   return { k: 'layer', name, hidden: mid.length ? mid[0] : 0, rgba: Array.from(rgba) };
+}
+
+/** A tag's line style (SketchUp 2019 and 2020, "Dash", "Solid Basic", ...).
+ *
+ * Written inline at the point where a tag first uses it, so it is an object in
+ * the walk like any other and takes a store-map slot. SketchUp 2020 opens it
+ * with one entity preamble; SketchUp 2019 writes the preamble twice. After the
+ * preamble come the style's name, its dash pattern as text ("12.0, -6.0") and
+ * three doubles. */
+function readCustomLineStyle(ar: Archive, r: R): any {
+  earlyPreamble(ar, r);
+  if (ar.ver < FIRST_SINGLE_PREAMBLE_LINE_STYLE) {
+    earlyPreamble(ar, r);
+  }
+  const name = r.utf16();
+  const pattern = r.utf16();
+  const values = [r.f64(), r.f64(), r.f64()];
+  ar.seenLineStyle = true;
+  return { k: 'linestyle', name, pattern, values };
 }
 
 /** The textured-material payload: an embedded CDib plus applied size,
@@ -1720,6 +1793,7 @@ export const READERS: Record<string, (ar: Archive, r: R) => any> = {
   CSkFont: readSkFont,
   CDimensionLinear: readDimLinear,
   CText: readText,
+  CCustomLineStyle: readCustomLineStyle,
 };
 
 // ── walk driver ──────────────────────────────────────────────────────────
@@ -1819,7 +1893,9 @@ function probeLayerAnchorBases(data: Uint8Array, ver: number, start: number, mat
   const layerSlots: number[] = [];
   for (let i = 0; i < layerCount; i++) {
     const [s] = boot.readObject(boot.r, 'CLayer');
-    layerSlots.push(s as number);
+    // a null entry in the layer list has no slot, so it is no candidate (files
+    // saved through SketchUp's C API as 2019 or 2020 have one)
+    if (s !== null) layerSlots.push(s);
   }
   boot.collectTrailingLayers(layerSlots, null, true);
   const [s, n] = boot.readObject(boot.r);

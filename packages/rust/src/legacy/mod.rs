@@ -76,6 +76,10 @@ pub(crate) const FIRST_DIB_OBJECT: i32 = 6;
 // one).
 pub(crate) const FIRST_NAMED_INSTANCE: i32 = 5;
 
+// CCustomLineStyle was added with tag line styles in SketchUp 2019, which
+// writes its entity preamble twice; SketchUp 2020 and later write it once.
+pub(crate) const FIRST_SINGLE_PREAMBLE_LINE_STYLE: i32 = 20;
+
 // ── decoded objects ──────────────────────────────────────────────────────
 
 /// Which entity a decoded [`LegacyValue`] is (C++ `V::k`).

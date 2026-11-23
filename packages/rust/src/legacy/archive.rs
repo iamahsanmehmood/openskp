@@ -9,7 +9,8 @@ use super::reader::R;
 use super::{
     anchored_text_connection, find_v20_filler_marker, legacy_connection_paths,
     legacy_instance_has_guid, LegacyDimension, LegacyKind, LegacyObject, LegacySlotEntry,
-    LegacyValue, FIRST_DIB_OBJECT, FIRST_NAMED_INSTANCE, FIRST_V4, MAX_V20_FILLER_PAD,
+    LegacyValue, FIRST_DIB_OBJECT, FIRST_NAMED_INSTANCE, FIRST_SINGLE_PREAMBLE_LINE_STYLE,
+    FIRST_V4, MAX_V20_FILLER_PAD,
 };
 use crate::internal::{read_f64, read_u16, read_u32, Error, Result};
 use crate::model::constrained_offset_vector;
@@ -51,6 +52,8 @@ pub(crate) struct Archive<'a> {
     current_loop: u64,
     pub slots: HashMap<u64, LegacySlotEntry>,
     pub class_slot: HashMap<String, u64>,
+    first_class_slot: HashMap<String, u64>,
+    seen_line_style: bool,
 
     // Burned store-map indices (see the CEdgeUse branch of read()): the
     // writer maps an annotation's connection points into the store map
@@ -88,6 +91,8 @@ impl<'a> Archive<'a> {
             current_loop: 0,
             slots: HashMap::new(),
             class_slot: HashMap::new(),
+            first_class_slot: HashMap::new(),
+            seen_line_style: false,
             burns: Vec::new(),
             cum_delta: 0,
             annot_watermark: None,
@@ -143,7 +148,9 @@ impl<'a> Archive<'a> {
                 schema: i32::from(schema),
                 v: None,
             });
-            self.class_slot.insert(name.to_string(), cs);
+            let key = name.to_string();
+            self.class_slot.insert(key.clone(), cs);
+            self.first_class_slot.entry(key).or_insert(cs);
             return self.new_obj(name);
         }
         if tag & 0x8000 != 0 {
@@ -514,6 +521,65 @@ impl<'a> Archive<'a> {
         unmatched_class_ref && tag & 0x8000 != 0 && tag != 0xffff
     }
 
+    // A tag may point at a line style right after its 21-byte tail: nothing
+    // (u16 0) for a plain tag, the style written in full on first use (a new
+    // CCustomLineStyle class record, or a class-ref once the class is known),
+    // or a back-ref to the style object a previous tag already wrote. Only
+    // these forms are consumed; everything else is left for the callers below.
+    //
+    // The slot-base probe (single- and no-material files) numbers from 1<<20,
+    // so the file's own class-refs and back-refs cannot be looked up there: a
+    // class-ref is matched through its distance from the CLayer class-ref (the
+    // same in both numberings), and once a style has been read, any other
+    // plain object ref at this position is the style's back-ref.
+    fn read_clayer_line_style(&mut self) -> Result<()> {
+        const CLS: &[u8] = b"CCustomLineStyle";
+        let d = self.r.d;
+        if self.r.p + 2 > d.len() {
+            return Ok(());
+        }
+        let tag = u16::from_le_bytes([d[self.r.p], d[self.r.p + 1]]);
+        let probing = self.base >= (1 << 20);
+        if tag == 0xffff {
+            let at = self.r.p + 4;
+            if at + 2 + CLS.len() > d.len()
+                || usize::from(u16::from_le_bytes([d[at], d[at + 1]])) != CLS.len()
+                || &d[at + 2..at + 2 + CLS.len()] != CLS
+            {
+                return Ok(());
+            }
+        } else if tag & 0x8000 != 0 {
+            let Some(&cs0) = self.class_slot.get("CCustomLineStyle") else {
+                return Ok(());
+            };
+            let mut cs = cs0 as i64;
+            if let (Some(&lay), Some(&lay0)) = (
+                self.class_slot.get("CLayer"),
+                self.first_class_slot.get("CLayer"),
+            ) {
+                cs += lay as i64 - lay0 as i64;
+            }
+            if cs != i64::from(tag & 0x7fff) {
+                return Ok(());
+            }
+        } else if tag == 0 || tag == 0x7fff {
+            return Ok(());
+        } else if probing {
+            if !self.seen_line_style {
+                return Ok(());
+            }
+        } else {
+            let Some(ent) = self.slots.get(&u64::from(tag)) else {
+                return Ok(());
+            };
+            if ent.cls || &*ent.name != "CCustomLineStyle" {
+                return Ok(());
+            }
+        }
+        self.object(Some("CCustomLineStyle"))?;
+        Ok(())
+    }
+
     // Colour CLayer ends in a 21-byte tail. Some v18 zero-material files
     // (custom tag listed first, then Layer0) write 12 zero bytes + u32 after
     // that, then another CLayer. Skip those 16 bytes only when they precede a
@@ -765,6 +831,20 @@ impl<'a> Archive<'a> {
             }
             "CDimensionLinear" => self.read_dimension_linear(v)?,
             "CText" => self.read_text(v)?,
+            "CCustomLineStyle" => {
+                // A tag's line style (SketchUp 2019 and 2020, "Dash", "Solid Basic",
+                // ...). Written inline where a tag first uses it, taking a store-map
+                // slot. SketchUp 2020 opens with one entity preamble; SketchUp 2019
+                // writes it twice, followed by name, dash pattern, and 3 doubles.
+                self.early_preamble()?;
+                if self.ver < FIRST_SINGLE_PREAMBLE_LINE_STYLE {
+                    self.early_preamble()?;
+                }
+                self.r.utf16()?;
+                self.r.utf16()?;
+                self.r.f64s(3)?;
+                self.seen_line_style = true;
+            }
             "CComponentDefinition" => self.read_definition(v)?,
             "CComponentInstance" | "CGroup" => self.read_instance(v)?,
             _ => return Err(Error::runtime(format!("no legacy reader for {n}"))),
@@ -905,6 +985,7 @@ impl<'a> Archive<'a> {
             self.r.utf16()?;
             // SketchUp 3's tail is 4 bytes shorter
             self.r.skip(if self.ver < FIRST_V4 { 17 } else { 21 })?;
+            self.read_clayer_line_style()?;
             self.skip_clayer_colour_ext();
             self.skip_clayer_parent_ref(this);
         }
@@ -1513,7 +1594,10 @@ pub(crate) fn probe_layer_anchor_bases(
     }
     let mut layer_slots = Vec::new();
     for _ in 0..layer_count {
-        layer_slots.push(boot.object(Some("CLayer"))?.slot);
+        let q = boot.object(Some("CLayer"))?;
+        if !q.name.is_empty() {
+            layer_slots.push(q.slot);
+        }
     }
     boot.collect_trailing_layers(Some(&mut layer_slots), None, true)?;
     let anchor = boot.object(None)?;
