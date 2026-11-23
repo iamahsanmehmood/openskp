@@ -1550,15 +1550,124 @@ function writeFaceOrTriangulate(args: WriteFaceOrTriangulateArgs): number {
   if (frontUv !== undefined || backUv !== undefined) {
     throw new SkpWriteError('autoTriangulate cannot be combined with frontUv/backUv positioning');
   }
-  let total = 0;
+  for (const p of points) {
+    for (const c of p) {
+      if (!Number.isFinite(c)) throw new SkpWriteError('face contains non-finite coordinates');
+    }
+  }
+  const triangles: Point3[][] = [];
   for (let i = 1; i < points.length - 1; i++) {
+    const tri: Point3[] = [points[0], points[i], points[i + 1]];
+    try {
+      planeFromPolygon(tri);
+    } catch (e) {
+      if (e instanceof SkpWriteError) continue;
+      throw e;
+    }
+    triangles.push(tri);
+  }
+  if (triangles.length === 0) {
+    throw new SkpWriteError('triangulation has no non-degenerate faces');
+  }
+  let total = 0;
+  for (const tri of triangles) {
     total += writer.writeFace(
-      [points[0], points[i], points[i + 1]], vertexSlots, edgeRegistry,
+      tri, vertexSlots, edgeRegistry,
       material, layer, backMaterial, hidden, softEdges, smoothEdges, hiddenEdges,
       undefined, undefined, attributeDicts
     );
   }
   return total;
+}
+
+export interface DocumentOptions {
+  /** Native UnitsOptions values: inches=0, feet=1, mm=2, cm=3, metres=4, yards=5. */
+  lengthUnit?: number;
+  lengthPrecision?: number;
+  /** Native style item IDs and scalar values (colors are packed ABGR uint32 values). */
+  styleItems?: Record<number, number> | Map<number, number>;
+}
+
+interface NormalizedDocumentOptions {
+  lengthUnit: number;
+  lengthPrecision: number;
+  styleItems: Map<number, number>;
+}
+
+const RENDERING_OPTION_FIELDS: ReadonlyArray<[number, number, boolean]> = [
+  [1000, 3173, false], [1001, 3279, false], [1002, 3197, false], [1004, 3201, true],
+  [1005, 3202, false], [1006, 3206, true],  [1007, 3207, false], [1008, 3211, true],
+  [1009, 3212, false], [1010, 3216, true],  [1011, 3217, false], [1012, 3172, true],
+  [1014, 3181, false], [1015, 3353, true],  [2001, 3166, false], [2002, 3227, false],
+  [2003, 3231, false], [2004, 3170, true],  [2005, 3171, true],  [2006, 3326, false],
+  [2007, 3196, true],  [4000, 3177, false], [4001, 3287, false], [4002, 3299, true],
+  [4003, 3295, false], [4004, 3300, true],  [4005, 3302, false], [4006, 3301, true],
+  [4007, 3291, false], [5000, 3344, true],  [7000, 3185, false], [7001, 3340, false],
+  [7002, 3189, false], [7003, 3306, false], [7004, 3310, false], [7005, 3314, false],
+  [7008, 3283, true],  [7010, 3222, true],  [7011, 3195, true],  [7012, 3286, true],
+  [7014, 3318, false],
+];
+
+function readU32At(buf: readonly number[], pos: number): number {
+  return (buf[pos] | (buf[pos + 1] << 8) | (buf[pos + 2] << 16) | (buf[pos + 3] << 24)) >>> 0;
+}
+
+function writeU64At(buf: number[], pos: number, v: number): void {
+  let p = v;
+  for (let i = 0; i < 8; i++) {
+    buf[pos + i] = p % 256;
+    p = Math.floor(p / 256);
+  }
+}
+
+function styleU32(v: number): number {
+  return Math.trunc(v) >>> 0;
+}
+
+function patchDocumentPrefix(prefix: number[], options: NormalizedDocumentOptions): void {
+  writeU32At(prefix, 2327, options.lengthPrecision);
+  writeU32At(prefix, 2360, 0); // LengthFormat: decimal
+  writeU32At(prefix, 2389, options.lengthUnit);
+  writeU32At(prefix, 2689, options.lengthUnit); // AreaUnit
+  writeU32At(prefix, 2718, options.lengthUnit); // VolumeUnit
+  for (const [id, offset, isBool] of RENDERING_OPTION_FIELDS) {
+    const v = options.styleItems.get(id);
+    if (v === undefined) continue;
+    if (isBool) {
+      prefix[offset] = v !== 0.0 ? 1 : 0;
+    } else {
+      writeU32At(prefix, offset, styleU32(v));
+    }
+  }
+}
+
+function patchStyleItems(tail: number[], startPos: number, options: NormalizedDocumentOptions): void {
+  let pos = startPos;
+  const dv = new DataView(new ArrayBuffer(8));
+  for (let i = 0; i < 56; i++) {
+    const id = readU32At(tail, pos) | 0;
+    const valid = readU32At(tail, pos + 4) !== 0;
+    pos += 8;
+    if (!valid) continue;
+    const kind = readU32At(tail, pos);
+    pos += 4;
+    const size = kind === 1 ? 1 : kind === 7 ? 8 : 4;
+    const v = options.styleItems.get(id);
+    if (v !== undefined) {
+      if (kind === 1) {
+        tail[pos] = v !== 0.0 ? 1 : 0;
+      } else if (kind === 4) {
+        writeU32At(tail, pos, styleU32(v));
+      } else if (kind === 6) {
+        dv.setFloat32(0, v, true);
+        for (let b = 0; b < 4; b++) tail[pos + b] = dv.getUint8(b);
+      } else if (kind === 7) {
+        dv.setFloat64(0, v, true);
+        for (let b = 0; b < 8; b++) tail[pos + b] = dv.getUint8(b);
+      }
+    }
+    pos += size;
+  }
 }
 
 // ---------------------------------------------------------------------
@@ -1901,6 +2010,7 @@ export class SkpBuilder {
   private edgeRegistry = new Map<string, [number, number]>();
   private newEntityCount = 0;
   private faceCount = 0;
+  private documentOptions: NormalizedDocumentOptions | null = null;
 
   /** First persistent id this builder hands out: one past the scaffold's own counter. */
   private pidStart: number;
@@ -1925,6 +2035,39 @@ export class SkpBuilder {
    * one stopped. */
   private nextPid(): number {
     return (this.geometryWriter ?? this.definitionWriterInstance ?? this.layerWriter ?? this.materialWriter).nextPid;
+  }
+
+  /** Set decimal display units and working/saved style values without scaling geometry. */
+  setDocumentOptions(options: DocumentOptions): void {
+    const lengthUnit = options.lengthUnit ?? 0;
+    const lengthPrecision = options.lengthPrecision ?? 3;
+    if (
+      !Number.isInteger(lengthUnit) ||
+      lengthUnit < 0 ||
+      lengthUnit > 5 ||
+      !Number.isInteger(lengthPrecision) ||
+      lengthPrecision < 0 ||
+      lengthPrecision > 6
+    ) {
+      throw new SkpWriteError('invalid decimal display units or precision');
+    }
+    const styleItems = new Map<number, number>();
+    if (options.styleItems instanceof Map) {
+      for (const [k, v] of options.styleItems.entries()) {
+        if (!Number.isFinite(v) || v < -2147483648.0 || v > 4294967295.0) {
+          throw new SkpWriteError('style scalar is out of range');
+        }
+        styleItems.set(Math.trunc(k), v);
+      }
+    } else if (options.styleItems !== undefined) {
+      for (const [k, v] of Object.entries(options.styleItems)) {
+        if (!Number.isFinite(v) || v < -2147483648.0 || v > 4294967295.0) {
+          throw new SkpWriteError('style scalar is out of range');
+        }
+        styleItems.set(Number(k), v);
+      }
+    }
+    this.documentOptions = { lengthUnit, lengthPrecision, styleItems };
   }
 
   addMaterial(name: string, rgba: readonly number[], opacity?: number): number {
@@ -2443,10 +2586,12 @@ export class SkpBuilder {
     // Real SketchUp overwrites them in place rather than growing the
     // file by 4 extra bytes here.
     const prefix = Array.from(this.data.subarray(0, this.materialInsertPos - 4));
-    // The model's pid counter: the last pid handed out, in every section. A
-    // 32-bit field, so a model with more than 65 535 entities keeps a truthful
-    // counter.
-    writeU32At(prefix, PID_COUNTER_POS, this.nextPid() - 1);
+    if (this.documentOptions !== null) {
+      patchDocumentPrefix(prefix, this.documentOptions);
+    }
+    // The model's pid counter: the last pid handed out, in every section.
+    // Stored as an 8-byte uint64 at PID_COUNTER_POS.
+    writeU64At(prefix, PID_COUNTER_POS, this.nextPid() - 1);
     for (let i = 0; i < ISO_CAMERA_PREFIX_PATCH.length; i++) {
       prefix[ISO_CAMERA_PREFIX_OFFSET + i] = ISO_CAMERA_PREFIX_PATCH[i];
     }
@@ -2482,6 +2627,10 @@ export class SkpBuilder {
     out.push((this.geometryWriter as ArchiveWriter).bytes.view());
 
     const tail = Array.from(this.data.subarray(this.tailPos));
+    if (this.documentOptions !== null) {
+      patchStyleItems(tail, 4070 - this.tailPos, this.documentOptions);
+      patchStyleItems(tail, 4951 - this.tailPos, this.documentOptions);
+    }
     const totalTailShift = materialShift + layerShift + definitionShift + geometryShift;
     // TAIL_REF_POSITIONS and ISO_CAMERA_TAIL_PATCHES's positions both
     // index into this same tail buffer. A ref-shift that widens to the

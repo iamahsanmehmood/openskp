@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:math';
+import 'dart:typed_data';
 
 import 'package:openskp/openskp.dart';
 import 'package:test/test.dart';
@@ -1308,6 +1309,111 @@ void main() {
       builder.addGroup((def) => def.addFace(square), name: 'one');
       builder.addGroup((def) => def.addFace(shifted(60, 0, 0)), name: 'two');
       expect(counter(builder.toBytes()), 40);
+    });
+  });
+
+  group('DocumentOptions & degenerate fan handling (#477)', () {
+    int nativeOption(Uint8List raw, String name) {
+      final key = <int>[0xff, 0xfe, 0xff, name.length];
+      for (final c in name.codeUnits) {
+        key.add(c & 0xff);
+        key.add(0);
+      }
+      var found = -1;
+      for (var i = 0; i <= raw.length - key.length; i++) {
+        var ok = true;
+        for (var j = 0; j < key.length; j++) {
+          if (raw[i + j] != key[j]) {
+            ok = false;
+            break;
+          }
+        }
+        if (ok) {
+          found = i;
+          break;
+        }
+      }
+      expect(found, greaterThanOrEqualTo(0));
+      final pos = found + key.length;
+      expect(raw[pos], 4);
+      return ByteData.sublistView(raw).getUint32(pos + 1, Endian.little);
+    }
+
+    test('patches units, rendering options, and style tables without scaling geometry', () {
+      const styleSig = <int>[0xa0, 0x0f, 0, 0, 1, 0, 0, 0, 4, 0, 0, 0, 0x12, 0x34, 0x56, 0xff];
+      for (var unit = 0; unit <= 5; unit++) {
+        final builder = create();
+        builder.setDocumentOptions(DocumentOptions(
+          lengthUnit: unit,
+          lengthPrecision: 2,
+          styleItems: {4000: 0xff563412.toDouble(), 1006: 0, 1007: 5},
+        ));
+        builder.addFace([(0.0, 0.0, 0.0), (2.0, 0.0, 0.0), (0.0, 3.0, 0.0)]);
+        final raw = builder.toBytes();
+        expect(nativeOption(raw, 'LengthUnit'), unit);
+        expect(nativeOption(raw, 'LengthFormat'), 0);
+        expect(nativeOption(raw, 'LengthPrecision'), 2);
+        expect(nativeOption(raw, 'AreaUnit'), unit);
+        expect(nativeOption(raw, 'VolumeUnit'), unit);
+        final bd = ByteData.sublistView(raw);
+        expect(bd.getUint32(3177, Endian.little), 0xff563412);
+        expect(raw[3206], 0);
+        expect(bd.getUint32(3207, Endian.little), 5);
+        expect(bd.getUint64(1987, Endian.little), greaterThan(18));
+
+        var matches = 0;
+        for (var i = 0; i <= raw.length - styleSig.length; i++) {
+          var ok = true;
+          for (var j = 0; j < styleSig.length; j++) {
+            if (raw[i + j] != styleSig[j]) {
+              ok = false;
+              break;
+            }
+          }
+          if (ok) matches++;
+        }
+        expect(matches, 2);
+
+        final model = SkpFile.fromBuffer(raw).parse();
+        expect(
+          model.root.vertices.values.any((v) => v.x == 2.0 && v.y == 0.0 && v.z == 0.0),
+          isTrue,
+        );
+      }
+    });
+
+    test('rejects invalid document options and skips collinear autoTriangulate fan wedges', () {
+      final invalid = create();
+      expect(() => invalid.setDocumentOptions(const DocumentOptions(lengthUnit: 6)), throwsA(isA<SkpWriteError>()));
+      expect(() => invalid.setDocumentOptions(const DocumentOptions(lengthPrecision: 7)), throwsA(isA<SkpWriteError>()));
+      expect(
+        () => invalid.setDocumentOptions(const DocumentOptions(styleItems: {1000: double.nan})),
+        throwsA(isA<SkpWriteError>()),
+      );
+
+      const polygon = [
+        (0.0, 0.0, 0.0),
+        (1.0, 0.0, 0.0),
+        (1.0, 1.0, 0.0),
+        (2.0, 2.0, 0.0),
+        (0.0, 1.0, 1.0),
+      ];
+      for (final nested in [false, true]) {
+        final builder = create();
+        if (nested) {
+          final def = builder.addComponentDefinition('fan', (d) {
+            d.addFace(polygon, autoTriangulate: true);
+          });
+          builder.addInstance(def);
+        } else {
+          builder.addFace(polygon, autoTriangulate: true);
+        }
+        builder.addFace([(10.0, 0.0, 0.0), (11.0, 0.0, 0.0), (10.0, 1.0, 0.0)]);
+        final model = SkpFile.fromBuffer(builder.toBytes()).parse();
+        final totalFaces = model.root.faces.length +
+            model.definitions.values.fold<int>(0, (acc, d) => acc + d.faces.length);
+        expect(totalFaces, 3);
+      }
     });
   });
 }

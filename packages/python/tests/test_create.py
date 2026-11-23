@@ -4604,3 +4604,83 @@ def test_a_small_definition_before_a_bigger_one_saves_through_real_sketchup(tmp_
         dll.SUModelRelease(ctypes.byref(model))
     finally:
         dll.SUTerminate()
+
+
+def test_document_options_patch_units_rendering_and_styles_without_scaling(tmp_path):
+    import struct
+    from openskp import DocumentOptions
+
+    def native_option(raw: bytes, name: str) -> int:
+        key = b"\xff\xfe\xff" + bytes([len(name)]) + name.encode("utf-16-le")
+        pos = raw.index(key) + len(key)
+        assert raw[pos] == 4  # native int32 typed value
+        return struct.unpack_from("<I", raw, pos + 1)[0]
+
+    style_sig = bytes([0xA0, 0x0F, 0, 0, 1, 0, 0, 0, 4, 0, 0, 0, 0x12, 0x34, 0x56, 0xFF])
+    for unit in range(6):
+        builder = create()
+        builder.set_document_options(
+            DocumentOptions(
+                length_unit=unit,
+                length_precision=2,
+                style_items={4000: 0xFF563412, 1006: 0, 1007: 5},
+            )
+        )
+        builder.add_face([(0.0, 0.0, 0.0), (2.0, 0.0, 0.0), (0.0, 3.0, 0.0)])
+        raw = builder.to_bytes()
+        assert native_option(raw, "LengthUnit") == unit
+        assert native_option(raw, "LengthFormat") == 0
+        assert native_option(raw, "LengthPrecision") == 2
+        assert native_option(raw, "AreaUnit") == unit
+        assert native_option(raw, "VolumeUnit") == unit
+        assert struct.unpack_from("<I", raw, 3177)[0] == 0xFF563412
+        assert raw[3206] == 0
+        assert struct.unpack_from("<I", raw, 3207)[0] == 5
+        assert raw.count(style_sig) == 2
+
+        out = tmp_path / f"doc_opts_{unit}.skp"
+        out.write_bytes(raw)
+        model = SkpFile.open(str(out)).parse()
+        assert any((v.x, v.y, v.z) == (2.0, 0.0, 0.0) for v in model.root.vertices.values())
+
+
+def test_rejects_invalid_document_options():
+    from openskp import DocumentOptions
+
+    builder = create()
+    with pytest.raises(SkpWriteError):
+        builder.set_document_options(DocumentOptions(length_unit=6))
+    with pytest.raises(SkpWriteError):
+        builder.set_document_options(DocumentOptions(length_precision=7))
+    with pytest.raises(SkpWriteError):
+        builder.set_document_options(DocumentOptions(style_items={1000: float("nan")}))
+
+
+def test_degenerate_fan_does_not_corrupt_following_entities_and_pid_counter_is_64_bit(tmp_path):
+    import struct
+    from openskp.create import _PID_COUNTER_POS
+
+    polygon = [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (1.0, 1.0, 0.0), (2.0, 2.0, 0.0), (0.0, 1.0, 1.0)]
+    for nested_mode in (False, True):
+        builder = create()
+        if nested_mode:
+            with builder.add_component_definition("fan") as d:
+                d.add_face(polygon, auto_triangulate=True)
+            builder.add_instance(d)
+        else:
+            builder.add_face(polygon, auto_triangulate=True)
+        builder.add_face([(10.0, 0.0, 0.0), (11.0, 0.0, 0.0), (10.0, 1.0, 0.0)])
+        out = tmp_path / f"fan_{int(nested_mode)}.skp"
+        builder.save(str(out))
+        model = SkpFile.open(str(out)).parse()
+        total_faces = len(model.root.faces) + sum(len(defn.faces) for defn in model.definitions.values())
+        assert total_faces == 3
+
+    # Verify 8-byte uint64 header pid counter past 2^32.
+    b64 = create()
+    b64._material_writer.next_pid = (1 << 33) + 7
+    b64.add_face([(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0)])
+    raw64 = b64.to_bytes()
+    assert struct.unpack_from("<Q", raw64, _PID_COUNTER_POS)[0] == b64._geometry_writer.next_pid - 1
+    assert struct.unpack_from("<Q", raw64, _PID_COUNTER_POS)[0] > (1 << 33)
+

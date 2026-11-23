@@ -1872,10 +1872,28 @@ int _writeFaceOrTriangulate(
   if (frontUv != null || backUv != null) {
     throw SkpWriteError('autoTriangulate cannot be combined with frontUv/backUv positioning');
   }
-  var total = 0;
+  for (final p in points) {
+    if (!p.$1.isFinite || !p.$2.isFinite || !p.$3.isFinite) {
+      throw SkpWriteError('face contains non-finite coordinates');
+    }
+  }
+  final triangles = <List<Point3>>[];
   for (var i = 1; i < points.length - 1; i++) {
+    final tri = <Point3>[points[0], points[i], points[i + 1]];
+    try {
+      _planeFromPolygon(tri);
+    } on SkpWriteError {
+      continue;
+    }
+    triangles.add(tri);
+  }
+  if (triangles.isEmpty) {
+    throw SkpWriteError('triangulation has no non-degenerate faces');
+  }
+  var total = 0;
+  for (final tri in triangles) {
     total += writer.writeFace(
-      [points[0], points[i], points[i + 1]],
+      tri,
       vertexSlots,
       edgeRegistry,
       faceMaterial: material,
@@ -1889,6 +1907,92 @@ int _writeFaceOrTriangulate(
     );
   }
   return total;
+}
+
+/// Display settings supported by the legacy v17 document scaffold.
+class DocumentOptions {
+  /// Native `UnitsOptions` values: `0`=inches, `1`=feet, `2`=mm, `3`=cm,
+  /// `4`=metres, `5`=yards.
+  final int lengthUnit;
+  final int lengthPrecision;
+
+  /// Native style item IDs mapped to scalar values (colours are packed ABGR
+  /// `uint32` values).
+  final Map<int, double> styleItems;
+
+  const DocumentOptions({
+    this.lengthUnit = 0,
+    this.lengthPrecision = 3,
+    this.styleItems = const {},
+  });
+}
+
+const List<(int, int, bool)> _renderingOptionFields = [
+  (1000, 3173, false), (1001, 3279, false), (1002, 3197, false), (1004, 3201, true),
+  (1005, 3202, false), (1006, 3206, true),  (1007, 3207, false), (1008, 3211, true),
+  (1009, 3212, false), (1010, 3216, true),  (1011, 3217, false), (1012, 3172, true),
+  (1014, 3181, false), (1015, 3353, true),  (2001, 3166, false), (2002, 3227, false),
+  (2003, 3231, false), (2004, 3170, true),  (2005, 3171, true),  (2006, 3326, false),
+  (2007, 3196, true),  (4000, 3177, false), (4001, 3287, false), (4002, 3299, true),
+  (4003, 3295, false), (4004, 3300, true),  (4005, 3302, false), (4006, 3301, true),
+  (4007, 3291, false), (5000, 3344, true),  (7000, 3185, false), (7001, 3340, false),
+  (7002, 3189, false), (7003, 3306, false), (7004, 3310, false), (7005, 3314, false),
+  (7008, 3283, true),  (7010, 3222, true),  (7011, 3195, true),  (7012, 3286, true),
+  (7014, 3318, false),
+];
+
+void _patchU64(List<int> buf, int pos, int v) {
+  for (var i = 0; i < 8; i++) {
+    buf[pos + i] = (v >> (8 * i)) & 0xFF;
+  }
+}
+
+int _styleU32(double v) => v.truncate() & 0xFFFFFFFF;
+
+void _patchDocumentPrefix(List<int> prefix, DocumentOptions options) {
+  _patchU32(prefix, 2327, options.lengthPrecision);
+  _patchU32(prefix, 2360, 0); // LengthFormat: decimal
+  _patchU32(prefix, 2389, options.lengthUnit);
+  _patchU32(prefix, 2689, options.lengthUnit); // AreaUnit
+  _patchU32(prefix, 2718, options.lengthUnit); // VolumeUnit
+  for (final (id, offset, isBool) in _renderingOptionFields) {
+    final v = options.styleItems[id];
+    if (v == null) continue;
+    if (isBool) {
+      prefix[offset] = v != 0.0 ? 1 : 0;
+    } else {
+      _patchU32(prefix, offset, _styleU32(v));
+    }
+  }
+}
+
+void _patchStyleItems(List<int> tail, int startPos, DocumentOptions options) {
+  var pos = startPos;
+  final bd = ByteData(8);
+  for (var i = 0; i < 56; i++) {
+    final id = _readU32At(tail, pos).toSigned(32);
+    final valid = _readU32At(tail, pos + 4) != 0;
+    pos += 8;
+    if (!valid) continue;
+    final kind = _readU32At(tail, pos);
+    pos += 4;
+    final size = kind == 1 ? 1 : (kind == 7 ? 8 : 4);
+    final v = options.styleItems[id];
+    if (v != null) {
+      if (kind == 1) {
+        tail[pos] = v != 0.0 ? 1 : 0;
+      } else if (kind == 4) {
+        _patchU32(tail, pos, _styleU32(v));
+      } else if (kind == 6) {
+        bd.setFloat32(0, v, Endian.little);
+        for (var b = 0; b < 4; b++) tail[pos + b] = bd.getUint8(b);
+      } else if (kind == 7) {
+        bd.setFloat64(0, v, Endian.little);
+        for (var b = 0; b < 8; b++) tail[pos + b] = bd.getUint8(b);
+      }
+    }
+    pos += size;
+  }
 }
 
 // ── public builder API ──────────────────────────────────────────────────────
@@ -2311,6 +2415,28 @@ class SkpBuilder implements GeometryHost {
   final Map<(int, int), (int, int)> _edgeRegistry = {};
   int _newEntityCount = 0;
   int _faceCount = 0;
+  DocumentOptions? _documentOptions;
+
+  /// Set decimal display units and working/saved style values without scaling
+  /// geometry.
+  void setDocumentOptions(DocumentOptions options) {
+    if (options.lengthUnit < 0 ||
+        options.lengthUnit > 5 ||
+        options.lengthPrecision < 0 ||
+        options.lengthPrecision > 6) {
+      throw SkpWriteError('invalid decimal display units or precision');
+    }
+    for (final v in options.styleItems.values) {
+      if (!v.isFinite || v < -2147483648.0 || v > 4294967295.0) {
+        throw SkpWriteError('style scalar is out of range');
+      }
+    }
+    _documentOptions = DocumentOptions(
+      lengthUnit: options.lengthUnit,
+      lengthPrecision: options.lengthPrecision,
+      styleItems: Map<int, double>.from(options.styleItems),
+    );
+  }
 
   /// The root geometry writer's current next-archive-slot value, or null
   /// before any root-level geometry has been written. Exposed only so a
@@ -3089,10 +3215,12 @@ class SkpBuilder implements GeometryHost {
     // SketchUp overwrites them in place rather than growing the file by 4
     // extra bytes here.
     final prefix = List<int>.from(_data.sublist(0, _materialInsertPos - 4));
-    // The model's pid counter: the last pid handed out, in every section. A
-    // 32-bit field, so a model with more than 65 535 entities keeps a truthful
-    // counter.
-    _patchU32(prefix, _pidCounterPos, _nextPid() - 1);
+    if (_documentOptions != null) {
+      _patchDocumentPrefix(prefix, _documentOptions!);
+    }
+    // The model's pid counter: the last pid handed out, in every section.
+    // Stored as an 8-byte uint64 at _pidCounterPos.
+    _patchU64(prefix, _pidCounterPos, _nextPid() - 1);
     prefix.setRange(
       _isoCameraPrefixOffset,
       _isoCameraPrefixOffset + _isoCameraPrefixPatch.length,
@@ -3136,6 +3264,10 @@ class SkpBuilder implements GeometryHost {
     out.addAll(_geometryWriter!.buf);
 
     final tail = List<int>.from(_data.sublist(_tailPos));
+    if (_documentOptions != null) {
+      _patchStyleItems(tail, 4070 - _tailPos, _documentOptions!);
+      _patchStyleItems(tail, 4951 - _tailPos, _documentOptions!);
+    }
     final totalTailShift = materialShift + layerShift + definitionShift + geometryShift;
     // _tailRefPositions and _isoCameraTailPatches's positions both index
     // into this same tail buffer. A ref-shift that widens to the 6-byte
