@@ -130,4 +130,37 @@ describe('writer: section plane / text / dimension round trip', () => {
       builder.addConstructionLine([0, 0, 0], { point2: [1, 0, 0], direction: [0, 1, 0] })
     ).toThrow(SkpWriteError);
   });
+
+  it('round-trips construction guides inside a nested definition', () => {
+    // Construction line is last in the nested definition on purpose: its
+    // nrel=0 tail used to calibrate clineTail to 7 on v17, desyncing the
+    // archive walk and corrupting subsequent root-level guides.
+    const builder = create();
+    const nested = builder.addComponentDefinition('GuideGroup', (def) => {
+      def.addFace(SQUARE);
+      def.addConstructionPoint([4, 5, 6]);
+      def.addConstructionLine([1, 1, 1], { point2: [2, 2, 2] });
+    });
+    builder.addInstance(nested);
+    builder.addConstructionPoint([1, 2, 3]);
+    builder.addConstructionLine([0, 0, 0], { point2: [12, 0, 0] });
+    builder.addConstructionLine([0, 0, 4], { direction: [0, 0, 1] });
+
+    const model = parseSkp(toBuffer(builder.toBytes()));
+    expect(model.root.constructionPoints).toHaveLength(1);
+    expect(model.root.constructionPoints[0].position).toEqual([1, 2, 3]);
+    expect(model.root.constructionLines).toHaveLength(2);
+    expect(model.root.constructionLines[0].end).toEqual([12, 0, 0]);
+    expect(model.root.constructionLines[1].start).toBeNull();
+    expect(model.root.constructionLines[1].end).toBeNull();
+    expect(model.root.constructionLines[1].point).toEqual([0, 0, 4]);
+
+    const group = [...model.definitions.values()].find((d) => d.name === 'GuideGroup')!;
+    expect(group).toBeDefined();
+    expect(group.constructionPoints).toHaveLength(1);
+    expect(group.constructionPoints[0].position).toEqual([4, 5, 6]);
+    expect(group.constructionLines).toHaveLength(1);
+    expect(group.constructionLines[0].start).toEqual([1, 1, 1]);
+    expect(group.constructionLines[0].end).toEqual([2, 2, 2]);
+  });
 });

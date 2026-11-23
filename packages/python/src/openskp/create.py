@@ -2310,6 +2310,43 @@ class ComponentDefinitionBuilder:
         writer.buf += bytes(5)
         self._new_entity_count += 1
 
+    def add_construction_line(
+        self,
+        point: Point3,
+        point2: Optional[Point3] = None,
+        direction: Optional[Point3] = None,
+    ) -> None:
+        """Add a construction/guide line (SketchUp's Construction Line tool) in
+        this definition's local coordinates (inches) - same signature and
+        behavior as :meth:`SkpBuilder.add_construction_line`."""
+        self._check_writable("construction lines")
+        w = self._skp._definition_writer
+        p = (float(point[0]), float(point[1]), float(point[2]))
+        if (point2 is None) == (direction is None):
+            raise SkpWriteError("add_construction_line: pass exactly one of point2 or direction")
+        if point2 is not None:
+            p2 = (float(point2[0]), float(point2[1]), float(point2[2]))
+            dx, dy, dz = p2[0] - p[0], p2[1] - p[1], p2[2] - p[2]
+            length = math.sqrt(dx * dx + dy * dy + dz * dz)
+            if length == 0.0:
+                raise SkpWriteError("add_construction_line: point and point2 coincide")
+            dirv = (dx / length, dy / length, dz / length)
+            start_param, end_param = 0.0, length
+        else:
+            d = (float(direction[0]), float(direction[1]), float(direction[2]))
+            dlen = math.sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2])
+            if dlen == 0.0:
+                raise SkpWriteError("add_construction_line: direction must be nonzero")
+            dirv = (d[0] / dlen, d[1] / dlen, d[2] / dlen)
+            start_param, end_param = -_CLINE_INFINITE, _CLINE_INFINITE
+        w._new_of_known_class("CConstructionLine", schema=1)
+        w._preamble()
+        w.buf += _DIM_DRAWBASE
+        for v in (p[0], p[1], p[2], dirv[0], dirv[1], dirv[2], start_param, end_param):
+            w.buf += _f64(v)
+        w.buf += bytes(4)
+        self._new_entity_count += 1
+
     def add_construction_point(self, position: Point3) -> None:
         """Add a construction/guide point (SketchUp's Construction Point
         tool) at ``position`` (inches, local to this definition) - same

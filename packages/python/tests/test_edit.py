@@ -419,6 +419,39 @@ class TestRealWorldFixtures:
         assert len(rebuilt.root.instances) == len(orig.root.instances)
         assert len(rebuilt.definitions) == len(orig.definitions)
 
+    def test_replays_nested_and_root_construction_guides(self, tmp_path):
+        builder = create()
+        with builder.add_component_definition("GuideOnly") as nested:
+            nested.add_construction_point((4.0, 5.0, 6.0))
+            nested.add_construction_line((0.0, 0.0, 2.0), direction=(0.0, 1.0, 0.0))
+            nested.add_construction_line((1.0, 1.0, 1.0), point2=(2.0, 2.0, 2.0))
+        builder.add_instance(nested)
+        builder.add_construction_point((7.0, 8.0, 9.0))
+        builder.add_construction_line((0.0, 0.0, 0.0), point2=(10.0, 0.0, 0.0))
+        src = tmp_path / "guides.skp"
+        builder.save(str(src))
+
+        new_builder, warnings, definitions = edit.open_existing(str(src))
+        assert warnings == []
+        assert "GuideOnly" in definitions
+        out = tmp_path / "guides_rebuilt.skp"
+        out.write_bytes(new_builder.to_bytes())
+        rebuilt = SkpFile.open(str(out)).parse()
+
+        assert len(rebuilt.root.construction_points) == 1
+        assert rebuilt.root.construction_points[0].position == pytest.approx((7.0, 8.0, 9.0))
+        assert len(rebuilt.root.construction_lines) == 1
+        assert rebuilt.root.construction_lines[0].end == pytest.approx((10.0, 0.0, 0.0))
+
+        group = next(d for d in rebuilt.definitions.values() if d.name == "GuideOnly")
+        assert len(group.construction_points) == 1
+        assert group.construction_points[0].position == pytest.approx((4.0, 5.0, 6.0))
+        assert len(group.construction_lines) == 2
+        assert group.construction_lines[0].start is None
+        assert group.construction_lines[0].end is None
+        assert group.construction_lines[1].start == pytest.approx((1.0, 1.0, 1.0))
+        assert group.construction_lines[1].end == pytest.approx((2.0, 2.0, 2.0))
+
 
 class TestRealSketchUpOracle:
     _SDK_DLL_PATH = pathlib.Path(

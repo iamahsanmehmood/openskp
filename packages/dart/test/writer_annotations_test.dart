@@ -130,5 +130,37 @@ void main() {
         throwsA(isA<SkpWriteError>()),
       );
     });
+
+    test('round-trips construction guides inside a nested definition', () {
+      // Construction line is last in the nested definition on purpose: its
+      // nrel=0 tail used to calibrate clineTail to 7 on v17, desyncing the
+      // archive walk and corrupting subsequent root-level guides.
+      final builder = create();
+      final nested = builder.addComponentDefinition('GuideGroup', (def) {
+        def.addFace(square);
+        def.addConstructionPoint((4.0, 5.0, 6.0));
+        def.addConstructionLine((1.0, 1.0, 1.0), point2: (2.0, 2.0, 2.0));
+      });
+      builder.addInstance(nested);
+      builder.addConstructionPoint((1.0, 2.0, 3.0));
+      builder.addConstructionLine((0.0, 0.0, 0.0), point2: (12.0, 0.0, 0.0));
+      builder.addConstructionLine((0.0, 0.0, 4.0), direction: (0.0, 0.0, 1.0));
+
+      final model = SkpFile.fromBuffer(builder.toBytes()).parse();
+      expect(model.root.constructionPoints, hasLength(1));
+      expect(model.root.constructionPoints[0].position, (1.0, 2.0, 3.0));
+      expect(model.root.constructionLines, hasLength(2));
+      expect(model.root.constructionLines[0].end, (12.0, 0.0, 0.0));
+      expect(model.root.constructionLines[1].start, isNull);
+      expect(model.root.constructionLines[1].end, isNull);
+      expect(model.root.constructionLines[1].point, (0.0, 0.0, 4.0));
+
+      final group = model.definitions.values.firstWhere((d) => d.name == 'GuideGroup');
+      expect(group.constructionPoints, hasLength(1));
+      expect(group.constructionPoints[0].position, (4.0, 5.0, 6.0));
+      expect(group.constructionLines, hasLength(1));
+      expect(group.constructionLines[0].start!.$1, closeTo(1.0, 1e-6));
+      expect(group.constructionLines[0].end!.$1, closeTo(2.0, 1e-6));
+    });
   });
 }

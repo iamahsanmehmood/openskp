@@ -107,6 +107,8 @@ declare const require: any;
 interface ReplayTarget {
   addFace(points: readonly Point3[], options?: AddFaceOptions): void;
   addInstance(definition: ComponentDefinitionBuilder, options?: AddInstanceOptions): void;
+  addConstructionLine(point: Point3, options?: { point2?: Point3; direction?: Point3 }): void;
+  addConstructionPoint(position: Point3): void;
 }
 
 function readFileToArrayBuffer(path: string): ArrayBuffer {
@@ -293,16 +295,12 @@ function definitionHasContent(defn: Definition, defBuilders: Map<number, Compone
   for (const inst of defn.instances) {
     if (defBuilders.has(inst.refIdx)) return true;
   }
+  if (defn.constructionPoints.length > 0 || defn.constructionLines.length > 0) return true;
   return false;
 }
 
-/** Replay one definition's (or the root's) own faces and instances onto
- * `target` - a `SkpBuilder` for the root, or a `ComponentDefinitionBuilder`
- * for a nested definition; both expose the same addFace/addInstance shape
- * this calls generically. `defBuilders` resolves instance references - by
- * the time any definition is opened (topological order, see
- * `definitionOrder`) every OTHER definition its own instances could
- * reference is already in it. */
+/** Replay one definition's (or the root's) own faces, instances, and
+ * construction geometry onto `target`. */
 function replayBody(
   target: ReplayTarget,
   defn: Definition,
@@ -321,6 +319,34 @@ function replayBody(
   }
   for (const inst of defn.instances) {
     replayInstance(target, inst, defBuilders, materialSlots, layerSlots, model, warnings, context);
+  }
+  for (const cp of defn.constructionPoints) {
+    try {
+      target.addConstructionPoint(cp.position);
+    } catch (e) {
+      if (e instanceof SkpWriteError) {
+        warnings.push(`${context}: construction point skipped (${e.message})`);
+      } else {
+        throw e;
+      }
+    }
+  }
+  for (const cl of defn.constructionLines) {
+    try {
+      if (cl.start !== null && cl.end !== null) {
+        target.addConstructionLine(cl.start, { point2: cl.end });
+      } else if (cl.start === null && cl.end === null) {
+        target.addConstructionLine(cl.point, { direction: cl.direction });
+      } else {
+        warnings.push(`${context}: half-bounded construction line skipped`);
+      }
+    } catch (e) {
+      if (e instanceof SkpWriteError) {
+        warnings.push(`${context}: construction line skipped (${e.message})`);
+      } else {
+        throw e;
+      }
+    }
   }
 }
 

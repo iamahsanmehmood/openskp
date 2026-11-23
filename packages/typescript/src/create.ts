@@ -1790,6 +1790,22 @@ export class ComponentDefinitionBuilder {
     );
   }
 
+  addConstructionLine(point: Point3, options: { point2?: Point3; direction?: Point3 } = {}): void {
+    this.checkWritable('construction lines');
+    this._skp._definitionWriter().writeConstructionLine(
+      toPoint3(point),
+      options.point2 !== undefined ? toPoint3(options.point2) : undefined,
+      options.direction !== undefined ? toPoint3(options.direction) : undefined
+    );
+    this.newEntityCount += 1;
+  }
+
+  addConstructionPoint(position: Point3): void {
+    this.checkWritable('construction points');
+    this._skp._definitionWriter().writeConstructionPoint(toPoint3(position));
+    this.newEntityCount += 1;
+  }
+
   /** Place one instance of another, already-closed component definition
    * inside this one - the same nesting real SketchUp supports.
    * `definition` must come from this same builder, and be a different,

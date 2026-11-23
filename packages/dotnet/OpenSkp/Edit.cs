@@ -303,17 +303,18 @@ namespace OpenSkp
             {
                 if (inst.RefIdx.HasValue && defBuilders.ContainsKey(inst.RefIdx.Value)) return true;
             }
+            if (defn.ConstructionPoints.Count > 0 || defn.ConstructionLines.Count > 0) return true;
             return false;
         }
 
-        /// <summary>Replay one definition's (or the root's) own faces and
-        /// instances onto target - an SkpBuilder for the root, or a
-        /// ComponentDefinitionBuilder for a nested definition; both expose
-        /// the same AddFace/AddInstance shape via IGeometryTarget.
-        /// defBuilders resolves instance references - by the time any
-        /// definition is opened (topological order, see DefinitionOrder)
-        /// every OTHER definition its own instances could reference is
-        /// already in it.</summary>
+        /// <summary>Replay one definition's (or the root's) own faces,
+        /// instances, and construction geometry onto target - an SkpBuilder
+        /// for the root, or a ComponentDefinitionBuilder for a nested
+        /// definition; both expose the same AddFace/AddInstance/AddConstruction*
+        /// shape via IGeometryTarget. defBuilders resolves instance
+        /// references - by the time any definition is opened (topological
+        /// order, see DefinitionOrder) every OTHER definition its own
+        /// instances could reference is already in it.</summary>
         private static void ReplayBody(
             IGeometryTarget target, Definition defn, SkpModel model,
             Dictionary<long, int> materialSlots, Dictionary<string, int> layerSlots,
@@ -327,6 +328,39 @@ namespace OpenSkp
             foreach (var inst in defn.Instances)
             {
                 ReplayInstance(target, inst, defBuilders, materialSlots, layerSlots, warnings, context);
+            }
+            foreach (var cp in defn.ConstructionPoints)
+            {
+                try
+                {
+                    target.AddConstructionPoint(cp.Position);
+                }
+                catch (SkpWriteException exc)
+                {
+                    warnings.Add($"{context}: construction point skipped ({exc.Message})");
+                }
+            }
+            foreach (var cl in defn.ConstructionLines)
+            {
+                try
+                {
+                    if (cl.Start.HasValue && cl.End.HasValue)
+                    {
+                        target.AddConstructionLine(cl.Start.Value, point2: cl.End.Value);
+                    }
+                    else if (!cl.Start.HasValue && !cl.End.HasValue)
+                    {
+                        target.AddConstructionLine(cl.Point, direction: cl.Direction);
+                    }
+                    else
+                    {
+                        warnings.Add($"{context}: half-bounded construction line skipped");
+                    }
+                }
+                catch (SkpWriteException exc)
+                {
+                    warnings.Add($"{context}: construction line skipped ({exc.Message})");
+                }
             }
         }
 

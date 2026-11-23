@@ -4604,3 +4604,37 @@ def test_a_small_definition_before_a_bigger_one_saves_through_real_sketchup(tmp_
         dll.SUModelRelease(ctypes.byref(model))
     finally:
         dll.SUTerminate()
+
+
+def test_nested_definition_construction_round_trips(tmp_path):
+    """Construction guides inside a component definition round-trip cleanly,
+    including when a CConstructionLine is the last entity in the definition
+    followed by root-level guides."""
+    builder = create()
+    with builder.add_component_definition("GuideGroup") as nested:
+        nested.add_face([(0.0, 0.0, 0.0), (10.0, 0.0, 0.0), (10.0, 10.0, 0.0), (0.0, 10.0, 0.0)])
+        nested.add_construction_point((4.0, 5.0, 6.0))
+        nested.add_construction_line((1.0, 1.0, 1.0), point2=(2.0, 2.0, 2.0))
+    builder.add_instance(nested)
+    builder.add_construction_point((1.0, 2.0, 3.0))
+    builder.add_construction_line((0.0, 0.0, 0.0), point2=(12.0, 0.0, 0.0))
+    builder.add_construction_line((0.0, 0.0, 4.0), direction=(0.0, 0.0, 1.0))
+
+    out = tmp_path / "nested_guides.skp"
+    builder.save(str(out))
+    model = SkpFile.open(str(out)).parse()
+    assert len(model.root.construction_points) == 1
+    assert model.root.construction_points[0].position == pytest.approx((1.0, 2.0, 3.0))
+    assert len(model.root.construction_lines) == 2
+    assert model.root.construction_lines[0].end == pytest.approx((12.0, 0.0, 0.0))
+    assert model.root.construction_lines[1].start is None
+    assert model.root.construction_lines[1].end is None
+    assert model.root.construction_lines[1].point == pytest.approx((0.0, 0.0, 4.0))
+
+    group = next(d for d in model.definitions.values() if d.name == "GuideGroup")
+    assert len(group.construction_points) == 1
+    assert group.construction_points[0].position == pytest.approx((4.0, 5.0, 6.0))
+    assert len(group.construction_lines) == 1
+    assert group.construction_lines[0].start == pytest.approx((1.0, 1.0, 1.0))
+    assert group.construction_lines[0].end == pytest.approx((2.0, 2.0, 2.0))
+

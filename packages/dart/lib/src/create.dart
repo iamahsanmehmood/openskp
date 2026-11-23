@@ -1930,6 +1930,10 @@ abstract class GeometryHost {
     required String attributeDictName,
     required bool hidden,
   });
+
+  void addConstructionLine(Point3 point, {Point3? point2, Point3? direction});
+
+  void addConstructionPoint(Point3 position);
 }
 
 /// Accumulates one component/group definition's geometry. Construct via
@@ -2131,6 +2135,22 @@ class ComponentDefinitionBuilder implements GeometryHost {
       softEdges: softEdges,
       smoothEdges: smoothEdges,
     );
+  }
+
+  /// Add a construction/guide line to this definition (local coordinates) -
+  /// same signature and behavior as [SkpBuilder.addConstructionLine].
+  void addConstructionLine(Point3 point, {Point3? point2, Point3? direction}) {
+    _checkWritable('construction lines');
+    _skp._definitionWriter!.writeConstructionLine(point, point2: point2, direction: direction);
+    _newEntityCount++;
+  }
+
+  /// Add a construction/guide point to this definition (local coordinates) -
+  /// same signature and behavior as [SkpBuilder.addConstructionPoint].
+  void addConstructionPoint(Point3 position) {
+    _checkWritable('construction points');
+    _skp._definitionWriter!.writeConstructionPoint(position);
+    _newEntityCount++;
   }
 
   /// Place one instance of another, already-closed component definition

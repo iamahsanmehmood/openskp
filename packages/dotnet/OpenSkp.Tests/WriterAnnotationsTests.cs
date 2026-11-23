@@ -154,5 +154,46 @@ namespace OpenSkp.Tests
             Assert.Throws<SkpWriteException>(() =>
                 builder.AddConstructionLine((0, 0, 0), point2: (1, 0, 0), direction: (0, 1, 0)));
         }
+
+        [Fact]
+        public void NestedDefinitionConstructionRoundTrips()
+        {
+            // Construction line is last in the nested definition on purpose:
+            // its nrel=0 tail used to calibrate ClineTail to 7 on v17,
+            // desyncing the archive walk and corrupting root-level guides.
+            var builder = SkpCreate.NewFile();
+            ComponentDefinitionBuilder nested;
+            using (nested = builder.AddComponentDefinition("GuideGroup"))
+            {
+                nested.AddFace(new (double, double, double)[]
+                {
+                    (0, 0, 0), (10, 0, 0), (10, 10, 0), (0, 10, 0),
+                });
+                nested.AddConstructionPoint((4, 5, 6));
+                nested.AddConstructionLine((1, 1, 1), point2: (2, 2, 2));
+            }
+            builder.AddInstance(nested);
+            builder.AddConstructionPoint((1, 2, 3));
+            builder.AddConstructionLine((0, 0, 0), point2: (12, 0, 0));
+            builder.AddConstructionLine((0, 0, 4), direction: (0, 0, 1));
+
+            var model = SkpFile.Parse(builder.ToBytes());
+            var rootCp = Assert.Single(model.Root.ConstructionPoints);
+            Assert.Equal((1.0, 2.0, 3.0), rootCp.Position);
+            Assert.Equal(2, model.Root.ConstructionLines.Count);
+            Assert.Equal((12.0, 0.0, 0.0), model.Root.ConstructionLines[0].End!.Value);
+            Assert.Null(model.Root.ConstructionLines[1].Start);
+            Assert.Null(model.Root.ConstructionLines[1].End);
+            Assert.Equal((0.0, 0.0, 4.0), model.Root.ConstructionLines[1].Point);
+
+            var group = Assert.Single(model.Definitions.Values, d => d.Name == "GuideGroup");
+            var defCp = Assert.Single(group.ConstructionPoints);
+            Assert.Equal((4.0, 5.0, 6.0), defCp.Position);
+            var defCl = Assert.Single(group.ConstructionLines);
+            Assert.NotNull(defCl.Start);
+            Assert.NotNull(defCl.End);
+            Assert.Equal(1.0, defCl.Start!.Value.X, 6);
+            Assert.Equal(2.0, defCl.End!.Value.X, 6);
+        }
     }
 }

@@ -260,6 +260,8 @@ def _definition_has_content(defn: Definition, def_builders: Dict[int, ComponentD
     for inst in defn.instances:
         if inst.ref_idx in def_builders:
             return True
+    if defn.construction_points or defn.construction_lines:
+        return True
     return False
 
 
@@ -273,19 +275,31 @@ def _replay_body(
     context: str,
     def_builders: Dict[int, ComponentDefinitionBuilder],
 ) -> None:
-    """Replay one definition's (or the root's) own faces and instances
-    onto ``target`` - a :class:`SkpBuilder` for the root, or a
-    :class:`ComponentDefinitionBuilder` for a nested definition; both
-    expose the same ``add_face``/``add_instance`` shape this calls
-    generically. ``def_builders`` resolves instance references - by the
-    time any definition is opened (topological order, see
-    `_definition_order`) every OTHER definition its own instances could
-    reference is already in it."""
+    """Replay one definition's (or the root's) own faces, instances, and
+    construction geometry onto ``target`` - a :class:`SkpBuilder` for the
+    root, or a :class:`ComponentDefinitionBuilder` for a nested definition;
+    both expose the same ``add_face``/``add_instance``/``add_construction_*``
+    shape this calls generically."""
     edges = _edge_map(defn)
     for face in defn.faces.values():
         _replay_face(target, face, defn, edges, model, material_slots, warnings, context)
     for inst in defn.instances:
         _replay_instance(target, inst, def_builders, material_slots, layer_slots, model, warnings, context)
+    for cp in defn.construction_points:
+        try:
+            target.add_construction_point(cp.position)
+        except SkpWriteError as exc:
+            warnings.append(f"{context}: construction point skipped ({exc})")
+    for cl in defn.construction_lines:
+        try:
+            if cl.start is not None and cl.end is not None:
+                target.add_construction_line(cl.start, point2=cl.end)
+            elif cl.start is None and cl.end is None:
+                target.add_construction_line(cl.point, direction=cl.direction)
+            else:
+                warnings.append(f"{context}: half-bounded construction line skipped")
+        except SkpWriteError as exc:
+            warnings.append(f"{context}: construction line skipped ({exc})")
 
 
 def _replay_face(

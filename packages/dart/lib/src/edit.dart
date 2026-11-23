@@ -251,16 +251,17 @@ bool _definitionHasContent(Definition defn, Map<int, ComponentDefinitionBuilder>
   for (final inst in defn.instances) {
     if (inst.refIdx != null && defBuilders.containsKey(inst.refIdx)) return true;
   }
+  if (defn.constructionPoints.isNotEmpty || defn.constructionLines.isNotEmpty) return true;
   return false;
 }
 
-/// Replay one definition's (or the root's) own faces and instances onto
-/// [target] - an [SkpBuilder] for the root, or a [ComponentDefinitionBuilder]
-/// for a nested definition; both satisfy [GeometryHost] the same shape this
-/// calls generically. [defBuilders] resolves instance references - by the
-/// time any definition is opened (topological order, see
-/// [_definitionOrder]) every OTHER definition its own instances could
-/// reference is already in it.
+/// Replay one definition's (or the root's) own faces, instances, and
+/// construction geometry onto [target] - an [SkpBuilder] for the root, or a
+/// [ComponentDefinitionBuilder] for a nested definition; both satisfy
+/// [GeometryHost] the same shape this calls generically. [defBuilders]
+/// resolves instance references - by the time any definition is opened
+/// (topological order, see [_definitionOrder]) every OTHER definition its
+/// own instances could reference is already in it.
 void _replayBody(
   GeometryHost target,
   Definition defn,
@@ -277,6 +278,26 @@ void _replayBody(
   }
   for (final inst in defn.instances) {
     _replayInstance(target, inst, defBuilders, materialSlots, layerSlots, model, warnings, context);
+  }
+  for (final cp in defn.constructionPoints) {
+    try {
+      target.addConstructionPoint(cp.position);
+    } on SkpWriteError catch (exc) {
+      warnings.add('$context: construction point skipped ($exc)');
+    }
+  }
+  for (final cl in defn.constructionLines) {
+    try {
+      if (cl.start != null && cl.end != null) {
+        target.addConstructionLine(cl.start!, point2: cl.end!);
+      } else if (cl.start == null && cl.end == null) {
+        target.addConstructionLine(cl.point, direction: cl.direction);
+      } else {
+        warnings.add('$context: half-bounded construction line skipped');
+      }
+    } on SkpWriteError catch (exc) {
+      warnings.add('$context: construction line skipped ($exc)');
+    }
   }
 }
 

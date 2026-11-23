@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Python, TypeScript, .NET & Dart: construction guides inside component definitions and `open_existing()` replay (#372, #285)
+
+- Ports C++ and Rust's nested-definition construction-guide support (`#372`) to Python, TypeScript, .NET and Dart: `ComponentDefinitionBuilder` now exposes `add_construction_line` / `add_construction_point` (`addConstructionLine` / `addConstructionPoint`, `AddConstructionLine` / `AddConstructionPoint`) alongside Python's existing `add_construction_point`, and `open_existing()` (`openExisting`, `SkpEdit.OpenExisting`) replays both root and nested-definition construction lines and points (including guide-only component definitions).
+- Fixes classic `CConstructionLine` trailer calibration in TypeScript, .NET and Dart when a construction line is the last entity in a `CComponentDefinition` (preferring a 4-byte trailer over v17's 7-byte default on the weak null-tag pass, matching Python, C++ and Rust).
+
 ### Fixed — Python: scenes use a component instance's own paint and tag in classic files (#596)
 
 - `build_scene()` and `build_instanced_scene()` read an instance's paint and tag from its 2021+ `D007` record only. In classic (pre-2021) files a painted component came out in its tag's colour, and every instance sat on its parent's tag. Both now come from the instance itself, and nested components inherit the paint.

@@ -1508,19 +1508,27 @@ class LegacyReaders {
         dflt,
         ...[0, 4, 7].where((c) => c != dflt)
       ];
-      // two passes: a zero tail full of padding can mimic a null tag, so
-      // only accept a null-anchored candidate when no candidate lands on a
-      // STRONG form (escape / known class / class definition)
-      outer:
-      for (final allowNull in [false, true]) {
-        for (final cand in order) {
-          if (_strictNextTag(ar, r.data, r.pos + cand, allowNull)) {
+      // Strong tags first (escape / known class / class definition). A
+      // construction line that is the last entity in a CComponentDefinition
+      // is followed by nrel=0, which looks like a null tag at every candidate
+      // including v17's preferred 7; preferring 7 on the weak pass swallows
+      // 3 bytes of the definition tail and caches 7 for later guides, so
+      // prefer 4.
+      for (final cand in order) {
+        if (_strictNextTag(ar, r.data, r.pos + cand, false)) {
+          k = cand;
+          break;
+        }
+      }
+      if (k == null) {
+        for (final cand in const [4, 0, 7]) {
+          if (_strictNextTag(ar, r.data, r.pos + cand, true)) {
             k = cand;
-            break outer;
+            break;
           }
         }
       }
-      k ??= dflt;
+      k ??= 4;
       ar.clineTail = k;
     }
     r.raw(k);

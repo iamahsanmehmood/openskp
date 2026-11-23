@@ -145,6 +145,38 @@ describe('openExisting', () => {
     expect(rebuilt.root.instances.length).toBe(2); // but now placed twice
   });
 
+  it('replays nested and root construction guides (including guide-only definitions)', () => {
+    const builder = create();
+    const nested = builder.addComponentDefinition('GuideOnly', (def) => {
+      def.addConstructionPoint([4, 5, 6]);
+      def.addConstructionLine([0, 0, 2], { direction: [0, 1, 0] });
+      def.addConstructionLine([1, 1, 1], { point2: [2, 2, 2] });
+    });
+    builder.addInstance(nested);
+    builder.addConstructionPoint([7, 8, 9]);
+    builder.addConstructionLine([0, 0, 0], { point2: [10, 0, 0] });
+
+    const { builder: newBuilder, warnings, definitions } = openExisting(toBuffer(builder.toBytes()));
+    expect(warnings).toEqual([]);
+    expect(definitions.has('GuideOnly')).toBe(true);
+
+    const rebuilt = parseSkp(toBuffer(newBuilder.toBytes()));
+    expect(rebuilt.root.constructionPoints).toHaveLength(1);
+    expect(rebuilt.root.constructionPoints[0].position).toEqual([7, 8, 9]);
+    expect(rebuilt.root.constructionLines).toHaveLength(1);
+    expect(rebuilt.root.constructionLines[0].end).toEqual([10, 0, 0]);
+
+    const group = [...rebuilt.definitions.values()].find((d) => d.name === 'GuideOnly')!;
+    expect(group).toBeDefined();
+    expect(group.constructionPoints).toHaveLength(1);
+    expect(group.constructionPoints[0].position).toEqual([4, 5, 6]);
+    expect(group.constructionLines).toHaveLength(2);
+    expect(group.constructionLines[0].start).toBeNull();
+    expect(group.constructionLines[0].end).toBeNull();
+    expect(group.constructionLines[1].start![0]).toBeCloseTo(1, 6);
+    expect(group.constructionLines[1].end![0]).toBeCloseTo(2, 6);
+  });
+
   it('a genuinely new material/layer/definition/group is rejected after replay', () => {
     const builder = create();
     builder.addFace(SQUARE);
