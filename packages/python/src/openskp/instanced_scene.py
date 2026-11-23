@@ -29,7 +29,13 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from . import _core
 from ._curves import _chain_loose_edges, _solve_run_arc
-from ._face_groups import FaceGroupContext, FaceGroupKey, build_local_face_groups
+from ._face_groups import (
+    FaceGroupContext,
+    FaceGroupKey,
+    build_local_face_groups,
+    resolve_color,
+    resolve_material,
+)
 from .errors import SkpParseError
 from .scene import SceneTexture, _original_image_mime, _sniff_image_mime, _warn_skipped_texture
 
@@ -638,6 +644,16 @@ def build_instanced_scene(
             properties: Dict[str, str] = dict(inst.get("properties") or {})
             attribute_dicts: Dict[str, Dict[str, str]] = {}
             name_override: Optional[str] = None
+
+            # A classic (pre-2021) instance has no D007: its own tag and paint
+            # were read with it.
+            l_name = layer_id_to_name.get(inst.get("layer_id"), l_name)
+            painted = resolve_material(
+                inst.get("material_id"), material_id_to_name, materials, materials_by_folder
+            )
+            if painted:
+                inst_color = resolve_color(painted)
+                inst_material = painted
 
             d007 = next((c for c in inst["children"] if c["tag"] == "D007"), None)
             if d007:
