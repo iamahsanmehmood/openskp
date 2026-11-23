@@ -48,11 +48,7 @@ fn corners(positions: &[f32], indices: &[u32]) -> Vec<Tri> {
     }
     let mut out = Vec::with_capacity(indices.len() / 3);
     for t in indices.as_chunks::<3>().0 {
-        out.push([
-            pts[t[0] as usize],
-            pts[t[1] as usize],
-            pts[t[2] as usize],
-        ]);
+        out.push([pts[t[0] as usize], pts[t[1] as usize], pts[t[2] as usize]]);
     }
     out
 }
@@ -217,7 +213,10 @@ fn file_without_face_colours_uses_tag_colour() {
 
     let style_inst = skp.build_instanced_scene(&style_opts).unwrap();
     let tag_inst = skp.build_instanced_scene(&tag_opts).unwrap();
-    assert_eq!(style_inst.mesh_resources.len(), tag_inst.mesh_resources.len());
+    assert_eq!(
+        style_inst.mesh_resources.len(),
+        tag_inst.mesh_resources.len()
+    );
     for r in &style_inst.mesh_resources {
         for p in &r.primitives {
             assert!(!p.unpainted_back);

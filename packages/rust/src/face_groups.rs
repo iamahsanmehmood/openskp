@@ -112,7 +112,7 @@ pub fn unpainted_style_colors(
     match unpainted_faces {
         "tag" => Ok(None),
         "style" => {
-            let (Some(f), Some(b)) = (parsed.face_front_color, parsed.face_back_color) else {
+            let Some((f, b)) = parsed.face_colors else {
                 return Ok(None);
             };
             Ok(Some((
