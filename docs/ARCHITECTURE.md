@@ -17,10 +17,10 @@
    the heavier work. See [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md#two-entry-points-parse-and-buildscene).
 4. **Streaming over materializing.** The whole file's TLV tree is never
    held in memory at once — see [Memory architecture](#memory-architecture)
-   below. This is the single most consequential architectural decision in
-   the codebase; real production files can have 100,000+ component
-   definitions, and the naive "parse everything into one tree, then walk
-   it" approach crashed outright on files in the hundreds-of-MB range.
+   below. Real production files can have 100,000+ component definitions
+   (verified in Python, .NET, and Dart; TypeScript still hits V8's
+   per-object heap ceiling on ~300 MB files — see
+   [#where-typescripts-fix-falls-short](#where-typescripts-fix-falls-short)).
 5. **Cross-validated, not just cross-implemented.** Every non-trivial
    feature (materials, styles, legacy MFC support, scene-baking,
    triangulation, memory behavior) is checked against real `.skp` files
@@ -74,11 +74,15 @@ whole file's total node count.
 `FlatHeaders`) finds each **top-level** record's (offset, size) — O(sibling
 count), not O(total node count) — and `iter_top_level_lazy()` /
 `iterTopLevelLazy()` / `IterTopLevelLazy()` yields one top-level record's
-**fully-built** subtree at a time. The caller (the definitions/layers/
-materials collection loop) processes it and drops the reference before the
-next one is built, so it's eligible for garbage collection immediately.
-Peak memory is bounded by the size of the **single largest** top-level
-record — a huge component definition, say — not the file's total size.
+**fully-built** subtree at a time. In Python, TypeScript, and C++ (plus
+Rust), that pre-scan also unwraps the `F901 > 7017 > 7117` definition-list
+wrapper chain ([#264](https://github.com/iamahsanmehmood/openskp/issues/264)),
+so each `7C15` component definition is built and dropped individually; `.NET`
+and `Dart` currently unwrap `F401` top-level siblings only. Where definitions
+are streamed individually, peak **walk** memory is bounded by the single
+largest record rather than the file's total size (for TypeScript's final
+materialized `SkpModel` ceiling, see
+[#where-typescripts-fix-falls-short](#where-typescripts-fix-falls-short) below).
 
 ```mermaid
 graph LR
@@ -88,8 +92,7 @@ graph LR
     B --> E["... record N"]
 ```
 
-This one change is what every language's memory fix is built on — the
-per-tag extraction logic (every field, every tag's decoding) was **not
+The per-tag extraction logic (every field, every tag's decoding) was **not
 touched**; only the orchestration loop that decides how much of the tree
 exists in memory at once changed. It's also what makes progress reporting
 free: the flat header scan already knows the total record count, so
