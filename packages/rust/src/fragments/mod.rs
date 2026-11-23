@@ -24,6 +24,7 @@ use crate::instanced_scene::{
     InstancedMeshResource, InstancedNode, InstancedScene, LocalPrimitive, IDENTITY_GLTF,
 };
 use crate::model::EntityId;
+use crate::observability::{emit_log, LogLevel, ParseOptions};
 use crate::scene::GltfMaterial;
 use schema::{
     BoundingBox, DoubleVector, FloatVector, Material, MeshesArgs, ModelArgs, RenderedFaces,
@@ -765,7 +766,8 @@ fn decode_shell(shell: schema::Shell<'_>) -> ReadResult<ShellGeometry> {
 }
 
 /// State shared by one [`from_fragments`] call.
-struct FragReader<'a> {
+struct FragReader<'a, 'o> {
+    options: &'o ParseOptions,
     model: schema::Model<'a>,
     meshes: Option<schema::Meshes<'a>>,
     shells: Option<crate::flatbuffers::Vector<'a, schema::Shell<'a>>>,
@@ -786,7 +788,7 @@ struct FragReader<'a> {
     visited_tables: HashSet<usize>,
 }
 
-impl<'a> FragReader<'a> {
+impl<'a> FragReader<'a, '_> {
     fn shell_geometry(&mut self, shell_idx: usize) -> ReadResult<&ShellGeometry> {
         if self.shell_cache[shell_idx].is_none() {
             let shells = self
@@ -837,10 +839,11 @@ impl<'a> FragReader<'a> {
             let rep_class = representation.representation_class;
             if rep_class != RepresentationClass::SHELL {
                 if !self.warned_unsupported {
-                    eprintln!(
+                    let msg = format!(
                         "openskp from_fragments: skipping a sample with unsupported RepresentationClass={} (only SHELL is read today).",
                         rep_class.0
                     );
+                    emit_log(self.options, LogLevel::Warning, &msg);
                     self.warned_unsupported = true;
                 }
                 continue;
@@ -1031,7 +1034,7 @@ fn read_metadata(
     (layer_hidden, generated)
 }
 
-fn read_model(raw: &[u8]) -> ReadResult<InstancedScene> {
+fn read_model(raw: &[u8], options: &ParseOptions) -> ReadResult<InstancedScene> {
     let model = schema::root_as_model(raw)?;
     let meshes = model.meshes()?;
     let gltf_materials = read_materials(meshes)?;
@@ -1084,6 +1087,7 @@ fn read_model(raw: &[u8]) -> ReadResult<InstancedScene> {
     let (layer_hidden, generated_name_guids) = read_metadata(model.metadata()?);
 
     let mut reader = FragReader {
+        options,
         model,
         meshes,
         shells,
@@ -1130,15 +1134,25 @@ fn read_model(raw: &[u8]) -> ReadResult<InstancedScene> {
 /// `properties` and `attribute_dictionaries` stay at their defaults - the
 /// format only carries the `Name` attribute this reads. Geometry comes back
 /// flat-shaded with zero UVs; samples of a non-SHELL representation (e.g.
-/// CIRCLE_EXTRUSION) are skipped with a one-time warning on stderr.
+/// CIRCLE_EXTRUSION) are skipped (see [`from_fragments_with_options`] to
+/// receive the warning callback).
 pub fn from_fragments(data: &[u8]) -> Result<InstancedScene, FragmentsError> {
-    from_fragments_capped(data, MAX_FRAGMENTS_DECOMPRESSED_BYTES)
+    from_fragments_with_options(data, &ParseOptions::default())
+}
+
+/// [`from_fragments`], routing non-fatal warnings through `options`.
+pub fn from_fragments_with_options(
+    data: &[u8],
+    options: &ParseOptions,
+) -> Result<InstancedScene, FragmentsError> {
+    from_fragments_capped(data, MAX_FRAGMENTS_DECOMPRESSED_BYTES, options)
 }
 
 /// [`from_fragments`] with the decompressed size capped at `max_inflated`.
 fn from_fragments_capped(
     data: &[u8],
     max_inflated: usize,
+    options: &ParseOptions,
 ) -> Result<InstancedScene, FragmentsError> {
     let inflated = match crate::inflate::zlib_decompress_capped(data, max_inflated) {
         Ok(buf) => Some(buf),
@@ -1150,17 +1164,25 @@ fn from_fragments_capped(
         Err(_) => None,
     };
     let raw = inflated.as_deref().unwrap_or(data);
-    Ok(read_model(raw)?)
+    Ok(read_model(raw, options)?)
 }
 
 /// Reads a `.frag` file into an instanced scene. See [`from_fragments`].
 pub fn read_fragments(path: impl AsRef<Path>) -> Result<InstancedScene, FragmentsError> {
+    read_fragments_with_options(path, &ParseOptions::default())
+}
+
+/// [`read_fragments`], routing non-fatal warnings through `options`.
+pub fn read_fragments_with_options(
+    path: impl AsRef<Path>,
+    options: &ParseOptions,
+) -> Result<InstancedScene, FragmentsError> {
     let path = path.as_ref();
     let data = std::fs::read(path).map_err(|source| FragmentsError::Io {
         path: path.to_path_buf(),
         source,
     })?;
-    from_fragments(&data)
+    from_fragments_with_options(&data, options)
 }
 
 #[cfg(test)]
@@ -1248,11 +1270,12 @@ mod tests {
         // The real cap is 2 GiB (the largest FlatBuffer); the same path at 1 MiB.
         let bomb = crate::deflate::zlib_compress(&vec![0u8; 4 << 20], ZLIB_LEVEL);
         assert!(bomb.len() < 64 << 10);
-        let err = from_fragments_capped(&bomb, 1 << 20).unwrap_err();
+        let opts = ParseOptions::default();
+        let err = from_fragments_capped(&bomb, 1 << 20, &opts).unwrap_err();
         assert!(err.to_string().contains("exceeds safety limit"), "{err}");
         // Under the cap the zeros inflate, and are then not a FlatBuffer.
         assert!(matches!(
-            from_fragments_capped(&bomb, 8 << 20),
+            from_fragments_capped(&bomb, 8 << 20, &opts),
             Err(FragmentsError::InvalidBuffer(e)) if !e.message().contains("safety limit")
         ));
     }

@@ -17,6 +17,7 @@ Example::
 
 from __future__ import annotations
 
+import logging
 from importlib.metadata import PackageNotFoundError, version as _version
 
 from .codegen import to_python_code
@@ -34,6 +35,8 @@ from .instanced_scene import (
 )
 from .model import ArcCurve, SkpFile, SkpModel, loose_edge_runs
 from .scene import Scene, InstanceNode, MeshMetadata, GlbPrimitive, SceneTexture
+
+logging.getLogger("openskp").addHandler(logging.NullHandler())
 
 try:
     __version__: str = _version("openskp")

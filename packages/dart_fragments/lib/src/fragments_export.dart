@@ -746,7 +746,7 @@ Uint8List? _inflateIfZlib(Uint8List data) {
 /// `properties`/`attributeDictionaries` on each node are left at their
 /// defaults, since the Fragments format doesn't carry them separately
 /// from the `Name` attribute this function does extract.
-InstancedScene fromFragments(Uint8List data) {
+InstancedScene fromFragments(Uint8List data, [ParseOptions? options]) {
   final rawBytes = _inflateIfZlib(data) ?? data;
 
   final model = ffb.Model(rawBytes);
@@ -873,8 +873,10 @@ InstancedScene fromFragments(Uint8List data) {
       final repClass = representation?.representationClass ?? ffb.RepresentationClass.SHELL;
       if (!_supportedRepresentationClasses.contains(repClass)) {
         if (!warnedUnsupported) {
-          stderr.writeln(
-              'openskp fromFragments: skipping a sample with unsupported RepresentationClass=$repClass (only SHELL is read today).');
+          options?.onLog?.call(
+            SkpLogLevel.warning,
+            'openskp fromFragments: skipping a sample with unsupported RepresentationClass=$repClass (only SHELL is read today).',
+          );
           warnedUnsupported = true;
         }
         continue;
@@ -985,4 +987,5 @@ InstancedScene fromFragments(Uint8List data) {
 
 /// Reads a `.frag` file from disk into an [InstancedScene]. See
 /// [fromFragments] for the full contract and known gaps.
-InstancedScene readFragments(String path) => fromFragments(File(path).readAsBytesSync());
+InstancedScene readFragments(String path, [ParseOptions? options]) =>
+    fromFragments(File(path).readAsBytesSync(), options);

@@ -1,6 +1,7 @@
 import * as flatbuffers from 'flatbuffers';
 import * as fflate from 'fflate';
 import type { InstancedScene, InstancedNode, LocalPrimitive, InstancedMeshResource } from './instanced';
+import { emitLog, type ParseOptions } from './observability';
 import { multiplyMatrices } from './transforms';
 import {
   Model,
@@ -710,7 +711,7 @@ function extractNameAttribute(attribute: Attribute | null): string {
  * the Fragments format itself doesn't carry them separately from the
  * `Name` attribute this function does extract.
  */
-export function fromFragments(data: Uint8Array): InstancedScene {
+export function fromFragments(data: Uint8Array, options?: ParseOptions): InstancedScene {
   let rawBytes: Uint8Array;
   try {
     rawBytes = fflate.unzlibSync(data);
@@ -843,7 +844,9 @@ export function fromFragments(data: Uint8Array): InstancedScene {
       const repClass = representation !== null ? representation.representationClass() : RepresentationClass.SHELL;
       if (!SUPPORTED_REPRESENTATION_CLASSES.has(repClass)) {
         if (!warnedUnsupported) {
-          console.warn(
+          emitLog(
+            options,
+            'warn',
             `openskp fromFragments: skipping a sample with unsupported RepresentationClass=${repClass} ` +
             '(only SHELL is read today).'
           );

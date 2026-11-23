@@ -5,7 +5,6 @@
 #include <flatbuffers/flatbuffers.h>
 #include <fstream>
 #include <functional>
-#include <iostream>
 #include <map>
 #include <miniz.h>
 #include <set>
@@ -875,6 +874,10 @@ void export_fragments(const InstancedScene& scene, const std::filesystem::path& 
 }
 
 InstancedScene from_fragments(const std::vector<std::uint8_t>& data) {
+  return from_fragments(data, ParseOptions{});
+}
+
+InstancedScene from_fragments(const std::vector<std::uint8_t>& data, const ParseOptions& options) {
   std::vector<std::uint8_t> raw_bytes;
   try {
     raw_bytes = zlib_decompress(data);
@@ -1034,9 +1037,12 @@ InstancedScene from_fragments(const std::vector<std::uint8_t>& data) {
                                                     : fb::RepresentationClass_SHELL;
       if (!is_supported_representation_class(rep_class)) {
         if (!warned_unsupported) {
-          std::cerr
-              << "openskp from_fragments: skipping a sample with unsupported RepresentationClass="
-              << static_cast<int>(rep_class) << " (only SHELL is read today).\n";
+          if (options.log) {
+            const std::string msg =
+                "openskp from_fragments: skipping a sample with unsupported RepresentationClass=" +
+                std::to_string(static_cast<int>(rep_class)) + " (only SHELL is read today).";
+            options.log(LogLevel::warning, msg);
+          }
           warned_unsupported = true;
         }
         continue;
@@ -1154,11 +1160,15 @@ InstancedScene from_fragments(const std::vector<std::uint8_t>& data) {
 }
 
 InstancedScene read_fragments(const std::filesystem::path& path) {
+  return read_fragments(path, ParseOptions{});
+}
+
+InstancedScene read_fragments(const std::filesystem::path& path, const ParseOptions& options) {
   std::ifstream in(path, std::ios::binary);
   if (!in) throw std::runtime_error("Fragments import: could not open " + path.string());
   std::vector<std::uint8_t> data((std::istreambuf_iterator<char>(in)),
                                  std::istreambuf_iterator<char>());
-  return from_fragments(data);
+  return from_fragments(data, options);
 }
 
 }  // namespace openskp

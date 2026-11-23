@@ -62,7 +62,8 @@ pub use dxf_export::{export_dxf, to_dxf, DxfError};
 pub use edit::{open_existing, OpenExistingError, OpenExistingResult};
 pub use errors::SkpParseError;
 pub use fragments::{
-    export_fragments, from_fragments, read_fragments, to_fragments, FragmentsError,
+    export_fragments, from_fragments, from_fragments_with_options, read_fragments,
+    read_fragments_with_options, to_fragments, FragmentsError,
 };
 pub use glb::{export_glb, to_glb, GlbError, GlbOptions, GlbResult};
 pub use ifc_export::{
