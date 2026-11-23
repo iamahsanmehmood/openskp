@@ -8,10 +8,11 @@
 /// no options, nothing is called.
 library;
 
-/// Mirrors the Python port's logging.DEBUG/logging.INFO split: "debug" for
-/// fine-grained per-record/per-instance detail, "info" for start/complete
-/// summaries.
-enum SkpLogLevel { debug, info }
+/// Mirrors the Python port's logging.DEBUG/logging.INFO/logging.WARNING
+/// split: "debug" for fine-grained per-record/per-instance detail, "info" for
+/// start/complete summaries, and "warning" for non-fatal partial-read or
+/// export warnings.
+enum SkpLogLevel { debug, info, warning }
 
 /// One progress update during a long parse/scene-bake walk.
 class ParseProgress {

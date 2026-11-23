@@ -8,6 +8,7 @@ use std::sync::Arc;
 pub enum LogLevel {
     Debug,
     Information,
+    Warning,
 }
 
 /// The stage of the parse pipeline a progress report or error refers to.

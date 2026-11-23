@@ -374,6 +374,10 @@ namespace OpenSkp
         public int CumDelta;
         public int? AnnotWatermark;
         public List<int> BurnStack = new List<int>();  // per-entity-list burned-item credits
+        // Set when the root list stopped at a record it couldn't read, and how
+        // many of its declared entities that left out (see SkpModel.UnreadRootEntities).
+        public bool RootStoppedEarly;
+        public int UnreadRootEntities;
         // per-entity-list instances an annotation's path wrote in full (see
         // PathRef) that the list has not listed yet, in order
         public List<List<int>> InlineStack = new List<List<int>>();
@@ -1675,6 +1679,11 @@ namespace OpenSkp
 
         public static List<(int Slot, string? Name, object? Value)> ReadEntityList(Archive ar, LR r, long count, string owner)
         {
+            if (owner == "root")
+            {
+                ar.RootStoppedEarly = false;
+                ar.UnreadRootEntities = 0;
+            }
             ar.BurnStack.Add(0);
             ar.InlineStack.Add(new List<int>());
             try
@@ -1692,6 +1701,15 @@ namespace OpenSkp
                     if (ents.Count >= count) break;
                     ar.Slots.TryGetValue(slot, out var ent);
                     ents.Add((slot, ent?.Name, ent?.Value));
+                }
+                if (owner == "root" && ar.RootStoppedEarly)
+                {
+                    // Burned indices count phantom entries the stream never
+                    // carries (see RegisterBurn); the rest of the shortfall is
+                    // entities the reader couldn't read and dropped.
+                    long phantoms = Math.Max(0, ar.BurnStack[ar.BurnStack.Count - 1]);
+                    long missing = Math.Max(0L, count - ents.Count);
+                    ar.UnreadRootEntities = (int)Math.Max(0L, missing - phantoms);
                 }
                 return ents;
             }
@@ -1757,6 +1775,10 @@ namespace OpenSkp
                     // overshoots the real records. Stop at the failed item
                     // - the definition tail that follows (nrel, GUID
                     // anchor, thumbnail scan) validates the cut.
+                    if (owner == "root")
+                    {
+                        ar.RootStoppedEarly = true;
+                    }
                     failed = true;
                 }
                 finally
@@ -2624,6 +2646,12 @@ namespace OpenSkp
             Observability.Log(
                 options, SkpLogLevel.Debug,
                 $"Legacy walk complete: {walkResult.Materials.Count} materials, {walkResult.Layers.Count} layers");
+            if (ar.UnreadRootEntities > 0)
+            {
+                Observability.Log(
+                    options, SkpLogLevel.Warning,
+                    $"Classic .skp root entity list stopped early after {walkResult.Root.Count} entities ({ar.UnreadRootEntities} unread): this file was read only in part");
+            }
 
             var materialsMap = new Dictionary<string, Geometry.RawMaterial>();
             var materialIdToName = new Dictionary<long, string>();
@@ -2766,6 +2794,7 @@ namespace OpenSkp
                 MaterialsByFolder = new Dictionary<string, Geometry.RawMaterial>(),
                 Styles = new List<Geometry.RawStyle>(),
                 DefsDict = defsDict,
+                UnreadRootEntities = ar.UnreadRootEntities,
                 Root = new Geometry.RawDefinition
                 {
                     Guid = "ROOT",

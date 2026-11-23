@@ -15,7 +15,15 @@ namespace {
 TEST(LegacyUnreadRootEntities, CompleteFilesReportNone) {
   for (const char* name : {"legacy_annotations.skp", "capilla_quiroz_v17.skp", "gondola_v20.skp",
                            "legacy_text_arrows_2017.skp", "nesting_2017.skp", "SU_File.skp"}) {
-    EXPECT_EQ(SkpFile::open(test::fixture(name)).parse().unread_root_entities, 0u) << name;
+    std::vector<std::pair<LogLevel, std::string>> logs;
+    ParseOptions options;
+    options.log = [&](LogLevel level, std::string_view message) {
+      logs.emplace_back(level, message);
+    };
+    EXPECT_EQ(SkpFile::open(test::fixture(name)).parse(options).unread_root_entities, 0u) << name;
+    EXPECT_TRUE(std::none_of(logs.begin(), logs.end(), [](const auto& entry) {
+      return entry.first == LogLevel::warning;
+    })) << name;
   }
 }
 
@@ -36,10 +44,21 @@ TEST(LegacyUnreadRootEntities, AnUnreadableTextDropsTheRestOfTheRoot) {
   ASSERT_NE(at, bytes.end());
   std::fill(at, at + 4, std::uint8_t{0x00});
 
-  const auto model = SkpFile::from_buffer(std::move(bytes)).parse();
+  std::vector<std::pair<LogLevel, std::string>> logs;
+  ParseOptions options;
+  options.log = [&](LogLevel level, std::string_view message) {
+    logs.emplace_back(level, message);
+  };
+  const auto model = SkpFile::from_buffer(std::move(bytes)).parse(options);
   ASSERT_EQ(model.root().texts.size(), 1u);
   EXPECT_EQ(model.root().texts[0].text, "First");
   EXPECT_GT(model.unread_root_entities, 0u);
+  const auto unread_token = std::to_string(model.unread_root_entities) + " unread";
+  EXPECT_TRUE(std::any_of(logs.begin(), logs.end(), [&](const auto& entry) {
+    return entry.first == LogLevel::warning &&
+           entry.second.find("stopped early") != std::string::npos &&
+           entry.second.find(unread_token) != std::string::npos;
+  }));
 }
 
 }  // namespace

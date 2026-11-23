@@ -2279,6 +2279,7 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
         'thumbnail_data': thumbnail_data,
         'styles': styles,
         'face_colors': _model_face_colors(model_dat),
+        'unread_root_entities': 0,
         'units': units,
     }
 

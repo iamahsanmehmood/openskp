@@ -926,6 +926,18 @@ pub fn parse_legacy(data: &[u8], o: &ParseOptions) -> Result<RawParsed, SkpParse
     let mut walked = walk(data).map_err(|e| {
         SkpParseError::at_stage("legacy .skp parse failed", ParseStage::LegacyWalk).with_cause(e)
     })?;
+    out.unread_root_entities = walked.ar.unread_root_entities;
+    if out.unread_root_entities != 0 {
+        emit_log(
+            o,
+            LogLevel::Warning,
+            &format!(
+                "Classic .skp root entity list stopped early after {} entities ({} unread): this file was read only in part",
+                walked.root.len(),
+                out.unread_root_entities
+            ),
+        );
+    }
 
     {
         let slots = &walked.ar.slots;

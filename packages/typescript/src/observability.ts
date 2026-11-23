@@ -11,7 +11,7 @@
  * *where*.
  */
 
-export type LogLevel = 'debug' | 'info';
+export type LogLevel = 'debug' | 'info' | 'warn';
 
 export interface ProgressInfo {
   /** Which pipeline stage is reporting progress, e.g. "tlv_walk",
@@ -29,9 +29,10 @@ export interface ParseOptions {
    * long walk, so a caller can report "N of M processed" without any extra
    * pass over the data. */
   onProgress?: (info: ProgressInfo) => void;
-  /** Called for start/stage/completion messages. `level` is "debug" for
-   * fine-grained detail, "info" for start/complete summaries - mirrors the
-   * Python port's `logging.DEBUG`/`logging.INFO` split. */
+  /** Called for start/stage/completion messages and partial-read warnings.
+   * `level` is "debug" for fine-grained detail, "info" for start/complete
+   * summaries, and "warn" for non-fatal warnings - mirrors the Python port's
+   * `logging.DEBUG`/`logging.INFO`/`logging.WARNING` split. */
   onLog?: (level: LogLevel, message: string) => void;
 }
 

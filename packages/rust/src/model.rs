@@ -907,6 +907,13 @@ pub struct SkpModel {
     pub pages: Vec<Page>,
     /// The view the model was saved with (VFF only).
     pub camera: Option<ViewCamera>,
+    /// How many top-level entities of a classic (pre-2021) file the reader
+    /// couldn't read. It keeps what it read before the first root record it
+    /// can't parse and drops that record and everything after it, so a nonzero
+    /// count means the model lost geometry, components, groups, text or
+    /// dimensions. Phantom entries the root count includes but the file never
+    /// writes are not counted. Always 0 for VFF files.
+    pub unread_root_entities: usize,
     /// Model-level linear dimensions with world-space endpoints (VFF).
     pub dimensions: Vec<Dimension>,
     pub materials: Vec<Material>,
@@ -926,6 +933,7 @@ impl Default for SkpModel {
             layers: Vec::new(),
             pages: Vec::new(),
             camera: None,
+            unread_root_entities: 0,
             dimensions: Vec::new(),
             materials: Vec::new(),
             styles: Vec::new(),

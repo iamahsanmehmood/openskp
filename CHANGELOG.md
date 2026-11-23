@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — All 6 languages: partial reads of classic `.skp` files are reported (#552)
+
+- The classic (pre-2021 MFC) root entity reader stops at the first top-level record it cannot
+  parse and keeps what came before it. Previously only C++ exposed `unread_root_entities` (#522),
+  and no language logged a warning, so missing geometry, components or annotations went unnoticed.
+- Python (`SkpModel.unread_root_entities`), TypeScript (`SkpModel.unreadRootEntities`), .NET
+  (`SkpModel.UnreadRootEntities`), Dart (`SkpModel.unreadRootEntities`) and Rust
+  (`SkpModel::unread_root_entities`) now expose the same count as C++ (always `0` for VFF files,
+  with burned phantom connection-point slots subtracted), and all six ports emit a warning through
+  their logging hook (`openskp.legacy` in Python, `ParseOptions` / `SkpParseOptions` log callback
+  at the new `warn` / `Warning` / `warning` level in the other five) whenever
+  `unread_root_entities` is nonzero.
+
 ### Added — Python: the model's face colours (`SkpModel.face_front_color` / `face_back_color`)
 
 - The colours SketchUp shows on the front and the back side of a face with no paint on that side,

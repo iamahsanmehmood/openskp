@@ -209,6 +209,7 @@ pub fn build_model(p: RawParsed, o: &ParseOptions) -> SkpModel {
         });
     }
     m.camera = p.camera;
+    m.unread_root_entities = p.unread_root_entities;
     // Model-level linear dimensions (VFF; world space).
     for dm in &p.dimensions {
         m.dimensions.push(Dimension {
