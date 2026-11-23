@@ -85,7 +85,7 @@ jobs:
             -DOPENSKP_BUILD_TESTS=OFF \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/cpp-prefix"
-          cmake --build build-cpp --config Release --parallel
+          cmake --build build-cpp --config Release --parallel 4
           cmake --install build-cpp --config Release
 
       - name: Mutate fixtures and fuzz all readers
