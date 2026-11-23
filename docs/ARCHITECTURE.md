@@ -24,8 +24,8 @@
 5. **Cross-validated, not just cross-implemented.** Every non-trivial
    feature (materials, styles, legacy MFC support, scene-baking,
    triangulation, memory behavior) is checked against real `.skp` files
-   and against the other three languages' output for the same file, not
-   just unit-tested against synthetic fixtures.
+   and against the other four published languages' output for the same
+   file, not just unit-tested against synthetic fixtures.
 
 ## Two container eras, one output shape
 
@@ -109,7 +109,7 @@ shared streaming-iteration change; see `packages/dotnet/OpenSkp/ChunkedBuffer.cs
 ### Where TypeScript's fix falls short
 
 The lazy top-level iteration bounds the **walk's** peak memory in
-TypeScript exactly like the other three languages. What it doesn't change
+TypeScript like the other four published languages. What it doesn't change
 is the size of the **final** `SkpModel` result: for a file with millions
 of vertices/edges/faces, that result is millions of small JS object
 literals, and V8's per-object overhead makes that final result
@@ -186,7 +186,7 @@ platform:
 | Geometry extraction | `_core.py` | `geometry.ts` | `Geometry.cs` | `geometry.dart` | `geometry.cpp` |
 | Public model | `model.py` | `model.ts` | `Model.cs` | `model.dart` | `model.cpp` |
 | Scene baking | `scene.py` | `model.ts` | `Scene.cs` | `scene.dart` | `scene.cpp` |
-| Exporters (GLB, OBJ, STL, PLY, DXF, IFC, JSON) | `export/` | `obj.ts`, `stl.ts`, `ply.ts`, `dxf.ts`, `ifc.ts` | `GlbExport.cs`, `ObjExport.cs`, `StlExport.cs`, `PlyExport.cs`, `DxfExport.cs`, `IfcExport.cs`, `JsonExport.cs` | `glb_export.dart`, `obj_export.dart`, `stl_export.dart`, `ply_export.dart`, `dxf_export.dart`, `ifc_export.dart`, `json_export.dart` | `glb_export.cpp`, `obj_export.cpp`, `stl_export.cpp`, `ply_export.cpp`, `dxf_export.cpp`, `ifc_export.cpp`, `json_export.cpp` |
+| Exporters (GLB, OBJ, STL, PLY, DXF, IFC, JSON) | `export/` | `index.ts`, `instanced-glb.ts`, `obj.ts`, `stl.ts`, `ply.ts`, `dxf.ts`, `ifc.ts` | `Glb.cs`, `InstancedGlb.cs`, `ObjExport.cs`, `StlExport.cs`, `PlyExport.cs`, `DxfExport.cs`, `IfcExport.cs`, `JsonExport.cs` | `glb.dart`, `instanced_glb.dart`, `obj_export.dart`, `stl_export.dart`, `ply_export.dart`, `dxf_export.dart`, `ifc_export.dart`, `json_export.dart` | `glb.cpp`, `instanced_glb.cpp`, `obj_export.cpp`, `stl_export.cpp`, `ply_export.cpp`, `dxf_export.cpp`, `ifc_export.cpp`, `json_export.cpp` |
 | Triangulation | `triangulator.py` | `triangulator.ts` | `Triangulator.cs` + `Earcut.cs` | `triangulator.dart` + `earcut.dart` | `triangulator.cpp` + `earcut.cpp` |
 | Transform math | `transforms.py` | `transforms.ts` | `Transforms.cs` | `transforms.dart` | `transforms.cpp` |
 | Errors / observability | `errors.py` / logging | `errors.ts` / `observability.ts` | `Errors.cs` / `Observability.cs` | `errors.dart` / `observability.dart` | `errors.cpp` / `observability.cpp` |
@@ -197,8 +197,8 @@ platform:
 
 Note Python has no dedicated `observability.py` — it's instrumented
 directly at each call site using the standard-library `logging` module,
-which needs no shared helper module the way the other three languages'
-callback-based approach does. See
+which needs no shared helper module the way the other four published
+languages' (and Rust's) callback-based approach does. See
 [OBSERVABILITY.md](OBSERVABILITY.md#per-language-mechanism) for why.
 
 ### Triangulation: not the same algorithm everywhere (by design, now)

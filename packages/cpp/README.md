@@ -323,4 +323,7 @@ python3 packages/cpp/tools/check_native_skp.py generated.skp \
   --background 18,52,86 --textured-material paint --resave new-modern.skp
 ```
 
-The checker validates native units, background, group definition types and named\ntexture dimensions. `--resave` exercises the SDK's modern-format serialization,\nwhich can expose persistent-ID conflicts that a self round-trip misses. The SDK\nis optional and is neither downloaded nor redistributed by this project.
+The checker validates native units, background, group definition types and named
+texture dimensions. `--resave` exercises the SDK's modern-format serialization,
+which can expose persistent-ID conflicts that a self round-trip misses. The SDK
+is optional and is neither downloaded nor redistributed by this project.

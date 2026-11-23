@@ -46,7 +46,7 @@ This project follows the [Contributor Covenant v2.1](CODE_OF_CONDUCT.md). By par
 
 Before diving in, we recommend reading:
 
-1. **[Architecture](docs/ARCHITECTURE.md)** — Understand the three-layer design
+1. **[Architecture](docs/ARCHITECTURE.md)** — Two container walkers (VFF/TLV and classic MFC `CArchive`), lazy top-level streaming, the two-tier `parse()` / `buildScene()` split, writers, and native exporters
 2. **[Binary Format Spec](docs/BINARY_FORMAT.md)** — Learn how SKP files are structured
 3. **[API Design](docs/API_DESIGN.md)** — Understand the cross-platform API contract
 4. **[Research Methodology](research/METHODOLOGY.md)** — How we reverse-engineered the format
@@ -136,7 +136,7 @@ pytest
 pytest --cov=openskp --cov-report=html
 
 # Run a specific test file
-pytest tests/test_tlv_parser.py
+pytest tests/test_parser.py
 
 # Run tests matching a keyword
 pytest -k "test_vertex"
@@ -216,7 +216,7 @@ test(python): add regression test for nested component instances
 ### Review Process
 
 - At least **one maintainer approval** is required
-- CI must pass (linting, tests, type checking)
+- CI must pass (per-language lint/format checks and test suites)
 - Discussions should be resolved before merge
 - Squash merge is preferred for single-feature PRs
 
@@ -228,12 +228,10 @@ test(python): add regression test for nested component instances
 
 | Rule | Standard |
 |:-----|:---------|
-| Formatter | `black` (line length 88) |
-| Linter | `ruff` |
-| Type checking | `mypy` (strict mode) |
+| Linter | `ruff check` (`ruff==0.15.13` enforced in CI) |
+| Typing | PEP 561 `py.typed` marker shipped (`packages/python/src/openskp/py.typed`); no `mypy`/`pyright` CI gate yet |
 | Docstrings | Google style |
-| Imports | `isort` (profile: black) |
-| Minimum version | Python 3.10 |
+| Minimum version | Python 3.10 (tested across 3.10–3.14 in CI) |
 
 ```python
 # ✅ Good
@@ -257,10 +255,9 @@ def parse_vertex(data: bytes, offset: int = 0) -> tuple[float, float, float]:
 
 | Rule | Standard |
 |:-----|:---------|
-| Formatter | `prettier` |
-| Linter | `eslint` |
-| Type checking | `strict: true` in tsconfig |
-| Module system | ESM |
+| Linter | `eslint` (`npm run lint`, enforced in CI) |
+| Type checking | `strict: true` in tsconfig (`npm run typecheck`, enforced in CI) |
+| Build outputs | ESM + CJS + `.d.ts` via `tsup` (`npm run build`) |
 | Minimum version | Node.js 22.12 to use the package; building from source needs 22.18+, 24.11+ or 26+ |
 
 ### C++
@@ -309,12 +306,12 @@ Open an issue with the `platform` label describing:
 
 ### 2. Follow the Architecture
 
-All platform implementations **must** follow the [three-layer architecture](docs/ARCHITECTURE.md):
+All platform implementations **must** follow [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md):
 
 ```
-Layer 1: Binary Parser     → Read raw TLV from model.dat
-Layer 2: Structured Model  → Build typed model objects
-Layer 3: Export Engines     → GLB, OBJ, JSON export
+Container walkers    → VFF/ZIP TLV (2021+) + classic MFC CArchive (pre-2021)
+Two-tier model/scene → parse() -> SkpModel; buildScene() / buildInstancedScene()
+Writers & exporters  → create(), open_existing(), codegen, GLB/OBJ/STL/PLY/DXF/IFC/JSON/.frag
 ```
 
 ### 3. Implement the API Contract
@@ -328,11 +325,11 @@ Every platform must pass the same behavioral tests against the same fixture file
 ### 5. Directory Structure
 
 ```
-<language>/
+packages/<language>/
 ├── README.md          # Platform-specific README
-├── src/               # Source code
+├── src/ (or lib/)     # Source code
 ├── tests/             # Test suite
-└── <package-config>   # pyproject.toml / package.json / pubspec.yaml
+└── <package-config>   # pyproject.toml / package.json / *.csproj / pubspec.yaml / CMakeLists.txt / Cargo.toml
 ```
 
 ---
@@ -350,8 +347,9 @@ tag exactly as below:
 |---|---|---|---|
 | Python | `packages/python/pyproject.toml` + `src/openskp/__init__.py` | `python-vX.Y.Z` | PyPI |
 | TypeScript | `packages/typescript/package.json` (+ regenerate `package-lock.json`) | `typescript-vX.Y.Z` | npm |
-| .NET | `packages/dotnet/OpenSkp/OpenSkp.csproj` (`<Version>`) | `nuget-vX.Y.Z` | NuGet |
+| .NET | `packages/dotnet/OpenSkp/OpenSkp.csproj` + `packages/dotnet/OpenSkp.Fragments/OpenSkp.Fragments.csproj` (`<Version>`) | `nuget-vX.Y.Z` | NuGet |
 | Dart | `packages/dart/pubspec.yaml` | **`vX.Y.Z`** (bare — not `dart-vX.Y.Z`) | pub.dev |
+| C++ | `packages/cpp/CMakeLists.txt` (`project(OpenSkp VERSION ...)`) | `cpp-vX.Y.Z` | GitHub Releases |
 
 The Dart entry is easy to get wrong: `release-dart.yml` listens for both
 `dart-v*` and bare `v*`, which looks like `dart-v0.3.0` should be the
@@ -398,7 +396,7 @@ after creating it; it is shown only once.
 
 Use the [Bug Report](https://github.com/iamahsanmehmood/openskp/issues/new?template=bug_report.md) issue template. Please include:
 
-- OpenSKP version and platform (Python/TypeScript/Dart)
+- OpenSKP version and platform (Python / TypeScript / .NET / Dart / C++, or unpublished Rust)
 - Operating system
 - SketchUp version that created the `.skp` file
 - Minimal reproduction steps

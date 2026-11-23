@@ -127,7 +127,7 @@ with `toInstancedGLB()` (`to_instanced_glb()` in Python and C++,
 one mesh instead of duplicating it per placement. It produces exactly the
 same triangles as `buildScene()` — lossless instancing preservation, not
 mesh decimation — and is worth reaching for whenever a file reuses
-definitions across many placements (see the [Unreleased] entry in
+definitions across many placements (see the 1.2.0 entry in
 [CHANGELOG.md](../CHANGELOG.md) for size/speed numbers on a repeated-1,000-times case).
 
 ## The data model
