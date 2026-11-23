@@ -279,10 +279,16 @@ starting code, or for a diffable, reviewable text representation of a
 
 ## Requirements
 
-- Python ≥ 3.10
-- NumPy ≥ 1.20
-- Trimesh ≥ 3.0
-- Shapely ≥ 1.8
+- Python ≥ 3.10 (tested on 3.10–3.14)
+- `numpy >= 2.2.6` (prebuilt wheel)
+- `trimesh >= 3.0`
+- `shapely >= 1.8` (prebuilt wheel)
+- `defusedxml >= 0.7.1`
+- `mapbox_earcut >= 1.0` (prebuilt wheel)
+
+Optional extras:
+- `openskp[textures]`: `pillow >= 12.3.0`
+- `openskp[fragments]`: `flatbuffers >= 24.0`
 
 ## Used in Production
 

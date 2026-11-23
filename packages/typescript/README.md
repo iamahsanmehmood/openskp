@@ -3,9 +3,9 @@
 **The open-source SketchUp (`.skp`) file parser, writer, and converter — TypeScript / JavaScript edition.**
 
 Parse, write, and convert `.skp` files without SketchUp. No SDK. No
-license. Zero native dependencies — `fflate` handles ZIP extraction and a
-ported `earcut` handles triangulation, so it runs anywhere JavaScript
-does: Node.js or the browser.
+license. Zero native dependencies — `fflate` handles ZIP extraction,
+`earcut` handles triangulation, and `flatbuffers` handles Fragments (`.frag`)
+serialization, so it runs anywhere JavaScript does: Node.js or the browser.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![npm](https://img.shields.io/npm/v/openskp.svg?logo=npm&logoColor=white)](https://www.npmjs.com/package/openskp)
@@ -461,7 +461,7 @@ verified numbers before parsing very large files in this package.
 | `model.ts` | Interfaces for geometry, layers, materials, scenes |
 | `legacy.ts` | Legacy MFC container support (SketchUp 2013–2020) |
 | `vff.ts` | VFF/ZIP container handling (`fflate`-based) |
-| `triangulator.ts` | Planar polygon triangulation (ported `earcut`) |
+| `triangulator.ts` | Planar polygon triangulation (`earcut`) |
 | `transforms.ts` | 3D matrix transforms and coordinate conversions |
 | `observability.ts` | Progress/log callback types |
 | `errors.ts` | `SkpParseError` and structured failure context |
@@ -472,7 +472,7 @@ verified numbers before parsing very large files in this package.
 
 ## Requirements
 
-Node.js ≥ 16, or any modern browser. No native dependencies.
+Node.js ≥ 22.12.0 (building from source requires 22.18+, 24.11+, or 26+), or any modern browser. No native dependencies (pure-JavaScript runtime dependencies: `earcut`, `fflate`, `flatbuffers`).
 
 ## Used in Production
 

@@ -14,9 +14,10 @@ trip through IFC's verbose ASCII STEP format entirely.
 Ships as its own package, separate from the core
 [openskp](https://pub.dev/packages/openskp) package, because it needs
 [`package:flat_buffers`](https://pub.dev/packages/flat_buffers) — the core
-package has zero external dependencies, and this mirrors Python's own opt-in
-`pip install openskp[fragments]` extra instead of forcing every openskp Dart
-consumer to take a transitive dependency they don't need.
+package depends only on `archive`, `crypto`, `meta`, and `xml` (pure Dart, no
+native dependencies), and keeping Fragments separate mirrors Python's opt-in
+`pip install openskp[fragments]` extra instead of pulling `flat_buffers` into
+every `openskp` Dart consumer.
 
 ## Usage
 

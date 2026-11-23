@@ -291,7 +291,7 @@ local executable.
 - **Explicit over implicit** — Name things clearly, avoid magic numbers
 - **Parse, don't validate** — Convert raw bytes into typed structures as early as possible
 - **Fail loudly** — Throw descriptive errors with byte offsets when parsing fails
-- **Zero external dependencies** for the core parser — stdlib only
+- **No SketchUp SDK; keep dependencies minimal** — No proprietary SDK in any port. Only .NET (`OpenSkp`) and Rust use the standard library alone; Python requires `numpy`, `shapely`, `mapbox_earcut` (prebuilt wheels), `trimesh`, and `defusedxml`; TypeScript depends on `earcut`, `fflate`, and `flatbuffers`; Dart depends on `archive`, `crypto`, `meta`, and `xml`; C++ fetches `miniz`, `TinyGLTF`, and `FlatBuffers` headers privately via CMake. Avoid adding new runtime dependencies without a clear need
 - **Cross-platform parity** — If you add a feature in one language, document the expected behavior so other platforms can follow
 
 ---
