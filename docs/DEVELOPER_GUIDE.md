@@ -629,15 +629,15 @@ independently-improved version):
 
 Everything above this section is about reading `.skp` files. All five
 languages can also go the other direction: create a new `.skp` file from
-nothing, or load and extend a file that already exists. The write path has
-matured well past a proof of concept — every feature below has been
-validated feature-by-feature against the real SketchUp SDK, and it holds
-up rebuilding complex, real architectural models, not just synthetic test
-fixtures. It landed in Python first; TypeScript, .NET, Dart, and C++ were
-ported to the identical feature set, each cross-checked against Python's
-own already-SDK-validated output (byte-identical for TypeScript/.NET/Dart;
-structurally verified plus full CI for C++, which has no local compiler in
-this project's own development environment).
+nothing, or load and extend a file that already exists. The write path
+landed in Python first, where features are validated against SketchUp's C
+library; TypeScript, .NET, and Dart are checked byte-for-byte against
+Python's output in CI, C++ is checked against SketchUp via
+`packages/cpp/tools/check_native_skp.py` and tested across GCC, Clang, and
+MSVC in CI, and the unpublished Rust port is checked byte-for-byte against
+C++. See [LANGUAGE_PARITY.md § Writer validation](LANGUAGE_PARITY.md#writer-validation)
+for exact per-language verification and feature differences (for example,
+writing scenes is Python-only today).
 
 | Language | Write new `.skp` files | Start building | Edit an existing file |
 |---|---|---|---|

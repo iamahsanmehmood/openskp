@@ -26,9 +26,9 @@ first-class packages for TypeScript, .NET, Dart, and C++ — see the
 cross-language picture.
 
 This Python package can also *write* new `.skp` files from scratch, and
-edit existing ones, validated feature-by-feature against the real
-SketchUp SDK (see [Writing](#writing) below) — the same writer is also
-available in TypeScript, .NET, Dart, and C++.
+edit existing ones, validated against SketchUp's C library (see
+[Writing](#writing) below) — writers also ship in TypeScript, .NET, Dart,
+and C++ (see [Writer validation](https://github.com/iamahsanmehmood/openskp/blob/main/docs/LANGUAGE_PARITY.md#writer-validation)).
 
 ## Features
 
@@ -54,9 +54,9 @@ available in TypeScript, .NET, Dart, and C++.
   materials (solid + PNG/JPEG textures), layers, nested component
   definitions and groups, instance rotation/visibility, and custom
   attribute dictionaries — or load and extend an existing file with
-  `open_existing()`. No SDK involved; every feature validated against
-  the real SketchUp SDK. Also available in TypeScript, .NET, Dart, and
-  C++. See [Writing](#writing) below.
+  `open_existing()`. No SDK at runtime; validated against SketchUp's C
+  library. Writers also ship in TypeScript, .NET, Dart, and C++ (see
+  [Writer validation](https://github.com/iamahsanmehmood/openskp/blob/main/docs/LANGUAGE_PARITY.md#writer-validation)). See [Writing](#writing) below.
 
 ## Installation
 

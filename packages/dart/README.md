@@ -28,8 +28,9 @@ Python, TypeScript, .NET, and C++ — see the
 cross-language picture.
 
 This package can also *write* new `.skp` files from scratch, and edit
-existing ones, validated feature-by-feature against the real SketchUp
-SDK (see [Writing](#-writing) below).
+existing ones, checked byte-for-byte in CI against the SDK-validated
+Python writer (see [Writing](#-writing) below and
+[Writer validation](https://github.com/iamahsanmehmood/openskp/blob/main/docs/LANGUAGE_PARITY.md#writer-validation)).
 
 ---
 
@@ -67,8 +68,10 @@ Enable mobile (iOS/Android), desktop, and web developers to parse and build 3D S
   materials (solid + PNG/JPEG textures), layers, nested component
   definitions and groups, instance rotation/visibility, and custom
   attribute dictionaries — or load and extend an existing file with
-  `openExisting()`. No SDK involved; every feature validated against the
-  real SketchUp SDK. See [Writing](#-writing) below.
+  `openExisting()`. No SDK at runtime; checked byte-for-byte in CI against
+  the SDK-validated Python writer (see
+  [Writer validation](https://github.com/iamahsanmehmood/openskp/blob/main/docs/LANGUAGE_PARITY.md#writer-validation)
+  and [Writing](#-writing) below).
 
 ---
 

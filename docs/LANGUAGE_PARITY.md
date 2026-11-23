@@ -118,6 +118,19 @@ Both directions — exporting an `InstancedScene` to [ThatOpen's Fragments](http
 | 🎯 Dart | Git / path dependency on `packages/dart_fragments` (`openskp_fragments`) | `toFragments()`, `exportFragments()` | `fromFragments()`, `readFragments()` | 🔶 On `main`, **not published to pub.dev** (`publish_to: none`) | Self round-trip (including multi-shell splits); not tested on external `IfcImporter` `.frag` input |
 | ⚙️ C++ | Included in `OpenSkp::OpenSkp` (`<openskp/fragments_export.hpp>`) | `openskp::to_fragments()`, `export_fragments()` | `openskp::from_fragments()`, `read_fragments()` | ✅ [GitHub release](https://github.com/iamahsanmehmood/openskp/releases?q=cpp-) (`cpp-v1.6.0`) | Self round-trip (including multi-shell splits); not tested on external `IfcImporter` `.frag` input |
 
+### Writer validation
+
+Not every language's `.skp` writer (`create()` / `open_existing()`) is checked directly against SketchUp's C library — here is what each writer is actually verified against and what CI enforces on every writer change ([`.github/workflows/ci-writer-parity.yml`](../.github/workflows/ci-writer-parity.yml)):
+
+| Language | What the writer is checked against | Automated cross-writer CI check | Measured byte differences |
+|:---|:---|:---|:---|
+| 🐍 **Python** | SketchUp's C library (`SketchUpAPI`, including `--resave` to modern VFF) during feature development + self round-trip test suite | Baseline for the Python-scaffold group in [`ci-writer-parity.yml`](../.github/workflows/ci-writer-parity.yml) | Preserves `blank_v17.skp`'s scaffold GUID at `0x34..0x43`; starts entity persistent IDs at `19` (`data[1987] + 1`); writes opaque textured-material RGBA alpha `254` (`0xfe`) |
+| 📘 **TypeScript** | Python's writer output, byte-for-byte + self round-trip test suite | Asserted byte-identical to Python (ignoring per-definition/instance random UUIDs and `u32` definition Unix timestamps) in [`ci-writer-parity.yml`](../.github/workflows/ci-writer-parity.yml) | **0** non-GUID/timestamp bytes vs Python |
+| 🚀 **.NET** | Python's writer output, byte-for-byte + self round-trip test suite | Asserted byte-identical to Python (ignoring random UUIDs and `u32` definition timestamps) in [`ci-writer-parity.yml`](../.github/workflows/ci-writer-parity.yml) | **0** non-GUID/timestamp bytes vs Python |
+| 🎯 **Dart** | Python's writer output, byte-for-byte + self round-trip test suite | Asserted byte-identical to Python (ignoring random UUIDs and `u32` definition timestamps) in [`ci-writer-parity.yml`](../.github/workflows/ci-writer-parity.yml) | **0** non-GUID/timestamp bytes vs Python |
+| ⚙️ **C++** | SketchUp's C library via [`packages/cpp/tools/check_native_skp.py`](../packages/cpp/tools/check_native_skp.py) (including `--resave` to modern VFF) + native binary invariants + self round-trip test suite | Baseline for the C++ group + diffed against Python in [`ci-writer-parity.yml`](../.github/workflows/ci-writer-parity.yml) | Randomizes the 16-byte file GUID at `0x34..0x43`, starts entity persistent IDs at `18` (`kFirstNewPid = 18` vs Python's `19`), and writes opaque textured-material RGBA alpha `255` (`0xff`) vs Python's `254` (`0xfe`) |
+| 🦀 **Rust** *(unpublished)* | C++'s writer output, byte-for-byte (`tests/create_reference_test.rs`) + self round-trip test suite | Asserted byte-identical to C++ (ignoring random UUIDs and `u32` definition timestamps) in [`ci-writer-parity.yml`](../.github/workflows/ci-writer-parity.yml) and `ci-rust.yml` | **0** non-GUID/timestamp bytes vs C++ |
+
 ## 3. What's still outstanding after 1.6.0
 
 Nothing is unreleased on main: the 2026-11-22 synchronized 1.6.0 (see
