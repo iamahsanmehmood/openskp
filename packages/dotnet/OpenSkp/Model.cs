@@ -364,6 +364,18 @@ namespace OpenSkp
 
         public List<Style> Styles { get; set; } = new List<Style>();
 
+        /// <summary>The colour SketchUp shows on the front side of a face with
+        /// no paint on that side, <c>(R, G, B)</c> 0-255: the model's current
+        /// rendering options, which is what SketchUp displays even when the
+        /// style was changed and not saved (so it can differ from every entry
+        /// in <see cref="Styles"/>). Read from 2021+ files and from classic
+        /// files of SketchUp 4 to 2020; <c>null</c> when the file does not give
+        /// it (SketchUp 3).</summary>
+        public (int R, int G, int B)? FaceFrontColor { get; set; }
+
+        /// <summary>The same for the back side of a face.</summary>
+        public (int R, int G, int B)? FaceBackColor { get; set; }
+
         /// <summary>How many top-level entities of a classic (pre-2021) file
         /// the reader couldn't read. It keeps what it read before the first
         /// root record it can't parse and drops that record and everything

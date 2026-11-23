@@ -166,6 +166,12 @@ class SkpFile {
           name: st.name, frontColor: st.frontColor, backColor: st.backColor));
     }
 
+    final faceColors = parsed.faceColors;
+    if (faceColors != null) {
+      model.faceFrontColor = faceColors.$1;
+      model.faceBackColor = faceColors.$2;
+    }
+
     return model;
   }
 

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — TypeScript, .NET, Dart, C++ & Rust: the model's face colours (`face_front_color` / `face_back_color`) (#533)
+
+- Ports Python's #550 model rendering-options face-colour reader to TypeScript (`SkpModel.faceFrontColor` / `faceBackColor`), .NET (`SkpModel.FaceFrontColor` / `FaceBackColor`), Dart (`SkpModel.faceFrontColor` / `faceBackColor`), C++ (`SkpModel::face_front_color` / `face_back_color`), and Rust (`SkpModel::face_front_color` / `face_back_color`): read from 2021+ `model.dat` items `0x735C` / `0x735D` and from classic SketchUp 4–2020 rendering options after the model camera (`None` / `null` / unset for SketchUp 3).
+
 ### Fixed — Python: scenes use a component instance's own paint and tag in classic files (#596)
 
 - `build_scene()` and `build_instanced_scene()` read an instance's paint and tag from its 2021+ `D007` record only. In classic (pre-2021) files a painted component came out in its tag's colour, and every instance sat on its parent's tag. Both now come from the instance itself, and nested components inherit the paint.

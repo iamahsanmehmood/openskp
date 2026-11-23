@@ -281,5 +281,9 @@ pub fn build_model(p: RawParsed, o: &ParseOptions) -> SkpModel {
             modified: s.modified,
         });
     }
+    if let Some((front, back)) = p.face_colors {
+        m.face_front_color = Some(front);
+        m.face_back_color = Some(back);
+    }
     m
 }

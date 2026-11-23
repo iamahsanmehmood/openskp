@@ -19,7 +19,7 @@ use super::xml::{attr, attributes, find_element, find_open_tag, find_screenimage
 use super::{text, RawMaterial, RawParsed, RawStyle, RawTexture, TlvNode};
 use crate::errors::SkpParseError;
 use crate::legacy::parse_legacy;
-use crate::model::{StyleItem, StyleWatermark, Vec3, ViewCamera};
+use crate::model::{Color3, StyleItem, StyleWatermark, Vec3, ViewCamera};
 use crate::observability::{
     emit_log, emit_progress, LogLevel, ParseOptions, ParseStage, PROGRESS_INTERVAL,
 };
@@ -734,6 +734,7 @@ pub fn full_parse(data: &[u8], o: &ParseOptions) -> Result<RawParsed, SkpParseEr
     if !vertex_positions.is_empty() {
         p.dimensions = parse_dimensions(&model, &vertex_positions, &instance_world);
     }
+    p.face_colors = model_face_colors(&model);
     drop(model);
     let mut real_folders = BTreeSet::new();
     for folder in p.material_id_to_name.values() {
@@ -770,4 +771,22 @@ pub fn full_parse(data: &[u8], o: &ParseOptions) -> Result<RawParsed, SkpParseEr
         &format!("Parse complete: {} defs", p.definitions.len()),
     );
     Ok(p)
+}
+
+const FACE_FRONT_TAG: [u8; 6] = [0x5C, 0x73, 0x04, 0x00, 0x00, 0x00];
+const FACE_BACK_TAG: [u8; 6] = [0x5D, 0x73, 0x04, 0x00, 0x00, 0x00];
+
+fn model_face_colors(model_dat: &[u8]) -> Option<(Color3, Color3)> {
+    let len = model_dat.len();
+    let mut at = 0;
+    while at + 20 <= len {
+        if model_dat[at..at + 6] == FACE_FRONT_TAG && model_dat[at + 10..at + 16] == FACE_BACK_TAG {
+            return Some((
+                [model_dat[at + 6], model_dat[at + 7], model_dat[at + 8]],
+                [model_dat[at + 16], model_dat[at + 17], model_dat[at + 18]],
+            ));
+        }
+        at += 1;
+    }
+    None
 }
