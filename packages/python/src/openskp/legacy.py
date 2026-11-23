@@ -601,8 +601,12 @@ def _read_vertex(ar, r):
 def _read_edge(ar, r):
     _preamble(ar, r)
     db = _drawbase(ar, r)
-    s1, _, _ = ar.read_object(r, expect='CVertex')
-    s2, _, _ = ar.read_object(r, expect='CVertex')
+    s1, n1, _ = ar.read_object(r, expect='CVertex')
+    if n1 != 'CVertex':
+        raise LegacyParseError(f"edge vertex pointer resolved to {n1} {r.ctx()}")
+    s2, n2, _ = ar.read_object(r, expect='CVertex')
+    if n2 != 'CVertex':
+        raise LegacyParseError(f"edge vertex pointer resolved to {n2} {r.ctx()}")
     cs, cn, cv = ar.read_object(r)
     if cn not in (None, 'CCurve', 'CArcCurve'):
         raise LegacyParseError(f"edge curve pointer resolved to {cn} {r.ctx()}")
@@ -1634,18 +1638,20 @@ def _path_ref(ar, r, member=False):
 
 def _text_delimiter(r):
     """Where a text's string starts: the variable-length variant middle
-    ends in an 11-byte block `01 00 00 00 ?? 00 03 00 00 00 01` right
-    before it."""
+    ends in an 11-byte block `01 00 00 00 ?? 00 03 00 00 00 <00|01>` right
+    before it (`blk[6:10]` is the arrow type 0-8; `blk[10]` is the boolean
+    `display_leader` flag, 0 for screen or leaderless text and 1 otherwise)."""
     p = r.pos
     while True:
         idx = r.data.find(_STR_MARKER, p, r.pos + 512)
         if idx < 0:
             raise LegacyParseError(f"text delimiter not found {r.ctx()}")
-        blk = r.data[idx - 11:idx]
-        arrow = struct.unpack_from('<I', blk, 6)[0]
-        if (blk[:4] == b'\x01\x00\x00\x00'
-                and arrow <= 8 and blk[10] == 1):
-            return idx               # blk[6:10] is the ARROW TYPE (0-4 seen)
+        if idx >= 11:
+            blk = r.data[idx - 11:idx]
+            arrow = struct.unpack_from('<I', blk, 6)[0]
+            if (blk[:4] == b'\x01\x00\x00\x00'
+                    and arrow <= 8 and blk[10] <= 1):
+                return idx
         p = idx + 3
 
 
@@ -2469,7 +2475,11 @@ def _add_edge(builder, slot, e, slots):
     v1, v2 = e['v1'], e['v2']
     for vs in (v1, v2):
         ent = slots.get(vs)
-        if ent is not None and ent[2] is not None and vs not in builder.vertices:
+        if (ent is None or ent[0] != 'obj' or ent[1] != 'CVertex'
+                or not isinstance(ent[2], dict) or 'xyz' not in ent[2]):
+            got = ent[1] if ent is not None else None
+            raise LegacyParseError(f"edge {slot} vertex pointer {vs} resolved to {got}")
+        if vs not in builder.vertices:
             builder.vertices[vs] = tuple(ent[2]['xyz'])
     builder.edges[slot] = (v1, v2)
     db = e.get('db') or {}
@@ -2736,7 +2746,13 @@ def full_parse_legacy(skp_path: str) -> Dict[str, Any]:
         ) from e
 
     root_builder = _Builder()
-    _fill_builder(root_builder, root, slots)
+    try:
+        _fill_builder(root_builder, root, slots)
+    except Exception as e:
+        raise SkpParseError(
+            f"Failed while building root entities: {e}",
+            stage="legacy_defs", definition_id="ROOT",
+        ) from e
     try:
         model_attribute_dicts = _premodel_attribute_dictionaries(data)
     except Exception:  # noqa: BLE001 - the model's dictionaries are optional

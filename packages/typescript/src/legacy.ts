@@ -745,8 +745,14 @@ function readVertex(ar: Archive, r: R): any {
 function readEdge(ar: Archive, r: R): any {
   preamble(ar, r);
   const db = drawbase(ar, r);
-  const [s1] = ar.readObject(r, 'CVertex');
-  const [s2] = ar.readObject(r, 'CVertex');
+  const [s1, n1] = ar.readObject(r, 'CVertex');
+  if (n1 !== 'CVertex') {
+    throw new LegacyParseError(`edge vertex pointer resolved to ${n1} ${r.ctx()}`);
+  }
+  const [s2, n2] = ar.readObject(r, 'CVertex');
+  if (n2 !== 'CVertex') {
+    throw new LegacyParseError(`edge vertex pointer resolved to ${n2} ${r.ctx()}`);
+  }
   const [cs, cn, cv] = ar.readObject(r);
   if (cn !== null && cn !== 'CCurve' && cn !== 'CArcCurve') {
     throw new LegacyParseError(`edge curve pointer resolved to ${cn} ${r.ctx()}`);
@@ -1457,8 +1463,8 @@ export function readDimLinear(ar: Archive, r: R): any {
 }
 
 /** The text's string start: the variable-length variant middle ends in an
- * 11-byte block `01 00 00 00 ?? 00 <arrow type> 00 00 00 01` right before
- * it; the arrow type is 0-8 (Python's reader accepts the same range). */
+ * 11-byte block `01 00 00 00 ?? 00 <arrow type> 00 00 00 <00|01>` right before
+ * it (`blk[6]` is arrow type 0-8; `blk[10]` is boolean `display_leader`). */
 function textDelimiter(r: R): number {
   let p = r.pos;
   while (true) {
@@ -1466,13 +1472,15 @@ function textDelimiter(r: R): number {
     if (idx < 0) {
       throw new LegacyParseError(`text delimiter not found ${r.ctx()}`);
     }
-    const blk = r.data.subarray(idx - 11, idx);
-    if (
-      blk[0] === 0x01 && blk[1] === 0x00 && blk[2] === 0x00 && blk[3] === 0x00 &&
-      blk[6] <= 8 && blk[7] === 0x00 && blk[8] === 0x00 && blk[9] === 0x00 &&
-      blk[10] === 1
-    ) {
-      return idx;
+    if (idx >= 11) {
+      const blk = r.data.subarray(idx - 11, idx);
+      if (
+        blk[0] === 0x01 && blk[1] === 0x00 && blk[2] === 0x00 && blk[3] === 0x00 &&
+        blk[6] <= 8 && blk[7] === 0x00 && blk[8] === 0x00 && blk[9] === 0x00 &&
+        blk[10] <= 1
+      ) {
+        return idx;
+      }
     }
     p = idx + 3;
   }
@@ -2495,10 +2503,18 @@ function addEdge(builder: LegacyBuilder, slot: number, e: any, slots: Map<number
   const v1 = e.v1;
   const v2 = e.v2;
   for (const vs of [v1, v2]) {
-    if (vs === null || vs === undefined) continue;
+    if (vs === null || vs === undefined) {
+      throw new LegacyParseError(`edge ${slot} vertex pointer is null`);
+    }
     const ent = slots.get(vs);
-    if (ent !== undefined && ent[2] !== null && !builder.vertices.has(vs)) {
+    if (ent === undefined || ent[0] !== 'obj' || ent[1] !== 'CVertex') {
+      throw new LegacyParseError(`edge ${slot} vertex pointer ${vs} resolved to ${ent ? ent[1] : null}`);
+    }
+    if (ent[2] !== null && !builder.vertices.has(vs)) {
       const xyz = ent[2].xyz as number[];
+      if (!Array.isArray(xyz) || xyz.length < 3) {
+        throw new LegacyParseError(`edge ${slot} vertex ${vs} missing xyz`);
+      }
       builder.vertices.set(vs, [xyz[0], xyz[1], xyz[2]]);
     }
   }
@@ -2782,7 +2798,15 @@ export function parseLegacyToRaw(data: Uint8Array, options?: ParseOptions): Pars
   }
 
   const rootBuilder = new LegacyBuilder();
-  fillBuilder(rootBuilder, root, slots);
+  try {
+    fillBuilder(rootBuilder, root, slots);
+  } catch (e) {
+    throw new SkpParseError(`Failed while building root entities: ${(e as Error).message}`, {
+      stage: 'legacy_defs',
+      definitionId: 'ROOT',
+      cause: e,
+    });
+  }
   defsDict.set('ROOT', {
     guid: 'ROOT',
     name: 'ROOT_MODEL',

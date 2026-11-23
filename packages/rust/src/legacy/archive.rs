@@ -698,10 +698,30 @@ impl<'a> Archive<'a> {
                 self.preamble()?;
                 v.k = LegacyKind::Edge;
                 self.draw(v)?;
-                v.v1 = self.object(Some("CVertex"))?.slot;
-                v.v2 = self.object(Some("CVertex"))?.slot;
+                let q1 = self.object(Some("CVertex"))?;
+                if &*q1.name != "CVertex" {
+                    return Err(Error::runtime(format!(
+                        "edge vertex pointer resolved to {}",
+                        q1.name
+                    )));
+                }
+                let q2 = self.object(Some("CVertex"))?;
+                if &*q2.name != "CVertex" {
+                    return Err(Error::runtime(format!(
+                        "edge vertex pointer resolved to {}",
+                        q2.name
+                    )));
+                }
+                v.v1 = q1.slot;
+                v.v2 = q2.slot;
                 let curve = self.object(None)?;
                 if !curve.name.is_empty() {
+                    if &*curve.name != "CCurve" && &*curve.name != "CArcCurve" {
+                        return Err(Error::runtime(format!(
+                            "edge curve pointer resolved to {}",
+                            curve.name
+                        )));
+                    }
                     v.curve = Some(curve.slot);
                     v.curve_value = curve.v;
                 }
@@ -1195,7 +1215,7 @@ impl<'a> Archive<'a> {
                 && d[q + 7] == 0
                 && d[q + 8] == 0
                 && d[q + 9] == 0
-                && d[q + 10] == 1
+                && d[q + 10] <= 1
                 && d[q + 11] == 255
                 && d[q + 12] == 254
                 && d[q + 13] == 255

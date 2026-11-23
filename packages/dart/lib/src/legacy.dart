@@ -965,8 +965,14 @@ class LegacyReaders {
   static Object readEdge(Archive ar, LR r) {
     preamble(ar, r);
     final db = drawbase(ar, r);
-    final (s1, _, __) = ar.readObject(r, 'CVertex');
-    final (s2, _2, __2) = ar.readObject(r, 'CVertex');
+    final (s1, n1, __) = ar.readObject(r, 'CVertex');
+    if (n1 != 'CVertex') {
+      throw LegacyParseError('edge vertex pointer resolved to $n1 ${r.ctx()}');
+    }
+    final (s2, n2, __2) = ar.readObject(r, 'CVertex');
+    if (n2 != 'CVertex') {
+      throw LegacyParseError('edge vertex pointer resolved to $n2 ${r.ctx()}');
+    }
     final (cs, cn, cv) = ar.readObject(r);
     if (cn != null && cn != 'CCurve' && cn != 'CArcCurve') {
       throw LegacyParseError('edge curve pointer resolved to $cn ${r.ctx()}');
@@ -1669,8 +1675,8 @@ class LegacyReaders {
   }
 
   /// The text's string start: the variable-length variant middle ends in an
-  /// 11-byte block `01 00 00 00 ?? 00 <arrow type> 00 00 00 01` right before
-  /// it.
+  /// 11-byte block `01 00 00 00 ?? 00 <arrow type> 00 00 00 <00|01>` right
+  /// before it (`blk[10]` is boolean `display_leader`).
   static int _textDelimiter(LR r) {
     int p = r.pos;
     while (true) {
@@ -1678,17 +1684,19 @@ class LegacyReaders {
       if (idx < 0) {
         throw LegacyParseError('text delimiter not found ${r.ctx()}');
       }
-      final blk = Uint8List.sublistView(r.data, idx - 11, idx);
-      if (blk[0] == 0x01 &&
-          blk[1] == 0x00 &&
-          blk[2] == 0x00 &&
-          blk[3] == 0x00 &&
-          blk[6] <= 8 &&
-          blk[7] == 0x00 &&
-          blk[8] == 0x00 &&
-          blk[9] == 0x00 &&
-          blk[10] == 1) {
-        return idx;
+      if (idx >= 11) {
+        final blk = Uint8List.sublistView(r.data, idx - 11, idx);
+        if (blk[0] == 0x01 &&
+            blk[1] == 0x00 &&
+            blk[2] == 0x00 &&
+            blk[3] == 0x00 &&
+            blk[6] <= 8 &&
+            blk[7] == 0x00 &&
+            blk[8] == 0x00 &&
+            blk[9] == 0x00 &&
+            blk[10] <= 1) {
+          return idx;
+        }
       }
       p = idx + 3;
     }
@@ -2357,11 +2365,15 @@ class Legacy {
       GeometryBuilder builder, int slot, EdgeRec e, Map<int, SlotEntry> slots) {
     if (builder.edges.containsKey(slot)) return;
     for (final vs in [e.v1, e.v2]) {
-      if (vs == null) continue;
+      if (vs == null) {
+        throw LegacyParseError('edge $slot vertex pointer is null');
+      }
       final ent = slots[vs];
-      if (ent != null &&
-          ent.value != null &&
-          !builder.vertices.containsKey(vs)) {
+      if (ent == null || ent.value is! VertexRec) {
+        throw LegacyParseError(
+            'edge $slot vertex pointer $vs resolved to ${ent?.name}');
+      }
+      if (!builder.vertices.containsKey(vs)) {
         final xyz = (ent.value as VertexRec).xyz;
         builder.vertices[vs] = (xyz[0], xyz[1], xyz[2]);
       }
@@ -2659,7 +2671,15 @@ class Legacy {
     }
 
     final rootBuilder = GeometryBuilder();
-    _fillBuilder(rootBuilder, walkResult.root, slots);
+    try {
+      _fillBuilder(rootBuilder, walkResult.root, slots);
+    } catch (e) {
+      throw SkpParseException(
+        'Failed while building root entities: $e',
+        stage: 'legacy_defs',
+        cause: e,
+      );
+    }
 
     emitLog(
       options,

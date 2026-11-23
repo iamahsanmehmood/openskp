@@ -32,6 +32,7 @@ add_executable(
   legacy_anchored_texts_test.cpp
   legacy_dimension_paths_test.cpp
   legacy_layer_anchor_def_count_test.cpp
+  legacy_leaderless_text_and_edge_refs_test.cpp
   legacy_recursion_limit_test.cpp
   legacy_unread_root_entities_test.cpp
   legacy_dimension_geometry_test.cpp
