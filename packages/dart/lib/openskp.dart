@@ -22,7 +22,7 @@ export 'src/obj_export.dart' show toObj, toMtl, exportObj;
 export 'src/stl_export.dart' show toStlAscii, toStlBinary, exportStl;
 export 'src/ply_export.dart' show toPlyAscii, toPlyBinary, exportPly;
 export 'src/dxf_export.dart' show toDxf, exportDxf, metresToInches;
-export 'src/ifc_export.dart' show toIfc, exportIfc, generateIfcGuid, classifyElement;
+export 'src/ifc_export.dart' show toIfc, exportIfc, generateIfcGuid, classifyElement, metresToMm;
 export 'src/errors.dart' show SkpParseException;
 export 'src/observability.dart' show SkpLogLevel, ParseProgress, ParseOptions;
 export 'src/create.dart'

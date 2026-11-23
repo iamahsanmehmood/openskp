@@ -57,7 +57,7 @@ export { toOBJ, toMTL, exportOBJ } from './obj';
 export * from './stl';
 export * from './ply';
 export * from './dxf';
-export { toIFC, exportIFC, generateIFCGUID, classifyElement } from './ifc';
+export { toIFC, exportIFC, generateIFCGUID, classifyElement, METRES_TO_MM } from './ifc';
 export { toTypeScriptCode } from './codegen';
 export {
   create,

@@ -548,6 +548,9 @@ export interface SkpScene {
    * handful of photographic textures is several times larger with them than
    * without. */
   textures: SceneTexture[];
+  /** Each layer's hidden/visible state by layer name, read from the parsed
+   * file (`true` when hidden, `false` when visible). */
+  layerHidden: Record<string, boolean>;
 }
 
 /** Options shared by {@link buildScene} and {@link buildInstancedScene}. */
@@ -922,7 +925,15 @@ export function buildSceneFromParsed(
   options?: ParseOptions & SceneOptions
 ): SkpScene {
   const t0 = Date.now();
-  const { layerColors, layerIdToName, materialIdToName, materialsMap, materialsByFolder, defsDict } = parsed;
+  const {
+    layerColors,
+    layerHidden,
+    layerIdToName,
+    materialIdToName,
+    materialsMap,
+    materialsByFolder,
+    defsDict,
+  } = parsed;
 
   emitLog(options, 'info', `Building scene: ${defsDict.size} definitions available`);
   const instanceCounter = { count: 0 };
@@ -1282,10 +1293,26 @@ export function buildSceneFromParsed(
         }
       }
 
+      // Fallback order: an attribute-dict name/label/code override, then
+      // the instance's own explicit name, then the definition's own name
+      // IF it's not itself just SketchUp's auto-generated
+      // "Group#1"/"Component#12" placeholder, then finally the internal
+      // index. Mirrors instanced.ts's identical resolution (and Python's/
+      // C++'s own scene.py/instanced_scene.py) - see
+      // instanced-fixture-parity.test.ts, which depends on both trees
+      // resolving display names identically.
       const childDefName = defsDict.get(refIdx)?.name || '';
       const defNameIsReal = !!childDefName && !isGenericDefinitionName(childDefName);
+      const nameOverride = findNameOverride(attributeDicts);
       const instNameNonEmpty = !!inst.name;
-      const instName = instNameNonEmpty ? inst.name : (defNameIsReal ? childDefName : `Component_${refIdx}`);
+      const instName = instNameNonEmpty
+        ? inst.name
+        : defNameIsReal
+          ? childDefName
+          : `Component_${refIdx}`;
+      const displayName = nameOverride ?? instName;
+      const nameIsGenerated = nameOverride === null && !instNameNonEmpty && !defNameIsReal;
+
       const fullPathName = `${pathName} / ${instName}`;
       instanceCounter.count++;
       if (instanceCounter.count % PROGRESS_INTERVAL === 0) {
@@ -1305,19 +1332,6 @@ export function buildSceneFromParsed(
       const tx = (newMatrix[9] ?? 0) * 25.4;
       const ty = (newMatrix[10] ?? 0) * 25.4;
       const tz = (newMatrix[11] ?? 0) * 25.4;
-
-      // Fallback order: an attribute-dict name/label/code override, then
-      // the instance's own explicit name, then the definition's own name
-      // IF it's not itself just SketchUp's auto-generated
-      // "Group#1"/"Component#12" placeholder, then finally the internal
-      // index. Mirrors instanced.ts's identical resolution (and Python's/
-      // C++'s own scene.py/instanced_scene.py) - see
-      // instanced-fixture-parity.test.ts, which depends on both trees
-      // resolving display names identically.
-      const nameOverride = findNameOverride(attributeDicts);
-      const displayName = nameOverride ?? instName;
-      const nameIsGenerated = nameOverride === null && !instNameNonEmpty && !defNameIsReal;
-
       // Every OTHER attribute dictionary this instance carries -
       // dynamic_attributes is already surfaced separately as `properties`
       // above, and SU_InstanceSet is SketchUp's own always-present,
@@ -1352,7 +1366,7 @@ export function buildSceneFromParsed(
       };
       childInstancesInfo.push(instInfo);
 
-      pathUpdates.set(fullPathName, { properties, name: inst.name || '', attributeDictionaries });
+      pathUpdates.set(fullPathName, { properties, name: displayName, attributeDictionaries });
     }
 
     return childInstancesInfo;
@@ -1428,7 +1442,16 @@ export function buildSceneFromParsed(
       }
     : null;
 
-  return { sceneHierarchy, meshIndex, glbPrimitives, curveSets, gltfMaterials, textures, bounds };
+  return {
+    sceneHierarchy,
+    meshIndex,
+    glbPrimitives,
+    curveSets,
+    gltfMaterials,
+    textures,
+    bounds,
+    layerHidden: layerHidden ? Object.fromEntries(layerHidden) : {},
+  };
 }
 
 export function resolveMaterialFromMaps(

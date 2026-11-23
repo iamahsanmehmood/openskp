@@ -137,6 +137,10 @@ namespace OpenSkp
         /// deduplicated by source bytes. Empty when nothing placed in the
         /// scene is textured.</summary>
         public List<SceneTexture> Textures { get; set; } = new List<SceneTexture>();
+
+        /// <summary>Each layer's hidden/visible state by layer name, read from
+        /// the parsed file (<c>true</c> when hidden, <c>false</c> when visible).</summary>
+        public Dictionary<string, bool> LayerHidden { get; set; } = new Dictionary<string, bool>();
     }
 
     /// <summary>Bakes every instance actually placed in a parsed model into
@@ -548,9 +552,24 @@ namespace OpenSkp
                     {
                         childDefName = childDef.Name ?? "";
                     }
+                    // Fallback order: an attribute-dict name/label/code
+                    // override, then the instance's own explicit name, then
+                    // the definition's own name IF it's not itself just
+                    // SketchUp's auto-generated "Group#1"/"Component#12"
+                    // placeholder, then finally the internal index - the
+                    // only case with no real name anywhere in the source
+                    // file. Mirrors InstancedScene.cs's identical resolution
+                    // (and Python's/C++'s own scene.py/instanced_scene.py) -
+                    // see ResolvesTheSameLayersAndDynamicPropertiesPerNode in
+                    // OpenSkp.Tests, which depends on both trees resolving
+                    // display names identically.
                     bool defNameIsReal = !string.IsNullOrEmpty(childDefName) && !Geometry.IsGenericDefinitionName(childDefName);
+                    string? nameOverride = Geometry.FindNameOverride(inst.AttributeDicts);
                     bool instNameNonEmpty = !string.IsNullOrEmpty(inst.Name);
                     string instName = instNameNonEmpty ? inst.Name! : (defNameIsReal ? childDefName : $"Component_{refIdx}");
+                    string displayName = nameOverride ?? instName;
+                    bool nameIsGenerated = nameOverride == null && !instNameNonEmpty && !defNameIsReal;
+
                     string fullPathName = $"{pathName} / {instName}";
                     instanceCounter++;
                     if (instanceCounter % ParseTuning.ProgressInterval == 0)
@@ -565,10 +584,6 @@ namespace OpenSkp
                     double itx = newMatrix.Count > 9 ? newMatrix[9] * InchesToMm : 0.0;
                     double ity = newMatrix.Count > 10 ? newMatrix[10] * InchesToMm : 0.0;
                     double itz = newMatrix.Count > 11 ? newMatrix[11] * InchesToMm : 0.0;
-
-                    string? nameOverride = Geometry.FindNameOverride(inst.AttributeDicts);
-                    string displayName = nameOverride ?? instName;
-                    bool nameIsGenerated = nameOverride == null && !instNameNonEmpty && !defNameIsReal;
 
                     // Every OTHER attribute dictionary this instance carries -
                     // dynamic_attributes is already surfaced separately as
@@ -612,7 +627,7 @@ namespace OpenSkp
                     // state is identical: an instance's update is applied to
                     // every mesh under its path, and the outermost (most
                     // shallow) ancestor's update wins.
-                    pathUpdates[fullPathName] = (properties, inst.Name ?? "", attributeDictionaries);
+                    pathUpdates[fullPathName] = (properties, displayName, attributeDictionaries);
                 }
 
                 return childInstancesInfo;
@@ -683,6 +698,9 @@ namespace OpenSkp
                 CurveSets = curveSets,
                 GltfMaterials = gltfMaterials,
                 Textures = textures,
+                LayerHidden = parsed.LayerHidden != null
+                    ? new Dictionary<string, bool>(parsed.LayerHidden)
+                    : new Dictionary<string, bool>(),
             };
         }
 

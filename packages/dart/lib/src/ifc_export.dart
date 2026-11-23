@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'scene.dart';
 
 const double metresToInches = 39.37007874015748;
+const double metresToMm = 1000.0;
 const _ifcBase64 =
     '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_\$';
 
@@ -36,17 +37,24 @@ List<String>? _classifyByKeyword(String name) {
 
 /// Maps a geometry/component name to an IFC4 entity type and constructor.
 ///
-/// Tries [geomName] first, then falls back to [layerName] (many
-/// SketchUp-for-BIM workflows organize by tag/layer - "Walls", "Doors" -
-/// even when individual components are never renamed away from
-/// SketchUp's own defaults like "Component#109415"), then falls back to
-/// a generic, untyped element if neither matches.
-List<String> classifyElement(String geomName, [String layerName = '']) {
+/// Tries [geomName] first, then falls back to [layerName], then (when
+/// [classifyUsingFullPath] is `true`) to [pathName], and finally to a
+/// generic, untyped element if nothing matches.
+List<String> classifyElement(
+  String geomName, [
+  String layerName = '',
+  String pathName = '',
+  bool classifyUsingFullPath = false,
+]) {
   final byName = _classifyByKeyword(geomName);
   if (byName != null) return byName;
   if (layerName.isNotEmpty) {
     final byLayer = _classifyByKeyword(layerName);
     if (byLayer != null) return byLayer;
+  }
+  if (classifyUsingFullPath && pathName.isNotEmpty) {
+    final byPath = _classifyByKeyword(pathName);
+    if (byPath != null) return byPath;
   }
   return ['IFCBUILDINGELEMENTPROXY', 'IfcBuildingElementProxy'];
 }
@@ -78,11 +86,14 @@ List<double> getPrimRgb(Scene scene, int primMatIdx) {
  */
 String toIfc(
   Scene scene, {
-  double scale = metresToInches,
+  double scale = metresToMm,
   String schema = 'IFC4',
   List<String> Function(String geomName, String layerName)? classifier,
+  bool classifyUsingFullPath = false,
 }) {
-  final classify = classifier ?? classifyElement;
+  final List<String> Function(String, String, String) classify = classifier != null
+      ? (name, layer, _) => classifier(name, layer)
+      : (name, layer, path) => classifyElement(name, layer, path, classifyUsingFullPath);
   final schemaStr = schema.toUpperCase();
   final nowIso = DateTime.now().toUtc().toIso8601String().split('.').first;
   final timestampEpoch = DateTime.now().toUtc().millisecondsSinceEpoch ~/ 1000;
@@ -178,22 +189,48 @@ String toIfc(
   final layerItems = <String, List<int>>{};
   final matStyleCache = <String, int>{};
 
+  void writePset(int productId, String psetName, Map<String, String> props) {
+    if (props.isEmpty) return;
+
+    final propValIds = <int>[];
+    for (final entry in props.entries) {
+      final cleanK = sanitizeName(entry.key);
+      final cleanV = sanitizeName(entry.value);
+      final propId = nextId();
+      lines.add(
+          '#$propId=IFCPROPERTYSINGLEVALUE(\'$cleanK\',\$,IFCTEXT(\'$cleanV\'),\$);');
+      propValIds.add(propId);
+    }
+
+    final psetId = nextId();
+    final propRefs = propValIds.map((pid) => '#$pid').join(',');
+    lines.add(
+        '#$psetId=IFCPROPERTYSET(\'${generateIfcGuid()}\',#$ownerHistId,\'${sanitizeName(psetName)}\',\$,($propRefs));');
+    lines.add(
+        '#${nextId()}=IFCRELDEFINESBYPROPERTIES(\'${generateIfcGuid()}\',#$ownerHistId,\$,\$,(#$productId),#$psetId);');
+  }
+
   for (final prim in scene.glbPrimitives) {
     final triCount = prim.indices.length ~/ 3;
     final vCount = prim.positions.length ~/ 3;
     if (triCount == 0 || vCount == 0) continue;
 
-    final geomName = sanitizeName(prim.geomName);
     final meta = scene.meshIndex[prim.geomName];
-    final layerName = sanitizeName(meta?.layer ?? 'Layer0');
-    final classification = classify(geomName, layerName);
+    final displayName = (meta != null && meta.name.isNotEmpty)
+        ? sanitizeName(meta.name)
+        : sanitizeName(prim.geomName);
+    final layerName = (meta != null && meta.layer.isNotEmpty)
+        ? sanitizeName(meta.layer)
+        : 'Layer0';
+    final pathName = meta?.path ?? '';
+    final classification = classify(displayName, layerName, pathName);
     final stepType = classification[0];
 
     final ptCoords = <String>[];
     for (int i = 0; i < vCount; i++) {
       final vx = (prim.positions[i * 3] * scale).toStringAsFixed(6);
-      final vy = (prim.positions[i * 3 + 1] * scale).toStringAsFixed(6);
-      final vz = (prim.positions[i * 3 + 2] * scale).toStringAsFixed(6);
+      final vy = (-prim.positions[i * 3 + 2] * scale).toStringAsFixed(6);
+      final vz = (prim.positions[i * 3 + 1] * scale).toStringAsFixed(6);
       ptCoords.add('($vx,$vy,$vz)');
     }
 
@@ -232,7 +269,7 @@ String toIfc(
 
       final styleId = nextId();
       lines.add(
-          '#$styleId=IFCSURFACESTYLE(\'${geomName}_Material\',.BOTH.,(#$renderingId));');
+          '#$styleId=IFCSURFACESTYLE(\'${displayName}_Material\',.BOTH.,(#$renderingId));');
 
       styleAssignId = nextId();
       lines.add('#$styleAssignId=IFCPRESENTATIONSTYLEASSIGNMENT((#$styleId));');
@@ -260,32 +297,17 @@ String toIfc(
     final prodGuid = generateIfcGuid();
     if (stepType == 'IFCBUILDINGELEMENTPROXY') {
       lines.add(
-          '#$productId=$stepType(\'$prodGuid\',#$ownerHistId,\'$geomName\',\$,\$,#$prodPlacementId,#$prodShapeId,\$,.NOTDEFINED.);');
+          '#$productId=$stepType(\'$prodGuid\',#$ownerHistId,\'$displayName\',\$,\$,#$prodPlacementId,#$prodShapeId,\$,.NOTDEFINED.);');
     } else {
       lines.add(
-          '#$productId=$stepType(\'$prodGuid\',#$ownerHistId,\'$geomName\',\$,\$,#$prodPlacementId,#$prodShapeId,\$,\$);');
+          '#$productId=$stepType(\'$prodGuid\',#$ownerHistId,\'$displayName\',\$,\$,#$prodPlacementId,#$prodShapeId,\$,\$);');
     }
     productIds.add(productId);
 
-    if (meta != null && meta.properties.isNotEmpty) {
-      final propValIds = <int>[];
-      for (final entry in meta.properties.entries) {
-        final cleanK = sanitizeName(entry.key);
-        final cleanV = sanitizeName(entry.value);
-        final propId = nextId();
-        lines.add(
-            '#$propId=IFCPROPERTYSINGLEVALUE(\'$cleanK\',\$,IFCTEXT(\'$cleanV\'),\$);');
-        propValIds.add(propId);
-      }
-
-      if (propValIds.isNotEmpty) {
-        final psetId = nextId();
-        final propRefs = propValIds.map((pid) => '#$pid').join(',');
-        lines.add(
-            '#$psetId=IFCPROPERTYSET(\'${generateIfcGuid()}\',#$ownerHistId,\'Pset_CustomProperties\',\$,($propRefs));');
-
-        lines.add(
-            '#${nextId()}=IFCRELDEFINESBYPROPERTIES(\'${generateIfcGuid()}\',#$ownerHistId,\$,\$,(#$productId),#$psetId);');
+    if (meta != null) {
+      writePset(productId, 'Pset_CustomProperties', meta.properties);
+      for (final dictEntry in meta.attributeDictionaries.entries) {
+        writePset(productId, 'Pset_${dictEntry.key}', dictEntry.value);
       }
     }
   }
@@ -295,8 +317,9 @@ String toIfc(
     final itemIds = layerItems[lName]!;
     if (itemIds.isNotEmpty) {
       final itemRefs = itemIds.map((iid) => '#$iid').join(',');
+      final layerOn = scene.layerHidden[lName] == true ? '.F.' : '.T.';
       lines.add(
-          '#${nextId()}=IFCPRESENTATIONLAYERASSIGNMENT(\'$lName\',\$,($itemRefs),\$);');
+          '#${nextId()}=IFCPRESENTATIONLAYERWITHSTYLE(\'$lName\',\$,($itemRefs),\$,$layerOn,.F.,.F.,());');
     }
   }
 
@@ -314,13 +337,19 @@ String toIfc(
 void exportIfc(
   Scene scene,
   String outputPath, {
-  double scale = metresToInches,
+  double scale = metresToMm,
   String schema = 'IFC4',
   List<String> Function(String geomName, String layerName)? classifier,
+  bool classifyUsingFullPath = false,
 }) {
   final file = File(outputPath);
   file.parent.createSync(recursive: true);
-  final text =
-      toIfc(scene, scale: scale, schema: schema, classifier: classifier);
+  final text = toIfc(
+    scene,
+    scale: scale,
+    schema: schema,
+    classifier: classifier,
+    classifyUsingFullPath: classifyUsingFullPath,
+  );
   file.writeAsStringSync(text);
 }

@@ -21,6 +21,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **TypeScript, .NET & Dart**: `Edge` and `Face` now expose their own resolved `layer` / `Layer` name (`""` when the element carries no explicit layer reference), read from VFF `D007 > D207` and the classic drawbase layer id, matching C++ (#526) and Rust.
 - **All 6 languages**: `build_scene` and `build_instanced_scene` now resolve a definition's fallback layer from the majority non-default layer of its faces when present (previously missing in Python's `build_instanced_scene`, and in both scene builders in TypeScript, .NET, Dart, C++ and Rust), so unpainted face sides and nested placements in classic files such as `chair_and_table.skp` take the definition's tag colour instead of `Layer0`.
 
+### Fixed — TypeScript, .NET & Dart: IFC export units/axes, real instance names, layer visibility, plugin Psets, and opt-in full-path classification (#285)
+
+- Ports the four bundled IFC4 exporter fixes already in Python and C++/Rust to TypeScript
+  (`toIFC` / `exportIFC`), .NET (`IfcExport.ToIfc` / `ExportIfc`), and Dart (`toIfc` / `exportIfc`):
+  default `scale` now matches the declared millimetre `IFCSIUNIT` (`1000.0` instead of
+  `39.37007874`), vertex positions convert from glTF Y-up `(x, y, z)` back to IFC Z-up
+  `(x, -z, y)`, elements and surface styles use `MeshMetadata.name` rather than the internal
+  `geomName` lookup key, presentation layers emit `IFCPRESENTATIONLAYERWITHSTYLE` with `LayerOn`
+  reflecting the new `Scene.layerHidden` (`SkpScene.layerHidden` / `Scene.LayerHidden`), every
+  non-empty third-party dictionary in `MeshMetadata.attributeDictionaries` becomes its own
+  `Pset_<dict>` property set, and `classifyElement` / `toIFC` gain opt-in
+  `classifyUsingFullPath` keyword fallback.
+- Also fixes baked-scene display-name backfilling in TypeScript, .NET, and Dart (`pathUpdates`
+  previously overwrote `MeshMetadata.name` with `""` whenever an instance took its name from its
+  component definition or a plugin override).
+
 ### Fixed — Python: scenes use a component instance's own paint and tag in classic files (#596)
 
 - `build_scene()` and `build_instanced_scene()` read an instance's paint and tag from its 2021+ `D007` record only. In classic (pre-2021) files a painted component came out in its tag's colour, and every instance sat on its parent's tag. Both now come from the instance itself, and nested components inherit the paint.
