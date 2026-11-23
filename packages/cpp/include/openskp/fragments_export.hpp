@@ -6,6 +6,7 @@
 
 #include <openskp/export.hpp>
 #include <openskp/instanced_scene.hpp>
+#include <openskp/observability.hpp>
 
 namespace openskp {
 
@@ -39,9 +40,13 @@ OPENSKP_EXPORT void export_fragments(const InstancedScene& scene,
 /// at their defaults, since the Fragments format doesn't carry them
 /// separately from the `Name` attribute this function does extract.
 OPENSKP_EXPORT InstancedScene from_fragments(const std::vector<std::uint8_t>& data);
+OPENSKP_EXPORT InstancedScene from_fragments(const std::vector<std::uint8_t>& data,
+                                             const ParseOptions& options);
 
 /// Reads a `.frag` file from disk into an InstancedScene. See
 /// from_fragments() for the full contract and known gaps.
 OPENSKP_EXPORT InstancedScene read_fragments(const std::filesystem::path& path);
+OPENSKP_EXPORT InstancedScene read_fragments(const std::filesystem::path& path,
+                                             const ParseOptions& options);
 
 }  // namespace openskp

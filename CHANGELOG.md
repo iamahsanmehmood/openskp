@@ -32,6 +32,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   while keeping tag colours on `layers` and preserving any genuine user material whose name starts
   with `Layer_`.
 
+### Fixed — All 6 languages: library no longer writes warnings to stderr or console (#556)
+
+- Python now attaches `logging.NullHandler()` to the `openskp` logger in `openskp/__init__.py` so unconfigured `logger.warning(...)` calls no longer fall through to Python's last-resort stderr handler, and `openskp.export.fragments.from_fragments` logs unsupported-representation warnings via `logging` instead of `warnings.warn`.
+- TypeScript (`fromFragments`), .NET (`FragmentsExport.FromFragments` / `ReadFragments`), Dart (`fromFragments` / `readFragments` in `openskp_fragments`), C++ (`from_fragments` / `read_fragments`) and Rust (`from_fragments` / `from_fragments_with_options` / `read_fragments_with_options`) now route unsupported-representation warnings through each port's `ParseOptions` / `SkpParseOptions` log callback instead of `console.warn`, `Console.Error`, `stderr`, `std::cerr` or `eprintln!`.
+
 ### Fixed — All 6 languages: partial reads of classic `.skp` files are reported (#552)
 
 - The classic (pre-2021 MFC) root entity reader stops at the first top-level record it cannot

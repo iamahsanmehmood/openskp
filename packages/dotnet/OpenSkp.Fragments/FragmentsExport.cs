@@ -995,7 +995,12 @@ namespace OpenSkp.Fragments
         /// <see cref="InstancedNode.AttributeDictionaries"/> are left at
         /// their defaults, since the Fragments format doesn't carry them
         /// separately from the <c>Name</c> attribute this does extract.</summary>
-        public static InstancedScene FromFragments(byte[] data)
+        public static InstancedScene FromFragments(byte[] data) => FromFragments(data, null);
+
+        /// <summary>Parses a real <c>.frag</c> file's bytes into an
+        /// <see cref="InstancedScene"/>, routing non-fatal warnings through
+        /// <paramref name="options"/> instead of writing to the console.</summary>
+        public static InstancedScene FromFragments(byte[] data, SkpParseOptions? options)
         {
             byte[] rawBytes;
             try { rawBytes = data.Length > 2 ? ZlibDecompress(data) : data; }
@@ -1165,7 +1170,8 @@ namespace OpenSkp.Fragments
                     {
                         if (!warnedUnsupported)
                         {
-                            Console.Error.WriteLine(
+                            options?.OnLog?.Invoke(
+                                SkpLogLevel.Warning,
                                 $"OpenSkp.Fragments.FromFragments: skipping a sample with unsupported " +
                                 $"RepresentationClass={repClass} (only SHELL is read today).");
                             warnedUnsupported = true;
@@ -1287,8 +1293,14 @@ namespace OpenSkp.Fragments
         }
 
         /// <summary>Reads a <c>.frag</c> file from disk into an
-        /// <see cref="InstancedScene"/>. See <see cref="FromFragments"/> for
+        /// <see cref="InstancedScene"/>. See <see cref="FromFragments(byte[])"/> for
         /// the full contract and known gaps.</summary>
-        public static InstancedScene ReadFragments(string path) => FromFragments(File.ReadAllBytes(path));
+        public static InstancedScene ReadFragments(string path) => ReadFragments(path, null);
+
+        /// <summary>Reads a <c>.frag</c> file from disk into an
+        /// <see cref="InstancedScene"/>, routing non-fatal warnings through
+        /// <paramref name="options"/>.</summary>
+        public static InstancedScene ReadFragments(string path, SkpParseOptions? options) =>
+            FromFragments(File.ReadAllBytes(path), options);
     }
 }

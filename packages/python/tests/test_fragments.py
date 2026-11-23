@@ -13,6 +13,7 @@ scale/mirror rejection behavior that has no equivalent in the real
 importer to compare against.
 """
 import json
+import logging
 import math
 import pathlib
 import zlib
@@ -834,7 +835,7 @@ class TestFromFragments:
         assert sum(len(r.primitives) for r in scene.mesh_resources) > 0
         assert _count_nodes(scene.scene_hierarchy) > 1
 
-    def test_unsupported_representation_class_warns_instead_of_silently_misreading(self):
+    def test_unsupported_representation_class_warns_instead_of_silently_misreading(self, caplog):
         """A sample referencing a CIRCLE_EXTRUSION representation (round
         profiles - rebar, pipes; real IfcImporter output can contain
         these) has no shell reader yet - must be skipped with a warning,
@@ -856,8 +857,9 @@ class TestFromFragments:
         struct_pos = rep._tab.Pos
         patched[struct_pos + 28] = _RC.RepresentationClass.CIRCLE_EXTRUSION
 
-        with pytest.warns(UserWarning, match="unsupported RepresentationClass"):
+        with caplog.at_level(logging.WARNING, logger="openskp.export.fragments"):
             result = fragments.from_fragments(bytes(patched))
+        assert "unsupported RepresentationClass" in caplog.text
         # Both items share this one (now-patched) representation, so every
         # sample referencing it is skipped - zero primitives anywhere in
         # the resulting scene, not a crash and not misread geometry.
