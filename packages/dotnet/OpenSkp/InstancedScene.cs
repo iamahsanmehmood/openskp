@@ -301,17 +301,27 @@ namespace OpenSkp
             // repaint geometry.
             string? MeshResourceForBuilder(
                 GeometryBuilder builder, string defName, long? defId,
-                (int R, int G, int B)? inheritedColor, string layer)
+                (int R, int G, int B)? inheritedColor, string layer,
+                Geometry.RawMaterial? inheritedMaterial = null)
             {
                 if (builder.Faces.Count == 0) return null;
 
                 var fallbackColor = inheritedColor ?? GetLayerColor(layer);
-                var key = $"{(defId.HasValue ? defId.Value.ToString() : "ROOT")}|{fallbackColor.R},{fallbackColor.G},{fallbackColor.B}";
+                var matPart = inheritedMaterial != null
+                    ? $"|{inheritedMaterial.Name}:{FaceGroups.ResolveTransparency(inheritedMaterial)}"
+                    : "";
+                var key = $"{(defId.HasValue ? defId.Value.ToString() : "ROOT")}|{fallbackColor.R},{fallbackColor.G},{fallbackColor.B}{matPart}";
                 if (resourceIdByKey.TryGetValue(key, out var hit)) return hit;
 
                 var faceGroups = FaceGroups.BuildLocalFaceGroups(builder, new FaceGroups.Context
                 {
-                    ResolveMaterial = ResolveMaterial,
+                    ResolveMaterial = matId =>
+                    {
+                        var resolved = ResolveMaterial(matId);
+                        return resolved.Mat != null || inheritedMaterial == null
+                            ? resolved
+                            : (inheritedMaterial, (inheritedMaterial.R, inheritedMaterial.G, inheritedMaterial.B));
+                    },
                     TextureIndexFor = TextureIndexFor,
                     FallbackColor = fallbackColor,
                     DefinitionId = defId,
@@ -399,14 +409,15 @@ namespace OpenSkp
                 return resourceId;
             }
 
-            string? MeshResourceFor(long defId, (int R, int G, int B)? inheritedColor, string layer)
+            string? MeshResourceFor(long defId, (int R, int G, int B)? inheritedColor, string layer, Geometry.RawMaterial? inheritedMaterial = null)
             {
                 if (!defsDict.TryGetValue(defId, out var d)) return null;
-                return MeshResourceForBuilder(d.Builder, d.Name ?? "", defId, inheritedColor, layer);
+                return MeshResourceForBuilder(d.Builder, d.Name ?? "", defId, inheritedColor, layer, inheritedMaterial);
             }
 
             List<InstancedNode> Walk(
-                long defId, List<double> currentMatrix, string parentLayer, (int R, int G, int B)? inheritedColor)
+                long defId, List<double> currentMatrix, string parentLayer, (int R, int G, int B)? inheritedColor,
+                Geometry.RawMaterial? inheritedMaterial = null)
             {
                 if (!defsDict.TryGetValue(defId, out var d))
                 {
@@ -420,7 +431,7 @@ namespace OpenSkp
                 }
                 try
                 {
-                    return WalkBuilder(d.Builder, currentMatrix, parentLayer, inheritedColor);
+                    return WalkBuilder(d.Builder, currentMatrix, parentLayer, inheritedColor, inheritedMaterial);
                 }
                 finally
                 {
@@ -429,7 +440,8 @@ namespace OpenSkp
             }
 
             List<InstancedNode> WalkBuilder(
-                GeometryBuilder builder, List<double> currentMatrix, string parentLayer, (int R, int G, int B)? inheritedColor)
+                GeometryBuilder builder, List<double> currentMatrix, string parentLayer, (int R, int G, int B)? inheritedColor,
+                Geometry.RawMaterial? inheritedMaterial = null)
             {
                 var nodes = new List<InstancedNode>();
                 foreach (var inst in builder.Instances)
@@ -439,9 +451,23 @@ namespace OpenSkp
 
                     string lName = parentLayer;
                     (int R, int G, int B)? instColor = inheritedColor;
+                    Geometry.RawMaterial? instMaterial = inheritedMaterial;
                     var properties = inst.Properties != null
                         ? new Dictionary<string, string>(inst.Properties)
                         : new Dictionary<string, string>();
+
+                    // A classic (pre-2021) instance has no D007: its own tag
+                    // and paint were read with it.
+                    if (inst.LayerId is long ownLayerId && layerIdToName.TryGetValue(ownLayerId, out var ownLayerName))
+                    {
+                        lName = ownLayerName;
+                    }
+                    var (paintedMat, paintedColor) = ResolveMaterial(inst.MaterialId);
+                    if (paintedMat != null)
+                    {
+                        instColor = paintedColor;
+                        instMaterial = paintedMat;
+                    }
 
                     var d007 = inst.Children.FirstOrDefault(c => c.Tag == "D007");
                     if (d007 != null)
@@ -461,7 +487,11 @@ namespace OpenSkp
                             {
                                 var mat = materials.TryGetValue(matName, out var m1) ? m1
                                     : materialsByFolder.TryGetValue(matName, out var m2) ? m2 : null;
-                                if (mat != null) instColor = (mat.R, mat.G, mat.B);
+                                if (mat != null)
+                                {
+                                    instColor = (mat.R, mat.G, mat.B);
+                                    instMaterial = mat;
+                                }
                             }
                         }
                         try
@@ -484,7 +514,7 @@ namespace OpenSkp
                     }
 
                     var children = refIdx.HasValue
-                        ? Walk(refIdx.Value, newMatrix, lName, instColor)
+                        ? Walk(refIdx.Value, newMatrix, lName, instColor, instMaterial)
                         : new List<InstancedNode>();
 
                     double itx = newMatrix.Count > 9 ? newMatrix[9] * InchesToMm : 0.0;
@@ -539,7 +569,7 @@ namespace OpenSkp
                         Properties = properties,
                         AttributeDictionaries = attributeDictionaries,
                         Guid = inst.RefGuid ?? "",
-                        MeshResourceId = refIdx.HasValue ? MeshResourceFor(refIdx.Value, instColor, lName) : null,
+                        MeshResourceId = refIdx.HasValue ? MeshResourceFor(refIdx.Value, instColor, lName, instMaterial) : null,
                         Children = children,
                     });
                 }

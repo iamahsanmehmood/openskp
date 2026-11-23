@@ -297,8 +297,9 @@ class SceneBuilder {
       List<double> currentMatrix,
       String parentLayer,
       String pathName,
-      (int, int, int)? inheritedColor,
-    ) {
+      (int, int, int)? inheritedColor, [
+      RawMaterial? inheritedMaterial,
+    ]) {
       if (builder.faces.isNotEmpty) {
         // Group faces sharing a resolved (color, doubleSided, texture)
         // identity into one mesh each, in local space - shared with the
@@ -315,7 +316,9 @@ class SceneBuilder {
         final faceGroups = buildLocalFaceGroups(
           builder,
           FaceGroupContext(
-            resolveMaterial: (matId) => _resolveMaterial(matId, materialIdToName, materials, materialsByFolder),
+            resolveMaterial: (matId) =>
+                _resolveMaterial(matId, materialIdToName, materials, materialsByFolder) ??
+                inheritedMaterial,
             textureIndexFor: textureIndexFor,
             fallbackColor: fallbackColor,
             definitionId: defId,
@@ -431,12 +434,25 @@ class SceneBuilder {
 
         var lName = parentLayer;
         (int, int, int)? instColor = inheritedColor;
+        RawMaterial? instMaterial = inheritedMaterial;
         // Legacy (pre-2021 MFC) instances carry a precomputed `properties`
         // map (see legacy.dart's extractLegacyDynamicProperties) - VFF
         // instances don't set this, so this stays {} for them and gets
         // overwritten below via the D007/DC05 TLV walk instead.
         var properties = Map<String, String>.from(inst.properties ?? {});
         Map<String, Map<String, Object?>>? instAttributeDicts;
+
+        // A classic (pre-2021) instance has no D007: its own tag and paint
+        // were read with it.
+        if (inst.layerId != null) {
+          lName = layerIdToName[inst.layerId!] ?? parentLayer;
+        }
+        final painted =
+            _resolveMaterial(inst.materialId, materialIdToName, materials, materialsByFolder);
+        if (painted != null) {
+          instColor = (painted.r, painted.g, painted.b);
+          instMaterial = painted;
+        }
 
         final d007 = inst.children.where((c) => c.tag == 'D007').firstOrNull;
         if (d007 != null) {
@@ -452,7 +468,10 @@ class SceneBuilder {
             final matName = materialIdToName[instMatId];
             if (matName != null) {
               final mat = materials[matName] ?? materialsByFolder[matName];
-              if (mat != null) instColor = (mat.r, mat.g, mat.b);
+              if (mat != null) {
+                instColor = (mat.r, mat.g, mat.b);
+                instMaterial = mat;
+              }
             }
           }
           try {
@@ -484,7 +503,15 @@ class SceneBuilder {
           }
           try {
             childNodes = instantiateBuilder(
-                childDef.builder, childDef.name ?? '', refIdx, newMatrix, lName, fullPathName, instColor);
+              childDef.builder,
+              childDef.name ?? '',
+              refIdx,
+              newMatrix,
+              lName,
+              fullPathName,
+              instColor,
+              instMaterial,
+            );
           } finally {
             activeDefinitions.remove(refIdx);
           }
