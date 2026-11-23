@@ -1,9 +1,11 @@
 name: openskp_fragments
-description: Direct SketchUp (.skp) -> ThatOpen Fragments (.frag) export for OpenSkp - EXPERIMENTAL. Separate, opt-in package (mirrors Python's `pip install openskp[fragments]` extra) so the core openskp package avoids taking flat_buffers for every other consumer; this package carries the flat_buffers dependency Fragments export needs.
+description: Direct SketchUp (.skp) <-> ThatOpen Fragments (.frag) export and import for OpenSkp. Separate, opt-in package (mirrors Python's `pip install "openskp[fragments]"` extra) so the core openskp package avoids taking flat_buffers for every other consumer; on main only, not published to pub.dev.
 version: 1.6.0
-# TODO(release): remove once the path dependency below is switched to a
-# hosted openskp version (see that dependency's own comment) - a
-# publish_to: none package can't be published to pub.dev.
+# Kept unpublished on pub.dev (`publish_to: none`): `release-dart.yml`
+# publishes only `packages/dart`, and local/CI builds link `openskp` via a
+# monorepo path dependency below. To publish this package in the future,
+# replace `path: ../dart` with `openskp: ^1.6.0`, remove `publish_to: none`,
+# and add a release step.
 publish_to: none
 homepage: https://openskp.com
 repository: https://github.com/iamahsanmehmood/openskp/tree/main/packages/dart_fragments
@@ -19,12 +21,8 @@ environment:
   sdk: ^3.0.0
 
 dependencies:
-  # TODO(release): path dependency for local dev/CI only - `dart pub
-  # publish` refuses a package with a path dependency. Switch this to a
-  # hosted `openskp: ^<next-version>` constraint once the core `openskp`
-  # package's next version (carrying InstancedNode.guid/nameIsGenerated
-  # and InstancedScene.layerHidden - see openskp#285) is itself published
-  # to pub.dev, then this package can be published too.
+  # Monorepo path dependency for local dev/CI while `openskp_fragments` is
+  # unpublished (`publish_to: none` above).
   openskp:
     path: ../dart
   flat_buffers: ^25.9.23

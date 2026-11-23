@@ -28,7 +28,7 @@ the repository with the same version number but is not on crates.io yet.
 | TypeScript | [1.6.0 on npm](https://www.npmjs.com/package/openskp) | At parity except the backlog items below |
 | .NET | [1.6.0 on NuGet](https://www.nuget.org/packages/OpenSkp) | At parity except the backlog items below |
 | Dart | [1.6.0 on pub.dev](https://pub.dev/packages/openskp) | At parity except the backlog items below |
-| C++ | [1.6.0 on GitHub releases](https://github.com/iamahsanmehmood/openskp/releases?q=cpp-) | Closest to Python — only missing Fragments reading, loose-edge/curve support, and IFC curve annotations |
+| C++ | [1.6.0 on GitHub releases](https://github.com/iamahsanmehmood/openskp/releases?q=cpp-) | Closest to Python — missing loose-edge/curve support and IFC curve annotations (see [docs/LANGUAGE_PARITY.md](docs/LANGUAGE_PARITY.md)) |
 
 Each language is released independently — see
 [CONTRIBUTING.md § Releasing](CONTRIBUTING.md#releasing-maintainers) for

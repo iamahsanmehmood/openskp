@@ -15,7 +15,6 @@
 [![Pub](https://img.shields.io/pub/v/openskp.svg?logo=dart&logoColor=white&label=pub.dev)](https://pub.dev/packages/openskp)
 [![C++](https://img.shields.io/github/v/release/iamahsanmehmood/openskp?filter=cpp-v*&logo=cplusplus&logoColor=white&label=cpp)](https://github.com/iamahsanmehmood/openskp/releases?q=cpp-)
 [![GitHub Stars](https://img.shields.io/github/stars/iamahsanmehmood/openskp?style=social)](https://github.com/iamahsanmehmood/openskp)
-[![NEW: Fragments export](https://img.shields.io/badge/NEW-Fragments%20(.frag)%20export%2C%20Python%20%2B%20C%2B%2B-3ecf8e)](docs/DEVELOPER_GUIDE.md#fragments-export)
 
 ---
 
@@ -39,8 +38,6 @@ OpenSKP is an open-source, cross-platform toolkit for SketchUp (`.skp`) binary f
 
 **Converting** puts reading and writing together: OpenSKP is a genuine **SketchUp file converter**, not just a parser with an export bolt-on. Every one of the five languages natively converts a `.skp` file to **7 formats** — glTF (GLB), Wavefront OBJ/MTL, STL, PLY, DXF 3D (AutoCAD), IFC4 (BIM), and JSON — with no third-party CAD/BIM SDK involved, and the DXF converter specifically verified against real desktop AutoCAD, not just lenient readers. Converting `.skp` *into* other formats is fully shipped today; converting *other* formats into `.skp` (glTF/IFC/OBJ → SketchUp) is a planned future direction built on the now-mature writer, not yet under way.
 
-**🆕 Direct BIM export (Fragments)** — the newest capability: `openskp.export.fragments` / `openskp::to_fragments()` converts a `.skp` file straight to [ThatOpen's Fragments](https://github.com/ThatOpen/engine_fragment) (`.frag`) format, the FlatBuffers-based format real BIM web viewers (`@thatopen/fragments`) load — with **no IFC intermediate step**, eliminating the slow downstream re-parse a viewer would otherwise pay for. **Python and C++ today, neither on a package registry yet** — real, fully tested, tagged GitHub releases ([Python](https://github.com/iamahsanmehmood/openskp/releases/tag/preview-python-v1.3.2), [C++](https://github.com/iamahsanmehmood/openskp/releases/tag/preview-cpp-v1.3.1)), installable by pinning the tag directly; C++ measured roughly 5-9x faster end to end than the Python pipeline on the same real files. See [Fragments export](docs/DEVELOPER_GUIDE.md#fragments-export) for the full API and known limitations, stated plainly.
-
 > [!IMPORTANT]
 > This project was built by reverse engineering a proprietary binary format. It is not affiliated with or endorsed by Trimble Inc. or SketchUp.
 
@@ -61,8 +58,8 @@ OpenSKP is an open-source, cross-platform toolkit for SketchUp (`.skp`) binary f
 | **Dynamic Components** | ✅ | Extracts dynamic component attribute key-value pairs for both modern (2021+) and legacy (2013–2020) files, in all five languages |
 | **Observability** | ✅ | Opt-in progress reporting + structured, location-carrying parse errors — see [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md) |
 | **Convert to GLB / OBJ / STL / PLY / DXF 3D / IFC4 / JSON** | ✅ | Native, from-scratch conversion to glTF (GLB), Wavefront OBJ, STL, PLY, DXF 3D (AutoCAD Polyface Mesh), IFC4 (BIM), and JSON metadata — available in all five languages, no third-party CAD/BIM SDK involved — see [Export capabilities](docs/DEVELOPER_GUIDE.md#export-capabilities) |
-| **Convert to Fragments (.frag)** | ✅ | Direct SketchUp → [ThatOpen Fragments](https://github.com/ThatOpen/engine_fragment) export for BIM web viewers, no IFC intermediate. Available in all five languages as of 1.3.0. See [Fragments export](docs/DEVELOPER_GUIDE.md#fragments-export) |
-| **Read a Fragments (.frag) file back** | ✅ | OpenSKP's 6th input format alongside `.skp` — parses any real `.frag` file (this project's own output, ThatOpen's real `IfcImporter` output, or anyone else's) into a scene that rides every other export above for free. Available in **all five languages**. See [Reading a .frag file back](docs/DEVELOPER_GUIDE.md#reading-a-frag-file-back) |
+| **Convert to Fragments (.frag)** | ✅ | Direct SketchUp → [ThatOpen Fragments](https://github.com/ThatOpen/engine_fragment) export for BIM web viewers, no IFC intermediate. Published in Python (`openskp[fragments]`), TypeScript, .NET (`OpenSkp.Fragments`), and C++; on `main` (not published to pub.dev) in Dart (`openskp_fragments`). See [docs/LANGUAGE_PARITY.md § Fragments](docs/LANGUAGE_PARITY.md#fragments-frag-support) and [Fragments export](docs/DEVELOPER_GUIDE.md#fragments-export) |
+| **Read a Fragments (.frag) file back** | ✅ | Parses `.frag` `SHELL` geometry into an `InstancedScene` (`CIRCLE_EXTRUSION` samples are skipped with a warning). Python is verified on a real ThatOpen `IfcImporter` file as well as OpenSKP output; TypeScript, .NET, Dart (on `main`, not published), and C++ are verified on OpenSKP round-trips. See [docs/LANGUAGE_PARITY.md § Fragments](docs/LANGUAGE_PARITY.md#fragments-frag-support) and [Reading a .frag file back](docs/DEVELOPER_GUIDE.md#reading-a-frag-file-back) |
 | **Write native `.skp` files** | ✅ | Build new `.skp` files from scratch — geometry (including genuine circular/arc curves, freeform polylines, faces with holes cut out, and non-planar auto-triangulation), solid/textured materials, layers, nested component definitions and groups, instance rotation/visibility, and custom attribute dictionaries. No SDK involved — every feature validated against the real SketchUp SDK, in all five languages. See [Write capabilities](docs/DEVELOPER_GUIDE.md#write-capabilities) |
 | **Edit existing `.skp` files** | ✅ | Load an existing legacy-format file and extend it — reuses its materials, layers, and component definitions, adds new geometry or instances, and saves a new file. All five languages. See [Editing an existing file](docs/DEVELOPER_GUIDE.md#editing-an-existing-file) |
 | **Generate rebuild code from a file** | ✅ | Turn a parsed `.skp` file into a human-readable, re-runnable source-code transcript that calls the same language's own writer API to rebuild it — materials, textures, layers, nested definitions, holes, instance-level paint and names. All five languages. See [Generating code from a file](docs/DEVELOPER_GUIDE.md#generating-code-from-a-file) |
@@ -230,8 +227,8 @@ condensed version.
 | Export: GLB / OBJ / STL / PLY / DXF / IFC4 / JSON | ✅ | ✅ | ✅ | ✅ | ✅ |
 | IFC export correctness fixes (units, layer visibility, Psets, classification) | ✅ | not checked | not checked | not checked | ✅ |
 | IFC curve/arc annotations (`IfcAnnotation`/`IfcArcIndex`) | ✅ | ❌ | ❌ | ❌ | ❌ |
-| **Fragments (`.frag`) export** | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **Fragments (`.frag`) import** — 6th input format | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Fragments (`.frag`) export** ([details](docs/LANGUAGE_PARITY.md#fragments-frag-support)) | ✅ | ✅ | ✅ | 🔶 on `main`, not published | ✅ |
+| **Fragments (`.frag`) import** ([details](docs/LANGUAGE_PARITY.md#fragments-frag-support)) | ✅ | ✅ | ✅ | 🔶 on `main`, not published | ✅ |
 
 ### Real SketchUp file version support
 
