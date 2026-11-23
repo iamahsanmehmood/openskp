@@ -89,7 +89,9 @@ fn paint_is_applied_and_inherited_by_nested_components() -> Result<(), Box<dyn E
 
     let mut baked_mats = BTreeSet::new();
     for prim in &baked.glb_primitives {
-        baked_mats.insert(summarize_material(&baked.gltf_materials[prim.material_index]));
+        baked_mats.insert(summarize_material(
+            &baked.gltf_materials[prim.material_index],
+        ));
     }
     assert_eq!(baked_mats, expected);
 
