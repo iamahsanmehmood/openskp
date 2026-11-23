@@ -42,38 +42,13 @@ void main() {
       expect(layer.hidden, false);
     }
 
-    expect(model.materials.length, 15);
-    const expectedMaterials = [
-      '*',
-      'Layer_Layer0',
-      'Layer_BottomPlate',
-      'Layer_TopPlate',
-      'Layer_Stud',
-      'Layer_Nog',
-      'Layer_KingStud',
-      'Layer_HeaderJackStud',
-      'Layer_HeaderPlate1',
-      'Layer_HeaderPlate2',
-      'Layer_SillPlate1',
-      'Layer_VerticalHeaderStud',
-      'Layer_generic_frame',
-      'Layer_dimension',
-      'Layer_Hat Sections',
-    ];
-    final parsedMaterials = model.materials.map((m) => m.name).toList();
-    for (final name in expectedMaterials) {
-      expect(parsedMaterials, contains(name));
-    }
-
-    final matLayer0 =
-        model.materials.firstWhere((m) => m.name == 'Layer_Layer0');
+    expect([for (final m in model.materials) m.name], ['*']);
+    final matDefault = model.materials[0];
     // Real data: none of this fixture's materials have useTrans="1" set, so
     // all correctly read fully opaque.
-    expect(matLayer0.transparency, 1.0);
-    expect(matLayer0.id, isNull);
-    expect(matLayer0.texture, isNull);
-    expect(matLayer0.colorized, isFalse);
-    expect(matLayer0.colorizeType, 0);
+    expect(matDefault.transparency, 1.0);
+    expect(matDefault.colorized, isFalse);
+    expect(matDefault.colorizeType, 0);
 
     expect(model.definitions.length, 46);
 
@@ -163,8 +138,7 @@ void main() {
     expect(model.layers.length, 1);
     expect(model.layers[0].name, 'Layer0');
 
-    expect(model.materials.length, 1);
-    expect(model.materials[0].name, 'Layer_Layer0');
+    expect(model.materials, isEmpty);
 
     // Only ROOT holds geometry in this fixture, so the numeric definitions
     // map (which excludes ROOT) is empty.

@@ -2107,16 +2107,14 @@ class TestModernRealFile:
         # VFF files carry no known layer-visibility tag - always False here.
         assert all(not layer.hidden for layer in model.layers)
 
-        # 3. Materials
-        assert len(model.materials) == 15
-        mat_layer0 = next(m for m in model.materials if m.name == "Layer_Layer0")
+        # 3. Materials (tag colour records under materials/Layer_* are excluded; #551)
+        assert [m.name for m in model.materials] == ["*"]
+        mat_default = model.materials[0]
         # Real data: none of this fixture's materials have useTrans="1" set,
         # so all correctly read fully opaque.
-        assert mat_layer0.transparency == 1.0
-        assert mat_layer0.id is None
-        assert mat_layer0.texture is None
-        assert mat_layer0.colorized is False
-        assert mat_layer0.colorize_type == 0
+        assert mat_default.transparency == 1.0
+        assert mat_default.colorized is False
+        assert mat_default.colorize_type == 0
 
         # Real join: TLV material ID 26180 resolves to the default "*"
         # material, and the resolved object is the SAME instance held in
@@ -2284,8 +2282,7 @@ class TestModernRealFile:
         assert len(model.layers) == 1
         assert model.layers[0].name == "Layer0"
 
-        assert len(model.materials) == 1
-        assert model.materials[0].name == "Layer_Layer0"
+        assert model.materials == []
 
         # Only ROOT holds geometry in this fixture, so the numeric
         # definitions map (which excludes ROOT) is empty.

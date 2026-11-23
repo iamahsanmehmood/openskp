@@ -43,29 +43,13 @@ namespace OpenSkp.Tests
             // VFF files carry no known layer-visibility tag - always false here.
             Assert.All(model.Layers, l => Assert.False(l.Hidden));
 
-            Assert.Equal(15, model.Materials.Count);
-            var expectedMaterials = new[]
-            {
-                "*", "Layer_Layer0", "Layer_BottomPlate", "Layer_TopPlate", "Layer_Stud",
-                "Layer_Nog", "Layer_KingStud", "Layer_HeaderJackStud", "Layer_HeaderPlate1",
-                "Layer_HeaderPlate2", "Layer_SillPlate1", "Layer_VerticalHeaderStud",
-                "Layer_generic_frame", "Layer_dimension", "Layer_Hat Sections",
-            };
-            var parsedMaterials = model.Materials.Select(m => m.Name).ToList();
-            foreach (var name in expectedMaterials)
-            {
-                Assert.Contains(name, parsedMaterials);
-            }
-
-            var matLayer0 = model.Materials.FirstOrDefault(m => m.Name == "Layer_Layer0");
-            Assert.NotNull(matLayer0);
+            Assert.Equal(new[] { "*" }, model.Materials.Select(m => m.Name).ToArray());
+            var matDefault = model.Materials[0];
             // Real data: none of this fixture's materials have useTrans="1"
             // set, so all correctly read fully opaque.
-            Assert.Equal(1.0, matLayer0!.Transparency);
-            Assert.Null(matLayer0.Id);
-            Assert.Null(matLayer0.Texture);
-            Assert.False(matLayer0.Colorized);
-            Assert.Equal(0, matLayer0.ColorizeType);
+            Assert.Equal(1.0, matDefault.Transparency);
+            Assert.False(matDefault.Colorized);
+            Assert.Equal(0, matDefault.ColorizeType);
 
             Assert.Equal(46, model.Definitions.Count);
 
@@ -154,8 +138,7 @@ namespace OpenSkp.Tests
             Assert.Single(model.Layers);
             Assert.Equal("Layer0", model.Layers[0].Name);
 
-            Assert.Single(model.Materials);
-            Assert.Equal("Layer_Layer0", model.Materials[0].Name);
+            Assert.Empty(model.Materials);
 
             // Only ROOT holds geometry in this fixture, so the numeric
             // Definitions map (which excludes ROOT) is empty.

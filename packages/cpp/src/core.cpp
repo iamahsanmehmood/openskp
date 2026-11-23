@@ -473,6 +473,7 @@ RawParsed full_parse(const ByteBuffer& data, const ParseOptions& o) {
   if (off == std::string::npos)
     throw SkpParseError("No ZIP container found", ParseStage::zip_extract);
   Zip zip(data, off);
+  std::vector<std::pair<std::string, std::shared_ptr<RawMaterial>>> raw_materials;
   for (auto& n : zip.names)
     if (n.rfind("materials/", 0) == 0 && n.size() >= 12 &&
         n.substr(n.size() - 12) == "material.xml") {
@@ -480,15 +481,7 @@ RawParsed full_parse(const ByteBuffer& data, const ParseOptions& o) {
         if (auto m = material_xml(zip, n, *b)) {
           auto slash = n.find('/', 10);
           auto folder = n.substr(10, slash == std::string::npos ? std::string::npos : slash - 10);
-          p.materials[m->name] = m;
-          p.materials_by_folder[folder] = m;
-          if (m->name.rfind("Layer_", 0) == 0) {
-            auto layer_name = m->name.substr(6);
-            if (!p.layer_colors.count(layer_name)) p.layer_order.push_back(layer_name);
-            p.layer_colors[layer_name] = {std::uint8_t(m->r), std::uint8_t(m->g),
-                                          std::uint8_t(m->b)};
-            p.layer_hidden[layer_name] = false;
-          }
+          raw_materials.emplace_back(std::move(folder), std::move(m));
         }
     }
   for (auto& n : zip.names)
@@ -606,6 +599,19 @@ RawParsed full_parse(const ByteBuffer& data, const ParseOptions& o) {
   for (const auto& item : p.layer_id_to_name) {
     p.layer_persistent_ids[item.second] = item.first;
     if (item.first) p.layer_persistent_id_aliases[item.second].insert(item.first);
+  }
+  std::set<std::string> real_material_folders;
+  for (const auto& item : p.material_id_to_name) real_material_folders.insert(item.second);
+  for (auto& [folder, m] : raw_materials) {
+    if (m->name.rfind("Layer_", 0) == 0 && !real_material_folders.count(folder)) {
+      auto layer_name = m->name.substr(6);
+      if (!p.layer_colors.count(layer_name)) p.layer_order.push_back(layer_name);
+      p.layer_colors[layer_name] = {std::uint8_t(m->r), std::uint8_t(m->g), std::uint8_t(m->b)};
+      p.layer_hidden.try_emplace(layer_name, false);
+    } else {
+      p.materials[m->name] = m;
+      if (!folder.empty()) p.materials_by_folder[folder] = m;
+    }
   }
   for (const auto& item : p.material_id_to_name) {
     auto material = p.materials.find(item.second);

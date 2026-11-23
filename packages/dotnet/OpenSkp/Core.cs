@@ -72,6 +72,7 @@ namespace OpenSkp
             var layerHidden = new Dictionary<string, bool>();
             var materials = new Dictionary<string, Geometry.RawMaterial>();
             var materialsByFolder = new Dictionary<string, Geometry.RawMaterial>();
+            var rawMaterialEntries = new List<(string Folder, Geometry.RawMaterial Mat)>();
 
             foreach (var entry in zip.Entries)
             {
@@ -100,16 +101,7 @@ namespace OpenSkp
                     {
                         var parts = name.Split('/');
                         string folderName = parts.Length > 1 ? parts[1] : "";
-                        materials[mat.Name] = mat;
-                        if (folderName.Length > 0)
-                        {
-                            materialsByFolder[folderName] = mat;
-                        }
-                        if (mat.Name.StartsWith("Layer_", StringComparison.Ordinal))
-                        {
-                            layerColors[mat.Name.Substring(6)] = (mat.R, mat.G, mat.B);
-                            layerHidden[mat.Name.Substring(6)] = false;
-                        }
+                        rawMaterialEntries.Add((folderName, mat));
                     }
                 }
             }
@@ -239,6 +231,29 @@ namespace OpenSkp
                 {
                     units = null;
                     Observability.Log(options, SkpLogLevel.Debug, $"Failed to read units from meta/meta.dat: {e.Message}");
+                }
+            }
+
+            var realMaterialFolders = new HashSet<string>(materialIdToName.Values, StringComparer.Ordinal);
+            foreach (var (folderName, mat) in rawMaterialEntries)
+            {
+                if (mat.Name.StartsWith("Layer_", StringComparison.Ordinal)
+                    && !realMaterialFolders.Contains(folderName))
+                {
+                    string tagName = mat.Name.Substring(6);
+                    layerColors[tagName] = (mat.R, mat.G, mat.B);
+                    if (!layerHidden.ContainsKey(tagName))
+                    {
+                        layerHidden[tagName] = false;
+                    }
+                }
+                else
+                {
+                    materials[mat.Name] = mat;
+                    if (folderName.Length > 0)
+                    {
+                        materialsByFolder[folderName] = mat;
+                    }
                 }
             }
 

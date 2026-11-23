@@ -142,6 +142,7 @@ function parseToRaw(buffer: ArrayBuffer, options?: ParseOptions): ParsedRawData 
   const layerHidden = new Map<string, boolean>();
   const materialsMap = new Map<string, Material>();
   const materialsByFolder = new Map<string, Material>();
+  const rawMaterialEntries: [string, Material, [number, number, number]][] = [];
 
   for (const [name, xmlBytes] of Object.entries(materialFiles)) {
     const lowerName = name.toLowerCase();
@@ -180,14 +181,11 @@ function parseToRaw(buffer: ArrayBuffer, options?: ParseOptions): ParsedRawData 
             colorized: parsedMat.colorized,
             colorizeType: parsedMat.colorizeType,
           };
-          materialsMap.set(parsedMat.name, matObj);
-          if (folderName) {
-            materialsByFolder.set(folderName, matObj);
-          }
-          if (parsedMat.name.startsWith('Layer_')) {
-            layerColors.set(parsedMat.name.slice(6), [parsedMat.r, parsedMat.g, parsedMat.b]);
-            layerHidden.set(parsedMat.name.slice(6), false);
-          }
+          rawMaterialEntries.push([
+            folderName,
+            matObj,
+            [parsedMat.r, parsedMat.g, parsedMat.b],
+          ]);
         }
       } catch (e) {
         emitLog(options, 'debug', `Failed to parse material.xml ${name}: ${(e as Error).message}`);
@@ -300,6 +298,22 @@ function parseToRaw(buffer: ArrayBuffer, options?: ParseOptions): ParsedRawData 
     'info',
     `Parse complete: ${defsDict.size} defs (${((Date.now() - t0) / 1000).toFixed(2)}s)`
   );
+
+  const realMaterialFolders = new Set(materialIdToName.values());
+  for (const [folderName, matObj, rgb] of rawMaterialEntries) {
+    if (matObj.name.startsWith('Layer_') && !realMaterialFolders.has(folderName)) {
+      const tagName = matObj.name.slice(6);
+      layerColors.set(tagName, rgb);
+      if (!layerHidden.has(tagName)) {
+        layerHidden.set(tagName, false);
+      }
+    } else {
+      materialsMap.set(matObj.name, matObj);
+      if (folderName) {
+        materialsByFolder.set(folderName, matObj);
+      }
+    }
+  }
 
   if (!layerIdToName.has(1)) {
     layerIdToName.set(1, 'Layer0');

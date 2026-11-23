@@ -22,6 +22,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Each inline `CCustomLineStyle` is read and counted in the archive store map — including during the
   slot-base probe for zero- and single-material files — so every tag and face keeps its right slot.
 
+### Fixed — All 6 languages: 2021+ files no longer list tag colour records (`Layer_<tag>`) as materials (#551)
+
+- SketchUp 2021+ (`.skp` ZIP/VFF) stores each tag's display colour under `materials/Layer_<tag>/`
+  without a corresponding `C832` material-manager entry in `model.dat`. Previously every port
+  included those records in `SkpModel.materials` (`Materials`), inflating material counts by the
+  number of tags and overwriting any real user material named `Layer_<name>`.
+- Python, TypeScript, .NET, Dart, C++ and Rust now exclude tag colour records from `materials`
+  while keeping tag colours on `layers` and preserving any genuine user material whose name starts
+  with `Layer_`.
+
 ### Fixed — All 6 languages: partial reads of classic `.skp` files are reported (#552)
 
 - The classic (pre-2021 MFC) root entity reader stops at the first top-level record it cannot

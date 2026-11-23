@@ -56,6 +56,7 @@ add_executable(
   texture_test.cpp
   triangulator_test.cpp
   vff_layer_hidden_test.cpp
+  vff_layer_materials_test.cpp
   xml_entities_test.cpp
   wrapped_tlv_test.cpp
   zip_entry_size_cap_test.cpp

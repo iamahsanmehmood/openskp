@@ -1948,6 +1948,7 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
         layer_hidden = {}
         materials = {}
         materials_by_folder = {}
+        raw_material_entries = []
         MAT_NS = {'mat': 'http://sketchup.google.com/schemas/sketchup/1.0/material'}
         for name in zf.namelist():
             if name.endswith('material.xml') and name.startswith('materials/'):
@@ -1989,12 +1990,7 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
                         tex = _extract_texture(zf, name, mat_elem, MAT_NS)
                         if tex is not None:
                             mat_obj['texture'] = tex
-                        materials[mat_name] = mat_obj
-                        if folder_name:
-                            materials_by_folder[folder_name] = mat_obj
-                        if mat_name.startswith('Layer_'):
-                            layer_colors[mat_name[6:]] = (r, g, b)
-                            layer_hidden[mat_name[6:]] = False
+                        raw_material_entries.append((folder_name, mat_obj, (r, g, b)))
                 except Exception:
                     logger.debug("Failed to parse material.xml %r", name, exc_info=True)
 
@@ -2250,6 +2246,18 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
         "Parse complete: %s (%d defs, %.2fs)",
         skp_path, len(defs_dict), time.monotonic() - t0,
     )
+
+    real_material_folders = set(material_id_to_name.values())
+    for folder_name, mat_obj, rgb in raw_material_entries:
+        mat_name = mat_obj['name']
+        if mat_name.startswith('Layer_') and folder_name not in real_material_folders:
+            tag_name = mat_name[6:]
+            layer_colors[tag_name] = rgb
+            layer_hidden.setdefault(tag_name, False)
+        else:
+            materials[mat_name] = mat_obj
+            if folder_name:
+                materials_by_folder[folder_name] = mat_obj
 
     if 1 not in layer_id_to_name:
         layer_id_to_name[1] = 'Layer0'
