@@ -198,21 +198,25 @@ definitions. The naive approach — parse the entire file into one in-memory
 tree, then walk it — means peak memory scales with the *whole file's* node
 count, which is what made large files crash outright before this was fixed.
 
-All five languages now parse **one top-level record at a time**:
+All five languages parse **one top-level `F401` record at a time**:
 `iter_top_level_lazy()` / `iterTopLevelLazy()` / `IterTopLevelLazy()` do a
 cheap flat header scan (O(sibling count), not O(total node count)) to find
-each top-level definition/layer-manager/material-manager/root block, fully
-build *only that one record's* subtree, hand it to the caller, and let it
-be garbage-collected before the next one is built. Peak memory during the
-walk is bounded by the size of the **single largest** top-level record, not
-the file's total size — this is also what makes the [progress
-reporting](#observability) free: the same header scan that drives the loop
-gives you the total record count for "N of total" with no extra pass over
-the file.
+each top-level block, build *only that one record's* subtree, hand it to
+the caller, and let it be reclaimed before the next one is built. In Python
+([#265](https://github.com/iamahsanmehmood/openskp/pull/265)), TypeScript,
+and C++ ([#300](https://github.com/iamahsanmehmood/openskp/pull/300), plus
+Rust), that pre-scan also unwraps the `F901 > 7017 > 7117` definition-list
+wrapper chain ([#264](https://github.com/iamahsanmehmood/openskp/issues/264))
+so each `7C15` definition is built and dropped individually; `.NET` and
+`Dart` currently unwrap `F401` only. Where definitions are streamed
+individually, peak **walk** memory is bounded by the size of the **single
+largest** record rather than the file's total size (see below for
+TypeScript's materialized-model V8 heap ceiling) — and the same header scan
+gives the total record count for [progress reporting](#observability) with
+no extra pass over the file.
 
-**This fixed the crash on large files uniformly** — the underlying
-per-tag extraction logic (every tag's decoding, every field) was untouched;
-only the orchestration loop changed, in all five languages, the same way.
+The underlying per-tag extraction logic (every tag's decoding, every field)
+was untouched; only the orchestration loop changed.
 
 ### .NET's additional fix: no array-size ceiling
 
@@ -355,7 +359,7 @@ model = skp.parse()
 scene = skp.build_scene()
 
 glb.export(skp, "output.glb")               # takes the SkpFile, writes .glb + .json via trimesh
-obj.export(scene, "output.obj")              # takes a built Scene, writes vertices/faces only
+obj.export(scene, "output.obj")              # takes a built Scene, writes .obj + companion .mtl
 stl.export(scene, "output.stl", binary=True) # writes 3D printing STL (ASCII/binary)
 ply.export(scene, "output.ply", binary=True) # writes Stanford PLY mesh
 dxf.export(scene, "output.dxf")              # writes AutoCAD R2000 3D Polyface Mesh DXF
@@ -372,9 +376,11 @@ Notes on each:
   - so every fix made to `scene.build_scene()` reaches real `.glb` output
   automatically, with no separate scene-baking pipeline to fall out of
   sync.
-- **`obj.export(scene, output_path)`** takes a built `Scene` (not the raw
-  model) and writes one `o` group per `GlbPrimitive` with `v`/`f` records
-  only — no materials, normals, or UVs.
+- **`obj.export(scene, output_path)`** (and `to_obj()` / `to_mtl()`) takes
+  a built `Scene` (not the raw model) and writes one `o` group per
+  `GlbPrimitive` with `v` positions, `vt` UVs, `vn` normals, `mtllib` /
+  `usemtl` material assignments, and a companion `.mtl` material library
+  (`Kd`, `d`, `map_Kd`).
 - **`json_export.to_dict(model, scene=None)` / `.export(...)`** serialize
   definitions/layers/materials from `model` always; `scene_hierarchy` is
   `None` unless a built `Scene` is passed via `scene=`, in which case it's
@@ -400,18 +406,11 @@ dependency — .NET added a small internal JSON serializer since
 `netstandard2.0` has none built in; C++'s writer uses a private, pinned
 TinyGLTF dependency that does not appear in installed consumer
 interfaces; Dart's uses `dart:convert`'s built-in JSON support directly.
-OBJ export is native in all five languages, not just Python — see the
-capability table above (`openskp.export.obj` / `toOBJ`/`exportOBJ` /
-`ObjExport.ExportObj` / `toObj`/`exportObj` / `to_obj`/`export_obj`). Each
-takes a built `Scene` (not the raw model) and writes one `o` group per
-`GlbPrimitive` with `v`/`f` records only — no materials, normals, or UVs,
-matching Python's `obj.export(scene, output_path)` documented above. Since
-every language's `buildScene()` returns the same `Scene` shape
-(`GlbPrimitive[]` with triangulated `positions` and `indices`), a custom
-OBJ variant — say, with per-primitive groups or vertex normals the
-built-in writer omits — is only a short loop over `scene.glbPrimitives`
-away in any language, but the built-in exporters above cover the common
-case without writing that loop yourself.
+OBJ+MTL export is native in all five languages, not just Python — see the
+capability table above (`openskp.export.obj` / `toOBJ`+`toMTL`+`exportOBJ` /
+`ObjExport.ToObj`+`ToMtl`+`ExportObj` / `toObj`+`toMtl`+`exportObj` /
+`to_obj`+`to_mtl`+`export_obj`), writing `v`/`vt`/`vn`/`usemtl` records and
+the companion `.mtl` library from the baked `Scene`.
 
 ### Fragments export
 
@@ -503,10 +502,11 @@ What's carried through from the source `.skp` file:
   Python/C++, verified via a real round-trip through the
   `@thatopen/fragments` npm package's own `SingleThreadedFragmentsModel`,
   not just this project's own generated bindings.
-- C++'s attribute dictionary values are strings only (no native
-  `Point3d`/`Length`/nested-list types like Python has) — matches its
-  existing string-only property handling elsewhere. See
-  [docs/LANGUAGE_PARITY.md](LANGUAGE_PARITY.md).
+- C++'s raw model (`ParsedAttribute` in `model.hpp`) preserves typed
+  attribute values (`String`, `Integer`, `Float`, `Length`, `Boolean`,
+  `Vec`, `Array`, and `Null` across both classic and VFF files), while
+  scene, JSON, IFC, and `.frag` exports stringify named dictionaries (same
+  as the other ports). See [docs/LANGUAGE_PARITY.md](LANGUAGE_PARITY.md).
 
 ### Reading a `.frag` file back
 
@@ -1220,7 +1220,7 @@ entirely — also fixed, earlier in the same session.)
 
 ### GLB/OBJ/STL/PLY/DXF/IFC/JSON export
 
-Covered above under [Export capabilities](#export-capabilities) — GLB, Wavefront OBJ, STL (3D Printing), PLY (Stanford Mesh), DXF 3D (AutoCAD R2000 compliant), IFC4 (BIM ISO STEP), and JSON metadata conversion are natively supported in all five languages. All ports provide both in-memory string/buffer formatting (`to_ifc`/`toIFC`/`toIfc`/`ToIfc`) and direct file output functions (`export_ifc`/`exportIFC`/`exportIfc`/`ExportIfc`).
+Covered above under [Export capabilities](#export-capabilities) — GLB, Wavefront OBJ+MTL, STL (3D Printing), PLY (Stanford Mesh), DXF 3D (AutoCAD R2000 compliant), IFC4 (BIM ISO STEP), and JSON metadata conversion are natively supported in all five languages. Both in-memory formatting (`to_ifc`/`toIFC`/`toIfc`/`ToIfc`, etc.) and direct file output (`export_ifc`/`exportIFC`/`exportIfc`/`ExportIfc`, etc.) are provided everywhere except TypeScript's GLB (`toGLB`, bytes only) and TypeScript/.NET/Dart's JSON (`toJSON` / `JsonExport.ToDict` / `toJson`, in-memory object/dictionary only).
 
 ### Progress/logging mechanism
 

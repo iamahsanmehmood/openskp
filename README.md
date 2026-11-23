@@ -54,8 +54,8 @@ OpenSKP is an open-source, cross-platform toolkit for SketchUp (`.skp`) binary f
 | **Scene Baking / Triangulation** | ✅ | Opt-in scene baking: full placed scene graph resolved to world-space, triangulated, GLB-ready — in all five languages |
 | **Layers / Tags** | ✅ | Layer definitions with colors and visibility (`hidden` state) — fully exposed across all five languages |
 | **Materials & Textures** | ✅ | Material properties, colors, transparency, colorized materials, and embedded texture images |
-| **Styles** | ✅ | Front/back face colors for unpainted faces |
-| **Dynamic Components** | ✅ | Extracts dynamic component attribute key-value pairs for both modern (2021+) and classic (pre-2021) files, in all five languages |
+| **Styles** | 🔶 | `styles[].front_color`/`back_color` read for 2021+ files in all five, plus `face_front_color`/`face_back_color` (SketchUp 4–2025 rendering options) on `main` in Python ([#550](https://github.com/iamahsanmehmood/openskp/pull/550)); baked/instanced scenes still colour unpainted faces with their tag colour ([#533](https://github.com/iamahsanmehmood/openskp/issues/533)) |
+| **Dynamic Components** | 🔶 | Instance and face attribute dictionaries extracted in all five languages (2021+ and pre-2021); **definition- and model-level** attribute dictionaries (Dynamic Components formulas/options) are Python-only today |
 | **Observability** | ✅ | Opt-in progress reporting + structured, location-carrying parse errors — see [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md) |
 | **Convert to GLB / OBJ / STL / PLY / DXF 3D / IFC4 / JSON** | ✅ | Native, from-scratch conversion to glTF (GLB), Wavefront OBJ, STL, PLY, DXF 3D (AutoCAD Polyface Mesh), IFC4 (BIM), and JSON metadata — available in all five languages, no third-party CAD/BIM SDK involved — see [Export capabilities](docs/DEVELOPER_GUIDE.md#export-capabilities) |
 | **Convert to Fragments (.frag)** | ✅ | Direct SketchUp → [ThatOpen Fragments](https://github.com/ThatOpen/engine_fragment) export for BIM web viewers, no IFC intermediate. Published in Python (`openskp[fragments]`), TypeScript, .NET (`OpenSkp.Fragments`), and C++; on `main` (not published to pub.dev) in Dart (`openskp_fragments`). See [docs/LANGUAGE_PARITY.md § Fragments](docs/LANGUAGE_PARITY.md#fragments-frag-support) and [Fragments export](docs/DEVELOPER_GUIDE.md#fragments-export) |
@@ -64,7 +64,7 @@ OpenSKP is an open-source, cross-platform toolkit for SketchUp (`.skp`) binary f
 | **Edit existing `.skp` files** | ✅ | Load an existing legacy-format file and extend it — reuses its materials, layers, and component definitions, adds new geometry or instances, and saves a new file. All five languages. See [Editing an existing file](docs/DEVELOPER_GUIDE.md#editing-an-existing-file) |
 | **Generate rebuild code from a file** | ✅ | Turn a parsed `.skp` file into a human-readable, re-runnable source-code transcript that calls the same language's own writer API to rebuild it — materials, textures, layers, nested definitions, holes, instance-level paint and names. All five languages. See [Generating code from a file](docs/DEVELOPER_GUIDE.md#generating-code-from-a-file) |
 | **AI coding-agent ready** | ✅ | A generic, well-documented writer API (no object-specific helpers needed) that AI coding agents can compose freely — proven on real generated models (furniture, a house, an executive desk, a smartphone modeled from a photo) across two independent AI agents, each built from a natural-language prompt with no primitives library involved. See [AI-Generated Models](docs/AI_MODELING.md) |
-| **Streaming / low-memory parsing** | ✅ | Peak memory bounded by the largest single definition, not the whole file — see [Memory architecture](docs/ARCHITECTURE.md#memory-architecture) |
+| **Streaming / low-memory parsing** | ✅ | Lazy top-level TLV walk bounds walk memory per definition in Python, TypeScript, and C++ (`.NET`/Dart unwrap `F401` only, and TypeScript's materialized `SkpModel` hits V8 heap limits on ~300 MB files) — see [Memory architecture](docs/ARCHITECTURE.md#memory-architecture) and [Performance](docs/DEVELOPER_GUIDE.md#performance) |
 | **No SketchUp SDK** | ✅ | No SketchUp install or license required. TypeScript, .NET, Dart, and Rust use no native dependencies; C++ builds `miniz`, `TinyGLTF`, and `FlatBuffers` headers privately via CMake; Python requires `numpy`, `shapely`, `mapbox_earcut` (prebuilt native wheels), `trimesh`, and `defusedxml` |
 | **Cross-Platform** | ✅ | Works on Linux, macOS, and Windows |
 
@@ -211,9 +211,10 @@ condensed version.
 | Feature | Python | TypeScript | .NET | Dart | C++ |
 |:---|:---:|:---:|:---:|:---:|:---:|
 | Parse VFF (2021+) & classic MFC (SketchUp 4–2020; [§4](docs/LANGUAGE_PARITY.md#4-real-sketchup-file-version-support)) | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Geometry, layers, materials/textures, styles, Dynamic Components | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Attribute dicts: multiple dictionaries per entity | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Attribute dicts: full 9-value-type support (`Point3d`/`Length`/nested lists) | ✅ | ❌ | ❌ | ❌ | ❌ str only |
+| Geometry, layers, materials/textures | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Styles (`styles[]` 2021+ in all 5; `face_front_color`/`face_back_color` 4–2025 on `main` in Python; scenes still use tag colour, [#533](https://github.com/iamahsanmehmood/openskp/issues/533)) | 🔶 | 🔶 | 🔶 | 🔶 | 🔶 |
+| Dynamic Components / attribute dicts (instance/face in all 5; definition & model dicts in Python) | ✅ | 🔶 | 🔶 | 🔶 | 🔶 |
+| Attribute dicts: multi-dictionary + typed values (`Point3d`/`Length`/nested lists; 9/9 classic, 7–8/9 VFF) | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Attribute dicts surfaced in GLB/JSON metadata export (not just IFC Psets) | ✅ | n/a | n/a | n/a | ✅ |
 | VFF pages/scenes + dimension parsing | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Legacy (pre-2021) pages/scenes reading | ✅ with cameras (2014–2020) | ✅ | ✅ | ✅ | ✅ |
@@ -522,10 +523,13 @@ graph TB
 ```
 
 **Reading** streams the TLV tree one top-level record at a time rather
-than materializing the whole thing in memory — the reason OpenSKP
-handles real production files with 100,000+ component definitions;
-peak memory is bounded by the single largest top-level record, not the
-file's total size. `parse()` (light, per-definition) and `buildScene()`
+than materializing the whole thing in memory — enabling Python, .NET, and
+Dart to handle real production files with 100,000+ component definitions
+(in Python, TypeScript, and C++, walk memory is bounded per definition via
+`F901 > 7017 > 7117` unwrapping; `.NET` and `Dart` unwrap `F401` only, and
+TypeScript's materialized `SkpModel` still hits V8's per-object heap ceiling
+on ~300 MB files — see [Performance](docs/DEVELOPER_GUIDE.md#performance)).
+`parse()` (light, per-definition) and `buildScene()`
 (opt-in, full placed scene graph) are deliberately separate so the
 common case never pays for scene-graph resolution it doesn't need.
 

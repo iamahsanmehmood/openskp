@@ -35,11 +35,11 @@ the release before it).
 
 | Language | Registry | Released version | On `main`, not released yet |
 |:---|:---|:---:|:---|
-| 🐍 Python | [PyPI](https://pypi.org/project/openskp/) | [![PyPI](https://img.shields.io/pypi/v/openskp.svg?label=)](https://pypi.org/project/openskp/) | No |
-| 📘 TypeScript | [npm](https://www.npmjs.com/package/openskp) | [![npm](https://img.shields.io/npm/v/openskp.svg?label=)](https://www.npmjs.com/package/openskp) | No |
-| 🚀 .NET | [NuGet](https://www.nuget.org/packages/OpenSkp) | [![NuGet](https://img.shields.io/nuget/v/OpenSkp.svg?label=)](https://www.nuget.org/packages/OpenSkp) | No |
-| 🎯 Dart | [pub.dev](https://pub.dev/packages/openskp) | [![Pub](https://img.shields.io/pub/v/openskp.svg?label=)](https://pub.dev/packages/openskp) | No |
-| ⚙️ C++ | [GitHub Releases](https://github.com/iamahsanmehmood/openskp/releases?q=cpp-) | [![C++](https://img.shields.io/github/v/release/iamahsanmehmood/openskp?filter=cpp-v*&label=)](https://github.com/iamahsanmehmood/openskp/releases?q=cpp-) | No |
+| 🐍 Python | [PyPI](https://pypi.org/project/openskp/) | [![PyPI](https://img.shields.io/pypi/v/openskp.svg?label=)](https://pypi.org/project/openskp/) | `face_front_color`/`face_back_color` ([#550](https://github.com/iamahsanmehmood/openskp/pull/550)); `py.typed` ([#580](https://github.com/iamahsanmehmood/openskp/pull/580)); `unread_root_entities` + warning ([#575](https://github.com/iamahsanmehmood/openskp/pull/575)); VFF `Layer_*` material exclusion ([#581](https://github.com/iamahsanmehmood/openskp/pull/581)) |
+| 📘 TypeScript | [npm](https://www.npmjs.com/package/openskp) | [![npm](https://img.shields.io/npm/v/openskp.svg?label=)](https://www.npmjs.com/package/openskp) | `CCustomLineStyle` ([#579](https://github.com/iamahsanmehmood/openskp/pull/579)); `CLayer` parent-ref guard ([#577](https://github.com/iamahsanmehmood/openskp/pull/577)); `unreadRootEntities` + warning ([#575](https://github.com/iamahsanmehmood/openskp/pull/575)); VFF `Layer_*` material exclusion ([#581](https://github.com/iamahsanmehmood/openskp/pull/581)) |
+| 🚀 .NET | [NuGet](https://www.nuget.org/packages/OpenSkp) | [![NuGet](https://img.shields.io/nuget/v/OpenSkp.svg?label=)](https://www.nuget.org/packages/OpenSkp) | `CCustomLineStyle` ([#579](https://github.com/iamahsanmehmood/openskp/pull/579)); `CLayer` parent-ref guard ([#577](https://github.com/iamahsanmehmood/openskp/pull/577)); `UnreadRootEntities` + warning ([#575](https://github.com/iamahsanmehmood/openskp/pull/575)); VFF `Layer_*` material exclusion ([#581](https://github.com/iamahsanmehmood/openskp/pull/581)) |
+| 🎯 Dart | [pub.dev](https://pub.dev/packages/openskp) | [![Pub](https://img.shields.io/pub/v/openskp.svg?label=)](https://pub.dev/packages/openskp) | `CCustomLineStyle` ([#579](https://github.com/iamahsanmehmood/openskp/pull/579)); `CLayer` parent-ref guard ([#577](https://github.com/iamahsanmehmood/openskp/pull/577)); `unreadRootEntities` + warning ([#575](https://github.com/iamahsanmehmood/openskp/pull/575)); VFF `Layer_*` material exclusion ([#581](https://github.com/iamahsanmehmood/openskp/pull/581)) |
+| ⚙️ C++ | [GitHub Releases](https://github.com/iamahsanmehmood/openskp/releases?q=cpp-) | [![C++](https://img.shields.io/github/v/release/iamahsanmehmood/openskp?filter=cpp-v*&label=)](https://github.com/iamahsanmehmood/openskp/releases?q=cpp-) | `CCustomLineStyle` ([#579](https://github.com/iamahsanmehmood/openskp/pull/579)); `CLayer` parent-ref guard ([#577](https://github.com/iamahsanmehmood/openskp/pull/577)); partial-read warning ([#575](https://github.com/iamahsanmehmood/openskp/pull/575)); VFF `Layer_*` material exclusion ([#581](https://github.com/iamahsanmehmood/openskp/pull/581)) |
 
 Each language releases independently by pushing its own tag — see
 [CONTRIBUTING.md § Releasing](../CONTRIBUTING.md#releasing-maintainers) for
@@ -50,8 +50,8 @@ the pub.dev upload step).
 ## 2. Feature matrix
 
 Every feature OpenSKP has, across all 5 languages. ✅ = shipped and
-released. 🔶 = implemented on `main`, not published to a package registry.
-❌ = not yet ported to that language; see
+released. 🔶 = implemented on `main`, not published to a package registry
+(or partial — see cell text). ❌ = not yet ported to that language; see
 [§3](#3-whats-still-outstanding-after-160) for what's tracked there.
 
 | Feature | Python | TypeScript | .NET | Dart | C++ |
@@ -63,11 +63,13 @@ released. 🔶 = implemented on `main`, not published to a package registry.
 | Component hierarchy / nested definitions | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Layers/tags (color + visibility) | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Materials & textures | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Styles (front/back unpainted face color) | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Dynamic Component attributes | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Styles (`styles[].front_color`/`back_color` on 2021+ files; scenes still use tag colour, [#533](https://github.com/iamahsanmehmood/openskp/issues/533)) | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Model rendering-options face colours (`face_front_color`/`face_back_color`, SketchUp 4–2025, [#550](https://github.com/iamahsanmehmood/openskp/pull/550)) | 🔶 on `main` | ❌ | ❌ | ❌ | ❌ |
+| Dynamic Component / entity attributes (instance & face dictionaries) | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Definition- & model-level attribute dictionaries (Dynamic Components formulas/options, VFF + classic) | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Single attribute dictionary per entity | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Attribute dicts: full 9-value-type support, **legacy (pre-2021) format** (`Point3d`/`Vector3d`/`Length`/`Timestamp`/nested lists) | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Attribute dicts: full 9-value-type support, **VFF (2021+) format** | ✅ 7/9 — no native `bool`/`time_t` tag observed yet | ❌ `AD38` string only (1/9) | ❌ string only (1/9) | ❌ string only (1/9) | ❌ string only (1/9) |
+| Attribute dicts: typed value decoding, **VFF (2021+) format** | ✅ 7/9 (`bool`/`time_t` missing) | ✅ 7/9 (`bool`/`time_t` missing) | ✅ 7/9 (`bool`/`time_t` missing) | ✅ 7/9 (`bool`/`time_t` missing) | ✅ 8/9 (`AA38` `bool` supported; `time_t` unobserved) |
 | Attribute dicts: multiple dictionaries per entity | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Attribute dicts surfaced in GLB/JSON metadata export (not just IFC Psets) | ✅ | n/a, not independently re-checked this cycle | n/a, not independently re-checked this cycle | n/a, not independently re-checked this cycle | ✅ |
 | VFF pages/scenes + dimension parsing | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -83,7 +85,7 @@ released. 🔶 = implemented on `main`, not published to a package registry.
 | `build_instanced_scene()`: loose-edge curve support (structural framing/LGS) | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Public typed model: `Edge.layer`/`Edge.curve_id`/`Face.layer`, `loose_edge_runs()` (raw ids, no baking - for a B-rep consumer building real wire edges) | ✅ | ❌ | ❌ | ❌ | ❌ |
 | earcut-based triangulation (replaces Shapely + concave-face correctness fix) | ✅ | n/a, own triangulator | n/a | n/a | n/a |
-| Large-file streaming fix ([#264](https://github.com/iamahsanmehmood/openskp/issues/264)) | ✅ | not checked | not checked | not checked | not checked |
+| Large-file `F901 > 7017 > 7117` per-definition streaming ([#264](https://github.com/iamahsanmehmood/openskp/issues/264)) | ✅ ([#265](https://github.com/iamahsanmehmood/openskp/pull/265)) | ✅ | ❌ (`F401` only) | ❌ (`F401` only) | ✅ ([#300](https://github.com/iamahsanmehmood/openskp/pull/300)) |
 | Opt-in progress reporting + structured errors | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Writing** | | | | | |
 | Writer base (`create()`): materials, layers, definitions, groups, faces, holes, auto-triangulate | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -95,6 +97,7 @@ released. 🔶 = implemented on `main`, not published to a package registry.
 | Writer: linear dimensions + leader text | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Writer: section planes | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Writer: construction lines/points | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Writer: scenes (`add_scene`: camera + hidden layers) | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Editor (`open_existing()`) | ✅ | ✅ | ✅ | ✅ | ✅ |
 | SKP-to-code generator (`to_*_code()`) | ✅ | ✅ | ✅ | ✅ | ✅ |
 | codegen round-trips `applied_width`/opacity | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -133,35 +136,26 @@ Not every language's `.skp` writer (`create()` / `open_existing()`) is checked d
 
 ## 3. What's still outstanding after 1.6.0
 
-Nothing is unreleased on main: the 2026-11-22 synchronized 1.6.0 (see
-[CHANGELOG.md § 1.6.0](../CHANGELOG.md)) released everything merged before it.
-What remains open is genuine cross-language porting work, not a
-release-timing gap:
-
-**Closed**: reading a `.frag` file back (`from_fragments`/`read`) is now
-done in all 5 languages (TypeScript #362, .NET #363, Dart #364, C++ #365)
-- the last remaining item from the original 1.3.0 gap list. Along the
-way, Dart's port found and fixed a real, previously-undetected write-side
-bug (an odd material count silently corrupted the materials vector -
-`flat_buffers` struct-vector alignment padding landing in the wrong
-place), and C++'s port found and fixed an unrelated one of its own (a
-dangling-reference bug in a hand-written JSON parser - see
-`fragments_export.cpp`'s own comment on `MinimalJsonParser`). Neither
-would have surfaced without a reader to actually exercise the write
-path's own output.
+For changes already merged to `main` since the 2026-11-22 **1.6.0** release, see
+the **On `main`, not released yet** column in [§1](#1-package-versions) and the
+`[Unreleased]` section of [CHANGELOG.md](../CHANGELOG.md). What remains open
+across languages is cross-language porting work:
 
 | Item | Python has it via | Needs porting to |
 |:---|:---|:---|
+| Writer: scenes (`add_scene`: camera + hidden layers) | `create.py`, `edit.py`, `codegen.py` | TypeScript, .NET, Dart, C++ |
 | `build_instanced_scene()` loose-edge curve support + public typed-model `Edge.layer`/`Face.layer`/`loose_edge_runs()` | `_curves.py`, `instanced_scene.py`, `model.py` | TypeScript, .NET, Dart, C++ — none started |
 | IFC export: loose-edge curve sets + analytic arcs as `IfcAnnotation`/`IfcIndexedPolyCurve`, plus the 4 IFC4 STEP-conformance fixes | `scene.py`, `export/ifc.py` | TypeScript, .NET, Dart, C++ — none started |
-| Per-edge/per-face layer | `legacy.py`/`_core.py` | TypeScript, .NET, Dart, C++ |
-| Python scenes since 1.6.0: a painted group or component passes its whole material to the faces inside it, material names are kept, colorized textures are flagged, a texture a scene cannot carry is reported, and `original_textures=True` keeps it | `scene.py`, `instanced_scene.py`, `_face_groups.py` | TypeScript, .NET, Dart, C++ — not checked against these changes |
-| A definition's and the model's own attribute dictionaries (Dynamic Components), in VFF and classic files (1.6.0) | `_core.py`, `legacy.py`, `model.py` | TypeScript, .NET, Dart, C++ — not checked |
-| Attribute dicts: full 9-value-type decoding for VFF (2021+) format (Python: 7/9, others: string-only) — not independently re-verified this cycle for TS/.NET/Dart/C++, carried over from the prior version of this page rather than asserted fresh | `_core.py` | TypeScript, .NET, Dart, C++ — status needs a fresh check |
+| Per-edge/per-face layer, `Edge#curve` pointers, classic `CArcCurve` frames | `legacy.py`, `_core.py` | TypeScript, .NET, Dart, C++ |
+| Python scenes since 1.6.0: a painted group or component passes its whole material to the faces inside it, material names are kept, colorized textures are flagged, a texture a scene cannot carry is reported, and `original_textures=True` keeps it | `scene.py`, `instanced_scene.py`, `_face_groups.py` | TypeScript, .NET, Dart, C++ — not ported |
+| Definition- and model-level attribute dictionaries (Dynamic Components formulas/options), in VFF and classic files (1.6.0) | `_core.py`, `legacy.py`, `model.py` | TypeScript, .NET, Dart, C++ — not ported |
+| Model rendering-options face colours (`SkpModel.face_front_color` / `face_back_color`, SketchUp 4–2025, [#550](https://github.com/iamahsanmehmood/openskp/pull/550), part of [#533](https://github.com/iamahsanmehmood/openskp/issues/533)) | `_core.py`, `legacy.py`, `model.py` (on `main`) | TypeScript, .NET, Dart, C++ (once `#533` scene behaviour settles) |
+| Large-file `F901 > 7017 > 7117` per-definition streaming ([#264](https://github.com/iamahsanmehmood/openskp/issues/264)) | `_core.py` ([#265](https://github.com/iamahsanmehmood/openskp/pull/265)); also in TypeScript and C++ ([#300](https://github.com/iamahsanmehmood/openskp/pull/300)) | .NET (`Tlv.cs`) and Dart (`tlv.dart`) — currently unwrap `F401` only |
+| VFF `AA38` boolean attribute tag | C++ (`geometry.cpp`, `model.hpp`: 8/9 VFF types) | Python, TypeScript, .NET, Dart (7/9 VFF types today) |
 
-All tracked in [issue #285](https://github.com/iamahsanmehmood/openskp/issues/285).
-None of this blocked the 1.3.0 release — see the note at the top of
-[§1](#1-package-versions) for why.
+Tracked in [issue #285](https://github.com/iamahsanmehmood/openskp/issues/285) —
+see the note at the top of [§1](#1-package-versions) for how cross-porting is
+sequenced across releases.
 
 ## 4. Real SketchUp file version support
 

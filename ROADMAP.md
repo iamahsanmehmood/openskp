@@ -24,11 +24,11 @@ the repository with the same version number but is not on crates.io yet.
 
 | Language | Latest release | Status |
 |:---|:---|:---|
-| Python | [1.6.0 on PyPI](https://pypi.org/project/openskp/) | Ahead of the other 4 on a few items — see [Cross-language porting backlog](#cross-language-porting-backlog) below |
+| Python | [1.6.0 on PyPI](https://pypi.org/project/openskp/) | Ahead of the other 4 on several items — see [Cross-language porting backlog](#cross-language-porting-backlog) below |
 | TypeScript | [1.6.0 on npm](https://www.npmjs.com/package/openskp) | See [docs/LANGUAGE_PARITY.md](docs/LANGUAGE_PARITY.md) and the backlog below |
 | .NET | [1.6.0 on NuGet](https://www.nuget.org/packages/OpenSkp) | See [docs/LANGUAGE_PARITY.md](docs/LANGUAGE_PARITY.md) and the backlog below |
 | Dart | [1.6.0 on pub.dev](https://pub.dev/packages/openskp) | See [docs/LANGUAGE_PARITY.md](docs/LANGUAGE_PARITY.md) and the backlog below |
-| C++ | [1.6.0 on GitHub releases](https://github.com/iamahsanmehmood/openskp/releases?q=cpp-) | Closest to Python — missing loose-edge/curve support and IFC curve annotations (see [docs/LANGUAGE_PARITY.md](docs/LANGUAGE_PARITY.md)) |
+| C++ | [1.6.0 on GitHub releases](https://github.com/iamahsanmehmood/openskp/releases?q=cpp-) | Closest to Python — still missing scene writing (`add_scene`), loose-edge/curve support, per-edge/per-face layers, IFC curve annotations, definition/model attribute dictionaries, the 1.6.0 scene changes, and `face_front_color`/`face_back_color` (see [docs/LANGUAGE_PARITY.md](docs/LANGUAGE_PARITY.md)) |
 
 Each language is released independently — see
 [CONTRIBUTING.md § Releasing](CONTRIBUTING.md#releasing-maintainers) for
@@ -40,35 +40,41 @@ the tag format per language.
 
 Tracked in full, with checkboxes, in
 [issue #285](https://github.com/iamahsanmehmood/openskp/issues/285) — one
-line per feature, not one issue per language per feature. What's actually
-still open after 1.3.0 (most of what used to be listed here is now
-shipped everywhere — see [docs/LANGUAGE_PARITY.md](docs/LANGUAGE_PARITY.md)
-for the full, current matrix):
+line per feature, not one issue per language per feature. What is currently
+open across languages after 1.6.0 (see
+[docs/LANGUAGE_PARITY.md](docs/LANGUAGE_PARITY.md) for the full, current
+matrix):
 
-- ~~Reading a `.frag` file back~~ — **done in all 5 languages** (Python,
-  TypeScript #362, .NET #363, Dart #364, C++ #365). The last item from
-  the original 1.3.0 gap list; found and fixed two real, previously-
-  undetected write-side bugs along the way (Dart's material-vector
-  alignment padding, C++'s dangling-reference JSON parser) - see
-  [CHANGELOG.md](CHANGELOG.md).
-- Loose-edge/curve support in `build_instanced_scene()`, plus the public
-  typed model's `Edge.layer`/`Edge.curve_id`/`Face.layer`/
-  `loose_edge_runs()` — Python only.
-- IFC export: loose-edge curve sets + analytic arcs as
-  `IfcAnnotation`/`IfcIndexedPolyCurve`, plus 4 IFC4 STEP-conformance
-  fixes — Python only.
-- Legacy (pre-2021) pages/scenes reading — Python and C++; TypeScript/
-  .NET/Dart only read pages/scenes from VFF (2021+) files.
-- Per-edge/per-face layer, `Edge#curve` pointers, classic `CArcCurve`
-  frames — Python only.
-- Attribute dictionaries: full 9-value-type support for VFF (2021+) format
-  — Python (7/9) only; not independently re-checked this round for the
-  other 4 languages, so treat as needing a fresh look rather than a
-  confirmed gap.
-
-**Good first contribution?** Most of these have a real, SDK-verified Python
-implementation to port from — the hard research is already done. See
-[CONTRIBUTING.md](CONTRIBUTING.md) for the workflow.
+- **Writer scenes (`add_scene`)** — camera + hidden-layer `CViewPage` scenes in
+  new/edited classic files are Python-only today. *(Reading scenes works in all
+  five languages for both VFF 2021+ and classic pre-2021 files.)*
+- **Loose-edge/curve support in `build_instanced_scene()`**, plus the public
+  typed model's `Edge.layer`/`Edge.curve_id`/`Face.layer`/`loose_edge_runs()`
+  — Python only.
+- **IFC export: loose-edge curve sets + analytic arcs** as
+  `IfcAnnotation`/`IfcIndexedPolyCurve`, plus 4 IFC4 STEP-conformance fixes —
+  Python only.
+- **Per-edge/per-face layer, `Edge#curve` pointers, and classic `CArcCurve`
+  frames** — Python only.
+- **Python 1.6.0 scene & attribute additions** — painted-group/component
+  material inheritance (textures + transparency) on inner faces, preserved
+  material names, colorized-texture flag, `original_textures=True` (plus
+  reporting skipped non-PNG/JPEG textures), and **definition- and model-level
+  attribute dictionaries** (Dynamic Components formulas/options, in VFF and
+  classic files) — Python only.
+- **Current rendering-options face colours (`SkpModel.face_front_color` /
+  `face_back_color`, [#550](https://github.com/iamahsanmehmood/openskp/pull/550))**
+  — on `main` (unreleased) in Python only; scenes still colour unpainted faces
+  with the tag colour ([#533](https://github.com/iamahsanmehmood/openskp/issues/533)).
+- **Large-file `F901 > 7017 > 7117` per-definition streaming
+  ([#264](https://github.com/iamahsanmehmood/openskp/issues/264))** — shipped
+  in Python ([#265](https://github.com/iamahsanmehmood/openskp/pull/265)),
+  TypeScript, and C++ ([#300](https://github.com/iamahsanmehmood/openskp/pull/300));
+  `.NET` and `Dart` unwrap `F401` lazily but do not yet unwrap `F901 > 7017 > 7117`.
+- **VFF `AA38` boolean attribute tag** — decoded in C++ (8/9 VFF value types);
+  Python, TypeScript, .NET, and Dart decode the other 7 observed VFF types
+  (`AD38` string, `A738` int32, `A938` float, `AF38` Length, `B438`/`B538`
+  3D point/vector, `AE38` array).
 
 **Good first contribution?** Most of these have a real, SDK-verified Python
 implementation to port from — the hard research is already done. See
