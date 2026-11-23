@@ -1,6 +1,4 @@
-use openskp::create::{
-    create, DefinitionOptions, FaceOptions, InstanceOptions, LayerOptions,
-};
+use openskp::create::{create, DefinitionOptions, FaceOptions, InstanceOptions, LayerOptions};
 use openskp::{ParseOptions, SkpFile};
 
 // Regression (#534 / #285): after the last CLayer the reader sees
@@ -30,7 +28,12 @@ fn build(n_tags: usize, n_defs: usize) -> Vec<u8> {
             .unwrap();
         let x = 1.0 + i as f64;
         comp.add_face(
-            &[[0.0, 0.0, 0.0], [x, 0.0, 0.0], [x, 1.0, 0.0], [0.0, 1.0, 0.0]],
+            &[
+                [0.0, 0.0, 0.0],
+                [x, 0.0, 0.0],
+                [x, 1.0, 0.0],
+                [0.0, 1.0, 0.0],
+            ],
             &FaceOptions {
                 material: Some(mat),
                 ..FaceOptions::default()

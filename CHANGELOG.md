@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   their logging hook (`openskp.legacy` in Python, `ParseOptions` / `SkpParseOptions` log callback
   at the new `warn` / `Warning` / `warning` level in the other five) whenever
   `unread_root_entities` is nonzero.
+
 ### Fixed — TypeScript, .NET, Dart, C++, Rust: classic files whose definition count matches a tag's slot read again (#285)
 
 - Ports Python's #534 fix to the other five classic (pre-2021 MFC) readers: `skip_clayer_parent_ref`
