@@ -79,9 +79,10 @@ String toMtl(Scene scene) {
 /// Names are case-sensitive. Collisions gain _<1-based material index>
 /// and, when needed, an additional _<n> suffix. Other names stay unchanged.
 String toObj(Scene scene, {String? mtlFilename}) {
+  final surfacePrimitives = scene.surfacePrimitives;
   final buffer = StringBuffer();
   buffer.writeln('# OpenSKP OBJ Export');
-  buffer.writeln('# Primitives: ${scene.glbPrimitives.length}');
+  buffer.writeln('# Primitives: ${surfacePrimitives.length}');
   if (mtlFilename != null && mtlFilename.isNotEmpty) {
     buffer.writeln('mtllib $mtlFilename');
   }
@@ -92,7 +93,7 @@ String toObj(Scene scene, {String? mtlFilename}) {
   var uvOffset = 1;
   var normOffset = 1;
 
-  for (final prim in scene.glbPrimitives) {
+  for (final prim in surfacePrimitives) {
     buffer.writeln('o ${prim.geomName}');
 
     final vertCount = prim.positions.length ~/ 3;

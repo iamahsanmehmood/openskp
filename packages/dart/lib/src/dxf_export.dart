@@ -393,7 +393,7 @@ String toDxf(
   String mode = 'polyface',
 }) {
   final layerColors = <String, List<int>>{};
-  for (final prim in scene.glbPrimitives) {
+  for (final prim in scene.surfacePrimitives) {
     final layerName = sanitizeLayerName(prim.geomName);
     if (!layerColors.containsKey(layerName)) {
       layerColors[layerName] = getPrimRgb(scene, prim);
@@ -449,7 +449,7 @@ String toDxf(
   lines.addAll(_headerStaticC);
   lines.addAll(['  0', 'SECTION', '  2', 'ENTITIES']);
 
-  for (final prim in scene.glbPrimitives) {
+  for (final prim in scene.surfacePrimitives) {
     final layerName = sanitizeLayerName(prim.geomName);
     final triCount = prim.indices.length ~/ 3;
     if (triCount == 0) continue;

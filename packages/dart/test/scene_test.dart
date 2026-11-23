@@ -22,8 +22,10 @@ void main() {
   test('buildScene matches Python and TypeScript ground truth', () {
     final scene = SkpFile.open(fixturePath).buildScene();
 
-    expect(scene.glbPrimitives.length, 21);
-    expect(scene.meshIndex.length, 21);
+    // 21 surface primitives as before #533, plus the back copies of unpainted faces
+    expect(scene.surfacePrimitives.length, 21);
+    expect(scene.glbPrimitives.length, 22);
+    expect(scene.meshIndex.length, 22);
     expect(scene.gltfMaterials.length, 13);
 
     expect(scene.sceneHierarchy.name, 'ROOT');
@@ -56,7 +58,7 @@ void main() {
     // buildScene() must not require parse() to have been called first -
     // it re-parses independently.
     final scene = SkpFile.open(fixturePath).buildScene();
-    expect(scene.glbPrimitives.length, 21);
+    expect(scene.glbPrimitives.length, 22);
   });
 
   test('renders back-face materials correctly (item 14 regression)', () {
@@ -80,7 +82,7 @@ void main() {
     expect(hasColor(204, 235, 244), true);
 
     final doubleSidedCount = scene.gltfMaterials.where((m) => m['doubleSided'] == true).length;
-    expect(doubleSidedCount, 4);
+    expect(doubleSidedCount, 3); // unpainted faces show a colour per side (#533)
   });
 
   test('translucent material gets BLEND alpha', () {
@@ -168,8 +170,9 @@ void main() {
     File(path).writeAsBytesSync(bytes);
     try {
       final scene = SkpFile.open(path).buildScene();
-      final names = scene.meshIndex.values.map((m) => m.name).toList()..sort();
+      final names = [for (final p in scene.surfacePrimitives) scene.meshIndex[p.geomName]!.name]..sort();
       expect(names, ['LeafInstance', 'MiddleInstance', 'OuterInstance']);
+      expect(scene.meshIndex.values.map((m) => m.name).toSet(), names.toSet());
     } finally {
       File(path).deleteSync();
     }

@@ -56,7 +56,7 @@ void main() {
 
       final scene = SkpFile.fromBuffer(builder.toBytes()).buildScene();
       int tris = 0, verts = 0;
-      for (final p in scene.glbPrimitives) {
+      for (final p in scene.surfacePrimitives) {
         tris += p.indices.length ~/ 3;
         verts += p.positions.length ~/ 3;
       }
@@ -92,8 +92,8 @@ void main() {
       builder.addInstance(board);
 
       final scene = SkpFile.fromBuffer(builder.toBytes()).buildScene();
-      expect(scene.glbPrimitives.length, 1);
-      final prim = scene.glbPrimitives[0];
+      expect(scene.surfacePrimitives.length, 1);
+      final prim = scene.surfacePrimitives[0];
 
       double bakedAreaM2 = 0.0;
       for (int t = 0; t < prim.indices.length; t += 3) {
@@ -131,7 +131,7 @@ void main() {
       final fixturePath = '${Directory.current.path}/test/fixtures/Untitled.skp';
       final scene = SkpFile.open(fixturePath).buildScene();
       int tris = 0;
-      for (final p in scene.glbPrimitives) {
+      for (final p in scene.surfacePrimitives) {
         tris += p.indices.length ~/ 3;
       }
       expect(tris, 18636);

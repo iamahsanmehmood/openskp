@@ -110,6 +110,10 @@ class GlbPrimitive {
   /// Matches the corresponding key in Scene.meshIndex.
   final String geomName;
 
+  /// `true` for the back copies of faces with no paint on either side; see
+  /// [Scene.surfacePrimitives].
+  final bool unpaintedBack;
+
   GlbPrimitive({
     required this.positions,
     required this.normals,
@@ -117,6 +121,7 @@ class GlbPrimitive {
     required this.indices,
     required this.materialIndex,
     required this.geomName,
+    this.unpaintedBack = false,
   });
 }
 
@@ -146,6 +151,11 @@ class Scene {
   /// Distinct texture images the placed materials use, deduplicated by
   /// source bytes. Empty when nothing placed in the scene is textured.
   List<SceneTexture> textures;
+
+  /// [glbPrimitives] without the back copies of faces that have no paint on
+  /// either side, for formats and callers that emit one surface per face.
+  List<GlbPrimitive> get surfacePrimitives =>
+      [for (final p in glbPrimitives) if (!p.unpaintedBack) p];
 
   Scene({
     required this.sceneHierarchy,
@@ -242,6 +252,7 @@ class SceneBuilder {
     final activeDefinitions = <int>{};
 
     (int, int, int) getLayerColor(String name) => layerColors[name] ?? (136, 136, 136);
+    final styleColors = unpaintedStyleColors(parsed, options?.unpaintedFaces);
 
     int getMaterialIndex((int, int, int) color, bool doubleSided, int? textureIndex,
         [double transparency = 1.0]) {
@@ -311,13 +322,22 @@ class SceneBuilder {
         // reverse-wound using the back material - so each side renders
         // its own correct color instead of the front material leaking
         // onto (or the back vanishing from) the far side.
-        final fallbackColor = inheritedColor ?? getLayerColor(parentLayer);
+        final (int, int, int) fallbackColor;
+        final (int, int, int) fallbackBackColor;
+        if (inheritedColor != null) {
+          fallbackColor = fallbackBackColor = inheritedColor;
+        } else if (styleColors != null) {
+          (fallbackColor, fallbackBackColor) = styleColors;
+        } else {
+          fallbackColor = fallbackBackColor = getLayerColor(parentLayer);
+        }
         final faceGroups = buildLocalFaceGroups(
           builder,
           FaceGroupContext(
             resolveMaterial: (matId) => _resolveMaterial(matId, materialIdToName, materials, materialsByFolder),
             textureIndexFor: textureIndexFor,
             fallbackColor: fallbackColor,
+            fallbackBackColor: fallbackBackColor,
             definitionId: defId,
           ),
         );
@@ -326,7 +346,7 @@ class SceneBuilder {
         final multiGroup = faceGroups.length > 1;
 
         for (final groupEntry in faceGroups.entries) {
-          final (_, _, texIndex, _) = groupEntry.key;
+          final (_, _, texIndex, _, unpaintedBack) = groupEntry.key;
           final group = groupEntry.value;
           final color = group.color;
           if (group.localFaces.isEmpty) continue;
@@ -420,6 +440,7 @@ class SceneBuilder {
             indices: indices,
             materialIndex: materialIndex,
             geomName: geomName,
+            unpaintedBack: unpaintedBack,
           ));
         }
       }
