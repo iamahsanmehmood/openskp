@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — C++: scenes show unpainted faces in SketchUp's face colours (#533)
+
+- `build_scene()`, `build_instanced_scene()`, `to_glb()` and `to_instanced_glb()` now give a face side with no paint the colour SketchUp shows: the model's front face colour on the front and its back face colour on the back (`SkpModel::face_front_color` / `face_back_color`). Set `ParseOptions::unpainted_faces = "tag"` for the previous tag-colour fallback; SketchUp 3 files without face colours still use the tag colour.
+- Where the two colours differ, a face with no paint on either side becomes two single-sided primitives, with the back copy marked `unpainted_back` on `GlbPrimitive` and `LocalPrimitive`. `Scene::surface_primitives()` leaves those out; the STL, OBJ, PLY, DXF, IFC and Fragments exports emit one copy of each such face in the front colour.
+- An unpainted component placed on several tags is now one instanced mesh resource instead of one per tag colour.
+
 ### Added — TypeScript, .NET, Dart, C++ & Rust: the model's face colours (`face_front_color` / `face_back_color`) (#533)
 
 - Ports Python's #550 model rendering-options face-colour reader to TypeScript (`SkpModel.faceFrontColor` / `faceBackColor`), .NET (`SkpModel.FaceFrontColor` / `FaceBackColor`), Dart (`SkpModel.faceFrontColor` / `faceBackColor`), C++ (`SkpModel::face_front_color` / `face_back_color`), and Rust (`SkpModel::face_front_color` / `face_back_color`): read from 2021+ `model.dat` items `0x735C` / `0x735D` and from classic SketchUp 4–2020 rendering options after the model camera (`None` / `null` / unset for SketchUp 3).

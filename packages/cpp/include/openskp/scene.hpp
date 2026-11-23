@@ -57,6 +57,7 @@ struct GlbPrimitive {
   std::vector<std::uint32_t> indices;
   std::size_t material_index{};
   std::string geom_name;
+  bool unpainted_back{};
 };
 
 struct PbrMetallicRoughness {
@@ -102,5 +103,7 @@ struct OPENSKP_EXPORT Scene {
   // not yet read here (open gap, see docs/LANGUAGE_PARITY.md), so every
   // VFF layer is absent from this map (treated as visible by consumers).
   std::map<std::string, bool> layer_hidden;
+
+  std::vector<GlbPrimitive> surface_primitives() const;
 };
 }  // namespace openskp

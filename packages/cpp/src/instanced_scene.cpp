@@ -93,17 +93,23 @@ std::array<double, 16> mul4(const std::array<double, 16>& a, const std::array<do
   return out;
 }
 
-std::string resource_key(std::optional<EntityId> defid, const FaceColorKey& color) {
+std::string resource_key(std::optional<EntityId> defid, const FaceColorKey& color,
+                         const FaceColorKey& back_color) {
   std::string key = defid ? std::to_string(*defid) : "ROOT";
   key += '|';
   key += std::to_string(color[0]) + ',' + std::to_string(color[1]) + ',' +
          std::to_string(color[2]) + ',' + std::to_string(color[3]);
+  if (back_color != color) {
+    key += '/' + std::to_string(back_color[0]) + ',' + std::to_string(back_color[1]) + ',' +
+           std::to_string(back_color[2]) + ',' + std::to_string(back_color[3]);
+  }
   return key;
 }
 
 }  // namespace
 
 InstancedScene build_instanced_scene_raw(RawParsed&& p, const ParseOptions& o) {
+  const auto style_colors = unpainted_style_colors(p, o.unpainted_faces);
   InstancedScene scene;
   emit_log(o, LogLevel::information,
            "Building instanced scene: " + std::to_string(p.definitions.size()) +
@@ -140,7 +146,9 @@ InstancedScene build_instanced_scene_raw(RawParsed&& p, const ParseOptions& o) {
   std::map<GroupKey, std::size_t> material_index_by_key;
 
   auto get_material_index = [&](const GroupKey& key) -> std::size_t {
-    auto found = material_index_by_key.find(key);
+    GroupKey mat_key = key;
+    mat_key.unpainted_back = false;
+    auto found = material_index_by_key.find(mat_key);
     if (found != material_index_by_key.end()) return found->second;
     const auto idx = scene.gltf_materials.size();
     GltfMaterial gm;
@@ -149,7 +157,7 @@ InstancedScene build_instanced_scene_raw(RawParsed&& p, const ParseOptions& o) {
     gm.pbr_metallic_roughness.base_color_texture = key.texture_index;
     gm.double_sided = key.double_sided;
     scene.gltf_materials.push_back(gm);
-    material_index_by_key.emplace(key, idx);
+    material_index_by_key.emplace(mat_key, idx);
     return idx;
   };
 
@@ -174,15 +182,23 @@ InstancedScene build_instanced_scene_raw(RawParsed&& p, const ParseOptions& o) {
                                   const std::string& layer) -> std::optional<std::string> {
     if (builder.faces.empty()) return std::nullopt;
 
-    const auto fallback = inherited.value_or(default_color(p, layer));
-    const auto key = resource_key(defid, fallback);
+    FaceColorKey fallback{};
+    FaceColorKey fallback_back{};
+    if (inherited) {
+      fallback = fallback_back = *inherited;
+    } else if (style_colors) {
+      std::tie(fallback, fallback_back) = *style_colors;
+    } else {
+      fallback = fallback_back = default_color(p, layer);
+    }
+    const auto key = resource_key(defid, fallback, fallback_back);
     auto hit = resource_index_by_key.find(key);
     if (hit != resource_index_by_key.end()) {
       return scene.mesh_resources[hit->second].id;
     }
 
-    auto groups =
-        build_local_face_groups(p, builder, FaceGroupContext{texture_index_for, fallback});
+    auto groups = build_local_face_groups(
+        p, builder, FaceGroupContext{texture_index_for, fallback, fallback_back});
 
     std::vector<LocalPrimitive> primitives;
     for (auto& kv : groups) {
@@ -230,6 +246,7 @@ InstancedScene build_instanced_scene_raw(RawParsed&& p, const ParseOptions& o) {
       }
 
       prim.material_index = get_material_index(kv.first);
+      prim.unpainted_back = kv.first.unpainted_back;
       primitives.push_back(std::move(prim));
     }
 

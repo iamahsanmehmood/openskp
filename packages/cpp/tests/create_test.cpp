@@ -648,9 +648,14 @@ TEST(Create, EachNestedLevelKeepsItsOwnInstanceNameInMeshIndex) {
 
   Scene scene = SkpFile::from_buffer(builder->to_bytes()).build_scene();
   std::vector<std::string> names;
-  for (const auto& [geom_name, meta] : scene.mesh_index) names.push_back(meta.name);
+  for (const auto& prim : scene.surface_primitives()) {
+    names.push_back(scene.mesh_index.at(prim.geom_name).name);
+  }
   std::sort(names.begin(), names.end());
   EXPECT_EQ(names, (std::vector<std::string>{"LeafInstance", "MiddleInstance", "OuterInstance"}));
+  std::set<std::string> all_names;
+  for (const auto& [geom_name, meta] : scene.mesh_index) all_names.insert(meta.name);
+  EXPECT_EQ(all_names, (std::set<std::string>(names.begin(), names.end())));
 }
 
 TEST(Create, DefinitionCannotNestAnInstanceOfItself) {

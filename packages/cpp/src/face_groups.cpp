@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <sstream>
+#include <stdexcept>
 #include <utility>
 
 namespace openskp {
@@ -114,6 +115,18 @@ FaceColorKey default_color(const RawParsed& parsed, const std::string& layer) {
   return {color[0], color[1], color[2], 255};
 }
 
+std::optional<std::pair<FaceColorKey, FaceColorKey>> unpainted_style_colors(
+    const RawParsed& parsed, const std::string& unpainted_faces) {
+  if (unpainted_faces != "style" && unpainted_faces != "tag") {
+    throw std::invalid_argument("unpainted_faces must be \"style\" or \"tag\", not \"" +
+                                unpainted_faces + "\"");
+  }
+  if (unpainted_faces != "style" || !parsed.face_colors) return std::nullopt;
+  const auto& [front, back] = *parsed.face_colors;
+  return std::pair<FaceColorKey, FaceColorKey>{{front[0], front[1], front[2], 255},
+                                               {back[0], back[1], back[2], 255}};
+}
+
 // Identifies an image's MIME type from its magic bytes. Returns nullopt
 // for anything glTF cannot carry (glTF only allows PNG and JPEG).
 std::optional<std::string> sniff_image_mime(const ByteBuffer& data) {
@@ -130,6 +143,7 @@ std::optional<std::string> sniff_image_mime(const ByteBuffer& data) {
 std::map<GroupKey, Group> build_local_face_groups(const RawParsed& parsed, const GeometryBuilder& b,
                                                   const FaceGroupContext& ctx) {
   std::map<GroupKey, Group> groups;
+  const auto fallback_back = ctx.fallback_back_color.value_or(ctx.fallback_color);
 
   // Built once per definition, not per face: rebuilding it inside the loop
   // makes the whole pass O(faces x vertices).
@@ -141,7 +155,7 @@ std::map<GroupKey, Group> build_local_face_groups(const RawParsed& parsed, const
     const auto front_mat = find_material(parsed, f.material_id);
     const auto back_mat = find_material(parsed, f.back_material_id);
     const auto front = material_color(front_mat).value_or(ctx.fallback_color);
-    const auto back = material_color(back_mat).value_or(ctx.fallback_color);
+    const auto back = material_color(back_mat).value_or(fallback_back);
 
     std::vector<std::vector<EntityId>> loops;
     for (auto& l : f.loops) {
@@ -185,12 +199,15 @@ std::map<GroupKey, Group> build_local_face_groups(const RawParsed& parsed, const
     };
     if (front == back) {
       const auto [tw, th] = tile_size(front_mat);
-      add_side({front, true, ctx.texture_index_for(front_mat)}, false, f.uv_transform, tw, th);
+      add_side({front, true, ctx.texture_index_for(front_mat), false}, false, f.uv_transform, tw,
+               th);
     } else {
       const auto [ftw, fth] = tile_size(front_mat);
-      add_side({front, false, ctx.texture_index_for(front_mat)}, false, f.uv_transform, ftw, fth);
+      add_side({front, false, ctx.texture_index_for(front_mat), false}, false, f.uv_transform, ftw,
+               fth);
       const auto [btw, bth] = tile_size(back_mat);
-      add_side({back, false, ctx.texture_index_for(back_mat)}, true, f.uv_transform_back, btw, bth);
+      add_side({back, false, ctx.texture_index_for(back_mat), !front_mat && !back_mat}, true,
+               f.uv_transform_back, btw, bth);
     }
   }
 

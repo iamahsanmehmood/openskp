@@ -2968,6 +2968,7 @@ std::string to_dxf(const Scene& scene, double scale, const std::string& mode) {
   std::map<std::string, std::string> layer_names;
   std::set<std::string> used_names = {"0", "defpoints"};
   for (const auto& prim : scene.glb_primitives) {
+    if (prim.unpainted_back) continue;
     if (prim.indices.empty()) continue;
     if (prim.positions.size() % 3 != 0 || prim.indices.size() % 3 != 0)
       throw std::invalid_argument("DXF mesh has incomplete coordinates or triangles");
@@ -3058,6 +3059,7 @@ std::string to_dxf(const Scene& scene, double scale, const std::string& mode) {
   };
 
   for (const auto& prim : scene.glb_primitives) {
+    if (prim.unpainted_back) continue;
     size_t tri_count = prim.indices.size() / 3;
     if (tri_count == 0) continue;
     const std::string& l_name = layer_names.at(prim.geom_name);
