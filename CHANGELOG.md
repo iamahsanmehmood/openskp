@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The wheel now ships `openskp/py.typed` and carries the `Typing :: Typed` classifier, so mypy
   and pyright read openskp's type hints instead of treating the package as untyped.
+
 ### Fixed — TypeScript, .NET, Dart, C++ & Rust: SketchUp 2019 and 2020 files whose tags carry a line style (#514, #285)
 
 - Ports Python's `CCustomLineStyle` reader (#515) to TypeScript, .NET, Dart, C++ and Rust. Since
