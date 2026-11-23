@@ -1,5 +1,5 @@
 import { foldScale, multiplyMatrices } from './transforms';
-import { extractDynamicProperties, extractAttributeDictionaries, isGenericDefinitionName, findNameOverride, stringifyVffAttrValue, VffAttrValue } from './geometry';
+import { extractDynamicProperties, extractAttributeDictionaries, isGenericDefinitionName, findNameOverride, stringifyVffAttrValue, majorityFaceLayer, VffAttrValue } from './geometry';
 import { ParseOptions, PROGRESS_INTERVAL, emitLog, emitProgress } from './observability';
 import { SkpParseError } from './errors';
 import { buildLocalFaceGroups } from './face-groups';
@@ -326,6 +326,7 @@ export function buildInstancedSceneFromParsed(
     const d = defsDict.get(defId);
     if (!d || d.builder.faces.size === 0) return undefined;
 
+    layer = majorityFaceLayer(d.builder, layerIdToName, layer);
     const key = resourceVariantKey(defId, inheritedMaterial, layer);
     const hit = resourceIdByKey.get(key);
     if (hit !== undefined) return hit;
@@ -464,6 +465,7 @@ export function buildInstancedSceneFromParsed(
     const d = defsDict.get(defId);
     if (!d) return [];
 
+    parentLayer = majorityFaceLayer(d.builder, layerIdToName, parentLayer);
     const nodes: InstancedNode[] = [];
 
     for (const inst of d.builder.instances) {

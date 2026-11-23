@@ -97,8 +97,9 @@ Scene build_scene_raw(RawParsed&& p, const ParseOptions& o) {
                                           std::optional<FaceColorKey>)>
       bake;
   bake = [&](const GeometryBuilder& b, const std::string& defname, std::optional<EntityId> defid,
-             const std::vector<double>& matrix, const std::string& layer, const std::string& path,
-             std::optional<FaceColorKey> inherited) {
+             const std::vector<double>& matrix, const std::string& parent_layer,
+             const std::string& path, std::optional<FaceColorKey> inherited) {
+    const std::string layer = majority_face_layer(p, b, parent_layer, o);
     const auto fallback = inherited.value_or(default_color(p, layer));
     auto groups = build_local_face_groups(p, b, FaceGroupContext{texture_index_for, fallback});
     for (auto& kv : groups) {

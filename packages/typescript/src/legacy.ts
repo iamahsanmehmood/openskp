@@ -2486,6 +2486,7 @@ class LegacyBuilder {
     end: [number, number, number] | null;
   }[] = [];
   constructionPoints: { position: [number, number, number] }[] = [];
+  edgeLayers = new Map<number, number>();
   edgeCurves = new Map<number, number>();
   arcCurves = new Map<number, ArcFrame>();
 }
@@ -2507,6 +2508,9 @@ function addEdge(builder: LegacyBuilder, slot: number, e: any, slots: Map<number
   const flags = (db.soft ? 0x08 : 0) | (db.smooth ? 0x10 : 0) | (db.hidden ? 0x01 : 0);
   if (flags) {
     builder.edgeFlags.set(slot, flags);
+  }
+  if (db.layer) {
+    builder.edgeLayers.set(slot, db.layer);
   }
   // The edge's parent Curve (the CCurve/CArcCurve slot), and, if that curve
   // is an analytic arc, its frame: it arrives on the edge that first
@@ -2554,6 +2558,7 @@ function fillBuilder(builder: LegacyBuilder, ents: [number, string | null, any][
         uvProjected: false,
         uvProjectedBack: false,
         hidden: Boolean(v.db.hidden),
+        layerId: v.db.layer || null,
       };
       const attrs = v.attrs;
       if (attrs && typeof attrs === 'object') {

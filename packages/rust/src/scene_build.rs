@@ -306,6 +306,8 @@ impl<'a> Baker<'a> {
         inherited: Option<FaceColorKey>,
     ) -> Result<Vec<InstanceNode>, SkpParseError> {
         let p = self.p;
+        let effective_layer = curve_fallback_layer(p, b, layer);
+        let layer = effective_layer.as_str();
         let fallback = inherited.unwrap_or_else(|| default_color(p, layer));
         let groups = {
             let textures = &mut self.textures;

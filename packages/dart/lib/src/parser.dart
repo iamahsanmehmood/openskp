@@ -86,9 +86,9 @@ class SkpFile {
 
     for (final entry in parsed.defsDict.entries) {
       model.definitions[entry.key] =
-          _buildDefinition(entry.key, entry.value, parsed.layerIdToName);
+          buildDefinition(entry.key, entry.value, parsed.layerIdToName);
     }
-    model.root = _buildDefinition(0, parsed.root, parsed.layerIdToName);
+    model.root = buildDefinition(0, parsed.root, parsed.layerIdToName);
 
     for (final entry in parsed.layerColors.entries) {
       final (r, g, b) = entry.value;
@@ -169,7 +169,7 @@ class SkpFile {
     return model;
   }
 
-  static Definition _buildDefinition(
+  static Definition buildDefinition(
       int defId, RawDefinition d, Map<int, String> layerIdToName) {
     final defn = Definition(
       id: defId,
@@ -189,6 +189,7 @@ class SkpFile {
     for (final entry in d.builder.edges.entries) {
       final (v1, v2) = entry.value;
       final flags = d.builder.edgeFlags[entry.key] ?? 0;
+      final edgeLayerId = d.builder.edgeLayers[entry.key];
       defn.edges[entry.key] = Edge(
         id: entry.key,
         v1Id: v1 ?? 0,
@@ -197,6 +198,9 @@ class SkpFile {
         smooth: (flags & 0x10) != 0,
         hidden: (flags & 0x01) != 0,
         curveId: d.builder.edgeCurves[entry.key],
+        layer: edgeLayerId != null
+            ? (layerIdToName[edgeLayerId] ?? edgeLayerId.toString())
+            : '',
       );
     }
 
@@ -214,6 +218,7 @@ class SkpFile {
 
     for (final entry in d.builder.faces.entries) {
       final f = entry.value;
+      final faceLayerId = f.layerId;
       defn.faces[entry.key] = Face(
         id: entry.key,
         loops: f.loops,
@@ -225,6 +230,9 @@ class SkpFile {
         uvProjected: f.uvProjected,
         uvProjectedBack: f.uvProjectedBack,
         hidden: f.hidden,
+        layer: faceLayerId != null
+            ? (layerIdToName[faceLayerId] ?? faceLayerId.toString())
+            : '',
       );
     }
 

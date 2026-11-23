@@ -288,6 +288,7 @@ namespace OpenSkp
             {
                 if (builder.Faces.Count > 0)
                 {
+                    parentLayer = Geometry.MajorityFaceLayer(builder, layerIdToName, parentLayer);
                     var fallbackColor = inheritedColor ?? GetLayerColor(parentLayer);
                     var faceGroups = FaceGroups.BuildLocalFaceGroups(builder, new FaceGroups.Context
                     {
@@ -419,6 +420,17 @@ namespace OpenSkp
                     // re-derived here (from inst.Children) to match the
                     // Python/TS reference exactly rather than needing a
                     // new field threaded through GeometryBuilderInstance.
+                    if (inst.LayerId is long instLayerId)
+                    {
+                        lName = layerIdToName.TryGetValue(instLayerId, out var ln) ? ln : parentLayer;
+                    }
+                    if (inst.MaterialId is long instMaterialId && materialIdToName.TryGetValue(instMaterialId, out var instMatName))
+                    {
+                        var mat = materials.TryGetValue(instMatName, out var m1) ? m1
+                            : materialsByFolder.TryGetValue(instMatName, out var m2) ? m2 : null;
+                        if (mat != null) instColor = (mat.R, mat.G, mat.B);
+                    }
+
                     var d007 = inst.Children.FirstOrDefault(c => c.Tag == "D007");
                     if (d007 != null)
                     {

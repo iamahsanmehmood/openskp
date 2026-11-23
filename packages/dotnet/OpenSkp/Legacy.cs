@@ -2528,6 +2528,7 @@ namespace OpenSkp
             public Dictionary<long, (double X, double Y, double Z)> Vertices = new Dictionary<long, (double, double, double)>();
             public Dictionary<long, (long? V1, long? V2)> Edges = new Dictionary<long, (long?, long?)>();
             public Dictionary<long, int> EdgeFlags = new Dictionary<long, int>();
+            public Dictionary<long, long> EdgeLayers = new Dictionary<long, long>();
             public Dictionary<long, long> EdgeCurves = new Dictionary<long, long>();
             public Dictionary<long, ArcFrame> ArcCurves = new Dictionary<long, ArcFrame>();
             public Dictionary<long, GeometryBuilderFace> Faces = new Dictionary<long, GeometryBuilderFace>();
@@ -2557,6 +2558,10 @@ namespace OpenSkp
             if (flags != 0)
             {
                 builder.EdgeFlags[slot] = flags;
+            }
+            if (db.Layer != 0)
+            {
+                builder.EdgeLayers[slot] = db.Layer;
             }
             // The edge's parent Curve (the CCurve/CArcCurve slot) and, if that curve is an
             // analytic arc, its frame: it arrives on the edge that first references the
@@ -2611,6 +2616,7 @@ namespace OpenSkp
                         UvTransform = null,
                         UvTransformBack = null,
                         Hidden = faceRec.Db.Hidden != 0,
+                        LayerId = faceRec.Db.Layer != 0 ? faceRec.Db.Layer : (long?)null,
                     };
                     var attrs = faceRec.Attrs;
                     if (attrs != null)
@@ -2925,6 +2931,7 @@ namespace OpenSkp
             foreach (var kv in b.Vertices) g.Vertices[kv.Key] = kv.Value;
             foreach (var kv in b.Edges) g.Edges[kv.Key] = kv.Value;
             foreach (var kv in b.EdgeFlags) g.EdgeFlags[kv.Key] = kv.Value;
+            foreach (var kv in b.EdgeLayers) g.EdgeLayers[kv.Key] = kv.Value;
             foreach (var kv in b.EdgeCurves) g.EdgeCurves[kv.Key] = kv.Value;
             foreach (var kv in b.ArcCurves) g.ArcCurves[kv.Key] = kv.Value;
             foreach (var kv in b.Faces) g.Faces[kv.Key] = kv.Value;

@@ -24,6 +24,9 @@ namespace OpenSkp
         /// multi-segment line or arc; if the curve is an arc, <see cref="Definition.Arcs"/> has it
         /// under the same id.</summary>
         public long? CurveId { get; set; }
+        /// <summary>Name of the layer (tag) this edge is assigned to, or "" when the edge carries no
+        /// explicit layer reference.</summary>
+        public string Layer { get; set; } = "";
     }
 
     /// <summary>The analytic arc behind a curve: SketchUp's own <c>ArcCurve</c>. A curve SketchUp drew
@@ -92,6 +95,10 @@ namespace OpenSkp
         /// <summary>Whether the face is hidden (SketchUp's "Hide" on this
         /// specific face, not a layer/tag visibility toggle).</summary>
         public bool Hidden { get; set; }
+
+        /// <summary>Name of the layer (tag) this face is assigned to, or "" when the face carries no
+        /// explicit layer reference (default layer).</summary>
+        public string Layer { get; set; } = "";
     }
 
     public sealed class Layer

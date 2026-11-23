@@ -128,7 +128,7 @@ namespace OpenSkp
             return model;
         }
 
-        private static Definition BuildDefinition(long defId, Geometry.RawDefinition d, Dictionary<long, string> layerIdToName)
+        internal static Definition BuildDefinition(long defId, Geometry.RawDefinition d, Dictionary<long, string> layerIdToName)
         {
             var defn = new Definition
             {
@@ -151,6 +151,11 @@ namespace OpenSkp
             {
                 var (v1, v2) = kv.Value;
                 int flags = d.Builder.EdgeFlags.TryGetValue(kv.Key, out var f) ? f : 0;
+                string edgeLayer = "";
+                if (d.Builder.EdgeLayers.TryGetValue(kv.Key, out var edgeLayerId))
+                {
+                    edgeLayer = layerIdToName.TryGetValue(edgeLayerId, out var elName) ? elName : edgeLayerId.ToString();
+                }
                 defn.Edges[kv.Key] = new Edge
                 {
                     Id = kv.Key,
@@ -160,6 +165,7 @@ namespace OpenSkp
                     Smooth = (flags & 0x10) != 0,
                     Hidden = (flags & 0x01) != 0,
                     CurveId = d.Builder.EdgeCurves.TryGetValue(kv.Key, out var curveId) ? curveId : (long?)null,
+                    Layer = edgeLayer,
                 };
             }
 
@@ -180,6 +186,11 @@ namespace OpenSkp
             foreach (var kv in d.Builder.Faces)
             {
                 var f = kv.Value;
+                string faceLayer = "";
+                if (f.LayerId is long faceLayerId)
+                {
+                    faceLayer = layerIdToName.TryGetValue(faceLayerId, out var flName) ? flName : faceLayerId.ToString();
+                }
                 defn.Faces[kv.Key] = new Face
                 {
                     Id = kv.Key,
@@ -192,6 +203,7 @@ namespace OpenSkp
                     UvProjected = f.UvProjected,
                     UvProjectedBack = f.UvProjectedBack,
                     Hidden = f.Hidden,
+                    Layer = faceLayer,
                 };
             }
 

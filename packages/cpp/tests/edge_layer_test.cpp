@@ -1,4 +1,9 @@
+#include <cmath>
 #include <gtest/gtest.h>
+#include <set>
+#include <tuple>
+#include <utility>
+#include <vector>
 
 #include <openskp/openskp.hpp>
 
@@ -52,6 +57,52 @@ TEST(EdgeLayer, ReadsEdgeLayersFromAClassicFile) {
   count(model.root());
   for (const auto& [id, d] : model.definitions) count(d);
   EXPECT_GT(on_layer, 0U);
+}
+
+TEST(EdgeLayer, UsesMajorityFaceLayerInBuildSceneAndBuildInstancedSceneForChairAndTable) {
+  const auto chair_and_table = std::filesystem::path(OPENSKP_FIXTURES)
+                                   .parent_path()
+                                   .parent_path()
+                                   .parent_path()
+                                   .parent_path() /
+                               "examples" / "web-viewer" / "samples" / "chair_and_table.skp";
+  const auto skp = SkpFile::open(chair_and_table);
+  const auto baked = skp.build_scene();
+  const auto instanced = skp.build_instanced_scene();
+
+  const auto rgb_set = [](const std::vector<GltfMaterial>& mats) {
+    std::set<std::tuple<int, int, int>> s;
+    for (const auto& m : mats) {
+      const auto& bcf = m.pbr_metallic_roughness.base_color_factor;
+      s.emplace(static_cast<int>(std::lround(bcf[0] * 255.0)),
+                static_cast<int>(std::lround(bcf[1] * 255.0)),
+                static_cast<int>(std::lround(bcf[2] * 255.0)));
+    }
+    return s;
+  };
+
+  const auto baked_colors = rgb_set(baked.gltf_materials);
+  const auto instanced_colors = rgb_set(instanced.gltf_materials);
+
+  EXPECT_EQ(baked_colors.count({255, 84, 84}), 0U);
+  EXPECT_EQ(instanced_colors.count({255, 84, 84}), 0U);
+  EXPECT_EQ(baked_colors.count({120, 150, 190}), 1U);
+  EXPECT_EQ(baked_colors.count({190, 150, 120}), 1U);
+  EXPECT_EQ(instanced_colors, baked_colors);
+
+  std::vector<std::pair<std::string, std::string>> baked_layers;
+  std::function<void(const InstanceNode&)> collect_baked = [&](const InstanceNode& n) {
+    baked_layers.emplace_back(n.name, n.layer);
+    for (const auto& c : n.children) collect_baked(c);
+  };
+  std::vector<std::pair<std::string, std::string>> instanced_layers;
+  std::function<void(const InstancedNode&)> collect_instanced = [&](const InstancedNode& n) {
+    instanced_layers.emplace_back(n.name, n.layer);
+    for (const auto& c : n.children) collect_instanced(c);
+  };
+  collect_baked(baked.scene_hierarchy);
+  collect_instanced(instanced.scene_hierarchy);
+  EXPECT_EQ(instanced_layers, baked_layers);
 }
 
 }  // namespace

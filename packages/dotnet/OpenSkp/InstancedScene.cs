@@ -305,6 +305,7 @@ namespace OpenSkp
             {
                 if (builder.Faces.Count == 0) return null;
 
+                layer = Geometry.MajorityFaceLayer(builder, layerIdToName, layer);
                 var fallbackColor = inheritedColor ?? GetLayerColor(layer);
                 var key = $"{(defId.HasValue ? defId.Value.ToString() : "ROOT")}|{fallbackColor.R},{fallbackColor.G},{fallbackColor.B}";
                 if (resourceIdByKey.TryGetValue(key, out var hit)) return hit;
@@ -431,6 +432,7 @@ namespace OpenSkp
             List<InstancedNode> WalkBuilder(
                 GeometryBuilder builder, List<double> currentMatrix, string parentLayer, (int R, int G, int B)? inheritedColor)
             {
+                parentLayer = Geometry.MajorityFaceLayer(builder, layerIdToName, parentLayer);
                 var nodes = new List<InstancedNode>();
                 foreach (var inst in builder.Instances)
                 {
@@ -442,6 +444,17 @@ namespace OpenSkp
                     var properties = inst.Properties != null
                         ? new Dictionary<string, string>(inst.Properties)
                         : new Dictionary<string, string>();
+
+                    if (inst.LayerId is long instLayerId)
+                    {
+                        lName = layerIdToName.TryGetValue(instLayerId, out var ln) ? ln : parentLayer;
+                    }
+                    if (inst.MaterialId is long instMaterialId && materialIdToName.TryGetValue(instMaterialId, out var instMatName))
+                    {
+                        var mat = materials.TryGetValue(instMatName, out var m1) ? m1
+                            : materialsByFolder.TryGetValue(instMatName, out var m2) ? m2 : null;
+                        if (mat != null) instColor = (mat.R, mat.G, mat.B);
+                    }
 
                     var d007 = inst.Children.FirstOrDefault(c => c.Tag == "D007");
                     if (d007 != null)

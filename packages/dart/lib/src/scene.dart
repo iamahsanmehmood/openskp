@@ -300,6 +300,7 @@ class SceneBuilder {
       (int, int, int)? inheritedColor,
     ) {
       if (builder.faces.isNotEmpty) {
+        parentLayer = Geometry.majorityFaceLayer(builder, layerIdToName, parentLayer);
         // Group faces sharing a resolved (color, doubleSided, texture)
         // identity into one mesh each, in local space - shared with the
         // instanced builder (openskp#200) via face_groups.dart: a face
@@ -437,6 +438,17 @@ class SceneBuilder {
         // overwritten below via the D007/DC05 TLV walk instead.
         var properties = Map<String, String>.from(inst.properties ?? {});
         Map<String, Map<String, Object?>>? instAttributeDicts;
+
+        if (inst.layerId != null) {
+          lName = layerIdToName[inst.layerId!] ?? parentLayer;
+        }
+        if (inst.materialId != null) {
+          final matName = materialIdToName[inst.materialId!];
+          if (matName != null) {
+            final mat = materials[matName] ?? materialsByFolder[matName];
+            if (mat != null) instColor = (mat.r, mat.g, mat.b);
+          }
+        }
 
         final d007 = inst.children.where((c) => c.tag == 'D007').firstOrNull;
         if (d007 != null) {

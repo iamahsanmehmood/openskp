@@ -19,6 +19,7 @@ namespace OpenSkp
         public bool UvProjected;
         public bool UvProjectedBack;
         public bool Hidden;
+        public long? LayerId;
     }
 
     internal sealed class GeometryBuilderInstance
@@ -74,6 +75,7 @@ namespace OpenSkp
         public Dictionary<long, (double X, double Y, double Z)> Vertices = new Dictionary<long, (double, double, double)>();
         public Dictionary<long, (long? V1, long? V2)> Edges = new Dictionary<long, (long?, long?)>();
         public Dictionary<long, int> EdgeFlags = new Dictionary<long, int>();
+        public Dictionary<long, long> EdgeLayers = new Dictionary<long, long>();
         /// <summary>Edge id -> entity id of the Curve the edge belongs to (SketchUp's <c>Edge#curve</c>).</summary>
         public Dictionary<long, long> EdgeCurves = new Dictionary<long, long>();
         /// <summary>Curve id -> its analytic arc, for the curves that are arcs.</summary>
@@ -468,6 +470,11 @@ namespace OpenSkp
                             {
                                 builder.EdgeFlags[eId.Value] = d307.Payload[0];
                             }
+                            var d207 = d007.Children.FirstOrDefault(c => c.Tag == "D207");
+                            if (d207 != null && d207.Payload.Length > 0)
+                            {
+                                builder.EdgeLayers[eId.Value] = Tlv.ParseVarInt(d207.Payload, 0, d207.Payload.Length);
+                            }
                         }
 
                         // BB0B = the parent Curve's entity id (Edge#curve).
@@ -560,6 +567,7 @@ namespace OpenSkp
                         }
 
                         long? faceMatId = null;
+                        long? faceLayerId = null;
                         double[]? uvFront = null;
                         double[]? uvBack = null;
                         bool faceHidden = false;
@@ -570,6 +578,11 @@ namespace OpenSkp
                             if (d107 != null)
                             {
                                 faceMatId = Tlv.ParseVarInt(d107.Payload, 0, d107.Payload.Length);
+                            }
+                            var d207 = d007.Children.FirstOrDefault(c => c.Tag == "D207");
+                            if (d207 != null && d207.Payload.Length > 0)
+                            {
+                                faceLayerId = Tlv.ParseVarInt(d207.Payload, 0, d207.Payload.Length);
                             }
                             var dc05 = d007.Children.FirstOrDefault(c => c.Tag == "DC05");
                             if (dc05 != null)
@@ -602,6 +615,7 @@ namespace OpenSkp
                             UvTransform = uvFront,
                             UvTransformBack = uvBack,
                             Hidden = faceHidden,
+                            LayerId = faceLayerId,
                         };
                     }
                 }
@@ -1089,6 +1103,36 @@ namespace OpenSkp
                 FrontColor = colors.TryGetValue("2002", out var fc) ? fc : ((int, int, int)?)null,
                 BackColor = colors.TryGetValue("2003", out var bc) ? bc : ((int, int, int)?)null,
             };
+        }
+
+        public static string MajorityFaceLayer(
+            GeometryBuilder builder,
+            Dictionary<long, string> layerIdToName,
+            string fallback)
+        {
+            if (builder.Faces.Count == 0) return fallback;
+            var counts = new List<(long Id, int Count)>();
+            foreach (var f in builder.Faces.Values)
+            {
+                if (f.LayerId is long lid && lid != 0)
+                {
+                    int idx = counts.FindIndex(c => c.Id == lid);
+                    if (idx >= 0) counts[idx] = (lid, counts[idx].Count + 1);
+                    else counts.Add((lid, 1));
+                }
+            }
+            if (counts.Count == 0) return fallback;
+            long bestId = counts[0].Id;
+            int bestCount = counts[0].Count;
+            for (int i = 1; i < counts.Count; i++)
+            {
+                if (counts[i].Count > bestCount)
+                {
+                    bestId = counts[i].Id;
+                    bestCount = counts[i].Count;
+                }
+            }
+            return layerIdToName.TryGetValue(bestId, out var name) ? name : fallback;
         }
     }
 }

@@ -2374,6 +2374,9 @@ class Legacy {
     if (flags != 0) {
       builder.edgeFlags[slot] = flags;
     }
+    if (db.layer != 0) {
+      builder.edgeLayers[slot] = db.layer;
+    }
     // The edge's parent Curve (the CCurve/CArcCurve slot) and, if that curve
     // is an analytic arc, its frame: it arrives on the edge that first
     // references the CArcCurve; every later edge on the arc back-refs it.
@@ -2417,7 +2420,8 @@ class Legacy {
           ..backMaterialId = v.backMat != 0 ? v.backMat : null
           ..uvTransform = null
           ..uvTransformBack = null
-          ..hidden = v.db.hidden != 0;
+          ..hidden = v.db.hidden != 0
+          ..layerId = v.db.layer != 0 ? v.db.layer : null;
         final attrs = v.attrs;
         if (attrs != null) {
           for (final (_, cv) in attrs.children) {

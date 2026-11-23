@@ -242,9 +242,8 @@ struct Face {
   /// Whether the face is hidden (SketchUp's "Hide" on this specific face,
   /// not a layer/tag visibility toggle).
   bool hidden{};
-  /// Name of the layer (tag) the face is assigned to. "" for faces on the
-  /// default layer (Layer0), and for every face in a VFF file, which does
-  /// not record it per face.
+  /// Name of the layer (tag) the face is assigned to, or "" when the face carries no explicit
+  /// layer reference (default layer).
   std::string layer;
   /// Native persistent ID; zero when absent. Legacy archive slots are not persistent IDs.
   std::uint64_t persistent_id{};

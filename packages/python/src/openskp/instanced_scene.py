@@ -381,6 +381,19 @@ def build_instanced_scene(
     mesh_resources: List[InstancedMeshResource] = []
     resource_id_by_key: Dict[str, str] = {}
 
+    def _majority_face_layer(builder: Any, fallback: str) -> str:
+        if not builder.faces:
+            return fallback
+        face_layer_counts: Dict[Any, int] = {}
+        for face in builder.faces.values():
+            face_layer = face.get("layer")
+            if face_layer:
+                face_layer_counts[face_layer] = face_layer_counts.get(face_layer, 0) + 1
+        if not face_layer_counts:
+            return fallback
+        top_layer = max(face_layer_counts, key=face_layer_counts.get)
+        return layer_id_to_name.get(top_layer, fallback)
+
     def mesh_resource_for(
         def_id: Any,
         inherited_color: Optional[Tuple[int, int, int]],
@@ -405,6 +418,7 @@ def build_instanced_scene(
         if d is None or not d["builder"].faces:
             return None
 
+        layer = _majority_face_layer(d["builder"], layer)
         fallback_color = inherited_color if inherited_color is not None else get_layer_color(layer)
         key = f"{def_id}|{fallback_color[0]},{fallback_color[1]},{fallback_color[2]}"
         if inherited_material is not None:
@@ -545,16 +559,7 @@ def build_instanced_scene(
         # of the definition's own dominant face layer - verified wrong
         # against gondola_v20.skp ('Gondulas Laterais' expected, 'Layer0'
         # produced) before this fallback was added.
-        effective_layer = layer
-        if builder.faces:
-            face_layer_counts: Dict[Any, int] = {}
-            for face in builder.faces.values():
-                face_layer = face.get("layer")
-                if face_layer:
-                    face_layer_counts[face_layer] = face_layer_counts.get(face_layer, 0) + 1
-            if face_layer_counts:
-                top_layer = max(face_layer_counts, key=face_layer_counts.get)
-                effective_layer = layer_id_to_name.get(top_layer, layer)
+        effective_layer = _majority_face_layer(builder, layer)
 
         edge_layers = getattr(builder, "edge_layers", None) or {}
         curves: List[LocalCurve] = []
@@ -633,6 +638,7 @@ def build_instanced_scene(
         if d is None:
             return []
 
+        parent_layer = _majority_face_layer(d["builder"], parent_layer)
         nodes: List[InstancedNode] = []
         for inst in d["builder"].instances:
             ref_idx = inst["ref_idx"]

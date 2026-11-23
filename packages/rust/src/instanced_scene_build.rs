@@ -150,7 +150,8 @@ impl<'a> Instancer<'a> {
             return Ok(None);
         }
         let p = self.p;
-        let fallback = inherited.unwrap_or_else(|| default_color(p, layer));
+        let effective_layer = curve_fallback_layer(p, builder, layer);
+        let fallback = inherited.unwrap_or_else(|| default_color(p, &effective_layer));
         let key = resource_key(defid, &fallback);
         if let Some(&hit) = self.resource_index_by_key.get(&key) {
             return Ok(Some(self.mesh_resources[hit].id.clone()));
@@ -302,6 +303,8 @@ impl<'a> Instancer<'a> {
         inherited: Option<FaceColorKey>,
     ) -> Result<Vec<InstancedNode>, SkpParseError> {
         let p = self.p;
+        let effective_parent_layer = curve_fallback_layer(p, builder, parent_layer);
+        let parent_layer = effective_parent_layer.as_str();
         let mut nodes = Vec::new();
         for i in &builder.instances {
             let new_matrix = multiply_matrices(current_matrix, &i.matrix);

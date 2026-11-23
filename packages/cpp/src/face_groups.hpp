@@ -75,6 +75,8 @@ struct Group {
 std::shared_ptr<RawMaterial> find_material(const RawParsed& parsed, std::optional<EntityId> id);
 std::optional<FaceColorKey> material_color(const std::shared_ptr<RawMaterial>& material);
 FaceColorKey default_color(const RawParsed& parsed, const std::string& layer);
+std::string majority_face_layer(const RawParsed& parsed, const GeometryBuilder& b,
+                                const std::string& fallback, const ParseOptions& options = {});
 std::optional<std::string> sniff_image_mime(const ByteBuffer& data);
 
 // Everything build_local_face_groups needs from its caller that isn't the

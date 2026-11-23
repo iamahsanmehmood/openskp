@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added & Fixed — All 6 languages: per-edge and per-face layers, and majority-face-layer scene fallback (#285, #526, #543)
+
+- **TypeScript, .NET & Dart**: `Edge` and `Face` now expose their own resolved `layer` / `Layer` name (`""` when the element carries no explicit layer reference), read from VFF `D007 > D207` and the classic drawbase layer id, matching C++ (#526) and Rust.
+- **All 6 languages**: `build_scene` and `build_instanced_scene` now resolve a definition's fallback layer from the majority non-default layer of its faces when present (previously missing in Python's `build_instanced_scene`, and in both scene builders in TypeScript, .NET, Dart, C++ and Rust), so unpainted face sides and nested placements in classic files such as `chair_and_table.skp` take the definition's tag colour instead of `Layer0`.
+
 ### Fixed — Python: scenes use a component instance's own paint and tag in classic files (#596)
 
 - `build_scene()` and `build_instanced_scene()` read an instance's paint and tag from its 2021+ `D007` record only. In classic (pre-2021) files a painted component came out in its tag's colour, and every instance sat on its parent's tag. Both now come from the instance itself, and nested components inherit the paint.

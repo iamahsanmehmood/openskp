@@ -21,6 +21,10 @@ class Edge {
   /// were drawn as one continuous multi-segment line or arc; if the curve is
   /// an arc, [Definition.arcs] has it under the same id.
   final int? curveId;
+
+  /// Name of the layer (tag) this edge is assigned to, or `""` when the edge
+  /// carries no explicit layer reference.
+  final String layer;
   Edge({
     required this.id,
     required this.v1Id,
@@ -29,6 +33,7 @@ class Edge {
     this.smooth = false,
     this.hidden = false,
     this.curveId,
+    this.layer = '',
   });
 }
 
@@ -109,6 +114,10 @@ class Face {
   /// not a layer/tag visibility toggle).
   final bool hidden;
 
+  /// Name of the layer (tag) this face is assigned to, or `""` when the face
+  /// carries no explicit layer reference (default layer).
+  final String layer;
+
   Face({
     required this.id,
     this.loops = const [],
@@ -120,6 +129,7 @@ class Face {
     this.uvProjected = false,
     this.uvProjectedBack = false,
     this.hidden = false,
+    this.layer = '',
   });
 }
 

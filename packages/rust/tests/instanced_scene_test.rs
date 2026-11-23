@@ -349,3 +349,69 @@ fn untitled_bakes_its_loose_edges() {
         assert!((bounds.size[k] - (bounds.max[k] - bounds.min[k])).abs() < 1e-12);
     }
 }
+
+#[test]
+fn chair_and_table_uses_face_majority_layer_in_both_builders() {
+    let chair_and_table = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("examples")
+        .join("web-viewer")
+        .join("samples")
+        .join("chair_and_table.skp");
+    let skp = SkpFile::open(&chair_and_table).expect("open chair_and_table.skp");
+    let baked = skp.build_scene(&ParseOptions::default()).expect("baked");
+    let instanced = skp
+        .build_instanced_scene(&ParseOptions::default())
+        .expect("instanced");
+
+    let rgb_set = |mats: &[GltfMaterial]| -> std::collections::BTreeSet<(i64, i64, i64)> {
+        mats.iter()
+            .map(|m| {
+                let bcf = m.pbr_metallic_roughness.base_color_factor;
+                (
+                    (bcf[0] * 255.0).round() as i64,
+                    (bcf[1] * 255.0).round() as i64,
+                    (bcf[2] * 255.0).round() as i64,
+                )
+            })
+            .collect()
+    };
+
+    let baked_colors = rgb_set(&baked.gltf_materials);
+    let instanced_colors = rgb_set(&instanced.gltf_materials);
+
+    assert!(!baked_colors.contains(&(255, 84, 84)));
+    assert!(!instanced_colors.contains(&(255, 84, 84)));
+    assert!(baked_colors.contains(&(120, 150, 190)));
+    assert!(baked_colors.contains(&(190, 150, 120)));
+    assert_eq!(instanced_colors, baked_colors);
+
+    let inst_tris = flatten_instanced(&instanced);
+    let baked_tris = flatten_baked(&baked);
+    assert_eq!(inst_tris.len(), baked_tris.len());
+    compare_triangles_in_order(
+        &inst_tris,
+        &baked_tris,
+        &instanced.gltf_materials,
+        &baked.gltf_materials,
+    );
+
+    fn collect_baked(n: &InstanceNode, out: &mut Vec<(String, String)>) {
+        out.push((n.name.clone(), n.layer.clone()));
+        for c in &n.children {
+            collect_baked(c, out);
+        }
+    }
+    fn collect_instanced(n: &InstancedNode, out: &mut Vec<(String, String)>) {
+        out.push((n.name.clone(), n.layer.clone()));
+        for c in &n.children {
+            collect_instanced(c, out);
+        }
+    }
+    let mut bl = Vec::new();
+    let mut il = Vec::new();
+    collect_baked(&baked.scene_hierarchy, &mut bl);
+    collect_instanced(&instanced.scene_hierarchy, &mut il);
+    assert_eq!(il, bl);
+}

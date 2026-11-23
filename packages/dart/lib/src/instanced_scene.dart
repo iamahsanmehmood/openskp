@@ -275,6 +275,7 @@ class InstancedSceneBuilder {
     ) {
       if (builder.faces.isEmpty) return null;
 
+      layer = Geometry.majorityFaceLayer(builder, layerIdToName, layer);
       final fallbackColor = inheritedColor ?? getLayerColor(layer);
       final key = '${defId ?? 'ROOT'}|${fallbackColor.$1},${fallbackColor.$2},${fallbackColor.$3}';
       final hit = resourceIdByKey[key];
@@ -408,6 +409,7 @@ class InstancedSceneBuilder {
       String parentLayer,
       (int, int, int)? inheritedColor,
     ) {
+      parentLayer = Geometry.majorityFaceLayer(builder, layerIdToName, parentLayer);
       final nodes = <InstancedNode>[];
       for (final inst in builder.instances) {
         final refIdx = inst.refIdx;
@@ -417,6 +419,17 @@ class InstancedSceneBuilder {
         (int, int, int)? instColor = inheritedColor;
         var properties = Map<String, String>.from(inst.properties ?? {});
         Map<String, Map<String, Object?>>? instAttributeDicts;
+
+        if (inst.layerId != null) {
+          lName = layerIdToName[inst.layerId!] ?? parentLayer;
+        }
+        if (inst.materialId != null) {
+          final matName = materialIdToName[inst.materialId!];
+          if (matName != null) {
+            final mat = materials[matName] ?? materialsByFolder[matName];
+            if (mat != null) instColor = (mat.r, mat.g, mat.b);
+          }
+        }
 
         final d007 = inst.children.where((c) => c.tag == 'D007').firstOrNull;
         if (d007 != null) {

@@ -1,5 +1,5 @@
 import { transformPoint, multiplyMatrices } from './transforms';
-import { extractDynamicProperties, extractAttributeDictionaries, isGenericDefinitionName, findNameOverride, stringifyVffAttrValue, ParsedDefinition, VffAttrValue } from './geometry';
+import { extractDynamicProperties, extractAttributeDictionaries, isGenericDefinitionName, findNameOverride, stringifyVffAttrValue, majorityFaceLayer, ParsedDefinition, VffAttrValue } from './geometry';
 import { buildLocalFaceGroups } from './face-groups';
 import { SkpParseError } from './errors';
 import { ParseOptions, PROGRESS_INTERVAL, emitLog, emitProgress } from './observability';
@@ -177,6 +177,9 @@ export interface Edge {
    * were drawn as one continuous multi-segment line or arc; if the curve is
    * an arc, {@link Definition.arcs} has it under the same id. */
   curveId?: number | null;
+  /** Name of the layer (tag) this edge is assigned to, or `""` when the edge
+   * carries no explicit layer reference. */
+  layer: string;
 }
 
 /**
@@ -246,6 +249,9 @@ export interface Face {
   /** Whether the face is hidden (SketchUp's "Hide" on this specific face,
    * not a layer/tag visibility toggle). */
   hidden: boolean;
+  /** Name of the layer (tag) this face is assigned to, or `""` when the face
+   * carries no explicit layer reference (default layer). */
+  layer: string;
 }
 
 /**
@@ -661,6 +667,7 @@ function buildDefinition(id: number, d: ParsedDefinition, layerIdToName?: Map<nu
   }));
   const edges: Edge[] = Array.from(d.builder.edges.entries()).map(([eId, [v1, v2]]) => {
     const flags = d.builder.edgeFlags.get(eId) ?? 0;
+    const edgeLayerId = d.builder.edgeLayers?.get(eId);
     return {
       id: eId,
       v1Id: v1 ?? 0,
@@ -669,6 +676,7 @@ function buildDefinition(id: number, d: ParsedDefinition, layerIdToName?: Map<nu
       smooth: (flags & 0x10) !== 0,
       hidden: (flags & 0x01) !== 0,
       curveId: d.builder.edgeCurves?.get(eId) ?? null,
+      layer: edgeLayerId != null ? (layerIdToName?.get(edgeLayerId) ?? String(edgeLayerId)) : '',
     };
   });
   const arcs = new Map<number, ArcCurve>();
@@ -697,6 +705,7 @@ function buildDefinition(id: number, d: ParsedDefinition, layerIdToName?: Map<nu
     uvProjected: fData.uvProjected ?? false,
     uvProjectedBack: fData.uvProjectedBack ?? false,
     hidden: fData.hidden ?? false,
+    layer: fData.layerId != null ? (layerIdToName?.get(fData.layerId) ?? String(fData.layerId)) : '',
   }));
   const instances: Instance[] = d.builder.instances.map((inst) => ({
     name: inst.name,
@@ -964,6 +973,7 @@ export function buildSceneFromParsed(
     const builder = d.builder;
 
     if (builder.faces.size > 0) {
+      parentLayer = majorityFaceLayer(builder, layerIdToName, parentLayer);
       // Group faces sharing a resolved (color, doubleSided) pair into one
       // mesh each - same grouping the C++ reference uses (the only port
       // that already had this before this port): a face whose front/back

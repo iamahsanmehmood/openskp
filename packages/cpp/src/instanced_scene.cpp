@@ -174,7 +174,8 @@ InstancedScene build_instanced_scene_raw(RawParsed&& p, const ParseOptions& o) {
                                   const std::string& layer) -> std::optional<std::string> {
     if (builder.faces.empty()) return std::nullopt;
 
-    const auto fallback = inherited.value_or(default_color(p, layer));
+    const std::string effective_layer = majority_face_layer(p, builder, layer, o);
+    const auto fallback = inherited.value_or(default_color(p, effective_layer));
     const auto key = resource_key(defid, fallback);
     auto hit = resource_index_by_key.find(key);
     if (hit != resource_index_by_key.end()) {
@@ -257,8 +258,9 @@ InstancedScene build_instanced_scene_raw(RawParsed&& p, const ParseOptions& o) {
                                            std::optional<FaceColorKey>)>
       walk;
   walk = [&](const GeometryBuilder& builder, std::optional<EntityId> defid,
-             const std::vector<double>& current_matrix, const std::string& parent_layer,
+             const std::vector<double>& current_matrix, const std::string& incoming_layer,
              std::optional<FaceColorKey> inherited) {
+    const std::string parent_layer = majority_face_layer(p, builder, incoming_layer, o);
     std::vector<InstancedNode> nodes;
     for (auto& i : builder.instances) {
       const auto new_matrix = multiply_matrices(current_matrix, i.matrix);

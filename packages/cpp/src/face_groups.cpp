@@ -114,6 +114,36 @@ FaceColorKey default_color(const RawParsed& parsed, const std::string& layer) {
   return {color[0], color[1], color[2], 255};
 }
 
+std::string majority_face_layer(const RawParsed& parsed, const GeometryBuilder& b,
+                                const std::string& fallback, const ParseOptions& options) {
+  if (b.faces.empty()) return fallback;
+  std::vector<std::pair<std::string, std::size_t>> counts;
+  for (const auto& [fid, f] : b.faces) {
+    if (f.layer.empty() || f.layer == "0") continue;
+    auto it = std::find_if(counts.begin(), counts.end(),
+                           [&](const auto& kv) { return kv.first == f.layer; });
+    if (it != counts.end()) {
+      ++it->second;
+    } else {
+      counts.emplace_back(f.layer, 1);
+    }
+  }
+  if (counts.empty()) return fallback;
+  const auto best =
+      std::max_element(counts.begin(), counts.end(),
+                       [](const auto& lhs, const auto& rhs) { return lhs.second < rhs.second; });
+  try {
+    const auto id = std::stoll(best->first);
+    if (id == 0) return fallback;
+    auto li = parsed.layer_id_to_name.find(id);
+    if (li != parsed.layer_id_to_name.end()) return li->second;
+  } catch (...) {
+    emit_log(options, LogLevel::debug,
+             "Failed to resolve face layer id '" + best->first + "' to a name");
+  }
+  return fallback;
+}
+
 // Identifies an image's MIME type from its magic bytes. Returns nullopt
 // for anything glTF cannot carry (glTF only allows PNG and JPEG).
 std::optional<std::string> sniff_image_mime(const ByteBuffer& data) {

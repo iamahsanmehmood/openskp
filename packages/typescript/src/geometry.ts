@@ -33,6 +33,8 @@ export interface GeometryBuilderFace {
   uvProjected?: boolean;
   uvProjectedBack?: boolean;
   hidden?: boolean;
+  /** Layer ID this face belongs to (VFF D007 -> D207, or classic drawbase), or null. */
+  layerId?: number | null;
 }
 
 /** The analytic frame of a Curve that is one arc: the points
@@ -57,6 +59,8 @@ export class GeometryBuilder {
   /** Edge id -> display flag byte (D307). Backed by a Uint8Array rather
    * than a Map: the value is one byte, and a Map entry costs ~30. */
   edgeFlags = new EdgeFlagStore();
+  /** Edge id -> layer entity id (VFF D207 or classic drawbase layer id). */
+  edgeLayers = new Map<number, number>();
   /** Edge id -> the entity id of the Curve the edge belongs to (SketchUp's
    * `Edge#curve`). Absent means the edge belongs to no curve. */
   edgeCurves = new Map<number, number>();
@@ -243,6 +247,10 @@ export function extractGeometryFromNodes(
           if (d307 && d307.payload.length > 0) {
             builder.edgeFlags.set(eId, d307.payload[0]);
           }
+          const d207 = d007.children.find((c) => c.tag === 'D207');
+          if (d207 && d207.payload.length > 0) {
+            builder.edgeLayers.set(eId, parseVarInt(d207.payload, 0, d207.payload.length));
+          }
         }
 
         // BB0B = the parent Curve's entity id (Edge#curve).
@@ -324,6 +332,7 @@ export function extractGeometryFromNodes(
           }
         }
         let faceMatId: number | null = null;
+        let faceLayerId: number | null = null;
         let uvFront: number[] | null = null;
         let uvBack: number[] | null = null;
         let faceHidden = false;
@@ -332,6 +341,10 @@ export function extractGeometryFromNodes(
           const d107 = d007.children.find((c) => c.tag === 'D107');
           if (d107) {
             faceMatId = parseVarInt(d107.payload, 0, d107.payload.length);
+          }
+          const d207 = d007.children.find((c) => c.tag === 'D207');
+          if (d207 && d207.payload.length > 0) {
+            faceLayerId = parseVarInt(d207.payload, 0, d207.payload.length);
           }
           const dc05 = d007.children.find((c) => c.tag === 'DC05');
           if (dc05) {
@@ -362,6 +375,7 @@ export function extractGeometryFromNodes(
           uvTransform: uvFront,
           uvTransformBack: uvBack,
           hidden: faceHidden,
+          layerId: faceLayerId,
         });
       }
     } else if (tag === '6419') {
@@ -1137,4 +1151,32 @@ export function resolveTextureBytes(
   }
 
   return { data, filename: resolvedFilename };
+}
+
+/**
+ * Resolve a definition's fallback layer from its own faces' majority
+ * non-default layer ID when present, falling back to `fallback` otherwise.
+ */
+export function majorityFaceLayer(
+  builder: GeometryBuilder,
+  layerIdToName: Map<number, string>,
+  fallback: string
+): string {
+  if (builder.faces.size === 0) return fallback;
+  const counts = new Map<number, number>();
+  for (const f of builder.faces.values()) {
+    if (f.layerId) {
+      counts.set(f.layerId, (counts.get(f.layerId) ?? 0) + 1);
+    }
+  }
+  if (counts.size === 0) return fallback;
+  let bestId: number | null = null;
+  let bestCount = 0;
+  for (const [id, count] of counts) {
+    if (count > bestCount) {
+      bestId = id;
+      bestCount = count;
+    }
+  }
+  return bestId !== null ? (layerIdToName.get(bestId) ?? fallback) : fallback;
 }
