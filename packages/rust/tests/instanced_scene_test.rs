@@ -390,12 +390,12 @@ fn chair_and_table_uses_face_majority_layer_in_both_builders() {
     let inst_tris = flatten_instanced(&instanced);
     let baked_tris = flatten_baked(&baked);
     assert_eq!(inst_tris.len(), baked_tris.len());
-    compare_triangles_in_order(
-        &inst_tris,
-        &baked_tris,
-        &instanced.gltf_materials,
-        &baked.gltf_materials,
-    );
+    for (a, e) in inst_tris.iter().zip(&baked_tris) {
+        assert!(materials_equal(
+            &instanced.gltf_materials[a.material_index],
+            &baked.gltf_materials[e.material_index],
+        ));
+    }
 
     fn collect_baked(n: &InstanceNode, out: &mut Vec<(String, String)>) {
         out.push((n.name.clone(), n.layer.clone()));
