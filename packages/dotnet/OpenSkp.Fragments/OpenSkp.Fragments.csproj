@@ -5,7 +5,7 @@
     <Nullable>enable</Nullable>
     <Version>1.6.0</Version>
     <Authors>Ahsan Mehmood</Authors>
-    <Description>Direct SketchUp (.skp) -&gt; ThatOpen Fragments (.frag) export for OpenSkp - EXPERIMENTAL. Separate, opt-in package (mirrors Python's `pip install openskp[fragments]` extra) so the core OpenSkp package stays dependency-free for every other consumer; this one package takes the Google.FlatBuffers dependency Fragments export actually needs.</Description>
+    <Description>Direct SketchUp (.skp) &lt;-&gt; ThatOpen Fragments (.frag) export and import for OpenSkp. Separate, opt-in package (mirrors Python's `pip install "openskp[fragments]"` extra) so the core OpenSkp package stays dependency-free for every other consumer; this package carries the Google.FlatBuffers dependency Fragments conversion needs.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://openskp.com</PackageProjectUrl>
     <RepositoryUrl>https://github.com/iamahsanmehmood/openskp.git</RepositoryUrl>

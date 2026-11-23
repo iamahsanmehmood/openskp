@@ -412,14 +412,14 @@ case without writing that loop yourself.
 
 ### Fragments export
 
-> **Available in all 5 languages as of 1.3.0** (`pip install openskp`,
-> `npm install openskp`, `dotnet add package OpenSkp`, `dart pub add
-> openskp`, or the C++17/CMake Quick Start in [README.md](../README.md)).
-> See [docs/LANGUAGE_PARITY.md](LANGUAGE_PARITY.md) for the full parity
-> picture, including the one thing not yet ported anywhere but Python:
-> reading a `.frag` file back. C++ measured roughly 5-9x faster end to end
-> than the Python pipeline on the same real files (parse + scene build +
-> export).
+> **Install & package status** (see [docs/LANGUAGE_PARITY.md § Fragments](LANGUAGE_PARITY.md#fragments-frag-support) for the full table):
+> - **Python:** `pip install "openskp[fragments]"` (pulls `flatbuffers>=24.0`)
+> - **TypeScript / JS:** `npm install openskp` (included in `openskp`)
+> - **.NET:** `dotnet add package OpenSkp.Fragments` (separate NuGet package alongside `OpenSkp`)
+> - **Dart:** `packages/dart_fragments` (`openskp_fragments` — on `main`, **not published to pub.dev**; depend via Git or path)
+> - **C++17 / CMake:** included in `OpenSkp::OpenSkp` (`<openskp/fragments_export.hpp>`, `FlatBuffers` headers fetched by CMake; C++ measured roughly 5–9x faster end to end than the Python pipeline on the same real files)
+>
+> Both exporting to `.frag` and reading `.frag` back are implemented across all five ports.
 
 `openskp.export.fragments` / `openskp::to_fragments()` write [ThatOpen's Fragments](https://github.com/ThatOpen/engine_fragment)
 format — a public FlatBuffers-based binary format designed for fast loading
@@ -491,12 +491,15 @@ What's carried through from the source `.skp` file:
   the format.
 - `Model.guid` — the single model-level identifier, distinct from each
   item's own per-instance guid above — is still an unpopulated placeholder.
-- All 5 languages have this as of 1.3.0. TypeScript uses the real,
-  canonical ThatOpen FlatBuffers schema (not hand-rolled), with TRS
-  decomposition and scale/mirror baking matching Python/C++, verified via
-  a real round-trip through the `@thatopen/fragments` npm package's own
-  `SingleThreadedFragmentsModel`, not just this project's own generated
-  bindings.
+- Published in Python (`openskp[fragments]`), TypeScript, .NET
+  (`OpenSkp.Fragments`), and C++, and on `main` (not published to pub.dev)
+  in Dart (`openskp_fragments`) — see
+  [docs/LANGUAGE_PARITY.md § Fragments](LANGUAGE_PARITY.md#fragments-frag-support).
+  TypeScript uses the real, canonical ThatOpen FlatBuffers schema (not
+  hand-rolled), with TRS decomposition and scale/mirror baking matching
+  Python/C++, verified via a real round-trip through the
+  `@thatopen/fragments` npm package's own `SingleThreadedFragmentsModel`,
+  not just this project's own generated bindings.
 - C++'s attribute dictionary values are strings only (no native
   `Point3d`/`Length`/nested-list types like Python has) — matches its
   existing string-only property handling elsewhere. See
@@ -504,17 +507,18 @@ What's carried through from the source `.skp` file:
 
 ### Reading a `.frag` file back
 
-> **All five languages.** The last remaining cross-language gap from the
-> 1.3.0 synchronized release - see
-> [docs/LANGUAGE_PARITY.md](LANGUAGE_PARITY.md).
+> **Implemented across all five ports** (published in Python, TypeScript,
+> .NET `OpenSkp.Fragments`, and C++; on `main`, not published to pub.dev,
+> in Dart `openskp_fragments`) — see
+> [docs/LANGUAGE_PARITY.md § Fragments](LANGUAGE_PARITY.md#fragments-frag-support).
 
 The mirror direction: `openskp.export.fragments.read()`/`from_fragments()`
-(Python), `fromFragments()` (TypeScript and Dart, same name in both),
-`FragmentsExport.FromFragments()` (.NET), or `openskp::from_fragments()`
-(C++) parse a real `.frag` file straight into an `InstancedScene` —
-OpenSKP's 6th input format alongside `.skp`. Any file works, not just one
-this project wrote — ThatOpen's own real `IfcImporter` output, or anyone
-else's:
+(Python), `fromFragments()` (TypeScript), `readFragments()`/`fromFragments()`
+(Dart `openskp_fragments`), `FragmentsExport.ReadFragments()`/`FromFragments()`
+(.NET `OpenSkp.Fragments`), or `openskp::read_fragments()`/`from_fragments()`
+(C++) parse `.frag` `SHELL` geometry into an `InstancedScene` — OpenSKP's
+6th input format alongside `.skp` (see below for verification scope per
+language and `CIRCLE_EXTRUSION` handling):
 
 ```python
 from openskp.export import fragments

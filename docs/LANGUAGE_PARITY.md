@@ -50,7 +50,8 @@ the pub.dev upload step).
 ## 2. Feature matrix
 
 Every feature OpenSKP has, across all 5 languages. ✅ = shipped and
-released. ❌ = not yet ported to that language; see
+released. 🔶 = implemented on `main`, not published to a package registry.
+❌ = not yet ported to that language; see
 [§3](#3-whats-still-outstanding-after-160) for what's tracked there.
 
 | Feature | Python | TypeScript | .NET | Dart | C++ |
@@ -101,9 +102,21 @@ released. ❌ = not yet ported to that language; see
 | GLB / OBJ+MTL / STL / PLY / DXF 3D / IFC4 / JSON | ✅ | ✅ | ✅ | ✅ | ✅ |
 | IFC export: unit/axis fix, real names + layer visibility, plugin-attribute Psets, full-path classification | ✅ | not checked for equivalent issues | not checked | not checked | ✅ |
 | IFC export: loose-edge curve sets + analytic arcs as `IfcAnnotation` / `IfcIndexedPolyCurve`, IFC4 STEP conformance fixes | ✅ | ❌ | ❌ | ❌ | ❌ |
-| Direct SketchUp → Fragments (`.frag`) export | ✅ | ✅ — verified against the real `@thatopen/fragments` runtime | ✅ | ✅ | ✅ |
+| Direct SketchUp → Fragments (`.frag`) export ([details](#fragments-frag-support)) | ✅ | ✅ | ✅ | 🔶 on `main`, not published | ✅ |
 | **Import** | | | | | |
-| Read a `.frag` file back (6th input format alongside `.skp`) | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Read a `.frag` file back (6th input format alongside `.skp`; [details](#fragments-frag-support)) | ✅ | ✅ | ✅ | 🔶 on `main`, not published | ✅ |
+
+### Fragments (`.frag`) support
+
+Both directions — exporting an `InstancedScene` to [ThatOpen's Fragments](https://github.com/ThatOpen/engine_fragment) (`.frag`) format and reading a `.frag` file's `SHELL` geometry back into an `InstancedScene` — are implemented across all five ports (plus the unpublished Rust port in `packages/rust`, `to_fragments` / `read_fragments`). Packaging, registry status, and test coverage differ by language:
+
+| Language | Package & install | Export (`.skp` → `.frag`) | Read (`.frag` → `InstancedScene`) | Registry status | Verification scope |
+|:---|:---|:---|:---|:---|:---|
+| 🐍 Python | `pip install "openskp[fragments]"` (`openskp.export.fragments`) | `to_fragments()`, `export()` | `from_fragments()`, `read()` | ✅ On [PyPI](https://pypi.org/project/openskp/) (`1.6.0`) | Self round-trip + real `@thatopen/fragments` (`IfcImporter`) production `.frag` file (`CIRCLE_EXTRUSION` samples skipped with warning) |
+| 📘 TypeScript | `npm install openskp` (included in `openskp`) | `toFragments()`, `skp.toFragments()` | `fromFragments()` | ✅ On [npm](https://www.npmjs.com/package/openskp) (`1.6.0`) | Self round-trip + real `@thatopen/fragments` (`SingleThreadedFragmentsModel`) load check on export; not tested on external `IfcImporter` `.frag` input |
+| 🚀 .NET | `dotnet add package OpenSkp.Fragments` (`OpenSkp.Fragments`) | `FragmentsExport.ToFragments()`, `ExportFragments()` | `FragmentsExport.FromFragments()`, `ReadFragments()` | ✅ On [NuGet](https://www.nuget.org/packages/OpenSkp.Fragments) (`1.6.0`) | Self round-trip (including multi-shell splits); not tested on external `IfcImporter` `.frag` input |
+| 🎯 Dart | Git / path dependency on `packages/dart_fragments` (`openskp_fragments`) | `toFragments()`, `exportFragments()` | `fromFragments()`, `readFragments()` | 🔶 On `main`, **not published to pub.dev** (`publish_to: none`) | Self round-trip (including multi-shell splits); not tested on external `IfcImporter` `.frag` input |
+| ⚙️ C++ | Included in `OpenSkp::OpenSkp` (`<openskp/fragments_export.hpp>`) | `openskp::to_fragments()`, `export_fragments()` | `openskp::from_fragments()`, `read_fragments()` | ✅ [GitHub release](https://github.com/iamahsanmehmood/openskp/releases?q=cpp-) (`cpp-v1.6.0`) | Self round-trip (including multi-shell splits); not tested on external `IfcImporter` `.frag` input |
 
 ## 3. What's still outstanding after 1.6.0
 
