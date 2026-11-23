@@ -22,6 +22,10 @@ namespace OpenSkp
         public float[] Uvs { get; set; } = Array.Empty<float>();
         public uint[] Indices { get; set; } = Array.Empty<uint>();
         public int MaterialIndex { get; set; }
+
+        /// <summary>The back copies of faces with no paint on either side; see
+        /// <see cref="GlbPrimitive.UnpaintedBack"/>.</summary>
+        public bool UnpaintedBack { get; set; }
     }
 
     /// <summary>A definition's geometry, resolved for one specific
@@ -220,6 +224,8 @@ namespace OpenSkp
             (int R, int G, int B) GetLayerColor(string name) =>
                 layerColors.TryGetValue(name, out var c) ? c : (136, 136, 136);
 
+            var styleColors = FaceGroups.UnpaintedStyleColors(parsed, options?.UnpaintedFaces);
+
             var textures = new List<SceneTexture>();
             var textureIndexByKey = new Dictionary<string, int>();
 
@@ -305,8 +311,24 @@ namespace OpenSkp
             {
                 if (builder.Faces.Count == 0) return null;
 
-                var fallbackColor = inheritedColor ?? GetLayerColor(layer);
+                (int R, int G, int B) fallbackColor, fallbackBackColor;
+                if (inheritedColor.HasValue)
+                {
+                    fallbackColor = fallbackBackColor = inheritedColor.Value;
+                }
+                else if (styleColors.HasValue)
+                {
+                    (fallbackColor, fallbackBackColor) = styleColors.Value;
+                }
+                else
+                {
+                    fallbackColor = fallbackBackColor = GetLayerColor(layer);
+                }
                 var key = $"{(defId.HasValue ? defId.Value.ToString() : "ROOT")}|{fallbackColor.R},{fallbackColor.G},{fallbackColor.B}";
+                if (fallbackBackColor != fallbackColor)
+                {
+                    key += $"/{fallbackBackColor.R},{fallbackBackColor.G},{fallbackBackColor.B}";
+                }
                 if (resourceIdByKey.TryGetValue(key, out var hit)) return hit;
 
                 var faceGroups = FaceGroups.BuildLocalFaceGroups(builder, new FaceGroups.Context
@@ -314,6 +336,7 @@ namespace OpenSkp
                     ResolveMaterial = ResolveMaterial,
                     TextureIndexFor = TextureIndexFor,
                     FallbackColor = fallbackColor,
+                    FallbackBackColor = fallbackBackColor,
                     DefinitionId = defId,
                 });
 
@@ -381,6 +404,7 @@ namespace OpenSkp
                         Uvs = uvs,
                         Indices = indices,
                         MaterialIndex = GetMaterialIndex(color, group.DoubleSided, texIndex, group.Transparency),
+                        UnpaintedBack = group.UnpaintedBack,
                     });
                 }
 

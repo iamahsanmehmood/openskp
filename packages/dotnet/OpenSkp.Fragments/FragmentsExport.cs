@@ -705,6 +705,7 @@ namespace OpenSkp.Fragments
                     for (int primIdx = 0; primIdx < res.Primitives.Count; primIdx++)
                     {
                         var prim = res.Primitives[primIdx];
+                        if (prim.UnpaintedBack) continue;
                         int materialIndex = GetMaterialIndex(prim.MaterialIndex);
                         // Normally exactly one shell; more than one only
                         // when the primitive's own triangle count exceeded

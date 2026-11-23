@@ -92,6 +92,10 @@ namespace OpenSkp
 
         /// <summary>Matches the corresponding key in Scene.MeshIndex.</summary>
         public string GeomName { get; set; } = "";
+
+        /// <summary><c>true</c> for the back copies of faces with no paint on
+        /// either side; see <see cref="Scene.SurfacePrimitives"/>.</summary>
+        public bool UnpaintedBack { get; set; }
     }
 
     /// <summary>One texture image referenced by Scene.GltfMaterials.</summary>
@@ -121,6 +125,12 @@ namespace OpenSkp
         /// deduplicated by source bytes. Empty when nothing placed in the
         /// scene is textured.</summary>
         public List<SceneTexture> Textures { get; set; } = new List<SceneTexture>();
+
+        /// <summary><see cref="GlbPrimitives"/> without the back copies of
+        /// faces that have no paint on either side, for formats and callers
+        /// that emit one surface per face.</summary>
+        public IReadOnlyList<GlbPrimitive> SurfacePrimitives =>
+            GlbPrimitives.Where(p => !p.UnpaintedBack).ToList();
     }
 
     /// <summary>Bakes every instance actually placed in a parsed model into
@@ -196,6 +206,8 @@ namespace OpenSkp
             {
                 return layerColors.TryGetValue(name, out var c) ? c : (136, 136, 136);
             }
+
+            var styleColors = FaceGroups.UnpaintedStyleColors(parsed, options?.UnpaintedFaces);
 
             int GetMaterialIndex((int R, int G, int B) color, bool doubleSided, int? textureIndex, double transparency = 1.0)
             {
@@ -288,12 +300,25 @@ namespace OpenSkp
             {
                 if (builder.Faces.Count > 0)
                 {
-                    var fallbackColor = inheritedColor ?? GetLayerColor(parentLayer);
+                    (int R, int G, int B) fallbackColor, fallbackBackColor;
+                    if (inheritedColor.HasValue)
+                    {
+                        fallbackColor = fallbackBackColor = inheritedColor.Value;
+                    }
+                    else if (styleColors.HasValue)
+                    {
+                        (fallbackColor, fallbackBackColor) = styleColors.Value;
+                    }
+                    else
+                    {
+                        fallbackColor = fallbackBackColor = GetLayerColor(parentLayer);
+                    }
                     var faceGroups = FaceGroups.BuildLocalFaceGroups(builder, new FaceGroups.Context
                     {
                         ResolveMaterial = ResolveMaterial,
                         TextureIndexFor = TextureIndexFor,
                         FallbackColor = fallbackColor,
+                        FallbackBackColor = fallbackBackColor,
                         DefinitionId = defId,
                     });
 
@@ -393,6 +418,7 @@ namespace OpenSkp
                             Indices = indices,
                             MaterialIndex = materialIndex,
                             GeomName = geomName,
+                            UnpaintedBack = group.UnpaintedBack,
                         });
                     }
                 }

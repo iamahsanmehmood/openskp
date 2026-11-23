@@ -31,8 +31,10 @@ namespace OpenSkp.Tests
         {
             var scene = SkpFile.BuildScene(FixturePath("capilla_quiroz_v17.skp"));
 
-            Assert.Equal(21, scene.GlbPrimitives.Count);
-            Assert.Equal(21, scene.MeshIndex.Count);
+            // 21 surface primitives as before #533, plus the back copies of unpainted faces
+            Assert.Equal(21, scene.SurfacePrimitives.Count);
+            Assert.Equal(22, scene.GlbPrimitives.Count);
+            Assert.Equal(22, scene.MeshIndex.Count);
             Assert.Equal(13, scene.GltfMaterials.Count);
 
             Assert.Equal("ROOT", scene.SceneHierarchy.Name);
@@ -65,7 +67,7 @@ namespace OpenSkp.Tests
             // BuildScene() must not require Parse()/Open() to have been
             // called first - it re-parses independently.
             var scene = SkpFile.BuildScene(FixturePath("capilla_quiroz_v17.skp"));
-            Assert.Equal(21, scene.GlbPrimitives.Count);
+            Assert.Equal(22, scene.GlbPrimitives.Count);
         }
 
         [Fact]
@@ -93,7 +95,7 @@ namespace OpenSkp.Tests
 
             int doubleSidedCount = scene.GltfMaterials.Count(m =>
                 ((System.Collections.Generic.IDictionary<string, object>)m).TryGetValue("doubleSided", out var v) && v is bool b && b);
-            Assert.Equal(4, doubleSidedCount);
+            Assert.Equal(3, doubleSidedCount); // unpainted faces show a colour per side (#533)
         }
 
         private static System.Collections.Generic.IDictionary<string, object> Pbr(object mat) =>
@@ -131,8 +133,9 @@ namespace OpenSkp.Tests
             try
             {
                 var scene = SkpFile.BuildScene(path);
-                var names = scene.MeshIndex.Values.Select(m => m.Name).OrderBy(n => n).ToList();
+                var names = scene.SurfacePrimitives.Select(p => scene.MeshIndex[p.GeomName].Name).OrderBy(n => n).ToList();
                 Assert.Equal(new[] { "LeafInstance", "MiddleInstance", "OuterInstance" }, names);
+                Assert.Equal(names.ToHashSet(), scene.MeshIndex.Values.Select(m => m.Name).ToHashSet());
             }
             finally
             {
