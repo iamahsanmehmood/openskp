@@ -32,6 +32,7 @@ const STR_MARKER = new Uint8Array([0xff, 0xfe, 0xff]);
  * count that follows it (9 and 13 bytes occur in real files; the ceiling
  * leaves room without letting the probe wander into unrelated records). */
 const MAX_V20_FILLER_PAD = 29;
+const MAX_LEGACY_DEPTH = 64;
 
 function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
   if (a.length !== b.length) return false;
@@ -359,6 +360,7 @@ export class Archive {
   // [first, end) slot range of each built definition's own records.
   releasedSpans: [number, number][] = [];
   clineTail: number | null = null;
+  depth = 0;
 
   constructor(data: Uint8Array, ver: number) {
     this.data = data;
@@ -426,6 +428,12 @@ export class Archive {
   }
 
   private newObj(r: R, name: string): [number, string, any] {
+    if (this.depth >= MAX_LEGACY_DEPTH) {
+      throw new SkpParseError(
+        `legacy archive object nesting exceeds maximum depth (${MAX_LEGACY_DEPTH})`,
+        { stage: 'legacy_walk', offset: r.pos }
+      );
+    }
     this.inEntityList = false;
     const slot = this.alloc(['obj', name, null]);
     const reader = this.readers[name];
@@ -436,10 +444,12 @@ export class Archive {
     const prevSlot = this.currentObjSlot;
     this.currentClass = name;
     this.currentObjSlot = slot;
+    this.depth += 1;
     let value: any;
     try {
       value = reader(this, r);
     } finally {
+      this.depth -= 1;
       this.currentClass = prevClass;
       this.currentObjSlot = prevSlot;
     }
@@ -895,7 +905,7 @@ function readAttrNamed(ar: Archive, r: R): any {
   r.raw(4);
   const dictname = r.utf16();
 
-  function readTyped(t: number): any {
+  function readTyped(t: number, depth = 0): any {
     if (t === 0x00) return null;
     if (t === 0x04) return r.i32();
     if (t === 0x06) return r.f64();
@@ -904,12 +914,18 @@ function readAttrNamed(ar: Archive, r: R): any {
     if (t === 0x0a) return r.utf16();
     if (t === 0x0c) return r.f64(); // Length (a double, inches)
     if (t === 0x0b) {
+      if (depth >= MAX_LEGACY_DEPTH) {
+        throw new SkpParseError(
+          `legacy attribute array nesting exceeds maximum depth (${MAX_LEGACY_DEPTH})`,
+          { stage: 'legacy_walk', offset: r.pos }
+        );
+      }
       const n = r.u32();
       if (n > 100000) {
         throw new LegacyParseError(`implausible attr array count ${r.ctx()}`);
       }
       const arr: any[] = [];
-      for (let i = 0; i < n; i++) arr.push(readTyped(r.u8()));
+      for (let i = 0; i < n; i++) arr.push(readTyped(r.u8(), depth + 1));
       return arr;
     }
     if (t === 0x11) return r.f64s(3); // 3D point (Geom::Point3d)

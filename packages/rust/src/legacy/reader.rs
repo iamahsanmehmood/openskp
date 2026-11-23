@@ -117,12 +117,6 @@ impl<'a> R<'a> {
     }
 
     fn attr_value_depth(&mut self, t: u8, depth: usize) -> Result<ParsedAttribute> {
-        const MAX_ATTR_DEPTH: usize = 32;
-        if depth > MAX_ATTR_DEPTH {
-            return Err(Error::runtime(
-                "legacy attribute nesting exceeds maximum depth",
-            ));
-        }
         Ok(match t {
             0 => ParsedAttribute::Null,
             4 => ParsedAttribute::Integer(i64::from(read_i32(self.raw(4)?, 0)?)),
@@ -132,6 +126,11 @@ impl<'a> R<'a> {
             10 => ParsedAttribute::String(self.utf16()?),
             12 => ParsedAttribute::Length(self.f64()?), // Length (a double, inches)
             11 => {
+                if depth >= super::archive::MAX_LEGACY_DEPTH {
+                    return Err(Error::depth_limit(
+                        "legacy attribute array nesting exceeds maximum depth (64)",
+                    ));
+                }
                 let mut n = self.u32()?;
                 if n > 100000 {
                     return Err(Error::runtime("attr array too large"));

@@ -386,6 +386,8 @@ namespace OpenSkp
         // Cached CConstructionLine trailer width, self-calibrated on the
         // first guide line of the file (see ReadConstructionLine).
         public int? ClineTail;
+        public const int MaxLegacyDepth = 64;
+        public int Depth;
 
         public Archive(byte[] data, int ver)
         {
@@ -466,6 +468,13 @@ namespace OpenSkp
 
         private (int, string, object?) NewObj(LR r, string name)
         {
+            if (Depth >= MaxLegacyDepth)
+            {
+                throw new SkpParseException(
+                    $"legacy archive object nesting exceeds maximum depth ({MaxLegacyDepth})",
+                    stage: "legacy_walk",
+                    offset: r.Pos);
+            }
             InEntityList = false;
             int slot = Alloc(new SlotEntry { Kind = "obj", Name = name, Value = null });
             if (!Readers.TryGetValue(name, out var reader))
@@ -476,6 +485,7 @@ namespace OpenSkp
             int? prevSlot = CurrentObjSlot;
             CurrentClass = name;
             CurrentObjSlot = slot;
+            Depth += 1;
             object? value;
             try
             {
@@ -483,6 +493,7 @@ namespace OpenSkp
             }
             finally
             {
+                Depth -= 1;
                 CurrentClass = prevClass;
                 CurrentObjSlot = prevSlot;
             }
@@ -1123,7 +1134,7 @@ namespace OpenSkp
             return new AttrsRec { Children = children };
         }
 
-        private static object? ReadTyped(LR r, int t)
+        private static object? ReadTyped(LR r, int t, int depth = 0)
         {
             if (t == 0x00) return null;
             if (t == 0x04) return r.I32();
@@ -1134,13 +1145,20 @@ namespace OpenSkp
             if (t == 0x0c) return r.F64();           // Length (a double, inches)
             if (t == 0x0b)
             {
+                if (depth >= Archive.MaxLegacyDepth)
+                {
+                    throw new SkpParseException(
+                        $"legacy attribute array nesting exceeds maximum depth ({Archive.MaxLegacyDepth})",
+                        stage: "legacy_walk",
+                        offset: r.Pos);
+                }
                 uint n = r.U32();
                 if (n > 100000)
                 {
                     throw new LegacyParseError($"implausible attr array count {r.Ctx()}");
                 }
                 var arr = new List<object?>();
-                for (int i = 0; i < n; i++) arr.Add(ReadTyped(r, r.U8()));
+                for (int i = 0; i < n; i++) arr.Add(ReadTyped(r, r.U8(), depth + 1));
                 return arr;
             }
             if (t == 0x11) return r.F64s(3);         // 3D point (Geom::Point3d)

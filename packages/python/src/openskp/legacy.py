@@ -46,6 +46,7 @@ logger = logging.getLogger("openskp.legacy")
 # Mirrors _core._PROGRESS_INTERVAL - coarse enough to cost nothing on
 # files with 100k+ component definitions.
 _PROGRESS_INTERVAL = 500
+_MAX_LEGACY_DEPTH = 64
 
 
 class LegacyParseError(ValueError):
@@ -157,6 +158,7 @@ class _Archive:
         # per-entity-list instances an annotation's path wrote in full (see
         # _path_ref) that the list has not listed yet, slot -> None in order
         self.inline_stack: list = []
+        self.depth: int = 0
 
     def alloc(self, entry) -> int:
         s = self.next_slot
@@ -204,6 +206,12 @@ class _Archive:
         return self._new_obj(r, ent[1])
 
     def _new_obj(self, r, name):
+        if self.depth >= _MAX_LEGACY_DEPTH:
+            raise SkpParseError(
+                f"legacy archive object nesting exceeds maximum depth ({_MAX_LEGACY_DEPTH})",
+                stage="legacy_walk",
+                offset=r.pos,
+            )
         self._as_item = self.in_entity_list
         self.in_entity_list = False
         slot = self.alloc(('obj', name, None))
@@ -214,9 +222,11 @@ class _Archive:
         prev_slot = self.current_obj_slot
         self.current_class = name
         self.current_obj_slot = slot
+        self.depth += 1
         try:
             value = reader(self, r)
         finally:
+            self.depth -= 1
             self.current_class = prev_class
             self.current_obj_slot = prev_slot
         self.slots[slot] = ('obj', name, value)
@@ -774,7 +784,7 @@ def _read_attr_named(ar, r):
     r.raw(4)
     dictname = r.utf16()
 
-    def read_typed(t):
+    def read_typed(t, depth=0):
         if t == 0x00:
             return None
         if t == 0x04:
@@ -790,10 +800,16 @@ def _read_attr_named(ar, r):
         if t == 0x0C:
             return r.f64()           # Length (a double, inches)
         if t == 0x0B:
+            if depth >= _MAX_LEGACY_DEPTH:
+                raise SkpParseError(
+                    f"legacy attribute array nesting exceeds maximum depth ({_MAX_LEGACY_DEPTH})",
+                    stage="legacy_walk",
+                    offset=r.pos,
+                )
             n = r.u32()
             if n > 100000:
                 raise LegacyParseError(f"implausible attr array count {r.ctx()}")
-            return [read_typed(r.u8()) for _ in range(n)]
+            return [read_typed(r.u8(), depth + 1) for _ in range(n)]
         if t == 0x11:
             return r.f64s(3)         # 3D point (Geom::Point3d)
         if t == 0x12:

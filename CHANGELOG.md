@@ -37,6 +37,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Python now attaches `logging.NullHandler()` to the `openskp` logger in `openskp/__init__.py` so unconfigured `logger.warning(...)` calls no longer fall through to Python's last-resort stderr handler, and `openskp.export.fragments.from_fragments` logs unsupported-representation warnings via `logging` instead of `warnings.warn`.
 - TypeScript (`fromFragments`), .NET (`FragmentsExport.FromFragments` / `ReadFragments`), Dart (`fromFragments` / `readFragments` in `openskp_fragments`), C++ (`from_fragments` / `read_fragments`) and Rust (`from_fragments` / `from_fragments_with_options` / `read_fragments_with_options`) now route unsupported-representation warnings through each port's `ParseOptions` / `SkpParseOptions` log callback instead of `console.warn`, `Console.Error`, `stderr`, `std::cerr` or `eprintln!`.
 
+### Fixed — All 6 languages: classic (pre-2021) `.skp` readers cap recursion at 64 levels (#557)
+
+- All six classic MFC archive readers now reject nested archive object chains and nested `CAttributeNamed` array values deeper than 64 levels (matching the 2021+ TLV depth limit from #512; real classic files reach at most 6) with `SkpParseError` / `SkpParseException` (`stage="legacy_walk"`), including inside the root entity list so deep hostile nesting is never masked as a partial root read.
+
 ### Fixed — All 6 languages: partial reads of classic `.skp` files are reported (#552)
 
 - The classic (pre-2021 MFC) root entity reader stops at the first top-level record it cannot
