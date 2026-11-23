@@ -74,7 +74,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - run: cmake -S packages/cpp -B build -DOPENSKP_BUILD_TESTS=ON -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS='-fsanitize=address,undefined -fno-omit-frame-pointer' -DCMAKE_C_FLAGS='-fsanitize=address,undefined -fno-omit-frame-pointer' -DCMAKE_EXE_LINKER_FLAGS='-fsanitize=address,undefined'
-      - run: cmake --build build --parallel
+      - run: cmake --build build --parallel 2
       - run: ctest --test-dir build --output-on-failure
 
   # Single stable check name for branch protection to require, regardless of
