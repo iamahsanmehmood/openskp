@@ -41,6 +41,6 @@ fn scene_pages_keep_native_inches_and_hidden_layers_and_clear_on_fragments() {
         assert_eq!(pages[1].hidden_layers, vec!["Furniture".to_string()]);
     }
 
-    let reloaded = from_fragments(&to_fragments(&instanced)).unwrap();
+    let reloaded = from_fragments(&to_fragments(&instanced, false)).unwrap();
     assert!(reloaded.pages.is_empty());
 }
