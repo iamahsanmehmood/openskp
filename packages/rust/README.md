@@ -24,11 +24,11 @@ let model = SkpFile::open("building.skp")?.parse(&ParseOptions::default())?;
 println!("{} {} definitions", model.version, model.definitions.len());
 ```
 
-Both containers are read: VFF (SketchUp 2021+) and the classic MFC `CArchive` (2013–2020).
+Both containers are read: VFF (SketchUp 2021+) and the classic MFC `CArchive` (SketchUp 4–2020; see [docs/LANGUAGE_PARITY.md](../../docs/LANGUAGE_PARITY.md#4-real-sketchup-file-version-support)).
 
 ## Writing, editing and code generation
 
-- `openskp::create()` returns an `SkpBuilder` for a new file from scratch.
+- `openskp::create()` returns an `SkpBuilder` for a new SketchUp 2017 (`{17.0.1}`) classic-format file from scratch.
 - `openskp::open_existing()` loads a classic-format file to extend it.
 - `openskp::to_rust_code()` turns a parsed model into Rust source that rebuilds it.
 

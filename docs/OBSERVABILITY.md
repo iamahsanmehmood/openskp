@@ -76,7 +76,7 @@ languages:
 | `header` | The file doesn't start with the VFF magic marker (`FF FE FF 0E`) — not a `.skp` file, or a format OpenSKP doesn't recognize at all. | The very first bytes read. |
 | `zip_extract` | The file has a valid header but no embedded ZIP could be found or opened, or the ZIP has no `model.dat` entry. | Right after header validation, VFF path only. |
 | `tlv_walk` | A failure while walking `model.dat`'s top-level TLV records (the modern VFF/2021+ path). Carries `recordIndex`/`totalRecords`/`tag`. | The main per-record loop. |
-| `legacy_walk` | A failure while walking the classic MFC `CArchive` object stream (SketchUp 2013–2020 files). | The legacy archive walker. |
+| `legacy_walk` | A failure while walking the classic MFC `CArchive` object stream (pre-2021 files; see [LANGUAGE_PARITY.md § 4](LANGUAGE_PARITY.md#4-real-sketchup-file-version-support)). | The legacy archive walker. |
 | `legacy_defs` | A failure while converting walked legacy objects into component definitions. Carries `definitionId` (the archive slot index being built). | The legacy definitions loop. |
 | `build_scene` | A failure while baking placed instances into a triangulated, world-space scene — almost always a triangulation failure on a malformed face. Carries `definitionId`. | The opt-in `build_scene()`/`buildScene()`/`BuildScene()` call. |
 

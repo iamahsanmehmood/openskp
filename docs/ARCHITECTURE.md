@@ -36,7 +36,7 @@ handles both:
 graph TD
     A[".skp file bytes"] --> B{"Header + byte\npattern detection"}
     B -->|"2021+, VFF/ZIP"| C["VFF container walker"]
-    B -->|"2013-2020, MFC CArchive"| D["Legacy walker"]
+    B -->|"4-2020, MFC CArchive"| D["Legacy walker"]
     C --> E["Shared raw-parse shape\n(defs, layers, materials, styles)"]
     D --> E
     E --> F["parse() -> SkpModel\n(light, no scene resolution)"]
@@ -56,8 +56,9 @@ locate the absolute slot base, since the pre-model region's classes are
 walked opaquely) and adapts its output to the *same* shape the VFF path
 produces, so everything downstream — `parse()`, `buildScene()`, error
 handling, observability — is identical regardless of which walker ran.
-See [DEVELOPER_GUIDE.md's legacy section](DEVELOPER_GUIDE.md#legacy-format-support-sketchup-20132020)
-for what's specific to this format.
+See [DEVELOPER_GUIDE.md's legacy section](DEVELOPER_GUIDE.md#legacy-format-support-sketchup-42020)
+for what's specific to this format, and [LANGUAGE_PARITY.md § 4](LANGUAGE_PARITY.md#4-real-sketchup-file-version-support)
+for per-version reader support.
 
 ## Memory architecture
 
@@ -122,9 +123,9 @@ internal representation is tracked as follow-up work.
 ## Writer architecture
 
 All five languages can also write: create a new `.skp` file from nothing,
-or load and extend one that already exists. The writer only ever targets
-the **legacy MFC `CArchive`** container (never VFF) — the same format the
-legacy reader above decodes, just inverted.
+or load and extend one that already exists. The writer only ever emits a
+**SketchUp 2017 (`{17.0.1}`) classic MFC `CArchive`** container (never VFF) —
+the same format the legacy reader above decodes, just inverted.
 
 Real SketchUp never patches a file in place; it fully re-serializes the
 whole document on every save. `create()` follows the same discipline in
