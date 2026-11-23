@@ -121,6 +121,10 @@ namespace OpenSkp
         /// deduplicated by source bytes. Empty when nothing placed in the
         /// scene is textured.</summary>
         public List<SceneTexture> Textures { get; set; } = new List<SceneTexture>();
+
+        /// <summary>Each layer's hidden/visible state by layer name, read from
+        /// the parsed file (<c>true</c> when hidden, <c>false</c> when visible).</summary>
+        public Dictionary<string, bool> LayerHidden { get; set; } = new Dictionary<string, bool>();
     }
 
     /// <summary>Bakes every instance actually placed in a parsed model into
@@ -414,6 +418,11 @@ namespace OpenSkp
                         ? new Dictionary<string, string>(inst.Properties)
                         : new Dictionary<string, string>();
 
+                    if (inst.LayerId.HasValue)
+                    {
+                        lName = layerIdToName.TryGetValue(inst.LayerId.Value, out var ln) ? ln : parentLayer;
+                    }
+
                     // Layer/material resolution mirrors
                     // Geometry.ExtractGeometryFromNodes's D007 handling;
                     // re-derived here (from inst.Children) to match the
@@ -452,22 +461,6 @@ namespace OpenSkp
                         }
                     }
 
-                    string instName = !string.IsNullOrEmpty(inst.Name) ? inst.Name! : $"Component_{refIdx}";
-                    string fullPathName = $"{pathName} / {instName}";
-                    instanceCounter++;
-                    if (instanceCounter % ParseTuning.ProgressInterval == 0)
-                    {
-                        Observability.Progress(options, "build_scene", instanceCounter, instanceCounter);
-                        Observability.Log(options, SkpLogLevel.Debug, $"Processed {instanceCounter} placed instances");
-                    }
-                    var childNodes = refIdx.HasValue
-                        ? Instantiate(refIdx.Value, false, newMatrix, lName, fullPathName, instColor)
-                        : new List<InstanceNode>();
-
-                    double itx = newMatrix.Count > 9 ? newMatrix[9] * InchesToMm : 0.0;
-                    double ity = newMatrix.Count > 10 ? newMatrix[10] * InchesToMm : 0.0;
-                    double itz = newMatrix.Count > 11 ? newMatrix[11] * InchesToMm : 0.0;
-
                     string childDefName = "";
                     if (refIdx.HasValue && defsDict.TryGetValue(refIdx.Value, out var childDef))
                     {
@@ -488,9 +481,24 @@ namespace OpenSkp
                     bool defNameIsReal = !string.IsNullOrEmpty(childDefName) && !Geometry.IsGenericDefinitionName(childDefName);
                     string? nameOverride = Geometry.FindNameOverride(inst.AttributeDicts);
                     bool instNameNonEmpty = !string.IsNullOrEmpty(inst.Name);
-                    string fallbackName = instNameNonEmpty ? inst.Name! : (defNameIsReal ? childDefName : $"Component_{refIdx}");
-                    string displayName = nameOverride ?? fallbackName;
+                    string instName = instNameNonEmpty ? inst.Name! : (defNameIsReal ? childDefName : $"Component_{refIdx}");
+                    string displayName = nameOverride ?? instName;
                     bool nameIsGenerated = nameOverride == null && !instNameNonEmpty && !defNameIsReal;
+
+                    string fullPathName = $"{pathName} / {instName}";
+                    instanceCounter++;
+                    if (instanceCounter % ParseTuning.ProgressInterval == 0)
+                    {
+                        Observability.Progress(options, "build_scene", instanceCounter, instanceCounter);
+                        Observability.Log(options, SkpLogLevel.Debug, $"Processed {instanceCounter} placed instances");
+                    }
+                    var childNodes = refIdx.HasValue
+                        ? Instantiate(refIdx.Value, false, newMatrix, lName, fullPathName, instColor)
+                        : new List<InstanceNode>();
+
+                    double itx = newMatrix.Count > 9 ? newMatrix[9] * InchesToMm : 0.0;
+                    double ity = newMatrix.Count > 10 ? newMatrix[10] * InchesToMm : 0.0;
+                    double itz = newMatrix.Count > 11 ? newMatrix[11] * InchesToMm : 0.0;
 
                     // Every OTHER attribute dictionary this instance carries -
                     // dynamic_attributes is already surfaced separately as
@@ -534,7 +542,7 @@ namespace OpenSkp
                     // state is identical: an instance's update is applied to
                     // every mesh under its path, and the outermost (most
                     // shallow) ancestor's update wins.
-                    pathUpdates[fullPathName] = (properties, inst.Name ?? "", attributeDictionaries);
+                    pathUpdates[fullPathName] = (properties, displayName, attributeDictionaries);
                 }
 
                 return childInstancesInfo;
@@ -604,6 +612,9 @@ namespace OpenSkp
                 GlbPrimitives = glbPrimitives,
                 GltfMaterials = gltfMaterials,
                 Textures = textures,
+                LayerHidden = parsed.LayerHidden != null
+                    ? new Dictionary<string, bool>(parsed.LayerHidden)
+                    : new Dictionary<string, bool>(),
             };
         }
 
