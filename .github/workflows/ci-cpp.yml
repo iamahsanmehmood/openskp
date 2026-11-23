@@ -55,7 +55,7 @@ jobs:
         if: matrix.compiler == 'clang'
         run: echo "CXX=clang++" >> "$GITHUB_ENV" && echo "CC=clang" >> "$GITHUB_ENV"
       - run: cmake -S packages/cpp -B build -DOPENSKP_BUILD_TESTS=ON -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/prefix
-      - run: cmake --build build --config Release --parallel
+      - run: cmake --build build --config Release --parallel 4
       - run: ctest --test-dir build -C Release --output-on-failure
       - run: cmake --install build --config Release
       - name: Configure installed-package consumer
