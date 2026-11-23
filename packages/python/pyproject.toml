@@ -22,6 +22,7 @@ classifiers = [
     "Programming Language :: Python :: 3.14",
     "Topic :: Multimedia :: Graphics :: 3D Modeling",
     "Topic :: Scientific/Engineering",
+    "Typing :: Typed",
 ]
 dependencies = [
     "numpy>=2.2.6",
@@ -69,7 +70,7 @@ openskp = "openskp.__init__:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-openskp = ["_scaffold/*.skp", "_fragments_fb/*.fbs"]
+openskp = ["_scaffold/*.skp", "_fragments_fb/*.fbs", "py.typed"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

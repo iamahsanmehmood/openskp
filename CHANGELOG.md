@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Python: a `py.typed` marker (#572)
+
+- The wheel now ships `openskp/py.typed` and carries the `Typing :: Typed` classifier, so mypy
+  and pyright read openskp's type hints instead of treating the package as untyped.
+
 ### Fixed — All 6 languages: partial reads of classic `.skp` files are reported (#552)
 
 - The classic (pre-2021 MFC) root entity reader stops at the first top-level record it cannot
