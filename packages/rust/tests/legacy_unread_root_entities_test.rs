@@ -3,7 +3,7 @@ mod common;
 use std::sync::{Arc, Mutex};
 
 use openskp::create::{create, FaceOptions, DEFAULT_TEXT_LEADER};
-use openskp::{LogLevel, ParseOptions, SkpFile};
+use openskp::{from_fragments, to_fragments, LogLevel, ParseOptions, SkpFile};
 
 // The classic root reader keeps what it read before the first record it can't
 // parse and drops the rest of the root. SkpModel::unread_root_entities says
@@ -72,11 +72,23 @@ fn an_unreadable_text_drops_the_rest_of_the_root_and_warns() {
         .unwrap();
 
     let mut bytes = builder.to_bytes().unwrap();
-    let complete = SkpFile::from_buffer(bytes.clone())
-        .parse(&ParseOptions::default())
-        .unwrap();
+    let complete_skp = SkpFile::from_buffer(bytes.clone());
+    let complete = complete_skp.parse(&ParseOptions::default()).unwrap();
     assert_eq!(complete.root().texts.len(), 2);
     assert_eq!(complete.unread_root_entities, 0);
+    assert_eq!(
+        complete_skp
+            .build_scene(&ParseOptions::default())
+            .unwrap()
+            .unread_root_entities,
+        0
+    );
+    let complete_instanced = complete_skp
+        .build_instanced_scene(&ParseOptions::default())
+        .unwrap();
+    assert_eq!(complete_instanced.unread_root_entities, 0);
+    let frag = to_fragments(&complete_instanced, false);
+    assert_eq!(from_fragments(&frag).unwrap().unread_root_entities, 0);
 
     // Break the second text's string marker so the reader can't find its text.
     let marker = [0x01, 0xff, 0xfe, 0xff, 0x06, b'B', 0x00];
@@ -90,10 +102,25 @@ fn an_unreadable_text_drops_the_rest_of_the_root_and_warns() {
     let l = Arc::clone(&logs);
     let options = ParseOptions::default()
         .with_log(move |level, message| l.lock().unwrap().push((level, message.to_owned())));
-    let model = SkpFile::from_buffer(bytes).parse(&options).unwrap();
+    let broken_skp = SkpFile::from_buffer(bytes);
+    let model = broken_skp.parse(&options).unwrap();
     assert_eq!(model.root().texts.len(), 1);
     assert_eq!(model.root().texts[0].text, "First");
     assert!(model.unread_root_entities > 0);
+    assert_eq!(
+        broken_skp
+            .build_scene(&ParseOptions::default())
+            .unwrap()
+            .unread_root_entities,
+        model.unread_root_entities
+    );
+    assert_eq!(
+        broken_skp
+            .build_instanced_scene(&ParseOptions::default())
+            .unwrap()
+            .unread_root_entities,
+        model.unread_root_entities
+    );
     let unread_token = format!("{} unread", model.unread_root_entities);
     assert!(logs.lock().unwrap().iter().any(|(level, msg)| {
         *level == LogLevel::Warning && msg.contains("stopped early") && msg.contains(&unread_token)

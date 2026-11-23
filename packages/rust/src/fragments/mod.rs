@@ -1122,6 +1122,7 @@ fn read_model(raw: &[u8], options: &ParseOptions) -> ReadResult<InstancedScene> 
         textures: Vec::new(),
         layer_hidden,
         curve_resources: Vec::new(),
+        unread_root_entities: 0,
     })
 }
 

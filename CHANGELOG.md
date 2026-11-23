@@ -10,6 +10,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed — Python: scenes use a component instance's own paint and tag in classic files (#596)
 
 - `build_scene()` and `build_instanced_scene()` read an instance's paint and tag from its 2021+ `D007` record only. In classic (pre-2021) files a painted component came out in its tag's colour, and every instance sat on its parent's tag. Both now come from the instance itself, and nested components inherit the paint.
+### Added — All 6 languages: `unread_root_entities` on `Scene` and `InstancedScene` (#552)
+
+- Exposes the classic partial-read count directly on baked and instanced scenes across every port
+  (`Scene.unread_root_entities` / `InstancedScene.unread_root_entities` in Python, C++ and Rust;
+  `SkpScene.unreadRootEntities` / `InstancedScene.unreadRootEntities` in TypeScript;
+  `Scene.UnreadRootEntities` / `InstancedScene.UnreadRootEntities` in .NET;
+  `Scene.unreadRootEntities` / `InstancedScene.unreadRootEntities` in Dart), always `0` for
+  complete classic files, VFF files and scenes loaded from `.frag`, so downstream scene consumers
+  and add-ons do not need to parse warning log text.
 
 ### Added — Python: a `py.typed` marker (#572)
 

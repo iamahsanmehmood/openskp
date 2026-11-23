@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
-import { create, parseSkp } from '../src/index';
+import { create, parseSkp, buildScene, buildInstancedScene, fromFragments, toFragments } from '../src/index';
 import { LogLevel } from '../src/observability';
 
 function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
@@ -59,9 +59,14 @@ describe('Legacy unreadRootEntities', () => {
       [20, 10, 0],
     ]);
     const bytes = new Uint8Array(builder.toBytes());
-    const complete = parseSkp(toArrayBuffer(bytes));
+    const completeBuf = toArrayBuffer(bytes);
+    const complete = parseSkp(completeBuf);
     expect(complete.root.texts.length).toBe(2);
     expect(complete.unreadRootEntities).toBe(0);
+    expect(buildScene(completeBuf).unreadRootEntities).toBe(0);
+    const completeInstanced = buildInstancedScene(completeBuf);
+    expect(completeInstanced.unreadRootEntities).toBe(0);
+    expect(fromFragments(toFragments(completeInstanced)).unreadRootEntities).toBe(0);
 
     // Break the second text's string marker so the reader can't find its text.
     const marker = [0x01, 0xff, 0xfe, 0xff, 0x06, 0x42, 0x00];
@@ -70,12 +75,15 @@ describe('Legacy unreadRootEntities', () => {
     bytes.fill(0x00, at, at + 4);
 
     const logs: { level: LogLevel; message: string }[] = [];
-    const model = parseSkp(toArrayBuffer(bytes), {
+    const brokenBuf = toArrayBuffer(bytes);
+    const model = parseSkp(brokenBuf, {
       onLog: (level, message) => logs.push({ level, message }),
     });
     expect(model.root.texts.length).toBe(1);
     expect(model.root.texts[0].text).toBe('First');
     expect(model.unreadRootEntities).toBeGreaterThan(0);
+    expect(buildScene(brokenBuf).unreadRootEntities).toBe(model.unreadRootEntities);
+    expect(buildInstancedScene(brokenBuf).unreadRootEntities).toBe(model.unreadRootEntities);
     expect(
       logs.some(
         (entry) =>

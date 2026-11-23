@@ -34,9 +34,14 @@ TEST(LegacyUnreadRootEntities, AnUnreadableTextDropsTheRestOfTheRoot) {
   builder.add_text("Broken", {5, 0, 0});
   builder.add_face({{20, 0, 0}, {30, 0, 0}, {30, 10, 0}, {20, 10, 0}});
   auto bytes = builder.to_bytes();
-  const auto complete = SkpFile::from_buffer(bytes).parse();
+  const auto complete_skp = SkpFile::from_buffer(bytes);
+  const auto complete = complete_skp.parse();
   ASSERT_EQ(complete.root().texts.size(), 2u);
   ASSERT_EQ(complete.unread_root_entities, 0u);
+  EXPECT_EQ(complete_skp.build_scene().unread_root_entities, 0u);
+  const auto complete_instanced = complete_skp.build_instanced_scene();
+  EXPECT_EQ(complete_instanced.unread_root_entities, 0u);
+  EXPECT_EQ(from_fragments(to_fragments(complete_instanced)).unread_root_entities, 0u);
 
   // Break the second text's string marker so the reader can't find its text.
   const ByteBuffer marker{0x01, 0xff, 0xfe, 0xff, 0x06, 'B', 0};
@@ -49,10 +54,13 @@ TEST(LegacyUnreadRootEntities, AnUnreadableTextDropsTheRestOfTheRoot) {
   options.log = [&](LogLevel level, std::string_view message) {
     logs.emplace_back(level, message);
   };
-  const auto model = SkpFile::from_buffer(std::move(bytes)).parse(options);
+  const auto broken_skp = SkpFile::from_buffer(std::move(bytes));
+  const auto model = broken_skp.parse(options);
   ASSERT_EQ(model.root().texts.size(), 1u);
   EXPECT_EQ(model.root().texts[0].text, "First");
   EXPECT_GT(model.unread_root_entities, 0u);
+  EXPECT_EQ(broken_skp.build_scene().unread_root_entities, model.unread_root_entities);
+  EXPECT_EQ(broken_skp.build_instanced_scene().unread_root_entities, model.unread_root_entities);
   const auto unread_token = std::to_string(model.unread_root_entities) + " unread";
   EXPECT_TRUE(std::any_of(logs.begin(), logs.end(), [&](const auto& entry) {
     return entry.first == LogLevel::warning &&

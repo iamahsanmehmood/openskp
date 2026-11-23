@@ -122,6 +122,10 @@ struct OPENSKP_EXPORT InstancedScene {
   /// through, since the layer concept itself doesn't survive into the
   /// instanced tree/mesh data any other way.
   std::map<std::string, bool> layer_hidden;
+  /// Number of top-level entities dropped when a classic (pre-2021) root
+  /// entity walk stopped early (0 for complete classic files, VFF files,
+  /// and scenes read back from .frag).
+  std::size_t unread_root_entities{};
 };
 
 }  // namespace openskp

@@ -147,12 +147,17 @@ class Scene {
   /// source bytes. Empty when nothing placed in the scene is textured.
   List<SceneTexture> textures;
 
+  /// Number of top-level entities dropped when a classic (pre-2021) root
+  /// entity walk stopped early (`0` for complete classic files and VFF files).
+  int unreadRootEntities;
+
   Scene({
     required this.sceneHierarchy,
     required this.meshIndex,
     required this.glbPrimitives,
     required this.gltfMaterials,
     List<SceneTexture>? textures,
+    this.unreadRootEntities = 0,
   }) : textures = textures ?? [];
 }
 
@@ -599,6 +604,7 @@ class SceneBuilder {
       glbPrimitives: glbPrimitives,
       gltfMaterials: gltfMaterials,
       textures: textures,
+      unreadRootEntities: parsed.unreadRootEntities,
     );
   }
 

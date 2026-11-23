@@ -152,6 +152,11 @@ class InstancedScene {
   /// Python's/C++'s own field of the same name.
   Map<String, bool> layerHidden;
 
+  /// Number of top-level entities dropped when a classic (pre-2021) root
+  /// entity walk stopped early (`0` for complete classic files, VFF files,
+  /// and scenes read back from `.frag`).
+  int unreadRootEntities;
+
   InstancedScene({
     this.bounds,
     required this.sceneHierarchy,
@@ -159,6 +164,7 @@ class InstancedScene {
     required this.gltfMaterials,
     List<SceneTexture>? textures,
     Map<String, bool>? layerHidden,
+    this.unreadRootEntities = 0,
   })  : textures = textures ?? [],
         layerHidden = layerHidden ?? {};
 }
@@ -640,6 +646,7 @@ class InstancedSceneBuilder {
       gltfMaterials: gltfMaterials,
       textures: textures,
       layerHidden: Map<String, bool>.from(parsed.layerHidden),
+      unreadRootEntities: parsed.unreadRootEntities,
     );
   }
 

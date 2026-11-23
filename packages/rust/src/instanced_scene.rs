@@ -125,4 +125,8 @@ pub struct InstancedScene {
     /// Loose-edge resources, one per (definition, effective layer) (Python
     /// port extension). Empty for a model whose geometry is all faces.
     pub curve_resources: Vec<InstancedCurveResource>,
+    /// Number of top-level entities dropped when a classic (pre-2021) root
+    /// entity walk stopped early (`0` for complete classic files, VFF files,
+    /// and scenes read back from `.frag`).
+    pub unread_root_entities: usize,
 }

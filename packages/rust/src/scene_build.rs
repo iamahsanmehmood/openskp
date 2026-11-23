@@ -567,6 +567,7 @@ pub fn build_scene_raw(mut p: RawParsed, o: &ParseOptions) -> Result<Scene, SkpP
                 ..Default::default()
             },
             layer_hidden,
+            unread_root_entities: p.unread_root_entities,
             ..Default::default()
         },
         textures: TextureRegistry::default(),

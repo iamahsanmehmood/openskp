@@ -62,6 +62,7 @@ function makeCircleExtrusionFrag(): Uint8Array {
     gltfMaterials: [{ pbrMetallicRoughness: { baseColorFactor: [1.0, 1.0, 1.0, 1.0] } }],
     textures: [],
     layerHidden: {},
+    unreadRootEntities: 0,
   };
   const raw = new Uint8Array(toFragments(scene, { raw: true }));
   const model = Model.getRootAsModel(new flatbuffers.ByteBuffer(raw));

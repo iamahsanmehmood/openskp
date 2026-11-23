@@ -254,6 +254,7 @@ class Scene:
     # use this to match SketchUp's own on/off state instead of always
     # defaulting every layer to visible.
     layer_hidden: Dict[str, bool] = field(default_factory=dict)
+    unread_root_entities: int = 0
 
 
 def _sniff_image_mime(data: bytes) -> Optional[str]:
@@ -922,4 +923,5 @@ def build_scene(
         gltf_materials=gltf_materials,
         textures=textures,
         layer_hidden=dict(parsed.get("layer_hidden") or {}),
+        unread_root_entities=int(parsed.get("unread_root_entities", 0)),
     )

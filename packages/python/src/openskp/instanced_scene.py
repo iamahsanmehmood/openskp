@@ -219,6 +219,7 @@ class InstancedScene:
     # this was never threaded through here even after that fix landed for
     # the baked path (openskp#272).
     layer_hidden: Dict[str, bool] = field(default_factory=dict)
+    unread_root_entities: int = 0
 
 
 def _to_gltf_matrix(m: List[float]) -> Tuple[float, ...]:
@@ -856,4 +857,5 @@ def build_instanced_scene(
         gltf_materials=gltf_materials,
         textures=textures,
         layer_hidden=dict(parsed.get("layer_hidden") or {}),
+        unread_root_entities=int(parsed.get("unread_root_entities", 0)),
     )
