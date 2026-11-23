@@ -954,6 +954,33 @@ def _parse_dimensions(model_dat, id2pos, inst_world):
     return dims
 
 
+_FACE_FRONT_TAG = b'\x5c\x73\x04\x00\x00\x00'  # 0x735C, 4 bytes
+_FACE_BACK_TAG = b'\x5d\x73\x04\x00\x00\x00'   # 0x735D, 4 bytes
+
+
+def _model_face_colors(model_dat):
+    """``(front, back)``: the model's face colours as SketchUp shows them on
+    an unpainted face's front and back side, each ``(r, g, b)``, or ``None``.
+
+    They are the rendering options' items 0x735C and 0x735D in model.dat, one
+    RGBA each, the first right before the second (openskp#533). Checked
+    against SketchUp's own FaceFrontColor / FaceBackColor on every 2021+ file
+    of the test corpus: the pair occurs once and holds exactly those colours,
+    including in a file whose colours were changed from the default. These
+    are what SketchUp shows, which can differ from every saved style in
+    ``styles`` (a style changed and not saved)."""
+    at = model_dat.find(_FACE_FRONT_TAG)
+    while at >= 0:
+        back_at = at + 10
+        if model_dat[back_at:back_at + 6] == _FACE_BACK_TAG:
+            front = model_dat[at + 6:at + 10]
+            back = model_dat[back_at + 6:back_at + 10]
+            if len(back) == 4:
+                return tuple(front[:3]), tuple(back[:3])
+        at = model_dat.find(_FACE_FRONT_TAG, at + 1)
+    return None
+
+
 def _parse_pages(node):
     """Scenes ("pages"). The 0702 node's payload nests 6D60 > 6D61 > one
     7148 record per page:
@@ -2251,6 +2278,7 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
         'defs_dict': defs_dict,
         'thumbnail_data': thumbnail_data,
         'styles': styles,
+        'face_colors': _model_face_colors(model_dat),
         'units': units,
     }
 
