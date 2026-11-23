@@ -17,8 +17,10 @@ slot numbering. It just calls a generic, documented API
 (`add_face`/`add_material`/`add_component_definition`/`add_instance`,
 the same shape in every language — see
 [Write capabilities](DEVELOPER_GUIDE.md#write-capabilities)) and the
-writer handles the rest, with every feature independently validated
-against the real SketchUp SDK.
+writer handles the rest — validated against SketchUp's C library in Python
+(and C++ via `check_native_skp.py`), with TypeScript, .NET, and Dart
+checked byte-for-byte against Python in CI (see
+[Writer validation](LANGUAGE_PARITY.md#writer-validation)).
 
 No object-specific helper library is involved on purpose — no
 `add_chair()` or `add_staircase()`. A raw, generic API is more work

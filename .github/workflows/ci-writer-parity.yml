@@ -1,0 +1,589 @@
+name: Writer Parity CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      writer: ${{ steps.filter.outputs.writer }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dorny/paths-filter@v4
+        id: filter
+        with:
+          filters: |
+            writer:
+              - 'packages/python/src/**'
+              - 'packages/typescript/src/**'
+              - 'packages/dotnet/OpenSkp/**'
+              - 'packages/dart/lib/**'
+              - 'packages/cpp/src/**'
+              - 'packages/cpp/include/**'
+              - 'packages/rust/src/**'
+              - '.github/workflows/ci-writer-parity.yml'
+
+  cross-writer:
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.writer == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '9.0'
+
+      - name: Set up Dart
+        uses: dart-lang/setup-dart@v1
+
+      - name: Set up Rust
+        run: rustup toolchain install stable --profile minimal && rustup default stable
+
+      - name: Build language packages
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e packages/python
+          (cd packages/typescript && npm ci && npm run build)
+          dotnet build packages/dotnet/OpenSkp/OpenSkp.csproj --configuration Release
+          (cd packages/dart && dart pub get)
+
+      - name: Run cross-writer byte parity check
+        env:
+          REPO_ROOT: ${{ github.workspace }}
+        run: |
+          python - <<'PY'
+          import os
+          import pathlib
+          import struct
+          import subprocess
+          import sys
+          import tempfile
+          import zlib
+
+          from openskp import SkpFile, create
+
+          repo = pathlib.Path(os.environ["REPO_ROOT"]).resolve()
+
+          def make_png() -> bytes:
+              def chunk(tag: bytes, data: bytes) -> bytes:
+                  crc = zlib.crc32(tag + data) & 0xFFFFFFFF
+                  return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", crc)
+              raw = b"".join(b"\x00" + b"\xc8\x64\x32" * 4 for _ in range(4))
+              return (
+                  b"\x89PNG\r\n\x1a\n"
+                  + chunk(b"IHDR", struct.pack(">IIBBBBB", 4, 4, 8, 2, 0, 0, 0))
+                  + chunk(b"IDAT", zlib.compress(raw))
+                  + chunk(b"IEND", b"")
+              )
+
+          def mask_random_fields(raw: bytes, def_names: list[str], mask_model_guid: bool = False) -> bytes:
+              buf = bytearray(raw)
+              if mask_model_guid:
+                  buf[0x34:0x44] = b"\x00" * 16
+              for name in def_names:
+                  marker = b"\xff\xfe\xff" + bytes([len(name)]) + name.encode("utf-16-le")
+                  pos = 0
+                  hits = []
+                  while True:
+                      idx = raw.find(marker, pos)
+                      if idx == -1:
+                          break
+                      hits.append(idx)
+                      pos = idx + len(marker)
+                  if len(hits) != 2:
+                      raise AssertionError(f"Expected 2 occurrences of {name!r}, got {len(hits)}")
+                  # 1st occurrence (CComponentDefinition tail): 16B UUID before name, 4B u32 timestamp after 2 empty strings.
+                  s0, e0 = hits[0], hits[0] + len(marker)
+                  if raw[e0:e0 + 8] != b"\xff\xfe\xff\x00\xff\xfe\xff\x00":
+                      raise AssertionError(f"Unexpected bytes after {name!r} definition name")
+                  buf[s0 - 16:s0] = b"\x00" * 16
+                  buf[e0 + 8:e0 + 12] = b"\x00" * 4
+                  # 2nd occurrence (CComponentInstance / CGroup): 16B placement UUID right after name.
+                  e1 = hits[1] + len(marker)
+                  buf[e1:e1 + 16] = b"\x00" * 16
+              return bytes(buf)
+
+          def format_diffs(a: bytes, b: bytes, limit: int = 12) -> str:
+              if len(a) != len(b):
+                  return f"length mismatch ({len(a)} vs {len(b)} bytes)"
+              diffs = [f"0x{i:04x} ({a[i]:02x} vs {b[i]:02x})" for i in range(len(a)) if a[i] != b[i]]
+              extra = f" ... (+{len(diffs) - limit} more)" if len(diffs) > limit else ""
+              return f"{len(diffs)} differing bytes: {', '.join(diffs[:limit])}{extra}"
+
+          with tempfile.TemporaryDirectory() as tmp:
+              work = pathlib.Path(tmp)
+              (work / "tex.png").write_bytes(make_png())
+
+              # 1. Python
+              prev_cwd = os.getcwd()
+              os.chdir(work)
+              try:
+                  b = create()
+                  red = b.add_material("Red", (255, 0, 0))
+                  roof = b.add_layer("Roof", color=(180, 60, 40))
+                  with b.add_component_definition("Chair") as chair:
+                      chair.add_face([(0, 0, 0), (20, 0, 0), (20, 20, 0), (0, 20, 0)])
+                  b.add_instance(chair, translation=(50, 0, 0))
+                  b.add_face([(0, 0, 0), (100, 0, 0), (100, 100, 0), (0, 100, 0)], material=red, layer=roof)
+                  b.save("py_basic.skp")
+
+                  b = create()
+                  red = b.add_material("Red", (255, 0, 0))
+                  brick = b.add_texture_material("Brick", "tex.png")
+                  roof = b.add_layer("Roof", color=(180, 60, 40))
+                  with b.add_component_definition("Chair") as chair:
+                      chair.add_face([(0, 0, 0), (20, 0, 0), (20, 20, 0), (0, 20, 0)], material=brick)
+                  with b.add_group("Box", translation=(0, 50, 0)) as box:
+                      box.add_face([(0, 0, 0), (10, 0, 0), (10, 10, 0), (0, 10, 0)])
+                  b.add_instance(chair, translation=(50, 0, 0), attributes={"tag": "c1"})
+                  b.add_face(
+                      [(0, 0, 0), (100, 0, 0), (100, 100, 0), (0, 100, 0)],
+                      holes=[[(20, 20, 0), (40, 20, 0), (40, 40, 0), (20, 40, 0)]],
+                      material=red,
+                      layer=roof,
+                  )
+                  b.save("py_rich.skp")
+              finally:
+                  os.chdir(prev_cwd)
+
+              # 2. TypeScript
+              ts_driver = work / "driver.cjs"
+              ts_driver.write_text(f"""const fs = require('fs');
+          const {{ create }} = require({str(repo / 'packages/typescript/dist/index.js')!r});
+          {{
+            const b = create();
+            const red = b.addMaterial('Red', [255, 0, 0]);
+            const roof = b.addLayer('Roof', {{ color: [180, 60, 40] }});
+            const chair = b.addComponentDefinition('Chair', (def) => {{
+              def.addFace([[0, 0, 0], [20, 0, 0], [20, 20, 0], [0, 20, 0]]);
+            }});
+            b.addInstance(chair, {{ translation: [50, 0, 0] }});
+            b.addFace([[0, 0, 0], [100, 0, 0], [100, 100, 0], [0, 100, 0]], {{ material: red, layer: roof }});
+            b.save('ts_basic.skp');
+          }}
+          {{
+            const b = create();
+            const red = b.addMaterial('Red', [255, 0, 0]);
+            const brick = b.addTextureMaterial('Brick', new Uint8Array(fs.readFileSync('tex.png')), 'tex.png');
+            const roof = b.addLayer('Roof', {{ color: [180, 60, 40] }});
+            const chair = b.addComponentDefinition('Chair', (def) => {{
+              def.addFace([[0, 0, 0], [20, 0, 0], [20, 20, 0], [0, 20, 0]], {{ material: brick }});
+            }});
+            b.addGroup((box) => {{
+              box.addFace([[0, 0, 0], [10, 0, 0], [10, 10, 0], [0, 10, 0]]);
+            }}, {{ name: 'Box', translation: [0, 50, 0] }});
+            b.addInstance(chair, {{ translation: [50, 0, 0], attributes: {{ tag: 'c1' }} }});
+            b.addFace(
+              [[0, 0, 0], [100, 0, 0], [100, 100, 0], [0, 100, 0]],
+              {{
+                holes: [[[20, 20, 0], [40, 20, 0], [40, 40, 0], [20, 40, 0]]],
+                material: red,
+                layer: roof,
+              }}
+            );
+            b.save('ts_rich.skp');
+          }}
+          """, encoding="utf-8")
+              subprocess.check_call(["node", str(ts_driver)], cwd=str(work))
+
+              # 3. .NET
+              net_dir = work / "net_driver"
+              net_dir.mkdir()
+              (net_dir / "Driver.csproj").write_text(f"""<Project Sdk="Microsoft.NET.Sdk">
+            <PropertyGroup>
+              <OutputType>Exe</OutputType>
+              <TargetFramework>net9.0</TargetFramework>
+              <ImplicitUsings>enable</ImplicitUsings>
+              <Nullable>enable</Nullable>
+            </PropertyGroup>
+            <ItemGroup>
+              <ProjectReference Include="{repo / 'packages/dotnet/OpenSkp/OpenSkp.csproj'}" />
+            </ItemGroup>
+          </Project>
+          """, encoding="utf-8")
+              (net_dir / "Program.cs").write_text("""using OpenSkp;
+          {
+              var b = SkpCreate.NewFile();
+              int red = b.AddMaterial("Red", (255, 0, 0));
+              int roof = b.AddLayer("Roof", color: (180, 60, 40));
+              ComponentDefinitionBuilder chair;
+              using (chair = b.AddComponentDefinition("Chair"))
+              {
+                  chair.AddFace(new (double, double, double)[] { (0, 0, 0), (20, 0, 0), (20, 20, 0), (0, 20, 0) });
+              }
+              b.AddInstance(chair, translation: (50, 0, 0));
+              b.AddFace(new (double, double, double)[] { (0, 0, 0), (100, 0, 0), (100, 100, 0), (0, 100, 0) }, material: red, layer: roof);
+              b.Save("dotnet_basic.skp");
+          }
+          {
+              var b = SkpCreate.NewFile();
+              int red = b.AddMaterial("Red", (255, 0, 0));
+              int brick = b.AddTextureMaterial("Brick", "tex.png");
+              int roof = b.AddLayer("Roof", color: (180, 60, 40));
+              ComponentDefinitionBuilder chair;
+              using (chair = b.AddComponentDefinition("Chair"))
+              {
+                  chair.AddFace(new (double, double, double)[] { (0, 0, 0), (20, 0, 0), (20, 20, 0), (0, 20, 0) }, material: brick);
+              }
+              using (var box = b.AddGroup("Box", translation: (0, 50, 0)))
+              {
+                  box.AddFace(new (double, double, double)[] { (0, 0, 0), (10, 0, 0), (10, 10, 0), (0, 10, 0) });
+              }
+              b.AddInstance(chair, translation: (50, 0, 0), attributes: new Dictionary<string, object> { ["tag"] = "c1" });
+              b.AddFace(
+                  new (double, double, double)[] { (0, 0, 0), (100, 0, 0), (100, 100, 0), (0, 100, 0) },
+                  material: red,
+                  layer: roof,
+                  holes: new[] { (IReadOnlyList<(double, double, double)>)new (double, double, double)[] { (20, 20, 0), (40, 20, 0), (40, 40, 0), (20, 40, 0) } });
+              b.Save("dotnet_rich.skp");
+          }
+          """, encoding="utf-8")
+              subprocess.check_call(["dotnet", "run", "-c", "Release", "--project", str(net_dir / "Driver.csproj")], cwd=str(work))
+
+              # 4. Dart
+              dart_driver = work / "driver.dart"
+              dart_driver.write_text("""import 'package:openskp/openskp.dart';
+          void main() {
+            {
+              final b = create();
+              final red = b.addMaterial('Red', [255, 0, 0]);
+              final roof = b.addLayer('Roof', color: [180, 60, 40]);
+              final chair = b.addComponentDefinition('Chair', (def) {
+                def.addFace([(0.0, 0.0, 0.0), (20.0, 0.0, 0.0), (20.0, 20.0, 0.0), (0.0, 20.0, 0.0)]);
+              });
+              b.addInstance(chair, translation: (50.0, 0.0, 0.0));
+              b.addFace([(0.0, 0.0, 0.0), (100.0, 0.0, 0.0), (100.0, 100.0, 0.0), (0.0, 100.0, 0.0)], material: red, layer: roof);
+              b.save('dart_basic.skp');
+            }
+            {
+              final b = create();
+              final red = b.addMaterial('Red', [255, 0, 0]);
+              final brick = b.addTextureMaterial('Brick', 'tex.png');
+              final roof = b.addLayer('Roof', color: [180, 60, 40]);
+              final chair = b.addComponentDefinition('Chair', (def) {
+                def.addFace([(0.0, 0.0, 0.0), (20.0, 0.0, 0.0), (20.0, 20.0, 0.0), (0.0, 20.0, 0.0)], material: brick);
+              });
+              b.addGroup((box) {
+                box.addFace([(0.0, 0.0, 0.0), (10.0, 0.0, 0.0), (10.0, 10.0, 0.0), (0.0, 10.0, 0.0)]);
+              }, name: 'Box', translation: (0.0, 50.0, 0.0));
+              b.addInstance(chair, translation: (50.0, 0.0, 0.0), attributes: {'tag': 'c1'});
+              b.addFace(
+                [(0.0, 0.0, 0.0), (100.0, 0.0, 0.0), (100.0, 100.0, 0.0), (0.0, 100.0, 0.0)],
+                holes: [[(20.0, 20.0, 0.0), (40.0, 20.0, 0.0), (40.0, 40.0, 0.0), (20.0, 40.0, 0.0)]],
+                material: red,
+                layer: roof,
+              );
+              b.save('dart_rich.skp');
+            }
+          }
+          """, encoding="utf-8")
+              subprocess.check_call(
+                  ["dart", f"--packages={repo / 'packages/dart/.dart_tool/package_config.json'}", str(dart_driver)],
+                  cwd=str(work),
+              )
+
+              # 5. C++
+              cpp_dir = work / "cpp_driver"
+              (cpp_dir / "include/openskp").mkdir(parents=True)
+              (cpp_dir / "include/openskp/export.hpp").write_text("#pragma once\n#define OPENSKP_EXPORT\n", encoding="utf-8")
+              (cpp_dir / "driver.cpp").write_text("""#include <openskp/create.hpp>
+          int main() {
+            {
+              auto b = openskp::create();
+              int red = b->add_material("Red", openskp::Color3{255, 0, 0});
+              openskp::LayerOptions roof_opts;
+              roof_opts.color = openskp::Color4{180, 60, 40, 255};
+              int roof = b->add_layer("Roof", roof_opts);
+              auto& chair = b->add_component_definition("Chair");
+              chair.add_face({{0, 0, 0}, {20, 0, 0}, {20, 20, 0}, {0, 20, 0}});
+              chair.close();
+              openskp::InstanceOptions inst_opts;
+              inst_opts.translation = {50, 0, 0};
+              b->add_instance(chair, inst_opts);
+              openskp::FaceOptions face_opts;
+              face_opts.material = red;
+              face_opts.layer = roof;
+              b->add_face({{0, 0, 0}, {100, 0, 0}, {100, 100, 0}, {0, 100, 0}}, face_opts);
+              b->save("cpp_basic.skp");
+            }
+            {
+              auto b = openskp::create();
+              int red = b->add_material("Red", openskp::Color3{255, 0, 0});
+              int brick = b->add_texture_material("Brick", "tex.png");
+              openskp::LayerOptions roof_opts;
+              roof_opts.color = openskp::Color4{180, 60, 40, 255};
+              int roof = b->add_layer("Roof", roof_opts);
+              auto& chair = b->add_component_definition("Chair");
+              openskp::FaceOptions chair_f;
+              chair_f.material = brick;
+              chair.add_face({{0, 0, 0}, {20, 0, 0}, {20, 20, 0}, {0, 20, 0}}, chair_f);
+              chair.close();
+              openskp::GroupOptions box_opts;
+              box_opts.name = "Box";
+              box_opts.translation = {0, 50, 0};
+              auto& box = b->add_group(box_opts);
+              box.add_face({{0, 0, 0}, {10, 0, 0}, {10, 10, 0}, {0, 10, 0}});
+              box.close();
+              openskp::InstanceOptions inst_opts;
+              inst_opts.translation = {50, 0, 0};
+              inst_opts.attributes["tag"] = std::string("c1");
+              b->add_instance(chair, inst_opts);
+              openskp::FaceOptions face_opts;
+              face_opts.material = red;
+              face_opts.layer = roof;
+              face_opts.holes = {{{20, 20, 0}, {40, 20, 0}, {40, 40, 0}, {20, 40, 0}}};
+              b->add_face({{0, 0, 0}, {100, 0, 0}, {100, 100, 0}, {0, 100, 0}}, face_opts);
+              b->save("cpp_rich.skp");
+            }
+            return 0;
+          }
+          """, encoding="utf-8")
+              cpp_bin = cpp_dir / "driver"
+              subprocess.check_call([
+                  "g++", "-std=c++17", "-O2",
+                  f"-I{cpp_dir / 'include'}",
+                  f"-I{repo / 'packages/cpp/include'}",
+                  f"-I{repo / 'packages/cpp/src'}",
+                  str(repo / "packages/cpp/src/create.cpp"),
+                  str(cpp_dir / "driver.cpp"),
+                  "-o", str(cpp_bin),
+              ])
+              subprocess.check_call([str(cpp_bin)], cwd=str(work))
+
+              # 6. Rust
+              rust_dir = work / "rust_driver"
+              (rust_dir / "src").mkdir(parents=True)
+              (rust_dir / "Cargo.toml").write_text(f"""[package]
+          name = "writer_parity_driver"
+          version = "0.1.0"
+          edition = "2021"
+
+          [dependencies]
+          openskp = {{ path = {str(repo / 'packages/rust')!r} }}
+          """, encoding="utf-8")
+              (rust_dir / "src/main.rs").write_text("""use openskp::create::{
+              create, AttributeDict, DefinitionOptions, FaceOptions, GroupOptions, InstanceOptions,
+              LayerOptions,
+          };
+
+          fn main() -> Result<(), Box<dyn std::error::Error>> {
+              {
+                  let mut b = create();
+                  let red = b.add_material("Red", [255, 0, 0], None)?;
+                  let roof = b.add_layer(
+                      "Roof",
+                      &LayerOptions {
+                          color: Some([180, 60, 40, 255]),
+                          ..Default::default()
+                      },
+                  )?;
+                  let mut chair = b.add_component_definition("Chair", &DefinitionOptions::default())?;
+                  chair.add_face(
+                      &[[0.0, 0.0, 0.0], [20.0, 0.0, 0.0], [20.0, 20.0, 0.0], [0.0, 20.0, 0.0]],
+                      &FaceOptions::default(),
+                  )?;
+                  let chair = chair.close()?;
+                  b.add_instance(
+                      chair,
+                      &InstanceOptions {
+                          translation: [50.0, 0.0, 0.0],
+                          ..Default::default()
+                      },
+                  )?;
+                  b.add_face(
+                      &[[0.0, 0.0, 0.0], [100.0, 0.0, 0.0], [100.0, 100.0, 0.0], [0.0, 100.0, 0.0]],
+                      &FaceOptions {
+                          material: Some(red),
+                          layer: Some(roof),
+                          ..Default::default()
+                      },
+                  )?;
+                  b.save("rust_basic.skp")?;
+              }
+              {
+                  let mut b = create();
+                  let red = b.add_material("Red", [255, 0, 0], None)?;
+                  let brick = b.add_texture_material("Brick", "tex.png", None, None, None)?;
+                  let roof = b.add_layer(
+                      "Roof",
+                      &LayerOptions {
+                          color: Some([180, 60, 40, 255]),
+                          ..Default::default()
+                      },
+                  )?;
+                  let mut chair = b.add_component_definition("Chair", &DefinitionOptions::default())?;
+                  chair.add_face(
+                      &[[0.0, 0.0, 0.0], [20.0, 0.0, 0.0], [20.0, 20.0, 0.0], [0.0, 20.0, 0.0]],
+                      &FaceOptions {
+                          material: Some(brick),
+                          ..Default::default()
+                      },
+                  )?;
+                  let chair = chair.close()?;
+                  let mut box_grp = b.add_group(&GroupOptions {
+                      name: Some("Box".to_owned()),
+                      translation: [0.0, 50.0, 0.0],
+                      ..Default::default()
+                  })?;
+                  box_grp.add_face(
+                      &[[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [10.0, 10.0, 0.0], [0.0, 10.0, 0.0]],
+                      &FaceOptions::default(),
+                  )?;
+                  box_grp.close()?;
+                  let mut attrs = AttributeDict::new();
+                  attrs.insert("tag".to_owned(), "c1".into());
+                  b.add_instance(
+                      chair,
+                      &InstanceOptions {
+                          translation: [50.0, 0.0, 0.0],
+                          attributes: attrs,
+                          ..Default::default()
+                      },
+                  )?;
+                  b.add_face(
+                      &[[0.0, 0.0, 0.0], [100.0, 0.0, 0.0], [100.0, 100.0, 0.0], [0.0, 100.0, 0.0]],
+                      &FaceOptions {
+                          material: Some(red),
+                          layer: Some(roof),
+                          holes: vec![vec![
+                              [20.0, 20.0, 0.0],
+                              [40.0, 20.0, 0.0],
+                              [40.0, 40.0, 0.0],
+                              [20.0, 40.0, 0.0],
+                          ]],
+                          ..Default::default()
+                      },
+                  )?;
+                  b.save("rust_rich.skp")?;
+              }
+              Ok(())
+          }
+          """, encoding="utf-8")
+              subprocess.check_call(["cargo", "build", "--release", "--manifest-path", str(rust_dir / "Cargo.toml")])
+              subprocess.check_call([str(rust_dir / "target/release/writer_parity_driver")], cwd=str(work))
+
+              # Verify parsed structure + byte parity across all 6 writers
+              writers = ["py", "ts", "dotnet", "dart", "cpp", "rust"]
+              failures = []
+
+              for scenario, names, expected_mats, expected_defs, expected_insts in [
+                  ("basic", ["Chair"], ["Red"], [("Chair", 1, False)], [("Chair", {})]),
+                  (
+                      "rich",
+                      ["Chair", "Box"],
+                      ["Red", "Brick"],
+                      [("Chair", 1, False), ("Box", 1, True)],
+                      [("Box", {}), ("Chair", {"attributes": {"tag": "c1"}})],
+                  ),
+              ]:
+                  raw = {w: (work / f"{w}_{scenario}.skp").read_bytes() for w in writers}
+                  print(f"=== Scenario: {scenario} ({len(raw['py'])} bytes) ===")
+
+                  for w in writers:
+                      m = SkpFile.open(work / f"{w}_{scenario}.skp").parse()
+                      mats = [x.name for x in m.materials]
+                      layers = [x.name for x in m.layers]
+                      defs = [(d.name, len(d.faces), d.is_group) for d in m.definitions.values()]
+                      insts = [(i.name, i.attribute_dictionaries) for i in m.root.instances]
+                      if (mats, layers, defs, len(m.root.faces), insts) != (
+                          expected_mats,
+                          ["Layer0", "Roof"],
+                          expected_defs,
+                          1,
+                          expected_insts,
+                      ):
+                          failures.append(
+                              f"[{scenario}] {w} parsed structure mismatch: "
+                              f"mats={mats}, layers={layers}, defs={defs}, faces={len(m.root.faces)}, insts={insts}"
+                          )
+
+                  # Assert TS, .NET, Dart == Python (byte-for-byte outside random UUIDs/timestamps)
+                  masked_py = mask_random_fields(raw["py"], names)
+                  for w in ["ts", "dotnet", "dart"]:
+                      masked_w = mask_random_fields(raw[w], names)
+                      if masked_w != masked_py:
+                          failures.append(f"[{scenario}] {w} != py: {format_diffs(masked_py, masked_w)}")
+                      else:
+                          print(f"  PASS: {w} == py (0 non-GUID/timestamp byte differences)")
+
+                  # Assert Rust == C++ (byte-for-byte outside model GUID, random UUIDs, and timestamps)
+                  masked_cpp = mask_random_fields(raw["cpp"], names, mask_model_guid=True)
+                  masked_rust = mask_random_fields(raw["rust"], names, mask_model_guid=True)
+                  if masked_rust != masked_cpp:
+                      failures.append(f"[{scenario}] rust != cpp: {format_diffs(masked_cpp, masked_rust)}")
+                  else:
+                      print(f"  PASS: rust == cpp (0 non-GUID/timestamp byte differences)")
+
+                  # Compare C++ vs Python: fail on any divergence outside the 3 documented items
+                  # (0x34..0x43 model GUID, -1 entity PID start 18 vs 19, 0xff vs 0xfe textured-material alpha).
+                  masked_py_gm = mask_random_fields(raw["py"], names, mask_model_guid=True)
+                  if len(masked_py_gm) != len(masked_cpp):
+                      failures.append(
+                          f"[{scenario}] cpp vs py length mismatch: {len(masked_cpp)} vs {len(masked_py_gm)}"
+                      )
+                  else:
+                      pid_diffs = 0
+                      alpha_diffs = 0
+                      unexpected = []
+                      for idx, (pb, cb) in enumerate(zip(masked_py_gm, masked_cpp)):
+                          if pb == cb:
+                              continue
+                          if scenario == "rich" and pb == 0xFE and cb == 0xFF:
+                              alpha_diffs += 1
+                          elif cb == pb - 1:
+                              pid_diffs += 1
+                          else:
+                              unexpected.append(f"0x{idx:04x} (py={pb:02x}, cpp={cb:02x})")
+                      print(
+                          f"  INFO: cpp/rust vs py/ts/dotnet/dart known deltas: "
+                          f"model_guid=16B (0x34..0x43), entity_pid_minus_1={pid_diffs}B, alpha_ff_vs_fe={alpha_diffs}B"
+                      )
+                      if unexpected:
+                          failures.append(
+                              f"[{scenario}] unexpected cpp vs py byte differences ({len(unexpected)}): "
+                              + ", ".join(unexpected[:12])
+                          )
+
+              if failures:
+                  print("\nWRITER PARITY CHECK FAILED:", file=sys.stderr)
+                  for f in failures:
+                      print(f"  - {f}", file=sys.stderr)
+                  sys.exit(1)
+
+              print("\nAll 6 writers passed cross-writer parity checks.")
+          PY
+
+  required:
+    name: Writer Parity CI required
+    needs: [changes, cross-writer]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check outcome
+        run: |
+          if [ "${{ github.event_name }}" != "workflow_dispatch" ] && [ "${{ needs.changes.outputs.writer }}" != "true" ]; then
+            echo "Writer sources unchanged - nothing to verify"
+            exit 0
+          fi
+          if [ "${{ needs.cross-writer.result }}" != "success" ]; then
+            echo "Writer Parity CI failed"
+            exit 1
+          fi
+          echo "Writer Parity CI passed"

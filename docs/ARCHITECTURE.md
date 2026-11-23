@@ -156,9 +156,11 @@ producing a brand-new file with equivalent content that more geometry can
 still be added to before saving. This is the "full-parse-and-replay, not
 byte-patching" design each language's `edit.*` module follows.
 
-Ported to all five languages against the same feature set, each verified
-against the real SketchUp SDK and cross-checked against Python's own
-already-validated output — see
+Ported across all five published languages (plus Rust): Python and C++ are
+checked against SketchUp's C library, while TypeScript, .NET, and Dart are
+verified byte-for-byte against Python in CI (and Rust against C++) — see
+[LANGUAGE_PARITY.md § Writer validation](LANGUAGE_PARITY.md#writer-validation)
+for how each port is checked and where feature sets differ, and
 [Write capabilities](DEVELOPER_GUIDE.md#write-capabilities) in the
 Developer Guide for the full API and the per-language naming convention.
 
