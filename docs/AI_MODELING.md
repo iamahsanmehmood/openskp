@@ -127,7 +127,7 @@ Point your AI coding agent at:
   narrow, deliberate exception to "no object-specific helpers" — it's a
   geometric primitive (a lathe), not a domain-specific one (`add_chair`
   is still out of scope) — contributed as a CC0 gift by
-  [IngeTrazo](https://github.com/iamahsanmehmood) after the same pattern
+  [IngeTrazo](https://ingetrazo.com/) after the same pattern
   showed up repeatedly in their own AI Assistant's generated code.
 
 The workflow that produced every showcase model above: describe the
@@ -155,7 +155,7 @@ project rather than in this repo:
   a `.skp` file" is that the agent has no way to *see* what it built
   without a human opening SketchUp — closing that loop needs an actual
   3D viewport, which is out of scope for a library that only reads and
-  writes files. [IngeTrazo](https://github.com/iamahsanmehmood), a
+  writes files. [IngeTrazo](https://ingetrazo.com/), a
   desktop `.skp` editor built on this project's reader and writer, has
   shipped exactly this: an in-app AI Assistant that runs an agent's
   recipe against the live scene, screenshots the viewport, and feeds the

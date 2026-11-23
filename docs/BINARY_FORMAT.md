@@ -172,15 +172,17 @@ and `1` → `-1`.
 | Property | SketchUp | glTF (OpenSKP output) |
 |----------|----------|-----------------------|
 | Up axis | Z | Y |
-| Units | Inches | Millimeters |
+| Units | Inches | Meters |
 
-**Conversion formula:**
+**Conversion formula (glTF vertex positions & transforms):**
 
 ```
-x_mm =  x_inches × 25.4
-y_mm =  z_inches × 25.4   (Z-up → Y-up)
-z_mm = -y_inches × 25.4   (flip Y → -Z)
+x_m =  x_inches × 0.0254
+y_m =  z_inches × 0.0254   (Z-up → Y-up)
+z_m = -y_inches × 0.0254   (flip Y → -Z)
 ```
+
+*(Scene metadata fields explicitly suffixed `_mm` / `Mm`, such as `InstanceNode.position_mm` and `MeshMetadata.bounding_box_mm`, convert inches to millimeters via `× 25.4` on SketchUp's Z-up axes.)*
 
 ## 5. Transform Matrix
 

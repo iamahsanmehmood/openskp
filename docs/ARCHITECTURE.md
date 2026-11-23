@@ -2,11 +2,14 @@
 
 ## Design principles
 
-1. **One reverse-engineered specification, five independent implementations.**
-   Python, TypeScript, .NET, Dart, and C++ each parse the same binary format
-   from scratch in their own idiomatic style — not bindings around a shared
-   native core. [BINARY_FORMAT.md](BINARY_FORMAT.md) is the one canonical
-   reference all five are checked against.
+1. **Reverse-engineered specifications, five independent implementations.**
+   Python, TypeScript, .NET, Dart, and C++ (plus an unpublished Rust port) each
+   parse the binary formats from scratch in their own idiomatic style — not
+   bindings around a shared native core. [BINARY_FORMAT.md](BINARY_FORMAT.md)
+   documents the **2021+ VFF/TLV container** (`model.dat`), while the **classic
+   pre-2021 MFC `CArchive` container** (parsed by every port's `legacy.*` reader
+   and emitted as a SketchUp 2017 scaffold by every port's `create.*` writer) is
+   documented in the `legacy.*` and `create.*` module docstrings.
 2. **Zero SketchUp SDK.** Pure implementations, no proprietary dependencies,
    no license required.
 3. **Two-tier API, split for memory, not just abstraction.** `parse()`
@@ -205,31 +208,28 @@ which needs no shared helper module the way the other four published
 languages' (and Rust's) callback-based approach does. See
 [OBSERVABILITY.md](OBSERVABILITY.md#per-language-mechanism) for why.
 
-### Triangulation: not the same algorithm everywhere (by design, now)
+### Triangulation: earcut across all ports (with Shapely retained in Python for overlapping holes)
 
 Python originally used `shapely` (a full computational-geometry library,
 Delaunay-style). TypeScript used [earcut](https://github.com/mapbox/earcut)
-(Mapbox's compact, dependency-free ear-clipping algorithm with hole
-support) from the start. When scene-baking was ported to .NET and Dart,
-the natural instinct was to treat `shapely`'s Delaunay approach as "the"
-reference — but reading TypeScript's actual `triangulator.ts` source
-revealed it uses earcut, not Delaunay. `earcut` was ported faithfully
-(same linked-list-node algorithm, function-by-function) to both C#
-(`Earcut.cs`) and Dart (`earcut.dart`) instead of attempting an
-independent Delaunay-equivalent — lower risk, and it's what TypeScript
-had already proven correct on real files. Python's `triangulator.py`
-still uses `shapely`; the two algorithms can legitimately produce
-different (but each individually valid) triangulations of the same
-polygon, which is expected and fine — the *rendered result* is
-equivalent, not the internal triangle split.
+(Mapbox's compact ear-clipping algorithm with hole support) from the start.
+When scene-baking was ported to .NET, Dart, and C++, `earcut` was ported
+faithfully (`Earcut.cs`, `earcut.dart`, `earcut.cpp`), and Python's own scene
+builder (`_core.py`) likewise switched to `mapbox_earcut` (with a fan fast-path
+for convex polygons and `shapely.ops.unary_union` retained to merge
+overlapping or touching holes before ear-clipping; only the standalone
+`triangulator.py` helper still calls `shapely.ops.triangulate`). Where
+`shapely` and `earcut` are compared, the two algorithms can legitimately
+produce different (but each individually valid) triangulations of the same
+polygon — the *rendered result* is equivalent, not the internal triangle split.
 
 ## Cross-platform dependency map
 
 | Component | Python | TypeScript | .NET | Dart | C++ |
 |---|---|---|---|---|---|
 | ZIP/VFF extraction | `zipfile` | `fflate` | `System.IO.Compression` | `archive` | private miniz 3.1.2 |
-| XML parsing | `ElementTree` | manual/DOM | `System.Xml` | `xml` | focused scanner |
-| Triangulation | `shapely` | `earcut` | ported earcut | ported earcut | native C++ |
+| XML parsing | `defusedxml` | manual/DOM | `System.Xml` | `xml` | focused scanner |
+| Triangulation | `mapbox_earcut` (`shapely` for overlapping holes & `triangulator.py`) | `earcut` | ported earcut | ported earcut | ported earcut |
 | Matrix math | `numpy` | native | native | native | native |
 | GLB/OBJ/STL/PLY/DXF/IFC/JSON export | all (native / `trimesh`) | all (native) | all (native) | all (native) | all (native + private TinyGLTF 2.9.7) |
 

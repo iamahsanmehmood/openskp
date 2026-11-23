@@ -63,7 +63,7 @@ OpenSKP is an open-source, cross-platform toolkit for SketchUp (`.skp`) binary f
 | **Write native `.skp` files** | ✅ | Build new `.skp` files from scratch — geometry (including genuine circular/arc curves, freeform polylines, faces with holes cut out, and non-planar auto-triangulation), solid/textured materials, layers, nested component definitions and groups, instance rotation/visibility, and custom attribute dictionaries. No SDK at runtime — Python and C++ are checked against SketchUp's C library, while TypeScript, .NET, and Dart are checked byte-for-byte against Python in CI. See [Writer validation](docs/LANGUAGE_PARITY.md#writer-validation) and [Write capabilities](docs/DEVELOPER_GUIDE.md#write-capabilities) |
 | **Edit existing `.skp` files** | ✅ | Load an existing legacy-format file and extend it — reuses its materials, layers, and component definitions, adds new geometry or instances, and saves a new file. All five languages. See [Editing an existing file](docs/DEVELOPER_GUIDE.md#editing-an-existing-file) |
 | **Generate rebuild code from a file** | ✅ | Turn a parsed `.skp` file into a human-readable, re-runnable source-code transcript that calls the same language's own writer API to rebuild it — materials, textures, layers, nested definitions, holes, instance-level paint and names. All five languages. See [Generating code from a file](docs/DEVELOPER_GUIDE.md#generating-code-from-a-file) |
-| **AI coding-agent ready** | ✅ | A generic, well-documented writer API (no object-specific helpers needed) that AI coding agents can compose freely — proven on real generated models (furniture, a house, an executive desk, a smartphone modeled from a photo) across two independent AI agents, each built from a natural-language prompt with no primitives library involved. See [AI-Generated Models](docs/AI_MODELING.md) |
+| **AI coding-agent ready** | ✅ | A generic, well-documented writer API (no object-specific helpers needed) that AI coding agents can compose freely — proven on five generated models across two AI coding agents (the three pictured screenshots come from one agent, Antigravity, while screenshots for the first agent's chair and house models are pending), each built from a natural-language or reference-photo prompt with no primitives library involved. See [AI-Generated Models](docs/AI_MODELING.md) |
 | **Streaming / low-memory parsing** | ✅ | Lazy top-level TLV walk bounds walk memory per definition in Python, TypeScript, and C++ (`.NET`/Dart unwrap `F401` only, and TypeScript's materialized `SkpModel` hits V8 heap limits on ~300 MB files) — see [Memory architecture](docs/ARCHITECTURE.md#memory-architecture) and [Performance](docs/DEVELOPER_GUIDE.md#performance) |
 | **No SketchUp SDK** | ✅ | No SketchUp install or license required. TypeScript, .NET, Dart, and Rust use no native dependencies; C++ builds `miniz`, `TinyGLTF`, and `FlatBuffers` headers privately via CMake; Python requires `numpy`, `shapely`, `mapbox_earcut` (prebuilt native wheels), `trimesh`, and `defusedxml` |
 | **Cross-Platform** | ✅ | Works on Linux, macOS, and Windows |
@@ -103,7 +103,7 @@ OpenSKP isn't just a library — it's the SketchUp-parsing engine behind real, a
 
 | Project | Description | How it uses OpenSKP |
 |:--------|:-------------|:---------------------|
-| <img width="82" height="69" alt="image" src="https://frame-smart.com/assets/img/logo.png" /> [FrameSmart](https://frame-smart.com/) | A 3D collaboration platform for viewing, sharing, and collaborating on 3D models together with their metadata (IFC, SketchUp, and more) — hosted on Linux, with 300+ users. | Powers FrameSmart's entire SketchUp import pipeline, end to end. |
+| <img width="82" height="69" alt="image" src="https://frame-smart.com/assets/img/logo.png" /> [FrameSmart](https://frame-smart.com/) | A 3D collaboration platform for viewing, sharing, and collaborating on 3D models together with their metadata (IFC, SketchUp, and more) — hosted on Linux. | Powers FrameSmart's entire SketchUp import pipeline, end to end. |
 |<img width="82" height="69" alt="image" src="https://ingetrazo.com/images/logo.png" /> [IngeTrazo](https://ingetrazo.com/) | A free, Linux-first 3D modeler for civil engineering and architecture — a SketchUp alternative with a BIM → IFC bridge. | Replaced IngeTrazo's Wine + proprietary SketchUp DLL dependency as its native `.skp` import backend. |
 | <picture><source media="(prefers-color-scheme: dark)" srcset="assets/users/rayscaper-dark.svg" /><img width="120" alt="Rayscaper" src="assets/users/rayscaper-light.svg" /></picture> [Rayscaper](https://rayscaper.com/) | A photorealistic render plugin for SketchUp that updates live as you model. | Reads `.skp` models through OpenSKP. |
 | <picture><source media="(prefers-color-scheme: dark)" srcset="assets/users/modlumi-dark.svg" /><img width="120" alt="Modlumi" src="assets/users/modlumi-light.svg" /></picture> [Modlumi](https://modlumi.com/) | A practical 3D modeling app for independent designers and craftspeople, on Windows and in the browser. | Opens and imports existing `.skp` models through OpenSKP. |
@@ -192,8 +192,10 @@ for anything specific to FreeCAD/Blender behavior.
 All five languages are on **1.6.0** as of the 2026-11-22 synchronized
 release — same version number, not identical capability: Python carries a
 few things (writing scenes, per-edge and per-face layer ids, loose-edge
-curve scene support) the other four don't have yet, and C++ has a few
-writer options (guides, document options) the other four don't. All five parse both the modern VFF (2021+)
+curve scene support) the other four don't have yet, and while all five write
+construction lines and points, C++ adds extra writer options (`GuideOptions`
+layer/visibility and parameterized segments, `set_document_options()`, and
+explicit GUID/persistent-ID overrides) the other four don't. All five parse both the modern VFF (2021+)
 and classic MFC (SketchUp 4–2020) `.skp` containers, and support the same
 opt-in scene-baking (`buildScene()`) and observability APIs. Full detail
 on what differs between languages, and which real SketchUp file versions
@@ -456,9 +458,11 @@ builder->save("output.skp");
 The writer above is a generic, well-documented API on purpose — no
 `add_chair()` or `add_staircase()` helpers, just materials, faces,
 components, and instances. That turns out to make it an unusually good
-target for AI coding agents: every model below was generated from a
-natural-language (or reference-photo) prompt, by two *independent* AI
-agents, using nothing but the raw API documented above.
+target for AI coding agents: five showcase models have been generated from
+natural-language (or reference-photo) prompts across two AI coding agents,
+using nothing but the raw API documented above (the three pictured below
+were generated by Antigravity; screenshots for the first agent's chair and
+house models are pending):
 
 <table>
 <tr>

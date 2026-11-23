@@ -481,8 +481,8 @@ Node.js ≥ 22.12.0 (building from source requires 22.18+, 24.11+, or 26+), or a
 ## Used in Production
 
 OpenSKP powers the SketchUp import pipeline for
-[FrameSmart](https://frame-smart.com/) (a 3D collaboration platform with
-nearly 200 active users) and [IngeTrazo](https://ingetrazo.com/) (a
+[FrameSmart](https://frame-smart.com/) (a 3D collaboration platform) and
+[IngeTrazo](https://ingetrazo.com/) (a
 SketchUp-alternative 3D modeler with a BIM → IFC bridge). Using OpenSKP in
 your own project? [Open an issue](https://github.com/iamahsanmehmood/openskp/issues)
 or a PR to get added here.
