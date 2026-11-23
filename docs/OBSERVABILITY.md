@@ -145,9 +145,9 @@ Python doesn't have a separate progress callback: the standard-library
 `DEBUG`-level log records (`"Processed %d/%d top-level records"`) rather
 than a second parallel mechanism — that's the idiomatic choice for a
 language whose ecosystem already standardizes on `logging` for exactly this
-kind of "opt-in, leveled, handler-agnostic" reporting. The other three
-languages don't have an equivalent stdlib-blessed logging façade, so they
-use an explicit options object with two independent callbacks instead.
+kind of "opt-in, leveled, handler-agnostic" reporting. The other four
+published languages don't have an equivalent stdlib-blessed logging façade, so
+they use an explicit options object with two independent callbacks instead.
 
 ### Python
 

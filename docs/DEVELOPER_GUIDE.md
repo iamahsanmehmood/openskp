@@ -419,7 +419,7 @@ the companion `.mtl` library from the baked `Scene`.
 > - **TypeScript / JS:** `npm install openskp` (included in `openskp`)
 > - **.NET:** `dotnet add package OpenSkp.Fragments` (separate NuGet package alongside `OpenSkp`)
 > - **Dart:** `packages/dart_fragments` (`openskp_fragments` — on `main`, **not published to pub.dev**; depend via Git or path)
-> - **C++17 / CMake:** included in `OpenSkp::OpenSkp` (`<openskp/fragments_export.hpp>`, `FlatBuffers` headers fetched by CMake; C++ measured roughly 5–9x faster end to end than the Python pipeline on the same real files)
+> - **C++17 / CMake:** included in `OpenSkp::OpenSkp` (`<openskp/fragments_export.hpp>`, `FlatBuffers` headers fetched by CMake)
 >
 > Both exporting to `.frag` and reading `.frag` back are implemented across all five ports.
 
