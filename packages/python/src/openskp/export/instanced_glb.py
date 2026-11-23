@@ -80,6 +80,7 @@ def export(
     coordinate_system: str = "y-up",
     units: str = "mm",
     textures: bool = False,
+    unpainted_faces: str = "style",
 ) -> str:
     """Export a parsed SkpFile to GLB (binary glTF 2.0), preserving
     SketchUp's component/group instancing instead of baking it out.
@@ -102,6 +103,10 @@ def export(
             default - see :func:`openskp.export.glb.export`'s own
             ``textures`` parameter for the full explanation; the same
             trade-off and lazy Pillow dependency apply here.
+        unpainted_faces: ``"style"`` (the default) shows faces with no paint
+            in the model's front and back face colours, as SketchUp does;
+            ``"tag"`` gives them the colour of their tag. See
+            :meth:`openskp.SkpFile.build_scene`.
 
     Returns:
         Absolute path to the written GLB file.
@@ -134,7 +139,9 @@ def export(
     # Embedding textures decodes them with Pillow, which reads a TIFF, TGA or GIF
     # texture as well as a PNG or JPEG one, so keep those in the scene (it would
     # otherwise drop them) and let the GLB carry them re-encoded.
-    scene_obj = _instanced_scene_mod.build_instanced_scene(parsed, original_textures=textures)
+    scene_obj = _instanced_scene_mod.build_instanced_scene(
+        parsed, original_textures=textures, unpainted_faces=unpainted_faces
+    )
 
     trimesh_scene = trimesh.Scene()
 

@@ -660,7 +660,7 @@ def to_ifc(
 
         product_ids.append(ann_id)
 
-    for prim in scene.glb_primitives:
+    for prim in scene.surface_primitives:
         tri_count = len(prim.indices) // 3
         v_count = len(prim.positions) // 3
         if tri_count == 0 or v_count == 0:

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — Python: scenes show unpainted faces in SketchUp's face colours (#533)
+
+- `build_scene()`, `build_instanced_scene()` and the GLB exports now give a face side with no paint the colour SketchUp shows: the model's front face colour on the front and its back face colour on the back (`SkpModel.face_front_color` / `face_back_color`). Before, both sides took the colour of the face's tag. Pass `unpainted_faces="tag"` for the old colours. A SketchUp 3 file, whose face colours aren't read, still uses the tag colour.
+- Where the two colours differ, as in SketchUp's default styles, a face with no paint on either side becomes two single-sided sets instead of one double-sided one. The back one is marked `unpainted_back` on `GlbPrimitive` and `LocalPrimitive`. The new `Scene.surface_primitives` leaves those out; the STL, OBJ, PLY, DXF, IFC and Fragments exports use one copy of each such face, as before, in the front colour.
+- A component placed on several tags is one instanced mesh now instead of one per tag colour.
+
 ### Fixed — Python: scenes use a component instance's own paint and tag in classic files (#596)
 
 - `build_scene()` and `build_instanced_scene()` read an instance's paint and tag from its 2021+ `D007` record only. In classic (pre-2021) files a painted component came out in its tag's colour, and every instance sat on its parent's tag. Both now come from the instance itself, and nested components inherit the paint.

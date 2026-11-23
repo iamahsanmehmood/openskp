@@ -63,8 +63,9 @@ released. 🔶 = implemented on `main`, not published to a package registry
 | Component hierarchy / nested definitions | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Layers/tags (color + visibility) | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Materials & textures | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Styles (`styles[].front_color`/`back_color` on 2021+ files; scenes still use tag colour, [#533](https://github.com/iamahsanmehmood/openskp/issues/533)) | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Styles (`styles[].front_color`/`back_color` on 2021+ files) | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Model rendering-options face colours (`face_front_color`/`face_back_color`, SketchUp 4–2025, [#550](https://github.com/iamahsanmehmood/openskp/pull/550)) | 🔶 on `main` | ❌ | ❌ | ❌ | ❌ |
+| Scenes show unpainted faces in the model's front/back face colours (`unpainted_faces`, [#533](https://github.com/iamahsanmehmood/openskp/issues/533)) | 🔶 on `main` | ❌ | ❌ | ❌ | ❌ |
 | Dynamic Component / entity attributes (instance & face dictionaries) | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Definition- & model-level attribute dictionaries (Dynamic Components formulas/options, VFF + classic) | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Single attribute dictionary per entity | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -149,7 +150,8 @@ across languages is cross-language porting work:
 | Per-edge/per-face layer, `Edge#curve` pointers, classic `CArcCurve` frames | `legacy.py`, `_core.py` | TypeScript, .NET, Dart, C++ |
 | Python scenes since 1.6.0: a painted group or component passes its whole material to the faces inside it, material names are kept, colorized textures are flagged, a texture a scene cannot carry is reported, and `original_textures=True` keeps it | `scene.py`, `instanced_scene.py`, `_face_groups.py` | TypeScript, .NET, Dart, C++ — not ported |
 | Definition- and model-level attribute dictionaries (Dynamic Components formulas/options), in VFF and classic files (1.6.0) | `_core.py`, `legacy.py`, `model.py` | TypeScript, .NET, Dart, C++ — not ported |
-| Model rendering-options face colours (`SkpModel.face_front_color` / `face_back_color`, SketchUp 4–2025, [#550](https://github.com/iamahsanmehmood/openskp/pull/550), part of [#533](https://github.com/iamahsanmehmood/openskp/issues/533)) | `_core.py`, `legacy.py`, `model.py` (on `main`) | TypeScript, .NET, Dart, C++ (once `#533` scene behaviour settles) |
+| Model rendering-options face colours (`SkpModel.face_front_color` / `face_back_color`, SketchUp 4–2025, [#550](https://github.com/iamahsanmehmood/openskp/pull/550), part of [#533](https://github.com/iamahsanmehmood/openskp/issues/533)) | `_core.py`, `legacy.py`, `model.py` (on `main`) | TypeScript, .NET, Dart, C++ |
+| Scenes use those colours for unpainted faces (`unpainted_faces="style"`/`"tag"`, `GlbPrimitive`/`LocalPrimitive.unpainted_back`, `Scene.surface_primitives`; [#533](https://github.com/iamahsanmehmood/openskp/issues/533)) | `_face_groups.py`, `scene.py`, `instanced_scene.py`, `export/` (on `main`) | TypeScript, .NET, Dart, C++, Rust |
 | Large-file `F901 > 7017 > 7117` per-definition streaming ([#264](https://github.com/iamahsanmehmood/openskp/issues/264)) | `_core.py` ([#265](https://github.com/iamahsanmehmood/openskp/pull/265)); also in TypeScript and C++ ([#300](https://github.com/iamahsanmehmood/openskp/pull/300)) | .NET (`Tlv.cs`) and Dart (`tlv.dart`) — currently unwrap `F401` only |
 | VFF `AA38` boolean attribute tag | C++ (`geometry.cpp`, `model.hpp`: 8/9 VFF types) | Python, TypeScript, .NET, Dart (7/9 VFF types today) |
 

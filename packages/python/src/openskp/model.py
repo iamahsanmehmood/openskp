@@ -1041,6 +1041,7 @@ class SkpFile:
         name_override_keys: Sequence[str] = ("name", "label", "code"),
         include_curve_sets: bool = True,
         original_textures: bool = False,
+        unpainted_faces: str = "style",
     ) -> "scene.Scene":
         """Bake every instance actually placed in the model into
         world-space, triangulated mesh data - SketchUp's component/group
@@ -1080,6 +1081,17 @@ class SkpFile:
                 a consumer that assumes every texture is PNG or JPEG (a
                 glTF writer of its own) would break on the others. The
                 GLB exporters need no change: they decode through Pillow.
+            unpainted_faces: Colour of a face side with no paint on it or on
+                anything that contains it. ``"style"`` (the default) is what
+                SketchUp shows: the model's front face colour on the front
+                and its back face colour on the back
+                (:attr:`SkpModel.face_front_color` / ``face_back_color``).
+                Where the two differ, as they do in SketchUp's own styles,
+                such a face is emitted as two single-sided sets and the back
+                one is marked ``unpainted_back``. ``"tag"`` gives both sides
+                the colour of the face's tag, in one double-sided set, as
+                openskp did up to 1.6.0. A file whose face colours can't be
+                read (SketchUp 3) always uses the tag colour.
 
         Returns:
             A populated :class:`openskp.scene.Scene`.
@@ -1093,12 +1105,14 @@ class SkpFile:
             name_override_keys=name_override_keys,
             include_curve_sets=include_curve_sets,
             original_textures=original_textures,
+            unpainted_faces=unpainted_faces,
         )
 
     def build_instanced_scene(
         self,
         name_override_keys: Sequence[str] = ("name", "label", "code"),
         original_textures: bool = False,
+        unpainted_faces: str = "style",
     ) -> "instanced_scene.InstancedScene":
         """Build the placed scene graph with SketchUp's component/group
         INSTANCING PRESERVED, instead of baked into world-space vertex data.
@@ -1120,6 +1134,8 @@ class SkpFile:
             original_textures: Keep a texture that is not PNG or JPEG in
                 its own format, with its real MIME type; see
                 :meth:`build_scene`.
+            unpainted_faces: ``"style"`` (the default) or ``"tag"``; see
+                :meth:`build_scene`.
 
         Returns:
             A populated :class:`openskp.instanced_scene.InstancedScene`.
@@ -1129,6 +1145,9 @@ class SkpFile:
 
         parsed = _core.full_parse(str(self.path))
         return instanced_scene.build_instanced_scene(
-            parsed, name_override_keys=name_override_keys, original_textures=original_textures
+            parsed,
+            name_override_keys=name_override_keys,
+            original_textures=original_textures,
+            unpainted_faces=unpainted_faces,
         )
 

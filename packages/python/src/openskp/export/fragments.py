@@ -564,6 +564,8 @@ def to_fragments(scene: "InstancedScene", *, raw: bool = False) -> bytes:
         if res is not None:
             pos, x_dir, y_dir, scale, mirrored = _decompose_trs(world_matrix)
             for prim_idx, prim in enumerate(res.primitives):
+                if prim.unpainted_back:
+                    continue  # a shell has one colour: the front copy carries it
                 material_index = get_material_index(prim.material_index)
                 # Normally exactly one shell; more than one only when the
                 # primitive's own triangle count exceeded what a single
