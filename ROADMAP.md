@@ -88,11 +88,10 @@ readers on synthetic, SDK-written, and real multi-version project saves (after
 [#440](https://github.com/iamahsanmehmood/openskp/pull/440),
 [#443](https://github.com/iamahsanmehmood/openskp/pull/443), and
 [#465](https://github.com/iamahsanmehmood/openskp/pull/465)). The remaining
-known gaps are the real SketchUp 3 project save (fails in every reader), a
-real SketchUp 5 file in the wild (fails in TypeScript), and 2019–2020 custom
-tag line styles (`CCustomLineStyle`,
-[#514](https://github.com/iamahsanmehmood/openskp/issues/514), currently read
-in Python only) — see
+known gaps are the real SketchUp 3 project save (fails in every reader) and a
+real SketchUp 5 file in the wild (fails in TypeScript; 2019–2020
+`CCustomLineStyle` tag line styles [#514](https://github.com/iamahsanmehmood/openskp/issues/514)
+are now ported on `main` across all ports via [#579](https://github.com/iamahsanmehmood/openskp/pull/579)) — see
 [docs/LANGUAGE_PARITY.md § 4](docs/LANGUAGE_PARITY.md#4-real-sketchup-file-version-support)
 for the single version-by-version table and evidence.
 
