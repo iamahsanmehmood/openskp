@@ -1,0 +1,752 @@
+name: Fuzz Readers CI
+
+on:
+  schedule:
+    - cron: '0 4 * * 1'
+  workflow_dispatch:
+    inputs:
+      seed:
+        description: 'PRNG seed for deterministic fixture mutations'
+        required: false
+        default: '557'
+      rounds:
+        description: 'Number of mutation rounds over the fixture set'
+        required: false
+        default: '1'
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  changes:
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      reader: ${{ steps.filter.outputs.reader }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dorny/paths-filter@v4
+        id: filter
+        with:
+          filters: |
+            reader:
+              - 'packages/python/src/**'
+              - 'packages/typescript/src/**'
+              - 'packages/dotnet/OpenSkp/**'
+              - 'packages/dart/lib/**'
+              - 'packages/cpp/src/**'
+              - 'packages/cpp/include/**'
+              - 'packages/rust/src/**'
+              - '.github/workflows/ci-fuzz.yml'
+
+  fuzz:
+    needs: changes
+    if: >-
+      always() && (
+        github.event_name == 'schedule' ||
+        github.event_name == 'workflow_dispatch' ||
+        (needs.changes.result == 'success' && needs.changes.outputs.reader == 'true')
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '9.0'
+
+      - name: Set up Dart
+        uses: dart-lang/setup-dart@v1
+
+      - name: Set up Rust
+        run: rustup toolchain install stable --profile minimal && rustup default stable
+
+      - name: Build language packages
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e packages/python
+          (cd packages/typescript && npm ci && npm run build)
+          dotnet build packages/dotnet/OpenSkp/OpenSkp.csproj --configuration Release
+          (cd packages/dart && dart pub get)
+          cmake -S packages/cpp -B build-cpp \
+            -DOPENSKP_BUILD_TESTS=OFF \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/cpp-prefix"
+          cmake --build build-cpp --config Release --parallel
+          cmake --install build-cpp --config Release
+
+      - name: Mutate fixtures and fuzz all readers
+        env:
+          REPO_ROOT: ${{ github.workspace }}
+          CPP_PREFIX: ${{ github.workspace }}/cpp-prefix
+          FUZZ_SEED: ${{ inputs.seed || '557' }}
+          FUZZ_ROUNDS: ${{ inputs.rounds || '1' }}
+        run: |
+          python - <<'PY'
+          import io
+          import os
+          import pathlib
+          import random
+          import resource
+          import select
+          import struct
+          import subprocess
+          import sys
+          import tempfile
+          import textwrap
+          import threading
+          import time
+          import zipfile
+
+          import openskp.legacy as py_legacy
+          from openskp import create
+
+          repo = pathlib.Path(os.environ["REPO_ROOT"]).resolve()
+          cpp_prefix = pathlib.Path(os.environ["CPP_PREFIX"]).resolve()
+          seed = int(os.environ.get("FUZZ_SEED") or "557")
+          rounds = max(1, int(os.environ.get("FUZZ_ROUNDS") or "1"))
+          per_file_timeout_s = 5.0
+          has_classic_depth_cap = hasattr(py_legacy, "_MAX_LEGACY_DEPTH")
+
+          def build_classic_nested_array(levels: int) -> bytes:
+              b = create()
+              b.add_face([(0, 0, 0), (10, 0, 0), (10, 10, 0), (0, 10, 0)], attributes={"k": "v"})
+              classic = b.to_bytes()
+              needle = b"\x0a\xff\xfe\xff\x01v\x00"
+              if needle not in classic:
+                  raise RuntimeError("Expected attribute payload marker not found in classic scaffold")
+              return classic.replace(needle, (b"\x0b\x01\x00\x00\x00" * levels) + needle, 1)
+
+          def build_corpus(out_dir: pathlib.Path) -> list[tuple[str, pathlib.Path]]:
+              rng = random.Random(seed)
+              fixtures = [
+                  p for p in sorted((repo / "packages/python/tests/fixtures").glob("*.skp"))
+                  if p.stat().st_size <= 150_000
+              ]
+              vff_fx = []
+              classic_fx = []
+              for fx in fixtures:
+                  raw = fx.read_bytes()
+                  if b"PK\x03\x04" in raw[:4096]:
+                      vff_fx.append(fx)
+                  else:
+                      classic_fx.append(fx)
+              selected = vff_fx[:8] + classic_fx[:8]
+              if not selected:
+                  raise RuntimeError("No .skp fixtures found under packages/python/tests/fixtures")
+
+              cases: list[tuple[str, pathlib.Path]] = []
+              idx = 0
+
+              def add_case(label: str, payload: bytes) -> None:
+                  nonlocal idx
+                  p = out_dir / f"fuzz_{idx:04d}.skp"
+                  p.write_bytes(payload)
+                  cases.append((label, p))
+                  idx += 1
+
+              def mutate_vff_entry(raw_skp: bytes, target_entry: str, fn) -> bytes | None:
+                  pk = raw_skp.find(b"PK\x03\x04")
+                  if pk == -1:
+                      return None
+                  prefix = raw_skp[:pk]
+                  try:
+                      with zipfile.ZipFile(io.BytesIO(raw_skp[pk:]), "r") as zin:
+                          names = zin.namelist()
+                          if target_entry not in names:
+                              return None
+                          out_buf = io.BytesIO()
+                          with zipfile.ZipFile(out_buf, "w", compression=zipfile.ZIP_DEFLATED) as zout:
+                              for name in names:
+                                  data = zin.read(name)
+                                  if name == target_entry:
+                                      data = fn(data)
+                                  zout.writestr(name, data)
+                          return prefix + out_buf.getvalue()
+                  except Exception:
+                      return None
+
+              for r in range(rounds):
+                  suffix = f":r{r}" if rounds > 1 else ""
+                  for fx in selected:
+                      raw = fx.read_bytes()
+                      is_vff = b"PK\x03\x04" in raw[:4096]
+
+                      if r == 0:
+                          for frac in (0.1, 0.5, 0.9):
+                              add_case(
+                                  f"trunc_outer:{fx.name}:{frac}",
+                                  raw[: max(1, int(len(raw) * frac))],
+                              )
+
+                      for t in range(3):
+                          buf = bytearray(raw)
+                          for _ in range(rng.randint(1, 12)):
+                              pos = rng.randrange(len(buf))
+                              buf[pos] ^= 1 << rng.randrange(8)
+                          add_case(f"bitflip_outer:{fx.name}:{t}{suffix}", bytes(buf))
+
+                      for t in range(2):
+                          pos = rng.randrange(len(raw) + 1)
+                          ins = bytes(rng.getrandbits(8) for _ in range(rng.randint(1, 32)))
+                          add_case(f"insert_outer:{fx.name}:{t}{suffix}", raw[:pos] + ins + raw[pos:])
+
+                      if is_vff:
+                          if r == 0:
+                              for frac in (0.25, 0.75):
+                                  m = mutate_vff_entry(
+                                      raw,
+                                      "model.dat",
+                                      lambda d, f=frac: d[: max(1, int(len(d) * f))],
+                                  )
+                                  if m:
+                                      add_case(f"trunc_model_dat:{fx.name}:{frac}", m)
+
+                          for t in range(3):
+                              def flip_inner(d: bytes) -> bytes:
+                                  b = bytearray(d)
+                                  for _ in range(rng.randint(1, 16)):
+                                      p = rng.randrange(len(b))
+                                      b[p] ^= 1 << rng.randrange(8)
+                                  return bytes(b)
+
+                              m = mutate_vff_entry(raw, "model.dat", flip_inner)
+                              if m:
+                                  add_case(f"bitflip_model_dat:{fx.name}:{t}{suffix}", m)
+
+                          for t in range(2):
+                              def ins_inner(d: bytes) -> bytes:
+                                  p = rng.randrange(len(d) + 1)
+                                  ins = bytes(rng.getrandbits(8) for _ in range(rng.randint(1, 24)))
+                                  return d[:p] + ins + d[p:]
+
+                              m = mutate_vff_entry(raw, "model.dat", ins_inner)
+                              if m:
+                                  add_case(f"insert_model_dat:{fx.name}:{t}{suffix}", m)
+
+              # Deep nesting cases (2021+ TLV, meta.dat wrappers, and classic MFC attributes)
+              header = b"\xff\xfe\xff\x0e" + b"\0" * 600
+              for tag_name, tag_bytes in [("F401", b"\xf4\x01"), ("7C15", b"\x7c\x15")]:
+                  levels = 5000
+                  nested_tlv = b"".join(
+                      tag_bytes + struct.pack("<I", 6 * (levels - 1 - i))
+                      for i in range(levels)
+                  )
+                  model_dat = b"\xf4\x01" + struct.pack("<I", len(nested_tlv)) + nested_tlv
+                  zbuf = io.BytesIO()
+                  with zipfile.ZipFile(zbuf, "w") as zf:
+                      zf.writestr("model.dat", model_dat)
+                  add_case(f"deep_tlv_{tag_name}:5000", header + zbuf.getvalue())
+
+              levels = 20000
+              leaf = b"\x6d\x00\x06\x00\x00\x00Inches"
+              meta_dat = (
+                  b"".join(
+                      b"\x64\x00" + struct.pack("<I", len(leaf) + 6 * (levels - 1 - i))
+                      for i in range(levels)
+                  )
+                  + leaf
+              )
+              zbuf = io.BytesIO()
+              with zipfile.ZipFile(zbuf, "w") as zf:
+                  zf.writestr("model.dat", b"\xf4\x01\x00\x00\x00\x00")
+                  zf.writestr("meta/meta.dat", meta_dat)
+              add_case("deep_meta_wrappers:20000", header + zbuf.getvalue())
+
+              add_case("classic_attr_array:40", build_classic_nested_array(40))
+              if has_classic_depth_cap:
+                  add_case("classic_attr_array:5000", build_classic_nested_array(5000))
+
+              return cases
+
+          def spawn_worker(
+              cmd: list[str],
+              env: dict[str, str],
+              rlimit_as_bytes: int | None,
+          ):
+              def preexec():
+                  if rlimit_as_bytes is not None:
+                      resource.setrlimit(resource.RLIMIT_AS, (rlimit_as_bytes, rlimit_as_bytes))
+
+              proc = subprocess.Popen(
+                  cmd,
+                  stdin=subprocess.PIPE,
+                  stdout=subprocess.PIPE,
+                  stderr=subprocess.PIPE,
+                  env=env,
+                  bufsize=0,
+                  preexec_fn=preexec if rlimit_as_bytes is not None else None,
+              )
+              stderr_tail = bytearray()
+
+              def drain_stderr():
+                  while True:
+                      chunk = proc.stderr.read(4096)
+                      if not chunk:
+                          break
+                      stderr_tail.extend(chunk)
+                      if len(stderr_tail) > 8192:
+                          del stderr_tail[:-4096]
+
+              t = threading.Thread(target=drain_stderr, daemon=True)
+              t.start()
+              return proc, stderr_tail, t
+
+          def run_worker(
+              name: str,
+              cmd: list[str],
+              cases: list[tuple[str, pathlib.Path]],
+              extra_env: dict[str, str] | None = None,
+              rlimit_as_bytes: int | None = None,
+          ) -> tuple[dict[str, int], dict[str, str], list[str], float]:
+              env = os.environ.copy()
+              if extra_env:
+                  env.update(extra_env)
+
+              counts: dict[str, int] = {}
+              other_samples: dict[str, str] = {}
+              crashes: list[str] = []
+              restarts = 0
+              t0 = time.perf_counter()
+
+              proc, stderr_tail, err_thread = spawn_worker(cmd, env, rlimit_as_bytes)
+              buf = bytearray()
+
+              for label, path in cases:
+                  try:
+                      proc.stdin.write((str(path) + "\n").encode("utf-8"))
+                      proc.stdin.flush()
+                  except BrokenPipeError:
+                      pass
+
+                  fd = proc.stdout.fileno()
+                  deadline = time.monotonic() + per_file_timeout_s
+                  resp = None
+                  died_reason = None
+
+                  while True:
+                      nl = buf.find(b"\n")
+                      if nl != -1:
+                          raw_line = bytes(buf[:nl]).decode("utf-8", errors="replace").strip()
+                          del buf[: nl + 1]
+                          if raw_line.startswith("@@FUZZ@@:"):
+                              resp = raw_line[len("@@FUZZ@@:") :]
+                              break
+                          continue
+
+                      rem = deadline - time.monotonic()
+                      if rem <= 0:
+                          died_reason = f"TIMEOUT (>{per_file_timeout_s:.1f}s)"
+                          break
+
+                      ready, _, _ = select.select([fd], [], [], rem)
+                      if not ready:
+                          died_reason = f"TIMEOUT (>{per_file_timeout_s:.1f}s)"
+                          break
+
+                      chunk = os.read(fd, 4096)
+                      if not chunk:
+                          proc.wait(timeout=2)
+                          err_thread.join(timeout=1)
+                          tail = bytes(stderr_tail).decode("utf-8", errors="replace").strip().splitlines()
+                          last_err = tail[-1] if tail else ""
+                          died_reason = f"PROCESS_EXIT(rc={proc.returncode})" + (
+                              f": {last_err}" if last_err else ""
+                          )
+                          break
+                      buf.extend(chunk)
+
+                  if died_reason is not None:
+                      crashes.append(f"[{name}] {label} -> {died_reason}")
+                      try:
+                          proc.kill()
+                          proc.wait(timeout=2)
+                      except Exception:
+                          pass
+                      restarts += 1
+                      if restarts > 3:
+                          crashes.append(f"[{name}] aborting worker after {restarts} hard crashes/timeouts")
+                          return counts, other_samples, crashes, time.perf_counter() - t0
+                      proc, stderr_tail, err_thread = spawn_worker(cmd, env, rlimit_as_bytes)
+                      buf.clear()
+                      continue
+
+                  if resp.startswith("CRASH:"):
+                      crashes.append(f"[{name}] {label} -> {resp}")
+                  elif resp in ("OK", "PARSE_ERR"):
+                      counts[resp] = counts.get(resp, 0) + 1
+                  elif resp.startswith("OTHER:"):
+                      exc_type = resp.split(":", 2)[1] if ":" in resp else resp
+                      key = f"OTHER:{exc_type}"
+                      counts[key] = counts.get(key, 0) + 1
+                      other_samples.setdefault(exc_type, label)
+                  else:
+                      crashes.append(f"[{name}] {label} -> UNEXPECTED_RESPONSE:{resp}")
+
+              try:
+                  proc.stdin.close()
+                  proc.wait(timeout=5)
+              except Exception:
+                  proc.kill()
+              return counts, other_samples, crashes, time.perf_counter() - t0
+
+          with tempfile.TemporaryDirectory() as tmp:
+              work = pathlib.Path(tmp)
+              corpus_dir = work / "corpus"
+              corpus_dir.mkdir()
+              cases = build_corpus(corpus_dir)
+              print(
+                  f"Generated {len(cases)} mutated fuzz cases "
+                  f"(seed={seed}, rounds={rounds}, classic_depth_cap={has_classic_depth_cap})"
+              )
+
+              if not has_classic_depth_cap:
+                  probe_skp = work / "classic_5000_probe.skp"
+                  probe_skp.write_bytes(build_classic_nested_array(5000))
+                  probe_res = subprocess.run(
+                      [
+                          sys.executable,
+                          "-c",
+                          f"from openskp import SkpFile; SkpFile.open({str(probe_skp)!r}).parse()",
+                      ],
+                      capture_output=True,
+                      text=True,
+                      timeout=10,
+                  )
+                  last_line = (probe_res.stderr.strip().splitlines() or ["exit=" + str(probe_res.returncode)])[-1]
+                  print(
+                      f"::warning::Classic 5000-level nesting probe before #585: {last_line} "
+                      f"(classic_attr_array:5000 activates automatically in mandatory corpus once _MAX_LEGACY_DEPTH lands)"
+                  )
+
+              # 1. Python worker (1.5 GiB RLIMIT_AS after OpenBLAS/NumPy init)
+              py_worker = work / "py_fuzz.py"
+              py_worker.write_text(textwrap.dedent("""\
+                  import resource
+                  import sys
+                  from openskp import SkpFile, SkpParseError
+
+                  resource.setrlimit(resource.RLIMIT_AS, (1536 * 1024 * 1024, 1536 * 1024 * 1024))
+
+                  for raw_line in sys.stdin:
+                      line = raw_line.strip()
+                      if not line:
+                          continue
+                      try:
+                          skp = SkpFile.open(line)
+                          skp.parse()
+                          skp.build_scene()
+                          sys.stdout.write("@@FUZZ@@:OK\\n")
+                      except SkpParseError:
+                          sys.stdout.write("@@FUZZ@@:PARSE_ERR\\n")
+                      except (RecursionError, MemoryError) as e:
+                          msg = str(e).replace("\\n", " ")[:120]
+                          sys.stdout.write(f"@@FUZZ@@:CRASH:{type(e).__name__}:{msg}\\n")
+                      except Exception as e:
+                          sys.stdout.write(f"@@FUZZ@@:OTHER:{type(e).__name__}\\n")
+                      sys.stdout.flush()
+              """), encoding="utf-8")
+
+              # 2. TypeScript worker (V8 --max-old-space-size=512)
+              ts_worker = work / "ts_fuzz.cjs"
+              ts_worker.write_text(f"""const fs = require('fs');
+          const readline = require('readline');
+          const {{ parseSkp, buildScene, SkpParseError }} = require({str(repo / 'packages/typescript/dist/index.js')!r});
+          const rl = readline.createInterface({{ input: process.stdin, crlfDelay: Infinity }});
+          rl.on('line', (line) => {{
+            if (!line) return;
+            try {{
+              const raw = fs.readFileSync(line);
+              const ab = raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength);
+              parseSkp(ab);
+              buildScene(ab);
+              fs.writeSync(1, '@@FUZZ@@:OK\\n');
+            }} catch (e) {{
+              if (e instanceof SkpParseError) {{
+                fs.writeSync(1, '@@FUZZ@@:PARSE_ERR\\n');
+              }} else if (e instanceof RangeError && /call stack/i.test(String(e.message))) {{
+                fs.writeSync(1, '@@FUZZ@@:CRASH:StackOverflow:' + String(e.message).slice(0, 120) + '\\n');
+              }} else {{
+                const name = e && e.constructor && e.constructor.name ? e.constructor.name : typeof e;
+                fs.writeSync(1, '@@FUZZ@@:OTHER:' + name + '\\n');
+              }}
+            }}
+          }});
+          """, encoding="utf-8")
+
+              # 3. .NET worker (DOTNET_GCHeapHardLimit=512 MiB)
+              net_dir = work / "net_fuzz"
+              net_dir.mkdir()
+              (net_dir / "NetFuzz.csproj").write_text(f"""<Project Sdk="Microsoft.NET.Sdk">
+            <PropertyGroup>
+              <OutputType>Exe</OutputType>
+              <TargetFramework>net9.0</TargetFramework>
+              <ImplicitUsings>enable</ImplicitUsings>
+              <Nullable>enable</Nullable>
+            </PropertyGroup>
+            <ItemGroup>
+              <ProjectReference Include="{repo / 'packages/dotnet/OpenSkp/OpenSkp.csproj'}" />
+            </ItemGroup>
+          </Project>
+          """, encoding="utf-8")
+              (net_dir / "Program.cs").write_text("""using OpenSkp;
+          string? line;
+          while ((line = Console.ReadLine()) != null) {
+              if (line.Length == 0) continue;
+              try {
+                  var bytes = File.ReadAllBytes(line);
+                  SkpFile.Parse(bytes);
+                  SkpFile.BuildScene(bytes);
+                  Console.WriteLine("@@FUZZ@@:OK");
+              } catch (SkpParseException) {
+                  Console.WriteLine("@@FUZZ@@:PARSE_ERR");
+              } catch (OutOfMemoryException ex) {
+                  Console.WriteLine($"@@FUZZ@@:CRASH:OutOfMemoryException:{ex.Message}");
+              } catch (Exception ex) {
+                  Console.WriteLine($"@@FUZZ@@:OTHER:{ex.GetType().Name}");
+              }
+              Console.Out.Flush();
+          }
+          """, encoding="utf-8")
+              subprocess.check_call(["dotnet", "build", "-c", "Release", str(net_dir / "NetFuzz.csproj")])
+              net_bin = net_dir / "bin/Release/net9.0/NetFuzz"
+
+              # 4. Dart worker (--old_gen_heap_size=512)
+              dart_worker = work / "dart_fuzz.dart"
+              dart_worker.write_text("""import 'dart:convert';
+          import 'dart:io';
+          import 'package:openskp/openskp.dart';
+
+          void main() {
+            String? line;
+            while ((line = stdin.readLineSync(encoding: utf8)) != null) {
+              if (line!.isEmpty) continue;
+              try {
+                final skp = SkpFile.open(line);
+                skp.parse();
+                skp.buildScene();
+                stdout.writeln('@@FUZZ@@:OK');
+              } on SkpParseException {
+                stdout.writeln('@@FUZZ@@:PARSE_ERR');
+              } on StackOverflowError catch (e) {
+                stdout.writeln('@@FUZZ@@:CRASH:StackOverflowError:$e');
+              } on OutOfMemoryError catch (e) {
+                stdout.writeln('@@FUZZ@@:CRASH:OutOfMemoryError:$e');
+              } catch (e) {
+                stdout.writeln('@@FUZZ@@:OTHER:${e.runtimeType}');
+              }
+            }
+          }
+          """, encoding="utf-8")
+
+              # 5. C++ worker (1 GiB RLIMIT_AS)
+              cpp_dir = work / "cpp_fuzz"
+              cpp_dir.mkdir()
+              (cpp_dir / "CMakeLists.txt").write_text("""cmake_minimum_required(VERSION 3.21)
+          project(cpp_fuzz LANGUAGES CXX)
+          find_package(OpenSkp CONFIG REQUIRED)
+          add_executable(cpp_fuzz main.cpp)
+          target_link_libraries(cpp_fuzz PRIVATE OpenSkp::OpenSkp)
+          """, encoding="utf-8")
+              (cpp_dir / "main.cpp").write_text("""#include <iostream>
+          #include <new>
+          #include <string>
+          #include <typeinfo>
+          #include <sys/resource.h>
+          #include <openskp/openskp.hpp>
+
+          int main() {
+            struct rlimit rl;
+            rl.rlim_cur = 1024ULL * 1024ULL * 1024ULL;
+            rl.rlim_max = 1024ULL * 1024ULL * 1024ULL;
+            (void)setrlimit(RLIMIT_AS, &rl);
+
+            std::string line;
+            while (std::getline(std::cin, line)) {
+              if (line.empty()) continue;
+              try {
+                auto skp = openskp::SkpFile::open(line);
+                (void)skp.parse();
+                (void)skp.build_scene();
+                std::cout << "@@FUZZ@@:OK\\n" << std::flush;
+              } catch (const openskp::SkpParseError&) {
+                std::cout << "@@FUZZ@@:PARSE_ERR\\n" << std::flush;
+              } catch (const std::bad_alloc& e) {
+                std::cout << "@@FUZZ@@:CRASH:bad_alloc:" << e.what() << "\\n" << std::flush;
+              } catch (const std::exception& e) {
+                std::cout << "@@FUZZ@@:OTHER:" << typeid(e).name() << "\\n" << std::flush;
+              } catch (...) {
+                std::cout << "@@FUZZ@@:CRASH:unknown_throw\\n" << std::flush;
+              }
+            }
+            return 0;
+          }
+          """, encoding="utf-8")
+              subprocess.check_call([
+                  "cmake",
+                  "-S", str(cpp_dir),
+                  "-B", str(cpp_dir / "build"),
+                  "-DCMAKE_BUILD_TYPE=Release",
+                  f"-DCMAKE_PREFIX_PATH={cpp_prefix}",
+              ])
+              subprocess.check_call(["cmake", "--build", str(cpp_dir / "build"), "--config", "Release"])
+              cpp_bin = cpp_dir / "build/cpp_fuzz"
+
+              # 6. Rust worker (1 GiB RLIMIT_AS + catch_unwind panic detector)
+              rust_dir = work / "rust_fuzz"
+              (rust_dir / "src").mkdir(parents=True)
+              (rust_dir / "Cargo.toml").write_text(f"""[package]
+          name = "rust_fuzz"
+          version = "0.1.0"
+          edition = "2021"
+
+          [dependencies]
+          openskp = {{ path = {str(repo / 'packages/rust')!r} }}
+          """, encoding="utf-8")
+              (rust_dir / "src/main.rs").write_text("""use std::io::{self, BufRead, Write};
+          use std::panic::{self, AssertUnwindSafe};
+          use openskp::{ParseOptions, SkpFile};
+
+          fn main() {
+              panic::set_hook(Box::new(|_| {}));
+              let stdin = io::stdin();
+              let mut stdout = io::stdout();
+              let opts = ParseOptions::default();
+
+              for line_res in stdin.lock().lines() {
+                  let line = match line_res {
+                      Ok(s) if !s.is_empty() => s,
+                      Ok(_) => continue,
+                      Err(_) => break,
+                  };
+                  let res = panic::catch_unwind(AssertUnwindSafe(|| -> Result<(), String> {
+                      let skp = SkpFile::open(&line).map_err(|e| format!("IO:{:?}", e.kind()))?;
+                      skp.parse(&opts).map_err(|_| "PARSE_ERR".to_owned())?;
+                      skp.build_scene(&opts).map_err(|_| "PARSE_ERR".to_owned())?;
+                      Ok(())
+                  }));
+                  match res {
+                      Ok(Ok(())) => {
+                          let _ = writeln!(stdout, "@@FUZZ@@:OK");
+                      }
+                      Ok(Err(tag)) if tag == "PARSE_ERR" => {
+                          let _ = writeln!(stdout, "@@FUZZ@@:PARSE_ERR");
+                      }
+                      Ok(Err(other)) => {
+                          let _ = writeln!(stdout, "@@FUZZ@@:OTHER:{other}");
+                      }
+                      Err(payload) => {
+                          let msg = if let Some(s) = payload.downcast_ref::<&str>() {
+                              (*s).to_owned()
+                          } else if let Some(s) = payload.downcast_ref::<String>() {
+                              s.clone()
+                          } else {
+                              "non-string panic".to_owned()
+                          };
+                          let clean = msg.replace('\\n', " ").replace('\\r', " ");
+                          let _ = writeln!(stdout, "@@FUZZ@@:CRASH:panic:{clean}");
+                      }
+                  }
+                  let _ = stdout.flush();
+              }
+          }
+          """, encoding="utf-8")
+              subprocess.check_call(["cargo", "build", "--release", "--manifest-path", str(rust_dir / "Cargo.toml")])
+              rust_bin = rust_dir / "target/release/rust_fuzz"
+
+              runners = [
+                  (
+                      "python",
+                      [sys.executable, str(py_worker)],
+                      {"OPENBLAS_NUM_THREADS": "1", "OMP_NUM_THREADS": "1", "MKL_NUM_THREADS": "1"},
+                      None,
+                  ),
+                  (
+                      "typescript",
+                      ["node", "--max-old-space-size=512", str(ts_worker)],
+                      None,
+                      None,
+                  ),
+                  (
+                      "dotnet",
+                      [str(net_bin)],
+                      {"DOTNET_GCHeapHardLimit": "0x20000000"},
+                      None,
+                  ),
+                  (
+                      "dart",
+                      [
+                          "dart",
+                          "--old_gen_heap_size=512",
+                          f"--packages={repo / 'packages/dart/.dart_tool/package_config.json'}",
+                          str(dart_worker),
+                      ],
+                      None,
+                      None,
+                  ),
+                  (
+                      "cpp",
+                      [str(cpp_bin)],
+                      None,
+                      None,
+                  ),
+                  (
+                      "rust",
+                      [str(rust_bin)],
+                      None,
+                      1024 * 1024 * 1024,
+                  ),
+              ]
+
+              all_crashes: list[str] = []
+              print("\n=== Fuzz Reader Summary ===")
+              for name, cmd, extra_env, rlimit_bytes in runners:
+                  counts, other_samples, crashes, elapsed = run_worker(
+                      name, cmd, cases, extra_env=extra_env, rlimit_as_bytes=rlimit_bytes
+                  )
+                  summary = ", ".join(f"{k}={v}" for k, v in sorted(counts.items()))
+                  print(f"  {name:10s} ({elapsed:5.2f}s): {summary} | crashes={len(crashes)}")
+                  if other_samples:
+                      samples_str = ", ".join(f"{k} (e.g. {v})" for k, v in sorted(other_samples.items()))
+                      print(f"             non-SkpParseError exceptions: {samples_str}")
+                  all_crashes.extend(crashes)
+
+              if all_crashes:
+                  print("\nFUZZ READERS CHECK FAILED (crashes/hangs/panics detected):", file=sys.stderr)
+                  for c in all_crashes:
+                      print(f"  - {c}", file=sys.stderr)
+                  sys.exit(1)
+
+              print(f"\nAll 6 readers completed {len(cases)} mutated fuzz cases with 0 crashes or hangs.")
+          PY
+
+  required:
+    name: Fuzz Readers CI required
+    needs: [changes, fuzz]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check outcome
+        run: |
+          if [ "${{ github.event_name }}" != "schedule" ] && [ "${{ github.event_name }}" != "workflow_dispatch" ] && [ "${{ needs.changes.outputs.reader }}" != "true" ]; then
+            echo "Reader sources unchanged - nothing to fuzz"
+            exit 0
+          fi
+          if [ "${{ needs.fuzz.result }}" != "success" ]; then
+            echo "Fuzz Readers CI failed"
+            exit 1
+          fi
+          echo "Fuzz Readers CI passed"
