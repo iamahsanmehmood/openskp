@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — .NET & Dart: stream `F901 > 7017 > 7117` VFF definition wrappers one definition at a time (#264, #285)
+
+- Ports the `F901 > 7017 > 7117` pass-through wrapper expansion already in Python, TypeScript, C++,
+  and Rust to `.NET` (`Tlv.IterTopLevelLazy`) and `Dart` (`Tlv.iterTopLevelLazy`), so SketchUp 2021+
+  files whose component definitions sit under a single `F901` container yield one `7C15` definition
+  subtree at a time instead of materializing the entire definition list in memory simultaneously,
+  while still enforcing the 64-level nesting cap on nested wrappers.
+
 ### Fixed — Python: scenes use a component instance's own paint and tag in classic files (#596)
 
 - `build_scene()` and `build_instanced_scene()` read an instance's paint and tag from its 2021+ `D007` record only. In classic (pre-2021) files a painted component came out in its tag's colour, and every instance sat on its parent's tag. Both now come from the instance itself, and nested components inherit the paint.

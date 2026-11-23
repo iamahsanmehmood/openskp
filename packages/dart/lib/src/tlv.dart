@@ -200,17 +200,46 @@ class Tlv {
     }
   }
 
+  static const Set<String> _passThroughWrappers = {'F901', '7017', '7117'};
+
+  static List<(String, int, int)> _expandWrappers(
+    Uint8List data,
+    List<(String, int, int)> headers,
+    Set<String> containerTagsSet, [
+    int depth = 0,
+  ]) {
+    final out = <(String, int, int)>[];
+    for (final header in headers) {
+      final (tag, offset, size) = header;
+      if (_passThroughWrappers.contains(tag) && containerTagsSet.contains(tag)) {
+        if (depth >= maxDepth) {
+          throw SkpParseException(
+            'TLV records nest deeper than $maxDepth levels',
+            stage: 'tlv_walk',
+            tag: tag,
+            offset: offset,
+          );
+        }
+        out.addAll(
+          _expandWrappers(
+            data,
+            _flatHeaders(data, offset + 6, offset + 6 + size),
+            containerTagsSet,
+            depth + 1,
+          ),
+        );
+      } else {
+        out.add(header);
+      }
+    }
+    return out;
+  }
+
   /// Yield `(index, total, node)` for each top-level TLV record's
   /// fully-recursed node one at a time, transparently unwrapping a lone
-  /// "F401" wrapper - without ever materializing more than one top-level
-  /// subtree simultaneously. `total` (the top-level sibling count) comes
-  /// for free from the same cheap header scan that drives the loop, so
-  /// callers can report "N of total" progress with no extra pass over the
-  /// file. Each yielded node is safe to discard (drop all references) once
-  /// the caller is done with it, before the next one is produced - that's
-  /// what keeps peak memory bounded by the size of the single largest
-  /// top-level record instead of the whole file (real production files can
-  /// have 100k+ separate definitions).
+  /// "F401" wrapper and the F901 > 7017 > 7117 definitions chain (so each
+  /// "7C15" definition is its own record) - without ever materializing
+  /// more than one subtree simultaneously.
   static Iterable<(int, int, TlvNode)> iterTopLevelLazy(Uint8List data, int start, int end, [Set<String>? tags]) sync* {
     final containerTagsSet = tags ?? containerTags;
 
@@ -220,6 +249,7 @@ class Tlv {
       final (_, f401Offset, f401Size) = headers[0];
       headers = _flatHeaders(data, f401Offset + 6, f401Offset + 6 + f401Size);
     }
+    headers = _expandWrappers(data, headers, containerTagsSet);
 
     final total = headers.length;
     var index = 0;

@@ -235,17 +235,49 @@ namespace OpenSkp
             }
         }
 
+        private static readonly HashSet<string> PassThroughWrappers = new HashSet<string>
+        {
+            "F901", "7017", "7117",
+        };
+
+        private static List<(string Tag, long Offset, long Size)> ExpandWrappers(
+            ChunkedBuffer data,
+            List<(string Tag, long Offset, long Size)> headers,
+            HashSet<string> containerTags,
+            int depth = 0)
+        {
+            var expanded = new List<(string, long, long)>();
+            foreach (var header in headers)
+            {
+                var (tag, offset, size) = header;
+                if (PassThroughWrappers.Contains(tag) && containerTags.Contains(tag))
+                {
+                    if (depth >= MaxDepth)
+                    {
+                        throw new SkpParseException(
+                            $"TLV records nest deeper than {MaxDepth} levels",
+                            stage: "tlv_walk", tag: tag, offset: offset);
+                    }
+                    expanded.AddRange(
+                        ExpandWrappers(
+                            data,
+                            FlatHeaders(data, offset + 6, offset + 6 + size),
+                            containerTags,
+                            depth + 1));
+                }
+                else
+                {
+                    expanded.Add(header);
+                }
+            }
+            return expanded;
+        }
+
         /// <summary>Yield each top-level TLV record's fully-recursed node one
-        /// at a time, transparently unwrapping a lone "F401" wrapper -
-        /// without ever materializing more than one top-level subtree
-        /// simultaneously. Total (the top-level sibling count) comes for free
-        /// from the same cheap header scan that drives the loop, so callers
-        /// can report "N of total" progress with no extra pass over the
-        /// file. Each yielded node is safe to discard (drop all references)
-        /// once the caller is done with it, before the next one is produced
-        /// - that's what keeps peak memory bounded by the size of the single
-        /// largest top-level record instead of the whole file (real
-        /// production files can have 100k+ separate definitions).</summary>
+        /// at a time, transparently unwrapping a lone "F401" wrapper and the
+        /// F901 &gt; 7017 &gt; 7117 definitions chain (so each "7C15" definition
+        /// is its own record) - without ever materializing more than one
+        /// subtree simultaneously.</summary>
         public static IEnumerable<TopLevelRecord> IterTopLevelLazy(ChunkedBuffer data, long start, long end, HashSet<string>? containerTags = null)
         {
             containerTags ??= ContainerTags;
@@ -257,6 +289,7 @@ namespace OpenSkp
                 var (_, f401Offset, f401Size) = headers[0];
                 headers = FlatHeaders(data, f401Offset + 6, f401Offset + 6 + f401Size);
             }
+            headers = ExpandWrappers(data, headers, containerTags);
 
             int total = headers.Count;
             int index = 0;
