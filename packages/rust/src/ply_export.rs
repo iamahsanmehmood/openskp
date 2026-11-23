@@ -24,11 +24,13 @@ fn header(format: &str, scene: &Scene) -> String {
     let vertices: usize = scene
         .glb_primitives
         .iter()
+        .filter(|p| !p.unpainted_back)
         .map(|p| p.positions.len() / 3)
         .sum();
     let faces: usize = scene
         .glb_primitives
         .iter()
+        .filter(|p| !p.unpainted_back)
         .map(|p| p.indices.len() / 3)
         .sum();
     let mut s = String::new();
@@ -67,22 +69,26 @@ fn vertex_attrs(prim: &GlbPrimitive, i: usize) -> [f32; 8] {
 /// Every face as global vertex indices, primitives concatenated.
 fn faces(scene: &Scene) -> impl Iterator<Item = [u32; 3]> + '_ {
     let mut offset = 0usize;
-    scene.glb_primitives.iter().flat_map(move |p| {
-        let base = offset as u32;
-        offset += p.positions.len() / 3;
-        p.indices
-            .as_chunks::<3>()
-            .0
-            .iter()
-            .map(move |t| [t[0], t[1], t[2]].map(|i| i.wrapping_add(base)))
-    })
+    scene
+        .glb_primitives
+        .iter()
+        .filter(|p| !p.unpainted_back)
+        .flat_map(move |p| {
+            let base = offset as u32;
+            offset += p.positions.len() / 3;
+            p.indices
+                .as_chunks::<3>()
+                .0
+                .iter()
+                .map(move |t| [t[0], t[1], t[2]].map(|i| i.wrapping_add(base)))
+        })
 }
 
 /// Serializes a baked scene as ASCII PLY (per-vertex position, normal, UV
 /// and material color; triangle faces).
 pub fn to_ply_ascii(scene: &Scene) -> String {
     let mut s = header("ascii", scene);
-    for prim in &scene.glb_primitives {
+    for prim in scene.surface_primitives() {
         let c = material_rgba(scene, prim.material_index);
         for i in 0..prim.positions.len() / 3 {
             let a = vertex_attrs(prim, i);
@@ -102,7 +108,7 @@ pub fn to_ply_ascii(scene: &Scene) -> String {
 /// Serializes a baked scene as little-endian binary PLY.
 pub fn to_ply_binary(scene: &Scene) -> Vec<u8> {
     let mut data = header("binary_little_endian", scene).into_bytes();
-    for prim in &scene.glb_primitives {
+    for prim in scene.surface_primitives() {
         let c = material_rgba(scene, prim.material_index);
         for i in 0..prim.positions.len() / 3 {
             for v in vertex_attrs(prim, i) {

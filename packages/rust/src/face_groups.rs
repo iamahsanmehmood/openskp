@@ -16,8 +16,10 @@
 
 use std::collections::{BTreeMap, HashMap};
 
+use crate::errors::SkpParseError;
 use crate::internal::{Error, GeometryBuilder, RawMaterial, RawParsed};
 use crate::model::{ByteBuffer, CoEdge, EntityId, Vec3};
+use crate::observability::ParseStage;
 use crate::scene::SceneTexture;
 use crate::triangulator::triangulate_with;
 
@@ -25,7 +27,7 @@ use crate::triangulator::triangulate_with;
 pub type FaceColorKey = [i32; 4];
 
 /// A face group's identity. Ordered like the C++ `std::tie(color,
-/// double_sided, texture_index)` (an absent texture sorts first).
+/// double_sided, texture_index, unpainted_back)` (an absent texture sorts first).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
 pub struct GroupKey {
     pub color: FaceColorKey,
@@ -33,6 +35,9 @@ pub struct GroupKey {
     /// The texture is part of the identity, not just the color: two different
     /// images can average to the same RGB.
     pub texture_index: Option<usize>,
+    /// True for the reverse-wound back primitive of a face with no paint on
+    /// either side when front and back fallback colours differ.
+    pub unpainted_back: bool,
 }
 
 /// A vertex is keyed by (source vertex id, u, v): UVs are per-face, so a
@@ -98,6 +103,30 @@ pub fn default_color(parsed: &RawParsed, layer: &str) -> FaceColorKey {
     ]
 }
 
+/// Front and back face colours from the model's rendering options (`"style"`),
+/// or `None` when `"tag"` is requested or the file carries no face colours.
+pub fn unpainted_style_colors(
+    parsed: &RawParsed,
+    unpainted_faces: &str,
+) -> Result<Option<(FaceColorKey, FaceColorKey)>, SkpParseError> {
+    match unpainted_faces {
+        "tag" => Ok(None),
+        "style" => {
+            let (Some(f), Some(b)) = (parsed.face_front_color, parsed.face_back_color) else {
+                return Ok(None);
+            };
+            Ok(Some((
+                [i32::from(f[0]), i32::from(f[1]), i32::from(f[2]), 255],
+                [i32::from(b[0]), i32::from(b[1]), i32::from(b[2]), 255],
+            )))
+        }
+        other => Err(SkpParseError::at_stage(
+            format!("unpainted_faces must be 'style' or 'tag', got {other:?}"),
+            ParseStage::BuildScene,
+        )),
+    }
+}
+
 /// An image's MIME type from its magic bytes; `None` for anything glTF cannot
 /// carry (glTF only allows PNG and JPEG).
 pub fn sniff_image_mime(data: &[u8]) -> Option<&'static str> {
@@ -151,9 +180,11 @@ impl TextureRegistry {
 /// What [`build_local_face_groups`] needs from its caller besides the builder.
 pub struct FaceGroupContext<'a> {
     pub texture_index_for: &'a mut dyn FnMut(Option<&RawMaterial>) -> Option<usize>,
-    /// Color an unpainted face falls back to (the instance's inherited paint
-    /// color, or the effective layer's color when nothing is inherited).
+    /// Color an unpainted face front falls back to (the instance's inherited
+    /// paint color, the model's front face color, or the effective layer's color).
     pub fallback_color: FaceColorKey,
+    /// Color an unpainted face back falls back to (`fallback_color` when `None`).
+    pub fallback_back_color: Option<FaceColorKey>,
 }
 
 fn tile_size(material: Option<&RawMaterial>) -> (f64, f64) {
@@ -280,12 +311,13 @@ pub fn build_local_face_groups(
     ctx: &mut FaceGroupContext<'_>,
 ) -> Result<BTreeMap<GroupKey, Group>, Error> {
     let mut groups: BTreeMap<GroupKey, Group> = BTreeMap::new();
+    let fallback_back = ctx.fallback_back_color.unwrap_or(ctx.fallback_color);
 
     for f in b.faces.values() {
         let front_mat = find_material(parsed, f.material_id);
         let back_mat = find_material(parsed, f.back_material_id);
         let front = material_color(front_mat).unwrap_or(ctx.fallback_color);
-        let back = material_color(back_mat).unwrap_or(ctx.fallback_color);
+        let back = material_color(back_mat).unwrap_or(fallback_back);
 
         let loops: Vec<Vec<EntityId>> = f
             .loops
@@ -340,6 +372,7 @@ pub fn build_local_face_groups(
                 color: front,
                 double_sided: true,
                 texture_index: (ctx.texture_index_for)(front_mat),
+                unpainted_back: false,
             };
             add_side(key, false, &f.uv_transform, tw, th)?;
         } else {
@@ -348,6 +381,7 @@ pub fn build_local_face_groups(
                 color: front,
                 double_sided: false,
                 texture_index: (ctx.texture_index_for)(front_mat),
+                unpainted_back: false,
             };
             add_side(key, false, &f.uv_transform, ftw, fth)?;
             let (btw, bth) = tile_size(back_mat);
@@ -355,6 +389,7 @@ pub fn build_local_face_groups(
                 color: back,
                 double_sided: false,
                 texture_index: (ctx.texture_index_for)(back_mat),
+                unpainted_back: front_mat.is_none() && back_mat.is_none(),
             };
             add_side(key, true, &f.uv_transform_back, btw, bth)?;
         }

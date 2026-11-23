@@ -6,8 +6,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use crate::curves::{chain_loose_edges, majority_layer, round6, solve_run_arc, INCHES_TO_M};
 use crate::errors::SkpParseError;
 use crate::face_groups::{
-    build_local_face_groups, default_color, find_material, material_color, FaceColorKey,
-    FaceGroupContext, GroupKey, TextureRegistry,
+    build_local_face_groups, default_color, find_material, material_color, unpainted_style_colors,
+    FaceColorKey, FaceGroupContext, GroupKey, TextureRegistry,
 };
 use crate::internal::strconv::c_stoll;
 use crate::internal::{
@@ -279,6 +279,7 @@ type PathUpdate = (BTreeMap<String, String>, String, StringDictionaries);
 struct Baker<'a> {
     p: &'a RawParsed,
     o: &'a ParseOptions,
+    style_colors: Option<(FaceColorKey, FaceColorKey)>,
     scene: Scene,
     textures: TextureRegistry,
     materials: BTreeMap<GroupKey, usize>,
@@ -306,13 +307,23 @@ impl<'a> Baker<'a> {
         inherited: Option<FaceColorKey>,
     ) -> Result<Vec<InstanceNode>, SkpParseError> {
         let p = self.p;
-        let fallback = inherited.unwrap_or_else(|| default_color(p, layer));
+        let (fallback, fallback_back) = match inherited {
+            Some(c) => (c, c),
+            None => match self.style_colors {
+                Some((front, back)) => (front, back),
+                None => {
+                    let c = default_color(p, layer);
+                    (c, c)
+                }
+            },
+        };
         let groups = {
             let textures = &mut self.textures;
             let mut texture_index_for = |m: Option<&_>| textures.index_for(m);
             let mut ctx = FaceGroupContext {
                 texture_index_for: &mut texture_index_for,
                 fallback_color: fallback,
+                fallback_back_color: Some(fallback_back),
             };
             build_local_face_groups(p, b, &mut ctx).map_err(build_error)?
         };
@@ -349,6 +360,7 @@ impl<'a> Baker<'a> {
 
             let mut prim = GlbPrimitive {
                 geom_name: geom,
+                unpainted_back: key.unpainted_back,
                 ..Default::default()
             };
             let mirrored = transform_determinant(matrix) < 0.0;
@@ -388,21 +400,23 @@ impl<'a> Baker<'a> {
                 prim.normals[i * 3 + 1] = (w[2] / l) as f32;
                 prim.normals[i * 3 + 2] = (-w[1] / l) as f32;
             }
-            prim.material_index = match self.materials.get(key) {
+            let mut mat_key = *key;
+            mat_key.unpainted_back = false;
+            prim.material_index = match self.materials.get(&mat_key) {
                 Some(&idx) => idx,
                 None => {
                     let idx = self.scene.gltf_materials.len();
                     let mut gm = GltfMaterial::default();
                     gm.pbr_metallic_roughness.base_color_factor = [
-                        f64::from(key.color[0]) / 255.0,
-                        f64::from(key.color[1]) / 255.0,
-                        f64::from(key.color[2]) / 255.0,
-                        f64::from(key.color[3]) / 255.0,
+                        f64::from(mat_key.color[0]) / 255.0,
+                        f64::from(mat_key.color[1]) / 255.0,
+                        f64::from(mat_key.color[2]) / 255.0,
+                        f64::from(mat_key.color[3]) / 255.0,
                     ];
-                    gm.pbr_metallic_roughness.base_color_texture = key.texture_index;
-                    gm.double_sided = key.double_sided;
+                    gm.pbr_metallic_roughness.base_color_texture = mat_key.texture_index;
+                    gm.double_sided = mat_key.double_sided;
                     self.scene.gltf_materials.push(gm);
-                    self.materials.insert(*key, idx);
+                    self.materials.insert(mat_key, idx);
                     idx
                 }
             };
@@ -545,6 +559,7 @@ impl<'a> Baker<'a> {
 
 /// Bakes a reader's raw output into a world-space [`Scene`].
 pub fn build_scene_raw(mut p: RawParsed, o: &ParseOptions) -> Result<Scene, SkpParseError> {
+    let style_colors = unpainted_style_colors(&p, &o.unpainted_faces)?;
     let layer_hidden = std::mem::take(&mut p.layer_hidden);
     emit_log(
         o,
@@ -558,6 +573,7 @@ pub fn build_scene_raw(mut p: RawParsed, o: &ParseOptions) -> Result<Scene, SkpP
     let mut baker = Baker {
         p: &p,
         o,
+        style_colors,
         scene: Scene {
             scene_hierarchy: InstanceNode {
                 name: "ROOT".into(),

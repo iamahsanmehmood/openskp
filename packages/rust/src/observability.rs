@@ -60,12 +60,25 @@ pub type ProgressFn = dyn Fn(&ParseProgress) + Send + Sync;
 /// Log callback type.
 pub type LogFn = dyn Fn(LogLevel, &str) + Send + Sync;
 
-/// Optional progress and logging callbacks. Both are invoked synchronously on
-/// the calling thread.
-#[derive(Clone, Default)]
+/// Optional progress and logging callbacks, plus scene-building options.
+/// Callbacks are invoked synchronously on the calling thread.
+#[derive(Clone)]
 pub struct ParseOptions {
     pub progress: Option<Arc<ProgressFn>>,
     pub log: Option<Arc<LogFn>>,
+    /// `"style"` (default) gives unpainted faces the model's front and back
+    /// face colours; `"tag"` gives them their tag's colour.
+    pub unpainted_faces: String,
+}
+
+impl Default for ParseOptions {
+    fn default() -> Self {
+        Self {
+            progress: None,
+            log: None,
+            unpainted_faces: "style".to_owned(),
+        }
+    }
 }
 
 impl ParseOptions {
@@ -85,6 +98,12 @@ impl ParseOptions {
         self.log = Some(Arc::new(f));
         self
     }
+
+    /// Sets how unpainted faces are coloured (`"style"` or `"tag"`).
+    pub fn with_unpainted_faces(mut self, mode: impl Into<String>) -> Self {
+        self.unpainted_faces = mode.into();
+        self
+    }
 }
 
 impl fmt::Debug for ParseOptions {
@@ -92,6 +111,7 @@ impl fmt::Debug for ParseOptions {
         f.debug_struct("ParseOptions")
             .field("progress", &self.progress.is_some())
             .field("log", &self.log.is_some())
+            .field("unpainted_faces", &self.unpainted_faces)
             .finish()
     }
 }

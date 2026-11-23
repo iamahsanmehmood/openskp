@@ -7,8 +7,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use crate::curves::{chain_loose_edges, round6, solve_run_arc, INCHES_TO_M};
 use crate::errors::SkpParseError;
 use crate::face_groups::{
-    build_local_face_groups, default_color, find_material, material_color, FaceColorKey,
-    FaceGroupContext, GroupKey, TextureRegistry,
+    build_local_face_groups, default_color, find_material, material_color, unpainted_style_colors,
+    FaceColorKey, FaceGroupContext, GroupKey, TextureRegistry,
 };
 use crate::instanced_scene::{
     InstancedCurveResource, InstancedMeshResource, InstancedNode, InstancedScene, LocalCurve,
@@ -84,17 +84,22 @@ fn mul4(a: &[f64; 16], b: &[f64; 16]) -> [f64; 16] {
     out
 }
 
-fn resource_key(defid: Option<EntityId>, color: &FaceColorKey) -> String {
-    format!(
+fn resource_key(defid: Option<EntityId>, front: &FaceColorKey, back: &FaceColorKey) -> String {
+    let mut key = format!(
         "{}|{},{},{},{}",
         defid
             .map(|d| d.to_string())
             .unwrap_or_else(|| "ROOT".into()),
-        color[0],
-        color[1],
-        color[2],
-        color[3]
-    )
+        front[0],
+        front[1],
+        front[2],
+        front[3]
+    );
+    if back != front {
+        let [r, g, b, a] = *back;
+        key.push_str(&format!("/{r},{g},{b},{a}"));
+    }
+    key
 }
 
 type LocalBox = Option<([f64; 3], [f64; 3])>;
@@ -102,6 +107,7 @@ type LocalBox = Option<([f64; 3], [f64; 3])>;
 struct Instancer<'a> {
     p: &'a RawParsed,
     o: &'a ParseOptions,
+    style_colors: Option<(FaceColorKey, FaceColorKey)>,
     textures: TextureRegistry,
     gltf_materials: Vec<GltfMaterial>,
     /// Materials deduped globally, by the same key that groups faces.
@@ -116,21 +122,23 @@ struct Instancer<'a> {
 
 impl<'a> Instancer<'a> {
     fn material_index(&mut self, key: &GroupKey) -> usize {
-        if let Some(&found) = self.material_index_by_key.get(key) {
+        let mut mat_key = *key;
+        mat_key.unpainted_back = false;
+        if let Some(&found) = self.material_index_by_key.get(&mat_key) {
             return found;
         }
         let idx = self.gltf_materials.len();
         let mut gm = GltfMaterial::default();
         gm.pbr_metallic_roughness.base_color_factor = [
-            f64::from(key.color[0]) / 255.0,
-            f64::from(key.color[1]) / 255.0,
-            f64::from(key.color[2]) / 255.0,
-            f64::from(key.color[3]) / 255.0,
+            f64::from(mat_key.color[0]) / 255.0,
+            f64::from(mat_key.color[1]) / 255.0,
+            f64::from(mat_key.color[2]) / 255.0,
+            f64::from(mat_key.color[3]) / 255.0,
         ];
-        gm.pbr_metallic_roughness.base_color_texture = key.texture_index;
-        gm.double_sided = key.double_sided;
+        gm.pbr_metallic_roughness.base_color_texture = mat_key.texture_index;
+        gm.double_sided = mat_key.double_sided;
         self.gltf_materials.push(gm);
-        self.material_index_by_key.insert(*key, idx);
+        self.material_index_by_key.insert(mat_key, idx);
         idx
     }
 
@@ -150,8 +158,17 @@ impl<'a> Instancer<'a> {
             return Ok(None);
         }
         let p = self.p;
-        let fallback = inherited.unwrap_or_else(|| default_color(p, layer));
-        let key = resource_key(defid, &fallback);
+        let (fallback, fallback_back) = match inherited {
+            Some(c) => (c, c),
+            None => match self.style_colors {
+                Some((front, back)) => (front, back),
+                None => {
+                    let c = default_color(p, layer);
+                    (c, c)
+                }
+            },
+        };
+        let key = resource_key(defid, &fallback, &fallback_back);
         if let Some(&hit) = self.resource_index_by_key.get(&key) {
             return Ok(Some(self.mesh_resources[hit].id.clone()));
         }
@@ -162,6 +179,7 @@ impl<'a> Instancer<'a> {
             let mut ctx = FaceGroupContext {
                 texture_index_for: &mut texture_index_for,
                 fallback_color: fallback,
+                fallback_back_color: Some(fallback_back),
             };
             build_local_face_groups(p, builder, &mut ctx).map_err(build_error)?
         };
@@ -176,6 +194,7 @@ impl<'a> Instancer<'a> {
                 positions: vec![0.0; count * 3],
                 normals: vec![0.0; count * 3],
                 uvs: vec![0.0; count * 2],
+                unpainted_back: group_key.unpainted_back,
                 ..Default::default()
             };
             for i in 0..count {
@@ -398,6 +417,7 @@ pub fn build_instanced_scene_raw(
     mut p: RawParsed,
     o: &ParseOptions,
 ) -> Result<InstancedScene, SkpParseError> {
+    let style_colors = unpainted_style_colors(&p, &o.unpainted_faces)?;
     let layer_hidden = std::mem::take(&mut p.layer_hidden);
     emit_log(
         o,
@@ -411,6 +431,7 @@ pub fn build_instanced_scene_raw(
     let mut inst = Instancer {
         p: &p,
         o,
+        style_colors,
         textures: TextureRegistry::default(),
         gltf_materials: Vec::new(),
         material_index_by_key: BTreeMap::new(),

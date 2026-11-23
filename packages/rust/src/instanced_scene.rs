@@ -16,6 +16,9 @@ pub struct LocalPrimitive {
     pub uvs: Vec<f32>,
     pub indices: Vec<u32>,
     pub material_index: usize,
+    /// True when this primitive is the back copy of a face with no paint on
+    /// either side, split out so the two sides can take different style colours.
+    pub unpainted_back: bool,
 }
 
 /// A definition's geometry resolved for one rendering context. One definition

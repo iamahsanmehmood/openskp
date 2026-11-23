@@ -225,7 +225,8 @@ fn modern_root_only_scene() {
         .unwrap();
     assert_eq!(scene.scene_hierarchy.name, "ROOT");
     assert_eq!(scene.scene_hierarchy.definition_name, "ROOT_MODEL");
-    assert_eq!(scene.mesh_index.len(), 1);
+    assert_eq!(scene.surface_primitives().len(), 1);
+    assert_eq!(scene.mesh_index.len(), 2);
     assert_eq!(
         scene.mesh_index.values().next().unwrap().definition_name,
         "ROOT_MODEL"
@@ -417,8 +418,9 @@ fn legacy_matches_reference() {
 fn legacy_scene_matches_reference() {
     let file = SkpFile::open(fixture("capilla_quiroz_v17.skp")).unwrap();
     let scene = file.build_scene(&opts()).unwrap();
-    assert_eq!(scene.glb_primitives.len(), 21);
-    assert_eq!(scene.mesh_index.len(), 21);
+    assert_eq!(scene.surface_primitives().len(), 21);
+    assert_eq!(scene.glb_primitives.len(), 22);
+    assert_eq!(scene.mesh_index.len(), 22);
     assert_eq!(scene.gltf_materials.len(), 13);
     assert_eq!(scene.scene_hierarchy.children.len(), 3);
     let mut placed: Vec<&str> = scene
@@ -450,8 +452,9 @@ fn modern_scene_matches_reference() {
     assert_eq!(scene.scene_hierarchy.name, "ROOT");
     assert_eq!(scene.scene_hierarchy.definition_name, "ROOT_MODEL");
     assert!(!scene.scene_hierarchy.children.is_empty());
-    assert_eq!(scene.mesh_index.len(), 43);
-    assert_eq!(scene.glb_primitives.len(), 43);
+    assert_eq!(scene.surface_primitives().len(), 43);
+    assert_eq!(scene.mesh_index.len(), 86);
+    assert_eq!(scene.glb_primitives.len(), 86);
     for (name, metadata) in &scene.mesh_index {
         assert!(!name.is_empty());
         assert!(!metadata.layer.is_empty());
@@ -524,7 +527,14 @@ fn streaming_definitions_preserves_hierarchy() {
     assert!(!scene.mesh_resources.is_empty());
     assert_eq!(scene.scene_hierarchy.name, "ROOT");
     assert!(!scene.scene_hierarchy.children.is_empty());
-    assert_eq!(scene.gltf_materials.len(), 8);
+    assert_eq!(scene.gltf_materials.len(), 2);
+    let surface_faces: usize = scene
+        .mesh_resources
+        .iter()
+        .flat_map(|r| &r.primitives)
+        .filter(|p| !p.unpainted_back)
+        .map(|p| p.indices.len() / 3)
+        .sum();
     let total_faces: usize = scene
         .mesh_resources
         .iter()
@@ -532,7 +542,8 @@ fn streaming_definitions_preserves_hierarchy() {
         .map(|p| p.indices.len() / 3)
         .sum();
     // 16883: the post-openskp#285 overlapping-hole triangulation count.
-    assert_eq!(total_faces, 16883);
+    assert_eq!(surface_faces, 16883);
+    assert_eq!(total_faces, 33766);
 }
 
 #[test]

@@ -21,6 +21,7 @@ fn make_circle_extrusion_frag() -> Vec<u8> {
         uvs: vec![0.0; 8],
         indices: vec![0, 1, 2, 0, 2, 3],
         material_index: 0,
+        unpainted_back: false,
     };
     let resource = InstancedMeshResource {
         id: "mesh_0".to_string(),
