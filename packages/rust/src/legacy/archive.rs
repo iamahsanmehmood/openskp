@@ -560,6 +560,11 @@ impl<'a> Archive<'a> {
         if &*ea.name != "CLayer" || &*eb.name != "CLayer" {
             return;
         }
+        // <anchor u16><def_count u32><definition> is already the usual layout: a
+        // def_count whose low u16 matches a CLayer slot is not a parent back-ref.
+        if p + 6 < d.len() && definition_starts_at(self, p + 6) {
+            return;
+        }
         self.r.p += 2;
     }
 

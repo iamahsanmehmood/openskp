@@ -707,6 +707,17 @@ struct Archive {
     if (clayer_record_at(r.p + kExt, true)) r.p += kExt;
   }
 
+  // True when the bytes at `at` begin a CComponentDefinition record: its
+  // first-use class declaration, or a class-ref to its known slot.
+  bool definition_starts_at(size_t at) const {
+    if (at + 26 <= r.d.size() && r.d[at] == 0xff && r.d[at + 1] == 0xff &&
+        std::equal(r.d.begin() + at + 6, r.d.begin() + at + 26, "CComponentDefinition")) {
+      return true;
+    }
+    auto cs = class_slot.find("CComponentDefinition");
+    return cs != class_slot.end() && is_class_ref(r.d, at, cs->second);
+  }
+
   // v18 template Layer0 after a custom tag: <parent u16><active u16><dc u32>.
   // Consume parent only when both u16s are already CLayer objects. A lone
   // back-ref then a definition count (usual layout) stays put.
@@ -721,6 +732,9 @@ struct Archive {
     if (ia == slots.end() || ib == slots.end()) return;
     if (ia->second.cls || ib->second.cls) return;
     if (ia->second.name != "CLayer" || ib->second.name != "CLayer") return;
+    // <anchor u16><def_count u32><definition> is already the usual layout: a
+    // def_count whose low u16 matches a CLayer slot is not a parent back-ref.
+    if (r.p + 6 < r.d.size() && definition_starts_at(r.p + 6)) return;
     r.p += 2;
   }
 
@@ -1629,14 +1643,7 @@ WalkResult walk_with_bases(const ByteBuffer& data, int ver, size_t start, uint32
 
 // True when the bytes at `at` begin a CComponentDefinition record: its
 // first-use class declaration, or a class-ref to its known slot.
-bool definition_starts_at(Archive& ar, size_t at) {
-  const auto& d = ar.r.d;
-  if (at + 26 <= d.size() && d[at] == 0xff && d[at + 1] == 0xff &&
-      std::equal(d.begin() + at + 6, d.begin() + at + 26, "CComponentDefinition"))
-    return true;
-  auto cs = ar.class_slot.find("CComponentDefinition");
-  return cs != ar.class_slot.end() && is_class_ref(d, at, cs->second);
-}
+bool definition_starts_at(Archive& ar, size_t at) { return ar.definition_starts_at(at); }
 
 // The walk proper, on a caller-owned archive so walk_model can report how far
 // it got when it throws.

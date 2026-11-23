@@ -539,6 +539,9 @@ namespace OpenSkp
             if (!Slots.TryGetValue(a, out var ea) || !Slots.TryGetValue(b, out var eb)) return;
             if (ea.Kind == "class" || eb.Kind == "class") return;
             if (ea.Name != "CLayer" || eb.Name != "CLayer") return;
+            // <anchor u16><def_count u32><definition> is already the usual layout: a
+            // def_count whose low u16 matches a CLayer slot is not a parent back-ref.
+            if (R.Pos + 6 < Data.Length && Legacy.DefinitionStartsAt(this, Data, R.Pos + 6)) return;
             R.Pos += 2;
         }
 
@@ -2265,7 +2268,7 @@ namespace OpenSkp
         /// <summary>True when the bytes at <paramref name="at"/> begin a
         /// CComponentDefinition record: its first-use class declaration, or a
         /// class-ref to its known slot.</summary>
-        private static bool DefinitionStartsAt(Archive ar, byte[] data, int at)
+        internal static bool DefinitionStartsAt(Archive ar, byte[] data, int at)
         {
             if (at + 26 <= data.Length && data[at] == 0xFF && data[at + 1] == 0xFF
                 && LegacyBytes.MatchesAscii(data, at + 6, "CComponentDefinition"))
