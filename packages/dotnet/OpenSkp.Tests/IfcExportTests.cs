@@ -404,12 +404,19 @@ namespace OpenSkp.Tests
             {
                 var scene = SkpFile.BuildScene(tmpSkp);
                 Assert.True(scene.LayerHidden["HiddenWalls"]);
+                Assert.False(scene.LayerHidden["Layer0"]);
                 string ifcText = IfcExport.ToIfc(scene, classifyUsingFullPath: true);
                 Assert.Contains("IFCWALL(", ifcText);
                 Assert.Contains("'Stud 12'", ifcText);
                 Assert.DoesNotContain("mesh_0_ROOT", ifcText);
-                string hiddenLine = ifcText.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None)
-                    .First(l => l.Contains("'HiddenWalls'"));
+                string visibleLine = ifcText.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None)
+                    .First(l => l.Contains("IFCPRESENTATIONLAYERWITHSTYLE('Layer0'"));
+                Assert.Contains(",.T.,.F.,.F.,())", visibleLine);
+
+                scene.LayerHidden["Layer0"] = true;
+                string hiddenIfc = IfcExport.ToIfc(scene, classifyUsingFullPath: true);
+                string hiddenLine = hiddenIfc.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None)
+                    .First(l => l.Contains("IFCPRESENTATIONLAYERWITHSTYLE('Layer0'"));
                 Assert.Contains(",.F.,.F.,.F.,())", hiddenLine);
             }
             finally

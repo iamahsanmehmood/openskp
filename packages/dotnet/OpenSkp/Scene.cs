@@ -418,11 +418,6 @@ namespace OpenSkp
                         ? new Dictionary<string, string>(inst.Properties)
                         : new Dictionary<string, string>();
 
-                    if (inst.LayerId.HasValue)
-                    {
-                        lName = layerIdToName.TryGetValue(inst.LayerId.Value, out var ln) ? ln : parentLayer;
-                    }
-
                     // Layer/material resolution mirrors
                     // Geometry.ExtractGeometryFromNodes's D007 handling;
                     // re-derived here (from inst.Children) to match the

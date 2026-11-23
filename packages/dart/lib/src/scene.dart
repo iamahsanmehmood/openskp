@@ -444,10 +444,6 @@ class SceneBuilder {
         var properties = Map<String, String>.from(inst.properties ?? {});
         Map<String, Map<String, Object?>>? instAttributeDicts;
 
-        if (inst.layerId != null) {
-          lName = layerIdToName[inst.layerId!] ?? parentLayer;
-        }
-
         final d007 = inst.children.where((c) => c.tag == 'D007').firstOrNull;
         if (d007 != null) {
           final d207 = d007.children.where((c) => c.tag == 'D207').firstOrNull;

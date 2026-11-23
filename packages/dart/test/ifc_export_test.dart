@@ -376,12 +376,21 @@ void main() {
       try {
         final scene = SkpFile.open(tmpPath).buildScene();
         expect(scene.layerHidden['HiddenWalls'], isTrue);
+        expect(scene.layerHidden['Layer0'], isFalse);
         final ifcText = toIfc(scene, classifyUsingFullPath: true);
         expect(ifcText, contains('IFCWALL('));
         expect(ifcText, contains("'Stud 12'"));
         expect(ifcText, isNot(contains('mesh_0_ROOT')));
-        final hiddenLine =
-            ifcText.split(RegExp(r'\r?\n')).firstWhere((l) => l.contains("'HiddenWalls'"));
+        final visibleLine = ifcText
+            .split(RegExp(r'\r?\n'))
+            .firstWhere((l) => l.contains("IFCPRESENTATIONLAYERWITHSTYLE('Layer0'"));
+        expect(visibleLine, contains(',.T.,.F.,.F.,())'));
+
+        scene.layerHidden['Layer0'] = true;
+        final hiddenIfc = toIfc(scene, classifyUsingFullPath: true);
+        final hiddenLine = hiddenIfc
+            .split(RegExp(r'\r?\n'))
+            .firstWhere((l) => l.contains("IFCPRESENTATIONLAYERWITHSTYLE('Layer0'"));
         expect(hiddenLine, contains(',.F.,.F.,.F.,())'));
       } finally {
         File(tmpPath).deleteSync();
