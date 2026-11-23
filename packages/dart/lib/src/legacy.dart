@@ -486,6 +486,12 @@ class Archive {
     if (ea == null || eb == null) return;
     if (ea.kind == 'class' || eb.kind == 'class') return;
     if (ea.name != 'CLayer' || eb.name != 'CLayer') return;
+    // <anchor u16><def_count u32><definition> is already the usual layout: a
+    // def_count whose low u16 matches a CLayer slot is not a parent back-ref.
+    if (r.pos + 6 < data.length &&
+        definitionStartsAt(this, data, r.pos + 6)) {
+      return;
+    }
     r.pos += 2;
   }
 

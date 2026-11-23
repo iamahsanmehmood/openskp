@@ -496,6 +496,11 @@ export class Archive {
     if (ea === undefined || eb === undefined) return;
     if (ea[0] === 'class' || eb[0] === 'class') return;
     if (ea[1] !== 'CLayer' || eb[1] !== 'CLayer') return;
+    // <anchor u16><def_count u32><definition> is already the usual layout: a
+    // def_count whose low u16 matches a CLayer slot is not a parent back-ref.
+    if (this.r.pos + 6 < this.data.length && definitionStartsAt(this, this.data, this.r.pos + 6)) {
+      return;
+    }
     this.r.pos += 2;
   }
 
@@ -1931,7 +1936,12 @@ function buildAndReleaseDefinition(ar: Archive, slot: number, def: any): void {
 /** True when the bytes at `at` begin a CComponentDefinition record: its
  * first-use class declaration, or a class-ref to its known slot. */
 function definitionStartsAt(ar: Archive, data: Uint8Array, at: number): boolean {
-  if (data[at] === 0xff && data[at + 1] === 0xff && matchesAscii(data.subarray(at, at + 26), 6, 'CComponentDefinition')) {
+  if (
+    at + 26 <= data.length &&
+    data[at] === 0xff &&
+    data[at + 1] === 0xff &&
+    matchesAscii(data.subarray(at, at + 26), 6, 'CComponentDefinition')
+  ) {
     return true;
   }
   const defCls = ar.classSlot.get('CComponentDefinition');
