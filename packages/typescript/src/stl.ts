@@ -1,4 +1,4 @@
-import { SkpScene } from './model';
+import { SkpScene, getSurfacePrimitives } from './model';
 
 declare const process: any;
 declare const require: any;
@@ -41,7 +41,7 @@ export function toSTLAscii(scene: SkpScene, scale = 1.0): string {
 
   const lines: string[] = ['solid OpenSKP_Model'];
 
-  for (const prim of scene.glbPrimitives) {
+  for (const prim of getSurfacePrimitives(scene)) {
     const triCount = Math.floor(prim.indices.length / 3);
     for (let i = 0; i < triCount; i++) {
       const i0 = prim.indices[i * 3];
@@ -100,8 +100,9 @@ export function toSTLBinary(scene: SkpScene, scale = 1.0): Uint8Array {
     throw new Error('toSTLBinary requires a valid SkpScene instance');
   }
 
+  const prims = getSurfacePrimitives(scene);
   let totalTriangles = 0;
-  for (const prim of scene.glbPrimitives) {
+  for (const prim of prims) {
     totalTriangles += Math.floor(prim.indices.length / 3);
   }
 
@@ -120,7 +121,7 @@ export function toSTLBinary(scene: SkpScene, scale = 1.0): Uint8Array {
   view.setUint32(80, totalTriangles, true);
 
   let offset = 84;
-  for (const prim of scene.glbPrimitives) {
+  for (const prim of prims) {
     const triCount = Math.floor(prim.indices.length / 3);
     for (let i = 0; i < triCount; i++) {
       const i0 = prim.indices[i * 3];

@@ -137,9 +137,10 @@ describe('SketchUp Parser Integration Test', () => {
     expect(scene.sceneHierarchy.definitionName).toBe('ROOT_MODEL');
     expect(scene.sceneHierarchy.children.length).toBeGreaterThan(0);
 
-    // 9. Assert Mesh Index
+    // 9. Assert Mesh Index (43 front primitives + 43 back copies of unpainted definitions, #533)
+    expect(scene.surfacePrimitives).toHaveLength(43);
     const meshNames = Object.keys(scene.meshIndex);
-    expect(meshNames.length).toBe(43);
+    expect(meshNames.length).toBe(86);
     const firstMesh = scene.meshIndex[meshNames[0]];
     expect(firstMesh).toBeDefined();
     expect(firstMesh.name).toBeDefined();
@@ -171,8 +172,10 @@ describe('SketchUp Parser Integration Test', () => {
     expect(scene.sceneHierarchy.name).toBe('ROOT');
     expect(scene.sceneHierarchy.definitionName).toBe('ROOT_MODEL');
 
+    // its faces have no paint: a front and a back copy (#533)
+    expect(scene.surfacePrimitives).toHaveLength(1);
     const meshNames = Object.keys(scene.meshIndex);
-    expect(meshNames).toHaveLength(1);
+    expect(meshNames).toHaveLength(2);
     expect(scene.meshIndex[meshNames[0]].definitionName).toBe('ROOT_MODEL');
   });
 });

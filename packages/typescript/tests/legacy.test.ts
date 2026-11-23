@@ -204,14 +204,14 @@ describe('Legacy MFC reader (classic pre-2021 .skp)', () => {
     // all) are emitted once with doubleSided=true instead of being split -
     // confirmed count from direct inspection of this fixture.
     const doubleSidedCount = scene.gltfMaterials.filter((m: any) => m.doubleSided).length;
-    expect(doubleSidedCount).toBe(4);
+    expect(doubleSidedCount).toBe(3); // unpainted faces show a colour per side (#533)
 
     // Full scene counts: matches C++'s independently-verified reference
-    // for this exact fixture (parser_test.cpp) - 21 primitives/mesh
-    // entries instead of the pre-fix 13, since 30 faces in this fixture
-    // now correctly split into two single-sided primitives each.
-    expect(scene.glbPrimitives.length).toBe(21);
-    expect(Object.keys(scene.meshIndex).length).toBe(21);
+    // for this exact fixture (parser_test.cpp) - 21 surface primitives
+    // instead of the pre-fix 13, plus the back copies of its unpainted faces.
+    expect(scene.surfacePrimitives!.length).toBe(21);
+    expect(scene.glbPrimitives.length).toBe(22);
+    expect(Object.keys(scene.meshIndex).length).toBe(22);
     expect(scene.gltfMaterials.length).toBe(13);
   });
 });

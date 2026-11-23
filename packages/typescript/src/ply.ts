@@ -1,4 +1,4 @@
-import { SkpScene } from './model';
+import { SkpScene, getSurfacePrimitives } from './model';
 
 declare const process: any;
 declare const require: any;
@@ -36,10 +36,11 @@ export function toPLYAscii(scene: SkpScene): string {
     throw new Error('toPLYAscii requires a valid SkpScene instance');
   }
 
+  const prims = getSurfacePrimitives(scene);
   let totalVertices = 0;
   let totalFaces = 0;
 
-  for (const prim of scene.glbPrimitives) {
+  for (const prim of prims) {
     totalVertices += Math.floor(prim.positions.length / 3);
     totalFaces += Math.floor(prim.indices.length / 3);
   }
@@ -66,7 +67,7 @@ export function toPLYAscii(scene: SkpScene): string {
     'end_header',
   ];
 
-  for (const prim of scene.glbPrimitives) {
+  for (const prim of prims) {
     const [r, g, b, a] = getMaterialRGBA(scene, prim.materialIndex);
     const vertCount = Math.floor(prim.positions.length / 3);
     for (let i = 0; i < vertCount; i++) {
@@ -86,7 +87,7 @@ export function toPLYAscii(scene: SkpScene): string {
   }
 
   let vertOffset = 0;
-  for (const prim of scene.glbPrimitives) {
+  for (const prim of prims) {
     const triCount = Math.floor(prim.indices.length / 3);
     for (let i = 0; i < triCount; i++) {
       const i0 = prim.indices[i * 3] + vertOffset;
@@ -111,10 +112,11 @@ export function toPLYBinary(scene: SkpScene): Uint8Array {
     throw new Error('toPLYBinary requires a valid SkpScene instance');
   }
 
+  const prims = getSurfacePrimitives(scene);
   let totalVertices = 0;
   let totalFaces = 0;
 
-  for (const prim of scene.glbPrimitives) {
+  for (const prim of prims) {
     totalVertices += Math.floor(prim.positions.length / 3);
     totalFaces += Math.floor(prim.indices.length / 3);
   }
@@ -155,7 +157,7 @@ export function toPLYBinary(scene: SkpScene): Uint8Array {
 
   let offset = headerBytes.length;
 
-  for (const prim of scene.glbPrimitives) {
+  for (const prim of prims) {
     const [r, g, b, a] = getMaterialRGBA(scene, prim.materialIndex);
     const vertCount = Math.floor(prim.positions.length / 3);
     for (let i = 0; i < vertCount; i++) {
@@ -191,7 +193,7 @@ export function toPLYBinary(scene: SkpScene): Uint8Array {
   }
 
   let vertOffset = 0;
-  for (const prim of scene.glbPrimitives) {
+  for (const prim of prims) {
     const triCount = Math.floor(prim.indices.length / 3);
     for (let i = 0; i < triCount; i++) {
       const i0 = prim.indices[i * 3] + vertOffset;

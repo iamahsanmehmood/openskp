@@ -437,6 +437,7 @@ export function toFragments(
       const trs = decomposeTrs(world);
       for (let primIdx = 0; primIdx < res.primitives.length; primIdx++) {
         const prim = res.primitives[primIdx];
+        if (prim.unpaintedBack) continue;
         const materialIndex = getMaterialIndex(prim.materialIndex);
         // Normally exactly one shell; more than one only when the
         // primitive's own triangle count exceeded what a single shell can

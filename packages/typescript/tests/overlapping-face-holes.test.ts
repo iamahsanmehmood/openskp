@@ -62,8 +62,8 @@ describe('overlapping face holes (openskp#285)', () => {
     builder.addInstance(board);
 
     const scene = buildScene(toBuffer(builder.toBytes()));
-    const tris = scene.glbPrimitives.reduce((s, p) => s + p.indices.length / 3, 0);
-    const verts = scene.glbPrimitives.reduce((s, p) => s + p.positions.length / 3, 0);
+    const tris = scene.surfacePrimitives!.reduce((s, p) => s + p.indices.length / 3, 0);
+    const verts = scene.surfacePrimitives!.reduce((s, p) => s + p.positions.length / 3, 0);
     expect(tris).toBe(54);
     expect(verts).toBe(52);
   });
@@ -97,8 +97,8 @@ describe('overlapping face holes (openskp#285)', () => {
     builder.addInstance(board);
 
     const scene = buildScene(toBuffer(builder.toBytes()));
-    expect(scene.glbPrimitives.length).toBe(1);
-    const prim = scene.glbPrimitives[0];
+    expect(scene.surfacePrimitives!.length).toBe(1);
+    const prim = scene.surfacePrimitives![0];
 
     let bakedAreaM2 = 0.0;
     for (let t = 0; t < prim.indices.length; t += 3) {
@@ -141,7 +141,7 @@ describe('overlapping face holes (openskp#285)', () => {
     // file (byte-for-byte match, not just "close").
     const buf = fs.readFileSync(path.join(__dirname, 'fixtures', 'Untitled.skp'));
     const scene = buildScene(toBuffer(buf));
-    const tris = scene.glbPrimitives.reduce((s, p) => s + p.indices.length / 3, 0);
+    const tris = scene.surfacePrimitives!.reduce((s, p) => s + p.indices.length / 3, 0);
     expect(tris).toBe(18636);
   });
 });
