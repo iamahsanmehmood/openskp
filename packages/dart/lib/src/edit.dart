@@ -280,18 +280,20 @@ void _replayBody(
     _replayInstance(target, inst, defBuilders, materialSlots, layerSlots, model, warnings, context);
   }
   for (final cp in defn.constructionPoints) {
+    final cpLayer = cp.layer.isNotEmpty ? layerSlots[cp.layer] : null;
     try {
-      target.addConstructionPoint(cp.position);
+      target.addConstructionPoint(cp.position, layer: cpLayer, hidden: cp.hidden);
     } on SkpWriteError catch (exc) {
       warnings.add('$context: construction point skipped ($exc)');
     }
   }
   for (final cl in defn.constructionLines) {
+    final clLayer = cl.layer.isNotEmpty ? layerSlots[cl.layer] : null;
     try {
       if (cl.start != null && cl.end != null) {
-        target.addConstructionLine(cl.start!, point2: cl.end!);
+        target.addConstructionLine(cl.start!, point2: cl.end!, layer: clLayer, hidden: cl.hidden);
       } else if (cl.start == null && cl.end == null) {
-        target.addConstructionLine(cl.point, direction: cl.direction);
+        target.addConstructionLine(cl.point, direction: cl.direction, layer: clLayer, hidden: cl.hidden);
       } else {
         warnings.add('$context: half-bounded construction line skipped');
       }

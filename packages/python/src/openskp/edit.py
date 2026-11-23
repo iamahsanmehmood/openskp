@@ -286,16 +286,18 @@ def _replay_body(
     for inst in defn.instances:
         _replay_instance(target, inst, def_builders, material_slots, layer_slots, model, warnings, context)
     for cp in defn.construction_points:
+        cp_layer = layer_slots.get(cp.layer) if cp.layer else None
         try:
-            target.add_construction_point(cp.position)
+            target.add_construction_point(cp.position, layer=cp_layer, hidden=cp.hidden)
         except SkpWriteError as exc:
             warnings.append(f"{context}: construction point skipped ({exc})")
     for cl in defn.construction_lines:
+        cl_layer = layer_slots.get(cl.layer) if cl.layer else None
         try:
             if cl.start is not None and cl.end is not None:
-                target.add_construction_line(cl.start, point2=cl.end)
+                target.add_construction_line(cl.start, point2=cl.end, layer=cl_layer, hidden=cl.hidden)
             elif cl.start is None and cl.end is None:
-                target.add_construction_line(cl.point, direction=cl.direction)
+                target.add_construction_line(cl.point, direction=cl.direction, layer=cl_layer, hidden=cl.hidden)
             else:
                 warnings.append(f"{context}: half-bounded construction line skipped")
         except SkpWriteError as exc:

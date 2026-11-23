@@ -684,7 +684,8 @@ namespace OpenSkp
                 else if (tag == "6942")
                 {
                     // VFF construction line: 6A42 contains point/direction and
-                    // start/end distance parameters, eight little-endian doubles.
+                    // start/end distance parameters, eight little-endian doubles;
+                    // 6842 -> D007 holds D307 (display flags, +0x01 hidden) and D207 (layer id).
                     var body = FindChildTag(el.Children, "6A42");
                     if (body != null && body.Payload.Length >= 64)
                     {
@@ -697,24 +698,43 @@ namespace OpenSkp
                                 ? (point.X + direction.X * distance, point.Y + direction.Y * distance, point.Z + direction.Z * distance)
                                 : null;
                         }
+                        var flagsNode = FindChildTag(el.Children, "D307");
+                        bool clHidden = flagsNode != null && flagsNode.Payload.Length > 0 && (flagsNode.Payload[0] & 0x01) != 0;
+                        var layerNode = FindChildTag(el.Children, "D207");
+                        long? clLayerId = layerNode != null && layerNode.Payload.Length > 0
+                            ? Tlv.ParseVarInt(layerNode.Payload, 0, layerNode.Payload.Length)
+                            : (long?)null;
                         builder.ConstructionLines.Add(new ConstructionLine
                         {
                             Point = point,
                             Direction = direction,
                             Start = Endpoint(Tlv.ReadF64(p, 48)),
                             End = Endpoint(Tlv.ReadF64(p, 56)),
+                            Layer = clLayerId?.ToString() ?? "",
+                            LayerId = clLayerId,
+                            Hidden = clHidden,
                         });
                     }
                 }
                 else if (tag == "6C42")
                 {
-                    // VFF construction point: 6D42 stores its 3D position.
+                    // VFF construction point: 6D42 stores its 3D position;
+                    // 6842 -> D007 holds D307 (display flags) and D207 (layer id).
                     var pos = FindChildTag(el.Children, "6D42");
                     if (pos != null && pos.Payload.Length >= 24)
                     {
+                        var flagsNode = FindChildTag(el.Children, "D307");
+                        bool cpHidden = flagsNode != null && flagsNode.Payload.Length > 0 && (flagsNode.Payload[0] & 0x01) != 0;
+                        var layerNode = FindChildTag(el.Children, "D207");
+                        long? cpLayerId = layerNode != null && layerNode.Payload.Length > 0
+                            ? Tlv.ParseVarInt(layerNode.Payload, 0, layerNode.Payload.Length)
+                            : (long?)null;
                         builder.ConstructionPoints.Add(new ConstructionPoint
                         {
                             Position = (Tlv.ReadF64(pos.Payload, 0), Tlv.ReadF64(pos.Payload, 8), Tlv.ReadF64(pos.Payload, 16)),
+                            Layer = cpLayerId?.ToString() ?? "",
+                            LayerId = cpLayerId,
+                            Hidden = cpHidden,
                         });
                     }
                 }

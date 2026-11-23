@@ -4638,3 +4638,48 @@ def test_nested_definition_construction_round_trips(tmp_path):
     assert group.construction_lines[0].start == pytest.approx((1.0, 1.0, 1.0))
     assert group.construction_lines[0].end == pytest.approx((2.0, 2.0, 2.0))
 
+
+def test_guide_options_round_trip_hidden_flag_and_layer(tmp_path):
+    builder = create()
+    guides = builder.add_layer("Guides")
+    with builder.add_component_definition("NestedGuides") as nested:
+        nested.add_construction_point((1.0, 1.0, 1.0), layer=guides, hidden=True)
+        nested.add_construction_line((0.0, 0.0, 0.0), point2=(5.0, 0.0, 0.0), hidden=True)
+    builder.add_instance(nested)
+    builder.add_construction_point((1.0, 2.0, 3.0), hidden=True)
+    builder.add_construction_point((4.0, 5.0, 6.0), layer=guides, hidden=False)
+    builder.add_construction_line((0.0, 0.0, 0.0), point2=(10.0, 0.0, 0.0), layer=guides, hidden=True)
+    builder.add_construction_line((0.0, 0.0, 4.0), direction=(0.0, 0.0, 1.0))
+
+    out = tmp_path / "guide_options.skp"
+    builder.save(str(out))
+    model = SkpFile.open(str(out)).parse()
+
+    assert len(model.root.construction_points) == 2
+    assert model.root.construction_points[0].hidden is True
+    assert model.root.construction_points[0].layer == ""
+    assert model.root.construction_points[1].hidden is False
+    assert model.root.construction_points[1].layer == "Guides"
+
+    assert len(model.root.construction_lines) == 2
+    assert model.root.construction_lines[0].hidden is True
+    assert model.root.construction_lines[0].layer == "Guides"
+    assert model.root.construction_lines[1].hidden is False
+    assert model.root.construction_lines[1].layer == ""
+
+    defn = next(d for d in model.definitions.values() if d.name == "NestedGuides")
+    assert defn.construction_points[0].layer == "Guides"
+    assert defn.construction_points[0].hidden is True
+    assert defn.construction_lines[0].layer == ""
+    assert defn.construction_lines[0].hidden is True
+
+
+def test_guide_options_reject_foreign_layer_handle():
+    builder = create()
+    builder.add_face([(0.0, 0.0, 0.0), (10.0, 0.0, 0.0), (10.0, 10.0, 0.0), (0.0, 10.0, 0.0)])
+    with pytest.raises(SkpWriteError):
+        builder.add_construction_point((1.0, 2.0, 3.0), layer=42)
+    with pytest.raises(SkpWriteError):
+        builder.add_construction_line((0.0, 0.0, 0.0), point2=(10.0, 0.0, 0.0), layer=42)
+
+

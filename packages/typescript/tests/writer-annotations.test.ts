@@ -163,4 +163,44 @@ describe('writer: section plane / text / dimension round trip', () => {
     expect(group.constructionLines[0].start).toEqual([1, 1, 1]);
     expect(group.constructionLines[0].end).toEqual([2, 2, 2]);
   });
+
+  it('round-trips guide hidden flag and layer', () => {
+    const builder = create();
+    const guides = builder.addLayer('Guides');
+    const nested = builder.addComponentDefinition('NestedGuides', (def) => {
+      def.addConstructionPoint([1, 1, 1], { layer: guides, hidden: true });
+      def.addConstructionLine([0, 0, 0], { point2: [5, 0, 0], hidden: true });
+    });
+    builder.addInstance(nested);
+    builder.addConstructionPoint([1, 2, 3], { hidden: true });
+    builder.addConstructionPoint([4, 5, 6], { layer: guides, hidden: false });
+    builder.addConstructionLine([0, 0, 0], { point2: [10, 0, 0], layer: guides, hidden: true });
+    builder.addConstructionLine([0, 0, 4], { direction: [0, 0, 1] });
+
+    const model = parseSkp(toBuffer(builder.toBytes()));
+    expect(model.root.constructionPoints).toHaveLength(2);
+    expect(model.root.constructionPoints[0].hidden).toBe(true);
+    expect(model.root.constructionPoints[0].layer).toBe('');
+    expect(model.root.constructionPoints[1].hidden).toBe(false);
+    expect(model.root.constructionPoints[1].layer).toBe('Guides');
+
+    expect(model.root.constructionLines).toHaveLength(2);
+    expect(model.root.constructionLines[0].hidden).toBe(true);
+    expect(model.root.constructionLines[0].layer).toBe('Guides');
+    expect(model.root.constructionLines[1].hidden).toBe(false);
+    expect(model.root.constructionLines[1].layer).toBe('');
+
+    const defn = [...model.definitions.values()].find((d) => d.name === 'NestedGuides')!;
+    expect(defn.constructionPoints[0].layer).toBe('Guides');
+    expect(defn.constructionPoints[0].hidden).toBe(true);
+    expect(defn.constructionLines[0].layer).toBe('');
+    expect(defn.constructionLines[0].hidden).toBe(true);
+  });
+
+  it('rejects a foreign layer handle on guides', () => {
+    const builder = create();
+    builder.addFace(SQUARE);
+    expect(() => builder.addConstructionPoint([1, 2, 3], { layer: 42 })).toThrow(SkpWriteError);
+    expect(() => builder.addConstructionLine([0, 0, 0], { point2: [10, 0, 0], layer: 42 })).toThrow(SkpWriteError);
+  });
 });

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Python, TypeScript, .NET & Dart: construction guides keep their layer and hidden flag (#475, #285)
+
+- Ports C++ and Rust's guide layer and hidden-flag support (`#475`) to Python, TypeScript, .NET and Dart: `ConstructionLine` and `ConstructionPoint` now expose `layer` (`Layer`, `""` on the default layer) and `hidden` (`Hidden`), read from both VFF (`6842 -> D007 -> D207 / D307`) and classic (`CConstructionLine` / `CConstructionPoint` drawbase) `.skp` files.
+- `add_construction_line` / `add_construction_point` (`addConstructionLine` / `addConstructionPoint`, `AddConstructionLine` / `AddConstructionPoint`) on both `SkpBuilder` and `ComponentDefinitionBuilder` accept `layer` (validated with the same layer-handle check as faces) and `hidden`, and `open_existing()` (`openExisting`, `SkpEdit.OpenExisting`) replays both.
+
 ### Added — Python, TypeScript, .NET & Dart: construction guides inside component definitions and `open_existing()` replay (#372, #285)
 
 - Ports C++ and Rust's nested-definition construction-guide support (`#372`) to Python, TypeScript, .NET and Dart: `ComponentDefinitionBuilder` now exposes `add_construction_line` / `add_construction_point` (`addConstructionLine` / `addConstructionPoint`, `AddConstructionLine` / `AddConstructionPoint`) alongside Python's existing `add_construction_point`, and `open_existing()` (`openExisting`, `SkpEdit.OpenExisting`) replays both root and nested-definition construction lines and points (including guide-only component definitions).

@@ -319,11 +319,20 @@ class ConstructionLine {
   /// The bounded segment's end point, or null if unbounded.
   final (double, double, double)? end;
 
+  /// Name of the layer (tag) the guide is assigned to, or "" for the
+  /// default layer (Layer0).
+  final String layer;
+
+  /// Whether the guide itself is hidden.
+  final bool hidden;
+
   const ConstructionLine({
     this.point = (0.0, 0.0, 0.0),
     this.direction = (1.0, 0.0, 0.0),
     this.start,
     this.end,
+    this.layer = '',
+    this.hidden = false,
   });
 }
 
@@ -333,7 +342,18 @@ class ConstructionPoint {
   /// The point's position, in inches (world space).
   final (double, double, double) position;
 
-  const ConstructionPoint({this.position = (0.0, 0.0, 0.0)});
+  /// Name of the layer (tag) the guide is assigned to, or "" for the
+  /// default layer (Layer0).
+  final String layer;
+
+  /// Whether the guide itself is hidden.
+  final bool hidden;
+
+  const ConstructionPoint({
+    this.position = (0.0, 0.0, 0.0),
+    this.layer = '',
+    this.hidden = false,
+  });
 }
 
 /// A saved scene (SketchUp's "Scenes" tabs; "pages" in the SDK).

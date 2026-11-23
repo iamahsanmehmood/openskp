@@ -1333,7 +1333,7 @@ function strictNextTag(ar: Archive, data: Uint8Array, at: number, allowNull = tr
 
 function readConstructionLine(ar: Archive, r: R): any {
   preamble(ar, r);
-  drawbase(ar, r);
+  const db = drawbase(ar, r);
   const point = r.f64s(3);
   const direction = r.f64s(3);
   // Signed distance along `direction` from `point` marking where the visible segment
@@ -1386,7 +1386,7 @@ function readConstructionLine(ar: Archive, r: R): any {
   const end = Math.abs(endParam) >= huge
     ? null
     : [point[0] + direction[0] * endParam, point[1] + direction[1] * endParam, point[2] + direction[2] * endParam];
-  return { k: 'cline', point: [point[0], point[1], point[2]], direction: [direction[0], direction[1], direction[2]], start, end };
+  return { k: 'cline', db, point: [point[0], point[1], point[2]], direction: [direction[0], direction[1], direction[2]], start, end };
 }
 
 function readConstructionPoint(ar: Archive, r: R): any {
@@ -2495,8 +2495,10 @@ class LegacyBuilder {
     direction: [number, number, number];
     start: [number, number, number] | null;
     end: [number, number, number] | null;
+    layerId?: number | null;
+    hidden?: boolean;
   }[] = [];
-  constructionPoints: { position: [number, number, number] }[] = [];
+  constructionPoints: { position: [number, number, number]; layerId?: number | null; hidden?: boolean }[] = [];
   edgeCurves = new Map<number, number>();
   arcCurves = new Map<number, ArcFrame>();
 }
@@ -2636,10 +2638,14 @@ function fillBuilder(builder: LegacyBuilder, ents: [number, string | null, any][
         direction: v.direction,
         start: v.start,
         end: v.end,
+        layerId: (v.db && v.db.layer) || null,
+        hidden: Boolean(v.db && v.db.hidden),
       });
     } else if (k === 'cpoint') {
       builder.constructionPoints.push({
         position: [v.pos[0], v.pos[1], v.pos[2]],
+        layerId: (v.db && v.db.layer) || null,
+        hidden: Boolean(v.db && v.db.hidden),
       });
     }
   }

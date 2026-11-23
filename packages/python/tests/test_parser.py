@@ -1268,11 +1268,44 @@ class TestVffConstructionGeometry:
 
         assert len(builder.construction_points) == 1
         assert builder.construction_points[0]['position'] == pytest.approx((1.0, 2.0, 3.0))
+        assert builder.construction_points[0]['hidden'] is False
+        assert builder.construction_points[0]['layer_id'] is None
         assert len(builder.construction_lines) == 2
         assert builder.construction_lines[0]['end'][0] == pytest.approx(12.0)
+        assert builder.construction_lines[0]['hidden'] is False
+        assert builder.construction_lines[0]['layer_id'] is None
         assert builder.construction_lines[1]['start'] is None
         assert builder.construction_lines[1]['end'] is None
         assert builder.construction_lines[1]['point'][2] == pytest.approx(4.0)
+
+    def test_reads_vff_guide_hidden_flag_and_layer(self) -> None:
+        from openskp import _core
+
+        def f64s(*vals: float) -> bytes:
+            return struct.pack('<' + 'd' * len(vals), *vals)
+
+        def drawbase(flags: int, layer_id: int | None = None) -> bytes:
+            d007 = self._tlv('D307', bytes([flags]))
+            if layer_id is not None:
+                d007 = self._tlv('D207', bytes([layer_id])) + d007
+            return self._tlv('6842', self._tlv('D007', d007))
+
+        p1 = self._tlv('6C42', drawbase(0x07) + self._tlv('6D42', f64s(1, 2, 3)))
+        p2 = self._tlv('6C42', drawbase(0x06, 4) + self._tlv('6D42', f64s(4, 5, 6)))
+        cl = self._tlv('6942', drawbase(0x07, 3) + self._tlv('6A42', f64s(0, 0, 0, 1, 0, 0, 0, 12)))
+        buf = self._tlv('9213', p1 + p2) + self._tlv('9113', cl)
+        elements = _core.parse_tlv_recursive(buf, 0, len(buf))
+        builder = _core._GeometryBuilder()
+        _core._extract_geometry_from_nodes(elements, builder)
+
+        assert len(builder.construction_points) == 2
+        assert builder.construction_points[0]['hidden'] is True
+        assert builder.construction_points[0]['layer_id'] is None
+        assert builder.construction_points[1]['hidden'] is False
+        assert builder.construction_points[1]['layer_id'] == 4
+        assert len(builder.construction_lines) == 1
+        assert builder.construction_lines[0]['hidden'] is True
+        assert builder.construction_lines[0]['layer_id'] == 3
 
 
 # ── Style tests ──────────────────────────────────────────────────────────

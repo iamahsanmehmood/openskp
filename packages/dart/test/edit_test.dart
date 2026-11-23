@@ -377,6 +377,39 @@ void main() {
         tmpDir.deleteSync(recursive: true);
       }
     });
+
+    test('replays guide hidden flag and layer', () {
+      final tmpDir = Directory.systemTemp.createTempSync('openskp_edit_guide_opts_');
+      try {
+        final builder = create();
+        final guides = builder.addLayer('Guides');
+        final nested = builder.addComponentDefinition('NestedGuides', (def) {
+          def.addConstructionPoint((2.0, 3.0, 4.0), layer: guides, hidden: true);
+          def.addConstructionLine((0.0, 0.0, 0.0), point2: (5.0, 0.0, 0.0), layer: guides, hidden: false);
+        });
+        builder.addInstance(nested);
+        builder.addConstructionPoint((1.0, 2.0, 3.0), hidden: true);
+        builder.addConstructionLine((0.0, 0.0, 0.0), point2: (12.0, 0.0, 0.0), layer: guides, hidden: true);
+        final src = saveToTempFile(builder, tmpDir);
+
+        final result = openExisting(src);
+        expect(result.warnings, isEmpty);
+        final rebuilt = SkpFile.fromBuffer(result.builder.toBytes()).parse();
+
+        expect(rebuilt.root.constructionPoints[0].hidden, isTrue);
+        expect(rebuilt.root.constructionPoints[0].layer, '');
+        expect(rebuilt.root.constructionLines[0].hidden, isTrue);
+        expect(rebuilt.root.constructionLines[0].layer, 'Guides');
+
+        final defn = rebuilt.definitions.values.firstWhere((d) => d.name == 'NestedGuides');
+        expect(defn.constructionPoints[0].layer, 'Guides');
+        expect(defn.constructionPoints[0].hidden, isTrue);
+        expect(defn.constructionLines[0].layer, 'Guides');
+        expect(defn.constructionLines[0].hidden, isFalse);
+      } finally {
+        tmpDir.deleteSync(recursive: true);
+      }
+    });
   });
 
   group('RealWorldFixtures', () {

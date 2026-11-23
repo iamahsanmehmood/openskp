@@ -1151,7 +1151,13 @@ class _ArchiveWriter {
   /// parameters along that direction marking the visible segment's
   /// start/end. An unbounded direction is written as the real ±1e30
   /// sentinel SketchUp itself uses.
-  void writeConstructionLine(Point3 point, {Point3? point2, Point3? direction}) {
+  void writeConstructionLine(
+    Point3 point, {
+    Point3? point2,
+    Point3? direction,
+    int layer = 0,
+    bool hidden = false,
+  }) {
     if ((point2 == null) == (direction == null)) {
       throw SkpWriteError('addConstructionLine: pass exactly one of point2 or direction');
     }
@@ -1183,7 +1189,7 @@ class _ArchiveWriter {
     }
     _newOfKnownClass('CConstructionLine', schema: _constructionLineSchema);
     _preamble();
-    _drawbase();
+    _drawbase(layer: layer, hidden: hidden);
     for (final v in [point.$1, point.$2, point.$3, dx, dy, dz, startParam, endParam]) {
       buf.addAll(_f64(v));
     }
@@ -1197,10 +1203,10 @@ class _ArchiveWriter {
   /// always-zero 3-double block and a trailing zero byte follow the
   /// position - reserved/unused, written as zero to match every real-file
   /// sample seen.
-  void writeConstructionPoint(Point3 position) {
+  void writeConstructionPoint(Point3 position, {int layer = 0, bool hidden = false}) {
     _newOfKnownClass('CConstructionPoint', schema: _constructionPointSchema);
     _preamble();
-    _drawbase();
+    _drawbase(layer: layer, hidden: hidden);
     for (final v in [position.$1, position.$2, position.$3, 0.0, 0.0, 0.0]) {
       buf.addAll(_f64(v));
     }
@@ -1931,9 +1937,9 @@ abstract class GeometryHost {
     required bool hidden,
   });
 
-  void addConstructionLine(Point3 point, {Point3? point2, Point3? direction});
+  void addConstructionLine(Point3 point, {Point3? point2, Point3? direction, int? layer, bool hidden = false});
 
-  void addConstructionPoint(Point3 position);
+  void addConstructionPoint(Point3 position, {int? layer, bool hidden = false});
 }
 
 /// Accumulates one component/group definition's geometry. Construct via
@@ -2139,17 +2145,29 @@ class ComponentDefinitionBuilder implements GeometryHost {
 
   /// Add a construction/guide line to this definition (local coordinates) -
   /// same signature and behavior as [SkpBuilder.addConstructionLine].
-  void addConstructionLine(Point3 point, {Point3? point2, Point3? direction}) {
+  void addConstructionLine(Point3 point, {Point3? point2, Point3? direction, int? layer, bool hidden = false}) {
     _checkWritable('construction lines');
-    _skp._definitionWriter!.writeConstructionLine(point, point2: point2, direction: direction);
+    _skp._checkLayerHandle(layer);
+    _skp._definitionWriter!.writeConstructionLine(
+      point,
+      point2: point2,
+      direction: direction,
+      layer: layer ?? 0,
+      hidden: hidden,
+    );
     _newEntityCount++;
   }
 
   /// Add a construction/guide point to this definition (local coordinates) -
   /// same signature and behavior as [SkpBuilder.addConstructionPoint].
-  void addConstructionPoint(Point3 position) {
+  void addConstructionPoint(Point3 position, {int? layer, bool hidden = false}) {
     _checkWritable('construction points');
-    _skp._definitionWriter!.writeConstructionPoint(position);
+    _skp._checkLayerHandle(layer);
+    _skp._definitionWriter!.writeConstructionPoint(
+      position,
+      layer: layer ?? 0,
+      hidden: hidden,
+    );
     _newEntityCount++;
   }
 
@@ -3050,9 +3068,16 @@ class SkpBuilder implements GeometryHost {
   /// unbounded guide line through [point], matching
   /// `Entities#add_cline(point, vector)`). See
   /// [_ArchiveWriter.writeConstructionLine] for the record's ground truth.
-  void addConstructionLine(Point3 point, {Point3? point2, Point3? direction}) {
+  void addConstructionLine(Point3 point, {Point3? point2, Point3? direction, int? layer, bool hidden = false}) {
+    _checkLayerHandle(layer);
     _ensureGeometryWriter();
-    _geometryWriter!.writeConstructionLine(point, point2: point2, direction: direction);
+    _geometryWriter!.writeConstructionLine(
+      point,
+      point2: point2,
+      direction: direction,
+      layer: layer ?? 0,
+      hidden: hidden,
+    );
     _newEntityCount++;
     _faceCount++; // reuses the "at least one root entity" check in toBytes
   }
@@ -3060,9 +3085,14 @@ class SkpBuilder implements GeometryHost {
   /// Add a construction/guide point (SketchUp's Construction Point tool)
   /// at [position] (inches, world space). See
   /// [_ArchiveWriter.writeConstructionPoint] for the record's ground truth.
-  void addConstructionPoint(Point3 position) {
+  void addConstructionPoint(Point3 position, {int? layer, bool hidden = false}) {
+    _checkLayerHandle(layer);
     _ensureGeometryWriter();
-    _geometryWriter!.writeConstructionPoint(position);
+    _geometryWriter!.writeConstructionPoint(
+      position,
+      layer: layer ?? 0,
+      hidden: hidden,
+    );
     _newEntityCount++;
     _faceCount++; // reuses the "at least one root entity" check in toBytes
   }

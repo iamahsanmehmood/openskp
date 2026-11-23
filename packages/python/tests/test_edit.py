@@ -452,6 +452,34 @@ class TestRealWorldFixtures:
         assert group.construction_lines[1].start == pytest.approx((1.0, 1.0, 1.0))
         assert group.construction_lines[1].end == pytest.approx((2.0, 2.0, 2.0))
 
+    def test_replays_guide_hidden_flag_and_layer(self, tmp_path):
+        builder = create()
+        guides = builder.add_layer("Guides")
+        with builder.add_component_definition("NestedGuides") as nested:
+            nested.add_construction_point((2.0, 3.0, 4.0), layer=guides, hidden=True)
+            nested.add_construction_line((0.0, 0.0, 0.0), point2=(5.0, 0.0, 0.0), layer=guides, hidden=False)
+        builder.add_instance(nested)
+        builder.add_construction_point((1.0, 2.0, 3.0), hidden=True)
+        builder.add_construction_line((0.0, 0.0, 0.0), point2=(12.0, 0.0, 0.0), layer=guides, hidden=True)
+        src = tmp_path / "guide_hidden_layer.skp"
+        builder.save(str(src))
+
+        new_builder, warnings, _ = edit.open_existing(str(src))
+        assert warnings == []
+        out = tmp_path / "guide_hidden_layer_rebuilt.skp"
+        out.write_bytes(new_builder.to_bytes())
+        rebuilt = SkpFile.open(str(out)).parse()
+
+        assert rebuilt.root.construction_points[0].hidden is True
+        assert rebuilt.root.construction_points[0].layer == ""
+        assert rebuilt.root.construction_lines[0].hidden is True
+        assert rebuilt.root.construction_lines[0].layer == "Guides"
+        defn = next(d for d in rebuilt.definitions.values() if d.name == "NestedGuides")
+        assert defn.construction_points[0].layer == "Guides"
+        assert defn.construction_points[0].hidden is True
+        assert defn.construction_lines[0].layer == "Guides"
+        assert defn.construction_lines[0].hidden is False
+
 
 class TestRealSketchUpOracle:
     _SDK_DLL_PATH = pathlib.Path(

@@ -252,6 +252,15 @@ namespace OpenSkp
         /// <summary>The bounded segment's end point, or null if
         /// unbounded.</summary>
         public (double X, double Y, double Z)? End { get; set; }
+
+        /// <summary>Name of the layer (tag) the guide is assigned to, or ""
+        /// for the default layer (Layer0).</summary>
+        public string Layer { get; set; } = "";
+
+        /// <summary>Whether the guide itself is hidden.</summary>
+        public bool Hidden { get; set; }
+
+        internal long? LayerId;
     }
 
     /// <summary>A construction/guide point (SketchUp's Construction Point
@@ -260,6 +269,15 @@ namespace OpenSkp
     {
         /// <summary>The point's position, in inches (world space).</summary>
         public (double X, double Y, double Z) Position { get; set; }
+
+        /// <summary>Name of the layer (tag) the guide is assigned to, or ""
+        /// for the default layer (Layer0).</summary>
+        public string Layer { get; set; } = "";
+
+        /// <summary>Whether the guide itself is hidden.</summary>
+        public bool Hidden { get; set; }
+
+        internal long? LayerId;
     }
 
     /// <summary>A saved scene (SketchUp's "Scenes" tabs; "pages" in the SDK).</summary>

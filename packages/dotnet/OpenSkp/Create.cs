@@ -1680,11 +1680,12 @@ namespace OpenSkp
         public void WriteConstructionLine(
             (double X, double Y, double Z) point,
             double dx, double dy, double dz,
-            double startParam, double endParam)
+            double startParam, double endParam,
+            int layer = 0, bool hidden = false)
         {
             NewOfKnownClass("CConstructionLine", CreateConstants.ConstructionLineSchema);
             Preamble();
-            Drawbase();
+            Drawbase(layer: layer, hidden: hidden);
             foreach (var v in new[] { point.X, point.Y, point.Z, dx, dy, dz, startParam, endParam })
             {
                 AddF64(v);
@@ -1692,11 +1693,11 @@ namespace OpenSkp
             AddZeros(4); // trailer
         }
 
-        public void WriteConstructionPoint((double X, double Y, double Z) position)
+        public void WriteConstructionPoint((double X, double Y, double Z) position, int layer = 0, bool hidden = false)
         {
             NewOfKnownClass("CConstructionPoint", CreateConstants.ConstructionPointSchema);
             Preamble();
-            Drawbase();
+            Drawbase(layer: layer, hidden: hidden);
             foreach (var v in new[] { position.X, position.Y, position.Z, 0.0, 0.0, 0.0 })
             {
                 AddF64(v);
@@ -1741,9 +1742,14 @@ namespace OpenSkp
         void AddConstructionLine(
             (double X, double Y, double Z) point,
             (double X, double Y, double Z)? point2 = null,
-            (double X, double Y, double Z)? direction = null);
+            (double X, double Y, double Z)? direction = null,
+            int? layer = null,
+            bool hidden = false);
 
-        void AddConstructionPoint((double X, double Y, double Z) position);
+        void AddConstructionPoint(
+            (double X, double Y, double Z) position,
+            int? layer = null,
+            bool hidden = false);
     }
 
     /// <summary>Shared by SkpBuilder.AddFace and
@@ -1976,21 +1982,28 @@ namespace OpenSkp
         public void AddConstructionLine(
             (double X, double Y, double Z) point,
             (double X, double Y, double Z)? point2 = null,
-            (double X, double Y, double Z)? direction = null)
+            (double X, double Y, double Z)? direction = null,
+            int? layer = null,
+            bool hidden = false)
         {
             CheckWritable("construction lines");
+            Skp.CheckLayerHandle(layer);
             var (dx, dy, dz, startParam, endParam) = ArchiveWriter.ResolveConstructionLineParams(point, point2, direction);
-            Skp.DefinitionWriter!.WriteConstructionLine(point, dx, dy, dz, startParam, endParam);
+            Skp.DefinitionWriter!.WriteConstructionLine(point, dx, dy, dz, startParam, endParam, layer ?? 0, hidden);
             _newEntityCount += 1;
         }
 
         /// <summary>Add a construction/guide point to this definition (local
         /// coordinates) - same behavior as
         /// <see cref="SkpBuilder.AddConstructionPoint"/>.</summary>
-        public void AddConstructionPoint((double X, double Y, double Z) position)
+        public void AddConstructionPoint(
+            (double X, double Y, double Z) position,
+            int? layer = null,
+            bool hidden = false)
         {
             CheckWritable("construction points");
-            Skp.DefinitionWriter!.WriteConstructionPoint(position);
+            Skp.CheckLayerHandle(layer);
+            Skp.DefinitionWriter!.WriteConstructionPoint(position, layer ?? 0, hidden);
             _newEntityCount += 1;
         }
 
@@ -3055,11 +3068,14 @@ namespace OpenSkp
         public void AddConstructionLine(
             (double X, double Y, double Z) point,
             (double X, double Y, double Z)? point2 = null,
-            (double X, double Y, double Z)? direction = null)
+            (double X, double Y, double Z)? direction = null,
+            int? layer = null,
+            bool hidden = false)
         {
+            CheckLayerHandle(layer);
             var (dx, dy, dz, startParam, endParam) = ArchiveWriter.ResolveConstructionLineParams(point, point2, direction);
             EnsureGeometryWriter();
-            _geometryWriter!.WriteConstructionLine(point, dx, dy, dz, startParam, endParam);
+            _geometryWriter!.WriteConstructionLine(point, dx, dy, dz, startParam, endParam, layer ?? 0, hidden);
             _newEntityCount += 1;
             _faceCount += 1; // reuses the "at least one root entity" check in ToBytes
         }
@@ -3071,10 +3087,14 @@ namespace OpenSkp
         /// second, always-zero 3-double block and a trailing zero byte
         /// follow the position - reserved/unused, written as zero to match
         /// every real-file sample seen.</summary>
-        public void AddConstructionPoint((double X, double Y, double Z) position)
+        public void AddConstructionPoint(
+            (double X, double Y, double Z) position,
+            int? layer = null,
+            bool hidden = false)
         {
+            CheckLayerHandle(layer);
             EnsureGeometryWriter();
-            _geometryWriter!.WriteConstructionPoint(position);
+            _geometryWriter!.WriteConstructionPoint(position, layer ?? 0, hidden);
             _newEntityCount += 1;
             _faceCount += 1; // reuses the "at least one root entity" check in ToBytes
         }

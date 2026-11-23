@@ -264,6 +264,46 @@ namespace OpenSkp.Tests
         }
 
         [Fact]
+        public void ReplaysGuideHiddenFlagAndLayer()
+        {
+            var original = SkpCreate.NewFile();
+            int guides = original.AddLayer("Guides");
+            ComponentDefinitionBuilder nested;
+            using (nested = original.AddComponentDefinition("NestedGuides"))
+            {
+                nested.AddConstructionPoint((2, 3, 4), layer: guides, hidden: true);
+                nested.AddConstructionLine((0, 0, 0), point2: (5, 0, 0), layer: guides, hidden: false);
+            }
+            original.AddInstance(nested);
+            original.AddConstructionPoint((1, 2, 3), hidden: true);
+            original.AddConstructionLine((0, 0, 0), point2: (12, 0, 0), layer: guides, hidden: true);
+
+            string path = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".skp");
+            original.Save(path);
+            try
+            {
+                var result = SkpEdit.OpenExisting(path);
+                Assert.Empty(result.Warnings);
+                var rebuilt = SkpFile.Parse(result.Builder.ToBytes());
+
+                Assert.True(rebuilt.Root.ConstructionPoints[0].Hidden);
+                Assert.Equal("", rebuilt.Root.ConstructionPoints[0].Layer);
+                Assert.True(rebuilt.Root.ConstructionLines[0].Hidden);
+                Assert.Equal("Guides", rebuilt.Root.ConstructionLines[0].Layer);
+
+                var defn = Assert.Single(rebuilt.Definitions.Values, d => d.Name == "NestedGuides");
+                Assert.Equal("Guides", defn.ConstructionPoints[0].Layer);
+                Assert.True(defn.ConstructionPoints[0].Hidden);
+                Assert.Equal("Guides", defn.ConstructionLines[0].Layer);
+                Assert.False(defn.ConstructionLines[0].Hidden);
+            }
+            finally
+            {
+                File.Delete(path);
+            }
+        }
+
+        [Fact]
         public void RealWorldFixtureOpensAndReplaysCleanly()
         {
             var result = SkpEdit.OpenExisting(FixturePath("capilla_quiroz_v17.skp"));

@@ -331,9 +331,10 @@ namespace OpenSkp
             }
             foreach (var cp in defn.ConstructionPoints)
             {
+                int? cpLayer = !string.IsNullOrEmpty(cp.Layer) && layerSlots.TryGetValue(cp.Layer, out var cpl) ? cpl : (int?)null;
                 try
                 {
-                    target.AddConstructionPoint(cp.Position);
+                    target.AddConstructionPoint(cp.Position, layer: cpLayer, hidden: cp.Hidden);
                 }
                 catch (SkpWriteException exc)
                 {
@@ -342,15 +343,16 @@ namespace OpenSkp
             }
             foreach (var cl in defn.ConstructionLines)
             {
+                int? clLayer = !string.IsNullOrEmpty(cl.Layer) && layerSlots.TryGetValue(cl.Layer, out var cll) ? cll : (int?)null;
                 try
                 {
                     if (cl.Start.HasValue && cl.End.HasValue)
                     {
-                        target.AddConstructionLine(cl.Start.Value, point2: cl.End.Value);
+                        target.AddConstructionLine(cl.Start.Value, point2: cl.End.Value, layer: clLayer, hidden: cl.Hidden);
                     }
                     else if (!cl.Start.HasValue && !cl.End.HasValue)
                     {
-                        target.AddConstructionLine(cl.Point, direction: cl.Direction);
+                        target.AddConstructionLine(cl.Point, direction: cl.Direction, layer: clLayer, hidden: cl.Hidden);
                     }
                     else
                     {
