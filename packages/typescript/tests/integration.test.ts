@@ -36,26 +36,14 @@ describe('SketchUp Parser Integration Test', () => {
       expect(layer.hidden).toBe(false);
     }
 
-    // 3. Assert Materials
-    expect(model.materials.length).toBe(15);
-    const expectedMaterials = [
-      '*', 'Layer_Layer0', 'Layer_BottomPlate', 'Layer_TopPlate', 'Layer_Stud',
-      'Layer_Nog', 'Layer_KingStud', 'Layer_HeaderJackStud', 'Layer_HeaderPlate1',
-      'Layer_HeaderPlate2', 'Layer_SillPlate1', 'Layer_VerticalHeaderStud',
-      'Layer_generic_frame', 'Layer_dimension', 'Layer_Hat Sections'
-    ];
-    const parsedMaterials = model.materials.map(m => m.name);
-    for (const matName of expectedMaterials) {
-      expect(parsedMaterials).toContain(matName);
-    }
-    // Check material fields
-    const matLayer0 = model.materials.find(m => m.name === 'Layer_Layer0');
-    expect(matLayer0).toBeDefined();
-    expect(typeof matLayer0!.color.r).toBe('number');
-    expect(typeof matLayer0!.transparency).toBe('number');
+    // 3. Assert Materials (tag colour records under materials/Layer_* are excluded; #551)
+    expect(model.materials.map(m => m.name)).toEqual(['*']);
+    const matDefault = model.materials[0];
+    expect(typeof matDefault.color.r).toBe('number');
+    expect(typeof matDefault.transparency).toBe('number');
     // Real data: none of this fixture's materials have useTrans="1" set,
     // so all correctly read fully opaque.
-    expect(matLayer0!.transparency).toBe(1);
+    expect(matDefault.transparency).toBe(1);
 
     // 4. Assert Definitions
     expect(model.definitions.size).toBe(46);
@@ -120,10 +108,8 @@ describe('SketchUp Parser Integration Test', () => {
     expect(def66!.isImage).toBe(false);
     expect(def66!.alwaysFacesCamera).toBe(false);
 
-    expect(matLayer0!.id).toBeNull();
-    expect(matLayer0!.texture).toBeNull();
-    expect(matLayer0!.colorized).toBe(false);
-    expect(matLayer0!.colorizeType).toBe(0);
+    expect(matDefault.colorized).toBe(false);
+    expect(matDefault.colorizeType).toBe(0);
 
     expect(model.materialsById).toBeInstanceOf(Map);
     // Real join: TLV material ID 26180 in this fixture resolves to the
@@ -174,8 +160,7 @@ describe('SketchUp Parser Integration Test', () => {
     expect(model.layers[0].name).toBe('Layer0');
 
     // 3. Assert Materials
-    expect(model.materials).toHaveLength(1);
-    expect(model.materials[0].name).toBe('Layer_Layer0');
+    expect(model.materials).toHaveLength(0);
 
     // 4. Assert Definitions (only ROOT, so finalDefinitions is empty)
     expect(model.definitions.size).toBe(0);

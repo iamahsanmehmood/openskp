@@ -72,6 +72,7 @@ class Core {
     final layerHidden = <String, bool>{};
     final materials = <String, RawMaterial>{};
     final materialsByFolder = <String, RawMaterial>{};
+    final rawMaterialEntries = <(String, RawMaterial)>[];
 
     for (final entry in zip.files) {
       final name = entry.name;
@@ -88,14 +89,7 @@ class Core {
         if (mat != null) {
           final parts = name.split('/');
           final folderName = parts.length > 1 ? parts[1] : '';
-          materials[mat.name] = mat;
-          if (folderName.isNotEmpty) {
-            materialsByFolder[folderName] = mat;
-          }
-          if (mat.name.startsWith('Layer_')) {
-            layerColors[mat.name.substring(6)] = (mat.r, mat.g, mat.b);
-            layerHidden[mat.name.substring(6)] = false;
-          }
+          rawMaterialEntries.add((folderName, mat));
         }
       }
     }
@@ -189,6 +183,21 @@ class Core {
         units = Vff.readMetaUnits(metaDatEntry.content);
       } catch (_) {
         units = null;
+      }
+    }
+
+    final realMaterialFolders = materialIdToName.values.toSet();
+    for (final (folderName, mat) in rawMaterialEntries) {
+      if (mat.name.startsWith('Layer_') &&
+          !realMaterialFolders.contains(folderName)) {
+        final tagName = mat.name.substring(6);
+        layerColors[tagName] = (mat.r, mat.g, mat.b);
+        layerHidden.putIfAbsent(tagName, () => false);
+      } else {
+        materials[mat.name] = mat;
+        if (folderName.isNotEmpty) {
+          materialsByFolder[folderName] = mat;
+        }
       }
     }
 

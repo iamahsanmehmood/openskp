@@ -96,7 +96,7 @@ TEST(Parser, ModernUntitled) {
   ASSERT_TRUE(model.units.has_value());
   EXPECT_EQ(*model.units, "Millimeter");
   EXPECT_EQ(model.layers.size(), 14);
-  EXPECT_EQ(model.materials.size(), 15);
+  EXPECT_EQ(model.materials.size(), 1);
   EXPECT_EQ(model.definitions.size(), 46);
 
   // Exact FILE order, not alphabetical/map-keyed - openskp#285 had flagged
@@ -160,15 +160,9 @@ TEST(Parser, ModernUntitled) {
   ASSERT_NE(material_in_list, model.materials.end());
   EXPECT_EQ(joined_material, &*material_in_list);
 
-  const auto layer_material =
-      std::find_if(model.materials.begin(), model.materials.end(),
-                   [](const Material& value) { return value.name == "Layer_Layer0"; });
-  ASSERT_NE(layer_material, model.materials.end());
-  EXPECT_DOUBLE_EQ(layer_material->transparency, 1.0);
-  EXPECT_FALSE(layer_material->id.has_value());
-  EXPECT_FALSE(layer_material->texture.has_value());
-  EXPECT_FALSE(layer_material->colorized);
-  EXPECT_EQ(layer_material->colorize_type, 0);
+  EXPECT_DOUBLE_EQ(material_in_list->transparency, 1.0);
+  EXPECT_FALSE(material_in_list->colorized);
+  EXPECT_EQ(material_in_list->colorize_type, 0);
 
   ASSERT_EQ(model.styles.size(), 2);
   EXPECT_EQ(model.styles[0].name, "[Construction Documentation Style]");
@@ -236,8 +230,7 @@ TEST(Parser, ModernRootOnly) {
   EXPECT_EQ(model.root().name, "ROOT_MODEL");
   ASSERT_EQ(model.layers.size(), 1);
   EXPECT_EQ(model.layers[0].name, "Layer0");
-  ASSERT_EQ(model.materials.size(), 1);
-  EXPECT_EQ(model.materials[0].name, "Layer_Layer0");
+  EXPECT_TRUE(model.materials.empty());
 
   auto scene = file.build_scene();
   EXPECT_EQ(scene.scene_hierarchy.name, "ROOT");
@@ -553,7 +546,7 @@ TEST(Parser, StreamingDefinitionsPreservesGeometryAndHierarchy) {
   auto model = skp.parse();
   EXPECT_EQ(model.definitions.size(), 46);
   EXPECT_EQ(model.layers.size(), 14);
-  EXPECT_EQ(model.materials.size(), 15);
+  EXPECT_EQ(model.materials.size(), 1);
   EXPECT_EQ(model.dimensions.size(), 13);
 
   auto scene = skp.build_instanced_scene();

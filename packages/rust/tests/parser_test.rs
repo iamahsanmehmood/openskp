@@ -84,7 +84,7 @@ fn modern_untitled() {
     assert_eq!(model.version, "{25.0.575}");
     assert_eq!(model.units.as_deref(), Some("Millimeter"));
     assert_eq!(model.layers.len(), 14);
-    assert_eq!(model.materials.len(), 15);
+    assert_eq!(model.materials.len(), 1);
     assert_eq!(model.definitions.len(), 46);
 
     // Exact FILE order, not alphabetical.
@@ -137,16 +137,9 @@ fn modern_untitled() {
     let in_list = model.materials.iter().find(|m| m.name == "*").unwrap();
     assert!(std::ptr::eq(joined, in_list));
 
-    let layer_material = model
-        .materials
-        .iter()
-        .find(|m| m.name == "Layer_Layer0")
-        .unwrap();
-    assert_eq!(layer_material.transparency, 1.0);
-    assert!(layer_material.id.is_none());
-    assert!(layer_material.texture.is_none());
-    assert!(!layer_material.colorized);
-    assert_eq!(layer_material.colorize_type, 0);
+    assert_eq!(in_list.transparency, 1.0);
+    assert!(!in_list.colorized);
+    assert_eq!(in_list.colorize_type, 0);
 
     assert_eq!(model.styles.len(), 2);
     let s0 = &model.styles[0];
@@ -221,8 +214,7 @@ fn modern_root_only() {
     assert_eq!(model.root().name, "ROOT_MODEL");
     assert_eq!(model.layers.len(), 1);
     assert_eq!(model.layers[0].name, "Layer0");
-    assert_eq!(model.materials.len(), 1);
-    assert_eq!(model.materials[0].name, "Layer_Layer0");
+    assert!(model.materials.is_empty());
 }
 
 #[test]
@@ -519,7 +511,7 @@ fn streaming_definitions_preserves_geometry() {
     let model = parse("Untitled.skp");
     assert_eq!(model.definitions.len(), 46);
     assert_eq!(model.layers.len(), 14);
-    assert_eq!(model.materials.len(), 15);
+    assert_eq!(model.materials.len(), 1);
     assert_eq!(model.dimensions.len(), 13);
 }
 

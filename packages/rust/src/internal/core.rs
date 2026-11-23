@@ -1,7 +1,7 @@
 //! The VFF (2021+) reader: ZIP container, material/style XML, and the
 //! model.dat record walk (`core.cpp`).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use super::bytes::{parse_flat, parse_tlv_recursive, tag_at, u32_at};
@@ -565,6 +565,7 @@ pub fn full_parse(data: &[u8], o: &ParseOptions) -> Result<RawParsed, SkpParseEr
     };
     let zip = Zip::new(&data[off..])?;
 
+    let mut raw_materials = Vec::new();
     for n in &zip.names {
         if !(n.starts_with(b"materials/") && n.len() >= 12 && n.ends_with(b"material.xml")) {
             continue;
@@ -579,18 +580,7 @@ pub fn full_parse(data: &[u8], o: &ParseOptions) -> Result<RawParsed, SkpParseEr
             .map(|k| 10 + k)
             .unwrap_or(n.len());
         let folder = text(&n[10..folder_end]);
-        let layer_name = m.name.strip_prefix("Layer_").map(str::to_owned);
-        let color = [m.r as u8, m.g as u8, m.b as u8];
-        let m = Arc::new(m);
-        p.materials.insert(m.name.clone(), Arc::clone(&m));
-        p.materials_by_folder.insert(folder, m);
-        if let Some(layer_name) = layer_name {
-            if !p.layer_colors.contains_key(&layer_name) {
-                p.layer_order.push(layer_name.clone());
-            }
-            p.layer_colors.insert(layer_name.clone(), color);
-            p.layer_hidden.insert(layer_name, false);
-        }
+        raw_materials.push((folder, Arc::new(m)));
     }
 
     for n in &zip.names {
@@ -745,6 +735,27 @@ pub fn full_parse(data: &[u8], o: &ParseOptions) -> Result<RawParsed, SkpParseEr
         p.dimensions = parse_dimensions(&model, &vertex_positions, &instance_world);
     }
     drop(model);
+    let mut real_folders = BTreeSet::new();
+    for folder in p.material_id_to_name.values() {
+        real_folders.insert(folder.clone());
+    }
+    for (folder, m) in raw_materials {
+        let is_tag = m.name.starts_with("Layer_") && !real_folders.contains(&folder);
+        if is_tag {
+            let tag_name = m.name[6..].to_owned();
+            if !p.layer_colors.contains_key(&tag_name) {
+                p.layer_order.push(tag_name.clone());
+            }
+            let rgb = [m.r as u8, m.g as u8, m.b as u8];
+            p.layer_colors.insert(tag_name.clone(), rgb);
+            p.layer_hidden.entry(tag_name).or_insert(false);
+        } else {
+            p.materials.insert(m.name.clone(), Arc::clone(&m));
+            if !folder.is_empty() {
+                p.materials_by_folder.insert(folder, m);
+            }
+        }
+    }
     p.layer_id_to_name
         .entry(1)
         .or_insert_with(|| "Layer0".into());
