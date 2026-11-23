@@ -6,10 +6,12 @@ memory behavior, observability, legacy format support, and the places
 where the five languages currently differ), see the
 [Developer Guide](DEVELOPER_GUIDE.md).
 
-All five packages are available today — Python and TypeScript have been
-public longest; .NET, Dart, and C++ followed, built from scratch against the
-same [binary format spec](BINARY_FORMAT.md) and cross-validated against
-the other two on real files.
+All five published packages are available today (plus an unpublished Rust port
+in `packages/rust`) — Python and TypeScript landed first, followed by .NET,
+Dart, and C++, each implemented natively without shared bindings (see
+[BINARY_FORMAT.md](BINARY_FORMAT.md) for the 2021+ VFF/TLV container and each
+port's `legacy.*` / `create.*` docstrings for the pre-2021 classic MFC
+container) and cross-validated against the other four ports on real files.
 
 ## Python
 

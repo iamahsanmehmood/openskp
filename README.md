@@ -561,16 +561,25 @@ openskp/
 │   ├── typescript/            # 📘 TypeScript / JavaScript implementation — parse + write
 │   │   ├── src/                # index.ts, model.ts, legacy.ts, create.ts, edit.ts, observability.ts, ...
 │   │   └── tests/
-│   ├── dotnet/                # 🚀 .NET / C# implementation — parse + write
+│   ├── dotnet/                # 🚀 .NET / C# implementation — parse + write + Fragments
 │   │   ├── OpenSkp/            # Core.cs, Legacy.cs, Model.cs, Scene.cs, Create.cs, Edit.cs, ...
-│   │   └── OpenSkp.Tests/
+│   │   ├── OpenSkp.Tests/
+│   │   ├── OpenSkp.Fragments/  # Separate NuGet package for ThatOpen Fragments (.frag) export/import
+│   │   └── OpenSkp.Fragments.Tests/
 │   ├── dart/                  # 🎯 Dart / Flutter implementation — parse + write
 │   │   ├── lib/src/            # core.dart, legacy.dart, model.dart, scene.dart, create.dart, edit.dart, ...
 │   │   └── test/
-│   └── cpp/                   # ⚙️ C++17 / CMake implementation — parse + write
-│       ├── include/openskp/    # Public API (create.hpp, edit.hpp, ...)
-│       ├── src/                # Parser, scene, and writer implementation
-│       └── tests/
+│   ├── dart_fragments/        # 🎯 Dart Fragments (.frag) export/import (on main, not published to pub.dev)
+│   │   ├── lib/
+│   │   └── test/
+│   ├── cpp/                   # ⚙️ C++17 / CMake implementation — parse + write
+│   │   ├── include/openskp/    # Public API (create.hpp, edit.hpp, fragments_export.hpp, ...)
+│   │   ├── src/                # Parser, scene, writer, and exporter implementation
+│   │   └── tests/
+│   └── rust/                  # 🦀 Pure-Rust implementation (std only; not on crates.io yet)
+│       ├── src/                # Parser, scene, writer, and exporters
+│       ├── tests/
+│       └── viewer/             # In-browser wasm32 + WebGL2 viewer
 │
 ├── examples/
 │   ├── web-viewer/             # Drag-and-drop 3D viewer (TypeScript + Three.js),
@@ -579,11 +588,12 @@ openskp/
 │
 ├── docs/                       # 📖 Documentation
 │   ├── DEVELOPER_GUIDE.md      # Start here — the detailed cross-language guide
+│   ├── LANGUAGE_PARITY.md      # Canonical feature, version-support, Fragments, and writer-validation tables
 │   ├── AI_MODELING.md          # AI coding agents as a writer target, with real examples
 │   ├── OBSERVABILITY.md        # Progress reporting + structured errors, in depth
 │   ├── ARCHITECTURE.md         # Library architecture, memory model, writer design
 │   ├── API_DESIGN.md           # Cross-platform API quick reference
-│   ├── BINARY_FORMAT.md        # Reverse-engineered SKP format spec
+│   ├── BINARY_FORMAT.md        # Reverse-engineered 2021+ VFF/TLV format spec
 │   └── assets/                 # Images referenced by the docs above
 │
 ├── research/                   # 🔬 Research notes
@@ -728,6 +738,15 @@ dotnet test
 cd packages/dart
 dart pub get
 dart test
+
+# C++
+cmake -S packages/cpp -B build/cpp -DOPENSKP_BUILD_TESTS=ON
+cmake --build build/cpp
+ctest --test-dir build/cpp --output-on-failure
+
+# Rust
+cd packages/rust
+cargo test --release
 ```
 
 Please read our [Contributing Guide](CONTRIBUTING.md) and [Code of Conduct](CODE_OF_CONDUCT.md) before submitting a pull request.
