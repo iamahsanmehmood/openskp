@@ -136,6 +136,9 @@ export interface Page {
   orthoHeight: number;
   /** Names of the layers this scene hides. */
   hiddenLayers: string[];
+  /** Persistent ids of the entities this scene hides (groups, component
+   * instances, and edges or faces hidden as geometry), in file order. */
+  hiddenEntityIds?: number[];
 }
 
 export interface Definition {
@@ -186,6 +189,8 @@ export interface Edge {
    * were drawn as one continuous multi-segment line or arc; if the curve is
    * an arc, {@link Definition.arcs} has it under the same id. */
   curveId?: number | null;
+  /** Native persistent ID; 0 when absent. */
+  persistentId?: number;
 }
 
 /**
@@ -255,6 +260,8 @@ export interface Face {
   /** Whether the face is hidden (SketchUp's "Hide" on this specific face,
    * not a layer/tag visibility toggle). */
   hidden: boolean;
+  /** Native persistent ID; 0 when absent. */
+  persistentId?: number;
 }
 
 /**
@@ -294,6 +301,7 @@ export interface CoEdge {
 
 /** A placed instance (component or group) inside a Definition's own instance list. */
 export interface Instance {
+  id?: number | null;
   name: string;
   refIdx: number;
   guid: string;
@@ -694,6 +702,7 @@ export function buildModelFromParsed(parsed: ParsedRawData): SkpModel {
 }
 
 function buildDefinition(id: number, d: ParsedDefinition, layerIdToName?: Map<number, string>): Definition {
+  const isLegacy = d.builder.edgePids !== undefined;
   const vertices: Vertex[] = Array.from(d.builder.vertices.entries()).map(([vId, [x, y, z]]) => ({
     id: vId,
     x,
@@ -710,6 +719,7 @@ function buildDefinition(id: number, d: ParsedDefinition, layerIdToName?: Map<nu
       smooth: (flags & 0x10) !== 0,
       hidden: (flags & 0x01) !== 0,
       curveId: d.builder.edgeCurves?.get(eId) ?? null,
+      persistentId: isLegacy ? (d.builder.edgePids?.get(eId) ?? 0) : eId,
     };
   });
   const arcs = new Map<number, ArcCurve>();
@@ -738,8 +748,10 @@ function buildDefinition(id: number, d: ParsedDefinition, layerIdToName?: Map<nu
     uvProjected: fData.uvProjected ?? false,
     uvProjectedBack: fData.uvProjectedBack ?? false,
     hidden: fData.hidden ?? false,
+    persistentId: isLegacy ? (fData.persistentId ?? 0) : fId,
   }));
   const instances: Instance[] = d.builder.instances.map((inst) => ({
+    id: inst.id ?? null,
     name: inst.name,
     refIdx: inst.refIdx,
     guid: inst.refGuid,
@@ -1363,6 +1375,7 @@ export function buildPagesFromRaw(parsed: ParsedRawData): Page[] {
     hiddenLayers: (pg.hiddenLayerIds ?? [])
       .map((id) => parsed.layerIdToName?.get(id))
       .filter((name): name is string => name !== undefined),
+    hiddenEntityIds: [...(pg.hiddenEntityIds ?? [])],
   }));
 }
 

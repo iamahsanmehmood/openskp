@@ -46,6 +46,7 @@ def _convert_pages(parsed: Dict[str, Any]) -> List["Page"]:
                 for i in pg.get("hidden_layer_ids", [])
                 if i in layer_id_to_name
             ],
+            hidden_entity_ids=list(pg.get("hidden_entity_ids", [])),
         )
         for pg in (parsed.get("pages") or [])
     ]
@@ -131,6 +132,7 @@ class Edge:
     hidden: bool = False
     layer: Optional[int] = None
     curve_id: Optional[int] = None
+    persistent_id: int = 0
 
 
 @dataclass
@@ -194,6 +196,7 @@ class Face:
     uv_projected_back: bool = False
     hidden: bool = False
     layer: Optional[int] = None
+    persistent_id: int = 0
 
 
 # ── Layers & Materials ────────────────────────────────────────────────────
@@ -394,6 +397,7 @@ class Instance:
     attribute_dictionaries: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     material_id: Optional[int] = None
     hidden: bool = False
+    id: Optional[int] = None
 
 
 @dataclass
@@ -471,6 +475,9 @@ class Page:
             projection; ``fov`` still holds the stored perspective angle.
         ortho_height: Visible height in inches when ``parallel``.
         hidden_layers: Names of the layers this scene hides.
+        hidden_entity_ids: Persistent ids of the entities this scene hides
+            (see ``Instance.id``, ``Edge.persistent_id`` and
+            ``Face.persistent_id``).
     """
 
     name: str = ""
@@ -481,6 +488,7 @@ class Page:
     parallel: bool = False
     ortho_height: float = 0.0
     hidden_layers: List[str] = field(default_factory=list)
+    hidden_entity_ids: List[int] = field(default_factory=list)
 
 
 @dataclass
@@ -879,7 +887,8 @@ class SkpFile:
             )
             # Completed VFF builders can retain dense private tables. Iterate
             # those directly; their public accessors still return cached dicts.
-            if isinstance(builder, _core._GeometryBuilder):
+            is_vff = isinstance(builder, _core._GeometryBuilder)
+            if is_vff:
                 vertices, edges, faces = builder._geometry_tables()
             else:
                 vertices, edges, faces = builder.vertices, builder.edges, builder.faces
@@ -890,6 +899,7 @@ class SkpFile:
             flags_map = getattr(builder, "edge_flags", {})
             edge_layers_map = getattr(builder, "edge_layers", None) or {}
             edge_curves_map = getattr(builder, "edge_curves", None) or {}
+            edge_pids_map = getattr(builder, "edge_pids", None) or {}
             for e_id, (v1, v2) in edges.items():
                 flags = flags_map.get(e_id, 0)
                 defn.edges[e_id] = Edge(id=e_id, v1_id=v1 or 0, v2_id=v2 or 0,
@@ -897,7 +907,8 @@ class SkpFile:
                                         smooth=bool(flags & 0x10),
                                         hidden=bool(flags & 0x01),
                                         layer=edge_layers_map.get(e_id),
-                                        curve_id=edge_curves_map.get(e_id))
+                                        curve_id=edge_curves_map.get(e_id),
+                                        persistent_id=e_id if is_vff else edge_pids_map.get(e_id, 0))
             # Populate faces
             for f_id, f_data in faces.items():
                 defn.faces[f_id] = Face(
@@ -912,6 +923,7 @@ class SkpFile:
                     uv_projected=f_data.get("uv_projected", False),
                     uv_projected_back=f_data.get("uv_projected_back", False),
                     hidden=f_data.get("hidden", False),
+                    persistent_id=f_id if is_vff else f_data.get("persistent_id", 0),
                 )
             # Populate instances
             for inst in builder.instances:
@@ -926,6 +938,7 @@ class SkpFile:
                     layer=layer_id_to_name.get(layer_id, "") if layer_id is not None else "",
                     properties=inst.get("properties", {}),
                     attribute_dictionaries=inst.get("attribute_dictionaries", {}),
+                    id=inst.get("id"),
                 ))
             # Populate section planes
             for sp in getattr(builder, "section_planes", []):

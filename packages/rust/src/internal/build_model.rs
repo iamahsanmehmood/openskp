@@ -73,6 +73,7 @@ fn definition(
             },
         );
     }
+    let edge_pids = b.edge_pids.as_ref();
     for (&eid, &(v1, v2)) in &b.edges {
         let flags = b.edge_flags.get(&eid).copied().unwrap_or(0);
         let layer_id = b.edge_layers.get(&eid).copied();
@@ -82,6 +83,10 @@ fn definition(
                 .cloned()
                 .unwrap_or_else(|| (l as u64).to_string()),
             None => String::new(),
+        };
+        let persistent_id = match edge_pids {
+            Some(pids) => pids.get(&eid).copied().unwrap_or(0),
+            None => eid as u64,
         };
         d.edges.insert(
             eid,
@@ -95,6 +100,7 @@ fn definition(
                 curve_id: b.edge_curves.get(&eid).copied(),
                 layer,
                 layer_id,
+                persistent_id,
             },
         );
     }
@@ -111,7 +117,13 @@ fn definition(
             },
         );
     }
+    let is_legacy = edge_pids.is_some();
     for (fid, f) in b.faces {
+        let persistent_id = if is_legacy {
+            f.persistent_id
+        } else {
+            fid as u64
+        };
         d.faces.insert(
             fid,
             Face {
@@ -127,6 +139,7 @@ fn definition(
                 hidden: f.hidden,
                 layer: f.layer,
                 layer_id: f.layer_id,
+                persistent_id,
             },
         );
     }
@@ -290,6 +303,7 @@ pub fn build_pages(pages: &[RawPage], layer_names: &BTreeMap<EntityId, String>) 
                 .iter()
                 .filter_map(|id| layer_names.get(id).cloned())
                 .collect(),
+            hidden_entity_ids: pg.hidden_entity_ids.clone(),
             selected: pg.selected,
         })
         .collect()

@@ -19,6 +19,7 @@ class RawPage {
   bool parallel = false;
   double orthoHeight = 0.0;
   final List<int> hiddenLayerIds = [];
+  final List<int> hiddenEntityIds = [];
 }
 
 class RawDimension {
@@ -280,6 +281,17 @@ TlvNode? findPageNode(TlvNode top) {
   return Geometry.findChildTag([top], '0702');
 }
 
+void _parseIdRuns(Uint8List? buf, List<int> out) {
+  if (buf == null) return;
+  var off = 0;
+  while (off + 1 <= buf.length) {
+    final ln = buf[off];
+    if (ln == 0 || off + 1 + ln > buf.length) break;
+    out.add(Tlv.parseVarInt(buf, off + 1, ln));
+    off += 1 + ln;
+  }
+}
+
 /// Scenes ("pages"). The 0702 node's payload nests 6D60 > 6D61 > one 7148
 /// record per page:
 ///
@@ -291,6 +303,7 @@ TlvNode? findPageNode(TlvNode top) {
 ///   height matches the thumbnail framing exactly, while perspective
 ///   scenes carry 01 with a stale 34C3), 34C3 f64 = visible height when
 ///   parallel (inches)
+/// * 714B - entities hidden in this page: (u8 length, var-int entity id) runs
 /// * 7150 - layers hidden in this page: (u8 length, var-int layer id) runs
 List<RawPage> parsePages(TlvNode? node) {
   final pages = <RawPage>[];
@@ -339,14 +352,8 @@ List<RawPage> parsePages(TlvNode? node) {
             page.orthoHeight = Tlv.readF64(height, 0);
         }
 
-        final hidden = _tlvFindInt(items, 0x7150);
-        int off = 0;
-        while (hidden != null && off + 1 <= hidden.length) {
-          final ln = hidden[off];
-          if (ln == 0 || off + 1 + ln > hidden.length) break;
-          page.hiddenLayerIds.add(Tlv.parseVarInt(hidden, off + 1, ln));
-          off += 1 + ln;
-        }
+        _parseIdRuns(_tlvFindInt(items, 0x7150), page.hiddenLayerIds);
+        _parseIdRuns(_tlvFindInt(items, 0x714B), page.hiddenEntityIds);
 
         // A scene that doesn't save its camera ("Camera Location" unticked) is
         // still a scene: it keeps its name and hidden layers, eye/target/up null.

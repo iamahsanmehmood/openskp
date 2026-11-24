@@ -6,6 +6,7 @@ import { DefaultEdgeStore, type EdgeStore } from './edge-store';
 
 export interface GeometryBuilderInstance {
   offset: number;
+  id?: number | null;
   refGuid: string;
   refIdx: number;
   name: string;
@@ -36,6 +37,7 @@ export interface GeometryBuilderFace {
   uvProjected?: boolean;
   uvProjectedBack?: boolean;
   hidden?: boolean;
+  persistentId?: number;
 }
 
 /** The analytic frame of a Curve that is one arc: the points
@@ -63,6 +65,8 @@ export class GeometryBuilder {
   /** Edge id -> the entity id of the Curve the edge belongs to (SketchUp's
    * `Edge#curve`). Absent means the edge belongs to no curve. */
   edgeCurves = new Map<number, number>();
+  /** Legacy edge slot -> persistent id (undefined for VFF, where edge id is already persistent). */
+  edgePids?: Map<number, number>;
   /** Curve id -> its analytic arc, for the curves that are arcs. */
   arcCurves = new Map<number, ArcFrame>();
   faces = new Map<number, GeometryBuilderFace>(); // id -> face data
@@ -435,6 +439,7 @@ export function extractGeometryFromNodes(
 
       builder.instances.push({
         offset: el.offset,
+        id: extractEntityId(el),
         refGuid: guid || '',
         refIdx: defIdx !== null ? defIdx : -1,
         name: name || '',

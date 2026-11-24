@@ -136,6 +136,7 @@ namespace OpenSkp
                     Parallel = pg.Parallel,
                     OrthoHeight = pg.OrthoHeight,
                     HiddenLayers = hiddenLayers,
+                    HiddenEntityIds = new List<long>(pg.HiddenEntityIds),
                 });
             }
             return pages;
@@ -160,10 +161,14 @@ namespace OpenSkp
                 defn.Vertices[kv.Key] = new Vertex { Id = kv.Key, X = x, Y = y, Z = z };
             }
 
+            bool isLegacy = d.Builder.EdgePids != null;
             foreach (var kv in d.Builder.Edges)
             {
                 var (v1, v2) = kv.Value;
                 int flags = d.Builder.EdgeFlags.TryGetValue(kv.Key, out var f) ? f : 0;
+                long pid = isLegacy
+                    ? (d.Builder.EdgePids!.TryGetValue(kv.Key, out var ep) ? ep : 0L)
+                    : kv.Key;
                 defn.Edges[kv.Key] = new Edge
                 {
                     Id = kv.Key,
@@ -173,6 +178,7 @@ namespace OpenSkp
                     Smooth = (flags & 0x10) != 0,
                     Hidden = (flags & 0x01) != 0,
                     CurveId = d.Builder.EdgeCurves.TryGetValue(kv.Key, out var curveId) ? curveId : (long?)null,
+                    PersistentId = pid,
                 };
             }
 
@@ -205,6 +211,7 @@ namespace OpenSkp
                     UvProjected = f.UvProjected,
                     UvProjectedBack = f.UvProjectedBack,
                     Hidden = f.Hidden,
+                    PersistentId = isLegacy ? f.PersistentId : kv.Key,
                 };
             }
 
@@ -218,6 +225,7 @@ namespace OpenSkp
                 }
                 defn.Instances.Add(new Instance
                 {
+                    Id = inst.Id,
                     Name = inst.Name ?? "",
                     RefIdx = inst.RefIdx,
                     Guid = inst.RefGuid ?? "",

@@ -53,7 +53,9 @@ pub(crate) struct Archive<'a> {
     pub next: u64,
     pub base: u64,
     current_loop: u64,
+    current_obj: Option<u64>,
     pub slots: HashMap<u64, LegacySlotEntry>,
+    pub pids: HashMap<u64, u64>,
     pub class_slot: HashMap<String, u64>,
     first_class_slot: HashMap<String, u64>,
     seen_line_style: bool,
@@ -92,7 +94,9 @@ impl<'a> Archive<'a> {
             next: 0,
             base: 0,
             current_loop: 0,
+            current_obj: None,
             slots: HashMap::new(),
+            pids: HashMap::new(),
             class_slot: HashMap::new(),
             first_class_slot: HashMap::new(),
             seen_line_style: false,
@@ -419,9 +423,15 @@ impl<'a> Archive<'a> {
         let attrs = self.object(Some("CAttributeContainer"))?;
         if self.pid {
             let mask = self.r.u8()?;
+            let mut pid = 0u64;
             for i in 0..8 {
                 if mask & (1 << i) != 0 {
-                    self.r.u8()?;
+                    pid |= u64::from(self.r.u8()?) << (8 * i);
+                }
+            }
+            if pid != 0 {
+                if let Some(cur) = self.current_obj {
+                    self.pids.entry(cur).or_insert(pid);
                 }
             }
         }
@@ -671,9 +681,12 @@ impl<'a> Archive<'a> {
             v: None,
         });
         let mut boxed = Box::new(LegacyValue::default());
+        let prev_obj = self.current_obj;
+        self.current_obj = Some(slot);
         self.depth += 1;
         let read_res = self.read(&n, slot, &mut boxed);
         self.depth -= 1;
+        self.current_obj = prev_obj;
         read_res?;
         let v: Rc<LegacyValue> = Rc::from(boxed);
         self.slots.entry(slot).or_default().v = Some(v.clone());
@@ -685,6 +698,18 @@ impl<'a> Archive<'a> {
             name: n,
             v: Some(v),
         })
+    }
+
+    pub(crate) fn resolve_entity_pid(&self, file_slot: u64) -> Option<u64> {
+        let mut s = file_slot;
+        if !self.burns.is_empty() && s >= self.burns[0].0 {
+            s = self.translate_ref(s)?;
+        }
+        let ent = self.slots.get(&s)?;
+        if ent.cls {
+            return None;
+        }
+        self.pids.get(&s).copied().filter(|&p| p != 0)
     }
 
     fn read(&mut self, n: &str, this: u64, v: &mut LegacyValue) -> Result<()> {

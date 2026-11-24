@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Python, TypeScript, .NET, Dart & Rust: entities hidden by scenes and persistent entity ids (#472, #501, #521)
+
+- `Page.hidden_entity_ids` (`hiddenEntityIds`, `HiddenEntityIds`) lists what each scene hides, as persistent ids; match them with `Instance.id` and the new `Edge`/`Face` `persistent_id` (`persistentId`, `PersistentId`). Both work for 2021+ files and for SketchUp 2017-2020; older files have no such ids (`0`, or no `Instance.id`). C++ had them already.
+
+### Fixed — Python, TypeScript, .NET, Dart & Rust: classic files lost all scenes when one hides objects without saving the axes (#632)
+
 ### Fixed — C++ & Rust: unpainted faces inside a textured component or group inherit its texture (#634)
 
 - `build_scene` and `build_instanced_scene` passed only the instance's colour down, which lost the texture image, the tile size and the `MASK` alpha mode. They now pass the whole material, as the other ports do. `InstancedMeshResource::variant_key` ends with the inherited material's name.

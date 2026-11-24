@@ -218,8 +218,8 @@ pub fn scan_pages_for_layers(
 //   0x02 style       the rendering options (length by file version) + a
 //                    CSkpStyle ref or object
 //   0x04 shadows     2 bytes (schema 13+: 3) + the shadow info
-//   0x08 axes        (schema 13+: a flag byte +) 110 bytes
-//   0x10 hidden      a byte, u32 n, n entity refs
+//   0x08 axes        (schema 13+: a flag byte +) 110 bytes + a closing byte
+//   0x10 hidden      u32 n, n entity refs
 //   0x20 layers      u32 n, n refs to the layers (tags) the scene hides
 //   0x40 sections    u32 n, n section-plane refs
 //
@@ -485,12 +485,11 @@ fn read_page_record(ver: i32, r: &mut R, classes: &mut PageClasses) -> Result<Ra
         r.skip(SHADOW_INFO_FIXED_LEN)?;
     }
     if flags & 0x08 != 0 {
-        r.skip(PAGE_AXES_LEN + usize::from(schema >= 13))?;
+        r.skip(PAGE_AXES_LEN + 1 + usize::from(schema >= 13))?;
     }
     if flags & 0x10 != 0 {
-        r.u8()?;
         let n = r.u32()?;
-        read_page_refs(r, n)?;
+        page.hidden_entity_ids = read_page_refs(r, n)?;
     }
     if flags & 0x20 != 0 {
         let n = r.u32()?;
@@ -566,6 +565,13 @@ pub(crate) fn read_page_list(data: &[u8], ar: &Archive) -> Option<Vec<RawPage>> 
                 .get(&(*id as u64))
                 .is_some_and(|e| !e.cls && &*e.name == "CLayer")
         });
+        let mut resolved = Vec::new();
+        for &id in &page.hidden_entity_ids {
+            if let Some(pid) = ar.resolve_entity_pid(id as u64) {
+                resolved.push(pid as EntityId);
+            }
+        }
+        page.hidden_entity_ids = resolved;
     }
     Some(pages)
 }

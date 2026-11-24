@@ -293,12 +293,8 @@ namespace OpenSkp
                 r.Utf16(); // country
                 r.Raw(ShadowInfoFixedLen);
             }
-            if ((flags & 0x08) != 0) r.Raw(AxesLen + (schema >= 13 ? 1 : 0));
-            if ((flags & 0x10) != 0)
-            {
-                r.U8();
-                ReadRefs(r, r.U32());
-            }
+            if ((flags & 0x08) != 0) r.Raw(AxesLen + 1 + (schema >= 13 ? 1 : 0));
+            if ((flags & 0x10) != 0) page.HiddenEntityIds = ReadRefs(r, r.U32());
             if ((flags & 0x20) != 0) page.HiddenLayerIds = ReadRefs(r, r.U32());
             if ((flags & 0x40) != 0) ReadRefs(r, r.U32());
             if (schema >= 15)
@@ -345,6 +341,13 @@ namespace OpenSkp
                 {
                     page.HiddenLayerIds = page.HiddenLayerIds.FindAll(id =>
                         ar.Slots.TryGetValue((int)id, out var ent) && ent.Kind == "obj" && ent.Name == "CLayer");
+                    var pids = new List<long>();
+                    foreach (var id in page.HiddenEntityIds)
+                    {
+                        var pid = ar.ResolveEntityPid((int)id);
+                        if (pid.HasValue) pids.Add(pid.Value);
+                    }
+                    page.HiddenEntityIds = pids;
                 }
                 return pages;
             }
