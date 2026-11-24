@@ -1493,12 +1493,32 @@ void main() {
     });
 
     test('a file with groups but no materials or layers still raises the header counter', () {
-      // The scaffold's counter is 18; a file of two groups used ids up to 20
-      // with the counter left at 18.
+      // The scaffold's counter is 18; a file of two groups allocates ids 18..39
+      // (nextPid == 40).
       final builder = create();
       builder.addGroup((def) => def.addFace(square), name: 'one');
       builder.addGroup((def) => def.addFace(shifted(60, 0, 0)), name: 'two');
       expect(counter(builder.toBytes()), 40);
+    });
+
+    test('opaque textured material uses alpha 255 and single quad face raises counter to 27', () {
+      final tmpDir = Directory.systemTemp.createTempSync('openskp_alpha_');
+      final pngPath = '${tmpDir.path}${Platform.pathSeparator}tex.png';
+      File(pngPath).writeAsBytesSync([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 1, 2, 3]);
+      try {
+        final single = create()..addFace(square);
+        expect(counter(single.toBytes()), 27);
+
+        final builder = create();
+        final tex = builder.addTextureMaterial('Brick', pngPath);
+        builder.addFace(square, material: tex);
+        final model = SkpFile.fromBuffer(builder.toBytes()).parse();
+        final mat = model.materials.single;
+        expect(mat.color, (255, 255, 255, 255));
+        expect(mat.colorized, isFalse);
+      } finally {
+        tmpDir.deleteSync(recursive: true);
+      }
     });
   });
 

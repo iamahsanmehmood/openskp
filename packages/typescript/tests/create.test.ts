@@ -1244,18 +1244,19 @@ describe('Persistent ids', () => {
       s.definitionWriterInstance!.nextPid,
       s.geometryWriter!.nextPid,
     ];
+    expect(s.pidStart).toBe(18);
     expect(starts).toEqual([...starts].sort((x, y) => x - y));
     expect(starts[0]).toBeLessThan(starts[starts.length - 1]);
-    // the counter is the last pid handed out, and far more than materials + layers
-    expect(readCounter(data)).toBe(s.geometryWriter!.nextPid - 1);
+    // the counter is the next free pid after all sections, and far more than materials + layers
+    expect(readCounter(data)).toBe(s.geometryWriter!.nextPid);
     expect(readCounter(data)).toBeGreaterThan(s.pidStart + 2);
-    // The Python, .NET and Dart writers pin the same number for this model.
+    // All six writers pin the same number for this model.
     expect(readCounter(data)).toBe(52);
   });
 
   it('a file with groups but no materials or layers still raises the header counter', () => {
-    // The scaffold's counter is 18; a file of two groups used ids up to 20 with
-    // the counter left at 18, and SketchUp for Web could not save it (openskp#492).
+    // The scaffold's counter is 18; a file of two groups allocates ids 18..39
+    // (nextPid === 40).
     const builder = create();
     builder.addGroup((d) => d.addFace(SQUARE), { name: 'one' });
     builder.addGroup((d) => d.addFace(SQUARE.map(([x, y, z]): Point3 => [x + 60, y, z])), { name: 'two' });
@@ -1263,9 +1264,20 @@ describe('Persistent ids', () => {
     const s = builder as unknown as Sections;
     expect(readCounter(data)).toBeGreaterThan(18);
     expect(readCounter(data)).toBe(40);
-    expect(readCounter(data)).toBe(s.geometryWriter!.nextPid - 1);
+    expect(readCounter(data)).toBe(s.geometryWriter!.nextPid);
     expect(s.definitionWriterInstance!.nextPid).toBeGreaterThan(s.pidStart);
     expect(s.geometryWriter!.nextPid).toBeGreaterThan(s.definitionWriterInstance!.nextPid);
+  });
+
+  it('opaque textured material writes alpha 255 and stays non-colorized', () => {
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 1, 2, 3]);
+    const builder = create();
+    const tex = builder.addTextureMaterial('Brick', png, 'tex.png');
+    builder.addFace(SQUARE, { material: tex });
+    const model = parseSkp(toBuffer(builder.toBytes()));
+    expect(model.materials.length).toBe(1);
+    expect(model.materials[0].color).toEqual({ r: 255, g: 255, b: 255, a: 255 });
+    expect(model.materials[0].colorized).toBe(false);
   });
 });
 

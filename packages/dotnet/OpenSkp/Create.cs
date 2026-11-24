@@ -1166,15 +1166,10 @@ namespace OpenSkp
             AddF64(appliedWidth ?? 1.0);
             AddF64(appliedHeight ?? 1.0);
             WriteStr(texturePath);
-            // avg color (RGBA + pad + RGBA repeated) - neutral near-opaque
-            // white rather than a real image average, since this project
-            // doesn't depend on an image library to compute one. Alpha is
-            // 254, not a fully-opaque 255: the reader treats alpha=255 here
-            // as one of its two "this material is colorized" signals - a
-            // plain texture's placeholder must not trip that, or every
-            // plain texture this writer creates reads back as falsely
-            // colorized.
-            AddRaw(new byte[] { 255, 255, 255, 254, 0, 255, 255, 255, 254 });
+            // avg color (RGBA + pad + RGBA repeated) - neutral opaque white
+            // (alpha=255 in both color slots, matching SketchUp's C SDK;
+            // colorization is gated on the u32 material-type field below).
+            AddRaw(new byte[] { 255, 255, 255, 255, 0, 255, 255, 255, 255 });
             WriteStr(""); // second name field - empty in ground truth
             AddU32(1); AddU32(0); // blob (colorize-related, ground truth: 1, 0)
             // Opacity, and the u8 that GATES it. The stored f64 is
@@ -2250,7 +2245,7 @@ namespace OpenSkp
             // pid 1: SketchUp loads such a file, renumbers the duplicates, and
             // then cannot SAVE it (SketchUp for Web: "Save Failed") once ids
             // above the header counter are in use.
-            _pidStart = Tlv.ReadU32(data, CreateConstants.PidCounterPos) + 1;
+            _pidStart = (long)BitConverter.ToUInt64(data, CreateConstants.PidCounterPos);
             _materialWriter = new ArchiveWriter(@base, new Dictionary<string, int>(), _pidStart);
             _layerWriterBase = layerWriterBase;
         }
@@ -3143,14 +3138,13 @@ namespace OpenSkp
             // growing the file by 4 extra bytes here.
             var prefix = new byte[_materialInsertPos - 4];
             Array.Copy(_data, 0, prefix, 0, prefix.Length);
-            // The model's pid counter: the last pid handed out, in every
-            // section. A 32-bit field, so a model with more than 65 535
-            // entities keeps a truthful counter.
-            uint lastPid = (uint)(NextPid() - 1);
-            prefix[CreateConstants.PidCounterPos] = (byte)(lastPid & 0xFF);
-            prefix[CreateConstants.PidCounterPos + 1] = (byte)((lastPid >> 8) & 0xFF);
-            prefix[CreateConstants.PidCounterPos + 2] = (byte)((lastPid >> 16) & 0xFF);
-            prefix[CreateConstants.PidCounterPos + 3] = (byte)((lastPid >> 24) & 0xFF);
+            // The model's 64-bit next-persistent-ID counter: the next unused
+            // pid after every section has allocated its entities.
+            ulong nextPid = (ulong)NextPid();
+            for (int i = 0; i < 8; i++)
+            {
+                prefix[CreateConstants.PidCounterPos + i] = (byte)(nextPid >> (8 * i));
+            }
             Array.Copy(
                 CreateConstants.IsoCameraPrefixPatch, 0, prefix, CreateConstants.IsoCameraPrefixOffset,
                 CreateConstants.IsoCameraPrefixPatch.Length);

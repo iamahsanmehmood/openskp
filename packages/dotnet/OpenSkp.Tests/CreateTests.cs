@@ -1103,23 +1103,24 @@ namespace OpenSkp.Tests
             builder.AddInstance(b, translation: (0, 0, 100));
             var data = builder.ToBytes();
 
+            Assert.Equal(18L, builder._pidStart);
             Assert.True(builder._pidStart < builder.NextPid());
-            Assert.Equal(builder.NextPid() - 1, (long)PidCounter(data));
+            Assert.Equal(builder.NextPid(), (long)PidCounter(data));
             Assert.Equal(52u, PidCounter(data));
         }
 
         [Fact]
         public void GroupsWithoutMaterialsOrLayersStillRaiseTheHeaderCounter()
         {
-            // The scaffold's counter is 18; a file of two groups used ids up to 20
-            // with the counter left at 18, and SketchUp for Web could not save it.
+            // The scaffold's counter is 18; a file of two groups allocates ids
+            // 18..39 (nextPid == 40).
             var builder = SkpCreate.NewFile();
             using (var one = builder.AddGroup("one")) one.AddFace(Square());
             using (var two = builder.AddGroup("two")) two.AddFace(Square(x0: 60));
             var data = builder.ToBytes();
 
             Assert.True(PidCounter(data) > 18u);
-            Assert.Equal(builder.NextPid() - 1, (long)PidCounter(data));
+            Assert.Equal(builder.NextPid(), (long)PidCounter(data));
             Assert.Equal(40u, PidCounter(data));
         }
 
@@ -1196,6 +1197,28 @@ namespace OpenSkp.Tests
             var trailing = SkpFile.Parse(bytes);
             var trailingInst = Assert.Single(trailing.Root.Instances);
             Assert.Equal("\uFFFD\uFFFDY\uFFFD\uFFFD", trailingInst.Properties["damaged"]);
+        }
+
+        [Fact]
+        public void OpaqueTexturedMaterialUsesAlpha255AndStartsPidAt18()
+        {
+            string pngPath = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".png");
+            File.WriteAllBytes(pngPath, TinyPng());
+            try
+            {
+                var builder = SkpCreate.NewFile();
+                Assert.Equal(18L, builder._pidStart);
+                int brick = builder.AddTextureMaterial("Brick", pngPath);
+                builder.AddFace(Square(), material: brick);
+                var model = SkpFile.Parse(builder.ToBytes());
+                var mat = Assert.Single(model.Materials);
+                Assert.Equal((255, 255, 255, 255), mat.Color);
+                Assert.False(mat.Colorized);
+            }
+            finally
+            {
+                File.Delete(pngPath);
+            }
         }
 
         // 1x1 transparent PNG.
