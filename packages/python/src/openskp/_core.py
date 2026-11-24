@@ -1596,13 +1596,13 @@ _PROP_CONTAINER_TAGS = ['DD05', 'B536', 'B136', 'B236', 'B336', 'B036', 'A438', 
 # same way (real bytes, not guessed): AD38 string, AF38 Length, A938
 # plain double - SketchUp genuinely uses two different tags for the same
 # 8-byte float64 encoding depending on whether the value is a Length or a
-# plain Float - A738 int32, B438 Point3d, B538 Vector3d (each 3 x f64,
-# 24 bytes flat, no per-component tags). No native bool/time_t tag has
-# been observed in real data yet -
-# FrameBuilder itself stores booleans as the literal strings "true"/
-# "false" - so those two of legacy's 9 types are not yet decoded here;
-# left safely unrecognized (see _decode_vff_attr_value) rather than
-# guessed at.
+# plain Float - A738 int32, AA38 bool (one byte), AC38 time_t (u32 unix
+# seconds), B438 Point3d, B538 Vector3d (each 3 x f64, 24 bytes flat, no
+# per-component tags).  The bool/time tags are confirmed against
+# research/vff-writer/stage3/oracle/attributes.skp, saved by SketchUp 2025's
+# own Ruby API with true/false/Time values; they are the VFF counterparts of
+# legacy's 0x07 and 0x09 types.  Everything else is still left unrecognized
+# (see _decode_vff_attr_value) rather than guessed at.
 _VFF_ATTR_DOUBLE_TAGS = ('AF38', 'A938')
 
 
@@ -1625,6 +1625,12 @@ def _decode_vff_attr_value(a438_node):
         return struct.unpack('<d', payload)[0]
     if tag == 'A738' and len(payload) == 4:
         return struct.unpack('<i', payload)[0]
+    if tag == 'AA38' and len(payload) == 1:
+        return payload[0] != 0
+    if tag == 'AC38' and len(payload) == 4:
+        # time_t: the same unsigned 32-bit integer the classic reader
+        # returns for legacy attribute type 0x09.
+        return struct.unpack('<I', payload)[0]
     if tag in ('B438', 'B538') and len(payload) == 24:
         return struct.unpack('<3d', payload)
     if tag == 'AE38':
@@ -1681,9 +1687,13 @@ def extract_attribute_dictionaries(d007):
 def _stringify_vff_attr_value(value):
     """Render an already-typed VFF attribute value as a string, matching
     extract_dynamic_properties' pre-existing Dict[str, str] contract -
-    mirrors legacy._stringify_attr_value exactly."""
+    mirrors legacy._stringify_attr_value exactly.  Bools render as "1"/"0"
+    because the classic reader decodes its equivalent bool tag as an int
+    (0x07 -> u8), so the two containers keep the same string form."""
     if value is None:
         return ''
+    if isinstance(value, bool):
+        return "1" if value else "0"
     if isinstance(value, (list, tuple)):
         return ','.join(_stringify_vff_attr_value(v) for v in value)
     return str(value)
