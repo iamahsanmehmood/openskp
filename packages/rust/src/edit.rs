@@ -74,7 +74,9 @@ use crate::create::{
 };
 use crate::errors::SkpParseError;
 use crate::internal::is_legacy;
-use crate::model::{CoEdge, Definition, EntityId, Face, Instance, SkpModel, Vec3};
+use crate::model::{
+    CoEdge, ConstructionLine, Definition, EntityId, Face, Instance, SkpModel, Vec3,
+};
 use crate::observability::ParseOptions;
 use crate::parser::parse_skp;
 
@@ -391,6 +393,27 @@ fn definition_order(model: &SkpModel) -> Result<Vec<EntityId>, SkpWriteError> {
     Ok(order)
 }
 
+fn is_replayable_construction_line(cl: &ConstructionLine) -> bool {
+    match (cl.start, cl.end) {
+        (Some(s), Some(e)) => {
+            let dx = e[0] - s[0];
+            let dy = e[1] - s[1];
+            let dz = e[2] - s[2];
+            let length = (dx * dx + dy * dy + dz * dz).sqrt();
+            length.is_finite() && length > 0.0
+        }
+        (None, None) => {
+            if cl.point.iter().any(|v| !v.is_finite()) {
+                return false;
+            }
+            let d = cl.direction;
+            let dlen = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+            dlen.is_finite() && dlen > 0.0
+        }
+        _ => false,
+    }
+}
+
 fn definition_has_content(
     defn: &Definition,
     def_builders: &BTreeMap<EntityId, DefinitionHandle>,
@@ -411,7 +434,11 @@ fn definition_has_content(
     {
         return true;
     }
-    !defn.construction_points.is_empty() || !defn.construction_lines.is_empty()
+    !defn.construction_points.is_empty()
+        || defn
+            .construction_lines
+            .iter()
+            .any(is_replayable_construction_line)
 }
 
 // ---------------------------------------------------------------------------------------------

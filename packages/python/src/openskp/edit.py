@@ -13,7 +13,8 @@ This module takes the other viable approach instead: fully parse the
 existing file with this project's own reader (:mod:`openskp.legacy`,
 already comprehensive), then *replay* everything it understood back
 through the writer's own public API (materials, layers, every component
-definition, every face/instance) to produce a brand-new file - not a
+definition, every face/instance, construction points and lines) to produce a
+brand-new file - not a
 byte-patched copy of the original, but a freshly-built one with equivalent
 content, to which the caller can add more geometry before saving.
 
@@ -61,11 +62,12 @@ module's own docstring for why):
   visually identical, but no longer shows as a "Group" in SketchUp's
   Outliner afterward.
 * Section planes, text entities, and dimensions aren't carried over on
-  replay - `_replay_body` only replays faces and instances. The writer
-  itself can now *create* new text (`add_text`) and dimension
-  (`add_dimension`) entities from scratch, but this function doesn't call
-  either to reproduce ones the source file already had. Section planes
-  still have no writer support at all, in any form.
+  replay - `_replay_body` replays faces, instances, and construction guides
+  (`ConstructionPoint` and bounded or unbounded `ConstructionLine` records;
+  half-bounded or zero-length guide lines are skipped). The writer itself can
+  *create* new section planes (`add_section_plane`), text (`add_text`), and
+  dimension (`add_dimension`) entities from scratch, but this function doesn't
+  call them to reproduce ones the source file already had.
 * A circle/arc/polyline's original ``CArcCurve``/``CCurve`` grouping is
   lost - this project's reader doesn't preserve that grouping in its
   public :class:`~openskp.model.Face`/:class:`~openskp.model.Edge` model,
@@ -76,6 +78,7 @@ module's own docstring for why):
 """
 from __future__ import annotations
 
+import math
 import os
 import pathlib
 import tempfile
@@ -250,6 +253,22 @@ def _edge_map(defn: Definition) -> Dict[int, Tuple[int, int]]:
     return {eid: (e.v1_id, e.v2_id) for eid, e in defn.edges.items()}
 
 
+def _is_replayable_construction_line(cl) -> bool:
+    if cl.start is not None and cl.end is not None:
+        dx = float(cl.end[0]) - float(cl.start[0])
+        dy = float(cl.end[1]) - float(cl.start[1])
+        dz = float(cl.end[2]) - float(cl.start[2])
+        length = math.sqrt(dx * dx + dy * dy + dz * dz)
+        return math.isfinite(length) and length > 0.0
+    if cl.start is None and cl.end is None:
+        if not all(math.isfinite(float(v)) for v in cl.point):
+            return False
+        dx, dy, dz = float(cl.direction[0]), float(cl.direction[1]), float(cl.direction[2])
+        dlen = math.sqrt(dx * dx + dy * dy + dz * dz)
+        return math.isfinite(dlen) and dlen > 0.0
+    return False
+
+
 def _definition_has_content(defn: Definition, def_builders: Dict[int, ComponentDefinitionBuilder]) -> bool:
     edges = _edge_map(defn)
     for face in defn.faces.values():
@@ -260,6 +279,10 @@ def _definition_has_content(defn: Definition, def_builders: Dict[int, ComponentD
     for inst in defn.instances:
         if inst.ref_idx in def_builders:
             return True
+    if defn.construction_points:
+        return True
+    if any(_is_replayable_construction_line(cl) for cl in defn.construction_lines):
+        return True
     return False
 
 
@@ -273,19 +296,31 @@ def _replay_body(
     context: str,
     def_builders: Dict[int, ComponentDefinitionBuilder],
 ) -> None:
-    """Replay one definition's (or the root's) own faces and instances
-    onto ``target`` - a :class:`SkpBuilder` for the root, or a
-    :class:`ComponentDefinitionBuilder` for a nested definition; both
-    expose the same ``add_face``/``add_instance`` shape this calls
-    generically. ``def_builders`` resolves instance references - by the
-    time any definition is opened (topological order, see
-    `_definition_order`) every OTHER definition its own instances could
-    reference is already in it."""
+    """Replay one definition's (or the root's) own faces, instances, and
+    construction geometry onto ``target`` - a :class:`SkpBuilder` for the
+    root, or a :class:`ComponentDefinitionBuilder` for a nested definition;
+    both expose the same ``add_face``/``add_instance``/``add_construction_*``
+    shape this calls generically."""
     edges = _edge_map(defn)
     for face in defn.faces.values():
         _replay_face(target, face, defn, edges, model, material_slots, warnings, context)
     for inst in defn.instances:
         _replay_instance(target, inst, def_builders, material_slots, layer_slots, model, warnings, context)
+    for cp in defn.construction_points:
+        try:
+            target.add_construction_point(cp.position)
+        except SkpWriteError as exc:
+            warnings.append(f"{context}: construction point skipped ({exc})")
+    for cl in defn.construction_lines:
+        try:
+            if cl.start is not None and cl.end is not None:
+                target.add_construction_line(cl.start, point2=cl.end)
+            elif cl.start is None and cl.end is None:
+                target.add_construction_line(cl.point, direction=cl.direction)
+            else:
+                warnings.append(f"{context}: half-bounded construction line skipped")
+        except SkpWriteError as exc:
+            warnings.append(f"{context}: construction line skipped ({exc})")
 
 
 def _replay_face(

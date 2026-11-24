@@ -1556,23 +1556,32 @@ namespace OpenSkp
                 int def = ar.Ver == 17 ? 7 : 4;
                 var order = new List<int> { def };
                 foreach (var c in new[] { 0, 4, 7 }) if (c != def) order.Add(c);
-                // two passes: a zero tail full of padding can mimic a null
-                // tag, so only accept a null-anchored candidate when no
-                // candidate lands on a STRONG form (escape / known class /
-                // class definition)
-                foreach (var allowNull in new[] { false, true })
+                // Strong tags first (escape / known class / class definition).
+                // A construction line that is the last entity in a
+                // CComponentDefinition is followed by nrel=0, which looks like
+                // a null tag at every candidate including v17's preferred 7;
+                // preferring 7 on the weak pass swallows 3 bytes of the
+                // definition tail and caches 7 for later guides, so prefer 4.
+                foreach (var cand in order)
                 {
-                    foreach (var cand in order)
+                    if (StrictNextTag(ar, r.Data, r.Pos + cand, false))
                     {
-                        if (StrictNextTag(ar, r.Data, r.Pos + cand, allowNull))
+                        k = cand;
+                        break;
+                    }
+                }
+                if (k == null)
+                {
+                    foreach (var cand in new[] { 4, 0, 7 })
+                    {
+                        if (StrictNextTag(ar, r.Data, r.Pos + cand, true))
                         {
                             k = cand;
                             break;
                         }
                     }
-                    if (k != null) break;
                 }
-                if (k == null) k = def;
+                k ??= 4;
                 ar.ClineTail = k;
             }
             r.Raw(k.Value);

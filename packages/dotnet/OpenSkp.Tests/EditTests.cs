@@ -220,6 +220,111 @@ namespace OpenSkp.Tests
         }
 
         [Fact]
+        public void ReplaysNestedAndRootConstructionGuides()
+        {
+            var original = SkpCreate.NewFile();
+            ComponentDefinitionBuilder nested;
+            using (nested = original.AddComponentDefinition("GuideOnly"))
+            {
+                nested.AddConstructionPoint((4, 5, 6));
+                nested.AddConstructionLine((0, 0, 2), direction: (0, 1, 0));
+                nested.AddConstructionLine((1, 1, 1), point2: (2, 2, 2));
+            }
+            original.AddInstance(nested);
+            original.AddConstructionPoint((7, 8, 9));
+            original.AddConstructionLine((0, 0, 0), point2: (10, 0, 0));
+
+            string path = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".skp");
+            original.Save(path);
+            try
+            {
+                var result = SkpEdit.OpenExisting(path);
+                Assert.Empty(result.Warnings);
+                Assert.True(result.Definitions.ContainsKey("GuideOnly"));
+
+                var rebuilt = SkpFile.Parse(result.Builder.ToBytes());
+                var rootCp = Assert.Single(rebuilt.Root.ConstructionPoints);
+                Assert.Equal((7.0, 8.0, 9.0), rootCp.Position);
+                var rootCl = Assert.Single(rebuilt.Root.ConstructionLines);
+                Assert.Equal((10.0, 0.0, 0.0), rootCl.End!.Value);
+
+                var group = Assert.Single(rebuilt.Definitions.Values, d => d.Name == "GuideOnly");
+                var defCp = Assert.Single(group.ConstructionPoints);
+                Assert.Equal((4.0, 5.0, 6.0), defCp.Position);
+                Assert.Equal(2, group.ConstructionLines.Count);
+                Assert.Null(group.ConstructionLines[0].Start);
+                Assert.Null(group.ConstructionLines[0].End);
+                Assert.Equal(1.0, group.ConstructionLines[1].Start!.Value.X, 6);
+                Assert.Equal(2.0, group.ConstructionLines[1].End!.Value.X, 6);
+            }
+            finally
+            {
+                File.Delete(path);
+            }
+        }
+
+        [Fact]
+        public void SkipsDefinitionsWhoseOnlyGuidesCannotBeReplayed()
+        {
+            var original = SkpCreate.NewFile();
+            ComponentDefinitionBuilder half;
+            using (half = original.AddComponentDefinition("Half"))
+            {
+                half.AddConstructionLine((0, 0, 0), point2: (12345, 0, 0));
+            }
+            ComponentDefinitionBuilder zero;
+            using (zero = original.AddComponentDefinition("Zero"))
+            {
+                zero.AddConstructionLine((0, 0, 0), point2: (54321, 0, 0));
+            }
+            original.AddFace(new[] { (0.0, 0.0, 0.0), (10.0, 0.0, 0.0), (0.0, 10.0, 0.0) });
+            original.AddInstance(half);
+            original.AddInstance(zero);
+
+            byte[] raw = original.ToBytes();
+            void PatchF64(double target, double replacement)
+            {
+                byte[] needle = BitConverter.GetBytes(target);
+                byte[] repl = BitConverter.GetBytes(replacement);
+                for (int i = 0; i + 8 <= raw.Length; i++)
+                {
+                    bool match = true;
+                    for (int j = 0; j < 8; j++)
+                    {
+                        if (raw[i + j] != needle[j]) { match = false; break; }
+                    }
+                    if (match)
+                    {
+                        Buffer.BlockCopy(repl, 0, raw, i, 8);
+                        return;
+                    }
+                }
+                throw new InvalidOperationException($"f64 {target} not found");
+            }
+            PatchF64(12345.0, 1e30);
+            PatchF64(54321.0, 0.0);
+
+            string path = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".skp");
+            File.WriteAllBytes(path, raw);
+            try
+            {
+                var result = SkpEdit.OpenExisting(path);
+                Assert.False(result.Definitions.ContainsKey("Half"));
+                Assert.False(result.Definitions.ContainsKey("Zero"));
+                Assert.Contains(result.Warnings, w => w.Contains("definition 'Half': skipped"));
+                Assert.Contains(result.Warnings, w => w.Contains("definition 'Zero': skipped"));
+
+                var rebuilt = SkpFile.Parse(result.Builder.ToBytes());
+                Assert.Single(rebuilt.Root.Faces);
+                Assert.Empty(rebuilt.Definitions);
+            }
+            finally
+            {
+                File.Delete(path);
+            }
+        }
+
+        [Fact]
         public void RealWorldFixtureOpensAndReplaysCleanly()
         {
             var result = SkpEdit.OpenExisting(FixturePath("capilla_quiroz_v17.skp"));

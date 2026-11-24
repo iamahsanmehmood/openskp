@@ -744,6 +744,41 @@ impl ArchiveWriter {
     /// A construction line: point + unit direction + signed start/end distance parameters along
     /// it (ground truth: SketchUp 2025, SDK/Ruby cross-checked). Exactly one of `point2` (bounded
     /// segment) or `direction` (unbounded, written with the real +/-1e30 sentinel) is required.
+    pub(super) fn resolve_construction_line(
+        point: Point3,
+        point2: Option<Point3>,
+        direction: Option<Point3>,
+    ) -> Result<(Point3, f64, f64), SkpWriteError> {
+        match (point2, direction) {
+            (Some(p2), None) => {
+                let d = [p2[0] - point[0], p2[1] - point[1], p2[2] - point[2]];
+                let length = d[0].hypot(d[1]).hypot(d[2]);
+                if !length.is_finite() || length == 0.0 {
+                    return Err(SkpWriteError::new(
+                        "add_construction_line: point and point2 coincide",
+                    ));
+                }
+                Ok(([d[0] / length, d[1] / length, d[2] / length], 0.0, length))
+            }
+            (None, Some(d)) => {
+                let dlen = d[0].hypot(d[1]).hypot(d[2]);
+                if !dlen.is_finite() || dlen == 0.0 {
+                    return Err(SkpWriteError::new(
+                        "add_construction_line: direction must be nonzero",
+                    ));
+                }
+                Ok((
+                    [d[0] / dlen, d[1] / dlen, d[2] / dlen],
+                    -CLINE_INFINITE,
+                    CLINE_INFINITE,
+                ))
+            }
+            _ => Err(SkpWriteError::new(
+                "add_construction_line: pass exactly one of point2 or direction",
+            )),
+        }
+    }
+
     pub fn write_construction_line(
         &mut self,
         point: Point3,
@@ -751,36 +786,8 @@ impl ArchiveWriter {
         direction: Option<Point3>,
         options: &GuideOptions,
     ) -> Result<(), SkpWriteError> {
-        let (dir, start_param, end_param) = match (point2, direction) {
-            (Some(p2), None) => {
-                let d = [p2[0] - point[0], p2[1] - point[1], p2[2] - point[2]];
-                let length = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
-                if length == 0.0 {
-                    return Err(SkpWriteError::new(
-                        "add_construction_line: point and point2 coincide",
-                    ));
-                }
-                ([d[0] / length, d[1] / length, d[2] / length], 0.0, length)
-            }
-            (None, Some(d)) => {
-                let dlen = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
-                if dlen == 0.0 {
-                    return Err(SkpWriteError::new(
-                        "add_construction_line: direction must be nonzero",
-                    ));
-                }
-                (
-                    [d[0] / dlen, d[1] / dlen, d[2] / dlen],
-                    -CLINE_INFINITE,
-                    CLINE_INFINITE,
-                )
-            }
-            _ => {
-                return Err(SkpWriteError::new(
-                    "add_construction_line: pass exactly one of point2 or direction",
-                ))
-            }
-        };
+        let (dir, start_param, end_param) =
+            Self::resolve_construction_line(point, point2, direction)?;
         self.new_of_known_class("CConstructionLine", CONSTRUCTION_LINE_SCHEMA);
         self.preamble(None, false);
         self.guide_drawbase(options);

@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:openskp/openskp.dart';
 import 'package:test/test.dart';
@@ -339,6 +340,103 @@ void main() {
       result.builder.addFace(square);
       final data = result.builder.toBytes();
       expect(data, isNotEmpty);
+    });
+
+    test('replays nested and root construction guides (including guide-only definitions)', () {
+      final tmpDir = Directory.systemTemp.createTempSync('openskp_edit_guides_');
+      try {
+        final builder = create();
+        final nested = builder.addComponentDefinition('GuideOnly', (def) {
+          def.addConstructionPoint((4.0, 5.0, 6.0));
+          def.addConstructionLine((0.0, 0.0, 2.0), direction: (0.0, 1.0, 0.0));
+          def.addConstructionLine((1.0, 1.0, 1.0), point2: (2.0, 2.0, 2.0));
+        });
+        builder.addInstance(nested);
+        builder.addConstructionPoint((7.0, 8.0, 9.0));
+        builder.addConstructionLine((0.0, 0.0, 0.0), point2: (10.0, 0.0, 0.0));
+        final src = saveToTempFile(builder, tmpDir);
+
+        final result = openExisting(src);
+        expect(result.warnings, isEmpty);
+        expect(result.definitions.containsKey('GuideOnly'), isTrue);
+
+        final rebuilt = SkpFile.fromBuffer(result.builder.toBytes()).parse();
+        expect(rebuilt.root.constructionPoints, hasLength(1));
+        expect(rebuilt.root.constructionPoints[0].position, (7.0, 8.0, 9.0));
+        expect(rebuilt.root.constructionLines, hasLength(1));
+        expect(rebuilt.root.constructionLines[0].end, (10.0, 0.0, 0.0));
+
+        final group = rebuilt.definitions.values.firstWhere((d) => d.name == 'GuideOnly');
+        expect(group.constructionPoints, hasLength(1));
+        expect(group.constructionPoints[0].position, (4.0, 5.0, 6.0));
+        expect(group.constructionLines, hasLength(2));
+        expect(group.constructionLines[0].start, isNull);
+        expect(group.constructionLines[0].end, isNull);
+        expect(group.constructionLines[1].start!.$1, closeTo(1.0, 1e-6));
+        expect(group.constructionLines[1].end!.$1, closeTo(2.0, 1e-6));
+      } finally {
+        tmpDir.deleteSync(recursive: true);
+      }
+    });
+
+    test('skips definitions whose only guides cannot be replayed', () {
+      final tmpDir = Directory.systemTemp.createTempSync('openskp_edit_half_');
+      try {
+        final builder = create();
+        final half = builder.addComponentDefinition('Half', (def) {
+          def.addConstructionLine((0, 0, 0), point2: (12345, 0, 0));
+        });
+        final zero = builder.addComponentDefinition('Zero', (def) {
+          def.addConstructionLine((0, 0, 0), point2: (54321, 0, 0));
+        });
+        builder.addFace([(0, 0, 0), (10, 0, 0), (0, 10, 0)]);
+        builder.addInstance(half);
+        builder.addInstance(zero);
+
+        final raw = Uint8List.fromList(builder.toBytes());
+        final dv = ByteData.sublistView(raw);
+        void patchF64(double target, double replacement) {
+          final needle = ByteData(8)..setFloat64(0, target, Endian.little);
+          final nb = needle.buffer.asUint8List();
+          for (var i = 0; i + 8 <= raw.length; i++) {
+            var match = true;
+            for (var j = 0; j < 8; j++) {
+              if (raw[i + j] != nb[j]) {
+                match = false;
+                break;
+              }
+            }
+            if (match) {
+              dv.setFloat64(i, replacement, Endian.little);
+              return;
+            }
+          }
+          throw StateError('f64 $target not found');
+        }
+
+        patchF64(12345.0, 1e30);
+        patchF64(54321.0, 0.0);
+
+        final src = '${tmpDir.path}/half_zero.skp';
+        File(src).writeAsBytesSync(raw);
+
+        final result = openExisting(src);
+        expect(result.definitions.containsKey('Half'), isFalse);
+        expect(result.definitions.containsKey('Zero'), isFalse);
+        expect(
+          result.warnings.any((w) => w.contains("definition 'Half': skipped")),
+          isTrue,
+        );
+        expect(
+          result.warnings.any((w) => w.contains("definition 'Zero': skipped")),
+          isTrue,
+        );
+        final rebuilt = SkpFile.fromBuffer(result.builder.toBytes()).parse();
+        expect(rebuilt.root.faces, hasLength(1));
+        expect(rebuilt.definitions, isEmpty);
+      } finally {
+        tmpDir.deleteSync(recursive: true);
+      }
     });
   });
 
