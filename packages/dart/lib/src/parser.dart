@@ -229,6 +229,7 @@ class SkpFile {
     for (final entry in d.builder.edges.entries) {
       final (v1, v2) = entry.value;
       final flags = d.builder.edgeFlags[entry.key] ?? 0;
+      final edgeLayerId = d.builder.edgeLayers[entry.key];
       defn.edges[entry.key] = Edge(
         id: entry.key,
         v1Id: v1 ?? 0,
@@ -238,6 +239,9 @@ class SkpFile {
         hidden: (flags & 0x01) != 0,
         curveId: d.builder.edgeCurves[entry.key],
         persistentId: edgePids != null ? (edgePids[entry.key] ?? 0) : entry.key,
+        layer: edgeLayerId != null
+            ? (layerIdToName[edgeLayerId] ?? edgeLayerId.toString())
+            : '',
       );
     }
 
@@ -255,6 +259,7 @@ class SkpFile {
 
     for (final entry in d.builder.faces.entries) {
       final f = entry.value;
+      final faceLayerId = f.layerId;
       defn.faces[entry.key] = Face(
         id: entry.key,
         loops: f.loops,
@@ -267,6 +272,9 @@ class SkpFile {
         uvProjectedBack: f.uvProjectedBack,
         hidden: f.hidden,
         persistentId: edgePids != null ? f.persistentId : entry.key,
+        layer: faceLayerId != null
+            ? (layerIdToName[faceLayerId] ?? faceLayerId.toString())
+            : '',
       );
     }
 

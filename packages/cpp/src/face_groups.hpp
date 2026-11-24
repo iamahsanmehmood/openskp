@@ -72,9 +72,16 @@ struct Group {
   std::map<FaceVKey, Vec3> normals;
 };
 
+struct FaceLayerSummary {
+  std::optional<std::string> uniform_layer;
+  std::optional<std::string> majority_layer;
+};
+
 std::shared_ptr<RawMaterial> find_material(const RawParsed& parsed, std::optional<EntityId> id);
 std::optional<FaceColorKey> material_color(const std::shared_ptr<RawMaterial>& material);
 FaceColorKey default_color(const RawParsed& parsed, const std::string& layer);
+FaceLayerSummary summarize_face_layers(const RawParsed& parsed, const GeometryBuilder& b,
+                                       const ParseOptions& options = {});
 std::optional<std::pair<FaceColorKey, FaceColorKey>> unpainted_style_colors(
     const RawParsed& parsed, const std::string& unpainted_faces);
 std::optional<std::string> sniff_image_mime(const ByteBuffer& data);

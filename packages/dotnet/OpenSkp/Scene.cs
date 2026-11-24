@@ -286,6 +286,16 @@ namespace OpenSkp
                 }
             }
 
+            var faceLayerCache = new Dictionary<long, (string? UniformLayer, string? MajorityLayer)>();
+            (string? UniformLayer, string? MajorityLayer) GetFaceLayerSummary(long? defId, GeometryBuilder builder)
+            {
+                long key = defId ?? -1L;
+                if (faceLayerCache.TryGetValue(key, out var hit)) return hit;
+                hit = Geometry.SummarizeFaceLayers(builder, layerIdToName);
+                faceLayerCache[key] = hit;
+                return hit;
+            }
+
             List<InstanceNode> InstantiateRoot(GeometryBuilder rootBuilder, List<double> currentMatrix)
             {
                 return InstantiateBuilder(rootBuilder, "ROOT_MODEL", null, currentMatrix, "Layer0", "ROOT", null, null);
@@ -296,6 +306,10 @@ namespace OpenSkp
                 string parentLayer, string pathName, (int R, int G, int B)? inheritedColor,
                 Geometry.RawMaterial? inheritedMaterial = null)
             {
+                var summary = GetFaceLayerSummary(defId, builder);
+                string meshLayer = parentLayer == "Layer0"
+                    ? (summary.UniformLayer ?? parentLayer)
+                    : parentLayer;
                 if (builder.Faces.Count > 0)
                 {
                     (int R, int G, int B) fallbackColor, fallbackBackColor;
@@ -309,7 +323,8 @@ namespace OpenSkp
                     }
                     else
                     {
-                        fallbackColor = fallbackBackColor = GetLayerColor(parentLayer);
+                        string colorLayer = summary.MajorityLayer ?? parentLayer;
+                        fallbackColor = fallbackBackColor = GetLayerColor(colorLayer);
                     }
                     var faceGroups = FaceGroups.BuildLocalFaceGroups(builder, new FaceGroups.Context
                     {
@@ -343,14 +358,14 @@ namespace OpenSkp
                         string safePath = pathName.Replace(" / ", "__").Replace(" ", "_");
                         if (safePath.Length > 80) safePath = safePath.Substring(0, 80);
                         string colorSuffix = multiGroup ? $"_{color.Item1}_{color.Item2}_{color.Item3}_{(group.DoubleSided ? "ds" : "ss")}" : "";
-                        string geomName = $"mesh_{meshCounter}_{safePath}_{parentLayer}{colorSuffix}";
+                        string geomName = $"mesh_{meshCounter}_{safePath}_{meshLayer}{colorSuffix}";
                         meshCounter++;
 
                         meshIndex[geomName] = new MeshMetadata
                         {
                             Name = isRootPath ? "ROOT" : (pathName.Split(new[] { " / " }, StringSplitOptions.None).LastOrDefault() ?? ""),
                             DefinitionName = defName ?? "",
-                            Layer = parentLayer,
+                            Layer = meshLayer,
                             PositionMm = (Math.Round(tx, 2), Math.Round(ty, 2), Math.Round(tz, 2)),
                             Properties = new Dictionary<string, string>(),
                             Path = pathName,
@@ -570,12 +585,18 @@ namespace OpenSkp
                         }
                     }
 
+                    string nodeLayer = lName;
+                    if (lName == "Layer0" && childNodes.Count == 0 && refIdx.HasValue && defsDict.TryGetValue(refIdx.Value, out var leafDef))
+                    {
+                        nodeLayer = GetFaceLayerSummary(refIdx.Value, leafDef.Builder).UniformLayer ?? lName;
+                    }
+
                     var instInfo = new InstanceNode
                     {
                         Name = displayName,
                         NameIsGenerated = nameIsGenerated,
                         DefinitionName = childDefName,
-                        Layer = lName,
+                        Layer = nodeLayer,
                         PositionMm = (Math.Round(itx, 2), Math.Round(ity, 2), Math.Round(itz, 2)),
                         Properties = properties,
                         AttributeDictionaries = attributeDictionaries,
@@ -631,12 +652,12 @@ namespace OpenSkp
                 var existing = meshKv3.Value;
                 if (existing.Path == "ROOT")
                 {
-                    existing.Name = "ROOT";
-                    existing.DefinitionName = "ROOT_MODEL";
-                    existing.Layer = "Layer0";
+                    if (string.IsNullOrEmpty(existing.Name)) existing.Name = "ROOT";
+                    if (string.IsNullOrEmpty(existing.DefinitionName)) existing.DefinitionName = "ROOT_MODEL";
+                    if (string.IsNullOrEmpty(existing.Layer)) existing.Layer = "Layer0";
                     existing.PositionMm = (0, 0, 0);
-                    existing.Properties = new Dictionary<string, string>();
-                    existing.AttributeDictionaries = new Dictionary<string, Dictionary<string, string>>();
+                    existing.Properties ??= new Dictionary<string, string>();
+                    existing.AttributeDictionaries ??= new Dictionary<string, Dictionary<string, string>>();
                 }
             }
 

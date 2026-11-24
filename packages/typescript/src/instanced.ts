@@ -1,5 +1,5 @@
 import { foldScale, multiplyMatrices } from './transforms';
-import { extractAttributeDictionaries, isGenericDefinitionName, findNameOverride, stringifyVffAttrValue, VffAttrValue } from './geometry';
+import { extractAttributeDictionaries, isGenericDefinitionName, findNameOverride, stringifyVffAttrValue, summarizeFaceLayers, FaceLayerSummary, VffAttrValue } from './geometry';
 import { ParseOptions, PROGRESS_INTERVAL, emitLog, emitProgress } from './observability';
 import { SkpParseError } from './errors';
 import {
@@ -337,6 +337,16 @@ export function buildInstancedSceneFromParsed(
     return `${String(defId)}|${matKey}|${fallbackColor.r},${fallbackColor.g},${fallbackColor.b}${backPart}`;
   }
 
+  const faceLayerCache = new Map<number | string, FaceLayerSummary>();
+  function getFaceLayerSummary(defId: number | string): FaceLayerSummary {
+    let hit = faceLayerCache.get(defId);
+    if (hit !== undefined) return hit;
+    const d = defsDict.get(defId);
+    hit = d ? summarizeFaceLayers(d.builder, layerIdToName) : { uniformLayer: null, majorityLayer: null };
+    faceLayerCache.set(defId, hit);
+    return hit;
+  }
+
   /** Build (or reuse) the local-space mesh resource for a definition
    * rendered in the given context. Returns undefined when the definition
    * has no face geometry of its own. */
@@ -348,13 +358,17 @@ export function buildInstancedSceneFromParsed(
     const d = defsDict.get(defId);
     if (!d || d.builder.faces.size === 0) return undefined;
 
-    const key = resourceVariantKey(defId, inheritedMaterial, layer);
+    const colorLayer =
+      !inheritedMaterial && !styleColors
+        ? (getFaceLayerSummary(defId).majorityLayer ?? layer)
+        : layer;
+    const key = resourceVariantKey(defId, inheritedMaterial, colorLayer);
     const hit = resourceIdByKey.get(key);
     if (hit !== undefined) return hit;
 
     const [fallbackColor, fallbackBackColor] = styleColors ?? [
-      getLayerColor(layer),
-      getLayerColor(layer),
+      getLayerColor(colorLayer),
+      getLayerColor(colorLayer),
     ];
     const faceGroups = buildLocalFaceGroups(d.builder, {
       resolveMaterial: (matId) =>
@@ -596,11 +610,16 @@ export function buildInstancedSceneFromParsed(
         }
       }
 
+      const nodeLayer =
+        lName === 'Layer0' && children.length === 0 && defsDict.has(refIdx)
+          ? (getFaceLayerSummary(refIdx).uniformLayer ?? lName)
+          : lName;
+
       nodes.push({
         name: displayName,
         nameIsGenerated,
         definitionName: childDefName,
-        layer: lName,
+        layer: nodeLayer,
         ...(ownLayer ? { ownLayer } : {}),
         matrix: toGltfMatrix(inst.matrix),
         positionMm: [

@@ -20,6 +20,7 @@ namespace OpenSkp
         public bool UvProjectedBack;
         public bool Hidden;
         public long PersistentId;
+        public long? LayerId;
     }
 
     internal sealed class GeometryBuilderInstance
@@ -75,6 +76,7 @@ namespace OpenSkp
         public Dictionary<long, (double X, double Y, double Z)> Vertices = new Dictionary<long, (double, double, double)>();
         public Dictionary<long, (long? V1, long? V2)> Edges = new Dictionary<long, (long?, long?)>();
         public Dictionary<long, int> EdgeFlags = new Dictionary<long, int>();
+        public Dictionary<long, long> EdgeLayers = new Dictionary<long, long>();
         /// <summary>Edge id -> entity id of the Curve the edge belongs to (SketchUp's <c>Edge#curve</c>).</summary>
         public Dictionary<long, long> EdgeCurves = new Dictionary<long, long>();
         /// <summary>Legacy edge slot -> persistent id (null for VFF, where edge id is already persistent).</summary>
@@ -501,6 +503,11 @@ namespace OpenSkp
                             {
                                 builder.EdgeFlags[eId.Value] = d307.Payload[0];
                             }
+                            var d207 = d007.Children.FirstOrDefault(c => c.Tag == "D207");
+                            if (d207 != null && d207.Payload.Length > 0)
+                            {
+                                builder.EdgeLayers[eId.Value] = Tlv.ParseVarInt(d207.Payload, 0, d207.Payload.Length);
+                            }
                         }
 
                         // BB0B = the parent Curve's entity id (Edge#curve).
@@ -593,6 +600,7 @@ namespace OpenSkp
                         }
 
                         long? faceMatId = null;
+                        long? faceLayerId = null;
                         double[]? uvFront = null;
                         double[]? uvBack = null;
                         bool faceHidden = false;
@@ -603,6 +611,11 @@ namespace OpenSkp
                             if (d107 != null)
                             {
                                 faceMatId = Tlv.ParseVarInt(d107.Payload, 0, d107.Payload.Length);
+                            }
+                            var d207 = d007.Children.FirstOrDefault(c => c.Tag == "D207");
+                            if (d207 != null && d207.Payload.Length > 0)
+                            {
+                                faceLayerId = Tlv.ParseVarInt(d207.Payload, 0, d207.Payload.Length);
                             }
                             var dc05 = d007.Children.FirstOrDefault(c => c.Tag == "DC05");
                             if (dc05 != null)
@@ -635,6 +648,7 @@ namespace OpenSkp
                             UvTransform = uvFront,
                             UvTransformBack = uvBack,
                             Hidden = faceHidden,
+                            LayerId = faceLayerId,
                         };
                     }
                 }
@@ -1164,6 +1178,52 @@ namespace OpenSkp
                 FrontColor = colors.TryGetValue("2002", out var fc) ? fc : ((int, int, int)?)null,
                 BackColor = colors.TryGetValue("2003", out var bc) ? bc : ((int, int, int)?)null,
             };
+        }
+
+        public static (string? UniformLayer, string? MajorityLayer) SummarizeFaceLayers(
+            GeometryBuilder builder,
+            Dictionary<long, string> layerIdToName)
+        {
+            if (builder.Faces.Count == 0) return (null, null);
+            var counts = new List<(long Id, int Count)>();
+            bool allSame = true;
+            string? commonName = null;
+            foreach (var f in builder.Faces.Values)
+            {
+                string fname = "";
+                if (f.LayerId is long lid && lid != 0 && layerIdToName.TryGetValue(lid, out var resolved) && resolved != "Layer0")
+                {
+                    fname = resolved;
+                    int idx = counts.FindIndex(c => c.Id == lid);
+                    if (idx >= 0) counts[idx] = (lid, counts[idx].Count + 1);
+                    else counts.Add((lid, 1));
+                }
+                if (!string.IsNullOrEmpty(fname))
+                {
+                    if (commonName == null) commonName = fname;
+                    else if (commonName != fname) allSame = false;
+                }
+                else
+                {
+                    allSame = false;
+                }
+            }
+            string? majorityLayer = null;
+            if (counts.Count > 0)
+            {
+                long bestId = counts[0].Id;
+                int bestCount = counts[0].Count;
+                for (int i = 1; i < counts.Count; i++)
+                {
+                    if (counts[i].Count > bestCount)
+                    {
+                        bestId = counts[i].Id;
+                        bestCount = counts[i].Count;
+                    }
+                }
+                if (layerIdToName.TryGetValue(bestId, out var mname)) majorityLayer = mname;
+            }
+            return (allSame ? commonName : null, majorityLayer);
         }
     }
 }

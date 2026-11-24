@@ -155,6 +155,13 @@ InstancedScene build_instanced_scene_raw(RawParsed&& p, const ParseOptions& o) {
   // merging those would silently repaint geometry. The material name is
   // needed on top of the color because two painted materials can share a
   // color and opacity yet differ in texture or tile size.
+  std::map<std::optional<EntityId>, FaceLayerSummary> face_layer_cache;
+  auto get_face_layer_summary = [&](std::optional<EntityId> defid,
+                                    const GeometryBuilder& b) -> const FaceLayerSummary& {
+    auto it = face_layer_cache.find(defid);
+    if (it != face_layer_cache.end()) return it->second;
+    return face_layer_cache.emplace(defid, summarize_face_layers(p, b, o)).first->second;
+  };
   std::function<std::optional<std::string>(const GeometryBuilder&, const std::string&,
                                            std::optional<EntityId>,
                                            const std::shared_ptr<RawMaterial>&, const std::string&)>
@@ -172,7 +179,9 @@ InstancedScene build_instanced_scene_raw(RawParsed&& p, const ParseOptions& o) {
     } else if (style_colors) {
       std::tie(fallback, fallback_back) = *style_colors;
     } else {
-      fallback = fallback_back = default_color(p, layer);
+      const auto& summary = get_face_layer_summary(defid, builder);
+      const std::string color_layer = summary.majority_layer.value_or(layer);
+      fallback = fallback_back = default_color(p, color_layer);
     }
     const auto key = resource_key(defid, fallback, fallback_back, inherited_material);
     auto hit = resource_index_by_key.find(key);
@@ -345,6 +354,10 @@ InstancedScene build_instanced_scene_raw(RawParsed&& p, const ParseOptions& o) {
           node.mesh_resource_id = mesh_resource_for_builder(d->second.builder, d->second.name,
                                                             *i.ref_idx, inst_material, l_name);
           node.children = walk(d->second.builder, *i.ref_idx, new_matrix, l_name, inst_material);
+          if (l_name == "Layer0" && node.children.empty()) {
+            const auto& child_summary = get_face_layer_summary(*i.ref_idx, d->second.builder);
+            if (child_summary.uniform_layer) node.layer = *child_summary.uniform_layer;
+          }
           active.erase(*i.ref_idx);
         }
       }
