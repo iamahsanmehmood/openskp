@@ -114,4 +114,6 @@ def test_plain_embedded_texture_factor_stays_unchanged(tmp_path, exporter_mod):
         for m in exported
         if "baseColorTexture" in m["pbrMetallicRoughness"]
     )
-    assert exported_textured_factors == pytest.approx(scene_textured_factors)
+    assert len(exported_textured_factors) == len(scene_textured_factors)
+    for actual, expected in zip(exported_textured_factors, scene_textured_factors):
+        assert actual == pytest.approx(expected)
