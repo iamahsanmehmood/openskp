@@ -185,12 +185,21 @@ namespace OpenSkp
             // multiply the export size for nothing.
             var textures = new List<SceneTexture>();
             var textureIndexByKey = new Dictionary<string, int>();
+            var skippedTextures = new HashSet<(string, string)>();
 
-            int? TextureIndexFor(Geometry.RawTexture? tex)
+            int? TextureIndexFor(Geometry.RawTexture? tex, string? materialName)
             {
                 if (tex?.Data == null || tex.Data.Length == 0) return null;
-                var mimeType = SniffImageMime(tex.Data);
-                if (mimeType == null) return null; // a format glTF cannot carry
+                var mimeType = FaceGroups.SniffImageMime(tex.Data);
+                if (mimeType == null && options?.OriginalTextures == true)
+                {
+                    mimeType = FaceGroups.OriginalImageMime(tex.Data);
+                }
+                if (mimeType == null)
+                {
+                    FaceGroups.WarnSkippedTexture(options, skippedTextures, materialName, tex, tex.Data);
+                    return null;
+                }
                 // length plus a short byte prefix is enough to tell real
                 // images apart without hashing megabytes on every face
                 var head = BitConverter.ToString(tex.Data, 0, Math.Min(16, tex.Data.Length));
@@ -670,24 +679,6 @@ namespace OpenSkp
                 UnreadRootEntities = parsed.UnreadRootEntities,
                 Pages = SkpFile.BuildPages(parsed),
             };
-        }
-
-        /// <summary>Identifies an image's MIME type from its magic bytes.
-        /// Returns null for anything glTF cannot carry (glTF only allows
-        /// PNG and JPEG).</summary>
-        private static string? SniffImageMime(byte[] data)
-        {
-            if (data.Length >= 3 && data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF)
-            {
-                return "image/jpeg";
-            }
-            if (data.Length >= 8 &&
-                data[0] == 0x89 && data[1] == 0x50 && data[2] == 0x4E && data[3] == 0x47 &&
-                data[4] == 0x0D && data[5] == 0x0A && data[6] == 0x1A && data[7] == 0x0A)
-            {
-                return "image/png";
-            }
-            return null;
         }
 
         /// <summary>Internal (not private) so Edit.cs can reuse this same

@@ -46,7 +46,7 @@ fn export_omits_images_by_default() {
 fn export_embeds_textures_when_asked() {
     let scene = capilla();
     let without = to_glb(&scene, &GlbOptions::default()).unwrap();
-    let with = to_glb(&scene, &GlbOptions { textures: true }).unwrap();
+    let with = to_glb(&scene, &GlbOptions::new().with_textures(true)).unwrap();
     assert!(with.len() > without.len());
     assert!(contains_bytes(&with, JPEG_MAGIC));
 
@@ -76,7 +76,7 @@ fn export_embeds_textures_when_asked() {
 #[test]
 fn export_glb_file_writes_embedded_textures() {
     let output = std::env::temp_dir().join("openskp-rs-textures-test.glb");
-    export_glb(&capilla(), &output, &GlbOptions { textures: true }).unwrap();
+    export_glb(&capilla(), &output, &GlbOptions::new().with_textures(true)).unwrap();
     let actual = std::fs::read(&output).unwrap();
     std::fs::remove_file(&output).unwrap();
     assert!(contains_bytes(&actual, JPEG_MAGIC));

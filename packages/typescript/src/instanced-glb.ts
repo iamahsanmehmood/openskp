@@ -1,5 +1,7 @@
 import type { InstancedScene, InstancedNode } from './instanced';
+import { filterGltfTextures } from './face-groups';
 import { encodeIndices } from './gltf-indices';
+import type { LogLevel } from './observability';
 
 /** Options for {@link toInstancedGLB}. */
 export interface InstancedGlbOptions {
@@ -8,29 +10,9 @@ export interface InstancedGlbOptions {
    * {@link toGLB}: photographic textures can multiply the file size, and
    * the geometry alone is what most callers are after. */
   textures?: boolean;
-}
-
-/**
- * Drops `baseColorTexture` from materials when the images are not being
- * embedded, so the reference does not dangle and a strict glTF reader
- * still accepts the file. Mirrors {@link toGLB}'s own handling.
- */
-function stripTextureRefs(materials: unknown[]): unknown[] {
-  let needsCopy = false;
-  for (const mat of materials) {
-    if ((mat as any)?.pbrMetallicRoughness?.baseColorTexture) {
-      needsCopy = true;
-      break;
-    }
-  }
-  if (!needsCopy) return materials;
-  return materials.map((mat) => {
-    const pbr = (mat as any)?.pbrMetallicRoughness;
-    if (!pbr?.baseColorTexture) return mat;
-    const restPbr = { ...pbr };
-    delete restPbr.baseColorTexture;
-    return { ...(mat as any), pbrMetallicRoughness: restPbr };
-  });
+  /** Optional log hook receiving warnings (e.g. when a non-PNG/JPEG texture
+   * kept via `originalTextures: true` is omitted from the GLB). */
+  onLog?: (level: LogLevel, message: string) => void;
 }
 
 /** Wrap glTF JSON and a binary buffer into a GLB container. Shared by
@@ -95,8 +77,13 @@ export function toInstancedGLB(
   options?: InstancedGlbOptions
 ): Uint8Array {
   const resources = scene.meshResources || [];
-  const gltfMaterials = scene.gltfMaterials || [];
-  const sceneTextures = options?.textures ? scene.textures || [] : [];
+  const rawMaterials = scene.gltfMaterials || [];
+  const { textures: sceneTextures, materials } = filterGltfTextures(
+    scene.textures || [],
+    rawMaterials,
+    Boolean(options?.textures),
+    options?.onLog
+  );
 
   // Narrow each index buffer to UNSIGNED_SHORT where every index fits.
   // Keyed by resource id + primitive position so the layout pass and the
@@ -337,7 +324,7 @@ export function toInstancedGLB(
     scenes: [{ nodes: [rootIdx] }],
     nodes: gltfNodes,
     meshes: gltfMeshes,
-    materials: sceneTextures.length > 0 ? gltfMaterials : stripTextureRefs(gltfMaterials),
+    materials,
     buffers: [{ byteLength: totalBinaryLength }],
     bufferViews,
     accessors,

@@ -147,6 +147,11 @@ namespace OpenSkp
         /// textures can multiply the file size, and the geometry alone is
         /// what most callers are after.</summary>
         public bool Textures { get; set; }
+
+        /// <summary>Optional log callback receiving warnings (for example, when
+        /// a non-PNG/JPEG texture kept via <see cref="SkpParseOptions.OriginalTextures"/>
+        /// is omitted from the GLB).</summary>
+        public Action<SkpLogLevel, string>? OnLog { get; set; }
     }
 
     public static class GlbExport
@@ -162,16 +167,11 @@ namespace OpenSkp
             if (scene == null) throw new ArgumentNullException(nameof(scene));
             var prims = scene.GlbPrimitives ?? new List<GlbPrimitive>();
             var rawMaterials = scene.GltfMaterials ?? new List<object>();
-            bool embedTextures = options?.Textures == true;
-            var sceneTextures = embedTextures ? (scene.Textures ?? new List<SceneTexture>()) : new List<SceneTexture>();
-
-            // Materials always reference textures by index (Scene.Build sets
-            // that up unconditionally); embedding the actual image bytes is
-            // the opt-in part. When not embedding, strip the reference so a
-            // strict glTF reader never sees a baseColorTexture pointing at a
-            // textures[] array that was never written - a copy, so the
-            // Scene the caller owns is never mutated.
-            var materials = embedTextures ? rawMaterials : StripTextureRefs(rawMaterials);
+            var (sceneTextures, materials) = FaceGroups.FilterGltfTextures(
+                scene.Textures ?? new List<SceneTexture>(),
+                rawMaterials,
+                options?.Textures == true,
+                options?.OnLog);
 
             ValidateScene(prims, materials);
 
@@ -384,54 +384,6 @@ namespace OpenSkp
             }
 
             return CreateGlb(gltfJson, binaryBuffer);
-        }
-
-        /// <summary>Materials with every baseColorTexture reference removed -
-        /// a copy, never mutating the input. Used when not embedding images,
-        /// so a strict glTF reader never sees a reference into a textures[]
-        /// array that was never written.
-        ///
-        /// Only Dictionary-shaped materials (what SceneBuilder.Build
-        /// produces) are inspected; anything else - e.g. the anonymous
-        /// types a hand-built Scene can still use, since GltfMaterials is
-        /// publicly just List&lt;object&gt; - passes through unchanged.
-        /// Stripping is a courtesy for the auto-generated shape, not a
-        /// contract on every possible material representation.</summary>
-        private static List<object> StripTextureRefs(List<object> materials)
-        {
-            var needsCopy = false;
-            foreach (var m in materials)
-            {
-                if (m is IDictionary<string, object> dict &&
-                    dict.TryGetValue("pbrMetallicRoughness", out var pbrObj) &&
-                    pbrObj is IDictionary<string, object> pbr &&
-                    pbr.ContainsKey("baseColorTexture"))
-                {
-                    needsCopy = true;
-                    break;
-                }
-            }
-            if (!needsCopy) return materials;
-
-            var result = new List<object>(materials.Count);
-            foreach (var m in materials)
-            {
-                if (m is IDictionary<string, object> dict &&
-                    dict.TryGetValue("pbrMetallicRoughness", out var pbrObj) &&
-                    pbrObj is IDictionary<string, object> pbr &&
-                    pbr.ContainsKey("baseColorTexture"))
-                {
-                    var newPbr = new Dictionary<string, object>(pbr);
-                    newPbr.Remove("baseColorTexture");
-                    var newMat = new Dictionary<string, object>(dict) { ["pbrMetallicRoughness"] = newPbr };
-                    result.Add(newMat);
-                }
-                else
-                {
-                    result.Add(m);
-                }
-            }
-            return result;
         }
 
         /// <summary>Serializes a baked Scene to GLB and writes it to

@@ -3,7 +3,8 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'instanced_scene.dart';
-import 'scene.dart' show SceneTexture;
+import 'observability.dart' show SkpLogLevel;
+import 'scene.dart' show filterGltfTextures;
 
 /// glTF's chunk-length fields are uint32 - a GLB file's total size (and
 /// each individual chunk) is hard-capped at 4GB by the format itself, not
@@ -30,11 +31,23 @@ const int _glbSizeLimit = 0xFFFFFFFF;
 /// [textures]: embed the scene's texture images in the GLB and point each
 /// textured material's `baseColorTexture` at them. Off by default,
 /// matching [toGlb]'s own `textures` parameter.
-Uint8List toInstancedGlb(InstancedScene scene, {bool textures = false}) {
+///
+/// [onLog]: optional callback receiving warnings (for example, when a
+/// non-PNG/JPEG texture kept via `ParseOptions(originalTextures: true)` is
+/// omitted from the GLB).
+Uint8List toInstancedGlb(
+  InstancedScene scene, {
+  bool textures = false,
+  void Function(SkpLogLevel level, String message)? onLog,
+}) {
   final resources = scene.meshResources;
   final rawMaterials = scene.gltfMaterials;
-  final sceneTextures = textures ? scene.textures : <SceneTexture>[];
-  final materials = textures ? rawMaterials : _stripTextureRefs(rawMaterials);
+  final (sceneTextures, materials) = filterGltfTextures(
+    scene.textures,
+    rawMaterials,
+    textures,
+    onLog,
+  );
 
   var totalBinaryLength = 0;
   for (final res in resources) {
@@ -246,29 +259,14 @@ Uint8List toInstancedGlb(InstancedScene scene, {bool textures = false}) {
   return _createGlb(gltfJson, bufferBytes);
 }
 
-/// Materials with every `baseColorTexture` reference removed - a copy,
-/// never mutating the input. Mirrors glb.dart's own `_stripTextureRefs`
-/// exactly (duplicated rather than shared, matching the TypeScript
-/// reference's own instanced-glb.ts, which duplicates this from index.ts
-/// too).
-List<Map<String, dynamic>> _stripTextureRefs(List<Map<String, dynamic>> materials) {
-  final needsCopy = materials.any((m) {
-    final pbr = m['pbrMetallicRoughness'] as Map<String, dynamic>?;
-    return pbr != null && pbr.containsKey('baseColorTexture');
-  });
-  if (!needsCopy) return materials;
-
-  return materials.map((m) {
-    final pbr = m['pbrMetallicRoughness'] as Map<String, dynamic>?;
-    if (pbr == null || !pbr.containsKey('baseColorTexture')) return m;
-    final newPbr = Map<String, dynamic>.from(pbr)..remove('baseColorTexture');
-    return Map<String, dynamic>.from(m)..['pbrMetallicRoughness'] = newPbr;
-  }).toList();
-}
-
 /// Serializes an [InstancedScene] to GLB and writes it to [path].
-void exportInstancedGlb(InstancedScene scene, String path, {bool textures = false}) {
-  File(path).writeAsBytesSync(toInstancedGlb(scene, textures: textures));
+void exportInstancedGlb(
+  InstancedScene scene,
+  String path, {
+  bool textures = false,
+  void Function(SkpLogLevel level, String message)? onLog,
+}) {
+  File(path).writeAsBytesSync(toInstancedGlb(scene, textures: textures, onLog: onLog));
 }
 
 Uint8List _createGlb(Map<String, dynamic> json, Uint8List binaryBuffer) {

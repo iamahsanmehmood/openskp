@@ -14,6 +14,8 @@
 
 #include <openskp/instanced_glb.hpp>
 
+#include "face_groups.hpp"
+
 #define TINYGLTF_IMPLEMENTATION
 #define TINYGLTF_NO_STB_IMAGE
 #define TINYGLTF_NO_STB_IMAGE_WRITE
@@ -195,8 +197,10 @@ int emit_node(gltf::Model& model, const InstancedNode& node,
   return idx;
 }
 
-gltf::Model make_model(const InstancedScene& scene, bool embed_textures) {
+gltf::Model make_model(const InstancedScene& scene, const InstancedGlbOptions& options) {
   validate_scene(scene);
+
+  const auto filtered = filter_gltf_textures(scene.textures, options.textures, options.log);
 
   gltf::Model model;
   model.asset.version = "2.0";
@@ -213,17 +217,22 @@ gltf::Model make_model(const InstancedScene& scene, bool embed_textures) {
     material.pbrMetallicRoughness.metallicFactor = source_pbr.metallic_factor;
     material.pbrMetallicRoughness.roughnessFactor = source_pbr.roughness_factor;
     material.doubleSided = source.double_sided;
+    std::optional<int> mapped_tex;
+    if (options.textures && source_pbr.base_color_texture &&
+        *source_pbr.base_color_texture < filtered.remap.size()) {
+      mapped_tex = filtered.remap[*source_pbr.base_color_texture];
+    }
     // See glb.cpp's make_model for why: BLEND for genuinely translucent
     // materials, MASK (a safe no-op on an opaque-alpha texture) for
     // textured ones, otherwise glTF's default OPAQUE.
     if (source_pbr.base_color_factor[3] < 1.0) {
       material.alphaMode = "BLEND";
-    } else if (source_pbr.base_color_texture) {
+    } else if (options.textures ? mapped_tex.has_value()
+                                : source_pbr.base_color_texture.has_value()) {
       material.alphaMode = "MASK";
     }
-    if (embed_textures && source_pbr.base_color_texture) {
-      material.pbrMetallicRoughness.baseColorTexture.index =
-          static_cast<int>(*source_pbr.base_color_texture);
+    if (mapped_tex) {
+      material.pbrMetallicRoughness.baseColorTexture.index = *mapped_tex;
     }
     model.materials.push_back(std::move(material));
   }
@@ -316,14 +325,14 @@ gltf::Model make_model(const InstancedScene& scene, bool embed_textures) {
     model.meshes.push_back(std::move(mesh));
   }
 
-  if (embed_textures && !scene.textures.empty()) {
+  if (!filtered.textures.empty()) {
     model.samplers.emplace_back();
     model.samplers[0].wrapS = TINYGLTF_TEXTURE_WRAP_REPEAT;
     model.samplers[0].wrapT = TINYGLTF_TEXTURE_WRAP_REPEAT;
 
-    for (const auto& tex : scene.textures) {
+    for (const auto* tex : filtered.textures) {
       const auto image_offset = append_values(
-          binary, tex.data, [](ByteBuffer& bytes, std::uint8_t value) { bytes.push_back(value); });
+          binary, tex->data, [](ByteBuffer& bytes, std::uint8_t value) { bytes.push_back(value); });
 
       // Not add_view(): that helper always sets BufferView::target, but an
       // image bufferView must leave target unset (glTF's target enum only
@@ -332,12 +341,12 @@ gltf::Model make_model(const InstancedScene& scene, bool embed_textures) {
       gltf::BufferView view;
       view.buffer = 0;
       view.byteOffset = image_offset;
-      view.byteLength = tex.data.size();
+      view.byteLength = tex->data.size();
       model.bufferViews.push_back(std::move(view));
       const auto image_view = static_cast<int>(model.bufferViews.size() - 1);
 
       gltf::Image image;
-      image.mimeType = tex.mime_type;
+      image.mimeType = tex->mime_type;
       image.bufferView = image_view;
       model.images.push_back(std::move(image));
 
@@ -357,7 +366,7 @@ gltf::Model make_model(const InstancedScene& scene, bool embed_textures) {
 }  // namespace
 
 ByteBuffer to_instanced_glb(const InstancedScene& scene, const InstancedGlbOptions& options) {
-  auto model = make_model(scene, options.textures);
+  auto model = make_model(scene, options);
   std::ostringstream stream(std::ios::binary | std::ios::out);
   try {
     gltf::TinyGLTF writer;

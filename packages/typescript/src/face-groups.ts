@@ -2,8 +2,9 @@ import { triangulateFace3D } from './triangulator';
 import { reconstructLoopVertices } from './geometry';
 import type { GeometryBuilder } from './geometry';
 import { SkpParseError } from './errors';
+import { emitLog, type LogLevel, type ParseOptions } from './observability';
 import { faceUvBasis, computeFaceUv } from './model';
-import type { Material, Texture } from './model';
+import type { Material, SceneTexture, Texture } from './model';
 
 /**
  * One group of faces sharing a single resolved (colour, doubleSided,
@@ -44,7 +45,7 @@ export interface LocalFaceGroup {
  * texture index, and the colour to fall back to for an unpainted face. */
 export interface FaceGroupContext {
   resolveMaterial: (matId: number | null | undefined) => Material | undefined;
-  textureIndexFor: (tex: Texture | null | undefined) => number | null;
+  textureIndexFor: (tex: Texture | null | undefined, materialName?: string) => number | null;
   /** Painted-instance material inherited from the enclosing instance, if any. */
   inheritedMaterial?: Material;
   /** Colour an unpainted face front side falls back to when nothing is
@@ -215,7 +216,7 @@ export function buildLocalFaceGroups(
     // faces are batched per emitted material, so the texture has to be
     // part of the key too - otherwise two differently-textured faces with
     // the same average colour end up in one primitive with one image
-    const texIndex = ctx.textureIndexFor(mat?.texture);
+    const texIndex = ctx.textureIndexFor(mat?.texture, mat?.name);
     // Two independent SketchUp mechanisms can reduce a material's opacity:
     // the plain RGBA colour record's alpha byte (older/simple materials,
     // and what the writer's addMaterial(rgba) sets), and the newer XML
@@ -369,4 +370,173 @@ export function buildLocalFaceGroups(
   }
 
   return faceGroups;
+}
+
+const ORIGINAL_IMAGE_MIME: Record<string, string> = {
+  TIFF: 'image/tiff',
+  GIF: 'image/gif',
+  BMP: 'image/bmp',
+  TGA: 'image/x-tga',
+  WebP: 'image/webp',
+  PSD: 'image/vnd.adobe.photoshop',
+  DDS: 'image/vnd.ms-dds',
+  'JPEG 2000': 'image/jp2',
+};
+
+function asciiStartsWith(data: Uint8Array, offset: number, text: string): boolean {
+  if (offset + text.length > data.length) return false;
+  for (let i = 0; i < text.length; i++) {
+    if (data[offset + i] !== text.charCodeAt(i)) return false;
+  }
+  return true;
+}
+
+export function describeImageFormat(data: Uint8Array, filename = ''): string {
+  if (
+    data.length >= 4 &&
+    ((data[0] === 0x49 && data[1] === 0x49 && data[2] === 0x2a && data[3] === 0x00) ||
+      (data[0] === 0x4d && data[1] === 0x4d && data[2] === 0x00 && data[3] === 0x2a))
+  ) {
+    return 'TIFF';
+  }
+  if (asciiStartsWith(data, 0, 'BM')) return 'BMP';
+  if (asciiStartsWith(data, 0, 'GIF87a') || asciiStartsWith(data, 0, 'GIF89a')) return 'GIF';
+  if (asciiStartsWith(data, 0, 'RIFF') && asciiStartsWith(data, 8, 'WEBP')) return 'WebP';
+  if (asciiStartsWith(data, 0, '8BPS')) return 'PSD';
+  if (asciiStartsWith(data, 0, 'DDS ')) return 'DDS';
+  if (
+    data.length >= 8 &&
+    data[0] === 0x00 &&
+    data[1] === 0x00 &&
+    data[2] === 0x00 &&
+    data[3] === 0x0c &&
+    asciiStartsWith(data, 4, 'jP  ')
+  ) {
+    return 'JPEG 2000';
+  }
+  const tailStart = Math.max(0, data.length - 26);
+  for (let i = tailStart; i + 16 <= data.length; i++) {
+    if (asciiStartsWith(data, i, 'TRUEVISION-XFILE')) return 'TGA';
+  }
+  const base = filename.replace(/\\/g, '/').split('/').pop() ?? '';
+  const dot = base.lastIndexOf('.');
+  const ext = dot >= 0 ? base.slice(dot + 1) : '';
+  return ext.length > 0 && ext.length <= 5 ? ext.toUpperCase() : 'an unrecognized format';
+}
+
+export function originalImageMime(data: Uint8Array): string | null {
+  return ORIGINAL_IMAGE_MIME[describeImageFormat(data)] ?? null;
+}
+
+export function warnSkippedTexture(
+  options: ParseOptions | undefined,
+  warned: Set<string>,
+  materialName: string | undefined,
+  tex: Texture,
+  data: Uint8Array
+): void {
+  const filename = tex.filename ?? '';
+  const fmt = describeImageFormat(data, filename);
+  const warnKey = `${materialName ?? ''}\0${fmt}`;
+  if (warned.has(warnKey)) return;
+  warned.add(warnKey);
+  const base = filename.replace(/\\/g, '/').split('/').pop() ?? '';
+  const keepable = originalImageMime(data) !== null;
+  const label = materialName ? `'${materialName}'` : "'(unnamed)'";
+  const suffix = base ? ` (${base})` : '';
+  const hint = keepable ? ' (pass originalTextures: true to keep it in its own format)' : '';
+  emitLog(
+    options,
+    'warn',
+    `Texture of material ${label}${suffix} is ${fmt}, which a scene cannot carry (only PNG and JPEG): ` +
+      `the material is built without its texture${hint}`
+  );
+}
+
+/**
+ * Prepares `textures` and `materials` for GLB serialization without mutating
+ * the input scene: strips all `baseColorTexture` references when `embed` is
+ * off, and when `embed` is on omits any non-PNG/JPEG texture (such as TIFF or
+ * BMP kept via `originalTextures: true`), remapping remaining texture indices
+ * and logging one warning per skipped image.
+ */
+export function filterGltfTextures(
+  rawTextures: SceneTexture[],
+  rawMaterials: unknown[],
+  embed: boolean,
+  onLog?: (level: LogLevel, message: string) => void
+): { textures: SceneTexture[]; materials: unknown[] } {
+  if (!embed || rawTextures.length === 0) {
+    let needsCopy = false;
+    for (const mat of rawMaterials) {
+      if ((mat as any)?.pbrMetallicRoughness?.baseColorTexture) {
+        needsCopy = true;
+        break;
+      }
+    }
+    if (!needsCopy) return { textures: [], materials: rawMaterials };
+    const stripped = rawMaterials.map((mat) => {
+      const pbr = (mat as any)?.pbrMetallicRoughness;
+      if (!pbr?.baseColorTexture) return mat;
+      const restPbr = { ...pbr };
+      delete restPbr.baseColorTexture;
+      return { ...(mat as any), pbrMetallicRoughness: restPbr };
+    });
+    return { textures: [], materials: stripped };
+  }
+
+  const kept: SceneTexture[] = [];
+  const remap: (number | null)[] = new Array(rawTextures.length);
+  const warned = new Set<string>();
+  let anyDropped = false;
+
+  for (let i = 0; i < rawTextures.length; i++) {
+    const tex = rawTextures[i];
+    if (tex.mimeType === 'image/png' || tex.mimeType === 'image/jpeg') {
+      remap[i] = kept.length;
+      kept.push(tex);
+    } else {
+      remap[i] = null;
+      anyDropped = true;
+      const filename = tex.filename ?? '';
+      const base = filename.replace(/\\/g, '/').split('/').pop() ?? '';
+      const fmt = describeImageFormat(tex.data, filename);
+      const warnKey = `${base}\0${fmt}`;
+      if (!warned.has(warnKey)) {
+        warned.add(warnKey);
+        const label = base ? ` '${base}'` : '';
+        onLog?.(
+          'warn',
+          `Texture${label} is ${fmt}, which glTF 2.0 cannot carry (only PNG and JPEG): leaving it out of the GLB`
+        );
+      }
+    }
+  }
+
+  if (!anyDropped) return { textures: kept, materials: rawMaterials };
+
+  const materials = rawMaterials.map((mat) => {
+    const m = mat as any;
+    const pbr = m?.pbrMetallicRoughness;
+    const texRef = pbr?.baseColorTexture;
+    if (!texRef || typeof texRef.index !== 'number') return mat;
+    const mapped = texRef.index >= 0 && texRef.index < remap.length ? remap[texRef.index] : null;
+    if (mapped === null) {
+      const restPbr = { ...pbr };
+      delete restPbr.baseColorTexture;
+      const nextMat = { ...m, pbrMetallicRoughness: restPbr };
+      if (nextMat.alphaMode === 'MASK') delete nextMat.alphaMode;
+      return nextMat;
+    }
+    if (mapped === texRef.index) return mat;
+    return {
+      ...m,
+      pbrMetallicRoughness: {
+        ...pbr,
+        baseColorTexture: { ...texRef, index: mapped },
+      },
+    };
+  });
+
+  return { textures: kept, materials };
 }

@@ -444,7 +444,7 @@ pub fn build_instanced_scene_raw(
         p: &p,
         o,
         style_colors,
-        textures: TextureRegistry::default(),
+        textures: TextureRegistry::from_options(o),
         gltf_materials: Vec::new(),
         material_index_by_key: BTreeMap::new(),
         mesh_resources: Vec::new(),

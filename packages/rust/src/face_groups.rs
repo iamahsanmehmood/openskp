@@ -140,24 +140,129 @@ pub fn sniff_image_mime(data: &[u8]) -> Option<&'static str> {
     None
 }
 
+pub(crate) fn describe_image_format(data: &[u8], filename: &str) -> String {
+    if data.starts_with(b"II*\x00") || data.starts_with(b"MM\x00*") {
+        return "TIFF".to_owned();
+    }
+    if data.starts_with(b"BM") {
+        return "BMP".to_owned();
+    }
+    if data.starts_with(b"GIF87a") || data.starts_with(b"GIF89a") {
+        return "GIF".to_owned();
+    }
+    if data.len() >= 12 && &data[..4] == b"RIFF" && &data[8..12] == b"WEBP" {
+        return "WebP".to_owned();
+    }
+    if data.starts_with(b"8BPS") {
+        return "PSD".to_owned();
+    }
+    if data.starts_with(b"DDS ") {
+        return "DDS".to_owned();
+    }
+    if data.starts_with(b"\x00\x00\x00\x0cjP  ") {
+        return "JPEG 2000".to_owned();
+    }
+    let tail = &data[data.len().saturating_sub(26)..];
+    if tail.windows(16).any(|w| w == b"TRUEVISION-XFILE") {
+        return "TGA".to_owned();
+    }
+    let base = filename.rsplit(['/', '\\']).next().unwrap_or("");
+    if let Some((_, ext)) = base.rsplit_once('.') {
+        if !ext.is_empty() && ext.len() <= 5 {
+            return ext.to_ascii_uppercase();
+        }
+    }
+    "an unrecognized format".to_owned()
+}
+
+/// Real MIME type of a known non-PNG/JPEG texture format from its byte
+/// signature (or TGA footer), or `None` when unrecognized.
+pub(crate) fn original_image_mime(data: &[u8]) -> Option<&'static str> {
+    match describe_image_format(data, "").as_str() {
+        "TIFF" => Some("image/tiff"),
+        "GIF" => Some("image/gif"),
+        "BMP" => Some("image/bmp"),
+        "TGA" => Some("image/x-tga"),
+        "WebP" => Some("image/webp"),
+        "PSD" => Some("image/vnd.adobe.photoshop"),
+        "DDS" => Some("image/vnd.ms-dds"),
+        "JPEG 2000" => Some("image/jp2"),
+        _ => None,
+    }
+}
+
 /// The scene's texture table, deduplicated by bytes (the builders'
 /// `texture_index_for`): the same image routinely backs several materials.
 #[derive(Debug, Clone, Default)]
 pub struct TextureRegistry {
     pub textures: Vec<SceneTexture>,
     index_by_key: HashMap<String, usize>,
+    options: crate::observability::ParseOptions,
+    warned: HashMap<(String, String), ()>,
 }
 
 impl TextureRegistry {
+    /// Creates a registry configured with the scene build's [`ParseOptions`].
+    pub fn from_options(options: &crate::observability::ParseOptions) -> Self {
+        Self {
+            options: options.clone(),
+            ..Self::default()
+        }
+    }
+
+    fn warn_skipped(&mut self, material: &RawMaterial, data: &[u8]) {
+        let Some(texture) = material.texture.as_ref() else {
+            return;
+        };
+        let fmt = describe_image_format(data, &texture.filename);
+        let warn_key = (material.name.clone(), fmt.clone());
+        if self.warned.insert(warn_key, ()).is_some() {
+            return;
+        }
+        let base = texture.filename.rsplit(['/', '\\']).next().unwrap_or("");
+        let keepable = original_image_mime(data).is_some();
+        let label = if material.name.is_empty() {
+            "(unnamed)"
+        } else {
+            &material.name
+        };
+        let suffix = if base.is_empty() {
+            String::new()
+        } else {
+            format!(" ({base})")
+        };
+        let hint = if keepable {
+            " (pass original_textures: true to keep it in its own format)"
+        } else {
+            ""
+        };
+        crate::observability::emit_log(
+            &self.options,
+            crate::observability::LogLevel::Warning,
+            &format!(
+                "Texture of material '{label}'{suffix} is {fmt}, which a scene cannot carry \
+                 (only PNG and JPEG): the material is built without its texture{hint}"
+            ),
+        );
+    }
+
     /// The texture index for a material's image, registering it on first use;
-    /// `None` when the material has no image glTF can carry.
+    /// `None` when the material has no image the scene can carry.
     pub fn index_for(&mut self, material: Option<&RawMaterial>) -> Option<usize> {
-        let texture = material?.texture.as_ref()?;
+        let material = material?;
+        let texture = material.texture.as_ref()?;
         let data: &ByteBuffer = texture.data.as_ref()?;
         if data.is_empty() {
             return None;
         }
-        let mime_type = sniff_image_mime(data)?;
+        let mut mime_type = sniff_image_mime(data);
+        if mime_type.is_none() && self.options.original_textures {
+            mime_type = original_image_mime(data);
+        }
+        let Some(mime_type) = mime_type else {
+            self.warn_skipped(material, data);
+            return None;
+        };
         // Length plus a short byte prefix (C++ `std::hex`, unpadded) tells
         // real images apart without hashing megabytes on every face.
         let mut key = format!("{}:", data.len());
@@ -400,4 +505,39 @@ pub fn build_local_face_groups(
     }
 
     Ok(groups)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::original_image_mime;
+
+    #[test]
+    fn sniffs_known_signatures_and_rejects_unknown_bytes() {
+        let mut tga = vec![0u8; 60];
+        tga[2] = 2;
+        tga[42..60].copy_from_slice(b"TRUEVISION-XFILE.\x00");
+        assert_eq!(original_image_mime(b"II*\x00"), Some("image/tiff"));
+        assert_eq!(original_image_mime(b"MM\x00*"), Some("image/tiff"));
+        assert_eq!(original_image_mime(b"GIF89a"), Some("image/gif"));
+        assert_eq!(original_image_mime(b"BM\x00\x00"), Some("image/bmp"));
+        assert_eq!(
+            original_image_mime(b"RIFF\x00\x00\x00\x00WEBP"),
+            Some("image/webp")
+        );
+        assert_eq!(
+            original_image_mime(b"8BPS\x00\x00\x00\x00"),
+            Some("image/vnd.adobe.photoshop")
+        );
+        assert_eq!(
+            original_image_mime(b"DDS \x00\x00\x00\x00"),
+            Some("image/vnd.ms-dds")
+        );
+        assert_eq!(
+            original_image_mime(b"\x00\x00\x00\x0cjP  "),
+            Some("image/jp2")
+        );
+        assert_eq!(original_image_mime(&tga), Some("image/x-tga"));
+        assert_eq!(original_image_mime(b"zzzzzzzzzzzzzzzz"), None);
+        assert_eq!(original_image_mime(b""), None);
+    }
 }

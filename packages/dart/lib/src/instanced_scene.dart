@@ -7,7 +7,7 @@ import 'geometry.dart';
 import 'model.dart' show Page;
 import 'observability.dart';
 import 'parser.dart' show buildPagesFromRaw;
-import 'scene.dart' show SceneTexture, sniffImageMime;
+import 'scene.dart' show SceneTexture, sniffImageMime, originalImageMime, warnSkippedTexture;
 import 'tlv.dart';
 import 'transforms.dart';
 
@@ -224,12 +224,19 @@ class InstancedSceneBuilder {
 
     final textures = <SceneTexture>[];
     final textureIndexByKey = <String, int>{};
+    final skippedTextures = <(String, String)>{};
 
-    int? textureIndexFor(RawTexture? tex) {
+    int? textureIndexFor(RawTexture? tex, [String? materialName]) {
       if (tex == null || tex.data == null || tex.data!.isEmpty) return null;
       final data = tex.data!;
-      final mimeType = sniffImageMime(data);
-      if (mimeType == null) return null;
+      var mimeType = sniffImageMime(data);
+      if (mimeType == null && (options?.originalTextures ?? false)) {
+        mimeType = originalImageMime(data);
+      }
+      if (mimeType == null) {
+        warnSkippedTexture(options, skippedTextures, materialName, tex, data);
+        return null;
+      }
       final headLen = data.length < 16 ? data.length : 16;
       final head = data.sublist(0, headLen).join(',');
       final key = '${data.length}:$head';

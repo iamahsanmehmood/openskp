@@ -1,7 +1,8 @@
 import { extractSkpContents, readMetaUnits } from './vff';
 import { iterTopLevelLazy, readU32, parseVarInt, TlvNode } from './parser';
 import { SkpParseError } from './errors';
-import { ParseOptions, PROGRESS_INTERVAL, emitLog, emitProgress } from './observability';
+import { LogLevel, ParseOptions, PROGRESS_INTERVAL, emitLog, emitProgress } from './observability';
+import { filterGltfTextures } from './face-groups';
 import {
   GeometryBuilder,
   collectLayers,
@@ -480,37 +481,22 @@ export interface GlbOptions {
    * exporter has always produced.
    */
   textures?: boolean;
-}
-
-/**
- * Drops `baseColorTexture` from materials when the images are not being
- * embedded. The reference would otherwise dangle - `textures[0]` would not
- * exist - and a strict glTF reader rejects the file outright.
- */
-function stripTextureRefs(materials: unknown[]): unknown[] {
-  let needsCopy = false;
-  for (const mat of materials) {
-    if ((mat as any)?.pbrMetallicRoughness?.baseColorTexture) {
-      needsCopy = true;
-      break;
-    }
-  }
-  if (!needsCopy) return materials;
-  return materials.map((mat) => {
-    const pbr = (mat as any)?.pbrMetallicRoughness;
-    if (!pbr?.baseColorTexture) return mat;
-    const restPbr = { ...pbr };
-    delete restPbr.baseColorTexture;
-    return { ...(mat as any), pbrMetallicRoughness: restPbr };
-  });
+  /** Optional log hook receiving warnings (e.g. when a non-PNG/JPEG texture
+   * kept via `originalTextures: true` is omitted from the GLB). */
+  onLog?: (level: LogLevel, message: string) => void;
 }
 
 export function toGLB(scene: SkpScene, options?: GlbOptions): Uint8Array {
   const prims = scene.glbPrimitives || [];
-  const gltfMaterials = scene.gltfMaterials || [];
+  const rawMaterials = scene.gltfMaterials || [];
   // Off by default: embedding the images makes the export several times
   // larger, and a caller who only wants geometry should not pay for it.
-  const sceneTextures = options?.textures ? scene.textures || [] : [];
+  const { textures: sceneTextures, materials } = filterGltfTextures(
+    scene.textures || [],
+    rawMaterials,
+    Boolean(options?.textures),
+    options?.onLog
+  );
 
   // Narrow each index buffer to UNSIGNED_SHORT where every index fits,
   // which is the overwhelmingly common case and halves the index data.
@@ -704,7 +690,7 @@ export function toGLB(scene: SkpScene, options?: GlbOptions): Uint8Array {
       },
     ] : [],
     meshes: gltfMeshes,
-    materials: sceneTextures.length > 0 ? gltfMaterials : stripTextureRefs(gltfMaterials),
+    materials,
     buffers: [
       {
         byteLength: totalBinaryLength,

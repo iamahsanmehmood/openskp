@@ -37,7 +37,15 @@ struct ParseProgress {
 struct ParseOptions {
   std::function<void(const ParseProgress&)> progress;
   std::function<void(LogLevel, std::string_view)> log;
+  /// "style" (default) gives unpainted faces the model's front and back face
+  /// colours; "tag" gives them their tag's colour.
   std::string unpainted_faces{"style"};
+  /// Keep a texture that is not PNG or JPEG in Scene::textures and
+  /// InstancedScene::textures in its own format (image/tiff, image/gif,
+  /// image/bmp, image/x-tga, image/webp, image/vnd.adobe.photoshop,
+  /// image/vnd.ms-dds, image/jp2) instead of leaving it out with a warning.
+  /// Off by default because glTF carries only PNG and JPEG.
+  bool original_textures{false};
 };
 
 inline constexpr std::uint64_t progress_interval = 500;

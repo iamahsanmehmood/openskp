@@ -242,8 +242,8 @@ fn baked_and_instanced_scenes_inherit_texture_uvs_and_alpha_mode() -> Result<(),
         .base_color_texture;
     assert_eq!(tile_tex, Some(1));
 
-    let baked_glb = to_glb(&scene, &GlbOptions { textures: true })?;
-    let inst_glb = to_instanced_glb(&instanced, &InstancedGlbOptions { textures: true })?;
+    let baked_glb = to_glb(&scene, &GlbOptions::new().with_textures(true))?;
+    let inst_glb = to_instanced_glb(&instanced, &InstancedGlbOptions::new().with_textures(true))?;
     for glb_bytes in [&baked_glb, &inst_glb] {
         let glb = load_glb(glb_bytes);
         assert_eq!(glb.list("images").len(), 2);
