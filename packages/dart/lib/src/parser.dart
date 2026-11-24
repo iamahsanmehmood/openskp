@@ -2,6 +2,8 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'core.dart';
+import 'errors.dart';
+import 'face_groups.dart';
 import 'geometry.dart';
 import 'instanced_scene.dart';
 import 'observability.dart';
@@ -56,7 +58,20 @@ class SkpFile {
   ///
   /// [options] - optional progress/log callbacks (see [ParseOptions]).
   Scene buildScene([ParseOptions? options]) {
-    return SceneBuilder.build(_parseToRaw(options), options);
+    final parsed = _parseToRaw(options);
+    unpaintedStyleColors(parsed, options?.unpaintedFaces);
+    try {
+      return SceneBuilder.build(parsed, options);
+    } on SkpParseException {
+      rethrow;
+    } on OutOfMemoryError {
+      rethrow;
+    } on StackOverflowError {
+      rethrow;
+    } catch (e) {
+      throw SkpParseException('Failed while building scene: $e',
+          stage: 'build_scene', cause: e);
+    }
   }
 
   /// Build the placed scene graph with SketchUp's component/group
@@ -72,13 +87,41 @@ class SkpFile {
   ///
   /// [options] - optional progress/log callbacks (see [ParseOptions]).
   InstancedScene buildInstancedScene([ParseOptions? options]) {
-    return InstancedSceneBuilder.build(_parseToRaw(options), options);
+    final parsed = _parseToRaw(options);
+    unpaintedStyleColors(parsed, options?.unpaintedFaces);
+    try {
+      return InstancedSceneBuilder.build(parsed, options);
+    } on SkpParseException {
+      rethrow;
+    } on OutOfMemoryError {
+      rethrow;
+    } on StackOverflowError {
+      rethrow;
+    } catch (e) {
+      throw SkpParseException('Failed while building scene: $e',
+          stage: 'build_scene', cause: e);
+    }
   }
 
   /// [options] - optional progress/log callbacks (see [ParseOptions]).
   SkpModel parse([ParseOptions? options]) {
     final parsed = _parseToRaw(options);
 
+    try {
+      return _buildModel(parsed);
+    } on SkpParseException {
+      rethrow;
+    } on OutOfMemoryError {
+      rethrow;
+    } on StackOverflowError {
+      rethrow;
+    } catch (e) {
+      throw SkpParseException('Failed while assembling model: $e',
+          stage: 'tlv_walk', cause: e);
+    }
+  }
+
+  static SkpModel _buildModel(RawParsed parsed) {
     final model = SkpModel()
       ..version = parsed.version
       ..units = parsed.units

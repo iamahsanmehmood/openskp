@@ -7,6 +7,7 @@ import 'geometry.dart';
 import 'legacy_pages.dart';
 import 'model.dart';
 import 'observability.dart';
+import 'pages_dimensions.dart' show RawPage;
 import 'tlv.dart';
 
 /// Legacy (classic MFC) SketchUp .skp parser - SketchUp 2013-2020 era.
@@ -2608,8 +2609,17 @@ class Legacy {
     }) walkResult;
     try {
       walkResult = _walk(data);
+    } on SkpParseException {
+      rethrow;
+    } on OutOfMemoryError {
+      rethrow;
+    } on StackOverflowError {
+      rethrow;
     } on LegacyParseError catch (e) {
       throw SkpParseException('legacy .skp parse failed: ${e.message}',
+          stage: 'legacy_walk', cause: e);
+    } catch (e) {
+      throw SkpParseException('legacy .skp parse failed: $e',
           stage: 'legacy_walk', cause: e);
     }
 
@@ -2729,6 +2739,12 @@ class Legacy {
           }
         }
       }
+    } on SkpParseException {
+      rethrow;
+    } on OutOfMemoryError {
+      rethrow;
+    } on StackOverflowError {
+      rethrow;
     } catch (e) {
       throw SkpParseException(
         'Failed while building component definitions: $e',
@@ -2741,6 +2757,12 @@ class Legacy {
     final rootBuilder = GeometryBuilder()..edgePids = {};
     try {
       _fillBuilder(rootBuilder, walkResult.root, slots, ar.pids);
+    } on SkpParseException {
+      rethrow;
+    } on OutOfMemoryError {
+      rethrow;
+    } on StackOverflowError {
+      rethrow;
     } catch (e) {
       throw SkpParseException(
         'Failed while building root entities: $e',
@@ -2755,6 +2777,31 @@ class Legacy {
       'Parse complete: ${defsDict.length} defs (${(sw.elapsedMilliseconds / 1000).toStringAsFixed(2)}s)',
     );
 
+    List<RawPage> pages;
+    try {
+      pages = readPageList(data, ar) ?? const [];
+    } on OutOfMemoryError {
+      rethrow;
+    } on StackOverflowError {
+      rethrow;
+    } catch (e) {
+      emitLog(options, SkpLogLevel.debug, 'Failed to read legacy pages: $e');
+      pages = const [];
+    }
+
+    ((int, int, int), (int, int, int))? faceColors;
+    try {
+      faceColors = _modelFaceColors(data, ar.ver);
+    } on OutOfMemoryError {
+      rethrow;
+    } on StackOverflowError {
+      rethrow;
+    } catch (e) {
+      emitLog(options, SkpLogLevel.debug,
+          'Failed to read legacy model face colours: $e');
+      faceColors = null;
+    }
+
     return RawParsed()
       ..version = version
       // Legacy (pre-2021 MFC) files carry no meta/meta.dat container -
@@ -2763,14 +2810,14 @@ class Legacy {
       ..units = null
       // Scenes come from the scene list in the document tail (see
       // legacy_pages.dart).
-      ..pages.addAll(readPageList(data, ar) ?? const [])
+      ..pages.addAll(pages)
       ..layerColors.addAll(layerColors)
       ..layerHidden.addAll(layerHidden)
       ..layerIdToName.addAll(layerIdToName)
       ..materialIdToName.addAll(materialIdToName)
       ..materials.addAll(materialsMap)
       ..styles.addAll(const [])
-      ..faceColors = _modelFaceColors(data, ar.ver)
+      ..faceColors = faceColors
       ..defsDict.addAll(defsDict)
       ..unreadRootEntities = ar.unreadRootEntities
       ..root =

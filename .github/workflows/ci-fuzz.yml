@@ -111,7 +111,6 @@ jobs:
           import time
           import zipfile
 
-          import openskp.legacy as py_legacy
           from openskp import create
 
           repo = pathlib.Path(os.environ["REPO_ROOT"]).resolve()
@@ -119,7 +118,6 @@ jobs:
           seed = int(os.environ.get("FUZZ_SEED") or "557")
           rounds = max(1, int(os.environ.get("FUZZ_ROUNDS") or "1"))
           per_file_timeout_s = 5.0
-          has_classic_depth_cap = hasattr(py_legacy, "_MAX_LEGACY_DEPTH")
 
           def build_classic_nested_array(levels: int) -> bytes:
               b = create()
@@ -267,8 +265,7 @@ jobs:
               add_case("deep_meta_wrappers:20000", header + zbuf.getvalue())
 
               add_case("classic_attr_array:40", build_classic_nested_array(40))
-              if has_classic_depth_cap:
-                  add_case("classic_attr_array:5000", build_classic_nested_array(5000))
+              add_case("classic_attr_array:5000", build_classic_nested_array(5000))
 
               return cases
 
@@ -408,29 +405,7 @@ jobs:
               corpus_dir = work / "corpus"
               corpus_dir.mkdir()
               cases = build_corpus(corpus_dir)
-              print(
-                  f"Generated {len(cases)} mutated fuzz cases "
-                  f"(seed={seed}, rounds={rounds}, classic_depth_cap={has_classic_depth_cap})"
-              )
-
-              if not has_classic_depth_cap:
-                  probe_skp = work / "classic_5000_probe.skp"
-                  probe_skp.write_bytes(build_classic_nested_array(5000))
-                  probe_res = subprocess.run(
-                      [
-                          sys.executable,
-                          "-c",
-                          f"from openskp import SkpFile; SkpFile.open({str(probe_skp)!r}).parse()",
-                      ],
-                      capture_output=True,
-                      text=True,
-                      timeout=10,
-                  )
-                  last_line = (probe_res.stderr.strip().splitlines() or ["exit=" + str(probe_res.returncode)])[-1]
-                  print(
-                      f"::warning::Classic 5000-level nesting probe before #585: {last_line} "
-                      f"(classic_attr_array:5000 activates automatically in mandatory corpus once _MAX_LEGACY_DEPTH lands)"
-                  )
+              print(f"Generated {len(cases)} mutated fuzz cases (seed={seed}, rounds={rounds})")
 
               # 1. Python worker (1.5 GiB RLIMIT_AS after OpenBLAS/NumPy init)
               py_worker = work / "py_fuzz.py"
@@ -712,6 +687,7 @@ jobs:
               ]
 
               all_crashes: list[str] = []
+              all_unexpected: list[str] = []
               print("\n=== Fuzz Reader Summary ===")
               for name, cmd, extra_env, rlimit_bytes in runners:
                   counts, other_samples, crashes, elapsed = run_worker(
@@ -722,15 +698,27 @@ jobs:
                   if other_samples:
                       samples_str = ", ".join(f"{k} (e.g. {v})" for k, v in sorted(other_samples.items()))
                       print(f"             non-SkpParseError exceptions: {samples_str}")
+                      for exc_type, sample in sorted(other_samples.items()):
+                          cnt = counts.get(f"OTHER:{exc_type}", 0)
+                          all_unexpected.append(f"[{name}] {exc_type} ({cnt}x, e.g. {sample})")
                   all_crashes.extend(crashes)
 
-              if all_crashes:
-                  print("\nFUZZ READERS CHECK FAILED (crashes/hangs/panics detected):", file=sys.stderr)
+              if all_crashes or all_unexpected:
+                  print(
+                      "\nFUZZ READERS CHECK FAILED "
+                      "(crashes, hangs, panics, or unwrapped non-parse-error exceptions):",
+                      file=sys.stderr,
+                  )
                   for c in all_crashes:
                       print(f"  - {c}", file=sys.stderr)
+                  for u in all_unexpected:
+                      print(f"  - UNWRAPPED_EXCEPTION {u}", file=sys.stderr)
                   sys.exit(1)
 
-              print(f"\nAll 6 readers completed {len(cases)} mutated fuzz cases with 0 crashes or hangs.")
+              print(
+                  f"\nAll 6 readers completed {len(cases)} mutated fuzz cases with "
+                  f"0 crashes, hangs, or unwrapped exceptions."
+              )
           PY
 
   required:

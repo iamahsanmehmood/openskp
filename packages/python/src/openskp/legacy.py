@@ -89,6 +89,8 @@ class _R:
         return v
 
     def raw(self, n: int) -> bytes:
+        if n < 0 or self.pos + n > len(self.data):
+            raise LegacyParseError(f"unexpected end of data {self.ctx()}")
         v = self.data[self.pos:self.pos + n]
         self.pos += n
         return v
@@ -861,9 +863,9 @@ def _read_attr_named(ar, r):
 def _read_layer(ar, r):
     _early_preamble(ar, r)
     name = r.utf16()
-    mid = b''
+    mid = bytearray()
     while len(mid) < 8 and r.peek(3) != _STR_MARKER:
-        mid += r.raw(1)              # flags: 3 bytes on v16, 4 on v17+
+        mid.append(r.u8())           # flags: 3 bytes on v16, 4 on v17+
     r.utf16()                        # internal name ("Layer_<name>")
     flags = r.u16()
     if flags & 0x00FF:
@@ -2675,7 +2677,9 @@ def full_parse_legacy(skp_path: str) -> Dict[str, Any]:
 
     try:
         ar, root, layers, materials = _walk(data)
-    except (LegacyParseError, struct.error, IndexError, UnicodeDecodeError) as e:
+    except (SkpParseError, RecursionError, MemoryError):
+        raise
+    except Exception as e:
         raise SkpParseError(
             f"legacy .skp parse failed: {e}", stage="legacy_walk") from e
     logger.debug(
@@ -2748,8 +2752,10 @@ def full_parse_legacy(skp_path: str) -> Dict[str, Any]:
     # definitions
     defs_dict: Dict[Any, Any] = {}
     processed = 0
+    current_slot: Optional[int] = None
     try:
         for s, ent in slots.items():
+            current_slot = s
             if ent[0] == 'obj' and ent[1] == 'CComponentDefinition' and ent[2]:
                 d = ent[2]
                 b = _Builder()
@@ -2765,15 +2771,19 @@ def full_parse_legacy(skp_path: str) -> Dict[str, Any]:
                 processed += 1
                 if processed % _PROGRESS_INTERVAL == 0:
                     logger.debug("Processed %d component definitions", processed)
+    except (SkpParseError, RecursionError, MemoryError):
+        raise
     except Exception as e:
         raise SkpParseError(
             f"Failed while building component definitions: {e}",
-            stage="legacy_defs", definition_id=s,
+            stage="legacy_defs", definition_id=current_slot,
         ) from e
 
     root_builder = _Builder()
     try:
         _fill_builder(root_builder, root, slots, ar.pids)
+    except (SkpParseError, RecursionError, MemoryError):
+        raise
     except Exception as e:
         raise SkpParseError(
             f"Failed while building root entities: {e}",
@@ -2781,6 +2791,8 @@ def full_parse_legacy(skp_path: str) -> Dict[str, Any]:
         ) from e
     try:
         model_attribute_dicts = _premodel_attribute_dictionaries(data)
+    except (RecursionError, MemoryError):
+        raise
     except Exception:  # noqa: BLE001 - the model's dictionaries are optional
         logger.debug("model attribute dictionaries unreadable", exc_info=True)
         model_attribute_dicts = {}
@@ -2789,7 +2801,7 @@ def full_parse_legacy(skp_path: str) -> Dict[str, Any]:
                          'attribute_dictionaries': model_attribute_dicts}
     try:
         face_colors = _model_face_colors(data, ar.ver)
-    except (struct.error, IndexError, UnicodeDecodeError):  # optional, like the dictionaries
+    except (LegacyParseError, struct.error, IndexError, UnicodeDecodeError, ValueError):
         logger.debug("model face colours unreadable", exc_info=True)
         face_colors = None
 
@@ -2797,7 +2809,9 @@ def full_parse_legacy(skp_path: str) -> Dict[str, Any]:
         pages = _read_page_list(data, ar)
         if pages is None:
             pages = _scan_pages(data, ar)
-    except (LegacyParseError, struct.error, IndexError, ValueError):
+    except (RecursionError, MemoryError):
+        raise
+    except Exception:
         pages = []
 
     logger.info(

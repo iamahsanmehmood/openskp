@@ -2810,7 +2810,7 @@ namespace OpenSkp
             {
                 walkResult = Walk(data);
             }
-            catch (LegacyParseError e)
+            catch (Exception e) when (!(e is SkpParseException) && !(e is OutOfMemoryException))
             {
                 throw new SkpParseException($"legacy .skp parse failed: {e.Message}", stage: "legacy_walk", innerException: e);
             }
@@ -2934,7 +2934,7 @@ namespace OpenSkp
                     }
                 }
             }
-            catch (Exception e) when (!(e is SkpParseException))
+            catch (Exception e) when (!(e is SkpParseException) && !(e is OutOfMemoryException))
             {
                 throw new SkpParseException(
                     $"Failed while building component definitions: {e.Message}",
@@ -2946,7 +2946,7 @@ namespace OpenSkp
             {
                 FillBuilder(rootBuilder, walkResult.Root, slots, ar.Pids);
             }
-            catch (Exception e) when (!(e is SkpParseException))
+            catch (Exception e) when (!(e is SkpParseException) && !(e is OutOfMemoryException))
             {
                 throw new SkpParseException(
                     $"Failed while building root entities: {e.Message}",
@@ -2958,7 +2958,27 @@ namespace OpenSkp
                 $"Parse complete: {defsDict.Count} defs ({sw.Elapsed.TotalSeconds:F2}s)");
 
             // Scenes come from the scene list in the document tail (see LegacyPages).
-            var pages = LegacyPages.ReadPageList(data, ar) ?? new List<RawPage>();
+            List<RawPage> pages;
+            try
+            {
+                pages = LegacyPages.ReadPageList(data, ar) ?? new List<RawPage>();
+            }
+            catch (Exception e) when (!(e is OutOfMemoryException))
+            {
+                Observability.Log(options, SkpLogLevel.Debug, $"Failed to read legacy pages: {e.Message}");
+                pages = new List<RawPage>();
+            }
+
+            ((int R, int G, int B) Front, (int R, int G, int B) Back)? faceColors;
+            try
+            {
+                faceColors = ModelFaceColors(data, ar.Ver);
+            }
+            catch (Exception e) when (!(e is OutOfMemoryException))
+            {
+                Observability.Log(options, SkpLogLevel.Debug, $"Failed to read legacy model face colours: {e.Message}");
+                faceColors = null;
+            }
 
             return new Core.RawParsed
             {
@@ -2976,7 +2996,7 @@ namespace OpenSkp
                 Materials = materialsMap,
                 MaterialsByFolder = new Dictionary<string, Geometry.RawMaterial>(),
                 Styles = new List<Geometry.RawStyle>(),
-                FaceColors = ModelFaceColors(data, ar.Ver),
+                FaceColors = faceColors,
                 DefsDict = defsDict,
                 UnreadRootEntities = ar.UnreadRootEntities,
                 Root = new Geometry.RawDefinition

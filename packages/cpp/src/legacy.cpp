@@ -2801,14 +2801,22 @@ RawParsed parse_legacy(const ByteBuffer& data, const ParseOptions& o) {
         out.definitions[s.first] = std::move(d);
       }
     fill(out.root.builder, root, ar.slots);
-    out.face_colors = model_face_colors(data, ar.ver);
+    try {
+      out.face_colors = model_face_colors(data, ar.ver);
+    } catch (const std::bad_alloc&) {
+      throw;
+    } catch (...) {
+      out.face_colors = std::nullopt;
+    }
     try {
       // whole scene records first; the narrow scan only when the full reader gives up on one
       auto pages = read_page_list(data, ar);
       out.pages = pages ? std::move(*pages)
                         : scan_pages_for_layers(data, ar.r.p,
                                                 LegacySlotTable{ar.slots, ar.class_slot, ar.next});
-    } catch (const std::exception&) {
+    } catch (const std::bad_alloc&) {
+      throw;
+    } catch (...) {
       out.pages.clear();
     }
     emit_progress(o, ParseStage::legacy_defs, out.definitions.size(), out.definitions.size());
@@ -2817,6 +2825,11 @@ RawParsed parse_legacy(const ByteBuffer& data, const ParseOptions& o) {
     return out;
   } catch (const SkpParseError&) {
     throw;
+  } catch (const std::bad_alloc&) {
+    throw;
+  } catch (const std::exception& e) {
+    throw SkpParseError(std::string("legacy .skp parse failed: ") + e.what(),
+                        ParseStage::legacy_walk, {}, {}, {}, {}, {}, std::current_exception());
   } catch (...) {
     throw SkpParseError("legacy .skp parse failed", ParseStage::legacy_walk, {}, {}, {}, {}, {},
                         std::current_exception());

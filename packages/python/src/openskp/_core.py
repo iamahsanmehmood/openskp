@@ -781,39 +781,53 @@ def iter_top_level_lazy(data, start, end, container_tags=None, *, _geometry=Fals
     if container_tags is None:
         container_tags = CONTAINER_TAGS
 
-    wrapped = None
-    if start == 0 and end == len(data) and 'F401' in container_tags and end >= 6 and end - 6 >= _TLV_WRAP:
-        wrapped = wrapped_model_records(
-            end,
-            lambda p: _unpack_header(data, p)[0],
-            lambda p: _unpack_header(data, p)[1],
-        )
+    try:
+        wrapped = None
+        if start == 0 and end == len(data) and 'F401' in container_tags and end >= 6 and end - 6 >= _TLV_WRAP:
+            wrapped = wrapped_model_records(
+                end,
+                lambda p: _unpack_header(data, p)[0],
+                lambda p: _unpack_header(data, p)[1],
+            )
 
-    if wrapped is not None:
-        tag_strings = _TAG_STRINGS or _tag_strings()
-        headers = [(tag_strings[_unpack_header(data, p)[0]], p, size) for p, size in wrapped]
-    else:
-        headers = _flat_headers(data, start, end, container_tags)
-        _require_complete_top_level(data, start, end, headers)
-        if len(headers) == 1 and headers[0][0] == 'F401':
-            _, f401_offset, f401_size = headers[0]
-            headers = _flat_headers(data, f401_offset + 6, f401_offset + 6 + f401_size, container_tags)
+        if wrapped is not None:
+            tag_strings = _TAG_STRINGS or _tag_strings()
+            headers = [(tag_strings[_unpack_header(data, p)[0]], p, size) for p, size in wrapped]
+        else:
+            headers = _flat_headers(data, start, end, container_tags)
+            _require_complete_top_level(data, start, end, headers)
+            if len(headers) == 1 and headers[0][0] == 'F401':
+                _, f401_offset, f401_size = headers[0]
+                headers = _flat_headers(data, f401_offset + 6, f401_offset + 6 + f401_size, container_tags)
 
-        expanded = []
-        for tag_hex, offset, size in headers:
-            if tag_hex == 'F901':
-                def_headers = _unwrap_definitions_container(data, offset, size, container_tags)
-                if def_headers is not None:
-                    expanded.extend(def_headers)
-                    continue
-            expanded.append((tag_hex, offset, size))
-        headers = expanded
+            expanded = []
+            for tag_hex, offset, size in headers:
+                if tag_hex == 'F901':
+                    def_headers = _unwrap_definitions_container(data, offset, size, container_tags)
+                    if def_headers is not None:
+                        expanded.extend(def_headers)
+                        continue
+                expanded.append((tag_hex, offset, size))
+            headers = expanded
+    except (SkpParseError, RecursionError, MemoryError):
+        raise
+    except Exception as e:
+        raise SkpParseError(f"Failed while scanning TLV headers: {e}", stage="tlv_walk") from e
 
     total = len(headers)
     for index, (tag_hex, offset, size) in enumerate(headers):
         record_end = offset + 6 + size
         parser = _parse_tlv_geometry if _geometry else parse_tlv_recursive
-        nodes = parser(data, offset, record_end, container_tags)
+        try:
+            nodes = parser(data, offset, record_end, container_tags)
+        except (SkpParseError, RecursionError, MemoryError):
+            raise
+        except Exception as e:
+            raise SkpParseError(
+                f"Failed while parsing top-level record: {e}",
+                stage="tlv_walk", record_index=index, total_records=total,
+                tag=tag_hex, offset=offset,
+            ) from e
         if nodes:
             yield index, total, nodes[0]
         # Assignment evaluates the next parser call before replacing `nodes`.
@@ -2330,123 +2344,17 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
         raise SkpParseError(
             "No ZIP container found", stage="zip_extract")
 
-    # ZipFile accounts for a prepended SKP header when locating entries.
-    # Reading the file directly avoids retaining a second, file-sized ZIP
-    # buffer throughout parsing. Close it on malformed members as well.
-    with zipfile.ZipFile(skp_path, 'r') as zf:
-        logger.debug("Opened ZIP container: %d entries", len(zf.namelist()))
-
-        # Materials & layer colors
-        layer_colors = {}
-        # Modern (VFF) files derive layer COLOR from Layer_<name>-prefixed
-        # materials, which carry no visibility flag of their own - real
-        # visibility comes from the model.dat layer manager's own 8E3C byte,
-        # read in collect_layers() below. Seeded to False (visible) here so a
-        # layer that never went through collect_layers (e.g. a layer with no
-        # painted material at all) still gets a sane default.
-        layer_hidden = {}
-        materials = {}
-        materials_by_folder = {}
-        raw_material_entries = []
-        MAT_NS = {'mat': 'http://sketchup.google.com/schemas/sketchup/1.0/material'}
-        for name in zf.namelist():
-            if name.endswith('material.xml') and name.startswith('materials/'):
-                _validate_zip_entry_size(zf, name)
-                xml_data = zf.read(name)
-                try:
-                    root = ET.fromstring(xml_data)
-                    mat_elem = root.find('.//mat:material', MAT_NS)
-                    if mat_elem is not None:
-                        mat_name = mat_elem.get('name', 'unknown')
-                        r = int(mat_elem.get('colorRed', 128))
-                        g = int(mat_elem.get('colorGreen', 128))
-                        b = int(mat_elem.get('colorBlue', 128))
-                        # 'trans' only applies when useTrans="1"; otherwise the
-                        # attribute is a leftover default and the material is
-                        # fully opaque. Without this check most materials read
-                        # as 50% transparent (or fully invisible for trans="0").
-                        # The stored value is a TRANSPARENCY (0 = opaque,
-                        # 1 = fully transparent) — e.g. SketchUp's library
-                        # "Translucent Glass Blue" (70% opacity) stores
-                        # trans="0.3" — so the exposed opacity is 1 - trans.
-                        if mat_elem.get('useTrans') == '1':
-                            trans = 1.0 - float(mat_elem.get('trans', 0.0))
-                            trans = min(max(trans, 0.0), 1.0)
-                        else:
-                            trans = 1.0
-                        folder_name = name.split('/')[1] if len(name.split('/')) > 1 else ''
-                        # type="2" marks a colourized copy ("[Name]1"): the
-                        # shared texture must be re-tinted toward the material
-                        # colour before display. colorizeType 0 = hue shift,
-                        # 1 = tint (greyscale then colour).
-                        colorized = mat_elem.get('type') == '2'
-                        try:
-                            colorize_type = int(mat_elem.get('colorizeType', 0) or 0)
-                        except ValueError:
-                            colorize_type = 0
-                        mat_obj = {'name': mat_name, 'color': {'r': r, 'g': g, 'b': b}, 'transparency': trans,
-                                   'colorized': colorized, 'colorize_type': colorize_type}
-                        tex = _extract_texture(zf, name, mat_elem, MAT_NS)
-                        if tex is not None:
-                            mat_obj['texture'] = tex
-                        raw_material_entries.append((folder_name, mat_obj, (r, g, b)))
-                except Exception:
-                    logger.debug("Failed to parse material.xml %r", name, exc_info=True)
-
-        # Thumbnail
-        thumbnail_data = None
-        if 'meta/model_thumbnail.png' in zf.namelist():
-            _validate_zip_entry_size(zf, 'meta/model_thumbnail.png')
-            thumbnail_data = zf.read('meta/model_thumbnail.png')
-
-        # Units (meta/meta.dat) - VFF-only; legacy files carry no equivalent
-        # container.
-        units = None
-        if 'meta/meta.dat' in zf.namelist():
-            try:
-                _validate_zip_entry_size(zf, 'meta/meta.dat')
-                units = _read_meta_units(zf.read('meta/meta.dat'))
-            except Exception:
-                units = None
-                logger.debug("Failed to read units from meta/meta.dat", exc_info=True)
-
-        # Styles: face colors live in styles/*/style.xml as signed-int32 ABGR
-        # variants — item id 2002 is the front (default) face color, 2003 the
-        # back face color (the 4000-series items are background/sky/ground).
-        # Viewers need them to shade unpainted faces the way SketchUp does (an author may e.g. set a green back color so unpainted
-        # garden faces read as grass).
-        styles = []
-        for name in zf.namelist():
-            if not (name.startswith('styles/') and name.endswith('style.xml')):
-                continue
-            try:
-                _validate_zip_entry_size(zf, name)
-                sroot = ET.fromstring(zf.read(name))
-            except (ET.ParseError, DefusedXmlException):
-                continue
-            STY = '{http://sketchup.google.com/schemas/sketchup/1.0/style}'
-            TYP = '{http://sketchup.google.com/schemas/1.0/types}'
-            style_el = sroot.find(f'{STY}style')
-            if style_el is None:
-                continue
-            colors = {}
-            for item in style_el.findall(f'{STY}item'):
-                iid = item.get('id')
-                var = item.find(f'{TYP}variant')
-                if iid in ('2002', '2003') and var is not None and var.text:
-                    try:
-                        v = int(var.text) & 0xFFFFFFFF
-                    except ValueError:
-                        continue
-                    colors[iid] = (v & 255, (v >> 8) & 255, (v >> 16) & 255)
-            styles.append({'name': style_el.get('name', ''),
-                           'front_color': colors.get('2002'),
-                           'back_color': colors.get('2003')})
-
-        logger.debug("Parsed %d materials, %d styles", len(materials), len(styles))
-
-        _validate_zip_entry_size(zf, 'model.dat')
-        model_dat = zf.read('model.dat')
+    try:
+        (layer_colors, layer_hidden, materials, materials_by_folder,
+         raw_material_entries, thumbnail_data, units, styles,
+         model_dat) = _read_vff_zip(skp_path)
+    except (SkpParseError, FileNotFoundError, PermissionError, IsADirectoryError,
+            RecursionError, MemoryError):
+        raise
+    except Exception as e:
+        raise SkpParseError(
+            f"Invalid or damaged ZIP container: {e}", stage="zip_extract"
+        ) from e
     logger.debug("Read model.dat: %d bytes", len(model_dat))
 
     compact_geometry = len(model_dat) >= _COMPACT_MODEL_BYTES
@@ -2629,6 +2537,8 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
             if el.tag == 'F601':
                 _extract_geometry_nodes(el.children, root_builder)
                 model_attribute_dicts = entity_attribute_dictionaries(el.children)
+        except (SkpParseError, RecursionError, MemoryError):
+            raise
         except Exception as e:
             raise SkpParseError(
                 f"Failed while processing top-level record: {e}",
@@ -2670,23 +2580,166 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
     defs_dict['ROOT'] = {'guid': 'ROOT', 'name': 'ROOT_MODEL', 'builder': root_builder,
                          'attribute_dictionaries': model_attribute_dicts}
 
+    try:
+        pages = _parse_pages(page_node)
+    except (RecursionError, MemoryError):
+        raise
+    except Exception:
+        logger.debug("Failed to parse pages", exc_info=True)
+        pages = []
+    try:
+        dimensions = _parse_dimensions(model_dat, vertex_positions, instance_world)
+    except (RecursionError, MemoryError):
+        raise
+    except Exception:
+        logger.debug("Failed to parse dimensions", exc_info=True)
+        dimensions = []
+    try:
+        face_colors = _model_face_colors(model_dat)
+    except (RecursionError, MemoryError):
+        raise
+    except Exception:
+        logger.debug("Failed to parse model face colours", exc_info=True)
+        face_colors = None
+
     return {
         'model_attribute_dictionaries': model_attribute_dicts,
         'version': version,
         'layer_colors': layer_colors,
         'layer_hidden': layer_hidden,
         'layer_id_to_name': layer_id_to_name,
-        'pages': _parse_pages(page_node),
-        'dimensions': _parse_dimensions(
-            model_dat, vertex_positions, instance_world),
+        'pages': pages,
+        'dimensions': dimensions,
         'material_id_to_name': material_id_to_name,
         'materials': materials,
         'materials_by_folder': materials_by_folder,
         'defs_dict': defs_dict,
         'thumbnail_data': thumbnail_data,
         'styles': styles,
-        'face_colors': _model_face_colors(model_dat),
+        'face_colors': face_colors,
         'unread_root_entities': 0,
         'units': units,
     }
 
+
+def _read_vff_zip(skp_path: str):
+    """Extract materials, styles, thumbnail, units, and model.dat from a VFF ZIP."""
+    # ZipFile accounts for a prepended SKP header when locating entries.
+    # Reading the file directly avoids retaining a second, file-sized ZIP
+    # buffer throughout parsing. Close it on malformed members as well.
+    with zipfile.ZipFile(skp_path, 'r') as zf:
+        logger.debug("Opened ZIP container: %d entries", len(zf.namelist()))
+
+        # Materials & layer colors
+        layer_colors = {}
+        # Modern (VFF) files derive layer COLOR from Layer_<name>-prefixed
+        # materials, which carry no visibility flag of their own - real
+        # visibility comes from the model.dat layer manager's own 8E3C byte,
+        # read in collect_layers() below. Seeded to False (visible) here so a
+        # layer that never went through collect_layers (e.g. a layer with no
+        # painted material at all) still gets a sane default.
+        layer_hidden = {}
+        materials = {}
+        materials_by_folder = {}
+        raw_material_entries = []
+        MAT_NS = {'mat': 'http://sketchup.google.com/schemas/sketchup/1.0/material'}
+        for name in zf.namelist():
+            if name.endswith('material.xml') and name.startswith('materials/'):
+                _validate_zip_entry_size(zf, name)
+                xml_data = zf.read(name)
+                try:
+                    root = ET.fromstring(xml_data)
+                    mat_elem = root.find('.//mat:material', MAT_NS)
+                    if mat_elem is not None:
+                        mat_name = mat_elem.get('name', 'unknown')
+                        r = int(mat_elem.get('colorRed', 128))
+                        g = int(mat_elem.get('colorGreen', 128))
+                        b = int(mat_elem.get('colorBlue', 128))
+                        # 'trans' only applies when useTrans="1"; otherwise the
+                        # attribute is a leftover default and the material is
+                        # fully opaque. Without this check most materials read
+                        # as 50% transparent (or fully invisible for trans="0").
+                        # The stored value is a TRANSPARENCY (0 = opaque,
+                        # 1 = fully transparent) — e.g. SketchUp's library
+                        # "Translucent Glass Blue" (70% opacity) stores
+                        # trans="0.3" — so the exposed opacity is 1 - trans.
+                        if mat_elem.get('useTrans') == '1':
+                            trans = 1.0 - float(mat_elem.get('trans', 0.0))
+                            trans = min(max(trans, 0.0), 1.0)
+                        else:
+                            trans = 1.0
+                        folder_name = name.split('/')[1] if len(name.split('/')) > 1 else ''
+                        # type="2" marks a colourized copy ("[Name]1"): the
+                        # shared texture must be re-tinted toward the material
+                        # colour before display. colorizeType 0 = hue shift,
+                        # 1 = tint (greyscale then colour).
+                        colorized = mat_elem.get('type') == '2'
+                        try:
+                            colorize_type = int(mat_elem.get('colorizeType', 0) or 0)
+                        except ValueError:
+                            colorize_type = 0
+                        mat_obj = {'name': mat_name, 'color': {'r': r, 'g': g, 'b': b}, 'transparency': trans,
+                                   'colorized': colorized, 'colorize_type': colorize_type}
+                        tex = _extract_texture(zf, name, mat_elem, MAT_NS)
+                        if tex is not None:
+                            mat_obj['texture'] = tex
+                        raw_material_entries.append((folder_name, mat_obj, (r, g, b)))
+                except Exception:
+                    logger.debug("Failed to parse material.xml %r", name, exc_info=True)
+
+        # Thumbnail
+        thumbnail_data = None
+        if 'meta/model_thumbnail.png' in zf.namelist():
+            _validate_zip_entry_size(zf, 'meta/model_thumbnail.png')
+            thumbnail_data = zf.read('meta/model_thumbnail.png')
+
+        # Units (meta/meta.dat) - VFF-only; legacy files carry no equivalent
+        # container.
+        units = None
+        if 'meta/meta.dat' in zf.namelist():
+            try:
+                _validate_zip_entry_size(zf, 'meta/meta.dat')
+                units = _read_meta_units(zf.read('meta/meta.dat'))
+            except Exception:
+                units = None
+                logger.debug("Failed to read units from meta/meta.dat", exc_info=True)
+
+        # Styles: face colors live in styles/*/style.xml as signed-int32 ABGR
+        # variants — item id 2002 is the front (default) face color, 2003 the
+        # back face color (the 4000-series items are background/sky/ground).
+        # Viewers need them to shade unpainted faces the way SketchUp does (an author may e.g. set a green back color so unpainted
+        # garden faces read as grass).
+        styles = []
+        for name in zf.namelist():
+            if not (name.startswith('styles/') and name.endswith('style.xml')):
+                continue
+            try:
+                _validate_zip_entry_size(zf, name)
+                sroot = ET.fromstring(zf.read(name))
+            except (ET.ParseError, DefusedXmlException):
+                continue
+            STY = '{http://sketchup.google.com/schemas/sketchup/1.0/style}'
+            TYP = '{http://sketchup.google.com/schemas/1.0/types}'
+            style_el = sroot.find(f'{STY}style')
+            if style_el is None:
+                continue
+            colors = {}
+            for item in style_el.findall(f'{STY}item'):
+                iid = item.get('id')
+                var = item.find(f'{TYP}variant')
+                if iid in ('2002', '2003') and var is not None and var.text:
+                    try:
+                        v = int(var.text) & 0xFFFFFFFF
+                    except ValueError:
+                        continue
+                    colors[iid] = (v & 255, (v >> 8) & 255, (v >> 16) & 255)
+            styles.append({'name': style_el.get('name', ''),
+                           'front_color': colors.get('2002'),
+                           'back_color': colors.get('2003')})
+
+        logger.debug("Parsed %d materials, %d styles", len(materials), len(styles))
+
+        _validate_zip_entry_size(zf, 'model.dat')
+        model_dat = zf.read('model.dat')
+    return (layer_colors, layer_hidden, materials, materials_by_folder,
+            raw_material_entries, thumbnail_data, units, styles, model_dat)
