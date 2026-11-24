@@ -2,9 +2,8 @@ import { transformPoint, multiplyMatrices } from './transforms';
 import { extractDynamicProperties, extractAttributeDictionaries, isGenericDefinitionName, findNameOverride, stringifyVffAttrValue, ParsedDefinition, VffAttrValue } from './geometry';
 import {
   buildLocalFaceGroups,
-  originalImageMime,
+  createTextureIndexFor,
   unpaintedStyleColors,
-  warnSkippedTexture,
   type UnpaintedFacesMode,
 } from './face-groups';
 import { SkpParseError } from './errors';
@@ -937,34 +936,11 @@ export function buildSceneFromParsed(
 
   const styleColors = unpaintedStyleColors(parsed.faceColors, options?.unpaintedFaces);
 
-  // Textures are deduplicated by their bytes: the same image routinely backs
-  // several materials, and re-embedding it per material would multiply the
-  // export size for nothing.
+  // Textures are deduplicated by full content (with an object-identity fast
+  // path per face): the same image routinely backs several materials, while
+  // equal-size PNGs/TIFFs share their 16-byte header and must stay distinct.
   const textures: SceneTexture[] = [];
-  const textureIndexByKey = new Map<string, number>();
-  const skippedTextures = new Set<string>();
-
-  function textureIndexFor(tex: Texture | null | undefined, materialName?: string): number | null {
-    if (!tex || !tex.data || tex.data.length === 0) return null;
-    let mimeType: string | null = sniffImageMime(tex.data);
-    if (mimeType === null && options?.originalTextures) {
-      mimeType = originalImageMime(tex.data);
-    }
-    if (mimeType === null) {
-      warnSkippedTexture(options, skippedTextures, materialName, tex, tex.data);
-      return null;
-    }
-    // length plus a short byte prefix is enough to tell real images apart
-    // without hashing megabytes on every face
-    const head = Array.from(tex.data.subarray(0, 16)).join(',');
-    const key = `${tex.data.length}:${head}`;
-    const hit = textureIndexByKey.get(key);
-    if (hit !== undefined) return hit;
-    const idx = textures.length;
-    textures.push({ data: tex.data, mimeType, filename: tex.filename });
-    textureIndexByKey.set(key, idx);
-    return idx;
-  }
+  const textureIndexFor = createTextureIndexFor(textures, options);
 
   const colorToMaterialIndex = new Map<string, number>();
   const gltfMaterials: any[] = [];

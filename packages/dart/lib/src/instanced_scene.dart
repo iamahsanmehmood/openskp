@@ -7,7 +7,7 @@ import 'geometry.dart';
 import 'model.dart' show Page;
 import 'observability.dart';
 import 'parser.dart' show buildPagesFromRaw;
-import 'scene.dart' show SceneTexture, sniffImageMime, originalImageMime, warnSkippedTexture;
+import 'scene.dart' show SceneTexture, createTextureIndexFor;
 import 'tlv.dart';
 import 'transforms.dart';
 
@@ -223,30 +223,7 @@ class InstancedSceneBuilder {
     final styleColors = unpaintedStyleColors(parsed, options?.unpaintedFaces);
 
     final textures = <SceneTexture>[];
-    final textureIndexByKey = <String, int>{};
-    final skippedTextures = <(String, String)>{};
-
-    int? textureIndexFor(RawTexture? tex, [String? materialName]) {
-      if (tex == null || tex.data == null || tex.data!.isEmpty) return null;
-      final data = tex.data!;
-      var mimeType = sniffImageMime(data);
-      if (mimeType == null && (options?.originalTextures ?? false)) {
-        mimeType = originalImageMime(data);
-      }
-      if (mimeType == null) {
-        warnSkippedTexture(options, skippedTextures, materialName, tex, data);
-        return null;
-      }
-      final headLen = data.length < 16 ? data.length : 16;
-      final head = data.sublist(0, headLen).join(',');
-      final key = '${data.length}:$head';
-      final hit = textureIndexByKey[key];
-      if (hit != null) return hit;
-      final idx = textures.length;
-      textures.add(SceneTexture(data: data, mimeType: mimeType, filename: tex.filename));
-      textureIndexByKey[key] = idx;
-      return idx;
-    }
+    final textureIndexFor = createTextureIndexFor(textures, options);
 
     final colorToMaterialIndex = <((int, int, int), bool, int?, double), int>{};
     final gltfMaterials = <Map<String, dynamic>>[];

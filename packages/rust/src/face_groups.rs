@@ -191,12 +191,16 @@ pub(crate) fn original_image_mime(data: &[u8]) -> Option<&'static str> {
     }
 }
 
-/// The scene's texture table, deduplicated by bytes (the builders'
-/// `texture_index_for`): the same image routinely backs several materials.
+/// The scene's texture table, deduplicated by full byte content (the builders'
+/// `texture_index_for`): the same image routinely backs several materials,
+/// while equal-size PNGs/TIFFs share their 16-byte header and must stay
+/// distinct. Checks `(ptr, len)` identity first so repeated face lookups stay
+/// O(1).
 #[derive(Debug, Clone, Default)]
 pub struct TextureRegistry {
     pub textures: Vec<SceneTexture>,
-    index_by_key: HashMap<String, usize>,
+    index_by_ptr: HashMap<(usize, usize), usize>,
+    buckets: HashMap<u64, Vec<usize>>,
     options: crate::observability::ParseOptions,
     warned: HashMap<(String, String), ()>,
 }
@@ -255,6 +259,10 @@ impl TextureRegistry {
         if data.is_empty() {
             return None;
         }
+        let ptr_key = (data.as_ptr() as usize, data.len());
+        if let Some(&found) = self.index_by_ptr.get(&ptr_key) {
+            return Some(found);
+        }
         let mut mime_type = sniff_image_mime(data);
         if mime_type.is_none() && self.options.original_textures {
             mime_type = original_image_mime(data);
@@ -263,14 +271,18 @@ impl TextureRegistry {
             self.warn_skipped(material, data);
             return None;
         };
-        // Length plus a short byte prefix (C++ `std::hex`, unpadded) tells
-        // real images apart without hashing megabytes on every face.
-        let mut key = format!("{}:", data.len());
-        for b in data.iter().take(16) {
-            key.push_str(&format!("{b:x}"));
+        let mut hash = 14_695_981_039_346_656_037u64;
+        for &b in data {
+            hash ^= u64::from(b);
+            hash = hash.wrapping_mul(1_099_511_628_211);
         }
-        if let Some(&found) = self.index_by_key.get(&key) {
-            return Some(found);
+        if let Some(bucket) = self.buckets.get(&hash) {
+            for &cand in bucket {
+                if self.textures[cand].data == *data {
+                    self.index_by_ptr.insert(ptr_key, cand);
+                    return Some(cand);
+                }
+            }
         }
         let idx = self.textures.len();
         self.textures.push(SceneTexture {
@@ -278,7 +290,8 @@ impl TextureRegistry {
             mime_type: mime_type.to_owned(),
             filename: texture.filename.clone(),
         });
-        self.index_by_key.insert(key, idx);
+        self.buckets.entry(hash).or_default().push(idx);
+        self.index_by_ptr.insert(ptr_key, idx);
         Some(idx)
     }
 }

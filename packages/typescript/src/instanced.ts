@@ -4,20 +4,18 @@ import { ParseOptions, PROGRESS_INTERVAL, emitLog, emitProgress } from './observ
 import { SkpParseError } from './errors';
 import {
   buildLocalFaceGroups,
-  originalImageMime,
+  createByteContentKeyer,
+  createTextureIndexFor,
   unpaintedStyleColors,
-  warnSkippedTexture,
 } from './face-groups';
 import {
   Material,
   Page,
-  Texture,
   SceneTexture,
   SceneOptions,
   SceneBounds,
   ParsedRawData,
   buildPagesFromRaw,
-  sniffImageMime,
   resolveMaterialFromMaps,
 } from './model';
 
@@ -243,30 +241,10 @@ export function buildInstancedSceneFromParsed(
 
   const styleColors = unpaintedStyleColors(parsed.faceColors, options?.unpaintedFaces);
 
-  // Textures deduplicated by bytes, exactly as the baked path does.
+  // Textures deduplicated by full content, matching model.ts.
   const textures: SceneTexture[] = [];
-  const textureIndexByKey = new Map<string, number>();
-  const skippedTextures = new Set<string>();
-
-  function textureIndexFor(tex: Texture | null | undefined, materialName?: string): number | null {
-    if (!tex || !tex.data || tex.data.length === 0) return null;
-    let mimeType: string | null = sniffImageMime(tex.data);
-    if (mimeType === null && options?.originalTextures) {
-      mimeType = originalImageMime(tex.data);
-    }
-    if (mimeType === null) {
-      warnSkippedTexture(options, skippedTextures, materialName, tex, tex.data);
-      return null;
-    }
-    const head = Array.from(tex.data.subarray(0, 16)).join(',');
-    const key = `${tex.data.length}:${head}`;
-    const hit = textureIndexByKey.get(key);
-    if (hit !== undefined) return hit;
-    const idx = textures.length;
-    textures.push({ data: tex.data, mimeType, filename: tex.filename });
-    textureIndexByKey.set(key, idx);
-    return idx;
-  }
+  const textureIndexFor = createTextureIndexFor(textures, options);
+  const byteContentKey = createByteContentKeyer();
 
   const colorToMaterialIndex = new Map<string, number>();
   const gltfMaterials: any[] = [];
@@ -335,7 +313,7 @@ export function buildInstancedSceneFromParsed(
   ): string {
     const tex = inheritedMaterial?.texture;
     const texKey = tex && tex.data && tex.data.length > 0
-      ? `${tex.data.length}:${Array.from(tex.data.subarray(0, 16)).join(',')}:${tex.width}x${tex.height}`
+      ? `${byteContentKey(tex.data)}:${tex.width}x${tex.height}`
       : '-';
     const matKey = inheritedMaterial
       ? `${inheritedMaterial.name}|${inheritedMaterial.color.r},${inheritedMaterial.color.g},${inheritedMaterial.color.b}|${texKey}`

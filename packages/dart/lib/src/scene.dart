@@ -270,6 +270,66 @@ void warnSkippedTexture(
   );
 }
 
+int _fnv1a32(List<int> data) {
+  var h = 0x811c9dc5;
+  for (var i = 0; i < data.length; i++) {
+    h ^= data[i] & 0xff;
+    h = (h * 0x01000193) & 0xffffffff;
+  }
+  return h;
+}
+
+bool _bytesEqual(List<int> a, List<int> b) {
+  if (identical(a, b)) return true;
+  if (a.length != b.length) return false;
+  for (var i = 0; i < a.length; i++) {
+    if (a[i] != b[i]) return false;
+  }
+  return true;
+}
+
+int? Function(RawTexture?, [String?]) createTextureIndexFor(
+  List<SceneTexture> textures,
+  ParseOptions? options,
+) {
+  final indexByIdentity = Map<List<int>, int>.identity();
+  final buckets = <int, List<int>>{};
+  final skippedTextures = <(String, String)>{};
+
+  return (RawTexture? tex, [String? materialName]) {
+    if (tex == null || tex.data == null || tex.data!.isEmpty) return null;
+    final data = tex.data!;
+    final cached = indexByIdentity[data];
+    if (cached != null) return cached;
+
+    var mimeType = sniffImageMime(data);
+    if (mimeType == null && (options?.originalTextures ?? false)) {
+      mimeType = originalImageMime(data);
+    }
+    if (mimeType == null) {
+      warnSkippedTexture(options, skippedTextures, materialName, tex, data);
+      return null;
+    }
+
+    final hash = _fnv1a32(data);
+    final bucket = buckets[hash];
+    if (bucket != null) {
+      for (final cand in bucket) {
+        if (_bytesEqual(textures[cand].data, data)) {
+          indexByIdentity[data] = cand;
+          return cand;
+        }
+      }
+    }
+
+    final idx = textures.length;
+    textures.add(SceneTexture(data: data, mimeType: mimeType, filename: tex.filename));
+    (bucket ?? (buckets[hash] = <int>[])).add(idx);
+    indexByIdentity[data] = idx;
+    return idx;
+  };
+}
+
 (List<SceneTexture>, List<Map<String, dynamic>>) filterGltfTextures(
   List<SceneTexture> rawTextures,
   List<Map<String, dynamic>> rawMaterials,
@@ -377,36 +437,12 @@ class SceneBuilder {
     // matched far more than intended - see openskp#240).
     final pathUpdates = <String, (Map<String, String>, String, Map<String, Map<String, String>>)>{};
 
-    // Textures deduplicated by bytes: the same image routinely backs
-    // several materials, and re-embedding it per material would multiply
-    // the export size for nothing.
+    // Textures deduplicated by full content (with an object-identity fast
+    // path per face): the same image routinely backs several materials,
+    // while equal-size PNGs/TIFFs share their 16-byte header and must stay
+    // distinct.
     final textures = <SceneTexture>[];
-    final textureIndexByKey = <String, int>{};
-    final skippedTextures = <(String, String)>{};
-
-    int? textureIndexFor(RawTexture? tex, [String? materialName]) {
-      if (tex == null || tex.data == null || tex.data!.isEmpty) return null;
-      final data = tex.data!;
-      var mimeType = sniffImageMime(data);
-      if (mimeType == null && (options?.originalTextures ?? false)) {
-        mimeType = originalImageMime(data);
-      }
-      if (mimeType == null) {
-        warnSkippedTexture(options, skippedTextures, materialName, tex, data);
-        return null;
-      }
-      // length plus a short byte prefix is enough to tell real images
-      // apart without hashing megabytes on every face
-      final headLen = data.length < 16 ? data.length : 16;
-      final head = data.sublist(0, headLen).join(',');
-      final key = '${data.length}:$head';
-      final hit = textureIndexByKey[key];
-      if (hit != null) return hit;
-      final idx = textures.length;
-      textures.add(SceneTexture(data: data, mimeType: mimeType, filename: tex.filename));
-      textureIndexByKey[key] = idx;
-      return idx;
-    }
+    final textureIndexFor = createTextureIndexFor(textures, options);
 
     final colorToMaterialIndex = <((int, int, int), bool, int?, double), int>{};
     final gltfMaterials = <Map<String, dynamic>>[];

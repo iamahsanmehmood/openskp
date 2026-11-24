@@ -239,30 +239,7 @@ namespace OpenSkp
             var styleColors = FaceGroups.UnpaintedStyleColors(parsed, options?.UnpaintedFaces);
 
             var textures = new List<SceneTexture>();
-            var textureIndexByKey = new Dictionary<string, int>();
-            var skippedTextures = new HashSet<(string, string)>();
-
-            int? TextureIndexFor(Geometry.RawTexture? tex, string? materialName)
-            {
-                if (tex?.Data == null || tex.Data.Length == 0) return null;
-                var mimeType = FaceGroups.SniffImageMime(tex.Data);
-                if (mimeType == null && options?.OriginalTextures == true)
-                {
-                    mimeType = FaceGroups.OriginalImageMime(tex.Data);
-                }
-                if (mimeType == null)
-                {
-                    FaceGroups.WarnSkippedTexture(options, skippedTextures, materialName, tex, tex.Data);
-                    return null;
-                }
-                var head = BitConverter.ToString(tex.Data, 0, Math.Min(16, tex.Data.Length));
-                var key = $"{tex.Data.Length}:{head}";
-                if (textureIndexByKey.TryGetValue(key, out var hit)) return hit;
-                var idx = textures.Count;
-                textures.Add(new SceneTexture { Data = tex.Data, MimeType = mimeType, Filename = tex.Filename });
-                textureIndexByKey[key] = idx;
-                return idx;
-            }
+            var textureIndexFor = FaceGroups.CreateTextureIndexFor(textures, options);
 
             var colorToMaterialIndex = new Dictionary<((int, int, int) Color, bool DoubleSided, int? TextureIndex, double Transparency), int>();
             var gltfMaterials = new List<object>();
@@ -365,7 +342,7 @@ namespace OpenSkp
                             ? resolved
                             : (inheritedMaterial, (inheritedMaterial.R, inheritedMaterial.G, inheritedMaterial.B));
                     },
-                    TextureIndexFor = TextureIndexFor,
+                    TextureIndexFor = textureIndexFor,
                     FallbackColor = fallbackColor,
                     FallbackBackColor = fallbackBackColor,
                     DefinitionId = defId,

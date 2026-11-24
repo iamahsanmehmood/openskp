@@ -6,6 +6,7 @@
 #include <cstring>
 #include <sstream>
 #include <stdexcept>
+#include <unordered_map>
 #include <utility>
 
 namespace openskp {
@@ -224,6 +225,63 @@ void warn_skipped_texture(const ParseOptions& options,
     msg += " (pass original_textures = true to keep it in its own format)";
   }
   emit_log(options, LogLevel::warning, msg);
+}
+
+namespace {
+
+std::uint64_t fnv1a64(const ByteBuffer& data) noexcept {
+  std::uint64_t h = 14695981039346656037ull;
+  for (const auto b : data) {
+    h ^= static_cast<std::uint64_t>(b);
+    h *= 1099511628211ull;
+  }
+  return h;
+}
+
+struct TextureDeduper {
+  std::unordered_map<const ByteBuffer*, std::size_t> by_ptr;
+  std::unordered_map<std::uint64_t, std::vector<std::size_t>> buckets;
+  std::vector<std::shared_ptr<RawMaterial>> kept_refs;
+  std::set<std::pair<std::string, std::string>> skipped;
+};
+
+}  // namespace
+
+std::function<std::optional<std::size_t>(const std::shared_ptr<RawMaterial>&)>
+make_texture_index_for(std::vector<SceneTexture>& textures, const ParseOptions& options) {
+  auto state = std::make_shared<TextureDeduper>();
+  return [&textures, &options,
+          state](const std::shared_ptr<RawMaterial>& mat) -> std::optional<std::size_t> {
+    if (!mat || !mat->texture || !mat->texture->data || mat->texture->data->empty()) {
+      return std::nullopt;
+    }
+    const auto* ptr = &*mat->texture->data;
+    if (const auto hit = state->by_ptr.find(ptr); hit != state->by_ptr.end()) {
+      return hit->second;
+    }
+    const auto& data = *ptr;
+    auto mime_type = sniff_image_mime(data);
+    if (!mime_type && options.original_textures) mime_type = original_image_mime(data);
+    if (!mime_type) {
+      warn_skipped_texture(options, state->skipped, mat);
+      return std::nullopt;
+    }
+    const auto hash = fnv1a64(data);
+    auto& bucket = state->buckets[hash];
+    for (const auto cand : bucket) {
+      if (textures[cand].data == data) {
+        state->kept_refs.push_back(mat);
+        state->by_ptr.emplace(ptr, cand);
+        return cand;
+      }
+    }
+    const auto idx = textures.size();
+    textures.push_back(SceneTexture{data, *mime_type, mat->texture->filename});
+    bucket.push_back(idx);
+    state->kept_refs.push_back(mat);
+    state->by_ptr.emplace(ptr, idx);
+    return idx;
+  };
 }
 
 FilteredGltfTextures filter_gltf_textures(
