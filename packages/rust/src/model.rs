@@ -317,6 +317,9 @@ pub struct Edge {
     pub layer: String,
     /// The raw layer id behind [`Edge::layer`], or `None`.
     pub layer_id: Option<EntityId>,
+    /// SketchUp's persistent entity id (`0` when the file predates SketchUp
+    /// 2017 persistent ids). Matches entries in [`Page::hidden_entity_ids`].
+    pub persistent_id: u64,
 }
 
 /// The analytic arc behind a curve: SketchUp's own ArcCurve.
@@ -396,6 +399,9 @@ pub struct Face {
     /// `None`. A legacy face always carries one (its drawbase layer field, `0`
     /// for the default layer), even though its `layer` name stays `""`.
     pub layer_id: Option<EntityId>,
+    /// SketchUp's persistent entity id (`0` when the file predates SketchUp
+    /// 2017 persistent ids). Matches entries in [`Page::hidden_entity_ids`].
+    pub persistent_id: u64,
 }
 
 // ── layers, materials, styles ───────────────────────────────────────────
@@ -552,7 +558,7 @@ pub struct Instance {
     pub material_id: Option<EntityId>,
     /// SketchUp's "Hide" on this placement.
     pub hidden: bool,
-    /// The placement's own persistent entity id (VFF only).
+    /// The placement's own persistent entity id (VFF and 2017+ classic).
     pub id: Option<EntityId>,
 }
 
@@ -693,6 +699,9 @@ pub struct Page {
     pub ortho_height: f64,
     /// Names of the layers this scene hides.
     pub hidden_layers: Vec<String>,
+    /// Persistent entity ids of the entities this scene hides (matching
+    /// [`Instance::id`], [`Edge::persistent_id`] and [`Face::persistent_id`]).
+    pub hidden_entity_ids: Vec<EntityId>,
     /// The scene selected when the model was saved.
     pub selected: bool,
 }
@@ -708,6 +717,7 @@ impl Default for Page {
             parallel: false,
             ortho_height: 0.0,
             hidden_layers: Vec::new(),
+            hidden_entity_ids: Vec::new(),
             selected: false,
         }
     }

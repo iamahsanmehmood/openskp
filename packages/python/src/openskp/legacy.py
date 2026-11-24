@@ -130,6 +130,7 @@ class _Archive:
         self.class_schema: Dict[str, int] = {}
         self.current_class: Optional[str] = None  # class of the object being read
         self.current_obj_slot: Optional[int] = None
+        self.pids: Dict[int, int] = {}
         self.next_slot = 0
         self.walk_base = 0            # slots below this are unwalked pre-model
         self.readers: Dict[str, Any] = {}
@@ -246,6 +247,18 @@ class _Archive:
                 return None
             offset += width
         return slot - offset
+
+    def resolve_entity_pid(self, file_slot: int) -> Optional[int]:
+        walker = (self._translate_ref(file_slot)
+                  if self.burns and file_slot >= self.burns[0][0]
+                  else file_slot)
+        if walker is None:
+            return None
+        ent = self.slots.get(walker)
+        if ent is None or ent[0] != 'obj':
+            return None
+        pid = self.pids.get(walker, 0)
+        return pid if pid else None
 
     def _backref(self, slot, r):
         if self.burns and slot >= self.burns[0][0]:
@@ -521,6 +534,8 @@ def _preamble(ar, r):
         for bit in range(8):
             if mask & (1 << bit):
                 pid |= r.u8() << (8 * bit)
+    if pid and ar.current_obj_slot is not None and ar.current_obj_slot not in ar.pids:
+        ar.pids[ar.current_obj_slot] = pid
     return {'attrs': attrs, 'pid': pid, 'attrs_slot': slot}
 
 
@@ -1433,7 +1448,7 @@ def _read_page_record(r, classes, ver):
         raise LegacyParseError(f"scene with attributes {r.ctx()}")
     if schema >= 13:
         _skip_pid(r)
-    page = {'name': r.utf16(), 'hidden_layer_ids': []}
+    page = {'name': r.utf16(), 'hidden_layer_ids': [], 'hidden_entity_ids': []}
     r.utf16()                                     # description
     flags = r.u32()
     if flags & ~_PAGE_KNOWN_FLAGS:
@@ -1473,10 +1488,9 @@ def _read_page_record(r, classes, ver):
         r.utf16()                                 # country
         r.raw(_SHADOW_INFO_FIXED_LEN)
     if flags & 0x08:
-        r.raw(_PAGE_AXES_LEN + (1 if schema >= 13 else 0))
+        r.raw(_PAGE_AXES_LEN + 1 + (1 if schema >= 13 else 0))
     if flags & 0x10:
-        r.u8()
-        _read_refs(r, r.u32())
+        page['hidden_entity_ids'] = _read_refs(r, r.u32())
     if flags & 0x20:
         page['hidden_layer_ids'] = _read_refs(r, r.u32())
     if flags & 0x40:
@@ -1516,6 +1530,12 @@ def _read_page_list(data: bytes, ar):
             page['hidden_layer_ids'] = [
                 i for i in page['hidden_layer_ids']
                 if (ar.slots.get(i) or ('',))[0] == 'obj' and ar.slots[i][1] == 'CLayer']
+            pids = []
+            for i in page['hidden_entity_ids']:
+                pid = ar.resolve_entity_pid(i)
+                if pid is not None:
+                    pids.append(pid)
+            page['hidden_entity_ids'] = pids
     except (LegacyParseError, struct.error, IndexError, ValueError) as e:
         logger.debug("scene list not fully readable, falling back to the scan: %s", e)
         return None
@@ -2321,6 +2341,7 @@ class _Builder:
         # parsers carry this; neither stored it. Absent = the edge is not in
         # a curve (SketchUp's ``edge.curve == nil``).
         self.edge_curves = {}
+        self.edge_pids = {}
         # Curve slot -> decoded arc frame, for the
         # subset of Curves that are CArcCurve. Keyed by the same slot index
         # that edge_curves stores, so an edge's analytic arc (if any) is one
@@ -2338,13 +2359,13 @@ class _Builder:
         self.construction_points = []
 
 
-def _fill_builder(builder, ents, slots):
+def _fill_builder(builder, ents, slots, pids=None):
     for s, n, v in ents:
         if not isinstance(v, dict):
             continue
         k = v.get('k')
         if k == 'edge':
-            _add_edge(builder, s, v, slots)
+            _add_edge(builder, s, v, slots, pids)
         elif k == 'arccurve':
             # Keep the analytic arc. Edges point at
             # this slot through edge_curves; without this the frame decoded in
@@ -2359,7 +2380,7 @@ def _fill_builder(builder, ents, slots):
                     ent = slots.get(es)
                     if ent is None or ent[2] is None:
                         continue
-                    _add_edge(builder, es, ent[2], slots)
+                    _add_edge(builder, es, ent[2], slots, pids)
                     # Normalize to the documented CoEdge contract (+1 = same
                     # direction as the edge, -1 = reversed) - u['sense'] is
                     # the raw SketchUp bit (0 = forward, 1 = reversed).
@@ -2369,6 +2390,7 @@ def _fill_builder(builder, ents, slots):
                     'material_id': v['db']['mat'] or None,
                     'back_material_id': v['back_mat'] or None,
                     'hidden': bool(v['db']['hidden']),
+                    'persistent_id': pids.get(s, 0) if pids else 0,
                     # drawbase already carries the
                     # face's layer id, but it was dropped here - so downstream
                     # (scene.py -> MeshMetadata.layer -> export/ifc.py's
@@ -2388,6 +2410,7 @@ def _fill_builder(builder, ents, slots):
             attr_dicts = _extract_legacy_attribute_dictionaries(v.get('attrs'))
             dynamic = attr_dicts.get(_DYNAMIC_ATTRIBUTES_DICT_NAME, {})
             builder.instances.append({
+                'id': pids.get(s) if pids else None,
                 'name': v['name'], 'ref_idx': v['def'],
                 'ref_guid': '', 'matrix': list(v['xf']),
                 'material_id': v['db']['mat'] or None,
@@ -2411,6 +2434,7 @@ def _fill_builder(builder, ents, slots):
             # above, so an Image entity parsed without error but never
             # appeared anywhere a caller could see it.
             builder.instances.append({
+                'id': pids.get(s) if pids else None,
                 'name': '', 'ref_idx': v['def'],
                 'ref_guid': v.get('guid', ''), 'matrix': list(v['xform']),
                 'material_id': v['db']['mat'] or None,
@@ -2463,7 +2487,7 @@ def _fill_builder(builder, ents, slots):
             })
 
 
-def _add_edge(builder, slot, e, slots):
+def _add_edge(builder, slot, e, slots, pids=None):
     if slot in builder.edges:
         return
     v1, v2 = e['v1'], e['v2']
@@ -2472,6 +2496,8 @@ def _add_edge(builder, slot, e, slots):
         if ent is not None and ent[2] is not None and vs not in builder.vertices:
             builder.vertices[vs] = tuple(ent[2]['xyz'])
     builder.edges[slot] = (v1, v2)
+    if pids and slot in pids:
+        builder.edge_pids[slot] = pids[slot]
     db = e.get('db') or {}
     flags = ((0x08 if db.get('soft') else 0)
              | (0x10 if db.get('smooth') else 0)
@@ -2717,7 +2743,7 @@ def full_parse_legacy(skp_path: str) -> Dict[str, Any]:
             if ent[0] == 'obj' and ent[1] == 'CComponentDefinition' and ent[2]:
                 d = ent[2]
                 b = _Builder()
-                _fill_builder(b, d['ents'], slots)
+                _fill_builder(b, d['ents'], slots, ar.pids)
                 defs_dict[s] = {'guid': d['guid'], 'name': d['name'],
                                 'is_image': s in image_def_ids,
                                 'is_group': d.get('is_group', False),
@@ -2736,7 +2762,7 @@ def full_parse_legacy(skp_path: str) -> Dict[str, Any]:
         ) from e
 
     root_builder = _Builder()
-    _fill_builder(root_builder, root, slots)
+    _fill_builder(root_builder, root, slots, ar.pids)
     try:
         model_attribute_dicts = _premodel_attribute_dictionaries(data)
     except Exception:  # noqa: BLE001 - the model's dictionaries are optional

@@ -282,10 +282,27 @@ pub fn parse_camera(record: &[u8]) -> RawCamera {
 ///
 /// * 6F54 > 6F55 - page name (UTF-8)
 /// * 714A > 34BC - camera (see [`parse_camera`])
+/// * 714B - entities hidden in this page: (u8 length, var-int entity id) runs
 /// * 7150 - layers hidden in this page: (u8 length, var-int layer id) runs
 ///
 /// Each page's 6F54 also carries its entity id (DC05 > DE05), and 6D62 next to
 /// 6D61 holds the id of the scene selected when the model was saved.
+fn parse_id_runs(runs: Option<&[u8]>) -> Result<Vec<EntityId>> {
+    let mut out = Vec::new();
+    let Some(runs) = runs else { return Ok(out) };
+    let mut off = 0usize;
+    while off < runs.len() {
+        let ln = runs[off] as usize;
+        if ln == 0 || off + 1 + ln > runs.len() {
+            break;
+        }
+        let id = parse_varint(runs, off + 1, ln)?;
+        out.push(id as EntityId);
+        off += 1 + ln;
+    }
+    Ok(out)
+}
+
 pub fn parse_pages(node: Option<&TlvNode>) -> Result<Vec<RawPage>> {
     let mut pages = Vec::new();
     let Some(node) = node else { return Ok(pages) };
@@ -334,18 +351,8 @@ pub fn parse_pages(node: Option<&TlvNode>) -> Result<Vec<RawPage>> {
                     page.parallel = cam.parallel;
                     page.ortho_height = cam.ortho_height;
                 }
-                if let Some(hidden) = tlv_find_int(&items, 0x7150) {
-                    let mut off = 0usize;
-                    while off < hidden.len() {
-                        let ln = hidden[off] as usize;
-                        if ln == 0 || off + 1 + ln > hidden.len() {
-                            break;
-                        }
-                        page.hidden_layer_ids
-                            .push(parse_varint(hidden, off + 1, ln)? as EntityId);
-                        off += 1 + ln;
-                    }
-                }
+                page.hidden_layer_ids = parse_id_runs(tlv_find_int(&items, 0x7150))?;
+                page.hidden_entity_ids = parse_id_runs(tlv_find_int(&items, 0x714b))?;
                 // A scene that doesn't save its camera is still a scene: it
                 // keeps its name and hidden layers, eye/target/up unset.
                 pages.push(page);

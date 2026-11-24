@@ -19,11 +19,13 @@ namespace OpenSkp
         public bool UvProjected;
         public bool UvProjectedBack;
         public bool Hidden;
+        public long PersistentId;
     }
 
     internal sealed class GeometryBuilderInstance
     {
         public long Offset;
+        public long? Id;
         public string? RefGuid;
         public long? RefIdx;
         public string? Name;
@@ -76,6 +78,8 @@ namespace OpenSkp
         public Dictionary<long, int> EdgeFlags = new Dictionary<long, int>();
         /// <summary>Edge id -> entity id of the Curve the edge belongs to (SketchUp's <c>Edge#curve</c>).</summary>
         public Dictionary<long, long> EdgeCurves = new Dictionary<long, long>();
+        /// <summary>Legacy edge slot -> persistent id (null for VFF, where edge id is already persistent).</summary>
+        public Dictionary<long, long>? EdgePids;
         /// <summary>Curve id -> its analytic arc, for the curves that are arcs.</summary>
         public Dictionary<long, ArcFrame> ArcCurves = new Dictionary<long, ArcFrame>();
         public Dictionary<long, GeometryBuilderFace> Faces = new Dictionary<long, GeometryBuilderFace>();
@@ -669,6 +673,7 @@ namespace OpenSkp
                     builder.Instances.Add(new GeometryBuilderInstance
                     {
                         Offset = el.Offset,
+                        Id = ExtractEntityId(el),
                         RefGuid = guid,
                         RefIdx = defIdx,
                         Name = name,

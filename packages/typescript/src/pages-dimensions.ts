@@ -17,6 +17,7 @@ export interface RawPage {
   parallel: boolean;
   orthoHeight: number;
   hiddenLayerIds: number[];
+  hiddenEntityIds: number[];
 }
 
 export interface RawDimension {
@@ -295,6 +296,18 @@ export function parsePages(node: TlvNode | null): RawPage[] {
     return p !== null && p.length === 24 ? [readF64(p, 0), readF64(p, 8), readF64(p, 16)] : null;
   }
 
+  function parseIdRuns(runs: Uint8Array | null): number[] {
+    const ids: number[] = [];
+    let off = 0;
+    while (runs !== null && off + 1 <= runs.length) {
+      const ln = runs[off];
+      if (ln === 0 || off + 1 + ln > runs.length) break;
+      ids.push(parseVarInt(runs, off + 1, ln));
+      off += 1 + ln;
+    }
+    return ids;
+  }
+
   const t60Items = tlvItemsInt(node.payload);
   if (t60Items === null) return pages;
   for (const it60 of t60Items) {
@@ -319,6 +332,7 @@ export function parsePages(node: TlvNode | null): RawPage[] {
           parallel: false,
           orthoHeight: 0.0,
           hiddenLayerIds: [],
+          hiddenEntityIds: [],
         };
 
         const head = tlvItemsInt(tlvFindInt(items, 0x6f54));
@@ -341,14 +355,8 @@ export function parsePages(node: TlvNode | null): RawPage[] {
           if (height !== null && height.length === 8) page.orthoHeight = readF64(height, 0);
         }
 
-        const hidden = tlvFindInt(items, 0x7150);
-        let off = 0;
-        while (hidden !== null && off + 1 <= hidden.length) {
-          const ln = hidden[off];
-          if (ln === 0 || off + 1 + ln > hidden.length) break;
-          page.hiddenLayerIds.push(parseVarInt(hidden, off + 1, ln));
-          off += 1 + ln;
-        }
+        page.hiddenLayerIds = parseIdRuns(tlvFindInt(items, 0x7150));
+        page.hiddenEntityIds = parseIdRuns(tlvFindInt(items, 0x714b));
 
         // A scene that doesn't save its camera ("Camera Location" unticked) is
         // still a scene: it keeps its name and hidden layers, eye/target/up null.

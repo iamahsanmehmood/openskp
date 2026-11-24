@@ -26,8 +26,8 @@ import 'pages_dimensions.dart';
 //   0x02 style       the rendering options (length by file version, see
 //                    _renderingOptionsLen) + a CSkpStyle ref or object
 //   0x04 shadows     2 bytes (schema 13+: 3) + the shadow info
-//   0x08 axes        (schema 13+: a flag byte +) 110 bytes
-//   0x10 hidden      a byte, u32 n, n entity refs
+//   0x08 axes        (schema 13+: a flag byte +) 110 bytes + a closing byte
+//   0x10 hidden      u32 n, n entity refs
 //   0x20 layers      u32 n, n refs to the layers (tags) the scene hides
 //   0x40 sections    u32 n, n section-plane refs
 //
@@ -269,11 +269,8 @@ RawPage _readRecord(Archive ar, LR r, _PageClasses classes) {
     r.utf16(); // country
     r.raw(_shadowInfoFixedLen);
   }
-  if ((flags & 0x08) != 0) r.raw(_axesLen + (schema >= 13 ? 1 : 0));
-  if ((flags & 0x10) != 0) {
-    r.u8();
-    _readRefs(r, r.u32());
-  }
+  if ((flags & 0x08) != 0) r.raw(_axesLen + 1 + (schema >= 13 ? 1 : 0));
+  if ((flags & 0x10) != 0) page.hiddenEntityIds.addAll(_readRefs(r, r.u32()));
   if ((flags & 0x20) != 0) page.hiddenLayerIds.addAll(_readRefs(r, r.u32()));
   if ((flags & 0x40) != 0) _readRefs(r, r.u32());
   if (schema >= 15) {
@@ -324,6 +321,14 @@ List<RawPage>? readPageList(Uint8List data, Archive ar) {
       page.hiddenLayerIds
         ..clear()
         ..addAll(kept);
+      final resolvedEntities = <int>[];
+      for (final id in page.hiddenEntityIds) {
+        final pid = ar.resolveEntityPid(id);
+        if (pid != null) resolvedEntities.add(pid);
+      }
+      page.hiddenEntityIds
+        ..clear()
+        ..addAll(resolvedEntities);
     }
     return pages;
   } on LegacyParseError {

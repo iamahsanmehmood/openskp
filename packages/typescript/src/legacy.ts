@@ -324,6 +324,7 @@ export class Archive {
   classSchema = new Map<string, number>();
   currentClass: string | null = null;
   currentObjSlot: number | null = null;
+  pids = new Map<number, number>();
   nextSlot = 0;
   walkBase = 0;
   readers: Record<string, (ar: Archive, r: R) => any> = {};
@@ -599,6 +600,15 @@ export class Archive {
     return slot - offset;
   }
 
+  resolveEntityPid(fileSlot: number): number | null {
+    const walker = this.burns.length > 0 && fileSlot >= this.burns[0][0] ? this.translateRef(fileSlot) : fileSlot;
+    if (walker === null) return null;
+    const ent = this.slots.get(walker);
+    if (ent === undefined || ent[0] !== 'obj') return null;
+    const pid = this.pids.get(walker) ?? 0;
+    return pid !== 0 ? pid : null;
+  }
+
   /** The walker slot of the back-reference at the cursor, without moving
    * it; `null` when the next tag is anything else. */
   peekBackref(r: R): number | null {
@@ -654,9 +664,12 @@ function preamble(ar: Archive, r: R): { attrs: any; pid: number; attrsSlot: numb
     const mask = r.u8();
     for (let bit = 0; bit < 8; bit++) {
       if (mask & (1 << bit)) {
-        pid |= r.u8() << (8 * bit);
+        pid += r.u8() * 2 ** (8 * bit);
       }
     }
+  }
+  if (pid !== 0 && ar.currentObjSlot !== null && !ar.pids.has(ar.currentObjSlot)) {
+    ar.pids.set(ar.currentObjSlot, pid);
   }
   return { attrs, pid, attrsSlot: attrsSlot as number | null };
 }
@@ -2006,7 +2019,7 @@ const RELEASED_ENTITIES = new Map<string, SlotEntry>(
 function buildAndReleaseDefinition(ar: Archive, slot: number, def: any): void {
   const builder = new LegacyBuilder();
   try {
-    fillBuilder(builder, def.ents, ar.slots);
+    fillBuilder(builder, def.ents, ar.slots, ar.pids);
   } catch (e) {
     throw new SkpParseError(`Failed while building component definitions: ${(e as Error).message}`, {
       stage: 'legacy_defs',
@@ -2361,6 +2374,7 @@ function readPageRecord(ar: Archive, r: R, classes: PageClasses): RawPage {
     parallel: false,
     orthoHeight: 0.0,
     hiddenLayerIds: [],
+    hiddenEntityIds: [],
   };
   r.utf16(); // description
   const flags = r.u32();
@@ -2417,11 +2431,8 @@ function readPageRecord(ar: Archive, r: R, classes: PageClasses): RawPage {
     r.utf16(); // country
     r.raw(SHADOW_INFO_FIXED_LEN);
   }
-  if (flags & 0x08) r.raw(PAGE_AXES_LEN + (schema >= 13 ? 1 : 0));
-  if (flags & 0x10) {
-    r.u8();
-    readPageRefs(r, r.u32());
-  }
+  if (flags & 0x08) r.raw(PAGE_AXES_LEN + 1 + (schema >= 13 ? 1 : 0));
+  if (flags & 0x10) page.hiddenEntityIds = readPageRefs(r, r.u32());
   if (flags & 0x20) page.hiddenLayerIds = readPageRefs(r, r.u32());
   if (flags & 0x40) readPageRefs(r, r.u32());
   if (schema >= 15) {
@@ -2462,6 +2473,12 @@ function readPageList(data: Uint8Array, ar: Archive): RawPage[] | null {
         const ent = ar.slots.get(id);
         return ent !== undefined && ent[0] === 'obj' && ent[1] === 'CLayer';
       });
+      const pids: number[] = [];
+      for (const id of page.hiddenEntityIds) {
+        const pid = ar.resolveEntityPid(id);
+        if (pid !== null) pids.push(pid);
+      }
+      page.hiddenEntityIds = pids;
     }
     return pages;
   } catch (e) {
@@ -2487,10 +2504,17 @@ class LegacyBuilder {
   }[] = [];
   constructionPoints: { position: [number, number, number] }[] = [];
   edgeCurves = new Map<number, number>();
+  edgePids = new Map<number, number>();
   arcCurves = new Map<number, ArcFrame>();
 }
 
-function addEdge(builder: LegacyBuilder, slot: number, e: any, slots: Map<number, SlotEntry>): void {
+function addEdge(
+  builder: LegacyBuilder,
+  slot: number,
+  e: any,
+  slots: Map<number, SlotEntry>,
+  pids?: Map<number, number>
+): void {
   if (builder.edges.has(slot)) return;
   const v1 = e.v1;
   const v2 = e.v2;
@@ -2503,6 +2527,10 @@ function addEdge(builder: LegacyBuilder, slot: number, e: any, slots: Map<number
     }
   }
   builder.edges.set(slot, [v1, v2]);
+  const pid = pids?.get(slot);
+  if (pid !== undefined) {
+    builder.edgePids.set(slot, pid);
+  }
   const db = e.db || {};
   const flags = (db.soft ? 0x08 : 0) | (db.smooth ? 0x10 : 0) | (db.hidden ? 0x01 : 0);
   if (flags) {
@@ -2520,12 +2548,17 @@ function addEdge(builder: LegacyBuilder, slot: number, e: any, slots: Map<number
   }
 }
 
-function fillBuilder(builder: LegacyBuilder, ents: [number, string | null, any][], slots: Map<number, SlotEntry>): void {
+function fillBuilder(
+  builder: LegacyBuilder,
+  ents: [number, string | null, any][],
+  slots: Map<number, SlotEntry>,
+  pids?: Map<number, number>
+): void {
   for (const [s, , v] of ents) {
     if (v === null || typeof v !== 'object') continue;
     const k = v.k;
     if (k === 'edge') {
-      addEdge(builder, s, v, slots);
+      addEdge(builder, s, v, slots, pids);
     } else if (k === 'arccurve') {
       builder.arcCurves.set(s, v.params);
     } else if (k === 'face') {
@@ -2536,7 +2569,7 @@ function fillBuilder(builder: LegacyBuilder, ents: [number, string | null, any][
           const es = u.edge;
           const ent = slots.get(es);
           if (ent === undefined || ent[2] === null) continue;
-          addEdge(builder, es, ent[2], slots);
+          addEdge(builder, es, ent[2], slots, pids);
           // Normalize to the documented CoEdge contract (+1 = same
           // direction as the edge, -1 = reversed) - u.sense is the raw
           // SketchUp bit (0 = forward, 1 = reversed).
@@ -2554,6 +2587,7 @@ function fillBuilder(builder: LegacyBuilder, ents: [number, string | null, any][
         uvProjected: false,
         uvProjectedBack: false,
         hidden: Boolean(v.db.hidden),
+        persistentId: pids?.get(s) ?? 0,
       };
       const attrs = v.attrs;
       if (attrs && typeof attrs === 'object') {
@@ -2570,6 +2604,7 @@ function fillBuilder(builder: LegacyBuilder, ents: [number, string | null, any][
     } else if (k === 'instance') {
       builder.instances.push({
         offset: 0,
+        id: pids?.get(s) ?? null,
         name: v.name,
         refIdx: v.def,
         refGuid: '',
@@ -2592,6 +2627,7 @@ function fillBuilder(builder: LegacyBuilder, ents: [number, string | null, any][
       // could see it.
       builder.instances.push({
         offset: 0,
+        id: pids?.get(s) ?? null,
         name: '',
         refIdx: v.def,
         refGuid: v.guid || '',
@@ -2755,7 +2791,7 @@ export function parseLegacyToRaw(data: Uint8Array, options?: ParseOptions): Pars
         let b = ar.prebuilt.get(s);
         if (b === undefined) {
           b = new LegacyBuilder();
-          fillBuilder(b, d.ents, slots);
+          fillBuilder(b, d.ents, slots, ar.pids);
         }
         defsDict.set(s, {
           guid: d.guid,
@@ -2782,7 +2818,7 @@ export function parseLegacyToRaw(data: Uint8Array, options?: ParseOptions): Pars
   }
 
   const rootBuilder = new LegacyBuilder();
-  fillBuilder(rootBuilder, root, slots);
+  fillBuilder(rootBuilder, root, slots, ar.pids);
   defsDict.set('ROOT', {
     guid: 'ROOT',
     name: 'ROOT_MODEL',

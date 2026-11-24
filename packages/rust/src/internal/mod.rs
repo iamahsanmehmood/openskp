@@ -227,6 +227,7 @@ pub struct RawFace {
     /// The raw layer id (Python port's `Face.layer`); `None` when the record
     /// carries none.
     pub layer_id: Option<EntityId>,
+    pub persistent_id: u64,
 }
 
 impl Default for RawFace {
@@ -243,6 +244,7 @@ impl Default for RawFace {
             hidden: false,
             layer: String::new(),
             layer_id: None,
+            persistent_id: 0,
         }
     }
 }
@@ -284,6 +286,9 @@ pub struct GeometryBuilder {
     pub edge_curves: BTreeMap<EntityId, EntityId>,
     /// Edge id -> raw layer id (VFF `D007 > D207`; Python's `edge_layers`).
     pub edge_layers: BTreeMap<EntityId, EntityId>,
+    /// Classic-only: edge archive slot -> persistent entity id (`None` on VFF,
+    /// where `edges` keys are already persistent ids).
+    pub edge_pids: Option<BTreeMap<EntityId, u64>>,
     /// Curve id -> its analytic arc, for the curves that are arcs.
     pub arc_curves: BTreeMap<EntityId, RawArcFrame>,
     pub faces: BTreeMap<EntityId, RawFace>,
@@ -378,6 +383,7 @@ pub struct RawPage {
     pub parallel: bool,
     pub ortho_height: f64,
     pub hidden_layer_ids: Vec<EntityId>,
+    pub hidden_entity_ids: Vec<EntityId>,
     pub selected: bool,
 }
 
@@ -392,6 +398,7 @@ impl Default for RawPage {
             parallel: false,
             ortho_height: 0.0,
             hidden_layer_ids: Vec::new(),
+            hidden_entity_ids: Vec::new(),
             selected: false,
         }
     }

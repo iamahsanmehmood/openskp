@@ -19,10 +19,12 @@ class GeometryBuilderFace {
   bool uvProjected = false;
   bool uvProjectedBack = false;
   bool hidden = false;
+  int persistentId = 0;
 }
 
 class GeometryBuilderInstance {
   int offset = 0;
+  int? id;
   String? refGuid;
   int? refIdx;
   String? name;
@@ -73,6 +75,10 @@ class GeometryBuilder {
   /// Edge id -> entity id of the Curve the edge belongs to (SketchUp's
   /// `Edge#curve`). Absent means the edge belongs to no curve.
   final Map<int, int> edgeCurves = {};
+
+  /// Classic-only: edge archive slot -> persistent entity ID (`null` on VFF,
+  /// where `edges` keys are already persistent IDs).
+  Map<int, int>? edgePids;
 
   /// Curve id -> its analytic arc, for the curves that are arcs.
   final Map<int, ArcFrame> arcCurves = {};
@@ -621,6 +627,7 @@ class Geometry {
 
         builder.instances.add(GeometryBuilderInstance()
           ..offset = el.offset
+          ..id = extractEntityId(el)
           ..refGuid = guid
           ..refIdx = defIdx
           ..name = name

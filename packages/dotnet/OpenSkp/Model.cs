@@ -24,6 +24,7 @@ namespace OpenSkp
         /// multi-segment line or arc; if the curve is an arc, <see cref="Definition.Arcs"/> has it
         /// under the same id.</summary>
         public long? CurveId { get; set; }
+        public long PersistentId { get; set; }
     }
 
     /// <summary>The analytic arc behind a curve: SketchUp's own <c>ArcCurve</c>. A curve SketchUp drew
@@ -92,6 +93,7 @@ namespace OpenSkp
         /// <summary>Whether the face is hidden (SketchUp's "Hide" on this
         /// specific face, not a layer/tag visibility toggle).</summary>
         public bool Hidden { get; set; }
+        public long PersistentId { get; set; }
     }
 
     public sealed class Layer
@@ -152,6 +154,7 @@ namespace OpenSkp
 
     public sealed class Instance
     {
+        public long? Id { get; set; }
         public string Name { get; set; } = "";
         public long? RefIdx { get; set; }
         public string Guid { get; set; } = "";
@@ -289,6 +292,9 @@ namespace OpenSkp
 
         /// <summary>Names of the layers this scene hides.</summary>
         public List<string> HiddenLayers { get; set; } = new List<string>();
+
+        /// <summary>Persistent ids of the entities this scene hides, in file order.</summary>
+        public List<long> HiddenEntityIds { get; set; } = new List<long>();
     }
 
     public sealed class Definition

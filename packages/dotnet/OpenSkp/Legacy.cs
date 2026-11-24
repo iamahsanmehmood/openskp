@@ -357,6 +357,7 @@ namespace OpenSkp
         public Dictionary<string, int> ClassSchema = new Dictionary<string, int>();
         public string? CurrentClass;
         public int? CurrentObjSlot;
+        public Dictionary<int, long> Pids = new Dictionary<int, long>();
         public int NextSlot;
         public int WalkBase;
         public Dictionary<string, LegacyReader> Readers = new Dictionary<string, LegacyReader>();
@@ -656,6 +657,16 @@ namespace OpenSkp
             return slot - offset;
         }
 
+        public long? ResolveEntityPid(int fileSlot)
+        {
+            int? walker = Burns.Count > 0 && fileSlot >= Burns[0].Start
+                ? TranslateRef(fileSlot)
+                : fileSlot;
+            if (!walker.HasValue) return null;
+            if (!Slots.TryGetValue(walker.Value, out var ent) || ent.Kind != "obj") return null;
+            return Pids.TryGetValue(walker.Value, out var pid) && pid != 0 ? pid : (long?)null;
+        }
+
         /// <summary>The walker slot of the back-reference at the cursor,
         /// without moving it; null when the next tag is anything
         /// else.</summary>
@@ -729,7 +740,7 @@ namespace OpenSkp
     internal sealed class PreambleResult
     {
         public object? Attrs;
-        public int Pid;
+        public long Pid;
         public int? AttrsSlot;
     }
 
@@ -872,7 +883,7 @@ namespace OpenSkp
         public static PreambleResult Preamble(Archive ar, LR r)
         {
             var (attrsSlot, _, attrs) = ar.ReadObject(r, "CAttributeContainer");
-            int pid = 0;
+            long pid = 0;
             if (ar.HasPid)
             {
                 byte mask = r.U8();
@@ -880,9 +891,13 @@ namespace OpenSkp
                 {
                     if ((mask & (1 << bit)) != 0)
                     {
-                        pid |= r.U8() << (8 * bit);
+                        pid |= (long)r.U8() << (8 * bit);
                     }
                 }
+            }
+            if (pid != 0 && ar.CurrentObjSlot is int cur && !ar.Pids.ContainsKey(cur))
+            {
+                ar.Pids[cur] = pid;
             }
             return new PreambleResult { Attrs = attrs, Pid = pid, AttrsSlot = attrsSlot };
         }
@@ -2529,6 +2544,7 @@ namespace OpenSkp
             public Dictionary<long, (long? V1, long? V2)> Edges = new Dictionary<long, (long?, long?)>();
             public Dictionary<long, int> EdgeFlags = new Dictionary<long, int>();
             public Dictionary<long, long> EdgeCurves = new Dictionary<long, long>();
+            public Dictionary<long, long> EdgePids = new Dictionary<long, long>();
             public Dictionary<long, ArcFrame> ArcCurves = new Dictionary<long, ArcFrame>();
             public Dictionary<long, GeometryBuilderFace> Faces = new Dictionary<long, GeometryBuilderFace>();
             public List<GeometryBuilderInstance> Instances = new List<GeometryBuilderInstance>();
@@ -2539,7 +2555,7 @@ namespace OpenSkp
             public List<ConstructionPoint> ConstructionPoints = new List<ConstructionPoint>();
         }
 
-        private static void AddEdge(LegacyBuilder builder, int slot, EdgeRec e, Dictionary<int, SlotEntry> slots)
+        private static void AddEdge(LegacyBuilder builder, int slot, EdgeRec e, Dictionary<int, SlotEntry> slots, Dictionary<int, long>? pids = null)
         {
             if (builder.Edges.ContainsKey(slot)) return;
             foreach (var vs in new[] { e.V1, e.V2 })
@@ -2552,6 +2568,10 @@ namespace OpenSkp
                 }
             }
             builder.Edges[slot] = (e.V1, e.V2);
+            if (pids != null && pids.TryGetValue(slot, out var pid))
+            {
+                builder.EdgePids[slot] = pid;
+            }
             var db = e.Db;
             int flags = (db.Soft != 0 ? 0x08 : 0) | (db.Smooth != 0 ? 0x10 : 0) | (db.Hidden != 0 ? 0x01 : 0);
             if (flags != 0)
@@ -2571,14 +2591,14 @@ namespace OpenSkp
             }
         }
 
-        private static void FillBuilder(LegacyBuilder builder, List<(int Slot, string? Name, object? Value)> ents, Dictionary<int, SlotEntry> slots)
+        private static void FillBuilder(LegacyBuilder builder, List<(int Slot, string? Name, object? Value)> ents, Dictionary<int, SlotEntry> slots, Dictionary<int, long>? pids = null)
         {
             foreach (var (s, _, v) in ents)
             {
                 if (v == null) continue;
                 if (v is EdgeRec edgeRec)
                 {
-                    AddEdge(builder, s, edgeRec, slots);
+                    AddEdge(builder, s, edgeRec, slots, pids);
                 }
                 else if (v is ArcCurveRec arcRec)
                 {
@@ -2594,7 +2614,7 @@ namespace OpenSkp
                         {
                             int? es = u.Edge;
                             if (es == null || !slots.TryGetValue(es.Value, out var ent) || ent.Value == null) continue;
-                            AddEdge(builder, es.Value, (EdgeRec)ent.Value, slots);
+                            AddEdge(builder, es.Value, (EdgeRec)ent.Value, slots, pids);
                             // Normalize to the documented CoEdge contract (+1 = same
                             // direction as the edge, -1 = reversed) - u.Sense is the raw
                             // SketchUp bit (0 = forward, 1 = reversed).
@@ -2611,6 +2631,7 @@ namespace OpenSkp
                         UvTransform = null,
                         UvTransformBack = null,
                         Hidden = faceRec.Db.Hidden != 0,
+                        PersistentId = pids != null && pids.TryGetValue(s, out var fPid) ? fPid : 0L,
                     };
                     var attrs = faceRec.Attrs;
                     if (attrs != null)
@@ -2633,6 +2654,7 @@ namespace OpenSkp
                     builder.Instances.Add(new GeometryBuilderInstance
                     {
                         Offset = 0,
+                        Id = pids != null && pids.TryGetValue(s, out var iPid) ? iPid : (long?)null,
                         Name = instRec.Name,
                         RefIdx = instRec.Def,
                         RefGuid = "",
@@ -2660,6 +2682,7 @@ namespace OpenSkp
                     builder.Instances.Add(new GeometryBuilderInstance
                     {
                         Offset = 0,
+                        Id = pids != null && pids.TryGetValue(s, out var imPid) ? imPid : (long?)null,
                         Name = "",
                         RefIdx = imgRec.Def,
                         RefGuid = imgRec.Guid,
@@ -2850,7 +2873,7 @@ namespace OpenSkp
                     {
                         var d = (DefinitionRec)kv.Value.Value;
                         var b = new LegacyBuilder();
-                        FillBuilder(b, d.Ents, slots);
+                        FillBuilder(b, d.Ents, slots, ar.Pids);
                         defsDict[kv.Key] = new Geometry.RawDefinition
                         {
                             Guid = d.Guid,
@@ -2878,7 +2901,7 @@ namespace OpenSkp
             }
 
             var rootBuilder = new LegacyBuilder();
-            FillBuilder(rootBuilder, walkResult.Root, slots);
+            FillBuilder(rootBuilder, walkResult.Root, slots, ar.Pids);
 
             Observability.Log(
                 options, SkpLogLevel.Information,
@@ -2926,6 +2949,7 @@ namespace OpenSkp
             foreach (var kv in b.Edges) g.Edges[kv.Key] = kv.Value;
             foreach (var kv in b.EdgeFlags) g.EdgeFlags[kv.Key] = kv.Value;
             foreach (var kv in b.EdgeCurves) g.EdgeCurves[kv.Key] = kv.Value;
+            g.EdgePids = new Dictionary<long, long>(b.EdgePids);
             foreach (var kv in b.ArcCurves) g.ArcCurves[kv.Key] = kv.Value;
             foreach (var kv in b.Faces) g.Faces[kv.Key] = kv.Value;
             g.Instances = b.Instances;
