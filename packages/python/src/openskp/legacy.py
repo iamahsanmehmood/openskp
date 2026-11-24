@@ -2483,15 +2483,21 @@ def _fill_builder(builder, ents, slots, pids=None):
                 dim['a'], dim['b'] = pts[0], pts[1]
             builder.dimensions.append(dim)
         elif k == 'cline':
+            db = v.get('db') or {}
             builder.construction_lines.append({
                 'point': v.get('point', (0.0, 0.0, 0.0)),
                 'direction': v.get('direction', (1.0, 0.0, 0.0)),
                 'start': v.get('start'),
                 'end': v.get('end'),
+                'layer_id': db.get('layer') or None,
+                'hidden': bool(db.get('hidden', False)),
             })
         elif k == 'cpoint':
+            db = v.get('db') or {}
             builder.construction_points.append({
                 'position': v.get('pos', (0.0, 0.0, 0.0)),
+                'layer_id': db.get('layer') or None,
+                'hidden': bool(db.get('hidden', False)),
             })
 
 

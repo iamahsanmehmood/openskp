@@ -226,5 +226,54 @@ namespace OpenSkp.Tests
             var model = SkpFile.Parse(builder.ToBytes());
             Assert.Contains(model.Layers, l => l.Name == "GuidesAfterReject");
         }
+
+        [Fact]
+        public void GuideOptionsRoundTripHiddenFlagAndLayer()
+        {
+            var builder = SkpCreate.NewFile();
+            int guides = builder.AddLayer("Guides");
+            ComponentDefinitionBuilder nested;
+            using (nested = builder.AddComponentDefinition("NestedGuides"))
+            {
+                nested.AddConstructionPoint((1, 1, 1), layer: guides, hidden: true);
+                nested.AddConstructionLine((0, 0, 0), point2: (5, 0, 0), hidden: true);
+            }
+            builder.AddInstance(nested);
+            builder.AddConstructionPoint((1, 2, 3), hidden: true);
+            builder.AddConstructionPoint((4, 5, 6), layer: guides, hidden: false);
+            builder.AddConstructionLine((0, 0, 0), point2: (10, 0, 0), layer: guides, hidden: true);
+            builder.AddConstructionLine((0, 0, 4), direction: (0, 0, 1));
+
+            var model = SkpFile.Parse(builder.ToBytes());
+            Assert.Equal(2, model.Root.ConstructionPoints.Count);
+            Assert.True(model.Root.ConstructionPoints[0].Hidden);
+            Assert.Equal("", model.Root.ConstructionPoints[0].Layer);
+            Assert.False(model.Root.ConstructionPoints[1].Hidden);
+            Assert.Equal("Guides", model.Root.ConstructionPoints[1].Layer);
+
+            Assert.Equal(2, model.Root.ConstructionLines.Count);
+            Assert.True(model.Root.ConstructionLines[0].Hidden);
+            Assert.Equal("Guides", model.Root.ConstructionLines[0].Layer);
+            Assert.False(model.Root.ConstructionLines[1].Hidden);
+            Assert.Equal("", model.Root.ConstructionLines[1].Layer);
+
+            var defn = Assert.Single(model.Definitions.Values, d => d.Name == "NestedGuides");
+            Assert.Equal("Guides", defn.ConstructionPoints[0].Layer);
+            Assert.True(defn.ConstructionPoints[0].Hidden);
+            Assert.Equal("", defn.ConstructionLines[0].Layer);
+            Assert.True(defn.ConstructionLines[0].Hidden);
+        }
+
+        [Fact]
+        public void GuideOptionsRejectAForeignLayerHandle()
+        {
+            var builder = SkpCreate.NewFile();
+            builder.AddFace(new (double, double, double)[]
+            {
+                (0, 0, 0), (10, 0, 0), (10, 10, 0), (0, 10, 0),
+            });
+            Assert.Throws<SkpWriteException>(() => builder.AddConstructionPoint((1, 2, 3), layer: 42));
+            Assert.Throws<SkpWriteException>(() => builder.AddConstructionLine((0, 0, 0), point2: (10, 0, 0), layer: 42));
+        }
     }
 }

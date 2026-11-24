@@ -2443,32 +2443,41 @@ class ComponentDefinitionBuilder:
         point: Point3,
         point2: Optional[Point3] = None,
         direction: Optional[Point3] = None,
+        layer: Optional[int] = None,
+        hidden: bool = False,
     ) -> None:
         """Add a construction/guide line (SketchUp's Construction Line tool) in
         this definition's local coordinates (inches) - same signature and
         behavior as :meth:`SkpBuilder.add_construction_line`."""
         self._check_writable("construction lines")
+        self._skp._check_layer_handle(layer)
         p, dirv, start_param, end_param = _resolve_construction_line_params(point, point2, direction)
         w = self._skp._definition_writer
         w._new_of_known_class("CConstructionLine", schema=1)
         w._preamble()
-        w.buf += _DIM_DRAWBASE
+        w._drawbase(layer=layer or 0, hidden=hidden)
         for v in (p[0], p[1], p[2], dirv[0], dirv[1], dirv[2], start_param, end_param):
             w.buf += _f64(v)
         w.buf += bytes(4)
         self._new_entity_count += 1
 
-    def add_construction_point(self, position: Point3) -> None:
+    def add_construction_point(
+        self,
+        position: Point3,
+        layer: Optional[int] = None,
+        hidden: bool = False,
+    ) -> None:
         """Add a construction/guide point (SketchUp's Construction Point
         tool) at ``position`` (inches, local to this definition) - same
         signature and behavior as :meth:`SkpBuilder.add_construction_point`
         (openskp#380)."""
         self._check_writable("construction points")
+        self._skp._check_layer_handle(layer)
         p = _finite_point3(position, "add_construction_point")
         writer = self._skp._definition_writer
         writer._new_of_known_class("CConstructionPoint", schema=0)
         writer._preamble()
-        writer.buf += _DIM_DRAWBASE
+        writer._drawbase(layer=layer or 0, hidden=hidden)
         for v in (p[0], p[1], p[2], 0.0, 0.0, 0.0):
             writer.buf += _f64(v)
         writer.buf += bytes(1)
@@ -3680,6 +3689,8 @@ class SkpBuilder:
         self, point: Point3,
         point2: Optional[Point3] = None,
         direction: Optional[Point3] = None,
+        layer: Optional[int] = None,
+        hidden: bool = False,
     ) -> None:
         """Add a construction/guide line (SketchUp's Construction Line
         tool). Pass exactly one of ``point2`` (a bounded segment between
@@ -3706,19 +3717,25 @@ class SkpBuilder:
         this one - real SketchUp rejected the result as an unrecognized
         file).
         """
+        self._check_layer_handle(layer)
         p, dirv, start_param, end_param = _resolve_construction_line_params(point, point2, direction)
         self._ensure_geometry_writer()
         w = self._geometry_writer
         w._new_of_known_class("CConstructionLine", schema=1)
         w._preamble()
-        w.buf += _DIM_DRAWBASE
+        w._drawbase(layer=layer or 0, hidden=hidden)
         for v in (p[0], p[1], p[2], dirv[0], dirv[1], dirv[2], start_param, end_param):
             w.buf += _f64(v)
         w.buf += bytes(4)  # trailer - see docstring
         self._new_entity_count += 1
         self._face_count += 1  # reuses the "at least one root entity" check in to_bytes
 
-    def add_construction_point(self, position: Point3) -> None:
+    def add_construction_point(
+        self,
+        position: Point3,
+        layer: Optional[int] = None,
+        hidden: bool = False,
+    ) -> None:
         """Add a construction/guide point (SketchUp's Construction Point
         tool) at ``position`` (inches, world space).
 
@@ -3728,12 +3745,13 @@ class SkpBuilder:
         ``Sketchup::ConstructionPoint`` property exists to name them
         after), written as zero to match every real-file sample seen.
         """
+        self._check_layer_handle(layer)
         p = _finite_point3(position, "add_construction_point")
         self._ensure_geometry_writer()
         w = self._geometry_writer
         w._new_of_known_class("CConstructionPoint", schema=0)
         w._preamble()
-        w.buf += _DIM_DRAWBASE
+        w._drawbase(layer=layer or 0, hidden=hidden)
         for v in (p[0], p[1], p[2], 0.0, 0.0, 0.0):
             w.buf += _f64(v)
         w.buf += bytes(1)

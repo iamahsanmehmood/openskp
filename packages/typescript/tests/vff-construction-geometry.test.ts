@@ -42,10 +42,34 @@ describe('VFF construction line and point records (#285)', () => {
     extractGeometryFromNodes(parseTlvRecursive(data, 0, data.length), builder);
 
     expect(builder.constructionLines).toEqual([
-      { point: [2, 3, 4], direction: [0, 1, 0], start: [2, 1, 4], end: [2, 10, 4] },
-      { point: [0, 0, 4], direction: [0, 0, 1], start: null, end: null },
+      { point: [2, 3, 4], direction: [0, 1, 0], start: [2, 1, 4], end: [2, 10, 4], layerId: null, hidden: false },
+      { point: [0, 0, 4], direction: [0, 0, 1], start: null, end: null, layerId: null, hidden: false },
     ]);
-    expect(builder.constructionPoints).toEqual([{ position: [8, 9, 10] }]);
+    expect(builder.constructionPoints).toEqual([{ position: [8, 9, 10], layerId: null, hidden: false }]);
+  });
+
+  it('reads VFF guide hidden flag and layer id from 6842 -> D007', () => {
+    const drawbase = (flags: number, layerId?: number): Uint8Array => {
+      const d307 = tlv('D307', Uint8Array.of(flags));
+      const d007 = layerId !== undefined ? join(tlv('D207', Uint8Array.of(layerId)), d307) : d307;
+      return tlv('6842', tlv('D007', d007));
+    };
+    const data = join(
+      tlv('9213', join(
+        tlv('6C42', join(drawbase(0x07), tlv('6D42', doubles(1, 2, 3)))),
+        tlv('6C42', join(drawbase(0x06, 4), tlv('6D42', doubles(4, 5, 6)))),
+      )),
+      tlv('9113', tlv('6942', join(drawbase(0x07, 3), tlv('6A42', doubles(0, 0, 0, 1, 0, 0, 0, 12))))),
+    );
+    const builder = new GeometryBuilder();
+    extractGeometryFromNodes(parseTlvRecursive(data, 0, data.length), builder);
+    expect(builder.constructionPoints).toEqual([
+      { position: [1, 2, 3], layerId: null, hidden: true },
+      { position: [4, 5, 6], layerId: 4, hidden: false },
+    ]);
+    expect(builder.constructionLines).toEqual([
+      { point: [0, 0, 0], direction: [1, 0, 0], start: [0, 0, 0], end: [12, 0, 0], layerId: 3, hidden: true },
+    ]);
   });
 
   it('ignores truncated VFF guide payloads', () => {

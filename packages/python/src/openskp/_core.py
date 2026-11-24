@@ -1867,7 +1867,8 @@ def _extract_geometry_nodes(elements, builder):
             # VFF CConstructionLine (list 9113). Same 8-double body as
             # classic CConstructionLine: point + unit direction + start/end
             # params; |param| >= 1e20 is unbounded (SketchUp's own sentinel
-            # is ±1e30).
+            # is ±1e30). 6842 -> D007 holds D307 (display flags, +0x01 hidden)
+            # and D207 (layer entity id).
             body = _find_tag(el.children, '6A42')
             if body and len(body.payload) >= 64:
                 p = body.payload
@@ -1890,20 +1891,41 @@ def _extract_geometry_nodes(elements, builder):
                         point[1] + direction[1] * end_param,
                         point[2] + direction[2] * end_param,
                     )
+                flags_node = _find_tag(el.children, 'D307')
+                cl_hidden = bool(flags_node.payload[0] & 0x01) if flags_node and flags_node.payload else False
+                layer_node = _find_tag(el.children, 'D207')
+                cl_layer_id = (
+                    parse_var_int(layer_node.payload, 0, len(layer_node.payload))
+                    if layer_node and layer_node.payload
+                    else None
+                )
                 builder.construction_lines.append({
                     'point': point,
                     'direction': direction,
                     'start': start,
                     'end': end,
+                    'layer_id': cl_layer_id,
+                    'hidden': cl_hidden,
                 })
 
         elif tag == '6C42':
-            # VFF CConstructionPoint (list 9213): 6D42 position.
+            # VFF CConstructionPoint (list 9213): 6D42 position, 6842 -> D007
+            # drawing-element base (D307 hidden flag + D207 layer id).
             pos = _find_tag(el.children, '6D42')
             if pos and len(pos.payload) >= 24:
                 p = pos.payload
+                flags_node = _find_tag(el.children, 'D307')
+                cp_hidden = bool(flags_node.payload[0] & 0x01) if flags_node and flags_node.payload else False
+                layer_node = _find_tag(el.children, 'D207')
+                cp_layer_id = (
+                    parse_var_int(layer_node.payload, 0, len(layer_node.payload))
+                    if layer_node and layer_node.payload
+                    else None
+                )
                 builder.construction_points.append({
                     'position': (read_f64(p, 0), read_f64(p, 8), read_f64(p, 16)),
+                    'layer_id': cp_layer_id,
+                    'hidden': cp_hidden,
                 })
 
         elif tag == '2C4C':

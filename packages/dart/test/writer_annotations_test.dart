@@ -205,5 +205,51 @@ void main() {
       final model = SkpFile.fromBuffer(builder.toBytes()).parse();
       expect(model.layers.any((l) => l.name == 'GuidesAfterReject'), isTrue);
     });
+
+    test('round-trips guide hidden flag and layer', () {
+      final builder = create();
+      final guides = builder.addLayer('Guides');
+      final nested = builder.addComponentDefinition('NestedGuides', (def) {
+        def.addConstructionPoint((1.0, 1.0, 1.0), layer: guides, hidden: true);
+        def.addConstructionLine((0.0, 0.0, 0.0), point2: (5.0, 0.0, 0.0), hidden: true);
+      });
+      builder.addInstance(nested);
+      builder.addConstructionPoint((1.0, 2.0, 3.0), hidden: true);
+      builder.addConstructionPoint((4.0, 5.0, 6.0), layer: guides, hidden: false);
+      builder.addConstructionLine((0.0, 0.0, 0.0), point2: (10.0, 0.0, 0.0), layer: guides, hidden: true);
+      builder.addConstructionLine((0.0, 0.0, 4.0), direction: (0.0, 0.0, 1.0));
+
+      final model = SkpFile.fromBuffer(builder.toBytes()).parse();
+      expect(model.root.constructionPoints, hasLength(2));
+      expect(model.root.constructionPoints[0].hidden, isTrue);
+      expect(model.root.constructionPoints[0].layer, '');
+      expect(model.root.constructionPoints[1].hidden, isFalse);
+      expect(model.root.constructionPoints[1].layer, 'Guides');
+
+      expect(model.root.constructionLines, hasLength(2));
+      expect(model.root.constructionLines[0].hidden, isTrue);
+      expect(model.root.constructionLines[0].layer, 'Guides');
+      expect(model.root.constructionLines[1].hidden, isFalse);
+      expect(model.root.constructionLines[1].layer, '');
+
+      final defn = model.definitions.values.firstWhere((d) => d.name == 'NestedGuides');
+      expect(defn.constructionPoints[0].layer, 'Guides');
+      expect(defn.constructionPoints[0].hidden, isTrue);
+      expect(defn.constructionLines[0].layer, '');
+      expect(defn.constructionLines[0].hidden, isTrue);
+    });
+
+    test('rejects a foreign layer handle on guides', () {
+      final builder = create();
+      builder.addFace(square);
+      expect(
+        () => builder.addConstructionPoint((1.0, 2.0, 3.0), layer: 42),
+        throwsA(isA<SkpWriteError>()),
+      );
+      expect(
+        () => builder.addConstructionLine((0.0, 0.0, 0.0), point2: (10.0, 0.0, 0.0), layer: 42),
+        throwsA(isA<SkpWriteError>()),
+      );
+    });
   });
 }
