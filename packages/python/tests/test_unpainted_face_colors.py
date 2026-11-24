@@ -176,12 +176,23 @@ def test_fragments_keep_one_copy_of_each_face(tmp_path):
     )
 
 
+def _linear_to_srgb(c: float) -> float:
+    if c <= 0.0:
+        return 0.0
+    if c >= 1.0:
+        return 1.0
+    return c * 12.92 if c <= 0.0031308 else 1.055 * (c ** (1.0 / 2.4)) - 0.055
+
+
 def _glb_materials(path):
     data = path.read_bytes()
     (length,) = struct.unpack_from("<I", data, 12)
     materials = json.loads(data[20:20 + length])["materials"]
     return sorted(
-        (tuple(round(c * 255) for c in m["pbrMetallicRoughness"]["baseColorFactor"][:3]), bool(m.get("doubleSided")))
+        (
+            tuple(round(_linear_to_srgb(c) * 255) for c in m["pbrMetallicRoughness"]["baseColorFactor"][:3]),
+            bool(m.get("doubleSided")),
+        )
         for m in materials
     )
 

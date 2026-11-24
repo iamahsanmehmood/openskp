@@ -467,6 +467,20 @@ pub(crate) fn filter_gltf_textures<'a>(
     (kept, remap)
 }
 
+fn srgb_to_linear(c: f64) -> f64 {
+    if c <= 0.0 {
+        return 0.0;
+    }
+    if c >= 1.0 {
+        return 1.0;
+    }
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
 /// TinyGLTF's `SerializeGltfMaterial`, including its default-value
 /// omissions (`OPAQUE` alpha mode, all-ones color, factors of 1).
 pub(crate) fn material_json(
@@ -499,16 +513,22 @@ pub(crate) fn material_json(
     if source.double_sided {
         material.set("doubleSided", true);
     }
+    let factor = if mapped_texture.is_some() {
+        pbr.base_color_factor
+    } else {
+        [
+            srgb_to_linear(pbr.base_color_factor[0]),
+            srgb_to_linear(pbr.base_color_factor[1]),
+            srgb_to_linear(pbr.base_color_factor[2]),
+            pbr.base_color_factor[3],
+        ]
+    };
     let mut pbr_json = JsonValue::object();
     let eps = 1e-12;
-    if pbr
-        .base_color_factor
-        .iter()
-        .any(|&c| (c - 1.0).abs() >= eps)
-    {
+    if factor.iter().any(|&c| (c - 1.0).abs() >= eps) {
         pbr_json.set(
             "baseColorFactor",
-            JsonValue::Array(pbr.base_color_factor.iter().map(|&c| c.into()).collect()),
+            JsonValue::Array(factor.iter().map(|&c| c.into()).collect()),
         );
     }
     if pbr.metallic_factor != 1.0 {

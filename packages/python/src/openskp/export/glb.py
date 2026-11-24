@@ -42,6 +42,15 @@ from typing import Any, Dict, List
 _M_TO_MM = 1000.0
 
 
+def _srgb_to_linear(c: float) -> float:
+    """Convert one sRGB component in ``[0, 1]`` to linear light per IEC 61966-2-1."""
+    if c <= 0.0:
+        return 0.0
+    if c >= 1.0:
+        return 1.0
+    return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+
+
 def _decode_texture_image(data: bytes):
     """Decode raw image bytes into a PIL Image for trimesh's
     ``baseColorTexture``. Imported lazily so callers who never pass
@@ -97,16 +106,35 @@ def _primitive_to_trimesh(
     if tex_ref is not None:
         tex = scene_textures[tex_ref["index"]]
         base_color_texture = _decode_texture_image(tex.data)
-    mesh.visual = trimesh.visual.TextureVisuals(
-        uv=uvs,
-        material=trimesh.visual.material.PBRMaterial(
-            baseColorFactor=pbr["baseColorFactor"],
-            baseColorTexture=base_color_texture,
-            metallicFactor=pbr["metallicFactor"],
-            roughnessFactor=pbr["roughnessFactor"],
-            doubleSided=mat.get("doubleSided", False),
-        ),
+    raw_factor = pbr["baseColorFactor"]
+    if base_color_texture is None:
+        base_color_factor = [
+            _srgb_to_linear(raw_factor[0]),
+            _srgb_to_linear(raw_factor[1]),
+            _srgb_to_linear(raw_factor[2]),
+            raw_factor[3],
+        ]
+    else:
+        base_color_factor = list(raw_factor)
+
+    import numpy as np
+
+    pbr_material = trimesh.visual.material.PBRMaterial(
+        baseColorTexture=base_color_texture,
+        metallicFactor=pbr["metallicFactor"],
+        roughnessFactor=pbr["roughnessFactor"],
+        doubleSided=mat.get("doubleSided", False),
     )
+    # PBRMaterial's baseColorFactor setter calls trimesh.visual.color.to_rgba()
+    # with dtype=uint8, which quantizes linear floats onto a 1/255 grid (for
+    # example sRGB 84 -> linear 0.08866 -> 23/255 = 0.09020, and sRGB <= 5 -> 0).
+    # Storing float64 directly lets trimesh's glTF serializer (color.to_float)
+    # write the exact IEEE-754 linear values.
+    if hasattr(pbr_material, "_data"):
+        pbr_material._data["baseColorFactor"] = np.asarray(base_color_factor, dtype=np.float64)
+    else:
+        pbr_material.baseColorFactor = base_color_factor
+    mesh.visual = trimesh.visual.TextureVisuals(uv=uvs, material=pbr_material)
     return mesh
 
 

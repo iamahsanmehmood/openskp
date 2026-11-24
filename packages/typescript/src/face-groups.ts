@@ -558,11 +558,36 @@ export function createByteContentKeyer(): (data: Uint8Array) => number {
 }
 
 /**
+ * Convert one sRGB component in `[0, 1]` to linear light per IEC 61966-2-1
+ * (glTF 2.0's `baseColorFactor` colour space).
+ */
+function srgbToLinear(c: number): number {
+  if (c <= 0) return 0;
+  if (c >= 1) return 1;
+  return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+}
+
+function linearizeBaseColorFactor(pbr: any): any {
+  const bcf = pbr?.baseColorFactor;
+  if (!Array.isArray(bcf) || bcf.length < 3) return pbr;
+  return {
+    ...pbr,
+    baseColorFactor: [
+      srgbToLinear(bcf[0]),
+      srgbToLinear(bcf[1]),
+      srgbToLinear(bcf[2]),
+      bcf.length > 3 ? bcf[3] : 1.0,
+    ],
+  };
+}
+
+/**
  * Prepares `textures` and `materials` for GLB serialization without mutating
  * the input scene: strips all `baseColorTexture` references when `embed` is
- * off, and when `embed` is on omits any non-PNG/JPEG texture (such as TIFF or
- * BMP kept via `originalTextures: true`), remapping remaining texture indices
- * and logging one warning per skipped image.
+ * off, omits any non-PNG/JPEG texture (such as TIFF or BMP kept via
+ * `originalTextures: true`) when `embed` is on with remapped indices and one
+ * warning per skipped image, and converts untextured `baseColorFactor` RGB
+ * components from sRGB to linear light (alpha unchanged).
  */
 export function filterGltfTextures(
   rawTextures: SceneTexture[],
@@ -571,20 +596,17 @@ export function filterGltfTextures(
   onLog?: (level: LogLevel, message: string) => void
 ): { textures: SceneTexture[]; materials: unknown[] } {
   if (!embed || rawTextures.length === 0) {
-    let needsCopy = false;
-    for (const mat of rawMaterials) {
-      if ((mat as any)?.pbrMetallicRoughness?.baseColorTexture) {
-        needsCopy = true;
-        break;
-      }
-    }
-    if (!needsCopy) return { textures: [], materials: rawMaterials };
     const stripped = rawMaterials.map((mat) => {
-      const pbr = (mat as any)?.pbrMetallicRoughness;
-      if (!pbr?.baseColorTexture) return mat;
-      const restPbr = { ...pbr };
-      delete restPbr.baseColorTexture;
-      return { ...(mat as any), pbrMetallicRoughness: restPbr };
+      const m = mat as any;
+      const pbr = m?.pbrMetallicRoughness;
+      if (!pbr) return mat;
+      const nextPbr = linearizeBaseColorFactor(pbr);
+      if (nextPbr.baseColorTexture) {
+        const restPbr = { ...nextPbr };
+        delete restPbr.baseColorTexture;
+        return { ...m, pbrMetallicRoughness: restPbr };
+      }
+      return nextPbr === pbr ? mat : { ...m, pbrMetallicRoughness: nextPbr };
     });
     return { textures: [], materials: stripped };
   }
@@ -592,7 +614,6 @@ export function filterGltfTextures(
   const kept: SceneTexture[] = [];
   const remap: (number | null)[] = new Array(rawTextures.length);
   const warned = new Set<string>();
-  let anyDropped = false;
 
   for (let i = 0; i < rawTextures.length; i++) {
     const tex = rawTextures[i];
@@ -601,7 +622,6 @@ export function filterGltfTextures(
       kept.push(tex);
     } else {
       remap[i] = null;
-      anyDropped = true;
       const filename = tex.filename ?? '';
       const base = filename.replace(/\\/g, '/').split('/').pop() ?? '';
       const fmt = describeImageFormat(tex.data, filename);
@@ -617,16 +637,18 @@ export function filterGltfTextures(
     }
   }
 
-  if (!anyDropped) return { textures: kept, materials: rawMaterials };
-
   const materials = rawMaterials.map((mat) => {
     const m = mat as any;
     const pbr = m?.pbrMetallicRoughness;
-    const texRef = pbr?.baseColorTexture;
-    if (!texRef || typeof texRef.index !== 'number') return mat;
+    if (!pbr) return mat;
+    const texRef = pbr.baseColorTexture;
+    if (!texRef || typeof texRef.index !== 'number') {
+      const nextPbr = linearizeBaseColorFactor(pbr);
+      return nextPbr === pbr ? mat : { ...m, pbrMetallicRoughness: nextPbr };
+    }
     const mapped = texRef.index >= 0 && texRef.index < remap.length ? remap[texRef.index] : null;
     if (mapped === null) {
-      const restPbr = { ...pbr };
+      const restPbr = linearizeBaseColorFactor(pbr);
       delete restPbr.baseColorTexture;
       const nextMat = { ...m, pbrMetallicRoughness: restPbr };
       if (nextMat.alphaMode === 'MASK') delete nextMat.alphaMode;

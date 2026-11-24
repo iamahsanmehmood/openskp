@@ -96,6 +96,12 @@ SkpFile build_box_skp() {
   return SkpFile::from_buffer(builder->to_bytes());
 }
 
+double linear_to_srgb(double c) {
+  if (c <= 0.0) return 0.0;
+  if (c >= 1.0) return 1.0;
+  return c <= 0.0031308 ? c * 12.92 : 1.055 * std::pow(c, 1.0 / 2.4) - 0.055;
+}
+
 std::vector<std::pair<Color3, bool>> glb_materials(const ByteBuffer& glb_bytes) {
   tinygltf::TinyGLTF loader;
   tinygltf::Model model;
@@ -108,9 +114,9 @@ std::vector<std::pair<Color3, bool>> glb_materials(const ByteBuffer& glb_bytes) 
   for (const auto& m : model.materials) {
     const auto& f = m.pbrMetallicRoughness.baseColorFactor;
     Color3 rgb{
-        static_cast<std::uint8_t>(std::lround(f[0] * 255.0)),
-        static_cast<std::uint8_t>(std::lround(f[1] * 255.0)),
-        static_cast<std::uint8_t>(std::lround(f[2] * 255.0)),
+        static_cast<std::uint8_t>(std::lround(linear_to_srgb(f[0]) * 255.0)),
+        static_cast<std::uint8_t>(std::lround(linear_to_srgb(f[1]) * 255.0)),
+        static_cast<std::uint8_t>(std::lround(linear_to_srgb(f[2]) * 255.0)),
     };
     out.emplace_back(rgb, m.doubleSided);
   }
