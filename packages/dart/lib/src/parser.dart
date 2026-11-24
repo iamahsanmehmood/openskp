@@ -284,8 +284,27 @@ class SkpFile {
     defn.sectionPlanes.addAll(d.builder.sectionPlanes);
     defn.texts.addAll(d.builder.texts);
     defn.dimensions.addAll(d.builder.dimensions);
-    defn.constructionLines.addAll(d.builder.constructionLines);
-    defn.constructionPoints.addAll(d.builder.constructionPoints);
+    for (final cl in d.builder.constructionLines) {
+      final parsedId = cl.layer.isNotEmpty ? int.tryParse(cl.layer) : null;
+      final resolvedLayer = parsedId != null ? (layerIdToName[parsedId] ?? '') : cl.layer;
+      defn.constructionLines.add(ConstructionLine(
+        point: cl.point,
+        direction: cl.direction,
+        start: cl.start,
+        end: cl.end,
+        layer: resolvedLayer,
+        hidden: cl.hidden,
+      ));
+    }
+    for (final cp in d.builder.constructionPoints) {
+      final parsedId = cp.layer.isNotEmpty ? int.tryParse(cp.layer) : null;
+      final resolvedLayer = parsedId != null ? (layerIdToName[parsedId] ?? '') : cp.layer;
+      defn.constructionPoints.add(ConstructionPoint(
+        position: cp.position,
+        layer: resolvedLayer,
+        hidden: cp.hidden,
+      ));
+    }
 
     return defn;
   }

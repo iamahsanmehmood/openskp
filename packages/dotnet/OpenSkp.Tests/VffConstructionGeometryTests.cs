@@ -55,7 +55,48 @@ namespace OpenSkp.Tests
             Assert.Equal((2.0, 10.0, 4.0), builder.ConstructionLines[0].End);
             Assert.Null(builder.ConstructionLines[1].Start);
             Assert.Null(builder.ConstructionLines[1].End);
-            Assert.Equal((8.0, 9.0, 10.0), Assert.Single(builder.ConstructionPoints).Position);
+            Assert.False(builder.ConstructionLines[0].Hidden);
+            Assert.Equal("", builder.ConstructionLines[0].Layer);
+            var cp = Assert.Single(builder.ConstructionPoints);
+            Assert.Equal((8.0, 9.0, 10.0), cp.Position);
+            Assert.False(cp.Hidden);
+            Assert.Equal("", cp.Layer);
+        }
+
+        [Fact]
+        public void ReadsVffGuideHiddenFlagAndLayer()
+        {
+            TlvNode Drawbase(byte flags, byte? layerId = null)
+            {
+                var children = new List<TlvNode>();
+                if (layerId.HasValue)
+                {
+                    children.Add(new TlvNode { Tag = "D207", Payload = new[] { layerId.Value } });
+                }
+                children.Add(new TlvNode { Tag = "D307", Payload = new[] { flags } });
+                return Node("6842", new TlvNode { Tag = "D007", Children = children });
+            }
+
+            var root = new List<TlvNode>
+            {
+                Node("9213",
+                    Node("6C42", Drawbase(0x07), Leaf("6D42", 1, 2, 3)),
+                    Node("6C42", Drawbase(0x06, 4), Leaf("6D42", 4, 5, 6))),
+                Node("9113",
+                    Node("6942", Drawbase(0x07, 3), Leaf("6A42", 0, 0, 0, 1, 0, 0, 0, 12))),
+            };
+            var builder = new GeometryBuilder();
+            Geometry.ExtractGeometryFromNodes(root, builder);
+
+            Assert.Equal(2, builder.ConstructionPoints.Count);
+            Assert.True(builder.ConstructionPoints[0].Hidden);
+            Assert.Equal("", builder.ConstructionPoints[0].Layer);
+            Assert.False(builder.ConstructionPoints[1].Hidden);
+            Assert.Equal("4", builder.ConstructionPoints[1].Layer);
+
+            var cl = Assert.Single(builder.ConstructionLines);
+            Assert.True(cl.Hidden);
+            Assert.Equal("3", cl.Layer);
         }
 
         [Fact]

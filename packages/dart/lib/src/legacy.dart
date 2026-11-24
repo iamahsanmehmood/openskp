@@ -830,11 +830,12 @@ class ImageRec {
 class RelationshipRec {}
 
 class ConstructionLineRec {
+  DrawBase db;
   List<double> point;
   List<double> direction;
   List<double>? start;
   List<double>? end;
-  ConstructionLineRec(this.point, this.direction, this.start, this.end);
+  ConstructionLineRec(this.db, this.point, this.direction, this.start, this.end);
 }
 
 class ConstructionPointRec {
@@ -1544,7 +1545,7 @@ class LegacyReaders {
 
   static Object readConstructionLine(Archive ar, LR r) {
     preamble(ar, r);
-    drawbase(ar, r);
+    final db = drawbase(ar, r);
     final point = r.f64s(3);
     final direction = r.f64s(3);
     // Signed distance along `direction` from `point` marking where the visible segment
@@ -1608,7 +1609,7 @@ class LegacyReaders {
             point[1] + direction[1] * endParam,
             point[2] + direction[2] * endParam,
           ];
-    return ConstructionLineRec(point, direction, start, end);
+    return ConstructionLineRec(db, point, direction, start, end);
   }
 
   static Object readConstructionPoint(Archive ar, LR r) {
@@ -2575,10 +2576,14 @@ class Legacy {
           direction: (v.direction[0], v.direction[1], v.direction[2]),
           start: v.start == null ? null : (v.start![0], v.start![1], v.start![2]),
           end: v.end == null ? null : (v.end![0], v.end![1], v.end![2]),
+          layer: v.db.layer != 0 ? v.db.layer.toString() : '',
+          hidden: v.db.hidden != 0,
         ));
       } else if (v is ConstructionPointRec) {
         builder.constructionPoints.add(ConstructionPoint(
           position: (v.pos[0], v.pos[1], v.pos[2]),
+          layer: v.db.layer != 0 ? v.db.layer.toString() : '',
+          hidden: v.db.hidden != 0,
         ));
       }
     }

@@ -177,6 +177,33 @@ describe('openExisting', () => {
     expect(group.constructionLines[1].end![0]).toBeCloseTo(2, 6);
   });
 
+  it('replays guide hidden flag and layer', () => {
+    const builder = create();
+    const guides = builder.addLayer('Guides');
+    const nested = builder.addComponentDefinition('NestedGuides', (def) => {
+      def.addConstructionPoint([2, 3, 4], { layer: guides, hidden: true });
+      def.addConstructionLine([0, 0, 0], { point2: [5, 0, 0], layer: guides, hidden: false });
+    });
+    builder.addInstance(nested);
+    builder.addConstructionPoint([1, 2, 3], { hidden: true });
+    builder.addConstructionLine([0, 0, 0], { point2: [12, 0, 0], layer: guides, hidden: true });
+
+    const { builder: newBuilder, warnings } = openExisting(toBuffer(builder.toBytes()));
+    expect(warnings).toEqual([]);
+    const rebuilt = parseSkp(toBuffer(newBuilder.toBytes()));
+
+    expect(rebuilt.root.constructionPoints[0].hidden).toBe(true);
+    expect(rebuilt.root.constructionPoints[0].layer).toBe('');
+    expect(rebuilt.root.constructionLines[0].hidden).toBe(true);
+    expect(rebuilt.root.constructionLines[0].layer).toBe('Guides');
+
+    const defn = [...rebuilt.definitions.values()].find((d) => d.name === 'NestedGuides')!;
+    expect(defn.constructionPoints[0].layer).toBe('Guides');
+    expect(defn.constructionPoints[0].hidden).toBe(true);
+    expect(defn.constructionLines[0].layer).toBe('Guides');
+    expect(defn.constructionLines[0].hidden).toBe(false);
+  });
+
   it('a genuinely new material/layer/definition/group is rejected after replay', () => {
     const builder = create();
     builder.addFace(SQUARE);

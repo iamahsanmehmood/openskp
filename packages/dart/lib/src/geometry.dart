@@ -664,23 +664,39 @@ class Geometry {
                       point.$3 + direction.$3 * distance,
                     )
                   : null;
+          final flagsNode = findChildTag(el.children, 'D307');
+          final clHidden = flagsNode != null && flagsNode.payload.isNotEmpty && (flagsNode.payload[0] & 0x01) != 0;
+          final layerNode = findChildTag(el.children, 'D207');
+          final clLayer = layerNode != null && layerNode.payload.isNotEmpty
+              ? Tlv.parseVarInt(layerNode.payload, 0, layerNode.payload.length).toString()
+              : '';
           builder.constructionLines.add(ConstructionLine(
             point: point,
             direction: direction,
             start: endpoint(Tlv.readF64(p, 48)),
             end: endpoint(Tlv.readF64(p, 56)),
+            layer: clLayer,
+            hidden: clHidden,
           ));
         }
       } else if (tag == '6C42') {
         // VFF construction point (9213 -> 6C42 -> 6D42).
         final pos = findChildTag(el.children, '6D42');
         if (pos != null && pos.payload.length >= 24) {
+          final flagsNode = findChildTag(el.children, 'D307');
+          final cpHidden = flagsNode != null && flagsNode.payload.isNotEmpty && (flagsNode.payload[0] & 0x01) != 0;
+          final layerNode = findChildTag(el.children, 'D207');
+          final cpLayer = layerNode != null && layerNode.payload.isNotEmpty
+              ? Tlv.parseVarInt(layerNode.payload, 0, layerNode.payload.length).toString()
+              : '';
           builder.constructionPoints.add(ConstructionPoint(
             position: (
               Tlv.readF64(pos.payload, 0),
               Tlv.readF64(pos.payload, 8),
               Tlv.readF64(pos.payload, 16),
             ),
+            layer: cpLayer,
+            hidden: cpHidden,
           ));
         }
       } else if (el.children.isNotEmpty) {

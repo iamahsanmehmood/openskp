@@ -113,6 +113,11 @@ export interface ConstructionLine {
   start: [number, number, number] | null;
   /** The bounded segment's end point, or null if unbounded. */
   end: [number, number, number] | null;
+  /** Name of the layer (tag) the guide is assigned to, or "" for the
+   * default layer (Layer0). */
+  layer?: string;
+  /** Whether the guide itself is hidden. */
+  hidden?: boolean;
 }
 
 /** A construction/guide point (SketchUp's Construction Point tool).
@@ -120,6 +125,11 @@ export interface ConstructionLine {
 export interface ConstructionPoint {
   /** The point's position, in inches (world space). */
   position: [number, number, number];
+  /** Name of the layer (tag) the guide is assigned to, or "" for the
+   * default layer (Layer0). */
+  layer?: string;
+  /** Whether the guide itself is hidden. */
+  hidden?: boolean;
 }
 
 /** A saved scene (SketchUp's "Scenes" tabs; "pages" in the SDK). */
@@ -804,9 +814,13 @@ function buildDefinition(id: number, d: ParsedDefinition, layerIdToName?: Map<nu
     direction: cl.direction,
     start: cl.start,
     end: cl.end,
+    layer: (cl.layerId != null ? layerIdToName?.get(cl.layerId) : undefined) ?? '',
+    hidden: cl.hidden ?? false,
   }));
   const constructionPoints: ConstructionPoint[] = (d.builder.constructionPoints || []).map((cp) => ({
     position: cp.position,
+    layer: (cp.layerId != null ? layerIdToName?.get(cp.layerId) : undefined) ?? '',
+    hidden: cp.hidden ?? false,
   }));
 
   return {

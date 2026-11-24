@@ -814,6 +814,7 @@ namespace OpenSkp
     internal sealed class RelationshipRec { }
     internal sealed class ConstructionLineRec
     {
+        public DrawBase Db = new DrawBase();
         public (double X, double Y, double Z) Point;
         public (double X, double Y, double Z) Direction = (1.0, 0.0, 0.0);
         public (double X, double Y, double Z)? Start;
@@ -1533,7 +1534,7 @@ namespace OpenSkp
         public static object ReadConstructionLine(Archive ar, LR r)
         {
             Preamble(ar, r);
-            Drawbase(ar, r);
+            var db = Drawbase(ar, r);
             var point = r.F64s(3);
             var direction = r.F64s(3);
             // Signed distance along `direction` from `point` marking where the visible segment
@@ -1595,6 +1596,7 @@ namespace OpenSkp
                 : (point[0] + direction[0] * endParam, point[1] + direction[1] * endParam, point[2] + direction[2] * endParam);
             return new ConstructionLineRec
             {
+                Db = db,
                 Point = (point[0], point[1], point[2]),
                 Direction = (direction[0], direction[1], direction[2]),
                 Start = start,
@@ -2778,6 +2780,8 @@ namespace OpenSkp
                         Direction = clRec.Direction,
                         Start = clRec.Start,
                         End = clRec.End,
+                        LayerId = clRec.Db.Layer != 0 ? clRec.Db.Layer : (long?)null,
+                        Hidden = clRec.Db.Hidden != 0,
                     });
                 }
                 else if (v is ConstructionPointRec cpRec)
@@ -2785,6 +2789,8 @@ namespace OpenSkp
                     builder.ConstructionPoints.Add(new ConstructionPoint
                     {
                         Position = (cpRec.Pos[0], cpRec.Pos[1], cpRec.Pos[2]),
+                        LayerId = cpRec.Db.Layer != 0 ? cpRec.Db.Layer : (long?)null,
+                        Hidden = cpRec.Db.Hidden != 0,
                     });
                 }
             }
