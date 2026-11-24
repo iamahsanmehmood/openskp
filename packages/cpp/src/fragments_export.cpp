@@ -691,6 +691,7 @@ std::vector<std::uint8_t> to_fragments(const InstancedScene& scene, bool raw) {
       const auto trs = decompose_trs(leaf.world);
       for (std::size_t prim_idx = 0; prim_idx < res->primitives.size(); ++prim_idx) {
         const auto& prim = res->primitives[prim_idx];
+        if (prim.unpainted_back) continue;
         const auto material_index = get_material_index(static_cast<int>(prim.material_index));
         // Normally exactly one shell; more than one only when the
         // primitive's own triangle count exceeded what a single shell can

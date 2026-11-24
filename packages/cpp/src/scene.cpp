@@ -41,6 +41,7 @@ bool omitted_from_scene(const std::string& dict_name) {
 }  // namespace
 
 Scene build_scene_raw(RawParsed&& p, const ParseOptions& o) {
+  const auto style_colors = unpainted_style_colors(p, o.unpainted_faces);
   Scene scene;
   scene.scene_hierarchy = {"ROOT", "ROOT_MODEL", "Layer0", {0, 0, 0}, {}, {}, {}};
   scene.layer_hidden = p.layer_hidden;
@@ -101,8 +102,17 @@ Scene build_scene_raw(RawParsed&& p, const ParseOptions& o) {
   bake = [&](const GeometryBuilder& b, const std::string& defname, std::optional<EntityId> defid,
              const std::vector<double>& matrix, const std::string& layer, const std::string& path,
              std::optional<FaceColorKey> inherited) {
-    const auto fallback = inherited.value_or(default_color(p, layer));
-    auto groups = build_local_face_groups(p, b, FaceGroupContext{texture_index_for, fallback});
+    FaceColorKey fallback{};
+    FaceColorKey fallback_back{};
+    if (inherited) {
+      fallback = fallback_back = *inherited;
+    } else if (style_colors) {
+      std::tie(fallback, fallback_back) = *style_colors;
+    } else {
+      fallback = fallback_back = default_color(p, layer);
+    }
+    auto groups =
+        build_local_face_groups(p, b, FaceGroupContext{texture_index_for, fallback, fallback_back});
     for (auto& kv : groups) {
       auto& g = kv.second;
       if (g.tris.empty()) continue;
@@ -125,6 +135,7 @@ Scene build_scene_raw(RawParsed&& p, const ParseOptions& o) {
       scene.mesh_index[geom] = meta;
       GlbPrimitive prim;
       prim.geom_name = geom;
+      prim.unpainted_back = kv.first.unpainted_back;
       const auto mirrored = transform_determinant(matrix) < 0.0;
       for (auto& triangle : g.tris) {
         prim.indices.push_back(static_cast<uint32_t>(triangle[0]));
@@ -158,7 +169,9 @@ Scene build_scene_raw(RawParsed&& p, const ParseOptions& o) {
         prim.normals[i * 3 + 1] = float(w[2] / l);
         prim.normals[i * 3 + 2] = float(-w[1] / l);
       }
-      auto mi = materials.find(kv.first);
+      GroupKey mat_key = kv.first;
+      mat_key.unpainted_back = false;
+      auto mi = materials.find(mat_key);
       if (mi == materials.end()) {
         auto idx = scene.gltf_materials.size();
         GltfMaterial gm;
@@ -168,7 +181,7 @@ Scene build_scene_raw(RawParsed&& p, const ParseOptions& o) {
         gm.pbr_metallic_roughness.base_color_texture = kv.first.texture_index;
         gm.double_sided = kv.first.double_sided;
         scene.gltf_materials.push_back(gm);
-        mi = materials.emplace(kv.first, idx).first;
+        mi = materials.emplace(mat_key, idx).first;
       }
       prim.material_index = mi->second;
       scene.glb_primitives.push_back(std::move(prim));
@@ -282,4 +295,14 @@ Scene build_scene_raw(RawParsed&& p, const ParseOptions& o) {
                std::to_string(scene.glb_primitives.size()) + " primitives");
   return scene;
 }
+
+std::vector<GlbPrimitive> Scene::surface_primitives() const {
+  std::vector<GlbPrimitive> out;
+  out.reserve(glb_primitives.size());
+  for (const auto& prim : glb_primitives) {
+    if (!prim.unpainted_back) out.push_back(prim);
+  }
+  return out;
+}
+
 }  // namespace openskp

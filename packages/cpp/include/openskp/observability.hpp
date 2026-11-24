@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <string>
 #include <string_view>
 
 namespace openskp {
@@ -36,6 +37,7 @@ struct ParseProgress {
 struct ParseOptions {
   std::function<void(const ParseProgress&)> progress;
   std::function<void(LogLevel, std::string_view)> log;
+  std::string unpainted_faces{"style"};
 };
 
 inline constexpr std::uint64_t progress_interval = 500;

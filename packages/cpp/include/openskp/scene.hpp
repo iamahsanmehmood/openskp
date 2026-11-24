@@ -57,6 +57,7 @@ struct GlbPrimitive {
   std::vector<std::uint32_t> indices;
   std::size_t material_index{};
   std::string geom_name;
+  bool unpainted_back{};
 };
 
 struct PbrMetallicRoughness {
@@ -109,5 +110,7 @@ struct OPENSKP_EXPORT Scene {
   // Camera eye/target/up and ortho_height stay in SketchUp's native Z-up
   // frame and inches (unlike glb_primitives, which are Y-up metres).
   std::vector<Page> pages;
+
+  std::vector<GlbPrimitive> surface_primitives() const;
 };
 }  // namespace openskp

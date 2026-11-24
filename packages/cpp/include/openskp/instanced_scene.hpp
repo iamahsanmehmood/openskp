@@ -29,6 +29,7 @@ struct LocalPrimitive {
   std::vector<float> uvs;
   std::vector<std::uint32_t> indices;
   std::size_t material_index{};
+  bool unpainted_back{};
 };
 
 /// A definition's geometry, resolved for one specific rendering context

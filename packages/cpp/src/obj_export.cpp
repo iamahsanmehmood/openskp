@@ -88,10 +88,14 @@ std::string to_mtl(const Scene& scene) {
 }
 
 std::string to_obj(const Scene& scene, const std::string& mtl_filename) {
+  std::size_t surface_count = 0;
+  for (const auto& prim : scene.glb_primitives) {
+    if (!prim.unpainted_back) ++surface_count;
+  }
   std::ostringstream ss;
   ss.imbue(std::locale::classic());
   ss << "# OpenSKP OBJ Export\n";
-  ss << "# Primitives: " << scene.glb_primitives.size() << "\n";
+  ss << "# Primitives: " << surface_count << "\n";
 
   if (!mtl_filename.empty()) {
     ss << "mtllib " << mtl_filename << "\n";
@@ -104,6 +108,7 @@ std::string to_obj(const Scene& scene, const std::string& mtl_filename) {
   std::uint32_t norm_offset = 1;
 
   for (const auto& prim : scene.glb_primitives) {
+    if (prim.unpainted_back) continue;
     ss << "o " << prim.geom_name << "\n";
 
     std::size_t vert_count = prim.positions.size() / 3;

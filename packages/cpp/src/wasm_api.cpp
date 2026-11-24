@@ -57,7 +57,7 @@ val parse_skp_to_fragments(const val& uint8_array) {
     std::size_t total_faces = 0;
     for (const auto& res : scene.mesh_resources) {
       for (const auto& prim : res.primitives) {
-        total_faces += prim.indices.size() / 3;
+        if (!prim.unpainted_back) total_faces += prim.indices.size() / 3;
       }
     }
 
@@ -121,7 +121,7 @@ val parse_skp_to_glb(const val& uint8_array) {
     std::size_t total_faces = 0;
     for (const auto& res : scene.mesh_resources) {
       for (const auto& prim : res.primitives) {
-        total_faces += prim.indices.size() / 3;
+        if (!prim.unpainted_back) total_faces += prim.indices.size() / 3;
       }
     }
 

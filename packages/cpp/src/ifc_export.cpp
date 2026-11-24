@@ -263,6 +263,7 @@ std::string to_ifc(const Scene& scene, double scale, const std::string& schema,
   std::map<std::string, int> mat_style_cache;
 
   for (const auto& prim : scene.glb_primitives) {
+    if (prim.unpainted_back) continue;
     size_t tri_count = prim.indices.size() / 3;
     size_t v_count = prim.positions.size() / 3;
     if (tri_count == 0 || v_count == 0) continue;
