@@ -5,26 +5,153 @@ import 'scene.dart';
 // 1 metre = 39.37007874015748 inches (SketchUp native unit)
 const double metresToInches = 39.37007874015748;
 
-String sanitizeLayerName(String? name) {
-  if (name == null || name.isEmpty) return '0';
-  final illegal = RegExp(r'[\<\>\/\\\"~\:;\?\*\=`\|]');
-  var clean = name.replaceAll(illegal, '_').trim();
-  if (clean.isEmpty) clean = '0';
-  // R2000 extended symbol names (enabled by $EXTNAMES=1 in the header
-  // scaffold) support up to 255 characters, but AutoCAD desktop has been
-  // reported to reject long table entry names in practice - cap
-  // defensively and append a short content hash on truncation so two
-  // different long names sharing a common prefix don't collide.
-  const maxLen = 255;
-  if (clean.length > maxLen) {
-    int hash = 0;
-    for (final unit in clean.codeUnits) {
-      hash = (hash * 31 + unit) & 0x7fffffff;
+final Set<int> _illegalLayerUnits =
+    '<>/\\"~:;?*=`|'.codeUnits.toSet();
+const int _maxLayerNameLen = 255;
+
+bool _isTrimUnit(int c) =>
+    c == 0x20 || c == 0x09 || c == 0x0D || c == 0x0A;
+
+List<int> _nameToRawBytes(String? name) {
+  if (name == null || name.isEmpty) return const <int>[];
+  final units = name.codeUnits;
+  final out = <int>[];
+  for (int i = 0; i < units.length; i++) {
+    final u = units[i];
+    if (u >= 0xD800 && u <= 0xDBFF && i + 1 < units.length) {
+      final low = units[i + 1];
+      if (low >= 0xDC00 && low <= 0xDFFF) {
+        final cp = 0x10000 + ((u - 0xD800) << 10) + (low - 0xDC00);
+        out.add(0xF0 | (cp >> 18));
+        out.add(0x80 | ((cp >> 12) & 0x3F));
+        out.add(0x80 | ((cp >> 6) & 0x3F));
+        out.add(0x80 | (cp & 0x3F));
+        i++;
+        continue;
+      }
     }
-    final suffix = hash.toRadixString(16).padLeft(8, '0');
-    clean = clean.substring(0, maxLen - suffix.length - 1) + '_' + suffix;
+    if (u >= 0xDC80 && u <= 0xDCFF) {
+      out.add(u & 0xFF);
+    } else if (u < 0x80) {
+      out.add(u);
+    } else if (u < 0x800) {
+      out.add(0xC0 | (u >> 6));
+      out.add(0x80 | (u & 0x3F));
+    } else {
+      out.add(0xE0 | (u >> 12));
+      out.add(0x80 | ((u >> 6) & 0x3F));
+      out.add(0x80 | (u & 0x3F));
+    }
   }
-  return clean;
+  return out;
+}
+
+List<int> _layerNameUtf16(List<int> raw) {
+  final result = <int>[];
+  for (int i = 0; i < raw.length;) {
+    final lead = raw[i++];
+    int cp = lead;
+    int extra = 0;
+    int minimum = 0;
+    if (lead >= 0xC2 && lead <= 0xDF) {
+      cp = lead & 0x1F;
+      extra = 1;
+      minimum = 0x80;
+    } else if (lead >= 0xe0 && lead <= 0xef) {
+      cp = lead & 0x0F;
+      extra = 2;
+      minimum = 0x800;
+    } else if (lead >= 0xf0 && lead <= 0xf4) {
+      cp = lead & 0x07;
+      extra = 3;
+      minimum = 0x10000;
+    } else if (lead >= 0x80) {
+      result.add(0x5F);
+      continue;
+    }
+    bool valid = true;
+    for (int j = 0; j < extra; j++) {
+      if (i == raw.length || (raw[i] & 0xC0) != 0x80) {
+        valid = false;
+        break;
+      }
+      cp = (cp << 6) | (raw[i++] & 0x3F);
+    }
+    if (!valid || cp < minimum || cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) {
+      result.add(0x5F);
+      continue;
+    }
+    if (cp > 0xFFFF) {
+      cp -= 0x10000;
+      result.add(0xD800 + (cp >> 10));
+      result.add(0xDC00 + (cp & 0x3FF));
+    } else {
+      result.add(cp);
+    }
+  }
+  return result;
+}
+
+String _layerNameHash(List<int> raw) {
+  int hash = 2166136261;
+  for (final b in raw) {
+    final x = (hash ^ b) & 0xFFFFFFFF;
+    hash = (((x << 24) & 0xFFFFFFFF) + x * 0x193) & 0xFFFFFFFF;
+  }
+  return hash.toRadixString(16).toUpperCase().padLeft(8, '0');
+}
+
+String sanitizeLayerName(String? name, [String suffix = '']) {
+  final raw = _nameToRawBytes(name);
+  return _sanitizeLayerNameBytes(raw, suffix);
+}
+
+String _sanitizeLayerNameBytes(List<int> raw, [String suffix = '']) {
+  final units = _layerNameUtf16(raw);
+  int first = -1;
+  int last = -1;
+  for (int i = 0; i < units.length; i++) {
+    if (!_isTrimUnit(units[i])) {
+      if (first == -1) first = i;
+      last = i;
+    }
+  }
+  final clean = first == -1 ? <int>[0x30] : units.sublist(first, last + 1);
+  for (int i = 0; i < clean.length; i++) {
+    final c = clean[i];
+    if (c < 32 || (c >= 127 && c <= 159) || _illegalLayerUnits.contains(c)) {
+      clean[i] = 0x5F;
+    }
+  }
+  var effSuffix = suffix;
+  if (clean.length > _maxLayerNameLen && effSuffix.isEmpty) {
+    effSuffix = '_${_layerNameHash(raw)}';
+  }
+  if (clean.length + effSuffix.length > _maxLayerNameLen) {
+    int end = _maxLayerNameLen - effSuffix.length;
+    if (end > 0 && clean[end - 1] >= 0xD800 && clean[end - 1] <= 0xDBFF) {
+      end--;
+    }
+    clean.removeRange(end, clean.length);
+  }
+  clean.addAll(effSuffix.codeUnits);
+  final sb = StringBuffer();
+  for (final c in clean) {
+    if (c < 128) {
+      sb.writeCharCode(c);
+    } else {
+      sb.write('\\U+${c.toRadixString(16).toUpperCase().padLeft(4, '0')}');
+    }
+  }
+  return sb.toString();
+}
+
+String _layerNameKey(String name) {
+  final sb = StringBuffer();
+  for (final c in name.codeUnits) {
+    sb.writeCharCode(c >= 65 && c <= 90 ? c + 32 : c);
+  }
+  return sb.toString();
 }
 
 int rgbToAci(int r, int g, int b) {
@@ -392,16 +519,41 @@ String toDxf(
   double scale = metresToInches,
   String mode = 'polyface',
 }) {
-  final layerColors = <String, List<int>>{};
-  for (final prim in scene.surfacePrimitives) {
-    final layerName = sanitizeLayerName(prim.geomName);
-    if (!layerColors.containsKey(layerName)) {
-      layerColors[layerName] = getPrimRgb(scene, prim);
-    }
+  if (!scale.isFinite) {
+    throw ArgumentError('DXF scale must be finite');
   }
-
-  if (layerColors.isEmpty) {
-    layerColors['0'] = [200, 200, 200];
+  final surfacePrimitives = scene.surfacePrimitives;
+  final layerColors = <String, List<int>>{};
+  final layerNames = <String, String>{};
+  final usedNames = <String>{'0', 'defpoints'};
+  for (final prim in surfacePrimitives) {
+    if (prim.indices.isEmpty) continue;
+    if (prim.positions.length % 3 != 0 || prim.indices.length % 3 != 0) {
+      throw ArgumentError('DXF mesh has incomplete coordinates or triangles');
+    }
+    final vertCount = prim.positions.length ~/ 3;
+    for (int i = 0; i < prim.indices.length; i++) {
+      final idx = prim.indices[i];
+      if (idx < 0 || idx >= vertCount) {
+        throw ArgumentError('DXF mesh index is outside the vertex array');
+      }
+    }
+    for (int i = 0; i < prim.positions.length; i++) {
+      if (!(prim.positions[i] * scale).isFinite) {
+        throw ArgumentError('DXF mesh coordinates must be finite');
+      }
+    }
+    final rawName = prim.geomName;
+    if (layerNames.containsKey(rawName)) continue;
+    final rawBytes = _nameToRawBytes(rawName);
+    var layerName = _sanitizeLayerNameBytes(rawBytes);
+    for (int attempt = 0; !usedNames.add(_layerNameKey(layerName)); attempt++) {
+      final suffix =
+          '_${_layerNameHash(rawBytes)}${attempt == 0 ? '' : '_$attempt'}';
+      layerName = _sanitizeLayerNameBytes(rawBytes, suffix);
+    }
+    layerNames[rawName] = layerName;
+    layerColors.putIfAbsent(layerName, () => getPrimRgb(scene, prim));
   }
 
   final sortedLayers = layerColors.keys.toList()..sort();
@@ -415,11 +567,6 @@ String toDxf(
     final h = handleId.toRadixString(16).toUpperCase();
     handleId++;
     return h;
-  }
-
-  final layerHandles = <String, String>{};
-  for (final lName in sortedLayers) {
-    layerHandles[lName] = nextHandle();
   }
 
   final lines = <String>[..._headerStaticA];
@@ -441,7 +588,7 @@ String toDxf(
     // desktop rejects the whole TABLES section ("Did not receive
     // PlotStyleName") if any layer omits them.
     lines.addAll([
-      '  0', 'LAYER', '  5', layerHandles[lName]!, '330', '1', '100', 'AcDbSymbolTableRecord', '100', 'AcDbLayerTableRecord',
+      '  0', 'LAYER', '  5', nextHandle(), '330', '1', '100', 'AcDbSymbolTableRecord', '100', 'AcDbLayerTableRecord',
       '  2', lName, ' 70', '0', ' 62', aci.toString(), '  6', 'Continuous', '370', '-3', '390', '13'
     ]);
   }
@@ -449,15 +596,18 @@ String toDxf(
   lines.addAll(_headerStaticC);
   lines.addAll(['  0', 'SECTION', '  2', 'ENTITIES']);
 
-  for (final prim in scene.surfacePrimitives) {
-    final layerName = sanitizeLayerName(prim.geomName);
+  for (final prim in surfacePrimitives) {
     final triCount = prim.indices.length ~/ 3;
     if (triCount == 0) continue;
+    final layerName = layerNames[prim.geomName]!;
 
     final rgb = getPrimRgb(scene, prim);
     final aci = rgbToAci(rgb[0], rgb[1], rgb[2]);
 
-    if (mode == 'polyface') {
+    // Polyface counts (71/72) and vertex indices (71-74) are signed
+    // 16-bit fields. Larger meshes use independent 3DFACE triangles.
+    final vCount = prim.positions.length ~/ 3;
+    if (mode == 'polyface' && vCount <= 32767 && triCount <= 32767) {
       // Structure verified against real ezdxf's own render_polyface()
       // output byte-for-byte, not guessed: face-record VERTEX entries
       // carry a color (62) and dummy 0/0/0 coordinates but NOT the
@@ -466,7 +616,6 @@ String toDxf(
       // Model_Space's - both were wrong here before and are exactly why
       // AutoCAD desktop rejected polyface-mode output while accepting
       // 3dface-mode output using the same scaffold.
-      final vCount = prim.positions.length ~/ 3;
       final polylineHandle = nextHandle();
       lines.addAll([
         '  0', 'POLYLINE', '  5', polylineHandle, '330', '17', '100', 'AcDbEntity', '  8', layerName,
@@ -540,8 +689,8 @@ void exportDxf(
   double scale = metresToInches,
   String mode = 'polyface',
 }) {
+  final text = toDxf(scene, scale: scale, mode: mode);
   final file = File(outputPath);
   file.parent.createSync(recursive: true);
-  final text = toDxf(scene, scale: scale, mode: mode);
   file.writeAsStringSync(text);
 }

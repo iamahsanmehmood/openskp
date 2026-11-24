@@ -1,12 +1,20 @@
 """DXF (AutoCAD Drawing Exchange Format R2000 / AC1015) 3D export module for OpenSKP.
 
-Exports a baked :class:`~openskp.scene.Scene` to 3D DXF format with Polyface Mesh
-or 3DFACE entities grouped by layer using ezdxf for 100% AutoCAD / DWG TrueView compatibility.
-Includes layer and entity RGB material base colors (ACI Group 62 and True Color Group 420).
+Exports a baked :class:`~openskp.scene.Scene` directly to deterministic,
+zero-dependency AutoCAD R2000 (``AC1015``) ASCII DXF with Polyface Mesh
+(``POLYLINE`` / ``VERTEX``) or ``3DFACE`` entities grouped by layer and
+standard ACI (Group 62) layer and entity material colors.
+
+Unlike older releases that delegated ``polyface`` exports to optional
+``ezdxf`` when installed, this module always writes the native R2000 stream
+directly with per-triangle polyface vertices and ACI Group 62 colors (no
+``ezdxf`` vertex deduplication or R2004+ True Color Group 420), matching the
+C++, Rust, TypeScript, .NET, and Dart exporters byte-for-byte.
 """
 
 from __future__ import annotations
 
+import math
 import pathlib
 from typing import TYPE_CHECKING, Literal, Union
 
@@ -326,24 +334,114 @@ _OBJECTS_STATIC = [
     ]
 
 
-def _sanitize_layer_name(name: str) -> str:
-    """Sanitize layer name for DXF Group 8 compliance and length limits."""
-    if not name:
-        return "0"
-    illegal = '<>/\\"~:;?*=`|'
-    clean = "".join(c if c not in illegal else "_" for c in name)
-    clean = clean.strip() or "0"
-    # R2000 extended symbol names (enabled by $EXTNAMES=1 in the header
-    # scaffold) support up to 255 characters, but AutoCAD desktop has been
-    # reported to reject long table entry names in practice - cap
-    # defensively and append a short content hash on truncation so two
-    # different long names sharing a common prefix don't collide.
-    max_len = 255
-    if len(clean) > max_len:
-        import hashlib
-        suffix = hashlib.md5(clean.encode("utf-8")).hexdigest()[:8]
-        clean = clean[: max_len - len(suffix) - 1] + "_" + suffix
-    return clean
+_ILLEGAL_LAYER_UNITS = {ord(c) for c in '<>/\\"~:;?*=`|'}
+_TRIM_UNITS = {0x20, 0x09, 0x0D, 0x0A}
+_MAX_LAYER_NAME_LEN = 255
+
+
+def _name_to_raw_bytes(name: Union[str, bytes]) -> bytes:
+    """Convert a layer name to raw bytes, recovering surrogateescape bytes and CESU-8 surrogates."""
+    if isinstance(name, bytes):
+        return name
+    out = bytearray()
+    for ch in name:
+        cp = ord(ch)
+        if 0xDC80 <= cp <= 0xDCFF:
+            out.append(cp & 0xFF)
+        elif 0xD800 <= cp <= 0xDFFF:
+            out.append(0xE0 | (cp >> 12))
+            out.append(0x80 | ((cp >> 6) & 0x3F))
+            out.append(0x80 | (cp & 0x3F))
+        else:
+            out.extend(ch.encode("utf-8"))
+    return bytes(out)
+
+
+def _layer_name_utf16(raw: bytes) -> list[int]:
+    """Decode UTF-8 bytes into UTF-16 code units, replacing malformed sequences with '_'."""
+    result: list[int] = []
+    i = 0
+    n = len(raw)
+    while i < n:
+        lead = raw[i]
+        i += 1
+        cp = lead
+        extra = 0
+        minimum = 0
+        if 0xC2 <= lead <= 0xDF:
+            cp = lead & 0x1F
+            extra = 1
+            minimum = 0x80
+        elif 0xE0 <= lead <= 0xEF:
+            cp = lead & 0x0F
+            extra = 2
+            minimum = 0x800
+        elif 0xF0 <= lead <= 0xF4:
+            cp = lead & 0x07
+            extra = 3
+            minimum = 0x10000
+        elif lead >= 0x80:
+            result.append(0x5F)
+            continue
+        valid = True
+        for _ in range(extra):
+            if i == n or (raw[i] & 0xC0) != 0x80:
+                valid = False
+                break
+            cp = (cp << 6) | (raw[i] & 0x3F)
+            i += 1
+        if not valid or cp < minimum or cp > 0x10FFFF or 0xD800 <= cp <= 0xDFFF:
+            result.append(0x5F)
+            continue
+        if cp > 0xFFFF:
+            cp -= 0x10000
+            result.append(0xD800 + (cp >> 10))
+            result.append(0xDC00 + (cp & 0x3FF))
+        else:
+            result.append(cp)
+    return result
+
+
+def _layer_name_hash(raw: bytes) -> str:
+    """32-bit FNV-1a hash of the source layer name bytes as 8 uppercase hex digits."""
+    h = 2166136261
+    for b in raw:
+        h = ((h ^ b) * 16777619) & 0xFFFFFFFF
+    return f"{h:08X}"
+
+
+def _sanitize_layer_name(name: Union[str, bytes], suffix: str = "") -> str:
+    """Sanitize and CIF-escape a layer name for R2000 (AC1015 / ANSI_1252) DXF."""
+    raw = _name_to_raw_bytes(name)
+    units = _layer_name_utf16(raw)
+    first = next((idx for idx, u in enumerate(units) if u not in _TRIM_UNITS), None)
+    if first is None:
+        clean = [0x30]
+    else:
+        last = max(idx for idx, u in enumerate(units) if u not in _TRIM_UNITS)
+        clean = units[first : last + 1]
+    for idx, c in enumerate(clean):
+        if c < 32 or 127 <= c <= 159 or c in _ILLEGAL_LAYER_UNITS:
+            clean[idx] = 0x5F
+    if len(clean) > _MAX_LAYER_NAME_LEN and not suffix:
+        suffix = "_" + _layer_name_hash(raw)
+    if len(clean) + len(suffix) > _MAX_LAYER_NAME_LEN:
+        end = _MAX_LAYER_NAME_LEN - len(suffix)
+        if end > 0 and 0xD800 <= clean[end - 1] <= 0xDBFF:
+            end -= 1
+        clean = clean[:end]
+    clean.extend(ord(ch) for ch in suffix)
+    out: list[str] = []
+    for c in clean:
+        if c < 128:
+            out.append(chr(c))
+        else:
+            out.append(f"\\U+{c:04X}")
+    return "".join(out)
+
+
+def _layer_name_key(name: str) -> str:
+    return "".join(chr(ord(c) + 32) if "A" <= c <= "Z" else c for c in name)
 
 
 def _rgb_to_aci(r: int, g: int, b: int) -> int:
@@ -369,11 +467,12 @@ def _rgb_to_aci(r: int, g: int, b: int) -> int:
     return best_aci
 
 
-def _get_prim_rgb(scene: Scene, prim: any) -> tuple[int, int, int]:
+def _get_prim_rgb(scene: Scene, prim: object) -> tuple[int, int, int]:
     """Extract (R, G, B) integer tuple (0-255) for a primitive's material."""
     r, g, b = 200, 200, 200
-    if prim.material_index is not None and scene.gltf_materials and prim.material_index < len(scene.gltf_materials):
-        mat = scene.gltf_materials[prim.material_index]
+    mat_idx = getattr(prim, "material_index", None)
+    if mat_idx is not None and scene.gltf_materials and mat_idx < len(scene.gltf_materials):
+        mat = scene.gltf_materials[mat_idx]
         if isinstance(mat, dict):
             pbr = mat.get("pbrMetallicRoughness", {})
             color_vec = pbr.get("baseColorFactor", [0.8, 0.8, 0.8, 1.0])
@@ -389,7 +488,12 @@ def to_dxf(
     scale: float = METRES_TO_INCHES,
     mode: Literal["3dface", "polyface"] = "polyface",
 ) -> str:
-    """Serialize a baked scene to AutoCAD R2000 (AC1015) 3D ASCII DXF format.
+    """Serialize a baked scene directly to AutoCAD R2000 (AC1015) 3D ASCII DXF.
+
+    Writes deterministic R2000 output directly (without delegating to optional
+    ``ezdxf``) using per-triangle polyface vertices and ACI Group 62 colors.
+    Primitives exceeding signed 16-bit polyface vertex or face limits (32,767)
+    automatically fall back to ``3DFACE`` triangles.
 
     Args:
         scene: The baked scene returned by :meth:`SkpFile.build_scene`.
@@ -401,82 +505,43 @@ def to_dxf(
     """
     if scene is None or scene.glb_primitives is None:
         raise ValueError("scene cannot be None")
-
-    try:
-        import ezdxf
-        has_ezdxf = True
-    except ImportError:
-        has_ezdxf = False
-
-    if has_ezdxf and mode == "polyface":
-        doc = ezdxf.new("R2000")
-        msp = doc.modelspace()
-
-        for prim in scene.surface_primitives:
-            layer_name = _sanitize_layer_name(prim.geom_name or "0")
-            v_count = len(prim.positions) // 3
-            tri_count = len(prim.indices) // 3
-            if v_count == 0 or tri_count == 0:
-                continue
-
-            r, g, b = _get_prim_rgb(scene, prim)
-            aci_color = _rgb_to_aci(r, g, b)
-            true_color = (r << 16) | (g << 8) | b
-
-            if not doc.layers.has_entry(layer_name):
-                layer_entry = doc.layers.add(layer_name)
-                layer_entry.dxf.color = aci_color
-                layer_entry.dxf.true_color = true_color
-
-            unique_verts = []
-            vert_map = {}
-            index_remap = []
-            for i in range(v_count):
-                pos = (
-                    round(prim.positions[i * 3] * scale, 6),
-                    round(prim.positions[i * 3 + 1] * scale, 6),
-                    round(prim.positions[i * 3 + 2] * scale, 6),
-                )
-                if pos not in vert_map:
-                    vert_map[pos] = len(unique_verts)
-                    unique_verts.append(pos)
-                index_remap.append(vert_map[pos])
-
-            from ezdxf.render import MeshBuilder
-            mesh = MeshBuilder()
-            mesh.add_vertices(unique_verts)
-            for i in range(tri_count):
-                idx0 = index_remap[prim.indices[i * 3]]
-                idx1 = index_remap[prim.indices[i * 3 + 1]]
-                idx2 = index_remap[prim.indices[i * 3 + 2]]
-                mesh.add_face([unique_verts[idx0], unique_verts[idx1], unique_verts[idx2]])
-
-            mesh.render_polyface(
-                msp,
-                dxfattribs={
-                    "layer": layer_name,
-                    "color": aci_color,
-                    "true_color": true_color,
-                },
-            )
-
-        import io
-        stream = io.StringIO()
-        doc.write(stream)
-        return stream.getvalue()
+    if not math.isfinite(scale):
+        raise ValueError("DXF scale must be finite")
 
     # Zero-dependency native R2000 DXF exporter, structurally identical to
     # the confirmed-working reference (see _HEADER_STATIC_*/_OBJECTS_STATIC
     # above) - full desktop AutoCAD compliance, not just what ezdxf.readfile()
     # or a web viewer tolerates.
+    surface_prims = scene.surface_primitives
     layer_colors: dict[str, tuple[int, int, int]] = {}
-    for prim in scene.surface_primitives:
-        layer_name = _sanitize_layer_name(prim.geom_name or "0")
+    layer_names: dict[Union[str, bytes], str] = {}
+    used_names: set[str] = {"0", "defpoints"}
+    for prim in surface_prims:
+        if len(prim.indices) == 0:
+            continue
+        if len(prim.positions) % 3 != 0 or len(prim.indices) % 3 != 0:
+            raise ValueError("DXF mesh has incomplete coordinates or triangles")
+        vert_count = len(prim.positions) // 3
+        for index in prim.indices:
+            if index < 0 or index >= vert_count:
+                raise ValueError("DXF mesh index is outside the vertex array")
+        for coord in prim.positions:
+            if not math.isfinite(coord * scale):
+                raise ValueError("DXF mesh coordinates must be finite")
+        raw_name: Union[str, bytes] = "" if prim.geom_name is None else prim.geom_name
+        if raw_name in layer_names:
+            continue
+        raw_bytes = _name_to_raw_bytes(raw_name)
+        layer_name = _sanitize_layer_name(raw_bytes)
+        attempt = 0
+        while _layer_name_key(layer_name) in used_names:
+            suffix = "_" + _layer_name_hash(raw_bytes) + ("" if attempt == 0 else f"_{attempt}")
+            layer_name = _sanitize_layer_name(raw_bytes, suffix)
+            attempt += 1
+        used_names.add(_layer_name_key(layer_name))
+        layer_names[raw_name] = layer_name
         if layer_name not in layer_colors:
             layer_colors[layer_name] = _get_prim_rgb(scene, prim)
-
-    if not layer_colors:
-        layer_colors["0"] = (200, 200, 200)
 
     sorted_layers = sorted(layer_colors.keys())
 
@@ -484,15 +549,12 @@ def to_dxf(
     # handles there (matching the reference file's own first entity handle)
     # keeps every handle in the file globally unique.
     handle_counter = 0x691
+
     def next_handle() -> str:
         nonlocal handle_counter
         h = f"{handle_counter:X}"
         handle_counter += 1
         return h
-
-    layer_handles: dict[str, str] = {}
-    for l_name in sorted_layers:
-        layer_handles[l_name] = next_handle()
 
     lines = list(_HEADER_STATIC_A)
     # LAYER table record count: built-in "0" + "Defpoints" + this scene's layers.
@@ -511,23 +573,27 @@ def to_dxf(
         # the whole TABLES section ("Did not receive PlotStyleName") if any
         # layer omits them, even though ezdxf.readfile() doesn't care.
         lines.extend([
-            "  0", "LAYER", "  5", layer_handles[l_name], "330", "1", "100", "AcDbSymbolTableRecord", "100", "AcDbLayerTableRecord",
-            "  2", l_name, " 70", "0", " 62", str(aci), "  6", "Continuous", "370", "-3", "390", "13"
+            "  0", "LAYER", "  5", next_handle(), "330", "1", "100", "AcDbSymbolTableRecord", "100", "AcDbLayerTableRecord",
+            "  2", l_name, " 70", "0", " 62", str(aci), "  6", "Continuous", "370", "-3", "390", "13",
         ])
 
     lines.extend(_HEADER_STATIC_C)
     lines.extend(["  0", "SECTION", "  2", "ENTITIES"])
 
-    for prim in scene.surface_primitives:
-        layer_name = _sanitize_layer_name(prim.geom_name or "0")
+    for prim in surface_prims:
         tri_count = len(prim.indices) // 3
         if tri_count == 0:
             continue
+        raw_name = "" if prim.geom_name is None else prim.geom_name
+        layer_name = layer_names[raw_name]
 
-        r, g, b = layer_colors.get(layer_name, (200, 200, 200))
+        r, g, b = _get_prim_rgb(scene, prim)
         aci = _rgb_to_aci(r, g, b)
 
-        if mode == "polyface":
+        # Polyface counts (71/72) and vertex indices (71-74) are signed
+        # 16-bit fields. Larger meshes use independent 3DFACE triangles.
+        v_count = len(prim.positions) // 3
+        if mode == "polyface" and v_count <= 32767 and tri_count <= 32767:
             # Structure verified against real ezdxf's own render_polyface()
             # output byte-for-byte, not guessed: face-record VERTEX entries
             # carry a color (62) and dummy 0/0/0 coordinates but NOT the
@@ -536,13 +602,12 @@ def to_dxf(
             # Model_Space's - both were wrong here before and are exactly
             # why AutoCAD desktop rejected polyface-mode output while
             # accepting 3dface-mode output using the same scaffold.
-            v_count = len(prim.positions) // 3
             polyline_handle = next_handle()
             lines.extend([
                 "  0", "POLYLINE", "  5", polyline_handle, "330", "17", "100", "AcDbEntity", "  8", layer_name,
                 " 62", str(aci), "100", "AcDbPolyFaceMesh", " 66", "1",
                 " 10", "0.0", " 20", "0.0", " 30", "0.0",
-                " 70", "64", " 71", str(v_count), " 72", str(tri_count)
+                " 70", "64", " 71", str(v_count), " 72", str(tri_count),
             ])
             for i in range(v_count):
                 vx = f"{prim.positions[i * 3] * scale:.6f}"
@@ -551,7 +616,7 @@ def to_dxf(
                 lines.extend([
                     "  0", "VERTEX", "  5", next_handle(), "330", "17", "100", "AcDbEntity", "  8", layer_name,
                     "100", "AcDbVertex", "100", "AcDbPolyFaceMeshVertex",
-                    " 10", vx, " 20", vy, " 30", vz, " 70", "192"
+                    " 10", vx, " 20", vy, " 30", vz, " 70", "192",
                 ])
             for i in range(tri_count):
                 idx0 = prim.indices[i * 3] + 1
@@ -561,10 +626,10 @@ def to_dxf(
                     "  0", "VERTEX", "  5", next_handle(), "330", "17", "100", "AcDbEntity", "  8", layer_name,
                     " 62", str(aci), "100", "AcDbFaceRecord",
                     " 10", "0.0", " 20", "0.0", " 30", "0.0", " 70", "128",
-                    " 71", str(idx0), " 72", str(idx1), " 73", str(idx2)
+                    " 71", str(idx0), " 72", str(idx1), " 73", str(idx2),
                 ])
             lines.extend([
-                "  0", "SEQEND", "  5", next_handle(), "330", polyline_handle, "100", "AcDbEntity", "  8", layer_name
+                "  0", "SEQEND", "  5", next_handle(), "330", polyline_handle, "100", "AcDbEntity", "  8", layer_name,
             ])
         else:
             for i in range(tri_count):
@@ -590,7 +655,7 @@ def to_dxf(
                     " 10", v0x, " 20", v0y, " 30", v0z,
                     " 11", v1x, " 21", v1y, " 31", v1z,
                     " 12", v2x, " 22", v2y, " 32", v2z,
-                    " 13", v2x, " 23", v2y, " 33", v2z
+                    " 13", v2x, " 23", v2y, " 33", v2z,
                 ])
 
     lines.extend(["  0", "ENDSEC"])
@@ -618,10 +683,9 @@ def export(
     if scene is None:
         raise ValueError("scene cannot be None")
 
+    text = to_dxf(scene, scale=scale, mode=mode)
     out = pathlib.Path(output_path)
     out.parent.mkdir(parents=True, exist_ok=True)
-
-    text = to_dxf(scene, scale=scale, mode=mode)
     with open(out, "w", encoding="utf-8", newline="") as fp:
         fp.write(text)
 
