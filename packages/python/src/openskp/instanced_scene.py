@@ -401,6 +401,40 @@ def build_instanced_scene(
 
     mesh_resources: List[InstancedMeshResource] = []
     resource_id_by_key: Dict[str, str] = {}
+    face_layer_summary_cache: Dict[Any, Tuple[Optional[str], Optional[str]]] = {}
+
+    def _face_layer_summary(def_id: Any) -> Tuple[Optional[str], Optional[str]]:
+        hit = face_layer_summary_cache.get(def_id)
+        if hit is not None or def_id in face_layer_summary_cache:
+            return hit  # type: ignore[return-value]
+        d = defs_dict.get(def_id)
+        if d is None or not d["builder"].faces:
+            res: Tuple[Optional[str], Optional[str]] = (None, None)
+            face_layer_summary_cache[def_id] = res
+            return res
+        counts: Dict[Any, int] = {}
+        all_same = True
+        common_name: Optional[str] = None
+        for f in d["builder"].faces.values():
+            lid = f.get("layer")
+            fname = layer_id_to_name.get(lid, "") if lid else ""
+            if fname == "Layer0":
+                fname = ""
+            if fname:
+                counts[lid] = counts.get(lid, 0) + 1
+                if common_name is None:
+                    common_name = fname
+                elif fname != common_name:
+                    all_same = False
+            else:
+                all_same = False
+        uniform_layer = common_name if all_same else None
+        majority_layer = (
+            layer_id_to_name.get(max(counts, key=counts.get)) if counts else None
+        )
+        res = (uniform_layer, majority_layer)
+        face_layer_summary_cache[def_id] = res
+        return res
 
     def mesh_resource_for(
         def_id: Any,
@@ -431,7 +465,9 @@ def build_instanced_scene(
         elif style_colors is not None:
             fallback_color, fallback_back_color = style_colors
         else:
-            fallback_color = fallback_back_color = get_layer_color(layer)
+            _, majority_layer = _face_layer_summary(def_id)
+            color_layer = majority_layer if majority_layer is not None else layer
+            fallback_color = fallback_back_color = get_layer_color(color_layer)
         key = f"{def_id}|{fallback_color[0]},{fallback_color[1]},{fallback_color[2]}"
         if fallback_back_color != fallback_color:
             key += f"/{fallback_back_color[0]},{fallback_back_color[1]},{fallback_back_color[2]}"
@@ -562,32 +598,17 @@ def build_instanced_scene(
         if not runs:
             return None
 
-        key = f"{def_id}|{layer}"
+        uniform_layer, _ = _face_layer_summary(def_id)
+        effective_layer = (
+            (uniform_layer if uniform_layer is not None else layer)
+            if layer == "Layer0"
+            else layer
+        )
+
+        key = f"{def_id}|{effective_layer}"
         hit = curve_resource_id_by_key.get(key)
         if hit is not None:
             return hit
-
-        # A definition's OWN faces (if any) carry their own layer and take
-        # priority over the caller's inherited one - the same override
-        # mesh_resource_for's caller applies before calling in here (see
-        # the `if builder.faces:` block in scene.py's instantiate(), which
-        # reassigns its local `parent_layer` the same way before ITS loose-
-        # edge block runs). Missing this produced a real, caught-by-testing
-        # bug: a mixed mesh+loose-edge definition's loose edges fell back to
-        # whatever layer the CALLING instance happened to inherit, instead
-        # of the definition's own dominant face layer - verified wrong
-        # against gondola_v20.skp ('Gondulas Laterais' expected, 'Layer0'
-        # produced) before this fallback was added.
-        effective_layer = layer
-        if builder.faces:
-            face_layer_counts: Dict[Any, int] = {}
-            for face in builder.faces.values():
-                face_layer = face.get("layer")
-                if face_layer:
-                    face_layer_counts[face_layer] = face_layer_counts.get(face_layer, 0) + 1
-            if face_layer_counts:
-                top_layer = max(face_layer_counts, key=face_layer_counts.get)
-                effective_layer = layer_id_to_name.get(top_layer, layer)
 
         edge_layers = getattr(builder, "edge_layers", None) or {}
         curves: List[LocalCurve] = []
@@ -763,6 +784,12 @@ def build_instanced_scene(
             children = walk(ref_idx, new_matrix, l_name, inst_color, inst_material)
             active_definitions.discard(ref_idx)
 
+            node_layer = l_name
+            if l_name == "Layer0" and not children and ref_idx in defs_dict:
+                child_uniform, _ = _face_layer_summary(ref_idx)
+                if child_uniform is not None:
+                    node_layer = child_uniform
+
             tx = new_matrix[9] * INCHES_TO_MM if len(new_matrix) > 9 else 0.0
             ty = new_matrix[10] * INCHES_TO_MM if len(new_matrix) > 10 else 0.0
             tz = new_matrix[11] * INCHES_TO_MM if len(new_matrix) > 11 else 0.0
@@ -772,7 +799,7 @@ def build_instanced_scene(
                     name=display_name,
                     name_is_generated=name_is_generated,
                     definition_name=def_name,
-                    layer=l_name,
+                    layer=node_layer,
                     matrix=_to_gltf_matrix(inst["matrix"]),
                     position_mm=(round(tx, 2), round(ty, 2), round(tz, 2)),
                     properties=properties,

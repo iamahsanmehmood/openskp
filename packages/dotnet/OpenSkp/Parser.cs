@@ -185,6 +185,11 @@ namespace OpenSkp
                 long pid = isLegacy
                     ? (d.Builder.EdgePids!.TryGetValue(kv.Key, out var ep) ? ep : 0L)
                     : kv.Key;
+                string edgeLayer = "";
+                if (d.Builder.EdgeLayers.TryGetValue(kv.Key, out var edgeLayerId))
+                {
+                    edgeLayer = layerIdToName.TryGetValue(edgeLayerId, out var elName) ? elName : edgeLayerId.ToString();
+                }
                 defn.Edges[kv.Key] = new Edge
                 {
                     Id = kv.Key,
@@ -195,6 +200,7 @@ namespace OpenSkp
                     Hidden = (flags & 0x01) != 0,
                     CurveId = d.Builder.EdgeCurves.TryGetValue(kv.Key, out var curveId) ? curveId : (long?)null,
                     PersistentId = pid,
+                    Layer = edgeLayer,
                 };
             }
 
@@ -215,6 +221,11 @@ namespace OpenSkp
             foreach (var kv in d.Builder.Faces)
             {
                 var f = kv.Value;
+                string faceLayer = "";
+                if (f.LayerId is long faceLayerId)
+                {
+                    faceLayer = layerIdToName.TryGetValue(faceLayerId, out var flName) ? flName : faceLayerId.ToString();
+                }
                 defn.Faces[kv.Key] = new Face
                 {
                     Id = kv.Key,
@@ -228,6 +239,7 @@ namespace OpenSkp
                     UvProjectedBack = f.UvProjectedBack,
                     Hidden = f.Hidden,
                     PersistentId = isLegacy ? f.PersistentId : kv.Key,
+                    Layer = faceLayer,
                 };
             }
 

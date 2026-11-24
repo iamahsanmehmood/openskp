@@ -349,3 +349,457 @@ fn untitled_bakes_its_loose_edges() {
         assert!((bounds.size[k] - (bounds.max[k] - bounds.min[k])).abs() < 1e-12);
     }
 }
+
+#[test]
+fn chair_and_table_uses_face_tag_colors_and_uniform_leaf_layers() {
+    let chair_and_table = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("examples")
+        .join("web-viewer")
+        .join("samples")
+        .join("chair_and_table.skp");
+    let skp = SkpFile::open(&chair_and_table).expect("open chair_and_table.skp");
+    let opts = ParseOptions::default().with_unpainted_faces("tag");
+    let baked = skp.build_scene(&opts).expect("baked");
+    let instanced = skp.build_instanced_scene(&opts).expect("instanced");
+
+    let rgb_set = |mats: &[GltfMaterial]| -> std::collections::BTreeSet<(i64, i64, i64)> {
+        mats.iter()
+            .map(|m| {
+                let bcf = m.pbr_metallic_roughness.base_color_factor;
+                (
+                    (bcf[0] * 255.0).round() as i64,
+                    (bcf[1] * 255.0).round() as i64,
+                    (bcf[2] * 255.0).round() as i64,
+                )
+            })
+            .collect()
+    };
+
+    let baked_colors = rgb_set(&baked.gltf_materials);
+    let instanced_colors = rgb_set(&instanced.gltf_materials);
+
+    assert!(!baked_colors.contains(&(255, 84, 84)));
+    assert!(!instanced_colors.contains(&(255, 84, 84)));
+    assert!(baked_colors.contains(&(120, 150, 190)));
+    assert!(baked_colors.contains(&(190, 150, 120)));
+    assert_eq!(instanced_colors, baked_colors);
+
+    let inst_tris = flatten_instanced(&instanced);
+    let baked_tris = flatten_baked(&baked);
+    assert_eq!(inst_tris.len(), baked_tris.len());
+    for (a, e) in inst_tris.iter().zip(&baked_tris) {
+        assert!(materials_equal(
+            &instanced.gltf_materials[a.material_index],
+            &baked.gltf_materials[e.material_index],
+        ));
+    }
+
+    fn collect_baked(n: &InstanceNode, out: &mut Vec<(String, String)>) {
+        out.push((n.name.clone(), n.layer.clone()));
+        for c in &n.children {
+            collect_baked(c, out);
+        }
+    }
+    fn collect_instanced(n: &InstancedNode, out: &mut Vec<(String, String)>) {
+        out.push((n.name.clone(), n.layer.clone()));
+        for c in &n.children {
+            collect_instanced(c, out);
+        }
+    }
+    let mut bl = Vec::new();
+    let mut il = Vec::new();
+    collect_baked(&baked.scene_hierarchy, &mut bl);
+    collect_instanced(&instanced.scene_hierarchy, &mut il);
+    assert!(bl.contains(&("Chair".to_owned(), "Layer0".to_owned())));
+    assert!(bl.contains(&("Leg_Chair".to_owned(), "Chair".to_owned())));
+    assert_eq!(il, bl);
+}
+
+#[test]
+fn mixed_twenty_untagged_and_one_hidden_face_do_not_hijack_meshes_or_children() {
+    use openskp::create::{create, DefinitionOptions, FaceOptions, InstanceOptions, LayerOptions};
+
+    let unit_quad = |x: f64, y: f64| {
+        [
+            [x, y, 0.0],
+            [x + 1.0, y, 0.0],
+            [x + 1.0, y + 1.0, 0.0],
+            [x, y + 1.0, 0.0],
+        ]
+    };
+
+    let mut b = create();
+    let hidden_tag = b
+        .add_layer(
+            "HiddenTag",
+            &LayerOptions {
+                color: Some([10, 20, 30, 255]),
+                hidden: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let child_def = {
+        let mut d = b
+            .add_component_definition("Child", &DefinitionOptions::default())
+            .unwrap();
+        d.add_face(&unit_quad(0.0, 0.0), &FaceOptions::default())
+            .unwrap();
+        d.close().unwrap()
+    };
+    let parent_def = {
+        let mut d = b
+            .add_component_definition("MixedParent", &DefinitionOptions::default())
+            .unwrap();
+        for k in 0..20 {
+            d.add_face(&unit_quad(f64::from(k * 2), 0.0), &FaceOptions::default())
+                .unwrap();
+        }
+        d.add_face(
+            &unit_quad(0.0, 5.0),
+            &FaceOptions {
+                layer: Some(hidden_tag),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        d.add_instance(
+            child_def,
+            &InstanceOptions {
+                name: Some("NestedChild".to_owned()),
+                translation: [0.0, 10.0, 0.0],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        d.close().unwrap()
+    };
+    b.add_instance(
+        parent_def,
+        &InstanceOptions {
+            name: Some("MixedPlacement".to_owned()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    let skp = SkpFile::from_buffer(b.to_bytes().unwrap());
+    let baked = skp.build_scene(&ParseOptions::default()).expect("baked");
+    let instanced = skp
+        .build_instanced_scene(&ParseOptions::default())
+        .expect("instanced");
+
+    for meta in baked.mesh_index.values() {
+        assert_eq!(meta.layer, "Layer0");
+    }
+    assert_eq!(baked.scene_hierarchy.children[0].layer, "Layer0");
+    assert_eq!(
+        baked.scene_hierarchy.children[0].children[0].layer,
+        "Layer0"
+    );
+    assert_eq!(instanced.scene_hierarchy.children[0].layer, "Layer0");
+    assert_eq!(
+        instanced.scene_hierarchy.children[0].children[0].layer,
+        "Layer0"
+    );
+}
+
+#[test]
+fn uniform_face_tag_applies_to_own_meshes_root_meshes_and_childless_nodes_only() {
+    use openskp::create::{create, DefinitionOptions, FaceOptions, InstanceOptions, LayerOptions};
+    use std::collections::{BTreeMap, BTreeSet};
+
+    let unit_quad = |x: f64, y: f64| {
+        [
+            [x, y, 0.0],
+            [x + 1.0, y, 0.0],
+            [x + 1.0, y + 1.0, 0.0],
+            [x, y + 1.0, 0.0],
+        ]
+    };
+
+    let mut b = create();
+    let roof = b
+        .add_layer(
+            "Roof",
+            &LayerOptions {
+                color: Some([100, 120, 140, 255]),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let leaf_tag = b
+        .add_layer(
+            "LeafTag",
+            &LayerOptions {
+                color: Some([40, 80, 120, 255]),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let child_def = {
+        let mut d = b
+            .add_component_definition("UntaggedChild", &DefinitionOptions::default())
+            .unwrap();
+        d.add_face(&unit_quad(0.0, 0.0), &FaceOptions::default())
+            .unwrap();
+        d.close().unwrap()
+    };
+    let parent_def = {
+        let mut d = b
+            .add_component_definition("UniformParent", &DefinitionOptions::default())
+            .unwrap();
+        d.add_face(
+            &unit_quad(0.0, 0.0),
+            &FaceOptions {
+                layer: Some(roof),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        d.add_instance(
+            child_def,
+            &InstanceOptions {
+                name: Some("ChildInst".to_owned()),
+                translation: [5.0, 0.0, 0.0],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        d.close().unwrap()
+    };
+    let leaf_def = {
+        let mut d = b
+            .add_component_definition("LeafDef", &DefinitionOptions::default())
+            .unwrap();
+        d.add_face(
+            &unit_quad(0.0, 0.0),
+            &FaceOptions {
+                layer: Some(leaf_tag),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        d.close().unwrap()
+    };
+    b.add_face(
+        &unit_quad(0.0, 20.0),
+        &FaceOptions {
+            layer: Some(roof),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    b.add_instance(
+        parent_def,
+        &InstanceOptions {
+            name: Some("ParentInst".to_owned()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    b.add_instance(
+        leaf_def,
+        &InstanceOptions {
+            name: Some("LeafInst".to_owned()),
+            translation: [10.0, 0.0, 0.0],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    let skp = SkpFile::from_buffer(b.to_bytes().unwrap());
+    let baked = skp.build_scene(&ParseOptions::default()).expect("baked");
+    let instanced = skp
+        .build_instanced_scene(&ParseOptions::default())
+        .expect("instanced");
+
+    let mut layers_by_path: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for meta in baked.mesh_index.values() {
+        layers_by_path
+            .entry(meta.path.clone())
+            .or_default()
+            .insert(meta.layer.clone());
+    }
+    assert_eq!(layers_by_path["ROOT"], BTreeSet::from(["Roof".to_owned()]));
+    assert_eq!(
+        layers_by_path["ROOT / ParentInst"],
+        BTreeSet::from(["Roof".to_owned()])
+    );
+    assert_eq!(
+        layers_by_path["ROOT / ParentInst / ChildInst"],
+        BTreeSet::from(["Layer0".to_owned()])
+    );
+    assert_eq!(
+        layers_by_path["ROOT / LeafInst"],
+        BTreeSet::from(["LeafTag".to_owned()])
+    );
+
+    assert_eq!(baked.scene_hierarchy.children[0].layer, "Layer0");
+    assert_eq!(
+        baked.scene_hierarchy.children[0].children[0].layer,
+        "Layer0"
+    );
+    assert_eq!(baked.scene_hierarchy.children[1].layer, "LeafTag");
+    assert_eq!(instanced.scene_hierarchy.children[0].layer, "Layer0");
+    assert_eq!(
+        instanced.scene_hierarchy.children[0].children[0].layer,
+        "Layer0"
+    );
+    assert_eq!(instanced.scene_hierarchy.children[1].layer, "LeafTag");
+}
+
+#[test]
+fn tagged_placement_and_tagged_parent_keep_their_tag_over_uniform_face_tag() {
+    use openskp::create::{
+        create, DefinitionOptions, FaceOptions, InstanceOptions, LayerOptions, PolylineOptions,
+    };
+    use std::collections::BTreeMap;
+
+    let mut b = create();
+    let wood = b
+        .add_layer(
+            "Wood",
+            &LayerOptions {
+                color: Some([160, 110, 60, 255]),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let furniture_hidden = b
+        .add_layer(
+            "FurnitureHidden",
+            &LayerOptions {
+                color: Some([40, 40, 40, 255]),
+                hidden: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let group_tag = b
+        .add_layer(
+            "GroupTag",
+            &LayerOptions {
+                color: Some([30, 140, 90, 255]),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    let wood_panel = {
+        let mut d = b
+            .add_component_definition("WoodPanel", &DefinitionOptions::default())
+            .unwrap();
+        d.add_face(
+            &[
+                [0.0, 0.0, 0.0],
+                [2.0, 0.0, 0.0],
+                [2.0, 2.0, 0.0],
+                [0.0, 2.0, 0.0],
+            ],
+            &FaceOptions {
+                layer: Some(wood),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        d.add_polyline(
+            &[[0.0, 3.0, 0.0], [2.0, 3.0, 0.0]],
+            &PolylineOptions::default(),
+        )
+        .unwrap();
+        d.close().unwrap()
+    };
+    let parent_group = {
+        let mut d = b
+            .add_component_definition("ParentGroup", &DefinitionOptions::default())
+            .unwrap();
+        d.add_instance(
+            wood_panel,
+            &InstanceOptions {
+                name: Some("UntaggedInGroup".to_owned()),
+                translation: [5.0, 0.0, 0.0],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        d.close().unwrap()
+    };
+    b.add_instance(
+        wood_panel,
+        &InstanceOptions {
+            name: Some("HiddenFurniture".to_owned()),
+            layer: Some(furniture_hidden),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    b.add_instance(
+        parent_group,
+        &InstanceOptions {
+            name: Some("TaggedGroup".to_owned()),
+            layer: Some(group_tag),
+            translation: [10.0, 0.0, 0.0],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    let skp = SkpFile::from_buffer(b.to_bytes().unwrap());
+    let opts = ParseOptions::default().with_unpainted_faces("tag");
+    let baked = skp.build_scene(&opts).expect("baked");
+    let instanced = skp.build_instanced_scene(&opts).expect("instanced");
+
+    let mesh_layers: BTreeMap<String, String> = baked
+        .mesh_index
+        .values()
+        .map(|m| (m.path.clone(), m.layer.clone()))
+        .collect();
+    assert_eq!(mesh_layers["ROOT / HiddenFurniture"], "FurnitureHidden");
+    assert_eq!(
+        mesh_layers["ROOT / TaggedGroup / UntaggedInGroup"],
+        "GroupTag"
+    );
+
+    let curve_layers: BTreeMap<String, String> = baked
+        .curve_sets
+        .iter()
+        .map(|c| (c.path.clone(), c.layer.clone()))
+        .collect();
+    assert_eq!(curve_layers["ROOT / HiddenFurniture"], "FurnitureHidden");
+    assert_eq!(
+        curve_layers["ROOT / TaggedGroup / UntaggedInGroup"],
+        "GroupTag"
+    );
+
+    assert_eq!(baked.scene_hierarchy.children[0].layer, "FurnitureHidden");
+    assert_eq!(baked.scene_hierarchy.children[1].layer, "GroupTag");
+    assert_eq!(
+        baked.scene_hierarchy.children[1].children[0].layer,
+        "GroupTag"
+    );
+    assert_eq!(
+        instanced.scene_hierarchy.children[0].layer,
+        "FurnitureHidden"
+    );
+    assert_eq!(instanced.scene_hierarchy.children[1].layer, "GroupTag");
+    assert_eq!(
+        instanced.scene_hierarchy.children[1].children[0].layer,
+        "GroupTag"
+    );
+
+    let ifc = openskp::to_ifc(&baked, openskp::METRES_TO_MM, "IFC4", None, false);
+    let layer_lines: Vec<&str> = ifc
+        .lines()
+        .filter(|l| l.contains("IFCPRESENTATIONLAYERWITHSTYLE("))
+        .collect();
+    let hidden_lines: Vec<&&str> = layer_lines
+        .iter()
+        .filter(|l| l.contains("'FurnitureHidden'"))
+        .collect();
+    assert_eq!(hidden_lines.len(), 1);
+    assert!(hidden_lines[0].contains(",.F.,"));
+    assert!(!layer_lines.iter().any(|l| l.contains("'Wood'")));
+}

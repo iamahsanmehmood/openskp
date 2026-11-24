@@ -118,6 +118,56 @@ FaceColorKey default_color(const RawParsed& parsed, const std::string& layer) {
   return {color[0], color[1], color[2], 255};
 }
 
+FaceLayerSummary summarize_face_layers(const RawParsed& parsed, const GeometryBuilder& b,
+                                       const ParseOptions& options) {
+  FaceLayerSummary out;
+  if (b.faces.empty()) return out;
+  std::vector<std::pair<std::string, std::size_t>> counts;
+  bool all_same = true;
+  std::optional<std::string> common_name;
+  for (const auto& [fid, f] : b.faces) {
+    std::string fname;
+    if (!f.layer.empty() && f.layer != "0") {
+      try {
+        const auto id = std::stoll(f.layer);
+        if (id != 0) {
+          auto li = parsed.layer_id_to_name.find(id);
+          if (li != parsed.layer_id_to_name.end() && li->second != "Layer0") {
+            fname = li->second;
+          }
+        }
+      } catch (...) {
+        emit_log(options, LogLevel::debug,
+                 "Failed to resolve face layer id '" + f.layer + "' to a name");
+      }
+    }
+    if (!fname.empty()) {
+      auto it = std::find_if(counts.begin(), counts.end(),
+                             [&](const auto& kv) { return kv.first == fname; });
+      if (it != counts.end()) {
+        ++it->second;
+      } else {
+        counts.emplace_back(fname, 1);
+      }
+      if (!common_name) {
+        common_name = fname;
+      } else if (*common_name != fname) {
+        all_same = false;
+      }
+    } else {
+      all_same = false;
+    }
+  }
+  if (all_same) out.uniform_layer = common_name;
+  if (!counts.empty()) {
+    const auto best =
+        std::max_element(counts.begin(), counts.end(),
+                         [](const auto& lhs, const auto& rhs) { return lhs.second < rhs.second; });
+    out.majority_layer = best->first;
+  }
+  return out;
+}
+
 std::optional<std::pair<FaceColorKey, FaceColorKey>> unpainted_style_colors(
     const RawParsed& parsed, const std::string& unpainted_faces) {
   if (unpainted_faces != "style" && unpainted_faces != "tag") {

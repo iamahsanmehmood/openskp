@@ -263,6 +263,17 @@ class InstancedSceneBuilder {
 
     final meshResources = <InstancedMeshResource>[];
     final resourceIdByKey = <String, String>{};
+    final faceLayerCache = <int, (String?, String?)>{};
+    (String?, String?) getFaceLayerSummary(int? defId, GeometryBuilder builder) {
+      final key = defId ?? -1;
+      final hit = faceLayerCache[key];
+      if (hit != null || faceLayerCache.containsKey(key)) {
+        return hit ?? (null, null);
+      }
+      final summary = Geometry.summarizeFaceLayers(builder, layerIdToName);
+      faceLayerCache[key] = summary;
+      return summary;
+    }
 
     // Identity of a mesh resource: (definition, effective fallback color) -
     // the ONLY inputs that can change what buildLocalFaceGroups produces
@@ -290,7 +301,8 @@ class InstancedSceneBuilder {
       } else if (styleColors != null) {
         (fallbackColor, fallbackBackColor) = styleColors;
       } else {
-        fallbackColor = fallbackBackColor = getLayerColor(layer);
+        final colorLayer = getFaceLayerSummary(defId, builder).$2 ?? layer;
+        fallbackColor = fallbackBackColor = getLayerColor(colorLayer);
       }
       final backPart = fallbackBackColor != fallbackColor
           ? '/${fallbackBackColor.$1},${fallbackBackColor.$2},${fallbackBackColor.$3}'
@@ -561,11 +573,16 @@ class InstancedSceneBuilder {
           }
         }
 
+        final nodeLayer =
+            (lName == 'Layer0' && children.isEmpty && refIdx != null && childDef != null)
+                ? (getFaceLayerSummary(refIdx, childDef.builder).$1 ?? lName)
+                : lName;
+
         nodes.add(InstancedNode(
           name: displayName,
           nameIsGenerated: nameIsGenerated,
           definitionName: childDefName,
-          layer: lName,
+          layer: nodeLayer,
           matrix: toGltfMatrix(inst.matrix),
           positionMm: (_round2(itx), _round2(ity), _round2(itz)),
           properties: properties,

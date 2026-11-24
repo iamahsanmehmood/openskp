@@ -118,16 +118,54 @@ pub(crate) fn definition_name(p: &RawParsed, i: &RawInstance) -> String {
         .unwrap_or_default()
 }
 
-/// The fallback layer a definition's loose edges resolve to (Python port):
-/// its own faces' majority layer when they carry one, else `layer`.
-pub(crate) fn curve_fallback_layer(p: &RawParsed, b: &GeometryBuilder, layer: &str) -> String {
-    match majority_layer(b.faces.values().map(|f| f.layer_id)) {
-        Some(id) => p
-            .layer_id_to_name
-            .get(&id)
-            .cloned()
-            .unwrap_or_else(|| layer.to_owned()),
-        None => layer.to_owned(),
+/// Per-definition face-tag summary: `uniform_layer` is `Some` only when every
+/// face of the definition has the same tag (other than `Layer0`);
+/// `majority_layer` is the most common non-`Layer0` face tag.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct FaceLayerSummary {
+    pub uniform_layer: Option<String>,
+    pub majority_layer: Option<String>,
+}
+
+pub(crate) fn summarize_face_layers(p: &RawParsed, b: &GeometryBuilder) -> FaceLayerSummary {
+    if b.faces.is_empty() {
+        return FaceLayerSummary::default();
+    }
+    let mut all_same = true;
+    let mut common_name: Option<String> = None;
+    let mut counts: Vec<(EntityId, usize)> = Vec::new();
+    for f in b.faces.values() {
+        let resolved = f
+            .layer_id
+            .filter(|&id| id != 0)
+            .and_then(|id| p.layer_id_to_name.get(&id))
+            .filter(|name| !name.is_empty() && name.as_str() != "Layer0");
+        if let (Some(id), Some(name)) = (f.layer_id, resolved) {
+            if let Some(entry) = counts.iter_mut().find(|(cid, _)| *cid == id) {
+                entry.1 += 1;
+            } else {
+                counts.push((id, 1));
+            }
+            match &common_name {
+                None => common_name = Some(name.clone()),
+                Some(prev) if prev != name => all_same = false,
+                Some(_) => {}
+            }
+        } else {
+            all_same = false;
+        }
+    }
+    let uniform_layer = if all_same { common_name } else { None };
+    let majority_layer = counts
+        .into_iter()
+        .fold(None::<(EntityId, usize)>, |best, cur| match best {
+            Some((_, bc)) if cur.1 <= bc => best,
+            _ => Some(cur),
+        })
+        .and_then(|(id, _)| p.layer_id_to_name.get(&id).cloned());
+    FaceLayerSummary {
+        uniform_layer,
+        majority_layer,
     }
 }
 
@@ -299,6 +337,7 @@ struct Baker<'a> {
     /// every node that places it
     /// (`InstanceNode::definition_attribute_dictionaries`).
     definition_dicts: HashMap<EntityId, StringDictionaries>,
+    face_layers: HashMap<Option<EntityId>, FaceLayerSummary>,
 }
 
 impl<'a> Baker<'a> {
@@ -320,23 +359,42 @@ impl<'a> Baker<'a> {
             .clone()
     }
 
+    fn face_layer_summary(
+        &mut self,
+        defid: Option<EntityId>,
+        b: &GeometryBuilder,
+    ) -> &FaceLayerSummary {
+        let p = self.p;
+        self.face_layers
+            .entry(defid)
+            .or_insert_with(|| summarize_face_layers(p, b))
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn bake(
         &mut self,
         b: &'a GeometryBuilder,
         defname: &str,
+        defid: Option<EntityId>,
         matrix: &[f64],
         layer: &str,
         path: &str,
         inherited_material: Option<&'a RawMaterial>,
     ) -> Result<Vec<InstanceNode>, SkpParseError> {
+        let summary = self.face_layer_summary(defid, b).clone();
+        let mesh_layer = if layer == "Layer0" {
+            summary.uniform_layer.as_deref().unwrap_or(layer)
+        } else {
+            layer
+        };
         let p = self.p;
         let (fallback, fallback_back) = match material_color(inherited_material) {
             Some(c) => (c, c),
             None => match self.style_colors {
                 Some((front, back)) => (front, back),
                 None => {
-                    let c = default_color(p, layer);
+                    let color_layer = summary.majority_layer.as_deref().unwrap_or(layer);
+                    let c = default_color(p, color_layer);
                     (c, c)
                 }
             },
@@ -357,7 +415,7 @@ impl<'a> Baker<'a> {
             if g.tris.is_empty() {
                 continue;
             }
-            let mut geom = format!("mesh_{}_{}_{}", self.mesh_counter, safe(path), layer);
+            let mut geom = format!("mesh_{}_{}_{}", self.mesh_counter, safe(path), mesh_layer);
             self.mesh_counter += 1;
             if group_count > 1 {
                 geom += &format!(
@@ -376,7 +434,7 @@ impl<'a> Baker<'a> {
                     last_path_segment(path).to_owned()
                 },
                 definition_name: defname.to_owned(),
-                layer: layer.to_owned(),
+                layer: mesh_layer.to_owned(),
                 path: path.to_owned(),
                 position_mm: position_mm(matrix),
                 ..Default::default()
@@ -448,7 +506,7 @@ impl<'a> Baker<'a> {
             self.scene.glb_primitives.push(prim);
         }
 
-        self.bake_curves(b, defname, matrix, layer, path);
+        self.bake_curves(b, defname, matrix, mesh_layer, path);
 
         let mut children = Vec::new();
         for i in &b.instances {
@@ -490,6 +548,7 @@ impl<'a> Baker<'a> {
                     nested = self.bake(
                         &d.builder,
                         &d.name,
+                        Some(r),
                         &mat,
                         &child_layer,
                         &child_path,
@@ -498,13 +557,24 @@ impl<'a> Baker<'a> {
                     self.active.remove(&r);
                 }
             }
+            let mut node_layer = child_layer;
+            if node_layer == "Layer0" && nested.is_empty() {
+                if let Some(r) = i.ref_idx {
+                    if let Some(d) = p.definitions.get(&r) {
+                        let summary = self.face_layer_summary(Some(r), &d.builder);
+                        if let Some(uniform) = &summary.uniform_layer {
+                            node_layer = uniform.clone();
+                        }
+                    }
+                }
+            }
             let dicts = scene_dictionaries(i);
             let definition_attribute_dictionaries = self.definition_dictionaries(i.ref_idx);
             let node = InstanceNode {
                 name: display_name.clone(),
                 name_is_generated,
                 definition_name: def_name,
-                layer: child_layer,
+                layer: node_layer,
                 position_mm: position_mm(&mat),
                 properties: i.properties.clone(),
                 children: nested,
@@ -542,7 +612,6 @@ impl<'a> Baker<'a> {
             return;
         }
         let p = self.p;
-        let fallback = curve_fallback_layer(p, b, layer);
         for run in runs {
             let mut pts = Vec::with_capacity(run.vertex_ids.len());
             for vk in &run.vertex_ids {
@@ -558,7 +627,7 @@ impl<'a> Baker<'a> {
             if pts.len() != run.vertex_ids.len() || pts.len() < 2 {
                 continue;
             }
-            let layer = run_layer(p, b, &run.edge_ids, &fallback);
+            let layer = run_layer(p, b, &run.edge_ids, layer);
             // Root-level loose geometry has no name in the file: label it with
             // its layer and a sequence number, flagged as generated.
             let (name, name_is_generated) = if path == "ROOT" {
@@ -623,10 +692,12 @@ pub fn build_scene_raw(mut p: RawParsed, o: &ParseOptions) -> Result<Scene, SkpP
         path_updates: HashMap::new(),
         curve_seq: HashMap::new(),
         definition_dicts: HashMap::new(),
+        face_layers: HashMap::new(),
     };
     let children = baker.bake(
         &p.root.builder,
         "ROOT_MODEL",
+        None,
         &IDENTITY,
         "Layer0",
         "ROOT",

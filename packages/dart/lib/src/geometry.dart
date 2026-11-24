@@ -20,6 +20,7 @@ class GeometryBuilderFace {
   bool uvProjectedBack = false;
   bool hidden = false;
   int persistentId = 0;
+  int? layerId;
 }
 
 class GeometryBuilderInstance {
@@ -75,6 +76,7 @@ class GeometryBuilder {
   final Map<int, (double, double, double)> vertices = {};
   final Map<int, (int?, int?)> edges = {};
   final Map<int, int> edgeFlags = {};
+  final Map<int, int> edgeLayers = {};
 
   /// Edge id -> entity id of the Curve the edge belongs to (SketchUp's
   /// `Edge#curve`). Absent means the edge belongs to no curve.
@@ -482,6 +484,12 @@ class Geometry {
             if (d307 != null && d307.payload.isNotEmpty) {
               builder.edgeFlags[eId] = d307.payload[0];
             }
+            final d207 =
+                d007.children.where((c) => c.tag == 'D207').firstOrNull;
+            if (d207 != null && d207.payload.isNotEmpty) {
+              builder.edgeLayers[eId] =
+                  Tlv.parseVarInt(d207.payload, 0, d207.payload.length);
+            }
           }
 
           // BB0B = the parent Curve's entity id (Edge#curve).
@@ -566,6 +574,7 @@ class Geometry {
           }
 
           int? faceMatId;
+          int? faceLayerId;
           List<double>? uvFront;
           List<double>? uvBack;
           var faceHidden = false;
@@ -575,6 +584,12 @@ class Geometry {
                 d007.children.where((c) => c.tag == 'D107').firstOrNull;
             if (d107 != null) {
               faceMatId = Tlv.parseVarInt(d107.payload, 0, d107.payload.length);
+            }
+            final d207 =
+                d007.children.where((c) => c.tag == 'D207').firstOrNull;
+            if (d207 != null && d207.payload.isNotEmpty) {
+              faceLayerId =
+                  Tlv.parseVarInt(d207.payload, 0, d207.payload.length);
             }
             final dc05 =
                 d007.children.where((c) => c.tag == 'DC05').firstOrNull;
@@ -606,7 +621,8 @@ class Geometry {
             ..backMaterialId = backMatId
             ..uvTransform = uvFront
             ..uvTransformBack = uvBack
-            ..hidden = faceHidden;
+            ..hidden = faceHidden
+            ..layerId = faceLayerId;
         }
       } else if (tag == '6419') {
         final nodesToSearch = el.children.isNotEmpty ? el.children : [el];
@@ -1026,6 +1042,39 @@ class Geometry {
       frontColor: colors['2002'],
       backColor: colors['2003'],
     );
+  }
+
+  static (String? uniformLayer, String? majorityLayer) summarizeFaceLayers(
+    GeometryBuilder builder,
+    Map<int, String> layerIdToName,
+  ) {
+    if (builder.faces.isEmpty) return (null, null);
+    final counts = <int, int>{};
+    var allSame = true;
+    String? commonName;
+    for (final f in builder.faces.values) {
+      final lid = f.layerId;
+      final fname = (lid != null && lid != 0) ? (layerIdToName[lid] ?? '') : '';
+      if (fname.isNotEmpty && fname != 'Layer0') {
+        counts[lid!] = (counts[lid] ?? 0) + 1;
+        if (commonName == null) {
+          commonName = fname;
+        } else if (commonName != fname) {
+          allSame = false;
+        }
+      } else {
+        allSame = false;
+      }
+    }
+    String? majorityLayer;
+    var bestCount = 0;
+    for (final entry in counts.entries) {
+      if (entry.value > bestCount) {
+        bestCount = entry.value;
+        majorityLayer = layerIdToName[entry.key];
+      }
+    }
+    return (allSame ? commonName : null, majorityLayer);
   }
 }
 

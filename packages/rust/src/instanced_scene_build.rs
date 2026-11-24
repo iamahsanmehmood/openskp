@@ -22,9 +22,9 @@ use crate::model::EntityId;
 use crate::observability::{LogLevel, ParseOptions, ParseStage, PROGRESS_INTERVAL};
 use crate::scene::GltfMaterial;
 use crate::scene_build::{
-    build_error, curve_fallback_layer, definition_name, instance_layer, is_generic_definition_name,
-    max_depth_exceeded, max_instances_exceeded, name_override, recursive_definition, run_layer,
-    scene_dictionaries, IDENTITY, MAX_COMPONENT_DEPTH, MAX_EXPANDED_INSTANCES,
+    build_error, definition_name, instance_layer, is_generic_definition_name, max_depth_exceeded,
+    max_instances_exceeded, name_override, recursive_definition, run_layer, scene_dictionaries,
+    summarize_face_layers, FaceLayerSummary, IDENTITY, MAX_COMPONENT_DEPTH, MAX_EXPANDED_INSTANCES,
 };
 
 const INCHES_TO_MM: f64 = 25.4;
@@ -126,11 +126,22 @@ struct Instancer<'a> {
     resource_index_by_key: HashMap<String, usize>,
     curve_resources: Vec<InstancedCurveResource>,
     curve_resource_id_by_key: HashMap<String, String>,
+    face_layers: HashMap<Option<EntityId>, FaceLayerSummary>,
     instance_counter: u64,
     active: BTreeSet<EntityId>,
 }
 
 impl<'a> Instancer<'a> {
+    fn face_layer_summary(
+        &mut self,
+        defid: Option<EntityId>,
+        b: &GeometryBuilder,
+    ) -> &FaceLayerSummary {
+        let p = self.p;
+        self.face_layers
+            .entry(defid)
+            .or_insert_with(|| summarize_face_layers(p, b))
+    }
     fn material_index(&mut self, key: &GroupKey) -> usize {
         let mut mat_key = *key;
         mat_key.unpainted_back = false;
@@ -167,17 +178,22 @@ impl<'a> Instancer<'a> {
         if builder.faces.is_empty() {
             return Ok(None);
         }
-        let p = self.p;
         let (fallback, fallback_back) = match material_color(inherited_material) {
             Some(c) => (c, c),
             None => match self.style_colors {
                 Some((front, back)) => (front, back),
                 None => {
-                    let c = default_color(p, layer);
+                    let majority = self
+                        .face_layer_summary(defid, builder)
+                        .majority_layer
+                        .clone();
+                    let color_layer = majority.as_deref().unwrap_or(layer);
+                    let c = default_color(self.p, color_layer);
                     (c, c)
                 }
             },
         };
+        let p = self.p;
         let key = resource_key(defid, &fallback, &fallback_back, inherited_material);
         if let Some(&hit) = self.resource_index_by_key.get(&key) {
             return Ok(Some(self.mesh_resources[hit].id.clone()));
@@ -269,8 +285,17 @@ impl<'a> Instancer<'a> {
         if runs.is_empty() {
             return None;
         }
+        let uniform = self
+            .face_layer_summary(defid, builder)
+            .uniform_layer
+            .clone();
+        let effective_layer = if layer == "Layer0" {
+            uniform.as_deref().unwrap_or(layer)
+        } else {
+            layer
+        };
         let key = format!(
-            "{}|{layer}",
+            "{}|{effective_layer}",
             defid
                 .map(|d| d.to_string())
                 .unwrap_or_else(|| "ROOT".into())
@@ -279,9 +304,6 @@ impl<'a> Instancer<'a> {
             return Some(hit.clone());
         }
         let p = self.p;
-        // The definition's own faces' layer takes priority over the
-        // inherited one, as in the baked path.
-        let effective_layer = curve_fallback_layer(p, builder, layer);
         let mut curves = Vec::new();
         for run in runs {
             let mut pts = Vec::with_capacity(run.vertex_ids.len());
@@ -298,7 +320,7 @@ impl<'a> Instancer<'a> {
             if pts.len() != run.vertex_ids.len() || pts.len() < 2 {
                 continue;
             }
-            let layer = run_layer(p, builder, &run.edge_ids, &effective_layer);
+            let layer = run_layer(p, builder, &run.edge_ids, effective_layer);
             let arc = solve_run_arc(builder, &run.edge_ids, None, &pts, run.closed);
             curves.push(LocalCurve {
                 points_m: pts,
@@ -401,6 +423,12 @@ impl<'a> Instancer<'a> {
                         &l_name,
                     )?;
                     node.children = self.walk(&d.builder, &new_matrix, &l_name, inst_material)?;
+                    if l_name == "Layer0" && node.children.is_empty() {
+                        let summary = self.face_layer_summary(Some(r), &d.builder);
+                        if let Some(uniform) = &summary.uniform_layer {
+                            node.layer = uniform.clone();
+                        }
+                    }
                     // After the children, as in the Python reference, so curve
                     // resource ids number the same there and here.
                     node.curve_resource_id =
@@ -452,6 +480,7 @@ pub fn build_instanced_scene_raw(
         resource_index_by_key: HashMap::new(),
         curve_resources: Vec::new(),
         curve_resource_id_by_key: HashMap::new(),
+        face_layers: HashMap::new(),
         instance_counter: 0,
         active: BTreeSet::new(),
     };
