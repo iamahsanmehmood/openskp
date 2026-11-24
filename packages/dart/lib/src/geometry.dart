@@ -23,6 +23,7 @@ class GeometryBuilderFace {
 }
 
 class GeometryBuilderInstance {
+  String persistentId = '';
   int offset = 0;
   int? id;
   String? refGuid;
@@ -637,9 +638,22 @@ class Geometry {
         int? instMatId;
         var instHidden = false;
         int? instLayerId;
+        var instPid = '';
         Map<String, String>? instProperties;
         final instD007 = el.children.where((c) => c.tag == 'D007').firstOrNull;
         if (instD007 != null) {
+          final dc05 =
+              instD007.children.where((c) => c.tag == 'DC05').firstOrNull;
+          if (dc05 != null && dc05.payload.isNotEmpty) {
+            var idb = dc05.payload;
+            if (idb.length >= 6 && idb[0] == 0xDE && idb[1] == 0x05) {
+              final z = Tlv.readU32(idb, 2);
+              if (z <= idb.length - 6) {
+                idb = Uint8List.sublistView(idb, 6, 6 + z);
+              }
+            }
+            instPid = Tlv.toHexUpper(idb);
+          }
           final d107 =
               instD007.children.where((c) => c.tag == 'D107').firstOrNull;
           if (d107 != null) {
@@ -661,6 +675,7 @@ class Geometry {
         }
 
         builder.instances.add(GeometryBuilderInstance()
+          ..persistentId = instPid
           ..offset = el.offset
           ..id = extractEntityId(el)
           ..refGuid = guid

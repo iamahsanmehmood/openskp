@@ -412,38 +412,48 @@ class SectionPlane:
 
 @dataclass
 class TextEntity:
-    """A leader-text label (SketchUp's Text tool).
+    """A leader-text or screen-text label (SketchUp's Text tool).
 
     Attributes:
         text: The displayed string.
         hidden: Whether the label is hidden.
-        point: Anchor point ``(x, y, z)`` in inches (world space for
-            model-root texts), or ``None`` when the record anchors to
-            geometry instead of a free point (not resolved yet).
-        label_point: Where the label text floats (the leader line joins
-            it to ``point``), or ``None`` for screen texts / unknown.
+        point: Anchor point ``(x, y, z)`` in owner-local inches (world space
+            for model-root texts), or ``None`` when unresolved.
+        label_point: Where the label text floats in owner-local inches, or
+            ``None`` when unresolved.
+        layer: Explicit tag name, or ``""`` for the default tag (Layer0).
+        screen_position: Normalized screen fractions ``(x, y)`` (used when
+            ``leader_type == 0``), or ``None``.
+        leader_type: SketchUp leader type (``0`` screen, ``1`` view, ``2`` pushpin).
+        arrow_type: Leader arrow type (``0``..``4``, default ``3``).
+        display_leader: Independent leader visibility switch.
     """
 
     text: str = ""
     hidden: bool = False
     point: Optional[Tuple[float, float, float]] = None
     label_point: Optional[Tuple[float, float, float]] = None
+    layer: str = ""
+    screen_position: Optional[Tuple[float, float]] = None
+    leader_type: int = 2
+    arrow_type: int = 3
+    display_leader: bool = True
 
 
 @dataclass
 class Dimension:
     """A linear dimension (SketchUp's Dimension tool).
 
-    The legacy (pre-2021) reader recovers only ``text``/``hidden``. The VFF
-    reader (2021+) recovers the full geometry — see :attr:`SkpModel.dimensions`
-    for the model-level, world-space list.
+    Both VFF (2021+) and legacy (pre-2021) readers expose owner-local geometry
+    and drawing properties on ``root.dimensions`` and ``Definition.dimensions``;
+    :attr:`SkpModel.dimensions` also retains the world-space VFF compatibility list.
 
     Attributes:
         text: The displayed text. Empty when the dimension shows its
             auto-computed measured value (the caller formats ``|b − a|``).
         hidden: Whether the dimension is hidden.
-        a: First measured point ``(x, y, z)`` in inches (world space), or
-            ``None`` when only the text was recovered.
+        a: First measured point ``(x, y, z)`` in inches, or ``None`` when
+            unresolved.
         b: Second measured point.
         offset: Offset distance (inches) — how far the dimension line sits
             from the ``a``–``b`` segment, along the in-plane perpendicular.
@@ -455,6 +465,7 @@ class Dimension:
         offset_vector: Explicit offset vector (inches) for legacy or VFF dimensions
             constrained to a plane axis, preserving the side of the line
             independently of endpoint ordering, or ``None``.
+        layer: Explicit tag name, or ``""`` for the default tag (Layer0).
     """
 
     text: str = ""
@@ -465,6 +476,7 @@ class Dimension:
     plane_x: Optional[Tuple[float, float, float]] = None
     normal: Optional[Tuple[float, float, float]] = None
     offset_vector: Optional[Tuple[float, float, float]] = None
+    layer: str = ""
 
 
 @dataclass
@@ -885,6 +897,21 @@ class SkpFile:
 
         layer_id_to_name = parsed.get("layer_id_to_name", {})
 
+        def _resolve_annotation_layer(raw_layer: Any, raw_layer_id: Any = None) -> str:
+            if raw_layer_id is not None and raw_layer_id != 0:
+                return layer_id_to_name.get(raw_layer_id, str(raw_layer_id))
+            if not raw_layer:
+                return ""
+            if isinstance(raw_layer, int):
+                return layer_id_to_name.get(raw_layer, str(raw_layer)) if raw_layer != 0 else ""
+            try:
+                lid = int(raw_layer)
+            except (ValueError, TypeError):
+                return str(raw_layer)
+            if lid == 0:
+                return ""
+            return layer_id_to_name.get(lid, str(raw_layer))
+
         # Convert defs_dict to Definition dataclasses
         for def_id, d in parsed["defs_dict"].items():
             builder = d["builder"]
@@ -965,15 +992,23 @@ class SkpFile:
             for txt in getattr(builder, "texts", []):
                 defn.texts.append(TextEntity(
                     text=txt.get("text", ""),
-                    hidden=txt.get("hidden", False),
-                    point=tuple(txt["p"]) if txt.get("p") else None,
-                    label_point=tuple(txt["lp"]) if txt.get("lp") else None,
+                    hidden=bool(txt.get("hidden", False)),
+                    layer=_resolve_annotation_layer(txt.get("layer"), txt.get("layer_id")),
+                    point=tuple(txt["p"]) if txt.get("p") is not None else None,
+                    label_point=tuple(txt["lp"]) if txt.get("lp") is not None else None,
+                    screen_position=(
+                        tuple(txt["screen_position"])
+                        if txt.get("screen_position") is not None else None
+                    ),
+                    leader_type=txt.get("leader_type", 2),
+                    arrow_type=txt.get("arrow_type", 3),
+                    display_leader=txt.get("display_leader", True),
                 ))
             # Populate dimensions
             for dim in getattr(builder, "dimensions", []):
                 defn.dimensions.append(Dimension(
                     text=dim.get("text", ""),
-                    hidden=dim.get("hidden", False),
+                    hidden=bool(dim.get("hidden", False)),
                     a=tuple(dim["a"]) if dim.get("a") is not None else None,
                     b=tuple(dim["b"]) if dim.get("b") is not None else None,
                     offset=dim.get("offset", 0.0),
@@ -983,6 +1018,7 @@ class SkpFile:
                         tuple(dim["offset_vector"])
                         if dim.get("offset_vector") is not None else None
                     ),
+                    layer=_resolve_annotation_layer(dim.get("layer"), dim.get("layer_id")),
                 ))
             # Populate construction lines/points
             for cl in getattr(builder, "construction_lines", []):
@@ -1031,6 +1067,8 @@ class SkpFile:
                 plane_x=dm.get("plane_x"), normal=dm.get("normal"),
                 offset_vector=dm.get("offset_vector"),
                 text=dm.get("text", ""),
+                hidden=bool(dm.get("hidden", False)),
+                layer=_resolve_annotation_layer(dm.get("layer"), dm.get("layer_id")),
             ))
 
         # Convert materials

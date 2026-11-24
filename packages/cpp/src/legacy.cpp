@@ -1241,7 +1241,11 @@ struct Archive {
       v->k = "text";
       draw(*v);
       object("CSkFont");
-      if (anchored_text_connection(r.d, r.p)) {
+      const std::size_t font_end = r.p;
+      const bool anchored = anchored_text_connection(r.d, font_end);
+      std::optional<std::array<double, 2>> anchored_screen;
+      std::optional<std::uint64_t> anchored_vertex;
+      if (anchored) {
         // An anchored connection block is followed, as a dimension's is, by
         // the anchored entity's ref and its instance paths - and MFC writes a
         // path instance IN FULL there when nothing has pointed at it before
@@ -1250,8 +1254,12 @@ struct Archive {
         // Skipped as bytes, that instance never gets its store-map slots and
         // every later reference is off by them; read it instead.
         r.raw(16 + 32);
-        entity_ref();
-        connection_paths();
+        anchored_screen =
+            std::array<double, 2>{read_f64(r.d, font_end), read_f64(r.d, font_end + 8)};
+        const auto conn_kind = read_u32(r.d, font_end + 16);
+        const auto connect = entity_ref();
+        const bool empty_paths = connection_paths();
+        if (conn_kind == 2 && empty_paths) anchored_vertex = connect;
       }
       size_t found = std::string::npos;
       for (size_t q = r.p; q + 14 <= std::min(r.d.size(), r.p + 512); ++q)
@@ -1263,8 +1271,10 @@ struct Archive {
         }
       if (found == std::string::npos) throw std::runtime_error("text delimiter not found");
       v->annotation_text = std::make_shared<LegacyText>();
+      v->annotation_text->vertex = anchored_vertex;
       TextEntity annotation;
       annotation.display_leader = r.d[found - 1] != 0;
+      annotation.screen_position = anchored_screen;
       if (found >= r.p + 63) {
         annotation.leader_type = static_cast<int>(read_u32(r.d, found - 15));
         annotation.arrow_type = static_cast<int>(read_u32(r.d, found - 5));
@@ -1272,25 +1282,27 @@ struct Archive {
             Vec3{read_f64(r.d, found - 63), read_f64(r.d, found - 55), read_f64(r.d, found - 47)};
         // Same free/vertex connection header used by linear dimensions. Font
         // schema tails vary, so locate the validated connection before the label.
-        for (std::size_t q = r.p; q + 32 <= found - 63; ++q) {
-          const auto type = read_u32(r.d, q);
-          if ((type > 2) || read_u32(r.d, q + 4) != 4) continue;
-          if (q >= r.p + 16)
-            annotation.screen_position =
-                std::array<double, 2>{read_f64(r.d, q - 16), read_f64(r.d, q - 8)};
-          if (type == 0 || type == 1) {
-            annotation.point =
-                Vec3{read_f64(r.d, q + 8), read_f64(r.d, q + 16), read_f64(r.d, q + 24)};
-          } else {
-            const auto ref = read_u16(r.d, q + 32);
-            if (ref > 0 && ref < 0x7fff)
-              v->annotation_text->vertex = ref;
-            else if (ref == 0x7fff && q + 38 <= found - 63) {
-              const auto large = read_u32(r.d, q + 34);
-              if (!(large & 0x80000000)) v->annotation_text->vertex = large;
+        if (!anchored) {
+          for (std::size_t q = r.p; q + 32 <= found - 63; ++q) {
+            const auto type = read_u32(r.d, q);
+            if ((type > 2) || read_u32(r.d, q + 4) != 4) continue;
+            if (q >= r.p + 16)
+              annotation.screen_position =
+                  std::array<double, 2>{read_f64(r.d, q - 16), read_f64(r.d, q - 8)};
+            if (type == 0 || type == 1) {
+              annotation.point =
+                  Vec3{read_f64(r.d, q + 8), read_f64(r.d, q + 16), read_f64(r.d, q + 24)};
+            } else {
+              const auto ref = read_u16(r.d, q + 32);
+              if (ref > 0 && ref < 0x7fff)
+                v->annotation_text->vertex = ref;
+              else if (ref == 0x7fff && q + 38 <= found - 63) {
+                const auto large = read_u32(r.d, q + 34);
+                if (!(large & 0x80000000)) v->annotation_text->vertex = large;
+              }
             }
+            break;
           }
-          break;
         }
       }
       v->annotation_text->geometry = std::move(annotation);

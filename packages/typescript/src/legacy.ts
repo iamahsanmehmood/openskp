@@ -18,6 +18,7 @@
 import { RawPage } from './pages-dimensions';
 import {
   ArcFrame,
+  GeometryBuilder,
   GeometryBuilderFace,
   GeometryBuilderInstance,
   ParsedDefinition,
@@ -1601,22 +1602,63 @@ function readText(ar: Archive, r: R): any {
   preamble(ar, r);
   const db = drawbase(ar, r);
   ar.readObject(r, 'CSkFont');
+  const fontEnd = r.pos;
+  const view = new DataView(r.data.buffer, r.data.byteOffset, r.data.byteLength);
+  let point: [number, number, number] | null = null;
+  let labelPoint: [number, number, number] | null = null;
+  let screenPosition: [number, number] | null = null;
+  let vertex: number | null = null;
   let connect: number | null = null;
   let paths: [number | null, number[], number[]] | null = null;
-  if (anchoredConnection(r.data, r.pos)) {
-    // An anchored connection block is followed, as a dimension's is (see
-    // readDimLinear), by the anchored entity's ref and its instance paths -
-    // and MFC writes a path instance IN FULL there when nothing has pointed
-    // at it before (a label anchored to a component instance serialized
-    // after it, its class declaration included when it is the file's first
-    // instance). Skipped as bytes, that instance never gets its store-map
-    // slots and every later reference is off by them ("class-ref to
-    // non-class slot"); read it instead.
+  const anchored = anchoredConnection(r.data, r.pos);
+  if (anchored) {
+    screenPosition = [view.getFloat64(fontEnd, true), view.getFloat64(fontEnd + 8, true)];
+    const connKind = view.getUint32(fontEnd + 16, true);
     r.raw(16 + 32);
     connect = entityRef(ar, r);
     paths = connectionPaths(ar, r);
+    if (connKind === 2 && paths[1].length === 0 && paths[2].length === 0) {
+      vertex = connect;
+    }
   }
   const idx = textDelimiter(r);
+  const displayLeader = r.data[idx - 1] !== 0;
+  let leaderType = 2;
+  let arrowType = 3;
+  if (idx >= r.pos + 63) {
+    leaderType = view.getUint32(idx - 15, true);
+    arrowType = view.getUint32(idx - 5, true);
+    labelPoint = [
+      view.getFloat64(idx - 63, true),
+      view.getFloat64(idx - 55, true),
+      view.getFloat64(idx - 47, true),
+    ];
+    if (!anchored) {
+      for (let q = r.pos; q + 32 <= idx - 63; q++) {
+        const ctype = view.getUint32(q, true);
+        if (ctype > 2 || view.getUint32(q + 4, true) !== 4) continue;
+        if (q >= r.pos + 16) {
+          screenPosition = [view.getFloat64(q - 16, true), view.getFloat64(q - 8, true)];
+        }
+        if (ctype === 0 || ctype === 1) {
+          point = [
+            view.getFloat64(q + 8, true),
+            view.getFloat64(q + 16, true),
+            view.getFloat64(q + 24, true),
+          ];
+        } else {
+          const ref = view.getUint16(q + 32, true);
+          if (ref > 0 && ref < 0x7fff) {
+            vertex = ref;
+          } else if (ref === 0x7fff && q + 38 <= idx - 63) {
+            const large = view.getUint32(q + 34, true);
+            if (!(large & 0x80000000)) vertex = large;
+          }
+        }
+        break;
+      }
+    }
+  }
   r.raw(idx - r.pos);
   const text = r.utf16();
   r.raw(5);
@@ -1639,7 +1681,21 @@ function readText(ar: Archive, r: R): any {
     r.raw(6);
     attach.push(val);
   }
-  return { k: 'text', text, db, attach, connect, paths };
+  return {
+    k: 'text',
+    text,
+    db,
+    attach,
+    point,
+    labelPoint,
+    screenPosition,
+    leaderType,
+    arrowType,
+    displayLeader,
+    vertex,
+    connect,
+    paths,
+  };
 }
 
 /** @internal exported for the anchored-text tests */
@@ -2667,17 +2723,8 @@ class LegacyBuilder {
   faces = new Map<number, GeometryBuilderFace>();
   instances: GeometryBuilderInstance[] = [];
   sectionPlanes: { plane: [number, number, number, number]; name: string; label: string; hidden: boolean }[] = [];
-  texts: { text: string; hidden: boolean }[] = [];
-  dimensions: {
-    text: string;
-    hidden: boolean;
-    a?: [number, number, number] | null;
-    b?: [number, number, number] | null;
-    offset?: number;
-    planeX?: [number, number, number] | null;
-    normal?: [number, number, number] | null;
-    offsetVector?: [number, number, number] | null;
-  }[] = [];
+  texts: GeometryBuilder['texts'] = [];
+  dimensions: GeometryBuilder['dimensions'] = [];
   constructionLines: {
     point: [number, number, number];
     direction: [number, number, number];
@@ -2839,9 +2886,23 @@ function fillBuilder(
         hidden: Boolean(v.db && v.db.hidden),
       });
     } else if (k === 'text') {
+      let pt: [number, number, number] | null = v.point ?? null;
+      if (pt === null && v.vertex != null) {
+        const ent = slots.get(v.vertex);
+        if (ent && ent[0] === 'obj' && ent[1] === 'CVertex' && ent[2] && Array.isArray(ent[2].xyz)) {
+          pt = [ent[2].xyz[0], ent[2].xyz[1], ent[2].xyz[2]];
+        }
+      }
       builder.texts.push({
         text: v.text || '',
         hidden: Boolean(v.db && v.db.hidden),
+        layerId: v.db && v.db.layer ? v.db.layer : null,
+        point: pt,
+        labelPoint: v.labelPoint ?? null,
+        screenPosition: v.screenPosition ?? null,
+        leaderType: v.leaderType ?? 2,
+        arrowType: v.arrowType ?? 3,
+        displayLeader: v.displayLeader ?? true,
       });
     } else if (k === 'dimension') {
       const resolveEndpoint = (
@@ -2861,6 +2922,7 @@ function fillBuilder(
       builder.dimensions.push({
         text: v.text || '',
         hidden: Boolean(v.db && v.db.hidden),
+        layerId: v.db && v.db.layer ? v.db.layer : null,
         a: resolveEndpoint(v.a, connect[0]),
         b: resolveEndpoint(v.b, connect[1]),
         offset: typeof v.offset === 'number' ? v.offset : 0,

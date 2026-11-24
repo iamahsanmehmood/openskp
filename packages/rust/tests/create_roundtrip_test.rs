@@ -10,11 +10,11 @@ use std::f64::consts::PI;
 
 use openskp::create::{
     create, ArcOptions, AttributeDict, AttributeValue, CircleOptions, DefinitionOptions,
-    FaceOptions, GroupInstanceOptions, GroupOptions, GuideOptions, ImageOptions, InstanceOptions,
-    LayerOptions, Point3, PolylineOptions, SkpBuilder, UvCorrespondence, DEFAULT_DIMENSION_OFFSET,
-    DEFAULT_TEXT_LEADER,
+    DimensionOptions, FaceOptions, GroupInstanceOptions, GroupOptions, GuideOptions, ImageOptions,
+    InstanceOptions, LayerOptions, Point3, PolylineOptions, SkpBuilder, TextOptions,
+    UvCorrespondence, DEFAULT_DIMENSION_OFFSET, DEFAULT_TEXT_LEADER,
 };
-use openskp::{AttributeKind, ParseOptions, SkpFile, SkpModel};
+use openskp::{AttributeKind, Definition, ParseOptions, SkpFile, SkpModel};
 
 const PNG: &str = "tests/fixtures/create_reference/fake.png";
 
@@ -1758,4 +1758,171 @@ fn default_definition_guids_are_distinct_and_stable() {
     for (id, defn) in &first.definitions {
         assert_eq!(defn.guid, second.definitions[id].guid);
     }
+}
+
+#[test]
+fn annotation_drawing_properties_round_trip() {
+    let mut b = create();
+    let layer = b
+        .add_layer("Annotations", &LayerOptions::default())
+        .unwrap();
+    let dim_options = DimensionOptions {
+        layer: Some(layer),
+        hidden: true,
+    };
+    let mut text_options = TextOptions {
+        layer: Some(layer),
+        hidden: true,
+        screen_position: Some([0.23, 0.67]),
+        ..Default::default()
+    };
+    let nested = {
+        let mut def = b
+            .add_component_definition("TextOnly", &DefinitionOptions::default())
+            .unwrap();
+        def.add_text("Screen label", [0.0; 3], [0.0; 3], &text_options)
+            .unwrap();
+        def.close().unwrap()
+    };
+    b.add_instance(nested, &InstanceOptions::default()).unwrap();
+    text_options.screen_position = None;
+    let root_pt = [2.0, 3.0, 4.0];
+    b.add_text_with_options("Root label", root_pt, [0.0, 0.0, 5.0], &text_options)
+        .unwrap();
+    b.add_dimension_with_options([0.0; 3], [10.0, 0.0, 0.0], [0.0, 3.0, 0.0], &dim_options)
+        .unwrap();
+
+    let model = round_trip(&mut b);
+    assert_eq!(model.root().dimensions.len(), 1);
+    assert_eq!(model.root().dimensions[0].layer, "Annotations");
+    assert!(model.root().dimensions[0].hidden);
+    assert_eq!(model.root().texts.len(), 1);
+    let text = &model.root().texts[0];
+    assert_eq!(text.layer, "Annotations");
+    assert!(text.hidden);
+    assert_eq!(text.point, Some([2.0, 3.0, 4.0]));
+    assert_eq!(text.label_point, Some([2.0, 3.0, 9.0]));
+    let def = model
+        .definitions
+        .values()
+        .find(|d| d.name == "TextOnly")
+        .expect("TextOnly");
+    assert_eq!(def.texts.len(), 1);
+    let screen = &def.texts[0];
+    assert_eq!(screen.layer, "Annotations");
+    assert!(screen.hidden);
+    assert_eq!(screen.leader_type, 0);
+    assert_eq!(screen.screen_position, Some([0.23, 0.67]));
+}
+
+#[test]
+fn leaderless_model_text_retains_both_points_and_visibility() {
+    let mut b = create();
+    let nested = {
+        let mut def = b
+            .add_component_definition("Leader visibility", &DefinitionOptions::default())
+            .unwrap();
+        for ltype in [0, 1, 2] {
+            for display in [false, true] {
+                let options = TextOptions {
+                    leader_type: ltype,
+                    display_leader: display,
+                    ..Default::default()
+                };
+                def.add_text("Model label", [5.0, 6.0, 7.0], [2.0, 3.0, 4.0], &options)
+                    .unwrap();
+            }
+        }
+        let screen = TextOptions {
+            screen_position: Some([0.23, 0.67]),
+            ..Default::default()
+        };
+        def.add_text("Screen label", [0.0; 3], [0.0; 3], &screen)
+            .unwrap();
+        def.close().unwrap()
+    };
+    b.add_instance(nested, &InstanceOptions::default()).unwrap();
+    for ltype in [0, 1, 2] {
+        for display in [false, true] {
+            let options = TextOptions {
+                leader_type: ltype,
+                display_leader: display,
+                ..Default::default()
+            };
+            b.add_text_with_options("Model label", [5.0, 6.0, 7.0], [2.0, 3.0, 4.0], &options)
+                .unwrap();
+        }
+    }
+    let screen = TextOptions {
+        screen_position: Some([0.23, 0.67]),
+        ..Default::default()
+    };
+    b.add_text_with_options("Screen label", [0.0; 3], [0.0; 3], &screen)
+        .unwrap();
+
+    let model = round_trip(&mut b);
+    let verify = |owner: &Definition| {
+        assert_eq!(owner.texts.len(), 7);
+        for (i, text) in owner.texts.iter().take(6).enumerate() {
+            assert_eq!(text.point, Some([5.0, 6.0, 7.0]));
+            assert_eq!(text.label_point, Some([7.0, 9.0, 11.0]));
+            assert_ne!(text.leader_type, 0);
+            assert_eq!(text.display_leader, i == 3 || i == 5);
+        }
+        assert_eq!(owner.texts[6].leader_type, 0);
+        assert_eq!(owner.texts[6].screen_position, Some([0.23, 0.67]));
+    };
+    verify(model.root());
+    assert_eq!(model.definitions.len(), 1);
+    verify(model.definitions.values().next().unwrap());
+}
+
+#[test]
+fn invalid_annotation_options_leave_archive_usable() {
+    let mut b = create();
+    let bad_dim = DimensionOptions {
+        layer: Some(999),
+        hidden: false,
+    };
+    assert!(b
+        .add_dimension_with_options([0.0; 3], [10.0, 0.0, 0.0], [0.0, 3.0, 0.0], &bad_dim)
+        .is_err());
+    assert!(b.add_dimension([0.0; 3], [0.0; 3], 10.0).is_err());
+    assert!(b
+        .add_dimension_with_offset_vector([0.0; 3], [10.0, 0.0, 0.0], [f64::NAN, 0.0, 0.0])
+        .is_err());
+    let bad_layer = TextOptions {
+        layer: Some(999),
+        ..Default::default()
+    };
+    assert!(b
+        .add_text_with_options("Bad layer", [0.0; 3], [1.0, 0.0, 0.0], &bad_layer)
+        .is_err());
+    let bad_pos = TextOptions {
+        screen_position: Some([-1.0, 0.5]),
+        ..Default::default()
+    };
+    assert!(b
+        .add_text_with_options("Bad position", [0.0; 3], [1.0, 0.0, 0.0], &bad_pos)
+        .is_err());
+    assert!(b
+        .add_text("NaN", [f64::NAN, 0.0, 0.0], [1.0, 0.0, 0.0])
+        .is_err());
+    assert!(b
+        .add_text("Inf", [0.0; 3], [f64::INFINITY, 0.0, 0.0])
+        .is_err());
+    let after_layer = b
+        .add_layer("AfterReject", &LayerOptions::default())
+        .unwrap();
+    let valid_opts = TextOptions {
+        layer: Some(after_layer),
+        ..Default::default()
+    };
+    b.add_text_with_options("Valid", [0.0; 3], [1.0, 0.0, 0.0], &valid_opts)
+        .unwrap();
+    let model = round_trip(&mut b);
+    assert!(model.root().dimensions.is_empty());
+    assert_eq!(model.root().texts.len(), 1);
+    assert_eq!(model.root().texts[0].text, "Valid");
+    assert_eq!(model.root().texts[0].layer, "AfterReject");
 }

@@ -583,15 +583,37 @@ impl Default for SectionPlane {
 }
 
 /// Text annotation entity.
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TextEntity {
     pub text: String,
     pub hidden: bool,
-    /// Anchor point in inches (Python port extension), or `None` when the
-    /// record anchors to geometry or the reader does not recover it.
+    /// Explicit tag name, or empty for the default tag.
+    pub layer: String,
+    /// Anchor and label positions in owner-local inches; `None` when
+    /// unresolved.
     pub point: Option<Vec3>,
-    /// Where the label floats (Python port extension), or `None`.
     pub label_point: Option<Vec3>,
+    /// Normalized screen fractions (used when `leader_type` is zero).
+    pub screen_position: Option<[f64; 2]>,
+    pub leader_type: i32,
+    pub arrow_type: i32,
+    pub display_leader: bool,
+}
+
+impl Default for TextEntity {
+    fn default() -> Self {
+        Self {
+            text: String::new(),
+            hidden: false,
+            layer: String::new(),
+            point: None,
+            label_point: None,
+            screen_position: None,
+            leader_type: 2,
+            arrow_type: 3,
+            display_leader: true,
+        }
+    }
 }
 
 /// A linear dimension (SketchUp's Dimension tool).
@@ -621,6 +643,8 @@ pub struct Dimension {
     /// Explicit offset for legacy or VFF dimensions constrained to a plane
     /// axis. Preserves the side of the line independently of endpoint order.
     pub offset_vector: Option<Vec3>,
+    /// Explicit tag name, or empty for the default tag.
+    pub layer: String,
 }
 
 /// The offset vector of a dimension constrained to a plane axis (`axis` 1 or
@@ -926,7 +950,9 @@ pub struct SkpModel {
     /// dimensions. Phantom entries the root count includes but the file never
     /// writes are not counted. Always 0 for VFF files.
     pub unread_root_entities: usize,
-    /// Model-level linear dimensions with world-space endpoints (VFF).
+    /// All VFF linear dimensions with world-space endpoints (compatibility
+    /// view). Both VFF and legacy also expose owner-local geometry and drawing
+    /// properties through `root().dimensions` and [`Definition::dimensions`].
     pub dimensions: Vec<Dimension>,
     pub materials: Vec<Material>,
     pub styles: Vec<Style>,

@@ -521,7 +521,6 @@ RawParsed full_parse(const ByteBuffer& data, const ParseOptions& o) {
   }
 
   std::map<std::string, Vec3> vertex_positions;
-  std::map<std::string, std::vector<double>> instance_world;
   const TlvNode* page_node = nullptr;
   std::vector<TlvNode> page_node_owner;  // keeps page_node's subtree alive past the loop
 
@@ -556,7 +555,6 @@ RawParsed full_parse(const ByteBuffer& data, const ParseOptions& o) {
       collect_material_ids(one, p.material_id_to_name);
       collect_definitions(one, p.definitions);
       scan_vertex_positions(one[0], vertex_positions);
-      scan_instance_transforms(one[0], instance_world);
       if (!page_node) {
         if (auto* found = find_page_node(one[0])) {
           page_node_owner.push_back(*found);
@@ -591,11 +589,7 @@ RawParsed full_parse(const ByteBuffer& data, const ParseOptions& o) {
     emit_log(o, LogLevel::debug, "Failed to parse pages");
   }
   try {
-    // Definition-local annotations need only transforms below their owning definition.
-    // Keep the historical world-space model list for existing clients as well.
-    compose_instance_world(p.root, p.definitions, instance_world);
-    p.dimensions = parse_dimensions(*model, vertex_positions, instance_world);
-    assign_vff_annotations(*model, hs, vertex_positions, instance_world, p);
+    assign_vff_annotations(*model, hs, vertex_positions, p);
   } catch (const std::bad_alloc&) {
     throw;
   } catch (...) {

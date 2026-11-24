@@ -487,13 +487,16 @@ std::array<double, 3> transform_point(const std::vector<double>&, const std::arr
 std::array<double, 3> transform_normal(const std::vector<double>&, const std::array<double, 3>&);
 double transform_determinant(const std::vector<double>&);
 std::vector<double> multiply_matrices(const std::vector<double>&, const std::vector<double>&);
+inline constexpr std::size_t max_expanded_instances = 50'000'000;
+
 void scan_vertex_positions(const TlvNode&, std::map<std::string, Vec3>&);
 void scan_instance_transforms(const TlvNode&, std::map<std::string, std::vector<double>>&);
-void assign_vff_annotations(const ByteBuffer&, const std::vector<TlvHeader>&,
-                            const std::map<std::string, Vec3>&,
-                            const std::map<std::string, std::vector<double>>&, RawParsed&);
-void compose_instance_world(const RawDefinition&, const std::map<EntityId, RawDefinition>&,
-                            std::map<std::string, std::vector<double>>&);
+std::size_t assign_vff_annotations(const ByteBuffer&, const std::vector<TlvHeader>&,
+                                   const std::map<std::string, Vec3>&, RawParsed&,
+                                   std::size_t max_visits = max_expanded_instances);
+std::size_t compose_instance_world(const RawDefinition&, const std::map<EntityId, RawDefinition>&,
+                                   std::map<std::string, std::vector<double>>&,
+                                   std::size_t max_visits = max_expanded_instances);
 std::vector<RawDimension> parse_dimensions(const ByteBuffer&, const std::map<std::string, Vec3>&,
                                            const std::map<std::string, std::vector<double>>&);
 const TlvNode* find_page_node(const TlvNode&);

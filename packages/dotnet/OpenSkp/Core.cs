@@ -99,7 +99,6 @@ namespace OpenSkp
             var defsDictRaw = new Dictionary<long, Geometry.RawDefinition>();
             var rootBuilder = new GeometryBuilder();
             var vertexPositions = new Dictionary<string, (double X, double Y, double Z)>();
-            var instanceWorld = new Dictionary<string, List<double>?>();
             TlvNode? pageNode = null;
 
             foreach (var rec in Tlv.IterTopLevelLazy(modelDat, 0, modelDat.Length, Tlv.ContainerTags))
@@ -112,7 +111,6 @@ namespace OpenSkp
                     Geometry.CollectMaterialIds(single, materialIdToName);
                     Geometry.CollectDefs(single, defsDictRaw);
                     PagesDimensions.ScanVertexPositions(el, vertexPositions);
-                    PagesDimensions.ScanInstanceTransforms(el, instanceWorld);
                     if (pageNode == null)
                     {
                         pageNode = PagesDimensions.FindPageNode(el);
@@ -190,15 +188,15 @@ namespace OpenSkp
                 pages = new List<RawPage>();
             }
 
-            List<RawDimension> dimensions;
+            var dimensions = new List<RawDimension>();
             try
             {
-                dimensions = PagesDimensions.ParseDimensions(modelDat, vertexPositions, instanceWorld);
+                PagesDimensions.AssignVffAnnotations(modelDat, vertexPositions, rootBuilder, defsDictRaw, dimensions);
             }
             catch (Exception e) when (!(e is OutOfMemoryException))
             {
-                Observability.Log(options, SkpLogLevel.Debug, $"Failed to parse dimensions: {e.Message}");
-                dimensions = new List<RawDimension>();
+                Observability.Log(options, SkpLogLevel.Debug, $"Failed to parse annotations: {e.Message}");
+                dimensions.Clear();
             }
 
             ((int R, int G, int B) Front, (int R, int G, int B) Back)? faceColors;

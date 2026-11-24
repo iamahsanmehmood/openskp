@@ -265,9 +265,6 @@ final List<int> _dimFontPayload = _hexBytes(
   'ecf57abd5eaf2340', // height f64
 );
 
-/// Leader-text delimiter block: `[u32 1][u8 flag=1][u8 0][u32 ARROW=3 closed][u8 1]`
-final List<int> _textDelim = _hexBytes('0100000001000300000001');
-
 /// Sentinel a CConstructionLine's start/end distance-parameter carries when
 /// unbounded in that direction - real SketchUp's own value, ground-truth
 /// verified against `Sketchup::ConstructionLine#start`/`#end` returning nil
@@ -788,6 +785,62 @@ List<(String, Map<String, Object>)> _attrDicts(
 
 (int, int) _edgeKey(int a, int b) => a <= b ? (a, b) : (b, a);
 
+((double, double, double), (double, double), int, bool) _prepareText(
+  String text,
+  Point3 point,
+  Point3 leader,
+  int leaderType,
+  int arrowType,
+  (double, double)? screenPosition,
+  bool displayLeader,
+) {
+  final units = text.codeUnits;
+  if (units.length >= 0xFFFFFFFF) {
+    throw SkpWriteError('string too long to encode');
+  }
+  for (var i = 0; i < units.length; i++) {
+    final cu = units[i];
+    if (cu >= 0xD800 && cu <= 0xDBFF) {
+      if (i + 1 >= units.length || units[i + 1] < 0xDC00 || units[i + 1] > 0xDFFF) {
+        throw SkpWriteError('addText text contains an unpaired UTF-16 surrogate');
+      }
+      i++;
+    } else if (cu >= 0xDC00 && cu <= 0xDFFF) {
+      throw SkpWriteError('addText text contains an unpaired UTF-16 surrogate');
+    }
+  }
+  final lb = (point.$1 + leader.$1, point.$2 + leader.$2, point.$3 + leader.$3);
+  if (!point.$1.isFinite ||
+      !point.$2.isFinite ||
+      !point.$3.isFinite ||
+      !leader.$1.isFinite ||
+      !leader.$2.isFinite ||
+      !leader.$3.isFinite ||
+      !lb.$1.isFinite ||
+      !lb.$2.isFinite ||
+      !lb.$3.isFinite) {
+    throw SkpWriteError('addText coordinates must be finite');
+  }
+  if (leaderType < 0 || leaderType > 2 || arrowType < 0 || arrowType > 4) {
+    throw SkpWriteError('addText invalid leader or arrow type');
+  }
+  var screen = (0.0, 0.0);
+  if (screenPosition != null) {
+    if (!screenPosition.$1.isFinite ||
+        !screenPosition.$2.isFinite ||
+        screenPosition.$1 < 0.0 ||
+        screenPosition.$1 > 1.0 ||
+        screenPosition.$2 < 0.0 ||
+        screenPosition.$2 > 1.0) {
+      throw SkpWriteError('addText screen position must be between zero and one');
+    }
+    screen = screenPosition;
+  }
+  final effLeaderType = screenPosition != null ? 0 : (leaderType == 0 ? 2 : leaderType);
+  final effDisplayLeader = displayLeader && (screenPosition != null || leaderType != 0);
+  return (lb, screen, effLeaderType, effDisplayLeader);
+}
+
 // ── the write-side archive mirror ───────────────────────────────────────────
 
 /// Write-side mirror of [Archive]'s slot/class-ref bookkeeping - emits the
@@ -1145,6 +1198,8 @@ class _ArchiveWriter {
     Point3 p2, {
     double offset = 10.0,
     Point3? offsetVector,
+    int? layer,
+    bool hidden = false,
   }) {
     var normal = (0.0, 0.0, 1.0);
     var xaxis = (1.0, 0.0, 0.0);
@@ -1189,12 +1244,23 @@ class _ArchiveWriter {
         final clen = sqrt(cx * cx + cy * cy + cz * cz);
         normal = (cx / clen, cy / clen, cz / clen);
       }
-    } else if (p1.$1 == p2.$1 && p1.$2 == p2.$2 && p1.$3 == p2.$3) {
-      throw SkpWriteError('addDimension endpoints coincide');
+    } else {
+      if (!p1.$1.isFinite ||
+          !p1.$2.isFinite ||
+          !p1.$3.isFinite ||
+          !p2.$1.isFinite ||
+          !p2.$2.isFinite ||
+          !p2.$3.isFinite ||
+          !resolvedOffset.isFinite) {
+        throw SkpWriteError('addDimension coordinates must be finite');
+      }
+      if (p1.$1 == p2.$1 && p1.$2 == p2.$2 && p1.$3 == p2.$3) {
+        throw SkpWriteError('addDimension endpoints coincide');
+      }
     }
     _newOfKnownClass('CDimensionLinear', schema: _dimensionLinearSchema);
     _preamble();
-    _drawbase();
+    _drawbase(mat: 0, layer: layer ?? 0, hidden: hidden);
     _writeStr(''); // auto-computed measurement text
     _writeDimFontRef();
     // connection 1: [u8 0][u32 0][u32 type=1][u32 4][point A], null ref
@@ -1225,37 +1291,51 @@ class _ArchiveWriter {
     buf.addAll(_u32(1));
   }
 
-  /// Add a leader text (SketchUp's Text tool) anchored at [point] (inches,
-  /// world space), with the label floating at `point + leader` and a
-  /// leader line joining them.
-  ///
-  /// The record mirrors human-drawn leader texts harvested from real files
-  /// (the SDK's own create only produces SCREEN texts - its two 0.5
-  /// doubles are screen fractions): screen slot zeroed, the free-
-  /// connection block dimensions use `([u32 1][u32 4][point3d])`, the
-  /// label's world position in the placement tail, and leader type 2
-  /// (pushpin) before the arrow delimiter.
-  void writeText(String text, Point3 point, {Point3 leader = (15.0, 15.0, 15.0)}) {
-    final lb = (point.$1 + leader.$1, point.$2 + leader.$2, point.$3 + leader.$3);
+  /// Add a leader or screen text anchored at [point] (inches, owner-local),
+  /// with the label floating at `point + leader`.
+  void writeText(
+    String text,
+    Point3 point, {
+    Point3 leader = (15.0, 15.0, 15.0),
+    int? layer,
+    bool hidden = false,
+    int leaderType = 2,
+    int arrowType = 3,
+    (double, double)? screenPosition,
+    bool displayLeader = true,
+  }) {
+    final (lb, screen, effLeaderType, effDisplayLeader) = _prepareText(
+      text,
+      point,
+      leader,
+      leaderType,
+      arrowType,
+      screenPosition,
+      displayLeader,
+    );
+
     _newOfKnownClass('CText', schema: _textSchema);
     _preamble();
-    _drawbase();
+    _drawbase(mat: 0, layer: layer ?? 0, hidden: hidden);
     _writeDimFontRef();
-    buf.addAll(_f64(0.0));
-    buf.addAll(_f64(0.0)); // screen-fraction slot (unused)
+    buf.addAll(_f64(screen.$1));
+    buf.addAll(_f64(screen.$2));
     buf.addAll(_u32(1));
-    buf.addAll(_u32(4)); // free connection + constant
+    buf.addAll(_u32(4));
     buf.addAll(_f64(point.$1));
     buf.addAll(_f64(point.$2));
     buf.addAll(_f64(point.$3));
     buf.addAll(List<int>.filled(12, 0));
     buf.addAll(_f64(lb.$1));
     buf.addAll(_f64(lb.$2));
-    buf.addAll(_f64(lb.$3)); // label position
+    buf.addAll(_f64(lb.$3));
     buf.addAll(List<int>.filled(16, 0));
     buf.addAll(_f64(1.0));
-    buf.addAll(_u32(2)); // leader type: pushpin
-    buf.addAll(_textDelim);
+    buf.addAll(_u32(effLeaderType));
+    buf.addAll(_u32(1));
+    buf.addAll(_u16(1));
+    buf.addAll(_u32(arrowType));
+    buf.add(effDisplayLeader ? 1 : 0);
     _writeStr(text);
     buf.addAll(List<int>.filled(5, 0));
   }
@@ -2513,15 +2593,51 @@ class ComponentDefinitionBuilder implements GeometryHost {
   void addDimension(
     Point3 p1,
     Point3 p2, {
-    double offset = 10.0,
+    double? offset,
     Point3? offsetVector,
+    int? layer,
+    bool hidden = false,
   }) {
     _checkWritable('dimensions');
+    _skp._checkLayerHandle(layer);
+    if (offset != null && offsetVector != null) {
+      throw SkpWriteError('pass either offset or offsetVector, not both');
+    }
     _skp._definitionWriter!.writeDimension(
       p1,
       p2,
-      offset: offset,
+      offset: offset ?? 10.0,
       offsetVector: offsetVector,
+      layer: layer,
+      hidden: hidden,
+    );
+    _newEntityCount++;
+  }
+
+  /// Add owner-local leader or screen text, with optional tag and hidden state.
+  void addText(
+    String text,
+    Point3 point, {
+    Point3 leader = (15.0, 15.0, 15.0),
+    int? layer,
+    bool hidden = false,
+    int leaderType = 2,
+    int arrowType = 3,
+    (double, double)? screenPosition,
+    bool displayLeader = true,
+  }) {
+    _checkWritable('text');
+    _skp._checkLayerHandle(layer);
+    _skp._definitionWriter!.writeText(
+      text,
+      point,
+      leader: leader,
+      layer: layer,
+      hidden: hidden,
+      leaderType: leaderType,
+      arrowType: arrowType,
+      screenPosition: screenPosition,
+      displayLeader: displayLeader,
     );
     _newEntityCount++;
   }
@@ -3365,7 +3481,10 @@ class SkpBuilder implements GeometryHost {
     Point3 p2, {
     double? offset,
     Point3? offsetVector,
+    int? layer,
+    bool hidden = false,
   }) {
+    _checkLayerHandle(layer);
     if (offset != null && offsetVector != null) {
       throw SkpWriteError('pass either offset or offsetVector, not both');
     }
@@ -3381,6 +3500,24 @@ class SkpBuilder implements GeometryHost {
           !offsetVector.$3.isFinite) {
         throw SkpWriteError('addDimension coordinates must be finite');
       }
+      final dx = p2.$1 - p1.$1;
+      final dy = p2.$2 - p1.$2;
+      final dz = p2.$3 - p1.$3;
+      final length = sqrt(dx * dx + dy * dy + dz * dz);
+      if (!length.isFinite || length == 0.0) {
+        throw SkpWriteError('addDimension segment length must be finite and nonzero');
+      }
+    } else {
+      final scalarOffset = offset ?? 10.0;
+      if (!p1.$1.isFinite ||
+          !p1.$2.isFinite ||
+          !p1.$3.isFinite ||
+          !p2.$1.isFinite ||
+          !p2.$2.isFinite ||
+          !p2.$3.isFinite ||
+          !scalarOffset.isFinite) {
+        throw SkpWriteError('addDimension coordinates must be finite');
+      }
     }
     if (p1.$1 == p2.$1 && p1.$2 == p2.$2 && p1.$3 == p2.$3) {
       throw SkpWriteError('addDimension endpoints coincide');
@@ -3391,18 +3528,48 @@ class SkpBuilder implements GeometryHost {
       p2,
       offset: offset ?? 10.0,
       offsetVector: offsetVector,
+      layer: layer,
+      hidden: hidden,
     );
     _newEntityCount++;
     _faceCount++; // reuses the "at least one root entity" check in toBytes
   }
 
-  /// Add a leader text (SketchUp's Text tool) anchored at [point] (inches,
-  /// world space), with the label floating at `point + leader` and a
-  /// leader line joining them. See [_ArchiveWriter.writeText] for the
-  /// record's ground truth.
-  void addText(String text, Point3 point, {Point3 leader = (15.0, 15.0, 15.0)}) {
+  /// Add a leader or screen text anchored at [point] (inches, world space),
+  /// with the label floating at `point + leader`.
+  void addText(
+    String text,
+    Point3 point, {
+    Point3 leader = (15.0, 15.0, 15.0),
+    int? layer,
+    bool hidden = false,
+    int leaderType = 2,
+    int arrowType = 3,
+    (double, double)? screenPosition,
+    bool displayLeader = true,
+  }) {
+    _checkLayerHandle(layer);
+    _prepareText(
+      text,
+      point,
+      leader,
+      leaderType,
+      arrowType,
+      screenPosition,
+      displayLeader,
+    );
     _ensureGeometryWriter();
-    _geometryWriter!.writeText(text, point, leader: leader);
+    _geometryWriter!.writeText(
+      text,
+      point,
+      leader: leader,
+      layer: layer,
+      hidden: hidden,
+      leaderType: leaderType,
+      arrowType: arrowType,
+      screenPosition: screenPosition,
+      displayLeader: displayLeader,
+    );
     _newEntityCount++;
     _faceCount++; // reuses the "at least one root entity" check in toBytes
   }
