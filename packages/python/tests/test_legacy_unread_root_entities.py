@@ -34,9 +34,13 @@ def test_complete_files_report_no_unread_root_entities(caplog, name: str) -> Non
     if not path.exists():
         pytest.skip(f"fixture {name} not present")
     with caplog.at_level(logging.WARNING, logger="openskp.legacy"):
-        model = SkpFile.open(path).parse()
+        skp = SkpFile.open(path)
+        model = skp.parse()
     assert model.unread_root_entities == 0
     assert caplog.records == []
+    if name == "SU_File.skp":
+        assert skp.build_scene().unread_root_entities == 0
+        assert skp.build_instanced_scene().unread_root_entities == 0
 
 
 def test_unreadable_text_drops_rest_of_root_and_warns(tmp_path, caplog) -> None:
@@ -49,9 +53,12 @@ def test_unreadable_text_drops_rest_of_root_and_warns(tmp_path, caplog) -> None:
 
     complete_path = tmp_path / "complete.skp"
     complete_path.write_bytes(raw)
-    complete = SkpFile.open(complete_path).parse()
+    complete_skp = SkpFile.open(complete_path)
+    complete = complete_skp.parse()
     assert len(complete.root.texts) == 2
     assert complete.unread_root_entities == 0
+    assert complete_skp.build_scene().unread_root_entities == 0
+    assert complete_skp.build_instanced_scene().unread_root_entities == 0
 
     # Break the second text's string marker so the reader can't find its text.
     marker = b"\x01\xff\xfe\xff\x06B\x00"
@@ -61,12 +68,15 @@ def test_unreadable_text_drops_rest_of_root_and_warns(tmp_path, caplog) -> None:
 
     broken_path = tmp_path / "broken.skp"
     broken_path.write_bytes(raw)
+    broken_skp = SkpFile.open(broken_path)
     with caplog.at_level(logging.WARNING, logger="openskp.legacy"):
-        model = SkpFile.open(broken_path).parse()
+        model = broken_skp.parse()
 
     assert len(model.root.texts) == 1
     assert model.root.texts[0].text == "First"
     assert model.unread_root_entities > 0
+    assert broken_skp.build_scene().unread_root_entities == model.unread_root_entities
+    assert broken_skp.build_instanced_scene().unread_root_entities == model.unread_root_entities
     warnings = [r.message for r in caplog.records if r.levelno == logging.WARNING]
     assert any(
         "stopped early" in m and f"{model.unread_root_entities} unread" in m

@@ -34,12 +34,17 @@ void main() {
     ]) {
       final path = '${Directory.current.path}/test/fixtures/$name';
       final logs = <(SkpLogLevel, String)>[];
-      final model = SkpFile.open(path).parse(
+      final skp = SkpFile.open(path);
+      final model = skp.parse(
         ParseOptions(onLog: (level, message) => logs.add((level, message))),
       );
       expect(model.unreadRootEntities, 0, reason: name);
       expect(logs.any((entry) => entry.$1 == SkpLogLevel.warning), isFalse,
           reason: name);
+      if (name == 'SU_File.skp') {
+        expect(skp.buildScene().unreadRootEntities, 0, reason: name);
+        expect(skp.buildInstancedScene().unreadRootEntities, 0, reason: name);
+      }
     }
   });
 
@@ -61,9 +66,12 @@ void main() {
     ]);
 
     final bytes = Uint8List.fromList(builder.toBytes());
-    final complete = SkpFile.fromBuffer(bytes).parse();
+    final completeSkp = SkpFile.fromBuffer(bytes);
+    final complete = completeSkp.parse();
     expect(complete.root.texts, hasLength(2));
     expect(complete.unreadRootEntities, 0);
+    expect(completeSkp.buildScene().unreadRootEntities, 0);
+    expect(completeSkp.buildInstancedScene().unreadRootEntities, 0);
 
     // Break the second text's string marker so the reader can't find its text.
     const marker = [0x01, 0xFF, 0xFE, 0xFF, 0x06, 0x42, 0x00];
@@ -74,12 +82,15 @@ void main() {
     }
 
     final logs = <(SkpLogLevel, String)>[];
-    final model = SkpFile.fromBuffer(bytes).parse(
+    final brokenSkp = SkpFile.fromBuffer(bytes);
+    final model = brokenSkp.parse(
       ParseOptions(onLog: (level, message) => logs.add((level, message))),
     );
     expect(model.root.texts, hasLength(1));
     expect(model.root.texts[0].text, 'First');
     expect(model.unreadRootEntities, greaterThan(0));
+    expect(brokenSkp.buildScene().unreadRootEntities, model.unreadRootEntities);
+    expect(brokenSkp.buildInstancedScene().unreadRootEntities, model.unreadRootEntities);
     expect(
       logs.any(
         (entry) =>

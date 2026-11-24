@@ -102,5 +102,8 @@ struct OPENSKP_EXPORT Scene {
   // not yet read here (open gap, see docs/LANGUAGE_PARITY.md), so every
   // VFF layer is absent from this map (treated as visible by consumers).
   std::map<std::string, bool> layer_hidden;
+  // Number of top-level entities dropped when a classic (pre-2021) root
+  // entity walk stopped early (0 for complete classic files and VFF files).
+  std::size_t unread_root_entities{};
 };
 }  // namespace openskp

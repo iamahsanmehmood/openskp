@@ -365,6 +365,7 @@ InstancedScene build_instanced_scene_raw(RawParsed&& p, const ParseOptions& o) {
       mesh_resource_for_builder(p.root.builder, "ROOT_MODEL", std::nullopt, std::nullopt, "Layer0");
 
   scene.layer_hidden = p.layer_hidden;
+  scene.unread_root_entities = p.unread_root_entities;
 
   scene.scene_hierarchy = InstancedNode{};
   scene.scene_hierarchy.name = "ROOT";

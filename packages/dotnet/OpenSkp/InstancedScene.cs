@@ -116,6 +116,11 @@ namespace OpenSkp
         /// the raw parse. Mirrors Python's/C++'s own field of the same
         /// name.</summary>
         public Dictionary<string, bool> LayerHidden { get; set; } = new Dictionary<string, bool>();
+
+        /// <summary>Number of top-level entities dropped when a classic
+        /// (pre-2021) root entity walk stopped early (0 for complete classic
+        /// files, VFF files, and scenes read back from .frag).</summary>
+        public int UnreadRootEntities { get; set; }
     }
 
     /// <summary>Builds the placed scene graph with SketchUp's
@@ -659,6 +664,7 @@ namespace OpenSkp
                 GltfMaterials = gltfMaterials,
                 Textures = textures,
                 LayerHidden = new Dictionary<string, bool>(parsed.LayerHidden),
+                UnreadRootEntities = parsed.UnreadRootEntities,
             };
         }
 
