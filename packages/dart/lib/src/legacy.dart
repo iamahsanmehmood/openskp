@@ -843,6 +843,7 @@ class DefinitionRec {
   List<(int, String?, Object?)> ents;
   bool facesCamera;
   bool shadowsFaceSun;
+  int noScaleMask;
   bool isGroup;
   DefinitionRec(
       {required this.name,
@@ -850,6 +851,7 @@ class DefinitionRec {
       required this.ents,
       required this.facesCamera,
       required this.shadowsFaceSun,
+      this.noScaleMask = 0,
       this.isGroup = false});
 }
 
@@ -1954,6 +1956,8 @@ class LegacyReaders {
     }
     final gap = r.raw(tpos - r.pos);
     final behavior = gap.length >= 9 ? gap[gap.length - 9] : 0;
+    final noScaleMask =
+        ar.ver >= 7 && gap.length >= 8 ? Tlv.readU32(gap, gap.length - 8) : 0;
     // the last u32 before the thumbnail is 1 for the definition of a group
     // and 0 for a component's (what SketchUp's SUComponentDefinitionGetType
     // reports), measured against SketchUp 2025's own counts
@@ -1970,6 +1974,7 @@ class LegacyReaders {
       ents: ents,
       facesCamera: (behavior & 1) != 0,
       shadowsFaceSun: (behavior & 2) != 0,
+      noScaleMask: noScaleMask,
       isGroup: isGroup,
     );
   }
@@ -2495,6 +2500,32 @@ class Legacy {
     }
   }
 
+  static int _readRootNoScaleMask(Uint8List data, int ver) {
+    if (ver < 7) return 0;
+    final marker = <int>[];
+    for (final cu in 'End-Of-Version-Map'.codeUnits) {
+      marker.add(cu);
+      marker.add(0);
+    }
+    final found = _findBytes(data, marker);
+    if (found < 0) return 0;
+    final start = found + marker.length;
+    var scan = start;
+    final cdibLimit = start + 64 < data.length ? start + 64 : data.length;
+    if (_findBytes(data, ascii.encode('CDib'), scan, cdibLimit) >= 0) {
+      final endChunk = _findBytes(data, ascii.encode('IEND'), scan);
+      if (endChunk >= 0) {
+        scan = endChunk + 8 < data.length ? endChunk + 8 : data.length;
+      }
+    }
+    final strLimit = scan + 96 < data.length ? scan + 96 : data.length;
+    final at = _findBytes(data, _strMarker, scan, strLimit);
+    if (at >= start + 4) {
+      return Tlv.readU32(data, at - 4);
+    }
+    return 0;
+  }
+
   /// Parse a classic MFC .skp into the shared RawParsed shape, which
   /// Parser converts to the public SkpModel exactly like the VFF path.
   static RawParsed fullParseLegacy(Uint8List data, [ParseOptions? options]) {
@@ -2639,6 +2670,7 @@ class Legacy {
             isGroup: d.isGroup,
             alwaysFacesCamera: d.facesCamera,
             shadowsFaceSun: d.shadowsFaceSun,
+            noScaleMask: d.noScaleMask,
             builder: b,
           );
           processed++;
@@ -2684,7 +2716,11 @@ class Legacy {
       ..styles.addAll(const [])
       ..defsDict.addAll(defsDict)
       ..unreadRootEntities = ar.unreadRootEntities
-      ..root =
-          RawDefinition(guid: 'ROOT', name: 'ROOT_MODEL', builder: rootBuilder);
+      ..root = RawDefinition(
+        guid: 'ROOT',
+        name: 'ROOT_MODEL',
+        noScaleMask: _readRootNoScaleMask(data, ar.ver),
+        builder: rootBuilder,
+      );
   }
 }

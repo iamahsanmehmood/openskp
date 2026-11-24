@@ -109,6 +109,9 @@ OpenExistingResult openExisting(String path) {
   final model = SkpFile.open(path).parse();
   final warnings = <String>[];
   final builder = create();
+  if (model.root.noScaleMask != 0) {
+    builder.setDocumentOptions(DocumentOptions(noScaleMask: model.root.noScaleMask));
+  }
 
   final materialSlots = _replayMaterials(builder, model, warnings);
   final layerSlots = <String, int>{
@@ -134,9 +137,15 @@ OpenExistingResult openExisting(String path) {
     // component definitions (unlike Components, which SketchUp
     // auto-names), so an empty name is common in real files - same
     // reasoning as _replayInstance's own name handling below.
-    final db = builder.addComponentDefinition(defn.name, (b) {
-      _replayBody(b, defn, model, materialSlots, layerSlots, warnings, context, defBuilders);
-    });
+    final db = builder.addComponentDefinition(
+      defn.name,
+      (b) {
+        _replayBody(b, defn, model, materialSlots, layerSlots, warnings, context, defBuilders);
+      },
+      alwaysFacesCamera: defn.alwaysFacesCamera,
+      shadowsFaceSun: defn.shadowsFaceSun,
+      noScaleMask: defn.noScaleMask,
+    );
     defBuilders[defId] = db;
   }
 

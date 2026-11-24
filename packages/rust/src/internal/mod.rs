@@ -301,6 +301,7 @@ pub struct RawDefinition {
     pub name: String,
     pub always_faces_camera: bool,
     pub shadows_face_sun: bool,
+    pub no_scale_mask: u32,
     pub is_image: bool,
     pub is_group: bool,
     pub builder: GeometryBuilder,

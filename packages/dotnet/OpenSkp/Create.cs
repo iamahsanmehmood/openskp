@@ -1259,7 +1259,7 @@ namespace OpenSkp
         /// <summary>Close out a CComponentDefinition record: relationship
         /// count, GUID, name, timestamp, behavior flags, and a default
         /// thumbnail.</summary>
-        internal int WriteDefinitionTail(string name, bool isGroup = false)
+        internal int WriteDefinitionTail(string name, bool isGroup = false, byte behavior = 0, uint noScaleMask = 0)
         {
             AddU32(0); // nrel: CRelationship count - always 0, not supported
             AddU16(0);
@@ -1268,17 +1268,12 @@ namespace OpenSkp
             WriteStr(""); // description - empty in ground truth
             WriteStr(""); // second name field - empty in ground truth
             AddU32((uint)DateTimeOffset.UtcNow.ToUnixTimeSeconds());
-            // 43-byte gap; byte -9 carries the always-faces-camera/
-            // shadows-face-sun behavior flags, both left off, matching
-            // neither being exposed by this writer yet. The last u32 is 1 for the
-            // definition of a group and 0 for a component's (what SketchUp's own API
-            // reports as SUComponentType_Group).
             int groupFlagPos = Buf.Count + 39;
-            AddZeros(39);
+            AddZeros(34);
+            Buf.Add(behavior);
+            AddU32(noScaleMask);
             AddU32(isGroup ? 1u : 0u);
             WriteThumbnail();
-            // where that u32 sits, so a definition first closed as a component can be flagged later,
-            // when it is placed as a group
             return groupFlagPos;
         }
 
@@ -1769,6 +1764,8 @@ namespace OpenSkp
         public int LengthPrecision { get; set; } = 3;
         /// <summary>Native style item IDs and scalar values (colors are packed ABGR uint32 values).</summary>
         public Dictionary<int, double> StyleItems { get; set; } = new Dictionary<int, double>();
+        /// <summary>Root model scale-grip suppression mask, used when loaded as a component.</summary>
+        public uint NoScaleMask { get; set; } = 0;
     }
 
     internal static class DocumentOptionsPatching
@@ -1809,6 +1806,7 @@ namespace OpenSkp
 
         public static void PatchDocumentPrefix(byte[] prefix, DocumentOptions options)
         {
+            WriteU32At(prefix, 2008, options.NoScaleMask);
             WriteU32At(prefix, 2327, (uint)options.LengthPrecision);
             WriteU32At(prefix, 2360, 0u); // LengthFormat: decimal
             WriteU32At(prefix, 2389, (uint)options.LengthUnit);
@@ -1913,6 +1911,8 @@ namespace OpenSkp
         // needs an explicit later AddInstance call.
         private readonly GroupPlacement? _groupPlacement;
         private int? _groupFlagPos;
+        internal byte Behavior;
+        internal uint NoScaleMask;
 
         internal ComponentDefinitionBuilder(SkpBuilder skp, int slot, string name, int countPatchPos, GroupPlacement? groupPlacement)
         {
@@ -2128,7 +2128,7 @@ namespace OpenSkp
             }
             var writer = Skp.DefinitionWriter!;
             writer.PatchU32(_countPatchPos, (uint)_newEntityCount);
-            _groupFlagPos = writer.WriteDefinitionTail(Name, _groupPlacement.HasValue);
+            _groupFlagPos = writer.WriteDefinitionTail(Name, _groupPlacement.HasValue, Behavior, NoScaleMask);
             _closed = true;
             Skp.ClearOpenDefinition(this);
             if (_groupPlacement.HasValue)
@@ -2275,6 +2275,7 @@ namespace OpenSkp
                 LengthUnit = options.LengthUnit,
                 LengthPrecision = options.LengthPrecision,
                 StyleItems = copied,
+                NoScaleMask = options.NoScaleMask,
             };
         }
 
@@ -2617,12 +2618,20 @@ namespace OpenSkp
         /// be string, int, or double) attached to the definition itself,
         /// under a dictionary named attributeDictName.</summary>
         public ComponentDefinitionBuilder AddComponentDefinition(
-            string name, IReadOnlyDictionary<string, object>? attributes = null, string attributeDictName = "attributes")
+            string name,
+            IReadOnlyDictionary<string, object>? attributes = null,
+            string attributeDictName = "attributes",
+            bool alwaysFacesCamera = false,
+            bool shadowsFaceSun = false,
+            uint noScaleMask = 0)
         {
             var attributeDicts = attributes != null && attributes.Count > 0
                 ? new List<AttributeDict> { new AttributeDict(attributeDictName, attributes) }
                 : null;
-            return StartDefinition(name, "AddComponentDefinition", null, attributeDicts);
+            var def = StartDefinition(name, "AddComponentDefinition", null, attributeDicts);
+            def.Behavior = (byte)((alwaysFacesCamera ? 1 : 0) | (shadowsFaceSun ? 2 : 0));
+            def.NoScaleMask = noScaleMask;
+            return def;
         }
 
         /// <summary>Start a new group. Use the returned object with a

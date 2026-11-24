@@ -156,6 +156,7 @@ export interface Definition {
   isGroup: boolean;
   alwaysFacesCamera: boolean;
   shadowsFaceSun: boolean;
+  noScaleMask: number;
 }
 
 export interface Vertex {
@@ -640,7 +641,7 @@ export function buildModelFromParsed(parsed: ParsedRawData): SkpModel {
     // group). Kept out of `definitions` (which is numeric-ID-only, one
     // entry per real component/group definition) and exposed here instead,
     // matching the .NET and Dart ports' `Root`/`root` field.
-    root: rootDefinition ?? { id: 0, guid: 'ROOT', name: 'ROOT_MODEL', vertices: [], edges: [], faces: [], instances: [], sectionPlanes: [], texts: [], dimensions: [], constructionLines: [], constructionPoints: [], arcs: new Map(), isImage: false, isGroup: false, alwaysFacesCamera: false, shadowsFaceSun: false },
+    root: rootDefinition ?? { id: 0, guid: 'ROOT', name: 'ROOT_MODEL', vertices: [], edges: [], faces: [], instances: [], sectionPlanes: [], texts: [], dimensions: [], constructionLines: [], constructionPoints: [], arcs: new Map(), isImage: false, isGroup: false, alwaysFacesCamera: false, shadowsFaceSun: false, noScaleMask: 0 },
     layers: finalLayersList,
     pages: finalPagesList,
     dimensions: finalDimensionsList,
@@ -756,6 +757,7 @@ function buildDefinition(id: number, d: ParsedDefinition, layerIdToName?: Map<nu
     isGroup: d.isGroup || false,
     alwaysFacesCamera: d.alwaysFacesCamera,
     shadowsFaceSun: d.shadowsFaceSun || false,
+    noScaleMask: d.noScaleMask ?? 0,
   };
 }
 

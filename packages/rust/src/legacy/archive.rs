@@ -1378,6 +1378,13 @@ impl<'a> Archive<'a> {
         let n = gap.len();
         v.faces_camera = n >= 9 && gap[n - 9] & 1 != 0;
         v.shadows_face_sun = n >= 9 && gap[n - 9] & 2 != 0;
+        // SDK-generated legacy definitions store a little-endian u32 right
+        // before the final definition-kind u32 (eight bytes before CThumbnail).
+        v.no_scale_mask = if self.ver >= 7 && n >= 8 {
+            read_u32(gap, n - 8)?
+        } else {
+            0
+        };
         // the last u32 before the thumbnail is 1 for the definition of a group
         // and 0 for a component's (what SketchUp's
         // SUComponentDefinitionGetType reports)

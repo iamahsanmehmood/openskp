@@ -2069,6 +2069,7 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
     vertex_positions = {}
     instance_world = {}
     page_node = None
+    root_no_scale_mask = 0
 
     def entity_key(payload):
         # DC05 payload -> persistent id: either a DE05 var-int wrapper or the
@@ -2129,6 +2130,7 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
                 name = None
                 faces_camera = False
                 shadows_face_sun = False
+                no_scale_mask = 0
                 is_image = False
                 is_group = False
                 for child in children:
@@ -2140,7 +2142,8 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
                     elif ctag == '581B':
                         # Component behavior flags: sub-TLV 5D1B == 1 marks
                         # "always faces camera" (2D people/tree cut-outs);
-                        # its companion 5E1B is "shadows face sun".
+                        # its companion 5E1B is "shadows face sun"; 5A1B is
+                        # the u32 scale-grip suppression mask.
                         pos = 0
                         pl = child.payload
                         while pos <= len(pl) - 6:
@@ -2148,7 +2151,9 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
                             sub_size = read_u32(pl, pos+2)
                             if pos + 6 + sub_size > len(pl):
                                 break
-                            if sub_tag == '5D1B' and sub_size >= 1:
+                            if sub_tag == '5A1B' and sub_size == 4:
+                                no_scale_mask = read_u32(pl, pos + 6)
+                            elif sub_tag == '5D1B' and sub_size >= 1:
                                 faces_camera = parse_var_int(
                                     pl, pos+6, sub_size) == 1
                             elif sub_tag == '5E1B' and sub_size >= 1:
@@ -2171,6 +2176,7 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
                 defs_dict[ent_id] = {'guid': guid, 'name': name,
                                      'always_faces_camera': faces_camera,
                                      'shadows_face_sun': shadows_face_sun,
+                                     'no_scale_mask': no_scale_mask,
                                      'is_image': is_image, 'is_group': is_group,
                                      'attribute_dictionaries':
                                          entity_attribute_dictionaries(children),
@@ -2219,6 +2225,28 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
             elif tag == '0702':
                 if page_node is None:
                     page_node = el
+
+            elif tag == '0E02':
+                nonlocal root_no_scale_mask
+                pl = el.payload
+                pos = 0
+                while pos <= len(pl) - 6:
+                    sub_tag = pl[pos:pos + 2].hex().upper()
+                    sub_size = read_u32(pl, pos + 2)
+                    if pos + 6 + sub_size > len(pl):
+                        break
+                    if sub_tag == '581B':
+                        bpos = pos + 6
+                        bend = bpos + sub_size
+                        while bpos <= bend - 6:
+                            ftag = pl[bpos:bpos + 2].hex().upper()
+                            fsize = read_u32(pl, bpos + 2)
+                            if bpos + 6 + fsize > bend:
+                                break
+                            if ftag == '5A1B' and fsize == 4:
+                                root_no_scale_mask = read_u32(pl, bpos + 6)
+                            bpos += 6 + fsize
+                    pos += 6 + sub_size
 
             if children:
                 walk(children, here)
@@ -2269,6 +2297,7 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
     if compact_geometry:
         root_builder._compact_geometry()
     defs_dict['ROOT'] = {'guid': 'ROOT', 'name': 'ROOT_MODEL', 'builder': root_builder,
+                         'no_scale_mask': root_no_scale_mask,
                          'attribute_dictionaries': model_attribute_dicts}
 
     return {

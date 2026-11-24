@@ -564,7 +564,9 @@ pub fn collect_definitions(
                     d.is_group = kind == 1;
                 } else if c.tag == "581B" {
                     for (t, v) in parse_flat(&c.payload) {
-                        if t == "5D1B" && !v.is_empty() {
+                        if t == "5A1B" && v.len() == 4 {
+                            d.no_scale_mask = u32_at(v, 0);
+                        } else if t == "5D1B" && !v.is_empty() {
                             d.always_faces_camera = varint_all(v)? == 1;
                         } else if t == "5E1B" && !v.is_empty() {
                             d.shadows_face_sun = varint_all(v)? == 1;

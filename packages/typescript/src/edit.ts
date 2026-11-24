@@ -170,6 +170,9 @@ export function openExisting(
   const model = parseSkp(buffer);
   const warnings: string[] = [];
   const builder = create();
+  if ((model.root.noScaleMask ?? 0) !== 0) {
+    builder.setDocumentOptions({ noScaleMask: model.root.noScaleMask });
+  }
 
   const materialSlots = replayMaterials(builder, model, warnings);
   const layerSlots = new Map<string, number>();
@@ -191,9 +194,17 @@ export function openExisting(
     // Components, which SketchUp auto-names), so an empty name is common
     // in real files - same reasoning as replayInstance's own name
     // handling below.
-    const db = builder.addComponentDefinition(defn.name, (d) => {
-      replayBody(d, defn, model, materialSlots, layerSlots, warnings, context, defBuilders);
-    });
+    const db = builder.addComponentDefinition(
+      defn.name,
+      (d) => {
+        replayBody(d, defn, model, materialSlots, layerSlots, warnings, context, defBuilders);
+      },
+      {
+        alwaysFacesCamera: defn.alwaysFacesCamera,
+        shadowsFaceSun: defn.shadowsFaceSun,
+        noScaleMask: defn.noScaleMask,
+      }
+    );
     defBuilders.set(defId, db);
   }
 

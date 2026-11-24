@@ -796,6 +796,7 @@ namespace OpenSkp
             public string? Name;
             public bool AlwaysFacesCamera;
             public bool ShadowsFaceSun;
+            public uint NoScaleMask;
             public bool IsImage;
             public bool IsGroup;
             public GeometryBuilder Builder = new GeometryBuilder();
@@ -811,6 +812,7 @@ namespace OpenSkp
                     string? name = null;
                     bool facesCamera = false;
                     bool shadowsFaceSun = false;
+                    uint noScaleMask = 0;
                     bool isImage = false;
                     bool isGroup = false;
                     foreach (var child in el.Children)
@@ -832,7 +834,11 @@ namespace OpenSkp
                                 string subTag = pl[pos].ToString("X2") + pl[pos + 1].ToString("X2");
                                 uint subSize = Tlv.ReadU32(pl, pos + 2);
                                 if (pos + 6 + subSize > pl.Length) break;
-                                if (subTag == "5D1B" && subSize >= 1)
+                                if (subTag == "5A1B" && subSize == 4)
+                                {
+                                    noScaleMask = Tlv.ReadU32(pl, pos + 6);
+                                }
+                                else if (subTag == "5D1B" && subSize >= 1)
                                 {
                                     facesCamera = Tlv.ParseVarInt(pl, pos + 6, (int)subSize) == 1;
                                 }
@@ -864,6 +870,7 @@ namespace OpenSkp
                             Name = name,
                             AlwaysFacesCamera = facesCamera,
                             ShadowsFaceSun = shadowsFaceSun,
+                            NoScaleMask = noScaleMask,
                             IsImage = isImage,
                             IsGroup = isGroup,
                             Builder = builder,

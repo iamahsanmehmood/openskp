@@ -604,6 +604,7 @@ class Definition:
     arcs: Dict[int, ArcCurve] = field(default_factory=dict)
     always_faces_camera: bool = False
     shadows_face_sun: bool = False
+    no_scale_mask: int = 0
     is_image: bool = False
     is_group: bool = False
     attribute_dictionaries: Dict[str, Dict[str, Any]] = field(default_factory=dict)
@@ -851,6 +852,7 @@ class SkpFile:
                 name=d.get("name", "") or "",
                 always_faces_camera=d.get("always_faces_camera", False),
                 shadows_face_sun=d.get("shadows_face_sun", False),
+                no_scale_mask=d.get("no_scale_mask", 0),
                 is_image=d.get("is_image", False),
                 is_group=d.get("is_group", False),
                 attribute_dictionaries=d.get("attribute_dictionaries") or {},

@@ -69,8 +69,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::create::{
     create, AttributeDict, AttributeValue, ComponentDefinitionBuilder, DefinitionHandle,
-    DefinitionOptions, FaceOptions, GuideOptions, InstanceOptions, LayerOptions, Matrix3x3, Point3,
-    SkpBuilder, SkpWriteError, UvCorrespondence,
+    DefinitionOptions, DocumentOptions, FaceOptions, GuideOptions, InstanceOptions, LayerOptions,
+    Matrix3x3, Point3, SkpBuilder, SkpWriteError, UvCorrespondence,
 };
 use crate::errors::SkpParseError;
 use crate::internal::is_legacy;
@@ -820,6 +820,12 @@ impl ReplayContext<'_> {
 fn replay_model(model: &SkpModel) -> Result<OpenExistingResult, SkpWriteError> {
     let mut warnings = Vec::new();
     let mut builder = create();
+    if model.root().no_scale_mask != 0 {
+        builder.set_document_options(&DocumentOptions {
+            no_scale_mask: model.root().no_scale_mask,
+            ..DocumentOptions::default()
+        })?;
+    }
 
     let material_slots = replay_materials(&mut builder, model, &mut warnings)?;
     let layer_slots = replay_layers(&mut builder, model)?;
@@ -850,7 +856,13 @@ fn replay_model(model: &SkpModel) -> Result<OpenExistingResult, SkpWriteError> {
             layer_slots: &layer_slots,
             def_builders: &def_builders,
         };
-        let mut db = builder.add_component_definition(&defn.name, &DefinitionOptions::default())?;
+        let def_options = DefinitionOptions {
+            always_faces_camera: defn.always_faces_camera,
+            shadows_face_sun: defn.shadows_face_sun,
+            no_scale_mask: defn.no_scale_mask,
+            ..DefinitionOptions::default()
+        };
+        let mut db = builder.add_component_definition(&defn.name, &def_options)?;
         ctx.replay_body(&mut db, defn, &mut warnings, &context);
         let handle = db.close()?;
         def_builders.insert(def_id, handle);

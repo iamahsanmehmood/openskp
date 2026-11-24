@@ -177,6 +177,7 @@ class SkpFile {
       name: d.name ?? '',
       alwaysFacesCamera: d.alwaysFacesCamera,
       shadowsFaceSun: d.shadowsFaceSun,
+      noScaleMask: d.noScaleMask,
       isImage: d.isImage,
       isGroup: d.isGroup,
     );

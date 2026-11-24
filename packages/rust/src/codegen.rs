@@ -509,10 +509,20 @@ impl Gen<'_> {
             defn.faces.len(),
             defn.instances.len()
         ));
-        self.push(format!(
-            "    let mut {var_name} = builder.add_component_definition({}, &DefinitionOptions::default())?;",
-            rust_string(def_name)
-        ));
+        if defn.no_scale_mask != 0 {
+            let mask = defn.no_scale_mask;
+            self.push(format!("    let mut {var_name}_opts = DefinitionOptions::default();"));
+            self.push(format!("    {var_name}_opts.no_scale_mask = {mask};"));
+            self.push(format!(
+                "    let mut {var_name} = builder.add_component_definition({}, &{var_name}_opts)?;",
+                rust_string(def_name)
+            ));
+        } else {
+            self.push(format!(
+                "    let mut {var_name} = builder.add_component_definition({}, &DefinitionOptions::default())?;",
+                rust_string(def_name)
+            ));
+        }
         let mut items = self.face_items(defn, &var_name);
         for inst in &defn.instances {
             let Some(child) = inst.ref_idx else {
@@ -714,6 +724,12 @@ pub fn to_rust_code(model: &SkpModel) -> String {
     g.push("#[allow(unused_variables)]");
     g.push("pub fn build() -> Result<Vec<u8>, SkpWriteError> {");
     g.push("    let mut builder = create();");
+    if model.root().no_scale_mask != 0 {
+        let mask = model.root().no_scale_mask;
+        g.push("    let mut document = DocumentOptions::default();");
+        g.push(format!("    document.no_scale_mask = {mask};"));
+        g.push("    builder.set_document_options(&document)?;");
+    }
     g.push("");
     g.emit_materials();
     g.emit_layers();

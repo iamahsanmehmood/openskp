@@ -1141,7 +1141,7 @@ class ArchiveWriter {
 
   /** Close out a CComponentDefinition record: relationship count, GUID,
    * name, timestamp, behavior flags, and a default thumbnail. */
-  writeDefinitionTail(name: string, isGroup = false): number {
+  writeDefinitionTail(name: string, isGroup = false, behavior = 0, noScaleMask = 0): number {
     this.pushU32(0); // nrel: CRelationship count - always 0, not supported
     this.pushU16(0);
     this.pushBytes(randomGuidBytes());
@@ -1149,16 +1149,12 @@ class ArchiveWriter {
     this.writeStr(''); // description - empty in ground truth
     this.writeStr(''); // second name field - empty in ground truth
     this.pushU32(Math.floor(Date.now() / 1000));
-    // 43-byte gap; byte -9 carries the always-faces-camera/shadows-face-sun
-    // behavior flags - both left off, matching neither being exposed yet.
-    // The last u32 is 1 for the definition of a group and 0 for a component's
-    // (what SketchUp's own API reports as SUComponentType_Group).
     const groupFlagPos = this.bytes.length + 39;
-    this.pushZeros(39);
+    this.pushZeros(34);
+    this.bytes.push(behavior & 0xff);
+    this.pushU32(noScaleMask >>> 0);
     this.pushU32(isGroup ? 1 : 0);
     this.writeThumbnail();
-    // where that u32 sits, so a definition first closed as a component can be flagged later, when
-    // it is placed as a group
     return groupFlagPos;
   }
 
@@ -1586,12 +1582,15 @@ export interface DocumentOptions {
   lengthPrecision?: number;
   /** Native style item IDs and scalar values (colors are packed ABGR uint32 values). */
   styleItems?: Record<number, number> | Map<number, number>;
+  /** Root model scale-grip suppression mask, used when a file is loaded as a component. */
+  noScaleMask?: number;
 }
 
 interface NormalizedDocumentOptions {
   lengthUnit: number;
   lengthPrecision: number;
   styleItems: Map<number, number>;
+  noScaleMask: number;
 }
 
 const RENDERING_OPTION_FIELDS: ReadonlyArray<[number, number, boolean]> = [
@@ -1625,6 +1624,7 @@ function styleU32(v: number): number {
 }
 
 function patchDocumentPrefix(prefix: number[], options: NormalizedDocumentOptions): void {
+  writeU32At(prefix, 2008, options.noScaleMask);
   writeU32At(prefix, 2327, options.lengthPrecision);
   writeU32At(prefix, 2360, 0); // LengthFormat: decimal
   writeU32At(prefix, 2389, options.lengthUnit);
@@ -1758,6 +1758,9 @@ export interface AddGroupInstanceOptions {
 export interface AddComponentDefinitionOptions {
   attributes?: AttributeDict;
   attributeDictName?: string;
+  alwaysFacesCamera?: boolean;
+  shadowsFaceSun?: boolean;
+  noScaleMask?: number;
 }
 
 export interface AddGroupOptions {
@@ -1807,6 +1810,10 @@ export class ComponentDefinitionBuilder {
   private closed = false;
   private groupPlacement?: GroupPlacement;
   private groupFlagPos?: number;
+  /** @internal */
+  _behavior = 0;
+  /** @internal */
+  _noScaleMask = 0;
 
   /** @internal */
   constructor(skp: SkpBuilder, slot: number, name: string, countPatchPos: number, groupPlacement?: GroupPlacement) {
@@ -1957,7 +1964,12 @@ export class ComponentDefinitionBuilder {
     }
     const writer = this._skp._definitionWriter();
     this._skp._patchDefinitionCount(this.countPatchPos, this.newEntityCount);
-    this.groupFlagPos = writer.writeDefinitionTail(this.name, this.groupPlacement !== undefined);
+    this.groupFlagPos = writer.writeDefinitionTail(
+      this.name,
+      this.groupPlacement !== undefined,
+      this._behavior,
+      this._noScaleMask
+    );
     this.closed = true;
     this._skp._clearOpenDefinition();
     if (this.groupPlacement !== undefined) {
@@ -2067,7 +2079,11 @@ export class SkpBuilder {
         styleItems.set(Number(k), v);
       }
     }
-    this.documentOptions = { lengthUnit, lengthPrecision, styleItems };
+    const noScaleMask = options.noScaleMask ?? 0;
+    if (!Number.isInteger(noScaleMask) || noScaleMask < 0 || noScaleMask > 0xffffffff) {
+      throw new SkpWriteError('noScaleMask is out of range');
+    }
+    this.documentOptions = { lengthUnit, lengthPrecision, styleItems, noScaleMask };
   }
 
   addMaterial(name: string, rgba: readonly number[], opacity?: number): number {
@@ -2249,8 +2265,14 @@ export class SkpBuilder {
   addComponentDefinition(
     name: string, build: (def: ComponentDefinitionBuilder) => void, options: AddComponentDefinitionOptions = {}
   ): ComponentDefinitionBuilder {
+    const noScaleMask = options.noScaleMask ?? 0;
+    if (!Number.isInteger(noScaleMask) || noScaleMask < 0 || noScaleMask > 0xffffffff) {
+      throw new SkpWriteError('noScaleMask is out of range');
+    }
     const attributeDicts = attributeDictsFrom(options.attributes, options.attributeDictName ?? 'attributes');
     const def = this.startDefinition(name, 'addComponentDefinition', undefined, attributeDicts);
+    def._behavior = (options.alwaysFacesCamera ? 1 : 0) | (options.shadowsFaceSun ? 2 : 0);
+    def._noScaleMask = noScaleMask;
     build(def);
     def._close();
     return def;

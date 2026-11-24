@@ -263,6 +263,7 @@ function parseToRaw(buffer: ArrayBuffer, options?: ParseOptions): ParsedRawData 
   const vertexPositions = new Map<string, [number, number, number]>();
   const instanceWorld = new Map<string, number[] | null>();
   let pageNode: TlvNode | null = null;
+  let rootNoScaleMask = 0;
 
   for (const { index, total, node: el } of iterTopLevelLazy(modelData, 0, modelData.length)) {
     try {
@@ -273,6 +274,25 @@ function parseToRaw(buffer: ArrayBuffer, options?: ParseOptions): ParsedRawData 
       scanInstanceTransforms(el, instanceWorld);
       if (pageNode === null) {
         pageNode = findPageNode(el);
+      }
+      if (el.tag === '0E02') {
+        const pl = el.payload;
+        for (let pos = 0; pos <= pl.length - 6; ) {
+          const subSize = readU32(pl, pos + 2);
+          if (pos + 6 + subSize > pl.length) break;
+          if (pl[pos] === 0x58 && pl[pos + 1] === 0x1b) {
+            const bend = pos + 6 + subSize;
+            for (let bpos = pos + 6; bpos <= bend - 6; ) {
+              const fsize = readU32(pl, bpos + 2);
+              if (bpos + 6 + fsize > bend) break;
+              if (pl[bpos] === 0x5a && pl[bpos + 1] === 0x1b && fsize === 4) {
+                rootNoScaleMask = readU32(pl, bpos + 6);
+              }
+              bpos += 6 + fsize;
+            }
+          }
+          pos += 6 + subSize;
+        }
       }
       if (el.tag === 'F601') {
         extractGeometryFromNodes(el.children, rootBuilder, options);
@@ -333,6 +353,7 @@ function parseToRaw(buffer: ArrayBuffer, options?: ParseOptions): ParsedRawData 
     isGroup: false,
     alwaysFacesCamera: false,
     shadowsFaceSun: false,
+    noScaleMask: rootNoScaleMask,
     builder: rootBuilder,
   });
 

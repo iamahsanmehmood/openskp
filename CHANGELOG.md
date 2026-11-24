@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Python, TypeScript, .NET, Dart & Rust: preserve native component and root `no_scale_mask` behavior (#519, #285)
+
+- Ports C++'s native scale-grip suppression mask (`#519`) across Python, TypeScript, .NET, Dart and Rust: exposes `Definition.no_scale_mask` (`noScaleMask`, `NoScaleMask`) on component definitions and `SkpModel.root` from both VFF (`7C15 > 581B > 5A1B` and `0E02 > 581B > 5A1B`) and classic MFC (`ver >= 7` definition tail `gap[-8:-4]` and root behavior after `End-Of-Version-Map` + optional `CDib` PNG thumbnail).
+- Preserves `no_scale_mask` (plus `always_faces_camera` / `shadows_face_sun` definition behavior flags) across the legacy v17 writer (`DocumentOptions.no_scale_mask` at scaffold offset `2008` and `add_component_definition`), `open_existing` (`openExisting`, `OpenExisting`) replay, and source-code generation (`to_python_code`, `toTypeScriptCode`, `ToCSharpCode`, `toDartCode`, `to_rust_code`).
+
 ### Added — Python, TypeScript, .NET & Dart: writer `set_document_options`, 8-byte persistent-id counter, and collinear `auto_triangulate` fan handling (#477, #285)
 
 - Ports C++ and Rust's `DocumentOptions` / `set_document_options` (`setDocumentOptions`, `SetDocumentOptions`, `#477`) across Python, TypeScript, .NET and Dart: sets decimal length/area/volume display units (`0..5`), display precision (`0..6`), current rendering options, and working/saved style item tables in the v17 scaffold without scaling model geometry.

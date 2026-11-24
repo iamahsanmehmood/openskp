@@ -311,6 +311,7 @@ namespace OpenSkp
         public Dictionary<long, ArcCurve> Arcs { get; set; } = new Dictionary<long, ArcCurve>();
         public bool AlwaysFacesCamera { get; set; }
         public bool ShadowsFaceSun { get; set; }
+        public uint NoScaleMask { get; set; }
         public bool IsImage { get; set; }
         /// <summary>True when SketchUp made this definition for a group rather than a
         /// component (what its own API reports as <c>SUComponentType_Group</c>). Groups and

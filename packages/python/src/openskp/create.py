@@ -1361,7 +1361,7 @@ class _ArchiveWriter:
         self.buf += _u32(0)  # placeholder entity count, patched by the caller
         return slot, count_patch_pos
 
-    def write_definition_tail(self, name: str, behavior: int = 0, is_group: bool = False) -> int:
+    def write_definition_tail(self, name: str, behavior: int = 0, is_group: bool = False, no_scale_mask: int = 0) -> int:
         """Close out a ``CComponentDefinition`` record: relationship count,
         GUID, name, timestamp, behavior flags, and a default thumbnail.
 
@@ -1387,6 +1387,7 @@ class _ArchiveWriter:
         # _read_definition reads exactly that byte).
         gap = bytearray(43)
         gap[43 - 9] = behavior & 0xFF
+        struct.pack_into("<I", gap, 43 - 8, no_scale_mask & 0xFFFFFFFF)
         gap[43 - 4] = 1 if is_group else 0
         group_flag_pos = len(self.buf) + 43 - 4
         self.buf += bytes(gap)
@@ -1999,6 +2000,7 @@ class DocumentOptions:
     length_unit: int = 0
     length_precision: int = 3
     style_items: Dict[int, float] = dataclasses.field(default_factory=dict)
+    no_scale_mask: int = 0
 
 
 _RENDERING_OPTION_FIELDS: Tuple[Tuple[int, int, bool], ...] = (
@@ -2017,6 +2019,7 @@ _RENDERING_OPTION_FIELDS: Tuple[Tuple[int, int, bool], ...] = (
 
 
 def _patch_document_prefix(prefix: bytearray, options: DocumentOptions) -> None:
+    struct.pack_into("<I", prefix, 2008, options.no_scale_mask & 0xFFFFFFFF)
     struct.pack_into("<I", prefix, 2327, options.length_precision)
     struct.pack_into("<I", prefix, 2360, 0)  # LengthFormat: decimal
     struct.pack_into("<I", prefix, 2389, options.length_unit)
@@ -2078,6 +2081,7 @@ class ComponentDefinitionBuilder:
         #: SketchUp's behavior byte, set by `SkpBuilder.add_component_definition`
         #: (bit 0 always-faces-camera, bit 1 shadows-face-sun).
         self.behavior = 0
+        self.no_scale_mask = 0
         #: Offset of this definition's group flag in the definition buffer, set when
         #: it closes; `add_group_instance` flags it as a group's definition.
         self._group_flag_pos: Optional[int] = None
@@ -2424,7 +2428,8 @@ class ComponentDefinitionBuilder:
         writer = self._skp._definition_writer
         struct.pack_into("<I", writer.buf, self._count_patch_pos, self._new_entity_count)
         self._group_flag_pos = writer.write_definition_tail(
-            self.name, behavior=self.behavior, is_group=self._group_placement is not None)
+            self.name, behavior=self.behavior, is_group=self._group_placement is not None,
+            no_scale_mask=self.no_scale_mask)
         self._closed = True
         self._skp._open_definition = None
         if self._group_placement is not None:
@@ -2559,6 +2564,7 @@ class SkpBuilder:
         length_unit: int = 0,
         length_precision: int = 3,
         style_items: Optional[Dict[int, float]] = None,
+        no_scale_mask: int = 0,
     ) -> None:
         """Set decimal display units and working/saved style values without
         scaling geometry."""
@@ -2567,14 +2573,18 @@ class SkpBuilder:
                 length_unit=options.length_unit,
                 length_precision=options.length_precision,
                 style_items=dict(options.style_items),
+                no_scale_mask=options.no_scale_mask,
             )
             if options is not None
             else DocumentOptions(
                 length_unit=length_unit,
                 length_precision=length_precision,
                 style_items=dict(style_items) if style_items is not None else {},
+                no_scale_mask=no_scale_mask,
             )
         )
+        if isinstance(opts.no_scale_mask, bool) or not (0 <= opts.no_scale_mask <= 0xFFFFFFFF):
+            raise SkpWriteError("no_scale_mask is out of range")
         if (
             isinstance(opts.length_unit, bool)
             or isinstance(opts.length_precision, bool)
@@ -2858,6 +2868,7 @@ class SkpBuilder:
         attribute_dicts: Sequence[Tuple[str, Dict[str, object]]] = (),
         always_faces_camera: bool = False,
         shadows_face_sun: bool = False,
+        no_scale_mask: int = 0,
     ) -> "ComponentDefinitionBuilder":
         """Start a new reusable component definition. Use the returned
         object as a context manager, adding its geometry via `.add_face`
@@ -2888,9 +2899,12 @@ class SkpBuilder:
         several dictionaries at once - real SketchUp entities routinely
         carry more than one. Passing both raises.
         """
+        if isinstance(no_scale_mask, bool) or not (0 <= no_scale_mask <= 0xFFFFFFFF):
+            raise SkpWriteError("no_scale_mask is out of range")
         resolved_attribute_dicts = _resolve_attribute_dicts(attributes, attribute_dict_name, attribute_dicts)
         db = self._start_definition(name, "add_component_definition", attribute_dicts=resolved_attribute_dicts)
         db.behavior = (1 if always_faces_camera else 0) | (2 if shadows_face_sun else 0)
+        db.no_scale_mask = no_scale_mask
         return db
 
     def add_group(

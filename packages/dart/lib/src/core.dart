@@ -135,6 +135,7 @@ class Core {
     final vertexPositions = <String, (double, double, double)>{};
     final instanceWorld = <String, List<double>>{};
     TlvNode? pageNode;
+    var rootNoScaleMask = 0;
 
     for (final (index, total, el) in Tlv.iterTopLevelLazy(
         modelDat, 0, modelDat.length, Tlv.containerTags)) {
@@ -145,6 +146,17 @@ class Core {
         scanVertexPositions(el, vertexPositions);
         scanInstanceTransforms(el, instanceWorld);
         pageNode ??= findPageNode(el);
+        if (el.tag == '0E02') {
+          for (final (t, behavior) in Tlv.parseFlat(el.payload)) {
+            if (t == '581B') {
+              for (final (field, val) in Tlv.parseFlat(behavior)) {
+                if (field == '5A1B' && val.length == 4) {
+                  rootNoScaleMask = Tlv.readU32(val, 0);
+                }
+              }
+            }
+          }
+        }
         if (el.tag == 'F601') {
           Geometry.extractGeometryFromNodes(el.children, rootBuilder);
         }
@@ -225,7 +237,11 @@ class Core {
       ..materialsByFolder.addAll(materialsByFolder)
       ..styles.addAll(styles)
       ..defsDict.addAll(defsDictRaw)
-      ..root =
-          RawDefinition(guid: 'ROOT', name: 'ROOT_MODEL', builder: rootBuilder);
+      ..root = RawDefinition(
+        guid: 'ROOT',
+        name: 'ROOT_MODEL',
+        noScaleMask: rootNoScaleMask,
+        builder: rootBuilder,
+      );
   }
 }

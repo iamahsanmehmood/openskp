@@ -1746,6 +1746,14 @@ function readDefinition(ar: Archive, r: R): any {
   // component-behavior flags sit 9 bytes before the thumbnail:
   // bit 0 = always-faces-camera, bit 1 = shadows-face-sun
   const behavior = gap.length >= 9 ? gap[gap.length - 9] : 0;
+  const noScaleMask =
+    ar.ver >= 7 && gap.length >= 8
+      ? (gap[gap.length - 8] |
+          (gap[gap.length - 7] << 8) |
+          (gap[gap.length - 6] << 16) |
+          (gap[gap.length - 5] << 24)) >>>
+        0
+      : 0;
   // the last u32 before the thumbnail is 1 for the definition of a group and
   // 0 for a component's (what SketchUp's SUComponentDefinitionGetType
   // reports), measured against SketchUp 2025's own counts
@@ -1760,6 +1768,7 @@ function readDefinition(ar: Archive, r: R): any {
     ents,
     faces_camera: Boolean(behavior & 1),
     shadows_face_sun: Boolean(behavior & 2),
+    no_scale_mask: noScaleMask,
     is_group: isGroup,
   };
 }
@@ -2634,6 +2643,26 @@ function fillBuilder(builder: LegacyBuilder, ents: [number, string | null, any][
   }
 }
 
+function readLegacyRootNoScaleMask(data: Uint8Array, ver: number): number {
+  if (ver < 7) return 0;
+  const label = 'End-Of-Version-Map';
+  const marker = new Uint8Array(label.length * 2);
+  for (let i = 0; i < label.length; i++) marker[i * 2] = label.charCodeAt(i);
+  const found = findBytes(data, marker, 0, data.length);
+  if (found < 0) return 0;
+  const start = found + marker.length;
+  let scan = start;
+  if (findBytes(data, new Uint8Array([0x43, 0x44, 0x69, 0x62]), start, Math.min(data.length, start + 64)) >= 0) {
+    const endChunk = findBytes(data, new Uint8Array([0x49, 0x45, 0x4e, 0x44]), start, data.length);
+    if (endChunk >= 0) scan = Math.min(data.length, endChunk + 8);
+  }
+  const at = findBytes(data, new Uint8Array([0xff, 0xfe, 0xff]), scan, Math.min(data.length, scan + 96));
+  if (at >= start + 4) {
+    return (data[at - 4] | (data[at - 3] << 8) | (data[at - 2] << 16) | (data[at - 1] << 24)) >>> 0;
+  }
+  return 0;
+}
+
 /** Parse a classic MFC .skp into the shared raw-parse shape, which both
  * parseSkp() and buildScene() convert onward from exactly like the VFF
  * path. */
@@ -2764,6 +2793,7 @@ export function parseLegacyToRaw(data: Uint8Array, options?: ParseOptions): Pars
           isGroup: d.is_group || false,
           alwaysFacesCamera: d.faces_camera || false,
           shadowsFaceSun: d.shadows_face_sun || false,
+          noScaleMask: d.no_scale_mask ?? 0,
           builder: b,
         });
         processed++;
@@ -2790,6 +2820,7 @@ export function parseLegacyToRaw(data: Uint8Array, options?: ParseOptions): Pars
     isGroup: false,
     alwaysFacesCamera: false,
     shadowsFaceSun: false,
+    noScaleMask: readLegacyRootNoScaleMask(data, ar.ver),
     builder: rootBuilder,
   });
 

@@ -83,6 +83,7 @@ export interface ParsedDefinition {
   isGroup?: boolean;
   alwaysFacesCamera: boolean;
   shadowsFaceSun?: boolean;
+  noScaleMask?: number;
   sectionPlanes?: { plane: [number, number, number, number]; name: string; label: string; hidden: boolean }[];
   texts?: { text: string; hidden: boolean }[];
   dimensions?: { text: string; hidden: boolean }[];
@@ -546,6 +547,7 @@ export function collectDefs(
       let isGroup = false;
       let facesCamera = false;
       let shadowsFaceSun = false;
+      let noScaleMask = 0;
       for (const child of el.children) {
         if (child.tag === '7D15' && child.payload.length === 16) {
           let hex = '';
@@ -572,14 +574,15 @@ export function collectDefs(
         } else if (child.tag === '581B') {
           // Component behavior flags: sub-TLV 5D1B == 1 marks "always
           // faces camera" (2D people/tree cut-outs); its companion 5E1B
-          // is "shadows face sun".
+          // is "shadows face sun"; 5A1B is the u32 scale-grip mask.
           let pos = 0;
           const pl = child.payload;
           while (pos <= pl.length - 6) {
             const subSize = readU32(pl, pos + 2);
             if (pos + 6 + subSize > pl.length) break;
-            // Tag 0x5d 0x1b contains component definition flags (1 = always faces camera)
-            if (pl[pos] === 0x5d && pl[pos + 1] === 0x1b && subSize >= 1) {
+            if (pl[pos] === 0x5a && pl[pos + 1] === 0x1b && subSize === 4) {
+              noScaleMask = readU32(pl, pos + 6);
+            } else if (pl[pos] === 0x5d && pl[pos + 1] === 0x1b && subSize >= 1) {
               facesCamera = parseVarInt(pl, pos + 6, subSize) === 1;
             } else if (pl[pos] === 0x5e && pl[pos + 1] === 0x1b && subSize >= 1) {
               shadowsFaceSun = parseVarInt(pl, pos + 6, subSize) === 1;
@@ -599,6 +602,7 @@ export function collectDefs(
           isGroup,
           alwaysFacesCamera: facesCamera,
           shadowsFaceSun,
+          noScaleMask,
           builder,
         });
       }

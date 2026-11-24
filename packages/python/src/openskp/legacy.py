@@ -1925,6 +1925,9 @@ def _read_definition(ar, r):
     # component-behavior flags sit 9 bytes before the thumbnail:
     # bit 0 = always-faces-camera, bit 1 = shadows-face-sun
     behavior = gap[-9] if len(gap) >= 9 else 0
+    # SDK-generated legacy definitions store the u32 scale-grip mask immediately
+    # before the final definition-kind u32 (8 bytes before CThumbnail).
+    no_scale_mask = struct.unpack_from('<I', gap, len(gap) - 8)[0] if ar.ver >= 7 and len(gap) >= 8 else 0
     # the last u32 before the thumbnail is 1 for the definition of a group and
     # 0 for a component's (what SketchUp's SUComponentDefinitionGetType
     # reports). Checked against SketchUp 2025's own counts on gondola_v20
@@ -1936,7 +1939,9 @@ def _read_definition(ar, r):
     ar.read_object(r, expect='CThumbnail')
     return {'k': 'definition', 'name': name, 'guid': guid.hex().upper(),
             'ents': ents, 'faces_camera': bool(behavior & 1),
-            'shadows_face_sun': bool(behavior & 2), 'is_group': is_group,
+            'shadows_face_sun': bool(behavior & 2),
+            'no_scale_mask': no_scale_mask,
+            'is_group': is_group,
             'attrs': pre['attrs']}
 
 
@@ -2622,6 +2627,26 @@ def _premodel_attribute_dictionaries(data: bytes) -> Dict[str, Dict[str, Any]]:
     return out
 
 
+def _root_no_scale_mask(data: bytes, ver: int) -> int:
+    """Read the legacy root CComponentBehavior scale-grip mask (ver >= 7)."""
+    if ver < 7:
+        return 0
+    marker = "End-Of-Version-Map".encode("utf-16-le")
+    found = data.find(marker)
+    if found < 0:
+        return 0
+    start = found + len(marker)
+    scan = start
+    if b"CDib" in data[start : min(len(data), start + 64)]:
+        end_chunk = data.find(b"IEND", start)
+        if end_chunk >= 0:
+            scan = min(len(data), end_chunk + 8)
+    at = data.find(b"\xff\xfe\xff", scan, min(len(data), scan + 96))
+    if at >= start + 4:
+        return struct.unpack_from("<I", data, at - 4)[0]
+    return 0
+
+
 def full_parse_legacy(skp_path: str) -> Dict[str, Any]:
     """Parse a classic MFC ``.skp`` into the ``full_parse`` dict shape."""
     t0 = time.monotonic()
@@ -2723,6 +2748,7 @@ def full_parse_legacy(skp_path: str) -> Dict[str, Any]:
                                 'is_group': d.get('is_group', False),
                                 'always_faces_camera': d.get('faces_camera', False),
                                 'shadows_face_sun': d.get('shadows_face_sun', False),
+                                'no_scale_mask': d.get('no_scale_mask', 0),
                                 'attribute_dictionaries':
                                     _extract_legacy_attribute_dictionaries(d.get('attrs')),
                                 'builder': b}
@@ -2744,6 +2770,7 @@ def full_parse_legacy(skp_path: str) -> Dict[str, Any]:
         model_attribute_dicts = {}
     defs_dict['ROOT'] = {'guid': 'ROOT', 'name': 'ROOT_MODEL',
                          'builder': root_builder,
+                         'no_scale_mask': _root_no_scale_mask(data, ar.ver),
                          'attribute_dictionaries': model_attribute_dicts}
     try:
         face_colors = _model_face_colors(data, ar.ver)

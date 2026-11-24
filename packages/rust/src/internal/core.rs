@@ -661,6 +661,17 @@ pub fn full_parse(data: &[u8], o: &ParseOptions) -> Result<RawParsed, SkpParseEr
                     }
                 }
             }
+            if first.tag == "0E02" {
+                for (t, behavior) in parse_flat(&first.payload) {
+                    if t == "581B" {
+                        for (field, val) in parse_flat(behavior) {
+                            if field == "5A1B" && val.len() == 4 {
+                                p.root.no_scale_mask = u32_at(val, 0);
+                            }
+                        }
+                    }
+                }
+            }
             if first.tag == "0602" {
                 for (t, catalog) in parse_flat(&first.payload) {
                     if t == "7869" {

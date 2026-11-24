@@ -72,6 +72,10 @@ namespace OpenSkp
             Push("    public static byte[] Build()");
             Push("    {");
             Push("        var builder = SkpCreate.NewFile();");
+            if (model.Root.NoScaleMask != 0)
+            {
+                Push($"        builder.SetDocumentOptions(new DocumentOptions {{ NoScaleMask = {model.Root.NoScaleMask}u }});");
+            }
             Push("");
             Push($"        // --- Materials ({model.Materials.Count}) ---");
             for (int i = 0; i < model.Materials.Count; i++)
@@ -247,7 +251,8 @@ namespace OpenSkp
 
                 Push("");
                 Push($"        // {CsComment(defn.Name)} - {defn.Faces.Count} faces, {defn.Instances.Count} nested instances");
-                Push($"        var {varName} = builder.AddComponentDefinition({CsString(defName)});");
+                string defMaskArg = defn.NoScaleMask != 0 ? $", noScaleMask: {defn.NoScaleMask}u" : "";
+                Push($"        var {varName} = builder.AddComponentDefinition({CsString(defName)}{defMaskArg});");
                 Push($"        using ({varName})");
                 Push("        {");
                 EmitFaces(defn, varName, "            ");

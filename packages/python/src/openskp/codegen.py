@@ -123,11 +123,16 @@ def to_python_code(model: SkpModel) -> str:
     push("import os")
     push("import tempfile")
     push("")
-    push("from openskp import create")
+    if model.root.no_scale_mask != 0:
+        push("from openskp import DocumentOptions, create")
+    else:
+        push("from openskp import create")
     push("")
     push("")
     push("def build():")
     push("    builder = create()")
+    if model.root.no_scale_mask != 0:
+        push(f"    builder.set_document_options(DocumentOptions(no_scale_mask={model.root.no_scale_mask}))")
     push("")
     push(f"    # --- Materials ({len(model.materials)}) ---")
     for i, mat in enumerate(model.materials):
@@ -301,7 +306,8 @@ def to_python_code(model: SkpModel) -> str:
 
         push("")
         push(f"    # {defn.name!r} - {len(defn.faces)} faces, {len(defn.instances)} nested instances")
-        push(f"    with builder.add_component_definition({def_name!r}) as {var_name}:")
+        def_opts = f", no_scale_mask={defn.no_scale_mask}" if defn.no_scale_mask != 0 else ""
+        push(f"    with builder.add_component_definition({def_name!r}{def_opts}) as {var_name}:")
         before = len(lines)
         emit_faces(defn, var_name, "        ")
         for inst in defn.instances:

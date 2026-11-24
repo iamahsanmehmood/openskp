@@ -161,6 +161,9 @@ String toDartCode(SkpModel model) {
   push('');
   push('List<int> build() {');
   push('  final builder = create();');
+  if (model.root.noScaleMask != 0) {
+    push('  builder.setDocumentOptions(const DocumentOptions(noScaleMask: ${model.root.noScaleMask}));');
+  }
   push('');
   push('  // --- Materials (${model.materials.length}) ---');
   for (var i = 0; i < model.materials.length; i++) {
@@ -330,6 +333,7 @@ String toDartCode(SkpModel model) {
 
     push('');
     push('  // ${_dartComment(defn.name)} - ${defn.faces.length} faces, ${defn.instances.length} nested instances');
+    final defOpts = defn.noScaleMask != 0 ? ', noScaleMask: ${defn.noScaleMask}' : '';
     push("  final $varName = builder.addComponentDefinition(${_dartString(defName)}, ($varName) {");
     emitFaces(defn, varName, '    ');
     for (final inst in defn.instances) {
@@ -345,7 +349,7 @@ String toDartCode(SkpModel model) {
       final opts = ['translation: ${pointStr(t)}', 'matrix3x3: ${matrix3x3Str(m9)}', ...extra];
       push('    $varName.addInstance($childVar, ${opts.join(', ')});');
     }
-    push('  });');
+    push('  }$defOpts);');
     return varName;
   }
 

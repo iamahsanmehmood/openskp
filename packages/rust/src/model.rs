@@ -765,6 +765,8 @@ pub struct Definition {
     pub construction_points: Vec<ConstructionPoint>,
     pub always_faces_camera: bool,
     pub shadows_face_sun: bool,
+    /// Native scale-grip suppression bits: X, Y, Z, XZ, YZ, XY, XYZ (bits 0-6).
+    pub no_scale_mask: u32,
     /// The analytic arc of every curve that is one, keyed by curve id.
     pub arcs: BTreeMap<EntityId, ArcCurve>,
     /// Backs an Image entity.

@@ -115,6 +115,10 @@ namespace OpenSkp
             var model = SkpFile.Open(path);
             var warnings = new List<string>();
             var builder = SkpCreate.NewFile();
+            if (model.Root.NoScaleMask != 0)
+            {
+                builder.SetDocumentOptions(new DocumentOptions { NoScaleMask = model.Root.NoScaleMask });
+            }
 
             var materialSlots = ReplayMaterials(builder, model, warnings);
             var layerSlots = new Dictionary<string, int>();
@@ -141,7 +145,11 @@ namespace OpenSkp
                 // SketchUp auto-names), so an empty name is common in real
                 // files - same reasoning as ReplayInstance's own name
                 // handling below.
-                var db = builder.AddComponentDefinition(defn.Name);
+                var db = builder.AddComponentDefinition(
+                    defn.Name,
+                    alwaysFacesCamera: defn.AlwaysFacesCamera,
+                    shadowsFaceSun: defn.ShadowsFaceSun,
+                    noScaleMask: defn.NoScaleMask);
                 ReplayBody(db, defn, model, materialSlots, layerSlots, warnings, context, defBuilders);
                 db.Dispose();
                 defBuilders[defId] = db;

@@ -395,6 +395,7 @@ class Definition {
   final Map<int, ArcCurve> arcs = {};
   final bool alwaysFacesCamera;
   final bool shadowsFaceSun;
+  final int noScaleMask;
   final bool isImage;
 
   /// True when SketchUp made this definition for a group rather than a
@@ -412,6 +413,7 @@ class Definition {
     this.name = '',
     this.alwaysFacesCamera = false,
     this.shadowsFaceSun = false,
+    this.noScaleMask = 0,
     this.isImage = false,
     this.isGroup = false,
   });

@@ -1388,7 +1388,12 @@ class _ArchiveWriter {
 
   /// Close out a `CComponentDefinition` record: relationship count, GUID,
   /// name, timestamp, behavior flags, and a default thumbnail.
-  int writeDefinitionTail(String name, {bool isGroup = false}) {
+  int writeDefinitionTail(
+    String name, {
+    bool isGroup = false,
+    int behavior = 0,
+    int noScaleMask = 0,
+  }) {
     buf.addAll(_u32(0)); // nrel: CRelationship count - always 0, not supported
     buf.addAll(_u16(0));
     buf.addAll(_uuid4Bytes());
@@ -1396,16 +1401,12 @@ class _ArchiveWriter {
     _writeStr(''); // description - empty in ground truth
     _writeStr(''); // second name field - empty in ground truth
     buf.addAll(_u32(DateTime.now().toUtc().millisecondsSinceEpoch ~/ 1000));
-    // 43-byte gap; byte -9 carries the always-faces-camera/shadows-face-sun
-    // behavior flags, both left off (neither exposed by this writer yet). The
-    // last u32 is 1 for the definition of a group and 0 for a component's (what
-    // SketchUp's own API reports as SUComponentType_Group).
     final groupFlagPos = buf.length + 39;
-    buf.addAll(List<int>.filled(39, 0));
+    buf.addAll(List<int>.filled(34, 0));
+    buf.add(behavior & 0xFF);
+    buf.addAll(_u32(noScaleMask));
     buf.addAll(_u32(isGroup ? 1 : 0));
     writeThumbnail();
-    // where that u32 sits, so a definition first closed as a component can be flagged later, when
-    // it is placed as a group
     return groupFlagPos;
   }
 
@@ -1920,10 +1921,14 @@ class DocumentOptions {
   /// `uint32` values).
   final Map<int, double> styleItems;
 
+  /// Root model behavior, used when a file is loaded as a component.
+  final int noScaleMask;
+
   const DocumentOptions({
     this.lengthUnit = 0,
     this.lengthPrecision = 3,
     this.styleItems = const {},
+    this.noScaleMask = 0,
   });
 }
 
@@ -1950,6 +1955,7 @@ void _patchU64(List<int> buf, int pos, int v) {
 int _styleU32(double v) => v.truncate() & 0xFFFFFFFF;
 
 void _patchDocumentPrefix(List<int> prefix, DocumentOptions options) {
+  _patchU32(prefix, 2008, options.noScaleMask);
   _patchU32(prefix, 2327, options.lengthPrecision);
   _patchU32(prefix, 2360, 0); // LengthFormat: decimal
   _patchU32(prefix, 2389, options.lengthUnit);
@@ -2070,6 +2076,8 @@ class ComponentDefinitionBuilder implements GeometryHost {
   /// call.
   final GroupPlacement? _groupPlacement;
   int? _groupFlagPos;
+  int _behavior = 0;
+  int _noScaleMask = 0;
 
   ComponentDefinitionBuilder._(this._skp, this.slot, this.name, this._countPatchPos, this._groupPlacement);
 
@@ -2336,7 +2344,12 @@ class ComponentDefinitionBuilder implements GeometryHost {
     }
     final writer = _skp._definitionWriter!;
     _patchU32(writer.buf, _countPatchPos, _newEntityCount);
-    _groupFlagPos = writer.writeDefinitionTail(name, isGroup: _groupPlacement != null);
+    _groupFlagPos = writer.writeDefinitionTail(
+      name,
+      isGroup: _groupPlacement != null,
+      behavior: _behavior,
+      noScaleMask: _noScaleMask,
+    );
     _closed = true;
     _skp._openDefinition = null;
     final gp = _groupPlacement;
@@ -2426,6 +2439,9 @@ class SkpBuilder implements GeometryHost {
         options.lengthPrecision > 6) {
       throw SkpWriteError('invalid decimal display units or precision');
     }
+    if (options.noScaleMask < 0 || options.noScaleMask > 0xFFFFFFFF) {
+      throw SkpWriteError('noScaleMask is out of range');
+    }
     for (final v in options.styleItems.values) {
       if (!v.isFinite || v < -2147483648.0 || v > 4294967295.0) {
         throw SkpWriteError('style scalar is out of range');
@@ -2435,6 +2451,7 @@ class SkpBuilder implements GeometryHost {
       lengthUnit: options.lengthUnit,
       lengthPrecision: options.lengthPrecision,
       styleItems: Map<int, double>.from(options.styleItems),
+      noScaleMask: options.noScaleMask,
     );
   }
 
@@ -2716,9 +2733,17 @@ class SkpBuilder implements GeometryHost {
     void Function(ComponentDefinitionBuilder def) body, {
     Map<String, Object>? attributes,
     String attributeDictName = 'attributes',
+    bool alwaysFacesCamera = false,
+    bool shadowsFaceSun = false,
+    int noScaleMask = 0,
   }) {
+    if (noScaleMask < 0 || noScaleMask > 0xFFFFFFFF) {
+      throw SkpWriteError('noScaleMask is out of range');
+    }
     final attributeDicts = _attrDicts(attributes, attributeDictName);
     final comp = _startDefinition(name, 'addComponentDefinition', attributeDicts: attributeDicts);
+    comp._behavior = (alwaysFacesCamera ? 1 : 0) | (shadowsFaceSun ? 2 : 0);
+    comp._noScaleMask = noScaleMask;
     body(comp);
     comp._close();
     return comp;

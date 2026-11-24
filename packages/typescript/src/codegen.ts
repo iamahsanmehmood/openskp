@@ -105,6 +105,9 @@ export function toTypeScriptCode(model: SkpModel): string {
   push(``);
   push(`export function build() {`);
   push(`  const builder = create();`);
+  if ((model.root.noScaleMask ?? 0) !== 0) {
+    push(`  builder.setDocumentOptions({ noScaleMask: ${model.root.noScaleMask} });`);
+  }
   push(``);
   push(`  // --- Materials (${model.materials.length}) ---`);
   for (const mat of model.materials) {
@@ -355,7 +358,7 @@ export function toTypeScriptCode(model: SkpModel): string {
       const optsStr = [`translation: ${pointStr(t as [number, number, number])}`, `matrix3x3: ${matrix3x3Str(m9)}`, ...extra].join(', ');
       push(`    ${varName}.addInstance(${childVar}, { ${optsStr} });`);
     }
-    push(`  });`);
+    push(`  }${(def.noScaleMask ?? 0) !== 0 ? `, { noScaleMask: ${def.noScaleMask} }` : ''});`);
     return varName;
   }
 

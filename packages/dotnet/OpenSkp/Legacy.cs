@@ -817,6 +817,7 @@ namespace OpenSkp
         public List<(int Slot, string? Name, object? Value)> Ents = new List<(int, string?, object?)>();
         public bool FacesCamera;
         public bool ShadowsFaceSun;
+        public uint NoScaleMask;
         public bool IsGroup;
     }
     internal sealed class InstanceRec
@@ -2035,6 +2036,7 @@ namespace OpenSkp
             }
             var gap = r.Raw(tpos.Value - r.Pos);
             int behavior = gap.Length >= 9 ? gap[gap.Length - 9] : 0;
+            uint noScaleMask = ar.Ver >= 7 && gap.Length >= 8 ? Tlv.ReadU32(gap, gap.Length - 8) : 0u;
             // the last u32 before the thumbnail is 1 for the definition of a group
             // and 0 for a component's (what SketchUp's SUComponentDefinitionGetType
             // reports), measured against SketchUp 2025's own counts
@@ -2047,6 +2049,7 @@ namespace OpenSkp
                 Ents = ents,
                 FacesCamera = (behavior & 1) != 0,
                 ShadowsFaceSun = (behavior & 2) != 0,
+                NoScaleMask = noScaleMask,
                 IsGroup = isGroup,
             };
         }
@@ -2717,6 +2720,43 @@ namespace OpenSkp
             }
         }
 
+        private static int FindBytesWindow(byte[] data, byte[] needle, int start, int end)
+        {
+            int stop = Math.Min(data.Length, end) - needle.Length;
+            for (int i = start; i <= stop; i++)
+            {
+                bool ok = true;
+                for (int j = 0; j < needle.Length; j++)
+                {
+                    if (data[i + j] != needle[j])
+                    {
+                        ok = false;
+                        break;
+                    }
+                }
+                if (ok) return i;
+            }
+            return -1;
+        }
+
+        private static uint ReadRootNoScaleMask(byte[] data, int ver)
+        {
+            if (ver < 7) return 0;
+            byte[] marker = Encoding.Unicode.GetBytes("End-Of-Version-Map");
+            int found = FindBytesWindow(data, marker, 0, data.Length);
+            if (found < 0) return 0;
+            int start = found + marker.Length;
+            int scan = start;
+            if (FindBytesWindow(data, new byte[] { 0x43, 0x44, 0x69, 0x62 }, start, start + 64) >= 0)
+            {
+                int endChunk = FindBytesWindow(data, new byte[] { 0x49, 0x45, 0x4E, 0x44 }, start, data.Length);
+                if (endChunk >= 0) scan = Math.Min(data.Length, endChunk + 8);
+            }
+            int at = FindBytesWindow(data, new byte[] { 0xFF, 0xFE, 0xFF }, scan, scan + 96);
+            if (at >= start + 4) return Tlv.ReadU32(data, at - 4);
+            return 0;
+        }
+
         /// <summary>Parse a classic MFC .skp into the shared raw-parse shape
         /// (Core.RawParsed), which Parser.cs converts to the public
         /// SkpModel exactly like the VFF path.</summary>
@@ -2859,6 +2899,7 @@ namespace OpenSkp
                             IsGroup = d.IsGroup,
                             AlwaysFacesCamera = d.FacesCamera,
                             ShadowsFaceSun = d.ShadowsFaceSun,
+                            NoScaleMask = d.NoScaleMask,
                             Builder = ToGeometryBuilder(b),
                         };
                         processed++;
@@ -2911,6 +2952,7 @@ namespace OpenSkp
                     Name = "ROOT_MODEL",
                     IsImage = false,
                     AlwaysFacesCamera = false,
+                    NoScaleMask = ReadRootNoScaleMask(data, ar.Ver),
                     Builder = ToGeometryBuilder(rootBuilder),
                 },
             };

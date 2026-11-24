@@ -187,6 +187,8 @@ pub struct DocumentOptions {
     /// Native style item ids and scalar values (colours are packed ABGR u32 values). Only items
     /// present in the bundled legacy style are updated; newer items are ignored.
     pub style_items: BTreeMap<i32, f64>,
+    /// Root model behavior, used when a file is loaded as a component.
+    pub no_scale_mask: u32,
 }
 
 impl Default for DocumentOptions {
@@ -195,6 +197,7 @@ impl Default for DocumentOptions {
             length_unit: 0,
             length_precision: 3,
             style_items: BTreeMap::new(),
+            no_scale_mask: 0,
         }
     }
 }
@@ -289,6 +292,7 @@ const RENDERING_OPTION_FIELDS: [(i32, usize, bool); 41] = [
 /// Applies `options` to the scaffold prefix: the native named UnitsOptions and the current
 /// rendering options, at fixed offsets in the immutable v17 scaffold.
 fn patch_document_prefix(prefix: &mut [u8], options: &DocumentOptions) {
+    write_u32_at(prefix, 2008, options.no_scale_mask);
     write_u32_at(prefix, 2327, options.length_precision as u32);
     write_u32_at(prefix, 2360, 0); // LengthFormat: decimal
     write_u32_at(prefix, 2389, options.length_unit as u32);
@@ -437,6 +441,10 @@ pub struct DefinitionOptions {
     /// Custom metadata on the definition itself, under `attribute_dict_name`.
     pub attributes: AttributeDict,
     pub attribute_dict_name: String,
+    pub always_faces_camera: bool,
+    pub shadows_face_sun: bool,
+    /// Native scale-grip suppression mask; unknown bits are preserved.
+    pub no_scale_mask: u32,
 }
 
 impl Default for DefinitionOptions {
@@ -444,6 +452,9 @@ impl Default for DefinitionOptions {
         DefinitionOptions {
             attributes: AttributeDict::new(),
             attribute_dict_name: DEFAULT_ATTRIBUTE_DICT_NAME.to_owned(),
+            always_faces_camera: false,
+            shadows_face_sun: false,
+            no_scale_mask: 0,
         }
     }
 }
@@ -601,6 +612,8 @@ struct DefinitionState {
     group_flag_pos: Option<usize>,
     /// Set only for definitions started via `add_group`: a group places itself on close.
     group_placement: Option<GroupPlacement>,
+    behavior: u8,
+    no_scale_mask: u32,
 }
 
 /// The placement fields shared by nested instances and nested group instances.
@@ -1285,6 +1298,8 @@ impl SkpBuilder {
         (slot, count_patch_pos): (i32, usize),
         name: String,
         group_placement: Option<GroupPlacement>,
+        behavior: u8,
+        no_scale_mask: u32,
     ) -> ComponentDefinitionBuilder<'_> {
         self.definitions.push(DefinitionState {
             slot,
@@ -1295,6 +1310,8 @@ impl SkpBuilder {
             closed: false,
             group_flag_pos: None,
             group_placement,
+            behavior,
+            no_scale_mask,
         });
         let index = self.definitions.len() - 1;
         self.open_definition = Some(index);
@@ -1311,7 +1328,11 @@ impl SkpBuilder {
     ) -> Result<ComponentDefinitionBuilder<'_>, SkpWriteError> {
         let dicts = single_dict(&options.attribute_dict_name, &options.attributes);
         let header = self.begin_definition_header("add_component_definition", &dicts)?;
-        Ok(self.push_definition(header, name.to_owned(), None))
+        let behavior =
+            u8::from(options.always_faces_camera) | (u8::from(options.shadows_face_sun) << 1);
+        let name = name.to_owned();
+        let mask = options.no_scale_mask;
+        Ok(self.push_definition(header, name, None, behavior, mask))
     }
 
     /// Start a group: add its geometry through the returned builder; `close()` places it at
@@ -1334,7 +1355,7 @@ impl SkpBuilder {
             hidden: options.hidden,
         };
         let name = options.name.clone().unwrap_or_else(|| "Group".to_owned());
-        Ok(self.push_definition(header, name, Some(placement)))
+        Ok(self.push_definition(header, name, Some(placement), 0, 0))
     }
 
     /// Reopen the builder of one of this builder's definitions (e.g. to `close()` it later).
@@ -2138,8 +2159,11 @@ impl ComponentDefinitionBuilder<'_> {
             def.new_entity_count as u32,
         );
         let is_group = def.group_placement.is_some();
-        def.group_flag_pos =
-            Some(writer.write_definition_tail(&def.name, is_group, &mut skp.ids)?);
+        let behavior = def.behavior;
+        let mask = def.no_scale_mask;
+        let ids = &mut skp.ids;
+        let pos = writer.write_definition_tail(&def.name, is_group, behavior, mask, ids)?;
+        def.group_flag_pos = Some(pos);
         def.closed = true;
         skp.open_definition = None;
         if let Some(placement) = &def.group_placement {

@@ -83,7 +83,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 from . import legacy
 from ._face_groups import compute_face_uv, face_uv_basis, reconstruct_loop_vertices
-from .create import ComponentDefinitionBuilder, Point3, SkpBuilder, SkpWriteError, create
+from .create import ComponentDefinitionBuilder, DocumentOptions, Point3, SkpBuilder, SkpWriteError, create
 from .model import Definition, Face, Instance, SkpFile, SkpModel
 
 
@@ -136,6 +136,8 @@ def open_existing(
     model = SkpFile.open(path).parse()
     warnings: List[str] = []
     builder = create()
+    if getattr(model.root, "no_scale_mask", 0) != 0:
+        builder.set_document_options(DocumentOptions(no_scale_mask=model.root.no_scale_mask))
 
     material_slots = _replay_materials(builder, model, warnings)
     layer_slots = {
@@ -161,7 +163,8 @@ def open_existing(
         with builder.add_component_definition(
                 defn.name,
                 always_faces_camera=getattr(defn, "always_faces_camera", False),
-                shadows_face_sun=getattr(defn, "shadows_face_sun", False)) as db:
+                shadows_face_sun=getattr(defn, "shadows_face_sun", False),
+                no_scale_mask=getattr(defn, "no_scale_mask", 0)) as db:
             _replay_body(db, defn, model, material_slots, layer_slots, warnings, context, def_builders)
         def_builders[def_id] = db
 

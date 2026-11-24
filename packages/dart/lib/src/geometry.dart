@@ -129,6 +129,7 @@ class RawDefinition {
   String? name;
   bool alwaysFacesCamera;
   bool shadowsFaceSun;
+  int noScaleMask;
   bool isImage;
   bool isGroup;
   GeometryBuilder builder;
@@ -137,6 +138,7 @@ class RawDefinition {
     this.name,
     this.alwaysFacesCamera = false,
     this.shadowsFaceSun = false,
+    this.noScaleMask = 0,
     this.isImage = false,
     this.isGroup = false,
     GeometryBuilder? builder,
@@ -741,6 +743,7 @@ class Geometry {
         String? name;
         bool facesCamera = false;
         bool shadowsFaceSun = false;
+        int noScaleMask = 0;
         bool isImage = false;
         bool isGroup = false;
         for (final child in el.children) {
@@ -756,7 +759,9 @@ class Geometry {
                   Tlv.toHexUpper(Uint8List.sublistView(pl, pos, pos + 2));
               final subSize = Tlv.readU32(pl, pos + 2);
               if (pos + 6 + subSize > pl.length) break;
-              if (subTag == '5D1B' && subSize >= 1) {
+              if (subTag == '5A1B' && subSize == 4) {
+                noScaleMask = Tlv.readU32(pl, pos + 6);
+              } else if (subTag == '5D1B' && subSize >= 1) {
                 facesCamera = Tlv.parseVarInt(pl, pos + 6, subSize) == 1;
               } else if (subTag == '5E1B' && subSize >= 1) {
                 shadowsFaceSun = Tlv.parseVarInt(pl, pos + 6, subSize) == 1;
@@ -782,6 +787,7 @@ class Geometry {
             name: name,
             alwaysFacesCamera: facesCamera,
             shadowsFaceSun: shadowsFaceSun,
+            noScaleMask: noScaleMask,
             isImage: isImage,
             isGroup: isGroup,
             builder: builder,

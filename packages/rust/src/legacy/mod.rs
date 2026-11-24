@@ -169,6 +169,7 @@ pub struct LegacyValue {
     pub sense: bool,
     pub faces_camera: bool,
     pub shadows_face_sun: bool,
+    pub no_scale_mask: u32,
     pub is_group: bool,
     pub colorized: bool,
     pub colorize_type: i32,
@@ -225,6 +226,7 @@ impl Default for LegacyValue {
             sense: false,
             faces_camera: false,
             shadows_face_sun: false,
+            no_scale_mask: 0,
             is_group: false,
             colorized: false,
             colorize_type: 0,
@@ -913,6 +915,44 @@ fn walk(data: &[u8]) -> Result<WalkResult<'_>> {
     walk_with_bases(data, ver, start, mc, &bases)
 }
 
+fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || needle.len() > haystack.len() {
+        return None;
+    }
+    haystack.windows(needle.len()).position(|w| w == needle)
+}
+
+fn read_root_no_scale_mask(data: &[u8], ver: i32) -> u32 {
+    if ver < 7 {
+        return 0;
+    }
+    let mut marker = Vec::with_capacity(36);
+    for &ch in b"End-Of-Version-Map" {
+        marker.push(ch);
+        marker.push(0);
+    }
+    let Some(found) = find_subslice(data, &marker) else {
+        return 0;
+    };
+    let start = found + marker.len();
+    let mut scan = start;
+    let cdib_end = data.len().min(start + 64);
+    if find_subslice(&data[scan..cdib_end], b"CDib").is_some() {
+        if let Some(rel) = find_subslice(&data[scan..], b"IEND") {
+            let end_chunk = scan + rel;
+            scan = data.len().min(end_chunk + 8);
+        }
+    }
+    let str_end = data.len().min(scan + 96);
+    if let Some(rel) = find_subslice(&data[scan..str_end], &[0xff, 0xfe, 0xff]) {
+        let at = scan + rel;
+        if at >= start + 4 {
+            return read_u32(data, at - 4).unwrap_or(0);
+        }
+    }
+    0
+}
+
 /// Reads a classic (pre-2021) MFC-archive .skp buffer.
 pub fn parse_legacy(data: &[u8], o: &ParseOptions) -> Result<RawParsed, SkpParseError> {
     emit_log(
@@ -930,6 +970,7 @@ pub fn parse_legacy(data: &[u8], o: &ParseOptions) -> Result<RawParsed, SkpParse
     let mut walked = walk(data).map_err(|e| {
         SkpParseError::at_stage("legacy .skp parse failed", ParseStage::LegacyWalk).with_cause(e)
     })?;
+    out.root.no_scale_mask = read_root_no_scale_mask(data, walked.ar.ver);
     out.unread_root_entities = walked.ar.unread_root_entities;
     if out.unread_root_entities != 0 {
         emit_log(
@@ -993,6 +1034,7 @@ pub fn parse_legacy(data: &[u8], o: &ParseOptions) -> Result<RawParsed, SkpParse
                 guid: v.guid.clone(),
                 always_faces_camera: v.faces_camera,
                 shadows_face_sun: v.shadows_face_sun,
+                no_scale_mask: v.no_scale_mask,
                 is_image: image_def_ids.contains(&slot),
                 is_group: v.is_group,
                 ..Default::default()

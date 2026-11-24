@@ -167,6 +167,7 @@ namespace OpenSkp
             var vertexPositions = new Dictionary<string, (double X, double Y, double Z)>();
             var instanceWorld = new Dictionary<string, List<double>?>();
             TlvNode? pageNode = null;
+            uint rootNoScaleMask = 0;
 
             foreach (var rec in Tlv.IterTopLevelLazy(modelDat, 0, modelDat.Length, Tlv.ContainerTags))
             {
@@ -182,6 +183,22 @@ namespace OpenSkp
                     if (pageNode == null)
                     {
                         pageNode = PagesDimensions.FindPageNode(el);
+                    }
+                    if (el.Tag == "0E02")
+                    {
+                        foreach (var (t, behavior) in Tlv.ParseFlat(el.Payload))
+                        {
+                            if (t == "581B")
+                            {
+                                foreach (var (field, val) in Tlv.ParseFlat(behavior))
+                                {
+                                    if (field == "5A1B" && val.Length == 4)
+                                    {
+                                        rootNoScaleMask = Tlv.ReadU32(val, 0);
+                                    }
+                                }
+                            }
+                        }
                     }
                     if (el.Tag == "F601")
                     {
@@ -284,7 +301,7 @@ namespace OpenSkp
                 MaterialsByFolder = materialsByFolder,
                 Styles = styles,
                 DefsDict = defsDictRaw,
-                Root = new Geometry.RawDefinition { Guid = "ROOT", Name = "ROOT_MODEL", Builder = rootBuilder },
+                Root = new Geometry.RawDefinition { Guid = "ROOT", Name = "ROOT_MODEL", NoScaleMask = rootNoScaleMask, Builder = rootBuilder },
             };
         }
     }
