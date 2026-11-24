@@ -751,6 +751,216 @@ namespace OpenSkp.Tests
         }
 
         [Fact]
+        public void MultipleAttributeDictsOnInstancePreserveOrderAndRoundTrip()
+        {
+            var builder = SkpCreate.NewFile();
+            ComponentDefinitionBuilder stud;
+            using (stud = builder.AddComponentDefinition("Stud"))
+            {
+                stud.AddFace(Square());
+            }
+            builder.AddInstance(
+                stud,
+                attributeDicts: new[]
+                {
+                    new AttributeDict("z_first", new System.Collections.Generic.Dictionary<string, object> { ["part"] = "Stud", ["depth"] = 94.92 }),
+                    new AttributeDict("dynamic_attributes", new System.Collections.Generic.Dictionary<string, object> { ["count"] = 4 }),
+                    new AttributeDict("a_third", new System.Collections.Generic.Dictionary<string, object> { ["guide"] = 1 }),
+                });
+
+            var bytes = builder.ToBytes();
+            var walked = Legacy.Walk(bytes);
+            var instRec = Assert.IsType<InstanceRec>(walked.Root[0].Value);
+            Assert.NotNull(instRec.Attrs);
+            var dictNames = instRec.Attrs!.Children.Select(c => ((DictRec)c.Value!).Name).ToArray();
+            Assert.Equal(new[] { "z_first", "dynamic_attributes", "a_third" }, dictNames);
+            Assert.Equal("Stud", ((DictRec)instRec.Attrs.Children[0].Value!).Entries["part"]);
+            Assert.Equal(1, ((DictRec)instRec.Attrs.Children[2].Value!).Entries["guide"]);
+
+            var model = SkpFile.Parse(bytes);
+            var instance = Assert.Single(model.Root.Instances);
+            Assert.Equal("4", instance.Properties["count"]);
+        }
+
+        [Fact]
+        public void MultipleAttributeDictsOnGroupPreserveOrderAndCreateRealContainer()
+        {
+            var builder = SkpCreate.NewFile();
+            using (var grp = builder.AddGroup(
+                "W-1",
+                attributeDicts: new[]
+                {
+                    new AttributeDict("fbd-einfo", new System.Collections.Generic.Dictionary<string, object> { ["depth"] = 15.5 }),
+                    new AttributeDict("dynamic_attributes", new System.Collections.Generic.Dictionary<string, object> { ["sku"] = "GRP-1" }),
+                    new AttributeDict("fbd-profile", new System.Collections.Generic.Dictionary<string, object> { ["guide"] = 1 }),
+                }))
+            {
+                grp.AddFace(Square());
+            }
+
+            var bytes = builder.ToBytes();
+            var walked = Legacy.Walk(bytes);
+            var instRec = Assert.IsType<InstanceRec>(walked.Root[0].Value);
+            Assert.NotNull(instRec.Attrs);
+            var dictNames = instRec.Attrs!.Children.Select(c => ((DictRec)c.Value!).Name).ToArray();
+            Assert.Equal(new[] { "fbd-einfo", "dynamic_attributes", "fbd-profile" }, dictNames);
+
+            var model = SkpFile.Parse(bytes);
+            Assert.Equal("GRP-1", Assert.Single(model.Root.Instances).Properties["sku"]);
+        }
+
+        [Fact]
+        public void MultipleAttributeDictsWorkOnFacesCirclesDefinitionsAndNestedPlacements()
+        {
+            static bool ContainsUtf16(byte[] haystack, string needle)
+            {
+                byte[] sub = System.Text.Encoding.Unicode.GetBytes(needle);
+                for (int i = 0; i + sub.Length <= haystack.Length; i++)
+                {
+                    bool match = true;
+                    for (int j = 0; j < sub.Length; j++)
+                    {
+                        if (haystack[i + j] != sub[j]) { match = false; break; }
+                    }
+                    if (match) return true;
+                }
+                return false;
+            }
+
+            var builder = SkpCreate.NewFile();
+            ComponentDefinitionBuilder part;
+            using (part = builder.AddComponentDefinition(
+                "Part",
+                attributeDicts: new[]
+                {
+                    new AttributeDict("def_meta_a", new System.Collections.Generic.Dictionary<string, object> { ["k"] = "v1" }),
+                    new AttributeDict("def_meta_b", new System.Collections.Generic.Dictionary<string, object> { ["k"] = "v2" }),
+                }))
+            {
+                part.AddFace(Square(size: 10), attributeDicts: new[]
+                {
+                    new AttributeDict("def_face_a", new System.Collections.Generic.Dictionary<string, object> { ["x"] = 1 }),
+                    new AttributeDict("def_face_b", new System.Collections.Generic.Dictionary<string, object> { ["y"] = 2 }),
+                });
+                part.AddCircle((0, 0, 10), (0, 0, 1), 5, attributeDicts: new[]
+                {
+                    new AttributeDict("def_circ_a", new System.Collections.Generic.Dictionary<string, object> { ["r"] = 5 }),
+                    new AttributeDict("def_circ_b", new System.Collections.Generic.Dictionary<string, object> { ["seg"] = 24 }),
+                });
+            }
+
+            ComponentDefinitionBuilder assembly;
+            using (assembly = builder.AddComponentDefinition("Assembly"))
+            {
+                assembly.AddInstance(part, attributeDicts: new[]
+                {
+                    new AttributeDict("nest_inst_a", new System.Collections.Generic.Dictionary<string, object> { ["a"] = 1 }),
+                    new AttributeDict("nest_inst_b", new System.Collections.Generic.Dictionary<string, object> { ["b"] = 2 }),
+                });
+                assembly.AddGroupInstance(part, name: "NestedGroup", attributeDicts: new[]
+                {
+                    new AttributeDict("nest_grp_a", new System.Collections.Generic.Dictionary<string, object> { ["g"] = 1 }),
+                    new AttributeDict("nest_grp_b", new System.Collections.Generic.Dictionary<string, object> { ["h"] = 2 }),
+                });
+            }
+
+            builder.AddInstance(assembly);
+            builder.AddFace(Square(), attributeDicts: new[]
+            {
+                new AttributeDict("root_face_a", new System.Collections.Generic.Dictionary<string, object> { ["x"] = 1 }),
+                new AttributeDict("root_face_b", new System.Collections.Generic.Dictionary<string, object> { ["y"] = 2 }),
+            });
+            builder.AddCircle((50, 50, 0), (0, 0, 1), 10, attributeDicts: new[]
+            {
+                new AttributeDict("root_circ_a", new System.Collections.Generic.Dictionary<string, object> { ["c"] = 1 }),
+                new AttributeDict("root_circ_b", new System.Collections.Generic.Dictionary<string, object> { ["d"] = 2 }),
+            });
+
+            var bytes = builder.ToBytes();
+            foreach (var marker in new[]
+            {
+                "def_meta_a", "def_meta_b", "def_face_a", "def_face_b",
+                "def_circ_a", "def_circ_b", "nest_inst_a", "nest_inst_b",
+                "nest_grp_a", "nest_grp_b", "root_face_a", "root_face_b",
+                "root_circ_a", "root_circ_b",
+            })
+            {
+                Assert.True(ContainsUtf16(bytes, marker), $"expected marker {marker}");
+            }
+
+            var model = SkpFile.Parse(bytes);
+            Assert.Equal(2, model.Root.Faces.Count);
+            Assert.Single(model.Root.Instances);
+        }
+
+        [Fact]
+        public void PassingBothAttributesAndAttributeDictsThrows()
+        {
+            var single = new System.Collections.Generic.Dictionary<string, object> { ["a"] = 1 };
+            var multi = new[] { new AttributeDict("b", new System.Collections.Generic.Dictionary<string, object> { ["c"] = 2 }) };
+
+            var builder = SkpCreate.NewFile();
+            ComponentDefinitionBuilder chair;
+            using (chair = builder.AddComponentDefinition("Chair"))
+            {
+                chair.AddFace(Square());
+            }
+
+            var ex1 = Assert.Throws<SkpWriteException>(() => builder.AddInstance(chair, attributes: single, attributeDicts: multi));
+            Assert.Contains("not both", ex1.Message);
+
+            var ex2 = Assert.Throws<SkpWriteException>(() => builder.AddGroup("W-1", attributes: single, attributeDicts: multi));
+            Assert.Contains("not both", ex2.Message);
+
+            var ex3 = Assert.Throws<SkpWriteException>(() => builder.AddFace(Square(), attributes: single, attributeDicts: multi));
+            Assert.Contains("not both", ex3.Message);
+
+            var ex4 = Assert.Throws<SkpWriteException>(() => builder.AddCircle((0, 0, 0), (0, 0, 1), 10, attributes: single, attributeDicts: multi));
+            Assert.Contains("not both", ex4.Message);
+
+            var ex5 = Assert.Throws<SkpWriteException>(() => builder.AddComponentDefinition("Bad", attributes: single, attributeDicts: multi));
+            Assert.Contains("not both", ex5.Message);
+
+            var builder2 = SkpCreate.NewFile();
+            ComponentDefinitionBuilder part;
+            using (part = builder2.AddComponentDefinition("Part"))
+            {
+                part.AddFace(Square());
+            }
+            using (var outer = builder2.AddComponentDefinition("Outer"))
+            {
+                outer.AddFace(Square());
+                var ex6 = Assert.Throws<SkpWriteException>(() => outer.AddInstance(part, attributes: single, attributeDicts: multi));
+                Assert.Contains("not both", ex6.Message);
+                var ex7 = Assert.Throws<SkpWriteException>(() => outer.AddGroupInstance(part, attributes: single, attributeDicts: multi));
+                Assert.Contains("not both", ex7.Message);
+            }
+        }
+
+        [Fact]
+        public void EmptyAttributeDictsBehavesLikeNoAttributes()
+        {
+            var builder = SkpCreate.NewFile();
+            ComponentDefinitionBuilder chair;
+            using (chair = builder.AddComponentDefinition("Chair"))
+            {
+                chair.AddFace(Square());
+            }
+            using (var grp = builder.AddGroup("PlainGroup", attributeDicts: Array.Empty<AttributeDict>()))
+            {
+                grp.AddFace(Square());
+            }
+            builder.AddInstance(chair, attributeDicts: Array.Empty<AttributeDict>());
+
+            var walked = Legacy.Walk(builder.ToBytes());
+            var grpRec = Assert.IsType<InstanceRec>(walked.Root[0].Value);
+            var instRec = Assert.IsType<InstanceRec>(walked.Root[1].Value);
+            Assert.Null(grpRec.Attrs);
+            Assert.NotNull(instRec.Attrs);
+            Assert.Empty(instRec.Attrs!.Children);
+        }
+
+        [Fact]
         public void CircleIsRealArcCurveFace()
         {
             var builder = SkpCreate.NewFile();

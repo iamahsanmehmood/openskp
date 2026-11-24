@@ -721,9 +721,20 @@ List<int> _uuid4Bytes() {
   return bytes;
 }
 
-List<(String, Map<String, Object>)> _attrDicts(Map<String, Object>? attributes, String name) {
-  if (attributes == null || attributes.isEmpty) return const [];
-  return [(name, attributes)];
+List<(String, Map<String, Object>)> _attrDicts(
+  Map<String, Object>? attributes,
+  String name, [
+  List<(String, Map<String, Object>)> attributeDicts = const [],
+]) {
+  final hasAttributes = attributes != null && attributes.isNotEmpty;
+  if (hasAttributes && attributeDicts.isNotEmpty) {
+    throw SkpWriteError(
+      'pass either attributes/attributeDictName or attributeDicts, not both',
+    );
+  }
+  if (hasAttributes) return [(name, attributes)];
+  if (attributeDicts.isEmpty) return const [];
+  return List<(String, Map<String, Object>)>.of(attributeDicts);
 }
 
 (int, int) _edgeKey(int a, int b) => a <= b ? (a, b) : (b, a);
@@ -1914,6 +1925,7 @@ abstract class GeometryHost {
     required List<(Point3, (double, double))>? backUv,
     required Map<String, Object>? attributes,
     required String attributeDictName,
+    List<(String, Map<String, Object>)> attributeDicts = const [],
     required bool autoTriangulate,
     required List<List<Point3>> holes,
   });
@@ -1928,6 +1940,7 @@ abstract class GeometryHost {
     required int? layer,
     required Map<String, Object>? attributes,
     required String attributeDictName,
+    List<(String, Map<String, Object>)> attributeDicts = const [],
     required bool hidden,
   });
 }
@@ -1993,6 +2006,7 @@ class ComponentDefinitionBuilder implements GeometryHost {
     List<(Point3, (double, double))>? backUv,
     Map<String, Object>? attributes,
     String attributeDictName = 'attributes',
+    List<(String, Map<String, Object>)> attributeDicts = const [],
     bool autoTriangulate = false,
     List<List<Point3>> holes = const [],
   }) {
@@ -2003,7 +2017,7 @@ class ComponentDefinitionBuilder implements GeometryHost {
     if (points.length < 3) {
       throw SkpWriteError('a face needs at least 3 points');
     }
-    final attributeDicts = _attrDicts(attributes, attributeDictName);
+    final resolvedAttributeDicts = _attrDicts(attributes, attributeDictName, attributeDicts);
     _newEntityCount += _writeFaceOrTriangulate(
       _skp._definitionWriter!,
       points,
@@ -2018,7 +2032,7 @@ class ComponentDefinitionBuilder implements GeometryHost {
       hiddenEdges,
       frontUv,
       backUv,
-      attributeDicts,
+      resolvedAttributeDicts,
       autoTriangulate,
       holes: holes,
     );
@@ -2040,6 +2054,7 @@ class ComponentDefinitionBuilder implements GeometryHost {
     List<(Point3, (double, double))>? backUv,
     Map<String, Object>? attributes,
     String attributeDictName = 'attributes',
+    List<(String, Map<String, Object>)> attributeDicts = const [],
   }) {
     _checkWritable('faces');
     _skp._checkMaterialHandle(material, 'material');
@@ -2054,7 +2069,7 @@ class ComponentDefinitionBuilder implements GeometryHost {
     final xaxis = (radius * u.$1, radius * u.$2, radius * u.$3);
     final CurveParams curveParams = (center, n, xaxis, 0.0, 2.0 * pi, radius, numSegments);
     final points = _circlePoints(center, n, radius, numSegments, u, w);
-    final attributeDicts = _attrDicts(attributes, attributeDictName);
+    final resolvedAttributeDicts = _attrDicts(attributes, attributeDictName, attributeDicts);
     _newEntityCount += writer.writeFace(
       points,
       _vertexSlots,
@@ -2065,7 +2080,7 @@ class ComponentDefinitionBuilder implements GeometryHost {
       hidden: hidden,
       frontUv: frontUv,
       backUv: backUv,
-      attributeDicts: attributeDicts,
+      attributeDicts: resolvedAttributeDicts,
       curveParams: curveParams,
     );
   }
@@ -2150,6 +2165,7 @@ class ComponentDefinitionBuilder implements GeometryHost {
     int? layer,
     Map<String, Object>? attributes,
     String attributeDictName = 'attributes',
+    List<(String, Map<String, Object>)> attributeDicts = const [],
     bool hidden = false,
   }) {
     _checkWritable('instances');
@@ -2165,7 +2181,7 @@ class ComponentDefinitionBuilder implements GeometryHost {
       throw SkpWriteError("component definition '$name' cannot nest an instance of itself");
     }
     final resolved = _resolveMatrix3x3(matrix3x3, rotation);
-    final attributeDicts = _attrDicts(attributes, attributeDictName);
+    final resolvedAttributeDicts = _attrDicts(attributes, attributeDictName, attributeDicts);
     _newEntityCount += _skp._definitionWriter!.writeInstance(
       definition.slot,
       name ?? definition.name,
@@ -2173,7 +2189,7 @@ class ComponentDefinitionBuilder implements GeometryHost {
       resolved,
       material ?? 0,
       layer ?? 0,
-      attributeDicts: attributeDicts,
+      attributeDicts: resolvedAttributeDicts,
       hidden: hidden,
     );
   }
@@ -2195,6 +2211,7 @@ class ComponentDefinitionBuilder implements GeometryHost {
     int? layer,
     Map<String, Object>? attributes,
     String attributeDictName = 'attributes',
+    List<(String, Map<String, Object>)> attributeDicts = const [],
     bool hidden = false,
   }) {
     _checkWritable('groups');
@@ -2210,7 +2227,7 @@ class ComponentDefinitionBuilder implements GeometryHost {
       throw SkpWriteError("component definition '$name' cannot nest a group instance of itself");
     }
     final resolved = _resolveMatrix3x3(matrix3x3, rotation);
-    final attributeDicts = _attrDicts(attributes, attributeDictName);
+    final resolvedAttributeDicts = _attrDicts(attributes, attributeDictName, attributeDicts);
     _newEntityCount += _skp._definitionWriter!.writeGroup(
       definition.slot,
       name ?? definition.name,
@@ -2218,7 +2235,7 @@ class ComponentDefinitionBuilder implements GeometryHost {
       resolved,
       material ?? 0,
       layer ?? 0,
-      attributeDicts: attributeDicts,
+      attributeDicts: resolvedAttributeDicts,
       hidden: hidden,
     );
     // the definition behind a group is a group's definition to SketchUp: flag it (it closed earlier in the same definition buffer, which is only copied out on save). A definition placed both as a group and as a component instance reads as a group.
@@ -2590,9 +2607,10 @@ class SkpBuilder implements GeometryHost {
     void Function(ComponentDefinitionBuilder def) body, {
     Map<String, Object>? attributes,
     String attributeDictName = 'attributes',
+    List<(String, Map<String, Object>)> attributeDicts = const [],
   }) {
-    final attributeDicts = _attrDicts(attributes, attributeDictName);
-    final comp = _startDefinition(name, 'addComponentDefinition', attributeDicts: attributeDicts);
+    final resolvedAttributeDicts = _attrDicts(attributes, attributeDictName, attributeDicts);
+    final comp = _startDefinition(name, 'addComponentDefinition', attributeDicts: resolvedAttributeDicts);
     body(comp);
     comp._close();
     return comp;
@@ -2622,16 +2640,17 @@ class SkpBuilder implements GeometryHost {
     int? layer,
     Map<String, Object>? attributes,
     String attributeDictName = 'attributes',
+    List<(String, Map<String, Object>)> attributeDicts = const [],
     bool hidden = false,
   }) {
     _checkMaterialHandle(material, 'material');
     _checkLayerHandle(layer);
     final resolved = _resolveMatrix3x3(matrix3x3, rotation);
-    final attributeDicts = _attrDicts(attributes, attributeDictName);
+    final resolvedAttributeDicts = _attrDicts(attributes, attributeDictName, attributeDicts);
     final comp = _startDefinition(
       name ?? 'Group',
       'addGroup',
-      groupPlacement: (translation, resolved, material ?? 0, layer ?? 0, attributeDicts, hidden),
+      groupPlacement: (translation, resolved, material ?? 0, layer ?? 0, resolvedAttributeDicts, hidden),
     );
     body(comp);
     comp._close();
@@ -2673,6 +2692,7 @@ class SkpBuilder implements GeometryHost {
     int? layer,
     Map<String, Object>? attributes,
     String attributeDictName = 'attributes',
+    List<(String, Map<String, Object>)> attributeDicts = const [],
     bool hidden = false,
   }) {
     _checkMaterialHandle(material, 'material');
@@ -2690,8 +2710,8 @@ class SkpBuilder implements GeometryHost {
       );
     }
     final resolved = _resolveMatrix3x3(matrix3x3, rotation);
+    final resolvedAttributeDicts = _attrDicts(attributes, attributeDictName, attributeDicts);
     _ensureGeometryWriter();
-    final attributeDicts = _attrDicts(attributes, attributeDictName);
     _newEntityCount += _geometryWriter!.writeInstance(
       definition.slot,
       name ?? definition.name,
@@ -2699,7 +2719,7 @@ class SkpBuilder implements GeometryHost {
       resolved,
       material ?? 0,
       layer ?? 0,
-      attributeDicts: attributeDicts,
+      attributeDicts: resolvedAttributeDicts,
       hidden: hidden,
     );
     _faceCount++; // reuses the "at least one root entity" check in toBytes
@@ -2847,6 +2867,7 @@ class SkpBuilder implements GeometryHost {
     List<(Point3, (double, double))>? backUv,
     Map<String, Object>? attributes,
     String attributeDictName = 'attributes',
+    List<(String, Map<String, Object>)> attributeDicts = const [],
     bool autoTriangulate = false,
     List<List<Point3>> holes = const [],
   }) {
@@ -2856,8 +2877,8 @@ class SkpBuilder implements GeometryHost {
     if (points.length < 3) {
       throw SkpWriteError('a face needs at least 3 points');
     }
+    final resolvedAttributeDicts = _attrDicts(attributes, attributeDictName, attributeDicts);
     _ensureGeometryWriter();
-    final attributeDicts = _attrDicts(attributes, attributeDictName);
     _newEntityCount += _writeFaceOrTriangulate(
       _geometryWriter!,
       points,
@@ -2872,7 +2893,7 @@ class SkpBuilder implements GeometryHost {
       hiddenEdges,
       frontUv,
       backUv,
-      attributeDicts,
+      resolvedAttributeDicts,
       autoTriangulate,
       holes: holes,
     );
@@ -2900,6 +2921,7 @@ class SkpBuilder implements GeometryHost {
     List<(Point3, (double, double))>? backUv,
     Map<String, Object>? attributes,
     String attributeDictName = 'attributes',
+    List<(String, Map<String, Object>)> attributeDicts = const [],
   }) {
     _checkMaterialHandle(material, 'material');
     _checkMaterialHandle(backMaterial, 'backMaterial');
@@ -2908,12 +2930,12 @@ class SkpBuilder implements GeometryHost {
       throw SkpWriteError('numSegments must be between 3 and 255, got $numSegments');
     }
     final n = _normalize3(normal);
+    final resolvedAttributeDicts = _attrDicts(attributes, attributeDictName, attributeDicts);
     _ensureGeometryWriter();
     final (u, w) = _circleBasis(n);
     final xaxis = (radius * u.$1, radius * u.$2, radius * u.$3);
     final CurveParams curveParams = (center, n, xaxis, 0.0, 2.0 * pi, radius, numSegments);
     final points = _circlePoints(center, n, radius, numSegments, u, w);
-    final attributeDicts = _attrDicts(attributes, attributeDictName);
     _newEntityCount += _geometryWriter!.writeFace(
       points,
       _vertexSlots,
@@ -2924,7 +2946,7 @@ class SkpBuilder implements GeometryHost {
       hidden: hidden,
       frontUv: frontUv,
       backUv: backUv,
-      attributeDicts: attributeDicts,
+      attributeDicts: resolvedAttributeDicts,
       curveParams: curveParams,
     );
     _faceCount++;
