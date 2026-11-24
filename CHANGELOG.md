@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — TypeScript, .NET, Dart, C++ & Rust: the model's face colours (`face_front_color` / `face_back_color`) (#533)
+
+- Ports Python's #550 model rendering-options face-colour reader to TypeScript (`SkpModel.faceFrontColor` / `faceBackColor`), .NET (`SkpModel.FaceFrontColor` / `FaceBackColor`), Dart (`SkpModel.faceFrontColor` / `faceBackColor`), C++ (`SkpModel::face_front_color` / `face_back_color`), and Rust (`SkpModel::face_front_color` / `face_back_color`): read from 2021+ `model.dat` items `0x735C` / `0x735D` and from classic SketchUp 4–2020 rendering options after the model camera (`None` / `null` / unset for SketchUp 3).
+
 ### Added — All 6 languages: saved scenes (`pages`) on `Scene` and `InstancedScene` (#593)
 
 - `build_scene()` and `build_instanced_scene()` (`buildScene` / `buildInstancedScene` / `BuildScene` / `BuildInstancedScene`) now carry the model's saved scenes (`Scene.pages` / `InstancedScene.pages` in Python, Dart, C++ and Rust; optional `SkpScene.pages` / `InstancedScene.pages` in TypeScript; `Scene.Pages` / `InstancedScene.Pages` in .NET), matching `SkpModel.pages` in SketchUp's native Z-up axes and inches (`[]` when a scene is read back from `.frag`), so consumers that build a scene and import cameras do not need a second `parse()` pass.

@@ -288,6 +288,19 @@ std::optional<RawStyle> style_xml(const ByteBuffer& bytes) {
   return o;
 }
 
+std::optional<std::pair<Color3, Color3>> model_face_colors(const ByteBuffer& model_dat) {
+  static constexpr std::array<std::uint8_t, 6> kFrontTag{0x5C, 0x73, 0x04, 0x00, 0x00, 0x00};
+  static constexpr std::array<std::uint8_t, 6> kBackTag{0x5D, 0x73, 0x04, 0x00, 0x00, 0x00};
+  for (std::size_t at = 0; at + 20 <= model_dat.size(); ++at) {
+    if (std::equal(kFrontTag.begin(), kFrontTag.end(), model_dat.begin() + at) &&
+        std::equal(kBackTag.begin(), kBackTag.end(), model_dat.begin() + at + 10)) {
+      return std::make_pair(Color3{model_dat[at + 6], model_dat[at + 7], model_dat[at + 8]},
+                            Color3{model_dat[at + 16], model_dat[at + 17], model_dat[at + 18]});
+    }
+  }
+  return std::nullopt;
+}
+
 // Style catalog (model.dat record 0602 > 7869). 7969 lists the model's
 // styles as 6C6B entries (DC05 > DE05 entity id, 6F6B name = the style's
 // folder under styles/), 7A69 holds the current style's id, 7B69 the current
@@ -619,6 +632,7 @@ RawParsed full_parse(const ByteBuffer& data, const ParseOptions& o) {
     auto folder = p.materials_by_folder.find(item.second);
     if (folder != p.materials_by_folder.end()) folder->second->native_pid = item.first;
   }
+  p.face_colors = model_face_colors(*model);
   model.reset();
   if (!p.layer_id_to_name.count(1)) p.layer_id_to_name[1] = "Layer0";
   if (!p.layer_colors.count("Layer0")) {

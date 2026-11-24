@@ -333,6 +333,10 @@ SkpModel build_model(RawParsed&& p, const ParseOptions& o) {
     m.styles.push_back({std::move(s.name), std::move(s.description), s.front_color, s.back_color,
                         std::move(s.items), std::move(s.watermarks), std::move(s.folder), s.active,
                         s.working_copy, s.modified});
+  if (p.face_colors) {
+    m.face_front_color = p.face_colors->first;
+    m.face_back_color = p.face_colors->second;
+  }
   return m;
 }
 }  // namespace openskp

@@ -28,9 +28,9 @@ use crate::internal::{
     RawFace, RawInstance, RawMaterial, RawParsed, RawTexture, Result,
 };
 use crate::model::{
-    stringify_attr_dict, stringify_attr_dictionaries, CoEdge, ConstructionLine, ConstructionPoint,
-    Dimension, EntityId, ParsedAttrDict, ParsedAttrDictionaries, ParsedAttribute, SectionPlane,
-    TextEntity, Vec3,
+    stringify_attr_dict, stringify_attr_dictionaries, CoEdge, Color3, ConstructionLine,
+    ConstructionPoint, Dimension, EntityId, ParsedAttrDict, ParsedAttrDictionaries,
+    ParsedAttribute, SectionPlane, TextEntity, Vec3,
 };
 use crate::observability::{emit_log, emit_progress, LogLevel, ParseOptions, ParseStage};
 
@@ -1027,6 +1027,7 @@ pub fn parse_legacy(data: &[u8], o: &ParseOptions) -> Result<RawParsed, SkpParse
             .with_cause(e)
         })?;
     }
+    out.face_colors = model_face_colors(data, walked.ar.ver);
 
     // whole scene records first; the narrow scan only when the full reader
     // gives up on one
@@ -1051,4 +1052,72 @@ pub fn parse_legacy(data: &[u8], o: &ParseOptions) -> Result<RawParsed, SkpParse
         &format!("Parse complete: {n} defs"),
     );
     Ok(out)
+}
+
+fn face_colors_distance_after_camera(ver: i32) -> Option<usize> {
+    match ver {
+        4 => Some(50),
+        5 => Some(61),
+        6..=16 => Some(63),
+        17 | 18 => Some(64),
+        19 => Some(65),
+        20 => Some(66),
+        _ => None,
+    }
+}
+
+fn model_face_colors(data: &[u8], ver: i32) -> Option<(Color3, Color3)> {
+    let distance = face_colors_distance_after_camera(ver)?;
+    let cam_end = (0..data.len().saturating_sub(12)).find_map(|i| {
+        if data[i] == 0xFF
+            && data[i + 1] == 0xFF
+            && data[i + 4] == 0x07
+            && data[i + 5] == 0x00
+            && &data[i + 6..i + 13] == b"CCamera"
+        {
+            Some(i + 13)
+        } else {
+            None
+        }
+    })?;
+    let mut p = cam_end;
+    if p + 139 > data.len() {
+        return None;
+    }
+    p += 139;
+    if p + 4 > data.len() || data[p..p + 3] != [0xFF, 0xFE, 0xFF] {
+        return None;
+    }
+    let mut n = usize::from(data[p + 3]);
+    p += 4;
+    if n == 0xFF {
+        if p + 2 > data.len() {
+            return None;
+        }
+        n = usize::from(u16::from_le_bytes([data[p], data[p + 1]]));
+        p += 2;
+        if n == 0xFFFF {
+            if p + 4 > data.len() {
+                return None;
+            }
+            n = u32::from_le_bytes([data[p], data[p + 1], data[p + 2], data[p + 3]]) as usize;
+            p += 4;
+        }
+    }
+    if n > (data.len() - p) / 2 {
+        return None;
+    }
+    p += 2 * n;
+    let tail = (if ver >= 6 { 33 } else { 10 }) + distance;
+    if tail > data.len() - p {
+        return None;
+    }
+    let at = p + tail;
+    if 8 > data.len() - at || data[at + 3] != 0xFF || data[at + 7] != 0xFF {
+        return None;
+    }
+    Some((
+        [data[at], data[at + 1], data[at + 2]],
+        [data[at + 4], data[at + 5], data[at + 6]],
+    ))
 }

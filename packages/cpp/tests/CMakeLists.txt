@@ -48,6 +48,7 @@ add_executable(
   legacy_v6_attribute_trailer_test.cpp
   lowlevel_test.cpp
   meta_units_test.cpp
+  model_face_colors_test.cpp
   no_stderr_output_test.cpp
   obj_export_test.cpp
   obj_material_names_test.cpp

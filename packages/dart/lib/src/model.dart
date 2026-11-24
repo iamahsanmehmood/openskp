@@ -489,6 +489,17 @@ class SkpModel {
 
   final List<Style> styles = [];
 
+  /// The colour SketchUp shows on the front side of a face with no paint on
+  /// that side, `(r, g, b)` 0-255: the model's current rendering options, which
+  /// is what SketchUp displays even when the style was changed and not saved
+  /// (so it can differ from every entry in [styles]). Read from 2021+ files and
+  /// from classic files of SketchUp 4 to 2020; null when the file does not give
+  /// it (SketchUp 3).
+  (int, int, int)? faceFrontColor;
+
+  /// The same for the back side of a face.
+  (int, int, int)? faceBackColor;
+
   /// How many top-level entities of a classic (pre-2021) file the reader
   /// couldn't read. It keeps what it read before the first root record it
   /// can't parse and drops that record and everything after it, so a nonzero

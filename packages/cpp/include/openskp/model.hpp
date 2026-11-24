@@ -687,6 +687,15 @@ class OPENSKP_EXPORT SkpModel {
   std::deque<Material> materials;
   /// Model rendering styles.
   std::vector<Style> styles;
+  /// The colour SketchUp shows on the front side of a face with no paint on
+  /// that side, `(r, g, b)` 0-255: the model's current rendering options, which
+  /// is what SketchUp displays even when the style was changed and not saved
+  /// (so it can differ from every entry in `styles`). Read from 2021+ files and
+  /// from classic files of SketchUp 4 to 2020; unset when the file does not
+  /// give it (SketchUp 3).
+  std::optional<Color3> face_front_color;
+  /// The same for the back side of a face.
+  std::optional<Color3> face_back_color;
   /// Every attribute dictionary attached to the model itself (Ruby's
   /// `Sketchup::Model#attribute_dictionaries`), keyed by the dictionary's
   /// own declared name - where extensions typically persist model-wide

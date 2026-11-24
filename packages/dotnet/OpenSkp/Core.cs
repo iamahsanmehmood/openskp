@@ -32,6 +32,7 @@ namespace OpenSkp
             public Dictionary<string, Geometry.RawMaterial> Materials = new Dictionary<string, Geometry.RawMaterial>();
             public Dictionary<string, Geometry.RawMaterial> MaterialsByFolder = new Dictionary<string, Geometry.RawMaterial>();
             public List<Geometry.RawStyle> Styles = new List<Geometry.RawStyle>();
+            public ((int R, int G, int B) Front, (int R, int G, int B) Back)? FaceColors = null;
             public Dictionary<long, Geometry.RawDefinition> DefsDict = new Dictionary<long, Geometry.RawDefinition>();
             public Geometry.RawDefinition Root = new Geometry.RawDefinition { Guid = "ROOT", Name = "ROOT_MODEL" };
             public int UnreadRootEntities = 0;
@@ -283,9 +284,38 @@ namespace OpenSkp
                 Materials = materials,
                 MaterialsByFolder = materialsByFolder,
                 Styles = styles,
+                FaceColors = ModelFaceColors(modelDat),
                 DefsDict = defsDictRaw,
                 Root = new Geometry.RawDefinition { Guid = "ROOT", Name = "ROOT_MODEL", Builder = rootBuilder },
             };
+        }
+
+        private static readonly byte[] FaceFrontTag = { 0x5C, 0x73, 0x04, 0x00, 0x00, 0x00 };
+        private static readonly byte[] FaceBackTag = { 0x5D, 0x73, 0x04, 0x00, 0x00, 0x00 };
+
+        private static ((int R, int G, int B) Front, (int R, int G, int B) Back)? ModelFaceColors(ChunkedBuffer modelDat)
+        {
+            long at = 0;
+            while (at >= 0 && at + 20 <= modelDat.Length)
+            {
+                at = modelDat.IndexOf(FaceFrontTag, at);
+                if (at < 0 || at + 20 > modelDat.Length) break;
+                byte[] tail = modelDat.Slice(at + 6, 14);
+                if (tail[4] == FaceBackTag[0]
+                    && tail[5] == FaceBackTag[1]
+                    && tail[6] == FaceBackTag[2]
+                    && tail[7] == FaceBackTag[3]
+                    && tail[8] == FaceBackTag[4]
+                    && tail[9] == FaceBackTag[5])
+                {
+                    return (
+                        (tail[0], tail[1], tail[2]),
+                        (tail[10], tail[11], tail[12])
+                    );
+                }
+                at += 1;
+            }
+            return null;
         }
     }
 }

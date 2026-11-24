@@ -23,6 +23,15 @@ export interface SkpModel {
   materials: Material[];
   materialsById: Map<number, Material>;
   styles: Style[];
+  /** The colour SketchUp shows on the front side of a face with no paint on
+   * that side, `[r, g, b]` 0-255: the model's current rendering options, which
+   * is what SketchUp displays even when the style was changed and not saved
+   * (so it can differ from every entry in {@link styles}). Read from 2021+
+   * files and from classic files of SketchUp 4 to 2020; `null` when the file
+   * does not give it (SketchUp 3). */
+  faceFrontColor: [number, number, number] | null;
+  /** The same for the back side of a face. */
+  faceBackColor: [number, number, number] | null;
   /** The model's unit-system string (e.g. "Millimeter"), read from
    * meta/meta.dat in modern (VFF) files. null for legacy (pre-2021 MFC)
    * files, which carry no equivalent container, or when the tag isn't
@@ -564,6 +573,7 @@ export interface ParsedRawData {
   materialsMap: Map<string, Material>;
   materialsByFolder: Map<string, Material>;
   styles: Style[];
+  faceColors?: [[number, number, number], [number, number, number]] | null;
   defsDict: Map<number | string, ParsedDefinition>;
   unreadRootEntities?: number;
 }
@@ -646,6 +656,8 @@ export function buildModelFromParsed(parsed: ParsedRawData): SkpModel {
     materials: finalMaterialsList,
     materialsById,
     styles,
+    faceFrontColor: parsed.faceColors?.[0] ?? null,
+    faceBackColor: parsed.faceColors?.[1] ?? null,
     units,
     unreadRootEntities: parsed.unreadRootEntities ?? 0,
   };

@@ -104,6 +104,12 @@ namespace OpenSkp
                 model.Styles.Add(new Style { Name = st.Name, FrontColor = st.FrontColor, BackColor = st.BackColor });
             }
 
+            if (parsed.FaceColors.HasValue)
+            {
+                model.FaceFrontColor = parsed.FaceColors.Value.Front;
+                model.FaceBackColor = parsed.FaceColors.Value.Back;
+            }
+
             return model;
         }
 

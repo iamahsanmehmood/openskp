@@ -2560,6 +2560,59 @@ std::optional<std::vector<RawPage>> read_page_list(const ByteBuffer& data, Archi
   }
 }
 
+int face_colors_distance_after_camera(int ver) {
+  if (ver == 4) return 50;
+  if (ver == 5) return 61;
+  if (ver >= 6 && ver <= 16) return 63;
+  if (ver == 17 || ver == 18) return 64;
+  if (ver == 19) return 65;
+  if (ver == 20) return 66;
+  return -1;
+}
+
+std::optional<std::pair<Color3, Color3>> model_face_colors(const ByteBuffer& data, int ver) {
+  int distance = face_colors_distance_after_camera(ver);
+  if (distance < 0) return std::nullopt;
+  std::size_t cam_end = std::string::npos;
+  for (std::size_t i = 0; i + 13 <= data.size(); ++i) {
+    if (data[i] == 0xFF && data[i + 1] == 0xFF && data[i + 4] == 0x07 && data[i + 5] == 0x00 &&
+        data[i + 6] == 'C' && data[i + 7] == 'C' && data[i + 8] == 'a' && data[i + 9] == 'm' &&
+        data[i + 10] == 'e' && data[i + 11] == 'r' && data[i + 12] == 'a') {
+      cam_end = i + 13;
+      break;
+    }
+  }
+  if (cam_end == std::string::npos) return std::nullopt;
+  std::size_t p = cam_end;
+  if (p + 139 > data.size()) return std::nullopt;
+  p += 139;
+  if (p + 4 > data.size() || data[p] != 0xFF || data[p + 1] != 0xFE || data[p + 2] != 0xFF) {
+    return std::nullopt;
+  }
+  std::uint64_t n = data[p + 3];
+  p += 4;
+  if (n == 0xFF) {
+    if (p + 2 > data.size()) return std::nullopt;
+    n = read_u16(data, p);
+    p += 2;
+    if (n == 0xFFFF) {
+      if (p + 4 > data.size()) return std::nullopt;
+      n = read_u32(data, p);
+      p += 4;
+    }
+  }
+  if (n > (data.size() - p) / 2) return std::nullopt;
+  p += static_cast<std::size_t>(2 * n);
+  const auto tail = static_cast<std::size_t>((ver >= 6 ? 33 : 10) + distance);
+  if (tail > data.size() - p) return std::nullopt;
+  const std::size_t at = p + tail;
+  if (8 > data.size() - at || data[at + 3] != 0xFF || data[at + 7] != 0xFF) {
+    return std::nullopt;
+  }
+  return std::make_pair(Color3{data[at], data[at + 1], data[at + 2]},
+                        Color3{data[at + 4], data[at + 5], data[at + 6]});
+}
+
 }  // namespace
 
 RawParsed parse_legacy(const ByteBuffer& data, const ParseOptions& o) {
@@ -2748,6 +2801,7 @@ RawParsed parse_legacy(const ByteBuffer& data, const ParseOptions& o) {
         out.definitions[s.first] = std::move(d);
       }
     fill(out.root.builder, root, ar.slots);
+    out.face_colors = model_face_colors(data, ar.ver);
     try {
       // whole scene records first; the narrow scan only when the full reader gives up on one
       auto pages = read_page_list(data, ar);
