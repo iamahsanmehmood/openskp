@@ -18,6 +18,26 @@ The tools used to produce the evidence are in `tools/`:
 * `vffdump.py` / `sections.py` — dump the ZIP entries and the TLV record tree
   of a `model.dat`.
 
+## Attribution
+
+Most record layouts were derived from SketchUp 2025 minimal-pair saves (the
+oracles under `research/vff-writer/`), and any layout described in skpwright's
+§16 was likewise confirmed against those saves.  **No skpwright code is
+included in the committed code**; the skpwright binary is only an optional
+external verifier (`SKPWRIGHT_BIN`).
+
+skpwright ([https://github.com/hew3d/skpwright](https://github.com/hew3d/skpwright),
+by Kurt Granroth, GPL-3.0-only) documents the SketchUp 2021+ (VFF) container
+in `docs/SKP_FORMAT.md` §16 and `docs/WRITING.md`.  Those docs were consulted
+for:
+
+* the header integrity-word algorithm - implemented from the description in
+  `SKP_FORMAT.md` §16.15 and verified against genuine SketchUp 2025 saves;
+* the archive ZIP layout and `meta/meta.dat` fields (`WRITING.md`
+  "The archive", `SKP_FORMAT.md` §16.1), the model revision (§16.27), and
+  SketchUp's face-loop/curve-chain acceptance rules (`WRITING.md`) - each
+  then confirmed against SketchUp-saved files.
+
 ## Template
 
 `packages/python/src/openskp/_scaffold/blank_vff.skp` is a genuine SketchUp

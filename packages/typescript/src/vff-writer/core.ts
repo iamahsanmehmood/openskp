@@ -6,7 +6,12 @@
  * 32-bit little-endian payload length, payload.  Unknown records stay opaque
  * bytes so a template round-trips unchanged.  The container is a ZIP whose
  * header carries the clean-room integrity word; only `fflate` is used for
- * DEFLATE.
+ * DEFLATE.  The integrity-word description was taken from skpwright's
+ * `docs/SKP_FORMAT.md` §16.15 (https://github.com/hew3d/skpwright, by Kurt
+ * Granroth, GPL-3.0-only); this implementation is openskp's own and was
+ * verified against genuine SketchUp 2025 saves.  skpwright's docs also
+ * pointed to the ZIP layout and `meta/meta.dat` fields, confirmed from those
+ * saves; no skpwright code is used or included.
  */
 import { deflateSync, inflateSync } from 'fflate';
 
@@ -411,6 +416,9 @@ function metaSlotValue(meta: Uint8Array, k: number): number {
   return (historyConstant(k) ^ crcRegister(meta.subarray(meta.length - 4))) >>> 0;
 }
 
+/** The u32 integrity word for *entries*, in archive order.
+ * Implemented from skpwright `SKP_FORMAT.md` §16.15's description and
+ * verified against genuine SketchUp 2025 saves; no skpwright code is used. */
 export function integrityWord(entries: ZipEntry[]): number {
   const metaEntry = entries.find((entry) => entry.name === 'meta/meta.dat');
   if (!metaEntry) throw new Error('archive has no meta/meta.dat');

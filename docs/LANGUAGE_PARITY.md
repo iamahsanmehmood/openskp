@@ -196,9 +196,14 @@ compared); SketchUp 2021-2024 are untested. Python and TypeScript are kept
 equivalent (identical header, entry list and uncompressed entries; compressed
 DEFLATE bytes may differ) by shared deterministic golden fixtures in
 `packages/typescript/tests/fixtures/vff_writer/` and the VFF step of
-[`ci-writer-parity.yml`](../.github/workflows/ci-writer-parity.yml). The
-remaining ports still write classic 2017 only, so porting this writer and VFF
-`open_existing` is tracked in §3.
+[`ci-writer-parity.yml`](../.github/workflows/ci-writer-parity.yml).
+Format-documentation credit: skpwright's `docs/SKP_FORMAT.md` §16.15
+describes the header integrity-word algorithm implemented independently here
+and verified against genuine SketchUp 2025 saves; its docs also pointed to the
+ZIP layout, `meta.dat` fields, model revision and face-loop/curve-chain
+acceptance rules, each confirmed from SketchUp saves. No skpwright code is
+included. The remaining ports still write classic 2017 only, so porting this
+writer and VFF `open_existing` is tracked in §3.
 
 ### Reader support by SketchUp version
 

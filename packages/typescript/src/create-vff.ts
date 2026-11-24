@@ -9,6 +9,12 @@
  * polylines, attribute dictionaries, texts, dimensions, guides, section
  * planes, scenes and the model camera.  `openExistingVff` wraps the same
  * builder around an existing VFF source file.
+ *
+ * Format-documentation credit: skpwright's `docs/SKP_FORMAT.md` §16.15
+ * (https://github.com/hew3d/skpwright, by Kurt Granroth, GPL-3.0-only)
+ * describes the header integrity-word algorithm implemented here; the code
+ * is openskp's own and was verified against genuine SketchUp 2025 saves.
+ * No skpwright code is used or included.
  */
 import { unzlibSync } from 'fflate';
 import { blankVffTemplate } from './vff-scaffold';

@@ -65,11 +65,17 @@ an SDK conversion and not a file this writer produced:
 The record layouts written here were derived from SketchUp itself - the
 minimal pairs and the acceptance model saved by SketchUp 2025 in
 ``research/vff-writer/oracle/`` - and cross-checked against the reader in
-:mod:`openskp._core`.  skpwright's documentation was used only as a pointer
-to facts that were then confirmed against those real files; no skpwright code
-was copied or translated, and openskp never calls the SketchUp SDK or
-skpwright at runtime (skpwright is only an external verifier when
-``SKPWRIGHT_BIN`` is set).
+:mod:`openskp._core`.  Format-documentation credit: skpwright
+(https://github.com/hew3d/skpwright, by Kurt Granroth, GPL-3.0-only)
+documents the SketchUp 2021+ VFF container in ``docs/SKP_FORMAT.md`` §16 and
+``docs/WRITING.md``.  The header integrity-word algorithm here was
+implemented from the description in ``SKP_FORMAT.md`` §16.15 and verified
+against genuine SketchUp 2025 saves; those docs also pointed to the archive
+ZIP layout, the ``meta/meta.dat`` fields, the model revision and SketchUp's
+face-loop/curve-chain acceptance rules, each of which was confirmed from
+SketchUp-saved files.  No skpwright code is used or included, and openskp
+never calls the SketchUp SDK or skpwright at runtime (skpwright is only an
+optional external verifier when ``SKPWRIGHT_BIN`` is set).
 """
 
 from __future__ import annotations

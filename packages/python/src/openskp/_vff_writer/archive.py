@@ -16,6 +16,14 @@ constant derived from ``ceil(n/2)`` and the last four bytes of ``meta.dat``,
 lay the values out evens-first, and CRC-32 the ``meta.dat`` bytes before its
 last four followed by that table.  The rule is verified against unmodified
 SketchUp-saved files in ``tests/test_create_vff.py``.
+
+The description of this rule was taken from skpwright's
+``docs/SKP_FORMAT.md`` §16.15 (https://github.com/hew3d/skpwright, by Kurt
+Granroth, GPL-3.0-only); the implementation below is openskp's own and was
+verified against genuine SketchUp 2025 saves.  skpwright's docs also pointed
+to the archive ZIP layout and ``meta/meta.dat`` fields, which were confirmed
+from those saves.  No skpwright code is used or included; the skpwright
+binary is only an optional external verifier (``SKPWRIGHT_BIN``).
 """
 
 from __future__ import annotations
@@ -280,7 +288,12 @@ def _meta_slot_value(meta: bytes, k: int) -> int:
 
 
 def integrity_word(entries: Sequence[ZipEntry]) -> int:
-    """The u32 integrity word for *entries*, in archive order."""
+    """The u32 integrity word for *entries*, in archive order.
+
+    Implemented from the description in skpwright's ``SKP_FORMAT.md``
+    §16.15 and verified against genuine SketchUp 2025 saves; no skpwright
+    code is used.
+    """
     meta = next((e.data for e in entries if e.name == "meta/meta.dat"), None)
     if meta is None:
         raise ValueError("archive has no meta/meta.dat")
