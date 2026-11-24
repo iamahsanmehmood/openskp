@@ -89,6 +89,33 @@ struct SceneTexture {
   std::string filename;
 };
 
+/// An analytic arc recovered for a loose-edge run: points in the run's own
+/// frame (metres, glTF Y-up) plus 0-based [start, mid, end] index triples into
+/// them, ready for IFC4 IfcArcIndex.
+struct CurveArc {
+  std::vector<std::array<double, 3>> points;
+  std::vector<std::array<std::size_t, 3>> segments;
+
+  bool operator==(const CurveArc& other) const {
+    return points == other.points && segments == other.segments;
+  }
+
+  bool operator!=(const CurveArc& other) const { return !(*this == other); }
+};
+
+/// One world-space polyline run of loose edges (edges no face uses).
+struct CurveSetMetadata {
+  std::string name;
+  std::string definition_name;
+  std::string layer;
+  std::string path;
+  bool name_is_generated{};
+  std::vector<std::array<double, 3>> points_m;
+  bool closed{};
+  std::optional<CurveArc> arc;
+  std::map<std::string, std::map<std::string, std::string>> attribute_dictionaries;
+};
+
 struct OPENSKP_EXPORT Scene {
   InstanceNode scene_hierarchy;
   std::map<std::string, MeshMetadata> mesh_index;
@@ -110,6 +137,9 @@ struct OPENSKP_EXPORT Scene {
   // Camera eye/target/up and ortho_height stay in SketchUp's native Z-up
   // frame and inches (unlike glb_primitives, which are Y-up metres).
   std::vector<Page> pages;
+  /// World-space polyline runs of loose edges (edges no face uses), when
+  /// ParseOptions::include_curve_sets is true.
+  std::vector<CurveSetMetadata> curve_sets;
 
   std::vector<GlbPrimitive> surface_primitives() const;
 };

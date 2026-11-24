@@ -6,6 +6,7 @@
 #include <tuple>
 #include <utility>
 
+#include "curves.hpp"
 #include "face_groups.hpp"
 #include "internal.hpp"
 
@@ -71,6 +72,8 @@ Scene build_scene_raw(RawParsed&& p, const ParseOptions& o) {
   // per face): the same image routinely backs several materials, while
   // equal-size PNGs/TIFFs share their 16-byte header and must stay distinct.
   auto texture_index_for = make_texture_index_for(scene.textures, o);
+  std::map<std::string, std::size_t> curve_seq;
+  std::map<std::optional<EntityId>, PreparedDefCurves> prepared_curves_cache;
   std::map<std::optional<EntityId>, FaceLayerSummary> face_layer_cache;
   auto get_face_layer_summary = [&](std::optional<EntityId> defid,
                                     const GeometryBuilder& b) -> const FaceLayerSummary& {
@@ -175,6 +178,62 @@ Scene build_scene_raw(RawParsed&& p, const ParseOptions& o) {
       prim.material_index = mi->second;
       scene.glb_primitives.push_back(std::move(prim));
     }
+
+    if (o.include_curve_sets) {
+      auto prep_it = prepared_curves_cache.find(defid);
+      if (prep_it == prepared_curves_cache.end()) {
+        prep_it = prepared_curves_cache.emplace(defid, prepare_def_curves(p, b, o)).first;
+      }
+      const auto& prepared = prep_it->second;
+      if (!prepared.runs.empty()) {
+        const auto fm = matrix.size() >= 12 ? fold_scale(matrix) : std::vector<double>{};
+        const bool has_fm = fm.size() >= 12;
+        const std::string comp_name =
+            path == "ROOT"
+                ? ""
+                : path.substr(path.rfind(" / ") == std::string::npos ? 0 : path.rfind(" / ") + 3);
+        for (const auto& run : prepared.runs) {
+          std::vector<std::array<double, 3>> pts;
+          pts.reserve(run.local_verts.size());
+          if (!has_fm) {
+            for (const auto& v : run.local_verts) {
+              pts.push_back({round6(v[0] * kCurvesInchesToM), round6(v[2] * kCurvesInchesToM),
+                             round6(-v[1] * kCurvesInchesToM)});
+            }
+          } else {
+            for (const auto& v : run.local_verts) {
+              const double px = fm[0] * v[0] + fm[1] * v[1] + fm[2] * v[2] + fm[9];
+              const double py = fm[3] * v[0] + fm[4] * v[1] + fm[5] * v[2] + fm[10];
+              const double pz = fm[6] * v[0] + fm[7] * v[1] + fm[8] * v[2] + fm[11];
+              pts.push_back({round6(px * kCurvesInchesToM), round6(pz * kCurvesInchesToM),
+                             round6(-py * kCurvesInchesToM)});
+            }
+          }
+          const std::string run_layer = run.explicit_layer.value_or(mesh_layer);
+          std::string cname;
+          bool cgen = false;
+          if (path == "ROOT") {
+            const std::size_t seq = ++curve_seq[run_layer];
+            cname = run_layer + "_" + std::to_string(seq);
+            cgen = true;
+          } else {
+            cname = comp_name;
+          }
+          CurveSetMetadata cs;
+          cs.name = std::move(cname);
+          cs.definition_name = defname;
+          cs.layer = run_layer;
+          cs.path = path;
+          cs.name_is_generated = cgen;
+          cs.closed = run.closed;
+          cs.arc = solve_run_arc(b, run.edge_ids, has_fm ? &fm : nullptr, pts, run.closed,
+                                 &prepared.curve_edge_counts);
+          cs.points_m = std::move(pts);
+          scene.curve_sets.push_back(std::move(cs));
+        }
+      }
+    }
+
     std::vector<InstanceNode> children;
     for (auto& i : b.instances) {
       std::string child_layer = layer;

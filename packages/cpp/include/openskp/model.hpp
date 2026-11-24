@@ -594,6 +594,21 @@ struct ThumbnailCamera {
   double ortho_height = 1.0;
 };
 
+/// One chained run of loose edges: its edges in walk order, the vertex ids
+/// along it, and whether it returns to its first vertex (which is then NOT
+/// repeated at the end).
+struct LooseEdgeRun {
+  std::vector<EntityId> edge_ids;
+  std::vector<EntityId> vertex_ids;
+  bool closed{};
+
+  bool operator==(const LooseEdgeRun& other) const {
+    return edge_ids == other.edge_ids && vertex_ids == other.vertex_ids && closed == other.closed;
+  }
+
+  bool operator!=(const LooseEdgeRun& other) const { return !(*this == other); }
+};
+
 /// Reusable geometry container (component definition or group).
 struct Definition {
   /// Unique TLV entity ID.
@@ -649,7 +664,14 @@ struct Definition {
   bool type_known{};
   /// Native scale-grip suppression bits: X, Y, Z, XZ, YZ, XY, XYZ (bits 0-6).
   std::uint32_t no_scale_mask{};
+
+  /// Groups this definition's loose edges (edges no face uses) into ordered
+  /// polyline runs using SketchUp's own Edge#curve (Edge::curve_id) grouping.
+  OPENSKP_EXPORT std::vector<LooseEdgeRun> loose_edge_runs() const;
 };
+
+/// Free-function form of Definition::loose_edge_runs().
+OPENSKP_EXPORT std::vector<LooseEdgeRun> loose_edge_runs(const Definition& definition);
 
 /// Top-level model container holding all definitions, layers, materials, and styles.
 class OPENSKP_EXPORT SkpModel {

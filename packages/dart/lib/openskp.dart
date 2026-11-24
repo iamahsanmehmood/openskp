@@ -3,10 +3,18 @@
 library openskp;
 
 export 'src/model.dart';
+export 'src/curves.dart' show LooseEdgeRun, CurveArc, looseEdgeRuns;
 export 'src/parser.dart' show SkpFile;
-export 'src/scene.dart' show Scene, InstanceNode, MeshMetadata, GlbPrimitive;
+export 'src/scene.dart' show Scene, InstanceNode, MeshMetadata, GlbPrimitive, CurveSetMetadata;
 export 'src/instanced_scene.dart'
-    show InstancedScene, InstancedNode, InstancedMeshResource, LocalPrimitive, SceneBounds;
+    show
+        InstancedScene,
+        InstancedNode,
+        InstancedMeshResource,
+        InstancedCurveResource,
+        LocalPrimitive,
+        LocalCurve,
+        SceneBounds;
 export 'src/glb.dart' show toGlb, exportGlb;
 export 'src/instanced_glb.dart' show toInstancedGlb, exportInstancedGlb;
 export 'src/json_export.dart' show toJson;

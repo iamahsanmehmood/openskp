@@ -4,7 +4,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use crate::curves::{chain_loose_edges, round6, solve_run_arc, INCHES_TO_M};
+use crate::curves::{prepare_def_curves, round6, solve_run_arc_indexed, INCHES_TO_M};
 use crate::errors::SkpParseError;
 use crate::face_groups::{
     build_local_face_groups, default_color, find_material, material_color, unpainted_style_colors,
@@ -18,12 +18,12 @@ use crate::internal::{
     build_pages, emit_log, emit_progress, fold_scale, multiply_matrices, GeometryBuilder,
     RawMaterial, RawParsed,
 };
-use crate::model::EntityId;
+use crate::model::{EntityId, Vec3};
 use crate::observability::{LogLevel, ParseOptions, ParseStage, PROGRESS_INTERVAL};
-use crate::scene::GltfMaterial;
+use crate::scene::{CurveArc, GltfMaterial};
 use crate::scene_build::{
     build_error, definition_name, instance_layer, is_generic_definition_name, max_depth_exceeded,
-    max_instances_exceeded, name_override, recursive_definition, run_layer, scene_dictionaries,
+    max_instances_exceeded, name_override, recursive_definition, scene_dictionaries,
     summarize_face_layers, FaceLayerSummary, IDENTITY, MAX_COMPONENT_DEPTH, MAX_EXPANDED_INSTANCES,
 };
 
@@ -114,6 +114,8 @@ fn resource_key(
 
 type LocalBox = Option<([f64; 3], [f64; 3])>;
 
+type LocalCurveTemplate = (Vec<Vec3>, bool, Option<String>, Option<CurveArc>);
+
 struct Instancer<'a> {
     p: &'a RawParsed,
     o: &'a ParseOptions,
@@ -125,7 +127,8 @@ struct Instancer<'a> {
     mesh_resources: Vec<InstancedMeshResource>,
     resource_index_by_key: HashMap<String, usize>,
     curve_resources: Vec<InstancedCurveResource>,
-    curve_resource_id_by_key: HashMap<String, String>,
+    curve_resource_id_by_key: HashMap<String, Option<String>>,
+    prepared_local_curves: HashMap<Option<EntityId>, Vec<LocalCurveTemplate>>,
     face_layers: HashMap<Option<EntityId>, FaceLayerSummary>,
     instance_counter: u64,
     active: BTreeSet<EntityId>,
@@ -281,8 +284,7 @@ impl<'a> Instancer<'a> {
         defid: Option<EntityId>,
         layer: &str,
     ) -> Option<String> {
-        let runs = chain_loose_edges(builder);
-        if runs.is_empty() {
+        if !self.o.include_curve_sets {
             return None;
         }
         let uniform = self
@@ -301,37 +303,53 @@ impl<'a> Instancer<'a> {
                 .unwrap_or_else(|| "ROOT".into())
         );
         if let Some(hit) = self.curve_resource_id_by_key.get(&key) {
-            return Some(hit.clone());
+            return hit.clone();
         }
         let p = self.p;
-        let mut curves = Vec::new();
-        for run in runs {
-            let mut pts = Vec::with_capacity(run.vertex_ids.len());
-            for vk in &run.vertex_ids {
-                let Some(&v) = builder.vertices.get(vk) else {
-                    break;
-                };
-                pts.push([
-                    round6(v[0] * INCHES_TO_M),
-                    round6(v[2] * INCHES_TO_M),
-                    round6(-v[1] * INCHES_TO_M),
-                ]);
-            }
-            if pts.len() != run.vertex_ids.len() || pts.len() < 2 {
-                continue;
-            }
-            let layer = run_layer(p, builder, &run.edge_ids, effective_layer);
-            let arc = solve_run_arc(builder, &run.edge_ids, None, &pts, run.closed);
-            curves.push(LocalCurve {
-                points_m: pts,
-                closed: run.closed,
-                layer,
-                arc,
-            });
-        }
-        if curves.is_empty() {
+        let templates = self.prepared_local_curves.entry(defid).or_insert_with(|| {
+            let prepared = prepare_def_curves(p, builder);
+            prepared
+                .runs
+                .into_iter()
+                .map(|run| {
+                    let pts: Vec<Vec3> = run
+                        .local_verts
+                        .iter()
+                        .map(|&v| {
+                            [
+                                round6(v[0] * INCHES_TO_M),
+                                round6(v[2] * INCHES_TO_M),
+                                round6(-v[1] * INCHES_TO_M),
+                            ]
+                        })
+                        .collect();
+                    let arc = solve_run_arc_indexed(
+                        builder,
+                        &run.edge_ids,
+                        None,
+                        &pts,
+                        run.closed,
+                        Some(&prepared.curve_edge_counts),
+                    );
+                    (pts, run.closed, run.explicit_layer, arc)
+                })
+                .collect()
+        });
+        if templates.is_empty() {
+            self.curve_resource_id_by_key.insert(key, None);
             return None;
         }
+        let curves: Vec<LocalCurve> = templates
+            .iter()
+            .map(|(pts, closed, explicit_layer, arc)| LocalCurve {
+                points_m: pts.clone(),
+                closed: *closed,
+                layer: explicit_layer
+                    .clone()
+                    .unwrap_or_else(|| effective_layer.to_owned()),
+                arc: arc.clone(),
+            })
+            .collect();
         let id = format!("curve_{}", self.curve_resources.len());
         self.curve_resources.push(InstancedCurveResource {
             id: id.clone(),
@@ -339,7 +357,7 @@ impl<'a> Instancer<'a> {
             definition_name: defname.to_owned(),
             curves,
         });
-        self.curve_resource_id_by_key.insert(key, id.clone());
+        self.curve_resource_id_by_key.insert(key, Some(id.clone()));
         Some(id)
     }
 
@@ -480,6 +498,7 @@ pub fn build_instanced_scene_raw(
         resource_index_by_key: HashMap::new(),
         curve_resources: Vec::new(),
         curve_resource_id_by_key: HashMap::new(),
+        prepared_local_curves: HashMap::new(),
         face_layers: HashMap::new(),
         instance_counter: 0,
         active: BTreeSet::new(),

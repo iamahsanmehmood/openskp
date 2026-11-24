@@ -1,6 +1,7 @@
 import 'dart:math';
 
 import 'core.dart';
+import 'curves.dart';
 import 'errors.dart';
 import 'face_groups.dart';
 import 'geometry.dart';
@@ -142,12 +143,40 @@ class SceneTexture {
   SceneTexture({required this.data, required this.mimeType, this.filename = ''});
 }
 
+/// Metadata for one run of *loose* edges (edges no face uses) in world-space
+/// metres, glTF Y-up.
+class CurveSetMetadata {
+  String name;
+  bool nameIsGenerated;
+  String definitionName;
+  String layer;
+  String path;
+  List<(double, double, double)> pointsM;
+  bool closed;
+  CurveArc? arc;
+  Map<String, Map<String, String>> attributeDictionaries;
+
+  CurveSetMetadata({
+    this.name = '',
+    this.nameIsGenerated = false,
+    this.definitionName = '',
+    this.layer = '',
+    this.path = '',
+    List<(double, double, double)>? pointsM,
+    this.closed = false,
+    this.arc,
+    Map<String, Map<String, String>>? attributeDictionaries,
+  })  : pointsM = pointsM ?? [],
+        attributeDictionaries = attributeDictionaries ?? {};
+}
+
 /// The result of baking a parsed file's placed instances into a flat,
 /// world-space 3D scene.
 class Scene {
   InstanceNode sceneHierarchy;
   Map<String, MeshMetadata> meshIndex;
   List<GlbPrimitive> glbPrimitives;
+  List<CurveSetMetadata> curveSets;
   List<Map<String, dynamic>> gltfMaterials;
 
   /// Distinct texture images the placed materials use, deduplicated by
@@ -177,12 +206,14 @@ class Scene {
     required this.sceneHierarchy,
     required this.meshIndex,
     required this.glbPrimitives,
+    List<CurveSetMetadata>? curveSets,
     required this.gltfMaterials,
     List<SceneTexture>? textures,
     this.unreadRootEntities = 0,
     List<Page>? pages,
     Map<String, bool>? layerHidden,
-  })  : textures = textures ?? [],
+  })  : curveSets = curveSets ?? [],
+        textures = textures ?? [],
         pages = pages ?? [],
         layerHidden = layerHidden ?? {};
 }
@@ -466,6 +497,10 @@ class SceneBuilder {
 
     final colorToMaterialIndex = <((int, int, int), bool, int?, double), int>{};
     final gltfMaterials = <Map<String, dynamic>>[];
+    final curveSets = <CurveSetMetadata>[];
+    final curveSeq = <String, int>{};
+    final includeCurveSets = options?.includeCurveSets ?? true;
+    final preparedCurvesCache = <int, PreparedDefCurves>{};
 
     // Definitions currently being instantiated on the active recursion path
     // (not "ever visited" - the same definition legitimately reused by
@@ -686,6 +721,74 @@ class SceneBuilder {
         }
       }
 
+      if (includeCurveSets) {
+        final prepKey = defId ?? -1;
+        var prepared = preparedCurvesCache[prepKey];
+        if (prepared == null) {
+          prepared = prepareDefinitionCurves(builder, layerIdToName);
+          preparedCurvesCache[prepKey] = prepared;
+        }
+        if (prepared.runs.isNotEmpty) {
+          final fm = currentMatrix.length >= 12 ? Transforms.foldScale(currentMatrix) : null;
+          final compName = pathName == 'ROOT' ? '' : (pathName.split(' / ').lastOrNull ?? '');
+          for (final run in prepared.runs) {
+            final pts = <(double, double, double)>[];
+            if (fm == null) {
+              for (final v in run.localVerts) {
+                pts.add((
+                  round6(v.$1 * _inchesToM),
+                  round6(v.$3 * _inchesToM),
+                  round6(-v.$2 * _inchesToM),
+                ));
+              }
+            } else {
+              for (final v in run.localVerts) {
+                final px = fm[0] * v.$1 + fm[1] * v.$2 + fm[2] * v.$3 + fm[9];
+                final py = fm[3] * v.$1 + fm[4] * v.$2 + fm[5] * v.$3 + fm[10];
+                final pz = fm[6] * v.$1 + fm[7] * v.$2 + fm[8] * v.$3 + fm[11];
+                pts.add((
+                  round6(px * _inchesToM),
+                  round6(pz * _inchesToM),
+                  round6(-py * _inchesToM),
+                ));
+              }
+            }
+
+            final runLayer = run.explicitLayer ?? meshLayer;
+            String cname;
+            bool cgen;
+            if (pathName == 'ROOT') {
+              final seq = (curveSeq[runLayer] ?? 0) + 1;
+              curveSeq[runLayer] = seq;
+              cname = '${runLayer}_$seq';
+              cgen = true;
+            } else {
+              cname = compName;
+              cgen = false;
+            }
+
+            curveSets.add(CurveSetMetadata(
+              name: cname,
+              nameIsGenerated: cgen,
+              definitionName: defName,
+              layer: runLayer,
+              path: pathName,
+              pointsM: pts,
+              closed: run.closed,
+              arc: solveRunArc(
+                builder,
+                run.edgeIds,
+                fm,
+                pts,
+                closed: run.closed,
+                curveEdgeCounts: prepared.curveEdgeCounts,
+              ),
+              attributeDictionaries: <String, Map<String, String>>{},
+            ));
+          }
+        }
+      }
+
       final childInstancesInfo = <InstanceNode>[];
       for (final inst in builder.instances) {
         final refIdx = inst.refIdx;
@@ -892,6 +995,7 @@ class SceneBuilder {
       sceneHierarchy: sceneHierarchy,
       meshIndex: meshIndex,
       glbPrimitives: glbPrimitives,
+      curveSets: curveSets,
       gltfMaterials: gltfMaterials,
       textures: textures,
       unreadRootEntities: parsed.unreadRootEntities,

@@ -62,6 +62,12 @@ namespace OpenSkp
         /// colour of the face's tag as one double-sided primitive.</summary>
         public string UnpaintedFaces { get; set; } = "style";
 
+        /// <summary>Bake loose edges (edges no face uses) into
+        /// <see cref="Scene.CurveSets"/> and
+        /// <see cref="InstancedScene.CurveResources"/>. Defaults to <c>true</c>;
+        /// set to <c>false</c> to skip loose-edge chaining and arc solving.</summary>
+        public bool IncludeCurveSets { get; set; } = true;
+
         /// <summary>Keep a texture that is not PNG or JPEG in
         /// <see cref="Scene.Textures"/> and <see cref="InstancedScene.Textures"/>
         /// in its own format (<c>image/tiff</c>, <c>image/gif</c>,

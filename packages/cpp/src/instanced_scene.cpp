@@ -7,6 +7,7 @@
 #include <sstream>
 #include <utility>
 
+#include "curves.hpp"
 #include "face_groups.hpp"
 #include "internal.hpp"
 
@@ -161,6 +162,63 @@ InstancedScene build_instanced_scene_raw(RawParsed&& p, const ParseOptions& o) {
     auto it = face_layer_cache.find(defid);
     if (it != face_layer_cache.end()) return it->second;
     return face_layer_cache.emplace(defid, summarize_face_layers(p, b, o)).first->second;
+  };
+
+  std::map<std::string, std::optional<std::string>> curve_resource_id_by_key;
+  std::map<std::optional<EntityId>, PreparedDefCurves> prepared_curves_cache;
+  auto curve_resource_for_builder = [&](const GeometryBuilder& builder, const std::string& defname,
+                                        std::optional<EntityId> defid,
+                                        const std::string& layer) -> std::optional<std::string> {
+    if (!o.include_curve_sets) return std::nullopt;
+    const std::string effective_layer =
+        layer == "Layer0" ? get_face_layer_summary(defid, builder).uniform_layer.value_or(layer)
+                          : layer;
+    const std::string key =
+        (defid ? std::to_string(*defid) : std::string("ROOT")) + "|" + effective_layer;
+    auto hit = curve_resource_id_by_key.find(key);
+    if (hit != curve_resource_id_by_key.end()) return hit->second;
+
+    auto prep_it = prepared_curves_cache.find(defid);
+    if (prep_it == prepared_curves_cache.end()) {
+      prep_it = prepared_curves_cache.emplace(defid, prepare_def_curves(p, builder, o)).first;
+    }
+    const auto& prepared = prep_it->second;
+    if (prepared.runs.empty()) {
+      curve_resource_id_by_key.emplace(key, std::nullopt);
+      return std::nullopt;
+    }
+
+    std::vector<LocalCurve> local_curves;
+    local_curves.reserve(prepared.runs.size());
+    for (const auto& run : prepared.runs) {
+      std::vector<std::array<double, 3>> pts;
+      pts.reserve(run.local_verts.size());
+      for (const auto& v : run.local_verts) {
+        pts.push_back({round6(v[0] * kCurvesInchesToM), round6(v[2] * kCurvesInchesToM),
+                       round6(-v[1] * kCurvesInchesToM)});
+      }
+      LocalCurve lc;
+      lc.closed = run.closed;
+      lc.layer = run.explicit_layer.value_or(effective_layer);
+      lc.arc = solve_run_arc(builder, run.edge_ids, nullptr, pts, run.closed,
+                             &prepared.curve_edge_counts);
+      lc.points_m = std::move(pts);
+      local_curves.push_back(std::move(lc));
+    }
+    if (local_curves.empty()) {
+      curve_resource_id_by_key.emplace(key, std::nullopt);
+      return std::nullopt;
+    }
+
+    InstancedCurveResource resource;
+    resource.id = "curve_" + std::to_string(scene.curve_resources.size());
+    resource.definition_id = defid;
+    resource.definition_name = defname;
+    resource.curves = std::move(local_curves);
+    const std::string id = resource.id;
+    curve_resource_id_by_key.emplace(key, id);
+    scene.curve_resources.push_back(std::move(resource));
+    return id;
   };
   std::function<std::optional<std::string>(const GeometryBuilder&, const std::string&,
                                            std::optional<EntityId>,
@@ -358,6 +416,8 @@ InstancedScene build_instanced_scene_raw(RawParsed&& p, const ParseOptions& o) {
             const auto& child_summary = get_face_layer_summary(*i.ref_idx, d->second.builder);
             if (child_summary.uniform_layer) node.layer = *child_summary.uniform_layer;
           }
+          node.curve_resource_id =
+              curve_resource_for_builder(d->second.builder, d->second.name, *i.ref_idx, l_name);
           active.erase(*i.ref_idx);
         }
       }
@@ -377,6 +437,8 @@ InstancedScene build_instanced_scene_raw(RawParsed&& p, const ParseOptions& o) {
   // root node's own mesh resource.
   auto root_mesh_resource_id =
       mesh_resource_for_builder(p.root.builder, "ROOT_MODEL", std::nullopt, nullptr, "Layer0");
+  auto root_curve_resource_id =
+      curve_resource_for_builder(p.root.builder, "ROOT_MODEL", std::nullopt, "Layer0");
 
   scene.layer_hidden = p.layer_hidden;
   scene.unread_root_entities = p.unread_root_entities;
@@ -388,6 +450,7 @@ InstancedScene build_instanced_scene_raw(RawParsed&& p, const ParseOptions& o) {
   scene.scene_hierarchy.layer = "Layer0";
   scene.scene_hierarchy.matrix = kIdentityGltf;
   scene.scene_hierarchy.mesh_resource_id = root_mesh_resource_id;
+  scene.scene_hierarchy.curve_resource_id = root_curve_resource_id;
   scene.scene_hierarchy.children = std::move(root_children);
 
   // Bounds of the scene AS PLACED: walk the tree, transform each

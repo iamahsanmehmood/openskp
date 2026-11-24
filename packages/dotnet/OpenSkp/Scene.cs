@@ -112,6 +112,21 @@ namespace OpenSkp
         public string Filename { get; set; } = "";
     }
 
+    /// <summary>Metadata for one run of *loose* edges (edges no face uses), in
+    /// world-space metres in glTF's Y-up frame.</summary>
+    public sealed class CurveSetMetadata
+    {
+        public string Name { get; set; } = "";
+        public string DefinitionName { get; set; } = "";
+        public string Layer { get; set; } = "";
+        public string Path { get; set; } = "";
+        public bool NameIsGenerated { get; set; }
+        public List<(double X, double Y, double Z)> PointsM { get; set; } = new List<(double X, double Y, double Z)>();
+        public bool Closed { get; set; }
+        public CurveArc? Arc { get; set; }
+        public Dictionary<string, Dictionary<string, string>> AttributeDictionaries { get; set; } = new Dictionary<string, Dictionary<string, string>>();
+    }
+
     /// <summary>The result of baking a parsed file's placed instances into
     /// a flat, world-space 3D scene.</summary>
     public sealed class Scene
@@ -119,6 +134,7 @@ namespace OpenSkp
         public InstanceNode SceneHierarchy { get; set; } = new InstanceNode();
         public Dictionary<string, MeshMetadata> MeshIndex { get; set; } = new Dictionary<string, MeshMetadata>();
         public List<GlbPrimitive> GlbPrimitives { get; set; } = new List<GlbPrimitive>();
+        public List<CurveSetMetadata> CurveSets { get; set; } = new List<CurveSetMetadata>();
         public List<object> GltfMaterials { get; set; } = new List<object>();
 
         /// <summary>Distinct texture images the placed materials use,
@@ -193,6 +209,10 @@ namespace OpenSkp
 
             var colorToMaterialIndex = new Dictionary<((int, int, int) Color, bool DoubleSided, int? TextureIndex, double Transparency), int>();
             var gltfMaterials = new List<object>();
+            var curveSets = new List<CurveSetMetadata>();
+            var curveSeq = new Dictionary<string, int>();
+            bool includeCurveSets = options?.IncludeCurveSets ?? true;
+            var preparedCurvesCache = new Dictionary<long, PreparedDefCurves>();
 
             // Definitions currently being instantiated on the active
             // recursion path (not "ever visited" - the same definition
@@ -446,6 +466,83 @@ namespace OpenSkp
                     }
                 }
 
+                if (includeCurveSets)
+                {
+                    long prepKey = defId ?? -1L;
+                    if (!preparedCurvesCache.TryGetValue(prepKey, out var prepared))
+                    {
+                        prepared = Curves.PrepareDefinitionCurves(builder, layerIdToName);
+                        preparedCurvesCache[prepKey] = prepared;
+                    }
+                    if (prepared.Runs.Count > 0)
+                    {
+                        double[]? fm = currentMatrix.Count >= 12
+                            ? Transforms.FoldScale(currentMatrix.ToArray())
+                            : null;
+                        string defNameStr = defName ?? "";
+                        string compName = pathName == "ROOT"
+                            ? ""
+                            : (pathName.Split(new[] { " / " }, StringSplitOptions.None).LastOrDefault() ?? "");
+
+                        foreach (var run in prepared.Runs)
+                        {
+                            var pts = new List<(double X, double Y, double Z)>(run.LocalVerts.Count);
+                            if (fm == null)
+                            {
+                                foreach (var v in run.LocalVerts)
+                                {
+                                    pts.Add((
+                                        Curves.Round6(v.X * InchesToM),
+                                        Curves.Round6(v.Z * InchesToM),
+                                        Curves.Round6(-v.Y * InchesToM)));
+                                }
+                            }
+                            else
+                            {
+                                foreach (var v in run.LocalVerts)
+                                {
+                                    double px = fm[0] * v.X + fm[1] * v.Y + fm[2] * v.Z + fm[9];
+                                    double py = fm[3] * v.X + fm[4] * v.Y + fm[5] * v.Z + fm[10];
+                                    double pz = fm[6] * v.X + fm[7] * v.Y + fm[8] * v.Z + fm[11];
+                                    pts.Add((
+                                        Curves.Round6(px * InchesToM),
+                                        Curves.Round6(pz * InchesToM),
+                                        Curves.Round6(-py * InchesToM)));
+                                }
+                            }
+
+                            string runLayer = run.ExplicitLayer ?? meshLayer;
+                            string cname;
+                            bool cgen;
+                            if (pathName == "ROOT")
+                            {
+                                int seq = (curveSeq.TryGetValue(runLayer, out var s) ? s : 0) + 1;
+                                curveSeq[runLayer] = seq;
+                                cname = $"{runLayer}_{seq}";
+                                cgen = true;
+                            }
+                            else
+                            {
+                                cname = compName;
+                                cgen = false;
+                            }
+
+                            curveSets.Add(new CurveSetMetadata
+                            {
+                                Name = cname,
+                                NameIsGenerated = cgen,
+                                DefinitionName = defNameStr,
+                                Layer = runLayer,
+                                Path = pathName,
+                                PointsM = pts,
+                                Closed = run.Closed,
+                                Arc = Curves.SolveRunArc(builder, run.EdgeIds, fm, pts, run.Closed, prepared.CurveEdgeCounts),
+                                AttributeDictionaries = new Dictionary<string, Dictionary<string, string>>(),
+                            });
+                        }
+                    }
+                }
+
                 var childInstancesInfo = new List<InstanceNode>();
                 foreach (var inst in builder.Instances)
                 {
@@ -685,6 +782,7 @@ namespace OpenSkp
                 SceneHierarchy = sceneHierarchy,
                 MeshIndex = meshIndex,
                 GlbPrimitives = glbPrimitives,
+                CurveSets = curveSets,
                 GltfMaterials = gltfMaterials,
                 Textures = textures,
                 UnreadRootEntities = parsed.UnreadRootEntities,

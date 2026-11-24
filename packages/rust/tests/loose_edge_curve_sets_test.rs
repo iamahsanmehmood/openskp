@@ -451,12 +451,173 @@ fn a_vff_closed_circle_becomes_two_half_turns() {
     let sc = build_scene("coedge_orientation_regression.skp");
     assert_eq!(sc.curve_sets.len(), 1200);
     let arcs: Vec<_> = sc.curve_sets.iter().filter(|cs| cs.arc.is_some()).collect();
-    assert_eq!(arcs.len(), 5);
+    assert_eq!(arcs.len(), 7);
     let circle = arcs.iter().find(|cs| cs.closed).expect("closed arc");
     assert_eq!(circle.name, "Gruppo#195");
     assert_eq!(circle.points_m.len(), 24);
     assert_eq!(
         circle.arc.as_ref().unwrap().segments,
         [[0, 1, 2], [2, 3, 0]]
+    );
+}
+
+#[test]
+fn include_curve_sets_false_omits_curve_sets_and_curve_resources() {
+    let skp = openskp::SkpFile::open(common::fixture("Untitled.skp")).expect("open");
+    let opts = openskp::ParseOptions::default().with_include_curve_sets(false);
+    let baked = skp.build_scene(&opts).expect("baked");
+    let instanced = skp.build_instanced_scene(&opts).expect("instanced");
+    assert!(baked.curve_sets.is_empty());
+    assert!(instanced.curve_resources.is_empty());
+}
+
+#[test]
+fn mirrored_placement_preserves_analytic_arc() {
+    use openskp::create::{create, ArcOptions, DefinitionOptions, InstanceOptions};
+
+    let mut w = create();
+    let arc_def = {
+        let mut d = w
+            .add_component_definition("ArcDef", &DefinitionOptions::default())
+            .unwrap();
+        d.add_arc(
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0],
+            40.0,
+            0.0,
+            std::f64::consts::FRAC_PI_2,
+            &ArcOptions::default(),
+        )
+        .unwrap();
+        d.close().unwrap()
+    };
+    w.add_instance(
+        arc_def,
+        &InstanceOptions {
+            name: Some("MirroredArc".to_owned()),
+            matrix3x3: Some([-1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]),
+            translation: [10.0, 0.0, 0.0],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    let sc = openskp::SkpFile::from_buffer(w.to_bytes().unwrap())
+        .build_scene(&openskp::ParseOptions::default())
+        .expect("scene");
+    assert_eq!(sc.curve_sets.len(), 1);
+    let arc = sc.curve_sets[0].arc.as_ref().expect("mirrored arc");
+    assert_eq!(arc.segments, [[0, 1, 2]]);
+    let ex = (-40.0 * std::f64::consts::FRAC_PI_4.cos() + 10.0) * 0.0254;
+    let ez = -40.0 * std::f64::consts::FRAC_PI_4.sin() * 0.0254;
+    assert!((arc.points[1][0] - ex).abs() < 1e-6);
+    assert!(arc.points[1][1].abs() < 1e-6);
+    assert!((arc.points[1][2] - ez).abs() < 1e-6);
+}
+
+#[test]
+fn curve_resources_deduplicate_by_effective_layer_and_respect_own_tags() {
+    use openskp::create::{
+        create, DefinitionOptions, FaceOptions, InstanceOptions, LayerOptions, PolylineOptions,
+    };
+    use std::collections::BTreeMap;
+
+    let mut w = create();
+    let wood = w.add_layer("Wood", &LayerOptions::default()).unwrap();
+    let layer_a = w.add_layer("LayerA", &LayerOptions::default()).unwrap();
+    let layer_b = w.add_layer("LayerB", &LayerOptions::default()).unwrap();
+    let def = {
+        let mut d = w
+            .add_component_definition("WoodWithCurve", &DefinitionOptions::default())
+            .unwrap();
+        d.add_face(
+            &[
+                [0.0, 0.0, 0.0],
+                [2.0, 0.0, 0.0],
+                [2.0, 2.0, 0.0],
+                [0.0, 2.0, 0.0],
+            ],
+            &FaceOptions {
+                layer: Some(wood),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        d.add_polyline(
+            &[[0.0, 3.0, 0.0], [2.0, 3.0, 0.0]],
+            &PolylineOptions::default(),
+        )
+        .unwrap();
+        d.close().unwrap()
+    };
+    w.add_instance(
+        def,
+        &InstanceOptions {
+            name: Some("OnLayer0".to_owned()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    w.add_instance(
+        def,
+        &InstanceOptions {
+            name: Some("OnWood".to_owned()),
+            layer: Some(wood),
+            translation: [5.0, 0.0, 0.0],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    w.add_instance(
+        def,
+        &InstanceOptions {
+            name: Some("OnA".to_owned()),
+            layer: Some(layer_a),
+            translation: [10.0, 0.0, 0.0],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    w.add_instance(
+        def,
+        &InstanceOptions {
+            name: Some("OnB".to_owned()),
+            layer: Some(layer_b),
+            translation: [15.0, 0.0, 0.0],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    let inst = openskp::SkpFile::from_buffer(w.to_bytes().unwrap())
+        .build_instanced_scene(&openskp::ParseOptions::default())
+        .expect("instanced");
+    assert_eq!(inst.curve_resources.len(), 3);
+    let nodes: BTreeMap<&str, &openskp::InstancedNode> = inst
+        .scene_hierarchy
+        .children
+        .iter()
+        .map(|n| (n.name.as_str(), n))
+        .collect();
+    assert_eq!(
+        nodes["OnLayer0"].curve_resource_id,
+        nodes["OnWood"].curve_resource_id
+    );
+    let by_id: BTreeMap<&str, &openskp::InstancedCurveResource> = inst
+        .curve_resources
+        .iter()
+        .map(|r| (r.id.as_str(), r))
+        .collect();
+    assert_eq!(
+        by_id[nodes["OnLayer0"].curve_resource_id.as_deref().unwrap()].curves[0].layer,
+        "Wood"
+    );
+    assert_eq!(
+        by_id[nodes["OnA"].curve_resource_id.as_deref().unwrap()].curves[0].layer,
+        "LayerA"
+    );
+    assert_eq!(
+        by_id[nodes["OnB"].curve_resource_id.as_deref().unwrap()].curves[0].layer,
+        "LayerB"
     );
 }

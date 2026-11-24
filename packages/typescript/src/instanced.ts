@@ -9,6 +9,14 @@ import {
   unpaintedStyleColors,
 } from './face-groups';
 import {
+  CurveArc,
+  PreparedDefCurves,
+  INCHES_TO_M,
+  prepareDefinitionCurves,
+  round6,
+  solveRunArc,
+} from './curves';
+import {
   Material,
   Page,
   SceneTexture,
@@ -84,6 +92,24 @@ export interface InstancedMeshResource {
   primitives: LocalPrimitive[];
 }
 
+/** One loose-edge run in definition-local space (metres, glTF Y-up). */
+export interface LocalCurve {
+  pointsM: [number, number, number][];
+  closed: boolean;
+  layer: string;
+  arc: CurveArc | null;
+}
+
+/** A definition's loose edges, ready to be referenced by any number of
+ * {@link InstancedNode}s - the loose-edge counterpart of
+ * {@link InstancedMeshResource}. */
+export interface InstancedCurveResource {
+  id: string;
+  definitionId: number | string;
+  definitionName: string;
+  curves: LocalCurve[];
+}
+
 /**
  * One placed node in the instanced scene graph.
  *
@@ -149,6 +175,9 @@ export interface InstancedNode {
   /** The mesh resource this node renders, or undefined for a node that
    * only groups children. */
   meshResourceId?: string;
+  /** The loose-edge curve resource this node places, or undefined when its
+   * definition has no loose edges. */
+  curveResourceId?: string;
   children: InstancedNode[];
 }
 
@@ -182,6 +211,12 @@ export interface InstancedScene {
   /** Every distinct (definition, rendering-context) mesh actually placed,
    * in deterministic first-encounter order. */
   meshResources: InstancedMeshResource[];
+  /** Loose-edge resources, one per (definition, effective layer). Always
+   * populated by {@link buildInstancedScene} (empty for a model whose geometry
+   * is all face-bounded or when `includeCurveSets` is `false`); optional so
+   * hand-constructed scene literals and `fromFragments` scenes do not need to
+   * supply it. */
+  curveResources?: InstancedCurveResource[];
   /** glTF PBR materials referenced by {@link LocalPrimitive.materialIndex}.
    * Same shape and construction as {@link SkpScene.gltfMaterials}. */
   gltfMaterials: unknown[];
@@ -285,6 +320,11 @@ export function buildInstancedSceneFromParsed(
 
   const meshResources: InstancedMeshResource[] = [];
   const resourceIdByKey = new Map<string, string>();
+  const curveResources: InstancedCurveResource[] = [];
+  const curveResourceIdByKey = new Map<string, string | undefined>();
+  const preparedCurvesCache = new Map<number | string, PreparedDefCurves>();
+  const includeCurveSets = options?.includeCurveSets !== false;
+  const respectEdgeVis = options?.respectEdgeVisibility === true;
 
   /**
    * Identity of a mesh resource. Caching on the definition id ALONE would
@@ -345,6 +385,61 @@ export function buildInstancedSceneFromParsed(
     hit = d ? summarizeFaceLayers(d.builder, layerIdToName) : { uniformLayer: null, majorityLayer: null };
     faceLayerCache.set(defId, hit);
     return hit;
+  }
+
+  function curveResourceFor(defId: number | string, layer: string): string | undefined {
+    if (!includeCurveSets) return undefined;
+    const d = defsDict.get(defId);
+    if (!d) return undefined;
+
+    const effectiveLayer =
+      layer === 'Layer0' ? (getFaceLayerSummary(defId).uniformLayer ?? layer) : layer;
+    const key = `${String(defId)}|${effectiveLayer}`;
+    if (curveResourceIdByKey.has(key)) return curveResourceIdByKey.get(key);
+
+    let prepared = preparedCurvesCache.get(defId);
+    if (prepared === undefined) {
+      prepared = prepareDefinitionCurves(d.builder, layerIdToName, respectEdgeVis);
+      preparedCurvesCache.set(defId, prepared);
+    }
+    if (prepared.runs.length === 0) {
+      curveResourceIdByKey.set(key, undefined);
+      return undefined;
+    }
+
+    const curves: LocalCurve[] = [];
+    for (const run of prepared.runs) {
+      const pts: [number, number, number][] = new Array(run.localVerts.length);
+      for (let i = 0; i < run.localVerts.length; i++) {
+        const v = run.localVerts[i];
+        pts[i] = [
+          round6(v[0] * INCHES_TO_M),
+          round6(v[2] * INCHES_TO_M),
+          round6(-v[1] * INCHES_TO_M),
+        ];
+      }
+      const runLayer = run.explicitLayer ?? effectiveLayer;
+      curves.push({
+        pointsM: pts,
+        closed: run.closed,
+        layer: runLayer,
+        arc: solveRunArc(d.builder, run.edgeIds, null, pts, run.closed, prepared.curveEdgeCounts),
+      });
+    }
+    if (curves.length === 0) {
+      curveResourceIdByKey.set(key, undefined);
+      return undefined;
+    }
+
+    const id = `curve_${curveResources.length}`;
+    curveResources.push({
+      id,
+      definitionId: defId,
+      definitionName: d.name || '',
+      curves,
+    });
+    curveResourceIdByKey.set(key, id);
+    return id;
   }
 
   /** Build (or reuse) the local-space mesh resource for a definition
@@ -632,6 +727,10 @@ export function buildInstancedSceneFromParsed(
         guid: inst.refGuid || '',
         hidden: inst.hidden ?? false,
         meshResourceId: meshResourceFor(refIdx, instMaterial, lName),
+        ...((): { curveResourceId?: string } => {
+          const cid = curveResourceFor(refIdx, lName);
+          return cid !== undefined ? { curveResourceId: cid } : {};
+        })(),
         children,
       });
     }
@@ -646,6 +745,7 @@ export function buildInstancedSceneFromParsed(
   // component/group) is kept, as the baked path keeps it: it becomes the
   // root node's own mesh resource.
   const rootMeshResourceId = meshResourceFor('ROOT', undefined, 'Layer0');
+  const rootCurveResourceId = curveResourceFor('ROOT', 'Layer0');
 
   const sceneHierarchy: InstancedNode = {
     name: 'ROOT',
@@ -659,6 +759,7 @@ export function buildInstancedSceneFromParsed(
     guid: '',
     hidden: false,
     meshResourceId: rootMeshResourceId,
+    ...(rootCurveResourceId !== undefined ? { curveResourceId: rootCurveResourceId } : {}),
     children: rootChildren,
   };
 
@@ -752,6 +853,7 @@ export function buildInstancedSceneFromParsed(
   return {
     sceneHierarchy,
     meshResources,
+    curveResources,
     gltfMaterials,
     textures,
     bounds,

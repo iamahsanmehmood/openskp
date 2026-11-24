@@ -369,3 +369,63 @@ class TestSceneCurveSets:
         assert off.curve_sets == []
         assert len(on.glb_primitives) == len(off.glb_primitives)
         assert list(on.mesh_index) == list(off.mesh_index)
+
+    def test_mirrored_placement_preserves_analytic_arc(self):
+        b = _FakeBuilder()
+        b.edge_curves = {1: 17}
+        b.arc_curves = {17: _frame(RADIUS_IN, math.pi / 2)}
+        mirror = [-1, 0, 0, 0, 1, 0, 0, 0, 1, 10, 0, 0, 1]
+        pts = [
+            (
+                round((-RADIUS_IN * math.cos(t) + 10.0) * INCHES_TO_M, 6),
+                0.0,
+                round(-RADIUS_IN * math.sin(t) * INCHES_TO_M, 6),
+            )
+            for t in (0.0, math.pi / 8, math.pi / 4, 3 * math.pi / 8, math.pi / 2)
+        ]
+        arc = scene._solve_run_arc(b, [1], mirror, pts, False)
+        assert arc is not None
+        assert arc["segments"] == [(0, 1, 2)]
+        expected_mid = (
+            (-RADIUS_IN * math.cos(math.pi / 4) + 10.0) * INCHES_TO_M,
+            0.0,
+            -RADIUS_IN * math.sin(math.pi / 4) * INCHES_TO_M,
+        )
+        assert math.dist(arc["points"][1], expected_mid) < 1e-6
+
+    def test_curve_resources_deduplicate_by_effective_layer_and_respect_own_tag(self, tmp_path):
+        from openskp import create
+
+        w = create()
+        wood = w.add_layer("Wood")
+        layer_a = w.add_layer("LayerA")
+        layer_b = w.add_layer("LayerB")
+        with w.add_component_definition("WoodWithCurve") as d:
+            d.add_face([(0, 0, 0), (2, 0, 0), (2, 2, 0), (0, 2, 0)], layer=wood)
+            d.add_polyline([(0, 3, 0), (2, 3, 0)])
+        w.add_instance(d, name="OnLayer0")
+        w.add_instance(d, name="OnWood", layer=wood, translation=(5, 0, 0))
+        w.add_instance(d, name="OnA", layer=layer_a, translation=(10, 0, 0))
+        w.add_instance(d, name="OnB", layer=layer_b, translation=(15, 0, 0))
+
+        out = tmp_path / "curve_eff_layer.skp"
+        w.save(out)
+        inst = SkpFile.open(str(out)).build_instanced_scene()
+        assert len(inst.curve_resources) == 3
+        nodes = {n.name: n for n in inst.scene_hierarchy.children}
+        assert nodes["OnLayer0"].curve_resource_id == nodes["OnWood"].curve_resource_id
+        by_id = {cr.id: cr for cr in inst.curve_resources}
+        assert by_id[nodes["OnLayer0"].curve_resource_id].curves[0].layer == "Wood"
+        assert by_id[nodes["OnA"].curve_resource_id].curves[0].layer == "LayerA"
+        assert by_id[nodes["OnB"].curve_resource_id].curves[0].layer == "LayerB"
+
+    def test_round6_reference_checksum_matches_cross_language_ports(self):
+        assert round(-1199.8125 * INCHES_TO_M, 6) == -30.475237
+        h = 0x811C9DC5
+        for i in range(-19200, 19201):
+            v = round((i / 16.0) * INCHES_TO_M, 6)
+            um = int(round(v * 1_000_000)) & 0xFFFFFFFF
+            for shift in (0, 8, 16, 24):
+                h = ((h ^ ((um >> shift) & 0xFF)) * 0x01000193) & 0xFFFFFFFF
+        assert h == 0xFB8548AF
+
