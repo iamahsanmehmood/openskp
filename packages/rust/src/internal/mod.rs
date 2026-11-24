@@ -28,6 +28,7 @@ pub mod xml;
 pub use self::build_model::{build_model, build_pages};
 pub use self::bytes::{
     parse_flat, parse_tlv_recursive, parse_varint, read_f64, read_i32, read_u16, read_u32, tag_at,
+    tlv_headers, tlv_headers_slice, wrapped_model_records, TlvHeader,
 };
 pub use self::core::{decode_xml_entities, full_parse};
 pub use self::geometry::{
