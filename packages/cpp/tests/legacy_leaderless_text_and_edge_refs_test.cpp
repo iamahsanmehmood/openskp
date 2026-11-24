@@ -38,7 +38,7 @@ TEST(LegacyLeaderlessTextAndEdgeRefs, LeaderlessTextBeforeSharedVertexEdgesMatch
   EXPECT_EQ(model.root().texts[0].text, "Screen title");
   EXPECT_EQ(model.root().texts[1].text, "Callout");
   EXPECT_EQ(model.unread_root_entities, 0u);
-  EXPECT_EQ(scene.glb_primitives.size(), 1u);
+  EXPECT_EQ(scene.surface_primitives().size(), 1u);
   EXPECT_EQ(instanced.mesh_resources.size(), 1u);
   EXPECT_TRUE(std::none_of(logs.begin(), logs.end(),
                            [](const auto& e) { return e.first == LogLevel::warning; }));
@@ -68,7 +68,7 @@ TEST(LegacyLeaderlessTextAndEdgeRefs, RootEdgeWithNonVertexRefReportsPartialRead
   EXPECT_EQ(model.root().texts[1].text, "Callout");
   EXPECT_EQ(model.root().edges.size(), 1u);
   EXPECT_EQ(model.unread_root_entities, 2u);
-  EXPECT_EQ(scene.glb_primitives.size(), 1u);
+  EXPECT_EQ(scene.surface_primitives().size(), 1u);
   EXPECT_EQ(instanced.mesh_resources.size(), 1u);
   EXPECT_TRUE(std::any_of(logs.begin(), logs.end(), [](const auto& e) {
     return e.first == LogLevel::warning && e.second.find("2 unread") != std::string::npos;

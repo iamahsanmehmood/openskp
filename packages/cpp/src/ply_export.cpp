@@ -56,6 +56,7 @@ std::string to_ply_ascii(const Scene& scene) {
   std::size_t total_vertices = 0;
   std::size_t total_faces = 0;
   for (const auto& prim : scene.glb_primitives) {
+    if (prim.unpainted_back) continue;
     total_vertices += prim.positions.size() / 3;
     total_faces += prim.indices.size() / 3;
   }
@@ -84,6 +85,7 @@ std::string to_ply_ascii(const Scene& scene) {
   ss << "end_header\n";
 
   for (const auto& prim : scene.glb_primitives) {
+    if (prim.unpainted_back) continue;
     ColorRgba color = get_material_rgba(scene, prim.material_index);
     std::size_t vert_count = prim.positions.size() / 3;
     for (std::size_t i = 0; i < vert_count; ++i) {
@@ -107,6 +109,7 @@ std::string to_ply_ascii(const Scene& scene) {
 
   std::size_t vert_offset = 0;
   for (const auto& prim : scene.glb_primitives) {
+    if (prim.unpainted_back) continue;
     std::size_t tri_count = prim.indices.size() / 3;
     for (std::size_t i = 0; i < tri_count; ++i) {
       std::uint32_t i0 = prim.indices[i * 3] + static_cast<std::uint32_t>(vert_offset);
@@ -125,6 +128,7 @@ std::vector<std::uint8_t> to_ply_binary(const Scene& scene) {
   std::size_t total_vertices = 0;
   std::size_t total_faces = 0;
   for (const auto& prim : scene.glb_primitives) {
+    if (prim.unpainted_back) continue;
     total_vertices += prim.positions.size() / 3;
     total_faces += prim.indices.size() / 3;
   }
@@ -159,6 +163,7 @@ std::vector<std::uint8_t> to_ply_binary(const Scene& scene) {
   data.insert(data.end(), header_text.begin(), header_text.end());
 
   for (const auto& prim : scene.glb_primitives) {
+    if (prim.unpainted_back) continue;
     ColorRgba color = get_material_rgba(scene, prim.material_index);
     std::size_t vert_count = prim.positions.size() / 3;
     for (std::size_t i = 0; i < vert_count; ++i) {
@@ -195,6 +200,7 @@ std::vector<std::uint8_t> to_ply_binary(const Scene& scene) {
 
   std::size_t vert_offset = 0;
   for (const auto& prim : scene.glb_primitives) {
+    if (prim.unpainted_back) continue;
     std::size_t tri_count = prim.indices.size() / 3;
     for (std::size_t i = 0; i < tri_count; ++i) {
       std::int32_t i0 =

@@ -61,6 +61,7 @@ add_executable(
   stl_export_test.cpp
   texture_test.cpp
   triangulator_test.cpp
+  unpainted_face_colors_test.cpp
   vff_layer_hidden_test.cpp
   vff_layer_materials_test.cpp
   xml_entities_test.cpp

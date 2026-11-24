@@ -51,10 +51,11 @@ struct GroupKey {
   // and keying on color alone would merge them into one material and
   // lose one of the images.
   std::optional<std::size_t> texture_index;
+  bool unpainted_back{};
 
   bool operator<(const GroupKey& other) const {
-    return std::tie(color, double_sided, texture_index) <
-           std::tie(other.color, other.double_sided, other.texture_index);
+    return std::tie(color, double_sided, texture_index, unpainted_back) <
+           std::tie(other.color, other.double_sided, other.texture_index, other.unpainted_back);
   }
 };
 
@@ -75,16 +76,21 @@ struct Group {
 std::shared_ptr<RawMaterial> find_material(const RawParsed& parsed, std::optional<EntityId> id);
 std::optional<FaceColorKey> material_color(const std::shared_ptr<RawMaterial>& material);
 FaceColorKey default_color(const RawParsed& parsed, const std::string& layer);
+std::optional<std::pair<FaceColorKey, FaceColorKey>> unpainted_style_colors(
+    const RawParsed& parsed, const std::string& unpainted_faces);
 std::optional<std::string> sniff_image_mime(const ByteBuffer& data);
 
 // Everything build_local_face_groups needs from its caller that isn't the
 // builder itself.
 struct FaceGroupContext {
   std::function<std::optional<std::size_t>(const std::shared_ptr<RawMaterial>&)> texture_index_for;
-  // Color an unpainted face falls back to (already resolved by the
-  // caller: the instance's inherited paint color, or the effective
-  // layer's color when nothing is inherited).
+  // Color an unpainted face side falls back to (already resolved by the
+  // caller: the instance's inherited paint color, or, when nothing is
+  // inherited, the model's front face color or the layer's color).
   FaceColorKey fallback_color{};
+  // Same as fallback_color for a face's back side where it differs (the
+  // model's back face color). nullopt means fallback_color.
+  std::optional<FaceColorKey> fallback_back_color;
 };
 
 // Group a definition's faces by resolved material identity, in local

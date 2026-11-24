@@ -235,7 +235,8 @@ TEST(Parser, ModernRootOnly) {
   auto scene = file.build_scene();
   EXPECT_EQ(scene.scene_hierarchy.name, "ROOT");
   EXPECT_EQ(scene.scene_hierarchy.definition_name, "ROOT_MODEL");
-  ASSERT_EQ(scene.mesh_index.size(), 1);
+  EXPECT_EQ(scene.surface_primitives().size(), 1u);
+  ASSERT_EQ(scene.mesh_index.size(), 2u);
   EXPECT_EQ(scene.mesh_index.begin()->second.definition_name, "ROOT_MODEL");
 }
 
@@ -434,9 +435,10 @@ TEST(Parser, LegacyMatchesReference) {
   EXPECT_EQ(with_uv_projected, 0);
 
   auto scene = file.build_scene();
-  EXPECT_EQ(scene.glb_primitives.size(), 21);
-  EXPECT_EQ(scene.mesh_index.size(), 21);
-  EXPECT_EQ(scene.gltf_materials.size(), 13);
+  EXPECT_EQ(scene.surface_primitives().size(), 21u);
+  EXPECT_EQ(scene.glb_primitives.size(), 22u);
+  EXPECT_EQ(scene.mesh_index.size(), 22u);
+  EXPECT_EQ(scene.gltf_materials.size(), 13u);
   EXPECT_EQ(scene.scene_hierarchy.children.size(), 3);
 
   std::multiset<std::string> placed_definitions;
@@ -459,8 +461,9 @@ TEST(Parser, ModernSceneMatchesReference) {
   EXPECT_EQ(scene.scene_hierarchy.name, "ROOT");
   EXPECT_EQ(scene.scene_hierarchy.definition_name, "ROOT_MODEL");
   EXPECT_FALSE(scene.scene_hierarchy.children.empty());
-  EXPECT_EQ(scene.mesh_index.size(), 43);
-  EXPECT_EQ(scene.glb_primitives.size(), 43);
+  EXPECT_EQ(scene.surface_primitives().size(), 43u);
+  EXPECT_EQ(scene.mesh_index.size(), 86u);
+  EXPECT_EQ(scene.glb_primitives.size(), 86u);
   for (const auto& [name, metadata] : scene.mesh_index) {
     EXPECT_FALSE(name.empty());
     EXPECT_FALSE(metadata.layer.empty());
@@ -553,12 +556,16 @@ TEST(Parser, StreamingDefinitionsPreservesGeometryAndHierarchy) {
   EXPECT_FALSE(scene.mesh_resources.empty());
   EXPECT_EQ(scene.scene_hierarchy.name, "ROOT");
   EXPECT_FALSE(scene.scene_hierarchy.children.empty());
-  EXPECT_EQ(scene.gltf_materials.size(), 8);
+  EXPECT_EQ(scene.gltf_materials.size(), 2);
 
+  std::size_t surface_faces = 0;
   std::size_t total_faces = 0;
   for (const auto& res : scene.mesh_resources) {
     for (const auto& prim : res.primitives) {
       total_faces += prim.indices.size() / 3;
+      if (!prim.unpainted_back) {
+        surface_faces += prim.indices.size() / 3;
+      }
     }
   }
   // 16883, not the long-pinned 16949: this fixture is the same real file
@@ -568,8 +575,10 @@ TEST(Parser, StreamingDefinitionsPreservesGeometryAndHierarchy) {
   // intersecting-input count; the fix (see triangulator_test.cpp's
   // OverlappingHolesMatchIndependentAnalyticalCircleUnionArea) changed it
   // to the new, actually-well-defined value - a real, intentional
-  // behavior change, not a regression.
-  EXPECT_EQ(total_faces, 16883u);
+  // behavior change, not a regression. Every face in this fixture is
+  // unpainted, so GLB emits both front and back triangles (2 * 16883).
+  EXPECT_EQ(surface_faces, 16883u);
+  EXPECT_EQ(total_faces, 33766u);
 }
 
 // legacy_annotations.skp was generated with Python's own create() API

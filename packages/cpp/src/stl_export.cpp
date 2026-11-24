@@ -64,6 +64,7 @@ std::string to_stl_ascii(const Scene& scene, float scale) {
   ss << "solid OpenSKP_Model\n";
 
   for (const auto& prim : scene.glb_primitives) {
+    if (prim.unpainted_back) continue;
     std::size_t tri_count = prim.indices.size() / 3;
     for (std::size_t i = 0; i < tri_count; ++i) {
       std::uint32_t i0 = prim.indices[i * 3];
@@ -100,6 +101,7 @@ std::string to_stl_ascii(const Scene& scene, float scale) {
 std::vector<std::uint8_t> to_stl_binary(const Scene& scene, float scale) {
   std::uint32_t total_triangles = 0;
   for (const auto& prim : scene.glb_primitives) {
+    if (prim.unpainted_back) continue;
     total_triangles += static_cast<std::uint32_t>(prim.indices.size() / 3);
   }
 
@@ -116,6 +118,7 @@ std::vector<std::uint8_t> to_stl_binary(const Scene& scene, float scale) {
   write_uint32_le(data, total_triangles);
 
   for (const auto& prim : scene.glb_primitives) {
+    if (prim.unpainted_back) continue;
     std::size_t tri_count = prim.indices.size() / 3;
     for (std::size_t i = 0; i < tri_count; ++i) {
       std::uint32_t i0 = prim.indices[i * 3];
