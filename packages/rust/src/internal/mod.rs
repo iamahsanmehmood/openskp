@@ -25,7 +25,7 @@ pub mod transforms;
 pub mod vff;
 pub mod xml;
 
-pub use self::build_model::build_model;
+pub use self::build_model::{build_model, build_pages};
 pub use self::bytes::{
     parse_flat, parse_tlv_recursive, parse_varint, read_f64, read_i32, read_u16, read_u32, tag_at,
 };

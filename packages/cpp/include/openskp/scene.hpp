@@ -105,5 +105,9 @@ struct OPENSKP_EXPORT Scene {
   // Number of top-level entities dropped when a classic (pre-2021) root
   // entity walk stopped early (0 for complete classic files and VFF files).
   std::size_t unread_root_entities{};
+  // Saved scenes (SketchUp's "Scenes" tabs), identical to SkpModel::pages.
+  // Camera eye/target/up and ortho_height stay in SketchUp's native Z-up
+  // frame and inches (unlike glb_primitives, which are Y-up metres).
+  std::vector<Page> pages;
 };
 }  // namespace openskp

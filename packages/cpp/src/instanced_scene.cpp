@@ -366,6 +366,7 @@ InstancedScene build_instanced_scene_raw(RawParsed&& p, const ParseOptions& o) {
 
   scene.layer_hidden = p.layer_hidden;
   scene.unread_root_entities = p.unread_root_entities;
+  scene.pages = build_pages(p);
 
   scene.scene_hierarchy = InstancedNode{};
   scene.scene_hierarchy.name = "ROOT";

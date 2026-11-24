@@ -209,6 +209,29 @@ static Definition definition(EntityId id, RawDefinition r) {
   return d;
 }
 
+std::vector<Page> build_pages(const RawParsed& p) {
+  std::vector<Page> out;
+  out.reserve(p.pages.size());
+  for (const auto& pg : p.pages) {
+    Page page;
+    page.name = pg.name;
+    page.eye = pg.eye;
+    page.target = pg.target;
+    page.up = pg.up;
+    page.fov = pg.fov;
+    page.parallel = pg.parallel;
+    page.ortho_height = pg.ortho_height;
+    page.selected = pg.selected;
+    for (auto id : pg.hidden_layer_ids) {
+      auto it = p.layer_id_to_name.find(id);
+      if (it != p.layer_id_to_name.end()) page.hidden_layers.push_back(it->second);
+    }
+    page.hidden_entity_ids = pg.hidden_entity_ids;
+    out.push_back(std::move(page));
+  }
+  return out;
+}
+
 SkpModel build_model(RawParsed&& p, const ParseOptions& o) {
   SkpModel m;
   m.version = std::move(p.version);
@@ -256,23 +279,7 @@ SkpModel build_model(RawParsed&& p, const ParseOptions& o) {
   }
   // Convert pages (saved scenes) - hidden layer ids resolve to names;
   // unknown ids (stale refs) are dropped.
-  for (auto& pg : p.pages) {
-    Page page;
-    page.name = pg.name;
-    page.eye = pg.eye;
-    page.target = pg.target;
-    page.up = pg.up;
-    page.fov = pg.fov;
-    page.parallel = pg.parallel;
-    page.ortho_height = pg.ortho_height;
-    page.selected = pg.selected;
-    for (auto id : pg.hidden_layer_ids) {
-      auto it = p.layer_id_to_name.find(id);
-      if (it != p.layer_id_to_name.end()) page.hidden_layers.push_back(it->second);
-    }
-    page.hidden_entity_ids = pg.hidden_entity_ids;
-    m.pages.push_back(std::move(page));
-  }
+  m.pages = build_pages(p);
   m.camera = p.camera;
   m.unread_root_entities = p.unread_root_entities;
   // Convert model-level linear dimensions (VFF; world space).

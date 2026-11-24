@@ -29,6 +29,28 @@ if TYPE_CHECKING:
     from . import instanced_scene, scene
 
 
+def _convert_pages(parsed: Dict[str, Any]) -> List["Page"]:
+    """Convert raw parsed scene records into :class:`Page` objects."""
+    layer_id_to_name = parsed.get("layer_id_to_name", {})
+    return [
+        Page(
+            name=pg.get("name", ""),
+            eye=pg.get("eye"),
+            target=pg.get("target"),
+            up=pg.get("up"),
+            fov=pg.get("fov", 35.0),
+            parallel=pg.get("parallel", False),
+            ortho_height=pg.get("ortho_height", 0.0),
+            hidden_layers=[
+                layer_id_to_name[i]
+                for i in pg.get("hidden_layer_ids", [])
+                if i in layer_id_to_name
+            ],
+        )
+        for pg in (parsed.get("pages") or [])
+    ]
+
+
 # ── TLV node (raw parse tree) ─────────────────────────────────────────────
 
 
@@ -958,19 +980,7 @@ class SkpFile:
 
         # Convert pages (saved scenes) — hidden layer ids resolve to names;
         # unknown ids (stale refs) are dropped.
-        for pg in parsed.get("pages") or []:
-            model.pages.append(Page(
-                name=pg.get("name", ""),
-                eye=pg.get("eye"),
-                target=pg.get("target"),
-                up=pg.get("up"),
-                fov=pg.get("fov", 35.0),
-                parallel=pg.get("parallel", False),
-                ortho_height=pg.get("ortho_height", 0.0),
-                hidden_layers=[layer_id_to_name[i]
-                               for i in pg.get("hidden_layer_ids", [])
-                               if i in layer_id_to_name],
-            ))
+        model.pages = _convert_pages(parsed)
 
         # Convert model-level linear dimensions (VFF; world space).
         for dm in parsed.get("dimensions") or []:

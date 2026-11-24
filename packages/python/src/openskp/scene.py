@@ -35,6 +35,7 @@ from ._face_groups import (
     unpainted_style_colors,
 )
 from .errors import SkpParseError
+from .model import Page, _convert_pages
 
 logger = logging.getLogger("openskp.scene")
 
@@ -260,6 +261,10 @@ class Scene:
     # defaulting every layer to visible.
     layer_hidden: Dict[str, bool] = field(default_factory=dict)
     unread_root_entities: int = 0
+    # Saved scenes (SketchUp's "Scenes" tabs), identical to SkpModel.pages.
+    # Camera eye/target/up and ortho_height stay in SketchUp's native Z-up
+    # frame and inches (unlike glb_primitives, which are Y-up metres).
+    pages: List[Page] = field(default_factory=list)
 
     @property
     def surface_primitives(self) -> List[GlbPrimitive]:
@@ -951,4 +956,5 @@ def build_scene(
         textures=textures,
         layer_hidden=dict(parsed.get("layer_hidden") or {}),
         unread_root_entities=int(parsed.get("unread_root_entities", 0)),
+        pages=_convert_pages(parsed),
     )

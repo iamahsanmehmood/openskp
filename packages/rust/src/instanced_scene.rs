@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::model::{EntityId, StringDictionaries};
+use crate::model::{EntityId, Page, StringDictionaries};
 use crate::scene::{CurveArc, GltfMaterial, SceneTexture};
 
 /// One reusable, DEFINITION-LOCAL triangulated mesh: the instanced
@@ -129,4 +129,9 @@ pub struct InstancedScene {
     /// entity walk stopped early (`0` for complete classic files, VFF files,
     /// and scenes read back from `.frag`).
     pub unread_root_entities: usize,
+    /// Saved scenes (SketchUp's "Scenes" tabs), identical to [`crate::SkpModel::pages`].
+    /// Camera `eye`/`target`/`up` and `ortho_height` stay in SketchUp's native
+    /// Z-up frame and inches (unlike `mesh_resources` and node matrices, which
+    /// are Y-up metres). Empty on scenes read back from `.frag`.
+    pub pages: Vec<Page>,
 }

@@ -373,6 +373,38 @@ class Page {
     this.orthoHeight = 0.0,
     this.hiddenLayers = const [],
   });
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other is! Page) return false;
+    if (name != other.name ||
+        eye != other.eye ||
+        target != other.target ||
+        up != other.up ||
+        fov != other.fov ||
+        parallel != other.parallel ||
+        orthoHeight != other.orthoHeight ||
+        hiddenLayers.length != other.hiddenLayers.length) {
+      return false;
+    }
+    for (var i = 0; i < hiddenLayers.length; i++) {
+      if (hiddenLayers[i] != other.hiddenLayers[i]) return false;
+    }
+    return true;
+  }
+
+  @override
+  int get hashCode => Object.hash(
+        name,
+        eye,
+        target,
+        up,
+        fov,
+        parallel,
+        orthoHeight,
+        Object.hashAll(hiddenLayers),
+      );
 }
 
 class Definition {
