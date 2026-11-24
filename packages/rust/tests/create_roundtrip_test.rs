@@ -1510,3 +1510,29 @@ fn guide_options_reject_a_foreign_layer_handle() {
         .add_construction_line([0.0; 3], Some([1.0, 0.0, 0.0]), None, &foreign)
         .is_err());
 }
+
+#[test]
+fn opaque_textured_material_uses_alpha_255_and_single_quad_counter_27() {
+    let mut single = create();
+    single.add_face(&square(), &FaceOptions::default()).unwrap();
+    let single_bytes = single.to_bytes().unwrap();
+    let next_pid = u64::from_le_bytes(single_bytes[1987..1995].try_into().unwrap());
+    assert_eq!(next_pid, 27);
+
+    let mut b = create();
+    let brick = b
+        .add_texture_material("Brick", PNG, None, None, None)
+        .unwrap();
+    b.add_face(
+        &square(),
+        &FaceOptions {
+            material: Some(brick),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let model = round_trip(&mut b);
+    assert_eq!(model.materials.len(), 1);
+    assert_eq!(model.materials[0].color, [255, 255, 255, 255]);
+    assert!(!model.materials[0].colorized);
+}

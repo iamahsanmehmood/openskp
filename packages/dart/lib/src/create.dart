@@ -318,11 +318,19 @@ int _readU16At(List<int> buf, int pos) => buf[pos] | (buf[pos + 1] << 8);
 int _readU32At(List<int> buf, int pos) =>
     buf[pos] | (buf[pos + 1] << 8) | (buf[pos + 2] << 16) | (buf[pos + 3] << 24);
 
+int _readU64At(List<int> buf, int pos) =>
+    _readU32At(buf, pos) + _readU32At(buf, pos + 4) * 0x100000000;
+
 void _patchU32(List<int> buf, int pos, int val) {
   buf[pos] = val & 0xFF;
   buf[pos + 1] = (val >> 8) & 0xFF;
   buf[pos + 2] = (val >> 16) & 0xFF;
   buf[pos + 3] = (val >> 24) & 0xFF;
+}
+
+void _patchU64(List<int> buf, int pos, int val) {
+  _patchU32(buf, pos, val);
+  _patchU32(buf, pos + 4, val ~/ 0x100000000);
 }
 
 /// Renumber the u16 archive slot-reference at [pos] in [buf] by [shift],
@@ -1296,14 +1304,10 @@ class _ArchiveWriter {
     buf.addAll(_f64(appliedWidth ?? 1.0));
     buf.addAll(_f64(appliedHeight ?? 1.0));
     _writeStr(texturePath);
-    // avg color (RGBA + pad + RGBA repeated) - neutral near-opaque white
-    // rather than a real image average, since this project doesn't depend
-    // on an image library to compute one. Alpha is 254, not a fully-opaque
-    // 255: the reader treats alpha=255 here as one of its two "this
-    // material is colorized" signals (alongside the blob flag below) - a
-    // plain material's placeholder must not trip that, or every plain
-    // texture this writer creates reads back as falsely colorized.
-    buf.addAll([255, 255, 255, 254, 0, 255, 255, 255, 254]);
+    // avg color (RGBA + pad + RGBA repeated) - neutral opaque white (alpha=255
+    // in both color slots, matching SketchUp's C SDK; colorization is gated on
+    // the u32 material-type field below).
+    buf.addAll([255, 255, 255, 255, 0, 255, 255, 255, 255]);
     _writeStr(''); // second name field - empty in ground truth
     buf.addAll(_u32(1)); // blob (colorize-related, ground truth: 1, 0)
     buf.addAll(_u32(0));
@@ -2376,7 +2380,7 @@ class SkpBuilder implements GeometryHost {
     // instance and a material could all carry pid 1: SketchUp loads such a
     // file, renumbers the duplicates, and then cannot SAVE it (SketchUp for
     // Web: "Save Failed") once ids above the header counter are in use.
-    _pidStart = _readU32At(data, _pidCounterPos) + 1;
+    _pidStart = _readU64At(data, _pidCounterPos);
     _materialWriter = _ArchiveWriter(nextSlot: base, classSlot: {}, nextPid: _pidStart);
     _layerWriterBase = layerWriterBase;
   }
@@ -3089,10 +3093,9 @@ class SkpBuilder implements GeometryHost {
     // SketchUp overwrites them in place rather than growing the file by 4
     // extra bytes here.
     final prefix = List<int>.from(_data.sublist(0, _materialInsertPos - 4));
-    // The model's pid counter: the last pid handed out, in every section. A
-    // 32-bit field, so a model with more than 65 535 entities keeps a truthful
-    // counter.
-    _patchU32(prefix, _pidCounterPos, _nextPid() - 1);
+    // The model's 64-bit next-persistent-ID counter: the next unused pid
+    // after every section has allocated its entities.
+    _patchU64(prefix, _pidCounterPos, _nextPid());
     prefix.setRange(
       _isoCameraPrefixOffset,
       _isoCameraPrefixOffset + _isoCameraPrefixPatch.length,

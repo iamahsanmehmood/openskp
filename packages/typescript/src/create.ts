@@ -449,6 +449,10 @@ function readU32(buf: ArrayLike<number>, pos: number): number {
   return (buf[pos] | (buf[pos + 1] << 8) | (buf[pos + 2] << 16) | (buf[pos + 3] << 24)) >>> 0;
 }
 
+function readU64(buf: ArrayLike<number>, pos: number): number {
+  return readU32(buf, pos) + readU32(buf, pos + 4) * 0x100000000;
+}
+
 function writeU16At(buf: number[], pos: number, v: number): void {
   buf[pos] = v & 0xff;
   buf[pos + 1] = (v >> 8) & 0xff;
@@ -460,6 +464,11 @@ function writeU32At(buf: number[] | Uint8Array, pos: number, v: number): void {
   buf[pos + 1] = b[1];
   buf[pos + 2] = b[2];
   buf[pos + 3] = b[3];
+}
+
+function writeU64At(buf: number[] | Uint8Array, pos: number, v: number): void {
+  writeU32At(buf, pos, v >>> 0);
+  writeU32At(buf, pos + 4, Math.floor(v / 0x100000000) >>> 0);
 }
 
 /** Renumber the u16 archive slot-reference at `pos` by `shift`,
@@ -1064,10 +1073,9 @@ class ArchiveWriter {
     this.pushF64(appliedWidth !== undefined ? appliedWidth : 1.0);
     this.pushF64(appliedHeight !== undefined ? appliedHeight : 1.0);
     this.writeStr(texturePath);
-    // avg color: neutral near-opaque white, alpha 254 not 255 - legacy.ts's
-    // own reader treats alpha=255 here as one of its two "this material is
-    // colorized" signals, so a PLAIN one's placeholder must not have it.
-    this.pushBytes([255, 255, 255, 254, 0, 255, 255, 255, 254]);
+    // avg color: neutral opaque white (alpha 255 in both color slots, matching
+    // SketchUp's C SDK; colorization is gated on the u32 material-type field below).
+    this.pushBytes([255, 255, 255, 255, 0, 255, 255, 255, 255]);
     this.writeStr(''); // second name field - empty in ground truth
     this.pushU32(1);
     this.pushU32(0); // blob (colorize-related, ground truth: 1, 0)
@@ -1916,7 +1924,7 @@ export class SkpBuilder {
     // instance and a material could all carry pid 1: SketchUp loads such a
     // file, renumbers the duplicates, and then cannot SAVE it (SketchUp for
     // Web: "Save Failed") once ids above the header counter are in use.
-    this.pidStart = readU32(this.data, PID_COUNTER_POS) + 1;
+    this.pidStart = readU64(this.data, PID_COUNTER_POS);
     this.materialWriter = new ArchiveWriter(this.base, {}, this.pidStart);
   }
 
@@ -2443,10 +2451,9 @@ export class SkpBuilder {
     // Real SketchUp overwrites them in place rather than growing the
     // file by 4 extra bytes here.
     const prefix = Array.from(this.data.subarray(0, this.materialInsertPos - 4));
-    // The model's pid counter: the last pid handed out, in every section. A
-    // 32-bit field, so a model with more than 65 535 entities keeps a truthful
-    // counter.
-    writeU32At(prefix, PID_COUNTER_POS, this.nextPid() - 1);
+    // The model's 64-bit next-persistent-ID counter: the next unused pid
+    // after every section has allocated its entities.
+    writeU64At(prefix, PID_COUNTER_POS, this.nextPid());
     for (let i = 0; i < ISO_CAMERA_PREFIX_PATCH.length; i++) {
       prefix[ISO_CAMERA_PREFIX_OFFSET + i] = ISO_CAMERA_PREFIX_PATCH[i];
     }

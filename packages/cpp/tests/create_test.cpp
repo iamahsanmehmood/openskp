@@ -1484,5 +1484,33 @@ TEST(Create, MalformedUtf16AttributeStringsUseReplacementCharacters) {
       u8"\uFFFD\uFFFDY\uFFFD\uFFFD");
 }
 
+TEST(Create, OpaqueTexturedMaterialUsesAlpha255AndSingleQuadCounter27) {
+  auto single = create();
+  single->add_face(square_pts());
+  const auto single_bytes = single->to_bytes();
+  ASSERT_GE(single_bytes.size(), 1995u);
+  std::uint64_t next_pid = 0;
+  for (int i = 0; i < 8; ++i)
+    next_pid |= static_cast<std::uint64_t>(single_bytes[1987 + i]) << (8 * i);
+  EXPECT_EQ(next_pid, 27u);
+
+  auto tmp_path = std::filesystem::temp_directory_path() / "openskp_create_test_alpha255.png";
+  {
+    std::ofstream f(tmp_path, std::ios::binary);
+    ByteBuffer png = fake_png_bytes();
+    f.write(reinterpret_cast<const char*>(png.data()), static_cast<std::streamsize>(png.size()));
+  }
+  auto builder = create();
+  int brick = builder->add_texture_material("Brick", tmp_path);
+  FaceOptions opts;
+  opts.material = brick;
+  builder->add_face(square_pts(), opts);
+  const auto model = round_trip(*builder);
+  std::filesystem::remove(tmp_path);
+  ASSERT_EQ(model.materials.size(), 1u);
+  EXPECT_EQ(model.materials[0].color, (Color4{255, 255, 255, 255}));
+  EXPECT_FALSE(model.materials[0].colorized);
+}
+
 }  // namespace
 }  // namespace openskp

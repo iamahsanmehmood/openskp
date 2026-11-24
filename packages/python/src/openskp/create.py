@@ -1249,18 +1249,13 @@ class _ArchiveWriter:
         self.buf += _f64(1.0 if applied_height is None else float(applied_height))
         self._write_str(texture_path)
         # avg color (RGBA + pad + RGBA repeated, per legacy.py's _read_material
-        # comment) - neutral near-opaque white rather than a real image
-        # average, since this project doesn't depend on an image library to
-        # compute one. Ground truth confirms real SketchUp reads texture
-        # pixels directly for rendering; avg only feeds the material
-        # browser's thumbnail/tint preview. Alpha is 254, not a fully-opaque
-        # 255: legacy.py's own reader treats alpha=255 here as one of its
-        # two "this material is colorized" signals (`avg[3] == 0xFF`,
-        # alongside the blob flag below) - a real SketchUp-authored
-        # colorized material's stored average apparently always has full
-        # alpha, but a PLAIN one's placeholder must not, or every plain
-        # texture this writer creates reads back as falsely colorized.
-        self.buf += bytes([255, 255, 255, 254, 0, 255, 255, 255, 254])
+        # comment) - neutral opaque white rather than a real image average,
+        # since this project doesn't depend on an image library to compute one.
+        # Ground truth confirms real SketchUp reads texture pixels directly for
+        # rendering, writes alpha=255 in both color slots, and gates
+        # colorization on the u32 material-type field below (1=textured,
+        # 2=colorized texture).
+        self.buf += bytes([255, 255, 255, 255, 0, 255, 255, 255, 255])
         self._write_str("")  # second name field - empty in ground truth
         self.buf += struct.pack("<I", 1) + struct.pack("<I", 0)  # blob (colorize-related, ground truth: 1, 0)
         # Opacity, and the u8 that GATES it. The stored f64 is TRANSPARENCY
@@ -2413,14 +2408,10 @@ class SkpBuilder:
         # Materials always start allocating at `base`, the same slot the
         # (possibly absent) material section would have occupied.
         # Persistent IDs run in ONE sequence across every section of the
-        # file, continuing from the scaffold's own counter (u32 at
-        # _PID_COUNTER_POS). Each section's writer used to start at 1 again,
-        # so a definition, a root instance and a material could all carry
-        # pid 1: SketchUp loads such a file, renumbers the duplicates, and
-        # then fails to SAVE it (SUModelSaveToFile -> SU_ERROR_SERIALIZATION,
-        # "Guardado fallido" in SketchUp Web) once the model is big enough
-        # or a definition happens to come first - measured on real exports.
-        self._pid_start = struct.unpack_from("<I", data, _PID_COUNTER_POS)[0] + 1
+        # file, starting at the scaffold's own next-free-ID counter (u64 at
+        # _PID_COUNTER_POS, which is 18 in blank_v17.skp - verified via
+        # SUEntityGetPersistentID on SketchUp's C SDK).
+        self._pid_start = struct.unpack_from("<Q", data, _PID_COUNTER_POS)[0]
         self._material_writer = _ArchiveWriter(next_slot=base, class_slot={}, next_pid=self._pid_start)
         #: Every material registered so far, by name - populated by
         #: `add_material`/`add_texture_material` as a side effect (they
@@ -3642,12 +3633,11 @@ class SkpBuilder:
         # authored files (an earlier version of this method double-counted
         # this field as a fresh insertion, corrupting every offset after it).
         prefix = bytearray(self._data[: self._material_insert_pos - 4])
-        # The model's pid counter: the last pid handed out, in every
-        # section. A 32-bit field (the two bytes after the old u16 are part
-        # of it - a counter of 2 000 000 round-trips through the SDK), so a
-        # model with more than 65 535 entities keeps a truthful counter.
-        last_pid = (scenes.next_pid if scenes else self._next_pid()) - 1
-        struct.pack_into("<I", prefix, _PID_COUNTER_POS, last_pid)
+        # The model's 64-bit next-persistent-ID counter: the next unused pid
+        # after every section has allocated its entities (verified against
+        # SketchUp's C SDK: 18 in blank_v17.skp, 27 after one 9-pid quad face).
+        next_pid = scenes.next_pid if scenes else self._next_pid()
+        struct.pack_into("<Q", prefix, _PID_COUNTER_POS, next_pid)
         prefix[_ISO_CAMERA_PREFIX_OFFSET : _ISO_CAMERA_PREFIX_OFFSET + len(_ISO_CAMERA_PREFIX_PATCH)] = (
             _ISO_CAMERA_PREFIX_PATCH
         )
