@@ -195,7 +195,7 @@ namespace OpenSkp
             var layerItems = new Dictionary<string, List<int>>();
             var matStyleCache = new Dictionary<string, int>();
 
-            foreach (var prim in scene.GlbPrimitives)
+            foreach (var prim in scene.SurfacePrimitives)
             {
                 int triCount = prim.Indices.Length / 3;
                 int vCount = prim.Positions.Length / 3;

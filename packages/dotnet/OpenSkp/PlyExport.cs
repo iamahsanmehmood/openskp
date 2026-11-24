@@ -47,9 +47,10 @@ namespace OpenSkp
         {
             if (scene == null) throw new ArgumentNullException(nameof(scene));
 
+            var surfacePrimitives = scene.SurfacePrimitives;
             int totalVertices = 0;
             int totalFaces = 0;
-            foreach (var prim in scene.GlbPrimitives)
+            foreach (var prim in surfacePrimitives)
             {
                 totalVertices += prim.Positions.Length / 3;
                 totalFaces += prim.Indices.Length / 3;
@@ -76,7 +77,7 @@ namespace OpenSkp
             sb.Append("property list uchar int vertex_indices").Append('\n');
             sb.Append("end_header").Append('\n');
 
-            foreach (var prim in scene.GlbPrimitives)
+            foreach (var prim in surfacePrimitives)
             {
                 var (r, g, b, a) = GetMaterialRgba(scene, prim.MaterialIndex);
                 int vertCount = prim.Positions.Length / 3;
@@ -105,7 +106,7 @@ namespace OpenSkp
             }
 
             int vertOffset = 0;
-            foreach (var prim in scene.GlbPrimitives)
+            foreach (var prim in surfacePrimitives)
             {
                 int triCount = prim.Indices.Length / 3;
                 for (int i = 0; i < triCount; i++)
@@ -130,9 +131,10 @@ namespace OpenSkp
         {
             if (scene == null) throw new ArgumentNullException(nameof(scene));
 
+            var surfacePrimitives = scene.SurfacePrimitives;
             int totalVertices = 0;
             int totalFaces = 0;
-            foreach (var prim in scene.GlbPrimitives)
+            foreach (var prim in surfacePrimitives)
             {
                 totalVertices += prim.Positions.Length / 3;
                 totalFaces += prim.Indices.Length / 3;
@@ -168,7 +170,7 @@ namespace OpenSkp
 
             int offset = headerBytes.Length;
 
-            foreach (var prim in scene.GlbPrimitives)
+            foreach (var prim in surfacePrimitives)
             {
                 var (r, g, b, a) = GetMaterialRgba(scene, prim.MaterialIndex);
                 int vertCount = prim.Positions.Length / 3;

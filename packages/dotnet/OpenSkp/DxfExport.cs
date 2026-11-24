@@ -420,8 +420,9 @@ namespace OpenSkp
                 throw new ArgumentNullException(nameof(scene), "ToDxf requires a valid Scene instance");
             }
 
+            var surfacePrimitives = scene.SurfacePrimitives;
             var layerColors = new Dictionary<string, (int R, int G, int B)>();
-            foreach (var prim in scene.GlbPrimitives)
+            foreach (var prim in surfacePrimitives)
             {
                 string lName = SanitizeLayerName(prim.GeomName);
                 if (!layerColors.ContainsKey(lName))
@@ -482,7 +483,7 @@ namespace OpenSkp
             lines.AddRange(HeaderStaticC);
             lines.AddRange(new[] { "  0", "SECTION", "  2", "ENTITIES" });
 
-            foreach (var prim in scene.GlbPrimitives)
+            foreach (var prim in surfacePrimitives)
             {
                 string lName = SanitizeLayerName(prim.GeomName);
                 int triCount = prim.Indices.Length / 3;

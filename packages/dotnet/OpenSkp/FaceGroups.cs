@@ -46,6 +46,7 @@ namespace OpenSkp
             public double Transparency = 1.0;
             public bool DoubleSided;
             public int? TextureIndex;
+            public bool UnpaintedBack;
             public List<(double X, double Y, double Z)> LocalVerts = new List<(double, double, double)>();
             public List<(double U, double V)> LocalUvs = new List<(double, double)>();
             public List<double[]> NormalsAccum = new List<double[]>();
@@ -60,15 +61,33 @@ namespace OpenSkp
             public Func<long?, (Geometry.RawMaterial? Mat, (int R, int G, int B)? Color)> ResolveMaterial = _ => (null, null);
             public Func<Geometry.RawTexture?, int?> TextureIndexFor = _ => null;
 
-            /// <summary>Color an unpainted face falls back to (already
+            /// <summary>Color an unpainted face side falls back to (already
             /// resolved by the caller: the instance's inherited paint
-            /// color, or the effective layer's color when nothing is
-            /// inherited).</summary>
+            /// color, or, when nothing is inherited, the model's front face
+            /// color or the layer's color).</summary>
             public (int R, int G, int B) FallbackColor;
+
+            /// <summary>Same as <see cref="FallbackColor"/> for a face's back
+            /// side when it differs (the model's back face color). <c>null</c>
+            /// means <see cref="FallbackColor"/>.</summary>
+            public (int R, int G, int B)? FallbackBackColor;
 
             /// <summary>Identifies the definition in a triangulation
             /// failure.</summary>
             public long? DefinitionId;
+        }
+
+        public static ((int R, int G, int B) Front, (int R, int G, int B) Back)? UnpaintedStyleColors(
+            Core.RawParsed parsed, string? unpaintedFaces)
+        {
+            string mode = unpaintedFaces ?? "style";
+            if (mode != "style" && mode != "tag")
+            {
+                throw new ArgumentException(
+                    $"UnpaintedFaces must be \"style\" or \"tag\", not \"{mode}\".",
+                    nameof(unpaintedFaces));
+            }
+            return mode == "style" ? parsed.FaceColors : null;
         }
 
         /// <summary>Inverse of a row-major 3x3 matrix, via the
@@ -176,15 +195,17 @@ namespace OpenSkp
         /// is emitted as two single-sided triangle sets (one normal-wound
         /// front, one reverse-wound back) so each side keeps its own
         /// color.</summary>
-        public static Dictionary<((int R, int G, int B) Color, bool DoubleSided, int? TextureIndex, double Transparency), FaceGroup> BuildLocalFaceGroups(GeometryBuilder builder, Context ctx)
+        public static Dictionary<((int R, int G, int B) Color, bool DoubleSided, int? TextureIndex, double Transparency, bool UnpaintedBack), FaceGroup> BuildLocalFaceGroups(GeometryBuilder builder, Context ctx)
         {
-            var faceGroups = new Dictionary<((int R, int G, int B) Color, bool DoubleSided, int? TextureIndex, double Transparency), FaceGroup>();
+            var faceGroups = new Dictionary<((int R, int G, int B) Color, bool DoubleSided, int? TextureIndex, double Transparency, bool UnpaintedBack), FaceGroup>();
+            var fallbackBackColor = ctx.FallbackBackColor ?? ctx.FallbackColor;
 
             void AddSide(
                 List<long[]> triangles, (double X, double Y, double Z) fn,
                 (int R, int G, int B) color, bool doubleSided, bool reverse,
                 Geometry.RawMaterial? mat, double[]? uvTransform,
-                (double X, double Y, double Z) xr, (double X, double Y, double Z) yr)
+                (double X, double Y, double Z) xr, (double X, double Y, double Z) yr,
+                bool unpaintedBack = false)
             {
                 // faces are batched per emitted material, so the texture
                 // has to be part of the key too - otherwise two
@@ -192,10 +213,17 @@ namespace OpenSkp
                 // end up in one group with one image
                 int? texIndex = ctx.TextureIndexFor(mat?.Texture);
                 double transparency = ResolveTransparency(mat);
-                var key = (color, doubleSided, texIndex, transparency);
+                var key = (color, doubleSided, texIndex, transparency, unpaintedBack);
                 if (!faceGroups.TryGetValue(key, out var group))
                 {
-                    group = new FaceGroup { Color = color, Transparency = transparency, DoubleSided = doubleSided, TextureIndex = texIndex };
+                    group = new FaceGroup
+                    {
+                        Color = color,
+                        Transparency = transparency,
+                        DoubleSided = doubleSided,
+                        TextureIndex = texIndex,
+                        UnpaintedBack = unpaintedBack,
+                    };
                     faceGroups[key] = group;
                 }
 
@@ -254,7 +282,7 @@ namespace OpenSkp
                 var (frontMat, frontMatColor) = ctx.ResolveMaterial(fData.MaterialId);
                 var (backMat, backMatColor) = ctx.ResolveMaterial(fData.BackMaterialId);
                 var frontColor = frontMatColor ?? ctx.FallbackColor;
-                var backColor = backMatColor ?? ctx.FallbackColor;
+                var backColor = backMatColor ?? fallbackBackColor;
 
                 var loops = new List<List<long>>();
                 foreach (var loop in fData.Loops)
@@ -288,7 +316,8 @@ namespace OpenSkp
                 else
                 {
                     AddSide(triangles, fn, frontColor, false, false, frontMat, uvTransform, xr, yr);
-                    AddSide(triangles, fn, backColor, false, true, backMat, uvTransformBack, xr, yr);
+                    AddSide(triangles, fn, backColor, false, true, backMat, uvTransformBack, xr, yr,
+                        unpaintedBack: frontMat == null && backMat == null);
                 }
             }
 

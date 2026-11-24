@@ -61,8 +61,8 @@ namespace OpenSkp.Tests
             builder.AddInstance(board);
 
             var scene = SkpFile.BuildScene(builder.ToBytes());
-            long tris = scene.GlbPrimitives.Sum(p => (long)p.Indices.Length / 3);
-            long verts = scene.GlbPrimitives.Sum(p => (long)p.Positions.Length / 3);
+            long tris = scene.SurfacePrimitives.Sum(p => (long)p.Indices.Length / 3);
+            long verts = scene.SurfacePrimitives.Sum(p => (long)p.Positions.Length / 3);
             Assert.Equal(54, tris);
             Assert.Equal(52, verts);
         }
@@ -95,8 +95,7 @@ namespace OpenSkp.Tests
             builder.AddInstance(board);
 
             var scene = SkpFile.BuildScene(builder.ToBytes());
-            Assert.Single(scene.GlbPrimitives);
-            var prim = scene.GlbPrimitives[0];
+            var prim = Assert.Single(scene.SurfacePrimitives);
 
             double bakedAreaM2 = 0.0;
             for (int t = 0; t < prim.Indices.Length; t += 3)

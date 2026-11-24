@@ -132,9 +132,10 @@ namespace OpenSkp
         {
             if (scene == null) throw new ArgumentNullException(nameof(scene));
 
+            var surfacePrimitives = scene.SurfacePrimitives;
             var sb = new StringBuilder();
             sb.Append("# OpenSKP OBJ Export").Append('\n');
-            sb.Append($"# Primitives: {scene.GlbPrimitives.Count}").Append('\n');
+            sb.Append($"# Primitives: {surfacePrimitives.Count}").Append('\n');
 
             if (!string.IsNullOrEmpty(mtlFilename))
             {
@@ -148,7 +149,7 @@ namespace OpenSkp
             int uvOffset = 1;
             int normOffset = 1;
 
-            foreach (var prim in scene.GlbPrimitives)
+            foreach (var prim in surfacePrimitives)
             {
                 sb.Append($"o {prim.GeomName}").Append('\n');
 
