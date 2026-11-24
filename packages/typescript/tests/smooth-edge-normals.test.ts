@@ -14,7 +14,9 @@ function folded(smoothEdges: boolean) {
   builder.addFace([[10, 0, 0], [20, 0, rise], [20, 10, rise], [10, 10, 0]], { smoothEdges });
   const bytes = builder.toBytes();
   const scene = buildInstancedScene(bytes.slice().buffer);
-  const primitives = scene.meshResources.flatMap((resource) => resource.primitives);
+  const primitives = scene.meshResources
+    .flatMap((resource) => resource.primitives)
+    .filter((p) => !p.unpaintedBack);
   const seam: [number, number, number][] = [];
   for (const { positions, normals } of primitives) {
     for (let i = 0; i < positions.length; i += 3) {

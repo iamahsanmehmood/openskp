@@ -1,6 +1,6 @@
 import { transformPoint, multiplyMatrices } from './transforms';
 import { extractDynamicProperties, extractAttributeDictionaries, isGenericDefinitionName, findNameOverride, stringifyVffAttrValue, ParsedDefinition, VffAttrValue } from './geometry';
-import { buildLocalFaceGroups } from './face-groups';
+import { buildLocalFaceGroups, unpaintedStyleColors, type UnpaintedFacesMode } from './face-groups';
 import { SkpParseError } from './errors';
 import { ParseOptions, PROGRESS_INTERVAL, emitLog, emitProgress } from './observability';
 import { RawPage, RawDimension } from './pages-dimensions';
@@ -427,6 +427,10 @@ export interface GlbPrimitive {
   materialIndex: number;
   /** Matches the corresponding key in `SkpScene.meshIndex`. */
   geomName: string;
+  /** `true` for the back copies of faces with no paint on either side (the
+   * front copies sit in another primitive). They exist only to show the
+   * model's back face colour from behind; see {@link SkpScene.surfacePrimitives}. */
+  unpaintedBack?: boolean;
 }
 
 /**
@@ -462,6 +466,12 @@ export interface SkpScene {
   /** The actual triangulated mesh data, one entry per unique
    * (definition, resolved color) combination actually placed in the scene. */
   glbPrimitives: GlbPrimitive[];
+  /** {@link glbPrimitives} without the back copies of faces that have no paint
+   * on either side: what single-colour surface exporters (STL, OBJ, PLY, DXF,
+   * IFC) and triangle-counting callers use so every face appears once. Always
+   * populated by {@link buildScene}; optional so hand-constructed scene
+   * literals for exporters do not need to supply it. */
+  surfacePrimitives?: GlbPrimitive[];
   /** glTF PBR material definitions referenced by `GlbPrimitive.materialIndex`.
    * A material whose source had a texture image carries a `baseColorTexture`
    * whose `index` points into {@link SkpScene.textures}. */
@@ -521,6 +531,26 @@ export interface SceneOptions {
    * Off by default: a viewer wants each side's own colour.
    */
   frontSideOnly?: boolean;
+  /**
+   * Colour of a face side with no paint on it or on anything that contains it.
+   * `'style'` (the default) is what SketchUp shows: the model's front face
+   * colour on the front and its back face colour on the back
+   * ({@link SkpModel.faceFrontColor} / {@link SkpModel.faceBackColor}). Where
+   * the two differ, such a face is emitted as two single-sided sets and the
+   * back one is marked `unpaintedBack`. `'tag'` gives both sides the colour of
+   * the face's tag, in one double-sided set, as openskp did up to 1.6.0. A
+   * file whose face colours cannot be read (SketchUp 3) always uses the tag
+   * colour.
+   */
+  unpaintedFaces?: UnpaintedFacesMode;
+}
+
+export type { UnpaintedFacesMode };
+
+/** What the single-colour exporters write. Computed from `glbPrimitives`, so a
+ * scene whose primitives a caller replaced or filtered exports those. */
+export function getSurfacePrimitives(scene: SkpScene): GlbPrimitive[] {
+  return scene.glbPrimitives.filter((p) => !p.unpaintedBack);
 }
 
 /**
@@ -874,6 +904,8 @@ export function buildSceneFromParsed(
     return { r: c[0], g: c[1], b: c[2] };
   };
 
+  const styleColors = unpaintedStyleColors(parsed.faceColors, options?.unpaintedFaces);
+
   // Textures are deduplicated by their bytes: the same image routinely backs
   // several materials, and re-embedding it per material would multiply the
   // export size for nothing.
@@ -993,12 +1025,17 @@ export function buildSceneFromParsed(
       // happens next - here each group's vertices get `currentMatrix`
       // applied and become a world-space primitive, while the instanced
       // path leaves them local and puts the transform on the node.
+      const [fallbackColor, fallbackBackColor] = styleColors ?? [
+        getLayerColor(parentLayer),
+        getLayerColor(parentLayer),
+      ];
       const faceGroups = buildLocalFaceGroups(builder, {
         resolveMaterial: (matId) =>
           resolveMaterialFromMaps(matId, materialIdToName, materialsMap, materialsByFolder),
         textureIndexFor,
         inheritedMaterial,
-        fallbackLayerColor: getLayerColor(parentLayer),
+        fallbackLayerColor: fallbackColor,
+        fallbackBackColor,
         definitionId: defId,
         respectVisibility: options?.respectEdgeVisibility,
         frontSideOnly: options?.frontSideOnly,
@@ -1099,6 +1136,7 @@ export function buildSceneFromParsed(
           indices,
           materialIndex,
           geomName,
+          unpaintedBack: group.unpaintedBack,
         });
       }
     }
@@ -1304,6 +1342,7 @@ export function buildSceneFromParsed(
     sceneHierarchy,
     meshIndex,
     glbPrimitives,
+    surfacePrimitives: glbPrimitives.filter((p) => !p.unpaintedBack),
     gltfMaterials,
     textures,
     bounds,

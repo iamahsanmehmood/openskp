@@ -2,7 +2,7 @@ import { foldScale, multiplyMatrices } from './transforms';
 import { extractDynamicProperties, extractAttributeDictionaries, isGenericDefinitionName, findNameOverride, stringifyVffAttrValue, VffAttrValue } from './geometry';
 import { ParseOptions, PROGRESS_INTERVAL, emitLog, emitProgress } from './observability';
 import { SkpParseError } from './errors';
-import { buildLocalFaceGroups } from './face-groups';
+import { buildLocalFaceGroups, unpaintedStyleColors } from './face-groups';
 import {
   Material,
   Page,
@@ -48,6 +48,9 @@ export interface LocalPrimitive {
   indices: Uint32Array;
   /** Index into {@link InstancedScene.gltfMaterials}. */
   materialIndex: number;
+  /** `true` for the back copies of faces with no paint on either side; see
+   * {@link GlbPrimitive.unpaintedBack}. */
+  unpaintedBack?: boolean;
 }
 
 /**
@@ -233,6 +236,8 @@ export function buildInstancedSceneFromParsed(
     return { r: c[0], g: c[1], b: c[2] };
   };
 
+  const styleColors = unpaintedStyleColors(parsed.faceColors, options?.unpaintedFaces);
+
   // Textures deduplicated by bytes, exactly as the baked path does.
   const textures: SceneTexture[] = [];
   const textureIndexByKey = new Map<string, number>();
@@ -323,11 +328,23 @@ export function buildInstancedSceneFromParsed(
     const matKey = inheritedMaterial
       ? `${inheritedMaterial.name}|${inheritedMaterial.color.r},${inheritedMaterial.color.g},${inheritedMaterial.color.b}|${texKey}`
       : '-';
-    // The layer only matters through its fallback colour, so key on that
-    // rather than the name: two layers that happen to share a colour
-    // legitimately share geometry.
-    const lc = getLayerColor(layer);
-    return `${String(defId)}|${matKey}|${lc.r},${lc.g},${lc.b}`;
+    const fallbackColor = inheritedMaterial
+      ? inheritedMaterial.color
+      : styleColors
+        ? styleColors[0]
+        : getLayerColor(layer);
+    const fallbackBackColor = inheritedMaterial
+      ? inheritedMaterial.color
+      : styleColors
+        ? styleColors[1]
+        : getLayerColor(layer);
+    const backPart =
+      fallbackBackColor.r !== fallbackColor.r ||
+      fallbackBackColor.g !== fallbackColor.g ||
+      fallbackBackColor.b !== fallbackColor.b
+        ? `/${fallbackBackColor.r},${fallbackBackColor.g},${fallbackBackColor.b}`
+        : '';
+    return `${String(defId)}|${matKey}|${fallbackColor.r},${fallbackColor.g},${fallbackColor.b}${backPart}`;
   }
 
   /** Build (or reuse) the local-space mesh resource for a definition
@@ -345,12 +362,17 @@ export function buildInstancedSceneFromParsed(
     const hit = resourceIdByKey.get(key);
     if (hit !== undefined) return hit;
 
+    const [fallbackColor, fallbackBackColor] = styleColors ?? [
+      getLayerColor(layer),
+      getLayerColor(layer),
+    ];
     const faceGroups = buildLocalFaceGroups(d.builder, {
       resolveMaterial: (matId) =>
         resolveMaterialFromMaps(matId, materialIdToName, materialsMap, materialsByFolder),
       textureIndexFor,
       inheritedMaterial,
-      fallbackLayerColor: getLayerColor(layer),
+      fallbackLayerColor: fallbackColor,
+      fallbackBackColor,
       definitionId: defId,
       respectVisibility: options?.respectEdgeVisibility,
       frontSideOnly: options?.frontSideOnly,
@@ -404,6 +426,7 @@ export function buildInstancedSceneFromParsed(
         uvs,
         indices,
         materialIndex: getMaterialIndex(group.color, group.doubleSided, group.textureIndex, group.transparency),
+        unpaintedBack: group.unpaintedBack,
       });
     }
 

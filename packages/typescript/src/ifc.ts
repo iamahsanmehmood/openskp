@@ -1,4 +1,4 @@
-import { SkpScene } from './model';
+import { SkpScene, getSurfacePrimitives } from './model';
 
 declare const process: any;
 declare const require: any;
@@ -195,7 +195,7 @@ export function toIFC(
   const layerItems: Map<string, number[]> = new Map();
   const matStyleCache: Map<string, number> = new Map();
 
-  for (const prim of scene.glbPrimitives) {
+  for (const prim of getSurfacePrimitives(scene)) {
     const triCount = Math.floor(prim.indices.length / 3);
     const vCount = Math.floor(prim.positions.length / 3);
     if (triCount === 0 || vCount === 0) continue;

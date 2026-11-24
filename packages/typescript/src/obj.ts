@@ -1,4 +1,4 @@
-import { SkpScene } from './model';
+import { SkpScene, getSurfacePrimitives } from './model';
 
 declare const process: any;
 declare const require: any;
@@ -88,9 +88,10 @@ export function toMTL(scene: SkpScene): string {
  * @returns The formatted OBJ text string.
  */
 export function toOBJ(scene: SkpScene, mtlFilename?: string): string {
+  const prims = getSurfacePrimitives(scene);
   const lines: string[] = [
     '# OpenSKP OBJ Export',
-    `# Primitives: ${scene.glbPrimitives.length}`,
+    `# Primitives: ${prims.length}`,
   ];
 
   if (mtlFilename) {
@@ -104,7 +105,7 @@ export function toOBJ(scene: SkpScene, mtlFilename?: string): string {
   let uvOffset = 1;
   let normOffset = 1;
 
-  for (const prim of scene.glbPrimitives) {
+  for (const prim of prims) {
     lines.push(`o ${prim.geomName}`);
 
     const vertCount = Math.floor(prim.positions.length / 3);
