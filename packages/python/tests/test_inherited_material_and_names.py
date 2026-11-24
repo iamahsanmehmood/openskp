@@ -76,29 +76,29 @@ def _groups(builder, fallback_material=None, fallback_color=(136, 136, 136)):
 
 def test_unpainted_face_inherits_the_painted_groups_texture_and_name():
     (key,) = _groups(_square_builder(None), fallback_material=WOOD, fallback_color=(155, 105, 61))
-    assert key == ((155, 105, 61), True, 0, 1.0, "[Wood_ Floor]")
+    assert key == ((155, 105, 61), True, 0, 1.0, "[Wood_ Floor]", False)
 
 
 def test_unpainted_face_inherits_the_painted_groups_transparency():
     (key,) = _groups(_square_builder(None), fallback_material=GLASS, fallback_color=(229, 230, 230))
-    assert key == ((229, 230, 230), True, None, 0.59, "Glass")
+    assert key == ((229, 230, 230), True, None, 0.59, "Glass", False)
 
 
 def test_a_face_painted_itself_keeps_its_own_material():
     (key,) = _groups(_square_builder(3), fallback_material=WOOD, fallback_color=(155, 105, 61))
-    assert key == ((126, 127, 127), True, None, 1.0, "Grey A")
+    assert key == ((126, 127, 127), True, None, 1.0, "Grey A", False)
 
 
 def test_nothing_painted_falls_back_to_the_layer_colour_without_a_name():
     (key,) = _groups(_square_builder(None))
-    assert key == ((136, 136, 136), True, None, 1.0, None)
+    assert key == ((136, 136, 136), True, None, 1.0, None, False)
 
 
 def test_differently_named_materials_with_one_colour_stay_separate():
     keys = set(_groups(_square_builder(3, 4)))
     assert keys == {
-        ((126, 127, 127), True, None, 1.0, "Grey A"),
-        ((126, 127, 127), True, None, 1.0, "Grey B"),
+        ((126, 127, 127), True, None, 1.0, "Grey A", False),
+        ((126, 127, 127), True, None, 1.0, "Grey B", False),
     }
 
 

@@ -31,10 +31,10 @@ from . import _core
 from ._curves import _chain_loose_edges, _solve_run_arc
 from ._face_groups import (
     FaceGroupContext,
-    FaceGroupKey,
     build_local_face_groups,
     resolve_color,
     resolve_material,
+    unpainted_style_colors,
 )
 from .errors import SkpParseError
 from .scene import SceneTexture, _original_image_mime, _sniff_image_mime, _warn_skipped_texture
@@ -84,6 +84,9 @@ class LocalPrimitive:
     uvs: array
     indices: array
     material_index: int
+    # The back copies of faces with no paint on either side; see
+    # openskp.scene.GlbPrimitive.unpainted_back.
+    unpainted_back: bool = False
 
 
 @dataclass
@@ -273,6 +276,7 @@ def build_instanced_scene(
     parsed: Dict[str, Any],
     name_override_keys: Sequence[str] = ("name", "label", "code"),
     original_textures: bool = False,
+    unpainted_faces: str = "style",
 ) -> InstancedScene:
     """Build an instanced scene from already-parsed raw data.
 
@@ -307,6 +311,8 @@ def build_instanced_scene(
     def get_layer_color(name: str) -> Tuple[int, int, int]:
         return layer_colors.get(name, (136, 136, 136))
 
+    style_colors = unpainted_style_colors(parsed, unpainted_faces)
+
     # Textures deduplicated by bytes, exactly as the baked path does.
     textures: List[SceneTexture] = []
     texture_index_by_key: Dict[str, int] = {}
@@ -334,7 +340,7 @@ def build_instanced_scene(
         texture_index_by_key[key] = idx
         return idx
 
-    color_to_material_index: Dict[FaceGroupKey, int] = {}
+    color_to_material_index: Dict[Tuple[Any, ...], int] = {}
     gltf_materials: List[Dict[str, Any]] = []
 
     def get_material_index(
@@ -406,8 +412,15 @@ def build_instanced_scene(
         if d is None or not d["builder"].faces:
             return None
 
-        fallback_color = inherited_color if inherited_color is not None else get_layer_color(layer)
+        if inherited_color is not None:
+            fallback_color = fallback_back_color = inherited_color
+        elif style_colors is not None:
+            fallback_color, fallback_back_color = style_colors
+        else:
+            fallback_color = fallback_back_color = get_layer_color(layer)
         key = f"{def_id}|{fallback_color[0]},{fallback_color[1]},{fallback_color[2]}"
+        if fallback_back_color != fallback_color:
+            key += f"/{fallback_back_color[0]},{fallback_back_color[1]},{fallback_back_color[2]}"
         if inherited_material is not None:
             key += f"|{inherited_material.get('name', '')}"
         hit = resource_id_by_key.get(key)
@@ -424,11 +437,14 @@ def build_instanced_scene(
                 fallback_color=fallback_color,
                 definition_id=def_id,
                 fallback_material=inherited_material,
+                fallback_back_color=fallback_back_color,
             ),
         )
 
         primitives: List[LocalPrimitive] = []
-        for (color, double_sided, tex_index, transparency, material_name), group in face_groups.items():
+        for (
+            color, double_sided, tex_index, transparency, material_name, unpainted_back
+        ), group in face_groups.items():
             local_faces = group["local_faces"]
             if not local_faces:
                 continue
@@ -481,6 +497,7 @@ def build_instanced_scene(
                         color, double_sided, tex_index, transparency,
                         material_name, group["colorized"], group["colorize_type"],
                     ),
+                    unpainted_back=unpainted_back,
                 )
             )
 
