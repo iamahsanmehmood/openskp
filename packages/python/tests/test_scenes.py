@@ -100,9 +100,9 @@ def test_scene_list_layout(tmp_path):
     assert r.u32() == 0x7F
     assert r.u16() == 0x8007                      # CCamera class-ref
 
-    # the pid counter covers the scenes' pids, which come last
-    counter = struct.unpack_from("<I", data, create_module._PID_COUNTER_POS)[0]
-    assert pid_a == counter - 1
+    # the 64-bit next-pid counter covers both scenes' pids, which come last
+    counter = struct.unpack_from("<Q", data, create_module._PID_COUNTER_POS)[0]
+    assert pid_a == counter - 2
 
     # scene B refers back to the style scene A declared: camera (2 + 176),
     # no thumbnail (2), a byte, the rendering options, then the back-ref

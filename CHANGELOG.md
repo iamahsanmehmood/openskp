@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — Python, TypeScript, .NET & Dart: align classic writer persistent ID start (`18`) and opaque textured-material alpha (`255`) with SketchUp SDK, C++ & Rust (#285)
+
+- Verified against SketchUp's C library (`SketchUpAPI`): `CDocument`'s 64-bit persistent-ID field at offset `1987` holds the *next* free persistent ID (`18` in `blank_v17.skp`, so the first created entity receives `SUEntityGetPersistentID == 18`), and opaque textured `CMaterial` records store `255` (`0xFF`) in both RGBA alpha slots.
+- Python, TypeScript, .NET, and Dart now start entity persistent IDs at `18`, write the 64-bit `next_pid` counter at offset `1987`, and emit `255` alpha on opaque textured materials — eliminating all entity-PID and material-alpha byte differences against C++ and Rust.
+
 ### Fixed — Python, TypeScript, .NET, Dart & Rust: classic writer preserves long Unicode strings and classic reader replaces malformed UTF-16 surrogates (#500, #285)
 
 - Ports C++ PR #500 (`write_str` 16-bit and 32-bit `AfxWriteStringLength` headers for strings of 255 UTF-16 units or more, plus bounded `U+FFFD` replacement for lone UTF-16 surrogates in classic archive strings) across Python, TypeScript, .NET, Dart and Rust. Previously all five writers rejected strings of 255 UTF-16 units or more, and Dart's classic reader preserved raw unpaired UTF-16 surrogates instead of replacing them with `U+FFFD`.
