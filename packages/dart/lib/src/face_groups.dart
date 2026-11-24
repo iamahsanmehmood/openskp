@@ -1,5 +1,6 @@
 import 'dart:math';
 
+import 'core.dart';
 import 'errors.dart';
 import 'geometry.dart';
 import 'triangulator.dart';
@@ -32,13 +33,20 @@ class LocalFaceGroup {
   final double transparency;
   final bool doubleSided;
   final int? textureIndex;
+  final bool unpaintedBack;
   final List<(double, double, double)> localVerts = [];
   final List<(double, double)> localUvs = [];
   final List<List<double>> normalsAccum = [];
   final List<List<int>> localFaces = [];
   final Map<(int, double, double), int> localVMap = {};
 
-  LocalFaceGroup(this.color, this.doubleSided, this.textureIndex, this.transparency);
+  LocalFaceGroup(
+    this.color,
+    this.doubleSided,
+    this.textureIndex,
+    this.transparency, [
+    this.unpaintedBack = false,
+  ]);
 }
 
 /// The resolved material's overall opacity: 1.0 fully opaque, 0.0 fully
@@ -52,8 +60,8 @@ class LocalFaceGroup {
 double resolveTransparency(RawMaterial? mat) =>
     mat == null ? 1.0 : (mat.a / 255.0) * mat.transparency;
 
-/// Key: (color, doubleSided, textureIndex, transparency).
-typedef FaceGroupKey = ((int, int, int), bool, int?, double);
+/// Key: (color, doubleSided, textureIndex, transparency, unpaintedBack).
+typedef FaceGroupKey = ((int, int, int), bool, int?, double, bool);
 
 /// Everything [buildLocalFaceGroups] needs from its caller that isn't the
 /// builder itself.
@@ -61,10 +69,14 @@ class FaceGroupContext {
   final RawMaterial? Function(int?) resolveMaterial;
   final int? Function(RawTexture?) textureIndexFor;
 
-  /// Color an unpainted face falls back to (already resolved by the
-  /// caller: the instance's inherited paint color, or the effective
-  /// layer's color when nothing is inherited).
+  /// Color an unpainted face side falls back to (already resolved by the
+  /// caller: the instance's inherited paint color, or, when nothing is
+  /// inherited, the model's front face color or the layer's color).
   final (int, int, int) fallbackColor;
+
+  /// Same as [fallbackColor] for a face's back side when it differs (the
+  /// model's back face color). `null` means [fallbackColor].
+  final (int, int, int)? fallbackBackColor;
 
   /// Identifies the definition in a triangulation failure.
   final int? definitionId;
@@ -73,8 +85,20 @@ class FaceGroupContext {
     required this.resolveMaterial,
     required this.textureIndexFor,
     required this.fallbackColor,
+    this.fallbackBackColor,
     this.definitionId,
   });
+}
+
+((int, int, int), (int, int, int))? unpaintedStyleColors(
+  RawParsed parsed,
+  String? unpaintedFaces,
+) {
+  final mode = unpaintedFaces ?? 'style';
+  if (mode != 'style' && mode != 'tag') {
+    throw ArgumentError.value(mode, 'unpaintedFaces', 'Must be "style" or "tag"');
+  }
+  return mode == 'style' ? parsed.faceColors : null;
 }
 
 /// Inverse of a row-major 3x3 matrix, via the cofactor/adjugate method.
@@ -159,6 +183,7 @@ List<int> reconstructLoopVertices(List<(int, int)> loop, Map<int, (int?, int?)> 
 /// back) so each side keeps its own color.
 Map<FaceGroupKey, LocalFaceGroup> buildLocalFaceGroups(GeometryBuilder builder, FaceGroupContext ctx) {
   final faceGroups = <FaceGroupKey, LocalFaceGroup>{};
+  final fallbackBackColor = ctx.fallbackBackColor ?? ctx.fallbackColor;
 
   void addSide(
     List<List<int>> triangles,
@@ -169,16 +194,17 @@ Map<FaceGroupKey, LocalFaceGroup> buildLocalFaceGroups(GeometryBuilder builder, 
     RawMaterial? mat,
     List<double>? uvTransform,
     (double, double, double) xr,
-    (double, double, double) yr,
-  ) {
+    (double, double, double) yr, {
+    bool unpaintedBack = false,
+  }) {
     // faces are batched per emitted material, so the texture has to be
     // part of the key too - otherwise two differently-textured faces with
     // the same average color end up in one group with one image
     final texIndex = ctx.textureIndexFor(mat?.texture);
     final transparency = resolveTransparency(mat);
-    final key = (color, doubleSided, texIndex, transparency);
+    final key = (color, doubleSided, texIndex, transparency, unpaintedBack);
     final group = faceGroups.putIfAbsent(
-        key, () => LocalFaceGroup(color, doubleSided, texIndex, transparency));
+        key, () => LocalFaceGroup(color, doubleSided, texIndex, transparency, unpaintedBack));
 
     final tex = mat?.texture;
     final tileW = (tex != null && tex.xScale > 1e-9) ? tex.xScale : 1.0;
@@ -229,7 +255,7 @@ Map<FaceGroupKey, LocalFaceGroup> buildLocalFaceGroups(GeometryBuilder builder, 
     final frontMat = ctx.resolveMaterial(fData.materialId);
     final backMat = ctx.resolveMaterial(fData.backMaterialId);
     final frontColor = (frontMat != null) ? (frontMat.r, frontMat.g, frontMat.b) : ctx.fallbackColor;
-    final backColor = (backMat != null) ? (backMat.r, backMat.g, backMat.b) : ctx.fallbackColor;
+    final backColor = (backMat != null) ? (backMat.r, backMat.g, backMat.b) : fallbackBackColor;
 
     final loops = <List<int>>[];
     for (final loop in fData.loops) {
@@ -257,7 +283,18 @@ Map<FaceGroupKey, LocalFaceGroup> buildLocalFaceGroups(GeometryBuilder builder, 
       addSide(triangles, fn, frontColor, true, false, frontMat, uvTransform, xr, yr);
     } else {
       addSide(triangles, fn, frontColor, false, false, frontMat, uvTransform, xr, yr);
-      addSide(triangles, fn, backColor, false, true, backMat, uvTransformBack, xr, yr);
+      addSide(
+        triangles,
+        fn,
+        backColor,
+        false,
+        true,
+        backMat,
+        uvTransformBack,
+        xr,
+        yr,
+        unpaintedBack: frontMat == null && backMat == null,
+      );
     }
   }
 

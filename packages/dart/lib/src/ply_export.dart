@@ -23,7 +23,7 @@ import 'scene.dart';
 String toPlyAscii(Scene scene) {
   var totalVertices = 0;
   var totalFaces = 0;
-  for (final prim in scene.glbPrimitives) {
+  for (final prim in scene.surfacePrimitives) {
     totalVertices += prim.positions.length ~/ 3;
     totalFaces += prim.indices.length ~/ 3;
   }
@@ -49,7 +49,7 @@ String toPlyAscii(Scene scene) {
   buffer.writeln('property list uchar int vertex_indices');
   buffer.writeln('end_header');
 
-  for (final prim in scene.glbPrimitives) {
+  for (final prim in scene.surfacePrimitives) {
     final rgba = _getMaterialRgba(scene, prim.materialIndex);
     final vertCount = prim.positions.length ~/ 3;
     for (var i = 0; i < vertCount; i++) {
@@ -69,7 +69,7 @@ String toPlyAscii(Scene scene) {
   }
 
   var vertOffset = 0;
-  for (final prim in scene.glbPrimitives) {
+  for (final prim in scene.surfacePrimitives) {
     final triCount = prim.indices.length ~/ 3;
     for (var i = 0; i < triCount; i++) {
       final i0 = prim.indices[i * 3] + vertOffset;
@@ -87,7 +87,7 @@ String toPlyAscii(Scene scene) {
 Uint8List toPlyBinary(Scene scene) {
   var totalVertices = 0;
   var totalFaces = 0;
-  for (final prim in scene.glbPrimitives) {
+  for (final prim in scene.surfacePrimitives) {
     totalVertices += prim.positions.length ~/ 3;
     totalFaces += prim.indices.length ~/ 3;
   }
@@ -126,7 +126,7 @@ Uint8List toPlyBinary(Scene scene) {
 
   var offset = headerBytes.length;
 
-  for (final prim in scene.glbPrimitives) {
+  for (final prim in scene.surfacePrimitives) {
     final rgba = _getMaterialRgba(scene, prim.materialIndex);
     final vertCount = prim.positions.length ~/ 3;
     for (var i = 0; i < vertCount; i++) {
@@ -162,7 +162,7 @@ Uint8List toPlyBinary(Scene scene) {
   }
 
   var vertOffset = 0;
-  for (final prim in scene.glbPrimitives) {
+  for (final prim in scene.surfacePrimitives) {
     final triCount = prim.indices.length ~/ 3;
     for (var i = 0; i < triCount; i++) {
       final i0 = prim.indices[i * 3] + vertOffset;

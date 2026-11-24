@@ -28,12 +28,17 @@ class LocalPrimitive {
   final List<int> indices;
   final int materialIndex;
 
+  /// The back copies of faces with no paint on either side; see
+  /// [GlbPrimitive.unpaintedBack].
+  final bool unpaintedBack;
+
   LocalPrimitive({
     required this.positions,
     required this.normals,
     required this.uvs,
     required this.indices,
     required this.materialIndex,
+    this.unpaintedBack = false,
   });
 }
 
@@ -215,6 +220,7 @@ class InstancedSceneBuilder {
     final activeDefinitions = <int>{};
 
     (int, int, int) getLayerColor(String name) => layerColors[name] ?? (136, 136, 136);
+    final styleColors = unpaintedStyleColors(parsed, options?.unpaintedFaces);
 
     final textures = <SceneTexture>[];
     final textureIndexByKey = <String, int>{};
@@ -293,12 +299,23 @@ class InstancedSceneBuilder {
     ]) {
       if (builder.faces.isEmpty) return null;
 
-      final fallbackColor = inheritedColor ?? getLayerColor(layer);
+      final (int, int, int) fallbackColor;
+      final (int, int, int) fallbackBackColor;
+      if (inheritedColor != null) {
+        fallbackColor = fallbackBackColor = inheritedColor;
+      } else if (styleColors != null) {
+        (fallbackColor, fallbackBackColor) = styleColors;
+      } else {
+        fallbackColor = fallbackBackColor = getLayerColor(layer);
+      }
+      final backPart = fallbackBackColor != fallbackColor
+          ? '/${fallbackBackColor.$1},${fallbackBackColor.$2},${fallbackBackColor.$3}'
+          : '';
       final matPart = inheritedMaterial != null
           ? '|${inheritedMaterial.name}:${resolveTransparency(inheritedMaterial)}'
           : '';
       final key =
-          '${defId ?? 'ROOT'}|${fallbackColor.$1},${fallbackColor.$2},${fallbackColor.$3}$matPart';
+          '${defId ?? 'ROOT'}|${fallbackColor.$1},${fallbackColor.$2},${fallbackColor.$3}$matPart$backPart';
       final hit = resourceIdByKey[key];
       if (hit != null) return hit;
 
@@ -308,13 +325,14 @@ class InstancedSceneBuilder {
           resolveMaterial: (matId) => resolveMaterial(matId) ?? inheritedMaterial,
           textureIndexFor: textureIndexFor,
           fallbackColor: fallbackColor,
+          fallbackBackColor: fallbackBackColor,
           definitionId: defId,
         ),
       );
 
       final primitives = <LocalPrimitive>[];
       for (final groupEntry in faceGroups.entries) {
-        final (color, doubleSided, texIndex, transparency) = groupEntry.key;
+        final (color, doubleSided, texIndex, transparency, unpaintedBack) = groupEntry.key;
         final group = groupEntry.value;
         if (group.localFaces.isEmpty) continue;
 
@@ -370,6 +388,7 @@ class InstancedSceneBuilder {
           uvs: uvs,
           indices: indices,
           materialIndex: getMaterialIndex(color, doubleSided, texIndex, transparency),
+          unpaintedBack: unpaintedBack,
         ));
       }
 

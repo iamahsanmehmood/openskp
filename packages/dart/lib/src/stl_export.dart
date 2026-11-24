@@ -33,7 +33,7 @@ String toStlAscii(Scene scene, {double scale = 1.0}) {
   final buffer = StringBuffer();
   buffer.writeln('solid OpenSKP_Model');
 
-  for (final prim in scene.glbPrimitives) {
+  for (final prim in scene.surfacePrimitives) {
     final triCount = prim.indices.length ~/ 3;
     for (var i = 0; i < triCount; i++) {
       final i0 = prim.indices[i * 3];
@@ -75,7 +75,7 @@ String toStlAscii(Scene scene, {double scale = 1.0}) {
 /// Convert a baked [Scene] into Little-Endian Binary STL byte array.
 Uint8List toStlBinary(Scene scene, {double scale = 1.0}) {
   var totalTriangles = 0;
-  for (final prim in scene.glbPrimitives) {
+  for (final prim in scene.surfacePrimitives) {
     totalTriangles += prim.indices.length ~/ 3;
   }
 
@@ -93,7 +93,7 @@ Uint8List toStlBinary(Scene scene, {double scale = 1.0}) {
   bdata.setUint32(80, totalTriangles, Endian.little);
 
   var offset = 84;
-  for (final prim in scene.glbPrimitives) {
+  for (final prim in scene.surfacePrimitives) {
     final triCount = prim.indices.length ~/ 3;
     for (var i = 0; i < triCount; i++) {
       final i0 = prim.indices[i * 3];

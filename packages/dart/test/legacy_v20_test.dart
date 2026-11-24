@@ -71,8 +71,8 @@ void main() {
 
     final scene = SkpFile.open(fixturePath).buildScene();
     expect(scene.sceneHierarchy.children.length, 23);
-    expect(scene.glbPrimitives.length, 201);
-    expect(scene.meshIndex.length, 201);
+    expect(scene.surfacePrimitives.length, 201);
+    expect(scene.glbPrimitives.length, scene.meshIndex.length);
     expect(scene.gltfMaterials, isNotEmpty);
   });
 
