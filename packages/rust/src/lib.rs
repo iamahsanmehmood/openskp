@@ -67,7 +67,7 @@ pub use fragments::{
 };
 pub use glb::{export_glb, to_glb, GlbError, GlbOptions, GlbResult};
 pub use ifc_export::{
-    classify_element, export_ifc, generate_ifc_guid, to_ifc, IfcClassifier, METRES_TO_MM,
+    classify_element, export_ifc, generate_ifc_guid, to_ifc, IfcClassifier, IfcError, METRES_TO_MM,
 };
 pub use instanced_glb::{export_instanced_glb, to_instanced_glb, InstancedGlbOptions};
 pub use instanced_scene::{

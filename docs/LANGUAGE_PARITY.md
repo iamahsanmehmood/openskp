@@ -105,7 +105,7 @@ released. 🔶 = implemented on `main`, not published to a package registry
 | **Export** | | | | | |
 | GLB / OBJ+MTL / STL / PLY / DXF 3D / IFC4 / JSON | ✅ | ✅ | ✅ | ✅ | ✅ |
 | IFC export: unit/axis fix, real names + layer visibility, plugin-attribute Psets, full-path classification | ✅ (also writes `IFCELEMENTASSEMBLY` and accepts a 3-arg classifier) | ✅ (2-arg classifier; no `IFCELEMENTASSEMBLY`) | ✅ (2-arg classifier; no `IFCELEMENTASSEMBLY`) | ✅ (2-arg classifier; no `IFCELEMENTASSEMBLY`) | ✅ (2-arg classifier; no `IFCELEMENTASSEMBLY`) |
-| IFC export: loose-edge curve sets + analytic arcs as `IfcAnnotation` / `IfcIndexedPolyCurve`, IFC4 STEP conformance fixes | ✅ | ❌ | ❌ | ❌ | ❌ |
+| IFC export: loose-edge curve sets + analytic arcs as `IfcAnnotation` / `IfcIndexedPolyCurve`, IFC4 STEP conformance fixes | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Direct SketchUp → Fragments (`.frag`) export ([details](#fragments-frag-support)) | ✅ | ✅ | ✅ | 🔶 on `main`, not published | ✅ |
 | **Import** | | | | | |
 | Read a `.frag` file back (6th input format alongside `.skp`; [details](#fragments-frag-support)) | ✅ | ✅ | ✅ | 🔶 on `main`, not published | ✅ |
@@ -145,7 +145,6 @@ across languages is cross-language porting work:
 | Item | Python has it via | Needs porting to |
 |:---|:---|:---|
 | Writer: scenes (`add_scene`: camera + hidden layers) | `create.py`, `edit.py`, `codegen.py` | TypeScript, .NET, Dart, C++ |
-| IFC export: loose-edge curve sets + analytic arcs as `IfcAnnotation`/`IfcIndexedPolyCurve`, plus the 4 IFC4 STEP-conformance fixes | `scene.py`, `export/ifc.py` | TypeScript, .NET, Dart, C++ — none started |
 | Python scenes since 1.6.0: a painted group or component passes its whole material to the faces inside it, material names are kept, colorized textures are flagged, a texture a scene cannot carry is reported, and `original_textures=True` keeps it | `scene.py`, `instanced_scene.py`, `_face_groups.py` | TypeScript, .NET, Dart, C++ — not ported |
 | Definition- and model-level attribute dictionaries (Dynamic Components formulas/options), in VFF and classic files (1.6.0) | `_core.py`, `legacy.py`, `model.py` | TypeScript, .NET, Dart, C++ — not ported |
 | Model rendering-options face colours (`SkpModel.face_front_color` / `face_back_color`, SketchUp 4–2025, [#550](https://github.com/iamahsanmehmood/openskp/pull/550), part of [#533](https://github.com/iamahsanmehmood/openskp/issues/533)) | `_core.py`, `legacy.py`, `model.py` (on `main`) | TypeScript, .NET, Dart, C++ |

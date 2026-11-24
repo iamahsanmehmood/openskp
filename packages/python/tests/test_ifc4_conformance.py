@@ -24,13 +24,16 @@ from __future__ import annotations
 
 import codecs
 import json
+import math
 import pathlib
 import re
 from array import array
 from typing import Dict, List, Optional
 
-from openskp.export.ifc import to_ifc
-from openskp.scene import GlbPrimitive, InstanceNode, MeshMetadata, Scene
+import pytest
+
+from openskp.export.ifc import export, to_ifc
+from openskp.scene import CurveSetMetadata, GlbPrimitive, InstanceNode, MeshMetadata, Scene
 
 # The attribute-count table the exporter itself consults. Loaded here from the
 # file rather than imported, so the test fails if the emitter and the table
@@ -205,6 +208,68 @@ class TestStepStringEscaping:
         raw = codecs.decode(payload, "hex")
         assert raw.decode("utf-16-be") == "剪力墙"
         assert raw.decode("utf-16-le") != "剪力墙"
+
+    def test_control_characters_and_del_are_escaped_without_splitting_lines(self):
+        text = to_ifc(_mesh_scene(
+            "Wall\nOne\x7f",
+            [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+            [0, 1, 2],
+            properties={"note\tkey": "line1\r\nline2\x00\x1f\x7f"},
+        ))
+        assert "Wall\\X2\\000A\\X0\\One\\X2\\007F\\X0\\" in text
+        assert "note\\X2\\0009\\X0\\key" in text
+        assert "line1\\X2\\000D000A\\X0\\line2\\X2\\0000001F007F\\X0\\" in text
+        lines = text.split("\r\n")
+        data_idx = lines.index("DATA;") + 1
+        end_idx = lines.index("ENDSEC;", data_idx)
+        for line in lines[data_idx:end_idx]:
+            assert line.startswith("#") and line.endswith(");")
+            assert all(0x20 <= ord(ch) <= 0x7E for ch in line)
+
+
+class TestRealNumbersAndFiniteValidation:
+    """STEP REAL numbers never use bare '1e-05' or non-finite values."""
+
+    def test_small_and_large_coordinates_are_valid_step_reals(self):
+        # 1e-8 m * 1000.0 = 1e-5 mm; Python str(round(...)) would emit '1e-05'.
+        scene = _mesh_scene(
+            "Tiny",
+            [1e-8, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+            [0, 1, 2],
+        )
+        scene.curve_sets = [
+            CurveSetMetadata(
+                name="TinyCurve",
+                points_m=[(1e-8, 0.0, 0.0), (1e17, 0.0, 0.0)],
+            )
+        ]
+        text = to_ifc(scene)
+        assert "1e-" not in text and "1e+" not in text
+        assert "(0.00001,-0.0,0.0)" in text
+        assert "(1.0E+20,-0.0,0.0)" in text
+
+    def test_non_finite_scale_and_coordinates_raise_value_error(self, tmp_path):
+        good = _mesh_scene("Wall", [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0], [0, 1, 2])
+        for bad_scale in (math.nan, math.inf, -math.inf):
+            with pytest.raises(ValueError, match="scale must be finite"):
+                to_ifc(good, scale=bad_scale)
+
+        nan_mesh = _mesh_scene("Wall", [math.nan, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0], [0, 1, 2])
+        with pytest.raises(ValueError, match="coordinates must be finite"):
+            to_ifc(nan_mesh)
+
+        inf_curve = Scene(
+            scene_hierarchy=InstanceNode(name="Root"),
+            curve_sets=[CurveSetMetadata(name="C", points_m=[(0.0, 0.0, 0.0), (1e308, 0.0, 0.0)])],
+        )
+        with pytest.raises(ValueError, match="coordinates must be finite"):
+            to_ifc(inf_curve, scale=1000.0)
+
+        out_file = tmp_path / "nested" / "bad.ifc"
+        with pytest.raises(ValueError, match="coordinates must be finite"):
+            export(nan_mesh, out_file)
+        assert not out_file.exists()
+        assert not out_file.parent.exists()
 
 
 class TestClosedFlag:
