@@ -102,6 +102,7 @@ happens at import time, write time, or any other runtime path.
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import hashlib
 import math
 import re
@@ -116,7 +117,7 @@ from . import legacy
 from ._face_groups import face_uv_basis
 
 __all__ = [
-    "SkpWriteError", "SkpBuilder", "ComponentDefinitionBuilder", "create",
+    "SkpWriteError", "DocumentOptions", "SkpBuilder", "ComponentDefinitionBuilder", "create",
     "Point3d", "Vector3d", "Length", "Timestamp",
 ]
 
@@ -1958,15 +1959,101 @@ def _write_face_or_triangulate(
         )
     if front_uv is not None or back_uv is not None:
         raise SkpWriteError("auto_triangulate cannot be combined with front_uv/back_uv positioning")
-    total = 0
+    for p in points:
+        for c in p:
+            if not math.isfinite(float(c)):
+                raise SkpWriteError("face contains non-finite coordinates")
+    triangles: List[List[Point3]] = []
     for i in range(1, len(points) - 1):
+        tri = [points[0], points[i], points[i + 1]]
+        try:
+            _plane_from_polygon(tri)
+        except SkpWriteError:
+            continue
+        triangles.append(tri)
+    if not triangles:
+        raise SkpWriteError("triangulation has no non-degenerate faces")
+    total = 0
+    for tri in triangles:
         total += writer.write_face(
-            [points[0], points[i], points[i + 1]], vertex_slots, edge_registry,
+            tri, vertex_slots, edge_registry,
             material, layer, back_material,
             hidden, soft_edges, smooth_edges, hidden_edges,
             None, None, attribute_dicts,
         )
     return total
+
+
+@dataclasses.dataclass
+class DocumentOptions:
+    """Display settings supported by the legacy v17 document scaffold.
+
+    Attributes:
+        length_unit: Native ``UnitsOptions`` values: ``0`` = inches, ``1`` = feet,
+            ``2`` = mm, ``3`` = cm, ``4`` = metres, ``5`` = yards.
+        length_precision: Decimal display precision ``0``..``6``.
+        style_items: Native style item IDs mapped to scalar values (colours are
+            packed ABGR ``uint32`` values). Only items present in the bundled
+            legacy style are updated; newer items are ignored.
+    """
+
+    length_unit: int = 0
+    length_precision: int = 3
+    style_items: Dict[int, float] = dataclasses.field(default_factory=dict)
+
+
+_RENDERING_OPTION_FIELDS: Tuple[Tuple[int, int, bool], ...] = (
+    (1000, 3173, False), (1001, 3279, False), (1002, 3197, False), (1004, 3201, True),
+    (1005, 3202, False), (1006, 3206, True),  (1007, 3207, False), (1008, 3211, True),
+    (1009, 3212, False), (1010, 3216, True),  (1011, 3217, False), (1012, 3172, True),
+    (1014, 3181, False), (1015, 3353, True),  (2001, 3166, False), (2002, 3227, False),
+    (2003, 3231, False), (2004, 3170, True),  (2005, 3171, True),  (2006, 3326, False),
+    (2007, 3196, True),  (4000, 3177, False), (4001, 3287, False), (4002, 3299, True),
+    (4003, 3295, False), (4004, 3300, True),  (4005, 3302, False), (4006, 3301, True),
+    (4007, 3291, False), (5000, 3344, True),  (7000, 3185, False), (7001, 3340, False),
+    (7002, 3189, False), (7003, 3306, False), (7004, 3310, False), (7005, 3314, False),
+    (7008, 3283, True),  (7010, 3222, True),  (7011, 3195, True),  (7012, 3286, True),
+    (7014, 3318, False),
+)
+
+
+def _patch_document_prefix(prefix: bytearray, options: DocumentOptions) -> None:
+    struct.pack_into("<I", prefix, 2327, options.length_precision)
+    struct.pack_into("<I", prefix, 2360, 0)  # LengthFormat: decimal
+    struct.pack_into("<I", prefix, 2389, options.length_unit)
+    struct.pack_into("<I", prefix, 2689, options.length_unit)  # AreaUnit
+    struct.pack_into("<I", prefix, 2718, options.length_unit)  # VolumeUnit
+    for item_id, offset, is_bool in _RENDERING_OPTION_FIELDS:
+        if item_id not in options.style_items:
+            continue
+        v = options.style_items[item_id]
+        if is_bool:
+            prefix[offset] = 1 if v != 0.0 else 0
+        else:
+            struct.pack_into("<I", prefix, offset, int(v) & 0xFFFFFFFF)
+
+
+def _patch_style_items(tail: bytearray, pos: int, options: DocumentOptions) -> None:
+    for _ in range(56):
+        item_id = struct.unpack_from("<I", tail, pos)[0]
+        valid = struct.unpack_from("<I", tail, pos + 4)[0] != 0
+        pos += 8
+        if not valid:
+            continue
+        kind = struct.unpack_from("<I", tail, pos)[0]
+        pos += 4
+        size = 1 if kind == 1 else (8 if kind == 7 else 4)
+        if item_id in options.style_items:
+            v = options.style_items[item_id]
+            if kind == 1:
+                tail[pos] = 1 if v != 0.0 else 0
+            elif kind == 4:
+                struct.pack_into("<I", tail, pos, int(v) & 0xFFFFFFFF)
+            elif kind == 6:
+                struct.pack_into("<f", tail, pos, v)
+            elif kind == 7:
+                struct.pack_into("<d", tail, pos, v)
+        pos += size
 
 
 class ComponentDefinitionBuilder:
@@ -2460,6 +2547,48 @@ class SkpBuilder:
         self._new_entity_count = 0
         self._face_count = 0
         self._dim_font_slot: Optional[int] = None
+        self._document_options: Optional[DocumentOptions] = None
+
+    def set_document_options(
+        self,
+        options: Optional[DocumentOptions] = None,
+        *,
+        length_unit: int = 0,
+        length_precision: int = 3,
+        style_items: Optional[Dict[int, float]] = None,
+    ) -> None:
+        """Set decimal display units and working/saved style values without
+        scaling geometry."""
+        opts = (
+            DocumentOptions(
+                length_unit=options.length_unit,
+                length_precision=options.length_precision,
+                style_items=dict(options.style_items),
+            )
+            if options is not None
+            else DocumentOptions(
+                length_unit=length_unit,
+                length_precision=length_precision,
+                style_items=dict(style_items) if style_items is not None else {},
+            )
+        )
+        if (
+            isinstance(opts.length_unit, bool)
+            or isinstance(opts.length_precision, bool)
+            or not hasattr(opts.length_unit, "__index__")
+            or not hasattr(opts.length_precision, "__index__")
+            or not (0 <= opts.length_unit <= 5)
+            or not (0 <= opts.length_precision <= 6)
+        ):
+            raise SkpWriteError("invalid decimal display units or precision")
+        normalized_items: Dict[int, float] = {}
+        for k, raw_v in opts.style_items.items():
+            fv = float(raw_v)
+            if not math.isfinite(fv) or fv < -2_147_483_648.0 or fv > 4_294_967_295.0:
+                raise SkpWriteError("style scalar is out of range")
+            normalized_items[int(k)] = fv
+        opts.style_items = normalized_items
+        self._document_options = opts
 
     @contextlib.contextmanager
     def definitions(self) -> Iterator["SkpBuilder"]:
@@ -3348,7 +3477,12 @@ class SkpBuilder:
         _STYLE_OBJECT_TAIL_REL.
         """
         w = _ArchiveWriter(next_slot=first_slot, class_slot={}, next_pid=next_pid)
-        rendering = self._data[_RENDERING_OPTIONS_OFFSET:_RENDERING_OPTIONS_OFFSET + _RENDERING_OPTIONS_LEN]
+        # The scene carries its own copy of the rendering options, so it needs
+        # the document options set on the model too.
+        data = bytearray(self._data[: self._material_insert_pos])
+        if self._document_options is not None:
+            _patch_document_prefix(data, self._document_options)
+        rendering = bytes(data[_RENDERING_OPTIONS_OFFSET:_RENDERING_OPTIONS_OFFSET + _RENDERING_OPTIONS_LEN])
         shadow = tail[_PAGE_LIST_TAIL_REL - _SHADOW_INFO_LEN:_PAGE_LIST_TAIL_REL]
         style_object = tail[_STYLE_OBJECT_TAIL_REL:_STYLE_TAIL_REFS[0]]
         # The same guard _SCAFFOLD_SHA256 gives the other offsets, spelled out
@@ -3624,6 +3758,9 @@ class SkpBuilder:
         scenes = None
         if self._scenes:
             patched_tail = bytearray(self._data[self._tail_pos :])
+            if self._document_options is not None:
+                _patch_style_items(patched_tail, 4070 - self._tail_pos, self._document_options)
+                _patch_style_items(patched_tail, 4951 - self._tail_pos, self._document_options)
             for pos, patch in _ISO_CAMERA_TAIL_PATCHES:
                 patched_tail[pos : pos + len(patch)] = patch
             scenes = self._write_scenes(self._scaffold_next_slot + total_tail_shift,
@@ -3639,6 +3776,8 @@ class SkpBuilder:
         # authored files (an earlier version of this method double-counted
         # this field as a fresh insertion, corrupting every offset after it).
         prefix = bytearray(self._data[: self._material_insert_pos - 4])
+        if self._document_options is not None:
+            _patch_document_prefix(prefix, self._document_options)
         # The model's 64-bit next-persistent-ID counter: the next unused pid
         # after every section has allocated its entities (verified against
         # SketchUp's C SDK: 18 in blank_v17.skp, 27 after one 9-pid quad face).
@@ -3682,6 +3821,9 @@ class SkpBuilder:
         out += self._geometry_writer.buf
 
         tail = bytearray(self._data[self._tail_pos :])
+        if self._document_options is not None:
+            _patch_style_items(tail, 4070 - self._tail_pos, self._document_options)
+            _patch_style_items(tail, 4951 - self._tail_pos, self._document_options)
         # _TAIL_REF_POSITIONS and _ISO_CAMERA_TAIL_PATCHES's positions both
         # index into this same tail buffer. A ref-shift that widens to the
         # 6-byte escape form (see _shift_ref) grows the buffer at that

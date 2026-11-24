@@ -70,6 +70,7 @@ export type {
   Rotation,
   AttributeValue,
   AttributeDict,
+  DocumentOptions,
   AddFaceOptions,
   AddCircleOptions,
   AddArcOptions,

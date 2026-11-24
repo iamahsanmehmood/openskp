@@ -1732,16 +1732,149 @@ namespace OpenSkp
             {
                 throw new SkpWriteException("auto_triangulate cannot be combined with front_uv/back_uv positioning");
             }
-            int total = 0;
+            foreach (var p in points)
+            {
+                if (double.IsNaN(p.X) || double.IsInfinity(p.X) ||
+                    double.IsNaN(p.Y) || double.IsInfinity(p.Y) ||
+                    double.IsNaN(p.Z) || double.IsInfinity(p.Z))
+                {
+                    throw new SkpWriteException("face contains non-finite coordinates");
+                }
+            }
+            var triangles = new List<(double X, double Y, double Z)[]>();
             for (int i = 1; i < points.Count - 1; i++)
             {
+                var tri = new[] { points[0], points[i], points[i + 1] };
+                try
+                {
+                    CreateMath.PlaneFromPolygon(tri);
+                }
+                catch (SkpWriteException)
+                {
+                    continue;
+                }
+                triangles.Add(tri);
+            }
+            if (triangles.Count == 0)
+            {
+                throw new SkpWriteException("triangulation has no non-degenerate faces");
+            }
+            int total = 0;
+            foreach (var tri in triangles)
+            {
                 total += writer.WriteFace(
-                    new[] { points[0], points[i], points[i + 1] }, vertexSlots, edgeRegistry,
+                    tri, vertexSlots, edgeRegistry,
                     material, layer, backMaterial,
                     hidden, softEdges, smoothEdges, hiddenEdges,
                     null, null, attributeDicts);
             }
             return total;
+        }
+    }
+
+    /// <summary>Display settings supported by the legacy v17 document scaffold.</summary>
+    public sealed class DocumentOptions
+    {
+        /// <summary>Native UnitsOptions values: inches=0, feet=1, mm=2, cm=3, metres=4, yards=5.</summary>
+        public int LengthUnit { get; set; } = 0;
+        public int LengthPrecision { get; set; } = 3;
+        /// <summary>Native style item IDs and scalar values (colors are packed ABGR uint32 values).</summary>
+        public Dictionary<int, double> StyleItems { get; set; } = new Dictionary<int, double>();
+    }
+
+    internal static class DocumentOptionsPatching
+    {
+        private static readonly (int Id, int Offset, bool IsBool)[] RenderingOptionFields = new[]
+        {
+            (1000, 3173, false), (1001, 3279, false), (1002, 3197, false), (1004, 3201, true),
+            (1005, 3202, false), (1006, 3206, true),  (1007, 3207, false), (1008, 3211, true),
+            (1009, 3212, false), (1010, 3216, true),  (1011, 3217, false), (1012, 3172, true),
+            (1014, 3181, false), (1015, 3353, true),  (2001, 3166, false), (2002, 3227, false),
+            (2003, 3231, false), (2004, 3170, true),  (2005, 3171, true),  (2006, 3326, false),
+            (2007, 3196, true),  (4000, 3177, false), (4001, 3287, false), (4002, 3299, true),
+            (4003, 3295, false), (4004, 3300, true),  (4005, 3302, false), (4006, 3301, true),
+            (4007, 3291, false), (5000, 3344, true),  (7000, 3185, false), (7001, 3340, false),
+            (7002, 3189, false), (7003, 3306, false), (7004, 3310, false), (7005, 3314, false),
+            (7008, 3283, true),  (7010, 3222, true),  (7011, 3195, true),  (7012, 3286, true),
+            (7014, 3318, false),
+        };
+
+        private static void WriteU32At(byte[] buf, int pos, uint v)
+        {
+            buf[pos] = (byte)(v & 0xFF);
+            buf[pos + 1] = (byte)((v >> 8) & 0xFF);
+            buf[pos + 2] = (byte)((v >> 16) & 0xFF);
+            buf[pos + 3] = (byte)((v >> 24) & 0xFF);
+        }
+
+        private static void WriteU32At(List<byte> buf, int pos, uint v)
+        {
+            buf[pos] = (byte)(v & 0xFF);
+            buf[pos + 1] = (byte)((v >> 8) & 0xFF);
+            buf[pos + 2] = (byte)((v >> 16) & 0xFF);
+            buf[pos + 3] = (byte)((v >> 24) & 0xFF);
+        }
+
+        private static uint ReadU32At(List<byte> buf, int pos) =>
+            (uint)buf[pos] | ((uint)buf[pos + 1] << 8) | ((uint)buf[pos + 2] << 16) | ((uint)buf[pos + 3] << 24);
+
+        public static void PatchDocumentPrefix(byte[] prefix, DocumentOptions options)
+        {
+            WriteU32At(prefix, 2327, (uint)options.LengthPrecision);
+            WriteU32At(prefix, 2360, 0u); // LengthFormat: decimal
+            WriteU32At(prefix, 2389, (uint)options.LengthUnit);
+            WriteU32At(prefix, 2689, (uint)options.LengthUnit); // AreaUnit
+            WriteU32At(prefix, 2718, (uint)options.LengthUnit); // VolumeUnit
+            foreach (var (id, offset, isBool) in RenderingOptionFields)
+            {
+                if (!options.StyleItems.TryGetValue(id, out double v)) continue;
+                if (isBool)
+                {
+                    prefix[offset] = v != 0.0 ? (byte)1 : (byte)0;
+                }
+                else
+                {
+                    WriteU32At(prefix, offset, unchecked((uint)(long)v));
+                }
+            }
+        }
+
+        public static void PatchStyleItems(List<byte> tail, int pos, DocumentOptions options)
+        {
+            for (int i = 0; i < 56; i++)
+            {
+                int id = unchecked((int)ReadU32At(tail, pos));
+                bool valid = ReadU32At(tail, pos + 4) != 0;
+                pos += 8;
+                if (!valid) continue;
+                uint kind = ReadU32At(tail, pos);
+                pos += 4;
+                int size = kind == 1 ? 1 : (kind == 7 ? 8 : 4);
+                if (options.StyleItems.TryGetValue(id, out double v))
+                {
+                    if (kind == 1)
+                    {
+                        tail[pos] = v != 0.0 ? (byte)1 : (byte)0;
+                    }
+                    else if (kind == 4)
+                    {
+                        WriteU32At(tail, pos, unchecked((uint)(long)v));
+                    }
+                    else if (kind == 6)
+                    {
+                        var fBytes = BitConverter.GetBytes((float)v);
+                        if (!BitConverter.IsLittleEndian) Array.Reverse(fBytes);
+                        for (int b = 0; b < 4; b++) tail[pos + b] = fBytes[b];
+                    }
+                    else if (kind == 7)
+                    {
+                        var dBytes = BitConverter.GetBytes(v);
+                        if (!BitConverter.IsLittleEndian) Array.Reverse(dBytes);
+                        for (int b = 0; b < 8; b++) tail[pos + b] = dBytes[b];
+                    }
+                }
+                pos += size;
+            }
         }
     }
 
@@ -2145,6 +2278,37 @@ namespace OpenSkp
         private readonly Dictionary<(int, int), (int, int)> _edgeRegistry = new Dictionary<(int, int), (int, int)>();
         private int _newEntityCount;
         private int _faceCount;
+        private DocumentOptions? _documentOptions;
+
+        /// <summary>Set decimal display units and working/saved style values without scaling geometry.</summary>
+        public void SetDocumentOptions(DocumentOptions options)
+        {
+            if (options == null) throw new ArgumentNullException(nameof(options));
+            if (options.LengthUnit < 0 || options.LengthUnit > 5 ||
+                options.LengthPrecision < 0 || options.LengthPrecision > 6)
+            {
+                throw new SkpWriteException("invalid decimal display units or precision");
+            }
+            var copied = new Dictionary<int, double>();
+            if (options.StyleItems != null)
+            {
+                foreach (var kv in options.StyleItems)
+                {
+                    if (double.IsNaN(kv.Value) || double.IsInfinity(kv.Value) ||
+                        kv.Value < -2147483648.0 || kv.Value > 4294967295.0)
+                    {
+                        throw new SkpWriteException("style scalar is out of range");
+                    }
+                    copied[kv.Key] = kv.Value;
+                }
+            }
+            _documentOptions = new DocumentOptions
+            {
+                LengthUnit = options.LengthUnit,
+                LengthPrecision = options.LengthPrecision,
+                StyleItems = copied,
+            };
+        }
 
         // One CSkFont per file, serialized inline at the first
         // dimension/text's font field (exactly as SketchUp writes it) and
@@ -3138,6 +3302,10 @@ namespace OpenSkp
             // growing the file by 4 extra bytes here.
             var prefix = new byte[_materialInsertPos - 4];
             Array.Copy(_data, 0, prefix, 0, prefix.Length);
+            if (_documentOptions != null)
+            {
+                DocumentOptionsPatching.PatchDocumentPrefix(prefix, _documentOptions);
+            }
             // The model's 64-bit next-persistent-ID counter: the next unused
             // pid after every section has allocated its entities.
             ulong nextPid = (ulong)NextPid();
@@ -3191,6 +3359,11 @@ namespace OpenSkp
 
             var tail = new List<byte>(_data.Length - _tailPos);
             for (int i = _tailPos; i < _data.Length; i++) tail.Add(_data[i]);
+            if (_documentOptions != null)
+            {
+                DocumentOptionsPatching.PatchStyleItems(tail, 4070 - _tailPos, _documentOptions);
+                DocumentOptionsPatching.PatchStyleItems(tail, 4951 - _tailPos, _documentOptions);
+            }
             int totalTailShift = materialShift + layerShift + definitionShift + geometryShift;
             // TailRefPositions and IsoCameraTailPatches's positions both
             // index into this same tail buffer. A ref-shift that widens to

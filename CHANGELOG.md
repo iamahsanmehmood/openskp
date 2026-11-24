@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Python, TypeScript, .NET & Dart: writer `set_document_options`, 8-byte persistent-id counter, and collinear `auto_triangulate` fan handling (#477, #285)
+
+- Ports C++ and Rust's `DocumentOptions` / `set_document_options` (`setDocumentOptions`, `SetDocumentOptions`, `#477`) across Python, TypeScript, .NET and Dart: sets decimal length/area/volume display units (`0..5`), display precision (`0..6`), current rendering options, and working/saved style item tables in the v17 scaffold without scaling model geometry.
+- Widens the header persistent-id counter at offset `1987` to the full 8-byte `uint64` field across Python, TypeScript, .NET and Dart, and skips degenerate collinear fan wedges (after validating finite coordinates upfront) in `auto_triangulate` face triangulation so partial writes cannot desynchronize entity counts.
+
 ### Fixed — Python, TypeScript, .NET, Dart & Rust: `model.dat` of 4 GiB or more recovers wrapped 32-bit container lengths (#285)
 
 - Ports C++'s 4 GiB VFF `model.dat` container-length wrap recovery (#520, #535) to Python (`tlv_headers` / `wrapped_model_records` in `openskp._core`), TypeScript (`tlvHeaders` / `wrappedModelRecords` in `parser.ts`), .NET (`Tlv.TlvHeaders` / `Tlv.WrappedModelRecords`), Dart (`Tlv.tlvHeaders` / `Tlv.wrappedModelRecords`), and Rust (`tlv_headers` / `wrapped_model_records` / `model_records` in `openskp::internal`).

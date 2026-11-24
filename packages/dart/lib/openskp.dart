@@ -20,6 +20,7 @@ export 'src/observability.dart' show SkpLogLevel, ParseProgress, ParseOptions;
 export 'src/create.dart'
     show
         create,
+        DocumentOptions,
         SkpBuilder,
         ComponentDefinitionBuilder,
         GeometryHost,

@@ -1344,3 +1344,101 @@ describe('Long and malformed UTF-16 attribute strings', () => {
     expect(trailing.root.instances[0].properties.damaged).toBe('\uFFFD\uFFFDY\uFFFD\uFFFD');
   });
 });
+
+describe('DocumentOptions, 64-bit pid counter & degenerate fan handling (#477)', () => {
+  function nativeOption(raw: Uint8Array, name: string): number {
+    const key: number[] = [0xff, 0xfe, 0xff, name.length];
+    for (let i = 0; i < name.length; i++) key.push(name.charCodeAt(i), 0);
+    let found = -1;
+    for (let i = 0; i <= raw.length - key.length; i++) {
+      let ok = true;
+      for (let j = 0; j < key.length; j++) {
+        if (raw[i + j] !== key[j]) {
+          ok = false;
+          break;
+        }
+      }
+      if (ok) {
+        found = i;
+        break;
+      }
+    }
+    expect(found).toBeGreaterThanOrEqual(0);
+    const pos = found + key.length;
+    expect(raw[pos]).toBe(4);
+    return new DataView(raw.buffer, raw.byteOffset, raw.byteLength).getUint32(pos + 1, true);
+  }
+
+  it('patches units, rendering options, and style tables without scaling geometry', () => {
+    const styleSig = [0xa0, 0x0f, 0, 0, 1, 0, 0, 0, 4, 0, 0, 0, 0x12, 0x34, 0x56, 0xff];
+    for (let unit = 0; unit <= 5; unit++) {
+      const builder = create();
+      builder.setDocumentOptions({
+        lengthUnit: unit,
+        lengthPrecision: 2,
+        styleItems: { 4000: 0xff563412, 1006: 0, 1007: 5 },
+      });
+      builder.addFace([[0, 0, 0], [2, 0, 0], [0, 3, 0]]);
+      const raw = builder.toBytes();
+      expect(nativeOption(raw, 'LengthUnit')).toBe(unit);
+      expect(nativeOption(raw, 'LengthFormat')).toBe(0);
+      expect(nativeOption(raw, 'LengthPrecision')).toBe(2);
+      expect(nativeOption(raw, 'AreaUnit')).toBe(unit);
+      expect(nativeOption(raw, 'VolumeUnit')).toBe(unit);
+      const dv = new DataView(raw.buffer, raw.byteOffset, raw.byteLength);
+      expect(dv.getUint32(3177, true)).toBe(0xff563412);
+      expect(raw[3206]).toBe(0);
+      expect(dv.getUint32(3207, true)).toBe(5);
+
+      let matches = 0;
+      for (let i = 0; i <= raw.length - styleSig.length; i++) {
+        let ok = true;
+        for (let j = 0; j < styleSig.length; j++) {
+          if (raw[i + j] !== styleSig[j]) {
+            ok = false;
+            break;
+          }
+        }
+        if (ok) matches++;
+      }
+      expect(matches).toBe(2);
+
+      const model = parseSkp(raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength) as ArrayBuffer);
+      expect(model.root.vertices.some((v) => v.x === 2 && v.y === 0 && v.z === 0)).toBe(true);
+    }
+  });
+
+  it('rejects invalid document options, skips collinear fan wedges, and writes 64-bit pids', () => {
+    const invalid = create();
+    expect(() => invalid.setDocumentOptions({ lengthUnit: 6 })).toThrow(SkpWriteError);
+    expect(() => invalid.setDocumentOptions({ lengthPrecision: 7 })).toThrow(SkpWriteError);
+    expect(() => invalid.setDocumentOptions({ styleItems: { 1000: Number.NaN } })).toThrow(SkpWriteError);
+
+    const polygon: Point3[] = [[0, 0, 0], [1, 0, 0], [1, 1, 0], [2, 2, 0], [0, 1, 1]];
+    for (const nested of [false, true]) {
+      const builder = create();
+      if (nested) {
+        const def = builder.addComponentDefinition('fan', (d) => {
+          d.addFace(polygon, { autoTriangulate: true });
+        });
+        builder.addInstance(def);
+      } else {
+        builder.addFace(polygon, { autoTriangulate: true });
+      }
+      builder.addFace([[10, 0, 0], [11, 0, 0], [10, 1, 0]]);
+      const raw = builder.toBytes();
+      const model = parseSkp(raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength) as ArrayBuffer);
+      let totalFaces = model.root.faces.length;
+      for (const d of model.definitions.values()) totalFaces += d.faces.length;
+      expect(totalFaces).toBe(3);
+    }
+
+    const b64 = create();
+    (b64 as any).materialWriter.nextPid = 0x200000007;
+    b64.addFace([[0, 0, 0], [1, 0, 0], [0, 1, 0]]);
+    const raw64 = b64.toBytes();
+    const dv64 = new DataView(raw64.buffer, raw64.byteOffset, raw64.byteLength);
+    expect(dv64.getBigUint64(1987, true)).toBe(BigInt((b64 as any).geometryWriter.nextPid));
+    expect(dv64.getBigUint64(1987, true)).toBeGreaterThan(0x200000000n);
+  });
+});
