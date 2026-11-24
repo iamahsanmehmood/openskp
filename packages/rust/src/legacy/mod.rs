@@ -29,17 +29,22 @@ use crate::internal::{
 };
 use crate::model::{
     stringify_attr_dict, stringify_attr_dictionaries, CoEdge, ConstructionLine, ConstructionPoint,
-    Dimension, EntityId, ParsedAttrDict, ParsedAttrDictionaries, ParsedAttribute, SectionPlane,
-    TextEntity, Vec3,
+    Dimension, EntityId, ParsedAttrDict, ParsedAttrDictionaries, SectionPlane, TextEntity, Vec3,
 };
 use crate::observability::{emit_log, emit_progress, LogLevel, ParseOptions, ParseStage};
 
 pub use self::pages::scan_pages_for_layers;
 
 use self::archive::{
-    bootstrap_two_materials, probe_layer_anchor_bases, walk_with_bases, Archive, WalkResult,
+    bootstrap_two_materials, probe_layer_anchor_bases, walk_with_bases, WalkResult,
 };
-use self::reader::{header_major, R};
+use self::reader::header_major;
+#[cfg(test)]
+use self::archive::Archive;
+#[cfg(test)]
+use self::reader::R;
+#[cfg(test)]
+use crate::model::ParsedAttribute;
 
 // The trailing GUID looked plausible as a class-schema gate at first
 // (CComponentInstance schema >= 5, CGroup schema >= 1), but it doesn't

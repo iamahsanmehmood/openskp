@@ -46,9 +46,7 @@ fn boundary_after(s: &[u8], e: usize) -> bool {
 
 /// A match of an opening-tag pattern.
 pub struct OpenTag {
-    pub start: usize,
     pub attrs: Range<usize>,
-    pub end: usize,
 }
 
 /// `<(?:P:)?NAME\b([^>]*)>` (icase) searched from `from`. With
@@ -66,21 +64,11 @@ pub fn find_open_tag(s: &[u8], from: usize, name: &str, require_gt: bool) -> Opt
             }
             let gt = s[e..].iter().position(|&c| c == b'>').map(|k| e + k);
             match (gt, require_gt) {
-                (Some(g), true) => {
-                    return Some(OpenTag {
-                        start: i,
-                        attrs: e..g,
-                        end: g + 1,
-                    })
-                }
+                (Some(g), true) => return Some(OpenTag { attrs: e..g }),
                 (None, true) => return None,
                 (g, false) => {
                     let g = g.unwrap_or(s.len());
-                    return Some(OpenTag {
-                        start: i,
-                        attrs: e..g,
-                        end: g,
-                    });
+                    return Some(OpenTag { attrs: e..g });
                 }
             }
         }
