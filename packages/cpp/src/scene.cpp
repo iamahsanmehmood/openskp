@@ -97,22 +97,22 @@ Scene build_scene_raw(RawParsed&& p, const ParseOptions& o) {
   std::function<std::vector<InstanceNode>(const GeometryBuilder&, const std::string&,
                                           std::optional<EntityId>, const std::vector<double>&,
                                           const std::string&, const std::string&,
-                                          std::optional<FaceColorKey>)>
+                                          const std::shared_ptr<RawMaterial>&)>
       bake;
   bake = [&](const GeometryBuilder& b, const std::string& defname, std::optional<EntityId> defid,
              const std::vector<double>& matrix, const std::string& layer, const std::string& path,
-             std::optional<FaceColorKey> inherited) {
+             const std::shared_ptr<RawMaterial>& inherited_material) {
     FaceColorKey fallback{};
     FaceColorKey fallback_back{};
-    if (inherited) {
-      fallback = fallback_back = *inherited;
+    if (auto inherited_color = material_color(inherited_material)) {
+      fallback = fallback_back = *inherited_color;
     } else if (style_colors) {
       std::tie(fallback, fallback_back) = *style_colors;
     } else {
       fallback = fallback_back = default_color(p, layer);
     }
-    auto groups =
-        build_local_face_groups(p, b, FaceGroupContext{texture_index_for, fallback, fallback_back});
+    auto groups = build_local_face_groups(
+        p, b, FaceGroupContext{texture_index_for, fallback, fallback_back, inherited_material});
     for (auto& kv : groups) {
       auto& g = kv.second;
       if (g.tris.empty()) continue;
@@ -198,8 +198,8 @@ Scene build_scene_raw(RawParsed&& p, const ParseOptions& o) {
           emit_log(o, LogLevel::debug, "Failed to resolve layer id '" + i.layer + "' to a name");
         }
       }
-      auto child_color = inherited;
-      if (auto color = material_color(find_material(p, i.material_id))) child_color = color;
+      auto child_material = find_material(p, i.material_id);
+      if (!child_material) child_material = inherited_material;
 
       // def_name is looked up before building the node, since the
       // name-resolution fallback chain below needs it - same order as
@@ -251,7 +251,7 @@ Scene build_scene_raw(RawParsed&& p, const ParseOptions& o) {
         if (d != p.definitions.end()) {
           active.insert(*i.ref_idx);
           nested = bake(d->second.builder, d->second.name, *i.ref_idx, mat, child_layer, child_path,
-                        child_color);
+                        child_material);
           active.erase(*i.ref_idx);
         }
       }
@@ -277,7 +277,7 @@ Scene build_scene_raw(RawParsed&& p, const ParseOptions& o) {
   };
   std::vector<double> identity{1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1};
   scene.scene_hierarchy.children =
-      bake(p.root.builder, "ROOT_MODEL", {}, identity, "Layer0", "ROOT", {});
+      bake(p.root.builder, "ROOT_MODEL", {}, identity, "Layer0", "ROOT", nullptr);
 
   // Apply the deferred backfill: each mesh's real per-instance name/
   // properties/attribute dictionaries, now that the whole tree (and so

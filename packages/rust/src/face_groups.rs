@@ -9,9 +9,10 @@
 //! node instead. One implementation keeps the two paths agreeing on
 //! triangulation, UV seams, normals and front/back handling.
 //!
-//! An unpainted face falls back to the caller's `fallback_color` for color,
-//! but its material (and so its texture tile size) comes from the face's OWN
-//! `material_id` / `back_material_id` only. The color key carries a 4th
+//! An unpainted face side inherits `fallback_material` (texture image, tile
+//! size and opacity included) from an enclosing painted component or group;
+//! when nothing up the instance path is painted, its color falls back to
+//! `fallback_color` / `fallback_back_color`. The color key carries a 4th
 //! (alpha) component.
 
 use std::collections::{BTreeMap, HashMap};
@@ -185,6 +186,9 @@ pub struct FaceGroupContext<'a> {
     pub fallback_color: FaceColorKey,
     /// Color an unpainted face back falls back to (`fallback_color` when `None`).
     pub fallback_back_color: Option<FaceColorKey>,
+    /// Material painted on the enclosing group/component, inherited whole
+    /// (texture, tile size, transparency) by any unpainted face side.
+    pub fallback_material: Option<&'a RawMaterial>,
 }
 
 fn tile_size(material: Option<&RawMaterial>) -> (f64, f64) {
@@ -314,8 +318,8 @@ pub fn build_local_face_groups(
     let fallback_back = ctx.fallback_back_color.unwrap_or(ctx.fallback_color);
 
     for f in b.faces.values() {
-        let front_mat = find_material(parsed, f.material_id);
-        let back_mat = find_material(parsed, f.back_material_id);
+        let front_mat = find_material(parsed, f.material_id).or(ctx.fallback_material);
+        let back_mat = find_material(parsed, f.back_material_id).or(ctx.fallback_material);
         let front = material_color(front_mat).unwrap_or(ctx.fallback_color);
         let back = material_color(back_mat).unwrap_or(fallback_back);
 

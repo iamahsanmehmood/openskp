@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — C++ & Rust: unpainted faces inside a textured component or group inherit its texture (#634)
+
+- `build_scene` and `build_instanced_scene` passed only the instance's colour down, which lost the texture image, the tile size and the `MASK` alpha mode. They now pass the whole material, as the other ports do. `InstancedMeshResource::variant_key` ends with the inherited material's name.
+
 ### Fixed — Python, TypeScript, .NET & Dart: classic instances keep their attribute dictionaries and display names in scenes (#633)
 
 - `build_scene` and `build_instanced_scene` now fill `attribute_dictionaries` for pre-2021 instances (and files the writers produce) and apply the `name` / `label` / `code` display-name override, as C++ and Rust do. `mesh_index` names match the hierarchy in TypeScript, .NET and Dart.

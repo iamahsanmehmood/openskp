@@ -482,7 +482,7 @@ fn an_instanced_definition_is_shared_per_paint_color() {
         .collect();
     assert_eq!(ids, ["mesh_0", "mesh_0", "mesh_1"]);
     assert_eq!(scene.mesh_resources[0].variant_key, "1|136,136,136,255");
-    assert_eq!(scene.mesh_resources[1].variant_key, "1|40,50,60,64");
+    assert_eq!(scene.mesh_resources[1].variant_key, "1|40,50,60,64|back");
     assert_eq!(scene.scene_hierarchy.mesh_resource_id, None);
     let bounds = scene.bounds.unwrap();
     assert_eq!(bounds.min, [0.0, 0.0, f64::from(-0.0254f32)]);

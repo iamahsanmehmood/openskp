@@ -152,8 +152,10 @@ std::map<GroupKey, Group> build_local_face_groups(const RawParsed& parsed, const
 
   for (auto& fv : b.faces) {
     auto& f = fv.second;
-    const auto front_mat = find_material(parsed, f.material_id);
-    const auto back_mat = find_material(parsed, f.back_material_id);
+    auto front_mat = find_material(parsed, f.material_id);
+    if (!front_mat) front_mat = ctx.fallback_material;
+    auto back_mat = find_material(parsed, f.back_material_id);
+    if (!back_mat) back_mat = ctx.fallback_material;
     const auto front = material_color(front_mat).value_or(ctx.fallback_color);
     const auto back = material_color(back_mat).value_or(fallback_back);
 

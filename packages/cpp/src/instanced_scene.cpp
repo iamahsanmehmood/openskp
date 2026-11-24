@@ -94,7 +94,8 @@ std::array<double, 16> mul4(const std::array<double, 16>& a, const std::array<do
 }
 
 std::string resource_key(std::optional<EntityId> defid, const FaceColorKey& color,
-                         const FaceColorKey& back_color) {
+                         const FaceColorKey& back_color,
+                         const std::shared_ptr<RawMaterial>& inherited_material) {
   std::string key = defid ? std::to_string(*defid) : "ROOT";
   key += '|';
   key += std::to_string(color[0]) + ',' + std::to_string(color[1]) + ',' +
@@ -102,6 +103,10 @@ std::string resource_key(std::optional<EntityId> defid, const FaceColorKey& colo
   if (back_color != color) {
     key += '/' + std::to_string(back_color[0]) + ',' + std::to_string(back_color[1]) + ',' +
            std::to_string(back_color[2]) + ',' + std::to_string(back_color[3]);
+  }
+  if (inherited_material) {
+    key += '|';
+    key += inherited_material->name;
   }
   return key;
 }
@@ -163,42 +168,42 @@ InstancedScene build_instanced_scene_raw(RawParsed&& p, const ParseOptions& o) {
 
   std::map<std::string, std::size_t> resource_index_by_key;
 
-  // Identity of a mesh resource: (definition, effective fallback color) -
-  // the ONLY inputs that can change what build_local_face_groups produces
-  // for this definition, since (faithfully to the baked path this was
-  // extracted from - see face_groups.hpp's own docs) it resolves each
-  // face's material from the face's OWN material id only, never from an
-  // instance's painted material. Caching on the definition id alone would
-  // still be wrong: the same definition renders a different fallback
-  // color depending on the layer/paint context it's placed in, and
-  // merging those would silently repaint geometry.
+  // Identity of a mesh resource: (definition, effective fallback color,
+  // inherited material name) - the ONLY inputs that can change what
+  // build_local_face_groups produces for this definition. Caching on the
+  // definition id alone would be wrong: the same definition renders
+  // differently depending on the layer/paint context it's placed in, and
+  // merging those would silently repaint geometry. The material name is
+  // needed on top of the color because two painted materials can share a
+  // color and opacity yet differ in texture or tile size.
   std::function<std::optional<std::string>(const GeometryBuilder&, const std::string&,
-                                           std::optional<EntityId>, std::optional<FaceColorKey>,
-                                           const std::string&)>
+                                           std::optional<EntityId>,
+                                           const std::shared_ptr<RawMaterial>&, const std::string&)>
       mesh_resource_for_builder;
   mesh_resource_for_builder = [&](const GeometryBuilder& builder, const std::string& defname,
                                   std::optional<EntityId> defid,
-                                  std::optional<FaceColorKey> inherited,
+                                  const std::shared_ptr<RawMaterial>& inherited_material,
                                   const std::string& layer) -> std::optional<std::string> {
     if (builder.faces.empty()) return std::nullopt;
 
     FaceColorKey fallback{};
     FaceColorKey fallback_back{};
-    if (inherited) {
-      fallback = fallback_back = *inherited;
+    if (auto inherited_color = material_color(inherited_material)) {
+      fallback = fallback_back = *inherited_color;
     } else if (style_colors) {
       std::tie(fallback, fallback_back) = *style_colors;
     } else {
       fallback = fallback_back = default_color(p, layer);
     }
-    const auto key = resource_key(defid, fallback, fallback_back);
+    const auto key = resource_key(defid, fallback, fallback_back, inherited_material);
     auto hit = resource_index_by_key.find(key);
     if (hit != resource_index_by_key.end()) {
       return scene.mesh_resources[hit->second].id;
     }
 
     auto groups = build_local_face_groups(
-        p, builder, FaceGroupContext{texture_index_for, fallback, fallback_back});
+        p, builder,
+        FaceGroupContext{texture_index_for, fallback, fallback_back, inherited_material});
 
     std::vector<LocalPrimitive> primitives;
     for (auto& kv : groups) {
@@ -271,11 +276,11 @@ InstancedScene build_instanced_scene_raw(RawParsed&& p, const ParseOptions& o) {
   // path's metadata); the geometry itself never sees it.
   std::function<std::vector<InstancedNode>(const GeometryBuilder&, std::optional<EntityId>,
                                            const std::vector<double>&, const std::string&,
-                                           std::optional<FaceColorKey>)>
+                                           const std::shared_ptr<RawMaterial>&)>
       walk;
   walk = [&](const GeometryBuilder& builder, std::optional<EntityId> defid,
              const std::vector<double>& current_matrix, const std::string& parent_layer,
-             std::optional<FaceColorKey> inherited) {
+             const std::shared_ptr<RawMaterial>& inherited_material) {
     std::vector<InstancedNode> nodes;
     for (auto& i : builder.instances) {
       const auto new_matrix = multiply_matrices(current_matrix, i.matrix);
@@ -291,8 +296,8 @@ InstancedScene build_instanced_scene_raw(RawParsed&& p, const ParseOptions& o) {
         }
       }
 
-      auto inst_color = inherited;
-      if (auto color = material_color(find_material(p, i.material_id))) inst_color = color;
+      auto inst_material = find_material(p, i.material_id);
+      if (!inst_material) inst_material = inherited_material;
 
       // def_name is looked up before building the node, since the name-
       // resolution fallback chain below needs it - same order as Python's
@@ -359,8 +364,8 @@ InstancedScene build_instanced_scene_raw(RawParsed&& p, const ParseOptions& o) {
           active.insert(*i.ref_idx);
           node.definition_name = d->second.name;
           node.mesh_resource_id = mesh_resource_for_builder(d->second.builder, d->second.name,
-                                                            *i.ref_idx, inst_color, l_name);
-          node.children = walk(d->second.builder, *i.ref_idx, new_matrix, l_name, inst_color);
+                                                            *i.ref_idx, inst_material, l_name);
+          node.children = walk(d->second.builder, *i.ref_idx, new_matrix, l_name, inst_material);
           active.erase(*i.ref_idx);
         }
       }
@@ -373,13 +378,13 @@ InstancedScene build_instanced_scene_raw(RawParsed&& p, const ParseOptions& o) {
   };
 
   std::vector<double> identity{1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1};
-  auto root_children = walk(p.root.builder, std::nullopt, identity, "Layer0", std::nullopt);
+  auto root_children = walk(p.root.builder, std::nullopt, identity, "Layer0", nullptr);
 
   // Loose geometry drawn straight into the model (not inside any
   // component/group) is kept, as the baked path keeps it: it becomes the
   // root node's own mesh resource.
   auto root_mesh_resource_id =
-      mesh_resource_for_builder(p.root.builder, "ROOT_MODEL", std::nullopt, std::nullopt, "Layer0");
+      mesh_resource_for_builder(p.root.builder, "ROOT_MODEL", std::nullopt, nullptr, "Layer0");
 
   scene.layer_hidden = p.layer_hidden;
   scene.unread_root_entities = p.unread_root_entities;
