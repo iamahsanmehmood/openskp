@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — Python, TypeScript, .NET, Dart & Rust: `model.dat` of 4 GiB or more recovers wrapped 32-bit container lengths (#285)
+
+- Ports C++'s 4 GiB VFF `model.dat` container-length wrap recovery (#520, #535) to Python (`tlv_headers` / `wrapped_model_records` in `openskp._core`), TypeScript (`tlvHeaders` / `wrappedModelRecords` in `parser.ts`), .NET (`Tlv.TlvHeaders` / `Tlv.WrappedModelRecords`), Dart (`Tlv.tlvHeaders` / `Tlv.wrappedModelRecords`), and Rust (`tlv_headers` / `wrapped_model_records` / `model_records` in `openskp::internal`).
+- Ranges shorter than $2^{32}$ bytes continue to use the zero-allocation linear scan unchanged. Ranges of 4 GiB or more resolve 32-bit container length wrap-arounds (`size + k * 2^32`) with run-compressed record-chain views (`attempts = 256`, `MAX_TLV_DEPTH = 64`), and disambiguate wrapped `F401` top-level models via `F901 -> 7017 -> 7117 -> 7C15` catalog wrapper agreement when child records cross the stored 32-bit parent end.
+
 ### Fixed — Python: scenes use a component instance's own paint and tag in classic files (#596)
 
 - `build_scene()` and `build_instanced_scene()` read an instance's paint and tag from its 2021+ `D007` record only. In classic (pre-2021) files a painted component came out in its tag's colour, and every instance sat on its parent's tag. Both now come from the instance itself, and nested components inherit the paint.

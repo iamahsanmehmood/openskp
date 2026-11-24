@@ -15,6 +15,7 @@ import os
 import struct
 import time
 import zipfile
+from bisect import bisect_left, bisect_right
 from typing import Any, Dict, List, Optional
 # material.xml/style.xml come from inside the .skp's ZIP container, which is
 # fully attacker-controlled input - stdlib ElementTree expands internal
@@ -200,6 +201,7 @@ def _detach_tlv_payloads(nodes):
 # levels deep, which exhausts the stack before anything can be reported, so
 # the parser stops at this depth with a parse error instead.
 _MAX_TLV_DEPTH = 64
+_TLV_WRAP = 1 << 32
 
 
 def _nesting_error(tag, offset):
@@ -209,14 +211,357 @@ def _nesting_error(tag, offset):
     )
 
 
-def parse_tlv_recursive(data, start, end, container_tags=None, depth=0):
+class _Run:
+    __slots__ = ('offset', 'size', 'count')
+
+    def __init__(self, offset: int, size: int, count: int):
+        self.offset = offset
+        self.size = size
+        self.count = count
+
+
+class _Chain:
+    __slots__ = ('runs', 'run_offsets', 'candidates', 'candidate_offsets', 'indexed')
+
+    def __init__(self):
+        self.runs = []
+        self.run_offsets = []
+        self.candidates = []
+        self.candidate_offsets = []
+        self.indexed = False
+
+    def end(self) -> int:
+        r = self.runs[-1]
+        return r.offset + r.count * (r.size + 6)
+
+    def run_at(self, p: int) -> int:
+        return bisect_right(self.run_offsets, p) - 1
+
+    def contains(self, p: int) -> bool:
+        if p < self.runs[0].offset or p >= self.end():
+            return False
+        r = self.runs[self.run_at(p)]
+        return (p - r.offset) % (r.size + 6) == 0
+
+    def clip(self, limit: int) -> int:
+        end = self.end()
+        if limit >= end:
+            return end
+        r = self.runs[self.run_at(limit)]
+        step = r.size + 6
+        return r.offset + ((limit - r.offset) // step) * step
+
+    def append(self, p: int, size: int) -> None:
+        if self.runs and self.runs[-1].size == size and self.end() == p:
+            self.runs[-1].count += 1
+        else:
+            self.runs.append(_Run(p, size, 1))
+            self.run_offsets.append(p)
+
+
+class _Plan:
+    __slots__ = ('views', 'stop')
+
+    def __init__(self, views, stop: int):
+        self.views = views
+        self.stop = stop
+
+
+class _HeaderResolver:
+    """Recover 32-bit wrapped container lengths across >= 4 GiB TLV ranges."""
+
+    def __init__(self, length_fn, container_fn, end: int):
+        self.length = length_fn
+        self.container = container_fn
+        self.limit = end
+        self.attempts = 256
+        self.chains = []
+        self.decisions = {}
+
+    def _chain_at(self, p: int):
+        for chain in reversed(self.chains):
+            if chain.contains(p):
+                return chain
+        return None
+
+    def _ordinary(self, start: int, end: int) -> _Plan:
+        views = []
+        p = start
+        length = self.length
+        while end - p >= 6:
+            cached = self._chain_at(p)
+            if cached is not None:
+                nxt = cached.clip(end)
+                if nxt > p:
+                    views.append((cached, p, nxt))
+                p = nxt
+                if p < cached.end():
+                    return _Plan(views, p)
+                continue
+            chain = _Chain()
+            begin = p
+            probes = 0
+            joined = False
+            while end - p >= 6:
+                if probes and (probes & 1023) == 0 and self._chain_at(p) is not None:
+                    joined = True
+                    break
+                size = length(p)
+                if size > end - p - 6:
+                    break
+                chain.append(p, size)
+                p += 6 + size
+                probes += 1
+            if p > begin:
+                self.chains.append(chain)
+                views.append((chain, begin, p))
+            if not joined:
+                return _Plan(views, p)
+        return _Plan(views, p)
+
+    def _index(self, chain: _Chain) -> None:
+        if chain.indexed:
+            return
+        chain.indexed = True
+        limit = self.limit
+        container = self.container
+        for r in chain.runs:
+            step = r.size + 6
+            for k in range(r.count):
+                p = r.offset + k * step
+                if (limit - p) - step < _TLV_WRAP:
+                    return
+                if container(p):
+                    chain.candidates.append((p, r.size))
+                    chain.candidate_offsets.append(p)
+
+    @staticmethod
+    def _replace(original: _Plan, h_offset: int, size: int, suffix: _Plan, end: int) -> _Plan:
+        views = []
+        for v_chain, v_begin, v_end in original.views:
+            if v_begin >= h_offset:
+                break
+            views.append((v_chain, v_begin, v_end if v_end < h_offset else h_offset))
+            if v_end >= h_offset:
+                break
+        extended = _Chain()
+        extended.append(h_offset, size)
+        views.append((extended, h_offset, h_offset + 6 + size))
+        views.extend(suffix.views)
+        return _Plan(views, end)
+
+    def _solve(self, start: int, end: int, depth: int):
+        normal = self._ordinary(start, end)
+        if normal.stop == end:
+            return normal
+        key = (start, end, depth)
+        if key in self.decisions:
+            return self.decisions[key]
+        for v_chain, v_begin, v_end in normal.views:
+            self._index(v_chain)
+            candidates = v_chain.candidates
+            idx = bisect_left(v_chain.candidate_offsets, v_begin)
+            n_cand = len(candidates)
+            while idx < n_cand:
+                h_offset, h_size = candidates[idx]
+                if h_offset >= v_end:
+                    break
+                idx += 1
+                available = end - h_offset - 6
+                if available - h_size < _TLV_WRAP:
+                    break
+                n = h_size + _TLV_WRAP
+                while n <= available:
+                    if depth >= _MAX_TLV_DEPTH or self.attempts == 0:
+                        raise SkpParseError(
+                            "TLV length recovery exceeded its depth or attempt limit",
+                            stage="tlv_walk", offset=h_offset,
+                        )
+                    self.attempts -= 1
+                    nxt = h_offset + 6 + n
+                    suffix = self._solve(nxt, end, depth + 1)
+                    if suffix is not None and self._solve(h_offset + 6, nxt, depth + 1) is not None:
+                        result = self._replace(normal, h_offset, n, suffix, end)
+                        self.decisions[key] = result
+                        return result
+                    if available - n < _TLV_WRAP:
+                        break
+                    n += _TLV_WRAP
+        self.decisions[key] = None
+        return None
+
+    @staticmethod
+    def _materialize(plan: _Plan):
+        out = []
+        for v_chain, v_begin, v_end in plan.views:
+            i = v_chain.run_at(v_begin)
+            runs = v_chain.runs
+            n_runs = len(runs)
+            while i < n_runs and runs[i].offset < v_end:
+                r = runs[i]
+                i += 1
+                step = r.size + 6
+                r_end = r.offset + r.count * step
+                stop = v_end if v_end < r_end else r_end
+                k0 = 0 if v_begin <= r.offset else (v_begin - r.offset) // step
+                k1 = 0 if stop <= r.offset else (stop - r.offset) // step
+                for k in range(k0, k1):
+                    out.append((r.offset + k * step, r.size))
+        return out
+
+    def headers(self, start: int, end: int):
+        plan = self._solve(start, end, 0)
+        if plan is not None:
+            return self._materialize(plan)
+        return self._materialize(self._ordinary(start, end))
+
+
+def wrapped_model_records(end: int, tag_fn, length_fn):
+    """Disambiguate a >= 4 GiB model.dat whose outer F401 length wrapped."""
+    if end < 6 or end - 6 < _TLV_WRAP or tag_fn(0) != 0x01F4:
+        return None
+    if length_fn(0) != ((end - 6) & 0xFFFFFFFF):
+        return None
+
+    stored_root_end = 6 + length_fn(0)
+    stored_parent_end = stored_root_end
+    contradicts_stored_lengths = False
+    pos = 6
+
+    def checked_length() -> int:
+        nonlocal contradicts_stored_lengths
+        size = length_fn(pos)
+        if (pos <= stored_root_end and stored_root_end - pos >= 6 and size > stored_root_end - pos - 6) or (
+            pos <= stored_parent_end and stored_parent_end - pos >= 6 and size > stored_parent_end - pos - 6
+        ):
+            contradicts_stored_lengths = True
+        return size
+
+    def has(expected: int) -> bool:
+        return end - pos >= 6 and tag_fn(pos) == expected
+
+    def advance() -> bool:
+        nonlocal pos
+        if end - pos < 6:
+            return False
+        size = checked_length()
+        if size > end - pos - 6:
+            return False
+        pos += 6 + size
+        return True
+
+    while not has(0x01F9):
+        if not advance():
+            return None
+    catalog = pos
+    wrappers = []
+    for expected_tag in (0x01F9, 0x1770, 0x1771):
+        if not has(expected_tag):
+            return None
+        wrappers.append(pos)
+        size = checked_length()
+        if pos <= stored_parent_end and stored_parent_end - pos >= 6 and size <= stored_parent_end - pos - 6:
+            stored_parent_end = pos + 6 + size
+        pos += 6
+        if has(0x0063) and not advance():
+            return None
+    definitions = pos
+    while has(0x157C):
+        if not advance():
+            return None
+    entities = pos
+    if definitions == entities or not has(0x01F6):
+        return None
+    for offset in wrappers:
+        if length_fn(offset) != ((entities - offset - 6) & 0xFFFFFFFF):
+            return None
+    stored_parent_end = stored_root_end
+    while pos < end:
+        if not advance():
+            return None
+    if not contradicts_stored_lengths:
+        return None
+
+    records = []
+
+    def append_range(begin: int, stop: int) -> None:
+        p = begin
+        while p < stop:
+            size = length_fn(p)
+            records.append((p, size))
+            p += 6 + size
+
+    append_range(6, catalog)
+    append_range(definitions, entities)
+    append_range(entities, end)
+    return records
+
+
+def tlv_headers(start: int, end: int, length_fn, container_fn):
+    """Scan [start, end) for (offset, size) TLV headers, recovering 32-bit wraps."""
+    if start < 0 or start > end:
+        raise ValueError("invalid TLV range")
+    if end - start >= _TLV_WRAP:
+        return _HeaderResolver(length_fn, container_fn, end).headers(start, end)
+    out = []
+    p = start
+    while end - p >= 6:
+        n = length_fn(p)
+        if n > end - p - 6:
+            break
+        out.append((p, n))
+        p += 6 + n
+    return out
+
+
+def tlv_headers_buffer(data, start: int, end: int, container_tags=None):
     if container_tags is None:
         container_tags = CONTAINER_TAGS
-    pos = start
+    if start < 0 or start > end or end > len(data):
+        raise ValueError("invalid TLV range")
+    unpack_header = _unpack_header
+    if end - start >= _TLV_WRAP:
+        tag_strings = _TAG_STRINGS or _tag_strings()
+        return _HeaderResolver(
+            lambda p: unpack_header(data, p)[1],
+            lambda p: tag_strings[unpack_header(data, p)[0]] in container_tags,
+            end,
+        ).headers(start, end)
+    out = []
+    p = start
+    last_header = end - 6
+    while p <= last_header:
+        _, size = unpack_header(data, p)
+        if p + 6 + size > end:
+            break
+        out.append((p, size))
+        p += 6 + size
+    return out
+
+
+def parse_tlv_recursive(data, start, end, container_tags=None, depth=0):
+    if start < 0 or start > end or end > len(data):
+        raise ValueError("invalid TLV range")
+    if container_tags is None:
+        container_tags = CONTAINER_TAGS
     elements = []
     append = elements.append
     tag_strings = _TAG_STRINGS or _tag_strings()
     unpack_header = _unpack_header
+    if end - start >= _TLV_WRAP:
+        for pos, size in tlv_headers_buffer(data, start, end, container_tags):
+            tag_hex = tag_strings[unpack_header(data, pos)[0]]
+            payload_start = pos + 6
+            payload_end = payload_start + size
+            if size > 0 and tag_hex in container_tags:
+                if depth >= _MAX_TLV_DEPTH:
+                    raise _nesting_error(tag_hex, pos)
+                children = parse_tlv_recursive(data, payload_start, payload_end, container_tags, depth + 1)
+            else:
+                children = []
+            append(_TlvNode(pos, tag_hex, size, children, data, payload_start, payload_end))
+        return elements
+    pos = start
     last_header = end - 6
     while pos <= last_header:
         tag_value, size = unpack_header(data, pos)
@@ -273,6 +618,27 @@ def _parse_tlv_geometry(data, start, end, container_tags, depth=0):
     """
     elements = []
     tag_strings = _TAG_STRINGS or _tag_strings()
+    if end - start >= _TLV_WRAP:
+        for pos, size in tlv_headers_buffer(data, start, end, container_tags):
+            tag = tag_strings[_unpack_header(data, pos)[0]]
+            payload_start = pos + 6
+            payload_end = payload_start + size
+            if tag in ('C409', 'B80B', 'AC0D'):
+                record = _decode_geometry_record(data, payload_start, size, tag)
+                if record is not None:
+                    elements.append(_GeometryRecordNode(
+                        pos, tag, size, record, data, container_tags))
+                    continue
+            if size > 0 and tag in container_tags:
+                if depth >= _MAX_TLV_DEPTH:
+                    raise _nesting_error(tag, pos)
+                parser = parse_tlv_recursive if tag == '6419' else _parse_tlv_geometry
+                children = parser(data, payload_start, payload_end, container_tags, depth + 1)
+            else:
+                children = []
+            elements.append(_TlvNode(pos, tag, size, children, data,
+                                     payload_start, payload_end))
+        return elements
     pos = start
     while pos <= end - 6:
         tag_value, size = _unpack_header(data, pos)
@@ -301,15 +667,20 @@ def _parse_tlv_geometry(data, start, end, container_tags, depth=0):
     return elements
 
 
-def _flat_headers(data, start, end):
+def _flat_headers(data, start, end, container_tags=None):
     """Scan [start, end) for direct-child (tag, offset, size) headers only,
     without recursing into any container - O(sibling count), not
     O(total node count). Used to locate top-level records one at a time so
     full_parse() never has to hold the whole file's TLV tree in memory at
     once (real production files can have 100k+ top-level definitions)."""
+    tag_strings = _TAG_STRINGS or _tag_strings()
+    if end - start >= _TLV_WRAP:
+        return [
+            (tag_strings[_unpack_header(data, pos)[0]], pos, size)
+            for pos, size in tlv_headers_buffer(data, start, end, container_tags)
+        ]
     headers = []
     pos = start
-    tag_strings = _TAG_STRINGS or _tag_strings()
     while pos <= end - 6:
         tag_value, size = _unpack_header(data, pos)
         if pos + 6 + size > end:
@@ -319,7 +690,7 @@ def _flat_headers(data, start, end):
     return headers
 
 
-def _require_complete_top_level(data, start, end):
+def _require_complete_top_level(data, start, end, headers=None):
     """Raise if a top-level record declares more bytes than the data holds.
 
     ``_flat_headers`` stops quietly at such a record, so a ``model.dat`` cut
@@ -330,6 +701,16 @@ def _require_complete_top_level(data, start, end):
     not records, and a strict check there would reject valid models.
     """
     tag_strings = _TAG_STRINGS or _tag_strings()
+    if headers is not None:
+        pos = start if not headers else headers[-1][1] + 6 + headers[-1][2]
+        if end - pos >= 6:
+            tag_value, size = _unpack_header(data, pos)
+            raise SkpParseError(
+                f"model.dat is truncated: the top-level record declares {size} "
+                f"bytes but only {end - pos - 6} remain",
+                stage="tlv_walk", tag=tag_strings[tag_value], offset=pos,
+            )
+        return
     pos = start
     while pos <= end - 6:
         tag_value, size = _unpack_header(data, pos)
@@ -346,7 +727,7 @@ _DEFINITION_LIST_WRAPPER_CHAIN = ('7017', '7117')
 _DEFINITION_TAG = '7C15'
 
 
-def _unwrap_definitions_container(data, offset, size):
+def _unwrap_definitions_container(data, offset, size, container_tags=None):
     """``F901`` wraps the file's whole component/group-definition list
     behind two more single-child containers (``7017``, then ``7117``)
     before reaching the real, independent list of one ``7C15`` per
@@ -358,13 +739,13 @@ def _unwrap_definitions_container(data, offset, size):
     the expected wrapper shape isn't found, so a caller can fall back to
     treating ``F901`` as an ordinary single record rather than risk
     silently mis-parsing a differently-shaped file."""
-    level = _flat_headers(data, offset + 6, offset + 6 + size)
+    level = _flat_headers(data, offset + 6, offset + 6 + size, container_tags)
     for expected_tag in _DEFINITION_LIST_WRAPPER_CHAIN:
         container = next((h for h in level if h[0] == expected_tag), None)
         if container is None:
             return None
         _, c_offset, c_size = container
-        level = _flat_headers(data, c_offset + 6, c_offset + 6 + c_size)
+        level = _flat_headers(data, c_offset + 6, c_offset + 6 + c_size, container_tags)
     defs = [h for h in level if h[0] == _DEFINITION_TAG]
     return defs if defs else None
 
@@ -400,21 +781,33 @@ def iter_top_level_lazy(data, start, end, container_tags=None, *, _geometry=Fals
     if container_tags is None:
         container_tags = CONTAINER_TAGS
 
-    _require_complete_top_level(data, start, end)
-    headers = _flat_headers(data, start, end)
-    if len(headers) == 1 and headers[0][0] == 'F401':
-        _, f401_offset, f401_size = headers[0]
-        headers = _flat_headers(data, f401_offset + 6, f401_offset + 6 + f401_size)
+    wrapped = None
+    if start == 0 and end == len(data) and 'F401' in container_tags and end >= 6 and end - 6 >= _TLV_WRAP:
+        wrapped = wrapped_model_records(
+            end,
+            lambda p: _unpack_header(data, p)[0],
+            lambda p: _unpack_header(data, p)[1],
+        )
 
-    expanded = []
-    for tag_hex, offset, size in headers:
-        if tag_hex == 'F901':
-            def_headers = _unwrap_definitions_container(data, offset, size)
-            if def_headers is not None:
-                expanded.extend(def_headers)
-                continue
-        expanded.append((tag_hex, offset, size))
-    headers = expanded
+    if wrapped is not None:
+        tag_strings = _TAG_STRINGS or _tag_strings()
+        headers = [(tag_strings[_unpack_header(data, p)[0]], p, size) for p, size in wrapped]
+    else:
+        headers = _flat_headers(data, start, end, container_tags)
+        _require_complete_top_level(data, start, end, headers)
+        if len(headers) == 1 and headers[0][0] == 'F401':
+            _, f401_offset, f401_size = headers[0]
+            headers = _flat_headers(data, f401_offset + 6, f401_offset + 6 + f401_size, container_tags)
+
+        expanded = []
+        for tag_hex, offset, size in headers:
+            if tag_hex == 'F901':
+                def_headers = _unwrap_definitions_container(data, offset, size, container_tags)
+                if def_headers is not None:
+                    expanded.extend(def_headers)
+                    continue
+            expanded.append((tag_hex, offset, size))
+        headers = expanded
 
     total = len(headers)
     for index, (tag_hex, offset, size) in enumerate(headers):

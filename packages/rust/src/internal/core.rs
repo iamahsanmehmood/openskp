@@ -4,7 +4,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use super::bytes::{parse_flat, parse_tlv_recursive, tag_at, u32_at};
+use super::bytes::{
+    parse_flat, parse_tlv_recursive, tag_at, tlv_headers_slice, u32_at, wrapped_model_records,
+    TlvHeader,
+};
 use super::geometry::{
     collect_definitions, collect_geometry, collect_layers, collect_material_ids,
     collect_model_attribute_dictionaries,
@@ -16,7 +19,7 @@ use super::pages_dimensions::{
 use super::strconv::{c_stod, c_stoi, c_stoll, c_stoul_digits};
 use super::vff::{extract_version, is_legacy, read_meta_units, valid_header};
 use super::xml::{attr, attributes, find_element, find_open_tag, find_screenimage};
-use super::{text, RawMaterial, RawParsed, RawStyle, RawTexture, TlvNode};
+use super::{text, ErrorKind, RawMaterial, RawParsed, RawStyle, RawTexture, Tag, TlvNode};
 use crate::errors::SkpParseError;
 use crate::legacy::parse_legacy;
 use crate::model::{StyleItem, StyleWatermark, Vec3, ViewCamera};
@@ -129,24 +132,29 @@ fn zip_offset(d: &[u8]) -> Option<usize> {
     None
 }
 
-#[derive(Clone, Copy)]
-struct Header {
-    offset: usize,
-    size: usize,
-}
-
-fn headers(d: &[u8], start: usize, end: usize) -> Vec<Header> {
-    let mut h = Vec::new();
-    let mut p = start;
-    while p + 6 <= end {
-        let n = u32_at(d, p + 2) as usize;
-        if n > end - p - 6 {
-            break;
-        }
-        h.push(Header { offset: p, size: n });
-        p += 6 + n;
+fn require_complete_top_level(d: &[u8], records: &[TlvHeader]) -> Result<(), SkpParseError> {
+    let p = records
+        .last()
+        .map_or(0usize, |h| (h.offset + 6 + h.size) as usize);
+    if d.len() - p >= 6 {
+        let n = u32_at(d, p + 2);
+        let tag = Tag::from_bytes(d[p], d[p + 1]).as_str().to_owned();
+        return Err(SkpParseError::with_context(
+            format!(
+                "model.dat is truncated: the top-level record declares {n} bytes \
+                 but only {} remain",
+                d.len() - p - 6
+            ),
+            Some(ParseStage::TlvWalk),
+            None,
+            None,
+            Some(tag),
+            Some(p as u64),
+            None,
+            None,
+        ));
     }
-    h
+    Ok(())
 }
 
 fn integer(s: &str, fallback: i32) -> i32 {
@@ -503,26 +511,66 @@ fn view_camera(record: &[u8]) -> Option<ViewCamera> {
     Some(cam)
 }
 
+fn tlv_walk_err(e: super::Error) -> SkpParseError {
+    SkpParseError::at_stage(e.message.into_owned(), ParseStage::TlvWalk)
+}
+
 /// VFF model.dat wraps the file's definition list inside container tags
 /// F901 -> 7017 -> 7117 -> 7C15. Unwrapping it into individual 7C15 headers
 /// upfront bounds memory to one definition at a time (Python's
 /// `_unwrap_definitions_container`, Issue #264).
-fn unwrap_definitions_container(data: &[u8], offset: usize, size: usize) -> Vec<Header> {
-    let mut level = headers(data, offset + 6, offset + 6 + size);
+fn unwrap_definitions_container(
+    data: &[u8],
+    offset: usize,
+    size: usize,
+) -> Result<Vec<TlvHeader>, SkpParseError> {
+    let mut level = tlv_headers_slice(data, offset + 6, offset + 6 + size).map_err(tlv_walk_err)?;
     for expected in ["7017", "7117"] {
         let Some(h) = level
             .iter()
-            .find(|h| tag_is(data, h.offset, expected))
+            .find(|h| tag_is(data, h.offset as usize, expected))
             .copied()
         else {
-            return Vec::new();
+            return Ok(Vec::new());
         };
-        level = headers(data, h.offset + 6, h.offset + 6 + h.size);
+        let c_off = h.offset as usize;
+        let c_size = h.size as usize;
+        level = tlv_headers_slice(data, c_off + 6, c_off + 6 + c_size).map_err(tlv_walk_err)?;
     }
-    level
+    Ok(level
         .into_iter()
-        .filter(|h| tag_is(data, h.offset, "7C15"))
-        .collect()
+        .filter(|h| tag_is(data, h.offset as usize, "7C15"))
+        .collect())
+}
+
+fn model_records(data: &[u8]) -> Result<Vec<TlvHeader>, SkpParseError> {
+    if let Some(wrapped) = wrapped_model_records(
+        data.len() as u64,
+        |p| u16::from_le_bytes([data[p as usize], data[p as usize + 1]]),
+        |p| u32_at(data, p as usize + 2),
+    ) {
+        return Ok(wrapped);
+    }
+    let mut hs = tlv_headers_slice(data, 0, data.len()).map_err(tlv_walk_err)?;
+    require_complete_top_level(data, &hs)?;
+    if hs.len() == 1 && data[hs[0].offset as usize] == 0xf4 && data[hs[0].offset as usize + 1] == 1
+    {
+        let off = hs[0].offset as usize;
+        let sz = hs[0].size as usize;
+        hs = tlv_headers_slice(data, off + 6, off + 6 + sz).map_err(tlv_walk_err)?;
+    }
+    let mut expanded = Vec::with_capacity(hs.len());
+    for h in hs {
+        if tag_is(data, h.offset as usize, "F901") {
+            let defs = unwrap_definitions_container(data, h.offset as usize, h.size as usize)?;
+            if !defs.is_empty() {
+                expanded.extend(defs);
+                continue;
+            }
+        }
+        expanded.push(h);
+    }
+    Ok(expanded)
 }
 
 fn tag_is(data: &[u8], offset: usize, tag: &str) -> bool {
@@ -620,23 +668,7 @@ pub fn full_parse(data: &[u8], o: &ParseOptions) -> Result<RawParsed, SkpParseEr
             ParseStage::ZipExtract,
         ));
     };
-    let mut hs = headers(&model, 0, model.len());
-    if hs.len() == 1 && model[hs[0].offset] == 0xf4 && model[hs[0].offset + 1] == 1 {
-        hs = headers(&model, hs[0].offset + 6, hs[0].offset + 6 + hs[0].size);
-    }
-
-    let mut expanded = Vec::with_capacity(hs.len());
-    for h in hs {
-        if tag_is(&model, h.offset, "F901") {
-            let defs = unwrap_definitions_container(&model, h.offset, h.size);
-            if !defs.is_empty() {
-                expanded.extend(defs);
-                continue;
-            }
-        }
-        expanded.push(h);
-    }
-    let hs = expanded;
+    let hs = model_records(&model)?;
 
     let mut vertex_positions: BTreeMap<String, Vec3> = BTreeMap::new();
     let mut instance_world: BTreeMap<String, Vec<f64>> = BTreeMap::new();
@@ -648,7 +680,9 @@ pub fn full_parse(data: &[u8], o: &ParseOptions) -> Result<RawParsed, SkpParseEr
         let i = i as u64;
         let mut tag = String::new();
         let step = (|| -> Result<bool, super::Error> {
-            let one = parse_tlv_recursive(&model, h.offset, h.offset + 6 + h.size)?;
+            let rec_start = h.offset as usize;
+            let rec_end = (h.offset + 6 + h.size) as usize;
+            let one = parse_tlv_recursive(&model, rec_start, rec_end)?;
             let Some(first) = one.first() else {
                 return Ok(false);
             };
@@ -693,13 +727,18 @@ pub fn full_parse(data: &[u8], o: &ParseOptions) -> Result<RawParsed, SkpParseEr
                 continue;
             }
             Err(e) => {
+                let msg = if e.kind == ErrorKind::DepthLimit {
+                    e.message.to_string()
+                } else {
+                    "Failed while processing record".to_owned()
+                };
                 return Err(SkpParseError::with_context(
-                    "Failed while processing record",
+                    msg,
                     Some(ParseStage::TlvWalk),
                     Some(i),
                     Some(total),
                     Some(tag),
-                    Some(h.offset as u64),
+                    Some(h.offset),
                     None,
                     Some(Arc::new(e)),
                 ));
