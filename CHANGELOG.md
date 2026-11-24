@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — All 6 languages: saved scenes (`pages`) on `Scene` and `InstancedScene` (#593)
+
+- `build_scene()` and `build_instanced_scene()` (`buildScene` / `buildInstancedScene` / `BuildScene` / `BuildInstancedScene`) now carry the model's saved scenes (`Scene.pages` / `InstancedScene.pages` in Python, Dart, C++ and Rust; optional `SkpScene.pages` / `InstancedScene.pages` in TypeScript; `Scene.Pages` / `InstancedScene.Pages` in .NET), matching `SkpModel.pages` in SketchUp's native Z-up axes and inches (`[]` when a scene is read back from `.frag`), so consumers that build a scene and import cameras do not need a second `parse()` pass.
+
 ### Fixed — All 6 languages: leaderless classic `CText` records and non-vertex `CEdge` references (#592)
 
 - Classic (pre-2021 MFC) `CText` records end their placement block with a boolean `display_leader`

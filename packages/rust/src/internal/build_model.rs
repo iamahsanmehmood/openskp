@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use super::strconv::c_stoll;
-use super::{RawDefinition, RawMaterial, RawParsed};
+use super::{RawDefinition, RawMaterial, RawPage, RawParsed};
 use crate::model::{
     ArcCurve, Definition, Dimension, Edge, EntityId, Face, Instance, Layer, Material, Page,
     SkpModel, Style, Texture, Vertex,
@@ -191,23 +191,7 @@ pub fn build_model(p: RawParsed, o: &ParseOptions) -> SkpModel {
     }
     // Pages (saved scenes): hidden layer ids resolve to names; unknown ids
     // (stale refs) are dropped.
-    for pg in &p.pages {
-        m.pages.push(Page {
-            name: pg.name.clone(),
-            eye: pg.eye,
-            target: pg.target,
-            up: pg.up,
-            fov: pg.fov,
-            parallel: pg.parallel,
-            ortho_height: pg.ortho_height,
-            hidden_layers: pg
-                .hidden_layer_ids
-                .iter()
-                .filter_map(|id| layer_names.get(id).cloned())
-                .collect(),
-            selected: pg.selected,
-        });
-    }
+    m.pages = build_pages(&p.pages, &layer_names);
     m.camera = p.camera;
     m.unread_root_entities = p.unread_root_entities;
     // Model-level linear dimensions (VFF; world space).
@@ -282,4 +266,27 @@ pub fn build_model(p: RawParsed, o: &ParseOptions) -> SkpModel {
         });
     }
     m
+}
+
+/// Converts raw scene records into public [`Page`] values, resolving hidden
+/// layer ids to names and dropping stale references.
+pub fn build_pages(pages: &[RawPage], layer_names: &BTreeMap<EntityId, String>) -> Vec<Page> {
+    pages
+        .iter()
+        .map(|pg| Page {
+            name: pg.name.clone(),
+            eye: pg.eye,
+            target: pg.target,
+            up: pg.up,
+            fov: pg.fov,
+            parallel: pg.parallel,
+            ortho_height: pg.ortho_height,
+            hidden_layers: pg
+                .hidden_layer_ids
+                .iter()
+                .filter_map(|id| layer_names.get(id).cloned())
+                .collect(),
+            selected: pg.selected,
+        })
+        .collect()
 }

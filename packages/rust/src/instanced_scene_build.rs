@@ -15,7 +15,7 @@ use crate::instanced_scene::{
     LocalPrimitive, SceneBounds, IDENTITY_GLTF,
 };
 use crate::internal::{
-    emit_log, emit_progress, fold_scale, multiply_matrices, GeometryBuilder, RawParsed,
+    build_pages, emit_log, emit_progress, fold_scale, multiply_matrices, GeometryBuilder, RawParsed,
 };
 use crate::model::EntityId;
 use crate::observability::{LogLevel, ParseOptions, ParseStage, PROGRESS_INTERVAL};
@@ -399,6 +399,7 @@ pub fn build_instanced_scene_raw(
     o: &ParseOptions,
 ) -> Result<InstancedScene, SkpParseError> {
     let layer_hidden = std::mem::take(&mut p.layer_hidden);
+    let pages = build_pages(&p.pages, &p.layer_id_to_name);
     emit_log(
         o,
         LogLevel::Information,
@@ -470,6 +471,7 @@ pub fn build_instanced_scene_raw(
         layer_hidden,
         curve_resources,
         unread_root_entities: p.unread_root_entities,
+        pages,
     })
 }
 

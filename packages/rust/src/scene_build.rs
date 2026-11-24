@@ -11,8 +11,8 @@ use crate::face_groups::{
 };
 use crate::internal::strconv::c_stoll;
 use crate::internal::{
-    emit_log, emit_progress, multiply_matrices, transform_determinant, transform_normal,
-    transform_point, Error, GeometryBuilder, RawInstance, RawParsed,
+    build_pages, emit_log, emit_progress, multiply_matrices, transform_determinant,
+    transform_normal, transform_point, Error, GeometryBuilder, RawInstance, RawParsed,
 };
 use crate::model::{stringify_attr_dict, EntityId, StringDictionaries};
 use crate::observability::{LogLevel, ParseOptions, ParseStage, PROGRESS_INTERVAL};
@@ -546,6 +546,7 @@ impl<'a> Baker<'a> {
 /// Bakes a reader's raw output into a world-space [`Scene`].
 pub fn build_scene_raw(mut p: RawParsed, o: &ParseOptions) -> Result<Scene, SkpParseError> {
     let layer_hidden = std::mem::take(&mut p.layer_hidden);
+    let pages = build_pages(&p.pages, &p.layer_id_to_name);
     emit_log(
         o,
         LogLevel::Information,
@@ -568,6 +569,7 @@ pub fn build_scene_raw(mut p: RawParsed, o: &ParseOptions) -> Result<Scene, SkpP
             },
             layer_hidden,
             unread_root_entities: p.unread_root_entities,
+            pages,
             ..Default::default()
         },
         textures: TextureRegistry::default(),

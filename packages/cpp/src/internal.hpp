@@ -478,6 +478,7 @@ void collect_material_ids(const std::vector<TlvNode>&, std::map<EntityId, std::s
 void collect_definitions(const std::vector<TlvNode>&, std::map<EntityId, RawDefinition>&);
 void collect_model_attribute_dictionaries(const TlvNode&, ParsedAttrDictionaries&);
 SkpModel build_model(RawParsed&&, const ParseOptions& = {});
+std::vector<Page> build_pages(const RawParsed&);
 Scene build_scene_raw(RawParsed&&, const ParseOptions&);
 InstancedScene build_instanced_scene_raw(RawParsed&&, const ParseOptions&);
 std::vector<double> fold_scale(const std::vector<double>&);

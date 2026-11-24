@@ -475,6 +475,12 @@ export interface SkpScene {
    * Always populated by {@link buildScene}; optional so hand-constructed scene
    * literals for exporters do not need to supply it. */
   unreadRootEntities?: number;
+  /** Saved scenes (SketchUp's "Scenes" tabs), identical to {@link SkpModel.pages}.
+   * Camera `eye`, `target`, `up` and `orthoHeight` stay in SketchUp's native
+   * Z-up frame and inches (unlike `glbPrimitives`, which are Y-up metres).
+   * Always populated by {@link buildScene}; optional so hand-constructed scene
+   * literals for exporters do not need to supply it. */
+  pages?: Page[];
 }
 
 /** Options shared by {@link buildScene} and {@link buildInstancedScene}. */
@@ -569,7 +575,6 @@ export function buildModelFromParsed(parsed: ParsedRawData): SkpModel {
     layerColors,
     layerHidden,
     layerIdToName,
-    pages,
     dimensions,
     materialIdToName,
     materialsMap,
@@ -602,18 +607,7 @@ export function buildModelFromParsed(parsed: ParsedRawData): SkpModel {
 
   // Convert pages (saved scenes) - hidden layer ids resolve to names;
   // unknown ids (stale refs) are dropped.
-  const finalPagesList: Page[] = pages.map((pg) => ({
-    name: pg.name,
-    eye: pg.eye,
-    target: pg.target,
-    up: pg.up,
-    fov: pg.fov,
-    parallel: pg.parallel,
-    orthoHeight: pg.orthoHeight,
-    hiddenLayers: pg.hiddenLayerIds
-      .map((id) => layerIdToName.get(id))
-      .filter((name): name is string => name !== undefined),
-  }));
+  const finalPagesList: Page[] = buildPagesFromRaw(parsed);
 
   // Convert model-level linear dimensions (VFF; world space).
   const finalDimensionsList: Dimension[] = dimensions.map((dm) => ({
@@ -1302,7 +1296,23 @@ export function buildSceneFromParsed(
     textures,
     bounds,
     unreadRootEntities: parsed.unreadRootEntities ?? 0,
+    pages: buildPagesFromRaw(parsed),
   };
+}
+
+export function buildPagesFromRaw(parsed: ParsedRawData): Page[] {
+  return (parsed.pages ?? []).map((pg) => ({
+    name: pg.name,
+    eye: pg.eye,
+    target: pg.target,
+    up: pg.up,
+    fov: pg.fov,
+    parallel: pg.parallel,
+    orthoHeight: pg.orthoHeight,
+    hiddenLayers: (pg.hiddenLayerIds ?? [])
+      .map((id) => parsed.layerIdToName?.get(id))
+      .filter((name): name is string => name !== undefined),
+  }));
 }
 
 export function resolveMaterialFromMaps(

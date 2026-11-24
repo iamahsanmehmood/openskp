@@ -126,6 +126,12 @@ namespace OpenSkp
         /// (pre-2021) root entity walk stopped early (0 for complete classic
         /// files and VFF files).</summary>
         public int UnreadRootEntities { get; set; }
+
+        /// <summary>Saved scenes (SketchUp's "Scenes" tabs), identical to
+        /// <see cref="SkpModel.Pages"/>. Camera Eye/Target/Up and OrthoHeight
+        /// stay in SketchUp's native Z-up frame and inches (unlike
+        /// GlbPrimitives, which are Y-up metres).</summary>
+        public List<Page> Pages { get; set; } = new List<Page>();
     }
 
     /// <summary>Bakes every instance actually placed in a parsed model into
@@ -636,6 +642,7 @@ namespace OpenSkp
                 GltfMaterials = gltfMaterials,
                 Textures = textures,
                 UnreadRootEntities = parsed.UnreadRootEntities,
+                Pages = SkpFile.BuildPages(parsed),
             };
         }
 

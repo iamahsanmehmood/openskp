@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::model::{ByteBuffer, StringDictionaries};
+use crate::model::{ByteBuffer, Page, StringDictionaries};
 
 /// One node of the baked instance tree.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -143,4 +143,8 @@ pub struct Scene {
     /// Number of top-level entities dropped when a classic (pre-2021) root
     /// entity walk stopped early (`0` for complete classic files and VFF files).
     pub unread_root_entities: usize,
+    /// Saved scenes (SketchUp's "Scenes" tabs), identical to [`crate::SkpModel::pages`].
+    /// Camera `eye`/`target`/`up` and `ortho_height` stay in SketchUp's native
+    /// Z-up frame and inches (unlike `glb_primitives`, which are Y-up metres).
+    pub pages: Vec<Page>,
 }
