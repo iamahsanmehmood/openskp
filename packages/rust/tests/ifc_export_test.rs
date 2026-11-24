@@ -376,6 +376,24 @@ fn a_custom_classifier_is_called_with_the_display_name_and_layer() {
 }
 
 #[test]
+fn a_custom_classifier_receives_raw_unescaped_text() {
+    let mut scene = mesh_scene("Wände 'A'", &TRIANGLE, &[0, 1, 2]);
+    scene.mesh_index.get_mut("Wände 'A'").unwrap().layer = "Außenwände".to_string();
+    let seen = std::cell::RefCell::new(Vec::new());
+    let classify = |name: &str, layer: &str| {
+        seen.borrow_mut()
+            .push((name.to_string(), layer.to_string()));
+        ("IFCWALL".to_string(), "IfcWall".to_string())
+    };
+    let ifc_text = to_ifc(&scene, METRES_TO_MM, "IFC4", Some(&classify), false);
+    assert_eq!(
+        *seen.borrow(),
+        [("Wände 'A'".to_string(), "Außenwände".to_string())]
+    );
+    assert!(ifc_text.contains("W\\X2\\00E4\\X0\\nde ''A''"));
+}
+
+#[test]
 fn serializes_scene_to_ifc4_step_text() {
     let mut scene = Scene {
         glb_primitives: vec![prim("Outer Wall", 0, &TRIANGLE, &[0, 1, 2])],

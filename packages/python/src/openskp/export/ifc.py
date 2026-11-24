@@ -674,13 +674,15 @@ def to_ifc(
         # nobody renamed it) - use that for both classification and the
         # element's IFC Name, falling back to the internal key only if a
         # primitive somehow has no mesh_index entry.
-        display_name = sanitize_name(meta.name) if meta and meta.name else sanitize_name(prim.geom_name)
-        layer_name = "Layer0"
-        if meta and getattr(meta, "layer", None):
-            layer_name = sanitize_name(meta.layer)
+        raw_name_src = meta.name if meta and meta.name else prim.geom_name
+        raw_name = (raw_name_src.strip() if raw_name_src else "") or "Unnamed"
+        display_name = sanitize_name(raw_name)
+        raw_layer = meta.layer if meta and getattr(meta, "layer", None) else ""
+        classify_layer = raw_layer.strip() or "Layer0"
+        layer_key = raw_layer if raw_layer.strip() else "Layer0"
 
         path_name = meta.path if meta and getattr(meta, "path", None) else ""
-        step_type, ifc_class = classify(display_name, layer_name, path_name)
+        step_type, ifc_class = classify(raw_name, classify_layer, path_name)
 
         # 1. Coordinate Point List 3D
         #
@@ -753,7 +755,7 @@ def to_ifc(
             f"{'.T.' if _closed else '.F.'},({','.join(face_indices)}),$);"
         )
 
-        layer_items.setdefault(layer_name, []).append(face_set_id)
+        layer_items.setdefault(layer_key, []).append(face_set_id)
 
         # 3. Surface Style / Material Color if present
         r, g, b, a = _get_prim_rgb(scene, prim.material_index)

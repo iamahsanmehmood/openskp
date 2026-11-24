@@ -276,16 +276,25 @@ std::string to_ifc(const Scene& scene, double scale, const std::string& schema,
     // nobody renamed it) - use that for both classification and the
     // element's IFC Name, falling back to the internal key only if a
     // primitive somehow has no mesh_index entry.
-    std::string display_name = (meta_it != scene.mesh_index.end() && !meta_it->second.name.empty())
-                                   ? sanitize_name(meta_it->second.name)
-                                   : sanitize_name(prim.geom_name);
-    std::string layer_name = "Layer0";
-    if (meta_it != scene.mesh_index.end() && !meta_it->second.layer.empty()) {
-      layer_name = sanitize_name(meta_it->second.layer);
-    }
+    const std::string& raw_name_src =
+        (meta_it != scene.mesh_index.end() && !meta_it->second.name.empty()) ? meta_it->second.name
+                                                                             : prim.geom_name;
+    size_t ns = raw_name_src.find_first_not_of(" \t\r\n");
+    std::string raw_name =
+        ns == std::string::npos
+            ? "Unnamed"
+            : raw_name_src.substr(ns, raw_name_src.find_last_not_of(" \t\r\n") - ns + 1);
+    std::string display_name = sanitize_name(raw_name);
+    std::string raw_layer = meta_it != scene.mesh_index.end() ? meta_it->second.layer : "";
+    size_t ls = raw_layer.find_first_not_of(" \t\r\n");
+    std::string classify_layer =
+        ls == std::string::npos
+            ? "Layer0"
+            : raw_layer.substr(ls, raw_layer.find_last_not_of(" \t\r\n") - ls + 1);
+    std::string layer_key = ls == std::string::npos ? "Layer0" : raw_layer;
     std::string path_name = meta_it != scene.mesh_index.end() ? meta_it->second.path : "";
 
-    auto [step_type, _] = classify(display_name, layer_name, path_name);
+    auto [step_type, _] = classify(raw_name, classify_layer, path_name);
 
     // scene.glb_primitives positions are baked in glTF's Y-up convention
     // (glTF.y = SketchUp Z/height, glTF.z = -SketchUp Y/depth) - correct
@@ -317,7 +326,7 @@ std::string to_ifc(const Scene& scene, double scale, const std::string& schema,
     ss << "#" << face_set_id << "=IFCTRIANGULATEDFACESET(#" << pt_list_id << ",$,.TRUE.,("
        << face_ss.str() << "),$);\r\n";
 
-    layer_items[layer_name].push_back(face_set_id);
+    layer_items[layer_key].push_back(face_set_id);
 
     auto [r, g, b, a] = get_prim_rgb(scene, prim.material_index);
     std::ostringstream key_ss;
@@ -409,8 +418,8 @@ std::string to_ifc(const Scene& scene, double scale, const std::string& schema,
       auto hidden_it = scene.layer_hidden.find(l_name);
       const char* layer_on =
           (hidden_it != scene.layer_hidden.end() && hidden_it->second) ? ".F." : ".T.";
-      ss << "#" << next_id() << "=IFCPRESENTATIONLAYERWITHSTYLE('" << l_name << "',$,("
-         << item_ss.str() << "),$," << layer_on << ",.F.,.F.,());\r\n";
+      ss << "#" << next_id() << "=IFCPRESENTATIONLAYERWITHSTYLE('" << sanitize_name(l_name)
+         << "',$,(" << item_ss.str() << "),$," << layer_on << ",.F.,.F.,());\r\n";
     }
   }
 

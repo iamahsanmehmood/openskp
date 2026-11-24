@@ -388,5 +388,37 @@ TEST(IfcExport, ToIfcClassifyUsingFullPathOptIn) {
   EXPECT_NE(opted_in_text.find("'Stud 12'"), std::string::npos);
 }
 
+TEST(IfcExport, CustomClassifierReceivesRawUnescapedText) {
+  Scene scene;
+  scene.scene_hierarchy.name = "Root";
+  GlbPrimitive prim;
+  prim.positions = {0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0};
+  prim.normals = {0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0};
+  prim.uvs = {0.0, 0.0, 1.0, 0.0, 0.0, 1.0};
+  prim.indices = {0, 1, 2};
+  prim.material_index = 0;
+  prim.geom_name = "mesh_0";
+  scene.glb_primitives = {prim};
+
+  MeshMetadata meta;
+  meta.name = "Wände 'A'";
+  meta.layer = "Außenwände '1'";
+  scene.mesh_index["mesh_0"] = meta;
+  scene.layer_hidden["Außenwände '1'"] = true;
+  scene.gltf_materials = {GltfMaterial{}};
+
+  std::vector<std::pair<std::string, std::string>> seen;
+  IfcClassifier custom = [&](const std::string& name, const std::string& layer) {
+    seen.emplace_back(name, layer);
+    return std::pair<std::string, std::string>{"IFCWALL", "IfcWall"};
+  };
+  std::string ifc_text = to_ifc(scene, METRES_TO_MM, "IFC4", custom);
+  ASSERT_EQ(seen.size(), 1U);
+  EXPECT_EQ(seen[0].first, "Wände 'A'");
+  EXPECT_EQ(seen[0].second, "Außenwände '1'");
+  EXPECT_NE(ifc_text.find("''A''"), std::string::npos);
+  EXPECT_NE(ifc_text.find(",.F.,.F.,.F.,());"), std::string::npos);
+}
+
 }  // namespace
 }  // namespace openskp
