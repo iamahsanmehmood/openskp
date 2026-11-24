@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>OpenSKP + three.js</title>
+    <style>
+        /* Colours from the OpenSKP web viewer (examples/web-viewer/style.css). */
+        html, body { margin: 0; height: 100%; overflow: hidden; background: #08090b; color: #f4f4f5; font-family: system-ui, sans-serif; }
+        #ui { position: absolute; top: 12px; left: 12px; padding: 8px 12px; background: #141519; border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 10px; }
+        #file::file-selector-button { margin-right: 8px; padding: 6px 12px; border: 0; border-radius: 6px; background: #e8a33d; color: #1a1005; font-weight: 600; cursor: pointer; }
+        #status { margin-left: 8px; color: #a3a3ab; }
+    </style>
+    <!-- Every library comes from a CDN, so there is no build step. -->
+    <script type="importmap">
+        {
+        "imports": {
+            "openskp": "https://cdn.jsdelivr.net/npm/openskp@1.6.0/+esm",
+            "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+        }
+        }
+    </script>
+</head>
+<body>
+    <div id="ui">
+        <input type="file" id="file" accept=".skp">
+        <span id="status">Choose a .skp file</span>
+    </div>
+    <script type="module" src="main.js"></script>
+</body>
+</html>
