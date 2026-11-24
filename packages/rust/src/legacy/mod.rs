@@ -35,12 +35,12 @@ use crate::observability::{emit_log, emit_progress, LogLevel, ParseOptions, Pars
 
 pub use self::pages::scan_pages_for_layers;
 
+#[cfg(test)]
+use self::archive::Archive;
 use self::archive::{
     bootstrap_two_materials, probe_layer_anchor_bases, walk_with_bases, WalkResult,
 };
 use self::reader::header_major;
-#[cfg(test)]
-use self::archive::Archive;
 #[cfg(test)]
 use self::reader::R;
 #[cfg(test)]
