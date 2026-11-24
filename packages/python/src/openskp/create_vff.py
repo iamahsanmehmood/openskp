@@ -1,8 +1,8 @@
 """Create native VFF (SketchUp 2021+) ``.skp`` files from a SketchUp template.
 
-This is the first, deliberately small writer for the VFF container - the ZIP
-plus record-tree format SketchUp has written since the 2021 release, and the
-format the native desktop application still writes in 2025.  Unlike
+This is the native writer for the VFF container - the ZIP plus record-tree
+format SketchUp has written since the 2021 release, and the format the native
+desktop application still writes in 2025.  Unlike
 :mod:`openskp.create`, which splices a classic 2017 file together around a
 bundled 2017 scaffold, this module **parses the template's ``model.dat``
 record tree** and extends it by tag: no byte offset into the template is
@@ -17,9 +17,22 @@ Scope: faces built from vertex coordinates (shared vertices and edges dedupe
 exactly like ``create.py``), solid-colour and PNG/JPEG-textured materials (with
 SketchUp's default placement or explicit three-pin texture positioning), tags,
 reusable component definitions and groups (including groups and component
-instances nested inside definitions), and placements with a 3x3 matrix plus a
-translation.  Coordinates are in inches.  The module is intentionally *not*
-re-exported from ``openskp/__init__.py`` yet.
+instances nested inside definitions), placements with a 3x3 matrix plus a
+translation, real arcs/circles/polylines, attribute dictionaries, leader and
+screen texts, linear dimensions, bounded/unbounded guides and guide points,
+named/symboled and active section planes, and scenes (camera, hidden tags,
+selected page).  Coordinates are in inches.  The factory is exported as
+``openskp.create_vff`` (with ``openskp.VffBuilder`` /
+``openskp.VffComponentDefinitionBuilder``); :func:`openskp.open_existing`
+uses this module for VFF sources and passes the source file itself as the
+template.
+
+Acceptance: files written by this module have been opened by **SketchUp 2025**
+in the Windows VM via Ruby with no warning dialog, inspected and re-saved, and
+the re-save parsed back through openskp; the evidence lives under
+``research/vff-writer/``.  SketchUp 2021-2024 are untested, and
+``open_existing`` refuses VFF sources newer than revision 17 rather than
+downgrading them.
 
 The empty template ``_scaffold/blank_vff.skp``
 ------------------------------------------------
@@ -83,6 +96,8 @@ from .create import (
 
 __all__ = [
     "VffBuilder",
+    "VffComponentDefinitionBuilder",
+    "VffDefinitionHandle",
     "ComponentDefinitionBuilder",
     "create",
     "create_vff",
@@ -184,6 +199,27 @@ class CurveHandle:
     points: List[Tuple[float, float, float]]
     curve_id: int
     edge_ids: List[int] = field(default_factory=list)
+
+
+@dataclass
+class VffDefinitionHandle:
+    """A definition that already exists in the source template.
+
+    Returned by :func:`openskp.open_existing` for VFF inputs and accepted by
+    :meth:`VffBuilder.add_instance` / :meth:`VffBuilder.add_group_instance`
+    so callers can place more copies of a component the source already had.
+    """
+
+    _builder: "VffBuilder"
+    id: int
+    name: str
+    is_group: bool = False
+    bounds: Optional[Sequence[float]] = None
+    _closed: bool = True
+    _template_id: int = 0
+
+    def __post_init__(self) -> None:
+        self._template_id = self.id
 
 
 def _normalized(vector: Sequence[float]) -> Tuple[float, float, float]:
@@ -481,7 +517,7 @@ class ComponentDefinitionBuilder:
 
     def add_instance(
         self,
-        definition: "ComponentDefinitionBuilder",
+        definition: Union[ComponentDefinitionBuilder, VffDefinitionHandle],
         name: Optional[str] = None,
         translation: Sequence[float] = (0.0, 0.0, 0.0),
         matrix3x3: Optional[Sequence[float]] = None,
@@ -500,6 +536,39 @@ class ComponentDefinitionBuilder:
         if self._closed:
             raise SkpWriteError("this definition is already closed")
         self._editor.add_instance(
+            definition.id,
+            _matrix13(translation, matrix3x3, rotation),
+            definition_bounds=definition.bounds,
+            name=name or "",
+            material=material,
+            layer=layer,
+            hidden=hidden,
+            attribute_dicts=_attribute_dicts(
+                attributes, attribute_dict_name, attribute_dicts
+            ),
+        )
+
+    def add_group_instance(
+        self,
+        definition: Union[ComponentDefinitionBuilder, VffDefinitionHandle],
+        name: Optional[str] = None,
+        translation: Sequence[float] = (0.0, 0.0, 0.0),
+        matrix3x3: Optional[Sequence[float]] = None,
+        rotation: Optional[Tuple[Sequence[float], float]] = None,
+        material: Optional[int] = None,
+        layer: Optional[int] = None,
+        hidden: bool = False,
+        attributes: Optional[dict] = None,
+        attribute_dict_name: str = "attributes",
+        attribute_dicts: Sequence[Tuple[str, dict]] = (),
+    ) -> None:
+        """Place a definition as a Group inside this definition."""
+        self._builder._check_placement(
+            definition, name, translation, matrix3x3, rotation, material, layer
+        )
+        if self._closed:
+            raise SkpWriteError("this definition is already closed")
+        self._editor.add_group(
             definition.id,
             _matrix13(translation, matrix3x3, rotation),
             definition_bounds=definition.bounds,
@@ -634,9 +703,27 @@ class VffBuilder:
             data = Path(template).read_bytes()
         self._template = Template(data)
         self._root = EntityEditor(self._template, container=self._template.root_container)
-        self._materials: dict[str, int] = {}
-        self._layers: dict[str, int] = {}
+        self.materials_by_name: dict[str, int] = dict(self._template.materials)
+        self.layers_by_name: dict[str, int] = dict(self._template.layers)
+        self._materials = self.materials_by_name
+        self._layers = self.layers_by_name
         self._definition_names: set[str] = set()
+        self.definitions_by_name: dict[str, VffDefinitionHandle] = {}
+        self.definition_handles: list[VffDefinitionHandle] = []
+        for existing in self._template.definitions:
+            identifier = existing.get("id")
+            if identifier is None:
+                continue
+            handle = VffDefinitionHandle(
+                self,
+                identifier,
+                existing.get("name", ""),
+                bool(existing.get("is_group")),
+                existing.get("bounds"),
+            )
+            self.definition_handles.append(handle)
+            if handle.name:
+                self.definitions_by_name[handle.name] = handle
 
     # -- appearance -------------------------------------------------------
 
@@ -749,8 +836,10 @@ class VffBuilder:
         self._definition_names.add(name)
         return name
 
-    def _check_definition(self, definition: ComponentDefinitionBuilder) -> None:
-        if not isinstance(definition, ComponentDefinitionBuilder):
+    def _check_definition(
+        self, definition: Union[ComponentDefinitionBuilder, VffDefinitionHandle]
+    ) -> None:
+        if not isinstance(definition, (ComponentDefinitionBuilder, VffDefinitionHandle)):
             raise SkpWriteError("this needs a component definition builder")
         if definition._builder is not self:
             raise SkpWriteError("the definition belongs to a different builder")
@@ -759,7 +848,7 @@ class VffBuilder:
 
     def _check_placement(
         self,
-        definition: ComponentDefinitionBuilder,
+        definition: Union[ComponentDefinitionBuilder, VffDefinitionHandle],
         name: Optional[str],
         translation: Sequence[float],
         matrix3x3: Optional[Sequence[float]],
@@ -805,6 +894,37 @@ class VffBuilder:
             holes=holes,
             front_uv=front_uv,
             back_uv=back_uv,
+            attribute_dicts=_attribute_dicts(
+                attributes, attribute_dict_name, attribute_dicts
+            ),
+        )
+
+    def add_group_instance(
+        self,
+        definition: Union[ComponentDefinitionBuilder, VffDefinitionHandle],
+        name: Optional[str] = None,
+        translation: Sequence[float] = (0.0, 0.0, 0.0),
+        matrix3x3: Optional[Sequence[float]] = None,
+        rotation: Optional[Tuple[Sequence[float], float]] = None,
+        material: Optional[int] = None,
+        layer: Optional[int] = None,
+        hidden: bool = False,
+        attributes: Optional[dict] = None,
+        attribute_dict_name: str = "attributes",
+        attribute_dicts: Sequence[Tuple[str, dict]] = (),
+    ) -> None:
+        """Place a definition as a Group (``0x1d4c`` wrapper) in the root."""
+        self._check_placement(
+            definition, name, translation, matrix3x3, rotation, material, layer
+        )
+        self._root.add_group(
+            definition.id,
+            _matrix13(translation, matrix3x3, rotation),
+            definition_bounds=definition.bounds,
+            name=name or "",
+            material=material,
+            layer=layer,
+            hidden=hidden,
             attribute_dicts=_attribute_dicts(
                 attributes, attribute_dict_name, attribute_dicts
             ),
@@ -1150,7 +1270,7 @@ class VffBuilder:
 
     def add_instance(
         self,
-        definition: ComponentDefinitionBuilder,
+        definition: Union[ComponentDefinitionBuilder, VffDefinitionHandle],
         name: Optional[str] = None,
         translation: Sequence[float] = (0.0, 0.0, 0.0),
         matrix3x3: Optional[Sequence[float]] = None,
@@ -1280,6 +1400,11 @@ def _average_color(image: bytes) -> Tuple[int, int, int]:
             )
     except Exception:
         return (128, 128, 128)
+
+
+#: Public alias so callers can name the VFF definition builder without
+#: colliding with the classic :class:`openskp.create.ComponentDefinitionBuilder`.
+VffComponentDefinitionBuilder = ComponentDefinitionBuilder
 
 
 def create(template: Optional[TemplateSource] = None) -> VffBuilder:

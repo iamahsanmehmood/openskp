@@ -1,5 +1,19 @@
-"""Load an existing legacy-format ``.skp`` file and rebuild it as a new,
-independent :class:`~openskp.create.SkpBuilder`.
+"""Load an existing ``.skp`` file and return a builder for extending it.
+
+Two formats are handled differently:
+
+* **VFF (SketchUp 2021+)**: the source bytes themselves become the
+  :class:`~openskp.create_vff.VffBuilder` template.  The whole document is
+  carried through as it was - scenes, attributes, textures, curves, records
+  this project does not even decode included - and new content is appended by
+  the template-based writer.  New materials, tags, definitions and groups can
+  still be added, and every existing definition is returned as a handle for
+  placing more instances.
+* **Classic (SketchUp 2013-2020)**: fully parsed and replayed into a new
+  SketchUp 2017 file through :class:`~openskp.create.SkpBuilder`, exactly as
+  before (the remainder of this docstring describes that path).
+
+The rest of this docstring describes the classic replay path.
 
 :mod:`openskp.create` only ever builds a brand-new file by splicing new
 geometry into its own bundled blank scaffold (see that module's docstring)
@@ -17,14 +31,15 @@ definition, every face/instance) to produce a brand-new file - not a
 byte-patched copy of the original, but a freshly-built one with equivalent
 content, to which the caller can add more geometry before saving.
 
-**Adding more geometry after the fact.** The returned builder can take
-more ``add_face``/``add_circle``/``add_instance``/etc. calls, and every
-material/layer the source had is already reachable via
+**Adding more geometry after the fact (classic replay path).** The returned
+builder can take more ``add_face``/``add_circle``/``add_instance``/etc.
+calls, and every material/layer the source had is already reachable via
 ``builder.materials_by_name``/``builder.layers_by_name`` (no separate
 lookup needed - `open_existing` also returns a ``definitions`` dict
-mapping each component definition's name to its builder, for placing
-more instances of something the source already defined). What the
-returned builder can no longer do is register a genuinely NEW material,
+mapping each component definition's name to its builder or VFF definition
+handle, for placing more instances of something the source already
+defined). On this classic path, what the returned builder can no longer do
+is register a genuinely NEW material,
 layer, or component definition/group - :mod:`openskp.create`'s own
 file-format ordering requirement (materials/layers/definitions must all
 be finalized before any geometry is written) is already satisfied by the
@@ -38,9 +53,9 @@ Build anything new into a separate `create()` call instead.
 is a genuine, deliberately-scoped limitation, not an oversight - see each
 module's own docstring for why):
 
-* Only a **legacy-format** (SketchUp 2013-2020) source file is accepted -
-  :mod:`openskp.create` never writes any other format, so a modern VFF
-  (2021+) source can't be faithfully round-tripped through it.
+* These replay gaps apply only to the **legacy-format** (SketchUp 2013-2020)
+  path below; a VFF source is written by the template-based writer and keeps
+  all of its content, decoded or not.
 * Per-edge ``hidden``/``soft``/``smooth`` flags are applied per-FACE, not
   per-edge (an "any edge in this boundary has the flag" approximation) -
   `add_face` can only set these uniformly for every edge it newly
@@ -84,15 +99,36 @@ from typing import Dict, List, Optional, Sequence, Tuple
 from . import legacy
 from ._face_groups import compute_face_uv, face_uv_basis, reconstruct_loop_vertices
 from .create import ComponentDefinitionBuilder, Point3, SkpBuilder, SkpWriteError, create
+from .create_vff import VffBuilder, VffDefinitionHandle
 from .model import Definition, Face, Instance, SkpFile, SkpModel
+from .vff import validate_header as is_vff
 
 
 def open_existing(
     path: "str | pathlib.Path",
-) -> Tuple[SkpBuilder, List[str], Dict[str, ComponentDefinitionBuilder]]:
-    """Parse ``path`` (a legacy-format ``.skp`` file) and rebuild it as a
-    new :class:`SkpBuilder`, replaying materials, layers, every component
-    definition, and all root-level geometry/instances.
+) -> Tuple[
+    "SkpBuilder | VffBuilder",
+    List[str],
+    Dict[str, "ComponentDefinitionBuilder | VffDefinitionHandle"],
+]:
+    """Open ``path`` and return a builder that can extend its content.
+
+    For a modern VFF (SketchUp 2021+) file the source bytes become the
+    :class:`~openskp.create_vff.VffBuilder` template, so every existing
+    record - scenes, attributes, textures, undecoded records - survives
+    verbatim and new materials, tags, definitions, groups and geometry can be
+    appended.  ``definitions`` maps each existing definition name to a
+    :class:`~openskp.create_vff.VffDefinitionHandle` accepted by
+    ``builder.add_instance``/``add_group_instance``; ``warnings`` is empty.
+
+    A source at revision 18 or newer is refused rather than silently
+    downgraded: SketchUp 2025 (the only release this writer has been accepted
+    by) writes and opens revision 17, and no post-17 acceptance evidence
+    exists.
+
+    For a classic SketchUp 2013-2020 file, the source is parsed and replayed
+    into a new :class:`SkpBuilder` (SketchUp 2017 file), exactly as before;
+    the rest of this docstring describes that replay path.
 
     Returns ``(builder, warnings, definitions)``:
 
@@ -121,17 +157,30 @@ def open_existing(
       doesn't need them to be unique, only this convenience lookup does.
 
     Raises:
-        SkpWriteError: if ``path`` isn't a legacy-format file.
+        SkpWriteError: if ``path`` is not a recognised SketchUp file, or is a
+            VFF file newer than revision 17.
     """
     path = str(path)
     with open(path, "rb") as f:
-        head = f.read(0x200)
+        data = f.read()
+    header = data.find(b"VFF\x08\x00\x01\x00")
+    if is_vff(data[:4]) and header >= 0:
+        if header + 9 > len(data):
+            raise SkpWriteError(f"{path!r} is not a complete VFF .skp file")
+        revision = int.from_bytes(data[header + 7:header + 9], "little")
+        if revision > 17:
+            raise SkpWriteError(
+                f"{path!r} uses VFF model revision {revision}; this writer only "
+                "writes and has only been accepted by SketchUp 2025 at revision 17"
+            )
+        builder = VffBuilder(data)
+        definitions = dict(builder.definitions_by_name)
+        return builder, [], definitions
+    head = data[:0x200]
     if not legacy.is_legacy(head):
         raise SkpWriteError(
-            f"{path!r} is not a legacy-format (SketchUp 2013-2020) .skp file - "
-            "openskp.create only ever writes that format, so only a legacy-format "
-            "source file can be rebuilt through it (see openskp.edit's module "
-            "docstring for why an arbitrary existing file can't simply be patched)"
+            f"{path!r} is not a recognised SketchUp .skp file (neither VFF nor "
+            "legacy 2013-2020)"
         )
     model = SkpFile.open(path).parse()
     warnings: List[str] = []

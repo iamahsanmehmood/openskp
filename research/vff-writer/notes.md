@@ -751,3 +751,87 @@ No stage-5 record was refused by SketchUp.  The only subtlety is that page
 switches animate by default, so the acceptance script forces an instant
 transition before reading the applied camera; the stored pages keep the
 model's default transition time (-1).
+
+# Stage 6 notes: public API and VFF `open_existing`
+
+## Public API
+
+`openskp.create_vff(template=None)` and `openskp.VffBuilder` (plus
+`openskp.VffComponentDefinitionBuilder` and `VffDefinitionHandle`) are now
+exported from `openskp/__init__.py` and listed in `__all__`.  The factory is
+still also importable as `from openskp.create_vff import create_vff /
+VffBuilder / create` - the package-level `openskp.create_vff` name is the
+function, so `openskp.create_vff(...)` works, while `from openskp.create_vff
+import ...` keeps resolving the module through the import system.
+
+## `open_existing()` on a VFF source
+
+`edit.py` now branches on the VFF magic.  For a VFF source the source bytes
+are passed straight to `VffBuilder`, i.e. the source file itself is the
+template: nothing is replayed through the parser, so scenes, attributes,
+textures, curves, section planes and records openskp does not decode survive
+exactly.  New materials, tags, definitions and groups can still be appended
+because the template writer was never locked after parsing.
+
+`VffBuilder` now exposes `materials_by_name` / `layers_by_name` (pre-populated
+from the source, the same objects `add_material`/`add_layer` use) and builds
+a `VffDefinitionHandle` for every existing definition (name, container id,
+group flag, cached bounds).  `add_instance(handle, ...)` and
+`add_group_instance(handle, ...)` place more copies; new definitions are
+accepted by the same methods.  `open_existing` returns those handles as its
+`definitions` dict (no parsing replay, so `warnings` is empty).
+
+**Revision decision.**  SketchUp 2025 is the only release this writer has
+been accepted by, and it writes revision 17 (`blank_vff.skp` and every
+written/re-saved file here).  A VFF source whose header says revision 18+
+(e.g. a SketchUp 2026/2027 save) is therefore **refused** with a clear
+`SkpWriteError` rather than silently rewritten as revision 17.  The header
+revision is the deciding field (`0x38`-relative `VFF 08 00 01 00` + u16); the
+integrity word does not cover it, so the check needs no re-verification.
+
+Classic (2013-2020) input still uses the original replay path into a
+SketchUp 2017 file, unchanged.
+
+## Acceptance
+
+Source: `stage6/source.skp` - a genuine SketchUp 2025 save with a component
+(`SourceComp`, a 6-face box), one instance of it, a `SourceTex` PNG-textured
+face, a `SourceScene` perspective scene, and `source` attribute dictionaries
+on the face, definition and instance (plus the template's model dictionaries).
+Ruby list: component definition with 6 faces/12 edges and its `source.kind`
+attributes, texture `C:/Temp/vff2/tex.png` 10x5 in, scene eye (40,-40,30) fov
+45, face attribute `note = "kept by open_existing"`.
+
+`stage6/edited.skp` was produced by `openskp.open_existing(source)` adding:
+a face with new `Stage6Red` material on new `Stage6Tag`; one more
+`SourceComp` instance at (60,0,0); and a new `Stage6Group`.  SHA-256
+`0e4dbb5649aafbcca0f3524b9dda2b87bd8c7ec8a74f06e3d77cad68918c6a63`
+(source `e0a2a531298ec6a5a8c704737285cb73b593f8557cbb94a865a6f901d18e0855`).
+
+* `Sketchup.open_file` returned true with **no warning dialog**: counts
+  faces 2, component instances 2 (source at x=20, new at x=60), groups 1,
+  definitions 2, materials 2, layers 2, pages 1.
+* Ruby dump confirms the old content: `SourceComp` definition guid, 6 faces,
+  `source.kind = "component"`, instance attributes `source.kind =
+  "instance"`, the preserved texture (filename/10x5/16x8 px), `SourceScene`
+  camera and tag visibility, model dictionaries; plus the new `Stage6Red`
+  face on `Stage6Tag`, the second `SourceComp` instance at (60,0,0), and the
+  new `Stage6Group`.
+* SketchUp re-saved it as `stage6/sketchup_resave.skp` (SHA-256
+  `7fa0dc01f4d5b5e6d9e4e1d895982f988de5a58c84521112894fb38891202be1`);
+  openskp parses both with identical revision, integrity, definitions
+  (names/ids/group flags/faces/edges/attributes), instances (transforms,
+  layers, materials, dictionaries), faces, materials (texture bytes and tile
+  size), layers, pages and model dictionaries.  `skpwright verify` accepts
+  both.
+
+## Docs and tests
+
+README's writing paragraph and Write/Edit feature rows now state that Python
+also writes VFF (2021+) and edits VFF sources, that SketchUp 2025 accepted the
+output and that 2021-2024 are untested; `docs/LANGUAGE_PARITY.md` §3 lists
+porting the VFF writer/open_existing to TS/.NET/Dart/C++/Rust and §4 describes
+the Python-only VFF path (the VFF attribute matrix now shows Python 9/9);
+CHANGELOG `[Unreleased]` has the Added VFF-writer entry (features, SketchUp
+2025 acceptance method, template provenance) and the Fixed reader additions
+(bool/Time, texts, per-definition dimensions, section planes).

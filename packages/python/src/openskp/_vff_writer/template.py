@@ -273,9 +273,12 @@ MODEL_CONTAINERS = frozenset(
         T_MATERIALS,
         T_MATERIAL_SECTION,
         T_MATERIAL_LIST,
+        T_MATERIAL,
+        T_ENTITY_BASE,
         T_LAYERS,
         T_LAYER_SECTION,
         T_LAYER_LIST,
+        T_LAYER,
         T_DEFINITIONS,
         T_DEFINITION_SECTION,
         T_DEFINITION_LIST,
@@ -683,6 +686,7 @@ class Template:
         )
         self.font_id = self._read_font_id()
         self.style_id = self._read_style_id()
+        self.definitions = self._read_definitions()
         self.scenes: List[dict] = []
         self.camera: Optional[dict] = None
         self.new_entries: List[ZipEntry] = []
@@ -710,6 +714,61 @@ class Template:
                         if identifier is not None:
                             return identifier
         return None
+
+    def _read_definitions(self) -> List[dict]:
+        """Existing definitions: name, container id, group flag and bounds."""
+        section = self.sections.get(T_DEFINITIONS)
+        if section is None:
+            return []
+        wrapper = section.child(T_DEFINITION_SECTION)
+        listing = wrapper.child(T_DEFINITION_LIST) if wrapper is not None else None
+        if listing is None or listing.children is None:
+            return []
+        definitions: List[dict] = []
+        for definition in listing.children:
+            if definition.tag != T_DEFINITION:
+                continue
+            try:
+                parts = parse_records(
+                    definition.payload,
+                    {T_DEFINITION_CONTAINER, T_DRAWING, T_ENTITY_BASE},
+                )
+            except ValueError:
+                continue
+            container = next(
+                (part for part in parts if part.tag == T_DEFINITION_CONTAINER), None
+            )
+            drawing = (
+                container.child(T_DRAWING)
+                if container is not None and container.children is not None
+                else None
+            )
+            identifier = _find_entity_id(drawing) if drawing is not None else None
+            name_node = next(
+                (part for part in parts if part.tag == T_DEFINITION_NAME), None
+            )
+            kind_node = next(
+                (part for part in parts if part.tag == T_DEFINITION_KIND), None
+            )
+            bounds_node = (
+                container.child(T_BOUNDS)
+                if container is not None and container.children is not None
+                else None
+            )
+            bounds = None
+            if bounds_node is not None and len(bounds_node.payload) == 48:
+                bounds = list(struct.unpack("<6d", bounds_node.payload))
+            definitions.append({
+                "id": identifier,
+                "name": name_node.payload.decode("utf-8", errors="replace")
+                        if name_node is not None else "",
+                "is_group": bool(
+                    kind_node is not None
+                    and int.from_bytes(kind_node.payload, "little") == 1
+                ),
+                "bounds": bounds,
+            })
+        return definitions
 
     def _read_style_id(self) -> Optional[int]:
         section = self.sections.get(T_STYLES)
@@ -1012,6 +1071,7 @@ class Template:
                 continue
             name = name_node.payload.decode("utf-8", "replace")
             self.material_ids[identifier] = name
+            self.materials[name] = identifier
             self.material_folders.append(name)
 
     # -- adding materials / layers ---------------------------------------

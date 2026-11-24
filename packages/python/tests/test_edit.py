@@ -31,9 +31,14 @@ def _make_test_png(size: int = 4, rgb=(200, 50, 50)) -> bytes:
 
 
 class TestOpenExisting:
-    def test_rejects_vff_source(self):
-        with pytest.raises(SkpWriteError, match="not a legacy-format"):
-            edit.open_existing(FIXTURES / "SU_File.skp")
+    def test_accepts_vff_source_as_its_own_template(self):
+        builder, warnings, definitions = edit.open_existing(FIXTURES / "SU_File.skp")
+        from openskp.create_vff import VffBuilder
+
+        assert isinstance(builder, VffBuilder)
+        assert warnings == []
+        assert definitions == {}
+        assert builder.to_bytes()[:4] == b"\xff\xfe\xff\x0e"
 
     def test_rejects_nonexistent_file(self):
         with pytest.raises(FileNotFoundError):

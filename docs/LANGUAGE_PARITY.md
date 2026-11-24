@@ -69,7 +69,7 @@ released. 🔶 = implemented on `main`, not published to a package registry
 | Definition- & model-level attribute dictionaries (Dynamic Components formulas/options, VFF + classic) | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Single attribute dictionary per entity | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Attribute dicts: full 9-value-type support, **legacy (pre-2021) format** (`Point3d`/`Vector3d`/`Length`/`Timestamp`/nested lists) | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Attribute dicts: typed value decoding, **VFF (2021+) format** | ✅ 7/9 (`bool`/`time_t` missing) | ✅ 7/9 (`bool`/`time_t` missing) | ✅ 7/9 (`bool`/`time_t` missing) | ✅ 7/9 (`bool`/`time_t` missing) | ✅ 8/9 (`AA38` `bool` supported; `time_t` unobserved) |
+| Attribute dicts: typed value decoding, **VFF (2021+) format** | ✅ 9/9 (`AA38` bool + `AC38` time_t) | ✅ 7/9 (`bool`/`time_t` missing) | ✅ 7/9 (`bool`/`time_t` missing) | ✅ 7/9 (`bool`/`time_t` missing) | ✅ 8/9 (`AA38` `bool` supported; `time_t` unobserved) |
 | Attribute dicts: multiple dictionaries per entity | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Attribute dicts surfaced in GLB/JSON metadata export (not just IFC Psets) | ✅ | n/a, not independently re-checked this cycle | n/a, not independently re-checked this cycle | n/a, not independently re-checked this cycle | ✅ |
 | VFF pages/scenes + dimension parsing | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -143,7 +143,8 @@ across languages is cross-language porting work:
 
 | Item | Python has it via | Needs porting to |
 |:---|:---|:---|
-| Writer: scenes (`add_scene`: camera + hidden layers) | `create.py`, `edit.py`, `codegen.py` | TypeScript, .NET, Dart, C++ |
+| Writer: scenes (`add_scene`: camera + hidden layers) | `create.py`, `create_vff.py`, `edit.py`, `codegen.py` | TypeScript, .NET, Dart, C++ |
+| Writer: native VFF (SketchUp 2021+) output and VFF `open_existing` | `create_vff.py`, `_vff_writer/`, `edit.py`, `_scaffold/blank_vff.skp` | TypeScript, .NET, Dart, C++, Rust (unpublished) |
 | `build_instanced_scene()` loose-edge curve support + public typed-model `Edge.layer`/`Face.layer`/`loose_edge_runs()` | `_curves.py`, `instanced_scene.py`, `model.py` | TypeScript, .NET, Dart, C++ — none started |
 | IFC export: loose-edge curve sets + analytic arcs as `IfcAnnotation`/`IfcIndexedPolyCurve`, plus the 4 IFC4 STEP-conformance fixes | `scene.py`, `export/ifc.py` | TypeScript, .NET, Dart, C++ — none started |
 | Per-edge/per-face layer, `Edge#curve` pointers, classic `CArcCurve` frames | `legacy.py`, `_core.py` | TypeScript, .NET, Dart, C++ |
@@ -151,7 +152,7 @@ across languages is cross-language porting work:
 | Definition- and model-level attribute dictionaries (Dynamic Components formulas/options), in VFF and classic files (1.6.0) | `_core.py`, `legacy.py`, `model.py` | TypeScript, .NET, Dart, C++ — not ported |
 | Model rendering-options face colours (`SkpModel.face_front_color` / `face_back_color`, SketchUp 4–2025, [#550](https://github.com/iamahsanmehmood/openskp/pull/550), part of [#533](https://github.com/iamahsanmehmood/openskp/issues/533)) | `_core.py`, `legacy.py`, `model.py` (on `main`) | TypeScript, .NET, Dart, C++ (once `#533` scene behaviour settles) |
 | Large-file `F901 > 7017 > 7117` per-definition streaming ([#264](https://github.com/iamahsanmehmood/openskp/issues/264)) | `_core.py` ([#265](https://github.com/iamahsanmehmood/openskp/pull/265)); also in TypeScript and C++ ([#300](https://github.com/iamahsanmehmood/openskp/pull/300)) | .NET (`Tlv.cs`) and Dart (`tlv.dart`) — currently unwrap `F401` only |
-| VFF `AA38` boolean attribute tag | C++ (`geometry.cpp`, `model.hpp`: 8/9 VFF types) | Python, TypeScript, .NET, Dart (7/9 VFF types today) |
+| VFF `AA38` boolean and `AC38` time_t attribute tags | Python (`_core.py`; both types) and C++ `AA38` only | TypeScript, .NET, Dart |
 
 Tracked in [issue #285](https://github.com/iamahsanmehmood/openskp/issues/285) —
 see the note at the top of [§1](#1-package-versions) for how cross-porting is
@@ -167,15 +168,31 @@ fails on the real V3 project in every reader. Every classic version SketchUp's
 own C library saves (SketchUp 4 through 2020, plus 2021+) is read by Python
 with matching rendering-options face colours ([#550](https://github.com/iamahsanmehmood/openskp/pull/550)).
 
-**Writing (`create()` and `open_existing()`):** Every port's writer splices
-entities into the same bundled **SketchUp 2017 (`{17.0.1}`)** classic MFC
-`CArchive` blank-document scaffold (`blank_v17.skp`). Writers never emit VFF
-(2021+) or any classic version other than SketchUp 2017; SketchUp 2017 and
-every newer SketchUp release open that output natively. `open_existing()`
-accepts any classic MFC (pre-2021) file `parse()` reads, replays it through
-`create()`, and writes a new SketchUp 2017 (`{17.0.1}`) file (rejecting VFF
-2021+ inputs). The unpublished Rust port (`packages/rust`) carries the same
-classic version gates and the same `blank_v17.skp` scaffold.
+**Writing (`create()` and `open_existing()`, classic):** Every port's classic
+writer splices entities into the same bundled **SketchUp 2017 (`{17.0.1}`)**
+classic MFC `CArchive` blank-document scaffold (`blank_v17.skp`). Those writers
+never emit VFF (2021+) or any classic version other than SketchUp 2017;
+SketchUp 2017 and every newer SketchUp release open that output natively.
+`open_existing()` accepts any classic MFC (pre-2021) file `parse()` reads,
+replays it through `create()`, and writes a new SketchUp 2017 (`{17.0.1}`)
+file. The unpublished Rust port (`packages/rust`) carries the same classic
+version gates and the same `blank_v17.skp` scaffold.
+
+**Writing (VFF, 2021+) - Python only:** `openskp.create_vff()` /
+`openskp.VffBuilder` write the modern VFF container by parsing a genuine
+SketchUp-saved template (bundled `blank_vff.skp`, a SketchUp 2025 empty
+document) and extending its record tree; the writer emits revision 17 and
+covers faces, solid/textured materials, tags, component definitions and
+groups (including nested placements), arcs/circles/polylines, attribute
+dictionaries, texts, dimensions, guides, section planes and scenes.
+`open_existing()` on a VFF source uses that source file itself as the
+template - everything it holds survives, including records openskp does not
+decode - and returns handles for placing more copies of its definitions;
+VFF sources at revision 18 or newer are refused rather than downgraded.
+Files written this way have been accepted by **SketchUp 2025** (Ruby-created,
+opened without warning, re-saved and compared); SketchUp 2021-2024 are
+untested. The other ports still write classic 2017 only, so porting this
+writer and VFF `open_existing` is tracked in §3.
 
 ### Reader support by SketchUp version
 

@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Python: native VFF (SketchUp 2021+) writer, public API, and VFF `open_existing()`
+
+- New `openskp.create_vff(template=...)` / `openskp.VffBuilder` (the module's `from openskp.create_vff import VffBuilder` import path still works) writes the modern VFF container by parsing and extending a genuine SketchUp-saved template, with no template byte offsets: faces, solid and PNG/JPEG-textured materials (default and pinned UVs), tags, component definitions and groups (including nested placements), real arcs/circles/polylines, attribute dictionaries (str/int/float/bool/Time/Length/Point3d/Vector3d/nested lists), leader/screen texts, linear dimensions, bounded/unbounded guides, guide points, named/symboled and active section planes, and scenes (camera, hidden tags, selected page). The header integrity word is computed clean-room from the ZIP entries and `meta.dat`; the ZIP layout, revision 17, `meta.dat` GUID/time and per-entry CRCs are regenerated.
+- The bundled `_scaffold/blank_vff.skp` template is a genuine empty document saved by **SketchUp 2025.0.571** through its Ruby API (SHA-256 `795c5cb831a0474d633cf7db2022177678347e767e115bf5a4ee361167eb306c`; provenance in `create_vff.py`). Acceptance was real SketchUp 2025 in the Windows VM: every feature above was opened by Ruby with no warning dialog, dumped, re-saved by SketchUp and compared through openskp; evidence (oracle pairs, written files, re-saves, notes) is under `research/vff-writer/`. **SketchUp 2025 is the only release validated; SketchUp 2021–2024 are untested.**
+- New `VffComponentDefinitionBuilder`/`VffDefinitionHandle`; `from openskp.create_vff import ...` and `openskp.create_vff(...)` both work for the builder factory.
+- `openskp.open_existing()` now accepts a VFF (2021+) source: the source file itself becomes the `VffBuilder` template, so all of its content (scenes, attributes, textures, records openskp does not decode) survives and new content is appended; it returns handles for placing more instances of existing definitions, and existing materials/tags are reusable by name. VFF sources at revision 18+ are refused with a clear error instead of being downgraded. Classic (2013–2020) input still replays into a SketchUp 2017 file exactly as before.
+
+### Fixed — Python: VFF reader covers bool/Time attributes, texts, per-definition dimensions and section planes
+
+- VFF attribute values `AA38` (one-byte bool) and `AC38` (`time_t`, unsigned 32-bit unix seconds, the same Python type/value the classic reader returns) are decoded from genuine SketchUp 2025 saves; unknown tags and wrong payload sizes still decode to `None`, and bools stringify as `"1"`/`"0"` like the classic path.
+- VFF text entities (`0x55f0`), per-definition dimensions (`0x5bcc`), section planes (`0x445c`, with name/symbol exposed as `label`) and the active-section id (`0x1394`) are read; `Definition.texts`/`dimensions`/`section_planes` now populate for VFF files.
+
+### Changed — Python: `open_existing()` VFF path and public exports
+
+- Python writes VFF in addition to classic 2017; the other ports still write classic 2017 only (tracked in `docs/LANGUAGE_PARITY.md` §3). `open_existing()` rejects newer-than-17 VFF revisions until a newer SketchUp release has acceptance evidence.
+
 ### Fixed — Python: scenes use a component instance's own paint and tag in classic files (#596)
 
 - `build_scene()` and `build_instanced_scene()` read an instance's paint and tag from its 2021+ `D007` record only. In classic (pre-2021) files a painted component came out in its tag's colour, and every instance sat on its parent's tag. Both now come from the instance itself, and nested components inherit the paint.

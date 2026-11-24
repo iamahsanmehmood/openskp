@@ -1230,3 +1230,197 @@ def test_skpwright_verify_stage5_when_available(tmp_path):
         timeout=300,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+# ── Stage 6: public exports and open_existing on VFF input ──────────────────
+
+
+def _vff_summary(path) -> dict:
+    model = SkpFile.open(str(path)).parse()
+    root = model.root
+
+    def defs():
+        return sorted(
+            (
+                definition.id,
+                definition.name,
+                definition.is_group,
+                len(definition.vertices),
+                len(definition.edges),
+                len(definition.faces),
+                tuple(sorted(
+                    (instance.name, instance.ref_idx, instance.layer)
+                    for instance in definition.instances
+                )),
+            )
+            for definition in model.definitions.values()
+        )
+
+    return {
+        "root": (
+            len(root.vertices),
+            len(root.edges),
+            len(root.faces),
+            tuple(sorted(root.vertices.values() and [
+                (vertex.x, vertex.y, vertex.z) for vertex in root.vertices.values()
+            ])),
+            tuple(sorted(
+                (
+                    (face.normal, face.material_id, face.layer)
+                    for face in root.faces.values()
+                ),
+                key=repr,
+            )),
+            tuple(sorted(
+                (instance.name, instance.ref_idx, tuple(instance.matrix))
+                for instance in root.instances
+            )),
+        ),
+        "definitions": defs(),
+        "materials": sorted(
+            (
+                (material.name, material.color,
+                 (material.texture.filename, material.texture.data)
+                 if material.texture is not None else None)
+                for material in model.materials
+            ),
+            key=repr,
+        ),
+        "layers": sorted(
+            (layer.name, layer.color_r, layer.color_g, layer.color_b)
+            for layer in model.layers
+        ),
+        "pages": sorted(
+            (page.name, page.eye, page.target, page.parallel, page.hidden_layers)
+            for page in model.pages
+        ),
+    }
+
+
+def test_public_vff_exports():
+    import openskp
+
+    assert "create_vff" in openskp.__all__
+    assert "VffBuilder" in openskp.__all__
+    assert "VffComponentDefinitionBuilder" in openskp.__all__
+    builder = openskp.create_vff()
+    assert isinstance(builder, openskp.VffBuilder)
+
+    from openskp.create_vff import (
+        VffBuilder,
+        VffComponentDefinitionBuilder,
+        create as module_create,
+        create_vff,
+    )
+
+    assert openskp.VffBuilder is VffBuilder
+    assert isinstance(module_create(), VffBuilder)
+    assert isinstance(create_vff(), VffBuilder)
+    assert VffComponentDefinitionBuilder is not None
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["nesting_2021.skp", "SU_File.skp", "written_spike.skp"],
+)
+def test_open_existing_vff_preserves_source_and_allows_additions(tmp_path, name):
+    import openskp
+    from openskp import SkpFile
+
+    source = FIXTURES / name if name != "written_spike.skp" else WRITER_FIXTURES / name
+    before = _vff_summary(source)
+    builder, warnings, definitions = openskp.open_existing(source)
+    assert warnings == []
+    assert isinstance(builder, openskp.VffBuilder)
+
+    # A no-op save preserves everything the source held.
+    unchanged = tmp_path / "unchanged.skp"
+    builder.save(unchanged)
+    assert check_integrity(unchanged.read_bytes())
+    assert _vff_summary(unchanged) == before
+
+    # Existing materials/tags are reusable, and new content (including new
+    # materials/tags/definitions/groups) can still be added.
+    material = builder.materials_by_name.get("SpikeRed")
+    tag = builder.layers_by_name.get("SpikeTag")
+    new_material = builder.add_material("Stage6Blue", (20, 60, 220))
+    new_tag = builder.add_layer("Stage6Tag", (255, 180, 0))
+    builder.add_face(
+        [(500.0, 0.0, 0.0), (510.0, 0.0, 0.0),
+         (510.0, 10.0, 0.0), (500.0, 10.0, 0.0)],
+        material=new_material, layer=new_tag,
+    )
+    if material is not None and tag is not None:
+        builder.add_face(
+            [(500.0, 20.0, 0.0), (510.0, 20.0, 0.0),
+             (510.0, 30.0, 0.0), (500.0, 30.0, 0.0)],
+            material=material, layer=tag,
+        )
+    for handle in definitions.values():
+        if not handle.is_group:
+            builder.add_instance(handle, translation=(200.0, 0.0, 0.0))
+            break
+    with builder.add_group("Stage6Group") as group:
+        group.add_face(
+            [(600.0, 0.0, 0.0), (610.0, 0.0, 0.0),
+             (610.0, 10.0, 0.0), (600.0, 10.0, 0.0)]
+        )
+    with builder.add_component_definition("Stage6Component") as definition:
+        definition.add_face(
+            [(700.0, 0.0, 0.0), (710.0, 0.0, 0.0),
+             (710.0, 10.0, 0.0), (700.0, 10.0, 0.0)]
+        )
+    builder.add_instance(definition, translation=(800.0, 0.0, 0.0))
+
+    edited = tmp_path / "edited.skp"
+    builder.save(edited)
+    assert check_integrity(edited.read_bytes())
+    after_model = SkpFile.open(str(edited)).parse()
+    after = _vff_summary(edited)
+    assert after["root"][0] >= before["root"][0]
+    assert after["root"][1] >= before["root"][1]
+    assert after["root"][2] >= before["root"][2] + 1
+    assert any(
+        material.name == "Stage6Blue"
+        for material in after_model.materials
+    )
+    assert any(
+        layer.name == "Stage6Tag" and layer.color_r == 255
+        for layer in after_model.layers
+    )
+    names = {definition.name for definition in after_model.definitions.values()}
+    assert {"Stage6Group", "Stage6Component"} <= names
+    # Source definitions survive alongside the new ones.
+    assert {entry[1] for entry in before["definitions"]} <= {
+        entry[1] for entry in after["definitions"]
+    }
+    # Source scenes/attributes/textures survive (written_spike has none, but
+    # nesting_2021's content must still be there).
+    if before["pages"]:
+        assert set(entry[0] for entry in before["pages"]) <= {
+            entry[0] for entry in after["pages"]
+        }
+
+
+def test_open_existing_refuses_newer_vff_revision(tmp_path):
+    import openskp
+    from openskp.create import SkpWriteError
+
+    data = bytearray(DEFAULT_TEMPLATE.read_bytes())
+    header = data.find(b"VFF\x08\x00\x01\x00")
+    data[header + 7:header + 9] = (18).to_bytes(2, "little")
+    # The revision byte is not covered by the integrity word.
+    path = tmp_path / "newer.skp"
+    path.write_bytes(bytes(data))
+    with pytest.raises(SkpWriteError, match="revision 18"):
+        openskp.open_existing(path)
+
+
+def test_open_existing_still_rejects_unrecognised_files(tmp_path):
+    import openskp
+    from openskp.create import SkpWriteError
+
+    path = tmp_path / "not-a-model.skp"
+    path.write_bytes(b"not a sketchup file")
+    with pytest.raises(SkpWriteError, match="not a recognised SketchUp"):
+        openskp.open_existing(path)
