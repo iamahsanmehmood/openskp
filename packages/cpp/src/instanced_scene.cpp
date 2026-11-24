@@ -124,6 +124,7 @@ InstancedScene build_instanced_scene_raw(RawParsed&& p, const ParseOptions& o) {
 
   // Textures deduplicated by bytes, exactly as the baked path does.
   std::map<std::string, std::size_t> texture_index_by_key;
+  std::set<std::pair<std::string, std::string>> skipped_textures;
   auto texture_index_for =
       [&](const std::shared_ptr<RawMaterial>& mat) -> std::optional<std::size_t> {
     if (!mat || !mat->texture || !mat->texture->data || mat->texture->data->empty()) {
@@ -131,7 +132,11 @@ InstancedScene build_instanced_scene_raw(RawParsed&& p, const ParseOptions& o) {
     }
     const auto& data = *mat->texture->data;
     auto mime_type = sniff_image_mime(data);
-    if (!mime_type) return std::nullopt;
+    if (!mime_type && o.original_textures) mime_type = original_image_mime(data);
+    if (!mime_type) {
+      warn_skipped_texture(o, skipped_textures, mat);
+      return std::nullopt;
+    }
     std::ostringstream key_stream;
     key_stream << data.size() << ':';
     for (std::size_t i = 0; i < data.size() && i < 16; ++i) {

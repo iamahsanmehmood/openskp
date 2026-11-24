@@ -15,6 +15,11 @@ namespace OpenSkp
         /// textures can multiply the file size, and the geometry alone is
         /// what most callers are after.</summary>
         public bool Textures { get; set; }
+
+        /// <summary>Optional log callback receiving warnings (for example, when
+        /// a non-PNG/JPEG texture kept via <see cref="SkpParseOptions.OriginalTextures"/>
+        /// is omitted from the GLB).</summary>
+        public Action<SkpLogLevel, string>? OnLog { get; set; }
     }
 
     /// <summary>Binary glTF (.glb) export for an <see cref="InstancedScene"/>,
@@ -44,9 +49,11 @@ namespace OpenSkp
             if (scene == null) throw new ArgumentNullException(nameof(scene));
             var resources = scene.MeshResources ?? new List<InstancedMeshResource>();
             var rawMaterials = scene.GltfMaterials ?? new List<object>();
-            bool embedTextures = options?.Textures == true;
-            var sceneTextures = embedTextures ? (scene.Textures ?? new List<SceneTexture>()) : new List<SceneTexture>();
-            var materials = embedTextures ? rawMaterials : StripTextureRefs(rawMaterials);
+            var (sceneTextures, materials) = FaceGroups.FilterGltfTextures(
+                scene.Textures ?? new List<SceneTexture>(),
+                rawMaterials,
+                options?.Textures == true,
+                options?.OnLog);
 
             long totalBinaryLength = 0;
             foreach (var res in resources)
@@ -285,48 +292,6 @@ namespace OpenSkp
                 if (Math.Abs(m[i] - InstancedSceneBuilder.IdentityGltf[i]) > 1e-12) return false;
             }
             return true;
-        }
-
-        /// <summary>Materials with every baseColorTexture reference removed
-        /// - a copy, never mutating the input. Mirrors
-        /// GlbExport.StripTextureRefs exactly (duplicated rather than
-        /// shared, matching the TypeScript reference's own
-        /// instanced-glb.ts, which duplicates this from index.ts too).</summary>
-        private static List<object> StripTextureRefs(List<object> materials)
-        {
-            var needsCopy = false;
-            foreach (var m in materials)
-            {
-                if (m is IDictionary<string, object> dict &&
-                    dict.TryGetValue("pbrMetallicRoughness", out var pbrObj) &&
-                    pbrObj is IDictionary<string, object> pbr &&
-                    pbr.ContainsKey("baseColorTexture"))
-                {
-                    needsCopy = true;
-                    break;
-                }
-            }
-            if (!needsCopy) return materials;
-
-            var result = new List<object>(materials.Count);
-            foreach (var m in materials)
-            {
-                if (m is IDictionary<string, object> dict &&
-                    dict.TryGetValue("pbrMetallicRoughness", out var pbrObj) &&
-                    pbrObj is IDictionary<string, object> pbr &&
-                    pbr.ContainsKey("baseColorTexture"))
-                {
-                    var newPbr = new Dictionary<string, object>(pbr);
-                    newPbr.Remove("baseColorTexture");
-                    var newMat = new Dictionary<string, object>(dict) { ["pbrMetallicRoughness"] = newPbr };
-                    result.Add(newMat);
-                }
-                else
-                {
-                    result.Add(m);
-                }
-            }
-            return result;
         }
 
         /// <summary>Serializes an InstancedScene to GLB and writes it to

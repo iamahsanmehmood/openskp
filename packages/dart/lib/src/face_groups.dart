@@ -67,7 +67,7 @@ typedef FaceGroupKey = ((int, int, int), bool, int?, double, bool);
 /// builder itself.
 class FaceGroupContext {
   final RawMaterial? Function(int?) resolveMaterial;
-  final int? Function(RawTexture?) textureIndexFor;
+  final int? Function(RawTexture?, [String?]) textureIndexFor;
 
   /// Color an unpainted face side falls back to (already resolved by the
   /// caller: the instance's inherited paint color, or, when nothing is
@@ -200,7 +200,7 @@ Map<FaceGroupKey, LocalFaceGroup> buildLocalFaceGroups(GeometryBuilder builder, 
     // faces are batched per emitted material, so the texture has to be
     // part of the key too - otherwise two differently-textured faces with
     // the same average color end up in one group with one image
-    final texIndex = ctx.textureIndexFor(mat?.texture);
+    final texIndex = ctx.textureIndexFor(mat?.texture, mat?.name);
     final transparency = resolveTransparency(mat);
     final key = (color, doubleSided, texIndex, transparency, unpaintedBack);
     final group = faceGroups.putIfAbsent(

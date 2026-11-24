@@ -195,7 +195,7 @@ fn declares_mask_alpha_mode_for_textured_opaque_materials() {
         .is_none());
     assert!(model.list("images").is_empty());
 
-    let embedded = load_glb(&to_glb(&scene, &GlbOptions { textures: true }).unwrap());
+    let embedded = load_glb(&to_glb(&scene, &GlbOptions::new().with_textures(true)).unwrap());
     let images = embedded.list("images");
     assert_eq!(images.len(), 1);
     assert_eq!(string(&images[0], "mimeType"), "image/png");

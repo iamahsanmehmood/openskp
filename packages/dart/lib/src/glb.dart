@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'observability.dart' show SkpLogLevel;
 import 'scene.dart';
 
 /// glTF's chunk-length fields are uint32 - a GLB file's total size (and
@@ -23,17 +24,23 @@ const int _glbSizeLimit = 0xFFFFFFFF;
 /// matching every other language's exporter: photographic textures can
 /// multiply the file size, and the geometry alone is what most callers
 /// are after.
-Uint8List toGlb(Scene scene, {bool textures = false}) {
+///
+/// [onLog]: optional callback receiving warnings (for example, when a
+/// non-PNG/JPEG texture kept via `ParseOptions(originalTextures: true)` is
+/// omitted from the GLB).
+Uint8List toGlb(
+  Scene scene, {
+  bool textures = false,
+  void Function(SkpLogLevel level, String message)? onLog,
+}) {
   final prims = scene.glbPrimitives;
   final rawMaterials = scene.gltfMaterials;
-  final sceneTextures = textures ? scene.textures : <SceneTexture>[];
-
-  // Materials always reference textures by index (buildScene() sets that
-  // up unconditionally); embedding the actual image bytes is the opt-in
-  // part. When not embedding, strip the reference so a strict glTF reader
-  // never sees a baseColorTexture pointing at a textures[] array that was
-  // never written - a copy, never mutating the Scene the caller owns.
-  final materials = textures ? rawMaterials : _stripTextureRefs(rawMaterials);
+  final (sceneTextures, materials) = filterGltfTextures(
+    scene.textures,
+    rawMaterials,
+    textures,
+    onLog,
+  );
 
   _validateScene(prims, materials);
 
@@ -242,30 +249,16 @@ Uint8List toGlb(Scene scene, {bool textures = false}) {
   return _createGlb(gltfJson, bufferBytes);
 }
 
-/// Materials with every `baseColorTexture` reference removed - a copy,
-/// never mutating the input. Used when not embedding images, so a strict
-/// glTF reader never sees a reference into a textures[] array that was
-/// never written.
-List<Map<String, dynamic>> _stripTextureRefs(List<Map<String, dynamic>> materials) {
-  final needsCopy = materials.any((m) {
-    final pbr = m['pbrMetallicRoughness'] as Map<String, dynamic>?;
-    return pbr != null && pbr.containsKey('baseColorTexture');
-  });
-  if (!needsCopy) return materials;
-
-  return materials.map((m) {
-    final pbr = m['pbrMetallicRoughness'] as Map<String, dynamic>?;
-    if (pbr == null || !pbr.containsKey('baseColorTexture')) return m;
-    final newPbr = Map<String, dynamic>.from(pbr)..remove('baseColorTexture');
-    return Map<String, dynamic>.from(m)..['pbrMetallicRoughness'] = newPbr;
-  }).toList();
-}
-
 /// Serializes a baked [Scene] to GLB and writes it to [path]. Does not
 /// create missing parent directories - matching the C++ and .NET ports'
 /// export_glb/ExportGlb.
-void exportGlb(Scene scene, String path, {bool textures = false}) {
-  File(path).writeAsBytesSync(toGlb(scene, textures: textures));
+void exportGlb(
+  Scene scene,
+  String path, {
+  bool textures = false,
+  void Function(SkpLogLevel level, String message)? onLog,
+}) {
+  File(path).writeAsBytesSync(toGlb(scene, textures: textures, onLog: onLog));
 }
 
 void _validateScene(List<GlbPrimitive> prims, List<Map<String, dynamic>> materials) {

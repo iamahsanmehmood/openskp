@@ -134,7 +134,7 @@ fn embeds_textures_only_when_asked() {
     let without = to_instanced_glb(&scene, &opts()).unwrap();
     assert!(!contains_bytes(&without, b"\"images\""));
     assert!(!contains_bytes(&without, JPEG_MAGIC));
-    let with = to_instanced_glb(&scene, &InstancedGlbOptions { textures: true }).unwrap();
+    let with = to_instanced_glb(&scene, &InstancedGlbOptions::new().with_textures(true)).unwrap();
     assert!(contains_bytes(&with, JPEG_MAGIC));
     let model = load_glb(&with);
     assert_eq!(model.list("images").len(), 1);
@@ -260,7 +260,7 @@ fn export_omits_images_by_default() {
 fn export_embeds_textures_when_asked() {
     let scene = instanced("capilla_quiroz_v17.skp");
     let without = to_instanced_glb(&scene, &opts()).unwrap();
-    let with = to_instanced_glb(&scene, &InstancedGlbOptions { textures: true }).unwrap();
+    let with = to_instanced_glb(&scene, &InstancedGlbOptions::new().with_textures(true)).unwrap();
     assert!(with.len() > without.len());
     assert!(contains_bytes(&with, JPEG_MAGIC));
     let model = load_glb(&with);
@@ -292,7 +292,7 @@ fn export_instanced_glb_file_round_trips() {
     export_instanced_glb(
         &instanced("capilla_quiroz_v17.skp"),
         &output,
-        &InstancedGlbOptions { textures: true },
+        &InstancedGlbOptions::new().with_textures(true),
     )
     .unwrap();
     let actual = std::fs::read(&output).unwrap();

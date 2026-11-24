@@ -195,6 +195,151 @@ String? sniffImageMime(List<int> data) {
   return null;
 }
 
+const Map<String, String> _originalImageMime = {
+  'TIFF': 'image/tiff',
+  'GIF': 'image/gif',
+  'BMP': 'image/bmp',
+  'TGA': 'image/x-tga',
+  'WebP': 'image/webp',
+  'PSD': 'image/vnd.adobe.photoshop',
+  'DDS': 'image/vnd.ms-dds',
+  'JPEG 2000': 'image/jp2',
+};
+
+bool _asciiAt(List<int> data, int offset, String text) {
+  if (offset + text.length > data.length) return false;
+  for (var i = 0; i < text.length; i++) {
+    if (data[offset + i] != text.codeUnitAt(i)) return false;
+  }
+  return true;
+}
+
+String describeImageFormat(List<int> data, [String filename = '']) {
+  if (data.length >= 4 &&
+      ((data[0] == 0x49 && data[1] == 0x49 && data[2] == 0x2a && data[3] == 0x00) ||
+          (data[0] == 0x4d && data[1] == 0x4d && data[2] == 0x00 && data[3] == 0x2a))) {
+    return 'TIFF';
+  }
+  if (_asciiAt(data, 0, 'BM')) return 'BMP';
+  if (_asciiAt(data, 0, 'GIF87a') || _asciiAt(data, 0, 'GIF89a')) return 'GIF';
+  if (_asciiAt(data, 0, 'RIFF') && _asciiAt(data, 8, 'WEBP')) return 'WebP';
+  if (_asciiAt(data, 0, '8BPS')) return 'PSD';
+  if (_asciiAt(data, 0, 'DDS ')) return 'DDS';
+  if (data.length >= 8 &&
+      data[0] == 0x00 &&
+      data[1] == 0x00 &&
+      data[2] == 0x00 &&
+      data[3] == 0x0c &&
+      _asciiAt(data, 4, 'jP  ')) {
+    return 'JPEG 2000';
+  }
+  final tailStart = data.length > 26 ? data.length - 26 : 0;
+  for (var i = tailStart; i + 16 <= data.length; i++) {
+    if (_asciiAt(data, i, 'TRUEVISION-XFILE')) return 'TGA';
+  }
+  final baseName = filename.replaceAll('\\', '/').split('/').last;
+  final dot = baseName.lastIndexOf('.');
+  final ext = dot >= 0 ? baseName.substring(dot + 1) : '';
+  return ext.isNotEmpty && ext.length <= 5 ? ext.toUpperCase() : 'an unrecognized format';
+}
+
+String? originalImageMime(List<int> data) => _originalImageMime[describeImageFormat(data)];
+
+void warnSkippedTexture(
+  ParseOptions? options,
+  Set<(String, String)> warned,
+  String? materialName,
+  RawTexture tex,
+  List<int> data,
+) {
+  final filename = tex.filename;
+  final fmt = describeImageFormat(data, filename);
+  if (!warned.add((materialName ?? '', fmt))) return;
+  final baseName = filename.replaceAll('\\', '/').split('/').last;
+  final keepable = originalImageMime(data) != null;
+  final label = (materialName != null && materialName.isNotEmpty)
+      ? "'$materialName'"
+      : "'(unnamed)'";
+  final suffix = baseName.isNotEmpty ? ' ($baseName)' : '';
+  final hint = keepable ? ' (pass originalTextures: true to keep it in its own format)' : '';
+  emitLog(
+    options,
+    SkpLogLevel.warning,
+    'Texture of material $label$suffix is $fmt, which a scene cannot carry (only PNG and JPEG): '
+    'the material is built without its texture$hint',
+  );
+}
+
+(List<SceneTexture>, List<Map<String, dynamic>>) filterGltfTextures(
+  List<SceneTexture> rawTextures,
+  List<Map<String, dynamic>> rawMaterials,
+  bool embed,
+  void Function(SkpLogLevel level, String message)? onLog,
+) {
+  if (!embed || rawTextures.isEmpty) {
+    final needsCopy = rawMaterials.any((m) {
+      final pbr = m['pbrMetallicRoughness'] as Map<String, dynamic>?;
+      return pbr != null && pbr.containsKey('baseColorTexture');
+    });
+    if (!needsCopy) return (<SceneTexture>[], rawMaterials);
+
+    final stripped = rawMaterials.map((m) {
+      final pbr = m['pbrMetallicRoughness'] as Map<String, dynamic>?;
+      if (pbr == null || !pbr.containsKey('baseColorTexture')) return m;
+      final newPbr = Map<String, dynamic>.from(pbr)..remove('baseColorTexture');
+      return Map<String, dynamic>.from(m)..['pbrMetallicRoughness'] = newPbr;
+    }).toList();
+    return (<SceneTexture>[], stripped);
+  }
+
+  final kept = <SceneTexture>[];
+  final remap = List<int?>.filled(rawTextures.length, null);
+  final warned = <(String, String)>{};
+  var anyDropped = false;
+
+  for (var i = 0; i < rawTextures.length; i++) {
+    final tex = rawTextures[i];
+    if (tex.mimeType == 'image/png' || tex.mimeType == 'image/jpeg') {
+      remap[i] = kept.length;
+      kept.add(tex);
+    } else {
+      remap[i] = null;
+      anyDropped = true;
+      final baseName = tex.filename.replaceAll('\\', '/').split('/').last;
+      final fmt = describeImageFormat(tex.data, tex.filename);
+      if (warned.add((baseName, fmt))) {
+        final label = baseName.isNotEmpty ? " '$baseName'" : '';
+        onLog?.call(
+          SkpLogLevel.warning,
+          'Texture$label is $fmt, which glTF 2.0 cannot carry (only PNG and JPEG): leaving it out of the GLB',
+        );
+      }
+    }
+  }
+
+  if (!anyDropped) return (kept, rawMaterials);
+
+  final materials = rawMaterials.map((m) {
+    final pbr = m['pbrMetallicRoughness'] as Map<String, dynamic>?;
+    final texRef = pbr?['baseColorTexture'] as Map<String, dynamic>?;
+    final texIdx = texRef?['index'];
+    if (pbr == null || texRef == null || texIdx is! int) return m;
+    final mapped = texIdx >= 0 && texIdx < remap.length ? remap[texIdx] : null;
+    if (mapped == null) {
+      final newPbr = Map<String, dynamic>.from(pbr)..remove('baseColorTexture');
+      final newMat = Map<String, dynamic>.from(m)..['pbrMetallicRoughness'] = newPbr;
+      if (newMat['alphaMode'] == 'MASK') newMat.remove('alphaMode');
+      return newMat;
+    }
+    if (mapped == texIdx) return m;
+    final newTexRef = Map<String, dynamic>.from(texRef)..['index'] = mapped;
+    final newPbr = Map<String, dynamic>.from(pbr)..['baseColorTexture'] = newTexRef;
+    return Map<String, dynamic>.from(m)..['pbrMetallicRoughness'] = newPbr;
+  }).toList();
+
+  return (kept, materials);
+}
+
 const double _inchesToMm = 25.4;
 const double _inchesToM = 0.0254;
 
@@ -237,12 +382,19 @@ class SceneBuilder {
     // the export size for nothing.
     final textures = <SceneTexture>[];
     final textureIndexByKey = <String, int>{};
+    final skippedTextures = <(String, String)>{};
 
-    int? textureIndexFor(RawTexture? tex) {
+    int? textureIndexFor(RawTexture? tex, [String? materialName]) {
       if (tex == null || tex.data == null || tex.data!.isEmpty) return null;
       final data = tex.data!;
-      final mimeType = sniffImageMime(data);
-      if (mimeType == null) return null; // a format glTF cannot carry
+      var mimeType = sniffImageMime(data);
+      if (mimeType == null && (options?.originalTextures ?? false)) {
+        mimeType = originalImageMime(data);
+      }
+      if (mimeType == null) {
+        warnSkippedTexture(options, skippedTextures, materialName, tex, data);
+        return null;
+      }
       // length plus a short byte prefix is enough to tell real images
       // apart without hashing megabytes on every face
       final headLen = data.length < 16 ? data.length : 16;

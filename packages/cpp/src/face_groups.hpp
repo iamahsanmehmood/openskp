@@ -5,9 +5,12 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <tuple>
 #include <vector>
+
+#include <openskp/scene.hpp>
 
 #include "internal.hpp"
 
@@ -74,6 +77,19 @@ FaceColorKey default_color(const RawParsed& parsed, const std::string& layer);
 std::optional<std::pair<FaceColorKey, FaceColorKey>> unpainted_style_colors(
     const RawParsed& parsed, const std::string& unpainted_faces);
 std::optional<std::string> sniff_image_mime(const ByteBuffer& data);
+std::optional<std::string> original_image_mime(const ByteBuffer& data);
+void warn_skipped_texture(const ParseOptions& options,
+                          std::set<std::pair<std::string, std::string>>& warned,
+                          const std::shared_ptr<RawMaterial>& material);
+
+struct FilteredGltfTextures {
+  std::vector<const SceneTexture*> textures;
+  std::vector<std::optional<int>> remap;
+};
+
+FilteredGltfTextures filter_gltf_textures(
+    const std::vector<SceneTexture>& raw_textures, bool embed,
+    const std::function<void(LogLevel, std::string_view)>& log);
 
 // Everything build_local_face_groups needs from its caller that isn't the
 // builder itself.

@@ -59,7 +59,7 @@ namespace OpenSkp
         public sealed class Context
         {
             public Func<long?, (Geometry.RawMaterial? Mat, (int R, int G, int B)? Color)> ResolveMaterial = _ => (null, null);
-            public Func<Geometry.RawTexture?, int?> TextureIndexFor = _ => null;
+            public Func<Geometry.RawTexture?, string?, int?> TextureIndexFor = (_, _) => null;
 
             /// <summary>Color an unpainted face side falls back to (already
             /// resolved by the caller: the instance's inherited paint
@@ -88,6 +88,224 @@ namespace OpenSkp
                     nameof(unpaintedFaces));
             }
             return mode == "style" ? parsed.FaceColors : null;
+        }
+
+        internal static string? SniffImageMime(byte[] data)
+        {
+            if (data.Length >= 3 && data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF)
+            {
+                return "image/jpeg";
+            }
+            if (data.Length >= 8 &&
+                data[0] == 0x89 && data[1] == 0x50 && data[2] == 0x4E && data[3] == 0x47 &&
+                data[4] == 0x0D && data[5] == 0x0A && data[6] == 0x1A && data[7] == 0x0A)
+            {
+                return "image/png";
+            }
+            return null;
+        }
+
+        private static bool AsciiAt(byte[] data, int offset, string text)
+        {
+            if (offset + text.Length > data.Length) return false;
+            for (int i = 0; i < text.Length; i++)
+            {
+                if (data[offset + i] != (byte)text[i]) return false;
+            }
+            return true;
+        }
+
+        internal static string DescribeImageFormat(byte[] data, string filename = "")
+        {
+            if (data.Length >= 4 &&
+                ((data[0] == 0x49 && data[1] == 0x49 && data[2] == 0x2A && data[3] == 0x00) ||
+                 (data[0] == 0x4D && data[1] == 0x4D && data[2] == 0x00 && data[3] == 0x2A)))
+            {
+                return "TIFF";
+            }
+            if (AsciiAt(data, 0, "BM")) return "BMP";
+            if (AsciiAt(data, 0, "GIF87a") || AsciiAt(data, 0, "GIF89a")) return "GIF";
+            if (AsciiAt(data, 0, "RIFF") && AsciiAt(data, 8, "WEBP")) return "WebP";
+            if (AsciiAt(data, 0, "8BPS")) return "PSD";
+            if (AsciiAt(data, 0, "DDS ")) return "DDS";
+            if (data.Length >= 8 &&
+                data[0] == 0x00 && data[1] == 0x00 && data[2] == 0x00 && data[3] == 0x0C &&
+                AsciiAt(data, 4, "jP  "))
+            {
+                return "JPEG 2000";
+            }
+            int tailStart = Math.Max(0, data.Length - 26);
+            for (int i = tailStart; i + 16 <= data.Length; i++)
+            {
+                if (AsciiAt(data, i, "TRUEVISION-XFILE")) return "TGA";
+            }
+            string normalized = (filename ?? "").Replace('\\', '/');
+            int slash = normalized.LastIndexOf('/');
+            string baseName = slash >= 0 ? normalized.Substring(slash + 1) : normalized;
+            int dot = baseName.LastIndexOf('.');
+            string ext = dot >= 0 ? baseName.Substring(dot + 1) : "";
+            return ext.Length > 0 && ext.Length <= 5 ? ext.ToUpperInvariant() : "an unrecognized format";
+        }
+
+        internal static string? OriginalImageMime(byte[] data)
+        {
+            switch (DescribeImageFormat(data))
+            {
+                case "TIFF": return "image/tiff";
+                case "GIF": return "image/gif";
+                case "BMP": return "image/bmp";
+                case "TGA": return "image/x-tga";
+                case "WebP": return "image/webp";
+                case "PSD": return "image/vnd.adobe.photoshop";
+                case "DDS": return "image/vnd.ms-dds";
+                case "JPEG 2000": return "image/jp2";
+                default: return null;
+            }
+        }
+
+        internal static void WarnSkippedTexture(
+            SkpParseOptions? options,
+            HashSet<(string MaterialName, string Format)> warned,
+            string? materialName,
+            Geometry.RawTexture tex,
+            byte[] data)
+        {
+            string filename = tex.Filename ?? "";
+            string fmt = DescribeImageFormat(data, filename);
+            if (!warned.Add((materialName ?? "", fmt))) return;
+            string normalized = filename.Replace('\\', '/');
+            int slash = normalized.LastIndexOf('/');
+            string baseName = slash >= 0 ? normalized.Substring(slash + 1) : normalized;
+            bool keepable = OriginalImageMime(data) != null;
+            string label = !string.IsNullOrEmpty(materialName) ? $"'{materialName}'" : "'(unnamed)'";
+            string suffix = baseName.Length > 0 ? $" ({baseName})" : "";
+            string hint = keepable ? " (pass OriginalTextures = true to keep it in its own format)" : "";
+            Observability.Log(
+                options,
+                SkpLogLevel.Warning,
+                $"Texture of material {label}{suffix} is {fmt}, which a scene cannot carry (only PNG and JPEG): " +
+                $"the material is built without its texture{hint}");
+        }
+
+        internal static (List<SceneTexture> Textures, List<object> Materials) FilterGltfTextures(
+            List<SceneTexture> rawTextures,
+            List<object> rawMaterials,
+            bool embed,
+            Action<SkpLogLevel, string>? onLog)
+        {
+            if (!embed || rawTextures.Count == 0)
+            {
+                bool needsCopy = false;
+                foreach (var m in rawMaterials)
+                {
+                    if (m is IDictionary<string, object> dict &&
+                        dict.TryGetValue("pbrMetallicRoughness", out var pbrObj) &&
+                        pbrObj is IDictionary<string, object> pbr &&
+                        pbr.ContainsKey("baseColorTexture"))
+                    {
+                        needsCopy = true;
+                        break;
+                    }
+                }
+                if (!needsCopy) return (new List<SceneTexture>(), rawMaterials);
+
+                var stripped = new List<object>(rawMaterials.Count);
+                foreach (var m in rawMaterials)
+                {
+                    if (m is IDictionary<string, object> dict &&
+                        dict.TryGetValue("pbrMetallicRoughness", out var pbrObj) &&
+                        pbrObj is IDictionary<string, object> pbr &&
+                        pbr.ContainsKey("baseColorTexture"))
+                    {
+                        var newPbr = new Dictionary<string, object>(pbr);
+                        newPbr.Remove("baseColorTexture");
+                        var newMat = new Dictionary<string, object>(dict) { ["pbrMetallicRoughness"] = newPbr };
+                        stripped.Add(newMat);
+                    }
+                    else
+                    {
+                        stripped.Add(m);
+                    }
+                }
+                return (new List<SceneTexture>(), stripped);
+            }
+
+            var kept = new List<SceneTexture>(rawTextures.Count);
+            var remap = new int?[rawTextures.Count];
+            var warned = new HashSet<(string BaseName, string Format)>();
+            bool anyDropped = false;
+
+            for (int i = 0; i < rawTextures.Count; i++)
+            {
+                var tex = rawTextures[i];
+                if (tex.MimeType == "image/png" || tex.MimeType == "image/jpeg")
+                {
+                    remap[i] = kept.Count;
+                    kept.Add(tex);
+                }
+                else
+                {
+                    remap[i] = null;
+                    anyDropped = true;
+                    string filename = tex.Filename ?? "";
+                    string normalized = filename.Replace('\\', '/');
+                    int slash = normalized.LastIndexOf('/');
+                    string baseName = slash >= 0 ? normalized.Substring(slash + 1) : normalized;
+                    string fmt = DescribeImageFormat(tex.Data, filename);
+                    if (warned.Add((baseName, fmt)))
+                    {
+                        string label = baseName.Length > 0 ? $" '{baseName}'" : "";
+                        onLog?.Invoke(
+                            SkpLogLevel.Warning,
+                            $"Texture{label} is {fmt}, which glTF 2.0 cannot carry (only PNG and JPEG): leaving it out of the GLB");
+                    }
+                }
+            }
+
+            if (!anyDropped) return (kept, rawMaterials);
+
+            var materials = new List<object>(rawMaterials.Count);
+            foreach (var m in rawMaterials)
+            {
+                if (m is IDictionary<string, object> dict &&
+                    dict.TryGetValue("pbrMetallicRoughness", out var pbrObj) &&
+                    pbrObj is IDictionary<string, object> pbr &&
+                    pbr.TryGetValue("baseColorTexture", out var texRefObj) &&
+                    texRefObj is IDictionary<string, object> texRef &&
+                    texRef.TryGetValue("index", out var idxObj) &&
+                    idxObj is int texIdx)
+                {
+                    int? mapped = texIdx >= 0 && texIdx < remap.Length ? remap[texIdx] : null;
+                    if (!mapped.HasValue)
+                    {
+                        var newPbr = new Dictionary<string, object>(pbr);
+                        newPbr.Remove("baseColorTexture");
+                        var newMat = new Dictionary<string, object>(dict) { ["pbrMetallicRoughness"] = newPbr };
+                        if (newMat.TryGetValue("alphaMode", out var am) && am as string == "MASK")
+                        {
+                            newMat.Remove("alphaMode");
+                        }
+                        materials.Add(newMat);
+                    }
+                    else if (mapped.Value == texIdx)
+                    {
+                        materials.Add(m);
+                    }
+                    else
+                    {
+                        var newTexRef = new Dictionary<string, object>(texRef) { ["index"] = mapped.Value };
+                        var newPbr = new Dictionary<string, object>(pbr) { ["baseColorTexture"] = newTexRef };
+                        var newMat = new Dictionary<string, object>(dict) { ["pbrMetallicRoughness"] = newPbr };
+                        materials.Add(newMat);
+                    }
+                }
+                else
+                {
+                    materials.Add(m);
+                }
+            }
+
+            return (kept, materials);
         }
 
         /// <summary>Inverse of a row-major 3x3 matrix, via the
@@ -211,7 +429,7 @@ namespace OpenSkp
                 // has to be part of the key too - otherwise two
                 // differently-textured faces with the same average color
                 // end up in one group with one image
-                int? texIndex = ctx.TextureIndexFor(mat?.Texture);
+                int? texIndex = ctx.TextureIndexFor(mat?.Texture, mat?.Name);
                 double transparency = ResolveTransparency(mat);
                 var key = (color, doubleSided, texIndex, transparency, unpaintedBack);
                 if (!faceGroups.TryGetValue(key, out var group))

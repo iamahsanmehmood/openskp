@@ -1,7 +1,9 @@
 #include "face_groups.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
+#include <cstring>
 #include <sstream>
 #include <stdexcept>
 #include <utility>
@@ -138,6 +140,118 @@ std::optional<std::string> sniff_image_mime(const ByteBuffer& data) {
     return "image/png";
   }
   return std::nullopt;
+}
+
+namespace {
+
+bool ascii_at(const ByteBuffer& data, std::size_t offset, const char* text) {
+  const std::size_t len = std::strlen(text);
+  if (offset + len > data.size()) return false;
+  return std::memcmp(data.data() + offset, text, len) == 0;
+}
+
+std::string basename_of(const std::string& filename) {
+  const auto pos = filename.find_last_of("/\\");
+  return pos == std::string::npos ? filename : filename.substr(pos + 1);
+}
+
+std::string describe_image_format(const ByteBuffer& data, const std::string& filename = {}) {
+  if (data.size() >= 4 &&
+      ((data[0] == 0x49 && data[1] == 0x49 && data[2] == 0x2a && data[3] == 0x00) ||
+       (data[0] == 0x4d && data[1] == 0x4d && data[2] == 0x00 && data[3] == 0x2a))) {
+    return "TIFF";
+  }
+  if (ascii_at(data, 0, "BM")) return "BMP";
+  if (ascii_at(data, 0, "GIF87a") || ascii_at(data, 0, "GIF89a")) return "GIF";
+  if (ascii_at(data, 0, "RIFF") && ascii_at(data, 8, "WEBP")) return "WebP";
+  if (ascii_at(data, 0, "8BPS")) return "PSD";
+  if (ascii_at(data, 0, "DDS ")) return "DDS";
+  if (data.size() >= 8 && data[0] == 0x00 && data[1] == 0x00 && data[2] == 0x00 &&
+      data[3] == 0x0c && ascii_at(data, 4, "jP  ")) {
+    return "JPEG 2000";
+  }
+  const std::size_t tail_start = data.size() > 26 ? data.size() - 26 : 0;
+  for (std::size_t i = tail_start; i + 16 <= data.size(); ++i) {
+    if (ascii_at(data, i, "TRUEVISION-XFILE")) return "TGA";
+  }
+  const auto base = basename_of(filename);
+  const auto dot = base.rfind('.');
+  if (dot != std::string::npos) {
+    auto ext = base.substr(dot + 1);
+    if (!ext.empty() && ext.size() <= 5) {
+      for (auto& ch : ext) {
+        ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+      }
+      return ext;
+    }
+  }
+  return "an unrecognized format";
+}
+
+}  // namespace
+
+std::optional<std::string> original_image_mime(const ByteBuffer& data) {
+  const auto fmt = describe_image_format(data);
+  if (fmt == "TIFF") return "image/tiff";
+  if (fmt == "GIF") return "image/gif";
+  if (fmt == "BMP") return "image/bmp";
+  if (fmt == "TGA") return "image/x-tga";
+  if (fmt == "WebP") return "image/webp";
+  if (fmt == "PSD") return "image/vnd.adobe.photoshop";
+  if (fmt == "DDS") return "image/vnd.ms-dds";
+  if (fmt == "JPEG 2000") return "image/jp2";
+  return std::nullopt;
+}
+
+void warn_skipped_texture(const ParseOptions& options,
+                          std::set<std::pair<std::string, std::string>>& warned,
+                          const std::shared_ptr<RawMaterial>& material) {
+  if (!material || !material->texture || !material->texture->data) return;
+  const auto& data = *material->texture->data;
+  const auto& filename = material->texture->filename;
+  const auto fmt = describe_image_format(data, filename);
+  if (!warned.emplace(material->name, fmt).second) return;
+  const auto base = basename_of(filename);
+  const bool keepable = original_image_mime(data).has_value();
+  std::string msg = "Texture of material '";
+  msg += material->name.empty() ? "(unnamed)" : material->name;
+  msg += "'";
+  if (!base.empty()) msg += " (" + base + ")";
+  msg += " is " + fmt +
+         ", which a scene cannot carry (only PNG and JPEG): the material is built without its "
+         "texture";
+  if (keepable) {
+    msg += " (pass original_textures = true to keep it in its own format)";
+  }
+  emit_log(options, LogLevel::warning, msg);
+}
+
+FilteredGltfTextures filter_gltf_textures(
+    const std::vector<SceneTexture>& raw_textures, bool embed,
+    const std::function<void(LogLevel, std::string_view)>& log) {
+  FilteredGltfTextures out;
+  if (!embed || raw_textures.empty()) return out;
+  out.remap.resize(raw_textures.size());
+  std::set<std::pair<std::string, std::string>> warned;
+  for (std::size_t i = 0; i < raw_textures.size(); ++i) {
+    const auto& tex = raw_textures[i];
+    if (tex.mime_type == "image/png" || tex.mime_type == "image/jpeg") {
+      out.remap[i] = static_cast<int>(out.textures.size());
+      out.textures.push_back(&tex);
+    } else {
+      out.remap[i] = std::nullopt;
+      const auto base = basename_of(tex.filename);
+      const auto fmt = describe_image_format(tex.data, tex.filename);
+      if (warned.emplace(base, fmt).second && log) {
+        std::string msg = "Texture";
+        if (!base.empty()) msg += " '" + base + "'";
+        msg += " is " + fmt +
+               ", which glTF 2.0 cannot carry (only PNG and JPEG): leaving it out of the GLB";
+        log(LogLevel::warning, msg);
+      }
+    }
+  }
+  return out;
 }
 
 std::map<GroupKey, Group> build_local_face_groups(const RawParsed& parsed, const GeometryBuilder& b,

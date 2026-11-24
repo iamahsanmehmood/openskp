@@ -46,10 +46,18 @@ class ParseOptions {
   /// `'tag'` uses the colour of the face's tag as one double-sided primitive.
   final String unpaintedFaces;
 
+  /// Keep a texture that is not PNG or JPEG in `Scene.textures` and
+  /// `InstancedScene.textures` in its own format (`image/tiff`, `image/gif`,
+  /// `image/bmp`, `image/x-tga`, `image/webp`, `image/vnd.adobe.photoshop`,
+  /// `image/vnd.ms-dds`, `image/jp2`) instead of leaving it out with a
+  /// warning. Off by default because glTF carries only PNG and JPEG.
+  final bool originalTextures;
+
   const ParseOptions({
     this.onProgress,
     this.onLog,
     this.unpaintedFaces = 'style',
+    this.originalTextures = false,
   });
 }
 

@@ -2,7 +2,12 @@ import { foldScale, multiplyMatrices } from './transforms';
 import { extractDynamicProperties, extractAttributeDictionaries, isGenericDefinitionName, findNameOverride, stringifyVffAttrValue, VffAttrValue } from './geometry';
 import { ParseOptions, PROGRESS_INTERVAL, emitLog, emitProgress } from './observability';
 import { SkpParseError } from './errors';
-import { buildLocalFaceGroups, unpaintedStyleColors } from './face-groups';
+import {
+  buildLocalFaceGroups,
+  originalImageMime,
+  unpaintedStyleColors,
+  warnSkippedTexture,
+} from './face-groups';
 import {
   Material,
   Page,
@@ -241,11 +246,18 @@ export function buildInstancedSceneFromParsed(
   // Textures deduplicated by bytes, exactly as the baked path does.
   const textures: SceneTexture[] = [];
   const textureIndexByKey = new Map<string, number>();
+  const skippedTextures = new Set<string>();
 
-  function textureIndexFor(tex: Texture | null | undefined): number | null {
+  function textureIndexFor(tex: Texture | null | undefined, materialName?: string): number | null {
     if (!tex || !tex.data || tex.data.length === 0) return null;
-    const mimeType = sniffImageMime(tex.data);
-    if (mimeType === null) return null; // a format glTF cannot carry
+    let mimeType: string | null = sniffImageMime(tex.data);
+    if (mimeType === null && options?.originalTextures) {
+      mimeType = originalImageMime(tex.data);
+    }
+    if (mimeType === null) {
+      warnSkippedTexture(options, skippedTextures, materialName, tex, tex.data);
+      return null;
+    }
     const head = Array.from(tex.data.subarray(0, 16)).join(',');
     const key = `${tex.data.length}:${head}`;
     const hit = textureIndexByKey.get(key);

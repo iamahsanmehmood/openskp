@@ -1,10 +1,13 @@
 #pragma once
 
 #include <filesystem>
+#include <functional>
+#include <string_view>
 
 #include <openskp/export.hpp>
 #include <openskp/instanced_scene.hpp>
 #include <openskp/model.hpp>
+#include <openskp/observability.hpp>
 
 namespace openskp {
 
@@ -15,6 +18,10 @@ struct InstancedGlbOptions {
   /// GlbOptions::textures: photographic textures can multiply the file
   /// size, and the geometry alone is what most callers are after.
   bool textures{false};
+  /// Optional log callback receiving warnings (for example, when a
+  /// non-PNG/JPEG texture kept via ParseOptions::original_textures is omitted
+  /// from the GLB).
+  std::function<void(LogLevel, std::string_view)> log;
 };
 
 /// Serialize an InstancedScene as a binary glTF 2.0 (GLB) asset,

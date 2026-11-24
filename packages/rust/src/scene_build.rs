@@ -589,7 +589,7 @@ pub fn build_scene_raw(mut p: RawParsed, o: &ParseOptions) -> Result<Scene, SkpP
             pages,
             ..Default::default()
         },
-        textures: TextureRegistry::default(),
+        textures: TextureRegistry::from_options(o),
         materials: BTreeMap::new(),
         mesh_counter: 0,
         instance_counter: 0,

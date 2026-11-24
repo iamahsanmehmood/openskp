@@ -71,6 +71,7 @@ Scene build_scene_raw(RawParsed&& p, const ParseOptions& o) {
   // several materials, and re-embedding it per material would multiply
   // the export size for nothing.
   std::map<std::string, std::size_t> texture_index_by_key;
+  std::set<std::pair<std::string, std::string>> skipped_textures;
   auto texture_index_for =
       [&](const std::shared_ptr<RawMaterial>& mat) -> std::optional<std::size_t> {
     if (!mat || !mat->texture || !mat->texture->data || mat->texture->data->empty()) {
@@ -78,7 +79,11 @@ Scene build_scene_raw(RawParsed&& p, const ParseOptions& o) {
     }
     const auto& data = *mat->texture->data;
     auto mime_type = sniff_image_mime(data);
-    if (!mime_type) return std::nullopt;  // a format glTF cannot carry
+    if (!mime_type && o.original_textures) mime_type = original_image_mime(data);
+    if (!mime_type) {
+      warn_skipped_texture(o, skipped_textures, mat);
+      return std::nullopt;
+    }
     // length plus a short byte prefix is enough to tell real images apart
     // without hashing megabytes on every face
     std::ostringstream key_stream;

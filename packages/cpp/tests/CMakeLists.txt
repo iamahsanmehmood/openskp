@@ -55,6 +55,7 @@ add_executable(
   obj_export_test.cpp
   obj_material_names_test.cpp
   observability_test.cpp
+  original_textures_test.cpp
   pages_dimensions_test.cpp
   parser_limits_test.cpp
   parser_test.cpp

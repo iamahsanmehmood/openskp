@@ -61,6 +61,15 @@ namespace OpenSkp
         /// <see cref="SkpModel.FaceBackColor"/>), while <c>"tag"</c> uses the
         /// colour of the face's tag as one double-sided primitive.</summary>
         public string UnpaintedFaces { get; set; } = "style";
+
+        /// <summary>Keep a texture that is not PNG or JPEG in
+        /// <see cref="Scene.Textures"/> and <see cref="InstancedScene.Textures"/>
+        /// in its own format (<c>image/tiff</c>, <c>image/gif</c>,
+        /// <c>image/bmp</c>, <c>image/x-tga</c>, <c>image/webp</c>,
+        /// <c>image/vnd.adobe.photoshop</c>, <c>image/vnd.ms-dds</c>,
+        /// <c>image/jp2</c>) instead of leaving it out with a warning. Off by
+        /// default because glTF carries only PNG and JPEG.</summary>
+        public bool OriginalTextures { get; set; }
     }
 
     /// <summary>Shared tuning constants for progress reporting.</summary>

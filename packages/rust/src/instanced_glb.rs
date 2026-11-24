@@ -2,20 +2,55 @@
 //! `instanced_glb.cpp`).
 
 use std::collections::HashMap;
+use std::fmt;
 use std::path::Path;
+use std::sync::Arc;
 
 use crate::glb::{
-    check_finite, document, material_json, validate_primitive, write_glb, GlbError, GlbResult,
-    GltfBuilder,
+    check_finite, document, filter_gltf_textures, material_json, validate_primitive, write_glb,
+    GlbError, GlbResult, GltfBuilder,
 };
 use crate::instanced_scene::{InstancedNode, InstancedScene, IDENTITY_GLTF};
 use crate::json_export::JsonValue;
+use crate::observability::{LogFn, LogLevel};
 
 /// Options for [`to_instanced_glb`] / [`export_instanced_glb`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Clone, Default)]
 pub struct InstancedGlbOptions {
     /// Embed the scene's texture images (see `GlbOptions::textures`).
     pub textures: bool,
+    /// Optional log callback receiving warnings (for example, when a
+    /// non-PNG/JPEG texture kept via [`crate::ParseOptions::original_textures`]
+    /// is omitted from the GLB).
+    pub log: Option<Arc<LogFn>>,
+}
+
+impl InstancedGlbOptions {
+    /// Default options (`textures: false`, no log callback).
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Sets whether texture images are embedded in the GLB.
+    pub fn with_textures(mut self, embed: bool) -> Self {
+        self.textures = embed;
+        self
+    }
+
+    /// Sets the log callback.
+    pub fn with_log(mut self, f: impl Fn(LogLevel, &str) + Send + Sync + 'static) -> Self {
+        self.log = Some(Arc::new(f));
+        self
+    }
+}
+
+impl fmt::Debug for InstancedGlbOptions {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("InstancedGlbOptions")
+            .field("textures", &self.textures)
+            .field("log", &self.log.is_some())
+            .finish()
+    }
 }
 
 fn validate_scene(scene: &InstancedScene) -> GlbResult<()> {
@@ -114,10 +149,12 @@ pub fn to_instanced_glb(
     options: &InstancedGlbOptions,
 ) -> GlbResult<Vec<u8>> {
     validate_scene(scene)?;
+    let (kept_textures, remap) =
+        filter_gltf_textures(&scene.textures, options.textures, options.log.as_ref());
     let materials: Vec<JsonValue> = scene
         .gltf_materials
         .iter()
-        .map(|m| material_json(m, options.textures))
+        .map(|m| material_json(m, options.textures, &remap))
         .collect();
 
     let mut builder = GltfBuilder::new();
@@ -161,8 +198,8 @@ pub fn to_instanced_glb(
         meshes.push(mesh);
     }
 
-    let textures = if options.textures && !scene.textures.is_empty() {
-        Some(builder.add_textures(&scene.textures)?)
+    let textures = if !kept_textures.is_empty() {
+        Some(builder.add_textures(&kept_textures)?)
     } else {
         None
     };

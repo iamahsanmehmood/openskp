@@ -1,6 +1,12 @@
 import { transformPoint, multiplyMatrices } from './transforms';
 import { extractDynamicProperties, extractAttributeDictionaries, isGenericDefinitionName, findNameOverride, stringifyVffAttrValue, ParsedDefinition, VffAttrValue } from './geometry';
-import { buildLocalFaceGroups, unpaintedStyleColors, type UnpaintedFacesMode } from './face-groups';
+import {
+  buildLocalFaceGroups,
+  originalImageMime,
+  unpaintedStyleColors,
+  warnSkippedTexture,
+  type UnpaintedFacesMode,
+} from './face-groups';
 import { SkpParseError } from './errors';
 import { ParseOptions, PROGRESS_INTERVAL, emitLog, emitProgress } from './observability';
 import { RawPage, RawDimension } from './pages-dimensions';
@@ -551,6 +557,15 @@ export interface SceneOptions {
    * colour.
    */
   unpaintedFaces?: UnpaintedFacesMode;
+  /**
+   * Keep a texture that is not PNG or JPEG in {@link SkpScene.textures} and
+   * {@link InstancedScene.textures} in its own format (`image/tiff`,
+   * `image/gif`, `image/bmp`, `image/x-tga`, `image/webp`,
+   * `image/vnd.adobe.photoshop`, `image/vnd.ms-dds`, `image/jp2`), instead of
+   * leaving it out with a warning. Off by default because glTF carries only
+   * PNG and JPEG.
+   */
+  originalTextures?: boolean;
 }
 
 export type { UnpaintedFacesMode };
@@ -585,8 +600,12 @@ export interface SceneTexture {
   /** The image file's raw bytes, exactly as they were stored in the .skp. */
   data: Uint8Array;
   /** Sniffed from the bytes, not from `filename`: SketchUp records the
-   * authoring machine's path, whose extension can disagree with the content. */
-  mimeType: 'image/png' | 'image/jpeg';
+   * authoring machine's path, whose extension can disagree with the content.
+   * `image/png` or `image/jpeg` unless built with `originalTextures: true`,
+   * which also keeps `image/tiff`, `image/gif`, `image/bmp`, `image/x-tga`,
+   * `image/webp`, `image/vnd.adobe.photoshop`, `image/vnd.ms-dds`, and
+   * `image/jp2`. */
+  mimeType: string;
   /** The material's texture path as recorded in the file. Informational: it
    * is usually an absolute path on the machine that authored the model. */
   filename: string;
@@ -923,11 +942,18 @@ export function buildSceneFromParsed(
   // export size for nothing.
   const textures: SceneTexture[] = [];
   const textureIndexByKey = new Map<string, number>();
+  const skippedTextures = new Set<string>();
 
-  function textureIndexFor(tex: Texture | null | undefined): number | null {
+  function textureIndexFor(tex: Texture | null | undefined, materialName?: string): number | null {
     if (!tex || !tex.data || tex.data.length === 0) return null;
-    const mimeType = sniffImageMime(tex.data);
-    if (mimeType === null) return null; // a format glTF cannot carry
+    let mimeType: string | null = sniffImageMime(tex.data);
+    if (mimeType === null && options?.originalTextures) {
+      mimeType = originalImageMime(tex.data);
+    }
+    if (mimeType === null) {
+      warnSkippedTexture(options, skippedTextures, materialName, tex, tex.data);
+      return null;
+    }
     // length plus a short byte prefix is enough to tell real images apart
     // without hashing megabytes on every face
     const head = Array.from(tex.data.subarray(0, 16)).join(',');

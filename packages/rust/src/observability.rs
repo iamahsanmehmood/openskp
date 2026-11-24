@@ -69,6 +69,12 @@ pub struct ParseOptions {
     /// `"style"` (default) gives unpainted faces the model's front and back
     /// face colours; `"tag"` gives them their tag's colour.
     pub unpainted_faces: String,
+    /// Keeps a texture that is not PNG or JPEG in `Scene::textures` and
+    /// `InstancedScene::textures` in its own format (`image/tiff`, `image/gif`,
+    /// `image/bmp`, `image/x-tga`, `image/webp`, `image/vnd.adobe.photoshop`,
+    /// `image/vnd.ms-dds`, `image/jp2`) instead of leaving it out with a
+    /// warning. Off by default because glTF carries only PNG and JPEG.
+    pub original_textures: bool,
 }
 
 impl Default for ParseOptions {
@@ -77,6 +83,7 @@ impl Default for ParseOptions {
             progress: None,
             log: None,
             unpainted_faces: "style".to_owned(),
+            original_textures: false,
         }
     }
 }
@@ -104,6 +111,12 @@ impl ParseOptions {
         self.unpainted_faces = mode.into();
         self
     }
+
+    /// Sets whether non-PNG/JPEG textures are kept in their own format.
+    pub fn with_original_textures(mut self, keep: bool) -> Self {
+        self.original_textures = keep;
+        self
+    }
 }
 
 impl fmt::Debug for ParseOptions {
@@ -112,6 +125,7 @@ impl fmt::Debug for ParseOptions {
             .field("progress", &self.progress.is_some())
             .field("log", &self.log.is_some())
             .field("unpainted_faces", &self.unpainted_faces)
+            .field("original_textures", &self.original_textures)
             .finish()
     }
 }
