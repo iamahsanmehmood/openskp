@@ -180,36 +180,12 @@ namespace OpenSkp
             // models with tens or hundreds of thousands of placed instances.
             var pathUpdates = new Dictionary<string, (Dictionary<string, string> Props, string Name, Dictionary<string, Dictionary<string, string>> AttrDicts)>();
 
-            // Textures deduplicated by bytes: the same image routinely backs
-            // several materials, and re-embedding it per material would
-            // multiply the export size for nothing.
+            // Textures deduplicated by full content (with an object-identity
+            // fast path per face): the same image routinely backs several
+            // materials, while equal-size PNGs/TIFFs share their 16-byte header
+            // and must stay distinct.
             var textures = new List<SceneTexture>();
-            var textureIndexByKey = new Dictionary<string, int>();
-            var skippedTextures = new HashSet<(string, string)>();
-
-            int? TextureIndexFor(Geometry.RawTexture? tex, string? materialName)
-            {
-                if (tex?.Data == null || tex.Data.Length == 0) return null;
-                var mimeType = FaceGroups.SniffImageMime(tex.Data);
-                if (mimeType == null && options?.OriginalTextures == true)
-                {
-                    mimeType = FaceGroups.OriginalImageMime(tex.Data);
-                }
-                if (mimeType == null)
-                {
-                    FaceGroups.WarnSkippedTexture(options, skippedTextures, materialName, tex, tex.Data);
-                    return null;
-                }
-                // length plus a short byte prefix is enough to tell real
-                // images apart without hashing megabytes on every face
-                var head = BitConverter.ToString(tex.Data, 0, Math.Min(16, tex.Data.Length));
-                var key = $"{tex.Data.Length}:{head}";
-                if (textureIndexByKey.TryGetValue(key, out var hit)) return hit;
-                var idx = textures.Count;
-                textures.Add(new SceneTexture { Data = tex.Data, MimeType = mimeType, Filename = tex.Filename });
-                textureIndexByKey[key] = idx;
-                return idx;
-            }
+            var textureIndexFor = FaceGroups.CreateTextureIndexFor(textures, options);
 
             var colorToMaterialIndex = new Dictionary<((int, int, int) Color, bool DoubleSided, int? TextureIndex, double Transparency), int>();
             var gltfMaterials = new List<object>();
@@ -344,7 +320,7 @@ namespace OpenSkp
                                 ? resolved
                                 : (inheritedMaterial, (inheritedMaterial.R, inheritedMaterial.G, inheritedMaterial.B));
                         },
-                        TextureIndexFor = TextureIndexFor,
+                        TextureIndexFor = textureIndexFor,
                         FallbackColor = fallbackColor,
                         FallbackBackColor = fallbackBackColor,
                         DefinitionId = defId,

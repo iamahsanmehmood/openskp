@@ -3,7 +3,7 @@ import { reconstructLoopVertices } from './geometry';
 import type { GeometryBuilder } from './geometry';
 import { SkpParseError } from './errors';
 import { emitLog, type LogLevel, type ParseOptions } from './observability';
-import { faceUvBasis, computeFaceUv } from './model';
+import { faceUvBasis, computeFaceUv, sniffImageMime } from './model';
 import type { Material, SceneTexture, Texture } from './model';
 
 /**
@@ -451,6 +451,110 @@ export function warnSkippedTexture(
     `Texture of material ${label}${suffix} is ${fmt}, which a scene cannot carry (only PNG and JPEG): ` +
       `the material is built without its texture${hint}`
   );
+}
+
+function fnv1a32(data: Uint8Array): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < data.length; i++) {
+    h ^= data[i];
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
+}
+
+function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
+/**
+ * Returns a per-face `textureIndexFor` closure that deduplicates `textures` by
+ * full byte content, checking `Uint8Array` object identity first so repeated
+ * lookups for the same material stay O(1).
+ */
+export function createTextureIndexFor(
+  textures: SceneTexture[],
+  options: (ParseOptions & { originalTextures?: boolean }) | undefined
+): (tex: Texture | null | undefined, materialName?: string) => number | null {
+  const indexByObject = new WeakMap<Uint8Array, number>();
+  const buckets = new Map<number, number[]>();
+  const skippedTextures = new Set<string>();
+
+  return function textureIndexFor(
+    tex: Texture | null | undefined,
+    materialName?: string
+  ): number | null {
+    if (!tex || !tex.data || tex.data.length === 0) return null;
+    const data = tex.data;
+    const cached = indexByObject.get(data);
+    if (cached !== undefined) return cached;
+
+    let mimeType: string | null = sniffImageMime(data);
+    if (mimeType === null && options?.originalTextures) {
+      mimeType = originalImageMime(data);
+    }
+    if (mimeType === null) {
+      warnSkippedTexture(options, skippedTextures, materialName, tex, data);
+      return null;
+    }
+
+    const hash = fnv1a32(data);
+    let bucket = buckets.get(hash);
+    if (bucket) {
+      for (const cand of bucket) {
+        if (bytesEqual(textures[cand].data, data)) {
+          indexByObject.set(data, cand);
+          return cand;
+        }
+      }
+    } else {
+      bucket = [];
+      buckets.set(hash, bucket);
+    }
+
+    const idx = textures.length;
+    textures.push({ data, mimeType, filename: tex.filename });
+    bucket.push(idx);
+    indexByObject.set(data, idx);
+    return idx;
+  };
+}
+
+/**
+ * Assigns a deterministic per-run integer ID to each distinct `Uint8Array`
+ * byte sequence (identity fast path + full-byte comparison) without side
+ * effects on `scene.textures`.
+ */
+export function createByteContentKeyer(): (data: Uint8Array) => number {
+  const idByObject = new WeakMap<Uint8Array, number>();
+  const buckets = new Map<number, number[]>();
+  const seen: Uint8Array[] = [];
+
+  return (data: Uint8Array): number => {
+    const cached = idByObject.get(data);
+    if (cached !== undefined) return cached;
+    const hash = fnv1a32(data);
+    let bucket = buckets.get(hash);
+    if (bucket) {
+      for (const cand of bucket) {
+        if (bytesEqual(seen[cand], data)) {
+          idByObject.set(data, cand);
+          return cand;
+        }
+      }
+    } else {
+      bucket = [];
+      buckets.set(hash, bucket);
+    }
+    const id = seen.length;
+    seen.push(data);
+    bucket.push(id);
+    idByObject.set(data, id);
+    return id;
+  };
 }
 
 /**

@@ -82,6 +82,9 @@ void warn_skipped_texture(const ParseOptions& options,
                           std::set<std::pair<std::string, std::string>>& warned,
                           const std::shared_ptr<RawMaterial>& material);
 
+std::function<std::optional<std::size_t>(const std::shared_ptr<RawMaterial>&)>
+make_texture_index_for(std::vector<SceneTexture>& textures, const ParseOptions& options);
+
 struct FilteredGltfTextures {
   std::vector<const SceneTexture*> textures;
   std::vector<std::optional<int>> remap;

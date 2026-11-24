@@ -67,38 +67,10 @@ Scene build_scene_raw(RawParsed&& p, const ParseOptions& o) {
                                    std::map<std::string, std::map<std::string, std::string>>>>
       path_updates;
 
-  // Textures deduplicated by bytes: the same image routinely backs
-  // several materials, and re-embedding it per material would multiply
-  // the export size for nothing.
-  std::map<std::string, std::size_t> texture_index_by_key;
-  std::set<std::pair<std::string, std::string>> skipped_textures;
-  auto texture_index_for =
-      [&](const std::shared_ptr<RawMaterial>& mat) -> std::optional<std::size_t> {
-    if (!mat || !mat->texture || !mat->texture->data || mat->texture->data->empty()) {
-      return std::nullopt;
-    }
-    const auto& data = *mat->texture->data;
-    auto mime_type = sniff_image_mime(data);
-    if (!mime_type && o.original_textures) mime_type = original_image_mime(data);
-    if (!mime_type) {
-      warn_skipped_texture(o, skipped_textures, mat);
-      return std::nullopt;
-    }
-    // length plus a short byte prefix is enough to tell real images apart
-    // without hashing megabytes on every face
-    std::ostringstream key_stream;
-    key_stream << data.size() << ':';
-    for (std::size_t i = 0; i < data.size() && i < 16; ++i) {
-      key_stream << std::hex << static_cast<int>(data[i]);
-    }
-    const auto key = key_stream.str();
-    auto found = texture_index_by_key.find(key);
-    if (found != texture_index_by_key.end()) return found->second;
-    const auto idx = scene.textures.size();
-    scene.textures.push_back(SceneTexture{data, *mime_type, mat->texture->filename});
-    texture_index_by_key.emplace(key, idx);
-    return idx;
-  };
+  // Textures deduplicated by full content (with a pointer-identity fast path
+  // per face): the same image routinely backs several materials, while
+  // equal-size PNGs/TIFFs share their 16-byte header and must stay distinct.
+  auto texture_index_for = make_texture_index_for(scene.textures, o);
   std::function<std::vector<InstanceNode>(const GeometryBuilder&, const std::string&,
                                           std::optional<EntityId>, const std::vector<double>&,
                                           const std::string&, const std::string&,

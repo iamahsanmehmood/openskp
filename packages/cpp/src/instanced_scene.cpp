@@ -122,34 +122,8 @@ InstancedScene build_instanced_scene_raw(RawParsed&& p, const ParseOptions& o) {
   std::size_t instance_counter = 0;
   std::set<EntityId> active;
 
-  // Textures deduplicated by bytes, exactly as the baked path does.
-  std::map<std::string, std::size_t> texture_index_by_key;
-  std::set<std::pair<std::string, std::string>> skipped_textures;
-  auto texture_index_for =
-      [&](const std::shared_ptr<RawMaterial>& mat) -> std::optional<std::size_t> {
-    if (!mat || !mat->texture || !mat->texture->data || mat->texture->data->empty()) {
-      return std::nullopt;
-    }
-    const auto& data = *mat->texture->data;
-    auto mime_type = sniff_image_mime(data);
-    if (!mime_type && o.original_textures) mime_type = original_image_mime(data);
-    if (!mime_type) {
-      warn_skipped_texture(o, skipped_textures, mat);
-      return std::nullopt;
-    }
-    std::ostringstream key_stream;
-    key_stream << data.size() << ':';
-    for (std::size_t i = 0; i < data.size() && i < 16; ++i) {
-      key_stream << std::hex << static_cast<int>(data[i]);
-    }
-    const auto key = key_stream.str();
-    auto found = texture_index_by_key.find(key);
-    if (found != texture_index_by_key.end()) return found->second;
-    const auto idx = scene.textures.size();
-    scene.textures.push_back(SceneTexture{data, *mime_type, mat->texture->filename});
-    texture_index_by_key.emplace(key, idx);
-    return idx;
-  };
+  // Textures deduplicated by full content, matching scene.cpp.
+  auto texture_index_for = make_texture_index_for(scene.textures, o);
 
   // Materials deduped globally (same key that groups faces, matching
   // scene.cpp's own reuse of GroupKey for both purposes).

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 
 namespace OpenSkp
 {
@@ -185,6 +186,78 @@ namespace OpenSkp
                 SkpLogLevel.Warning,
                 $"Texture of material {label}{suffix} is {fmt}, which a scene cannot carry (only PNG and JPEG): " +
                 $"the material is built without its texture{hint}");
+        }
+
+        private sealed class ByteArrayIdentityComparer : IEqualityComparer<byte[]>
+        {
+            public static readonly ByteArrayIdentityComparer Instance = new ByteArrayIdentityComparer();
+            public bool Equals(byte[]? x, byte[]? y) => ReferenceEquals(x, y);
+            public int GetHashCode(byte[] obj) => RuntimeHelpers.GetHashCode(obj);
+        }
+
+        private sealed class ByteArrayContentComparer : IEqualityComparer<byte[]>
+        {
+            public static readonly ByteArrayContentComparer Instance = new ByteArrayContentComparer();
+
+            public bool Equals(byte[]? x, byte[]? y)
+            {
+                if (ReferenceEquals(x, y)) return true;
+                if (x == null || y == null || x.Length != y.Length) return false;
+                for (int i = 0; i < x.Length; i++)
+                {
+                    if (x[i] != y[i]) return false;
+                }
+                return true;
+            }
+
+            public int GetHashCode(byte[] obj)
+            {
+                unchecked
+                {
+                    uint h = 2166136261u;
+                    for (int i = 0; i < obj.Length; i++)
+                    {
+                        h = (h ^ obj[i]) * 16777619u;
+                    }
+                    return (int)h;
+                }
+            }
+        }
+
+        internal static Func<Geometry.RawTexture?, string?, int?> CreateTextureIndexFor(
+            List<SceneTexture> textures,
+            SkpParseOptions? options)
+        {
+            var indexByIdentity = new Dictionary<byte[], int>(ByteArrayIdentityComparer.Instance);
+            var indexByContent = new Dictionary<byte[], int>(ByteArrayContentComparer.Instance);
+            var skippedTextures = new HashSet<(string, string)>();
+
+            return (Geometry.RawTexture? tex, string? materialName) =>
+            {
+                if (tex?.Data == null || tex.Data.Length == 0) return null;
+                var data = tex.Data;
+                if (indexByIdentity.TryGetValue(data, out var cached)) return cached;
+
+                var mimeType = SniffImageMime(data);
+                if (mimeType == null && options?.OriginalTextures == true)
+                {
+                    mimeType = OriginalImageMime(data);
+                }
+                if (mimeType == null)
+                {
+                    WarnSkippedTexture(options, skippedTextures, materialName, tex, data);
+                    return null;
+                }
+
+                if (!indexByContent.TryGetValue(data, out var idx))
+                {
+                    idx = textures.Count;
+                    textures.Add(new SceneTexture { Data = data, MimeType = mimeType, Filename = tex.Filename });
+                    indexByContent[data] = idx;
+                }
+                indexByIdentity[data] = idx;
+                return idx;
+            };
         }
 
         internal static (List<SceneTexture> Textures, List<object> Materials) FilterGltfTextures(

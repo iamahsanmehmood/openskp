@@ -450,11 +450,14 @@ def build_scene(
     # more than intended - see openskp#240).
     path_updates: Dict[str, Tuple[Dict[str, str], str, Dict[str, Dict[str, str]]]] = {}
 
-    # Textures deduplicated by bytes: the same image routinely backs
-    # several materials, and re-embedding it per material would multiply
-    # the export size for nothing.
+    # Textures deduplicated by full content: the same image routinely backs
+    # several materials, while equal-size PNGs/TIFFs share their 16-byte
+    # header and must stay distinct. Look up each bytes object by identity
+    # first so per-face calls stay O(1) after the first sight.
     textures: List[SceneTexture] = []
-    texture_index_by_key: Dict[str, int] = {}
+    texture_index_by_id: Dict[int, int] = {}
+    texture_index_by_bytes: Dict[bytes, int] = {}
+    kept_data_refs: List[Any] = []
     skipped_textures: set = set()
 
     def texture_index_for(tex: Optional[Dict[str, Any]], material_name: Optional[str] = None) -> Optional[int]:
@@ -463,6 +466,9 @@ def build_scene(
         data = tex.get("data")
         if not data:
             return None
+        hit = texture_index_by_id.get(id(data))
+        if hit is not None:
+            return hit
         mime_type = _sniff_image_mime(data)
         if mime_type is None and original_textures:
             mime_type = _original_image_mime(data)
@@ -470,15 +476,14 @@ def build_scene(
             # a format glTF cannot carry: leave it out, but say so
             _warn_skipped_texture(logger, skipped_textures, material_name, tex, data)
             return None
-        # length plus a short byte prefix is enough to tell real images
-        # apart without hashing megabytes on every face
-        key = f"{len(data)}:{data[:16].hex()}"
-        hit = texture_index_by_key.get(key)
-        if hit is not None:
-            return hit
-        idx = len(textures)
-        textures.append(SceneTexture(data=data, mime_type=mime_type, filename=tex.get("filename", "")))
-        texture_index_by_key[key] = idx
+        data_bytes = data if isinstance(data, bytes) else bytes(data)
+        idx = texture_index_by_bytes.get(data_bytes)
+        if idx is None:
+            idx = len(textures)
+            textures.append(SceneTexture(data=data_bytes, mime_type=mime_type, filename=tex.get("filename", "")))
+            texture_index_by_bytes[data_bytes] = idx
+        kept_data_refs.append(data)
+        texture_index_by_id[id(data)] = idx
         return idx
 
     color_to_material_index: Dict[Tuple[Any, ...], int] = {}
