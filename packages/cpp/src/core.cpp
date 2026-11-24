@@ -472,6 +472,11 @@ std::string decode_xml_entities(const std::string& value) {
   return out;
 }
 
+static std::optional<ByteBuffer> read_vff_zip(
+    const ByteBuffer& data, std::size_t off, RawParsed& p,
+    std::vector<std::pair<std::string, std::shared_ptr<RawMaterial>>>& raw_materials,
+    const ParseOptions& o);
+
 RawParsed full_parse(const ByteBuffer& data, const ParseOptions& o) {
   emit_log(o, LogLevel::information, "Parsing buffer (" + std::to_string(data.size()) + " bytes)");
   if (!valid_header(data))
@@ -485,38 +490,35 @@ RawParsed full_parse(const ByteBuffer& data, const ParseOptions& o) {
   auto off = zip_offset(data);
   if (off == std::string::npos)
     throw SkpParseError("No ZIP container found", ParseStage::zip_extract);
-  Zip zip(data, off);
   std::vector<std::pair<std::string, std::shared_ptr<RawMaterial>>> raw_materials;
-  for (auto& n : zip.names)
-    if (n.rfind("materials/", 0) == 0 && n.size() >= 12 &&
-        n.substr(n.size() - 12) == "material.xml") {
-      if (auto b = zip.get(n))
-        if (auto m = material_xml(zip, n, *b)) {
-          auto slash = n.find('/', 10);
-          auto folder = n.substr(10, slash == std::string::npos ? std::string::npos : slash - 10);
-          raw_materials.emplace_back(std::move(folder), std::move(m));
-        }
-    }
-  for (auto& n : zip.names)
-    if (n.rfind("styles/", 0) == 0 && n.size() >= 9 && n.substr(n.size() - 9) == "style.xml")
-      if (auto b = zip.get(n))
-        if (auto s = style_xml(*b)) {
-          if (n.size() > 17) s->folder = n.substr(7, n.size() - 17);  // styles/<folder>/style.xml
-          // A style's own images sit in its folder ("./2.jpg"); the current style's
-          // watermark images are at the ZIP root ("watermarks/Watermark1.jpg").
-          for (auto& w : s->watermarks) {
-            auto path = w.image_path;
-            while (path.rfind("./", 0) == 0) path.erase(0, 2);
-            while (!path.empty() && path[0] == '/') path.erase(0, 1);
-            if (path.empty()) continue;
-            for (const auto& candidate : {"styles/" + s->folder + "/" + path, path})
-              if ((w.image = zip.get(candidate))) break;
-          }
-          p.styles.push_back(std::move(*s));
-        }
-  auto model = zip.get("model.dat");
-  if (!model) throw SkpParseError("model.dat not found in ZIP container", ParseStage::zip_extract);
-  auto hs = model_records(*model);
+  std::optional<ByteBuffer> model;
+  try {
+    model = read_vff_zip(data, off, p, raw_materials, o);
+  } catch (const SkpParseError&) {
+    throw;
+  } catch (const std::bad_alloc&) {
+    throw;
+  } catch (const std::exception& e) {
+    throw SkpParseError(std::string("Invalid or damaged ZIP container: ") + e.what(),
+                        ParseStage::zip_extract, {}, {}, {}, {}, {}, std::current_exception());
+  } catch (...) {
+    throw SkpParseError("Invalid or damaged ZIP container", ParseStage::zip_extract, {}, {}, {}, {},
+                        {}, std::current_exception());
+  }
+  std::vector<TlvHeader> hs;
+  try {
+    hs = model_records(*model);
+  } catch (const SkpParseError&) {
+    throw;
+  } catch (const std::bad_alloc&) {
+    throw;
+  } catch (const std::exception& e) {
+    throw SkpParseError(std::string("Failed while scanning TLV headers: ") + e.what(),
+                        ParseStage::tlv_walk, {}, {}, {}, {}, {}, std::current_exception());
+  } catch (...) {
+    throw SkpParseError("Failed while scanning TLV headers", ParseStage::tlv_walk, {}, {}, {}, {},
+                        {}, std::current_exception());
+  }
 
   std::map<std::string, Vec3> vertex_positions;
   std::map<std::string, std::vector<double>> instance_world;
@@ -567,6 +569,8 @@ RawParsed full_parse(const ByteBuffer& data, const ParseOptions& o) {
       }
     } catch (const SkpParseError&) {
       throw;
+    } catch (const std::bad_alloc&) {
+      throw;
     } catch (...) {
       throw SkpParseError("Failed while processing record", ParseStage::tlv_walk, i, total, tag,
                           hs[i].offset, {}, std::current_exception());
@@ -579,16 +583,10 @@ RawParsed full_parse(const ByteBuffer& data, const ParseOptions& o) {
     s.modified = s.active && current.modified;
     s.working_copy = !current.working_copy.empty() && s.folder == current.working_copy;
   }
-  // Units (meta/meta.dat) - VFF-only; legacy files carry no equivalent
-  // container.
-  try {
-    if (auto meta = zip.get("meta/meta.dat")) p.units = read_meta_units(*meta);
-  } catch (...) {
-    p.units = std::nullopt;
-    emit_log(o, LogLevel::debug, "Failed to read units from meta/meta.dat");
-  }
   try {
     p.pages = parse_pages(page_node);
+  } catch (const std::bad_alloc&) {
+    throw;
   } catch (...) {
     emit_log(o, LogLevel::debug, "Failed to parse pages");
   }
@@ -598,11 +596,15 @@ RawParsed full_parse(const ByteBuffer& data, const ParseOptions& o) {
     compose_instance_world(p.root, p.definitions, instance_world);
     p.dimensions = parse_dimensions(*model, vertex_positions, instance_world);
     assign_vff_annotations(*model, hs, vertex_positions, instance_world, p);
+  } catch (const std::bad_alloc&) {
+    throw;
   } catch (...) {
     emit_log(o, LogLevel::debug, "Failed to parse annotations");
   }
   try {
     assign_vff_sections(*model, hs, p);
+  } catch (const std::bad_alloc&) {
+    throw;
   } catch (...) {
     emit_log(o, LogLevel::debug, "Failed to parse section planes");
   }
@@ -632,7 +634,13 @@ RawParsed full_parse(const ByteBuffer& data, const ParseOptions& o) {
     auto folder = p.materials_by_folder.find(item.second);
     if (folder != p.materials_by_folder.end()) folder->second->native_pid = item.first;
   }
-  p.face_colors = model_face_colors(*model);
+  try {
+    p.face_colors = model_face_colors(*model);
+  } catch (const std::bad_alloc&) {
+    throw;
+  } catch (...) {
+    emit_log(o, LogLevel::debug, "Failed to parse model face colours");
+  }
   model.reset();
   if (!p.layer_id_to_name.count(1)) p.layer_id_to_name[1] = "Layer0";
   if (!p.layer_colors.count("Layer0")) {
@@ -643,5 +651,52 @@ RawParsed full_parse(const ByteBuffer& data, const ParseOptions& o) {
   emit_log(o, LogLevel::information,
            "Parse complete: " + std::to_string(p.definitions.size()) + " defs");
   return p;
+}
+
+static std::optional<ByteBuffer> read_vff_zip(
+    const ByteBuffer& data, std::size_t off, RawParsed& p,
+    std::vector<std::pair<std::string, std::shared_ptr<RawMaterial>>>& raw_materials,
+    const ParseOptions& o) {
+  Zip zip(data, off);
+  for (auto& n : zip.names)
+    if (n.rfind("materials/", 0) == 0 && n.size() >= 12 &&
+        n.substr(n.size() - 12) == "material.xml") {
+      if (auto b = zip.get(n))
+        if (auto m = material_xml(zip, n, *b)) {
+          auto slash = n.find('/', 10);
+          auto folder = n.substr(10, slash == std::string::npos ? std::string::npos : slash - 10);
+          raw_materials.emplace_back(std::move(folder), std::move(m));
+        }
+    }
+  for (auto& n : zip.names)
+    if (n.rfind("styles/", 0) == 0 && n.size() >= 9 && n.substr(n.size() - 9) == "style.xml")
+      if (auto b = zip.get(n))
+        if (auto s = style_xml(*b)) {
+          if (n.size() > 17) s->folder = n.substr(7, n.size() - 17);  // styles/<folder>/style.xml
+          // A style's own images sit in its folder ("./2.jpg"); the current style's
+          // watermark images are at the ZIP root ("watermarks/Watermark1.jpg").
+          for (auto& w : s->watermarks) {
+            auto path = w.image_path;
+            while (path.rfind("./", 0) == 0) path.erase(0, 2);
+            while (!path.empty() && path[0] == '/') path.erase(0, 1);
+            if (path.empty()) continue;
+            for (const auto& candidate : {"styles/" + s->folder + "/" + path, path})
+              if ((w.image = zip.get(candidate))) break;
+          }
+          p.styles.push_back(std::move(*s));
+        }
+  // Units (meta/meta.dat) - VFF-only; legacy files carry no equivalent
+  // container.
+  try {
+    if (auto meta = zip.get("meta/meta.dat")) p.units = read_meta_units(*meta);
+  } catch (const std::bad_alloc&) {
+    throw;
+  } catch (...) {
+    p.units = std::nullopt;
+    emit_log(o, LogLevel::debug, "Failed to read units from meta/meta.dat");
+  }
+  auto model = zip.get("model.dat");
+  if (!model) throw SkpParseError("model.dat not found in ZIP container", ParseStage::zip_extract);
+  return model;
 }
 }  // namespace openskp

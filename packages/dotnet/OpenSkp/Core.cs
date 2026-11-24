@@ -67,12 +67,174 @@ namespace OpenSkp
                 throw new SkpParseException("No ZIP container found", stage: "zip_extract");
             }
 
-            using var zip = Vff.OpenZip(data, pkPos);
-
             var layerColors = new Dictionary<string, (int, int, int)>();
             var layerHidden = new Dictionary<string, bool>();
             var materials = new Dictionary<string, Geometry.RawMaterial>();
             var materialsByFolder = new Dictionary<string, Geometry.RawMaterial>();
+            List<(string Folder, Geometry.RawMaterial Mat)> rawMaterialEntries;
+            List<Geometry.RawStyle> styles;
+            ChunkedBuffer modelDat;
+            string? units;
+            try
+            {
+                (rawMaterialEntries, styles, modelDat, units) = ReadVffZip(data, pkPos, materials.Count, options);
+            }
+            catch (Exception e) when (!(e is SkpParseException) && !(e is OutOfMemoryException))
+            {
+                throw new SkpParseException($"Invalid or damaged ZIP container: {e.Message}", stage: "zip_extract", innerException: e);
+            }
+            Observability.Log(options, SkpLogLevel.Debug, $"Read model.dat: {modelDat.Length} bytes");
+
+            // Walk the TLV tree one top-level record at a time (instead of
+            // building the whole file's tree at once) so peak memory is
+            // bounded by the single largest definition/layer-manager/
+            // material-manager/root block, not by the file's total node
+            // count. Real production files can have 100k+ separate
+            // component definitions; materializing all of them
+            // simultaneously is what actually exhausts memory on large
+            // files - not the (comparatively modest, ~1x) cost of
+            // decompressing model.dat itself.
+            var layerIdToName = new Dictionary<long, string>();
+            var materialIdToName = new Dictionary<long, string>();
+            var defsDictRaw = new Dictionary<long, Geometry.RawDefinition>();
+            var rootBuilder = new GeometryBuilder();
+            var vertexPositions = new Dictionary<string, (double X, double Y, double Z)>();
+            var instanceWorld = new Dictionary<string, List<double>?>();
+            TlvNode? pageNode = null;
+
+            foreach (var rec in Tlv.IterTopLevelLazy(modelDat, 0, modelDat.Length, Tlv.ContainerTags))
+            {
+                var el = rec.Node;
+                try
+                {
+                    var single = new List<TlvNode> { el };
+                    Geometry.CollectLayers(single, layerIdToName, layerHidden);
+                    Geometry.CollectMaterialIds(single, materialIdToName);
+                    Geometry.CollectDefs(single, defsDictRaw);
+                    PagesDimensions.ScanVertexPositions(el, vertexPositions);
+                    PagesDimensions.ScanInstanceTransforms(el, instanceWorld);
+                    if (pageNode == null)
+                    {
+                        pageNode = PagesDimensions.FindPageNode(el);
+                    }
+                    if (el.Tag == "F601")
+                    {
+                        Geometry.ExtractGeometryFromNodes(el.Children, rootBuilder);
+                    }
+                }
+                catch (Exception e) when (!(e is SkpParseException) && !(e is OutOfMemoryException))
+                {
+                    throw new SkpParseException(
+                        $"Failed while processing top-level record: {e.Message}",
+                        stage: "tlv_walk", recordIndex: rec.Index, totalRecords: rec.Total, tag: el.Tag,
+                        innerException: e);
+                }
+                // `el` (and its whole subtree) is now unreferenced and
+                // eligible for garbage collection before the next top-level
+                // record is built.
+                if (rec.Index % ParseTuning.ProgressInterval == 0 || rec.Index == rec.Total - 1)
+                {
+                    Observability.Progress(options, "tlv_walk", rec.Index + 1, rec.Total);
+                    Observability.Log(options, SkpLogLevel.Debug, $"Processed {rec.Index + 1}/{rec.Total} top-level records");
+                }
+            }
+
+            Observability.Log(
+                options, SkpLogLevel.Information,
+                $"Parse complete: {defsDictRaw.Count} defs ({sw.Elapsed.TotalSeconds:F2}s)");
+
+            var realMaterialFolders = new HashSet<string>(materialIdToName.Values, StringComparer.Ordinal);
+            foreach (var (folderName, mat) in rawMaterialEntries)
+            {
+                if (mat.Name.StartsWith("Layer_", StringComparison.Ordinal)
+                    && !realMaterialFolders.Contains(folderName))
+                {
+                    string tagName = mat.Name.Substring(6);
+                    layerColors[tagName] = (mat.R, mat.G, mat.B);
+                    if (!layerHidden.ContainsKey(tagName))
+                    {
+                        layerHidden[tagName] = false;
+                    }
+                }
+                else
+                {
+                    materials[mat.Name] = mat;
+                    if (folderName.Length > 0)
+                    {
+                        materialsByFolder[folderName] = mat;
+                    }
+                }
+            }
+
+            if (!layerIdToName.ContainsKey(1))
+            {
+                layerIdToName[1] = "Layer0";
+            }
+            if (!layerColors.ContainsKey("Layer0"))
+            {
+                layerColors["Layer0"] = (136, 136, 136);
+            }
+            if (!layerHidden.ContainsKey("Layer0"))
+            {
+                layerHidden["Layer0"] = false;
+            }
+
+            List<RawPage> pages;
+            try
+            {
+                pages = PagesDimensions.ParsePages(pageNode);
+            }
+            catch (Exception e) when (!(e is OutOfMemoryException))
+            {
+                Observability.Log(options, SkpLogLevel.Debug, $"Failed to parse pages: {e.Message}");
+                pages = new List<RawPage>();
+            }
+
+            List<RawDimension> dimensions;
+            try
+            {
+                dimensions = PagesDimensions.ParseDimensions(modelDat, vertexPositions, instanceWorld);
+            }
+            catch (Exception e) when (!(e is OutOfMemoryException))
+            {
+                Observability.Log(options, SkpLogLevel.Debug, $"Failed to parse dimensions: {e.Message}");
+                dimensions = new List<RawDimension>();
+            }
+
+            ((int R, int G, int B) Front, (int R, int G, int B) Back)? faceColors;
+            try
+            {
+                faceColors = ModelFaceColors(modelDat);
+            }
+            catch (Exception e) when (!(e is OutOfMemoryException))
+            {
+                Observability.Log(options, SkpLogLevel.Debug, $"Failed to parse model face colours: {e.Message}");
+                faceColors = null;
+            }
+
+            return new RawParsed
+            {
+                Version = version,
+                Units = units,
+                LayerColors = layerColors,
+                LayerHidden = layerHidden,
+                LayerIdToName = layerIdToName,
+                Pages = pages,
+                Dimensions = dimensions,
+                MaterialIdToName = materialIdToName,
+                Materials = materials,
+                MaterialsByFolder = materialsByFolder,
+                Styles = styles,
+                FaceColors = faceColors,
+                DefsDict = defsDictRaw,
+                Root = new Geometry.RawDefinition { Guid = "ROOT", Name = "ROOT_MODEL", Builder = rootBuilder },
+            };
+        }
+
+        private static (List<(string Folder, Geometry.RawMaterial Mat)> RawMaterials, List<Geometry.RawStyle> Styles, ChunkedBuffer ModelDat, string? Units)
+            ReadVffZip(byte[] data, int pkPos, int initialMaterialCount, SkpParseOptions? options)
+        {
+            using var zip = Vff.OpenZip(data, pkPos);
             var rawMaterialEntries = new List<(string Folder, Geometry.RawMaterial Mat)>();
 
             foreach (var entry in zip.Entries)
@@ -130,85 +292,7 @@ namespace OpenSkp
                 }
             }
 
-            Observability.Log(options, SkpLogLevel.Debug, $"Parsed {materials.Count} materials, {styles.Count} styles");
-
-            var modelDatEntry = zip.GetEntry("model.dat");
-            if (modelDatEntry == null)
-            {
-                throw new SkpParseException("model.dat not found in ZIP container", stage: "zip_extract");
-            }
-            Vff.ValidateEntrySize(modelDatEntry);
-            // model.dat routinely decompresses to several GB on real
-            // production files (SketchUp's binary format has been observed
-            // compressing at ~10x) - well past .NET's ~2.1GB single-array
-            // limit. Read it into a ChunkedBuffer (multiple bounded
-            // segments) instead of one MemoryStream, using the ZIP entry's
-            // own recorded uncompressed length so each segment is allocated
-            // once at its exact final size.
-            ChunkedBuffer modelDat;
-            using (var s = modelDatEntry.Open())
-            {
-                modelDat = ChunkedBuffer.FromStream(s, modelDatEntry.Length);
-            }
-            Observability.Log(options, SkpLogLevel.Debug, $"Read model.dat: {modelDat.Length} bytes");
-
-            // Walk the TLV tree one top-level record at a time (instead of
-            // building the whole file's tree at once) so peak memory is
-            // bounded by the single largest definition/layer-manager/
-            // material-manager/root block, not by the file's total node
-            // count. Real production files can have 100k+ separate
-            // component definitions; materializing all of them
-            // simultaneously is what actually exhausts memory on large
-            // files - not the (comparatively modest, ~1x) cost of
-            // decompressing model.dat itself.
-            var layerIdToName = new Dictionary<long, string>();
-            var materialIdToName = new Dictionary<long, string>();
-            var defsDictRaw = new Dictionary<long, Geometry.RawDefinition>();
-            var rootBuilder = new GeometryBuilder();
-            var vertexPositions = new Dictionary<string, (double X, double Y, double Z)>();
-            var instanceWorld = new Dictionary<string, List<double>?>();
-            TlvNode? pageNode = null;
-
-            foreach (var rec in Tlv.IterTopLevelLazy(modelDat, 0, modelDat.Length, Tlv.ContainerTags))
-            {
-                var el = rec.Node;
-                try
-                {
-                    var single = new List<TlvNode> { el };
-                    Geometry.CollectLayers(single, layerIdToName, layerHidden);
-                    Geometry.CollectMaterialIds(single, materialIdToName);
-                    Geometry.CollectDefs(single, defsDictRaw);
-                    PagesDimensions.ScanVertexPositions(el, vertexPositions);
-                    PagesDimensions.ScanInstanceTransforms(el, instanceWorld);
-                    if (pageNode == null)
-                    {
-                        pageNode = PagesDimensions.FindPageNode(el);
-                    }
-                    if (el.Tag == "F601")
-                    {
-                        Geometry.ExtractGeometryFromNodes(el.Children, rootBuilder);
-                    }
-                }
-                catch (Exception e) when (!(e is SkpParseException))
-                {
-                    throw new SkpParseException(
-                        $"Failed while processing top-level record: {e.Message}",
-                        stage: "tlv_walk", recordIndex: rec.Index, totalRecords: rec.Total, tag: el.Tag,
-                        innerException: e);
-                }
-                // `el` (and its whole subtree) is now unreferenced and
-                // eligible for garbage collection before the next top-level
-                // record is built.
-                if (rec.Index % ParseTuning.ProgressInterval == 0 || rec.Index == rec.Total - 1)
-                {
-                    Observability.Progress(options, "tlv_walk", rec.Index + 1, rec.Total);
-                    Observability.Log(options, SkpLogLevel.Debug, $"Processed {rec.Index + 1}/{rec.Total} top-level records");
-                }
-            }
-
-            Observability.Log(
-                options, SkpLogLevel.Information,
-                $"Parse complete: {defsDictRaw.Count} defs ({sw.Elapsed.TotalSeconds:F2}s)");
+            Observability.Log(options, SkpLogLevel.Debug, $"Parsed {initialMaterialCount} materials, {styles.Count} styles");
 
             // Units (meta/meta.dat) - VFF-only; legacy files carry no
             // equivalent container.
@@ -235,59 +319,26 @@ namespace OpenSkp
                 }
             }
 
-            var realMaterialFolders = new HashSet<string>(materialIdToName.Values, StringComparer.Ordinal);
-            foreach (var (folderName, mat) in rawMaterialEntries)
+            var modelDatEntry = zip.GetEntry("model.dat");
+            if (modelDatEntry == null)
             {
-                if (mat.Name.StartsWith("Layer_", StringComparison.Ordinal)
-                    && !realMaterialFolders.Contains(folderName))
-                {
-                    string tagName = mat.Name.Substring(6);
-                    layerColors[tagName] = (mat.R, mat.G, mat.B);
-                    if (!layerHidden.ContainsKey(tagName))
-                    {
-                        layerHidden[tagName] = false;
-                    }
-                }
-                else
-                {
-                    materials[mat.Name] = mat;
-                    if (folderName.Length > 0)
-                    {
-                        materialsByFolder[folderName] = mat;
-                    }
-                }
+                throw new SkpParseException("model.dat not found in ZIP container", stage: "zip_extract");
+            }
+            Vff.ValidateEntrySize(modelDatEntry);
+            // model.dat routinely decompresses to several GB on real
+            // production files (SketchUp's binary format has been observed
+            // compressing at ~10x) - well past .NET's ~2.1GB single-array
+            // limit. Read it into a ChunkedBuffer (multiple bounded
+            // segments) instead of one MemoryStream, using the ZIP entry's
+            // own recorded uncompressed length so each segment is allocated
+            // once at its exact final size.
+            ChunkedBuffer modelDat;
+            using (var s = modelDatEntry.Open())
+            {
+                modelDat = ChunkedBuffer.FromStream(s, modelDatEntry.Length);
             }
 
-            if (!layerIdToName.ContainsKey(1))
-            {
-                layerIdToName[1] = "Layer0";
-            }
-            if (!layerColors.ContainsKey("Layer0"))
-            {
-                layerColors["Layer0"] = (136, 136, 136);
-            }
-            if (!layerHidden.ContainsKey("Layer0"))
-            {
-                layerHidden["Layer0"] = false;
-            }
-
-            return new RawParsed
-            {
-                Version = version,
-                Units = units,
-                LayerColors = layerColors,
-                LayerHidden = layerHidden,
-                LayerIdToName = layerIdToName,
-                Pages = PagesDimensions.ParsePages(pageNode),
-                Dimensions = PagesDimensions.ParseDimensions(modelDat, vertexPositions, instanceWorld),
-                MaterialIdToName = materialIdToName,
-                Materials = materials,
-                MaterialsByFolder = materialsByFolder,
-                Styles = styles,
-                FaceColors = ModelFaceColors(modelDat),
-                DefsDict = defsDictRaw,
-                Root = new Geometry.RawDefinition { Guid = "ROOT", Name = "ROOT_MODEL", Builder = rootBuilder },
-            };
+            return (rawMaterialEntries, styles, modelDat, units);
         }
 
         private static readonly byte[] FaceFrontTag = { 0x5C, 0x73, 0x04, 0x00, 0x00, 0x00 };

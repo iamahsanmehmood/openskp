@@ -24,6 +24,18 @@ namespace OpenSkp
 
             var parsed = Core.FullParse(buffer, options);
 
+            try
+            {
+                return BuildModel(parsed);
+            }
+            catch (Exception e) when (!(e is SkpParseException) && !(e is OutOfMemoryException))
+            {
+                throw new SkpParseException($"Failed while assembling model: {e.Message}", stage: "tlv_walk", innerException: e);
+            }
+        }
+
+        private static SkpModel BuildModel(Core.RawParsed parsed)
+        {
             var model = new SkpModel
             {
                 Version = parsed.Version,
@@ -272,7 +284,15 @@ namespace OpenSkp
             }
 
             var parsed = Core.FullParse(buffer, options);
-            return SceneBuilder.Build(parsed, options);
+            FaceGroups.UnpaintedStyleColors(parsed, options?.UnpaintedFaces);
+            try
+            {
+                return SceneBuilder.Build(parsed, options);
+            }
+            catch (Exception e) when (!(e is SkpParseException) && !(e is OutOfMemoryException))
+            {
+                throw new SkpParseException($"Failed while building scene: {e.Message}", stage: "build_scene", innerException: e);
+            }
         }
 
         /// <summary>Same as <see cref="BuildScene(byte[])"/>, reading the
@@ -302,7 +322,15 @@ namespace OpenSkp
             }
 
             var parsed = Core.FullParse(buffer, options);
-            return InstancedSceneBuilder.Build(parsed, options);
+            FaceGroups.UnpaintedStyleColors(parsed, options?.UnpaintedFaces);
+            try
+            {
+                return InstancedSceneBuilder.Build(parsed, options);
+            }
+            catch (Exception e) when (!(e is SkpParseException) && !(e is OutOfMemoryException))
+            {
+                throw new SkpParseException($"Failed while building scene: {e.Message}", stage: "build_scene", innerException: e);
+            }
         }
 
         /// <summary>Same as <see cref="BuildInstancedScene(byte[], SkpParseOptions?)"/>,

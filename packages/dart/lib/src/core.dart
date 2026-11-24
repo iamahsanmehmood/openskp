@@ -67,12 +67,180 @@ class Core {
       throw SkpParseException('No ZIP container found', stage: 'zip_extract');
     }
 
-    final zip = Vff.openZip(data, pkPos);
-
     final layerColors = <String, (int, int, int)>{};
     final layerHidden = <String, bool>{};
     final materials = <String, RawMaterial>{};
     final materialsByFolder = <String, RawMaterial>{};
+    final List<(String, RawMaterial)> rawMaterialEntries;
+    final List<RawStyle> styles;
+    final Uint8List modelDat;
+    final String? units;
+    try {
+      (rawMaterialEntries, styles, modelDat, units) =
+          _readVffZip(data, pkPos, materials.length, options);
+    } on SkpParseException {
+      rethrow;
+    } on OutOfMemoryError {
+      rethrow;
+    } on StackOverflowError {
+      rethrow;
+    } catch (e) {
+      throw SkpParseException('Invalid or damaged ZIP container: $e',
+          stage: 'zip_extract', cause: e);
+    }
+    emitLog(
+        options, SkpLogLevel.debug, 'Read model.dat: ${modelDat.length} bytes');
+
+    // Walk the TLV tree one top-level record at a time (instead of building
+    // the whole file's tree at once) so peak memory is bounded by the
+    // single largest definition/layer-manager/material-manager/root block,
+    // not by the file's total node count. Real production files can have
+    // 100k+ separate component definitions; materializing all of them
+    // simultaneously is what actually exhausts memory on large files - not
+    // the (comparatively modest, ~1x) cost of decompressing model.dat
+    // itself.
+    final layerIdToName = <int, String>{};
+    final materialIdToName = <int, String>{};
+    final defsDictRaw = <int, RawDefinition>{};
+    final rootBuilder = GeometryBuilder();
+    final vertexPositions = <String, (double, double, double)>{};
+    final instanceWorld = <String, List<double>>{};
+    TlvNode? pageNode;
+
+    for (final (index, total, el) in Tlv.iterTopLevelLazy(
+        modelDat, 0, modelDat.length, Tlv.containerTags)) {
+      try {
+        Geometry.collectLayers([el], layerIdToName, layerHidden);
+        Geometry.collectMaterialIds([el], materialIdToName);
+        Geometry.collectDefs([el], defsDictRaw);
+        scanVertexPositions(el, vertexPositions);
+        scanInstanceTransforms(el, instanceWorld);
+        pageNode ??= findPageNode(el);
+        if (el.tag == 'F601') {
+          Geometry.extractGeometryFromNodes(el.children, rootBuilder);
+        }
+      } on SkpParseException {
+        rethrow;
+      } on OutOfMemoryError {
+        rethrow;
+      } on StackOverflowError {
+        rethrow;
+      } catch (e) {
+        throw SkpParseException(
+          'Failed while processing top-level record: $e',
+          stage: 'tlv_walk',
+          recordIndex: index,
+          totalRecords: total,
+          tag: el.tag,
+          cause: e,
+        );
+      }
+      // `el` (and its whole subtree) is now unreferenced and eligible for
+      // garbage collection before the next top-level record is built.
+      if (index % progressInterval == 0 || index == total - 1) {
+        emitProgress(options, 'tlv_walk', index + 1, total);
+        emitLog(options, SkpLogLevel.debug,
+            'Processed ${index + 1}/$total top-level records');
+      }
+    }
+
+    emitLog(
+      options,
+      SkpLogLevel.info,
+      'Parse complete: ${defsDictRaw.length} defs (${(sw.elapsedMilliseconds / 1000).toStringAsFixed(2)}s)',
+    );
+
+    final realMaterialFolders = materialIdToName.values.toSet();
+    for (final (folderName, mat) in rawMaterialEntries) {
+      if (mat.name.startsWith('Layer_') &&
+          !realMaterialFolders.contains(folderName)) {
+        final tagName = mat.name.substring(6);
+        layerColors[tagName] = (mat.r, mat.g, mat.b);
+        layerHidden.putIfAbsent(tagName, () => false);
+      } else {
+        materials[mat.name] = mat;
+        if (folderName.isNotEmpty) {
+          materialsByFolder[folderName] = mat;
+        }
+      }
+    }
+
+    if (!layerIdToName.containsKey(1)) {
+      layerIdToName[1] = 'Layer0';
+    }
+    if (!layerColors.containsKey('Layer0')) {
+      layerColors['Layer0'] = (136, 136, 136);
+    }
+    if (!layerHidden.containsKey('Layer0')) {
+      layerHidden['Layer0'] = false;
+    }
+
+    List<RawPage> pages;
+    try {
+      pages = parsePages(pageNode);
+    } on OutOfMemoryError {
+      rethrow;
+    } on StackOverflowError {
+      rethrow;
+    } catch (e) {
+      emitLog(options, SkpLogLevel.debug, 'Failed to parse pages: $e');
+      pages = [];
+    }
+
+    List<RawDimension> dimensions;
+    try {
+      dimensions = parseDimensions(modelDat, vertexPositions, instanceWorld);
+    } on OutOfMemoryError {
+      rethrow;
+    } on StackOverflowError {
+      rethrow;
+    } catch (e) {
+      emitLog(options, SkpLogLevel.debug, 'Failed to parse dimensions: $e');
+      dimensions = [];
+    }
+
+    ((int, int, int), (int, int, int))? faceColors;
+    try {
+      faceColors = _modelFaceColors(modelDat);
+    } on OutOfMemoryError {
+      rethrow;
+    } on StackOverflowError {
+      rethrow;
+    } catch (e) {
+      emitLog(options, SkpLogLevel.debug, 'Failed to parse model face colours: $e');
+      faceColors = null;
+    }
+
+    return RawParsed()
+      ..version = version
+      ..units = units
+      ..layerColors.addAll(layerColors)
+      ..layerHidden.addAll(layerHidden)
+      ..layerIdToName.addAll(layerIdToName)
+      ..pages.addAll(pages)
+      ..dimensions.addAll(dimensions)
+      ..materialIdToName.addAll(materialIdToName)
+      ..materials.addAll(materials)
+      ..materialsByFolder.addAll(materialsByFolder)
+      ..styles.addAll(styles)
+      ..faceColors = faceColors
+      ..defsDict.addAll(defsDictRaw)
+      ..root =
+          RawDefinition(guid: 'ROOT', name: 'ROOT_MODEL', builder: rootBuilder);
+  }
+
+  static (
+    List<(String, RawMaterial)>,
+    List<RawStyle>,
+    Uint8List,
+    String?,
+  ) _readVffZip(
+    Uint8List data,
+    int pkPos,
+    int initialMaterialCount,
+    ParseOptions? options,
+  ) {
+    final zip = Vff.openZip(data, pkPos);
     final rawMaterialEntries = <(String, RawMaterial)>[];
 
     for (final entry in zip.files) {
@@ -109,70 +277,7 @@ class Core {
     }
 
     emitLog(options, SkpLogLevel.debug,
-        'Parsed ${materials.length} materials, ${styles.length} styles');
-
-    final modelDatEntry = zip.findFile('model.dat');
-    if (modelDatEntry == null) {
-      throw SkpParseException('model.dat not found in ZIP container',
-          stage: 'zip_extract');
-    }
-    Vff.validateEntrySize(modelDatEntry);
-    final modelDat = modelDatEntry.content;
-    emitLog(
-        options, SkpLogLevel.debug, 'Read model.dat: ${modelDat.length} bytes');
-
-    // Walk the TLV tree one top-level record at a time (instead of building
-    // the whole file's tree at once) so peak memory is bounded by the
-    // single largest definition/layer-manager/material-manager/root block,
-    // not by the file's total node count. Real production files can have
-    // 100k+ separate component definitions; materializing all of them
-    // simultaneously is what actually exhausts memory on large files - not
-    // the (comparatively modest, ~1x) cost of decompressing model.dat
-    // itself.
-    final layerIdToName = <int, String>{};
-    final materialIdToName = <int, String>{};
-    final defsDictRaw = <int, RawDefinition>{};
-    final rootBuilder = GeometryBuilder();
-    final vertexPositions = <String, (double, double, double)>{};
-    final instanceWorld = <String, List<double>>{};
-    TlvNode? pageNode;
-
-    for (final (index, total, el) in Tlv.iterTopLevelLazy(
-        modelDat, 0, modelDat.length, Tlv.containerTags)) {
-      try {
-        Geometry.collectLayers([el], layerIdToName, layerHidden);
-        Geometry.collectMaterialIds([el], materialIdToName);
-        Geometry.collectDefs([el], defsDictRaw);
-        scanVertexPositions(el, vertexPositions);
-        scanInstanceTransforms(el, instanceWorld);
-        pageNode ??= findPageNode(el);
-        if (el.tag == 'F601') {
-          Geometry.extractGeometryFromNodes(el.children, rootBuilder);
-        }
-      } catch (e) {
-        throw SkpParseException(
-          'Failed while processing top-level record: $e',
-          stage: 'tlv_walk',
-          recordIndex: index,
-          totalRecords: total,
-          tag: el.tag,
-          cause: e,
-        );
-      }
-      // `el` (and its whole subtree) is now unreferenced and eligible for
-      // garbage collection before the next top-level record is built.
-      if (index % progressInterval == 0 || index == total - 1) {
-        emitProgress(options, 'tlv_walk', index + 1, total);
-        emitLog(options, SkpLogLevel.debug,
-            'Processed ${index + 1}/$total top-level records');
-      }
-    }
-
-    emitLog(
-      options,
-      SkpLogLevel.info,
-      'Parse complete: ${defsDictRaw.length} defs (${(sw.elapsedMilliseconds / 1000).toStringAsFixed(2)}s)',
-    );
+        'Parsed $initialMaterialCount materials, ${styles.length} styles');
 
     // Units (meta/meta.dat) - VFF-only; legacy files carry no equivalent
     // container.
@@ -187,48 +292,14 @@ class Core {
       }
     }
 
-    final realMaterialFolders = materialIdToName.values.toSet();
-    for (final (folderName, mat) in rawMaterialEntries) {
-      if (mat.name.startsWith('Layer_') &&
-          !realMaterialFolders.contains(folderName)) {
-        final tagName = mat.name.substring(6);
-        layerColors[tagName] = (mat.r, mat.g, mat.b);
-        layerHidden.putIfAbsent(tagName, () => false);
-      } else {
-        materials[mat.name] = mat;
-        if (folderName.isNotEmpty) {
-          materialsByFolder[folderName] = mat;
-        }
-      }
+    final modelDatEntry = zip.findFile('model.dat');
+    if (modelDatEntry == null) {
+      throw SkpParseException('model.dat not found in ZIP container',
+          stage: 'zip_extract');
     }
-
-    if (!layerIdToName.containsKey(1)) {
-      layerIdToName[1] = 'Layer0';
-    }
-    if (!layerColors.containsKey('Layer0')) {
-      layerColors['Layer0'] = (136, 136, 136);
-    }
-    if (!layerHidden.containsKey('Layer0')) {
-      layerHidden['Layer0'] = false;
-    }
-
-    return RawParsed()
-      ..version = version
-      ..units = units
-      ..layerColors.addAll(layerColors)
-      ..layerHidden.addAll(layerHidden)
-      ..layerIdToName.addAll(layerIdToName)
-      ..pages.addAll(parsePages(pageNode))
-      ..dimensions
-          .addAll(parseDimensions(modelDat, vertexPositions, instanceWorld))
-      ..materialIdToName.addAll(materialIdToName)
-      ..materials.addAll(materials)
-      ..materialsByFolder.addAll(materialsByFolder)
-      ..styles.addAll(styles)
-      ..faceColors = _modelFaceColors(modelDat)
-      ..defsDict.addAll(defsDictRaw)
-      ..root =
-          RawDefinition(guid: 'ROOT', name: 'ROOT_MODEL', builder: rootBuilder);
+    Vff.validateEntrySize(modelDatEntry);
+    final modelDat = modelDatEntry.content;
+    return (rawMaterialEntries, styles, modelDat, units);
   }
 
   static const _faceFrontTag = [0x5C, 0x73, 0x04, 0x00, 0x00, 0x00];

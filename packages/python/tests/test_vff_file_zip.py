@@ -5,7 +5,7 @@ import zipfile
 
 import pytest
 
-from openskp import _core
+from openskp import SkpParseError, _core
 
 
 @pytest.mark.parametrize("absolute_offsets", [False, True])
@@ -43,7 +43,9 @@ def test_zip_is_file_backed_and_closed_on_error(tmp_path, monkeypatch):
         return archive
 
     monkeypatch.setattr(_core.zipfile, "ZipFile", recording_zip_file)
-    with pytest.raises(KeyError, match="model.dat"):
+    with pytest.raises(SkpParseError, match="model.dat") as exc_info:
         _core.full_parse(str(path))
+    assert exc_info.value.stage == "zip_extract"
+    assert isinstance(exc_info.value.__cause__, KeyError)
     assert len(opened) == 1
     assert opened[0].fp is None

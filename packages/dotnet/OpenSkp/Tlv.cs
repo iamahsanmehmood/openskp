@@ -713,49 +713,56 @@ namespace OpenSkp
             containerTags ??= ContainerTags;
 
             List<(string Tag, long Offset, long Size)> headers;
-            List<TlvHeader>? wrapped = null;
-            if (start == 0 && end == data.Length && containerTags.Contains("F401") && end >= 6 && (ulong)(end - 6) >= TlvWrap)
+            try
             {
-                wrapped = WrappedModelRecords(
-                    (ulong)end,
-                    p => data.ReadU16((long)p),
-                    p => data.ReadU32((long)p + 2));
-            }
-            if (wrapped != null)
-            {
-                headers = new List<(string, long, long)>(wrapped.Count);
-                foreach (var h in wrapped)
+                List<TlvHeader>? wrapped = null;
+                if (start == 0 && end == data.Length && containerTags.Contains("F401") && end >= 6 && (ulong)(end - 6) >= TlvWrap)
                 {
-                    headers.Add((TagHex(data, (long)h.Offset), (long)h.Offset, (long)h.Size));
+                    wrapped = WrappedModelRecords(
+                        (ulong)end,
+                        p => data.ReadU16((long)p),
+                        p => data.ReadU32((long)p + 2));
                 }
-            }
-            else
-            {
-                headers = FlatHeaders(data, start, end, containerTags);
-                RequireCompleteTopLevel(data, start, end, headers);
-                if (headers.Count == 1 && headers[0].Tag == "F401")
+                if (wrapped != null)
                 {
-                    var (_, f401Offset, f401Size) = headers[0];
-                    headers = FlatHeaders(data, f401Offset + 6, f401Offset + 6 + f401Size, containerTags);
-                }
-                if (containerTags.Contains("F901"))
-                {
-                    var expanded = new List<(string, long, long)>(headers.Count);
-                    foreach (var h in headers)
+                    headers = new List<(string, long, long)>(wrapped.Count);
+                    foreach (var h in wrapped)
                     {
-                        if (h.Tag == "F901")
-                        {
-                            var defs = UnwrapDefinitionsContainer(data, h.Offset, h.Size, containerTags);
-                            if (defs != null)
-                            {
-                                expanded.AddRange(defs);
-                                continue;
-                            }
-                        }
-                        expanded.Add(h);
+                        headers.Add((TagHex(data, (long)h.Offset), (long)h.Offset, (long)h.Size));
                     }
-                    headers = expanded;
                 }
+                else
+                {
+                    headers = FlatHeaders(data, start, end, containerTags);
+                    RequireCompleteTopLevel(data, start, end, headers);
+                    if (headers.Count == 1 && headers[0].Tag == "F401")
+                    {
+                        var (_, f401Offset, f401Size) = headers[0];
+                        headers = FlatHeaders(data, f401Offset + 6, f401Offset + 6 + f401Size, containerTags);
+                    }
+                    if (containerTags.Contains("F901"))
+                    {
+                        var expanded = new List<(string, long, long)>(headers.Count);
+                        foreach (var h in headers)
+                        {
+                            if (h.Tag == "F901")
+                            {
+                                var defs = UnwrapDefinitionsContainer(data, h.Offset, h.Size, containerTags);
+                                if (defs != null)
+                                {
+                                    expanded.AddRange(defs);
+                                    continue;
+                                }
+                            }
+                            expanded.Add(h);
+                        }
+                        headers = expanded;
+                    }
+                }
+            }
+            catch (Exception e) when (!(e is SkpParseException) && !(e is OutOfMemoryException))
+            {
+                throw new SkpParseException($"Failed while scanning TLV headers: {e.Message}", stage: "tlv_walk", innerException: e);
             }
 
             int total = headers.Count;
@@ -763,7 +770,18 @@ namespace OpenSkp
             foreach (var (tag, offset, size) in headers)
             {
                 long recordEnd = offset + 6 + size;
-                var nodes = ParseRecursive(data, offset, recordEnd, containerTags);
+                List<TlvNode> nodes;
+                try
+                {
+                    nodes = ParseRecursive(data, offset, recordEnd, containerTags);
+                }
+                catch (Exception e) when (!(e is SkpParseException) && !(e is OutOfMemoryException))
+                {
+                    throw new SkpParseException(
+                        $"Failed while parsing top-level record: {e.Message}",
+                        stage: "tlv_walk", recordIndex: index, totalRecords: total, tag: tag, offset: offset,
+                        innerException: e);
+                }
                 if (nodes.Count > 0)
                 {
                     yield return new TopLevelRecord(index, total, nodes[0]);

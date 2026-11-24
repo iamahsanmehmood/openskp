@@ -1,5 +1,7 @@
 #include <fstream>
+#include <new>
 
+#include "face_groups.hpp"
 #include "internal.hpp"
 
 namespace openskp {
@@ -34,13 +36,56 @@ InstancedScene SkpFile::build_instanced_scene(const ParseOptions& o) const {
   return openskp::build_instanced_scene(data_, o);
 }
 
-SkpModel parse_skp(ByteBuffer b, const ParseOptions& o) { return build_model(full_parse(b, o), o); }
+SkpModel parse_skp(ByteBuffer b, const ParseOptions& o) {
+  auto raw = full_parse(b, o);
+  try {
+    return build_model(std::move(raw), o);
+  } catch (const SkpParseError&) {
+    throw;
+  } catch (const std::bad_alloc&) {
+    throw;
+  } catch (const std::exception& e) {
+    throw SkpParseError(std::string("Failed while assembling model: ") + e.what(),
+                        ParseStage::tlv_walk, {}, {}, {}, {}, {}, std::current_exception());
+  } catch (...) {
+    throw SkpParseError("Failed while assembling model", ParseStage::tlv_walk, {}, {}, {}, {}, {},
+                        std::current_exception());
+  }
+}
 
 Scene build_scene(ByteBuffer b, const ParseOptions& o) {
-  return build_scene_raw(full_parse(b, o), o);
+  auto raw = full_parse(b, o);
+  unpainted_style_colors(raw, o.unpainted_faces);
+  try {
+    return build_scene_raw(std::move(raw), o);
+  } catch (const SkpParseError&) {
+    throw;
+  } catch (const std::bad_alloc&) {
+    throw;
+  } catch (const std::exception& e) {
+    throw SkpParseError(std::string("Failed while building scene: ") + e.what(),
+                        ParseStage::build_scene, {}, {}, {}, {}, {}, std::current_exception());
+  } catch (...) {
+    throw SkpParseError("Failed while building scene", ParseStage::build_scene, {}, {}, {}, {}, {},
+                        std::current_exception());
+  }
 }
 
 InstancedScene build_instanced_scene(ByteBuffer b, const ParseOptions& o) {
-  return build_instanced_scene_raw(full_parse(b, o), o);
+  auto raw = full_parse(b, o);
+  unpainted_style_colors(raw, o.unpainted_faces);
+  try {
+    return build_instanced_scene_raw(std::move(raw), o);
+  } catch (const SkpParseError&) {
+    throw;
+  } catch (const std::bad_alloc&) {
+    throw;
+  } catch (const std::exception& e) {
+    throw SkpParseError(std::string("Failed while building scene: ") + e.what(),
+                        ParseStage::build_scene, {}, {}, {}, {}, {}, std::current_exception());
+  } catch (...) {
+    throw SkpParseError("Failed while building scene", ParseStage::build_scene, {}, {}, {}, {}, {},
+                        std::current_exception());
+  }
 }
 }  // namespace openskp

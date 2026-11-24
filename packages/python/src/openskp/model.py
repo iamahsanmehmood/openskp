@@ -25,6 +25,8 @@ import pathlib
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple
 
+from .errors import SkpParseError
+
 if TYPE_CHECKING:
     from . import instanced_scene, scene
 
@@ -1122,14 +1124,23 @@ class SkpFile:
         from . import _core
         from . import scene as _scene
 
+        if unpainted_faces not in ("style", "tag"):
+            raise ValueError(f'unpainted_faces must be "style" or "tag", not {unpainted_faces!r}')
         parsed = _core.full_parse(str(self.path))
-        return _scene.build_scene(
-            parsed,
-            name_override_keys=name_override_keys,
-            include_curve_sets=include_curve_sets,
-            original_textures=original_textures,
-            unpainted_faces=unpainted_faces,
-        )
+        try:
+            return _scene.build_scene(
+                parsed,
+                name_override_keys=name_override_keys,
+                include_curve_sets=include_curve_sets,
+                original_textures=original_textures,
+                unpainted_faces=unpainted_faces,
+            )
+        except (SkpParseError, RecursionError, MemoryError):
+            raise
+        except Exception as e:
+            raise SkpParseError(
+                f"Failed while building scene: {e}", stage="build_scene"
+            ) from e
 
     def build_instanced_scene(
         self,
@@ -1166,11 +1177,20 @@ class SkpFile:
         from . import _core
         from . import instanced_scene
 
+        if unpainted_faces not in ("style", "tag"):
+            raise ValueError(f'unpainted_faces must be "style" or "tag", not {unpainted_faces!r}')
         parsed = _core.full_parse(str(self.path))
-        return instanced_scene.build_instanced_scene(
-            parsed,
-            name_override_keys=name_override_keys,
-            original_textures=original_textures,
-            unpainted_faces=unpainted_faces,
-        )
+        try:
+            return instanced_scene.build_instanced_scene(
+                parsed,
+                name_override_keys=name_override_keys,
+                original_textures=original_textures,
+                unpainted_faces=unpainted_faces,
+            )
+        except (SkpParseError, RecursionError, MemoryError):
+            raise
+        except Exception as e:
+            raise SkpParseError(
+                f"Failed while building scene: {e}", stage="build_scene"
+            ) from e
 

@@ -597,52 +597,82 @@ class Tlv {
     final containerTagsSet = tags ?? containerTags;
 
     List<(String, int, int)> headers;
-    List<TlvHeader>? wrapped;
-    if (start == 0 &&
-        end == data.length &&
-        containerTagsSet.contains('F401') &&
-        end >= 6 &&
-        end - 6 >= _tlvWrap) {
-      wrapped = wrappedModelRecords(
-        end,
-        (p) => readU16(data, p),
-        (p) => readU32(data, p + 2),
-      );
-    }
-    if (wrapped != null) {
-      headers = wrapped
-          .map((h) => (_tagHex(data, h.offset), h.offset, h.size))
-          .toList();
-    } else {
-      headers = _flatHeaders(data, start, end, containerTagsSet);
-      _requireCompleteTopLevel(data, start, end, headers);
-      if (headers.length == 1 && headers[0].$1 == 'F401') {
-        final (_, f401Offset, f401Size) = headers[0];
-        headers = _flatHeaders(
-            data, f401Offset + 6, f401Offset + 6 + f401Size, containerTagsSet);
+    try {
+      List<TlvHeader>? wrapped;
+      if (start == 0 &&
+          end == data.length &&
+          containerTagsSet.contains('F401') &&
+          end >= 6 &&
+          end - 6 >= _tlvWrap) {
+        wrapped = wrappedModelRecords(
+          end,
+          (p) => readU16(data, p),
+          (p) => readU32(data, p + 2),
+        );
       }
-      if (containerTagsSet.contains('F901')) {
-        final expanded = <(String, int, int)>[];
-        for (final h in headers) {
-          if (h.$1 == 'F901') {
-            final defs =
-                _unwrapDefinitionsContainer(data, h.$2, h.$3, containerTagsSet);
-            if (defs != null) {
-              expanded.addAll(defs);
-              continue;
-            }
-          }
-          expanded.add(h);
+      if (wrapped != null) {
+        headers = wrapped
+            .map((h) => (_tagHex(data, h.offset), h.offset, h.size))
+            .toList();
+      } else {
+        headers = _flatHeaders(data, start, end, containerTagsSet);
+        _requireCompleteTopLevel(data, start, end, headers);
+        if (headers.length == 1 && headers[0].$1 == 'F401') {
+          final (_, f401Offset, f401Size) = headers[0];
+          headers = _flatHeaders(data, f401Offset + 6,
+              f401Offset + 6 + f401Size, containerTagsSet);
         }
-        headers = expanded;
+        if (containerTagsSet.contains('F901')) {
+          final expanded = <(String, int, int)>[];
+          for (final h in headers) {
+            if (h.$1 == 'F901') {
+              final defs = _unwrapDefinitionsContainer(
+                  data, h.$2, h.$3, containerTagsSet);
+              if (defs != null) {
+                expanded.addAll(defs);
+                continue;
+              }
+            }
+            expanded.add(h);
+          }
+          headers = expanded;
+        }
       }
+    } on SkpParseException {
+      rethrow;
+    } on OutOfMemoryError {
+      rethrow;
+    } on StackOverflowError {
+      rethrow;
+    } catch (e) {
+      throw SkpParseException('Failed while scanning TLV headers: $e',
+          stage: 'tlv_walk', cause: e);
     }
 
     final total = headers.length;
     var index = 0;
-    for (final (_, offset, size) in headers) {
+    for (final (tag, offset, size) in headers) {
       final recordEnd = offset + 6 + size;
-      final nodes = parseRecursive(data, offset, recordEnd, containerTagsSet);
+      final List<TlvNode> nodes;
+      try {
+        nodes = parseRecursive(data, offset, recordEnd, containerTagsSet);
+      } on SkpParseException {
+        rethrow;
+      } on OutOfMemoryError {
+        rethrow;
+      } on StackOverflowError {
+        rethrow;
+      } catch (e) {
+        throw SkpParseException(
+          'Failed while parsing top-level record: $e',
+          stage: 'tlv_walk',
+          recordIndex: index,
+          totalRecords: total,
+          tag: tag,
+          offset: offset,
+          cause: e,
+        );
+      }
       if (nodes.isNotEmpty) {
         yield (index, total, nodes[0]);
       }

@@ -2797,13 +2797,12 @@ export function parseLegacyToRaw(data: Uint8Array, options?: ParseOptions): Pars
   try {
     walkResult = walk(data);
   } catch (e) {
-    if (e instanceof LegacyParseError || e instanceof RangeError) {
-      throw new SkpParseError(`legacy .skp parse failed: ${(e as Error).message}`, {
-        stage: 'legacy_walk',
-        cause: e,
-      });
-    }
-    throw e;
+    if (e instanceof SkpParseError) throw e;
+    if (e instanceof RangeError && /call stack/i.test(String(e.message))) throw e;
+    throw new SkpParseError(`legacy .skp parse failed: ${(e as Error)?.message ?? String(e)}`, {
+      stage: 'legacy_walk',
+      cause: e,
+    });
   }
 
   const { ar, root, layers, materials } = walkResult;
@@ -2940,7 +2939,19 @@ export function parseLegacyToRaw(data: Uint8Array, options?: ParseOptions): Pars
     builder: rootBuilder,
   });
 
-  const pages = readPageList(data, ar) ?? [];
+  let pages: RawPage[];
+  try {
+    pages = readPageList(data, ar) ?? [];
+  } catch {
+    pages = [];
+  }
+
+  let faceColors: [[number, number, number], [number, number, number]] | null;
+  try {
+    faceColors = modelFaceColors(data, ar.ver);
+  } catch {
+    faceColors = null;
+  }
 
   emitLog(
     options,
@@ -2967,7 +2978,7 @@ export function parseLegacyToRaw(data: Uint8Array, options?: ParseOptions): Pars
     materialsMap,
     materialsByFolder: new Map(),
     styles: [],
-    faceColors: modelFaceColors(data, ar.ver),
+    faceColors,
     defsDict,
     unreadRootEntities: ar.unreadRootEntities,
   };
