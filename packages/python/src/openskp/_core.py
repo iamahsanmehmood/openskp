@@ -1348,15 +1348,38 @@ def _parse_dimensions(model_dat, id2pos, inst_world):
             continue
         xaxis = _tlv_find(body, 0x5BCF)
         normal = _tlv_find(body, 0x5BD0)
+        axis_bytes = _tlv_find(body, 0x5BD1)
         off = _tlv_find(body, 0x5BD2)
+        plane_x_val = (struct.unpack('<3d', xaxis)
+                       if xaxis and len(xaxis) == 24 else None)
+        normal_val = (struct.unpack('<3d', normal)
+                      if normal and len(normal) == 24 else None)
+        offset_val = (struct.unpack('<d', off)[0]
+                      if off and len(off) == 8 else 0.0)
+        offset_vector = None
+        if (axis_bytes and len(axis_bytes) == 4
+                and plane_x_val is not None and normal_val is not None):
+            axis = struct.unpack('<I', axis_bytes)[0]
+            p_norm = plane_x_val
+            p_x = normal_val
+            if axis == 1:
+                offset_vector = (
+                    (p_norm[1] * p_x[2] - p_norm[2] * p_x[1]) * offset_val + 0.0,
+                    (p_norm[2] * p_x[0] - p_norm[0] * p_x[2]) * offset_val + 0.0,
+                    (p_norm[0] * p_x[1] - p_norm[1] * p_x[0]) * offset_val + 0.0,
+                )
+            elif axis == 2:
+                offset_vector = (
+                    -p_x[0] * offset_val + 0.0,
+                    -p_x[1] * offset_val + 0.0,
+                    -p_x[2] * offset_val + 0.0,
+                )
         dims.append({
             'a': a, 'b': b,
-            'plane_x': struct.unpack('<3d', xaxis)
-            if xaxis and len(xaxis) == 24 else None,
-            'normal': struct.unpack('<3d', normal)
-            if normal and len(normal) == 24 else None,
-            'offset': struct.unpack('<d', off)[0]
-            if off and len(off) == 8 else 0.0,
+            'plane_x': plane_x_val,
+            'normal': normal_val,
+            'offset': offset_val,
+            'offset_vector': offset_vector,
         })
     return dims
 

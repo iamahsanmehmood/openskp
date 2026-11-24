@@ -449,9 +449,12 @@ class Dimension:
             from the ``a``–``b`` segment, along the in-plane perpendicular.
         plane_x: Historical name: for a VFF dimension this is tag ``5BCF``, which
             is the plane NORMAL (SketchUp's ``SUDimensionLinearGetNormal``
-            equals it), or ``None``.
+            equals it); for a legacy dimension this is the plane's X axis, or ``None``.
         normal: Historical name: for a VFF dimension this is tag ``5BD0``, the
-            plane's X axis, or ``None``.
+            plane's X axis; for a legacy dimension this is the plane normal, or ``None``.
+        offset_vector: Explicit offset vector (inches) for legacy or VFF dimensions
+            constrained to a plane axis, preserving the side of the line
+            independently of endpoint ordering, or ``None``.
     """
 
     text: str = ""
@@ -461,6 +464,7 @@ class Dimension:
     offset: float = 0.0
     plane_x: Optional[Tuple[float, float, float]] = None
     normal: Optional[Tuple[float, float, float]] = None
+    offset_vector: Optional[Tuple[float, float, float]] = None
 
 
 @dataclass
@@ -970,6 +974,15 @@ class SkpFile:
                 defn.dimensions.append(Dimension(
                     text=dim.get("text", ""),
                     hidden=dim.get("hidden", False),
+                    a=tuple(dim["a"]) if dim.get("a") is not None else None,
+                    b=tuple(dim["b"]) if dim.get("b") is not None else None,
+                    offset=dim.get("offset", 0.0),
+                    plane_x=tuple(dim["plane_x"]) if dim.get("plane_x") is not None else None,
+                    normal=tuple(dim["normal"]) if dim.get("normal") is not None else None,
+                    offset_vector=(
+                        tuple(dim["offset_vector"])
+                        if dim.get("offset_vector") is not None else None
+                    ),
                 ))
             # Populate construction lines/points
             for cl in getattr(builder, "construction_lines", []):
@@ -1016,6 +1029,7 @@ class SkpFile:
                 a=tuple(dm["a"]), b=tuple(dm["b"]),
                 offset=dm.get("offset", 0.0),
                 plane_x=dm.get("plane_x"), normal=dm.get("normal"),
+                offset_vector=dm.get("offset_vector"),
                 text=dm.get("text", ""),
             ))
 

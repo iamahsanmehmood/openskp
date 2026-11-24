@@ -2244,6 +2244,30 @@ namespace OpenSkp
             if (definition._groupFlagPos.HasValue) Skp.DefinitionWriter!.PatchU32(definition._groupFlagPos.Value, 1u);
         }
 
+        /// <summary>Add a FREE linear dimension between two explicit points
+        /// (inches, definition-local space) - same behavior as
+        /// <see cref="SkpBuilder.AddDimension((double, double, double), (double, double, double), double)"/>.</summary>
+        public void AddDimension(
+            (double X, double Y, double Z) p1, (double X, double Y, double Z) p2, double offset = 10.0)
+        {
+            CheckWritable("dimensions");
+            Skp.WriteDimensionTo(Skp.DefinitionWriter!, p1, p2, offset, null);
+            _newEntityCount += 1;
+        }
+
+        /// <summary>Place a linear dimension using an explicit 3D offset vector
+        /// (inches, definition-local space) whose component perpendicular to
+        /// p1-&gt;p2 determines the plane and side of the dimension line.</summary>
+        public void AddDimension(
+            (double X, double Y, double Z) p1,
+            (double X, double Y, double Z) p2,
+            (double X, double Y, double Z) offsetVector)
+        {
+            CheckWritable("dimensions");
+            Skp.WriteDimensionTo(Skp.DefinitionWriter!, p1, p2, 0.0, offsetVector);
+            _newEntityCount += 1;
+        }
+
         internal static List<AttributeDict>? BuildAttributeDicts(
             IReadOnlyDictionary<string, object>? attributes,
             string dictName,
@@ -3156,15 +3180,85 @@ namespace OpenSkp
         /// 1 with the point stored inline in each connection block and null
         /// object refs. Free dimensions render in any orientation; anchored
         /// (type 2) dimensions are a future refinement.</summary>
-        public void AddDimension(
-            (double X, double Y, double Z) p1, (double X, double Y, double Z) p2, double offset = 10.0)
+        private static ((double X, double Y, double Z) Normal, (double X, double Y, double Z) XAxis, double Offset)
+            PrepareDimension(
+                (double X, double Y, double Z) p1,
+                (double X, double Y, double Z) p2,
+                double offset,
+                (double X, double Y, double Z)? offsetVector)
         {
-            if (p1 == p2)
+            static bool IsFinite(double v) => !double.IsNaN(v) && !double.IsInfinity(v);
+            var normal = (X: 0.0, Y: 0.0, Z: 1.0);
+            var xaxis = (X: 1.0, Y: 0.0, Z: 0.0);
+            if (offsetVector.HasValue)
+            {
+                var ov = offsetVector.Value;
+                if (!IsFinite(p1.X) || !IsFinite(p1.Y) || !IsFinite(p1.Z) ||
+                    !IsFinite(p2.X) || !IsFinite(p2.Y) || !IsFinite(p2.Z) ||
+                    !IsFinite(ov.X) || !IsFinite(ov.Y) || !IsFinite(ov.Z))
+                {
+                    throw new SkpWriteException("AddDimension coordinates must be finite");
+                }
+                if (p1 == p2)
+                {
+                    throw new SkpWriteException("AddDimension endpoints coincide");
+                }
+                double dx = p2.X - p1.X, dy = p2.Y - p1.Y, dz = p2.Z - p1.Z;
+                double length = Math.Sqrt(dx * dx + dy * dy + dz * dz);
+                if (!IsFinite(length) || length == 0.0)
+                {
+                    throw new SkpWriteException("AddDimension segment length must be finite and nonzero");
+                }
+                xaxis = (dx / length, dy / length, dz / length);
+                double nx = xaxis.Y * ov.Z - xaxis.Z * ov.Y;
+                double ny = xaxis.Z * ov.X - xaxis.X * ov.Z;
+                double nz = xaxis.X * ov.Y - xaxis.Y * ov.X;
+                offset = Math.Sqrt(nx * nx + ny * ny + nz * nz);
+                if (!IsFinite(offset))
+                {
+                    throw new SkpWriteException("AddDimension offset must be finite");
+                }
+                if (offset > 0.0)
+                {
+                    normal = (nx / offset, ny / offset, nz / offset);
+                }
+                else
+                {
+                    var seed = Math.Abs(xaxis.Z) < 0.9 ? (X: 0.0, Y: 0.0, Z: 1.0) : (X: 0.0, Y: 1.0, Z: 0.0);
+                    double cx = xaxis.Y * seed.Z - xaxis.Z * seed.Y;
+                    double cy = xaxis.Z * seed.X - xaxis.X * seed.Z;
+                    double cz = xaxis.X * seed.Y - xaxis.Y * seed.X;
+                    double clen = Math.Sqrt(cx * cx + cy * cy + cz * cz);
+                    normal = (cx / clen, cy / clen, cz / clen);
+                }
+            }
+            else if (p1 == p2)
             {
                 throw new SkpWriteException("AddDimension endpoints coincide");
             }
-            EnsureGeometryWriter();
-            var w = _geometryWriter!;
+            return (normal, xaxis, offset);
+        }
+
+        internal void WriteDimensionTo(
+            ArchiveWriter w,
+            (double X, double Y, double Z) p1,
+            (double X, double Y, double Z) p2,
+            double offset,
+            (double X, double Y, double Z)? offsetVector)
+        {
+            var (normal, xaxis, resolvedOffset) = PrepareDimension(p1, p2, offset, offsetVector);
+            EmitDimensionTo(w, p1, p2, normal, xaxis, resolvedOffset, offsetVector.HasValue);
+        }
+
+        private void EmitDimensionTo(
+            ArchiveWriter w,
+            (double X, double Y, double Z) p1,
+            (double X, double Y, double Z) p2,
+            (double X, double Y, double Z) normal,
+            (double X, double Y, double Z) xaxis,
+            double offset,
+            bool hasVector)
+        {
             w.NewOfKnownClass("CDimensionLinear", CreateConstants.DimensionLinearSchema);
             w.Preamble();
             w.Drawbase();
@@ -3194,16 +3288,42 @@ namespace OpenSkp
             w.AddF64(p2.Y);
             w.AddF64(p2.Z);
             w.AddU16(0);
-            // placement block: SDK free-dimension defaults + our offset
+            // placement block: SDK free-dimension defaults or constrained plane + offset
             w.AddZeros(2);
-            foreach (var val in new[] { 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0 })
-            {
-                w.AddF64(val);
-            }
-            w.AddU32(0);
+            w.AddF64(0.0);
+            w.AddF64(normal.X);
+            w.AddF64(normal.Y);
+            w.AddF64(normal.Z);
+            w.AddF64(xaxis.X);
+            w.AddF64(xaxis.Y);
+            w.AddF64(xaxis.Z);
+            w.AddU32(hasVector ? 1u : 0u);
             w.AddF64(offset);
             w.AddF64(0.0);
             w.AddU32(1);
+        }
+
+        public void AddDimension(
+            (double X, double Y, double Z) p1, (double X, double Y, double Z) p2, double offset = 10.0)
+        {
+            var (normal, xaxis, resolvedOffset) = PrepareDimension(p1, p2, offset, null);
+            EnsureGeometryWriter();
+            EmitDimensionTo(_geometryWriter!, p1, p2, normal, xaxis, resolvedOffset, false);
+            _newEntityCount += 1;
+            _faceCount += 1; // reuses the "at least one root entity" check in ToBytes
+        }
+
+        /// <summary>Place a linear dimension using an explicit 3D offset vector
+        /// (inches, world space) whose component perpendicular to p1-&gt;p2
+        /// determines the plane and side of the dimension line.</summary>
+        public void AddDimension(
+            (double X, double Y, double Z) p1,
+            (double X, double Y, double Z) p2,
+            (double X, double Y, double Z) offsetVector)
+        {
+            var (normal, xaxis, resolvedOffset) = PrepareDimension(p1, p2, 0.0, offsetVector);
+            EnsureGeometryWriter();
+            EmitDimensionTo(_geometryWriter!, p1, p2, normal, xaxis, resolvedOffset, true);
             _newEntityCount += 1;
             _faceCount += 1; // reuses the "at least one root entity" check in ToBytes
         }

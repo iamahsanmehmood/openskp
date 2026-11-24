@@ -103,6 +103,84 @@ namespace OpenSkp.Tests
             Assert.Equal(15.5, d.Offset);
             Assert.Equal((1.0, 0.0, 0.0), d.PlaneX);
             Assert.Equal((0.0, 0.0, 1.0), d.Normal);
+            Assert.Null(d.OffsetVector);
+        }
+
+        [Fact]
+        public void ConstrainedOffsetsPreservePlaneSideAndEndpointOrder()
+        {
+            byte[] PointBlock(ushort wrapTag, (double X, double Y, double Z) p)
+            {
+                var inner = Concat(Tlv(0x5209, BitConverter.GetBytes((uint)1)), Tlv(0x520A, Vec3(p.X, p.Y, p.Z)));
+                return Tlv(wrapTag, Tlv(0x5208, inner));
+            }
+
+            var a = (X: 1.0, Y: 2.0, Z: 3.0);
+            var b = (X: 1.0, Y: 2.0, Z: 13.0);
+            foreach (uint axis in new uint[] { 1, 2 })
+            {
+                foreach (double distance in new[] { -4.0, 4.0 })
+                {
+                    foreach (bool reversed in new[] { false, true })
+                    {
+                        var p1 = reversed ? b : a;
+                        var p2 = reversed ? a : b;
+                        var body = Concat(
+                            PointBlock(0x5BCD, p1),
+                            PointBlock(0x5BCE, p2),
+                            Tlv(0x5BCF, Vec3(0, -1, 0)),
+                            Tlv(0x5BD0, Vec3(1, 0, 0)),
+                            Tlv(0x5BD1, BitConverter.GetBytes(axis)),
+                            Tlv(0x5BD2, BitConverter.GetBytes(distance)));
+                        var dims = PagesDimensions.ParseDimensions(
+                            ChunkedBuffer.FromArray(Tlv(0x5BCC, body)),
+                            new Dictionary<string, (double X, double Y, double Z)>(),
+                            new Dictionary<string, List<double>?>());
+                        var dim = Assert.Single(dims);
+                        var expected = axis == 1 ? (0.0, 0.0, distance) : (-distance, 0.0, 0.0);
+                        Assert.Equal(expected, dim.OffsetVector);
+                        Assert.Equal(p1, dim.A);
+                        Assert.Equal(p2, dim.B);
+                    }
+                }
+            }
+        }
+
+        [Fact]
+        public void UnsupportedOrMalformedConstraintKeepsScalarFallback()
+        {
+            byte[] PointBlock(ushort wrapTag, (double X, double Y, double Z) p)
+            {
+                var inner = Concat(Tlv(0x5209, BitConverter.GetBytes((uint)1)), Tlv(0x520A, Vec3(p.X, p.Y, p.Z)));
+                return Tlv(wrapTag, Tlv(0x5208, inner));
+            }
+
+            foreach (var axisPayload in new[]
+            {
+                Array.Empty<byte>(),
+                new byte[] { 2 },
+                BitConverter.GetBytes((uint)0),
+                BitConverter.GetBytes((uint)3),
+            })
+            {
+                var body = Concat(
+                    PointBlock(0x5BCD, (1, 2, 3)),
+                    PointBlock(0x5BCE, (1, 2, 13)),
+                    Tlv(0x5BCF, Vec3(0, -1, 0)),
+                    Tlv(0x5BD0, Vec3(1, 0, 0)),
+                    Tlv(0x5BD2, BitConverter.GetBytes(-4.0)));
+                if (axisPayload.Length > 0)
+                {
+                    body = Concat(body, Tlv(0x5BD1, axisPayload));
+                }
+                var dims = PagesDimensions.ParseDimensions(
+                    ChunkedBuffer.FromArray(Tlv(0x5BCC, body)),
+                    new Dictionary<string, (double X, double Y, double Z)>(),
+                    new Dictionary<string, List<double>?>());
+                var dim = Assert.Single(dims);
+                Assert.Null(dim.OffsetVector);
+                Assert.Equal(-4.0, dim.Offset);
+            }
         }
 
         [Fact]
