@@ -19,7 +19,7 @@ use super::pages_dimensions::{
 use super::strconv::{c_stod, c_stoi, c_stoll, c_stoul_digits};
 use super::vff::{extract_version, is_legacy, read_meta_units, valid_header};
 use super::xml::{attr, attributes, find_element, find_open_tag, find_screenimage};
-use super::{text, ErrorKind, RawMaterial, RawParsed, RawStyle, RawTexture, Tag, TlvNode};
+use super::{text, ErrorKind, RawMaterial, RawParsed, RawStyle, RawTexture, TlvNode};
 use crate::errors::SkpParseError;
 use crate::legacy::parse_legacy;
 use crate::model::{StyleItem, StyleWatermark, Vec3, ViewCamera};
@@ -130,31 +130,6 @@ fn zip_offset(d: &[u8]) -> Option<usize> {
         i += 1;
     }
     None
-}
-
-fn require_complete_top_level(d: &[u8], records: &[TlvHeader]) -> Result<(), SkpParseError> {
-    let p = records
-        .last()
-        .map_or(0usize, |h| (h.offset + 6 + h.size) as usize);
-    if d.len() - p >= 6 {
-        let n = u32_at(d, p + 2);
-        let tag = Tag::from_bytes(d[p], d[p + 1]).as_str().to_owned();
-        return Err(SkpParseError::with_context(
-            format!(
-                "model.dat is truncated: the top-level record declares {n} bytes \
-                 but only {} remain",
-                d.len() - p - 6
-            ),
-            Some(ParseStage::TlvWalk),
-            None,
-            None,
-            Some(tag),
-            Some(p as u64),
-            None,
-            None,
-        ));
-    }
-    Ok(())
 }
 
 fn integer(s: &str, fallback: i32) -> i32 {
@@ -552,7 +527,6 @@ fn model_records(data: &[u8]) -> Result<Vec<TlvHeader>, SkpParseError> {
         return Ok(wrapped);
     }
     let mut hs = tlv_headers_slice(data, 0, data.len()).map_err(tlv_walk_err)?;
-    require_complete_top_level(data, &hs)?;
     if hs.len() == 1 && data[hs[0].offset as usize] == 0xf4 && data[hs[0].offset as usize + 1] == 1
     {
         let off = hs[0].offset as usize;

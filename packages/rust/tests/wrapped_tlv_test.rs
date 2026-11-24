@@ -303,7 +303,7 @@ fn zero_filled_payload_does_not_exhaust_recovery() {
                     5
                 } else if p == leaf {
                     u32::MAX
-                } else if p >= leaf + 5 && p < leaf + 5 + 6 * padding_headers {
+                } else if (leaf + 5..leaf + 5 + 6 * padding_headers).contains(&p) {
                     0
                 } else {
                     u32::MAX
@@ -353,7 +353,7 @@ fn reuses_successful_and_failed_suffixes_across_parent_ends() {
                     |p| {
                         reads += 1;
                         let rel = p - start;
-                        if rel < 1536 || rel >= WRAP {
+                        if !(1536..WRAP).contains(&rel) {
                             0
                         } else {
                             u32::MAX
@@ -381,7 +381,7 @@ fn reuses_long_children_as_well_as_long_suffixes() {
         WRAP + 12 * count + 1542,
         |p| {
             reads += 1;
-            if p < 6 * count + 1536 || p >= WRAP {
+            if !(6 * count + 1536..WRAP).contains(&p) {
                 0
             } else {
                 u32::MAX
