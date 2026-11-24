@@ -342,6 +342,7 @@ class Archive {
   final bool hasPid;
   late final LR r;
   final Map<int, SlotEntry> slots = {};
+  final Map<int, int> pids = {};
   final Map<String, int> classSlot = {};
   final Map<String, int> firstClassSlot = {};
   final Map<String, int> classSchema = {};
@@ -649,6 +650,21 @@ class Archive {
     }
     return (slot, ent.name, ent.value);
   }
+
+  /// Resolve a file store-map slot from a scene's hidden-entity ref list to
+  /// the entity's persistent ID (or `null` when unresolved / pre-2017).
+  int? resolveEntityPid(int fileSlot) {
+    var slot = fileSlot;
+    if (burns.isNotEmpty && slot >= burns[0].$1) {
+      final walker = _translateRef(slot);
+      if (walker == null) return null;
+      slot = walker;
+    }
+    final ent = slots[slot];
+    if (ent == null || ent.kind != 'obj') return null;
+    final pid = pids[slot];
+    return (pid != null && pid != 0) ? pid : null;
+  }
 }
 
 // ── shared record blocks ───────────────────────────────────────────────────
@@ -931,6 +947,10 @@ class LegacyReaders {
         if ((mask & (1 << bit)) != 0) {
           pid |= r.u8() << (8 * bit);
         }
+      }
+      final cur = ar.currentObjSlot;
+      if (pid != 0 && cur != null) {
+        ar.pids.putIfAbsent(cur, () => pid);
       }
     }
     return PreambleResult(attrs, pid, attrsSlot);
@@ -2394,8 +2414,8 @@ class Legacy {
 
   /// Mirror of Geometry's GeometryBuilder, kept dependency-free from the
   /// VFF-specific TLV machinery.
-  static void _addEdge(
-      GeometryBuilder builder, int slot, EdgeRec e, Map<int, SlotEntry> slots) {
+  static void _addEdge(GeometryBuilder builder, int slot, EdgeRec e,
+      Map<int, SlotEntry> slots, Map<int, int> pids) {
     if (builder.edges.containsKey(slot)) return;
     for (final vs in [e.v1, e.v2]) {
       if (vs == null) {
@@ -2412,6 +2432,13 @@ class Legacy {
       }
     }
     builder.edges[slot] = (e.v1, e.v2);
+    final edgePids = builder.edgePids;
+    if (edgePids != null) {
+      final pid = pids[slot];
+      if (pid != null && pid != 0) {
+        edgePids[slot] = pid;
+      }
+    }
     final db = e.db;
     final flags = (db.soft != 0 ? 0x08 : 0) |
         (db.smooth != 0 ? 0x10 : 0) |
@@ -2430,12 +2457,15 @@ class Legacy {
     }
   }
 
-  static void _fillBuilder(GeometryBuilder builder,
-      List<(int, String?, Object?)> ents, Map<int, SlotEntry> slots) {
+  static void _fillBuilder(
+      GeometryBuilder builder,
+      List<(int, String?, Object?)> ents,
+      Map<int, SlotEntry> slots,
+      Map<int, int> pids) {
     for (final (s, _, v) in ents) {
       if (v == null) continue;
       if (v is EdgeRec) {
-        _addEdge(builder, s, v, slots);
+        _addEdge(builder, s, v, slots, pids);
       } else if (v is ArcCurveRec) {
         builder.arcCurves[s] = v.frame;
       } else if (v is FaceRec) {
@@ -2447,7 +2477,7 @@ class Legacy {
             if (es == null) continue;
             final ent = slots[es];
             if (ent == null || ent.value == null) continue;
-            _addEdge(builder, es, ent.value as EdgeRec, slots);
+            _addEdge(builder, es, ent.value as EdgeRec, slots, pids);
             // Normalize to the documented CoEdge contract (+1 = same
             // direction as the edge, -1 = reversed) - u.sense is the raw
             // SketchUp bit (0 = forward, 1 = reversed).
@@ -2462,7 +2492,8 @@ class Legacy {
           ..backMaterialId = v.backMat != 0 ? v.backMat : null
           ..uvTransform = null
           ..uvTransformBack = null
-          ..hidden = v.db.hidden != 0;
+          ..hidden = v.db.hidden != 0
+          ..persistentId = pids[s] ?? 0;
         final attrs = v.attrs;
         if (attrs != null) {
           for (final (_, cv) in attrs.children) {
@@ -2478,6 +2509,7 @@ class Legacy {
       } else if (v is InstanceRec) {
         builder.instances.add(GeometryBuilderInstance()
           ..offset = 0
+          ..id = pids[s]
           ..name = v.name
           ..refIdx = v.def
           ..refGuid = ''
@@ -2501,6 +2533,7 @@ class Legacy {
         // caller could see it.
         builder.instances.add(GeometryBuilderInstance()
           ..offset = 0
+          ..id = pids[s]
           ..name = ''
           ..refIdx = v.def
           ..refGuid = v.guid
@@ -2677,8 +2710,8 @@ class Legacy {
             ent.name == 'CComponentDefinition' &&
             ent.value != null) {
           final d = ent.value as DefinitionRec;
-          final b = GeometryBuilder();
-          _fillBuilder(b, d.ents, slots);
+          final b = GeometryBuilder()..edgePids = {};
+          _fillBuilder(b, d.ents, slots, ar.pids);
           defsDict[entry.key] = RawDefinition(
             guid: d.guid,
             name: d.name,
@@ -2705,9 +2738,9 @@ class Legacy {
       );
     }
 
-    final rootBuilder = GeometryBuilder();
+    final rootBuilder = GeometryBuilder()..edgePids = {};
     try {
-      _fillBuilder(rootBuilder, walkResult.root, slots);
+      _fillBuilder(rootBuilder, walkResult.root, slots, ar.pids);
     } catch (e) {
       throw SkpParseException(
         'Failed while building root entities: $e',

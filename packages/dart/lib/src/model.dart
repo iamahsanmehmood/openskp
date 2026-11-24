@@ -21,6 +21,10 @@ class Edge {
   /// were drawn as one continuous multi-segment line or arc; if the curve is
   /// an arc, [Definition.arcs] has it under the same id.
   final int? curveId;
+
+  /// SketchUp's persistent entity ID (`0` when the file predates SketchUp
+  /// 2017 persistent IDs). Matches entries in [Page.hiddenEntityIds].
+  final int persistentId;
   Edge({
     required this.id,
     required this.v1Id,
@@ -29,6 +33,7 @@ class Edge {
     this.smooth = false,
     this.hidden = false,
     this.curveId,
+    this.persistentId = 0,
   });
 }
 
@@ -109,6 +114,10 @@ class Face {
   /// not a layer/tag visibility toggle).
   final bool hidden;
 
+  /// SketchUp's persistent entity ID (`0` when the file predates SketchUp
+  /// 2017 persistent IDs). Matches entries in [Page.hiddenEntityIds].
+  final int persistentId;
+
   Face({
     required this.id,
     this.loops = const [],
@@ -120,6 +129,7 @@ class Face {
     this.uvProjected = false,
     this.uvProjectedBack = false,
     this.hidden = false,
+    this.persistentId = 0,
   });
 }
 
@@ -191,6 +201,7 @@ class Material {
 }
 
 class Instance {
+  final int? id;
   final String name;
   final int? refIdx;
   final String guid;
@@ -217,6 +228,7 @@ class Instance {
   final bool hidden;
 
   Instance({
+    this.id,
     this.name = '',
     this.refIdx,
     this.guid = '',
@@ -363,6 +375,10 @@ class Page {
   /// Names of the layers this scene hides.
   final List<String> hiddenLayers;
 
+  /// Persistent entity IDs of the entities this scene hides (matching
+  /// [Instance.id], [Edge.persistentId] and [Face.persistentId]).
+  final List<int> hiddenEntityIds;
+
   const Page({
     this.name = '',
     this.eye,
@@ -372,6 +388,7 @@ class Page {
     this.parallel = false,
     this.orthoHeight = 0.0,
     this.hiddenLayers = const [],
+    this.hiddenEntityIds = const [],
   });
 
   @override
@@ -385,11 +402,15 @@ class Page {
         fov != other.fov ||
         parallel != other.parallel ||
         orthoHeight != other.orthoHeight ||
-        hiddenLayers.length != other.hiddenLayers.length) {
+        hiddenLayers.length != other.hiddenLayers.length ||
+        hiddenEntityIds.length != other.hiddenEntityIds.length) {
       return false;
     }
     for (var i = 0; i < hiddenLayers.length; i++) {
       if (hiddenLayers[i] != other.hiddenLayers[i]) return false;
+    }
+    for (var i = 0; i < hiddenEntityIds.length; i++) {
+      if (hiddenEntityIds[i] != other.hiddenEntityIds[i]) return false;
     }
     return true;
   }
@@ -404,6 +425,7 @@ class Page {
         parallel,
         orthoHeight,
         Object.hashAll(hiddenLayers),
+        Object.hashAll(hiddenEntityIds),
       );
 }
 

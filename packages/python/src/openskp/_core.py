@@ -1401,6 +1401,17 @@ def _parse_pages(node):
         return struct.unpack('<3d', p) if p is not None and len(p) == 24 \
             else None
 
+    def parse_id_runs(runs):
+        ids = []
+        off = 0
+        while runs and off + 1 <= len(runs):
+            ln = runs[off]
+            if ln == 0 or off + 1 + ln > len(runs):
+                break
+            ids.append(parse_var_int(runs, off + 1, ln))
+            off += 1 + ln
+        return ids
+
     pages = []
     for t60, p60 in _tlv_items(node['payload']) or []:
         if t60 != 0x6D60:
@@ -1416,7 +1427,7 @@ def _parse_pages(node):
                     continue
                 page = {'name': '', 'eye': None, 'target': None, 'up': None,
                         'fov': 35.0, 'parallel': False, 'ortho_height': 0.0,
-                        'hidden_layer_ids': []}
+                        'hidden_layer_ids': [], 'hidden_entity_ids': []}
                 head = _tlv_items(sub(items, 0x6F54) or b'')
                 name = sub(head, 0x6F55)
                 if name:
@@ -1435,15 +1446,8 @@ def _parse_pages(node):
                     height = sub(cam, 0x34C3)
                     if height is not None and len(height) == 8:
                         page['ortho_height'] = struct.unpack('<d', height)[0]
-                hidden = sub(items, 0x7150)
-                off = 0
-                while hidden and off + 1 <= len(hidden):
-                    ln = hidden[off]
-                    if ln == 0 or off + 1 + ln > len(hidden):
-                        break
-                    page['hidden_layer_ids'].append(
-                        parse_var_int(hidden, off + 1, ln))
-                    off += 1 + ln
+                page['hidden_layer_ids'] = parse_id_runs(sub(items, 0x7150))
+                page['hidden_entity_ids'] = parse_id_runs(sub(items, 0x714B))
                 # A scene that doesn't save its camera ("Camera Location"
                 # unticked) is still a scene: it keeps its name and hidden
                 # layers, with eye/target/up left None.
@@ -1825,9 +1829,11 @@ def _extract_geometry_nodes(elements, builder):
                     inst_hidden = bool(d307.payload[0] & 0x01)
 
             dynamic = inst_attribute_dicts.get('dynamic_attributes', {})
+            inst_id = _entity_id(el)
             _detach_tlv_payloads(el.children)
             builder.instances.append({
                 'offset': el.offset,
+                'id': inst_id,
                 'ref_guid': guid,
                 'ref_idx': def_idx,
                 'name': name,

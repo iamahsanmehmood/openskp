@@ -288,12 +288,20 @@ fn modern_instances_carry_unique_entity_ids() {
 }
 
 #[test]
-fn legacy_instances_have_no_entity_id() {
+fn classic_instances_carry_entity_ids_from_sketchup_2017_on() {
     let model = parse("gondola_v20.skp");
-    for definition in model.definitions.values() {
+    let mut ids = BTreeSet::new();
+    for definition in model.definitions.values().chain([model.root()]) {
+        for instance in &definition.instances {
+            assert!(ids.insert(instance.id.expect("no id")));
+        }
+    }
+    assert_eq!(ids.len(), 53);
+
+    let older = parse("nesting_2013.skp");
+    for definition in older.definitions.values().chain([older.root()]) {
         assert!(definition.instances.iter().all(|i| i.id.is_none()));
     }
-    assert!(model.root().instances.iter().all(|i| i.id.is_none()));
 }
 
 #[test]

@@ -178,6 +178,7 @@ class SkpFile {
       defn.vertices[entry.key] = Vertex(id: entry.key, x: x, y: y, z: z);
     }
 
+    final edgePids = d.builder.edgePids;
     for (final entry in d.builder.edges.entries) {
       final (v1, v2) = entry.value;
       final flags = d.builder.edgeFlags[entry.key] ?? 0;
@@ -189,6 +190,7 @@ class SkpFile {
         smooth: (flags & 0x10) != 0,
         hidden: (flags & 0x01) != 0,
         curveId: d.builder.edgeCurves[entry.key],
+        persistentId: edgePids != null ? (edgePids[entry.key] ?? 0) : entry.key,
       );
     }
 
@@ -217,12 +219,14 @@ class SkpFile {
         uvProjected: f.uvProjected,
         uvProjectedBack: f.uvProjectedBack,
         hidden: f.hidden,
+        persistentId: edgePids != null ? f.persistentId : entry.key,
       );
     }
 
     for (final inst in d.builder.instances) {
       final layerId = inst.layerId;
       defn.instances.add(Instance(
+        id: inst.id,
         name: inst.name ?? '',
         refIdx: inst.refIdx,
         guid: inst.refGuid ?? '',
@@ -259,6 +263,7 @@ List<Page> buildPagesFromRaw(RawParsed parsed) {
           for (final id in pg.hiddenLayerIds)
             if (parsed.layerIdToName[id] != null) parsed.layerIdToName[id]!
         ],
+        hiddenEntityIds: List<int>.from(pg.hiddenEntityIds),
       ),
   ];
 }

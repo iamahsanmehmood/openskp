@@ -18,6 +18,7 @@ namespace OpenSkp
         public bool Parallel;
         public double OrthoHeight;
         public List<long> HiddenLayerIds = new List<long>();
+        public List<long> HiddenEntityIds = new List<long>();
     }
 
     internal sealed class RawDimension
@@ -346,15 +347,22 @@ namespace OpenSkp
                             if (height != null && height.Length == 8) page.OrthoHeight = Tlv.ReadF64(height, 0);
                         }
 
-                        var hidden = TlvFindInt(items, 0x7150);
-                        int off = 0;
-                        while (hidden != null && off + 1 <= hidden.Length)
+                        static List<long> ParseIdRuns(byte[]? runs)
                         {
-                            int ln = hidden[off];
-                            if (ln == 0 || off + 1 + ln > hidden.Length) break;
-                            page.HiddenLayerIds.Add(Tlv.ParseVarInt(hidden, off + 1, ln));
-                            off += 1 + ln;
+                            var ids = new List<long>();
+                            int off = 0;
+                            while (runs != null && off + 1 <= runs.Length)
+                            {
+                                int ln = runs[off];
+                                if (ln == 0 || off + 1 + ln > runs.Length) break;
+                                ids.Add(Tlv.ParseVarInt(runs, off + 1, ln));
+                                off += 1 + ln;
+                            }
+                            return ids;
                         }
+
+                        page.HiddenLayerIds = ParseIdRuns(TlvFindInt(items, 0x7150));
+                        page.HiddenEntityIds = ParseIdRuns(TlvFindInt(items, 0x714B));
 
                         // A scene that doesn't save its camera ("Camera Location" unticked)
                         // is still a scene: it keeps its name and hidden layers, with

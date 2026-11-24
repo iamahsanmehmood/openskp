@@ -18,7 +18,7 @@ mod archive;
 mod pages;
 mod reader;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -594,6 +594,7 @@ fn add_edge(
     s: u64,
     e: &LegacyValue,
     slots: &HashMap<u64, LegacySlotEntry>,
+    pids: &HashMap<u64, u64>,
 ) -> Result<()> {
     let id = s as EntityId;
     if b.edges.contains_key(&id) {
@@ -614,6 +615,13 @@ fn add_edge(
     }
     b.edges
         .insert(id, (Some(e.v1 as EntityId), Some(e.v2 as EntityId)));
+    if let Some(edge_pids) = b.edge_pids.as_mut() {
+        if let Some(&pid) = pids.get(&s) {
+            if pid != 0 {
+                edge_pids.insert(id, pid);
+            }
+        }
+    }
     let f = (if e.soft != 0 { 8 } else { 0 })
         | (if e.smooth != 0 { 16 } else { 0 })
         | i32::from(e.hidden != 0);
@@ -679,12 +687,13 @@ fn fill(
     b: &mut GeometryBuilder,
     ents: &[LegacyObject],
     slots: &HashMap<u64, LegacySlotEntry>,
+    pids: &HashMap<u64, u64>,
 ) -> Result<()> {
     for x in ents {
         let s = x.slot;
         let Some(v) = &x.v else { continue };
         match v.k {
-            LegacyKind::Edge => add_edge(b, s, v, slots)?,
+            LegacyKind::Edge => add_edge(b, s, v, slots, pids)?,
             LegacyKind::ArcCurve => {
                 b.arc_curves.insert(s as EntityId, v.arc);
             }
@@ -697,13 +706,14 @@ fn fill(
                     // The drawbase's own layer id (Python's `face['layer']`):
                     // always present in a classic record, 0 for the default.
                     layer_id: Some(EntityId::from(v.layer)),
+                    persistent_id: pids.get(&s).copied().unwrap_or(0),
                     ..Default::default()
                 };
                 for lp in &v.loops {
                     let mut co = Vec::new();
                     for u in &lp.uses {
                         if let Some(LegacySlotEntry { v: Some(ev), .. }) = slots.get(&u.edge) {
-                            add_edge(b, u.edge, ev, slots)?;
+                            add_edge(b, u.edge, ev, slots, pids)?;
                             co.push(CoEdge {
                                 edge_id: u.edge as EntityId,
                                 orientation: if u.sense { -1 } else { 1 },
@@ -744,6 +754,7 @@ fn fill(
                     .map(stringify_attr_dict)
                     .unwrap_or_default();
                 b.instances.push(RawInstance {
+                    id: pids.get(&s).map(|&p| p as EntityId),
                     name: v.name.clone(),
                     ref_idx: Some(v.def as EntityId),
                     matrix: v.xf.clone(),
@@ -763,6 +774,7 @@ fn fill(
                 // Placed exactly like an ordinary component instance; the
                 // definition it points at is flagged is_image.
                 b.instances.push(RawInstance {
+                    id: pids.get(&s).map(|&p| p as EntityId),
                     ref_idx: Some(v.def as EntityId),
                     ref_guid: v.guid.clone(),
                     matrix: v.xf.clone(),
@@ -957,6 +969,7 @@ pub fn parse_legacy(data: &[u8], o: &ParseOptions) -> Result<RawParsed, SkpParse
 
     {
         let slots = &walked.ar.slots;
+        let pids = &walked.ar.pids;
         for (slot, v) in &walked.materials {
             // C++ dereferences the value unconditionally; a material slot read
             // as a back-ref (never seen in a real file) is skipped here.
@@ -1009,7 +1022,8 @@ pub fn parse_legacy(data: &[u8], o: &ParseOptions) -> Result<RawParsed, SkpParse
                 is_group: v.is_group,
                 ..Default::default()
             };
-            fill(&mut d.builder, &v.ents, slots).map_err(|e| {
+            d.builder.edge_pids = Some(BTreeMap::new());
+            fill(&mut d.builder, &v.ents, slots, pids).map_err(|e| {
                 SkpParseError::at_stage(
                     "Failed while building component definitions",
                     ParseStage::LegacyDefs,
@@ -1019,7 +1033,8 @@ pub fn parse_legacy(data: &[u8], o: &ParseOptions) -> Result<RawParsed, SkpParse
             })?;
             out.definitions.insert(slot as EntityId, d);
         }
-        fill(&mut out.root.builder, &walked.root, slots).map_err(|e| {
+        out.root.builder.edge_pids = Some(BTreeMap::new());
+        fill(&mut out.root.builder, &walked.root, slots, pids).map_err(|e| {
             SkpParseError::at_stage(
                 "Failed while building root entities",
                 ParseStage::LegacyDefs,
