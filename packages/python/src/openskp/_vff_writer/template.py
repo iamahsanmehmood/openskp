@@ -16,6 +16,7 @@ import struct
 import time
 import uuid
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from xml.sax.saxutils import escape as _xml_escape
 
 from .archive import (
     ZipEntry,
@@ -33,11 +34,12 @@ from .tlv import (
     read_varint,
     record,
     u8,
+    u32,
     unit_normal,
     varint,
 )
 
-__all__ = ["Template", "EntityEditor"]
+__all__ = ["Template", "EntityEditor", "material_xml", "sanitize_folder"]
 
 # ── Tags (16-bit values exactly as stored little-endian in the file) ───────
 
@@ -251,6 +253,14 @@ def _drawing(
     return Record(T_DRAWING, children=children)
 
 
+def _material_record(entity_id: int, name: str, owner: int) -> Record:
+    children = [
+        _entity_base(entity_id),
+        record(T_MATERIAL_NAME, name.encode("utf-8")),
+        record(T_MATERIAL_OWNER, u8(owner)),
+        record(T_MATERIAL_EMPTY, b""),
+    ]
+    return Record(T_MATERIAL, children=children)
 
 
 
@@ -304,16 +314,89 @@ def _find_entity_id(record_: Record) -> Optional[int]:
 
 # ── Material XML ─────────────────────────────────────────────────────────
 
+def _pbr_block(x_scale: float, y_scale: float) -> str:
+    return (
+        f'    <mat:pbrMR xScale="{_xml_number(x_scale)}" yScale="{_xml_number(y_scale)}">\n'
+        "      <mat:enable_metalness>0</mat:enable_metalness>\n"
+        "      <mat:enable_roughness>0</mat:enable_roughness>\n"
+        "      <mat:enable_normal>0</mat:enable_normal>\n"
+        "      <mat:enable_occlusion>0</mat:enable_occlusion>\n"
+        "      <mat:metallicFactor>1</mat:metallicFactor>\n"
+        "      <mat:roughnessFactor>1</mat:roughnessFactor>\n"
+        "      <mat:normalMapStyle>1</mat:normalMapStyle>\n"
+        "      <mat:normalScale>1</mat:normalScale>\n"
+        "      <mat:occlusionStrength>1</mat:occlusionStrength>\n"
+        "      <mat:baseColorFactor>4294967295</mat:baseColorFactor>\n"
+        "    </mat:pbrMR>\n"
+    )
+
+
+def _xml_number(value: float) -> str:
+    text = f"{value:.6f}".rstrip("0").rstrip(".")
+    return text or "0"
 
 
 
 
+def material_xml(
+    name: str,
+    rgb: Tuple[int, int, int] = (255, 255, 255),
+    *,
+    layer_color: bool = False,
+    opacity: float = 1.0,
+) -> bytes:
+    """A ``material.xml`` as SketchUp 2025 writes it.
+
+    A solid-colour material has ``type="0"``. ``layer_color`` marks the embedded material a tag owns
+    (``Layer_<name>``); SketchUp writes ``pbrPromoState`` 0 and "belongs to
+    another entity" for those.  An opacity below 1 is stored as
+    ``useTrans="1"`` with ``trans = 1 - opacity`` (SketchUp's convention).
+    """
+    red, green, blue = (max(0, min(255, int(c))) for c in rgb)
+    promo = "0" if layer_color else "2"
+    opacity = min(max(float(opacity), 0.0), 1.0)
+    if opacity >= 1.0:
+        trans_attr, use_trans = "0.5", "0"
+    else:
+        trans_attr, use_trans = _xml_number(1.0 - opacity), "1"
+    type_attr = "0"
+    has_texture = "0"
+    block = _pbr_block(1.0, 1.0)
+    text = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="no" ?>\n'
+        '<materialDocument xmlns="http://sketchup.google.com/schemas/sketchup/1.0/material" '
+        'xmlns:mat="http://sketchup.google.com/schemas/sketchup/1.0/material">\n'
+        f'  <mat:material name="{_xml_escape(name)}" type="{type_attr}" workflow="0" '
+        f'colorRed="{red}" colorGreen="{green}" colorBlue="{blue}" '
+        f'colorizeType="0" trans="{trans_attr}" useTrans="{use_trans}" '
+        f'pbrPromoState="{promo}" hasTexture="{has_texture}">\n'
+        + block
+        + "  </mat:material>\n"
+        "</materialDocument>\n"
+    )
+    return text.encode("utf-8")
 
 
+def sanitize_folder(name: str) -> str:
+    """Archive folder for a material/tag name, as SketchUp derives it."""
+    out = []
+    for char in name:
+        if char in '*<>:|/\\':
+            out.append("_")
+        else:
+            out.append(char)
+    folder = "".join(out)
+    return folder or "_"
 
 
-
-
+def _material_folder_for(name: str, taken: Sequence[str]) -> str:
+    base = sanitize_folder(name)
+    if base not in taken:
+        return base
+    counter = 1
+    while f"{base}{counter}" in taken:
+        counter += 1
+    return f"{base}{counter}"
 
 
 # ── Template ─────────────────────────────────────────────────────────────
@@ -543,8 +626,58 @@ class Template:
 
     # -- adding materials / layers ---------------------------------------
 
+    def add_material(
+        self, name: str, rgb: Tuple[int, int, int], opacity: float = 1.0
+    ) -> int:
+        if name in self.materials:
+            return self.materials[name]
+        folder = _material_folder_for(name, self.material_folders)
+        identifier = self.alloc_id()
+        self._material_list().children.append(_material_record(identifier, folder, 0))
+        self.material_ids[identifier] = name
+        self.material_folders.append(folder)
+        self.materials[name] = identifier
+        self._add_entry(
+            f"materials/{folder}/material.xml",
+            material_xml(name, rgb, opacity=opacity),
+        )
+        return identifier
 
 
+    def add_layer(
+        self,
+        name: str,
+        color: Optional[Tuple[int, int, int]] = None,
+        hidden: bool = False,
+    ) -> int:
+        if name in self.layers:
+            return self.layers[name]
+        colour = color if color is not None else _DEFAULT_LAYER_COLOR
+        identifier = self.alloc_id()
+        material_id = self.alloc_id()
+        folder = _material_folder_for(f"Layer_{name}", self.material_folders)
+        self.material_folders.append(folder)
+        layer = Record(
+            T_LAYER,
+            children=[
+                _entity_base(identifier),
+                record(T_LAYER_NAME, name.encode("utf-8")),
+                record(T_LAYER_HIDDEN, u8(1 if hidden else 0)),
+                Record(
+                    T_LAYER_MATERIAL,
+                    children=[_material_record(material_id, folder, 1)],
+                ),
+                record(T_LAYER_TAIL, u32(0)),
+            ],
+        )
+        self._layer_list().children.append(layer)
+        self.layers[name] = identifier
+        self.layer_ids[identifier] = name
+        self._add_entry(
+            f"materials/{folder}/material.xml",
+            material_xml(f"Layer_{name}", colour, layer_color=True),
+        )
+        return identifier
 
 
     def _add_entry(self, name: str, data: bytes, flag: int = 0x0006) -> None:

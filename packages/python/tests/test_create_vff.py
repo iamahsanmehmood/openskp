@@ -312,3 +312,32 @@ def test_face_errors_are_skpwriteerrors():
         )
 
 
+def test_materials_and_tags_are_shared_handles(tmp_path):
+    builder = create_vff()
+    red = builder.add_material("Red", (255, 0, 0))
+    assert builder.add_material("Red", (0, 255, 0)) == red
+    tag = builder.add_layer("Roof", (10, 20, 30), hidden=True)
+    assert builder.add_layer("Roof") == tag
+    assert builder.materials_by_name == {"Red": red}
+    assert builder.layers_by_name["Roof"] == tag
+    builder.add_face(
+        [(0, 0, 0), (10, 0, 0), (10, 10, 0), (0, 10, 0)],
+        material=red,
+        layer=tag,
+    )
+    model = parse_bytes(tmp_path, builder.to_bytes())
+    assert [material.name for material in model.materials] == ["Red"]
+    tag_read = next(layer for layer in model.layers if layer.name == "Roof")
+    assert (tag_read.color_r, tag_read.color_g, tag_read.color_b) == (10, 20, 30)
+    assert tag_read.hidden
+
+
+def test_material_errors_are_skpwriteerrors():
+    with pytest.raises(SkpWriteError):
+        create_vff().add_material("bad", (300, 0, 0))
+    with pytest.raises(SkpWriteError):
+        create_vff().add_material("bad", (1, 2), opacity=0.5)
+    with pytest.raises(SkpWriteError):
+        create_vff().add_layer("bad", (1, 2, 300))
+
+

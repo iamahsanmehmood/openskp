@@ -102,6 +102,16 @@ def check_integrity(data: bytes) -> bool:
 # ── Small helpers ────────────────────────────────────────────────────────
 
 
+def _validated_rgba(
+    rgba: Sequence[int], opacity: Optional[float] = None
+) -> Tuple[int, int, int, int]:
+    if len(rgba) == 3:
+        rgba = (*rgba, 255)
+    if len(rgba) != 4 or not all(
+        isinstance(channel, int) and 0 <= channel <= 255 for channel in rgba
+    ):
+        raise SkpWriteError("rgba must be 3 or 4 integers in 0-255")
+    return int(rgba[0]), int(rgba[1]), int(rgba[2]), int(rgba[3])
 
 
 def _edge_flags(hidden: bool, soft: bool, smooth: bool) -> int:
@@ -162,7 +172,46 @@ class VffBuilder:
 
     # -- appearance -------------------------------------------------------
 
+    def add_material(
+        self,
+        name: str,
+        rgba: Sequence[int],
+        opacity: Optional[float] = None,
+    ) -> int:
+        """Register a solid-colour material and return a handle for ``add_face``."""
+        if name in self.materials_by_name:
+            return self.materials_by_name[name]
+        red, green, blue, _alpha = _validated_rgba(rgba, opacity)
+        try:
+            identifier = self._template.add_material(
+                name,
+                (red, green, blue),
+                opacity=1.0 if opacity is None else float(opacity),
+            )
+        except ValueError as exc:
+            raise SkpWriteError(str(exc)) from exc
+        self.materials_by_name[name] = identifier
+        return identifier
 
+    def add_layer(
+        self,
+        name: str,
+        color: Optional[Sequence[int]] = None,
+        hidden: bool = False,
+    ) -> int:
+        """Register a tag and return a handle for ``add_face``/``add_instance``."""
+        if name in self.layers_by_name:
+            return self.layers_by_name[name]
+        rgb = None
+        if color is not None:
+            rgba = _validated_rgba(color)
+            rgb = rgba[:3]
+        try:
+            identifier = self._template.add_layer(name, rgb, hidden=bool(hidden))
+        except ValueError as exc:
+            raise SkpWriteError(str(exc)) from exc
+        self.layers_by_name[name] = identifier
+        return identifier
 
     # -- validation -------------------------------------------------------
 
