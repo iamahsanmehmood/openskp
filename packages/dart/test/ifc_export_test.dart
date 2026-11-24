@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:typed_data';
 import 'package:openskp/openskp.dart';
 import 'package:test/test.dart';
@@ -168,6 +169,131 @@ void main() {
       expect(ifcText, contains('IFCCARTESIANPOINTLIST3D'));
       expect(ifcText, contains('IFCPROPERTYSET'));
       expect(ifcText, contains('ENDSEC;'));
+    });
+
+    test('declares millimetres and converts glTF Y-up positions back to IFC Z-up', () {
+      final scene = Scene(
+        sceneHierarchy: InstanceNode(name: 'Root', definitionName: 'RootDef'),
+        meshIndex: {
+          'Test Triangle': MeshMetadata(name: 'Test Triangle'),
+        },
+        glbPrimitives: [
+          GlbPrimitive(
+            geomName: 'Test Triangle',
+            materialIndex: 0,
+            positions: Float32List.fromList([0, 0, 0, 2, 3, 5, 0, 1, 0]),
+            normals: Float32List.fromList([0, 0, 1, 0, 0, 1, 0, 0, 1]),
+            uvs: Float32List.fromList([0, 0, 1, 0, 0, 1]),
+            indices: Uint32List.fromList([0, 1, 2]),
+          ),
+        ],
+        gltfMaterials: [{}],
+      );
+
+      final ifcText = toIfc(scene);
+      expect(ifcText, contains('IFCSIUNIT(*,.LENGTHUNIT.,.MILLI.,.METRE.)'));
+      expect(ifcText, contains('(2000.000000,-5000.000000,3000.000000)'));
+      expect(ifcText, isNot(contains('(2000.000000,3000.000000,5000.000000)')));
+    });
+
+    test('uses MeshMetadata.name, passes raw text to custom classifier, and writes layer visibility & Psets', () {
+      final scene = Scene(
+        sceneHierarchy: InstanceNode(name: 'Root', definitionName: 'RootDef'),
+        meshIndex: {
+          'mesh_3_ROOT__W1_Layer0': MeshMetadata(
+            name: "Wände 'A'",
+            layer: "Außenwände '1'",
+            properties: {'width': '10.0'},
+            attributeDictionaries: {
+              'fbd-einfo': {'code': 'aPf'},
+              'empty_dict': {},
+            },
+          ),
+        },
+        glbPrimitives: [
+          GlbPrimitive(
+            geomName: 'mesh_3_ROOT__W1_Layer0',
+            materialIndex: 0,
+            positions: Float32List.fromList([0, 0, 0, 1, 0, 0, 0, 1, 0]),
+            normals: Float32List.fromList([0, 0, 1, 0, 0, 1, 0, 0, 1]),
+            uvs: Float32List.fromList([0, 0, 1, 0, 0, 1]),
+            indices: Uint32List.fromList([0, 1, 2]),
+          ),
+        ],
+        gltfMaterials: [{}],
+        layerHidden: {"Außenwände '1'": true},
+      );
+
+      final seen = <(String, String)>[];
+      final ifcText = toIfc(
+        scene,
+        classifier: (name, layer) {
+          seen.add((name, layer));
+          return ['IFCWALL', 'IfcWall'];
+        },
+      );
+      expect(seen, [("Wände 'A'", "Außenwände '1'")]);
+      expect(ifcText, contains("''A''"));
+      expect(ifcText, isNot(contains('mesh_3_ROOT')));
+      expect(ifcText, contains("'Pset_CustomProperties'"));
+      expect(ifcText, contains("'Pset_fbd-einfo'"));
+      expect(ifcText, isNot(contains('Pset_empty_dict')));
+      expect(ifcText, contains(',.F.,.F.,.F.,());'));
+    });
+
+    test('preserves definition display names, hidden layers, single surface per unpainted face, and plugin dicts end-to-end', () {
+      const path = 'ROOT / Wall Frame / Stud 12';
+      expect(classifyElement('Stud 12', 'Layer0', path)[0], equals('IFCBUILDINGELEMENTPROXY'));
+      expect(classifyElement('Stud 12', 'Layer0', path, true)[0], equals('IFCWALL'));
+
+      final builder = create();
+      final hiddenWalls = builder.addLayer('HiddenWalls', color: [200, 100, 100], hidden: true);
+      final stud = builder.addComponentDefinition('Stud 12', (def) {
+        def.addFace([(0.0, 0.0, 0.0), (10.0, 0.0, 0.0), (10.0, 10.0, 0.0), (0.0, 10.0, 0.0)]);
+      });
+      final wallFrame = builder.addComponentDefinition('Wall Frame', (def) {
+        def.addInstance(stud);
+      });
+      builder.addInstance(wallFrame, layer: hiddenWalls);
+
+      final scene = SkpFile.fromBuffer(builder.toBytes()).buildScene();
+      expect(scene.layerHidden['HiddenWalls'], isTrue);
+      expect(scene.layerHidden['Layer0'], isFalse);
+      final ifcText = toIfc(scene, classifyUsingFullPath: true);
+      expect(ifcText, contains('IFCWALL('));
+      expect(ifcText, contains("'Stud 12'"));
+      expect(ifcText, isNot(contains('mesh_0_ROOT')));
+      expect(RegExp(r'IFCTRIANGULATEDFACESET\(').allMatches(ifcText).length, 1);
+
+      final untitledScene =
+          SkpFile.open('${Directory.current.path}/test/fixtures/Untitled.skp').buildScene();
+      final untitledIfc = toIfc(untitledScene);
+      expect(untitledIfc, contains("'Pset_steelframer-dict'"));
+    });
+
+    test('writes a hidden placement tag as hidden in IFC even when all definition faces are on Wood', () {
+      final b = create();
+      final wood = b.addLayer('Wood', color: [160, 110, 60]);
+      final furnitureHidden =
+          b.addLayer('FurnitureHidden', color: [40, 40, 40], hidden: true);
+      final woodPanel = b.addComponentDefinition('WoodPanel', (d) {
+        d.addFace(
+          [(0.0, 0.0, 0.0), (2.0, 0.0, 0.0), (2.0, 2.0, 0.0), (0.0, 2.0, 0.0)],
+          layer: wood,
+        );
+      });
+      b.addInstance(woodPanel, name: 'HiddenFurniture', layer: furnitureHidden);
+
+      final ifcText = toIfc(SkpFile.fromBuffer(b.toBytes()).buildScene());
+      final layerLines = ifcText
+          .split(RegExp(r'\r?\n'))
+          .where((l) => l.contains('IFCPRESENTATIONLAYERWITHSTYLE('))
+          .toList();
+      final hiddenLines =
+          layerLines.where((l) => l.contains("'FurnitureHidden'")).toList();
+      expect(hiddenLines.length, 1);
+      expect(hiddenLines.first, contains(',.F.,'));
+      expect(layerLines.any((l) => l.contains("'Wood'")), isFalse);
     });
   });
 }

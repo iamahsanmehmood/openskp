@@ -164,6 +164,10 @@ class Scene {
   /// are Y-up metres).
   List<Page> pages;
 
+  /// Each layer's hidden/visible state by layer name, read from the parsed
+  /// file (`true` when hidden, `false` when visible).
+  Map<String, bool> layerHidden;
+
   /// [glbPrimitives] without the back copies of faces that have no paint on
   /// either side, for formats and callers that emit one surface per face.
   List<GlbPrimitive> get surfacePrimitives =>
@@ -177,8 +181,10 @@ class Scene {
     List<SceneTexture>? textures,
     this.unreadRootEntities = 0,
     List<Page>? pages,
+    Map<String, bool>? layerHidden,
   })  : textures = textures ?? [],
-        pages = pages ?? [];
+        pages = pages ?? [],
+        layerHidden = layerHidden ?? {};
 }
 
 /// Identifies an image's MIME type from its magic bytes. Returns null for
@@ -745,14 +751,29 @@ class SceneBuilder {
           }
         }
 
-        final instName = (inst.name != null && inst.name!.isNotEmpty) ? inst.name! : 'Component_$refIdx';
+        final childDef = refIdx != null ? defsDict[refIdx] : null;
+        // Fallback order: an attribute-dict name/label/code override, then
+        // the instance's own explicit name, then the definition's own
+        // name IF it's not itself just SketchUp's auto-generated
+        // "Group#1"/"Component#12" placeholder, then finally the internal
+        // index. Mirrors instanced_scene.dart's identical resolution (and
+        // Python's/C++'s own scene.py/instanced_scene.py) - see
+        // instanced_fixture_parity_test.dart, which depends on both trees
+        // resolving display names identically.
+        final childDefName = childDef?.name ?? '';
+        final defNameIsReal = childDefName.isNotEmpty && !Geometry.isGenericDefinitionName(childDefName);
+        final nameOverride = Geometry.findNameOverride(instAttributeDicts);
+        final instNameNonEmpty = inst.name != null && inst.name!.isNotEmpty;
+        final instName = instNameNonEmpty ? inst.name! : (defNameIsReal ? childDefName : 'Component_$refIdx');
+        final displayName = nameOverride ?? instName;
+        final nameIsGenerated = nameOverride == null && !instNameNonEmpty && !defNameIsReal;
+
         final fullPathName = '$pathName / $instName';
         instanceCounter++;
         if (instanceCounter % progressInterval == 0) {
           emitProgress(options, 'build_scene', instanceCounter, instanceCounter);
           emitLog(options, SkpLogLevel.debug, 'Processed $instanceCounter placed instances');
         }
-        final childDef = refIdx != null ? defsDict[refIdx] : null;
         List<InstanceNode> childNodes;
         if (refIdx != null && childDef != null) {
           if (!activeDefinitions.add(refIdx)) {
@@ -782,22 +803,6 @@ class SceneBuilder {
         final itx = newMatrix.length > 9 ? newMatrix[9] * _inchesToMm : 0.0;
         final ity = newMatrix.length > 10 ? newMatrix[10] * _inchesToMm : 0.0;
         final itz = newMatrix.length > 11 ? newMatrix[11] * _inchesToMm : 0.0;
-
-        // Fallback order: an attribute-dict name/label/code override, then
-        // the instance's own explicit name, then the definition's own
-        // name IF it's not itself just SketchUp's auto-generated
-        // "Group#1"/"Component#12" placeholder, then finally the internal
-        // index. Mirrors instanced_scene.dart's identical resolution (and
-        // Python's/C++'s own scene.py/instanced_scene.py) - see
-        // instanced_fixture_parity_test.dart, which depends on both trees
-        // resolving display names identically.
-        final childDefName = childDef?.name ?? '';
-        final defNameIsReal = childDefName.isNotEmpty && !Geometry.isGenericDefinitionName(childDefName);
-        final nameOverride = Geometry.findNameOverride(instAttributeDicts);
-        final instNameNonEmpty = inst.name != null && inst.name!.isNotEmpty;
-        final fallbackName = instNameNonEmpty ? inst.name! : (defNameIsReal ? childDefName : 'Component_$refIdx');
-        final displayName = nameOverride ?? fallbackName;
-        final nameIsGenerated = nameOverride == null && !instNameNonEmpty && !defNameIsReal;
 
         // Every OTHER attribute dictionary this instance carries -
         // dynamic_attributes is already surfaced separately as properties
@@ -891,6 +896,7 @@ class SceneBuilder {
       textures: textures,
       unreadRootEntities: parsed.unreadRootEntities,
       pages: buildPagesFromRaw(parsed),
+      layerHidden: Map<String, bool>.from(parsed.layerHidden),
     );
   }
 

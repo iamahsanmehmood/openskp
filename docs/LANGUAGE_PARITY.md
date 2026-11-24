@@ -104,7 +104,7 @@ released. 🔶 = implemented on `main`, not published to a package registry
 | codegen round-trips `applied_width`/opacity | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Export** | | | | | |
 | GLB / OBJ+MTL / STL / PLY / DXF 3D / IFC4 / JSON | ✅ | ✅ | ✅ | ✅ | ✅ |
-| IFC export: unit/axis fix, real names + layer visibility, plugin-attribute Psets, full-path classification | ✅ | not checked for equivalent issues | not checked | not checked | ✅ |
+| IFC export: unit/axis fix, real names + layer visibility, plugin-attribute Psets, full-path classification | ✅ (also writes `IFCELEMENTASSEMBLY` and accepts a 3-arg classifier) | ✅ (2-arg classifier; no `IFCELEMENTASSEMBLY`) | ✅ (2-arg classifier; no `IFCELEMENTASSEMBLY`) | ✅ (2-arg classifier; no `IFCELEMENTASSEMBLY`) | ✅ (2-arg classifier; no `IFCELEMENTASSEMBLY`) |
 | IFC export: loose-edge curve sets + analytic arcs as `IfcAnnotation` / `IfcIndexedPolyCurve`, IFC4 STEP conformance fixes | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Direct SketchUp → Fragments (`.frag`) export ([details](#fragments-frag-support)) | ✅ | ✅ | ✅ | 🔶 on `main`, not published | ✅ |
 | **Import** | | | | | |

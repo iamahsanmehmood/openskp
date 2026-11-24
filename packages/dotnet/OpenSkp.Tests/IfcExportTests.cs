@@ -1,4 +1,7 @@
+using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Linq;
 using OpenSkp;
 using Xunit;
 
@@ -150,6 +153,153 @@ namespace OpenSkp.Tests
             Assert.Contains("IFCCARTESIANPOINTLIST3D", ifcText);
             Assert.Contains("IFCPROPERTYSET", ifcText);
             Assert.Contains("ENDSEC;", ifcText);
+        }
+
+        [Fact]
+        public void ToIfc_DeclaresMillimetresAndConvertsGltfYUpToIfcZUp()
+        {
+            var scene = new Scene
+            {
+                SceneHierarchy = new InstanceNode { Name = "Root", DefinitionName = "RootDef" },
+                MeshIndex = new Dictionary<string, MeshMetadata>
+                {
+                    ["Test Triangle"] = new MeshMetadata { Name = "Test Triangle" }
+                },
+                GlbPrimitives = new List<GlbPrimitive>
+                {
+                    new GlbPrimitive
+                    {
+                        GeomName = "Test Triangle",
+                        MaterialIndex = 0,
+                        Positions = new float[] { 0f, 0f, 0f, 2f, 3f, 5f, 0f, 1f, 0f },
+                        Normals = new float[] { 0f, 0f, 1f, 0f, 0f, 1f, 0f, 0f, 1f },
+                        Uvs = new float[] { 0f, 0f, 1f, 0f, 0f, 1f },
+                        Indices = new uint[] { 0, 1, 2 }
+                    }
+                }
+            };
+
+            string ifcText = IfcExport.ToIfc(scene);
+            Assert.Contains("IFCSIUNIT(*,.LENGTHUNIT.,.MILLI.,.METRE.)", ifcText);
+            Assert.Contains("(2000.000000,-5000.000000,3000.000000)", ifcText);
+            Assert.DoesNotContain("(2000.000000,3000.000000,5000.000000)", ifcText);
+        }
+
+        [Fact]
+        public void ToIfc_UsesRealInstanceNameAndPassesRawTextToCustomClassifier()
+        {
+            var scene = new Scene
+            {
+                SceneHierarchy = new InstanceNode { Name = "Root", DefinitionName = "RootDef" },
+                MeshIndex = new Dictionary<string, MeshMetadata>
+                {
+                    ["mesh_3_ROOT__W1_Layer0"] = new MeshMetadata
+                    {
+                        Name = "Wände 'A'",
+                        Layer = "Außenwände '1'",
+                        Properties = new Dictionary<string, string> { ["width"] = "10.0" },
+                        AttributeDictionaries = new Dictionary<string, Dictionary<string, string>>
+                        {
+                            ["fbd-einfo"] = new Dictionary<string, string> { ["code"] = "aPf" },
+                            ["empty_dict"] = new Dictionary<string, string>()
+                        }
+                    }
+                },
+                GlbPrimitives = new List<GlbPrimitive>
+                {
+                    new GlbPrimitive
+                    {
+                        GeomName = "mesh_3_ROOT__W1_Layer0",
+                        MaterialIndex = 0,
+                        Positions = new float[] { 0f, 0f, 0f, 1f, 0f, 0f, 0f, 1f, 0f },
+                        Normals = new float[] { 0f, 0f, 1f, 0f, 0f, 1f, 0f, 0f, 1f },
+                        Uvs = new float[] { 0f, 0f, 1f, 0f, 0f, 1f },
+                        Indices = new uint[] { 0, 1, 2 }
+                    }
+                },
+                LayerHidden = new Dictionary<string, bool> { ["Außenwände '1'"] = true }
+            };
+
+            var seen = new List<(string Name, string Layer)>();
+            string ifcText = IfcExport.ToIfc(scene, classifier: (name, layer) =>
+            {
+                seen.Add((name, layer));
+                return ("IFCWALL", "IfcWall");
+            });
+
+            Assert.Equal(new[] { ("Wände 'A'", "Außenwände '1'") }, seen);
+            Assert.Contains("''A''", ifcText);
+            Assert.DoesNotContain("mesh_3_ROOT", ifcText);
+            Assert.Contains("'Pset_CustomProperties'", ifcText);
+            Assert.Contains("'Pset_fbd-einfo'", ifcText);
+            Assert.DoesNotContain("Pset_empty_dict", ifcText);
+            Assert.Contains(",.F.,.F.,.F.,());", ifcText);
+        }
+
+        [Fact]
+        public void ToIfc_PreservesPaintedMaterialColorsDisplayNamesAndHiddenLayersEndToEnd()
+        {
+            const string path = "ROOT / Wall Frame / Stud 12";
+            Assert.Equal("IFCBUILDINGELEMENTPROXY", IfcExport.ClassifyElement("Stud 12", "Layer0", path).StepType);
+            Assert.Equal("IFCWALL", IfcExport.ClassifyElement("Stud 12", "Layer0", path, classifyUsingFullPath: true).StepType);
+
+            var builder = SkpCreate.NewFile();
+            int redMat = builder.AddMaterial("Crimson", (255, 51, 0));
+            int hiddenWalls = builder.AddLayer("HiddenWalls", (200, 100, 100), hidden: true);
+            ComponentDefinitionBuilder stud;
+            using (stud = builder.AddComponentDefinition("Stud 12"))
+            {
+                stud.AddFace(
+                    new (double, double, double)[] { (0, 0, 0), (10, 0, 0), (10, 10, 0), (0, 10, 0) },
+                    material: redMat);
+            }
+            ComponentDefinitionBuilder wallFrame;
+            using (wallFrame = builder.AddComponentDefinition("Wall Frame"))
+            {
+                wallFrame.AddInstance(stud);
+            }
+            builder.AddInstance(wallFrame, layer: hiddenWalls);
+
+            var scene = SkpFile.BuildScene(builder.ToBytes());
+            Assert.True(scene.LayerHidden["HiddenWalls"]);
+            Assert.False(scene.LayerHidden["Layer0"]);
+
+            string ifcText = IfcExport.ToIfc(scene, classifyUsingFullPath: true);
+            Assert.Contains("IFCWALL(", ifcText);
+            Assert.Contains("'Stud 12'", ifcText);
+            Assert.DoesNotContain("mesh_0_ROOT", ifcText);
+            // Scene.cs stores baseColorFactor as double[]; verify non-grey IFCCOLOURRGB
+            Assert.Contains("IFCCOLOURRGB($,1.0000,0.2000,0.0000);", ifcText);
+            Assert.DoesNotContain("IFCCOLOURRGB($,0.8000,0.8000,0.8000);", ifcText);
+
+            var untitledScene = SkpFile.BuildScene(Path.Combine(AppContext.BaseDirectory, "fixtures", "Untitled.skp"));
+            string untitledIfc = IfcExport.ToIfc(untitledScene);
+            Assert.Contains("'Pset_steelframer-dict'", untitledIfc);
+        }
+
+        [Fact]
+        public void ToIfc_WritesHiddenPlacementTagAsHiddenEvenWhenDefinitionFacesAreWood()
+        {
+            var b = SkpCreate.NewFile();
+            int wood = b.AddLayer("Wood", (160, 110, 60));
+            int furnitureHidden = b.AddLayer("FurnitureHidden", (40, 40, 40), hidden: true);
+            ComponentDefinitionBuilder woodPanel;
+            using (woodPanel = b.AddComponentDefinition("WoodPanel"))
+            {
+                woodPanel.AddFace(
+                    new (double, double, double)[] { (0, 0, 0), (2, 0, 0), (2, 2, 0), (0, 2, 0) },
+                    layer: wood);
+            }
+            b.AddInstance(woodPanel, name: "HiddenFurniture", layer: furnitureHidden);
+
+            string ifcText = IfcExport.ToIfc(SkpFile.BuildScene(b.ToBytes()));
+            var layerLines = ifcText.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None)
+                .Where(l => l.Contains("IFCPRESENTATIONLAYERWITHSTYLE("))
+                .ToArray();
+            var hiddenLines = layerLines.Where(l => l.Contains("'FurnitureHidden'")).ToArray();
+            Assert.Single(hiddenLines);
+            Assert.Contains(",.F.,", hiddenLines[0]);
+            Assert.DoesNotContain(layerLines, l => l.Contains("'Wood'"));
         }
     }
 }
