@@ -570,8 +570,10 @@ fn attribute_values_convert_from_plain_types() {
 #[test]
 fn builder_default_matches_create() {
     let mut b = SkpBuilder::default();
+    b.use_deterministic_ids(1700_000_000);
     b.add_face(&square(), &FaceOptions::default()).unwrap();
     let mut c = create();
+    c.use_deterministic_ids(1700_000_000);
     c.add_face(&square(), &FaceOptions::default()).unwrap();
     assert_eq!(b.to_bytes().unwrap(), c.to_bytes().unwrap());
 }
