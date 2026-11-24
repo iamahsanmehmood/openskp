@@ -51,7 +51,41 @@ void main() {
       expect(builder.constructionLines[0].end, (2.0, 10.0, 4.0));
       expect(builder.constructionLines[1].start, isNull);
       expect(builder.constructionLines[1].end, isNull);
+      expect(builder.constructionLines[0].hidden, isFalse);
+      expect(builder.constructionLines[0].layer, '');
       expect(builder.constructionPoints.single.position, (8.0, 9.0, 10.0));
+      expect(builder.constructionPoints.single.hidden, isFalse);
+      expect(builder.constructionPoints.single.layer, '');
+    });
+
+    test('reads VFF guide hidden flag and layer id from 6842 -> D007', () {
+      TlvNode drawbase(int flags, [int? layerId]) {
+        final children = <TlvNode>[
+          if (layerId != null) node('D207', payload: Uint8List.fromList([layerId])),
+          node('D307', payload: Uint8List.fromList([flags])),
+        ];
+        return node('6842', children: [node('D007', children: children)]);
+      }
+
+      final builder = GeometryBuilder();
+      Geometry.extractGeometryFromNodes([
+        node('9213', children: [
+          node('6C42', children: [drawbase(0x07), node('6D42', payload: doubles([1, 2, 3]))]),
+          node('6C42', children: [drawbase(0x06, 4), node('6D42', payload: doubles([4, 5, 6]))]),
+        ]),
+        node('9113', children: [
+          node('6942', children: [drawbase(0x07, 3), node('6A42', payload: doubles([0, 0, 0, 1, 0, 0, 0, 12]))]),
+        ]),
+      ], builder);
+
+      expect(builder.constructionPoints, hasLength(2));
+      expect(builder.constructionPoints[0].hidden, isTrue);
+      expect(builder.constructionPoints[0].layer, '');
+      expect(builder.constructionPoints[1].hidden, isFalse);
+      expect(builder.constructionPoints[1].layer, '4');
+      expect(builder.constructionLines, hasLength(1));
+      expect(builder.constructionLines[0].hidden, isTrue);
+      expect(builder.constructionLines[0].layer, '3');
     });
 
     test('ignores incomplete line and point payloads', () {

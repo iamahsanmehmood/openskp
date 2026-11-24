@@ -520,6 +520,8 @@ class ConstructionLine:
     direction: Tuple[float, float, float] = (1.0, 0.0, 0.0)
     start: Optional[Tuple[float, float, float]] = None
     end: Optional[Tuple[float, float, float]] = None
+    layer: str = ""
+    hidden: bool = False
 
 
 @dataclass
@@ -572,9 +574,14 @@ class ConstructionPoint:
 
     Attributes:
         position: The point's position, in inches (world space).
+        layer: Name of the layer (tag) the guide is assigned to, or ``""``
+            for the default layer (Layer0).
+        hidden: Whether the guide itself is hidden.
     """
 
     position: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    layer: str = ""
+    hidden: bool = False
 
 
 @dataclass
@@ -966,11 +973,14 @@ class SkpFile:
                 ))
             # Populate construction lines/points
             for cl in getattr(builder, "construction_lines", []):
+                cl_layer_id = cl.get("layer_id")
                 defn.construction_lines.append(ConstructionLine(
                     point=cl.get("point", (0.0, 0.0, 0.0)),
                     direction=cl.get("direction", (1.0, 0.0, 0.0)),
                     start=cl.get("start"),
                     end=cl.get("end"),
+                    layer=layer_id_to_name.get(cl_layer_id, "") if cl_layer_id is not None else "",
+                    hidden=cl.get("hidden", False),
                 ))
             for curve_id, frame in (getattr(builder, "arc_curves", None) or {}).items():
                 defn.arcs[curve_id] = ArcCurve(
@@ -978,8 +988,11 @@ class SkpFile:
                     x_axis=tuple(frame["x_axis"]), y_axis=tuple(frame["y_axis"]),
                     start_angle=frame["start_angle"], end_angle=frame["end_angle"])
             for cp in getattr(builder, "construction_points", []):
+                cp_layer_id = cp.get("layer_id")
                 defn.construction_points.append(ConstructionPoint(
                     position=cp.get("position", (0.0, 0.0, 0.0)),
+                    layer=layer_id_to_name.get(cp_layer_id, "") if cp_layer_id is not None else "",
+                    hidden=cp.get("hidden", False),
                 ))
             if def_id == "ROOT":
                 model.root = defn

@@ -79,8 +79,10 @@ export class GeometryBuilder {
     direction: [number, number, number];
     start: [number, number, number] | null;
     end: [number, number, number] | null;
+    layerId?: number | null;
+    hidden?: boolean;
   }[] = [];
-  constructionPoints: { position: [number, number, number] }[] = [];
+  constructionPoints: { position: [number, number, number]; layerId?: number | null; hidden?: boolean }[] = [];
 }
 
 export interface ParsedDefinition {
@@ -98,8 +100,10 @@ export interface ParsedDefinition {
     direction: [number, number, number];
     start: [number, number, number] | null;
     end: [number, number, number] | null;
+    layerId?: number | null;
+    hidden?: boolean;
   }[];
-  constructionPoints?: { position: [number, number, number] }[];
+  constructionPoints?: { position: [number, number, number]; layerId?: number | null; hidden?: boolean }[];
   builder: GeometryBuilder;
 }
 
@@ -451,7 +455,8 @@ export function extractGeometryFromNodes(
       });
     } else if (tag === '6942') {
       // VFF guide line (9113 -> 6942 -> 6A42): 3 point doubles,
-      // 3 direction doubles, then the start/end distance parameters.
+      // 3 direction doubles, then the start/end distance parameters;
+      // 6842 -> D007 holds D307 (display flags, +0x01 hidden) and D207 (layer id).
       const body = findChildTag(el.children, '6A42');
       if (body && body.payload.length >= 64) {
         const p = body.payload;
@@ -465,19 +470,37 @@ export function extractGeometryFromNodes(
                 point[2] + direction[2] * distance,
               ]
             : null;
+        const flagsNode = findChildTag(el.children, 'D307');
+        const hidden = flagsNode && flagsNode.payload.length > 0 ? (flagsNode.payload[0] & 0x01) !== 0 : false;
+        const layerNode = findChildTag(el.children, 'D207');
+        const layerId =
+          layerNode && layerNode.payload.length > 0
+            ? parseVarInt(layerNode.payload, 0, layerNode.payload.length)
+            : null;
         builder.constructionLines.push({
           point,
           direction,
           start: endpoint(readF64(p, 48)),
           end: endpoint(readF64(p, 56)),
+          layerId,
+          hidden,
         });
       }
     } else if (tag === '6C42') {
       // VFF guide point (9213 -> 6C42 -> 6D42).
       const pos = findChildTag(el.children, '6D42');
       if (pos && pos.payload.length >= 24) {
+        const flagsNode = findChildTag(el.children, 'D307');
+        const hidden = flagsNode && flagsNode.payload.length > 0 ? (flagsNode.payload[0] & 0x01) !== 0 : false;
+        const layerNode = findChildTag(el.children, 'D207');
+        const layerId =
+          layerNode && layerNode.payload.length > 0
+            ? parseVarInt(layerNode.payload, 0, layerNode.payload.length)
+            : null;
         builder.constructionPoints.push({
           position: [readF64(pos.payload, 0), readF64(pos.payload, 8), readF64(pos.payload, 16)],
+          layerId,
+          hidden,
         });
       }
     } else if (el.children && el.children.length > 0) {

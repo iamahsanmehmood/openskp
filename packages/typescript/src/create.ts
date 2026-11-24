@@ -943,11 +943,17 @@ class ArchiveWriter {
    * parameters along that direction marking the visible segment's
    * start/end. An unbounded direction is written as the real ±1e30
    * sentinel SketchUp itself uses. */
-  writeConstructionLine(point: Point3, point2?: Point3, direction?: Point3): void {
+  writeConstructionLine(
+    point: Point3,
+    point2?: Point3,
+    direction?: Point3,
+    layer = 0,
+    hidden = false
+  ): void {
     const [p, dir, startParam, endParam] = resolveConstructionLineParams(point, point2, direction);
     this.newOfKnownClass('CConstructionLine', CONSTRUCTIONLINE_SCHEMA);
     this.preamble();
-    this.drawbase();
+    this.drawbase(0, layer, hidden);
     for (const v of [p[0], p[1], p[2], dir[0], dir[1], dir[2], startParam, endParam]) this.pushF64(v);
     this.pushZeros(4); // trailer
   }
@@ -959,11 +965,11 @@ class ArchiveWriter {
    * always-zero 3-double block and a trailing zero byte follow the
    * position - reserved/unused, written as zero to match every real-file
    * sample seen. */
-  writeConstructionPoint(position: Point3): void {
+  writeConstructionPoint(position: Point3, layer = 0, hidden = false): void {
     const p = finitePoint3(position, 'addConstructionPoint');
     this.newOfKnownClass('CConstructionPoint', CONSTRUCTIONPOINT_SCHEMA);
     this.preamble();
-    this.drawbase();
+    this.drawbase(0, layer, hidden);
     for (const v of [p[0], p[1], p[2], 0.0, 0.0, 0.0]) this.pushF64(v);
     this.pushZeros(1);
   }
@@ -1711,6 +1717,16 @@ export interface AddPolylineOptions {
   smoothEdges?: boolean;
 }
 
+export interface GuideOptions {
+  layer?: number;
+  hidden?: boolean;
+}
+
+export interface AddConstructionLineOptions extends GuideOptions {
+  point2?: Point3;
+  direction?: Point3;
+}
+
 export interface AddInstanceOptions {
   name?: string;
   translation?: Point3;
@@ -1954,19 +1970,27 @@ export class ComponentDefinitionBuilder {
     );
   }
 
-  addConstructionLine(point: Point3, options: { point2?: Point3; direction?: Point3 } = {}): void {
+  addConstructionLine(point: Point3, options: AddConstructionLineOptions = {}): void {
     this.checkWritable('construction lines');
+    this._skp._checkLayerHandle(options.layer);
     this._skp._definitionWriter().writeConstructionLine(
       toPoint3(point),
       options.point2 !== undefined ? toPoint3(options.point2) : undefined,
-      options.direction !== undefined ? toPoint3(options.direction) : undefined
+      options.direction !== undefined ? toPoint3(options.direction) : undefined,
+      options.layer ?? 0,
+      options.hidden ?? false
     );
     this.newEntityCount += 1;
   }
 
-  addConstructionPoint(position: Point3): void {
+  addConstructionPoint(position: Point3, options: GuideOptions = {}): void {
     this.checkWritable('construction points');
-    this._skp._definitionWriter().writeConstructionPoint(toPoint3(position));
+    this._skp._checkLayerHandle(options.layer);
+    this._skp._definitionWriter().writeConstructionPoint(
+      toPoint3(position),
+      options.layer ?? 0,
+      options.hidden ?? false
+    );
     this.newEntityCount += 1;
   }
 
@@ -2594,12 +2618,20 @@ export class SkpBuilder {
    * unbounded guide line through `point`, matching
    * `Entities#add_cline(point, vector)`). See
    * ArchiveWriter.writeConstructionLine for the record's ground truth. */
-  addConstructionLine(point: Point3, options: { point2?: Point3; direction?: Point3 } = {}): void {
+  addConstructionLine(point: Point3, options: AddConstructionLineOptions = {}): void {
+    this._checkLayerHandle(options.layer);
+    const p = toPoint3(point);
     const p2 = options.point2 !== undefined ? toPoint3(options.point2) : undefined;
     const dir = options.direction !== undefined ? toPoint3(options.direction) : undefined;
-    resolveConstructionLineParams(point, p2, dir);
+    resolveConstructionLineParams(p, p2, dir);
     this.ensureGeometryWriter();
-    (this.geometryWriter as ArchiveWriter).writeConstructionLine(toPoint3(point), p2, dir);
+    (this.geometryWriter as ArchiveWriter).writeConstructionLine(
+      p,
+      p2,
+      dir,
+      options.layer ?? 0,
+      options.hidden ?? false
+    );
     this.newEntityCount += 1;
     this.faceCount += 1; // reuses the "at least one root entity" check in toBytes
   }
@@ -2607,10 +2639,15 @@ export class SkpBuilder {
   /** Add a construction/guide point (SketchUp's Construction Point tool)
    * at `position` (inches, world space). See
    * ArchiveWriter.writeConstructionPoint for the record's ground truth. */
-  addConstructionPoint(position: Point3): void {
+  addConstructionPoint(position: Point3, options: GuideOptions = {}): void {
+    this._checkLayerHandle(options.layer);
     const pos = finitePoint3(position, 'addConstructionPoint');
     this.ensureGeometryWriter();
-    (this.geometryWriter as ArchiveWriter).writeConstructionPoint(pos);
+    (this.geometryWriter as ArchiveWriter).writeConstructionPoint(
+      pos,
+      options.layer ?? 0,
+      options.hidden ?? false
+    );
     this.newEntityCount += 1;
     this.faceCount += 1; // reuses the "at least one root entity" check in toBytes
   }

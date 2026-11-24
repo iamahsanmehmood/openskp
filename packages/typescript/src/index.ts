@@ -76,6 +76,8 @@ export type {
   AddCircleOptions,
   AddArcOptions,
   AddPolylineOptions,
+  GuideOptions,
+  AddConstructionLineOptions,
   AddInstanceOptions,
   AddGroupInstanceOptions,
   AddComponentDefinitionOptions,

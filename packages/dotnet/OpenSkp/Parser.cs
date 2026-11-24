@@ -252,8 +252,20 @@ namespace OpenSkp
             defn.SectionPlanes.AddRange(d.Builder.SectionPlanes);
             defn.Texts.AddRange(d.Builder.Texts);
             defn.Dimensions.AddRange(d.Builder.Dimensions);
-            defn.ConstructionLines.AddRange(d.Builder.ConstructionLines);
-            defn.ConstructionPoints.AddRange(d.Builder.ConstructionPoints);
+            foreach (var cl in d.Builder.ConstructionLines)
+            {
+                cl.Layer = cl.LayerId is long clLayerId && layerIdToName.TryGetValue(clLayerId, out var clLayerName)
+                    ? clLayerName
+                    : "";
+                defn.ConstructionLines.Add(cl);
+            }
+            foreach (var cp in d.Builder.ConstructionPoints)
+            {
+                cp.Layer = cp.LayerId is long cpLayerId && layerIdToName.TryGetValue(cpLayerId, out var cpLayerName)
+                    ? cpLayerName
+                    : "";
+                defn.ConstructionPoints.Add(cp);
+            }
 
             return defn;
         }

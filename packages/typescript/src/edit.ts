@@ -108,8 +108,8 @@ declare const require: any;
 interface ReplayTarget {
   addFace(points: readonly Point3[], options?: AddFaceOptions): void;
   addInstance(definition: ComponentDefinitionBuilder, options?: AddInstanceOptions): void;
-  addConstructionLine(point: Point3, options?: { point2?: Point3; direction?: Point3 }): void;
-  addConstructionPoint(position: Point3): void;
+  addConstructionLine(point: Point3, options?: { point2?: Point3; direction?: Point3; layer?: number; hidden?: boolean }): void;
+  addConstructionPoint(position: Point3, options?: { layer?: number; hidden?: boolean }): void;
 }
 
 function readFileToArrayBuffer(path: string): ArrayBuffer {
@@ -340,8 +340,9 @@ function replayBody(
     replayInstance(target, inst, defBuilders, materialSlots, layerSlots, model, warnings, context);
   }
   for (const cp of defn.constructionPoints) {
+    const cpLayer = cp.layer ? layerSlots.get(cp.layer) : undefined;
     try {
-      target.addConstructionPoint(cp.position);
+      target.addConstructionPoint(cp.position, { layer: cpLayer, hidden: cp.hidden });
     } catch (e) {
       if (e instanceof SkpWriteError) {
         warnings.push(`${context}: construction point skipped (${e.message})`);
@@ -351,11 +352,12 @@ function replayBody(
     }
   }
   for (const cl of defn.constructionLines) {
+    const clLayer = cl.layer ? layerSlots.get(cl.layer) : undefined;
     try {
       if (cl.start !== null && cl.end !== null) {
-        target.addConstructionLine(cl.start, { point2: cl.end });
+        target.addConstructionLine(cl.start, { point2: cl.end, layer: clLayer, hidden: cl.hidden });
       } else if (cl.start === null && cl.end === null) {
-        target.addConstructionLine(cl.point, { direction: cl.direction });
+        target.addConstructionLine(cl.point, { direction: cl.direction, layer: clLayer, hidden: cl.hidden });
       } else {
         warnings.push(`${context}: half-bounded construction line skipped`);
       }
