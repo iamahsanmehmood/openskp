@@ -45,6 +45,7 @@ from ._vff_writer.archive import (
 )
 from ._vff_writer.template import EntityEditor, Template
 from .create import (
+    DocumentOptions,
     Point3,
     SkpWriteError,
     _archive_uuid,
@@ -645,7 +646,27 @@ class VffBuilder:
 
     # -- document settings ------------------------------------------------
 
+    def set_guid(self, guid: str) -> None:
+        """Set the file/model UUID (canonical 32 hex digits or 8-4-4-4-12)."""
+        self._template.options["model_guid"] = _archive_uuid(guid)
 
+    def set_document_options(
+        self,
+        options: Optional[DocumentOptions] = None,
+        *,
+        length_unit: int = 0,
+        length_precision: int = 3,
+        style_items: Optional[Dict[int, float]] = None,
+    ) -> None:
+        """Accept the default document settings; other values are not encoded yet."""
+        if options is not None:
+            length_unit = options.length_unit
+            length_precision = options.length_precision
+            style_items = options.style_items
+        if length_unit != 0 or length_precision != 3 or style_items:
+            raise SkpWriteError(
+                "VFF document options are not supported by the VFF writer yet"
+            )
 
     # -- output -----------------------------------------------------------
 
