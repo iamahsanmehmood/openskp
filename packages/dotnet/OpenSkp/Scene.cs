@@ -260,7 +260,8 @@ namespace OpenSkp
 
             List<InstanceNode> Instantiate(
                 long defId, bool isRoot, List<double> currentMatrix,
-                string parentLayer, string pathName, (int R, int G, int B)? inheritedColor)
+                string parentLayer, string pathName, (int R, int G, int B)? inheritedColor,
+                Geometry.RawMaterial? inheritedMaterial = null)
             {
                 if (!defsDict.TryGetValue(defId, out var d))
                 {
@@ -274,7 +275,7 @@ namespace OpenSkp
                 }
                 try
                 {
-                    return InstantiateBuilder(d.Builder, d.Name ?? "", defId, currentMatrix, parentLayer, pathName, inheritedColor);
+                    return InstantiateBuilder(d.Builder, d.Name ?? "", defId, currentMatrix, parentLayer, pathName, inheritedColor, inheritedMaterial);
                 }
                 finally
                 {
@@ -284,19 +285,26 @@ namespace OpenSkp
 
             List<InstanceNode> InstantiateRoot(GeometryBuilder rootBuilder, List<double> currentMatrix)
             {
-                return InstantiateBuilder(rootBuilder, "ROOT_MODEL", null, currentMatrix, "Layer0", "ROOT", null);
+                return InstantiateBuilder(rootBuilder, "ROOT_MODEL", null, currentMatrix, "Layer0", "ROOT", null, null);
             }
 
             List<InstanceNode> InstantiateBuilder(
                 GeometryBuilder builder, string defName, long? defId, List<double> currentMatrix,
-                string parentLayer, string pathName, (int R, int G, int B)? inheritedColor)
+                string parentLayer, string pathName, (int R, int G, int B)? inheritedColor,
+                Geometry.RawMaterial? inheritedMaterial = null)
             {
                 if (builder.Faces.Count > 0)
                 {
                     var fallbackColor = inheritedColor ?? GetLayerColor(parentLayer);
                     var faceGroups = FaceGroups.BuildLocalFaceGroups(builder, new FaceGroups.Context
                     {
-                        ResolveMaterial = ResolveMaterial,
+                        ResolveMaterial = matId =>
+                        {
+                            var resolved = ResolveMaterial(matId);
+                            return resolved.Mat != null || inheritedMaterial == null
+                                ? resolved
+                                : (inheritedMaterial, (inheritedMaterial.R, inheritedMaterial.G, inheritedMaterial.B));
+                        },
                         TextureIndexFor = TextureIndexFor,
                         FallbackColor = fallbackColor,
                         DefinitionId = defId,
@@ -410,6 +418,7 @@ namespace OpenSkp
 
                     string lName = parentLayer;
                     (int R, int G, int B)? instColor = inheritedColor;
+                    Geometry.RawMaterial? instMaterial = inheritedMaterial;
                     // Legacy (pre-2021 MFC) instances carry a precomputed
                     // Properties dict (see Legacy.ExtractLegacyDynamicProperties)
                     // - VFF instances don't set this, so this stays {} for
@@ -418,6 +427,19 @@ namespace OpenSkp
                     var properties = inst.Properties != null
                         ? new Dictionary<string, string>(inst.Properties)
                         : new Dictionary<string, string>();
+
+                    // A classic (pre-2021) instance has no D007: its own tag
+                    // and paint were read with it.
+                    if (inst.LayerId is long ownLayerId && layerIdToName.TryGetValue(ownLayerId, out var ownLayerName))
+                    {
+                        lName = ownLayerName;
+                    }
+                    var (paintedMat, paintedColor) = ResolveMaterial(inst.MaterialId);
+                    if (paintedMat != null)
+                    {
+                        instColor = paintedColor;
+                        instMaterial = paintedMat;
+                    }
 
                     // Layer/material resolution mirrors
                     // Geometry.ExtractGeometryFromNodes's D007 handling;
@@ -442,7 +464,11 @@ namespace OpenSkp
                             {
                                 var mat = materials.TryGetValue(matName, out var m1) ? m1
                                     : materialsByFolder.TryGetValue(matName, out var m2) ? m2 : null;
-                                if (mat != null) instColor = (mat.R, mat.G, mat.B);
+                                if (mat != null)
+                                {
+                                    instColor = (mat.R, mat.G, mat.B);
+                                    instMaterial = mat;
+                                }
                             }
                         }
                         try
@@ -466,7 +492,7 @@ namespace OpenSkp
                         Observability.Log(options, SkpLogLevel.Debug, $"Processed {instanceCounter} placed instances");
                     }
                     var childNodes = refIdx.HasValue
-                        ? Instantiate(refIdx.Value, false, newMatrix, lName, fullPathName, instColor)
+                        ? Instantiate(refIdx.Value, false, newMatrix, lName, fullPathName, instColor, instMaterial)
                         : new List<InstanceNode>();
 
                     double itx = newMatrix.Count > 9 ? newMatrix[9] * InchesToMm : 0.0;
