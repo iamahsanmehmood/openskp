@@ -125,6 +125,8 @@ class SkpFile {
         normal: dm.normal,
         offsetVector: dm.offsetVector,
         text: dm.text,
+        hidden: dm.hidden,
+        layer: _resolveAnnotationLayer(dm.layer, parsed.layerIdToName),
       ));
     }
 
@@ -244,11 +246,46 @@ class SkpFile {
     }
 
     defn.sectionPlanes.addAll(d.builder.sectionPlanes);
-    defn.texts.addAll(d.builder.texts);
-    defn.dimensions.addAll(d.builder.dimensions);
+    for (final txt in d.builder.texts) {
+      defn.texts.add(TextEntity(
+        text: txt.text,
+        hidden: txt.hidden,
+        layer: _resolveAnnotationLayer(txt.layer, layerIdToName),
+        point: txt.point,
+        labelPoint: txt.labelPoint,
+        screenPosition: txt.screenPosition,
+        leaderType: txt.leaderType,
+        arrowType: txt.arrowType,
+        displayLeader: txt.displayLeader,
+      ));
+    }
+    for (final dim in d.builder.dimensions) {
+      defn.dimensions.add(Dimension(
+        text: dim.text,
+        hidden: dim.hidden,
+        a: dim.a,
+        b: dim.b,
+        offset: dim.offset,
+        planeX: dim.planeX,
+        normal: dim.normal,
+        offsetVector: dim.offsetVector,
+        layer: _resolveAnnotationLayer(dim.layer, layerIdToName),
+      ));
+    }
     defn.constructionLines.addAll(d.builder.constructionLines);
     defn.constructionPoints.addAll(d.builder.constructionPoints);
 
     return defn;
+  }
+
+  static String _resolveAnnotationLayer(
+      String rawLayer, Map<int, String> layerIdToName) {
+    if (rawLayer.isEmpty) return '';
+    final lid = int.tryParse(rawLayer);
+    if (lid != null) {
+      if (lid == 0) return '';
+      return layerIdToName[lid] ?? rawLayer;
+    }
+    return rawLayer;
   }
 }

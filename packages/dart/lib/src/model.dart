@@ -245,26 +245,39 @@ class SectionPlane {
 class TextEntity {
   final String text;
   final bool hidden;
+  final String layer;
+  final (double, double, double)? point;
+  final (double, double, double)? labelPoint;
+  final (double, double)? screenPosition;
+  final int leaderType;
+  final int arrowType;
+  final bool displayLeader;
 
   const TextEntity({
     this.text = '',
     this.hidden = false,
+    this.layer = '',
+    this.point,
+    this.labelPoint,
+    this.screenPosition,
+    this.leaderType = 2,
+    this.arrowType = 3,
+    this.displayLeader = true,
   });
 }
 
 /// A linear dimension (SketchUp's Dimension tool).
 ///
-/// The legacy (pre-2021) reader recovers only [text]/[hidden]. The VFF
-/// reader (2021+) recovers the full geometry - see [SkpModel.dimensions]
-/// for the model-level, world-space list.
+/// Both VFF (2021+) and legacy (pre-2021) readers expose owner-local geometry
+/// and drawing properties on `root.dimensions` and `Definition.dimensions`;
+/// [SkpModel.dimensions] also retains the world-space VFF compatibility list.
 class Dimension {
   /// The displayed text. Empty when the dimension shows its auto-computed
   /// measured value (the caller formats `|b - a|`).
   final String text;
   final bool hidden;
 
-  /// First measured point (x, y, z) in inches (world space), or null when
-  /// only the text was recovered.
+  /// First measured point (x, y, z) in inches, or null when unresolved.
   final (double, double, double)? a;
 
   /// Second measured point.
@@ -288,6 +301,9 @@ class Dimension {
   /// endpoint ordering, or null.
   final (double, double, double)? offsetVector;
 
+  /// Explicit tag name, or empty string for the default tag (Layer0).
+  final String layer;
+
   const Dimension({
     this.text = '',
     this.hidden = false,
@@ -297,6 +313,7 @@ class Dimension {
     this.planeX,
     this.normal,
     this.offsetVector,
+    this.layer = '',
   });
 }
 

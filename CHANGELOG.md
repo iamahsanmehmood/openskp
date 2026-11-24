@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — Python, TypeScript, .NET, Dart & Rust: annotation tags, hidden state, owner-local VFF assignment, and leader-visibility options (#488, #285)
+
+- Dimensions and text annotations now expose their own `layer` (`Layer`) and `hidden` (`Hidden`) drawing properties across Python, TypeScript, .NET, Dart, and Rust (matching C++ #488): classic readers decode them from the annotation's drawing base, and VFF readers decode `59D8 > 07D0 > 07D2/07D3` on `5BCC` dimensions and `07D0 > 07D2/07D3` on `55F0` texts without letting connection targets override the annotation's own tag or flags.
+- VFF `5BCC` dimensions and `55F0` texts inside a `7C15` definition are assigned to that definition in owner-local space (composing nested `53FE` instance paths via `compose_instance_world` / `composeInstanceWorld` / `ComposeInstanceWorld`), while root annotations populate `root` and `SkpModel.dimensions` keeps the world-space compatibility list.
+- Text annotations (`Text` / `TextEntity`) expose `point`, `label_point` (`labelPoint` / `LabelPoint`), `screen_position` (`screenPosition` / `ScreenPosition`), `leader_type` (`leaderType` / `LeaderType`), `arrow_type` (`arrowType` / `ArrowType`), and `display_leader` (`displayLeader` / `DisplayLeader`); the classic `CText` delimiter accepts `display_leader` as `0` or `1`.
+- Root and component writers (`SkpBuilder` and `ComponentDefinitionBuilder`) accept `DimensionOptions` / `TextOptions` (and keyword options in Python) for tags, hidden state, screen positions, arrow/leader types, and leaderless model text (`leader_type == 0` without `screen_position` canonicalized to model text with `display_leader = false`), validating options before writing to the archive.
+
 ### Fixed — Python, TypeScript, .NET & Dart: legacy dimension endpoints/plane offsets, VFF `0x5BD1` constrained offsets, and writer `offset_vector` (#481, #285)
 
 - Classic `CDimensionLinear` readers now decode inline free endpoints, inline and forward-referenced `CVertex` attachments (whilst withholding local coordinates on nested instance paths), plane frame (`normal`, `plane_x`, `offset`), and `offset_vector` for X/Y-constrained dimensions across Python, TypeScript, .NET, and Dart, exposing the full `Dimension` geometry on `Definition.dimensions` (`Dimensions`).

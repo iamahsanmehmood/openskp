@@ -388,6 +388,20 @@ pub fn collect_geometry(es: &[TlvNode], b: &mut GeometryBuilder) -> Result<()> {
                 id: entity_id(e)?,
                 ..Default::default()
             };
+            if let Some(dc05) =
+                find_node(&e.children, "D007").and_then(|d| find_node(&d.children, "DC05"))
+            {
+                if !dc05.payload.is_empty() {
+                    let mut idb = dc05.payload.as_slice();
+                    if idb.len() >= 6 && idb[0] == 0xde && idb[1] == 5 {
+                        let z = u32_at(idb, 2) as usize;
+                        if z <= idb.len() - 6 {
+                            idb = &idb[6..6 + z];
+                        }
+                    }
+                    i.persistent_id = hex_upper(idb);
+                }
+            }
             if let Some(g) = find_node(&e.children, "6819") {
                 if g.payload.len() == 16 {
                     i.ref_guid = hex_upper(&g.payload);

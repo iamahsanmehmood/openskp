@@ -270,6 +270,10 @@ namespace OpenSkp
                 layerHidden["Layer0"] = false;
             }
 
+            PagesDimensions.ComposeInstanceWorld(rootBuilder, defsDictRaw, instanceWorld);
+            var vffDimensions = PagesDimensions.ParseDimensions(modelDat, vertexPositions, instanceWorld);
+            PagesDimensions.AssignVffAnnotations(modelDat, vertexPositions, instanceWorld, rootBuilder, defsDictRaw);
+
             return new RawParsed
             {
                 Version = version,
@@ -278,7 +282,7 @@ namespace OpenSkp
                 LayerHidden = layerHidden,
                 LayerIdToName = layerIdToName,
                 Pages = PagesDimensions.ParsePages(pageNode),
-                Dimensions = PagesDimensions.ParseDimensions(modelDat, vertexPositions, instanceWorld),
+                Dimensions = vffDimensions,
                 MaterialIdToName = materialIdToName,
                 Materials = materials,
                 MaterialsByFolder = materialsByFolder,

@@ -1658,7 +1658,7 @@ def _path_ref(ar, r, member=False):
 
 def _text_delimiter(r):
     """Where a text's string starts: the variable-length variant middle
-    ends in an 11-byte block `01 00 00 00 ?? 00 03 00 00 00 01` right
+    ends in an 11-byte block `01 00 00 00 ?? 00 03 00 00 00 <0|1>` right
     before it."""
     p = r.pos
     while True:
@@ -1668,8 +1668,8 @@ def _text_delimiter(r):
         blk = r.data[idx - 11:idx]
         arrow = struct.unpack_from('<I', blk, 6)[0]
         if (blk[:4] == b'\x01\x00\x00\x00'
-                and arrow <= 8 and blk[10] == 1):
-            return idx               # blk[6:10] is the ARROW TYPE (0-4 seen)
+                and arrow <= 8 and blk[10] <= 1):
+            return idx               # blk[6:10] is the ARROW TYPE (0-4 seen), blk[10] display_leader
         p = idx + 3
 
 
@@ -1687,8 +1687,11 @@ def _read_text(ar, r):
     _preamble(ar, r)
     db = _drawbase(ar, r)
     ar.read_object(r, expect='CSkFont')
+    font_end = r.pos
     point = None
     label = None
+    screen_position = None
+    vertex = None
     connect = None
     paths = None
     anchored = _anchored_connection(r.data, r.pos)
@@ -1701,26 +1704,40 @@ def _read_text(ar, r):
         # included when it is the file's first instance). Skipped as
         # bytes, that instance never gets its store-map slots and every
         # later reference is off by them ("class-ref to non-class slot");
-        # read it instead. The block's point is zero (types 2 and 4) or
-        # not known to be a world position (5, and 7's face fractions), so
-        # it is not kept.
+        # read it instead.
+        screen_position = struct.unpack_from('<2d', r.data, font_end)
+        conn_kind = struct.unpack_from('<I', r.data, font_end + 16)[0]
         r.raw(16 + 32)
         connect = _entity_ref(ar, r)
         paths = _connection_paths(ar, r)
+        if conn_kind == 2 and not paths[1] and not paths[2]:
+            vertex = connect
     idx = _text_delimiter(r)
-    # A free text's block has type 1 and its anchor inline (world inches),
-    # followed by the null ref and empty paths (the 12 zero bytes below).
-    mid = r.data[r.pos:idx]
-    off = -1 if anchored else mid.find(b'\x01\x00\x00\x00\x04\x00\x00\x00')
-    if off >= 0 and off + 32 <= len(mid):
-        point = struct.unpack_from('<3d', mid, off + 8)
-        # placement tail: [12B zeros][point3d LABEL][16B zeros][f64 1.0]
-        # [u32 leader type][delimiter]; all-zero label = screen text
-        lo = off + 32 + 12
-        if lo + 24 <= len(mid):
-            lp = struct.unpack_from('<3d', mid, lo)
-            if any(abs(c) > 1e-12 for c in lp):
-                label = lp
+    display_leader = r.data[idx - 1] != 0
+    leader_type = 2
+    arrow_type = 3
+    if idx >= r.pos + 63:
+        leader_type = struct.unpack_from('<I', r.data, idx - 15)[0]
+        arrow_type = struct.unpack_from('<I', r.data, idx - 5)[0]
+        label = struct.unpack_from('<3d', r.data, idx - 63)
+        if not anchored:
+            for q in range(r.pos, idx - 63 - 32 + 1):
+                ctype, cfour = struct.unpack_from('<2I', r.data, q)
+                if ctype > 2 or cfour != 4:
+                    continue
+                if q >= r.pos + 16:
+                    screen_position = struct.unpack_from('<2d', r.data, q - 16)
+                if ctype in (0, 1):
+                    point = struct.unpack_from('<3d', r.data, q + 8)
+                else:
+                    ref = struct.unpack_from('<H', r.data, q + 32)[0]
+                    if 0 < ref < 0x7FFF:
+                        vertex = ref
+                    elif ref == 0x7FFF and q + 38 <= idx - 63:
+                        large = struct.unpack_from('<I', r.data, q + 34)[0]
+                        if not (large & 0x80000000):
+                            vertex = large
+                break
     r.raw(idx - r.pos)
     text = r.utf16()
     r.raw(5)
@@ -1739,7 +1756,10 @@ def _read_text(ar, r):
         r.raw(6)
         attach.append(val)
     return {'k': 'text', 'text': text, 'db': db, 'attach': attach,
-            'p': point, 'lp': label, 'connect': connect, 'paths': paths}
+            'p': point, 'lp': label, 'screen_position': screen_position,
+            'leader_type': leader_type, 'arrow_type': arrow_type,
+            'display_leader': display_leader, 'vertex': vertex,
+            'connect': connect, 'paths': paths}
 
 
 def _read_entity_list(ar, r, count, owner):
@@ -2449,11 +2469,22 @@ def _fill_builder(builder, ents, slots):
                 'hidden': bool(v.get('db', {}).get('hidden', False))
             })
         elif k == 'text':
+            pt = v.get('p')
+            vtx = v.get('vertex')
+            if pt is None and vtx is not None:
+                ent = slots.get(vtx)
+                if ent and ent[0] == 'obj' and ent[1] == 'CVertex' and isinstance(ent[2], dict) and 'xyz' in ent[2]:
+                    pt = tuple(ent[2]['xyz'])
             builder.texts.append({
                 'text': v.get('text', ''),
                 'hidden': bool(v.get('db', {}).get('hidden', False)),
-                'p': v.get('p'),
+                'layer_id': v.get('db', {}).get('layer') or None,
+                'p': pt,
                 'lp': v.get('lp'),
+                'screen_position': v.get('screen_position'),
+                'leader_type': v.get('leader_type', 2),
+                'arrow_type': v.get('arrow_type', 3),
+                'display_leader': v.get('display_leader', True),
             })
         elif k == 'dimension':
             # endpoints: FREE connections carry them inline; anchored ones
@@ -2469,6 +2500,7 @@ def _fill_builder(builder, ents, slots):
             dim = {
                 'text': v.get('text', ''),
                 'hidden': bool(v.get('db', {}).get('hidden', False)),
+                'layer_id': v.get('db', {}).get('layer') or None,
                 'a': pts[0],
                 'b': pts[1],
                 'offset': v.get('offset', 0.0),

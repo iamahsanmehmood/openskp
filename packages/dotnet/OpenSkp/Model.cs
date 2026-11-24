@@ -191,14 +191,24 @@ namespace OpenSkp
     {
         public string Text { get; set; } = "";
         public bool Hidden { get; set; }
+        /// <summary>Explicit tag name, or empty string for the default tag (Layer0).</summary>
+        public string Layer { get; set; } = "";
+        /// <summary>Anchor and label positions in owner-local inches; null when unresolved.</summary>
+        public (double X, double Y, double Z)? Point { get; set; }
+        public (double X, double Y, double Z)? LabelPoint { get; set; }
+        /// <summary>Normalized screen fractions (used when LeaderType is zero).</summary>
+        public (double X, double Y)? ScreenPosition { get; set; }
+        public int LeaderType { get; set; } = 2;
+        public int ArrowType { get; set; } = 3;
+        public bool DisplayLeader { get; set; } = true;
     }
 
     /// <summary>A linear dimension (SketchUp's Dimension tool).
     ///
-    /// The legacy (pre-2021) reader recovers only Text/Hidden. The VFF
-    /// reader (2021+) recovers the full geometry - see
-    /// <see cref="SkpModel.Dimensions"/> for the model-level, world-space
-    /// list.</summary>
+    /// Both VFF (2021+) and legacy (pre-2021) readers expose owner-local geometry
+    /// and drawing properties on Root.Dimensions and Definition.Dimensions;
+    /// <see cref="SkpModel.Dimensions"/> also retains the world-space VFF
+    /// compatibility list.</summary>
     public sealed class Dimension
     {
         /// <summary>The displayed text. Empty when the dimension shows its
@@ -206,8 +216,7 @@ namespace OpenSkp
         public string Text { get; set; } = "";
         public bool Hidden { get; set; }
 
-        /// <summary>First measured point (x, y, z) in inches (world space),
-        /// or null when only the text was recovered.</summary>
+        /// <summary>First measured point (x, y, z) in inches, or null when unresolved.</summary>
         public (double X, double Y, double Z)? A { get; set; }
 
         /// <summary>Second measured point.</summary>
@@ -225,6 +234,9 @@ namespace OpenSkp
 
         /// <summary>Explicit offset vector (inches) for legacy or VFF dimensions constrained to a plane axis, preserving the side of the line independently of endpoint ordering, or null.</summary>
         public (double X, double Y, double Z)? OffsetVector { get; set; }
+
+        /// <summary>Explicit tag name, or empty string for the default tag (Layer0).</summary>
+        public string Layer { get; set; } = "";
     }
 
     /// <summary>A construction/guide line (SketchUp's Construction Line

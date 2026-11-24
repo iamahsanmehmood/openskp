@@ -9,11 +9,11 @@ use super::reader::R;
 use super::{
     anchored_text_connection, find_v20_filler_marker, legacy_connection_paths,
     legacy_instance_has_guid, LegacyDimension, LegacyKind, LegacyObject, LegacySlotEntry,
-    LegacyValue, FIRST_DIB_OBJECT, FIRST_NAMED_INSTANCE, FIRST_SINGLE_PREAMBLE_LINE_STYLE,
-    FIRST_V4, MAX_V20_FILLER_PAD,
+    LegacyText, LegacyValue, FIRST_DIB_OBJECT, FIRST_NAMED_INSTANCE,
+    FIRST_SINGLE_PREAMBLE_LINE_STYLE, FIRST_V4, MAX_V20_FILLER_PAD,
 };
 use crate::internal::{read_f64, read_u16, read_u32, Error, Result};
-use crate::model::constrained_offset_vector;
+use crate::model::{constrained_offset_vector, TextEntity};
 
 /// A decoded value (always present for an object read in full).
 pub(crate) type Value = Rc<LegacyValue>;
@@ -1168,19 +1168,30 @@ impl<'a> Archive<'a> {
         v.k = LegacyKind::Text;
         self.draw(v)?;
         self.object(Some("CSkFont"))?;
-        if anchored_text_connection(self.r.d, self.r.p) {
-            // An anchored connection block is followed, as a
-            // dimension's is, by the anchored entity's ref and its
-            // instance paths - and MFC writes a path instance IN FULL
-            // there when nothing has pointed at it before (a label
-            // anchored to a component instance serialized after it,
-            // its class declaration included when it is the file's
-            // first instance). Skipped as bytes, that instance never
-            // gets its store-map slots and every later reference is
-            // off by them; read it instead.
+        let font_end = self.r.p;
+        let anchored = anchored_text_connection(self.r.d, font_end);
+        let mut anchored_screen = None;
+        let mut anchored_vertex = None;
+        if anchored {
+            // An anchored connection block is followed, as a dimension's is, by
+            // the anchored entity's ref and its instance paths - and MFC writes
+            // a path instance IN FULL there when nothing has pointed at it
+            // before (a label anchored to a component instance serialized after
+            // it, its class declaration included when it is the file's first
+            // instance). Skipped as bytes, that instance never gets its
+            // store-map slots and every later reference is off by them; read it
+            // instead.
+            anchored_screen = Some([
+                read_f64(self.r.d, font_end)?,
+                read_f64(self.r.d, font_end + 8)?,
+            ]);
+            let conn_kind = read_u32(self.r.d, font_end + 16)?;
             self.r.skip(16 + 32)?;
-            self.entity_ref(false)?;
-            self.connection_paths()?;
+            let connect = self.entity_ref(false)?;
+            let empty_paths = self.connection_paths()?;
+            if conn_kind == 2 && empty_paths {
+                anchored_vertex = connect;
+            }
         }
         let d = self.r.d;
         let lim = d.len().min(self.r.p + 512);
@@ -1195,7 +1206,7 @@ impl<'a> Archive<'a> {
                 && d[q + 7] == 0
                 && d[q + 8] == 0
                 && d[q + 9] == 0
-                && d[q + 10] == 1
+                && d[q + 10] <= 1
                 && d[q + 11] == 255
                 && d[q + 12] == 254
                 && d[q + 13] == 255
@@ -1208,6 +1219,60 @@ impl<'a> Archive<'a> {
         let Some(found) = found else {
             return Err(Error::runtime("text delimiter not found"));
         };
+        let mut annotation = TextEntity {
+            display_leader: d[found - 1] != 0,
+            screen_position: anchored_screen,
+            ..Default::default()
+        };
+        let mut vertex = anchored_vertex;
+        if found >= self.r.p + 63 {
+            annotation.leader_type = read_u32(d, found - 15)? as i32;
+            annotation.arrow_type = read_u32(d, found - 5)? as i32;
+            annotation.label_point = Some([
+                read_f64(d, found - 63)?,
+                read_f64(d, found - 55)?,
+                read_f64(d, found - 47)?,
+            ]);
+            // Same free/vertex connection header used by linear dimensions.
+            // Font schema tails vary, so locate the validated connection before
+            // the label.
+            if !anchored {
+                let mut cq = self.r.p;
+                while cq + 32 <= found - 63 {
+                    let ctype = read_u32(d, cq)?;
+                    if ctype > 2 || read_u32(d, cq + 4)? != 4 {
+                        cq += 1;
+                        continue;
+                    }
+                    if cq >= self.r.p + 16 {
+                        annotation.screen_position =
+                            Some([read_f64(d, cq - 16)?, read_f64(d, cq - 8)?]);
+                    }
+                    if ctype == 0 || ctype == 1 {
+                        annotation.point = Some([
+                            read_f64(d, cq + 8)?,
+                            read_f64(d, cq + 16)?,
+                            read_f64(d, cq + 24)?,
+                        ]);
+                    } else {
+                        let uref = read_u16(d, cq + 32)?;
+                        if uref > 0 && uref < 0x7fff {
+                            vertex = Some(u64::from(uref));
+                        } else if uref == 0x7fff && cq + 38 <= found - 63 {
+                            let large = read_u32(d, cq + 34)?;
+                            if large & 0x8000_0000 == 0 {
+                                vertex = Some(u64::from(large));
+                            }
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+        v.annotation_text = Some(Box::new(LegacyText {
+            geometry: annotation,
+            vertex,
+        }));
         self.r.skip(found - self.r.p)?;
         v.text = self.r.utf16()?;
         self.r.skip(5)?;

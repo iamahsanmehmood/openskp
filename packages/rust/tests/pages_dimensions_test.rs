@@ -8,10 +8,10 @@ use std::collections::{BTreeMap, HashMap};
 
 use common::{concat, f64s};
 use openskp::internal::{
-    hex_upper, parse_dimensions, parse_pages, scan_pages_for_layers, LegacySlotEntry,
-    LegacySlotTable, TlvNode,
+    compose_instance_world, hex_upper, parse_dimensions, parse_pages, scan_pages_for_layers,
+    transform_point, LegacySlotEntry, LegacySlotTable, RawDefinition, RawInstance, TlvNode,
 };
-use openskp::{ParseOptions, SkpFile, Vec3};
+use openskp::{Definition, ParseOptions, SkpFile, Vec3};
 
 // Deliberately NOT common::tlv(): these sub-records use Python's INTEGER tag
 // convention (a true little-endian u16), so the numeric tag is packed
@@ -373,4 +373,281 @@ fn scan_pages_legacy_ignores_unrelated_noise() {
     .unwrap();
 
     assert!(pages.is_empty());
+}
+
+#[test]
+fn compose_instance_world_nests_parent_times_local() {
+    let panel = RawDefinition::default();
+    let mut cabinet = RawDefinition::default();
+    cabinet.builder.instances.push(RawInstance {
+        persistent_id: "AA".into(),
+        ref_idx: Some(2),
+        matrix: vec![
+            1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 2.0, 3.0, 1.0,
+        ],
+        ..Default::default()
+    });
+    let mut root = RawDefinition::default();
+    root.builder.instances.push(RawInstance {
+        persistent_id: "BB".into(),
+        ref_idx: Some(1),
+        matrix: vec![
+            1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 10.0, 20.0, 30.0, 1.0,
+        ],
+        ..Default::default()
+    });
+    let mut defs = BTreeMap::new();
+    defs.insert(1, cabinet);
+    defs.insert(2, panel);
+
+    let mut world = BTreeMap::new();
+    compose_instance_world(&root, &defs, &mut world);
+    assert_eq!(
+        transform_point(&world["BB"], [0.0, 0.0, 0.0]),
+        [10.0, 20.0, 30.0]
+    );
+    assert_eq!(
+        transform_point(&world["AA"], [0.0, 0.0, 0.0]),
+        [11.0, 22.0, 33.0]
+    );
+}
+
+#[test]
+fn dimension_connected_point_uses_composed_nested_world() {
+    let vid = [0xaau8, 0xbb, 0x01];
+    let iid = [0xccu8, 0xdd, 0x02];
+    let connected = |wrap_tag: u16| {
+        let mut id_len_prefixed = vec![iid.len() as u8];
+        id_len_prefixed.extend_from_slice(&iid);
+        let ref_tlv = tlv(
+            0x53fc,
+            &concat(&[&tlv(0x53fd, &vid), &tlv(0x53fe, &id_len_prefixed)]),
+        );
+        let inner = concat(&[&tlv(0x5209, &[2, 0, 0, 0]), &tlv(0x520b, &ref_tlv)]);
+        tlv(wrap_tag, &tlv(0x5208, &inner))
+    };
+    let free = |wrap_tag: u16| {
+        let inner = concat(&[
+            &tlv(0x5209, &[1, 0, 0, 0]),
+            &tlv(0x520a, &vec3(0.0, 0.0, 0.0)),
+        ]);
+        tlv(wrap_tag, &tlv(0x5208, &inner))
+    };
+    let body = concat(&[
+        &connected(0x5bcd),
+        &free(0x5bce),
+        &tlv(0x5bd2, &f64s(&[0.0])),
+    ]);
+    let blob = tlv(0x5bcc, &body);
+
+    let leaf = RawDefinition::default();
+    let mut parent_def = RawDefinition::default();
+    parent_def.builder.instances.push(RawInstance {
+        persistent_id: hex_upper(&iid),
+        ref_idx: Some(2),
+        matrix: vec![
+            1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 2.0, 3.0, 1.0,
+        ],
+        ..Default::default()
+    });
+    let mut root = RawDefinition::default();
+    root.builder.instances.push(RawInstance {
+        persistent_id: "PARENT".into(),
+        ref_idx: Some(1),
+        matrix: vec![
+            1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 10.0, 20.0, 30.0, 1.0,
+        ],
+        ..Default::default()
+    });
+    let mut defs = BTreeMap::new();
+    defs.insert(1, parent_def);
+    defs.insert(2, leaf);
+
+    let mut world = BTreeMap::new();
+    compose_instance_world(&root, &defs, &mut world);
+    let id2pos: BTreeMap<String, Vec3> = [(hex_upper(&vid), [0.0, 0.0, 0.0])].into();
+    let dims = parse_dimensions(&blob, &id2pos, &world);
+    assert_eq!(dims.len(), 1);
+    assert_eq!(dims[0].a, [11.0, 22.0, 33.0]);
+}
+
+#[test]
+fn dimension_connected_point_uses_innermost_instance_in_path() {
+    let vid = [0xaau8, 0xbb, 0x01];
+    let outer_id = [0x11u8, 0x01];
+    let inner_id = [0x22u8, 0x02];
+    let mut path = vec![outer_id.len() as u8];
+    path.extend_from_slice(&outer_id);
+    path.push(inner_id.len() as u8);
+    path.extend_from_slice(&inner_id);
+
+    let connected = |wrap_tag: u16| {
+        let ref_tlv = tlv(0x53fc, &concat(&[&tlv(0x53fd, &vid), &tlv(0x53fe, &path)]));
+        let inner = concat(&[&tlv(0x5209, &[2, 0, 0, 0]), &tlv(0x520b, &ref_tlv)]);
+        tlv(wrap_tag, &tlv(0x5208, &inner))
+    };
+    let free = |wrap_tag: u16| {
+        let inner = concat(&[
+            &tlv(0x5209, &[1, 0, 0, 0]),
+            &tlv(0x520a, &vec3(0.0, 0.0, 0.0)),
+        ]);
+        tlv(wrap_tag, &tlv(0x5208, &inner))
+    };
+    let blob = tlv(
+        0x5bcc,
+        &concat(&[
+            &connected(0x5bcd),
+            &free(0x5bce),
+            &tlv(0x5bd2, &f64s(&[0.0])),
+        ]),
+    );
+
+    let leaf = RawDefinition::default();
+    let mut parent_def = RawDefinition::default();
+    parent_def.builder.instances.push(RawInstance {
+        persistent_id: hex_upper(&inner_id),
+        ref_idx: Some(2),
+        matrix: vec![
+            1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 100.0, 0.0, 0.0, 1.0,
+        ],
+        ..Default::default()
+    });
+    let mut root = RawDefinition::default();
+    root.builder.instances.push(RawInstance {
+        persistent_id: hex_upper(&outer_id),
+        ref_idx: Some(1),
+        matrix: vec![
+            1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 10.0, 0.0, 0.0, 1.0,
+        ],
+        ..Default::default()
+    });
+    let mut defs = BTreeMap::new();
+    defs.insert(1, parent_def);
+    defs.insert(2, leaf);
+
+    let mut world = BTreeMap::new();
+    compose_instance_world(&root, &defs, &mut world);
+    let id2pos: BTreeMap<String, Vec3> = [(hex_upper(&vid), [0.0, 0.0, 0.0])].into();
+    let dims = parse_dimensions(&blob, &id2pos, &world);
+    assert_eq!(dims.len(), 1);
+    assert_eq!(dims[0].a, [110.0, 0.0, 0.0]);
+}
+
+#[test]
+fn sdk_annotation_tags_retain_owner_and_visibility() {
+    fn check_tagged<'a>(
+        items: impl Iterator<Item = (&'a str, bool)>,
+        tag: &str,
+        count: usize,
+        hidden: usize,
+        name: &str,
+    ) {
+        let collected: Vec<_> = items.collect();
+        assert_eq!(collected.len(), count, "{name}");
+        for &(layer, _) in &collected {
+            assert_eq!(layer, tag, "{name}");
+        }
+        let actual_hidden = collected.iter().filter(|&&(_, h)| h).count();
+        assert_eq!(actual_hidden, hidden, "{name}");
+    }
+
+    fn verify(owner: &Definition, nested: bool, name: &str) {
+        check_tagged(
+            owner.dimensions.iter().map(|e| (e.layer.as_str(), e.hidden)),
+            "尺寸标注",
+            2,
+            1,
+            name,
+        );
+        check_tagged(
+            owner
+                .construction_points
+                .iter()
+                .map(|e| (e.layer.as_str(), e.hidden)),
+            "参考元素",
+            2,
+            1,
+            name,
+        );
+        check_tagged(
+            owner
+                .construction_lines
+                .iter()
+                .map(|e| (e.layer.as_str(), e.hidden)),
+            "参考元素",
+            2,
+            1,
+            name,
+        );
+        check_tagged(
+            owner.texts.iter().map(|e| (e.layer.as_str(), e.hidden)),
+            "引注文字",
+            if nested { 1 } else { 3 },
+            if nested { 0 } else { 1 },
+            name,
+        );
+        for text in &owner.texts {
+            assert_eq!(text.display_leader, text.text != "Dot", "{name}");
+            if nested {
+                assert_eq!(text.leader_type, 0, "{name}");
+                assert_eq!(text.screen_position, Some([0.23, 0.67]), "{name}");
+            } else {
+                let pt = text.point.expect("point");
+                let lp = text.label_point.expect("label_point");
+                assert!((lp[0] - pt[0]).abs() < 1e-9, "{name}");
+                assert!((lp[1] - pt[1]).abs() < 1e-9, "{name}");
+                assert!((lp[2] - pt[2] - 10.0).abs() < 1e-9, "{name}");
+            }
+        }
+    }
+
+    for name in ["annotation_layers_legacy.skp", "annotation_layers_vff.skp"] {
+        let model = SkpFile::open(common::fixture(name))
+            .unwrap()
+            .parse(&ParseOptions::default())
+            .unwrap();
+        verify(model.root(), false, name);
+        let mut annotated = 0usize;
+        for def in model.definitions.values() {
+            if def.texts.is_empty() {
+                continue;
+            }
+            verify(def, true, name);
+            annotated += 1;
+        }
+        assert_eq!(annotated, 1, "{name}");
+        if name == "annotation_layers_vff.skp" {
+            assert_eq!(model.dimensions.len(), 4);
+            for dim in &model.dimensions {
+                assert_eq!(dim.layer, "尺寸标注");
+            }
+        }
+    }
+}
+
+#[test]
+fn drawing_properties_come_from_dimension_not_its_connections() {
+    let free_point = |x: f64, y: f64, z: f64| {
+        tlv(
+            0x5208,
+            &concat(&[
+                &tlv(0x5209, &[1, 0, 0, 0]),
+                &tlv(0x520a, &vec3(x, y, z)),
+                &tlv(0x07d0, &tlv(0x07d2, &[99])),
+            ]),
+        )
+    };
+    let body = concat(&[
+        &tlv(
+            0x59d8,
+            &tlv(0x07d0, &concat(&[&tlv(0x07d2, &[12]), &tlv(0x07d3, &[7])])),
+        ),
+        &tlv(0x5bcd, &free_point(0.0, 0.0, 0.0)),
+        &tlv(0x5bce, &free_point(10.0, 0.0, 0.0)),
+        &tlv(0x5bd2, &f64s(&[3.0])),
+    ]);
+    let dims = parse_dimensions(&tlv(0x5bcc, &body), &BTreeMap::new(), &BTreeMap::new());
+    assert_eq!(dims.len(), 1);
+    assert_eq!(dims[0].layer, "12");
+    assert!(dims[0].hidden);
 }

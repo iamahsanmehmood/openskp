@@ -5,6 +5,7 @@ import { DefaultVertexStore, type VertexStore } from './vertex-store';
 import { DefaultEdgeStore, type EdgeStore } from './edge-store';
 
 export interface GeometryBuilderInstance {
+  persistentId?: string;
   offset: number;
   refGuid: string;
   refIdx: number;
@@ -65,10 +66,23 @@ export class GeometryBuilder {
   faces = new Map<number, GeometryBuilderFace>(); // id -> face data
   instances: GeometryBuilderInstance[] = [];
   sectionPlanes: { plane: [number, number, number, number]; name: string; label: string; hidden: boolean }[] = [];
-  texts: { text: string; hidden: boolean }[] = [];
+  texts: {
+    text: string;
+    hidden: boolean;
+    layer?: string;
+    layerId?: number | null;
+    point?: [number, number, number] | null;
+    labelPoint?: [number, number, number] | null;
+    screenPosition?: [number, number] | null;
+    leaderType?: number;
+    arrowType?: number;
+    displayLeader?: boolean;
+  }[] = [];
   dimensions: {
     text: string;
     hidden: boolean;
+    layer?: string;
+    layerId?: number | null;
     a?: [number, number, number] | null;
     b?: [number, number, number] | null;
     offset?: number;
@@ -93,10 +107,23 @@ export interface ParsedDefinition {
   alwaysFacesCamera: boolean;
   shadowsFaceSun?: boolean;
   sectionPlanes?: { plane: [number, number, number, number]; name: string; label: string; hidden: boolean }[];
-  texts?: { text: string; hidden: boolean }[];
+  texts?: {
+    text: string;
+    hidden: boolean;
+    layer?: string;
+    layerId?: number | null;
+    point?: [number, number, number] | null;
+    labelPoint?: [number, number, number] | null;
+    screenPosition?: [number, number] | null;
+    leaderType?: number;
+    arrowType?: number;
+    displayLeader?: boolean;
+  }[];
   dimensions?: {
     text: string;
     hidden: boolean;
+    layer?: string;
+    layerId?: number | null;
     a?: [number, number, number] | null;
     b?: [number, number, number] | null;
     offset?: number;
@@ -429,8 +456,21 @@ export function extractGeometryFromNodes(
       let instMatId: number | null = null;
       let instLayerId: number | null = null;
       let instHidden = false;
+      let instPid = '';
       const d007 = el.children.find((c) => c.tag === 'D007');
       if (d007) {
+        const dc05 = d007.children.find((c) => c.tag === 'DC05');
+        if (dc05 && dc05.payload.length > 0) {
+          let idb = dc05.payload;
+          if (idb.length >= 6 && idb[0] === 0xde && idb[1] === 0x05) {
+            const z = readU32(idb, 2);
+            if (z <= idb.length - 6) idb = idb.subarray(6, 6 + z);
+          }
+          for (let k = 0; k < idb.length; k++) {
+            const h = idb[k].toString(16).toUpperCase();
+            instPid += h.length === 1 ? '0' + h : h;
+          }
+        }
         const d107 = d007.children.find((c) => c.tag === 'D107');
         if (d107) {
           instMatId = parseVarInt(d107.payload, 0, d107.payload.length);
@@ -449,6 +489,7 @@ export function extractGeometryFromNodes(
       }
 
       builder.instances.push({
+        persistentId: instPid,
         offset: el.offset,
         refGuid: guid || '',
         refIdx: defIdx !== null ? defIdx : -1,

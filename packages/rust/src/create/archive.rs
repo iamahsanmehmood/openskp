@@ -12,7 +12,8 @@ use super::geometry::{
 };
 use super::scaffold_blank_v17::{ATTRIBUTE_NAMED_SLOT, ATTR_CONTAINER_SLOT, CCAMERA_SLOT};
 use super::{
-    AttributeDict, AttributeValue, Color4, GuideOptions, Matrix3x3, Point3, SkpWriteError, UvPoint,
+    AttributeDict, AttributeValue, Color4, DimensionOptions, GuideOptions, Matrix3x3, Point3,
+    SkpWriteError, TextOptions, UvPoint,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -78,11 +79,6 @@ const DIM_FONT_PAYLOAD: [u8; 34] = [
     0x08, 0x00, 0x00, 0x00, //
     0x00, //
     0xec, 0xf5, 0x7a, 0xbd, 0x5e, 0xaf, 0x23, 0x40, // height f64
-];
-
-/// Leader-text delimiter block: [u32 1][u8 flag=1][u8 0][u32 ARROW=3 closed][u8 1].
-const TEXT_DELIM: [u8; 11] = [
-    0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x03, 0x00, 0x00, 0x00, 0x01,
 ];
 
 /// A face with no explicit texture positioning stores no CFaceTextureCoords at all, so this is
@@ -617,6 +613,7 @@ impl ArchiveWriter {
         p2: Point3,
         offset: f64,
         offset_vector: Option<Point3>,
+        options: &DimensionOptions,
     ) -> Result<(), SkpWriteError> {
         if p1 == p2 {
             return Err(SkpWriteError::new("add_dimension endpoints coincide"));
@@ -658,7 +655,12 @@ impl ArchiveWriter {
         }
         self.new_of_known_class("CDimensionLinear", DIMENSION_LINEAR_SCHEMA);
         self.preamble(None, false);
-        self.plain_drawbase();
+        self.drawbase(
+            0,
+            options.layer.unwrap_or(0),
+            options.hidden,
+            EdgeFlags::default(),
+        );
         self.write_str("")?; // auto-computed measurement text
         self.write_dim_font_ref();
         // connection 1: [u8 0][u32 0][u32 type=1][u32 4][point A], null ref
@@ -692,29 +694,54 @@ impl ArchiveWriter {
         Ok(())
     }
 
-    /// A leader text anchored at `point`, label at `point + leader`. Mirrors human-drawn leader
-    /// texts from real files (the SDK's own create only makes SCREEN texts): screen slot zeroed,
-    /// the free-connection block dimensions use, the label's world position in the placement
-    /// tail, and leader type 2 (pushpin) before the arrow delimiter.
+    /// A leader or screen text anchored at `point`, label at `point + leader`. Mirrors human-drawn
+    /// leader texts from real files (the SDK's own create only makes SCREEN texts): screen slot
+    /// zeroed unless `options.screen_position` is set, the free-connection block dimensions use,
+    /// the label's world position in the placement tail, and leader type / arrow delimiter.
     pub fn write_text(
         &mut self,
         text: &str,
         point: Point3,
         leader: Point3,
+        options: &TextOptions,
     ) -> Result<(), SkpWriteError> {
         let label = [
             point[0] + leader[0],
             point[1] + leader[1],
             point[2] + leader[2],
         ];
+        if point.iter().chain(&label).any(|v| !v.is_finite()) {
+            return Err(SkpWriteError::new("add_text coordinates must be finite"));
+        }
+        if !(0..=2).contains(&options.leader_type) || !(0..=4).contains(&options.arrow_type) {
+            return Err(SkpWriteError::new("add_text invalid leader or arrow type"));
+        }
+        if let Some(screen) = options.screen_position {
+            for value in screen {
+                if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+                    return Err(SkpWriteError::new(
+                        "add_text screen position must be between zero and one",
+                    ));
+                }
+            }
+        }
+        if text.encode_utf16().count() >= 0xFF {
+            return Err(SkpWriteError::new("string too long to encode (255 char limit)"));
+        }
         self.new_of_known_class("CText", TEXT_SCHEMA);
         self.preamble(None, false);
-        self.plain_drawbase();
+        self.drawbase(
+            0,
+            options.layer.unwrap_or(0),
+            options.hidden,
+            EdgeFlags::default(),
+        );
         self.write_dim_font_ref();
-        self.buf.put_f64(0.0);
-        self.buf.put_f64(0.0); // screen-fraction slot (unused)
+        for value in options.screen_position.unwrap_or([0.0, 0.0]) {
+            self.buf.put_f64(value);
+        }
         self.buf.put_u32(1);
-        self.buf.put_u32(4); // free connection + constant
+        self.buf.put_u32(4);
         for v in point {
             self.buf.put_f64(v);
         }
@@ -724,8 +751,22 @@ impl ArchiveWriter {
         }
         self.buf.put_zeros(16);
         self.buf.put_f64(1.0);
-        self.buf.put_u32(2); // leader type: pushpin
-        self.buf.extend_from_slice(&TEXT_DELIM);
+        // Native type 0 is screen text. A leaderless owner-local label must remain
+        // type 2 with its independent display flag cleared, preserving both points.
+        let leader_type = if options.screen_position.is_some() {
+            0
+        } else if options.leader_type == 0 {
+            2
+        } else {
+            options.leader_type as u32
+        };
+        let keep_leader = options.screen_position.is_some() || options.leader_type != 0;
+        let display_leader = options.display_leader && keep_leader;
+        self.buf.put_u32(leader_type);
+        self.buf.put_u32(1);
+        self.buf.put_u16(1);
+        self.buf.put_u32(options.arrow_type as u32);
+        self.buf.push(u8::from(display_leader));
         self.write_str(text)?;
         self.buf.put_zeros(5);
         Ok(())

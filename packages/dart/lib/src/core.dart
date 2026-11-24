@@ -211,6 +211,12 @@ class Core {
       layerHidden['Layer0'] = false;
     }
 
+    composeInstanceWorld(rootBuilder, defsDictRaw, instanceWorld);
+    final vffDimensions =
+        parseDimensions(modelDat, vertexPositions, instanceWorld);
+    assignVffAnnotations(
+        modelDat, vertexPositions, instanceWorld, rootBuilder, defsDictRaw);
+
     return RawParsed()
       ..version = version
       ..units = units
@@ -218,8 +224,7 @@ class Core {
       ..layerHidden.addAll(layerHidden)
       ..layerIdToName.addAll(layerIdToName)
       ..pages.addAll(parsePages(pageNode))
-      ..dimensions
-          .addAll(parseDimensions(modelDat, vertexPositions, instanceWorld))
+      ..dimensions.addAll(vffDimensions)
       ..materialIdToName.addAll(materialIdToName)
       ..materials.addAll(materials)
       ..materialsByFolder.addAll(materialsByFolder)

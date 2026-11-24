@@ -29,7 +29,15 @@ import {
   SceneOptions,
 } from './model';
 import { isLegacy, parseLegacyToRaw } from './legacy';
-import { scanVertexPositions, scanInstanceTransforms, findPageNode, parsePages, parseDimensions } from './pages-dimensions';
+import {
+  scanVertexPositions,
+  scanInstanceTransforms,
+  findPageNode,
+  parsePages,
+  parseDimensions,
+  composeInstanceWorld,
+  assignVffAnnotations,
+} from './pages-dimensions';
 import { encodeIndices } from './gltf-indices';
 import { createGlb } from './instanced-glb';
 import { buildInstancedSceneFromParsed, InstancedScene } from './instanced';
@@ -79,6 +87,8 @@ export type {
   AddComponentDefinitionOptions,
   AddGroupOptions,
   AddImageOptions,
+  DimensionOptions,
+  TextOptions,
 } from './create';
 export { openExisting } from './edit';
 
@@ -325,6 +335,10 @@ function parseToRaw(buffer: ArrayBuffer, options?: ParseOptions): ParsedRawData 
     layerHidden.set('Layer0', false);
   }
 
+  composeInstanceWorld(rootBuilder, defsDict, instanceWorld);
+  const vffDimensions = parseDimensions(modelData, vertexPositions, instanceWorld);
+  assignVffAnnotations(modelData, vertexPositions, instanceWorld, rootBuilder, defsDict);
+
   defsDict.set('ROOT', {
     guid: 'ROOT',
     name: 'ROOT_MODEL',
@@ -342,7 +356,7 @@ function parseToRaw(buffer: ArrayBuffer, options?: ParseOptions): ParsedRawData 
     layerHidden,
     layerIdToName,
     pages: parsePages(pageNode),
-    dimensions: parseDimensions(modelData, vertexPositions, instanceWorld),
+    dimensions: vffDimensions,
     materialIdToName,
     materialsMap,
     materialsByFolder,

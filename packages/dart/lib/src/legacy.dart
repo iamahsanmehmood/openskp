@@ -853,6 +853,13 @@ class DimLinearRec {
 class TextRec {
   DrawBase db;
   String text;
+  (double, double, double)? point;
+  (double, double, double)? labelPoint;
+  (double, double)? screenPosition;
+  int leaderType = 2;
+  int arrowType = 3;
+  bool displayLeader = true;
+  int? vertex;
   TextRec(this.db, this.text);
 }
 
@@ -1756,7 +1763,7 @@ class LegacyReaders {
           blk[7] == 0x00 &&
           blk[8] == 0x00 &&
           blk[9] == 0x00 &&
-          blk[10] == 1) {
+          blk[10] <= 1) {
         return idx;
       }
       p = idx + 3;
@@ -1778,30 +1785,65 @@ class LegacyReaders {
     preamble(ar, r);
     final db = drawbase(ar, r);
     ar.readObject(r, 'CSkFont');
-    if (_anchoredConnection(r.data, r.pos)) {
-      // An anchored connection block is followed, as a dimension's is (see
-      // readDimLinear), by the anchored entity's ref and its instance paths -
-      // and MFC writes a path instance IN FULL there when nothing has pointed
-      // at it before (a label anchored to a component instance serialized
-      // after it, its class declaration included when it is the file's first
-      // instance). Skipped as bytes, that instance never gets its store-map
-      // slots and every later reference is off by them ("class-ref to
-      // non-class slot"); read it instead.
+    final fontEnd = r.pos;
+    (double, double, double)? point;
+    (double, double, double)? labelPoint;
+    (double, double)? screenPosition;
+    int? vertex;
+    final anchored = _anchoredConnection(r.data, r.pos);
+    if (anchored) {
+      screenPosition =
+          (Tlv.readF64(r.data, fontEnd), Tlv.readF64(r.data, fontEnd + 8));
+      final connKind = Tlv.readU32(r.data, fontEnd + 16);
       r.raw(16 + 32);
-      _entityRef(ar, r);
-      connectionPaths((rr) => ar.readObject(rr).$1, r, ar);
+      final connect = _entityRef(ar, r);
+      final paths = connectionPaths((rr) => ar.readObject(rr).$1, r, ar);
+      if (connKind == 2 && paths.$2.isEmpty && paths.$3.isEmpty) {
+        vertex = connect;
+      }
     }
     final idx = _textDelimiter(r);
+    final displayLeader = r.data[idx - 1] != 0;
+    var leaderType = 2;
+    var arrowType = 3;
+    if (idx >= r.pos + 63) {
+      leaderType = Tlv.readU32(r.data, idx - 15);
+      arrowType = Tlv.readU32(r.data, idx - 5);
+      labelPoint = (
+        Tlv.readF64(r.data, idx - 63),
+        Tlv.readF64(r.data, idx - 55),
+        Tlv.readF64(r.data, idx - 47),
+      );
+      if (!anchored) {
+        for (int q = r.pos; q + 32 <= idx - 63; q++) {
+          final ctype = Tlv.readU32(r.data, q);
+          if (ctype > 2 || Tlv.readU32(r.data, q + 4) != 4) continue;
+          if (q >= r.pos + 16) {
+            screenPosition =
+                (Tlv.readF64(r.data, q - 16), Tlv.readF64(r.data, q - 8));
+          }
+          if (ctype == 0 || ctype == 1) {
+            point = (
+              Tlv.readF64(r.data, q + 8),
+              Tlv.readF64(r.data, q + 16),
+              Tlv.readF64(r.data, q + 24),
+            );
+          } else {
+            final uref = r.data[q + 32] | (r.data[q + 33] << 8);
+            if (uref > 0 && uref < 0x7FFF) {
+              vertex = uref;
+            } else if (uref == 0x7FFF && q + 38 <= idx - 63) {
+              final large = Tlv.readU32(r.data, q + 34);
+              if ((large & 0x80000000) == 0) vertex = large;
+            }
+          }
+          break;
+        }
+      }
+    }
     r.raw(idx - r.pos);
     final text = r.utf16();
     r.raw(5);
-    // Optional leader-attachment refs follow the fixed tail (a text label
-    // anchored to geometry stores the anchored entities here; they can
-    // point FORWARD - see _entityRef). Only the escaped 6-byte form is
-    // recognisable without risk: a 2-byte back-ref here would be
-    // indistinguishable from the next list item's tag, and every known
-    // sample either has no attachments or lives in a >0x7FFE-object file
-    // where the escape is mandatory anyway.
     while (true) {
       final head = r.peek(2);
       if (!(head.length == 2 && head[0] == 0xFF && head[1] == 0x7F)) break;
@@ -1811,7 +1853,14 @@ class LegacyReaders {
       if ((val & 0x80000000) != 0) break; // new-object tag - the next entity
       r.raw(6);
     }
-    return TextRec(db, text);
+    return TextRec(db, text)
+      ..point = point
+      ..labelPoint = labelPoint
+      ..screenPosition = screenPosition
+      ..leaderType = leaderType
+      ..arrowType = arrowType
+      ..displayLeader = displayLeader
+      ..vertex = vertex;
   }
 
   static List<(int, String?, Object?)> readEntityList(
@@ -2540,9 +2589,25 @@ class Legacy {
           hidden: v.db.hidden != 0,
         ));
       } else if (v is TextRec) {
+        var pt = v.point;
+        final vtx = v.vertex;
+        if (pt == null && vtx != null) {
+          final vent = slots[vtx];
+          if (vent != null && vent.kind == 'obj' && vent.value is VertexRec) {
+            final xyz = (vent.value as VertexRec).xyz;
+            if (xyz.length >= 3) pt = (xyz[0], xyz[1], xyz[2]);
+          }
+        }
         builder.texts.add(TextEntity(
           text: v.text,
           hidden: v.db.hidden != 0,
+          layer: v.db.layer != 0 ? v.db.layer.toString() : '',
+          point: pt,
+          labelPoint: v.labelPoint,
+          screenPosition: v.screenPosition,
+          leaderType: v.leaderType,
+          arrowType: v.arrowType,
+          displayLeader: v.displayLeader,
         ));
       } else if (v is DimLinearRec) {
         (double, double, double)? resolveEndpoint(
@@ -2561,6 +2626,7 @@ class Legacy {
         builder.dimensions.add(Dimension(
           text: v.text,
           hidden: v.db.hidden != 0,
+          layer: v.db.layer != 0 ? v.db.layer.toString() : '',
           a: resolveEndpoint(v.a, v.connect1),
           b: resolveEndpoint(v.b, v.connect2),
           offset: v.offset,

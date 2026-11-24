@@ -92,6 +92,24 @@ namespace OpenSkp
         public SkpWriteException(string message) : base(message) { }
     }
 
+    /// <summary>Drawing properties for linear dimensions.</summary>
+    public sealed class DimensionOptions
+    {
+        public int? Layer { get; set; }
+        public bool Hidden { get; set; }
+    }
+
+    /// <summary>Text placement and drawing properties; point/leader are in owner-local inches.</summary>
+    public sealed class TextOptions
+    {
+        public int? Layer { get; set; }
+        public bool Hidden { get; set; }
+        public int LeaderType { get; set; } = 2;
+        public int ArrowType { get; set; } = 3;
+        public (double X, double Y)? ScreenPosition { get; set; }
+        public bool DisplayLeader { get; set; } = true;
+    }
+
     /// <summary>3D point convenience alias - a plain (X, Y, Z) tuple in
     /// inches, matching the rest of this codebase's own tuple convention
     /// (see Scene.cs).</summary>
@@ -1982,12 +2000,17 @@ namespace OpenSkp
 
         /// <summary>Add a FREE linear dimension between two explicit points
         /// (inches, definition-local space) - same behavior as
-        /// <see cref="SkpBuilder.AddDimension((double, double, double), (double, double, double), double)"/>.</summary>
+        /// <see cref="SkpBuilder.AddDimension((double, double, double), (double, double, double), double, int?, bool)"/>.</summary>
         public void AddDimension(
-            (double X, double Y, double Z) p1, (double X, double Y, double Z) p2, double offset = 10.0)
+            (double X, double Y, double Z) p1,
+            (double X, double Y, double Z) p2,
+            double offset = 10.0,
+            int? layer = null,
+            bool hidden = false)
         {
             CheckWritable("dimensions");
-            Skp.WriteDimensionTo(Skp.DefinitionWriter!, p1, p2, offset, null);
+            Skp.CheckLayerHandle(layer);
+            Skp.WriteDimensionTo(Skp.DefinitionWriter!, p1, p2, offset, null, layer, hidden);
             _newEntityCount += 1;
         }
 
@@ -1997,11 +2020,71 @@ namespace OpenSkp
         public void AddDimension(
             (double X, double Y, double Z) p1,
             (double X, double Y, double Z) p2,
-            (double X, double Y, double Z) offsetVector)
+            (double X, double Y, double Z) offsetVector,
+            int? layer = null,
+            bool hidden = false)
         {
             CheckWritable("dimensions");
-            Skp.WriteDimensionTo(Skp.DefinitionWriter!, p1, p2, 0.0, offsetVector);
+            Skp.CheckLayerHandle(layer);
+            Skp.WriteDimensionTo(Skp.DefinitionWriter!, p1, p2, 0.0, offsetVector, layer, hidden);
             _newEntityCount += 1;
+        }
+
+        public void AddDimension(
+            (double X, double Y, double Z) p1,
+            (double X, double Y, double Z) p2,
+            (double X, double Y, double Z) offsetVector,
+            DimensionOptions options)
+        {
+            var opts = options ?? new DimensionOptions();
+            AddDimension(p1, p2, offsetVector, opts.Layer, opts.Hidden);
+        }
+
+        /// <summary>Add owner-local leader or screen text, with optional tag and hidden state.</summary>
+        public void AddText(
+            string text,
+            (double X, double Y, double Z) point,
+            (double X, double Y, double Z)? leader = null,
+            int? layer = null,
+            bool hidden = false,
+            int leaderType = 2,
+            int arrowType = 3,
+            (double X, double Y)? screenPosition = null,
+            bool displayLeader = true)
+        {
+            CheckWritable("text");
+            Skp.CheckLayerHandle(layer);
+            Skp.WriteTextTo(
+                Skp.DefinitionWriter!,
+                text,
+                point,
+                leader ?? (15.0, 15.0, 15.0),
+                layer,
+                hidden,
+                leaderType,
+                arrowType,
+                screenPosition,
+                displayLeader);
+            _newEntityCount += 1;
+        }
+
+        public void AddText(
+            string text,
+            (double X, double Y, double Z) point,
+            (double X, double Y, double Z) leader,
+            TextOptions options)
+        {
+            var opts = options ?? new TextOptions();
+            AddText(
+                text,
+                point,
+                leader,
+                opts.Layer,
+                opts.Hidden,
+                opts.LeaderType,
+                opts.ArrowType,
+                opts.ScreenPosition,
+                opts.DisplayLeader);
         }
 
         private static List<AttributeDict>? BuildAttributeDicts(IReadOnlyDictionary<string, object>? attributes, string dictName)
@@ -2876,7 +2959,9 @@ namespace OpenSkp
             (double X, double Y, double Z) p1,
             (double X, double Y, double Z) p2,
             double offset,
-            (double X, double Y, double Z)? offsetVector)
+            (double X, double Y, double Z)? offsetVector,
+            int? layer = null,
+            bool hidden = false)
         {
             bool IsFinite(double v) => !double.IsNaN(v) && !double.IsInfinity(v);
             var normal = (X: 0.0, Y: 0.0, Z: 1.0);
@@ -2923,13 +3008,22 @@ namespace OpenSkp
                     normal = (cx / clen, cy / clen, cz / clen);
                 }
             }
-            else if (p1 == p2)
+            else
             {
-                throw new SkpWriteException("AddDimension endpoints coincide");
+                if (!IsFinite(p1.X) || !IsFinite(p1.Y) || !IsFinite(p1.Z) ||
+                    !IsFinite(p2.X) || !IsFinite(p2.Y) || !IsFinite(p2.Z) ||
+                    !IsFinite(offset))
+                {
+                    throw new SkpWriteException("AddDimension coordinates must be finite");
+                }
+                if (p1 == p2)
+                {
+                    throw new SkpWriteException("AddDimension endpoints coincide");
+                }
             }
             w.NewOfKnownClass("CDimensionLinear", CreateConstants.DimensionLinearSchema);
             w.Preamble();
-            w.Drawbase();
+            w.Drawbase(0, layer ?? 0, hidden);
             w.WriteStr(""); // auto-computed measurement text
             if (_dimFontSlot == null)
             {
@@ -2971,11 +3065,86 @@ namespace OpenSkp
             w.AddU32(1);
         }
 
-        public void AddDimension(
-            (double X, double Y, double Z) p1, (double X, double Y, double Z) p2, double offset = 10.0)
+        internal void WriteTextTo(
+            ArchiveWriter w,
+            string text,
+            (double X, double Y, double Z) point,
+            (double X, double Y, double Z) leader,
+            int? layer = null,
+            bool hidden = false,
+            int leaderType = 2,
+            int arrowType = 3,
+            (double X, double Y)? screenPosition = null,
+            bool displayLeader = true)
         {
+            bool IsFinite(double v) => !double.IsNaN(v) && !double.IsInfinity(v);
+            var lb = (X: point.X + leader.X, Y: point.Y + leader.Y, Z: point.Z + leader.Z);
+            if (!IsFinite(point.X) || !IsFinite(point.Y) || !IsFinite(point.Z) ||
+                !IsFinite(lb.X) || !IsFinite(lb.Y) || !IsFinite(lb.Z))
+            {
+                throw new SkpWriteException("AddText coordinates must be finite");
+            }
+            if (leaderType < 0 || leaderType > 2 || arrowType < 0 || arrowType > 4)
+            {
+                throw new SkpWriteException("AddText invalid leader or arrow type");
+            }
+            var screen = (X: 0.0, Y: 0.0);
+            if (screenPosition.HasValue)
+            {
+                var sp = screenPosition.Value;
+                if (!IsFinite(sp.X) || !IsFinite(sp.Y) || sp.X < 0.0 || sp.X > 1.0 || sp.Y < 0.0 || sp.Y > 1.0)
+                {
+                    throw new SkpWriteException("AddText screen position must be between zero and one");
+                }
+                screen = sp;
+            }
+            int effLeaderType = screenPosition.HasValue ? 0 : (leaderType == 0 ? 2 : leaderType);
+            bool effDisplayLeader = displayLeader && (screenPosition.HasValue || leaderType != 0);
+
+            w.NewOfKnownClass("CText", CreateConstants.TextSchema);
+            w.Preamble();
+            w.Drawbase(0, layer ?? 0, hidden);
+            if (_dimFontSlot == null)
+            {
+                _dimFontSlot = w.NewOfKnownClass("CSkFont", CreateConstants.SkFontSchema);
+                w.AddRaw(CreateConstants.DimFontPayload);
+            }
+            else
+            {
+                w.Backref(_dimFontSlot.Value);
+            }
+            w.AddF64(screen.X);
+            w.AddF64(screen.Y);
+            w.AddU32(1);
+            w.AddU32(4);
+            w.AddF64(point.X);
+            w.AddF64(point.Y);
+            w.AddF64(point.Z);
+            w.AddZeros(12);
+            w.AddF64(lb.X);
+            w.AddF64(lb.Y);
+            w.AddF64(lb.Z);
+            w.AddZeros(16);
+            w.AddF64(1.0);
+            w.AddU32((uint)effLeaderType);
+            w.AddU32(1);
+            w.AddU16(1);
+            w.AddU32((uint)arrowType);
+            w.Buf.Add(effDisplayLeader ? (byte)1 : (byte)0);
+            w.WriteStr(text);
+            w.AddZeros(5);
+        }
+
+        public void AddDimension(
+            (double X, double Y, double Z) p1,
+            (double X, double Y, double Z) p2,
+            double offset = 10.0,
+            int? layer = null,
+            bool hidden = false)
+        {
+            CheckLayerHandle(layer);
             EnsureGeometryWriter();
-            WriteDimensionTo(_geometryWriter!, p1, p2, offset, null);
+            WriteDimensionTo(_geometryWriter!, p1, p2, offset, null, layer, hidden);
             _newEntityCount += 1;
             _faceCount += 1; // reuses the "at least one root entity" check in ToBytes
         }
@@ -2986,64 +3155,74 @@ namespace OpenSkp
         public void AddDimension(
             (double X, double Y, double Z) p1,
             (double X, double Y, double Z) p2,
-            (double X, double Y, double Z) offsetVector)
+            (double X, double Y, double Z) offsetVector,
+            int? layer = null,
+            bool hidden = false)
         {
+            CheckLayerHandle(layer);
             EnsureGeometryWriter();
-            WriteDimensionTo(_geometryWriter!, p1, p2, 0.0, offsetVector);
+            WriteDimensionTo(_geometryWriter!, p1, p2, 0.0, offsetVector, layer, hidden);
             _newEntityCount += 1;
             _faceCount += 1; // reuses the "at least one root entity" check in ToBytes
         }
 
-        /// <summary>Add a leader text (SketchUp's Text tool) anchored at
-        /// point (inches, world space), with the label floating at
-        /// point + leader and a leader line joining them.
-        ///
-        /// The record mirrors human-drawn leader texts harvested from real
-        /// files (the SDK's own create only produces SCREEN texts - its two
-        /// 0.5 doubles are screen fractions and SketchUp renders them
-        /// superimposed at view centre): screen slot zeroed, the free-
-        /// connection block dimensions use ([u32 1][u32 4][point3d]), the
-        /// label's world position in the placement tail, and leader type 2
-        /// (pushpin) before the arrow delimiter.</summary>
-        public void AddText(
-            string text, (double X, double Y, double Z) point,
-            (double X, double Y, double Z)? leader = null)
+        public void AddDimension(
+            (double X, double Y, double Z) p1,
+            (double X, double Y, double Z) p2,
+            (double X, double Y, double Z) offsetVector,
+            DimensionOptions options)
         {
-            var lv = leader ?? (15.0, 15.0, 15.0);
-            var lb = (point.X + lv.X, point.Y + lv.Y, point.Z + lv.Z);
+            var opts = options ?? new DimensionOptions();
+            AddDimension(p1, p2, offsetVector, opts.Layer, opts.Hidden);
+        }
+
+        /// <summary>Add a leader or screen text anchored at point (inches,
+        /// world space), with the label floating at point + leader.</summary>
+        public void AddText(
+            string text,
+            (double X, double Y, double Z) point,
+            (double X, double Y, double Z)? leader = null,
+            int? layer = null,
+            bool hidden = false,
+            int leaderType = 2,
+            int arrowType = 3,
+            (double X, double Y)? screenPosition = null,
+            bool displayLeader = true)
+        {
+            CheckLayerHandle(layer);
             EnsureGeometryWriter();
-            var w = _geometryWriter!;
-            w.NewOfKnownClass("CText", CreateConstants.TextSchema);
-            w.Preamble();
-            w.Drawbase();
-            if (_dimFontSlot == null)
-            {
-                _dimFontSlot = w.NewOfKnownClass("CSkFont", CreateConstants.SkFontSchema);
-                w.AddRaw(CreateConstants.DimFontPayload);
-            }
-            else
-            {
-                w.Backref(_dimFontSlot.Value);
-            }
-            w.AddF64(0.0);
-            w.AddF64(0.0); // screen-fraction slot (unused)
-            w.AddU32(1);
-            w.AddU32(4); // free connection + constant
-            w.AddF64(point.X);
-            w.AddF64(point.Y);
-            w.AddF64(point.Z);
-            w.AddZeros(12);
-            w.AddF64(lb.Item1);
-            w.AddF64(lb.Item2);
-            w.AddF64(lb.Item3); // label position
-            w.AddZeros(16);
-            w.AddF64(1.0);
-            w.AddU32(2); // leader type: pushpin
-            w.AddRaw(CreateConstants.TextDelim);
-            w.WriteStr(text);
-            w.AddZeros(5);
+            WriteTextTo(
+                _geometryWriter!,
+                text,
+                point,
+                leader ?? (15.0, 15.0, 15.0),
+                layer,
+                hidden,
+                leaderType,
+                arrowType,
+                screenPosition,
+                displayLeader);
             _newEntityCount += 1;
             _faceCount += 1; // reuses the "at least one root entity" check in ToBytes
+        }
+
+        public void AddText(
+            string text,
+            (double X, double Y, double Z) point,
+            (double X, double Y, double Z) leader,
+            TextOptions options)
+        {
+            var opts = options ?? new TextOptions();
+            AddText(
+                text,
+                point,
+                leader,
+                opts.Layer,
+                opts.Hidden,
+                opts.LeaderType,
+                opts.ArrowType,
+                opts.ScreenPosition,
+                opts.DisplayLeader);
         }
 
         /// <summary>Add a construction/guide line (SketchUp's Construction

@@ -10,8 +10,8 @@ use super::geometry::{
     collect_model_attribute_dictionaries,
 };
 use super::pages_dimensions::{
-    find_page_node, parse_camera, parse_dimensions, parse_pages, scan_instance_transforms,
-    scan_vertex_positions,
+    assign_vff_annotations, compose_instance_world, find_page_node, parse_camera, parse_dimensions,
+    parse_pages, scan_instance_transforms, scan_vertex_positions,
 };
 use super::strconv::{c_stod, c_stoi, c_stoll, c_stoul_digits};
 use super::vff::{extract_version, is_legacy, read_meta_units, valid_header};
@@ -731,9 +731,12 @@ pub fn full_parse(data: &[u8], o: &ParseOptions) -> Result<RawParsed, SkpParseEr
         Ok(pages) => p.pages = pages,
         Err(_) => emit_log(o, LogLevel::Debug, "Failed to parse pages"),
     }
-    if !vertex_positions.is_empty() {
-        p.dimensions = parse_dimensions(&model, &vertex_positions, &instance_world);
-    }
+    // Definition-local annotations need only transforms below their owning
+    // definition. Keep the historical world-space model list for existing
+    // clients as well.
+    compose_instance_world(&p.root, &p.definitions, &mut instance_world);
+    p.dimensions = parse_dimensions(&model, &vertex_positions, &instance_world);
+    assign_vff_annotations(&model, &vertex_positions, &instance_world, &mut p);
     drop(model);
     let mut real_folders = BTreeSet::new();
     for folder in p.material_id_to_name.values() {

@@ -821,7 +821,18 @@ namespace OpenSkp
         public (double X, double Y, double Z)? Normal;
         public (double X, double Y, double Z)? OffsetVector;
     }
-    internal sealed class TextRec { public DrawBase Db = new DrawBase(); public string Text = ""; }
+    internal sealed class TextRec
+    {
+        public DrawBase Db = new DrawBase();
+        public string Text = "";
+        public (double X, double Y, double Z)? Point;
+        public (double X, double Y, double Z)? LabelPoint;
+        public (double X, double Y)? ScreenPosition;
+        public int LeaderType = 2;
+        public int ArrowType = 3;
+        public bool DisplayLeader = true;
+        public int? Vertex;
+    }
     internal sealed class DefinitionRec
     {
         public string Name = "";
@@ -1781,7 +1792,7 @@ namespace OpenSkp
                 Array.Copy(r.Data, idx - 11, blk, 0, 11);
                 if (blk[0] == 0x01 && blk[1] == 0x00 && blk[2] == 0x00 && blk[3] == 0x00
                     && blk[6] <= 8 && blk[7] == 0x00 && blk[8] == 0x00 && blk[9] == 0x00
-                    && blk[10] == 1)
+                    && blk[10] <= 1)
                 {
                     return idx;
                 }
@@ -1807,40 +1818,91 @@ namespace OpenSkp
             Preamble(ar, r);
             var db = Drawbase(ar, r);
             ar.ReadObject(r, "CSkFont");
-            if (AnchoredConnection(r.Data, r.Pos))
+            int fontEnd = r.Pos;
+            (double X, double Y, double Z)? point = null;
+            (double X, double Y, double Z)? labelPoint = null;
+            (double X, double Y)? screenPosition = null;
+            int? vertex = null;
+            bool anchored = AnchoredConnection(r.Data, r.Pos);
+            if (anchored)
             {
-                // An anchored connection block is followed, as a dimension's
-                // is (see ReadDimLinear), by the anchored entity's ref and
-                // its instance paths - and MFC writes a path instance IN FULL
-                // there when nothing has pointed at it before (a label
-                // anchored to a component instance serialized after it, its
-                // class declaration included when it is the file's first
-                // instance). Skipped as bytes, that instance never gets its
-                // store-map slots and every later reference is off by them
-                // ("class-ref to non-class slot"); read it instead.
+                screenPosition = (Tlv.ReadF64(r.Data, fontEnd), Tlv.ReadF64(r.Data, fontEnd + 8));
+                uint connKind = Tlv.ReadU32(r.Data, fontEnd + 16);
                 r.Raw(16 + 32);
-                EntityRef(ar, r);
-                ConnectionPaths(rr => ar.ReadObject(rr).Slot, r, ar);
+                int? connect = EntityRef(ar, r);
+                var paths = ConnectionPaths(rr => ar.ReadObject(rr).Slot, r, ar);
+                if (connKind == 2 && paths.First.Count == 0 && paths.Second.Count == 0)
+                {
+                    vertex = connect;
+                }
             }
             int idx = TextDelimiter(r);
+            bool displayLeader = r.Data[idx - 1] != 0;
+            int leaderType = 2;
+            int arrowType = 3;
+            if (idx >= r.Pos + 63)
+            {
+                leaderType = (int)Tlv.ReadU32(r.Data, idx - 15);
+                arrowType = (int)Tlv.ReadU32(r.Data, idx - 5);
+                labelPoint = (
+                    Tlv.ReadF64(r.Data, idx - 63),
+                    Tlv.ReadF64(r.Data, idx - 55),
+                    Tlv.ReadF64(r.Data, idx - 47));
+                if (!anchored)
+                {
+                    for (int q = r.Pos; q + 32 <= idx - 63; q++)
+                    {
+                        uint ctype = Tlv.ReadU32(r.Data, q);
+                        if (ctype > 2 || Tlv.ReadU32(r.Data, q + 4) != 4) continue;
+                        if (q >= r.Pos + 16)
+                        {
+                            screenPosition = (Tlv.ReadF64(r.Data, q - 16), Tlv.ReadF64(r.Data, q - 8));
+                        }
+                        if (ctype == 0 || ctype == 1)
+                        {
+                            point = (
+                                Tlv.ReadF64(r.Data, q + 8),
+                                Tlv.ReadF64(r.Data, q + 16),
+                                Tlv.ReadF64(r.Data, q + 24));
+                        }
+                        else
+                        {
+                            ushort uref = (ushort)(r.Data[q + 32] | (r.Data[q + 33] << 8));
+                            if (uref > 0 && uref < 0x7FFF)
+                            {
+                                vertex = uref;
+                            }
+                            else if (uref == 0x7FFF && q + 38 <= idx - 63)
+                            {
+                                uint large = Tlv.ReadU32(r.Data, q + 34);
+                                if ((large & 0x80000000) == 0) vertex = (int)large;
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
             r.Raw(idx - r.Pos);
             string text = r.Utf16();
             r.Raw(5);
-            // Optional leader-attachment refs follow the fixed tail (a
-            // text label anchored to geometry stores the anchored entities
-            // here; they can point FORWARD - see EntityRef). Only the
-            // escaped 6-byte form is recognisable without risk: a 2-byte
-            // back-ref here would be indistinguishable from the next list
-            // item's tag, and every known sample either has no attachments
-            // or lives in a >0x7FFE-object file where the escape is
-            // mandatory anyway.
             while (r.Pos + 2 <= r.Data.Length && r.Data[r.Pos] == 0xFF && r.Data[r.Pos + 1] == 0x7F)
             {
                 uint val = Tlv.ReadU32(r.Data, r.Pos + 2);
                 if ((val & 0x80000000) != 0) break;   // new-object tag - the next entity
                 r.Raw(6);
             }
-            return new TextRec { Db = db, Text = text };
+            return new TextRec
+            {
+                Db = db,
+                Text = text,
+                Point = point,
+                LabelPoint = labelPoint,
+                ScreenPosition = screenPosition,
+                LeaderType = leaderType,
+                ArrowType = arrowType,
+                DisplayLeader = displayLeader,
+                Vertex = vertex,
+            };
         }
 
         public static List<(int Slot, string? Name, object? Value)> ReadEntityList(Archive ar, LR r, long count, string owner)
@@ -2740,10 +2802,24 @@ namespace OpenSkp
                 }
                 else if (v is TextRec trRec)
                 {
+                    var pt = trRec.Point;
+                    if (!pt.HasValue && trRec.Vertex.HasValue
+                        && slots.TryGetValue(trRec.Vertex.Value, out var vent)
+                        && vent.Kind == "obj" && vent.Value is VertexRec vrec && vrec.Xyz.Length >= 3)
+                    {
+                        pt = (vrec.Xyz[0], vrec.Xyz[1], vrec.Xyz[2]);
+                    }
                     builder.Texts.Add(new TextEntity
                     {
                         Text = trRec.Text,
-                        Hidden = trRec.Db.Hidden != 0
+                        Hidden = trRec.Db.Hidden != 0,
+                        Layer = trRec.Db.Layer != 0 ? trRec.Db.Layer.ToString() : "",
+                        Point = pt,
+                        LabelPoint = trRec.LabelPoint,
+                        ScreenPosition = trRec.ScreenPosition,
+                        LeaderType = trRec.LeaderType,
+                        ArrowType = trRec.ArrowType,
+                        DisplayLeader = trRec.DisplayLeader,
                     });
                 }
                 else if (v is DimLinearRec dlRec)
@@ -2761,6 +2837,7 @@ namespace OpenSkp
                     {
                         Text = dlRec.Text,
                         Hidden = dlRec.Db.Hidden != 0,
+                        Layer = dlRec.Db.Layer != 0 ? dlRec.Db.Layer.ToString() : "",
                         A = ResolveEndpoint(dlRec.A, dlRec.Connect1),
                         B = ResolveEndpoint(dlRec.B, dlRec.Connect2),
                         Offset = dlRec.Offset,

@@ -316,6 +316,41 @@ pub struct GuideOptions {
     pub hidden: bool,
 }
 
+/// Drawing properties for linear dimensions.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DimensionOptions {
+    /// Layer handle (from `add_layer`); `None` = Layer0.
+    pub layer: Option<i32>,
+    pub hidden: bool,
+}
+
+/// Text placement and drawing properties; point/leader are in owner-local inches.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TextOptions {
+    pub layer: Option<i32>,
+    pub hidden: bool,
+    /// Zero with no screen position writes model text with a hidden leader (native type 2).
+    pub leader_type: i32,
+    pub arrow_type: i32,
+    /// Normalized screen fractions for screen text; overrides the leader type.
+    pub screen_position: Option<[f64; 2]>,
+    /// Hide the leader without turning owner-local text into screen text.
+    pub display_leader: bool,
+}
+
+impl Default for TextOptions {
+    fn default() -> Self {
+        Self {
+            layer: None,
+            hidden: false,
+            leader_type: 2,
+            arrow_type: 3,
+            screen_position: None,
+            display_leader: true,
+        }
+    }
+}
+
 /// Options for `add_face`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FaceOptions {
@@ -1555,7 +1590,7 @@ impl SkpBuilder {
         }
         self.ensure_geometry_writer()?;
         let writer = self.geometry_writer.as_mut().expect("ensured above");
-        writer.write_dimension(p1, p2, offset, None)?;
+        writer.write_dimension(p1, p2, offset, None, &DimensionOptions::default())?;
         self.new_entity_count += 1;
         self.face_count += 1;
         Ok(())
@@ -1571,9 +1606,21 @@ impl SkpBuilder {
         p2: Point3,
         offset_vector: Point3,
     ) -> Result<(), SkpWriteError> {
+        self.add_dimension_with_options(p1, p2, offset_vector, &DimensionOptions::default())
+    }
+
+    /// Add a linear dimension placed by an offset vector, with optional tag and hidden state.
+    pub fn add_dimension_with_options(
+        &mut self,
+        p1: Point3,
+        p2: Point3,
+        offset_vector: Point3,
+        options: &DimensionOptions,
+    ) -> Result<(), SkpWriteError> {
+        self.check_layer_handle(options.layer)?;
         self.ensure_geometry_writer()?;
         let writer = self.geometry_writer.as_mut().expect("ensured above");
-        writer.write_dimension(p1, p2, 0.0, Some(offset_vector))?;
+        writer.write_dimension(p1, p2, 0.0, Some(offset_vector), options)?;
         self.new_entity_count += 1;
         self.face_count += 1;
         Ok(())
@@ -1589,9 +1636,21 @@ impl SkpBuilder {
     ) -> Result<(), SkpWriteError> {
         check_finite_point(point, "text point")?;
         check_finite_point(leader, "text leader")?;
+        self.add_text_with_options(text, point, leader, &TextOptions::default())
+    }
+
+    /// Add leader or screen text with explicit placement and drawing options.
+    pub fn add_text_with_options(
+        &mut self,
+        text: &str,
+        point: Point3,
+        leader: Point3,
+        options: &TextOptions,
+    ) -> Result<(), SkpWriteError> {
+        self.check_layer_handle(options.layer)?;
         self.ensure_geometry_writer()?;
         let writer = self.geometry_writer.as_mut().expect("ensured above");
-        writer.write_text(text, point, leader)?;
+        writer.write_text(text, point, leader, options)?;
         self.new_entity_count += 1;
         self.face_count += 1;
         Ok(())
@@ -1942,7 +2001,7 @@ impl ComponentDefinitionBuilder<'_> {
         }
         self.check_writable("dimensions")?;
         let (writer, def) = self.parts();
-        writer.write_dimension(p1, p2, offset, None)?;
+        writer.write_dimension(p1, p2, offset, None, &DimensionOptions::default())?;
         def.new_entity_count += 1;
         Ok(())
     }
@@ -1955,9 +2014,37 @@ impl ComponentDefinitionBuilder<'_> {
         p2: Point3,
         offset_vector: Point3,
     ) -> Result<(), SkpWriteError> {
+        self.add_dimension_with_options(p1, p2, offset_vector, &DimensionOptions::default())
+    }
+
+    /// Add a linear dimension placed by an offset vector, with optional tag and hidden state.
+    pub fn add_dimension_with_options(
+        &mut self,
+        p1: Point3,
+        p2: Point3,
+        offset_vector: Point3,
+        options: &DimensionOptions,
+    ) -> Result<(), SkpWriteError> {
+        self.skp.check_layer_handle(options.layer)?;
         self.check_writable("dimensions")?;
         let (writer, def) = self.parts();
-        writer.write_dimension(p1, p2, 0.0, Some(offset_vector))?;
+        writer.write_dimension(p1, p2, 0.0, Some(offset_vector), options)?;
+        def.new_entity_count += 1;
+        Ok(())
+    }
+
+    /// Add owner-local leader or screen text, with optional tag and hidden state.
+    pub fn add_text(
+        &mut self,
+        text: &str,
+        point: Point3,
+        leader: Point3,
+        options: &TextOptions,
+    ) -> Result<(), SkpWriteError> {
+        self.check_writable("text")?;
+        self.skp.check_layer_handle(options.layer)?;
+        let (writer, def) = self.parts();
+        writer.write_text(text, point, leader, options)?;
         def.new_entity_count += 1;
         Ok(())
     }

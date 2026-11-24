@@ -125,6 +125,13 @@ pub struct LegacyDimension {
     pub connect2: Option<u64>,
 }
 
+/// A legacy text annotation's decoded geometry and optional vertex ref.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct LegacyText {
+    pub geometry: TextEntity,
+    pub vertex: Option<u64>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct LegacyValue {
     pub k: LegacyKind,
@@ -133,6 +140,7 @@ pub struct LegacyValue {
     pub text: String,
     /// Dimension only (boxed, so mesh vertices do not carry it).
     pub dimension: Option<Box<LegacyDimension>>,
+    pub annotation_text: Option<Box<LegacyText>>,
     pub guid: String,
     pub xyz: Vec3,
     /// Construction line only: its normalized direction, and its bounded
@@ -200,6 +208,7 @@ impl Default for LegacyValue {
             label: String::new(),
             text: String::new(),
             dimension: None,
+            annotation_text: None,
             guid: String::new(),
             xyz: [0.0; 3],
             direction: [0.0; 3],
@@ -776,11 +785,26 @@ fn fill(b: &mut GeometryBuilder, ents: &[LegacyObject], slots: &HashMap<u64, Leg
                 b.section_planes.push(sp);
             }
             LegacyKind::Text => {
-                b.texts.push(TextEntity {
-                    text: v.text.clone(),
-                    hidden: v.hidden != 0,
-                    ..Default::default()
-                });
+                let mut te = v
+                    .annotation_text
+                    .as_ref()
+                    .map(|t| t.geometry.clone())
+                    .unwrap_or_default();
+                if te.point.is_none() {
+                    if let Some(vid) = v.annotation_text.as_ref().and_then(|t| t.vertex) {
+                        if let Some(LegacySlotEntry { v: Some(pv), .. }) = slots.get(&vid) {
+                            if pv.k == LegacyKind::Vertex {
+                                te.point = Some(pv.xyz);
+                            }
+                        }
+                    }
+                }
+                if v.layer != 0 {
+                    te.layer = v.layer.to_string();
+                }
+                te.text = v.text.clone();
+                te.hidden = v.hidden != 0;
+                b.texts.push(te);
             }
             LegacyKind::Dimension => {
                 let decoded = v.dimension.as_deref().cloned().unwrap_or_default();
@@ -800,6 +824,9 @@ fn fill(b: &mut GeometryBuilder, ents: &[LegacyObject], slots: &HashMap<u64, Leg
                 };
                 resolve(&mut dim.a, decoded.connect1);
                 resolve(&mut dim.b, decoded.connect2);
+                if v.layer != 0 {
+                    dim.layer = v.layer.to_string();
+                }
                 dim.text = v.text.clone();
                 dim.hidden = v.hidden != 0;
                 b.dimensions.push(dim);

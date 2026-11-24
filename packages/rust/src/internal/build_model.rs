@@ -44,6 +44,12 @@ fn resolve_layers(d: &mut RawDefinition, names: &BTreeMap<EntityId, String>, o: 
     for cp in &mut d.builder.construction_points {
         resolve_layer(&mut cp.layer, names, o);
     }
+    for dim in &mut d.builder.dimensions {
+        resolve_layer(&mut dim.layer, names, o);
+    }
+    for text in &mut d.builder.texts {
+        resolve_layer(&mut text.layer, names, o);
+    }
 }
 
 fn definition(
@@ -212,15 +218,18 @@ pub fn build_model(p: RawParsed, o: &ParseOptions) -> SkpModel {
     m.unread_root_entities = p.unread_root_entities;
     // Model-level linear dimensions (VFF; world space).
     for dm in &p.dimensions {
+        let mut layer = dm.layer.clone();
+        resolve_layer(&mut layer, &layer_names, o);
         m.dimensions.push(Dimension {
             text: dm.text.clone(),
-            hidden: false,
+            hidden: dm.hidden,
             a: Some(dm.a),
             b: Some(dm.b),
             offset: dm.offset,
             plane_x: dm.plane_x,
             normal: dm.normal,
             offset_vector: dm.offset_vector,
+            layer,
         });
     }
 

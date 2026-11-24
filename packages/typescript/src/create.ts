@@ -85,6 +85,26 @@ export interface Rotation {
 export type AttributeValue = string | number;
 export type AttributeDict = Record<string, AttributeValue>;
 
+/** Drawing properties for linear dimensions. */
+export interface DimensionOptions {
+  /** Layer slot (from `addLayer`); unset = Layer0. */
+  layer?: number;
+  hidden?: boolean;
+}
+
+/** Text placement and drawing properties; point/leader are in owner-local inches. */
+export interface TextOptions {
+  layer?: number;
+  hidden?: boolean;
+  /** Zero with no screenPosition writes model text with a hidden leader (native type 2). */
+  leaderType?: number;
+  arrowType?: number;
+  /** Normalized screen fractions for screen text; overrides leaderType. */
+  screenPosition?: [number, number];
+  /** Hide the leader without turning owner-local text into screen text. */
+  displayLeader?: boolean;
+}
+
 /** Raised when a `.skp` file cannot be constructed. */
 export class SkpWriteError extends Error {
   constructor(message: string) {
@@ -192,8 +212,6 @@ const DIM_FONT_PAYLOAD = hexToBytes(
     '00' +
     'ecf57abd5eaf2340' // height f64
 );
-// Leader-text delimiter block: [u32 1][u8 flag=1][u8 0][u32 ARROW=3 closed][u8 1]
-const TEXT_DELIM = hexToBytes('0100000001000300000001');
 // Sentinel a CConstructionLine's start/end distance-parameter carries when
 // unbounded in that direction - real SketchUp's own value, ground-truth
 // verified against Sketchup::ConstructionLine#start/#end returning nil for
@@ -844,7 +862,13 @@ class ArchiveWriter {
    * stored inline in each connection block and null object refs. Free
    * dimensions render in any orientation; anchored (type 2) dimensions are
    * a future refinement. */
-  writeDimension(p1: Point3, p2: Point3, offset = 10.0, offsetVector?: Point3): void {
+  writeDimension(
+    p1: Point3,
+    p2: Point3,
+    offset = 10.0,
+    offsetVector?: Point3,
+    options: DimensionOptions = {}
+  ): void {
     let normal: Point3 = [0.0, 0.0, 1.0];
     let xaxis: Point3 = [1.0, 0.0, 0.0];
     let resolvedOffset = offset;
@@ -882,12 +906,19 @@ class ArchiveWriter {
         const clen = Math.hypot(cx, cy, cz);
         normal = [cx / clen, cy / clen, cz / clen];
       }
-    } else if (p1[0] === p2[0] && p1[1] === p2[1] && p1[2] === p2[2]) {
-      throw new SkpWriteError('addDimension endpoints coincide');
+    } else {
+      if (!Number.isFinite(p1[0]) || !Number.isFinite(p1[1]) || !Number.isFinite(p1[2]) ||
+          !Number.isFinite(p2[0]) || !Number.isFinite(p2[1]) || !Number.isFinite(p2[2]) ||
+          !Number.isFinite(resolvedOffset)) {
+        throw new SkpWriteError('addDimension coordinates must be finite');
+      }
+      if (p1[0] === p2[0] && p1[1] === p2[1] && p1[2] === p2[2]) {
+        throw new SkpWriteError('addDimension endpoints coincide');
+      }
     }
     this.newOfKnownClass('CDimensionLinear', DIMENSIONLINEAR_SCHEMA);
     this.preamble();
-    this.drawbase();
+    this.drawbase(0, options.layer ?? 0, options.hidden ?? false);
     this.writeStr(''); // auto-computed measurement text
     this.writeDimFontRef();
     // connection 1: [u8 0][u32 0][u32 type=1][u32 4][point A], null ref
@@ -917,37 +948,62 @@ class ArchiveWriter {
     this.pushU32(1);
   }
 
-  /** Add a leader text (SketchUp's Text tool) anchored at `point` (inches,
-   * world space), with the label floating at `point + leader` and a
-   * leader line joining them.
-   *
-   * The record mirrors human-drawn leader texts harvested from real files
-   * (the SDK's own create only produces SCREEN texts - its two 0.5
-   * doubles are screen fractions): screen slot zeroed, the free-connection
-   * block dimensions use ([u32 1][u32 4][point3d]), the label's world
-   * position in the placement tail, and leader type 2 (pushpin) before the
-   * arrow delimiter. */
-  writeText(text: string, point: Point3, leader: Point3 = [15.0, 15.0, 15.0]): void {
+  /** Add a leader or screen text anchored at `point` (inches, owner-local),
+   * with the label floating at `point + leader` and a leader line joining them. */
+  writeText(
+    text: string,
+    point: Point3,
+    leader: Point3 = [15.0, 15.0, 15.0],
+    options: TextOptions = {}
+  ): void {
     const lb: Point3 = [point[0] + leader[0], point[1] + leader[1], point[2] + leader[2]];
+    for (let i = 0; i < 3; i++) {
+      if (!Number.isFinite(point[i]) || !Number.isFinite(lb[i])) {
+        throw new SkpWriteError('addText coordinates must be finite');
+      }
+    }
+    const rawLeaderType = options.leaderType ?? 2;
+    const arrowType = options.arrowType ?? 3;
+    if (
+      !Number.isInteger(rawLeaderType) || rawLeaderType < 0 || rawLeaderType > 2 ||
+      !Number.isInteger(arrowType) || arrowType < 0 || arrowType > 4
+    ) {
+      throw new SkpWriteError('addText invalid leader or arrow type');
+    }
+    let screen: [number, number] = [0.0, 0.0];
+    if (options.screenPosition !== undefined) {
+      const [sx, sy] = options.screenPosition;
+      if (!Number.isFinite(sx) || !Number.isFinite(sy) || sx < 0 || sx > 1 || sy < 0 || sy > 1) {
+        throw new SkpWriteError('addText screen position must be between zero and one');
+      }
+      screen = [sx, sy];
+    }
+    const effLeaderType =
+      options.screenPosition !== undefined ? 0 : rawLeaderType === 0 ? 2 : rawLeaderType;
+    const effDisplayLeader =
+      (options.displayLeader ?? true) && (options.screenPosition !== undefined || rawLeaderType !== 0);
     this.newOfKnownClass('CText', TEXT_SCHEMA);
     this.preamble();
-    this.drawbase();
+    this.drawbase(0, options.layer ?? 0, options.hidden ?? false);
     this.writeDimFontRef();
-    this.pushF64(0.0);
-    this.pushF64(0.0); // screen-fraction slot (unused)
+    this.pushF64(screen[0]);
+    this.pushF64(screen[1]);
     this.pushU32(1);
-    this.pushU32(4); // free connection + constant
+    this.pushU32(4);
     this.pushF64(point[0]);
     this.pushF64(point[1]);
     this.pushF64(point[2]);
     this.pushZeros(12);
     this.pushF64(lb[0]);
     this.pushF64(lb[1]);
-    this.pushF64(lb[2]); // label position
+    this.pushF64(lb[2]);
     this.pushZeros(16);
     this.pushF64(1.0);
-    this.pushU32(2); // leader type: pushpin
-    this.pushBytes(TEXT_DELIM);
+    this.pushU32(effLeaderType);
+    this.pushU32(1);
+    this.pushU16(1);
+    this.pushU32(arrowType);
+    this.pushU8(effDisplayLeader ? 1 : 0);
     this.writeStr(text);
     this.pushZeros(5);
   }
@@ -1883,15 +1939,34 @@ export class ComponentDefinitionBuilder {
    * definition-local space). Pass a signed scalar `offset` or a 3D
    * `offsetVector` whose component perpendicular to `p1 -> p2` determines
    * the plane and side of the dimension line. */
-  addDimension(p1: Point3, p2: Point3, offset?: number): void;
-  addDimension(p1: Point3, p2: Point3, offsetVector: Point3): void;
-  addDimension(p1: Point3, p2: Point3, offsetOrVector: number | Point3 = 10.0): void {
+  addDimension(p1: Point3, p2: Point3, offset?: number, options?: DimensionOptions): void;
+  addDimension(p1: Point3, p2: Point3, offsetVector: Point3, options?: DimensionOptions): void;
+  addDimension(
+    p1: Point3,
+    p2: Point3,
+    offsetOrVector: number | Point3 = 10.0,
+    options: DimensionOptions = {}
+  ): void {
     this.checkWritable('dimensions');
+    this._skp._checkLayerHandle(options.layer);
     if (typeof offsetOrVector === 'number') {
-      this._skp._definitionWriter().writeDimension(toPoint3(p1), toPoint3(p2), offsetOrVector);
+      this._skp._definitionWriter().writeDimension(toPoint3(p1), toPoint3(p2), offsetOrVector, undefined, options);
     } else {
-      this._skp._definitionWriter().writeDimension(toPoint3(p1), toPoint3(p2), 0.0, toPoint3(offsetOrVector));
+      this._skp._definitionWriter().writeDimension(toPoint3(p1), toPoint3(p2), 0.0, toPoint3(offsetOrVector), options);
     }
+    this.newEntityCount += 1;
+  }
+
+  /** Add owner-local leader or screen text, with optional tag and hidden state. */
+  addText(
+    text: string,
+    point: Point3,
+    leader: Point3 = [15.0, 15.0, 15.0],
+    options: TextOptions = {}
+  ): void {
+    this.checkWritable('text');
+    this._skp._checkLayerHandle(options.layer);
+    this._skp._definitionWriter().writeText(text, toPoint3(point), toPoint3(leader), options);
     this.newEntityCount += 1;
   }
 
@@ -2412,26 +2487,36 @@ export class SkpBuilder {
    * a 3D offset vector whose component perpendicular to `p1 -> p2`
    * determines the plane and side of the dimension line. See
    * ArchiveWriter.writeDimension for the record's ground truth. */
-  addDimension(p1: Point3, p2: Point3, offset?: number): void;
-  addDimension(p1: Point3, p2: Point3, offsetVector: Point3): void;
-  addDimension(p1: Point3, p2: Point3, offsetOrVector: number | Point3 = 10.0): void {
+  addDimension(p1: Point3, p2: Point3, offset?: number, options?: DimensionOptions): void;
+  addDimension(p1: Point3, p2: Point3, offsetVector: Point3, options?: DimensionOptions): void;
+  addDimension(
+    p1: Point3,
+    p2: Point3,
+    offsetOrVector: number | Point3 = 10.0,
+    options: DimensionOptions = {}
+  ): void {
+    this._checkLayerHandle(options.layer);
     this.ensureGeometryWriter();
     if (typeof offsetOrVector === 'number') {
-      (this.geometryWriter as ArchiveWriter).writeDimension(toPoint3(p1), toPoint3(p2), offsetOrVector);
+      (this.geometryWriter as ArchiveWriter).writeDimension(toPoint3(p1), toPoint3(p2), offsetOrVector, undefined, options);
     } else {
-      (this.geometryWriter as ArchiveWriter).writeDimension(toPoint3(p1), toPoint3(p2), 0.0, toPoint3(offsetOrVector));
+      (this.geometryWriter as ArchiveWriter).writeDimension(toPoint3(p1), toPoint3(p2), 0.0, toPoint3(offsetOrVector), options);
     }
     this.newEntityCount += 1;
     this.faceCount += 1; // reuses the "at least one root entity" check in toBytes
   }
 
-  /** Add a leader text (SketchUp's Text tool) anchored at `point` (inches,
-   * world space), with the label floating at `point + leader` and a
-   * leader line joining them. See ArchiveWriter.writeText for the
-   * record's ground truth. */
-  addText(text: string, point: Point3, leader: Point3 = [15.0, 15.0, 15.0]): void {
+  /** Add a leader or screen text anchored at `point` (inches, world space),
+   * with the label floating at `point + leader` and a leader line joining them. */
+  addText(
+    text: string,
+    point: Point3,
+    leader: Point3 = [15.0, 15.0, 15.0],
+    options: TextOptions = {}
+  ): void {
+    this._checkLayerHandle(options.layer);
     this.ensureGeometryWriter();
-    (this.geometryWriter as ArchiveWriter).writeText(text, toPoint3(point), toPoint3(leader));
+    (this.geometryWriter as ArchiveWriter).writeText(text, toPoint3(point), toPoint3(leader), options);
     this.newEntityCount += 1;
     this.faceCount += 1; // reuses the "at least one root entity" check in toBytes
   }
