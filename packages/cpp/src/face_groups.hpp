@@ -26,17 +26,12 @@ namespace openskp {
 // seams, normals and front/back handling by construction rather than by
 // parallel maintenance.
 //
-// Faithful to the pre-existing baked behavior it was extracted from: an
-// unpainted face falls back to the caller-supplied fallback_color for
-// color, but its material (and therefore texture tile size) is resolved
-// from the face's OWN material_id/back_material_id only - an instance's
-// painted material is not consulted for texture purposes here. That is an
-// existing characteristic of this port (TypeScript's reference
-// additionally falls back to the inherited material itself for texture
-// tile size on unpainted faces), preserved rather than changed by this
-// extraction. Also preserved: color includes a 4th (alpha/transparency)
-// component here, unlike the other three ports' 3-component RGB key - C++
-// already had that before this port.
+// An unpainted face side inherits fallback_material (texture image, tile
+// size and opacity included) from an enclosing painted component or group;
+// when nothing up the instance path is painted, its color falls back to
+// fallback_color / fallback_back_color (the model's face colors or the
+// effective layer's color). Color includes a 4th (alpha/transparency)
+// component here, unlike the 3-component RGB key in Python/TypeScript/.NET/Dart.
 
 // Color key: (r, g, b, alpha-from-transparency). Richer than the other
 // three ports' 3-component RGB key - an existing C++ characteristic,
@@ -91,6 +86,9 @@ struct FaceGroupContext {
   // Same as fallback_color for a face's back side where it differs (the
   // model's back face color). nullopt means fallback_color.
   std::optional<FaceColorKey> fallback_back_color;
+  // Material painted on the enclosing group/component, inherited whole
+  // (texture, tile size, transparency) by any unpainted face side.
+  std::shared_ptr<RawMaterial> fallback_material;
 };
 
 // Group a definition's faces by resolved material identity, in local

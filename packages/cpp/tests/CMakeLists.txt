@@ -16,6 +16,7 @@ add_executable(
   glb_test.cpp
   glb_textures_test.cpp
   ifc_export_test.cpp
+  inherited_texture_test.cpp
   instanced_glb_test.cpp
   arc_curves_test.cpp
   definition_is_group_test.cpp

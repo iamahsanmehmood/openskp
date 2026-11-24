@@ -15,7 +15,8 @@ use crate::instanced_scene::{
     LocalPrimitive, SceneBounds, IDENTITY_GLTF,
 };
 use crate::internal::{
-    build_pages, emit_log, emit_progress, fold_scale, multiply_matrices, GeometryBuilder, RawParsed,
+    build_pages, emit_log, emit_progress, fold_scale, multiply_matrices, GeometryBuilder,
+    RawMaterial, RawParsed,
 };
 use crate::model::EntityId;
 use crate::observability::{LogLevel, ParseOptions, ParseStage, PROGRESS_INTERVAL};
@@ -84,7 +85,12 @@ fn mul4(a: &[f64; 16], b: &[f64; 16]) -> [f64; 16] {
     out
 }
 
-fn resource_key(defid: Option<EntityId>, front: &FaceColorKey, back: &FaceColorKey) -> String {
+fn resource_key(
+    defid: Option<EntityId>,
+    front: &FaceColorKey,
+    back: &FaceColorKey,
+    inherited_material: Option<&RawMaterial>,
+) -> String {
     let mut key = format!(
         "{}|{},{},{},{}",
         defid
@@ -98,6 +104,10 @@ fn resource_key(defid: Option<EntityId>, front: &FaceColorKey, back: &FaceColorK
     if back != front {
         let [r, g, b, a] = *back;
         key.push_str(&format!("/{r},{g},{b},{a}"));
+    }
+    if let Some(m) = inherited_material {
+        key.push('|');
+        key.push_str(&m.name);
     }
     key
 }
@@ -143,22 +153,22 @@ impl<'a> Instancer<'a> {
     }
 
     /// The local-space mesh resource for a definition in one rendering
-    /// context, built once per (definition, effective fallback color): the
-    /// only inputs that change what the face grouping produces. `None` when
-    /// the definition has no faces.
+    /// context, built once per (definition, effective fallback color,
+    /// inherited material name): the only inputs that change what the face
+    /// grouping produces. `None` when the definition has no faces.
     fn mesh_resource_for_builder(
         &mut self,
         builder: &GeometryBuilder,
         defname: &str,
         defid: Option<EntityId>,
-        inherited: Option<FaceColorKey>,
+        inherited_material: Option<&'a RawMaterial>,
         layer: &str,
     ) -> Result<Option<String>, SkpParseError> {
         if builder.faces.is_empty() {
             return Ok(None);
         }
         let p = self.p;
-        let (fallback, fallback_back) = match inherited {
+        let (fallback, fallback_back) = match material_color(inherited_material) {
             Some(c) => (c, c),
             None => match self.style_colors {
                 Some((front, back)) => (front, back),
@@ -168,7 +178,7 @@ impl<'a> Instancer<'a> {
                 }
             },
         };
-        let key = resource_key(defid, &fallback, &fallback_back);
+        let key = resource_key(defid, &fallback, &fallback_back, inherited_material);
         if let Some(&hit) = self.resource_index_by_key.get(&key) {
             return Ok(Some(self.mesh_resources[hit].id.clone()));
         }
@@ -180,6 +190,7 @@ impl<'a> Instancer<'a> {
                 texture_index_for: &mut texture_index_for,
                 fallback_color: fallback,
                 fallback_back_color: Some(fallback_back),
+                fallback_material: inherited_material,
             };
             build_local_face_groups(p, builder, &mut ctx).map_err(build_error)?
         };
@@ -318,14 +329,14 @@ impl<'a> Instancer<'a> {
         builder: &'a GeometryBuilder,
         current_matrix: &[f64],
         parent_layer: &str,
-        inherited: Option<FaceColorKey>,
+        inherited_material: Option<&'a RawMaterial>,
     ) -> Result<Vec<InstancedNode>, SkpParseError> {
         let p = self.p;
         let mut nodes = Vec::new();
         for i in &builder.instances {
             let new_matrix = multiply_matrices(current_matrix, &i.matrix);
             let l_name = instance_layer(p, self.o, i, parent_layer);
-            let inst_color = material_color(find_material(p, i.material_id)).or(inherited);
+            let inst_material = find_material(p, i.material_id).or(inherited_material);
 
             let def_name = definition_name(p, i);
             let def_name_is_real = !def_name.is_empty() && !is_generic_definition_name(&def_name);
@@ -385,10 +396,10 @@ impl<'a> Instancer<'a> {
                         &d.builder,
                         &d.name,
                         Some(r),
-                        inst_color,
+                        inst_material,
                         &l_name,
                     )?;
-                    node.children = self.walk(&d.builder, &new_matrix, &l_name, inst_color)?;
+                    node.children = self.walk(&d.builder, &new_matrix, &l_name, inst_material)?;
                     // After the children, as in the Python reference, so curve
                     // resource ids number the same there and here.
                     node.curve_resource_id =

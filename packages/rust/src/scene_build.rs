@@ -12,7 +12,8 @@ use crate::face_groups::{
 use crate::internal::strconv::c_stoll;
 use crate::internal::{
     build_pages, emit_log, emit_progress, multiply_matrices, transform_determinant,
-    transform_normal, transform_point, Error, GeometryBuilder, RawInstance, RawParsed,
+    transform_normal, transform_point, Error, GeometryBuilder, RawInstance, RawMaterial,
+    RawParsed,
 };
 use crate::model::{stringify_attr_dict, EntityId, StringDictionaries};
 use crate::observability::{LogLevel, ParseOptions, ParseStage, PROGRESS_INTERVAL};
@@ -304,10 +305,10 @@ impl<'a> Baker<'a> {
         matrix: &[f64],
         layer: &str,
         path: &str,
-        inherited: Option<FaceColorKey>,
+        inherited_material: Option<&'a RawMaterial>,
     ) -> Result<Vec<InstanceNode>, SkpParseError> {
         let p = self.p;
-        let (fallback, fallback_back) = match inherited {
+        let (fallback, fallback_back) = match material_color(inherited_material) {
             Some(c) => (c, c),
             None => match self.style_colors {
                 Some((front, back)) => (front, back),
@@ -324,6 +325,7 @@ impl<'a> Baker<'a> {
                 texture_index_for: &mut texture_index_for,
                 fallback_color: fallback,
                 fallback_back_color: Some(fallback_back),
+                fallback_material: inherited_material,
             };
             build_local_face_groups(p, b, &mut ctx).map_err(build_error)?
         };
@@ -428,7 +430,7 @@ impl<'a> Baker<'a> {
         let mut children = Vec::new();
         for i in &b.instances {
             let child_layer = instance_layer(p, self.o, i, layer);
-            let child_color = material_color(find_material(p, i.material_id)).or(inherited);
+            let child_material = find_material(p, i.material_id).or(inherited_material);
 
             let def_name = definition_name(p, i);
             let def_name_is_real = !def_name.is_empty() && !is_generic_definition_name(&def_name);
@@ -468,7 +470,7 @@ impl<'a> Baker<'a> {
                         &mat,
                         &child_layer,
                         &child_path,
-                        child_color,
+                        child_material,
                     )?;
                     self.active.remove(&r);
                 }
