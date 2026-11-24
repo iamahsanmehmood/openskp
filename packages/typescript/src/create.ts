@@ -814,9 +814,20 @@ class ArchiveWriter {
   }
 
   private writeStr(s: string): void {
-    if (s.length >= 0xff) throw new SkpWriteError('string too long to encode (255 char limit)');
-    this.bytes.push(0xff, 0xfe, 0xff, s.length);
-    for (let i = 0; i < s.length; i++) {
+    const n = s.length;
+    if (n >= 0xffffffff) throw new SkpWriteError('string too long to encode');
+    this.bytes.push(0xff, 0xfe, 0xff);
+    if (n < 0xff) {
+      this.bytes.push(n);
+    } else if (n < 0xfffe) {
+      this.bytes.push(0xff);
+      this.pushU16(n);
+    } else {
+      this.bytes.push(0xff);
+      this.pushU16(0xffff);
+      this.pushU32(n);
+    }
+    for (let i = 0; i < n; i++) {
       const c = s.charCodeAt(i);
       this.bytes.push(c & 0xff, (c >> 8) & 0xff);
     }

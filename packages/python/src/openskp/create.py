@@ -1175,9 +1175,15 @@ class _ArchiveWriter:
     def _write_str(self, s: str) -> None:
         encoded = s.encode("utf-16-le")
         n = len(encoded) // 2
-        if n >= 0xFF:
-            raise SkpWriteError("string too long to encode (255 char limit)")
-        self.buf += b"\xff\xfe\xff" + struct.pack("<B", n) + encoded
+        if n >= 0xFFFFFFFF:
+            raise SkpWriteError("string too long to encode")
+        if n < 0xFF:
+            header = b"\xff\xfe\xff" + struct.pack("<B", n)
+        elif n < 0xFFFE:
+            header = b"\xff\xfe\xff\xff" + struct.pack("<H", n)
+        else:
+            header = b"\xff\xfe\xff\xff\xff\xff" + struct.pack("<I", n)
+        self.buf += header + encoded
 
     def write_material(self, name: str, rgba: Tuple[int, int, int, int],
                        opacity: Optional[float] = None) -> int:
