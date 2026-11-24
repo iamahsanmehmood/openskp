@@ -721,7 +721,7 @@ pub fn to_ifc(
         product_ids.push(ann_id);
     }
 
-    for prim in &scene.glb_primitives {
+    for prim in scene.surface_primitives() {
         let tri_count = prim.indices.len() / 3;
         let v_count = prim.positions.len() / 3;
         if tri_count == 0 || v_count == 0 {

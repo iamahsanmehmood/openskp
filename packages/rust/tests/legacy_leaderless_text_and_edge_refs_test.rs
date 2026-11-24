@@ -26,7 +26,7 @@ fn leaderless_text_before_shared_vertex_edges_matches_sdk() {
     let texts: Vec<&str> = model.root().texts.iter().map(|t| t.text.as_str()).collect();
     assert_eq!(texts, vec!["Screen title", "Callout"]);
     assert_eq!(model.unread_root_entities, 0);
-    assert_eq!(scene.glb_primitives.len(), 1);
+    assert_eq!(scene.surface_primitives().len(), 1);
     assert_eq!(instanced.mesh_resources.len(), 1);
     assert!(logs
         .lock()
@@ -58,7 +58,7 @@ fn root_edge_with_non_vertex_ref_reports_partial_read() {
     assert_eq!(texts, vec!["Screen title", "Callout"]);
     assert_eq!(model.root().edges.len(), 1);
     assert_eq!(model.unread_root_entities, 2);
-    assert_eq!(scene.glb_primitives.len(), 1);
+    assert_eq!(scene.surface_primitives().len(), 1);
     assert_eq!(instanced.mesh_resources.len(), 1);
     assert!(logs
         .lock()

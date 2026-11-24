@@ -242,7 +242,7 @@ pub fn to_dxf(scene: &Scene, scale: f64, mode: &str) -> Result<String, DxfError>
     let mut layer_names: HashMap<&str, String> = HashMap::new();
     let mut used_names: HashSet<String> = ["0", "defpoints"].map(String::from).into();
     for prim in &scene.glb_primitives {
-        if prim.indices.is_empty() {
+        if prim.unpainted_back || prim.indices.is_empty() {
             continue;
         }
         validate_primitive(prim, scale)?;
@@ -317,6 +317,9 @@ pub fn to_dxf(scene: &Scene, scale: f64, mode: &str) -> Result<String, DxfError>
     lines.push("ENTITIES");
 
     for prim in &scene.glb_primitives {
+        if prim.unpainted_back {
+            continue;
+        }
         let tri_count = prim.indices.len() / 3;
         if tri_count == 0 {
             continue;

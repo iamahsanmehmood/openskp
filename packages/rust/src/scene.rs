@@ -51,6 +51,9 @@ pub struct GlbPrimitive {
     pub indices: Vec<u32>,
     pub material_index: usize,
     pub geom_name: String,
+    /// True when this primitive is the back copy of a face with no paint on
+    /// either side, split out so the two sides can take different style colours.
+    pub unpainted_back: bool,
 }
 
 /// glTF `pbrMetallicRoughness`.
@@ -147,4 +150,14 @@ pub struct Scene {
     /// Camera `eye`/`target`/`up` and `ortho_height` stay in SketchUp's native
     /// Z-up frame and inches (unlike `glb_primitives`, which are Y-up metres).
     pub pages: Vec<Page>,
+}
+
+impl Scene {
+    /// Primitives without the back copies of unpainted faces.
+    pub fn surface_primitives(&self) -> Vec<&GlbPrimitive> {
+        self.glb_primitives
+            .iter()
+            .filter(|p| !p.unpainted_back)
+            .collect()
+    }
 }

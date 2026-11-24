@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — Rust: scenes show unpainted faces in SketchUp's face colours (#533)
+
+- `build_scene()`, `build_instanced_scene()`, `to_glb()` and `to_instanced_glb()` now give a face side with no paint the colour SketchUp shows: the model's front face colour on the front and its back face colour on the back (`SkpModel::face_front_color` / `face_back_color`). Set `ParseOptions::unpainted_faces` (`ParseOptions::with_unpainted_faces("tag")`) for the previous tag-colour fallback; SketchUp 3 files without face colours still use the tag colour.
+- Where the two colours differ, a face with no paint on either side becomes two single-sided primitives, with the back copy marked `unpainted_back` on `GlbPrimitive` and `LocalPrimitive`. `Scene::surface_primitives()` leaves those out; the STL, OBJ, PLY, DXF, IFC and Fragments exports emit one copy of each such face in the front colour.
+- An unpainted component placed on several tags is now one instanced mesh resource instead of one per tag colour.
+
 ### Changed — C++: scenes show unpainted faces in SketchUp's face colours (#533)
 
 - `build_scene()`, `build_instanced_scene()`, `to_glb()` and `to_instanced_glb()` now give a face side with no paint the colour SketchUp shows: the model's front face colour on the front and its back face colour on the back (`SkpModel::face_front_color` / `face_back_color`). Set `ParseOptions::unpainted_faces = "tag"` for the previous tag-colour fallback; SketchUp 3 files without face colours still use the tag colour.
