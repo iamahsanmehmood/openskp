@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Python, TypeScript, .NET & Dart: guides inside component definitions, guide tags and hidden guides (#618, #619)
+
+- The writers take construction lines and points inside a component definition, and `open_existing` replays them. A definition whose only guides can't be replayed (half-bounded or zero length) is skipped instead of failing, in all six languages. Guides with NaN or infinite values are rejected.
+- `ConstructionLine` and `ConstructionPoint` have `layer` and `hidden`, read and written.
+
+### Added — Python, TypeScript, .NET & Dart: where a linear dimension's line lies (#621)
+
+- `plane_x`, `normal`, `offset` and `offset_vector` on linear dimensions, and `offset_vector` on `add_dimension`.
+- Dart: `GeometryHost` has two new methods (`addConstructionLine`, `addConstructionPoint`); classes that **implement** it must add them, classes that extend it don't.
+
+### Fixed — Python, TypeScript, .NET, Dart & Rust: component GUIDs read as SketchUp shows them (#622)
+
+- `Definition.guid` and `Instance.guid` use the canonical byte order, as SketchUp and C++ do. **GUID strings change** for anyone who stored them, also in JSON and Fragments output.
+- The writers give each definition its own random GUID and accept an explicit `guid`; Rust also writes a random file GUID.
+- 2021+ component definitions have their attribute dictionaries.
+- Python, TypeScript, .NET and Dart decode 2021+ boolean attribute values (they were null), in the dictionaries of definitions, instances and the model. As text they are `1` and `0`, as in classic files, C++ and Rust.
+
+### Fixed — Python, TypeScript, .NET, Dart & Rust: tags, visibility and owner of dimensions and texts (#623)
+
+- Dimensions and texts keep `layer` and `hidden`. Those of 2021+ files that lie inside a component belong to its definition, in its own coordinates, instead of to the model.
+- Texts have their leader and screen placement (`screen_position`, `leader_type`, `arrow_type`, `display_leader`), read and written. Screen texts of classic files give `label_point=(0, 0, 0)`, as in C++.
+- Text and dimension calls are checked completely before anything is written, so a rejected call leaves the builder usable.
+
+### Added — TypeScript, .NET, Dart, C++ & Rust: a warning for textures a scene can't carry, and an option to keep them (#635)
+
+- A texture that is neither PNG nor JPEG is reported once through the log callback instead of vanishing. `originalTextures` / `OriginalTextures` / `original_textures` keeps it in `scene.textures` in its own format; the GLB exporters leave such an image out.
+
+### Fixed — All 6 languages: two different textures of equal size were mixed up in scenes (#645)
+
+- Images were told apart by their length and first 16 bytes, which are the same in every PNG. Now the whole content counts.
+
+### Fixed — TypeScript, .NET & Dart: scene `properties` of 2021+ files (#642)
+
+- They hold the instance's dynamic attributes, numbers included, instead of the text entries of every dictionary.
+
+### Fixed — Python, TypeScript, .NET, Dart & C++: damaged files raise the parse error (#588)
+
+- Damaged containers and records no longer escape as `BadZipFile`, `KeyError`, `InvalidDataException`, `RangeError`, `std::out_of_range` and the like; missing or unreadable files keep their own errors. The original error is the cause.
+- Python: a classic file cut inside its layer list no longer hangs. A classic file cut inside its entities is read in part, with `unread_root_entities`.
+
 ### Added — Python, TypeScript, .NET, Dart & Rust: entities hidden by scenes and persistent entity ids (#472, #501, #521)
 
 - `Page.hidden_entity_ids` (`hiddenEntityIds`, `HiddenEntityIds`) lists what each scene hides, as persistent ids; match them with `Instance.id` and the new `Edge`/`Face` `persistent_id` (`persistentId`, `PersistentId`). Both work for 2021+ files and for SketchUp 2017-2020; older files have no such ids (`0`, or no `Instance.id`). C++ had them already.
