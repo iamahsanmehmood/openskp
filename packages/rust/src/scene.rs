@@ -140,4 +140,7 @@ pub struct Scene {
     /// meshes above are unaffected by them). Empty for a model whose geometry
     /// is all faces.
     pub curve_sets: Vec<CurveSetMetadata>,
+    /// Number of top-level entities dropped when a classic (pre-2021) root
+    /// entity walk stopped early (`0` for complete classic files and VFF files).
+    pub unread_root_entities: usize,
 }

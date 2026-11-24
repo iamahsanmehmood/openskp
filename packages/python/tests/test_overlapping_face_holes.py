@@ -51,8 +51,8 @@ def _build_scene_counts(skp_bytes: bytes, tmp_path):
     out = tmp_path / "test.skp"
     out.write_bytes(skp_bytes)
     scene = SkpFile.open(str(out)).build_scene()
-    tris = sum(len(p.indices) // 3 for p in scene.glb_primitives)
-    verts = sum(len(p.positions) // 3 for p in scene.glb_primitives)
+    tris = sum(len(p.indices) // 3 for p in scene.surface_primitives)
+    verts = sum(len(p.positions) // 3 for p in scene.surface_primitives)
     return tris, verts
 
 
@@ -148,8 +148,8 @@ class TestOverlappingHolesMergeIntoOneCorrectShape:
         from openskp import SkpFile
 
         scene = SkpFile.open(str(out)).build_scene()
-        assert len(scene.glb_primitives) == 1
-        prim = scene.glb_primitives[0]
+        assert len(scene.surface_primitives) == 1
+        prim = scene.surface_primitives[0]
         positions = prim.positions
         indices = prim.indices
         verts = [
@@ -206,8 +206,8 @@ class TestOverlappingHolesMergeIntoOneCorrectShape:
             assert len(hole_faces) == 4
 
         scene = skp.build_scene()
-        tris = sum(len(p.indices) // 3 for p in scene.glb_primitives)
-        verts = sum(len(p.positions) // 3 for p in scene.glb_primitives)
+        tris = sum(len(p.indices) // 3 for p in scene.surface_primitives)
+        verts = sum(len(p.positions) // 3 for p in scene.surface_primitives)
         # Pinned exactly, as this project's other real-fixture regression
         # tests do (see test_legacy_v20.py) - re-derived and verified
         # against the geometric invariant (not just "whatever the code

@@ -37,8 +37,8 @@ def to_ply_ascii(scene: Scene) -> str:
     Returns:
         The formatted ASCII PLY text string.
     """
-    total_vertices = sum(len(p.positions) // 3 for p in scene.glb_primitives)
-    total_faces = sum(len(p.indices) // 3 for p in scene.glb_primitives)
+    total_vertices = sum(len(p.positions) // 3 for p in scene.surface_primitives)
+    total_faces = sum(len(p.indices) // 3 for p in scene.surface_primitives)
 
     lines: list[str] = [
         "ply",
@@ -62,7 +62,7 @@ def to_ply_ascii(scene: Scene) -> str:
         "end_header",
     ]
 
-    for prim in scene.glb_primitives:
+    for prim in scene.surface_primitives:
         r, g, b, a = _get_material_rgba(scene, prim.material_index)
         vert_count = len(prim.positions) // 3
         for i in range(vert_count):
@@ -82,7 +82,7 @@ def to_ply_ascii(scene: Scene) -> str:
             )
 
     vert_offset = 0
-    for prim in scene.glb_primitives:
+    for prim in scene.surface_primitives:
         tri_count = len(prim.indices) // 3
         for i in range(tri_count):
             i0 = prim.indices[i * 3] + vert_offset
@@ -104,8 +104,8 @@ def to_ply_binary(scene: Scene) -> bytes:
     Returns:
         The packed Little-Endian Binary PLY byte array.
     """
-    total_vertices = sum(len(p.positions) // 3 for p in scene.glb_primitives)
-    total_faces = sum(len(p.indices) // 3 for p in scene.glb_primitives)
+    total_vertices = sum(len(p.positions) // 3 for p in scene.surface_primitives)
+    total_faces = sum(len(p.indices) // 3 for p in scene.surface_primitives)
 
     header = (
         f"ply\n"
@@ -131,7 +131,7 @@ def to_ply_binary(scene: Scene) -> bytes:
 
     chunks: list[bytes] = [header]
 
-    for prim in scene.glb_primitives:
+    for prim in scene.surface_primitives:
         r, g, b, a = _get_material_rgba(scene, prim.material_index)
         vert_count = len(prim.positions) // 3
         for i in range(vert_count):
@@ -152,7 +152,7 @@ def to_ply_binary(scene: Scene) -> bytes:
             chunks.append(vert_bytes)
 
     vert_offset = 0
-    for prim in scene.glb_primitives:
+    for prim in scene.surface_primitives:
         tri_count = len(prim.indices) // 3
         for i in range(tri_count):
             i0 = prim.indices[i * 3] + vert_offset

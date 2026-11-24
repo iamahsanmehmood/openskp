@@ -29,10 +29,10 @@ from . import _core
 from ._curves import _chain_loose_edges, _solve_run_arc
 from ._face_groups import (
     FaceGroupContext,
-    FaceGroupKey,
     build_local_face_groups,
     resolve_color,
     resolve_material,
+    unpainted_style_colors,
 )
 from .errors import SkpParseError
 
@@ -142,6 +142,10 @@ class GlbPrimitive:
             primitive's resolved color.
         geom_name: Matches the corresponding key in
             :attr:`Scene.mesh_index`.
+        unpainted_back: ``True`` for the back copies of faces with no
+            paint on either side (the front copies are in another
+            primitive). They exist only to show the model's back face
+            colour from behind; see :attr:`Scene.surface_primitives`.
     """
 
     positions: array
@@ -151,6 +155,7 @@ class GlbPrimitive:
     back_triangles: array = field(default_factory=lambda: array("I"), kw_only=True)
     material_index: int
     geom_name: str
+    unpainted_back: bool = False
 
 
 @dataclass
@@ -258,6 +263,15 @@ class Scene:
     # use this to match SketchUp's own on/off state instead of always
     # defaulting every layer to visible.
     layer_hidden: Dict[str, bool] = field(default_factory=dict)
+    unread_root_entities: int = 0
+
+    @property
+    def surface_primitives(self) -> List[GlbPrimitive]:
+        """:attr:`glb_primitives` without the back copies of faces that have
+        no paint on either side: what to use when the two sides of a surface
+        aren't shown separately (printing, CAD and BIM formats, counting or
+        measuring triangles). Every face is still there once."""
+        return [p for p in self.glb_primitives if not p.unpainted_back]
 
 
 def _sniff_image_mime(data: bytes) -> Optional[str]:
@@ -351,6 +365,7 @@ def build_scene(
     name_override_keys: Sequence[str] = ("name", "label", "code"),
     include_curve_sets: bool = True,
     original_textures: bool = False,
+    unpainted_faces: str = "style",
 ) -> Scene:
     """Bake every instance actually placed in ``parsed`` (the output of
     :func:`openskp._core.full_parse` / ``full_parse_legacy``) into
@@ -379,6 +394,8 @@ def build_scene(
             568,177 - that second one being the point: on a curve-only
             model the curve sets *are* the model, and turning them off
             leaves a spatial skeleton with nothing in it.
+        original_textures: See :meth:`SkpFile.build_scene`.
+        unpainted_faces: See :meth:`SkpFile.build_scene`.
 
     Returns:
         A populated :class:`Scene`.
@@ -459,7 +476,7 @@ def build_scene(
         texture_index_by_key[key] = idx
         return idx
 
-    color_to_material_index: Dict[FaceGroupKey, int] = {}
+    color_to_material_index: Dict[Tuple[Any, ...], int] = {}
     gltf_materials: List[Dict[str, Any]] = []
 
     # Definitions currently being instantiated on the active recursion
@@ -471,6 +488,8 @@ def build_scene(
 
     def get_layer_color(name: str) -> Tuple[int, int, int]:
         return layer_colors.get(name, (136, 136, 136))
+
+    style_colors = unpainted_style_colors(parsed, unpainted_faces)
 
     def get_material_index(
         color: Tuple[int, int, int],
@@ -569,7 +588,12 @@ def build_scene(
             # reverse-wound using the back material - so each side renders
             # its own correct color instead of the front material leaking
             # onto (or the back vanishing from) the far side.
-            fallback_color = inherited_color if inherited_color is not None else get_layer_color(parent_layer)
+            if inherited_color is not None:
+                fallback_color = fallback_back_color = inherited_color
+            elif style_colors is not None:
+                fallback_color, fallback_back_color = style_colors
+            else:
+                fallback_color = fallback_back_color = get_layer_color(parent_layer)
             face_groups = build_local_face_groups(
                 builder,
                 FaceGroupContext(
@@ -580,10 +604,13 @@ def build_scene(
                     fallback_color=fallback_color,
                     definition_id=def_id,
                     fallback_material=inherited_material,
+                    fallback_back_color=fallback_back_color,
                 ),
             )
 
-            for (face_color, double_sided, tex_index, transparency, material_name), group in face_groups.items():
+            for (
+                face_color, double_sided, tex_index, transparency, material_name, unpainted_back
+            ), group in face_groups.items():
                 local_faces = group["local_faces"]
                 if not local_faces:
                     continue
@@ -665,6 +692,7 @@ def build_scene(
                         back_triangles=group["back_triangles"],
                         material_index=material_index,
                         geom_name=geom_name,
+                        unpainted_back=unpainted_back,
                     )
                 )
 
@@ -927,4 +955,5 @@ def build_scene(
         gltf_materials=gltf_materials,
         textures=textures,
         layer_hidden=dict(parsed.get("layer_hidden") or {}),
+        unread_root_entities=int(parsed.get("unread_root_entities", 0)),
     )

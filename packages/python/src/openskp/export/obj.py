@@ -111,7 +111,7 @@ def to_obj(scene: Scene, mtl_filename: str | None = None) -> str:
     """
     lines: list[str] = [
         "# OpenSKP OBJ Export",
-        f"# Primitives: {len(scene.glb_primitives)}",
+        f"# Primitives: {len(scene.surface_primitives)}",
     ]
 
     if mtl_filename:
@@ -124,7 +124,7 @@ def to_obj(scene: Scene, mtl_filename: str | None = None) -> str:
     uv_offset = 1
     norm_offset = 1
 
-    for prim in scene.glb_primitives:
+    for prim in scene.surface_primitives:
         lines.append(f"o {prim.geom_name}")
 
         vert_count = len(prim.positions) // 3

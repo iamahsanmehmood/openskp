@@ -469,6 +469,7 @@ pub fn build_instanced_scene_raw(
         textures: textures.textures,
         layer_hidden,
         curve_resources,
+        unread_root_entities: p.unread_root_entities,
     })
 }
 

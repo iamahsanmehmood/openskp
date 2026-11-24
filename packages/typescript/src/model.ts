@@ -470,6 +470,11 @@ export interface SkpScene {
    * handful of photographic textures is several times larger with them than
    * without. */
   textures: SceneTexture[];
+  /** Number of top-level entities dropped when a classic (pre-2021) root
+   * entity walk stopped early (`0` for complete classic files and VFF files).
+   * Always populated by {@link buildScene}; optional so hand-constructed scene
+   * literals for exporters do not need to supply it. */
+  unreadRootEntities?: number;
 }
 
 /** Options shared by {@link buildScene} and {@link buildInstancedScene}. */
@@ -1289,7 +1294,15 @@ export function buildSceneFromParsed(
       }
     : null;
 
-  return { sceneHierarchy, meshIndex, glbPrimitives, gltfMaterials, textures, bounds };
+  return {
+    sceneHierarchy,
+    meshIndex,
+    glbPrimitives,
+    gltfMaterials,
+    textures,
+    bounds,
+    unreadRootEntities: parsed.unreadRootEntities ?? 0,
+  };
 }
 
 export function resolveMaterialFromMaps(

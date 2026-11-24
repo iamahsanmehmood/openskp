@@ -54,9 +54,15 @@ namespace OpenSkp.Tests
                 {
                     OnLog = (level, message) => logs.Add((level, message)),
                 };
-                var model = SkpFile.Open(FixturePath(name), options);
+                var path = FixturePath(name);
+                var model = SkpFile.Open(path, options);
                 Assert.Equal(0, model.UnreadRootEntities);
                 Assert.DoesNotContain(logs, entry => entry.Level == SkpLogLevel.Warning);
+                if (name == "SU_File.skp")
+                {
+                    Assert.Equal(0, SkpFile.BuildScene(path).UnreadRootEntities);
+                    Assert.Equal(0, SkpFile.BuildInstancedScene(path).UnreadRootEntities);
+                }
             }
         }
 
@@ -79,6 +85,8 @@ namespace OpenSkp.Tests
             var complete = SkpFile.Parse(bytes);
             Assert.Equal(2, complete.Root.Texts.Count);
             Assert.Equal(0, complete.UnreadRootEntities);
+            Assert.Equal(0, SkpFile.BuildScene(bytes).UnreadRootEntities);
+            Assert.Equal(0, SkpFile.BuildInstancedScene(bytes).UnreadRootEntities);
 
             // Break the second text's string marker so the reader can't find its text.
             var marker = new byte[] { 0x01, 0xFF, 0xFE, 0xFF, 0x06, (byte)'B', 0x00 };
@@ -95,6 +103,8 @@ namespace OpenSkp.Tests
             var text = Assert.Single(model.Root.Texts);
             Assert.Equal("First", text.Text);
             Assert.True(model.UnreadRootEntities > 0);
+            Assert.Equal(model.UnreadRootEntities, SkpFile.BuildScene(bytes).UnreadRootEntities);
+            Assert.Equal(model.UnreadRootEntities, SkpFile.BuildInstancedScene(bytes).UnreadRootEntities);
             Assert.Contains(
                 logs,
                 entry => entry.Level == SkpLogLevel.Warning

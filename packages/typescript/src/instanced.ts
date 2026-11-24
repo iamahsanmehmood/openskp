@@ -192,6 +192,12 @@ export interface InstancedScene {
    * a scene read back with `fromFragments`, whose format carries no layer
    * colours. */
   layerColors?: Record<string, [number, number, number]>;
+  /** Number of top-level entities dropped when a classic (pre-2021) root
+   * entity walk stopped early (`0` for complete classic files, VFF files, and
+   * scenes read back from `.frag`). Always populated by
+   * {@link buildInstancedScene} and `fromFragments`; optional so
+   * hand-constructed scene literals for exporters do not need to supply it. */
+  unreadRootEntities?: number;
 }
 
 /**
@@ -694,5 +700,14 @@ export function buildInstancedSceneFromParsed(
       `${meshResources.length} mesh resources (${((Date.now() - t0) / 1000).toFixed(2)}s)`
   );
 
-  return { sceneHierarchy, meshResources, gltfMaterials, textures, bounds, layerHidden: Object.fromEntries(layerHidden), layerColors: Object.fromEntries(layerColors) };
+  return {
+    sceneHierarchy,
+    meshResources,
+    gltfMaterials,
+    textures,
+    bounds,
+    layerHidden: Object.fromEntries(layerHidden),
+    layerColors: Object.fromEntries(layerColors),
+    unreadRootEntities: parsed.unreadRootEntities ?? 0,
+  };
 }

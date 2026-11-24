@@ -54,7 +54,7 @@ OpenSKP is an open-source, cross-platform toolkit for SketchUp (`.skp`) binary f
 | **Scene Baking / Triangulation** | ✅ | Opt-in scene baking: full placed scene graph resolved to world-space, triangulated, GLB-ready — in all five languages |
 | **Layers / Tags** | ✅ | Layer definitions with colors and visibility (`hidden` state) — fully exposed across all five languages |
 | **Materials & Textures** | ✅ | Material properties, colors, transparency, colorized materials, and embedded texture images |
-| **Styles** | 🔶 | `styles[].front_color`/`back_color` read for 2021+ files in all five, plus `face_front_color`/`face_back_color` (SketchUp 4–2025 rendering options) on `main` in Python ([#550](https://github.com/iamahsanmehmood/openskp/pull/550)); baked/instanced scenes still colour unpainted faces with their tag colour ([#533](https://github.com/iamahsanmehmood/openskp/issues/533)) |
+| **Styles** | 🔶 | `styles[].front_color`/`back_color` read for 2021+ files in all five, plus `face_front_color`/`face_back_color` (SketchUp 4–2025 rendering options) on `main` in Python ([#550](https://github.com/iamahsanmehmood/openskp/pull/550)); Python's scenes show unpainted faces in those colours (on `main`), while the other ports' scenes still use the tag colour ([#533](https://github.com/iamahsanmehmood/openskp/issues/533)) |
 | **Dynamic Components** | 🔶 | Instance and face attribute dictionaries extracted in all five languages (2021+ and pre-2021); **definition- and model-level** attribute dictionaries (Dynamic Components formulas/options) are Python-only today |
 | **Observability** | ✅ | Opt-in progress reporting + structured, location-carrying parse errors — see [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md) |
 | **Convert to GLB / OBJ / STL / PLY / DXF 3D / IFC4 / JSON** | ✅ | Native, from-scratch conversion to glTF (GLB), Wavefront OBJ, STL, PLY, DXF 3D (AutoCAD Polyface Mesh), IFC4 (BIM), and JSON metadata — available in all five languages, no third-party CAD/BIM SDK involved — see [Export capabilities](docs/DEVELOPER_GUIDE.md#export-capabilities) |
@@ -214,7 +214,7 @@ condensed version.
 |:---|:---:|:---:|:---:|:---:|:---:|
 | Parse VFF (2021+) & classic MFC (SketchUp 4–2020; [§4](docs/LANGUAGE_PARITY.md#4-real-sketchup-file-version-support)) | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Geometry, layers, materials/textures | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Styles (`styles[]` 2021+ in all 5; `face_front_color`/`face_back_color` 4–2025 on `main` in Python; scenes still use tag colour, [#533](https://github.com/iamahsanmehmood/openskp/issues/533)) | 🔶 | 🔶 | 🔶 | 🔶 | 🔶 |
+| Styles (`styles[]` 2021+ in all 5; `face_front_color`/`face_back_color` 4–2025 and used in scenes on `main` in Python; the other ports' scenes still use tag colour, [#533](https://github.com/iamahsanmehmood/openskp/issues/533)) | 🔶 | 🔶 | 🔶 | 🔶 | 🔶 |
 | Dynamic Components / attribute dicts (instance/face in all 5; definition & model dicts in Python) | ✅ | 🔶 | 🔶 | 🔶 | 🔶 |
 | Attribute dicts: multi-dictionary + typed values (`Point3d`/`Length`/nested lists; 9/9 classic, 7–8/9 VFF) | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Attribute dicts surfaced in GLB/JSON metadata export (not just IFC Psets) | ✅ | n/a | n/a | n/a | ✅ |

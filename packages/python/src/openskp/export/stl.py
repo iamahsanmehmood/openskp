@@ -50,7 +50,7 @@ def to_stl_ascii(scene: Scene, scale: float = 1.0) -> str:
     """
     lines: list[str] = ["solid OpenSKP_Model"]
 
-    for prim in scene.glb_primitives:
+    for prim in scene.surface_primitives:
         tri_count = len(prim.indices) // 3
         back_triangles = set(prim.back_triangles)
         for i in range(tri_count):
@@ -101,9 +101,7 @@ def to_stl_binary(scene: Scene, scale: float = 1.0) -> bytes:
     Returns:
         The packed Little-Endian Binary STL byte array.
     """
-    total_triangles = sum(
-        len(p.indices) // 3 - len(p.back_triangles) for p in scene.glb_primitives
-    )
+    total_triangles = sum(len(p.indices) // 3 for p in scene.surface_primitives)
 
     # 80-byte header
     header = b"# OpenSKP Binary STL Export"
@@ -111,7 +109,7 @@ def to_stl_binary(scene: Scene, scale: float = 1.0) -> bytes:
 
     chunks: list[bytes] = [header, struct.pack("<I", total_triangles)]
 
-    for prim in scene.glb_primitives:
+    for prim in scene.surface_primitives:
         tri_count = len(prim.indices) // 3
         back_triangles = set(prim.back_triangles)
         for i in range(tri_count):

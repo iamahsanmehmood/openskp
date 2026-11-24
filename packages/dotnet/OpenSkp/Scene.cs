@@ -121,6 +121,11 @@ namespace OpenSkp
         /// deduplicated by source bytes. Empty when nothing placed in the
         /// scene is textured.</summary>
         public List<SceneTexture> Textures { get; set; } = new List<SceneTexture>();
+
+        /// <summary>Number of top-level entities dropped when a classic
+        /// (pre-2021) root entity walk stopped early (0 for complete classic
+        /// files and VFF files).</summary>
+        public int UnreadRootEntities { get; set; }
     }
 
     /// <summary>Bakes every instance actually placed in a parsed model into
@@ -604,6 +609,7 @@ namespace OpenSkp
                 GlbPrimitives = glbPrimitives,
                 GltfMaterials = gltfMaterials,
                 Textures = textures,
+                UnreadRootEntities = parsed.UnreadRootEntities,
             };
         }
 

@@ -412,7 +412,7 @@ def to_dxf(
         doc = ezdxf.new("R2000")
         msp = doc.modelspace()
 
-        for prim in scene.glb_primitives:
+        for prim in scene.surface_primitives:
             layer_name = _sanitize_layer_name(prim.geom_name or "0")
             v_count = len(prim.positions) // 3
             tri_count = len(prim.indices) // 3
@@ -470,7 +470,7 @@ def to_dxf(
     # above) - full desktop AutoCAD compliance, not just what ezdxf.readfile()
     # or a web viewer tolerates.
     layer_colors: dict[str, tuple[int, int, int]] = {}
-    for prim in scene.glb_primitives:
+    for prim in scene.surface_primitives:
         layer_name = _sanitize_layer_name(prim.geom_name or "0")
         if layer_name not in layer_colors:
             layer_colors[layer_name] = _get_prim_rgb(scene, prim)
@@ -518,7 +518,7 @@ def to_dxf(
     lines.extend(_HEADER_STATIC_C)
     lines.extend(["  0", "SECTION", "  2", "ENTITIES"])
 
-    for prim in scene.glb_primitives:
+    for prim in scene.surface_primitives:
         layer_name = _sanitize_layer_name(prim.geom_name or "0")
         tri_count = len(prim.indices) // 3
         if tri_count == 0:

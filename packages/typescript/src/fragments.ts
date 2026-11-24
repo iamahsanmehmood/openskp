@@ -969,5 +969,6 @@ export function fromFragments(data: Uint8Array, options?: ParseOptions): Instanc
     gltfMaterials,
     textures: [],
     layerHidden,
+    unreadRootEntities: 0,
   };
 }

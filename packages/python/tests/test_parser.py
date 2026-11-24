@@ -2292,7 +2292,9 @@ class TestModernRealFile:
         assert scene.scene_hierarchy.name == "ROOT"
         assert scene.scene_hierarchy.definition_name == "ROOT_MODEL"
 
-        assert len(scene.mesh_index) == 1
+        # its faces have no paint: a front and a back copy (#533)
+        assert len(scene.surface_primitives) == 1
+        assert len(scene.mesh_index) == 2
         first_mesh = next(iter(scene.mesh_index.values()))
         assert first_mesh.definition_name == "ROOT_MODEL"
 
@@ -2576,8 +2578,9 @@ class TestBuildScene:
     def test_scene_matches_typescript_ground_truth(self) -> None:
         scene = self._scene()
 
-        assert len(scene.glb_primitives) == 21
-        assert len(scene.mesh_index) == 21
+        # 21 as before #533, plus the back copies of the unpainted faces
+        assert len(scene.surface_primitives) == 21
+        assert len(scene.glb_primitives) == len(scene.mesh_index) == 22
         assert len(scene.gltf_materials) == 13
 
         assert scene.scene_hierarchy.name == "ROOT"
@@ -2623,7 +2626,7 @@ class TestBuildScene:
         # at all) are emitted once with doubleSided=True instead of being
         # split - confirmed count from direct inspection of this fixture.
         double_sided = [m for m in scene.gltf_materials if m.get("doubleSided")]
-        assert len(double_sided) == 4
+        assert len(double_sided) == 3  # unpainted faces show a colour per side (#533)
 
     def test_independent_of_parse(self) -> None:
         """build_scene() must not require parse() to have been called
@@ -2631,7 +2634,7 @@ class TestBuildScene:
         from openskp.model import SkpFile
         skp = SkpFile.open(str(self.FIXTURE))
         scene = skp.build_scene()
-        assert len(scene.glb_primitives) == 21
+        assert len(scene.glb_primitives) == 22
 
 
 class TestBuildSceneRecursionGuard:
@@ -2846,8 +2849,10 @@ class TestBuildSceneMeshIndexPerInstanceMetadata:
         out.write_bytes(builder.to_bytes())
         scene = SkpFile.open(str(out)).build_scene()
 
-        names = sorted(m.name for m in scene.mesh_index.values())
+        names = sorted(scene.mesh_index[p.geom_name].name for p in scene.surface_primitives)
         assert names == ["LeafInstance", "MiddleInstance", "OuterInstance"]
+        # the back copies of the unpainted faces carry the same name
+        assert {m.name for m in scene.mesh_index.values()} == set(names)
 
 
 class TestBuildSceneAttributeDictionaries:
@@ -3135,7 +3140,8 @@ class TestGlbExport:
         # export() bakes via scene.build_scene() - faces with genuinely
         # different front/back materials split into two meshes each (30
         # such faces on this fixture).
-        assert metadata["total_meshes"] == 21
+        # One more since #533: the back copies of its unpainted faces.
+        assert metadata["total_meshes"] == 22
         # Regression: materials carry texture data as raw bytes internally,
         # which isn't JSON-serializable - export() must strip it before
         # writing, not embed it (or crash).
@@ -3366,7 +3372,7 @@ class TestGlbExport:
 
         assert len(materials) == 13
         double_sided = [m for m in materials if m.get("doubleSided")]
-        assert len(double_sided) == 4
+        assert len(double_sided) == 3  # unpainted faces show a colour per side (#533)
 
 
 # ── Observability: progress logging + structured error context ──────────
