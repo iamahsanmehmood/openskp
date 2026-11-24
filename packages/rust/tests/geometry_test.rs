@@ -537,10 +537,7 @@ fn definition_dictionaries_keep_native_types_without_child_attributes() {
     let child_dict = named_dict("Plugin", &entry("flag", &tlv("AA38", &[0])));
     let child = tlv(
         "6419",
-        &concat(&[
-            &tlv("6719", &[2]),
-            &tlv("D007", &tlv("DC05", &child_dict)),
-        ]),
+        &concat(&[&tlv("6719", &[2]), &tlv("D007", &tlv("DC05", &child_dict))]),
     );
     let raw_bytes = concat(&[
         &tlv("7C15", &concat(&[&tlv("DE05", &[1]), &own, &child])),
