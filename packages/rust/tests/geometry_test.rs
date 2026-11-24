@@ -4,9 +4,10 @@ use std::collections::BTreeMap;
 
 use common::{bytes, concat, f64s, tlv};
 use openskp::internal::{
-    collect_definitions, collect_geometry, parse_tlv_recursive, GeometryBuilder, RawDefinition,
+    build_model, collect_definitions, collect_geometry, parse_tlv_recursive, GeometryBuilder,
+    RawDefinition, RawParsed,
 };
-use openskp::{AttributeKind, ParsedAttrDictionaries, ParsedAttribute};
+use openskp::{AttributeKind, ParseOptions, ParsedAttrDictionaries, ParsedAttribute};
 
 fn geometry(b: &[u8]) -> GeometryBuilder {
     let mut builder = GeometryBuilder::default();
@@ -484,4 +485,81 @@ fn oversized_entity_id_is_an_error() {
     let mut builder = GeometryBuilder::default();
     let nodes = parse_tlv_recursive(&bad, 0, bad.len()).unwrap();
     assert!(collect_geometry(&nodes, &mut builder).is_err());
+}
+
+#[test]
+fn vff_definition_and_instance_guids_use_canonical_uuid_order() {
+    let native = [
+        0xc5, 0xe9, 0x14, 0x16, 0x0b, 0x8c, 0x33, 0x40, 0x88, 0x81, 0xdd, 0xe6, 0x2e, 0x6e, 0x2d,
+        0x80,
+    ];
+    let canonical = "1614E9C58C0B40338881DDE62E6E2D80";
+    let def_bytes = tlv(
+        "7C15",
+        &concat(&[
+            &tlv("DE05", &[1]),
+            &tlv("7D15", &native),
+            &tlv("7E15", &bytes("Shelf")),
+        ]),
+    );
+    let mut raw = RawParsed::default();
+    let nodes = parse_tlv_recursive(&def_bytes, 0, def_bytes.len()).unwrap();
+    collect_definitions(&nodes, &mut raw.definitions).unwrap();
+    raw.root.builder = geometry(&tlv("6419", &tlv("6819", &native)));
+    assert_eq!(raw.definitions.len(), 1);
+    assert_eq!(raw.definitions[&1].guid, canonical);
+    assert_eq!(raw.root.builder.instances.len(), 1);
+    assert_eq!(raw.root.builder.instances[0].ref_guid, canonical);
+    assert!(raw.root.builder.instances[0].ref_idx.is_none());
+    let model = build_model(raw, &ParseOptions::default());
+    assert_eq!(model.root().instances[0].guid, model.definitions[&1].guid);
+}
+
+#[test]
+fn definition_dictionaries_keep_native_types_without_child_attributes() {
+    let values = concat(&[
+        &entry("flag", &tlv("AA38", &[1])),
+        &entry("count", &tlv("A738", &(-7i32).to_le_bytes())),
+        &entry("nothing", &[]),
+        &entry(
+            "values",
+            &tlv(
+                "AE38",
+                &concat(&[
+                    &entry_value(&tlv("A938", &f64s(&[2.5]))),
+                    &entry_value(&tlv("AD38", &bytes("abc"))),
+                ]),
+            ),
+        ),
+    ]);
+    let plugin_dict = named_dict("Plugin", &values);
+    let own = tlv("8813", &tlv("D007", &tlv("DC05", &plugin_dict)));
+    let child_dict = named_dict("Plugin", &entry("flag", &tlv("AA38", &[0])));
+    let child = tlv(
+        "6419",
+        &concat(&[&tlv("6719", &[2]), &tlv("D007", &tlv("DC05", &child_dict))]),
+    );
+    let raw_bytes = concat(&[
+        &tlv("7C15", &concat(&[&tlv("DE05", &[1]), &own, &child])),
+        &tlv("7C15", &concat(&[&tlv("DE05", &[2]), &child])),
+    ]);
+    let mut raw = RawParsed::default();
+    let nodes = parse_tlv_recursive(&raw_bytes, 0, raw_bytes.len()).unwrap();
+    collect_definitions(&nodes, &mut raw.definitions).unwrap();
+    assert_eq!(raw.definitions.len(), 2);
+    let model = build_model(raw, &ParseOptions::default());
+    let attrs = &model.definitions[&1].parsed_dictionaries["Plugin"];
+    assert_eq!(attrs["flag"], ParsedAttribute::Boolean(true));
+    assert_eq!(attrs["count"], ParsedAttribute::Integer(-7));
+    assert_eq!(attrs["nothing"], ParsedAttribute::Null);
+    let array = attrs["values"].array();
+    assert_eq!(array.len(), 2);
+    assert_eq!(array[0], ParsedAttribute::Float(2.5));
+    assert_eq!(array[1], ParsedAttribute::String("abc".into()));
+    assert!(model.definitions[&2].parsed_dictionaries.is_empty());
+    assert_eq!(model.definitions[&1].instances.len(), 1);
+    assert_eq!(
+        model.definitions[&1].instances[0].attribute_dictionaries["Plugin"]["flag"],
+        ParsedAttribute::Boolean(false)
+    );
 }

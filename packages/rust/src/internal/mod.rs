@@ -310,6 +310,7 @@ pub struct RawDefinition {
     pub is_image: bool,
     pub is_group: bool,
     pub builder: GeometryBuilder,
+    pub parsed_dictionaries: ParsedAttrDictionaries,
 }
 
 impl RawDefinition {
@@ -515,4 +516,21 @@ pub fn hex_upper(p: &[u8]) -> String {
         s.push(HEX[(b & 15) as usize] as char);
     }
     s
+}
+
+/// Canonical uppercase, unhyphenated UUID from 16 Windows-order GUID bytes.
+pub fn guid_from_windows_bytes(bytes: &[u8]) -> Result<String> {
+    if bytes.len() != 16 {
+        return Err(Error::invalid_argument(
+            "GUID must contain exactly 16 bytes",
+        ));
+    }
+    const ORDER: [usize; 16] = [3, 2, 1, 0, 5, 4, 7, 6, 8, 9, 10, 11, 12, 13, 14, 15];
+    let mut out = String::with_capacity(32);
+    for idx in ORDER {
+        let b = bytes[idx];
+        out.push(HEX[(b >> 4) as usize] as char);
+        out.push(HEX[(b & 15) as usize] as char);
+    }
+    Ok(out)
 }

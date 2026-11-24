@@ -61,6 +61,16 @@ _COMPACT_MODEL_BYTES = 256 * 1024 * 1024
 
 # ── TLV Parsing ──────────────────────────────────────────────────────────
 
+_WIN_GUID_ORDER = (3, 2, 1, 0, 5, 4, 7, 6, 8, 9, 10, 11, 12, 13, 14, 15)
+
+
+def guid_from_windows_bytes(data: bytes) -> str:
+    """Convert 16 Windows-order GUID bytes into a canonical 32-char uppercase UUID."""
+    if len(data) != 16:
+        raise ValueError("GUID must contain exactly 16 bytes")
+    return bytes(data[i] for i in _WIN_GUID_ORDER).hex().upper()
+
+
 def read_u32(data: bytes, offset: int) -> int:
     return struct.unpack_from('<I', data, offset)[0]
 
@@ -1820,7 +1830,7 @@ def _extract_geometry_nodes(elements, builder):
             matrix = []
             guid_node = _find_tag(nodes_to_search, '6819')
             if guid_node and len(guid_node.payload) == 16:
-                guid = guid_node.payload.hex().upper()
+                guid = guid_from_windows_bytes(guid_node.payload)
             def_idx_node = _find_tag(nodes_to_search, '6719')
             if def_idx_node:
                 def_idx = parse_var_int(def_idx_node.payload, 0, len(def_idx_node.payload))
@@ -2079,6 +2089,8 @@ def _decode_vff_attr_value(a438_node):
     payload = child['payload']
     if tag == 'AD38':
         return payload.decode('utf-8', errors='replace')
+    if tag == 'AA38' and len(payload) == 1:
+        return payload[0] != 0
     if tag in _VFF_ATTR_DOUBLE_TAGS and len(payload) == 8:
         return struct.unpack('<d', payload)[0]
     if tag == 'A738' and len(payload) == 4:
@@ -2142,6 +2154,8 @@ def _stringify_vff_attr_value(value):
     mirrors legacy._stringify_attr_value exactly."""
     if value is None:
         return ''
+    if isinstance(value, bool):
+        return '1' if value else '0'
     if isinstance(value, (list, tuple)):
         return ','.join(_stringify_vff_attr_value(v) for v in value)
     return str(value)
@@ -2486,7 +2500,7 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
                 for child in children:
                     ctag = child.tag
                     if ctag == '7D15' and len(child.payload) == 16:
-                        guid = child.payload.hex().upper()
+                        guid = guid_from_windows_bytes(child.payload)
                     elif ctag == '7E15':
                         name = child.payload.decode('utf-8', errors='replace')
                     elif ctag == '581B':

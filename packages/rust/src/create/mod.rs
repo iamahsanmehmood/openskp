@@ -54,7 +54,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use archive::{
-    detect_image_subtype, shift_ref, write_u32_at, ArcCurveParams, ArchiveWriter,
+    archive_uuid, detect_image_subtype, shift_ref, write_u32_at, ArcCurveParams, ArchiveWriter,
     AttributeDictList, EdgeFlags, FaceSpec, IdSource, Placement, PutLe, TextureSource, Topology,
 };
 use geometry::{
@@ -444,6 +444,8 @@ pub struct DefinitionOptions {
     pub attributes: AttributeDict,
     pub attribute_dict_name: String,
     pub attribute_dicts: Vec<(String, AttributeDict)>,
+    /// Canonical UUID: 32 hex digits or 8-4-4-4-12, case-insensitive. Empty creates a new identity.
+    pub guid: String,
 }
 
 impl Default for DefinitionOptions {
@@ -452,6 +454,7 @@ impl Default for DefinitionOptions {
             attributes: AttributeDict::new(),
             attribute_dict_name: DEFAULT_ATTRIBUTE_DICT_NAME.to_owned(),
             attribute_dicts: Vec::new(),
+            guid: String::new(),
         }
     }
 }
@@ -607,6 +610,7 @@ struct GroupPlacement {
 struct DefinitionState {
     slot: i32,
     name: String,
+    guid: Option<[u8; 16]>,
     count_patch_pos: usize,
     topology: Topology,
     new_entity_count: i32,
@@ -667,6 +671,7 @@ pub struct SkpBuilder {
     face_count: i32,
     /// Display units and style values from `set_document_options`, applied in `to_bytes`.
     document_options: Option<DocumentOptions>,
+    model_guid: Option<[u8; 16]>,
 }
 
 impl Default for SkpBuilder {
@@ -954,11 +959,13 @@ fn add_polyline_to(
 impl SkpBuilder {
     /// An empty builder. See also [`create`].
     pub fn new() -> Self {
+        let mut ids = IdSource::Random;
+        let model_guid = Some(archive_uuid("", &mut ids).expect("empty guid is valid"));
         SkpBuilder {
             id: NEXT_BUILDER_ID.fetch_add(1, Ordering::Relaxed),
             materials_by_name: BTreeMap::new(),
             layers_by_name: BTreeMap::new(),
-            ids: IdSource::Random,
+            ids,
             material_writer: ArchiveWriter::new(
                 scaffold::BASE,
                 HashMap::new(),
@@ -980,6 +987,7 @@ impl SkpBuilder {
             new_entity_count: 0,
             face_count: 0,
             document_options: None,
+            model_guid,
         }
     }
 
@@ -999,6 +1007,14 @@ impl SkpBuilder {
     #[doc(hidden)]
     pub fn use_deterministic_ids(&mut self, timestamp: u32) {
         self.ids = IdSource::Deterministic { next: 0, timestamp };
+        self.model_guid = None;
+    }
+
+    /// Set the file/model UUID (also its identity when imported as a component). Accepts 32 hex
+    /// digits or 8-4-4-4-12, case-insensitive; empty generates a new UUID.
+    pub fn set_guid(&mut self, guid: &str) -> Result<(), SkpWriteError> {
+        self.model_guid = Some(archive_uuid(guid, &mut self.ids)?);
+        Ok(())
     }
 
     /// Set decimal display units and basic working/saved style values, without scaling geometry.
@@ -1314,11 +1330,13 @@ impl SkpBuilder {
         &mut self,
         (slot, count_patch_pos): (i32, usize),
         name: String,
+        guid: Option<[u8; 16]>,
         group_placement: Option<GroupPlacement>,
     ) -> ComponentDefinitionBuilder<'_> {
         self.definitions.push(DefinitionState {
             slot,
             name,
+            guid,
             count_patch_pos,
             topology: Topology::default(),
             new_entity_count: 0,
@@ -1339,13 +1357,18 @@ impl SkpBuilder {
         name: &str,
         options: &DefinitionOptions,
     ) -> Result<ComponentDefinitionBuilder<'_>, SkpWriteError> {
+        let guid = if !options.guid.is_empty() || matches!(self.ids, IdSource::Random) {
+            Some(archive_uuid(&options.guid, &mut self.ids)?)
+        } else {
+            None
+        };
         let dicts = resolve_attribute_dicts(
             &options.attributes,
             &options.attribute_dict_name,
             &options.attribute_dicts,
         )?;
         let header = self.begin_definition_header("add_component_definition", &dicts)?;
-        Ok(self.push_definition(header, name.to_owned(), None))
+        Ok(self.push_definition(header, name.to_owned(), guid, None))
     }
 
     /// Start a group: add its geometry through the returned builder; `close()` places it at
@@ -1373,7 +1396,7 @@ impl SkpBuilder {
             hidden: options.hidden,
         };
         let name = options.name.clone().unwrap_or_else(|| "Group".to_owned());
-        Ok(self.push_definition(header, name, Some(placement)))
+        Ok(self.push_definition(header, name, None, Some(placement)))
     }
 
     /// Reopen the builder of one of this builder's definitions (e.g. to `close()` it later).
@@ -1735,6 +1758,9 @@ impl SkpBuilder {
         let mut out =
             Vec::with_capacity(data.len() + self.material_writer.buf.len() + geometry.buf.len());
         out.extend_from_slice(&data[..scaffold::MATERIAL_INSERT_POS - 4]);
+        if let Some(guid) = &self.model_guid {
+            out[52..68].copy_from_slice(guid);
+        }
         if let Some(options) = &self.document_options {
             patch_document_prefix(&mut out, options);
         }
@@ -2199,9 +2225,16 @@ impl ComponentDefinitionBuilder<'_> {
             def.count_patch_pos,
             def.new_entity_count as u32,
         );
+        let guid = match def.guid {
+            Some(g) => g,
+            None => match skp.ids {
+                IdSource::Random => archive_uuid("", &mut skp.ids)?,
+                IdSource::Deterministic { .. } => skp.ids.guid(),
+            },
+        };
         let is_group = def.group_placement.is_some();
-        def.group_flag_pos =
-            Some(writer.write_definition_tail(&def.name, is_group, &mut skp.ids)?);
+        let flag_pos = writer.write_definition_tail(&def.name, &guid, is_group, &mut skp.ids)?;
+        def.group_flag_pos = Some(flag_pos);
         def.closed = true;
         skp.open_definition = None;
         if let Some(placement) = &def.group_placement {

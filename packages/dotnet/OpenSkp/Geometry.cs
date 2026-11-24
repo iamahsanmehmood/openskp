@@ -91,6 +91,36 @@ namespace OpenSkp
 
     internal static class Geometry
     {
+        private static readonly int[] WindowsGuidOrder =
+            { 3, 2, 1, 0, 5, 4, 7, 6, 8, 9, 10, 11, 12, 13, 14, 15 };
+
+        /// <summary>Convert 16 Windows-order GUID bytes into canonical uppercase 32-hex UUID order.</summary>
+        public static string GuidFromWindowsBytes(byte[] bytes)
+        {
+            if (bytes == null || bytes.Length != 16)
+            {
+                throw new ArgumentException("GUID must contain exactly 16 bytes", nameof(bytes));
+            }
+            const string hex = "0123456789ABCDEF";
+            var chars = new char[32];
+            for (int idx = 0; idx < 16; idx++)
+            {
+                byte b = bytes[WindowsGuidOrder[idx]];
+                chars[idx * 2] = hex[b >> 4];
+                chars[idx * 2 + 1] = hex[b & 0x0F];
+            }
+            return new string(chars);
+        }
+
+        public static Dictionary<string, Dictionary<string, object?>> EntityAttributeDictionaries(List<TlvNode> nodes)
+        {
+            var entity = nodes.FirstOrDefault(n => n.Tag == "8813");
+            if (entity == null) return new Dictionary<string, Dictionary<string, object?>>();
+            var d007 = entity.Children.FirstOrDefault(c => c.Tag == "D007");
+            if (d007 == null) return new Dictionary<string, Dictionary<string, object?>>();
+            return ExtractAttributeDictionaries(d007);
+        }
+
         public static TlvNode? FindChildTag(List<TlvNode> nodes, string target)
         {
             foreach (var n in nodes)
@@ -233,6 +263,7 @@ namespace OpenSkp
             var tag = child.Tag;
             var payload = child.Payload;
             if (tag == "AD38") return Encoding.UTF8.GetString(payload);
+            if (tag == "AA38" && payload.Length == 1) return payload[0] != 0;
             if (VffAttrDoubleTags.Contains(tag) && payload.Length == 8) return Tlv.ReadF64(payload, 0);
             if (tag == "A738" && payload.Length == 4) return Tlv.ReadI32(payload, 0);
             if ((tag == "B438" || tag == "B538") && payload.Length == 24)
@@ -253,6 +284,7 @@ namespace OpenSkp
         public static string StringifyVffAttrValue(object? value)
         {
             if (value == null) return "";
+            if (value is bool b) return b ? "1" : "0";
             if (value is System.Collections.IEnumerable enumerable && value is not string)
             {
                 var parts = new List<string>();
@@ -618,7 +650,7 @@ namespace OpenSkp
                     var guidNode = FindChildTag(nodesToSearch, "6819");
                     if (guidNode != null && guidNode.Payload.Length == 16)
                     {
-                        guid = Tlv.ToHexUpper(guidNode.Payload);
+                        guid = GuidFromWindowsBytes(guidNode.Payload);
                     }
                     var defIdxNode = FindChildTag(nodesToSearch, "6719");
                     if (defIdxNode != null)
@@ -821,6 +853,8 @@ namespace OpenSkp
             public bool ShadowsFaceSun;
             public bool IsImage;
             public bool IsGroup;
+            public Dictionary<string, Dictionary<string, object?>> AttributeDictionaries =
+                new Dictionary<string, Dictionary<string, object?>>();
             public GeometryBuilder Builder = new GeometryBuilder();
         }
 
@@ -840,7 +874,7 @@ namespace OpenSkp
                     {
                         if (child.Tag == "7D15" && child.Payload.Length == 16)
                         {
-                            guid = Tlv.ToHexUpper(child.Payload);
+                            guid = GuidFromWindowsBytes(child.Payload);
                         }
                         else if (child.Tag == "7E15")
                         {
@@ -889,6 +923,7 @@ namespace OpenSkp
                             ShadowsFaceSun = shadowsFaceSun,
                             IsImage = isImage,
                             IsGroup = isGroup,
+                            AttributeDictionaries = EntityAttributeDictionaries(el.Children),
                             Builder = builder,
                         };
                     }

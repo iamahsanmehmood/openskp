@@ -387,6 +387,9 @@ namespace OpenSkp
         /// definition record in an older one - not from how often the definition is
         /// placed.</summary>
         public bool IsGroup { get; set; }
+        /// <summary>Native definition attribute dictionaries from VFF files, preserving typed values.</summary>
+        public Dictionary<string, Dictionary<string, object?>> AttributeDictionaries { get; set; } =
+            new Dictionary<string, Dictionary<string, object?>>();
     }
 
     /// <summary>Complete parsed representation of a SketchUp file, mirroring
