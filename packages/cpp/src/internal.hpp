@@ -225,6 +225,7 @@ struct RawParsed {
   std::map<std::string, std::shared_ptr<RawMaterial>> materials;
   std::map<std::string, std::shared_ptr<RawMaterial>> materials_by_folder;
   std::vector<RawStyle> styles;
+  std::optional<std::pair<Color3, Color3>> face_colors;
   std::map<EntityId, RawDefinition> definitions;
   RawDefinition root{"ROOT", "ROOT_MODEL"};
   // Dictionaries attached to the model entity itself (F601 -> 8813 -> D007

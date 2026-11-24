@@ -347,9 +347,40 @@ function parseToRaw(buffer: ArrayBuffer, options?: ParseOptions): ParsedRawData 
     materialsMap,
     materialsByFolder,
     styles,
+    faceColors: modelFaceColors(modelData),
     defsDict,
     unreadRootEntities: 0,
   };
+}
+
+const FACE_FRONT_TAG = [0x5c, 0x73, 0x04, 0x00, 0x00, 0x00]; // 0x735C, 4 bytes
+const FACE_BACK_TAG = [0x5d, 0x73, 0x04, 0x00, 0x00, 0x00]; // 0x735D, 4 bytes
+
+function modelFaceColors(
+  modelData: Uint8Array
+): [[number, number, number], [number, number, number]] | null {
+  for (let at = 0; at + 20 <= modelData.length; at++) {
+    if (
+      modelData[at] === FACE_FRONT_TAG[0] &&
+      modelData[at + 1] === FACE_FRONT_TAG[1] &&
+      modelData[at + 2] === FACE_FRONT_TAG[2] &&
+      modelData[at + 3] === FACE_FRONT_TAG[3] &&
+      modelData[at + 4] === FACE_FRONT_TAG[4] &&
+      modelData[at + 5] === FACE_FRONT_TAG[5] &&
+      modelData[at + 10] === FACE_BACK_TAG[0] &&
+      modelData[at + 11] === FACE_BACK_TAG[1] &&
+      modelData[at + 12] === FACE_BACK_TAG[2] &&
+      modelData[at + 13] === FACE_BACK_TAG[3] &&
+      modelData[at + 14] === FACE_BACK_TAG[4] &&
+      modelData[at + 15] === FACE_BACK_TAG[5]
+    ) {
+      return [
+        [modelData[at + 6], modelData[at + 7], modelData[at + 8]],
+        [modelData[at + 16], modelData[at + 17], modelData[at + 18]],
+      ];
+    }
+  }
+  return null;
 }
 
 /**

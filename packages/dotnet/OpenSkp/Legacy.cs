@@ -2931,6 +2931,7 @@ namespace OpenSkp
                 Materials = materialsMap,
                 MaterialsByFolder = new Dictionary<string, Geometry.RawMaterial>(),
                 Styles = new List<Geometry.RawStyle>(),
+                FaceColors = ModelFaceColors(data, ar.Ver),
                 DefsDict = defsDict,
                 UnreadRootEntities = ar.UnreadRootEntities,
                 Root = new Geometry.RawDefinition
@@ -2977,6 +2978,77 @@ namespace OpenSkp
             g.ConstructionLines = b.ConstructionLines;
             g.ConstructionPoints = b.ConstructionPoints;
             return g;
+        }
+
+        private static int? FaceColorsDistanceAfterCamera(int ver)
+        {
+            if (ver == 4) return 50;
+            if (ver == 5) return 61;
+            if (ver >= 6 && ver <= 16) return 63;
+            if (ver == 17 || ver == 18) return 64;
+            if (ver == 19) return 65;
+            if (ver == 20) return 66;
+            return null;
+        }
+
+        private static ((int R, int G, int B) Front, (int R, int G, int B) Back)? ModelFaceColors(byte[] data, int ver)
+        {
+            int? distance = FaceColorsDistanceAfterCamera(ver);
+            if (!distance.HasValue) return null;
+            int camEnd = -1;
+            for (int i = 0; i + 13 <= data.Length; i++)
+            {
+                if (data[i] == 0xFF
+                    && data[i + 1] == 0xFF
+                    && data[i + 4] == 0x07
+                    && data[i + 5] == 0x00
+                    && data[i + 6] == (byte)'C'
+                    && data[i + 7] == (byte)'C'
+                    && data[i + 8] == (byte)'a'
+                    && data[i + 9] == (byte)'m'
+                    && data[i + 10] == (byte)'e'
+                    && data[i + 11] == (byte)'r'
+                    && data[i + 12] == (byte)'a')
+                {
+                    camEnd = i + 13;
+                    break;
+                }
+            }
+            if (camEnd < 0) return null;
+            int p = camEnd;
+            if (p + 139 > data.Length) return null;
+            p += 139;
+            if (p + 4 > data.Length || data[p] != 0xFF || data[p + 1] != 0xFE || data[p + 2] != 0xFF)
+            {
+                return null;
+            }
+            uint n = data[p + 3];
+            p += 4;
+            if (n == 0xFF)
+            {
+                if (p + 2 > data.Length) return null;
+                n = Tlv.ReadU16(data, p);
+                p += 2;
+                if (n == 0xFFFF)
+                {
+                    if (p + 4 > data.Length) return null;
+                    n = Tlv.ReadU32(data, p);
+                    p += 4;
+                }
+            }
+            if (n > (uint)((data.Length - p) / 2)) return null;
+            p += (int)(2 * n);
+            int tail = (ver >= 6 ? 33 : 10) + distance.Value;
+            if (tail > data.Length - p) return null;
+            int at = p + tail;
+            if (8 > data.Length - at || data[at + 3] != 0xFF || data[at + 7] != 0xFF)
+            {
+                return null;
+            }
+            return (
+                (data[at], data[at + 1], data[at + 2]),
+                (data[at + 4], data[at + 5], data[at + 6])
+            );
         }
     }
 }

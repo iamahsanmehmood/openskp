@@ -30,6 +30,7 @@ class RawParsed {
   final Map<String, RawMaterial> materials = {};
   final Map<String, RawMaterial> materialsByFolder = {};
   final List<RawStyle> styles = [];
+  ((int, int, int), (int, int, int))? faceColors;
   final Map<int, RawDefinition> defsDict = {};
   RawDefinition root = RawDefinition(guid: 'ROOT', name: 'ROOT_MODEL');
   int unreadRootEntities = 0;
@@ -224,8 +225,36 @@ class Core {
       ..materials.addAll(materials)
       ..materialsByFolder.addAll(materialsByFolder)
       ..styles.addAll(styles)
+      ..faceColors = _modelFaceColors(modelDat)
       ..defsDict.addAll(defsDictRaw)
       ..root =
           RawDefinition(guid: 'ROOT', name: 'ROOT_MODEL', builder: rootBuilder);
+  }
+
+  static const _faceFrontTag = [0x5C, 0x73, 0x04, 0x00, 0x00, 0x00];
+  static const _faceBackTag = [0x5D, 0x73, 0x04, 0x00, 0x00, 0x00];
+
+  static ((int, int, int), (int, int, int))? _modelFaceColors(
+      Uint8List modelDat) {
+    for (int at = 0; at + 20 <= modelDat.length; at++) {
+      if (modelDat[at] == _faceFrontTag[0] &&
+          modelDat[at + 1] == _faceFrontTag[1] &&
+          modelDat[at + 2] == _faceFrontTag[2] &&
+          modelDat[at + 3] == _faceFrontTag[3] &&
+          modelDat[at + 4] == _faceFrontTag[4] &&
+          modelDat[at + 5] == _faceFrontTag[5] &&
+          modelDat[at + 10] == _faceBackTag[0] &&
+          modelDat[at + 11] == _faceBackTag[1] &&
+          modelDat[at + 12] == _faceBackTag[2] &&
+          modelDat[at + 13] == _faceBackTag[3] &&
+          modelDat[at + 14] == _faceBackTag[4] &&
+          modelDat[at + 15] == _faceBackTag[5]) {
+        return (
+          (modelDat[at + 6], modelDat[at + 7], modelDat[at + 8]),
+          (modelDat[at + 16], modelDat[at + 17], modelDat[at + 18]),
+        );
+      }
+    }
+    return null;
   }
 }

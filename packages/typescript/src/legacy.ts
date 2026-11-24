@@ -2478,6 +2478,77 @@ function readPageList(data: Uint8Array, ar: Archive): RawPage[] | null {
   }
 }
 
+function faceColorsDistanceAfterCamera(ver: number): number | null {
+  if (ver === 4) return 50;
+  if (ver === 5) return 61;
+  if (ver >= 6 && ver <= 16) return 63;
+  if (ver === 17 || ver === 18) return 64;
+  if (ver === 19) return 65;
+  if (ver === 20) return 66;
+  return null;
+}
+
+/** `[front, back]` - the model's face colours from the rendering options after
+ * the model's first `CCamera` record (SketchUp 4..2020), or `null`. */
+function modelFaceColors(
+  data: Uint8Array,
+  ver: number
+): [[number, number, number], [number, number, number]] | null {
+  const distance = faceColorsDistanceAfterCamera(ver);
+  if (distance === null) return null;
+  let camEnd = -1;
+  for (let i = 0; i + 13 <= data.length; i++) {
+    if (
+      data[i] === 0xff &&
+      data[i + 1] === 0xff &&
+      data[i + 4] === 0x07 &&
+      data[i + 5] === 0x00 &&
+      data[i + 6] === 0x43 && // 'C'
+      data[i + 7] === 0x43 && // 'C'
+      data[i + 8] === 0x61 && // 'a'
+      data[i + 9] === 0x6d && // 'm'
+      data[i + 10] === 0x65 && // 'e'
+      data[i + 11] === 0x72 && // 'r'
+      data[i + 12] === 0x61 // 'a'
+    ) {
+      camEnd = i + 13;
+      break;
+    }
+  }
+  if (camEnd < 0) return null;
+  let p = camEnd;
+  if (p + 139 > data.length) return null;
+  p += 139; // 137-byte camera body + u16
+  if (p + 4 > data.length || data[p] !== 0xff || data[p + 1] !== 0xfe || data[p + 2] !== 0xff) {
+    return null;
+  }
+  const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  let n = data[p + 3];
+  p += 4;
+  if (n === 0xff) {
+    if (p + 2 > data.length) return null;
+    n = view.getUint16(p, true);
+    p += 2;
+    if (n === 0xffff) {
+      if (p + 4 > data.length) return null;
+      n = view.getUint32(p, true);
+      p += 4;
+    }
+  }
+  if (n > Math.floor((data.length - p) / 2)) return null;
+  p += 2 * n;
+  const tail = (ver >= 6 ? 33 : 10) + distance;
+  if (tail > data.length - p) return null;
+  const at = p + tail;
+  if (8 > data.length - at || data[at + 3] !== 0xff || data[at + 7] !== 0xff) {
+    return null;
+  }
+  return [
+    [data[at], data[at + 1], data[at + 2]],
+    [data[at + 4], data[at + 5], data[at + 6]],
+  ];
+}
+
 class LegacyBuilder {
   vertices: VertexStore = new DefaultVertexStore();
   edges: EdgeStore = new DefaultEdgeStore();
@@ -2844,6 +2915,7 @@ export function parseLegacyToRaw(data: Uint8Array, options?: ParseOptions): Pars
     materialsMap,
     materialsByFolder: new Map(),
     styles: [],
+    faceColors: modelFaceColors(data, ar.ver),
     defsDict,
     unreadRootEntities: ar.unreadRootEntities,
   };

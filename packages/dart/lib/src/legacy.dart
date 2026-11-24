@@ -2702,9 +2702,77 @@ class Legacy {
       ..materialIdToName.addAll(materialIdToName)
       ..materials.addAll(materialsMap)
       ..styles.addAll(const [])
+      ..faceColors = _modelFaceColors(data, ar.ver)
       ..defsDict.addAll(defsDict)
       ..unreadRootEntities = ar.unreadRootEntities
       ..root =
           RawDefinition(guid: 'ROOT', name: 'ROOT_MODEL', builder: rootBuilder);
+  }
+
+  static int? _faceColorsDistanceAfterCamera(int ver) {
+    if (ver == 4) return 50;
+    if (ver == 5) return 61;
+    if (ver >= 6 && ver <= 16) return 63;
+    if (ver == 17 || ver == 18) return 64;
+    if (ver == 19) return 65;
+    if (ver == 20) return 66;
+    return null;
+  }
+
+  static ((int, int, int), (int, int, int))? _modelFaceColors(
+      Uint8List data, int ver) {
+    final distance = _faceColorsDistanceAfterCamera(ver);
+    if (distance == null) return null;
+    int camEnd = -1;
+    for (int i = 0; i + 13 <= data.length; i++) {
+      if (data[i] == 0xFF &&
+          data[i + 1] == 0xFF &&
+          data[i + 4] == 0x07 &&
+          data[i + 5] == 0x00 &&
+          data[i + 6] == 0x43 && // 'C'
+          data[i + 7] == 0x43 && // 'C'
+          data[i + 8] == 0x61 && // 'a'
+          data[i + 9] == 0x6D && // 'm'
+          data[i + 10] == 0x65 && // 'e'
+          data[i + 11] == 0x72 && // 'r'
+          data[i + 12] == 0x61) {
+        camEnd = i + 13;
+        break;
+      }
+    }
+    if (camEnd < 0) return null;
+    int p = camEnd;
+    if (p + 139 > data.length) return null;
+    p += 139;
+    if (p + 4 > data.length ||
+        data[p] != 0xFF ||
+        data[p + 1] != 0xFE ||
+        data[p + 2] != 0xFF) {
+      return null;
+    }
+    int n = data[p + 3];
+    p += 4;
+    if (n == 0xFF) {
+      if (p + 2 > data.length) return null;
+      n = Tlv.readU16(data, p);
+      p += 2;
+      if (n == 0xFFFF) {
+        if (p + 4 > data.length) return null;
+        n = Tlv.readU32(data, p);
+        p += 4;
+      }
+    }
+    if (n > (data.length - p) ~/ 2) return null;
+    p += 2 * n;
+    final tail = (ver >= 6 ? 33 : 10) + distance;
+    if (tail > data.length - p) return null;
+    final at = p + tail;
+    if (8 > data.length - at || data[at + 3] != 0xFF || data[at + 7] != 0xFF) {
+      return null;
+    }
+    return (
+      (data[at], data[at + 1], data[at + 2]),
+      (data[at + 4], data[at + 5], data[at + 6]),
+    );
   }
 }

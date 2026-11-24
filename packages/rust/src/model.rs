@@ -918,6 +918,15 @@ pub struct SkpModel {
     pub dimensions: Vec<Dimension>,
     pub materials: Vec<Material>,
     pub styles: Vec<Style>,
+    /// The colour SketchUp shows on the front side of a face with no paint on
+    /// that side, `[r, g, b]` 0-255: the model's current rendering options,
+    /// which is what SketchUp displays even when the style was changed and not
+    /// saved (so it can differ from every entry in [`SkpModel::styles`]). Read
+    /// from 2021+ files and from classic files of SketchUp 4 to 2020; `None`
+    /// when the file does not give it (SketchUp 3).
+    pub face_front_color: Option<Color3>,
+    /// The same for the back side of a face.
+    pub face_back_color: Option<Color3>,
     /// Dictionaries attached to the model itself (VFF only), values typed.
     pub attribute_dictionaries: ParsedAttrDictionaries,
     pub(crate) root: Definition,
@@ -937,6 +946,8 @@ impl Default for SkpModel {
             dimensions: Vec::new(),
             materials: Vec::new(),
             styles: Vec::new(),
+            face_front_color: None,
+            face_back_color: None,
             attribute_dictionaries: BTreeMap::new(),
             root: Definition {
                 id: 0,
