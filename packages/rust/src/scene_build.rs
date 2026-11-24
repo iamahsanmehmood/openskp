@@ -12,8 +12,7 @@ use crate::face_groups::{
 use crate::internal::strconv::c_stoll;
 use crate::internal::{
     build_pages, emit_log, emit_progress, multiply_matrices, transform_determinant,
-    transform_normal, transform_point, Error, GeometryBuilder, RawInstance, RawMaterial,
-    RawParsed,
+    transform_normal, transform_point, Error, GeometryBuilder, RawInstance, RawMaterial, RawParsed,
 };
 use crate::model::{stringify_attr_dict, EntityId, StringDictionaries};
 use crate::observability::{LogLevel, ParseOptions, ParseStage, PROGRESS_INTERVAL};

@@ -275,7 +275,8 @@ fn instanced_scene_separates_same_image_materials_by_tile_size() -> Result<(), B
     let files = TempTextureFiles::new("tile-size");
     let mut builder = create();
     let small = builder.add_texture_material("Small", &files.brick, Some(6.0), Some(12.0), None)?;
-    let large = builder.add_texture_material("Large", &files.brick, Some(12.0), Some(24.0), None)?;
+    let large =
+        builder.add_texture_material("Large", &files.brick, Some(12.0), Some(24.0), None)?;
 
     let mut panel = builder.add_component_definition("Panel", &DefinitionOptions::default())?;
     panel.add_face(&PANEL_QUAD, &FaceOptions::default())?;
