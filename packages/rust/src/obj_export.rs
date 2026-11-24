@@ -98,9 +98,10 @@ pub fn to_mtl(scene: &Scene) -> String {
 /// the same unique names as [`to_mtl`]; `mtl_filename` (when non-empty) is
 /// referenced with `mtllib`.
 pub fn to_obj(scene: &Scene, mtl_filename: &str) -> String {
+    let surface = scene.surface_primitives();
     let mut s = String::new();
     s.push_str("# OpenSKP OBJ Export\n");
-    let _ = writeln!(s, "# Primitives: {}", scene.glb_primitives.len());
+    let _ = writeln!(s, "# Primitives: {}", surface.len());
     if !mtl_filename.is_empty() {
         let _ = writeln!(s, "mtllib {mtl_filename}");
     }
@@ -111,7 +112,7 @@ pub fn to_obj(scene: &Scene, mtl_filename: &str) -> String {
     let mut uv_offset: u32 = 1;
     let mut norm_offset: u32 = 1;
 
-    for prim in &scene.glb_primitives {
+    for prim in surface {
         let _ = writeln!(s, "o {}", prim.geom_name);
         let vert_count = prim.positions.len() / 3;
         for p in prim.positions.as_chunks::<3>().0 {

@@ -140,6 +140,7 @@ fn pack(model: &SkpModel, scene: &Scene) -> Output {
     let triangles: usize = scene
         .glb_primitives
         .iter()
+        .filter(|p| !p.unpainted_back)
         .map(|p| p.indices.len() / 3)
         .sum();
     let _ = write!(

@@ -676,9 +676,9 @@ fn each_nested_level_keeps_its_own_instance_name_in_mesh_index() {
         .build_scene(&ParseOptions::default())
         .expect("scene");
     let mut names: Vec<String> = scene
-        .mesh_index
-        .values()
-        .map(|meta| meta.name.clone())
+        .surface_primitives()
+        .iter()
+        .map(|p| scene.mesh_index[&p.geom_name].name.clone())
         .collect();
     names.sort();
     assert_eq!(names, ["LeafInstance", "MiddleInstance", "OuterInstance"]);

@@ -11,6 +11,7 @@ fn cube_scene() -> Scene {
         normals: vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
         uvs: vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
         indices: vec![0, 1, 2],
+        unpainted_back: false,
     });
     scene
 }

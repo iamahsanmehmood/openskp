@@ -429,6 +429,9 @@ pub fn to_fragments(scene: &InstancedScene, raw: bool) -> Vec<u8> {
         if let Some((resource_id, res)) = res {
             let trs = decompose_trs(&leaf.world);
             for (prim_idx, prim) in res.primitives.iter().enumerate() {
+                if prim.unpainted_back {
+                    continue;
+                }
                 let material_index = w.material_index(prim.material_index);
                 // Normally one shell; more only for an oversized primitive,
                 // each extra shell becoming its own sample of the same item.
@@ -868,6 +871,7 @@ impl<'a> FragReader<'a, '_> {
                 uvs: vec![0.0; points.len() * 2],
                 indices: triangles.iter().flatten().copied().collect(),
                 material_index,
+                unpainted_back: false,
             };
             primitives.push(prim);
         }
