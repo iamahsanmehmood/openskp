@@ -80,6 +80,13 @@ pub struct InstancedNode {
     /// Every attribute dictionary other than `dynamic_attributes` and
     /// `SU_InstanceSet`, stringified.
     pub attribute_dictionaries: StringDictionaries,
+    /// Whether this placement itself is hidden (SketchUp's "Hide" on the
+    /// instance, not a tag/layer toggle), the same flag the baked path's
+    /// `Instance::hidden` reports. `Some(false)` for the root. `None` on a
+    /// scene read back from Fragments, whose format carries no per-instance
+    /// visibility. The baked scene builders leave hidden instances out, so
+    /// this is where a consumer finds them.
+    pub hidden: Option<bool>,
     pub mesh_resource_id: Option<String>,
     /// Python port extension: the loose-edge resource this node places.
     pub curve_resource_id: Option<String>,
@@ -98,6 +105,7 @@ impl Default for InstancedNode {
             position_mm: [0.0; 3],
             properties: BTreeMap::new(),
             attribute_dictionaries: BTreeMap::new(),
+            hidden: None,
             mesh_resource_id: None,
             curve_resource_id: None,
             children: Vec::new(),

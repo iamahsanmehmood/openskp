@@ -187,6 +187,9 @@ pub struct DocumentOptions {
     /// Native style item ids and scalar values (colours are packed ABGR u32 values). Only items
     /// present in the bundled legacy style are updated; newer items are ignored.
     pub style_items: BTreeMap<i32, f64>,
+    /// The model's own scale-grip suppression mask (see
+    /// [`DefinitionOptions::no_scale_mask`]), used when the file is placed as a component.
+    pub no_scale_mask: u32,
 }
 
 impl Default for DocumentOptions {
@@ -195,6 +198,7 @@ impl Default for DocumentOptions {
             length_unit: 0,
             length_precision: 3,
             style_items: BTreeMap::new(),
+            no_scale_mask: 0,
         }
     }
 }
@@ -289,6 +293,8 @@ const RENDERING_OPTION_FIELDS: [(i32, usize, bool); 41] = [
 /// Applies `options` to the scaffold prefix: the native named UnitsOptions and the current
 /// rendering options, at fixed offsets in the immutable v17 scaffold.
 fn patch_document_prefix(prefix: &mut [u8], options: &DocumentOptions) {
+    // the root CComponentBehavior's scale mask
+    write_u32_at(prefix, 2008, options.no_scale_mask);
     write_u32_at(prefix, 2327, options.length_precision as u32);
     write_u32_at(prefix, 2360, 0); // LengthFormat: decimal
     write_u32_at(prefix, 2389, options.length_unit as u32);
@@ -481,6 +487,9 @@ pub struct DefinitionOptions {
     pub attribute_dicts: Vec<(String, AttributeDict)>,
     /// Canonical UUID: 32 hex digits or 8-4-4-4-12, case-insensitive. Empty creates a new identity.
     pub guid: String,
+    /// SketchUp's native scale-grip suppression mask: bits 0-6 hide the X, Y, Z, XZ, YZ, XY and
+    /// XYZ scale handles of the definition's instances. Unknown bits are written as given.
+    pub no_scale_mask: u32,
 }
 
 impl Default for DefinitionOptions {
@@ -490,6 +499,7 @@ impl Default for DefinitionOptions {
             attribute_dict_name: DEFAULT_ATTRIBUTE_DICT_NAME.to_owned(),
             attribute_dicts: Vec::new(),
             guid: String::new(),
+            no_scale_mask: 0,
         }
     }
 }
@@ -646,6 +656,7 @@ struct DefinitionState {
     slot: i32,
     name: String,
     guid: Option<[u8; 16]>,
+    no_scale_mask: u32,
     count_patch_pos: usize,
     topology: Topology,
     new_entity_count: i32,
@@ -1366,12 +1377,14 @@ impl SkpBuilder {
         (slot, count_patch_pos): (i32, usize),
         name: String,
         guid: Option<[u8; 16]>,
+        no_scale_mask: u32,
         group_placement: Option<GroupPlacement>,
     ) -> ComponentDefinitionBuilder<'_> {
         self.definitions.push(DefinitionState {
             slot,
             name,
             guid,
+            no_scale_mask,
             count_patch_pos,
             topology: Topology::default(),
             new_entity_count: 0,
@@ -1403,7 +1416,7 @@ impl SkpBuilder {
             &options.attribute_dicts,
         )?;
         let header = self.begin_definition_header("add_component_definition", &dicts)?;
-        Ok(self.push_definition(header, name.to_owned(), guid, None))
+        Ok(self.push_definition(header, name.to_owned(), guid, options.no_scale_mask, None))
     }
 
     /// Start a group: add its geometry through the returned builder; `close()` places it at
@@ -1431,7 +1444,7 @@ impl SkpBuilder {
             hidden: options.hidden,
         };
         let name = options.name.clone().unwrap_or_else(|| "Group".to_owned());
-        Ok(self.push_definition(header, name, None, Some(placement)))
+        Ok(self.push_definition(header, name, None, 0, Some(placement)))
     }
 
     /// Reopen the builder of one of this builder's definitions (e.g. to `close()` it later).
@@ -2316,7 +2329,13 @@ impl ComponentDefinitionBuilder<'_> {
             },
         };
         let is_group = def.group_placement.is_some();
-        let flag_pos = writer.write_definition_tail(&def.name, &guid, is_group, &mut skp.ids)?;
+        let flag_pos = writer.write_definition_tail(
+            &def.name,
+            &guid,
+            def.no_scale_mask,
+            is_group,
+            &mut skp.ids,
+        )?;
         def.group_flag_pos = Some(flag_pos);
         def.closed = true;
         skp.open_definition = None;

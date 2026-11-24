@@ -177,6 +177,7 @@ pub struct LegacyValue {
     pub sense: bool,
     pub faces_camera: bool,
     pub shadows_face_sun: bool,
+    pub no_scale_mask: u32,
     pub is_group: bool,
     pub colorized: bool,
     pub colorize_type: i32,
@@ -234,6 +235,7 @@ impl Default for LegacyValue {
             sense: false,
             faces_camera: false,
             shadows_face_sun: false,
+            no_scale_mask: 0,
             is_group: false,
             colorized: false,
             colorize_type: 0,
@@ -1045,8 +1047,12 @@ pub fn parse_legacy(data: &[u8], o: &ParseOptions) -> Result<RawParsed, SkpParse
                 guid: v.guid.clone(),
                 always_faces_camera: v.faces_camera,
                 shadows_face_sun: v.shadows_face_sun,
+                no_scale_mask: v.no_scale_mask,
                 is_image: image_def_ids.contains(&slot),
                 is_group: v.is_group,
+                // the definition's own dictionaries (where SketchUp keeps a
+                // dynamic component's formulas and options)
+                parsed_dictionaries: extract_legacy_attribute_dictionaries(v.attrs, slots),
                 ..Default::default()
             };
             d.builder.edge_pids = Some(BTreeMap::new());
@@ -1070,6 +1076,10 @@ pub fn parse_legacy(data: &[u8], o: &ParseOptions) -> Result<RawParsed, SkpParse
         })?;
     }
     out.face_colors = model_face_colors(data, walked.ar.ver);
+    // The model's own dictionaries, which the root definition shares.
+    out.model_attribute_dicts = premodel_attribute_dictionaries(data, walked.ar.ver);
+    out.root.no_scale_mask = root_no_scale_mask(data, walked.ar.ver);
+    out.root.parsed_dictionaries = out.model_attribute_dicts.clone();
 
     // whole scene records first; the narrow scan only when the full reader
     // gives up on one
@@ -1094,6 +1104,174 @@ pub fn parse_legacy(data: &[u8], o: &ParseOptions) -> Result<RawParsed, SkpParse
         &format!("Parse complete: {n} defs"),
     );
     Ok(out)
+}
+
+/// The root's scale-grip mask in a classic file (C++ #519): the u32 right
+/// before the first UTF-16 string header (`FF FE FF`) after the version-map
+/// terminator. A file saved by SketchUp itself puts a CDib thumbnail (PNG) in
+/// between, so the distance from the terminator is not fixed: the thumbnail
+/// is skipped first, then the string header anchors the field. SketchUp 3 to
+/// 6 files predate scale-handle masks.
+fn root_no_scale_mask(data: &[u8], ver: i32) -> u32 {
+    if ver < 7 {
+        return 0;
+    }
+    let marker: Vec<u8> = "End-Of-Version-Map".bytes().flat_map(|b| [b, 0]).collect();
+    let Some(found) = find_bytes(data, &marker, 0, data.len()) else {
+        return 0;
+    };
+    let start = found + marker.len();
+    let mut scan = start;
+    if find_bytes(data, b"CDib", start, start + 64).is_some() {
+        // Skip the PNG: IEND plus its four-byte CRC.
+        if let Some(iend) = find_bytes(data, b"IEND", start, data.len()) {
+            scan = (iend + 8).min(data.len());
+        }
+    }
+    match find_bytes(data, &[0xFF, 0xFE, 0xFF], scan, scan + 96) {
+        Some(at) if at >= start + 4 => {
+            u32::from_le_bytes([data[at - 4], data[at - 3], data[at - 2], data[at - 1]])
+        }
+        _ => 0,
+    }
+}
+
+/// Finds `needle` in `hay[from..to]`, as an absolute offset.
+fn find_bytes(hay: &[u8], needle: &[u8], from: usize, to: usize) -> Option<usize> {
+    let to = to.min(hay.len());
+    if from >= to || needle.len() > to - from {
+        return None;
+    }
+    hay[from..to]
+        .windows(needle.len())
+        .position(|w| w == needle)
+        .map(|i| from + i)
+}
+
+/// The MODEL's own attribute dictionaries of a classic file (Python's
+/// `_premodel_attribute_dictionaries`, #532).
+///
+/// They sit in the region before the material manager that the object walk
+/// never visits (the model header: thumbnail, attribute containers, camera,
+/// rendering options ...). A component saved as its own file keeps there what
+/// SketchUp's Dynamic Components extension stored on the component's
+/// definition (`dynamic_attributes` with the formulas and options the parts
+/// refer to as `Name!Attr`), so a file of a dynamic component read without
+/// them loses its top level.
+///
+/// The region is not walked, so the store-map numbering is learned from the
+/// bytes: the first CAttributeContainer is a new-class record, followed by
+/// its first CAttributeNamed new-class record (slots b, b+1, b+2); every later
+/// dictionary is a class-ref to b+2, which gives b. Later containers are the
+/// class-refs to b that read as one. Returns the dictionaries of every
+/// container found, empty when there is none or the bytes do not read.
+fn premodel_attribute_dictionaries(data: &[u8], ver: i32) -> ParsedAttrDictionaries {
+    let mut out = ParsedAttrDictionaries::new();
+
+    // The region ends at the first record of the material manager, the
+    // layers or the definitions, whichever comes first.
+    let mut end = data.len();
+    for name in [&b"CMaterial"[..], b"CLayer", b"CComponentDefinition"] {
+        let mut tail = (name.len() as u16).to_le_bytes().to_vec();
+        tail.extend_from_slice(name);
+        let mut from = 0;
+        while let Some(at) = find_bytes(data, &tail, from + 4, end) {
+            if data[at - 4] == 0xFF && data[at - 3] == 0xFF {
+                end = end.min(at - 4);
+                break;
+            }
+            from = at - 3;
+        }
+    }
+
+    const CONTAINER: &[u8] = b"\x13\x00CAttributeContainer";
+    let mut cls = find_bytes(data, &[0xFF, 0xFF], 0, end);
+    while let Some(c) = cls {
+        if data.get(c + 4..c + 4 + CONTAINER.len()) == Some(CONTAINER) {
+            break;
+        }
+        cls = find_bytes(data, &[0xFF, 0xFF], c + 1, end);
+    }
+    let Some(cls) = cls else { return out };
+
+    // A CAttributeNamed class-ref: <tag u16, high bit set> 00 00 [00 from
+    // v17] <4 bytes> FF FE FF (the dictionary name's string marker). The most
+    // frequent tag is b+2.
+    let gap = if ver >= 17 { 5 } else { 4 };
+    let mut counts: Vec<(u16, usize)> = Vec::new();
+    let mut i = cls;
+    while i + 2 + 2 + gap + 3 <= end {
+        let ok = data[i] != 0
+            && data[i + 1] & 0x80 != 0
+            && data[i + 2] == 0
+            && data[i + 3] == 0
+            && (ver < 17 || data[i + 4] == 0)
+            && data[i + 4 + gap..i + 4 + gap + 3] == [0xFF, 0xFE, 0xFF];
+        if ok {
+            let tag = u16::from_le_bytes([data[i], data[i + 1]]) & 0x7FFF;
+            match counts.iter_mut().find(|(t, _)| *t == tag) {
+                Some((_, n)) => *n += 1,
+                None => counts.push((tag, 1)),
+            }
+        }
+        i += 1;
+    }
+    // The first tag seen wins a tie, as Python's `max` over a dict does.
+    let named = counts
+        .iter()
+        .fold(None::<(u16, usize)>, |best, &(t, n)| match best {
+            Some((_, bn)) if bn >= n => best,
+            _ => Some((t, n)),
+        })
+        .map_or(3, |(t, _)| u64::from(t));
+    let base = named.saturating_sub(2).max(1);
+
+    let mut ar = Archive::new(data, ver);
+    ar.next = base;
+    ar.base = base;
+    let mut containers: Vec<u64> = Vec::new();
+    ar.r.p = cls;
+    match ar.object(None) {
+        Ok(obj) if &*obj.name == "CAttributeContainer" && obj.v.is_some() => {
+            containers.push(obj.slot)
+        }
+        Ok(_) => {}
+        Err(_) => return out,
+    }
+    if let Some(&cslot) = ar.class_slot.get("CAttributeContainer") {
+        let Ok(tag) = u16::try_from(0x8000 | cslot) else {
+            return out;
+        };
+        let tag = tag.to_le_bytes();
+        let mut pos = ar.r.p;
+        while let Some(at) = find_bytes(data, &tag, pos, end) {
+            let saved = ar.next;
+            ar.r.p = at;
+            match ar.object(None) {
+                Ok(obj) => {
+                    if &*obj.name == "CAttributeContainer" && obj.v.is_some() {
+                        containers.push(obj.slot);
+                    }
+                    pos = ar.r.p.max(at + 1);
+                }
+                Err(_) => {
+                    ar.next = saved;
+                    pos = at + 1;
+                }
+            }
+        }
+    }
+    for slot in containers {
+        for (name, entries) in extract_legacy_attribute_dictionaries(Some(slot), &ar.slots) {
+            out.entry(name).or_default().extend(entries);
+        }
+    }
+    // `ModelProperties` (Name, Description, IsDynamic, ...) is SketchUp's own
+    // model-info record. It is stored in a container, but SketchUp's API does
+    // not list it among the model's attribute dictionaries, so it is not one
+    // here either.
+    out.remove("ModelProperties");
+    out
 }
 
 fn face_colors_distance_after_camera(ver: i32) -> Option<usize> {

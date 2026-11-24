@@ -253,11 +253,22 @@ fn modern_model_attribute_dictionaries() {
     );
 }
 
+// A classic file's own dictionaries sit in the header region before the
+// material manager (#532); Python reads the same three here.
 #[test]
-fn legacy_model_attribute_dictionaries_are_empty() {
-    assert!(parse("capilla_quiroz_v17.skp")
+fn legacy_model_attribute_dictionaries_come_from_the_header() {
+    let model = parse("capilla_quiroz_v17.skp");
+    let names: Vec<&str> = model
         .attribute_dictionaries
-        .is_empty());
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(names, ["GSU_ContributorsInfo", "GeoReference", "temp"]);
+    assert_eq!(model.attribute_dictionaries["GeoReference"].len(), 7);
+    assert_eq!(
+        model.root().parsed_dictionaries,
+        model.attribute_dictionaries
+    );
 }
 
 #[test]

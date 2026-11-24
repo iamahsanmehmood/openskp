@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Rust: scale-handle masks, an instance's Hide flag, and definition and classic attribute dictionaries (#285)
+
+- `Definition::no_scale_mask`, SketchUp's scale-grip suppression mask (bits 0-6: X, Y, Z, XZ, YZ, XY, XYZ; unknown bits kept), on definitions and on the root (the model's own), read from classic and 2021+ files, written through `DefinitionOptions::no_scale_mask` and `DocumentOptions::no_scale_mask`, and kept by `open_existing` and `to_rust_code` (C++ #519). Code that builds `DocumentOptions` or `DefinitionOptions` with every field listed needs `..Default::default()`.
+- `InstancedNode::hidden`, the placement's own Hide flag: `Some(false)` on the root, `None` on a scene read back from Fragments (TypeScript #527).
+- `InstanceNode::definition_attribute_dictionaries`: the placed definition's dictionaries, stringified once per definition (Python #530).
+- Classic (pre-2021) files keep their definitions' attribute dictionaries and the model's own (read from the header region, without `ModelProperties`), so `Definition::parsed_dictionaries`, `SkpModel::attribute_dictionaries` and the scene's definition dictionaries are no longer empty for them (Python #532). On the 125 Rust and Python fixtures the dictionary names and key counts match Python's for the model and every definition.
+
 ### Added — Python, TypeScript, .NET & Dart: guides inside component definitions, guide tags and hidden guides (#618, #619)
 
 - The writers take construction lines and points inside a component definition, and `open_existing` replays them. A definition whose only guides can't be replayed (half-bounded or zero length) is skipped instead of failing, in all six languages. Guides with NaN or infinite values are rejected.

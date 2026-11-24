@@ -1039,6 +1039,7 @@ fn document_options() {
                 ]
                 .into_iter()
                 .collect(),
+                ..DocumentOptions::default()
             })?;
             b.add_face(&sq(10.0, 0.0), &FaceOptions::default())
         },

@@ -1348,7 +1348,9 @@ impl<'a> Archive<'a> {
     }
 
     fn read_definition(&mut self, v: &mut LegacyValue) -> Result<()> {
-        self.preamble()?;
+        // The preamble's attribute container is the DEFINITION's own
+        // attribute dictionaries (kept for parse_legacy).
+        v.attrs = self.preamble()?;
         v.k = LegacyKind::Definition;
         // undecoded base block: 13 bytes in SketchUp 3, 19 in 4, 20 from 5,
         // 22 from 2017
@@ -1478,6 +1480,14 @@ impl<'a> Archive<'a> {
         let n = gap.len();
         v.faces_camera = n >= 9 && gap[n - 9] & 1 != 0;
         v.shadows_face_sun = n >= 9 && gap[n - 9] & 2 != 0;
+        // the native scale-grip mask: a little-endian u32 right before the
+        // definition-kind u32 (eight bytes before CThumbnail); SketchUp 3 to
+        // 6 files predate it
+        v.no_scale_mask = if self.ver >= 7 && n >= 8 {
+            u32::from_le_bytes([gap[n - 8], gap[n - 7], gap[n - 6], gap[n - 5]])
+        } else {
+            0
+        };
         // the last u32 before the thumbnail is 1 for the definition of a group
         // and 0 for a component's (what SketchUp's
         // SUComponentDefinitionGetType reports)

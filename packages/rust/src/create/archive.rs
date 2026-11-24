@@ -1105,6 +1105,7 @@ impl ArchiveWriter {
         &mut self,
         name: &str,
         guid: &[u8; 16],
+        no_scale_mask: u32,
         is_group: bool,
         ids: &mut IdSource,
     ) -> Result<usize, SkpWriteError> {
@@ -1116,10 +1117,11 @@ impl ArchiveWriter {
         self.write_str("")?; // second name field - empty in ground truth
         self.buf.put_u32(ids.timestamp());
         // 43-byte gap; byte -9 carries the always-faces-camera/shadows-face-sun flags (both off,
-        // not exposed yet). The last u32 is 1 for a group's definition and 0 for a component's
-        // (SketchUp API's SUComponentType_Group).
+        // not exposed yet), then the native scale-grip mask (u32). The last u32 is 1 for a
+        // group's definition and 0 for a component's (SketchUp API's SUComponentType_Group).
         let group_flag_pos = self.buf.len() + 39;
-        self.buf.put_zeros(39);
+        self.buf.put_zeros(35);
+        self.buf.put_u32(no_scale_mask);
         self.buf.put_u32(u32::from(is_group));
         self.write_thumbnail();
         Ok(group_flag_pos)

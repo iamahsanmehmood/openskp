@@ -667,6 +667,20 @@ pub fn full_parse(data: &[u8], o: &ParseOptions) -> Result<RawParsed, SkpParseEr
                     }
                 }
             }
+            // The model's own behavior (the root's scale-grip mask):
+            // 0E02 > 581B > 5A1B, as on a definition.
+            if first.tag == "0E02" {
+                for (t, behavior) in parse_flat(&first.payload) {
+                    if t != "581B" {
+                        continue;
+                    }
+                    for (field, v) in parse_flat(behavior) {
+                        if field == "5A1B" && v.len() == 4 {
+                            p.root.no_scale_mask = u32::from_le_bytes([v[0], v[1], v[2], v[3]]);
+                        }
+                    }
+                }
+            }
             if first.tag == "0602" {
                 for (t, catalog) in parse_flat(&first.payload) {
                     if t == "7869" {
