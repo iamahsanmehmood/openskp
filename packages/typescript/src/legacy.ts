@@ -16,7 +16,14 @@
  */
 
 import { RawPage } from './pages-dimensions';
-import { ArcFrame, GeometryBuilderFace, GeometryBuilderInstance, ParsedDefinition, VffAttrValue } from './geometry';
+import {
+  ArcFrame,
+  GeometryBuilderFace,
+  GeometryBuilderInstance,
+  ParsedDefinition,
+  VffAttrValue,
+  guidFromWindowsBytes,
+} from './geometry';
 import { EdgeFlagStore } from './edge-flags';
 import { DefaultVertexStore, type VertexStore } from './vertex-store';
 import { DefaultEdgeStore, type EdgeStore } from './edge-store';
@@ -1257,7 +1264,7 @@ function readImage(ar: Archive, r: R): any {
   r.f64(); // constant 1.0
   r.utf16(); // source path
   const guid = r.raw(16);
-  return { k: 'image', db, def: ds, xform, guid: toHex(guid) };
+  return { k: 'image', db, def: ds, xform, guid: guidFromWindowsBytes(guid) };
 }
 
 /** A reference-to-entity tag: dimension connection points and text leader
@@ -1856,7 +1863,7 @@ function readDefinition(ar: Archive, r: R): any {
   return {
     k: 'definition',
     name,
-    guid: toHex(guid),
+    guid: guidFromWindowsBytes(guid),
     ents,
     faces_camera: Boolean(behavior & 1),
     shadows_face_sun: Boolean(behavior & 2),
@@ -1884,7 +1891,15 @@ function readInstance(ar: Archive, r: R): any {
   // phantom 16-byte read on every pre-2014 group (openskp#284 / #310).
   const guid = ar.ver >= 14 ? r.raw(16) : new Uint8Array(0);
 
-  return { k: 'instance', db, def: ds, xf, name, guid: toHex(guid), attrs: pre.attrs };
+  return {
+    k: 'instance',
+    db,
+    def: ds,
+    xf,
+    name,
+    guid: guid.length === 16 ? guidFromWindowsBytes(guid) : '',
+    attrs: pre.attrs,
+  };
 }
 
 export const READERS: Record<string, (ar: Archive, r: R) => any> = {
