@@ -668,6 +668,7 @@ def build_instanced_scene(
             inst_color = inherited_color
             inst_material = inherited_material
             properties: Dict[str, str] = dict(inst.get("properties") or {})
+            raw_attr_dicts = inst.get("attribute_dictionaries")
             attribute_dicts: Dict[str, Dict[str, str]] = {}
             name_override: Optional[str] = None
 
@@ -700,29 +701,33 @@ def build_instanced_scene(
                         inst_material = mat
 
                 try:
-                    all_dicts = _core.extract_attribute_dictionaries(d007)
-                    dynamic = all_dicts.get("dynamic_attributes", {})
+                    raw_attr_dicts = _core.extract_attribute_dictionaries(d007)
+                    dynamic = raw_attr_dicts.get("dynamic_attributes", {})
                     properties = {k: _core._stringify_vff_attr_value(v) for k, v in dynamic.items()}
-                    # See openskp.scene.build_scene's identical loop for why
-                    # SU_InstanceSet is skipped and name/label/code take
-                    # priority as the display-name override.
-                    for dict_name, entries in all_dicts.items():
-                        if dict_name in ("dynamic_attributes", "SU_InstanceSet"):
-                            continue
-                        attribute_dicts[dict_name] = {
-                            k: _core._stringify_vff_attr_value(v) for k, v in entries.items()
-                        }
-                        if name_override is None:
-                            for key in name_override_keys:
-                                val = entries.get(key)
-                                if val:
-                                    name_override = str(val)
-                                    break
                 except Exception:
+                    raw_attr_dicts = None
                     logger.debug(
                         "Failed to extract attribute dictionaries for instance %r (ref_idx=%r)",
                         inst.get("name"), ref_idx, exc_info=True,
                     )
+
+            # See openskp.scene.build_scene's identical loop for why
+            # SU_InstanceSet is skipped and name/label/code take priority as
+            # the display-name override.
+            if raw_attr_dicts:
+                for dict_name, entries in raw_attr_dicts.items():
+                    if dict_name in ("dynamic_attributes", "SU_InstanceSet"):
+                        continue
+                    attribute_dicts[dict_name] = {
+                        k: _core._stringify_vff_attr_value(v) for k, v in entries.items()
+                    }
+                    if name_override is None:
+                        for key in name_override_keys:
+                            if key in entries and entries[key] is not None:
+                                s = _core._stringify_vff_attr_value(entries[key])
+                                if s:
+                                    name_override = s
+                                    break
 
             def_name = (defs_dict.get(ref_idx) or {}).get("name") or ""
             # Fallback order: an attribute-dict name/label/code override,

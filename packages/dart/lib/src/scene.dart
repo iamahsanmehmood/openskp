@@ -476,7 +476,7 @@ class SceneBuilder {
         // instances don't set this, so this stays {} for them and gets
         // overwritten below via the D007/DC05 TLV walk instead.
         var properties = Map<String, String>.from(inst.properties ?? {});
-        Map<String, Map<String, Object?>>? instAttributeDicts;
+        Map<String, Map<String, Object?>>? instAttributeDicts = inst.attributeDicts;
 
         // A classic (pre-2021) instance has no D007: its own tag and paint
         // were read with it.
@@ -604,7 +604,7 @@ class SceneBuilder {
         );
         childInstancesInfo.add(instInfo);
 
-        pathUpdates[fullPathName] = (properties, inst.name ?? '', attributeDictionaries);
+        pathUpdates[fullPathName] = (properties, displayName, attributeDictionaries);
       }
 
       return childInstancesInfo;

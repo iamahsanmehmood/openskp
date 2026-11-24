@@ -2140,6 +2140,23 @@ namespace OpenSkp
             return new Dictionary<string, string>();
         }
 
+        /// <summary>Extract every attribute dictionary attached to a legacy
+        /// entity's already-parsed CAttributeContainer, keyed by the
+        /// dictionary's own declared name.</summary>
+        public static Dictionary<string, Dictionary<string, object?>> ExtractLegacyAttributeDictionaries(AttrsRec? attrs)
+        {
+            var result = new Dictionary<string, Dictionary<string, object?>>();
+            if (attrs == null) return result;
+            foreach (var (_, value) in attrs.Children)
+            {
+                if (value is DictRec dict && !string.IsNullOrEmpty(dict.Name))
+                {
+                    result[dict.Name] = new Dictionary<string, object?>(dict.Entries);
+                }
+            }
+            return result;
+        }
+
         public static readonly Dictionary<string, LegacyReader> Readers = new Dictionary<string, LegacyReader>
         {
             ["CVertex"] = ReadVertex,
@@ -2661,6 +2678,7 @@ namespace OpenSkp
                         LayerId = instRec.Db.Layer != 0 ? instRec.Db.Layer : (long?)null,
                         Children = new List<TlvNode>(),
                         Properties = LegacyReaders.ExtractLegacyDynamicProperties(instRec.Attrs),
+                        AttributeDicts = LegacyReaders.ExtractLegacyAttributeDictionaries(instRec.Attrs),
                     });
                 }
                 else if (v is ImageRec imgRec)

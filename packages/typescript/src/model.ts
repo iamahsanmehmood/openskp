@@ -1178,7 +1178,7 @@ export function buildSceneFromParsed(
       // legacy instances, so this is a no-op there and the precomputed
       // `properties` seeded above survives unchanged.
       const d007 = inst.children.find((c) => c.tag === 'D007');
-      let attributeDicts: Record<string, Record<string, VffAttrValue>> | null = null;
+      let attributeDicts: Record<string, Record<string, VffAttrValue>> | null = inst.attributeDicts ?? null;
       if (d007) {
         try {
           properties = extractDynamicProperties(d007, options);
@@ -1262,7 +1262,7 @@ export function buildSceneFromParsed(
       };
       childInstancesInfo.push(instInfo);
 
-      pathUpdates.set(fullPathName, { properties, name: inst.name || '', attributeDictionaries });
+      pathUpdates.set(fullPathName, { properties, name: displayName, attributeDictionaries });
     }
 
     return childInstancesInfo;

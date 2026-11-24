@@ -1212,6 +1212,21 @@ class LegacyReaders {
     return {};
   }
 
+  /// Extract every attribute dictionary attached to a legacy entity's
+  /// already-parsed CAttributeContainer, keyed by the dictionary's own
+  /// declared name.
+  static Map<String, Map<String, Object?>> extractLegacyAttributeDictionaries(
+      AttrsRec? attrs) {
+    if (attrs == null) return {};
+    final out = <String, Map<String, Object?>>{};
+    for (final (_, value) in attrs.children) {
+      if (value is DictRec && value.name.isNotEmpty) {
+        out[value.name] = Map<String, Object?>.from(value.entries);
+      }
+    }
+    return out;
+  }
+
   static Object readLayer(Archive ar, LR r) {
     earlyPreamble(ar, r);
     final name = r.utf16();
@@ -2453,7 +2468,9 @@ class Legacy {
           ..hidden = v.db.hidden != 0
           ..layerId = v.db.layer != 0 ? v.db.layer : null
           ..children = const []
-          ..properties = LegacyReaders.extractLegacyDynamicProperties(v.attrs));
+          ..properties = LegacyReaders.extractLegacyDynamicProperties(v.attrs)
+          ..attributeDicts =
+              LegacyReaders.extractLegacyAttributeDictionaries(v.attrs));
       } else if (v is ImageRec) {
         // Placed exactly like an ordinary component instance - same
         // transform/definition-reference shape - the only difference is
