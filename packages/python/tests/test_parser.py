@@ -2495,6 +2495,23 @@ class TestVffAttributeDictionaries:
         d007 = self._d007(self._dict('fbd-einfo', entries))
         assert _core.extract_attribute_dictionaries(d007) == {'fbd-einfo': {'angle': -7}}
 
+    def test_boolean_with_wrong_payload_size_is_none(self) -> None:
+        # A bool is exactly one byte; any other size is not guessed at.
+        from openskp import _core
+        entries = self._entry('bool', self._value(self._tlv('AA38', b'\x01\x02')))
+        d007 = self._d007(self._dict('fbd-einfo', entries))
+        assert _core.extract_attribute_dictionaries(d007) == {'fbd-einfo': {'bool': None}}
+
+    def test_boolean_stringifies_like_the_classic_reader(self) -> None:
+        # The classic reader decodes its 0x07 bool as a u8 int, so the VFF
+        # stringified view must render True/False as "1"/"0" to match.
+        from openskp import _core
+        from openskp.legacy import _stringify_attr_value
+        assert _core._stringify_vff_attr_value(True) == '1'
+        assert _core._stringify_vff_attr_value(False) == '0'
+        assert _core._stringify_vff_attr_value(True) == _stringify_attr_value(1)
+        assert _core._stringify_vff_attr_value(False) == _stringify_attr_value(0)
+
     def test_time_value_round_trips(self) -> None:
         # AC38 is the VFF counterpart of legacy's 0x09 time_t: u32 seconds.
         from openskp import _core
