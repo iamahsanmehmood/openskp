@@ -83,10 +83,12 @@ export interface Dimension {
   /** Offset distance (inches) - how far the dimension line sits from the
    * a-b segment, along the in-plane perpendicular. */
   offset: number;
-  /** Historical name: for a VFF dimension this is tag 5BCF, which is the plane NORMAL (SketchUp's SUDimensionLinearGetNormal equals it), or null. */
+  /** Historical name: for a VFF dimension this is tag 5BCF, which is the plane NORMAL (SketchUp's SUDimensionLinearGetNormal equals it); for a legacy dimension this is the plane's X axis, or null. */
   planeX: [number, number, number] | null;
-  /** Historical name: for a VFF dimension this is tag 5BD0, the plane's X axis, or null. */
+  /** Historical name: for a VFF dimension this is tag 5BD0, the plane's X axis; for a legacy dimension this is the plane normal, or null. */
   normal: [number, number, number] | null;
+  /** Explicit offset vector (inches) for legacy or VFF dimensions constrained to a plane axis, preserving the side of the line independently of endpoint ordering, or null. */
+  offsetVector?: [number, number, number] | null;
 }
 
 /**
@@ -692,6 +694,7 @@ export function buildModelFromParsed(parsed: ParsedRawData): SkpModel {
     offset: dm.offset,
     planeX: dm.planeX,
     normal: dm.normal,
+    offsetVector: dm.offsetVector ?? null,
     text: dm.text,
     hidden: false,
   }));
@@ -803,11 +806,12 @@ function buildDefinition(id: number, d: ParsedDefinition, layerIdToName?: Map<nu
   const dimensions: Dimension[] = (d.builder.dimensions || []).map((dim) => ({
     text: dim.text || '',
     hidden: dim.hidden || false,
-    a: null,
-    b: null,
-    offset: 0,
-    planeX: null,
-    normal: null,
+    a: dim.a ?? null,
+    b: dim.b ?? null,
+    offset: dim.offset ?? 0,
+    planeX: dim.planeX ?? null,
+    normal: dim.normal ?? null,
+    offsetVector: dim.offsetVector ?? null,
   }));
   const constructionLines: ConstructionLine[] = (d.builder.constructionLines || []).map((cl) => ({
     point: cl.point,

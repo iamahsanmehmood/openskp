@@ -864,7 +864,26 @@ class LineStyleRec {
 class DimLinearRec {
   DrawBase db;
   String text;
-  DimLinearRec(this.db, this.text);
+  (double, double, double)? a;
+  (double, double, double)? b;
+  int? connect1;
+  int? connect2;
+  double offset;
+  (double, double, double)? planeX;
+  (double, double, double)? normal;
+  (double, double, double)? offsetVector;
+  DimLinearRec(
+    this.db,
+    this.text, {
+    this.a,
+    this.b,
+    this.connect1,
+    this.connect2,
+    this.offset = 0.0,
+    this.planeX,
+    this.normal,
+    this.offsetVector,
+  });
 }
 
 class TextRec {
@@ -1680,14 +1699,64 @@ class LegacyReaders {
     // SketchUp 4 and 5 write neither the font object above nor the 5 bytes in
     // front of the first connection block, nor the trailing u32 of the last
     // one.
-    r.raw(ar.ver >= 6 ? 37 : 32);
-    _pathRef((rr) => ar.readObject(rr).$1, r); // connection point 1 (may be null; may be written in full)
-    connectionPaths((rr) => ar.readObject(rr).$1, r, ar);
-    r.raw(32);
-    _pathRef((rr) => ar.readObject(rr).$1, r); // connection point 2 (may be null; may be written in full)
-    connectionPaths((rr) => ar.readObject(rr).$1, r, ar);
-    r.raw(ar.ver >= 6 ? 72 : 68);
-    return DimLinearRec(db, text);
+    if (ar.ver >= 6) r.raw(5);
+    ((double, double, double)?, int?) readConnection() {
+      final block = r.raw(32);
+      (double, double, double)? pt = Tlv.readU32(block, 0) == 1
+          ? (Tlv.readF64(block, 8), Tlv.readF64(block, 16), Tlv.readF64(block, 24))
+          : null;
+      int? cref = _pathRef((rr) => ar.readObject(rr).$1, r);
+      final paths = connectionPaths((rr) => ar.readObject(rr).$1, r, ar);
+      if (paths.$1 != null || paths.$2.isNotEmpty || paths.$3.isNotEmpty) {
+        // Do not expose definition-local vertex coordinates as owner/world
+        // points until the nested instance path can also be resolved.
+        pt = null;
+        cref = null;
+      }
+      return (pt, cref);
+    }
+
+    final (a, c1) = readConnection();
+    final (b, c2) = readConnection();
+    final placement = r.raw(ar.ver >= 6 ? 72 : 68);
+    final normal = (
+      Tlv.readF64(placement, 0),
+      Tlv.readF64(placement, 8),
+      Tlv.readF64(placement, 16),
+    );
+    final planeX = (
+      Tlv.readF64(placement, 24),
+      Tlv.readF64(placement, 32),
+      Tlv.readF64(placement, 40),
+    );
+    final axis = Tlv.readU32(placement, 48);
+    final offset = Tlv.readF64(placement, 52);
+    (double, double, double)? offsetVector;
+    if (axis == 1) {
+      offsetVector = (
+        (normal.$2 * planeX.$3 - normal.$3 * planeX.$2) * offset + 0.0,
+        (normal.$3 * planeX.$1 - normal.$1 * planeX.$3) * offset + 0.0,
+        (normal.$1 * planeX.$2 - normal.$2 * planeX.$1) * offset + 0.0,
+      );
+    } else if (axis == 2) {
+      offsetVector = (
+        -planeX.$1 * offset + 0.0,
+        -planeX.$2 * offset + 0.0,
+        -planeX.$3 * offset + 0.0,
+      );
+    }
+    return DimLinearRec(
+      db,
+      text,
+      a: a,
+      b: b,
+      connect1: c1,
+      connect2: c2,
+      offset: offset,
+      planeX: planeX,
+      normal: normal,
+      offsetVector: offsetVector,
+    );
   }
 
   /// What follows a dimension connection ref (see [readDimLinear]):
@@ -2566,9 +2635,28 @@ class Legacy {
           hidden: v.db.hidden != 0,
         ));
       } else if (v is DimLinearRec) {
+        (double, double, double)? resolveEndpoint(
+          (double, double, double)? pt,
+          int? cref,
+        ) {
+          if (pt != null || cref == null) return pt;
+          final ent = slots[cref];
+          if (ent != null && ent.kind == 'obj' && ent.value is VertexRec) {
+            final xyz = (ent.value as VertexRec).xyz;
+            if (xyz.length >= 3) return (xyz[0], xyz[1], xyz[2]);
+          }
+          return null;
+        }
+
         builder.dimensions.add(Dimension(
           text: v.text,
           hidden: v.db.hidden != 0,
+          a: resolveEndpoint(v.a, v.connect1),
+          b: resolveEndpoint(v.b, v.connect2),
+          offset: v.offset,
+          planeX: v.planeX,
+          normal: v.normal,
+          offsetVector: v.offsetVector,
         ));
       } else if (v is ConstructionLineRec) {
         builder.constructionLines.add(ConstructionLine(

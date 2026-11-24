@@ -1099,8 +1099,56 @@ class _ArchiveWriter {
   /// stored inline in each connection block and null object refs. Free
   /// dimensions render in any orientation; anchored (type 2) dimensions
   /// are a future refinement.
-  void writeDimension(Point3 p1, Point3 p2, {double offset = 10.0}) {
-    if (p1.$1 == p2.$1 && p1.$2 == p2.$2 && p1.$3 == p2.$3) {
+  void writeDimension(
+    Point3 p1,
+    Point3 p2, {
+    double offset = 10.0,
+    Point3? offsetVector,
+  }) {
+    var normal = (0.0, 0.0, 1.0);
+    var xaxis = (1.0, 0.0, 0.0);
+    var resolvedOffset = offset;
+    if (offsetVector != null) {
+      if (!p1.$1.isFinite ||
+          !p1.$2.isFinite ||
+          !p1.$3.isFinite ||
+          !p2.$1.isFinite ||
+          !p2.$2.isFinite ||
+          !p2.$3.isFinite ||
+          !offsetVector.$1.isFinite ||
+          !offsetVector.$2.isFinite ||
+          !offsetVector.$3.isFinite) {
+        throw SkpWriteError('addDimension coordinates must be finite');
+      }
+      if (p1.$1 == p2.$1 && p1.$2 == p2.$2 && p1.$3 == p2.$3) {
+        throw SkpWriteError('addDimension endpoints coincide');
+      }
+      final dx = p2.$1 - p1.$1;
+      final dy = p2.$2 - p1.$2;
+      final dz = p2.$3 - p1.$3;
+      final length = sqrt(dx * dx + dy * dy + dz * dz);
+      if (!length.isFinite || length == 0.0) {
+        throw SkpWriteError('addDimension segment length must be finite and nonzero');
+      }
+      xaxis = (dx / length, dy / length, dz / length);
+      final nx = xaxis.$2 * offsetVector.$3 - xaxis.$3 * offsetVector.$2;
+      final ny = xaxis.$3 * offsetVector.$1 - xaxis.$1 * offsetVector.$3;
+      final nz = xaxis.$1 * offsetVector.$2 - xaxis.$2 * offsetVector.$1;
+      resolvedOffset = sqrt(nx * nx + ny * ny + nz * nz);
+      if (!resolvedOffset.isFinite) {
+        throw SkpWriteError('addDimension offset must be finite');
+      }
+      if (resolvedOffset > 0.0) {
+        normal = (nx / resolvedOffset, ny / resolvedOffset, nz / resolvedOffset);
+      } else {
+        final seed = xaxis.$3.abs() < 0.9 ? (0.0, 0.0, 1.0) : (0.0, 1.0, 0.0);
+        final cx = xaxis.$2 * seed.$3 - xaxis.$3 * seed.$2;
+        final cy = xaxis.$3 * seed.$1 - xaxis.$1 * seed.$3;
+        final cz = xaxis.$1 * seed.$2 - xaxis.$2 * seed.$1;
+        final clen = sqrt(cx * cx + cy * cy + cz * cz);
+        normal = (cx / clen, cy / clen, cz / clen);
+      }
+    } else if (p1.$1 == p2.$1 && p1.$2 == p2.$2 && p1.$3 == p2.$3) {
       throw SkpWriteError('addDimension endpoints coincide');
     }
     _newOfKnownClass('CDimensionLinear', schema: _dimensionLinearSchema);
@@ -1124,13 +1172,14 @@ class _ArchiveWriter {
     buf.addAll(_f64(p2.$2));
     buf.addAll(_f64(p2.$3));
     buf.addAll(_u16(0));
-    // placement block: SDK free-dimension defaults + our offset
+    // placement block: SDK free-dimension defaults or constrained plane + offset
     buf.addAll(List<int>.filled(2, 0));
-    for (final v in [0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0]) {
+    buf.addAll(_f64(0.0));
+    for (final v in [normal.$1, normal.$2, normal.$3, xaxis.$1, xaxis.$2, xaxis.$3]) {
       buf.addAll(_f64(v));
     }
-    buf.addAll(_u32(0));
-    buf.addAll(_f64(offset));
+    buf.addAll(_u32(offsetVector != null ? 1 : 0));
+    buf.addAll(_f64(resolvedOffset));
     buf.addAll(_f64(0.0));
     buf.addAll(_u32(1));
   }
@@ -2409,6 +2458,25 @@ class ComponentDefinitionBuilder implements GeometryHost {
     if (flagPos != null) _patchU32(_skp._definitionWriter!.buf, flagPos, 1);
   }
 
+  /// Add a FREE linear dimension between two explicit points (inches,
+  /// definition-local space) - same signature and behavior as
+  /// [SkpBuilder.addDimension].
+  void addDimension(
+    Point3 p1,
+    Point3 p2, {
+    double offset = 10.0,
+    Point3? offsetVector,
+  }) {
+    _checkWritable('dimensions');
+    _skp._definitionWriter!.writeDimension(
+      p1,
+      p2,
+      offset: offset,
+      offsetVector: offsetVector,
+    );
+    _newEntityCount++;
+  }
+
   void _close() {
     if (_newEntityCount == 0) {
       throw SkpWriteError("component definition '$name' has no geometry - add at least one face");
@@ -3214,11 +3282,42 @@ class SkpBuilder implements GeometryHost {
 
   /// Add a FREE linear dimension between two explicit points (inches,
   /// world space). [offset] is the dimension line's offset from the
-  /// measured segment, in inches (signed). See
+  /// measured segment in inches (signed), or pass [offsetVector] to place
+  /// the dimension line using a 3D vector whose component perpendicular to
+  /// `p1 -> p2` determines the plane and side. See
   /// [_ArchiveWriter.writeDimension] for the record's ground truth.
-  void addDimension(Point3 p1, Point3 p2, {double offset = 10.0}) {
+  void addDimension(
+    Point3 p1,
+    Point3 p2, {
+    double? offset,
+    Point3? offsetVector,
+  }) {
+    if (offset != null && offsetVector != null) {
+      throw SkpWriteError('pass either offset or offsetVector, not both');
+    }
+    if (offsetVector != null) {
+      if (!p1.$1.isFinite ||
+          !p1.$2.isFinite ||
+          !p1.$3.isFinite ||
+          !p2.$1.isFinite ||
+          !p2.$2.isFinite ||
+          !p2.$3.isFinite ||
+          !offsetVector.$1.isFinite ||
+          !offsetVector.$2.isFinite ||
+          !offsetVector.$3.isFinite) {
+        throw SkpWriteError('addDimension coordinates must be finite');
+      }
+    }
+    if (p1.$1 == p2.$1 && p1.$2 == p2.$2 && p1.$3 == p2.$3) {
+      throw SkpWriteError('addDimension endpoints coincide');
+    }
     _ensureGeometryWriter();
-    _geometryWriter!.writeDimension(p1, p2, offset: offset);
+    _geometryWriter!.writeDimension(
+      p1,
+      p2,
+      offset: offset ?? 10.0,
+      offsetVector: offsetVector,
+    );
     _newEntityCount++;
     _faceCount++; // reuses the "at least one root entity" check in toBytes
   }

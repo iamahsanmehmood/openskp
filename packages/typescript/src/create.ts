@@ -864,8 +864,45 @@ class ArchiveWriter {
    * stored inline in each connection block and null object refs. Free
    * dimensions render in any orientation; anchored (type 2) dimensions are
    * a future refinement. */
-  writeDimension(p1: Point3, p2: Point3, offset = 10.0): void {
-    if (p1[0] === p2[0] && p1[1] === p2[1] && p1[2] === p2[2]) {
+  writeDimension(p1: Point3, p2: Point3, offset = 10.0, offsetVector?: Point3): void {
+    let normal: Point3 = [0.0, 0.0, 1.0];
+    let xaxis: Point3 = [1.0, 0.0, 0.0];
+    let resolvedOffset = offset;
+    if (offsetVector !== undefined) {
+      for (let i = 0; i < 3; i++) {
+        if (!Number.isFinite(p1[i]) || !Number.isFinite(p2[i]) || !Number.isFinite(offsetVector[i])) {
+          throw new SkpWriteError('addDimension coordinates must be finite');
+        }
+      }
+      if (p1[0] === p2[0] && p1[1] === p2[1] && p1[2] === p2[2]) {
+        throw new SkpWriteError('addDimension endpoints coincide');
+      }
+      const dx = p2[0] - p1[0];
+      const dy = p2[1] - p1[1];
+      const dz = p2[2] - p1[2];
+      const length = Math.hypot(dx, dy, dz);
+      if (!Number.isFinite(length) || length === 0) {
+        throw new SkpWriteError('addDimension segment length must be finite and nonzero');
+      }
+      xaxis = [dx / length, dy / length, dz / length];
+      const nx = xaxis[1] * offsetVector[2] - xaxis[2] * offsetVector[1];
+      const ny = xaxis[2] * offsetVector[0] - xaxis[0] * offsetVector[2];
+      const nz = xaxis[0] * offsetVector[1] - xaxis[1] * offsetVector[0];
+      resolvedOffset = Math.hypot(nx, ny, nz);
+      if (!Number.isFinite(resolvedOffset)) {
+        throw new SkpWriteError('addDimension offset must be finite');
+      }
+      if (resolvedOffset > 0) {
+        normal = [nx / resolvedOffset, ny / resolvedOffset, nz / resolvedOffset];
+      } else {
+        const seed: Point3 = Math.abs(xaxis[2]) < 0.9 ? [0.0, 0.0, 1.0] : [0.0, 1.0, 0.0];
+        const cx = xaxis[1] * seed[2] - xaxis[2] * seed[1];
+        const cy = xaxis[2] * seed[0] - xaxis[0] * seed[2];
+        const cz = xaxis[0] * seed[1] - xaxis[1] * seed[0];
+        const clen = Math.hypot(cx, cy, cz);
+        normal = [cx / clen, cy / clen, cz / clen];
+      }
+    } else if (p1[0] === p2[0] && p1[1] === p2[1] && p1[2] === p2[2]) {
       throw new SkpWriteError('addDimension endpoints coincide');
     }
     this.newOfKnownClass('CDimensionLinear', DIMENSIONLINEAR_SCHEMA);
@@ -889,11 +926,13 @@ class ArchiveWriter {
     this.pushF64(p2[1]);
     this.pushF64(p2[2]);
     this.pushU16(0);
-    // placement block: SDK free-dimension defaults + our offset
+    // placement block: SDK free-dimension defaults or constrained plane + offset
     this.pushZeros(2);
-    for (const v of [0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0]) this.pushF64(v);
-    this.pushU32(0);
-    this.pushF64(offset);
+    this.pushF64(0.0);
+    for (const v of normal) this.pushF64(v);
+    for (const v of xaxis) this.pushF64(v);
+    this.pushU32(offsetVector !== undefined ? 1 : 0);
+    this.pushF64(resolvedOffset);
     this.pushF64(0.0);
     this.pushU32(1);
   }
@@ -2044,6 +2083,22 @@ export class ComponentDefinitionBuilder {
     if (definition.groupFlagPos !== undefined) this._skp._patchDefinitionCount(definition.groupFlagPos, 1);
   }
 
+  /** Add a FREE linear dimension between two explicit points (inches,
+   * definition-local space). Pass a signed scalar `offset` or a 3D
+   * `offsetVector` whose component perpendicular to `p1 -> p2` determines
+   * the plane and side of the dimension line. */
+  addDimension(p1: Point3, p2: Point3, offset?: number): void;
+  addDimension(p1: Point3, p2: Point3, offsetVector: Point3): void;
+  addDimension(p1: Point3, p2: Point3, offsetOrVector: number | Point3 = 10.0): void {
+    this.checkWritable('dimensions');
+    if (typeof offsetOrVector === 'number') {
+      this._skp._definitionWriter().writeDimension(toPoint3(p1), toPoint3(p2), offsetOrVector);
+    } else {
+      this._skp._definitionWriter().writeDimension(toPoint3(p1), toPoint3(p2), 0.0, toPoint3(offsetOrVector));
+    }
+    this.newEntityCount += 1;
+  }
+
   /** @internal called automatically once the defining callback (passed
    * to addComponentDefinition/addGroup) returns. */
   _close(): void {
@@ -2591,12 +2646,38 @@ export class SkpBuilder {
   }
 
   /** Add a FREE linear dimension between two explicit points (inches,
-   * world space). `offset` is the dimension line's offset from the
-   * measured segment, in inches (signed). See ArchiveWriter.writeDimension
-   * for the record's ground truth. */
-  addDimension(p1: Point3, p2: Point3, offset = 10.0): void {
-    this.ensureGeometryWriter();
-    (this.geometryWriter as ArchiveWriter).writeDimension(toPoint3(p1), toPoint3(p2), offset);
+   * world space). `offset` is either a signed scalar distance in inches or
+   * a 3D offset vector whose component perpendicular to `p1 -> p2`
+   * determines the plane and side of the dimension line. See
+   * ArchiveWriter.writeDimension for the record's ground truth. */
+  addDimension(p1: Point3, p2: Point3, offset?: number): void;
+  addDimension(p1: Point3, p2: Point3, offsetVector: Point3): void;
+  addDimension(p1: Point3, p2: Point3, offsetOrVector: number | Point3 = 10.0): void {
+    const a = toPoint3(p1);
+    const b = toPoint3(p2);
+    if (typeof offsetOrVector === 'number') {
+      if (a[0] === b[0] && a[1] === b[1] && a[2] === b[2]) {
+        throw new SkpWriteError('addDimension endpoints coincide');
+      }
+      this.ensureGeometryWriter();
+      (this.geometryWriter as ArchiveWriter).writeDimension(a, b, offsetOrVector);
+    } else {
+      const ov = toPoint3(offsetOrVector);
+      for (let i = 0; i < 3; i++) {
+        if (!Number.isFinite(a[i]) || !Number.isFinite(b[i]) || !Number.isFinite(ov[i])) {
+          throw new SkpWriteError('addDimension coordinates must be finite');
+        }
+      }
+      if (a[0] === b[0] && a[1] === b[1] && a[2] === b[2]) {
+        throw new SkpWriteError('addDimension endpoints coincide');
+      }
+      const length = Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
+      if (!Number.isFinite(length) || length === 0) {
+        throw new SkpWriteError('addDimension segment length must be finite and nonzero');
+      }
+      this.ensureGeometryWriter();
+      (this.geometryWriter as ArchiveWriter).writeDimension(a, b, 0.0, ov);
+    }
     this.newEntityCount += 1;
     this.faceCount += 1; // reuses the "at least one root entity" check in toBytes
   }
