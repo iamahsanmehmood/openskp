@@ -101,7 +101,9 @@ def to_stl_binary(scene: Scene, scale: float = 1.0) -> bytes:
     Returns:
         The packed Little-Endian Binary STL byte array.
     """
-    total_triangles = sum(len(p.indices) // 3 for p in scene.surface_primitives)
+    total_triangles = sum(
+        len(p.indices) // 3 - len(p.back_triangles) for p in scene.surface_primitives
+    )
 
     # 80-byte header
     header = b"# OpenSKP Binary STL Export"
