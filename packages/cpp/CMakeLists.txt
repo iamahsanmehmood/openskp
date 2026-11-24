@@ -126,6 +126,7 @@ set(
   src/codegen.cpp
   src/core.cpp
   src/create.cpp
+  src/curves.cpp
   src/dxf_export.cpp
   src/earcut.cpp
   src/edit.cpp

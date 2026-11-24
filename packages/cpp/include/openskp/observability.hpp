@@ -46,6 +46,9 @@ struct ParseOptions {
   /// image/vnd.ms-dds, image/jp2) instead of leaving it out with a warning.
   /// Off by default because glTF carries only PNG and JPEG.
   bool original_textures{false};
+  /// Bake loose edges (edges no face uses) into Scene::curve_sets and
+  /// InstancedScene::curve_resources. Defaults to true.
+  bool include_curve_sets{true};
 };
 
 inline constexpr std::uint64_t progress_interval = 500;

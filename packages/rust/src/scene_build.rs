@@ -3,7 +3,9 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use crate::curves::{chain_loose_edges, majority_layer, round6, solve_run_arc, INCHES_TO_M};
+use crate::curves::{
+    prepare_def_curves, round6, solve_run_arc_indexed, PreparedDefCurves, INCHES_TO_M,
+};
 use crate::errors::SkpParseError;
 use crate::face_groups::{
     build_local_face_groups, default_color, find_material, material_color, unpainted_style_colors,
@@ -169,23 +171,6 @@ pub(crate) fn summarize_face_layers(p: &RawParsed, b: &GeometryBuilder) -> FaceL
     }
 }
 
-/// A run's own layer: its edges' majority layer, else `fallback`.
-pub(crate) fn run_layer(
-    p: &RawParsed,
-    b: &GeometryBuilder,
-    edge_ids: &[EntityId],
-    fallback: &str,
-) -> String {
-    match majority_layer(edge_ids.iter().map(|e| b.edge_layers.get(e).copied())) {
-        Some(id) => p
-            .layer_id_to_name
-            .get(&id)
-            .cloned()
-            .unwrap_or_else(|| fallback.to_owned()),
-        None => fallback.to_owned(),
-    }
-}
-
 /// A missing vertex (the C++ `std::out_of_range` from `map::at`).
 pub(crate) fn build_error(e: Error) -> SkpParseError {
     SkpParseError::at_stage(e.message.to_string(), ParseStage::BuildScene).with_cause(e)
@@ -338,6 +323,7 @@ struct Baker<'a> {
     /// (`InstanceNode::definition_attribute_dictionaries`).
     definition_dicts: HashMap<EntityId, StringDictionaries>,
     face_layers: HashMap<Option<EntityId>, FaceLayerSummary>,
+    prepared_curves: HashMap<Option<EntityId>, PreparedDefCurves>,
 }
 
 impl<'a> Baker<'a> {
@@ -506,7 +492,9 @@ impl<'a> Baker<'a> {
             self.scene.glb_primitives.push(prim);
         }
 
-        self.bake_curves(b, defname, matrix, mesh_layer, path);
+        if self.o.include_curve_sets {
+            self.bake_curves(b, defname, defid, matrix, mesh_layer, path);
+        }
 
         let mut children = Vec::new();
         for i in &b.instances {
@@ -603,20 +591,27 @@ impl<'a> Baker<'a> {
         &mut self,
         b: &GeometryBuilder,
         defname: &str,
+        defid: Option<EntityId>,
         matrix: &[f64],
         layer: &str,
         path: &str,
     ) {
-        let runs = chain_loose_edges(b);
-        if runs.is_empty() {
+        let p = self.p;
+        let prepared = self
+            .prepared_curves
+            .entry(defid)
+            .or_insert_with(|| prepare_def_curves(p, b));
+        if prepared.runs.is_empty() {
             return;
         }
-        let p = self.p;
-        for run in runs {
-            let mut pts = Vec::with_capacity(run.vertex_ids.len());
-            for vk in &run.vertex_ids {
-                // A dangling vertex would silently shorten the run; drop it.
-                let Some(&v) = b.vertices.get(vk) else { break };
+        let comp_name = if path == "ROOT" {
+            ""
+        } else {
+            last_path_segment(path)
+        };
+        for run in &prepared.runs {
+            let mut pts = Vec::with_capacity(run.local_verts.len());
+            for &v in &run.local_verts {
                 let pt = transform_point(matrix, v);
                 pts.push([
                     round6(pt[0] * INCHES_TO_M),
@@ -624,24 +619,31 @@ impl<'a> Baker<'a> {
                     round6(-pt[1] * INCHES_TO_M),
                 ]);
             }
-            if pts.len() != run.vertex_ids.len() || pts.len() < 2 {
-                continue;
-            }
-            let layer = run_layer(p, b, &run.edge_ids, layer);
+            let run_layer_str = run
+                .explicit_layer
+                .clone()
+                .unwrap_or_else(|| layer.to_owned());
             // Root-level loose geometry has no name in the file: label it with
             // its layer and a sequence number, flagged as generated.
             let (name, name_is_generated) = if path == "ROOT" {
-                let seq = self.curve_seq.entry(layer.clone()).or_insert(0);
+                let seq = self.curve_seq.entry(run_layer_str.clone()).or_insert(0);
                 *seq += 1;
-                (format!("{layer}_{seq}"), true)
+                (format!("{run_layer_str}_{seq}"), true)
             } else {
-                (last_path_segment(path).to_owned(), false)
+                (comp_name.to_owned(), false)
             };
-            let arc = solve_run_arc(b, &run.edge_ids, Some(matrix), &pts, run.closed);
+            let arc = solve_run_arc_indexed(
+                b,
+                &run.edge_ids,
+                Some(matrix),
+                &pts,
+                run.closed,
+                Some(&prepared.curve_edge_counts),
+            );
             self.scene.curve_sets.push(CurveSetMetadata {
                 name,
                 definition_name: defname.to_owned(),
-                layer,
+                layer: run_layer_str,
                 path: path.to_owned(),
                 name_is_generated,
                 points_m: pts,
@@ -693,6 +695,7 @@ pub fn build_scene_raw(mut p: RawParsed, o: &ParseOptions) -> Result<Scene, SkpP
         curve_seq: HashMap::new(),
         definition_dicts: HashMap::new(),
         face_layers: HashMap::new(),
+        prepared_curves: HashMap::new(),
     };
     let children = baker.bake(
         &p.root.builder,

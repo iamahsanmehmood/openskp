@@ -1,6 +1,7 @@
 import 'dart:math';
 
 import 'core.dart';
+import 'curves.dart';
 import 'errors.dart';
 import 'face_groups.dart';
 import 'geometry.dart';
@@ -64,6 +65,37 @@ class InstancedMeshResource {
   });
 }
 
+/// One loose-edge run in definition-local space (metres, glTF Y-up).
+class LocalCurve {
+  final List<(double, double, double)> pointsM;
+  final bool closed;
+  final String layer;
+  final CurveArc? arc;
+
+  LocalCurve({
+    required this.pointsM,
+    required this.closed,
+    required this.layer,
+    this.arc,
+  });
+}
+
+/// A definition's loose edges, ready to be referenced by any number of
+/// [InstancedNode]s - the loose-edge counterpart of [InstancedMeshResource].
+class InstancedCurveResource {
+  final String id;
+  final int? definitionId;
+  final String definitionName;
+  final List<LocalCurve> curves;
+
+  InstancedCurveResource({
+    required this.id,
+    required this.definitionId,
+    required this.definitionName,
+    required this.curves,
+  });
+}
+
 const List<double> identityGltf = [
   1, 0, 0, 0,
   0, 1, 0, 0,
@@ -112,6 +144,7 @@ class InstancedNode {
   String guid;
 
   String? meshResourceId;
+  String? curveResourceId;
   List<InstancedNode> children;
 
   InstancedNode({
@@ -125,6 +158,7 @@ class InstancedNode {
     Map<String, Map<String, String>>? attributeDictionaries,
     this.guid = '',
     this.meshResourceId,
+    this.curveResourceId,
     List<InstancedNode>? children,
   })  : matrix = matrix ?? identityGltf,
         properties = properties ?? {},
@@ -147,6 +181,7 @@ class InstancedScene {
   SceneBounds? bounds;
   InstancedNode sceneHierarchy;
   List<InstancedMeshResource> meshResources;
+  List<InstancedCurveResource> curveResources;
   List<Map<String, dynamic>> gltfMaterials;
 
   /// Distinct texture images the placed materials use, deduplicated by
@@ -175,12 +210,14 @@ class InstancedScene {
     this.bounds,
     required this.sceneHierarchy,
     required this.meshResources,
+    List<InstancedCurveResource>? curveResources,
     required this.gltfMaterials,
     List<SceneTexture>? textures,
     Map<String, bool>? layerHidden,
     this.unreadRootEntities = 0,
     List<Page>? pages,
-  })  : textures = textures ?? [],
+  })  : curveResources = curveResources ?? [],
+        textures = textures ?? [],
         layerHidden = layerHidden ?? {},
         pages = pages ?? [];
 }
@@ -263,6 +300,10 @@ class InstancedSceneBuilder {
 
     final meshResources = <InstancedMeshResource>[];
     final resourceIdByKey = <String, String>{};
+    final curveResources = <InstancedCurveResource>[];
+    final curveResourceIdByKey = <String, String?>{};
+    final preparedCurvesCache = <int, PreparedDefCurves>{};
+    final includeCurveSets = options?.includeCurveSets ?? true;
     final faceLayerCache = <int, (String?, String?)>{};
     (String?, String?) getFaceLayerSummary(int? defId, GeometryBuilder builder) {
       final key = defId ?? -1;
@@ -273,6 +314,72 @@ class InstancedSceneBuilder {
       final summary = Geometry.summarizeFaceLayers(builder, layerIdToName);
       faceLayerCache[key] = summary;
       return summary;
+    }
+
+    String? curveResourceForBuilder(
+      GeometryBuilder builder,
+      String defName,
+      int? defId,
+      String layer,
+    ) {
+      if (!includeCurveSets) return null;
+      final effectiveLayer =
+          layer == 'Layer0' ? (getFaceLayerSummary(defId, builder).$1 ?? layer) : layer;
+      final key = '${defId ?? 'ROOT'}|$effectiveLayer';
+      if (curveResourceIdByKey.containsKey(key)) {
+        return curveResourceIdByKey[key];
+      }
+
+      final prepKey = defId ?? -1;
+      var prepared = preparedCurvesCache[prepKey];
+      if (prepared == null) {
+        prepared = prepareDefinitionCurves(builder, layerIdToName);
+        preparedCurvesCache[prepKey] = prepared;
+      }
+      if (prepared.runs.isEmpty) {
+        curveResourceIdByKey[key] = null;
+        return null;
+      }
+
+      final localCurves = <LocalCurve>[];
+      for (final run in prepared.runs) {
+        final pts = <(double, double, double)>[
+          for (final v in run.localVerts)
+            (
+              round6(v.$1 * inchesToM),
+              round6(v.$3 * inchesToM),
+              round6(-v.$2 * inchesToM),
+            ),
+        ];
+        final runLayer = run.explicitLayer ?? effectiveLayer;
+        localCurves.add(LocalCurve(
+          pointsM: pts,
+          closed: run.closed,
+          layer: runLayer,
+          arc: solveRunArc(
+            builder,
+            run.edgeIds,
+            null,
+            pts,
+            closed: run.closed,
+            curveEdgeCounts: prepared.curveEdgeCounts,
+          ),
+        ));
+      }
+      if (localCurves.isEmpty) {
+        curveResourceIdByKey[key] = null;
+        return null;
+      }
+
+      final resourceId = 'curve_${curveResources.length}';
+      curveResources.add(InstancedCurveResource(
+        id: resourceId,
+        definitionId: defId,
+        definitionName: defName,
+        curves: localCurves,
+      ));
+      curveResourceIdByKey[key] = resourceId;
+      return resourceId;
     }
 
     // Identity of a mesh resource: (definition, effective fallback color) -
@@ -598,6 +705,14 @@ class InstancedSceneBuilder {
                   instMaterial,
                 )
               : null,
+          curveResourceId: (refIdx != null && childDef != null)
+              ? curveResourceForBuilder(
+                  childDef.builder,
+                  childDef.name ?? '',
+                  refIdx,
+                  lName,
+                )
+              : null,
           children: children,
         ));
       }
@@ -611,6 +726,7 @@ class InstancedSceneBuilder {
     // component/group) is kept, as the baked path keeps it: it becomes
     // the root node's own mesh resource.
     final rootMeshResourceId = meshResourceForBuilder(parsed.root.builder, 'ROOT_MODEL', null, null, 'Layer0');
+    final rootCurveResourceId = curveResourceForBuilder(parsed.root.builder, 'ROOT_MODEL', null, 'Layer0');
 
     final sceneHierarchy = InstancedNode(
       name: 'ROOT',
@@ -619,6 +735,7 @@ class InstancedSceneBuilder {
       matrix: List<double>.from(identityGltf),
       positionMm: (0.0, 0.0, 0.0),
       meshResourceId: rootMeshResourceId,
+      curveResourceId: rootCurveResourceId,
       children: rootChildren,
     );
 
@@ -715,6 +832,7 @@ class InstancedSceneBuilder {
       bounds: bounds,
       sceneHierarchy: sceneHierarchy,
       meshResources: meshResources,
+      curveResources: curveResources,
       gltfMaterials: gltfMaterials,
       textures: textures,
       layerHidden: Map<String, bool>.from(parsed.layerHidden),

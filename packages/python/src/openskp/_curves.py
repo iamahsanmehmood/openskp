@@ -138,9 +138,64 @@ def _chain_loose_edges(builder: Any) -> List[Tuple[List[Any], List[Any], bool]]:
     return runs
 
 
+def _index_edge_curves(builder: Any) -> Dict[Any, int]:
+    """Count edges per curve id once for a definition (`O(|edge_curves|)`)."""
+    edge_curves = getattr(builder, "edge_curves", None) or {}
+    counts: Dict[Any, int] = {}
+    for cid in edge_curves.values():
+        if cid is not None:
+            counts[cid] = counts.get(cid, 0) + 1
+    return counts
+
+
+def _prepare_definition_curves(
+    builder: Any,
+    layer_id_to_name: Dict[Any, str],
+) -> Tuple[List[Tuple[List[Any], List[Any], bool, Optional[str]]], Optional[Dict[Any, int]]]:
+    """Chain a definition's loose edges, resolve local vertices and explicit
+    edge-layer overrides, and index curve edge counts once per definition."""
+    runs = _chain_loose_edges(builder)
+    if not runs:
+        return [], None
+
+    vertices = getattr(builder, "vertices", None) or {}
+    edge_layers = getattr(builder, "edge_layers", None) or {}
+    prepared: List[Tuple[List[Any], List[Any], bool, Optional[str]]] = []
+    for eids, chain, closed in runs:
+        local_verts: List[Any] = []
+        complete = True
+        for vk in chain:
+            v = vertices.get(vk)
+            if v is None:
+                complete = False
+                break
+            local_verts.append(v)
+        if not complete or len(local_verts) < 2:
+            continue
+
+        explicit_layer: Optional[str] = None
+        if edge_layers:
+            lc: Dict[Any, int] = {}
+            for eid in eids:
+                lid = edge_layers.get(eid)
+                if lid:
+                    lc[lid] = lc.get(lid, 0) + 1
+            if lc:
+                explicit_layer = layer_id_to_name.get(max(lc, key=lc.get))
+        prepared.append((eids, local_verts, closed, explicit_layer))
+
+    if not prepared:
+        return [], None
+
+    arc_curves = getattr(builder, "arc_curves", None) or {}
+    curve_counts = _index_edge_curves(builder) if arc_curves else None
+    return prepared, curve_counts
+
+
 def _solve_run_arc(builder: Any, eids: List[Any], matrix: Any,
                    pts: List[Tuple[float, float, float]],
-                   closed: bool = False) -> Optional[Dict[str, Any]]:
+                   closed: bool = False,
+                   curve_edge_counts: Optional[Dict[Any, int]] = None) -> Optional[Dict[str, Any]]:
     """Recover the analytic arc behind one loose-edge run, or ``None``.
 
     ``None`` is the answer for almost every run, and it is the *honest*
@@ -187,23 +242,41 @@ def _solve_run_arc(builder: Any, eids: List[Any], matrix: Any,
     frame = arc_curves.get(cid)
     if frame is None:
         return None
-    if sum(1 for v in edge_curves.values() if v == cid) != len(eids):
+    if curve_edge_counts is not None:
+        if curve_edge_counts.get(cid, 0) != len(eids):
+            return None
+    elif sum(1 for v in edge_curves.values() if v == cid) != len(eids):
         return None
 
+    folded = _core._fold_scale(matrix) if (matrix and len(matrix) >= 12) else None
+    mirrored = False
+    if folded is not None:
+        det = (
+            folded[0] * (folded[4] * folded[8] - folded[5] * folded[7])
+            - folded[1] * (folded[3] * folded[8] - folded[5] * folded[6])
+            + folded[2] * (folded[3] * folded[7] - folded[4] * folded[6])
+        )
+        mirrored = det < 0.0
+
     def _xf_point(p):
-        q = _core.transform_point(p, matrix)
-        return (q[0] * INCHES_TO_M, q[2] * INCHES_TO_M, -q[1] * INCHES_TO_M)
+        if folded is None:
+            q0, q1, q2 = p
+        else:
+            q0 = folded[0] * p[0] + folded[1] * p[1] + folded[2] * p[2] + folded[9]
+            q1 = folded[3] * p[0] + folded[4] * p[1] + folded[5] * p[2] + folded[10]
+            q2 = folded[6] * p[0] + folded[7] * p[1] + folded[8] * p[2] + folded[11]
+        return (q0 * INCHES_TO_M, q2 * INCHES_TO_M, -q1 * INCHES_TO_M)
 
     def _xf_vec(v):
         # The linear part only - a direction, not a position. `matrix` is
         # the same 13-double row-major transform _core.transform_point
         # takes, so the 3x3 occupies [0:9].
-        if not matrix or len(matrix) < 12:
+        if folded is None:
             x, y, z = v
         else:
-            x = matrix[0] * v[0] + matrix[1] * v[1] + matrix[2] * v[2]
-            y = matrix[3] * v[0] + matrix[4] * v[1] + matrix[5] * v[2]
-            z = matrix[6] * v[0] + matrix[7] * v[1] + matrix[8] * v[2]
+            x = folded[0] * v[0] + folded[1] * v[1] + folded[2] * v[2]
+            y = folded[3] * v[0] + folded[4] * v[1] + folded[5] * v[2]
+            z = folded[6] * v[0] + folded[7] * v[1] + folded[8] * v[2]
         return (x * INCHES_TO_M, z * INCHES_TO_M, -y * INCHES_TO_M)
 
     # Everything below is in the same frame the caller produced pts in:
@@ -230,7 +303,7 @@ def _solve_run_arc(builder: Any, eids: List[Any], matrix: Any,
     nlen = sum(t * t for t in na) ** 0.5
     if nlen <= 0.0:
         return None
-    nh = tuple(t / nlen for t in na)
+    nh = (-na[0] / nlen, -na[1] / nlen, -na[2] / nlen) if mirrored else tuple(t / nlen for t in na)
     cross = (nh[1] * xa[2] - nh[2] * xa[1],
              nh[2] * xa[0] - nh[0] * xa[2],
              nh[0] * xa[1] - nh[1] * xa[0])

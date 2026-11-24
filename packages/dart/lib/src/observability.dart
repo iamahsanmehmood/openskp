@@ -46,6 +46,11 @@ class ParseOptions {
   /// `'tag'` uses the colour of the face's tag as one double-sided primitive.
   final String unpaintedFaces;
 
+  /// Bake loose edges (edges no face uses) into `Scene.curveSets` and
+  /// `InstancedScene.curveResources`. Defaults to `true`; pass `false` to skip
+  /// loose-edge chaining and arc solving.
+  final bool includeCurveSets;
+
   /// Keep a texture that is not PNG or JPEG in `Scene.textures` and
   /// `InstancedScene.textures` in its own format (`image/tiff`, `image/gif`,
   /// `image/bmp`, `image/x-tga`, `image/webp`, `image/vnd.adobe.photoshop`,
@@ -57,6 +62,7 @@ class ParseOptions {
     this.onProgress,
     this.onLog,
     this.unpaintedFaces = 'style',
+    this.includeCurveSets = true,
     this.originalTextures = false,
   });
 }
