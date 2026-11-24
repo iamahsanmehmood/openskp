@@ -140,6 +140,7 @@ class RawDefinition {
   bool shadowsFaceSun;
   bool isImage;
   bool isGroup;
+  Map<String, Map<String, Object?>> attributeDictionaries;
   GeometryBuilder builder;
   RawDefinition({
     this.guid,
@@ -148,11 +149,40 @@ class RawDefinition {
     this.shadowsFaceSun = false,
     this.isImage = false,
     this.isGroup = false,
+    Map<String, Map<String, Object?>>? attributeDictionaries,
     GeometryBuilder? builder,
-  }) : builder = builder ?? GeometryBuilder();
+  })  : attributeDictionaries = attributeDictionaries ?? {},
+        builder = builder ?? GeometryBuilder();
 }
 
 class Geometry {
+  static const List<int> _windowsGuidOrder = [
+    3, 2, 1, 0, 5, 4, 7, 6, 8, 9, 10, 11, 12, 13, 14, 15,
+  ];
+
+  static String guidFromWindowsBytes(Uint8List bytes) {
+    if (bytes.length != 16) {
+      throw ArgumentError('GUID must contain exactly 16 bytes');
+    }
+    const hex = '0123456789ABCDEF';
+    final out = StringBuffer();
+    for (final idx in _windowsGuidOrder) {
+      final b = bytes[idx];
+      out.write(hex[b >> 4]);
+      out.write(hex[b & 0x0F]);
+    }
+    return out.toString();
+  }
+
+  static Map<String, Map<String, Object?>> entityAttributeDictionaries(
+      List<TlvNode> nodes) {
+    final entity = nodes.where((n) => n.tag == '8813').firstOrNull;
+    if (entity == null) return {};
+    final d007 = entity.children.where((c) => c.tag == 'D007').firstOrNull;
+    if (d007 == null) return {};
+    return extractAttributeDictionaries(d007);
+  }
+
   static TlvNode? findChildTag(List<TlvNode> nodes, String target) {
     for (final n in nodes) {
       if (n.tag == target) return n;
@@ -289,6 +319,7 @@ class Geometry {
     final tag = child.tag;
     final payload = child.payload;
     if (tag == 'AD38') return utf8.decode(payload, allowMalformed: true);
+    if (tag == 'AA38' && payload.length == 1) return payload[0] != 0;
     if (_vffAttrDoubleTags.contains(tag) && payload.length == 8) {
       return Tlv.readF64(payload, 0);
     }
@@ -307,6 +338,7 @@ class Geometry {
   /// contract - mirrors Python's `_stringify_vff_attr_value` exactly.
   static String stringifyVffAttrValue(Object? value) {
     if (value == null) return '';
+    if (value is bool) return value ? '1' : '0';
     if (value is List) {
       return value.map(stringifyVffAttrValue).join(',');
     }
@@ -584,7 +616,7 @@ class Geometry {
 
         final guidNode = findChildTag(nodesToSearch, '6819');
         if (guidNode != null && guidNode.payload.length == 16) {
-          guid = Tlv.toHexUpper(guidNode.payload);
+          guid = guidFromWindowsBytes(guidNode.payload);
         }
         final defIdxNode = findChildTag(nodesToSearch, '6719');
         if (defIdxNode != null) {
@@ -771,7 +803,7 @@ class Geometry {
         bool isGroup = false;
         for (final child in el.children) {
           if (child.tag == '7D15' && child.payload.length == 16) {
-            guid = Tlv.toHexUpper(child.payload);
+            guid = guidFromWindowsBytes(child.payload);
           } else if (child.tag == '7E15') {
             name = Tlv.decodeUtf8(child.payload);
           } else if (child.tag == '581B') {
@@ -810,6 +842,7 @@ class Geometry {
             shadowsFaceSun: shadowsFaceSun,
             isImage: isImage,
             isGroup: isGroup,
+            attributeDictionaries: entityAttributeDictionaries(el.children),
             builder: builder,
           );
         }

@@ -5,8 +5,8 @@ use std::collections::BTreeMap;
 
 use super::bytes::{parse_flat, parse_varint, read_f64, read_i32, read_u32, u32_at};
 use super::{
-    hex_upper, text, GeometryBuilder, RawArcFrame, RawDefinition, RawFace, RawInstance, Result,
-    Tag, TlvNode,
+    guid_from_windows_bytes, text, GeometryBuilder, RawArcFrame, RawDefinition, RawFace,
+    RawInstance, Result, Tag, TlvNode,
 };
 use crate::model::{
     stringify_attr_dict, CoEdge, ConstructionLine, ConstructionPoint, EntityId, ParsedAttrDict,
@@ -390,7 +390,7 @@ pub fn collect_geometry(es: &[TlvNode], b: &mut GeometryBuilder) -> Result<()> {
             };
             if let Some(g) = find_node(&e.children, "6819") {
                 if g.payload.len() == 16 {
-                    i.ref_guid = hex_upper(&g.payload);
+                    i.ref_guid = guid_from_windows_bytes(&g.payload)?;
                 }
             }
             if let Some(r) = find_node(&e.children, "6719") {
@@ -553,7 +553,7 @@ pub fn collect_definitions(
             let mut d = RawDefinition::default();
             for c in &e.children {
                 if c.tag == "7D15" && c.payload.len() == 16 {
-                    d.guid = hex_upper(&c.payload);
+                    d.guid = guid_from_windows_bytes(&c.payload)?;
                 } else if c.tag == "7E15" {
                     d.name = text(&c.payload);
                 } else if c.tag == "8315" && !c.payload.is_empty() {
@@ -573,6 +573,8 @@ pub fn collect_definitions(
                 }
             }
             collect_geometry(&e.children, &mut d.builder)?;
+            // Only the definition's own entity base, never dictionaries on child instances/faces.
+            collect_model_attribute_dictionaries(e, &mut d.parsed_dictionaries);
             if let Some(id) = entity_id(e)? {
                 out.insert(id, d);
             }

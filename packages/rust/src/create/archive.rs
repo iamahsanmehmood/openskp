@@ -224,6 +224,58 @@ fn random_u64() -> u64 {
     hasher.finish()
 }
 
+fn hex_digit(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
+/// Legacy CArchive UUID fields use Windows GUID byte order, unlike the canonical string.
+pub(super) fn archive_uuid(value: &str, ids: &mut IdSource) -> Result<[u8; 16], SkpWriteError> {
+    let mut bytes = if value.is_empty() {
+        ids.guid()
+    } else {
+        let raw = value.as_bytes();
+        let mut hex = [0u8; 32];
+        if raw.len() == 32 {
+            hex.copy_from_slice(raw);
+        } else if raw.len() == 36
+            && raw[8] == b'-'
+            && raw[13] == b'-'
+            && raw[18] == b'-'
+            && raw[23] == b'-'
+        {
+            let mut out_idx = 0;
+            for (idx, &b) in raw.iter().enumerate() {
+                if idx != 8 && idx != 13 && idx != 18 && idx != 23 {
+                    hex[out_idx] = b;
+                    out_idx += 1;
+                }
+            }
+        } else {
+            return Err(SkpWriteError::new(
+                "GUID must contain 32 hex digits or use 8-4-4-4-12 notation",
+            ));
+        }
+        let mut parsed = [0u8; 16];
+        for (idx, slot) in parsed.iter_mut().enumerate() {
+            let hi = hex_digit(hex[2 * idx])
+                .ok_or_else(|| SkpWriteError::new("GUID contains a non-hex digit"))?;
+            let lo = hex_digit(hex[2 * idx + 1])
+                .ok_or_else(|| SkpWriteError::new("GUID contains a non-hex digit"))?;
+            *slot = (hi << 4) | lo;
+        }
+        parsed
+    };
+    bytes[..4].reverse();
+    bytes[4..6].reverse();
+    bytes[6..8].reverse();
+    Ok(bytes)
+}
+
 // ---------------------------------------------------------------------------------------------
 // Shared write-side state and parameter bundles.
 // ---------------------------------------------------------------------------------------------
@@ -979,12 +1031,13 @@ impl ArchiveWriter {
     pub fn write_definition_tail(
         &mut self,
         name: &str,
+        guid: &[u8; 16],
         is_group: bool,
         ids: &mut IdSource,
     ) -> Result<usize, SkpWriteError> {
         self.buf.put_u32(0); // nrel: CRelationship count - always 0, not supported
         self.buf.put_u16(0);
-        self.buf.extend_from_slice(&ids.guid());
+        self.buf.extend_from_slice(guid);
         self.write_str(name)?;
         self.write_str("")?; // description - empty in ground truth
         self.write_str("")?; // second name field - empty in ground truth

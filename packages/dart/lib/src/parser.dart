@@ -215,6 +215,7 @@ class SkpFile {
       shadowsFaceSun: d.shadowsFaceSun,
       isImage: d.isImage,
       isGroup: d.isGroup,
+      attributeDictionaries: d.attributeDictionaries,
     );
 
     for (final entry in d.builder.vertices.entries) {
