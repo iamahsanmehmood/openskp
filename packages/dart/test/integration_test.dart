@@ -124,7 +124,8 @@ void main() {
     expect(scene.sceneHierarchy.definitionName, 'ROOT_MODEL');
     expect(scene.sceneHierarchy.children.length, greaterThan(0));
 
-    expect(scene.meshIndex.length, 43);
+    expect(scene.surfacePrimitives.length, 43);
+    expect(scene.meshIndex.length, 86);
     final firstMesh = scene.meshIndex.values.first;
     expect(firstMesh.name, isNotNull);
     expect(firstMesh.layer, isNotNull);
@@ -149,7 +150,9 @@ void main() {
     expect(scene.sceneHierarchy.name, 'ROOT');
     expect(scene.sceneHierarchy.definitionName, 'ROOT_MODEL');
 
-    expect(scene.meshIndex.length, 1);
+    // its faces have no paint: a front and a back copy (#533)
+    expect(scene.surfacePrimitives.length, 1);
+    expect(scene.meshIndex.length, 2);
     expect(scene.meshIndex.values.first.definitionName, 'ROOT_MODEL');
     expect(model.root.sectionPlanes, isEmpty);
     expect(model.root.texts, isEmpty);

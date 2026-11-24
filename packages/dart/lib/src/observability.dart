@@ -40,7 +40,17 @@ class ParseOptions {
   /// Called for start/stage/completion messages.
   final void Function(SkpLogLevel level, String message)? onLog;
 
-  const ParseOptions({this.onProgress, this.onLog});
+  /// Colour of a face side with no paint on it or on any enclosing instance
+  /// when building a scene: `'style'` (default) uses the model's front and
+  /// back face colours (`SkpModel.faceFrontColor` / `faceBackColor`), while
+  /// `'tag'` uses the colour of the face's tag as one double-sided primitive.
+  final String unpaintedFaces;
+
+  const ParseOptions({
+    this.onProgress,
+    this.onLog,
+    this.unpaintedFaces = 'style',
+  });
 }
 
 /// How often (in records/definitions/instances) to call onProgress during a

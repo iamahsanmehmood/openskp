@@ -178,7 +178,7 @@ String toIfc(
   final layerItems = <String, List<int>>{};
   final matStyleCache = <String, int>{};
 
-  for (final prim in scene.glbPrimitives) {
+  for (final prim in scene.surfacePrimitives) {
     final triCount = prim.indices.length ~/ 3;
     final vCount = prim.positions.length ~/ 3;
     if (triCount == 0 || vCount == 0) continue;

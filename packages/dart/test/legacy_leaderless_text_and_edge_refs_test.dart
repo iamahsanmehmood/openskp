@@ -32,7 +32,7 @@ void main() {
         equals(['Screen title', 'Callout']),
       );
       expect(model.unreadRootEntities, equals(0));
-      expect(scene.glbPrimitives.length, equals(1));
+      expect(scene.surfacePrimitives.length, equals(1));
       expect(instanced.meshResources.length, equals(1));
       expect(warnings, isEmpty);
     });
@@ -61,7 +61,7 @@ void main() {
       );
       expect(model.root.edges.length, equals(1));
       expect(model.unreadRootEntities, equals(2));
-      expect(scene.glbPrimitives.length, equals(1));
+      expect(scene.surfacePrimitives.length, equals(1));
       expect(instanced.meshResources.length, equals(1));
       expect(warnings.any((w) => w.contains('2 unread')), isTrue);
     });

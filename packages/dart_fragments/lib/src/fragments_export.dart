@@ -436,6 +436,7 @@ Uint8List toFragments(InstancedScene scene, [FragmentExportOptions options = con
       final trs = decomposeTrs(leaf.world);
       for (var primIdx = 0; primIdx < res.primitives.length; primIdx++) {
         final prim = res.primitives[primIdx];
+        if (prim.unpaintedBack) continue;
         final materialIndex = getMaterialIndex(prim.materialIndex);
         // Normally exactly one shell; more than one only when the
         // primitive's own triangle count exceeded what a single shell can
