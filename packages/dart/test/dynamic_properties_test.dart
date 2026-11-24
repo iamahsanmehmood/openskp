@@ -314,13 +314,8 @@ void main() {
       final w1 = findByName(scene.sceneHierarchy, 'W1');
 
       expect(w1, isNotNull);
-      // NOTE: unlike Python (whose properties is scoped to only the
-      // "dynamic_attributes" dict), Dart's properties is populated via the
-      // pre-existing, deliberately flatten-everything
-      // extractDynamicProperties - a real, established divergence
-      // predating this change. attributeDictionaries is the actually-
-      // correct, dictionary-scoped way to reach steelframer-dict's data.
-      expect(w1!.attributeDictionaries['steelframer-dict'], isNotNull);
+      expect(w1!.properties, isEmpty);
+      expect(w1.attributeDictionaries['steelframer-dict'], isNotNull);
       expect(w1.attributeDictionaries['steelframer-dict']!['generator'],
           'SteelFramer::Engine::PanelGenerator');
       expect(w1.attributeDictionaries['steelframer-dict']!['profile'], '362S200-43');
@@ -331,7 +326,8 @@ void main() {
       final w1 = findInstancedByName(instanced.sceneHierarchy, 'W1');
 
       expect(w1, isNotNull);
-      expect(w1!.attributeDictionaries['steelframer-dict'], isNotNull);
+      expect(w1!.properties, isEmpty);
+      expect(w1.attributeDictionaries['steelframer-dict'], isNotNull);
       expect(w1.attributeDictionaries['steelframer-dict']!['generator'],
           'SteelFramer::Engine::PanelGenerator');
       expect(w1.attributeDictionaries['steelframer-dict']!['profile'], '362S200-43');
@@ -350,6 +346,61 @@ void main() {
       );
 
       expect(meshWithDict, isNotEmpty);
+    });
+
+    for (final fx in ['nesting_2021.skp', 'instance_scale_term_2021.skp']) {
+      test('$fx: does not mix SU_InstanceSet boilerplate into scene properties (#642)', () {
+        final skp = SkpFile.open('${Directory.current.path}/test/fixtures/$fx');
+        final baked = skp.buildScene();
+        final instanced = skp.buildInstancedScene();
+        expect(baked.sceneHierarchy.children, isNotEmpty);
+        expect(instanced.sceneHierarchy.children, isNotEmpty);
+        for (final child in baked.sceneHierarchy.children) {
+          expect(child.properties, isEmpty);
+        }
+        for (final child in instanced.sceneHierarchy.children) {
+          expect(child.properties, isEmpty);
+        }
+      });
+    }
+
+    test('vff_dynamic_properties_2021.skp: keeps numeric dynamic_attributes in properties and separates other dicts (#642)', () {
+      final skp = SkpFile.open(
+        '${Directory.current.path}/test/fixtures/vff_dynamic_properties_2021.skp',
+      );
+      final baked = skp.buildScene();
+      final instanced = skp.buildInstancedScene();
+
+      const expectedProps = {
+        '_lenx_formula': 'Shelf!Width/2',
+        'copies': '3',
+        'lenx': '12.5',
+      };
+      const expectedDicts = {
+        'bim_meta': {
+          'category': 'Shelving',
+          'code': 'SH-01',
+          'weight_kg': '8.25',
+        },
+      };
+
+      expect(baked.sceneHierarchy.children, hasLength(1));
+      final bakedNode = baked.sceneHierarchy.children.single;
+      expect(bakedNode.name, 'SH-01');
+      expect(bakedNode.properties, equals(expectedProps));
+      expect(bakedNode.attributeDictionaries, equals(expectedDicts));
+
+      expect(baked.meshIndex.values, isNotEmpty);
+      for (final bakedMesh in baked.meshIndex.values) {
+        expect(bakedMesh.properties, equals(expectedProps));
+        expect(bakedMesh.attributeDictionaries, equals(expectedDicts));
+      }
+
+      expect(instanced.sceneHierarchy.children, hasLength(1));
+      final instancedNode = instanced.sceneHierarchy.children.single;
+      expect(instancedNode.name, 'SH-01');
+      expect(instancedNode.properties, equals(expectedProps));
+      expect(instancedNode.attributeDictionaries, equals(expectedDicts));
     });
   });
 
