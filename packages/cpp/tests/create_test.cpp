@@ -1489,5 +1489,139 @@ TEST(Create, MalformedUtf16AttributeStringsUseReplacementCharacters) {
       u8"\uFFFD\uFFFDY\uFFFD\uFFFD");
 }
 
+TEST(Create, MultipleAttributeDictsPreserveOrderAndRoundTripAcrossEntities) {
+  auto utf16_offset = [](const ByteBuffer& haystack, const std::string& ascii) -> std::size_t {
+    ByteBuffer needle;
+    needle.reserve(ascii.size() * 2);
+    for (char c : ascii) {
+      needle.push_back(static_cast<std::uint8_t>(c));
+      needle.push_back(0);
+    }
+    auto it = std::search(haystack.begin(), haystack.end(), needle.begin(), needle.end());
+    return it == haystack.end() ? std::string::npos
+                                : static_cast<std::size_t>(std::distance(haystack.begin(), it));
+  };
+
+  auto builder = create();
+  DefinitionOptions def_opts;
+  def_opts.attribute_dicts = {
+      {"z_def_first", {{"part", std::string{"Stud"}}}},
+      {"a_def_second", {{"rev", std::int32_t{2}}}},
+  };
+  auto& stud = builder->add_component_definition("Stud", def_opts);
+
+  FaceOptions face_opts;
+  face_opts.attribute_dicts = {
+      {"z_face_first", {{"area", 12.5}}},
+      {"a_face_second", {{"tag", std::string{"panel"}}}},
+  };
+  stud.add_face({{0, 0, 0}, {10, 0, 0}, {10, 10, 0}, {0, 10, 0}}, face_opts);
+
+  CircleOptions circle_opts;
+  circle_opts.attribute_dicts = {
+      {"z_circ_first", {{"r", 5.0}}},
+      {"a_circ_second", {{"seg", std::int32_t{24}}}},
+  };
+  stud.add_circle({0, 0, 5}, {0, 0, 1}, 5.0, circle_opts);
+  stud.close();
+
+  auto& assembly = builder->add_component_definition("Assembly");
+  InstanceOptions nested_inst;
+  nested_inst.attribute_dicts = {
+      {"z_nest_inst", {{"idx", std::int32_t{1}}}},
+      {"a_nest_inst", {{"code", std::string{"N1"}}}},
+  };
+  assembly.add_instance(stud, nested_inst);
+
+  GroupInstanceOptions nested_grp;
+  nested_grp.name = "NestedGroup";
+  nested_grp.attribute_dicts = {
+      {"z_nest_grp", {{"g", std::int32_t{1}}}},
+      {"a_nest_grp", {{"h", std::int32_t{2}}}},
+  };
+  assembly.add_group_instance(stud, nested_grp);
+  assembly.close();
+
+  GroupOptions grp_opts;
+  grp_opts.name = "W-1";
+  grp_opts.attribute_dicts = {
+      {"z_grp_first", {{"depth", 15.5}}},
+      {"m_grp_second", {{"sku", std::string{"GRP-1"}}}},
+      {"a_grp_third", {{"guide", std::int32_t{1}}}},
+  };
+  auto& grp = builder->add_group(grp_opts);
+  grp.add_face({{0, 0, 0}, {5, 0, 0}, {5, 5, 0}});
+  grp.close();
+
+  InstanceOptions inst_opts;
+  inst_opts.attribute_dicts = {
+      {"z_inst_first", {{"part", std::string{"Stud"}}, {"depth", 94.92}}},
+      {"dynamic_attributes", {{"count", std::int32_t{4}}}},
+      {"a_inst_third", {{"guide", std::int32_t{1}}}},
+  };
+  builder->add_instance(assembly, inst_opts);
+
+  const ByteBuffer bytes = builder->to_bytes();
+  // Exact caller-supplied list order (non-alphabetical) is preserved in the written archive.
+  EXPECT_LT(utf16_offset(bytes, "z_def_first"), utf16_offset(bytes, "a_def_second"));
+  EXPECT_LT(utf16_offset(bytes, "z_face_first"), utf16_offset(bytes, "a_face_second"));
+  EXPECT_LT(utf16_offset(bytes, "z_circ_first"), utf16_offset(bytes, "a_circ_second"));
+  EXPECT_LT(utf16_offset(bytes, "z_nest_inst"), utf16_offset(bytes, "a_nest_inst"));
+  EXPECT_LT(utf16_offset(bytes, "z_nest_grp"), utf16_offset(bytes, "a_nest_grp"));
+  EXPECT_LT(utf16_offset(bytes, "z_grp_first"), utf16_offset(bytes, "m_grp_second"));
+  EXPECT_LT(utf16_offset(bytes, "m_grp_second"), utf16_offset(bytes, "a_grp_third"));
+  EXPECT_LT(utf16_offset(bytes, "z_inst_first"), utf16_offset(bytes, "dynamic_attributes"));
+  EXPECT_LT(utf16_offset(bytes, "dynamic_attributes"), utf16_offset(bytes, "a_inst_third"));
+
+  const SkpModel model = SkpFile::from_buffer(bytes).parse();
+  ASSERT_EQ(model.root().instances.size(), 2u);
+  const auto& grp_inst = model.root().instances[0];
+  EXPECT_EQ(grp_inst.attribute_dictionaries.at("m_grp_second").at("sku").text, "GRP-1");
+  EXPECT_DOUBLE_EQ(grp_inst.attribute_dictionaries.at("z_grp_first").at("depth").number, 15.5);
+  EXPECT_EQ(grp_inst.attribute_dictionaries.at("a_grp_third").at("guide").integer, 1);
+
+  const auto& root_inst = model.root().instances[1];
+  EXPECT_EQ(root_inst.properties.at("count"), "4");
+  EXPECT_EQ(root_inst.attribute_dictionaries.at("z_inst_first").at("part").text, "Stud");
+  EXPECT_EQ(root_inst.attribute_dictionaries.at("a_inst_third").at("guide").integer, 1);
+}
+
+TEST(Create, PassingBothAttributesAndAttributeDictsThrows) {
+  auto builder = create();
+  auto& chair = builder->add_component_definition("Chair");
+  chair.add_face({{0, 0, 0}, {1, 0, 0}, {0, 1, 0}});
+  chair.close();
+
+  InstanceOptions bad_inst;
+  bad_inst.attributes["a"] = std::int32_t{1};
+  bad_inst.attribute_dicts = {{"b", {{"c", std::int32_t{2}}}}};
+  EXPECT_THROW(builder->add_instance(chair, bad_inst), SkpWriteError);
+
+  GroupOptions bad_grp;
+  bad_grp.attributes["a"] = std::int32_t{1};
+  bad_grp.attribute_dicts = {{"b", {{"c", std::int32_t{2}}}}};
+  EXPECT_THROW(builder->add_group(bad_grp), SkpWriteError);
+
+  GroupInstanceOptions bad_grp_inst;
+  bad_grp_inst.attributes["a"] = std::int32_t{1};
+  bad_grp_inst.attribute_dicts = {{"b", {{"c", std::int32_t{2}}}}};
+  EXPECT_THROW(builder->add_group_instance(chair, bad_grp_inst), SkpWriteError);
+
+  FaceOptions bad_face;
+  bad_face.attributes["a"] = std::int32_t{1};
+  bad_face.attribute_dicts = {{"b", {{"c", std::int32_t{2}}}}};
+  EXPECT_THROW(builder->add_face({{0, 0, 0}, {1, 0, 0}, {0, 1, 0}}, bad_face), SkpWriteError);
+
+  CircleOptions bad_circle;
+  bad_circle.attributes["a"] = std::int32_t{1};
+  bad_circle.attribute_dicts = {{"b", {{"c", std::int32_t{2}}}}};
+  EXPECT_THROW(builder->add_circle({0, 0, 0}, {0, 0, 1}, 5.0, bad_circle), SkpWriteError);
+
+  DefinitionOptions bad_def;
+  bad_def.attributes["a"] = std::int32_t{1};
+  bad_def.attribute_dicts = {{"b", {{"c", std::int32_t{2}}}}};
+  EXPECT_THROW(builder->add_component_definition("Bad", bad_def), SkpWriteError);
+}
+
 }  // namespace
 }  // namespace openskp

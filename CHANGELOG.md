@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — TypeScript, .NET, Dart, C++ & Rust: multiple attribute dictionaries per entity in `create` (#285)
+
+- Ports Python's `attribute_dicts` writer parameter (#256) to TypeScript (`attributeDicts` on
+  `AddFaceOptions`, `AddCircleOptions`, `AddInstanceOptions`, `AddGroupInstanceOptions`,
+  `AddComponentDefinitionOptions` and `AddGroupOptions`), .NET (`attributeDicts` on `AddFace`,
+  `AddCircle`, `AddInstance`, `AddGroupInstance`, `AddComponentDefinition` and `AddGroup`), Dart
+  (`attributeDicts` on `addFace`, `addCircle`, `addInstance`, `addGroupInstance`,
+  `addComponentDefinition` and `addGroup`), C++ (`attribute_dicts` on `FaceOptions`,
+  `CircleOptions`, `PolylineOptions`, `DefinitionOptions`, `InstanceOptions`, `GroupOptions` and
+  `GroupInstanceOptions`) and Rust (`attribute_dicts` on `FaceOptions`, `CircleOptions`,
+  `DefinitionOptions`, `InstanceOptions`, `GroupOptions` and `GroupInstanceOptions`), preserving
+  exact caller-supplied dictionary order and rejecting calls that pass both `attributes` and
+  `attribute_dicts`.
+
 ### Changed — Rust: scenes show unpainted faces in SketchUp's face colours (#533)
 
 - `build_scene()`, `build_instanced_scene()`, `to_glb()` and `to_instanced_glb()` now give a face side with no paint the colour SketchUp shows: the model's front face colour on the front and its back face colour on the back (`SkpModel::face_front_color` / `face_back_color`). Set `ParseOptions::unpainted_faces` (`ParseOptions::with_unpainted_faces("tag")`) for the previous tag-colour fallback; SketchUp 3 files without face colours still use the tag colour.

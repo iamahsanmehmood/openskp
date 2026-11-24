@@ -1669,7 +1669,8 @@ namespace OpenSkp
             IReadOnlyList<UvCorrespondence>? frontUv = null, IReadOnlyList<UvCorrespondence>? backUv = null,
             IReadOnlyDictionary<string, object>? attributes = null, string attributeDictName = "attributes",
             bool autoTriangulate = false,
-            IReadOnlyList<IReadOnlyList<(double X, double Y, double Z)>>? holes = null);
+            IReadOnlyList<IReadOnlyList<(double X, double Y, double Z)>>? holes = null,
+            IReadOnlyList<AttributeDict>? attributeDicts = null);
 
         void AddInstance(
             ComponentDefinitionBuilder definition, string? name = null,
@@ -1678,7 +1679,8 @@ namespace OpenSkp
             ((double X, double Y, double Z) Axis, double AngleRadians)? rotation = null,
             int? material = null, int? layer = null,
             IReadOnlyDictionary<string, object>? attributes = null, string attributeDictName = "attributes",
-            bool hidden = false);
+            bool hidden = false,
+            IReadOnlyList<AttributeDict>? attributeDicts = null);
     }
 
     /// <summary>Shared by SkpBuilder.AddFace and
@@ -1810,7 +1812,8 @@ namespace OpenSkp
             IReadOnlyList<UvCorrespondence>? frontUv = null, IReadOnlyList<UvCorrespondence>? backUv = null,
             IReadOnlyDictionary<string, object>? attributes = null, string attributeDictName = "attributes",
             bool autoTriangulate = false,
-            IReadOnlyList<IReadOnlyList<(double X, double Y, double Z)>>? holes = null)
+            IReadOnlyList<IReadOnlyList<(double X, double Y, double Z)>>? holes = null,
+            IReadOnlyList<AttributeDict>? attributeDicts = null)
         {
             CheckWritable("faces");
             Skp.CheckMaterialHandle(material, "material");
@@ -1820,12 +1823,12 @@ namespace OpenSkp
             {
                 throw new SkpWriteException("a face needs at least 3 points");
             }
-            var attributeDicts = BuildAttributeDicts(attributes, attributeDictName);
+            var resolvedAttributeDicts = BuildAttributeDicts(attributes, attributeDictName, attributeDicts);
             _newEntityCount += FaceWriting.WriteFaceOrTriangulate(
                 Skp.DefinitionWriter!, points, _vertexSlots, _edgeRegistry,
                 material ?? 0, layer ?? 0, backMaterial ?? 0,
                 hidden, softEdges, smoothEdges, hiddenEdges,
-                frontUv, backUv, attributeDicts, autoTriangulate,
+                frontUv, backUv, resolvedAttributeDicts, autoTriangulate,
                 holes: holes);
         }
 
@@ -1838,7 +1841,8 @@ namespace OpenSkp
             int? material = null, int? layer = null, int? backMaterial = null,
             bool hidden = false,
             IReadOnlyList<UvCorrespondence>? frontUv = null, IReadOnlyList<UvCorrespondence>? backUv = null,
-            IReadOnlyDictionary<string, object>? attributes = null, string attributeDictName = "attributes")
+            IReadOnlyDictionary<string, object>? attributes = null, string attributeDictName = "attributes",
+            IReadOnlyList<AttributeDict>? attributeDicts = null)
         {
             CheckWritable("faces");
             Skp.CheckMaterialHandle(material, "material");
@@ -1854,12 +1858,12 @@ namespace OpenSkp
             var xAxis = (radius * u.X, radius * u.Y, radius * u.Z);
             var curveParams = new ArcCurveParams(center, normal, xAxis, 0.0, 2.0 * Math.PI, radius, numSegments);
             var points = CreateMath.CirclePoints(center, radius, numSegments, u, w);
-            var attributeDicts = BuildAttributeDicts(attributes, attributeDictName);
+            var resolvedAttributeDicts = BuildAttributeDicts(attributes, attributeDictName, attributeDicts);
             _newEntityCount += writer.WriteFace(
                 points, _vertexSlots, _edgeRegistry,
                 material ?? 0, layer ?? 0, backMaterial ?? 0,
                 hidden, false, false, false,
-                frontUv, backUv, attributeDicts,
+                frontUv, backUv, resolvedAttributeDicts,
                 curveParams: curveParams);
         }
 
@@ -1921,7 +1925,8 @@ namespace OpenSkp
             ((double X, double Y, double Z) Axis, double AngleRadians)? rotation = null,
             int? material = null, int? layer = null,
             IReadOnlyDictionary<string, object>? attributes = null, string attributeDictName = "attributes",
-            bool hidden = false)
+            bool hidden = false,
+            IReadOnlyList<AttributeDict>? attributeDicts = null)
         {
             CheckWritable("instances");
             Skp.CheckMaterialHandle(material, "material");
@@ -1936,10 +1941,10 @@ namespace OpenSkp
                 throw new SkpWriteException($"component definition '{Name}' cannot nest an instance of itself");
             }
             var resolved = CreateMath.ResolveMatrix3x3(matrix3x3, rotation);
-            var attributeDicts = BuildAttributeDicts(attributes, attributeDictName);
+            var resolvedAttributeDicts = BuildAttributeDicts(attributes, attributeDictName, attributeDicts);
             _newEntityCount += Skp.DefinitionWriter!.WriteInstance(
                 definition.Slot, name ?? definition.Name, translation, resolved, material ?? 0, layer ?? 0,
-                attributeDicts, hidden);
+                resolvedAttributeDicts, hidden);
         }
 
         /// <summary>Place another, already-closed component definition
@@ -1959,7 +1964,8 @@ namespace OpenSkp
             ((double X, double Y, double Z) Axis, double AngleRadians)? rotation = null,
             int? material = null, int? layer = null,
             IReadOnlyDictionary<string, object>? attributes = null, string attributeDictName = "attributes",
-            bool hidden = false)
+            bool hidden = false,
+            IReadOnlyList<AttributeDict>? attributeDicts = null)
         {
             CheckWritable("groups");
             Skp.CheckMaterialHandle(material, "material");
@@ -1974,16 +1980,33 @@ namespace OpenSkp
                 throw new SkpWriteException($"component definition '{Name}' cannot nest a group instance of itself");
             }
             var resolved = CreateMath.ResolveMatrix3x3(matrix3x3, rotation);
-            var attributeDicts = BuildAttributeDicts(attributes, attributeDictName);
-            _newEntityCount += Skp.DefinitionWriter!.WriteGroup(definition.Slot, name ?? definition.Name, translation, resolved, material ?? 0, layer ?? 0, attributeDicts, hidden);
+            var resolvedAttributeDicts = BuildAttributeDicts(attributes, attributeDictName, attributeDicts);
+            _newEntityCount += Skp.DefinitionWriter!.WriteGroup(definition.Slot, name ?? definition.Name, translation, resolved, material ?? 0, layer ?? 0, resolvedAttributeDicts, hidden);
             // the definition behind a group is a group's definition to SketchUp: flag it (it closed earlier in the same definition buffer, which is only copied out on save). A definition placed both as a group and as a component instance reads as a group.
             if (definition._groupFlagPos.HasValue) Skp.DefinitionWriter!.PatchU32(definition._groupFlagPos.Value, 1u);
         }
 
-        private static List<AttributeDict>? BuildAttributeDicts(IReadOnlyDictionary<string, object>? attributes, string dictName)
+        internal static List<AttributeDict>? BuildAttributeDicts(
+            IReadOnlyDictionary<string, object>? attributes,
+            string dictName,
+            IReadOnlyList<AttributeDict>? attributeDicts = null)
         {
-            if (attributes == null || attributes.Count == 0) return null;
-            return new List<AttributeDict> { new AttributeDict(dictName, attributes) };
+            bool hasAttributes = attributes != null && attributes.Count > 0;
+            bool hasAttributeDicts = attributeDicts != null && attributeDicts.Count > 0;
+            if (hasAttributes && hasAttributeDicts)
+            {
+                throw new SkpWriteException(
+                    "pass either attributes/attributeDictName or attributeDicts, not both");
+            }
+            if (hasAttributes)
+            {
+                return new List<AttributeDict> { new AttributeDict(dictName, attributes!) };
+            }
+            if (hasAttributeDicts)
+            {
+                return new List<AttributeDict>(attributeDicts!);
+            }
+            return null;
         }
 
         public void Dispose()
@@ -2453,12 +2476,13 @@ namespace OpenSkp
         /// be string, int, or double) attached to the definition itself,
         /// under a dictionary named attributeDictName.</summary>
         public ComponentDefinitionBuilder AddComponentDefinition(
-            string name, IReadOnlyDictionary<string, object>? attributes = null, string attributeDictName = "attributes")
+            string name,
+            IReadOnlyDictionary<string, object>? attributes = null,
+            string attributeDictName = "attributes",
+            IReadOnlyList<AttributeDict>? attributeDicts = null)
         {
-            var attributeDicts = attributes != null && attributes.Count > 0
-                ? new List<AttributeDict> { new AttributeDict(attributeDictName, attributes) }
-                : null;
-            return StartDefinition(name, "AddComponentDefinition", null, attributeDicts);
+            var resolvedAttributeDicts = ComponentDefinitionBuilder.BuildAttributeDicts(attributes, attributeDictName, attributeDicts);
+            return StartDefinition(name, "AddComponentDefinition", null, resolvedAttributeDicts);
         }
 
         /// <summary>Start a new group. Use the returned object with a
@@ -2485,15 +2509,14 @@ namespace OpenSkp
             ((double X, double Y, double Z) Axis, double AngleRadians)? rotation = null,
             int? material = null, int? layer = null,
             IReadOnlyDictionary<string, object>? attributes = null, string attributeDictName = "attributes",
-            bool hidden = false)
+            bool hidden = false,
+            IReadOnlyList<AttributeDict>? attributeDicts = null)
         {
             CheckMaterialHandle(material, "material");
             CheckLayerHandle(layer);
             var resolved = CreateMath.ResolveMatrix3x3(matrix3x3, rotation);
-            var attributeDicts = attributes != null && attributes.Count > 0
-                ? new List<AttributeDict> { new AttributeDict(attributeDictName, attributes) }
-                : null;
-            var placement = new GroupPlacement(translation, resolved, material ?? 0, layer ?? 0, attributeDicts, hidden);
+            var resolvedAttributeDicts = ComponentDefinitionBuilder.BuildAttributeDicts(attributes, attributeDictName, attributeDicts);
+            var placement = new GroupPlacement(translation, resolved, material ?? 0, layer ?? 0, resolvedAttributeDicts, hidden);
             return StartDefinition(name ?? "Group", "AddGroup", placement, null);
         }
 
@@ -2530,7 +2553,8 @@ namespace OpenSkp
             ((double X, double Y, double Z) Axis, double AngleRadians)? rotation = null,
             int? material = null, int? layer = null,
             IReadOnlyDictionary<string, object>? attributes = null, string attributeDictName = "attributes",
-            bool hidden = false)
+            bool hidden = false,
+            IReadOnlyList<AttributeDict>? attributeDicts = null)
         {
             CheckMaterialHandle(material, "material");
             CheckLayerHandle(layer);
@@ -2545,13 +2569,11 @@ namespace OpenSkp
                     $"component definition '{definition.Name}' is still open - exit its using block before calling AddInstance");
             }
             var resolved = CreateMath.ResolveMatrix3x3(matrix3x3, rotation);
+            var resolvedAttributeDicts = ComponentDefinitionBuilder.BuildAttributeDicts(attributes, attributeDictName, attributeDicts);
             EnsureGeometryWriter();
-            var attributeDicts = attributes != null && attributes.Count > 0
-                ? new List<AttributeDict> { new AttributeDict(attributeDictName, attributes) }
-                : null;
             _newEntityCount += _geometryWriter!.WriteInstance(
                 definition.Slot, name ?? definition.Name, translation, resolved, material ?? 0, layer ?? 0,
-                attributeDicts, hidden);
+                resolvedAttributeDicts, hidden);
             _faceCount += 1; // reuses the "at least one root entity" check in ToBytes
         }
 
@@ -2718,7 +2740,8 @@ namespace OpenSkp
             IReadOnlyList<UvCorrespondence>? frontUv = null, IReadOnlyList<UvCorrespondence>? backUv = null,
             IReadOnlyDictionary<string, object>? attributes = null, string attributeDictName = "attributes",
             bool autoTriangulate = false,
-            IReadOnlyList<IReadOnlyList<(double X, double Y, double Z)>>? holes = null)
+            IReadOnlyList<IReadOnlyList<(double X, double Y, double Z)>>? holes = null,
+            IReadOnlyList<AttributeDict>? attributeDicts = null)
         {
             CheckMaterialHandle(material, "material");
             CheckMaterialHandle(backMaterial, "backMaterial");
@@ -2727,15 +2750,13 @@ namespace OpenSkp
             {
                 throw new SkpWriteException("a face needs at least 3 points");
             }
+            var resolvedAttributeDicts = ComponentDefinitionBuilder.BuildAttributeDicts(attributes, attributeDictName, attributeDicts);
             EnsureGeometryWriter();
-            var attributeDicts = attributes != null && attributes.Count > 0
-                ? new List<AttributeDict> { new AttributeDict(attributeDictName, attributes) }
-                : null;
             _newEntityCount += FaceWriting.WriteFaceOrTriangulate(
                 _geometryWriter!, points, _vertexSlots, _edgeRegistry,
                 material ?? 0, layer ?? 0, backMaterial ?? 0,
                 hidden, softEdges, smoothEdges, hiddenEdges,
-                frontUv, backUv, attributeDicts, autoTriangulate,
+                frontUv, backUv, resolvedAttributeDicts, autoTriangulate,
                 holes: holes);
             _faceCount += 1;
         }
@@ -2756,7 +2777,8 @@ namespace OpenSkp
             int? material = null, int? layer = null, int? backMaterial = null,
             bool hidden = false,
             IReadOnlyList<UvCorrespondence>? frontUv = null, IReadOnlyList<UvCorrespondence>? backUv = null,
-            IReadOnlyDictionary<string, object>? attributes = null, string attributeDictName = "attributes")
+            IReadOnlyDictionary<string, object>? attributes = null, string attributeDictName = "attributes",
+            IReadOnlyList<AttributeDict>? attributeDicts = null)
         {
             CheckMaterialHandle(material, "material");
             CheckMaterialHandle(backMaterial, "backMaterial");
@@ -2766,19 +2788,17 @@ namespace OpenSkp
                 throw new SkpWriteException($"num_segments must be between 3 and 255, got {numSegments}");
             }
             normal = CreateMath.Normalize3(normal);
+            var resolvedAttributeDicts = ComponentDefinitionBuilder.BuildAttributeDicts(attributes, attributeDictName, attributeDicts);
             EnsureGeometryWriter();
             var (u, w) = CreateMath.CircleBasis(normal);
             var xAxis = (radius * u.X, radius * u.Y, radius * u.Z);
             var curveParams = new ArcCurveParams(center, normal, xAxis, 0.0, 2.0 * Math.PI, radius, numSegments);
             var points = CreateMath.CirclePoints(center, radius, numSegments, u, w);
-            var attributeDicts = attributes != null && attributes.Count > 0
-                ? new List<AttributeDict> { new AttributeDict(attributeDictName, attributes) }
-                : null;
             _newEntityCount += _geometryWriter!.WriteFace(
                 points, _vertexSlots, _edgeRegistry,
                 material ?? 0, layer ?? 0, backMaterial ?? 0,
                 hidden, false, false, false,
-                frontUv, backUv, attributeDicts,
+                frontUv, backUv, resolvedAttributeDicts,
                 curveParams: curveParams);
             _faceCount += 1;
         }

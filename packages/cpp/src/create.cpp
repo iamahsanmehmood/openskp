@@ -767,8 +767,25 @@ AttributeDictList named_dicts(const std::map<std::string, AttributeDict>& dictio
   return dicts;
 }
 
+AttributeDictList resolve_attribute_dicts(const AttributeDict& attributes, const std::string& name,
+                                          const AttributeDictList& attribute_dicts) {
+  if (!attributes.empty() && !attribute_dicts.empty()) {
+    throw SkpWriteError("pass either attributes/attribute_dict_name or attribute_dicts, not both");
+  }
+  if (!attributes.empty()) return {{name, attributes}};
+  return attribute_dicts;
+}
+
 AttributeDictList named_dicts(const std::map<std::string, AttributeDict>& dictionaries,
-                              const AttributeDict& attributes, const std::string& name) {
+                              const AttributeDict& attributes, const std::string& name,
+                              const AttributeDictList& attribute_dicts = {}) {
+  if (!attribute_dicts.empty()) {
+    if (!attributes.empty() || !dictionaries.empty()) {
+      throw SkpWriteError(
+          "pass either attributes/attribute_dict_name or attribute_dicts, not both");
+    }
+    return attribute_dicts;
+  }
   if (!dictionaries.empty()) return named_dicts(dictionaries);
   AttributeDictList dicts;
   if (!attributes.empty()) dicts.emplace_back(name, attributes);
@@ -1844,9 +1861,8 @@ int do_add_circle(ArchiveWriter& writer, std::map<Point3, int>& vertex_slots,
       throw SkpWriteError("circle tessellation must have num_segments vertices");
     points = options.vertices;
   }
-  AttributeDictList dicts;
-  if (!options.attributes.empty())
-    dicts.emplace_back(options.attribute_dict_name, options.attributes);
+  AttributeDictList dicts = resolve_attribute_dicts(options.attributes, options.attribute_dict_name,
+                                                    options.attribute_dicts);
   return writer.write_face(points, vertex_slots, edge_registry, options.material.value_or(0),
                            options.layer.value_or(0), options.back_material.value_or(0),
                            options.hidden, false, false, false, options.front_uv, options.back_uv,
@@ -1894,10 +1910,11 @@ int do_add_polyline(ArchiveWriter& writer, std::map<Point3, int>& vertex_slots,
                     EdgeRegistry& edge_registry, const std::vector<Point3>& points,
                     const PolylineOptions& options) {
   if (points.size() < 2) throw SkpWriteError("a polyline needs at least 2 points");
-  return writer.write_polyline(
-      points, vertex_slots, edge_registry, options.closed, options.hidden_edges, options.soft_edges,
-      options.smooth_edges, options.locked, options.casts_shadows, options.receives_shadows,
-      named_dicts(options.dictionaries, options.attributes, options.attribute_dict_name));
+  return writer.write_polyline(points, vertex_slots, edge_registry, options.closed,
+                               options.hidden_edges, options.soft_edges, options.smooth_edges,
+                               options.locked, options.casts_shadows, options.receives_shadows,
+                               named_dicts(options.dictionaries, options.attributes,
+                                           options.attribute_dict_name, options.attribute_dicts));
 }
 
 // A caller's front_uv/back_uv pins are in TILES of the image ((1, 0) = one full repeat
@@ -2277,7 +2294,8 @@ void ComponentDefinitionBuilder::add_face(const std::vector<Point3>& points,
   detail::check_layer_handle(*impl_->skp, options.layer);
   if (points.size() < 3) throw SkpWriteError("a face needs at least 3 points");
   detail::AttributeDictList dicts =
-      detail::named_dicts(options.dictionaries, options.attributes, options.attribute_dict_name);
+      detail::named_dicts(options.dictionaries, options.attributes, options.attribute_dict_name,
+                          options.attribute_dicts);
   auto front_uv = detail::scale_pins(options.front_uv, impl_->skp->impl_->applied_sizes,
                                      options.material.value_or(0));
   auto back_uv = detail::scale_pins(options.back_uv, impl_->skp->impl_->applied_sizes,
@@ -2374,9 +2392,8 @@ void ComponentDefinitionBuilder::add_instance(const ComponentDefinitionBuilder& 
                         "' cannot nest an instance of itself");
   }
   auto matrix = detail::resolve_matrix3x3(options.matrix3x3, options.rotation);
-  detail::AttributeDictList dicts;
-  if (!options.attributes.empty())
-    dicts.emplace_back(options.attribute_dict_name, options.attributes);
+  detail::AttributeDictList dicts = detail::resolve_attribute_dicts(
+      options.attributes, options.attribute_dict_name, options.attribute_dicts);
   impl_->new_entity_count += impl_->writer->write_instance(
       definition.slot(), options.name.value_or(definition.name()), options.translation, matrix,
       options.material.value_or(0), options.layer.value_or(0), dicts, options.hidden,
@@ -2398,10 +2415,9 @@ void ComponentDefinitionBuilder::add_group_instance(const ComponentDefinitionBui
                         "' cannot nest a group instance of itself");
   }
   auto matrix = detail::resolve_matrix3x3(options.matrix3x3, options.rotation);
+  detail::AttributeDictList dicts = detail::resolve_attribute_dicts(
+      options.attributes, options.attribute_dict_name, options.attribute_dicts);
   definition.impl_->mark_as_group();
-  detail::AttributeDictList dicts;
-  if (!options.attributes.empty())
-    dicts.emplace_back(options.attribute_dict_name, options.attributes);
   impl_->new_entity_count += impl_->writer->write_group(
       definition.slot(), options.name.value_or(definition.name()), options.translation, matrix,
       options.material.value_or(0), options.layer.value_or(0), dicts, options.hidden,
@@ -2535,12 +2551,9 @@ int SkpBuilder::add_layer(const std::string& name, const LayerOptions& options) 
 ComponentDefinitionBuilder& SkpBuilder::add_component_definition(const std::string& name,
                                                                  const DefinitionOptions& options) {
   detail::archive_uuid(options.guid);
-  detail::AttributeDictList dicts;
-  if (!options.dictionaries.empty()) {
-    for (const auto& kv : options.dictionaries) dicts.emplace_back(kv.first, kv.second);
-  } else if (!options.attributes.empty()) {
-    dicts.emplace_back(options.attribute_dict_name, options.attributes);
-  }
+  detail::AttributeDictList dicts =
+      detail::named_dicts(options.dictionaries, options.attributes, options.attribute_dict_name,
+                          options.attribute_dicts);
   auto [slot, count_patch_pos] =
       impl_->begin_definition_header("add_component_definition", dicts, options.hidden);
   auto cdb_impl = std::make_unique<ComponentDefinitionBuilder::Impl>();
@@ -2551,6 +2564,7 @@ ComponentDefinitionBuilder& SkpBuilder::add_component_definition(const std::stri
   cdb_impl->writer = &*impl_->definition_writer;
   cdb_impl->options = options;
   cdb_impl->options.attributes.clear();
+  cdb_impl->options.attribute_dicts.clear();
   cdb_impl->options.dictionaries.clear();
   impl_->definitions.push_back(std::unique_ptr<ComponentDefinitionBuilder>(
       new ComponentDefinitionBuilder(std::move(cdb_impl))));
@@ -2563,6 +2577,8 @@ ComponentDefinitionBuilder& SkpBuilder::add_group(const GroupOptions& options) {
   detail::check_material_handle(*this, options.material, "material");
   detail::check_layer_handle(*this, options.layer);
   auto matrix = detail::resolve_matrix3x3(options.matrix3x3, options.rotation);
+  detail::AttributeDictList group_dicts = detail::resolve_attribute_dicts(
+      options.attributes, options.attribute_dict_name, options.attribute_dicts);
   auto [slot, count_patch_pos] = impl_->begin_definition_header("add_group", {}, false);
   auto cdb_impl = std::make_unique<ComponentDefinitionBuilder::Impl>();
   cdb_impl->skp = this;
@@ -2571,9 +2587,6 @@ ComponentDefinitionBuilder& SkpBuilder::add_group(const GroupOptions& options) {
   cdb_impl->count_patch_pos = count_patch_pos;
   cdb_impl->writer = &*impl_->definition_writer;
   cdb_impl->mark_as_group();
-  detail::AttributeDictList group_dicts;
-  if (!options.attributes.empty())
-    group_dicts.emplace_back(options.attribute_dict_name, options.attributes);
   cdb_impl->group_placement =
       ComponentDefinitionBuilder::Impl::GroupPlacement{options.translation,
                                                        matrix,
@@ -2605,10 +2618,9 @@ void SkpBuilder::add_instance(const ComponentDefinitionBuilder& definition,
                         "' is still open - call close() on it before calling add_instance");
   }
   auto matrix = detail::resolve_matrix3x3(options.matrix3x3, options.rotation);
+  detail::AttributeDictList dicts = detail::resolve_attribute_dicts(
+      options.attributes, options.attribute_dict_name, options.attribute_dicts);
   impl_->ensure_geometry_writer();
-  detail::AttributeDictList dicts;
-  if (!options.attributes.empty())
-    dicts.emplace_back(options.attribute_dict_name, options.attributes);
   impl_->new_entity_count += impl_->geometry_writer->write_instance(
       definition.slot(), options.name.value_or(definition.name()), options.translation, matrix,
       options.material.value_or(0), options.layer.value_or(0), dicts, options.hidden,
@@ -2630,11 +2642,10 @@ void SkpBuilder::add_group_instance(const ComponentDefinitionBuilder& definition
                         "' is still open - call close() on it before calling add_group_instance");
   }
   auto matrix = detail::resolve_matrix3x3(options.matrix3x3, options.rotation);
+  detail::AttributeDictList dicts = detail::resolve_attribute_dicts(
+      options.attributes, options.attribute_dict_name, options.attribute_dicts);
   impl_->ensure_geometry_writer();
   definition.impl_->mark_as_group();
-  detail::AttributeDictList dicts;
-  if (!options.attributes.empty())
-    dicts.emplace_back(options.attribute_dict_name, options.attributes);
   impl_->new_entity_count += impl_->geometry_writer->write_group(
       definition.slot(), options.name.value_or(definition.name()), options.translation, matrix,
       options.material.value_or(0), options.layer.value_or(0), dicts, options.hidden,
@@ -2674,9 +2685,10 @@ void SkpBuilder::add_face(const std::vector<Point3>& points, const FaceOptions& 
   detail::check_material_handle(*this, options.back_material, "back_material");
   detail::check_layer_handle(*this, options.layer);
   if (points.size() < 3) throw SkpWriteError("a face needs at least 3 points");
-  impl_->ensure_geometry_writer();
   detail::AttributeDictList dicts =
-      detail::named_dicts(options.dictionaries, options.attributes, options.attribute_dict_name);
+      detail::named_dicts(options.dictionaries, options.attributes, options.attribute_dict_name,
+                          options.attribute_dicts);
+  impl_->ensure_geometry_writer();
   auto front_uv =
       detail::scale_pins(options.front_uv, impl_->applied_sizes, options.material.value_or(0));
   auto back_uv =
@@ -2695,6 +2707,8 @@ void SkpBuilder::add_circle(Point3 center, Point3 normal, double radius,
   detail::check_material_handle(*this, options.material, "material");
   detail::check_material_handle(*this, options.back_material, "back_material");
   detail::check_layer_handle(*this, options.layer);
+  detail::resolve_attribute_dicts(options.attributes, options.attribute_dict_name,
+                                  options.attribute_dicts);
   impl_->ensure_geometry_writer();
   impl_->new_entity_count +=
       detail::do_add_circle(*impl_->geometry_writer, impl_->vertex_slots, impl_->edge_registry,
