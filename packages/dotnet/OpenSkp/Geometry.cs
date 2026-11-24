@@ -24,6 +24,7 @@ namespace OpenSkp
 
     internal sealed class GeometryBuilderInstance
     {
+        public string PersistentId = "";
         public long Offset;
         public long? Id;
         public string? RefGuid;
@@ -674,11 +675,28 @@ namespace OpenSkp
                     long? instMatId = null;
                     bool instHidden = false;
                     long? instLayerId = null;
+                    string instPid = "";
                     Dictionary<string, string>? instProperties = null;
                     Dictionary<string, Dictionary<string, object?>>? instAttributeDicts = null;
                     var instD007 = el.Children.FirstOrDefault(c => c.Tag == "D007");
                     if (instD007 != null)
                     {
+                        var dc05 = instD007.Children.FirstOrDefault(c => c.Tag == "DC05");
+                        if (dc05 != null && dc05.Payload.Length > 0)
+                        {
+                            byte[] idb = dc05.Payload;
+                            if (idb.Length >= 6 && idb[0] == 0xDE && idb[1] == 0x05)
+                            {
+                                uint z = Tlv.ReadU32(idb, 2);
+                                if (z <= idb.Length - 6)
+                                {
+                                    var sub = new byte[z];
+                                    Array.Copy(idb, 6, sub, 0, (int)z);
+                                    idb = sub;
+                                }
+                            }
+                            instPid = Tlv.ToHexUpper(idb);
+                        }
                         var d107 = instD007.Children.FirstOrDefault(c => c.Tag == "D107");
                         if (d107 != null)
                         {
@@ -702,6 +720,7 @@ namespace OpenSkp
 
                     builder.Instances.Add(new GeometryBuilderInstance
                     {
+                        PersistentId = instPid,
                         Offset = el.Offset,
                         Id = ExtractEntityId(el),
                         RefGuid = guid,

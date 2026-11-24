@@ -379,6 +379,8 @@ std::u16string utf8_to_utf16(const std::string& s) {
         throw SkpWriteError("invalid UTF-8 string passed to openskp::create");
       cp = (cp << 6) | (ck & 0x3F);
     }
+    if ((cp >= 0xD800 && cp <= 0xDFFF) || cp > 0x10FFFF)
+      throw SkpWriteError("invalid UTF-8 string passed to openskp::create");
     i += static_cast<std::size_t>(len);
     if (cp <= 0xFFFF) {
       out.push_back(static_cast<char16_t>(cp));
@@ -1047,14 +1049,17 @@ class ArchiveWriter {
   // (generated via SketchUpAPI and harvested - see docs/dimension-record-notes.md): connection
   // type 1 with the point stored inline in each connection block and null object refs. Free
   // dimensions render in any orientation; anchored (type 2) dimensions are a future refinement.
-  void write_dimension(Point3 p1, Point3 p2, double offset,
-                       std::optional<Point3> offset_vector = std::nullopt,
-                       const DimensionOptions& options = {}) {
+  static std::tuple<Point3, Point3, double> prepare_dimension(
+      Point3 p1, Point3 p2, double offset, std::optional<Point3> offset_vector = std::nullopt) {
+    for (int i = 0; i < 3; ++i) {
+      if (!std::isfinite(p1[i]) || !std::isfinite(p2[i]))
+        throw SkpWriteError("add_dimension coordinates must be finite");
+    }
     if (p1 == p2) throw SkpWriteError("add_dimension endpoints coincide");
     Point3 normal{0, 0, 1}, xaxis{1, 0, 0};
     if (offset_vector) {
       for (int i = 0; i < 3; ++i) {
-        if (!std::isfinite(p1[i]) || !std::isfinite(p2[i]) || !std::isfinite((*offset_vector)[i]))
+        if (!std::isfinite((*offset_vector)[i]))
           throw SkpWriteError("add_dimension coordinates must be finite");
         xaxis[i] = p2[i] - p1[i];
       }
@@ -1073,7 +1078,17 @@ class ArchiveWriter {
         const Point3 seed = std::abs(xaxis[2]) < 0.9 ? Point3{0, 0, 1} : Point3{0, 1, 0};
         normal = normalize3(cross3(xaxis, seed));
       }
+    } else if (!std::isfinite(offset)) {
+      throw SkpWriteError("add_dimension offset must be finite");
     }
+    return {normal, xaxis, offset};
+  }
+
+  void write_dimension(Point3 p1, Point3 p2, double offset,
+                       std::optional<Point3> offset_vector = std::nullopt,
+                       const DimensionOptions& options = {}) {
+    auto [normal, xaxis, resolved_offset] = prepare_dimension(p1, p2, offset, offset_vector);
+    offset = resolved_offset;
     new_of_known_class("CDimensionLinear", kDimensionLinearSchema);
     preamble();
     drawbase(0, options.layer.value_or(0), options.hidden);
@@ -1114,12 +1129,14 @@ class ArchiveWriter {
   // only produces SCREEN texts - its two 0.5 doubles are screen fractions): screen slot zeroed,
   // the free-connection block dimensions use ([u32 1][u32 4][point3d]), the label's world
   // position in the placement tail, and leader type 2 (pushpin) before the arrow delimiter.
-  void write_text(const std::string& text, Point3 point, Point3 leader,
-                  const TextOptions& options) {
+  static Point3 prepare_text(const std::string& text, Point3 point, Point3 leader,
+                             const TextOptions& options) {
+    const std::u16string encoded = utf8_to_utf16(text);
+    if (encoded.size() >= 0xFFFFFFFFu) throw SkpWriteError("string too long to encode");
     Point3 label{};
     for (int i = 0; i < 3; ++i) {
       label[i] = point[i] + leader[i];
-      if (!std::isfinite(point[i]) || !std::isfinite(label[i]))
+      if (!std::isfinite(point[i]) || !std::isfinite(leader[i]) || !std::isfinite(label[i]))
         throw SkpWriteError("add_text coordinates must be finite");
     }
     if (options.leader_type < 0 || options.leader_type > 2 || options.arrow_type < 0 ||
@@ -1129,6 +1146,12 @@ class ArchiveWriter {
       for (double value : *options.screen_position)
         if (!std::isfinite(value) || value < 0 || value > 1)
           throw SkpWriteError("add_text screen position must be between zero and one");
+    return label;
+  }
+
+  void write_text(const std::string& text, Point3 point, Point3 leader,
+                  const TextOptions& options) {
+    const Point3 label = prepare_text(text, point, leader, options);
     new_of_known_class("CText", kTextSchema);
     preamble();
     drawbase(0, options.layer.value_or(0), options.hidden);
@@ -2740,6 +2763,7 @@ void SkpBuilder::add_polyline(const std::vector<Point3>& points, const PolylineO
 }
 
 void SkpBuilder::add_dimension(Point3 p1, Point3 p2, double offset) {
+  detail::ArchiveWriter::prepare_dimension(p1, p2, offset);
   impl_->ensure_geometry_writer();
   impl_->geometry_writer->write_dimension(p1, p2, offset);
   impl_->new_entity_count += 1;
@@ -2753,6 +2777,7 @@ void SkpBuilder::add_dimension(Point3 p1, Point3 p2, Point3 offset_vector) {
 void SkpBuilder::add_dimension(Point3 p1, Point3 p2, Point3 offset_vector,
                                const DimensionOptions& options) {
   detail::check_layer_handle(*this, options.layer);
+  detail::ArchiveWriter::prepare_dimension(p1, p2, 0.0, offset_vector);
   impl_->ensure_geometry_writer();
   impl_->geometry_writer->write_dimension(p1, p2, 0.0, offset_vector, options);
   impl_->new_entity_count += 1;
@@ -2766,6 +2791,7 @@ void SkpBuilder::add_text(const std::string& text, Point3 point, Point3 leader) 
 void SkpBuilder::add_text(const std::string& text, Point3 point, Point3 leader,
                           const TextOptions& options) {
   detail::check_layer_handle(*this, options.layer);
+  detail::ArchiveWriter::prepare_text(text, point, leader, options);
   impl_->ensure_geometry_writer();
   impl_->geometry_writer->write_text(text, point, leader, options);
   impl_->new_entity_count += 1;

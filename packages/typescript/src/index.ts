@@ -30,7 +30,13 @@ import {
   SceneOptions,
 } from './model';
 import { isLegacy, parseLegacyToRaw } from './legacy';
-import { scanVertexPositions, scanInstanceTransforms, findPageNode, parsePages, parseDimensions } from './pages-dimensions';
+import {
+  scanVertexPositions,
+  findPageNode,
+  parsePages,
+  assignVffAnnotations,
+  RawDimension,
+} from './pages-dimensions';
 import { encodeIndices } from './gltf-indices';
 import { createGlb } from './instanced-glb';
 import { buildInstancedSceneFromParsed, InstancedScene } from './instanced';
@@ -84,6 +90,8 @@ export type {
   AddComponentDefinitionOptions,
   AddGroupOptions,
   AddImageOptions,
+  DimensionOptions,
+  TextOptions,
 } from './create';
 export { openExisting } from './edit';
 
@@ -265,7 +273,6 @@ function parseToRaw(buffer: ArrayBuffer, options?: ParseOptions): ParsedRawData 
   const defsDict = new Map<number | string, ParsedDefinition>();
   const rootBuilder = new GeometryBuilder();
   const vertexPositions = new Map<string, [number, number, number]>();
-  const instanceWorld = new Map<string, number[] | null>();
   let pageNode: TlvNode | null = null;
 
   for (const { index, total, node: el } of iterTopLevelLazy(modelData, 0, modelData.length)) {
@@ -274,7 +281,6 @@ function parseToRaw(buffer: ArrayBuffer, options?: ParseOptions): ParsedRawData 
       collectMaterialIds([el]);
       collectDefs([el], defsDict, options);
       scanVertexPositions(el, vertexPositions);
-      scanInstanceTransforms(el, instanceWorld);
       if (pageNode === null) {
         pageNode = findPageNode(el);
       }
@@ -330,6 +336,9 @@ function parseToRaw(buffer: ArrayBuffer, options?: ParseOptions): ParsedRawData 
     layerHidden.set('Layer0', false);
   }
 
+  const vffDimensions: RawDimension[] = [];
+  assignVffAnnotations(modelData, vertexPositions, rootBuilder, defsDict, vffDimensions);
+
   defsDict.set('ROOT', {
     guid: 'ROOT',
     name: 'ROOT_MODEL',
@@ -347,7 +356,7 @@ function parseToRaw(buffer: ArrayBuffer, options?: ParseOptions): ParsedRawData 
     layerHidden,
     layerIdToName,
     pages: parsePages(pageNode),
-    dimensions: parseDimensions(modelData, vertexPositions, instanceWorld),
+    dimensions: vffDimensions,
     materialIdToName,
     materialsMap,
     materialsByFolder,

@@ -542,4 +542,147 @@ TEST(PagesDimensions, DrawingPropertiesComeFromDimensionNotItsConnections) {
   EXPECT_TRUE(dims[0].hidden);
 }
 
+TEST(PagesDimensions, VffDoublingChainComposesOnlyReferencedPathAndCapsVisits) {
+  const auto chain_model = SkpFile::open(test::fixture("vff_doubling_chain.skp")).parse();
+  EXPECT_EQ(chain_model.definitions.size(), 22u);
+  EXPECT_EQ(chain_model.root().instances.size(), 2u);
+
+  constexpr int kLevels = 22;
+  auto make_parsed = [&]() {
+    RawParsed p;
+    p.definitions[0] = RawDefinition{};
+    for (int i = 1; i < kLevels; ++i) {
+      RawDefinition d;
+      for (int j = 0; j < 2; ++j) {
+        RawInstance inst;
+        inst.persistent_id =
+            hex_upper(ByteBuffer{static_cast<std::uint8_t>(i), static_cast<std::uint8_t>(j + 1)});
+        inst.ref_idx = i - 1;
+        inst.matrix = {1, 0, 0, 0, 1, 0, 0, 0, 1, j == 0 ? 0.0 : 10.0, 0.0, 0.0, 1.0};
+        d.builder.instances.push_back(std::move(inst));
+      }
+      p.definitions[i] = std::move(d);
+    }
+    for (int j = 0; j < 2; ++j) {
+      RawInstance inst;
+      inst.persistent_id = hex_upper(
+          ByteBuffer{static_cast<std::uint8_t>(kLevels), static_cast<std::uint8_t>(j + 1)});
+      inst.ref_idx = kLevels - 1;
+      inst.matrix = {1, 0, 0, 0, 1, 0, 0, 0, 1, j == 0 ? 0.0 : 10.0, 0.0, 0.0, 1.0};
+      p.root.builder.instances.push_back(std::move(inst));
+    }
+    return p;
+  };
+
+  ByteBuffer path_bytes;
+  for (int i = kLevels; i >= 1; --i) {
+    path_bytes.push_back(2);
+    path_bytes.push_back(static_cast<std::uint8_t>(i));
+    path_bytes.push_back(2);
+  }
+  const ByteBuffer vid_zero{0xaa, 0xbb, 0x00};
+  const ByteBuffer vid{0xaa, 0xbb, 0x01};
+  const ByteBuffer vid_b{0xaa, 0xbb, 0x02};
+  const std::map<std::string, Vec3> id2pos{
+      {hex_upper(vid_zero), Vec3{0.0, 0.0, 0.0}},
+      {hex_upper(vid), Vec3{4.0, 0.0, 0.0}},
+      {hex_upper(vid_b), Vec3{5.0, 0.0, 0.0}},
+  };
+
+  const auto dim_blob = [&](const ByteBuffer& raw_53fe) {
+    auto ref_tlv = tlv(0x53fc, test::concat({tlv(0x53fd, vid), tlv(0x53fe, raw_53fe)}));
+    auto conn_a =
+        tlv(0x5bcd, tlv(0x5208, test::concat({tlv(0x5209, {2, 0, 0, 0}), tlv(0x520b, ref_tlv)})));
+    auto conn_b = tlv(
+        0x5bce, tlv(0x5208, test::concat({tlv(0x5209, {1, 0, 0, 0}), tlv(0x520a, vec3(0, 0, 0))})));
+    return tlv(0x5bcc, test::concat({conn_a, conn_b, tlv(0x5bd2, test::f64s({0.0}))}));
+  };
+
+  auto p0 = make_parsed();
+  EXPECT_EQ(assign_vff_annotations(dim_blob({}), {}, id2pos, p0, 5), 0u);
+  ASSERT_EQ(p0.root.builder.dimensions.size(), 1u);
+  EXPECT_EQ(*p0.root.builder.dimensions[0].a, (Vec3{4.0, 0.0, 0.0}));
+
+  auto p_ok = make_parsed();
+  EXPECT_EQ(assign_vff_annotations(dim_blob(path_bytes), {}, id2pos, p_ok, 64),
+            static_cast<std::size_t>(kLevels));
+  ASSERT_EQ(p_ok.root.builder.dimensions.size(), 1u);
+  EXPECT_EQ(*p_ok.root.builder.dimensions[0].a, (Vec3{224.0, 0.0, 0.0}));
+  ASSERT_EQ(p_ok.dimensions.size(), 1u);
+  EXPECT_EQ(p_ok.dimensions[0].a, (Vec3{224.0, 0.0, 0.0}));
+
+  auto p_cap = make_parsed();
+  EXPECT_EQ(assign_vff_annotations(dim_blob(path_bytes), {}, id2pos, p_cap, 10), 10u);
+  ASSERT_EQ(p_cap.root.builder.dimensions.size(), 1u);
+  EXPECT_EQ(*p_cap.root.builder.dimensions[0].a, (Vec3{4.0, 0.0, 0.0}));
+
+  auto p_miss = make_parsed();
+  const ByteBuffer bogus{4, 0xde, 0xad, 0xbe, 0xef};
+  EXPECT_EQ(assign_vff_annotations(dim_blob(bogus), {}, id2pos, p_miss, 25), 0u);
+
+  const auto make_after_chain = [&]() {
+    auto p = make_parsed();
+    p.definitions[101] = RawDefinition{};
+    RawDefinition after_def;
+    RawInstance sub_inst;
+    sub_inst.persistent_id = "6501";
+    sub_inst.ref_idx = 101;
+    sub_inst.matrix = {1, 0, 0, 0, 1, 0, 0, 0, 1, 3.0, 0.0, 0.0, 1.0};
+    after_def.builder.instances.push_back(std::move(sub_inst));
+    p.definitions[100] = std::move(after_def);
+    RawInstance root_after;
+    root_after.persistent_id = "6401";
+    root_after.ref_idx = 100;
+    root_after.matrix = {1, 0, 0, 0, 1, 0, 0, 0, 1, 5.0, 0.0, 0.0, 1.0};
+    p.root.builder.instances.push_back(std::move(root_after));
+    return p;
+  };
+
+  const ByteBuffer sub_path{2, 0x65, 0x01};
+  const auto ref_a = tlv(0x53fc, test::concat({tlv(0x53fd, vid_zero), tlv(0x53fe, sub_path)}));
+  const auto ref_b = tlv(0x53fc, test::concat({tlv(0x53fd, vid_b), tlv(0x53fe, sub_path)}));
+  const auto after_dim = tlv(
+      0x5bcc,
+      test::concat(
+          {tlv(0x5bcd, tlv(0x5208, test::concat({tlv(0x5209, {2, 0, 0, 0}), tlv(0x520b, ref_a)}))),
+           tlv(0x5bce, tlv(0x5208, test::concat({tlv(0x5209, {2, 0, 0, 0}), tlv(0x520b, ref_b)}))),
+           tlv(0x5bd2, test::f64s({0.0}))}));
+  const auto rec_7c15 =
+      tlv(0x157c, test::concat({tlv(0x05dc, tlv(0x05de, ByteBuffer{100})), after_dim}));
+
+  auto p_after = make_after_chain();
+  const std::vector<TlvHeader> after_records{{0, rec_7c15.size() - 6}};
+  const auto visits_after = assign_vff_annotations(rec_7c15, after_records, id2pos, p_after, 16);
+  EXPECT_LE(visits_after, 10u);
+  ASSERT_EQ(p_after.definitions[100].builder.dimensions.size(), 1u);
+  EXPECT_EQ(*p_after.definitions[100].builder.dimensions[0].a, (Vec3{3.0, 0.0, 0.0}));
+  EXPECT_EQ(*p_after.definitions[100].builder.dimensions[0].b, (Vec3{8.0, 0.0, 0.0}));
+  ASSERT_EQ(p_after.dimensions.size(), 1u);
+  EXPECT_EQ(p_after.dimensions[0].a, (Vec3{8.0, 0.0, 0.0}));
+  EXPECT_EQ(p_after.dimensions[0].b, (Vec3{13.0, 0.0, 0.0}));
+
+  const ByteBuffer dangling_mid{2, 10, 2, 4, 0xde, 0xad, 0xbe, 0xef};
+  ByteBuffer repeated;
+  const auto one_dangling = dim_blob(dangling_mid);
+  for (int r = 0; r < 20; ++r) {
+    repeated.insert(repeated.end(), one_dangling.begin(), one_dangling.end());
+  }
+  auto p_repeat = make_parsed();
+  EXPECT_LE(assign_vff_annotations(repeated, {}, id2pos, p_repeat, 16), 5u);
+
+  ByteBuffer sixty_dangling;
+  for (int k = 0; k < 60; ++k) {
+    const auto d = dim_blob(ByteBuffer{2, 10, 2, 2, 0xee, static_cast<std::uint8_t>(k)});
+    sixty_dangling.insert(sixty_dangling.end(), d.begin(), d.end());
+  }
+  const std::size_t span_off = sixty_dangling.size();
+  sixty_dangling.insert(sixty_dangling.end(), rec_7c15.begin(), rec_7c15.end());
+  auto p_starve = make_after_chain();
+  const std::vector<TlvHeader> starve_records{{span_off, rec_7c15.size() - 6}};
+  assign_vff_annotations(sixty_dangling, starve_records, id2pos, p_starve, 16);
+  ASSERT_FALSE(p_starve.dimensions.empty());
+  EXPECT_EQ(p_starve.dimensions.back().a, (Vec3{8.0, 0.0, 0.0}));
+  EXPECT_EQ(p_starve.dimensions.back().b, (Vec3{13.0, 0.0, 0.0}));
+}
+
 }  // namespace openskp

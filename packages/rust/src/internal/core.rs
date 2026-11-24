@@ -13,8 +13,7 @@ use super::geometry::{
     collect_model_attribute_dictionaries,
 };
 use super::pages_dimensions::{
-    find_page_node, parse_camera, parse_dimensions, parse_pages, scan_instance_transforms,
-    scan_vertex_positions,
+    assign_vff_annotations, find_page_node, parse_camera, parse_pages, scan_vertex_positions,
 };
 use super::strconv::{c_stod, c_stoi, c_stoll, c_stoul_digits};
 use super::vff::{extract_version, is_legacy, read_meta_units, valid_header};
@@ -645,7 +644,6 @@ pub fn full_parse(data: &[u8], o: &ParseOptions) -> Result<RawParsed, SkpParseEr
     let hs = model_records(&model)?;
 
     let mut vertex_positions: BTreeMap<String, Vec3> = BTreeMap::new();
-    let mut instance_world: BTreeMap<String, Vec<f64>> = BTreeMap::new();
     let mut page_node: Option<TlvNode> = None;
     let mut current = CurrentStyle::default();
     let total = hs.len() as u64;
@@ -680,7 +678,6 @@ pub fn full_parse(data: &[u8], o: &ParseOptions) -> Result<RawParsed, SkpParseEr
             collect_material_ids(&one, &mut p.material_id_to_name)?;
             collect_definitions(&one, &mut p.definitions)?;
             scan_vertex_positions(first, &mut vertex_positions);
-            scan_instance_transforms(first, &mut instance_world);
             if page_node.is_none() {
                 page_node = find_page_node(first).cloned();
             }
@@ -744,9 +741,7 @@ pub fn full_parse(data: &[u8], o: &ParseOptions) -> Result<RawParsed, SkpParseEr
         Ok(pages) => p.pages = pages,
         Err(_) => emit_log(o, LogLevel::Debug, "Failed to parse pages"),
     }
-    if !vertex_positions.is_empty() {
-        p.dimensions = parse_dimensions(&model, &vertex_positions, &instance_world);
-    }
+    assign_vff_annotations(&model, &vertex_positions, &mut p);
     p.face_colors = model_face_colors(&model);
     drop(model);
     let mut real_folders = BTreeSet::new();

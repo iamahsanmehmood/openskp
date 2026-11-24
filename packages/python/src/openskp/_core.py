@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import struct
 import time
 import zipfile
@@ -1278,119 +1279,770 @@ def _tlv_find(items, tag):
     return None
 
 
+def _length_prefixed_ids(payload):
+    """53FE stores SketchUp's instance path as repeated (u8 length, id bytes),
+    outer placement first."""
+    ids = []
+    off = 0
+    n = len(payload)
+    while off < n:
+        ln = payload[off]
+        if ln == 0 or off + 1 + ln > n:
+            break
+        ids.append(bytes(payload[off + 1:off + 1 + ln]).hex())
+        off += 1 + ln
+    return ids
+
+
+def _dimension_connection_point(block_payload, id2pos, inst_world):
+    if block_payload is None:
+        return None
+    blk = _tlv_find(_tlv_items(block_payload) or [], 0x5208)
+    if blk is None:
+        return None
+    sub = _tlv_items(blk) or []
+    typ = _tlv_find(sub, 0x5209)
+    typ = struct.unpack('<I', typ)[0] if typ and len(typ) == 4 else None
+    if typ == 1:
+        pos = _tlv_find(sub, 0x520A)
+        return struct.unpack('<3d', pos) if pos and len(pos) == 24 else None
+    ref = _tlv_find(sub, 0x520B)
+    f53fc = _tlv_find(_tlv_items(ref) or [], 0x53FC) if ref else None
+    fi = _tlv_items(f53fc) or [] if f53fc else []
+    vid = _tlv_find(fi, 0x53FD)
+    iid = _tlv_find(fi, 0x53FE)
+    if not vid:
+        return None
+    vid_hex = bytes(vid).hex()
+    local = id2pos.get(vid_hex)
+    if local is None:
+        local = id2pos.get(vid_hex.upper())
+    if local is None:
+        return None
+    if iid and len(iid) > 0:
+        path = _length_prefixed_ids(iid)
+        if not path:
+            path = [bytes(iid).hex()]
+        for pid in reversed(path):
+            w = inst_world.get(pid)
+            if w is None:
+                w = inst_world.get(pid.upper())
+            if w:
+                return transform_point(local, w)
+    return local
+
+
+def _flat_tlv_has_fields(buf, begin, end, first=0x5BCD, second=0x5BCE):
+    has_first = False
+    has_second = False
+    off = begin
+    while off < end:
+        if off + 6 > end:
+            return False
+        tag = buf[off] | (buf[off + 1] << 8)
+        ln = struct.unpack_from('<I', buf, off + 2)[0]
+        if tag == 0 or ln > end - off - 6:
+            return False
+        if tag == first:
+            has_first = True
+        if tag == second:
+            has_second = True
+        off += 6 + ln
+    return has_first and has_second
+
+
+def _parse_one_5bcc(model_dat, view, j, id2pos, inst_world):
+    n = len(model_dat)
+    if j + 6 > n:
+        return None
+    ln = struct.unpack_from('<I', model_dat, j + 2)[0]
+    if ln < 40 or j + 6 + ln > n:
+        return None
+    if not _flat_tlv_has_fields(model_dat, j + 6, j + 6 + ln, 0x5BCD, 0x5BCE):
+        return None
+    body = _tlv_items(view[j + 6:j + 6 + ln])
+    if not body:
+        return None
+    tags = [t for t, _ in body]
+    if 0x5BCD not in tags or 0x5BCE not in tags:
+        return None
+    a = _dimension_connection_point(_tlv_find(body, 0x5BCD), id2pos, inst_world)
+    b = _dimension_connection_point(_tlv_find(body, 0x5BCE), id2pos, inst_world)
+    if a is None or b is None:
+        return None
+    layer = ""
+    hidden = False
+    base = _tlv_find(body, 0x59D8)
+    if base is not None:
+        draw = _tlv_find(_tlv_items(base) or [], 0x07D0)
+        if draw is not None:
+            props = _tlv_items(draw) or []
+            layer_b = _tlv_find(props, 0x07D2)
+            if layer_b:
+                layer = str(parse_var_int(bytes(layer_b), 0, len(layer_b)))
+            flags_b = _tlv_find(props, 0x07D3)
+            if flags_b:
+                hidden = bool(flags_b[0] & 0x01)
+    xaxis = _tlv_find(body, 0x5BCF)
+    normal = _tlv_find(body, 0x5BD0)
+    axis_bytes = _tlv_find(body, 0x5BD1)
+    off = _tlv_find(body, 0x5BD2)
+    plane_x_val = (struct.unpack('<3d', xaxis)
+                   if xaxis and len(xaxis) == 24 else None)
+    normal_val = (struct.unpack('<3d', normal)
+                  if normal and len(normal) == 24 else None)
+    offset_val = (struct.unpack('<d', off)[0]
+                  if off and len(off) == 8 else 0.0)
+    offset_vector = None
+    if (axis_bytes and len(axis_bytes) == 4
+            and plane_x_val is not None and normal_val is not None):
+        axis = struct.unpack('<I', axis_bytes)[0]
+        p_norm = plane_x_val
+        p_x = normal_val
+        if axis == 1:
+            offset_vector = (
+                (p_norm[1] * p_x[2] - p_norm[2] * p_x[1]) * offset_val + 0.0,
+                (p_norm[2] * p_x[0] - p_norm[0] * p_x[2]) * offset_val + 0.0,
+                (p_norm[0] * p_x[1] - p_norm[1] * p_x[0]) * offset_val + 0.0,
+            )
+        elif axis == 2:
+            offset_vector = (
+                -p_x[0] * offset_val + 0.0,
+                -p_x[1] * offset_val + 0.0,
+                -p_x[2] * offset_val + 0.0,
+            )
+    return {
+        'a': a, 'b': b,
+        'plane_x': plane_x_val,
+        'normal': normal_val,
+        'offset': offset_val,
+        'offset_vector': offset_vector,
+        'layer': layer,
+        'hidden': hidden,
+        'text': '',
+    }
+
+
+def _parse_vff_text(model_dat, view, j, id2pos, inst_world):
+    ln = struct.unpack_from('<I', model_dat, j + 2)[0]
+    fields = _tlv_items(view[j + 6:j + 6 + ln])
+    if not fields:
+        return None
+    val_b = _tlv_find(fields, 0x55F1)
+    conn_b = _tlv_find(fields, 0x55F4)
+    if val_b is None or conn_b is None:
+        return None
+    text_str = bytes(val_b).decode('utf-8', errors='replace')
+    pt = _dimension_connection_point(conn_b, id2pos, inst_world)
+    lp_b = _tlv_find(fields, 0x55F5)
+    lp = struct.unpack('<3d', lp_b) if lp_b and len(lp_b) == 24 else None
+    sx_b = _tlv_find(fields, 0x55F2)
+    sy_b = _tlv_find(fields, 0x55F3)
+    screen_pos = (
+        (struct.unpack('<d', sx_b)[0], struct.unpack('<d', sy_b)[0])
+        if sx_b and sy_b and len(sx_b) == 8 and len(sy_b) == 8 else None
+    )
+    lt_b = _tlv_find(fields, 0x55FD)
+    leader_type = struct.unpack('<I', lt_b)[0] if lt_b and len(lt_b) == 4 else 2
+    at_b = _tlv_find(fields, 0x55FA)
+    arrow_type = struct.unpack('<I', at_b)[0] if at_b and len(at_b) == 4 else 3
+    dl_b = _tlv_find(fields, 0x55FC)
+    display_leader = (dl_b[0] != 0) if dl_b and len(dl_b) == 1 else True
+    layer = ""
+    hidden = False
+    draw_b = _tlv_find(fields, 0x07D0)
+    if draw_b is not None:
+        props = _tlv_items(draw_b) or []
+        layer_b = _tlv_find(props, 0x07D2)
+        if layer_b:
+            layer = str(parse_var_int(bytes(layer_b), 0, len(layer_b)))
+        flags_b = _tlv_find(props, 0x07D3)
+        if flags_b:
+            hidden = bool(flags_b[0] & 0x01)
+    return {
+        'text': text_str,
+        'hidden': hidden,
+        'layer': layer,
+        'p': pt,
+        'lp': lp,
+        'screen_position': screen_pos,
+        'leader_type': leader_type,
+        'arrow_type': arrow_type,
+        'display_leader': display_leader,
+    }
+
+
+def _tlv_headers_range(md, start, end):
+    out = []
+    p = start
+    while p + 6 <= end:
+        n = struct.unpack_from('<I', md, p + 2)[0]
+        if n > end - p - 6:
+            break
+        out.append((p, n))
+        p += 6 + n
+    return out
+
+
+_DEF_ID_CONTAINERS = frozenset({'8813', 'D007', '8913', '8A13', '8B13', '8C13', '8D13'})
+
+
+def _entity_id_from_tlv_span(md, rec, rec_end, depth=0):
+    if depth > 24 or rec + 6 > rec_end:
+        return None
+    kids = _tlv_headers_range(md, rec + 6, rec_end)
+    for k_off, k_sz in kids:
+        t = f"{md[k_off]:02X}{md[k_off + 1]:02X}"
+        try:
+            if t == 'DE05' and 0 < k_sz <= 8:
+                return parse_var_int(md, k_off + 6, k_sz)
+            if t == 'DC05' and k_sz >= 6 and md[k_off + 6] == 0xDE and md[k_off + 7] == 0x05:
+                z = struct.unpack_from('<I', md, k_off + 8)[0]
+                if 0 < z <= 8 and z <= k_sz - 6:
+                    return parse_var_int(md, k_off + 12, z)
+        except Exception:
+            continue
+    for k_off, k_sz in kids:
+        t = f"{md[k_off]:02X}{md[k_off + 1]:02X}"
+        if t not in _DEF_ID_CONTAINERS:
+            continue
+        found = _entity_id_from_tlv_span(md, k_off, k_off + 6 + k_sz, depth + 1)
+        if found is not None:
+            return found
+    return None
+
+
+def _scan_definition_spans(md, defs_dict):
+    spans = []
+    if len(md) < 6:
+        return spans
+    hs = _tlv_headers_range(md, 0, len(md))
+    if len(hs) == 1 and md[hs[0][0]] == 0xF4 and md[hs[0][0] + 1] == 0x01:
+        hs = _tlv_headers_range(md, hs[0][0] + 6, hs[0][0] + 6 + hs[0][1])
+    for h_off, h_sz in hs:
+        if f"{md[h_off]:02X}{md[h_off + 1]:02X}" != 'F901':
+            continue
+        level = _tlv_headers_range(md, h_off + 6, h_off + 6 + h_sz)
+        ok = True
+        for expected in ('7017', '7117'):
+            match = None
+            for rec_off, rec_sz in level:
+                if f"{md[rec_off]:02X}{md[rec_off + 1]:02X}" == expected:
+                    match = (rec_off, rec_sz)
+                    break
+            if match is None:
+                ok = False
+                break
+            level = _tlv_headers_range(md, match[0] + 6, match[0] + 6 + match[1])
+        if not ok:
+            continue
+        for rec_off, rec_sz in level:
+            if f"{md[rec_off]:02X}{md[rec_off + 1]:02X}" != '7C15':
+                continue
+            did = _entity_id_from_tlv_span(md, rec_off, rec_off + 6 + rec_sz)
+            if did is None or did not in defs_dict:
+                continue
+            spans.append((rec_off, rec_off + 6 + rec_sz, did))
+    return spans
+
+
+def _owning_definition(spans, off):
+    best = None
+    best_len = None
+    for s_begin, s_end, s_id in spans:
+        if off < s_begin or off >= s_end:
+            continue
+        ln = s_end - s_begin
+        if best_len is None or ln < best_len:
+            best_len = ln
+            best = s_id
+    return best
+
+
+def _tlv_contains_tag(buf, begin, end, tag, depth=0):
+    if depth > 64:
+        return False
+    off = begin
+    while off < end:
+        if off + 6 > end:
+            return False
+        t = buf[off] | (buf[off + 1] << 8)
+        ln = struct.unpack_from('<I', buf, off + 2)[0]
+        if t == 0 or ln > end - off - 6:
+            return False
+        off += 6 + ln
+    off = begin
+    while off < end:
+        t = buf[off] | (buf[off + 1] << 8)
+        ln = struct.unpack_from('<I', buf, off + 2)[0]
+        if t == tag or _tlv_contains_tag(buf, off + 6, off + 6 + ln, tag, depth + 1):
+            return True
+        off += 6 + ln
+    return False
+
+
+MAX_EXPANDED_INSTANCES = 50_000_000
+
+
+def _compose_instance_world(root_builder, defs_dict, world, max_visits=MAX_EXPANDED_INSTANCES):
+    visits = 0
+
+    def walk(builder, parent, depth):
+        nonlocal visits
+        if depth > 64 or builder is None or visits >= max_visits:
+            return
+        for inst in getattr(builder, 'instances', ()):
+            if visits >= max_visits:
+                return
+            visits += 1
+            mat = inst.get('matrix')
+            here = multiply_matrices(parent, mat) if mat else parent
+            pid = inst.get('persistent_id')
+            if pid:
+                world[pid] = here
+            ref_idx = inst.get('ref_idx')
+            if ref_idx is None:
+                continue
+            target = defs_dict.get(ref_idx)
+            if target is not None:
+                walk(target.get('builder') if isinstance(target, dict) else getattr(target, 'builder', None), here, depth + 1)
+
+    rb = root_builder.get('builder') if isinstance(root_builder, dict) else getattr(root_builder, 'builder', root_builder)
+    walk(rb, None, 0)
+    return visits
+
+
+class _InstancePathResolver:
+    """Resolves 53FE instance paths lazily using a definition/PID reachability
+    index, capping per-query placement visits at *max_visits*."""
+
+    def __init__(self, root_builder, defs_dict, max_visits=MAX_EXPANDED_INSTANCES):
+        self.root_builder = (
+            root_builder.get('builder')
+            if isinstance(root_builder, dict)
+            else getattr(root_builder, 'builder', root_builder)
+        )
+        self.defs_dict = defs_dict
+        self.max_visits = max_visits
+        self.visits = 0
+        self._by_pid = {}
+        self._resolved = {}
+        self._indexed = False
+        self._holders_of_pid = {}
+        self._parents_of_def = {}
+
+    def _builder_for(self, owner):
+        if owner is None:
+            return self.root_builder
+        target = self.defs_dict.get(owner)
+        if target is None:
+            return None
+        return target.get('builder') if isinstance(target, dict) else getattr(target, 'builder', None)
+
+    def _pid_map(self, owner, builder):
+        if owner in self._by_pid:
+            return self._by_pid[owner]
+        mapping = {}
+        if builder is not None:
+            for inst in getattr(builder, 'instances', ()):
+                pid = inst.get('persistent_id')
+                if pid:
+                    mapping[pid.lower()] = inst
+        self._by_pid[owner] = mapping
+        return mapping
+
+    def _ensure_index(self):
+        if self._indexed:
+            return
+        self._indexed = True
+        owners = [None]
+        owners.extend(self.defs_dict.keys())
+        for def_owner in owners:
+            builder = self._builder_for(def_owner)
+            if builder is None:
+                continue
+            seen_pids = set()
+            seen_refs = set()
+            for inst in getattr(builder, 'instances', ()):
+                pid = inst.get('persistent_id')
+                if pid:
+                    norm_pid = pid.lower()
+                    if norm_pid not in seen_pids:
+                        seen_pids.add(norm_pid)
+                        self._holders_of_pid.setdefault(norm_pid, []).append(def_owner)
+                ref_idx = inst.get('ref_idx')
+                if ref_idx is not None and ref_idx in self.defs_dict and ref_idx not in seen_refs:
+                    seen_refs.add(ref_idx)
+                    self._parents_of_def.setdefault(ref_idx, []).append(def_owner)
+
+    def _walk_exact(self, owner, builder, path, idx, parent_xf, depth, query_state):
+        if depth > 64 or builder is None or query_state[0] >= self.max_visits:
+            return False, None
+        inst = self._pid_map(owner, builder).get(path[idx])
+        if inst is None:
+            return False, None
+        self.visits += 1
+        query_state[0] += 1
+        mat = inst.get('matrix')
+        here = multiply_matrices(parent_xf, mat) if mat else parent_xf
+        if idx + 1 == len(path):
+            return True, here
+        ref_idx = inst.get('ref_idx')
+        if ref_idx is None:
+            return False, None
+        child_builder = self._builder_for(ref_idx)
+        if child_builder is None:
+            return False, None
+        return self._walk_exact(ref_idx, child_builder, path, idx + 1, here, depth + 1, query_state)
+
+    def resolve_path(self, owner, raw_path, fallback_owner=None):
+        norm = tuple(p.lower() for p in raw_path)
+        if not norm:
+            return False, None
+        key = (owner, fallback_owner, norm)
+        if key in self._resolved:
+            return self._resolved[key]
+        query_state = [0]
+        start_builder = self._builder_for(owner)
+        matched, xf = self._walk_exact(owner, start_builder, norm, 0, None, 0, query_state)
+        if matched:
+            self._resolved[key] = (True, xf)
+            return True, xf
+        if query_state[0] >= self.max_visits:
+            return False, None
+
+        self._ensure_index()
+        valid_holders = set()
+        fb_result = None
+        for holder in self._holders_of_pid.get(norm[0], ()):
+            if holder == owner:
+                continue
+            if query_state[0] >= self.max_visits:
+                break
+            ok, h_xf = self._walk_exact(
+                holder, self._builder_for(holder), norm, 0, None, 0, query_state
+            )
+            if ok:
+                valid_holders.add(holder)
+                if fallback_owner is not None and holder == fallback_owner:
+                    fb_result = (True, h_xf)
+
+        if valid_holders and query_state[0] < self.max_visits:
+            can_reach = set(valid_holders)
+            queue = [h for h in valid_holders if h is not None]
+            qi = 0
+            while qi < len(queue):
+                cur = queue[qi]
+                qi += 1
+                for parent_owner in self._parents_of_def.get(cur, ()):
+                    if parent_owner not in can_reach:
+                        can_reach.add(parent_owner)
+                        if parent_owner is not None:
+                            queue.append(parent_owner)
+
+            if owner in can_reach:
+                active_defs = {owner} if owner is not None else set()
+                failed_min_depth = {}
+
+                def walk_to_holder(cur_owner, cur_builder, parent_xf, depth):
+                    if depth > 64 or cur_builder is None or query_state[0] >= self.max_visits:
+                        return False, None
+                    if depth > 0 and cur_owner in valid_holders and depth + len(norm) <= 65:
+                        m_tail, tail_xf = self._walk_exact(
+                            cur_owner, cur_builder, norm, 0, parent_xf, depth, query_state
+                        )
+                        if m_tail or query_state[0] >= self.max_visits:
+                            return m_tail, tail_xf
+                    for inst in getattr(cur_builder, 'instances', ()):
+                        if query_state[0] >= self.max_visits:
+                            return False, None
+                        ref_idx = inst.get('ref_idx')
+                        if ref_idx is None or ref_idx not in can_reach or ref_idx in active_defs:
+                            continue
+                        prev_fail = failed_min_depth.get(ref_idx)
+                        if prev_fail is not None and depth + 1 >= prev_fail:
+                            continue
+                        child_builder = self._builder_for(ref_idx)
+                        if child_builder is None:
+                            continue
+                        self.visits += 1
+                        query_state[0] += 1
+                        mat = inst.get('matrix')
+                        here = multiply_matrices(parent_xf, mat) if mat else parent_xf
+                        active_defs.add(ref_idx)
+                        found, found_xf = walk_to_holder(ref_idx, child_builder, here, depth + 1)
+                        active_defs.remove(ref_idx)
+                        if found:
+                            return True, found_xf
+                        if query_state[0] >= self.max_visits:
+                            return False, None
+                    if cur_owner is not None:
+                        prev = failed_min_depth.get(cur_owner)
+                        if prev is None or depth < prev:
+                            failed_min_depth[cur_owner] = depth
+                    return False, None
+
+                matched, xf = walk_to_holder(owner, start_builder, None, 0)
+
+        if not matched and fallback_owner is not None and fallback_owner != owner:
+            if fb_result is not None:
+                matched, xf = fb_result
+            elif query_state[0] < self.max_visits and fallback_owner in valid_holders:
+                fb_builder = self._builder_for(fallback_owner)
+                matched, xf = self._walk_exact(
+                    fallback_owner, fb_builder, norm, 0, None, 0, query_state
+                )
+
+        if query_state[0] < self.max_visits:
+            self._resolved[key] = (matched, xf)
+        return matched, xf
+
+    def connection_point(self, block_payload, id2pos, owner, fallback_owner=None):
+        if block_payload is None:
+            return None
+        blk = _tlv_find(_tlv_items(block_payload) or [], 0x5208)
+        if blk is None:
+            return None
+        sub = _tlv_items(blk) or []
+        typ = _tlv_find(sub, 0x5209)
+        typ = struct.unpack('<I', typ)[0] if typ and len(typ) == 4 else None
+        if typ == 1:
+            pos = _tlv_find(sub, 0x520A)
+            return struct.unpack('<3d', pos) if pos and len(pos) == 24 else None
+        ref = _tlv_find(sub, 0x520B)
+        f53fc = _tlv_find(_tlv_items(ref) or [], 0x53FC) if ref else None
+        fi = _tlv_items(f53fc) or [] if f53fc else []
+        vid = _tlv_find(fi, 0x53FD)
+        iid = _tlv_find(fi, 0x53FE)
+        if not vid:
+            return None
+        vid_hex = bytes(vid).hex()
+        local = id2pos.get(vid_hex)
+        if local is None:
+            local = id2pos.get(vid_hex.upper())
+        if local is None:
+            return None
+        if iid and len(iid) > 0:
+            path = _length_prefixed_ids(iid)
+            if not path:
+                path = [bytes(iid).hex()]
+            matched, xf = self.resolve_path(owner, path, fallback_owner=fallback_owner)
+            if matched and xf:
+                return transform_point(local, xf)
+        return local
+
+
+_ANNOTATION_TAG_RE = re.compile(rb'\xcc\x5b|\xf0\x55')
+
+
+def _parse_one_5bcc_resolved(model_dat, view, j, id2pos, resolver, owner, fallback_owner=None):
+    n = len(model_dat)
+    if j + 6 > n:
+        return None
+    ln = struct.unpack_from('<I', model_dat, j + 2)[0]
+    if ln < 40 or j + 6 + ln > n:
+        return None
+    if not _flat_tlv_has_fields(model_dat, j + 6, j + 6 + ln, 0x5BCD, 0x5BCE):
+        return None
+    body = _tlv_items(view[j + 6:j + 6 + ln])
+    if not body:
+        return None
+    tags = [t for t, _ in body]
+    if 0x5BCD not in tags or 0x5BCE not in tags:
+        return None
+    a = resolver.connection_point(_tlv_find(body, 0x5BCD), id2pos, owner, fallback_owner)
+    b = resolver.connection_point(_tlv_find(body, 0x5BCE), id2pos, owner, fallback_owner)
+    if a is None or b is None:
+        return None
+    layer = ""
+    hidden = False
+    base = _tlv_find(body, 0x59D8)
+    if base is not None:
+        draw = _tlv_find(_tlv_items(base) or [], 0x07D0)
+        if draw is not None:
+            props = _tlv_items(draw) or []
+            layer_b = _tlv_find(props, 0x07D2)
+            if layer_b:
+                layer = str(parse_var_int(bytes(layer_b), 0, len(layer_b)))
+            flags_b = _tlv_find(props, 0x07D3)
+            if flags_b:
+                hidden = bool(flags_b[0] & 0x01)
+    xaxis = _tlv_find(body, 0x5BCF)
+    normal = _tlv_find(body, 0x5BD0)
+    axis_bytes = _tlv_find(body, 0x5BD1)
+    off = _tlv_find(body, 0x5BD2)
+    plane_x_val = (struct.unpack('<3d', xaxis)
+                   if xaxis and len(xaxis) == 24 else None)
+    normal_val = (struct.unpack('<3d', normal)
+                  if normal and len(normal) == 24 else None)
+    offset_val = (struct.unpack('<d', off)[0]
+                  if off and len(off) == 8 else 0.0)
+    offset_vector = None
+    if (axis_bytes and len(axis_bytes) == 4
+            and plane_x_val is not None and normal_val is not None):
+        axis = struct.unpack('<I', axis_bytes)[0]
+        p_norm = plane_x_val
+        p_x = normal_val
+        if axis == 1:
+            offset_vector = (
+                (p_norm[1] * p_x[2] - p_norm[2] * p_x[1]) * offset_val + 0.0,
+                (p_norm[2] * p_x[0] - p_norm[0] * p_x[2]) * offset_val + 0.0,
+                (p_norm[0] * p_x[1] - p_norm[1] * p_x[0]) * offset_val + 0.0,
+            )
+        elif axis == 2:
+            offset_vector = (
+                -p_x[0] * offset_val + 0.0,
+                -p_x[1] * offset_val + 0.0,
+                -p_x[2] * offset_val + 0.0,
+            )
+    return {
+        'a': a, 'b': b,
+        'plane_x': plane_x_val,
+        'normal': normal_val,
+        'offset': offset_val,
+        'offset_vector': offset_vector,
+        'layer': layer,
+        'hidden': hidden,
+        'text': '',
+    }
+
+
+def _parse_vff_text_resolved(model_dat, view, j, id2pos, resolver, owner):
+    ln = struct.unpack_from('<I', model_dat, j + 2)[0]
+    fields = _tlv_items(view[j + 6:j + 6 + ln])
+    if not fields:
+        return None
+    val_b = _tlv_find(fields, 0x55F1)
+    conn_b = _tlv_find(fields, 0x55F4)
+    if val_b is None or conn_b is None:
+        return None
+    text_str = bytes(val_b).decode('utf-8', errors='replace')
+    pt = resolver.connection_point(conn_b, id2pos, owner)
+    lp_b = _tlv_find(fields, 0x55F5)
+    lp = struct.unpack('<3d', lp_b) if lp_b and len(lp_b) == 24 else None
+    sx_b = _tlv_find(fields, 0x55F2)
+    sy_b = _tlv_find(fields, 0x55F3)
+    screen_pos = (
+        (struct.unpack('<d', sx_b)[0], struct.unpack('<d', sy_b)[0])
+        if sx_b and sy_b and len(sx_b) == 8 and len(sy_b) == 8 else None
+    )
+    lt_b = _tlv_find(fields, 0x55FD)
+    leader_type = struct.unpack('<I', lt_b)[0] if lt_b and len(lt_b) == 4 else 2
+    at_b = _tlv_find(fields, 0x55FA)
+    arrow_type = struct.unpack('<I', at_b)[0] if at_b and len(at_b) == 4 else 3
+    dl_b = _tlv_find(fields, 0x55FC)
+    display_leader = (dl_b[0] != 0) if dl_b and len(dl_b) == 1 else True
+    layer = ""
+    hidden = False
+    draw_b = _tlv_find(fields, 0x07D0)
+    if draw_b is not None:
+        props = _tlv_items(draw_b) or []
+        layer_b = _tlv_find(props, 0x07D2)
+        if layer_b:
+            layer = str(parse_var_int(bytes(layer_b), 0, len(layer_b)))
+        flags_b = _tlv_find(props, 0x07D3)
+        if flags_b:
+            hidden = bool(flags_b[0] & 0x01)
+    return {
+        'text': text_str,
+        'hidden': hidden,
+        'layer': layer,
+        'p': pt,
+        'lp': lp,
+        'screen_position': screen_pos,
+        'leader_type': leader_type,
+        'arrow_type': arrow_type,
+        'display_leader': display_leader,
+    }
+
+
+def _tlv_has_nonempty_tag(buf, begin, end, tag, depth=0):
+    if depth > 64:
+        return False
+    off = begin
+    while off < end:
+        if off + 6 > end:
+            return False
+        t = buf[off] | (buf[off + 1] << 8)
+        ln = struct.unpack_from('<I', buf, off + 2)[0]
+        if t == 0 or ln > end - off - 6:
+            return False
+        off += 6 + ln
+    off = begin
+    while off < end:
+        t = buf[off] | (buf[off + 1] << 8)
+        ln = struct.unpack_from('<I', buf, off + 2)[0]
+        if (t == tag and ln > 0) or _tlv_has_nonempty_tag(buf, off + 6, off + 6 + ln, tag, depth + 1):
+            return True
+        off += 6 + ln
+    return False
+
+
+def _assign_vff_annotations(
+    model_dat,
+    id2pos,
+    root_builder,
+    defs_dict,
+    world_dimensions=None,
+    max_visits=MAX_EXPANDED_INSTANCES,
+):
+    spans = None
+    resolver = _InstancePathResolver(root_builder, defs_dict, max_visits=max_visits)
+    n = len(model_dat)
+    view = memoryview(model_dat)
+    for m in _ANNOTATION_TAG_RE.finditer(model_dat):
+        j = m.start()
+        if j + 6 > n:
+            continue
+        ln = struct.unpack_from('<I', model_dat, j + 2)[0]
+        if ln < 40 or j + 6 + ln > n:
+            continue
+        is_text = model_dat[j] == 0xF0
+        if not _flat_tlv_has_fields(
+            model_dat, j + 6, j + 6 + ln,
+            0x55F1 if is_text else 0x5BCD,
+            0x55F4 if is_text else 0x5BCE,
+        ):
+            continue
+        if spans is None:
+            spans = _scan_definition_spans(model_dat, defs_dict)
+        owner = _owning_definition(spans, j)
+        target_builder = defs_dict[owner]['builder'] if owner is not None else root_builder
+        if is_text:
+            txt = _parse_vff_text_resolved(model_dat, view, j, id2pos, resolver, owner)
+            if txt is not None:
+                target_builder.texts.append(txt)
+        else:
+            dim = _parse_one_5bcc_resolved(model_dat, view, j, id2pos, resolver, owner)
+            if dim is not None:
+                target_builder.dimensions.append(dim)
+            if world_dimensions is not None:
+                if owner is None or not _tlv_has_nonempty_tag(model_dat, j + 6, j + 6 + ln, 0x53FE):
+                    if dim is not None:
+                        world_dimensions.append(dict(dim))
+                else:
+                    wdim = _parse_one_5bcc_resolved(
+                        model_dat, view, j, id2pos, resolver, None, fallback_owner=owner
+                    )
+                    if wdim is not None:
+                        world_dimensions.append(wdim)
+    return resolver.visits
+
+
 def _parse_dimensions(model_dat, id2pos, inst_world):
-    """Linear dimensions (SketchUp's Dimension tool).
-
-    A dimension entity is a ``5BCC`` record (raw bytes ``cc 5b``) holding:
-
-    * ``5BCD`` / ``5BCE`` — the two connection points. Each wraps a ``5208``
-      whose ``5209`` is the connection TYPE (1 = a free explicit point in
-      ``520A``, already world space; 2 = connected to geometry, ``520A`` is
-      zero and ``520B → 53FC`` names the target: ``53FD`` = the vertex by
-      persistent id, ``53FE`` = a length-prefixed persistent id of the
-      INSTANCE holding it — the vertex position is definition-local, so it is
-      lifted to world by that instance's transform).
-    * ``5BCF`` — the dimension plane's NORMAL (SketchUp's
-      ``SUDimensionLinearGetNormal`` equals it); ``5BD0`` — its X axis. Kept in
-      the ``plane_x`` and ``normal`` fields, whose names say the opposite.
-    * ``5BD2`` — the offset distance (inches): how far the dimension line sits
-      from the measured segment, along the in-plane perpendicular.
-
-    The measured value is auto-computed from the two points (no cached text on
-    the samples seen), so callers format it themselves. Endpoints come out in
-    WORLD space (inches). A connection point that cannot be resolved drops the
-    whole dimension (fail-safe)."""
+    """Linear dimensions (SketchUp's Dimension tool). Keeps world-space model
+    compatibility list across all 5BCC records."""
     dims = []
     i = 0
-    n = len(model_dat)
     view = memoryview(model_dat)
     while True:
         j = model_dat.find(b'\xcc\x5b', i)
         if j < 0:
             break
         i = j + 1
-        if j + 6 > n:
-            continue
-        ln = struct.unpack_from('<I', model_dat, j + 2)[0]
-        if ln < 40 or j + 6 + ln > n:
-            continue
-        # A coincidental marker in geometry can advertise hundreds of MB.
-        # Validate candidates through views before copying any payloads.
-        body = _tlv_items(view[j + 6:j + 6 + ln])
-        if body is None:
-            continue
-        tags = [t for t, _ in body]
-        if 0x5BCD not in tags or 0x5BCE not in tags:
-            continue
-
-        def _point(block_payload):
-            blk = _tlv_find(_tlv_items(block_payload) or [], 0x5208)
-            if blk is None:
-                return None
-            sub = _tlv_items(blk) or []
-            typ = _tlv_find(sub, 0x5209)
-            typ = struct.unpack('<I', typ)[0] if typ and len(typ) == 4 else None
-            if typ == 1:
-                pos = _tlv_find(sub, 0x520A)
-                return struct.unpack('<3d', pos) if pos and len(pos) == 24 \
-                    else None
-            # type 2: resolve the geometry reference (vertex + instance).
-            ref = _tlv_find(sub, 0x520B)
-            f53fc = _tlv_find(_tlv_items(ref) or [], 0x53FC) if ref else None
-            fi = _tlv_items(f53fc) or [] if f53fc else []
-            vid = _tlv_find(fi, 0x53FD)
-            iid = _tlv_find(fi, 0x53FE)
-            if not vid:
-                return None
-            local = id2pos.get(vid.hex())
-            if local is None:
-                return None
-            if iid and len(iid) >= 1 and iid[0] > 0 \
-                    and 1 + iid[0] <= len(iid):
-                w = inst_world.get(iid[1:1 + iid[0]].hex())
-                if w:
-                    return transform_point(local, w)
-            return local           # model-root vertex — already world
-
-        a = _point(_tlv_find(body, 0x5BCD))
-        b = _point(_tlv_find(body, 0x5BCE))
-        if a is None or b is None:
-            continue
-        xaxis = _tlv_find(body, 0x5BCF)
-        normal = _tlv_find(body, 0x5BD0)
-        axis_bytes = _tlv_find(body, 0x5BD1)
-        off = _tlv_find(body, 0x5BD2)
-        plane_x_val = (struct.unpack('<3d', xaxis)
-                       if xaxis and len(xaxis) == 24 else None)
-        normal_val = (struct.unpack('<3d', normal)
-                      if normal and len(normal) == 24 else None)
-        offset_val = (struct.unpack('<d', off)[0]
-                      if off and len(off) == 8 else 0.0)
-        offset_vector = None
-        if (axis_bytes and len(axis_bytes) == 4
-                and plane_x_val is not None and normal_val is not None):
-            axis = struct.unpack('<I', axis_bytes)[0]
-            p_norm = plane_x_val
-            p_x = normal_val
-            if axis == 1:
-                offset_vector = (
-                    (p_norm[1] * p_x[2] - p_norm[2] * p_x[1]) * offset_val + 0.0,
-                    (p_norm[2] * p_x[0] - p_norm[0] * p_x[2]) * offset_val + 0.0,
-                    (p_norm[0] * p_x[1] - p_norm[1] * p_x[0]) * offset_val + 0.0,
-                )
-            elif axis == 2:
-                offset_vector = (
-                    -p_x[0] * offset_val + 0.0,
-                    -p_x[1] * offset_val + 0.0,
-                    -p_x[2] * offset_val + 0.0,
-                )
-        dims.append({
-            'a': a, 'b': b,
-            'plane_x': plane_x_val,
-            'normal': normal_val,
-            'offset': offset_val,
-            'offset_vector': offset_vector,
-        })
+        d = _parse_one_5bcc(model_dat, view, j, id2pos, inst_world)
+        if d is not None:
+            dims.append(d)
     return dims
 
 
@@ -1857,9 +2509,18 @@ def _extract_geometry_nodes(elements, builder):
             # knowable once the scene graph is actually flattened (see
             # SkpFile.build_scene()'s InstanceNode.layer for that).
             inst_layer_id = None
+            inst_pid = ""
             inst_attribute_dicts = {}
             d007 = _direct_child(el.children, 'D007')
             if d007:
+                dc05 = _direct_child(d007.children, 'DC05')
+                if dc05 and dc05.payload:
+                    p = dc05.payload
+                    if len(p) >= 6 and p[:2] == b'\xde\x05':
+                        idlen = read_u32(p, 2)
+                        if idlen <= len(p) - 6:
+                            p = p[6:6 + idlen]
+                    inst_pid = p.hex()
                 d107 = _direct_child(d007.children, 'D107')
                 if d107:
                     inst_mat_id = parse_var_int(
@@ -1879,6 +2540,7 @@ def _extract_geometry_nodes(elements, builder):
             inst_id = _entity_id(el)
             _detach_tlv_payloads(el.children)
             builder.instances.append({
+                'persistent_id': inst_pid,
                 'offset': el.offset,
                 'id': inst_id,
                 'ref_guid': guid,
@@ -2433,7 +3095,6 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
     root_builder = _GeometryBuilder()
     model_attribute_dicts = {}
     vertex_positions = {}
-    instance_world = {}
     page_node = None
 
     def entity_key(payload):
@@ -2444,19 +3105,15 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
             return parse_var_int(payload, 6, de05_len)
         return parse_var_int(payload, 0, len(payload))
 
-    def walk(nodes, parent):
+    def walk(nodes):
         """One pre-order pass over a top-level record's subtree, doing the
-        work that used to take six separate full traversals: layers
-        (993A), materials (C832), component definitions (7C15), vertex
-        positions (C409), instance world transforms (6419, carrying the
-        composed ``parent`` matrix) and the first scenes node (0702).
-        Each output is independent of the others, so folding the passes
-        together changes no result - only how often the tree is walked."""
+        work that used to take separate full traversals: layers (993A),
+        materials (C832), component definitions (7C15), vertex positions
+        (C409), and the first scenes node (0702)."""
         nonlocal page_node
         for el in nodes:
             tag = el.tag
             children = () if isinstance(el, _GeometryRecordNode) else el.children
-            here = parent
 
             if tag == '993A':
                 # Layer ID -> name
@@ -2562,37 +3219,17 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
                             idb = p
                         vertex_positions[idb.hex()] = struct.unpack('<3d', c509.payload)
 
-            elif tag == '6419':
-                # Instance persistent id (hex) -> WORLD transform (13-float
-                # matrix), composing parent x local at every 6419. A
-                # dimension's connection point is definition-local, so
-                # _parse_dimensions lifts it to world with this. An instance
-                # chain never crosses top-level records.
-                d007 = _find_tag(children, 'D007')
-                dc05 = _find_tag(d007.children, 'DC05') if d007 else None
-                iid = None
-                if dc05:
-                    p = dc05.payload
-                    idb = p[6:6 + read_u32(p, 2)] if p[:2] == b'\xde\x05' else p
-                    iid = idb.hex()
-                m = _find_tag(children, '6619')
-                mat = list(struct.unpack('<13d', m.payload)) \
-                    if m and len(m.payload) == 104 else None
-                here = multiply_matrices(parent, mat) if mat else parent
-                if iid:
-                    instance_world[iid] = here
-
             elif tag == '0702':
                 if page_node is None:
                     page_node = el
 
             if children:
-                walk(children, here)
+                walk(children)
 
     for index, total, el in iter_top_level_lazy(
             model_dat, 0, len(model_dat), CONTAINER_TAGS, _geometry=True):
         try:
-            walk([el], None)
+            walk([el])
             if el.tag == 'F601':
                 _extract_geometry_nodes(el.children, root_builder)
                 model_attribute_dicts = entity_attribute_dictionaries(el.children)
@@ -2634,6 +3271,15 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
     if 'Layer0' not in layer_hidden:
         layer_hidden['Layer0'] = False
 
+    dimensions = []
+    try:
+        _assign_vff_annotations(model_dat, vertex_positions, root_builder, defs_dict, dimensions)
+    except (RecursionError, MemoryError):
+        raise
+    except Exception:
+        logger.debug("Failed to parse annotations", exc_info=True)
+        dimensions = []
+
     if compact_geometry:
         root_builder._compact_geometry()
     defs_dict['ROOT'] = {'guid': 'ROOT', 'name': 'ROOT_MODEL', 'builder': root_builder,
@@ -2646,13 +3292,6 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
     except Exception:
         logger.debug("Failed to parse pages", exc_info=True)
         pages = []
-    try:
-        dimensions = _parse_dimensions(model_dat, vertex_positions, instance_world)
-    except (RecursionError, MemoryError):
-        raise
-    except Exception:
-        logger.debug("Failed to parse dimensions", exc_info=True)
-        dimensions = []
     try:
         face_colors = _model_face_colors(model_dat)
     except (RecursionError, MemoryError):

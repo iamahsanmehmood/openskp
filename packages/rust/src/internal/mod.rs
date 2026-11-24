@@ -36,8 +36,9 @@ pub use self::geometry::{
     collect_model_attribute_dictionaries, extract_attribute_dictionaries,
 };
 pub use self::pages_dimensions::{
-    find_page_node, parse_camera, parse_dimensions, parse_pages, scan_instance_transforms,
-    scan_vertex_positions,
+    assign_vff_annotations, assign_vff_annotations_with_limit, compose_instance_world,
+    compose_instance_world_with_limit, find_page_node, parse_camera, parse_dimensions, parse_pages,
+    scan_instance_transforms, scan_vertex_positions,
 };
 pub use self::transforms::{
     fold_scale, multiply_matrices, transform_determinant, transform_normal, transform_point,
@@ -252,6 +253,7 @@ impl Default for RawFace {
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct RawInstance {
+    pub persistent_id: String,
     pub offset: u64,
     pub id: Option<EntityId>,
     pub ref_guid: String,
@@ -414,6 +416,8 @@ pub struct RawDimension {
     pub plane_x: Option<Vec3>,
     pub normal: Option<Vec3>,
     pub offset_vector: Option<Vec3>,
+    pub layer: String,
+    pub hidden: bool,
     pub text: String,
 }
 

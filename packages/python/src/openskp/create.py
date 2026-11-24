@@ -2453,47 +2453,48 @@ class ComponentDefinitionBuilder:
         offset: Union[float, Point3] = _DEFAULT_OFFSET,
         *,
         offset_vector: Optional[Point3] = None,
+        layer: Optional[int] = None,
+        hidden: bool = False,
     ) -> None:
         """Add a FREE linear dimension between two explicit points (inches,
         local to this definition) - same signature and behavior as
         :meth:`SkpBuilder.add_dimension`."""
         self._check_writable("dimensions")
+        self._skp._check_layer_handle(layer)
         prepared = self._skp._prepare_dimension(p1, p2, offset=offset, offset_vector=offset_vector)
-        self._skp._emit_dimension(self._skp._definition_writer, *prepared)
+        self._skp._emit_dimension(self._skp._definition_writer, *prepared, layer=layer, hidden=hidden)
         self._new_entity_count += 1
 
-    def add_text(self, text: str, point: Point3,
-                 leader: Point3 = (15.0, 15.0, 15.0)) -> None:
-        """Add a leader text (SketchUp's Text tool) anchored at ``point``
-        (inches, local to this definition), with the label floating at
-        ``point + leader`` and a leader line joining them - same
-        signature and behavior as :meth:`SkpBuilder.add_text`, so it
-        belongs to the group/instance the way SketchUp's own Text tool
-        lets it when drawn while editing a component in place
-        (openskp#380)."""
+    def add_text(
+        self,
+        text: str,
+        point: Point3,
+        leader: Point3 = (15.0, 15.0, 15.0),
+        *,
+        layer: Optional[int] = None,
+        hidden: bool = False,
+        leader_type: int = 2,
+        arrow_type: int = 3,
+        screen_position: Optional[Tuple[float, float]] = None,
+        display_leader: bool = True,
+    ) -> None:
+        """Add a leader or screen text anchored at ``point`` (inches, local
+        to this definition) - same signature and behavior as
+        :meth:`SkpBuilder.add_text`."""
         self._check_writable("text")
-        writer = self._skp._definition_writer
-        p = (float(point[0]), float(point[1]), float(point[2]))
-        lb = tuple(p[i] + float(leader[i]) for i in range(3))
-        writer._new_of_known_class("CText", schema=9)
-        writer._preamble()
-        writer.buf += _DIM_DRAWBASE
-        if self._skp._dim_font_slot is None:
-            self._skp._dim_font_slot = writer._new_of_known_class("CSkFont", schema=1)
-            writer.buf += _DIM_FONT_PAYLOAD
-        else:
-            writer._backref(self._skp._dim_font_slot)
-        writer.buf += _f64(0.0) + _f64(0.0)  # screen-fraction slot (unused)
-        writer.buf += _u32(1) + _u32(4)      # free connection + constant
-        writer.buf += _f64(p[0]) + _f64(p[1]) + _f64(p[2])
-        writer.buf += bytes(12)
-        writer.buf += _f64(lb[0]) + _f64(lb[1]) + _f64(lb[2])  # label position
-        writer.buf += bytes(16)
-        writer.buf += _f64(1.0)
-        writer.buf += _u32(2)                # leader type: pushpin
-        writer.buf += _TEXT_DELIM
-        writer._write_str(text)
-        writer.buf += bytes(5)
+        self._skp._check_layer_handle(layer)
+        self._skp._write_text(
+            self._skp._definition_writer,
+            text,
+            point,
+            leader=leader,
+            layer=layer,
+            hidden=hidden,
+            leader_type=leader_type,
+            arrow_type=arrow_type,
+            screen_position=screen_position,
+            display_leader=display_leader,
+        )
         self._new_entity_count += 1
 
     def add_construction_line(
@@ -3729,10 +3730,13 @@ class SkpBuilder:
         xaxis: Point3,
         scalar_offset: float,
         has_vector: bool,
+        *,
+        layer: Optional[int] = None,
+        hidden: bool = False,
     ) -> None:
         w._new_of_known_class("CDimensionLinear", schema=6)
         w._preamble()
-        w.buf += _DIM_DRAWBASE
+        w._drawbase(mat=0, layer=layer or 0, hidden=hidden)
         w._write_str("")                     # auto-computed measurement text
         if self._dim_font_slot is None:
             # one CSkFont per file, serialized INLINE at the first
@@ -3757,6 +3761,123 @@ class SkpBuilder:
         w.buf += _u32(1 if has_vector else 0)
         w.buf += _f64(scalar_offset) + _f64(0.0) + _u32(1)
 
+    def _prepare_text(
+        self,
+        text: str,
+        point: Point3,
+        leader: Point3 = (15.0, 15.0, 15.0),
+        leader_type: int = 2,
+        arrow_type: int = 3,
+        screen_position: Optional[Tuple[float, float]] = None,
+        display_leader: bool = True,
+    ) -> Tuple[str, Point3, Point3, Tuple[float, float], int, int, bool]:
+        if not isinstance(text, str):
+            raise SkpWriteError("add_text: text must be a str")
+        try:
+            encoded = text.encode("utf-16-le")
+        except UnicodeEncodeError as exc:
+            raise SkpWriteError("add_text: text contains an unpaired UTF-16 surrogate") from exc
+        if len(encoded) // 2 >= 0xFFFFFFFF:
+            raise SkpWriteError("string too long to encode")
+        p = _finite_point3(point, "add_text")
+        ld = _finite_point3(leader, "add_text")
+        lb = (p[0] + ld[0], p[1] + ld[1], p[2] + ld[2])
+        if not all(math.isfinite(c) for c in lb):
+            raise SkpWriteError("add_text coordinates must be finite")
+        if (
+            isinstance(leader_type, bool)
+            or not isinstance(leader_type, int)
+            or isinstance(arrow_type, bool)
+            or not isinstance(arrow_type, int)
+            or leader_type < 0
+            or leader_type > 2
+            or arrow_type < 0
+            or arrow_type > 4
+        ):
+            raise SkpWriteError("add_text invalid leader or arrow type")
+        screen = (0.0, 0.0)
+        if screen_position is not None:
+            if isinstance(screen_position, (str, bytes, bytearray)):
+                raise SkpWriteError("add_text screen_position must have 2 elements")
+            try:
+                sp_items = tuple(screen_position)
+            except TypeError as exc:
+                raise SkpWriteError("add_text screen_position must have 2 elements") from exc
+            if len(sp_items) != 2:
+                raise SkpWriteError(f"add_text screen_position must have 2 elements, got {len(sp_items)}")
+            try:
+                sx, sy = float(sp_items[0]), float(sp_items[1])
+            except (TypeError, ValueError) as exc:
+                raise SkpWriteError("add_text screen position must be numeric") from exc
+            if not (math.isfinite(sx) and math.isfinite(sy) and 0.0 <= sx <= 1.0 and 0.0 <= sy <= 1.0):
+                raise SkpWriteError("add_text screen position must be between zero and one")
+            screen = (sx, sy)
+        eff_leader_type = (
+            0 if screen_position is not None else (2 if leader_type == 0 else leader_type)
+        )
+        eff_display_leader = bool(
+            display_leader and (screen_position is not None or leader_type != 0)
+        )
+        return text, p, lb, screen, eff_leader_type, arrow_type, eff_display_leader
+
+    def _emit_text(
+        self,
+        w: _ArchiveWriter,
+        text: str,
+        p: Point3,
+        lb: Point3,
+        screen: Tuple[float, float],
+        eff_leader_type: int,
+        arrow_type: int,
+        eff_display_leader: bool,
+        *,
+        layer: Optional[int] = None,
+        hidden: bool = False,
+    ) -> None:
+        w._new_of_known_class("CText", schema=9)
+        w._preamble()
+        w._drawbase(mat=0, layer=layer or 0, hidden=hidden)
+        if self._dim_font_slot is None:
+            self._dim_font_slot = w._new_of_known_class("CSkFont", schema=1)
+            w.buf += _DIM_FONT_PAYLOAD
+        else:
+            w._backref(self._dim_font_slot)
+        w.buf += _f64(screen[0]) + _f64(screen[1])
+        w.buf += _u32(1) + _u32(4)
+        w.buf += _f64(p[0]) + _f64(p[1]) + _f64(p[2])
+        w.buf += bytes(12)
+        w.buf += _f64(lb[0]) + _f64(lb[1]) + _f64(lb[2])
+        w.buf += bytes(16)
+        w.buf += _f64(1.0)
+        w.buf += _u32(eff_leader_type)
+        w.buf += _u32(1) + struct.pack("<H", 1) + _u32(arrow_type) + bytes([1 if eff_display_leader else 0])
+        w._write_str(text)
+        w.buf += bytes(5)
+
+    def _write_text(
+        self,
+        w: _ArchiveWriter,
+        text: str,
+        point: Point3,
+        leader: Point3 = (15.0, 15.0, 15.0),
+        layer: Optional[int] = None,
+        hidden: bool = False,
+        leader_type: int = 2,
+        arrow_type: int = 3,
+        screen_position: Optional[Tuple[float, float]] = None,
+        display_leader: bool = True,
+    ) -> None:
+        prepared = self._prepare_text(
+            text,
+            point,
+            leader=leader,
+            leader_type=leader_type,
+            arrow_type=arrow_type,
+            screen_position=screen_position,
+            display_leader=display_leader,
+        )
+        self._emit_text(w, *prepared, layer=layer, hidden=hidden)
+
     def add_dimension(
         self,
         p1: Point3,
@@ -3764,63 +3885,50 @@ class SkpBuilder:
         offset: Union[float, Point3] = _DEFAULT_OFFSET,
         *,
         offset_vector: Optional[Point3] = None,
+        layer: Optional[int] = None,
+        hidden: bool = False,
     ) -> None:
         """Add a FREE linear dimension between two explicit points (inches,
         world space). ``offset`` is either a signed scalar distance in inches
         or a 3D offset vector (whose component perpendicular to ``p1 -> p2``
         determines the plane and side of the dimension line); ``offset_vector``
         can also be passed by keyword.
-
-        The record layout is the byte-exact one the REAL SketchUp SDK
-        writes for free dimensions (generated via SketchUpAPI and
-        harvested — see docs/dimension-record-notes.md): connection type 1
-        with the point stored inline in each connection block and null
-        object refs. Free dimensions render in any orientation; anchored
-        (type 2) dimensions are a future refinement.
         """
+        self._check_layer_handle(layer)
         prepared = self._prepare_dimension(p1, p2, offset=offset, offset_vector=offset_vector)
         self._ensure_geometry_writer()
-        self._emit_dimension(self._geometry_writer, *prepared)
+        self._emit_dimension(self._geometry_writer, *prepared, layer=layer, hidden=hidden)
         self._new_entity_count += 1
         self._face_count += 1  # reuses the "at least one root entity" check in to_bytes
 
-    def add_text(self, text: str, point: Point3,
-                 leader: Point3 = (15.0, 15.0, 15.0)) -> None:
-        """Add a leader text (SketchUp's Text tool) anchored at ``point``
-        (inches, world space), with the label floating at ``point +
-        leader`` and a leader line joining them.
-
-        The record mirrors human-drawn leader texts harvested from real
-        files (the SDK's own create only produces SCREEN texts — its
-        two 0.5 doubles are screen fractions and SketchUp renders them
-        superimposed at view centre): screen slot zeroed, the free-
-        connection block dimensions use ([u32 1][u32 4][point3d]), the
-        label's world position in the placement tail, and leader type 2
-        (pushpin) before the arrow delimiter.
-        """
+    def add_text(
+        self,
+        text: str,
+        point: Point3,
+        leader: Point3 = (15.0, 15.0, 15.0),
+        *,
+        layer: Optional[int] = None,
+        hidden: bool = False,
+        leader_type: int = 2,
+        arrow_type: int = 3,
+        screen_position: Optional[Tuple[float, float]] = None,
+        display_leader: bool = True,
+    ) -> None:
+        """Add a leader or screen text anchored at ``point`` (inches, world
+        space), with the label floating at ``point + leader`` and a leader
+        line joining them."""
+        self._check_layer_handle(layer)
+        prepared = self._prepare_text(
+            text,
+            point,
+            leader=leader,
+            leader_type=leader_type,
+            arrow_type=arrow_type,
+            screen_position=screen_position,
+            display_leader=display_leader,
+        )
         self._ensure_geometry_writer()
-        w = self._geometry_writer
-        p = (float(point[0]), float(point[1]), float(point[2]))
-        lb = tuple(p[i] + float(leader[i]) for i in range(3))
-        w._new_of_known_class("CText", schema=9)
-        w._preamble()
-        w.buf += _DIM_DRAWBASE
-        if self._dim_font_slot is None:
-            self._dim_font_slot = w._new_of_known_class("CSkFont", schema=1)
-            w.buf += _DIM_FONT_PAYLOAD
-        else:
-            w._backref(self._dim_font_slot)
-        w.buf += _f64(0.0) + _f64(0.0)       # screen-fraction slot (unused)
-        w.buf += _u32(1) + _u32(4)           # free connection + constant
-        w.buf += _f64(p[0]) + _f64(p[1]) + _f64(p[2])
-        w.buf += bytes(12)
-        w.buf += _f64(lb[0]) + _f64(lb[1]) + _f64(lb[2])   # label position
-        w.buf += bytes(16)
-        w.buf += _f64(1.0)
-        w.buf += _u32(2)                     # leader type: pushpin
-        w.buf += _TEXT_DELIM
-        w._write_str(text)
-        w.buf += bytes(5)
+        self._emit_text(self._geometry_writer, *prepared, layer=layer, hidden=hidden)
         self._new_entity_count += 1
         self._face_count += 1  # reuses the "at least one root entity" check in to_bytes
 
