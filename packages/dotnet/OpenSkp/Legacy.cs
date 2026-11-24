@@ -317,6 +317,10 @@ namespace OpenSkp
                     n = U32();
                 }
             }
+            if (n > (Data.Length - Pos) / 2)
+            {
+                throw new LegacyParseError($"truncated string record {Ctx()}");
+            }
             var bytes = Raw((int)(2 * n));
             return Encoding.Unicode.GetString(bytes);
         }

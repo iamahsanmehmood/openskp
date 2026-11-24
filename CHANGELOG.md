@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — Python, TypeScript, .NET, Dart & Rust: classic writer preserves long Unicode strings and classic reader replaces malformed UTF-16 surrogates (#500, #285)
+
+- Ports C++ PR #500 (`write_str` 16-bit and 32-bit `AfxWriteStringLength` headers for strings of 255 UTF-16 units or more, plus bounded `U+FFFD` replacement for lone UTF-16 surrogates in classic archive strings) across Python, TypeScript, .NET, Dart and Rust. Previously all five writers rejected strings of 255 UTF-16 units or more, and Dart's classic reader preserved raw unpaired UTF-16 surrogates instead of replacing them with `U+FFFD`.
+
 ### Added — TypeScript, .NET, Dart, C++ & Rust: multiple attribute dictionaries per entity in `create` (#285)
 
 - Ports Python's `attribute_dicts` writer parameter (#256) to TypeScript (`attributeDicts` on

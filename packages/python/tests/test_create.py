@@ -4604,3 +4604,57 @@ def test_a_small_definition_before_a_bigger_one_saves_through_real_sketchup(tmp_
         dll.SUModelRelease(ctypes.byref(model))
     finally:
         dll.SUTerminate()
+
+
+def test_attribute_strings_cross_mfc_length_boundaries(tmp_path):
+    for length in (254, 255, 256, 65533, 65534, 65535, 65536):
+        builder = create()
+        with builder.add_component_definition("TextCarrier") as definition:
+            definition.add_face([(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0)])
+        ascii_s = "x" * length
+        unicode_s = ("x" * (length - 2)) + "\U0001F600"
+        builder.add_instance(
+            definition,
+            attributes={"ascii": ascii_s, "unicode": unicode_s},
+            attribute_dict_name="RoundTrip",
+        )
+        p = tmp_path / f"long_{length}.skp"
+        builder.save(str(p))
+        model = SkpFile.open(str(p)).parse()
+        assert len(model.root.instances) == 1
+        attrs = model.root.instances[0].attribute_dictionaries["RoundTrip"]
+        assert attrs["ascii"] == ascii_s
+        assert attrs["unicode"] == unicode_s
+
+
+def test_malformed_utf16_attribute_strings_use_replacement_characters(tmp_path):
+    builder = create()
+    with builder.add_component_definition("TextCarrier") as definition:
+        definition.add_face([(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0)])
+    builder.add_instance(
+        definition,
+        attributes={"damaged": "WXYZQ", "intact": "still readable"},
+        attribute_dict_name="RoundTrip",
+    )
+
+    buf = bytearray(builder.to_bytes())
+    original = b"W\x00X\x00Y\x00Z\x00Q\x00"
+    malformed = bytes([0x00, 0xDC, 0x00, 0xD8, ord("Y"), 0, 0x3D, 0xD8, 0x00, 0xDE])
+    start = buf.find(original)
+    assert start >= 0
+    buf[start:start + len(malformed)] = malformed
+    p1 = tmp_path / "malformed.skp"
+    p1.write_bytes(bytes(buf))
+    parsed = SkpFile.open(str(p1)).parse()
+    assert len(parsed.root.instances) == 1
+    attrs = parsed.root.instances[0].attribute_dictionaries["RoundTrip"]
+    assert attrs["damaged"] == "\uFFFD\uFFFDY\U0001F600"
+    assert attrs["intact"] == "still readable"
+
+    # A trailing high surrogate cannot read into the next archive field.
+    buf[start + 9] = 0xD8
+    p2 = tmp_path / "trailing.skp"
+    p2.write_bytes(bytes(buf))
+    trailing = SkpFile.open(str(p2)).parse()
+    assert len(trailing.root.instances) == 1
+    assert trailing.root.instances[0].attribute_dictionaries["RoundTrip"]["damaged"] == "\uFFFD\uFFFDY\uFFFD\uFFFD"

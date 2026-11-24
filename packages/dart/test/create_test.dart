@@ -1501,4 +1501,69 @@ void main() {
       expect(counter(builder.toBytes()), 40);
     });
   });
+
+  group('Long and malformed UTF-16 attribute strings', () {
+    test('attribute strings cross MFC length boundaries', () {
+      for (final length in [254, 255, 256, 65533, 65534, 65535, 65536]) {
+        final builder = create();
+        final def = builder.addComponentDefinition('TextCarrier', (d) {
+          d.addFace([(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0)]);
+        });
+        final ascii = 'x' * length;
+        final unicode = '${'x' * (length - 2)}\u{1F600}';
+        builder.addInstance(
+          def,
+          attributes: {'ascii': ascii, 'unicode': unicode},
+          attributeDictName: 'dynamic_attributes',
+        );
+        final model = SkpFile.fromBuffer(builder.toBytes()).parse();
+        expect(model.root.instances.length, 1);
+        expect(model.root.instances.first.properties['ascii'], ascii);
+        expect(model.root.instances.first.properties['unicode'], unicode);
+      }
+    });
+
+    test('malformed UTF-16 attribute strings use replacement characters', () {
+      final builder = create();
+      final def = builder.addComponentDefinition('TextCarrier', (d) {
+        d.addFace([(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0)]);
+      });
+      builder.addInstance(
+        def,
+        attributes: {'damaged': 'WXYZQ', 'intact': 'still readable'},
+        attributeDictName: 'dynamic_attributes',
+      );
+
+      final bytes = Uint8List.fromList(builder.toBytes());
+      const original = [0x57, 0, 0x58, 0, 0x59, 0, 0x5A, 0, 0x51, 0];
+      const malformed = [0x00, 0xDC, 0x00, 0xD8, 0x59, 0, 0x3D, 0xD8, 0x00, 0xDE];
+      var start = -1;
+      for (var i = 0; i + original.length <= bytes.length; i++) {
+        var match = true;
+        for (var j = 0; j < original.length; j++) {
+          if (bytes[i + j] != original[j]) {
+            match = false;
+            break;
+          }
+        }
+        if (match) {
+          start = i;
+          break;
+        }
+      }
+      expect(start, greaterThanOrEqualTo(0));
+      bytes.setRange(start, start + malformed.length, malformed);
+
+      final parsed = SkpFile.fromBuffer(bytes).parse();
+      expect(parsed.root.instances.length, 1);
+      expect(parsed.root.instances.first.properties['damaged'], '\uFFFD\uFFFDY\u{1F600}');
+      expect(parsed.root.instances.first.properties['intact'], 'still readable');
+
+      // A trailing high surrogate cannot read into the next archive field.
+      bytes[start + 9] = 0xD8;
+      final trailing = SkpFile.fromBuffer(bytes).parse();
+      expect(trailing.root.instances.length, 1);
+      expect(trailing.root.instances.first.properties['damaged'], '\uFFFD\uFFFDY\uFFFD\uFFFD');
+    });
+  });
 }

@@ -526,16 +526,16 @@ fn texture_positioning_validation() {
 }
 
 #[test]
-fn strings_over_254_utf16_units_are_rejected() {
-    let mut b = create();
-    assert!(b.add_material(&"x".repeat(255), [1, 2, 3], None).is_err());
-    let mut b = create();
-    assert!(b.add_material(&"x".repeat(254), [1, 2, 3], None).is_ok());
-    // An astral character is 2 UTF-16 code units.
-    let mut b = create();
-    assert!(b
-        .add_material(&"\u{1F600}".repeat(128), [1, 2, 3], None)
-        .is_err());
+fn strings_over_254_utf16_units_are_accepted() {
+    for s in [
+        "x".repeat(254),
+        "x".repeat(255),
+        "\u{1F600}".repeat(128),
+        "x".repeat(65_535),
+    ] {
+        let mut b = create();
+        assert!(b.add_material(&s, [1, 2, 3], None).is_ok());
+    }
 }
 
 #[test]

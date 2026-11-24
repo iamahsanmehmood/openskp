@@ -29,6 +29,29 @@ class LegacyParseError implements Exception {
 
 const List<int> _strMarker = [0xFF, 0xFE, 0xFF];
 
+String _decodeUtf16Le(Uint8List bytes) {
+  final sb = StringBuffer();
+  final count = bytes.length >> 1;
+  for (int i = 0; i < count; i++) {
+    final c = bytes[i * 2] | (bytes[i * 2 + 1] << 8);
+    if (c >= 0xD800 && c <= 0xDFFF) {
+      if (c <= 0xDBFF && i + 1 < count) {
+        final low = bytes[(i + 1) * 2] | (bytes[(i + 1) * 2 + 1] << 8);
+        if (low >= 0xDC00 && low <= 0xDFFF) {
+          sb.writeCharCode(c);
+          sb.writeCharCode(low);
+          i++;
+          continue;
+        }
+      }
+      sb.writeCharCode(0xFFFD);
+    } else {
+      sb.writeCharCode(c);
+    }
+  }
+  return sb.toString();
+}
+
 bool _bytesEqualAt(Uint8List a, int aOff, List<int> b) {
   if (aOff + b.length > a.length) return false;
   for (int i = 0; i < b.length; i++) {
@@ -289,12 +312,7 @@ class LR {
         n = u32();
       }
     }
-    final bytes = raw(2 * n);
-    final codeUnits = <int>[];
-    for (int i = 0; i + 1 < bytes.length; i += 2) {
-      codeUnits.add(bytes[i] | (bytes[i + 1] << 8));
-    }
-    return String.fromCharCodes(codeUnits);
+    return _decodeUtf16Le(raw(2 * n));
   }
 
   String ctx([int back = 16, int fwd = 32]) {

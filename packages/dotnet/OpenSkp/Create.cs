@@ -1073,15 +1073,29 @@ namespace OpenSkp
         internal void WriteStr(string s)
         {
             var encoded = Encoding.Unicode.GetBytes(s); // UTF-16LE on every .NET platform
-            int n = encoded.Length / 2;
-            if (n >= 0xFF)
+            long n = encoded.Length / 2;
+            if (n >= 0xFFFFFFFFL)
             {
-                throw new SkpWriteException("string too long to encode (255 char limit)");
+                throw new SkpWriteException("string too long to encode");
             }
             Buf.Add(0xFF);
             Buf.Add(0xFE);
             Buf.Add(0xFF);
-            Buf.Add((byte)n);
+            if (n < 0xFF)
+            {
+                Buf.Add((byte)n);
+            }
+            else if (n < 0xFFFE)
+            {
+                Buf.Add(0xFF);
+                AddU16((ushort)n);
+            }
+            else
+            {
+                Buf.Add(0xFF);
+                AddU16(0xFFFF);
+                AddU32((uint)n);
+            }
             AddRaw(encoded);
         }
 
