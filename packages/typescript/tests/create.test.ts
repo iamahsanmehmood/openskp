@@ -872,8 +872,10 @@ describe('Nested definitions and groups', () => {
     builder.addInstance(outer, { name: 'OuterInstance' });
 
     const scene = buildScene(toBuffer(builder.toBytes()));
-    const names = Object.values(scene.meshIndex).map((m) => m.name).sort();
+    const names = scene.surfacePrimitives!.map((p) => scene.meshIndex[p.geomName].name).sort();
     expect(names).toEqual(['LeafInstance', 'MiddleInstance', 'OuterInstance']);
+    // the back copies of the unpainted faces carry the same name
+    expect(new Set(Object.values(scene.meshIndex).map((m) => m.name))).toEqual(new Set(names));
   });
 });
 

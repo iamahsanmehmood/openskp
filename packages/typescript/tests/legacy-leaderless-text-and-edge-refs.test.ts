@@ -37,7 +37,7 @@ describe('legacy leaderless CText and CEdge vertex validation (#592)', () => {
     expect(model.root.instances).toHaveLength(1);
     expect(model.root.texts.map((t) => t.text)).toEqual(['Screen title', 'Callout']);
     expect(model.unreadRootEntities).toBe(0);
-    expect(scene.glbPrimitives).toHaveLength(1);
+    expect(scene.surfacePrimitives).toHaveLength(1);
     expect(instanced.meshResources).toHaveLength(1);
     expect(warnings).toEqual([]);
   });
@@ -63,7 +63,7 @@ describe('legacy leaderless CText and CEdge vertex validation (#592)', () => {
     expect(model.root.texts.map((t) => t.text)).toEqual(['Screen title', 'Callout']);
     expect(model.root.edges).toHaveLength(1);
     expect(model.unreadRootEntities).toBe(2);
-    expect(scene.glbPrimitives).toHaveLength(1);
+    expect(scene.surfacePrimitives).toHaveLength(1);
     expect(instanced.meshResources).toHaveLength(1);
     expect(warnings.some((w) => w.includes('2 unread'))).toBe(true);
   });

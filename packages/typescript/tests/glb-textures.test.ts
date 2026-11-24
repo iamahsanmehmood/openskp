@@ -91,8 +91,10 @@ describe('buildScene texture collection', () => {
 
   it('does not fragment the mesh (same primitive count as before)', () => {
     // adding the texture to the grouping key must not split primitives that
-    // were previously batched together
-    expect(scene.glbPrimitives.length).toBe(21);
+    // were previously batched together (21 as before #533, plus the back
+    // copies of the unpainted faces)
+    expect(scene.surfacePrimitives!.length).toBe(21);
+    expect(scene.glbPrimitives.length).toBe(22);
   });
 });
 

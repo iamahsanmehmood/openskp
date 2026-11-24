@@ -1,4 +1,4 @@
-import { SkpScene } from './model';
+import { SkpScene, getSurfacePrimitives } from './model';
 
 declare const process: any;
 declare const require: any;
@@ -401,8 +401,9 @@ export function toDXF(
     throw new Error('toDXF requires a valid SkpScene instance');
   }
 
+  const prims = getSurfacePrimitives(scene);
   const layerColors = new Map<string, [number, number, number]>();
-  for (const prim of scene.glbPrimitives) {
+  for (const prim of prims) {
     const layerName = sanitizeLayerName(prim.geomName || '0');
     if (!layerColors.has(layerName)) {
       layerColors.set(layerName, getPrimRgb(scene, prim));
@@ -455,7 +456,7 @@ export function toDXF(
   lines.push(...HEADER_STATIC_C);
   lines.push('  0', 'SECTION', '  2', 'ENTITIES');
 
-  for (const prim of scene.glbPrimitives) {
+  for (const prim of prims) {
     const layerName = sanitizeLayerName(prim.geomName || '0');
     const triCount = Math.floor(prim.indices.length / 3);
     if (triCount === 0) continue;

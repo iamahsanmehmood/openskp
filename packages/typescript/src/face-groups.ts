@@ -25,6 +25,8 @@ export interface LocalFaceGroup {
    * real alpha instead of always claiming fully opaque. */
   transparency: number;
   doubleSided: boolean;
+  /** True for the back copies of faces with no paint on either side. */
+  unpaintedBack: boolean;
   /** Local-space vertex positions, inches, SketchUp Z-up. */
   localVerts: [number, number, number][];
   localUvs: [number, number][];
@@ -45,9 +47,14 @@ export interface FaceGroupContext {
   textureIndexFor: (tex: Texture | null | undefined) => number | null;
   /** Painted-instance material inherited from the enclosing instance, if any. */
   inheritedMaterial?: Material;
-  /** Colour an unpainted face falls back to when nothing is inherited
-   * (the effective layer's colour). */
+  /** Colour an unpainted face front side falls back to when nothing is
+   * inherited (the model's front face colour, or the effective layer's
+   * colour). */
   fallbackLayerColor: { r: number; g: number; b: number };
+  /** Colour an unpainted face back side falls back to when nothing is
+   * inherited (the model's back face colour). Defaults to
+   * {@link fallbackLayerColor}. */
+  fallbackBackColor?: { r: number; g: number; b: number };
   /** Identifies the definition in a triangulation failure. */
   definitionId: number | string;
   /** Skip faces SketchUp itself would not draw (see
@@ -57,6 +64,25 @@ export interface FaceGroupContext {
   /** Emit each face once with its front material (see
    * {@link SceneOptions.frontSideOnly}). */
   frontSideOnly?: boolean;
+}
+
+export type UnpaintedFacesMode = 'style' | 'tag';
+
+export function unpaintedStyleColors(
+  faceColors: [[number, number, number], [number, number, number]] | null | undefined,
+  unpaintedFaces: string = 'style'
+): [{ r: number; g: number; b: number }, { r: number; g: number; b: number }] | null {
+  if (unpaintedFaces !== 'style' && unpaintedFaces !== 'tag') {
+    throw new RangeError(
+      `unpaintedFaces must be "style" or "tag", not ${JSON.stringify(unpaintedFaces)}`
+    );
+  }
+  if (unpaintedFaces !== 'style' || !faceColors) return null;
+  const [f, b] = faceColors;
+  return [
+    { r: f[0], g: f[1], b: f[2] },
+    { r: b[0], g: b[1], b: b[2] },
+  ];
 }
 
 /** A corner (vertex of one face) on a smoothed surface: the surface it
@@ -183,7 +209,8 @@ export function buildLocalFaceGroups(
     uvTransform: number[] | null | undefined,
     xr: [number, number, number],
     yr: [number, number, number],
-    fId: number
+    fId: number,
+    unpaintedBack = false
   ) => {
     // faces are batched per emitted material, so the texture has to be
     // part of the key too - otherwise two differently-textured faces with
@@ -200,13 +227,14 @@ export function buildLocalFaceGroups(
     // silently darkens a material that only used the other mechanism.
     const colorAlpha = color.a !== undefined ? color.a / 255 : 1.0;
     const transparency = colorAlpha * (mat?.transparency ?? 1.0);
-    const colorKey = `${color.r},${color.g},${color.b},${doubleSided},${texIndex ?? -1},${transparency}`;
+    const colorKey = `${color.r},${color.g},${color.b},${doubleSided},${texIndex ?? -1},${transparency},${unpaintedBack ? 1 : 0}`;
     let group = faceGroups.get(colorKey);
     if (!group) {
       group = {
         color,
         transparency,
         doubleSided,
+        unpaintedBack,
         textureIndex: texIndex,
         localVerts: [],
         localUvs: [],
@@ -279,6 +307,8 @@ export function buildLocalFaceGroups(
     if (ctx.respectVisibility && fData.hidden) continue;
 
     const fallbackColor = ctx.inheritedMaterial?.color ?? ctx.fallbackLayerColor;
+    const fallbackBackColor =
+      ctx.inheritedMaterial?.color ?? ctx.fallbackBackColor ?? ctx.fallbackLayerColor;
 
     // A face with no material of its own is painted by the instance
     // (SketchUp's "paint the component"). Inheriting the whole material -
@@ -289,7 +319,7 @@ export function buildLocalFaceGroups(
     const frontMat = ctx.resolveMaterial((fData as any).materialId) ?? ctx.inheritedMaterial;
     const backMat = ctx.resolveMaterial((fData as any).backMaterialId) ?? ctx.inheritedMaterial;
     const frontColor = frontMat?.color ?? fallbackColor;
-    const backColor = backMat?.color ?? fallbackColor;
+    const backColor = backMat?.color ?? fallbackBackColor;
 
     const loops: number[][] = [];
     for (const loop of fData.loops) {
@@ -322,7 +352,19 @@ export function buildLocalFaceGroups(
       addSide(triangles, fn, frontColor, true, false, frontMat, uvTransform, xr, yr, fId);
     } else {
       addSide(triangles, fn, frontColor, false, false, frontMat, uvTransform, xr, yr, fId);
-      addSide(triangles, fn, backColor, false, true, backMat, uvTransformBack, xr, yr, fId);
+      addSide(
+        triangles,
+        fn,
+        backColor,
+        false,
+        true,
+        backMat,
+        uvTransformBack,
+        xr,
+        yr,
+        fId,
+        !frontMat && !backMat
+      );
     }
   }
 
