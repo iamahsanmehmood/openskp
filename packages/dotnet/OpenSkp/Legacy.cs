@@ -952,8 +952,16 @@ namespace OpenSkp
         {
             Preamble(ar, r);
             var db = Drawbase(ar, r);
-            var (s1, _, _) = ar.ReadObject(r, "CVertex");
-            var (s2, _, _) = ar.ReadObject(r, "CVertex");
+            var (s1, n1, _) = ar.ReadObject(r, "CVertex");
+            if (n1 != "CVertex")
+            {
+                throw new LegacyParseError($"edge vertex pointer resolved to {n1} {r.Ctx()}");
+            }
+            var (s2, n2, _) = ar.ReadObject(r, "CVertex");
+            if (n2 != "CVertex")
+            {
+                throw new LegacyParseError($"edge vertex pointer resolved to {n2} {r.Ctx()}");
+            }
             var (cs, cn, cv) = ar.ReadObject(r);
             if (cn != null && cn != "CCurve" && cn != "CArcCurve")
             {
@@ -1709,7 +1717,8 @@ namespace OpenSkp
 
         /// <summary>The text's string start: the variable-length variant
         /// middle ends in an 11-byte block `01 00 00 00 ?? 00 &lt;arrow type&gt;
-        /// 00 00 00 01` right before it.</summary>
+        /// 00 00 00 &lt;00|01&gt;` right before it (`blk[10]` is boolean
+        /// `display_leader`).</summary>
         private static int TextDelimiter(LR r)
         {
             int p = r.Pos;
@@ -1720,13 +1729,16 @@ namespace OpenSkp
                 {
                     throw new LegacyParseError($"text delimiter not found {r.Ctx()}");
                 }
-                var blk = new byte[11];
-                Array.Copy(r.Data, idx - 11, blk, 0, 11);
-                if (blk[0] == 0x01 && blk[1] == 0x00 && blk[2] == 0x00 && blk[3] == 0x00
-                    && blk[6] <= 8 && blk[7] == 0x00 && blk[8] == 0x00 && blk[9] == 0x00
-                    && blk[10] == 1)
+                if (idx >= 11)
                 {
-                    return idx;
+                    var blk = new byte[11];
+                    Array.Copy(r.Data, idx - 11, blk, 0, 11);
+                    if (blk[0] == 0x01 && blk[1] == 0x00 && blk[2] == 0x00 && blk[3] == 0x00
+                        && blk[6] <= 8 && blk[7] == 0x00 && blk[8] == 0x00 && blk[9] == 0x00
+                        && blk[10] <= 1)
+                    {
+                        return idx;
+                    }
                 }
                 p = idx + 3;
             }
@@ -2544,10 +2556,17 @@ namespace OpenSkp
             if (builder.Edges.ContainsKey(slot)) return;
             foreach (var vs in new[] { e.V1, e.V2 })
             {
-                if (vs == null) continue;
-                if (slots.TryGetValue(vs.Value, out var ent) && ent.Value != null && !builder.Vertices.ContainsKey(vs.Value))
+                if (vs == null)
                 {
-                    var xyz = ((VertexRec)ent.Value).Xyz;
+                    throw new LegacyParseError($"edge {slot} vertex pointer is null");
+                }
+                if (!slots.TryGetValue(vs.Value, out var ent) || ent.Value is not VertexRec vrec)
+                {
+                    throw new LegacyParseError($"edge {slot} vertex pointer {vs} resolved to {ent?.Name ?? "null"}");
+                }
+                if (!builder.Vertices.ContainsKey(vs.Value))
+                {
+                    var xyz = vrec.Xyz;
                     builder.Vertices[vs.Value] = (xyz[0], xyz[1], xyz[2]);
                 }
             }
@@ -2878,7 +2897,16 @@ namespace OpenSkp
             }
 
             var rootBuilder = new LegacyBuilder();
-            FillBuilder(rootBuilder, walkResult.Root, slots);
+            try
+            {
+                FillBuilder(rootBuilder, walkResult.Root, slots);
+            }
+            catch (Exception e) when (!(e is SkpParseException))
+            {
+                throw new SkpParseException(
+                    $"Failed while building root entities: {e.Message}",
+                    stage: "legacy_defs", innerException: e);
+            }
 
             Observability.Log(
                 options, SkpLogLevel.Information,

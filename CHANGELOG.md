@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — All 6 languages: leaderless classic `CText` records and non-vertex `CEdge` references (#592)
+
+- Classic (pre-2021 MFC) `CText` records end their placement block with a boolean `display_leader`
+  byte (`0` for screen or leaderless text, `1` when a leader is shown). Previously Python,
+  TypeScript, .NET, Dart and Rust required that byte to be `1`, so a leaderless `CText` failed to
+  match its own string delimiter — or, when another `CText` sat within the 512-byte scan window,
+  swallowed the second `CText` without allocating its MFC store-map slot and shifted every later
+  back-reference by one slot.
+- Classic `CEdge` reading and geometry building in Python, TypeScript, .NET, Dart, C++ and Rust now
+  validate that both endpoint references resolve to `CVertex` objects (and wrap root geometry
+  building consistently with definitions), reporting a damaged root edge as a partial read (#552) or
+  a damaged definition edge as `SkpParseError` / `SkpParseException` instead of raising a raw
+  `KeyError`, `TypeError` or `InvalidCastException`.
+
 ### Fixed — Python, .NET & Dart: scenes use a component instance's own paint and tag in classic files (#596)
 
 - `build_scene()` / `BuildScene()` / `buildScene()` and `build_instanced_scene()` / `BuildInstancedScene()` / `buildInstancedScene()` read an instance's paint and tag from its 2021+ `D007` record only. In classic (pre-2021) files a painted component came out in its tag's colour, and every instance sat on its parent's tag. Both now come from the instance itself, and nested components inherit the paint (including translucency). Cross-port regression tests cover all six ports.

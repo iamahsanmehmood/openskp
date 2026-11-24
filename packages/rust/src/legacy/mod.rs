@@ -594,15 +594,21 @@ fn add_edge(
     s: u64,
     e: &LegacyValue,
     slots: &HashMap<u64, LegacySlotEntry>,
-) {
+) -> Result<()> {
     let id = s as EntityId;
     if b.edges.contains_key(&id) {
-        return;
+        return Ok(());
     }
     for vid in [e.v1, e.v2] {
-        if let Some(LegacySlotEntry { v: Some(v), .. }) = slots.get(&vid) {
-            if v.k == LegacyKind::Vertex {
+        match slots.get(&vid) {
+            Some(LegacySlotEntry { v: Some(v), .. }) if v.k == LegacyKind::Vertex => {
                 b.vertices.insert(vid as EntityId, v.xyz);
+            }
+            other => {
+                let got = other.map(|ent| &*ent.name).unwrap_or("missing");
+                return Err(Error::runtime(format!(
+                    "edge {s} vertex pointer {vid} resolved to {got}"
+                )));
             }
         }
     }
@@ -631,6 +637,7 @@ fn add_edge(
             }
         }
     }
+    Ok(())
 }
 
 // SketchUp's Dynamic Components extension stores its data in an attribute
@@ -668,12 +675,16 @@ fn guide_layer(layer: i32) -> String {
     }
 }
 
-fn fill(b: &mut GeometryBuilder, ents: &[LegacyObject], slots: &HashMap<u64, LegacySlotEntry>) {
+fn fill(
+    b: &mut GeometryBuilder,
+    ents: &[LegacyObject],
+    slots: &HashMap<u64, LegacySlotEntry>,
+) -> Result<()> {
     for x in ents {
         let s = x.slot;
         let Some(v) = &x.v else { continue };
         match v.k {
-            LegacyKind::Edge => add_edge(b, s, v, slots),
+            LegacyKind::Edge => add_edge(b, s, v, slots)?,
             LegacyKind::ArcCurve => {
                 b.arc_curves.insert(s as EntityId, v.arc);
             }
@@ -692,7 +703,7 @@ fn fill(b: &mut GeometryBuilder, ents: &[LegacyObject], slots: &HashMap<u64, Leg
                     let mut co = Vec::new();
                     for u in &lp.uses {
                         if let Some(LegacySlotEntry { v: Some(ev), .. }) = slots.get(&u.edge) {
-                            add_edge(b, u.edge, ev, slots);
+                            add_edge(b, u.edge, ev, slots)?;
                             co.push(CoEdge {
                                 edge_id: u.edge as EntityId,
                                 orientation: if u.sense { -1 } else { 1 },
@@ -824,6 +835,7 @@ fn fill(b: &mut GeometryBuilder, ents: &[LegacyObject], slots: &HashMap<u64, Leg
             _ => {}
         }
     }
+    Ok(())
 }
 
 fn material(v: &LegacyValue, slots: &HashMap<u64, LegacySlotEntry>) -> RawMaterial {
@@ -997,10 +1009,23 @@ pub fn parse_legacy(data: &[u8], o: &ParseOptions) -> Result<RawParsed, SkpParse
                 is_group: v.is_group,
                 ..Default::default()
             };
-            fill(&mut d.builder, &v.ents, slots);
+            fill(&mut d.builder, &v.ents, slots).map_err(|e| {
+                SkpParseError::at_stage(
+                    "Failed while building component definitions",
+                    ParseStage::LegacyDefs,
+                )
+                .with_definition_id(slot as i64)
+                .with_cause(e)
+            })?;
             out.definitions.insert(slot as EntityId, d);
         }
-        fill(&mut out.root.builder, &walked.root, slots);
+        fill(&mut out.root.builder, &walked.root, slots).map_err(|e| {
+            SkpParseError::at_stage(
+                "Failed while building root entities",
+                ParseStage::LegacyDefs,
+            )
+            .with_cause(e)
+        })?;
     }
 
     // whole scene records first; the narrow scan only when the full reader
