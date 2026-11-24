@@ -406,6 +406,9 @@ class Definition {
   /// placed.
   final bool isGroup;
 
+  /// Native definition attribute dictionaries from VFF files, preserving typed values.
+  final Map<String, Map<String, Object?>> attributeDictionaries;
+
   Definition({
     this.id = 0,
     this.guid = '',
@@ -414,7 +417,8 @@ class Definition {
     this.shadowsFaceSun = false,
     this.isImage = false,
     this.isGroup = false,
-  });
+    Map<String, Map<String, Object?>>? attributeDictionaries,
+  }) : attributeDictionaries = attributeDictionaries ?? {};
 }
 
 /// Complete parsed representation of a SketchUp file, mirroring the shape

@@ -60,6 +60,7 @@ fn definition(
         shadows_face_sun: r.shadows_face_sun,
         is_image: r.is_image,
         is_group: r.is_group,
+        parsed_dictionaries: r.parsed_dictionaries,
         ..Default::default()
     };
     for (&vid, v) in &b.vertices {

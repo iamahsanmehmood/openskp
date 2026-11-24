@@ -710,15 +710,56 @@ bool _isCoplanar(List<Point3> points) {
 
 final Random _rnd = Random.secure();
 
-/// A random RFC-4122-shaped v4 UUID's 16 raw bytes, matching
-/// `uuid.uuid4().bytes` in Python - this format has no strict validator on
-/// the SketchUp side, but setting the version/variant bits keeps the value
-/// a genuine UUID rather than 16 arbitrary bytes.
+const List<int> _windowsGuidOrder = [
+  3, 2, 1, 0, 5, 4, 7, 6, 8, 9, 10, 11, 12, 13, 14, 15,
+];
+
+/// A random v4 UUID's 16 bytes in Windows GUID byte order (Data1/Data2/Data3
+/// little-endian), matching CArchive's on-disk GUID layout.
 List<int> _uuid4Bytes() {
-  final bytes = List<int>.generate(16, (_) => _rnd.nextInt(256));
-  bytes[6] = (bytes[6] & 0x0F) | 0x40;
-  bytes[8] = (bytes[8] & 0x3F) | 0x80;
-  return bytes;
+  final wire = List<int>.generate(16, (_) => _rnd.nextInt(256));
+  wire[6] = (wire[6] & 0x0F) | 0x40;
+  wire[8] = (wire[8] & 0x3F) | 0x80;
+  return [for (final idx in _windowsGuidOrder) wire[idx]];
+}
+
+List<int> _archiveUuid([String? value]) {
+  if (value == null || value.isEmpty) {
+    return _uuid4Bytes();
+  }
+  String hex;
+  if (value.length == 32) {
+    hex = value;
+  } else if (value.length == 36 &&
+      value[8] == '-' &&
+      value[13] == '-' &&
+      value[18] == '-' &&
+      value[23] == '-') {
+    final sb = StringBuffer();
+    for (var i = 0; i < value.length; i++) {
+      if (i != 8 && i != 13 && i != 18 && i != 23) sb.write(value[i]);
+    }
+    hex = sb.toString();
+  } else {
+    throw SkpWriteError('GUID must contain 32 hex digits or use 8-4-4-4-12 notation');
+  }
+  int hexDigit(int code) {
+    if (code >= 0x30 && code <= 0x39) return code - 0x30;
+    if (code >= 0x61 && code <= 0x66) return code - 0x61 + 10;
+    if (code >= 0x41 && code <= 0x46) return code - 0x41 + 10;
+    return -1;
+  }
+
+  final wire = List<int>.filled(16, 0);
+  for (var i = 0; i < 16; i++) {
+    final hi = hexDigit(hex.codeUnitAt(2 * i));
+    final lo = hexDigit(hex.codeUnitAt(2 * i + 1));
+    if (hi < 0 || lo < 0) {
+      throw SkpWriteError('GUID contains a non-hex digit');
+    }
+    wire[i] = (hi << 4) | lo;
+  }
+  return [for (final idx in _windowsGuidOrder) wire[idx]];
 }
 
 List<(String, Map<String, Object>)> _attrDicts(Map<String, Object>? attributes, String name) {
@@ -1388,10 +1429,10 @@ class _ArchiveWriter {
 
   /// Close out a `CComponentDefinition` record: relationship count, GUID,
   /// name, timestamp, behavior flags, and a default thumbnail.
-  int writeDefinitionTail(String name, {bool isGroup = false}) {
+  int writeDefinitionTail(String name, {bool isGroup = false, List<int>? guid}) {
     buf.addAll(_u32(0)); // nrel: CRelationship count - always 0, not supported
     buf.addAll(_u16(0));
-    buf.addAll(_uuid4Bytes());
+    buf.addAll(guid ?? _uuid4Bytes());
     _writeStr(name);
     _writeStr(''); // description - empty in ground truth
     _writeStr(''); // second name field - empty in ground truth
@@ -1965,9 +2006,17 @@ class ComponentDefinitionBuilder implements GeometryHost {
   /// definition, which needs an explicit later [SkpBuilder.addInstance]
   /// call.
   final GroupPlacement? _groupPlacement;
+  final List<int> _guid;
   int? _groupFlagPos;
 
-  ComponentDefinitionBuilder._(this._skp, this.slot, this.name, this._countPatchPos, this._groupPlacement);
+  ComponentDefinitionBuilder._(
+    this._skp,
+    this.slot,
+    this.name,
+    this._countPatchPos,
+    this._groupPlacement,
+    this._guid,
+  );
 
   void _checkWritable(String action) {
     if (_closed) {
@@ -2232,7 +2281,7 @@ class ComponentDefinitionBuilder implements GeometryHost {
     }
     final writer = _skp._definitionWriter!;
     _patchU32(writer.buf, _countPatchPos, _newEntityCount);
-    _groupFlagPos = writer.writeDefinitionTail(name, isGroup: _groupPlacement != null);
+    _groupFlagPos = writer.writeDefinitionTail(name, isGroup: _groupPlacement != null, guid: _guid);
     _closed = true;
     _skp._openDefinition = null;
     final gp = _groupPlacement;
@@ -2311,6 +2360,14 @@ class SkpBuilder implements GeometryHost {
   final Map<(int, int), (int, int)> _edgeRegistry = {};
   int _newEntityCount = 0;
   int _faceCount = 0;
+  List<int>? _modelGuid;
+
+  /// Set the file/model UUID (also its identity when imported as a component).
+  /// Accepts 32 hex digits or 8-4-4-4-12, case-insensitive; invalid values
+  /// throw [SkpWriteError]. Empty generates a new UUID.
+  void setGuid(String guid) {
+    _modelGuid = _archiveUuid(guid);
+  }
 
   /// The root geometry writer's current next-archive-slot value, or null
   /// before any root-level geometry has been written. Exposed only so a
@@ -2542,6 +2599,7 @@ class SkpBuilder implements GeometryHost {
     String caller, {
     GroupPlacement? groupPlacement,
     List<(String, Map<String, Object>)> attributeDicts = const [],
+    List<int>? guid,
   }) {
     if (_geometryWriter != null) {
       throw SkpWriteError('$caller must be called before any addFace/addInstance calls');
@@ -2562,7 +2620,14 @@ class SkpBuilder implements GeometryHost {
     }
     final (slot, countPatchPos) = _definitionWriter!.writeDefinitionHeader(attributeDicts);
     _definitionCount++;
-    final comp = ComponentDefinitionBuilder._(this, slot, name, countPatchPos, groupPlacement);
+    final comp = ComponentDefinitionBuilder._(
+      this,
+      slot,
+      name,
+      countPatchPos,
+      groupPlacement,
+      guid ?? _uuid4Bytes(),
+    );
     _openDefinition = comp;
     return comp;
   }
@@ -2585,14 +2650,23 @@ class SkpBuilder implements GeometryHost {
   /// [attributes], if given, is custom key/value metadata (values may be
   /// `String`, `int`, or `double`) attached to the definition itself,
   /// under a dictionary named [attributeDictName].
+  /// [guid], if given, sets the definition's canonical UUID (32 hex digits
+  /// or 8-4-4-4-12, case-insensitive).
   ComponentDefinitionBuilder addComponentDefinition(
     String name,
     void Function(ComponentDefinitionBuilder def) body, {
     Map<String, Object>? attributes,
     String attributeDictName = 'attributes',
+    String? guid,
   }) {
+    final resolvedGuid = _archiveUuid(guid);
     final attributeDicts = _attrDicts(attributes, attributeDictName);
-    final comp = _startDefinition(name, 'addComponentDefinition', attributeDicts: attributeDicts);
+    final comp = _startDefinition(
+      name,
+      'addComponentDefinition',
+      attributeDicts: attributeDicts,
+      guid: resolvedGuid,
+    );
     body(comp);
     comp._close();
     return comp;
@@ -3089,6 +3163,9 @@ class SkpBuilder implements GeometryHost {
     // SketchUp overwrites them in place rather than growing the file by 4
     // extra bytes here.
     final prefix = List<int>.from(_data.sublist(0, _materialInsertPos - 4));
+    if (_modelGuid != null) {
+      prefix.setRange(52, 68, _modelGuid!);
+    }
     // The model's pid counter: the last pid handed out, in every section. A
     // 32-bit field, so a model with more than 65 535 entities keeps a truthful
     // counter.

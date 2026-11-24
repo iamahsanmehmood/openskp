@@ -37,6 +37,7 @@ import { extractThumbnail, SkpThumbnail } from './thumbnail';
 import { toFragments, FragmentExportOptions } from './fragments';
 
 export * from './model';
+export type { VffAttrValue } from './geometry';
 export type {
   InstancedScene,
   InstancedNode,

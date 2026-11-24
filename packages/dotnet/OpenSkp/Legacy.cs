@@ -1439,7 +1439,7 @@ namespace OpenSkp
             r.F64();                                     // constant 1.0
             r.Utf16();                                    // source path
             var guid = r.Raw(16);
-            return new ImageRec { Db = db, Def = ds, Xform = xform, Guid = LegacyBytes.ToHex(guid) };
+            return new ImageRec { Db = db, Def = ds, Xform = xform, Guid = Geometry.GuidFromWindowsBytes(guid) };
         }
 
         /// <summary>A reference-to-entity tag: dimension connection points
@@ -2043,7 +2043,7 @@ namespace OpenSkp
             return new DefinitionRec
             {
                 Name = name,
-                Guid = LegacyBytes.ToHex(guid),
+                Guid = Geometry.GuidFromWindowsBytes(guid),
                 Ents = ents,
                 FacesCamera = (behavior & 1) != 0,
                 ShadowsFaceSun = (behavior & 2) != 0,
@@ -2074,8 +2074,9 @@ namespace OpenSkp
             // schema gate is always true for it and forces a phantom 16-byte
             // read on every pre-2014 group (openskp#284 / #310).
             byte[] guid = ar.Ver >= 14 ? r.Raw(16) : Array.Empty<byte>();
+            string guidHex = guid.Length == 16 ? Geometry.GuidFromWindowsBytes(guid) : LegacyBytes.ToHex(guid);
 
-            return new InstanceRec { Db = db, Def = ds, Xf = xf, Name = name, Guid = LegacyBytes.ToHex(guid), Attrs = pre.Attrs as AttrsRec };
+            return new InstanceRec { Db = db, Def = ds, Xf = xf, Name = name, Guid = guidHex, Attrs = pre.Attrs as AttrsRec };
         }
 
         // SketchUp's Dynamic Components extension stores its data in an

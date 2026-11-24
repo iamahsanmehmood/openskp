@@ -1510,3 +1510,137 @@ fn guide_options_reject_a_foreign_layer_handle() {
         .add_construction_line([0.0; 3], Some([1.0, 0.0, 0.0]), None, &foreign)
         .is_err());
 }
+
+#[test]
+fn model_guid_is_unique_per_builder_and_stable_across_writes() {
+    let mut first = create();
+    let mut second = create();
+    first.add_face(&square(), &FaceOptions::default()).unwrap();
+    second.add_face(&square(), &FaceOptions::default()).unwrap();
+    let a = first.to_bytes().unwrap();
+    let b = second.to_bytes().unwrap();
+    let again = first.to_bytes().unwrap();
+    assert!(a.len() >= 68);
+    assert!(b.len() >= 68);
+    assert!(again.len() >= 68);
+    let guid = &a[52..68];
+    assert_ne!(guid, &b[52..68]);
+    assert_eq!(guid, &again[52..68]);
+    assert_eq!(guid[7] & 0xf0, 0x40);
+    assert_eq!(guid[8] & 0xc0, 0x80);
+}
+
+#[test]
+fn explicit_model_guid_uses_native_byte_order() {
+    let mut b = create();
+    b.add_face(&square(), &FaceOptions::default()).unwrap();
+    let native = [
+        0x33, 0x22, 0x11, 0x00, 0x55, 0x44, 0x77, 0x46, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee,
+        0xff,
+    ];
+    for guid in [
+        "00112233-4455-4677-8899-aabbccddeeff",
+        "00112233445546778899AABBCCDDEEFF",
+    ] {
+        b.set_guid(guid).unwrap();
+        let data = b.to_bytes().unwrap();
+        assert!(data.len() >= 68);
+        assert_eq!(&data[52..68], &native);
+    }
+    assert!(b.set_guid("not-a-guid").is_err());
+    assert!(b.set_guid("00112233445546778899AABBCCDDEEFZ").is_err());
+    assert!(b.set_guid("00112233-4455-4677-8899a-abbccddeeff").is_err());
+    let unchanged = b.to_bytes().unwrap();
+    assert_eq!(&unchanged[52..68], &native);
+    b.set_guid("").unwrap();
+    let reset = b.to_bytes().unwrap();
+    assert_ne!(&reset[52..68], &native);
+}
+
+#[test]
+fn definition_guid_preserved_in_archive_and_public_model() {
+    let native = [
+        0x33, 0x22, 0x11, 0x00, 0x55, 0x44, 0x77, 0x46, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee,
+        0xff,
+    ];
+    for guid in [
+        "00112233-4455-4677-8899-aabbccddeeff",
+        "00112233445546778899AABBCCDDEEFF",
+    ] {
+        let mut b = create();
+        let opts = DefinitionOptions {
+            guid: guid.to_owned(),
+            ..Default::default()
+        };
+        let def = {
+            let mut d = b.add_component_definition("Identified", &opts).unwrap();
+            d.add_face(&square(), &FaceOptions::default()).unwrap();
+            d.close().unwrap()
+        };
+        b.add_instance(def, &InstanceOptions::default()).unwrap();
+        let data = b.to_bytes().unwrap();
+        assert!(data.windows(native.len()).any(|w| w == native));
+        let model = SkpFile::from_buffer(data)
+            .parse(&ParseOptions::default())
+            .unwrap();
+        assert_eq!(model.definitions.len(), 1);
+        let only_def = model.definitions.values().next().unwrap();
+        assert_eq!(only_def.guid, "00112233445546778899AABBCCDDEEFF");
+        assert_eq!(model.root().instances.len(), 1);
+        let ref_idx = model.root().instances[0].ref_idx.unwrap();
+        assert_eq!(
+            model.definitions[&ref_idx].guid,
+            "00112233445546778899AABBCCDDEEFF"
+        );
+    }
+}
+
+#[test]
+fn invalid_definition_guid_does_not_partially_add_definition() {
+    let mut b = create();
+    let bad = DefinitionOptions {
+        guid: "not-a-guid".to_owned(),
+        ..Default::default()
+    };
+    assert!(b.add_component_definition("Invalid", &bad).is_err());
+    let good = {
+        let mut d = b
+            .add_component_definition("Valid", &DefinitionOptions::default())
+            .unwrap();
+        d.add_face(&square(), &FaceOptions::default()).unwrap();
+        d.close().unwrap()
+    };
+    b.add_instance(good, &InstanceOptions::default()).unwrap();
+    let model = round_trip(&mut b);
+    assert_eq!(model.definitions.len(), 1);
+    assert_eq!(model.definitions.values().next().unwrap().name, "Valid");
+}
+
+#[test]
+fn default_definition_guids_are_distinct_and_stable() {
+    let mut b = create();
+    let def_a = {
+        let mut d = b
+            .add_component_definition("Same name", &DefinitionOptions::default())
+            .unwrap();
+        d.add_face(&square(), &FaceOptions::default()).unwrap();
+        d.close().unwrap()
+    };
+    let def_b = {
+        let mut d = b
+            .add_component_definition("Same name", &DefinitionOptions::default())
+            .unwrap();
+        d.add_face(&square(), &FaceOptions::default()).unwrap();
+        d.close().unwrap()
+    };
+    b.add_instance(def_a, &InstanceOptions::default()).unwrap();
+    b.add_instance(def_b, &InstanceOptions::default()).unwrap();
+    let first = round_trip(&mut b);
+    let second = round_trip(&mut b);
+    assert_eq!(first.definitions.len(), 2);
+    let defs: Vec<_> = first.definitions.values().collect();
+    assert_ne!(defs[0].guid, defs[1].guid);
+    for (id, defn) in &first.definitions {
+        assert_eq!(defn.guid, second.definitions[id].guid);
+    }
+}

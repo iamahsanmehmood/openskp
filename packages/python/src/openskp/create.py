@@ -739,6 +739,26 @@ _DIM_B42 = bytes.fromhex("00000000000000000000020000000400000000000000"
                          "0000000000000000000000000000000000000000")
 
 
+_HEX_DIGITS = frozenset("0123456789abcdefABCDEF")
+
+
+def _archive_uuid(value: Optional[str] = None) -> bytes:
+    """Parse a canonical UUID string (32 hex digits or 8-4-4-4-12) into 16
+    Windows-order GUID bytes, or generate a new v4 UUID when empty/None."""
+    if not value:
+        return uuid.uuid4().bytes_le
+    if len(value) == 32:
+        hex_str = value
+    elif (len(value) == 36 and value[8] == "-" and value[13] == "-"
+          and value[18] == "-" and value[23] == "-"):
+        hex_str = value[:8] + value[9:13] + value[14:18] + value[19:23] + value[24:]
+    else:
+        raise SkpWriteError("GUID must contain 32 hex digits or use 8-4-4-4-12 notation")
+    if len(hex_str) != 32 or not all(ch in _HEX_DIGITS for ch in hex_str):
+        raise SkpWriteError("GUID contains a non-hex digit")
+    return uuid.UUID(hex=hex_str).bytes_le
+
+
 def _f64(v: float) -> bytes:
     return struct.pack("<d", v)
 
@@ -1360,7 +1380,10 @@ class _ArchiveWriter:
         self.buf += _u32(0)  # placeholder entity count, patched by the caller
         return slot, count_patch_pos
 
-    def write_definition_tail(self, name: str, behavior: int = 0, is_group: bool = False) -> int:
+    def write_definition_tail(
+        self, name: str, behavior: int = 0, is_group: bool = False,
+        guid: Optional[bytes] = None,
+    ) -> int:
         """Close out a ``CComponentDefinition`` record: relationship count,
         GUID, name, timestamp, behavior flags, and a default thumbnail.
 
@@ -1376,7 +1399,7 @@ class _ArchiveWriter:
         component can be flagged later, when it is placed as a group."""
         self.buf += _u32(0)  # nrel: CRelationship count - always 0, not supported
         self.buf += struct.pack("<H", 0)
-        self.buf += uuid.uuid4().bytes
+        self.buf += guid if guid is not None else _archive_uuid()
         self._write_str(name)
         self._write_str("")  # description - empty in ground truth
         self._write_str("")  # second name field - empty in ground truth
@@ -1988,6 +2011,7 @@ class ComponentDefinitionBuilder:
         self._skp = skp
         self.slot = slot
         self.name = name
+        self._guid: bytes = _archive_uuid()
         #: SketchUp's behavior byte, set by `SkpBuilder.add_component_definition`
         #: (bit 0 always-faces-camera, bit 1 shadows-face-sun).
         self.behavior = 0
@@ -2337,7 +2361,8 @@ class ComponentDefinitionBuilder:
         writer = self._skp._definition_writer
         struct.pack_into("<I", writer.buf, self._count_patch_pos, self._new_entity_count)
         self._group_flag_pos = writer.write_definition_tail(
-            self.name, behavior=self.behavior, is_group=self._group_placement is not None)
+            self.name, behavior=self.behavior, is_group=self._group_placement is not None,
+            guid=self._guid)
         self._closed = True
         self._skp._open_definition = None
         if self._group_placement is not None:
@@ -2463,6 +2488,13 @@ class SkpBuilder:
         self._new_entity_count = 0
         self._face_count = 0
         self._dim_font_slot: Optional[int] = None
+        self._model_guid: Optional[bytes] = None
+
+    def set_guid(self, guid: str) -> None:
+        """Set the file/model UUID (also its identity when imported as a
+        component). Accepts 32 hex digits or 8-4-4-4-12, case-insensitive;
+        empty generates a new UUID; invalid values raise :class:`SkpWriteError`."""
+        self._model_guid = _archive_uuid(guid)
 
     @contextlib.contextmanager
     def definitions(self) -> Iterator["SkpBuilder"]:
@@ -2731,6 +2763,7 @@ class SkpBuilder:
         attribute_dicts: Sequence[Tuple[str, Dict[str, object]]] = (),
         always_faces_camera: bool = False,
         shadows_face_sun: bool = False,
+        guid: Optional[str] = None,
     ) -> "ComponentDefinitionBuilder":
         """Start a new reusable component definition. Use the returned
         object as a context manager, adding its geometry via `.add_face`
@@ -2761,9 +2794,11 @@ class SkpBuilder:
         several dictionaries at once - real SketchUp entities routinely
         carry more than one. Passing both raises.
         """
+        resolved_guid = _archive_uuid(guid)
         resolved_attribute_dicts = _resolve_attribute_dicts(attributes, attribute_dict_name, attribute_dicts)
         db = self._start_definition(name, "add_component_definition", attribute_dicts=resolved_attribute_dicts)
         db.behavior = (1 if always_faces_camera else 0) | (2 if shadows_face_sun else 0)
+        db._guid = resolved_guid
         return db
 
     def add_group(
@@ -3642,6 +3677,8 @@ class SkpBuilder:
         # authored files (an earlier version of this method double-counted
         # this field as a fresh insertion, corrupting every offset after it).
         prefix = bytearray(self._data[: self._material_insert_pos - 4])
+        if self._model_guid is not None:
+            prefix[52:68] = self._model_guid
         # The model's pid counter: the last pid handed out, in every
         # section. A 32-bit field (the two bytes after the old u16 are part
         # of it - a counter of 2 000 000 round-trips through the SDK), so a

@@ -12,7 +12,7 @@ use super::{
     LegacyValue, FIRST_DIB_OBJECT, FIRST_NAMED_INSTANCE, FIRST_SINGLE_PREAMBLE_LINE_STYLE,
     FIRST_V4, MAX_V20_FILLER_PAD,
 };
-use crate::internal::{read_f64, read_u16, read_u32, Error, Result};
+use crate::internal::{guid_from_windows_bytes, read_f64, read_u16, read_u32, Error, Result};
 use crate::model::constrained_offset_vector;
 
 /// A decoded value (always present for an object read in full).
@@ -34,16 +34,6 @@ pub(crate) fn is_class_ref(d: &[u8], p: usize, slot: u64) -> bool {
         && u16::from_le_bytes([d[p], d[p + 1]]) == 0x7fff
         && u32::from_le_bytes([d[p + 2], d[p + 3], d[p + 4], d[p + 5]])
             == (0x8000_0000u32 | slot as u32)
-}
-
-fn hex_guid(g: &[u8]) -> String {
-    const H: &[u8; 16] = b"0123456789ABCDEF";
-    let mut s = String::with_capacity(g.len() * 2);
-    for &x in g {
-        s.push(H[(x >> 4) as usize] as char);
-        s.push(H[(x & 15) as usize] as char);
-    }
-    s
 }
 
 pub(crate) struct Archive<'a> {
@@ -787,7 +777,7 @@ impl<'a> Archive<'a> {
                 v.xf = self.r.f64s(12)?;
                 self.r.f64()?; // constant 1.0
                 self.r.utf16()?; // source path
-                v.guid = hex_guid(self.r.raw(16)?);
+                v.guid = guid_from_windows_bytes(self.r.raw(16)?)?;
             }
             "CRelationship" => {
                 // two object pointers binding an annotation to the entity it
@@ -1346,7 +1336,7 @@ impl<'a> Archive<'a> {
                 self.r.p += skip;
             }
         }
-        v.guid = hex_guid(self.r.raw(16)?);
+        v.guid = guid_from_windows_bytes(self.r.raw(16)?)?;
         v.name = self.r.utf16()?;
         self.r.utf16()?;
         self.r.utf16()?;

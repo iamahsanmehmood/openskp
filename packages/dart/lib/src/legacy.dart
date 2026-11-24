@@ -1426,7 +1426,8 @@ class LegacyReaders {
     r.f64(); // constant 1.0
     r.utf16(); // source path
     final guid = r.raw(16);
-    return ImageRec(db: db, def: ds, xform: xform, guid: Tlv.toHexUpper(guid));
+    return ImageRec(
+        db: db, def: ds, xform: xform, guid: Geometry.guidFromWindowsBytes(guid));
   }
 
   /// A reference-to-entity tag: dimension connection points and text
@@ -1966,7 +1967,7 @@ class LegacyReaders {
     ar.readObject(r, 'CThumbnail');
     return DefinitionRec(
       name: name,
-      guid: Tlv.toHexUpper(guid),
+      guid: Geometry.guidFromWindowsBytes(guid),
       ents: ents,
       facesCamera: (behavior & 1) != 0,
       shadowsFaceSun: (behavior & 2) != 0,
@@ -1996,13 +1997,16 @@ class LegacyReaders {
     // on every version, so a schema gate is always true for it and forces a
     // phantom 16-byte read on every pre-2014 group (openskp#284 / #310).
     final guid = ar.ver >= 14 ? r.raw(16) : Uint8List(0);
+    final guidHex = guid.length == 16
+        ? Geometry.guidFromWindowsBytes(guid)
+        : Tlv.toHexUpper(guid);
 
     return InstanceRec(
         db: db,
         def: ds,
         xf: xf,
         name: name,
-        guid: Tlv.toHexUpper(guid),
+        guid: guidHex,
         attrs: pre.attrs as AttrsRec?);
   }
 

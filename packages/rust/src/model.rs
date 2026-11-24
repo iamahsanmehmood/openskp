@@ -771,6 +771,8 @@ pub struct Definition {
     pub is_image: bool,
     /// SketchUp made this definition for a group rather than a component.
     pub is_group: bool,
+    /// Native definition attributes from VFF files, preserving booleans, nil and arrays.
+    pub parsed_dictionaries: ParsedAttrDictionaries,
 }
 
 impl Definition {

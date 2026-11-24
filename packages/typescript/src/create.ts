@@ -496,6 +496,37 @@ function randomGuidBytes(): number[] {
   return Array.from(bytes);
 }
 
+function archiveUuid(value?: string): number[] {
+  let bytes: number[];
+  if (!value) {
+    bytes = randomGuidBytes();
+  } else {
+    let hex: string;
+    if (value.length === 32) {
+      hex = value;
+    } else if (
+      value.length === 36 &&
+      value[8] === '-' &&
+      value[13] === '-' &&
+      value[18] === '-' &&
+      value[23] === '-'
+    ) {
+      hex = value.slice(0, 8) + value.slice(9, 13) + value.slice(14, 18) + value.slice(19, 23) + value.slice(24);
+    } else {
+      throw new SkpWriteError('GUID must contain 32 hex digits or use 8-4-4-4-12 notation');
+    }
+    if (!/^[0-9a-fA-F]{32}$/.test(hex)) {
+      throw new SkpWriteError('GUID contains a non-hex digit');
+    }
+    bytes = [];
+    for (let i = 0; i < 16; i++) {
+      bytes.push(parseInt(hex.slice(2 * i, 2 * i + 2), 16));
+    }
+  }
+  const order = [3, 2, 1, 0, 5, 4, 7, 6, 8, 9, 10, 11, 12, 13, 14, 15];
+  return order.map((idx) => bytes[idx]);
+}
+
 /** CDib's format tag for the two image formats this project has
  * confirmed via SDK ground truth - PNG and JPEG, both real SketchUp
  * encodes as the source file's bytes verbatim, distinguished only by
@@ -1141,10 +1172,10 @@ class ArchiveWriter {
 
   /** Close out a CComponentDefinition record: relationship count, GUID,
    * name, timestamp, behavior flags, and a default thumbnail. */
-  writeDefinitionTail(name: string, isGroup = false): number {
+  writeDefinitionTail(name: string, isGroup = false, guid?: number[]): number {
     this.pushU32(0); // nrel: CRelationship count - always 0, not supported
     this.pushU16(0);
-    this.pushBytes(randomGuidBytes());
+    this.pushBytes(guid ?? archiveUuid());
     this.writeStr(name);
     this.writeStr(''); // description - empty in ground truth
     this.writeStr(''); // second name field - empty in ground truth
@@ -1649,6 +1680,8 @@ export interface AddGroupInstanceOptions {
 export interface AddComponentDefinitionOptions {
   attributes?: AttributeDict;
   attributeDictName?: string;
+  /** Canonical UUID: 32 hex digits or 8-4-4-4-12, case-insensitive. Empty/omitted creates a new identity. */
+  guid?: string;
 }
 
 export interface AddGroupOptions {
@@ -1698,14 +1731,23 @@ export class ComponentDefinitionBuilder {
   private closed = false;
   private groupPlacement?: GroupPlacement;
   private groupFlagPos?: number;
+  private guidBytes: number[];
 
   /** @internal */
-  constructor(skp: SkpBuilder, slot: number, name: string, countPatchPos: number, groupPlacement?: GroupPlacement) {
+  constructor(
+    skp: SkpBuilder,
+    slot: number,
+    name: string,
+    countPatchPos: number,
+    groupPlacement?: GroupPlacement,
+    guidBytes?: number[]
+  ) {
     this._skp = skp;
     this.slot = slot;
     this.name = name;
     this.countPatchPos = countPatchPos;
     this.groupPlacement = groupPlacement;
+    this.guidBytes = guidBytes ?? archiveUuid();
   }
 
   private checkWritable(action: string): void {
@@ -1848,7 +1890,7 @@ export class ComponentDefinitionBuilder {
     }
     const writer = this._skp._definitionWriter();
     this._skp._patchDefinitionCount(this.countPatchPos, this.newEntityCount);
-    this.groupFlagPos = writer.writeDefinitionTail(this.name, this.groupPlacement !== undefined);
+    this.groupFlagPos = writer.writeDefinitionTail(this.name, this.groupPlacement !== undefined, this.guidBytes);
     this.closed = true;
     this._skp._clearOpenDefinition();
     if (this.groupPlacement !== undefined) {
@@ -1901,6 +1943,7 @@ export class SkpBuilder {
   private edgeRegistry = new Map<string, [number, number]>();
   private newEntityCount = 0;
   private faceCount = 0;
+  private modelGuid: number[] | null = null;
 
   /** First persistent id this builder hands out: one past the scaffold's own counter. */
   private pidStart: number;
@@ -2060,9 +2103,17 @@ export class SkpBuilder {
     return this.materialShiftedClassSlot();
   }
 
+  /** Set the file/model UUID (also its identity when imported as a component).
+   * Accepts 32 hex digits or 8-4-4-4-12, case-insensitive; invalid values throw
+   * SkpWriteError; empty generates a new UUID. */
+  setGuid(guid: string): void {
+    this.modelGuid = archiveUuid(guid);
+  }
+
   private startDefinition(
     name: string, caller: string, groupPlacement?: GroupPlacement,
-    attributeDicts: ReadonlyArray<[string, AttributeDict]> = []
+    attributeDicts: ReadonlyArray<[string, AttributeDict]> = [],
+    guidBytes?: number[]
   ): ComponentDefinitionBuilder {
     if (this.geometryWriter !== null) {
       throw new SkpWriteError(`${caller} must be called before any addFace/addInstance calls`);
@@ -2083,7 +2134,7 @@ export class SkpBuilder {
     }
     const [slot, countPatchPos] = this.definitionWriterInstance.writeDefinitionHeader(attributeDicts);
     this.definitionCount += 1;
-    const comp = new ComponentDefinitionBuilder(this, slot, name, countPatchPos, groupPlacement);
+    const comp = new ComponentDefinitionBuilder(this, slot, name, countPatchPos, groupPlacement, guidBytes);
     this.openDefinition = comp;
     return comp;
   }
@@ -2106,8 +2157,9 @@ export class SkpBuilder {
   addComponentDefinition(
     name: string, build: (def: ComponentDefinitionBuilder) => void, options: AddComponentDefinitionOptions = {}
   ): ComponentDefinitionBuilder {
+    const guidBytes = archiveUuid(options.guid);
     const attributeDicts = attributeDictsFrom(options.attributes, options.attributeDictName ?? 'attributes');
-    const def = this.startDefinition(name, 'addComponentDefinition', undefined, attributeDicts);
+    const def = this.startDefinition(name, 'addComponentDefinition', undefined, attributeDicts, guidBytes);
     build(def);
     def._close();
     return def;
@@ -2443,6 +2495,9 @@ export class SkpBuilder {
     // Real SketchUp overwrites them in place rather than growing the
     // file by 4 extra bytes here.
     const prefix = Array.from(this.data.subarray(0, this.materialInsertPos - 4));
+    if (this.modelGuid !== null) {
+      for (let i = 0; i < 16; i++) prefix[52 + i] = this.modelGuid[i];
+    }
     // The model's pid counter: the last pid handed out, in every section. A
     // 32-bit field, so a model with more than 65 535 entities keeps a truthful
     // counter.

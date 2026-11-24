@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — Python, TypeScript, .NET, Dart & Rust: canonical component/instance UUIDs, explicit writer UUIDs, and typed VFF definition attribute dictionaries (#478, #285)
+
+- Ports C++'s component identity and VFF definition dictionary support (#478) across the remaining ports:
+  - Classic (`CComponentDefinition`, `CComponentInstance`, `CImage`) and VFF (`7D15`, `6819`) readers in Python, TypeScript, .NET, Dart, and Rust now decode 16-byte Windows GUID fields into canonical uppercase 32-hex UUID order, so the same component definition reports the identical `guid` across pre-2021 and 2021+ containers.
+  - TypeScript (`Definition.attributeDictionaries`), .NET (`Definition.AttributeDictionaries`), Dart (`Definition.attributeDictionaries`), and Rust (`Definition.parsed_dictionaries`) now expose typed VFF attribute dictionaries from a definition's own `8813 > D007 > DC05` entity base without mixing in child instance or face dictionaries (matching Python's `Definition.attribute_dictionaries` and C++'s `Definition::parsed_dictionaries`).
+  - `SkpBuilder` now accepts explicit canonical or hyphenated UUIDs for the model (`set_guid` / `setGuid` / `SetGuid`) and component definitions (`guid` / `DefinitionOptions.guid`) across Python, TypeScript, .NET, Dart, and Rust, rejecting malformed GUIDs before mutating builder state.
+
 ### Fixed — Python: scenes use a component instance's own paint and tag in classic files (#596)
 
 - `build_scene()` and `build_instanced_scene()` read an instance's paint and tag from its 2021+ `D007` record only. In classic (pre-2021) files a painted component came out in its tag's colour, and every instance sat on its parent's tag. Both now come from the instance itself, and nested components inherit the paint.

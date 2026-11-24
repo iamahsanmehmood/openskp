@@ -630,21 +630,50 @@ namespace OpenSkp
                 + "(detected from the file's own magic bytes, not its extension)");
         }
 
-        /// <summary>A fresh 16-byte v4 UUID, in RFC 4122 wire (big-endian)
-        /// byte order - matching Python's uuid.uuid4().bytes / real
-        /// SketchUp's own GUIDs, even though the exact byte order has no
-        /// effect on round-trip correctness (both this project's own
-        /// reader and real SketchUp store these 16 bytes as opaque data,
-        /// never parsing them structurally) - .NET's Guid.ToByteArray()
-        /// stores its first three fields little-endian, so they're
-        /// reversed here to match.</summary>
+        /// <summary>A fresh 16-byte v4 UUID in Windows GUID byte order (Data1/Data2/Data3 little-endian),
+        /// matching CArchive's on-disk GUID layout.</summary>
         internal static byte[] NewGuidBytes()
         {
-            var b = Guid.NewGuid().ToByteArray();
-            Array.Reverse(b, 0, 4);
-            Array.Reverse(b, 4, 2);
-            Array.Reverse(b, 6, 2);
-            return b;
+            return Guid.NewGuid().ToByteArray();
+        }
+
+        /// <summary>Parse a canonical 32-hex or 8-4-4-4-12 UUID string into 16 Windows-order GUID bytes,
+        /// or generate a new random v4 UUID when <paramref name="value"/> is null or empty.</summary>
+        internal static byte[] ArchiveUuid(string? value)
+        {
+            if (string.IsNullOrEmpty(value))
+            {
+                return NewGuidBytes();
+            }
+            string hex;
+            if (value!.Length == 32)
+            {
+                hex = value;
+            }
+            else if (value.Length == 36
+                && value[8] == '-' && value[13] == '-' && value[18] == '-' && value[23] == '-')
+            {
+                var sb = new StringBuilder(32);
+                for (int i = 0; i < value.Length; i++)
+                {
+                    if (i != 8 && i != 13 && i != 18 && i != 23) sb.Append(value[i]);
+                }
+                hex = sb.ToString();
+            }
+            else
+            {
+                throw new SkpWriteException("GUID must contain 32 hex digits or use 8-4-4-4-12 notation");
+            }
+            for (int i = 0; i < hex.Length; i++)
+            {
+                char c = hex[i];
+                bool isHex = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+                if (!isHex)
+                {
+                    throw new SkpWriteException("GUID contains a non-hex digit");
+                }
+            }
+            return Guid.ParseExact(hex, "N").ToByteArray();
         }
     }
 
@@ -1259,11 +1288,11 @@ namespace OpenSkp
         /// <summary>Close out a CComponentDefinition record: relationship
         /// count, GUID, name, timestamp, behavior flags, and a default
         /// thumbnail.</summary>
-        internal int WriteDefinitionTail(string name, bool isGroup = false)
+        internal int WriteDefinitionTail(string name, bool isGroup = false, byte[]? guid = null)
         {
             AddU32(0); // nrel: CRelationship count - always 0, not supported
             AddU16(0);
-            AddRaw(CreateMath.NewGuidBytes());
+            AddRaw(guid ?? CreateMath.NewGuidBytes());
             WriteStr(name);
             WriteStr(""); // description - empty in ground truth
             WriteStr(""); // second name field - empty in ground truth
@@ -1779,15 +1808,17 @@ namespace OpenSkp
         // immediately on close, unlike a plain component definition, which
         // needs an explicit later AddInstance call.
         private readonly GroupPlacement? _groupPlacement;
+        private readonly byte[] _guid;
         private int? _groupFlagPos;
 
-        internal ComponentDefinitionBuilder(SkpBuilder skp, int slot, string name, int countPatchPos, GroupPlacement? groupPlacement)
+        internal ComponentDefinitionBuilder(SkpBuilder skp, int slot, string name, int countPatchPos, GroupPlacement? groupPlacement, byte[] guid)
         {
             Skp = skp;
             Slot = slot;
             Name = name;
             _countPatchPos = countPatchPos;
             _groupPlacement = groupPlacement;
+            _guid = guid;
         }
 
         private void CheckWritable(string action)
@@ -1995,7 +2026,7 @@ namespace OpenSkp
             }
             var writer = Skp.DefinitionWriter!;
             writer.PatchU32(_countPatchPos, (uint)_newEntityCount);
-            _groupFlagPos = writer.WriteDefinitionTail(Name, _groupPlacement.HasValue);
+            _groupFlagPos = writer.WriteDefinitionTail(Name, _groupPlacement.HasValue, _guid);
             _closed = true;
             Skp.ClearOpenDefinition(this);
             if (_groupPlacement.HasValue)
@@ -2118,6 +2149,19 @@ namespace OpenSkp
         // dimension/text's font field (exactly as SketchUp writes it) and
         // re-used by back-ref afterwards - see AddDimension/AddText.
         private int? _dimFontSlot;
+        private byte[]? _modelGuid;
+
+        /// <summary>Set the file/model UUID (also its identity when imported as a component).
+        /// Accepts 32 hex digits or 8-4-4-4-12, case-insensitive; invalid values throw
+        /// <see cref="SkpWriteException"/>. Empty generates a new UUID.</summary>
+        public void SetGuid(string guid)
+        {
+            if (guid == null)
+            {
+                throw new SkpWriteException("GUID must contain 32 hex digits or use 8-4-4-4-12 notation");
+            }
+            _modelGuid = CreateMath.ArchiveUuid(guid);
+        }
 
         private static readonly int?[] ClayerPattern = BuildClayerPattern();
 
@@ -2409,7 +2453,8 @@ namespace OpenSkp
         private Dictionary<string, int> PostLayerClassSlot() =>
             _layerWriter != null ? new Dictionary<string, int>(_layerWriter.ClassSlot) : MaterialShiftedClassSlot();
 
-        private ComponentDefinitionBuilder StartDefinition(string name, string caller, GroupPlacement? groupPlacement, IReadOnlyList<AttributeDict>? attributeDicts)
+        private ComponentDefinitionBuilder StartDefinition(
+            string name, string caller, GroupPlacement? groupPlacement, IReadOnlyList<AttributeDict>? attributeDicts, byte[]? guid = null)
         {
             if (_geometryWriter != null)
             {
@@ -2427,7 +2472,8 @@ namespace OpenSkp
             }
             var (slot, countPatchPos) = DefinitionWriter.WriteDefinitionHeader(attributeDicts);
             _definitionCount += 1;
-            var comp = new ComponentDefinitionBuilder(this, slot, name, countPatchPos, groupPlacement);
+            var comp = new ComponentDefinitionBuilder(
+                this, slot, name, countPatchPos, groupPlacement, guid ?? CreateMath.NewGuidBytes());
             _openDefinition = comp;
             return comp;
         }
@@ -2451,14 +2497,20 @@ namespace OpenSkp
         ///
         /// attributes, if given, is custom key/value metadata (values may
         /// be string, int, or double) attached to the definition itself,
-        /// under a dictionary named attributeDictName.</summary>
+        /// under a dictionary named attributeDictName.
+        /// guid, if given, sets the definition's canonical UUID (32 hex
+        /// digits or 8-4-4-4-12, case-insensitive).</summary>
         public ComponentDefinitionBuilder AddComponentDefinition(
-            string name, IReadOnlyDictionary<string, object>? attributes = null, string attributeDictName = "attributes")
+            string name,
+            IReadOnlyDictionary<string, object>? attributes = null,
+            string attributeDictName = "attributes",
+            string? guid = null)
         {
+            byte[] resolvedGuid = CreateMath.ArchiveUuid(guid);
             var attributeDicts = attributes != null && attributes.Count > 0
                 ? new List<AttributeDict> { new AttributeDict(attributeDictName, attributes) }
                 : null;
-            return StartDefinition(name, "AddComponentDefinition", null, attributeDicts);
+            return StartDefinition(name, "AddComponentDefinition", null, attributeDicts, resolvedGuid);
         }
 
         /// <summary>Start a new group. Use the returned object with a
@@ -3109,6 +3161,10 @@ namespace OpenSkp
             // growing the file by 4 extra bytes here.
             var prefix = new byte[_materialInsertPos - 4];
             Array.Copy(_data, 0, prefix, 0, prefix.Length);
+            if (_modelGuid != null)
+            {
+                Array.Copy(_modelGuid, 0, prefix, 52, 16);
+            }
             // The model's pid counter: the last pid handed out, in every
             // section. A 32-bit field, so a model with more than 65 535
             // entities keeps a truthful counter.

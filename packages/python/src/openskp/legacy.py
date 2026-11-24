@@ -40,6 +40,7 @@ import time
 from typing import Any, Dict, Optional
 
 from .errors import SkpParseError
+from ._core import guid_from_windows_bytes as _guid_from_windows_bytes
 
 logger = logging.getLogger("openskp.legacy")
 
@@ -1023,7 +1024,7 @@ def _read_image(ar, r):
     r.utf16()                                  # source path
     guid = r.raw(16)
     return {'k': 'image', 'db': db, 'def': ds, 'xform': xform,
-            'guid': guid.hex().upper()}
+            'guid': _guid_from_windows_bytes(guid)}
 
 
 def _read_relationship(ar, r):
@@ -1934,7 +1935,7 @@ def _read_definition(ar, r):
     # puts one over a component definition, which SketchUp calls a component.
     is_group = len(gap) >= 4 and int.from_bytes(gap[-4:], 'little') == 1
     ar.read_object(r, expect='CThumbnail')
-    return {'k': 'definition', 'name': name, 'guid': guid.hex().upper(),
+    return {'k': 'definition', 'name': name, 'guid': _guid_from_windows_bytes(guid),
             'ents': ents, 'faces_camera': bool(behavior & 1),
             'shadows_face_sun': bool(behavior & 2), 'is_group': is_group,
             'attrs': pre['attrs']}
@@ -1978,7 +1979,9 @@ def _read_instance(ar, r):
     else:
         guid = b''
     return {'k': 'instance', 'db': db, 'def': ds, 'xf': xf,
-            'name': name, 'guid': guid.hex().upper(), 'attrs': pre['attrs']}
+            'name': name,
+            'guid': _guid_from_windows_bytes(guid) if len(guid) == 16 else '',
+            'attrs': pre['attrs']}
 
 
 _READERS = {

@@ -76,6 +76,19 @@ export class GeometryBuilder {
   constructionPoints: { position: [number, number, number] }[] = [];
 }
 
+const WIN_GUID_ORDER = [3, 2, 1, 0, 5, 4, 7, 6, 8, 9, 10, 11, 12, 13, 14, 15];
+
+/** Convert 16 Windows-order GUID bytes into a canonical 32-char uppercase UUID. */
+export function guidFromWindowsBytes(bytes: Uint8Array): string {
+  if (bytes.length !== 16) throw new Error('GUID must contain exactly 16 bytes');
+  let hex = '';
+  for (const idx of WIN_GUID_ORDER) {
+    const h = bytes[idx].toString(16).toUpperCase();
+    hex += h.length === 1 ? '0' + h : h;
+  }
+  return hex;
+}
+
 export interface ParsedDefinition {
   guid: string;
   name: string;
@@ -83,6 +96,7 @@ export interface ParsedDefinition {
   isGroup?: boolean;
   alwaysFacesCamera: boolean;
   shadowsFaceSun?: boolean;
+  attributeDictionaries?: Record<string, Record<string, VffAttrValue>>;
   sectionPlanes?: { plane: [number, number, number, number]; name: string; label: string; hidden: boolean }[];
   texts?: { text: string; hidden: boolean }[];
   dimensions?: { text: string; hidden: boolean }[];
@@ -373,12 +387,7 @@ export function extractGeometryFromNodes(
 
       const guidNode = findChildTag(nodesToSearch, '6819');
       if (guidNode && guidNode.payload.length === 16) {
-        let hex = '';
-        for (let i = 0; i < 16; i++) {
-          const h = guidNode.payload[i].toString(16).toUpperCase();
-          hex += h.length === 1 ? '0' + h : h;
-        }
-        guid = hex;
+        guid = guidFromWindowsBytes(guidNode.payload);
       }
 
       const defIdxNode = findChildTag(nodesToSearch, '6719');
@@ -548,12 +557,7 @@ export function collectDefs(
       let shadowsFaceSun = false;
       for (const child of el.children) {
         if (child.tag === '7D15' && child.payload.length === 16) {
-          let hex = '';
-          for (let i = 0; i < 16; i++) {
-            const h = child.payload[i].toString(16).toUpperCase();
-            hex += h.length === 1 ? '0' + h : h;
-          }
-          guid = hex;
+          guid = guidFromWindowsBytes(child.payload);
         } else if (child.tag === '7E15') {
           try {
             const decoder = new TextDecoder('utf-8');
@@ -599,6 +603,7 @@ export function collectDefs(
           isGroup,
           alwaysFacesCamera: facesCamera,
           shadowsFaceSun,
+          attributeDictionaries: entityAttributeDictionaries(el.children, options),
           builder,
         });
       }
@@ -829,6 +834,22 @@ export function extractAttributeDictionaries(
 
   walk(propElements);
   return dictionaries;
+}
+
+/**
+ * Every attribute dictionary on the entity whose direct children are `nodes`
+ * (a component definition `7C15` or the model `F601`): reads only its direct
+ * `8813` entity base -> `D007`, never child instances/faces/edges.
+ */
+export function entityAttributeDictionaries(
+  nodes: TlvNode[],
+  options?: ParseOptions
+): Record<string, Record<string, VffAttrValue>> {
+  const entity = nodes.find((n) => n.tag === '8813');
+  if (!entity) return {};
+  const d007 = entity.children.find((n) => n.tag === 'D007');
+  if (!d007) return {};
+  return extractAttributeDictionaries(d007, options);
 }
 
 // Matches SketchUp's own auto-generated placeholder definition names

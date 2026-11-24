@@ -582,3 +582,35 @@ fn loose_edge_runs_follow_curve_ids() {
         assert!(ends.contains(&run.vertex_ids[k]) && ends.contains(&run.vertex_ids[k + 1]));
     }
 }
+
+#[test]
+fn component_guid_matches_across_classic_and_vff_containers() {
+    for filename in ["nesting_2017.skp", "nesting_2020.skp", "nesting_2021.skp"] {
+        let model = parse(filename);
+        let shelves: Vec<_> = model
+            .definitions
+            .values()
+            .filter(|d| d.name == "Shelf")
+            .collect();
+        assert_eq!(shelves.len(), 1, "{filename}");
+        assert_eq!(shelves[0].guid, "1614E9C58C0B40338881DDE62E6E2D80");
+        let mut references = 0usize;
+        for defn in std::iter::once(model.root()).chain(model.definitions.values()) {
+            for inst in &defn.instances {
+                let Some(ref_idx) = inst.ref_idx else {
+                    continue;
+                };
+                assert!(model.definitions.contains_key(&ref_idx));
+                references += 1;
+            }
+        }
+        assert!(references > 0);
+        if filename == "nesting_2021.skp" {
+            assert_eq!(model.root().instances.len(), 1);
+            assert_eq!(
+                model.root().instances[0].guid,
+                "0BFF75653E97458E9B7238A6E9CF1A99"
+            );
+        }
+    }
+}
