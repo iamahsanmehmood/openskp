@@ -458,7 +458,7 @@ def _attribute_container(
     )
 
 
-def _definition(container: Record, name: str, kind: int = 0) -> Record:
+def _definition(container: Record, name: str, guid: bytes, timestamp: int, kind: int = 0) -> Record:
     behaviour = Record(
         T_DEFINITION_BEHAVIOUR,
         children=[
@@ -474,13 +474,13 @@ def _definition(container: Record, name: str, kind: int = 0) -> Record:
         T_DEFINITION,
         children=[
             container,
-            record(T_DEFINITION_GUID, uuid.uuid4().bytes),
+            record(T_DEFINITION_GUID, guid),
             record(T_DEFINITION_NAME, name.encode("utf-8")),
             record(T_DEFINITION_DESCRIPTION, b""),
             record(T_DEFINITION_SOURCE, b""),
             record(T_DEFINITION_FLAG, u8(0)),
             record(T_DEFINITION_KIND, u32(kind)),
-            record(T_DEFINITION_TIMESTAMP, u32(int(time.time()))),
+            record(T_DEFINITION_TIMESTAMP, u32(timestamp)),
             behaviour,
         ],
     )
@@ -648,7 +648,9 @@ def _material_folder_for(name: str, taken: Sequence[str]) -> str:
 class Template:
     """A SketchUp-written VFF document parsed into an editable record tree."""
 
-    def __init__(self, data: bytes) -> None:
+    def __init__(self, data: bytes, options: Optional[dict] = None) -> None:
+        self.options = dict(options or {})
+        self._guid_counter = 0
         zip_offset = data.find(b"PK\x03\x04")
         if zip_offset < 0:
             raise ValueError("not a VFF file: no embedded ZIP archive")
@@ -691,6 +693,36 @@ class Template:
         self.camera: Optional[dict] = None
         self.new_entries: List[ZipEntry] = []
         self._entry_names = set(self._by_name)
+
+    def guid_bytes(self) -> bytes:
+        """Random by default; reproducible when ``options['guid_seed']`` is set."""
+        seed = self.options.get("guid_seed")
+        if seed is None:
+            return uuid.uuid4().bytes
+        state = (int(seed) ^ (self._guid_counter * 0x9E3779B9)) & 0xFFFFFFFF
+        self._guid_counter += 1
+        out = bytearray()
+        for _ in range(4):
+            state ^= (state << 13) & 0xFFFFFFFF
+            state ^= state >> 17
+            state ^= (state << 5) & 0xFFFFFFFF
+            state &= 0xFFFFFFFF
+            out += struct.pack("<I", state)
+        return bytes(out)
+
+    def model_guid_bytes(self) -> bytes:
+        supplied = self.options.get("model_guid")
+        if supplied is not None:
+            if isinstance(supplied, str):
+                return bytes.fromhex(supplied.replace("-", ""))
+            return bytes(supplied)
+        return self.guid_bytes()
+
+    def save_time(self) -> int:
+        return int(self.options.get("save_time", int(time.time())))
+
+    def definition_time(self) -> int:
+        return int(self.options.get("definition_time", int(time.time())))
 
     def _read_font_id(self) -> Optional[int]:
         section = self.sections.get(0x01FD)
@@ -1177,7 +1209,9 @@ class Template:
     def add_definition(
         self, container: Record, name: str, container_id: int, kind: int = 0
     ) -> int:
-        definition = _definition(container, name, kind=kind)
+        definition = _definition(
+            container, name, self.guid_bytes(), self.definition_time(), kind=kind
+        )
         self._definition_list().children.append(definition)
         return container_id
 
@@ -1199,7 +1233,7 @@ class Template:
         guid = root.child(T_META_GUID)
         if guid is None:
             raise ValueError("template meta.dat has no model GUID")
-        guid.payload = uuid.uuid4().bytes
+        guid.payload = self.model_guid_bytes()
 
         revision = root.child(T_META_REVISION)
         if revision is not None:
@@ -1216,7 +1250,7 @@ class Template:
                 stamp = items[-1].child(T_META_HISTORY_TIME)
                 if stamp is not None:
                     stamp.payload = struct.pack(
-                        "<I", int(time.time()) & 0xFFFFFFFF
+                        "<I", self.save_time() & 0xFFFFFFFF
                     )
         return encode_records(records)
 
@@ -1911,7 +1945,7 @@ class EntityEditor:
                 record(T_INSTANCE_NAME, name.encode("utf-8")),
                 record(T_INSTANCE_TRANSFORM, f64s(matrix13)),
                 record(T_INSTANCE_DEFINITION, varint(definition_container_id)),
-                record(T_INSTANCE_GUID, uuid.uuid4().bytes),
+                record(T_INSTANCE_GUID, self.template.guid_bytes()),
             ],
         )
         self._pool(T_COMPONENTS).children.append(instance)
@@ -1951,7 +1985,7 @@ class EntityEditor:
                 record(T_INSTANCE_NAME, name.encode("utf-8")),
                 record(T_INSTANCE_TRANSFORM, f64s(matrix13)),
                 record(T_INSTANCE_DEFINITION, varint(definition_container_id)),
-                record(T_INSTANCE_GUID, uuid.uuid4().bytes),
+                record(T_INSTANCE_GUID, self.template.guid_bytes()),
             ],
         )
         self._pool(T_GROUPS).children.append(Record(T_GROUP, children=[instance]))

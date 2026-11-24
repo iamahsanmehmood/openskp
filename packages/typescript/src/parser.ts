@@ -27,6 +27,10 @@ export const CONTAINER_TAGS = new Set<string>([
   '9013', '401F',
   // VFF per-definition guide lines/points and their entity/drawbase wrappers.
   '9113', '9213', '6942', '6C42', '6842',
+  // Stage-4 annotations: text/dimension/section pools and items.
+  '9813', 'F055', 'F455', '0852', '0B52', 'FC53',
+  '9913', 'CC5B', 'D859', 'CD5B', 'CE5B',
+  '9313', '5C44',
 ]);
 
 export function readU32(data: Uint8Array, offset: number): number {

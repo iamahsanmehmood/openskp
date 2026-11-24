@@ -37,6 +37,36 @@ import { extractThumbnail, SkpThumbnail } from './thumbnail';
 import { toFragments, FragmentExportOptions } from './fragments';
 
 export * from './model';
+export {
+  VffBuilder,
+  VffComponentDefinitionBuilder,
+  VffDefinitionHandle,
+  VffGroupBuilder,
+  VffWriteError,
+  checkIntegrity,
+  createVff,
+  create as createVffAlias,
+  openExistingVff,
+  pngAverageColor,
+} from './create-vff';
+export type {
+  Rotation as VffRotation,
+  VffCurveHandle,
+  VffTemplateSource,
+} from './create-vff';
+export {
+  VffLength,
+  VffPoint3d,
+  VffTimestamp,
+  VffVector3d,
+} from './vff-writer/types';
+export type {
+  Point3 as VffPoint3,
+  VffAttributeDict,
+  VffAttributeDicts,
+  VffAttributeValue,
+  VffWriterOptions,
+} from './vff-writer/types';
 export type {
   InstancedScene,
   InstancedNode,

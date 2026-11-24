@@ -209,6 +209,12 @@ export function extractUvTransforms(
   return [result[0], result[1]];
 }
 
+function drawingHidden(el: TlvNode): boolean {
+  const d007 = el.children.find((c) => c.tag === 'D007');
+  const d307 = d007?.children.find((c) => c.tag === 'D307');
+  return !!d307 && d307.payload.length > 0 && (d307.payload[0] & 0x01) !== 0;
+}
+
 export function extractGeometryFromNodes(
   elements: TlvNode[],
   builder: GeometryBuilder,
@@ -472,6 +478,39 @@ export function extractGeometryFromNodes(
           position: [readF64(pos.payload, 0), readF64(pos.payload, 8), readF64(pos.payload, 16)],
         });
       }
+    } else if (tag === 'F055') {
+      // VFF CText (F055 -> F155 string, D007 drawing element).
+      const textNode = findChildTag(el.children, 'F155');
+      let text = '';
+      if (textNode) {
+        try {
+          text = new TextDecoder('utf-8').decode(textNode.payload).replace(/\0/g, '');
+        } catch {
+          text = '';
+        }
+      }
+      builder.texts.push({ text, hidden: drawingHidden(el) });
+    } else if (tag === '5C44') {
+      // VFF CSectionPlane (5C44 -> 5D44 plane, 5E44 name, 5F44 symbol).
+      const planeNode = findChildTag(el.children, '5D44');
+      const nameNode = findChildTag(el.children, '5E44');
+      const symbolNode = findChildTag(el.children, '5F44');
+      if (planeNode && planeNode.payload.length === 32) {
+        builder.sectionPlanes.push({
+          plane: [
+            readF64(planeNode.payload, 0),
+            readF64(planeNode.payload, 8),
+            readF64(planeNode.payload, 16),
+            readF64(planeNode.payload, 24),
+          ],
+          name: nameNode ? new TextDecoder('utf-8').decode(nameNode.payload) : '',
+          label: symbolNode ? new TextDecoder('utf-8').decode(symbolNode.payload) : '',
+          hidden: drawingHidden(el),
+        });
+      }
+    } else if (tag === 'CC5B') {
+      // VFF linear dimension (per-definition placeholder text/hidden).
+      builder.dimensions.push({ text: '', hidden: drawingHidden(el) });
     } else if (el.children && el.children.length > 0) {
       extractGeometryFromNodes(el.children, builder, options);
     }
@@ -678,14 +717,12 @@ export function extractDynamicProperties(d007: TlvNode, options?: ParseOptions):
   return properties;
 }
 
-// A decoded VFF attribute value - whichever of the 7 documented types
-// (of 9 total; no native bool/time_t tag has ever been observed in real
-// data, so 7/9 is Python's own real ceiling) `decodeVffAttrValue` below
-// recognized: string (AD38), number (AF38/A938 double, A738 int32), a
-// flat 3-tuple (B438 Point3d / B538 Vector3d), a recursively-decoded
-// array (AE38), or null (an unrecognized tag, or an A438 with no value
-// child at all).
-export type VffAttrValue = string | number | [number, number, number] | VffAttrValue[] | null;
+// A decoded VFF attribute value - all 9 documented types: string (AD38),
+// number (AF38/A938 double, A738 int32, AC38 time_t uint32), boolean
+// (AA38), a flat 3-tuple (B438 Point3d / B538 Vector3d), a
+// recursively-decoded array (AE38), or null (an unrecognized tag, or an
+// A438 with no value child at all).
+export type VffAttrValue = string | number | boolean | [number, number, number] | VffAttrValue[] | null;
 
 // AF38 (Length) and A938 (plain Float) both encode as a flat 8-byte
 // float64 but are genuinely different tags - real SketchUp/FrameBuilder
@@ -715,6 +752,10 @@ export function decodeVffAttrValue(a438Node: TlvNode): VffAttrValue {
   }
   if (VFF_ATTR_DOUBLE_TAGS.has(tag) && payload.length === 8) return readF64(payload, 0);
   if (tag === 'A738' && payload.length === 4) return readI32(payload, 0);
+  if (tag === 'AA38' && payload.length === 1) return payload[0] !== 0;
+  if (tag === 'AC38' && payload.length === 4) {
+    return (payload[0] | (payload[1] << 8) | (payload[2] << 16) | (payload[3] << 24)) >>> 0;
+  }
   if ((tag === 'B438' || tag === 'B538') && payload.length === 24) {
     return [readF64(payload, 0), readF64(payload, 8), readF64(payload, 16)];
   }
@@ -731,6 +772,7 @@ export function decodeVffAttrValue(a438Node: TlvNode): VffAttrValue {
  */
 export function stringifyVffAttrValue(value: VffAttrValue): string {
   if (value === null || value === undefined) return '';
+  if (typeof value === 'boolean') return value ? '1' : '0';
   if (Array.isArray(value)) {
     return value.map((v) => stringifyVffAttrValue(v)).join(',');
   }

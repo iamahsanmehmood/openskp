@@ -1,0 +1,768 @@
+{
+  "options": {
+    "guidSeed": 20261124,
+    "modelGuid": "00112233445566778899aabbccddeeff",
+    "saveTime": 1700000000,
+    "definitionTime": 1700000000,
+    "portableTrig": true
+  },
+  "textures": {
+    "tex.png": {
+      "name": "TexPNG",
+      "width": 10,
+      "height": 5,
+      "averageColor": [
+        121,
+        68,
+        114
+      ]
+    },
+    "tex.jpg": {
+      "name": "TexJPG",
+      "width": 8,
+      "height": 8,
+      "averageColor": [
+        128,
+        64,
+        32
+      ]
+    }
+  },
+  "attributes": {
+    "s": "hi",
+    "i": 7,
+    "f": 1.5,
+    "b": true,
+    "t": {
+      "$type": "timestamp",
+      "value": 1700000000
+    },
+    "l": {
+      "$type": "length",
+      "value": 12.5
+    },
+    "p": {
+      "$type": "point",
+      "value": [
+        1,
+        2,
+        3
+      ]
+    },
+    "v": {
+      "$type": "vector",
+      "value": [
+        4,
+        5,
+        6
+      ]
+    },
+    "a": [
+      1,
+      "two",
+      {
+        "$type": "length",
+        "value": 2.0
+      }
+    ],
+    "n": null
+  },
+  "ops": [
+    {
+      "op": "layer",
+      "name": "TagA",
+      "color": [
+        200,
+        0,
+        0
+      ]
+    },
+    {
+      "op": "layer",
+      "name": "TagB",
+      "color": [
+        0,
+        0,
+        200
+      ]
+    },
+    {
+      "op": "material",
+      "name": "Red",
+      "rgba": [
+        255,
+        0,
+        0
+      ]
+    },
+    {
+      "op": "material",
+      "name": "Blue",
+      "rgba": [
+        0,
+        0,
+        255
+      ],
+      "opacity": 0.5
+    },
+    {
+      "op": "texture",
+      "image": "tex.png",
+      "name": "TexPNG",
+      "width": 10,
+      "height": 5,
+      "averageColor": [
+        121,
+        68,
+        114
+      ]
+    },
+    {
+      "op": "texture",
+      "image": "tex.jpg",
+      "name": "TexJPG",
+      "width": 8,
+      "height": 8,
+      "averageColor": [
+        128,
+        64,
+        32
+      ]
+    },
+    {
+      "op": "face",
+      "points": [
+        [
+          0,
+          0,
+          0
+        ],
+        [
+          100,
+          0,
+          0
+        ],
+        [
+          100,
+          100,
+          0
+        ],
+        [
+          0,
+          100,
+          0
+        ]
+      ],
+      "material": "Red",
+      "layer": "TagA",
+      "attributes": "attrs"
+    },
+    {
+      "op": "face",
+      "points": [
+        [
+          0,
+          0,
+          10
+        ],
+        [
+          40,
+          0,
+          10
+        ],
+        [
+          40,
+          40,
+          10
+        ],
+        [
+          0,
+          40,
+          10
+        ]
+      ],
+      "material": "TexPNG",
+      "layer": "TagA",
+      "frontUv": [
+        [
+          [
+            0,
+            0,
+            10
+          ],
+          [
+            0,
+            0
+          ]
+        ],
+        [
+          [
+            40,
+            0,
+            10
+          ],
+          [
+            1,
+            0
+          ]
+        ],
+        [
+          [
+            0,
+            40,
+            10
+          ],
+          [
+            0,
+            1
+          ]
+        ]
+      ]
+    },
+    {
+      "op": "face",
+      "points": [
+        [
+          -60,
+          0,
+          0
+        ],
+        [
+          -20,
+          0,
+          0
+        ],
+        [
+          -20,
+          40,
+          0
+        ],
+        [
+          -60,
+          40,
+          0
+        ]
+      ],
+      "material": "TexJPG",
+      "layer": "TagB",
+      "frontUv": [
+        [
+          [
+            -60,
+            0,
+            0
+          ],
+          [
+            0,
+            0
+          ]
+        ],
+        [
+          [
+            -20,
+            0,
+            0
+          ],
+          [
+            2,
+            0
+          ]
+        ],
+        [
+          [
+            -60,
+            40,
+            0
+          ],
+          [
+            0,
+            2
+          ]
+        ]
+      ]
+    },
+    {
+      "op": "face",
+      "points": [
+        [
+          0,
+          0,
+          20
+        ],
+        [
+          40,
+          0,
+          20
+        ],
+        [
+          40,
+          40,
+          20
+        ],
+        [
+          0,
+          40,
+          20
+        ]
+      ],
+      "material": "Blue",
+      "layer": "TagA",
+      "holes": [
+        [
+          [
+            10,
+            10,
+            20
+          ],
+          [
+            10,
+            30,
+            20
+          ],
+          [
+            30,
+            30,
+            20
+          ],
+          [
+            30,
+            10,
+            20
+          ]
+        ]
+      ]
+    },
+    {
+      "op": "circle",
+      "center": [
+        120,
+        0,
+        0
+      ],
+      "normal": [
+        0,
+        0,
+        1
+      ],
+      "radius": 15,
+      "numSegments": 16,
+      "material": "Red",
+      "layer": "TagA"
+    },
+    {
+      "op": "arc",
+      "center": [
+        160,
+        0,
+        0
+      ],
+      "normal": [
+        0,
+        0,
+        1
+      ],
+      "radius": 10,
+      "startAngle": 0,
+      "endAngle": 1.5707963267948966,
+      "numSegments": 8
+    },
+    {
+      "op": "polyline",
+      "points": [
+        [
+          0,
+          60,
+          0
+        ],
+        [
+          20,
+          70,
+          5
+        ],
+        [
+          40,
+          60,
+          10
+        ],
+        [
+          60,
+          75,
+          0
+        ]
+      ],
+      "closed": false
+    },
+    {
+      "op": "definition",
+      "name": "Sub",
+      "ops": [
+        {
+          "op": "face",
+          "points": [
+            [
+              0,
+              0,
+              0
+            ],
+            [
+              5,
+              0,
+              0
+            ],
+            [
+              5,
+              5,
+              0
+            ],
+            [
+              0,
+              5,
+              0
+            ]
+          ],
+          "material": "Blue"
+        }
+      ]
+    },
+    {
+      "op": "definition",
+      "name": "Widget",
+      "attributes": "attrs",
+      "ops": [
+        {
+          "op": "face",
+          "points": [
+            [
+              0,
+              0,
+              0
+            ],
+            [
+              20,
+              0,
+              0
+            ],
+            [
+              20,
+              20,
+              0
+            ],
+            [
+              0,
+              20,
+              0
+            ]
+          ],
+          "material": "Red"
+        },
+        {
+          "op": "circle",
+          "center": [
+            10,
+            10,
+            5
+          ],
+          "normal": [
+            0,
+            0,
+            1
+          ],
+          "radius": 3,
+          "numSegments": 12
+        },
+        {
+          "op": "instance",
+          "definition": "Sub",
+          "translation": [
+            2,
+            2,
+            5
+          ],
+          "attributes": "attrs"
+        },
+        {
+          "op": "group",
+          "name": "InnerGroup",
+          "ops": [
+            {
+              "op": "face",
+              "points": [
+                [
+                  0,
+                  0,
+                  10
+                ],
+                [
+                  5,
+                  0,
+                  10
+                ],
+                [
+                  5,
+                  5,
+                  10
+                ],
+                [
+                  0,
+                  5,
+                  10
+                ]
+              ]
+            }
+          ],
+          "placement": {
+            "translation": [
+              10,
+              0,
+              0
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "op": "instance",
+      "definition": "Widget",
+      "translation": [
+        0,
+        0,
+        0
+      ],
+      "attributes": "attrs"
+    },
+    {
+      "op": "instance",
+      "definition": "Widget",
+      "translation": [
+        50,
+        0,
+        0
+      ],
+      "rotation": {
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "angle": 0.5235987755982988
+      }
+    },
+    {
+      "op": "group",
+      "name": "RootGroup",
+      "ops": [
+        {
+          "op": "face",
+          "points": [
+            [
+              0,
+              0,
+              30
+            ],
+            [
+              30,
+              0,
+              30
+            ],
+            [
+              30,
+              30,
+              30
+            ],
+            [
+              0,
+              30,
+              30
+            ]
+          ],
+          "material": "Red",
+          "layer": "TagB"
+        }
+      ],
+      "placement": {
+        "translation": [
+          0,
+          100,
+          0
+        ]
+      }
+    },
+    {
+      "op": "text",
+      "text": "Leader label",
+      "point": [
+        0,
+        0,
+        0
+      ],
+      "vector": [
+        10,
+        10,
+        10
+      ]
+    },
+    {
+      "op": "text",
+      "text": "Screen label",
+      "point": [
+        5,
+        5,
+        10
+      ],
+      "vector": [
+        30,
+        20,
+        0
+      ],
+      "screen": true
+    },
+    {
+      "op": "dimension",
+      "start": [
+        0,
+        0,
+        0
+      ],
+      "end": [
+        100,
+        0,
+        0
+      ],
+      "offset": 8,
+      "anchor": true
+    },
+    {
+      "op": "dimension",
+      "start": [
+        0,
+        0,
+        0
+      ],
+      "end": [
+        0,
+        100,
+        0
+      ],
+      "offset": 5
+    },
+    {
+      "op": "guideLine",
+      "point": [
+        0,
+        0,
+        0
+      ],
+      "point2": [
+        20,
+        10,
+        5
+      ]
+    },
+    {
+      "op": "guideLine",
+      "point": [
+        0,
+        0,
+        10
+      ],
+      "direction": [
+        0,
+        1,
+        1
+      ]
+    },
+    {
+      "op": "guidePoint",
+      "position": [
+        5,
+        5,
+        5
+      ]
+    },
+    {
+      "op": "section",
+      "point": [
+        0,
+        0,
+        5
+      ],
+      "normal": [
+        0,
+        0,
+        1
+      ],
+      "name": "Section A",
+      "symbol": "A",
+      "active": true
+    },
+    {
+      "op": "section",
+      "point": [
+        5,
+        0,
+        0
+      ],
+      "normal": [
+        1,
+        0,
+        0
+      ],
+      "name": "Section B",
+      "symbol": "B"
+    },
+    {
+      "op": "scene",
+      "name": "Perspective",
+      "eye": [
+        40,
+        -40,
+        30
+      ],
+      "target": [
+        0,
+        0,
+        0
+      ],
+      "perspective": true,
+      "fov": 45
+    },
+    {
+      "op": "scene",
+      "name": "HideB",
+      "eye": [
+        40,
+        -40,
+        30
+      ],
+      "target": [
+        0,
+        0,
+        0
+      ],
+      "perspective": true,
+      "fov": 45,
+      "hiddenLayers": [
+        "TagB"
+      ]
+    },
+    {
+      "op": "camera",
+      "eye": [
+        100,
+        -100,
+        100
+      ],
+      "target": [
+        0,
+        0,
+        0
+      ],
+      "perspective": false,
+      "orthoHeight": 200
+    },
+    {
+      "op": "modelAttributes",
+      "attributes": "attrs"
+    }
+  ]
+}

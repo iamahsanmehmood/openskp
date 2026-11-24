@@ -88,9 +88,7 @@ from ._vff_writer.archive import (
 from ._vff_writer.template import EntityEditor, Template
 from .create import (
     SkpWriteError,
-    _arc_points,
     _circle_basis,
-    _circle_points,
     _resolve_attribute_dicts,
 )
 
@@ -229,6 +227,109 @@ def _normalized(vector: Sequence[float]) -> Tuple[float, float, float]:
     return tuple(float(c) / length for c in vector)  # type: ignore[return-value]
 
 
+# The trigonometric kernels below are derived from fdlibm (Sun
+# Microsystems), which is freely licensed:
+#
+#   Copyright (C) 1993 by Sun Microsystems, Inc. All rights reserved.
+#   Developed at SunPro, a Sun Microsystems, Inc. business.
+#   Permission to use, copy, modify, and distribute this software is
+#   freely granted, provided that this notice is preserved.
+#
+# The same sequence of IEEE double operations is used by the TypeScript
+# port, so opt-in "portable trig" output is bit-identical across both.
+_INVPIO2 = 6.36619772367581382433e-01
+_PIO2_1 = 1.57079632673412561417e00
+_PIO2_1T = 6.07710050650619224932e-11
+_S1 = -1.66666666666666324348e-01
+_S2 = 8.33333333332248946124e-03
+_S3 = -1.98412698298579493134e-04
+_S4 = 2.75573137070700676789e-06
+_S5 = -2.50507602534068634195e-08
+_S6 = 1.58969099521155010221e-10
+_C1 = 4.16666666666666019037e-02
+_C2 = -1.38888888888741095749e-03
+_C3 = 2.48015872894767294178e-05
+_C4 = -2.75573143513906633035e-07
+_C5 = 2.08757232129817482790e-09
+_C6 = -1.13596475577881948265e-11
+
+
+def _kernel_sin(x: float, y: float) -> float:
+    z = x * x
+    v = z * x
+    r = _S2 + z * (_S3 + z * (_S4 + z * (_S5 + z * _S6)))
+    return x + v * (_S1 + z * r) + y
+
+
+def _kernel_cos(x: float, y: float) -> float:
+    z = x * x
+    r = z * (_C1 + z * (_C2 + z * (_C3 + z * (_C4 + z * (_C5 + z * _C6)))))
+    if abs(x) < 0.3:
+        return 1.0 - (0.5 * z - (z * r - x * y))
+    hz = 0.5 * z
+    w = 1.0 - hz
+    return w + (((1.0 - w) - hz) + (z * r - x * y))
+
+
+def _rem_pio2(x: float):
+    n = math.floor(x * _INVPIO2 + 0.5)
+    r = x - n * _PIO2_1
+    w = n * _PIO2_1T
+    return int(n) & 3, r - w
+
+
+def _portable_sin(x: float) -> float:
+    quadrant, y = _rem_pio2(x)
+    if quadrant == 0:
+        return _kernel_sin(y, 0.0)
+    if quadrant == 1:
+        return _kernel_cos(y, 0.0)
+    if quadrant == 2:
+        return -_kernel_sin(y, 0.0)
+    return -_kernel_cos(y, 0.0)
+
+
+def _portable_cos(x: float) -> float:
+    quadrant, y = _rem_pio2(x)
+    if quadrant == 0:
+        return _kernel_cos(y, 0.0)
+    if quadrant == 1:
+        return -_kernel_sin(y, 0.0)
+    if quadrant == 2:
+        return -_kernel_cos(y, 0.0)
+    return _kernel_sin(y, 0.0)
+
+
+def _vff_circle_points(centre, num_segments, radius, u, w, sin, cos):
+    sin = sin or math.sin
+    cos = cos or math.cos
+    points = []
+    for index in range(num_segments):
+        angle = 2.0 * math.pi * index / num_segments
+        c, s = cos(angle), sin(angle)
+        points.append((
+            centre[0] + radius * (c * u[0] + s * w[0]),
+            centre[1] + radius * (c * u[1] + s * w[1]),
+            centre[2] + radius * (c * u[2] + s * w[2]),
+        ))
+    return points
+
+
+def _vff_arc_points(centre, num_segments, radius, u, w, start_angle, end_angle, sin, cos):
+    sin = sin or math.sin
+    cos = cos or math.cos
+    points = []
+    for index in range(num_segments + 1):
+        angle = start_angle + (end_angle - start_angle) * index / num_segments
+        c, s = cos(angle), sin(angle)
+        points.append((
+            centre[0] + radius * (c * u[0] + s * w[0]),
+            centre[1] + radius * (c * u[1] + s * w[1]),
+            centre[2] + radius * (c * u[2] + s * w[2]),
+        ))
+    return points
+
+
 def _curve_points(
     center: Sequence[float],
     normal: Sequence[float],
@@ -236,18 +337,23 @@ def _curve_points(
     num_segments: int,
     start_angle: Optional[float] = None,
     end_angle: Optional[float] = None,
+    portable_trig: bool = False,
 ):
     if not 3 <= num_segments <= 255:
         raise SkpWriteError("num_segments must be between 3 and 255")
     centre = tuple(float(c) for c in center)
     unit_normal = _normalized(normal)
     u, w = _circle_basis(unit_normal)
+    sin = _portable_sin if portable_trig else None
+    cos = _portable_cos if portable_trig else None
     if start_angle is None or end_angle is None:
-        points = _circle_points(centre, unit_normal, float(radius), num_segments, u, w)
+        points = _vff_circle_points(
+            centre, num_segments, float(radius), u, w, sin, cos
+        )
     else:
-        points = _arc_points(
-            centre, unit_normal, float(radius), num_segments, u, w,
-            float(start_angle), float(end_angle),
+        points = _vff_arc_points(
+            centre, num_segments, float(radius), u, w,
+            float(start_angle), float(end_angle), sin, cos,
         )
     return centre, unit_normal, u, w, points
 
@@ -694,14 +800,19 @@ class GroupBuilder(ComponentDefinitionBuilder):
 class VffBuilder:
     """Template-based VFF writer.  See the module docstring for the scope."""
 
-    def __init__(self, template: Optional[TemplateSource] = None) -> None:
+    def __init__(
+        self,
+        template: Optional[TemplateSource] = None,
+        *,
+        options: Optional[dict] = None,
+    ) -> None:
         if template is None:
             data = DEFAULT_TEMPLATE.read_bytes()
         elif isinstance(template, (bytes, bytearray)):
             data = bytes(template)
         else:
             data = Path(template).read_bytes()
-        self._template = Template(data)
+        self._template = Template(data, options)
         self._root = EntityEditor(self._template, container=self._template.root_container)
         self.materials_by_name: dict[str, int] = dict(self._template.materials)
         self.layers_by_name: dict[str, int] = dict(self._template.layers)
@@ -751,6 +862,7 @@ class VffBuilder:
         applied_height: Optional[float] = None,
         opacity: Optional[float] = None,
         image_name: Optional[str] = None,
+        average_color: Optional[Sequence[int]] = None,
     ) -> int:
         """Register a PNG/JPEG-textured material and return a handle.
 
@@ -786,6 +898,11 @@ class VffBuilder:
             if not 0.0 <= float(opacity) <= 1.0:
                 raise SkpWriteError("opacity must be between 0 and 1")
             alpha = float(opacity)
+        average = (
+            tuple(int(c) for c in average_color)
+            if average_color is not None
+            else _average_color(image_bytes)
+        )
         identifier = self._template.add_texture_material(
             name,
             image_bytes,
@@ -793,7 +910,7 @@ class VffBuilder:
             width,
             height,
             alpha,
-            _average_color(image_bytes),
+            average,
             texture_filename,
         )
         self._materials[name] = identifier
@@ -1049,7 +1166,8 @@ class VffBuilder:
         smooth_edges=False,
     ) -> CurveHandle:
         centre, unit_normal, u, w, points = _curve_points(
-            center, normal, radius, num_segments
+            center, normal, radius, num_segments,
+            portable_trig=bool(self._template.options.get("portableTrig")),
         )
         frame = _arc_frame(
             centre, unit_normal, float(radius), u, w, 0.0, 0.0
@@ -1078,7 +1196,8 @@ class VffBuilder:
         if float(start_angle) == float(end_angle):
             raise SkpWriteError("start_angle and end_angle must differ - use add_circle")
         centre, unit_normal, u, w, points = _curve_points(
-            center, normal, radius, num_segments, start_angle, end_angle
+            center, normal, radius, num_segments, start_angle, end_angle,
+            portable_trig=bool(self._template.options.get("portableTrig")),
         )
         frame = _arc_frame(
             centre,
@@ -1407,7 +1526,11 @@ def _average_color(image: bytes) -> Tuple[int, int, int]:
 VffComponentDefinitionBuilder = ComponentDefinitionBuilder
 
 
-def create(template: Optional[TemplateSource] = None) -> VffBuilder:
+def create(
+    template: Optional[TemplateSource] = None,
+    *,
+    options: Optional[dict] = None,
+) -> VffBuilder:
     """Start building a new VFF file (the ``create.py`` entry-point name).
 
     >>> builder = create()
@@ -1417,7 +1540,7 @@ def create(template: Optional[TemplateSource] = None) -> VffBuilder:
     ...                  material=red, layer=tag)
     >>> builder.save("output.skp")
     """
-    return VffBuilder(template)
+    return VffBuilder(template, options=options)
 
 
 def create_vff(template: Optional[TemplateSource] = None) -> VffBuilder:

@@ -835,3 +835,102 @@ the Python-only VFF path (the VFF attribute matrix now shows Python 9/9);
 CHANGELOG `[Unreleased]` has the Added VFF-writer entry (features, SketchUp
 2025 acceptance method, template provenance) and the Fixed reader additions
 (bool/Time, texts, per-definition dimensions, section planes).
+
+# TypeScript VFF writer port
+
+## Layout
+
+`packages/typescript/src/vff-writer/` mirrors the Python internals:
+
+* `core.ts` - record tree (`parseRecords`/`Record`), little-endian helpers,
+  varints/id lists, the local-header ZIP reader/writer (fflate for raw
+  DEFLATE), standard CRC-32, the reflected-register history constants and the
+  clean-room header integrity word.
+* `template.ts` - `Template` (materials/layers/definitions/font/style/scenes/
+  camera/meta, archive entry order) and `EntityEditor` (vertices, edges,
+  faces, instances, curves, texts, dimensions, guides, section planes,
+  bounds/finalize).
+* `uv.ts` - the three-pin texture matrix.
+* `types.ts` - attribute value wrappers (`VffTimestamp`, `VffLength`,
+  `VffPoint3d`, `VffVector3d`) and writer options.
+* `src/create-vff.ts` - `createVff`/`VffBuilder`, the definition/group
+  builders, circles/arcs/polylines, `openExistingVff`, PNG average colour.
+* `src/vff-scaffold.ts` - the same `blank_vff.skp` (SketchUp 2025.0.571,
+  SHA-256 `795c5cb8...306c`) embedded as base64 so the writer works in
+  browsers; no Node APIs are used in `src/`.
+
+The package exports `createVff`, `VffBuilder`, `VffComponentDefinitionBuilder`,
+`VffDefinitionHandle`, `VffGroupBuilder`, `openExistingVff`, `checkIntegrity`,
+the attribute wrappers and the option/type interfaces.
+
+## Determinism and parity
+
+Both writers gained options: `guidSeed` / `guid_seed`, `modelGuid` /
+`model_guid`, `saveTime` / `save_time`, `definitionTime` / `definition_time`
+and (Python `portableTrig`) the portable sin/cos mode used by the goldens.
+Defaults keep the old random UUID/current-time behaviour. The portable PRNG
+is the same xorshift32 sequence in both languages; the portable trig uses
+fdlibm-derived sin/cos kernels with a two-part pi/2 range reduction and the
+same IEEE double operation order in Python and TypeScript (accurate to about
+one ulp over the swept range, and the golden model's circle/arc vertices match
+byte-for-byte).
+
+Shared fixtures live in `packages/typescript/tests/fixtures/vff_writer/`:
+`spec.json` (the all-features model as operations), `tex.png` / `tex.jpg`,
+and `golden/all_features.skp`. `research/vff-writer/parity/build_golden.py`
+builds the golden with Python; `research/vff-writer/parity/ts_driver.cjs`
+builds it with the built TypeScript `dist`; the Python test
+`test_python_reproduces_the_shared_ts_golden` and the TS
+`tests/create-vff.test.ts` both assert the parity definition:
+
+* identical header bytes (integrity word included);
+* identical ZIP entry list (names, order, flags);
+* identical uncompressed bytes in every entry.
+
+Compressed DEFLATE bytes differ between CPython zlib and fflate (skpwright
+reports only "compressed otherwise than SketchUp compresses it" notes, never
+a record error). The model covers faces (including a hole and explicit UV
+pins), solid/textured materials, tags, arcs/circles/polylines, nested
+definitions/instances/groups, every attribute type, texts, dimensions, guides,
+section planes, scenes and the model camera.
+
+Textures: TypeScript computes PNG average colour itself (fflate inflate +
+PNG unfiltering for 8-bit gray/RGB/GA/RGBA, matching Pillow's result for the
+16x8 fixture) and both APIs accept an explicit `averageColor`; the golden
+model passes it for the PNG and JPEG textures, which is the documented JPEG
+path. Python's Pillow path stays the default.
+
+Reader: the TS VFF reader now decodes `AA38` bool and `AC38` time_t (uint32,
+including Python's `"1"`/`"0"` stringification), and extracts texts
+(`0x55f0`), section planes (`0x445c`) and per-definition dimension
+placeholders (`0x5bcc`) so the round-trip tests can check them; parser
+container tags were extended to the annotation pools/items.
+
+## Acceptance
+
+`research/vff-writer/ts/ts_written.skp` (SHA-256
+`eadfe0371c9d8a859920c2d2205be559e7867a7670f6d6df03f86c53e6cff05a`) is the
+all-features model built by the TypeScript `dist`; the Python-written
+equivalent is `python_written.skp` (SHA-256
+`2e24cf0be1970379cfe85ed5063f4560425a1a616560127ae6e41b7f84cf03c8`).
+
+* `Sketchup.open_file` returned true with **no warning dialog**: 5 root faces,
+  2 instances, 1 group, 2 texts, 2 dimensions, 2 guide lines, 1 guide point,
+  2 section planes, 4 definitions, 4 materials, 3 tags, 2 scenes.
+* Ruby dumps (`ts_written_ruby.txt` / `python_written_ruby.txt`) differ only
+  in the document title: identical camera (Iso), counts, definitions, material
+  colours and texture sizes (TexPNG 10x5), page cameras, leader/screen text
+  flags, dimension values/offset vectors, bounded/unbounded guides, section
+  planes/names/symbols/active flags and instance transforms.
+* SketchUp re-saved the TS file as `sketchup_resave.skp` (SHA-256
+  `4e610a0fe80fdb158bacc30c13de90aa4fbc9fb0d475fcddd45bcf5fa068d1a2`);
+  the TS reader and Python openskp produce identical summaries for the
+  written file and the re-save (`ts_written_*_summary.json`,
+  `resave_*_summary.json`), covering counts, definitions, materials/textures,
+  pages/cameras, dimensions, section planes, texts and guides.
+* `skpwright verify` accepts both files.
+
+The CI workflow's new VFF step rebuilds the Python golden, checks it did not
+drift, builds the model through the TypeScript `dist` driver, and applies the
+same header/entry-list/uncompressed-entry comparison locally and in
+`ci-writer-parity.yml`.

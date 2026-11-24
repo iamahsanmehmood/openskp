@@ -570,6 +570,39 @@ jobs:
               print("\nAll 6 writers passed cross-writer parity checks.")
           PY
 
+      - name: Run VFF writer parity check
+        env:
+          REPO_ROOT: ${{ github.workspace }}
+        run: |
+          python research/vff-writer/parity/build_golden.py
+          git diff --exit-code -- packages/typescript/tests/fixtures/vff_writer/golden
+          node research/vff-writer/parity/ts_driver.cjs "$REPO_ROOT" /tmp/ts_vff_golden.skp
+          python - <<'PY'
+          import os
+          import zipfile
+
+          golden = os.path.join(os.environ["REPO_ROOT"], "packages/typescript/tests/fixtures/vff_writer/golden/all_features.skp")
+          ts = "/tmp/ts_vff_golden.skp"
+
+          def parts(path):
+              data = open(path, "rb").read()
+              zip_start = data.find(b"PK\x03\x04")
+              with zipfile.ZipFile(path) as archive:
+                  return (
+                      data[:zip_start],
+                      archive.namelist(),
+                      [archive.read(name) for name in archive.namelist()],
+                  )
+
+          py_header, py_names, py_data = parts(golden)
+          ts_header, ts_names, ts_data = parts(ts)
+          assert py_header == ts_header, "VFF header/integrity word differs"
+          assert py_names == ts_names, "VFF ZIP entry list differs"
+          for name, left, right in zip(py_names, py_data, ts_data):
+              assert left == right, f"VFF entry differs: {name}"
+          print(f"VFF writer parity passed ({len(py_names)} entries, compressed bytes may differ)")
+          PY
+
   required:
     name: Writer Parity CI required
     needs: [changes, cross-writer]

@@ -1424,3 +1424,66 @@ def test_open_existing_still_rejects_unrecognised_files(tmp_path):
     path.write_bytes(b"not a sketchup file")
     with pytest.raises(SkpWriteError, match="not a recognised SketchUp"):
         openskp.open_existing(path)
+
+
+def test_python_reproduces_the_shared_ts_golden():
+    """The deterministic all-features model stays byte-identical to the
+    golden file the TypeScript parity test builds (header, entry list and
+    every uncompressed entry; compressed DEFLATE bytes are allowed to differ).
+    """
+    import importlib.util
+    import io
+    import pathlib
+    import zipfile
+
+    root = pathlib.Path(__file__).resolve().parents[3]
+    script = root / "research" / "vff-writer" / "parity" / "build_golden.py"
+    spec = importlib.util.spec_from_file_location("vff_build_golden", script)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    actual = module.build()
+    golden = root / "packages" / "typescript" / "tests" / "fixtures" / "vff_writer" / "golden" / "all_features.skp"
+    expected = golden.read_bytes()
+
+    actual_zip = actual.find(b"PK\x03\x04")
+    expected_zip = expected.find(b"PK\x03\x04")
+    assert actual[:actual_zip] == expected[:expected_zip]
+
+    with zipfile.ZipFile(io.BytesIO(actual)) as a, zipfile.ZipFile(golden) as b:
+        assert a.namelist() == b.namelist()
+        for name in a.namelist():
+            assert a.read(name) == b.read(name), name
+
+
+def test_portable_trig_matches_mathlib_and_default_circle_points():
+    from openskp.create_vff import _curve_points, _portable_cos, _portable_sin
+
+    def close(a, b):
+        if a == b:
+            return True
+        # Measure the reduction error in ulps of the argument (near a
+        # multiple of pi the result is ~1e-16, where a raw ulp of the result
+        # would demand sub-ulp argument reduction no libm provides).
+        tolerance = 4.0 * math.ulp(max(abs(angle), 1.0))
+        return abs(a - b) <= tolerance
+
+    for index in range(20001):
+        angle = -4.0 * math.pi + 8.0 * math.pi * index / 20000
+        assert close(_portable_sin(angle), math.sin(angle))
+        assert close(_portable_cos(angle), math.cos(angle))
+
+    center = (3.0, 4.0, 5.0)
+    normal = (0.0, 0.0, 1.0)
+    default = _curve_points(center, normal, 12.5, 24)[4]
+    portable = _curve_points(center, normal, 12.5, 24, portable_trig=True)[4]
+    for point, reference in zip(portable, default):
+        for value, expected in zip(point, reference):
+            assert abs(value - expected) <= 1e-12 * max(1.0, abs(expected))
+
+    arc_default = _curve_points(center, normal, 7.0, 17, 0.3, 2.1)[4]
+    arc_portable = _curve_points(
+        center, normal, 7.0, 17, 0.3, 2.1, portable_trig=True
+    )[4]
+    for point, reference in zip(arc_portable, arc_default):
+        for value, expected in zip(point, reference):
+            assert abs(value - expected) <= 1e-12 * max(1.0, abs(expected))

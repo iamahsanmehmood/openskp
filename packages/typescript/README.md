@@ -393,6 +393,36 @@ builder.addFace(
 builder.save('output.skp');   // Node.js only; use builder.toBytes() in the browser
 ```
 
+### Writing VFF (SketchUp 2021+) files
+
+`createVff()` / `VffBuilder` write the modern VFF container from a genuine
+SketchUp-saved template (the bundled 2025 blank by default), covering the same
+feature set as Python's VFF writer: faces, solid/textured materials, tags,
+component definitions, groups and nested placements, arcs/circles/polylines,
+attribute dictionaries, texts, dimensions, guides, section planes and scenes
+with hidden tags, plus the model camera. It runs in browsers and Node, uses
+only `fflate` at runtime, and is kept byte-identical to Python by shared golden
+fixtures and the VFF writer-parity CI step. `openExistingVff()` uses an
+existing VFF file as the template and returns handles for its definitions.
+Files written by either language have been accepted by SketchUp 2025;
+SketchUp 2021-2024 are untested.
+
+```typescript
+import { createVff, VffTimestamp } from 'openskp';
+
+const builder = createVff();
+const red = builder.addMaterial('Red', [255, 0, 0]);
+const tag = builder.addLayer('Roof', [180, 60, 40]);
+builder.addFace([[0, 0, 0], [100, 0, 0], [100, 100, 0], [0, 100, 0]], {
+  material: red,
+  layer: tag,
+  attributes: { built: new VffTimestamp(1700000000) },
+});
+builder.addText('Roof', [0, 0, 0], [10, 10, 10]);
+builder.addScene('Perspective', [40, -40, 30], [0, 0, 0], { fov: 45 });
+const bytes = builder.toBytes(); // browser-safe; save() is available in Node
+```
+
 ### Editing an existing file
 
 ```typescript
