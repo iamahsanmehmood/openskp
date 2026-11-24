@@ -974,3 +974,155 @@ def test_genuine_sketchup_bool_and_time_attributes(tmp_path):
     assert _stringify_vff_attr_value(False) == "0"
     assert _stringify_vff_attr_value(True) == _stringify_attr_value(1)
     assert _stringify_vff_attr_value(False) == _stringify_attr_value(0)
+
+
+# ── Stage 4: text, dimensions, guides and section planes ────────────────────
+
+BOX8 = [
+    (0.0, 0.0, 0.0), (10.0, 0.0, 0.0), (10.0, 10.0, 0.0), (0.0, 10.0, 0.0),
+    (0.0, 0.0, 10.0), (10.0, 0.0, 10.0), (10.0, 10.0, 10.0), (0.0, 10.0, 10.0),
+]
+BOX_QUADS = [(0, 3, 2, 1), (4, 5, 6, 7), (0, 1, 5, 4),
+             (1, 2, 6, 5), (2, 3, 7, 6), (3, 0, 4, 7)]
+
+
+def build_stage4_acceptance(template=None) -> bytes:
+    builder = VffBuilder(template)
+    for quad in BOX_QUADS:
+        builder.add_face([BOX8[i] for i in quad])
+    builder.add_text("Corner label", (0.0, 0.0, 0.0), (10.0, 10.0, 10.0))
+    builder.add_text("Face label", (5.0, 5.0, 10.0), (8.0, -4.0, 6.0))
+    builder.add_screen_text("Screen label", (15.0, 0.0, 10.0), (30.0, 20.0, 0.0))
+    builder.add_dimension((0.0, 0.0, 0.0), (10.0, 0.0, 0.0), offset=8.0, anchor=True)
+    builder.add_guide_line((0.0, 0.0, 0.0), (20.0, 10.0, 5.0))
+    builder.add_guide_line((0.0, 0.0, 10.0), direction=(0.0, 1.0, 1.0))
+    builder.add_guide_point((5.0, 5.0, 5.0))
+    section_a = builder.add_section_plane(
+        (0.0, 0.0, 5.0), (0.0, 0.0, 1.0),
+        name="Section A", symbol="A", active=True,
+    )
+    builder.add_section_plane(
+        (5.0, 0.0, 0.0), (1.0, 0.0, 0.0),
+        name="Section B", symbol="B",
+    )
+    with builder.add_component_definition("Stage4Comp") as definition:
+        for quad in BOX_QUADS:
+            definition.add_face([BOX8[i] for i in quad])
+        definition.add_dimension(
+            (0.0, 0.0, 0.0), (10.0, 0.0, 0.0), offset=8.0, anchor=True
+        )
+    builder.add_instance(definition, translation=(0.0, 30.0, 0.0))
+    builder.add_instance(
+        definition,
+        translation=(30.0, 30.0, 0.0),
+        rotation=((0.0, 0.0, 1.0), math.pi / 6.0),
+    )
+    return builder.to_bytes(), section_a
+
+
+def test_genuine_sketchup_annotations_are_read():
+    path = WRITER_FIXTURES / "genuine_stage4.skp"
+    model = SkpFile.open(str(path)).parse()
+    root = model.root
+
+    assert [t.text for t in root.texts] == [
+        "Corner label", "Face label", "Screen label",
+    ]
+    assert tuple(round(v, 6) for v in root.texts[0].point) == (10.0, 0.0, 0.0)
+    assert tuple(round(v, 6) for v in root.texts[0].label_point) == (20.0, 10.0, 10.0)
+    assert tuple(round(v, 6) for v in root.texts[2].point) == (15.0, 15.0, 0.0)
+
+    # One component dimension, but the definition is placed twice.
+    assert len(model.dimensions) == 2
+    for dimension in model.dimensions:
+        assert tuple(round(v, 6) for v in dimension.a) == (10.0, 0.0, 0.0)
+        assert tuple(round(v, 6) for v in dimension.b) == (0.0, 0.0, 0.0)
+        assert dimension.offset == pytest.approx(-8.0)
+
+    assert len(root.construction_lines) == 2
+    bounded, unbounded = root.construction_lines
+    assert bounded.start is not None and bounded.end is not None
+    assert unbounded.start is None and unbounded.end is None
+    assert len(root.construction_points) == 1
+    assert tuple(round(v, 6) for v in root.construction_points[0].position) == (
+        5.0, 5.0, 5.0,
+    )
+
+    sections = {section.name: section for section in root.section_planes}
+    assert sections["Section A"].label == "A"
+    assert sections["Section A"].plane == [0.0, 0.0, 1.0, -5.0]
+    assert sections["Section B"].label == "B"
+    assert sections["Section B"].plane == [1.0, 0.0, 0.0, -5.0]
+
+    component = next(
+        d for d in model.definitions.values() if d.name == "Stage4Comp"
+    )
+    assert len(component.dimensions) == 1
+
+
+def test_writer_annotations_round_trip(tmp_path):
+    data, section_a = build_stage4_acceptance()
+    assert check_integrity(data)
+    path = tmp_path / "stage4.skp"
+    path.write_bytes(data)
+    model = SkpFile.open(str(path)).parse()
+    root = model.root
+
+    assert [t.text for t in root.texts] == [
+        "Corner label", "Face label", "Screen label",
+    ]
+    assert tuple(round(v, 6) for v in root.texts[1].point) == (5.0, 5.0, 10.0)
+    assert tuple(round(v, 6) for v in root.texts[1].label_point) == (13.0, 1.0, 16.0)
+
+    assert len(root.dimensions) == 1
+    # Root anchored dimension + the component definition's own dimension.
+    assert len(model.dimensions) == 2
+    root_dimension = model.dimensions[0]
+    assert tuple(round(v, 6) for v in root_dimension.a) == (0.0, 0.0, 0.0)
+    assert tuple(round(v, 6) for v in root_dimension.b) == (10.0, 0.0, 0.0)
+
+    assert len(root.construction_lines) == 2
+    bounded, unbounded = root.construction_lines
+    assert tuple(round(v, 6) for v in bounded.start) == (0.0, 0.0, 0.0)
+    assert tuple(round(v, 6) for v in bounded.end) == (20.0, 10.0, 5.0)
+    assert unbounded.start is None and unbounded.end is None
+    assert tuple(round(v, 6) for v in unbounded.direction) == (
+        0.0, round(2 ** -0.5, 6), round(2 ** -0.5, 6),
+    )
+    assert tuple(round(v, 6) for v in root.construction_points[0].position) == (
+        5.0, 5.0, 5.0,
+    )
+
+    sections = {section.name: section for section in root.section_planes}
+    assert sections["Section A"].plane == [0.0, 0.0, 1.0, -5.0]
+    assert sections["Section A"].label == "A"
+    assert sections["Section B"].plane == [1.0, 0.0, 0.0, -5.0]
+    assert sections["Section B"].label == "B"
+
+    # The active section id is recorded in the root entity container.
+    from openskp._core import full_parse
+
+    parsed = full_parse(str(path))
+    assert parsed["defs_dict"]["ROOT"]["builder"].active_section == section_a
+
+    component = next(
+        d for d in model.definitions.values() if d.name == "Stage4Comp"
+    )
+    assert len(component.dimensions) == 1
+    assert len(component.faces) == 6
+
+
+def test_skpwright_verify_stage4_when_available(tmp_path):
+    binary = os.environ.get("SKPWRIGHT_BIN")
+    if not binary:
+        pytest.skip("SKPWRIGHT_BIN is not set; skpwright is an optional verifier")
+    data, _section = build_stage4_acceptance()
+    path = tmp_path / "stage4.skp"
+    path.write_bytes(data)
+    result = subprocess.run(
+        [binary, "verify", str(path)],
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr

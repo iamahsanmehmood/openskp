@@ -66,6 +66,12 @@ T_FACES = 0x138B
 T_COMPONENTS = 0x138C
 T_CURVES = 0x1396
 T_ARC_CURVES = 0x1397
+T_TEXTS = 0x1398
+T_DIMENSIONS = 0x1399
+T_SECTION_PLANES = 0x1393
+T_GUIDE_LINES = 0x1391
+T_GUIDE_POINTS = 0x1392
+T_ACTIVE_SECTION = 0x1394
 T_ORDER = 0x138E
 T_RELATIONSHIPS = 0x139B
 T_FLAGS_CONTAINER = 0x139F
@@ -116,6 +122,60 @@ T_CURVE_FIRST = 0x4A3B
 T_CURVE_LAST = 0x4A3C
 T_ARC_CURVE = 0x4C2C
 T_ARC_FRAME = 0x4C2D
+
+T_TEXT = 0x55F0
+T_TEXT_STRING = 0x55F1
+T_TEXT_EMPTY = 0x55FF
+T_TEXT_ZERO_A = 0x55F2
+T_TEXT_ZERO_B = 0x55F3
+T_TEXT_ANCHOR = 0x55F4
+T_TEXT_VECTOR = 0x55F5
+T_TEXT_ONE = 0x55F6
+T_TEXT_UP = 0x55F7
+T_TEXT_ZERO = 0x55F8
+T_TEXT_FONT = 0x55F9
+T_TEXT_ARROW = 0x55FA
+T_TEXT_LEADER_FLAG_A = 0x55FB
+T_TEXT_LEADER_FLAG = 0x55FC
+T_TEXT_LEADER_TYPE = 0x55FD
+T_TEXT_SCREEN = 0x55FE
+
+T_DIMENSION = 0x5BCC
+T_DIMENSION_HEAD = 0x59D8
+T_DIMENSION_HEAD_EMPTY = 0x59D9
+T_DIMENSION_FONT = 0x59DA
+T_DIMENSION_HEAD_FLAG = 0x59DB
+T_DIMENSION_HEAD_ARROW = 0x59DC
+T_DIM_START = 0x5BCD
+T_DIM_END = 0x5BCE
+T_DIM_NORMAL = 0x5BCF
+T_DIM_XAXIS = 0x5BD0
+T_DIM_ONE = 0x5BD1
+T_DIM_OFFSET = 0x5BD2
+T_DIM_ZERO = 0x5BD3
+T_DIM_ARROW = 0x5BD4
+T_CONNECTION = 0x5208
+T_CONNECTION_TYPE = 0x5209
+T_CONNECTION_POINT = 0x520A
+T_CONNECTION_REF_A = 0x520B
+T_CONNECTION_REF_B = 0x520C
+T_CONNECTION_REF = 0x53FC
+T_CONNECTION_VERTEX = 0x53FD
+T_CONNECTION_PATH = 0x53FE
+
+T_SECTION = 0x445C
+T_SECTION_PLANE = 0x445D
+T_SECTION_NAME = 0x445E
+T_SECTION_SYMBOL = 0x445F
+
+T_ANNOTATION_BASE = 0x4268
+T_GUIDE_LINE = 0x4269
+T_GUIDE_BODY = 0x426A
+T_GUIDE_STIPPLE = 0x426B
+T_GUIDE_POINT = 0x426C
+T_GUIDE_POSITION = 0x426D
+T_GUIDE_ANCHOR = 0x426E
+T_GUIDE_TAIL = 0x426F
 
 T_ATTR_LIST = 0x36B1
 T_ATTR_SET = 0x36B2
@@ -194,6 +254,11 @@ MODEL_CONTAINERS = frozenset(
         T_GROUPS,
         T_CURVES,
         T_ARC_CURVES,
+        T_TEXTS,
+        T_DIMENSIONS,
+        T_SECTION_PLANES,
+        T_GUIDE_LINES,
+        T_GUIDE_POINTS,
         T_RELATIONSHIPS,
     }
 )
@@ -218,6 +283,11 @@ _POOL_TAGS = (
     T_FACES,
     T_COMPONENTS,
     T_GROUPS,
+    T_GUIDE_LINES,
+    T_GUIDE_POINTS,
+    T_SECTION_PLANES,
+    T_TEXTS,
+    T_DIMENSIONS,
 )
 _DEFAULT_LAYER_COLOR = (136, 136, 136)
 
@@ -571,8 +641,32 @@ class Template:
         self.default_layer_id = self.layers.get("Layer0") or (
             next(iter(self.layers.values())) if self.layers else None
         )
+        self.font_id = self._read_font_id()
         self.new_entries: List[ZipEntry] = []
         self._entry_names = set(self._by_name)
+
+    def _read_font_id(self) -> Optional[int]:
+        section = self.sections.get(0x01FD)
+        if section is None:
+            return None
+        try:
+            nodes = parse_records(
+                section.payload, {0x4E20, 0x4E21, 0x5014, T_ENTITY_BASE}
+            )
+        except ValueError:
+            return None
+        for wrapper in nodes:
+            if wrapper.tag != 0x4E20 or wrapper.children is None:
+                continue
+            for pool in wrapper.children:
+                if pool.tag != 0x4E21 or pool.children is None:
+                    continue
+                for font in pool.children:
+                    if font.tag == 0x5014:
+                        identifier = _find_entity_id(font)
+                        if identifier is not None:
+                            return identifier
+        return None
 
     # -- ids --------------------------------------------------------------
 
@@ -908,6 +1002,7 @@ class EntityEditor:
         self.edges: Dict[Tuple[int, int], Tuple[int, int]] = {}
         self.order: List[int] = []
         self.bounds = None  # [minx, miny, minz, maxx, maxy, maxz]
+        self.active_section: Optional[int] = None
         self._pools: Dict[int, Record] = {}
         for child in self.container.children or []:
             if child.tag in _POOL_TAGS and child.children is not None:
@@ -1093,6 +1188,270 @@ class EntityEditor:
         self.order.append(identifier)
         return identifier
 
+    def _font_id(self) -> int:
+        font = self.template.font_id
+        if font is None:
+            raise SkpWriteError("the template has no font record to reference")
+        return font
+
+    @staticmethod
+    def _connection(
+        point: Optional[Sequence[float]] = None,
+        vertex_id: Optional[int] = None,
+    ) -> Record:
+        if vertex_id is None:
+            if point is None:
+                raise ValueError("a free connection needs a point")
+            children = [
+                record(T_CONNECTION_TYPE, u32(1)),
+                record(T_CONNECTION_POINT, f64s([float(c) for c in point])),
+                Record(
+                    T_CONNECTION_REF_A,
+                    children=[Record(T_CONNECTION_REF, children=[record(T_CONNECTION_PATH, b"")])],
+                ),
+                Record(
+                    T_CONNECTION_REF_B,
+                    children=[Record(T_CONNECTION_REF, children=[record(T_CONNECTION_PATH, b"")])],
+                ),
+            ]
+        else:
+            ref = Record(
+                T_CONNECTION_REF,
+                children=[
+                    record(T_CONNECTION_VERTEX, varint(vertex_id)),
+                    record(T_CONNECTION_PATH, b""),
+                ],
+            )
+            children = [
+                record(T_CONNECTION_TYPE, u32(2)),
+                record(T_CONNECTION_POINT, f64s([0.0, 0.0, 0.0])),
+                Record(T_CONNECTION_REF_A, children=[ref]),
+                Record(
+                    T_CONNECTION_REF_B,
+                    children=[
+                        Record(
+                            T_CONNECTION_REF,
+                            children=[record(T_CONNECTION_PATH, b"")],
+                        )
+                    ],
+                ),
+            ]
+        return Record(T_CONNECTION, children=children)
+
+    def add_text(
+        self,
+        text: str,
+        point: Sequence[float],
+        vector: Sequence[float],
+        *,
+        screen: bool = False,
+        layer: Optional[int] = None,
+    ) -> int:
+        identifier = self.template.alloc_id()
+        anchor = (float(point[0]), float(point[1]), float(point[2]))
+        offset = (float(vector[0]), float(vector[1]), float(vector[2]))
+        item = Record(
+            T_TEXT,
+            children=[
+                _drawing(identifier, layer=layer),
+                record(T_TEXT_STRING, text.encode("utf-8")),
+                record(T_TEXT_EMPTY, b""),
+                record(T_TEXT_ZERO_A, f64s([0.0])),
+                record(T_TEXT_ZERO_B, f64s([0.0])),
+                Record(
+                    T_TEXT_ANCHOR, children=[self._connection(point=anchor)]
+                ),
+                record(T_TEXT_VECTOR, f64s(offset)),
+                record(T_TEXT_ONE, u8(1)),
+                record(T_TEXT_UP, f64s([0.0, 0.0, 1.0])),
+                record(T_TEXT_ZERO, u8(0)),
+                record(T_TEXT_FONT, varint(self._font_id())),
+                record(T_TEXT_ARROW, u32(3)),
+                record(T_TEXT_LEADER_FLAG_A, u32(1)),
+                record(T_TEXT_LEADER_FLAG, u8(0 if screen else 1)),
+                record(T_TEXT_LEADER_TYPE, u32(2)),
+                record(T_TEXT_SCREEN, u32(1 if screen else 0)),
+            ],
+        )
+        self._pool(T_TEXTS).children.append(item)
+        self.order.append(identifier)
+        return identifier
+
+    @staticmethod
+    def _perpendicular(direction: Sequence[float]) -> Tuple[float, float, float]:
+        z = (0.0, 0.0, 1.0)
+        cx = direction[1] * z[2] - direction[2] * z[1]
+        cy = direction[2] * z[0] - direction[0] * z[2]
+        cz = direction[0] * z[1] - direction[1] * z[0]
+        length = (cx * cx + cy * cy + cz * cz) ** 0.5
+        if length < 1e-9:
+            return (1.0, 0.0, 0.0)
+        return (cx / length, cy / length, cz / length)
+
+    def add_dimension(
+        self,
+        start: Sequence[float],
+        end: Sequence[float],
+        offset: float = 10.0,
+        offset_vector: Optional[Sequence[float]] = None,
+        *,
+        anchor: bool = False,
+    ) -> int:
+        p1 = tuple(float(c) for c in start)
+        p2 = tuple(float(c) for c in end)
+        if p1 == p2:
+            raise SkpWriteError("dimension endpoints coincide")
+        dx, dy, dz = (p2[i] - p1[i] for i in range(3))
+        length = (dx * dx + dy * dy + dz * dz) ** 0.5
+        direction = (dx / length, dy / length, dz / length)
+        if offset_vector is None:
+            perp = self._perpendicular(direction)
+            ov = tuple(offset * c for c in perp)
+        else:
+            ov = tuple(float(c) for c in offset_vector)
+            if all(abs(c) < 1e-12 for c in ov):
+                raise SkpWriteError("dimension offset vector must be non-zero")
+        nx = ov[1] * direction[2] - ov[2] * direction[1]
+        ny = ov[2] * direction[0] - ov[0] * direction[2]
+        nz = ov[0] * direction[1] - ov[1] * direction[0]
+        nlen = (nx * nx + ny * ny + nz * nz) ** 0.5
+        if nlen < 1e-9:
+            raise SkpWriteError("dimension offset must not be parallel to the segment")
+        normal = (nx / nlen, ny / nlen, nz / nlen)
+        offset_scalar = -((ov[0] ** 2 + ov[1] ** 2 + ov[2] ** 2) ** 0.5)
+        if anchor:
+            v1 = self.vertices.get(p1)
+            v2 = self.vertices.get(p2)
+            if v1 is None or v2 is None:
+                raise SkpWriteError(
+                    "anchored dimension endpoints must be existing vertices"
+                )
+            connection_a = self._connection(vertex_id=v1)
+            connection_b = self._connection(vertex_id=v2)
+        else:
+            connection_a = self._connection(point=p1)
+            connection_b = self._connection(point=p2)
+        identifier = self.template.alloc_id()
+        item = Record(
+            T_DIMENSION,
+            children=[
+                Record(
+                    T_DIMENSION_HEAD,
+                    children=[
+                        _drawing(identifier),
+                        record(T_DIMENSION_HEAD_EMPTY, b""),
+                        record(T_DIMENSION_FONT, varint(self._font_id())),
+                        record(T_DIMENSION_HEAD_FLAG, u8(0)),
+                        record(T_DIMENSION_HEAD_ARROW, u32(3)),
+                    ],
+                ),
+                Record(T_DIM_START, children=[connection_a]),
+                Record(T_DIM_END, children=[connection_b]),
+                record(T_DIM_NORMAL, f64s(normal)),
+                record(T_DIM_XAXIS, f64s(direction)),
+                record(T_DIM_ONE, u32(1)),
+                record(T_DIM_ZERO, f64s([0.0])),
+                record(T_DIM_OFFSET, f64s([offset_scalar])),
+                record(T_DIM_ARROW, u32(3)),
+            ],
+        )
+        self._pool(T_DIMENSIONS).children.append(item)
+        self.order.append(identifier)
+        return identifier
+
+    def add_guide_line(
+        self,
+        point: Sequence[float],
+        point2: Optional[Sequence[float]] = None,
+        direction: Optional[Sequence[float]] = None,
+    ) -> int:
+        if (point2 is None) == (direction is None):
+            raise SkpWriteError(
+                "add_guide_line: pass exactly one of point2 or direction"
+            )
+        p = tuple(float(c) for c in point)
+        if point2 is not None:
+            p2 = tuple(float(c) for c in point2)
+            dx, dy, dz = (p2[i] - p[i] for i in range(3))
+            length = (dx * dx + dy * dy + dz * dz) ** 0.5
+            if length == 0:
+                raise SkpWriteError("guide-line points coincide")
+            dirv = (dx / length, dy / length, dz / length)
+            start_param, end_param = 0.0, length
+        else:
+            d = tuple(float(c) for c in direction)
+            dlen = (d[0] ** 2 + d[1] ** 2 + d[2] ** 2) ** 0.5
+            if dlen == 0:
+                raise SkpWriteError("guide-line direction must be non-zero")
+            dirv = (d[0] / dlen, d[1] / dlen, d[2] / dlen)
+            start_param, end_param = -1e30, 1e30
+        identifier = self.template.alloc_id()
+        item = Record(
+            T_GUIDE_LINE,
+            children=[
+                Record(T_ANNOTATION_BASE, children=[_drawing(identifier)]),
+                record(
+                    T_GUIDE_BODY,
+                    f64s([*p, *dirv, start_param, end_param]),
+                ),
+                record(T_GUIDE_STIPPLE, struct.pack("<H", 0xFFFF)),
+            ],
+        )
+        self._pool(T_GUIDE_LINES).children.append(item)
+        self.order.append(identifier)
+        return identifier
+
+    def add_guide_point(self, position: Sequence[float]) -> int:
+        p = tuple(float(c) for c in position)
+        identifier = self.template.alloc_id()
+        item = Record(
+            T_GUIDE_POINT,
+            children=[
+                Record(T_ANNOTATION_BASE, children=[_drawing(identifier)]),
+                record(T_GUIDE_POSITION, f64s(p)),
+                record(T_GUIDE_ANCHOR, f64s([0.0, 0.0, 0.0])),
+                record(T_GUIDE_TAIL, u8(0)),
+            ],
+        )
+        self._pool(T_GUIDE_POINTS).children.append(item)
+        self.order.append(identifier)
+        self._extend_bounds(p)
+        return identifier
+
+    def add_section_plane(
+        self,
+        point: Sequence[float],
+        normal: Sequence[float],
+        *,
+        name: str = "",
+        symbol: str = "",
+        active: bool = False,
+        hidden: bool = False,
+    ) -> int:
+        p = tuple(float(c) for c in point)
+        n = tuple(float(c) for c in normal)
+        nlen = (n[0] ** 2 + n[1] ** 2 + n[2] ** 2) ** 0.5
+        if nlen == 0:
+            raise SkpWriteError("section-plane normal must be non-zero")
+        a, b, c = n[0] / nlen, n[1] / nlen, n[2] / nlen
+        d = -(a * p[0] + b * p[1] + c * p[2])
+        identifier = self.template.alloc_id()
+        flags = 0x06 | (0x01 if hidden else 0)
+        item = Record(
+            T_SECTION,
+            children=[
+                _drawing(identifier, flags=flags),
+                record(T_SECTION_PLANE, f64s([a, b, c, d])),
+                record(T_SECTION_NAME, name.encode("utf-8")),
+                record(T_SECTION_SYMBOL, symbol.encode("utf-8")),
+            ],
+        )
+        self._pool(T_SECTION_PLANES).children.append(item)
+        self.order.append(identifier)
+        if active:
+            self.active_section = identifier
+        return identifier
+
     def add_curve_edges(
         self,
         points: Sequence[Sequence[float]],
@@ -1274,13 +1633,17 @@ class EntityEditor:
                 children.append(pool)
         ahead: List[Record] = []
         trailing: List[Record] = []
+        existing_active = None
         for child in existing:
             if child.tag in _POOL_TAGS or child.tag in (
                 T_DRAWING,
                 T_ORDER,
                 T_FLAGS_CONTAINER,
                 T_BOUNDS,
+                T_ACTIVE_SECTION,
             ):
+                if child.tag == T_ACTIVE_SECTION:
+                    existing_active = child
                 continue
             (trailing if child.tag == T_RELATIONSHIPS else ahead).append(child)
         children.extend(ahead)
@@ -1289,6 +1652,10 @@ class EntityEditor:
         ]
         if merged_order:
             children.append(_new_id_list_tag(merged_order))
+        if self.active_section is not None:
+            children.append(record(T_ACTIVE_SECTION, varint(self.active_section)))
+        elif existing_active is not None:
+            children.append(existing_active)
         children.extend(trailing)
         flags_record = self.container.child(T_FLAGS_CONTAINER)
         if self.fresh:

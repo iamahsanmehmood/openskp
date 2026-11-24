@@ -317,6 +317,79 @@ class ComponentDefinitionBuilder:
             attribute_dicts=resolved,
         )
 
+    # -- annotations ------------------------------------------------------
+
+    def add_text(
+        self,
+        text: str,
+        point: Sequence[float],
+        leader: Sequence[float] = (15.0, 15.0, 15.0),
+        layer: Optional[int] = None,
+    ) -> None:
+        self._builder._validate_layer(layer)
+        if self._closed:
+            raise SkpWriteError("this definition is already closed")
+        self._editor.add_text(text, point, leader, screen=False, layer=layer)
+
+    def add_screen_text(
+        self,
+        text: str,
+        point: Sequence[float],
+        vector: Sequence[float] = (30.0, 20.0, 0.0),
+        layer: Optional[int] = None,
+    ) -> None:
+        self._builder._validate_layer(layer)
+        if self._closed:
+            raise SkpWriteError("this definition is already closed")
+        self._editor.add_text(text, point, vector, screen=True, layer=layer)
+
+    def add_dimension(
+        self,
+        start: Sequence[float],
+        end: Sequence[float],
+        offset: float = 10.0,
+        offset_vector: Optional[Sequence[float]] = None,
+        anchor: bool = False,
+    ) -> None:
+        if self._closed:
+            raise SkpWriteError("this definition is already closed")
+        self._editor.add_dimension(start, end, offset, offset_vector, anchor=anchor)
+
+    def add_guide_line(
+        self,
+        point: Sequence[float],
+        point2: Optional[Sequence[float]] = None,
+        direction: Optional[Sequence[float]] = None,
+    ) -> None:
+        if self._closed:
+            raise SkpWriteError("this definition is already closed")
+        self._editor.add_guide_line(point, point2, direction)
+
+    def add_guide_point(self, position: Sequence[float]) -> None:
+        if self._closed:
+            raise SkpWriteError("this definition is already closed")
+        self._editor.add_guide_point(position)
+
+    def add_section_plane(
+        self,
+        point: Sequence[float],
+        normal: Sequence[float],
+        name: Optional[str] = None,
+        symbol: Optional[str] = None,
+        active: bool = False,
+        hidden: bool = False,
+    ) -> int:
+        if self._closed:
+            raise SkpWriteError("this definition is already closed")
+        return self._editor.add_section_plane(
+            point,
+            normal,
+            name=name or "",
+            symbol=symbol or "",
+            active=active,
+            hidden=hidden,
+        )
+
     # -- curves -----------------------------------------------------------
 
     def add_circle(
@@ -736,6 +809,75 @@ class VffBuilder:
                 attributes, attribute_dict_name, attribute_dicts
             ),
         )
+
+    # -- annotations ------------------------------------------------------
+
+    def add_text(
+        self,
+        text: str,
+        point: Sequence[float],
+        leader: Sequence[float] = (15.0, 15.0, 15.0),
+        layer: Optional[int] = None,
+    ) -> None:
+        """Add a leader text anchored at *point*, label at point + leader."""
+        self._validate_layer(layer)
+        self._root.add_text(text, point, leader, screen=False, layer=layer)
+
+    def add_screen_text(
+        self,
+        text: str,
+        point: Sequence[float],
+        vector: Sequence[float] = (30.0, 20.0, 0.0),
+        layer: Optional[int] = None,
+    ) -> None:
+        """Add a screen text (no displayed leader) at *point*."""
+        self._validate_layer(layer)
+        self._root.add_text(text, point, vector, screen=True, layer=layer)
+
+    def add_dimension(
+        self,
+        start: Sequence[float],
+        end: Sequence[float],
+        offset: float = 10.0,
+        offset_vector: Optional[Sequence[float]] = None,
+        anchor: bool = False,
+    ) -> None:
+        """Add a linear dimension; ``anchor=True`` attaches to existing vertices."""
+        self._root.add_dimension(start, end, offset, offset_vector, anchor=anchor)
+
+    def add_guide_line(
+        self,
+        point: Sequence[float],
+        point2: Optional[Sequence[float]] = None,
+        direction: Optional[Sequence[float]] = None,
+    ) -> None:
+        """Add a bounded (point2) or unbounded (direction) guide line."""
+        self._root.add_guide_line(point, point2, direction)
+
+    def add_guide_point(self, position: Sequence[float]) -> None:
+        self._root.add_guide_point(position)
+
+    def add_section_plane(
+        self,
+        point: Sequence[float],
+        normal: Sequence[float],
+        name: Optional[str] = None,
+        symbol: Optional[str] = None,
+        active: bool = False,
+        hidden: bool = False,
+    ) -> int:
+        """Add a section plane; ``active=True`` also makes it the active one."""
+        return self._root.add_section_plane(
+            point,
+            normal,
+            name=name or "",
+            symbol=symbol or "",
+            active=active,
+            hidden=hidden,
+        )
+
+    def set_active_section_plane(self, identifier: Optional[int]) -> None:
+        self._root.active_section = identifier
 
     # -- curves -----------------------------------------------------------
 

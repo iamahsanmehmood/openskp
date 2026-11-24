@@ -95,6 +95,12 @@ CONTAINER_TAGS = {
     # 9213 → entity 6C42. 6842 is the drawbase wrapper those entities share.
     # 6A42 / 6D42 / 6E42 / 6F42 stay leaves.
     '9113', '9213', '6942', '6C42', '6842',
+    # Stage-4 annotations: texts pool/item, dimensions pool/item, section
+    # planes pool/item, and their inner records (anchor connection, plane,
+    # name, symbol).
+    '9813', 'F055', 'F455', '0852', '0B52', 'FC53',
+    '9913', 'CC5B', 'D859', 'CD5B', 'CE5B',
+    '9313', '5C44',
 }
 
 # Every byte value's 2-character uppercase hex form, precomputed once.
@@ -804,6 +810,7 @@ class _GeometryBuilder:
         self.dimensions = []
         self.construction_lines = []
         self.construction_points = []
+        self.active_section = None
 
 
 def _find_tag(nodes, target):
@@ -1212,6 +1219,15 @@ def _direct_child(children, tag):
     return None
 
 
+def _drawing_hidden(record_node):
+    """Display-flags hidden bit of a drawing-element record, else False."""
+    drawing = _find_tag(record_node.children, 'D007')
+    if drawing is None:
+        return False
+    flags = _find_tag(drawing.children, 'D307')
+    return bool(flags is not None and flags.payload and (flags.payload[0] & 1))
+
+
 def _extract_geometry_nodes(elements, builder):
     vertices, edges, faces = builder.vertices, builder.edges, builder.faces
     edge_flags = builder.edge_flags
@@ -1492,6 +1508,61 @@ def _extract_geometry_nodes(elements, builder):
                 builder.construction_points.append({
                     'position': (read_f64(p, 0), read_f64(p, 8), read_f64(p, 16)),
                 })
+
+        elif tag == 'F055':
+            text = None
+            text_node = _find_tag(el.children, 'F155')
+            if text_node is not None:
+                text = text_node.payload.decode('utf-8', errors='replace')
+            point = None
+            label_point = None
+            anchor_node = _find_tag(el.children, 'F455')
+            connection = _find_tag(anchor_node.children, '0852') if anchor_node else None
+            if connection is not None:
+                type_node = _find_tag(connection.children, '0952')
+                point_node = _find_tag(connection.children, '0A52')
+                if type_node is not None and point_node is not None and len(point_node.payload) == 24:
+                    if parse_var_int(type_node.payload, 0, len(type_node.payload)) == 1:
+                        point = struct.unpack('<3d', point_node.payload)
+            vector_node = _find_tag(el.children, 'F555')
+            if point is not None and vector_node is not None and len(vector_node.payload) == 24:
+                vector = struct.unpack('<3d', vector_node.payload)
+                label_point = tuple(point[i] + vector[i] for i in range(3))
+            builder.texts.append({
+                'text': text or '', 'p': point, 'lp': label_point,
+                'hidden': _drawing_hidden(el),
+            })
+
+        elif tag == 'CC5B':
+            head = _find_tag(el.children, 'D859')
+            if _entity_id(el) is not None:
+                builder.dimensions.append({
+                    'text': '',
+                    'hidden': _drawing_hidden(head) if head is not None else False,
+                })
+
+        elif tag == '5C44':
+            if _entity_id(el) is None:
+                pass
+            else:
+                plane_node = _find_tag(el.children, '5D44')
+                name_node = _find_tag(el.children, '5E44')
+                symbol_node = _find_tag(el.children, '5F44')
+                plane = ([0.0, 0.0, 1.0, 0.0]
+                         if plane_node is None or len(plane_node.payload) != 32
+                         else list(struct.unpack('<4d', plane_node.payload)))
+                builder.section_planes.append({
+                    'plane': plane,
+                    'name': name_node.payload.decode('utf-8', errors='replace')
+                            if name_node is not None else '',
+                    'label': symbol_node.payload.decode('utf-8', errors='replace')
+                             if symbol_node is not None else '',
+                    'hidden': _drawing_hidden(el),
+                })
+
+        elif tag == '9413':
+            if el.payload:
+                builder.active_section = parse_var_int(el.payload, 0, len(el.payload))
 
         elif tag == '2C4C':
             # A Curve (384A: its entity id and edge count) and, when the curve

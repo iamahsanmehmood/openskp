@@ -521,3 +521,149 @@ No stage-3 feature was refused by SketchUp; the only notable operational
 quirk is the already-documented stage-2 one (SketchUp's save can sit behind a
 dialog when a model holds unused materials, so the oracle models paint every
 material).
+
+# Stage 4 research notes: text, dimensions, guides, section planes
+
+## Text (CText)
+
+Pairs: `stage4/oracle/text_leader.skp` (two leader texts) and
+`text_screen.skp` (a screen text).
+
+A text is `0x55f0` in the `0x1398` pool (pools come after the face pool and
+before `0x139e`), and its id is listed in `0x138e`.  Child records, in order:
+
+| tag | contents |
+|---|---|
+| `0x07d0` | drawing element (entity id, optional material/layer, flags) |
+| `0x55f1` | the display string (UTF-8) |
+| `0x55ff` | empty |
+| `0x55f2`, `0x55f3` | one f64 zero each (unused) |
+| `0x55f4` | anchor connection `0x5208 { 0x5209 type 1, 0x520a point,
+  0x520b/0x520c -> 0x53fc -> 0x53fe empty }` (free point) |
+| `0x55f5` | three f64: the label offset (label at point + vector) |
+| `0x55f6` | u8 1 |
+| `0x55f7` | three f64 (0,0,1) |
+| `0x55f8` | u8 0 |
+| `0x55f9` | font id (the template's single `0x5014` font, 0x3eaf in blank_vff) |
+| `0x55fa` | u32 arrow type (3) |
+| `0x55fb` | u32 1 |
+| `0x55fc` | u8: leader displayed (1) / screen text (0) |
+| `0x55fd` | u32 leader type (2) |
+| `0x55fe` | u32: 0 leader text, 1 screen text |
+
+SketchUp's Ruby `Text#has_leader?` stays true for a screen text created with
+`add_text(...); text.display_leader = false`; the acceptance dump shows
+`has_leader? true, display_leader? false`.  The API cannot set
+`Text#attached_to` directly (it expects an InstancePath), so the writer
+anchors leader texts at the free anchor point (the box corner / a point on a
+face), which SketchUp reads back exactly.
+
+## Linear dimensions (CDimensionLinear)
+
+Pair: `dim_free.skp` (free points), `dim_vertices.skp` (anchored to two
+vertices) and `dim_component.skp` (inside a definition placed twice).
+
+`0x5bcc` in the `0x1399` pool, id in `0x138e`:
+
+```
+0x59d8 { 0x07d0, 0x59d9 empty, 0x59da font id, 0x59db u8 0, 0x59dc u32 3 }
+0x5bcd / 0x5bce   connection:
+    free    0x5208 { 0x5209 u32 1, 0x520a point, 0x520b/0x520c -> 0x53fc -> 0x53fe }
+    anchored0x5208 { 0x5209 u32 2, 0x520a zeros,
+                     0x520b/0x520c -> 0x53fc { 0x53fd vertex id, 0x53fe empty } }
+0x5bcf  3 f64 plane normal
+0x5bd0  3 f64 dimension x axis (the measured direction)
+0x5bd1  u32 1
+0x5bd3  f64 0
+0x5bd2  f64 signed offset
+0x5bd4  u32 3
+```
+
+SketchUp's `DimensionLinear#offset_vector` is `offset * (xaxis × normal)`;
+the writer derives a mutually perpendicular normal/xaxis from the requested
+offset vector and stores `-|offset|` as the signed offset (matching both
+oracle pairs).  An anchored dimension resolves its endpoints to existing
+vertex ids in the same container, so a dimension inside a definition stores
+the definition-local vertex ids; openskp's global dimension scanner returns
+the component dimension's local points (once per definition record) and the
+world-space root dimension.
+
+## Guides (ConstructionLine / ConstructionPoint)
+
+Pair: `guides.skp` (bounded line, unbounded line, point).
+
+* Guide lines are `0x4269` in pool `0x1391`.  Their drawing element is
+  wrapped in **`0x4268`**, not `0x07d0` (this was the one stage-4 bug: using
+  `0x07d0` made SketchUp reject the file with a warning).  Children:
+  `0x4268 { 0x07d0 ... }`, `0x426a` eight f64 (point, unit direction,
+  start/end distance parameters), `0x426b` u16 stipple mask (`0xffff` =
+  solid).
+* Bounded guides store params `0` and `length`; unbounded ones store the
+  classic `±1e30` sentinel, so SketchUp's `start`/`end` are `nil`.
+* Guide points are `0x426c` in pool `0x1392`: `0x4268 { 0x07d0 }`,
+  `0x426d` position (3 f64), `0x426e` three zero f64, `0x426f` u8 0.
+
+## Section planes
+
+Pair: `section_planes.skp` (two planes, named/symboled, first active).
+
+`0x445c` in pool `0x1393`, id in `0x138e`:
+
+```
+0x07d0 drawing element
+0x445d plane 4 f64 (a, b, c, d), normalized normal, d = -normal·point
+0x445e name (UTF-8)
+0x445f symbol (UTF-8; "A")
+```
+
+The active section's id is a `0x1394` record in the entity container, placed
+between `0x138e` and `0x139b`.  The writer sets it when
+`add_section_plane(..., active=True)` (or `set_active_section_plane`).
+
+## Reader additions
+
+`_core.py` now decodes:
+
+* texts (`0x55f0`): string, anchor point, label point (point + vector),
+  hidden flag;
+* dimensions (`0x5bcc`) as container-owned `Definition.dimensions` entries
+  (text/hidden; the geometric root/world list already came from the
+  existing `_parse_dimensions` scanner);
+* section planes (`0x445c`): plane, name, symbol (exposed as `label`), hidden;
+* the active-section id (`0x1394`) on the internal geometry builder;
+* guide lines/points were already decoded; their `0x4268` drawing-element
+  wrapper is walked by the existing `_find_tag` logic.
+
+Container tags were extended for the text/dimension/section pools and their
+inner records.
+
+## Stage-4 acceptance
+
+`stage4/written_stage4.skp` (SHA-256
+`e13adacd8e4ff4ed3f8665053c4b99db315f9ceedd0b17ba5cc774c43e11b94b`) is the
+combined model: box, corner + face leader texts, a screen text, an anchored
+dimension on the box, a component with an anchored dimension placed twice,
+a bounded guide, an unbounded guide, a guide point, and two named/symboled
+section planes with the first active.
+
+* `Sketchup.open_file` returned true with **no warning dialog**.
+* Ruby dump: `text0` corner label point (0,0,0) + vector (10,10,10),
+  `has_leader? true`; `text1` face label; `text2` screen label with
+  `display_leader? false`; `dim0` starts/ends attached to the two
+  `Sketchup::Vertex` objects with text `10"` and offset vector (0,-8,0);
+  `cline0` bounded (start/end 0,0,0 .. 20,10,5), `cline1` unbounded
+  (`start`/`end` nil, direction (0,0.707,0.707)); `cpoint0` (5,5,5);
+  `section0` plane (0,0,1,-5) name "Section A" symbol "A" active true,
+  `section1` plane (1,0,0,-5) name "Section B" symbol "B" active false;
+  the component definition has its own dimension.
+* SketchUp re-saved it as `stage4/sketchup_resave.skp` (SHA-256
+  `dc160ed57ac63abae00db054f5681606e671cea4ba862eeb0e8822d554095f8b`);
+  openskp parses both with identical revision, integrity, texts and labels,
+  dimensions (points, offset, normal/x axis), guides, guide points, section
+  planes/names/symbols and per-definition annotation counts.
+* `skpwright verify` accepts both files.
+
+The only refused feature was the pre-fix guide record (drawing element
+`0x07d0` instead of `0x4268`), which produced SketchUp's warning dialog;
+after the wrapper fix every annotation opened cleanly.  No other stage-4
+record was refused.
