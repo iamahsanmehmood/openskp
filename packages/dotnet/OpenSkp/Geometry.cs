@@ -44,12 +44,10 @@ namespace OpenSkp
         public Dictionary<string, string>? Properties;
 
         /// <summary>Every attribute dictionary attached to this instance
-        /// (VFF only), keyed by the dictionary's own declared name, not just
-        /// the one "dynamic_attributes" dictionary Properties above covers -
-        /// see Geometry.ExtractAttributeDictionaries. Populated eagerly at
-        /// the same site as Properties, for the same reason (name-override
-        /// resolution in InstancedScene.cs needs to inspect whichever OTHER
-        /// dictionary a third-party plugin wrote, e.g. "FrameBuilder").</summary>
+        /// (both legacy MFC and VFF), keyed by the dictionary's own declared
+        /// name, not just the one "dynamic_attributes" dictionary Properties
+        /// above covers - see Geometry.ExtractAttributeDictionaries and
+        /// LegacyReaders.ExtractLegacyAttributeDictionaries.</summary>
         public Dictionary<string, Dictionary<string, object?>>? AttributeDicts;
     }
 

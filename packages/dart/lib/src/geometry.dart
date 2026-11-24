@@ -41,6 +41,9 @@ class GeometryBuilderInstance {
   /// instances (via extractDynamicProperties on this instance's own
   /// D007/DC05 children).
   Map<String, String>? properties;
+  /// Every attribute dictionary attached to this instance (populated for
+  /// legacy MFC instances via legacy.dart's extractLegacyAttributeDictionaries).
+  Map<String, Map<String, Object?>>? attributeDicts;
 }
 
 /// Accumulates the raw geometry extracted for one component definition (or

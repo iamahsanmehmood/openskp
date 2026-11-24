@@ -21,6 +21,9 @@ export interface GeometryBuilderInstance {
    * instances don't set this, since their properties come from a lazy
    * D007/DC05 TLV walk over `children` instead (see model.ts). */
   properties?: Record<string, string>;
+  /** Every attribute dictionary precomputed for legacy (pre-2021 MFC)
+   * instances (see legacy.ts's extractLegacyAttributeDictionaries). */
+  attributeDicts?: Record<string, Record<string, VffAttrValue>>;
 }
 
 export interface GeometryBuilderFace {

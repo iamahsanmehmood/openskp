@@ -2,6 +2,7 @@ include(GoogleTest)
 
 add_executable(
   openskp_tests
+  classic_instance_attrs_test.cpp
   classic_instance_paint_test.cpp
   codegen_test.cpp
   create_test.cpp
