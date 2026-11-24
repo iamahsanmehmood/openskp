@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using Xunit;
@@ -1218,6 +1219,102 @@ namespace OpenSkp.Tests
             finally
             {
                 File.Delete(pngPath);
+            }
+        }
+
+        [Fact]
+        public void DocumentOptionsPatchUnitsRenderingAndStylesWithoutScaling()
+        {
+            static uint NativeOption(byte[] raw, string name)
+            {
+                var key = new List<byte> { 0xff, 0xfe, 0xff, (byte)name.Length };
+                foreach (char c in name) { key.Add((byte)c); key.Add(0); }
+                int found = -1;
+                for (int i = 0; i <= raw.Length - key.Count; i++)
+                {
+                    bool ok = true;
+                    for (int j = 0; j < key.Count; j++) { if (raw[i + j] != key[j]) { ok = false; break; } }
+                    if (ok) { found = i; break; }
+                }
+                Assert.True(found >= 0);
+                int pos = found + key.Count;
+                Assert.Equal((byte)4, raw[pos]);
+                return BitConverter.ToUInt32(raw, pos + 1);
+            }
+
+            byte[] styleSig = { 0xa0, 0x0f, 0, 0, 1, 0, 0, 0, 4, 0, 0, 0, 0x12, 0x34, 0x56, 0xff };
+            for (int unit = 0; unit <= 5; unit++)
+            {
+                var builder = SkpCreate.NewFile();
+                builder.SetDocumentOptions(new DocumentOptions
+                {
+                    LengthUnit = unit,
+                    LengthPrecision = 2,
+                    StyleItems = new Dictionary<int, double>
+                    {
+                        [4000] = 0xff563412u,
+                        [1006] = 0,
+                        [1007] = 5,
+                    },
+                });
+                builder.AddFace(new (double, double, double)[] { (0, 0, 0), (2, 0, 0), (0, 3, 0) });
+                var raw = builder.ToBytes();
+                Assert.Equal((uint)unit, NativeOption(raw, "LengthUnit"));
+                Assert.Equal(0u, NativeOption(raw, "LengthFormat"));
+                Assert.Equal(2u, NativeOption(raw, "LengthPrecision"));
+                Assert.Equal((uint)unit, NativeOption(raw, "AreaUnit"));
+                Assert.Equal((uint)unit, NativeOption(raw, "VolumeUnit"));
+                Assert.Equal(0xff563412u, BitConverter.ToUInt32(raw, 3177));
+                Assert.Equal((byte)0, raw[3206]);
+                Assert.Equal(5u, BitConverter.ToUInt32(raw, 3207));
+
+                int matches = 0;
+                for (int i = 0; i <= raw.Length - styleSig.Length; i++)
+                {
+                    bool ok = true;
+                    for (int j = 0; j < styleSig.Length; j++) { if (raw[i + j] != styleSig[j]) { ok = false; break; } }
+                    if (ok) matches++;
+                }
+                Assert.Equal(2, matches);
+                Assert.Equal((ulong)builder.NextPid(), BitConverter.ToUInt64(raw, 1987));
+
+                var model = SkpFile.Parse(raw);
+                Assert.Contains(model.Root.Vertices.Values, v => v.X == 2.0 && v.Y == 0.0 && v.Z == 0.0);
+            }
+        }
+
+        [Fact]
+        public void RejectsInvalidDocumentOptionsAndSkipsDegenerateAutoTriangulateWedge()
+        {
+            var invalid = SkpCreate.NewFile();
+            Assert.Throws<SkpWriteException>(() => invalid.SetDocumentOptions(new DocumentOptions { LengthUnit = 6 }));
+            Assert.Throws<SkpWriteException>(() => invalid.SetDocumentOptions(new DocumentOptions { LengthPrecision = 7 }));
+            Assert.Throws<SkpWriteException>(() => invalid.SetDocumentOptions(new DocumentOptions
+            {
+                StyleItems = new Dictionary<int, double> { [1000] = double.NaN },
+            }));
+
+            var polygon = new (double, double, double)[] { (0, 0, 0), (1, 0, 0), (1, 1, 0), (2, 2, 0), (0, 1, 1) };
+            foreach (bool nested in new[] { false, true })
+            {
+                var builder = SkpCreate.NewFile();
+                if (nested)
+                {
+                    ComponentDefinitionBuilder def;
+                    using (def = builder.AddComponentDefinition("fan"))
+                    {
+                        def.AddFace(polygon, autoTriangulate: true);
+                    }
+                    builder.AddInstance(def);
+                }
+                else
+                {
+                    builder.AddFace(polygon, autoTriangulate: true);
+                }
+                builder.AddFace(new (double, double, double)[] { (10, 0, 0), (11, 0, 0), (10, 1, 0) });
+                var model = SkpFile.Parse(builder.ToBytes());
+                int totalFaces = model.Root.Faces.Count + model.Definitions.Values.Sum(d => d.Faces.Count);
+                Assert.Equal(3, totalFaces);
             }
         }
 
