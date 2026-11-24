@@ -6,11 +6,9 @@
 // crate's own DEFLATE encoder stands in for miniz's writer) and exercise the
 // guard end-to-end through full_parse().
 
-mod common;
-
-use common::{build_zip, wrap_vff, ZipEntry};
-use openskp::internal::full_parse;
-use openskp::ParseOptions;
+use super::common::{build_zip, wrap_vff, ZipEntry};
+use crate::internal::full_parse;
+use crate::ParseOptions;
 
 fn skp_with_model(content: &[u8], level: u32) -> Vec<u8> {
     wrap_vff(

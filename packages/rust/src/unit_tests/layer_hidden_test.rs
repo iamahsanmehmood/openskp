@@ -2,8 +2,8 @@
 // RawParsed::layer_hidden. build_model() is called directly with a synthetic
 // RawParsed.
 
-use openskp::internal::{build_model, RawParsed};
-use openskp::ParseOptions;
+use crate::internal::{build_model, RawParsed};
+use crate::ParseOptions;
 
 #[test]
 fn reports_hidden_layer_as_hidden() {

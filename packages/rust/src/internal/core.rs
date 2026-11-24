@@ -185,6 +185,7 @@ fn concat(parts: &[&[u8]]) -> Vec<u8> {
 /// through still escaped. A single left-to-right pass, not five sequential
 /// replacements: sequential replacement would double-decode "&amp;lt;" into
 /// "<" instead of the correct "&lt;".
+#[cfg(test)]
 pub fn decode_xml_entities(value: &str) -> String {
     text(&decode_xml_entities_bytes(value.as_bytes()))
 }

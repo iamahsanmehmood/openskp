@@ -5,7 +5,7 @@
 
 use std::collections::BTreeMap;
 
-use openskp::internal::{collect_layers, TlvNode};
+use crate::internal::{collect_layers, TlvNode};
 
 fn leaf(tag: &str, payload: &[u8]) -> TlvNode {
     TlvNode::leaf(tag, payload.to_vec())

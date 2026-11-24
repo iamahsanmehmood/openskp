@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — Rust: seal internal `#[doc(hidden)]` modules as `pub(crate)` (#285)
+
+- Makes `curves`, `earcut`, `face_groups`, `instanced_scene_build`, `internal`, `legacy`, and `scene_build` `pub(crate)` instead of `#[doc(hidden)] pub mod` in `packages/rust/src/lib.rs`, moving the 20 white-box reader/scene unit test modules under `#[cfg(test)]` so external crates see only the deliberate public API.
+
 ### Fixed — Python: scenes use a component instance's own paint and tag in classic files (#596)
 
 - `build_scene()` and `build_instanced_scene()` read an instance's paint and tag from its 2021+ `D007` record only. In classic (pre-2021) files a painted component came out in its tag's colour, and every instance sat on its parent's tag. Both now come from the instance itself, and nested components inherit the paint.

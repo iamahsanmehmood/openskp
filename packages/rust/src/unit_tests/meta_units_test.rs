@@ -3,10 +3,8 @@
 // list wrapped in a single outer record (tag 0x6400); tag 0x6D00 carries the
 // units string as plain text.
 
-mod common;
-
-use common::{bytes, tlv};
-use openskp::internal::read_meta_units;
+use super::common::{bytes, tlv};
+use crate::internal::read_meta_units;
 
 fn hex_to_bytes(hex: &str) -> Vec<u8> {
     (0..hex.len() / 2)

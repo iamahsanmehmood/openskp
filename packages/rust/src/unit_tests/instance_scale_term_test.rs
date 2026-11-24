@@ -3,11 +3,9 @@
 // units (openskp#444). Two cubes, one at the origin and one placed 2000 units
 // out with a 0.01 scale term: SketchUp shows the second 20 inches away.
 
-mod common;
-
-use common::{assert_near, fixture};
-use openskp::internal::{fold_scale, multiply_matrices, transform_point};
-use openskp::{ParseOptions, SkpFile};
+use super::common::{assert_near, fixture};
+use crate::internal::{fold_scale, multiply_matrices, transform_point};
+use crate::{ParseOptions, SkpFile};
 
 const INCH_MM: f64 = 25.4;
 

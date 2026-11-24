@@ -7,13 +7,11 @@
 // second style, and a back-ref for a style that an earlier tag already wrote.
 // The style is an object in the walk like any other and takes a store-map slot.
 
-mod common;
-
 use std::fs;
 
-use common::fixture;
-use openskp::legacy::parse_legacy;
-use openskp::{ParseOptions, SkpFile};
+use super::common::fixture;
+use crate::legacy::parse_legacy;
+use crate::{ParseOptions, SkpFile};
 
 const MODELS: &[(&str, &[&str])] = &[
     (

@@ -16,18 +16,16 @@
 // still count right - so each is paired with a relation the file itself
 // forces.
 
-mod common;
-
 use std::collections::{BTreeMap, BTreeSet};
 
-use common::fixture;
-use openskp::create::{
+use super::common::{self, fixture};
+use crate::create::{
     create, AttributeValue, DefinitionOptions, FaceOptions, InstanceOptions, LayerOptions,
 };
-use openskp::internal::{
+use crate::internal::{
     full_parse, read_legacy_attribute_value, GeometryBuilder, RawArcFrame, RawParsed,
 };
-use openskp::{AttributeKind, EntityId, ParseOptions, ParsedAttribute, SkpFile, Vec3};
+use crate::{AttributeKind, EntityId, ParseOptions, ParsedAttribute, SkpFile, Vec3};
 
 const CAPILLA: &str = "capilla_quiroz_v17.skp"; // v17, circles only, one layer
 const GONDOLA: &str = "gondola_v20.skp"; // v20, circles + ellipses, two layers

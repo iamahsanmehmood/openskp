@@ -5,10 +5,10 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use openskp::instanced_scene_build::build_instanced_scene_raw;
-use openskp::internal::{build_model, RawDefinition, RawFace, RawInstance, RawMaterial, RawParsed};
-use openskp::scene_build::build_scene_raw;
-use openskp::{
+use crate::instanced_scene_build::build_instanced_scene_raw;
+use crate::internal::{build_model, RawDefinition, RawFace, RawInstance, RawMaterial, RawParsed};
+use crate::scene_build::build_scene_raw;
+use crate::{
     CoEdge, GlbPrimitive, ParseOptions, ParseStage, ParsedAttrDictionaries, ParsedAttribute,
 };
 

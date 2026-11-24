@@ -3,7 +3,7 @@
 // own "<auto>" default-material convention - which the raw XML MUST spell as
 // "&lt;auto&gt;" - came through still escaped.
 
-use openskp::internal::decode_xml_entities;
+use crate::internal::decode_xml_entities;
 
 #[test]
 fn decodes_lt_gt() {

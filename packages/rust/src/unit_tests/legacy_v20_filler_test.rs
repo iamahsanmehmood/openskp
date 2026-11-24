@@ -13,7 +13,7 @@
 //   <zero padding>      length varies per call site, always pad % 4 == 1
 //   <u32 count>
 
-use openskp::internal::find_count_after_v20_filler;
+use crate::internal::find_count_after_v20_filler;
 
 /// A filler record followed by `count`, then a class-record header.
 fn filler(count: u32, pad: usize) -> Vec<u8> {

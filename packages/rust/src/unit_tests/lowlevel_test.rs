@@ -1,6 +1,5 @@
-mod common;
-
-use openskp::internal::{
+use super::common;
+use crate::internal::{
     extract_version, is_legacy, legacy_instance_has_guid, multiply_matrices, parse_tlv_recursive,
     parse_varint, read_f64, read_u16, read_u32, transform_determinant, transform_normal,
     transform_point, valid_header, ErrorKind,

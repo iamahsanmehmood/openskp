@@ -17,12 +17,10 @@
 // Synthetic bytes only. A vertex stands in for the anchored instance: its record is short, and
 // the list's bookkeeping does not depend on the class.
 
-mod common;
-
 use std::collections::HashMap;
 
-use common::{concat, f64s};
-use openskp::internal::{
+use super::common::{concat, f64s};
+use crate::internal::{
     read_legacy_entity_list, LegacyEntityListResult, LegacySlotEntry, LegacySlotTable,
 };
 

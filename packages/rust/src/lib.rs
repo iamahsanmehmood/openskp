@@ -42,20 +42,18 @@ pub mod zip;
 // documented by its own inner docs.
 pub mod flatbuffers;
 
-#[doc(hidden)]
-pub mod curves;
-#[doc(hidden)]
-pub mod earcut;
-#[doc(hidden)]
-pub mod face_groups;
-#[doc(hidden)]
-pub mod instanced_scene_build;
-#[doc(hidden)]
-pub mod internal;
-#[doc(hidden)]
-pub mod legacy;
-#[doc(hidden)]
-pub mod scene_build;
+pub(crate) mod curves;
+pub(crate) mod earcut;
+pub(crate) mod face_groups;
+pub(crate) mod instanced_scene_build;
+pub(crate) mod internal;
+pub(crate) mod legacy;
+pub(crate) mod scene_build;
+
+#[cfg(test)]
+extern crate self as openskp;
+#[cfg(test)]
+mod unit_tests;
 
 pub use codegen::to_rust_code;
 pub use dxf_export::{export_dxf, to_dxf, DxfError};

@@ -1,8 +1,8 @@
 // Face::hidden / Instance::hidden carried through build_model() from a
 // synthetic RawParsed.
 
-use openskp::internal::{build_model, RawFace, RawInstance, RawParsed};
-use openskp::ParseOptions;
+use crate::internal::{build_model, RawFace, RawInstance, RawParsed};
+use crate::ParseOptions;
 
 #[test]
 fn reports_hidden_face_and_instance_as_hidden() {

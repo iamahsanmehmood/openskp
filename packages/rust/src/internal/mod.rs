@@ -1,8 +1,9 @@
 //! Reader infrastructure shared by the VFF reader, the legacy reader and the
 //! scene builders (`internal.hpp`).
 //!
-//! Public (but `#[doc(hidden)]` from the crate root) so integration tests and
-//! sibling modules can reach the same internals the C++ tests include.
+//! Crate-private (`pub(crate)`) so sibling modules and in-crate unit tests can
+//! reach the same internals the C++ tests include without leaking them from the
+//! crate root.
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
@@ -25,30 +26,31 @@ pub mod transforms;
 pub mod vff;
 pub mod xml;
 
-pub use self::build_model::build_model;
-pub use self::bytes::{
-    parse_flat, parse_tlv_recursive, parse_varint, read_f64, read_i32, read_u16, read_u32, tag_at,
-};
-pub use self::core::{decode_xml_entities, full_parse};
-pub use self::geometry::{
-    collect_definitions, collect_geometry, collect_layers, collect_material_ids,
-    collect_model_attribute_dictionaries, extract_attribute_dictionaries,
-};
-pub use self::pages_dimensions::{
-    find_page_node, parse_camera, parse_dimensions, parse_pages, scan_instance_transforms,
-    scan_vertex_positions,
-};
-pub use self::transforms::{
+pub(crate) use self::build_model::build_model;
+pub(crate) use self::bytes::{read_f64, read_i32, read_u16, read_u32};
+pub(crate) use self::core::full_parse;
+pub(crate) use self::transforms::{
     fold_scale, multiply_matrices, transform_determinant, transform_normal, transform_point,
 };
-pub use self::vff::{extract_version, is_legacy, read_meta_units, valid_header};
-pub use crate::legacy::{
+pub(crate) use self::vff::{extract_version, is_legacy};
+pub(crate) use crate::observability::{emit_log, emit_progress};
+
+#[cfg(test)]
+pub(crate) use self::bytes::{parse_tlv_recursive, parse_varint};
+#[cfg(test)]
+pub(crate) use self::core::decode_xml_entities;
+#[cfg(test)]
+pub(crate) use self::geometry::{collect_definitions, collect_geometry, collect_layers};
+#[cfg(test)]
+pub(crate) use self::pages_dimensions::{parse_dimensions, parse_pages};
+#[cfg(test)]
+pub(crate) use self::vff::{read_meta_units, valid_header};
+#[cfg(test)]
+pub(crate) use crate::legacy::{
     find_count_after_v20_filler, find_empty_root_after_v20_filler, legacy_connection_paths,
-    legacy_instance_has_guid, parse_legacy, read_legacy_attribute_value, read_legacy_entity_list,
-    scan_pages_for_layers, LegacyEntityListResult, LegacyKind, LegacyObject, LegacyPathResult,
-    LegacySlotEntry, LegacySlotTable, LegacyValue, V20FillerHit,
+    legacy_instance_has_guid, read_legacy_attribute_value, read_legacy_entity_list,
+    scan_pages_for_layers, LegacyEntityListResult, LegacySlotEntry, LegacySlotTable,
 };
-pub use crate::observability::{emit_log, emit_progress};
 
 // ── internal error (the C++ std::exception family) ──────────────────────
 
@@ -188,6 +190,7 @@ pub struct TlvNode {
     pub payload: Vec<u8>,
 }
 
+#[cfg(test)]
 impl TlvNode {
     /// A leaf with a payload (test / builder convenience).
     pub fn leaf(tag: &str, payload: Vec<u8>) -> Self {

@@ -372,6 +372,7 @@ pub(crate) fn anchored_text_connection(d: &[u8], pos: usize) -> bool {
 
 /// A legacy definition's entity list, read by [`read_legacy_entity_list`]:
 /// each item's slot and class name, and the offset just past the list.
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct LegacyEntityListResult {
     pub items: Vec<(u64, String)>,
@@ -383,6 +384,7 @@ pub struct LegacyEntityListResult {
 /// [`scan_pages_for_layers`], so the list's bookkeeping is unit-testable: an
 /// instance a text label's connection path writes in full is one of the
 /// list's items whether or not the list names it again.
+#[cfg(test)]
 pub fn read_legacy_entity_list(
     data: &[u8],
     pos: usize,
@@ -485,6 +487,7 @@ pub(crate) const MAX_V20_FILLER_PAD: usize = 29;
 
 /// Result of [`find_count_after_v20_filler`]: the recovered count and the
 /// offset just past it.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct V20FillerHit {
     pub count: u32,
@@ -511,6 +514,7 @@ pub struct V20FillerHit {
 /// and moving the cursor past it would corrupt the parse.
 ///
 /// Returns `None` when the bytes do not match the filler layout.
+#[cfg(test)]
 pub fn find_count_after_v20_filler(d: &[u8], count_pos: usize, limit: u32) -> Option<V20FillerHit> {
     let marker_at = find_v20_filler_marker(d, count_pos)?;
     // The count sits past a run of zero padding whose length varies per call
@@ -577,6 +581,7 @@ pub(crate) fn find_v20_filler_marker(d: &[u8], count_pos: usize) -> Option<usize
 
 /// Decodes one typed `CAttributeNamed` value of type `type_tag` starting at
 /// `pos`; returns the value and the offset just past it. Exposed for tests.
+#[cfg(test)]
 pub fn read_legacy_attribute_value(
     data: &[u8],
     pos: usize,

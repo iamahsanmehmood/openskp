@@ -13,10 +13,8 @@
 // Synthetic bytes only: the real file that exposed this (a SketchUp 2017
 // cabinet, 21 of 96 root instances lost) is private and is not committed.
 
-mod common;
-
-use common::concat;
-use openskp::internal::{legacy_connection_paths, Error, ErrorKind};
+use super::common::concat;
+use crate::internal::{legacy_connection_paths, Error, ErrorKind};
 
 /// A 6-byte big reference (0x7fff escape) to an existing object.
 fn big(slot: u32) -> Vec<u8> {

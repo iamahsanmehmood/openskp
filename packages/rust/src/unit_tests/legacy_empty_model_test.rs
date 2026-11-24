@@ -8,11 +8,9 @@
 // file was rejected with an invalid definition count. The same file is a fixture of the other
 // ports. No private content.
 
-mod common;
-
-use common::fixture;
-use openskp::internal::find_empty_root_after_v20_filler;
-use openskp::{ParseOptions, SkpFile};
+use super::common::fixture;
+use crate::internal::find_empty_root_after_v20_filler;
+use crate::{ParseOptions, SkpFile};
 
 #[test]
 fn an_empty_2020_model_parses_to_an_empty_model() {

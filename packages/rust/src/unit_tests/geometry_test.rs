@@ -1,12 +1,10 @@
-mod common;
-
 use std::collections::BTreeMap;
 
-use common::{bytes, concat, f64s, tlv};
-use openskp::internal::{
+use super::common::{bytes, concat, f64s, tlv};
+use crate::internal::{
     collect_definitions, collect_geometry, parse_tlv_recursive, GeometryBuilder, RawDefinition,
 };
-use openskp::{AttributeKind, ParsedAttrDictionaries, ParsedAttribute};
+use crate::{AttributeKind, ParsedAttrDictionaries, ParsedAttribute};
 
 fn geometry(b: &[u8]) -> GeometryBuilder {
     let mut builder = GeometryBuilder::default();

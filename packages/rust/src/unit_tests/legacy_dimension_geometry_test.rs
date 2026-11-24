@@ -8,12 +8,10 @@
 // path. The last two cases write dimensions placed by an offset vector
 // (`add_dimension_with_offset_vector`), at the root and inside a component definition.
 
-mod common;
-
-use common::{concat, f64s};
-use openskp::create::{create, DefinitionOptions, GuideOptions, InstanceOptions, Point3};
-use openskp::internal::read_u16;
-use openskp::{ParseOptions, SkpFile, SkpModel, Vec3};
+use super::common::{concat, f64s};
+use crate::create::{create, DefinitionOptions, GuideOptions, InstanceOptions, Point3};
+use crate::internal::read_u16;
+use crate::{ParseOptions, SkpFile, SkpModel, Vec3};
 
 const A: Point3 = [1.0, 2.0, 3.0];
 const B: Point3 = [4.0, 6.0, 3.0];

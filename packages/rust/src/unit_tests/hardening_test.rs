@@ -1,7 +1,7 @@
 //! Untrusted-input hardening of the reading side: recursion limits, allocation sizes and
 //! worst-case scans on crafted inputs. The writer's input checks are in create_hardening_test.rs.
 
-use openskp::internal::bytes::parse_tlv_recursive;
+use crate::internal::bytes::parse_tlv_recursive;
 
 fn make_nested_tlv(levels: usize) -> Vec<u8> {
     let mut data = Vec::with_capacity(levels * 6);
@@ -36,8 +36,8 @@ fn tlv_recursion_boundary_test() {
 
 #[test]
 fn dc05_attribute_dict_deep_nesting_does_not_overflow_stack() {
-    use openskp::internal::geometry::extract_attribute_dictionaries;
-    use openskp::model::ParsedAttrDictionaries;
+    use crate::internal::geometry::extract_attribute_dictionaries;
+    use crate::model::ParsedAttrDictionaries;
 
     // 5,000 nested DD05 containers (6 bytes each = 30 KB), bypassing parse_tlv_recursive
     // because DC05 is a leaf tag in model.dat.
@@ -55,7 +55,7 @@ fn dc05_attribute_dict_deep_nesting_does_not_overflow_stack() {
 
 #[test]
 fn meta_units_deep_6400_nesting_does_not_overflow_stack() {
-    use openskp::internal::vff::read_meta_units;
+    use crate::internal::vff::read_meta_units;
 
     let levels = 5_000usize;
     let mut payload = Vec::with_capacity(levels * 6);
@@ -69,7 +69,7 @@ fn meta_units_deep_6400_nesting_does_not_overflow_stack() {
 
 #[test]
 fn xml_unclosed_tags_finish_in_linear_time() {
-    use openskp::internal::xml::{find_element, find_open_tag};
+    use crate::internal::xml::{find_element, find_open_tag};
     use std::time::Instant;
 
     let repeated = b"<item attr=\"1\">".repeat(10_000);
@@ -89,7 +89,7 @@ fn xml_unclosed_tags_finish_in_linear_time() {
 /// unclosed tags, which this only checks stays bounded for a modest input.
 #[test]
 fn find_screenimage_matches_a_later_tag_after_an_unclosed_one() {
-    use openskp::internal::xml::find_screenimage;
+    use crate::internal::xml::find_screenimage;
     use std::time::Instant;
 
     let s = b"<screenimage a=\"1\">no closing tag <screenimage b=\"2\"/>";
@@ -109,7 +109,7 @@ fn find_screenimage_matches_a_later_tag_after_an_unclosed_one() {
 
 #[test]
 fn zip64_overflow_and_directory_allocation_bomb_are_rejected() {
-    use openskp::zip::ZipArchive;
+    use crate::zip::ZipArchive;
 
     // Craft a minimal single-entry ZIP archive with a ZIP64 extra field in the CDH.
     fn build_zip64_archive(comp_size: u64, uncomp_size: u64, external_attr: u32) -> Vec<u8> {
@@ -190,10 +190,10 @@ fn zip64_overflow_and_directory_allocation_bomb_are_rejected() {
 
 #[test]
 fn deep_component_chain_and_exponential_dag_are_rejected() {
-    use openskp::instanced_scene_build::build_instanced_scene_raw;
-    use openskp::internal::{RawDefinition, RawInstance, RawParsed};
-    use openskp::scene_build::build_scene_raw;
-    use openskp::ParseOptions;
+    use crate::instanced_scene_build::build_instanced_scene_raw;
+    use crate::internal::{RawDefinition, RawInstance, RawParsed};
+    use crate::scene_build::build_scene_raw;
+    use crate::ParseOptions;
 
     // 1. Deep acyclic component chain: D0 -> D1 -> ... -> D300 (> MAX_COMPONENT_DEPTH 256)
     let mut deep = RawParsed::default();
@@ -263,8 +263,8 @@ fn legacy_mfc_object_recursion_and_attr_bombs_are_rejected() {
     let handle = std::thread::Builder::new()
         .stack_size(8 * 1024 * 1024)
         .spawn(|| {
-            use openskp::legacy::parse_legacy;
-            use openskp::ParseOptions;
+            use crate::legacy::parse_legacy;
+            use crate::ParseOptions;
 
             // Craft a legacy v18 header + CMaterial class record whose preamble's
             // CAttributeContainer chains 5,000 nested 2-byte class-ref tags (0x8001).
@@ -312,10 +312,10 @@ fn legacy_mfc_object_recursion_and_attr_bombs_are_rejected() {
 
 /// A model whose only content is `spatial_structure`.
 fn fragments_model(
-    build: impl FnOnce(&mut openskp::flatbuffers::Builder) -> openskp::flatbuffers::Offset,
+    build: impl FnOnce(&mut crate::flatbuffers::Builder) -> crate::flatbuffers::Offset,
 ) -> Vec<u8> {
-    use openskp::fragments::schema::{create_model, finish_model_buffer, ModelArgs};
-    let mut fbb = openskp::flatbuffers::Builder::default();
+    use crate::fragments::schema::{create_model, finish_model_buffer, ModelArgs};
+    let mut fbb = crate::flatbuffers::Builder::default();
     let spatial_structure = build(&mut fbb);
     let model = create_model(
         &mut fbb,
@@ -330,8 +330,8 @@ fn fragments_model(
 
 #[test]
 fn fragments_spatial_dag_aliasing_is_rejected_in_linear_time() {
-    use openskp::flatbuffers::Offset;
-    use openskp::fragments::schema::create_spatial_structure;
+    use crate::flatbuffers::Offset;
+    use crate::fragments::schema::create_spatial_structure;
     use std::time::Instant;
 
     // 64 levels (within the depth limit), each listing the level below
@@ -346,7 +346,7 @@ fn fragments_spatial_dag_aliasing_is_rejected_in_linear_time() {
     });
     assert!(buf.len() < 2048, "{} bytes", buf.len());
     let start = Instant::now();
-    let err = openskp::from_fragments(&buf).unwrap_err();
+    let err = crate::from_fragments(&buf).unwrap_err();
     assert!(
         err.to_string().contains("more than one parent"),
         "unexpected error: {err}"
@@ -367,6 +367,6 @@ fn fragments_spatial_dag_aliasing_is_rejected_in_linear_time() {
         }
         node
     });
-    let scene = openskp::from_fragments(&buf).unwrap();
+    let scene = crate::from_fragments(&buf).unwrap();
     assert_eq!(scene.scene_hierarchy.children.len(), 2);
 }

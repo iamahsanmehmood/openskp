@@ -2,16 +2,14 @@
 // Untitled.skp (13 linear dimensions); scenes on a synthetic 0702 record
 // shaped like the real ones.
 
-mod common;
-
 use std::collections::{BTreeMap, HashMap};
 
-use common::{concat, f64s};
-use openskp::internal::{
+use super::common::{self, concat, f64s};
+use crate::internal::{
     hex_upper, parse_dimensions, parse_pages, scan_pages_for_layers, LegacySlotEntry,
     LegacySlotTable, TlvNode,
 };
-use openskp::{ParseOptions, SkpFile, Vec3};
+use crate::{ParseOptions, SkpFile, Vec3};
 
 // Deliberately NOT common::tlv(): these sub-records use Python's INTEGER tag
 // convention (a true little-endian u16), so the numeric tag is packed
@@ -90,7 +88,7 @@ fn constrained_body(a: Vec3, b: Vec3, axis: Option<&[u8]>, distance: f64) -> Vec
 
 #[test]
 fn constrained_offsets_preserve_plane_side_and_endpoint_order() {
-    use openskp::internal::{build_model, RawParsed};
+    use crate::internal::{build_model, RawParsed};
     let (a, b): (Vec3, Vec3) = ([1.0, 2.0, 3.0], [1.0, 2.0, 13.0]);
     for axis in [1u8, 2] {
         for distance in [-4.0, 4.0] {

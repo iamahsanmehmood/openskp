@@ -8,14 +8,12 @@
 //   caller then emits the chords the file stores. Every test expecting an arc
 //   is paired with one expecting `None` for a similar-looking case.
 
-mod common;
-
 use std::collections::{BTreeMap, BTreeSet};
 
-use common::{fixture, read_fixture};
-use openskp::curves::{chain_loose_edges, solve_run_arc, LooseRun, INCHES_TO_M};
-use openskp::internal::{full_parse, GeometryBuilder, RawArcFrame, RawFace};
-use openskp::{CoEdge, CurveArc, EntityId, ParseOptions, SkpFile, Vec3};
+use super::common::{fixture, read_fixture};
+use crate::curves::{chain_loose_edges, solve_run_arc, LooseRun, INCHES_TO_M};
+use crate::internal::{full_parse, GeometryBuilder, RawArcFrame, RawFace};
+use crate::{CoEdge, CurveArc, EntityId, ParseOptions, SkpFile, Vec3};
 
 // The arc fixture's own frame: |x_axis| == |y_axis| == 40 inches.
 const RADIUS_IN: f64 = 40.0;
@@ -330,7 +328,7 @@ fn a_plain_curve_is_not_an_arc() {
 
 // ── end to end: a real file's loose edges arrive in the scene ────────────
 
-fn build_scene(name: &str) -> openskp::Scene {
+fn build_scene(name: &str) -> crate::Scene {
     SkpFile::open(fixture(name))
         .unwrap()
         .build_scene(&ParseOptions::default())
