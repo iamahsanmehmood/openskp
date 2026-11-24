@@ -277,19 +277,24 @@ class InstancedSceneBuilder {
       String defName,
       int? defId,
       (int, int, int)? inheritedColor,
-      String layer,
-    ) {
+      String layer, [
+      RawMaterial? inheritedMaterial,
+    ]) {
       if (builder.faces.isEmpty) return null;
 
       final fallbackColor = inheritedColor ?? getLayerColor(layer);
-      final key = '${defId ?? 'ROOT'}|${fallbackColor.$1},${fallbackColor.$2},${fallbackColor.$3}';
+      final matPart = inheritedMaterial != null
+          ? '|${inheritedMaterial.name}:${resolveTransparency(inheritedMaterial)}'
+          : '';
+      final key =
+          '${defId ?? 'ROOT'}|${fallbackColor.$1},${fallbackColor.$2},${fallbackColor.$3}$matPart';
       final hit = resourceIdByKey[key];
       if (hit != null) return hit;
 
       final faceGroups = buildLocalFaceGroups(
         builder,
         FaceGroupContext(
-          resolveMaterial: resolveMaterial,
+          resolveMaterial: (matId) => resolveMaterial(matId) ?? inheritedMaterial,
           textureIndexFor: textureIndexFor,
           fallbackColor: fallbackColor,
           definitionId: defId,
@@ -412,8 +417,9 @@ class InstancedSceneBuilder {
       GeometryBuilder builder,
       List<double> currentMatrix,
       String parentLayer,
-      (int, int, int)? inheritedColor,
-    ) {
+      (int, int, int)? inheritedColor, [
+      RawMaterial? inheritedMaterial,
+    ]) {
       final nodes = <InstancedNode>[];
       for (final inst in builder.instances) {
         final refIdx = inst.refIdx;
@@ -421,8 +427,20 @@ class InstancedSceneBuilder {
 
         var lName = parentLayer;
         (int, int, int)? instColor = inheritedColor;
+        RawMaterial? instMaterial = inheritedMaterial;
         var properties = Map<String, String>.from(inst.properties ?? {});
         Map<String, Map<String, Object?>>? instAttributeDicts;
+
+        // A classic (pre-2021) instance has no D007: its own tag and paint
+        // were read with it.
+        if (inst.layerId != null) {
+          lName = layerIdToName[inst.layerId!] ?? parentLayer;
+        }
+        final painted = resolveMaterial(inst.materialId);
+        if (painted != null) {
+          instColor = (painted.r, painted.g, painted.b);
+          instMaterial = painted;
+        }
 
         final d007 = inst.children.where((c) => c.tag == 'D007').firstOrNull;
         if (d007 != null) {
@@ -438,7 +456,10 @@ class InstancedSceneBuilder {
             final matName = materialIdToName[instMatId];
             if (matName != null) {
               final mat = materials[matName] ?? materialsByFolder[matName];
-              if (mat != null) instColor = (mat.r, mat.g, mat.b);
+              if (mat != null) {
+                instColor = (mat.r, mat.g, mat.b);
+                instMaterial = mat;
+              }
             }
           }
           try {
@@ -468,7 +489,13 @@ class InstancedSceneBuilder {
             );
           }
           try {
-            children = walkBuilder(childDef.builder, newMatrix, lName, instColor);
+            children = walkBuilder(
+              childDef.builder,
+              newMatrix,
+              lName,
+              instColor,
+              instMaterial,
+            );
           } finally {
             activeDefinitions.remove(refIdx);
           }
@@ -524,7 +551,14 @@ class InstancedSceneBuilder {
           attributeDictionaries: attributeDictionaries,
           guid: inst.refGuid ?? '',
           meshResourceId: (refIdx != null && childDef != null)
-              ? meshResourceForBuilder(childDef.builder, childDef.name ?? '', refIdx, instColor, lName)
+              ? meshResourceForBuilder(
+                  childDef.builder,
+                  childDef.name ?? '',
+                  refIdx,
+                  instColor,
+                  lName,
+                  instMaterial,
+                )
               : null,
           children: children,
         ));
