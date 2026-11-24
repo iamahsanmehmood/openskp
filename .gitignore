@@ -73,6 +73,13 @@ packages/rust/viewer/dist/
 !packages/cpp/tests/fixtures/*.skp
 !packages/rust/tests/fixtures/*.skp
 !packages/rust/tests/fixtures/create_reference/*.skp
+
+# Evidence files for the VFF writer research (small, hand-verified models):
+# keep the oracle pairs, stage-1 and stage-2 acceptance files committable.
+!research/vff-writer/**/*.skp
+# Genuine SketchUp-saved files used by the VFF writer tests (entry-count
+# variants for the header integrity constant).
+!packages/python/tests/fixtures/vff_writer/*.skp
 !packages/rust/src/create/*.skp
 !packages/python/src/openskp/_scaffold/*.skp
 !examples/web-viewer/samples/*.skp
