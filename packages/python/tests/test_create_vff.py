@@ -37,6 +37,7 @@ from openskp._vff_writer.archive import (
     read_zip,
 )
 from openskp._vff_writer.tlv import parse_records
+from openskp.create import SkpWriteError
 from openskp.create_vff import (
     DEFAULT_TEMPLATE,
     VffBuilder,
@@ -255,5 +256,59 @@ def test_a_new_builder_round_trips_the_template(tmp_path):
     assert model.version == "{25.0.571}"
     assert not model.root.faces
     assert not model.definitions
+
+
+def test_faces_support_holes_and_shared_edges(tmp_path):
+    builder = create_vff()
+    builder.add_face(
+        [(0, 0, 0), (20, 0, 0), (20, 20, 0), (0, 20, 0)],
+        holes=[[(5, 5, 0), (15, 5, 0), (15, 15, 0), (5, 15, 0)]],
+    )
+    model = parse_bytes(tmp_path, builder.to_bytes())
+    (face,) = model.root.faces.values()
+    assert len(face.loops) == 2
+
+
+def test_faces_honour_edge_flags(tmp_path):
+    builder = create_vff()
+    builder.add_face(
+        [(0, 0, 0), (10, 0, 0), (10, 10, 0), (0, 10, 0)],
+        soft_edges=True,
+        smooth_edges=True,
+    )
+    model = parse_bytes(tmp_path, builder.to_bytes())
+    edges = list(model.root.edges.values())
+    assert len(edges) == 4
+    assert all(edge.soft and edge.smooth for edge in edges)
+
+
+def test_auto_triangulate_splits_a_non_planar_face(tmp_path):
+    builder = create_vff()
+    builder.add_face(
+        [(0, 0, 0), (10, 0, 0), (10, 10, 1), (0, 10, 0)],
+        auto_triangulate=True,
+    )
+    model = parse_bytes(tmp_path, builder.to_bytes())
+    assert len(model.root.faces) == 2
+    assert all(len(face.loops[0]) == 3 for face in model.root.faces.values())
+
+
+def test_face_errors_are_skpwriteerrors():
+    with pytest.raises(SkpWriteError):
+        create_vff().add_face([(0, 0, 0), (1, 0, 0)])
+    with pytest.raises(SkpWriteError):
+        create_vff().add_face([(0, 0, 0), (1, 0, 0), (2, 0, 0)])
+    with pytest.raises(SkpWriteError):
+        create_vff().add_face([(0, 0, 0), (10, 0, 0), (10, 10, 1), (0, 10, 0)])
+    with pytest.raises(SkpWriteError):
+        create_vff().add_face(
+            [(0, 0, 0), (10, 0, 0), (10, 10, 0), (0, 10, 0)],
+            material=123456,
+        )
+    with pytest.raises(SkpWriteError):
+        create_vff().add_face(
+            [(0, 0, 0), (10, 0, 0), (10, 10, 0), (0, 10, 0)],
+            layer=123456,
+        )
 
 

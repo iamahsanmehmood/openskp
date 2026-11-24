@@ -15,7 +15,7 @@ from __future__ import annotations
 import struct
 import time
 import uuid
-from typing import Dict, Iterable, List, Optional
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 from .archive import (
     ZipEntry,
@@ -26,14 +26,18 @@ from .archive import (
 from .tlv import (
     Record,
     encode_records,
+    f64s,
     id_list,
+    newell_normal,
     parse_records,
     read_varint,
     record,
+    u8,
+    unit_normal,
     varint,
 )
 
-__all__ = ["Template"]
+__all__ = ["Template", "EntityEditor"]
 
 # ── Tags (16-bit values exactly as stored little-endian in the file) ───────
 
@@ -224,8 +228,27 @@ _DEFAULT_LAYER_COLOR = (136, 136, 136)
 # ── Small record constructors ────────────────────────────────────────────
 
 
+def _entity_base(entity_id: Optional[int]) -> Record:
+    children: List[Record] = []
+    if entity_id is not None:
+        children.append(record(T_ENTITY_ID, varint(entity_id)))
+    return Record(T_ENTITY_BASE, children=children)
 
 
+def _drawing(
+    entity_id: Optional[int],
+    material: Optional[int] = None,
+    layer: Optional[int] = None,
+    flags: int = 0x06,
+) -> Record:
+    children = [_entity_base(entity_id)]
+    if material:
+        children.append(record(T_FRONT_MATERIAL, varint(material)))
+    if layer:
+        children.append(record(T_LAYER_REF, varint(layer)))
+    if flags:
+        children.append(record(T_FLAGS, u8(flags)))
+    return Record(T_DRAWING, children=children)
 
 
 
@@ -642,6 +665,269 @@ _TINY_PNG = bytes.fromhex(
 # ── Entity containers ───────────────────────────────────────────────────
 
 
+class EntityEditor:
+    """Build vertices/edges/faces/instances inside one ``0x1388`` container.
+
+    ``container`` is an existing container parsed from the template (the model
+    root); ``container_id`` makes a fresh container for a component
+    definition.  New records are appended to the template's own pools when
+    there are any, so template geometry and new geometry coexist.
+    """
+
+    def __init__(
+        self,
+        template: Template,
+        *,
+        container: Optional[Record] = None,
+        container_id: Optional[int] = None,
+    ) -> None:
+        self.template = template
+        self.fresh = container is None
+        self.container = container if container is not None else self._blank_container(
+            container_id
+        )
+        self.container_id = container_id
+        self.vertices: Dict[Tuple[float, float, float], int] = {}
+        self.edges: Dict[Tuple[int, int], Tuple[int, int]] = {}
+        self.order: List[int] = []
+        self.bounds = None  # [minx, miny, minz, maxx, maxy, maxz]
+        self.active_section: Optional[int] = None
+        self._pools: Dict[int, Record] = {}
+        for child in self.container.children or []:
+            if child.tag in _POOL_TAGS and child.children is not None:
+                self._pools[child.tag] = child
+        self._existing_order = self._read_order()
+
+    @staticmethod
+    def _blank_container(container_id: Optional[int]) -> Record:
+        children: List[Record] = [_drawing(container_id)]
+        children.append(Record(T_EMPTY, children=[]))
+        children.append(_empty_relationships())
+        children.append(record(T_FLAGS_CONTAINER, u8(0)))
+        return Record(T_DEFINITION_CONTAINER, children=children)
+
+    def _read_order(self) -> List[int]:
+        order = self.container.child(T_ORDER)
+        if order is None or order.children is not None:
+            return []
+        try:
+            return _decode_id_list(order.payload)
+        except ValueError:
+            return []
+
+    def _pool(self, tag: int) -> Record:
+        pool = self._pools.get(tag)
+        if pool is None:
+            pool = Record(tag, children=[])
+            self._pools[tag] = pool
+        return pool
+
+    # -- bounds -----------------------------------------------------------
+
+    def _extend_bounds(self, point: Sequence[float]) -> None:
+        if self.bounds is None:
+            self.bounds = [point[0], point[1], point[2], point[0], point[1], point[2]]
+            return
+        b = self.bounds
+        b[0] = min(b[0], point[0])
+        b[1] = min(b[1], point[1])
+        b[2] = min(b[2], point[2])
+        b[3] = max(b[3], point[0])
+        b[4] = max(b[4], point[1])
+        b[5] = max(b[5], point[2])
+
+    # -- primitives -------------------------------------------------------
+
+    def add_vertex(self, point: Sequence[float]) -> int:
+        key = (float(point[0]), float(point[1]), float(point[2]))
+        existing = self.vertices.get(key)
+        if existing is not None:
+            return existing
+        identifier = self.template.alloc_id()
+        vertex = Record(
+            T_VERTEX,
+            children=[_entity_base(identifier), record(T_POINT, f64s(key))],
+        )
+        self._pool(T_VERTICES).children.append(vertex)
+        self.vertices[key] = identifier
+        self._extend_bounds(key)
+        return identifier
+
+    def add_edge(
+        self,
+        start: int,
+        end: int,
+        layer: Optional[int],
+        *,
+        flags: int = 0x06,
+    ) -> Tuple[int, bool]:
+        """Return ``(edge id, forward)`` for the start-to-end direction."""
+        key = (start, end) if start <= end else (end, start)
+        existing = self.edges.get(key)
+        if existing is not None:
+            identifier, stored_start = existing
+            return identifier, stored_start == start
+        identifier = self.template.alloc_id()
+        children: List[Record] = [
+            _drawing(identifier, layer=layer, flags=flags),
+            record(T_EDGE_START, varint(start)),
+            record(T_EDGE_END, varint(end)),
+        ]
+        edge = Record(T_EDGE, children=children)
+        self._pool(T_EDGES).children.append(edge)
+        self.edges[key] = (identifier, start)
+        self.order.append(identifier)
+        return identifier, True
+
+    def add_face(
+        self,
+        points: Sequence[Sequence[float]],
+        *,
+        material: Optional[int] = None,
+        layer: Optional[int] = None,
+        back_material: Optional[int] = None,
+        hidden: bool = False,
+        holes: Sequence[Sequence[Sequence[float]]] = (),
+        edge_flags: int = 0x06,
+    ) -> int:
+        outer = [tuple(float(c) for c in p) for p in points]
+        if len(outer) < 3:
+            raise ValueError("a face needs at least three points")
+        normal = unit_normal(newell_normal(outer))
+        plane_d = -(
+            normal[0] * outer[0][0]
+            + normal[1] * outer[0][1]
+            + normal[2] * outer[0][2]
+        )
+        loops: List[Record] = []
+        rings = [outer]
+        for hole in holes:
+            source = getattr(hole, "points", hole)
+            ring = [tuple(float(c) for c in p) for p in source]
+            if len(ring) < 3:
+                raise ValueError("a hole needs at least three points")
+            hole_normal = newell_normal(ring)
+            if sum(a * b for a, b in zip(hole_normal, normal)) > 0:
+                ring = list(reversed(ring))
+            rings.append(ring)
+        for ring in rings:
+            uses: List[Record] = []
+            for index in range(len(ring)):
+                start_point = ring[index]
+                end_point = ring[(index + 1) % len(ring)]
+                start = self.add_vertex(start_point)
+                end = self.add_vertex(end_point)
+                if start == end:
+                    raise ValueError("a face ring has a repeated adjacent point")
+                edge_id, forward = self.add_edge(start, end, layer, flags=edge_flags)
+                uses.append(
+                    Record(
+                        T_EDGE_USE,
+                        children=[
+                            record(T_EDGE_USE_ID, varint(edge_id)),
+                            record(T_EDGE_USE_FORWARD, u8(0 if forward else 1)),
+                        ],
+                    )
+                )
+            loops.append(
+                Record(T_LOOP, children=[Record(T_LOOP_EDGES, children=uses)])
+            )
+        identifier = self.template.alloc_id()
+        flags = 0x06 | (0x01 if hidden else 0)
+        children: List[Record] = [
+            _drawing(
+                identifier,
+                material=material,
+                layer=layer,
+                flags=flags,
+            ),
+            record(T_PLANE, f64s([*normal, plane_d])),
+            Record(T_LOOPS, children=loops),
+        ]
+        if back_material:
+            children.append(record(T_BACK_MATERIAL, varint(back_material)))
+        self._pool(T_FACES).children.append(Record(T_FACE, children=children))
+        self.order.append(identifier)
+        return identifier
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    # -- finalize ---------------------------------------------------------
+
+    def finalize(self) -> Record:
+        children: List[Record] = []
+        existing = self.container.children or []
+        drawing = next((c for c in existing if c.tag == T_DRAWING), None)
+        if drawing is None:
+            drawing = _drawing(self.container_id)
+        children.append(drawing)
+        for tag in _POOL_TAGS:
+            pool = self._pools.get(tag)
+            if pool is not None:
+                children.append(pool)
+        ahead: List[Record] = []
+        trailing: List[Record] = []
+        existing_active = None
+        for child in existing:
+            if child.tag in _POOL_TAGS or child.tag in (
+                T_DRAWING,
+                T_ORDER,
+                T_FLAGS_CONTAINER,
+                T_BOUNDS,
+                T_ACTIVE_SECTION,
+            ):
+                if child.tag == T_ACTIVE_SECTION:
+                    existing_active = child
+                continue
+            (trailing if child.tag == T_RELATIONSHIPS else ahead).append(child)
+        children.extend(ahead)
+        merged_order = self._existing_order + [
+            i for i in self.order if i not in self._existing_order
+        ]
+        if merged_order:
+            children.append(_new_id_list_tag(merged_order))
+        if self.active_section is not None:
+            children.append(record(T_ACTIVE_SECTION, varint(self.active_section)))
+        elif existing_active is not None:
+            children.append(existing_active)
+        children.extend(trailing)
+        flags_record = self.container.child(T_FLAGS_CONTAINER)
+        if self.fresh:
+            children.append(record(T_FLAGS_CONTAINER, u8(1)))
+        elif flags_record is not None:
+            children.append(flags_record)
+        old_bounds = self.container.child(T_BOUNDS)
+        if self.fresh or old_bounds is not None:
+            bounds = self.bounds
+            if old_bounds is not None and len(old_bounds.payload) == 48:
+                values = list(struct.unpack("<6d", old_bounds.payload))
+                if bounds is None:
+                    bounds = values
+                else:
+                    bounds = [
+                        min(values[0], bounds[0]),
+                        min(values[1], bounds[1]),
+                        min(values[2], bounds[2]),
+                        max(values[3], bounds[3]),
+                        max(values[4], bounds[4]),
+                        max(values[5], bounds[5]),
+                    ]
+            if bounds is None:
+                bounds = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+            children.append(record(T_BOUNDS, f64s(bounds)))
+        self.container.children = children
+        return self.container
 
 
 
