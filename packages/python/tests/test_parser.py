@@ -2495,6 +2495,29 @@ class TestVffAttributeDictionaries:
         d007 = self._d007(self._dict('fbd-einfo', entries))
         assert _core.extract_attribute_dictionaries(d007) == {'fbd-einfo': {'angle': -7}}
 
+    def test_time_value_round_trips(self) -> None:
+        # AC38 is the VFF counterpart of legacy's 0x09 time_t: u32 seconds.
+        from openskp import _core
+        entries = self._entry(
+            'timestamp', self._value(self._tlv('AC38', struct.pack('<I', 1700000000))))
+        d007 = self._d007(self._dict('fbd-einfo', entries))
+        assert _core.extract_attribute_dictionaries(d007) == {
+            'fbd-einfo': {'timestamp': 1700000000}}
+
+    def test_time_value_stays_unsigned_above_int32(self) -> None:
+        from openskp import _core
+        entries = self._entry(
+            'timestamp', self._value(self._tlv('AC38', struct.pack('<I', 0xFFFFFFFF))))
+        d007 = self._d007(self._dict('fbd-einfo', entries))
+        assert _core.extract_attribute_dictionaries(d007) == {
+            'fbd-einfo': {'timestamp': 4294967295}}
+
+    def test_time_with_wrong_payload_size_is_none(self) -> None:
+        from openskp import _core
+        entries = self._entry('timestamp', self._value(self._tlv('AC38', b'\x00\x00\x00')))
+        d007 = self._d007(self._dict('fbd-einfo', entries))
+        assert _core.extract_attribute_dictionaries(d007) == {'fbd-einfo': {'timestamp': None}}
+
     def test_null_value_round_trips(self) -> None:
         from openskp import _core
         entries = self._entry('child_thickness', self._value())  # A438 with no children
