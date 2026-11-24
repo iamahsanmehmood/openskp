@@ -121,7 +121,10 @@ fn classic_instance_attrs_and_names_match_in_both_scene_types() {
         by_name.insert(meta.name.clone(), meta.clone());
     }
     assert_eq!(by_name.len(), 3);
-    assert_eq!(by_name["CustomOverride"].attribute_dictionaries, expected_w1);
+    assert_eq!(
+        by_name["CustomOverride"].attribute_dictionaries,
+        expected_w1
+    );
     assert_eq!(by_name["TS-9"].attribute_dictionaries, expected_w2);
     assert!(by_name["W3"].attribute_dictionaries.is_empty());
     assert_eq!(by_name["W3"].properties, expected_w3_props);
