@@ -1,5 +1,5 @@
 import { foldScale, multiplyMatrices } from './transforms';
-import { extractDynamicProperties, extractAttributeDictionaries, isGenericDefinitionName, findNameOverride, stringifyVffAttrValue, VffAttrValue } from './geometry';
+import { extractAttributeDictionaries, isGenericDefinitionName, findNameOverride, stringifyVffAttrValue, VffAttrValue } from './geometry';
 import { ParseOptions, PROGRESS_INTERVAL, emitLog, emitProgress } from './observability';
 import { SkpParseError } from './errors';
 import {
@@ -524,9 +524,17 @@ export function buildInstancedSceneFromParsed(
       let attributeDicts: Record<string, Record<string, VffAttrValue>> | null = inst.attributeDicts ?? null;
       if (d007) {
         try {
-          properties = extractDynamicProperties(d007, options);
           attributeDicts = extractAttributeDictionaries(d007, options);
+          const dynamic = attributeDicts['dynamic_attributes'];
+          properties = {};
+          if (dynamic) {
+            for (const key of Object.keys(dynamic)) {
+              properties[key] = stringifyVffAttrValue(dynamic[key]);
+            }
+          }
         } catch (e) {
+          properties = {};
+          attributeDicts = null;
           emitLog(
             options, 'debug',
             `Failed to extract dynamic properties for instance ${inst.name ?? ''} (refIdx=${refIdx}): ${(e as Error).message}`

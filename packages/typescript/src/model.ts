@@ -1,5 +1,5 @@
 import { transformPoint, multiplyMatrices } from './transforms';
-import { extractDynamicProperties, extractAttributeDictionaries, isGenericDefinitionName, findNameOverride, stringifyVffAttrValue, ParsedDefinition, VffAttrValue } from './geometry';
+import { extractAttributeDictionaries, isGenericDefinitionName, findNameOverride, stringifyVffAttrValue, ParsedDefinition, VffAttrValue } from './geometry';
 import {
   buildLocalFaceGroups,
   createTextureIndexFor,
@@ -1195,9 +1195,17 @@ export function buildSceneFromParsed(
       let attributeDicts: Record<string, Record<string, VffAttrValue>> | null = inst.attributeDicts ?? null;
       if (d007) {
         try {
-          properties = extractDynamicProperties(d007, options);
           attributeDicts = extractAttributeDictionaries(d007, options);
+          const dynamic = attributeDicts['dynamic_attributes'];
+          properties = {};
+          if (dynamic) {
+            for (const key of Object.keys(dynamic)) {
+              properties[key] = stringifyVffAttrValue(dynamic[key]);
+            }
+          }
         } catch (e) {
+          properties = {};
+          attributeDicts = null;
           emitLog(
             options, 'debug',
             `Failed to extract dynamic properties for instance ${inst.name ?? ''} (refIdx=${refIdx}): ${(e as Error).message}`

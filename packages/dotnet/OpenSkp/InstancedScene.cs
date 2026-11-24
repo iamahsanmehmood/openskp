@@ -492,6 +492,7 @@ namespace OpenSkp
                     }
 
                     var d007 = inst.Children.FirstOrDefault(c => c.Tag == "D007");
+                    var rawAttrDicts = inst.AttributeDicts;
                     if (d007 != null)
                     {
                         var d207 = d007.Children.FirstOrDefault(c => c.Tag == "D207");
@@ -518,10 +519,20 @@ namespace OpenSkp
                         }
                         try
                         {
-                            properties = Geometry.ExtractDynamicProperties(d007);
+                            rawAttrDicts ??= Geometry.ExtractAttributeDictionaries(d007);
+                            properties = new Dictionary<string, string>();
+                            if (rawAttrDicts.TryGetValue("dynamic_attributes", out var dynamicAttrs))
+                            {
+                                foreach (var entry in dynamicAttrs)
+                                {
+                                    properties[entry.Key] = Geometry.StringifyVffAttrValue(entry.Value);
+                                }
+                            }
                         }
                         catch (Exception e)
                         {
+                            properties = new Dictionary<string, string>();
+                            rawAttrDicts = null;
                             Observability.Log(
                                 options, SkpLogLevel.Debug,
                                 $"Failed to extract dynamic properties for instance {inst.Name} (refIdx={refIdx}): {e.Message}");
@@ -555,7 +566,7 @@ namespace OpenSkp
                     // file. Mirrors Python's/C++'s own instanced_scene name
                     // resolution exactly.
                     bool defNameIsReal = !string.IsNullOrEmpty(childDefName) && !Geometry.IsGenericDefinitionName(childDefName);
-                    string? nameOverride = Geometry.FindNameOverride(inst.AttributeDicts);
+                    string? nameOverride = Geometry.FindNameOverride(rawAttrDicts);
                     bool instNameNonEmpty = !string.IsNullOrEmpty(inst.Name);
                     string instName = instNameNonEmpty ? inst.Name! : (defNameIsReal ? childDefName : $"Component_{refIdx ?? 0}");
                     string displayName = nameOverride ?? instName;
@@ -569,9 +580,9 @@ namespace OpenSkp
                     // (and Python's own attribute_dictionaries) exactly
                     // (openskp#285).
                     var attributeDictionaries = new Dictionary<string, Dictionary<string, string>>();
-                    if (inst.AttributeDicts != null)
+                    if (rawAttrDicts != null)
                     {
-                        foreach (var kv in inst.AttributeDicts)
+                        foreach (var kv in rawAttrDicts)
                         {
                             if (kv.Key == "dynamic_attributes" || kv.Key == "SU_InstanceSet") continue;
                             var stringified = new Dictionary<string, string>();

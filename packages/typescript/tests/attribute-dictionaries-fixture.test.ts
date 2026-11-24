@@ -47,12 +47,7 @@ describe('attributeDictionaries - real fixture (openskp#285)', () => {
     const w1 = findByName(scene.sceneHierarchy, 'W1');
 
     expect(w1).not.toBeNull();
-    // NOTE: unlike Python (whose `properties` is scoped to only the
-    // "dynamic_attributes" dict), TypeScript's `properties` is populated via
-    // the pre-existing, deliberately flatten-everything
-    // extractDynamicProperties - a real, established divergence predating
-    // this change. attributeDictionaries (below) is the actually-correct,
-    // dictionary-scoped way to reach steelframer-dict's own data.
+    expect(w1!.properties).toEqual({});
     expect(w1!.attributeDictionaries['steelframer-dict']).toBeDefined();
     expect(w1!.attributeDictionaries['steelframer-dict'].generator).toBe('SteelFramer::Engine::PanelGenerator');
     expect(w1!.attributeDictionaries['steelframer-dict'].profile).toBe('362S200-43');
@@ -63,6 +58,7 @@ describe('attributeDictionaries - real fixture (openskp#285)', () => {
     const w1 = findInstancedByName(instanced.sceneHierarchy, 'W1');
 
     expect(w1).not.toBeNull();
+    expect(w1!.properties).toEqual({});
     expect(w1!.attributeDictionaries['steelframer-dict']).toBeDefined();
     expect(w1!.attributeDictionaries['steelframer-dict'].generator).toBe('SteelFramer::Engine::PanelGenerator');
     expect(w1!.attributeDictionaries['steelframer-dict'].profile).toBe('362S200-43');
@@ -80,5 +76,59 @@ describe('attributeDictionaries - real fixture (openskp#285)', () => {
     );
 
     expect(meshWithDict).toBeDefined();
+  });
+
+  for (const fx of ['nesting_2021.skp', 'instance_scale_term_2021.skp']) {
+    it(`${fx}: does not mix SU_InstanceSet boilerplate into scene properties (#642)`, () => {
+      const buf = readFixture(fx);
+      const baked = buildScene(buf);
+      const instanced = buildInstancedScene(buf);
+      expect(baked.sceneHierarchy.children.length).toBeGreaterThan(0);
+      expect(instanced.sceneHierarchy.children.length).toBeGreaterThan(0);
+      for (const child of baked.sceneHierarchy.children) {
+        expect(child.properties).toEqual({});
+      }
+      for (const child of instanced.sceneHierarchy.children) {
+        expect(child.properties).toEqual({});
+      }
+    });
+  }
+
+  it('vff_dynamic_properties_2021.skp: keeps numeric dynamic_attributes in properties and separates other dicts (#642)', () => {
+    const buf = readFixture('vff_dynamic_properties_2021.skp');
+    const baked = buildScene(buf);
+    const instanced = buildInstancedScene(buf);
+
+    const expectedProps = {
+      _lenx_formula: 'Shelf!Width/2',
+      copies: '3',
+      lenx: '12.5',
+    };
+    const expectedDicts = {
+      bim_meta: {
+        category: 'Shelving',
+        code: 'SH-01',
+        weight_kg: '8.25',
+      },
+    };
+
+    expect(baked.sceneHierarchy.children).toHaveLength(1);
+    const bakedNode = baked.sceneHierarchy.children[0];
+    expect(bakedNode.name).toBe('SH-01');
+    expect(bakedNode.properties).toEqual(expectedProps);
+    expect(bakedNode.attributeDictionaries).toEqual(expectedDicts);
+
+    const meshes = Object.values(baked.meshIndex);
+    expect(meshes.length).toBeGreaterThanOrEqual(1);
+    for (const mesh of meshes) {
+      expect(mesh.properties).toEqual(expectedProps);
+      expect(mesh.attributeDictionaries).toEqual(expectedDicts);
+    }
+
+    expect(instanced.sceneHierarchy.children).toHaveLength(1);
+    const instancedNode = instanced.sceneHierarchy.children[0];
+    expect(instancedNode.name).toBe('SH-01');
+    expect(instancedNode.properties).toEqual(expectedProps);
+    expect(instancedNode.attributeDictionaries).toEqual(expectedDicts);
   });
 });

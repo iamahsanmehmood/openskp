@@ -699,9 +699,16 @@ class SceneBuilder {
             }
           }
           try {
-            properties = Geometry.extractDynamicProperties(d007);
             instAttributeDicts = Geometry.extractAttributeDictionaries(d007);
+            final dynamicAttrs = instAttributeDicts['dynamic_attributes'];
+            properties = <String, String>{
+              if (dynamicAttrs != null)
+                for (final e in dynamicAttrs.entries)
+                  e.key: Geometry.stringifyVffAttrValue(e.value),
+            };
           } catch (e) {
+            properties = <String, String>{};
+            instAttributeDicts = null;
             emitLog(
               options, SkpLogLevel.debug,
               'Failed to extract dynamic properties for instance ${inst.name} (refIdx=$refIdx): $e',

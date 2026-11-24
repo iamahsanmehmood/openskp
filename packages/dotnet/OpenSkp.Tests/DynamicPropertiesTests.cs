@@ -421,14 +421,8 @@ namespace OpenSkp.Tests
             var w1 = FindByName(scene.SceneHierarchy, "W1");
 
             Assert.NotNull(w1);
-            // NOTE: unlike Python (whose properties is scoped to only the
-            // "dynamic_attributes" dict), .NET's Properties is populated via
-            // the pre-existing, deliberately flatten-everything
-            // Geometry.ExtractDynamicProperties - a real, established
-            // divergence predating this change, not something this task
-            // touches. AttributeDictionaries (below) is the actually-correct,
-            // dictionary-scoped way to reach steelframer-dict's own data.
-            Assert.True(w1!.AttributeDictionaries.ContainsKey("steelframer-dict"));
+            Assert.Empty(w1!.Properties);
+            Assert.True(w1.AttributeDictionaries.ContainsKey("steelframer-dict"));
             var steelframer = w1.AttributeDictionaries["steelframer-dict"];
             Assert.Equal("SteelFramer::Engine::PanelGenerator", steelframer["generator"]);
             Assert.Equal("362S200-43", steelframer["profile"]);
@@ -453,7 +447,8 @@ namespace OpenSkp.Tests
             var w1 = FindInstanced(instancedScene.SceneHierarchy, "W1");
 
             Assert.NotNull(w1);
-            Assert.True(w1!.AttributeDictionaries.ContainsKey("steelframer-dict"));
+            Assert.Empty(w1!.Properties);
+            Assert.True(w1.AttributeDictionaries.ContainsKey("steelframer-dict"));
             var steelframer = w1.AttributeDictionaries["steelframer-dict"];
             Assert.Equal("SteelFramer::Engine::PanelGenerator", steelframer["generator"]);
             Assert.Equal("362S200-43", steelframer["profile"]);
@@ -490,6 +485,59 @@ namespace OpenSkp.Tests
 
             Assert.Equal("W-2", dicts["FrameBuilder"]["mark"]);
             Assert.False(dicts.ContainsKey("dynamic_attributes"));
+        }
+
+        [Theory]
+        [InlineData("nesting_2021.skp")]
+        [InlineData("instance_scale_term_2021.skp")]
+        public void Vff2021Fixtures_DoNotMixSuInstanceSetIntoSceneProperties(string fixture)
+        {
+            var path = FixturePath(fixture);
+            var baked = SkpFile.BuildScene(path);
+            var instanced = SkpFile.BuildInstancedScene(path);
+            Assert.NotEmpty(baked.SceneHierarchy.Children);
+            Assert.NotEmpty(instanced.SceneHierarchy.Children);
+            Assert.All(baked.SceneHierarchy.Children, c => Assert.Empty(c.Properties));
+            Assert.All(instanced.SceneHierarchy.Children, c => Assert.Empty(c.Properties));
+        }
+
+        [Fact]
+        public void VffDynamicProperties2021_KeepsNumericDynamicAttributesAndSeparatesOtherDicts()
+        {
+            var path = FixturePath("vff_dynamic_properties_2021.skp");
+            var baked = SkpFile.BuildScene(path);
+            var instanced = SkpFile.BuildInstancedScene(path);
+
+            var expectedProps = new Dictionary<string, string>
+            {
+                ["_lenx_formula"] = "Shelf!Width/2",
+                ["copies"] = "3",
+                ["lenx"] = "12.5",
+            };
+
+            var bakedNode = Assert.Single(baked.SceneHierarchy.Children);
+            Assert.Equal("SH-01", bakedNode.Name);
+            Assert.Equal(expectedProps, bakedNode.Properties);
+            Assert.Single(bakedNode.AttributeDictionaries);
+            Assert.Equal("Shelving", bakedNode.AttributeDictionaries["bim_meta"]["category"]);
+            Assert.Equal("SH-01", bakedNode.AttributeDictionaries["bim_meta"]["code"]);
+            Assert.Equal("8.25", bakedNode.AttributeDictionaries["bim_meta"]["weight_kg"]);
+
+            Assert.NotEmpty(baked.MeshIndex.Values);
+            Assert.All(baked.MeshIndex.Values, bakedMesh =>
+            {
+                Assert.Equal(expectedProps, bakedMesh.Properties);
+                Assert.Single(bakedMesh.AttributeDictionaries);
+                Assert.Equal("SH-01", bakedMesh.AttributeDictionaries["bim_meta"]["code"]);
+            });
+
+            var instancedNode = Assert.Single(instanced.SceneHierarchy.Children);
+            Assert.Equal("SH-01", instancedNode.Name);
+            Assert.Equal(expectedProps, instancedNode.Properties);
+            Assert.Single(instancedNode.AttributeDictionaries);
+            Assert.Equal("Shelving", instancedNode.AttributeDictionaries["bim_meta"]["category"]);
+            Assert.Equal("SH-01", instancedNode.AttributeDictionaries["bim_meta"]["code"]);
+            Assert.Equal("8.25", instancedNode.AttributeDictionaries["bim_meta"]["weight_kg"]);
         }
     }
 }
