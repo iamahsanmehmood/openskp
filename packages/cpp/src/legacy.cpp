@@ -844,10 +844,18 @@ struct Archive {
       v->attrs = preamble(v.get());
       v->k = "edge";
       draw(*v);
-      v->v1 = std::get<0>(object("CVertex"));
-      v->v2 = std::get<0>(object("CVertex"));
+      auto q1 = object("CVertex");
+      if (std::get<1>(q1) != "CVertex")
+        throw std::runtime_error("edge vertex pointer resolved to " + std::get<1>(q1));
+      auto q2 = object("CVertex");
+      if (std::get<1>(q2) != "CVertex")
+        throw std::runtime_error("edge vertex pointer resolved to " + std::get<1>(q2));
+      v->v1 = std::get<0>(q1);
+      v->v2 = std::get<0>(q2);
       auto curve = object();
       if (!std::get<1>(curve).empty()) {
+        if (std::get<1>(curve) != "CCurve" && std::get<1>(curve) != "CArcCurve")
+          throw std::runtime_error("edge curve pointer resolved to " + std::get<1>(curve));
         v->curve = std::get<0>(curve);
         v->curve_value = std::get<2>(curve);
       }
@@ -1847,10 +1855,10 @@ void add_edge(GeometryBuilder& b, uint64_t s, const V& e,
   if (b.edges.count(s)) return;
   for (auto id : {e.v1, e.v2}) {
     auto i = slots.find(id);
-    if (i != slots.end() && i->second.v && i->second.v->k == "vertex") {
-      b.vertices[id] = i->second.v->xyz;
-      b.persistent_ids[id] = i->second.v->native_pid;
-    }
+    if (i == slots.end() || !i->second.v || i->second.v->k != "vertex")
+      throw std::runtime_error("edge vertex pointer is not a CVertex");
+    b.vertices[id] = i->second.v->xyz;
+    b.persistent_ids[id] = i->second.v->native_pid;
   }
   b.edges[s] = {EntityId(e.v1), EntityId(e.v2)};
   b.persistent_ids[s] = e.native_pid;
