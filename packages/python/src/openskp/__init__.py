@@ -22,6 +22,7 @@ from importlib.metadata import PackageNotFoundError, version as _version
 
 from .codegen import to_python_code
 from .create import ComponentDefinitionBuilder, DocumentOptions, SkpBuilder, SkpWriteError, create
+from .create_vff import VffBuilder, VffComponentDefinitionBuilder, create_vff
 from .edit import open_existing
 from .errors import SkpParseError
 from .instanced_scene import (
@@ -60,8 +61,11 @@ __all__: list[str] = [
     "SceneBounds",
     "SkpParseError",
     "create",
+    "create_vff",
     "DocumentOptions",
     "SkpBuilder",
+    "VffBuilder",
+    "VffComponentDefinitionBuilder",
     "ComponentDefinitionBuilder",
     "SkpWriteError",
     "open_existing",
