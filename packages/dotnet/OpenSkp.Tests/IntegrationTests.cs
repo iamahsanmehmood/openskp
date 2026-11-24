@@ -122,7 +122,8 @@ namespace OpenSkp.Tests
             Assert.Equal("ROOT_MODEL", scene.SceneHierarchy.DefinitionName);
             Assert.True(scene.SceneHierarchy.Children.Count > 0);
 
-            Assert.Equal(43, scene.MeshIndex.Count);
+            Assert.Equal(43, scene.SurfacePrimitives.Count);
+            Assert.Equal(86, scene.MeshIndex.Count);
             var firstMesh = scene.MeshIndex.Values.First();
             Assert.NotNull(firstMesh.Name);
             Assert.NotNull(firstMesh.Layer);
@@ -150,7 +151,9 @@ namespace OpenSkp.Tests
             Assert.Equal("ROOT", scene.SceneHierarchy.Name);
             Assert.Equal("ROOT_MODEL", scene.SceneHierarchy.DefinitionName);
 
-            Assert.Single(scene.MeshIndex);
+            // its faces have no paint: a front and a back copy (#533)
+            Assert.Single(scene.SurfacePrimitives);
+            Assert.Equal(2, scene.MeshIndex.Count);
             Assert.Equal("ROOT_MODEL", scene.MeshIndex.Values.First().DefinitionName);
             Assert.Empty(model.Root.SectionPlanes);
             Assert.Empty(model.Root.Texts);

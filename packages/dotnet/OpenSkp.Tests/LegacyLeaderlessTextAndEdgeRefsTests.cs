@@ -35,7 +35,7 @@ namespace OpenSkp.Tests
             Assert.Single(model.Root.Instances);
             Assert.Equal(new[] { "Screen title", "Callout" }, model.Root.Texts.Select(t => t.Text).ToArray());
             Assert.Equal(0, model.UnreadRootEntities);
-            Assert.Single(scene.GlbPrimitives);
+            Assert.Single(scene.SurfacePrimitives);
             Assert.Single(instanced.MeshResources);
             Assert.DoesNotContain(logs, entry => entry.Level == SkpLogLevel.Warning);
         }
@@ -62,7 +62,7 @@ namespace OpenSkp.Tests
             Assert.Equal(new[] { "Screen title", "Callout" }, model.Root.Texts.Select(t => t.Text).ToArray());
             Assert.Single(model.Root.Edges);
             Assert.Equal(2, model.UnreadRootEntities);
-            Assert.Single(scene.GlbPrimitives);
+            Assert.Single(scene.SurfacePrimitives);
             Assert.Single(instanced.MeshResources);
             Assert.Contains(logs, entry => entry.Level == SkpLogLevel.Warning && entry.Message.Contains("2 unread"));
         }

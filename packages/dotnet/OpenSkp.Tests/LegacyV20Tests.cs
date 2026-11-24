@@ -77,8 +77,8 @@ namespace OpenSkp.Tests
 
             var scene = SkpFile.BuildScene(FixturePath("gondola_v20.skp"));
             Assert.Equal(23, scene.SceneHierarchy.Children.Count);
-            Assert.Equal(201, scene.GlbPrimitives.Count);
-            Assert.Equal(201, scene.MeshIndex.Count);
+            Assert.Equal(201, scene.SurfacePrimitives.Count);
+            Assert.Equal(scene.GlbPrimitives.Count, scene.MeshIndex.Count);
             Assert.NotEmpty(scene.GltfMaterials);
         }
 

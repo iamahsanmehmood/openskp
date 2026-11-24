@@ -53,6 +53,14 @@ namespace OpenSkp
 
         /// <summary>Called for start/stage/completion messages.</summary>
         public Action<SkpLogLevel, string>? OnLog { get; set; }
+
+        /// <summary>Colour of a face side with no paint on it or on any
+        /// enclosing instance when building a scene: <c>"style"</c> (default)
+        /// uses the model's front and back face colours
+        /// (<see cref="SkpModel.FaceFrontColor"/> /
+        /// <see cref="SkpModel.FaceBackColor"/>), while <c>"tag"</c> uses the
+        /// colour of the face's tag as one double-sided primitive.</summary>
+        public string UnpaintedFaces { get; set; } = "style";
     }
 
     /// <summary>Shared tuning constants for progress reporting.</summary>
