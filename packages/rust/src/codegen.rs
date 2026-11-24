@@ -511,7 +511,9 @@ impl Gen<'_> {
         ));
         if defn.no_scale_mask != 0 {
             let mask = defn.no_scale_mask;
-            self.push(format!("    let mut {var_name}_opts = DefinitionOptions::default();"));
+            self.push(format!(
+                "    let mut {var_name}_opts = DefinitionOptions::default();"
+            ));
             self.push(format!("    {var_name}_opts.no_scale_mask = {mask};"));
             self.push(format!(
                 "    let mut {var_name} = builder.add_component_definition({}, &{var_name}_opts)?;",

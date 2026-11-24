@@ -13,7 +13,7 @@ fn cpp_fixture(name: &str) -> PathBuf {
         .join(name)
 }
 
-fn read(builder: &SkpBuilder) -> SkpModel {
+fn read(builder: &mut SkpBuilder) -> SkpModel {
     SkpFile::from_buffer(builder.to_bytes().unwrap())
         .parse(&ParseOptions::default())
         .unwrap()
@@ -44,7 +44,7 @@ fn native_scale_mask_round_trip() {
             .add_instance(handle, &InstanceOptions::default())
             .unwrap();
 
-        let model = read(&builder);
+        let model = read(&mut builder);
         assert_eq!(model.definitions.len(), 1);
         let actual = model.definitions.values().next().unwrap();
         assert_eq!(actual.no_scale_mask, mask);
@@ -130,10 +130,10 @@ fn scale_mask_survives_edit_and_code_generation() {
     let file_name = format!("openskp_scale_mask_edit_{}.skp", std::process::id());
     let path = std::env::temp_dir().join(file_name);
     builder.save(&path).unwrap();
-    let edited = open_existing(&path).unwrap();
+    let mut edited = open_existing(&path).unwrap();
     let _ = std::fs::remove_file(&path);
 
-    let model = read(&edited.builder);
+    let model = read(&mut edited.builder);
     assert_eq!(model.definitions.len(), 1);
     let actual = model.definitions.values().next().unwrap();
     assert_eq!(actual.no_scale_mask, 64);
