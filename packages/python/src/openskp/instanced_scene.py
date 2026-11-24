@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from . import _core
-from ._curves import _chain_loose_edges, _solve_run_arc
+from ._curves import _prepare_definition_curves, _solve_run_arc
 from ._face_groups import (
     FaceGroupContext,
     build_local_face_groups,
@@ -284,6 +284,7 @@ def build_instanced_scene(
     name_override_keys: Sequence[str] = ("name", "label", "code"),
     original_textures: bool = False,
     unpainted_faces: str = "style",
+    include_curve_sets: bool = True,
 ) -> InstancedScene:
     """Build an instanced scene from already-parsed raw data.
 
@@ -569,33 +570,18 @@ def build_instanced_scene(
         return resource_id
 
     curve_resources: List[InstancedCurveResource] = []
-    curve_resource_id_by_key: Dict[str, str] = {}
+    curve_resource_id_by_key: Dict[str, Optional[str]] = {}
+    prepared_local_curves_cache: Dict[Any, List[Tuple[List[Tuple[float, float, float]], bool, Optional[str], Optional[Dict[str, Any]]]]] = {}
 
     def curve_resource_for(def_id: Any, layer: str) -> Optional[str]:
         """Build (or reuse) the local-space loose-edge resource for a
         definition in the given inherited-layer context. Returns ``None``
         when the definition has no loose edges of its own.
-
-        Mirrors :func:`mesh_resource_for` exactly, one level simpler: a
-        loose edge has no paint-color equivalent to resolve, only a layer,
-        and that layer can be inherited the same contextual way an
-        unpainted face's color is - so the cache key is (definition,
-        effective fallback layer), same reasoning as the mesh case.
-
-        This is deliberately independent of whether the definition also
-        has face geometry (unlike the historical `if builder.faces:` gate
-        in ``scene.py``'s baked path before openskp#316): a definition can
-        be *entirely* loose edges (a structural-framing/light-gauge-steel
-        member drawn as a construction line, not a solid), and such a
-        definition contributing nothing to the instanced scene at all was
-        exactly the gap this closes.
         """
+        if not include_curve_sets:
+            return None
         d = defs_dict.get(def_id)
         if d is None:
-            return None
-        builder = d["builder"]
-        runs = _chain_loose_edges(builder)
-        if not runs:
             return None
 
         uniform_layer, _ = _face_layer_summary(def_id)
@@ -606,57 +592,38 @@ def build_instanced_scene(
         )
 
         key = f"{def_id}|{effective_layer}"
-        hit = curve_resource_id_by_key.get(key)
-        if hit is not None:
-            return hit
+        if key in curve_resource_id_by_key:
+            return curve_resource_id_by_key[key]
 
-        edge_layers = getattr(builder, "edge_layers", None) or {}
-        curves: List[LocalCurve] = []
-        for eids, chain, closed in runs:
-            pts: List[Tuple[float, float, float]] = []
-            complete = True
-            for vk in chain:
-                v = builder.vertices.get(vk)
-                if v is None:
-                    complete = False
-                    break
-                # Local space: no instance matrix, matching LocalPrimitive -
-                # only the inches->metres scale and SketchUp Z-up -> glTF
-                # Y-up axis swap, the same fixed conventions used there.
-                pts.append((round(v[0] * INCHES_TO_M, 6),
-                            round(v[2] * INCHES_TO_M, 6),
-                            round(-v[1] * INCHES_TO_M, 6)))
-            # A dangling vertex key would silently shorten the run, turning
-            # a parsing gap into a plausible-looking polyline. Drop the run
-            # instead - a missing curve is honest, a truncated one is not.
-            if not complete or len(pts) < 2:
-                continue
+        local_runs = prepared_local_curves_cache.get(def_id)
+        if local_runs is None:
+            builder = d["builder"]
+            prepared_runs, curve_counts = _prepare_definition_curves(builder, layer_id_to_name)
+            local_runs = []
+            for eids, local_verts, closed, explicit_layer in prepared_runs:
+                pts = [
+                    (round(v[0] * INCHES_TO_M, 6),
+                     round(v[2] * INCHES_TO_M, 6),
+                     round(-v[1] * INCHES_TO_M, 6))
+                    for v in local_verts
+                ]
+                arc = _solve_run_arc(builder, eids, None, pts, closed, curve_counts)
+                local_runs.append((pts, closed, explicit_layer, arc))
+            prepared_local_curves_cache[def_id] = local_runs
 
-            # A run whose edges disagree on layer resolves to the majority,
-            # same rule mesh_resource_for's faces use for the same reason.
-            lc: Dict[Any, int] = {}
-            for eid in eids:
-                edge_layer = edge_layers.get(eid)
-                if edge_layer:
-                    lc[edge_layer] = lc.get(edge_layer, 0) + 1
-            run_layer = effective_layer
-            if lc:
-                run_layer = layer_id_to_name.get(max(lc, key=lc.get), effective_layer)
-
-            curves.append(
-                LocalCurve(
-                    points_m=pts,
-                    closed=closed,
-                    layer=run_layer,
-                    # matrix=None: local space, same reasoning as the point
-                    # loop above - the frame's own axes get only the axis
-                    # swap, no per-instance transform.
-                    arc=_solve_run_arc(builder, eids, None, pts, closed),
-                )
-            )
-
-        if not curves:
+        if not local_runs:
+            curve_resource_id_by_key[key] = None
             return None
+
+        curves = [
+            LocalCurve(
+                points_m=pts,
+                closed=closed,
+                layer=explicit_layer if explicit_layer is not None else effective_layer,
+                arc=arc,
+            )
+            for pts, closed, explicit_layer, arc in local_runs
+        ]
 
         resource_id = f"curve_{len(curve_resources)}"
         curve_resources.append(

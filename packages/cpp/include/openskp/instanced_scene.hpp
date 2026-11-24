@@ -47,6 +47,22 @@ struct InstancedMeshResource {
   std::vector<LocalPrimitive> primitives;
 };
 
+/// One definition-local loose-edge run (metres, glTF Y-up).
+struct LocalCurve {
+  std::vector<std::array<double, 3>> points_m;
+  bool closed{};
+  std::string layer;
+  std::optional<CurveArc> arc;
+};
+
+/// A definition's loose-edge runs resolved for one inherited-layer context.
+struct InstancedCurveResource {
+  std::string id;
+  std::optional<EntityId> definition_id;
+  std::string definition_name;
+  std::vector<LocalCurve> curves;
+};
+
 /// One placed node in the instanced scene graph.
 ///
 /// Carries the transform that places its mesh_resource_id (and its whole
@@ -87,6 +103,7 @@ struct InstancedNode {
   std::map<std::string, std::map<std::string, std::string>> attribute_dictionaries;
   std::optional<std::string> mesh_resource_id;
   std::vector<InstancedNode> children;
+  std::optional<std::string> curve_resource_id;
 };
 
 /// Axis-aligned bounds of the scene as PLACED, metres and Y-up.
@@ -132,6 +149,10 @@ struct OPENSKP_EXPORT InstancedScene {
   /// frame and inches (unlike mesh_resources and node matrices, which are
   /// Y-up metres). Empty on scenes read back from .frag.
   std::vector<Page> pages;
+  /// Deduplicated local-space loose-edge curve resources referenced by
+  /// InstancedNode::curve_resource_id, when ParseOptions::include_curve_sets
+  /// is true.
+  std::vector<InstancedCurveResource> curve_resources;
 };
 
 }  // namespace openskp

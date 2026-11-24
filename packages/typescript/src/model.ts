@@ -1,4 +1,4 @@
-import { transformPoint, multiplyMatrices } from './transforms';
+import { foldScale, transformPoint, multiplyMatrices } from './transforms';
 import { extractAttributeDictionaries, isGenericDefinitionName, findNameOverride, stringifyVffAttrValue, summarizeFaceLayers, FaceLayerSummary, ParsedDefinition, VffAttrValue } from './geometry';
 import {
   buildLocalFaceGroups,
@@ -9,6 +9,18 @@ import {
 import { SkpParseError } from './errors';
 import { ParseOptions, PROGRESS_INTERVAL, emitLog, emitProgress } from './observability';
 import { RawPage, RawDimension } from './pages-dimensions';
+import {
+  CurveArc,
+  LooseEdgeRun,
+  PreparedDefCurves,
+  INCHES_TO_M,
+  orderCurveEdges,
+  prepareDefinitionCurves,
+  round6,
+  solveRunArc,
+} from './curves';
+
+export type { CurveArc, LooseEdgeRun };
 
 export interface SkpModel {
   version: string;
@@ -198,6 +210,49 @@ export interface Definition {
   shadowsFaceSun: boolean;
   /** Native definition attributes from VFF files, preserving booleans, null and arrays. */
   attributeDictionaries?: Record<string, Record<string, VffAttrValue>>;
+}
+
+/**
+ * Groups a definition's LOOSE edges (edges no face uses) into ordered
+ * polyline runs, using the file's own `Edge#curve` (`Edge.curveId`) grouping.
+ *
+ * Returns `{ edgeIds, vertexIds, closed }` runs in the same order as
+ * {@link buildInstancedScene}'s `curveResources`, so B-rep consumers working
+ * directly with {@link parseSkp}'s typed model can resolve raw vertex/edge IDs.
+ */
+export function looseEdgeRuns(definition: Definition): LooseEdgeRun[] {
+  const used = new Set<number>();
+  for (const face of definition.faces) {
+    for (const loop of face.loops) {
+      for (const co of loop) {
+        used.add(co.edgeId);
+      }
+    }
+  }
+
+  const edgesById = new Map<number, [number, number]>();
+  const groups = new Map<number, number[]>();
+  const runs: LooseEdgeRun[] = [];
+  for (const e of definition.edges) {
+    if (used.has(e.id) || e.v1Id === e.v2Id) continue;
+    if (e.curveId) {
+      edgesById.set(e.id, [e.v1Id, e.v2Id]);
+      let grp = groups.get(e.curveId);
+      if (!grp) {
+        grp = [];
+        groups.set(e.curveId, grp);
+      }
+      grp.push(e.id);
+    } else {
+      runs.push({ edgeIds: [e.id], vertexIds: [e.v1Id, e.v2Id], closed: false });
+    }
+  }
+
+  const endsOf = (eid: number) => edgesById.get(eid);
+  for (const eids of groups.values()) {
+    runs.push(...orderCurveEdges(endsOf, eids));
+  }
+  return runs;
 }
 
 export interface Vertex {
@@ -501,6 +556,20 @@ export interface SceneBounds {
   center: [number, number, number];
 }
 
+/** Metadata for one run of *loose* edges (edges no face uses), in world-space
+ * metres in glTF's Y-up frame. */
+export interface CurveSetMetadata {
+  name: string;
+  definitionName: string;
+  layer: string;
+  path: string;
+  nameIsGenerated: boolean;
+  pointsM: [number, number, number][];
+  closed: boolean;
+  arc: CurveArc | null;
+  attributeDictionaries: Record<string, Record<string, string>>;
+}
+
 export interface SkpScene {
   /** The root of the world-space instance tree. */
   sceneHierarchy: InstanceNode;
@@ -510,6 +579,11 @@ export interface SkpScene {
   /** The actual triangulated mesh data, one entry per unique
    * (definition, resolved color) combination actually placed in the scene. */
   glbPrimitives: GlbPrimitive[];
+  /** Loose-edge runs, one entry per chained polyline. Always populated by
+   * {@link buildScene} (empty when all geometry is face-bounded or
+   * `includeCurveSets` is `false`); optional so hand-constructed scene
+   * literals for exporters do not need to supply it. */
+  curveSets?: CurveSetMetadata[];
   /** {@link glbPrimitives} without the back copies of faces that have no paint
    * on either side: what single-colour surface exporters (STL, OBJ, PLY, DXF,
    * IFC) and triangle-counting callers use so every face appears once. Always
@@ -554,17 +628,20 @@ export interface SkpScene {
 /** Options shared by {@link buildScene} and {@link buildInstancedScene}. */
 export interface SceneOptions {
   /**
-   * Skip geometry SketchUp itself would not draw.
-   *
-   * Today this means faces carrying SketchUp's "Hide" flag. It does NOT
-   * filter edges, because neither scene builder emits edges: their output
-   * is face triangles, and an edge's soft/smooth/hidden flags never reach
-   * it. For edge-level filtering - which is where the real saving lives on
-   * curved models - use {@link isDrawableEdge} on {@link parseSkp} output
-   * directly.
+   * Bake loose edges (edges no face uses) into {@link SkpScene.curveSets} /
+   * {@link InstancedScene.curveResources}. Defaults to `true`; pass `false`
+   * to skip loose-edge chaining and arc solving.
+   */
+  includeCurveSets?: boolean;
+  /**
+   * Skip geometry SketchUp itself would not draw: faces carrying SketchUp's
+   * "Hide" flag and non-drawable loose edges (`hidden`, `soft`, or `smooth`,
+   * matching {@link isDrawableEdge}) in {@link SkpScene.curveSets} and
+   * {@link InstancedScene.curveResources}. Face-bounding edges are already
+   * represented by face triangles and are not emitted as curves regardless.
    *
    * Off by default: what SketchUp draws is a display policy, not a parsing
-   * fact, and some consumers legitimately want every face regardless.
+   * fact, and some consumers legitimately want every face and loose edge.
    */
   respectEdgeVisibility?: boolean;
   /**
@@ -995,6 +1072,11 @@ export function buildSceneFromParsed(
   const meshCounter = { count: 0 };
   const meshIndex: Record<string, MeshMetadata> = {};
   const glbPrimitives: any[] = [];
+  const curveSets: CurveSetMetadata[] = [];
+  const curveSeq = new Map<string, number>();
+  const includeCurveSets = options?.includeCurveSets !== false;
+  const respectEdgeVis = options?.respectEdgeVisibility === true;
+  const preparedCurvesCache = new Map<number | string, PreparedDefCurves>();
 
   // Instance path -> (properties, name) updates, recorded in O(1) per
   // instance and applied once after instantiation completes (see the
@@ -1250,6 +1332,81 @@ export function buildSceneFromParsed(
       }
     }
 
+    if (includeCurveSets) {
+      let prepared = preparedCurvesCache.get(defId);
+      if (prepared === undefined) {
+        prepared = prepareDefinitionCurves(builder, layerIdToName, respectEdgeVis);
+        preparedCurvesCache.set(defId, prepared);
+      }
+      if (prepared.runs.length > 0) {
+        const fm = currentMatrix && currentMatrix.length >= 12 ? foldScale(currentMatrix) : null;
+        const defNameStr = d.name || '';
+        const compName = pathName === 'ROOT' ? '' : pathName.split(' / ').pop() || '';
+        for (const run of prepared.runs) {
+          const pts: [number, number, number][] = new Array(run.localVerts.length);
+          if (!fm) {
+            for (let i = 0; i < run.localVerts.length; i++) {
+              const v = run.localVerts[i];
+              pts[i] = [
+                round6(v[0] * INCHES_TO_M),
+                round6(v[2] * INCHES_TO_M),
+                round6(-v[1] * INCHES_TO_M),
+              ];
+            }
+          } else if (fm.length === 16) {
+            for (let i = 0; i < run.localVerts.length; i++) {
+              const v = run.localVerts[i];
+              const px = fm[0] * v[0] + fm[4] * v[1] + fm[8] * v[2] + fm[12];
+              const py = fm[1] * v[0] + fm[5] * v[1] + fm[9] * v[2] + fm[13];
+              const pz = fm[2] * v[0] + fm[6] * v[1] + fm[10] * v[2] + fm[14];
+              pts[i] = [
+                round6(px * INCHES_TO_M),
+                round6(pz * INCHES_TO_M),
+                round6(-py * INCHES_TO_M),
+              ];
+            }
+          } else {
+            for (let i = 0; i < run.localVerts.length; i++) {
+              const v = run.localVerts[i];
+              const px = fm[0] * v[0] + fm[1] * v[1] + fm[2] * v[2] + fm[9];
+              const py = fm[3] * v[0] + fm[4] * v[1] + fm[5] * v[2] + fm[10];
+              const pz = fm[6] * v[0] + fm[7] * v[1] + fm[8] * v[2] + fm[11];
+              pts[i] = [
+                round6(px * INCHES_TO_M),
+                round6(pz * INCHES_TO_M),
+                round6(-py * INCHES_TO_M),
+              ];
+            }
+          }
+
+          const runLayer = run.explicitLayer ?? meshLayer;
+          let cname: string;
+          let cgen: boolean;
+          if (pathName === 'ROOT') {
+            const seq = (curveSeq.get(runLayer) ?? 0) + 1;
+            curveSeq.set(runLayer, seq);
+            cname = `${runLayer}_${seq}`;
+            cgen = true;
+          } else {
+            cname = compName;
+            cgen = false;
+          }
+
+          curveSets.push({
+            name: cname,
+            nameIsGenerated: cgen,
+            definitionName: defNameStr,
+            layer: runLayer,
+            path: pathName,
+            pointsM: pts,
+            closed: run.closed,
+            arc: solveRunArc(builder, run.edgeIds, fm, pts, run.closed, prepared.curveEdgeCounts),
+            attributeDictionaries: {},
+          });
+        }
+      }
+    }
+
     const childInstancesInfo: InstanceNode[] = [];
 
     for (const inst of builder.instances) {
@@ -1467,6 +1624,7 @@ export function buildSceneFromParsed(
     sceneHierarchy,
     meshIndex,
     glbPrimitives,
+    curveSets,
     surfacePrimitives: glbPrimitives.filter((p) => !p.unpaintedBack),
     gltfMaterials,
     textures,

@@ -75,6 +75,9 @@ pub struct ParseOptions {
     /// `image/vnd.ms-dds`, `image/jp2`) instead of leaving it out with a
     /// warning. Off by default because glTF carries only PNG and JPEG.
     pub original_textures: bool,
+    /// Bake loose edges (edges no face uses) into `Scene::curve_sets` and
+    /// `InstancedScene::curve_resources`. Defaults to `true`.
+    pub include_curve_sets: bool,
 }
 
 impl Default for ParseOptions {
@@ -84,6 +87,7 @@ impl Default for ParseOptions {
             log: None,
             unpainted_faces: "style".to_owned(),
             original_textures: false,
+            include_curve_sets: true,
         }
     }
 }
@@ -117,6 +121,13 @@ impl ParseOptions {
         self.original_textures = keep;
         self
     }
+
+    /// Sets whether loose edges are baked into `Scene::curve_sets` and
+    /// `InstancedScene::curve_resources`.
+    pub fn with_include_curve_sets(mut self, include: bool) -> Self {
+        self.include_curve_sets = include;
+        self
+    }
 }
 
 impl fmt::Debug for ParseOptions {
@@ -126,6 +137,7 @@ impl fmt::Debug for ParseOptions {
             .field("log", &self.log.is_some())
             .field("unpainted_faces", &self.unpainted_faces)
             .field("original_textures", &self.original_textures)
+            .field("include_curve_sets", &self.include_curve_sets)
             .finish()
     }
 }

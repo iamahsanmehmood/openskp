@@ -12,7 +12,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::internal::{transform_point, GeometryBuilder};
+use crate::internal::{fold_scale, transform_point, GeometryBuilder, RawParsed};
 use crate::model::{EntityId, Vec3};
 use crate::scene::CurveArc;
 
@@ -29,15 +29,35 @@ pub struct LooseRun {
     pub closed: bool,
 }
 
+#[derive(Clone)]
+pub(crate) struct PreparedCurveRun {
+    pub edge_ids: Vec<EntityId>,
+    pub local_verts: Vec<Vec3>,
+    pub closed: bool,
+    pub explicit_layer: Option<String>,
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct PreparedDefCurves {
+    pub runs: Vec<PreparedCurveRun>,
+    pub curve_edge_counts: HashMap<EntityId, usize>,
+}
+
 /// Python's `round(x, 6)`: the double nearest the decimal rounding of `x`'s
 /// exact value to 6 places, ties to even.
 pub fn round6(x: f64) -> f64 {
-    if !x.is_finite() {
+    if !x.is_finite() || x.abs() >= 8_589_934_592.0 || x == 0.0 {
         return x;
     }
-    // Rust's fixed-precision formatting rounds the exact binary value, ties
-    // to even - the same decimal string CPython's dtoa produces - and parsing
-    // it back is correctly rounded, like CPython's strtod.
+    let abs_scaled = (x * 1e6).abs();
+    if abs_scaled < 4.5e12 {
+        let fl = abs_scaled.floor();
+        let frac = abs_scaled - fl;
+        if (frac - 0.5).abs() > 1e-3 {
+            let res = (if frac > 0.5 { fl + 1.0 } else { fl }) / 1e6;
+            return res.copysign(x);
+        }
+    }
     format!("{x:.6}").parse().unwrap_or(x)
 }
 
@@ -260,6 +280,59 @@ pub fn chain_loose_edges(b: &GeometryBuilder) -> Vec<LooseRun> {
     runs
 }
 
+pub(crate) fn index_edge_curves(b: &GeometryBuilder) -> HashMap<EntityId, usize> {
+    let mut counts = HashMap::with_capacity(b.edge_curves.len());
+    for &cid in b.edge_curves.values() {
+        if cid != 0 {
+            *counts.entry(cid).or_insert(0) += 1;
+        }
+    }
+    counts
+}
+
+pub(crate) fn prepare_def_curves(p: &RawParsed, b: &GeometryBuilder) -> PreparedDefCurves {
+    let raw_runs = chain_loose_edges(b);
+    if raw_runs.is_empty() {
+        return PreparedDefCurves::default();
+    }
+    let mut runs = Vec::with_capacity(raw_runs.len());
+    for run in raw_runs {
+        let mut local_verts = Vec::with_capacity(run.vertex_ids.len());
+        let mut complete = true;
+        for vk in &run.vertex_ids {
+            let Some(&v) = b.vertices.get(vk) else {
+                complete = false;
+                break;
+            };
+            local_verts.push(v);
+        }
+        if !complete || local_verts.len() < 2 {
+            continue;
+        }
+        let explicit_layer =
+            majority_layer(run.edge_ids.iter().map(|e| b.edge_layers.get(e).copied()))
+                .and_then(|id| p.layer_id_to_name.get(&id).cloned());
+        runs.push(PreparedCurveRun {
+            edge_ids: run.edge_ids,
+            local_verts,
+            closed: run.closed,
+            explicit_layer,
+        });
+    }
+    if runs.is_empty() {
+        return PreparedDefCurves::default();
+    }
+    let curve_edge_counts = if b.arc_curves.is_empty() {
+        HashMap::new()
+    } else {
+        index_edge_curves(b)
+    };
+    PreparedDefCurves {
+        runs,
+        curve_edge_counts,
+    }
+}
+
 /// CPython 3.12+'s `sum()` of floats (Neumaier-compensated), starting from
 /// the int 0.
 fn py_sum(values: &[f64]) -> f64 {
@@ -305,14 +378,36 @@ pub fn solve_run_arc(
     pts: &[Vec3],
     closed: bool,
 ) -> Option<CurveArc> {
+    solve_run_arc_indexed(b, eids, matrix, pts, closed, None)
+}
+
+pub(crate) fn solve_run_arc_indexed(
+    b: &GeometryBuilder,
+    eids: &[EntityId],
+    matrix: Option<&[f64]>,
+    pts: &[Vec3],
+    closed: bool,
+    curve_edge_counts: Option<&HashMap<EntityId, usize>>,
+) -> Option<CurveArc> {
     if b.arc_curves.is_empty() {
         return None;
     }
     let cid = *b.edge_curves.get(eids.first()?)?;
     let frame = b.arc_curves.get(&cid)?;
-    if b.edge_curves.values().filter(|&&v| v == cid).count() != eids.len() {
+    let total_edges = match curve_edge_counts {
+        Some(counts) => counts.get(&cid).copied().unwrap_or(0),
+        None => b.edge_curves.values().filter(|&&v| v == cid).count(),
+    };
+    if total_edges != eids.len() {
         return None;
     }
+
+    let folded = matrix.filter(|m| m.len() >= 12).map(fold_scale);
+    let mirrored = folded.as_ref().is_some_and(|fm| {
+        let det = fm[0] * (fm[4] * fm[8] - fm[5] * fm[7]) - fm[1] * (fm[3] * fm[8] - fm[5] * fm[6])
+            + fm[2] * (fm[3] * fm[7] - fm[4] * fm[6]);
+        det < 0.0
+    });
 
     let xf_point = |p: Vec3| {
         let q = match matrix {
@@ -321,15 +416,15 @@ pub fn solve_run_arc(
         };
         [q[0] * INCHES_TO_M, q[2] * INCHES_TO_M, -q[1] * INCHES_TO_M]
     };
-    // The linear part only (a direction), unfolded.
+    // The linear part only (a direction), after scale folding.
     let xf_vec = |v: Vec3| {
-        let (x, y, z) = match matrix {
-            Some(m) if m.len() >= 12 => (
+        let (x, y, z) = match folded.as_deref() {
+            Some(m) => (
                 m[0] * v[0] + m[1] * v[1] + m[2] * v[2],
                 m[3] * v[0] + m[4] * v[1] + m[5] * v[2],
                 m[6] * v[0] + m[7] * v[1] + m[8] * v[2],
             ),
-            _ => (v[0], v[1], v[2]),
+            None => (v[0], v[1], v[2]),
         };
         [x * INCHES_TO_M, z * INCHES_TO_M, -y * INCHES_TO_M]
     };
@@ -345,12 +440,18 @@ pub fn solve_run_arc(
         return None;
     }
     // `normal` is unit-length in the file while x_axis / y_axis carry the
-    // radius; normalising keeps `y_axis == normal x x_axis` a vector equality.
+    // radius; normalising keeps `y_axis == normal x x_axis` a vector equality,
+    // and flipping `normal` under a reflection restores right-handedness.
     let nlen = py_sum(&[na[0] * na[0], na[1] * na[1], na[2] * na[2]]).powf(0.5);
     if nlen <= 0.0 {
         return None;
     }
-    let nh = [na[0] / nlen, na[1] / nlen, na[2] / nlen];
+    let sign = if mirrored { -1.0 } else { 1.0 };
+    let nh = [
+        sign * na[0] / nlen,
+        sign * na[1] / nlen,
+        sign * na[2] / nlen,
+    ];
     let cross = [
         nh[1] * xa[2] - nh[2] * xa[1],
         nh[2] * xa[0] - nh[0] * xa[2],
@@ -468,5 +569,16 @@ mod tests {
         assert_eq!(round6(-0.0078125), -0.007812);
         assert_eq!(round6(-4e-7).to_bits(), (-0.0f64).to_bits());
         assert_eq!(round6(1.23456789), 1.234568);
+        assert_eq!(round6(-1199.8125 * INCHES_TO_M), -30.475237);
+
+        let mut h: u32 = 0x811c_9dc5;
+        for i in -19200..=19200_i32 {
+            let v = round6((f64::from(i) / 16.0) * INCHES_TO_M);
+            let um = ((v * 1_000_000.0).round() as i64) as u32;
+            for b in um.to_le_bytes() {
+                h = (h ^ u32::from(b)).wrapping_mul(0x0100_0193);
+            }
+        }
+        assert_eq!(h, 0xfb85_48af);
     }
 }

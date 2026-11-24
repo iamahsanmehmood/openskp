@@ -26,7 +26,11 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from . import _core
-from ._curves import _chain_loose_edges, _solve_run_arc
+from ._curves import (
+    _chain_loose_edges as _chain_loose_edges,
+    _prepare_definition_curves,
+    _solve_run_arc,
+)
 from ._face_groups import (
     FaceGroupContext,
     build_local_face_groups,
@@ -439,6 +443,7 @@ def build_scene(
     # Per-layer sequence numbers for generated curve-set labels (see the
     # loose-edge block in instantiate()).
     curve_seq: Dict[str, int] = {}
+    prepared_curves_cache: Dict[Any, Any] = {}
 
     # Instance path -> (properties, name) updates, collected in O(1) per
     # instance and applied once after instantiation completes (see the
@@ -737,60 +742,58 @@ def build_scene(
         # to the scene, so export/ifc.py got an empty primitive list and
         # emitted a spatial skeleton with zero elements (see
         # magnetar_Facade_Drawing.skp: 1776 edges -> 0 products).
-        _edge_layers = getattr(builder, "edge_layers", None) or {}
-        _runs = _chain_loose_edges(builder) if include_curve_sets else ()
-        for _eids, _chain, _closed in _runs:
-            pts = []
-            _complete = True
-            for _vk in _chain:
-                _v = builder.vertices.get(_vk)
-                if _v is None:
-                    _complete = False
-                    break
-                _pt = _core.transform_point(_v, current_matrix)
-                pts.append((round(_pt[0] * INCHES_TO_M, 6),
-                            round(_pt[2] * INCHES_TO_M, 6),
-                            round(-_pt[1] * INCHES_TO_M, 6)))
-            # A dangling vertex key would silently shorten the run, turning a
-            # parsing gap into a plausible-looking polyline. Drop the run
-            # instead - a missing curve is honest, a truncated one is not.
-            if not _complete or len(pts) < 2:
-                continue
-            # A run whose edges disagree on layer resolves to the majority,
-            # same rule the face block above uses for the same reason.
-            _lc: Dict[Any, int] = {}
-            for _eid in _eids:
-                _l = _edge_layers.get(_eid)
-                if _l:
-                    _lc[_l] = _lc.get(_l, 0) + 1
-            run_layer = mesh_layer
-            if _lc:
-                run_layer = layer_id_to_name.get(max(_lc, key=_lc.get), mesh_layer)
-            # Root-level loose geometry has no name in the file whatsoever -
-            # an edge is just an edge, only components get named. Labelling
-            # all 444 of them "ROOT" would be technically honest and useless,
-            # so a root-level run is labelled with the one signal that does
-            # exist (its layer) plus a sequence number to keep them distinct.
-            # Anything inside a named component keeps its real name.
-            if path_name == "ROOT":
-                _seq = curve_seq.get(run_layer, 0) + 1
-                curve_seq[run_layer] = _seq
-                _cname = "%s_%d" % (run_layer, _seq)
-                _cgen = True
-            else:
-                _cname = path_name.split(" / ")[-1] or ""
-                _cgen = False
-            curve_sets.append(CurveSetMetadata(
-                name=_cname,
-                name_is_generated=_cgen,
-                definition_name=d.get("name") or "",
-                layer=run_layer,
-                path=path_name,
-                points_m=pts,
-                closed=_closed,
-                arc=_solve_run_arc(builder, _eids,
-                                   current_matrix, pts, _closed),
-            ))
+        if include_curve_sets:
+            _cached_curves = prepared_curves_cache.get(def_id)
+            if _cached_curves is None:
+                _cached_curves = _prepare_definition_curves(builder, layer_id_to_name)
+                prepared_curves_cache[def_id] = _cached_curves
+            _prepared_runs, _curve_counts = _cached_curves
+            if _prepared_runs:
+                _fm = _core._fold_scale(current_matrix) if (current_matrix and len(current_matrix) >= 12) else None
+                _def_name_str = d.get("name") or ""
+                _cname_component = "" if path_name == "ROOT" else (path_name.split(" / ")[-1] or "")
+                for _eids, _local_verts, _closed, _explicit_layer in _prepared_runs:
+                    if _fm is None:
+                        pts = [
+                            (round(_v[0] * INCHES_TO_M, 6),
+                             round(_v[2] * INCHES_TO_M, 6),
+                             round(-_v[1] * INCHES_TO_M, 6))
+                            for _v in _local_verts
+                        ]
+                    else:
+                        _m0, _m1, _m2, _m3, _m4, _m5, _m6, _m7, _m8, _m9, _m10, _m11 = _fm[:12]
+                        pts = [
+                            (round((_m0 * _v[0] + _m1 * _v[1] + _m2 * _v[2] + _m9) * INCHES_TO_M, 6),
+                             round((_m6 * _v[0] + _m7 * _v[1] + _m8 * _v[2] + _m11) * INCHES_TO_M, 6),
+                             round(-(_m3 * _v[0] + _m4 * _v[1] + _m5 * _v[2] + _m10) * INCHES_TO_M, 6))
+                            for _v in _local_verts
+                        ]
+                    run_layer = _explicit_layer if _explicit_layer is not None else mesh_layer
+                    # Root-level loose geometry has no name in the file whatsoever -
+                    # an edge is just an edge, only components get named. Labelling
+                    # all 444 of them "ROOT" would be technically honest and useless,
+                    # so a root-level run is labelled with the one signal that does
+                    # exist (its layer) plus a sequence number to keep them distinct.
+                    # Anything inside a named component keeps its real name.
+                    if path_name == "ROOT":
+                        _seq = curve_seq.get(run_layer, 0) + 1
+                        curve_seq[run_layer] = _seq
+                        _cname = "%s_%d" % (run_layer, _seq)
+                        _cgen = True
+                    else:
+                        _cname = _cname_component
+                        _cgen = False
+                    curve_sets.append(CurveSetMetadata(
+                        name=_cname,
+                        name_is_generated=_cgen,
+                        definition_name=_def_name_str,
+                        layer=run_layer,
+                        path=path_name,
+                        points_m=pts,
+                        closed=_closed,
+                        arc=_solve_run_arc(builder, _eids,
+                                           _fm, pts, _closed, _curve_counts),
+                    ))
 
         child_instances_info: List[InstanceNode] = []
         for inst in builder.instances:

@@ -77,14 +77,14 @@ released. 🔶 = implemented on `main`, not published to a package registry
 | Legacy (pre-2021) pages/scenes reading | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Construction lines/points reading | ✅ legacy + VFF | ✅ legacy + VFF | ✅ legacy + VFF | ✅ legacy + VFF | ✅ legacy + VFF |
 | VFF per-layer-hidden flag reading | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Per-edge/per-face layer, `Edge#curve` pointers, classic `CArcCurve` frames (legacy + VFF) | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Per-edge/per-face layer, `Edge#curve` pointers, classic `CArcCurve` frames (legacy + VFF) | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `mesh_index[...].properties` populated | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `model.layers` in file order (not alphabetical) | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Scene building & observability** | | | | | |
 | Scene baking / triangulation (`buildScene()`) | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Instancing-preserving scene output (`build_instanced_scene()`) | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `build_instanced_scene()`: loose-edge curve support (structural framing/LGS) | ✅ | ❌ | ❌ | ❌ | ❌ |
-| Public typed model: `Edge.layer`/`Edge.curve_id`/`Face.layer`, `loose_edge_runs()` (raw ids, no baking - for a B-rep consumer building real wire edges) | ✅ | ❌ | ❌ | ❌ | ❌ |
+| `build_instanced_scene()`: loose-edge curve support (structural framing/LGS) | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Public typed model: `Edge.layer`/`Edge.curve_id`/`Face.layer`, `loose_edge_runs()` (raw ids, no baking - for a B-rep consumer building real wire edges) | ✅ | ✅ | ✅ | ✅ | ✅ |
 | earcut-based triangulation (replaces Shapely + concave-face correctness fix) | ✅ | n/a, own triangulator | n/a | n/a | n/a |
 | Large-file `F901 > 7017 > 7117` per-definition streaming ([#264](https://github.com/iamahsanmehmood/openskp/issues/264)) | ✅ ([#265](https://github.com/iamahsanmehmood/openskp/pull/265)) | ✅ | ❌ (`F401` only) | ❌ (`F401` only) | ✅ ([#300](https://github.com/iamahsanmehmood/openskp/pull/300)) |
 | Opt-in progress reporting + structured errors | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -145,9 +145,7 @@ across languages is cross-language porting work:
 | Item | Python has it via | Needs porting to |
 |:---|:---|:---|
 | Writer: scenes (`add_scene`: camera + hidden layers) | `create.py`, `edit.py`, `codegen.py` | TypeScript, .NET, Dart, C++ |
-| `build_instanced_scene()` loose-edge curve support + public typed-model `Edge.layer`/`Face.layer`/`loose_edge_runs()` | `_curves.py`, `instanced_scene.py`, `model.py` | TypeScript, .NET, Dart, C++ — none started |
 | IFC export: loose-edge curve sets + analytic arcs as `IfcAnnotation`/`IfcIndexedPolyCurve`, plus the 4 IFC4 STEP-conformance fixes | `scene.py`, `export/ifc.py` | TypeScript, .NET, Dart, C++ — none started |
-| Per-edge/per-face layer, `Edge#curve` pointers, classic `CArcCurve` frames | `legacy.py`, `_core.py` | TypeScript, .NET, Dart, C++ |
 | Python scenes since 1.6.0: a painted group or component passes its whole material to the faces inside it, material names are kept, colorized textures are flagged, a texture a scene cannot carry is reported, and `original_textures=True` keeps it | `scene.py`, `instanced_scene.py`, `_face_groups.py` | TypeScript, .NET, Dart, C++ — not ported |
 | Definition- and model-level attribute dictionaries (Dynamic Components formulas/options), in VFF and classic files (1.6.0) | `_core.py`, `legacy.py`, `model.py` | TypeScript, .NET, Dart, C++ — not ported |
 | Model rendering-options face colours (`SkpModel.face_front_color` / `face_back_color`, SketchUp 4–2025, [#550](https://github.com/iamahsanmehmood/openskp/pull/550), part of [#533](https://github.com/iamahsanmehmood/openskp/issues/533)) | `_core.py`, `legacy.py`, `model.py` (on `main`) | TypeScript, .NET, Dart, C++ |

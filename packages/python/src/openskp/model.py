@@ -1300,6 +1300,7 @@ class SkpFile:
         name_override_keys: Sequence[str] = ("name", "label", "code"),
         original_textures: bool = False,
         unpainted_faces: str = "style",
+        include_curve_sets: bool = True,
     ) -> "instanced_scene.InstancedScene":
         """Build the placed scene graph with SketchUp's component/group
         INSTANCING PRESERVED, instead of baked into world-space vertex data.
@@ -1339,6 +1340,7 @@ class SkpFile:
                 name_override_keys=name_override_keys,
                 original_textures=original_textures,
                 unpainted_faces=unpainted_faces,
+                include_curve_sets=include_curve_sets,
             )
         except (SkpParseError, RecursionError, MemoryError):
             raise

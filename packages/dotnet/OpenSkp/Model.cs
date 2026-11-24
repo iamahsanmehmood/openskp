@@ -409,6 +409,11 @@ namespace OpenSkp
         /// <summary>Native definition attribute dictionaries from VFF files, preserving typed values.</summary>
         public Dictionary<string, Dictionary<string, object?>> AttributeDictionaries { get; set; } =
             new Dictionary<string, Dictionary<string, object?>>();
+
+        /// <summary>Groups this definition's LOOSE edges (edges no face uses)
+        /// into ordered polyline runs, using the file's own <c>Edge#curve</c>
+        /// (<see cref="Edge.CurveId"/>) grouping.</summary>
+        public List<LooseEdgeRun> LooseEdgeRuns() => SkpModel.LooseEdgeRuns(this);
     }
 
     /// <summary>Complete parsed representation of a SketchUp file, mirroring
@@ -473,5 +478,68 @@ namespace OpenSkp
         /// count includes but the file never writes are not counted. Always 0
         /// for VFF files.</summary>
         public int UnreadRootEntities { get; set; }
+
+        /// <summary>Groups <paramref name="definition"/>'s LOOSE edges (edges
+        /// no face uses) into ordered polyline runs, using the file's own
+        /// <c>Edge#curve</c> (<see cref="Edge.CurveId"/>) grouping, in the same
+        /// order as <see cref="InstancedScene.CurveResources"/>.</summary>
+        public static List<LooseEdgeRun> LooseEdgeRuns(Definition definition)
+        {
+            if (definition == null) throw new ArgumentNullException(nameof(definition));
+            if (definition.Edges.Count == 0) return new List<LooseEdgeRun>();
+
+            var used = new HashSet<long>();
+            foreach (var face in definition.Faces.Values)
+            {
+                foreach (var loop in face.Loops)
+                {
+                    foreach (var co in loop)
+                    {
+                        used.Add(co.EdgeId);
+                    }
+                }
+            }
+
+            var edgesById = new Dictionary<long, (long V1, long V2)>();
+            var groupOrder = new List<long>();
+            var groups = new Dictionary<long, List<long>>();
+            var runs = new List<LooseEdgeRun>();
+
+            foreach (var kv in definition.Edges)
+            {
+                var e = kv.Value;
+                if (used.Contains(e.Id) || e.V1Id == e.V2Id)
+                {
+                    continue;
+                }
+                if (e.CurveId is long cid && cid != 0)
+                {
+                    edgesById[e.Id] = (e.V1Id, e.V2Id);
+                    if (!groups.TryGetValue(cid, out var grp))
+                    {
+                        grp = new List<long>();
+                        groups[cid] = grp;
+                        groupOrder.Add(cid);
+                    }
+                    grp.Add(e.Id);
+                }
+                else
+                {
+                    runs.Add(new LooseEdgeRun
+                    {
+                        EdgeIds = new List<long> { e.Id },
+                        VertexIds = new List<long> { e.V1Id, e.V2Id },
+                        Closed = false,
+                    });
+                }
+            }
+
+            foreach (var cid in groupOrder)
+            {
+                runs.AddRange(Curves.OrderCurveEdges(edgesById, groups[cid]));
+            }
+
+            return runs;
+        }
     }
 }
