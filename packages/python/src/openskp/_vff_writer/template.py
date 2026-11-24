@@ -1085,6 +1085,41 @@ class EntityEditor:
                 self._extend_bounds(_transform_point(corner, matrix13))
         return identifier
 
+    def add_group(
+        self,
+        definition_container_id: int,
+        matrix13: Sequence[float],
+        *,
+        definition_bounds: Optional[Sequence[float]] = None,
+        name: str = "",
+        material: Optional[int] = None,
+        layer: Optional[int] = None,
+        hidden: bool = False,
+    ) -> int:
+        """Place a group: a ``0x1d4c`` wrapper around an ordinary instance."""
+        identifier = self.template.alloc_id()
+        flags = 0x06 | (0x01 if hidden else 0)
+        instance = Record(
+            T_INSTANCE,
+            children=[
+                _drawing(
+                    identifier,
+                    material=material,
+                    layer=layer,
+                    flags=flags,
+                ),
+                record(T_INSTANCE_NAME, name.encode("utf-8")),
+                record(T_INSTANCE_TRANSFORM, f64s(matrix13)),
+                record(T_INSTANCE_DEFINITION, varint(definition_container_id)),
+                record(T_INSTANCE_GUID, self.template.guid_bytes()),
+            ],
+        )
+        self._pool(T_GROUPS).children.append(Record(T_GROUP, children=[instance]))
+        self.order.append(identifier)
+        if definition_bounds is not None:
+            for corner in _box_corners(definition_bounds):
+                self._extend_bounds(_transform_point(corner, matrix13))
+        return identifier
 
     # -- finalize ---------------------------------------------------------
 

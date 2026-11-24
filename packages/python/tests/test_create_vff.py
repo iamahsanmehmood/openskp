@@ -371,3 +371,136 @@ def test_definition_lifecycle_errors():
         builder.add_instance(other)
 
 
+def test_sketchup_accepted_spike_parses(tmp_path):
+    """The stage-1 file SketchUp 2025 opened and re-saved stays readable."""
+    data = (WRITER_FIXTURES / "written_spike.skp").read_bytes()
+    assert check_integrity(data)
+    model = parse_bytes(tmp_path, data)
+    assert len(model.root.faces) == 6
+    assert len(model.root.edges) == 12
+    _assert_box_geometry(model.root)
+    (definition,) = model.definitions.values()
+    assert definition.name == "SpikeBox"
+    assert len(definition.faces) == 6
+    assert len(model.root.instances) == 2
+    assert all(instance.ref_idx == definition.id for instance in model.root.instances)
+    assert {instance.layer for instance in model.root.instances} == {"SpikeTag"}
+    assert [(m.name, tuple(m.color[:3])) for m in model.materials] == [("SpikeRed", RED)]
+
+
+def test_spike_on_the_bundled_2025_template(tmp_path):
+    spike = build_spike()
+    model = parse_bytes(tmp_path, spike.data)
+    root = model.root
+
+    assert check_integrity(spike.data)
+    assert read_stored_integrity_word(spike.data) == compute_integrity_word(spike.data)
+
+    _assert_box_geometry(root)
+    assert len(root.faces) == 6
+    assert len(root.edges) == 12
+
+    (material,) = model.materials
+    assert material.name == "SpikeRed"
+    assert material.color[:3] == RED
+    assert material.id == spike.material_id
+    material_ids = sorted(
+        face.material_id for face in root.faces.values() if face.material_id is not None
+    )
+    assert material_ids == [spike.material_id] * 4
+    assert sum(1 for face in root.faces.values() if face.material_id is None) == 2
+
+    tags = {layer.name: layer for layer in model.layers}
+    assert (tags["SpikeTag"].color_r, tags["SpikeTag"].color_g, tags["SpikeTag"].color_b) == TAG_COLOR
+    assert {face.layer for face in root.faces.values()} == {spike.layer_id}
+    assert {edge.layer for edge in root.edges.values()} == {spike.layer_id}
+
+    assert len(model.definitions) == 1
+    definition = model.definitions[spike.definition_id]
+    assert definition.name == "SpikeBox"
+    _assert_box_geometry(definition)
+    painted = [face.material_id for face in definition.faces.values()]
+    assert painted.count(spike.material_id) == 2
+
+    assert len(root.instances) == 2
+    for instance, expected in zip(root.instances, _expected_instances()):
+        assert instance.ref_idx == spike.definition_id
+        assert instance.layer == "SpikeTag"
+        assert len(instance.matrix) == 13
+        for actual, wanted in zip(instance.matrix, expected):
+            assert actual == pytest.approx(wanted, abs=1e-12)
+
+
+def test_spike_on_an_existing_2021_model_template(tmp_path):
+    spike = build_spike(NESTING_TEMPLATE)
+    assert check_integrity(spike.data)
+    model = parse_bytes(tmp_path, spike.data)
+    root = model.root
+    assert len(root.faces) == 6
+    assert len(root.edges) == 12
+    _assert_box_geometry(root)
+    assert len(root.instances) == 3
+    ours = [i for i in root.instances if i.ref_idx == spike.definition_id]
+    assert len(ours) == 2
+    for instance, expected in zip(ours, _expected_instances()):
+        assert instance.layer == "SpikeTag"
+        for actual, wanted in zip(instance.matrix, expected):
+            assert actual == pytest.approx(wanted, abs=1e-12)
+    names = {definition.name for definition in model.definitions.values()}
+    assert {"Group", "Shelf", "Group2", "SpikeBox"} <= names
+    spike_box = model.definitions[spike.definition_id]
+    assert spike_box.name == "SpikeBox"
+    _assert_box_geometry(spike_box)
+    assert any(
+        material.name == "SpikeRed" and material.color[:3] == RED
+        for material in model.materials
+    )
+    tags = {layer.name: layer for layer in model.layers}
+    assert (tags["SpikeTag"].color_r, tags["SpikeTag"].color_g, tags["SpikeTag"].color_b) == TAG_COLOR
+    assert {face.layer for face in root.faces.values()} == {spike.layer_id}
+
+
+def test_groups_and_nested_placements(tmp_path):
+    builder = create_vff()
+    red = builder.add_material("GroupRed", (200, 20, 20))
+    tag = builder.add_layer("GroupTag", (200, 120, 40))
+    with builder.add_group("RootBox", material=red, layer=tag) as group:
+        group.add_face([(0, 0, 0), (10, 0, 0), (10, 10, 0), (0, 10, 0)])
+    with builder.add_component_definition("Outer") as outer:
+        with outer.add_group("InnerBox", material=red, layer=tag) as inner:
+            inner.add_face([(0, 0, 0), (10, 0, 0), (10, 10, 0), (0, 10, 0)])
+    builder.add_instance(outer, translation=(0.0, 40.0, 0.0), layer=tag)
+    builder.add_instance(
+        outer,
+        translation=(40.0, 40.0, 0.0),
+        rotation=((0.0, 0.0, 1.0), math.pi / 6.0),
+        layer=tag,
+    )
+    model = parse_bytes(tmp_path, builder.to_bytes())
+    root = model.root
+    group_instance = next(i for i in root.instances if i.name == "RootBox")
+    group_definition = model.definitions[group_instance.ref_idx]
+    assert group_definition.is_group
+    assert group_definition.name == "RootBox"
+    assert len(group_definition.faces) == 1
+    assert group_instance.layer == "GroupTag"
+    assert group_instance.material_id == red
+
+    outer_definition = next(d for d in model.definitions.values() if d.name == "Outer")
+    assert not outer_definition.is_group
+    (nested,) = outer_definition.instances
+    assert nested.name == "InnerBox"
+    nested_definition = model.definitions[nested.ref_idx]
+    assert nested_definition.is_group
+    assert nested.layer == "GroupTag"
+    assert nested.material_id == red
+    outer_instances = [i for i in root.instances if i.ref_idx == outer_definition.id]
+    assert len(outer_instances) == 2
+    plain, rotated = sorted(outer_instances, key=lambda i: i.matrix[9])
+    assert plain.matrix[9:12] == [0.0, 40.0, 0.0]
+    c = math.cos(math.pi / 6.0)
+    s = math.sin(math.pi / 6.0)
+    assert rotated.matrix[:9] == pytest.approx([c, -s, 0.0, s, c, 0.0, 0.0, 0.0, 1.0], abs=1e-12)
+    assert rotated.matrix[9:12] == [40.0, 40.0, 0.0]
+
+

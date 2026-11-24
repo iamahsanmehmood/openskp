@@ -268,6 +268,34 @@ class ComponentDefinitionBuilder:
             hidden=hidden,
         )
 
+    def add_group(
+        self,
+        name: Optional[str] = None,
+        translation: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+        matrix3x3: Optional[Matrix3x3] = None,
+        rotation: Optional[Rotation] = None,
+        material: Optional[int] = None,
+        layer: Optional[int] = None,
+        hidden: bool = False,
+    ) -> "GroupBuilder":
+        """Start a group placed inside this definition (VFF-only extra)."""
+        if self._closed:
+            raise SkpWriteError("this definition is already closed")
+        self._builder._validate_material(material)
+        self._builder._validate_layer(layer)
+        return GroupBuilder(
+            self._builder,
+            name,
+            owner=self._editor,
+            placement={
+                "translation": translation,
+                "matrix3x3": matrix3x3,
+                "rotation": rotation,
+                "material": material,
+                "layer": layer,
+                "hidden": hidden,
+            },
+        )
 
     # -- lifecycle --------------------------------------------------------
 
@@ -327,6 +355,26 @@ class ComponentDefinitionBuilder:
             self.close()
 
 
+class GroupBuilder(ComponentDefinitionBuilder):
+    """A group: a definition (kind 1) plus the placement created at close."""
+
+    def __init__(
+        self,
+        builder: "VffBuilder",
+        name: Optional[str],
+        *,
+        owner: EntityEditor,
+        placement: dict,
+    ) -> None:
+        definition_name = name or "Group"
+        super().__init__(
+            builder,
+            definition_name,
+            kind=1,
+            owner=owner,
+            placement=placement,
+        )
+        self._placement["name"] = definition_name
 
 
 # ── The builder ─────────────────────────────────────────────────────────
@@ -542,6 +590,33 @@ class VffBuilder:
             guid=guid_bytes,
         )
 
+    def add_group(
+        self,
+        name: Optional[str] = None,
+        translation: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+        matrix3x3: Optional[Matrix3x3] = None,
+        rotation: Optional[Rotation] = None,
+        material: Optional[int] = None,
+        layer: Optional[int] = None,
+        hidden: bool = False,
+    ) -> GroupBuilder:
+        """Start a root-level group (definition kind 1, placed on close)."""
+        self._validate_material(material)
+        self._validate_layer(layer)
+        _matrix13(translation, matrix3x3, rotation)
+        return GroupBuilder(
+            self,
+            name,
+            owner=self._root,
+            placement={
+                "translation": translation,
+                "matrix3x3": matrix3x3,
+                "rotation": rotation,
+                "material": material,
+                "layer": layer,
+                "hidden": hidden,
+            },
+        )
 
     def add_instance(
         self,
