@@ -69,6 +69,7 @@ namespace OpenSkp
                     Offset = dm.Offset,
                     PlaneX = dm.PlaneX,
                     Normal = dm.Normal,
+                    OffsetVector = dm.OffsetVector,
                     Text = dm.Text,
                 });
             }

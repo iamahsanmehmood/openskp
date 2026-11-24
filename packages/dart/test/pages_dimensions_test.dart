@@ -103,6 +103,71 @@ void main() {
       expect(d.offset, 15.5);
       expect(d.planeX, (1.0, 0.0, 0.0));
       expect(d.normal, (0.0, 0.0, 1.0));
+      expect(d.offsetVector, isNull);
+    });
+
+    test('constrained offsets preserve plane side and endpoint order', () {
+      Uint8List pointBlock(int wrapTag, (double, double, double) p) {
+        final inner =
+            concatBytes([tlv(0x5209, u32le(1)), tlv(0x520A, vec3(p.$1, p.$2, p.$3))]);
+        return tlv(wrapTag, tlv(0x5208, inner));
+      }
+
+      const a = (1.0, 2.0, 3.0);
+      const b = (1.0, 2.0, 13.0);
+      for (final axis in [1, 2]) {
+        for (final distance in [-4.0, 4.0]) {
+          for (final reversed in [false, true]) {
+            final p1 = reversed ? b : a;
+            final p2 = reversed ? a : b;
+            final body = concatBytes([
+              pointBlock(0x5BCD, p1),
+              pointBlock(0x5BCE, p2),
+              tlv(0x5BCF, vec3(0, -1, 0)),
+              tlv(0x5BD0, vec3(1, 0, 0)),
+              tlv(0x5BD1, u32le(axis)),
+              tlv(0x5BD2, f64le(distance)),
+            ]);
+            final dims = parseDimensions(tlv(0x5BCC, body), {}, {});
+            expect(dims, hasLength(1));
+            final expected =
+                axis == 1 ? (0.0, 0.0, distance) : (-distance, 0.0, 0.0);
+            expect(dims[0].offsetVector, expected);
+            expect(dims[0].a, p1);
+            expect(dims[0].b, p2);
+          }
+        }
+      }
+    });
+
+    test('unsupported or malformed constraint keeps scalar fallback', () {
+      Uint8List pointBlock(int wrapTag, (double, double, double) p) {
+        final inner =
+            concatBytes([tlv(0x5209, u32le(1)), tlv(0x520A, vec3(p.$1, p.$2, p.$3))]);
+        return tlv(wrapTag, tlv(0x5208, inner));
+      }
+
+      for (final axisPayload in <Uint8List>[
+        Uint8List(0),
+        Uint8List.fromList([2]),
+        u32le(0),
+        u32le(3),
+      ]) {
+        var body = concatBytes([
+          pointBlock(0x5BCD, (1, 2, 3)),
+          pointBlock(0x5BCE, (1, 2, 13)),
+          tlv(0x5BCF, vec3(0, -1, 0)),
+          tlv(0x5BD0, vec3(1, 0, 0)),
+          tlv(0x5BD2, f64le(-4.0)),
+        ]);
+        if (axisPayload.isNotEmpty) {
+          body = concatBytes([body, tlv(0x5BD1, axisPayload)]);
+        }
+        final dims = parseDimensions(tlv(0x5BCC, body), {}, {});
+        expect(dims, hasLength(1));
+        expect(dims[0].offsetVector, isNull);
+        expect(dims[0].offset, -4.0);
+      }
     });
 
     test(

@@ -1597,25 +1597,49 @@ def _read_dimlinear(ar, r):
     # SketchUp 4 and 5 write neither the font object above nor the 5 bytes in
     # front of the first connection block; keep the block's later offsets
     # the same by supplying them as zeros.
-    b37 = (b'\x00' * 5 if ar.ver < 6 else b'') + r.raw(32 if ar.ver < 6 else 37)
-    c1 = _path_ref(ar, r)            # connection point 1 (may be null; may be written in full)
-    path1 = _connection_paths(ar, r)
-    b32 = r.raw(32)
-    c2 = _path_ref(ar, r)            # connection point 2 (may be null; may be written in full)
-    path2 = _connection_paths(ar, r)
+    if ar.ver >= 6:
+        r.raw(5)
+
+    def _connection():
+        block = r.raw(32)
+        pt = (struct.unpack_from('<3d', block, 8)
+              if struct.unpack_from('<I', block, 0)[0] == 1 else None)
+        ref = _path_ref(ar, r)
+        path = _connection_paths(ar, r)
+        if path[0] is not None or path[1] or path[2]:
+            # Do not expose definition-local vertex coordinates as owner/world
+            # points until the nested instance path can also be resolved.
+            return None, None, path
+        return pt, ref, path
+
+    a, c1, path1 = _connection()
+    b, c2, path2 = _connection()
     b72 = r.raw(72 if ar.ver >= 6 else 68)   # SketchUp 4 and 5: no trailing u32
-    # the dimension-line offset (inches, signed) sits at a fixed position
-    # of the trailing block on every sample (v17 and v18 alike)
+    normal = struct.unpack_from('<3d', b72, 0)
+    plane_x = struct.unpack_from('<3d', b72, 24)
+    axis = struct.unpack_from('<I', b72, 48)[0]
     offset = struct.unpack_from('<d', b72, 52)[0]
+    offset_vector = None
+    if axis == 1:
+        offset_vector = (
+            (normal[1] * plane_x[2] - normal[2] * plane_x[1]) * offset + 0.0,
+            (normal[2] * plane_x[0] - normal[0] * plane_x[2]) * offset + 0.0,
+            (normal[0] * plane_x[1] - normal[1] * plane_x[0]) * offset + 0.0,
+        )
+    elif axis == 2:
+        offset_vector = (
+            -plane_x[0] * offset + 0.0,
+            -plane_x[1] * offset + 0.0,
+            -plane_x[2] * offset + 0.0,
+        )
     out = {'k': 'dimension', 'db': db, 'text': text,
-           'connect': (c1, c2), 'paths': (path1, path2), 'offset': offset}
-    # connection blocks: [.. u32 TYPE ..][u32 4][point3d]. Type 1 = a FREE
-    # point stored inline (SDK-generated ground truth); type 2 = anchored
-    # to the referenced entity, point zeroed.
-    if struct.unpack_from('<I', b37, 5)[0] == 1:
-        out['a'] = struct.unpack_from('<3d', b37, 13)
-    if struct.unpack_from('<I', b32, 0)[0] == 1:
-        out['b'] = struct.unpack_from('<3d', b32, 8)
+           'connect': (c1, c2), 'paths': (path1, path2),
+           'offset': offset, 'plane_x': plane_x, 'normal': normal,
+           'offset_vector': offset_vector}
+    if a is not None:
+        out['a'] = a
+    if b is not None:
+        out['b'] = b
     return out
 
 
@@ -2464,11 +2488,6 @@ def _fill_builder(builder, ents, slots, pids=None):
                 'lp': v.get('lp'),
             })
         elif k == 'dimension':
-            dim = {
-                'text': v.get('text', ''),
-                'hidden': bool(v.get('db', {}).get('hidden', False)),
-                'offset': v.get('offset', 0.0),
-            }
             # endpoints: FREE connections carry them inline; anchored ones
             # resolve to their vertices (inches)
             pts = [v.get('a'), v.get('b')]
@@ -2479,8 +2498,16 @@ def _fill_builder(builder, ents, slots, pids=None):
                 val = ent[2] if ent and ent[0] == 'obj' else None
                 if isinstance(val, dict) and 'xyz' in val:
                     pts[i] = tuple(val['xyz'])
-            if len(pts) == 2 and pts[0] and pts[1]:
-                dim['a'], dim['b'] = pts[0], pts[1]
+            dim = {
+                'text': v.get('text', ''),
+                'hidden': bool(v.get('db', {}).get('hidden', False)),
+                'a': pts[0],
+                'b': pts[1],
+                'offset': v.get('offset', 0.0),
+                'plane_x': v.get('plane_x'),
+                'normal': v.get('normal'),
+                'offset_vector': v.get('offset_vector'),
+            }
             builder.dimensions.append(dim)
         elif k == 'cline':
             db = v.get('db') or {}
