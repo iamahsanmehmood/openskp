@@ -129,8 +129,35 @@ def parse_tlv_recursive(
     Raises:
         SkpParseError: If containers nest deeper than :data:`MAX_TLV_DEPTH`.
     """
+    if start < 0 or start > end or end > len(data):
+        raise ValueError("invalid TLV range")
     if container_tags is None:
         container_tags = CONTAINER_TAGS
+
+    if end - start >= (1 << 32):
+        from ._core import tlv_headers_buffer
+        elements_64: List[TlvNode] = []
+        for pos, size in tlv_headers_buffer(data, start, end, container_tags):
+            tag_hex = data[pos:pos + 2].hex().upper()
+            children_64: List[TlvNode] = []
+            if size > 0 and tag_hex in container_tags:
+                if depth >= MAX_TLV_DEPTH:
+                    raise SkpParseError(
+                        f"TLV records nest deeper than {MAX_TLV_DEPTH} levels",
+                        stage="tlv_walk", tag=tag_hex, offset=pos,
+                    )
+                children_64 = parse_tlv_recursive(
+                    data, pos + 6, pos + 6 + size, container_tags, depth + 1
+                )
+            payload_64: bytes = data[pos + 6: pos + 6 + size] if not children_64 else b''
+            elements_64.append(TlvNode(
+                offset=pos,
+                tag=tag_hex,
+                size=size,
+                children=children_64,
+                payload=payload_64,
+            ))
+        return elements_64
 
     pos: int = start
     elements: List[TlvNode] = []

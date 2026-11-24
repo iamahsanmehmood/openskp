@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — Python, TypeScript, .NET, Dart & Rust: `model.dat` of 4 GiB or more recovers wrapped 32-bit container lengths (#285)
+
+- Ports C++'s 4 GiB VFF `model.dat` container-length wrap recovery (#520, #535) to Python (`tlv_headers` / `wrapped_model_records` in `openskp._core`), TypeScript (`tlvHeaders` / `wrappedModelRecords` in `parser.ts`), .NET (`Tlv.TlvHeaders` / `Tlv.WrappedModelRecords`), Dart (`Tlv.tlvHeaders` / `Tlv.wrappedModelRecords`), and Rust (`tlv_headers` / `wrapped_model_records` / `model_records` in `openskp::internal`).
+- Ranges shorter than $2^{32}$ bytes continue to use the zero-allocation linear scan unchanged. Ranges of 4 GiB or more resolve 32-bit container length wrap-arounds (`size + k * 2^32`) with run-compressed record-chain views (`attempts = 256`, `MAX_TLV_DEPTH = 64`), and disambiguate wrapped `F401` top-level models via `F901 -> 7017 -> 7117 -> 7C15` catalog wrapper agreement when child records cross the stored 32-bit parent end.
+
 ### Fixed — Python, TypeScript, .NET & Dart: align classic writer persistent ID start (`18`) and opaque textured-material alpha (`255`) with SketchUp SDK, C++ & Rust (#285)
 
 - Verified against SketchUp's C library (`SketchUpAPI`): `CDocument`'s 64-bit persistent-ID field at offset `1987` holds the *next* free persistent ID (`18` in `blank_v17.skp`, so the first created entity receives `SUEntityGetPersistentID == 18`), and opaque textured `CMaterial` records store `255` (`0xFF`) in both RGBA alpha slots.
