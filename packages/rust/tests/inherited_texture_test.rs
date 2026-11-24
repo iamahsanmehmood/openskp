@@ -70,11 +70,13 @@ fn uv_bounds(uvs: &[f32]) -> (f32, f32, f32, f32) {
     let mut max_u = uvs[0];
     let mut min_v = uvs[1];
     let mut max_v = uvs[1];
-    for pair in uvs.chunks_exact(2) {
-        min_u = min_u.min(pair[0]);
-        max_u = max_u.max(pair[0]);
-        min_v = min_v.min(pair[1]);
-        max_v = max_v.max(pair[1]);
+    let mut i = 0;
+    while i + 1 < uvs.len() {
+        min_u = min_u.min(uvs[i]);
+        max_u = max_u.max(uvs[i]);
+        min_v = min_v.min(uvs[i + 1]);
+        max_v = max_v.max(uvs[i + 1]);
+        i += 2;
     }
     (min_u, max_u, min_v, max_v)
 }
