@@ -319,5 +319,31 @@ TEST(Edit, ReplaysGuideHiddenFlagAndLayer) {
   EXPECT_EQ(rebuilt.root().construction_lines[0].layer, "Guides");
 }
 
+TEST(EditTest, SkipsDefinitionsWhoseOnlyGuidesCannotBeReplayed) {
+  auto path = temp_skp("half_zero_guides");
+  {
+    auto builder = create();
+    auto& half = builder->add_component_definition("Half");
+    half.add_construction_line({0.0, 0.0, 0.0}, {1.0, 0.0, 0.0}, 0.0, 1e30);
+    half.close();
+    auto& zero = builder->add_component_definition("Zero");
+    zero.add_construction_line({0.0, 0.0, 0.0}, {1.0, 0.0, 0.0}, 0.0, 0.0);
+    zero.close();
+    builder->add_face({{0.0, 0.0, 0.0}, {10.0, 0.0, 0.0}, {0.0, 10.0, 0.0}});
+    builder->add_instance(half);
+    builder->add_instance(zero);
+    builder->save(path);
+  }
+
+  OpenExistingResult result = open_existing(path);
+  std::filesystem::remove(path);
+
+  EXPECT_EQ(result.definitions.count("Half"), 0u);
+  EXPECT_EQ(result.definitions.count("Zero"), 0u);
+  SkpModel rebuilt = SkpFile::from_buffer(result.builder->to_bytes()).parse();
+  EXPECT_EQ(rebuilt.root().faces.size(), 1u);
+  EXPECT_TRUE(rebuilt.definitions.empty());
+}
+
 }  // namespace
 }  // namespace openskp

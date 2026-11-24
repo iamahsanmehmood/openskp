@@ -1669,6 +1669,7 @@ impl SkpBuilder {
             check_finite_point(d, "construction line direction")?;
         }
         self.check_layer_handle(options.layer)?;
+        ArchiveWriter::resolve_construction_line(point, point2, direction)?;
         self.ensure_geometry_writer()?;
         let writer = self.geometry_writer.as_mut().expect("ensured above");
         writer.write_construction_line(point, point2, direction, options)?;

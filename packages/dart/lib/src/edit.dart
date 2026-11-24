@@ -13,7 +13,7 @@
 /// existing file with this package's own reader ([legacy], already
 /// comprehensive), then *replay* everything it understood back through the
 /// writer's own public API (materials, layers, every component definition,
-/// every face/instance) to produce a brand-new file - not a byte-patched
+/// every face/instance, construction points and lines) to produce a brand-new file - not a byte-patched
 /// copy of the original, but a freshly-built one with equivalent content,
 /// to which the caller can add more geometry before saving. Ported
 /// field-for-field from `openskp.edit` (Python).
@@ -56,8 +56,8 @@
 ///   is replayed as a plain component instance - structurally simpler, and
 ///   visually identical, but no longer shows as a "Group" in SketchUp's
 ///   Outliner afterward.
-/// * Section planes, text entities, and dimensions aren't carried over at
-///   all - the writer has no support for any of these entity types.
+/// * Section planes, text entities, and dimensions aren't carried over on
+///   replay (only faces, instances, and replayable construction guides are).
 /// * A circle/arc/polyline's original `CArcCurve`/`CCurve` grouping is
 ///   lost - this package's reader doesn't preserve that grouping in its
 ///   public [Face]/[Edge] model, so a round-tripped circle becomes an
@@ -242,6 +242,23 @@ Map<int, (int, int)> _edgeMap(Definition defn) {
   return {for (final e in defn.edges.entries) e.key: (e.value.v1Id, e.value.v2Id)};
 }
 
+bool _isReplayableConstructionLine(ConstructionLine cl) {
+  if (cl.start != null && cl.end != null) {
+    final s = cl.start!, e = cl.end!;
+    final dx = e.$1 - s.$1, dy = e.$2 - s.$2, dz = e.$3 - s.$3;
+    final length = sqrt(dx * dx + dy * dy + dz * dz);
+    return length.isFinite && length > 0.0;
+  }
+  if (cl.start == null && cl.end == null) {
+    final p = cl.point;
+    if (!p.$1.isFinite || !p.$2.isFinite || !p.$3.isFinite) return false;
+    final d = cl.direction;
+    final dlen = sqrt(d.$1 * d.$1 + d.$2 * d.$2 + d.$3 * d.$3);
+    return dlen.isFinite && dlen > 0.0;
+  }
+  return false;
+}
+
 bool _definitionHasContent(Definition defn, Map<int, ComponentDefinitionBuilder> defBuilders) {
   final edges = _edgeMap(defn);
   for (final face in defn.faces.values) {
@@ -251,16 +268,18 @@ bool _definitionHasContent(Definition defn, Map<int, ComponentDefinitionBuilder>
   for (final inst in defn.instances) {
     if (inst.refIdx != null && defBuilders.containsKey(inst.refIdx)) return true;
   }
+  if (defn.constructionPoints.isNotEmpty) return true;
+  if (defn.constructionLines.any(_isReplayableConstructionLine)) return true;
   return false;
 }
 
-/// Replay one definition's (or the root's) own faces and instances onto
-/// [target] - an [SkpBuilder] for the root, or a [ComponentDefinitionBuilder]
-/// for a nested definition; both satisfy [GeometryHost] the same shape this
-/// calls generically. [defBuilders] resolves instance references - by the
-/// time any definition is opened (topological order, see
-/// [_definitionOrder]) every OTHER definition its own instances could
-/// reference is already in it.
+/// Replay one definition's (or the root's) own faces, instances, and
+/// construction geometry onto [target] - an [SkpBuilder] for the root, or a
+/// [ComponentDefinitionBuilder] for a nested definition; both satisfy
+/// [GeometryHost] the same shape this calls generically. [defBuilders]
+/// resolves instance references - by the time any definition is opened
+/// (topological order, see [_definitionOrder]) every OTHER definition its
+/// own instances could reference is already in it.
 void _replayBody(
   GeometryHost target,
   Definition defn,
@@ -277,6 +296,26 @@ void _replayBody(
   }
   for (final inst in defn.instances) {
     _replayInstance(target, inst, defBuilders, materialSlots, layerSlots, model, warnings, context);
+  }
+  for (final cp in defn.constructionPoints) {
+    try {
+      target.addConstructionPoint(cp.position);
+    } on SkpWriteError catch (exc) {
+      warnings.add('$context: construction point skipped ($exc)');
+    }
+  }
+  for (final cl in defn.constructionLines) {
+    try {
+      if (cl.start != null && cl.end != null) {
+        target.addConstructionLine(cl.start!, point2: cl.end!);
+      } else if (cl.start == null && cl.end == null) {
+        target.addConstructionLine(cl.point, direction: cl.direction);
+      } else {
+        warnings.add('$context: half-bounded construction line skipped');
+      }
+    } on SkpWriteError catch (exc) {
+      warnings.add('$context: construction line skipped ($exc)');
+    }
   }
 }
 

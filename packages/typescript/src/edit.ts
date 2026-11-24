@@ -15,7 +15,8 @@
  * existing file with this package's own reader (`legacy.ts`/`index.ts`,
  * already comprehensive), then *replay* everything it understood back
  * through the writer's own public API (materials, layers, every component
- * definition, every face/instance) to produce a brand-new file - not a
+ * definition, every face/instance, construction points and lines) to produce
+ * a brand-new file - not a
  * byte-patched copy of the original, but a freshly-built one with
  * equivalent content, to which the caller can add more geometry before
  * saving.
@@ -67,8 +68,8 @@
  *   alike) is replayed as a plain component instance - structurally
  *   simpler, and visually identical, but no longer shows as a "Group" in
  *   SketchUp's Outliner afterward.
- * - Section planes, text entities, and dimensions aren't carried over at
- *   all - the writer has no support for any of these entity types.
+ * - Section planes, text entities, and dimensions aren't carried over on
+ *   replay (only faces, instances, and replayable construction guides are).
  * - A circle/arc/polyline's original CArcCurve/CCurve grouping is lost -
  *   this package's reader doesn't preserve that grouping in its public
  *   Face/Edge model, so a round-tripped circle becomes an ordinary
@@ -107,6 +108,8 @@ declare const require: any;
 interface ReplayTarget {
   addFace(points: readonly Point3[], options?: AddFaceOptions): void;
   addInstance(definition: ComponentDefinitionBuilder, options?: AddInstanceOptions): void;
+  addConstructionLine(point: Point3, options?: { point2?: Point3; direction?: Point3 }): void;
+  addConstructionPoint(position: Point3): void;
 }
 
 function readFileToArrayBuffer(path: string): ArrayBuffer {
@@ -284,6 +287,23 @@ function edgeById(defn: Definition): Map<number, Definition['edges'][number]> {
   return m;
 }
 
+function isReplayableConstructionLine(cl: Definition['constructionLines'][number]): boolean {
+  if (cl.start !== null && cl.end !== null) {
+    const dx = cl.end[0] - cl.start[0];
+    const dy = cl.end[1] - cl.start[1];
+    const dz = cl.end[2] - cl.start[2];
+    const length = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    return Number.isFinite(length) && length > 0;
+  }
+  if (cl.start === null && cl.end === null) {
+    if (!cl.point.every(Number.isFinite)) return false;
+    const [dx, dy, dz] = cl.direction;
+    const dlen = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    return Number.isFinite(dlen) && dlen > 0;
+  }
+  return false;
+}
+
 function definitionHasContent(defn: Definition, defBuilders: Map<number, ComponentDefinitionBuilder>): boolean {
   const edges = edgeMap(defn);
   for (const face of defn.faces) {
@@ -293,16 +313,13 @@ function definitionHasContent(defn: Definition, defBuilders: Map<number, Compone
   for (const inst of defn.instances) {
     if (defBuilders.has(inst.refIdx)) return true;
   }
+  if (defn.constructionPoints.length > 0) return true;
+  if (defn.constructionLines.some(isReplayableConstructionLine)) return true;
   return false;
 }
 
-/** Replay one definition's (or the root's) own faces and instances onto
- * `target` - a `SkpBuilder` for the root, or a `ComponentDefinitionBuilder`
- * for a nested definition; both expose the same addFace/addInstance shape
- * this calls generically. `defBuilders` resolves instance references - by
- * the time any definition is opened (topological order, see
- * `definitionOrder`) every OTHER definition its own instances could
- * reference is already in it. */
+/** Replay one definition's (or the root's) own faces, instances, and
+ * construction geometry onto `target`. */
 function replayBody(
   target: ReplayTarget,
   defn: Definition,
@@ -321,6 +338,34 @@ function replayBody(
   }
   for (const inst of defn.instances) {
     replayInstance(target, inst, defBuilders, materialSlots, layerSlots, model, warnings, context);
+  }
+  for (const cp of defn.constructionPoints) {
+    try {
+      target.addConstructionPoint(cp.position);
+    } catch (e) {
+      if (e instanceof SkpWriteError) {
+        warnings.push(`${context}: construction point skipped (${e.message})`);
+      } else {
+        throw e;
+      }
+    }
+  }
+  for (const cl of defn.constructionLines) {
+    try {
+      if (cl.start !== null && cl.end !== null) {
+        target.addConstructionLine(cl.start, { point2: cl.end });
+      } else if (cl.start === null && cl.end === null) {
+        target.addConstructionLine(cl.point, { direction: cl.direction });
+      } else {
+        warnings.push(`${context}: half-bounded construction line skipped`);
+      }
+    } catch (e) {
+      if (e instanceof SkpWriteError) {
+        warnings.push(`${context}: construction line skipped (${e.message})`);
+      } else {
+        throw e;
+      }
+    }
   }
 }
 

@@ -211,6 +211,25 @@ std::vector<EntityId> definition_order(const SkpModel& model) {
   return order;
 }
 
+bool is_replayable_construction_line(const ConstructionLine& cl) {
+  if (cl.start && cl.end) {
+    double dx = (*cl.end)[0] - (*cl.start)[0];
+    double dy = (*cl.end)[1] - (*cl.start)[1];
+    double dz = (*cl.end)[2] - (*cl.start)[2];
+    double length = std::sqrt(dx * dx + dy * dy + dz * dz);
+    return std::isfinite(length) && length > 0.0;
+  }
+  if (!cl.start && !cl.end) {
+    for (double v : cl.point) {
+      if (!std::isfinite(v)) return false;
+    }
+    double dlen = std::sqrt(cl.direction[0] * cl.direction[0] + cl.direction[1] * cl.direction[1] +
+                            cl.direction[2] * cl.direction[2]);
+    return std::isfinite(dlen) && dlen > 0.0;
+  }
+  return false;
+}
+
 bool definition_has_content(const Definition& defn,
                             const std::map<EntityId, ComponentDefinitionBuilder*>& def_builders) {
   EdgeMap edges = build_edge_map(defn);
@@ -222,7 +241,10 @@ bool definition_has_content(const Definition& defn,
   for (const auto& inst : defn.instances) {
     if (inst.ref_idx && def_builders.count(*inst.ref_idx)) return true;
   }
-  if (!defn.construction_points.empty() || !defn.construction_lines.empty()) return true;
+  if (!defn.construction_points.empty()) return true;
+  for (const auto& cl : defn.construction_lines) {
+    if (is_replayable_construction_line(cl)) return true;
+  }
   return false;
 }
 

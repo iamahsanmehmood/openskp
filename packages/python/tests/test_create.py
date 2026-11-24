@@ -4779,3 +4779,65 @@ def test_scenes_carry_the_document_options_too():
 def test_document_options_reject_units_that_are_not_integers(bad):
     with pytest.raises(SkpWriteError):
         create().set_document_options(length_unit=bad)
+
+
+def test_nested_definition_construction_round_trips(tmp_path):
+    """Construction guides inside a component definition round-trip cleanly,
+    including when a CConstructionLine is the last entity in the definition
+    followed by root-level guides."""
+    builder = create()
+    with builder.add_component_definition("GuideGroup") as nested:
+        nested.add_face([(0.0, 0.0, 0.0), (10.0, 0.0, 0.0), (10.0, 10.0, 0.0), (0.0, 10.0, 0.0)])
+        nested.add_construction_point((4.0, 5.0, 6.0))
+        nested.add_construction_line((1.0, 1.0, 1.0), point2=(2.0, 2.0, 2.0))
+    builder.add_instance(nested)
+    builder.add_construction_point((1.0, 2.0, 3.0))
+    builder.add_construction_line((0.0, 0.0, 0.0), point2=(12.0, 0.0, 0.0))
+    builder.add_construction_line((0.0, 0.0, 4.0), direction=(0.0, 0.0, 1.0))
+
+    out = tmp_path / "nested_guides.skp"
+    builder.save(str(out))
+    model = SkpFile.open(str(out)).parse()
+    assert len(model.root.construction_points) == 1
+    assert model.root.construction_points[0].position == pytest.approx((1.0, 2.0, 3.0))
+    assert len(model.root.construction_lines) == 2
+    assert model.root.construction_lines[0].end == pytest.approx((12.0, 0.0, 0.0))
+    assert model.root.construction_lines[1].start is None
+    assert model.root.construction_lines[1].end is None
+    assert model.root.construction_lines[1].point == pytest.approx((0.0, 0.0, 4.0))
+
+    group = next(d for d in model.definitions.values() if d.name == "GuideGroup")
+    assert len(group.construction_points) == 1
+    assert group.construction_points[0].position == pytest.approx((4.0, 5.0, 6.0))
+    assert len(group.construction_lines) == 1
+    assert group.construction_lines[0].start == pytest.approx((1.0, 1.0, 1.0))
+    assert group.construction_lines[0].end == pytest.approx((2.0, 2.0, 2.0))
+
+
+def test_construction_guides_reject_nonfinite_and_keep_add_layer_usable(tmp_path):
+    builder = create()
+    for bad in ((math.nan, 0.0, 0.0), (math.inf, 0.0, 0.0), (-math.inf, 1.0, 2.0), (1.0, 2.0)):
+        with pytest.raises(SkpWriteError):
+            builder.add_construction_point(bad)  # type: ignore[arg-type]
+        with pytest.raises(SkpWriteError):
+            builder.add_construction_line(bad, point2=(1.0, 0.0, 0.0))  # type: ignore[arg-type]
+        with pytest.raises(SkpWriteError):
+            builder.add_construction_line((0.0, 0.0, 0.0), point2=bad)  # type: ignore[arg-type]
+        with pytest.raises(SkpWriteError):
+            builder.add_construction_line((0.0, 0.0, 0.0), direction=bad)  # type: ignore[arg-type]
+    with pytest.raises(SkpWriteError):
+        builder.add_construction_line((0.0, 0.0, 0.0), point2=(0.0, 0.0, 0.0))
+
+    # Rejected guide calls must not start the geometry writer or lock out add_layer.
+    tag = builder.add_layer("GuidesAfterReject")
+    with builder.add_component_definition("NestedGuides") as nested:
+        with pytest.raises(SkpWriteError):
+            nested.add_construction_point((math.nan, 0.0, 0.0))
+        with pytest.raises(SkpWriteError):
+            nested.add_construction_line((0.0, 0.0, 0.0), direction=(0.0, math.inf, 0.0))
+        nested.add_face([(0.0, 0.0, 0.0), (5.0, 0.0, 0.0), (5.0, 5.0, 0.0), (0.0, 5.0, 0.0)], layer=tag)
+    builder.add_instance(nested, layer=tag)
+    out = tmp_path / "guides_after_reject.skp"
+    builder.save(str(out))
+    model = SkpFile.open(str(out)).parse()
+    assert any(layer.name == "GuidesAfterReject" for layer in model.layers)

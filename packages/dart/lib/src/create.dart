@@ -1181,35 +1181,11 @@ class _ArchiveWriter {
   /// start/end. An unbounded direction is written as the real ±1e30
   /// sentinel SketchUp itself uses.
   void writeConstructionLine(Point3 point, {Point3? point2, Point3? direction}) {
-    if ((point2 == null) == (direction == null)) {
-      throw SkpWriteError('addConstructionLine: pass exactly one of point2 or direction');
-    }
-    double dx, dy, dz, startParam, endParam;
-    if (point2 != null) {
-      dx = point2.$1 - point.$1;
-      dy = point2.$2 - point.$2;
-      dz = point2.$3 - point.$3;
-      final length = sqrt(dx * dx + dy * dy + dz * dz);
-      if (length == 0.0) {
-        throw SkpWriteError('addConstructionLine: point and point2 coincide');
-      }
-      dx /= length;
-      dy /= length;
-      dz /= length;
-      startParam = 0.0;
-      endParam = length;
-    } else {
-      final d = direction!;
-      final dlen = sqrt(d.$1 * d.$1 + d.$2 * d.$2 + d.$3 * d.$3);
-      if (dlen == 0.0) {
-        throw SkpWriteError('addConstructionLine: direction must be nonzero');
-      }
-      dx = d.$1 / dlen;
-      dy = d.$2 / dlen;
-      dz = d.$3 / dlen;
-      startParam = -_clineInfinite;
-      endParam = _clineInfinite;
-    }
+    final (dx, dy, dz, startParam, endParam) = _resolveConstructionLineParams(
+      point,
+      point2: point2,
+      direction: direction,
+    );
     _newOfKnownClass('CConstructionLine', schema: _constructionLineSchema);
     _preamble();
     _drawbase();
@@ -1227,6 +1203,7 @@ class _ArchiveWriter {
   /// position - reserved/unused, written as zero to match every real-file
   /// sample seen.
   void writeConstructionPoint(Point3 position) {
+    _validateFinitePoint3(position, 'addConstructionPoint');
     _newOfKnownClass('CConstructionPoint', schema: _constructionPointSchema);
     _preamble();
     _drawbase();
@@ -2055,6 +2032,49 @@ abstract class GeometryHost {
     List<(String, Map<String, Object>)> attributeDicts = const [],
     required bool hidden,
   });
+
+  void addConstructionLine(Point3 point, {Point3? point2, Point3? direction}) {
+    throw UnsupportedError('addConstructionLine is not implemented by this GeometryHost');
+  }
+
+  void addConstructionPoint(Point3 position) {
+    throw UnsupportedError('addConstructionPoint is not implemented by this GeometryHost');
+  }
+}
+
+void _validateFinitePoint3(Point3 p, String caller) {
+  if (!p.$1.isFinite || !p.$2.isFinite || !p.$3.isFinite) {
+    throw SkpWriteError('$caller: coordinates must be finite');
+  }
+}
+
+(double, double, double, double, double) _resolveConstructionLineParams(
+  Point3 point, {
+  Point3? point2,
+  Point3? direction,
+}) {
+  _validateFinitePoint3(point, 'addConstructionLine');
+  if ((point2 == null) == (direction == null)) {
+    throw SkpWriteError('addConstructionLine: pass exactly one of point2 or direction');
+  }
+  if (point2 != null) {
+    _validateFinitePoint3(point2, 'addConstructionLine');
+    final dx = point2.$1 - point.$1;
+    final dy = point2.$2 - point.$2;
+    final dz = point2.$3 - point.$3;
+    final length = sqrt(dx * dx + dy * dy + dz * dz);
+    if (!length.isFinite || length == 0.0) {
+      throw SkpWriteError('addConstructionLine: point and point2 coincide');
+    }
+    return (dx / length, dy / length, dz / length, 0.0, length);
+  }
+  final d = direction!;
+  _validateFinitePoint3(d, 'addConstructionLine');
+  final dlen = sqrt(d.$1 * d.$1 + d.$2 * d.$2 + d.$3 * d.$3);
+  if (!dlen.isFinite || dlen == 0.0) {
+    throw SkpWriteError('addConstructionLine: direction must be finite and nonzero');
+  }
+  return (d.$1 / dlen, d.$2 / dlen, d.$3 / dlen, -_clineInfinite, _clineInfinite);
 }
 
 /// Accumulates one component/group definition's geometry. Construct via
@@ -2258,6 +2278,22 @@ class ComponentDefinitionBuilder implements GeometryHost {
       softEdges: softEdges,
       smoothEdges: smoothEdges,
     );
+  }
+
+  /// Add a construction/guide line to this definition (local coordinates) -
+  /// same signature and behavior as [SkpBuilder.addConstructionLine].
+  void addConstructionLine(Point3 point, {Point3? point2, Point3? direction}) {
+    _checkWritable('construction lines');
+    _skp._definitionWriter!.writeConstructionLine(point, point2: point2, direction: direction);
+    _newEntityCount++;
+  }
+
+  /// Add a construction/guide point to this definition (local coordinates) -
+  /// same signature and behavior as [SkpBuilder.addConstructionPoint].
+  void addConstructionPoint(Point3 position) {
+    _checkWritable('construction points');
+    _skp._definitionWriter!.writeConstructionPoint(position);
+    _newEntityCount++;
   }
 
   /// Place one instance of another, already-closed component definition
@@ -3187,6 +3223,7 @@ class SkpBuilder implements GeometryHost {
   /// `Entities#add_cline(point, vector)`). See
   /// [_ArchiveWriter.writeConstructionLine] for the record's ground truth.
   void addConstructionLine(Point3 point, {Point3? point2, Point3? direction}) {
+    _resolveConstructionLineParams(point, point2: point2, direction: direction);
     _ensureGeometryWriter();
     _geometryWriter!.writeConstructionLine(point, point2: point2, direction: direction);
     _newEntityCount++;
@@ -3197,6 +3234,7 @@ class SkpBuilder implements GeometryHost {
   /// at [position] (inches, world space). See
   /// [_ArchiveWriter.writeConstructionPoint] for the record's ground truth.
   void addConstructionPoint(Point3 position) {
+    _validateFinitePoint3(position, 'addConstructionPoint');
     _ensureGeometryWriter();
     _geometryWriter!.writeConstructionPoint(position);
     _newEntityCount++;

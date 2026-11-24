@@ -1165,37 +1165,38 @@ class ArchiveWriter {
   // and a genuinely v17-native save): the record stores a point + normalized direction + two
   // signed distance parameters along that direction marking the visible segment's start/end. An
   // unbounded direction is written as the real +/-1e30 sentinel SketchUp itself uses.
-  void write_construction_line(Point3 point, std::optional<Point3> point2 = std::nullopt,
-                               std::optional<Point3> direction = std::nullopt,
-                               const GuideOptions& options = {}) {
+  static std::tuple<double, double, double, double, double> resolve_construction_line_params(
+      Point3 point, std::optional<Point3> point2, std::optional<Point3> direction) {
+    for (double v : point)
+      if (!std::isfinite(v)) throw SkpWriteError("construction line must be finite");
     if (point2.has_value() == direction.has_value()) {
       throw SkpWriteError("add_construction_line: pass exactly one of point2 or direction");
     }
-    double dx, dy, dz, start_param, end_param;
     if (point2) {
-      dx = (*point2)[0] - point[0];
-      dy = (*point2)[1] - point[1];
-      dz = (*point2)[2] - point[2];
-      double length = std::sqrt(dx * dx + dy * dy + dz * dz);
-      if (length == 0.0) throw SkpWriteError("add_construction_line: point and point2 coincide");
-      dx /= length;
-      dy /= length;
-      dz /= length;
-      start_param = 0.0;
-      end_param = length;
-    } else {
-      const Point3& d = *direction;
-      double dlen = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
-      for (double v : {point[0], point[1], point[2]})
+      for (double v : *point2)
         if (!std::isfinite(v)) throw SkpWriteError("construction line must be finite");
-      if (!std::isfinite(dlen) || dlen == 0.0)
-        throw SkpWriteError("add_construction_line: direction must be finite and nonzero");
-      dx = d[0] / dlen;
-      dy = d[1] / dlen;
-      dz = d[2] / dlen;
-      start_param = -kClineInfinite;
-      end_param = kClineInfinite;
+      double dx = (*point2)[0] - point[0];
+      double dy = (*point2)[1] - point[1];
+      double dz = (*point2)[2] - point[2];
+      double length = std::hypot(dx, dy, dz);
+      if (!std::isfinite(length) || length == 0.0)
+        throw SkpWriteError("add_construction_line: point and point2 coincide");
+      return {dx / length, dy / length, dz / length, 0.0, length};
     }
+    const Point3& d = *direction;
+    for (double v : d)
+      if (!std::isfinite(v)) throw SkpWriteError("construction line must be finite");
+    double dlen = std::hypot(d[0], d[1], d[2]);
+    if (!std::isfinite(dlen) || dlen == 0.0)
+      throw SkpWriteError("add_construction_line: direction must be finite and nonzero");
+    return {d[0] / dlen, d[1] / dlen, d[2] / dlen, -kClineInfinite, kClineInfinite};
+  }
+
+  void write_construction_line(Point3 point, std::optional<Point3> point2 = std::nullopt,
+                               std::optional<Point3> direction = std::nullopt,
+                               const GuideOptions& options = {}) {
+    auto [dx, dy, dz, start_param, end_param] =
+        resolve_construction_line_params(point, point2, direction);
     new_of_known_class("CConstructionLine", kConstructionLineSchema);
     preamble();
     drawbase(0, options.layer.value_or(0), options.hidden);
@@ -1210,7 +1211,13 @@ class ArchiveWriter {
   // Ground truth (real SketchUp 2025, SDK/Ruby cross-checked): a second, always-zero 3-double
   // block and a trailing zero byte follow the position - reserved/unused, written as zero to
   // match every real-file sample seen.
+  static void validate_construction_point(Point3 position) {
+    for (double v : position)
+      if (!std::isfinite(v)) throw SkpWriteError("construction point must be finite");
+  }
+
   void write_construction_point(Point3 position, const GuideOptions& options = {}) {
+    validate_construction_point(position);
     new_of_known_class("CConstructionPoint", kConstructionPointSchema);
     preamble();
     drawbase(0, options.layer.value_or(0), options.hidden);
@@ -2769,6 +2776,7 @@ void SkpBuilder::add_construction_line(Point3 point, std::optional<Point3> point
                                        std::optional<Point3> direction,
                                        const GuideOptions& options) {
   detail::check_layer_handle(*this, options.layer);
+  detail::ArchiveWriter::resolve_construction_line_params(point, point2, direction);
   impl_->ensure_geometry_writer();
   impl_->geometry_writer->write_construction_line(point, point2, direction, options);
   impl_->new_entity_count += 1;
@@ -2777,6 +2785,7 @@ void SkpBuilder::add_construction_line(Point3 point, std::optional<Point3> point
 
 void SkpBuilder::add_construction_point(Point3 position, const GuideOptions& options) {
   detail::check_layer_handle(*this, options.layer);
+  detail::ArchiveWriter::validate_construction_point(position);
   impl_->ensure_geometry_writer();
   impl_->geometry_writer->write_construction_point(position, options);
   impl_->new_entity_count += 1;
@@ -2873,6 +2882,11 @@ void ComponentDefinitionBuilder::add_construction_line(Point3 point, Point3 dire
 void SkpBuilder::add_construction_line(Point3 point, Point3 direction, double start_param,
                                        double end_param, const GuideOptions& options) {
   detail::check_layer_handle(*this, options.layer);
+  const double dlen = std::hypot(direction[0], direction[1], direction[2]);
+  for (double v : {point[0], point[1], point[2], start_param, end_param})
+    if (!std::isfinite(v)) throw SkpWriteError("construction line must be finite");
+  if (!std::isfinite(dlen) || dlen == 0.0)
+    throw SkpWriteError("add_construction_line: direction must be finite and nonzero");
   impl_->ensure_geometry_writer();
   impl_->new_entity_count += impl_->geometry_writer->write_construction_line(
       point, direction, start_param, end_param, options);

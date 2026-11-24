@@ -433,3 +433,66 @@ fn replays_guide_hidden_flag_and_layer() {
     assert!(lines[0].hidden);
     assert_eq!(lines[0].layer, "Guides");
 }
+
+#[test]
+fn skips_definitions_whose_only_guides_cannot_be_replayed() {
+    let path = temp_skp("half_zero_guides");
+    let mut builder = create();
+    let half = {
+        let mut def = builder
+            .add_component_definition("Half", &DefinitionOptions::default())
+            .unwrap();
+        def.add_construction_line(
+            [0.0; 3],
+            Some([12345.0, 0.0, 0.0]),
+            None,
+            &GuideOptions::default(),
+        )
+        .unwrap();
+        def.close().unwrap()
+    };
+    let zero = {
+        let mut def = builder
+            .add_component_definition("Zero", &DefinitionOptions::default())
+            .unwrap();
+        def.add_construction_line(
+            [0.0; 3],
+            Some([54321.0, 0.0, 0.0]),
+            None,
+            &GuideOptions::default(),
+        )
+        .unwrap();
+        def.close().unwrap()
+    };
+    let tri = [[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [0.0, 10.0, 0.0]];
+    builder.add_face(&tri, &FaceOptions::default()).unwrap();
+    builder
+        .add_instance(half, &InstanceOptions::default())
+        .unwrap();
+    builder
+        .add_instance(zero, &InstanceOptions::default())
+        .unwrap();
+
+    let mut raw = builder.to_bytes().unwrap();
+    for (target, repl) in [(12345.0_f64, 1e30_f64), (54321.0_f64, 0.0_f64)] {
+        let needle = target.to_le_bytes();
+        let pos = raw
+            .windows(8)
+            .position(|w| w == needle)
+            .expect("f64 marker");
+        raw[pos..pos + 8].copy_from_slice(&repl.to_le_bytes());
+    }
+    std::fs::write(&path, &raw).unwrap();
+
+    let mut result = open_existing(&path).unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert!(!result.definitions.contains_key("Half"));
+    assert!(!result.definitions.contains_key("Zero"));
+    let warnings = &result.warnings;
+    assert!(warnings.iter().any(|w| w.contains("'Half': skipped")));
+    assert!(warnings.iter().any(|w| w.contains("'Zero': skipped")));
+    let rebuilt = parse(result.builder.to_bytes().unwrap());
+    assert_eq!(rebuilt.root().faces.len(), 1);
+    assert!(rebuilt.definitions.is_empty());
+}

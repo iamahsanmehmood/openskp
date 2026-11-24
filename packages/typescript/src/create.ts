@@ -944,33 +944,11 @@ class ArchiveWriter {
    * start/end. An unbounded direction is written as the real ±1e30
    * sentinel SketchUp itself uses. */
   writeConstructionLine(point: Point3, point2?: Point3, direction?: Point3): void {
-    if ((point2 === undefined) === (direction === undefined)) {
-      throw new SkpWriteError('addConstructionLine: pass exactly one of point2 or direction');
-    }
-    let dir: Point3;
-    let startParam: number;
-    let endParam: number;
-    if (point2 !== undefined) {
-      const dx = point2[0] - point[0];
-      const dy = point2[1] - point[1];
-      const dz = point2[2] - point[2];
-      const length = Math.sqrt(dx * dx + dy * dy + dz * dz);
-      if (length === 0.0) throw new SkpWriteError('addConstructionLine: point and point2 coincide');
-      dir = [dx / length, dy / length, dz / length];
-      startParam = 0.0;
-      endParam = length;
-    } else {
-      const d = direction as Point3;
-      const dlen = Math.sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
-      if (dlen === 0.0) throw new SkpWriteError('addConstructionLine: direction must be nonzero');
-      dir = [d[0] / dlen, d[1] / dlen, d[2] / dlen];
-      startParam = -CLINE_INFINITE;
-      endParam = CLINE_INFINITE;
-    }
+    const [p, dir, startParam, endParam] = resolveConstructionLineParams(point, point2, direction);
     this.newOfKnownClass('CConstructionLine', CONSTRUCTIONLINE_SCHEMA);
     this.preamble();
     this.drawbase();
-    for (const v of [point[0], point[1], point[2], dir[0], dir[1], dir[2], startParam, endParam]) this.pushF64(v);
+    for (const v of [p[0], p[1], p[2], dir[0], dir[1], dir[2], startParam, endParam]) this.pushF64(v);
     this.pushZeros(4); // trailer
   }
 
@@ -982,10 +960,11 @@ class ArchiveWriter {
    * position - reserved/unused, written as zero to match every real-file
    * sample seen. */
   writeConstructionPoint(position: Point3): void {
+    const p = finitePoint3(position, 'addConstructionPoint');
     this.newOfKnownClass('CConstructionPoint', CONSTRUCTIONPOINT_SCHEMA);
     this.preamble();
     this.drawbase();
-    for (const v of [position[0], position[1], position[2], 0.0, 0.0, 0.0]) this.pushF64(v);
+    for (const v of [p[0], p[1], p[2], 0.0, 0.0, 0.0]) this.pushF64(v);
     this.pushZeros(1);
   }
 
@@ -1792,7 +1771,51 @@ export interface AddGroupOptions {
 type GroupPlacement = [Point3, Matrix3x3 | undefined, number, number, ReadonlyArray<[string, AttributeDict]>, boolean];
 
 function toPoint3(p: readonly [number, number, number]): Point3 {
+  if (
+    p == null ||
+    typeof p !== 'object' ||
+    typeof (p as ArrayLike<number>).length !== 'number' ||
+    (p as ArrayLike<number>).length !== 3
+  ) {
+    throw new SkpWriteError('expected a 3-element point or vector');
+  }
   return [Number(p[0]), Number(p[1]), Number(p[2])];
+}
+
+function finitePoint3(p: readonly [number, number, number], caller: string): Point3 {
+  const pt = toPoint3(p);
+  if (!Number.isFinite(pt[0]) || !Number.isFinite(pt[1]) || !Number.isFinite(pt[2])) {
+    throw new SkpWriteError(`${caller}: coordinates must be finite`);
+  }
+  return pt;
+}
+
+function resolveConstructionLineParams(
+  point: Point3,
+  point2?: Point3,
+  direction?: Point3
+): [Point3, Point3, number, number] {
+  const p = finitePoint3(point, 'addConstructionLine');
+  if ((point2 === undefined) === (direction === undefined)) {
+    throw new SkpWriteError('addConstructionLine: pass exactly one of point2 or direction');
+  }
+  if (point2 !== undefined) {
+    const p2 = finitePoint3(point2, 'addConstructionLine');
+    const dx = p2[0] - p[0];
+    const dy = p2[1] - p[1];
+    const dz = p2[2] - p[2];
+    const length = Math.hypot(dx, dy, dz);
+    if (!Number.isFinite(length) || length === 0.0) {
+      throw new SkpWriteError('addConstructionLine: point and point2 coincide');
+    }
+    return [p, [dx / length, dy / length, dz / length], 0.0, length];
+  }
+  const d = finitePoint3(direction as Point3, 'addConstructionLine');
+  const dlen = Math.hypot(d[0], d[1], d[2]);
+  if (!Number.isFinite(dlen) || dlen === 0.0) {
+    throw new SkpWriteError('addConstructionLine: direction must be finite and nonzero');
+  }
+  return [p, [d[0] / dlen, d[1] / dlen, d[2] / dlen], -CLINE_INFINITE, CLINE_INFINITE];
 }
 
 function attributeDictsFrom(
@@ -1929,6 +1952,22 @@ export class ComponentDefinitionBuilder {
       pts, this.vertexSlots, this.edgeRegistry,
       options.closed ?? false, options.hiddenEdges ?? false, options.softEdges ?? false, options.smoothEdges ?? false
     );
+  }
+
+  addConstructionLine(point: Point3, options: { point2?: Point3; direction?: Point3 } = {}): void {
+    this.checkWritable('construction lines');
+    this._skp._definitionWriter().writeConstructionLine(
+      toPoint3(point),
+      options.point2 !== undefined ? toPoint3(options.point2) : undefined,
+      options.direction !== undefined ? toPoint3(options.direction) : undefined
+    );
+    this.newEntityCount += 1;
+  }
+
+  addConstructionPoint(position: Point3): void {
+    this.checkWritable('construction points');
+    this._skp._definitionWriter().writeConstructionPoint(toPoint3(position));
+    this.newEntityCount += 1;
   }
 
   /** Place one instance of another, already-closed component definition
@@ -2556,12 +2595,11 @@ export class SkpBuilder {
    * `Entities#add_cline(point, vector)`). See
    * ArchiveWriter.writeConstructionLine for the record's ground truth. */
   addConstructionLine(point: Point3, options: { point2?: Point3; direction?: Point3 } = {}): void {
+    const p2 = options.point2 !== undefined ? toPoint3(options.point2) : undefined;
+    const dir = options.direction !== undefined ? toPoint3(options.direction) : undefined;
+    resolveConstructionLineParams(point, p2, dir);
     this.ensureGeometryWriter();
-    (this.geometryWriter as ArchiveWriter).writeConstructionLine(
-      toPoint3(point),
-      options.point2 !== undefined ? toPoint3(options.point2) : undefined,
-      options.direction !== undefined ? toPoint3(options.direction) : undefined
-    );
+    (this.geometryWriter as ArchiveWriter).writeConstructionLine(toPoint3(point), p2, dir);
     this.newEntityCount += 1;
     this.faceCount += 1; // reuses the "at least one root entity" check in toBytes
   }
@@ -2570,8 +2608,9 @@ export class SkpBuilder {
    * at `position` (inches, world space). See
    * ArchiveWriter.writeConstructionPoint for the record's ground truth. */
   addConstructionPoint(position: Point3): void {
+    const pos = finitePoint3(position, 'addConstructionPoint');
     this.ensureGeometryWriter();
-    (this.geometryWriter as ArchiveWriter).writeConstructionPoint(toPoint3(position));
+    (this.geometryWriter as ArchiveWriter).writeConstructionPoint(pos);
     this.newEntityCount += 1;
     this.faceCount += 1; // reuses the "at least one root entity" check in toBytes
   }
