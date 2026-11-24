@@ -47,11 +47,15 @@ from ._vff_writer.template import EntityEditor, Template
 from .create import (
     Point3,
     SkpWriteError,
+    _archive_uuid,
     _is_coplanar,
+    _resolve_matrix3x3,
 )
 
 __all__ = [
     "VffBuilder",
+    "VffComponentDefinitionBuilder",
+    "ComponentDefinitionBuilder",
     "create",
     "create_vff",
     "compute_integrity_word",
@@ -118,6 +122,17 @@ def _edge_flags(hidden: bool, soft: bool, smooth: bool) -> int:
     return 0x06 | (0x01 if hidden else 0) | (0x08 if soft else 0) | (0x10 if smooth else 0)
 
 
+def _matrix13(
+    translation: Sequence[float],
+    matrix3x3: Optional[Sequence[float]],
+    rotation: Optional[Rotation],
+) -> List[float]:
+    """A 13-value placement matrix: 3x3 row-major, translation, scale 1."""
+    matrix = _resolve_matrix3x3(matrix3x3, rotation)
+    if matrix is None:
+        matrix = (1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
+    tx, ty, tz = (float(c) for c in translation)
+    return [float(c) for c in matrix] + [tx, ty, tz, 1.0]
 
 
 def _points(points: Sequence[Sequence[float]], label: str) -> List[Point3]:
@@ -132,6 +147,184 @@ def _points(points: Sequence[Sequence[float]], label: str) -> List[Point3]:
 # ── Component definitions / groups ──────────────────────────────────────
 
 
+class ComponentDefinitionBuilder:
+    """A component definition under construction (use as a context manager).
+
+    A definition can hold its own faces and nested placements: component
+    instances (:meth:`add_instance`) and groups (:meth:`add_group`).  Groups
+    are definitions with kind 1 whose placement is wrapped in the file's
+    group record; the builder places them at the point they are closed.
+    """
+
+    def __init__(
+        self,
+        builder: "VffBuilder",
+        name: str,
+        *,
+        kind: int = 0,
+        owner: Optional[EntityEditor] = None,
+        placement: Optional[dict] = None,
+        always_faces_camera: bool = False,
+        shadows_face_sun: bool = False,
+        guid: Optional[bytes] = None,
+    ) -> None:
+        self._builder = builder
+        self.name = name
+        self.kind = kind
+        self._owner = owner
+        self._placement = placement or {}
+        self._container_id = builder._template.alloc_id()
+        self._editor = EntityEditor(
+            builder._template, container_id=self._container_id
+        )
+        self._closed = False
+        self._instance_id: Optional[int] = None
+        self._always_faces_camera = always_faces_camera
+        self._shadows_face_sun = shadows_face_sun
+        self._guid = guid
+
+    # -- geometry ---------------------------------------------------------
+
+    def add_face(
+        self,
+        points: Sequence[Point3],
+        material: Optional[int] = None,
+        layer: Optional[int] = None,
+        back_material: Optional[int] = None,
+        hidden: bool = False,
+        soft_edges: bool = False,
+        smooth_edges: bool = False,
+        hidden_edges: bool = False,
+        auto_triangulate: bool = False,
+        holes: Sequence[Sequence[Point3]] = (),
+    ) -> None:
+        if self._closed:
+            raise SkpWriteError("this definition is already closed")
+        self._builder._add_face_to(
+            self._editor,
+            points,
+            material,
+            layer,
+            back_material,
+            hidden,
+            soft_edges,
+            smooth_edges,
+            hidden_edges,
+            auto_triangulate,
+            holes,
+        )
+
+    # -- placements -------------------------------------------------------
+
+    def add_instance(
+        self,
+        definition: "ComponentDefinitionBuilder",
+        name: Optional[str] = None,
+        translation: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+        matrix3x3: Optional[Matrix3x3] = None,
+        rotation: Optional[Rotation] = None,
+        material: Optional[int] = None,
+        layer: Optional[int] = None,
+        hidden: bool = False,
+    ) -> None:
+        if self._closed:
+            raise SkpWriteError("this definition is already closed")
+        self._builder._check_placement(
+            definition, translation, matrix3x3, rotation, material, layer
+        )
+        self._editor.add_instance(
+            definition.id,
+            _matrix13(translation, matrix3x3, rotation),
+            definition_bounds=definition.bounds,
+            name=name if name is not None else definition.name,
+            material=material,
+            layer=layer,
+            hidden=hidden,
+        )
+
+    def add_group_instance(
+        self,
+        definition: "ComponentDefinitionBuilder",
+        name: Optional[str] = None,
+        translation: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+        matrix3x3: Optional[Matrix3x3] = None,
+        rotation: Optional[Rotation] = None,
+        material: Optional[int] = None,
+        layer: Optional[int] = None,
+        hidden: bool = False,
+    ) -> None:
+        if self._closed:
+            raise SkpWriteError("this definition is already closed")
+        self._builder._check_placement(
+            definition, translation, matrix3x3, rotation, material, layer
+        )
+        self._editor.add_group(
+            definition.id,
+            _matrix13(translation, matrix3x3, rotation),
+            definition_bounds=definition.bounds,
+            name=name if name is not None else definition.name,
+            material=material,
+            layer=layer,
+            hidden=hidden,
+        )
+
+
+    # -- lifecycle --------------------------------------------------------
+
+    def close(self) -> "ComponentDefinitionBuilder":
+        if not self._closed:
+            self._editor.finalize()
+            self._builder._template.add_definition(
+                self._editor.container,
+                self.name,
+                self._container_id,
+                kind=self.kind,
+                guid=self._guid,
+                always_faces_camera=self._always_faces_camera,
+                shadows_face_sun=self._shadows_face_sun,
+            )
+            self._closed = True
+            if self._placement:
+                placement = self._placement
+                self._instance_id = self._owner.add_group(
+                    self._container_id,
+                    _matrix13(
+                        placement["translation"],
+                        placement["matrix3x3"],
+                        placement["rotation"],
+                    ),
+                    definition_bounds=self.bounds,
+                    name=placement.get("name", ""),
+                    material=placement["material"],
+                    layer=placement["layer"],
+                    hidden=placement["hidden"],
+                )
+        return self
+
+    @property
+    def id(self) -> int:
+        if not self._closed:
+            raise SkpWriteError("definition is still open")
+        return self._container_id
+
+    @property
+    def instance_id(self) -> Optional[int]:
+        return self._instance_id
+
+    @property
+    def is_group(self) -> bool:
+        return self.kind == 1
+
+    @property
+    def bounds(self) -> Optional[Sequence[float]]:
+        return self._editor.bounds
+
+    def __enter__(self) -> "ComponentDefinitionBuilder":
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> None:
+        if exc_type is None:
+            self.close()
 
 
 
@@ -223,6 +416,24 @@ class VffBuilder:
         if layer and layer not in self._template.layer_ids:
             raise SkpWriteError(f"unknown layer handle: {layer!r}")
 
+    def _check_placement(
+        self,
+        definition: "ComponentDefinitionBuilder",
+        translation: Sequence[float],
+        matrix3x3: Optional[Matrix3x3],
+        rotation: Optional[Rotation],
+        material: Optional[int],
+        layer: Optional[int],
+    ) -> None:
+        if not isinstance(definition, ComponentDefinitionBuilder):
+            raise SkpWriteError("this needs a component definition builder")
+        if definition._builder is not self:
+            raise SkpWriteError("the definition belongs to a different builder")
+        if not definition._closed:
+            raise SkpWriteError("close the definition before placing instances")
+        self._validate_material(material)
+        self._validate_layer(layer)
+        _matrix13(translation, matrix3x3, rotation)
 
     # -- geometry ---------------------------------------------------------
 
@@ -314,8 +525,48 @@ class VffBuilder:
 
     # -- definitions ------------------------------------------------------
 
+    def add_component_definition(
+        self,
+        name: str,
+        always_faces_camera: bool = False,
+        shadows_face_sun: bool = False,
+        guid: Optional[str] = None,
+    ) -> ComponentDefinitionBuilder:
+        """Start a component definition; add geometry inside a ``with`` block."""
+        guid_bytes = _archive_uuid(guid)
+        return ComponentDefinitionBuilder(
+            self,
+            name,
+            always_faces_camera=always_faces_camera,
+            shadows_face_sun=shadows_face_sun,
+            guid=guid_bytes,
+        )
 
 
+    def add_instance(
+        self,
+        definition: ComponentDefinitionBuilder,
+        name: Optional[str] = None,
+        translation: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+        matrix3x3: Optional[Matrix3x3] = None,
+        rotation: Optional[Rotation] = None,
+        material: Optional[int] = None,
+        layer: Optional[int] = None,
+        hidden: bool = False,
+    ) -> None:
+        """Place one instance of a closed definition in the model root."""
+        self._check_placement(
+            definition, translation, matrix3x3, rotation, material, layer
+        )
+        self._root.add_instance(
+            definition.id,
+            _matrix13(translation, matrix3x3, rotation),
+            definition_bounds=definition.bounds,
+            name=name if name is not None else definition.name,
+            material=material,
+            layer=layer,
+            hidden=hidden,
+        )
 
     # -- document settings ------------------------------------------------
 
@@ -333,6 +584,11 @@ class VffBuilder:
     def save(self, path: str) -> None:
         """Write the finished file to ``path``."""
         Path(path).write_bytes(self.to_bytes())
+
+
+# Public alias so callers can name the VFF definition builder without
+# colliding with the classic :class:`openskp.create.ComponentDefinitionBuilder`.
+VffComponentDefinitionBuilder = ComponentDefinitionBuilder
 
 
 def create(

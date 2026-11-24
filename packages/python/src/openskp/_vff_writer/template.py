@@ -269,6 +269,40 @@ def _material_record(entity_id: int, name: str, owner: int) -> Record:
 
 
 
+def _definition(
+    container: Record,
+    name: str,
+    guid: bytes,
+    timestamp: int,
+    kind: int = 0,
+    always_faces_camera: bool = False,
+    shadows_face_sun: bool = False,
+) -> Record:
+    behaviour = Record(
+        T_DEFINITION_BEHAVIOUR,
+        children=[
+            record(0x1B59, u32(0)),
+            record(0x1B5A, u32(0)),
+            record(0x1B5B, u8(0)),
+            record(0x1B5C, u8(0)),
+            record(0x1B5D, u8(1 if always_faces_camera else 0)),
+            record(0x1B5E, u8(1 if shadows_face_sun else 0)),
+        ],
+    )
+    return Record(
+        T_DEFINITION,
+        children=[
+            container,
+            record(T_DEFINITION_GUID, guid),
+            record(T_DEFINITION_NAME, name.encode("utf-8")),
+            record(T_DEFINITION_DESCRIPTION, b""),
+            record(T_DEFINITION_SOURCE, b""),
+            record(T_DEFINITION_FLAG, u8(0)),
+            record(T_DEFINITION_KIND, u32(kind)),
+            record(T_DEFINITION_TIMESTAMP, u32(timestamp)),
+            behaviour,
+        ],
+    )
 
 
 def _empty_relationships() -> Record:
@@ -679,6 +713,28 @@ class Template:
         )
         return identifier
 
+    def add_definition(
+        self,
+        container: Record,
+        name: str,
+        container_id: int,
+        kind: int = 0,
+        *,
+        guid: Optional[bytes] = None,
+        always_faces_camera: bool = False,
+        shadows_face_sun: bool = False,
+    ) -> int:
+        definition = _definition(
+            container,
+            name,
+            self.guid_bytes() if guid is None else guid,
+            self.definition_time(),
+            kind=kind,
+            always_faces_camera=always_faces_camera,
+            shadows_face_sun=shadows_face_sun,
+        )
+        self._definition_list().children.append(definition)
+        return container_id
 
     def _add_entry(self, name: str, data: bytes, flag: int = 0x0006) -> None:
         if name in self._entry_names:
@@ -994,6 +1050,40 @@ class EntityEditor:
 
 
 
+    def add_instance(
+        self,
+        definition_container_id: int,
+        matrix13: Sequence[float],
+        *,
+        definition_bounds: Optional[Sequence[float]] = None,
+        name: str = "",
+        material: Optional[int] = None,
+        layer: Optional[int] = None,
+        hidden: bool = False,
+    ) -> int:
+        identifier = self.template.alloc_id()
+        flags = 0x06 | (0x01 if hidden else 0)
+        instance = Record(
+            T_INSTANCE,
+            children=[
+                _drawing(
+                    identifier,
+                    material=material,
+                    layer=layer,
+                    flags=flags,
+                ),
+                record(T_INSTANCE_NAME, name.encode("utf-8")),
+                record(T_INSTANCE_TRANSFORM, f64s(matrix13)),
+                record(T_INSTANCE_DEFINITION, varint(definition_container_id)),
+                record(T_INSTANCE_GUID, self.template.guid_bytes()),
+            ],
+        )
+        self._pool(T_COMPONENTS).children.append(instance)
+        self.order.append(identifier)
+        if definition_bounds is not None:
+            for corner in _box_corners(definition_bounds):
+                self._extend_bounds(_transform_point(corner, matrix13))
+        return identifier
 
 
     # -- finalize ---------------------------------------------------------
@@ -1063,5 +1153,20 @@ class EntityEditor:
         return self.container
 
 
+def _box_corners(bounds: Sequence[float]) -> List[Tuple[float, float, float]]:
+    min_x, min_y, min_z, max_x, max_y, max_z = bounds
+    return [
+        (x, y, z)
+        for x in (min_x, max_x)
+        for y in (min_y, max_y)
+        for z in (min_z, max_z)
+    ]
 
 
+def _transform_point(point: Sequence[float], matrix13: Sequence[float]) -> Tuple[float, float, float]:
+    x, y, z = point
+    return (
+        matrix13[0] * x + matrix13[1] * y + matrix13[2] * z + matrix13[9],
+        matrix13[3] * x + matrix13[4] * y + matrix13[5] * z + matrix13[10],
+        matrix13[6] * x + matrix13[7] * y + matrix13[8] * z + matrix13[11],
+    )

@@ -341,3 +341,33 @@ def test_material_errors_are_skpwriteerrors():
         create_vff().add_layer("bad", (1, 2, 300))
 
 
+def test_definition_flags_and_explicit_guid(tmp_path):
+    guid = "01234567-89AB-CDEF-0123-456789ABCDEF"
+    builder = create_vff()
+    with builder.add_component_definition(
+        "Cam", always_faces_camera=True, shadows_face_sun=True, guid=guid
+    ) as definition:
+        definition.add_face([(0, 0, 0), (10, 0, 0), (10, 10, 0), (0, 10, 0)])
+    builder.add_instance(definition)
+    model = parse_bytes(tmp_path, builder.to_bytes())
+    cam = next(d for d in model.definitions.values() if d.name == "Cam")
+    assert cam.guid == guid.replace("-", "").upper()
+    assert cam.always_faces_camera
+    assert cam.shadows_face_sun
+
+
+def test_definition_lifecycle_errors():
+    builder = create_vff()
+    definition = builder.add_component_definition("D")
+    with pytest.raises(SkpWriteError):
+        builder.add_instance(definition)
+    definition.close()
+    with pytest.raises(SkpWriteError):
+        definition.add_face([(0, 0, 0), (1, 0, 0), (1, 1, 0)])
+    with pytest.raises(SkpWriteError):
+        builder.add_instance(other := create_vff().add_component_definition("Other"))
+    other.close()
+    with pytest.raises(SkpWriteError):
+        builder.add_instance(other)
+
+
