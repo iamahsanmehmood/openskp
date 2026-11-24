@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — Python, TypeScript, .NET & Dart: classic instances keep their attribute dictionaries and display names in scenes (#633)
+
+- `build_scene` and `build_instanced_scene` now fill `attribute_dictionaries` for pre-2021 instances (and files the writers produce) and apply the `name` / `label` / `code` display-name override, as C++ and Rust do. `mesh_index` names match the hierarchy in TypeScript, .NET and Dart.
+- Python: the override now uses the stored value's text in both scene builders, so `0` and `False` count as names (as in the other ports) and an empty string still doesn't.
+
 ### Added — Python, TypeScript, .NET & Dart: writer `set_document_options`, 8-byte persistent-id counter, and collinear `auto_triangulate` fan handling (#477, #285)
 
 - Ports C++ and Rust's `DocumentOptions` / `set_document_options` (`setDocumentOptions`, `SetDocumentOptions`, `#477`) across Python, TypeScript, .NET and Dart: sets decimal length/area/volume display units (`0..5`), display precision (`0..6`), current rendering options, and working/saved style item tables in the v17 scaffold without scaling model geometry.

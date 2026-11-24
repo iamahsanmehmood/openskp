@@ -531,7 +531,7 @@ export function buildInstancedSceneFromParsed(
       // D007/DC05 TLV walk (VFF only); a no-op for legacy instances, whose
       // precomputed `properties` seeded above survives unchanged.
       const d007 = inst.children.find((c) => c.tag === 'D007');
-      let attributeDicts: Record<string, Record<string, VffAttrValue>> | null = null;
+      let attributeDicts: Record<string, Record<string, VffAttrValue>> | null = inst.attributeDicts ?? null;
       if (d007) {
         try {
           properties = extractDynamicProperties(d007, options);

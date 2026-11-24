@@ -16,7 +16,7 @@
  */
 
 import { RawPage } from './pages-dimensions';
-import { ArcFrame, GeometryBuilderFace, GeometryBuilderInstance, ParsedDefinition } from './geometry';
+import { ArcFrame, GeometryBuilderFace, GeometryBuilderInstance, ParsedDefinition, VffAttrValue } from './geometry';
 import { EdgeFlagStore } from './edge-flags';
 import { DefaultVertexStore, type VertexStore } from './vertex-store';
 import { DefaultEdgeStore, type EdgeStore } from './edge-store';
@@ -995,6 +995,21 @@ export function extractLegacyDynamicProperties(attrs: any): Record<string, strin
     }
   }
   return {};
+}
+
+/** Extract every attribute dictionary attached to a legacy entity's
+ * already-parsed CAttributeContainer, keyed by the dictionary's own
+ * declared name. */
+export function extractLegacyAttributeDictionaries(attrs: any): Record<string, Record<string, VffAttrValue>> {
+  const out: Record<string, Record<string, VffAttrValue>> = {};
+  if (!attrs || typeof attrs !== 'object') return out;
+  for (const [, value] of attrs.children || []) {
+    if (!value || typeof value !== 'object') continue;
+    const name = value.name;
+    if (!name || typeof name !== 'string') continue;
+    out[name] = { ...(value.entries || {}) };
+  }
+  return out;
 }
 
 function readLayer(ar: Archive, r: R): any {
@@ -2666,6 +2681,7 @@ function fillBuilder(builder: LegacyBuilder, ents: [number, string | null, any][
         hidden: Boolean(v.db.hidden),
         children: [],
         properties: extractLegacyDynamicProperties(v.attrs),
+        attributeDicts: extractLegacyAttributeDictionaries(v.attrs),
       });
     } else if (k === 'image') {
       // Placed exactly like an ordinary component instance - same

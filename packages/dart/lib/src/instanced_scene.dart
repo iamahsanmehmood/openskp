@@ -459,7 +459,7 @@ class InstancedSceneBuilder {
         (int, int, int)? instColor = inheritedColor;
         RawMaterial? instMaterial = inheritedMaterial;
         var properties = Map<String, String>.from(inst.properties ?? {});
-        Map<String, Map<String, Object?>>? instAttributeDicts;
+        Map<String, Map<String, Object?>>? instAttributeDicts = inst.attributeDicts;
 
         // A classic (pre-2021) instance has no D007: its own tag and paint
         // were read with it.

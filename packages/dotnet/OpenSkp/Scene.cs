@@ -597,7 +597,7 @@ namespace OpenSkp
                     // state is identical: an instance's update is applied to
                     // every mesh under its path, and the outermost (most
                     // shallow) ancestor's update wins.
-                    pathUpdates[fullPathName] = (properties, inst.Name ?? "", attributeDictionaries);
+                    pathUpdates[fullPathName] = (properties, displayName, attributeDictionaries);
                 }
 
                 return childInstancesInfo;
