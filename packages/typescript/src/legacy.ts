@@ -2734,6 +2734,7 @@ class LegacyBuilder {
     hidden?: boolean;
   }[] = [];
   constructionPoints: { position: [number, number, number]; layerId?: number | null; hidden?: boolean }[] = [];
+  edgeLayers = new Map<number, number>();
   edgeCurves = new Map<number, number>();
   edgePids = new Map<number, number>();
   arcCurves = new Map<number, ArcFrame>();
@@ -2774,6 +2775,9 @@ function addEdge(
   const flags = (db.soft ? 0x08 : 0) | (db.smooth ? 0x10 : 0) | (db.hidden ? 0x01 : 0);
   if (flags) {
     builder.edgeFlags.set(slot, flags);
+  }
+  if (db.layer) {
+    builder.edgeLayers.set(slot, db.layer);
   }
   // The edge's parent Curve (the CCurve/CArcCurve slot), and, if that curve
   // is an analytic arc, its frame: it arrives on the edge that first
@@ -2827,6 +2831,7 @@ function fillBuilder(
         uvProjectedBack: false,
         hidden: Boolean(v.db.hidden),
         persistentId: pids?.get(s) ?? 0,
+        layerId: v.db.layer || null,
       };
       const attrs = v.attrs;
       if (attrs && typeof attrs === 'object') {

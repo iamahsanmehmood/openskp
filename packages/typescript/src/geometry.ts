@@ -39,6 +39,8 @@ export interface GeometryBuilderFace {
   uvProjectedBack?: boolean;
   hidden?: boolean;
   persistentId?: number;
+  /** Layer ID this face belongs to (VFF D007 -> D207, or classic drawbase), or null. */
+  layerId?: number | null;
 }
 
 /** The analytic frame of a Curve that is one arc: the points
@@ -63,6 +65,8 @@ export class GeometryBuilder {
   /** Edge id -> display flag byte (D307). Backed by a Uint8Array rather
    * than a Map: the value is one byte, and a Map entry costs ~30. */
   edgeFlags = new EdgeFlagStore();
+  /** Edge id -> layer entity id (VFF D207 or classic drawbase layer id). */
+  edgeLayers = new Map<number, number>();
   /** Edge id -> the entity id of the Curve the edge belongs to (SketchUp's
    * `Edge#curve`). Absent means the edge belongs to no curve. */
   edgeCurves = new Map<number, number>();
@@ -313,6 +317,10 @@ export function extractGeometryFromNodes(
           if (d307 && d307.payload.length > 0) {
             builder.edgeFlags.set(eId, d307.payload[0]);
           }
+          const d207 = d007.children.find((c) => c.tag === 'D207');
+          if (d207 && d207.payload.length > 0) {
+            builder.edgeLayers.set(eId, parseVarInt(d207.payload, 0, d207.payload.length));
+          }
         }
 
         // BB0B = the parent Curve's entity id (Edge#curve).
@@ -394,6 +402,7 @@ export function extractGeometryFromNodes(
           }
         }
         let faceMatId: number | null = null;
+        let faceLayerId: number | null = null;
         let uvFront: number[] | null = null;
         let uvBack: number[] | null = null;
         let faceHidden = false;
@@ -402,6 +411,10 @@ export function extractGeometryFromNodes(
           const d107 = d007.children.find((c) => c.tag === 'D107');
           if (d107) {
             faceMatId = parseVarInt(d107.payload, 0, d107.payload.length);
+          }
+          const d207 = d007.children.find((c) => c.tag === 'D207');
+          if (d207 && d207.payload.length > 0) {
+            faceLayerId = parseVarInt(d207.payload, 0, d207.payload.length);
           }
           const dc05 = d007.children.find((c) => c.tag === 'DC05');
           if (dc05) {
@@ -432,6 +445,7 @@ export function extractGeometryFromNodes(
           uvTransform: uvFront,
           uvTransformBack: uvBack,
           hidden: faceHidden,
+          layerId: faceLayerId,
         });
       }
     } else if (tag === '6419') {
@@ -1252,4 +1266,52 @@ export function resolveTextureBytes(
   }
 
   return { data, filename: resolvedFilename };
+}
+
+export interface FaceLayerSummary {
+  uniformLayer: string | null;
+  majorityLayer: string | null;
+}
+
+/**
+ * Summarize a definition's face layers once per definition: `uniformLayer` is
+ * set only when every face of the definition has the same tag (other than
+ * `Layer0`); `majorityLayer` is the most common non-`Layer0` face tag.
+ */
+export function summarizeFaceLayers(
+  builder: GeometryBuilder,
+  layerIdToName: Map<number, string>
+): FaceLayerSummary {
+  if (builder.faces.size === 0) {
+    return { uniformLayer: null, majorityLayer: null };
+  }
+  const counts = new Map<number, number>();
+  let allSame = true;
+  let commonName: string | null = null;
+  for (const f of builder.faces.values()) {
+    const lid = f.layerId;
+    const fname = lid ? (layerIdToName.get(lid) ?? '') : '';
+    if (fname && fname !== 'Layer0') {
+      counts.set(lid!, (counts.get(lid!) ?? 0) + 1);
+      if (commonName === null) {
+        commonName = fname;
+      } else if (fname !== commonName) {
+        allSame = false;
+      }
+    } else {
+      allSame = false;
+    }
+  }
+  let majorityLayer: string | null = null;
+  let bestCount = 0;
+  for (const [id, count] of counts) {
+    if (count > bestCount) {
+      bestCount = count;
+      majorityLayer = layerIdToName.get(id) ?? null;
+    }
+  }
+  return {
+    uniformLayer: allSame ? commonName : null,
+    majorityLayer,
+  };
 }

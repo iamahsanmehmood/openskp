@@ -559,6 +559,41 @@ def build_scene(
         color_to_material_index[key] = idx
         return idx
 
+    face_layer_summary_cache: Dict[Any, Tuple[Optional[str], Optional[str]]] = {}
+
+    def _face_layer_summary(def_id: Any) -> Tuple[Optional[str], Optional[str]]:
+        hit = face_layer_summary_cache.get(def_id)
+        if hit is not None or def_id in face_layer_summary_cache:
+            return hit  # type: ignore[return-value]
+        d = defs_dict.get(def_id)
+        if d is None or not d["builder"].faces:
+            res: Tuple[Optional[str], Optional[str]] = (None, None)
+            face_layer_summary_cache[def_id] = res
+            return res
+        counts: Dict[Any, int] = {}
+        all_same = True
+        common_name: Optional[str] = None
+        for f in d["builder"].faces.values():
+            lid = f.get("layer")
+            fname = layer_id_to_name.get(lid, "") if lid else ""
+            if fname == "Layer0":
+                fname = ""
+            if fname:
+                counts[lid] = counts.get(lid, 0) + 1
+                if common_name is None:
+                    common_name = fname
+                elif fname != common_name:
+                    all_same = False
+            else:
+                all_same = False
+        uniform_layer = common_name if all_same else None
+        majority_layer = (
+            layer_id_to_name.get(max(counts, key=counts.get)) if counts else None
+        )
+        res = (uniform_layer, majority_layer)
+        face_layer_summary_cache[def_id] = res
+        return res
+
     def instantiate(
         def_id,
         current_matrix,
@@ -571,39 +606,27 @@ def build_scene(
         if d is None:
             return []
         builder = d["builder"]
+        uniform_layer, majority_layer = _face_layer_summary(def_id)
+        mesh_layer = (
+            (uniform_layer if uniform_layer is not None else parent_layer)
+            if parent_layer == "Layer0"
+            else parent_layer
+        )
 
         if builder.faces:
-            # A definition's faces carry their own
-            # layer (legacy drawbase). The inherited `parent_layer` is never
-            # resolvable for legacy instances, so it silently degraded to
-            # "Layer0" for every face - which starved export/ifc.py's
-            # classifier (it types elements by name, then by layer) of the
-            # one signal that was actually present in the file.
-            _lc: Dict[Any, int] = {}
-            for _f in builder.faces.values():
-                _l = _f.get("layer")
-                if _l:
-                    _lc[_l] = _lc.get(_l, 0) + 1
-            if _lc:
-                _top_layer = max(_lc, key=_lc.get)
-                parent_layer = layer_id_to_name.get(_top_layer, parent_layer)
-            # Group faces sharing a resolved (color, double_sided, texture)
-            # identity into one mesh each, in local space - shared with the
-            # instanced builder (openskp#200) via _face_groups.py: a face
-            # whose front/back resolve to the SAME color is emitted once,
-            # with its glTF material marked doubleSided so it's visible from
-            # either side without needing duplicate geometry; a face whose
-            # front/back genuinely differ is emitted as TWO single-sided
-            # triangle sets - one normal-wound using the front material, one
-            # reverse-wound using the back material - so each side renders
-            # its own correct color instead of the front material leaking
-            # onto (or the back vanishing from) the far side.
+            # An untagged (Layer0) placement's own mesh takes its faces' tag
+            # only when every face of the definition has the same tag (other
+            # than Layer0); tagged placements keep their own or inherited tag,
+            # and child instances never inherit a face's tag. For
+            # unpainted_faces="tag" and files without style face colours, the
+            # majority face tag still supplies the unpainted fallback colour.
             if inherited_color is not None:
                 fallback_color = fallback_back_color = inherited_color
             elif style_colors is not None:
                 fallback_color, fallback_back_color = style_colors
             else:
-                fallback_color = fallback_back_color = get_layer_color(parent_layer)
+                color_layer = majority_layer if majority_layer is not None else parent_layer
+                fallback_color = fallback_back_color = get_layer_color(color_layer)
             face_groups = build_local_face_groups(
                 builder,
                 FaceGroupContext(
@@ -635,13 +658,13 @@ def build_scene(
                     f"_{face_color[0]}_{face_color[1]}_{face_color[2]}_{'ds' if double_sided else 'ss'}"
                     if len(face_groups) > 1 else ""
                 )
-                geom_name = f"mesh_{mesh_counter[0]}_{safe_path}_{parent_layer}{color_suffix}"
+                geom_name = f"mesh_{mesh_counter[0]}_{safe_path}_{mesh_layer}{color_suffix}"
                 mesh_counter[0] += 1
 
                 mesh_index[geom_name] = MeshMetadata(
                     name="ROOT" if is_root else (path_name.split(" / ")[-1] or ""),
                     definition_name=d.get("name") or "",
-                    layer=parent_layer,
+                    layer=mesh_layer,
                     position_mm=(round(tx, 2), round(ty, 2), round(tz, 2)),
                     properties={},
                     path=path_name,
@@ -740,9 +763,9 @@ def build_scene(
                 _l = _edge_layers.get(_eid)
                 if _l:
                     _lc[_l] = _lc.get(_l, 0) + 1
-            run_layer = parent_layer
+            run_layer = mesh_layer
             if _lc:
-                run_layer = layer_id_to_name.get(max(_lc, key=_lc.get), parent_layer)
+                run_layer = layer_id_to_name.get(max(_lc, key=_lc.get), mesh_layer)
             # Root-level loose geometry has no name in the file whatsoever -
             # an edge is just an edge, only components get named. Labelling
             # all 444 of them "ROOT" would be technically honest and useless,
@@ -879,6 +902,12 @@ def build_scene(
             child_nodes = instantiate(ref_idx, new_matrix, l_name, full_path_name, inst_color, inst_material)
             active_definitions.discard(ref_idx)
 
+            node_layer = l_name
+            if l_name == "Layer0" and not child_nodes and ref_idx in defs_dict:
+                child_uniform, _ = _face_layer_summary(ref_idx)
+                if child_uniform is not None:
+                    node_layer = child_uniform
+
             tx = new_matrix[9] * INCHES_TO_MM if len(new_matrix) > 9 else 0.0
             ty = new_matrix[10] * INCHES_TO_MM if len(new_matrix) > 10 else 0.0
             tz = new_matrix[11] * INCHES_TO_MM if len(new_matrix) > 11 else 0.0
@@ -887,7 +916,7 @@ def build_scene(
                 name=display_name,
                 name_is_generated=name_is_generated,
                 definition_name=def_name,
-                layer=l_name,
+                layer=node_layer,
                 position_mm=(round(tx, 2), round(ty, 2), round(tz, 2)),
                 properties=properties,
                 attribute_dictionaries=attribute_dicts,

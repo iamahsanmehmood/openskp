@@ -291,6 +291,15 @@ namespace OpenSkp
 
             var meshResources = new List<InstancedMeshResource>();
             var resourceIdByKey = new Dictionary<string, string>();
+            var faceLayerCache = new Dictionary<long, (string? UniformLayer, string? MajorityLayer)>();
+            (string? UniformLayer, string? MajorityLayer) GetFaceLayerSummary(long? defId, GeometryBuilder builder)
+            {
+                long key = defId ?? -1L;
+                if (faceLayerCache.TryGetValue(key, out var hit)) return hit;
+                hit = Geometry.SummarizeFaceLayers(builder, layerIdToName);
+                faceLayerCache[key] = hit;
+                return hit;
+            }
 
             // Identity of a mesh resource: (definition, effective fallback
             // color) - the ONLY inputs that can change what
@@ -321,7 +330,8 @@ namespace OpenSkp
                 }
                 else
                 {
-                    fallbackColor = fallbackBackColor = GetLayerColor(layer);
+                    string colorLayer = GetFaceLayerSummary(defId, builder).MajorityLayer ?? layer;
+                    fallbackColor = fallbackBackColor = GetLayerColor(colorLayer);
                 }
                 var matPart = inheritedMaterial != null
                     ? $"|{inheritedMaterial.Name}:{FaceGroups.ResolveTransparency(inheritedMaterial)}"
@@ -591,12 +601,18 @@ namespace OpenSkp
                         }
                     }
 
+                    string nodeLayer = lName;
+                    if (lName == "Layer0" && children.Count == 0 && refIdx.HasValue && defsDict.TryGetValue(refIdx.Value, out var leafDef))
+                    {
+                        nodeLayer = GetFaceLayerSummary(refIdx.Value, leafDef.Builder).UniformLayer ?? lName;
+                    }
+
                     nodes.Add(new InstancedNode
                     {
                         Name = displayName,
                         NameIsGenerated = nameIsGenerated,
                         DefinitionName = childDefName,
-                        Layer = lName,
+                        Layer = nodeLayer,
                         Matrix = ToGltfMatrix(inst.Matrix),
                         PositionMm = (Math.Round(itx, 2), Math.Round(ity, 2), Math.Round(itz, 2)),
                         Properties = properties,

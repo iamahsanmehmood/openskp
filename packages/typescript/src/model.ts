@@ -1,5 +1,5 @@
 import { transformPoint, multiplyMatrices } from './transforms';
-import { extractAttributeDictionaries, isGenericDefinitionName, findNameOverride, stringifyVffAttrValue, ParsedDefinition, VffAttrValue } from './geometry';
+import { extractAttributeDictionaries, isGenericDefinitionName, findNameOverride, stringifyVffAttrValue, summarizeFaceLayers, FaceLayerSummary, ParsedDefinition, VffAttrValue } from './geometry';
 import {
   buildLocalFaceGroups,
   createTextureIndexFor,
@@ -221,6 +221,9 @@ export interface Edge {
   curveId?: number | null;
   /** Native persistent ID; 0 when absent. */
   persistentId?: number;
+  /** Name of the layer (tag) this edge is assigned to, or `""` when the edge
+   * carries no explicit layer reference. */
+  layer?: string;
 }
 
 /**
@@ -292,6 +295,9 @@ export interface Face {
   hidden: boolean;
   /** Native persistent ID; 0 when absent. */
   persistentId?: number;
+  /** Name of the layer (tag) this face is assigned to, or `""` when the face
+   * carries no explicit layer reference (default layer). */
+  layer?: string;
 }
 
 /**
@@ -773,6 +779,7 @@ function buildDefinition(id: number, d: ParsedDefinition, layerIdToName?: Map<nu
   }));
   const edges: Edge[] = Array.from(d.builder.edges.entries()).map(([eId, [v1, v2]]) => {
     const flags = d.builder.edgeFlags.get(eId) ?? 0;
+    const edgeLayerId = d.builder.edgeLayers?.get(eId);
     return {
       id: eId,
       v1Id: v1 ?? 0,
@@ -782,6 +789,7 @@ function buildDefinition(id: number, d: ParsedDefinition, layerIdToName?: Map<nu
       hidden: (flags & 0x01) !== 0,
       curveId: d.builder.edgeCurves?.get(eId) ?? null,
       persistentId: isLegacy ? (d.builder.edgePids?.get(eId) ?? 0) : eId,
+      layer: edgeLayerId != null ? (layerIdToName?.get(edgeLayerId) ?? String(edgeLayerId)) : '',
     };
   });
   const arcs = new Map<number, ArcCurve>();
@@ -811,6 +819,7 @@ function buildDefinition(id: number, d: ParsedDefinition, layerIdToName?: Map<nu
     uvProjectedBack: fData.uvProjectedBack ?? false,
     hidden: fData.hidden ?? false,
     persistentId: isLegacy ? (fData.persistentId ?? 0) : fId,
+    layer: fData.layerId != null ? (layerIdToName?.get(fData.layerId) ?? String(fData.layerId)) : '',
   }));
   const instances: Instance[] = d.builder.instances.map((inst) => ({
     id: inst.id ?? null,
@@ -1066,6 +1075,16 @@ export function buildSceneFromParsed(
     return idx;
   }
 
+  const faceLayerCache = new Map<number | string, FaceLayerSummary>();
+  function getFaceLayerSummary(defId: number | string): FaceLayerSummary {
+    let hit = faceLayerCache.get(defId);
+    if (hit !== undefined) return hit;
+    const d = defsDict.get(defId);
+    hit = d ? summarizeFaceLayers(d.builder, layerIdToName) : { uniformLayer: null, majorityLayer: null };
+    faceLayerCache.set(defId, hit);
+    return hit;
+  }
+
   function instantiate(
     defId: number | string,
     currentMatrix: number[],
@@ -1077,6 +1096,9 @@ export function buildSceneFromParsed(
     if (!d) return [];
 
     const builder = d.builder;
+    const summary = getFaceLayerSummary(defId);
+    const meshLayer =
+      parentLayer === 'Layer0' ? (summary.uniformLayer ?? parentLayer) : parentLayer;
 
     if (builder.faces.size > 0) {
       // Group faces sharing a resolved (color, doubleSided) pair into one
@@ -1097,10 +1119,12 @@ export function buildSceneFromParsed(
       // happens next - here each group's vertices get `currentMatrix`
       // applied and become a world-space primitive, while the instanced
       // path leaves them local and puts the transform on the node.
-      const [fallbackColor, fallbackBackColor] = styleColors ?? [
-        getLayerColor(parentLayer),
-        getLayerColor(parentLayer),
-      ];
+      const [fallbackColor, fallbackBackColor] =
+        styleColors ??
+        (() => {
+          const c = getLayerColor(summary.majorityLayer ?? parentLayer);
+          return [c, c] as const;
+        })();
       const faceGroups = buildLocalFaceGroups(builder, {
         resolveMaterial: (matId) =>
           resolveMaterialFromMaps(matId, materialIdToName, materialsMap, materialsByFolder),
@@ -1128,13 +1152,13 @@ export function buildSceneFromParsed(
           faceGroups.size > 1
             ? `_${group.color.r}_${group.color.g}_${group.color.b}_${group.doubleSided ? 'ds' : 'ss'}`
             : '';
-        const geomName = `mesh_${meshCounter.count}_${safePath}_${parentLayer}${colorSuffix}`;
+        const geomName = `mesh_${meshCounter.count}_${safePath}_${meshLayer}${colorSuffix}`;
         meshCounter.count++;
 
         meshIndex[geomName] = {
           name: isRoot ? 'ROOT' : pathName.split(' / ').pop() || '',
           definitionName: d.name || '',
-          layer: parentLayer,
+          layer: meshLayer,
           positionMm: [Math.round(tx * 100) / 100, Math.round(ty * 100) / 100, Math.round(tz * 100) / 100],
           properties: {},
           attributeDictionaries: {},
@@ -1325,11 +1349,16 @@ export function buildSceneFromParsed(
         }
       }
 
+      const nodeLayer =
+        lName === 'Layer0' && childNodes.length === 0 && defsDict.has(refIdx)
+          ? (getFaceLayerSummary(refIdx).uniformLayer ?? lName)
+          : lName;
+
       const instInfo: InstanceNode = {
         name: displayName,
         nameIsGenerated,
         definitionName: childDefName,
-        layer: lName,
+        layer: nodeLayer,
         positionMm: [
           Math.round(tx * 100) / 100,
           Math.round(ty * 100) / 100,
@@ -1369,16 +1398,16 @@ export function buildSceneFromParsed(
     }
   }
 
-  // Fill in missing root meshes
+  // Fill in missing root meshes without clobbering their resolved layer
   for (const geomName of Object.keys(meshIndex)) {
     const existing = meshIndex[geomName];
     if (existing && existing.path === 'ROOT') {
-      existing.name = 'ROOT';
-      existing.definitionName = 'ROOT_MODEL';
-      existing.layer = 'Layer0';
+      existing.name = existing.name || 'ROOT';
+      existing.definitionName = existing.definitionName || 'ROOT_MODEL';
+      existing.layer = existing.layer || 'Layer0';
       existing.positionMm = [0, 0, 0];
-      existing.properties = {};
-      existing.attributeDictionaries = {};
+      existing.properties = existing.properties || {};
+      existing.attributeDictionaries = existing.attributeDictionaries || {};
     }
   }
 

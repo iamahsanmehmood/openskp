@@ -518,6 +518,18 @@ class SceneBuilder {
       return idx;
     }
 
+    final faceLayerCache = <int, (String?, String?)>{};
+    (String?, String?) getFaceLayerSummary(int? defId, GeometryBuilder builder) {
+      final key = defId ?? -1;
+      final hit = faceLayerCache[key];
+      if (hit != null || faceLayerCache.containsKey(key)) {
+        return hit ?? (null, null);
+      }
+      final summary = Geometry.summarizeFaceLayers(builder, layerIdToName);
+      faceLayerCache[key] = summary;
+      return summary;
+    }
+
     List<InstanceNode> instantiateBuilder(
       GeometryBuilder builder,
       String defName,
@@ -528,6 +540,8 @@ class SceneBuilder {
       (int, int, int)? inheritedColor, [
       RawMaterial? inheritedMaterial,
     ]) {
+      final summary = getFaceLayerSummary(defId, builder);
+      final meshLayer = parentLayer == 'Layer0' ? (summary.$1 ?? parentLayer) : parentLayer;
       if (builder.faces.isNotEmpty) {
         // Group faces sharing a resolved (color, doubleSided, texture)
         // identity into one mesh each, in local space - shared with the
@@ -547,7 +561,8 @@ class SceneBuilder {
         } else if (styleColors != null) {
           (fallbackColor, fallbackBackColor) = styleColors;
         } else {
-          fallbackColor = fallbackBackColor = getLayerColor(parentLayer);
+          final colorLayer = summary.$2 ?? parentLayer;
+          fallbackColor = fallbackBackColor = getLayerColor(colorLayer);
         }
         final faceGroups = buildLocalFaceGroups(
           builder,
@@ -580,13 +595,13 @@ class SceneBuilder {
           final colorSuffix = multiGroup
               ? '_${color.$1}_${color.$2}_${color.$3}_${group.doubleSided ? 'ds' : 'ss'}'
               : '';
-          final geomName = 'mesh_${meshCounter}_${safePath}_$parentLayer$colorSuffix';
+          final geomName = 'mesh_${meshCounter}_${safePath}_$meshLayer$colorSuffix';
           meshCounter++;
 
           meshIndex[geomName] = MeshMetadata(
             name: isRootPath ? 'ROOT' : (pathName.split(' / ').lastOrNull ?? ''),
             definitionName: defName,
-            layer: parentLayer,
+            layer: meshLayer,
             positionMm: (_round2(tx), _round2(ty), _round2(tz)),
             path: pathName,
           );
@@ -800,11 +815,16 @@ class SceneBuilder {
           }
         }
 
+        final nodeLayer =
+            (lName == 'Layer0' && childNodes.isEmpty && refIdx != null && childDef != null)
+                ? (getFaceLayerSummary(refIdx, childDef.builder).$1 ?? lName)
+                : lName;
+
         final instInfo = InstanceNode(
           name: displayName,
           nameIsGenerated: nameIsGenerated,
           definitionName: childDefName,
-          layer: lName,
+          layer: nodeLayer,
           positionMm: (_round2(itx), _round2(ity), _round2(itz)),
           properties: properties,
           attributeDictionaries: attributeDictionaries,
@@ -842,12 +862,10 @@ class SceneBuilder {
     for (final entry in meshIndex.entries) {
       final existing = entry.value;
       if (existing.path == 'ROOT') {
-        existing.name = 'ROOT';
-        existing.definitionName = 'ROOT_MODEL';
-        existing.layer = 'Layer0';
+        if (existing.name.isEmpty) existing.name = 'ROOT';
+        if (existing.definitionName.isEmpty) existing.definitionName = 'ROOT_MODEL';
+        if (existing.layer.isEmpty) existing.layer = 'Layer0';
         existing.positionMm = (0.0, 0.0, 0.0);
-        existing.properties = {};
-        existing.attributeDictionaries = {};
       }
     }
 

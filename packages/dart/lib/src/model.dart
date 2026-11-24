@@ -25,6 +25,10 @@ class Edge {
   /// SketchUp's persistent entity ID (`0` when the file predates SketchUp
   /// 2017 persistent IDs). Matches entries in [Page.hiddenEntityIds].
   final int persistentId;
+
+  /// Name of the layer (tag) this edge is assigned to, or `""` when the edge
+  /// carries no explicit layer reference.
+  final String layer;
   Edge({
     required this.id,
     required this.v1Id,
@@ -34,6 +38,7 @@ class Edge {
     this.hidden = false,
     this.curveId,
     this.persistentId = 0,
+    this.layer = '',
   });
 }
 
@@ -118,6 +123,10 @@ class Face {
   /// 2017 persistent IDs). Matches entries in [Page.hiddenEntityIds].
   final int persistentId;
 
+  /// Name of the layer (tag) this face is assigned to, or `""` when the face
+  /// carries no explicit layer reference (default layer).
+  final String layer;
+
   Face({
     required this.id,
     this.loops = const [],
@@ -130,6 +139,7 @@ class Face {
     this.uvProjectedBack = false,
     this.hidden = false,
     this.persistentId = 0,
+    this.layer = '',
   });
 }
 

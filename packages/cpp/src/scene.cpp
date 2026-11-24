@@ -71,6 +71,14 @@ Scene build_scene_raw(RawParsed&& p, const ParseOptions& o) {
   // per face): the same image routinely backs several materials, while
   // equal-size PNGs/TIFFs share their 16-byte header and must stay distinct.
   auto texture_index_for = make_texture_index_for(scene.textures, o);
+  std::map<std::optional<EntityId>, FaceLayerSummary> face_layer_cache;
+  auto get_face_layer_summary = [&](std::optional<EntityId> defid,
+                                    const GeometryBuilder& b) -> const FaceLayerSummary& {
+    auto it = face_layer_cache.find(defid);
+    if (it != face_layer_cache.end()) return it->second;
+    return face_layer_cache.emplace(defid, summarize_face_layers(p, b, o)).first->second;
+  };
+
   std::function<std::vector<InstanceNode>(const GeometryBuilder&, const std::string&,
                                           std::optional<EntityId>, const std::vector<double>&,
                                           const std::string&, const std::string&,
@@ -79,6 +87,9 @@ Scene build_scene_raw(RawParsed&& p, const ParseOptions& o) {
   bake = [&](const GeometryBuilder& b, const std::string& defname, std::optional<EntityId> defid,
              const std::vector<double>& matrix, const std::string& layer, const std::string& path,
              const std::shared_ptr<RawMaterial>& inherited_material) {
+    const auto& summary = get_face_layer_summary(defid, b);
+    const std::string mesh_layer =
+        layer == "Layer0" ? summary.uniform_layer.value_or(layer) : layer;
     FaceColorKey fallback{};
     FaceColorKey fallback_back{};
     if (auto inherited_color = material_color(inherited_material)) {
@@ -86,14 +97,15 @@ Scene build_scene_raw(RawParsed&& p, const ParseOptions& o) {
     } else if (style_colors) {
       std::tie(fallback, fallback_back) = *style_colors;
     } else {
-      fallback = fallback_back = default_color(p, layer);
+      const std::string color_layer = summary.majority_layer.value_or(layer);
+      fallback = fallback_back = default_color(p, color_layer);
     }
     auto groups = build_local_face_groups(
         p, b, FaceGroupContext{texture_index_for, fallback, fallback_back, inherited_material});
     for (auto& kv : groups) {
       auto& g = kv.second;
       if (g.tris.empty()) continue;
-      auto geom = "mesh_" + std::to_string(mesh_counter++) + "_" + safe(path) + "_" + layer;
+      auto geom = "mesh_" + std::to_string(mesh_counter++) + "_" + safe(path) + "_" + mesh_layer;
       if (groups.size() > 1)
         geom += "_" + std::to_string(kv.first.color[0]) + "_" + std::to_string(kv.first.color[1]) +
                 "_" + std::to_string(kv.first.color[2]) + "_" + std::to_string(kv.first.color[3]) +
@@ -104,7 +116,7 @@ Scene build_scene_raw(RawParsed&& p, const ParseOptions& o) {
               ? "ROOT"
               : path.substr(path.rfind(" / ") == std::string::npos ? 0 : path.rfind(" / ") + 3);
       meta.definition_name = defname;
-      meta.layer = layer;
+      meta.layer = mesh_layer;
       meta.path = path;
       meta.position_mm = {matrix.size() > 9 ? matrix[9] * 25.4 : 0,
                           matrix.size() > 10 ? matrix[10] * 25.4 : 0,
@@ -232,6 +244,14 @@ Scene build_scene_raw(RawParsed&& p, const ParseOptions& o) {
           active.erase(*i.ref_idx);
         }
       }
+      std::string node_layer = child_layer;
+      if (child_layer == "Layer0" && nested.empty() && i.ref_idx) {
+        auto d = p.definitions.find(*i.ref_idx);
+        if (d != p.definitions.end()) {
+          const auto& child_summary = get_face_layer_summary(*i.ref_idx, d->second.builder);
+          if (child_summary.uniform_layer) node_layer = *child_summary.uniform_layer;
+        }
+      }
       std::map<std::string, std::map<std::string, std::string>> dicts;
       for (const auto& dict : i.attribute_dicts) {
         if (omitted_from_scene(dict.first)) continue;
@@ -239,7 +259,7 @@ Scene build_scene_raw(RawParsed&& p, const ParseOptions& o) {
       }
       InstanceNode node{display_name,
                         def_name,
-                        child_layer,
+                        node_layer,
                         {mat.size() > 9 ? mat[9] * 25.4 : 0, mat.size() > 10 ? mat[10] * 25.4 : 0,
                          mat.size() > 11 ? mat[11] * 25.4 : 0},
                         i.properties,
