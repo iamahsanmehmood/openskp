@@ -6,25 +6,151 @@ declare const require: any;
 // 1 metre = 39.37007874015748 inches (SketchUp native unit)
 export const METRES_TO_INCHES = 39.37007874015748;
 
-function sanitizeLayerName(name: string): string {
-  if (!name) return '0';
-  const illegal = /[<>/\\"~:;?*=`|]/g;
-  const clean = name.replace(illegal, '_').trim() || '0';
-  // R2000 extended symbol names (enabled by $EXTNAMES=1 in the header
-  // scaffold) support up to 255 characters, but AutoCAD desktop has been
-  // reported to reject long table entry names in practice - cap
-  // defensively and append a short content hash on truncation so two
-  // different long names sharing a common prefix don't collide.
-  const maxLen = 255;
-  if (clean.length > maxLen) {
-    let hash = 0;
-    for (let i = 0; i < clean.length; i++) {
-      hash = (Math.imul(31, hash) + clean.charCodeAt(i)) | 0;
+const ILLEGAL_LAYER_UNITS = new Set<number>(
+  Array.from('<>/\\"~:;?*=`|').map((c) => c.charCodeAt(0)),
+);
+const MAX_LAYER_NAME_LEN = 255;
+
+function isTrimUnit(c: number): boolean {
+  return c === 0x20 || c === 0x09 || c === 0x0d || c === 0x0a;
+}
+
+function nameToRawBytes(name: string | Uint8Array): Uint8Array {
+  if (name instanceof Uint8Array) return name;
+  const out: number[] = [];
+  for (let i = 0; i < name.length; i++) {
+    const u = name.charCodeAt(i);
+    if (u >= 0xd800 && u <= 0xdbff && i + 1 < name.length) {
+      const low = name.charCodeAt(i + 1);
+      if (low >= 0xdc00 && low <= 0xdfff) {
+        const cp = 0x10000 + ((u - 0xd800) << 10) + (low - 0xdc00);
+        out.push(
+          0xf0 | (cp >> 18),
+          0x80 | ((cp >> 12) & 0x3f),
+          0x80 | ((cp >> 6) & 0x3f),
+          0x80 | (cp & 0x3f),
+        );
+        i++;
+        continue;
+      }
     }
-    const suffix = (hash >>> 0).toString(16).padStart(8, '0');
-    return clean.slice(0, maxLen - suffix.length - 1) + '_' + suffix;
+    if (u >= 0xdc80 && u <= 0xdcff) {
+      out.push(u & 0xff);
+    } else if (u < 0x80) {
+      out.push(u);
+    } else if (u < 0x800) {
+      out.push(0xc0 | (u >> 6), 0x80 | (u & 0x3f));
+    } else {
+      out.push(0xe0 | (u >> 12), 0x80 | ((u >> 6) & 0x3f), 0x80 | (u & 0x3f));
+    }
   }
-  return clean;
+  return new Uint8Array(out);
+}
+
+function layerNameUtf16(raw: Uint8Array): number[] {
+  const result: number[] = [];
+  for (let i = 0; i < raw.length; ) {
+    const lead = raw[i++];
+    let cp = lead;
+    let extra = 0;
+    let minimum = 0;
+    if (lead >= 0xc2 && lead <= 0xdf) {
+      cp = lead & 0x1f;
+      extra = 1;
+      minimum = 0x80;
+    } else if (lead >= 0xe0 && lead <= 0xef) {
+      cp = lead & 0x0f;
+      extra = 2;
+      minimum = 0x800;
+    } else if (lead >= 0xf0 && lead <= 0xf4) {
+      cp = lead & 0x07;
+      extra = 3;
+      minimum = 0x10000;
+    } else if (lead >= 0x80) {
+      result.push(0x5f);
+      continue;
+    }
+    let valid = true;
+    for (let j = 0; j < extra; j++) {
+      if (i === raw.length || (raw[i] & 0xc0) !== 0x80) {
+        valid = false;
+        break;
+      }
+      cp = (cp << 6) | (raw[i++] & 0x3f);
+    }
+    if (!valid || cp < minimum || cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff)) {
+      result.push(0x5f);
+      continue;
+    }
+    if (cp > 0xffff) {
+      cp -= 0x10000;
+      result.push(0xd800 + (cp >> 10), 0xdc00 + (cp & 0x3ff));
+    } else {
+      result.push(cp);
+    }
+  }
+  return result;
+}
+
+function layerNameHash(raw: Uint8Array): string {
+  let hash = 2166136261;
+  for (let i = 0; i < raw.length; i++) {
+    hash = Math.imul(hash ^ raw[i], 16777619) >>> 0;
+  }
+  return (hash >>> 0).toString(16).toUpperCase().padStart(8, '0');
+}
+
+function sanitizeLayerName(name: string | Uint8Array, suffix: string = ''): string {
+  const raw = nameToRawBytes(name);
+  const units = layerNameUtf16(raw);
+  let first = -1;
+  let last = -1;
+  for (let i = 0; i < units.length; i++) {
+    if (!isTrimUnit(units[i])) {
+      if (first === -1) first = i;
+      last = i;
+    }
+  }
+  const clean = first === -1 ? [0x30] : units.slice(first, last + 1);
+  for (let i = 0; i < clean.length; i++) {
+    const c = clean[i];
+    if (c < 32 || (c >= 127 && c <= 159) || ILLEGAL_LAYER_UNITS.has(c)) {
+      clean[i] = 0x5f;
+    }
+  }
+  let effSuffix = suffix;
+  if (clean.length > MAX_LAYER_NAME_LEN && effSuffix.length === 0) {
+    effSuffix = '_' + layerNameHash(raw);
+  }
+  if (clean.length + effSuffix.length > MAX_LAYER_NAME_LEN) {
+    let end = MAX_LAYER_NAME_LEN - effSuffix.length;
+    if (end > 0 && clean[end - 1] >= 0xd800 && clean[end - 1] <= 0xdbff) {
+      end--;
+    }
+    clean.length = end;
+  }
+  for (let i = 0; i < effSuffix.length; i++) {
+    clean.push(effSuffix.charCodeAt(i));
+  }
+  let out = '';
+  for (let i = 0; i < clean.length; i++) {
+    const c = clean[i];
+    if (c < 128) {
+      out += String.fromCharCode(c);
+    } else {
+      out += '\\U+' + c.toString(16).toUpperCase().padStart(4, '0');
+    }
+  }
+  return out;
+}
+
+function layerNameKey(name: string): string {
+  let out = '';
+  for (let i = 0; i < name.length; i++) {
+    const c = name.charCodeAt(i);
+    out += c >= 65 && c <= 90 ? String.fromCharCode(c + 32) : name[i];
+  }
+  return out;
 }
 
 // Static AutoCAD R2000 (AC1015) boilerplate, extracted byte-for-byte from a
@@ -400,17 +526,45 @@ export function toDXF(
   if (!scene || !scene.glbPrimitives) {
     throw new Error('toDXF requires a valid SkpScene instance');
   }
+  if (!Number.isFinite(scale)) {
+    throw new Error('DXF scale must be finite');
+  }
 
   const layerColors = new Map<string, [number, number, number]>();
+  const layerNames = new Map<string | Uint8Array, string>();
+  const usedNames = new Set<string>(['0', 'defpoints']);
   for (const prim of scene.glbPrimitives) {
-    const layerName = sanitizeLayerName(prim.geomName || '0');
+    if (prim.indices.length === 0) continue;
+    if (prim.positions.length % 3 !== 0 || prim.indices.length % 3 !== 0) {
+      throw new Error('DXF mesh has incomplete coordinates or triangles');
+    }
+    const vertCount = prim.positions.length / 3;
+    for (let i = 0; i < prim.indices.length; i++) {
+      const idx = prim.indices[i];
+      if (idx < 0 || idx >= vertCount) {
+        throw new Error('DXF mesh index is outside the vertex array');
+      }
+    }
+    for (let i = 0; i < prim.positions.length; i++) {
+      if (!Number.isFinite(prim.positions[i] * scale)) {
+        throw new Error('DXF mesh coordinates must be finite');
+      }
+    }
+    const rawName: string | Uint8Array =
+      (prim as any).geomName == null ? '' : (prim as any).geomName;
+    if (layerNames.has(rawName)) continue;
+    const rawBytes = nameToRawBytes(rawName);
+    let layerName = sanitizeLayerName(rawBytes);
+    for (let attempt = 0; usedNames.has(layerNameKey(layerName)); attempt++) {
+      const suffix =
+        '_' + layerNameHash(rawBytes) + (attempt === 0 ? '' : `_${attempt}`);
+      layerName = sanitizeLayerName(rawBytes, suffix);
+    }
+    usedNames.add(layerNameKey(layerName));
+    layerNames.set(rawName, layerName);
     if (!layerColors.has(layerName)) {
       layerColors.set(layerName, getPrimRgb(scene, prim));
     }
-  }
-
-  if (layerColors.size === 0) {
-    layerColors.set('0', [200, 200, 200]);
   }
 
   const sortedLayers = Array.from(layerColors.keys()).sort();
@@ -425,11 +579,6 @@ export function toDXF(
     handleId++;
     return h;
   };
-
-  const layerHandles: Record<string, string> = {};
-  for (const lName of sortedLayers) {
-    layerHandles[lName] = nextHandle();
-  }
 
   const lines: string[] = [...HEADER_STATIC_A];
   // LAYER table record count: built-in "0" + "Defpoints" + this scene's layers.
@@ -447,7 +596,7 @@ export function toDXF(
     // desktop rejects the whole TABLES section ("Did not receive
     // PlotStyleName") if any layer omits them.
     lines.push(
-      '  0', 'LAYER', '  5', layerHandles[lName], '330', '1', '100', 'AcDbSymbolTableRecord', '100', 'AcDbLayerTableRecord',
+      '  0', 'LAYER', '  5', nextHandle(), '330', '1', '100', 'AcDbSymbolTableRecord', '100', 'AcDbLayerTableRecord',
       '  2', lName, ' 70', '0', ' 62', aci.toString(), '  6', 'Continuous', '370', '-3', '390', '13'
     );
   }
@@ -455,15 +604,22 @@ export function toDXF(
   lines.push(...HEADER_STATIC_C);
   lines.push('  0', 'SECTION', '  2', 'ENTITIES');
 
+  const fmt6 = (v: number): string => (Object.is(v, -0) ? '-0.000000' : v.toFixed(6));
+
   for (const prim of scene.glbPrimitives) {
-    const layerName = sanitizeLayerName(prim.geomName || '0');
     const triCount = Math.floor(prim.indices.length / 3);
     if (triCount === 0) continue;
+    const rawName: string | Uint8Array =
+      (prim as any).geomName == null ? '' : (prim as any).geomName;
+    const layerName = layerNames.get(rawName)!;
 
     const [pr, pg, pb] = getPrimRgb(scene, prim);
     const aci = rgbToAci(pr, pg, pb);
 
-    if (mode === 'polyface') {
+    // Polyface counts (71/72) and vertex indices (71-74) are signed
+    // 16-bit fields. Larger meshes use independent 3DFACE triangles.
+    const vCount = Math.floor(prim.positions.length / 3);
+    if (mode === 'polyface' && vCount <= 32767 && triCount <= 32767) {
       // Structure verified against real ezdxf's own render_polyface() output
       // byte-for-byte, not guessed: face-record VERTEX entries carry a
       // color (62) and dummy 0/0/0 coordinates but NOT the AcDbVertex
@@ -472,7 +628,6 @@ export function toDXF(
       // wrong here before and are exactly why AutoCAD desktop rejected
       // polyface-mode output while accepting 3dface-mode output using the
       // same scaffold.
-      const vCount = Math.floor(prim.positions.length / 3);
       const polylineHandle = nextHandle();
       lines.push(
         '  0', 'POLYLINE', '  5', polylineHandle, '330', '17', '100', 'AcDbEntity', '  8', layerName,
@@ -481,9 +636,9 @@ export function toDXF(
         ' 70', '64', ' 71', vCount.toString(), ' 72', triCount.toString()
       );
       for (let i = 0; i < vCount; i++) {
-        const vx = (prim.positions[i * 3] * scale).toFixed(6);
-        const vy = (prim.positions[i * 3 + 1] * scale).toFixed(6);
-        const vz = (prim.positions[i * 3 + 2] * scale).toFixed(6);
+        const vx = fmt6(prim.positions[i * 3] * scale);
+        const vy = fmt6(prim.positions[i * 3 + 1] * scale);
+        const vz = fmt6(prim.positions[i * 3 + 2] * scale);
         lines.push(
           '  0', 'VERTEX', '  5', nextHandle(), '330', '17', '100', 'AcDbEntity', '  8', layerName,
           '100', 'AcDbVertex', '100', 'AcDbPolyFaceMeshVertex',
@@ -508,17 +663,17 @@ export function toDXF(
         const idx1 = prim.indices[i * 3 + 1];
         const idx2 = prim.indices[i * 3 + 2];
 
-        const v0x = (prim.positions[idx0 * 3] * scale).toFixed(6);
-        const v0y = (prim.positions[idx0 * 3 + 1] * scale).toFixed(6);
-        const v0z = (prim.positions[idx0 * 3 + 2] * scale).toFixed(6);
+        const v0x = fmt6(prim.positions[idx0 * 3] * scale);
+        const v0y = fmt6(prim.positions[idx0 * 3 + 1] * scale);
+        const v0z = fmt6(prim.positions[idx0 * 3 + 2] * scale);
 
-        const v1x = (prim.positions[idx1 * 3] * scale).toFixed(6);
-        const v1y = (prim.positions[idx1 * 3 + 1] * scale).toFixed(6);
-        const v1z = (prim.positions[idx1 * 3 + 2] * scale).toFixed(6);
+        const v1x = fmt6(prim.positions[idx1 * 3] * scale);
+        const v1y = fmt6(prim.positions[idx1 * 3 + 1] * scale);
+        const v1z = fmt6(prim.positions[idx1 * 3 + 2] * scale);
 
-        const v2x = (prim.positions[idx2 * 3] * scale).toFixed(6);
-        const v2y = (prim.positions[idx2 * 3 + 1] * scale).toFixed(6);
-        const v2z = (prim.positions[idx2 * 3 + 2] * scale).toFixed(6);
+        const v2x = fmt6(prim.positions[idx2 * 3] * scale);
+        const v2y = fmt6(prim.positions[idx2 * 3 + 1] * scale);
+        const v2z = fmt6(prim.positions[idx2 * 3 + 2] * scale);
 
         lines.push(
           '  0', '3DFACE', '  5', nextHandle(), '330', '17', '100', 'AcDbEntity', '  8', layerName,
@@ -559,12 +714,11 @@ export function exportDXF(
     const fs = require('fs');
     const path = require('path');
 
+    const text = toDXF(scene, scale, mode);
     const dir = path.dirname(outputPath);
     if (dir && !fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
-
-    const text = toDXF(scene, scale, mode);
     fs.writeFileSync(outputPath, text, 'utf-8');
   } else {
     throw new Error('exportDXF file writing is only supported in Node.js environment');

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — Python, TypeScript, .NET & Dart: DXF Unicode layer escaping, deduplication, 16-bit polyface limits, and mesh validation (#499, #285)
+
+- R2000 (`AC1015` / `ANSI_1252`) DXF exports across Python, TypeScript, .NET, and Dart now match C++ (#499) and Rust byte-for-byte: non-ASCII layer characters are encoded as `\U+XXXX` CIF escapes, layer names are trimmed/sanitized and truncated at 255 UTF-16 code units without splitting surrogate pairs, malformed UTF-8 / unpaired surrogates are replaced with `_`, and sanitized names that collide case-insensitively (including with built-in `0` and `Defpoints`) receive deterministic 32-bit FNV-1a suffixes.
+- Empty scenes and primitives without triangles no longer emit duplicate `0` or unused `LAYER` table records, polyface primitives exceeding 32,767 vertices or triangles automatically fall back to `3DFACE` records instead of overflowing signed 16-bit DXF group codes, and malformed mesh buffers or non-finite scales are rejected before creating output files.
+
 ### Fixed — Python: scenes use a component instance's own paint and tag in classic files (#596)
 
 - `build_scene()` and `build_instanced_scene()` read an instance's paint and tag from its 2021+ `D007` record only. In classic (pre-2021) files a painted component came out in its tag's colour, and every instance sat on its parent's tag. Both now come from the instance itself, and nested components inherit the paint.

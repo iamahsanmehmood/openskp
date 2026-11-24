@@ -17,32 +17,203 @@ namespace OpenSkp
         /// </summary>
         public const double MetresToInches = 39.37007874015748;
 
-        private static string SanitizeLayerName(string name)
+        private static readonly HashSet<ushort> IllegalLayerUnits = new HashSet<ushort>
         {
-            if (string.IsNullOrWhiteSpace(name)) return "0";
-            char[] illegal = new[] { '<', '>', '/', '\\', '"', '~', ':', ';', '?', '*', '=', '`', '|' };
-            string clean = new string(name.Select(c => illegal.Contains(c) ? '_' : c).ToArray()).Trim();
-            if (string.IsNullOrEmpty(clean)) clean = "0";
-            // R2000 extended symbol names (enabled by $EXTNAMES=1 in the header
-            // scaffold) support up to 255 characters, but AutoCAD desktop has
-            // been reported to reject long table entry names in practice - cap
-            // defensively and append a short content hash on truncation so two
-            // different long names sharing a common prefix don't collide.
-            const int maxLen = 255;
-            if (clean.Length > maxLen)
+            '<', '>', '/', '\\', '"', '~', ':', ';', '?', '*', '=', '`', '|'
+        };
+
+        private const int MaxLayerNameLen = 255;
+
+        private static bool IsTrimUnit(ushort c) =>
+            c == 0x20 || c == 0x09 || c == 0x0D || c == 0x0A;
+
+        private static bool IsFinite(double v) => !double.IsNaN(v) && !double.IsInfinity(v);
+
+        private static byte[] NameToRawBytes(string? name)
+        {
+            if (name == null || name.Length == 0) return Array.Empty<byte>();
+            var bytes = new List<byte>(name.Length * 3);
+            for (int i = 0; i < name.Length; i++)
             {
-                unchecked
+                ushort u = name[i];
+                if (u >= 0xD800 && u <= 0xDBFF && i + 1 < name.Length)
                 {
-                    int hash = 0;
-                    foreach (char c in clean)
+                    ushort low = name[i + 1];
+                    if (low >= 0xDC00 && low <= 0xDFFF)
                     {
-                        hash = hash * 31 + c;
+                        uint cp = 0x10000u + (((uint)u - 0xD800u) << 10) + ((uint)low - 0xDC00u);
+                        bytes.Add((byte)(0xF0u | (cp >> 18)));
+                        bytes.Add((byte)(0x80u | ((cp >> 12) & 0x3Fu)));
+                        bytes.Add((byte)(0x80u | ((cp >> 6) & 0x3Fu)));
+                        bytes.Add((byte)(0x80u | (cp & 0x3Fu)));
+                        i++;
+                        continue;
                     }
-                    string suffix = ((uint)hash).ToString("x8", CultureInfo.InvariantCulture);
-                    clean = clean.Substring(0, maxLen - suffix.Length - 1) + "_" + suffix;
+                }
+                if (u >= 0xDC80 && u <= 0xDCFF)
+                {
+                    bytes.Add((byte)(u & 0xFF));
+                }
+                else if (u < 0x80)
+                {
+                    bytes.Add((byte)u);
+                }
+                else if (u < 0x800)
+                {
+                    bytes.Add((byte)(0xC0 | (u >> 6)));
+                    bytes.Add((byte)(0x80 | (u & 0x3F)));
+                }
+                else
+                {
+                    bytes.Add((byte)(0xE0 | (u >> 12)));
+                    bytes.Add((byte)(0x80 | ((u >> 6) & 0x3F)));
+                    bytes.Add((byte)(0x80 | (u & 0x3F)));
                 }
             }
-            return clean;
+            return bytes.ToArray();
+        }
+
+        private static List<ushort> LayerNameUtf16(byte[] raw)
+        {
+            var result = new List<ushort>(raw.Length);
+            for (int i = 0; i < raw.Length;)
+            {
+                byte lead = raw[i++];
+                uint cp = lead;
+                int extra = 0;
+                uint minimum = 0;
+                if (lead >= 0xC2 && lead <= 0xDF)
+                {
+                    cp = (uint)(lead & 0x1F);
+                    extra = 1;
+                    minimum = 0x80;
+                }
+                else if (lead >= 0xE0 && lead <= 0xEF)
+                {
+                    cp = (uint)(lead & 0x0F);
+                    extra = 2;
+                    minimum = 0x800;
+                }
+                else if (lead >= 0xF0 && lead <= 0xF4)
+                {
+                    cp = (uint)(lead & 0x07);
+                    extra = 3;
+                    minimum = 0x10000;
+                }
+                else if (lead >= 0x80)
+                {
+                    result.Add('_');
+                    continue;
+                }
+
+                bool valid = true;
+                for (int j = 0; j < extra; j++)
+                {
+                    if (i == raw.Length || (raw[i] & 0xC0) != 0x80)
+                    {
+                        valid = false;
+                        break;
+                    }
+                    cp = (cp << 6) | (uint)(raw[i++] & 0x3F);
+                }
+                if (!valid || cp < minimum || cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF))
+                {
+                    result.Add('_');
+                    continue;
+                }
+                if (cp > 0xFFFF)
+                {
+                    cp -= 0x10000;
+                    result.Add((ushort)(0xD800 + (cp >> 10)));
+                    result.Add((ushort)(0xDC00 + (cp & 0x3FF)));
+                }
+                else
+                {
+                    result.Add((ushort)cp);
+                }
+            }
+            return result;
+        }
+
+        private static string LayerNameHash(byte[] raw)
+        {
+            unchecked
+            {
+                uint hash = 2166136261u;
+                foreach (byte b in raw)
+                {
+                    hash = (hash ^ b) * 16777619u;
+                }
+                return hash.ToString("X8", CultureInfo.InvariantCulture);
+            }
+        }
+
+        private static string SanitizeLayerName(byte[] raw, string suffix = "")
+        {
+            var units = LayerNameUtf16(raw);
+            int first = -1, last = -1;
+            for (int i = 0; i < units.Count; i++)
+            {
+                if (!IsTrimUnit(units[i]))
+                {
+                    if (first == -1) first = i;
+                    last = i;
+                }
+            }
+            List<ushort> clean = first == -1
+                ? new List<ushort> { '0' }
+                : units.GetRange(first, last - first + 1);
+            for (int i = 0; i < clean.Count; i++)
+            {
+                ushort c = clean[i];
+                if (c < 32 || (c >= 127 && c <= 159) || IllegalLayerUnits.Contains(c))
+                {
+                    clean[i] = '_';
+                }
+            }
+            if (clean.Count > MaxLayerNameLen && suffix.Length == 0)
+            {
+                suffix = "_" + LayerNameHash(raw);
+            }
+            if (clean.Count + suffix.Length > MaxLayerNameLen)
+            {
+                int end = MaxLayerNameLen - suffix.Length;
+                if (end > 0 && clean[end - 1] >= 0xD800 && clean[end - 1] <= 0xDBFF)
+                {
+                    end--;
+                }
+                clean.RemoveRange(end, clean.Count - end);
+            }
+            foreach (char ch in suffix)
+            {
+                clean.Add(ch);
+            }
+            var sb = new StringBuilder(clean.Count);
+            foreach (ushort c in clean)
+            {
+                if (c < 128)
+                {
+                    sb.Append((char)c);
+                }
+                else
+                {
+                    sb.Append("\\U+").Append(c.ToString("X4", CultureInfo.InvariantCulture));
+                }
+            }
+            return sb.ToString();
+        }
+
+        private static string LayerNameKey(string name)
+        {
+            var chars = name.ToCharArray();
+            for (int i = 0; i < chars.Length; i++)
+            {
+                if (chars[i] >= 'A' && chars[i] <= 'Z')
+                {
+                    chars[i] = (char)(chars[i] + ('a' - 'A'));
+                }
+            }
+            return new string(chars);
         }
 
         private static int RgbToAci(int r, int g, int b)
@@ -419,20 +590,51 @@ namespace OpenSkp
             {
                 throw new ArgumentNullException(nameof(scene), "ToDxf requires a valid Scene instance");
             }
+            if (!IsFinite(scale))
+            {
+                throw new ArgumentException("DXF scale must be finite", nameof(scale));
+            }
 
-            var layerColors = new Dictionary<string, (int R, int G, int B)>();
+            var layerColors = new Dictionary<string, (int R, int G, int B)>(StringComparer.Ordinal);
+            var layerNames = new Dictionary<string, string>(StringComparer.Ordinal);
+            var usedNames = new HashSet<string>(StringComparer.Ordinal) { "0", "defpoints" };
             foreach (var prim in scene.GlbPrimitives)
             {
-                string lName = SanitizeLayerName(prim.GeomName);
+                if (prim.Indices == null || prim.Indices.Length == 0) continue;
+                if (prim.Positions == null || prim.Positions.Length % 3 != 0 || prim.Indices.Length % 3 != 0)
+                {
+                    throw new ArgumentException("DXF mesh has incomplete coordinates or triangles");
+                }
+                int vertCount = prim.Positions.Length / 3;
+                foreach (uint index in prim.Indices)
+                {
+                    if (index >= (uint)vertCount)
+                    {
+                        throw new ArgumentException("DXF mesh index is outside the vertex array");
+                    }
+                }
+                foreach (float coordinate in prim.Positions)
+                {
+                    if (!IsFinite((double)coordinate * scale))
+                    {
+                        throw new ArgumentException("DXF mesh coordinates must be finite");
+                    }
+                }
+                string rawName = prim.GeomName ?? "";
+                if (layerNames.ContainsKey(rawName)) continue;
+                byte[] rawBytes = NameToRawBytes(rawName);
+                string lName = SanitizeLayerName(rawBytes);
+                for (int attempt = 0; !usedNames.Add(LayerNameKey(lName)); attempt++)
+                {
+                    string suffix = "_" + LayerNameHash(rawBytes) +
+                        (attempt == 0 ? "" : "_" + attempt.ToString(CultureInfo.InvariantCulture));
+                    lName = SanitizeLayerName(rawBytes, suffix);
+                }
+                layerNames[rawName] = lName;
                 if (!layerColors.ContainsKey(lName))
                 {
                     layerColors[lName] = GetPrimRgb(scene, prim);
                 }
-            }
-
-            if (layerColors.Count == 0)
-            {
-                layerColors["0"] = (200, 200, 200);
             }
 
             var sortedLayers = layerColors.Keys.OrderBy(k => k, StringComparer.Ordinal).ToList();
@@ -441,18 +643,12 @@ namespace OpenSkp
             // below 0x691 - starting dynamic handles there (matching the
             // reference file's own first entity handle) keeps every handle
             // in the file globally unique.
-            int handleId = 0x691;
+            long handleId = 0x691;
             string NextHandle()
             {
                 string h = handleId.ToString("X", CultureInfo.InvariantCulture);
                 handleId++;
                 return h;
-            }
-
-            var layerHandles = new Dictionary<string, string>();
-            foreach (var lName in sortedLayers)
-            {
-                layerHandles[lName] = NextHandle();
             }
 
             var lines = new List<string>(HeaderStaticA);
@@ -474,7 +670,7 @@ namespace OpenSkp
                 // PlotStyleName") if any layer omits them.
                 lines.AddRange(new[]
                 {
-                    "  0", "LAYER", "  5", layerHandles[lName], "330", "1", "100", "AcDbSymbolTableRecord", "100", "AcDbLayerTableRecord",
+                    "  0", "LAYER", "  5", NextHandle(), "330", "1", "100", "AcDbSymbolTableRecord", "100", "AcDbLayerTableRecord",
                     "  2", lName, " 70", "0", " 62", aci.ToString(CultureInfo.InvariantCulture), "  6", "Continuous", "370", "-3", "390", "13"
                 });
             }
@@ -484,14 +680,19 @@ namespace OpenSkp
 
             foreach (var prim in scene.GlbPrimitives)
             {
-                string lName = SanitizeLayerName(prim.GeomName);
+                if (prim.Indices == null) continue;
                 int triCount = prim.Indices.Length / 3;
                 if (triCount == 0) continue;
+                string rawName = prim.GeomName ?? "";
+                string lName = layerNames[rawName];
 
                 var (pr, pg, pb) = GetPrimRgb(scene, prim);
                 int aci = RgbToAci(pr, pg, pb);
 
-                if (string.Equals(mode, "polyface", StringComparison.OrdinalIgnoreCase))
+                // Polyface counts (71/72) and vertex indices (71-74) are signed
+                // 16-bit fields. Larger meshes use independent 3DFACE triangles.
+                int vCount = prim.Positions.Length / 3;
+                if (mode == "polyface" && vCount <= 32767 && triCount <= 32767)
                 {
                     // Structure verified against real ezdxf's own
                     // render_polyface() output byte-for-byte, not guessed:
@@ -503,7 +704,6 @@ namespace OpenSkp
                     // are exactly why AutoCAD desktop rejected
                     // polyface-mode output while accepting 3dface-mode
                     // output using the same scaffold.
-                    int vCount = prim.Positions.Length / 3;
                     string polylineHandle = NextHandle();
                     lines.AddRange(new[]
                     {
@@ -515,9 +715,9 @@ namespace OpenSkp
 
                     for (int i = 0; i < vCount; i++)
                     {
-                        string vx = (prim.Positions[i * 3] * scale).ToString("F6", CultureInfo.InvariantCulture);
-                        string vy = (prim.Positions[i * 3 + 1] * scale).ToString("F6", CultureInfo.InvariantCulture);
-                        string vz = (prim.Positions[i * 3 + 2] * scale).ToString("F6", CultureInfo.InvariantCulture);
+                        string vx = ((double)prim.Positions[i * 3] * scale).ToString("F6", CultureInfo.InvariantCulture);
+                        string vy = ((double)prim.Positions[i * 3 + 1] * scale).ToString("F6", CultureInfo.InvariantCulture);
+                        string vz = ((double)prim.Positions[i * 3 + 2] * scale).ToString("F6", CultureInfo.InvariantCulture);
                         lines.AddRange(new[]
                         {
                             "  0", "VERTEX", "  5", NextHandle(), "330", "17", "100", "AcDbEntity", "  8", lName,
@@ -553,17 +753,17 @@ namespace OpenSkp
                         int i1 = (int)prim.Indices[i * 3 + 1];
                         int i2 = (int)prim.Indices[i * 3 + 2];
 
-                        string v0x = (prim.Positions[i0 * 3] * scale).ToString("F6", CultureInfo.InvariantCulture);
-                        string v0y = (prim.Positions[i0 * 3 + 1] * scale).ToString("F6", CultureInfo.InvariantCulture);
-                        string v0z = (prim.Positions[i0 * 3 + 2] * scale).ToString("F6", CultureInfo.InvariantCulture);
+                        string v0x = ((double)prim.Positions[i0 * 3] * scale).ToString("F6", CultureInfo.InvariantCulture);
+                        string v0y = ((double)prim.Positions[i0 * 3 + 1] * scale).ToString("F6", CultureInfo.InvariantCulture);
+                        string v0z = ((double)prim.Positions[i0 * 3 + 2] * scale).ToString("F6", CultureInfo.InvariantCulture);
 
-                        string v1x = (prim.Positions[i1 * 3] * scale).ToString("F6", CultureInfo.InvariantCulture);
-                        string v1y = (prim.Positions[i1 * 3 + 1] * scale).ToString("F6", CultureInfo.InvariantCulture);
-                        string v1z = (prim.Positions[i1 * 3 + 2] * scale).ToString("F6", CultureInfo.InvariantCulture);
+                        string v1x = ((double)prim.Positions[i1 * 3] * scale).ToString("F6", CultureInfo.InvariantCulture);
+                        string v1y = ((double)prim.Positions[i1 * 3 + 1] * scale).ToString("F6", CultureInfo.InvariantCulture);
+                        string v1z = ((double)prim.Positions[i1 * 3 + 2] * scale).ToString("F6", CultureInfo.InvariantCulture);
 
-                        string v2x = (prim.Positions[i2 * 3] * scale).ToString("F6", CultureInfo.InvariantCulture);
-                        string v2y = (prim.Positions[i2 * 3 + 1] * scale).ToString("F6", CultureInfo.InvariantCulture);
-                        string v2z = (prim.Positions[i2 * 3 + 2] * scale).ToString("F6", CultureInfo.InvariantCulture);
+                        string v2x = ((double)prim.Positions[i2 * 3] * scale).ToString("F6", CultureInfo.InvariantCulture);
+                        string v2y = ((double)prim.Positions[i2 * 3 + 1] * scale).ToString("F6", CultureInfo.InvariantCulture);
+                        string v2z = ((double)prim.Positions[i2 * 3 + 2] * scale).ToString("F6", CultureInfo.InvariantCulture);
 
                         lines.AddRange(new[]
                         {
@@ -600,13 +800,12 @@ namespace OpenSkp
                 throw new ArgumentException("outputPath cannot be empty", nameof(outputPath));
             }
 
-            string dir = Path.GetDirectoryName(outputPath);
+            string text = ToDxf(scene, scale, mode);
+            string? dir = Path.GetDirectoryName(outputPath);
             if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
             {
                 Directory.CreateDirectory(dir);
             }
-
-            string text = ToDxf(scene, scale, mode);
             // Write UTF-8 without BOM to avoid byte order mark corruption in CAD readers
             File.WriteAllText(outputPath, text, new UTF8Encoding(false));
         }
