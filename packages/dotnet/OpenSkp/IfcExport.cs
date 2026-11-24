@@ -16,6 +16,11 @@ namespace OpenSkp
         /// </summary>
         public const double MetresToInches = 39.37007874015748;
 
+        /// <summary>
+        /// 1 metre = 1000 millimetres (matches the millimetre length unit declared by the IFC exporter).
+        /// </summary>
+        public const double MetresToMm = 1000.0;
+
         private const string IfcBase64 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_$";
 
         /// <summary>
@@ -56,13 +61,15 @@ namespace OpenSkp
         /// <summary>
         /// Classifies geometry/component name into an IFC entity type.
         /// Tries <paramref name="geomName"/> first, then falls back to
-        /// <paramref name="layerName"/> (many SketchUp-for-BIM workflows
-        /// organize by tag/layer - "Walls", "Doors" - even when individual
-        /// components are never renamed away from SketchUp's own defaults
-        /// like "Component#109415"), then falls back to a generic, untyped
-        /// element if neither matches.
+        /// <paramref name="layerName"/>, then (when
+        /// <paramref name="classifyUsingFullPath"/> is <c>true</c>) to
+        /// <paramref name="pathName"/>, and finally to a generic, untyped element.
         /// </summary>
-        public static (string StepType, string ClassName) ClassifyElement(string geomName, string layerName = "")
+        public static (string StepType, string ClassName) ClassifyElement(
+            string geomName,
+            string layerName = "",
+            string pathName = "",
+            bool classifyUsingFullPath = false)
         {
             var byName = ClassifyByKeyword(geomName);
             if (byName.HasValue) return byName.Value;
@@ -70,6 +77,11 @@ namespace OpenSkp
             {
                 var byLayer = ClassifyByKeyword(layerName);
                 if (byLayer.HasValue) return byLayer.Value;
+            }
+            if (classifyUsingFullPath && !string.IsNullOrEmpty(pathName))
+            {
+                var byPath = ClassifyByKeyword(pathName);
+                if (byPath.HasValue) return byPath.Value;
             }
             return ("IFCBUILDINGELEMENTPROXY", "IfcBuildingElementProxy");
         }
@@ -82,7 +94,7 @@ namespace OpenSkp
                 var mat = scene.GltfMaterials[primMatIdx] as Dictionary<string, object>;
                 if (mat != null && mat.TryGetValue("pbrMetallicRoughness", out var pbrObj) && pbrObj is Dictionary<string, object> pbr)
                 {
-                    if (pbr.TryGetValue("baseColorFactor", out var colorVecObj) && colorVecObj is List<object> colorVec && colorVec.Count >= 3)
+                    if (pbr.TryGetValue("baseColorFactor", out var colorVecObj) && colorVecObj is System.Collections.IList colorVec && colorVec.Count >= 3)
                     {
                         r = Math.Max(0.0, Math.Min(1.0, Convert.ToDouble(colorVec[0], CultureInfo.InvariantCulture)));
                         g = Math.Max(0.0, Math.Min(1.0, Convert.ToDouble(colorVec[1], CultureInfo.InvariantCulture)));
@@ -103,14 +115,21 @@ namespace OpenSkp
         /// <param name="classifier">Optional override for <see cref="ClassifyElement"/> -
         /// use this to supply your own naming convention or metadata-driven typing
         /// instead of the built-in keyword/layer heuristic.</param>
-        public static string ToIfc(Scene scene, double scale = MetresToInches, string schema = "IFC4", Func<string, string, (string StepType, string ClassName)>? classifier = null)
+        public static string ToIfc(
+            Scene scene,
+            double scale = MetresToMm,
+            string schema = "IFC4",
+            Func<string, string, (string StepType, string ClassName)>? classifier = null,
+            bool classifyUsingFullPath = false)
         {
             if (scene == null || scene.GlbPrimitives == null)
             {
                 throw new ArgumentNullException(nameof(scene), "ToIfc requires a valid Scene instance");
             }
 
-            var classify = classifier ?? ClassifyElement;
+            Func<string, string, string, (string StepType, string ClassName)> classify = classifier != null
+                ? (name, layer, _) => classifier(name, layer)
+                : (name, layer, path) => ClassifyElement(name, layer, path, classifyUsingFullPath);
 
             string schemaStr = string.IsNullOrWhiteSpace(schema) ? "IFC4" : schema.ToUpperInvariant();
             string nowIso = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss", CultureInfo.InvariantCulture);
@@ -195,31 +214,54 @@ namespace OpenSkp
             var layerItems = new Dictionary<string, List<int>>();
             var matStyleCache = new Dictionary<string, int>();
 
+            void WritePset(int productId, string psetName, Dictionary<string, string>? props)
+            {
+                if (props == null || props.Count == 0) return;
+
+                var propValIds = new List<int>();
+                foreach (var kvp in props)
+                {
+                    string cleanK = SanitizeName(kvp.Key);
+                    string cleanV = SanitizeName(kvp.Value);
+                    int propId = NextId();
+                    lines.Add($"#{propId}=IFCPROPERTYSINGLEVALUE('{cleanK}',$,IFCTEXT('{cleanV}'),$);");
+                    propValIds.Add(propId);
+                }
+
+                int psetId = NextId();
+                string propRefs = string.Join(",", propValIds.ConvertAll(pid => $"#{pid}"));
+                lines.Add($"#{psetId}=IFCPROPERTYSET('{GenerateIfcGuid()}',#{ownerHistId},'{SanitizeName(psetName)}',$,({propRefs}));");
+                lines.Add($"#{NextId()}=IFCRELDEFINESBYPROPERTIES('{GenerateIfcGuid()}',#{ownerHistId},$,$,(#{productId}),#{psetId});");
+            }
+
             foreach (var prim in scene.SurfacePrimitives)
             {
                 int triCount = prim.Indices.Length / 3;
                 int vCount = prim.Positions.Length / 3;
                 if (triCount == 0 || vCount == 0) continue;
 
-                string geomName = SanitizeName(prim.GeomName);
-                string layerName = "Layer0";
                 MeshMetadata? meta = null;
-                if (scene.MeshIndex != null && scene.MeshIndex.TryGetValue(prim.GeomName, out meta) && meta != null)
+                if (scene.MeshIndex != null)
                 {
-                    if (!string.IsNullOrEmpty(meta.Layer))
-                    {
-                        layerName = SanitizeName(meta.Layer);
-                    }
+                    scene.MeshIndex.TryGetValue(prim.GeomName, out meta);
                 }
 
-                var (stepType, _) = classify(geomName, layerName);
+                string rawNameSrc = meta != null && !string.IsNullOrEmpty(meta.Name) ? meta.Name : prim.GeomName;
+                string rawName = string.IsNullOrWhiteSpace(rawNameSrc) ? "Unnamed" : rawNameSrc.Trim();
+                string displayName = SanitizeName(rawName);
+                string rawLayer = meta != null && !string.IsNullOrEmpty(meta.Layer) ? meta.Layer : "";
+                string classifyLayer = string.IsNullOrWhiteSpace(rawLayer) ? "Layer0" : rawLayer.Trim();
+                string layerKey = string.IsNullOrWhiteSpace(rawLayer) ? "Layer0" : rawLayer;
+                string pathName = meta != null && !string.IsNullOrEmpty(meta.Path) ? meta.Path : "";
+
+                var (stepType, _) = classify(rawName, classifyLayer, pathName);
 
                 var ptCoords = new List<string>();
                 for (int i = 0; i < vCount; i++)
                 {
                     string vx = (prim.Positions[i * 3] * scale).ToString("F6", CultureInfo.InvariantCulture);
-                    string vy = (prim.Positions[i * 3 + 1] * scale).ToString("F6", CultureInfo.InvariantCulture);
-                    string vz = (prim.Positions[i * 3 + 2] * scale).ToString("F6", CultureInfo.InvariantCulture);
+                    string vy = (-prim.Positions[i * 3 + 2] * scale).ToString("F6", CultureInfo.InvariantCulture);
+                    string vz = (prim.Positions[i * 3 + 1] * scale).ToString("F6", CultureInfo.InvariantCulture);
                     ptCoords.Add($"({vx},{vy},{vz})");
                 }
 
@@ -238,11 +280,11 @@ namespace OpenSkp
                 int faceSetId = NextId();
                 lines.Add($"#{faceSetId}=IFCTRIANGULATEDFACESET(#{ptListId},$,.TRUE.,({string.Join(",", faceIndices)}),$);");
 
-                if (!layerItems.ContainsKey(layerName))
+                if (!layerItems.ContainsKey(layerKey))
                 {
-                    layerItems[layerName] = new List<int>();
+                    layerItems[layerKey] = new List<int>();
                 }
-                layerItems[layerName].Add(faceSetId);
+                layerItems[layerKey].Add(faceSetId);
 
                 var (r, g, b, a) = GetPrimRgb(scene, prim.MaterialIndex);
                 string rgbaKey = $"{r.ToString("F4", CultureInfo.InvariantCulture)},{g.ToString("F4", CultureInfo.InvariantCulture)},{b.ToString("F4", CultureInfo.InvariantCulture)},{a.ToString("F4", CultureInfo.InvariantCulture)}";
@@ -258,7 +300,7 @@ namespace OpenSkp
                     lines.Add($"#{renderingId}=IFCSURFACESTYLERENDERING(#{colId},{transparency},$,$,$,$,$,$,.FLAT.);");
 
                     int styleId = NextId();
-                    lines.Add($"#{styleId}=IFCSURFACESTYLE('{geomName}_Material',.BOTH.,(#{renderingId}));");
+                    lines.Add($"#{styleId}=IFCSURFACESTYLE('{displayName}_Material',.BOTH.,(#{renderingId}));");
 
                     styleAssignId = NextId();
                     lines.Add($"#{styleAssignId}=IFCPRESENTATIONSTYLEASSIGNMENT((#{styleId}));");
@@ -281,33 +323,23 @@ namespace OpenSkp
                 string prodGuid = GenerateIfcGuid();
                 if (stepType == "IFCBUILDINGELEMENTPROXY")
                 {
-                    lines.Add($"#{productId}={stepType}('{prodGuid}',#{ownerHistId},'{geomName}',$,$,#{prodPlacementId},#{prodShapeId},$,.NOTDEFINED.);");
+                    lines.Add($"#{productId}={stepType}('{prodGuid}',#{ownerHistId},'{displayName}',$,$,#{prodPlacementId},#{prodShapeId},$,.NOTDEFINED.);");
                 }
                 else
                 {
-                    lines.Add($"#{productId}={stepType}('{prodGuid}',#{ownerHistId},'{geomName}',$,$,#{prodPlacementId},#{prodShapeId},$,$);");
+                    lines.Add($"#{productId}={stepType}('{prodGuid}',#{ownerHistId},'{displayName}',$,$,#{prodPlacementId},#{prodShapeId},$,$);");
                 }
                 productIds.Add(productId);
 
-                if (meta != null && meta.Properties != null && meta.Properties.Count > 0)
+                if (meta != null)
                 {
-                    var propValIds = new List<int>();
-                    foreach (var kvp in meta.Properties)
+                    WritePset(productId, "Pset_CustomProperties", meta.Properties);
+                    if (meta.AttributeDictionaries != null)
                     {
-                        string cleanK = SanitizeName(kvp.Key);
-                        string cleanV = SanitizeName(kvp.Value);
-                        int propId = NextId();
-                        lines.Add($"#{propId}=IFCPROPERTYSINGLEVALUE('{cleanK}',$,IFCTEXT('{cleanV}'),$);");
-                        propValIds.Add(propId);
-                    }
-
-                    if (propValIds.Count > 0)
-                    {
-                        int psetId = NextId();
-                        string propRefs = string.Join(",", propValIds.ConvertAll(pid => $"#{pid}"));
-                        lines.Add($"#{psetId}=IFCPROPERTYSET('{GenerateIfcGuid()}',#{ownerHistId},'Pset_CustomProperties',$,({propRefs}));");
-
-                        lines.Add($"#{NextId()}=IFCRELDEFINESBYPROPERTIES('{GenerateIfcGuid()}',#{ownerHistId},$,$,(#{productId}),#{psetId});");
+                        foreach (var dictKvp in meta.AttributeDictionaries)
+                        {
+                            WritePset(productId, $"Pset_{dictKvp.Key}", dictKvp.Value);
+                        }
                     }
                 }
             }
@@ -320,7 +352,10 @@ namespace OpenSkp
                 if (itemIds.Count > 0)
                 {
                     string itemRefs = string.Join(",", itemIds.ConvertAll(iid => $"#{iid}"));
-                    lines.Add($"#{NextId()}=IFCPRESENTATIONLAYERASSIGNMENT('{lName}',$,({itemRefs}),$);");
+                    string layerOn = scene.LayerHidden != null && scene.LayerHidden.TryGetValue(lName, out bool isHidden) && isHidden
+                        ? ".F."
+                        : ".T.";
+                    lines.Add($"#{NextId()}=IFCPRESENTATIONLAYERWITHSTYLE('{SanitizeName(lName)}',$,({itemRefs}),$,{layerOn},.F.,.F.,());");
                 }
             }
 
@@ -338,7 +373,13 @@ namespace OpenSkp
         /// <summary>
         /// Exports a baked <see cref="Scene"/> directly to an ISO-10303-21 STEP ASCII IFC4 file using UTF-8 without BOM.
         /// </summary>
-        public static void ExportIfc(Scene scene, string outputPath, double scale = MetresToInches, string schema = "IFC4", Func<string, string, (string StepType, string ClassName)>? classifier = null)
+        public static void ExportIfc(
+            Scene scene,
+            string outputPath,
+            double scale = MetresToMm,
+            string schema = "IFC4",
+            Func<string, string, (string StepType, string ClassName)>? classifier = null,
+            bool classifyUsingFullPath = false)
         {
             if (scene == null)
             {
@@ -355,7 +396,7 @@ namespace OpenSkp
                 Directory.CreateDirectory(dir);
             }
 
-            string text = ToIfc(scene, scale, schema, classifier);
+            string text = ToIfc(scene, scale, schema, classifier, classifyUsingFullPath);
             File.WriteAllText(outputPath, text, new UTF8Encoding(false));
         }
     }

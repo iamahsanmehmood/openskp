@@ -286,6 +286,38 @@ class TestIfcExporter:
         assert ",.F.,.F.,.F.,())" in hidden_line
         assert ",.T.,.F.,.F.,())" in visible_line
 
+    def test_custom_classifier_receives_raw_unescaped_text(self):
+        prim = GlbPrimitive(
+            positions=array("f", [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+            normals=array("f", [0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0]),
+            uvs=array("f", [0.0, 0.0, 1.0, 0.0, 0.0, 1.0]),
+            indices=array("I", [0, 1, 2]),
+            material_index=0,
+            geom_name="mesh_0",
+        )
+        scene = Scene(
+            scene_hierarchy=InstanceNode(name="Root"),
+            mesh_index={"mesh_0": MeshMetadata(name="Wände 'A'", layer="Außenwände")},
+            glb_primitives=[prim],
+            gltf_materials=[{"pbrMetallicRoughness": {"baseColorFactor": [0.5, 0.5, 0.5, 1.0]}}],
+            layer_hidden={"Außenwände": True},
+        )
+        seen = []
+
+        def custom_classifier(name: str, layer: str):
+            seen.append((name, layer))
+            return ("IFCWALL", "IfcWall")
+
+        ifc_text = to_ifc(scene, classifier=custom_classifier)
+        assert seen == [("Wände 'A'", "Außenwände")]
+        assert "W\\X2\\00E4\\X0\\nde ''A''" in ifc_text
+        layer_line = next(
+            line for line in ifc_text.splitlines() if "IFCPRESENTATIONLAYERWITHSTYLE(" in line
+        )
+        assert "Au\\X2\\00DF00E4\\X0\\nw\\X2\\00E4\\X0\\nde" not in layer_line
+        assert "Au\\X2\\00DF\\X0\\enw\\X2\\00E4\\X0\\nde" in layer_line
+        assert ",.F.,.F.,.F.,())" in layer_line
+
     def test_to_ifc_writes_a_property_set_per_extra_attribute_dictionary(self):
         """A third-party plugin's attribute dictionary (e.g. the
         steel-detailing "fbd-einfo" seen on the Keith Street file) must

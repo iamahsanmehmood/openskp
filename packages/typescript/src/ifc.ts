@@ -4,6 +4,7 @@ declare const process: any;
 declare const require: any;
 
 export const METRES_TO_INCHES = 39.37007874015748;
+export const METRES_TO_MM = 1000.0;
 
 const IFC_BASE64 = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_$';
 
@@ -40,15 +41,26 @@ function classifyByKeyword(name: string): [string, string] | null {
  * Tries the component's own name first, then falls back to `layerName`
  * (many SketchUp-for-BIM workflows organize by tag/layer - "Walls",
  * "Doors" - even when individual components are never renamed away from
- * SketchUp's own defaults like "Component#109415"), then falls back to a
- * generic, untyped element if neither matches.
+ * SketchUp's own defaults like "Component#109415"). If neither matches and
+ * `classifyUsingFullPath` is set, falls back further to keyword-matching
+ * the component's full ancestor hierarchy path, then finally to a generic,
+ * untyped element if nothing matches.
  */
-export function classifyElement(geomName: string, layerName = ''): [string, string] {
+export function classifyElement(
+  geomName: string,
+  layerName = '',
+  pathName = '',
+  classifyUsingFullPath = false
+): [string, string] {
   const byName = classifyByKeyword(geomName);
   if (byName) return byName;
   if (layerName) {
     const byLayer = classifyByKeyword(layerName);
     if (byLayer) return byLayer;
+  }
+  if (classifyUsingFullPath && pathName) {
+    const byPath = classifyByKeyword(pathName);
+    if (byPath) return byPath;
   }
   return ['IFCBUILDINGELEMENTPROXY', 'IfcBuildingElementProxy'];
 }
@@ -83,15 +95,19 @@ function getPrimRgb(scene: SkpScene, primMatIdx: number): [number, number, numbe
  */
 export function toIFC(
   scene: SkpScene,
-  scale: number = METRES_TO_INCHES,
+  scale: number = METRES_TO_MM,
   schema: string = 'IFC4',
-  classifier?: (geomName: string, layerName: string) => [string, string]
+  classifier?: (geomName: string, layerName: string) => [string, string],
+  classifyUsingFullPath = false
 ): string {
   if (!scene || !scene.glbPrimitives) {
     throw new Error('toIFC requires a valid SkpScene instance');
   }
 
-  const classify = classifier || classifyElement;
+  const classify = classifier
+    ? (name: string, layer: string, _path: string) => classifier(name, layer)
+    : (name: string, layer: string, path: string) =>
+        classifyElement(name, layer, path, classifyUsingFullPath);
 
   const schemaStr = (schema || 'IFC4').toUpperCase();
   const nowIso = new Date().toISOString().replace(/\.\d{3}Z$/, '');
@@ -195,21 +211,54 @@ export function toIFC(
   const layerItems: Map<string, number[]> = new Map();
   const matStyleCache: Map<string, number> = new Map();
 
+  const writePset = (
+    productId: number,
+    psetName: string,
+    props: Record<string, unknown> | null | undefined
+  ): void => {
+    if (!props || typeof props !== 'object') return;
+    const entries = Object.entries(props);
+    if (entries.length === 0) return;
+
+    const propValIds: number[] = [];
+    for (const [pk, pv] of entries) {
+      const cleanK = sanitizeName(String(pk));
+      const cleanV = sanitizeName(String(pv));
+      const propId = nextId();
+      lines.push(`#${propId}=IFCPROPERTYSINGLEVALUE('${cleanK}',$,IFCTEXT('${cleanV}'),$);`);
+      propValIds.push(propId);
+    }
+
+    const psetId = nextId();
+    const propRefs = propValIds.map((pid) => `#${pid}`).join(',');
+    lines.push(
+      `#${psetId}=IFCPROPERTYSET('${generateIFCGUID()}',#${ownerHistId},'${sanitizeName(psetName)}',$,(${propRefs}));`
+    );
+    lines.push(
+      `#${nextId()}=IFCRELDEFINESBYPROPERTIES('${generateIFCGUID()}',#${ownerHistId},$,$,(#${productId}),#${psetId});`
+    );
+  };
+
   for (const prim of getSurfacePrimitives(scene)) {
     const triCount = Math.floor(prim.indices.length / 3);
     const vCount = Math.floor(prim.positions.length / 3);
     if (triCount === 0 || vCount === 0) continue;
 
-    const geomName = sanitizeName(prim.geomName);
     const meta = scene.meshIndex ? scene.meshIndex[prim.geomName] : undefined;
-    const layerName = sanitizeName(meta && meta.layer ? meta.layer : 'Layer0');
-    const [stepType] = classify(geomName, layerName);
+    const rawNameSrc = meta && meta.name ? meta.name : prim.geomName;
+    const rawName = (rawNameSrc ? rawNameSrc.trim() : '') || 'Unnamed';
+    const displayName = sanitizeName(rawName);
+    const rawLayer = meta && meta.layer ? meta.layer : '';
+    const classifyLayer = rawLayer.trim() || 'Layer0';
+    const layerKey = rawLayer.trim() ? rawLayer : 'Layer0';
+    const pathName = meta && meta.path ? meta.path : '';
+    const [stepType] = classify(rawName, classifyLayer, pathName);
 
     const ptCoords: string[] = [];
     for (let i = 0; i < vCount; i++) {
       const vx = (prim.positions[i * 3] * scale).toFixed(6);
-      const vy = (prim.positions[i * 3 + 1] * scale).toFixed(6);
-      const vz = (prim.positions[i * 3 + 2] * scale).toFixed(6);
+      const vy = (-prim.positions[i * 3 + 2] * scale).toFixed(6);
+      const vz = (prim.positions[i * 3 + 1] * scale).toFixed(6);
       ptCoords.push(`(${vx},${vy},${vz})`);
     }
 
@@ -229,10 +278,10 @@ export function toIFC(
       `#${faceSetId}=IFCTRIANGULATEDFACESET(#${ptListId},$,.TRUE.,(${faceIndices.join(',')}),$);`
     );
 
-    if (!layerItems.has(layerName)) {
-      layerItems.set(layerName, []);
+    if (!layerItems.has(layerKey)) {
+      layerItems.set(layerKey, []);
     }
-    layerItems.get(layerName)!.push(faceSetId);
+    layerItems.get(layerKey)!.push(faceSetId);
 
     const [r, g, b, a] = getPrimRgb(scene, prim.materialIndex);
     const rgbaKey = `${r.toFixed(4)},${g.toFixed(4)},${b.toFixed(4)},${a.toFixed(4)}`;
@@ -248,7 +297,9 @@ export function toIFC(
       );
 
       const styleId = nextId();
-      lines.push(`#${styleId}=IFCSURFACESTYLE('${geomName}_Material',.BOTH.,(#${renderingId}));`);
+      lines.push(
+        `#${styleId}=IFCSURFACESTYLE('${displayName}_Material',.BOTH.,(#${renderingId}));`
+      );
 
       styleAssignId = nextId();
       lines.push(`#${styleAssignId}=IFCPRESENTATIONSTYLEASSIGNMENT((#${styleId}));`);
@@ -275,35 +326,21 @@ export function toIFC(
     const prodGuid = generateIFCGUID();
     if (stepType === 'IFCBUILDINGELEMENTPROXY') {
       lines.push(
-        `#${productId}=${stepType}('${prodGuid}',#${ownerHistId},'${geomName}',$,$,#${prodPlacementId},#${prodShapeId},$,.NOTDEFINED.);`
+        `#${productId}=${stepType}('${prodGuid}',#${ownerHistId},'${displayName}',$,$,#${prodPlacementId},#${prodShapeId},$,.NOTDEFINED.);`
       );
     } else {
       lines.push(
-        `#${productId}=${stepType}('${prodGuid}',#${ownerHistId},'${geomName}',$,$,#${prodPlacementId},#${prodShapeId},$,$);`
+        `#${productId}=${stepType}('${prodGuid}',#${ownerHistId},'${displayName}',$,$,#${prodPlacementId},#${prodShapeId},$,$);`
       );
     }
     productIds.push(productId);
 
-    if (meta && meta.properties && typeof meta.properties === 'object') {
-      const propValIds: number[] = [];
-      for (const [pk, pv] of Object.entries(meta.properties)) {
-        const cleanK = sanitizeName(String(pk));
-        const cleanV = sanitizeName(String(pv));
-        const propId = nextId();
-        lines.push(`#${propId}=IFCPROPERTYSINGLEVALUE('${cleanK}',$,IFCTEXT('${cleanV}'),$);`);
-        propValIds.push(propId);
-      }
-
-      if (propValIds.length > 0) {
-        const psetId = nextId();
-        const propRefs = propValIds.map((pid) => `#${pid}`).join(',');
-        lines.push(
-          `#${psetId}=IFCPROPERTYSET('${generateIFCGUID()}',#${ownerHistId},'Pset_CustomProperties',$,(${propRefs}));`
-        );
-
-        lines.push(
-          `#${nextId()}=IFCRELDEFINESBYPROPERTIES('${generateIFCGUID()}',#${ownerHistId},$,$,(#${productId}),#${psetId});`
-        );
+    if (meta) {
+      writePset(productId, 'Pset_CustomProperties', meta.properties);
+      if (meta.attributeDictionaries && typeof meta.attributeDictionaries === 'object') {
+        for (const [dictName, entries] of Object.entries(meta.attributeDictionaries)) {
+          writePset(productId, `Pset_${dictName}`, entries);
+        }
       }
     }
   }
@@ -313,8 +350,9 @@ export function toIFC(
     const itemIds = layerItems.get(lName)!;
     if (itemIds.length > 0) {
       const itemRefs = itemIds.map((iid) => `#${iid}`).join(',');
+      const layerOn = scene.layerHidden && scene.layerHidden[lName] ? '.F.' : '.T.';
       lines.push(
-        `#${nextId()}=IFCPRESENTATIONLAYERASSIGNMENT('${lName}',$,(${itemRefs}),$);`
+        `#${nextId()}=IFCPRESENTATIONLAYERWITHSTYLE('${sanitizeName(lName)}',$,(${itemRefs}),$,${layerOn},.F.,.F.,());`
       );
     }
   }
@@ -336,9 +374,10 @@ export function toIFC(
 export function exportIFC(
   scene: SkpScene,
   outputPath: string,
-  scale: number = METRES_TO_INCHES,
+  scale: number = METRES_TO_MM,
   schema: string = 'IFC4',
-  classifier?: (geomName: string, layerName: string) => [string, string]
+  classifier?: (geomName: string, layerName: string) => [string, string],
+  classifyUsingFullPath = false
 ): void {
   if (typeof process !== 'undefined' && process.versions && process.versions.node) {
     const fs = require('fs');
@@ -347,7 +386,7 @@ export function exportIFC(
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
-    const text = toIFC(scene, scale, schema, classifier);
+    const text = toIFC(scene, scale, schema, classifier, classifyUsingFullPath);
     fs.writeFileSync(outputPath, text, 'utf8');
   } else {
     throw new Error('exportIFC is only supported in Node.js environment');

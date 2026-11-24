@@ -82,7 +82,7 @@ namespace OpenSkp
                 var mat = scene.GltfMaterials[prim.MaterialIndex] as Dictionary<string, object>;
                 if (mat != null && mat.TryGetValue("pbrMetallicRoughness", out var pbrObj) && pbrObj is Dictionary<string, object> pbr)
                 {
-                    if (pbr.TryGetValue("baseColorFactor", out var colorVecObj) && colorVecObj is List<object> colorVec && colorVec.Count >= 3)
+                    if (pbr.TryGetValue("baseColorFactor", out var colorVecObj) && colorVecObj is System.Collections.IList colorVec && colorVec.Count >= 3)
                     {
                         r = (int)Math.Round(Convert.ToDouble(colorVec[0], CultureInfo.InvariantCulture) * 255.0);
                         g = (int)Math.Round(Convert.ToDouble(colorVec[1], CultureInfo.InvariantCulture) * 255.0);

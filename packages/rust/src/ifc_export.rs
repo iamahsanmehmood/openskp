@@ -34,7 +34,7 @@ use crate::scene::{GlbPrimitive, Scene};
 /// the unit declaration.
 pub const METRES_TO_MM: f64 = 1000.0;
 
-/// A custom classifier for [`to_ifc`]: called with an element's (escaped)
+/// A custom classifier for [`to_ifc`]: called with an element's raw
 /// display name and layer name, returns `(STEP_ENTITY_TYPE, IFC_CLASS_NAME)`,
 /// e.g. `("IFCCOLUMN", "IfcColumn")`.
 pub type IfcClassifier<'a> = dyn Fn(&str, &str) -> (String, String) + 'a;
@@ -736,19 +736,27 @@ pub fn to_ifc(
         // nobody renamed it) - use that for both classification and the
         // element's IFC Name, falling back to the internal key only if a
         // primitive somehow has no mesh_index entry.
-        let display_name = match meta {
-            Some(m) if !m.name.is_empty() => sanitize_name(&m.name),
-            _ => sanitize_name(&prim.geom_name),
+        let raw_name_src = match meta {
+            Some(m) if !m.name.is_empty() => m.name.as_str(),
+            _ => prim.geom_name.as_str(),
         };
-        let raw_layer = meta.map_or("", |m| m.layer.as_str());
-        let layer_name = if raw_layer.is_empty() {
-            "Layer0".to_string()
+        let trimmed_name = raw_name_src.trim_matches(is_trim_char);
+        let raw_name = if trimmed_name.is_empty() {
+            "Unnamed"
         } else {
-            sanitize_name(raw_layer)
+            trimmed_name
+        };
+        let display_name = sanitize_name(raw_name);
+        let raw_layer = meta.map_or("", |m| m.layer.as_str());
+        let trimmed_layer = raw_layer.trim_matches(is_trim_char);
+        let classify_layer = if trimmed_layer.is_empty() {
+            "Layer0"
+        } else {
+            trimmed_layer
         };
         let path_name = meta.map_or("", |m| m.path.as_str());
 
-        let (step_type, _) = classify(&display_name, &layer_name, path_name);
+        let (step_type, _) = classify(raw_name, classify_layer, path_name);
 
         let mut pt_list = String::new();
         for (i, p) in prim.positions.as_chunks::<3>().0.iter().enumerate() {
