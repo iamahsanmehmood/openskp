@@ -667,3 +667,87 @@ The only refused feature was the pre-fix guide record (drawing element
 `0x07d0` instead of `0x4268`), which produced SketchUp's warning dialog;
 after the wrapper fix every annotation opened cleanly.  No other stage-4
 record was refused.
+
+# Stage 5 research notes: scenes and the model camera
+
+## Scene records
+
+Pairs: `stage5/oracle/scene_perspective.skp` (one scene), `scene_two.skp`
+(parallel + perspective), `scene_hidden.skp` (a scene hiding `TagB`) and
+`stage5_target.skp` (three scenes with the first selected).
+
+The scene section is top-level `0x0207`: `0x6d60 { 0x6d61 (pages), 0x6d62
+(selected page id) }`.  Each page is `0x7148`:
+
+```
+0x6f54 { entity base (page id), 0x6f55 name [, 0x6f56 description] }
+0x7149 u32 properties saved (1 camera, 2 style/rendering, 4 shadows,
+       8 axes, 16 hidden geometry, 32 hidden layers, ...)
+0x714a { 0x34bc camera }              (bit 1)
+0x714c style id                       (bit 2)
+0x714d { 0x733c rendering options }   (bit 2)
+0x714e { 0x6590 shadow info }         (bit 4)
+0x714f { 0x4650 axes }                (bit 8)
+0x7150 hidden-layer id list (u8 width + var-int id per entry) (bit 32)
+0x7152 u8 included in animation
+0x7153 display name
+0x7154 / 0x7155 f64 transition time / delay (-1 = model default)
+0x7157 u8 thumbnail flag
+```
+
+The camera record `0x34bc` is the same one the model uses (`0x01fa >
+0x34bc`): `0x34bd` eye, `0x34be` target, `0x34bf` up (3 f64 each), `0x34c0`
+and `0x34c1` constants, `0x34c2` u8 perspective flag (1 perspective, 0
+parallel), `0x34c3` visible height (inches; only meaningful in parallel -
+SketchUp stores a stale 1.0 in perspective), `0x34c4` field of view degrees,
+plus constant fields `0x34c5`-`0x34ce`.  The stored up vector is always
+orthogonalized against the view direction (the Ruby camera's `up` value is
+not stored verbatim when it is not perpendicular).
+
+The writer emits properties `1|2|4|8|32` (camera, style/rendering, shadows,
+axes, hidden layers), copying `0x733c` / `0x6590` / `0x4650` and the style id
+from the template's own sections and writes the page's hidden-layer list.
+All new pages are appended to any existing page list, and the first page is
+the selected one (`0x6d62`).
+
+## Model camera
+
+`0x01fa > 0x34bc` is the camera the file opens with.  The writer sets the
+standard Iso view by default - eye `(100, -100, 100)`, target `(0, 0, 0)`,
+up Z orthogonalized, parallel projection, ortho height 200 - matching
+`create.py`'s Iso default, via `VffBuilder.set_camera(...)` (eye, target, up,
+perspective, fov, ortho_height) if the caller wants another view.  The
+`34bc` record is rebuilt from the template's own record with the eye / target
+/ up / perspective / fov / height leaves replaced, so any constant fields
+survive.
+
+## Stage-5 acceptance
+
+`stage5/written_stage5.skp` (SHA-256
+`d4d557bbd4b49fc11c6ea88ede3d6ca167b47ad3e1d1d729893cb6c0cc0a38b7`) contains
+a box on `TagA` and a box on `TagB` and three scenes: Perspective (fov 45),
+Parallel (height 80), and Hide B (hides `TagB`), with the model camera set to
+the standard Iso view.
+
+* `Sketchup.open_file` returned true with **no warning dialog** and three
+  pages.
+* Ruby dump: model camera eye (100,-100,100), target (0,0,0), perspective
+  false, fov 35, height 200; page Perspective eye (40,-40,30), fov 45,
+  perspective true, height 1; page Parallel eye (0,-60,0), up (0,0,1),
+  perspective false, fov 35, height 80; page Hide B carries the hidden-layer
+  list.  `selected_page` is "Perspective".
+* Switching to each page (with `transition_time = 0` forced for the test,
+  since SketchUp animates page changes) applies the stored camera exactly:
+  Perspective (40,-40,30) fov 45 perspective, Parallel (0,-60,0) fov 35
+  perspective false height 80, Hide B (40,-40,30) with `TagB` hidden and
+  `TagA` visible.
+* SketchUp re-saved it as `stage5/sketchup_resave.skp` (SHA-256
+  `c6a0118426ec339d867dc3807124dd651a764f2b499e06d1b68451eaa52b0cf0`);
+  openskp parses both with identical revision, integrity, all three pages
+  (names, eye/target/up, perspective/fov/height, hidden tags), the model
+  camera record and the layers.  `skpwright verify` accepts both.
+
+No stage-5 record was refused by SketchUp.  The only subtlety is that page
+switches animate by default, so the acceptance script forces an instant
+transition before reading the applied camera; the stored pages keep the
+model's default transition time (-1).

@@ -1126,3 +1126,107 @@ def test_skpwright_verify_stage4_when_available(tmp_path):
         timeout=300,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+# ── Stage 5: scenes and the model camera ────────────────────────────────────
+
+
+def build_stage5_acceptance(template=None) -> tuple:
+    builder = VffBuilder(template)
+    tag_a = builder.add_layer("TagA", (200, 0, 0))
+    tag_b = builder.add_layer("TagB", (0, 0, 200))
+
+    def box(offset, tag):
+        points = [
+            (offset[0] + x, offset[1] + y, offset[2] + z)
+            for x, y, z in BOX8
+        ]
+        for quad in BOX_QUADS:
+            builder.add_face([points[i] for i in quad], layer=tag)
+
+    box((0.0, 0.0, 0.0), tag_a)
+    box((20.0, 0.0, 0.0), tag_b)
+    builder.add_scene(
+        "Perspective", (40.0, -40.0, 30.0), (0.0, 0.0, 0.0),
+        perspective=True, fov=45.0,
+    )
+    builder.add_scene(
+        "Parallel", (0.0, -60.0, 0.0), (0.0, 0.0, 0.0),
+        perspective=False, ortho_height=80.0,
+    )
+    builder.add_scene(
+        "Hide B", (40.0, -40.0, 30.0), (0.0, 0.0, 0.0),
+        perspective=True, fov=45.0, hidden_layers=[tag_b],
+    )
+    builder.set_camera(
+        (100.0, -100.0, 100.0), (0.0, 0.0, 0.0),
+        perspective=False, ortho_height=200.0,
+    )
+    return builder.to_bytes(), tag_a, tag_b
+
+
+def test_genuine_sketchup_scenes_are_read():
+    path = WRITER_FIXTURES / "genuine_stage5.skp"
+    model = SkpFile.open(str(path)).parse()
+    pages = {page.name: page for page in model.pages}
+    assert set(pages) == {"Perspective", "Parallel", "Hide B"}
+
+    perspective = pages["Perspective"]
+    assert tuple(round(v, 6) for v in perspective.eye) == (40.0, -40.0, 30.0)
+    assert tuple(round(v, 6) for v in perspective.target) == (0.0, 0.0, 0.0)
+    assert perspective.parallel is False
+    assert perspective.fov == pytest.approx(45.0)
+    assert perspective.hidden_layers == []
+
+    parallel = pages["Parallel"]
+    assert tuple(round(v, 6) for v in parallel.eye) == (0.0, -60.0, 0.0)
+    assert tuple(round(v, 6) for v in parallel.up) == (0.0, 0.0, 1.0)
+    assert parallel.parallel is True
+    assert parallel.ortho_height == pytest.approx(80.0)
+
+    assert pages["Hide B"].hidden_layers == ["TagB"]
+
+
+def test_writer_scenes_round_trip(tmp_path):
+    data, _tag_a, _tag_b = build_stage5_acceptance()
+    assert check_integrity(data)
+    path = tmp_path / "stage5.skp"
+    path.write_bytes(data)
+    model = SkpFile.open(str(path)).parse()
+    page_list = model.pages
+    assert [page.name for page in page_list] == ["Perspective", "Parallel", "Hide B"]
+
+    perspective, parallel, hidden = page_list
+    assert tuple(round(v, 6) for v in perspective.eye) == (40.0, -40.0, 30.0)
+    assert tuple(round(v, 6) for v in perspective.target) == (0.0, 0.0, 0.0)
+    assert perspective.parallel is False
+    assert perspective.fov == pytest.approx(45.0)
+    assert perspective.hidden_layers == []
+
+    assert tuple(round(v, 6) for v in parallel.eye) == (0.0, -60.0, 0.0)
+    assert parallel.parallel is True
+    assert parallel.fov == pytest.approx(35.0)
+    assert parallel.ortho_height == pytest.approx(80.0)
+
+    assert hidden.hidden_layers == ["TagB"]
+    assert hidden.parallel is False
+    assert hidden.fov == pytest.approx(45.0)
+
+    layers = {layer.name: layer for layer in model.layers}
+    assert {"TagA", "TagB"} <= set(layers)
+
+
+def test_skpwright_verify_stage5_when_available(tmp_path):
+    binary = os.environ.get("SKPWRIGHT_BIN")
+    if not binary:
+        pytest.skip("SKPWRIGHT_BIN is not set; skpwright is an optional verifier")
+    data, _tag_a, _tag_b = build_stage5_acceptance()
+    path = tmp_path / "stage5.skp"
+    path.write_bytes(data)
+    result = subprocess.run(
+        [binary, "verify", str(path)],
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr

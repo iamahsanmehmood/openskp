@@ -1179,6 +1179,52 @@ class VffBuilder:
             ),
         )
 
+    def add_scene(
+        self,
+        name: str,
+        eye: Sequence[float],
+        target: Sequence[float],
+        up: Optional[Sequence[float]] = None,
+        *,
+        perspective: bool = True,
+        fov: float = 35.0,
+        ortho_height: float = 200.0,
+        hidden_layers: Sequence[int] = (),
+    ) -> None:
+        """Add a scene (page): named camera plus the tags it hides."""
+        for identifier in hidden_layers:
+            self._validate_layer(identifier)
+        self._template.add_scene(
+            name,
+            eye,
+            target,
+            up,
+            perspective=perspective,
+            fov=fov,
+            ortho_height=ortho_height,
+            hidden_layers=hidden_layers,
+        )
+
+    def set_camera(
+        self,
+        eye: Sequence[float],
+        target: Sequence[float],
+        up: Optional[Sequence[float]] = None,
+        *,
+        perspective: bool = True,
+        fov: float = 35.0,
+        ortho_height: float = 200.0,
+    ) -> None:
+        """Set the model camera (the view the file opens with)."""
+        self._template.set_camera(
+            eye,
+            target,
+            up,
+            perspective=perspective,
+            fov=fov,
+            ortho_height=ortho_height,
+        )
+
     def set_model_attributes(
         self,
         attributes: Optional[dict] = None,
