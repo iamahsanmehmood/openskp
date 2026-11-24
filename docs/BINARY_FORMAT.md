@@ -257,3 +257,73 @@ def extract_entity_id(node):
             return result
     return None
 ```
+
+## 7. VFF Writer (Python, 2021+)
+
+`openskp.create_vff` writes the modern container by **editing a template**,
+never by patching fixed byte offsets. It parses the template's `model.dat`
+into a record tree, appends new records to the model's existing pools,
+allocates new ids above the template's own next-id counter, re-encodes the
+tree and repacks the archive. The bundled `_scaffold/blank_vff.skp` is an
+empty SketchUp 2025 document (one default tag, no geometry); any SketchUp
+file with the standard sections can be passed as the template instead.
+
+### 7.1 Header and integrity word
+
+The header is two UTF-16LE marker-prefixed strings followed by a 13-byte
+block whose last four bytes are the integrity word, then the embedded ZIP
+archive (`PK\x03\x04`). The writer keeps the template's header strings and
+patches the model-revision `u16` at magic `VFF\x08\x00\x01\x00` + 7 (it
+writes revision 17) and the integrity word.
+
+skpwright (https://github.com/hew3d/skpwright, by Kurt Granroth,
+GPL-3.0-only) documents the VFF container; the integrity-word algorithm was
+implemented from that description and verified against genuine SketchUp
+saves. No skpwright code is used.
+
+The integrity word is derived from the final archive: take every entry's
+CRC-32 in archive order, subtract 42 from odd-indexed entries, replace the
+`meta/meta.dat` slot with a constant derived from `ceil(n/2)` and the last
+four bytes of `meta.dat`, lay the slots out evens-first, then CRC-32
+`meta.dat` without its last four bytes followed by that table.
+
+### 7.2 ZIP and `model.dat` ordering
+
+New archive entries are emitted as local headers with the 20-byte ZIP64
+extended-information field (two zero `u64`s), DEFLATE level 1 (`0x0006`) for
+`.dat`/`.xml` and stored DEFLATE level 0 (`0x0000`) for images, no data
+descriptor, DOS date `0x0020` and a UTF-8 name. The central directory
+repeats the fields without the extra field. Entry order is:
+
+1. `meta/model_thumbnail.png`, `meta/preview_thumbnail.png`
+2. `meta/meta.dat`
+3. existing `materials/...` entries, then new material folders
+4. other existing entries
+5. `model.dat` **last**
+
+`meta/meta.dat` is repacked with a fresh model GUID (or the explicit
+`set_guid` value), revision 17 and a fresh save time on the history entry.
+
+### 7.3 Records the core writer emits
+
+Everything lives under the root definition container `8813` inside the
+root entity list `F601`, with child pools for vertices (`8913`), edges
+(`8A13`), faces (`8B13`), components (`8C13`) and groups (`8D13`). New ids
+are allocated from the model's next-id record (`F501`), whose counter the
+writer advances.
+
+| Entity | Records |
+|---|---|
+| Drawing/entity base | `05DC` with entity id `05DE`, then `07D0` drawing with optional front material `07D1`, layer ref `07D2` and flags `07D3` |
+| Vertex | `09C4` wrapping point `09C5` (3 × `f64`) |
+| Edge | `0BB8` with start `0BB9`, end `0BBA`; flags carry hidden/soft/smooth bits |
+| Face | `0DAC` with plane `0DAD` (normal + distance, 4 × `f64`), loops `0DAE` (a loop `1194` contains edge uses `0FA0`, each an edge id `0FA1` plus forward bit `0FA2`), optional back material `0DAF` |
+| Material | `32C8` with name `32CC`; the color/opacity lives in `materials/<folder>/material.xml`, and tags own their `Layer_<name>` material |
+| Tag/layer | `8C3C` with name `8D3C`, hidden byte `8E3C`, owned material `8F3C` and tail `903C` |
+| Definition | `7C15` inside the definitions list (`7017` → `7117`) with GUID `7D15`, name `7E15`, kind `8315` (0 component, 1 group), timestamp and behaviour `581B` (`5D1B` always-faces-camera, `5E1B` shadows-face-sun) |
+| Instance/group placement | `6419` with name `6519`, 13 × `f64` transform `6619`, definition reference `6719` and GUID `6819`; a group is the same instance wrapped in `4C1D` in the groups pool |
+
+Faces are deduplicated by exact vertex coordinate and edges by endpoint
+pair, so adjacent faces share (and never duplicate) vertices and edges.
+Non-coplanar input is rejected unless `auto_triangulate=True`, which
+fan-splits it into planar triangles, matching `create.py`'s behavior.

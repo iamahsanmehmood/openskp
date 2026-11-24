@@ -37,6 +37,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **DXF** (Python, TypeScript, .NET, Dart): layer names with any character, no two layers merged, meshes over 32,767 vertices or faces written as single faces; NaN, infinite values and malformed meshes are refused.
 
 ### Added — All 6 languages: which properties a scene saves
+### Added — Python: native VFF (SketchUp 2021+) writer core
+
+- New `openskp.create_vff` module: builds modern VFF files by extending a SketchUp-written template's `model.dat` record tree, recomputing the archive CRCs and header integrity word and giving the document a fresh GUID/save time. The bundled template is an empty SketchUp 2025 document.
+- Core scope: faces (holes, edge hidden/soft/smooth flags and `auto_triangulate`), solid-colour materials, tags, component definitions (including always-faces-camera/shadows-face-sun and explicit GUIDs), instances, and (nested) groups. Shared methods follow `create()`'s names, argument order, defaults and `SkpWriteError` cases; `set_guid` and default `set_document_options` are supported.
+- Textures/UVs, curves, attribute dictionaries, texts/dimensions/guides/section planes and scenes are follow-up work; `open_existing()` does not yet extend VFF sources.
+
+### Added — Python: which properties a scene saves
 
 - `Page.capture_flags` is the u32 a scene stores for the boxes ticked under "Properties to save": tag `7149` of the `7148` record in 2021+ files, and the u32 after the description in classic files. It is `None` when the reader found none, or when the classic fallback scan read a word with bits above `0x1FF`. `use_camera`, `use_rendering_options`, `use_shadow_info`, `use_axes`, `use_hidden_layers`, `use_section_planes`, `use_hidden_geometry` and `use_hidden_objects` read its bits.
 - This tells apart the two meanings of an empty `hidden_entity_ids`: a scene that hides nothing (`use_hidden_objects` is `True`: picking it shows every object) and one that doesn't save hidden objects (`False`: picking it leaves them alone).

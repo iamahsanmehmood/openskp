@@ -222,6 +222,38 @@ builder.add_face(wall, holes=[window])
 builder.save("output.skp")
 ```
 
+### Writing VFF (SketchUp 2021+) files
+
+Python also has a native VFF writer, `openskp.create_vff`. It starts from a
+SketchUp-written template (the bundled empty SketchUp 2025 document by
+default) and extends that document's record tree, so the file keeps every
+engine-level section SketchUp needs and gets a recomputed ZIP/integrity
+header. Its shared methods follow `create()`'s names, argument order,
+defaults and `SkpWriteError` cases, so the same model-building code can use
+either writer:
+
+```python
+from openskp import create_vff
+
+builder = create_vff()
+red = builder.add_material("Red", (255, 0, 0))
+tag = builder.add_layer("Roof", (0, 153, 135))
+with builder.add_component_definition("Box") as box:
+    box.add_face([(0, 0, 0), (10, 0, 0), (10, 10, 0), (0, 10, 0)])
+builder.add_instance(box, translation=(20, 0, 0), layer=tag)
+with builder.add_group("Base", translation=(0, 20, 0), layer=tag) as base:
+    base.add_face([(0, 0, 0), (10, 0, 0), (10, 10, 0), (0, 10, 0)])
+builder.save("modern.skp")
+```
+
+This first version covers the core: the container/template and integrity
+word, faces (holes, edge flags, `auto_triangulate`), solid-colour materials,
+tags, component definitions and instances, and (nested) groups. Textures and
+UVs, curves, attribute dictionaries, texts/dimensions/guides/section planes
+and scenes are follow-up work; `open_existing()` does not yet extend VFF
+sources. `set_guid` and the default `set_document_options` are supported;
+non-default document display settings are not encoded yet.
+
 ### Editing an existing file
 
 `create()` only ever starts from a blank scaffold. To load an *existing*
@@ -281,6 +313,7 @@ starting code, or for a diffable, reviewable text representation of a
 | `openskp.transforms` | 3D matrix transforms and coordinate conversion |
 | `openskp.export` | GLB, OBJ/MTL, STL, PLY, DXF, IFC4, and JSON exporters |
 | `openskp.create` | Writer — build new `.skp` files from scratch |
+| `openskp.create_vff` | Writer — build new VFF (SketchUp 2021+) files from a template |
 | `openskp.edit` | Load an existing legacy `.skp` file and rebuild it as a new writer |
 
 ## Requirements

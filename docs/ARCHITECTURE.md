@@ -129,9 +129,11 @@ internal representation is tracked as follow-up work.
 ## Writer architecture
 
 All five languages can also write: create a new `.skp` file from nothing,
-or load and extend one that already exists. The writer only ever emits a
-**SketchUp 2017 (`{17.0.1}`) classic MFC `CArchive`** container (never VFF) —
-the same format the legacy reader above decodes, just inverted.
+or load and extend one that already exists. The TypeScript, .NET, Dart and
+C++ writers only ever emit a **SketchUp 2017 (`{17.0.1}`) classic MFC
+`CArchive`** container — the same format the legacy reader above decodes,
+just inverted. Python additionally has an experimental VFF (2021+) writer,
+described below.
 
 Real SketchUp never patches a file in place; it fully re-serializes the
 whole document on every save. `create()` follows the same discipline in
@@ -151,6 +153,18 @@ of fixed pointers in the scaffold's own tail region are renumbered
 slots — including widening to the format's 6-byte "big-tag" escape form
 if a shift crosses the 0x7FFE short-reference ceiling, and cascading that
 growth through any later fixed position in the same buffer.
+
+Python's `create_vff` module writes the modern VFF container. It does not
+synthesize SketchUp's scaffold: it parses a SketchUp-written template's
+`model.dat` record tree, appends new records to the model's own pools,
+allocates ids above the template's next-id counter, and repacks the archive
+(recomputing every ZIP CRC and the header integrity word). New records use
+the same TLV tags the reader documents in
+[BINARY_FORMAT.md § 7](BINARY_FORMAT.md#7-vff-writer-python-2021). The shared
+methods mirror `create()`'s names, argument order, defaults and errors, so
+one model-building function can target either writer. This first version
+covers faces, materials, tags, definitions, instances and groups; textures,
+curves, attributes, annotations and scenes are deferred to follow-up PRs.
 
 `open_existing()` takes the complementary approach for a file that
 already has real content: rather than trying to patch or append to an
@@ -199,6 +213,7 @@ platform:
 | Errors / observability | `errors.py` / logging | `errors.ts` / `observability.ts` | `Errors.cs` / `Observability.cs` | `errors.dart` / `observability.dart` | `errors.cpp` / `observability.cpp` |
 | Public entry point | `model.py` | `index.ts` | `Parser.cs` | `parser.dart` | `parser.cpp` |
 | Writer (create new files) | `create.py` | `create.ts` | `Create.cs` | `create.dart` | `create.hpp` / `create.cpp` |
+| Writer (create VFF 2021+ files) | `create_vff.py` + `_vff_writer/` | — | — | — | — |
 | Writer (edit existing files) | `edit.py` | `edit.ts` | `Edit.cs` | `edit.dart` | `edit.hpp` / `edit.cpp` |
 | Writer (generate rebuild code) | `codegen.py` | `codegen.ts` | `Codegen.cs` | `codegen.dart` | `codegen.hpp` / `codegen.cpp` |
 

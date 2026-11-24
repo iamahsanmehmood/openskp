@@ -91,6 +91,7 @@ released. 🔶 = implemented on `main`, not published to a package registry
 | Opt-in progress reporting + structured errors | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Writing** | | | | | |
 | Writer base (`create()`): materials, layers, definitions, groups, faces, holes, auto-triangulate | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Writer: VFF (2021+) core — template, integrity word, faces, solid materials, tags, definitions, instances, nested groups | 🔶 on `main` | ❌ | ❌ | ❌ | ❌ |
 | Writer: circular/arc curves + polylines | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Writer: instance/group rotation + visibility | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Writer: Image entities (`add_image`) | ✅ | ✅ | ✅ | ✅ | ✅ |
