@@ -39,6 +39,27 @@ pub const METRES_TO_MM: f64 = 1000.0;
 /// e.g. `("IFCCOLUMN", "IfcColumn")`.
 pub type IfcClassifier<'a> = dyn Fn(&str, &str) -> (String, String) + 'a;
 
+/// Why a scene cannot be written as IFC (the C++ throws
+/// `std::invalid_argument` with the same messages).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IfcError {
+    /// `scale` is infinite or NaN.
+    NonFiniteScale,
+    /// A coordinate (or scaled coordinate) is infinite or NaN.
+    NonFiniteCoordinate,
+}
+
+impl fmt::Display for IfcError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            IfcError::NonFiniteScale => "IFC scale must be finite",
+            IfcError::NonFiniteCoordinate => "IFC coordinates must be finite",
+        })
+    }
+}
+
+impl std::error::Error for IfcError {}
+
 const IFC_BASE64: &[u8; 64] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_$";
 
 fn is_trim_char(c: char) -> bool {
@@ -49,12 +70,13 @@ fn is_trim_char(c: char) -> bool {
 ///
 /// The default character set of a STEP file is ISO 8859-1, so non-ASCII
 /// text cannot go out as raw UTF-8 (ifcopenshell 0.8.5 silently drops every
-/// such character). Maximal runs of non-ASCII are wrapped in `\X2\` (UTF-16BE,
-/// 4 upper-case hex digits per character), or `\X4\` (8 per character) once a
-/// run holds a character outside the BMP - the forms ifcopenshell's own
-/// writer emits. As in the Python reference, `\X4\` stays in effect for every
-/// later run of the same string. ASCII is written as is, with `'` doubled
-/// and `\` doubled.
+/// such character). Maximal runs of non-ASCII, control characters (0x00-0x1F)
+/// or 0x7F are wrapped in `\X2\` (UTF-16BE, 4 upper-case hex digits per
+/// character), or `\X4\` (8 per character) once a run holds a character outside
+/// the BMP - the forms ifcopenshell's own writer emits. As in the Python
+/// reference, `\X4\` stays in effect for every later run of the same string.
+/// Printable ASCII (0x20-0x7E) is written as is, with `'` doubled and `\`
+/// doubled.
 fn step_text(text: &str) -> String {
     fn flush(out: &mut String, run: &mut Vec<char>, wide: bool) {
         if run.is_empty() {
@@ -75,7 +97,7 @@ fn step_text(text: &str) -> String {
     let mut run: Vec<char> = Vec::new();
     let mut wide = false;
     for ch in text.chars() {
-        if ch.is_ascii() {
+        if (' '..='~').contains(&ch) {
             flush(&mut out, &mut run, wide);
             match ch {
                 '\'' => out.push_str("''"),
@@ -103,27 +125,32 @@ fn sanitize_name(name: &str) -> String {
     step_text(clean)
 }
 
+fn clamp_channel(v: f64, fallback: f64) -> f64 {
+    if v.is_finite() {
+        v.clamp(0.0, 1.0)
+    } else {
+        fallback
+    }
+}
+
 fn get_prim_rgb(scene: &Scene, prim_mat_idx: usize) -> (f64, f64, f64, f64) {
     match scene.gltf_materials.get(prim_mat_idx) {
         Some(mat) => {
             let col = &mat.pbr_metallic_roughness.base_color_factor;
             (
-                col[0].clamp(0.0, 1.0),
-                col[1].clamp(0.0, 1.0),
-                col[2].clamp(0.0, 1.0),
-                col[3].clamp(0.0, 1.0),
+                clamp_channel(col[0], 0.8),
+                clamp_channel(col[1], 0.8),
+                clamp_channel(col[2], 0.8),
+                clamp_channel(col[3], 1.0),
             )
         }
         None => (0.8, 0.8, 0.8, 1.0),
     }
 }
 
-/// `std::fixed << std::setprecision(prec)`; Rust's `{:.N}` matches it digit
-/// for digit except for NaN, spelled the glibc way here.
+/// `std::fixed << std::setprecision(prec)`; every value reaching it has
+/// already been checked to be finite.
 fn fixed(v: f64, prec: usize) -> String {
-    if v.is_nan() {
-        return if v.is_sign_negative() { "-nan" } else { "nan" }.to_string();
-    }
     format!("{v:.prec$}")
 }
 
@@ -131,13 +158,22 @@ fn fixed(v: f64, prec: usize) -> String {
 /// SketchUp Z/height, glTF.z = -SketchUp Y/depth) back to IFC's - and
 /// SketchUp's own - Z-up, or the building comes out rotated ~90 degrees and
 /// mirrored.
-fn ifc_coord(x: f64, y: f64, z: f64, scale: f64) -> String {
-    format!(
+fn ifc_coord(x: f64, y: f64, z: f64, scale: f64) -> Result<String, IfcError> {
+    if !x.is_finite() || !y.is_finite() || !z.is_finite() {
+        return Err(IfcError::NonFiniteCoordinate);
+    }
+    let vx = x * scale;
+    let vy = -z * scale;
+    let vz = y * scale;
+    if !vx.is_finite() || !vy.is_finite() || !vz.is_finite() {
+        return Err(IfcError::NonFiniteCoordinate);
+    }
+    Ok(format!(
         "({},{},{})",
-        fixed(x * scale, 6),
-        fixed(-z * scale, 6),
-        fixed(y * scale, 6)
-    )
+        fixed(vx, 6),
+        fixed(vy, 6),
+        fixed(vz, 6)
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -368,7 +404,7 @@ fn write_pset(
 /// Python's `round(v, 6)` as a hashable key: the double nearest the
 /// correctly rounded 6-dp decimal, with -0.0 folded into 0.0.
 fn weld_key(v: f32) -> u64 {
-    let rounded: f64 = format!("{:.6}", f64::from(v)).parse().unwrap_or(f64::NAN);
+    let rounded = crate::curves::round6(f64::from(v));
     (rounded + 0.0).to_bits()
 }
 
@@ -417,7 +453,7 @@ struct LayerItems(BTreeMap<String, (String, Vec<usize>)>);
 
 impl LayerItems {
     fn add(&mut self, raw_layer: &str, item_id: usize) {
-        let (raw, key) = if raw_layer.is_empty() {
+        let (raw, key) = if raw_layer.trim_matches(is_trim_char).is_empty() {
             ("Layer0".to_string(), "Layer0".to_string())
         } else {
             (raw_layer.to_string(), sanitize_name(raw_layer))
@@ -448,13 +484,20 @@ impl LayerItems {
 /// Each loose-edge run in [`Scene::curve_sets`] becomes an `IfcAnnotation`;
 /// each triangulated primitive becomes a typed product with an
 /// `IfcTriangulatedFaceSet` body, surface style and property sets.
+///
+/// # Errors
+///
+/// [`IfcError`] when `scale` or any coordinate is infinite or NaN.
 pub fn to_ifc(
     scene: &Scene,
     scale: f64,
     schema: &str,
     classifier: Option<&IfcClassifier<'_>>,
     classify_using_full_path: bool,
-) -> String {
+) -> Result<String, IfcError> {
+    if !scale.is_finite() {
+        return Err(IfcError::NonFiniteScale);
+    }
     // A custom classifier keeps its 2-arg (name, layer) signature; only the
     // built-in classify_element() takes the path/full-path parameters.
     let classify = |name: &str, layer: &str, path: &str| -> (String, String) {
@@ -618,6 +661,13 @@ pub fn to_ifc(
         if cs.points_m.len() < 2 {
             continue;
         }
+        if cs
+            .points_m
+            .iter()
+            .any(|p| !p[0].is_finite() || !p[1].is_finite() || !p[2].is_finite())
+        {
+            return Err(IfcError::NonFiniteCoordinate);
+        }
 
         let curve_id = match cs.arc.as_ref().filter(|arc| arc.points.len() >= 3) {
             Some(arc) => {
@@ -637,7 +687,7 @@ pub fn to_ifc(
                     .points
                     .iter()
                     .map(|p| ifc_coord(p[0], p[1], p[2], scale))
-                    .collect();
+                    .collect::<Result<_, _>>()?;
                 let pt_list_id = w.id();
                 w.line(format_args!(
                     "#{pt_list_id}=IFCCARTESIANPOINTLIST3D(({}));",
@@ -655,7 +705,7 @@ pub fn to_ifc(
                     .points_m
                     .iter()
                     .map(|p| ifc_coord(p[0], p[1], p[2], scale))
-                    .collect();
+                    .collect::<Result<_, _>>()?;
                 // IfcPolyline has no implicit closing segment - a closed run
                 // must repeat its first point or the last gap renders open.
                 if cs.closed {
@@ -768,7 +818,7 @@ pub fn to_ifc(
                 f64::from(p[1]),
                 f64::from(p[2]),
                 scale,
-            ));
+            )?);
         }
         let pt_list_id = w.id();
         w.line(format_args!(
@@ -925,12 +975,13 @@ pub fn to_ifc(
 
     w.line(format_args!("ENDSEC;"));
     w.line(format_args!("END-ISO-10303-21;"));
-    w.out
+    Ok(w.out)
 }
 
 /// Exports a baked [`Scene`] directly to an ISO-10303-21 STEP ASCII IFC4
 /// file (see [`to_ifc`] for the parameters), creating the parent directory
-/// if needed.
+/// if needed. Any [`IfcError`] comes back as an
+/// [`io::ErrorKind::InvalidInput`] error before anything is created on disk.
 pub fn export_ifc(
     scene: &Scene,
     path: impl AsRef<Path>,
@@ -940,10 +991,11 @@ pub fn export_ifc(
     classify_using_full_path: bool,
 ) -> io::Result<()> {
     let path = path.as_ref();
+    let text = to_ifc(scene, scale, schema, classifier, classify_using_full_path)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
     if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent)?;
     }
-    let text = to_ifc(scene, scale, schema, classifier, classify_using_full_path);
     std::fs::write(path, text.as_bytes()).map_err(|e| {
         io::Error::new(
             e.kind(),

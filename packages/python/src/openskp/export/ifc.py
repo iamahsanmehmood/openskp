@@ -14,6 +14,7 @@ from __future__ import annotations
 import datetime
 import inspect
 import json
+import math
 import pathlib
 import uuid
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
@@ -57,9 +58,10 @@ def _step_text(text: str) -> str:
         '测试项目'          -> '\\X2\\6D4B8BD5987976EE\\X0\\'
         'emoji\\U0001F600墙' -> 'emoji\\X4\\0001F60000005899\\X0\\'
 
-    Rule: maximal runs of non-ASCII are wrapped in \\X2\\ (UTF-16BE, 4 hex per
-    char), or \\X4\\ (8 hex per char) when the run contains a non-BMP char;
-    ASCII falls outside the runs; ' -> '' and \\ -> \\\\.
+    Rule: maximal runs of non-ASCII, control characters (0x00-0x1F) or 0x7F
+    are wrapped in \\X2\\ (UTF-16BE, 4 hex per char), or \\X4\\ (8 hex per char)
+    when the run contains a non-BMP char; printable ASCII (0x20-0x7E) falls
+    outside the runs; ' -> '' and \\ -> \\\\.
     """
     out: list = []
     run: list = []
@@ -76,7 +78,7 @@ def _step_text(text: str) -> str:
 
     for ch in text:
         o = ord(ch)
-        if o < 128:
+        if 0x20 <= o <= 0x7E:
             flush()
             if ch == "'":
                 out.append("''")
@@ -96,10 +98,27 @@ def sanitize_name(name: str) -> str:
     """Sanitize string for STEP text escaping."""
     if not name:
         return "Unnamed"
-    clean = name.strip()
+    clean = name.strip(" \t\r\n")
     if not clean:
         return "Unnamed"
     return _step_text(clean)
+
+
+def _step_real(val: float) -> str:
+    """Format a finite coordinate as a legal ISO 10303-21 STEP REAL literal."""
+    if not math.isfinite(val):
+        raise ValueError("IFC coordinates must be finite")
+    r = round(val, 6)
+    s = repr(r)
+    if "e" not in s and "E" not in s:
+        return s
+    if abs(r) < 1.0:
+        fixed = f"{r:.6f}".rstrip("0")
+        return fixed + "0" if fixed.endswith(".") else fixed
+    mant, exp = s.upper().split("E", 1)
+    if "." not in mant:
+        mant += ".0"
+    return f"{mant}E{exp}"
 
 
 _ATTR_COUNT_CACHE: Dict[str, Dict[str, int]] = {}
@@ -251,6 +270,8 @@ def to_ifc(
     """
     if not isinstance(scene, Scene):
         raise TypeError("to_ifc requires a valid Scene instance")
+    if isinstance(scale, bool) or not isinstance(scale, (int, float)) or not math.isfinite(scale):
+        raise ValueError("IFC scale must be finite")
 
     if classifier is not None:
         # A caller-supplied classifier used to be
@@ -548,8 +569,14 @@ def to_ifc(
         # Same glTF-Y-up -> IFC-Z-up conversion the mesh branch below uses
         # (there: y = -z, z = y; here the same swap on the curve's points).
         def _ifc_coord(p: Tuple[float, float, float]) -> str:
-            return (f"({round(p[0] * scale, 6)},{round(-p[2] * scale, 6)},"
-                    f"{round(p[1] * scale, 6)})")
+            if not (math.isfinite(p[0]) and math.isfinite(p[1]) and math.isfinite(p[2])):
+                raise ValueError("IFC coordinates must be finite")
+            return (f"({_step_real(p[0] * scale)},{_step_real(-p[2] * scale)},"
+                    f"{_step_real(p[1] * scale)})")
+
+        for p in pts:
+            if not (math.isfinite(p[0]) and math.isfinite(p[1]) and math.isfinite(p[2])):
+                raise ValueError("IFC coordinates must be finite")
 
         arc = getattr(cs, "arc", None)
         if arc and len(arc.get("points") or ()) >= 3:
@@ -675,11 +702,11 @@ def to_ifc(
         # element's IFC Name, falling back to the internal key only if a
         # primitive somehow has no mesh_index entry.
         raw_name_src = meta.name if meta and meta.name else prim.geom_name
-        raw_name = (raw_name_src.strip() if raw_name_src else "") or "Unnamed"
+        raw_name = (raw_name_src.strip(" \t\r\n") if raw_name_src else "") or "Unnamed"
         display_name = sanitize_name(raw_name)
         raw_layer = meta.layer if meta and getattr(meta, "layer", None) else ""
-        classify_layer = raw_layer.strip() or "Layer0"
-        layer_key = raw_layer if raw_layer.strip() else "Layer0"
+        classify_layer = raw_layer.strip(" \t\r\n") or "Layer0"
+        layer_key = raw_layer if raw_layer.strip(" \t\r\n") else "Layer0"
 
         path_name = meta.path if meta and getattr(meta, "path", None) else ""
         step_type, ifc_class = classify(raw_name, classify_layer, path_name)
@@ -694,9 +721,14 @@ def to_ifc(
         # out rotated ~90 degrees and mirrored.
         pt_coords: List[str] = []
         for i in range(v_count):
-            vx = round(prim.positions[i * 3] * scale, 6)
-            vy = round(-prim.positions[i * 3 + 2] * scale, 6)
-            vz = round(prim.positions[i * 3 + 1] * scale, 6)
+            px = prim.positions[i * 3]
+            py = prim.positions[i * 3 + 1]
+            pz = prim.positions[i * 3 + 2]
+            if not (math.isfinite(px) and math.isfinite(py) and math.isfinite(pz)):
+                raise ValueError("IFC coordinates must be finite")
+            vx = _step_real(px * scale)
+            vy = _step_real(-pz * scale)
+            vz = _step_real(py * scale)
             pt_coords.append(f"({vx},{vy},{vz})")
 
         pt_list_id = next_id()
@@ -925,10 +957,10 @@ def export(
             :func:`to_ifc` for the calling convention.
         classify_using_full_path: See :func:`to_ifc`.
     """
-    path = pathlib.Path(output_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
     text = to_ifc(
         scene, scale=scale, schema=schema, classifier=classifier,
         classify_using_full_path=classify_using_full_path,
     )
+    path = pathlib.Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(text.encode("utf-8"))

@@ -1,8 +1,12 @@
 #include "openskp/ifc_export.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
 #include <fstream>
 #include <functional>
 #include <iomanip>
@@ -10,31 +14,116 @@
 #include <optional>
 #include <random>
 #include <sstream>
+#include <stdexcept>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+#include "curves.hpp"
+#include "ifc_attr_counts.hpp"
 
 namespace openskp {
 
 namespace {
 
-const std::string IFC_BASE64 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_$";
+constexpr char kIfcBase64[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_$";
+
+std::vector<std::uint32_t> decode_utf8_codepoints(const std::string& s) {
+  std::vector<std::uint32_t> out;
+  out.reserve(s.size());
+  std::size_t i = 0;
+  const std::size_t n = s.size();
+  while (i < n) {
+    const auto b0 = static_cast<unsigned char>(s[i]);
+    if (b0 < 0x80) {
+      out.push_back(b0);
+      ++i;
+    } else if ((b0 & 0xE0) == 0xC0 && i + 1 < n) {
+      const auto b1 = static_cast<unsigned char>(s[i + 1]);
+      if ((b1 & 0xC0) == 0x80) {
+        const std::uint32_t cp = ((b0 & 0x1Fu) << 6) | (b1 & 0x3Fu);
+        out.push_back(cp >= 0x80 ? cp : 0xFFFDu);
+        i += 2;
+      } else {
+        out.push_back(0xFFFDu);
+        ++i;
+      }
+    } else if ((b0 & 0xF0) == 0xE0 && i + 2 < n) {
+      const auto b1 = static_cast<unsigned char>(s[i + 1]);
+      const auto b2 = static_cast<unsigned char>(s[i + 2]);
+      if ((b1 & 0xC0) == 0x80 && (b2 & 0xC0) == 0x80) {
+        const std::uint32_t cp = ((b0 & 0x0Fu) << 12) | ((b1 & 0x3Fu) << 6) | (b2 & 0x3Fu);
+        out.push_back((cp >= 0x800 && !(cp >= 0xD800 && cp <= 0xDFFF)) ? cp : 0xFFFDu);
+        i += 3;
+      } else {
+        out.push_back(0xFFFDu);
+        ++i;
+      }
+    } else if ((b0 & 0xF8) == 0xF0 && i + 3 < n) {
+      const auto b1 = static_cast<unsigned char>(s[i + 1]);
+      const auto b2 = static_cast<unsigned char>(s[i + 2]);
+      const auto b3 = static_cast<unsigned char>(s[i + 3]);
+      if ((b1 & 0xC0) == 0x80 && (b2 & 0xC0) == 0x80 && (b3 & 0xC0) == 0x80) {
+        const std::uint32_t cp =
+            ((b0 & 0x07u) << 18) | ((b1 & 0x3Fu) << 12) | ((b2 & 0x3Fu) << 6) | (b3 & 0x3Fu);
+        out.push_back((cp >= 0x10000 && cp <= 0x10FFFF) ? cp : 0xFFFDu);
+        i += 4;
+      } else {
+        out.push_back(0xFFFDu);
+        ++i;
+      }
+    } else {
+      out.push_back(0xFFFDu);
+      ++i;
+    }
+  }
+  return out;
+}
+
+std::string step_text(const std::string& text) {
+  std::string out;
+  out.reserve(text.size());
+  std::vector<std::uint32_t> run;
+  bool wide = false;
+
+  auto flush = [&]() {
+    if (run.empty()) return;
+    out += wide ? "\\X4\\" : "\\X2\\";
+    char buf[16];
+    for (std::uint32_t cp : run) {
+      std::snprintf(buf, sizeof(buf), wide ? "%08X" : "%04X", static_cast<unsigned int>(cp));
+      out += buf;
+    }
+    out += "\\X0\\";
+    run.clear();
+  };
+
+  for (std::uint32_t cp : decode_utf8_codepoints(text)) {
+    if (cp >= 0x20u && cp <= 0x7Eu) {
+      flush();
+      if (cp == '\'') {
+        out += "''";
+      } else if (cp == '\\') {
+        out += "\\\\";
+      } else {
+        out.push_back(static_cast<char>(cp));
+      }
+    } else {
+      run.push_back(cp);
+      if (cp > 0xFFFFu) wide = true;
+    }
+  }
+  flush();
+  return out;
+}
 
 std::string sanitize_name(const std::string& name) {
   if (name.empty()) return "Unnamed";
-  std::string clean;
-  clean.reserve(name.size());
-  for (char c : name) {
-    if (c == '\'') {
-      clean += "''";
-    } else if (c == '\\') {
-      clean += "\\\\";
-    } else {
-      clean += c;
-    }
-  }
   // trim
-  size_t start = clean.find_first_not_of(" \t\r\n");
+  const std::size_t start = name.find_first_not_of(" \t\r\n");
   if (start == std::string::npos) return "Unnamed";
-  size_t end = clean.find_last_not_of(" \t\r\n");
-  return clean.substr(start, end - start + 1);
+  const std::size_t end = name.find_last_not_of(" \t\r\n");
+  return step_text(name.substr(start, end - start + 1));
 }
 
 std::tuple<double, double, double, double> get_prim_rgb(const Scene& scene, size_t prim_mat_idx) {
@@ -50,15 +139,128 @@ std::tuple<double, double, double, double> get_prim_rgb(const Scene& scene, size
   return {r, g, b, a};
 }
 
+std::uint64_t weld_key(float v) {
+  double r = round6(static_cast<double>(v));
+  if (r == 0.0) r = 0.0;
+  std::uint64_t bits = 0;
+  std::memcpy(&bits, &r, sizeof(bits));
+  return bits;
+}
+
+struct WeldPosHash {
+  std::size_t operator()(const std::array<std::uint64_t, 3>& k) const noexcept {
+    std::uint64_t h = k[0];
+    h ^= k[1] + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+    h ^= k[2] + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+    return static_cast<std::size_t>(h);
+  }
+};
+
+bool mesh_is_closed(const GlbPrimitive& prim) {
+  const std::size_t v_count = prim.positions.size() / 3;
+  const std::size_t tri_count = prim.indices.size() / 3;
+  if (v_count == 0 || tri_count == 0) return false;
+
+  std::unordered_map<std::array<std::uint64_t, 3>, std::uint32_t, WeldPosHash> weld;
+  weld.reserve(v_count);
+  std::vector<std::uint32_t> remap(v_count);
+  for (std::size_t i = 0; i < v_count; ++i) {
+    const std::array<std::uint64_t, 3> key{
+        weld_key(prim.positions[i * 3]),
+        weld_key(prim.positions[i * 3 + 1]),
+        weld_key(prim.positions[i * 3 + 2]),
+    };
+    auto [it, inserted] = weld.emplace(key, static_cast<std::uint32_t>(weld.size()));
+    remap[i] = it->second;
+  }
+
+  std::unordered_map<std::uint64_t, std::uint32_t> edge_use;
+  edge_use.reserve(tri_count * 3 / 2 + 1);
+  for (std::size_t i = 0; i < tri_count; ++i) {
+    const std::uint32_t i0 = prim.indices[i * 3];
+    const std::uint32_t i1 = prim.indices[i * 3 + 1];
+    const std::uint32_t i2 = prim.indices[i * 3 + 2];
+    if (i0 >= v_count || i1 >= v_count || i2 >= v_count) return false;
+    const std::uint32_t a = remap[i0];
+    const std::uint32_t b = remap[i1];
+    const std::uint32_t c = remap[i2];
+    for (const auto& [u, v] :
+         std::array<std::pair<std::uint32_t, std::uint32_t>, 3>{{{a, b}, {b, c}, {c, a}}}) {
+      const std::uint64_t lo = u < v ? u : v;
+      const std::uint64_t hi = u < v ? v : u;
+      ++edge_use[(lo << 32) | hi];
+    }
+  }
+
+  if (edge_use.empty()) return false;
+  for (const auto& [ek, count] : edge_use) {
+    if (count != 2) return false;
+  }
+  return true;
+}
+
+void append_fixed6(std::string& out, double val) {
+  char buf[64];
+  const int n = std::snprintf(buf, sizeof(buf), "%.6f", val);
+  if (n <= 0) return;
+  if (static_cast<std::size_t>(n) < sizeof(buf)) {
+    for (int i = 0; i < n; ++i) {
+      if (buf[i] == ',') buf[i] = '.';
+    }
+    out.append(buf, static_cast<std::size_t>(n));
+    return;
+  }
+  std::string dyn(static_cast<std::size_t>(n) + 1, '\0');
+  const int n2 = std::snprintf(dyn.data(), dyn.size(), "%.6f", val);
+  if (n2 > 0) {
+    const std::size_t len = std::min(static_cast<std::size_t>(n2), dyn.size() - 1);
+    for (std::size_t i = 0; i < len; ++i) {
+      if (dyn[i] == ',') dyn[i] = '.';
+    }
+    out.append(dyn.data(), len);
+  }
+}
+
+void append_ifc_coord(std::string& out, double x, double y, double z, double scale) {
+  if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) {
+    throw std::invalid_argument("IFC coordinates must be finite");
+  }
+  const double vx = x * scale;
+  const double vy = -z * scale;
+  const double vz = y * scale;
+  if (!std::isfinite(vx) || !std::isfinite(vy) || !std::isfinite(vz)) {
+    throw std::invalid_argument("IFC coordinates must be finite");
+  }
+  out.push_back('(');
+  append_fixed6(out, vx);
+  out.push_back(',');
+  append_fixed6(out, vy);
+  out.push_back(',');
+  append_fixed6(out, vz);
+  out.push_back(')');
+}
+
+std::string ifc_coord(double x, double y, double z, double scale) {
+  std::string out;
+  out.reserve(40);
+  append_ifc_coord(out, x, y, z, scale);
+  return out;
+}
+
 }  // namespace
 
 std::string generate_ifc_guid() {
-  static std::mt19937 rng(std::random_device{}());
-  std::uniform_int_distribution<int> dist(0, 63);
-  std::string result;
-  result.reserve(22);
-  for (int i = 0; i < 22; ++i) {
-    result += IFC_BASE64[dist(rng)];
+  static thread_local std::mt19937_64 rng(std::random_device{}());
+  std::uint64_t hi = rng();
+  std::uint64_t lo = rng();
+  hi = (hi & ~(std::uint64_t{0xF} << 12)) | (std::uint64_t{0x4} << 12);  // version 4
+  lo = (lo & ~(std::uint64_t{0x3} << 62)) | (std::uint64_t{0x2} << 62);  // RFC 4122 variant
+
+  std::string result(22, '0');
+  for (int i = 21; i >= 0; --i) {
+    result[static_cast<std::size_t>(i)] = kIfcBase64[lo & 63u];
+    lo = (lo >> 6) | ((hi & 63u) << 58);
+    hi >>= 6;
   }
   return result;
 }
@@ -133,6 +335,9 @@ void write_pset(std::ostringstream& ss, const std::function<int()>& next_id, int
 
 std::string to_ifc(const Scene& scene, double scale, const std::string& schema,
                    const IfcClassifier& classifier, bool classify_using_full_path) {
+  if (!std::isfinite(scale)) {
+    throw std::invalid_argument("IFC scale must be finite");
+  }
   // classifier (if given) keeps its original 2-arg (name, layer) public
   // signature; only the built-in classify_element() gains the path/
   // full-path-matching parameters, matching openskp.export.ifc's own
@@ -199,7 +404,7 @@ std::string to_ifc(const Scene& scene, double scale, const std::string& schema,
 
   int owner_hist_id = next_id();
   ss << "#" << owner_hist_id << "=IFCOWNERHISTORY(#" << person_org_id << ",#" << app_id
-     << ",$,.READWRITE.,$,$,$," << timestamp_epoch << ");\r\n";
+     << ",$,.NOCHANGE.,$,$,$," << timestamp_epoch << ");\r\n";
 
   int length_unit_id = next_id();
   ss << "#" << length_unit_id << "=IFCSIUNIT(*,.LENGTHUNIT.,.MILLI.,.METRE.);\r\n";
@@ -208,7 +413,7 @@ std::string to_ifc(const Scene& scene, double scale, const std::string& schema,
   ss << "#" << angle_unit_id << "=IFCSIUNIT(*,.PLANEANGLEUNIT.,$,.RADIAN.);\r\n";
 
   int solid_unit_id = next_id();
-  ss << "#" << solid_unit_id << "=IFCSIUNIT(*,.STERADIANUNIT.,$,.STERADIAN.);\r\n";
+  ss << "#" << solid_unit_id << "=IFCSIUNIT(*,.SOLIDANGLEUNIT.,$,.STERADIAN.);\r\n";
 
   int unit_assign_id = next_id();
   ss << "#" << unit_assign_id << "=IFCUNITASSIGNMENT((#" << length_unit_id << ",#" << angle_unit_id
@@ -221,8 +426,12 @@ std::string to_ifc(const Scene& scene, double scale, const std::string& schema,
   ss << "#" << axis_placement_id << "=IFCAXIS2PLACEMENT3D(#" << pt_zero_id << ",$,$);\r\n";
 
   int geom_ctx_id = next_id();
-  ss << "#" << geom_ctx_id << "=IFCGEOMETRICREPRESENTATIONCONTEXT($,'Model',3,1.0E-5,# "
+  ss << "#" << geom_ctx_id << "=IFCGEOMETRICREPRESENTATIONCONTEXT($,'Model',3,1.0E-5,#"
      << axis_placement_id << ",$);\r\n";
+
+  int ann_ctx_id = next_id();
+  ss << "#" << ann_ctx_id << "=IFCGEOMETRICREPRESENTATIONSUBCONTEXT('Annotation','Model',*,*,*,*,#"
+     << geom_ctx_id << ",$,.MODEL_VIEW.,$);\r\n";
 
   int proj_id = next_id();
   ss << "#" << proj_id << "=IFCPROJECT('" << generate_ifc_guid() << "',#" << owner_hist_id
@@ -259,8 +468,92 @@ std::string to_ifc(const Scene& scene, double scale, const std::string& schema,
      << ",$,$,#" << bldg_id << ",(#" << storey_id << "));\r\n";
 
   std::vector<int> product_ids;
-  std::map<std::string, std::vector<int>> layer_items;
+  std::map<std::string, std::pair<std::string, std::vector<int>>> layer_items;
   std::map<std::string, int> mat_style_cache;
+
+  auto add_layer_item = [&](const std::string& raw_layer, int item_id) {
+    const bool has_layer = raw_layer.find_first_not_of(" \t\r\n") != std::string::npos;
+    const std::string raw = has_layer ? raw_layer : "Layer0";
+    const std::string key = has_layer ? sanitize_name(raw_layer) : "Layer0";
+    auto [it, inserted] = layer_items.emplace(key, std::make_pair(raw, std::vector<int>{}));
+    it->second.second.push_back(item_id);
+  };
+
+  for (const auto& cs : scene.curve_sets) {
+    if (cs.points_m.size() < 2) continue;
+    for (const auto& p : cs.points_m) {
+      if (!std::isfinite(p[0]) || !std::isfinite(p[1]) || !std::isfinite(p[2])) {
+        throw std::invalid_argument("IFC coordinates must be finite");
+      }
+    }
+
+    int curve_id = 0;
+    if (cs.arc && cs.arc->points.size() >= 3) {
+      std::ostringstream seg_ss;
+      for (std::size_t i = 0; i < cs.arc->segments.size(); ++i) {
+        if (i > 0) seg_ss << ",";
+        const auto& s = cs.arc->segments[i];
+        seg_ss << "IFCARCINDEX((" << (s[0] + 1) << "," << (s[1] + 1) << "," << (s[2] + 1) << "))";
+      }
+      std::string coord_str;
+      coord_str.reserve(cs.arc->points.size() * 36);
+      for (std::size_t i = 0; i < cs.arc->points.size(); ++i) {
+        if (i > 0) coord_str.push_back(',');
+        const auto& p = cs.arc->points[i];
+        append_ifc_coord(coord_str, p[0], p[1], p[2], scale);
+      }
+      const int pt_list_id = next_id();
+      ss << "#" << pt_list_id << "=IFCCARTESIANPOINTLIST3D((" << coord_str << "));\r\n";
+      curve_id = next_id();
+      ss << "#" << curve_id << "=IFCINDEXEDPOLYCURVE(#" << pt_list_id << ",(" << seg_ss.str()
+         << "),.F.);\r\n";
+    } else {
+      std::vector<std::string> coords;
+      coords.reserve(cs.points_m.size() + (cs.closed ? 1 : 0));
+      for (const auto& p : cs.points_m) {
+        coords.push_back(ifc_coord(p[0], p[1], p[2], scale));
+      }
+      if (cs.closed) coords.push_back(coords.front());
+
+      std::vector<int> pt_ids;
+      pt_ids.reserve(coords.size());
+      for (const auto& c : coords) {
+        const int pt_id = next_id();
+        ss << "#" << pt_id << "=IFCCARTESIANPOINT(" << c << ");\r\n";
+        pt_ids.push_back(pt_id);
+      }
+      curve_id = next_id();
+      ss << "#" << curve_id << "=IFCPOLYLINE((";
+      for (std::size_t i = 0; i < pt_ids.size(); ++i) {
+        if (i > 0) ss << ",";
+        ss << "#" << pt_ids[i];
+      }
+      ss << "));\r\n";
+    }
+
+    const int curve_set_id = next_id();
+    ss << "#" << curve_set_id << "=IFCGEOMETRICCURVESET((#" << curve_id << "));\r\n";
+
+    add_layer_item(cs.layer, curve_id);
+
+    const std::string ann_name = sanitize_name(cs.name.empty() ? "Curve" : cs.name);
+    const int ann_rep_id = next_id();
+    ss << "#" << ann_rep_id << "=IFCSHAPEREPRESENTATION(#" << ann_ctx_id
+       << ",'Annotation','GeometricCurveSet',(#" << curve_set_id << "));\r\n";
+    const int ann_shape_id = next_id();
+    ss << "#" << ann_shape_id << "=IFCPRODUCTDEFINITIONSHAPE($,$,(#" << ann_rep_id << "));\r\n";
+    const int ann_placement_id = next_id();
+    ss << "#" << ann_placement_id << "=IFCLOCALPLACEMENT(#" << storey_placement_id << ",#"
+       << axis_placement_id << ");\r\n";
+    const int ann_id = next_id();
+    ss << "#" << ann_id << "=IFCANNOTATION('" << generate_ifc_guid() << "',#" << owner_hist_id
+       << ",'" << ann_name << "',$,$,#" << ann_placement_id << ",#" << ann_shape_id << ");\r\n";
+
+    for (const auto& [dict_name, entries] : cs.attribute_dictionaries) {
+      write_pset(ss, next_id, owner_hist_id, ann_id, "Pset_" + dict_name, entries);
+    }
+    product_ids.push_back(ann_id);
+  }
 
   for (const auto& prim : scene.glb_primitives) {
     if (prim.unpainted_back) continue;
@@ -291,7 +584,6 @@ std::string to_ifc(const Scene& scene, double scale, const std::string& schema,
         ls == std::string::npos
             ? "Layer0"
             : raw_layer.substr(ls, raw_layer.find_last_not_of(" \t\r\n") - ls + 1);
-    std::string layer_key = ls == std::string::npos ? "Layer0" : raw_layer;
     std::string path_name = meta_it != scene.mesh_index.end() ? meta_it->second.path : "";
 
     auto [step_type, _] = classify(raw_name, classify_layer, path_name);
@@ -301,19 +593,16 @@ std::string to_ifc(const Scene& scene, double scale, const std::string& schema,
     // for GLB export, but IFC (like SketchUp itself) is Z-up, so it has
     // to be converted back rather than passed through raw, or the
     // exported building comes out rotated ~90 degrees and mirrored.
-    std::ostringstream pt_ss;
-    pt_ss.imbue(std::locale::classic());
-    pt_ss << std::fixed << std::setprecision(6);
+    std::string pt_coords;
+    pt_coords.reserve(v_count * 36);
     for (size_t i = 0; i < v_count; ++i) {
-      if (i > 0) pt_ss << ",";
-      double vx = prim.positions[i * 3] * scale;
-      double vy = -prim.positions[i * 3 + 2] * scale;
-      double vz = prim.positions[i * 3 + 1] * scale;
-      pt_ss << "(" << vx << "," << vy << "," << vz << ")";
+      if (i > 0) pt_coords.push_back(',');
+      append_ifc_coord(pt_coords, prim.positions[i * 3], prim.positions[i * 3 + 1],
+                       prim.positions[i * 3 + 2], scale);
     }
 
     int pt_list_id = next_id();
-    ss << "#" << pt_list_id << "=IFCCARTESIANPOINTLIST3D((" << pt_ss.str() << "));\r\n";
+    ss << "#" << pt_list_id << "=IFCCARTESIANPOINTLIST3D((" << pt_coords << "));\r\n";
 
     std::ostringstream face_ss;
     for (size_t i = 0; i < tri_count; ++i) {
@@ -322,11 +611,12 @@ std::string to_ifc(const Scene& scene, double scale, const std::string& schema,
               << (prim.indices[i * 3 + 2] + 1) << ")";
     }
 
+    const char* closed = mesh_is_closed(prim) ? ".T." : ".F.";
     int face_set_id = next_id();
-    ss << "#" << face_set_id << "=IFCTRIANGULATEDFACESET(#" << pt_list_id << ",$,.TRUE.,("
+    ss << "#" << face_set_id << "=IFCTRIANGULATEDFACESET(#" << pt_list_id << ",$," << closed << ",("
        << face_ss.str() << "),$);\r\n";
 
-    layer_items[layer_key].push_back(face_set_id);
+    add_layer_item(raw_layer, face_set_id);
 
     auto [r, g, b, a] = get_prim_rgb(scene, prim.material_index);
     std::ostringstream key_ss;
@@ -373,16 +663,29 @@ std::string to_ifc(const Scene& scene, double scale, const std::string& schema,
        << axis_placement_id << ");\r\n";
 
     int product_id = next_id();
-    std::string prod_guid = generate_ifc_guid();
-    if (step_type == "IFCBUILDINGELEMENTPROXY") {
-      ss << "#" << product_id << "=" << step_type << "('" << prod_guid << "',#" << owner_hist_id
-         << ",'" << display_name << "',$,$,#" << prod_placement_id << ",#" << prod_shape_id
-         << ",$,.NOTDEFINED.);\r\n";
-    } else {
-      ss << "#" << product_id << "=" << step_type << "('" << prod_guid << "',#" << owner_hist_id
-         << ",'" << display_name << "',$,$,#" << prod_placement_id << ",#" << prod_shape_id
-         << ",$,$);\r\n";
+    std::vector<std::string> attrs{
+        "'" + generate_ifc_guid() + "'",
+        "#" + std::to_string(owner_hist_id),
+        "'" + display_name + "'",
+        "$",
+        "$",
+        "#" + std::to_string(prod_placement_id),
+        "#" + std::to_string(prod_shape_id),
+        "$",
+    };
+    const auto declared = ifc_attr_count(schema_str, step_type);
+    const std::size_t total =
+        std::max(attrs.size(), (declared && *declared > 0) ? *declared : std::size_t{9});
+    attrs.resize(total, "$");
+    if (step_type == "IFCBUILDINGELEMENTPROXY" && total == 9) {
+      attrs[8] = ".NOTDEFINED.";
     }
+    ss << "#" << product_id << "=" << step_type << "(";
+    for (std::size_t i = 0; i < attrs.size(); ++i) {
+      if (i > 0) ss << ",";
+      ss << attrs[i];
+    }
+    ss << ");\r\n";
     product_ids.push_back(product_id);
 
     if (meta_it != scene.mesh_index.end()) {
@@ -408,18 +711,19 @@ std::string to_ifc(const Scene& scene, double scale, const std::string& schema,
   // that can carry a layer's visibility at all (LayerOn); every other
   // attribute here besides Name and LayerOn is left unset/false since
   // this project doesn't track them (freeze/block/layer-level styles).
-  for (const auto& [l_name, item_ids] : layer_items) {
+  for (const auto& [l_name, entry] : layer_items) {
+    const auto& [raw_name, item_ids] = entry;
     if (!item_ids.empty()) {
       std::ostringstream item_ss;
       for (size_t i = 0; i < item_ids.size(); ++i) {
         if (i > 0) item_ss << ",";
         item_ss << "#" << item_ids[i];
       }
-      auto hidden_it = scene.layer_hidden.find(l_name);
+      auto hidden_it = scene.layer_hidden.find(raw_name);
       const char* layer_on =
           (hidden_it != scene.layer_hidden.end() && hidden_it->second) ? ".F." : ".T.";
-      ss << "#" << next_id() << "=IFCPRESENTATIONLAYERWITHSTYLE('" << sanitize_name(l_name)
-         << "',$,(" << item_ss.str() << "),$," << layer_on << ",.F.,.F.,());\r\n";
+      ss << "#" << next_id() << "=IFCPRESENTATIONLAYERWITHSTYLE('" << l_name << "',$,("
+         << item_ss.str() << "),$," << layer_on << ",.F.,.F.,());\r\n";
     }
   }
 
@@ -441,6 +745,7 @@ std::string to_ifc(const Scene& scene, double scale, const std::string& schema,
 void export_ifc(const Scene& scene, const std::filesystem::path& path, double scale,
                 const std::string& schema, const IfcClassifier& classifier,
                 bool classify_using_full_path) {
+  std::string text = to_ifc(scene, scale, schema, classifier, classify_using_full_path);
   if (path.has_parent_path()) {
     std::filesystem::create_directories(path.parent_path());
   }
@@ -448,7 +753,6 @@ void export_ifc(const Scene& scene, const std::filesystem::path& path, double sc
   if (!file.is_open()) {
     throw std::runtime_error("Failed to open file for writing: " + path.string());
   }
-  std::string text = to_ifc(scene, scale, schema, classifier, classify_using_full_path);
   file.write(text.data(), text.size());
 }
 

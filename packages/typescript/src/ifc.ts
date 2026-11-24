@@ -1,4 +1,6 @@
-import { SkpScene, getSurfacePrimitives } from './model';
+import { SkpScene, GlbPrimitive, getSurfacePrimitives } from './model';
+import { round6 } from './curves';
+import { ifcAttrCount } from './ifc-attr-counts';
 
 declare const process: any;
 declare const require: any;
@@ -9,18 +11,71 @@ export const METRES_TO_MM = 1000.0;
 const IFC_BASE64 = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_$';
 
 export function generateIFCGUID(): string {
-  let result = '';
-  for (let i = 0; i < 22; i++) {
-    const r = Math.floor(Math.random() * 64);
-    result += IFC_BASE64[r];
+  const bytes = new Uint8Array(16);
+  for (let i = 0; i < 16; i++) {
+    bytes[i] = Math.floor(Math.random() * 256);
   }
-  return result;
+  bytes[6] = (bytes[6] & 0x0f) | 0x40; // version 4
+  bytes[8] = (bytes[8] & 0x3f) | 0x80; // RFC 4122 variant
+  let u = 0n;
+  for (let i = 0; i < 16; i++) {
+    u = (u << 8n) | BigInt(bytes[i]);
+  }
+  const chars = new Array<string>(22);
+  for (let i = 21; i >= 0; i--) {
+    chars[i] = IFC_BASE64[Number(u & 63n)];
+    u >>= 6n;
+  }
+  return chars.join('');
+}
+
+export function stepText(text: string): string {
+  let out = '';
+  const run: number[] = [];
+  let wide = false;
+
+  const flush = (): void => {
+    if (run.length === 0) return;
+    out += wide ? '\\X4\\' : '\\X2\\';
+    const width = wide ? 8 : 4;
+    for (const cp of run) {
+      out += cp.toString(16).toUpperCase().padStart(width, '0');
+    }
+    out += '\\X0\\';
+    run.length = 0;
+  };
+
+  for (const ch of text) {
+    const cp = ch.codePointAt(0)!;
+    if (cp >= 0x20 && cp <= 0x7e) {
+      flush();
+      if (ch === "'") {
+        out += "''";
+      } else if (ch === '\\') {
+        out += '\\\\';
+      } else {
+        out += ch;
+      }
+    } else {
+      run.push(cp);
+      if (cp > 0xffff) {
+        wide = true;
+      }
+    }
+  }
+  flush();
+  return out;
+}
+
+function trimAsciiWs(s: string | null | undefined): string {
+  if (!s) return '';
+  return s.replace(/^[ \t\r\n]+|[ \t\r\n]+$/g, '');
 }
 
 export function sanitizeName(name: string | null | undefined): string {
-  if (!name) return 'Unnamed';
-  const clean = name.replace(/'/g, "''").replace(/\\/g, '\\\\').trim();
-  return clean.length > 0 ? clean : 'Unnamed';
+  const clean = trimAsciiWs(name);
+  if (clean.length === 0) return 'Unnamed';
+  return stepText(clean);
 }
 
 function classifyByKeyword(name: string): [string, string] | null {
@@ -84,6 +139,143 @@ function getPrimRgb(scene: SkpScene, primMatIdx: number): [number, number, numbe
   return [r, g, b, a];
 }
 
+function weldVertices(
+  positions: Float32Array,
+  vCount: number
+): { remap: Uint32Array; uCount: number } {
+  let bucketCount = 16;
+  const targetBuckets = Math.min(vCount, 1 << 23);
+  while (bucketCount < targetBuckets) bucketCount <<= 1;
+  const bucketMask = bucketCount - 1;
+
+  const buckets = new Int32Array(bucketCount).fill(-1);
+  const nextUnique = new Int32Array(vCount);
+  const ux = new Float64Array(vCount);
+  const uy = new Float64Array(vCount);
+  const uz = new Float64Array(vCount);
+  const remap = new Uint32Array(vCount);
+
+  const scratchF64 = new Float64Array(3);
+  const scratchU32 = new Uint32Array(scratchF64.buffer);
+  let uCount = 0;
+
+  for (let i = 0; i < vCount; i++) {
+    let rx = round6(positions[i * 3]);
+    let ry = round6(positions[i * 3 + 1]);
+    let rz = round6(positions[i * 3 + 2]);
+    if (rx === 0) rx = 0;
+    if (ry === 0) ry = 0;
+    if (rz === 0) rz = 0;
+
+    scratchF64[0] = rx;
+    scratchF64[1] = ry;
+    scratchF64[2] = rz;
+    let h = Math.imul(scratchU32[0] ^ scratchU32[1], 0x9e3779b1);
+    h = Math.imul(h ^ scratchU32[2] ^ scratchU32[3], 0x85ebca6b);
+    h = Math.imul(h ^ scratchU32[4] ^ scratchU32[5], 0xc2b2ae35);
+    h ^= h >>> 16;
+    const b = h & bucketMask;
+
+    let u = buckets[b];
+    while (u !== -1) {
+      if (ux[u] === rx && uy[u] === ry && uz[u] === rz) break;
+      u = nextUnique[u];
+    }
+    if (u === -1) {
+      u = uCount++;
+      ux[u] = rx;
+      uy[u] = ry;
+      uz[u] = rz;
+      nextUnique[u] = buckets[b];
+      buckets[b] = u;
+    }
+    remap[i] = u;
+  }
+
+  return { remap, uCount };
+}
+
+export function meshIsClosed(prim: GlbPrimitive): boolean {
+  const positions = prim.positions;
+  const indices = prim.indices;
+  const vCount = Math.floor(positions.length / 3);
+  const triCount = Math.floor(indices.length / 3);
+  if (vCount === 0 || triCount === 0) return false;
+
+  const triIndexCount = triCount * 3;
+  for (let i = 0; i < triIndexCount; i++) {
+    if (indices[i] >= vCount) return false;
+  }
+
+  const { remap, uCount } = weldVertices(positions, vCount);
+
+  const offsets = new Uint32Array(uCount + 1);
+  for (let i = 0; i < triIndexCount; i += 3) {
+    const a = remap[indices[i]];
+    const b = remap[indices[i + 1]];
+    const c = remap[indices[i + 2]];
+    offsets[(a < b ? a : b) + 1]++;
+    offsets[(b < c ? b : c) + 1]++;
+    offsets[(c < a ? c : a) + 1]++;
+  }
+  for (let u = 0; u < uCount; u++) {
+    offsets[u + 1] += offsets[u];
+  }
+
+  const cursor = new Uint32Array(offsets.subarray(0, uCount));
+  const adj = new Uint32Array(triIndexCount);
+  for (let i = 0; i < triIndexCount; i += 3) {
+    const a = remap[indices[i]];
+    const b = remap[indices[i + 1]];
+    const c = remap[indices[i + 2]];
+    adj[cursor[a < b ? a : b]++] = a < b ? b : a;
+    adj[cursor[b < c ? b : c]++] = b < c ? c : b;
+    adj[cursor[c < a ? c : a]++] = c < a ? a : c;
+  }
+
+  const stamp = new Int32Array(uCount).fill(-1);
+  const counts = new Uint32Array(uCount);
+  for (let u = 0; u < uCount; u++) {
+    const start = offsets[u];
+    const end = offsets[u + 1];
+    for (let p = start; p < end; p++) {
+      const v = adj[p];
+      if (stamp[v] !== u) {
+        stamp[v] = u;
+        counts[v] = 1;
+      } else {
+        counts[v]++;
+      }
+    }
+    for (let p = start; p < end; p++) {
+      if (counts[adj[p]] !== 2) return false;
+    }
+  }
+  return true;
+}
+
+function fmtReal6(v: number): string {
+  if (!Number.isFinite(v)) {
+    throw new Error('IFC coordinates must be finite');
+  }
+  const s = v.toFixed(6);
+  const eIdx = s.indexOf('e');
+  if (eIdx === -1) return s;
+  const mant = s.slice(0, eIdx);
+  const exp = s.slice(eIdx + 1);
+  return `${mant.includes('.') ? mant : `${mant}.0`}E${exp}`;
+}
+
+function ifcCoord(x: number, y: number, z: number, scale: number): string {
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {
+    throw new Error('IFC coordinates must be finite');
+  }
+  const vx = fmtReal6(x * scale);
+  const vy = fmtReal6(-z * scale);
+  const vz = fmtReal6(y * scale);
+  return `(${vx},${vy},${vz})`;
+}
+
 /**
  * Serialize a baked SkpScene to ISO-10303-21 STEP ASCII IFC4 format.
  *
@@ -103,6 +295,9 @@ export function toIFC(
   if (!scene || !scene.glbPrimitives) {
     throw new Error('toIFC requires a valid SkpScene instance');
   }
+  if (!Number.isFinite(scale)) {
+    throw new Error('IFC scale must be finite');
+  }
 
   const classify = classifier
     ? (name: string, layer: string, _path: string) => classifier(name, layer)
@@ -120,7 +315,7 @@ export function toIFC(
     `FILE_NAME('model.ifc','${nowIso}',('OpenSKP Author'),('OpenSKP Organization'),'OpenSKP IFC Exporter','OpenSKP','');`,
     `FILE_SCHEMA(('${schemaStr}'));`,
     'ENDSEC;',
-    'DATA;'
+    'DATA;',
   ];
 
   let entityId = 1;
@@ -140,7 +335,7 @@ export function toIFC(
 
   const ownerHistId = nextId();
   lines.push(
-    `#${ownerHistId}=IFCOWNERHISTORY(#${personOrgId},#${appId},$,.READWRITE.,$,$,$,${timestampEpoch});`
+    `#${ownerHistId}=IFCOWNERHISTORY(#${personOrgId},#${appId},$,.NOCHANGE.,$,$,$,${timestampEpoch});`
   );
 
   const lengthUnitId = nextId();
@@ -150,7 +345,7 @@ export function toIFC(
   lines.push(`#${angleUnitId}=IFCSIUNIT(*,.PLANEANGLEUNIT.,$,.RADIAN.);`);
 
   const solidUnitId = nextId();
-  lines.push(`#${solidUnitId}=IFCSIUNIT(*,.STERADIANUNIT.,$,.STERADIAN.);`);
+  lines.push(`#${solidUnitId}=IFCSIUNIT(*,.SOLIDANGLEUNIT.,$,.STERADIAN.);`);
 
   const unitAssignId = nextId();
   lines.push(
@@ -166,6 +361,11 @@ export function toIFC(
   const geomCtxId = nextId();
   lines.push(
     `#${geomCtxId}=IFCGEOMETRICREPRESENTATIONCONTEXT($,'Model',3,1.0E-5,#${axisPlacementId},$);`
+  );
+
+  const annCtxId = nextId();
+  lines.push(
+    `#${annCtxId}=IFCGEOMETRICREPRESENTATIONSUBCONTEXT('Annotation','Model',*,*,*,*,#${geomCtxId},$,.MODEL_VIEW.,$);`
   );
 
   const projId = nextId();
@@ -208,8 +408,20 @@ export function toIFC(
   );
 
   const productIds: number[] = [];
-  const layerItems: Map<string, number[]> = new Map();
+  const layerItems: Map<string, { rawName: string; itemIds: number[] }> = new Map();
   const matStyleCache: Map<string, number> = new Map();
+
+  const addLayerItem = (rawLayer: string | null | undefined, itemId: number): void => {
+    const trimmed = trimAsciiWs(rawLayer);
+    const raw = trimmed.length > 0 ? rawLayer! : 'Layer0';
+    const key = trimmed.length > 0 ? sanitizeName(rawLayer) : 'Layer0';
+    let entry = layerItems.get(key);
+    if (!entry) {
+      entry = { rawName: raw, itemIds: [] };
+      layerItems.set(key, entry);
+    }
+    entry.itemIds.push(itemId);
+  };
 
   const writePset = (
     productId: number,
@@ -239,6 +451,69 @@ export function toIFC(
     );
   };
 
+  if (scene.curveSets) {
+    for (const cs of scene.curveSets) {
+      if (!cs.pointsM || cs.pointsM.length < 2) continue;
+      for (const p of cs.pointsM) {
+        if (!Number.isFinite(p[0]) || !Number.isFinite(p[1]) || !Number.isFinite(p[2])) {
+          throw new Error('IFC coordinates must be finite');
+        }
+      }
+
+      let curveId: number;
+      if (cs.arc && cs.arc.points.length >= 3) {
+        const segs = cs.arc.segments.map(
+          (s) => `IFCARCINDEX((${s[0] + 1},${s[1] + 1},${s[2] + 1}))`
+        );
+        const coords = cs.arc.points.map((p) => ifcCoord(p[0], p[1], p[2], scale));
+        const ptListId = nextId();
+        lines.push(`#${ptListId}=IFCCARTESIANPOINTLIST3D((${coords.join(',')}));`);
+        curveId = nextId();
+        lines.push(`#${curveId}=IFCINDEXEDPOLYCURVE(#${ptListId},(${segs.join(',')}),.F.);`);
+      } else {
+        const coords = cs.pointsM.map((p) => ifcCoord(p[0], p[1], p[2], scale));
+        if (cs.closed) {
+          coords.push(coords[0]);
+        }
+        const ptIds: number[] = [];
+        for (const c of coords) {
+          const ptId = nextId();
+          lines.push(`#${ptId}=IFCCARTESIANPOINT(${c});`);
+          ptIds.push(ptId);
+        }
+        curveId = nextId();
+        const ptRefs = ptIds.map((pid) => `#${pid}`).join(',');
+        lines.push(`#${curveId}=IFCPOLYLINE((${ptRefs}));`);
+      }
+
+      const curveSetId = nextId();
+      lines.push(`#${curveSetId}=IFCGEOMETRICCURVESET((#${curveId}));`);
+
+      addLayerItem(cs.layer, curveId);
+
+      const annName = sanitizeName(cs.name || 'Curve');
+      const annRepId = nextId();
+      lines.push(
+        `#${annRepId}=IFCSHAPEREPRESENTATION(#${annCtxId},'Annotation','GeometricCurveSet',(#${curveSetId}));`
+      );
+      const annShapeId = nextId();
+      lines.push(`#${annShapeId}=IFCPRODUCTDEFINITIONSHAPE($,$,(#${annRepId}));`);
+      const annPlacementId = nextId();
+      lines.push(`#${annPlacementId}=IFCLOCALPLACEMENT(#${storeyPlacementId},#${axisPlacementId});`);
+      const annId = nextId();
+      lines.push(
+        `#${annId}=IFCANNOTATION('${generateIFCGUID()}',#${ownerHistId},'${annName}',$,$,#${annPlacementId},#${annShapeId});`
+      );
+
+      if (cs.attributeDictionaries && typeof cs.attributeDictionaries === 'object') {
+        for (const [dictName, entries] of Object.entries(cs.attributeDictionaries)) {
+          writePset(annId, `Pset_${dictName}`, entries);
+        }
+      }
+      productIds.push(annId);
+    }
+  }
+
   for (const prim of getSurfacePrimitives(scene)) {
     const triCount = Math.floor(prim.indices.length / 3);
     const vCount = Math.floor(prim.positions.length / 3);
@@ -246,42 +521,37 @@ export function toIFC(
 
     const meta = scene.meshIndex ? scene.meshIndex[prim.geomName] : undefined;
     const rawNameSrc = meta && meta.name ? meta.name : prim.geomName;
-    const rawName = (rawNameSrc ? rawNameSrc.trim() : '') || 'Unnamed';
+    const rawName = trimAsciiWs(rawNameSrc) || 'Unnamed';
     const displayName = sanitizeName(rawName);
     const rawLayer = meta && meta.layer ? meta.layer : '';
-    const classifyLayer = rawLayer.trim() || 'Layer0';
-    const layerKey = rawLayer.trim() ? rawLayer : 'Layer0';
+    const classifyLayer = trimAsciiWs(rawLayer) || 'Layer0';
     const pathName = meta && meta.path ? meta.path : '';
     const [stepType] = classify(rawName, classifyLayer, pathName);
 
-    const ptCoords: string[] = [];
+    const positions = prim.positions;
+    const ptCoords = new Array<string>(vCount);
     for (let i = 0; i < vCount; i++) {
-      const vx = (prim.positions[i * 3] * scale).toFixed(6);
-      const vy = (-prim.positions[i * 3 + 2] * scale).toFixed(6);
-      const vz = (prim.positions[i * 3 + 1] * scale).toFixed(6);
-      ptCoords.push(`(${vx},${vy},${vz})`);
+      const base = i * 3;
+      ptCoords[i] = ifcCoord(positions[base], positions[base + 1], positions[base + 2], scale);
     }
 
     const ptListId = nextId();
     lines.push(`#${ptListId}=IFCCARTESIANPOINTLIST3D((${ptCoords.join(',')}));`);
 
-    const faceIndices: string[] = [];
+    const indices = prim.indices;
+    const faceIndices = new Array<string>(triCount);
     for (let i = 0; i < triCount; i++) {
-      const idx0 = prim.indices[i * 3] + 1;
-      const idx1 = prim.indices[i * 3 + 1] + 1;
-      const idx2 = prim.indices[i * 3 + 2] + 1;
-      faceIndices.push(`(${idx0},${idx1},${idx2})`);
+      const base = i * 3;
+      faceIndices[i] = `(${indices[base] + 1},${indices[base + 1] + 1},${indices[base + 2] + 1})`;
     }
 
+    const closed = meshIsClosed(prim) ? '.T.' : '.F.';
     const faceSetId = nextId();
     lines.push(
-      `#${faceSetId}=IFCTRIANGULATEDFACESET(#${ptListId},$,.TRUE.,(${faceIndices.join(',')}),$);`
+      `#${faceSetId}=IFCTRIANGULATEDFACESET(#${ptListId},$,${closed},(${faceIndices.join(',')}),$);`
     );
 
-    if (!layerItems.has(layerKey)) {
-      layerItems.set(layerKey, []);
-    }
-    layerItems.get(layerKey)!.push(faceSetId);
+    addLayerItem(rawLayer, faceSetId);
 
     const [r, g, b, a] = getPrimRgb(scene, prim.materialIndex);
     const rgbaKey = `${r.toFixed(4)},${g.toFixed(4)},${b.toFixed(4)},${a.toFixed(4)}`;
@@ -323,16 +593,25 @@ export function toIFC(
     lines.push(`#${prodPlacementId}=IFCLOCALPLACEMENT(#${storeyPlacementId},#${axisPlacementId});`);
 
     const productId = nextId();
-    const prodGuid = generateIFCGUID();
-    if (stepType === 'IFCBUILDINGELEMENTPROXY') {
-      lines.push(
-        `#${productId}=${stepType}('${prodGuid}',#${ownerHistId},'${displayName}',$,$,#${prodPlacementId},#${prodShapeId},$,.NOTDEFINED.);`
-      );
-    } else {
-      lines.push(
-        `#${productId}=${stepType}('${prodGuid}',#${ownerHistId},'${displayName}',$,$,#${prodPlacementId},#${prodShapeId},$,$);`
-      );
+    const attrs: string[] = [
+      `'${generateIFCGUID()}'`,
+      `#${ownerHistId}`,
+      `'${displayName}'`,
+      '$',
+      '$',
+      `#${prodPlacementId}`,
+      `#${prodShapeId}`,
+      '$',
+    ];
+    const declared = ifcAttrCount(schemaStr, stepType);
+    const total = Math.max(attrs.length, declared && declared > 0 ? declared : 9);
+    while (attrs.length < total) {
+      attrs.push('$');
     }
+    if (stepType === 'IFCBUILDINGELEMENTPROXY' && total === 9) {
+      attrs[8] = '.NOTDEFINED.';
+    }
+    lines.push(`#${productId}=${stepType}(${attrs.join(',')});`);
     productIds.push(productId);
 
     if (meta) {
@@ -347,12 +626,12 @@ export function toIFC(
 
   const sortedLayerNames = Array.from(layerItems.keys()).sort();
   for (const lName of sortedLayerNames) {
-    const itemIds = layerItems.get(lName)!;
-    if (itemIds.length > 0) {
-      const itemRefs = itemIds.map((iid) => `#${iid}`).join(',');
-      const layerOn = scene.layerHidden && scene.layerHidden[lName] ? '.F.' : '.T.';
+    const entry = layerItems.get(lName)!;
+    if (entry.itemIds.length > 0) {
+      const itemRefs = entry.itemIds.map((iid) => `#${iid}`).join(',');
+      const layerOn = scene.layerHidden && scene.layerHidden[entry.rawName] ? '.F.' : '.T.';
       lines.push(
-        `#${nextId()}=IFCPRESENTATIONLAYERWITHSTYLE('${sanitizeName(lName)}',$,(${itemRefs}),$,${layerOn},.F.,.F.,());`
+        `#${nextId()}=IFCPRESENTATIONLAYERWITHSTYLE('${lName}',$,(${itemRefs}),$,${layerOn},.F.,.F.,());`
       );
     }
   }
@@ -380,13 +659,13 @@ export function exportIFC(
   classifyUsingFullPath = false
 ): void {
   if (typeof process !== 'undefined' && process.versions && process.versions.node) {
+    const text = toIFC(scene, scale, schema, classifier, classifyUsingFullPath);
     const fs = require('fs');
     const path = require('path');
     const dir = path.dirname(outputPath);
-    if (!fs.existsSync(dir)) {
+    if (dir && !fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
-    const text = toIFC(scene, scale, schema, classifier, classifyUsingFullPath);
     fs.writeFileSync(outputPath, text, 'utf8');
   } else {
     throw new Error('exportIFC is only supported in Node.js environment');
