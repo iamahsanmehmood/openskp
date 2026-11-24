@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — Python, TypeScript, .NET, Dart & Rust: classic writer preserves long Unicode strings and classic reader replaces malformed UTF-16 surrogates (#500, #285)
+
+- Ports C++ PR #500 (`write_str` 16-bit and 32-bit `AfxWriteStringLength` headers for strings of 255 UTF-16 units or more, plus bounded `U+FFFD` replacement for lone UTF-16 surrogates in classic archive strings) across Python, TypeScript, .NET, Dart and Rust. Previously all five writers rejected strings of 255 UTF-16 units or more, and Dart's classic reader preserved raw unpaired UTF-16 surrogates instead of replacing them with `U+FFFD`.
+
 ### Fixed — Python: scenes use a component instance's own paint and tag in classic files (#596)
 
 - `build_scene()` and `build_instanced_scene()` read an instance's paint and tag from its 2021+ `D007` record only. In classic (pre-2021) files a painted component came out in its tag's colour, and every instance sat on its parent's tag. Both now come from the instance itself, and nested components inherit the paint.

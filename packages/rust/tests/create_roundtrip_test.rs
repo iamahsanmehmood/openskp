@@ -1510,3 +1510,92 @@ fn guide_options_reject_a_foreign_layer_handle() {
         .add_construction_line([0.0; 3], Some([1.0, 0.0, 0.0]), None, &foreign)
         .is_err());
 }
+
+#[test]
+fn attribute_strings_cross_mfc_length_boundaries() {
+    for length in [254usize, 255, 256, 65_533, 65_534, 65_535, 65_536] {
+        let mut b = create();
+        let mut def = b
+            .add_component_definition("TextCarrier", &DefinitionOptions::default())
+            .unwrap();
+        def.add_face(
+            &[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            &FaceOptions::default(),
+        )
+        .unwrap();
+        let def = def.close().unwrap();
+        let ascii = "x".repeat(length);
+        let unicode = format!("{}\u{1F600}", "x".repeat(length - 2));
+        b.add_instance(
+            def,
+            &InstanceOptions {
+                attributes: attrs(&[
+                    ("ascii", ascii.as_str().into()),
+                    ("unicode", unicode.as_str().into()),
+                ]),
+                attribute_dict_name: "RoundTrip".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let model = round_trip(&mut b);
+        assert_eq!(model.root().instances.len(), 1);
+        let dict = &model.root().instances[0].attribute_dictionaries["RoundTrip"];
+        assert_eq!(dict["ascii"].text(), ascii);
+        assert_eq!(dict["unicode"].text(), unicode);
+    }
+}
+
+#[test]
+fn malformed_utf16_attribute_strings_use_replacement_characters() {
+    let mut b = create();
+    let mut def = b
+        .add_component_definition("TextCarrier", &DefinitionOptions::default())
+        .unwrap();
+    def.add_face(
+        &[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+        &FaceOptions::default(),
+    )
+    .unwrap();
+    let def = def.close().unwrap();
+    b.add_instance(
+        def,
+        &InstanceOptions {
+            attributes: attrs(&[
+                ("damaged", "WXYZQ".into()),
+                ("intact", "still readable".into()),
+            ]),
+            attribute_dict_name: "RoundTrip".into(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    let mut bytes = b.to_bytes().unwrap();
+    let original: [u8; 10] = [b'W', 0, b'X', 0, b'Y', 0, b'Z', 0, b'Q', 0];
+    let malformed: [u8; 10] = [0x00, 0xDC, 0x00, 0xD8, b'Y', 0, 0x3D, 0xD8, 0x00, 0xDE];
+    let start = bytes
+        .windows(original.len())
+        .position(|w| w == original)
+        .expect("find WXYZQ");
+    bytes[start..start + malformed.len()].copy_from_slice(&malformed);
+
+    let parsed = SkpFile::from_buffer(bytes.clone())
+        .parse(&ParseOptions::default())
+        .unwrap();
+    assert_eq!(parsed.root().instances.len(), 1);
+    let dict = &parsed.root().instances[0].attribute_dictionaries["RoundTrip"];
+    assert_eq!(dict["damaged"].text(), "\u{FFFD}\u{FFFD}Y\u{1F600}");
+    assert_eq!(dict["intact"].text(), "still readable");
+
+    // A trailing high surrogate cannot read into the next archive field.
+    bytes[start + 9] = 0xD8;
+    let trailing = SkpFile::from_buffer(bytes)
+        .parse(&ParseOptions::default())
+        .unwrap();
+    assert_eq!(trailing.root().instances.len(), 1);
+    assert_eq!(
+        trailing.root().instances[0].attribute_dictionaries["RoundTrip"]["damaged"].text(),
+        "\u{FFFD}\u{FFFD}Y\u{FFFD}\u{FFFD}"
+    );
+}

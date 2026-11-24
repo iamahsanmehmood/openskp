@@ -1039,10 +1039,20 @@ class _ArchiveWriter {
   void _writeStr(String s) {
     final units = s.codeUnits; // UTF-16 code units == UTF-16LE encoding, 2 bytes each
     final n = units.length;
-    if (n >= 0xFF) {
-      throw SkpWriteError('string too long to encode (255 char limit)');
+    if (n >= 0xFFFFFFFF) {
+      throw SkpWriteError('string too long to encode');
     }
-    buf.addAll([0xFF, 0xFE, 0xFF, n]);
+    buf.addAll(const [0xFF, 0xFE, 0xFF]);
+    if (n < 0xFF) {
+      buf.add(n);
+    } else if (n < 0xFFFE) {
+      buf.add(0xFF);
+      buf.addAll(_u16(n));
+    } else {
+      buf.add(0xFF);
+      buf.addAll(_u16(0xFFFF));
+      buf.addAll(_u32(n));
+    }
     for (final u in units) {
       buf.addAll(_u16(u));
     }

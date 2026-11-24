@@ -1136,3 +1136,67 @@ describe('Persistent ids', () => {
     expect(s.geometryWriter!.nextPid).toBeGreaterThan(s.definitionWriterInstance!.nextPid);
   });
 });
+
+describe('Long and malformed UTF-16 attribute strings', () => {
+  it('attribute strings cross MFC length boundaries', () => {
+    for (const length of [254, 255, 256, 65533, 65534, 65535, 65536]) {
+      const builder = create();
+      const def = builder.addComponentDefinition('TextCarrier', (d) => {
+        d.addFace([
+          [0, 0, 0],
+          [1, 0, 0],
+          [0, 1, 0],
+        ]);
+      });
+      const ascii = 'x'.repeat(length);
+      const unicode = 'x'.repeat(length - 2) + '\u{1F600}';
+      builder.addInstance(def, {
+        attributes: { ascii, unicode },
+        attributeDictName: 'dynamic_attributes',
+      });
+      const model = parseSkp(toBuffer(builder.toBytes()));
+      expect(model.root.instances.length).toBe(1);
+      expect(model.root.instances[0].properties.ascii).toBe(ascii);
+      expect(model.root.instances[0].properties.unicode).toBe(unicode);
+    }
+  });
+
+  it('malformed UTF-16 attribute strings use replacement characters', () => {
+    const builder = create();
+    const def = builder.addComponentDefinition('TextCarrier', (d) => {
+      d.addFace([
+        [0, 0, 0],
+        [1, 0, 0],
+        [0, 1, 0],
+      ]);
+    });
+    builder.addInstance(def, {
+      attributes: { damaged: 'WXYZQ', intact: 'still readable' },
+      attributeDictName: 'dynamic_attributes',
+    });
+
+    const bytes = new Uint8Array(builder.toBytes());
+    const original = [0x57, 0, 0x58, 0, 0x59, 0, 0x5a, 0, 0x51, 0];
+    const malformed = [0x00, 0xdc, 0x00, 0xd8, 0x59, 0, 0x3d, 0xd8, 0x00, 0xde];
+    let start = -1;
+    for (let i = 0; i + original.length <= bytes.length; i++) {
+      if (original.every((b, j) => bytes[i + j] === b)) {
+        start = i;
+        break;
+      }
+    }
+    expect(start).toBeGreaterThanOrEqual(0);
+    bytes.set(malformed, start);
+
+    const parsed = parseSkp(toBuffer(bytes));
+    expect(parsed.root.instances.length).toBe(1);
+    expect(parsed.root.instances[0].properties.damaged).toBe('\uFFFD\uFFFDY\u{1F600}');
+    expect(parsed.root.instances[0].properties.intact).toBe('still readable');
+
+    // A trailing high surrogate cannot read into the next archive field.
+    bytes[start + 9] = 0xd8;
+    const trailing = parseSkp(toBuffer(bytes));
+    expect(trailing.root.instances.length).toBe(1);
+    expect(trailing.root.instances[0].properties.damaged).toBe('\uFFFD\uFFFDY\uFFFD\uFFFD');
+  });
+});

@@ -583,15 +583,25 @@ impl ArchiveWriter {
         slot
     }
 
-    /// An MFC CString: `FF FE FF`, a u8 UTF-16 code-unit count, then UTF-16LE code units.
+    /// An MFC CString: `FF FE FF`, the UTF-16 code-unit length as `AfxWriteStringLength` writes it
+    /// (`u8` below `0xFF`, `0xFF + u16` below `0xFFFE`, `0xFF + 0xFFFF + u32` otherwise), then
+    /// UTF-16LE code units.
     pub fn write_str(&mut self, s: &str) -> Result<(), SkpWriteError> {
         let n = s.encode_utf16().count();
-        if n >= 0xFF {
-            return Err(SkpWriteError::new(
-                "string too long to encode (255 char limit)",
-            ));
+        if n >= 0xFFFF_FFFF {
+            return Err(SkpWriteError::new("string too long to encode"));
         }
-        self.buf.extend_from_slice(&[0xFF, 0xFE, 0xFF, n as u8]);
+        self.buf.extend_from_slice(&[0xFF, 0xFE, 0xFF]);
+        if n < 0xFF {
+            self.buf.push(n as u8);
+        } else if n < 0xFFFE {
+            self.buf.push(0xFF);
+            self.buf.put_u16(n as u16);
+        } else {
+            self.buf.push(0xFF);
+            self.buf.put_u16(0xFFFF);
+            self.buf.put_u32(n as u32);
+        }
         for unit in s.encode_utf16() {
             self.buf.put_u16(unit);
         }

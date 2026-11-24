@@ -913,6 +913,81 @@ namespace OpenSkp.Tests
             Assert.Equal(40u, PidCounter(data));
         }
 
+        [Fact]
+        public void AttributeStringsCrossMfcLengthBoundaries()
+        {
+            foreach (int length in new[] { 254, 255, 256, 65533, 65534, 65535, 65536 })
+            {
+                var builder = SkpCreate.NewFile();
+                ComponentDefinitionBuilder def;
+                using (def = builder.AddComponentDefinition("TextCarrier"))
+                {
+                    def.AddFace(new[] { (0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0) });
+                }
+                string ascii = new string('x', length);
+                string unicode = new string('x', length - 2) + "\U0001F600";
+                builder.AddInstance(
+                    def,
+                    attributes: new System.Collections.Generic.Dictionary<string, object>
+                    {
+                        ["ascii"] = ascii,
+                        ["unicode"] = unicode,
+                    },
+                    attributeDictName: "dynamic_attributes");
+
+                var model = SkpFile.Parse(builder.ToBytes());
+                var inst = Assert.Single(model.Root.Instances);
+                Assert.Equal(ascii, inst.Properties["ascii"]);
+                Assert.Equal(unicode, inst.Properties["unicode"]);
+            }
+        }
+
+        [Fact]
+        public void MalformedUtf16AttributeStringsUseReplacementCharacters()
+        {
+            var builder = SkpCreate.NewFile();
+            ComponentDefinitionBuilder def;
+            using (def = builder.AddComponentDefinition("TextCarrier"))
+            {
+                def.AddFace(new[] { (0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0) });
+            }
+            builder.AddInstance(
+                def,
+                attributes: new System.Collections.Generic.Dictionary<string, object>
+                {
+                    ["damaged"] = "WXYZQ",
+                    ["intact"] = "still readable",
+                },
+                attributeDictName: "dynamic_attributes");
+
+            var bytes = builder.ToBytes();
+            byte[] original = { (byte)'W', 0, (byte)'X', 0, (byte)'Y', 0, (byte)'Z', 0, (byte)'Q', 0 };
+            byte[] malformed = { 0x00, 0xDC, 0x00, 0xD8, (byte)'Y', 0, 0x3D, 0xD8, 0x00, 0xDE };
+            int start = -1;
+            for (int i = 0; i + original.Length <= bytes.Length; i++)
+            {
+                bool match = true;
+                for (int j = 0; j < original.Length; j++)
+                {
+                    if (bytes[i + j] != original[j]) { match = false; break; }
+                }
+                if (match) { start = i; break; }
+            }
+            Assert.True(start >= 0);
+            System.Array.Copy(malformed, 0, bytes, start, malformed.Length);
+
+            var parsed = SkpFile.Parse(bytes);
+            var inst = Assert.Single(parsed.Root.Instances);
+            Assert.Equal("\uFFFD\uFFFDY\U0001F600", inst.Properties["damaged"]);
+            Assert.Equal("still readable", inst.Properties["intact"]);
+
+            // A trailing high surrogate cannot read into the next archive field.
+            bytes[start + 9] = 0xD8;
+            var trailing = SkpFile.Parse(bytes);
+            var trailingInst = Assert.Single(trailing.Root.Instances);
+            Assert.Equal("\uFFFD\uFFFDY\uFFFD\uFFFD", trailingInst.Properties["damaged"]);
+        }
+
         // 1x1 transparent PNG.
         private static byte[] TinyPng() => Convert.FromBase64String(
             "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=");

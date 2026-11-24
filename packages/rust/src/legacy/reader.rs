@@ -153,9 +153,8 @@ impl<'a> R<'a> {
     }
 }
 
-/// UTF-16LE code units to UTF-8. The C++ converts unit by unit (no surrogate
-/// pairing); a Rust `String` must be valid UTF-8, so surrogate pairs are
-/// combined and a lone surrogate becomes U+FFFD. BMP text is identical.
+/// UTF-16LE code units to UTF-8: valid surrogate pairs are combined and any
+/// lone surrogate becomes U+FFFD, matching C++'s `decode_utf16le_range`.
 pub(crate) fn decode_utf16le(units: &[u8]) -> String {
     char::decode_utf16(
         units
