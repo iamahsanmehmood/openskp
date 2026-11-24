@@ -2,6 +2,10 @@
 
 Exports a baked :class:`~openskp.scene.Scene` to STL format (ASCII or Binary)
 for 3D printing and CAD interchange.
+
+STL has no colour. Where the scene contains separate front and back copies
+to represent different face colours, only the original front winding is
+exported. Other formats retain their existing colour handling.
 """
 
 from __future__ import annotations
@@ -48,7 +52,10 @@ def to_stl_ascii(scene: Scene, scale: float = 1.0) -> str:
 
     for prim in scene.surface_primitives:
         tri_count = len(prim.indices) // 3
+        back_triangles = set(prim.back_triangles)
         for i in range(tri_count):
+            if i in back_triangles:
+                continue
             i0 = prim.indices[i * 3]
             i1 = prim.indices[i * 3 + 1]
             i2 = prim.indices[i * 3 + 2]
@@ -94,7 +101,9 @@ def to_stl_binary(scene: Scene, scale: float = 1.0) -> bytes:
     Returns:
         The packed Little-Endian Binary STL byte array.
     """
-    total_triangles = sum(len(p.indices) // 3 for p in scene.surface_primitives)
+    total_triangles = sum(
+        len(p.indices) // 3 - len(p.back_triangles) for p in scene.surface_primitives
+    )
 
     # 80-byte header
     header = b"# OpenSKP Binary STL Export"
@@ -104,7 +113,10 @@ def to_stl_binary(scene: Scene, scale: float = 1.0) -> bytes:
 
     for prim in scene.surface_primitives:
         tri_count = len(prim.indices) // 3
+        back_triangles = set(prim.back_triangles)
         for i in range(tri_count):
+            if i in back_triangles:
+                continue
             i0 = prim.indices[i * 3]
             i1 = prim.indices[i * 3 + 1]
             i2 = prim.indices[i * 3 + 2]

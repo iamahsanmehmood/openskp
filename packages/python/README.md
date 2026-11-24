@@ -123,6 +123,11 @@ meta = json_export.to_dict(model, scene=scene)
 json_export.export(model, "output.json", scene=scene)
 ```
 
+STL contains only the front winding of each SketchUp face, including faces
+painted differently on each side; STL does not carry colour. GLB and the
+colour-capable OBJ, PLY, DXF, IFC and Fragments exports retain separately
+painted sides.
+
 ## Writing
 
 OpenSKP can also *create* new `.skp` files from scratch — a genuine,

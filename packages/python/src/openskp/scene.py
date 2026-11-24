@@ -136,6 +136,9 @@ class GlbPrimitive:
             data - their UVs will be approximate.
         indices: Triangle vertex indices into *positions*/*normals*/*uvs*
             (3 per triangle).
+        back_triangles: Triangle offsets for separately emitted back
+            sides. A primitive can mix front and back triangles when they
+            share a material. Their front counterparts are still present.
         material_index: Index into :attr:`Scene.gltf_materials` for this
             primitive's resolved color.
         geom_name: Matches the corresponding key in
@@ -150,6 +153,7 @@ class GlbPrimitive:
     normals: array
     uvs: array
     indices: array
+    back_triangles: array = field(default_factory=lambda: array("I"), kw_only=True)
     material_index: int
     geom_name: str
     unpainted_back: bool = False
@@ -690,6 +694,7 @@ def build_scene(
                         normals=normals,
                         uvs=uvs,
                         indices=indices,
+                        back_triangles=group["back_triangles"],
                         material_index=material_index,
                         geom_name=geom_name,
                         unpainted_back=unpainted_back,

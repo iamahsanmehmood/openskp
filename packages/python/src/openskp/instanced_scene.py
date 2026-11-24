@@ -84,6 +84,8 @@ class LocalPrimitive:
     normals: array
     uvs: array
     indices: array
+    # Triangle offsets for separately emitted back sides.
+    back_triangles: array = field(default_factory=lambda: array("I"), kw_only=True)
     material_index: int
     # The back copies of faces with no paint on either side; see
     # openskp.scene.GlbPrimitive.unpainted_back.
@@ -498,6 +500,7 @@ def build_instanced_scene(
                     normals=normals,
                     uvs=uvs,
                     indices=indices,
+                    back_triangles=group["back_triangles"],
                     material_index=get_material_index(
                         color, double_sided, tex_index, transparency,
                         material_name, group["colorized"], group["colorize_type"],

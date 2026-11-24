@@ -31,6 +31,7 @@ them out.
 
 from __future__ import annotations
 
+from array import array
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -245,6 +246,7 @@ def _add_face_side(
             "local_uvs": [],
             "normals_accum": [],
             "local_faces": [],
+            "back_triangles": array("I"),
             "local_v_map": {},
         }
         face_groups[key] = group
@@ -289,6 +291,8 @@ def _add_face_side(
                 face_local_map[v_id] = idx
             face_indices.append(idx)
         if len(face_indices) == 3:
+            if reverse:
+                group["back_triangles"].append(len(group["local_faces"]))
             group["local_faces"].append(face_indices)
 
 
