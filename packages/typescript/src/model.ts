@@ -61,22 +61,31 @@ export interface SectionPlane {
 export interface TextEntity {
   text: string;
   hidden: boolean;
+  /** Explicit tag name, or empty string for the default tag (Layer0). */
+  layer?: string;
+  /** Anchor and label positions in owner-local inches; null when unresolved. */
+  point?: [number, number, number] | null;
+  labelPoint?: [number, number, number] | null;
+  /** Normalized screen fractions (used when leaderType is 0). */
+  screenPosition?: [number, number] | null;
+  leaderType?: number;
+  arrowType?: number;
+  displayLeader?: boolean;
 }
 
 /**
  * A linear dimension (SketchUp's Dimension tool).
  *
- * The legacy (pre-2021) reader recovers only `text`/`hidden`. The VFF
- * reader (2021+) recovers the full geometry - see `SkpModel.dimensions`
- * for the model-level, world-space list.
+ * Both VFF (2021+) and legacy (pre-2021) readers expose owner-local geometry
+ * and drawing properties on `root.dimensions` and `Definition.dimensions`;
+ * `SkpModel.dimensions` also retains the world-space VFF compatibility list.
  */
 export interface Dimension {
   /** The displayed text. Empty when the dimension shows its auto-computed
    * measured value (the caller formats `|b - a|`). */
   text: string;
   hidden: boolean;
-  /** First measured point [x, y, z] in inches (world space), or null when
-   * only the text was recovered. */
+  /** First measured point [x, y, z] in inches, or null when unresolved. */
   a: [number, number, number] | null;
   /** Second measured point. */
   b: [number, number, number] | null;
@@ -89,6 +98,8 @@ export interface Dimension {
   normal: [number, number, number] | null;
   /** Explicit offset vector (inches) for legacy or VFF dimensions constrained to a plane axis, preserving the side of the line independently of endpoint ordering, or null. */
   offsetVector?: [number, number, number] | null;
+  /** Explicit tag name, or empty string for the default tag (Layer0). */
+  layer?: string;
 }
 
 /**
@@ -698,7 +709,8 @@ export function buildModelFromParsed(parsed: ParsedRawData): SkpModel {
     normal: dm.normal,
     offsetVector: dm.offsetVector ?? null,
     text: dm.text,
-    hidden: false,
+    hidden: dm.hidden ?? false,
+    layer: resolveAnnotationLayer(dm.layer, undefined, layerIdToName),
   }));
 
   const finalDefinitions = new Map<number, Definition>();
@@ -732,6 +744,23 @@ export function buildModelFromParsed(parsed: ParsedRawData): SkpModel {
     units,
     unreadRootEntities: parsed.unreadRootEntities ?? 0,
   };
+}
+
+function resolveAnnotationLayer(
+  rawLayer?: string,
+  rawLayerId?: number | null,
+  layerIdToName?: Map<number, string>
+): string {
+  if (rawLayerId != null && rawLayerId !== 0) {
+    return layerIdToName?.get(rawLayerId) ?? String(rawLayerId);
+  }
+  if (!rawLayer) return '';
+  const num = Number(rawLayer);
+  if (Number.isInteger(num) && String(num) === rawLayer) {
+    if (num === 0) return '';
+    return layerIdToName?.get(num) ?? rawLayer;
+  }
+  return rawLayer;
 }
 
 function buildDefinition(id: number, d: ParsedDefinition, layerIdToName?: Map<number, string>): Definition {
@@ -804,6 +833,13 @@ function buildDefinition(id: number, d: ParsedDefinition, layerIdToName?: Map<nu
   const texts: TextEntity[] = (d.builder.texts || []).map((txt) => ({
     text: txt.text || '',
     hidden: txt.hidden || false,
+    layer: resolveAnnotationLayer(txt.layer, txt.layerId, layerIdToName),
+    point: txt.point ?? null,
+    labelPoint: txt.labelPoint ?? null,
+    screenPosition: txt.screenPosition ?? null,
+    leaderType: txt.leaderType ?? 2,
+    arrowType: txt.arrowType ?? 3,
+    displayLeader: txt.displayLeader ?? true,
   }));
   const dimensions: Dimension[] = (d.builder.dimensions || []).map((dim) => ({
     text: dim.text || '',
@@ -814,6 +850,7 @@ function buildDefinition(id: number, d: ParsedDefinition, layerIdToName?: Map<nu
     planeX: dim.planeX ?? null,
     normal: dim.normal ?? null,
     offsetVector: dim.offsetVector ?? null,
+    layer: resolveAnnotationLayer(dim.layer, dim.layerId, layerIdToName),
   }));
   const constructionLines: ConstructionLine[] = (d.builder.constructionLines || []).map((cl) => ({
     point: cl.point,

@@ -1651,5 +1651,41 @@ TEST(Create, OpaqueTexturedMaterialUsesAlpha255AndSingleQuadCounter27) {
   EXPECT_FALSE(model.materials[0].colorized);
 }
 
+TEST(Create, InvalidAnnotationInputsLeaveLayerAndDefinitionUsable) {
+  auto builder = create();
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  const double inf = std::numeric_limits<double>::infinity();
+
+  EXPECT_THROW(builder->add_dimension({0, 0, 0}, {0, 0, 0}, 10.0), SkpWriteError);
+  EXPECT_THROW(builder->add_dimension({nan, 0, 0}, {10, 0, 0}, 10.0), SkpWriteError);
+  EXPECT_THROW(builder->add_dimension({0, 0, 0}, {10, 0, 0}, Point3{nan, 0, 0}), SkpWriteError);
+
+  TextOptions bad_screen;
+  bad_screen.screen_position = std::array<double, 2>{-0.1, 0.5};
+  EXPECT_THROW(builder->add_text("Bad screen", {0, 0, 0}, {1, 0, 0}, bad_screen), SkpWriteError);
+  EXPECT_THROW(builder->add_text("\xFF", {0, 0, 0}, {1, 0, 0}), SkpWriteError);
+  EXPECT_THROW(builder->add_text("\xED\xA0\x80", {0, 0, 0}, {1, 0, 0}), SkpWriteError);
+  EXPECT_THROW(builder->add_text("NaN", {nan, 0, 0}, {1, 0, 0}), SkpWriteError);
+  EXPECT_THROW(builder->add_text("Inf", {0, 0, 0}, {inf, 0, 0}), SkpWriteError);
+
+  const int after_layer = builder->add_layer("AfterReject");
+  auto& def = builder->add_component_definition("DefAfterReject");
+  EXPECT_THROW(def.add_text("\xFF", {0, 0, 0}, {1, 0, 0}), SkpWriteError);
+  TextOptions valid_opts;
+  valid_opts.layer = after_layer;
+  def.add_text("Nested valid", {0, 0, 0}, {1, 0, 0}, valid_opts);
+  def.close();
+  builder->add_instance(def);
+  builder->add_text("Valid", {0, 0, 0}, {1, 0, 0}, valid_opts);
+
+  const auto model = round_trip(*builder);
+  ASSERT_EQ(model.root().texts.size(), 1u);
+  EXPECT_EQ(model.root().texts[0].text, "Valid");
+  EXPECT_EQ(model.root().texts[0].layer, "AfterReject");
+  ASSERT_EQ(model.definitions.size(), 1u);
+  ASSERT_EQ(model.definitions.begin()->second.texts.size(), 1u);
+  EXPECT_EQ(model.definitions.begin()->second.texts[0].text, "Nested valid");
+}
+
 }  // namespace
 }  // namespace openskp

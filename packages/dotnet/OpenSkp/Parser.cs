@@ -71,6 +71,8 @@ namespace OpenSkp
                     Normal = dm.Normal,
                     OffsetVector = dm.OffsetVector,
                     Text = dm.Text,
+                    Hidden = dm.Hidden,
+                    Layer = ResolveAnnotationLayer(dm.Layer, parsed.LayerIdToName),
                 });
             }
 
@@ -252,8 +254,36 @@ namespace OpenSkp
             }
 
             defn.SectionPlanes.AddRange(d.Builder.SectionPlanes);
-            defn.Texts.AddRange(d.Builder.Texts);
-            defn.Dimensions.AddRange(d.Builder.Dimensions);
+            foreach (var txt in d.Builder.Texts)
+            {
+                defn.Texts.Add(new TextEntity
+                {
+                    Text = txt.Text,
+                    Hidden = txt.Hidden,
+                    Layer = ResolveAnnotationLayer(txt.Layer, layerIdToName),
+                    Point = txt.Point,
+                    LabelPoint = txt.LabelPoint,
+                    ScreenPosition = txt.ScreenPosition,
+                    LeaderType = txt.LeaderType,
+                    ArrowType = txt.ArrowType,
+                    DisplayLeader = txt.DisplayLeader,
+                });
+            }
+            foreach (var dim in d.Builder.Dimensions)
+            {
+                defn.Dimensions.Add(new Dimension
+                {
+                    Text = dim.Text,
+                    Hidden = dim.Hidden,
+                    A = dim.A,
+                    B = dim.B,
+                    Offset = dim.Offset,
+                    PlaneX = dim.PlaneX,
+                    Normal = dim.Normal,
+                    OffsetVector = dim.OffsetVector,
+                    Layer = ResolveAnnotationLayer(dim.Layer, layerIdToName),
+                });
+            }
             foreach (var cl in d.Builder.ConstructionLines)
             {
                 cl.Layer = cl.LayerId is long clLayerId && layerIdToName.TryGetValue(clLayerId, out var clLayerName)
@@ -270,6 +300,20 @@ namespace OpenSkp
             }
 
             return defn;
+        }
+
+        private static string ResolveAnnotationLayer(string? rawLayer, Dictionary<long, string> layerIdToName)
+        {
+            if (string.IsNullOrEmpty(rawLayer)) return "";
+            if (long.TryParse(rawLayer, out long lid))
+            {
+                if (lid == 0) return "";
+                if (layerIdToName.TryGetValue(lid, out var name) && name != null)
+                {
+                    return name;
+                }
+            }
+            return rawLayer!;
         }
 
         public static SkpModel Open(string filePath, SkpParseOptions? options = null)

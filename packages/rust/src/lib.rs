@@ -97,7 +97,7 @@ pub use triangulator::{compute_face_normal, triangulate_face_3d};
 
 pub use create::{
     create, ArcOptions, AttributeDict, AttributeValue, CircleOptions, ComponentDefinitionBuilder,
-    DefinitionHandle, DefinitionOptions, DocumentOptions, FaceOptions, GroupInstanceOptions,
-    GroupOptions, GuideOptions, ImageOptions, InstanceOptions, LayerOptions, PolylineOptions,
-    SkpBuilder, SkpWriteError,
+    DefinitionHandle, DefinitionOptions, DimensionOptions, DocumentOptions, FaceOptions,
+    GroupInstanceOptions, GroupOptions, GuideOptions, ImageOptions, InstanceOptions, LayerOptions,
+    PolylineOptions, SkpBuilder, SkpWriteError, TextOptions,
 };

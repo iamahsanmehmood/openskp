@@ -104,7 +104,6 @@ class Core {
     final defsDictRaw = <int, RawDefinition>{};
     final rootBuilder = GeometryBuilder();
     final vertexPositions = <String, (double, double, double)>{};
-    final instanceWorld = <String, List<double>>{};
     TlvNode? pageNode;
 
     for (final (index, total, el) in Tlv.iterTopLevelLazy(
@@ -114,7 +113,6 @@ class Core {
         Geometry.collectMaterialIds([el], materialIdToName);
         Geometry.collectDefs([el], defsDictRaw);
         scanVertexPositions(el, vertexPositions);
-        scanInstanceTransforms(el, instanceWorld);
         pageNode ??= findPageNode(el);
         if (el.tag == 'F601') {
           Geometry.extractGeometryFromNodes(el.children, rootBuilder);
@@ -187,16 +185,22 @@ class Core {
       pages = [];
     }
 
-    List<RawDimension> dimensions;
+    final dimensions = <RawDimension>[];
     try {
-      dimensions = parseDimensions(modelDat, vertexPositions, instanceWorld);
+      assignVffAnnotations(
+        modelDat,
+        vertexPositions,
+        rootBuilder,
+        defsDictRaw,
+        worldDimensions: dimensions,
+      );
     } on OutOfMemoryError {
       rethrow;
     } on StackOverflowError {
       rethrow;
     } catch (e) {
-      emitLog(options, SkpLogLevel.debug, 'Failed to parse dimensions: $e');
-      dimensions = [];
+      emitLog(options, SkpLogLevel.debug, 'Failed to parse annotations: $e');
+      dimensions.clear();
     }
 
     ((int, int, int), (int, int, int))? faceColors;

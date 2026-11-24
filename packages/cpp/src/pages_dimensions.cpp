@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <functional>
 #include <optional>
+#include <set>
 
 #include "internal.hpp"
 
@@ -90,9 +91,23 @@ std::optional<Vec3> vec3_of(const std::optional<ByteBuffer>& p) {
   return std::nullopt;
 }
 
-std::optional<Vec3> dimension_connection_point(
-    const std::optional<ByteBuffer>& block_payload, const std::map<std::string, Vec3>& id2pos,
-    const std::map<std::string, std::vector<double>>& inst_world) {
+using PathResolverFn = std::function<std::vector<double>(const std::vector<std::string>&)>;
+
+PathResolverFn map_path_resolver(const std::map<std::string, std::vector<double>>& inst_world) {
+  return [&inst_world](const std::vector<std::string>& path) -> std::vector<double> {
+    for (auto it = path.rbegin(); it != path.rend(); ++it) {
+      auto w_it = inst_world.find(*it);
+      if (w_it != inst_world.end() && !w_it->second.empty()) {
+        return w_it->second;
+      }
+    }
+    return {};
+  };
+}
+
+std::optional<Vec3> dimension_connection_point(const std::optional<ByteBuffer>& block_payload,
+                                               const std::map<std::string, Vec3>& id2pos,
+                                               const PathResolverFn& resolve_path) {
   if (!block_payload) return std::nullopt;
   auto blk_items = tlv_items_int(*block_payload);
   auto blk = tlv_find_int(blk_items, 0x5208);
@@ -121,11 +136,9 @@ std::optional<Vec3> dimension_connection_point(
   if (iid && !iid->empty()) {
     auto path = length_prefixed_ids(*iid);
     if (path.empty()) path.push_back(bytes_to_upper_hex(*iid));
-    for (auto it = path.rbegin(); it != path.rend(); ++it) {
-      auto w_it = inst_world.find(*it);
-      if (w_it != inst_world.end() && !w_it->second.empty()) {
-        return transform_point(w_it->second, local_it->second);
-      }
+    auto w = resolve_path(path);
+    if (!w.empty()) {
+      return transform_point(w, local_it->second);
     }
   }
   return local_it->second;
@@ -159,9 +172,9 @@ std::uint64_t drawing_pid(const std::vector<FlatTlvItem>& fields) {
   return id && !id->empty() && id->size() <= 8 ? parse_varint(*id, 0, id->size()) : 0;
 }
 
-std::optional<RawDimension> parse_one_5bcc(
-    const ByteBuffer& model_dat, std::size_t j, const std::map<std::string, Vec3>& id2pos,
-    const std::map<std::string, std::vector<double>>& inst_world) {
+std::optional<RawDimension> parse_one_5bcc(const ByteBuffer& model_dat, std::size_t j,
+                                           const std::map<std::string, Vec3>& id2pos,
+                                           const PathResolverFn& resolve_path) {
   const std::size_t n = model_dat.size();
   if (j + 6 > n) return std::nullopt;
   auto ln = read_u32(model_dat, j + 2);
@@ -176,8 +189,8 @@ std::optional<RawDimension> parse_one_5bcc(
     if (it.tag == 0x5bce) has_second = true;
   }
   if (!has_first || !has_second) return std::nullopt;
-  auto a = dimension_connection_point(tlv_find_int(body, 0x5bcd), id2pos, inst_world);
-  auto b = dimension_connection_point(tlv_find_int(body, 0x5bce), id2pos, inst_world);
+  auto a = dimension_connection_point(tlv_find_int(body, 0x5bcd), id2pos, resolve_path);
+  auto b = dimension_connection_point(tlv_find_int(body, 0x5bce), id2pos, resolve_path);
   if (!a || !b) return std::nullopt;
   RawDimension d;
   d.a = *a;
@@ -219,7 +232,7 @@ std::optional<RawDimension> parse_one_5bcc(
 
 std::optional<TextEntity> parse_text(const ByteBuffer& model_dat, std::size_t j,
                                      const std::map<std::string, Vec3>& id2pos,
-                                     const std::map<std::string, std::vector<double>>& transforms) {
+                                     const PathResolverFn& resolve_path) {
   const auto size = read_u32(model_dat, j + 2);
   const auto fields =
       tlv_items_int(ByteBuffer(model_dat.begin() + j + 6, model_dat.begin() + j + 6 + size));
@@ -228,7 +241,7 @@ std::optional<TextEntity> parse_text(const ByteBuffer& model_dat, std::size_t j,
   if (!value || !connection) return std::nullopt;
   TextEntity text;
   text.text.assign(value->begin(), value->end());
-  text.point = dimension_connection_point(connection, id2pos, transforms);
+  text.point = dimension_connection_point(connection, id2pos, resolve_path);
   text.label_point = vec3_of(tlv_find_int(fields, 0x55f5));
   const auto x = tlv_find_int(fields, 0x55f2), y = tlv_find_int(fields, 0x55f3);
   if (x && y && x->size() == 8 && y->size() == 8)
@@ -336,11 +349,8 @@ std::optional<EntityId> owning_definition(const std::vector<DefSpan>& spans, std
   return best;
 }
 
-// Recursive tag search over buf[begin, end), in place. Same acceptance as
-// walking tlv_items_int level by level (a malformed level contributes
-// nothing), without copying every nested payload.
-bool tlv_contains_tag(const ByteBuffer& buf, std::size_t begin, std::size_t end, std::uint16_t tag,
-                      int depth = 0) {
+bool tlv_has_nonempty_tag(const ByteBuffer& buf, std::size_t begin, std::size_t end,
+                          std::uint16_t tag, int depth = 0) {
   if (depth > 64) return false;
   std::size_t off = begin;
   while (off < end) {
@@ -353,11 +363,231 @@ bool tlv_contains_tag(const ByteBuffer& buf, std::size_t begin, std::size_t end,
   for (off = begin; off < end;) {
     const auto t = static_cast<std::uint16_t>(buf[off] | (buf[off + 1] << 8));
     const auto ln = read_u32(buf, off + 2);
-    if (t == tag || tlv_contains_tag(buf, off + 6, off + 6 + ln, tag, depth + 1)) return true;
+    if ((t == tag && ln > 0) || tlv_has_nonempty_tag(buf, off + 6, off + 6 + ln, tag, depth + 1))
+      return true;
     off += 6 + ln;
   }
   return false;
 }
+
+class InstancePathResolver {
+ public:
+  InstancePathResolver(const RawDefinition& root,
+                       const std::map<EntityId, RawDefinition>& definitions, std::size_t max_visits)
+      : root_(root), definitions_(definitions), max_visits_(max_visits) {}
+
+  std::size_t visits() const { return visits_; }
+
+  std::vector<double> resolve_path(std::optional<EntityId> owner,
+                                   const std::vector<std::string>& raw_path,
+                                   std::optional<EntityId> fallback_owner = std::nullopt) {
+    if (raw_path.empty()) return {};
+    std::vector<std::string> norm;
+    norm.reserve(raw_path.size());
+    std::string key = owner ? std::to_string(*owner) : std::string("ROOT");
+    key.push_back(':');
+    key.append(fallback_owner ? std::to_string(*fallback_owner) : std::string("NONE"));
+    for (const auto& part : raw_path) {
+      std::string upper = to_upper_ascii(part);
+      key.push_back('/');
+      key.append(upper);
+      norm.push_back(std::move(upper));
+    }
+    if (auto it = resolved_.find(key); it != resolved_.end()) return it->second;
+
+    std::size_t query_visits = 0;
+    const auto* start_builder = builder_for(owner);
+    auto res = walk_exact(owner, start_builder, norm, 0, {}, 0, query_visits);
+    if (res.first) {
+      resolved_.emplace(std::move(key), res.second);
+      return res.second;
+    }
+    if (query_visits >= max_visits_) return {};
+
+    ensure_index();
+    std::set<std::optional<EntityId>> valid_holders;
+    std::optional<std::pair<bool, std::vector<double>>> fb_result;
+    if (auto it = holders_of_pid_.find(norm[0]); it != holders_of_pid_.end()) {
+      for (const auto& holder : it->second) {
+        if (holder == owner) continue;
+        if (query_visits >= max_visits_) break;
+        auto h_res = walk_exact(holder, builder_for(holder), norm, 0, {}, 0, query_visits);
+        if (h_res.first) {
+          valid_holders.insert(holder);
+          if (fallback_owner && holder == fallback_owner) fb_result = std::move(h_res);
+        }
+      }
+    }
+
+    if (!valid_holders.empty() && query_visits < max_visits_) {
+      std::set<std::optional<EntityId>> can_reach = valid_holders;
+      std::vector<EntityId> queue;
+      for (const auto& h : valid_holders) {
+        if (h) queue.push_back(*h);
+      }
+      for (std::size_t qi = 0; qi < queue.size(); ++qi) {
+        const EntityId cur = queue[qi];
+        auto pit = parents_of_def_.find(cur);
+        if (pit == parents_of_def_.end()) continue;
+        for (const auto& parent_owner : pit->second) {
+          if (can_reach.insert(parent_owner).second && parent_owner) {
+            queue.push_back(*parent_owner);
+          }
+        }
+      }
+
+      if (can_reach.count(owner)) {
+        std::set<EntityId> active_defs;
+        if (owner) active_defs.insert(*owner);
+        std::map<EntityId, int> failed_min_depth;
+
+        std::function<std::pair<bool, std::vector<double>>(
+            std::optional<EntityId>, const GeometryBuilder*, const std::vector<double>&, int)>
+            walk_to_holder = [&](std::optional<EntityId> cur_owner,
+                                 const GeometryBuilder* cur_builder,
+                                 const std::vector<double>& parent_xf,
+                                 int depth) -> std::pair<bool, std::vector<double>> {
+          if (depth > 64 || !cur_builder || query_visits >= max_visits_) return {false, {}};
+          if (depth > 0 && valid_holders.count(cur_owner) &&
+              depth + static_cast<int>(norm.size()) <= 65) {
+            auto tail = walk_exact(cur_owner, cur_builder, norm, 0, parent_xf, depth, query_visits);
+            if (tail.first || query_visits >= max_visits_) return tail;
+          }
+          for (const auto& inst : cur_builder->instances) {
+            if (query_visits >= max_visits_) return {false, {}};
+            if (!inst.ref_idx) continue;
+            const EntityId ref_idx = *inst.ref_idx;
+            if (!can_reach.count(ref_idx) || active_defs.count(ref_idx)) continue;
+            if (auto fit = failed_min_depth.find(ref_idx);
+                fit != failed_min_depth.end() && depth + 1 >= fit->second) {
+              continue;
+            }
+            const auto* child_builder = builder_for(ref_idx);
+            if (!child_builder) continue;
+            ++visits_;
+            ++query_visits;
+            std::vector<double> here =
+                inst.matrix.empty() ? parent_xf : multiply_matrices(parent_xf, inst.matrix);
+            active_defs.insert(ref_idx);
+            auto found = walk_to_holder(ref_idx, child_builder, here, depth + 1);
+            active_defs.erase(ref_idx);
+            if (found.first) return found;
+            if (query_visits >= max_visits_) return {false, {}};
+          }
+          if (cur_owner) {
+            auto fit = failed_min_depth.find(*cur_owner);
+            if (fit == failed_min_depth.end() || depth < fit->second) {
+              failed_min_depth[*cur_owner] = depth;
+            }
+          }
+          return {false, {}};
+        };
+
+        res = walk_to_holder(owner, start_builder, {}, 0);
+      }
+    }
+
+    if (!res.first && fallback_owner && fallback_owner != owner) {
+      if (fb_result) {
+        res = std::move(*fb_result);
+      } else if (query_visits < max_visits_ && valid_holders.count(fallback_owner)) {
+        res = walk_exact(fallback_owner, builder_for(fallback_owner), norm, 0, {}, 0, query_visits);
+      }
+    }
+
+    std::vector<double> out = res.first ? std::move(res.second) : std::vector<double>{};
+    if (query_visits < max_visits_) {
+      resolved_.emplace(std::move(key), out);
+    }
+    return out;
+  }
+
+ private:
+  static std::string to_upper_ascii(const std::string& s) {
+    std::string upper = s;
+    for (char& ch : upper) {
+      if (ch >= 'a' && ch <= 'z') ch = static_cast<char>(ch - 'a' + 'A');
+    }
+    return upper;
+  }
+
+  const GeometryBuilder* builder_for(std::optional<EntityId> owner) const {
+    if (!owner) return &root_.builder;
+    auto it = definitions_.find(*owner);
+    return it != definitions_.end() ? &it->second.builder : nullptr;
+  }
+
+  const std::map<std::string, const RawInstance*>& pid_map(std::optional<EntityId> owner,
+                                                           const GeometryBuilder& builder) {
+    const EntityId key = owner.value_or(-1);
+    if (auto it = by_pid_.find(key); it != by_pid_.end()) return it->second;
+    auto& map = by_pid_[key];
+    for (const auto& inst : builder.instances) {
+      if (inst.persistent_id.empty()) continue;
+      map[to_upper_ascii(inst.persistent_id)] = &inst;
+    }
+    return map;
+  }
+
+  void ensure_index() {
+    if (indexed_) return;
+    indexed_ = true;
+    std::vector<std::optional<EntityId>> owners;
+    owners.reserve(1 + definitions_.size());
+    owners.push_back(std::nullopt);
+    for (const auto& kv : definitions_) owners.push_back(kv.first);
+    for (const auto& def_owner : owners) {
+      const auto* builder = builder_for(def_owner);
+      if (!builder) continue;
+      std::set<std::string> seen_pids;
+      std::set<EntityId> seen_refs;
+      for (const auto& inst : builder->instances) {
+        if (!inst.persistent_id.empty()) {
+          std::string norm_pid = to_upper_ascii(inst.persistent_id);
+          if (seen_pids.insert(norm_pid).second) {
+            holders_of_pid_[norm_pid].push_back(def_owner);
+          }
+        }
+        if (inst.ref_idx && definitions_.count(*inst.ref_idx) &&
+            seen_refs.insert(*inst.ref_idx).second) {
+          parents_of_def_[*inst.ref_idx].push_back(def_owner);
+        }
+      }
+    }
+  }
+
+  std::pair<bool, std::vector<double>> walk_exact(std::optional<EntityId> owner,
+                                                  const GeometryBuilder* builder,
+                                                  const std::vector<std::string>& path,
+                                                  std::size_t idx,
+                                                  const std::vector<double>& parent_xf, int depth,
+                                                  std::size_t& query_visits) {
+    if (depth > 64 || !builder || query_visits >= max_visits_) return {false, {}};
+    const auto& map = pid_map(owner, *builder);
+    auto it = map.find(path[idx]);
+    if (it == map.end()) return {false, {}};
+    ++visits_;
+    ++query_visits;
+    const RawInstance* inst = it->second;
+    std::vector<double> here =
+        inst->matrix.empty() ? parent_xf : multiply_matrices(parent_xf, inst->matrix);
+    if (idx + 1 == path.size()) return {true, std::move(here)};
+    if (!inst->ref_idx) return {false, {}};
+    const auto* child_builder = builder_for(*inst->ref_idx);
+    if (!child_builder) return {false, {}};
+    return walk_exact(*inst->ref_idx, child_builder, path, idx + 1, here, depth + 1, query_visits);
+  }
+
+  const RawDefinition& root_;
+  const std::map<EntityId, RawDefinition>& definitions_;
+  std::size_t max_visits_;
+  std::size_t visits_{0};
+  bool indexed_{false};
+  std::map<EntityId, std::map<std::string, const RawInstance*>> by_pid_;
+  std::map<std::string, std::vector<std::optional<EntityId>>> holders_of_pid_;
+  std::map<EntityId, std::vector<std::optional<EntityId>>> parents_of_def_;
+  std::map<std::string, std::vector<double>> resolved_;
+};
 
 }  // namespace
 
@@ -427,13 +657,17 @@ void scan_instance_transforms(const TlvNode& top,
   visit(top, {});
 }
 
-void compose_instance_world(const RawDefinition& root,
-                            const std::map<EntityId, RawDefinition>& definitions,
-                            std::map<std::string, std::vector<double>>& world) {
+std::size_t compose_instance_world(const RawDefinition& root,
+                                   const std::map<EntityId, RawDefinition>& definitions,
+                                   std::map<std::string, std::vector<double>>& world,
+                                   std::size_t max_visits) {
+  std::size_t visits = 0;
   std::function<void(const RawDefinition&, const std::vector<double>&, int)> walk =
       [&](const RawDefinition& def, const std::vector<double>& parent, int depth) {
-        if (depth > 64) return;
+        if (depth > 64 || visits >= max_visits) return;
         for (const auto& inst : def.builder.instances) {
+          if (visits >= max_visits) return;
+          ++visits;
           const std::vector<double> here =
               inst.matrix.empty() ? parent : multiply_matrices(parent, inst.matrix);
           if (!inst.persistent_id.empty()) world[inst.persistent_id] = here;
@@ -443,6 +677,7 @@ void compose_instance_world(const RawDefinition& root,
         }
       };
   walk(root, {}, 0);
+  return visits;
 }
 
 // Linear dimensions (SketchUp's Dimension tool). 5BCC records inside a
@@ -455,28 +690,24 @@ std::vector<RawDimension> parse_dimensions(
     const std::map<std::string, std::vector<double>>& inst_world) {
   std::vector<RawDimension> dims;
   const ByteBuffer needle{0xcc, 0x5b};
+  const auto resolve_path = map_path_resolver(inst_world);
   std::size_t i = 0;
   while (true) {
     auto found = std::search(model_dat.begin() + i, model_dat.end(), needle.begin(), needle.end());
     if (found == model_dat.end()) break;
     std::size_t j = static_cast<std::size_t>(found - model_dat.begin());
     i = j + 1;
-    if (auto d = parse_one_5bcc(model_dat, j, id2pos, inst_world)) dims.push_back(std::move(*d));
+    if (auto d = parse_one_5bcc(model_dat, j, id2pos, resolve_path)) dims.push_back(std::move(*d));
   }
   return dims;
 }
 
-void assign_vff_annotations(const ByteBuffer& model_dat, const std::vector<TlvHeader>& records,
-                            const std::map<std::string, Vec3>& id2pos,
-                            const std::map<std::string, std::vector<double>>& model_world,
-                            RawParsed& parsed) {
-  const auto spans = scan_definition_spans(model_dat, records, parsed.definitions);
-  // One definition's composed instance transforms at a time. A definition's 5BCC records sit
-  // inside its own 7C15 span, so they arrive together; keeping a composed map for every owner
-  // grew by gigabytes on large models with many dimensioned components.
-  std::optional<EntityId> composed_owner;
-  std::map<std::string, std::vector<double>> local_world;
-  const std::map<std::string, std::vector<double>> no_xf;
+std::size_t assign_vff_annotations(const ByteBuffer& model_dat,
+                                   const std::vector<TlvHeader>& records,
+                                   const std::map<std::string, Vec3>& id2pos, RawParsed& parsed,
+                                   std::size_t max_visits) {
+  std::optional<std::vector<DefSpan>> spans;
+  InstancePathResolver resolver(parsed.root, parsed.definitions, max_visits);
   std::size_t i = 0;
   while (true) {
     auto found = model_dat.begin() + i;
@@ -497,37 +728,38 @@ void assign_vff_annotations(const ByteBuffer& model_dat, const std::vector<TlvHe
     if (!flat_tlv_has_fields(model_dat, j + 6, j + 6 + ln, is_text ? 0x55f1 : 0x5bcd,
                              is_text ? 0x55f4 : 0x5bce))
       continue;
-    const auto owner = owning_definition(spans, j);
-    const std::map<std::string, std::vector<double>>* xf = &model_world;
-    if (owner) {
-      // Same-def type-2 5BCC has no 53FE; don't compose an instance-xf map
-      // that parse_one_5bcc would never consult.
-      if (tlv_contains_tag(model_dat, j + 6, j + 6 + ln, 0x53fe)) {
-        if (composed_owner != owner) {
-          local_world.clear();
-          compose_instance_world(parsed.definitions[*owner], parsed.definitions, local_world);
-          composed_owner = owner;
-        }
-        xf = &local_world;
-      } else {
-        xf = &no_xf;
-      }
-    }
+    if (!spans) spans = scan_definition_spans(model_dat, records, parsed.definitions);
+    const auto owner = owning_definition(*spans, j);
+    const PathResolverFn owner_resolver = [&](const std::vector<std::string>& path) {
+      return resolver.resolve_path(owner, path);
+    };
     if (is_text) {
-      if (auto text = parse_text(model_dat, j, id2pos, *xf)) {
+      if (auto text = parse_text(model_dat, j, id2pos, owner_resolver)) {
         auto& builder = owner ? parsed.definitions[*owner].builder : parsed.root.builder;
         builder.texts.push_back(std::move(*text));
       }
       continue;
     }
-    auto d = parse_one_5bcc(model_dat, j, id2pos, *xf);
-    if (!d) continue;
-    if (owner) {
-      parsed.definitions[*owner].builder.dimensions.push_back(public_dimension(*d));
+    auto d = parse_one_5bcc(model_dat, j, id2pos, owner_resolver);
+    if (d) {
+      if (owner) {
+        parsed.definitions[*owner].builder.dimensions.push_back(public_dimension(*d));
+      } else {
+        parsed.root.builder.dimensions.push_back(public_dimension(*d));
+      }
+    }
+    if (!owner || !tlv_has_nonempty_tag(model_dat, j + 6, j + 6 + ln, 0x53fe)) {
+      if (d) parsed.dimensions.push_back(std::move(*d));
     } else {
-      parsed.root.builder.dimensions.push_back(public_dimension(*d));
+      const PathResolverFn world_resolver = [&](const std::vector<std::string>& path) {
+        return resolver.resolve_path(std::nullopt, path, owner);
+      };
+      if (auto wd = parse_one_5bcc(model_dat, j, id2pos, world_resolver)) {
+        parsed.dimensions.push_back(std::move(*wd));
+      }
     }
   }
+  return resolver.visits();
 }
 
 void assign_vff_sections(const ByteBuffer& md, const std::vector<TlvHeader>& records,
