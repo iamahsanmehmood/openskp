@@ -415,8 +415,8 @@ fn single_colour_exports_and_fragments_keep_one_copy_of_each_face() {
     assert!(dxf_style > 0);
     assert_eq!(dxf_style, dxf_tag);
 
-    let ifc_style = to_ifc(&style, METRES_TO_MM, "IFC4", None, false);
-    let ifc_tag = to_ifc(&tag, METRES_TO_MM, "IFC4", None, false);
+    let ifc_style = to_ifc(&style, METRES_TO_MM, "IFC4", None, false).unwrap();
+    let ifc_tag = to_ifc(&tag, METRES_TO_MM, "IFC4", None, false).unwrap();
     assert_eq!(ifc_style.matches("IFCTRIANGULATEDFACESET").count(), 1);
     assert_eq!(ifc_tag.matches("IFCTRIANGULATEDFACESET").count(), 1);
 

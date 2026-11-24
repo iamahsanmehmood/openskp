@@ -17,6 +17,7 @@ add_executable(
   geometry_test.cpp
   glb_test.cpp
   glb_textures_test.cpp
+  ifc_conformance_and_curves_test.cpp
   ifc_export_test.cpp
   inherited_texture_test.cpp
   instanced_glb_test.cpp

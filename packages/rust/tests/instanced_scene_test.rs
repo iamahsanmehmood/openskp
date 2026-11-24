@@ -790,7 +790,7 @@ fn tagged_placement_and_tagged_parent_keep_their_tag_over_uniform_face_tag() {
         "GroupTag"
     );
 
-    let ifc = openskp::to_ifc(&baked, openskp::METRES_TO_MM, "IFC4", None, false);
+    let ifc = openskp::to_ifc(&baked, openskp::METRES_TO_MM, "IFC4", None, false).unwrap();
     let layer_lines: Vec<&str> = ifc
         .lines()
         .filter(|l| l.contains("IFCPRESENTATIONLAYERWITHSTYLE("))

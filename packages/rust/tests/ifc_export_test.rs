@@ -12,7 +12,8 @@ use std::collections::BTreeMap;
 
 use openskp::{
     classify_element, generate_ifc_guid, to_ifc, CurveArc, CurveSetMetadata, GlbPrimitive,
-    GltfMaterial, IfcClassifier, InstanceNode, MeshMetadata, Scene, METRES_TO_INCHES, METRES_TO_MM,
+    GltfMaterial, IfcClassifier, IfcError, InstanceNode, MeshMetadata, Scene, METRES_TO_INCHES,
+    METRES_TO_MM,
 };
 
 // ---------------------------------------------------------------------------
@@ -107,7 +108,7 @@ fn mesh_scene(name: &str, positions: &[f32], indices: &[u32]) -> Scene {
 }
 
 fn ifc(scene: &Scene) -> String {
-    to_ifc(scene, METRES_TO_MM, "IFC4", None, false)
+    to_ifc(scene, METRES_TO_MM, "IFC4", None, false).unwrap()
 }
 
 /// The first STEP entity line containing `token`.
@@ -332,7 +333,8 @@ fn to_ifc_accepts_custom_classifier_override() {
         "IFC4",
         Some(&always_column),
         false,
-    );
+    )
+    .unwrap();
     assert!(!ifc_text.contains("IFCWALL("));
     assert!(ifc_text.contains("IFCCOLUMN("));
 }
@@ -347,7 +349,8 @@ fn to_ifc_custom_classifier_types_every_element() {
         "IFC4",
         Some(always_column),
         false,
-    );
+    )
+    .unwrap();
     assert!(!ifc_text.contains("IFCWALL("));
     assert!(!ifc_text.contains("IFCDOOR("));
     assert_eq!(ifc_text.matches("IFCCOLUMN(").count(), 2);
@@ -367,7 +370,8 @@ fn a_custom_classifier_is_called_with_the_display_name_and_layer() {
         "IFC4",
         Some(&classify),
         false,
-    );
+    )
+    .unwrap();
     assert_eq!(
         *seen.borrow(),
         [("Stud 12".to_string(), "Layer0".to_string())]
@@ -385,7 +389,7 @@ fn a_custom_classifier_receives_raw_unescaped_text() {
             .push((name.to_string(), layer.to_string()));
         ("IFCWALL".to_string(), "IfcWall".to_string())
     };
-    let ifc_text = to_ifc(&scene, METRES_TO_MM, "IFC4", Some(&classify), false);
+    let ifc_text = to_ifc(&scene, METRES_TO_MM, "IFC4", Some(&classify), false).unwrap();
     assert_eq!(
         *seen.borrow(),
         [("Wände 'A'".to_string(), "Außenwände".to_string())]
@@ -475,7 +479,7 @@ fn to_ifc_converts_gltf_y_up_to_ifc_z_up() {
         &[0.0, 0.0, 0.0, 2.0, 3.0, 5.0, 0.0, 1.0, 0.0],
         &[0, 1, 2],
     );
-    let ifc_text = to_ifc(&scene, 1.0, "IFC4", None, false);
+    let ifc_text = to_ifc(&scene, 1.0, "IFC4", None, false).unwrap();
     // glTF (2.0, 3.0, 5.0) is SketchUp (x=2.0, y=-5.0, z=3.0).
     assert!(ifc_text.contains("(2.000000,-5.000000,3.000000)"));
     assert!(!ifc_text.contains("(2.000000,3.000000,5.000000)"));
@@ -626,7 +630,7 @@ fn to_ifc_classify_using_full_path_opt_in() {
     assert!(default_text.contains("IFCBUILDINGELEMENTPROXY"));
     assert!(!default_text.contains("IFCWALL("));
 
-    let opted_in_text = to_ifc(&scene, METRES_TO_MM, "IFC4", None, true);
+    let opted_in_text = to_ifc(&scene, METRES_TO_MM, "IFC4", None, true).unwrap();
     assert!(opted_in_text.contains("IFCWALL("));
     // The real, clean name is still what's shown.
     assert!(opted_in_text.contains("'Stud 12'"));
@@ -657,7 +661,7 @@ fn export_ifc_writes_a_file() {
 
 #[test]
 fn the_header_names_the_schema_and_a_utc_timestamp() {
-    let text = to_ifc(&create_mock_scene(), METRES_TO_MM, "ifc2x3", None, false);
+    let text = to_ifc(&create_mock_scene(), METRES_TO_MM, "ifc2x3", None, false).unwrap();
     assert!(text
         .starts_with("ISO-10303-21;\r\nHEADER;\r\nFILE_DESCRIPTION(('ViewDefinition [CoordinationView]'),'2;1');\r\n"));
     assert!(text.contains("FILE_SCHEMA(('IFC2X3'));"));
@@ -674,6 +678,7 @@ fn the_header_names_the_schema_and_a_utc_timestamp() {
         "{stamp}"
     );
     assert!(to_ifc(&create_mock_scene(), METRES_TO_MM, "", None, false)
+        .unwrap()
         .contains("FILE_SCHEMA(('IFC4'));"));
 }
 
@@ -791,7 +796,8 @@ fn ifc2x3_products_use_that_schemas_attribute_counts() {
         "IFC2X3",
         None,
         false,
-    );
+    )
+    .unwrap();
     assert_eq!(split_attributes(entity_line(&text, "=IFCWALL(")).len(), 8);
     let door = to_ifc(
         &mesh_scene("Front Door", &TRIANGLE, &[0, 1, 2]),
@@ -799,7 +805,8 @@ fn ifc2x3_products_use_that_schemas_attribute_counts() {
         "IFC2X3",
         None,
         false,
-    );
+    )
+    .unwrap();
     assert_eq!(split_attributes(entity_line(&door, "=IFCDOOR(")).len(), 10);
 }
 
@@ -821,7 +828,8 @@ fn an_unknown_custom_type_keeps_nine_attributes() {
         "IFC4",
         Some(&classify),
         false,
-    );
+    )
+    .unwrap();
     let attrs = split_attributes(entity_line(&text, "=IFCMADEUPTHING("));
     assert_eq!(attrs.len(), 9);
     assert_eq!(attrs[8], "$");
@@ -991,6 +999,67 @@ mod conformance {
         let text = ifc(&mesh_scene("Broken", &pts(&[A, B, C]), &[0, 1, 9]));
         assert_eq!(closed_flag(&text), ".F.");
         assert!(text.contains("((1,2,10))"));
+    }
+
+    #[test]
+    fn control_characters_and_del_are_escaped_without_splitting_lines() {
+        let mut scene = mesh_scene("Wall\nOne\x7f", &TRIANGLE, &[0, 1, 2]);
+        scene
+            .mesh_index
+            .get_mut("Wall\nOne\x7f")
+            .unwrap()
+            .properties = props(&[("note\tkey", "line1\r\nline2\0\x1f\x7f")]);
+        let text = ifc(&scene);
+        assert!(text.contains("Wall\\X2\\000A\\X0\\One\\X2\\007F\\X0\\"));
+        assert!(text.contains("note\\X2\\0009\\X0\\key"));
+        assert!(text.contains("line1\\X2\\000D000A\\X0\\line2\\X2\\0000001F007F\\X0\\"));
+        assert_step_well_formed(&text);
+    }
+
+    #[test]
+    fn non_finite_scale_and_coordinates_return_errors_before_writing() {
+        let good = mesh_scene("Wall", &TRIANGLE, &[0, 1, 2]);
+        assert_eq!(
+            to_ifc(&good, f64::NAN, "IFC4", None, false),
+            Err(IfcError::NonFiniteScale)
+        );
+        assert_eq!(
+            to_ifc(&good, f64::INFINITY, "IFC4", None, false),
+            Err(IfcError::NonFiniteScale)
+        );
+
+        let nan_mesh = mesh_scene(
+            "Wall",
+            &[f32::NAN, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+            &[0, 1, 2],
+        );
+        assert_eq!(
+            to_ifc(&nan_mesh, METRES_TO_MM, "IFC4", None, false),
+            Err(IfcError::NonFiniteCoordinate)
+        );
+
+        let mut inf_curve = Scene {
+            scene_hierarchy: root(),
+            ..Scene::default()
+        };
+        inf_curve.curve_sets.push(CurveSetMetadata {
+            name: "C".to_string(),
+            points_m: vec![[0.0, 0.0, 0.0], [1e308, 0.0, 0.0]],
+            ..CurveSetMetadata::default()
+        });
+        assert_eq!(
+            to_ifc(&inf_curve, METRES_TO_MM, "IFC4", None, false),
+            Err(IfcError::NonFiniteCoordinate)
+        );
+
+        let dir = std::env::temp_dir().join(format!("openskp_ifc_nan_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let out_path = dir.join("nested").join("bad.ifc");
+        let err = openskp::export_ifc(&nan_mesh, &out_path, METRES_TO_MM, "IFC4", None, false)
+            .unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(!out_path.exists());
+        assert!(!dir.exists());
     }
 }
 
