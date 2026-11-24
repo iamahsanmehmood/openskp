@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <fstream>
 #include <gtest/gtest.h>
+#include <random>
 #include <string>
 #include <utility>
 #include <vector>
@@ -64,7 +65,9 @@ struct TempTextureFiles {
   std::filesystem::path tile;
 
   TempTextureFiles() {
-    dir = std::filesystem::temp_directory_path() / "openskp-cpp-inherited-tex-test";
+    // Tests run in parallel: each one needs its own folder.
+    dir = std::filesystem::temp_directory_path() /
+          ("openskp-cpp-inherited-tex-" + std::to_string(std::random_device{}()));
     std::filesystem::create_directories(dir);
     brick = dir / "brick.png";
     tile = dir / "tile.png";
