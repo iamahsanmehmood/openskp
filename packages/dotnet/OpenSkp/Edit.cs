@@ -21,7 +21,7 @@ namespace OpenSkp
     /// existing file with this project's own reader (Legacy.cs, already
     /// comprehensive), then *replay* everything it understood back through
     /// the writer's own public API (materials, layers, every component
-    /// definition, every face/instance) to produce a brand-new file - not a
+    /// definition, every face/instance, construction points and lines) to produce a brand-new file - not a
     /// byte-patched copy of the original, but a freshly-built one with
     /// equivalent content, to which the caller can add more geometry before
     /// saving. Direct port of openskp/edit.py.
@@ -75,8 +75,8 @@ namespace OpenSkp
     /// structurally simpler, and visually identical, but no longer shows
     /// as a "Group" in SketchUp's Outliner afterward.</item>
     /// <item>Section planes, text entities, and dimensions aren't carried
-    /// over at all - the writer has no support for any of these entity
-    /// types.</item>
+    /// over on replay (only faces, instances, and replayable construction
+    /// guides are).</item>
     /// <item>A circle/arc/polyline's original CArcCurve/CCurve grouping is
     /// lost - this project's reader doesn't preserve that grouping in its
     /// public Face/Edge model, so a round-tripped circle becomes an
@@ -291,6 +291,28 @@ namespace OpenSkp
             return result;
         }
 
+        private static bool IsFinite(double v) => !double.IsNaN(v) && !double.IsInfinity(v);
+
+        private static bool IsReplayableConstructionLine(ConstructionLine cl)
+        {
+            if (cl.Start.HasValue && cl.End.HasValue)
+            {
+                var s = cl.Start.Value;
+                var e = cl.End.Value;
+                double dx = e.X - s.X, dy = e.Y - s.Y, dz = e.Z - s.Z;
+                double length = Math.Sqrt(dx * dx + dy * dy + dz * dz);
+                return IsFinite(length) && length > 0.0;
+            }
+            if (!cl.Start.HasValue && !cl.End.HasValue)
+            {
+                if (!IsFinite(cl.Point.X) || !IsFinite(cl.Point.Y) || !IsFinite(cl.Point.Z)) return false;
+                var d = cl.Direction;
+                double dlen = Math.Sqrt(d.X * d.X + d.Y * d.Y + d.Z * d.Z);
+                return IsFinite(dlen) && dlen > 0.0;
+            }
+            return false;
+        }
+
         private static bool DefinitionHasContent(Definition defn, Dictionary<long, ComponentDefinitionBuilder> defBuilders)
         {
             var edges = EdgeMap(defn);
@@ -303,17 +325,19 @@ namespace OpenSkp
             {
                 if (inst.RefIdx.HasValue && defBuilders.ContainsKey(inst.RefIdx.Value)) return true;
             }
+            if (defn.ConstructionPoints.Count > 0) return true;
+            if (defn.ConstructionLines.Any(IsReplayableConstructionLine)) return true;
             return false;
         }
 
-        /// <summary>Replay one definition's (or the root's) own faces and
-        /// instances onto target - an SkpBuilder for the root, or a
-        /// ComponentDefinitionBuilder for a nested definition; both expose
-        /// the same AddFace/AddInstance shape via IGeometryTarget.
-        /// defBuilders resolves instance references - by the time any
-        /// definition is opened (topological order, see DefinitionOrder)
-        /// every OTHER definition its own instances could reference is
-        /// already in it.</summary>
+        /// <summary>Replay one definition's (or the root's) own faces,
+        /// instances, and construction geometry onto target - an SkpBuilder
+        /// for the root, or a ComponentDefinitionBuilder for a nested
+        /// definition; both expose the same AddFace/AddInstance/AddConstruction*
+        /// shape via IGeometryTarget. defBuilders resolves instance
+        /// references - by the time any definition is opened (topological
+        /// order, see DefinitionOrder) every OTHER definition its own
+        /// instances could reference is already in it.</summary>
         private static void ReplayBody(
             IGeometryTarget target, Definition defn, SkpModel model,
             Dictionary<long, int> materialSlots, Dictionary<string, int> layerSlots,
@@ -327,6 +351,39 @@ namespace OpenSkp
             foreach (var inst in defn.Instances)
             {
                 ReplayInstance(target, inst, defBuilders, materialSlots, layerSlots, warnings, context);
+            }
+            foreach (var cp in defn.ConstructionPoints)
+            {
+                try
+                {
+                    target.AddConstructionPoint(cp.Position);
+                }
+                catch (SkpWriteException exc)
+                {
+                    warnings.Add($"{context}: construction point skipped ({exc.Message})");
+                }
+            }
+            foreach (var cl in defn.ConstructionLines)
+            {
+                try
+                {
+                    if (cl.Start.HasValue && cl.End.HasValue)
+                    {
+                        target.AddConstructionLine(cl.Start.Value, point2: cl.End.Value);
+                    }
+                    else if (!cl.Start.HasValue && !cl.End.HasValue)
+                    {
+                        target.AddConstructionLine(cl.Point, direction: cl.Direction);
+                    }
+                    else
+                    {
+                        warnings.Add($"{context}: half-bounded construction line skipped");
+                    }
+                }
+                catch (SkpWriteException exc)
+                {
+                    warnings.Add($"{context}: construction line skipped ({exc.Message})");
+                }
             }
         }
 

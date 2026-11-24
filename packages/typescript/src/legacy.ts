@@ -1386,18 +1386,29 @@ function readConstructionLine(ar: Archive, r: R): any {
   if (k === null) {
     const dflt = ar.ver === 17 ? 7 : 4;
     const order = [dflt, ...[0, 4, 7].filter((c) => c !== dflt)];
-    // two passes: a zero tail full of padding can mimic a null tag, so
-    // only accept a null-anchored candidate when no candidate lands on a
-    // STRONG form (escape / known class / class definition)
-    outer: for (const allowNull of [false, true]) {
-      for (const cand of order) {
-        if (strictNextTag(ar, r.data, r.pos + cand, allowNull)) {
+    // Strong tags first (escape / known class / class definition). A
+    // following entity at +4 or +7 is unambiguous. The weak (null) pass is
+    // the last-in-list case: a construction line that is the last entity in
+    // a CComponentDefinition is followed by nrel=0, which looks like a null
+    // tag at every candidate including v17's preferred 7. Preferring 7
+    // there swallows three bytes of the definition tail and caches 7 for
+    // every later guide in the file; the writer uses a 4-byte trailer, so
+    // the weak pass prefers 4.
+    for (const cand of order) {
+      if (strictNextTag(ar, r.data, r.pos + cand, false)) {
+        k = cand;
+        break;
+      }
+    }
+    if (k === null) {
+      for (const cand of [4, 0, 7]) {
+        if (strictNextTag(ar, r.data, r.pos + cand, true)) {
           k = cand;
-          break outer;
+          break;
         }
       }
     }
-    if (k === null) k = dflt;
+    if (k === null) k = 4;
     ar.clineTail = k;
   }
   r.raw(k);

@@ -1655,6 +1655,78 @@ namespace OpenSkp
             return newEntities;
         }
 
+        internal static void ValidateFinitePoint((double X, double Y, double Z) p, string caller)
+        {
+            if (double.IsNaN(p.X) || double.IsInfinity(p.X) ||
+                double.IsNaN(p.Y) || double.IsInfinity(p.Y) ||
+                double.IsNaN(p.Z) || double.IsInfinity(p.Z))
+            {
+                throw new SkpWriteException($"{caller}: coordinates must be finite");
+            }
+        }
+
+        internal static (double Dx, double Dy, double Dz, double StartParam, double EndParam) ResolveConstructionLineParams(
+            (double X, double Y, double Z) point,
+            (double X, double Y, double Z)? point2,
+            (double X, double Y, double Z)? direction)
+        {
+            ValidateFinitePoint(point, "AddConstructionLine");
+            if ((point2 == null) == (direction == null))
+            {
+                throw new SkpWriteException("AddConstructionLine: pass exactly one of point2 or direction");
+            }
+            if (point2 != null)
+            {
+                var p2 = point2.Value;
+                ValidateFinitePoint(p2, "AddConstructionLine");
+                double dx = p2.X - point.X;
+                double dy = p2.Y - point.Y;
+                double dz = p2.Z - point.Z;
+                double length = Math.Sqrt(dx * dx + dy * dy + dz * dz);
+                if (double.IsNaN(length) || double.IsInfinity(length) || length == 0.0)
+                {
+                    throw new SkpWriteException("AddConstructionLine: point and point2 coincide");
+                }
+                return (dx / length, dy / length, dz / length, 0.0, length);
+            }
+            var d = direction!.Value;
+            ValidateFinitePoint(d, "AddConstructionLine");
+            double dlen = Math.Sqrt(d.X * d.X + d.Y * d.Y + d.Z * d.Z);
+            if (double.IsNaN(dlen) || double.IsInfinity(dlen) || dlen == 0.0)
+            {
+                throw new SkpWriteException("AddConstructionLine: direction must be finite and nonzero");
+            }
+            return (d.X / dlen, d.Y / dlen, d.Z / dlen, -CreateConstants.ClineInfinite, CreateConstants.ClineInfinite);
+        }
+
+        public void WriteConstructionLine(
+            (double X, double Y, double Z) point,
+            double dx, double dy, double dz,
+            double startParam, double endParam)
+        {
+            NewOfKnownClass("CConstructionLine", CreateConstants.ConstructionLineSchema);
+            Preamble();
+            Drawbase();
+            foreach (var v in new[] { point.X, point.Y, point.Z, dx, dy, dz, startParam, endParam })
+            {
+                AddF64(v);
+            }
+            AddZeros(4); // trailer
+        }
+
+        public void WriteConstructionPoint((double X, double Y, double Z) position)
+        {
+            ValidateFinitePoint(position, "AddConstructionPoint");
+            NewOfKnownClass("CConstructionPoint", CreateConstants.ConstructionPointSchema);
+            Preamble();
+            Drawbase();
+            foreach (var v in new[] { position.X, position.Y, position.Z, 0.0, 0.0, 0.0 })
+            {
+                AddF64(v);
+            }
+            AddZeros(1);
+        }
+
         private static IReadOnlyList<((double, double, double), (double, double))> ToPairs(IReadOnlyList<UvCorrespondence> uv)
         {
             var list = new List<((double, double, double), (double, double))>(uv.Count);
@@ -1690,6 +1762,13 @@ namespace OpenSkp
             IReadOnlyDictionary<string, object>? attributes = null, string attributeDictName = "attributes",
             bool hidden = false,
             IReadOnlyList<AttributeDict>? attributeDicts = null);
+
+        void AddConstructionLine(
+            (double X, double Y, double Z) point,
+            (double X, double Y, double Z)? point2 = null,
+            (double X, double Y, double Z)? direction = null);
+
+        void AddConstructionPoint((double X, double Y, double Z) position);
     }
 
     /// <summary>Shared by SkpBuilder.AddFace and
@@ -2049,6 +2128,30 @@ namespace OpenSkp
                 throw new SkpWriteException("a polyline needs at least 2 points");
             }
             _newEntityCount += Skp.DefinitionWriter!.WritePolyline(points, _vertexSlots, _edgeRegistry, closed, hiddenEdges, softEdges, smoothEdges);
+        }
+
+        /// <summary>Add a construction/guide line to this definition (local
+        /// coordinates) - same behavior as
+        /// <see cref="SkpBuilder.AddConstructionLine"/>.</summary>
+        public void AddConstructionLine(
+            (double X, double Y, double Z) point,
+            (double X, double Y, double Z)? point2 = null,
+            (double X, double Y, double Z)? direction = null)
+        {
+            CheckWritable("construction lines");
+            var (dx, dy, dz, startParam, endParam) = ArchiveWriter.ResolveConstructionLineParams(point, point2, direction);
+            Skp.DefinitionWriter!.WriteConstructionLine(point, dx, dy, dz, startParam, endParam);
+            _newEntityCount += 1;
+        }
+
+        /// <summary>Add a construction/guide point to this definition (local
+        /// coordinates) - same behavior as
+        /// <see cref="SkpBuilder.AddConstructionPoint"/>.</summary>
+        public void AddConstructionPoint((double X, double Y, double Z) position)
+        {
+            CheckWritable("construction points");
+            Skp.DefinitionWriter!.WriteConstructionPoint(position);
+            _newEntityCount += 1;
         }
 
         /// <summary>Place one instance of another, already-closed
@@ -3161,48 +3264,9 @@ namespace OpenSkp
             (double X, double Y, double Z)? point2 = null,
             (double X, double Y, double Z)? direction = null)
         {
-            if ((point2 == null) == (direction == null))
-            {
-                throw new SkpWriteException("AddConstructionLine: pass exactly one of point2 or direction");
-            }
-            double dx, dy, dz, startParam, endParam;
-            if (point2 != null)
-            {
-                var p2 = point2.Value;
-                dx = p2.X - point.X;
-                dy = p2.Y - point.Y;
-                dz = p2.Z - point.Z;
-                double length = Math.Sqrt(dx * dx + dy * dy + dz * dz);
-                if (length == 0.0)
-                {
-                    throw new SkpWriteException("AddConstructionLine: point and point2 coincide");
-                }
-                dx /= length; dy /= length; dz /= length;
-                startParam = 0.0;
-                endParam = length;
-            }
-            else
-            {
-                var d = direction!.Value;
-                double dlen = Math.Sqrt(d.X * d.X + d.Y * d.Y + d.Z * d.Z);
-                if (dlen == 0.0)
-                {
-                    throw new SkpWriteException("AddConstructionLine: direction must be nonzero");
-                }
-                dx = d.X / dlen; dy = d.Y / dlen; dz = d.Z / dlen;
-                startParam = -CreateConstants.ClineInfinite;
-                endParam = CreateConstants.ClineInfinite;
-            }
+            var (dx, dy, dz, startParam, endParam) = ArchiveWriter.ResolveConstructionLineParams(point, point2, direction);
             EnsureGeometryWriter();
-            var w = _geometryWriter!;
-            w.NewOfKnownClass("CConstructionLine", CreateConstants.ConstructionLineSchema);
-            w.Preamble();
-            w.Drawbase();
-            foreach (var v in new[] { point.X, point.Y, point.Z, dx, dy, dz, startParam, endParam })
-            {
-                w.AddF64(v);
-            }
-            w.AddZeros(4); // trailer - see docstring
+            _geometryWriter!.WriteConstructionLine(point, dx, dy, dz, startParam, endParam);
             _newEntityCount += 1;
             _faceCount += 1; // reuses the "at least one root entity" check in ToBytes
         }
@@ -3216,16 +3280,9 @@ namespace OpenSkp
         /// every real-file sample seen.</summary>
         public void AddConstructionPoint((double X, double Y, double Z) position)
         {
+            ArchiveWriter.ValidateFinitePoint(position, "AddConstructionPoint");
             EnsureGeometryWriter();
-            var w = _geometryWriter!;
-            w.NewOfKnownClass("CConstructionPoint", CreateConstants.ConstructionPointSchema);
-            w.Preamble();
-            w.Drawbase();
-            foreach (var v in new[] { position.X, position.Y, position.Z, 0.0, 0.0, 0.0 })
-            {
-                w.AddF64(v);
-            }
-            w.AddZeros(1);
+            _geometryWriter!.WriteConstructionPoint(position);
             _newEntityCount += 1;
             _faceCount += 1; // reuses the "at least one root entity" check in ToBytes
         }

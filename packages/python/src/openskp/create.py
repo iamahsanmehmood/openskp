@@ -2056,6 +2056,46 @@ def _patch_style_items(tail: bytearray, pos: int, options: DocumentOptions) -> N
         pos += size
 
 
+def _finite_point3(value: object, caller: str) -> Point3:
+    if isinstance(value, (str, bytes, bytearray)):
+        raise SkpWriteError(f"{caller}: expected a 3-coordinate point or vector")
+    try:
+        items = tuple(value)  # type: ignore[arg-type]
+    except TypeError as exc:
+        raise SkpWriteError(f"{caller}: expected a 3-coordinate point or vector") from exc
+    if len(items) != 3:
+        raise SkpWriteError(f"{caller}: expected 3 coordinates, got {len(items)}")
+    try:
+        pt = (float(items[0]), float(items[1]), float(items[2]))
+    except (TypeError, ValueError) as exc:
+        raise SkpWriteError(f"{caller}: coordinates must be numeric") from exc
+    if not all(math.isfinite(c) for c in pt):
+        raise SkpWriteError(f"{caller}: coordinates must be finite")
+    return pt
+
+
+def _resolve_construction_line_params(
+    point: Point3,
+    point2: Optional[Point3],
+    direction: Optional[Point3],
+) -> Tuple[Point3, Point3, float, float]:
+    p = _finite_point3(point, "add_construction_line")
+    if (point2 is None) == (direction is None):
+        raise SkpWriteError("add_construction_line: pass exactly one of point2 or direction")
+    if point2 is not None:
+        p2 = _finite_point3(point2, "add_construction_line")
+        dx, dy, dz = p2[0] - p[0], p2[1] - p[1], p2[2] - p[2]
+        length = math.hypot(dx, dy, dz)
+        if not math.isfinite(length) or length == 0.0:
+            raise SkpWriteError("add_construction_line: point and point2 coincide")
+        return p, (dx / length, dy / length, dz / length), 0.0, length
+    d = _finite_point3(direction, "add_construction_line")
+    dlen = math.hypot(d[0], d[1], d[2])
+    if not math.isfinite(dlen) or dlen == 0.0:
+        raise SkpWriteError("add_construction_line: direction must be finite and nonzero")
+    return p, (d[0] / dlen, d[1] / dlen, d[2] / dlen), -_CLINE_INFINITE, _CLINE_INFINITE
+
+
 class ComponentDefinitionBuilder:
     """Accumulates one component/group definition's geometry. Construct via
     :meth:`SkpBuilder.add_component_definition` or :meth:`SkpBuilder.
@@ -2398,14 +2438,34 @@ class ComponentDefinitionBuilder:
         writer.buf += bytes(5)
         self._new_entity_count += 1
 
+    def add_construction_line(
+        self,
+        point: Point3,
+        point2: Optional[Point3] = None,
+        direction: Optional[Point3] = None,
+    ) -> None:
+        """Add a construction/guide line (SketchUp's Construction Line tool) in
+        this definition's local coordinates (inches) - same signature and
+        behavior as :meth:`SkpBuilder.add_construction_line`."""
+        self._check_writable("construction lines")
+        p, dirv, start_param, end_param = _resolve_construction_line_params(point, point2, direction)
+        w = self._skp._definition_writer
+        w._new_of_known_class("CConstructionLine", schema=1)
+        w._preamble()
+        w.buf += _DIM_DRAWBASE
+        for v in (p[0], p[1], p[2], dirv[0], dirv[1], dirv[2], start_param, end_param):
+            w.buf += _f64(v)
+        w.buf += bytes(4)
+        self._new_entity_count += 1
+
     def add_construction_point(self, position: Point3) -> None:
         """Add a construction/guide point (SketchUp's Construction Point
         tool) at ``position`` (inches, local to this definition) - same
         signature and behavior as :meth:`SkpBuilder.add_construction_point`
         (openskp#380)."""
         self._check_writable("construction points")
+        p = _finite_point3(position, "add_construction_point")
         writer = self._skp._definition_writer
-        p = (float(position[0]), float(position[1]), float(position[2]))
         writer._new_of_known_class("CConstructionPoint", schema=0)
         writer._preamble()
         writer.buf += _DIM_DRAWBASE
@@ -3646,26 +3706,9 @@ class SkpBuilder:
         this one - real SketchUp rejected the result as an unrecognized
         file).
         """
+        p, dirv, start_param, end_param = _resolve_construction_line_params(point, point2, direction)
         self._ensure_geometry_writer()
         w = self._geometry_writer
-        p = (float(point[0]), float(point[1]), float(point[2]))
-        if (point2 is None) == (direction is None):
-            raise SkpWriteError("add_construction_line: pass exactly one of point2 or direction")
-        if point2 is not None:
-            p2 = (float(point2[0]), float(point2[1]), float(point2[2]))
-            dx, dy, dz = p2[0] - p[0], p2[1] - p[1], p2[2] - p[2]
-            length = math.sqrt(dx * dx + dy * dy + dz * dz)
-            if length == 0.0:
-                raise SkpWriteError("add_construction_line: point and point2 coincide")
-            dirv = (dx / length, dy / length, dz / length)
-            start_param, end_param = 0.0, length
-        else:
-            d = (float(direction[0]), float(direction[1]), float(direction[2]))
-            dlen = math.sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2])
-            if dlen == 0.0:
-                raise SkpWriteError("add_construction_line: direction must be nonzero")
-            dirv = (d[0] / dlen, d[1] / dlen, d[2] / dlen)
-            start_param, end_param = -_CLINE_INFINITE, _CLINE_INFINITE
         w._new_of_known_class("CConstructionLine", schema=1)
         w._preamble()
         w.buf += _DIM_DRAWBASE
@@ -3685,9 +3728,9 @@ class SkpBuilder:
         ``Sketchup::ConstructionPoint`` property exists to name them
         after), written as zero to match every real-file sample seen.
         """
+        p = _finite_point3(position, "add_construction_point")
         self._ensure_geometry_writer()
         w = self._geometry_writer
-        p = (float(position[0]), float(position[1]), float(position[2]))
         w._new_of_known_class("CConstructionPoint", schema=0)
         w._preamble()
         w.buf += _DIM_DRAWBASE
