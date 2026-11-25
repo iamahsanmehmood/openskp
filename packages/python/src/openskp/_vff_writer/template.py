@@ -12,10 +12,11 @@ confirmed against minimal pairs saved by SketchUp itself.
 
 from __future__ import annotations
 
+import re
 import struct
 import time
 import uuid
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, KeysView, List, Optional, Sequence, Tuple
 from xml.sax.saxutils import escape as _xml_escape
 
 from .archive import (
@@ -417,28 +418,41 @@ def material_xml(
     return text.encode("utf-8")
 
 
+_FOLDER_MAX_LENGTH = 80
+_FOLDER_UNSAFE = set('*<>:|?/\\"\t\n\r')
+
+
 def sanitize_folder(name: str) -> str:
-    """Archive folder for a material/tag name, as SketchUp derives it."""
-    out = []
-    for char in name:
-        if char in '*<>:|/\\"':
-            out.append("_")
-        else:
-            out.append(char)
-    folder = "".join(out)
-    if folder in (".", ".."):
-        folder = "_"
+    """SketchUp's archive folder for a material/tag name, before truncation."""
+    folder = "".join("_" if char in _FOLDER_UNSAFE else char for char in name)
     return folder or "_"
 
 
-def _material_folder_for(name: str, taken: Sequence[str]) -> str:
-    base = sanitize_folder(name)
-    if base not in taken:
+def _truncate_folder(folder: str) -> str:
+    """SketchUp's long-name truncation: repeated floor(2/3) while over 80."""
+    while len(folder) > _FOLDER_MAX_LENGTH:
+        folder = folder[: (2 * len(folder)) // 3]
+        if len(folder) == _FOLDER_MAX_LENGTH:
+            folder = folder[: (2 * len(folder)) // 3]
+    return folder or "_"
+
+
+def _material_folder_for(name: str, taken: KeysView[str] | set[str]) -> str:
+    """The folder SketchUp would use for *name*, including ``_N`` collisions.
+
+    ``taken`` holds lower-cased folders (Windows is case-insensitive).  On a
+    collision SketchUp first strips a Windows drive prefix (``a:b`` -> ``b``)
+    and then always starts its suffix at ``_1``.
+    """
+    base = _truncate_folder(sanitize_folder(name))
+    if base.lower() not in taken:
         return base
+    stripped = re.sub(r"^[A-Za-z]:", "", name)
+    fallback = _truncate_folder(sanitize_folder(stripped))
     counter = 1
-    while f"{base}{counter}" in taken:
+    while f"{fallback}_{counter}".lower() in taken:
         counter += 1
-    return f"{base}{counter}"
+    return f"{fallback}_{counter}"
 
 
 # ── Template ─────────────────────────────────────────────────────────────
@@ -476,9 +490,19 @@ class Template:
         self.next_id = self._read_next_id()
         self.layers: Dict[str, int] = {}
         self.layer_ids: Dict[int, str] = {}
+        self._layer_names: Dict[str, str] = {}
         self.materials: Dict[str, int] = {}
         self.material_ids: Dict[int, str] = {}
-        self.material_folders: List[str] = []
+        self._material_names: Dict[str, str] = {}
+        self.material_folders: List[str] = [
+            entry.name.split("/")[1]
+            for entry in self.entries
+            if entry.name.startswith("materials/")
+            and entry.name.endswith("/material.xml")
+        ]
+        self._material_folder_keys = {
+            folder.lower() for folder in self.material_folders
+        }
         self._read_layers()
         self._read_materials()
         self.default_layer_id = self.layers.get("Layer0") or (
@@ -645,6 +669,7 @@ class Template:
             name = name_node.payload.decode("utf-8", "replace")
             self.layers.setdefault(name, identifier)
             self.layer_ids[identifier] = name
+            self._layer_names.setdefault(name.lower(), name)
 
     def _read_materials(self) -> None:
         for material in self._material_list().children or []:
@@ -657,7 +682,7 @@ class Template:
             name = name_node.payload.decode("utf-8", "replace")
             self.material_ids[identifier] = name
             self.materials[name] = identifier
-            self.material_folders.append(name)
+            self._material_names.setdefault(name.lower(), name)
 
     # -- adding materials / layers ---------------------------------------
 
@@ -667,12 +692,22 @@ class Template:
         _validate_xml_name(name, "material")
         if name in self.materials:
             return self.materials[name]
-        folder = _material_folder_for(name, self.material_folders)
+        if name.lower() in self._material_names:
+            # SketchUp appends a bare counter to a case-insensitive duplicate:
+            # "wood" after "Wood" becomes "wood1", then "wood2", ...
+            base = name
+            counter = 1
+            while f"{base}{counter}".lower() in self._material_names:
+                counter += 1
+            name = f"{base}{counter}"
+        folder = _material_folder_for(name, self._material_folder_keys)
         identifier = self.alloc_id()
         self._material_list().children.append(_material_record(identifier, folder, 0))
         self.material_ids[identifier] = name
         self.material_folders.append(folder)
+        self._material_folder_keys.add(folder.lower())
         self.materials[name] = identifier
+        self._material_names[name.lower()] = name
         self._add_entry(
             f"materials/{folder}/material.xml",
             material_xml(name, rgb, opacity=opacity),
@@ -689,11 +724,16 @@ class Template:
         _validate_xml_name(name, "tag")
         if name in self.layers:
             return self.layers[name]
+        if name.lower() in self._layer_names:
+            # SketchUp's layer manager is case-insensitive: "wood" after
+            # "Wood" returns the same tag rather than creating a second one.
+            return self.layers[self._layer_names[name.lower()]]
         colour = color if color is not None else _DEFAULT_LAYER_COLOR
         identifier = self.alloc_id()
         material_id = self.alloc_id()
-        folder = _material_folder_for(f"Layer_{name}", self.material_folders)
+        folder = _material_folder_for(f"Layer_{name}", self._material_folder_keys)
         self.material_folders.append(folder)
+        self._material_folder_keys.add(folder.lower())
         layer = Record(
             T_LAYER,
             children=[
@@ -710,6 +750,7 @@ class Template:
         self._layer_list().children.append(layer)
         self.layers[name] = identifier
         self.layer_ids[identifier] = name
+        self._layer_names[name.lower()] = name
         self._add_entry(
             f"materials/{folder}/material.xml",
             material_xml(f"Layer_{name}", colour, layer_color=True),

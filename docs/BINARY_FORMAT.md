@@ -304,7 +304,36 @@ repeats the fields without the extra field. Entry order is:
 `set_guid` value) and a fresh save time on the history entry; the template's
 own model revision is kept.
 
-### 7.3 Records the core writer emits
+### 7.3 Material and tag archive folders
+
+SketchUp derives the folder under `materials/` from the material's display
+name; a tag's embedded material uses `Layer_<tag name>` as that name. The
+writer reproduces the observed rule:
+
+- Replace the characters `\ / : * ? < > | "`, tab, newline and carriage
+  return with `_` (a quote becomes `_` only in the folder; `material.xml`'s
+  `name` attribute keeps it, XML-escaped).
+- While the name is longer than 80 characters, cut it to `floor(2/3)` of the
+  current length; if that lands exactly on 80, cut once more. For example a
+  120-character name becomes 53 characters and a 200-character one becomes
+  58.
+- If the resulting folder is already taken (comparison is case-insensitive,
+  as on Windows), strip a leading Windows drive prefix (`a:b` becomes `b`,
+  `C:D` becomes `D`), sanitise and truncate that remainder, then append
+  `_1`, `_2`, ... . Without a drive prefix this is just the usual `_N`
+  suffix, e.g. `a*b` after `a_b` becomes `a_b_1`.
+- Material and tag folders share one collision namespace, which is why a
+  material named `Layer_Foo` and a tag `Foo` end up at `Layer_Foo` and
+  `Layer_Foo_1`.
+- Material names are case-insensitive too: a new `wood` after `Wood` becomes
+  `wood1` (then `wood2`, ...), as SketchUp's material manager does. Tags are
+  case-insensitive rather than renamed: a new `wood` after `Wood` resolves
+  to the existing tag.
+
+Names containing characters XML 1.0 cannot hold raise `SkpWriteError`
+instead. The `/` and `"` cases therefore never nest or break a ZIP path.
+
+### 7.4 Records the core writer emits
 
 Everything lives under the root definition container `8813` inside the
 root entity list `F601`, with child pools for vertices (`8913`), edges

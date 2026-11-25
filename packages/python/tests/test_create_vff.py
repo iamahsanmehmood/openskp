@@ -23,9 +23,12 @@ fixtures it reuses are genuine SketchUp saves:
 
 from __future__ import annotations
 
+import io
 import math
 import random
 import struct
+import xml.etree.ElementTree as ET
+import zipfile
 import zlib
 from pathlib import Path
 
@@ -378,6 +381,114 @@ def test_material_and_tag_names_with_quotes_round_trip(tmp_path):
     names = [entry.name for entry in read_zip(builder.to_bytes(), builder.to_bytes().find(b"PK\x03\x04"))]
     assert any(name.startswith("materials/1_2_ plywood/") for name in names), names
 
+
+
+def _sketchup_folder_map(data: bytes):
+    """Map (kind, name) -> archive folder from a SketchUp-saved VFF file."""
+    archive = zipfile.ZipFile(io.BytesIO(data))
+    found = {}
+    for info in archive.infolist():
+        if not info.filename.startswith("materials/") or not info.filename.endswith("/material.xml"):
+            continue
+        folder = info.filename.split("/")[1]
+        # SketchUp stores UTF-8 entry names without the ZIP UTF-8 flag, so
+        # Python decodes them as cp437; put the original UTF-8 bytes back.
+        folder = folder.encode("cp437").decode("utf-8", errors="replace")
+        root = ET.fromstring(archive.read(info))
+        namespace = "{http://sketchup.google.com/schemas/sketchup/1.0/material}"
+        name = root.find(f".//{namespace}material").attrib["name"]
+        if name.startswith("Layer_"):
+            found[("tag", name[len("Layer_"):])] = folder
+        else:
+            found[("material", name)] = folder
+    return found
+
+
+def test_material_and_tag_folders_match_sketchup(tmp_path):
+    """SketchUp 2025's own folder mapping for special names and collisions.
+
+    ``material_folder_names_2025.skp`` (29 KB) was saved by SketchUp 2025
+    from the bundled empty template, after creating these material and tag
+    names through the Ruby API and applying each to its own face. The writer
+    below is given the same names in the same order, so its archive folders
+    must equal the ones SketchUp chose, including the ``a:b`` drive-prefix
+    fallback, ``_N`` collisions, the 200-character truncation and the
+    ``Layer_Foo`` material/Foo-tag collision.
+    """
+    material_names = [
+        '1/2" plywood', "a/b", "a_b", "a:b", "a*b", "a?b",
+        "x" * 200, "Ünïcødé 木材", ".", "Layer_Foo",
+    ]
+    tag_names = [
+        '1/2" tag', "a/b", "a_b", "a:b", "a*b", "a?b",
+        "x" * 200, "Ünïcødé 木材", ".", "Foo",
+    ]
+    expected = _sketchup_folder_map(
+        (WRITER_FIXTURES / "material_folder_names_2025.skp").read_bytes()
+    )
+    builder = create_vff()
+    for index, name in enumerate(material_names):
+        material = builder.add_material(name, (100, 150, 200))
+        builder.add_face(
+            [(index * 30, 0, 0), (index * 30 + 10, 0, 0),
+             (index * 30 + 10, 10, 0), (index * 30, 10, 0)],
+            material=material,
+        )
+    for index, name in enumerate(tag_names):
+        tag = builder.add_layer(name)
+        builder.add_face(
+            [(index * 30, 200, 0), (index * 30 + 10, 200, 0),
+             (index * 30 + 10, 210, 0), (index * 30, 210, 0)],
+            layer=tag,
+        )
+    actual = _sketchup_folder_map(builder.to_bytes())
+    assert actual == expected
+
+    model = parse_bytes(tmp_path, builder.to_bytes())
+    assert '1/2" plywood' in {material.name for material in model.materials}
+    assert '1/2" tag' in {layer.name for layer in model.layers}
+
+
+def test_material_folder_special_character_table():
+    """The folder rule for characters absent from the SketchUp fixture."""
+    names = ["p\\q", "r<s>", "t|u", "v?w", "A" * 90, "B" * 120, "C" * 200]
+    expected = {
+        "p\\q": "p_q",
+        "r<s>": "r_s_",
+        "t|u": "t_u",
+        "v?w": "v_w",
+        "A" * 90: "A" * 60,
+        "B" * 120: "B" * 53,
+        "C" * 200: "C" * 58,
+    }
+    builder = create_vff()
+    for name in names:
+        builder.add_material(name, (10, 20, 30))
+    actual = {
+        name: folder
+        for (_kind, name), folder in _sketchup_folder_map(builder.to_bytes()).items()
+        if name in expected
+    }
+    assert actual == expected
+
+
+def test_case_variant_material_and_tag_names_follow_sketchup(tmp_path):
+    builder = create_vff()
+    first = builder.add_material("Wood", (10, 20, 30))
+    second = builder.add_material("wood", (40, 50, 60))
+    assert first != second
+    tag = builder.add_layer("Wood", (1, 2, 3))
+    assert builder.add_layer("wood", (4, 5, 6)) == tag
+
+    model = parse_bytes(tmp_path, builder.to_bytes())
+    assert [material.name for material in model.materials] == ["Wood", "wood1"]
+    assert [layer.name for layer in model.layers].count("Wood") == 1
+    folders = {
+        name: folder
+        for (kind, name), folder in _sketchup_folder_map(builder.to_bytes()).items()
+        if kind == "material" and name in {"Wood", "wood1"}
+    }
+    assert folders == {"Wood": "Wood", "wood1": "wood1"}
 
 def test_material_and_tag_names_reject_xml_control_characters():
     with pytest.raises(SkpWriteError):
