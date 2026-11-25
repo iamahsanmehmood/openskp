@@ -470,6 +470,12 @@ class Template:
             raise ValueError("not a VFF file: no embedded ZIP archive")
         h_offset = header_offset(data)
         self.header = data[:zip_offset]
+        revision_offset = self.header.find(b"VFF\x08\x00\x01\x00")
+        self.revision = (
+            struct.unpack_from("<H", self.header, revision_offset + 7)[0]
+            if revision_offset >= 0
+            else None
+        )
         self.entries: List[ZipEntry] = entries_of(data)
         self._by_name: Dict[str, ZipEntry] = {e.name: e for e in self.entries}
         if "model.dat" not in self._by_name:
@@ -781,10 +787,6 @@ class Template:
             raise ValueError("template meta.dat has no model GUID")
         guid.payload = self.model_guid_bytes()
 
-        revision = root.child(T_META_REVISION)
-        if revision is not None:
-            revision.payload = struct.pack("<H", MODEL_REVISION)
-
         history = root.child(T_META_HISTORY)
         if history is not None:
             wrappers = history.child(T_META_HISTORY_INNER)
@@ -861,10 +863,8 @@ class Template:
         entries.extend(self.new_entries)
         entries.extend(others)
         entries.append(ZipEntry("model.dat", model_dat, 0x0006))
-        header = bytearray(self.header)
-        start = header.find(b"VFF\x08\x00\x01\x00")
-        struct.pack_into("<H", header, start + 7, MODEL_REVISION)
-        return build_skp(bytes(header), entries)
+        # The template's own header (including its model revision) is kept.
+        return build_skp(self.header, entries)
 
 
 #: Valid 1x1 transparent PNG, used only to fill the two thumbnail slots of a

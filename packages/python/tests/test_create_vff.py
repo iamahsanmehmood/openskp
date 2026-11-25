@@ -508,6 +508,20 @@ def test_sketchup_accepted_spike_parses(tmp_path):
     assert [(m.name, tuple(m.color[:3])) for m in model.materials] == [("SpikeRed", RED)]
 
 
+
+def test_writing_keeps_the_templates_model_revision(tmp_path):
+    def revision(data: bytes) -> int:
+        offset = data.find(b"VFF\x08\x00\x01\x00")
+        return struct.unpack_from("<H", data, offset + 7)[0]
+
+    source = NESTING_TEMPLATE.read_bytes()
+    assert revision(create_vff(template=source).to_bytes()) == revision(source)
+
+    older = bytearray(DEFAULT_TEMPLATE.read_bytes())
+    offset = older.find(b"VFF\x08\x00\x01\x00")
+    struct.pack_into("<H", older, offset + 7, 16)
+    assert revision(create_vff(template=bytes(older)).to_bytes()) == 16
+
 def test_spike_on_the_bundled_2025_template(tmp_path):
     spike = build_spike()
     model = parse_bytes(tmp_path, spike.data)

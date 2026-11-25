@@ -273,8 +273,7 @@ file with the standard sections can be passed as the template instead.
 The header is two UTF-16LE marker-prefixed strings followed by a 13-byte
 block whose last four bytes are the integrity word, then the embedded ZIP
 archive (`PK\x03\x04`). The writer keeps the template's header strings and
-patches the model-revision `u16` at magic `VFF\x08\x00\x01\x00` + 7 (it
-writes revision 17) and the integrity word.
+its model revision, and patches only the integrity word.
 
 skpwright (https://github.com/hew3d/skpwright, by Kurt Granroth,
 GPL-3.0-only) documents the VFF container; the integrity-word algorithm was
@@ -302,7 +301,8 @@ repeats the fields without the extra field. Entry order is:
 5. `model.dat` **last**
 
 `meta/meta.dat` is repacked with a fresh model GUID (or the explicit
-`set_guid` value), revision 17 and a fresh save time on the history entry.
+`set_guid` value) and a fresh save time on the history entry; the template's
+own model revision is kept.
 
 ### 7.3 Records the core writer emits
 
