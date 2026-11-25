@@ -78,6 +78,7 @@
  *   reproduced - the reader's public model doesn't expose either (only
  *   an instance's own `properties` are).
  */
+import { BinaryInput, toUint8ArrayView } from './binary-input';
 import { isLegacy } from './legacy';
 import { reconstructLoopVertices } from './geometry';
 import { faceUvBasis, computeFaceUv, SkpModel, Definition, Face, Instance } from './model';
@@ -112,21 +113,20 @@ interface ReplayTarget {
   addConstructionPoint(position: Point3, options?: { layer?: number; hidden?: boolean }): void;
 }
 
-function readFileToArrayBuffer(path: string): ArrayBuffer {
+function readFileToBytes(path: string): Uint8Array {
   if (typeof process === 'undefined' || !process.versions || !process.versions.node) {
     throw new SkpWriteError(
-      'a file-path source for openExisting is only supported in Node.js environments - pass an ArrayBuffer instead'
+      'a file-path source for openExisting is only supported in Node.js environments - pass a Uint8Array or ArrayBuffer instead'
     );
   }
   const fs = nodeFs();
-  const buffer = fs.readFileSync(path);
-  return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
+  return fs.readFileSync(path);
 }
 
 /**
  * Parse `source` (a legacy-format `.skp` file - either a filesystem path,
- * Node.js only, or an already-loaded `ArrayBuffer`, which works in the
- * browser too) and rebuild it as a new `SkpBuilder`, replaying materials,
+ * Node.js only, or an already-loaded `Uint8Array` or `ArrayBuffer`, which
+ * works in the browser too) and rebuild it as a new `SkpBuilder`, replaying materials,
  * layers, every component definition, and all root-level geometry/
  * instances.
  *
@@ -158,10 +158,10 @@ function readFileToArrayBuffer(path: string): ArrayBuffer {
  * @throws SkpWriteError if `source` isn't a legacy-format file.
  */
 export function openExisting(
-  source: string | ArrayBuffer
+  source: string | BinaryInput
 ): { builder: SkpBuilder; warnings: string[]; definitions: Map<string, ComponentDefinitionBuilder> } {
-  const buffer = typeof source === 'string' ? readFileToArrayBuffer(source) : source;
-  const head = new Uint8Array(buffer, 0, Math.min(0x200, buffer.byteLength));
+  const bytes = typeof source === 'string' ? readFileToBytes(source) : toUint8ArrayView(source);
+  const head = bytes.subarray(0, Math.min(0x200, bytes.length));
   if (!isLegacy(head)) {
     throw new SkpWriteError(
       `${typeof source === 'string' ? JSON.stringify(source) : 'the given buffer'} is not a legacy-format ` +
@@ -170,7 +170,7 @@ export function openExisting(
         'existing file cannot simply be patched)'
     );
   }
-  const model = parseSkp(buffer);
+  const model = parseSkp(bytes);
   const warnings: string[] = [];
   const builder = create();
 

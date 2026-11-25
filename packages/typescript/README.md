@@ -110,7 +110,8 @@ console.log(instanced.meshResources.length, 'unique meshes');
 ```
 
 In the browser, parse a `File` or `Blob` (for example from an
-`<input type="file">`):
+`<input type="file">`), or pass any `Uint8Array` (including a Node.js
+`Buffer` from `fs.readFileSync` or `builder.toBytes()`) directly:
 
 ```typescript
 import { parseSkp } from 'openskp';
@@ -224,8 +225,10 @@ triangles stitched by edges that define the shape and are never shown.
 These are parsed and exposed on `Edge`, but acting on them is opt-in.
 
 ```typescript
+import fs from 'fs';
 import { parseSkp, isDrawableEdge } from 'openskp';
 
+const buffer = fs.readFileSync('model.skp');
 const model = parseSkp(buffer);
 const visible = model.root.edges.filter(isDrawableEdge);
 ```
@@ -258,6 +261,8 @@ full parse or a render:
 ```typescript
 import fs from 'fs';
 import { extractThumbnail, buildScene } from 'openskp';
+
+const buffer = fs.readFileSync('model.skp');
 
 // The preview image SketchUp already saved inside the file. Reads
 // container metadata only - no geometry parsing, no renderer.
