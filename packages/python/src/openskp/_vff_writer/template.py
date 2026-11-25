@@ -24,6 +24,7 @@ from .archive import (
     entries_of,
     header_offset,
 )
+from ..create import SkpWriteError
 from .tlv import (
     Record,
     encode_records,
@@ -370,6 +371,25 @@ def _xml_number(value: float) -> str:
     return text or "0"
 
 
+def _xml_attr(value: str) -> str:
+    """Escape a value for a double- or single-quoted XML attribute."""
+    return _xml_escape(value, {'"': "&quot;", "'": "&apos;"})
+
+
+def _validate_xml_name(name: str, kind: str) -> None:
+    """Reject characters XML 1.0 cannot hold, before they reach a file."""
+    for char in name:
+        codepoint = ord(char)
+        if (
+            (codepoint < 0x20 and char not in "\t\n\r")
+            or 0xD800 <= codepoint <= 0xDFFF
+            or codepoint in (0xFFFE, 0xFFFF)
+        ):
+            raise SkpWriteError(
+                f"{kind} name contains a character XML cannot hold: {char!r}"
+            )
+
+
 
 
 def material_xml(
@@ -386,6 +406,7 @@ def material_xml(
     another entity" for those.  An opacity below 1 is stored as
     ``useTrans="1"`` with ``trans = 1 - opacity`` (SketchUp's convention).
     """
+    _validate_xml_name(name, "material")
     red, green, blue = (max(0, min(255, int(c))) for c in rgb)
     promo = "0" if layer_color else "2"
     opacity = min(max(float(opacity), 0.0), 1.0)
@@ -400,7 +421,7 @@ def material_xml(
         '<?xml version="1.0" encoding="UTF-8" standalone="no" ?>\n'
         '<materialDocument xmlns="http://sketchup.google.com/schemas/sketchup/1.0/material" '
         'xmlns:mat="http://sketchup.google.com/schemas/sketchup/1.0/material">\n'
-        f'  <mat:material name="{_xml_escape(name)}" type="{type_attr}" workflow="0" '
+        f'  <mat:material name="{_xml_attr(name)}" type="{type_attr}" workflow="0" '
         f'colorRed="{red}" colorGreen="{green}" colorBlue="{blue}" '
         f'colorizeType="0" trans="{trans_attr}" useTrans="{use_trans}" '
         f'pbrPromoState="{promo}" hasTexture="{has_texture}">\n'
@@ -415,11 +436,13 @@ def sanitize_folder(name: str) -> str:
     """Archive folder for a material/tag name, as SketchUp derives it."""
     out = []
     for char in name:
-        if char in '*<>:|/\\':
+        if char in '*<>:|/\\"':
             out.append("_")
         else:
             out.append(char)
     folder = "".join(out)
+    if folder in (".", ".."):
+        folder = "_"
     return folder or "_"
 
 
@@ -663,6 +686,7 @@ class Template:
     def add_material(
         self, name: str, rgb: Tuple[int, int, int], opacity: float = 1.0
     ) -> int:
+        _validate_xml_name(name, "material")
         if name in self.materials:
             return self.materials[name]
         folder = _material_folder_for(name, self.material_folders)
@@ -684,6 +708,7 @@ class Template:
         color: Optional[Tuple[int, int, int]] = None,
         hidden: bool = False,
     ) -> int:
+        _validate_xml_name(name, "tag")
         if name in self.layers:
             return self.layers[name]
         colour = color if color is not None else _DEFAULT_LAYER_COLOR

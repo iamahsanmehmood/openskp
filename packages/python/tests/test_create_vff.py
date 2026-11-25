@@ -332,6 +332,30 @@ def test_materials_and_tags_are_shared_handles(tmp_path):
     assert tag_read.hidden
 
 
+
+def test_material_and_tag_names_with_quotes_round_trip(tmp_path):
+    builder = create_vff()
+    material = builder.add_material('1/2" plywood', (200, 150, 100))
+    tag = builder.add_layer('1/2" tag')
+    builder.add_face(
+        [(0, 0, 0), (10, 0, 0), (10, 10, 0), (0, 10, 0)],
+        material=material,
+        layer=tag,
+    )
+    model = parse_bytes(tmp_path, builder.to_bytes())
+    assert [item.name for item in model.materials] == ['1/2" plywood']
+    assert '1/2" tag' in {layer.name for layer in model.layers}
+    # The archive uses a sanitised folder, never a path inside another folder.
+    names = [entry.name for entry in read_zip(builder.to_bytes(), builder.to_bytes().find(b"PK\x03\x04"))]
+    assert any(name.startswith("materials/1_2_ plywood/") for name in names), names
+
+
+def test_material_and_tag_names_reject_xml_control_characters():
+    with pytest.raises(SkpWriteError):
+        create_vff().add_material("bad\x01", (1, 2, 3))
+    with pytest.raises(SkpWriteError):
+        create_vff().add_layer("bad\x02")
+
 def test_material_errors_are_skpwriteerrors():
     with pytest.raises(SkpWriteError):
         create_vff().add_material("bad", (300, 0, 0))
