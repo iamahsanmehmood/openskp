@@ -314,11 +314,11 @@ writer advances.
 
 | Entity | Records |
 |---|---|
-| Drawing/entity base | `05DC` with entity id `05DE`, then `07D0` drawing with optional front material `07D1`, layer ref `07D2` and flags `07D3` |
-| Vertex | `09C4` wrapping point `09C5` (3 × `f64`) |
-| Edge | `0BB8` with start `0BB9`, end `0BBA`; flags carry hidden/soft/smooth bits |
-| Face | `0DAC` with plane `0DAD` (normal + distance, 4 × `f64`), loops `0DAE` (a loop `1194` contains edge uses `0FA0`, each an edge id `0FA1` plus forward bit `0FA2`), optional back material `0DAF` |
-| Material | `32C8` with name `32CC`; the color/opacity lives in `materials/<folder>/material.xml`, and tags own their `Layer_<name>` material |
+| Drawing/entity base | `DC05` with entity id `DE05`, then `D007` drawing with optional front material `D107`, layer ref `D207` and flags `D307` |
+| Vertex | `C409` wrapping point `C509` (3 × `f64`) |
+| Edge | `B80B` with start `B90B`, end `BA0B`; flags carry hidden/soft/smooth bits |
+| Face | `AC0D` with plane `AD0D` (normal + distance, 4 × `f64`), loops `AE0D` (a loop `9411` contains edge uses `A00F`, each an edge id `A10F` plus forward bit `A20F`), optional back material `AF0D` |
+| Material | `C832` with name `CC32`; the color/opacity lives in `materials/<folder>/material.xml`, and tags own their `Layer_<name>` material |
 | Tag/layer | `8C3C` with name `8D3C`, hidden byte `8E3C`, owned material `8F3C` and tail `903C` |
 | Definition | `7C15` inside the definitions list (`7017` → `7117`) with GUID `7D15`, name `7E15`, kind `8315` (0 component, 1 group), timestamp and behaviour `581B` (`5D1B` always-faces-camera, `5E1B` shadows-face-sun) |
 | Instance/group placement | `6419` with name `6519`, 13 × `f64` transform `6619`, definition reference `6719` and GUID `6819`; a group is the same instance wrapped in `4C1D` in the groups pool |
