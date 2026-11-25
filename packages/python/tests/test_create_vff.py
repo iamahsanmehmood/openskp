@@ -415,6 +415,30 @@ def test_unclosed_definitions_and_groups_raise():
     with pytest.raises(SkpWriteError):
         definition.close()
 
+
+def test_duplicate_definition_names_are_renamed(tmp_path):
+    square = [(0, 0, 0), (10, 0, 0), (10, 10, 0), (0, 10, 0)]
+    builder = create_vff()
+    for _ in range(3):
+        with builder.add_component_definition("Same") as definition:
+            definition.add_face(square)
+    names = {item.name for item in parse_bytes(tmp_path, builder.to_bytes()).definitions.values()}
+    assert {"Same", "Same#1", "Same#2"} <= names
+
+    builder = create_vff()
+    with builder.add_group("Group") as group:
+        group.add_face(square)
+    with builder.add_group("Group") as group:
+        group.add_face(square)
+    names = {item.name for item in parse_bytes(tmp_path, builder.to_bytes()).definitions.values()}
+    assert {"Group", "Group#1"} <= names
+
+    builder = create_vff(NESTING_TEMPLATE)
+    with builder.add_component_definition("Group") as definition:
+        definition.add_face(square)
+    names = {item.name for item in parse_bytes(tmp_path, builder.to_bytes()).definitions.values()}
+    assert "Group#1" in names
+
 def test_definition_lifecycle_errors():
     builder = create_vff()
     definition = builder.add_component_definition("D")

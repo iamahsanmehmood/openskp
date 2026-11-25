@@ -391,7 +391,7 @@ class GroupBuilder(ComponentDefinitionBuilder):
         placement: dict,
         parent: Optional["ComponentDefinitionBuilder"] = None,
     ) -> None:
-        definition_name = name or "Group"
+        definition_name = builder._unique_definition_name(name or "Group")
         super().__init__(
             builder,
             definition_name,
@@ -437,6 +437,23 @@ class VffBuilder:
         self.materials_by_name: Dict[str, int] = dict(self._template.materials)
         self.layers_by_name: Dict[str, int] = dict(self._template.layers)
         self._open_definitions: set[ComponentDefinitionBuilder] = set()
+        self._definition_names = {
+            definition["name"]
+            for definition in self._template.definitions
+            if definition.get("name")
+        }
+
+    def _unique_definition_name(self, name: str) -> str:
+        """SketchUp's rename-on-collision rule: ``Same``, ``Same#1``, ..."""
+        if name not in self._definition_names:
+            self._definition_names.add(name)
+            return name
+        counter = 1
+        while f"{name}#{counter}" in self._definition_names:
+            counter += 1
+        unique = f"{name}#{counter}"
+        self._definition_names.add(unique)
+        return unique
 
     # -- appearance -------------------------------------------------------
 
@@ -625,7 +642,7 @@ class VffBuilder:
         guid_bytes = _archive_uuid(guid)
         return ComponentDefinitionBuilder(
             self,
-            name,
+            self._unique_definition_name(name),
             always_faces_camera=always_faces_camera,
             shadows_face_sun=shadows_face_sun,
             guid=guid_bytes,
