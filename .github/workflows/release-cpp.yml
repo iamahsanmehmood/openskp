@@ -40,6 +40,7 @@ jobs:
           # out of the box for anyone who downloads and builds this directly.
           mkdir -p "dist/openskp-cpp-${RELEASE_VERSION}"
           cp -r packages/cpp/. "dist/openskp-cpp-${RELEASE_VERSION}/"
+          cp LICENSE "dist/openskp-cpp-${RELEASE_VERSION}/"
           cd dist
           tar czf "openskp-cpp-${RELEASE_VERSION}.tar.gz" "openskp-cpp-${RELEASE_VERSION}"
           zip -r "openskp-cpp-${RELEASE_VERSION}.zip" "openskp-cpp-${RELEASE_VERSION}" > /dev/null

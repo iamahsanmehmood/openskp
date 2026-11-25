@@ -241,6 +241,11 @@ builder->save("output.skp");
 ### Editing an existing file
 
 ```cpp
+#include <iostream>
+#include <openskp/openskp.hpp>
+
+using namespace openskp;
+
 OpenExistingResult result = open_existing("building.skp");
 for (const auto& w : result.warnings) std::cerr << "not fully reproduced: " << w << '\n';
 
@@ -262,6 +267,11 @@ keep editing, it returns a **string of source code** — a re-runnable
 transcript of `create()` calls that rebuilds an equivalent file when run:
 
 ```cpp
+#include <iostream>
+#include <openskp/openskp.hpp>
+
+using namespace openskp;
+
 SkpModel model = SkpFile::open("building.skp").parse();
 std::cout << to_cpp_code(model);
 ```
