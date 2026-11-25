@@ -168,11 +168,17 @@ class ComponentDefinitionBuilder:
         always_faces_camera: bool = False,
         shadows_face_sun: bool = False,
         guid: Optional[bytes] = None,
+        parent: Optional["ComponentDefinitionBuilder"] = None,
     ) -> None:
         self._builder = builder
         self.name = name
         self.kind = kind
         self._owner = owner
+        self._parent = parent
+        self._children: set["ComponentDefinitionBuilder"] = set()
+        builder._open_definitions.add(self)
+        if parent is not None:
+            parent._children.add(self)
         self._placement = placement or {}
         self._container_id = builder._template.alloc_id()
         self._editor = EntityEditor(
@@ -288,6 +294,7 @@ class ComponentDefinitionBuilder:
             self._builder,
             name,
             owner=self._editor,
+            parent=self,
             placement={
                 "translation": translation,
                 "matrix3x3": matrix3x3,
@@ -302,6 +309,18 @@ class ComponentDefinitionBuilder:
 
     def close(self) -> "ComponentDefinitionBuilder":
         if not self._closed:
+            if self._children:
+                child = next(iter(self._children))
+                raise SkpWriteError(
+                    f"component definition {self.name!r} has an open group or "
+                    f"definition {child.name!r} - close it before closing "
+                    f"{self.name!r}"
+                )
+            if self._parent is not None and self._parent._closed:
+                raise SkpWriteError(
+                    f"component definition {self._parent.name!r} is already closed - "
+                    f"cannot close {self.name!r} after it"
+                )
             self._editor.finalize()
             self._builder._template.add_definition(
                 self._editor.container,
@@ -313,6 +332,9 @@ class ComponentDefinitionBuilder:
                 shadows_face_sun=self._shadows_face_sun,
             )
             self._closed = True
+            self._builder._open_definitions.discard(self)
+            if self._parent is not None:
+                self._parent._children.discard(self)
             if self._placement:
                 placement = self._placement
                 self._instance_id = self._owner.add_group(
@@ -366,6 +388,7 @@ class GroupBuilder(ComponentDefinitionBuilder):
         *,
         owner: EntityEditor,
         placement: dict,
+        parent: Optional["ComponentDefinitionBuilder"] = None,
     ) -> None:
         definition_name = name or "Group"
         super().__init__(
@@ -374,6 +397,7 @@ class GroupBuilder(ComponentDefinitionBuilder):
             kind=1,
             owner=owner,
             placement=placement,
+            parent=parent,
         )
         self._placement["name"] = definition_name
 
@@ -411,6 +435,7 @@ class VffBuilder:
             raise SkpWriteError(f"cannot use VFF template: {exc}") from exc
         self.materials_by_name: Dict[str, int] = dict(self._template.materials)
         self.layers_by_name: Dict[str, int] = dict(self._template.layers)
+        self._open_definitions: set[ComponentDefinitionBuilder] = set()
 
     # -- appearance -------------------------------------------------------
 
@@ -671,6 +696,12 @@ class VffBuilder:
     # -- output -----------------------------------------------------------
 
     def to_bytes(self) -> bytes:
+        open_builder = next(iter(self._open_definitions), None)
+        if open_builder is not None:
+            raise SkpWriteError(
+                f"component definition {open_builder.name!r} is still open - exit its "
+                "`with` block before saving the file"
+            )
         self._root.finalize()
         try:
             return self._template.build()

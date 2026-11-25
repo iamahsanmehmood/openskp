@@ -380,6 +380,29 @@ def test_definition_flags_and_explicit_guid(tmp_path):
     assert cam.shadows_face_sun
 
 
+
+def test_unclosed_definitions_and_groups_raise():
+    square = [(0, 0, 0), (10, 0, 0), (10, 10, 0), (0, 10, 0)]
+
+    builder = create_vff()
+    definition = builder.add_component_definition("Open")
+    definition.add_face(square)
+    with pytest.raises(SkpWriteError):
+        builder.to_bytes()
+
+    builder = create_vff()
+    group = builder.add_group("OpenGroup")
+    group.add_face(square)
+    with pytest.raises(SkpWriteError):
+        builder.to_bytes()
+
+    builder = create_vff()
+    definition = builder.add_component_definition("Outer")
+    group = definition.add_group("Inner")
+    group.add_face(square)
+    with pytest.raises(SkpWriteError):
+        definition.close()
+
 def test_definition_lifecycle_errors():
     builder = create_vff()
     definition = builder.add_component_definition("D")
