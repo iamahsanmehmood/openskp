@@ -3,27 +3,40 @@ using System.Collections.Generic;
 
 namespace OpenSkp
 {
+    /// <summary>A 3D vertex in definition-local space (inches, SketchUp Z-up).</summary>
     public sealed class Vertex
     {
+        /// <summary>Definition-scoped vertex identifier referenced by <see cref="Edge.V1Id"/> and <see cref="Edge.V2Id"/>.</summary>
         public long Id { get; set; }
+        /// <summary>X coordinate in inches.</summary>
         public double X { get; set; }
+        /// <summary>Y coordinate in inches.</summary>
         public double Y { get; set; }
+        /// <summary>Z coordinate in inches.</summary>
         public double Z { get; set; }
     }
 
+    /// <summary>A straight line segment connecting two vertices in a <see cref="Definition"/>.</summary>
     public sealed class Edge
     {
+        /// <summary>Definition-scoped edge identifier referenced by <see cref="Face.Loops"/>.</summary>
         public long Id { get; set; }
+        /// <summary>Start vertex ID in <see cref="Definition.Vertices"/>.</summary>
         public long V1Id { get; set; }
+        /// <summary>End vertex ID in <see cref="Definition.Vertices"/>.</summary>
         public long V2Id { get; set; }
+        /// <summary>SketchUp's Soft flag (suppresses wireframe display between adjacent faces).</summary>
         public bool Soft { get; set; }
+        /// <summary>SketchUp's Smooth flag (interpolates shading normals across the edge).</summary>
         public bool Smooth { get; set; }
+        /// <summary>Whether the edge itself is explicitly hidden.</summary>
         public bool Hidden { get; set; }
         /// <summary>SketchUp's own <c>Edge#curve</c> grouping: the id of the Curve this edge belongs
         /// to, or null when it belongs to none. Edges sharing a CurveId were drawn as one continuous
         /// multi-segment line or arc; if the curve is an arc, <see cref="Definition.Arcs"/> has it
         /// under the same id.</summary>
         public long? CurveId { get; set; }
+        /// <summary>Document-wide persistent entity ID (used by <see cref="Page.HiddenEntityIds"/>).</summary>
         public long PersistentId { get; set; }
         /// <summary>Name of the layer (tag) this edge is assigned to, or "" when the edge carries no
         /// explicit layer reference.</summary>
@@ -40,6 +53,7 @@ namespace OpenSkp
     /// the model's units (inches), in the definition's local space, like <see cref="Vertex.X"/>.</summary>
     public sealed class ArcCurve
     {
+        /// <summary>Arc centre in definition-local inches.</summary>
         public (double X, double Y, double Z) Center { get; set; }
         /// <summary>Unit normal of the arc's plane.</summary>
         public (double X, double Y, double Z) Normal { get; set; }
@@ -53,7 +67,9 @@ namespace OpenSkp
         /// (pre-2021) file and StartAngle + 2 pi in a 2021+ file; <see cref="IsFullCircle"/> covers
         /// both.</summary>
         public double EndAngle { get; set; }
+        /// <summary>Length of <see cref="XAxis"/> in inches.</summary>
         public double Radius => Math.Sqrt(XAxis.X * XAxis.X + XAxis.Y * XAxis.Y + XAxis.Z * XAxis.Z);
+        /// <summary><c>true</c> when the arc sweeps a complete 360-degree circle.</summary>
         public bool IsFullCircle
         {
             get
@@ -65,8 +81,10 @@ namespace OpenSkp
         }
     }
 
+    /// <summary>A planar polygonal face bounded by an outer edge loop and zero or more inner hole loops.</summary>
     public sealed class Face
     {
+        /// <summary>Definition-scoped face identifier.</summary>
         public long Id { get; set; }
 
         /// <summary>Ordered list of loops; each loop is a list of
@@ -74,8 +92,11 @@ namespace OpenSkp
         /// -1 for reversed.</summary>
         public List<List<(long EdgeId, long Orientation)>> Loops { get; set; } = new List<List<(long, long)>>();
 
+        /// <summary>Face plane normal in definition-local space, or <c>null</c> when omitted by the record.</summary>
         public (double Nx, double Ny, double Nz)? Normal { get; set; }
+        /// <summary>Front-side material ID into <see cref="SkpModel.MaterialsById"/>, or <c>null</c> when unpainted.</summary>
         public long? MaterialId { get; set; }
+        /// <summary>Back-side material ID into <see cref="SkpModel.MaterialsById"/>, or <c>null</c> when unpainted.</summary>
         public long? BackMaterialId { get; set; }
 
         /// <summary>Per-face texture mapping for a positioned/photo-fitted
@@ -83,6 +104,7 @@ namespace OpenSkp
         /// applies. A 9-element row-major 3x3 matrix mapping texture space to
         /// the face plane.</summary>
         public double[]? UvTransform { get; set; }
+        /// <summary>Back-side positioned texture transform (9-element row-major 3x3), or <c>null</c>.</summary>
         public double[]? UvTransformBack { get; set; }
 
         /// <summary>The texture is PROJECTED (e.g. the Add Location terrain
@@ -96,6 +118,7 @@ namespace OpenSkp
         /// <summary>Whether the face is hidden (SketchUp's "Hide" on this
         /// specific face, not a layer/tag visibility toggle).</summary>
         public bool Hidden { get; set; }
+        /// <summary>Document-wide persistent entity ID (used by <see cref="Page.HiddenEntityIds"/>).</summary>
         public long PersistentId { get; set; }
 
         /// <summary>Name of the layer (tag) this face is assigned to, or "" when the face carries no
@@ -103,35 +126,46 @@ namespace OpenSkp
         public string Layer { get; set; } = "";
     }
 
+    /// <summary>A SketchUp layer (tag), carrying a display colour and default visibility.</summary>
     public sealed class Layer
     {
+        /// <summary>Layer (tag) name, such as <c>"Layer0"</c>.</summary>
         public string Name { get; set; } = "";
+        /// <summary>Red channel (0-255) of the layer's display colour.</summary>
         public int ColorR { get; set; } = 200;
+        /// <summary>Green channel (0-255) of the layer's display colour.</summary>
         public int ColorG { get; set; } = 200;
+        /// <summary>Blue channel (0-255) of the layer's display colour.</summary>
         public int ColorB { get; set; } = 200;
 
-        /// <summary>Whether the layer's visibility is switched off. Only
-        /// populated for legacy (pre-2021 MFC) files, where the byte is read
-        /// directly from the layer record - modern (VFF) files derive layers
-        /// from Layer_&lt;name&gt;-prefixed materials, which carry no
-        /// visibility data, so this is always false there.</summary>
+        /// <summary>Whether the layer's visibility is switched off.</summary>
         public bool Hidden { get; set; }
     }
 
+    /// <summary>A SketchUp visual style bundled inside the model.</summary>
     public sealed class Style
     {
+        /// <summary>Style name.</summary>
         public string Name { get; set; } = "";
+        /// <summary>Default front-face RGB colour (0-255) stored on this style, or <c>null</c>.</summary>
         public (int R, int G, int B)? FrontColor { get; set; }
+        /// <summary>Default back-face RGB colour (0-255) stored on this style, or <c>null</c>.</summary>
         public (int R, int G, int B)? BackColor { get; set; }
     }
 
+    /// <summary>An image texture embedded in a SketchUp <see cref="Material"/>.</summary>
     public sealed class Texture
     {
+        /// <summary>Authoring texture filename or relative path recorded in the material.</summary>
         public string Filename { get; set; } = "";
+        /// <summary>Tile width in inches on unpositioned faces.</summary>
         public double Width { get; set; }
+        /// <summary>Tile height in inches on unpositioned faces.</summary>
         public double Height { get; set; }
+        /// <summary>Raw encoded image bytes (typically PNG or JPEG), or <c>null</c> if absent.</summary>
         public byte[]? Data { get; set; }
 
+        /// <summary>Writes <see cref="Data"/> to <paramref name="filepath"/> and returns its <see cref="System.IO.FileInfo"/>.</summary>
         public System.IO.FileInfo Save(string filepath)
         {
             if (Data == null)
@@ -143,10 +177,14 @@ namespace OpenSkp
         }
     }
 
+    /// <summary>A SketchUp surface material (solid colour or textured, with optional colour tinting and opacity).</summary>
     public sealed class Material
     {
+        /// <summary>Material name.</summary>
         public string Name { get; set; } = "";
+        /// <summary>sRGB colour <c>(R, G, B, A)</c> with channels in 0-255.</summary>
         public (int R, int G, int B, int A) Color { get; set; } = (200, 200, 200, 255);
+        /// <summary>Surface opacity in <c>[0.0, 1.0]</c>, where <c>1.0</c> is completely opaque.</summary>
         public double Transparency { get; set; } = 1.0;
 
         /// <summary>Numeric material ID from the TLV stream - the value that
@@ -154,16 +192,24 @@ namespace OpenSkp
         /// material no ID.</summary>
         public long? Id { get; set; }
 
+        /// <summary>Embedded texture image and tile dimensions, or <c>null</c> for a solid-colour material.</summary>
         public Texture? Texture { get; set; }
+        /// <summary>Whether SketchUp colour-tints <see cref="Texture"/> with <see cref="Color"/>.</summary>
         public bool Colorized { get; set; }
+        /// <summary>Colour-tinting mode (<c>0</c> = shift, <c>1</c> = tint) when <see cref="Colorized"/> is <c>true</c>.</summary>
         public int ColorizeType { get; set; }
     }
 
+    /// <summary>A placement of a <see cref="Definition"/> (component instance or group) inside a parent definition or model root.</summary>
     public sealed class Instance
     {
+        /// <summary>Entity ID (persistent ID on classic placements), or <c>null</c>.</summary>
         public long? Id { get; set; }
+        /// <summary>Instance name authored in SketchUp's Entity Info, or <c>""</c> when unnamed.</summary>
         public string Name { get; set; } = "";
+        /// <summary>Numeric ID of the referenced <see cref="Definition"/> in <see cref="SkpModel.Definitions"/>.</summary>
         public long? RefIdx { get; set; }
+        /// <summary>Instance GUID (VFF 2021+ files) or definition GUID reference, or <c>""</c>.</summary>
         public string Guid { get; set; } = "";
 
         /// <summary>4x4 transform stored as a flat 16-element list in
@@ -181,6 +227,7 @@ namespace OpenSkp
         /// <summary>Arbitrary key/value dynamic attributes attached
         /// directly to this instance (SketchUp's Dynamic Components).</summary>
         public Dictionary<string, string> Properties { get; set; } = new Dictionary<string, string>();
+        /// <summary>Material ID painted onto this instance in <see cref="SkpModel.MaterialsById"/>, or <c>null</c>.</summary>
         public long? MaterialId { get; set; }
 
         /// <summary>Whether the instance itself is hidden (SketchUp's "Hide"
@@ -189,27 +236,39 @@ namespace OpenSkp
         public bool Hidden { get; set; }
     }
 
+    /// <summary>A SketchUp section plane (<c>ax + by + cz + d = 0</c> in owner-local inches).</summary>
     public sealed class SectionPlane
     {
+        /// <summary>Four-element plane equation <c>[a, b, c, d]</c> with unit normal <c>(a, b, c)</c> and signed distance <c>d</c> in inches.</summary>
         public double[] Plane { get; set; } = new double[] { 0.0, 0.0, 1.0, 0.0 };
+        /// <summary>Section plane name.</summary>
         public string Name { get; set; } = "";
+        /// <summary>Short section symbol shown on the section plane's corner markers.</summary>
         public string Label { get; set; } = "";
+        /// <summary>Whether the section plane entity is hidden.</summary>
         public bool Hidden { get; set; }
     }
 
+    /// <summary>A leader or screen text annotation in a <see cref="Definition"/> or model root.</summary>
     public sealed class TextEntity
     {
+        /// <summary>Displayed text string.</summary>
         public string Text { get; set; } = "";
+        /// <summary>Whether the text entity is hidden.</summary>
         public bool Hidden { get; set; }
         /// <summary>Explicit tag name, or empty string for the default tag (Layer0).</summary>
         public string Layer { get; set; } = "";
-        /// <summary>Anchor and label positions in owner-local inches; null when unresolved.</summary>
+        /// <summary>Anchor position in owner-local inches; null when unresolved or screen-pinned.</summary>
         public (double X, double Y, double Z)? Point { get; set; }
+        /// <summary>Label tip position in owner-local inches, or <c>null</c> for screen-pinned text.</summary>
         public (double X, double Y, double Z)? LabelPoint { get; set; }
         /// <summary>Normalized screen fractions (used when LeaderType is zero).</summary>
         public (double X, double Y)? ScreenPosition { get; set; }
+        /// <summary>SketchUp leader mode (<c>0</c> = none/screen, <c>1</c> = view-based, <c>2</c> = pushpin).</summary>
         public int LeaderType { get; set; } = 2;
+        /// <summary>SketchUp leader arrow style (<c>0</c> = none, <c>1</c> = slash, <c>2</c> = dot, <c>3</c> = closed, <c>4</c> = open).</summary>
         public int ArrowType { get; set; } = 3;
+        /// <summary>Whether the leader line is drawn.</summary>
         public bool DisplayLeader { get; set; } = true;
     }
 
@@ -224,6 +283,7 @@ namespace OpenSkp
         /// <summary>The displayed text. Empty when the dimension shows its
         /// auto-computed measured value (the caller formats |B - A|).</summary>
         public string Text { get; set; } = "";
+        /// <summary>Whether the dimension entity is hidden.</summary>
         public bool Hidden { get; set; }
 
         /// <summary>First measured point (x, y, z) in inches, or null when unresolved.</summary>
@@ -333,14 +393,23 @@ namespace OpenSkp
         /// <summary>Names of the layers this scene hides.</summary>
         public List<string> HiddenLayers { get; set; } = new List<string>();
 
+        /// <summary>Bit flag (<c>0x001</c>): scene saves camera location.</summary>
         public const uint PageUseCamera = 0x001;
+        /// <summary>Bit flag (<c>0x002</c>): scene saves rendering options (style and fog).</summary>
         public const uint PageUseRenderingOptions = 0x002;
+        /// <summary>Bit flag (<c>0x004</c>): scene saves shadow settings.</summary>
         public const uint PageUseShadowInfo = 0x004;
+        /// <summary>Bit flag (<c>0x008</c>): scene saves axes location.</summary>
         public const uint PageUseAxes = 0x008;
-        public const uint PageUseHidden = 0x010; // before SketchUp 2020.1: geometry + objects
+        /// <summary>Legacy bit flag (<c>0x010</c>): before SketchUp 2020.1, scene saves both hidden geometry and hidden objects.</summary>
+        public const uint PageUseHidden = 0x010;
+        /// <summary>Bit flag (<c>0x020</c>): scene saves visible/hidden tags (layers).</summary>
         public const uint PageUseHiddenLayers = 0x020;
+        /// <summary>Bit flag (<c>0x040</c>): scene saves active section planes.</summary>
         public const uint PageUseSectionPlanes = 0x040;
+        /// <summary>Bit flag (<c>0x080</c>): scene saves hidden edges and faces (SketchUp 2020.1+).</summary>
         public const uint PageUseHiddenGeometry = 0x080;
+        /// <summary>Bit flag (<c>0x100</c>): scene saves hidden groups and components (SketchUp 2020.1+).</summary>
         public const uint PageUseHiddenObjects = 0x100;
 
         /// <summary>Persistent ids of the entities this scene hides, in file order.</summary>
@@ -386,6 +455,7 @@ namespace OpenSkp
         /// <summary>The scene saves which groups and components it hides ("Hidden Objects"), 0x100.</summary>
         public bool? UseHiddenObjects => HiddenFlag(PageUseHiddenObjects);
 
+        /// <inheritdoc />
         public bool Equals(Page? other)
         {
             if (ReferenceEquals(this, other)) return true;
@@ -402,8 +472,10 @@ namespace OpenSkp
                 && System.Linq.Enumerable.SequenceEqual(HiddenEntityIds, other.HiddenEntityIds);
         }
 
+        /// <inheritdoc />
         public override bool Equals(object? obj) => Equals(obj as Page);
 
+        /// <inheritdoc />
         public override int GetHashCode()
         {
             unchecked
@@ -429,26 +501,42 @@ namespace OpenSkp
         }
     }
 
+    /// <summary>A component or group geometry definition (or the model's <see cref="SkpModel.Root"/> container).</summary>
     public sealed class Definition
     {
+        /// <summary>Numeric definition entity ID in <see cref="SkpModel.Definitions"/>.</summary>
         public long Id { get; set; }
+        /// <summary>Canonical 32-hex-digit component definition GUID, or <c>"ROOT"</c> on <see cref="SkpModel.Root"/>.</summary>
         public string Guid { get; set; } = "";
+        /// <summary>Component or group definition name.</summary>
         public string Name { get; set; } = "";
+        /// <summary>Vertices belonging to this definition, keyed by <see cref="Vertex.Id"/>.</summary>
         public Dictionary<long, Vertex> Vertices { get; set; } = new Dictionary<long, Vertex>();
+        /// <summary>Edges belonging to this definition, keyed by <see cref="Edge.Id"/>.</summary>
         public Dictionary<long, Edge> Edges { get; set; } = new Dictionary<long, Edge>();
+        /// <summary>Faces belonging to this definition, keyed by <see cref="Face.Id"/>.</summary>
         public Dictionary<long, Face> Faces { get; set; } = new Dictionary<long, Face>();
+        /// <summary>Component and group instances placed directly inside this definition.</summary>
         public List<Instance> Instances { get; set; } = new List<Instance>();
+        /// <summary>Section planes owned by this definition.</summary>
         public List<SectionPlane> SectionPlanes { get; set; } = new List<SectionPlane>();
+        /// <summary>Text annotations owned by this definition.</summary>
         public List<TextEntity> Texts { get; set; } = new List<TextEntity>();
+        /// <summary>Linear dimensions owned by this definition.</summary>
         public List<Dimension> Dimensions { get; set; } = new List<Dimension>();
+        /// <summary>Construction/guide lines owned by this definition.</summary>
         public List<ConstructionLine> ConstructionLines { get; set; } = new List<ConstructionLine>();
+        /// <summary>Construction/guide points owned by this definition.</summary>
         public List<ConstructionPoint> ConstructionPoints { get; set; } = new List<ConstructionPoint>();
         /// <summary>The analytic arc of every curve that is one, keyed by curve id - the
         /// <see cref="Edge.CurveId"/> of the edges that form it. A curve that is not an arc (a
         /// freehand or polygon curve) has no entry.</summary>
         public Dictionary<long, ArcCurve> Arcs { get; set; } = new Dictionary<long, ArcCurve>();
+        /// <summary>SketchUp's "Always face camera" billboard behaviour flag.</summary>
         public bool AlwaysFacesCamera { get; set; }
+        /// <summary>SketchUp's "Shadows face sun" billboard flag when <see cref="AlwaysFacesCamera"/> is set.</summary>
         public bool ShadowsFaceSun { get; set; }
+        /// <summary><c>true</c> when this definition backs a SketchUp Image entity.</summary>
         public bool IsImage { get; set; }
         /// <summary>True when SketchUp made this definition for a group rather than a
         /// component (what its own API reports as <c>SUComponentType_Group</c>). Groups and
@@ -472,6 +560,7 @@ namespace OpenSkp
     /// the shape of Python's public SkpFile.parse() result.</summary>
     public sealed class SkpModel
     {
+        /// <summary>SketchUp file format version string (for example <c>"{21.0.1}"</c> or <c>"{17.0.1}"</c>).</summary>
         public string Version { get; set; } = "unknown";
 
         /// <summary>The model's unit-system string (e.g. "Millimeter"),
@@ -491,6 +580,7 @@ namespace OpenSkp
         /// component/group). Corresponds to Python's defs_dict['ROOT'].</summary>
         public Definition Root { get; set; } = new Definition { Name = "ROOT_MODEL" };
 
+        /// <summary>Model layers (tags) in file order.</summary>
         public List<Layer> Layers { get; set; } = new List<Layer>();
 
         /// <summary>The file's saved scenes, from VFF files and from classic pre-2021 files.</summary>
@@ -501,6 +591,7 @@ namespace OpenSkp
         /// definition instead (<see cref="Definition.Dimensions"/>).</summary>
         public List<Dimension> Dimensions { get; set; } = new List<Dimension>();
 
+        /// <summary>Model surface materials.</summary>
         public List<Material> Materials { get; set; } = new List<Material>();
 
         /// <summary>Join table for Face.MaterialId / Instance.MaterialId:
@@ -508,6 +599,7 @@ namespace OpenSkp
         /// Material instance.</summary>
         public Dictionary<long, Material> MaterialsById { get; set; } = new Dictionary<long, Material>();
 
+        /// <summary>Bundled visual styles read from modern VFF files.</summary>
         public List<Style> Styles { get; set; } = new List<Style>();
 
         /// <summary>The colour SketchUp shows on the front side of a face with

@@ -65,7 +65,7 @@ namespace OpenSkp
     /// project has not fully reverse-engineered - only enough of it is
     /// understood to preserve it byte-for-byte and correctly renumber the
     /// handful of internal references inside it that shift when new geometry
-    /// is inserted (see <see cref="TailRefPositions"/> below). Rather than
+    /// is inserted (see <c>TailRefPositions</c> below). Rather than
     /// guess at synthesizing that region from scratch, new files are built by
     /// splicing genuinely-written geometry into a bundled minimal
     /// empty-document template (the embedded <c>_scaffold/blank_v17.skp</c>
@@ -89,24 +89,33 @@ namespace OpenSkp
     /// </summary>
     public sealed class SkpWriteException : Exception
     {
+        /// <summary>Initializes a writer exception with <paramref name="message"/>.</summary>
         public SkpWriteException(string message) : base(message) { }
     }
 
     /// <summary>Drawing properties for linear dimensions.</summary>
     public sealed class DimensionOptions
     {
+        /// <summary>Optional layer handle returned by <see cref="SkpBuilder.AddLayer(string, ValueTuple{int, int, int, int}?, bool)"/>.</summary>
         public int? Layer { get; set; }
+        /// <summary>Whether the dimension entity is hidden.</summary>
         public bool Hidden { get; set; }
     }
 
     /// <summary>Text placement and drawing properties; point/leader are in owner-local inches.</summary>
     public sealed class TextOptions
     {
+        /// <summary>Optional layer handle returned by <see cref="SkpBuilder.AddLayer(string, ValueTuple{int, int, int, int}?, bool)"/>.</summary>
         public int? Layer { get; set; }
+        /// <summary>Whether the text entity is hidden.</summary>
         public bool Hidden { get; set; }
+        /// <summary>SketchUp leader mode (<c>0</c> = none/screen, <c>1</c> = view-based, <c>2</c> = pushpin).</summary>
         public int LeaderType { get; set; } = 2;
+        /// <summary>SketchUp leader arrow style (<c>0</c> = none, <c>1</c> = slash, <c>2</c> = dot, <c>3</c> = closed, <c>4</c> = open).</summary>
         public int ArrowType { get; set; } = 3;
+        /// <summary>Normalized viewport coordinates <c>(X, Y)</c> when <see cref="LeaderType"/> is <c>0</c> (screen text).</summary>
         public (double X, double Y)? ScreenPosition { get; set; }
+        /// <summary>Whether the leader line is drawn.</summary>
         public bool DisplayLeader { get; set; } = true;
     }
 
@@ -728,9 +737,12 @@ namespace OpenSkp
     /// own (str/int/float) support.</summary>
     public readonly struct AttributeDict
     {
+        /// <summary>Name of the SketchUp attribute dictionary (for example <c>"dynamic_attributes"</c>).</summary>
         public readonly string DictName;
+        /// <summary>Key/value entries written into this attribute dictionary.</summary>
         public readonly IReadOnlyDictionary<string, object> Entries;
 
+        /// <summary>Initializes a named attribute dictionary.</summary>
         public AttributeDict(string dictName, IReadOnlyDictionary<string, object> entries)
         {
             DictName = dictName;
@@ -743,9 +755,12 @@ namespace OpenSkp
     /// parameters.</summary>
     public readonly struct UvCorrespondence
     {
+        /// <summary>3D sample point on the face plane, in inches.</summary>
         public readonly (double X, double Y, double Z) Point;
+        /// <summary>Texture <c>(U, V)</c> coordinates paired with <see cref="Point"/>.</summary>
         public readonly (double U, double V) Uv;
 
+        /// <summary>Initializes one 3D-point-to-UV texture pin correspondence.</summary>
         public UvCorrespondence((double X, double Y, double Z) point, (double U, double V) uv)
         {
             Point = point;
@@ -1909,6 +1924,7 @@ namespace OpenSkp
     {
         /// <summary>Native UnitsOptions values: inches=0, feet=1, mm=2, cm=3, metres=4, yards=5.</summary>
         public int LengthUnit { get; set; } = 0;
+        /// <summary>Decimal display precision for length measurements (<c>0</c> to <c>6</c>).</summary>
         public int LengthPrecision { get; set; } = 3;
         /// <summary>Native style item IDs and scalar values (colors are packed ABGR uint32 values).</summary>
         public Dictionary<int, double> StyleItems { get; set; } = new Dictionary<int, double>();
@@ -2043,6 +2059,7 @@ namespace OpenSkp
     {
         internal readonly SkpBuilder Skp;
         internal readonly int Slot;
+        /// <summary>Name of this component or group definition.</summary>
         public string Name { get; }
         private readonly int _countPatchPos;
         private readonly Dictionary<(double, double, double), int> _vertexSlots = new Dictionary<(double, double, double), int>();
@@ -2295,7 +2312,7 @@ namespace OpenSkp
 
         /// <summary>Add a FREE linear dimension between two explicit points
         /// (inches, definition-local space) - same behavior as
-        /// <see cref="SkpBuilder.AddDimension((double, double, double), (double, double, double), double, int?, bool)"/>.</summary>
+        /// <see cref="SkpBuilder.AddDimension(ValueTuple{double, double, double}, ValueTuple{double, double, double}, double, int?, bool)"/>.</summary>
         public void AddDimension(
             (double X, double Y, double Z) p1,
             (double X, double Y, double Z) p2,
@@ -2325,6 +2342,7 @@ namespace OpenSkp
             _newEntityCount += 1;
         }
 
+        /// <summary>Place a linear dimension in definition-local space with <see cref="DimensionOptions"/>.</summary>
         public void AddDimension(
             (double X, double Y, double Z) p1,
             (double X, double Y, double Z) p2,
@@ -2363,6 +2381,7 @@ namespace OpenSkp
             _newEntityCount += 1;
         }
 
+        /// <summary>Add owner-local leader or screen text configured with <see cref="TextOptions"/>.</summary>
         public void AddText(
             string text,
             (double X, double Y, double Z) point,
@@ -2405,6 +2424,7 @@ namespace OpenSkp
             return null;
         }
 
+        /// <summary>Finalizes this definition's entity stream and flushes its auto-placement if created via <see cref="SkpBuilder.AddGroup"/>.</summary>
         public void Dispose()
         {
             if (_closed) return;
@@ -3574,6 +3594,7 @@ namespace OpenSkp
             EmitTextTo(w, text, point, lb, screen, layer, hidden, effLeaderType, arrowType, effDisplayLeader);
         }
 
+        /// <summary>Adds a free linear dimension between <paramref name="p1"/> and <paramref name="p2"/> (inches, world space) at signed perpendicular <paramref name="offset"/>.</summary>
         public void AddDimension(
             (double X, double Y, double Z) p1,
             (double X, double Y, double Z) p2,
@@ -3607,6 +3628,7 @@ namespace OpenSkp
             _faceCount += 1; // reuses the "at least one root entity" check in ToBytes
         }
 
+        /// <summary>Places a linear dimension in world space with <see cref="DimensionOptions"/>.</summary>
         public void AddDimension(
             (double X, double Y, double Z) p1,
             (double X, double Y, double Z) p2,
@@ -3650,6 +3672,7 @@ namespace OpenSkp
             _faceCount += 1; // reuses the "at least one root entity" check in ToBytes
         }
 
+        /// <summary>Adds a root-level leader or screen text configured with <see cref="TextOptions"/>.</summary>
         public void AddText(
             string text,
             (double X, double Y, double Z) point,

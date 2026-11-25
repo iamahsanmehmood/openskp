@@ -9,8 +9,11 @@ namespace OpenSkp
     /// warnings.</summary>
     public enum SkpLogLevel
     {
+        /// <summary>Fine-grained per-record or per-instance diagnostic detail.</summary>
         Debug,
+        /// <summary>High-level start, stage, and completion summaries.</summary>
         Information,
+        /// <summary>Non-fatal partial-read, skipped-texture, or export fidelity warnings.</summary>
         Warning,
     }
 
@@ -28,6 +31,7 @@ namespace OpenSkp
         /// <summary>Total units expected for this stage.</summary>
         public long Total { get; }
 
+        /// <summary>Initializes one progress snapshot for <paramref name="stage"/>.</summary>
         public SkpParseProgress(string stage, long current, long total)
         {
             Stage = stage;

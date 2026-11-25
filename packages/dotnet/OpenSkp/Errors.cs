@@ -37,6 +37,7 @@ namespace OpenSkp
         /// failure happened, if applicable.</summary>
         public long? DefinitionId { get; }
 
+        /// <summary>Initializes a structured parse failure with optional TLV or legacy record location context.</summary>
         public SkpParseException(
             string message,
             string? stage = null,

@@ -12,6 +12,7 @@
     <RepositoryType>git</RepositoryType>
     <PackageTags>sketchup;skp;parser;writer;converter;conversion;3d;glb;gltf;cad;bim;dxf;autocad;ifc;obj;stl;ply</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
   </PropertyGroup>
 

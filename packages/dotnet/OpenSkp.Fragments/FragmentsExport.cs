@@ -11,28 +11,20 @@ using Fb = openskp._fragments_fb;
 
 namespace OpenSkp.Fragments
 {
-    /// <summary>Direct SKP -&gt; ThatOpen Fragments (.frag) export - EXPERIMENTAL.
-    /// A port of Python's <c>openskp.export.fragments.to_fragments</c> (see
-    /// that module's own docstring for the full rationale and real-loader
-    /// verification status this port inherits) against the same vendored
+    /// <summary>Direct SKP &lt;-&gt; ThatOpen Fragments (<c>.frag</c>) export and import.
+    /// A port of Python's <c>openskp.export.fragments</c> against the vendored
     /// ThatOpen Fragments schema (<c>_fragments_fb/index.fbs</c>).
     ///
-    /// EXPORT ONLY, matching the TypeScript port (#276) - not Python's or
-    /// C++'s read side (TypeScript has no read side either; this is a
-    /// smaller, still-open gap, not unique to .NET). GUID/name-is-generated/
-    /// layer-hidden fidelity now matches Python's/C++'s in full:
+    /// Supports both export (<see cref="ToFragments"/> / <see cref="ExportFragments"/>)
+    /// and import (<see cref="FromFragments(byte[])"/> / <see cref="ReadFragments(string)"/>).
     /// <see cref="InstancedNode"/>/<see cref="InstancedScene"/> carry real
     /// per-instance source GUIDs, a generated-name flag, and the source
-    /// file's layer-hidden state (openskp#290's fix, ported here too - see
-    /// InstancedScene.cs's own name-resolution and Geometry.cs's
-    /// ExtractAttributeDictionaries in the core OpenSkp package).
+    /// file's layer-hidden state.
     ///
     /// Ships as its own package (rather than living in the core OpenSkp
     /// package) because it needs Google.FlatBuffers - the core package has
-    /// zero external dependencies today, and this mirrors Python's own
-    /// opt-in `pip install openskp[fragments]` extra instead of forcing
-    /// every OpenSkp.NET consumer to take a transitive dependency they
-    /// don't need.</summary>
+    /// zero external dependencies, and this mirrors Python's opt-in
+    /// <c>pip install "openskp[fragments]"</c> extra.</summary>
     public static class FragmentsExport
     {
         // Fragments' Shell uses `ushort` point indices by default; a shell
@@ -110,12 +102,18 @@ namespace OpenSkp.Fragments
         /// docstring for why mirroring is resolved this way.</summary>
         public readonly struct Trs
         {
+            /// <summary>Translation vector <c>[x, y, z]</c> in metres (glTF Y-up).</summary>
             public readonly double[] Position;
+            /// <summary>Unit X basis vector (negated when <see cref="Mirrored"/> is <c>true</c> so the frame is right-handed).</summary>
             public readonly double[] XDir;
+            /// <summary>Unit Y basis vector.</summary>
             public readonly double[] YDir;
+            /// <summary>Positive per-axis scale magnitudes <c>[sx, sy, sz]</c>.</summary>
             public readonly double[] Scale;
+            /// <summary><c>true</c> when the source 3x3 transform has a negative determinant.</summary>
             public readonly bool Mirrored;
 
+            /// <summary>Initializes a decomposed rigid-frame + scale/mirror result.</summary>
             public Trs(double[] position, double[] xDir, double[] yDir, double[] scale, bool mirrored)
             {
                 Position = position;
@@ -126,6 +124,7 @@ namespace OpenSkp.Fragments
             }
         }
 
+        /// <summary>Decomposes a 16-element column-major 4x4 transform matrix into <see cref="Trs"/>.</summary>
         public static Trs DecomposeTrs(double[] m)
         {
             var xAxis = new[] { m[0], m[1], m[2] };
@@ -157,11 +156,15 @@ namespace OpenSkp.Fragments
             return new Trs(pos, xDir, yDir, new[] { sx, sy, sz }, mirrored);
         }
 
+        /// <summary>Local primitive points and triangle index triples after baking non-uniform scale and mirror flip.</summary>
         public readonly struct BakedGeometry
         {
+            /// <summary>Scaled 3D vertex positions <c>[x, y, z]</c> in metres.</summary>
             public readonly List<float[]> Points;
+            /// <summary>Triangle vertex index triples (winding flipped when mirrored).</summary>
             public readonly List<uint[]> Triangles;
 
+            /// <summary>Initializes baked shell geometry.</summary>
             public BakedGeometry(List<float[]> points, List<uint[]> triangles)
             {
                 Points = points;

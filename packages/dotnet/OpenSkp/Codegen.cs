@@ -46,6 +46,8 @@ namespace OpenSkp
     /// mirroring real SketchUp's own tolerance.</summary>
     public static class Codegen
     {
+        /// <summary>Generates a self-contained C# source transcript of
+        /// <see cref="SkpCreate.NewFile"/> calls that rebuilds <paramref name="model"/>.</summary>
         public static string ToCSharpCode(SkpModel model)
         {
             var lines = new List<string>();
