@@ -211,34 +211,36 @@ pub fn scan_pages_for_layers(
 // The scene list sits in the document tail as a u32 count right before the
 // first record (which declares the CViewPage class), then one record per
 // scene, then a ref to the selected scene. A record is: the class tag | a
-// null attribute ref | (schema 13+) a pid | name | description | u32 capture
-// flags | the camera (CCamera, or null) | the thumbnail (CDib, or null) |
-// (schema 13) a byte | then one section per capture flag that is set:
+// null attribute ref | (schema 13+, SketchUp 2017+) a pid | name | description
+// | u32 capture flags | the camera (CCamera, or null) | the thumbnail (CDib,
+// or null) | (schema 13) a byte | then one section per capture flag that is
+// set:
 //
 //   0x02 style       the rendering options (length by file version) + a
 //                    CSkpStyle ref or object
-//   0x04 shadows     2 bytes (schema 13+: 3) + the shadow info
-//   0x08 axes        (schema 13+: a flag byte +) 110 bytes + a closing byte
+//   0x04 shadows     2 bytes (2017+: 3) + the shadow info
+//   0x08 axes        (2017+: a pid byte +) 108 bytes + a closing byte
 //   0x10 hidden      u32 n, n entity refs
 //   0x20 layers      u32 n, n refs to the layers (tags) the scene hides
 //   0x40 sections    u32 n, n section-plane refs
 //
 // | 22 bytes (transition and delay time, flags) | u32 n + an n-byte PNG.
 //
-// Schema 15 (a file saved through the C API as 2017 to 2020) differs: flag
-// 0x01 is the camera, which is only there when the flag is set, with no CDib
-// tag, no byte after it and no thumbnail; the rendering options are 3 bytes
-// longer; the style options have two more value types (3: 2 bytes, 5: 4
-// bytes); and the trailer is 21 bytes with no PNG after it.
+// Schema 15 (a file saved through the C API as 2015 to 2020; persistent ids
+// start at 2017) differs: flag 0x01 is the camera, which is only there when
+// the flag is set, with no CDib tag, no byte after it and no thumbnail; the
+// rendering options are 2 bytes longer (3 in 2017+); the style options have
+// two more value types (3: 2 bytes, 5: 4 bytes); and the trailer is 21 bytes
+// with no PNG after it.
 //
 // A record this reader can't fully read, or flags outside 0x1FF, make
 // read_page_list give up (None) and parse_legacy falls back to
 // scan_pages_for_layers - the same order as Python.
 
 const PAGE_KNOWN_FLAGS: u32 = 0x1FF;
-const PAGE_AXES_LEN: usize = 110;
+const PAGE_AXES_LEN: usize = 108;
 const PAGE_TRAILER_LEN: usize = 22;
-const SHADOW_INFO_FIXED_LEN: usize = 60; // after the city and country strings
+const SHADOW_INFO_FIXED_LEN: usize = 62; // after the city and country strings
 
 // The rendering options' length by SketchUp major version, measured on the
 // model-level copy of the same block in every fixture from 2014 to 2020;
@@ -376,14 +378,14 @@ fn read_page_camera(r: &mut R, page: &mut RawPage) -> Result<()> {
     Ok(())
 }
 
-// A CSkpStyle object's body: no attributes, a pid (schema 2+), GUID, a
-// string, u32, name, description, then its options - each a u32 key and a u32
-// count of (u32 type, value) pairs.
-fn skip_page_style(r: &mut R, schema: i32) -> Result<()> {
+// A CSkpStyle object's body: no attributes, a pid (schema 2+ in 2017+), GUID,
+// a string, u32, name, description, then its options - each a u32 key and a
+// u32 count of (u32 type, value) pairs.
+fn skip_page_style(r: &mut R, schema: i32, has_pid: bool) -> Result<()> {
     if r.u16()? != 0 {
         return Err(page_error("style with attributes"));
     }
-    if schema >= 2 {
+    if schema >= 2 && has_pid {
         skip_page_pid(r)?;
     }
     r.skip(16)?;
@@ -428,7 +430,8 @@ fn read_page_record(ver: i32, r: &mut R, classes: &mut PageClasses) -> Result<Ra
     if r.u16()? != 0 {
         return Err(page_error("scene with attributes"));
     }
-    if schema >= 13 {
+    let has_pid = schema >= 13 && ver >= 17;
+    if has_pid {
         skip_page_pid(r)?;
     }
     let mut page = RawPage {
@@ -469,15 +472,25 @@ fn read_page_record(ver: i32, r: &mut R, classes: &mut PageClasses) -> Result<Ra
     if flags & 0x02 != 0 {
         let base = rendering_options_len(ver)
             .ok_or_else(|| page_error("rendering options of an unknown version"))?;
-        r.skip(base + if schema >= 15 { 3 } else { 0 })?;
+        r.skip(
+            base + if schema >= 15 {
+                if has_pid {
+                    3
+                } else {
+                    2
+                }
+            } else {
+                0
+            },
+        )?;
         let (kind, slot) = read_page_tag(r)?;
         if kind == PageTag::Decl || kind == PageTag::ClassRef {
             let style_schema = classes.object(r, kind, slot, "CSkpStyle")?;
-            skip_page_style(r, style_schema)?;
+            skip_page_style(r, style_schema, has_pid)?;
         }
     }
     if flags & 0x04 != 0 {
-        r.skip(if schema >= 13 { 3 } else { 2 })?;
+        r.skip(if has_pid { 3 } else { 2 })?;
         r.u32()?; // time
         r.u8()?;
         r.utf16()?; // city
@@ -485,7 +498,7 @@ fn read_page_record(ver: i32, r: &mut R, classes: &mut PageClasses) -> Result<Ra
         r.skip(SHADOW_INFO_FIXED_LEN)?;
     }
     if flags & 0x08 != 0 {
-        r.skip(PAGE_AXES_LEN + 1 + usize::from(schema >= 13))?;
+        r.skip(PAGE_AXES_LEN + 1 + usize::from(has_pid))?;
     }
     if flags & 0x10 != 0 {
         let n = r.u32()?;
