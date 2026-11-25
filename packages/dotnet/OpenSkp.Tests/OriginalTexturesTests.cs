@@ -233,21 +233,24 @@ namespace OpenSkp.Tests
             Assert.Single(doc.GetProperty("textures").EnumerateArray());
             Assert.Single(doc.GetProperty("samplers").EnumerateArray());
 
+            static double SrgbToLinear(double c) =>
+                c <= 0.04045 ? c / 12.92 : Math.Pow((c + 0.055) / 1.055, 2.4);
+
             JsonElement? tiffMat = null;
             JsonElement? pngMat = null;
             foreach (var mat in doc.GetProperty("materials").EnumerateArray())
             {
                 var bcf = mat.GetProperty("pbrMetallicRoughness").GetProperty("baseColorFactor");
-                if (bcf[0].GetDouble() > 0.7) tiffMat = mat;
+                if (bcf[0].GetDouble() > 0.5) tiffMat = mat;
                 if (bcf[2].GetDouble() > 0.8) pngMat = mat;
             }
             Assert.True(tiffMat.HasValue);
             Assert.False(tiffMat.Value.GetProperty("pbrMetallicRoughness").TryGetProperty("baseColorTexture", out _));
             Assert.False(tiffMat.Value.TryGetProperty("alphaMode", out _));
             var tiffBcf = tiffMat.Value.GetProperty("pbrMetallicRoughness").GetProperty("baseColorFactor");
-            Assert.Equal(200.0 / 255.0, tiffBcf[0].GetDouble(), 4);
-            Assert.Equal(60.0 / 255.0, tiffBcf[1].GetDouble(), 4);
-            Assert.Equal(40.0 / 255.0, tiffBcf[2].GetDouble(), 4);
+            Assert.Equal(SrgbToLinear(200.0 / 255.0), tiffBcf[0].GetDouble(), 4);
+            Assert.Equal(SrgbToLinear(60.0 / 255.0), tiffBcf[1].GetDouble(), 4);
+            Assert.Equal(SrgbToLinear(40.0 / 255.0), tiffBcf[2].GetDouble(), 4);
 
             Assert.True(pngMat.HasValue);
             Assert.Equal(0, pngMat.Value.GetProperty("pbrMetallicRoughness").GetProperty("baseColorTexture").GetProperty("index").GetInt32());

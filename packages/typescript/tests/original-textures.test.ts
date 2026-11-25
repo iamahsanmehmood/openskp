@@ -156,14 +156,16 @@ describe('originalTextures option and skipped-texture warning (#635)', () => {
       expect(doc.textures).toEqual([{ sampler: 0, source: 0 }]);
       expect(doc.samplers).toHaveLength(1);
 
-      const tiffMat = doc.materials.find((m: any) => m.pbrMetallicRoughness.baseColorFactor[0] > 0.7);
+      const srgbToLinear = (c: number) =>
+        c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+      const tiffMat = doc.materials.find((m: any) => m.pbrMetallicRoughness.baseColorFactor[0] > 0.5);
       const pngMat = doc.materials.find((m: any) => m.pbrMetallicRoughness.baseColorFactor[2] > 0.8);
       expect(tiffMat).toBeDefined();
       expect(tiffMat.pbrMetallicRoughness.baseColorTexture).toBeUndefined();
       expect(tiffMat.alphaMode).toBeUndefined();
-      expect(tiffMat.pbrMetallicRoughness.baseColorFactor[0]).toBeCloseTo(200 / 255, 4);
-      expect(tiffMat.pbrMetallicRoughness.baseColorFactor[1]).toBeCloseTo(60 / 255, 4);
-      expect(tiffMat.pbrMetallicRoughness.baseColorFactor[2]).toBeCloseTo(40 / 255, 4);
+      expect(tiffMat.pbrMetallicRoughness.baseColorFactor[0]).toBeCloseTo(srgbToLinear(200 / 255), 4);
+      expect(tiffMat.pbrMetallicRoughness.baseColorFactor[1]).toBeCloseTo(srgbToLinear(60 / 255), 4);
+      expect(tiffMat.pbrMetallicRoughness.baseColorFactor[2]).toBeCloseTo(srgbToLinear(40 / 255), 4);
 
       expect(pngMat).toBeDefined();
       expect(pngMat.pbrMetallicRoughness.baseColorTexture).toEqual({ index: 0 });

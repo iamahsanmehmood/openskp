@@ -330,6 +330,27 @@ int? Function(RawTexture?, [String?]) createTextureIndexFor(
   };
 }
 
+double _srgbToLinear(double c) {
+  if (c <= 0.0) return 0.0;
+  if (c >= 1.0) return 1.0;
+  return c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4).toDouble();
+}
+
+Map<String, dynamic> _linearizePbr(Map<String, dynamic> pbr, {bool stripTexture = false}) {
+  final newPbr = Map<String, dynamic>.from(pbr);
+  if (stripTexture) newPbr.remove('baseColorTexture');
+  final bcf = newPbr['baseColorFactor'];
+  if (bcf is List && bcf.length >= 3) {
+    newPbr['baseColorFactor'] = <double>[
+      _srgbToLinear((bcf[0] as num).toDouble()),
+      _srgbToLinear((bcf[1] as num).toDouble()),
+      _srgbToLinear((bcf[2] as num).toDouble()),
+      bcf.length > 3 ? (bcf[3] as num).toDouble() : 1.0,
+    ];
+  }
+  return newPbr;
+}
+
 (List<SceneTexture>, List<Map<String, dynamic>>) filterGltfTextures(
   List<SceneTexture> rawTextures,
   List<Map<String, dynamic>> rawMaterials,
@@ -337,16 +358,10 @@ int? Function(RawTexture?, [String?]) createTextureIndexFor(
   void Function(SkpLogLevel level, String message)? onLog,
 ) {
   if (!embed || rawTextures.isEmpty) {
-    final needsCopy = rawMaterials.any((m) {
-      final pbr = m['pbrMetallicRoughness'] as Map<String, dynamic>?;
-      return pbr != null && pbr.containsKey('baseColorTexture');
-    });
-    if (!needsCopy) return (<SceneTexture>[], rawMaterials);
-
     final stripped = rawMaterials.map((m) {
       final pbr = m['pbrMetallicRoughness'] as Map<String, dynamic>?;
-      if (pbr == null || !pbr.containsKey('baseColorTexture')) return m;
-      final newPbr = Map<String, dynamic>.from(pbr)..remove('baseColorTexture');
+      if (pbr == null) return m;
+      final newPbr = _linearizePbr(pbr, stripTexture: pbr.containsKey('baseColorTexture'));
       return Map<String, dynamic>.from(m)..['pbrMetallicRoughness'] = newPbr;
     }).toList();
     return (<SceneTexture>[], stripped);
@@ -355,7 +370,6 @@ int? Function(RawTexture?, [String?]) createTextureIndexFor(
   final kept = <SceneTexture>[];
   final remap = List<int?>.filled(rawTextures.length, null);
   final warned = <(String, String)>{};
-  var anyDropped = false;
 
   for (var i = 0; i < rawTextures.length; i++) {
     final tex = rawTextures[i];
@@ -364,7 +378,6 @@ int? Function(RawTexture?, [String?]) createTextureIndexFor(
       kept.add(tex);
     } else {
       remap[i] = null;
-      anyDropped = true;
       final baseName = tex.filename.replaceAll('\\', '/').split('/').last;
       final fmt = describeImageFormat(tex.data, tex.filename);
       if (warned.add((baseName, fmt))) {
@@ -377,16 +390,17 @@ int? Function(RawTexture?, [String?]) createTextureIndexFor(
     }
   }
 
-  if (!anyDropped) return (kept, rawMaterials);
-
   final materials = rawMaterials.map((m) {
     final pbr = m['pbrMetallicRoughness'] as Map<String, dynamic>?;
-    final texRef = pbr?['baseColorTexture'] as Map<String, dynamic>?;
+    if (pbr == null) return m;
+    final texRef = pbr['baseColorTexture'] as Map<String, dynamic>?;
     final texIdx = texRef?['index'];
-    if (pbr == null || texRef == null || texIdx is! int) return m;
+    if (texRef == null || texIdx is! int) {
+      return Map<String, dynamic>.from(m)..['pbrMetallicRoughness'] = _linearizePbr(pbr);
+    }
     final mapped = texIdx >= 0 && texIdx < remap.length ? remap[texIdx] : null;
     if (mapped == null) {
-      final newPbr = Map<String, dynamic>.from(pbr)..remove('baseColorTexture');
+      final newPbr = _linearizePbr(pbr, stripTexture: true);
       final newMat = Map<String, dynamic>.from(m)..['pbrMetallicRoughness'] = newPbr;
       if (newMat['alphaMode'] == 'MASK') newMat.remove('alphaMode');
       return newMat;

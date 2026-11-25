@@ -5,9 +5,18 @@ mod gltf_helper;
 
 use gltf_helper::{int, load_glb, numbers, string};
 use openskp::{
-    export_glb, to_glb, GlbError, GlbOptions, GlbPrimitive, GltfMaterial, PbrMetallicRoughness,
-    Scene, SceneTexture, SkpFile,
+    export_glb, to_glb, to_instanced_glb, GlbError, GlbOptions, GlbPrimitive, GltfMaterial,
+    InstancedGlbOptions, InstancedMeshResource, InstancedNode, InstancedScene, LocalPrimitive,
+    PbrMetallicRoughness, Scene, SceneTexture, SkpFile,
 };
+
+fn srgb_to_linear(c: f64) -> f64 {
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
 
 fn material(
     name: &str,
@@ -124,7 +133,11 @@ fn serializes_scene_and_binary_data() {
     let materials = model.list("materials");
     assert_eq!(materials.len(), 1);
     let pbr = materials[0].find("pbrMetallicRoughness").unwrap();
-    assert_eq!(numbers(pbr, "baseColorFactor"), vec![0.25, 0.5, 0.75, 1.0]);
+    let bcf = numbers(pbr, "baseColorFactor");
+    assert!((bcf[0] - srgb_to_linear(0.25)).abs() < 1e-12);
+    assert!((bcf[1] - srgb_to_linear(0.5)).abs() < 1e-12);
+    assert!((bcf[2] - srgb_to_linear(0.75)).abs() < 1e-12);
+    assert_eq!(bcf[3], 1.0);
     assert_eq!(pbr.find("metallicFactor").unwrap().as_double(), Some(0.1));
     assert_eq!(pbr.find("roughnessFactor").unwrap().as_double(), Some(0.9));
     assert_eq!(alpha_mode(&materials[0]), "OPAQUE");
@@ -149,7 +162,7 @@ fn json_chunk_matches_tinygltf_layout() {
         r#""bufferViews":[{"buffer":0,"byteLength":36,"target":34962},{"buffer":0,"byteLength":36,"byteOffset":36,"target":34962},"#,
         r#"{"buffer":0,"byteLength":24,"byteOffset":72,"target":34962},{"buffer":0,"byteLength":12,"byteOffset":96,"target":34963}],"#,
         r#""buffers":[{"byteLength":108}],"#,
-        r#""materials":[{"doubleSided":true,"pbrMetallicRoughness":{"baseColorFactor":[0.25,0.5,0.75,1.0],"metallicFactor":0.1,"roughnessFactor":0.9}}],"#,
+        r#""materials":[{"doubleSided":true,"pbrMetallicRoughness":{"baseColorFactor":[0.05087608817155679,0.21404114048223255,0.5225215539683921,1.0],"metallicFactor":0.1,"roughnessFactor":0.9}}],"#,
         r#""meshes":[{"name":"OpenSKP Mesh","primitives":[{"attributes":{"NORMAL":1,"POSITION":0,"TEXCOORD_0":2},"indices":3,"material":0,"mode":4}]}],"#,
         r#""nodes":[{"mesh":0,"name":"OpenSKP Scene"}],"scene":0,"scenes":[{"name":"OpenSKP Scene","nodes":[0]}]}"#
     );
@@ -333,4 +346,140 @@ fn reports_file_failures_without_creating_directories() {
         Err(GlbError::Io(_))
     ));
     assert!(!output.parent().unwrap().exists());
+}
+
+#[test]
+fn converts_srgb_base_color_factor_to_linear_in_baked_and_instanced_exports() {
+    let mats = vec![
+        material(
+            "LayerRed",
+            [1.0, 84.0 / 255.0, 84.0 / 255.0, 1.0],
+            0.0,
+            0.8,
+            false,
+        ),
+        material("White", [1.0, 1.0, 1.0, 1.0], 0.0, 0.8, false),
+        material("Black", [0.0, 0.0, 0.0, 1.0], 0.0, 0.8, false),
+        material(
+            "MidGrey",
+            [188.0 / 255.0, 188.0 / 255.0, 188.0 / 255.0, 1.0],
+            0.0,
+            0.8,
+            false,
+        ),
+        material(
+            "DarkToe",
+            [10.0 / 255.0, 10.0 / 255.0, 10.0 / 255.0, 128.0 / 255.0],
+            0.0,
+            0.8,
+            false,
+        ),
+    ];
+
+    let mut baked = Scene {
+        gltf_materials: mats.clone(),
+        ..Default::default()
+    };
+    for i in 0..mats.len() {
+        let mut p = flat_triangle();
+        p.material_index = i;
+        baked.glb_primitives.push(p);
+    }
+
+    let mut res = InstancedMeshResource {
+        id: "res_0".into(),
+        definition_id: Some(1),
+        definition_name: "Def".into(),
+        variant_key: "1".into(),
+        primitives: Vec::new(),
+    };
+    for i in 0..mats.len() {
+        res.primitives.push(LocalPrimitive {
+            positions: vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+            normals: vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
+            uvs: vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
+            indices: vec![0, 1, 2],
+            material_index: i,
+            unpainted_back: false,
+        });
+    }
+    let instanced = InstancedScene {
+        gltf_materials: mats,
+        mesh_resources: vec![res],
+        scene_hierarchy: InstancedNode {
+            name: "ROOT".into(),
+            mesh_resource_id: Some("res_0".into()),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let factor_of = |mat: &openskp::JsonValue| -> Vec<f64> {
+        mat.find("pbrMetallicRoughness")
+            .and_then(|p| p.find("baseColorFactor"))
+            .map(|_| numbers(mat.find("pbrMetallicRoughness").unwrap(), "baseColorFactor"))
+            .unwrap_or_else(|| vec![1.0, 1.0, 1.0, 1.0])
+    };
+
+    let baked_bytes = glb(&baked);
+    let instanced_bytes = to_instanced_glb(&instanced, &InstancedGlbOptions::default()).unwrap();
+    for bytes in [baked_bytes, instanced_bytes] {
+        let model = load_glb(&bytes);
+        let exported = model.list("materials");
+        assert_eq!(exported.len(), 5);
+
+        let red = factor_of(&exported[0]);
+        assert_eq!(red[0], 1.0);
+        assert!((red[1] - 0.0887).abs() < 1e-4);
+        assert!((red[2] - 0.0887).abs() < 1e-4);
+        assert_eq!(red[3], 1.0);
+
+        assert_eq!(factor_of(&exported[1]), vec![1.0, 1.0, 1.0, 1.0]);
+        assert_eq!(factor_of(&exported[2]), vec![0.0, 0.0, 0.0, 1.0]);
+
+        let mid = factor_of(&exported[3]);
+        assert!((mid[0] - 0.503).abs() < 1e-3);
+        assert!((mid[0] - srgb_to_linear(188.0 / 255.0)).abs() < 1e-12);
+
+        let toe = factor_of(&exported[4]);
+        assert!((toe[0] - (10.0 / 255.0) / 12.92).abs() < 1e-12);
+        assert!((toe[3] - 128.0 / 255.0).abs() < 1e-12);
+    }
+
+    // Scene gltf_materials stay sRGB.
+    assert_eq!(
+        baked.gltf_materials[0]
+            .pbr_metallic_roughness
+            .base_color_factor[1],
+        84.0 / 255.0
+    );
+    assert_eq!(
+        baked.gltf_materials[3]
+            .pbr_metallic_roughness
+            .base_color_factor[0],
+        188.0 / 255.0
+    );
+
+    // Plain textured material with embedded image keeps its baseColorFactor unchanged.
+    let mut tex_scene = Scene::default();
+    let mut tex_mat = material(
+        "PlainTex",
+        [138.0 / 255.0, 64.0 / 255.0, 36.0 / 255.0, 1.0],
+        0.0,
+        0.8,
+        false,
+    );
+    tex_mat.pbr_metallic_roughness.base_color_texture = Some(0);
+    tex_scene.gltf_materials.push(tex_mat);
+    tex_scene.textures.push(SceneTexture {
+        data: vec![0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a],
+        mime_type: "image/png".into(),
+        filename: "tile.png".into(),
+    });
+    tex_scene.glb_primitives.push(flat_triangle());
+    let tex_model = load_glb(&to_glb(&tex_scene, &GlbOptions::new().with_textures(true)).unwrap());
+    let tex_bcf = factor_of(&tex_model.list("materials")[0]);
+    assert!((tex_bcf[0] - 138.0 / 255.0).abs() < 1e-12);
+    assert!((tex_bcf[1] - 64.0 / 255.0).abs() < 1e-12);
+    assert!((tex_bcf[2] - 36.0 / 255.0).abs() < 1e-12);
 }

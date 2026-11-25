@@ -93,7 +93,12 @@ namespace OpenSkp.Tests
 
             var materials = json.GetProperty("materials");
             var pbr = materials[0].GetProperty("pbrMetallicRoughness");
-            Assert.Equal(0.25, pbr.GetProperty("baseColorFactor")[0].GetDouble());
+            static double SrgbToLinear(double c) =>
+                c <= 0.04045 ? c / 12.92 : Math.Pow((c + 0.055) / 1.055, 2.4);
+            Assert.Equal(SrgbToLinear(0.25), pbr.GetProperty("baseColorFactor")[0].GetDouble(), 9);
+            Assert.Equal(SrgbToLinear(0.5), pbr.GetProperty("baseColorFactor")[1].GetDouble(), 9);
+            Assert.Equal(SrgbToLinear(0.75), pbr.GetProperty("baseColorFactor")[2].GetDouble(), 9);
+            Assert.Equal(1.0, pbr.GetProperty("baseColorFactor")[3].GetDouble(), 9);
             Assert.Equal(0.1, pbr.GetProperty("metallicFactor").GetDouble());
             Assert.Equal(0.9, pbr.GetProperty("roughnessFactor").GetDouble());
         }
@@ -199,6 +204,103 @@ namespace OpenSkp.Tests
         {
             var output = Path.Combine(Path.GetTempPath(), "openskp-missing-parent-" + Guid.NewGuid(), "asset.glb");
             Assert.ThrowsAny<Exception>(() => GlbExport.ExportGlb(TriangleScene(), output));
+        }
+
+        [Fact]
+        public void ConvertsSrgbBaseColorFactorToLinearWhileKeepingSceneSrgb()
+        {
+            static double SrgbToLinear(double c) =>
+                c <= 0.04045 ? c / 12.92 : Math.Pow((c + 0.055) / 1.055, 2.4);
+
+            var builder = SkpCreate.NewFile();
+            var specs = new (string Name, byte R, byte G, byte B, byte A)[]
+            {
+                ("LayerRed", 255, 84, 84, 255),
+                ("White", 255, 255, 255, 255),
+                ("Black", 0, 0, 0, 255),
+                ("MidGrey", 188, 188, 188, 255),
+                ("DarkToe", 10, 10, 10, 128),
+            };
+            var handles = specs.Select(s => builder.AddMaterial(s.Name, (s.R, s.G, s.B, s.A))).ToArray();
+            for (int i = 0; i < handles.Length; i++)
+            {
+                double x = i * 10.0;
+                builder.AddFace(
+                    new[] { (x, 0.0, 0.0), (x + 5.0, 0.0, 0.0), (x + 5.0, 5.0, 0.0), (x, 5.0, 0.0) },
+                    material: handles[i]);
+            }
+
+            var skpBytes = builder.ToBytes();
+            var bakedScene = SkpFile.BuildScene(skpBytes);
+            var instancedScene = SkpFile.BuildInstancedScene(skpBytes);
+
+            foreach (var glbBytes in new[] { GlbExport.ToGlb(bakedScene), InstancedGlbExport.ToInstancedGlb(instancedScene) })
+            {
+                var (json, _) = ParseGlb(glbBytes);
+                var factors = json.GetProperty("materials")
+                    .EnumerateArray()
+                    .Select(m => m.GetProperty("pbrMetallicRoughness")
+                        .GetProperty("baseColorFactor")
+                        .EnumerateArray()
+                        .Select(e => e.GetDouble())
+                        .ToArray())
+                    .ToList();
+
+                double[]? FindClose(double[] target) =>
+                    factors.FirstOrDefault(f => target.Select((v, idx) => Math.Abs(f[idx] - v) < 1e-4).All(ok => ok));
+
+                var red = FindClose(new[] { 1.0, SrgbToLinear(84.0 / 255.0), SrgbToLinear(84.0 / 255.0), 1.0 });
+                Assert.NotNull(red);
+                Assert.Equal(1.0, red![0]);
+                Assert.Equal(0.0887, red[1], 4);
+                Assert.Equal(0.0887, red[2], 4);
+                Assert.Equal(1.0, red[3]);
+
+                Assert.Equal(new[] { 1.0, 1.0, 1.0, 1.0 }, FindClose(new[] { 1.0, 1.0, 1.0, 1.0 }));
+                Assert.Equal(new[] { 0.0, 0.0, 0.0, 1.0 }, FindClose(new[] { 0.0, 0.0, 0.0, 1.0 }));
+
+                var mid = FindClose(new[] { SrgbToLinear(188.0 / 255.0), SrgbToLinear(188.0 / 255.0), SrgbToLinear(188.0 / 255.0), 1.0 });
+                Assert.NotNull(mid);
+                Assert.Equal(0.503, mid![0], 3);
+                Assert.Equal(SrgbToLinear(188.0 / 255.0), mid[0], 9);
+
+                var toe = FindClose(new[] { (10.0 / 255.0) / 12.92, (10.0 / 255.0) / 12.92, (10.0 / 255.0) / 12.92, 128.0 / 255.0 });
+                Assert.NotNull(toe);
+                Assert.Equal((10.0 / 255.0) / 12.92, toe![0], 9);
+                Assert.Equal(128.0 / 255.0, toe[3], 6);
+            }
+
+            // Scene GltfMaterials stay sRGB.
+            var sceneFactors = bakedScene.GltfMaterials
+                .Cast<System.Collections.Generic.IDictionary<string, object>>()
+                .Select(m => (double[])((System.Collections.Generic.IDictionary<string, object>)m["pbrMetallicRoughness"])["baseColorFactor"])
+                .ToList();
+            Assert.Contains(sceneFactors, f => f[0] == 1.0 && Math.Abs(f[1] - 84.0 / 255.0) < 1e-6);
+            Assert.Contains(sceneFactors, f => Math.Abs(f[0] - 188.0 / 255.0) < 1e-6);
+
+            // Embedded plain textures keep their factor unchanged.
+            var capillaScene = SkpFile.BuildScene(FixturePath("capilla_quiroz_v17.skp"));
+            var expectedTexFactors = capillaScene.GltfMaterials
+                .Cast<System.Collections.Generic.IDictionary<string, object>>()
+                .Select(m => (System.Collections.Generic.IDictionary<string, object>)m["pbrMetallicRoughness"])
+                .Where(p => p.ContainsKey("baseColorTexture"))
+                .Select(p => (double[])p["baseColorFactor"])
+                .ToList();
+            var (capillaJson, _) = ParseGlb(GlbExport.ToGlb(capillaScene, new GlbOptions { Textures = true }));
+            var actualTexFactors = capillaJson.GetProperty("materials")
+                .EnumerateArray()
+                .Select(m => m.GetProperty("pbrMetallicRoughness"))
+                .Where(p => p.TryGetProperty("baseColorTexture", out _))
+                .Select(p => p.GetProperty("baseColorFactor").EnumerateArray().Select(e => e.GetDouble()).ToArray())
+                .ToList();
+            Assert.Equal(expectedTexFactors.Count, actualTexFactors.Count);
+            for (int i = 0; i < expectedTexFactors.Count; i++)
+            {
+                for (int c = 0; c < 4; c++)
+                {
+                    Assert.Equal(expectedTexFactors[i][c], actualTexFactors[i][c], 9);
+                }
+            }
         }
 
         private static (JsonElement Json, byte[] Binary) ParseGlb(byte[] bytes)

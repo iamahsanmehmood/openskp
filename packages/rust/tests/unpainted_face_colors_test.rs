@@ -92,6 +92,18 @@ fn build_box_skp() -> SkpFile {
     SkpFile::from_buffer(b.to_bytes().unwrap())
 }
 
+fn linear_to_srgb(c: f64) -> f64 {
+    if c <= 0.0 {
+        0.0
+    } else if c >= 1.0 {
+        1.0
+    } else if c <= 0.0031308 {
+        c * 12.92
+    } else {
+        1.055 * c.powf(1.0 / 2.4) - 0.055
+    }
+}
+
 fn glb_materials(glb_bytes: &[u8]) -> Vec<(Color3, bool)> {
     let glb = load_glb(glb_bytes);
     let mut out = Vec::new();
@@ -99,9 +111,9 @@ fn glb_materials(glb_bytes: &[u8]) -> Vec<(Color3, bool)> {
         let pbr = mat.find("pbrMetallicRoughness").unwrap();
         let f = numbers(pbr, "baseColorFactor");
         let rgb = [
-            (f[0] * 255.0).round() as u8,
-            (f[1] * 255.0).round() as u8,
-            (f[2] * 255.0).round() as u8,
+            (linear_to_srgb(f[0]) * 255.0).round() as u8,
+            (linear_to_srgb(f[1]) * 255.0).round() as u8,
+            (linear_to_srgb(f[2]) * 255.0).round() as u8,
         ];
         let ds = mat
             .find("doubleSided")

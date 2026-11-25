@@ -269,19 +269,25 @@ TEST(OriginalTextures, GlbExportDropsTiffKeepsColorRemapsPngIndexAndWarnsOnce) {
     EXPECT_EQ(model.textures[0].source, 0);
     ASSERT_EQ(model.samplers.size(), 1u);
 
+    const auto srgb_to_linear = [](double c) {
+      return c <= 0.04045 ? c / 12.92 : std::pow((c + 0.055) / 1.055, 2.4);
+    };
     const tinygltf::Material* tiff_mat = nullptr;
     const tinygltf::Material* png_mat = nullptr;
     for (const auto& mat : model.materials) {
       ASSERT_EQ(mat.pbrMetallicRoughness.baseColorFactor.size(), 4u);
-      if (mat.pbrMetallicRoughness.baseColorFactor[0] > 0.7) tiff_mat = &mat;
+      if (mat.pbrMetallicRoughness.baseColorFactor[0] > 0.5) tiff_mat = &mat;
       if (mat.pbrMetallicRoughness.baseColorFactor[2] > 0.8) png_mat = &mat;
     }
     ASSERT_NE(tiff_mat, nullptr);
     EXPECT_LT(tiff_mat->pbrMetallicRoughness.baseColorTexture.index, 0);
     EXPECT_EQ(tiff_mat->alphaMode, "OPAQUE");
-    EXPECT_NEAR(tiff_mat->pbrMetallicRoughness.baseColorFactor[0], 200.0 / 255.0, 1e-4);
-    EXPECT_NEAR(tiff_mat->pbrMetallicRoughness.baseColorFactor[1], 60.0 / 255.0, 1e-4);
-    EXPECT_NEAR(tiff_mat->pbrMetallicRoughness.baseColorFactor[2], 40.0 / 255.0, 1e-4);
+    EXPECT_NEAR(tiff_mat->pbrMetallicRoughness.baseColorFactor[0], srgb_to_linear(200.0 / 255.0),
+                1e-4);
+    EXPECT_NEAR(tiff_mat->pbrMetallicRoughness.baseColorFactor[1], srgb_to_linear(60.0 / 255.0),
+                1e-4);
+    EXPECT_NEAR(tiff_mat->pbrMetallicRoughness.baseColorFactor[2], srgb_to_linear(40.0 / 255.0),
+                1e-4);
 
     ASSERT_NE(png_mat, nullptr);
     EXPECT_EQ(png_mat->pbrMetallicRoughness.baseColorTexture.index, 0);

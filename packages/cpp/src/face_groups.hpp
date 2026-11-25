@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cmath>
 #include <functional>
 #include <map>
 #include <memory>
@@ -93,6 +94,12 @@ struct FilteredGltfTextures {
 FilteredGltfTextures filter_gltf_textures(
     const std::vector<SceneTexture>& raw_textures, bool embed,
     const std::function<void(LogLevel, std::string_view)>& log);
+
+inline double srgb_to_linear(double c) {
+  if (c <= 0.0) return 0.0;
+  if (c >= 1.0) return 1.0;
+  return c <= 0.04045 ? c / 12.92 : std::pow((c + 0.055) / 1.055, 2.4);
+}
 
 // Everything build_local_face_groups needs from its caller that isn't the
 // builder itself.

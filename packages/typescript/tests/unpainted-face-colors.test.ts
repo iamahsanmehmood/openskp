@@ -86,6 +86,12 @@ function builtPairs(skp: SkpFile, options?: Parameters<SkpFile['buildScene']>[0]
   ];
 }
 
+function linearToSrgb(c: number): number {
+  if (c <= 0) return 0;
+  if (c >= 1) return 1;
+  return c <= 0.0031308 ? c * 12.92 : 1.055 * Math.pow(c, 1 / 2.4) - 0.055;
+}
+
 function glbMaterials(glbBytes: Uint8Array): [Rgb, boolean][] {
   const view = new DataView(glbBytes.buffer, glbBytes.byteOffset, glbBytes.byteLength);
   const jsonLen = view.getUint32(12, true);
@@ -95,7 +101,11 @@ function glbMaterials(glbBytes: Uint8Array): [Rgb, boolean][] {
     .map((m): [Rgb, boolean] => {
       const f = m.pbrMetallicRoughness.baseColorFactor as number[];
       return [
-        [Math.round(f[0] * 255), Math.round(f[1] * 255), Math.round(f[2] * 255)],
+        [
+          Math.round(linearToSrgb(f[0]) * 255),
+          Math.round(linearToSrgb(f[1]) * 255),
+          Math.round(linearToSrgb(f[2]) * 255),
+        ],
         Boolean(m.doubleSided),
       ];
     })

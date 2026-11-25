@@ -1,5 +1,8 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
+using System.Globalization;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 
 namespace OpenSkp
@@ -260,6 +263,87 @@ namespace OpenSkp
             };
         }
 
+        private static double SrgbToLinear(double c)
+        {
+            if (c <= 0.0) return 0.0;
+            if (c >= 1.0) return 1.0;
+            return c <= 0.04045 ? c / 12.92 : Math.Pow((c + 0.055) / 1.055, 2.4);
+        }
+
+        private static Dictionary<string, object>? ToObjectDictionary(object? value)
+        {
+            if (value == null) return null;
+            if (value is IDictionary<string, object> dict)
+            {
+                return new Dictionary<string, object>(dict);
+            }
+            var reflected = new Dictionary<string, object>();
+            foreach (var prop in value.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance))
+            {
+                var propVal = prop.GetValue(value);
+                if (propVal != null) reflected[prop.Name] = propVal;
+            }
+            return reflected.Count > 0 ? reflected : null;
+        }
+
+        private static double[]? TryLinearizeFactor(object? factorObj)
+        {
+            if (factorObj is double[] arr && arr.Length >= 3)
+            {
+                return new[]
+                {
+                    SrgbToLinear(arr[0]),
+                    SrgbToLinear(arr[1]),
+                    SrgbToLinear(arr[2]),
+                    arr.Length > 3 ? arr[3] : 1.0,
+                };
+            }
+            if (factorObj is IEnumerable enumerable && factorObj is not string)
+            {
+                var vals = new List<double>(4);
+                foreach (var item in enumerable)
+                {
+                    vals.Add(Convert.ToDouble(item, CultureInfo.InvariantCulture));
+                }
+                if (vals.Count >= 3)
+                {
+                    return new[]
+                    {
+                        SrgbToLinear(vals[0]),
+                        SrgbToLinear(vals[1]),
+                        SrgbToLinear(vals[2]),
+                        vals.Count > 3 ? vals[3] : 1.0,
+                    };
+                }
+            }
+            return null;
+        }
+
+        private static object LinearizeMaterialWithoutTexture(object mat, bool stripTexture, bool stripMask)
+        {
+            var newMat = ToObjectDictionary(mat);
+            if (newMat == null || !newMat.TryGetValue("pbrMetallicRoughness", out var pbrObj))
+            {
+                return mat;
+            }
+            var newPbr = ToObjectDictionary(pbrObj);
+            if (newPbr == null) return mat;
+            if (!stripTexture && newPbr.ContainsKey("baseColorTexture")) return mat;
+
+            if (stripTexture) newPbr.Remove("baseColorTexture");
+            if (newPbr.TryGetValue("baseColorFactor", out var bcfObj))
+            {
+                var linearized = TryLinearizeFactor(bcfObj);
+                if (linearized != null) newPbr["baseColorFactor"] = linearized;
+            }
+            newMat["pbrMetallicRoughness"] = newPbr;
+            if (stripMask && newMat.TryGetValue("alphaMode", out var am) && am as string == "MASK")
+            {
+                newMat.Remove("alphaMode");
+            }
+            return newMat;
+        }
+
         internal static (List<SceneTexture> Textures, List<object> Materials) FilterGltfTextures(
             List<SceneTexture> rawTextures,
             List<object> rawMaterials,
@@ -268,37 +352,10 @@ namespace OpenSkp
         {
             if (!embed || rawTextures.Count == 0)
             {
-                bool needsCopy = false;
-                foreach (var m in rawMaterials)
-                {
-                    if (m is IDictionary<string, object> dict &&
-                        dict.TryGetValue("pbrMetallicRoughness", out var pbrObj) &&
-                        pbrObj is IDictionary<string, object> pbr &&
-                        pbr.ContainsKey("baseColorTexture"))
-                    {
-                        needsCopy = true;
-                        break;
-                    }
-                }
-                if (!needsCopy) return (new List<SceneTexture>(), rawMaterials);
-
                 var stripped = new List<object>(rawMaterials.Count);
                 foreach (var m in rawMaterials)
                 {
-                    if (m is IDictionary<string, object> dict &&
-                        dict.TryGetValue("pbrMetallicRoughness", out var pbrObj) &&
-                        pbrObj is IDictionary<string, object> pbr &&
-                        pbr.ContainsKey("baseColorTexture"))
-                    {
-                        var newPbr = new Dictionary<string, object>(pbr);
-                        newPbr.Remove("baseColorTexture");
-                        var newMat = new Dictionary<string, object>(dict) { ["pbrMetallicRoughness"] = newPbr };
-                        stripped.Add(newMat);
-                    }
-                    else
-                    {
-                        stripped.Add(m);
-                    }
+                    stripped.Add(LinearizeMaterialWithoutTexture(m, stripTexture: true, stripMask: false));
                 }
                 return (new List<SceneTexture>(), stripped);
             }
@@ -306,7 +363,6 @@ namespace OpenSkp
             var kept = new List<SceneTexture>(rawTextures.Count);
             var remap = new int?[rawTextures.Count];
             var warned = new HashSet<(string BaseName, string Format)>();
-            bool anyDropped = false;
 
             for (int i = 0; i < rawTextures.Count; i++)
             {
@@ -319,7 +375,6 @@ namespace OpenSkp
                 else
                 {
                     remap[i] = null;
-                    anyDropped = true;
                     string filename = tex.Filename ?? "";
                     string normalized = filename.Replace('\\', '/');
                     int slash = normalized.LastIndexOf('/');
@@ -335,8 +390,6 @@ namespace OpenSkp
                 }
             }
 
-            if (!anyDropped) return (kept, rawMaterials);
-
             var materials = new List<object>(rawMaterials.Count);
             foreach (var m in rawMaterials)
             {
@@ -351,14 +404,7 @@ namespace OpenSkp
                     int? mapped = texIdx >= 0 && texIdx < remap.Length ? remap[texIdx] : null;
                     if (!mapped.HasValue)
                     {
-                        var newPbr = new Dictionary<string, object>(pbr);
-                        newPbr.Remove("baseColorTexture");
-                        var newMat = new Dictionary<string, object>(dict) { ["pbrMetallicRoughness"] = newPbr };
-                        if (newMat.TryGetValue("alphaMode", out var am) && am as string == "MASK")
-                        {
-                            newMat.Remove("alphaMode");
-                        }
-                        materials.Add(newMat);
+                        materials.Add(LinearizeMaterialWithoutTexture(m, stripTexture: true, stripMask: true));
                     }
                     else if (mapped.Value == texIdx)
                     {
@@ -374,7 +420,7 @@ namespace OpenSkp
                 }
                 else
                 {
-                    materials.Add(m);
+                    materials.Add(LinearizeMaterialWithoutTexture(m, stripTexture: false, stripMask: false));
                 }
             }
 
