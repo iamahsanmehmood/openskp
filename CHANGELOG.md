@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — All 6 languages: scenes of 2015 to 2020 files that save shadows or axes alone (#661)
+
+- A scene that saves the shadows without the axes, or the axes without the shadows, made the reader lose **all** scenes of the file. The two sections had the wrong length, and the errors cancelled out only when both were saved. 2015 and 2016 files written through SketchUp's C API lost their scenes too (they have no persistent ids).
+
+### Added — All 6 languages: face and edge tags, loose-edge curves and arcs, IFC4 conformance and DXF safety (#285)
+
+- **Tags of faces and edges** (`layer`) in TypeScript, .NET and Dart, as in Python, C++ and Rust. An untagged placement takes its definition's face tag only when every face has the same tag; a placement with its own or an inherited tag keeps it. Dart classes that **implement** `Edge`, `Face` or `Definition` must add the new members.
+- **Loose edges as curves** in the scenes of TypeScript, .NET, Dart and C++: `curve_sets` (baked) and `curve_resources` (instanced), with real arcs where the edges are one (also in mirrored placements; Python and Rust too), and `include_curve_sets` to leave them out. All six languages round coordinates alike.
+- **IFC**: curves as annotations, names with any character (control characters and line breaks too), proper GlobalIds, attribute counts per schema, and the `Closed` flag of meshes in TypeScript, .NET, Dart and C++. NaN and infinite values raise an error before a file is made; in Rust `to_ifc` returns a `Result`. **The default scale of TypeScript, .NET and Dart changes from inches to millimetres**, the unit the file declares; tag visibility, plugin attributes and element names are ported to them. .NET: `ToIfc`, `ExportIfc` and `ClassifyElement` have new optional parameters (recompile).
+- **DXF** (Python, TypeScript, .NET, Dart): layer names with any character, no two layers merged, meshes over 32,767 vertices or faces written as single faces; NaN, infinite values and malformed meshes are refused.
+
 ### Added — Python: which properties a scene saves
 
 - `Page.capture_flags` is the u32 a scene stores for the boxes ticked under "Properties to save": tag `7149` of the `7148` record in 2021+ files, and the u32 after the description in classic files. It is `None` when the reader found none, or when the classic fallback scan read a word with bits above `0x1FF`. `use_camera`, `use_rendering_options`, `use_shadow_info`, `use_axes`, `use_hidden_layers`, `use_section_planes`, `use_hidden_geometry` and `use_hidden_objects` read its bits.
