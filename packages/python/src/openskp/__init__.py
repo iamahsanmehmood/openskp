@@ -79,8 +79,11 @@ def main() -> None:
     """
     import sys
 
+    if sys.argv[1:2] in (["-h"], ["--help"]):
+        print("usage: openskp [--version] [FILE.skp]")
+        return
     print(f"openskp {__version__}")
-    if len(sys.argv) > 1:
+    if len(sys.argv) > 1 and sys.argv[1] != "--version":
         filepath = sys.argv[1]
         try:
             skp = SkpFile.open(filepath)
