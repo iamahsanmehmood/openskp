@@ -35,7 +35,10 @@ String toStlAscii(Scene scene, {double scale = 1.0}) {
 
   for (final prim in scene.surfacePrimitives) {
     final triCount = prim.indices.length ~/ 3;
+    final backSet =
+        prim.backTriangles.isEmpty ? null : prim.backTriangles.toSet();
     for (var i = 0; i < triCount; i++) {
+      if (backSet != null && backSet.contains(i)) continue;
       final i0 = prim.indices[i * 3];
       final i1 = prim.indices[i * 3 + 1];
       final i2 = prim.indices[i * 3 + 2];
@@ -58,11 +61,15 @@ String toStlAscii(Scene scene, {double scale = 1.0}) {
 
       final normal = _calculateNormal(v0, v1, v2);
 
-      buffer.writeln('  facet normal ${normal.$1.toStringAsFixed(6)} ${normal.$2.toStringAsFixed(6)} ${normal.$3.toStringAsFixed(6)}');
+      buffer.writeln(
+          '  facet normal ${normal.$1.toStringAsFixed(6)} ${normal.$2.toStringAsFixed(6)} ${normal.$3.toStringAsFixed(6)}');
       buffer.writeln('    outer loop');
-      buffer.writeln('      vertex ${v0.$1.toStringAsFixed(6)} ${v0.$2.toStringAsFixed(6)} ${v0.$3.toStringAsFixed(6)}');
-      buffer.writeln('      vertex ${v1.$1.toStringAsFixed(6)} ${v1.$2.toStringAsFixed(6)} ${v1.$3.toStringAsFixed(6)}');
-      buffer.writeln('      vertex ${v2.$1.toStringAsFixed(6)} ${v2.$2.toStringAsFixed(6)} ${v2.$3.toStringAsFixed(6)}');
+      buffer.writeln(
+          '      vertex ${v0.$1.toStringAsFixed(6)} ${v0.$2.toStringAsFixed(6)} ${v0.$3.toStringAsFixed(6)}');
+      buffer.writeln(
+          '      vertex ${v1.$1.toStringAsFixed(6)} ${v1.$2.toStringAsFixed(6)} ${v1.$3.toStringAsFixed(6)}');
+      buffer.writeln(
+          '      vertex ${v2.$1.toStringAsFixed(6)} ${v2.$2.toStringAsFixed(6)} ${v2.$3.toStringAsFixed(6)}');
       buffer.writeln('    endloop');
       buffer.writeln('  endfacet');
     }
@@ -74,9 +81,22 @@ String toStlAscii(Scene scene, {double scale = 1.0}) {
 
 /// Convert a baked [Scene] into Little-Endian Binary STL byte array.
 Uint8List toStlBinary(Scene scene, {double scale = 1.0}) {
+  final prims = scene.surfacePrimitives;
+  final backSets = [
+    for (final prim in prims)
+      prim.backTriangles.isEmpty ? null : prim.backTriangles.toSet(),
+  ];
   var totalTriangles = 0;
-  for (final prim in scene.surfacePrimitives) {
-    totalTriangles += prim.indices.length ~/ 3;
+  for (var pIdx = 0; pIdx < prims.length; pIdx++) {
+    final triCount = prims[pIdx].indices.length ~/ 3;
+    final backSet = backSets[pIdx];
+    if (backSet == null) {
+      totalTriangles += triCount;
+    } else {
+      for (var i = 0; i < triCount; i++) {
+        if (!backSet.contains(i)) totalTriangles++;
+      }
+    }
   }
 
   final bufferSize = 80 + 4 + totalTriangles * 50;
@@ -93,9 +113,12 @@ Uint8List toStlBinary(Scene scene, {double scale = 1.0}) {
   bdata.setUint32(80, totalTriangles, Endian.little);
 
   var offset = 84;
-  for (final prim in scene.surfacePrimitives) {
+  for (var pIdx = 0; pIdx < prims.length; pIdx++) {
+    final prim = prims[pIdx];
+    final backSet = backSets[pIdx];
     final triCount = prim.indices.length ~/ 3;
     for (var i = 0; i < triCount; i++) {
+      if (backSet != null && backSet.contains(i)) continue;
       final i0 = prim.indices[i * 3];
       final i1 = prim.indices[i * 3 + 1];
       final i2 = prim.indices[i * 3 + 2];
@@ -149,7 +172,8 @@ Uint8List toStlBinary(Scene scene, {double scale = 1.0}) {
 }
 
 /// Export a baked [Scene] to an STL file at [path].
-void exportStl(Scene scene, String path, {bool binary = false, double scale = 1.0}) {
+void exportStl(Scene scene, String path,
+    {bool binary = false, double scale = 1.0}) {
   final file = File(path);
   final dir = file.parent;
   if (!dir.existsSync()) {

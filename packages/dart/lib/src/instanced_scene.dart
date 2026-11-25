@@ -27,6 +27,10 @@ class LocalPrimitive {
   final List<double> normals;
   final List<double> uvs;
   final List<int> indices;
+
+  /// Triangle offsets for separately emitted back sides.
+  final List<int> backTriangles;
+
   final int materialIndex;
 
   /// The back copies of faces with no paint on either side; see
@@ -38,9 +42,10 @@ class LocalPrimitive {
     required this.normals,
     required this.uvs,
     required this.indices,
+    List<int>? backTriangles,
     required this.materialIndex,
     this.unpaintedBack = false,
-  });
+  }) : backTriangles = backTriangles ?? const [];
 }
 
 /// A definition's geometry, resolved for one specific rendering context and
@@ -97,10 +102,22 @@ class InstancedCurveResource {
 }
 
 const List<double> identityGltf = [
-  1, 0, 0, 0,
-  0, 1, 0, 0,
-  0, 0, 1, 0,
-  0, 0, 0, 1,
+  1,
+  0,
+  0,
+  0,
+  0,
+  1,
+  0,
+  0,
+  0,
+  0,
+  1,
+  0,
+  0,
+  0,
+  0,
+  1,
 ];
 
 /// One placed node in the instanced scene graph.
@@ -173,7 +190,11 @@ class SceneBounds {
   final (double, double, double) size;
   final (double, double, double) center;
 
-  SceneBounds({required this.min, required this.max, required this.size, required this.center});
+  SceneBounds(
+      {required this.min,
+      required this.max,
+      required this.size,
+      required this.center});
 }
 
 /// The result of [InstancedSceneBuilder.build].
@@ -252,11 +273,13 @@ class InstancedSceneBuilder {
     final materials = parsed.materials;
     final materialsByFolder = parsed.materialsByFolder;
 
-    emitLog(options, SkpLogLevel.info, 'Building instanced scene: ${defsDict.length} definitions available');
+    emitLog(options, SkpLogLevel.info,
+        'Building instanced scene: ${defsDict.length} definitions available');
     var instanceCounter = 0;
     final activeDefinitions = <int>{};
 
-    (int, int, int) getLayerColor(String name) => layerColors[name] ?? (136, 136, 136);
+    (int, int, int) getLayerColor(String name) =>
+        layerColors[name] ?? (136, 136, 136);
     final styleColors = unpaintedStyleColors(parsed, options?.unpaintedFaces);
 
     final textures = <SceneTexture>[];
@@ -265,7 +288,8 @@ class InstancedSceneBuilder {
     final colorToMaterialIndex = <((int, int, int), bool, int?, double), int>{};
     final gltfMaterials = <Map<String, dynamic>>[];
 
-    int getMaterialIndex((int, int, int) color, bool doubleSided, int? textureIndex,
+    int getMaterialIndex(
+        (int, int, int) color, bool doubleSided, int? textureIndex,
         [double transparency = 1.0]) {
       final key = (color, doubleSided, textureIndex, transparency);
       final existing = colorToMaterialIndex[key];
@@ -305,7 +329,8 @@ class InstancedSceneBuilder {
     final preparedCurvesCache = <int, PreparedDefCurves>{};
     final includeCurveSets = options?.includeCurveSets ?? true;
     final faceLayerCache = <int, (String?, String?)>{};
-    (String?, String?) getFaceLayerSummary(int? defId, GeometryBuilder builder) {
+    (String?, String?) getFaceLayerSummary(
+        int? defId, GeometryBuilder builder) {
       final key = defId ?? -1;
       final hit = faceLayerCache[key];
       if (hit != null || faceLayerCache.containsKey(key)) {
@@ -323,8 +348,9 @@ class InstancedSceneBuilder {
       String layer,
     ) {
       if (!includeCurveSets) return null;
-      final effectiveLayer =
-          layer == 'Layer0' ? (getFaceLayerSummary(defId, builder).$1 ?? layer) : layer;
+      final effectiveLayer = layer == 'Layer0'
+          ? (getFaceLayerSummary(defId, builder).$1 ?? layer)
+          : layer;
       final key = '${defId ?? 'ROOT'}|$effectiveLayer';
       if (curveResourceIdByKey.containsKey(key)) {
         return curveResourceIdByKey[key];
@@ -425,7 +451,8 @@ class InstancedSceneBuilder {
       final faceGroups = buildLocalFaceGroups(
         builder,
         FaceGroupContext(
-          resolveMaterial: (matId) => resolveMaterial(matId) ?? inheritedMaterial,
+          resolveMaterial: (matId) =>
+              resolveMaterial(matId) ?? inheritedMaterial,
           textureIndexFor: textureIndexFor,
           fallbackColor: fallbackColor,
           fallbackBackColor: fallbackBackColor,
@@ -435,7 +462,8 @@ class InstancedSceneBuilder {
 
       final primitives = <LocalPrimitive>[];
       for (final groupEntry in faceGroups.entries) {
-        final (color, doubleSided, texIndex, transparency, unpaintedBack) = groupEntry.key;
+        final (color, doubleSided, texIndex, transparency, unpaintedBack) =
+            groupEntry.key;
         final group = groupEntry.value;
         if (group.localFaces.isEmpty) continue;
 
@@ -490,7 +518,9 @@ class InstancedSceneBuilder {
           normals: normals,
           uvs: uvs,
           indices: indices,
-          materialIndex: getMaterialIndex(color, doubleSided, texIndex, transparency),
+          backTriangles: List<int>.of(group.backTriangles),
+          materialIndex:
+              getMaterialIndex(color, doubleSided, texIndex, transparency),
           unpaintedBack: unpaintedBack,
         ));
       }
@@ -535,10 +565,22 @@ class InstancedSceneBuilder {
       final r20 = -d, r21 = -f, r22 = e;
 
       return [
-        r00, r10, r20, 0,
-        r01, r11, r21, 0,
-        r02, r12, r22, 0,
-        tx * _inchesToM, tz * _inchesToM, -ty * _inchesToM, 1,
+        r00,
+        r10,
+        r20,
+        0,
+        r01,
+        r11,
+        r21,
+        0,
+        r02,
+        r12,
+        r22,
+        0,
+        tx * _inchesToM,
+        tz * _inchesToM,
+        -ty * _inchesToM,
+        1,
       ];
     }
 
@@ -556,13 +598,15 @@ class InstancedSceneBuilder {
       final nodes = <InstancedNode>[];
       for (final inst in builder.instances) {
         final refIdx = inst.refIdx;
-        final newMatrix = Transforms.multiplyMatrices(currentMatrix, inst.matrix);
+        final newMatrix =
+            Transforms.multiplyMatrices(currentMatrix, inst.matrix);
 
         var lName = parentLayer;
         (int, int, int)? instColor = inheritedColor;
         RawMaterial? instMaterial = inheritedMaterial;
         var properties = Map<String, String>.from(inst.properties ?? {});
-        Map<String, Map<String, Object?>>? instAttributeDicts = inst.attributeDicts;
+        Map<String, Map<String, Object?>>? instAttributeDicts =
+            inst.attributeDicts;
 
         // A classic (pre-2021) instance has no D007: its own tag and paint
         // were read with it.
@@ -585,7 +629,8 @@ class InstancedSceneBuilder {
           }
           final d107 = d007.children.where((c) => c.tag == 'D107').firstOrNull;
           if (d107 != null) {
-            final instMatId = Tlv.parseVarInt(d107.payload, 0, d107.payload.length);
+            final instMatId =
+                Tlv.parseVarInt(d107.payload, 0, d107.payload.length);
             final matName = materialIdToName[instMatId];
             if (matName != null) {
               final mat = materials[matName] ?? materialsByFolder[matName];
@@ -607,7 +652,8 @@ class InstancedSceneBuilder {
             properties = <String, String>{};
             instAttributeDicts = null;
             emitLog(
-              options, SkpLogLevel.debug,
+              options,
+              SkpLogLevel.debug,
               'Failed to extract dynamic properties for instance ${inst.name} (refIdx=$refIdx): $e',
             );
           }
@@ -615,8 +661,10 @@ class InstancedSceneBuilder {
 
         instanceCounter++;
         if (instanceCounter % progressInterval == 0) {
-          emitProgress(options, 'build_scene', instanceCounter, instanceCounter);
-          emitLog(options, SkpLogLevel.debug, 'Processed $instanceCounter placed instances');
+          emitProgress(
+              options, 'build_scene', instanceCounter, instanceCounter);
+          emitLog(options, SkpLogLevel.debug,
+              'Processed $instanceCounter placed instances');
         }
 
         final childDef = refIdx != null ? defsDict[refIdx] : null;
@@ -625,7 +673,8 @@ class InstancedSceneBuilder {
           if (!activeDefinitions.add(refIdx)) {
             throw SkpParseException(
               'Recursive component definition',
-              stage: 'build_scene', definitionId: refIdx,
+              stage: 'build_scene',
+              definitionId: refIdx,
             );
           }
           try {
@@ -657,12 +706,16 @@ class InstancedSceneBuilder {
         // instanced_fixture_parity_test.dart, which depends on both trees
         // resolving display names identically.
         final childDefName = childDef?.name ?? '';
-        final defNameIsReal = childDefName.isNotEmpty && !Geometry.isGenericDefinitionName(childDefName);
+        final defNameIsReal = childDefName.isNotEmpty &&
+            !Geometry.isGenericDefinitionName(childDefName);
         final nameOverride = Geometry.findNameOverride(instAttributeDicts);
         final instNameNonEmpty = inst.name != null && inst.name!.isNotEmpty;
-        final fallbackName = instNameNonEmpty ? inst.name! : (defNameIsReal ? childDefName : 'Component_$refIdx');
+        final fallbackName = instNameNonEmpty
+            ? inst.name!
+            : (defNameIsReal ? childDefName : 'Component_$refIdx');
         final displayName = nameOverride ?? fallbackName;
-        final nameIsGenerated = nameOverride == null && !instNameNonEmpty && !defNameIsReal;
+        final nameIsGenerated =
+            nameOverride == null && !instNameNonEmpty && !defNameIsReal;
 
         // Every OTHER attribute dictionary this instance carries -
         // dynamic_attributes is already surfaced separately as properties
@@ -673,17 +726,21 @@ class InstancedSceneBuilder {
         final attributeDictionaries = <String, Map<String, String>>{};
         if (instAttributeDicts != null) {
           for (final entry in instAttributeDicts.entries) {
-            if (entry.key == 'dynamic_attributes' || entry.key == 'SU_InstanceSet') continue;
+            if (entry.key == 'dynamic_attributes' ||
+                entry.key == 'SU_InstanceSet') continue;
             attributeDictionaries[entry.key] = {
-              for (final e in entry.value.entries) e.key: Geometry.stringifyVffAttrValue(e.value),
+              for (final e in entry.value.entries)
+                e.key: Geometry.stringifyVffAttrValue(e.value),
             };
           }
         }
 
-        final nodeLayer =
-            (lName == 'Layer0' && children.isEmpty && refIdx != null && childDef != null)
-                ? (getFaceLayerSummary(refIdx, childDef.builder).$1 ?? lName)
-                : lName;
+        final nodeLayer = (lName == 'Layer0' &&
+                children.isEmpty &&
+                refIdx != null &&
+                childDef != null)
+            ? (getFaceLayerSummary(refIdx, childDef.builder).$1 ?? lName)
+            : lName;
 
         nodes.add(InstancedNode(
           name: displayName,
@@ -720,13 +777,16 @@ class InstancedSceneBuilder {
     }
 
     final identityMat = <double>[1.0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1.0];
-    final rootChildren = walkBuilder(parsed.root.builder, identityMat, 'Layer0', null);
+    final rootChildren =
+        walkBuilder(parsed.root.builder, identityMat, 'Layer0', null);
 
     // Loose geometry drawn straight into the model (not inside any
     // component/group) is kept, as the baked path keeps it: it becomes
     // the root node's own mesh resource.
-    final rootMeshResourceId = meshResourceForBuilder(parsed.root.builder, 'ROOT_MODEL', null, null, 'Layer0');
-    final rootCurveResourceId = curveResourceForBuilder(parsed.root.builder, 'ROOT_MODEL', null, 'Layer0');
+    final rootMeshResourceId = meshResourceForBuilder(
+        parsed.root.builder, 'ROOT_MODEL', null, null, 'Layer0');
+    final rootCurveResourceId = curveResourceForBuilder(
+        parsed.root.builder, 'ROOT_MODEL', null, 'Layer0');
 
     final sceneHierarchy = InstancedNode(
       name: 'ROOT',
@@ -749,12 +809,17 @@ class InstancedSceneBuilder {
     final localBoxCache = <String, (List<double>, List<double>)?>{};
 
     (List<double>, List<double>)? localBox(String resourceId) {
-      if (localBoxCache.containsKey(resourceId)) return localBoxCache[resourceId];
+      if (localBoxCache.containsKey(resourceId))
+        return localBoxCache[resourceId];
       (List<double>, List<double>)? box;
       final res = resourceById[resourceId];
       if (res != null) {
         final lo = [double.infinity, double.infinity, double.infinity];
-        final hi = [double.negativeInfinity, double.negativeInfinity, double.negativeInfinity];
+        final hi = [
+          double.negativeInfinity,
+          double.negativeInfinity,
+          double.negativeInfinity
+        ];
         for (final prim in res.primitives) {
           for (var i = 0; i < prim.positions.length; i += 3) {
             for (var k = 0; k < 3; k++) {
@@ -783,7 +848,11 @@ class InstancedSceneBuilder {
     }
 
     final bMin = [double.infinity, double.infinity, double.infinity];
-    final bMax = [double.negativeInfinity, double.negativeInfinity, double.negativeInfinity];
+    final bMax = [
+      double.negativeInfinity,
+      double.negativeInfinity,
+      double.negativeInfinity
+    ];
 
     void accumulate(InstancedNode node, List<double> parent) {
       final world = mul4(parent, node.matrix);
@@ -810,6 +879,7 @@ class InstancedSceneBuilder {
       }
       for (final child in node.children) accumulate(child, world);
     }
+
     accumulate(sceneHierarchy, List<double>.from(identityGltf));
 
     SceneBounds? bounds;
@@ -818,12 +888,17 @@ class InstancedSceneBuilder {
         min: (bMin[0], bMin[1], bMin[2]),
         max: (bMax[0], bMax[1], bMax[2]),
         size: (bMax[0] - bMin[0], bMax[1] - bMin[1], bMax[2] - bMin[2]),
-        center: ((bMin[0] + bMax[0]) / 2, (bMin[1] + bMax[1]) / 2, (bMin[2] + bMax[2]) / 2),
+        center: (
+          (bMin[0] + bMax[0]) / 2,
+          (bMin[1] + bMax[1]) / 2,
+          (bMin[2] + bMax[2]) / 2
+        ),
       );
     }
 
     emitLog(
-      options, SkpLogLevel.info,
+      options,
+      SkpLogLevel.info,
       'Instanced scene build complete: $instanceCounter instances, ${meshResources.length} mesh resources '
       '(${(sw.elapsedMilliseconds / 1000).toStringAsFixed(2)}s)',
     );
@@ -842,7 +917,8 @@ class InstancedSceneBuilder {
   }
 
   static double _round2(double v) => (v * 100).round() / 100;
-  static double _len3(double x, double y, double z) => sqrt(x * x + y * y + z * z);
+  static double _len3(double x, double y, double z) =>
+      sqrt(x * x + y * y + z * z);
 
   static RawMaterial? _resolveMaterial(
     int? matId,

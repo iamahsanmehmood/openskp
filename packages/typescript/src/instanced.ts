@@ -57,6 +57,8 @@ export interface LocalPrimitive {
   uvs: Float32Array;
   /** Triangle vertex indices (3 per triangle). */
   indices: Uint32Array;
+  /** Triangle offsets for separately emitted back sides. */
+  backTriangles?: Uint32Array;
   /** Index into {@link InstancedScene.gltfMaterials}. */
   materialIndex: number;
   /** `true` for the back copies of faces with no paint on either side; see
@@ -524,6 +526,7 @@ export function buildInstancedSceneFromParsed(
         normals,
         uvs,
         indices,
+        backTriangles: new Uint32Array(group.backTriangles),
         materialIndex: getMaterialIndex(group.color, group.doubleSided, group.textureIndex, group.transparency),
         unpaintedBack: group.unpaintedBack,
       });

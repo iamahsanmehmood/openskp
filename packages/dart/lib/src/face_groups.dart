@@ -38,6 +38,7 @@ class LocalFaceGroup {
   final List<(double, double)> localUvs = [];
   final List<List<double>> normalsAccum = [];
   final List<List<int>> localFaces = [];
+  final List<int> backTriangles = [];
   final Map<(int, double, double), int> localVMap = {};
 
   LocalFaceGroup(
@@ -96,7 +97,8 @@ class FaceGroupContext {
 ) {
   final mode = unpaintedFaces ?? 'style';
   if (mode != 'style' && mode != 'tag') {
-    throw ArgumentError.value(mode, 'unpaintedFaces', 'Must be "style" or "tag"');
+    throw ArgumentError.value(
+        mode, 'unpaintedFaces', 'Must be "style" or "tag"');
   }
   return mode == 'style' ? parsed.faceColors : null;
 }
@@ -112,14 +114,21 @@ List<double> _invert3x3(List<double> m) {
   }
   final invDet = 1 / det;
   return [
-    (e * i - f * h) * invDet, (c * h - b * i) * invDet, (b * f - c * e) * invDet,
-    (f * g - d * i) * invDet, (a * i - c * g) * invDet, (c * d - a * f) * invDet,
-    (d * h - e * g) * invDet, (b * g - a * h) * invDet, (a * e - b * d) * invDet,
+    (e * i - f * h) * invDet,
+    (c * h - b * i) * invDet,
+    (b * f - c * e) * invDet,
+    (f * g - d * i) * invDet,
+    (a * i - c * g) * invDet,
+    (c * d - a * f) * invDet,
+    (d * h - e * g) * invDet,
+    (b * g - a * h) * invDet,
+    (a * e - b * d) * invDet,
   ];
 }
 
 /// Face-plane basis vectors (xr, yr) for UV projection, from a face normal.
-((double, double, double), (double, double, double)) faceUvBasis((double, double, double) n) {
+((double, double, double), (double, double, double)) faceUvBasis(
+    (double, double, double) n) {
   final (nx, ny, nz) = n;
   final cx = -ny, cy = nx;
   final clen = sqrt(cx * cx + cy * cy);
@@ -127,7 +136,11 @@ List<double> _invert3x3(List<double> m) {
     return ((1.0, 0.0, 0.0), (0.0, nz >= 0 ? 1.0 : -1.0, 0.0));
   }
   final xr = (cx / clen, cy / clen, 0.0);
-  final yr = (ny * xr.$3 - nz * xr.$2, nz * xr.$1 - nx * xr.$3, nx * xr.$2 - ny * xr.$1);
+  final yr = (
+    ny * xr.$3 - nz * xr.$2,
+    nz * xr.$1 - nx * xr.$3,
+    nx * xr.$2 - ny * xr.$1
+  );
   return (xr, yr);
 }
 
@@ -157,7 +170,8 @@ List<double> _invert3x3(List<double> m) {
 
 /// Walks a face loop's (edgeId, orientation) pairs to the start-vertex
 /// sequence, collapsing a closed loop's duplicated first/last vertex.
-List<int> reconstructLoopVertices(List<(int, int)> loop, Map<int, (int?, int?)> edges) {
+List<int> reconstructLoopVertices(
+    List<(int, int)> loop, Map<int, (int?, int?)> edges) {
   final loopVerts = <int>[];
   for (final (edgeId, orient) in loop) {
     final ends = edges[edgeId];
@@ -181,7 +195,8 @@ List<int> reconstructLoopVertices(List<(int, int)> loop, Map<int, (int?, int?)> 
 /// doubleSided set; a face whose sides genuinely differ is emitted as two
 /// single-sided triangle sets (one normal-wound front, one reverse-wound
 /// back) so each side keeps its own color.
-Map<FaceGroupKey, LocalFaceGroup> buildLocalFaceGroups(GeometryBuilder builder, FaceGroupContext ctx) {
+Map<FaceGroupKey, LocalFaceGroup> buildLocalFaceGroups(
+    GeometryBuilder builder, FaceGroupContext ctx) {
   final faceGroups = <FaceGroupKey, LocalFaceGroup>{};
   final fallbackBackColor = ctx.fallbackBackColor ?? ctx.fallbackColor;
 
@@ -204,7 +219,9 @@ Map<FaceGroupKey, LocalFaceGroup> buildLocalFaceGroups(GeometryBuilder builder, 
     final transparency = resolveTransparency(mat);
     final key = (color, doubleSided, texIndex, transparency, unpaintedBack);
     final group = faceGroups.putIfAbsent(
-        key, () => LocalFaceGroup(color, doubleSided, texIndex, transparency, unpaintedBack));
+        key,
+        () => LocalFaceGroup(
+            color, doubleSided, texIndex, transparency, unpaintedBack));
 
     final tex = mat?.texture;
     final tileW = (tex != null && tex.xScale > 1e-9) ? tex.xScale : 1.0;
@@ -230,7 +247,8 @@ Map<FaceGroupKey, LocalFaceGroup> buildLocalFaceGroups(GeometryBuilder builder, 
           if (idx == null) {
             group.localVerts.add(p);
             group.localUvs.add((u, v));
-            group.normalsAccum.add([sideNormal.$1, sideNormal.$2, sideNormal.$3]);
+            group.normalsAccum
+                .add([sideNormal.$1, sideNormal.$2, sideNormal.$3]);
             idx = group.localVerts.length - 1;
             group.localVMap[vkey] = idx;
           } else {
@@ -244,6 +262,9 @@ Map<FaceGroupKey, LocalFaceGroup> buildLocalFaceGroups(GeometryBuilder builder, 
         faceIndices.add(idx);
       }
       if (faceIndices.length == 3) {
+        if (reverse) {
+          group.backTriangles.add(group.localFaces.length);
+        }
         group.localFaces.add(faceIndices);
       }
     }
@@ -254,8 +275,12 @@ Map<FaceGroupKey, LocalFaceGroup> buildLocalFaceGroups(GeometryBuilder builder, 
 
     final frontMat = ctx.resolveMaterial(fData.materialId);
     final backMat = ctx.resolveMaterial(fData.backMaterialId);
-    final frontColor = (frontMat != null) ? (frontMat.r, frontMat.g, frontMat.b) : ctx.fallbackColor;
-    final backColor = (backMat != null) ? (backMat.r, backMat.g, backMat.b) : fallbackBackColor;
+    final frontColor = (frontMat != null)
+        ? (frontMat.r, frontMat.g, frontMat.b)
+        : ctx.fallbackColor;
+    final backColor = (backMat != null)
+        ? (backMat.r, backMat.g, backMat.b)
+        : fallbackBackColor;
 
     final loops = <List<int>>[];
     for (final loop in fData.loops) {
@@ -266,11 +291,14 @@ Map<FaceGroupKey, LocalFaceGroup> buildLocalFaceGroups(GeometryBuilder builder, 
 
     List<List<int>> triangles;
     try {
-      triangles = Triangulator.triangulateFace3D(builder.vertices, loops, fData.normal);
+      triangles =
+          Triangulator.triangulateFace3D(builder.vertices, loops, fData.normal);
     } catch (e) {
       throw SkpParseException(
         'Failed to triangulate face: $e',
-        stage: 'build_scene', definitionId: ctx.definitionId, cause: e,
+        stage: 'build_scene',
+        definitionId: ctx.definitionId,
+        cause: e,
       );
     }
 
@@ -280,9 +308,11 @@ Map<FaceGroupKey, LocalFaceGroup> buildLocalFaceGroups(GeometryBuilder builder, 
     final uvTransformBack = fData.uvTransformBack;
 
     if (frontColor == backColor) {
-      addSide(triangles, fn, frontColor, true, false, frontMat, uvTransform, xr, yr);
+      addSide(triangles, fn, frontColor, true, false, frontMat, uvTransform, xr,
+          yr);
     } else {
-      addSide(triangles, fn, frontColor, false, false, frontMat, uvTransform, xr, yr);
+      addSide(triangles, fn, frontColor, false, false, frontMat, uvTransform,
+          xr, yr);
       addSide(
         triangles,
         fn,

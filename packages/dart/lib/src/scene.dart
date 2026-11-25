@@ -107,6 +107,11 @@ class GlbPrimitive {
   /// Triangle vertex indices into positions/normals/uvs (3 per triangle).
   final List<int> indices;
 
+  /// Triangle offsets for separately emitted back sides. A primitive can mix
+  /// front and back triangles when they share a material; their front
+  /// counterparts are still present.
+  final List<int> backTriangles;
+
   /// Index into Scene.gltfMaterials for this primitive's resolved color.
   final int materialIndex;
 
@@ -122,10 +127,11 @@ class GlbPrimitive {
     required this.normals,
     required this.uvs,
     required this.indices,
+    List<int>? backTriangles,
     required this.materialIndex,
     required this.geomName,
     this.unpaintedBack = false,
-  });
+  }) : backTriangles = backTriangles ?? const [];
 }
 
 /// One texture image referenced by Scene.gltfMaterials.
@@ -140,7 +146,8 @@ class SceneTexture {
 
   final String filename;
 
-  SceneTexture({required this.data, required this.mimeType, this.filename = ''});
+  SceneTexture(
+      {required this.data, required this.mimeType, this.filename = ''});
 }
 
 /// Metadata for one run of *loose* edges (edges no face uses) in world-space
@@ -199,8 +206,10 @@ class Scene {
 
   /// [glbPrimitives] without the back copies of faces that have no paint on
   /// either side, for formats and callers that emit one surface per face.
-  List<GlbPrimitive> get surfacePrimitives =>
-      [for (final p in glbPrimitives) if (!p.unpaintedBack) p];
+  List<GlbPrimitive> get surfacePrimitives => [
+        for (final p in glbPrimitives)
+          if (!p.unpaintedBack) p
+      ];
 
   Scene({
     required this.sceneHierarchy,
@@ -221,12 +230,21 @@ class Scene {
 /// Identifies an image's MIME type from its magic bytes. Returns null for
 /// anything glTF cannot carry (glTF only allows PNG and JPEG).
 String? sniffImageMime(List<int> data) {
-  if (data.length >= 3 && data[0] == 0xff && data[1] == 0xd8 && data[2] == 0xff) {
+  if (data.length >= 3 &&
+      data[0] == 0xff &&
+      data[1] == 0xd8 &&
+      data[2] == 0xff) {
     return 'image/jpeg';
   }
   if (data.length >= 8 &&
-      data[0] == 0x89 && data[1] == 0x50 && data[2] == 0x4e && data[3] == 0x47 &&
-      data[4] == 0x0d && data[5] == 0x0a && data[6] == 0x1a && data[7] == 0x0a) {
+      data[0] == 0x89 &&
+      data[1] == 0x50 &&
+      data[2] == 0x4e &&
+      data[3] == 0x47 &&
+      data[4] == 0x0d &&
+      data[5] == 0x0a &&
+      data[6] == 0x1a &&
+      data[7] == 0x0a) {
     return 'image/png';
   }
   return null;
@@ -253,8 +271,14 @@ bool _asciiAt(List<int> data, int offset, String text) {
 
 String describeImageFormat(List<int> data, [String filename = '']) {
   if (data.length >= 4 &&
-      ((data[0] == 0x49 && data[1] == 0x49 && data[2] == 0x2a && data[3] == 0x00) ||
-          (data[0] == 0x4d && data[1] == 0x4d && data[2] == 0x00 && data[3] == 0x2a))) {
+      ((data[0] == 0x49 &&
+              data[1] == 0x49 &&
+              data[2] == 0x2a &&
+              data[3] == 0x00) ||
+          (data[0] == 0x4d &&
+              data[1] == 0x4d &&
+              data[2] == 0x00 &&
+              data[3] == 0x2a))) {
     return 'TIFF';
   }
   if (_asciiAt(data, 0, 'BM')) return 'BMP';
@@ -277,10 +301,13 @@ String describeImageFormat(List<int> data, [String filename = '']) {
   final baseName = filename.replaceAll('\\', '/').split('/').last;
   final dot = baseName.lastIndexOf('.');
   final ext = dot >= 0 ? baseName.substring(dot + 1) : '';
-  return ext.isNotEmpty && ext.length <= 5 ? ext.toUpperCase() : 'an unrecognized format';
+  return ext.isNotEmpty && ext.length <= 5
+      ? ext.toUpperCase()
+      : 'an unrecognized format';
 }
 
-String? originalImageMime(List<int> data) => _originalImageMime[describeImageFormat(data)];
+String? originalImageMime(List<int> data) =>
+    _originalImageMime[describeImageFormat(data)];
 
 void warnSkippedTexture(
   ParseOptions? options,
@@ -298,7 +325,9 @@ void warnSkippedTexture(
       ? "'$materialName'"
       : "'(unnamed)'";
   final suffix = baseName.isNotEmpty ? ' ($baseName)' : '';
-  final hint = keepable ? ' (pass originalTextures: true to keep it in its own format)' : '';
+  final hint = keepable
+      ? ' (pass originalTextures: true to keep it in its own format)'
+      : '';
   emitLog(
     options,
     SkpLogLevel.warning,
@@ -360,7 +389,8 @@ int? Function(RawTexture?, [String?]) createTextureIndexFor(
     }
 
     final idx = textures.length;
-    textures.add(SceneTexture(data: data, mimeType: mimeType, filename: tex.filename));
+    textures.add(
+        SceneTexture(data: data, mimeType: mimeType, filename: tex.filename));
     (bucket ?? (buckets[hash] = <int>[])).add(idx);
     indexByIdentity[data] = idx;
     return idx;
@@ -373,7 +403,8 @@ double _srgbToLinear(double c) {
   return c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4).toDouble();
 }
 
-Map<String, dynamic> _linearizePbr(Map<String, dynamic> pbr, {bool stripTexture = false}) {
+Map<String, dynamic> _linearizePbr(Map<String, dynamic> pbr,
+    {bool stripTexture = false}) {
   final newPbr = Map<String, dynamic>.from(pbr);
   if (stripTexture) newPbr.remove('baseColorTexture');
   final bcf = newPbr['baseColorFactor'];
@@ -398,7 +429,8 @@ Map<String, dynamic> _linearizePbr(Map<String, dynamic> pbr, {bool stripTexture 
     final stripped = rawMaterials.map((m) {
       final pbr = m['pbrMetallicRoughness'] as Map<String, dynamic>?;
       if (pbr == null) return m;
-      final newPbr = _linearizePbr(pbr, stripTexture: pbr.containsKey('baseColorTexture'));
+      final newPbr =
+          _linearizePbr(pbr, stripTexture: pbr.containsKey('baseColorTexture'));
       return Map<String, dynamic>.from(m)..['pbrMetallicRoughness'] = newPbr;
     }).toList();
     return (<SceneTexture>[], stripped);
@@ -433,18 +465,21 @@ Map<String, dynamic> _linearizePbr(Map<String, dynamic> pbr, {bool stripTexture 
     final texRef = pbr['baseColorTexture'] as Map<String, dynamic>?;
     final texIdx = texRef?['index'];
     if (texRef == null || texIdx is! int) {
-      return Map<String, dynamic>.from(m)..['pbrMetallicRoughness'] = _linearizePbr(pbr);
+      return Map<String, dynamic>.from(m)
+        ..['pbrMetallicRoughness'] = _linearizePbr(pbr);
     }
     final mapped = texIdx >= 0 && texIdx < remap.length ? remap[texIdx] : null;
     if (mapped == null) {
       final newPbr = _linearizePbr(pbr, stripTexture: true);
-      final newMat = Map<String, dynamic>.from(m)..['pbrMetallicRoughness'] = newPbr;
+      final newMat = Map<String, dynamic>.from(m)
+        ..['pbrMetallicRoughness'] = newPbr;
       if (newMat['alphaMode'] == 'MASK') newMat.remove('alphaMode');
       return newMat;
     }
     if (mapped == texIdx) return m;
     final newTexRef = Map<String, dynamic>.from(texRef)..['index'] = mapped;
-    final newPbr = Map<String, dynamic>.from(pbr)..['baseColorTexture'] = newTexRef;
+    final newPbr = Map<String, dynamic>.from(pbr)
+      ..['baseColorTexture'] = newTexRef;
     return Map<String, dynamic>.from(m)..['pbrMetallicRoughness'] = newPbr;
   }).toList();
 
@@ -471,7 +506,8 @@ class SceneBuilder {
     final materials = parsed.materials;
     final materialsByFolder = parsed.materialsByFolder;
 
-    emitLog(options, SkpLogLevel.info, 'Building scene: ${defsDict.length} definitions available');
+    emitLog(options, SkpLogLevel.info,
+        'Building scene: ${defsDict.length} definitions available');
     var instanceCounter = 0;
 
     int meshCounter = 0;
@@ -486,7 +522,8 @@ class SceneBuilder {
     // could match the wrong meshes (a shallow instance's path is always a
     // string prefix of every deeper descendant's path too, so `contains`
     // matched far more than intended - see openskp#240).
-    final pathUpdates = <String, (Map<String, String>, String, Map<String, Map<String, String>>)>{};
+    final pathUpdates = <String,
+        (Map<String, String>, String, Map<String, Map<String, String>>)>{};
 
     // Textures deduplicated by full content (with an object-identity fast
     // path per face): the same image routinely backs several materials,
@@ -509,10 +546,12 @@ class SceneBuilder {
     // the stack overflows.
     final activeDefinitions = <int>{};
 
-    (int, int, int) getLayerColor(String name) => layerColors[name] ?? (136, 136, 136);
+    (int, int, int) getLayerColor(String name) =>
+        layerColors[name] ?? (136, 136, 136);
     final styleColors = unpaintedStyleColors(parsed, options?.unpaintedFaces);
 
-    int getMaterialIndex((int, int, int) color, bool doubleSided, int? textureIndex,
+    int getMaterialIndex(
+        (int, int, int) color, bool doubleSided, int? textureIndex,
         [double transparency = 1.0]) {
       // The texture is part of the identity, not just the color: two
       // different images can average to the same RGB (real files do
@@ -560,7 +599,8 @@ class SceneBuilder {
     }
 
     final faceLayerCache = <int, (String?, String?)>{};
-    (String?, String?) getFaceLayerSummary(int? defId, GeometryBuilder builder) {
+    (String?, String?) getFaceLayerSummary(
+        int? defId, GeometryBuilder builder) {
       final key = defId ?? -1;
       final hit = faceLayerCache[key];
       if (hit != null || faceLayerCache.containsKey(key)) {
@@ -582,7 +622,8 @@ class SceneBuilder {
       RawMaterial? inheritedMaterial,
     ]) {
       final summary = getFaceLayerSummary(defId, builder);
-      final meshLayer = parentLayer == 'Layer0' ? (summary.$1 ?? parentLayer) : parentLayer;
+      final meshLayer =
+          parentLayer == 'Layer0' ? (summary.$1 ?? parentLayer) : parentLayer;
       if (builder.faces.isNotEmpty) {
         // Group faces sharing a resolved (color, doubleSided, texture)
         // identity into one mesh each, in local space - shared with the
@@ -609,7 +650,8 @@ class SceneBuilder {
           builder,
           FaceGroupContext(
             resolveMaterial: (matId) =>
-                _resolveMaterial(matId, materialIdToName, materials, materialsByFolder) ??
+                _resolveMaterial(
+                    matId, materialIdToName, materials, materialsByFolder) ??
                 inheritedMaterial,
             textureIndexFor: textureIndexFor,
             fallbackColor: fallbackColor,
@@ -627,20 +669,31 @@ class SceneBuilder {
           final color = group.color;
           if (group.localFaces.isEmpty) continue;
 
-          final tx = isRootPath ? 0.0 : (currentMatrix.length > 9 ? currentMatrix[9] : 0.0) * _inchesToMm;
-          final ty = isRootPath ? 0.0 : (currentMatrix.length > 10 ? currentMatrix[10] : 0.0) * _inchesToMm;
-          final tz = isRootPath ? 0.0 : (currentMatrix.length > 11 ? currentMatrix[11] : 0.0) * _inchesToMm;
+          final tx = isRootPath
+              ? 0.0
+              : (currentMatrix.length > 9 ? currentMatrix[9] : 0.0) *
+                  _inchesToMm;
+          final ty = isRootPath
+              ? 0.0
+              : (currentMatrix.length > 10 ? currentMatrix[10] : 0.0) *
+                  _inchesToMm;
+          final tz = isRootPath
+              ? 0.0
+              : (currentMatrix.length > 11 ? currentMatrix[11] : 0.0) *
+                  _inchesToMm;
 
           var safePath = pathName.replaceAll(' / ', '__').replaceAll(' ', '_');
           if (safePath.length > 80) safePath = safePath.substring(0, 80);
           final colorSuffix = multiGroup
               ? '_${color.$1}_${color.$2}_${color.$3}_${group.doubleSided ? 'ds' : 'ss'}'
               : '';
-          final geomName = 'mesh_${meshCounter}_${safePath}_$meshLayer$colorSuffix';
+          final geomName =
+              'mesh_${meshCounter}_${safePath}_$meshLayer$colorSuffix';
           meshCounter++;
 
           meshIndex[geomName] = MeshMetadata(
-            name: isRootPath ? 'ROOT' : (pathName.split(' / ').lastOrNull ?? ''),
+            name:
+                isRootPath ? 'ROOT' : (pathName.split(' / ').lastOrNull ?? ''),
             definitionName: defName,
             layer: meshLayer,
             positionMm: (_round2(tx), _round2(ty), _round2(tz)),
@@ -708,12 +761,14 @@ class SceneBuilder {
             indices.add(tri[2]);
           }
 
-          final materialIndex = getMaterialIndex(color, group.doubleSided, texIndex, group.transparency);
+          final materialIndex = getMaterialIndex(
+              color, group.doubleSided, texIndex, group.transparency);
           glbPrimitives.add(GlbPrimitive(
             positions: positions,
             normals: normals,
             uvs: uvs,
             indices: indices,
+            backTriangles: List<int>.of(group.backTriangles),
             materialIndex: materialIndex,
             geomName: geomName,
             unpaintedBack: unpaintedBack,
@@ -729,8 +784,12 @@ class SceneBuilder {
           preparedCurvesCache[prepKey] = prepared;
         }
         if (prepared.runs.isNotEmpty) {
-          final fm = currentMatrix.length >= 12 ? Transforms.foldScale(currentMatrix) : null;
-          final compName = pathName == 'ROOT' ? '' : (pathName.split(' / ').lastOrNull ?? '');
+          final fm = currentMatrix.length >= 12
+              ? Transforms.foldScale(currentMatrix)
+              : null;
+          final compName = pathName == 'ROOT'
+              ? ''
+              : (pathName.split(' / ').lastOrNull ?? '');
           for (final run in prepared.runs) {
             final pts = <(double, double, double)>[];
             if (fm == null) {
@@ -792,7 +851,8 @@ class SceneBuilder {
       final childInstancesInfo = <InstanceNode>[];
       for (final inst in builder.instances) {
         final refIdx = inst.refIdx;
-        final newMatrix = Transforms.multiplyMatrices(currentMatrix, inst.matrix);
+        final newMatrix =
+            Transforms.multiplyMatrices(currentMatrix, inst.matrix);
 
         var lName = parentLayer;
         (int, int, int)? instColor = inheritedColor;
@@ -802,15 +862,16 @@ class SceneBuilder {
         // instances don't set this, so this stays {} for them and gets
         // overwritten below via the D007/DC05 TLV walk instead.
         var properties = Map<String, String>.from(inst.properties ?? {});
-        Map<String, Map<String, Object?>>? instAttributeDicts = inst.attributeDicts;
+        Map<String, Map<String, Object?>>? instAttributeDicts =
+            inst.attributeDicts;
 
         // A classic (pre-2021) instance has no D007: its own tag and paint
         // were read with it.
         if (inst.layerId != null) {
           lName = layerIdToName[inst.layerId!] ?? parentLayer;
         }
-        final painted =
-            _resolveMaterial(inst.materialId, materialIdToName, materials, materialsByFolder);
+        final painted = _resolveMaterial(
+            inst.materialId, materialIdToName, materials, materialsByFolder);
         if (painted != null) {
           instColor = (painted.r, painted.g, painted.b);
           instMaterial = painted;
@@ -826,7 +887,8 @@ class SceneBuilder {
           }
           final d107 = d007.children.where((c) => c.tag == 'D107').firstOrNull;
           if (d107 != null) {
-            final instMatId = Tlv.parseVarInt(d107.payload, 0, d107.payload.length);
+            final instMatId =
+                Tlv.parseVarInt(d107.payload, 0, d107.payload.length);
             final matName = materialIdToName[instMatId];
             if (matName != null) {
               final mat = materials[matName] ?? materialsByFolder[matName];
@@ -848,7 +910,8 @@ class SceneBuilder {
             properties = <String, String>{};
             instAttributeDicts = null;
             emitLog(
-              options, SkpLogLevel.debug,
+              options,
+              SkpLogLevel.debug,
               'Failed to extract dynamic properties for instance ${inst.name} (refIdx=$refIdx): $e',
             );
           }
@@ -864,25 +927,32 @@ class SceneBuilder {
         // instanced_fixture_parity_test.dart, which depends on both trees
         // resolving display names identically.
         final childDefName = childDef?.name ?? '';
-        final defNameIsReal = childDefName.isNotEmpty && !Geometry.isGenericDefinitionName(childDefName);
+        final defNameIsReal = childDefName.isNotEmpty &&
+            !Geometry.isGenericDefinitionName(childDefName);
         final nameOverride = Geometry.findNameOverride(instAttributeDicts);
         final instNameNonEmpty = inst.name != null && inst.name!.isNotEmpty;
-        final instName = instNameNonEmpty ? inst.name! : (defNameIsReal ? childDefName : 'Component_$refIdx');
+        final instName = instNameNonEmpty
+            ? inst.name!
+            : (defNameIsReal ? childDefName : 'Component_$refIdx');
         final displayName = nameOverride ?? instName;
-        final nameIsGenerated = nameOverride == null && !instNameNonEmpty && !defNameIsReal;
+        final nameIsGenerated =
+            nameOverride == null && !instNameNonEmpty && !defNameIsReal;
 
         final fullPathName = '$pathName / $instName';
         instanceCounter++;
         if (instanceCounter % progressInterval == 0) {
-          emitProgress(options, 'build_scene', instanceCounter, instanceCounter);
-          emitLog(options, SkpLogLevel.debug, 'Processed $instanceCounter placed instances');
+          emitProgress(
+              options, 'build_scene', instanceCounter, instanceCounter);
+          emitLog(options, SkpLogLevel.debug,
+              'Processed $instanceCounter placed instances');
         }
         List<InstanceNode> childNodes;
         if (refIdx != null && childDef != null) {
           if (!activeDefinitions.add(refIdx)) {
             throw SkpParseException(
               'Recursive component definition',
-              stage: 'build_scene', definitionId: refIdx,
+              stage: 'build_scene',
+              definitionId: refIdx,
             );
           }
           try {
@@ -916,17 +986,21 @@ class SceneBuilder {
         final attributeDictionaries = <String, Map<String, String>>{};
         if (instAttributeDicts != null) {
           for (final entry in instAttributeDicts.entries) {
-            if (entry.key == 'dynamic_attributes' || entry.key == 'SU_InstanceSet') continue;
+            if (entry.key == 'dynamic_attributes' ||
+                entry.key == 'SU_InstanceSet') continue;
             attributeDictionaries[entry.key] = {
-              for (final e in entry.value.entries) e.key: Geometry.stringifyVffAttrValue(e.value),
+              for (final e in entry.value.entries)
+                e.key: Geometry.stringifyVffAttrValue(e.value),
             };
           }
         }
 
-        final nodeLayer =
-            (lName == 'Layer0' && childNodes.isEmpty && refIdx != null && childDef != null)
-                ? (getFaceLayerSummary(refIdx, childDef.builder).$1 ?? lName)
-                : lName;
+        final nodeLayer = (lName == 'Layer0' &&
+                childNodes.isEmpty &&
+                refIdx != null &&
+                childDef != null)
+            ? (getFaceLayerSummary(refIdx, childDef.builder).$1 ?? lName)
+            : lName;
 
         final instInfo = InstanceNode(
           name: displayName,
@@ -941,14 +1015,16 @@ class SceneBuilder {
         );
         childInstancesInfo.add(instInfo);
 
-        pathUpdates[fullPathName] = (properties, displayName, attributeDictionaries);
+        pathUpdates[fullPathName] =
+            (properties, displayName, attributeDictionaries);
       }
 
       return childInstancesInfo;
     }
 
     final identityMat = <double>[1.0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1.0];
-    final rootChildren = instantiateBuilder(parsed.root.builder, 'ROOT_MODEL', null, identityMat, 'Layer0', 'ROOT', null);
+    final rootChildren = instantiateBuilder(parsed.root.builder, 'ROOT_MODEL',
+        null, identityMat, 'Layer0', 'ROOT', null);
 
     // Deferred mesh backfill: each mesh's own path was recorded verbatim
     // as a pathUpdates key by the exact instance that placed the
@@ -971,7 +1047,8 @@ class SceneBuilder {
       final existing = entry.value;
       if (existing.path == 'ROOT') {
         if (existing.name.isEmpty) existing.name = 'ROOT';
-        if (existing.definitionName.isEmpty) existing.definitionName = 'ROOT_MODEL';
+        if (existing.definitionName.isEmpty)
+          existing.definitionName = 'ROOT_MODEL';
         if (existing.layer.isEmpty) existing.layer = 'Layer0';
         existing.positionMm = (0.0, 0.0, 0.0);
       }
@@ -986,7 +1063,8 @@ class SceneBuilder {
     );
 
     emitLog(
-      options, SkpLogLevel.info,
+      options,
+      SkpLogLevel.info,
       'Scene build complete: $instanceCounter instances, ${meshIndex.length} meshes, '
       '${glbPrimitives.length} primitives (${(sw.elapsedMilliseconds / 1000).toStringAsFixed(2)}s)',
     );
@@ -1005,7 +1083,8 @@ class SceneBuilder {
   }
 
   static double _round2(double v) => (v * 100).round() / 100;
-  static double _len3(double x, double y, double z) => sqrt(x * x + y * y + z * z);
+  static double _len3(double x, double y, double z) =>
+      sqrt(x * x + y * y + z * z);
 
   static RawMaterial? _resolveMaterial(
     int? matId,

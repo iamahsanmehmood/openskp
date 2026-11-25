@@ -418,6 +418,9 @@ std::map<GroupKey, Group> build_local_face_groups(const RawParsed& parsed, const
           for (int axis = 0; axis < 3; ++axis)
             normal[axis] += reverse ? -f.normal[axis] : f.normal[axis];
         }
+        if (reverse) {
+          group.back_tris.push_back(static_cast<std::uint32_t>(group.tris.size()));
+        }
         group.tris.push_back(indices);
       }
     };
