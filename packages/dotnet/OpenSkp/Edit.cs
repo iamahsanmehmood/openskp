@@ -187,7 +187,7 @@ namespace OpenSkp
                         // is kept explicit here since it's a hard
                         // requirement of this call site specifically, not
                         // just a safe default.
-                        slot = builder.AddTextureMaterial(mat.Name, tmpPath, appliedHeight: 1.0);
+                        slot = builder.AddTextureMaterial(mat.Name, tmpPath, appliedHeight: 1.0, filename: mat.Texture.Filename ?? "");
                     }
                     finally
                     {

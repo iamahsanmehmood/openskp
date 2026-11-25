@@ -496,3 +496,136 @@ fn skips_definitions_whose_only_guides_cannot_be_replayed() {
     assert_eq!(rebuilt.root().faces.len(), 1);
     assert!(rebuilt.definitions.is_empty());
 }
+
+#[test]
+fn preserves_texture_filenames_including_empty_without_embedding_temp_path() {
+    use openskp::create::{ImageOptions, TextureMaterialOptions};
+
+    let temp_dir_str = std::env::temp_dir()
+        .to_string_lossy()
+        .trim_end_matches(['\\', '/'])
+        .to_owned();
+    let ascii_needle = temp_dir_str.as_bytes().to_vec();
+    let utf16_needle: Vec<u8> = temp_dir_str
+        .encode_utf16()
+        .flat_map(u16::to_le_bytes)
+        .collect();
+    let assert_no_temp_dir = |bytes: &[u8]| {
+        assert!(
+            !bytes.windows(ascii_needle.len()).any(|w| w == ascii_needle),
+            "saved bytes contain ASCII temp dir"
+        );
+        assert!(
+            !bytes.windows(utf16_needle.len()).any(|w| w == utf16_needle),
+            "saved bytes contain UTF-16LE temp dir"
+        );
+    };
+
+    let png_path =
+        std::env::temp_dir().join(format!("openskp_rs_667_tex_{}.png", std::process::id()));
+    std::fs::write(&png_path, fake_png_bytes()).unwrap();
+
+    let mut def_builder = create();
+    let def_mat = def_builder
+        .add_texture_material("DefaultMat", &png_path, None, None, None)
+        .unwrap();
+    def_builder
+        .add_face(
+            &square(10.0),
+            &FaceOptions {
+                material: Some(def_mat),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let def_model = parse(def_builder.to_bytes().unwrap());
+    assert_eq!(
+        def_model.materials[0].texture.as_ref().unwrap().filename,
+        png_path.to_string_lossy()
+    );
+
+    let src_path = temp_skp("tex_filenames_667");
+    {
+        let mut builder = create();
+        let m1 = builder
+            .add_texture_material_with_options(
+                "Concrete",
+                &png_path,
+                &TextureMaterialOptions {
+                    filename: Some("Polished Concrete Old.jpg".to_owned()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let m2 = builder
+            .add_texture_material_with_options(
+                "Nameless",
+                &png_path,
+                &TextureMaterialOptions {
+                    filename: Some(String::new()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        builder
+            .add_image(
+                &png_path,
+                20.0,
+                10.0,
+                &ImageOptions {
+                    filename: Some("Poster.png".to_owned()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        builder
+            .add_face(
+                &square(100.0),
+                &FaceOptions {
+                    material: Some(m1),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        builder
+            .add_face(
+                &[
+                    [200.0, 0.0, 0.0],
+                    [300.0, 0.0, 0.0],
+                    [300.0, 100.0, 0.0],
+                    [200.0, 100.0, 0.0],
+                ],
+                &FaceOptions {
+                    material: Some(m2),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        builder.save(&src_path).unwrap();
+    }
+    let orig = SkpFile::open(&src_path)
+        .unwrap()
+        .parse(&ParseOptions::default())
+        .unwrap();
+    let orig_names: std::collections::BTreeMap<_, _> = orig
+        .materials
+        .iter()
+        .map(|m| (m.name.clone(), m.texture.as_ref().unwrap().filename.clone()))
+        .collect();
+    assert_eq!(orig_names["__openskp_image_2"], "Poster.png");
+    assert_eq!(orig_names["Nameless"], "Nameless.png");
+
+    let mut edited = open_existing(&src_path).unwrap();
+    let saved_bytes = edited.builder.to_bytes().unwrap();
+    let _ = std::fs::remove_file(&src_path);
+    let _ = std::fs::remove_file(&png_path);
+
+    assert_no_temp_dir(&saved_bytes);
+    let rebuilt = parse(saved_bytes);
+    let rebuilt_names: std::collections::BTreeMap<_, _> = rebuilt
+        .materials
+        .iter()
+        .map(|m| (m.name.clone(), m.texture.as_ref().unwrap().filename.clone()))
+        .collect();
+    assert_eq!(rebuilt_names, orig_names);
+}

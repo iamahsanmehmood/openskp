@@ -389,5 +389,79 @@ namespace OpenSkp.Tests
             var grada = reparsed.Definitions.Values.Single(d => d.Name == "grada");
             Assert.Equal(11, grada.Faces.Count);
         }
+
+        [Fact]
+        public void PreservesTextureFilenamesIncludingEmptyAndNeverEmbedsTempFolder()
+        {
+            string tempDir = Path.GetTempPath().TrimEnd('\\', '/');
+            byte[] asciiNeedle = System.Text.Encoding.UTF8.GetBytes(tempDir);
+            byte[] utf16Needle = System.Text.Encoding.Unicode.GetBytes(tempDir);
+
+            static bool ContainsSubsequence(byte[] haystack, byte[] needle)
+            {
+                if (needle.Length == 0 || haystack.Length < needle.Length) return false;
+                for (int i = 0; i <= haystack.Length - needle.Length; i++)
+                {
+                    bool match = true;
+                    for (int j = 0; j < needle.Length; j++)
+                    {
+                        if (haystack[i + j] != needle[j]) { match = false; break; }
+                    }
+                    if (match) return true;
+                }
+                return false;
+            }
+
+            byte[] pngBytes = new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3, 4 };
+            var square = new (double, double, double)[] { (0, 0, 0), (100, 0, 0), (100, 100, 0), (0, 100, 0) };
+            string pngPath = Path.Combine(Path.GetTempPath(), "openskp_667_" + Guid.NewGuid() + ".png");
+            string srcPath = Path.Combine(Path.GetTempPath(), "openskp_667_src_" + Guid.NewGuid() + ".skp");
+            File.WriteAllBytes(pngPath, pngBytes);
+            try
+            {
+                var defBuilder = SkpCreate.NewFile();
+                int defMat = defBuilder.AddTextureMaterial("DefaultMat", pngPath);
+                defBuilder.AddFace(square, material: defMat);
+                var defModel = SkpFile.Parse(defBuilder.ToBytes());
+                Assert.Equal(pngPath, defModel.Materials[0].Texture!.Filename);
+
+                var srcBuilder = SkpCreate.NewFile();
+                int m1 = srcBuilder.AddTextureMaterial("Concrete", pngPath, filename: "Polished Concrete Old.jpg");
+                int m2 = srcBuilder.AddTextureMaterial("Nameless", pngPath, filename: "");
+                srcBuilder.AddImage(pngPath, 20.0, 10.0, filename: "Poster.png");
+                srcBuilder.AddFace(square, material: m1);
+                srcBuilder.AddFace(new (double, double, double)[] { (200, 0, 0), (300, 0, 0), (300, 100, 0), (200, 100, 0) }, material: m2);
+                srcBuilder.Save(srcPath);
+
+                var orig = SkpFile.Parse(File.ReadAllBytes(srcPath));
+                Assert.Equal("Poster.png", orig.Materials.Single(m => m.Name == "__openskp_image_2").Texture!.Filename);
+                Assert.Equal("Nameless.png", orig.Materials.Single(m => m.Name == "Nameless").Texture!.Filename);
+
+                var edited = SkpEdit.OpenExisting(srcPath);
+                byte[] savedBytes = edited.Builder.ToBytes();
+                Assert.False(ContainsSubsequence(savedBytes, asciiNeedle));
+                Assert.False(ContainsSubsequence(savedBytes, utf16Needle));
+
+                var rebuilt = SkpFile.Parse(savedBytes);
+                Assert.Equal(
+                    orig.Materials.ToDictionary(m => m.Name, m => m.Texture!.Filename),
+                    rebuilt.Materials.ToDictionary(m => m.Name, m => m.Texture!.Filename));
+
+                var capOrig = SkpFile.Open(FixturePath("capilla_quiroz_v17.skp"));
+                var capEdited = SkpEdit.OpenExisting(FixturePath("capilla_quiroz_v17.skp"));
+                byte[] capBytes = capEdited.Builder.ToBytes();
+                Assert.False(ContainsSubsequence(capBytes, asciiNeedle));
+                Assert.False(ContainsSubsequence(capBytes, utf16Needle));
+                var capRebuilt = SkpFile.Parse(capBytes);
+                Assert.Equal(
+                    capOrig.Materials.Where(m => m.Texture != null).ToDictionary(m => m.Name, m => m.Texture!.Filename),
+                    capRebuilt.Materials.Where(m => m.Texture != null).ToDictionary(m => m.Name, m => m.Texture!.Filename));
+            }
+            finally
+            {
+                if (File.Exists(pngPath)) File.Delete(pngPath);
+                if (File.Exists(srcPath)) File.Delete(srcPath);
+            }
+        }
     }
 }

@@ -513,5 +513,76 @@ void main() {
       expect(rebuilt.root.instances.length, orig.root.instances.length);
       expect(rebuilt.definitions.length, orig.definitions.length);
     }, timeout: const Timeout.factor(4));
+
+    test('preserves texture filenames (including empty) and embeds no temp folder', () {
+      bool containsBytes(Uint8List haystack, List<int> needle) {
+        if (needle.isEmpty || haystack.length < needle.length) return false;
+        for (var i = 0; i <= haystack.length - needle.length; i++) {
+          var ok = true;
+          for (var j = 0; j < needle.length; j++) {
+            if (haystack[i + j] != needle[j]) {
+              ok = false;
+              break;
+            }
+          }
+          if (ok) return true;
+        }
+        return false;
+      }
+
+      final tempRoot = Directory.systemTemp.path.replaceAll(RegExp(r'[/\\]+$'), '');
+      final asciiNeedle = tempRoot.codeUnits;
+      final utf16Needle = <int>[
+        for (final unit in tempRoot.codeUnits) ...[unit & 0xff, (unit >> 8) & 0xff],
+      ];
+
+      final tmpDir = Directory.systemTemp.createTempSync('openskp_edit_667_');
+      try {
+        final pngPath = '${tmpDir.path}/staged.png';
+        File(pngPath).writeAsBytesSync([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3, 4]);
+
+        final defBuilder = create();
+        final defMat = defBuilder.addTextureMaterial('DefaultMat', pngPath);
+        defBuilder.addFace(square, material: defMat);
+        final defModel = SkpFile.fromBuffer(defBuilder.toBytes()).parse();
+        expect(defModel.materials.single.texture!.filename, pngPath);
+
+        final srcBuilder = create();
+        final m1 = srcBuilder.addTextureMaterial(
+          'Concrete',
+          pngPath,
+          filename: 'Polished Concrete Old.jpg',
+        );
+        final m2 = srcBuilder.addTextureMaterial('Nameless', pngPath, filename: '');
+        srcBuilder.addImage(pngPath, 20.0, 10.0, filename: 'Poster.png');
+        srcBuilder.addFace(square, material: m1);
+        srcBuilder.addFace(
+          [(200.0, 0.0, 0.0), (300.0, 0.0, 0.0), (300.0, 100.0, 0.0), (200.0, 100.0, 0.0)],
+          material: m2,
+        );
+        final srcPath = saveToTempFile(srcBuilder, tmpDir);
+        final orig = SkpFile.open(srcPath).parse();
+        expect(
+          orig.materials.firstWhere((m) => m.name == '__openskp_image_2').texture!.filename,
+          'Poster.png',
+        );
+        expect(
+          orig.materials.firstWhere((m) => m.name == 'Nameless').texture!.filename,
+          'Nameless.png',
+        );
+
+        final edited = openExisting(srcPath);
+        final savedBytes = edited.builder.toBytes();
+        expect(containsBytes(savedBytes, asciiNeedle), isFalse);
+        expect(containsBytes(savedBytes, utf16Needle), isFalse);
+        final rebuilt = SkpFile.fromBuffer(savedBytes).parse();
+        expect(
+          {for (final m in rebuilt.materials) m.name: m.texture!.filename},
+          {for (final m in orig.materials) m.name: m.texture!.filename},
+        );
+      } finally {
+        tmpDir.deleteSync(recursive: true);
+      }
+    });
   });
 }

@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { openExisting } from '../src/edit';
+import { toTypeScriptCode } from '../src/codegen';
 import { create, SkpWriteError, Point3 } from '../src/create';
 import { parseSkp } from '../src/index';
 import { SkpModel, faceUvBasis, computeFaceUv } from '../src/model';
@@ -481,4 +483,61 @@ describe('Real-world fixtures (non-writer-authored)', () => {
     expect(rebuilt.root.instances.length).toBe(orig.root.instances.length);
     expect(rebuilt.definitions.size).toBe(orig.definitions.size);
   }, 30000);
+
+  it('preserves texture filenames (including empty) and writes no temp path in edit or codegen', () => {
+    const tmpDir = os.tmpdir().replace(/[/\\]+$/, '');
+    const assertNoTempDir = (bytes: Uint8Array) => {
+      const buf = Buffer.from(bytes);
+      expect(buf.indexOf(Buffer.from(tmpDir, 'utf8'))).toBe(-1);
+      expect(buf.indexOf(Buffer.from(tmpDir, 'utf16le'))).toBe(-1);
+    };
+
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 1, 2, 3]);
+    const srcBuilder = create();
+    const m1 = srcBuilder.addTextureMaterial('Concrete', png, 'Polished Concrete Old.jpg');
+    const m2 = srcBuilder.addTextureMaterial('Nameless', png, '');
+    srcBuilder.addImage(png, 20, 10, { texturePath: 'Poster.png' });
+    srcBuilder.addFace(SQUARE, { material: m1 });
+    srcBuilder.addFace(
+      [
+        [200, 0, 0],
+        [300, 0, 0],
+        [300, 100, 0],
+        [200, 100, 0],
+      ],
+      { material: m2 }
+    );
+    const srcPath = path.join(os.tmpdir(), `openskp_ts_667_${process.pid}.skp`);
+    fs.writeFileSync(srcPath, srcBuilder.toBytes());
+    try {
+      const orig = parseSkp(toBuffer(fs.readFileSync(srcPath)));
+      expect(orig.materials.find((m) => m.name === '__openskp_image_2')!.texture!.filename).toBe('Poster.png');
+      const origNamelessName = orig.materials.find((m) => m.name === 'Nameless')!.texture!.filename;
+      expect(origNamelessName).toBe('Nameless.png');
+
+      const { builder: edited } = openExisting(srcPath);
+      const savedBytes = edited.toBytes();
+      assertNoTempDir(savedBytes);
+      const rebuilt = parseSkp(toBuffer(savedBytes));
+      expect(rebuilt.materials.find((m) => m.name === 'Concrete')!.texture!.filename).toBe(
+        'Polished Concrete Old.jpg'
+      );
+      expect(rebuilt.materials.find((m) => m.name === 'Nameless')!.texture!.filename).toBe(origNamelessName);
+
+      // Also test when a material in the model has an empty filename string ("").
+      orig.materials.find((m) => m.name === 'Nameless')!.texture!.filename = '';
+      const code = toTypeScriptCode(orig);
+      const body = code.replace(/^import .*;\n/m, '').replace(/export function build/, 'function build');
+      const factory = new Function('create', 'atob', `${body}\nreturn build();`);
+      const regenBytes: Uint8Array = factory(create, atob);
+      assertNoTempDir(regenBytes);
+      const regen = parseSkp(toBuffer(regenBytes));
+      expect(regen.materials.find((m) => m.name === 'Concrete')!.texture!.filename).toBe(
+        'Polished Concrete Old.jpg'
+      );
+      expect(regen.materials.find((m) => m.name === 'Nameless')!.texture!.filename).toBe('Nameless.png');
+    } finally {
+      if (fs.existsSync(srcPath)) fs.unlinkSync(srcPath);
+    }
+  });
 });

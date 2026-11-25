@@ -591,10 +591,11 @@ impl Gen<'_> {
                     "None".to_owned()
                 };
                 self.push(format!(
-                    "        let result = builder.add_texture_material({}, &tex_path_{i}, Some({}), Some({}), {opacity});",
+                    "        let result = builder.add_texture_material_with_options({}, &tex_path_{i}, &TextureMaterialOptions {{ applied_height: Some({}), applied_width: Some({}), opacity: {opacity}, filename: Some({}.to_owned()) }});",
                     rust_string(&mat.name),
                     num(app_h),
-                    num(app_w)
+                    num(app_w),
+                    rust_string(&texture.filename)
                 ));
                 self.push(format!(
                     "        let _ = std::fs::remove_file(&tex_path_{i});"

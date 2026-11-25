@@ -558,3 +558,105 @@ class TestRealSketchUpOracle:
             dll.SUModelRelease(ctypes.byref(model))
         finally:
             dll.SUTerminate()
+
+
+class TestTextureFilenamePreservation:
+    @staticmethod
+    def _assert_no_temp_dir(data: bytes) -> None:
+        import tempfile
+
+        temp_dir = tempfile.gettempdir().rstrip("/\\")
+        assert temp_dir.encode("utf-8") not in data
+        assert temp_dir.encode("utf-16-le") not in data
+
+    @staticmethod
+    def _parse_bytes(tmp_path: pathlib.Path, name: str, data: bytes):
+        out = tmp_path / name
+        out.write_bytes(data)
+        return SkpFile.open(str(out)).parse()
+
+    def test_add_texture_material_and_add_image_filename_option(self, tmp_path):
+        png_path = tmp_path / "staged.png"
+        png_path.write_bytes(_make_test_png())
+
+        default_b = create()
+        m_default = default_b.add_texture_material("DefaultName", str(png_path))
+        default_b.add_face(SQUARE, material=m_default)
+        default_model = self._parse_bytes(tmp_path, "default.skp", default_b.to_bytes())
+        assert default_model.materials[0].texture.filename == str(png_path)
+
+        custom_b = create()
+        m_named = custom_b.add_texture_material(
+            "Concrete", str(png_path), filename="Polished Concrete Old.jpg"
+        )
+        m_nameless = custom_b.add_texture_material("Nameless", str(png_path), filename="")
+        custom_b.add_image(str(png_path), 20.0, 10.0, filename="Poster.png")
+        custom_b.add_face(SQUARE, material=m_named)
+        custom_b.add_face([(200.0, 0.0, 0.0), (300.0, 0.0, 0.0), (300.0, 100.0, 0.0)], material=m_nameless)
+        custom_bytes = custom_b.to_bytes()
+        self._assert_no_temp_dir(custom_bytes)
+        custom_model = self._parse_bytes(tmp_path, "custom.skp", custom_bytes)
+        by_name = {m.name: m.texture.filename for m in custom_model.materials}
+        assert by_name["Concrete"] == "Polished Concrete Old.jpg"
+        assert by_name["Nameless"] == "Nameless.png"
+        assert by_name["__openskp_image_2"] == "Poster.png"
+
+    def test_open_existing_and_codegen_preserve_texture_filenames_without_temp_path(self, tmp_path):
+        from openskp import to_python_code
+
+        png_path = tmp_path / "staged_input.png"
+        png_path.write_bytes(_make_test_png())
+
+        src_builder = create()
+        m1 = src_builder.add_texture_material(
+            "Concrete", str(png_path), filename="Polished Concrete Old.jpg"
+        )
+        m2 = src_builder.add_texture_material("UntitledTex", str(png_path), filename="")
+        src_builder.add_face(SQUARE, material=m1)
+        src_builder.add_face(
+            [(200.0, 0.0, 0.0), (300.0, 0.0, 0.0), (300.0, 100.0, 0.0), (200.0, 100.0, 0.0)],
+            material=m2,
+        )
+        src_path = tmp_path / "source_textures.skp"
+        src_builder.save(str(src_path))
+        orig = SkpFile.open(str(src_path)).parse()
+        orig_names = {m.name: m.texture.filename for m in orig.materials}
+        assert orig_names == {
+            "Concrete": "Polished Concrete Old.jpg",
+            "UntitledTex": "UntitledTex.png",
+        }
+
+        edited_builder, _, _ = edit.open_existing(str(src_path))
+        saved_path = tmp_path / "edited_saved.skp"
+        edited_builder.save(str(saved_path))
+        saved_bytes = saved_path.read_bytes()
+        self._assert_no_temp_dir(saved_bytes)
+        rebuilt = SkpFile.open(str(saved_path)).parse()
+        assert {m.name: m.texture.filename for m in rebuilt.materials} == orig_names
+
+        # Also exercise codegen when a parsed/in-memory material has no filename at all ("").
+        for m in orig.materials:
+            if m.name == "UntitledTex":
+                m.texture.filename = ""
+        code = to_python_code(orig)
+        assert "filename=''" in code
+        ns: dict = {}
+        exec(code, ns)
+        regen_bytes = ns["build"]()
+        self._assert_no_temp_dir(regen_bytes)
+        regen = self._parse_bytes(tmp_path, "regen.skp", regen_bytes)
+        assert {m.name: m.texture.filename for m in regen.materials} == orig_names
+
+        capilla = FIXTURES / "capilla_quiroz_v17.skp"
+        if capilla.exists():
+            cap_orig = SkpFile.open(str(capilla)).parse()
+            cap_builder, _, _ = edit.open_existing(str(capilla))
+            cap_bytes = cap_builder.to_bytes()
+            self._assert_no_temp_dir(cap_bytes)
+            cap_rebuilt = self._parse_bytes(tmp_path, "cap_rebuilt.skp", cap_bytes)
+            assert {
+                m.name: m.texture.filename for m in cap_rebuilt.materials if m.texture is not None
+            } == {
+                m.name: m.texture.filename for m in cap_orig.materials if m.texture is not None
+            }
+

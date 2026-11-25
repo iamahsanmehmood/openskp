@@ -16,6 +16,9 @@
 // isn't automated here; it was verified manually against 4 real fixtures (gondola_v20.skp,
 // SU_File.skp, Untitled.skp, capilla_quiroz_v17.skp) instead.
 
+#include <algorithm>
+#include <filesystem>
+#include <fstream>
 #include <gtest/gtest.h>
 
 #include <openskp/codegen.hpp>
@@ -73,8 +76,100 @@ TEST(Codegen, EmitsTexturedMaterialWithAppliedWidthAndOpacity) {
 
   std::string code = to_cpp_code(model);
 
-  EXPECT_NE(code.find("add_texture_material(\"Brick\", tex_path_0, 12, 24, 0.75)"),
+  EXPECT_NE(code.find("add_texture_material(\"Brick\", tex_path_0, 12, 24, 0.75, \"brick.png\")"),
             std::string::npos);
+}
+
+TEST(Codegen, EmitsOriginalAndEmptyTextureFilenamesWithoutTempPath) {
+  auto contains_bytes = [](const ByteBuffer& haystack, const std::vector<std::uint8_t>& needle) {
+    if (needle.empty() || haystack.size() < needle.size()) return false;
+    return std::search(haystack.begin(), haystack.end(), needle.begin(), needle.end()) !=
+           haystack.end();
+  };
+
+  std::string temp_dir = std::filesystem::temp_directory_path().string();
+  while (!temp_dir.empty() && (temp_dir.back() == '\\' || temp_dir.back() == '/')) {
+    temp_dir.pop_back();
+  }
+  std::vector<std::uint8_t> ascii_needle(temp_dir.begin(), temp_dir.end());
+  std::vector<std::uint8_t> utf16_needle;
+  for (unsigned char ch : temp_dir) {
+    utf16_needle.push_back(ch);
+    utf16_needle.push_back(0);
+  }
+
+  ByteBuffer png{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3, 4};
+  auto png_path = std::filesystem::temp_directory_path() / "openskp_cpp_codegen_667.png";
+  {
+    std::ofstream out(png_path, std::ios::binary);
+    out.write(reinterpret_cast<const char*>(png.data()), static_cast<std::streamsize>(png.size()));
+  }
+
+  auto src = create();
+  int m1 = src->add_texture_material("Concrete", png_path, std::nullopt, std::nullopt, std::nullopt,
+                                     "Polished Concrete Old.jpg");
+  int m2 =
+      src->add_texture_material("Nameless", png_path, std::nullopt, std::nullopt, std::nullopt, "");
+  FaceOptions f1;
+  f1.material = m1;
+  src->add_face({{0, 0, 0}, {10, 0, 0}, {10, 10, 0}, {0, 10, 0}}, f1);
+  FaceOptions f2;
+  f2.material = m2;
+  src->add_face({{20, 0, 0}, {30, 0, 0}, {30, 10, 0}, {20, 10, 0}}, f2);
+  SkpModel model = roundtrip(src);
+  for (auto& m : model.materials) {
+    if (m.name == "Nameless" && m.texture) m.texture->filename.clear();
+  }
+
+  std::string code = to_cpp_code(model);
+  EXPECT_NE(code.find("add_texture_material(\"Concrete\", tex_path_0, 1, 1, std::nullopt, "
+                      "\"Polished Concrete Old.jpg\")"),
+            std::string::npos);
+  EXPECT_NE(code.find("add_texture_material(\"Nameless\", tex_path_1, 1, 1, std::nullopt, \"\")"),
+            std::string::npos);
+
+  // Execute the generated add_texture_material calls with staged temp files and check output bytes.
+  auto extract_filename_arg = [&](const std::string& mat_name) -> std::optional<std::string> {
+    std::string prefix = "add_texture_material(\"" + mat_name + "\", ";
+    auto pos = code.find(prefix);
+    if (pos == std::string::npos) return std::nullopt;
+    auto close = code.find(");", pos);
+    if (close == std::string::npos) return std::nullopt;
+    std::string call = code.substr(pos + prefix.size(), close - (pos + prefix.size()));
+    int commas = 0;
+    for (char ch : call) {
+      if (ch == ',') ++commas;
+    }
+    if (commas < 4) return std::nullopt;  // no 6th filename argument emitted
+    auto last_quote = call.rfind('"');
+    if (last_quote == std::string::npos || last_quote == 0) return std::nullopt;
+    auto open_quote = call.rfind('"', last_quote - 1);
+    if (open_quote == std::string::npos) return std::nullopt;
+    return call.substr(open_quote + 1, last_quote - open_quote - 1);
+  };
+
+  auto fn1 = extract_filename_arg("Concrete");
+  auto fn2 = extract_filename_arg("Nameless");
+  ASSERT_TRUE(fn1.has_value());
+  ASSERT_TRUE(fn2.has_value());
+  auto regen_builder = create();
+  int rm1 = regen_builder->add_texture_material("Concrete", png_path, 1.0, 1.0, std::nullopt, *fn1);
+  int rm2 = regen_builder->add_texture_material("Nameless", png_path, 1.0, 1.0, std::nullopt, *fn2);
+  std::filesystem::remove(png_path);
+  FaceOptions rf1;
+  rf1.material = rm1;
+  regen_builder->add_face({{0, 0, 0}, {10, 0, 0}, {10, 10, 0}, {0, 10, 0}}, rf1);
+  FaceOptions rf2;
+  rf2.material = rm2;
+  regen_builder->add_face({{20, 0, 0}, {30, 0, 0}, {30, 10, 0}, {20, 10, 0}}, rf2);
+  ByteBuffer regen_bytes = regen_builder->to_bytes();
+
+  EXPECT_FALSE(contains_bytes(regen_bytes, ascii_needle));
+  EXPECT_FALSE(contains_bytes(regen_bytes, utf16_needle));
+  SkpModel regen = SkpFile::from_buffer(regen_bytes).parse();
+  ASSERT_EQ(regen.materials.size(), 2u);
+  EXPECT_EQ(regen.materials[0].texture->filename, "Polished Concrete Old.jpg");
+  EXPECT_EQ(regen.materials[1].texture->filename, "Nameless.png");
 }
 
 TEST(Codegen, ReconstructsFaceHoles) {

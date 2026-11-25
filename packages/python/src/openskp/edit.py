@@ -198,6 +198,7 @@ def _replay_materials(builder: SkpBuilder, model: SkpModel, warnings: List[str])
                     mat.name, tmp_path,
                     applied_width=mat.texture.width or 1.0,
                     applied_height=mat.texture.height or 1.0,
+                    filename=mat.texture.filename or "",
                 )
             finally:
                 os.unlink(tmp_path)
