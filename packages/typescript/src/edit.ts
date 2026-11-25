@@ -223,7 +223,7 @@ function replayMaterials(builder: SkpBuilder, model: SkpModel, warnings: string[
       // This happens to match addTextureMaterial's own default too, but
       // is kept explicit here since it's a hard requirement of this call
       // site specifically, not just a safe default.
-      slot = builder.addTextureMaterial(mat.name, mat.texture.data, mat.texture.filename || 'texture', 1.0);
+      slot = builder.addTextureMaterial(mat.name, mat.texture.data, mat.texture.filename, 1.0);
       if (mat.colorized) {
         warnings.push(`material ${JSON.stringify(mat.name)}: colorized tint not reproduced (base texture only)`);
       }

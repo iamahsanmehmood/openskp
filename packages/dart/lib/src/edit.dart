@@ -171,7 +171,12 @@ Map<Material, int> _replayMaterials(SkpBuilder builder, SkpModel model, List<Str
         // This happens to match addTextureMaterial's own default too, but
         // is kept explicit here since it's a hard requirement of this
         // call site specifically, not just a safe default.
-        slot = builder.addTextureMaterial(mat.name, tmpFile.path, appliedHeight: 1.0);
+        slot = builder.addTextureMaterial(
+          mat.name,
+          tmpFile.path,
+          appliedHeight: 1.0,
+          filename: tex.filename,
+        );
       } finally {
         tmpDir.deleteSync(recursive: true);
       }

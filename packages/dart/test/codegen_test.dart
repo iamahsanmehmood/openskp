@@ -225,6 +225,92 @@ void main() {
         if (f.existsSync()) f.deleteSync();
       }
     });
+
+    test('preserves original and empty texture filenames without embedding temp folder', () {
+      bool containsBytes(List<int> haystack, List<int> needle) {
+        if (needle.isEmpty || haystack.length < needle.length) return false;
+        for (var i = 0; i <= haystack.length - needle.length; i++) {
+          var ok = true;
+          for (var j = 0; j < needle.length; j++) {
+            if (haystack[i + j] != needle[j]) {
+              ok = false;
+              break;
+            }
+          }
+          if (ok) return true;
+        }
+        return false;
+      }
+
+      final tempRoot = Directory.systemTemp.path.replaceAll(RegExp(r'[/\\]+$'), '');
+      final asciiNeedle = tempRoot.codeUnits;
+      final utf16Needle = <int>[
+        for (final unit in tempRoot.codeUnits) ...[unit & 0xff, (unit >> 8) & 0xff],
+      ];
+
+      final tmpDir = Directory.systemTemp.createTempSync('openskp_codegen_667_');
+      final pngPath = '${tmpDir.path}${Platform.pathSeparator}staged.png';
+      File(pngPath).writeAsBytesSync(makeFakePng());
+      final b = create();
+      final m1 = b.addTextureMaterial(
+        'Concrete',
+        pngPath,
+        filename: 'Polished Concrete Old.jpg',
+      );
+      final m2 = b.addTextureMaterial('Nameless', pngPath, filename: '');
+      b.addFace(
+        [(0.0, 0.0, 0.0), (100.0, 0.0, 0.0), (100.0, 100.0, 0.0), (0.0, 100.0, 0.0)],
+        material: m1,
+      );
+      b.addFace(
+        [(200.0, 0.0, 0.0), (300.0, 0.0, 0.0), (300.0, 100.0, 0.0), (200.0, 100.0, 0.0)],
+        material: m2,
+      );
+      final original = SkpFile.fromBuffer(Uint8List.fromList(b.toBytes())).parse();
+      final idx = original.materials.indexWhere((m) => m.name == 'Nameless');
+      final oldMat = original.materials[idx];
+      final replaced = Material(
+        name: oldMat.name,
+        color: oldMat.color,
+        transparency: oldMat.transparency,
+        id: oldMat.id,
+        colorized: oldMat.colorized,
+        colorizeType: oldMat.colorizeType,
+        texture: Texture(
+          filename: '',
+          width: oldMat.texture!.width,
+          height: oldMat.texture!.height,
+          data: oldMat.texture!.data,
+        ),
+      );
+      original.materials[idx] = replaced;
+      if (oldMat.id != null) {
+        original.materialsById[oldMat.id!] = replaced;
+      }
+      final code = toDartCode(original);
+      expect(code, contains("filename: 'Polished Concrete Old.jpg'"));
+      expect(code, contains("filename: ''"));
+
+      final tmpOut = '$packageRoot/.tmp_codegen_667_${DateTime.now().microsecondsSinceEpoch}.skp';
+      try {
+        final regenBytes = runGeneratedCode(code, tmpOut);
+        expect(containsBytes(regenBytes, asciiNeedle), isFalse);
+        expect(containsBytes(regenBytes, utf16Needle), isFalse);
+        final regen = SkpFile.fromBuffer(Uint8List.fromList(regenBytes)).parse();
+        expect(
+          regen.materials.firstWhere((m) => m.name == 'Concrete').texture!.filename,
+          'Polished Concrete Old.jpg',
+        );
+        expect(
+          regen.materials.firstWhere((m) => m.name == 'Nameless').texture!.filename,
+          'Nameless.png',
+        );
+      } finally {
+        tmpDir.deleteSync(recursive: true);
+        final f = File(tmpOut);
+        if (f.existsSync()) f.deleteSync();
+      }
+    });
   });
 
   // single_material_v17.skp is deliberately excluded: it declares one

@@ -274,11 +274,15 @@ std::string to_cpp_code(const SkpModel& model) {
              cpp_string(suffix) + ");");
         double app_h = (mat.texture && mat.texture->height > 1e-9) ? mat.texture->height : 1.0;
         double app_w = (mat.texture && mat.texture->width > 1e-9) ? mat.texture->width : 1.0;
+        std::string stored_name = mat.texture ? mat.texture->filename : std::string();
         std::ostringstream extra_args_ss;
         extra_args_ss << ", " << round4(app_h) << ", " << round4(app_w);
         if (mat.transparency < 1.0 - 1e-6) {
           extra_args_ss << ", " << round4(mat.transparency);
+        } else {
+          extra_args_ss << ", std::nullopt";
         }
+        extra_args_ss << ", " << cpp_string(stored_name);
         push("    " + var_name + " = builder->add_texture_material(" + cpp_string(mat.name) +
              ", tex_path_" + std::to_string(i) + extra_args_ss.str() + ");");
         push("    std::remove(tex_path_" + std::to_string(i) + ".c_str());");

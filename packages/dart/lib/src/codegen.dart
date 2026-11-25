@@ -181,7 +181,7 @@ String toDartCode(SkpModel model) {
       push("    '$b64',");
       push('  );');
       push(
-          "  final $varName = builder.addTextureMaterial(${_dartString(mat.name)}, _writeTempFile(_texBytes$i, ${_dartString(_extOf(tex.filename))}), appliedHeight: ${round(appH)}, appliedWidth: ${round(appW)}$optOpacity);");
+          "  final $varName = builder.addTextureMaterial(${_dartString(mat.name)}, _writeTempFile(_texBytes$i, ${_dartString(_extOf(tex.filename))}), appliedHeight: ${round(appH)}, appliedWidth: ${round(appW)}$optOpacity, filename: ${_dartString(tex.filename)});");
     } else {
       final c = mat.color;
       push(

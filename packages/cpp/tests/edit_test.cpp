@@ -5,6 +5,9 @@
 // against a real SketchUp-SDK-authored fixture (capilla_quiroz_v17.skp) already used elsewhere in
 // this test suite.
 
+#include <algorithm>
+#include <filesystem>
+#include <fstream>
 #include <gtest/gtest.h>
 
 #include <openskp/openskp.hpp>
@@ -343,6 +346,81 @@ TEST(EditTest, SkipsDefinitionsWhoseOnlyGuidesCannotBeReplayed) {
   SkpModel rebuilt = SkpFile::from_buffer(result.builder->to_bytes()).parse();
   EXPECT_EQ(rebuilt.root().faces.size(), 1u);
   EXPECT_TRUE(rebuilt.definitions.empty());
+}
+
+TEST(EditTest, PreservesTextureFilenamesIncludingEmptyWithoutEmbeddingTempPath) {
+  auto contains_bytes = [](const ByteBuffer& haystack, const std::vector<std::uint8_t>& needle) {
+    if (needle.empty() || haystack.size() < needle.size()) return false;
+    return std::search(haystack.begin(), haystack.end(), needle.begin(), needle.end()) !=
+           haystack.end();
+  };
+
+  std::string temp_dir = std::filesystem::temp_directory_path().string();
+  while (!temp_dir.empty() && (temp_dir.back() == '\\' || temp_dir.back() == '/')) {
+    temp_dir.pop_back();
+  }
+  std::vector<std::uint8_t> ascii_needle(temp_dir.begin(), temp_dir.end());
+  std::vector<std::uint8_t> utf16_needle;
+  for (unsigned char ch : temp_dir) {
+    utf16_needle.push_back(ch);
+    utf16_needle.push_back(0);
+  }
+
+  auto png_path = std::filesystem::temp_directory_path() / "openskp_cpp_667_tex.png";
+  {
+    std::ofstream out(png_path, std::ios::binary);
+    auto png = fake_png_bytes();
+    out.write(reinterpret_cast<const char*>(png.data()), static_cast<std::streamsize>(png.size()));
+  }
+
+  auto def_builder = create();
+  int def_mat = def_builder->add_texture_material("DefaultMat", png_path);
+  FaceOptions def_fopts;
+  def_fopts.material = def_mat;
+  def_builder->add_face({{0, 0, 0}, {10, 0, 0}, {10, 10, 0}, {0, 10, 0}}, def_fopts);
+  SkpModel def_model = SkpFile::from_buffer(def_builder->to_bytes()).parse();
+  ASSERT_TRUE(def_model.materials[0].texture.has_value());
+  EXPECT_EQ(def_model.materials[0].texture->filename, png_path.string());
+
+  auto src_path = temp_skp("tex_filenames_667");
+  {
+    auto builder = create();
+    int m1 = builder->add_texture_material("Concrete", png_path, std::nullopt, std::nullopt,
+                                           std::nullopt, "Polished Concrete Old.jpg");
+    int m2 = builder->add_texture_material("Nameless", png_path, std::nullopt, std::nullopt,
+                                           std::nullopt, "");
+    ImageOptions img_opts;
+    img_opts.filename = "Poster.png";
+    builder->add_image(png_path, 20.0, 10.0, img_opts);
+    FaceOptions f1;
+    f1.material = m1;
+    builder->add_face({{0, 0, 0}, {100, 0, 0}, {100, 100, 0}, {0, 100, 0}}, f1);
+    FaceOptions f2;
+    f2.material = m2;
+    builder->add_face({{200, 0, 0}, {300, 0, 0}, {300, 100, 0}, {200, 100, 0}}, f2);
+    builder->save(src_path);
+  }
+  SkpModel orig = SkpFile::open(src_path).parse();
+  std::map<std::string, std::string> orig_by_name;
+  for (const auto& m : orig.materials) {
+    if (m.texture) orig_by_name[m.name] = m.texture->filename;
+  }
+  EXPECT_EQ(orig_by_name["__openskp_image_2"], "Poster.png");
+  EXPECT_EQ(orig_by_name["Nameless"], "Nameless.png");
+
+  OpenExistingResult edited = open_existing(src_path);
+  ByteBuffer saved_bytes = edited.builder->to_bytes();
+  std::filesystem::remove(src_path);
+  std::filesystem::remove(png_path);
+
+  EXPECT_FALSE(contains_bytes(saved_bytes, ascii_needle));
+  EXPECT_FALSE(contains_bytes(saved_bytes, utf16_needle));
+  SkpModel rebuilt = SkpFile::from_buffer(saved_bytes).parse();
+  std::map<std::string, std::string> by_name;
+  for (const auto& m : rebuilt.materials) {
+    if (m.texture) by_name[m.name] = m.texture->filename;
+  }
+  EXPECT_EQ(by_name, orig_by_name);
 }
 
 }  // namespace

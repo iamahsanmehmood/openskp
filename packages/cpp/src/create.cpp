@@ -2513,12 +2513,35 @@ int SkpBuilder::add_texture_material(const std::string& name,
                                      const std::filesystem::path& image_path,
                                      std::optional<double> applied_height,
                                      std::optional<double> applied_width,
-                                     std::optional<double> opacity) {
+                                     std::optional<double> opacity,
+                                     std::optional<std::string> filename) {
+  if (impl_->geometry_writer)
+    throw SkpWriteError("add_texture_material must be called before any add_face calls");
+  if (impl_->layer_writer)
+    throw SkpWriteError("add_texture_material must be called before any add_layer calls");
+  if (impl_->definition_writer) {
+    throw SkpWriteError(
+        "add_texture_material must be called before any add_component_definition calls");
+  }
+  auto it = materials_by_name.find(name);
+  if (it != materials_by_name.end()) return it->second;
+  std::ifstream f(image_path, std::ios::binary);
+  if (!f) throw SkpWriteError("cannot open texture image file: " + image_path.string());
+  ByteBuffer image_bytes((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+  int subtype = detail::detect_image_subtype(image_bytes);
   TextureMaterialOptions options;
   options.width = applied_width.value_or(1.0);
   options.height = applied_height.value_or(1.0);
   if (opacity) options.transparency = *opacity;
-  return add_texture_material(name, image_path, options);
+  const std::string stored = filename.has_value() ? *filename : image_path.string();
+  int slot =
+      impl_->material_writer.write_textured_material(name, image_bytes, stored, subtype, options);
+  materials_by_name[name] = slot;
+  const double applied_w = options.width > 0.0 ? options.width : 1.0;
+  const double applied_h = options.height.value_or(1.0);
+  impl_->applied_sizes[slot] = {applied_w, applied_h};
+  impl_->material_count += 1;
+  return slot;
 }
 
 int SkpBuilder::add_texture_material(const std::string& name,
@@ -2687,7 +2710,8 @@ void SkpBuilder::add_image(const std::filesystem::path& image_path, double width
                            const ImageOptions& options) {
   detail::check_layer_handle(*this, options.layer);
   int mat =
-      add_texture_material("__openskp_image_" + std::to_string(impl_->material_count), image_path);
+      add_texture_material("__openskp_image_" + std::to_string(impl_->material_count), image_path,
+                           std::nullopt, std::nullopt, std::nullopt, options.filename);
   auto& image_def = add_component_definition("Image" + std::to_string(impl_->definition_count));
   // Standard (0,0)-at-bottom-left, V increasing upward - no vertical flip. Every other UV-related
   // fact in this file is calibrated against real SketchUp output; this one specific sense is NOT

@@ -91,10 +91,18 @@ namespace OpenSkp
                     double appH = mat.Texture.Height > 1e-9 ? mat.Texture.Height : 1.0;
                     double appW = mat.Texture.Width > 1e-9 ? mat.Texture.Width : 1.0;
                     string optOpacity = mat.Transparency < 1.0 - 1e-6 ? $", opacity: {Round(mat.Transparency)}" : "";
+                    string storedName = mat.Texture.Filename ?? "";
                     Push($"        var _texPath{i} = System.IO.Path.Combine(System.IO.Path.GetTempPath(), Guid.NewGuid() + \"{ext}\");");
                     Push($"        System.IO.File.WriteAllBytes(_texPath{i}, Convert.FromBase64String(\"{b64}\"));");
-                    Push("        int " + varName + $" = builder.AddTextureMaterial({CsString(mat.Name)}, _texPath{i}, appliedHeight: {Round(appH)}, appliedWidth: {Round(appW)}{optOpacity});");
-                    Push($"        System.IO.File.Delete(_texPath{i});");
+                    Push("        int " + varName + ";");
+                    Push("        try");
+                    Push("        {");
+                    Push("            " + varName + $" = builder.AddTextureMaterial({CsString(mat.Name)}, _texPath{i}, appliedHeight: {Round(appH)}, appliedWidth: {Round(appW)}{optOpacity}, filename: {CsString(storedName)});");
+                    Push("        }");
+                    Push("        finally");
+                    Push("        {");
+                    Push($"            System.IO.File.Delete(_texPath{i});");
+                    Push("        }");
                 }
                 else
                 {

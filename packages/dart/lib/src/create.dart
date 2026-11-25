@@ -2873,7 +2873,7 @@ class SkpBuilder implements GeometryHost {
   /// matters even for `addFace`'s `frontUv`/`backUv` pinning (a positioned
   /// mapping still divides by it).
   int addTextureMaterial(String name, String imagePath,
-      {double? appliedHeight, double? appliedWidth, double? opacity}) {
+      {double? appliedHeight, double? appliedWidth, double? opacity, String? filename}) {
     if (_geometryWriter != null) {
       throw SkpWriteError('addTextureMaterial must be called before any addFace calls');
     }
@@ -2886,7 +2886,8 @@ class SkpBuilder implements GeometryHost {
     if (materialsByName.containsKey(name)) return materialsByName[name]!;
     final imageBytes = File(imagePath).readAsBytesSync();
     final subtype = _detectImageSubtype(imageBytes);
-    final slot = _materialWriter.writeTexturedMaterial(name, imageBytes, imagePath, subtype,
+    final slot = _materialWriter.writeTexturedMaterial(
+        name, imageBytes, filename ?? imagePath, subtype,
         appliedHeight: appliedHeight, appliedWidth: appliedWidth, opacity: opacity);
     materialsByName[name] = slot;
     _materialCount++;
@@ -3219,9 +3220,10 @@ class SkpBuilder implements GeometryHost {
     Rotation? rotation,
     int? layer,
     bool hidden = false,
+    String? filename,
   }) {
     _checkLayerHandle(layer);
-    final mat = addTextureMaterial('__openskp_image_$_materialCount', imagePath);
+    final mat = addTextureMaterial('__openskp_image_$_materialCount', imagePath, filename: filename);
     late final ComponentDefinitionBuilder imageDef;
     imageDef = addComponentDefinition('Image$_definitionCount', (def) {
       // Standard (0,0)-at-bottom-left, V increasing upward - no vertical
