@@ -393,6 +393,26 @@ def test_definition_flags_and_explicit_guid(tmp_path):
 
 
 
+
+def test_non_finite_coordinates_are_rejected():
+    square = [(0, 0, 0), (10, 0, 0), (10, 10, 0), (0, 10, 0)]
+    with pytest.raises(SkpWriteError) as error:
+        create_vff().add_face([(0, 0, 0), (math.nan, 0, 0), (1, 1, 0)])
+    assert "coplanar" not in str(error.value).lower()
+
+    builder = create_vff()
+    with builder.add_component_definition("D") as definition:
+        definition.add_face(square)
+    with pytest.raises(SkpWriteError):
+        builder.add_instance(definition, translation=(math.inf, 0, 0))
+    with pytest.raises(SkpWriteError):
+        builder.add_instance(
+            definition,
+            matrix3x3=((math.nan, 0, 0), (0, 1, 0), (0, 0, 1)),
+        )
+    with pytest.raises(SkpWriteError):
+        builder.add_instance(definition, rotation=((0, 0, math.inf), 0.5))
+
 def test_unclosed_definitions_and_groups_raise():
     square = [(0, 0, 0), (10, 0, 0), (10, 10, 0), (0, 10, 0)]
 

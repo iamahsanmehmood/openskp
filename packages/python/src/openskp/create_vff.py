@@ -34,6 +34,7 @@ empty-document boilerplate, nothing authored by this project.
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple, Union
 
@@ -130,10 +131,24 @@ def _matrix13(
     rotation: Optional[Rotation],
 ) -> List[float]:
     """A 13-value placement matrix: 3x3 row-major, translation, scale 1."""
+    if rotation is not None:
+        axis, angle = rotation
+        if not all(math.isfinite(float(value)) for value in axis) or not math.isfinite(
+            float(angle)
+        ):
+            raise SkpWriteError("rotation axis and angle must contain only finite numbers")
     matrix = _resolve_matrix3x3(matrix3x3, rotation)
     if matrix is None:
         matrix = (1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
+    try:
+        finite_matrix = all(math.isfinite(float(value)) for value in matrix)
+    except (TypeError, ValueError) as exc:
+        raise SkpWriteError("matrix3x3 must be nine finite numbers") from exc
+    if not finite_matrix:
+        raise SkpWriteError("matrix3x3 must contain only finite numbers")
     tx, ty, tz = (float(c) for c in translation)
+    if not all(math.isfinite(value) for value in (tx, ty, tz)):
+        raise SkpWriteError("translation must contain only finite numbers")
     return [float(c) for c in matrix] + [tx, ty, tz, 1.0]
 
 
@@ -142,7 +157,12 @@ def _points(points: Sequence[Sequence[float]], label: str) -> List[Point3]:
     for point in points:
         if len(point) != 3:
             raise SkpWriteError(f"{label} points must be (x, y, z) triples")
-        out.append((float(point[0]), float(point[1]), float(point[2])))
+        coordinates = (float(point[0]), float(point[1]), float(point[2]))
+        if not all(math.isfinite(value) for value in coordinates):
+            raise SkpWriteError(
+                f"{label} point coordinate must be finite, got {coordinates!r}"
+            )
+        out.append(coordinates)
     return out
 
 
