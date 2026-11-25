@@ -1,24 +1,53 @@
 <div align="center">
 
-<img src="assets/logo.png" width="400" Height="400" alt="OpenSKP logo"/>
+<img src="assets/logo.png" width="150" alt="OpenSKP logo"/>
 
-### The Open-Source SketchUp File Toolkit
+# OpenSKP
 
-**Parse, write, and convert `.skp` files natively in five languages. No SDK. No license. Just code.**
+**Read, write and convert SketchUp `.skp` files. No SketchUp, no SDK, no license key.**
 
-### 🏠 [openskp.com](https://openskp.com) · 🌐 [Try the Live Web Viewer (Drag-and-Drop)](https://iamahsanmehmood.github.io/openskp/) · 📖 [Browse the Docs Site](https://iamahsanmehmood.github.io/openskp/docs/)
+Python · TypeScript · .NET · Dart · C++ · Rust
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![PyPI](https://img.shields.io/pypi/v/openskp.svg?logo=pypi&logoColor=white&label=pypi)](https://pypi.org/project/openskp/)
 [![npm](https://img.shields.io/npm/v/openskp.svg?logo=npm&logoColor=white)](https://www.npmjs.com/package/openskp)
 [![NuGet](https://img.shields.io/nuget/v/OpenSkp.svg?logo=nuget&logoColor=white)](https://www.nuget.org/packages/OpenSkp)
 [![Pub](https://img.shields.io/pub/v/openskp.svg?logo=dart&logoColor=white&label=pub.dev)](https://pub.dev/packages/openskp)
 [![C++](https://img.shields.io/github/v/release/iamahsanmehmood/openskp?filter=cpp-v*&logo=cplusplus&logoColor=white&label=cpp)](https://github.com/iamahsanmehmood/openskp/releases?q=cpp-)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+<br>
+[![PyPI downloads](https://static.pepy.tech/badge/openskp/month)](https://pepy.tech/projects/openskp)
+[![npm downloads](https://img.shields.io/npm/dm/openskp.svg?logo=npm&logoColor=white)](https://www.npmjs.com/package/openskp)
+[![Contributors](https://img.shields.io/github/contributors/iamahsanmehmood/openskp.svg)](https://github.com/iamahsanmehmood/openskp/graphs/contributors)
 [![GitHub Stars](https://img.shields.io/github/stars/iamahsanmehmood/openskp?style=social)](https://github.com/iamahsanmehmood/openskp)
 
----
+### [Try it in your browser](https://iamahsanmehmood.github.io/openskp/) · [Documentation](https://iamahsanmehmood.github.io/openskp/docs/) · [openskp.com](https://openskp.com) · [Discussions](https://github.com/iamahsanmehmood/openskp/discussions)
 
-*Open-source SketchUp binary file parser, writer, and converter for Python, TypeScript, .NET, Dart, and C++*
+<img src="assets/demo.gif" width="760" alt="A house model read from a .skp file, turning around"/>
+
+<sub>[modern_house.skp](examples/web-viewer/samples/modern_house.skp): written with [a Python script](examples/web-viewer/samples/make_modern_house.py), read and converted to GLB by OpenSKP, without SketchUp.</sub>
+
+</div>
+
+```bash
+pip install openskp
+```
+
+```python
+from openskp import SkpFile
+from openskp.export import glb
+
+skp = SkpFile.open("house.skp")
+model = skp.parse()                  # layers, components, faces, materials, scenes ...
+glb.export(skp, "house.glb")         # ... or OBJ, STL, PLY, DXF, IFC4 and JSON
+```
+
+The same in [TypeScript](#-typescript--javascript), [.NET](#-net--c), [Dart](#-dart--flutter), [C++](#%EF%B8%8F-c17--cmake) and [Rust](packages/rust/README.md).
+
+<div align="center">
+
+**⭐ If OpenSKP is useful to you, please [give it a star](https://github.com/iamahsanmehmood/openskp). It helps others find it.**
+
+**Want to help?** Start with a [good first issue](https://github.com/iamahsanmehmood/openskp/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22), or ask in [Discussions](https://github.com/iamahsanmehmood/openskp/discussions).
 
 [Quick Start](#-quick-start) · [Features](#-features) · [Built by AI](#-built-by-ai-too) · [Featured](#-featured) · [Used in Production](#-used-in-production) · [Built with OpenSKP](#-built-with-openskp) · [Documentation](#-documentation) · [Contributing](#-contributing)
 
@@ -28,15 +57,14 @@
 
 ## 🌟 What is OpenSKP?
 
-OpenSKP is an open-source, cross-platform toolkit for SketchUp (`.skp`) binary files — built entirely through reverse engineering, with no SketchUp application or proprietary SDK required at any point.
+OpenSKP is an open-source toolkit for SketchUp (`.skp`) files, built entirely through reverse engineering. Each language has its own native implementation, not a binding around a shared core.
 
-**Reading** is available in **five languages** — Python, TypeScript, .NET, Dart, and C++ — parsing both the modern **VFF container** (2021+) and the classic **MFC `CArchive`** container (SketchUp 4–2020; see [version support](docs/LANGUAGE_PARITY.md#4-real-sketchup-file-version-support)) into full programmatic access: geometry, materials, components, layers, and more.
+- **Read** SketchUp 2021+ files and the classic ones from SketchUp 4 to 2020 ([known exceptions](docs/LANGUAGE_PARITY.md#4-real-sketchup-file-version-support)): geometry, materials and textures, components, tags, scenes, dimensions and attributes.
+- **Write** real, editable models from scratch, or extend an existing file with `open_existing()`. Files are saved in the SketchUp 2017 format. See [Write capabilities](docs/DEVELOPER_GUIDE.md#write-capabilities) and [how each writer is checked](docs/LANGUAGE_PARITY.md#writer-validation).
+- **Convert** to GLB, OBJ, STL, PLY, DXF, IFC4 and JSON without a CAD or BIM SDK; also to and from Fragments (`.frag`). See [Export capabilities](docs/DEVELOPER_GUIDE.md#export-capabilities).
+- **Generate code** that rebuilds a model, for example as a start for an AI coding agent or to compare two models as text. See [Generating code from a file](docs/DEVELOPER_GUIDE.md#generating-code-from-a-file).
 
-**Writing** is available in **all five languages**: a from-scratch legacy-format writer (`openskp.create()` / `create()` / `SkpCreate.NewFile()` / `openskp::create()` — see the [Quick Start](#-quick-start) below for the exact call per language) that produces real, editable geometry — materials and textures, layers, nested component definitions and groups, circular/arc curves, freeform polylines, faces with holes cut out — plus an editor (`openskp.open_existing()` / `openExisting()` / `SkpEdit.OpenExisting()` / `openskp::open_existing()`) that loads a file that already exists and extends it. Python's writer is validated against SketchUp's C library (and C++ independently via `check_native_skp.py`), while TypeScript, .NET, and Dart are checked byte-for-byte against Python in CI (and Rust against C++) — see [Writer validation](docs/LANGUAGE_PARITY.md#writer-validation) for how each port is checked and the [feature parity table](docs/LANGUAGE_PARITY.md#2-feature-matrix) for per-port differences (for example, writing scenes is Python-only today). See [Write capabilities](docs/DEVELOPER_GUIDE.md#write-capabilities) in the Developer Guide for the full API and naming convention per language.
-
-**Generating code** turns a parsed file into a source-code transcript instead of an opaque binary: `openskp.to_python_code()` / `toTypeScriptCode()` / `Codegen.ToCSharpCode()` / `toDartCode()` / `to_cpp_code()` walks a model and emits human-readable, re-runnable source that calls the same language's own writer API to rebuild an equivalent file — materials (including textures with explicit UV pins), layers, nested definitions in dependency order, faces with holes, and instance-level paint and names. Useful for handing a real model to an AI coding agent as editable starting code, or getting a diffable, reviewable text representation of a `.skp` file. See [Generating code from a file](docs/DEVELOPER_GUIDE.md#generating-code-from-a-file).
-
-**Converting** puts reading and writing together: OpenSKP is a genuine **SketchUp file converter**, not just a parser with an export bolt-on. Every one of the five languages natively converts a `.skp` file to **7 formats** — glTF (GLB), Wavefront OBJ/MTL, STL, PLY, DXF 3D (AutoCAD), IFC4 (BIM), and JSON — with no third-party CAD/BIM SDK involved, and the DXF converter specifically verified against real desktop AutoCAD, not just lenient readers. Converting `.skp` *into* other formats is fully shipped today; converting *other* formats into `.skp` (glTF/IFC/OBJ → SketchUp) is a planned future direction built on the now-mature writer, not yet under way.
+Python, TypeScript, .NET, Dart and C++ are published packages; Rust is on `main` and not on crates.io yet. Not every feature is in every language: see the [feature table](#-feature-support-by-language).
 
 > [!IMPORTANT]
 > This project was built by reverse engineering a proprietary binary format. It is not affiliated with or endorsed by Trimble Inc. or SketchUp.
@@ -169,8 +197,8 @@ Trimble SDK, no SketchUp install:
 
 | Addon | Status | Repo |
 |:------|:-------|:-----|
-| **FreeCAD** | Import + export, real B-rep geometry (not a triangulated mesh). Materials/layers not yet carried over. | [freecad-openskp](https://github.com/iamahsanmehmood/freecad-openskp) |
-| **Blender** | Import + export, collection-instancing architecture (a component placed 1,000 times costs one mesh, not 1,000). Materials/layers not yet carried over. | [blender-openskp](https://github.com/iamahsanmehmood/blender-openskp) · [Blender Extensions](https://extensions.blender.org/add-ons/openskp-import-export/) |
+| **FreeCAD** | Import + export, real B-rep geometry (not a triangulated mesh), with the component hierarchy, colours and tags. Textures not yet carried over. | [freecad-openskp](https://github.com/iamahsanmehmood/freecad-openskp) |
+| **Blender** | Import + export, collection-instancing architecture (a component placed 1,000 times costs one mesh, not 1,000). Materials, textures and tags on import; colours and tags on export. | [blender-openskp](https://github.com/iamahsanmehmood/blender-openskp) · [Blender Extensions](https://extensions.blender.org/add-ons/openskp-import-export/) |
 
 Both are early and under active development — real bugs get found and
 fixed by testing against real files, not by waiting until everything's
