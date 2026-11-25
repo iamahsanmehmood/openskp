@@ -1,0 +1,6 @@
+# What pub.dev does not need. A .pubignore replaces the .gitignore beside it.
+/test/
+/PUBLISHING.md
+/.dart_tool/
+/pubspec.lock
+!lib/src/scaffold/*.skp

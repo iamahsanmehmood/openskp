@@ -206,7 +206,7 @@ attribute dictionaries, circular faces and partial arcs, freeform
 polyline curves, faces with holes cut out, and non-planar
 auto-triangulation. `openExisting()` loads an *existing* legacy-format
 file and rebuilds it as a new builder, so more geometry can be added
-before saving. See [`lib/src/create.dart`](lib/src/create.dart) for the
+before saving. See [`lib/src/create.dart`](https://github.com/iamahsanmehmood/openskp/blob/main/packages/dart/lib/src/create.dart) for the
 full scope notes.
 
 ```dart

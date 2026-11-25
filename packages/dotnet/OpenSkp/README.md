@@ -117,7 +117,7 @@ class Program
         Console.WriteLine("Materials:");
         foreach (var material in model.Materials)
         {
-            Console.WriteLine($"- {material.Name} (Transparency: {material.Transparency})");
+            Console.WriteLine($"- {material.Name} (Opacity: {material.Transparency})");
         }
 
         // Walk component definitions and their geometry
@@ -165,7 +165,7 @@ attribute dictionaries, circular faces and partial arcs, freeform
 polyline curves, faces with holes cut out, and non-planar
 auto-triangulation. `SkpEdit.OpenExisting()` loads an *existing*
 legacy-format file and rebuilds it as a new builder, so more geometry can
-be added before saving. See [`Create.cs`](Create.cs) for the full scope
+be added before saving. See [`Create.cs`](https://github.com/iamahsanmehmood/openskp/blob/main/packages/dotnet/OpenSkp/Create.cs) for the full scope
 notes.
 
 ```csharp
