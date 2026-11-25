@@ -868,7 +868,9 @@ std::vector<std::uint8_t> to_fragments(const InstancedScene& scene, bool raw) {
 
 void export_fragments(const InstancedScene& scene, const std::filesystem::path& output_path,
                       bool raw) {
-  std::filesystem::create_directories(output_path.parent_path());
+  if (output_path.has_parent_path()) {
+    std::filesystem::create_directories(output_path.parent_path());
+  }
   const auto data = to_fragments(scene, raw);
   std::ofstream out(output_path, std::ios::binary);
   out.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));

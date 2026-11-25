@@ -68,6 +68,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `SkpFile.open`, `openExisting` with a path, `SkpBuilder.save`, `exportDXF`, `exportIFC`, `exportOBJ`, `exportPLY` and `exportSTL` threw `Dynamic require of "fs" is not supported` when the package was loaded with `import` (the ES module build); `require` worked. CI runs the built package both ways now.
 
+### Fixed — C++: `export_dxf` and `export_fragments` threw for a path without a folder
+
+- `export_dxf(scene, "model.dxf")` failed with `create_directories`. The source archive contains the licence now.
+
 ### Fixed — Python: `openskp --help` looked for a file of that name
 
 - It prints the usage now, and `openskp --version` the version.

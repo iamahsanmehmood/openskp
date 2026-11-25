@@ -3266,7 +3266,9 @@ std::string to_dxf(const Scene& scene, double scale, const std::string& mode) {
 
 void export_dxf(const Scene& scene, const std::filesystem::path& path, double scale,
                 const std::string& mode) {
-  std::filesystem::create_directories(path.parent_path());
+  if (path.has_parent_path()) {
+    std::filesystem::create_directories(path.parent_path());
+  }
   std::string content = to_dxf(scene, scale, mode);
   std::ofstream file(path, std::ios::binary);
   if (!file.is_open()) {
