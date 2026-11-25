@@ -268,7 +268,12 @@ install(
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
   INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
 )
-install(DIRECTORY include/openskp DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+# _fragments_fb is private: its generated header needs flatbuffers.
+install(
+  DIRECTORY include/openskp
+  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+  PATTERN "_fragments_fb" EXCLUDE
+)
 install(
   FILES "${OPENSKP_GENERATED_INCLUDE_DIR}/openskp/export.hpp"
   DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/openskp"

@@ -70,7 +70,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed — C++: `export_dxf` and `export_fragments` threw for a path without a folder
 
-- `export_dxf(scene, "model.dxf")` failed with `create_directories`. The source archive contains the licence now.
+- `export_dxf(scene, "model.dxf")` failed with `create_directories`.
+
+### Changed — packages
+
+- The Python, npm and C++ packages contain the licence. The pub.dev package no longer contains the tests (3 MB), the Python source distribution no longer contains tests without their fixtures, and `cmake --install` no longer installs the private FlatBuffers header.
 
 ### Fixed — Python: `openskp --help` looked for a file of that name
 
