@@ -18,35 +18,36 @@ import 'pages_dimensions.dart';
 // The scene list sits in the document tail as a u32 count right before the
 // first record (which declares the CViewPage class), then one record per
 // scene, then a ref to the selected scene. A record is: the class tag | a null
-// attribute ref | (schema 13+, SketchUp 2016+, only) a pid | name |
+// attribute ref | (schema 13+, SketchUp 2017+) a pid | name |
 // description | u32 capture flags | the camera (CCamera, or null) | the
 // thumbnail (CDib, or null) | (schema 13) a byte | then one section per
 // capture flag that is set:
 //
 //   0x02 style       the rendering options (length by file version, see
 //                    _renderingOptionsLen) + a CSkpStyle ref or object
-//   0x04 shadows     2 bytes (schema 13+: 3) + the shadow info
-//   0x08 axes        (schema 13+: a flag byte +) 110 bytes + a closing byte
+//   0x04 shadows     2 bytes (2017+: 3) + the shadow info
+//   0x08 axes        (2017+: a pid byte +) 108 bytes + a closing byte
 //   0x10 hidden      u32 n, n entity refs
 //   0x20 layers      u32 n, n refs to the layers (tags) the scene hides
 //   0x40 sections    u32 n, n section-plane refs
 //
 // | 22 bytes (transition and delay time, flags) | u32 n + an n-byte PNG.
 //
-// Schema 15 (a file saved through the C API as 2017 to 2020) differs: flag
-// 0x01 is the camera, which is only there when the flag is set, with no CDib
-// tag, no byte after it and no thumbnail; the rendering options are 3 bytes
-// longer; the style options have two more value types (3: 2 bytes, 5: 4
-// bytes); and the trailer is 21 bytes with no PNG after it.
+// Schema 15 (a file saved through the C API as 2015 to 2020; persistent ids
+// start at 2017) differs: flag 0x01 is the camera, which is only there when
+// the flag is set, with no CDib tag, no byte after it and no thumbnail; the
+// rendering options are 2 bytes longer (3 in 2017+); the style options have
+// two more value types (3: 2 bytes, 5: 4 bytes); and the trailer is 21 bytes
+// with no PNG after it.
 //
 // A record this reader can't fully read, or flags outside 0x1FF, make
 // readPageList give up (it returns null). Python then falls back to a narrow
 // scan of the file tail that finds scene names and hidden layers only; that
 // fallback is not ported, so these readers return no scenes there.
 const int _knownFlags = 0x1FF;
-const int _axesLen = 110;
+const int _axesLen = 108;
 const int _trailerLen = 22;
-const int _shadowInfoFixedLen = 60; // after the city and country strings
+const int _shadowInfoFixedLen = 62; // after the city and country strings
 
 // The rendering options' length by SketchUp major version, measured on the
 // model-level copy of the same block in every fixture from 2014 to 2020 (and
@@ -101,7 +102,9 @@ enum _TagKind { nullTag, decl, classRef, obj }
         ? (_TagKind.classRef, w & 0x7FFFFFFF)
         : (_TagKind.obj, w);
   }
-  return (v & 0x8000) != 0 ? (_TagKind.classRef, v & 0x7FFF) : (_TagKind.obj, v);
+  return (v & 0x8000) != 0
+      ? (_TagKind.classRef, v & 0x7FFF)
+      : (_TagKind.obj, v);
 }
 
 int _popcount(int mask) {
@@ -171,12 +174,12 @@ void _readCamera(LR r, RawPage page) {
   page.orthoHeight = orthoHeight;
 }
 
-/// A CSkpStyle object's body: no attributes, a pid (schema 2+), GUID, a
-/// string, u32, name, description, then its options - each a u32 key and a u32
-/// count of (u32 type, value) pairs.
-void _skipStyle(LR r, int schema) {
+/// A CSkpStyle object's body: no attributes, a pid (schema 2+ in 2017+), GUID,
+/// a string, u32, name, description, then its options - each a u32 key and a
+/// u32 count of (u32 type, value) pairs.
+void _skipStyle(LR r, int schema, bool hasPid) {
   if (r.u16() != 0) throw LegacyParseError('style with attributes ${r.ctx()}');
-  if (schema >= 2) _skipPid(r);
+  if (schema >= 2 && hasPid) _skipPid(r);
   r.raw(16);
   r.utf16();
   r.u32();
@@ -218,7 +221,8 @@ RawPage _readRecord(Archive ar, LR r, _PageClasses classes) {
   }
   final schema = classes.object(r, kind, slot, 'CViewPage');
   if (r.u16() != 0) throw LegacyParseError('scene with attributes ${r.ctx()}');
-  if (schema >= 13) _skipPid(r);
+  final hasPid = schema >= 13 && ar.ver >= 17;
+  if (hasPid) _skipPid(r);
   final page = RawPage()..name = r.utf16();
   r.utf16(); // description
   final flags = r.u32();
@@ -255,21 +259,21 @@ RawPage _readRecord(Archive ar, LR r, _PageClasses classes) {
     if (base == null) {
       throw LegacyParseError('rendering options of a v${ar.ver} scene');
     }
-    r.raw(base + (schema >= 15 ? 3 : 0));
+    r.raw(base + (schema >= 15 ? (hasPid ? 3 : 2) : 0));
     (kind, slot) = _readTag(r);
     if (kind == _TagKind.decl || kind == _TagKind.classRef) {
-      _skipStyle(r, classes.object(r, kind, slot, 'CSkpStyle'));
+      _skipStyle(r, classes.object(r, kind, slot, 'CSkpStyle'), hasPid);
     }
   }
   if ((flags & 0x04) != 0) {
-    r.raw(schema >= 13 ? 3 : 2);
+    r.raw(hasPid ? 3 : 2);
     r.u32(); // time
     r.u8();
     r.utf16(); // city
     r.utf16(); // country
     r.raw(_shadowInfoFixedLen);
   }
-  if ((flags & 0x08) != 0) r.raw(_axesLen + 1 + (schema >= 13 ? 1 : 0));
+  if ((flags & 0x08) != 0) r.raw(_axesLen + 1 + (hasPid ? 1 : 0));
   if ((flags & 0x10) != 0) page.hiddenEntityIds.addAll(_readRefs(r, r.u32()));
   if ((flags & 0x20) != 0) page.hiddenLayerIds.addAll(_readRefs(r, r.u32()));
   if ((flags & 0x40) != 0) _readRefs(r, r.u32());
@@ -297,7 +301,8 @@ List<RawPage>? readPageList(Uint8List data, Archive ar) {
     return found >= 0 ? null : <RawPage>[];
   }
   try {
-    final count = ByteData.sublistView(data).getUint32(start - 4, Endian.little);
+    final count =
+        ByteData.sublistView(data).getUint32(start - 4, Endian.little);
     if (count < 1 || count > 10000) {
       throw LegacyParseError('implausible scene count $count');
     }

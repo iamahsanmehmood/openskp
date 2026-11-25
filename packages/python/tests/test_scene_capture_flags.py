@@ -25,6 +25,35 @@ HIDDEN_ENTITIES = (
     "scene_hidden_entities_2024.skp",
 )
 
+CAPTURE_FLAG_FILES = tuple(
+    f"scene_capture_flags_{yr}.skp" for yr in range(2015, 2021)
+)
+
+SCENE_ORDER = [
+    "Camera",
+    "RenderingOptions",
+    "ShadowInfo",
+    "Axes",
+    "Hidden",
+    "HiddenGeometry",
+    "HiddenObjects",
+    "HiddenLayers",
+    "SectionPlanes",
+    "ShadowsCamera",
+    "AxesCamera",
+]
+
+ALL_USE_PROPS = (
+    "use_camera",
+    "use_rendering_options",
+    "use_shadow_info",
+    "use_axes",
+    "use_hidden_layers",
+    "use_section_planes",
+    "use_hidden_geometry",
+    "use_hidden_objects",
+)
+
 
 def _pages(path: Path) -> dict:
     return {p.name: p for p in SkpFile.open(path).parse().pages}
@@ -103,3 +132,84 @@ def test_no_flags_means_unknown() -> None:
     assert page.capture_flags is None
     assert page.use_camera is None
     assert page.use_hidden_objects is None
+
+
+@pytest.mark.parametrize("name", CAPTURE_FLAG_FILES)
+def test_classic_2015_to_2020_one_flag_per_scene(name: str) -> None:
+    """#661: shadows without axes, axes without shadows, and 2015/2016 schema 15."""
+    model = SkpFile.open(CPP_FIXTURES / name).parse()
+    assert [p.name for p in model.pages] == SCENE_ORDER
+    pages = {p.name: p for p in model.pages}
+
+    expected = {
+        "Camera": (0x001, {"use_camera"}),
+        "RenderingOptions": (0x002, {"use_rendering_options"}),
+        "ShadowInfo": (0x004, {"use_shadow_info"}),
+        "Axes": (0x008, {"use_axes"}),
+        "Hidden": (0x190, {"use_hidden_geometry", "use_hidden_objects"}),
+        "HiddenGeometry": (0x090, {"use_hidden_geometry"}),
+        "HiddenObjects": (0x110, {"use_hidden_objects"}),
+        "HiddenLayers": (0x020, {"use_hidden_layers"}),
+        "SectionPlanes": (0x040, {"use_section_planes"}),
+        "ShadowsCamera": (0x005, {"use_shadow_info", "use_camera"}),
+        "AxesCamera": (0x009, {"use_axes", "use_camera"}),
+    }
+    for scene_name, (want_flags, true_props) in expected.items():
+        p = pages[scene_name]
+        assert p.capture_flags == want_flags, scene_name
+        for prop in ALL_USE_PROPS:
+            assert getattr(p, prop) is (prop in true_props), (scene_name, prop)
+
+    # Cameras on the three scenes that save Camera Location (and absent on the rest)
+    assert pages["Camera"].eye == (120.0, -240.0, 90.0)
+    assert pages["Camera"].target == (5.0, 5.0, 0.0)
+    assert pages["Camera"].up == pytest.approx(
+        (-0.13407807210149128, 0.28564458839013357, 0.9489100271917137)
+    )
+    assert pages["Camera"].parallel is False
+    assert pages["Camera"].fov == pytest.approx(42.0)
+
+    assert pages["ShadowsCamera"].eye == (0.0, -300.0, 150.0)
+    assert pages["ShadowsCamera"].target == (0.0, 0.0, 0.0)
+    assert pages["ShadowsCamera"].up == pytest.approx(
+        (0.0, 0.44721359549995804, 0.8944271909999161)
+    )
+    assert pages["ShadowsCamera"].parallel is True
+    assert pages["ShadowsCamera"].ortho_height == pytest.approx(80.0)
+
+    assert pages["AxesCamera"].eye == (-180.0, -180.0, 110.0)
+    assert pages["AxesCamera"].target == (10.0, 10.0, 0.0)
+    assert pages["AxesCamera"].up == pytest.approx(
+        (0.2678945632789157, 0.2678945632789157, 0.9254539458726179)
+    )
+    assert pages["AxesCamera"].parallel is False
+    assert pages["AxesCamera"].fov == pytest.approx(55.0)
+
+    for scene_name in SCENE_ORDER:
+        if scene_name not in ("Camera", "ShadowsCamera", "AxesCamera"):
+            assert pages[scene_name].eye is None, scene_name
+            assert pages[scene_name].target is None, scene_name
+        if scene_name == "HiddenLayers":
+            assert pages[scene_name].hidden_layers == ["HiddenTag"]
+        else:
+            assert pages[scene_name].hidden_layers == [], scene_name
+
+
+@pytest.mark.parametrize("year", (2015, 2016, 2017, 2018, 2019, 2020))
+def test_classic_2015_to_2020_hidden_entities(year: int) -> None:
+    model = SkpFile.open(CPP_FIXTURES / f"scene_capture_flags_{year}.skp").parse()
+    pages = {p.name: p for p in model.pages}
+    if year < 2017:
+        for p in model.pages:
+            assert p.hidden_entity_ids == []
+    else:
+        crate_id = next(i.id for i in model.root.instances if i.name == "Crate")
+        assert crate_id == 30
+        assert any(e.persistent_id == 21 for e in model.root.edges.values())
+        assert set(pages["Hidden"].hidden_entity_ids) == {21, 30}
+        assert pages["HiddenGeometry"].hidden_entity_ids == [21]
+        assert pages["HiddenObjects"].hidden_entity_ids == [30]
+        for scene_name in SCENE_ORDER:
+            if scene_name not in ("Hidden", "HiddenGeometry", "HiddenObjects"):
+                assert pages[scene_name].hidden_entity_ids == []
+

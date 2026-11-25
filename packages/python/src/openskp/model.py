@@ -582,10 +582,11 @@ class Page:
 
 # Bits of ``Page.capture_flags``, named after SketchUp's public Ruby API
 # (``Sketchup::Page#use_camera?`` and so on). Checked on the fixtures in
-# tests/test_scene_capture_flags.py (0x001 and 0x020 one at a time, the
-# others all together), and one flag at a time against SketchUp's library
-# over 592 files (#660): hidden geometry alone is 0x090, hidden objects
-# alone 0x110, the older combined 0x010 set with either.
+# tests/test_scene_capture_flags.py and one flag at a time on a model
+# written with SketchUp's library (#660, #661): hidden geometry alone is
+# 0x090, hidden objects alone 0x110, the older combined 0x010 set with
+# either. Over 592 files (#660), every value is known and agrees with the
+# camera.
 PAGE_USE_CAMERA = 0x001
 PAGE_USE_RENDERING_OPTIONS = 0x002
 PAGE_USE_SHADOW_INFO = 0x004

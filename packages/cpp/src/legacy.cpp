@@ -2259,16 +2259,16 @@ std::vector<RawPage> scan_pages_for_layers(const ByteBuffer& data, std::size_t s
 //
 // The scene list sits in the document tail as a u32 count right before the first record (which
 // declares the CViewPage class), then one record per scene, then a ref to the selected scene. A
-// record is: the class tag | a null attribute ref | (schema 13+, SketchUp 2016+, only) a pid | name
-// | description | u32 capture flags | the camera (CCamera, or null) | the thumbnail (CDib, or
-// null) | (schema 13) a byte | then one section per capture flag that is set:
+// record is: the class tag | a null attribute ref | (schema 13+, SketchUp 2017+) a pid | name |
+// description | u32 capture flags | the camera (CCamera, or null) | the thumbnail (CDib, or null) |
+// (schema 13) a byte | then one section per capture flag that is set:
 //
 //   0x02 style       the rendering options (length by file version, see rendering_options_len)
 //                    + a CSkpStyle ref or object
-//   0x04 shadows     2 bytes (schema 13+: 3) + the shadow info
-//   0x08 axes        (schema 13+: a flag byte +) 110 bytes + a closing byte. That byte was read
-//                    as the start of the hidden section; a scene that saves hidden objects but
-//                    not the axes (openskp#472) shows it belongs here
+//   0x04 shadows     2 bytes (2017+: 3) + the shadow info
+//   0x08 axes        (2017+: a pid byte +) 108 bytes + a closing byte. That byte was read as the
+//                    start of the hidden section; a scene that saves hidden objects but not the
+//                    axes (openskp#472) shows it belongs here
 //   0x10 hidden      u32 n, n refs to the entities the scene hides (groups, component
 //                    instances, and edges or faces hidden as geometry); 2017 to 2019 files list
 //                    only those at model level
@@ -2277,10 +2277,11 @@ std::vector<RawPage> scan_pages_for_layers(const ByteBuffer& data, std::size_t s
 //
 // | 22 bytes (transition and delay time, flags) | u32 n + an n-byte PNG.
 //
-// Schema 15 (a file saved through the C API as 2017 to 2020) differs: flag 0x01 is the camera,
-// which is only there when the flag is set, with no CDib tag, no byte after it and no thumbnail;
-// the rendering options are 3 bytes longer; the style options have two more value types
-// (3: 2 bytes, 5: 4 bytes); and the trailer is 21 bytes with no PNG after it.
+// Schema 15 (a file saved through the C API as 2015 to 2020; persistent ids start at 2017) differs:
+// flag 0x01 is the camera, which is only there when the flag is set, with no CDib tag, no byte
+// after it and no thumbnail; the rendering options are 2 bytes longer (3 in 2017+); the style
+// options have two more value types (3: 2 bytes, 5: 4 bytes); and the trailer is 21 bytes with no
+// PNG after it.
 //
 // A record this reader can't fully read, or flags outside 0x1FF, make read_page_list give up (it
 // returns nullopt) and parse_legacy falls back to scan_pages_for_layers, which finds scene names
@@ -2288,9 +2289,9 @@ std::vector<RawPage> scan_pages_for_layers(const ByteBuffer& data, std::size_t s
 namespace {
 
 constexpr uint32_t kPageKnownFlags = 0x1FF;
-constexpr size_t kPageAxesLen = 110;
+constexpr size_t kPageAxesLen = 108;
 constexpr size_t kPageTrailerLen = 22;
-constexpr size_t kShadowInfoFixedLen = 60;  // after the city and country strings
+constexpr size_t kShadowInfoFixedLen = 62;  // after the city and country strings
 
 // The rendering options' length by SketchUp major version, measured on the model-level copy of the
 // same block in every fixture from 2014 to 2020 (and in the 2020 scene); other versions aren't
@@ -2412,11 +2413,11 @@ void read_page_camera(R& r, RawPage& page) {
   page.ortho_height = ortho_height;
 }
 
-// A CSkpStyle object's body: no attributes, a pid (schema 2+), GUID, a string, u32, name,
+// A CSkpStyle object's body: no attributes, a pid (schema 2+ in 2017+), GUID, a string, u32, name,
 // description, then its options - each a u32 key and a u32 count of (u32 type, value) pairs.
-void skip_page_style(R& r, int schema) {
+void skip_page_style(R& r, int schema, bool has_pid) {
   if (r.u16() != 0) throw PageError("style with attributes");
-  if (schema >= 2) skip_page_pid(r);
+  if (schema >= 2 && has_pid) skip_page_pid(r);
   r.raw(16);
   r.utf16();
   r.u32();
@@ -2451,7 +2452,8 @@ RawPage read_page_record(Archive& ar, R& r, PageClasses& classes) {
     throw PageError("expected a CViewPage record");
   int schema = classes.object(r, kind, slot, "CViewPage");
   if (r.u16() != 0) throw PageError("scene with attributes");
-  if (schema >= 13) skip_page_pid(r);
+  const bool has_pid = schema >= 13 && ar.ver >= 17;
+  if (has_pid) skip_page_pid(r);
   RawPage page;
   page.name = r.utf16();
   r.utf16();  // description
@@ -2482,20 +2484,20 @@ RawPage read_page_record(Archive& ar, R& r, PageClasses& classes) {
   if (flags & 0x02) {
     int base = rendering_options_len(ar.ver);
     if (base < 0) throw PageError("rendering options of an unknown version");
-    r.raw(size_t(base + (schema >= 15 ? 3 : 0)));
+    r.raw(size_t(base + (schema >= 15 ? (has_pid ? 3 : 2) : 0)));
     std::tie(kind, slot) = read_page_tag(r);
     if (kind == PageTag::decl || kind == PageTag::class_ref)
-      skip_page_style(r, classes.object(r, kind, slot, "CSkpStyle"));
+      skip_page_style(r, classes.object(r, kind, slot, "CSkpStyle"), has_pid);
   }
   if (flags & 0x04) {
-    r.raw(schema >= 13 ? 3 : 2);
+    r.raw(has_pid ? 3 : 2);
     r.u32();  // time
     r.u8();
     r.utf16();  // city
     r.utf16();  // country
     r.raw(kShadowInfoFixedLen);
   }
-  if (flags & 0x08) r.raw(kPageAxesLen + 1 + (schema >= 13 ? 1 : 0));
+  if (flags & 0x08) r.raw(kPageAxesLen + 1 + (has_pid ? 1 : 0));
   if (flags & 0x10) page.hidden_entity_ids = read_page_refs(r, r.u32());
   if (flags & 0x20) page.hidden_layer_ids = read_page_refs(r, r.u32());
   if (flags & 0x40) read_page_refs(r, r.u32());

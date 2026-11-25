@@ -16,24 +16,25 @@ namespace OpenSkp
     //
     // The scene list sits in the document tail as a u32 count right before the first record (which
     // declares the CViewPage class), then one record per scene, then a ref to the selected scene. A
-    // record is: the class tag | a null attribute ref | (schema 13+, SketchUp 2016+, only) a pid |
+    // record is: the class tag | a null attribute ref | (schema 13+, SketchUp 2017+) a pid |
     // name | description | u32 capture flags | the camera (CCamera, or null) | the thumbnail (CDib,
     // or null) | (schema 13) a byte | then one section per capture flag that is set:
     //
     //   0x02 style       the rendering options (length by file version, see RenderingOptionsLen)
     //                    + a CSkpStyle ref or object
-    //   0x04 shadows     2 bytes (schema 13+: 3) + the shadow info
-    //   0x08 axes        (schema 13+: a flag byte +) 110 bytes
-    //   0x10 hidden      a byte, u32 n, n entity refs
+    //   0x04 shadows     2 bytes (2017+: 3) + the shadow info
+    //   0x08 axes        (2017+: a pid byte +) 108 bytes + a closing byte
+    //   0x10 hidden      u32 n, n entity refs
     //   0x20 layers      u32 n, n refs to the layers (tags) the scene hides
     //   0x40 sections    u32 n, n section-plane refs
     //
     // | 22 bytes (transition and delay time, flags) | u32 n + an n-byte PNG.
     //
-    // Schema 15 (a file saved through the C API as 2017 to 2020) differs: flag 0x01 is the camera,
-    // which is only there when the flag is set, with no CDib tag, no byte after it and no
-    // thumbnail; the rendering options are 3 bytes longer; the style options have two more value
-    // types (3: 2 bytes, 5: 4 bytes); and the trailer is 21 bytes with no PNG after it.
+    // Schema 15 (a file saved through the C API as 2015 to 2020; persistent ids start at 2017)
+    // differs: flag 0x01 is the camera, which is only there when the flag is set, with no CDib
+    // tag, no byte after it and no thumbnail; the rendering options are 2 bytes longer (3 in
+    // 2017+); the style options have two more value types (3: 2 bytes, 5: 4 bytes); and the trailer
+    // is 21 bytes with no PNG after it.
     //
     // A record this reader can't fully read, or flags outside 0x1FF, make ReadPageList give up (it
     // returns null). Python then falls back to a narrow scan of the file tail that finds scene names
@@ -41,9 +42,9 @@ namespace OpenSkp
     internal static class LegacyPages
     {
         private const uint KnownFlags = 0x1FF;
-        private const int AxesLen = 110;
+        private const int AxesLen = 108;
         private const int TrailerLen = 22;
-        private const int ShadowInfoFixedLen = 60; // after the city and country strings
+        private const int ShadowInfoFixedLen = 62; // after the city and country strings
 
         // The rendering options' length by SketchUp major version, measured on the model-level copy
         // of the same block in every fixture from 2014 to 2020 (and in the 2020 scene); other
@@ -179,13 +180,13 @@ namespace OpenSkp
             page.OrthoHeight = orthoHeight;
         }
 
-        /// <summary>A CSkpStyle object's body: no attributes, a pid (schema 2+), GUID, a string,
-        /// u32, name, description, then its options - each a u32 key and a u32 count of (u32 type,
-        /// value) pairs.</summary>
-        private static void SkipStyle(LR r, int schema)
+        /// <summary>A CSkpStyle object's body: no attributes, a pid (schema 2+ in 2017+), GUID, a
+        /// string, u32, name, description, then its options - each a u32 key and a u32 count of
+        /// (u32 type, value) pairs.</summary>
+        private static void SkipStyle(LR r, int schema, bool hasPid)
         {
             if (r.U16() != 0) throw new LegacyParseError($"style with attributes {r.Ctx()}");
-            if (schema >= 2) SkipPid(r);
+            if (schema >= 2 && hasPid) SkipPid(r);
             r.Raw(16);
             r.Utf16();
             r.U32();
@@ -232,7 +233,8 @@ namespace OpenSkp
             }
             int schema = classes.Object(r, kind, slot, "CViewPage");
             if (r.U16() != 0) throw new LegacyParseError($"scene with attributes {r.Ctx()}");
-            if (schema >= 13) SkipPid(r);
+            bool hasPid = schema >= 13 && ar.Ver >= 17;
+            if (hasPid) SkipPid(r);
             var page = new RawPage { Name = r.Utf16() };
             r.Utf16(); // description
             uint flags = r.U32();
@@ -277,23 +279,23 @@ namespace OpenSkp
                 {
                     throw new LegacyParseError($"rendering options of a v{ar.Ver} scene");
                 }
-                r.Raw(baseLen + (schema >= 15 ? 3 : 0));
+                r.Raw(baseLen + (schema >= 15 ? (hasPid ? 3 : 2) : 0));
                 (kind, slot) = ReadTag(r);
                 if (kind == TagKind.Decl || kind == TagKind.Class)
                 {
-                    SkipStyle(r, classes.Object(r, kind, slot, "CSkpStyle"));
+                    SkipStyle(r, classes.Object(r, kind, slot, "CSkpStyle"), hasPid);
                 }
             }
             if ((flags & 0x04) != 0)
             {
-                r.Raw(schema >= 13 ? 3 : 2);
+                r.Raw(hasPid ? 3 : 2);
                 r.U32(); // time
                 r.U8();
                 r.Utf16(); // city
                 r.Utf16(); // country
                 r.Raw(ShadowInfoFixedLen);
             }
-            if ((flags & 0x08) != 0) r.Raw(AxesLen + 1 + (schema >= 13 ? 1 : 0));
+            if ((flags & 0x08) != 0) r.Raw(AxesLen + 1 + (hasPid ? 1 : 0));
             if ((flags & 0x10) != 0) page.HiddenEntityIds = ReadRefs(r, r.U32());
             if ((flags & 0x20) != 0) page.HiddenLayerIds = ReadRefs(r, r.U32());
             if ((flags & 0x40) != 0) ReadRefs(r, r.U32());

@@ -2343,24 +2343,25 @@ function walkModel(data: Uint8Array, ver: number, start: number, matCount: numbe
 //
 // The scene list sits in the document tail as a u32 count right before the first record (which
 // declares the CViewPage class), then one record per scene, then a ref to the selected scene. A
-// record is: the class tag | a null attribute ref | (schema 13+, SketchUp 2016+, only) a pid | name
-// | description | u32 capture flags | the camera (CCamera, or null) | the thumbnail (CDib, or
-// null) | (schema 13) a byte | then one section per capture flag that is set:
+// record is: the class tag | a null attribute ref | (schema 13+, SketchUp 2017+) a pid | name |
+// description | u32 capture flags | the camera (CCamera, or null) | the thumbnail (CDib, or null) |
+// (schema 13) a byte | then one section per capture flag that is set:
 //
 //   0x02 style       the rendering options (length by file version, see RENDERING_OPTIONS_LEN)
 //                    + a CSkpStyle ref or object
-//   0x04 shadows     2 bytes (schema 13+: 3) + the shadow info
-//   0x08 axes        (schema 13+: a flag byte +) 110 bytes
-//   0x10 hidden      a byte, u32 n, n entity refs
+//   0x04 shadows     2 bytes (2017+: 3) + the shadow info
+//   0x08 axes        (2017+: a pid byte +) 108 bytes + a closing byte
+//   0x10 hidden      u32 n, n entity refs
 //   0x20 layers      u32 n, n refs to the layers (tags) the scene hides
 //   0x40 sections    u32 n, n section-plane refs
 //
 // | 22 bytes (transition and delay time, flags) | u32 n + an n-byte PNG.
 //
-// Schema 15 (a file saved through the C API as 2017 to 2020) differs: flag 0x01 is the camera,
-// which is only there when the flag is set, with no CDib tag, no byte after it and no thumbnail;
-// the rendering options are 3 bytes longer; the style options have two more value types
-// (3: 2 bytes, 5: 4 bytes); and the trailer is 21 bytes with no PNG after it.
+// Schema 15 (a file saved through the C API as 2015 to 2020; persistent ids start at 2017) differs:
+// flag 0x01 is the camera, which is only there when the flag is set, with no CDib tag, no byte
+// after it and no thumbnail; the rendering options are 2 bytes longer (3 in 2017+); the style
+// options have two more value types (3: 2 bytes, 5: 4 bytes); and the trailer is 21 bytes with no
+// PNG after it.
 //
 // A record this reader can't fully read, or flags outside 0x1FF, make readPageList give up (it
 // returns null). Python then falls back to a narrow scan of the file tail that finds scene names
@@ -2371,9 +2372,9 @@ const PAGE_KNOWN_FLAGS = 0x1ff;
 // same block in every fixture from 2014 to 2020 (and in the 2020 scene); other versions aren't
 // known, so give up there.
 const RENDERING_OPTIONS_LEN: Record<number, number> = { 14: 206, 15: 206, 16: 206, 17: 206, 18: 211, 19: 212, 20: 213 };
-const PAGE_AXES_LEN = 110;
+const PAGE_AXES_LEN = 108;
 const PAGE_TRAILER_LEN = 22;
-const SHADOW_INFO_FIXED_LEN = 60; // after the city and country strings
+const SHADOW_INFO_FIXED_LEN = 62; // after the city and country strings
 // CSkpStyle option values: type tag -> byte size
 const STYLE_VALUE_SIZES: Record<number, number> = { 1: 1, 3: 2, 4: 4, 5: 4, 6: 4, 7: 8 };
 
@@ -2482,11 +2483,11 @@ function readPageCamera(r: R): PageCamera {
   return { eye, target, up, fov, parallel: perspective === 0, orthoHeight };
 }
 
-/** A CSkpStyle object's body: no attributes, a pid (schema 2+), GUID, a string, u32, name,
+/** A CSkpStyle object's body: no attributes, a pid (schema 2+ in 2017+), GUID, a string, u32, name,
  * description, then its options - each a u32 key and a u32 count of (u32 type, value) pairs. */
-function skipPageStyle(r: R, schema: number): void {
+function skipPageStyle(r: R, schema: number, hasPid: boolean): void {
   if (r.u16() !== 0) throw new LegacyParseError(`style with attributes ${r.ctx()}`);
-  if (schema >= 2) skipPid(r);
+  if (schema >= 2 && hasPid) skipPid(r);
   r.raw(16);
   r.utf16();
   r.u32();
@@ -2522,7 +2523,8 @@ function readPageRecord(ar: Archive, r: R, classes: PageClasses): RawPage {
   if (kind !== 'decl' && kind !== 'class') throw new LegacyParseError(`expected a CViewPage record ${r.ctx()}`);
   const schema = classes.object(r, kind, slot, 'CViewPage');
   if (r.u16() !== 0) throw new LegacyParseError(`scene with attributes ${r.ctx()}`);
-  if (schema >= 13) skipPid(r);
+  const hasPid = schema >= 13 && ar.ver >= 17;
+  if (hasPid) skipPid(r);
   const page: RawPage = {
     name: r.utf16(),
     eye: null,
@@ -2577,19 +2579,19 @@ function readPageRecord(ar: Archive, r: R, classes: PageClasses): RawPage {
   if (flags & 0x02) {
     const base = RENDERING_OPTIONS_LEN[ar.ver];
     if (base === undefined) throw new LegacyParseError(`rendering options of a v${ar.ver} scene`);
-    r.raw(base + (schema >= 15 ? 3 : 0));
+    r.raw(base + (schema >= 15 ? (hasPid ? 3 : 2) : 0));
     [kind, slot] = readTag(r);
-    if (kind === 'decl' || kind === 'class') skipPageStyle(r, classes.object(r, kind, slot, 'CSkpStyle'));
+    if (kind === 'decl' || kind === 'class') skipPageStyle(r, classes.object(r, kind, slot, 'CSkpStyle'), hasPid);
   }
   if (flags & 0x04) {
-    r.raw(schema >= 13 ? 3 : 2);
+    r.raw(hasPid ? 3 : 2);
     r.u32(); // time
     r.u8();
     r.utf16(); // city
     r.utf16(); // country
     r.raw(SHADOW_INFO_FIXED_LEN);
   }
-  if (flags & 0x08) r.raw(PAGE_AXES_LEN + 1 + (schema >= 13 ? 1 : 0));
+  if (flags & 0x08) r.raw(PAGE_AXES_LEN + 1 + (hasPid ? 1 : 0));
   if (flags & 0x10) page.hiddenEntityIds = readPageRefs(r, r.u32());
   if (flags & 0x20) page.hiddenLayerIds = readPageRefs(r, r.u32());
   if (flags & 0x40) readPageRefs(r, r.u32());

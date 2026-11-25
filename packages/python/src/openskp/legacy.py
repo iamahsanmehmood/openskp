@@ -1312,16 +1312,16 @@ def _scan_pages(data: bytes, ar) -> list:
 # The scene list sits in the document tail as a u32 count right before the
 # first record (which declares the CViewPage class), then one record per
 # scene, then a ref to the selected scene. A record is: the class tag | a
-# null attribute ref | (schema 13, SketchUp 2016+, only) a pid | name |
+# null attribute ref | (schema 13+, SketchUp 2017+) a pid | name |
 # description | u32 capture flags | the camera (CCamera, or null) | the
 # thumbnail (CDib, or null) | (schema 13) a byte | then one section per
 # capture flag that is set:
 #
 #   0x02 style       the rendering options (length by file version, see
 #                    _RENDERING_OPTIONS_LEN) + a CSkpStyle ref or object
-#   0x04 shadows     2 bytes (schema 13: 3) + the shadow info
-#   0x08 axes        (schema 13: a flag byte +) 110 bytes
-#   0x10 hidden      a byte, u32 n, n entity refs
+#   0x04 shadows     2 bytes (2017+: 3) + the shadow info
+#   0x08 axes        (2017+: a pid byte +) 108 bytes + a closing byte
+#   0x10 hidden      u32 n, n entity refs
 #   0x20 layers      u32 n, n refs to the layers (tags) the scene hides
 #   0x40 sections    u32 n, n section-plane refs
 #
@@ -1329,26 +1329,24 @@ def _scan_pages(data: bytes, ar) -> list:
 # 0x80 and 0x100 (SketchUp 2020's split of "hidden" into geometry and
 # objects) add no section.
 #
-# Files saved through SketchUp's C API (SUModelSaveToFileWithVersion as 2017
-# to 2020) declare the class at schema 15. Measured on those files: flag
-# 0x01 is the camera, which is only there when it is set, with no CDib tag, no
-# byte after it and no thumbnail; the rendering options are 3 bytes longer;
-# the style options have two more value types (3: 2 bytes, 5: 4 bytes); and
-# the trailer is 21 bytes with no PNG after it. Built with every flag set
-# (0x1FF), so the 0x04/0x08/0x10/0x40 sections of this layout are measured,
-# not assumed. The samples only have 0x7F and 0x1FF; that a
-# section is absent when its flag is clear is this reader's assumption for
-# the others. A record it can't fully read, or flags outside 0x1FF, make
-# _read_page_list give up, and the narrow _scan_pages above takes over.
+# Files saved through SketchUp's C API (SUModelSaveToFileWithVersion as 2015
+# to 2020) declare the class at schema 15; persistent ids on the scene, style
+# and inline option blocks start at 2017 (ver >= 17). Measured on those files
+# one flag at a time (#661): flag 0x01 is the camera, which is only there when
+# it is set, with no CDib tag, no byte after it and no thumbnail; the
+# rendering options are 2 bytes longer (3 in 2017+); the style options have
+# two more value types (3: 2 bytes, 5: 4 bytes); and the trailer is 21 bytes
+# with no PNG after it. A record it can't fully read, or flags outside 0x1FF,
+# make _read_page_list give up, and the narrow _scan_pages above takes over.
 _PAGE_DECL_RE = re.compile(rb'\xff\xff(\x0c|\x0d|\x0f)\x00\x09\x00CViewPage')
 _PAGE_KNOWN_FLAGS = 0x1FF
 # The rendering options' length by SketchUp major version, measured on the
 # model-level copy of the same block in every fixture from 2014 to 2020
 # (and in the 2020 scene); other versions aren't known, so give up there.
 _RENDERING_OPTIONS_LEN = {14: 206, 15: 206, 16: 206, 17: 206, 18: 211, 19: 212, 20: 213}
-_PAGE_AXES_LEN = 110
+_PAGE_AXES_LEN = 108
 _PAGE_TRAILER_LEN = 22
-_SHADOW_INFO_FIXED_LEN = 60  # after the city and country strings
+_SHADOW_INFO_FIXED_LEN = 62  # after the city and country strings
 # CSkpStyle option values: type tag -> byte size
 _STYLE_VALUE_SIZES = {1: 1, 3: 2, 4: 4, 5: 4, 6: 4, 7: 8}
 
@@ -1417,13 +1415,13 @@ def _read_page_camera(r):
             'parallel': perspective == 0, 'ortho_height': ortho_height}
 
 
-def _skip_style(r, schema):
-    """A CSkpStyle object's body: no attributes, a pid (schema 2+), GUID,
-    a string, u32, name, description, then its options - each a u32 key
+def _skip_style(r, schema, has_pid):
+    """A CSkpStyle object's body: no attributes, a pid (schema 2+ in 2017+),
+    GUID, a string, u32, name, description, then its options - each a u32 key
     and a u32 count of (u32 type, value) pairs."""
     if r.u16() != 0:
         raise LegacyParseError(f"style with attributes {r.ctx()}")
-    if schema >= 2:
+    if schema >= 2 and has_pid:
         _skip_pid(r)
     r.raw(16)
     r.utf16()
@@ -1458,7 +1456,8 @@ def _read_page_record(r, classes, ver):
     schema = classes.object(r, kind, slot, 'CViewPage')
     if r.u16() != 0:
         raise LegacyParseError(f"scene with attributes {r.ctx()}")
-    if schema >= 13:
+    has_pid = schema >= 13 and ver >= 17
+    if has_pid:
         _skip_pid(r)
     page = {'name': r.utf16(), 'hidden_layer_ids': [], 'hidden_entity_ids': []}
     r.utf16()                                     # description
@@ -1488,19 +1487,19 @@ def _read_page_record(r, classes, ver):
     if flags & 0x02:
         if ver not in _RENDERING_OPTIONS_LEN:
             raise LegacyParseError(f"rendering options of a v{ver} scene")
-        r.raw(_RENDERING_OPTIONS_LEN[ver] + (3 if schema >= 15 else 0))
+        r.raw(_RENDERING_OPTIONS_LEN[ver] + ((3 if has_pid else 2) if schema >= 15 else 0))
         kind, slot = _read_tag(r)
         if kind in ('decl', 'class'):
-            _skip_style(r, classes.object(r, kind, slot, 'CSkpStyle'))
+            _skip_style(r, classes.object(r, kind, slot, 'CSkpStyle'), has_pid)
     if flags & 0x04:
-        r.raw(3 if schema >= 13 else 2)
+        r.raw(3 if has_pid else 2)
         r.u32()                                   # time
         r.u8()
         r.utf16()                                 # city
         r.utf16()                                 # country
         r.raw(_SHADOW_INFO_FIXED_LEN)
     if flags & 0x08:
-        r.raw(_PAGE_AXES_LEN + 1 + (1 if schema >= 13 else 0))
+        r.raw(_PAGE_AXES_LEN + 1 + (1 if has_pid else 0))
     if flags & 0x10:
         page['hidden_entity_ids'] = _read_refs(r, r.u32())
     if flags & 0x20:
