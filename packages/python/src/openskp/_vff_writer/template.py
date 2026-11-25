@@ -910,7 +910,8 @@ class EntityEditor:
         for child in self.container.children or []:
             if child.tag in _POOL_TAGS and child.children is not None:
                 self._pools[child.tag] = child
-        self._existing_order = self._read_order()
+        self._existing_order_list = self._read_order()
+        self._existing_order = set(self._existing_order_list)
 
     @staticmethod
     def _blank_container(container_id: Optional[int]) -> Record:
@@ -1175,7 +1176,7 @@ class EntityEditor:
                 continue
             (trailing if child.tag == T_RELATIONSHIPS else ahead).append(child)
         children.extend(ahead)
-        merged_order = self._existing_order + [
+        merged_order = self._existing_order_list + [
             i for i in self.order if i not in self._existing_order
         ]
         if merged_order:
