@@ -1311,6 +1311,8 @@ class LegacyReaders {
       // non-zero either way).
       final tex = _textureBlock(ar, r);
       r.raw(4); // trailing u32
+      ar.readClayerLineStyle(r);
+      ar.skipClayerParentRef(ar.currentObjSlot);
       return LayerRec(
           name: name, hidden: mid.isNotEmpty ? mid[0] : 0, rgba: tex.rgba);
     }

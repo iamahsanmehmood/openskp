@@ -1263,6 +1263,8 @@ namespace OpenSkp
                 // either way).
                 var tex = TextureBlock(ar, r);
                 r.Raw(4);                    // trailing u32
+                ar.ReadClayerLineStyle(r);
+                ar.SkipClayerParentRef(ar.CurrentObjSlot);
                 return new LayerRec { Name = name, Hidden = mid.Count > 0 ? mid[0] : 0, Rgba = tex.Rgba };
             }
             var rgba = r.Raw(4);

@@ -336,6 +336,7 @@ struct V {
   std::string k;
   std::string name;
   std::string label;
+  std::string line_style;
   std::string text;
   // Allocate annotation geometry only for dimensions, not for every mesh vertex.
   std::shared_ptr<LegacyDimension> dimension;
