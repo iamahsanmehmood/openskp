@@ -14,7 +14,9 @@ use crate::internal::{
     build_pages, emit_log, emit_progress, multiply_matrices, transform_determinant,
     transform_normal, transform_point, Error, GeometryBuilder, RawInstance, RawMaterial, RawParsed,
 };
-use crate::model::{stringify_attr_dict, EntityId, StringDictionaries};
+use crate::model::{
+    stringify_attr_dict, stringify_attr_dictionaries, EntityId, StringDictionaries,
+};
 use crate::observability::{LogLevel, ParseOptions, ParseStage, PROGRESS_INTERVAL};
 use crate::scene::{
     CurveSetMetadata, GlbPrimitive, GltfMaterial, InstanceNode, MeshMetadata, Scene,
@@ -293,9 +295,31 @@ struct Baker<'a> {
     path_updates: HashMap<String, PathUpdate>,
     /// Per-layer sequence numbers for generated root curve-set names.
     curve_seq: HashMap<String, usize>,
+    /// Each definition's own dictionaries, stringified once and shared by
+    /// every node that places it
+    /// (`InstanceNode::definition_attribute_dictionaries`).
+    definition_dicts: HashMap<EntityId, StringDictionaries>,
 }
 
 impl<'a> Baker<'a> {
+    /// The stringified dictionaries of definition `r`, empty when the
+    /// reference names no definition.
+    fn definition_dictionaries(&mut self, r: Option<EntityId>) -> StringDictionaries {
+        let Some(r) = r else {
+            return StringDictionaries::new();
+        };
+        let p = self.p;
+        self.definition_dicts
+            .entry(r)
+            .or_insert_with(|| {
+                p.definitions
+                    .get(&r)
+                    .map(|d| stringify_attr_dictionaries(&d.parsed_dictionaries))
+                    .unwrap_or_default()
+            })
+            .clone()
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn bake(
         &mut self,
@@ -475,6 +499,7 @@ impl<'a> Baker<'a> {
                 }
             }
             let dicts = scene_dictionaries(i);
+            let definition_attribute_dictionaries = self.definition_dictionaries(i.ref_idx);
             let node = InstanceNode {
                 name: display_name.clone(),
                 name_is_generated,
@@ -484,6 +509,7 @@ impl<'a> Baker<'a> {
                 properties: i.properties.clone(),
                 children: nested,
                 attribute_dictionaries: dicts.clone(),
+                definition_attribute_dictionaries,
                 path: child_path.clone(),
             };
             self.path_updates
@@ -596,6 +622,7 @@ pub fn build_scene_raw(mut p: RawParsed, o: &ParseOptions) -> Result<Scene, SkpP
         active: BTreeSet::new(),
         path_updates: HashMap::new(),
         curve_seq: HashMap::new(),
+        definition_dicts: HashMap::new(),
     };
     let children = baker.bake(
         &p.root.builder,

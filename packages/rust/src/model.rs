@@ -799,6 +799,11 @@ pub struct Definition {
     pub construction_points: Vec<ConstructionPoint>,
     pub always_faces_camera: bool,
     pub shadows_face_sun: bool,
+    /// SketchUp's native scale-grip suppression mask (`SUComponentBehavior`'s
+    /// `component_scale_mask`): bits 0-6 hide the X, Y, Z, XZ, YZ, XY and
+    /// XYZ scale handles. Unknown bits are kept. On the root definition it is
+    /// the model's own behavior, used when the file is placed as a component.
+    pub no_scale_mask: u32,
     /// The analytic arc of every curve that is one, keyed by curve id.
     pub arcs: BTreeMap<EntityId, ArcCurve>,
     /// Backs an Image entity.

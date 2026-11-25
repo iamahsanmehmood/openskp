@@ -22,6 +22,13 @@ pub struct InstanceNode {
     /// `dynamic_attributes` (already on `properties`) and `SU_InstanceSet`
     /// (always-present Owner/Status boilerplate). Values are stringified.
     pub attribute_dictionaries: StringDictionaries,
+    /// The attribute dictionaries of the DEFINITION this instance places,
+    /// every one by name (`dynamic_attributes` included), values stringified
+    /// like `properties`. SketchUp's Dynamic Components keep a component's
+    /// attributes, formulas and options on the definition and only the
+    /// current values on each instance, so a reader needs both. The same for
+    /// every placement of one definition.
+    pub definition_attribute_dictionaries: StringDictionaries,
     /// The full-path string this node's meshes carry as `MeshMetadata::path`
     /// (Python port extension), or `""`.
     pub path: String,

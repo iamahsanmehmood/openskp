@@ -64,6 +64,7 @@ fn definition(
         name: r.name,
         always_faces_camera: r.always_faces_camera,
         shadows_face_sun: r.shadows_face_sun,
+        no_scale_mask: r.no_scale_mask,
         is_image: r.is_image,
         is_group: r.is_group,
         parsed_dictionaries: r.parsed_dictionaries,

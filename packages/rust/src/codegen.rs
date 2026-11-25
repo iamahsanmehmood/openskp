@@ -509,8 +509,16 @@ impl Gen<'_> {
             defn.faces.len(),
             defn.instances.len()
         ));
+        let options = if defn.no_scale_mask != 0 {
+            format!(
+                "&DefinitionOptions {{ no_scale_mask: {}, ..Default::default() }}",
+                defn.no_scale_mask
+            )
+        } else {
+            "&DefinitionOptions::default()".to_owned()
+        };
         self.push(format!(
-            "    let mut {var_name} = builder.add_component_definition({}, &DefinitionOptions::default())?;",
+            "    let mut {var_name} = builder.add_component_definition({}, {options})?;",
             rust_string(def_name)
         ));
         let mut items = self.face_items(defn, &var_name);
@@ -714,6 +722,12 @@ pub fn to_rust_code(model: &SkpModel) -> String {
     g.push("#[allow(unused_variables)]");
     g.push("pub fn build() -> Result<Vec<u8>, SkpWriteError> {");
     g.push("    let mut builder = create();");
+    if model.root().no_scale_mask != 0 {
+        g.push(format!(
+            "    builder.set_document_options(&DocumentOptions {{ no_scale_mask: {}, ..Default::default() }})?;",
+            model.root().no_scale_mask
+        ));
+    }
     g.push("");
     g.emit_materials();
     g.emit_layers();

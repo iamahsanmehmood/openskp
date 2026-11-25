@@ -187,6 +187,7 @@ fn writes_native_units_and_both_styles_without_scaling() {
             style_items: [(4000, f64::from(0xff56_3412u32)), (1006, 0.0), (1007, 5.0)]
                 .into_iter()
                 .collect(),
+            ..DocumentOptions::default()
         };
         builder.set_document_options(&options).unwrap();
         builder

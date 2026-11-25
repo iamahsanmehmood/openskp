@@ -376,6 +376,7 @@ impl<'a> Instancer<'a> {
                 ],
                 properties: i.properties.clone(),
                 attribute_dictionaries: scene_dictionaries(i),
+                hidden: Some(i.hidden),
                 ..Default::default()
             };
 
@@ -468,6 +469,7 @@ pub fn build_instanced_scene_raw(
         definition_name: "ROOT_MODEL".into(),
         layer: "Layer0".into(),
         matrix: IDENTITY_GLTF,
+        hidden: Some(false),
         mesh_resource_id: root_mesh_resource_id,
         curve_resource_id: root_curve_resource_id,
         children: root_children,
