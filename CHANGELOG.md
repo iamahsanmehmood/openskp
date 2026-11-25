@@ -36,11 +36,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **IFC**: curves as annotations, names with any character (control characters and line breaks too), proper GlobalIds, attribute counts per schema, and the `Closed` flag of meshes in TypeScript, .NET, Dart and C++. NaN and infinite values raise an error before a file is made; in Rust `to_ifc` returns a `Result`. **The default scale of TypeScript, .NET and Dart changes from inches to millimetres**, the unit the file declares; tag visibility, plugin attributes and element names are ported to them. .NET: `ToIfc`, `ExportIfc` and `ClassifyElement` have new optional parameters (recompile).
 - **DXF** (Python, TypeScript, .NET, Dart): layer names with any character, no two layers merged, meshes over 32,767 vertices or faces written as single faces; NaN, infinite values and malformed meshes are refused.
 
-### Added — Python: which properties a scene saves
+### Added — All 6 languages: which properties a scene saves
 
 - `Page.capture_flags` is the u32 a scene stores for the boxes ticked under "Properties to save": tag `7149` of the `7148` record in 2021+ files, and the u32 after the description in classic files. It is `None` when the reader found none, or when the classic fallback scan read a word with bits above `0x1FF`. `use_camera`, `use_rendering_options`, `use_shadow_info`, `use_axes`, `use_hidden_layers`, `use_section_planes`, `use_hidden_geometry` and `use_hidden_objects` read its bits.
 - This tells apart the two meanings of an empty `hidden_entity_ids`: a scene that hides nothing (`use_hidden_objects` is `True`: picking it shows every object) and one that doesn't save hidden objects (`False`: picking it leaves them alone).
 - Before SketchUp 2020.1, one bit (`0x010`) covered hidden geometry and hidden objects together. When neither of the split bits (`0x080`, `0x100`) is set, it answers for both.
+- The same in TypeScript, .NET, Dart, C++ and Rust (`captureFlags` / `CaptureFlags` / `capture_flags`, the `use…` properties and the `PAGE_USE_*` bits; in TypeScript they are plain properties of `Page`, and `pageCaptureFlags()` makes them from a number). C++ and Rust: code that builds a `Page` field by field has one more field.
 
 ### Added — Rust: scale-handle masks, an instance's Hide flag, and definition and classic attribute dictionaries (#285)
 
