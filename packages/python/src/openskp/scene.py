@@ -520,7 +520,17 @@ def build_scene(
         # this), and keying on color alone would merge them into one
         # material and lose one of the images. The name is too, so two
         # differently named SketchUp materials stay two materials.
-        key = (color, double_sided, texture_index, transparency, material_name)
+        effective_colorized = bool(colorized) and texture_index is not None
+        effective_colorize_type = int(colorize_type) if effective_colorized else 0
+        key = (
+            color,
+            double_sided,
+            texture_index,
+            transparency,
+            material_name,
+            effective_colorized,
+            effective_colorize_type,
+        )
         if key in color_to_material_index:
             return color_to_material_index[key]
         idx = len(gltf_materials)
@@ -538,9 +548,11 @@ def build_scene(
         mat_dict: Dict[str, Any] = {"pbrMetallicRoughness": pbr}
         if material_name:
             mat_dict["name"] = material_name
-        if colorized:
+        if effective_colorized:
             # See openskp.instanced_scene's get_material_index.
-            mat_dict["extras"] = {"sketchup": {"colorized": True, "colorize_type": colorize_type}}
+            mat_dict["extras"] = {
+                "sketchup": {"colorized": True, "colorize_type": effective_colorize_type}
+            }
         if double_sided:
             mat_dict["doubleSided"] = True
         # glTF's default alphaMode is OPAQUE, which tells a conformant

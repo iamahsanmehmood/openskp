@@ -76,6 +76,8 @@ struct GltfMaterial {
   std::string texture_path;
   PbrMetallicRoughness pbr_metallic_roughness;
   bool double_sided{};
+  bool colorized{};
+  int colorize_type{};
 };
 
 /// One texture image referenced by Scene::gltf_materials.

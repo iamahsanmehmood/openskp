@@ -51,10 +51,13 @@ struct GroupKey {
   // lose one of the images.
   std::optional<std::size_t> texture_index;
   bool unpainted_back{};
+  bool colorized{};
+  int colorize_type{};
 
   bool operator<(const GroupKey& other) const {
-    return std::tie(color, double_sided, texture_index, unpainted_back) <
-           std::tie(other.color, other.double_sided, other.texture_index, other.unpainted_back);
+    return std::tie(color, double_sided, texture_index, unpainted_back, colorized, colorize_type) <
+           std::tie(other.color, other.double_sided, other.texture_index, other.unpainted_back,
+                    other.colorized, other.colorize_type);
   }
 };
 

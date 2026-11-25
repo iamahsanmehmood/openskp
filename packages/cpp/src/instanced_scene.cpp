@@ -108,6 +108,8 @@ std::string resource_key(std::optional<EntityId> defid, const FaceColorKey& colo
   if (inherited_material) {
     key += '|';
     key += inherited_material->name;
+    key += inherited_material->colorized ? ":1:" : ":0:";
+    key += std::to_string(inherited_material->colorize_type);
   }
   return key;
 }
@@ -141,6 +143,8 @@ InstancedScene build_instanced_scene_raw(RawParsed&& p, const ParseOptions& o) {
                                                    key.color[2] / 255., key.color[3] / 255.};
     gm.pbr_metallic_roughness.base_color_texture = key.texture_index;
     gm.double_sided = key.double_sided;
+    gm.colorized = key.colorized && key.texture_index.has_value();
+    gm.colorize_type = gm.colorized ? key.colorize_type : 0;
     scene.gltf_materials.push_back(gm);
     material_index_by_key.emplace(mat_key, idx);
     return idx;

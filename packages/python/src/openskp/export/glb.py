@@ -107,6 +107,7 @@ def _primitive_to_trimesh(
         tex = scene_textures[tex_ref["index"]]
         base_color_texture = _decode_texture_image(tex.data)
     raw_factor = pbr["baseColorFactor"]
+    is_colorized = bool(mat.get("extras", {}).get("sketchup", {}).get("colorized"))
     if base_color_texture is None:
         base_color_factor = [
             _srgb_to_linear(raw_factor[0]),
@@ -114,8 +115,10 @@ def _primitive_to_trimesh(
             _srgb_to_linear(raw_factor[2]),
             raw_factor[3],
         ]
-    else:
+    elif is_colorized:
         base_color_factor = list(raw_factor)
+    else:
+        base_color_factor = [1.0, 1.0, 1.0, raw_factor[3]]
 
     import numpy as np
 

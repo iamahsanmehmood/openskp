@@ -158,8 +158,13 @@ describe('originalTextures option and skipped-texture warning (#635)', () => {
 
       const srgbToLinear = (c: number) =>
         c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
-      const tiffMat = doc.materials.find((m: any) => m.pbrMetallicRoughness.baseColorFactor[0] > 0.5);
-      const pngMat = doc.materials.find((m: any) => m.pbrMetallicRoughness.baseColorFactor[2] > 0.8);
+      const tiffMat = doc.materials.find(
+        (m: any) =>
+          !m.pbrMetallicRoughness.baseColorTexture &&
+          m.pbrMetallicRoughness.baseColorFactor[0] > 0.5 &&
+          m.pbrMetallicRoughness.baseColorFactor[2] < 0.1
+      );
+      const pngMat = doc.materials.find((m: any) => Boolean(m.pbrMetallicRoughness.baseColorTexture));
       expect(tiffMat).toBeDefined();
       expect(tiffMat.pbrMetallicRoughness.baseColorTexture).toBeUndefined();
       expect(tiffMat.alphaMode).toBeUndefined();
@@ -169,6 +174,7 @@ describe('originalTextures option and skipped-texture warning (#635)', () => {
 
       expect(pngMat).toBeDefined();
       expect(pngMat.pbrMetallicRoughness.baseColorTexture).toEqual({ index: 0 });
+      expect(pngMat.pbrMetallicRoughness.baseColorFactor).toEqual([1, 1, 1, 1]);
       expect(pngMat.alphaMode).toBe('MASK');
 
       // Caller's scene must remain unmutated.

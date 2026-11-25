@@ -212,11 +212,13 @@ void main() {
         double srgbToLinear(double c) =>
             c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4).toDouble();
         final mats = (doc['materials'] as List<dynamic>).cast<Map<String, dynamic>>();
-        final tiffMat = mats.firstWhere(
-          (m) => ((m['pbrMetallicRoughness'] as Map<String, dynamic>)['baseColorFactor'] as List<dynamic>)[0] as num > 0.5,
-        );
+        final tiffMat = mats.firstWhere((m) {
+          final pbr = m['pbrMetallicRoughness'] as Map<String, dynamic>;
+          final bcf = (pbr['baseColorFactor'] as List<dynamic>).cast<num>();
+          return !pbr.containsKey('baseColorTexture') && bcf[0] > 0.5 && bcf[2] < 0.1;
+        });
         final pngMat = mats.firstWhere(
-          (m) => ((m['pbrMetallicRoughness'] as Map<String, dynamic>)['baseColorFactor'] as List<dynamic>)[2] as num > 0.8,
+          (m) => (m['pbrMetallicRoughness'] as Map<String, dynamic>).containsKey('baseColorTexture'),
         );
         final tiffPbr = tiffMat['pbrMetallicRoughness'] as Map<String, dynamic>;
         expect(tiffPbr.containsKey('baseColorTexture'), isFalse);
@@ -228,6 +230,7 @@ void main() {
 
         final pngPbr = pngMat['pbrMetallicRoughness'] as Map<String, dynamic>;
         expect(pngPbr['baseColorTexture'], equals({'index': 0}));
+        expect(pngPbr['baseColorFactor'], equals([1.0, 1.0, 1.0, 1.0]));
         expect(pngMat['alphaMode'], equals('MASK'));
         expect(
           warnings,

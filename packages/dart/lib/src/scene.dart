@@ -495,7 +495,8 @@ class SceneBuilder {
     final textures = <SceneTexture>[];
     final textureIndexFor = createTextureIndexFor(textures, options);
 
-    final colorToMaterialIndex = <((int, int, int), bool, int?, double), int>{};
+    final colorToMaterialIndex =
+        <((int, int, int), bool, int?, double, bool, int), int>{};
     final gltfMaterials = <Map<String, dynamic>>[];
     final curveSets = <CurveSetMetadata>[];
     final curveSeq = <String, int>{};
@@ -512,13 +513,28 @@ class SceneBuilder {
     (int, int, int) getLayerColor(String name) => layerColors[name] ?? (136, 136, 136);
     final styleColors = unpaintedStyleColors(parsed, options?.unpaintedFaces);
 
-    int getMaterialIndex((int, int, int) color, bool doubleSided, int? textureIndex,
-        [double transparency = 1.0]) {
+    int getMaterialIndex(
+      (int, int, int) color,
+      bool doubleSided,
+      int? textureIndex, [
+      double transparency = 1.0,
+      bool colorized = false,
+      int colorizeType = 0,
+    ]) {
       // The texture is part of the identity, not just the color: two
       // different images can average to the same RGB (real files do
       // this), and keying on color alone would merge them into one
       // material and lose one of the images.
-      final key = (color, doubleSided, textureIndex, transparency);
+      final effectiveColorized = colorized && textureIndex != null;
+      final effectiveColorizeType = effectiveColorized ? colorizeType : 0;
+      final key = (
+        color,
+        doubleSided,
+        textureIndex,
+        transparency,
+        effectiveColorized,
+        effectiveColorizeType,
+      );
       final existing = colorToMaterialIndex[key];
       if (existing != null) return existing;
       final idx = gltfMaterials.length;
@@ -535,6 +551,14 @@ class SceneBuilder {
         pbr['baseColorTexture'] = {'index': textureIndex};
       }
       final material = <String, dynamic>{'pbrMetallicRoughness': pbr};
+      if (effectiveColorized) {
+        material['extras'] = <String, dynamic>{
+          'sketchup': <String, dynamic>{
+            'colorized': true,
+            'colorize_type': effectiveColorizeType,
+          },
+        };
+      }
       if (doubleSided) material['doubleSided'] = true;
       // glTF's default alphaMode is OPAQUE, which tells a conformant
       // renderer to ignore alpha entirely - both the material's own
@@ -622,7 +646,7 @@ class SceneBuilder {
         final multiGroup = faceGroups.length > 1;
 
         for (final groupEntry in faceGroups.entries) {
-          final (_, _, texIndex, _, unpaintedBack) = groupEntry.key;
+          final (_, _, texIndex, _, unpaintedBack, _, _) = groupEntry.key;
           final group = groupEntry.value;
           final color = group.color;
           if (group.localFaces.isEmpty) continue;
@@ -708,7 +732,14 @@ class SceneBuilder {
             indices.add(tri[2]);
           }
 
-          final materialIndex = getMaterialIndex(color, group.doubleSided, texIndex, group.transparency);
+          final materialIndex = getMaterialIndex(
+            color,
+            group.doubleSided,
+            texIndex,
+            group.transparency,
+            group.colorized,
+            group.colorizeType,
+          );
           glbPrimitives.add(GlbPrimitive(
             positions: positions,
             normals: normals,

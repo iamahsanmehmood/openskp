@@ -108,6 +108,9 @@ fn resource_key(
     if let Some(m) = inherited_material {
         key.push('|');
         key.push_str(&m.name);
+        if m.colorized {
+            key.push_str(&format!(":colorized:{}", m.colorize_type));
+        }
     }
     key
 }
@@ -161,6 +164,12 @@ impl<'a> Instancer<'a> {
         ];
         gm.pbr_metallic_roughness.base_color_texture = mat_key.texture_index;
         gm.double_sided = mat_key.double_sided;
+        gm.colorized = mat_key.colorized && mat_key.texture_index.is_some();
+        gm.colorize_type = if gm.colorized {
+            mat_key.colorize_type
+        } else {
+            0
+        };
         self.gltf_materials.push(gm);
         self.material_index_by_key.insert(mat_key, idx);
         idx

@@ -484,6 +484,12 @@ impl<'a> Baker<'a> {
                     ];
                     gm.pbr_metallic_roughness.base_color_texture = mat_key.texture_index;
                     gm.double_sided = mat_key.double_sided;
+                    gm.colorized = mat_key.colorized && mat_key.texture_index.is_some();
+                    gm.colorize_type = if gm.colorized {
+                        mat_key.colorize_type
+                    } else {
+                        0
+                    };
                     self.scene.gltf_materials.push(gm);
                     self.materials.insert(mat_key, idx);
                     idx

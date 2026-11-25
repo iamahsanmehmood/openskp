@@ -240,9 +240,16 @@ namespace OpenSkp.Tests
             JsonElement? pngMat = null;
             foreach (var mat in doc.GetProperty("materials").EnumerateArray())
             {
-                var bcf = mat.GetProperty("pbrMetallicRoughness").GetProperty("baseColorFactor");
-                if (bcf[0].GetDouble() > 0.5) tiffMat = mat;
-                if (bcf[2].GetDouble() > 0.8) pngMat = mat;
+                var pbr = mat.GetProperty("pbrMetallicRoughness");
+                var bcf = pbr.GetProperty("baseColorFactor");
+                if (pbr.TryGetProperty("baseColorTexture", out _))
+                {
+                    pngMat = mat;
+                }
+                else if (bcf[0].GetDouble() > 0.5 && bcf[2].GetDouble() < 0.1)
+                {
+                    tiffMat = mat;
+                }
             }
             Assert.True(tiffMat.HasValue);
             Assert.False(tiffMat.Value.GetProperty("pbrMetallicRoughness").TryGetProperty("baseColorTexture", out _));
@@ -254,6 +261,8 @@ namespace OpenSkp.Tests
 
             Assert.True(pngMat.HasValue);
             Assert.Equal(0, pngMat.Value.GetProperty("pbrMetallicRoughness").GetProperty("baseColorTexture").GetProperty("index").GetInt32());
+            var pngBcf = pngMat.Value.GetProperty("pbrMetallicRoughness").GetProperty("baseColorFactor");
+            Assert.Equal(new[] { 1.0, 1.0, 1.0, 1.0 }, pngBcf.EnumerateArray().Select(e => e.GetDouble()).ToArray());
             Assert.Equal("MASK", pngMat.Value.GetProperty("alphaMode").GetString());
 
             var warning = Assert.Single(warnings);

@@ -197,17 +197,82 @@ describe('toGLB', () => {
     expect(sceneFactors.some((f) => Math.abs(f[1] - 84 / 255) < 1e-6 && f[0] === 1)).toBe(true);
     expect(sceneFactors.some((f) => Math.abs(f[0] - 188 / 255) < 1e-6)).toBe(true);
 
-    // Embedded plain textures keep their factor unchanged.
+    // Embedded non-colorized textures write [1, 1, 1, alpha], while scene
+    // gltfMaterials keeps average colours and colorized materials stay tinted (#657).
     const capillaBuf = fs.readFileSync(path.join(__dirname, 'fixtures', 'capilla_quiroz_v17.skp'));
     const capillaAb = capillaBuf.buffer.slice(capillaBuf.byteOffset, capillaBuf.byteOffset + capillaBuf.byteLength) as ArrayBuffer;
     const capillaScene = buildScene(capillaAb);
-    const expectedTexFactors = (capillaScene.gltfMaterials as any[])
+    const capillaInstanced = buildInstancedScene(capillaAb);
+    const sceneTexFactors = (capillaScene.gltfMaterials as any[])
       .filter((m) => m.pbrMetallicRoughness?.baseColorTexture)
       .map((m) => m.pbrMetallicRoughness.baseColorFactor);
-    const { json: capillaGlbJson } = parseGlb(toGLB(capillaScene, { textures: true }));
-    const actualTexFactors = capillaGlbJson.materials
-      .filter((m: any) => m.pbrMetallicRoughness?.baseColorTexture)
-      .map((m: any) => m.pbrMetallicRoughness.baseColorFactor);
-    expect(actualTexFactors).toEqual(expectedTexFactors);
+    expect(sceneTexFactors.some((f) => f[0] < 0.6 && f[2] < 0.2)).toBe(true);
+    const expectedWhiteFactors = sceneTexFactors.map((f) => [1, 1, 1, f[3]]);
+
+    for (const exportedBytes of [
+      toGLB(capillaScene, { textures: true }),
+      toInstancedGLB(capillaInstanced, { textures: true }),
+    ]) {
+      const { json: capillaGlbJson } = parseGlb(exportedBytes);
+      const actualTexFactors = capillaGlbJson.materials
+        .filter((m: any) => m.pbrMetallicRoughness?.baseColorTexture)
+        .map((m: any) => m.pbrMetallicRoughness.baseColorFactor);
+      expect(actualTexFactors).toEqual(expectedWhiteFactors);
+    }
+
+    // End-to-end model -> scene -> GLB on a real .skp containing one plain and one
+    // colorized material sharing the same RGB (200, 80, 60) and PNG image (#657).
+    const bothBuf = fs.readFileSync(
+      path.join(__dirname, '..', '..', 'cpp', 'tests', 'fixtures', 'colorized_and_plain_texture.skp')
+    );
+    const bothAb = bothBuf.buffer.slice(bothBuf.byteOffset, bothBuf.byteOffset + bothBuf.byteLength) as ArrayBuffer;
+    const bothBaked = buildScene(bothAb);
+    const bothInstanced = buildInstancedScene(bothAb);
+    for (const built of [bothBaked, bothInstanced]) {
+      expect(built.gltfMaterials).toHaveLength(2);
+      const plainSceneMat = (built.gltfMaterials as any[]).find((m) => !m.extras);
+      const colSceneMat = (built.gltfMaterials as any[]).find((m) => m.extras?.sketchup?.colorized);
+      expect(plainSceneMat).toBeDefined();
+      expect(colSceneMat).toBeDefined();
+      expect(colSceneMat.extras).toEqual({ sketchup: { colorized: true, colorize_type: 1 } });
+      expect(plainSceneMat.pbrMetallicRoughness.baseColorFactor).toEqual([200 / 255, 80 / 255, 60 / 255, 1]);
+      expect(colSceneMat.pbrMetallicRoughness.baseColorFactor).toEqual([200 / 255, 80 / 255, 60 / 255, 1]);
+    }
+
+    for (const glbWithTex of [
+      toGLB(bothBaked, { textures: true }),
+      toInstancedGLB(bothInstanced, { textures: true }),
+    ]) {
+      const { json: withTexJson } = parseGlb(glbWithTex);
+      expect(withTexJson.materials).toHaveLength(2);
+      const plainGlbMat = withTexJson.materials.find((m: any) => !m.extras);
+      const colGlbMat = withTexJson.materials.find((m: any) => m.extras?.sketchup?.colorized);
+      expect(plainGlbMat.pbrMetallicRoughness.baseColorTexture).toEqual({ index: 0 });
+      expect(plainGlbMat.pbrMetallicRoughness.baseColorFactor).toEqual([1, 1, 1, 1]);
+      expect(colGlbMat.extras).toEqual({ sketchup: { colorized: true, colorize_type: 1 } });
+      expect(colGlbMat.pbrMetallicRoughness.baseColorTexture).toEqual({ index: 0 });
+      expect(colGlbMat.pbrMetallicRoughness.baseColorFactor).toEqual([200 / 255, 80 / 255, 60 / 255, 1]);
+    }
+
+    const expectedLinearTint = [
+      srgbToLinear(200 / 255),
+      srgbToLinear(80 / 255),
+      srgbToLinear(60 / 255),
+      1,
+    ];
+    for (const glbNoTex of [
+      toGLB(bothBaked, { textures: false }),
+      toInstancedGLB(bothInstanced, { textures: false }),
+    ]) {
+      const { json: noTexJson } = parseGlb(glbNoTex);
+      expect(noTexJson.materials).toHaveLength(2);
+      expect(noTexJson.textures).toBeUndefined();
+      for (const m of noTexJson.materials) {
+        expect(m.pbrMetallicRoughness.baseColorTexture).toBeUndefined();
+        for (let c = 0; c < 4; c++) {
+          expect(m.pbrMetallicRoughness.baseColorFactor[c]).toBeCloseTo(expectedLinearTint[c], 9);
+        }
+      }
+    }
   });
 });
