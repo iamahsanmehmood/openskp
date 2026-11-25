@@ -6,6 +6,11 @@ edition = "2021"
 rust-version = "1.88"
 description = "Open-source SketchUp (.skp) binary file parser, writer, and converter - pure Rust port of OpenSKP"
 license = "MIT"
+readme = "README.md"
+homepage = "https://openskp.com"
+repository = "https://github.com/iamahsanmehmood/openskp"
+documentation = "https://iamahsanmehmood.github.io/openskp/docs/"
+exclude = ["tests/fixtures/"]
 
 [dependencies]
 
