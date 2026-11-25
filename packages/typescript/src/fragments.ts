@@ -1,5 +1,6 @@
 import * as flatbuffers from 'flatbuffers';
 import * as fflate from 'fflate';
+import { BinaryInput, toUint8ArrayView } from './binary-input';
 import type { InstancedScene, InstancedNode, LocalPrimitive, InstancedMeshResource } from './instanced';
 import { emitLog, type ParseOptions } from './observability';
 import { multiplyMatrices } from './transforms';
@@ -712,12 +713,16 @@ function extractNameAttribute(attribute: Attribute | null): string {
  * the Fragments format itself doesn't carry them separately from the
  * `Name` attribute this function does extract.
  */
-export function fromFragments(data: Uint8Array, options?: ParseOptions): InstancedScene {
+export function fromFragments(data: BinaryInput, options?: ParseOptions): InstancedScene {
+  const inputBytes = toUint8ArrayView(data);
   let rawBytes: Uint8Array;
   try {
-    rawBytes = fflate.unzlibSync(data);
+    rawBytes = fflate.unzlibSync(inputBytes);
   } catch {
-    rawBytes = data;
+    // Generated FlatBuffers vector readers construct typed views (Uint32Array,
+    // Float64Array) at `bytes.byteOffset + offset`; copy only when an
+    // uncompressed caller view starts at an unaligned byteOffset.
+    rawBytes = inputBytes.byteOffset % 8 === 0 ? inputBytes : inputBytes.slice();
   }
 
   const bb = new flatbuffers.ByteBuffer(rawBytes);

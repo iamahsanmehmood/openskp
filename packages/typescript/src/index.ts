@@ -43,7 +43,9 @@ import { buildInstancedSceneFromParsed, InstancedScene } from './instanced';
 import { extractThumbnail, SkpThumbnail } from './thumbnail';
 import { toFragments, FragmentExportOptions } from './fragments';
 import { nodeFs, nodePath } from './node-builtins';
+import { BinaryInput, toUint8ArrayView } from './binary-input';
 
+export type { BinaryInput } from './binary-input';
 export * from './model';
 export type { VffAttrValue } from './geometry';
 export type {
@@ -109,9 +111,9 @@ declare const process: any;
  * Transparently handles both the modern VFF/ZIP container (SketchUp 2021+)
  * and the classic pre-2021 MFC CArchive container (SketchUp 2013-2020).
  */
-function parseToRaw(buffer: ArrayBuffer, options?: ParseOptions): ParsedRawData {
+function parseToRaw(buffer: BinaryInput, options?: ParseOptions): ParsedRawData {
   const t0 = Date.now();
-  const data = new Uint8Array(buffer);
+  const data = toUint8ArrayView(buffer);
   emitLog(options, 'info', `Parsing buffer (${data.length} bytes)`);
 
   // Both the legacy (pre-2021 MFC) and modern (VFF/ZIP) containers share
@@ -412,11 +414,11 @@ function modelFaceColors(
  * step, since baking every placed instance can produce far more data than
  * the file's raw geometry.
  *
- * @param buffer - The raw file contents as an ArrayBuffer
+ * @param buffer - The raw file contents as an ArrayBuffer or Uint8Array (including Node.js Buffer)
  * @param options - Optional progress/log callbacks (see {@link ParseOptions})
  * @returns Parsed SkpModel with full geometry and metadata
  */
-export function parseSkp(buffer: ArrayBuffer, options?: ParseOptions): SkpModel {
+export function parseSkp(buffer: BinaryInput, options?: ParseOptions): SkpModel {
   return buildModelFromParsed(parseToRaw(buffer, options));
 }
 
@@ -431,10 +433,11 @@ export function parseSkp(buffer: ArrayBuffer, options?: ParseOptions): SkpModel 
  * keeping each call's memory footprint no larger than what it actually
  * needs.
  *
+ * @param buffer - The raw file contents as an ArrayBuffer or Uint8Array (including Node.js Buffer)
  * @param options - Optional progress/log callbacks (see {@link ParseOptions})
  */
 export function buildScene(
-  buffer: ArrayBuffer,
+  buffer: BinaryInput,
   options?: ParseOptions & SceneOptions
 ): SkpScene {
   return buildSceneFromParsed(parseToRaw(buffer, options), options);
@@ -466,11 +469,11 @@ export function buildScene(
  * raw TLV data, consistent with the existing two-tier API, so callers who
  * never ask for it never pay for it.
  *
- * @param buffer - The raw file contents as an ArrayBuffer
+ * @param buffer - The raw file contents as an ArrayBuffer or Uint8Array (including Node.js Buffer)
  * @param options - Optional progress/log callbacks (see {@link ParseOptions})
  */
 export function buildInstancedScene(
-  buffer: ArrayBuffer,
+  buffer: BinaryInput,
   options?: ParseOptions & SceneOptions
 ): InstancedScene {
   return buildInstancedSceneFromParsed(parseToRaw(buffer, options), options);
@@ -846,13 +849,13 @@ export function toJSON(model: SkpModel, scene?: SkpScene): Record<string, unknow
  * SkpFile wrapper class.
  */
 export class SkpFile {
-  private buffer: ArrayBuffer;
+  private buffer: BinaryInput;
 
-  constructor(buffer: ArrayBuffer) {
+  constructor(buffer: BinaryInput) {
     this.buffer = buffer;
   }
 
-  static fromBuffer(buffer: ArrayBuffer): SkpFile {
+  static fromBuffer(buffer: BinaryInput): SkpFile {
     return new SkpFile(buffer);
   }
 
@@ -867,9 +870,7 @@ export class SkpFile {
       if (ext.toLowerCase() !== '.skp') {
         throw new Error(`Expected a .skp file, got: ${ext}`);
       }
-      const buffer = fs.readFileSync(filePath);
-      const arrayBuffer = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
-      return new SkpFile(arrayBuffer);
+      return new SkpFile(fs.readFileSync(filePath));
     } else {
       throw new Error('SkpFile.open is only supported in Node.js environment');
     }

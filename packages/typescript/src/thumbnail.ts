@@ -1,3 +1,4 @@
+import { BinaryInput, toUint8ArrayView } from './binary-input';
 import { extractSkpContents } from './vff';
 import { isLegacy } from './legacy';
 import { SkpParseError } from './errors';
@@ -71,14 +72,14 @@ function readPngSize(data: Uint8Array): { width: number; height: number } | null
  * A malformed container still throws {@link SkpParseError}, matching the
  * rest of the library.
  *
- * @param buffer - The raw file contents
+ * @param buffer - The raw file contents as an ArrayBuffer or Uint8Array (including Node.js Buffer)
  * @param options - Optional progress/log callbacks
  */
 export function extractThumbnail(
-  buffer: ArrayBuffer,
+  buffer: BinaryInput,
   options?: ParseOptions
 ): SkpThumbnail | null {
-  const data = new Uint8Array(buffer);
+  const data = toUint8ArrayView(buffer);
 
   if (!(data.length >= 4 && data[0] === 0xff && data[1] === 0xfe && data[2] === 0xff && data[3] === 0x0e)) {
     throw new SkpParseError('Not a valid SketchUp file (bad header magic)', { stage: 'header' });
