@@ -527,6 +527,19 @@ struct ConstructionPoint {
   std::uint64_t persistent_id{};
 };
 
+/// Bits of `Page::capture_flags`, named after SketchUp's public Ruby API
+/// (`Sketchup::Page#use_camera?` and so on).
+inline constexpr std::uint32_t PAGE_USE_CAMERA = 0x001u;
+inline constexpr std::uint32_t PAGE_USE_RENDERING_OPTIONS = 0x002u;
+inline constexpr std::uint32_t PAGE_USE_SHADOW_INFO = 0x004u;
+inline constexpr std::uint32_t PAGE_USE_AXES = 0x008u;
+inline constexpr std::uint32_t PAGE_USE_HIDDEN =
+    0x010u;  // before SketchUp 2020.1: geometry + objects
+inline constexpr std::uint32_t PAGE_USE_HIDDEN_LAYERS = 0x020u;
+inline constexpr std::uint32_t PAGE_USE_SECTION_PLANES = 0x040u;
+inline constexpr std::uint32_t PAGE_USE_HIDDEN_GEOMETRY = 0x080u;
+inline constexpr std::uint32_t PAGE_USE_HIDDEN_OBJECTS = 0x100u;
+
 /// A saved scene (SketchUp's "Scenes" tabs; "pages" in the SDK).
 struct Page {
   /// Scene name as shown on its tab.
@@ -555,15 +568,62 @@ struct Page {
   std::vector<EntityId> hidden_entity_ids;
   /// The scene selected when the model was saved (at most one).
   bool selected{};
+  /// Which properties the scene saves ("Properties to save" in SketchUp's Scenes panel), as the
+  /// u32 the file stores, or unset when unknown.
+  std::optional<std::uint32_t> capture_flags;
+
+  /// The scene saves its camera ("Camera Location"), `0x001`.
+  std::optional<bool> use_camera() const noexcept { return flag_(PAGE_USE_CAMERA); }
+
+  /// The scene saves its style ("Style and Fog"), `0x002`.
+  std::optional<bool> use_rendering_options() const noexcept {
+    return flag_(PAGE_USE_RENDERING_OPTIONS);
+  }
+
+  /// The scene saves its shadows ("Shadow Settings"), `0x004`.
+  std::optional<bool> use_shadow_info() const noexcept { return flag_(PAGE_USE_SHADOW_INFO); }
+
+  /// The scene saves the axes ("Axes Location"), `0x008`.
+  std::optional<bool> use_axes() const noexcept { return flag_(PAGE_USE_AXES); }
+
+  /// The scene saves which layers it hides ("Visible Tags"), `0x020`.
+  std::optional<bool> use_hidden_layers() const noexcept { return flag_(PAGE_USE_HIDDEN_LAYERS); }
+
+  /// The scene saves the active section ("Active Section Planes"), `0x040`.
+  std::optional<bool> use_section_planes() const noexcept { return flag_(PAGE_USE_SECTION_PLANES); }
+
+  /// The scene saves which edges and faces it hides ("Hidden Geometry"), `0x080`.
+  std::optional<bool> use_hidden_geometry() const noexcept {
+    return hidden_(PAGE_USE_HIDDEN_GEOMETRY);
+  }
+
+  /// The scene saves which groups and components it hides ("Hidden Objects"), `0x100`.
+  std::optional<bool> use_hidden_objects() const noexcept {
+    return hidden_(PAGE_USE_HIDDEN_OBJECTS);
+  }
 
   bool operator==(const Page& o) const {
     return name == o.name && eye == o.eye && target == o.target && up == o.up && fov == o.fov &&
            parallel == o.parallel && ortho_height == o.ortho_height &&
            hidden_layers == o.hidden_layers && hidden_entity_ids == o.hidden_entity_ids &&
-           selected == o.selected;
+           selected == o.selected && capture_flags == o.capture_flags;
   }
 
   bool operator!=(const Page& o) const { return !(*this == o); }
+
+ private:
+  std::optional<bool> flag_(std::uint32_t bit) const noexcept {
+    if (!capture_flags) return std::nullopt;
+    return (*capture_flags & bit) != 0u;
+  }
+
+  std::optional<bool> hidden_(std::uint32_t bit) const noexcept {
+    if (!capture_flags) return std::nullopt;
+    if (*capture_flags & (PAGE_USE_HIDDEN_GEOMETRY | PAGE_USE_HIDDEN_OBJECTS)) {
+      return (*capture_flags & bit) != 0u;
+    }
+    return (*capture_flags & PAGE_USE_HIDDEN) != 0u;
+  }
 };
 
 /// A view camera (VFF `34BC` record), as scenes and the model's current view

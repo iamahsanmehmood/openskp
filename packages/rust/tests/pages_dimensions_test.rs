@@ -351,6 +351,8 @@ fn scan_pages_legacy_synthetic() {
     assert_eq!(pages[1].name, "WithHidden");
     assert!(pages[0].hidden_layer_ids.is_empty());
     assert_eq!(pages[1].hidden_layer_ids, [5, 6]);
+    assert_eq!(pages[0].capture_flags, None);
+    assert_eq!(pages[1].capture_flags, None);
 }
 
 #[test]

@@ -21,6 +21,7 @@ class RawPage {
   double orthoHeight = 0.0;
   final List<int> hiddenLayerIds = [];
   final List<int> hiddenEntityIds = [];
+  int? captureFlags;
 }
 
 class RawDimension {
@@ -279,8 +280,7 @@ RawDimension? _parseOne5Bcc(
   if (!_flatTlvHasFields(modelDat, j + 6, j + 6 + ln, 0x5BCD, 0x5BCE)) {
     return null;
   }
-  final body =
-      _tlvItemsInt(Uint8List.sublistView(modelDat, j + 6, j + 6 + ln));
+  final body = _tlvItemsInt(Uint8List.sublistView(modelDat, j + 6, j + 6 + ln));
   if (body == null || body.isEmpty) return null;
   bool has5Bcd = false, has5Bce = false;
   for (final it in body) {
@@ -332,7 +332,8 @@ RawDimension? _parseOne5Bcc(
           Tlv.readF64(normalB, 16)
         )
       : null;
-  final offset = (offB != null && offB.length == 8) ? Tlv.readF64(offB, 0) : 0.0;
+  final offset =
+      (offB != null && offB.length == 8) ? Tlv.readF64(offB, 0) : 0.0;
   (double, double, double)? offsetVector;
   if (axisB != null && axisB.length == 4 && planeX != null && normal != null) {
     final axis = Tlv.readU32(axisB, 0);
@@ -388,14 +389,11 @@ TextEntity? _parseVffText(
           ? (Tlv.readF64(xB, 0), Tlv.readF64(yB, 0))
           : null;
   final ltB = _tlvFindInt(fields, 0x55FD);
-  final leaderType =
-      (ltB != null && ltB.length == 4) ? Tlv.readU32(ltB, 0) : 2;
+  final leaderType = (ltB != null && ltB.length == 4) ? Tlv.readU32(ltB, 0) : 2;
   final atB = _tlvFindInt(fields, 0x55FA);
-  final arrowType =
-      (atB != null && atB.length == 4) ? Tlv.readU32(atB, 0) : 3;
+  final arrowType = (atB != null && atB.length == 4) ? Tlv.readU32(atB, 0) : 3;
   final dlB = _tlvFindInt(fields, 0x55FC);
-  final displayLeader =
-      (dlB != null && dlB.length == 1) ? dlB[0] != 0 : true;
+  final displayLeader = (dlB != null && dlB.length == 1) ? dlB[0] != 0 : true;
   var layer = '';
   var hidden = false;
   final drawB = _tlvFindInt(fields, 0x07D0);
@@ -931,6 +929,11 @@ List<RawPage> parsePages(TlvNode? node) {
         if (items == null) continue;
 
         final page = RawPage();
+
+        final flags = _tlvFindInt(items, 0x7149);
+        if (flags != null && flags.length == 4) {
+          page.captureFlags = Tlv.readU32(flags, 0);
+        }
 
         final head = _tlvItemsInt(_tlvFindInt(items, 0x6F54));
         final name = _tlvFindInt(head, 0x6F55);

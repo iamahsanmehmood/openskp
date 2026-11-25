@@ -179,6 +179,7 @@ struct RawPage {
   // persistent ids (VFF: as stored; legacy: archive slots until read_page_list resolves them)
   std::vector<EntityId> hidden_entity_ids;
   bool selected{};
+  std::optional<std::uint32_t> capture_flags;
 };
 
 struct RawDimension {

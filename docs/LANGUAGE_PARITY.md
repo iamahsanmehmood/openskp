@@ -75,6 +75,7 @@ released. 🔶 = implemented on `main`, not published to a package registry
 | Attribute dicts surfaced in GLB/JSON metadata export (not just IFC Psets) | ✅ | n/a, not independently re-checked this cycle | n/a, not independently re-checked this cycle | n/a, not independently re-checked this cycle | ✅ |
 | VFF pages/scenes + dimension parsing | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Legacy (pre-2021) pages/scenes reading | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Scene capture flags (`Page.capture_flags` / `use_*`, [#660](https://github.com/iamahsanmehmood/openskp/pull/660)) | 🔶 on `main` | 🔶 on `main` | 🔶 on `main` | 🔶 on `main` | 🔶 on `main` |
 | Construction lines/points reading | ✅ legacy + VFF | ✅ legacy + VFF | ✅ legacy + VFF | ✅ legacy + VFF | ✅ legacy + VFF |
 | VFF per-layer-hidden flag reading | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Per-edge/per-face layer, `Edge#curve` pointers, classic `CArcCurve` frames (legacy + VFF) | ✅ | ✅ | ✅ | ✅ | ✅ |

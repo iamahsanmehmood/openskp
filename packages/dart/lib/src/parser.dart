@@ -322,7 +322,8 @@ class SkpFile {
     }
     for (final cl in d.builder.constructionLines) {
       final parsedId = cl.layer.isNotEmpty ? int.tryParse(cl.layer) : null;
-      final resolvedLayer = parsedId != null ? (layerIdToName[parsedId] ?? '') : cl.layer;
+      final resolvedLayer =
+          parsedId != null ? (layerIdToName[parsedId] ?? '') : cl.layer;
       defn.constructionLines.add(ConstructionLine(
         point: cl.point,
         direction: cl.direction,
@@ -334,7 +335,8 @@ class SkpFile {
     }
     for (final cp in d.builder.constructionPoints) {
       final parsedId = cp.layer.isNotEmpty ? int.tryParse(cp.layer) : null;
-      final resolvedLayer = parsedId != null ? (layerIdToName[parsedId] ?? '') : cp.layer;
+      final resolvedLayer =
+          parsedId != null ? (layerIdToName[parsedId] ?? '') : cp.layer;
       defn.constructionPoints.add(ConstructionPoint(
         position: cp.position,
         layer: resolvedLayer,
@@ -373,6 +375,7 @@ List<Page> buildPagesFromRaw(RawParsed parsed) {
             if (parsed.layerIdToName[id] != null) parsed.layerIdToName[id]!
         ],
         hiddenEntityIds: List<int>.from(pg.hiddenEntityIds),
+        captureFlags: pg.captureFlags,
       ),
   ];
 }

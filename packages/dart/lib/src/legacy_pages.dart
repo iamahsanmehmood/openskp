@@ -226,6 +226,7 @@ RawPage _readRecord(Archive ar, LR r, _PageClasses classes) {
   final page = RawPage()..name = r.utf16();
   r.utf16(); // description
   final flags = r.u32();
+  page.captureFlags = flags;
   if ((flags & ~_knownFlags) != 0) {
     throw LegacyParseError(
         'scene capture flags 0x${flags.toRadixString(16)} ${r.ctx()}');

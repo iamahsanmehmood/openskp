@@ -157,8 +157,33 @@ export interface ConstructionPoint {
   hidden?: boolean;
 }
 
+/** Bits of {@link Page.captureFlags}, named after SketchUp's public Ruby API
+ * (`Sketchup::Page#use_camera?` and so on). */
+export const PAGE_USE_CAMERA = 0x001;
+export const PAGE_USE_RENDERING_OPTIONS = 0x002;
+export const PAGE_USE_SHADOW_INFO = 0x004;
+export const PAGE_USE_AXES = 0x008;
+export const PAGE_USE_HIDDEN = 0x010; // before SketchUp 2020.1: geometry + objects
+export const PAGE_USE_HIDDEN_LAYERS = 0x020;
+export const PAGE_USE_SECTION_PLANES = 0x040;
+export const PAGE_USE_HIDDEN_GEOMETRY = 0x080;
+export const PAGE_USE_HIDDEN_OBJECTS = 0x100;
+
+export interface PageInit {
+  name?: string;
+  eye?: [number, number, number] | null;
+  target?: [number, number, number] | null;
+  up?: [number, number, number] | null;
+  fov?: number;
+  parallel?: boolean;
+  orthoHeight?: number;
+  hiddenLayers?: string[];
+  hiddenEntityIds?: number[];
+  captureFlags?: number | null;
+}
+
 /** A saved scene (SketchUp's "Scenes" tabs; "pages" in the SDK). */
-export interface Page {
+export class Page {
   /** Scene name as shown on its tab. */
   name: string;
   /** Camera position [x, y, z] in inches, or null. */
@@ -178,7 +203,77 @@ export interface Page {
   hiddenLayers: string[];
   /** Persistent ids of the entities this scene hides (groups, component
    * instances, and edges or faces hidden as geometry), in file order. */
-  hiddenEntityIds?: number[];
+  hiddenEntityIds: number[];
+  /** Which properties the scene saves ("Properties to save" in SketchUp's
+   * Scenes panel) as a u32 bitmask, or `null` when unknown. */
+  captureFlags: number | null;
+
+  constructor(init: PageInit = {}) {
+    this.name = init.name ?? '';
+    this.eye = init.eye ?? null;
+    this.target = init.target ?? null;
+    this.up = init.up ?? null;
+    this.fov = init.fov ?? 35.0;
+    this.parallel = init.parallel ?? false;
+    this.orthoHeight = init.orthoHeight ?? 0.0;
+    this.hiddenLayers = init.hiddenLayers ?? [];
+    this.hiddenEntityIds = init.hiddenEntityIds ?? [];
+    this.captureFlags = init.captureFlags ?? null;
+  }
+
+  private _flag(bit: number): boolean | null {
+    if (this.captureFlags === null) return null;
+    return Boolean(this.captureFlags & bit);
+  }
+
+  /** The scene saves its camera ("Camera Location"), `0x001`. */
+  get useCamera(): boolean | null {
+    return this._flag(PAGE_USE_CAMERA);
+  }
+
+  /** The scene saves its style ("Style and Fog"), `0x002`. */
+  get useRenderingOptions(): boolean | null {
+    return this._flag(PAGE_USE_RENDERING_OPTIONS);
+  }
+
+  /** The scene saves its shadows ("Shadow Settings"), `0x004`. */
+  get useShadowInfo(): boolean | null {
+    return this._flag(PAGE_USE_SHADOW_INFO);
+  }
+
+  /** The scene saves the axes ("Axes Location"), `0x008`. */
+  get useAxes(): boolean | null {
+    return this._flag(PAGE_USE_AXES);
+  }
+
+  /** The scene saves which layers it hides ("Visible Tags"), `0x020`. */
+  get useHiddenLayers(): boolean | null {
+    return this._flag(PAGE_USE_HIDDEN_LAYERS);
+  }
+
+  /** The scene saves the active section ("Active Section Planes"), `0x040`. */
+  get useSectionPlanes(): boolean | null {
+    return this._flag(PAGE_USE_SECTION_PLANES);
+  }
+
+  private _hidden(bit: number): boolean | null {
+    const flags = this.captureFlags;
+    if (flags === null) return null;
+    if (flags & (PAGE_USE_HIDDEN_GEOMETRY | PAGE_USE_HIDDEN_OBJECTS)) {
+      return Boolean(flags & bit);
+    }
+    return Boolean(flags & PAGE_USE_HIDDEN);
+  }
+
+  /** The scene saves which edges and faces it hides ("Hidden Geometry"), `0x080`. */
+  get useHiddenGeometry(): boolean | null {
+    return this._hidden(PAGE_USE_HIDDEN_GEOMETRY);
+  }
+
+  /** The scene saves which groups and components it hides ("Hidden Objects"), `0x100`. */
+  get useHiddenObjects(): boolean | null {
+    return this._hidden(PAGE_USE_HIDDEN_OBJECTS);
+  }
 }
 
 export interface Definition {
@@ -1636,19 +1731,23 @@ export function buildSceneFromParsed(
 }
 
 export function buildPagesFromRaw(parsed: ParsedRawData): Page[] {
-  return (parsed.pages ?? []).map((pg) => ({
-    name: pg.name,
-    eye: pg.eye,
-    target: pg.target,
-    up: pg.up,
-    fov: pg.fov,
-    parallel: pg.parallel,
-    orthoHeight: pg.orthoHeight,
-    hiddenLayers: (pg.hiddenLayerIds ?? [])
-      .map((id) => parsed.layerIdToName?.get(id))
-      .filter((name): name is string => name !== undefined),
-    hiddenEntityIds: [...(pg.hiddenEntityIds ?? [])],
-  }));
+  return (parsed.pages ?? []).map(
+    (pg) =>
+      new Page({
+        name: pg.name,
+        eye: pg.eye,
+        target: pg.target,
+        up: pg.up,
+        fov: pg.fov,
+        parallel: pg.parallel,
+        orthoHeight: pg.orthoHeight,
+        hiddenLayers: (pg.hiddenLayerIds ?? [])
+          .map((id) => parsed.layerIdToName?.get(id))
+          .filter((name): name is string => name !== undefined),
+        hiddenEntityIds: [...(pg.hiddenEntityIds ?? [])],
+        captureFlags: pg.captureFlags ?? null,
+      }),
+  );
 }
 
 export function resolveMaterialFromMaps(

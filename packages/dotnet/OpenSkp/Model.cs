@@ -333,8 +333,58 @@ namespace OpenSkp
         /// <summary>Names of the layers this scene hides.</summary>
         public List<string> HiddenLayers { get; set; } = new List<string>();
 
+        public const uint PageUseCamera = 0x001;
+        public const uint PageUseRenderingOptions = 0x002;
+        public const uint PageUseShadowInfo = 0x004;
+        public const uint PageUseAxes = 0x008;
+        public const uint PageUseHidden = 0x010; // before SketchUp 2020.1: geometry + objects
+        public const uint PageUseHiddenLayers = 0x020;
+        public const uint PageUseSectionPlanes = 0x040;
+        public const uint PageUseHiddenGeometry = 0x080;
+        public const uint PageUseHiddenObjects = 0x100;
+
         /// <summary>Persistent ids of the entities this scene hides, in file order.</summary>
         public List<long> HiddenEntityIds { get; set; } = new List<long>();
+
+        /// <summary>Which properties the scene saves ("Properties to save" in SketchUp's Scenes
+        /// panel), as the u32 the file stores, or null when unknown.</summary>
+        public uint? CaptureFlags { get; set; }
+
+        private bool? Flag(uint bit) => CaptureFlags is uint f ? (f & bit) != 0 : (bool?)null;
+
+        /// <summary>The scene saves its camera ("Camera Location"), 0x001.</summary>
+        public bool? UseCamera => Flag(PageUseCamera);
+
+        /// <summary>The scene saves its style ("Style and Fog"), 0x002.</summary>
+        public bool? UseRenderingOptions => Flag(PageUseRenderingOptions);
+
+        /// <summary>The scene saves its shadows ("Shadow Settings"), 0x004.</summary>
+        public bool? UseShadowInfo => Flag(PageUseShadowInfo);
+
+        /// <summary>The scene saves the axes ("Axes Location"), 0x008.</summary>
+        public bool? UseAxes => Flag(PageUseAxes);
+
+        /// <summary>The scene saves which layers it hides ("Visible Tags"), 0x020.</summary>
+        public bool? UseHiddenLayers => Flag(PageUseHiddenLayers);
+
+        /// <summary>The scene saves the active section ("Active Section Planes"), 0x040.</summary>
+        public bool? UseSectionPlanes => Flag(PageUseSectionPlanes);
+
+        private bool? HiddenFlag(uint bit)
+        {
+            if (CaptureFlags is not uint flags) return null;
+            if ((flags & (PageUseHiddenGeometry | PageUseHiddenObjects)) != 0)
+            {
+                return (flags & bit) != 0;
+            }
+            return (flags & PageUseHidden) != 0;
+        }
+
+        /// <summary>The scene saves which edges and faces it hides ("Hidden Geometry"), 0x080.</summary>
+        public bool? UseHiddenGeometry => HiddenFlag(PageUseHiddenGeometry);
+
+        /// <summary>The scene saves which groups and components it hides ("Hidden Objects"), 0x100.</summary>
+        public bool? UseHiddenObjects => HiddenFlag(PageUseHiddenObjects);
 
         public bool Equals(Page? other)
         {
@@ -347,6 +397,7 @@ namespace OpenSkp
                 && Fov.Equals(other.Fov)
                 && Parallel == other.Parallel
                 && OrthoHeight.Equals(other.OrthoHeight)
+                && CaptureFlags == other.CaptureFlags
                 && System.Linq.Enumerable.SequenceEqual(HiddenLayers, other.HiddenLayers)
                 && System.Linq.Enumerable.SequenceEqual(HiddenEntityIds, other.HiddenEntityIds);
         }
@@ -364,6 +415,7 @@ namespace OpenSkp
                 hash = (hash * 397) ^ Fov.GetHashCode();
                 hash = (hash * 397) ^ Parallel.GetHashCode();
                 hash = (hash * 397) ^ OrthoHeight.GetHashCode();
+                hash = (hash * 397) ^ CaptureFlags.GetHashCode();
                 foreach (var layer in HiddenLayers)
                 {
                     hash = (hash * 397) ^ (layer?.GetHashCode() ?? 0);

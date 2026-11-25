@@ -889,6 +889,11 @@ std::vector<RawPage> parse_pages(const TlvNode* node) {
 
         RawPage page;
 
+        auto flags = tlv_find_int(items, 0x7149);
+        if (flags && flags->size() == 4) {
+          page.capture_flags = read_u32(*flags, 0);
+        }
+
         auto head_payload = tlv_find_int(items, 0x6f54);
         std::vector<FlatTlvItem> head;
         if (head_payload) head = tlv_items_int(*head_payload);

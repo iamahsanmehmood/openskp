@@ -227,6 +227,7 @@ std::vector<Page> build_pages(const RawParsed& p) {
       if (it != p.layer_id_to_name.end()) page.hidden_layers.push_back(it->second);
     }
     page.hidden_entity_ids = pg.hidden_entity_ids;
+    page.capture_flags = pg.capture_flags;
     out.push_back(std::move(page));
   }
   return out;
