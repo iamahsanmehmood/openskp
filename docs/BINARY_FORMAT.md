@@ -257,3 +257,102 @@ def extract_entity_id(node):
             return result
     return None
 ```
+
+## 7. VFF Writer (Python, 2021+)
+
+`openskp.create_vff` writes the modern container by **editing a template**,
+never by patching fixed byte offsets. It parses the template's `model.dat`
+into a record tree, appends new records to the model's existing pools,
+allocates new ids above the template's own next-id counter, re-encodes the
+tree and repacks the archive. The bundled `_scaffold/blank_vff.skp` is an
+empty SketchUp 2025 document (one default tag, no geometry); any SketchUp
+file with the standard sections can be passed as the template instead.
+
+### 7.1 Header and integrity word
+
+The header is two UTF-16LE marker-prefixed strings followed by a 13-byte
+block whose last four bytes are the integrity word, then the embedded ZIP
+archive (`PK\x03\x04`). The writer keeps the template's header strings and
+its model revision, and patches only the integrity word.
+
+skpwright (https://github.com/hew3d/skpwright, by Kurt Granroth,
+GPL-3.0-only) documents the VFF container; the integrity-word algorithm was
+implemented from that description and verified against genuine SketchUp
+saves. No skpwright code is used.
+
+The integrity word is derived from the final archive: take every entry's
+CRC-32 in archive order, subtract 42 from odd-indexed entries, replace the
+`meta/meta.dat` slot with a constant derived from `ceil(n/2)` and the last
+four bytes of `meta.dat`, lay the slots out evens-first, then CRC-32
+`meta.dat` without its last four bytes followed by that table.
+
+### 7.2 ZIP and `model.dat` ordering
+
+New archive entries are emitted as local headers with the 20-byte ZIP64
+extended-information field (two zero `u64`s), DEFLATE level 1 (`0x0006`) for
+`.dat`/`.xml` and stored DEFLATE level 0 (`0x0000`) for images, no data
+descriptor, DOS date `0x0020` and a UTF-8 name. The central directory
+repeats the fields without the extra field. Entry order is:
+
+1. `meta/model_thumbnail.png`, `meta/preview_thumbnail.png`
+2. `meta/meta.dat`
+3. existing `materials/...` entries, then new material folders
+4. other existing entries
+5. `model.dat` **last**
+
+`meta/meta.dat` is repacked with a fresh model GUID (or the explicit
+`set_guid` value) and a fresh save time on the history entry; the template's
+own model revision is kept.
+
+### 7.3 Material and tag archive folders
+
+SketchUp derives the folder under `materials/` from the material's display
+name; a tag's embedded material uses `Layer_<tag name>` as that name. The
+writer reproduces the observed rule:
+
+- Replace the characters `\ / : * ? < > | "`, tab, newline and carriage
+  return with `_` (a quote becomes `_` only in the folder; `material.xml`'s
+  `name` attribute keeps it, XML-escaped).
+- While the name is longer than 80 characters, cut it to `floor(2/3)` of the
+  current length; if that lands exactly on 80, cut once more. For example a
+  120-character name becomes 53 characters and a 200-character one becomes
+  58.
+- If the resulting folder is already taken (comparison is case-insensitive,
+  as on Windows), strip a leading Windows drive prefix (`a:b` becomes `b`,
+  `C:D` becomes `D`), sanitise and truncate that remainder, then append
+  `_1`, `_2`, ... . Without a drive prefix this is just the usual `_N`
+  suffix, e.g. `a*b` after `a_b` becomes `a_b_1`.
+- Material and tag folders share one collision namespace, which is why a
+  material named `Layer_Foo` and a tag `Foo` end up at `Layer_Foo` and
+  `Layer_Foo_1`.
+- Material names are case-insensitive too: a new `wood` after `Wood` becomes
+  `wood1` (then `wood2`, ...), as SketchUp's material manager does. Tags are
+  case-insensitive rather than renamed: a new `wood` after `Wood` resolves
+  to the existing tag.
+
+Names containing characters XML 1.0 cannot hold raise `SkpWriteError`
+instead. The `/` and `"` cases therefore never nest or break a ZIP path.
+
+### 7.4 Records the core writer emits
+
+Everything lives under the root definition container `8813` inside the
+root entity list `F601`, with child pools for vertices (`8913`), edges
+(`8A13`), faces (`8B13`), components (`8C13`) and groups (`8D13`). New ids
+are allocated from the model's next-id record (`F501`), whose counter the
+writer advances.
+
+| Entity | Records |
+|---|---|
+| Drawing/entity base | `DC05` with entity id `DE05`, then `D007` drawing with optional front material `D107`, layer ref `D207` and flags `D307` |
+| Vertex | `C409` wrapping point `C509` (3 × `f64`) |
+| Edge | `B80B` with start `B90B`, end `BA0B`; flags carry hidden/soft/smooth bits |
+| Face | `AC0D` with plane `AD0D` (normal + distance, 4 × `f64`), loops `AE0D` (a loop `9411` contains edge uses `A00F`, each an edge id `A10F` plus forward bit `A20F`), optional back material `AF0D` |
+| Material | `C832` with name `CC32`; the color/opacity lives in `materials/<folder>/material.xml`, and tags own their `Layer_<name>` material |
+| Tag/layer | `8C3C` with name `8D3C`, hidden byte `8E3C`, owned material `8F3C` and tail `903C` |
+| Definition | `7C15` inside the definitions list (`7017` → `7117`) with GUID `7D15`, name `7E15`, kind `8315` (0 component, 1 group), timestamp and behaviour `581B` (`5D1B` always-faces-camera, `5E1B` shadows-face-sun) |
+| Instance/group placement | `6419` with name `6519`, 13 × `f64` transform `6619`, definition reference `6719` and GUID `6819`; a group is the same instance wrapped in `4C1D` in the groups pool |
+
+Faces are deduplicated by exact vertex coordinate and edges by endpoint
+pair, so adjacent faces share (and never duplicate) vertices and edges.
+Non-coplanar input is rejected unless `auto_triangulate=True`, which
+fan-splits it into planar triangles, matching `create.py`'s behavior.

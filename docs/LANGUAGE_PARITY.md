@@ -89,6 +89,7 @@ yet in that language; see [§3](#3-whats-still-outstanding-after-170).
 | Writer: linear dimensions (`offset_vector`, `layer`, `hidden`) + leader/screen text | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Writer: section planes | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Writer: construction lines/points (root + component definitions, `layer` + `hidden`) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Writer for 2021+ files (`create_vff()`: faces, solid materials, tags, components, groups) | 🔶 on `main`, not released yet | ❌ | ❌ | ❌ | ❌ | ❌ |
 | Writer: scenes (`add_scene`: camera + hidden layers) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | Editor (`open_existing()`) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | SKP-to-code generator (`to_*_code()`), round-tripping `applied_width`/opacity/`filename` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -159,8 +160,9 @@ six ports with matching rendering-options face colours
 
 **Writing (`create()` and `open_existing()`):** Every port's writer splices
 entities into the same bundled **SketchUp 2017 (`{17.0.1}`)** classic MFC
-`CArchive` blank-document scaffold (`blank_v17.skp`). Writers never emit VFF
-(2021+) or any classic version other than SketchUp 2017; SketchUp 2017 and
+`CArchive` blank-document scaffold (`blank_v17.skp`). These writers never
+emit VFF (2021+) or any classic version other than SketchUp 2017 (Python's
+separate `create_vff()`, on `main`, writes 2021+ files); SketchUp 2017 and
 every newer SketchUp release open that output natively. `open_existing()`
 accepts any classic MFC (pre-2021) file `parse()` reads, replays it through
 `create()`, and writes a new SketchUp 2017 (`{17.0.1}`) file (rejecting VFF
