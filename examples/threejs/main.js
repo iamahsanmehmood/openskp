@@ -34,14 +34,6 @@ document.getElementById('file').addEventListener('change', async (event) => {
         const glb = toGLB(buildScene(skp), { textures: true });
         const gltf = await new GLTFLoader().parseAsync(glb.buffer, '');
 
-        // OpenSKP writes material colours as the file's sRGB values, while
-        // GLTFLoader reads baseColorFactor as linear. Convert them, or every
-        // colour comes out washed out. Meshes share materials, so convert each
-        // material once.
-        const materials = new Set();
-        gltf.scene.traverse((obj) => obj.isMesh && materials.add(obj.material));
-        materials.forEach((material) => material.color.convertSRGBToLinear());
-
         if (model) scene.remove(model);
         model = gltf.scene;
         scene.add(model);
