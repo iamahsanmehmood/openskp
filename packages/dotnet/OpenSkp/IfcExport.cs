@@ -265,9 +265,13 @@ namespace OpenSkp
         /// <summary>
         /// Serializes a baked <see cref="Scene"/> to ISO-10303-21 STEP ASCII IFC4 format.
         /// </summary>
+        /// <param name="scene">Baked world-space scene returned by <see cref="SkpFile.BuildScene(byte[], SkpParseOptions?)"/>.</param>
+        /// <param name="scale">Coordinate multiplier from scene metres to the declared millimetre IFC unit (defaults to <see cref="MetresToMm"/>).</param>
+        /// <param name="schema">STEP header schema identifier (for example <c>"IFC4"</c>).</param>
         /// <param name="classifier">Optional override for <see cref="ClassifyElement"/> -
         /// use this to supply your own naming convention or metadata-driven typing
         /// instead of the built-in keyword/layer heuristic.</param>
+        /// <param name="classifyUsingFullPath">When <c>true</c> and <paramref name="classifier"/> is null, falls back to matching keywords across the full instance hierarchy path.</param>
         public static string ToIfc(
             Scene scene,
             double scale = MetresToMm,

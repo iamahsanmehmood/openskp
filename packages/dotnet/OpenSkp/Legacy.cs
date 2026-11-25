@@ -120,30 +120,6 @@ namespace OpenSkp
             return Tlv.ToHexUpper(data);
         }
 
-        /// <summary>
-        /// SketchUp 2020 (v20) writes an extra, undocumented record ahead of
-        /// some counts that v17 does not have, which leaves the reader a few
-        /// bytes early and makes it read garbage as the count. The filler is
-        /// an empty UTF-16 string record followed by zero padding:
-        ///
-        ///   &lt;ff fe ff&gt; &lt;u8 0&gt;        empty string
-        ///   &lt;zero padding&gt;           runs up to the real count
-        ///
-        /// Rather than hard-code an offset (the number of bytes before the
-        /// marker differs per call site), locate the marker in the short
-        /// window ahead, then take the first non-zero u32 that follows the
-        /// padding. Only the EMPTY-string form counts as filler: a real
-        /// string here would mean genuine data, and moving the cursor past
-        /// it would corrupt the parse.
-        ///
-        /// This only ever runs after a count came back implausible (or
-        /// zero), so files that were already parsing (v17, and the VFF
-        /// path) never reach it.
-        ///
-        /// <paramref name="countPos"/> is the offset the count was read FROM
-        /// (i.e. r.Pos - 4). Returns the corrected count, or null when this
-        /// is not the v20 layout.
-        /// </summary>
         /// <summary>Widest zero padding seen between the v20 filler's empty
         /// string and the count that follows it (9 and 13 bytes occur in
         /// real files; the ceiling leaves room without letting the probe
@@ -198,6 +174,30 @@ namespace OpenSkp
             return null;
         }
 
+        /// <summary>
+        /// SketchUp 2020 (v20) writes an extra, undocumented record ahead of
+        /// some counts that v17 does not have, which leaves the reader a few
+        /// bytes early and makes it read garbage as the count. The filler is
+        /// an empty UTF-16 string record followed by zero padding:
+        ///
+        ///   &lt;ff fe ff&gt; &lt;u8 0&gt;        empty string
+        ///   &lt;zero padding&gt;           runs up to the real count
+        ///
+        /// Rather than hard-code an offset (the number of bytes before the
+        /// marker differs per call site), locate the marker in the short
+        /// window ahead, then take the first non-zero u32 that follows the
+        /// padding. Only the EMPTY-string form counts as filler: a real
+        /// string here would mean genuine data, and moving the cursor past
+        /// it would corrupt the parse.
+        ///
+        /// This only ever runs after a count came back implausible (or
+        /// zero), so files that were already parsing (v17, and the VFF
+        /// path) never reach it.
+        ///
+        /// <paramref name="countPos"/> is the offset the count was read FROM
+        /// (i.e. r.Pos - 4). Returns the corrected count, or null when this
+        /// is not the v20 layout.
+        /// </summary>
         public static uint? RetryCountAfterV20Filler(LR r, int countPos, uint limit, Archive? ar = null)
         {
             var hit = FindCountAfterV20Filler(r.Data, countPos, limit, ar);
