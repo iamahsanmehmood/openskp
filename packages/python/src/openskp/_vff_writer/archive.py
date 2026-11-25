@@ -249,14 +249,13 @@ def _rewind_register_byte(register: int, byte: int) -> int:
 def _history_constant(k: int) -> int:
     """``V(k)`` for ``k = ceil(entries / 2)``.
 
-    Derived from the step as described in SketchUp's format notes: start at
-    ``V(1) = 0xFFFFFFFF``, ``V(2) = 0``, and each later value is the
-    complement of the previous one run *backwards* through four zero bytes of
-    the reflected CRC-32 register.  Instead of tabulating that inverse, the
-    register is rewound one bit at a time with ``_rewind_register_bit``; eight
-    inverse bits undo one byte and four bytes undo one step.  The resulting
-    constants are checked against values solved out of the stored words of
-    genuine SketchUp saves in the test suite.
+    Derived from the step described in skpwright's ``SKP_FORMAT.md``
+    (https://github.com/hew3d/skpwright): start at ``V(1) = 0xFFFFFFFF``,
+    ``V(2) = 0``, and each later value is the complement of the previous one
+    run *backwards* through four zero bytes of the reflected CRC-32 register.
+    Instead of tabulating that inverse, the register is rewound one bit at a
+    time with ``_rewind_register_bit``; eight inverse bits undo one byte and
+    four bytes undo one step.  The resulting constants are verified against SketchUp's own saves by solving them out of the stored words in the test suite.
     """
     if k < 1:
         raise ValueError("k must be positive")
@@ -287,7 +286,9 @@ def _meta_slot_value(meta: bytes, k: int) -> int:
 def integrity_word(entries: Sequence[ZipEntry]) -> int:
     """The u32 integrity word for *entries*, in archive order.
 
-    Implemented from genuine SketchUp 2025 saves (verified byte-for-byte).
+    Implemented from the rule described in skpwright's ``SKP_FORMAT.md``
+    (https://github.com/hew3d/skpwright), and verified against SketchUp's own
+    saves byte-for-byte.
     """
     meta = next((e.data for e in entries if e.name == "meta/meta.dat"), None)
     if meta is None:
