@@ -82,8 +82,8 @@ Python, TypeScript, .NET, Dart and C++ are published packages; Rust is on `main`
 | **Scene Baking / Triangulation** | ✅ | Opt-in scene baking: full placed scene graph resolved to world-space, triangulated, GLB-ready — in all five languages |
 | **Layers / Tags** | ✅ | Layer definitions with colors and visibility (`hidden` state) — fully exposed across all five languages |
 | **Materials & Textures** | ✅ | Material properties, colors, transparency, colorized materials, and embedded texture images |
-| **Styles** | 🔶 | `styles[].front_color`/`back_color` read for 2021+ files in all five, plus `face_front_color`/`face_back_color` (SketchUp 4–2025 rendering options) on `main` in Python ([#550](https://github.com/iamahsanmehmood/openskp/pull/550)); Python's scenes show unpainted faces in those colours (on `main`), while the other ports' scenes still use the tag colour ([#533](https://github.com/iamahsanmehmood/openskp/issues/533)) |
-| **Dynamic Components** | 🔶 | Instance and face attribute dictionaries extracted in all five languages (2021+ and pre-2021); **definition- and model-level** attribute dictionaries (Dynamic Components formulas/options) are Python-only today |
+| **Styles** | ✅ | `styles[].front_color`/`back_color` (2021+) and the model's face colours `face_front_color`/`face_back_color` (SketchUp 4–2025) in all five languages; scenes show unpainted faces in those colours ([#533](https://github.com/iamahsanmehmood/openskp/issues/533)) |
+| **Dynamic Components** | 🔶 | Instance and face attribute dictionaries extracted in all five languages (2021+ and pre-2021); **definition- and model-level** attribute dictionaries (Dynamic Components formulas/options) are complete in Python only, see [the table](docs/LANGUAGE_PARITY.md#2-feature-matrix) |
 | **Observability** | ✅ | Opt-in progress reporting + structured, location-carrying parse errors — see [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md) |
 | **Convert to GLB / OBJ / STL / PLY / DXF 3D / IFC4 / JSON** | ✅ | Native, from-scratch conversion to glTF (GLB), Wavefront OBJ, STL, PLY, DXF 3D (AutoCAD Polyface Mesh), IFC4 (BIM), and JSON metadata — available in all five languages, no third-party CAD/BIM SDK involved — see [Export capabilities](docs/DEVELOPER_GUIDE.md#export-capabilities) |
 | **Convert to Fragments (.frag)** | ✅ | Direct SketchUp → [ThatOpen Fragments](https://github.com/ThatOpen/engine_fragment) export for BIM web viewers, no IFC intermediate. Published in Python (`openskp[fragments]`), TypeScript, .NET (`OpenSkp.Fragments`), and C++; on `main` (not published to pub.dev) in Dart (`openskp_fragments`). See [docs/LANGUAGE_PARITY.md § Fragments](docs/LANGUAGE_PARITY.md#fragments-frag-support) and [Fragments export](docs/DEVELOPER_GUIDE.md#fragments-export) |
@@ -217,13 +217,9 @@ for anything specific to FreeCAD/Blender behavior.
 | 🎯 **Dart / Flutter** | [![Pub](https://img.shields.io/pub/v/openskp.svg?label=)](https://pub.dev/packages/openskp) | ✅ Available | `dart pub add openskp` |
 | ⚙️ **C++17** | [![C++](https://img.shields.io/github/v/release/iamahsanmehmood/openskp?filter=cpp-v*&label=)](https://github.com/iamahsanmehmood/openskp/releases?q=cpp-) | ✅ Source package | `find_package(OpenSkp CONFIG REQUIRED)` |
 
-All five languages are on **1.6.0** as of the 2026-11-22 synchronized
-release — same version number, not identical capability: Python carries a
-few things (writing scenes, per-edge and per-face layer ids, loose-edge
-curve scene support) the other four don't have yet, and while all five write
-construction lines and points, C++ adds extra writer options (`GuideOptions`
-layer/visibility and parameterized segments, `set_document_options()`, and
-explicit GUID/persistent-ID overrides) the other four don't. All five parse both the modern VFF (2021+)
+All five languages are on **1.7.0** as of the 2026-11-25 synchronized
+release. The version number is the same, the capability nearly so: Python alone
+writes scenes (`add_scene`), and a few smaller differences are listed below. All five parse both the modern VFF (2021+)
 and classic MFC (SketchUp 4–2020) `.skp` containers, and support the same
 opt-in scene-baking (`buildScene()`) and observability APIs. Full detail
 on what differs between languages, and which real SketchUp file versions
@@ -242,28 +238,28 @@ condensed version.
 |:---|:---:|:---:|:---:|:---:|:---:|
 | Parse VFF (2021+) & classic MFC (SketchUp 4–2020; [§4](docs/LANGUAGE_PARITY.md#4-real-sketchup-file-version-support)) | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Geometry, layers, materials/textures | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Styles (`styles[]` 2021+ in all 5; `face_front_color`/`face_back_color` 4–2025 and used in scenes on `main` in Python; the other ports' scenes still use tag colour, [#533](https://github.com/iamahsanmehmood/openskp/issues/533)) | 🔶 | 🔶 | 🔶 | 🔶 | 🔶 |
-| Dynamic Components / attribute dicts (instance/face in all 5; definition & model dicts in Python) | ✅ | 🔶 | 🔶 | 🔶 | 🔶 |
-| Attribute dicts: multi-dictionary + typed values (`Point3d`/`Length`/nested lists; 9/9 classic, 7–8/9 VFF) | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Attribute dicts surfaced in GLB/JSON metadata export (not just IFC Psets) | ✅ | n/a | n/a | n/a | ✅ |
+| Styles and the model's face colours (`face_front_color`/`face_back_color`), used in scenes | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Dynamic Components / attribute dicts (instance/face in all 5; definition and model dicts complete in Python) | ✅ | 🔶 | 🔶 | 🔶 | 🔶 |
+| Attribute dicts: multi-dictionary + typed values (`Point3d`/`Length`/nested lists; 9/9 classic and VFF) | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Attribute dicts surfaced in GLB/JSON metadata export (not just IFC Psets) | ✅ | ❌ | ❌ | ❌ | ✅ JSON |
 | VFF pages/scenes + dimension parsing | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Legacy (pre-2021) pages/scenes reading | ✅ with cameras (2014–2020) | ✅ | ✅ | ✅ | ✅ |
 | Construction lines/points reading | ✅ legacy + VFF | ✅ | ✅ | ✅ | ✅ legacy + VFF |
 | Scene baking, instancing-preserving scene output | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Loose-edge curve support (structural framing) | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Loose-edge curve support (structural framing) | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Writer: materials/layers/definitions/groups/faces/curves/images | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Writer: dimensions, section planes, construction geometry | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Writer: scenes (camera + hidden layers) | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Editor (`open_existing()`), code generator | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Export: GLB / OBJ / STL / PLY / DXF / IFC4 / JSON | ✅ | ✅ | ✅ | ✅ | ✅ |
-| IFC export correctness fixes (units, layer visibility, Psets, classification) | ✅ | not checked | not checked | not checked | ✅ |
-| IFC curve/arc annotations (`IfcAnnotation`/`IfcArcIndex`) | ✅ | ❌ | ❌ | ❌ | ❌ |
+| IFC export correctness fixes (units, layer visibility, Psets, classification) | ✅ | ✅ | ✅ | ✅ | ✅ |
+| IFC curve/arc annotations (`IfcAnnotation`/`IfcArcIndex`) | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Fragments (`.frag`) export** ([details](docs/LANGUAGE_PARITY.md#fragments-frag-support)) | ✅ | ✅ | ✅ | 🔶 on `main`, not published | ✅ |
 | **Fragments (`.frag`) import** ([details](docs/LANGUAGE_PARITY.md#fragments-frag-support)) | ✅ | ✅ | ✅ | 🔶 on `main`, not published | ✅ |
 
 ### Real SketchUp file version support
 
-Classic MFC files from **SketchUp 4 through 2020** and modern VFF files from **SketchUp 2021+** are read across all five languages, with known exceptions (real SketchUp 3 files fail in every reader; a real SketchUp 5 file in the wild fails in TypeScript; 2019–2020 `CCustomLineStyle` tag line styles fail in the 1.6.0 releases outside Python and are fixed on `main` via [#579](https://github.com/iamahsanmehmood/openskp/pull/579)). For writing, `create()` and `open_existing()` emit a **SketchUp 2017** (`{17.0.1}`) classic MFC scaffold (`blank_v17.skp`) that SketchUp 2017 and newer open natively.
+Classic MFC files from **SketchUp 4 through 2020** and modern VFF files from **SketchUp 2021+** are read across all five languages, with known exceptions (real SketchUp 3 files fail in every reader; a real SketchUp 5 file in the wild fails in TypeScript). For writing, `create()` and `open_existing()` emit a **SketchUp 2017** (`{17.0.1}`) classic MFC scaffold (`blank_v17.skp`) that SketchUp 2017 and newer open natively.
 
 Full per-version, per-language status table and evidence (synthetic fixtures, SDK-written files, and the real-world multi-version sweep): **[docs/LANGUAGE_PARITY.md § 4](docs/LANGUAGE_PARITY.md#4-real-sketchup-file-version-support)**.
 

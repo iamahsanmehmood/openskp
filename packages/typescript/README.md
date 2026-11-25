@@ -13,6 +13,10 @@ serialization, so it runs anywhere JavaScript does: Node.js or the browser.
 
 🏠 [openskp.com](https://openskp.com) · 🌐 [Try the Live Web Viewer](https://iamahsanmehmood.github.io/openskp/) · 📖 [Docs](https://iamahsanmehmood.github.io/openskp/docs/) · [Changelog](https://github.com/iamahsanmehmood/openskp/blob/main/CHANGELOG.md)
 
+![A house model read from a .skp file, turning around](https://raw.githubusercontent.com/iamahsanmehmood/openskp/main/assets/demo.gif)
+
+Questions and ideas are welcome in [Discussions](https://github.com/iamahsanmehmood/openskp/discussions). If OpenSKP is useful to you, a [star on GitHub](https://github.com/iamahsanmehmood/openskp) helps others find it.
+
 > [!IMPORTANT]
 > This project was built by reverse engineering a proprietary binary format. It is not affiliated with or endorsed by Trimble Inc. or SketchUp.
 
@@ -84,11 +88,6 @@ import { SkpFile } from 'openskp';
 const skp = SkpFile.open('model.skp');
 const model = skp.parse();
 
-// Browser: parse from a File/Blob's ArrayBuffer
-import { parseSkp } from 'openskp';
-const buffer = await file.arrayBuffer();
-const model2 = parseSkp(buffer);
-
 console.log(model.version, model.layers.length, 'layers');
 
 // Inspect definitions (component geometry) - model.definitions is a Map
@@ -108,6 +107,17 @@ console.log(scene.glbPrimitives.length, 'renderable mesh primitives');
 // once, plus a transform per placement.
 const instanced = skp.buildInstancedScene();
 console.log(instanced.meshResources.length, 'unique meshes');
+```
+
+In the browser, parse a `File` or `Blob` (for example from an
+`<input type="file">`):
+
+```typescript
+import { parseSkp } from 'openskp';
+
+async function read(file: File) {
+  return parseSkp(await file.arrayBuffer());
+}
 ```
 
 ## Choosing an API
@@ -246,6 +256,7 @@ Two things an asset browser or block library needs, without paying for a
 full parse or a render:
 
 ```typescript
+import fs from 'fs';
 import { extractThumbnail, buildScene } from 'openskp';
 
 // The preview image SketchUp already saved inside the file. Reads
@@ -368,7 +379,7 @@ attribute dictionaries, circular faces and partial arcs, freeform
 polyline curves, faces with holes cut out, and non-planar
 auto-triangulation. `openExisting()` loads an *existing* legacy-format
 file and rebuilds it as a new builder, so more geometry can be added
-before saving. See [`src/create.ts`](src/create.ts) for the full scope
+before saving. See [`src/create.ts`](https://github.com/iamahsanmehmood/openskp/blob/main/packages/typescript/src/create.ts) for the full scope
 notes.
 
 ```typescript
@@ -378,7 +389,7 @@ const builder = create();
 
 // Materials and layers
 const red = builder.addMaterial('Red', [255, 0, 0]);
-const brick = builder.addTextureMaterial('Brick', brickPngBytes);
+const brick = builder.addTextureMaterial('Brick', brickPngBytes); // a Uint8Array with a PNG or JPEG
 const roofLayer = builder.addLayer('Roof', { color: [180, 60, 40] });
 
 // All addComponentDefinition/addGroup calls must come before any
@@ -449,7 +460,7 @@ const model = skp.parse({
 Parse failures throw `SkpParseError`, carrying `stage`, `recordIndex`,
 `totalRecords`, `tag`, and `definitionId` context, with the original
 error preserved as `.cause`. See
-[docs/OBSERVABILITY.md](../../docs/OBSERVABILITY.md) for the full
+[docs/OBSERVABILITY.md](https://github.com/iamahsanmehmood/openskp/blob/main/docs/OBSERVABILITY.md) for the full
 cross-language reference.
 
 ## Known limitation: large files
@@ -459,7 +470,7 @@ a 113 MB file needs 8–16 GB of Node heap, and files beyond ~150-200 MB
 may not parse in a browser tab at all (a typical tab's heap ceiling is
 ~4 GB). Root cause: V8's per-object overhead on millions of small
 geometry objects. See
-[docs/DEVELOPER_GUIDE.md](../../docs/DEVELOPER_GUIDE.md#performance) for
+[docs/DEVELOPER_GUIDE.md](https://github.com/iamahsanmehmood/openskp/blob/main/docs/DEVELOPER_GUIDE.md#performance) for
 verified numbers before parsing very large files in this package.
 
 ## Package Structure
@@ -495,10 +506,10 @@ or a PR to get added here.
 ## Contributing
 
 The Python package in `../python/` and this package are both independent
-implementations — see [docs/LANGUAGE_PARITY.md](../../docs/LANGUAGE_PARITY.md)
+implementations — see [docs/LANGUAGE_PARITY.md](https://github.com/iamahsanmehmood/openskp/blob/main/docs/LANGUAGE_PARITY.md)
 for current feature differences.
-See [CONTRIBUTING.md](../../CONTRIBUTING.md) for guidelines.
+See [CONTRIBUTING.md](https://github.com/iamahsanmehmood/openskp/blob/main/CONTRIBUTING.md) for guidelines.
 
 ## License
 
-MIT — see [LICENSE](../../LICENSE)
+MIT — see [LICENSE](https://github.com/iamahsanmehmood/openskp/blob/main/LICENSE)

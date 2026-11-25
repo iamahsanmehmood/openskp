@@ -1,5 +1,34 @@
 # Changelog
 
+The releases 1.3.0 to 1.6.0 and the details of every release are in the
+[project changelog](https://github.com/iamahsanmehmood/openskp/blob/main/CHANGELOG.md).
+
+## 1.7.0
+
+- **Privacy:** `openExisting()` and the code made by `toDartCode()` no longer
+  write the path of a temporary file, with your user name, into the saved
+  file. `addTextureMaterial` and `addImage` take an optional `filename`.
+- **Colours as in SketchUp:** unpainted faces take the model's front and back
+  face colours (`ParseOptions(unpaintedFaces: 'tag')` for the old ones), GLB
+  files hold linear colours and textures that are no longer darkened, and
+  colorized textures are marked.
+- **More files open:** SketchUp 2019 and 2020 files whose tags carry a line
+  style; scenes of 2015 to 2020 files are no longer lost. Damaged files throw
+  `SkpParseError`.
+- `Edge.layer`, `Face.layer`, `Definition.looseEdgeRuns()`, curve sets and arcs
+  in scenes, saved scenes (`pages`) with the entities they hide and the
+  properties they save, guides inside components, the line of a dimension, tags
+  and visibility of texts and dimensions, several attribute dictionaries per
+  entity, document options in the writer.
+- STL files of painted models can be printed; IFC writes curves, names with any
+  character and the visibility of tags; DXF refuses malformed meshes.
+- **Changed results:** the IFC default scale is millimetres (it was inches),
+  `Definition.guid` and `Instance.guid` are in the order SketchUp shows, tag
+  colours are no longer listed as materials, and scene `properties` of 2021+
+  files hold the dynamic attributes only.
+- Classes that **implement** `Edge`, `Face`, `Definition` or `GeometryHost` need
+  the new members.
+
 ## 1.2.0
 
 - **Groups can now carry attributes.** `addGroup`/`addGroupInstance` gained

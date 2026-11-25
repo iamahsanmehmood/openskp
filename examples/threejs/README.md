@@ -34,7 +34,6 @@ scene.add(gltf.scene);
 - `buildScene()` parses the file and places every component instance in world space as triangulated meshes.
 - `toGLB()` writes those meshes as a binary glTF. `{ textures: true }` embeds texture images; leave it out if you only need geometry and colours.
 - The GLB is already Y-up and in metres, so three.js needs no rotation or scaling.
-
-One detail: OpenSKP stores material colours as the file's sRGB values, while `GLTFLoader` reads glTF colour factors as linear values. Without a fix, every colour looks washed out, so `main.js` converts each material's colour with `color.convertSRGBToLinear()` after loading.
+- Material colours are linear, as glTF wants them, so `GLTFLoader` shows them as they are in SketchUp (needs openskp 1.7.0 or newer).
 
 For layers (tags), picking, measurements and export to other formats, see the full [web viewer](../web-viewer).

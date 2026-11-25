@@ -1,7 +1,7 @@
 import { SkpScene, getSurfacePrimitives } from './model';
+import { nodeFs, nodePath } from './node-builtins';
 
 declare const process: any;
-declare const require: any;
 
 function sanitizeMaterialName(name: string): string {
   const clean = name.trim().replace(/[^\w.-]/g, '_');
@@ -192,8 +192,8 @@ export function toOBJ(scene: SkpScene, mtlFilename?: string): string {
  */
 export function exportOBJ(scene: SkpScene, outputPath: string, exportMtl: boolean = true): void {
   if (typeof process !== 'undefined' && process.versions && process.versions.node) {
-    const fs = require('fs');
-    const path = require('path');
+    const fs = nodeFs();
+    const path = nodePath();
 
     const mtlName = exportMtl ? `${path.basename(outputPath, path.extname(outputPath))}.mtl` : undefined;
     const text = toOBJ(scene, mtlName);

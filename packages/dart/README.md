@@ -9,6 +9,10 @@ Parse, write, and convert `.skp` files without SketchUp. No SDK. No license. Jus
 
 🏠 [openskp.com](https://openskp.com) · 🌐 [Try the Live Web Viewer](https://iamahsanmehmood.github.io/openskp/) · 📖 [Docs](https://iamahsanmehmood.github.io/openskp/docs/) · [Changelog](https://github.com/iamahsanmehmood/openskp/blob/main/CHANGELOG.md)
 
+![A house model read from a .skp file, turning around](https://raw.githubusercontent.com/iamahsanmehmood/openskp/main/assets/demo.gif)
+
+Questions and ideas are welcome in [Discussions](https://github.com/iamahsanmehmood/openskp/discussions). If OpenSKP is useful to you, a [star on GitHub](https://github.com/iamahsanmehmood/openskp) helps others find it.
+
 > [!IMPORTANT]
 > This project was built by reverse engineering a proprietary binary format. It is not affiliated with or endorsed by Trimble Inc. or SketchUp.
 
@@ -153,7 +157,7 @@ void main() async {
 
   // Export to binary glTF 2.0 (GLB) bytes or file
   final glbBytes = toGlb(scene);
-  await exportGlb(scene, 'my_model.glb');
+  exportGlb(scene, 'my_model.glb');
   print('Exported GLB: ${glbBytes.length} bytes');
 
   // Export to Wavefront OBJ, plus a companion .mtl material library
@@ -202,7 +206,7 @@ attribute dictionaries, circular faces and partial arcs, freeform
 polyline curves, faces with holes cut out, and non-planar
 auto-triangulation. `openExisting()` loads an *existing* legacy-format
 file and rebuilds it as a new builder, so more geometry can be added
-before saving. See [`lib/src/create.dart`](lib/src/create.dart) for the
+before saving. See [`lib/src/create.dart`](https://github.com/iamahsanmehmood/openskp/blob/main/packages/dart/lib/src/create.dart) for the
 full scope notes.
 
 ```dart
@@ -288,7 +292,7 @@ data model (the same shape the C# port also follows):
 - `List<GlbPrimitive> glbPrimitives` — Triangulated mesh primitives ready for GPU upload or GLB packaging.
 - `Map<String, MeshMetadata> meshIndex` — Metadata map describing each baked mesh primitive, keyed by the matching `GlbPrimitive.geomName`.
 - `Uint8List toGlb(Scene scene)` — Serializes a baked scene into binary glTF 2.0 (GLB) bytes.
-- `Future<File> exportGlb(Scene scene, String path)` — Exports a baked scene directly to a `.glb` file on disk.
+- `void exportGlb(Scene scene, String path)` — Exports a baked scene directly to a `.glb` file on disk.
 
 ---
 

@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.21)
 
 project(
   OpenSkp
-  VERSION 1.6.0
+  VERSION 1.7.0
   DESCRIPTION "Open-source SketchUp (.skp) binary file parser, writer, and converter - extract geometry, metadata, layers, and materials; create and edit .skp files; convert to GLB, OBJ, STL, PLY, DXF, and IFC4"
   HOMEPAGE_URL "https://openskp.com"
   LANGUAGES C CXX
@@ -268,7 +268,12 @@ install(
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
   INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
 )
-install(DIRECTORY include/openskp DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+# _fragments_fb is private: its generated header needs flatbuffers.
+install(
+  DIRECTORY include/openskp
+  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+  PATTERN "_fragments_fb" EXCLUDE
+)
 install(
   FILES "${OPENSKP_GENERATED_INCLUDE_DIR}/openskp/export.hpp"
   DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/openskp"

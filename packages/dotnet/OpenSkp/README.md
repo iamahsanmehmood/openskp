@@ -9,6 +9,10 @@ Parse, write, and convert `.skp` files without SketchUp. No SDK. No license. Jus
 
 🏠 [openskp.com](https://openskp.com) · 🌐 [Try the Live Web Viewer](https://iamahsanmehmood.github.io/openskp/) · 📖 [Docs](https://iamahsanmehmood.github.io/openskp/docs/) · [Changelog](https://github.com/iamahsanmehmood/openskp/blob/main/CHANGELOG.md)
 
+![A house model read from a .skp file, turning around](https://raw.githubusercontent.com/iamahsanmehmood/openskp/main/assets/demo.gif)
+
+Questions and ideas are welcome in [Discussions](https://github.com/iamahsanmehmood/openskp/discussions). If OpenSKP is useful to you, a [star on GitHub](https://github.com/iamahsanmehmood/openskp) helps others find it.
+
 > [!IMPORTANT]
 > This project was built by reverse engineering a proprietary binary format. It is not affiliated with or endorsed by Trimble Inc. or SketchUp.
 
@@ -113,7 +117,7 @@ class Program
         Console.WriteLine("Materials:");
         foreach (var material in model.Materials)
         {
-            Console.WriteLine($"- {material.Name} (Transparency: {material.Transparency})");
+            Console.WriteLine($"- {material.Name} (Opacity: {material.Transparency})");
         }
 
         // Walk component definitions and their geometry
@@ -161,7 +165,7 @@ attribute dictionaries, circular faces and partial arcs, freeform
 polyline curves, faces with holes cut out, and non-planar
 auto-triangulation. `SkpEdit.OpenExisting()` loads an *existing*
 legacy-format file and rebuilds it as a new builder, so more geometry can
-be added before saving. See [`Create.cs`](Create.cs) for the full scope
+be added before saving. See [`Create.cs`](https://github.com/iamahsanmehmood/openskp/blob/main/packages/dotnet/OpenSkp/Create.cs) for the full scope
 notes.
 
 ```csharp
@@ -194,6 +198,8 @@ builder.Save("output.skp");
 ### Editing an existing file
 
 ```csharp
+using OpenSkp;
+
 var result = SkpEdit.OpenExisting("building.skp");
 foreach (var w in result.Warnings) Console.WriteLine($"not fully reproduced: {w}");
 
@@ -216,6 +222,8 @@ re-runnable transcript of `SkpCreate.NewFile()` calls that rebuilds an
 equivalent file when run:
 
 ```csharp
+using OpenSkp;
+
 SkpModel model = SkpFile.Open("building.skp");
 Console.WriteLine(Codegen.ToCSharpCode(model));
 ```

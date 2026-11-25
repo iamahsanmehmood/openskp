@@ -10,6 +10,10 @@ Parse, write, and convert `.skp` files without SketchUp. No SDK. No license. Jus
 
 🏠 [openskp.com](https://openskp.com) · 🌐 [Try the Live Web Viewer](https://iamahsanmehmood.github.io/openskp/) · 📖 [Docs](https://iamahsanmehmood.github.io/openskp/docs/) · [Changelog](https://github.com/iamahsanmehmood/openskp/blob/main/CHANGELOG.md)
 
+![A house model read from a .skp file, turning around](https://raw.githubusercontent.com/iamahsanmehmood/openskp/main/assets/demo.gif)
+
+Questions and ideas are welcome in [Discussions](https://github.com/iamahsanmehmood/openskp/discussions). If OpenSKP is useful to you, a [star on GitHub](https://github.com/iamahsanmehmood/openskp) helps others find it.
+
 > [!IMPORTANT]
 > This project was built by reverse engineering a proprietary binary format. It is not affiliated with or endorsed by Trimble Inc. or SketchUp.
 
@@ -153,7 +157,7 @@ fallback for non-planar input. `openskp.open_existing()` can also load an
 *existing* legacy-format file and rebuild it as a new builder, so more
 geometry can be added to it before saving (see
 [Editing an existing file](#editing-an-existing-file) below). See
-[`openskp/create.py`](src/openskp/create.py) for the full scope notes.
+[`openskp/create.py`](https://github.com/iamahsanmehmood/openskp/blob/main/packages/python/src/openskp/create.py) for the full scope notes.
 
 The same writer is also available in TypeScript, .NET, Dart, and C++ —
 see each package's own README, or
@@ -280,7 +284,7 @@ builder.save("building_edited.skp")
 `warnings` lists anything the source file had that couldn't be
 faithfully reproduced (a projected/draped texture falling back to
 default projection, a colorized material's tint, and several others) —
-see [`openskp/edit.py`](src/openskp/edit.py) for the complete, itemized
+see [`openskp/edit.py`](https://github.com/iamahsanmehmood/openskp/blob/main/packages/python/src/openskp/edit.py) for the complete, itemized
 scope.
 
 ### Generating code from a file

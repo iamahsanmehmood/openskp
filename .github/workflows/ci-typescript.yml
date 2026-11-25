@@ -51,6 +51,11 @@ jobs:
           cd packages/typescript
           npm run build
 
+      - name: Load the built package with import and with require
+        run: |
+          cd packages/typescript
+          node tests/package-smoke.mjs
+
       - name: Test
         run: |
           cd packages/typescript

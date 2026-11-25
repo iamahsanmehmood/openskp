@@ -9,6 +9,10 @@ Parse, write, and convert `.skp` files without SketchUp. No SDK. No license. Jus
 
 🏠 [openskp.com](https://openskp.com) · 🌐 [Try the Live Web Viewer](https://iamahsanmehmood.github.io/openskp/) · 📖 [Docs](https://iamahsanmehmood.github.io/openskp/docs/) · [Changelog](https://github.com/iamahsanmehmood/openskp/blob/main/CHANGELOG.md)
 
+![A house model read from a .skp file, turning around](https://raw.githubusercontent.com/iamahsanmehmood/openskp/main/assets/demo.gif)
+
+Questions and ideas are welcome in [Discussions](https://github.com/iamahsanmehmood/openskp/discussions). If OpenSKP is useful to you, a [star on GitHub](https://github.com/iamahsanmehmood/openskp) helps others find it.
+
 > [!IMPORTANT]
 > This project was built by reverse engineering a proprietary binary format. It is not affiliated with or endorsed by Trimble Inc. or SketchUp.
 
@@ -40,8 +44,9 @@ existing ones, checked against SketchUp's C library via
   placed scene graph to world-space, triangulated, export-ready geometry.
 - **Native multi-format conversion** — glTF (GLB), Wavefront OBJ/MTL, STL,
   PLY, AutoCAD DXF (3DFACE and Polyface Mesh), IFC4 (BIM/ISO 10303-21
-  STEP), and JSON — no third-party CAD/BIM SDK involved beyond the two
-  privately-bundled dependencies below (miniz for ZIP, TinyGLTF for GLB).
+  STEP), and JSON — no third-party CAD/BIM SDK involved beyond the three
+  privately-bundled dependencies below (miniz for ZIP, TinyGLTF for GLB,
+  FlatBuffers for Fragments).
   The DXF writer is verified against real desktop AutoCAD, not just
   lenient DXF readers.
 - **Write support** — build new legacy-format `.skp` files from scratch:
@@ -71,16 +76,17 @@ CMake fetches these pinned dependencies:
 | --- | --- | --- | --- |
 | [miniz](https://github.com/richgel999/miniz) | 3.1.2 (`77d0dce8627735138c51770d1799a1ef48f2117d`) | Reading modern SKP ZIP containers | Always |
 | [TinyGLTF](https://github.com/syoyo/tinygltf) | 2.9.7 (`488a70a3df62a4df1a736e9e56fb8836580c4888`) | Writing binary glTF 2.0 assets | Always |
+| [FlatBuffers](https://github.com/google/flatbuffers) | 25.12.19 (headers only) | Reading and writing Fragments (`.frag`) | Always |
 | [GoogleTest](https://github.com/google/googletest) | 1.17.0 (`52eb8108c5bdec04579160ae17225d66034bd723`) | C++ test suite | `OPENSKP_BUILD_TESTS=ON` |
 
-miniz and TinyGLTF are compiled privately into OpenSKP, and GoogleTest is used
+miniz, TinyGLTF and FlatBuffers are compiled privately into OpenSKP, and GoogleTest is used
 only by the test executable. None is a transitive dependency for installed consumers.
 The triangulation implementation is included in this source tree and does not
 require a separate library.
 
 Standard FetchContent source overrides and offline workflows are supported,
-including `FETCHCONTENT_SOURCE_DIR_MINIZ` and
-`FETCHCONTENT_SOURCE_DIR_TINYGLTF`, and
+including `FETCHCONTENT_SOURCE_DIR_MINIZ`,
+`FETCHCONTENT_SOURCE_DIR_TINYGLTF`, `FETCHCONTENT_SOURCE_DIR_FLATBUFFERS` and
 `FETCHCONTENT_SOURCE_DIR_GOOGLETEST`.
 
 clang-format is an optional developer dependency. Version 18 is the canonical
@@ -142,9 +148,9 @@ painted sides.
 
 `to_glb()` returns the complete binary asset as a `ByteBuffer`.
 `export_glb()` writes those bytes to disk. Metadata JSON export is provided
-via `to_json(model, scene)`, which returns a `JsonValue` tree — pass it to
+via `to_json(model, &scene)`, which returns a `JsonValue` tree — pass it to
 `to_json_string(value, indent)` for actual JSON text, or use
-`export_json(model, path, scene)` to write a file directly (note: `path`
+`export_json(model, path, &scene)` to write a file directly (note: `path`
 comes before `scene` in that signature).
 
 `BUILD_SHARED_LIBS` controls static/shared output (static is the CMake
@@ -237,6 +243,11 @@ builder->save("output.skp");
 ### Editing an existing file
 
 ```cpp
+#include <iostream>
+#include <openskp/openskp.hpp>
+
+using namespace openskp;
+
 OpenExistingResult result = open_existing("building.skp");
 for (const auto& w : result.warnings) std::cerr << "not fully reproduced: " << w << '\n';
 
@@ -258,6 +269,11 @@ keep editing, it returns a **string of source code** — a re-runnable
 transcript of `create()` calls that rebuilds an equivalent file when run:
 
 ```cpp
+#include <iostream>
+#include <openskp/openskp.hpp>
+
+using namespace openskp;
+
 SkpModel model = SkpFile::open("building.skp").parse();
 std::cout << to_cpp_code(model);
 ```

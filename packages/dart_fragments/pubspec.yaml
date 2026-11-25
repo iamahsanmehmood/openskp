@@ -1,10 +1,10 @@
 name: openskp_fragments
 description: Direct SketchUp (.skp) <-> ThatOpen Fragments (.frag) export and import for OpenSkp. Separate, opt-in package (mirrors Python's `pip install "openskp[fragments]"` extra) so the core openskp package avoids taking flat_buffers for every other consumer; on main only, not published to pub.dev.
-version: 1.6.0
+version: 1.7.0
 # Kept unpublished on pub.dev (`publish_to: none`): `release-dart.yml`
 # publishes only `packages/dart`, and local/CI builds link `openskp` via a
 # monorepo path dependency below. To publish this package in the future,
-# replace `path: ../dart` with `openskp: ^1.6.0`, remove `publish_to: none`,
+# replace `path: ../dart` with `openskp: ^1.7.0`, remove `publish_to: none`,
 # and add a release step.
 publish_to: none
 homepage: https://openskp.com

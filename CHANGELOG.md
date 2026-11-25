@@ -7,14 +7,94 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Python: native VFF (SketchUp 2021+) writer core
+
+- New `openskp.create_vff` module: builds modern VFF files by extending a SketchUp-written template's `model.dat` record tree, recomputing the archive CRCs and header integrity word and giving the document a fresh GUID/save time. The bundled template is an empty SketchUp 2025 document.
+- Core scope: faces (holes, edge hidden/soft/smooth flags and `auto_triangulate`), solid-colour materials, tags, component definitions (including always-faces-camera/shadows-face-sun and explicit GUIDs), instances, and (nested) groups. Shared methods follow `create()`'s names, argument order, defaults and `SkpWriteError` cases; `set_guid` and default `set_document_options` are supported.
+- Material and tag archive folder names follow SketchUp's own sanitising, `_N` collision suffixes (with its drive-prefix fallback for names like `a:b`), case-insensitive collision matching and long-name truncation. Case-variant material names get SketchUp's bare-counter rename (`wood1`) and case-variant tags resolve to the existing tag.
+- Textures/UVs, curves, attribute dictionaries, texts/dimensions/guides/section planes and scenes are follow-up work; `open_existing()` does not yet extend VFF sources.
+
+## [1.7.0] — 2026-11-25 — all 5 languages
+
+> What most readers will notice, from the entries below (everything since 1.6.0):
+>
+> - **Privacy: `open_existing()` no longer writes your temporary folder, with your user name, into
+>   the files you save (#667).** Files saved by earlier versions still hold that path.
+> - **Models look as they do in SketchUp.** Unpainted faces take the model's own front and back face
+>   colours instead of their tag's colour (#533); GLB files hold plain colours in linear light
+>   (#650) and plain textures without darkening (#657); a component's own paint, tag and inherited
+>   texture are used in classic files too (#596, #634); two different textures of equal size are no
+>   longer mixed up (#645).
+> - **More files open, and more of what is in them.** SketchUp 2019 and 2020 files whose tags carry a
+>   line style open in every language (#514); scenes of SketchUp 2015 to 2020 files are no longer
+>   lost (#632, #661); texts, dimensions and guides keep their tag, visibility and owner (#618 to
+>   #623); damaged files fail with one clean error (#588), and a classic file that could only be
+>   read in part says so (#552).
+> - **Scenes** (SketchUp's tabs): they are on `Scene` and `InstancedScene` (#593), with the entities
+>   each scene hides (#472) and the properties it saves (@ultracat in #660).
+> - **npm:** `SkpFile.open`, `save` and the file exports work in Node.js with `import` too; they threw
+>   `Dynamic require of "fs" is not supported`.
+> - **STL files of painted models can be printed** (#601; Python by @rayw-lab in #627; not in Rust
+>   yet), and **IFC and DXF** exports are stricter and more complete: curves as annotations, names
+>   with any character, real units (#285).
+> - **TypeScript, .NET, Dart and C++ catch up with Python:** face and edge tags, loose edges as
+>   curves and arcs, several attribute dictionaries per entity, 2021+ boolean and time values
+>   (time: @zbyte64 in #652), document options in the writers.
+> - **Python** ships type hints (`py.typed`, by @tridev-tej in #580). **Rust** (not on crates.io yet)
+>   has scale-handle masks, the Hide flag and the dictionaries of classic files, by
+>   @francisreboucas in #656.
+> - Examples: a bill of materials in Python (@rayw-lab in #595) and a page with three.js
+>   (@kupkoXD in #649). Thank you all!
+>
+> **Upgrade notes.** Code that only reads a model rarely has to change, but results differ:
+>
+> - *Colours in scenes and GLB.* For the old colours of unpainted faces pass
+>   `unpainted_faces="tag"` (`unpaintedFaces`, `UnpaintedFaces`, `ParseOptions::unpainted_faces`).
+>   Where a model's front and back colours differ, an unpainted face is two single-sided triangle
+>   sets; `Scene.surface_primitives` gives one copy of each face. Remove any sRGB-to-linear
+>   conversion you did after loading an openskp GLB.
+> - *IFC in TypeScript, .NET and Dart:* the default scale is millimetres, the unit the file declares
+>   (it was inches). Remove a conversion of your own.
+> - *Tags in scenes:* an untagged placement takes its faces' tag only when all of them have the same
+>   one; a placement with its own or an inherited tag keeps it.
+> - *GUIDs* (`Definition.guid`, `Instance.guid`) in Python, TypeScript, .NET, Dart and Rust are in the
+>   order SketchUp shows; strings stored from earlier versions differ. C++ had this already.
+> - *Materials* of 2021+ files no longer include tag colours (`Layer_<tag>`).
+> - *Errors:* damaged files raise `SkpParseError` (`SkpParseException`); `BadZipFile`, `KeyError` and
+>   the like no longer escape. NaN and infinite coordinates are refused by the IFC and DXF exports.
+>   Warnings go to the log only, never to the console.
+> - *Scene `properties`* of 2021+ files in TypeScript, .NET and Dart hold the dynamic attributes,
+>   numbers included, instead of the text of every dictionary.
+> - *Python DXF* always uses the built-in writer, also when `ezdxf` is installed.
+> - *Dart:* classes that **implement** `Edge`, `Face`, `Definition` or `GeometryHost` need the new
+>   members. *.NET:* recompile, some methods have new optional parameters. *C++:* recompile, public
+>   structs have new fields. *Rust:* `to_ifc` returns a `Result`, `ImageOptions` is no longer `Copy`,
+>   and structs built field by field have new fields.
+
+### Fixed — TypeScript: reading and writing files failed in Node.js with `import`
+
+- `SkpFile.open`, `openExisting` with a path, `SkpBuilder.save`, `exportDXF`, `exportIFC`, `exportOBJ`, `exportPLY` and `exportSTL` threw `Dynamic require of "fs" is not supported` when the package was loaded with `import` (the ES module build); `require` worked. CI runs the built package both ways now.
+
+### Fixed — C++: `export_dxf` and `export_fragments` threw for a path without a folder
+
+- `export_dxf(scene, "model.dxf")` failed with `create_directories`.
+
+### Changed — packages
+
+- The Python, npm and C++ packages contain the licence. The pub.dev package no longer contains the tests (3 MB), the Python source distribution no longer contains tests without their fixtures, and `cmake --install` no longer installs the private FlatBuffers header.
+
+### Fixed — Python: `openskp --help` looked for a file of that name
+
+- It prints the usage now, and `openskp --version` the version.
+
 ### Fixed — All 6 languages and the web viewer: textures came out too dark in GLB files (#657)
 
 - A GLB with embedded textures multiplied every image by the material's colour, which for a plain textured material is the average of the image. It is white now (`[1, 1, 1, opacity]`), as in SketchUp 2025's own export. **Exported GLB files and the web viewer look brighter**; the scenes' `gltf_materials` are unchanged, so Fragments, DXF, IFC, OBJ, PLY and GLB without textures keep the average colour.
 - TypeScript, .NET, Dart, C++ and Rust mark a colorized texture in their scenes and GLB files as Python does (`extras: {"sketchup": {"colorized": true, "colorize_type": 0 | 1}}`; in C++ and Rust `colorized` and `colorize_type` on `GltfMaterial`). Colorized textures keep their tint. A plain and a colorized material with the same colour and image stay two, and a face painted with one of each on its sides stays two-sided.
 
-### Fixed — TypeScript, .NET, Dart & C++: STL exports of painted models can be printed (#601)
+### Fixed — Python, TypeScript, .NET, Dart & C++: STL exports of painted models can be printed (#601)
 
-- A face painted differently on its two sides was written twice, once per side, so the solid had no volume. STL holds one copy of each face now, as in Python. The scenes carry the triangle offsets of the second copies (`backTriangles` / `BackTriangles` / `back_triangles`); exports with colours are unchanged. Rust follows.
+- A face painted differently on its two sides was written twice, once per side, so the solid had no volume. STL holds one copy of each face now (Python by @rayw-lab, #627). The scenes carry the triangle offsets of the second copies (`backTriangles` / `BackTriangles` / `back_triangles`); exports with colours are unchanged. Rust follows.
 
 ### Fixed — All 6 languages: 2019 and 2020 files with a line style on a textured tag failed to open (#514)
 
@@ -37,14 +117,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **DXF** (Python, TypeScript, .NET, Dart): layer names with any character, no two layers merged, meshes over 32,767 vertices or faces written as single faces; NaN, infinite values and malformed meshes are refused.
 
 ### Added — All 6 languages: which properties a scene saves
-### Added — Python: native VFF (SketchUp 2021+) writer core
-
-- New `openskp.create_vff` module: builds modern VFF files by extending a SketchUp-written template's `model.dat` record tree, recomputing the archive CRCs and header integrity word and giving the document a fresh GUID/save time. The bundled template is an empty SketchUp 2025 document.
-- Core scope: faces (holes, edge hidden/soft/smooth flags and `auto_triangulate`), solid-colour materials, tags, component definitions (including always-faces-camera/shadows-face-sun and explicit GUIDs), instances, and (nested) groups. Shared methods follow `create()`'s names, argument order, defaults and `SkpWriteError` cases; `set_guid` and default `set_document_options` are supported.
-- Material and tag archive folder names follow SketchUp's own sanitising, `_N` collision suffixes (with its drive-prefix fallback for names like `a:b`), case-insensitive collision matching and long-name truncation. Case-variant material names get SketchUp's bare-counter rename (`wood1`) and case-variant tags resolve to the existing tag.
-- Textures/UVs, curves, attribute dictionaries, texts/dimensions/guides/section planes and scenes are follow-up work; `open_existing()` does not yet extend VFF sources.
-
-### Added — Python: which properties a scene saves
 
 - `Page.capture_flags` is the u32 a scene stores for the boxes ticked under "Properties to save": tag `7149` of the `7148` record in 2021+ files, and the u32 after the description in classic files. It is `None` when the reader found none, or when the classic fallback scan read a word with bits above `0x1FF`. `use_camera`, `use_rendering_options`, `use_shadow_info`, `use_axes`, `use_hidden_layers`, `use_section_planes`, `use_hidden_geometry` and `use_hidden_objects` read its bits.
 - This tells apart the two meanings of an empty `hidden_entity_ids`: a scene that hides nothing (`use_hidden_objects` is `True`: picking it shows every object) and one that doesn't save hidden objects (`False`: picking it leaves them alone).
@@ -64,7 +136,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed — All 6 languages: GLB exports write plain colours in linear light (#650)
 
-- glTF wants `baseColorFactor` in linear light; both GLB exporters wrote the sRGB numbers, so viewers showed plain colours washed out. **Exported GLB files look different (darker, as in SketchUp).** Materials with an embedded texture are unchanged, and `gltf_materials` of the scenes stays sRGB. Remove any sRGB-to-linear conversion you did after loading an openskp GLB.
+- glTF wants `baseColorFactor` in linear light; both GLB exporters wrote the sRGB numbers, so viewers showed plain colours washed out. **Exported GLB files look different (darker, as in SketchUp).** For materials with an embedded texture see #657 above; `gltf_materials` of the scenes stays sRGB. Remove any sRGB-to-linear conversion you did after loading an openskp GLB.
 
 ### Added — Python, TypeScript, .NET & Dart: guides inside component definitions, guide tags and hidden guides (#618, #619)
 
@@ -111,6 +183,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Page.hidden_entity_ids` (`hiddenEntityIds`, `HiddenEntityIds`) lists what each scene hides, as persistent ids; match them with `Instance.id` and the new `Edge`/`Face` `persistent_id` (`persistentId`, `PersistentId`). Both work for 2021+ files and for SketchUp 2017-2020; older files have no such ids (`0`, or no `Instance.id`). C++ had them already.
 
 ### Fixed — Python, TypeScript, .NET, Dart & Rust: classic files lost all scenes when one hides objects without saving the axes (#632)
+
+- The byte that ends the axes section was read as the start of the hidden-objects section.
 
 ### Fixed — C++ & Rust: unpainted faces inside a textured component or group inherit its texture (#634)
 
@@ -293,8 +367,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   SketchUp 3. Checked against SketchUp's own `FaceFrontColor` / `FaceBackColor` on every file of
   the test corpus (82 files, SketchUp 4 to 2025), and on files written by SketchUp's library with
   changed colours in every version it saves. Fixtures `face_colors_<version>.skp`.
-- Nothing else changes yet: scenes still colour unpainted faces as before. The other four languages
-  follow through #285.
+- The scenes use them, and the other languages have them too; see the entries above.
 
 ## [1.6.0] — 2026-11-22 — all 5 languages
 
