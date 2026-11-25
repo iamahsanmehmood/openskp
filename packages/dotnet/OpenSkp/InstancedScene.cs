@@ -21,6 +21,10 @@ namespace OpenSkp
         public float[] Normals { get; set; } = Array.Empty<float>();
         public float[] Uvs { get; set; } = Array.Empty<float>();
         public uint[] Indices { get; set; } = Array.Empty<uint>();
+
+        /// <summary>Triangle offsets for separately emitted back sides.</summary>
+        public uint[] BackTriangles { get; set; } = Array.Empty<uint>();
+
         public int MaterialIndex { get; set; }
 
         /// <summary>The back copies of faces with no paint on either side; see
@@ -541,6 +545,7 @@ namespace OpenSkp
                         Normals = normals,
                         Uvs = uvs,
                         Indices = indices,
+                        BackTriangles = group.BackTriangles.Count == 0 ? Array.Empty<uint>() : group.BackTriangles.ToArray(),
                         MaterialIndex = GetMaterialIndex(
                             color,
                             group.DoubleSided,

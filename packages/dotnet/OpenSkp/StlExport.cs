@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Text;
@@ -52,8 +53,12 @@ namespace OpenSkp
             foreach (var prim in scene.SurfacePrimitives)
             {
                 int triCount = prim.Indices.Length / 3;
+                var backTriangles = prim.BackTriangles != null && prim.BackTriangles.Length > 0
+                    ? new HashSet<uint>(prim.BackTriangles)
+                    : null;
                 for (int i = 0; i < triCount; i++)
                 {
+                    if (backTriangles != null && backTriangles.Contains((uint)i)) continue;
                     uint i0 = prim.Indices[i * 3];
                     uint i1 = prim.Indices[i * 3 + 1];
                     uint i2 = prim.Indices[i * 3 + 2];
@@ -117,10 +122,26 @@ namespace OpenSkp
             if (scene == null) throw new ArgumentNullException(nameof(scene));
 
             var surfacePrimitives = scene.SurfacePrimitives;
+            var backSets = new List<HashSet<uint>?>(surfacePrimitives.Count);
             int totalTriangles = 0;
             foreach (var prim in surfacePrimitives)
             {
-                totalTriangles += prim.Indices.Length / 3;
+                int triCount = prim.Indices.Length / 3;
+                var backSet = prim.BackTriangles != null && prim.BackTriangles.Length > 0
+                    ? new HashSet<uint>(prim.BackTriangles)
+                    : null;
+                backSets.Add(backSet);
+                if (backSet == null)
+                {
+                    totalTriangles += triCount;
+                }
+                else
+                {
+                    for (int i = 0; i < triCount; i++)
+                    {
+                        if (!backSet.Contains((uint)i)) totalTriangles++;
+                    }
+                }
             }
 
             int bufferSize = 80 + 4 + totalTriangles * 50;
@@ -136,11 +157,14 @@ namespace OpenSkp
             Array.Copy(countBytes, 0, bytes, 80, 4);
 
             int offset = 84;
-            foreach (var prim in surfacePrimitives)
+            for (int pIdx = 0; pIdx < surfacePrimitives.Count; pIdx++)
             {
+                var prim = surfacePrimitives[pIdx];
+                var backSet = backSets[pIdx];
                 int triCount = prim.Indices.Length / 3;
                 for (int i = 0; i < triCount; i++)
                 {
+                    if (backSet != null && backSet.Contains((uint)i)) continue;
                     uint i0 = prim.Indices[i * 3];
                     uint i1 = prim.Indices[i * 3 + 1];
                     uint i2 = prim.Indices[i * 3 + 2];

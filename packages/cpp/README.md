@@ -135,6 +135,11 @@ auto ifc_str = openskp::to_ifc(scene);
 openskp::export_ifc(scene, "model.ifc");
 ```
 
+STL contains only the front winding of each SketchUp face, including faces
+painted differently on each side; STL does not carry colour. GLB and the
+colour-capable OBJ, PLY, DXF, IFC and Fragments exports retain separately
+painted sides.
+
 `to_glb()` returns the complete binary asset as a `ByteBuffer`.
 `export_glb()` writes those bytes to disk. Metadata JSON export is provided
 via `to_json(model, scene)`, which returns a `JsonValue` tree — pass it to

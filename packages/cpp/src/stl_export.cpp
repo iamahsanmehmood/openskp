@@ -6,6 +6,7 @@
 #include <iomanip>
 #include <sstream>
 #include <stdexcept>
+#include <unordered_set>
 
 namespace openskp {
 
@@ -66,7 +67,10 @@ std::string to_stl_ascii(const Scene& scene, float scale) {
   for (const auto& prim : scene.glb_primitives) {
     if (prim.unpainted_back) continue;
     std::size_t tri_count = prim.indices.size() / 3;
+    std::unordered_set<std::uint32_t> back_set(prim.back_triangles.begin(),
+                                               prim.back_triangles.end());
     for (std::size_t i = 0; i < tri_count; ++i) {
+      if (!back_set.empty() && back_set.count(static_cast<std::uint32_t>(i)) > 0) continue;
       std::uint32_t i0 = prim.indices[i * 3];
       std::uint32_t i1 = prim.indices[i * 3 + 1];
       std::uint32_t i2 = prim.indices[i * 3 + 2];
@@ -100,9 +104,20 @@ std::string to_stl_ascii(const Scene& scene, float scale) {
 
 std::vector<std::uint8_t> to_stl_binary(const Scene& scene, float scale) {
   std::uint32_t total_triangles = 0;
+  std::vector<std::unordered_set<std::uint32_t>> back_sets;
+  back_sets.reserve(scene.glb_primitives.size());
   for (const auto& prim : scene.glb_primitives) {
+    back_sets.emplace_back(prim.back_triangles.begin(), prim.back_triangles.end());
     if (prim.unpainted_back) continue;
-    total_triangles += static_cast<std::uint32_t>(prim.indices.size() / 3);
+    std::size_t tri_count = prim.indices.size() / 3;
+    const auto& back_set = back_sets.back();
+    if (back_set.empty()) {
+      total_triangles += static_cast<std::uint32_t>(tri_count);
+    } else {
+      for (std::size_t i = 0; i < tri_count; ++i) {
+        if (back_set.count(static_cast<std::uint32_t>(i)) == 0) ++total_triangles;
+      }
+    }
   }
 
   std::vector<std::uint8_t> data;
@@ -117,10 +132,13 @@ std::vector<std::uint8_t> to_stl_binary(const Scene& scene, float scale) {
   // 4-byte triangle count
   write_uint32_le(data, total_triangles);
 
-  for (const auto& prim : scene.glb_primitives) {
+  for (std::size_t p_idx = 0; p_idx < scene.glb_primitives.size(); ++p_idx) {
+    const auto& prim = scene.glb_primitives[p_idx];
     if (prim.unpainted_back) continue;
+    const auto& back_set = back_sets[p_idx];
     std::size_t tri_count = prim.indices.size() / 3;
     for (std::size_t i = 0; i < tri_count; ++i) {
+      if (!back_set.empty() && back_set.count(static_cast<std::uint32_t>(i)) > 0) continue;
       std::uint32_t i0 = prim.indices[i * 3];
       std::uint32_t i1 = prim.indices[i * 3 + 1];
       std::uint32_t i2 = prim.indices[i * 3 + 2];

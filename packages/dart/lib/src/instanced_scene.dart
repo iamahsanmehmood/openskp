@@ -27,6 +27,10 @@ class LocalPrimitive {
   final List<double> normals;
   final List<double> uvs;
   final List<int> indices;
+
+  /// Triangle offsets for separately emitted back sides.
+  final List<int> backTriangles;
+
   final int materialIndex;
 
   /// The back copies of faces with no paint on either side; see
@@ -38,9 +42,10 @@ class LocalPrimitive {
     required this.normals,
     required this.uvs,
     required this.indices,
+    List<int>? backTriangles,
     required this.materialIndex,
     this.unpaintedBack = false,
-  });
+  }) : backTriangles = backTriangles ?? const [];
 }
 
 /// A definition's geometry, resolved for one specific rendering context and
@@ -522,6 +527,7 @@ class InstancedSceneBuilder {
           normals: normals,
           uvs: uvs,
           indices: indices,
+          backTriangles: List<int>.of(group.backTriangles),
           materialIndex: getMaterialIndex(
             color,
             doubleSided,

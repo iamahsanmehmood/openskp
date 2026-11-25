@@ -57,6 +57,7 @@ namespace OpenSkp
             public List<(double U, double V)> LocalUvs = new List<(double, double)>();
             public List<double[]> NormalsAccum = new List<double[]>();
             public List<long[]> LocalFaces = new List<long[]>();
+            public List<uint> BackTriangles = new List<uint>();
             public Dictionary<(long VId, double U, double V), int> LocalVMap = new Dictionary<(long, double, double), int>();
         }
 
@@ -654,6 +655,10 @@ namespace OpenSkp
                     }
                     if (faceIndices.Count == 3)
                     {
+                        if (reverse)
+                        {
+                            group.BackTriangles.Add((uint)group.LocalFaces.Count);
+                        }
                         group.LocalFaces.Add(new long[] { faceIndices[0], faceIndices[1], faceIndices[2] });
                     }
                 }

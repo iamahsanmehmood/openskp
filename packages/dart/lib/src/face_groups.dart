@@ -40,6 +40,7 @@ class LocalFaceGroup {
   final List<(double, double)> localUvs = [];
   final List<List<double>> normalsAccum = [];
   final List<List<int>> localFaces = [];
+  final List<int> backTriangles = [];
   final Map<(int, double, double), int> localVMap = {};
 
   LocalFaceGroup(
@@ -267,6 +268,9 @@ Map<FaceGroupKey, LocalFaceGroup> buildLocalFaceGroups(GeometryBuilder builder, 
         faceIndices.add(idx);
       }
       if (faceIndices.length == 3) {
+        if (reverse) {
+          group.backTriangles.add(group.localFaces.length);
+        }
         group.localFaces.add(faceIndices);
       }
     }

@@ -58,6 +58,9 @@ struct GlbPrimitive {
   std::size_t material_index{};
   std::string geom_name;
   bool unpainted_back{};
+  // Triangle offsets for separately emitted back sides. Kept at the end so
+  // existing positional aggregate initializers remain valid.
+  std::vector<std::uint32_t> back_triangles;
 };
 
 struct PbrMetallicRoughness {

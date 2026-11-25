@@ -43,7 +43,12 @@ export function toSTLAscii(scene: SkpScene, scale = 1.0): string {
 
   for (const prim of getSurfacePrimitives(scene)) {
     const triCount = Math.floor(prim.indices.length / 3);
+    const backTriangles =
+      prim.backTriangles && prim.backTriangles.length > 0
+        ? new Set<number>(prim.backTriangles)
+        : null;
     for (let i = 0; i < triCount; i++) {
+      if (backTriangles?.has(i)) continue;
       const i0 = prim.indices[i * 3];
       const i1 = prim.indices[i * 3 + 1];
       const i2 = prim.indices[i * 3 + 2];
@@ -101,9 +106,22 @@ export function toSTLBinary(scene: SkpScene, scale = 1.0): Uint8Array {
   }
 
   const prims = getSurfacePrimitives(scene);
+  const backSets: (Set<number> | null)[] = prims.map((prim) =>
+    prim.backTriangles && prim.backTriangles.length > 0
+      ? new Set<number>(prim.backTriangles)
+      : null
+  );
   let totalTriangles = 0;
-  for (const prim of prims) {
-    totalTriangles += Math.floor(prim.indices.length / 3);
+  for (let pIdx = 0; pIdx < prims.length; pIdx++) {
+    const triCount = Math.floor(prims[pIdx].indices.length / 3);
+    const backSet = backSets[pIdx];
+    if (!backSet) {
+      totalTriangles += triCount;
+    } else {
+      for (let i = 0; i < triCount; i++) {
+        if (!backSet.has(i)) totalTriangles++;
+      }
+    }
   }
 
   const bufferSize = 80 + 4 + totalTriangles * 50;
@@ -121,9 +139,12 @@ export function toSTLBinary(scene: SkpScene, scale = 1.0): Uint8Array {
   view.setUint32(80, totalTriangles, true);
 
   let offset = 84;
-  for (const prim of prims) {
+  for (let pIdx = 0; pIdx < prims.length; pIdx++) {
+    const prim = prims[pIdx];
+    const backSet = backSets[pIdx];
     const triCount = Math.floor(prim.indices.length / 3);
     for (let i = 0; i < triCount; i++) {
+      if (backSet?.has(i)) continue;
       const i0 = prim.indices[i * 3];
       const i1 = prim.indices[i * 3 + 1];
       const i2 = prim.indices[i * 3 + 2];

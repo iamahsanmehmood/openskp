@@ -86,6 +86,11 @@ namespace OpenSkp
         /// per triangle).</summary>
         public uint[] Indices { get; set; } = Array.Empty<uint>();
 
+        /// <summary>Triangle offsets for separately emitted back sides. A
+        /// primitive can mix front and back triangles when they share a
+        /// material; their front counterparts are still present.</summary>
+        public uint[] BackTriangles { get; set; } = Array.Empty<uint>();
+
         /// <summary>Index into Scene.GltfMaterials for this primitive's
         /// resolved color.</summary>
         public int MaterialIndex { get; set; }
@@ -484,6 +489,7 @@ namespace OpenSkp
                             Normals = normals,
                             Uvs = uvs,
                             Indices = indices,
+                            BackTriangles = group.BackTriangles.Count == 0 ? Array.Empty<uint>() : group.BackTriangles.ToArray(),
                             MaterialIndex = materialIndex,
                             GeomName = geomName,
                             UnpaintedBack = group.UnpaintedBack,

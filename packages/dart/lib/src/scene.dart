@@ -107,6 +107,11 @@ class GlbPrimitive {
   /// Triangle vertex indices into positions/normals/uvs (3 per triangle).
   final List<int> indices;
 
+  /// Triangle offsets for separately emitted back sides. A primitive can mix
+  /// front and back triangles when they share a material; their front
+  /// counterparts are still present.
+  final List<int> backTriangles;
+
   /// Index into Scene.gltfMaterials for this primitive's resolved color.
   final int materialIndex;
 
@@ -122,10 +127,11 @@ class GlbPrimitive {
     required this.normals,
     required this.uvs,
     required this.indices,
+    List<int>? backTriangles,
     required this.materialIndex,
     required this.geomName,
     this.unpaintedBack = false,
-  });
+  }) : backTriangles = backTriangles ?? const [];
 }
 
 /// One texture image referenced by Scene.gltfMaterials.
@@ -745,6 +751,7 @@ class SceneBuilder {
             normals: normals,
             uvs: uvs,
             indices: indices,
+            backTriangles: List<int>.of(group.backTriangles),
             materialIndex: materialIndex,
             geomName: geomName,
             unpaintedBack: unpaintedBack,

@@ -38,6 +38,7 @@ export interface LocalFaceGroup {
    * (see {@link smoothCornerNormals}). */
   normalsAccum: number[][];
   localFaces: number[][];
+  backTriangles: number[];
   localVMap: Map<string, number>;
   textureIndex: number | null;
 }
@@ -247,6 +248,7 @@ export function buildLocalFaceGroups(
         localUvs: [],
         normalsAccum: [],
         localFaces: [],
+        backTriangles: [],
         localVMap: new Map<string, number>(),
       };
       faceGroups.set(colorKey, group);
@@ -302,6 +304,9 @@ export function buildLocalFaceGroups(
         faceIndices.push(idx);
       }
       if (faceIndices.length === 3) {
+        if (reverse) {
+          group.backTriangles.push(group.localFaces.length);
+        }
         group.localFaces.push(faceIndices);
       }
     }
