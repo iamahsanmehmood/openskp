@@ -15,6 +15,7 @@ import datetime
 import inspect
 import json
 import math
+import numbers
 import pathlib
 import uuid
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
@@ -270,7 +271,7 @@ def to_ifc(
     """
     if not isinstance(scene, Scene):
         raise TypeError("to_ifc requires a valid Scene instance")
-    if isinstance(scale, bool) or not isinstance(scale, (int, float)) or not math.isfinite(scale):
+    if isinstance(scale, bool) or not isinstance(scale, numbers.Real) or not math.isfinite(scale):
         raise ValueError("IFC scale must be finite")
 
     if classifier is not None:

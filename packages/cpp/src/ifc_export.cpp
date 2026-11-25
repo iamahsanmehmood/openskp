@@ -149,9 +149,15 @@ std::uint64_t weld_key(float v) {
 
 struct WeldPosHash {
   std::size_t operator()(const std::array<std::uint64_t, 3>& k) const noexcept {
-    std::uint64_t h = k[0];
-    h ^= k[1] + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
-    h ^= k[2] + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+    // The bits of a round coordinate such as 12.0 are all in the upper word, and MSVC takes the
+    // bucket from the low bits, so each step has to carry the upper bits down.
+    std::uint64_t h = 0;
+    for (const std::uint64_t v : k) {
+      h ^= v;
+      h ^= h >> 32;
+      h *= 0x9e3779b97f4a7c15ULL;
+      h ^= h >> 29;
+    }
     return static_cast<std::size_t>(h);
   }
 };
