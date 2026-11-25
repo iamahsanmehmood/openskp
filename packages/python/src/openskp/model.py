@@ -49,6 +49,7 @@ def _convert_pages(parsed: Dict[str, Any]) -> List["Page"]:
                 if i in layer_id_to_name
             ],
             hidden_entity_ids=list(pg.get("hidden_entity_ids", [])),
+            capture_flags=pg.get("capture_flags"),
         )
         for pg in (parsed.get("pages") or [])
     ]
@@ -496,6 +497,12 @@ class Page:
         hidden_entity_ids: Persistent ids of the entities this scene hides
             (see ``Instance.id``, ``Edge.persistent_id`` and
             ``Face.persistent_id``).
+        capture_flags: Which properties the scene saves (the boxes ticked
+            under "Properties to save" in SketchUp's Scenes panel), as the
+            u32 the file stores, or ``None`` when the reader found none.
+            The ``use_*`` properties below read its bits. It tells an empty
+            ``hidden_entity_ids`` that means "this scene hides nothing" from
+            one that means "this scene leaves hidden objects alone".
     """
 
     name: str = ""
@@ -507,6 +514,83 @@ class Page:
     ortho_height: float = 0.0
     hidden_layers: List[str] = field(default_factory=list)
     hidden_entity_ids: List[int] = field(default_factory=list)
+    capture_flags: Optional[int] = None
+
+    def _flag(self, bit: int) -> Optional[bool]:
+        if self.capture_flags is None:
+            return None
+        return bool(self.capture_flags & bit)
+
+    @property
+    def use_camera(self) -> Optional[bool]:
+        """The scene saves its camera ("Camera Location"), ``0x001``."""
+        return self._flag(PAGE_USE_CAMERA)
+
+    @property
+    def use_rendering_options(self) -> Optional[bool]:
+        """The scene saves its style ("Style and Fog"), ``0x002``."""
+        return self._flag(PAGE_USE_RENDERING_OPTIONS)
+
+    @property
+    def use_shadow_info(self) -> Optional[bool]:
+        """The scene saves its shadows ("Shadow Settings"), ``0x004``."""
+        return self._flag(PAGE_USE_SHADOW_INFO)
+
+    @property
+    def use_axes(self) -> Optional[bool]:
+        """The scene saves the axes ("Axes Location"), ``0x008``."""
+        return self._flag(PAGE_USE_AXES)
+
+    @property
+    def use_hidden_layers(self) -> Optional[bool]:
+        """The scene saves which layers it hides ("Visible Tags"),
+        ``0x020``."""
+        return self._flag(PAGE_USE_HIDDEN_LAYERS)
+
+    @property
+    def use_section_planes(self) -> Optional[bool]:
+        """The scene saves the active section ("Active Section Planes"),
+        ``0x040``."""
+        return self._flag(PAGE_USE_SECTION_PLANES)
+
+    def _hidden(self, bit: int) -> Optional[bool]:
+        # Since SketchUp 2020.1 a scene saves hidden geometry and hidden
+        # objects separately (0x080, 0x100). A file with neither bit has
+        # only the older combined one (0x010), which then covers both.
+        flags = self.capture_flags
+        if flags is None:
+            return None
+        if flags & (PAGE_USE_HIDDEN_GEOMETRY | PAGE_USE_HIDDEN_OBJECTS):
+            return bool(flags & bit)
+        return bool(flags & PAGE_USE_HIDDEN)
+
+    @property
+    def use_hidden_geometry(self) -> Optional[bool]:
+        """The scene saves which edges and faces it hides ("Hidden
+        Geometry"), ``0x080``."""
+        return self._hidden(PAGE_USE_HIDDEN_GEOMETRY)
+
+    @property
+    def use_hidden_objects(self) -> Optional[bool]:
+        """The scene saves which groups and components it hides ("Hidden
+        Objects"), ``0x100``. When ``True``, an empty
+        ``hidden_entity_ids`` means every object is shown."""
+        return self._hidden(PAGE_USE_HIDDEN_OBJECTS)
+
+
+# Bits of ``Page.capture_flags``, named after SketchUp's public Ruby API
+# (``Sketchup::Page#use_camera?`` and so on). Checked on the fixtures in
+# tests/test_scene_capture_flags.py: 0x001 and 0x020 one at a time, the
+# others only all together (0x080 and 0x100 are never set apart there).
+PAGE_USE_CAMERA = 0x001
+PAGE_USE_RENDERING_OPTIONS = 0x002
+PAGE_USE_SHADOW_INFO = 0x004
+PAGE_USE_AXES = 0x008
+PAGE_USE_HIDDEN = 0x010          # before SketchUp 2020.1: geometry + objects
+PAGE_USE_HIDDEN_LAYERS = 0x020
+PAGE_USE_SECTION_PLANES = 0x040
+PAGE_USE_HIDDEN_GEOMETRY = 0x080
+PAGE_USE_HIDDEN_OBJECTS = 0x100
 
 
 @dataclass

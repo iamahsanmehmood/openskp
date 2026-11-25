@@ -1289,7 +1289,8 @@ def _scan_pages(data: bytes, ar) -> list:
                     raise LegacyParseError("unexpected hidden-layers marker")
         except (LegacyParseError, struct.error, IndexError):
             continue
-        pages.append({'name': name, 'hidden_layer_ids': hidden_ids})
+        pages.append({'name': name, 'hidden_layer_ids': hidden_ids,
+                      'capture_flags': flags})
     return pages
 
 
@@ -1457,7 +1458,7 @@ def _read_page_record(r, classes, ver):
         _skip_pid(r)
     page = {'name': r.utf16(), 'hidden_layer_ids': [], 'hidden_entity_ids': []}
     r.utf16()                                     # description
-    flags = r.u32()
+    flags = page['capture_flags'] = r.u32()
     if flags & ~_PAGE_KNOWN_FLAGS:
         raise LegacyParseError(f"scene capture flags {flags:#x} {r.ctx()}")
     if schema >= 15:

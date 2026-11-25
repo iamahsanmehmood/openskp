@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Python: which properties a scene saves
+
+- `Page.capture_flags` is the u32 a scene stores for the boxes ticked under "Properties to save": tag `7149` of the `7148` record in 2021+ files, and the u32 after the description in classic files. It is `None` when the reader found none. `use_camera`, `use_rendering_options`, `use_shadow_info`, `use_axes`, `use_hidden_layers`, `use_section_planes`, `use_hidden_geometry` and `use_hidden_objects` read its bits.
+- This tells apart the two meanings of an empty `hidden_entity_ids`: a scene that hides nothing (`use_hidden_objects` is `True`: picking it shows every object) and one that doesn't save hidden objects (`False`: picking it leaves them alone).
+- Before SketchUp 2020.1, one bit (`0x010`) covered hidden geometry and hidden objects together. When neither of the split bits (`0x080`, `0x100`) is set, it answers for both.
+
 ### Added — Rust: scale-handle masks, an instance's Hide flag, and definition and classic attribute dictionaries (#285)
 
 - `Definition::no_scale_mask`, SketchUp's scale-grip suppression mask (bits 0-6: X, Y, Z, XZ, YZ, XY, XYZ; unknown bits kept), on definitions and on the root (the model's own), read from classic and 2021+ files, written through `DefinitionOptions::no_scale_mask` and `DocumentOptions::no_scale_mask`, and kept by `open_existing` and `to_rust_code` (C++ #519). Code that builds `DocumentOptions` or `DefinitionOptions` with every field listed needs `..Default::default()`.

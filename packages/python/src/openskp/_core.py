@@ -2085,6 +2085,9 @@ def _parse_pages(node):
       visible height matches the thumbnail framing exactly, while
       perspective scenes carry 01 with a stale 34C3),
       34C3 f64 = visible height when parallel (inches)
+    * 7149 — u32 capture flags: which properties the scene saves (see
+      ``Page.capture_flags``)
+    * 714B — entities hidden in this page, in the runs 7150 uses
     * 7150 — layers hidden in this page: (u8 length, var-int layer id) runs
     """
     if node is None:
@@ -2126,7 +2129,11 @@ def _parse_pages(node):
                     continue
                 page = {'name': '', 'eye': None, 'target': None, 'up': None,
                         'fov': 35.0, 'parallel': False, 'ortho_height': 0.0,
-                        'hidden_layer_ids': [], 'hidden_entity_ids': []}
+                        'hidden_layer_ids': [], 'hidden_entity_ids': [],
+                        'capture_flags': None}
+                flags = sub(items, 0x7149)
+                if flags is not None and len(flags) == 4:
+                    page['capture_flags'] = struct.unpack('<I', flags)[0]
                 head = _tlv_items(sub(items, 0x6F54) or b'')
                 name = sub(head, 0x6F55)
                 if name:
