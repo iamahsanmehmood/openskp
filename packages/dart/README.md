@@ -9,6 +9,10 @@ Parse, write, and convert `.skp` files without SketchUp. No SDK. No license. Jus
 
 🏠 [openskp.com](https://openskp.com) · 🌐 [Try the Live Web Viewer](https://iamahsanmehmood.github.io/openskp/) · 📖 [Docs](https://iamahsanmehmood.github.io/openskp/docs/) · [Changelog](https://github.com/iamahsanmehmood/openskp/blob/main/CHANGELOG.md)
 
+![A house model read from a .skp file, turning around](https://raw.githubusercontent.com/iamahsanmehmood/openskp/main/assets/demo.gif)
+
+Questions and ideas are welcome in [Discussions](https://github.com/iamahsanmehmood/openskp/discussions). If OpenSKP is useful to you, a [star on GitHub](https://github.com/iamahsanmehmood/openskp) helps others find it.
+
 > [!IMPORTANT]
 > This project was built by reverse engineering a proprietary binary format. It is not affiliated with or endorsed by Trimble Inc. or SketchUp.
 

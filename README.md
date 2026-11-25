@@ -217,13 +217,9 @@ for anything specific to FreeCAD/Blender behavior.
 | 🎯 **Dart / Flutter** | [![Pub](https://img.shields.io/pub/v/openskp.svg?label=)](https://pub.dev/packages/openskp) | ✅ Available | `dart pub add openskp` |
 | ⚙️ **C++17** | [![C++](https://img.shields.io/github/v/release/iamahsanmehmood/openskp?filter=cpp-v*&label=)](https://github.com/iamahsanmehmood/openskp/releases?q=cpp-) | ✅ Source package | `find_package(OpenSkp CONFIG REQUIRED)` |
 
-All five languages are on **1.6.0** as of the 2026-11-22 synchronized
-release — same version number, not identical capability: Python carries a
-few things (writing scenes, per-edge and per-face layer ids, loose-edge
-curve scene support) the other four don't have yet, and while all five write
-construction lines and points, C++ adds extra writer options (`GuideOptions`
-layer/visibility and parameterized segments, `set_document_options()`, and
-explicit GUID/persistent-ID overrides) the other four don't. All five parse both the modern VFF (2021+)
+All five languages are on **1.7.0** as of the 2026-11-25 synchronized
+release. The version number is the same, the capability nearly so: Python alone
+writes scenes (`add_scene`), and a few smaller differences are listed below. All five parse both the modern VFF (2021+)
 and classic MFC (SketchUp 4–2020) `.skp` containers, and support the same
 opt-in scene-baking (`buildScene()`) and observability APIs. Full detail
 on what differs between languages, and which real SketchUp file versions
@@ -263,7 +259,7 @@ condensed version.
 
 ### Real SketchUp file version support
 
-Classic MFC files from **SketchUp 4 through 2020** and modern VFF files from **SketchUp 2021+** are read across all five languages, with known exceptions (real SketchUp 3 files fail in every reader; a real SketchUp 5 file in the wild fails in TypeScript; 2019–2020 `CCustomLineStyle` tag line styles fail in the 1.6.0 releases outside Python and are fixed on `main` via [#579](https://github.com/iamahsanmehmood/openskp/pull/579)). For writing, `create()` and `open_existing()` emit a **SketchUp 2017** (`{17.0.1}`) classic MFC scaffold (`blank_v17.skp`) that SketchUp 2017 and newer open natively.
+Classic MFC files from **SketchUp 4 through 2020** and modern VFF files from **SketchUp 2021+** are read across all five languages, with known exceptions (real SketchUp 3 files fail in every reader; a real SketchUp 5 file in the wild fails in TypeScript). For writing, `create()` and `open_existing()` emit a **SketchUp 2017** (`{17.0.1}`) classic MFC scaffold (`blank_v17.skp`) that SketchUp 2017 and newer open natively.
 
 Full per-version, per-language status table and evidence (synthetic fixtures, SDK-written files, and the real-world multi-version sweep): **[docs/LANGUAGE_PARITY.md § 4](docs/LANGUAGE_PARITY.md#4-real-sketchup-file-version-support)**.
 
