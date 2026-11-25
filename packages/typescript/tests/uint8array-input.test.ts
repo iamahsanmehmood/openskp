@@ -212,5 +212,22 @@ describe('Uint8Array and pooled Node.js Buffer inputs', () => {
     expect(fromFragments(fragAb).meshResources.length).toBe(instanced.meshResources.length);
     expect(fromFragments(allocFromPool(fragZlib, 64 * 1024)).meshResources.length).toBe(instanced.meshResources.length);
     expect(fromFragments(allocFromPool(fragRaw, 64 * 1024)).meshResources.length).toBe(instanced.meshResources.length);
+    for (const offset of [1, 3]) {
+      const unaligned = Buffer.alloc(8192 + fragRaw.length).subarray(offset, offset + fragRaw.length);
+      unaligned.set(fragRaw);
+      expect(fromFragments(unaligned).meshResources).toEqual(fromFragments(fragZlib).meshResources);
+    }
+  });
+
+  it('gives plain Uint8Arrays back for a Buffer', () => {
+    for (const name of ['capilla_quiroz_v17.skp', 'texture_bmp_2021.skp']) {
+      const bytes = fs.readFileSync(path.join(FIXTURES, name));
+      const scene = buildScene(bytes);
+      expect(scene.textures.length).toBeGreaterThan(0);
+      for (const texture of scene.textures) {
+        expect(texture.data.constructor).toBe(Uint8Array);
+      }
+      expect(scene).toEqual(buildScene(new Uint8Array(bytes)));
+    }
   });
 });

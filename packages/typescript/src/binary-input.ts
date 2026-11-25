@@ -10,10 +10,9 @@ export type BinaryInput = ArrayBuffer | Uint8Array;
  * `ArrayBuffer` (such as a Node.js `Buffer` allocated from the shared pool).
  */
 export function toUint8ArrayView(input: BinaryInput): Uint8Array {
-  if (input instanceof Uint8Array) {
-    return input;
-  }
   if (ArrayBuffer.isView(input)) {
+    // Never the Buffer itself: its `slice` is a view where Uint8Array's is a
+    // copy, and the textures read from it would be Buffers too.
     return new Uint8Array(input.buffer, input.byteOffset, input.byteLength);
   }
   return new Uint8Array(input);
