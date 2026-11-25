@@ -77,6 +77,13 @@ namespace OpenSkp.Tests
             (a.B.Equals(b.A) && a.C.Equals(b.B) && a.A.Equals(b.C)) ||
             (a.C.Equals(b.A) && a.A.Equals(b.B) && a.B.Equals(b.C));
 
+        private static double LinearToSrgb(double c)
+        {
+            if (c <= 0.0) return 0.0;
+            if (c >= 1.0) return 1.0;
+            return c <= 0.0031308 ? c * 12.92 : 1.055 * Math.Pow(c, 1.0 / 2.4) - 0.055;
+        }
+
         private static List<((int R, int G, int B) Rgb, bool DoubleSided)> GlbMaterials(byte[] glbBytes)
         {
             uint jsonLen = BitConverter.ToUInt32(glbBytes, 12);
@@ -86,9 +93,9 @@ namespace OpenSkp.Tests
             {
                 var factor = mat.GetProperty("pbrMetallicRoughness").GetProperty("baseColorFactor");
                 var rgb = (
-                    (int)Math.Round(factor[0].GetDouble() * 255.0),
-                    (int)Math.Round(factor[1].GetDouble() * 255.0),
-                    (int)Math.Round(factor[2].GetDouble() * 255.0)
+                    (int)Math.Round(LinearToSrgb(factor[0].GetDouble()) * 255.0),
+                    (int)Math.Round(LinearToSrgb(factor[1].GetDouble()) * 255.0),
+                    (int)Math.Round(LinearToSrgb(factor[2].GetDouble()) * 255.0)
                 );
                 bool ds = mat.TryGetProperty("doubleSided", out var dsProp) && dsProp.GetBoolean();
                 list.Add((rgb, ds));

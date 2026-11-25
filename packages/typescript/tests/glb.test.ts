@@ -1,7 +1,19 @@
 import { describe, it, expect } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
-import { toGLB, buildScene, SkpScene, GlbPrimitive } from '../src/index';
+import {
+  toGLB,
+  toInstancedGLB,
+  buildScene,
+  buildInstancedScene,
+  create,
+  SkpScene,
+  GlbPrimitive,
+} from '../src/index';
+
+function srgbToLinear(c: number): number {
+  return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+}
 
 function triangleScene(): SkpScene {
   return {
@@ -76,7 +88,10 @@ describe('toGLB', () => {
     expect(uvView.getFloat32(2 * 4, true)).toBe(1);
 
     const pbr = json.materials[0].pbrMetallicRoughness;
-    expect(pbr.baseColorFactor[0]).toBe(0.25);
+    expect(pbr.baseColorFactor[0]).toBeCloseTo(srgbToLinear(0.25), 9);
+    expect(pbr.baseColorFactor[1]).toBeCloseTo(srgbToLinear(0.5), 9);
+    expect(pbr.baseColorFactor[2]).toBeCloseTo(srgbToLinear(0.75), 9);
+    expect(pbr.baseColorFactor[3]).toBe(1.0);
     expect(pbr.metallicFactor).toBe(0.1);
     expect(pbr.roughnessFactor).toBe(0.9);
   });
@@ -121,5 +136,78 @@ describe('toGLB', () => {
         expect(uvView.getFloat32(j * 4, true)).toBeCloseTo(prim.uvs[j], 5);
       }
     }
+  });
+
+  it('converts sRGB baseColorFactor to linear in baked and instanced GLB while keeping scene materials sRGB (#650)', () => {
+    const builder = create();
+    const specs: [string, [number, number, number, number]][] = [
+      ['LayerRed', [255, 84, 84, 255]],
+      ['White', [255, 255, 255, 255]],
+      ['Black', [0, 0, 0, 255]],
+      ['MidGrey', [188, 188, 188, 255]],
+      ['DarkToe', [10, 10, 10, 128]],
+    ];
+    const handles = specs.map(([name, rgba]) => builder.addMaterial(name, rgba));
+    handles.forEach((mat, i) => {
+      const x = i * 10;
+      builder.addFace(
+        [
+          [x, 0, 0],
+          [x + 5, 0, 0],
+          [x + 5, 5, 0],
+          [x, 5, 0],
+        ],
+        { material: mat }
+      );
+    });
+    const bytes = builder.toBytes();
+    const ab = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+    const bakedScene = buildScene(ab);
+    const instancedScene = buildInstancedScene(ab);
+
+    for (const glbBytes of [toGLB(bakedScene), toInstancedGLB(instancedScene)]) {
+      const { json } = parseGlb(glbBytes);
+      const factors: number[][] = json.materials.map((m: any) => m.pbrMetallicRoughness.baseColorFactor);
+      const findClose = (target: number[]) =>
+        factors.find((f) => target.every((v, idx) => Math.abs(f[idx] - v) < 1e-4));
+
+      const red = findClose([1, srgbToLinear(84 / 255), srgbToLinear(84 / 255), 1])!;
+      expect(red).toBeDefined();
+      expect(red[0]).toBe(1);
+      expect(red[1]).toBeCloseTo(0.0887, 4);
+      expect(red[2]).toBeCloseTo(0.0887, 4);
+      expect(red[3]).toBe(1);
+
+      expect(findClose([1, 1, 1, 1])).toEqual([1, 1, 1, 1]);
+      expect(findClose([0, 0, 0, 1])).toEqual([0, 0, 0, 1]);
+
+      const mid = findClose([srgbToLinear(188 / 255), srgbToLinear(188 / 255), srgbToLinear(188 / 255), 1])!;
+      expect(mid).toBeDefined();
+      expect(mid[0]).toBeCloseTo(0.503, 3);
+      expect(mid[0]).toBeCloseTo(srgbToLinear(188 / 255), 9);
+
+      const toe = findClose([(10 / 255) / 12.92, (10 / 255) / 12.92, (10 / 255) / 12.92, 128 / 255])!;
+      expect(toe).toBeDefined();
+      expect(toe[0]).toBeCloseTo((10 / 255) / 12.92, 9);
+      expect(toe[3]).toBeCloseTo(128 / 255, 6);
+    }
+
+    // Scene gltfMaterials remain sRGB after export.
+    const sceneFactors = (bakedScene.gltfMaterials as any[]).map((m) => m.pbrMetallicRoughness.baseColorFactor);
+    expect(sceneFactors.some((f) => Math.abs(f[1] - 84 / 255) < 1e-6 && f[0] === 1)).toBe(true);
+    expect(sceneFactors.some((f) => Math.abs(f[0] - 188 / 255) < 1e-6)).toBe(true);
+
+    // Embedded plain textures keep their factor unchanged.
+    const capillaBuf = fs.readFileSync(path.join(__dirname, 'fixtures', 'capilla_quiroz_v17.skp'));
+    const capillaAb = capillaBuf.buffer.slice(capillaBuf.byteOffset, capillaBuf.byteOffset + capillaBuf.byteLength) as ArrayBuffer;
+    const capillaScene = buildScene(capillaAb);
+    const expectedTexFactors = (capillaScene.gltfMaterials as any[])
+      .filter((m) => m.pbrMetallicRoughness?.baseColorTexture)
+      .map((m) => m.pbrMetallicRoughness.baseColorFactor);
+    const { json: capillaGlbJson } = parseGlb(toGLB(capillaScene, { textures: true }));
+    const actualTexFactors = capillaGlbJson.materials
+      .filter((m: any) => m.pbrMetallicRoughness?.baseColorTexture)
+      .map((m: any) => m.pbrMetallicRoughness.baseColorFactor);
+    expect(actualTexFactors).toEqual(expectedTexFactors);
   });
 });

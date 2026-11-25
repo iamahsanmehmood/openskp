@@ -1,9 +1,13 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:openskp/openskp.dart';
 import 'package:test/test.dart';
+
+double _srgbToLinear(double c) =>
+    c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4).toDouble();
 
 Scene _triangleScene() {
   return Scene(
@@ -85,7 +89,10 @@ void main() {
 
       final materials = json['materials'] as List;
       final pbr = materials[0]['pbrMetallicRoughness'] as Map<String, dynamic>;
-      expect(pbr['baseColorFactor'][0], 0.25);
+      expect(pbr['baseColorFactor'][0], closeTo(_srgbToLinear(0.25), 1e-9));
+      expect(pbr['baseColorFactor'][1], closeTo(_srgbToLinear(0.5), 1e-9));
+      expect(pbr['baseColorFactor'][2], closeTo(_srgbToLinear(0.75), 1e-9));
+      expect(pbr['baseColorFactor'][3], 1.0);
       expect(pbr['metallicFactor'], 0.1);
       expect(pbr['roughnessFactor'], 0.9);
     });
@@ -198,6 +205,107 @@ void main() {
       final output = '${Directory.systemTemp.path}/openskp-missing-parent-${DateTime.now().microsecondsSinceEpoch}/asset.glb';
       expect(() => exportGlb(_triangleScene(), output), throwsA(anything));
       expect(Directory(output).parent.existsSync(), false);
+    });
+
+    test('converts sRGB baseColorFactor to linear in baked and instanced GLB while keeping scene materials sRGB (#650)', () {
+      final builder = create();
+      final specs = <(String, List<int>)>[
+        ('LayerRed', [255, 84, 84, 255]),
+        ('White', [255, 255, 255, 255]),
+        ('Black', [0, 0, 0, 255]),
+        ('MidGrey', [188, 188, 188, 255]),
+        ('DarkToe', [10, 10, 10, 128]),
+      ];
+      final handles = [
+        for (final (name, rgba) in specs) builder.addMaterial(name, rgba),
+      ];
+      for (var i = 0; i < handles.length; i++) {
+        final x = i * 10.0;
+        builder.addFace(
+          [(x, 0.0, 0.0), (x + 5.0, 0.0, 0.0), (x + 5.0, 5.0, 0.0), (x, 5.0, 0.0)],
+          material: handles[i],
+        );
+      }
+
+      final skp = SkpFile.fromBuffer(builder.toBytes());
+      final bakedScene = skp.buildScene();
+      final instancedScene = skp.buildInstancedScene();
+
+      for (final glbBytes in [toGlb(bakedScene), toInstancedGlb(instancedScene)]) {
+        final json = _parseGlb(glbBytes).json;
+        final factors = (json['materials'] as List)
+            .map((m) => (((m as Map)['pbrMetallicRoughness'] as Map)['baseColorFactor'] as List)
+                .cast<num>()
+                .map((e) => e.toDouble())
+                .toList())
+            .toList();
+
+        List<double>? findClose(List<double> target) {
+          for (final f in factors) {
+            var ok = true;
+            for (var k = 0; k < 4; k++) {
+              if ((f[k] - target[k]).abs() >= 1e-4) {
+                ok = false;
+                break;
+              }
+            }
+            if (ok) return f;
+          }
+          return null;
+        }
+
+        final red = findClose([1.0, _srgbToLinear(84 / 255), _srgbToLinear(84 / 255), 1.0]);
+        expect(red, isNotNull);
+        expect(red![0], 1.0);
+        expect(red[1], closeTo(0.0887, 1e-4));
+        expect(red[2], closeTo(0.0887, 1e-4));
+        expect(red[3], 1.0);
+
+        expect(findClose([1.0, 1.0, 1.0, 1.0]), equals([1.0, 1.0, 1.0, 1.0]));
+        expect(findClose([0.0, 0.0, 0.0, 1.0]), equals([0.0, 0.0, 0.0, 1.0]));
+
+        final mid = findClose([
+          _srgbToLinear(188 / 255),
+          _srgbToLinear(188 / 255),
+          _srgbToLinear(188 / 255),
+          1.0,
+        ]);
+        expect(mid, isNotNull);
+        expect(mid![0], closeTo(0.503, 1e-3));
+        expect(mid[0], closeTo(_srgbToLinear(188 / 255), 1e-9));
+
+        final toe = findClose([
+          (10 / 255) / 12.92,
+          (10 / 255) / 12.92,
+          (10 / 255) / 12.92,
+          128 / 255,
+        ]);
+        expect(toe, isNotNull);
+        expect(toe![0], closeTo((10 / 255) / 12.92, 1e-9));
+        expect(toe[3], closeTo(128 / 255, 1e-6));
+      }
+
+      // Scene gltfMaterials remain sRGB.
+      final sceneFactors = bakedScene.gltfMaterials
+          .map((m) => ((m['pbrMetallicRoughness'] as Map)['baseColorFactor'] as List).cast<num>().toList())
+          .toList();
+      expect(sceneFactors.any((f) => f[0] == 1.0 && (f[1] - 84 / 255).abs() < 1e-6), isTrue);
+      expect(sceneFactors.any((f) => (f[0] - 188 / 255).abs() < 1e-6), isTrue);
+
+      // Embedded plain textures keep their factor unchanged.
+      final capillaScene = SkpFile.open('${Directory.current.path}/test/fixtures/capilla_quiroz_v17.skp').buildScene();
+      final expectedTexFactors = capillaScene.gltfMaterials
+          .map((m) => m['pbrMetallicRoughness'] as Map<String, dynamic>)
+          .where((p) => p.containsKey('baseColorTexture'))
+          .map((p) => (p['baseColorFactor'] as List).cast<num>().map((e) => e.toDouble()).toList())
+          .toList();
+      final capillaJson = _parseGlb(toGlb(capillaScene, textures: true)).json;
+      final actualTexFactors = (capillaJson['materials'] as List)
+          .map((m) => (m as Map)['pbrMetallicRoughness'] as Map<String, dynamic>)
+          .where((p) => p.containsKey('baseColorTexture'))
+          .map((p) => (p['baseColorFactor'] as List).cast<num>().map((e) => e.toDouble()).toList())
+          .toList();
+      expect(actualTexFactors, equals(expectedTexFactors));
     });
   });
 }

@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:openskp/openskp.dart';
@@ -208,9 +209,11 @@ void main() {
         expect(doc['textures'], equals([{'sampler': 0, 'source': 0}]));
         expect(doc['samplers'], hasLength(1));
 
+        double srgbToLinear(double c) =>
+            c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4).toDouble();
         final mats = (doc['materials'] as List<dynamic>).cast<Map<String, dynamic>>();
         final tiffMat = mats.firstWhere(
-          (m) => ((m['pbrMetallicRoughness'] as Map<String, dynamic>)['baseColorFactor'] as List<dynamic>)[0] as num > 0.7,
+          (m) => ((m['pbrMetallicRoughness'] as Map<String, dynamic>)['baseColorFactor'] as List<dynamic>)[0] as num > 0.5,
         );
         final pngMat = mats.firstWhere(
           (m) => ((m['pbrMetallicRoughness'] as Map<String, dynamic>)['baseColorFactor'] as List<dynamic>)[2] as num > 0.8,
@@ -219,9 +222,9 @@ void main() {
         expect(tiffPbr.containsKey('baseColorTexture'), isFalse);
         expect(tiffMat.containsKey('alphaMode'), isFalse);
         final tiffBcf = (tiffPbr['baseColorFactor'] as List<dynamic>).cast<num>();
-        expect(tiffBcf[0], closeTo(200 / 255, 1e-4));
-        expect(tiffBcf[1], closeTo(60 / 255, 1e-4));
-        expect(tiffBcf[2], closeTo(40 / 255, 1e-4));
+        expect(tiffBcf[0], closeTo(srgbToLinear(200 / 255), 1e-4));
+        expect(tiffBcf[1], closeTo(srgbToLinear(60 / 255), 1e-4));
+        expect(tiffBcf[2], closeTo(srgbToLinear(40 / 255), 1e-4));
 
         final pngPbr = pngMat['pbrMetallicRoughness'] as Map<String, dynamic>;
         expect(pngPbr['baseColorTexture'], equals({'index': 0}));

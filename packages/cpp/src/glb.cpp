@@ -179,16 +179,25 @@ gltf::Model make_model(const Scene& scene, const GlbOptions& options) {
   for (const auto& source : scene.gltf_materials) {
     const auto& source_pbr = source.pbr_metallic_roughness;
     gltf::Material material;
-    material.pbrMetallicRoughness.baseColorFactor.assign(source_pbr.base_color_factor.begin(),
-                                                         source_pbr.base_color_factor.end());
-    material.pbrMetallicRoughness.metallicFactor = source_pbr.metallic_factor;
-    material.pbrMetallicRoughness.roughnessFactor = source_pbr.roughness_factor;
-    material.doubleSided = source.double_sided;
     std::optional<int> mapped_tex;
     if (options.textures && source_pbr.base_color_texture &&
         *source_pbr.base_color_texture < filtered.remap.size()) {
       mapped_tex = filtered.remap[*source_pbr.base_color_texture];
     }
+    if (mapped_tex) {
+      material.pbrMetallicRoughness.baseColorFactor.assign(source_pbr.base_color_factor.begin(),
+                                                           source_pbr.base_color_factor.end());
+    } else {
+      material.pbrMetallicRoughness.baseColorFactor = {
+          srgb_to_linear(source_pbr.base_color_factor[0]),
+          srgb_to_linear(source_pbr.base_color_factor[1]),
+          srgb_to_linear(source_pbr.base_color_factor[2]),
+          source_pbr.base_color_factor[3],
+      };
+    }
+    material.pbrMetallicRoughness.metallicFactor = source_pbr.metallic_factor;
+    material.pbrMetallicRoughness.roughnessFactor = source_pbr.roughness_factor;
+    material.doubleSided = source.double_sided;
     // glTF's default alphaMode is OPAQUE, which tells a conformant
     // renderer to ignore alpha entirely - both the material's own opacity
     // and any texture's alpha channel. Genuinely translucent materials

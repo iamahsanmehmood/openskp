@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:openskp/openskp.dart';
@@ -52,6 +53,12 @@ bool _sameWinding(
   return b == a || b == (a.$2, a.$3, a.$1) || b == (a.$3, a.$1, a.$2);
 }
 
+double _linearToSrgb(double c) {
+  if (c <= 0.0) return 0.0;
+  if (c >= 1.0) return 1.0;
+  return c <= 0.0031308 ? c * 12.92 : 1.055 * pow(c, 1.0 / 2.4).toDouble() - 0.055;
+}
+
 List<((int, int, int), bool)> _glbMaterials(Uint8List glbBytes) {
   final bdata = ByteData.sublistView(glbBytes);
   final jsonLen = bdata.getUint32(12, Endian.little);
@@ -65,9 +72,9 @@ List<((int, int, int), bool)> _glbMaterials(Uint8List glbBytes) {
           final pbr = m['pbrMetallicRoughness'] as Map<String, dynamic>;
           final f = (pbr['baseColorFactor'] as List).cast<num>();
           return (
-            (f[0].toDouble() * 255).round(),
-            (f[1].toDouble() * 255).round(),
-            (f[2].toDouble() * 255).round(),
+            (_linearToSrgb(f[0].toDouble()) * 255).round(),
+            (_linearToSrgb(f[1].toDouble()) * 255).round(),
+            (_linearToSrgb(f[2].toDouble()) * 255).round(),
           );
         }(),
         m['doubleSided'] == true,

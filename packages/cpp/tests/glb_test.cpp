@@ -7,6 +7,7 @@
 #include <limits>
 #include <string>
 
+#include <openskp/instanced_glb.hpp>
 #include <openskp/openskp.hpp>
 
 #define TINYGLTF_IMPLEMENTATION
@@ -104,7 +105,14 @@ TEST(Glb, SerializesSceneAndBinaryData) {
 
   ASSERT_EQ(model.materials.size(), 1);
   const auto& pbr = model.materials[0].pbrMetallicRoughness;
-  EXPECT_EQ(pbr.baseColorFactor, (std::vector<double>{0.25, 0.5, 0.75, 1.0}));
+  const auto srgb_to_linear = [](double c) {
+    return c <= 0.04045 ? c / 12.92 : std::pow((c + 0.055) / 1.055, 2.4);
+  };
+  ASSERT_EQ(pbr.baseColorFactor.size(), 4U);
+  EXPECT_NEAR(pbr.baseColorFactor[0], srgb_to_linear(0.25), 1e-12);
+  EXPECT_NEAR(pbr.baseColorFactor[1], srgb_to_linear(0.5), 1e-12);
+  EXPECT_NEAR(pbr.baseColorFactor[2], srgb_to_linear(0.75), 1e-12);
+  EXPECT_DOUBLE_EQ(pbr.baseColorFactor[3], 1.0);
   EXPECT_DOUBLE_EQ(pbr.metallicFactor, 0.1);
   EXPECT_DOUBLE_EQ(pbr.roughnessFactor, 0.9);
   EXPECT_EQ(model.materials[0].alphaMode, "OPAQUE");
@@ -240,6 +248,107 @@ TEST(Glb, ReportsFileFailuresWithoutCreatingDirectories) {
       std::filesystem::temp_directory_path() / "openskp-missing-parent" / "asset.any-extension";
   EXPECT_THROW(export_glb(triangle_scene(), output), std::runtime_error);
   EXPECT_FALSE(std::filesystem::exists(output.parent_path()));
+}
+
+TEST(Glb, ConvertsSrgbBaseColorFactorToLinearInBakedAndInstancedExports) {
+  const auto srgb_to_linear = [](double c) {
+    return c <= 0.04045 ? c / 12.92 : std::pow((c + 0.055) / 1.055, 2.4);
+  };
+
+  std::vector<GltfMaterial> mats{
+      {"LayerRed", "", {{1.0, 84.0 / 255.0, 84.0 / 255.0, 1.0}, 0.0, 0.8}, false},
+      {"White", "", {{1.0, 1.0, 1.0, 1.0}, 0.0, 0.8}, false},
+      {"Black", "", {{0.0, 0.0, 0.0, 1.0}, 0.0, 0.8}, false},
+      {"MidGrey", "", {{188.0 / 255.0, 188.0 / 255.0, 188.0 / 255.0, 1.0}, 0.0, 0.8}, false},
+      {"DarkToe", "", {{10.0 / 255.0, 10.0 / 255.0, 10.0 / 255.0, 128.0 / 255.0}, 0.0, 0.8}, false},
+  };
+
+  Scene baked;
+  baked.gltf_materials = mats;
+  for (std::size_t i = 0; i < mats.size(); ++i) {
+    baked.glb_primitives.push_back({
+        {0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F},
+        {0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 1.0F},
+        {0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 1.0F},
+        {0, 1, 2},
+        i,
+        "tri_" + std::to_string(i),
+    });
+  }
+
+  InstancedScene instanced;
+  instanced.gltf_materials = mats;
+  InstancedMeshResource res;
+  res.id = "res_0";
+  res.definition_name = "Def";
+  for (std::size_t i = 0; i < mats.size(); ++i) {
+    res.primitives.push_back({
+        {0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F},
+        {0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 1.0F},
+        {0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 1.0F},
+        {0, 1, 2},
+        i,
+        false,
+    });
+  }
+  instanced.mesh_resources.push_back(std::move(res));
+  instanced.scene_hierarchy.name = "ROOT";
+  instanced.scene_hierarchy.mesh_resource_id = "res_0";
+
+  for (const auto& bytes : {to_glb(baked), to_instanced_glb(instanced)}) {
+    const auto model = load_glb(bytes);
+    ASSERT_EQ(model.materials.size(), 5U);
+
+    const auto& red = model.materials[0].pbrMetallicRoughness.baseColorFactor;
+    EXPECT_DOUBLE_EQ(red[0], 1.0);
+    EXPECT_NEAR(red[1], 0.0887, 1e-4);
+    EXPECT_NEAR(red[2], 0.0887, 1e-4);
+    EXPECT_DOUBLE_EQ(red[3], 1.0);
+
+    const auto& white = model.materials[1].pbrMetallicRoughness.baseColorFactor;
+    EXPECT_EQ(white, (std::vector<double>{1.0, 1.0, 1.0, 1.0}));
+
+    const auto& black = model.materials[2].pbrMetallicRoughness.baseColorFactor;
+    EXPECT_EQ(black, (std::vector<double>{0.0, 0.0, 0.0, 1.0}));
+
+    const auto& mid = model.materials[3].pbrMetallicRoughness.baseColorFactor;
+    EXPECT_NEAR(mid[0], 0.503, 1e-3);
+    EXPECT_NEAR(mid[0], srgb_to_linear(188.0 / 255.0), 1e-12);
+
+    const auto& toe = model.materials[4].pbrMetallicRoughness.baseColorFactor;
+    EXPECT_NEAR(toe[0], (10.0 / 255.0) / 12.92, 1e-12);
+    EXPECT_NEAR(toe[3], 128.0 / 255.0, 1e-12);
+  }
+
+  // Scene gltf_materials remain sRGB.
+  EXPECT_DOUBLE_EQ(baked.gltf_materials[0].pbr_metallic_roughness.base_color_factor[1],
+                   84.0 / 255.0);
+  EXPECT_DOUBLE_EQ(baked.gltf_materials[3].pbr_metallic_roughness.base_color_factor[0],
+                   188.0 / 255.0);
+
+  // Plain textured material with embedded image keeps its baseColorFactor unchanged.
+  Scene tex_scene;
+  GltfMaterial tex_mat{
+      "PlainTex", "", {{138.0 / 255.0, 64.0 / 255.0, 36.0 / 255.0, 1.0}, 0.0, 0.8}, false};
+  tex_mat.pbr_metallic_roughness.base_color_texture = std::size_t{0};
+  tex_scene.gltf_materials.push_back(tex_mat);
+  tex_scene.textures.push_back(
+      {ByteBuffer{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a}, "image/png", "tile.png"});
+  tex_scene.glb_primitives.push_back(baked.glb_primitives[0]);
+  tinygltf::TinyGLTF loader;
+  loader.SetImageLoader([](tinygltf::Image*, const int, std::string*, std::string*, int, int,
+                           const unsigned char*, int, void*) { return true; },
+                        nullptr);
+  tinygltf::Model tex_model;
+  std::string err;
+  std::string warn;
+  const auto tex_bytes = to_glb(tex_scene, GlbOptions{true});
+  ASSERT_TRUE(
+      loader.LoadBinaryFromMemory(&tex_model, &err, &warn, tex_bytes.data(), tex_bytes.size()));
+  const auto& tex_bcf = tex_model.materials[0].pbrMetallicRoughness.baseColorFactor;
+  EXPECT_NEAR(tex_bcf[0], 138.0 / 255.0, 1e-12);
+  EXPECT_NEAR(tex_bcf[1], 64.0 / 255.0, 1e-12);
+  EXPECT_NEAR(tex_bcf[2], 36.0 / 255.0, 1e-12);
 }
 
 }  // namespace

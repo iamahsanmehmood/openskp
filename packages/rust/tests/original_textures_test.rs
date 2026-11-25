@@ -267,19 +267,26 @@ fn glb_export_drops_tiff_keeps_color_remaps_png_index_and_warns_once() {
         assert_eq!(int(&model.list("textures")[0], "source"), 0);
         assert_eq!(model.list("samplers").len(), 1);
 
+        let srgb_to_linear = |c: f64| {
+            if c <= 0.04045 {
+                c / 12.92
+            } else {
+                ((c + 0.055) / 1.055).powf(2.4)
+            }
+        };
         let mut found_tiff = false;
         let mut found_png = false;
         for m in model.list("materials") {
             let pbr = m.find("pbrMetallicRoughness").unwrap();
             let bcf = numbers(pbr, "baseColorFactor");
             let (r, g, b) = (bcf[0], bcf[1], bcf[2]);
-            if r > 0.7 {
+            if r > 0.5 {
                 found_tiff = true;
                 assert!(pbr.find("baseColorTexture").is_none());
                 assert_eq!(alpha_mode(m), "OPAQUE");
-                assert!((r - 200.0 / 255.0).abs() < 1e-4);
-                assert!((g - 60.0 / 255.0).abs() < 1e-4);
-                assert!((b - 40.0 / 255.0).abs() < 1e-4);
+                assert!((r - srgb_to_linear(200.0 / 255.0)).abs() < 1e-4);
+                assert!((g - srgb_to_linear(60.0 / 255.0)).abs() < 1e-4);
+                assert!((b - srgb_to_linear(40.0 / 255.0)).abs() < 1e-4);
             } else if b > 0.8 {
                 found_png = true;
                 let tex_ref = pbr.find("baseColorTexture").unwrap();
