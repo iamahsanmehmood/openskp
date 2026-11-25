@@ -27,6 +27,7 @@ fn make_box_resource(id: &str) -> InstancedMeshResource {
         positions,
         indices: vec![0, 1, 2, 0, 2, 3, 4, 6, 5, 4, 7, 6],
         material_index: 0,
+        back_triangles: Vec::new(),
         unpainted_back: false,
     };
     InstancedMeshResource {

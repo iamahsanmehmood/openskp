@@ -27,6 +27,7 @@ fn make_box_resource(id: &str) -> InstancedMeshResource {
         positions,
         indices: vec![0, 1, 2, 0, 2, 3, 4, 6, 5, 4, 7, 6],
         material_index: 0,
+        back_triangles: Vec::new(),
         unpainted_back: false,
     };
     InstancedMeshResource {
@@ -213,6 +214,7 @@ fn grid_primitive(cols: u32, rows: u32) -> LocalPrimitive {
         positions,
         indices,
         material_index: 0,
+        back_triangles: Vec::new(),
         unpainted_back: false,
     }
 }
@@ -378,6 +380,7 @@ fn an_odd_material_count_round_trips_colors_exactly() {
                 uvs: vec![0.0; 6],
                 indices: vec![0, 1, 2],
                 material_index: i,
+                back_triangles: Vec::new(),
                 unpainted_back: false,
             }],
         });
@@ -782,6 +785,7 @@ fn follows_representation_id_not_its_vector_position_for_shell_lookup() {
             uvs: vec![0.0; 6],
             indices: vec![0, 1, 2],
             material_index: 0,
+            back_triangles: Vec::new(),
             unpainted_back: false,
         }],
     };

@@ -870,6 +870,7 @@ impl<'a> FragReader<'a, '_> {
                 normals: normals.iter().flat_map(|n| n.map(|c| c as f32)).collect(),
                 uvs: vec![0.0; points.len() * 2],
                 indices: triangles.iter().flatten().copied().collect(),
+                back_triangles: Vec::new(),
                 material_index,
                 unpainted_back: false,
             };

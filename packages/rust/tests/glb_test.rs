@@ -47,6 +47,7 @@ fn flat_triangle() -> GlbPrimitive {
         indices: vec![0, 1, 2],
         material_index: 0,
         geom_name: "triangle".into(),
+        back_triangles: Vec::new(),
         unpainted_back: false,
     }
 }
@@ -67,6 +68,7 @@ fn triangle_scene() -> Scene {
         indices: vec![0, 1, 2],
         material_index: 0,
         geom_name: "triangle".into(),
+        back_triangles: Vec::new(),
         unpainted_back: false,
     });
     scene
@@ -401,6 +403,7 @@ fn converts_srgb_base_color_factor_to_linear_in_baked_and_instanced_exports() {
             uvs: vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
             indices: vec![0, 1, 2],
             material_index: i,
+            back_triangles: Vec::new(),
             unpainted_back: false,
         });
     }

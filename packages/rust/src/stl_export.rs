@@ -1,5 +1,10 @@
 //! STL export, ASCII and binary (`stl_export.hpp` / `stl_export.cpp`).
+//!
+//! STL has no colour. Where the scene contains separate front and back copies
+//! to represent different face colours, only the original front winding is
+//! exported. Other formats retain their existing colour handling.
 
+use std::collections::HashSet;
 use std::fmt::Write as _;
 use std::io;
 use std::path::Path;
@@ -24,8 +29,30 @@ fn calculate_normal(v0: V3, v1: V3, v2: V3) -> V3 {
     }
 }
 
-/// Every triangle of every primitive as `(normal, [v0, v1, v2])`, scaled.
-fn triangles(prim: &GlbPrimitive, scale: f32) -> impl Iterator<Item = (V3, [V3; 3])> + '_ {
+fn back_triangle_set(prim: &GlbPrimitive) -> Option<HashSet<usize>> {
+    if prim.back_triangles.is_empty() {
+        return None;
+    }
+    let tri_count = prim.indices.len() / 3;
+    let set: HashSet<usize> = prim
+        .back_triangles
+        .iter()
+        .filter_map(|&i| usize::try_from(i).ok())
+        .filter(|&i| i < tri_count)
+        .collect();
+    if set.is_empty() {
+        None
+    } else {
+        Some(set)
+    }
+}
+
+/// Every non-back-copy triangle of a primitive as `(normal, [v0, v1, v2])`, scaled.
+fn triangles<'a>(
+    prim: &'a GlbPrimitive,
+    back: Option<&'a HashSet<usize>>,
+    scale: f32,
+) -> impl Iterator<Item = (V3, [V3; 3])> + 'a {
     let vertex = move |i: u32| {
         let i = i as usize * 3;
         [
@@ -34,10 +61,16 @@ fn triangles(prim: &GlbPrimitive, scale: f32) -> impl Iterator<Item = (V3, [V3; 
             prim.positions[i + 2] * scale,
         ]
     };
-    prim.indices.as_chunks::<3>().0.iter().map(move |t| {
-        let v = [vertex(t[0]), vertex(t[1]), vertex(t[2])];
-        (calculate_normal(v[0], v[1], v[2]), v)
-    })
+    prim.indices
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .enumerate()
+        .filter(move |(idx, _)| back.is_none_or(|b| !b.contains(idx)))
+        .map(move |(_, t)| {
+            let v = [vertex(t[0]), vertex(t[1]), vertex(t[2])];
+            (calculate_normal(v[0], v[1], v[2]), v)
+        })
 }
 
 /// Serializes a baked scene as ASCII STL. `scale` multiplies every
@@ -45,7 +78,8 @@ fn triangles(prim: &GlbPrimitive, scale: f32) -> impl Iterator<Item = (V3, [V3; 
 pub fn to_stl_ascii(scene: &Scene, scale: f32) -> String {
     let mut s = String::from("solid OpenSKP_Model\n");
     for prim in scene.surface_primitives() {
-        for (n, v) in triangles(prim, scale) {
+        let back = back_triangle_set(prim);
+        for (n, v) in triangles(prim, back.as_ref(), scale) {
             let _ = writeln!(s, "  facet normal {:.6} {:.6} {:.6}", n[0], n[1], n[2]);
             s.push_str("    outer loop\n");
             for p in v {
@@ -62,17 +96,22 @@ pub fn to_stl_ascii(scene: &Scene, scale: f32) -> String {
 /// Serializes a baked scene as little-endian binary STL: an 80-byte header,
 /// a `u32` triangle count, then 50 bytes per triangle.
 pub fn to_stl_binary(scene: &Scene, scale: f32) -> Vec<u8> {
-    let surface = scene.surface_primitives();
-    let total: u32 = surface
-        .iter()
-        .fold(0u32, |a, p| a.wrapping_add((p.indices.len() / 3) as u32));
-    let mut data = Vec::with_capacity(84 + total as usize * 50);
+    let surface: Vec<(&GlbPrimitive, Option<HashSet<usize>>)> = scene
+        .surface_primitives()
+        .into_iter()
+        .map(|p| (p, back_triangle_set(p)))
+        .collect();
+    let total_usize: usize = surface.iter().fold(0usize, |a, (p, back)| {
+        a.saturating_add((p.indices.len() / 3) - back.as_ref().map_or(0, HashSet::len))
+    });
+    let total = u32::try_from(total_usize).unwrap_or(u32::MAX);
+    let mut data = Vec::with_capacity(84usize.saturating_add(total_usize.saturating_mul(50)));
     let header = b"# OpenSKP Binary STL Export";
     data.extend_from_slice(header);
     data.resize(80, 0);
     data.extend_from_slice(&total.to_le_bytes());
-    for prim in surface {
-        for (n, v) in triangles(prim, scale) {
+    for (prim, back) in &surface {
+        for (n, v) in triangles(prim, back.as_ref(), scale) {
             for f in n.iter().chain(v.iter().flatten()) {
                 data.extend_from_slice(&f.to_le_bytes());
             }

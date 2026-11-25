@@ -429,6 +429,7 @@ impl<'a> Baker<'a> {
 
             let mut prim = GlbPrimitive {
                 geom_name: geom,
+                back_triangles: g.back_triangles.clone(),
                 unpainted_back: key.unpainted_back,
                 ..Default::default()
             };
