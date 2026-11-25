@@ -88,7 +88,7 @@ def _inflate(data: bytes) -> bytes:
     return zlib.decompress(data, -15)
 
 
-def decompress_entry(raw: bytes, method: int, crc: int) -> bytes:
+def decompress_entry(raw: bytes, method: int) -> bytes:
     if method == 0:
         return raw
     if method == 8:
@@ -122,7 +122,7 @@ def read_zip(data: bytes, offset: int) -> List[ZipEntry]:
         body_end = body_start + compressed_size
         if body_end > len(data):
             raise ValueError(f"truncated ZIP entry {name!r}")
-        body = decompress_entry(data[body_start:body_end], method, crc)
+        body = decompress_entry(data[body_start:body_end], method)
         if zlib.crc32(body) & 0xFFFFFFFF != crc:
             raise ValueError(f"CRC mismatch in ZIP entry {name!r}")
         entries.append(

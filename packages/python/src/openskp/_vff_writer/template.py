@@ -110,10 +110,6 @@ T_GROUPS = 0x138D
 T_GROUP = 0x1D4C
 
 
-
-
-
-
 T_CAMERA_MODEL = 0x01FA
 T_PAGES_MODEL = 0x0207
 T_CAMERA = 0x34BC
@@ -121,7 +117,6 @@ T_PAGE_LIST = 0x6D60
 T_PAGE_ITEMS = 0x6D61
 T_PAGE = 0x7148
 T_PAGE_BASE = 0x6F54
-
 
 
 T_DEFINITION = 0x157C
@@ -148,7 +143,6 @@ T_RELATIONSHIP_LIST = 0x63A0
 
 T_META = 0x0064
 T_META_GUID = 0x0066
-T_META_REVISION = 0x0074
 T_META_HISTORY = 0x0078
 T_META_HISTORY_INNER = 0x00C8
 T_META_HISTORY_ENTRY = 0x00C9
@@ -209,7 +203,6 @@ META_CONTAINERS = frozenset(
     }
 )
 
-MODEL_REVISION = 17
 
 _POOL_TAGS = (
     T_VERTICES,
@@ -262,12 +255,6 @@ def _material_record(entity_id: int, name: str, owner: int) -> Record:
         record(T_MATERIAL_EMPTY, b""),
     ]
     return Record(T_MATERIAL, children=children)
-
-
-
-
-
-
 
 
 def _definition(
@@ -390,8 +377,6 @@ def _validate_xml_name(name: str, kind: str) -> None:
             )
 
 
-
-
 def material_xml(
     name: str,
     rgb: Tuple[int, int, int] = (255, 255, 255),
@@ -470,12 +455,6 @@ class Template:
             raise ValueError("not a VFF file: no embedded ZIP archive")
         h_offset = header_offset(data)
         self.header = data[:zip_offset]
-        revision_offset = self.header.find(b"VFF\x08\x00\x01\x00")
-        self.revision = (
-            struct.unpack_from("<H", self.header, revision_offset + 7)[0]
-            if revision_offset >= 0
-            else None
-        )
         self.entries: List[ZipEntry] = entries_of(data)
         self._by_name: Dict[str, ZipEntry] = {e.name: e for e in self.entries}
         if "model.dat" not in self._by_name:
@@ -595,13 +574,6 @@ class Template:
                 "bounds": bounds,
             })
         return definitions
-
-
-
-
-
-
-
 
 
     # -- ids --------------------------------------------------------------
@@ -1064,16 +1036,6 @@ class EntityEditor:
         self._pool(T_FACES).children.append(Record(T_FACE, children=children))
         self.order.append(identifier)
         return identifier
-
-
-
-
-
-
-
-
-
-
 
 
     def add_instance(
