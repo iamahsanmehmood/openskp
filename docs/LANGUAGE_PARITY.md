@@ -70,7 +70,7 @@ released. 🔶 = implemented on `main`, not published to a package registry
 | Definition- & model-level attribute dictionaries (Dynamic Components formulas/options, VFF + classic) | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Single attribute dictionary per entity | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Attribute dicts: full 9-value-type support, **legacy (pre-2021) format** (`Point3d`/`Vector3d`/`Length`/`Timestamp`/nested lists) | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Attribute dicts: typed value decoding, **VFF (2021+) format** | ✅ 7/9 (`bool`/`time_t` missing) | ✅ 7/9 (`bool`/`time_t` missing) | ✅ 7/9 (`bool`/`time_t` missing) | ✅ 7/9 (`bool`/`time_t` missing) | ✅ 8/9 (`AA38` `bool` supported; `time_t` unobserved) |
+| Attribute dicts: typed value decoding, **VFF (2021+) format** | ✅ 9/9 (`AA38` `bool`; `AC38` `time_t`) | ✅ 8/9 (`AC38` `time_t` missing) | ✅ 8/9 (`AC38` `time_t` missing) | ✅ 8/9 (`AC38` `time_t` missing) | ✅ 8/9 (`AA38` `bool` supported; `AC38` `time_t` not decoded) |
 | Attribute dicts: multiple dictionaries per entity | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Attribute dicts surfaced in GLB/JSON metadata export (not just IFC Psets) | ✅ | n/a, not independently re-checked this cycle | n/a, not independently re-checked this cycle | n/a, not independently re-checked this cycle | ✅ |
 | VFF pages/scenes + dimension parsing | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -153,7 +153,7 @@ across languages is cross-language porting work:
 | Model rendering-options face colours (`SkpModel.face_front_color` / `face_back_color`, SketchUp 4–2025, [#550](https://github.com/iamahsanmehmood/openskp/pull/550), part of [#533](https://github.com/iamahsanmehmood/openskp/issues/533)) | `_core.py`, `legacy.py`, `model.py` (on `main`) | TypeScript, .NET, Dart, C++ |
 | Scenes use those colours for unpainted faces (`unpainted_faces="style"`/`"tag"`, `GlbPrimitive`/`LocalPrimitive.unpainted_back`, `Scene.surface_primitives`; [#533](https://github.com/iamahsanmehmood/openskp/issues/533)) | `_face_groups.py`, `scene.py`, `instanced_scene.py`, `export/` (on `main`) | TypeScript, .NET, Dart, C++, Rust |
 | Large-file `F901 > 7017 > 7117` per-definition streaming ([#264](https://github.com/iamahsanmehmood/openskp/issues/264)) | `_core.py` ([#265](https://github.com/iamahsanmehmood/openskp/pull/265)); also in TypeScript and C++ ([#300](https://github.com/iamahsanmehmood/openskp/pull/300)) | .NET (`Tlv.cs`) and Dart (`tlv.dart`) — currently unwrap `F401` only |
-| VFF `AA38` boolean attribute tag | C++ (`geometry.cpp`, `model.hpp`: 8/9 VFF types) | Python, TypeScript, .NET, Dart (7/9 VFF types today) |
+| VFF `AC38` time attribute tag (`AC38` observed in SketchUp 2025 saves; `AA38` boolean supported by all five ports) | Python (`_core.py`: `AA38` `bool` + `AC38` `time_t`, 9/9 VFF types) | TypeScript, .NET, Dart and C++ (8/9 VFF types; `AA38` `bool` already supported, `AC38` `time_t` still missing) |
 
 Tracked in [issue #285](https://github.com/iamahsanmehmood/openskp/issues/285) —
 see the note at the top of [§1](#1-package-versions) for how cross-porting is

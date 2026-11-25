@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `InstancedNode::hidden`, the placement's own Hide flag: `Some(false)` on the root, `None` on a scene read back from Fragments (TypeScript #527).
 - `InstanceNode::definition_attribute_dictionaries`: the placed definition's dictionaries, stringified once per definition (Python #530).
 - Classic (pre-2021) files keep their definitions' attribute dictionaries and the model's own (read from the header region, without `ModelProperties`), so `Definition::parsed_dictionaries`, `SkpModel::attribute_dictionaries` and the scene's definition dictionaries are no longer empty for them (Python #532). On the 125 Rust and Python fixtures the dictionary names and key counts match Python's for the model and every definition.
+### Fixed — Python: VFF attribute dictionaries decode time values
+
+- VFF (SketchUp 2021+) attribute dictionaries now decode `AC38` (4-byte little-endian u32 unix seconds) as an unsigned `int` — the counterpart of the classic reader's `0x09` time type. It was previously returned as `None` because the tag had never been observed in real data. `AA38` booleans (one byte) are already decoded with [#622](https://github.com/iamahsanmehmood/openskp/pull/622) and rendered `"1"`/`"0"` like the classic integer form.
+- A genuine SketchUp 2025 Ruby-saved fixture with `true`, `false`, `Time.at(1700000000)` and `nil` now covers the model, a component definition, its instance, a group and a face, pinning both tags on real data.
 
 ### Added — Python, TypeScript, .NET & Dart: guides inside component definitions, guide tags and hidden guides (#618, #619)
 
