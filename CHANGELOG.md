@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — All 6 languages and the web viewer: textures came out too dark in GLB files (#657)
+
+- A GLB with embedded textures multiplied every image by the material's colour, which for a plain textured material is the average of the image. It is white now (`[1, 1, 1, opacity]`), as in SketchUp 2025's own export. **Exported GLB files and the web viewer look brighter**; the scenes' `gltf_materials` are unchanged, so Fragments, DXF, IFC, OBJ, PLY and GLB without textures keep the average colour.
+- TypeScript, .NET, Dart, C++ and Rust mark a colorized texture in their scenes and GLB files as Python does (`extras: {"sketchup": {"colorized": true, "colorize_type": 0 | 1}}`; in C++ and Rust `colorized` and `colorize_type` on `GltfMaterial`). Colorized textures keep their tint. A plain and a colorized material with the same colour and image stay two, and a face painted with one of each on its sides stays two-sided.
+
+### Fixed — All 6 languages: 2019 and 2020 files with a line style on a textured tag failed to open (#514)
+
+- The line style is read after a textured tag too. C++ has `Layer::line_style` for classic 2019 and 2020 files, as for 2021+.
+
 ### Fixed — Python, TypeScript, .NET, Dart, C++ & Rust: `open_existing()` and generated code wrote the local temporary path into the file (#667)
 
 - Opening a file with `open_existing()` and saving it replaced each texture's file name by the path of a temporary file, **with the user name of the person who saved it**; code made by `to_python_code` and its counterparts did the same. The names are kept now (TypeScript only lost an empty one). **Files saved by earlier versions still hold that path**: open and save them from the original again if that matters to you.
