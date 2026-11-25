@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — TypeScript: `Uint8Array` and Node.js `Buffer` input
+
+- `parseSkp`, `buildScene`, `buildInstancedScene`, `openExisting`, `extractThumbnail`, `SkpFile.fromBuffer` and `fromFragments` take any `Uint8Array` (also a Node.js `Buffer`) besides an `ArrayBuffer`, without a copy.
+
 ### Added — Python: native VFF (SketchUp 2021+) writer core
 
 - New `openskp.create_vff` module: builds modern VFF files by extending a SketchUp-written template's `model.dat` record tree, recomputing the archive CRCs and header integrity word and giving the document a fresh GUID/save time. The bundled template is an empty SketchUp 2025 document.
