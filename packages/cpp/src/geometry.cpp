@@ -149,7 +149,8 @@ static bool is_prop_container_tag(const std::string& t) {
 // AA38 is a native boolean: one byte, 0/1. It was not in that table, but a
 // SketchUp 2024 file with `face.set_attribute("d", "k", true)` stores exactly
 // that (`A438 { AA38 01 }`); it used to decode as Null. Length keeps its own
-// kind so it can be written back as a Length. No time_t tag has been seen.
+// kind so it can be written back as a Length. AC38 is a time (u32 Unix seconds,
+// the counterpart of the classic type 9), kept as an integer like there.
 //
 // Python's SkpModel.Instance.attribute_dictionaries keeps these native
 // types (`int`/`float`/`None`/3-tuple/list). C++ used to decode AND
@@ -182,6 +183,9 @@ static ParsedAttribute decode_a438_value(const ByteBuffer& p, size_t a, size_t z
   }
   if (tag == "A738" && sz - sa == 4) {
     return ParsedAttribute::from_integer(read_i32(p, sa));
+  }
+  if (tag == "AC38" && sz - sa == 4) {
+    return ParsedAttribute::from_integer(static_cast<std::int64_t>(read_u32(p, sa)));
   }
   if ((tag == "B438" || tag == "B538") && sz - sa == 24) {
     return ParsedAttribute::from_vec({read_f64(p, sa), read_f64(p, sa + 8), read_f64(p, sa + 16)});

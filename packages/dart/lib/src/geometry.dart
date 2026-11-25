@@ -311,9 +311,7 @@ class Geometry {
   /// a payload of the wrong size for its tag) is left undecoded (returns
   /// null) rather than guessed at - matching this project's standing rule
   /// to never assume an unverified binary layout. Mirrors Python's
-  /// `_decode_vff_attr_value` exactly (7 of the format's 9 documented
-  /// types - no native bool/time_t tag has ever been observed in real
-  /// data, so 7/9 is the real ceiling, not an arbitrary stopping point).
+  /// `_decode_vff_attr_value` exactly.
   static Object? _decodeVffAttrValue(TlvNode a438Node) {
     if (a438Node.children.isEmpty) return null;
     final child = a438Node.children.first;
@@ -325,6 +323,8 @@ class Geometry {
       return Tlv.readF64(payload, 0);
     }
     if (tag == 'A738' && payload.length == 4) return Tlv.readI32(payload, 0);
+    // a time: Unix seconds, unsigned as in classic files
+    if (tag == 'AC38' && payload.length == 4) return Tlv.readU32(payload, 0);
     if ((tag == 'B438' || tag == 'B538') && payload.length == 24) {
       return [Tlv.readF64(payload, 0), Tlv.readF64(payload, 8), Tlv.readF64(payload, 16)];
     }

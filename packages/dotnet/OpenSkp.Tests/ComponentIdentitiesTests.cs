@@ -148,6 +148,9 @@ namespace OpenSkp.Tests
                 Entry("count", TlvBytes("A738", BitConverter.GetBytes(-7))),
                 Entry("flag", TlvBytes("AA38", new byte[] { 1 })),
                 Entry("disabled", TlvBytes("AA38", new byte[] { 0 })),
+                Entry("time", TlvBytes("AC38", BitConverter.GetBytes(1700000000u))),
+                Entry("late", TlvBytes("AC38", BitConverter.GetBytes(uint.MaxValue))),
+                Entry("short", TlvBytes("AC38", new byte[] { 1, 2, 3 })),
                 Entry("nothing", Array.Empty<byte>()),
                 Entry(
                     "values",
@@ -175,6 +178,11 @@ namespace OpenSkp.Tests
             Assert.Equal(false, plugin["disabled"]);
             Assert.Equal("1", Geometry.StringifyVffAttrValue(plugin["flag"]));
             Assert.Equal("0", Geometry.StringifyVffAttrValue(plugin["disabled"]));
+            // a uint, as for the time type of classic files
+            Assert.Equal(1700000000u, plugin["time"]);
+            Assert.Equal(uint.MaxValue, plugin["late"]);
+            Assert.Equal("4294967295", Geometry.StringifyVffAttrValue(plugin["late"]));
+            Assert.Null(plugin["short"]);
             Assert.Null(plugin["nothing"]);
             var arr = Assert.IsType<List<object?>>(plugin["values"]);
             Assert.Equal(2, arr.Count);

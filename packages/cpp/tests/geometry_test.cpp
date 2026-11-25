@@ -210,6 +210,20 @@ TEST(Geometry, AttributeDictionariesDecodeBooleanValue) {
   EXPECT_EQ(yes.to_string(), "1");
 }
 
+TEST(Geometry, AttributeDictionariesDecodeTimeValue) {
+  // SketchUp 2025 `set_attribute(..., Time.at(1700000000))`: A438 { AC38 u32 }.
+  auto entries = concat({entry("time", tlv("AC38", {0x00, 0xF1, 0x53, 0x65})),
+                         entry("late", tlv("AC38", {0xFF, 0xFF, 0xFF, 0xFF})),
+                         entry("short", tlv("AC38", {1, 2, 3}))});
+  auto dicts = attribute_dicts_for(named_dict("d", entries));
+  const auto& time = dicts.at("d").at("time");
+  EXPECT_EQ(time.kind, ParsedAttribute::Kind::Integer);
+  EXPECT_EQ(time.integer, 1700000000);
+  EXPECT_EQ(dicts.at("d").at("late").integer, 4294967295);
+  EXPECT_EQ(dicts.at("d").at("late").to_string(), "4294967295");
+  EXPECT_EQ(dicts.at("d").at("short").kind, ParsedAttribute::Kind::Null);
+}
+
 TEST(Geometry, AttributeDictionariesDecodeIntegerValue) {
   auto dicts =
       attribute_dicts_for(named_dict("fbd-einfo", entry("angle", tlv("A738", i32_bytes(-7)))));
