@@ -50,6 +50,7 @@ from .create import (
     SkpWriteError,
     _archive_uuid,
     _is_coplanar,
+    _plane_from_polygon,
     _resolve_matrix3x3,
 )
 
@@ -536,11 +537,25 @@ class VffBuilder:
             if len(ring) < 3:
                 raise SkpWriteError("a hole needs at least 3 points")
         flags = _edge_flags(hidden_edges, soft_edges, smooth_edges)
-        coplanar = _is_coplanar(outer)
-        if not coplanar and not auto_triangulate:
-            raise SkpWriteError(
-                "face points are not coplanar; pass auto_triangulate=True to split them"
+        if rings or not auto_triangulate:
+            # Validates the boundary as planar and gives the same message as
+            # create.py for an off-plane hole or a non-planar boundary.
+            nx, ny, nz, plane_d = _plane_from_polygon(outer)
+            span = max(
+                max(point[i] for point in outer) - min(point[i] for point in outer)
+                for i in range(3)
             )
+            tolerance = max(span, 1.0) * 1e-6
+            for ring in rings:
+                for point in ring:
+                    distance = nx * point[0] + ny * point[1] + nz * point[2] - plane_d
+                    if abs(distance) > tolerance:
+                        raise SkpWriteError(
+                            f"hole point {point} is {abs(distance):.6g} units off the "
+                            "face's own plane - a hole must lie on the same plane as "
+                            "the outer boundary"
+                        )
+        coplanar = _is_coplanar(outer)
         if rings or not auto_triangulate or len(outer) == 3 or coplanar:
             try:
                 editor.add_face(

@@ -293,6 +293,18 @@ def test_auto_triangulate_splits_a_non_planar_face(tmp_path):
     assert all(len(face.loops[0]) == 3 for face in model.root.faces.values())
 
 
+
+def test_holes_must_lie_on_the_face_plane():
+    square = [(0, 0, 0), (10, 0, 0), (10, 10, 0), (0, 10, 0)]
+    raised_hole = [(2, 2, 1), (4, 2, 1), (4, 4, 1), (2, 4, 1)]
+    with pytest.raises(SkpWriteError):
+        create_vff().add_face(square, holes=[raised_hole])
+
+    bent = [(0, 0, 0), (10, 0, 0), (10, 10, 3), (0, 10, 0)]
+    flat_hole = [(2, 2, 0), (4, 2, 0), (4, 4, 0), (2, 4, 0)]
+    with pytest.raises(SkpWriteError):
+        create_vff().add_face(bent, auto_triangulate=True, holes=[flat_hole])
+
 def test_face_errors_are_skpwriteerrors():
     with pytest.raises(SkpWriteError):
         create_vff().add_face([(0, 0, 0), (1, 0, 0)])
