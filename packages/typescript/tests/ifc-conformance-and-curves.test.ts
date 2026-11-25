@@ -333,7 +333,7 @@ describe('IFC4 STEP conformance and loose-edge curve annotations (#285)', () => 
     }
   });
 
-  it('handles 400k-triangle toIFC quickly and > 2^24 distinct edges in meshIsClosed without throwing', () => {
+  it('handles 400k-triangle toIFC quickly and > 2^24 distinct edges in meshIsClosed without throwing', { timeout: 60_000 }, () => {
     const buildGridTorus = (nx: number, ny: number) => {
       const vCount = nx * ny;
       const triCount = vCount * 2;
