@@ -86,7 +86,7 @@ def compute_integrity_word(data: bytes) -> int:
         if offset < 0:
             raise ValueError("not a VFF file: no embedded ZIP archive")
         return integrity_word(read_zip(data, offset))
-    except ValueError as exc:
+    except Exception as exc:
         raise SkpWriteError(str(exc)) from exc
 
 
@@ -94,7 +94,7 @@ def read_stored_integrity_word(data: bytes) -> int:
     """The integrity word stored in *data*'s 13-byte archive header."""
     try:
         return stored_integrity_word(data)
-    except ValueError as exc:
+    except Exception as exc:
         raise SkpWriteError(str(exc)) from exc
 
 
@@ -102,7 +102,7 @@ def check_integrity(data: bytes) -> bool:
     """Whether *data*'s stored header word matches its archive."""
     try:
         return verify_integrity(data)
-    except ValueError as exc:
+    except Exception as exc:
         raise SkpWriteError(str(exc)) from exc
 
 
@@ -446,13 +446,10 @@ class VffBuilder:
                 raise SkpWriteError(f"cannot read VFF template {template!r}: {exc}") from exc
         try:
             self._template = Template(data, options)
-        except ValueError as exc:
-            raise SkpWriteError(f"cannot use VFF template: {exc}") from exc
-        try:
             self._root = EntityEditor(
                 self._template, container=self._template.root_container
             )
-        except ValueError as exc:
+        except Exception as exc:
             raise SkpWriteError(f"cannot use VFF template: {exc}") from exc
         self.materials_by_name: Dict[str, int] = dict(self._template.materials)
         self.layers_by_name: Dict[str, int] = dict(self._template.layers)
@@ -757,7 +754,7 @@ class VffBuilder:
         self._root.finalize()
         try:
             return self._template.build()
-        except ValueError as exc:
+        except Exception as exc:
             raise SkpWriteError(str(exc)) from exc
 
     def save(self, path: str) -> None:

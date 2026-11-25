@@ -24,6 +24,7 @@ fixtures it reuses are genuine SketchUp saves:
 from __future__ import annotations
 
 import math
+import random
 import struct
 import zlib
 from pathlib import Path
@@ -239,6 +240,22 @@ def test_history_constant_covers_a_range_of_entry_counts():
         covered.add(k)
     assert {4, 5, 6, 7, 8} <= covered
 
+
+
+def test_damaged_templates_raise_skpwriteerror():
+    blank = DEFAULT_TEMPLATE.read_bytes()
+    rng = random.Random(1234)
+    for index in range(400):
+        data = bytearray(blank)
+        if index % 4 == 0:
+            data = data[: rng.randrange(1, len(data))]
+        else:
+            for _ in range(rng.randint(1, 20)):
+                data[rng.randrange(len(data))] = rng.randrange(256)
+        try:
+            create_vff(template=bytes(data)).to_bytes()
+        except SkpWriteError:
+            pass
 
 def test_a_new_builder_round_trips_the_template(tmp_path):
     builder = create_vff()
