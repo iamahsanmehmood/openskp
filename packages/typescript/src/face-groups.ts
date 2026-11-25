@@ -28,6 +28,8 @@ export interface LocalFaceGroup {
   doubleSided: boolean;
   /** True for the back copies of faces with no paint on either side. */
   unpaintedBack: boolean;
+  colorized: boolean;
+  colorizeType: number;
   /** Local-space vertex positions, inches, SketchUp Z-up. */
   localVerts: [number, number, number][];
   localUvs: [number, number][];
@@ -228,7 +230,9 @@ export function buildLocalFaceGroups(
     // silently darkens a material that only used the other mechanism.
     const colorAlpha = color.a !== undefined ? color.a / 255 : 1.0;
     const transparency = colorAlpha * (mat?.transparency ?? 1.0);
-    const colorKey = `${color.r},${color.g},${color.b},${doubleSided},${texIndex ?? -1},${transparency},${unpaintedBack ? 1 : 0}`;
+    const colorized = Boolean(mat?.colorized) && texIndex !== null;
+    const colorizeType = colorized ? (mat?.colorizeType ?? 0) : 0;
+    const colorKey = `${color.r},${color.g},${color.b},${doubleSided},${texIndex ?? -1},${transparency},${unpaintedBack ? 1 : 0},${colorized ? 1 : 0},${colorizeType}`;
     let group = faceGroups.get(colorKey);
     if (!group) {
       group = {
@@ -236,6 +240,8 @@ export function buildLocalFaceGroups(
         transparency,
         doubleSided,
         unpaintedBack,
+        colorized,
+        colorizeType,
         textureIndex: texIndex,
         localVerts: [],
         localUvs: [],
@@ -347,8 +353,17 @@ export function buildLocalFaceGroups(
     const uvTransform = (fData as any).uvTransform as number[] | null | undefined;
     const uvTransformBack = (fData as any).uvTransformBack as number[] | null | undefined;
 
+    const frontCol = Boolean(frontMat?.colorized);
+    const backCol = Boolean(backMat?.colorized);
+    const frontCType = frontCol ? (frontMat?.colorizeType ?? 0) : 0;
+    const backCType = backCol ? (backMat?.colorizeType ?? 0) : 0;
+    const sameColorization =
+      frontMat && backMat ? frontCol === backCol && frontCType === backCType : true;
     const sameColor =
-      frontColor.r === backColor.r && frontColor.g === backColor.g && frontColor.b === backColor.b;
+      frontColor.r === backColor.r &&
+      frontColor.g === backColor.g &&
+      frontColor.b === backColor.b &&
+      sameColorization;
     if (sameColor || ctx.frontSideOnly) {
       addSide(triangles, fn, frontColor, true, false, frontMat, uvTransform, xr, yr, fId);
     } else {
@@ -581,13 +596,19 @@ function linearizeBaseColorFactor(pbr: any): any {
   };
 }
 
+function isColorizedMaterial(mat: any): boolean {
+  return Boolean(mat?.extras?.sketchup?.colorized);
+}
+
 /**
  * Prepares `textures` and `materials` for GLB serialization without mutating
  * the input scene: strips all `baseColorTexture` references when `embed` is
  * off, omits any non-PNG/JPEG texture (such as TIFF or BMP kept via
  * `originalTextures: true`) when `embed` is on with remapped indices and one
- * warning per skipped image, and converts untextured `baseColorFactor` RGB
- * components from sRGB to linear light (alpha unchanged).
+ * warning per skipped image, converts untextured `baseColorFactor` RGB
+ * components from sRGB to linear light (alpha unchanged), and sets
+ * non-colorized embedded-texture materials' `baseColorFactor` to
+ * `[1, 1, 1, alpha]` so the texture is not darkened by its average colour.
  */
 export function filterGltfTextures(
   rawTextures: SceneTexture[],
@@ -654,12 +675,24 @@ export function filterGltfTextures(
       if (nextMat.alphaMode === 'MASK') delete nextMat.alphaMode;
       return nextMat;
     }
-    if (mapped === texRef.index) return mat;
+    if (isColorizedMaterial(m)) {
+      if (mapped === texRef.index) return mat;
+      return {
+        ...m,
+        pbrMetallicRoughness: {
+          ...pbr,
+          baseColorTexture: { ...texRef, index: mapped },
+        },
+      };
+    }
+    const bcf = pbr.baseColorFactor;
+    const alpha = Array.isArray(bcf) && bcf.length > 3 ? bcf[3] : 1.0;
     return {
       ...m,
       pbrMetallicRoughness: {
         ...pbr,
-        baseColorTexture: { ...texRef, index: mapped },
+        baseColorFactor: [1.0, 1.0, 1.0, alpha],
+        baseColorTexture: mapped === texRef.index ? texRef : { ...texRef, index: mapped },
       },
     };
   });

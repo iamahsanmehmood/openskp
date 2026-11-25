@@ -35,6 +35,7 @@ fn material(
             base_color_texture: None,
         },
         double_sided,
+        ..Default::default()
     }
 }
 
@@ -460,26 +461,128 @@ fn converts_srgb_base_color_factor_to_linear_in_baked_and_instanced_exports() {
         188.0 / 255.0
     );
 
-    // Plain textured material with embedded image keeps its baseColorFactor unchanged.
-    let mut tex_scene = Scene::default();
-    let mut tex_mat = material(
-        "PlainTex",
-        [138.0 / 255.0, 64.0 / 255.0, 36.0 / 255.0, 1.0],
-        0.0,
-        0.8,
-        false,
-    );
-    tex_mat.pbr_metallic_roughness.base_color_texture = Some(0);
-    tex_scene.gltf_materials.push(tex_mat);
-    tex_scene.textures.push(SceneTexture {
-        data: vec![0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a],
-        mime_type: "image/png".into(),
-        filename: "tile.png".into(),
-    });
-    tex_scene.glb_primitives.push(flat_triangle());
-    let tex_model = load_glb(&to_glb(&tex_scene, &GlbOptions::new().with_textures(true)).unwrap());
-    let tex_bcf = factor_of(&tex_model.list("materials")[0]);
-    assert!((tex_bcf[0] - 138.0 / 255.0).abs() < 1e-12);
-    assert!((tex_bcf[1] - 64.0 / 255.0).abs() < 1e-12);
-    assert!((tex_bcf[2] - 36.0 / 255.0).abs() < 1e-12);
+    // Plain textured materials with embedded images write [1, 1, 1, alpha] while
+    // keeping scene.gltf_materials untouched (#657).
+    let capilla_skp = SkpFile::open(common::fixture("capilla_quiroz_v17.skp")).unwrap();
+    let capilla_baked = capilla_skp.build_scene(&Default::default()).unwrap();
+    let capilla_inst = capilla_skp
+        .build_instanced_scene(&Default::default())
+        .unwrap();
+    assert!(capilla_baked.gltf_materials.iter().any(|m| {
+        m.pbr_metallic_roughness.base_color_texture.is_some()
+            && m.pbr_metallic_roughness.base_color_factor[0] < 0.6
+            && m.pbr_metallic_roughness.base_color_factor[2] < 0.2
+    }));
+    for tex_bytes in [
+        to_glb(&capilla_baked, &GlbOptions::new().with_textures(true)).unwrap(),
+        to_instanced_glb(
+            &capilla_inst,
+            &InstancedGlbOptions::new().with_textures(true),
+        )
+        .unwrap(),
+    ] {
+        let tex_model = load_glb(&tex_bytes);
+        let mut tex_count = 0usize;
+        let mut half_alpha_count = 0usize;
+        for gm in tex_model.list("materials") {
+            let has_tex = gm
+                .find("pbrMetallicRoughness")
+                .and_then(|p| p.find("baseColorTexture"))
+                .is_some();
+            if has_tex {
+                tex_count += 1;
+                let bcf = factor_of(gm);
+                assert_eq!(bcf[0], 1.0);
+                assert_eq!(bcf[1], 1.0);
+                assert_eq!(bcf[2], 1.0);
+                if bcf[3] < 1.0 {
+                    assert!((bcf[3] - 0.5).abs() < 1e-2);
+                    half_alpha_count += 1;
+                }
+            }
+        }
+        assert_eq!(tex_count, 4);
+        assert_eq!(half_alpha_count, 2);
+    }
+
+    // End-to-end model -> scene -> GLB on a real .skp containing one plain and one
+    // colorized material sharing the same RGB (200, 80, 60) and PNG image (#657).
+    let cpp_fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("cpp")
+        .join("tests")
+        .join("fixtures")
+        .join("colorized_and_plain_texture.skp");
+    let both_skp = SkpFile::open(&cpp_fixture).unwrap();
+    let both_baked = both_skp.build_scene(&Default::default()).unwrap();
+    let both_inst = both_skp.build_instanced_scene(&Default::default()).unwrap();
+    for mats in [&both_baked.gltf_materials, &both_inst.gltf_materials] {
+        assert_eq!(mats.len(), 2);
+        let plain_count = mats
+            .iter()
+            .filter(|m| !m.colorized && m.colorize_type == 0)
+            .count();
+        let col_count = mats
+            .iter()
+            .filter(|m| m.colorized && m.colorize_type == 1)
+            .count();
+        assert_eq!(plain_count, 1);
+        assert_eq!(col_count, 1);
+        for m in mats {
+            assert_eq!(
+                m.pbr_metallic_roughness.base_color_factor,
+                [200.0 / 255.0, 80.0 / 255.0, 60.0 / 255.0, 1.0]
+            );
+        }
+    }
+
+    for with_tex_bytes in [
+        to_glb(&both_baked, &GlbOptions::new().with_textures(true)).unwrap(),
+        to_instanced_glb(&both_inst, &InstancedGlbOptions::new().with_textures(true)).unwrap(),
+    ] {
+        let m = load_glb(&with_tex_bytes);
+        let exported = m.list("materials");
+        assert_eq!(exported.len(), 2);
+        let mut saw_plain = 0usize;
+        let mut saw_col = 0usize;
+        for gm in exported {
+            let pbr = gm.find("pbrMetallicRoughness").unwrap();
+            assert_eq!(int(pbr.find("baseColorTexture").unwrap(), "index"), 0);
+            if let Some(extras) = gm.find("extras") {
+                let skp = extras.find("sketchup").unwrap();
+                assert_eq!(skp.find("colorized"), Some(&openskp::JsonValue::Bool(true)));
+                assert_eq!(int(skp, "colorize_type"), 1);
+                let bcf = factor_of(gm);
+                assert!((bcf[0] - 200.0 / 255.0).abs() < 1e-12);
+                assert!((bcf[1] - 80.0 / 255.0).abs() < 1e-12);
+                assert!((bcf[2] - 60.0 / 255.0).abs() < 1e-12);
+                assert_eq!(bcf[3], 1.0);
+                saw_col += 1;
+            } else {
+                assert_eq!(factor_of(gm), vec![1.0, 1.0, 1.0, 1.0]);
+                saw_plain += 1;
+            }
+        }
+        assert_eq!(saw_plain, 1);
+        assert_eq!(saw_col, 1);
+    }
+
+    for no_tex_bytes in [
+        to_glb(&both_baked, &GlbOptions::new().with_textures(false)).unwrap(),
+        to_instanced_glb(&both_inst, &InstancedGlbOptions::new().with_textures(false)).unwrap(),
+    ] {
+        let m = load_glb(&no_tex_bytes);
+        assert!(m.json.find("textures").is_none());
+        let exported = m.list("materials");
+        assert_eq!(exported.len(), 2);
+        for gm in exported {
+            let pbr = gm.find("pbrMetallicRoughness").unwrap();
+            assert!(pbr.find("baseColorTexture").is_none());
+            let bcf = factor_of(gm);
+            assert!((bcf[0] - srgb_to_linear(200.0 / 255.0)).abs() < 1e-12);
+            assert!((bcf[1] - srgb_to_linear(80.0 / 255.0)).abs() < 1e-12);
+            assert!((bcf[2] - srgb_to_linear(60.0 / 255.0)).abs() < 1e-12);
+            assert_eq!(bcf[3], 1.0);
+        }
+    }
 }

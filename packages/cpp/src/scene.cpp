@@ -172,6 +172,8 @@ Scene build_scene_raw(RawParsed&& p, const ParseOptions& o) {
             kv.first.color[3] / 255.};
         gm.pbr_metallic_roughness.base_color_texture = kv.first.texture_index;
         gm.double_sided = kv.first.double_sided;
+        gm.colorized = kv.first.colorized && kv.first.texture_index.has_value();
+        gm.colorize_type = gm.colorized ? kv.first.colorize_type : 0;
         scene.gltf_materials.push_back(gm);
         mi = materials.emplace(mat_key, idx).first;
       }

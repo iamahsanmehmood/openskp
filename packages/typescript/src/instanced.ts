@@ -288,9 +288,13 @@ export function buildInstancedSceneFromParsed(
     color: { r: number; g: number; b: number },
     doubleSided: boolean,
     textureIndex: number | null,
-    transparency: number = 1.0
+    transparency: number = 1.0,
+    colorized: boolean = false,
+    colorizeType: number = 0
   ) {
-    const key = `${color.r},${color.g},${color.b},${doubleSided},${textureIndex ?? -1},${transparency}`;
+    const effectiveColorized = colorized && textureIndex !== null;
+    const effectiveColorizeType = effectiveColorized ? colorizeType : 0;
+    const key = `${color.r},${color.g},${color.b},${doubleSided},${textureIndex ?? -1},${transparency},${effectiveColorized ? 1 : 0},${effectiveColorizeType}`;
     if (colorToMaterialIndex.has(key)) {
       return colorToMaterialIndex.get(key)!;
     }
@@ -304,6 +308,11 @@ export function buildInstancedSceneFromParsed(
       pbr.baseColorTexture = { index: textureIndex };
     }
     const material: any = { pbrMetallicRoughness: pbr };
+    if (effectiveColorized) {
+      material.extras = {
+        sketchup: { colorized: true, colorize_type: effectiveColorizeType },
+      };
+    }
     if (doubleSided) material.doubleSided = true;
     // See model.ts's getMaterialIndex for why: BLEND for genuinely
     // translucent materials, MASK (safe no-op on an opaque-alpha texture)
@@ -356,7 +365,7 @@ export function buildInstancedSceneFromParsed(
       ? `${byteContentKey(tex.data)}:${tex.width}x${tex.height}`
       : '-';
     const matKey = inheritedMaterial
-      ? `${inheritedMaterial.name}|${inheritedMaterial.color.r},${inheritedMaterial.color.g},${inheritedMaterial.color.b}|${texKey}`
+      ? `${inheritedMaterial.name}|${inheritedMaterial.color.r},${inheritedMaterial.color.g},${inheritedMaterial.color.b}|${inheritedMaterial.colorized ? 1 : 0}:${inheritedMaterial.colorizeType}|${texKey}`
       : '-';
     const fallbackColor = inheritedMaterial
       ? inheritedMaterial.color
@@ -524,7 +533,14 @@ export function buildInstancedSceneFromParsed(
         normals,
         uvs,
         indices,
-        materialIndex: getMaterialIndex(group.color, group.doubleSided, group.textureIndex, group.transparency),
+        materialIndex: getMaterialIndex(
+          group.color,
+          group.doubleSided,
+          group.textureIndex,
+          group.transparency,
+          group.colorized,
+          group.colorizeType
+        ),
         unpaintedBack: group.unpaintedBack,
       });
     }

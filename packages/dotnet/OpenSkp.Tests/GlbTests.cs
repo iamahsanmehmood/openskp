@@ -23,6 +23,18 @@ namespace OpenSkp.Tests
         private static string FixturePath(string name) =>
             Path.Combine(AppContext.BaseDirectory, "fixtures", name);
 
+        private static string CppFixturePath(string name)
+        {
+            var dir = new DirectoryInfo(AppContext.BaseDirectory);
+            while (dir != null)
+            {
+                var candidate = Path.Combine(dir.FullName, "packages", "cpp", "tests", "fixtures", name);
+                if (File.Exists(candidate)) return candidate;
+                dir = dir.Parent;
+            }
+            throw new FileNotFoundException($"Could not locate C++ fixture {name}");
+        }
+
         private static Scene TriangleScene()
         {
             return new Scene
@@ -278,27 +290,119 @@ namespace OpenSkp.Tests
             Assert.Contains(sceneFactors, f => f[0] == 1.0 && Math.Abs(f[1] - 84.0 / 255.0) < 1e-6);
             Assert.Contains(sceneFactors, f => Math.Abs(f[0] - 188.0 / 255.0) < 1e-6);
 
-            // Embedded plain textures keep their factor unchanged.
+            // Embedded non-colorized textures write [1, 1, 1, alpha], while scene
+            // GltfMaterials keeps average colours and colorized materials stay tinted (#657).
             var capillaScene = SkpFile.BuildScene(FixturePath("capilla_quiroz_v17.skp"));
-            var expectedTexFactors = capillaScene.GltfMaterials
+            var capillaInstanced = SkpFile.BuildInstancedScene(FixturePath("capilla_quiroz_v17.skp"));
+            var sceneTexFactors = capillaScene.GltfMaterials
                 .Cast<System.Collections.Generic.IDictionary<string, object>>()
                 .Select(m => (System.Collections.Generic.IDictionary<string, object>)m["pbrMetallicRoughness"])
                 .Where(p => p.ContainsKey("baseColorTexture"))
                 .Select(p => (double[])p["baseColorFactor"])
                 .ToList();
-            var (capillaJson, _) = ParseGlb(GlbExport.ToGlb(capillaScene, new GlbOptions { Textures = true }));
-            var actualTexFactors = capillaJson.GetProperty("materials")
-                .EnumerateArray()
-                .Select(m => m.GetProperty("pbrMetallicRoughness"))
-                .Where(p => p.TryGetProperty("baseColorTexture", out _))
-                .Select(p => p.GetProperty("baseColorFactor").EnumerateArray().Select(e => e.GetDouble()).ToArray())
-                .ToList();
-            Assert.Equal(expectedTexFactors.Count, actualTexFactors.Count);
-            for (int i = 0; i < expectedTexFactors.Count; i++)
+            Assert.Contains(sceneTexFactors, f => f[0] < 0.6 && f[2] < 0.2);
+            var expectedWhiteFactors = sceneTexFactors.Select(f => new[] { 1.0, 1.0, 1.0, f[3] }).ToList();
+
+            foreach (var capillaGlb in new[]
             {
-                for (int c = 0; c < 4; c++)
+                GlbExport.ToGlb(capillaScene, new GlbOptions { Textures = true }),
+                InstancedGlbExport.ToInstancedGlb(capillaInstanced, new InstancedGlbOptions { Textures = true }),
+            })
+            {
+                var (capillaJson, _) = ParseGlb(capillaGlb);
+                var actualTexFactors = capillaJson.GetProperty("materials")
+                    .EnumerateArray()
+                    .Select(m => m.GetProperty("pbrMetallicRoughness"))
+                    .Where(p => p.TryGetProperty("baseColorTexture", out _))
+                    .Select(p => p.GetProperty("baseColorFactor").EnumerateArray().Select(e => e.GetDouble()).ToArray())
+                    .ToList();
+                Assert.Equal(expectedWhiteFactors.Count, actualTexFactors.Count);
+                for (int i = 0; i < expectedWhiteFactors.Count; i++)
                 {
-                    Assert.Equal(expectedTexFactors[i][c], actualTexFactors[i][c], 9);
+                    for (int c = 0; c < 4; c++)
+                    {
+                        Assert.Equal(expectedWhiteFactors[i][c], actualTexFactors[i][c], 9);
+                    }
+                }
+            }
+
+            // End-to-end model -> scene -> GLB on a real .skp containing one plain and one
+            // colorized material sharing the same RGB (200, 80, 60) and PNG image (#657).
+            var bothPath = CppFixturePath("colorized_and_plain_texture.skp");
+            var bothBaked = SkpFile.BuildScene(bothPath);
+            var bothInstanced = SkpFile.BuildInstancedScene(bothPath);
+            foreach (var rawMats in new[] { bothBaked.GltfMaterials, bothInstanced.GltfMaterials })
+            {
+                var mats = rawMats.Cast<System.Collections.Generic.IDictionary<string, object>>().ToList();
+                Assert.Equal(2, mats.Count);
+                var plainMat = Assert.Single(mats, m => !m.ContainsKey("extras"));
+                var colMat = Assert.Single(mats, m => m.ContainsKey("extras"));
+                var skpExtras = (System.Collections.Generic.IDictionary<string, object>)
+                    ((System.Collections.Generic.IDictionary<string, object>)colMat["extras"])["sketchup"];
+                Assert.Equal(true, skpExtras["colorized"]);
+                Assert.Equal(1, skpExtras["colorize_type"]);
+                foreach (var m in mats)
+                {
+                    var bcf = (double[])((System.Collections.Generic.IDictionary<string, object>)m["pbrMetallicRoughness"])["baseColorFactor"];
+                    Assert.Equal(200.0 / 255.0, bcf[0], 9);
+                    Assert.Equal(80.0 / 255.0, bcf[1], 9);
+                    Assert.Equal(60.0 / 255.0, bcf[2], 9);
+                    Assert.Equal(1.0, bcf[3], 9);
+                }
+            }
+
+            foreach (var withTexGlb in new[]
+            {
+                GlbExport.ToGlb(bothBaked, new GlbOptions { Textures = true }),
+                InstancedGlbExport.ToInstancedGlb(bothInstanced, new InstancedGlbOptions { Textures = true }),
+            })
+            {
+                var (withTexJson, _) = ParseGlb(withTexGlb);
+                var mats = withTexJson.GetProperty("materials").EnumerateArray().ToList();
+                Assert.Equal(2, mats.Count);
+                var plainGlb = Assert.Single(mats, m => !m.TryGetProperty("extras", out _));
+                var colGlb = Assert.Single(mats, m => m.TryGetProperty("extras", out _));
+                Assert.Equal(0, plainGlb.GetProperty("pbrMetallicRoughness").GetProperty("baseColorTexture").GetProperty("index").GetInt32());
+                var plainBcf = plainGlb.GetProperty("pbrMetallicRoughness").GetProperty("baseColorFactor").EnumerateArray().Select(e => e.GetDouble()).ToArray();
+                Assert.Equal(new[] { 1.0, 1.0, 1.0, 1.0 }, plainBcf);
+
+                var colExtras = colGlb.GetProperty("extras").GetProperty("sketchup");
+                Assert.True(colExtras.GetProperty("colorized").GetBoolean());
+                Assert.Equal(1, colExtras.GetProperty("colorize_type").GetInt32());
+                Assert.Equal(0, colGlb.GetProperty("pbrMetallicRoughness").GetProperty("baseColorTexture").GetProperty("index").GetInt32());
+                var colBcf = colGlb.GetProperty("pbrMetallicRoughness").GetProperty("baseColorFactor").EnumerateArray().Select(e => e.GetDouble()).ToArray();
+                Assert.Equal(200.0 / 255.0, colBcf[0], 9);
+                Assert.Equal(80.0 / 255.0, colBcf[1], 9);
+                Assert.Equal(60.0 / 255.0, colBcf[2], 9);
+                Assert.Equal(1.0, colBcf[3], 9);
+            }
+
+            var expectedLinearTint = new[]
+            {
+                SrgbToLinear(200.0 / 255.0),
+                SrgbToLinear(80.0 / 255.0),
+                SrgbToLinear(60.0 / 255.0),
+                1.0,
+            };
+            foreach (var noTexGlb in new[]
+            {
+                GlbExport.ToGlb(bothBaked, new GlbOptions { Textures = false }),
+                InstancedGlbExport.ToInstancedGlb(bothInstanced, new InstancedGlbOptions { Textures = false }),
+            })
+            {
+                var (noTexJson, _) = ParseGlb(noTexGlb);
+                Assert.False(noTexJson.TryGetProperty("textures", out _));
+                var mats = noTexJson.GetProperty("materials").EnumerateArray().ToList();
+                Assert.Equal(2, mats.Count);
+                foreach (var m in mats)
+                {
+                    var pbr = m.GetProperty("pbrMetallicRoughness");
+                    Assert.False(pbr.TryGetProperty("baseColorTexture", out _));
+                    var bcf = pbr.GetProperty("baseColorFactor").EnumerateArray().Select(e => e.GetDouble()).ToArray();
+                    for (int c = 0; c < 4; c++)
+                    {
+                        Assert.Equal(expectedLinearTint[c], bcf[c], 9);
+                    }
                 }
             }
         }

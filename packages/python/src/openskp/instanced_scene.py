@@ -367,7 +367,17 @@ def build_instanced_scene(
         colorized: bool = False,
         colorize_type: int = 0,
     ) -> int:
-        key = (color, double_sided, texture_index, transparency, material_name)
+        effective_colorized = bool(colorized) and texture_index is not None
+        effective_colorize_type = int(colorize_type) if effective_colorized else 0
+        key = (
+            color,
+            double_sided,
+            texture_index,
+            transparency,
+            material_name,
+            effective_colorized,
+            effective_colorize_type,
+        )
         if key in color_to_material_index:
             return color_to_material_index[key]
         idx = len(gltf_materials)
@@ -382,11 +392,13 @@ def build_instanced_scene(
         mat_dict: Dict[str, Any] = {"pbrMetallicRoughness": pbr}
         if material_name:
             mat_dict["name"] = material_name
-        if colorized:
+        if effective_colorized:
             # A colourized copy shares its source material's image untinted;
             # baseColorFactor is the target colour to re-tint it toward
             # (colorize_type 0 = hue shift, 1 = greyscale then tint).
-            mat_dict["extras"] = {"sketchup": {"colorized": True, "colorize_type": colorize_type}}
+            mat_dict["extras"] = {
+                "sketchup": {"colorized": True, "colorize_type": effective_colorize_type}
+            }
         if double_sided:
             mat_dict["doubleSided"] = True
         # See scene.py's get_material_index for why: BLEND for genuinely

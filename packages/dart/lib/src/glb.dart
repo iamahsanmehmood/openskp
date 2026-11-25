@@ -10,6 +10,28 @@ import 'scene.dart';
 /// an arbitrary choice here.
 const int _glbSizeLimit = 0xFFFFFFFF;
 
+/// Sets `baseColorFactor` to `[1, 1, 1, alpha]` on GLB materials that carry an
+/// embedded `baseColorTexture` and are not marked `extras.sketchup.colorized`,
+/// without mutating the input scene's `gltfMaterials`.
+List<Map<String, dynamic>> normalizeEmbeddedTextureFactors(
+  List<Map<String, dynamic>> materials,
+) {
+  return materials.map((m) {
+    final pbr = m['pbrMetallicRoughness'] as Map<String, dynamic>?;
+    if (pbr == null || !pbr.containsKey('baseColorTexture')) return m;
+    final extras = m['extras'];
+    final sketchup = extras is Map ? extras['sketchup'] : null;
+    final isColorized = sketchup is Map && sketchup['colorized'] == true;
+    if (isColorized) return m;
+    final bcf = pbr['baseColorFactor'];
+    final alpha =
+        (bcf is List && bcf.length > 3) ? (bcf[3] as num).toDouble() : 1.0;
+    final newPbr = Map<String, dynamic>.from(pbr)
+      ..['baseColorFactor'] = <double>[1.0, 1.0, 1.0, alpha];
+    return Map<String, dynamic>.from(m)..['pbrMetallicRoughness'] = newPbr;
+  }).toList();
+}
+
 /// Serializes a baked [Scene] to binary glTF 2.0 (GLB) bytes.
 ///
 /// A from-scratch writer with no external dependency, matching how this
@@ -35,12 +57,13 @@ Uint8List toGlb(
 }) {
   final prims = scene.glbPrimitives;
   final rawMaterials = scene.gltfMaterials;
-  final (sceneTextures, materials) = filterGltfTextures(
+  final (sceneTextures, filteredMaterials) = filterGltfTextures(
     scene.textures,
     rawMaterials,
     textures,
     onLog,
   );
+  final materials = normalizeEmbeddedTextureFactors(filteredMaterials);
 
   _validateScene(prims, materials);
 

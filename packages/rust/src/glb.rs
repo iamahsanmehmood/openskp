@@ -514,7 +514,11 @@ pub(crate) fn material_json(
         material.set("doubleSided", true);
     }
     let factor = if mapped_texture.is_some() {
-        pbr.base_color_factor
+        if source.colorized {
+            pbr.base_color_factor
+        } else {
+            [1.0, 1.0, 1.0, pbr.base_color_factor[3]]
+        }
     } else {
         [
             srgb_to_linear(pbr.base_color_factor[0]),
@@ -523,6 +527,14 @@ pub(crate) fn material_json(
             pbr.base_color_factor[3],
         ]
     };
+    if source.colorized {
+        let mut sketchup = JsonValue::object();
+        sketchup.set("colorized", true);
+        sketchup.set("colorize_type", i64::from(source.colorize_type));
+        let mut extras = JsonValue::object();
+        extras.set("sketchup", sketchup);
+        material.set("extras", extras);
+    }
     let mut pbr_json = JsonValue::object();
     let eps = 1e-12;
     if factor.iter().any(|&c| (c - 1.0).abs() >= eps) {

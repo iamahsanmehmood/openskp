@@ -276,8 +276,12 @@ TEST(OriginalTextures, GlbExportDropsTiffKeepsColorRemapsPngIndexAndWarnsOnce) {
     const tinygltf::Material* png_mat = nullptr;
     for (const auto& mat : model.materials) {
       ASSERT_EQ(mat.pbrMetallicRoughness.baseColorFactor.size(), 4u);
-      if (mat.pbrMetallicRoughness.baseColorFactor[0] > 0.5) tiff_mat = &mat;
-      if (mat.pbrMetallicRoughness.baseColorFactor[2] > 0.8) png_mat = &mat;
+      if (mat.pbrMetallicRoughness.baseColorTexture.index >= 0) {
+        png_mat = &mat;
+      } else if (mat.pbrMetallicRoughness.baseColorFactor[0] > 0.5 &&
+                 mat.pbrMetallicRoughness.baseColorFactor[2] < 0.1) {
+        tiff_mat = &mat;
+      }
     }
     ASSERT_NE(tiff_mat, nullptr);
     EXPECT_LT(tiff_mat->pbrMetallicRoughness.baseColorTexture.index, 0);
@@ -291,6 +295,8 @@ TEST(OriginalTextures, GlbExportDropsTiffKeepsColorRemapsPngIndexAndWarnsOnce) {
 
     ASSERT_NE(png_mat, nullptr);
     EXPECT_EQ(png_mat->pbrMetallicRoughness.baseColorTexture.index, 0);
+    EXPECT_EQ(png_mat->pbrMetallicRoughness.baseColorFactor,
+              (std::vector<double>{1.0, 1.0, 1.0, 1.0}));
     EXPECT_EQ(png_mat->alphaMode, "MASK");
 
     ASSERT_EQ(warnings.size(), 1u);

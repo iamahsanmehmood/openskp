@@ -263,12 +263,20 @@ namespace OpenSkp
             var textures = new List<SceneTexture>();
             var textureIndexFor = FaceGroups.CreateTextureIndexFor(textures, options);
 
-            var colorToMaterialIndex = new Dictionary<((int, int, int) Color, bool DoubleSided, int? TextureIndex, double Transparency), int>();
+            var colorToMaterialIndex = new Dictionary<((int, int, int) Color, bool DoubleSided, int? TextureIndex, double Transparency, bool Colorized, int ColorizeType), int>();
             var gltfMaterials = new List<object>();
 
-            int GetMaterialIndex((int R, int G, int B) color, bool doubleSided, int? textureIndex, double transparency = 1.0)
+            int GetMaterialIndex(
+                (int R, int G, int B) color,
+                bool doubleSided,
+                int? textureIndex,
+                double transparency = 1.0,
+                bool colorized = false,
+                int colorizeType = 0)
             {
-                var key = (color, doubleSided, textureIndex, transparency);
+                bool effectiveColorized = colorized && textureIndex.HasValue;
+                int effectiveColorizeType = effectiveColorized ? colorizeType : 0;
+                var key = (color, doubleSided, textureIndex, transparency, effectiveColorized, effectiveColorizeType);
                 if (colorToMaterialIndex.TryGetValue(key, out var existing)) return existing;
                 int idx = gltfMaterials.Count;
                 var pbr = new Dictionary<string, object>
@@ -282,6 +290,17 @@ namespace OpenSkp
                     pbr["baseColorTexture"] = new Dictionary<string, object> { ["index"] = textureIndex.Value };
                 }
                 var material = new Dictionary<string, object> { ["pbrMetallicRoughness"] = pbr };
+                if (effectiveColorized)
+                {
+                    material["extras"] = new Dictionary<string, object>
+                    {
+                        ["sketchup"] = new Dictionary<string, object>
+                        {
+                            ["colorized"] = true,
+                            ["colorize_type"] = effectiveColorizeType,
+                        },
+                    };
+                }
                 if (doubleSided) material["doubleSided"] = true;
                 // See Scene.cs's GetMaterialIndex for why: BLEND for
                 // genuinely translucent materials, MASK (safe no-op on an
@@ -435,7 +454,7 @@ namespace OpenSkp
                     fallbackColor = fallbackBackColor = GetLayerColor(colorLayer);
                 }
                 var matPart = inheritedMaterial != null
-                    ? $"|{inheritedMaterial.Name}:{FaceGroups.ResolveTransparency(inheritedMaterial)}"
+                    ? $"|{inheritedMaterial.Name}:{FaceGroups.ResolveTransparency(inheritedMaterial)}:{(inheritedMaterial.Colorized ? 1 : 0)}:{inheritedMaterial.ColorizeType}"
                     : "";
                 var key = $"{(defId.HasValue ? defId.Value.ToString() : "ROOT")}|{fallbackColor.R},{fallbackColor.G},{fallbackColor.B}{matPart}";
                 if (fallbackBackColor != fallbackColor)
@@ -522,7 +541,13 @@ namespace OpenSkp
                         Normals = normals,
                         Uvs = uvs,
                         Indices = indices,
-                        MaterialIndex = GetMaterialIndex(color, group.DoubleSided, texIndex, group.Transparency),
+                        MaterialIndex = GetMaterialIndex(
+                            color,
+                            group.DoubleSided,
+                            texIndex,
+                            group.Transparency,
+                            group.Colorized,
+                            group.ColorizeType),
                         UnpaintedBack = group.UnpaintedBack,
                     });
                 }

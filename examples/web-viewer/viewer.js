@@ -620,11 +620,14 @@ function loadSkpBuffer(arrayBuffer, filename) {
         const matIdx = prim.materialIndex;
         let colorFactor = [0.6, 0.6, 0.6, 1.0];
         let baseColorTextureIndex = null;
+        let isColorized = false;
 
         if (currentScene.gltfMaterials && currentScene.gltfMaterials[matIdx]) {
-          const pbr = currentScene.gltfMaterials[matIdx].pbrMetallicRoughness;
+          const gltfMat = currentScene.gltfMaterials[matIdx];
+          const pbr = gltfMat.pbrMetallicRoughness;
           colorFactor = pbr.baseColorFactor;
           if (pbr.baseColorTexture) baseColorTextureIndex = pbr.baseColorTexture.index;
+          isColorized = Boolean(gltfMat.extras?.sketchup?.colorized);
         } else {
           // Attempt to find layer color
           const lay = currentModel.layers.find((l) => l.name === metadata.layer);
@@ -662,9 +665,19 @@ function loadSkpBuffer(arrayBuffer, filename) {
         if (baseColorTextureIndex !== null) {
           const texture = getSceneTexture(baseColorTextureIndex);
           if (texture) {
+            // Non-colorized textured materials store the image's average RGB in
+            // scene.gltfMaterials; reset material.color to white so Three.js does
+            // not multiply the texture by its own average colour (#657).
+            if (!isColorized) {
+              materialOptions.color = new THREE.Color(1, 1, 1);
+            }
             materialOptions.map = texture;
             materialOptions.transparent = true;
-            materialOptions.alphaTest = 0.5;
+            if (colorFactor[3] < 1.0) {
+              materialOptions.opacity = colorFactor[3];
+            } else {
+              materialOptions.alphaTest = 0.5;
+            }
           }
         }
 

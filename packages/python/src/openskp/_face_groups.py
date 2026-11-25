@@ -231,6 +231,8 @@ def _add_face_side(
     # the same average color end up in one group with one image
     tex_index = texture_index_for(tex, material_name)
     transparency = resolve_transparency(mat)
+    colorized = bool(mat.get("colorized")) if mat and tex_index is not None else False
+    colorize_type = int(mat.get("colorize_type") or 0) if mat and colorized else 0
     key = (color, double_sided, tex_index, transparency, material_name, unpainted_back)
     group = face_groups.get(key)
     if group is None:
@@ -240,8 +242,8 @@ def _add_face_side(
             "double_sided": double_sided,
             "texture_index": tex_index,
             "material_name": material_name,
-            "colorized": bool(mat.get("colorized")) if mat and tex_index is not None else False,
-            "colorize_type": int(mat.get("colorize_type") or 0) if mat else 0,
+            "colorized": colorized,
+            "colorize_type": colorize_type,
             "local_verts": [],
             "local_uvs": [],
             "normals_accum": [],
@@ -337,7 +339,16 @@ def build_local_face_groups(builder: Any, ctx: FaceGroupContext) -> Dict[FaceGro
         fn = f_data["normal"]
         xr, yr = face_uv_basis(fn)
 
-        if front_color == back_color:
+        front_col = bool(front_mat.get("colorized")) if front_mat else False
+        back_col = bool(back_mat.get("colorized")) if back_mat else False
+        front_ctype = int(front_mat.get("colorize_type") or 0) if front_mat and front_col else 0
+        back_ctype = int(back_mat.get("colorize_type") or 0) if back_mat and back_col else 0
+        same_colorization = (
+            (front_col == back_col and front_ctype == back_ctype)
+            if (front_mat is not None and back_mat is not None)
+            else True
+        )
+        if front_color == back_color and same_colorization:
             _add_face_side(face_groups, builder, triangles, fn, front_color, True, False, front_mat,
                            f_data.get("uv_transform"), xr, yr, ctx.texture_index_for)
         else:

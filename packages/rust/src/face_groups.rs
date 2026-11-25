@@ -39,6 +39,8 @@ pub struct GroupKey {
     /// True for the reverse-wound back primitive of a face with no paint on
     /// either side when front and back fallback colours differ.
     pub unpainted_back: bool,
+    pub colorized: bool,
+    pub colorize_type: i32,
 }
 
 /// A vertex is keyed by (source vertex id, u, v): UVs are per-face, so a
@@ -488,30 +490,59 @@ pub fn build_local_face_groups(
             }
             Ok(())
         };
-        if front == back {
+        let front_raw_col = front_mat.is_some_and(|m| m.colorized);
+        let back_raw_col = back_mat.is_some_and(|m| m.colorized);
+        let front_raw_ctype = if front_raw_col {
+            front_mat.map_or(0, |m| m.colorize_type)
+        } else {
+            0
+        };
+        let back_raw_ctype = if back_raw_col {
+            back_mat.map_or(0, |m| m.colorize_type)
+        } else {
+            0
+        };
+        let same_colorization = if front_mat.is_some() && back_mat.is_some() {
+            front_raw_col == back_raw_col && front_raw_ctype == back_raw_ctype
+        } else {
+            true
+        };
+        if front == back && same_colorization {
             let (tw, th) = tile_size(front_mat);
+            let tex = (ctx.texture_index_for)(front_mat);
+            let col = tex.is_some() && front_raw_col;
             let key = GroupKey {
                 color: front,
                 double_sided: true,
-                texture_index: (ctx.texture_index_for)(front_mat),
+                texture_index: tex,
                 unpainted_back: false,
+                colorized: col,
+                colorize_type: if col { front_raw_ctype } else { 0 },
             };
             add_side(key, false, &f.uv_transform, tw, th)?;
         } else {
             let (ftw, fth) = tile_size(front_mat);
+            let ftex = (ctx.texture_index_for)(front_mat);
+            let fcol = ftex.is_some() && front_raw_col;
             let key = GroupKey {
                 color: front,
                 double_sided: false,
-                texture_index: (ctx.texture_index_for)(front_mat),
+                texture_index: ftex,
                 unpainted_back: false,
+                colorized: fcol,
+                colorize_type: if fcol { front_raw_ctype } else { 0 },
             };
             add_side(key, false, &f.uv_transform, ftw, fth)?;
             let (btw, bth) = tile_size(back_mat);
+            let btex = (ctx.texture_index_for)(back_mat);
+            let bcol = btex.is_some() && back_raw_col;
             let key = GroupKey {
                 color: back,
                 double_sided: false,
-                texture_index: (ctx.texture_index_for)(back_mat),
+                texture_index: btex,
                 unpainted_back: front_mat.is_none() && back_mat.is_none(),
+                colorized: bcol,
+                colorize_type: if bcol { back_raw_ctype } else { 0 },
             };
             add_side(key, true, &f.uv_transform_back, btw, bth)?;
         }

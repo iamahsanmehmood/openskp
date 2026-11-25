@@ -262,12 +262,28 @@ class InstancedSceneBuilder {
     final textures = <SceneTexture>[];
     final textureIndexFor = createTextureIndexFor(textures, options);
 
-    final colorToMaterialIndex = <((int, int, int), bool, int?, double), int>{};
+    final colorToMaterialIndex =
+        <((int, int, int), bool, int?, double, bool, int), int>{};
     final gltfMaterials = <Map<String, dynamic>>[];
 
-    int getMaterialIndex((int, int, int) color, bool doubleSided, int? textureIndex,
-        [double transparency = 1.0]) {
-      final key = (color, doubleSided, textureIndex, transparency);
+    int getMaterialIndex(
+      (int, int, int) color,
+      bool doubleSided,
+      int? textureIndex, [
+      double transparency = 1.0,
+      bool colorized = false,
+      int colorizeType = 0,
+    ]) {
+      final effectiveColorized = colorized && textureIndex != null;
+      final effectiveColorizeType = effectiveColorized ? colorizeType : 0;
+      final key = (
+        color,
+        doubleSided,
+        textureIndex,
+        transparency,
+        effectiveColorized,
+        effectiveColorizeType,
+      );
       final existing = colorToMaterialIndex[key];
       if (existing != null) return existing;
       final idx = gltfMaterials.length;
@@ -281,6 +297,14 @@ class InstancedSceneBuilder {
         pbr['baseColorTexture'] = {'index': textureIndex};
       }
       final material = <String, dynamic>{'pbrMetallicRoughness': pbr};
+      if (effectiveColorized) {
+        material['extras'] = <String, dynamic>{
+          'sketchup': <String, dynamic>{
+            'colorized': true,
+            'colorize_type': effectiveColorizeType,
+          },
+        };
+      }
       if (doubleSided) material['doubleSided'] = true;
       // See scene.dart's getMaterialIndex for why: BLEND for genuinely
       // translucent materials, MASK (safe no-op on an opaque-alpha
@@ -415,7 +439,7 @@ class InstancedSceneBuilder {
           ? '/${fallbackBackColor.$1},${fallbackBackColor.$2},${fallbackBackColor.$3}'
           : '';
       final matPart = inheritedMaterial != null
-          ? '|${inheritedMaterial.name}:${resolveTransparency(inheritedMaterial)}'
+          ? '|${inheritedMaterial.name}:${resolveTransparency(inheritedMaterial)}:${inheritedMaterial.colorized ? 1 : 0}:${inheritedMaterial.colorizeType}'
           : '';
       final key =
           '${defId ?? 'ROOT'}|${fallbackColor.$1},${fallbackColor.$2},${fallbackColor.$3}$matPart$backPart';
@@ -435,7 +459,15 @@ class InstancedSceneBuilder {
 
       final primitives = <LocalPrimitive>[];
       for (final groupEntry in faceGroups.entries) {
-        final (color, doubleSided, texIndex, transparency, unpaintedBack) = groupEntry.key;
+        final (
+          color,
+          doubleSided,
+          texIndex,
+          transparency,
+          unpaintedBack,
+          colorized,
+          colorizeType,
+        ) = groupEntry.key;
         final group = groupEntry.value;
         if (group.localFaces.isEmpty) continue;
 
@@ -490,7 +522,14 @@ class InstancedSceneBuilder {
           normals: normals,
           uvs: uvs,
           indices: indices,
-          materialIndex: getMaterialIndex(color, doubleSided, texIndex, transparency),
+          materialIndex: getMaterialIndex(
+            color,
+            doubleSided,
+            texIndex,
+            transparency,
+            colorized,
+            colorizeType,
+          ),
           unpaintedBack: unpaintedBack,
         ));
       }

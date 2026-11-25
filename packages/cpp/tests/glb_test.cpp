@@ -326,29 +326,121 @@ TEST(Glb, ConvertsSrgbBaseColorFactorToLinearInBakedAndInstancedExports) {
   EXPECT_DOUBLE_EQ(baked.gltf_materials[3].pbr_metallic_roughness.base_color_factor[0],
                    188.0 / 255.0);
 
-  // Plain textured material with embedded image keeps its baseColorFactor unchanged.
-  Scene tex_scene;
-  GltfMaterial tex_mat{
-      "PlainTex", "", {{138.0 / 255.0, 64.0 / 255.0, 36.0 / 255.0, 1.0}, 0.0, 0.8}, false};
-  tex_mat.pbr_metallic_roughness.base_color_texture = std::size_t{0};
-  tex_scene.gltf_materials.push_back(tex_mat);
-  tex_scene.textures.push_back(
-      {ByteBuffer{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a}, "image/png", "tile.png"});
-  tex_scene.glb_primitives.push_back(baked.glb_primitives[0]);
+  // Plain textured materials with embedded images write [1, 1, 1, alpha] while
+  // keeping scene.gltf_materials untouched (#657).
+  const auto capilla_skp = SkpFile::open(test::fixture("capilla_quiroz_v17.skp"));
+  const auto capilla_baked = capilla_skp.build_scene();
+  const auto capilla_inst = capilla_skp.build_instanced_scene();
   tinygltf::TinyGLTF loader;
   loader.SetImageLoader([](tinygltf::Image*, const int, std::string*, std::string*, int, int,
                            const unsigned char*, int, void*) { return true; },
                         nullptr);
-  tinygltf::Model tex_model;
-  std::string err;
-  std::string warn;
-  const auto tex_bytes = to_glb(tex_scene, GlbOptions{true});
-  ASSERT_TRUE(
-      loader.LoadBinaryFromMemory(&tex_model, &err, &warn, tex_bytes.data(), tex_bytes.size()));
-  const auto& tex_bcf = tex_model.materials[0].pbrMetallicRoughness.baseColorFactor;
-  EXPECT_NEAR(tex_bcf[0], 138.0 / 255.0, 1e-12);
-  EXPECT_NEAR(tex_bcf[1], 64.0 / 255.0, 1e-12);
-  EXPECT_NEAR(tex_bcf[2], 36.0 / 255.0, 1e-12);
+  for (const auto& tex_bytes : {to_glb(capilla_baked, GlbOptions{true}),
+                                to_instanced_glb(capilla_inst, InstancedGlbOptions{true})}) {
+    tinygltf::Model tex_model;
+    std::string err;
+    std::string warn;
+    ASSERT_TRUE(
+        loader.LoadBinaryFromMemory(&tex_model, &err, &warn, tex_bytes.data(), tex_bytes.size()));
+    std::size_t tex_count = 0;
+    std::size_t half_alpha_count = 0;
+    for (const auto& gm : tex_model.materials) {
+      if (gm.pbrMetallicRoughness.baseColorTexture.index >= 0) {
+        ++tex_count;
+        EXPECT_DOUBLE_EQ(gm.pbrMetallicRoughness.baseColorFactor[0], 1.0);
+        EXPECT_DOUBLE_EQ(gm.pbrMetallicRoughness.baseColorFactor[1], 1.0);
+        EXPECT_DOUBLE_EQ(gm.pbrMetallicRoughness.baseColorFactor[2], 1.0);
+        if (gm.pbrMetallicRoughness.baseColorFactor[3] < 1.0) {
+          EXPECT_NEAR(gm.pbrMetallicRoughness.baseColorFactor[3], 0.5, 1e-2);
+          ++half_alpha_count;
+        }
+      }
+    }
+    EXPECT_EQ(tex_count, 4U);
+    EXPECT_EQ(half_alpha_count, 2U);
+  }
+  // Scene gltf_materials still carries the image average colours.
+  bool saw_spanish_tile_avg = false;
+  for (const auto& sm : capilla_baked.gltf_materials) {
+    if (sm.pbr_metallic_roughness.base_color_texture.has_value() &&
+        sm.pbr_metallic_roughness.base_color_factor[0] < 0.6 &&
+        sm.pbr_metallic_roughness.base_color_factor[2] < 0.2) {
+      saw_spanish_tile_avg = true;
+    }
+  }
+  EXPECT_TRUE(saw_spanish_tile_avg);
+
+  // End-to-end model -> scene -> GLB on a real .skp containing one plain and one
+  // colorized material sharing the same RGB (200, 80, 60) and PNG image (#657).
+  const auto both_skp = SkpFile::open(test::fixture("colorized_and_plain_texture.skp"));
+  const auto both_baked = both_skp.build_scene();
+  const auto both_inst = both_skp.build_instanced_scene();
+  for (const auto* mats_ptr : {&both_baked.gltf_materials, &both_inst.gltf_materials}) {
+    ASSERT_EQ(mats_ptr->size(), 2U);
+    std::size_t plain_count = 0;
+    std::size_t col_count = 0;
+    for (const auto& gm : *mats_ptr) {
+      EXPECT_DOUBLE_EQ(gm.pbr_metallic_roughness.base_color_factor[0], 200.0 / 255.0);
+      EXPECT_DOUBLE_EQ(gm.pbr_metallic_roughness.base_color_factor[1], 80.0 / 255.0);
+      EXPECT_DOUBLE_EQ(gm.pbr_metallic_roughness.base_color_factor[2], 60.0 / 255.0);
+      EXPECT_DOUBLE_EQ(gm.pbr_metallic_roughness.base_color_factor[3], 1.0);
+      if (gm.colorized) {
+        EXPECT_EQ(gm.colorize_type, 1);
+        ++col_count;
+      } else {
+        EXPECT_EQ(gm.colorize_type, 0);
+        ++plain_count;
+      }
+    }
+    EXPECT_EQ(plain_count, 1U);
+    EXPECT_EQ(col_count, 1U);
+  }
+
+  for (const auto& with_tex_bytes : {to_glb(both_baked, GlbOptions{true}),
+                                     to_instanced_glb(both_inst, InstancedGlbOptions{true})}) {
+    tinygltf::Model m;
+    std::string err;
+    std::string warn;
+    ASSERT_TRUE(
+        loader.LoadBinaryFromMemory(&m, &err, &warn, with_tex_bytes.data(), with_tex_bytes.size()));
+    ASSERT_EQ(m.materials.size(), 2U);
+    std::size_t saw_plain = 0;
+    std::size_t saw_col = 0;
+    for (const auto& gm : m.materials) {
+      EXPECT_EQ(gm.pbrMetallicRoughness.baseColorTexture.index, 0);
+      if (gm.extras.IsObject() && gm.extras.Has("sketchup")) {
+        const auto& skp_ext = gm.extras.Get("sketchup");
+        ASSERT_TRUE(skp_ext.IsObject());
+        EXPECT_TRUE(skp_ext.Get("colorized").Get<bool>());
+        EXPECT_EQ(skp_ext.Get("colorize_type").GetNumberAsInt(), 1);
+        EXPECT_NEAR(gm.pbrMetallicRoughness.baseColorFactor[0], 200.0 / 255.0, 1e-12);
+        EXPECT_NEAR(gm.pbrMetallicRoughness.baseColorFactor[1], 80.0 / 255.0, 1e-12);
+        EXPECT_NEAR(gm.pbrMetallicRoughness.baseColorFactor[2], 60.0 / 255.0, 1e-12);
+        EXPECT_DOUBLE_EQ(gm.pbrMetallicRoughness.baseColorFactor[3], 1.0);
+        ++saw_col;
+      } else {
+        EXPECT_EQ(gm.pbrMetallicRoughness.baseColorFactor,
+                  (std::vector<double>{1.0, 1.0, 1.0, 1.0}));
+        ++saw_plain;
+      }
+    }
+    EXPECT_EQ(saw_plain, 1U);
+    EXPECT_EQ(saw_col, 1U);
+  }
+
+  for (const auto& no_tex_bytes : {to_glb(both_baked, GlbOptions{false}),
+                                   to_instanced_glb(both_inst, InstancedGlbOptions{false})}) {
+    const auto m = load_glb(no_tex_bytes);
+    ASSERT_EQ(m.materials.size(), 2U);
+    EXPECT_TRUE(m.textures.empty());
+    for (const auto& gm : m.materials) {
+      EXPECT_EQ(gm.pbrMetallicRoughness.baseColorTexture.index, -1);
+      EXPECT_NEAR(gm.pbrMetallicRoughness.baseColorFactor[0], srgb_to_linear(200.0 / 255.0), 1e-12);
+      EXPECT_NEAR(gm.pbrMetallicRoughness.baseColorFactor[1], srgb_to_linear(80.0 / 255.0), 1e-12);
+      EXPECT_NEAR(gm.pbrMetallicRoughness.baseColorFactor[2], srgb_to_linear(60.0 / 255.0), 1e-12);
+      EXPECT_DOUBLE_EQ(gm.pbrMetallicRoughness.baseColorFactor[3], 1.0);
+    }
+  }
 }
 
 }  // namespace

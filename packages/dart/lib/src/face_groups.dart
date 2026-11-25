@@ -34,6 +34,8 @@ class LocalFaceGroup {
   final bool doubleSided;
   final int? textureIndex;
   final bool unpaintedBack;
+  final bool colorized;
+  final int colorizeType;
   final List<(double, double, double)> localVerts = [];
   final List<(double, double)> localUvs = [];
   final List<List<double>> normalsAccum = [];
@@ -46,6 +48,8 @@ class LocalFaceGroup {
     this.textureIndex,
     this.transparency, [
     this.unpaintedBack = false,
+    this.colorized = false,
+    this.colorizeType = 0,
   ]);
 }
 
@@ -60,8 +64,8 @@ class LocalFaceGroup {
 double resolveTransparency(RawMaterial? mat) =>
     mat == null ? 1.0 : (mat.a / 255.0) * mat.transparency;
 
-/// Key: (color, doubleSided, textureIndex, transparency, unpaintedBack).
-typedef FaceGroupKey = ((int, int, int), bool, int?, double, bool);
+/// Key: (color, doubleSided, textureIndex, transparency, unpaintedBack, colorized, colorizeType).
+typedef FaceGroupKey = ((int, int, int), bool, int?, double, bool, bool, int);
 
 /// Everything [buildLocalFaceGroups] needs from its caller that isn't the
 /// builder itself.
@@ -201,10 +205,29 @@ Map<FaceGroupKey, LocalFaceGroup> buildLocalFaceGroups(GeometryBuilder builder, 
     // part of the key too - otherwise two differently-textured faces with
     // the same average color end up in one group with one image
     final texIndex = ctx.textureIndexFor(mat?.texture, mat?.name);
+    final colorized = mat != null && texIndex != null && mat.colorized;
+    final colorizeType = colorized ? mat.colorizeType : 0;
     final transparency = resolveTransparency(mat);
-    final key = (color, doubleSided, texIndex, transparency, unpaintedBack);
+    final key = (
+      color,
+      doubleSided,
+      texIndex,
+      transparency,
+      unpaintedBack,
+      colorized,
+      colorizeType,
+    );
     final group = faceGroups.putIfAbsent(
-        key, () => LocalFaceGroup(color, doubleSided, texIndex, transparency, unpaintedBack));
+        key,
+        () => LocalFaceGroup(
+              color,
+              doubleSided,
+              texIndex,
+              transparency,
+              unpaintedBack,
+              colorized,
+              colorizeType,
+            ));
 
     final tex = mat?.texture;
     final tileW = (tex != null && tex.xScale > 1e-9) ? tex.xScale : 1.0;
@@ -279,8 +302,16 @@ Map<FaceGroupKey, LocalFaceGroup> buildLocalFaceGroups(GeometryBuilder builder, 
     final uvTransform = fData.uvTransform;
     final uvTransformBack = fData.uvTransformBack;
 
-    if (frontColor == backColor) {
-      addSide(triangles, fn, frontColor, true, false, frontMat, uvTransform, xr, yr);
+    final frontCol = frontMat?.colorized ?? false;
+    final backCol = backMat?.colorized ?? false;
+    final frontCType = frontCol ? frontMat!.colorizeType : 0;
+    final backCType = backCol ? backMat!.colorizeType : 0;
+    final sameColorization = (frontMat != null && backMat != null)
+        ? (frontCol == backCol && frontCType == backCType)
+        : true;
+    if (frontColor == backColor && sameColorization) {
+      addSide(triangles, fn, frontColor, true, false, frontMat, uvTransform, xr,
+          yr);
     } else {
       addSide(triangles, fn, frontColor, false, false, frontMat, uvTransform, xr, yr);
       addSide(
