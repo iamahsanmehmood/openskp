@@ -404,6 +404,18 @@ class ConstructionPoint {
   });
 }
 
+/// Bits of [Page.captureFlags], named after SketchUp's public Ruby API
+/// (`Sketchup::Page#use_camera?` and so on).
+const int pageUseCamera = 0x001;
+const int pageUseRenderingOptions = 0x002;
+const int pageUseShadowInfo = 0x004;
+const int pageUseAxes = 0x008;
+const int pageUseHidden = 0x010; // before SketchUp 2020.1: geometry + objects
+const int pageUseHiddenLayers = 0x020;
+const int pageUseSectionPlanes = 0x040;
+const int pageUseHiddenGeometry = 0x080;
+const int pageUseHiddenObjects = 0x100;
+
 /// A saved scene (SketchUp's "Scenes" tabs; "pages" in the SDK).
 class Page {
   /// Scene name as shown on its tab.
@@ -435,6 +447,10 @@ class Page {
   /// [Instance.id], [Edge.persistentId] and [Face.persistentId]).
   final List<int> hiddenEntityIds;
 
+  /// Which properties the scene saves ("Properties to save" in SketchUp's
+  /// Scenes panel), as the u32 the file stores, or null when unknown.
+  final int? captureFlags;
+
   const Page({
     this.name = '',
     this.eye,
@@ -445,7 +461,47 @@ class Page {
     this.orthoHeight = 0.0,
     this.hiddenLayers = const [],
     this.hiddenEntityIds = const [],
+    this.captureFlags,
   });
+
+  bool? _flag(int bit) {
+    final flags = captureFlags;
+    if (flags == null) return null;
+    return (flags & bit) != 0;
+  }
+
+  /// The scene saves its camera ("Camera Location"), `0x001`.
+  bool? get useCamera => _flag(pageUseCamera);
+
+  /// The scene saves its style ("Style and Fog"), `0x002`.
+  bool? get useRenderingOptions => _flag(pageUseRenderingOptions);
+
+  /// The scene saves its shadows ("Shadow Settings"), `0x004`.
+  bool? get useShadowInfo => _flag(pageUseShadowInfo);
+
+  /// The scene saves the axes ("Axes Location"), `0x008`.
+  bool? get useAxes => _flag(pageUseAxes);
+
+  /// The scene saves which layers it hides ("Visible Tags"), `0x020`.
+  bool? get useHiddenLayers => _flag(pageUseHiddenLayers);
+
+  /// The scene saves the active section ("Active Section Planes"), `0x040`.
+  bool? get useSectionPlanes => _flag(pageUseSectionPlanes);
+
+  bool? _hidden(int bit) {
+    final flags = captureFlags;
+    if (flags == null) return null;
+    if ((flags & (pageUseHiddenGeometry | pageUseHiddenObjects)) != 0) {
+      return (flags & bit) != 0;
+    }
+    return (flags & pageUseHidden) != 0;
+  }
+
+  /// The scene saves which edges and faces it hides ("Hidden Geometry"), `0x080`.
+  bool? get useHiddenGeometry => _hidden(pageUseHiddenGeometry);
+
+  /// The scene saves which groups and components it hides ("Hidden Objects"), `0x100`.
+  bool? get useHiddenObjects => _hidden(pageUseHiddenObjects);
 
   @override
   bool operator ==(Object other) {
@@ -458,6 +514,7 @@ class Page {
         fov != other.fov ||
         parallel != other.parallel ||
         orthoHeight != other.orthoHeight ||
+        captureFlags != other.captureFlags ||
         hiddenLayers.length != other.hiddenLayers.length ||
         hiddenEntityIds.length != other.hiddenEntityIds.length) {
       return false;
@@ -480,6 +537,7 @@ class Page {
         fov,
         parallel,
         orthoHeight,
+        captureFlags,
         Object.hashAll(hiddenLayers),
         Object.hashAll(hiddenEntityIds),
       );

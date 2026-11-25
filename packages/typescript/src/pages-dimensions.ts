@@ -18,6 +18,7 @@ export interface RawPage {
   orthoHeight: number;
   hiddenLayerIds: number[];
   hiddenEntityIds: number[];
+  captureFlags: number | null;
 }
 
 export interface RawDimension {
@@ -938,7 +939,13 @@ export function parsePages(node: TlvNode | null): RawPage[] {
           orthoHeight: 0.0,
           hiddenLayerIds: [],
           hiddenEntityIds: [],
+          captureFlags: null,
         };
+
+        const flags = tlvFindInt(items, 0x7149);
+        if (flags !== null && flags.length === 4) {
+          page.captureFlags = readU32(flags, 0);
+        }
 
         const head = tlvItemsInt(tlvFindInt(items, 0x6f54));
         const name = tlvFindInt(head, 0x6f55);

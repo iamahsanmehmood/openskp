@@ -708,6 +708,18 @@ pub struct ConstructionPoint {
     pub hidden: bool,
 }
 
+/// Bits of [`Page::capture_flags`], named after SketchUp's public Ruby API
+/// (`Sketchup::Page#use_camera?` and so on).
+pub const PAGE_USE_CAMERA: u32 = 0x001;
+pub const PAGE_USE_RENDERING_OPTIONS: u32 = 0x002;
+pub const PAGE_USE_SHADOW_INFO: u32 = 0x004;
+pub const PAGE_USE_AXES: u32 = 0x008;
+pub const PAGE_USE_HIDDEN: u32 = 0x010; // before SketchUp 2020.1: geometry + objects
+pub const PAGE_USE_HIDDEN_LAYERS: u32 = 0x020;
+pub const PAGE_USE_SECTION_PLANES: u32 = 0x040;
+pub const PAGE_USE_HIDDEN_GEOMETRY: u32 = 0x080;
+pub const PAGE_USE_HIDDEN_OBJECTS: u32 = 0x100;
+
 /// A saved scene ("page").
 #[derive(Debug, Clone, PartialEq)]
 pub struct Page {
@@ -728,6 +740,9 @@ pub struct Page {
     pub hidden_entity_ids: Vec<EntityId>,
     /// The scene selected when the model was saved.
     pub selected: bool,
+    /// Which properties the scene saves ("Properties to save" in SketchUp's
+    /// Scenes panel), as the u32 the file stores, or `None` when unknown.
+    pub capture_flags: Option<u32>,
 }
 
 impl Default for Page {
@@ -743,7 +758,63 @@ impl Default for Page {
             hidden_layers: Vec::new(),
             hidden_entity_ids: Vec::new(),
             selected: false,
+            capture_flags: None,
         }
+    }
+}
+
+impl Page {
+    fn flag(&self, bit: u32) -> Option<bool> {
+        self.capture_flags.map(|f| (f & bit) != 0)
+    }
+
+    fn hidden_flag(&self, bit: u32) -> Option<bool> {
+        let flags = self.capture_flags?;
+        if (flags & (PAGE_USE_HIDDEN_GEOMETRY | PAGE_USE_HIDDEN_OBJECTS)) != 0 {
+            Some((flags & bit) != 0)
+        } else {
+            Some((flags & PAGE_USE_HIDDEN) != 0)
+        }
+    }
+
+    /// The scene saves its camera ("Camera Location"), `0x001`.
+    pub fn use_camera(&self) -> Option<bool> {
+        self.flag(PAGE_USE_CAMERA)
+    }
+
+    /// The scene saves its style ("Style and Fog"), `0x002`.
+    pub fn use_rendering_options(&self) -> Option<bool> {
+        self.flag(PAGE_USE_RENDERING_OPTIONS)
+    }
+
+    /// The scene saves its shadows ("Shadow Settings"), `0x004`.
+    pub fn use_shadow_info(&self) -> Option<bool> {
+        self.flag(PAGE_USE_SHADOW_INFO)
+    }
+
+    /// The scene saves the axes ("Axes Location"), `0x008`.
+    pub fn use_axes(&self) -> Option<bool> {
+        self.flag(PAGE_USE_AXES)
+    }
+
+    /// The scene saves which layers it hides ("Visible Tags"), `0x020`.
+    pub fn use_hidden_layers(&self) -> Option<bool> {
+        self.flag(PAGE_USE_HIDDEN_LAYERS)
+    }
+
+    /// The scene saves the active section ("Active Section Planes"), `0x040`.
+    pub fn use_section_planes(&self) -> Option<bool> {
+        self.flag(PAGE_USE_SECTION_PLANES)
+    }
+
+    /// The scene saves which edges and faces it hides ("Hidden Geometry"), `0x080`.
+    pub fn use_hidden_geometry(&self) -> Option<bool> {
+        self.hidden_flag(PAGE_USE_HIDDEN_GEOMETRY)
+    }
+
+    /// The scene saves which groups and components it hides ("Hidden Objects"), `0x100`.
+    pub fn use_hidden_objects(&self) -> Option<bool> {
+        self.hidden_flag(PAGE_USE_HIDDEN_OBJECTS)
     }
 }
 

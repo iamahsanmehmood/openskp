@@ -2077,6 +2077,7 @@ void fill(GeometryBuilder& b,
 // legacy._scan_pages exactly.
 constexpr uint32_t kPageAllowedFlags[] = {0xc00, 0xc20};
 constexpr uint32_t kPageHiddenLayersBit = 0x20;
+constexpr uint32_t kPageKnownFlags = 0x1FF;
 
 bool is_allowed_page_flags(uint32_t flags) {
   for (auto f : kPageAllowedFlags)
@@ -2242,6 +2243,7 @@ std::vector<RawPage> scan_pages_for_layers(const ByteBuffer& data, std::size_t s
       RawPage page;
       page.name = std::move(name);
       page.hidden_layer_ids = std::move(hidden_ids);
+      if (!(flags & ~kPageKnownFlags)) page.capture_flags = flags;
       pages.push_back(std::move(page));
     } catch (const std::exception&) {
       continue;
@@ -2291,7 +2293,6 @@ std::vector<RawPage> scan_pages_for_layers(const ByteBuffer& data, std::size_t s
 // and hidden layers only - the same order as Python.
 namespace {
 
-constexpr uint32_t kPageKnownFlags = 0x1FF;
 constexpr size_t kPageAxesLen = 108;
 constexpr size_t kPageTrailerLen = 22;
 constexpr size_t kShadowInfoFixedLen = 62;  // after the city and country strings
@@ -2461,6 +2462,7 @@ RawPage read_page_record(Archive& ar, R& r, PageClasses& classes) {
   page.name = r.utf16();
   r.utf16();  // description
   uint32_t flags = r.u32();
+  page.capture_flags = flags;
   if (flags & ~kPageKnownFlags) throw PageError("scene capture flags");
   if (schema >= 15) {
     // saved through SketchUp's C API: the camera is there when its flag is, and there is no

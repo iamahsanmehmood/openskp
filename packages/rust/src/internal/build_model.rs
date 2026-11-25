@@ -316,6 +316,7 @@ pub fn build_pages(pages: &[RawPage], layer_names: &BTreeMap<EntityId, String>) 
                 .collect(),
             hidden_entity_ids: pg.hidden_entity_ids.clone(),
             selected: pg.selected,
+            capture_flags: pg.capture_flags,
         })
         .collect()
 }

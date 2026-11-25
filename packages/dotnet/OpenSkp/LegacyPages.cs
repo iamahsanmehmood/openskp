@@ -238,6 +238,7 @@ namespace OpenSkp
             var page = new RawPage { Name = r.Utf16() };
             r.Utf16(); // description
             uint flags = r.U32();
+            page.CaptureFlags = flags;
             if ((flags & ~KnownFlags) != 0)
             {
                 throw new LegacyParseError($"scene capture flags 0x{flags:x} {r.Ctx()}");

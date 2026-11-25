@@ -19,6 +19,7 @@ namespace OpenSkp
         public double OrthoHeight;
         public List<long> HiddenLayerIds = new List<long>();
         public List<long> HiddenEntityIds = new List<long>();
+        public uint? CaptureFlags;
     }
 
     internal sealed class RawDimension
@@ -979,6 +980,12 @@ namespace OpenSkp
                         if (items == null) continue;
 
                         var page = new RawPage();
+
+                        var flags = TlvFindInt(items, 0x7149);
+                        if (flags != null && flags.Length == 4)
+                        {
+                            page.CaptureFlags = Tlv.ReadU32(flags, 0);
+                        }
 
                         var head = TlvItemsInt(TlvFindInt(items, 0x6F54));
                         var name = TlvFindInt(head, 0x6F55);

@@ -2537,9 +2537,11 @@ function readPageRecord(ar: Archive, r: R, classes: PageClasses): RawPage {
     orthoHeight: 0.0,
     hiddenLayerIds: [],
     hiddenEntityIds: [],
+    captureFlags: null,
   };
   r.utf16(); // description
   const flags = r.u32();
+  page.captureFlags = flags;
   if (flags & ~PAGE_KNOWN_FLAGS) throw new LegacyParseError(`scene capture flags 0x${flags.toString(16)} ${r.ctx()}`);
   const takeCamera = (): void => {
     [kind, slot] = readTag(r);
