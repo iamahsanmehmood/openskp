@@ -151,6 +151,7 @@ def to_python_code(model: SkpModel) -> str:
             ]
             if mat.transparency is not None and mat.transparency < 1.0 - 1e-6:
                 extra_args.append(f"opacity={round(mat.transparency, 4)!r}")
+            extra_args.append(f"filename={mat.texture.filename or ''!r}")
             push(
                 f"        {var_name} = builder.add_texture_material({mat.name!r}, _tex_path, "
                 + ", ".join(extra_args)

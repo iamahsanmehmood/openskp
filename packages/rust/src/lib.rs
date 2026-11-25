@@ -99,5 +99,5 @@ pub use create::{
     create, ArcOptions, AttributeDict, AttributeValue, CircleOptions, ComponentDefinitionBuilder,
     DefinitionHandle, DefinitionOptions, DimensionOptions, DocumentOptions, FaceOptions,
     GroupInstanceOptions, GroupOptions, GuideOptions, ImageOptions, InstanceOptions, LayerOptions,
-    PolylineOptions, SkpBuilder, SkpWriteError, TextOptions,
+    PolylineOptions, SkpBuilder, SkpWriteError, TextOptions, TextureMaterialOptions,
 };

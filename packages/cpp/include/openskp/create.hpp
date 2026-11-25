@@ -403,6 +403,8 @@ struct ImageOptions {
   bool locked = false;
   bool casts_shadows = true;
   bool receives_shadows = true;
+  /// Stored `CTexture` path. Unset = the image file path passed to `add_image`.
+  std::optional<std::string> filename;
 };
 
 /// Accumulates one component/group definition's geometry. Construct via
@@ -589,7 +591,8 @@ class OPENSKP_EXPORT SkpBuilder {
   int add_texture_material(const std::string& name, const std::filesystem::path& image_path,
                            std::optional<double> applied_height = std::nullopt,
                            std::optional<double> applied_width = std::nullopt,
-                           std::optional<double> opacity = std::nullopt);
+                           std::optional<double> opacity = std::nullopt,
+                           std::optional<std::string> filename = std::nullopt);
   int add_texture_material(const std::string& name, const std::filesystem::path& image_path,
                            const TextureMaterialOptions& options);
 

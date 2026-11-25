@@ -101,6 +101,57 @@ namespace OpenSkp.Tests
             Assert.Contains("appliedHeight: 12", code);
             Assert.Contains("appliedWidth: 24", code);
             Assert.Contains("opacity: 0.75", code);
+            Assert.Contains("filename: \"brick.png\"", code);
+        }
+
+        [Fact]
+        public void GeneratedCodePreservesTextureFilenamesIncludingEmptyAndNeverEmbedsTempFolder()
+        {
+            string tempDir = Path.GetTempPath().TrimEnd('\\', '/');
+            byte[] asciiNeedle = System.Text.Encoding.UTF8.GetBytes(tempDir);
+            byte[] utf16Needle = System.Text.Encoding.Unicode.GetBytes(tempDir);
+
+            static bool ContainsSubsequence(byte[] haystack, byte[] needle)
+            {
+                if (needle.Length == 0 || haystack.Length < needle.Length) return false;
+                for (int i = 0; i <= haystack.Length - needle.Length; i++)
+                {
+                    bool ok = true;
+                    for (int j = 0; j < needle.Length; j++)
+                    {
+                        if (haystack[i + j] != needle[j]) { ok = false; break; }
+                    }
+                    if (ok) return true;
+                }
+                return false;
+            }
+
+            string pngPath = Path.Combine(Path.GetTempPath(), "openskp_codegen_667_" + Guid.NewGuid() + ".png");
+            File.WriteAllBytes(pngPath, new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3, 4 });
+            try
+            {
+                var builder = SkpCreate.NewFile();
+                int m1 = builder.AddTextureMaterial("Concrete", pngPath, filename: "Polished Concrete Old.jpg");
+                int m2 = builder.AddTextureMaterial("Nameless", pngPath, filename: "");
+                builder.AddFace(new (double, double, double)[] { (0, 0, 0), (100, 0, 0), (100, 100, 0), (0, 100, 0) }, material: m1);
+                builder.AddFace(new (double, double, double)[] { (200, 0, 0), (300, 0, 0), (300, 100, 0), (200, 100, 0) }, material: m2);
+                var original = SkpFile.Parse(builder.ToBytes());
+                original.Materials.Single(m => m.Name == "Nameless").Texture!.Filename = "";
+
+                string code = Codegen.ToCSharpCode(original);
+                Assert.Contains("filename: \"\"", code);
+                byte[] regenBytes = CompileAndRun(code);
+                Assert.False(ContainsSubsequence(regenBytes, asciiNeedle));
+                Assert.False(ContainsSubsequence(regenBytes, utf16Needle));
+
+                var regen = SkpFile.Parse(regenBytes);
+                Assert.Equal("Polished Concrete Old.jpg", regen.Materials.Single(m => m.Name == "Concrete").Texture!.Filename);
+                Assert.Equal("Nameless.png", regen.Materials.Single(m => m.Name == "Nameless").Texture!.Filename);
+            }
+            finally
+            {
+                if (File.Exists(pngPath)) File.Delete(pngPath);
+            }
         }
 
         public static System.Collections.Generic.IEnumerable<object[]> RealFixtures()

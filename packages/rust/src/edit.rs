@@ -287,7 +287,12 @@ fn replay_materials(
             // divisor (1.0) or the read-side UV formula divides by it a second time. This happens
             // to match add_texture_material's own default too, but is kept explicit since it's a
             // hard requirement of this call site specifically, not just a safe default.
-            let result = builder.add_texture_material(&mat.name, &tmp_path, Some(1.0), None, None);
+            let tex_opts = crate::create::TextureMaterialOptions {
+                applied_height: Some(1.0),
+                filename: Some(texture.filename.clone()),
+                ..Default::default()
+            };
+            let result = builder.add_texture_material_with_options(&mat.name, &tmp_path, &tex_opts);
             let _ = std::fs::remove_file(&tmp_path);
             let slot = result?;
             if mat.colorized {

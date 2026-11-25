@@ -2803,6 +2803,7 @@ class SkpBuilder:
         applied_width: Optional[float] = None,
         applied_height: Optional[float] = None,
         opacity: Optional[float] = None,
+        filename: Optional[str] = None,
     ) -> int:
         """Register an image-textured material from a local PNG or JPEG
         file and return a handle to pass as `add_face`'s ``material``
@@ -2816,6 +2817,10 @@ class SkpBuilder:
         pins in tiles of the image regardless of it (`add_face` scales
         them by this size, since SketchUp stores and reads the per-face
         matrix in inches of texture space - see `_scale_pins`).
+
+        ``filename``, if given, overrides the stored ``CTexture`` path
+        (including ``""`` for a texture with no file name); ``None`` keeps
+        ``image_path``.
 
         The format is detected from the file's own magic bytes, not its
         extension - PNG and JPEG are the only two this project has
@@ -2837,8 +2842,9 @@ class SkpBuilder:
         with open(image_path, "rb") as f:
             image_bytes = f.read()
         subtype = _detect_image_subtype(image_bytes)
+        stored_path = image_path if filename is None else filename
         slot = self._material_writer.write_textured_material(
-            name, image_bytes, image_path, subtype=subtype,
+            name, image_bytes, stored_path, subtype=subtype,
             applied_width=applied_width, applied_height=applied_height,
             opacity=opacity,
         )
@@ -3169,6 +3175,7 @@ class SkpBuilder:
         rotation: Optional[Tuple[Tuple[float, float, float], float]] = None,
         layer: Optional[int] = None,
         hidden: bool = False,
+        filename: Optional[str] = None,
     ) -> None:
         """Place a SketchUp Image entity (File > Import > Image) - a
         picture placed as its own object, distinct from painting a texture
@@ -3184,6 +3191,7 @@ class SkpBuilder:
         (matching every other `add_face` example in this file); rotate it
         to stand upright (e.g. on a wall) the same way you would any other
         placement. ``layer``, if given, is a handle from `add_layer`.
+        ``filename``, if given, overrides the stored ``CTexture`` path.
 
         >>> painting = builder.add_material  # (not used directly here)
         >>> builder.add_image("photo.jpg", width=48, height=36,
@@ -3213,7 +3221,9 @@ class SkpBuilder:
         this, and please report back what you find either way.
         """
         self._check_layer_handle(layer)
-        mat = self.add_texture_material(f"__openskp_image_{self._material_count}", image_path)
+        mat = self.add_texture_material(
+            f"__openskp_image_{self._material_count}", image_path, filename=filename
+        )
         with self.add_component_definition(f"Image{self._definition_count}") as image_def:
             # Standard (0,0)-at-bottom-left, V increasing upward - no
             # vertical flip. Every other UV-related fact in this file is

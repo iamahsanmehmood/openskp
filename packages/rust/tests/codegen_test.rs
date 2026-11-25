@@ -86,7 +86,7 @@ fn emits_textured_material_with_applied_width_and_opacity() {
 
     assert!(
         code.contains(
-            r#"add_texture_material("Brick", &tex_path_0, Some(12.0), Some(24.0), Some(0.75))"#
+            r#"add_texture_material_with_options("Brick", &tex_path_0, &TextureMaterialOptions { applied_height: Some(12.0), applied_width: Some(24.0), opacity: Some(0.75), filename: Some("brick.png".to_owned()) })"#
         ),
         "{code}"
     );
@@ -96,6 +96,176 @@ fn emits_textured_material_with_applied_width_and_opacity() {
     assert!(code.contains("fn openskp_codegen_base64_decode(s: &str) -> Vec<u8> {"));
     assert!(code.contains(r#"openskp_codegen_write_temp_file(&tex_bytes_0, ".png")"#));
     assert!(code.contains("fn openskp_codegen_write_temp_file("));
+}
+
+#[test]
+fn emits_original_and_empty_texture_filenames_without_embedding_temp_path() {
+    use openskp::create::TextureMaterialOptions;
+
+    let temp_dir_str = std::env::temp_dir()
+        .to_string_lossy()
+        .trim_end_matches(['\\', '/'])
+        .to_owned();
+    let ascii_needle = temp_dir_str.as_bytes().to_vec();
+    let utf16_needle: Vec<u8> = temp_dir_str
+        .encode_utf16()
+        .flat_map(u16::to_le_bytes)
+        .collect();
+
+    let png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3, 4];
+    let png_path =
+        std::env::temp_dir().join(format!("openskp_rs_codegen_667_{}.png", std::process::id()));
+    std::fs::write(&png_path, &png).unwrap();
+
+    let mut src = create();
+    let m1 = src
+        .add_texture_material_with_options(
+            "Concrete",
+            &png_path,
+            &TextureMaterialOptions {
+                filename: Some("Polished Concrete Old.jpg".to_owned()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let m2 = src
+        .add_texture_material_with_options(
+            "Nameless",
+            &png_path,
+            &TextureMaterialOptions {
+                filename: Some(String::new()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    src.add_face(
+        &square(10.0),
+        &FaceOptions {
+            material: Some(m1),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    src.add_face(
+        &[
+            [20.0, 0.0, 0.0],
+            [30.0, 0.0, 0.0],
+            [30.0, 10.0, 0.0],
+            [20.0, 10.0, 0.0],
+        ],
+        &FaceOptions {
+            material: Some(m2),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let mut model = roundtrip(&mut src);
+    for m in &mut model.materials {
+        if m.name == "Nameless" {
+            m.texture.as_mut().unwrap().filename.clear();
+        }
+    }
+
+    let code = to_rust_code(&model);
+    assert!(
+        code.contains(
+            r#"add_texture_material_with_options("Concrete", &tex_path_0, &TextureMaterialOptions { applied_height: Some(1.0), applied_width: Some(1.0), opacity: None, filename: Some("Polished Concrete Old.jpg".to_owned()) })"#
+        ),
+        "{code}"
+    );
+    assert!(
+        code.contains(
+            r#"add_texture_material_with_options("Nameless", &tex_path_1, &TextureMaterialOptions { applied_height: Some(1.0), applied_width: Some(1.0), opacity: None, filename: Some("".to_owned()) })"#
+        ),
+        "{code}"
+    );
+
+    let extract_emitted_filename = |mat_name: &str| -> Option<String> {
+        let prefix = format!(r#"add_texture_material_with_options("{mat_name}", "#);
+        let start = code.find(&prefix)? + prefix.len();
+        let end = start + code[start..].find(");")?;
+        let call = &code[start..end];
+        let fn_pos = call.find("filename: Some(\"")? + "filename: Some(\"".len();
+        let close_pos = fn_pos + call[fn_pos..].find("\".to_owned())")?;
+        Some(call[fn_pos..close_pos].to_owned())
+    };
+    let fn1 = extract_emitted_filename("Concrete").expect("Concrete filename arg");
+    let fn2 = extract_emitted_filename("Nameless").expect("Nameless filename arg");
+
+    let mut regen_builder = create();
+    let rm1 = regen_builder
+        .add_texture_material_with_options(
+            "Concrete",
+            &png_path,
+            &TextureMaterialOptions {
+                applied_height: Some(1.0),
+                applied_width: Some(1.0),
+                filename: Some(fn1),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let rm2 = regen_builder
+        .add_texture_material_with_options(
+            "Nameless",
+            &png_path,
+            &TextureMaterialOptions {
+                applied_height: Some(1.0),
+                applied_width: Some(1.0),
+                filename: Some(fn2),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let _ = std::fs::remove_file(&png_path);
+    regen_builder
+        .add_face(
+            &square(10.0),
+            &FaceOptions {
+                material: Some(rm1),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    regen_builder
+        .add_face(
+            &[
+                [20.0, 0.0, 0.0],
+                [30.0, 0.0, 0.0],
+                [30.0, 10.0, 0.0],
+                [20.0, 10.0, 0.0],
+            ],
+            &FaceOptions {
+                material: Some(rm2),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let regen_bytes = regen_builder.to_bytes().unwrap();
+
+    assert!(
+        !regen_bytes
+            .windows(ascii_needle.len())
+            .any(|w| w == ascii_needle),
+        "generated build bytes contain ASCII temp dir"
+    );
+    assert!(
+        !regen_bytes
+            .windows(utf16_needle.len())
+            .any(|w| w == utf16_needle),
+        "generated build bytes contain UTF-16LE temp dir"
+    );
+    let regen = SkpFile::from_buffer(regen_bytes)
+        .parse(&ParseOptions::default())
+        .unwrap();
+    assert_eq!(
+        regen.materials[0].texture.as_ref().unwrap().filename,
+        "Polished Concrete Old.jpg"
+    );
+    assert_eq!(
+        regen.materials[1].texture.as_ref().unwrap().filename,
+        "Nameless.png"
+    );
 }
 
 #[test]

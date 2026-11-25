@@ -621,8 +621,18 @@ impl Default for GroupInstanceOptions {
     }
 }
 
+/// Options for [`SkpBuilder::add_texture_material_with_options`].
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TextureMaterialOptions {
+    pub applied_height: Option<f64>,
+    pub applied_width: Option<f64>,
+    pub opacity: Option<f64>,
+    /// Stored `CTexture` path; `None` keeps `image_path`.
+    pub filename: Option<String>,
+}
+
 /// Options for [`SkpBuilder::add_image`].
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct ImageOptions {
     pub translation: Point3,
     /// Rotation/scale (identity if unset). At most one of `matrix3x3`/`rotation`.
@@ -630,6 +640,8 @@ pub struct ImageOptions {
     pub rotation: Option<Rotation>,
     pub layer: Option<i32>,
     pub hidden: bool,
+    /// Stored `CTexture` path; `None` keeps `image_path`.
+    pub filename: Option<String>,
 }
 
 /// A reference to a component/group definition of one [`SkpBuilder`], used to place it
@@ -1271,6 +1283,26 @@ impl SkpBuilder {
         applied_width: Option<f64>,
         opacity: Option<f64>,
     ) -> Result<i32, SkpWriteError> {
+        self.add_texture_material_with_options(
+            name,
+            image_path,
+            &TextureMaterialOptions {
+                applied_height,
+                applied_width,
+                opacity,
+                filename: None,
+            },
+        )
+    }
+
+    /// Register an image-textured material with full [`TextureMaterialOptions`] (including an
+    /// optional stored `filename` overriding `image_path`).
+    pub fn add_texture_material_with_options(
+        &mut self,
+        name: &str,
+        image_path: impl AsRef<Path>,
+        options: &TextureMaterialOptions,
+    ) -> Result<i32, SkpWriteError> {
         self.check_material_order("add_texture_material")?;
         if let Some(&slot) = self.materials_by_name.get(name) {
             return Ok(slot);
@@ -1280,22 +1312,26 @@ impl SkpBuilder {
         let bytes = fs::read(path).map_err(|e| {
             SkpWriteError::new(format!("cannot open texture image file: {path_str}: {e}"))
         })?;
+        let stored_path = options.filename.as_deref().unwrap_or(&path_str);
         let image = TextureSource {
             bytes: &bytes,
-            path: &path_str,
+            path: stored_path,
             subtype: detect_image_subtype(&bytes)?,
         };
         let slot = self.material_writer.write_textured_material(
             name,
             &image,
-            applied_height,
-            applied_width,
-            opacity,
+            options.applied_height,
+            options.applied_width,
+            options.opacity,
         )?;
         self.materials_by_name.insert(name.to_owned(), slot);
         self.applied_sizes.insert(
             slot,
-            (applied_width.unwrap_or(1.0), applied_height.unwrap_or(1.0)),
+            (
+                options.applied_width.unwrap_or(1.0),
+                options.applied_height.unwrap_or(1.0),
+            ),
         );
         self.material_count += 1;
         Ok(slot)
@@ -1515,7 +1551,14 @@ impl SkpBuilder {
     ) -> Result<(), SkpWriteError> {
         self.check_layer_handle(options.layer)?;
         let material_name = format!("__openskp_image_{}", self.material_count);
-        let mat = self.add_texture_material(&material_name, image_path, None, None, None)?;
+        let mat = self.add_texture_material_with_options(
+            &material_name,
+            image_path,
+            &TextureMaterialOptions {
+                filename: options.filename.clone(),
+                ..Default::default()
+            },
+        )?;
         let definition_name = format!("Image{}", self.definition_count);
         let image_def = {
             let mut def =

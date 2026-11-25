@@ -2748,7 +2748,7 @@ namespace OpenSkp
         /// passing appliedHeight as the 3rd argument keeps meaning what it
         /// always meant.</summary>
         public int AddTextureMaterial(
-            string name, string imagePath, double? appliedHeight = null, double? appliedWidth = null, double? opacity = null)
+            string name, string imagePath, double? appliedHeight = null, double? appliedWidth = null, double? opacity = null, string? filename = null)
         {
             if (_geometryWriter != null)
             {
@@ -2765,7 +2765,7 @@ namespace OpenSkp
             if (MaterialsByName.TryGetValue(name, out int existing)) return existing;
             byte[] imageBytes = System.IO.File.ReadAllBytes(imagePath);
             int subtype = CreateMath.DetectImageSubtype(imageBytes);
-            int slot = _materialWriter.WriteTexturedMaterial(name, imageBytes, imagePath, subtype, appliedHeight, appliedWidth, opacity);
+            int slot = _materialWriter.WriteTexturedMaterial(name, imageBytes, filename ?? imagePath, subtype, appliedHeight, appliedWidth, opacity);
             MaterialsByName[name] = slot;
             _materialCount += 1;
             return slot;
@@ -3071,10 +3071,11 @@ namespace OpenSkp
             double[]? matrix3x3 = null,
             ((double X, double Y, double Z) Axis, double AngleRadians)? rotation = null,
             int? layer = null,
-            bool hidden = false)
+            bool hidden = false,
+            string? filename = null)
         {
             CheckLayerHandle(layer);
-            int mat = AddTextureMaterial($"__openskp_image_{_materialCount}", imagePath);
+            int mat = AddTextureMaterial($"__openskp_image_{_materialCount}", imagePath, filename: filename);
             ComponentDefinitionBuilder imageDef;
             using (imageDef = AddComponentDefinition($"Image{_definitionCount}"))
             {
