@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A GLB with embedded textures multiplied every image by the material's colour, which for a plain textured material is the average of the image. It is white now (`[1, 1, 1, opacity]`), as in SketchUp 2025's own export. **Exported GLB files and the web viewer look brighter**; the scenes' `gltf_materials` are unchanged, so Fragments, DXF, IFC, OBJ, PLY and GLB without textures keep the average colour.
 - TypeScript, .NET, Dart, C++ and Rust mark a colorized texture in their scenes and GLB files as Python does (`extras: {"sketchup": {"colorized": true, "colorize_type": 0 | 1}}`; in C++ and Rust `colorized` and `colorize_type` on `GltfMaterial`). Colorized textures keep their tint. A plain and a colorized material with the same colour and image stay two, and a face painted with one of each on its sides stays two-sided.
 
+### Fixed — TypeScript, .NET, Dart & C++: STL exports of painted models can be printed (#601)
+
+- A face painted differently on its two sides was written twice, once per side, so the solid had no volume. STL holds one copy of each face now, as in Python. The scenes carry the triangle offsets of the second copies (`backTriangles` / `BackTriangles` / `back_triangles`); exports with colours are unchanged. Rust follows.
+
 ### Fixed — All 6 languages: 2019 and 2020 files with a line style on a textured tag failed to open (#514)
 
 - The line style is read after a textured tag too. C++ has `Layer::line_style` for classic 2019 and 2020 files, as for 2021+.
