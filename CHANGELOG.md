@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — Python, TypeScript, .NET, Dart, C++ & Rust: `open_existing()` and generated code wrote the local temporary path into the file (#667)
+
+- Opening a file with `open_existing()` and saving it replaced each texture's file name by the path of a temporary file, **with the user name of the person who saved it**; code made by `to_python_code` and its counterparts did the same. The names are kept now (TypeScript only lost an empty one). **Files saved by earlier versions still hold that path**: open and save them from the original again if that matters to you.
+- `add_texture_material` and `add_image` take an optional stored file name (`filename`) in Python, .NET, Dart and C++; in Rust `add_texture_material_with_options` and `ImageOptions::filename` (`ImageOptions` is no longer `Copy`).
+
 ### Fixed — All 6 languages: scenes of 2015 to 2020 files that save shadows or axes alone (#661)
 
 - A scene that saves the shadows without the axes, or the axes without the shadows, made the reader lose **all** scenes of the file. The two sections had the wrong length, and the errors cancelled out only when both were saved. 2015 and 2016 files written through SketchUp's C API lost their scenes too (they have no persistent ids).
