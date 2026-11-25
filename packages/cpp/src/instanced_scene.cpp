@@ -302,6 +302,7 @@ InstancedScene build_instanced_scene_raw(RawParsed&& p, const ParseOptions& o) {
 
       prim.material_index = get_material_index(kv.first);
       prim.unpainted_back = kv.first.unpainted_back;
+      prim.back_triangles = g.back_tris;
       primitives.push_back(std::move(prim));
     }
 

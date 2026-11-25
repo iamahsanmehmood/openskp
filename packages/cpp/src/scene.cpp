@@ -128,6 +128,7 @@ Scene build_scene_raw(RawParsed&& p, const ParseOptions& o) {
       GlbPrimitive prim;
       prim.geom_name = geom;
       prim.unpainted_back = kv.first.unpainted_back;
+      prim.back_triangles = g.back_tris;
       const auto mirrored = transform_determinant(matrix) < 0.0;
       for (auto& triangle : g.tris) {
         prim.indices.push_back(static_cast<uint32_t>(triangle[0]));

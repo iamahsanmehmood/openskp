@@ -522,6 +522,10 @@ export interface GlbPrimitive {
   /** Triangle vertex indices into `positions`/`normals`/`uvs` (3 per
    * triangle). */
   indices: Uint32Array;
+  /** Triangle offsets for separately emitted back sides. A primitive can mix
+   * front and back triangles when they share a material; their front
+   * counterparts are still present. */
+  backTriangles?: Uint32Array;
   /** Index into `gltfMaterials` for this primitive's resolved color. */
   materialIndex: number;
   /** Matches the corresponding key in `SkpScene.meshIndex`. */
@@ -1341,6 +1345,7 @@ export function buildSceneFromParsed(
           normals,
           uvs,
           indices,
+          backTriangles: new Uint32Array(group.backTriangles),
           materialIndex,
           geomName,
           unpaintedBack: group.unpaintedBack,

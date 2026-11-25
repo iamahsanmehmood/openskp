@@ -71,6 +71,7 @@ struct Group {
   std::vector<Vec3> verts;
   std::vector<std::array<float, 2>> uvs;
   std::vector<std::array<size_t, 3>> tris;
+  std::vector<std::uint32_t> back_tris;
   std::map<FaceVKey, size_t> map;
   std::map<FaceVKey, Vec3> normals;
 };
