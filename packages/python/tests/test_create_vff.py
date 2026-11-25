@@ -621,6 +621,39 @@ def test_duplicate_definition_names_are_renamed(tmp_path):
     names = {item.name for item in parse_bytes(tmp_path, builder.to_bytes()).definitions.values()}
     assert "Group#1" in names
 
+
+def test_definition_names_compare_without_case(tmp_path):
+    square = [(0, 0, 0), (10, 0, 0), (10, 10, 0), (0, 10, 0)]
+    builder = create_vff()
+    for _ in range(4):
+        with builder.add_component_definition("Same") as definition:
+            definition.add_face(square)
+    with builder.add_component_definition("same") as definition:
+        definition.add_face(square)
+    names = {item.name for item in parse_bytes(tmp_path, builder.to_bytes()).definitions.values()}
+    assert {"Same", "Same#1", "Same#2", "Same#3", "same#4"} <= names
+    assert len({name.lower() for name in names}) == len(names)
+
+    builder = create_vff()
+    for name in ("Same", "same"):
+        with builder.add_component_definition(name) as definition:
+            definition.add_face(square)
+    names = [item.name for item in parse_bytes(tmp_path, builder.to_bytes()).definitions.values()]
+    assert len({name.lower() for name in names}) == len(names)
+
+    builder = create_vff()
+    for name in ("Same", "same"):
+        with builder.add_group(name) as group:
+            group.add_face(square)
+    names = [item.name for item in parse_bytes(tmp_path, builder.to_bytes()).definitions.values()]
+    assert names == ["Same", "same#1"], names
+
+    builder = create_vff(template=NESTING_TEMPLATE)
+    with builder.add_component_definition("group") as definition:
+        definition.add_face(square)
+    names = {item.name for item in parse_bytes(tmp_path, builder.to_bytes()).definitions.values()}
+    assert "group#1" in names
+
 def test_definition_lifecycle_errors():
     builder = create_vff()
     definition = builder.add_component_definition("D")

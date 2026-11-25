@@ -455,21 +455,26 @@ class VffBuilder:
         self.layers_by_name: Dict[str, int] = dict(self._template.layers)
         self._open_definitions: set[ComponentDefinitionBuilder] = set()
         self._definition_names = {
-            definition["name"]
+            definition["name"].lower()
             for definition in self._template.definitions
             if definition.get("name")
         }
 
     def _unique_definition_name(self, name: str) -> str:
-        """SketchUp's rename-on-collision rule: ``Same``, ``Same#1``, ..."""
-        if name not in self._definition_names:
-            self._definition_names.add(name)
+        """SketchUp's rename-on-collision rule: ``Same``, ``Same#1``, ...
+
+        Comparison is case-insensitive, like SketchUp's own definition
+        library: ``Same``, ``Same#1``, ``Same#2``, ``Same#3`` then ``same``
+        becomes ``same#4``.
+        """
+        if name.lower() not in self._definition_names:
+            self._definition_names.add(name.lower())
             return name
         counter = 1
-        while f"{name}#{counter}" in self._definition_names:
+        while f"{name}#{counter}".lower() in self._definition_names:
             counter += 1
         unique = f"{name}#{counter}"
-        self._definition_names.add(unique)
+        self._definition_names.add(unique.lower())
         return unique
 
     # -- appearance -------------------------------------------------------
