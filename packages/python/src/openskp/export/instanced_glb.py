@@ -28,10 +28,13 @@ Example::
 from __future__ import annotations
 
 import json
+import logging
 import os
 from typing import Any, Dict
 
-from .glb import _primitive_to_trimesh
+from .glb import _GltfMaterialCache, _primitive_to_trimesh
+
+logger = logging.getLogger(__name__)
 
 
 def _gltf_matrix_to_numpy_mm(m):
@@ -144,6 +147,9 @@ def export(
     )
 
     trimesh_scene = trimesh.Scene()
+    material_cache = _GltfMaterialCache(
+        scene_obj.gltf_materials, scene_obj.textures, textures, log=logger
+    )
 
     # Each mesh resource's primitives become named trimesh geometries,
     # added directly to scene.geometry (bypassing add_geometry's own
@@ -155,7 +161,7 @@ def export(
         for i, prim in enumerate(res.primitives):
             name = f"{res.id}_{i}"
             trimesh_scene.geometry[name] = _primitive_to_trimesh(
-                prim, scene_obj.gltf_materials, scene_obj.textures, textures
+                prim, scene_obj.gltf_materials, scene_obj.textures, textures, material_cache
             )
             names.append(name)
         geometry_names[res.id] = names
