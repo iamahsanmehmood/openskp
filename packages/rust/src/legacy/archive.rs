@@ -1015,6 +1015,8 @@ impl<'a> Archive<'a> {
             // byte of the flag word set = textured.
             self.texture_block(v)?;
             self.r.skip(4)?; // trailing u32
+            self.read_clayer_line_style()?;
+            self.skip_clayer_parent_ref(this);
         } else {
             let c = self.r.raw(4)?;
             v.r = i32::from(c[0]);

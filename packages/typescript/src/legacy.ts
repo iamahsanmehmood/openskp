@@ -1051,6 +1051,8 @@ function readLayer(ar: Archive, r: R): any {
     // either way).
     const tex = textureBlock(ar, r);
     r.raw(4); // trailing u32
+    ar.readClayerLineStyle(r);
+    ar.skipClayerParentRef(ar.currentObjSlot);
     return { k: 'layer', name, hidden: mid.length ? mid[0] : 0, rgba: tex.rgba };
   }
   const rgba = r.raw(4);
