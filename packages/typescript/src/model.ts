@@ -157,8 +157,65 @@ export interface ConstructionPoint {
   hidden?: boolean;
 }
 
+/** Bits of {@link Page.captureFlags}, named after SketchUp's public Ruby API
+ * (`Sketchup::Page#use_camera?` and so on). */
+export const PAGE_USE_CAMERA = 0x001;
+export const PAGE_USE_RENDERING_OPTIONS = 0x002;
+export const PAGE_USE_SHADOW_INFO = 0x004;
+export const PAGE_USE_AXES = 0x008;
+export const PAGE_USE_HIDDEN = 0x010; // before SketchUp 2020.1: geometry + objects
+export const PAGE_USE_HIDDEN_LAYERS = 0x020;
+export const PAGE_USE_SECTION_PLANES = 0x040;
+export const PAGE_USE_HIDDEN_GEOMETRY = 0x080;
+export const PAGE_USE_HIDDEN_OBJECTS = 0x100;
+
+/** Which properties a scene saves ("Properties to save" in SketchUp's Scenes
+ * panel). `null` when the file doesn't say. */
+export interface PageCaptureFlags {
+  /** The u32 the file stores, a combination of the `PAGE_USE_*` bits. */
+  captureFlags: number | null;
+  /** The scene saves its camera ("Camera Location"), `0x001`. */
+  useCamera: boolean | null;
+  /** The scene saves its style ("Style and Fog"), `0x002`. */
+  useRenderingOptions: boolean | null;
+  /** The scene saves its shadows ("Shadow Settings"), `0x004`. */
+  useShadowInfo: boolean | null;
+  /** The scene saves the axes ("Axes Location"), `0x008`. */
+  useAxes: boolean | null;
+  /** The scene saves which layers it hides ("Visible Tags"), `0x020`. */
+  useHiddenLayers: boolean | null;
+  /** The scene saves the active section ("Active Section Planes"), `0x040`. */
+  useSectionPlanes: boolean | null;
+  /** The scene saves which edges and faces it hides ("Hidden Geometry"),
+   * `0x080`, or `0x010` before SketchUp 2020.1. */
+  useHiddenGeometry: boolean | null;
+  /** The scene saves which groups and components it hides ("Hidden Objects"),
+   * `0x100`, or `0x010` before SketchUp 2020.1. */
+  useHiddenObjects: boolean | null;
+}
+
+/** The `use...` properties of a scene's {@link PageCaptureFlags.captureFlags}. */
+export function pageCaptureFlags(captureFlags: number | null): PageCaptureFlags {
+  const flag = (bit: number): boolean | null =>
+    captureFlags === null ? null : (captureFlags & bit) !== 0;
+  const split =
+    captureFlags !== null &&
+    (captureFlags & (PAGE_USE_HIDDEN_GEOMETRY | PAGE_USE_HIDDEN_OBJECTS)) !== 0;
+  return {
+    captureFlags,
+    useCamera: flag(PAGE_USE_CAMERA),
+    useRenderingOptions: flag(PAGE_USE_RENDERING_OPTIONS),
+    useShadowInfo: flag(PAGE_USE_SHADOW_INFO),
+    useAxes: flag(PAGE_USE_AXES),
+    useHiddenLayers: flag(PAGE_USE_HIDDEN_LAYERS),
+    useSectionPlanes: flag(PAGE_USE_SECTION_PLANES),
+    useHiddenGeometry: flag(split ? PAGE_USE_HIDDEN_GEOMETRY : PAGE_USE_HIDDEN),
+    useHiddenObjects: flag(split ? PAGE_USE_HIDDEN_OBJECTS : PAGE_USE_HIDDEN),
+  };
+}
+
 /** A saved scene (SketchUp's "Scenes" tabs; "pages" in the SDK). */
-export interface Page {
+export interface Page extends Partial<PageCaptureFlags> {
   /** Scene name as shown on its tab. */
   name: string;
   /** Camera position [x, y, z] in inches, or null. */
@@ -1669,6 +1726,7 @@ export function buildPagesFromRaw(parsed: ParsedRawData): Page[] {
       .map((id) => parsed.layerIdToName?.get(id))
       .filter((name): name is string => name !== undefined),
     hiddenEntityIds: [...(pg.hiddenEntityIds ?? [])],
+    ...pageCaptureFlags(pg.captureFlags ?? null),
   }));
 }
 

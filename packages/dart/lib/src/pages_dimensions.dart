@@ -21,6 +21,7 @@ class RawPage {
   double orthoHeight = 0.0;
   final List<int> hiddenLayerIds = [];
   final List<int> hiddenEntityIds = [];
+  int? captureFlags;
 }
 
 class RawDimension {
@@ -931,6 +932,11 @@ List<RawPage> parsePages(TlvNode? node) {
         if (items == null) continue;
 
         final page = RawPage();
+
+        final flags = _tlvFindInt(items, 0x7149);
+        if (flags != null && flags.length == 4) {
+          page.captureFlags = Tlv.readU32(flags, 0);
+        }
 
         final head = _tlvItemsInt(_tlvFindInt(items, 0x6F54));
         final name = _tlvFindInt(head, 0x6F55);

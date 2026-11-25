@@ -152,6 +152,7 @@ namespace OpenSkp
                     OrthoHeight = pg.OrthoHeight,
                     HiddenLayers = hiddenLayers,
                     HiddenEntityIds = new List<long>(pg.HiddenEntityIds),
+                    CaptureFlags = pg.CaptureFlags,
                 });
             }
             return pages;

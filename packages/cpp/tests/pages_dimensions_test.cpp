@@ -461,6 +461,8 @@ TEST(PagesDimensions, ScanPagesLegacySynthetic) {
   ASSERT_EQ(pages[1].hidden_layer_ids.size(), 2u);
   EXPECT_EQ(pages[1].hidden_layer_ids[0], 5);
   EXPECT_EQ(pages[1].hidden_layer_ids[1], 6);
+  EXPECT_FALSE(pages[0].capture_flags.has_value());
+  EXPECT_FALSE(pages[1].capture_flags.has_value());
 }
 
 TEST(PagesDimensions, ScanPagesLegacyIgnoresUnrelatedNoise) {

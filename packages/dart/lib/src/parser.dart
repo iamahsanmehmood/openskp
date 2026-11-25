@@ -373,6 +373,7 @@ List<Page> buildPagesFromRaw(RawParsed parsed) {
             if (parsed.layerIdToName[id] != null) parsed.layerIdToName[id]!
         ],
         hiddenEntityIds: List<int>.from(pg.hiddenEntityIds),
+        captureFlags: pg.captureFlags,
       ),
   ];
 }

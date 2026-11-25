@@ -1153,6 +1153,9 @@ pub fn parse_pages(node: Option<&TlvNode>) -> Result<Vec<RawPage>> {
                     continue;
                 }
                 let mut page = RawPage::default();
+                if let Some(flags) = tlv_find_int(&items, 0x7149).filter(|b| b.len() == 4) {
+                    page.capture_flags = Some(u32_at(flags, 0));
+                }
                 let head = tlv_find_int(&items, 0x6f54)
                     .map(tlv_items_int)
                     .unwrap_or_default();

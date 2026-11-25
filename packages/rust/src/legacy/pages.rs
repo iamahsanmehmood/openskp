@@ -189,6 +189,7 @@ pub fn scan_pages_for_layers(
             Ok(RawPage {
                 name: name.clone(),
                 hidden_layer_ids: hidden_ids,
+                capture_flags: (flags & !PAGE_KNOWN_FLAGS == 0).then_some(flags),
                 ..Default::default()
             })
         })();
@@ -440,6 +441,7 @@ fn read_page_record(ver: i32, r: &mut R, classes: &mut PageClasses) -> Result<Ra
     };
     r.utf16()?; // description
     let flags = r.u32()?;
+    page.capture_flags = Some(flags);
     if flags & !PAGE_KNOWN_FLAGS != 0 {
         return Err(page_error("scene capture flags"));
     }

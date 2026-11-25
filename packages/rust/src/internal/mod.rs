@@ -390,6 +390,7 @@ pub struct RawPage {
     pub hidden_layer_ids: Vec<EntityId>,
     pub hidden_entity_ids: Vec<EntityId>,
     pub selected: bool,
+    pub capture_flags: Option<u32>,
 }
 
 impl Default for RawPage {
@@ -405,6 +406,7 @@ impl Default for RawPage {
             hidden_layer_ids: Vec::new(),
             hidden_entity_ids: Vec::new(),
             selected: false,
+            capture_flags: None,
         }
     }
 }

@@ -81,6 +81,9 @@ pub use model::{
     Edge, EntityId, Face, Instance, Layer, LooseEdgeRun, Material, Page, ParsedAttrDict,
     ParsedAttrDictionaries, ParsedAttribute, SectionPlane, SkpModel, StringDictionaries, Style,
     StyleItem, StyleWatermark, TextEntity, Texture, Vec3, Vertex, ViewCamera, METRES_TO_INCHES,
+    PAGE_USE_AXES, PAGE_USE_CAMERA, PAGE_USE_HIDDEN, PAGE_USE_HIDDEN_GEOMETRY,
+    PAGE_USE_HIDDEN_LAYERS, PAGE_USE_HIDDEN_OBJECTS, PAGE_USE_RENDERING_OPTIONS,
+    PAGE_USE_SECTION_PLANES, PAGE_USE_SHADOW_INFO,
 };
 pub use obj_export::{export_obj, to_mtl, to_obj};
 pub use observability::{
