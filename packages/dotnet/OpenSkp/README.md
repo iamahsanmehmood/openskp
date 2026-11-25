@@ -198,6 +198,8 @@ builder.Save("output.skp");
 ### Editing an existing file
 
 ```csharp
+using OpenSkp;
+
 var result = SkpEdit.OpenExisting("building.skp");
 foreach (var w in result.Warnings) Console.WriteLine($"not fully reproduced: {w}");
 
@@ -220,6 +222,8 @@ re-runnable transcript of `SkpCreate.NewFile()` calls that rebuilds an
 equivalent file when run:
 
 ```csharp
+using OpenSkp;
+
 SkpModel model = SkpFile.Open("building.skp");
 Console.WriteLine(Codegen.ToCSharpCode(model));
 ```
