@@ -713,8 +713,8 @@ struct Archive {
   // a class-ref is matched through its distance from the CLayer class-ref
   // (the same in both numberings), and once a style has been read, any
   // other plain object ref at this position is the style's back-ref.
-  void read_clayer_line_style() {
-    if (r.p + 2 > r.d.size()) return;
+  std::string read_clayer_line_style() {
+    if (r.p + 2 > r.d.size()) return {};
     auto tag = read_u16(r.d, r.p);
     constexpr std::string_view kCls = "CCustomLineStyle";
     bool probing = base >= (uint64_t(1) << 20);
@@ -722,27 +722,28 @@ struct Archive {
       size_t at = r.p + 4;
       if (at + 2 + kCls.size() > r.d.size() || read_u16(r.d, at) != kCls.size() ||
           !std::equal(kCls.begin(), kCls.end(), r.d.begin() + at + 2)) {
-        return;
+        return {};
       }
     } else if (tag & 0x8000) {
       auto cs_it = class_slot.find(std::string(kCls));
-      if (cs_it == class_slot.end()) return;
+      if (cs_it == class_slot.end()) return {};
       int64_t cs = int64_t(cs_it->second);
       auto lay_it = class_slot.find("CLayer");
       auto lay0_it = first_class_slot.find("CLayer");
       if (lay_it != class_slot.end() && lay0_it != first_class_slot.end()) {
         cs += int64_t(lay_it->second) - int64_t(lay0_it->second);
       }
-      if (cs != int64_t(tag & 0x7fff)) return;
+      if (cs != int64_t(tag & 0x7fff)) return {};
     } else if (tag == 0 || tag == 0x7fff) {
-      return;
+      return {};
     } else if (probing) {
-      if (!seen_line_style) return;
+      if (!seen_line_style) return {};
     } else {
       auto it = slots.find(tag);
-      if (it == slots.end() || it->second.cls || it->second.name != kCls) return;
+      if (it == slots.end() || it->second.cls || it->second.name != kCls) return {};
     }
-    object(std::string(kCls));
+    auto q = object(std::string(kCls));
+    return std::get<2>(q) ? std::get<2>(q)->name : std::string{};
   }
 
   // Colour CLayer ends in a 21-byte tail. Some v18 zero-material files
@@ -982,6 +983,8 @@ struct Archive {
         // as a whole is non-zero either way).
         texture_block(*v);
         r.raw(4);  // trailing u32
+        v->line_style = read_clayer_line_style();
+        skip_clayer_parent_ref(self);
       } else {
         auto c = r.raw(4);
         v->r = c[0];
@@ -989,7 +992,7 @@ struct Archive {
         v->b = c[2];
         r.utf16();
         r.raw(ver < kFirstV4 ? 17 : 21);  // SketchUp 3's tail is 4 bytes shorter
-        read_clayer_line_style();
+        v->line_style = read_clayer_line_style();
         skip_clayer_colour_ext();
         skip_clayer_parent_ref(self);
       }
@@ -2770,6 +2773,8 @@ RawParsed parse_legacy(const ByteBuffer& data, const ParseOptions& o) {
       out.layer_colors[l.second->name] = {uint8_t(l.second->r), uint8_t(l.second->g),
                                           uint8_t(l.second->b)};
       out.layer_hidden[l.second->name] = l.second->hidden != 0;
+      if (!l.second->line_style.empty())
+        out.layer_line_styles[l.second->name] = l.second->line_style;
       auto dicts = extract_legacy_attribute_dictionaries(l.second->attrs, ar.slots);
       out.layer_parsed_dictionaries[l.second->name] = dicts;
       // Layer::attribute_dictionaries stays string-typed by design (matches

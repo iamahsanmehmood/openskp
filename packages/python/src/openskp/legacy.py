@@ -878,6 +878,8 @@ def _read_layer(ar, r):
         # as a whole is non-zero either way).
         tex = _texture_block(ar, r)
         r.raw(4)                     # trailing u32
+        ar._read_clayer_line_style(r)
+        ar._skip_clayer_parent_ref(r, ar.current_obj_slot)
         return {'k': 'layer', 'name': name, 'hidden': mid[0] if mid else 0,
                 'rgba': tex['rgba']}
     rgba = r.raw(4)

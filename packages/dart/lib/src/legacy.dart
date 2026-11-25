@@ -564,8 +564,7 @@ class Archive {
     if (ea.name != 'CLayer' || eb.name != 'CLayer') return;
     // <anchor u16><def_count u32><definition> is already the usual layout: a
     // def_count whose low u16 matches a CLayer slot is not a parent back-ref.
-    if (r.pos + 6 < data.length &&
-        definitionStartsAt(this, data, r.pos + 6)) {
+    if (r.pos + 6 < data.length && definitionStartsAt(this, data, r.pos + 6)) {
       return;
     }
     r.pos += 2;
@@ -693,8 +692,7 @@ class EdgeRec {
   /// The curve itself, on the edge that first points at it (a back-ref to a
   /// curve already read carries none).
   Object? curveValue;
-  EdgeRec(
-      {required this.db, this.curve, this.curveValue, this.v1, this.v2});
+  EdgeRec({required this.db, this.curve, this.curveValue, this.v1, this.v2});
 }
 
 class CurveRec {
@@ -835,7 +833,8 @@ class ConstructionLineRec {
   List<double> direction;
   List<double>? start;
   List<double>? end;
-  ConstructionLineRec(this.db, this.point, this.direction, this.start, this.end);
+  ConstructionLineRec(
+      this.db, this.point, this.direction, this.start, this.end);
 }
 
 class ConstructionPointRec {
@@ -1311,6 +1310,8 @@ class LegacyReaders {
       // non-zero either way).
       final tex = _textureBlock(ar, r);
       r.raw(4); // trailing u32
+      ar.readClayerLineStyle(r);
+      ar.skipClayerParentRef(ar.currentObjSlot);
       return LayerRec(
           name: name, hidden: mid.isNotEmpty ? mid[0] : 0, rgba: tex.rgba);
     }
@@ -1514,7 +1515,10 @@ class LegacyReaders {
     r.utf16(); // source path
     final guid = r.raw(16);
     return ImageRec(
-        db: db, def: ds, xform: xform, guid: Geometry.guidFromWindowsBytes(guid));
+        db: db,
+        def: ds,
+        xform: xform,
+        guid: Geometry.guidFromWindowsBytes(guid));
   }
 
   /// A reference-to-entity tag: dimension connection points and text
@@ -1621,7 +1625,8 @@ class LegacyReaders {
     }
     r.raw(k);
 
-    const huge = 1e20; // well below the real +-1e30 sentinel, far above any real geometry extent
+    const huge =
+        1e20; // well below the real +-1e30 sentinel, far above any real geometry extent
     final start = startParam.abs() >= huge
         ? null
         : [
@@ -1711,7 +1716,11 @@ class LegacyReaders {
     ((double, double, double)?, int?) readConnection() {
       final block = r.raw(32);
       (double, double, double)? pt = Tlv.readU32(block, 0) == 1
-          ? (Tlv.readF64(block, 8), Tlv.readF64(block, 16), Tlv.readF64(block, 24))
+          ? (
+              Tlv.readF64(block, 8),
+              Tlv.readF64(block, 16),
+              Tlv.readF64(block, 24)
+            )
           : null;
       int? cref = _pathRef((rr) => ar.readObject(rr).$1, r);
       final paths = connectionPaths((rr) => ar.readObject(rr).$1, r, ar);
@@ -2036,7 +2045,8 @@ class LegacyReaders {
     preamble(ar, r);
     // undecoded base block: 13 bytes in SketchUp 3, 19 in 4, 20 from 5, 22
     // from 2017
-    r.raw(ar.ver >= 17 ? 22 : (ar.ver >= 5 ? 20 : (ar.ver >= firstV4 ? 19 : 13)));
+    r.raw(
+        ar.ver >= 17 ? 22 : (ar.ver >= 5 ? 20 : (ar.ver >= firstV4 ? 19 : 13)));
     final nlayers = r.u32();
     if (nlayers > 10000) {
       throw LegacyParseError('implausible def layer count ${r.ctx()}');
@@ -2736,7 +2746,8 @@ class Legacy {
         builder.constructionLines.add(ConstructionLine(
           point: (v.point[0], v.point[1], v.point[2]),
           direction: (v.direction[0], v.direction[1], v.direction[2]),
-          start: v.start == null ? null : (v.start![0], v.start![1], v.start![2]),
+          start:
+              v.start == null ? null : (v.start![0], v.start![1], v.start![2]),
           end: v.end == null ? null : (v.end![0], v.end![1], v.end![2]),
           layer: v.db.layer != 0 ? v.db.layer.toString() : '',
           hidden: v.db.hidden != 0,
