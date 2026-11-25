@@ -93,6 +93,8 @@ pub struct GltfMaterial {
     pub texture_path: String,
     pub pbr_metallic_roughness: PbrMetallicRoughness,
     pub double_sided: bool,
+    pub colorized: bool,
+    pub colorize_type: i32,
 }
 
 /// One texture image referenced by the scene's glTF materials.

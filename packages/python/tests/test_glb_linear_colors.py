@@ -92,7 +92,7 @@ def test_glb_writes_linear_base_color_factor_and_keeps_scene_srgb(tmp_path, expo
 
 
 @pytest.mark.parametrize("exporter_mod", [glb, instanced_glb])
-def test_plain_embedded_texture_factor_stays_unchanged(tmp_path, exporter_mod):
+def test_embedded_plain_textures_use_white_factor_and_colorized_stay_tinted(tmp_path, exporter_mod):
     import pathlib
     from openskp import SkpFile
 
@@ -105,15 +105,72 @@ def test_plain_embedded_texture_factor_stays_unchanged(tmp_path, exporter_mod):
         for m in scene.gltf_materials
         if "baseColorTexture" in m["pbrMetallicRoughness"]
     )
+    # Scene gltf_materials still carries each image's average colour (#657).
+    assert any(f[0] < 0.6 and f[2] < 0.2 for f in scene_textured_factors)
 
     out_glb = tmp_path / "textured.glb"
     exporter_mod.export(skp, str(out_glb), textures=True)
     exported = _glb_materials_by_alpha_or_factor(out_glb)
     exported_textured_factors = sorted(
-        tuple(m["pbrMetallicRoughness"]["baseColorFactor"])
+        tuple(m.get("pbrMetallicRoughness", {}).get("baseColorFactor", [1.0, 1.0, 1.0, 1.0]))
         for m in exported
-        if "baseColorTexture" in m["pbrMetallicRoughness"]
+        if "baseColorTexture" in m.get("pbrMetallicRoughness", {})
     )
-    assert len(exported_textured_factors) == len(scene_textured_factors)
-    for actual, expected in zip(exported_textured_factors, scene_textured_factors):
+    expected_white_with_alpha = sorted((1.0, 1.0, 1.0, f[3]) for f in scene_textured_factors)
+    assert len(exported_textured_factors) == len(expected_white_with_alpha)
+    for actual, expected in zip(exported_textured_factors, expected_white_with_alpha):
         assert actual == pytest.approx(expected)
+
+    # End-to-end model -> scene -> GLB on a real .skp containing one plain and one
+    # colorized material sharing the same RGB (200, 80, 60) and PNG image (#657).
+    shared_fixture = (
+        pathlib.Path(__file__).resolve().parents[2]
+        / "cpp"
+        / "tests"
+        / "fixtures"
+        / "colorized_and_plain_texture.skp"
+    )
+    both_skp = SkpFile.open(str(shared_fixture))
+    both_skp.parse()
+    for built_scene in (both_skp.build_scene(), both_skp.build_instanced_scene()):
+        assert len(built_scene.gltf_materials) == 2
+        extras_list = [m.get("extras") for m in built_scene.gltf_materials]
+        assert extras_list.count(None) == 1
+        assert extras_list.count({"sketchup": {"colorized": True, "colorize_type": 1}}) == 1
+        for m in built_scene.gltf_materials:
+            assert m["pbrMetallicRoughness"]["baseColorFactor"] == pytest.approx(
+                [200 / 255, 80 / 255, 60 / 255, 1.0]
+            )
+
+    with_tex_glb = tmp_path / "both_with_textures.glb"
+    exporter_mod.export(both_skp, str(with_tex_glb), textures=True)
+    with_tex_mats = _glb_materials_by_alpha_or_factor(with_tex_glb)
+    assert len(with_tex_mats) == 2
+    with_tex_factors = [
+        m.get("pbrMetallicRoughness", {}).get("baseColorFactor", [1.0, 1.0, 1.0, 1.0])
+        for m in with_tex_mats
+    ]
+    assert all("baseColorTexture" in m.get("pbrMetallicRoughness", {}) for m in with_tex_mats)
+    assert any(
+        all(abs(a - b) < 1e-4 for a, b in zip(f, [1.0, 1.0, 1.0, 1.0]))
+        for f in with_tex_factors
+    )
+    assert any(
+        all(abs(a - b) < 1e-2 for a, b in zip(f, [200 / 255, 80 / 255, 60 / 255, 1.0]))
+        for f in with_tex_factors
+    )
+
+    no_tex_glb = tmp_path / "both_without_textures.glb"
+    exporter_mod.export(both_skp, str(no_tex_glb), textures=False)
+    no_tex_mats = _glb_materials_by_alpha_or_factor(no_tex_glb)
+    assert len(no_tex_mats) >= 1
+    expected_linear = [
+        _srgb_to_linear(200 / 255),
+        _srgb_to_linear(80 / 255),
+        _srgb_to_linear(60 / 255),
+        1.0,
+    ]
+    for m in no_tex_mats:
+        pbr = m["pbrMetallicRoughness"]
+        assert "baseColorTexture" not in pbr
+        assert pbr["baseColorFactor"] == pytest.approx(expected_linear, abs=1e-4)

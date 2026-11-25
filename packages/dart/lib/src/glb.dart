@@ -10,6 +10,28 @@ import 'scene.dart';
 /// an arbitrary choice here.
 const int _glbSizeLimit = 0xFFFFFFFF;
 
+/// Sets `baseColorFactor` to `[1, 1, 1, alpha]` on GLB materials that carry an
+/// embedded `baseColorTexture` and are not marked `extras.sketchup.colorized`,
+/// without mutating the input scene's `gltfMaterials`.
+List<Map<String, dynamic>> normalizeEmbeddedTextureFactors(
+  List<Map<String, dynamic>> materials,
+) {
+  return materials.map((m) {
+    final pbr = m['pbrMetallicRoughness'] as Map<String, dynamic>?;
+    if (pbr == null || !pbr.containsKey('baseColorTexture')) return m;
+    final extras = m['extras'];
+    final sketchup = extras is Map ? extras['sketchup'] : null;
+    final isColorized = sketchup is Map && sketchup['colorized'] == true;
+    if (isColorized) return m;
+    final bcf = pbr['baseColorFactor'];
+    final alpha =
+        (bcf is List && bcf.length > 3) ? (bcf[3] as num).toDouble() : 1.0;
+    final newPbr = Map<String, dynamic>.from(pbr)
+      ..['baseColorFactor'] = <double>[1.0, 1.0, 1.0, alpha];
+    return Map<String, dynamic>.from(m)..['pbrMetallicRoughness'] = newPbr;
+  }).toList();
+}
+
 /// Serializes a baked [Scene] to binary glTF 2.0 (GLB) bytes.
 ///
 /// A from-scratch writer with no external dependency, matching how this
@@ -35,12 +57,13 @@ Uint8List toGlb(
 }) {
   final prims = scene.glbPrimitives;
   final rawMaterials = scene.gltfMaterials;
-  final (sceneTextures, materials) = filterGltfTextures(
+  final (sceneTextures, filteredMaterials) = filterGltfTextures(
     scene.textures,
     rawMaterials,
     textures,
     onLog,
   );
+  final materials = normalizeEmbeddedTextureFactors(filteredMaterials);
 
   _validateScene(prims, materials);
 
@@ -135,11 +158,15 @@ Uint8List toGlb(
     // otherwise a strict glTF validator could see min/max bounds that
     // don't match what the POSITION accessor's own data contains.
     var minX = double.infinity, minY = double.infinity, minZ = double.infinity;
-    var maxX = double.negativeInfinity, maxY = double.negativeInfinity, maxZ = double.negativeInfinity;
+    var maxX = double.negativeInfinity,
+        maxY = double.negativeInfinity,
+        maxZ = double.negativeInfinity;
     for (var i = 0; i < prim.positions.length; i += 3) {
       final x = binaryBuffer.getFloat32(posByteOffset + i * 4, Endian.little);
-      final y = binaryBuffer.getFloat32(posByteOffset + (i + 1) * 4, Endian.little);
-      final z = binaryBuffer.getFloat32(posByteOffset + (i + 2) * 4, Endian.little);
+      final y =
+          binaryBuffer.getFloat32(posByteOffset + (i + 1) * 4, Endian.little);
+      final z =
+          binaryBuffer.getFloat32(posByteOffset + (i + 2) * 4, Endian.little);
       if (x < minX) minX = x;
       if (x > maxX) maxX = x;
       if (y < minY) minY = y;
@@ -226,11 +253,15 @@ Uint8List toGlb(
     'asset': {'version': '2.0', 'generator': 'OpenSKP Dart Exporter'},
     'scene': 0,
     'scenes': [
-      {'nodes': gltfMeshes.isNotEmpty ? [0] : <int>[]},
+      {
+        'nodes': gltfMeshes.isNotEmpty ? [0] : <int>[]
+      },
     ],
-    'nodes': gltfMeshes.isNotEmpty ? [
-      {'mesh': 0},
-    ] : <Map<String, dynamic>>[],
+    'nodes': gltfMeshes.isNotEmpty
+        ? [
+            {'mesh': 0},
+          ]
+        : <Map<String, dynamic>>[],
     'meshes': gltfMeshes,
     'materials': materials,
     'buffers': [
@@ -261,16 +292,24 @@ void exportGlb(
   File(path).writeAsBytesSync(toGlb(scene, textures: textures, onLog: onLog));
 }
 
-void _validateScene(List<GlbPrimitive> prims, List<Map<String, dynamic>> materials) {
+void _validateScene(
+    List<GlbPrimitive> prims, List<Map<String, dynamic>> materials) {
   for (var i = 0; i < prims.length; i++) {
     final prim = prims[i];
     final prefix = 'primitive $i ';
-    if (prim.positions.isEmpty) throw ArgumentError('${prefix}positions must not be empty');
-    if (prim.positions.length % 3 != 0) throw ArgumentError('${prefix}positions must contain complete vec3 values');
-    if (prim.normals.length != prim.positions.length) throw ArgumentError('${prefix}normals must match positions');
-    if (prim.uvs.length != prim.positions.length ~/ 3 * 2) throw ArgumentError('${prefix}uvs must match positions');
-    if (prim.indices.isEmpty) throw ArgumentError('${prefix}indices must not be empty');
-    if (prim.indices.length % 3 != 0) throw ArgumentError('${prefix}indices must contain complete triangles');
+    if (prim.positions.isEmpty)
+      throw ArgumentError('${prefix}positions must not be empty');
+    if (prim.positions.length % 3 != 0)
+      throw ArgumentError(
+          '${prefix}positions must contain complete vec3 values');
+    if (prim.normals.length != prim.positions.length)
+      throw ArgumentError('${prefix}normals must match positions');
+    if (prim.uvs.length != prim.positions.length ~/ 3 * 2)
+      throw ArgumentError('${prefix}uvs must match positions');
+    if (prim.indices.isEmpty)
+      throw ArgumentError('${prefix}indices must not be empty');
+    if (prim.indices.length % 3 != 0)
+      throw ArgumentError('${prefix}indices must contain complete triangles');
     if (prim.materialIndex < 0 || prim.materialIndex >= materials.length) {
       throw ArgumentError('${prefix}references an invalid material');
     }
@@ -286,7 +325,8 @@ void _validateScene(List<GlbPrimitive> prims, List<Map<String, dynamic>> materia
       _checkFinite(v, '${prefix}uv');
     }
     for (final idx in prim.indices) {
-      if (idx >= vertexCount) throw ArgumentError('${prefix}index is out of range');
+      if (idx >= vertexCount)
+        throw ArgumentError('${prefix}index is out of range');
     }
   }
 }

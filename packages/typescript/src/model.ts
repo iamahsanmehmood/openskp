@@ -1123,13 +1123,17 @@ export function buildSceneFromParsed(
     color: { r: number; g: number; b: number },
     doubleSided: boolean,
     textureIndex: number | null,
-    transparency: number = 1.0
+    transparency: number = 1.0,
+    colorized: boolean = false,
+    colorizeType: number = 0
   ) {
     // The texture is part of the identity, not just the colour: two different
     // images can average to the same RGB (real files do this - two fabrics
     // both resolving to 141,141,141), and keying on colour alone would merge
     // them into one material and lose one of the images.
-    const key = `${color.r},${color.g},${color.b},${doubleSided},${textureIndex ?? -1},${transparency}`;
+    const effectiveColorized = colorized && textureIndex !== null;
+    const effectiveColorizeType = effectiveColorized ? colorizeType : 0;
+    const key = `${color.r},${color.g},${color.b},${doubleSided},${textureIndex ?? -1},${transparency},${effectiveColorized ? 1 : 0},${effectiveColorizeType}`;
     if (colorToMaterialIndex.has(key)) {
       return colorToMaterialIndex.get(key)!;
     }
@@ -1147,6 +1151,11 @@ export function buildSceneFromParsed(
       pbr.baseColorTexture = { index: textureIndex };
     }
     const material: any = { pbrMetallicRoughness: pbr };
+    if (effectiveColorized) {
+      material.extras = {
+        sketchup: { colorized: true, colorize_type: effectiveColorizeType },
+      };
+    }
     if (doubleSided) material.doubleSided = true;
     // glTF's default alphaMode is OPAQUE, which tells a conformant renderer
     // to ignore alpha entirely - both the material's own opacity and any
@@ -1318,7 +1327,14 @@ export function buildSceneFromParsed(
           indices[i * 3 + 2] = group.localFaces[i][2];
         }
 
-        const materialIndex = getMaterialIndex(group.color, group.doubleSided, group.textureIndex, group.transparency);
+        const materialIndex = getMaterialIndex(
+          group.color,
+          group.doubleSided,
+          group.textureIndex,
+          group.transparency,
+          group.colorized,
+          group.colorizeType
+        );
 
         glbPrimitives.push({
           positions,

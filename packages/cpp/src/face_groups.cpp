@@ -421,16 +421,30 @@ std::map<GroupKey, Group> build_local_face_groups(const RawParsed& parsed, const
         group.tris.push_back(indices);
       }
     };
-    if (front == back) {
+    const bool front_raw_col = front_mat && front_mat->colorized;
+    const bool back_raw_col = back_mat && back_mat->colorized;
+    const int front_raw_ctype = front_raw_col ? front_mat->colorize_type : 0;
+    const int back_raw_ctype = back_raw_col ? back_mat->colorize_type : 0;
+    const bool same_colorization = (front_mat && back_mat) ? (front_raw_col == back_raw_col &&
+                                                              front_raw_ctype == back_raw_ctype)
+                                                           : true;
+    if (front == back && same_colorization) {
       const auto [tw, th] = tile_size(front_mat);
-      add_side({front, true, ctx.texture_index_for(front_mat), false}, false, f.uv_transform, tw,
-               th);
+      const auto tex = ctx.texture_index_for(front_mat);
+      const bool col = front_mat && tex.has_value() && front_mat->colorized;
+      const int ctype = col ? front_mat->colorize_type : 0;
+      add_side({front, true, tex, false, col, ctype}, false, f.uv_transform, tw, th);
     } else {
       const auto [ftw, fth] = tile_size(front_mat);
-      add_side({front, false, ctx.texture_index_for(front_mat), false}, false, f.uv_transform, ftw,
-               fth);
+      const auto ftex = ctx.texture_index_for(front_mat);
+      const bool fcol = front_mat && ftex.has_value() && front_mat->colorized;
+      const int fctype = fcol ? front_mat->colorize_type : 0;
+      add_side({front, false, ftex, false, fcol, fctype}, false, f.uv_transform, ftw, fth);
       const auto [btw, bth] = tile_size(back_mat);
-      add_side({back, false, ctx.texture_index_for(back_mat), !front_mat && !back_mat}, true,
+      const auto btex = ctx.texture_index_for(back_mat);
+      const bool bcol = back_mat && btex.has_value() && back_mat->colorized;
+      const int bctype = bcol ? back_mat->colorize_type : 0;
+      add_side({back, false, btex, !front_mat && !back_mat, bcol, bctype}, true,
                f.uv_transform_back, btw, bth);
     }
   }

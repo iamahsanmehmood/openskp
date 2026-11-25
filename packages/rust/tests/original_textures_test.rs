@@ -277,21 +277,25 @@ fn glb_export_drops_tiff_keeps_color_remaps_png_index_and_warns_once() {
         let mut found_tiff = false;
         let mut found_png = false;
         for m in model.list("materials") {
-            let pbr = m.find("pbrMetallicRoughness").unwrap();
-            let bcf = numbers(pbr, "baseColorFactor");
-            let (r, g, b) = (bcf[0], bcf[1], bcf[2]);
-            if r > 0.5 {
-                found_tiff = true;
-                assert!(pbr.find("baseColorTexture").is_none());
-                assert_eq!(alpha_mode(m), "OPAQUE");
-                assert!((r - srgb_to_linear(200.0 / 255.0)).abs() < 1e-4);
-                assert!((g - srgb_to_linear(60.0 / 255.0)).abs() < 1e-4);
-                assert!((b - srgb_to_linear(40.0 / 255.0)).abs() < 1e-4);
-            } else if b > 0.8 {
+            let Some(pbr) = m.find("pbrMetallicRoughness") else {
+                continue;
+            };
+            if let Some(tex_ref) = pbr.find("baseColorTexture") {
                 found_png = true;
-                let tex_ref = pbr.find("baseColorTexture").unwrap();
                 assert_eq!(int(tex_ref, "index"), 0);
+                // [1, 1, 1, 1] is the glTF default and omitted by material_json (#657).
+                assert!(pbr.find("baseColorFactor").is_none());
                 assert_eq!(alpha_mode(m), "MASK");
+            } else if pbr.find("baseColorFactor").is_some() {
+                let bcf = numbers(pbr, "baseColorFactor");
+                let (r, g, b) = (bcf[0], bcf[1], bcf[2]);
+                if r > 0.5 && b < 0.1 {
+                    found_tiff = true;
+                    assert_eq!(alpha_mode(m), "OPAQUE");
+                    assert!((r - srgb_to_linear(200.0 / 255.0)).abs() < 1e-4);
+                    assert!((g - srgb_to_linear(60.0 / 255.0)).abs() < 1e-4);
+                    assert!((b - srgb_to_linear(40.0 / 255.0)).abs() < 1e-4);
+                }
             }
         }
         assert!(found_tiff);

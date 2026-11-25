@@ -51,6 +51,8 @@ namespace OpenSkp
             public bool DoubleSided;
             public int? TextureIndex;
             public bool UnpaintedBack;
+            public bool Colorized;
+            public int ColorizeType;
             public List<(double X, double Y, double Z)> LocalVerts = new List<(double, double, double)>();
             public List<(double U, double V)> LocalUvs = new List<(double, double)>();
             public List<double[]> NormalsAccum = new List<double[]>();
@@ -319,6 +321,54 @@ namespace OpenSkp
             return null;
         }
 
+        private static bool IsColorizedMaterial(IDictionary<string, object> mat)
+        {
+            if (!mat.TryGetValue("extras", out var extrasObj)) return false;
+            var extras = ToObjectDictionary(extrasObj);
+            if (extras == null || !extras.TryGetValue("sketchup", out var skpObj)) return false;
+            var skp = ToObjectDictionary(skpObj);
+            return skp != null && skp.TryGetValue("colorized", out var colObj) && colObj is bool b && b;
+        }
+
+        private static double GetFactorAlpha(object? factorObj)
+        {
+            if (factorObj is double[] arr && arr.Length > 3) return arr[3];
+            if (factorObj is IEnumerable enumerable && factorObj is not string)
+            {
+                int idx = 0;
+                foreach (var item in enumerable)
+                {
+                    if (idx == 3) return Convert.ToDouble(item, CultureInfo.InvariantCulture);
+                    idx++;
+                }
+            }
+            return 1.0;
+        }
+
+        private static object NormalizeEmbeddedTextureMaterial(
+            object mat,
+            IDictionary<string, object> dict,
+            IDictionary<string, object> pbr,
+            IDictionary<string, object> texRef,
+            int texIdx,
+            int mappedIdx)
+        {
+            bool colorized = IsColorizedMaterial(dict);
+            if (colorized && mappedIdx == texIdx) return mat;
+
+            var newPbr = new Dictionary<string, object>(pbr);
+            if (mappedIdx != texIdx)
+            {
+                newPbr["baseColorTexture"] = new Dictionary<string, object>(texRef) { ["index"] = mappedIdx };
+            }
+            if (!colorized)
+            {
+                double alpha = pbr.TryGetValue("baseColorFactor", out var bcfObj) ? GetFactorAlpha(bcfObj) : 1.0;
+                newPbr["baseColorFactor"] = new[] { 1.0, 1.0, 1.0, alpha };
+            }
+            return new Dictionary<string, object>(dict) { ["pbrMetallicRoughness"] = newPbr };
+        }
+
         private static object LinearizeMaterialWithoutTexture(object mat, bool stripTexture, bool stripMask)
         {
             var newMat = ToObjectDictionary(mat);
@@ -406,16 +456,9 @@ namespace OpenSkp
                     {
                         materials.Add(LinearizeMaterialWithoutTexture(m, stripTexture: true, stripMask: true));
                     }
-                    else if (mapped.Value == texIdx)
-                    {
-                        materials.Add(m);
-                    }
                     else
                     {
-                        var newTexRef = new Dictionary<string, object>(texRef) { ["index"] = mapped.Value };
-                        var newPbr = new Dictionary<string, object>(pbr) { ["baseColorTexture"] = newTexRef };
-                        var newMat = new Dictionary<string, object>(dict) { ["pbrMetallicRoughness"] = newPbr };
-                        materials.Add(newMat);
+                        materials.Add(NormalizeEmbeddedTextureMaterial(m, dict, pbr, texRef, texIdx, mapped.Value));
                     }
                 }
                 else
@@ -532,9 +575,9 @@ namespace OpenSkp
         /// is emitted as two single-sided triangle sets (one normal-wound
         /// front, one reverse-wound back) so each side keeps its own
         /// color.</summary>
-        public static Dictionary<((int R, int G, int B) Color, bool DoubleSided, int? TextureIndex, double Transparency, bool UnpaintedBack), FaceGroup> BuildLocalFaceGroups(GeometryBuilder builder, Context ctx)
+        public static Dictionary<((int R, int G, int B) Color, bool DoubleSided, int? TextureIndex, double Transparency, bool UnpaintedBack, bool Colorized, int ColorizeType), FaceGroup> BuildLocalFaceGroups(GeometryBuilder builder, Context ctx)
         {
-            var faceGroups = new Dictionary<((int R, int G, int B) Color, bool DoubleSided, int? TextureIndex, double Transparency, bool UnpaintedBack), FaceGroup>();
+            var faceGroups = new Dictionary<((int R, int G, int B) Color, bool DoubleSided, int? TextureIndex, double Transparency, bool UnpaintedBack, bool Colorized, int ColorizeType), FaceGroup>();
             var fallbackBackColor = ctx.FallbackBackColor ?? ctx.FallbackColor;
 
             void AddSide(
@@ -549,8 +592,10 @@ namespace OpenSkp
                 // differently-textured faces with the same average color
                 // end up in one group with one image
                 int? texIndex = ctx.TextureIndexFor(mat?.Texture, mat?.Name);
+                bool colorized = mat != null && texIndex.HasValue && mat.Colorized;
+                int colorizeType = colorized ? mat!.ColorizeType : 0;
                 double transparency = ResolveTransparency(mat);
-                var key = (color, doubleSided, texIndex, transparency, unpaintedBack);
+                var key = (color, doubleSided, texIndex, transparency, unpaintedBack, colorized, colorizeType);
                 if (!faceGroups.TryGetValue(key, out var group))
                 {
                     group = new FaceGroup
@@ -560,6 +605,8 @@ namespace OpenSkp
                         DoubleSided = doubleSided,
                         TextureIndex = texIndex,
                         UnpaintedBack = unpaintedBack,
+                        Colorized = colorized,
+                        ColorizeType = colorizeType,
                     };
                     faceGroups[key] = group;
                 }
@@ -645,7 +692,14 @@ namespace OpenSkp
                 var uvTransform = fData.UvTransform;
                 var uvTransformBack = fData.UvTransformBack;
 
-                bool sameColor = frontColor.R == backColor.R && frontColor.G == backColor.G && frontColor.B == backColor.B;
+                bool frontCol = frontMat?.Colorized == true;
+                bool backCol = backMat?.Colorized == true;
+                int frontCType = frontCol ? frontMat!.ColorizeType : 0;
+                int backCType = backCol ? backMat!.ColorizeType : 0;
+                bool sameColorization = (frontMat != null && backMat != null)
+                    ? (frontCol == backCol && frontCType == backCType)
+                    : true;
+                bool sameColor = frontColor.R == backColor.R && frontColor.G == backColor.G && frontColor.B == backColor.B && sameColorization;
                 if (sameColor)
                 {
                     AddSide(triangles, fn, frontColor, true, false, frontMat, uvTransform, xr, yr);

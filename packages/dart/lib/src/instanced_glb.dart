@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'glb.dart' show normalizeEmbeddedTextureFactors;
 import 'instanced_scene.dart';
 import 'observability.dart' show SkpLogLevel;
 import 'scene.dart' show filterGltfTextures;
@@ -42,12 +43,13 @@ Uint8List toInstancedGlb(
 }) {
   final resources = scene.meshResources;
   final rawMaterials = scene.gltfMaterials;
-  final (sceneTextures, materials) = filterGltfTextures(
+  final (sceneTextures, filteredMaterials) = filterGltfTextures(
     scene.textures,
     rawMaterials,
     textures,
     onLog,
   );
+  final materials = normalizeEmbeddedTextureFactors(filteredMaterials);
 
   var totalBinaryLength = 0;
   for (final res in resources) {

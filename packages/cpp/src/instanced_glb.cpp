@@ -218,8 +218,13 @@ gltf::Model make_model(const InstancedScene& scene, const InstancedGlbOptions& o
       mapped_tex = filtered.remap[*source_pbr.base_color_texture];
     }
     if (mapped_tex) {
-      material.pbrMetallicRoughness.baseColorFactor.assign(source_pbr.base_color_factor.begin(),
-                                                           source_pbr.base_color_factor.end());
+      if (source.colorized) {
+        material.pbrMetallicRoughness.baseColorFactor.assign(source_pbr.base_color_factor.begin(),
+                                                             source_pbr.base_color_factor.end());
+      } else {
+        material.pbrMetallicRoughness.baseColorFactor = {1.0, 1.0, 1.0,
+                                                         source_pbr.base_color_factor[3]};
+      }
     } else {
       material.pbrMetallicRoughness.baseColorFactor = {
           srgb_to_linear(source_pbr.base_color_factor[0]),
@@ -227,6 +232,14 @@ gltf::Model make_model(const InstancedScene& scene, const InstancedGlbOptions& o
           srgb_to_linear(source_pbr.base_color_factor[2]),
           source_pbr.base_color_factor[3],
       };
+    }
+    if (source.colorized) {
+      gltf::Value::Object sketchup;
+      sketchup.emplace("colorized", gltf::Value(true));
+      sketchup.emplace("colorize_type", gltf::Value(source.colorize_type));
+      gltf::Value::Object extras;
+      extras.emplace("sketchup", gltf::Value(std::move(sketchup)));
+      material.extras = gltf::Value(std::move(extras));
     }
     material.pbrMetallicRoughness.metallicFactor = source_pbr.metallic_factor;
     material.pbrMetallicRoughness.roughnessFactor = source_pbr.roughness_factor;

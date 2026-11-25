@@ -45,7 +45,8 @@ Scene _triangleScene() {
   var binary = Uint8List(0);
   if (binHeaderOffset < bytes.length) {
     final binChunkLen = bd.getUint32(binHeaderOffset, Endian.little);
-    binary = bytes.sublist(binHeaderOffset + 8, binHeaderOffset + 8 + binChunkLen);
+    binary =
+        bytes.sublist(binHeaderOffset + 8, binHeaderOffset + 8 + binChunkLen);
   }
   return (json: json, binary: binary);
 }
@@ -71,18 +72,21 @@ void main() {
       expect(prim['material'], 0);
 
       final accessors = json['accessors'] as List;
-      final posAccessor = accessors[attrs['POSITION'] as int] as Map<String, dynamic>;
+      final posAccessor =
+          accessors[attrs['POSITION'] as int] as Map<String, dynamic>;
       expect(posAccessor['componentType'], 5126);
       expect(posAccessor['type'], 'VEC3');
       expect(posAccessor['count'], 3);
       expect(posAccessor['min'], [-4.0, -1.0, 0.0]);
       expect(posAccessor['max'], [2.0, 5.0, 7.0]);
 
-      final uvAccessor = accessors[attrs['TEXCOORD_0'] as int] as Map<String, dynamic>;
+      final uvAccessor =
+          accessors[attrs['TEXCOORD_0'] as int] as Map<String, dynamic>;
       expect(uvAccessor['componentType'], 5126);
       expect(uvAccessor['type'], 'VEC2');
       expect(uvAccessor['count'], 3);
-      final uvBufferView = (json['bufferViews'] as List)[uvAccessor['bufferView'] as int] as Map<String, dynamic>;
+      final uvBufferView = (json['bufferViews']
+          as List)[uvAccessor['bufferView'] as int] as Map<String, dynamic>;
       final uvOffset = uvBufferView['byteOffset'] as int;
       final bd = ByteData.sublistView(parsed.binary);
       expect(bd.getFloat32(uvOffset + 2 * 4, Endian.little), 1.0);
@@ -157,11 +161,13 @@ void main() {
     });
 
     test('exports real fixture matching toGlb and buildScene', () {
-      final fixturePath = '${Directory.current.path}/test/fixtures/capilla_quiroz_v17.skp';
+      final fixturePath =
+          '${Directory.current.path}/test/fixtures/capilla_quiroz_v17.skp';
       final scene = SkpFile.open(fixturePath).buildScene();
       final expected = toGlb(scene);
 
-      final output = '${Directory.systemTemp.path}/openskp-dart-glb-test-${DateTime.now().microsecondsSinceEpoch}.glb';
+      final output =
+          '${Directory.systemTemp.path}/openskp-dart-glb-test-${DateTime.now().microsecondsSinceEpoch}.glb';
       exportGlb(scene, output);
       final file = File(output);
       try {
@@ -179,10 +185,13 @@ void main() {
         final bd = ByteData.sublistView(parsed.binary);
         for (var i = 0; i < scene.glbPrimitives.length; i++) {
           final prim = scene.glbPrimitives[i];
-          final attrs = (meshes[i] as Map<String, dynamic>)['attributes'] as Map<String, dynamic>;
+          final attrs = (meshes[i] as Map<String, dynamic>)['attributes']
+              as Map<String, dynamic>;
           expect(attrs.containsKey('TEXCOORD_0'), true);
-          final uvAccessor = (parsed.json['accessors'] as List)[attrs['TEXCOORD_0'] as int] as Map<String, dynamic>;
-          final uvBufferView = (parsed.json['bufferViews'] as List)[uvAccessor['bufferView'] as int] as Map<String, dynamic>;
+          final uvAccessor = (parsed.json['accessors']
+              as List)[attrs['TEXCOORD_0'] as int] as Map<String, dynamic>;
+          final uvBufferView = (parsed.json['bufferViews']
+              as List)[uvAccessor['bufferView'] as int] as Map<String, dynamic>;
           final uvOffset = uvBufferView['byteOffset'] as int;
           final uvCount = uvAccessor['count'] as int;
           expect(prim.uvs.length, uvCount * 2);
@@ -202,12 +211,15 @@ void main() {
     });
 
     test('reports file failures without creating directories', () {
-      final output = '${Directory.systemTemp.path}/openskp-missing-parent-${DateTime.now().microsecondsSinceEpoch}/asset.glb';
+      final output =
+          '${Directory.systemTemp.path}/openskp-missing-parent-${DateTime.now().microsecondsSinceEpoch}/asset.glb';
       expect(() => exportGlb(_triangleScene(), output), throwsA(anything));
       expect(Directory(output).parent.existsSync(), false);
     });
 
-    test('converts sRGB baseColorFactor to linear in baked and instanced GLB while keeping scene materials sRGB (#650)', () {
+    test(
+        'converts sRGB baseColorFactor to linear in baked and instanced GLB while keeping scene materials sRGB (#650)',
+        () {
       final builder = create();
       final specs = <(String, List<int>)>[
         ('LayerRed', [255, 84, 84, 255]),
@@ -222,7 +234,12 @@ void main() {
       for (var i = 0; i < handles.length; i++) {
         final x = i * 10.0;
         builder.addFace(
-          [(x, 0.0, 0.0), (x + 5.0, 0.0, 0.0), (x + 5.0, 5.0, 0.0), (x, 5.0, 0.0)],
+          [
+            (x, 0.0, 0.0),
+            (x + 5.0, 0.0, 0.0),
+            (x + 5.0, 5.0, 0.0),
+            (x, 5.0, 0.0)
+          ],
           material: handles[i],
         );
       }
@@ -231,10 +248,14 @@ void main() {
       final bakedScene = skp.buildScene();
       final instancedScene = skp.buildInstancedScene();
 
-      for (final glbBytes in [toGlb(bakedScene), toInstancedGlb(instancedScene)]) {
+      for (final glbBytes in [
+        toGlb(bakedScene),
+        toInstancedGlb(instancedScene)
+      ]) {
         final json = _parseGlb(glbBytes).json;
         final factors = (json['materials'] as List)
-            .map((m) => (((m as Map)['pbrMetallicRoughness'] as Map)['baseColorFactor'] as List)
+            .map((m) => (((m as Map)['pbrMetallicRoughness']
+                    as Map)['baseColorFactor'] as List)
                 .cast<num>()
                 .map((e) => e.toDouble())
                 .toList())
@@ -254,7 +275,8 @@ void main() {
           return null;
         }
 
-        final red = findClose([1.0, _srgbToLinear(84 / 255), _srgbToLinear(84 / 255), 1.0]);
+        final red = findClose(
+            [1.0, _srgbToLinear(84 / 255), _srgbToLinear(84 / 255), 1.0]);
         expect(red, isNotNull);
         expect(red![0], 1.0);
         expect(red[1], closeTo(0.0887, 1e-4));
@@ -287,25 +309,143 @@ void main() {
 
       // Scene gltfMaterials remain sRGB.
       final sceneFactors = bakedScene.gltfMaterials
-          .map((m) => ((m['pbrMetallicRoughness'] as Map)['baseColorFactor'] as List).cast<num>().toList())
+          .map((m) =>
+              ((m['pbrMetallicRoughness'] as Map)['baseColorFactor'] as List)
+                  .cast<num>()
+                  .toList())
           .toList();
-      expect(sceneFactors.any((f) => f[0] == 1.0 && (f[1] - 84 / 255).abs() < 1e-6), isTrue);
+      expect(
+          sceneFactors
+              .any((f) => f[0] == 1.0 && (f[1] - 84 / 255).abs() < 1e-6),
+          isTrue);
       expect(sceneFactors.any((f) => (f[0] - 188 / 255).abs() < 1e-6), isTrue);
 
-      // Embedded plain textures keep their factor unchanged.
-      final capillaScene = SkpFile.open('${Directory.current.path}/test/fixtures/capilla_quiroz_v17.skp').buildScene();
-      final expectedTexFactors = capillaScene.gltfMaterials
+      // Embedded non-colorized textures write [1, 1, 1, alpha], while scene
+      // gltfMaterials keeps average colours and colorized materials stay tinted (#657).
+      final capillaSkp = SkpFile.open(
+          '${Directory.current.path}/test/fixtures/capilla_quiroz_v17.skp');
+      final capillaScene = capillaSkp.buildScene();
+      final capillaInstanced = capillaSkp.buildInstancedScene();
+      final sceneTexFactors = capillaScene.gltfMaterials
           .map((m) => m['pbrMetallicRoughness'] as Map<String, dynamic>)
           .where((p) => p.containsKey('baseColorTexture'))
-          .map((p) => (p['baseColorFactor'] as List).cast<num>().map((e) => e.toDouble()).toList())
+          .map((p) => (p['baseColorFactor'] as List)
+              .cast<num>()
+              .map((e) => e.toDouble())
+              .toList())
           .toList();
-      final capillaJson = _parseGlb(toGlb(capillaScene, textures: true)).json;
-      final actualTexFactors = (capillaJson['materials'] as List)
-          .map((m) => (m as Map)['pbrMetallicRoughness'] as Map<String, dynamic>)
-          .where((p) => p.containsKey('baseColorTexture'))
-          .map((p) => (p['baseColorFactor'] as List).cast<num>().map((e) => e.toDouble()).toList())
-          .toList();
-      expect(actualTexFactors, equals(expectedTexFactors));
+      expect(sceneTexFactors.any((f) => f[0] < 0.6 && f[2] < 0.2), isTrue);
+      final expectedWhiteFactors = [
+        for (final f in sceneTexFactors) <double>[1.0, 1.0, 1.0, f[3]],
+      ];
+      for (final capillaBytes in [
+        toGlb(capillaScene, textures: true),
+        toInstancedGlb(capillaInstanced, textures: true),
+      ]) {
+        final capillaJson = _parseGlb(capillaBytes).json;
+        final actualTexFactors = (capillaJson['materials'] as List)
+            .map((m) =>
+                (m as Map)['pbrMetallicRoughness'] as Map<String, dynamic>)
+            .where((p) => p.containsKey('baseColorTexture'))
+            .map((p) => (p['baseColorFactor'] as List)
+                .cast<num>()
+                .map((e) => e.toDouble())
+                .toList())
+            .toList();
+        expect(actualTexFactors, equals(expectedWhiteFactors));
+      }
+
+      // End-to-end model -> scene -> GLB on a real .skp containing one plain and one
+      // colorized material sharing the same RGB (200, 80, 60) and PNG image (#657).
+      final bothSkp = SkpFile.open(
+        '${Directory.current.path}/../cpp/tests/fixtures/colorized_and_plain_texture.skp',
+      );
+      final bothBaked = bothSkp.buildScene();
+      final bothInstanced = bothSkp.buildInstancedScene();
+      for (final mats in [
+        bothBaked.gltfMaterials,
+        bothInstanced.gltfMaterials
+      ]) {
+        expect(mats, hasLength(2));
+        final plainMat = mats.firstWhere((m) => !m.containsKey('extras'));
+        final colMat = mats.firstWhere((m) => m.containsKey('extras'));
+        expect(
+          colMat['extras'],
+          equals(<String, dynamic>{
+            'sketchup': <String, dynamic>{
+              'colorized': true,
+              'colorize_type': 1
+            },
+          }),
+        );
+        expect(
+          (plainMat['pbrMetallicRoughness'] as Map)['baseColorFactor'],
+          equals([200 / 255, 80 / 255, 60 / 255, 1.0]),
+        );
+        expect(
+          (colMat['pbrMetallicRoughness'] as Map)['baseColorFactor'],
+          equals([200 / 255, 80 / 255, 60 / 255, 1.0]),
+        );
+      }
+
+      for (final withTexBytes in [
+        toGlb(bothBaked, textures: true),
+        toInstancedGlb(bothInstanced, textures: true),
+      ]) {
+        final withTexJson = _parseGlb(withTexBytes).json;
+        final mats =
+            (withTexJson['materials'] as List).cast<Map<String, dynamic>>();
+        expect(mats, hasLength(2));
+        final plainGlbMat = mats.firstWhere((m) => !m.containsKey('extras'));
+        final colGlbMat = mats.firstWhere((m) => m.containsKey('extras'));
+        expect((plainGlbMat['pbrMetallicRoughness'] as Map)['baseColorTexture'],
+            equals({'index': 0}));
+        expect((plainGlbMat['pbrMetallicRoughness'] as Map)['baseColorFactor'],
+            equals([1.0, 1.0, 1.0, 1.0]));
+        expect(
+          colGlbMat['extras'],
+          equals(<String, dynamic>{
+            'sketchup': <String, dynamic>{
+              'colorized': true,
+              'colorize_type': 1
+            },
+          }),
+        );
+        expect((colGlbMat['pbrMetallicRoughness'] as Map)['baseColorTexture'],
+            equals({'index': 0}));
+        expect(
+          (colGlbMat['pbrMetallicRoughness'] as Map)['baseColorFactor'],
+          equals([200 / 255, 80 / 255, 60 / 255, 1.0]),
+        );
+      }
+
+      final expectedLinearTint = [
+        _srgbToLinear(200 / 255),
+        _srgbToLinear(80 / 255),
+        _srgbToLinear(60 / 255),
+        1.0,
+      ];
+      for (final noTexBytes in [
+        toGlb(bothBaked, textures: false),
+        toInstancedGlb(bothInstanced, textures: false),
+      ]) {
+        final noTexJson = _parseGlb(noTexBytes).json;
+        expect(noTexJson.containsKey('textures'), isFalse);
+        final mats =
+            (noTexJson['materials'] as List).cast<Map<String, dynamic>>();
+        expect(mats, hasLength(2));
+        for (final m in mats) {
+          final pbr = m['pbrMetallicRoughness'] as Map<String, dynamic>;
+          expect(pbr.containsKey('baseColorTexture'), isFalse);
+          final bcf = (pbr['baseColorFactor'] as List)
+              .cast<num>()
+              .map((e) => e.toDouble())
+              .toList();
+          for (var c = 0; c < 4; c++) {
+            expect(bcf[c], closeTo(expectedLinearTint[c], 1e-9));
+          }
+        }
+      }
     });
   });
 }

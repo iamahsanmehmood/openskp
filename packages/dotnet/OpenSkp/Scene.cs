@@ -207,7 +207,7 @@ namespace OpenSkp
             var textures = new List<SceneTexture>();
             var textureIndexFor = FaceGroups.CreateTextureIndexFor(textures, options);
 
-            var colorToMaterialIndex = new Dictionary<((int, int, int) Color, bool DoubleSided, int? TextureIndex, double Transparency), int>();
+            var colorToMaterialIndex = new Dictionary<((int, int, int) Color, bool DoubleSided, int? TextureIndex, double Transparency, bool Colorized, int ColorizeType), int>();
             var gltfMaterials = new List<object>();
             var curveSets = new List<CurveSetMetadata>();
             var curveSeq = new Dictionary<string, int>();
@@ -229,13 +229,21 @@ namespace OpenSkp
 
             var styleColors = FaceGroups.UnpaintedStyleColors(parsed, options?.UnpaintedFaces);
 
-            int GetMaterialIndex((int R, int G, int B) color, bool doubleSided, int? textureIndex, double transparency = 1.0)
+            int GetMaterialIndex(
+                (int R, int G, int B) color,
+                bool doubleSided,
+                int? textureIndex,
+                double transparency = 1.0,
+                bool colorized = false,
+                int colorizeType = 0)
             {
                 // The texture is part of the identity, not just the color:
                 // two different images can average to the same RGB (real
                 // files do this), and keying on color alone would merge
                 // them into one material and lose one of the images.
-                var key = (color, doubleSided, textureIndex, transparency);
+                bool effectiveColorized = colorized && textureIndex.HasValue;
+                int effectiveColorizeType = effectiveColorized ? colorizeType : 0;
+                var key = (color, doubleSided, textureIndex, transparency, effectiveColorized, effectiveColorizeType);
                 if (colorToMaterialIndex.TryGetValue(key, out var existing)) return existing;
                 int idx = gltfMaterials.Count;
                 var pbr = new Dictionary<string, object>
@@ -253,6 +261,17 @@ namespace OpenSkp
                     pbr["baseColorTexture"] = new Dictionary<string, object> { ["index"] = textureIndex.Value };
                 }
                 var material = new Dictionary<string, object> { ["pbrMetallicRoughness"] = pbr };
+                if (effectiveColorized)
+                {
+                    material["extras"] = new Dictionary<string, object>
+                    {
+                        ["sketchup"] = new Dictionary<string, object>
+                        {
+                            ["colorized"] = true,
+                            ["colorize_type"] = effectiveColorizeType,
+                        },
+                    };
+                }
                 if (doubleSided) material["doubleSided"] = true;
                 // glTF's default alphaMode is OPAQUE, which tells a
                 // conformant renderer to ignore alpha entirely - both the
@@ -452,7 +471,13 @@ namespace OpenSkp
                             indices[i * 3 + 2] = (uint)group.LocalFaces[i][2];
                         }
 
-                        int materialIndex = GetMaterialIndex(color, group.DoubleSided, texIndex, group.Transparency);
+                        int materialIndex = GetMaterialIndex(
+                            color,
+                            group.DoubleSided,
+                            texIndex,
+                            group.Transparency,
+                            group.Colorized,
+                            group.ColorizeType);
                         glbPrimitives.Add(new GlbPrimitive
                         {
                             Positions = positions,
