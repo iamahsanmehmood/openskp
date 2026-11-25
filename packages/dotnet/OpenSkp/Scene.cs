@@ -7,6 +7,7 @@ namespace OpenSkp
     /// <summary>One node in the baked, world-space instance tree.</summary>
     public sealed class InstanceNode
     {
+        /// <summary>Resolved display name for this placed instance.</summary>
         public string Name { get; set; } = "";
 
         /// <summary>Whether <see cref="Name"/> is a synthetic fallback
@@ -16,9 +17,13 @@ namespace OpenSkp
         /// resolve a node's display name identically.</summary>
         public bool NameIsGenerated { get; set; }
 
+        /// <summary>Name of the component or group definition this node instantiates.</summary>
         public string DefinitionName { get; set; } = "";
+        /// <summary>Effective SketchUp layer/tag name resolved down the placement chain.</summary>
         public string Layer { get; set; } = "";
+        /// <summary>World-space origin of this placement in millimetres on glTF's Y-up axes.</summary>
         public (double X, double Y, double Z) PositionMm { get; set; }
+        /// <summary>Dynamic Component key/value properties (<c>dynamic_attributes</c>) on this instance.</summary>
         public Dictionary<string, string> Properties { get; set; } = new Dictionary<string, string>();
 
         /// <summary>Every OTHER attribute dictionary this instance carries,
@@ -37,6 +42,7 @@ namespace OpenSkp
         /// InstancedNode.Guid (InstancedScene.cs).</summary>
         public string Guid { get; set; } = "";
 
+        /// <summary>Child instances nested inside this placement.</summary>
         public List<InstanceNode> Children { get; set; } = new List<InstanceNode>();
     }
 
@@ -44,15 +50,21 @@ namespace OpenSkp
     /// GlbPrimitive's GeomName in Scene.MeshIndex.</summary>
     public sealed class MeshMetadata
     {
+        /// <summary>Resolved display name of the owning placement.</summary>
         public string Name { get; set; } = "";
+        /// <summary>Name of the source component or group definition.</summary>
         public string DefinitionName { get; set; } = "";
+        /// <summary>Effective SketchUp layer/tag name for this mesh.</summary>
         public string Layer { get; set; } = "";
+        /// <summary>World-space origin of the owning placement in millimetres (Y-up).</summary>
         public (double X, double Y, double Z) PositionMm { get; set; }
+        /// <summary>Dynamic Component key/value properties (<c>dynamic_attributes</c>) inherited from the owning placement.</summary>
         public Dictionary<string, string> Properties { get; set; } = new Dictionary<string, string>();
 
         /// <summary>See InstanceNode.AttributeDictionaries.</summary>
         public Dictionary<string, Dictionary<string, string>> AttributeDictionaries { get; set; } = new Dictionary<string, Dictionary<string, string>>();
 
+        /// <summary>Slash-separated scene-graph path from the model root to this mesh.</summary>
         public string Path { get; set; } = "";
     }
 
@@ -114,6 +126,7 @@ namespace OpenSkp
         /// disagree with the content.</summary>
         public string MimeType { get; set; } = "";
 
+        /// <summary>Original texture filename stored in the SketchUp material.</summary>
         public string Filename { get; set; } = "";
     }
 
@@ -121,14 +134,23 @@ namespace OpenSkp
     /// world-space metres in glTF's Y-up frame.</summary>
     public sealed class CurveSetMetadata
     {
+        /// <summary>Resolved display name of the owning placement.</summary>
         public string Name { get; set; } = "";
+        /// <summary>Name of the source component or group definition.</summary>
         public string DefinitionName { get; set; } = "";
+        /// <summary>Effective SketchUp layer/tag name for this curve run.</summary>
         public string Layer { get; set; } = "";
+        /// <summary>Slash-separated scene-graph path from the model root to this curve run.</summary>
         public string Path { get; set; } = "";
+        /// <summary>Whether <see cref="Name"/> was synthesized rather than authored in the source file.</summary>
         public bool NameIsGenerated { get; set; }
+        /// <summary>Ordered world-space polyline vertices in metres on glTF's Y-up axes.</summary>
         public List<(double X, double Y, double Z)> PointsM { get; set; } = new List<(double X, double Y, double Z)>();
+        /// <summary>Whether the curve run forms a closed loop.</summary>
         public bool Closed { get; set; }
+        /// <summary>Analytic circular arc segmentation when the run is a whole circular arc, or <c>null</c>.</summary>
         public CurveArc? Arc { get; set; }
+        /// <summary>Non-Dynamic-Component attribute dictionaries inherited from the owning placement.</summary>
         public Dictionary<string, Dictionary<string, string>> AttributeDictionaries { get; set; } = new Dictionary<string, Dictionary<string, string>>();
     }
 
@@ -136,10 +158,15 @@ namespace OpenSkp
     /// a flat, world-space 3D scene.</summary>
     public sealed class Scene
     {
+        /// <summary>Root node of the resolved instance hierarchy.</summary>
         public InstanceNode SceneHierarchy { get; set; } = new InstanceNode();
+        /// <summary>Per-primitive metadata keyed by <see cref="GlbPrimitive.GeomName"/>.</summary>
         public Dictionary<string, MeshMetadata> MeshIndex { get; set; } = new Dictionary<string, MeshMetadata>();
+        /// <summary>Triangulated world-space mesh primitives ready for rendering or export.</summary>
         public List<GlbPrimitive> GlbPrimitives { get; set; } = new List<GlbPrimitive>();
+        /// <summary>Baked world-space loose-edge polyline and arc runs.</summary>
         public List<CurveSetMetadata> CurveSets { get; set; } = new List<CurveSetMetadata>();
+        /// <summary>glTF PBR material definitions indexed by <see cref="GlbPrimitive.MaterialIndex"/>.</summary>
         public List<object> GltfMaterials { get; set; } = new List<object>();
 
         /// <summary>Distinct texture images the placed materials use,

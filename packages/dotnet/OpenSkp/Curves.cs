@@ -8,8 +8,11 @@ namespace OpenSkp
     /// is then NOT repeated at the end).</summary>
     public sealed class LooseEdgeRun
     {
+        /// <summary>Ordered entity IDs of the edges forming this run.</summary>
         public List<long> EdgeIds { get; set; } = new List<long>();
+        /// <summary>Ordered vertex IDs visited along this run (the closing vertex is not repeated when <see cref="Closed"/> is <c>true</c>).</summary>
         public List<long> VertexIds { get; set; } = new List<long>();
+        /// <summary>Whether the run's last edge reconnects to its starting vertex.</summary>
         public bool Closed { get; set; }
     }
 
@@ -18,7 +21,9 @@ namespace OpenSkp
     /// index triples into them, ready for IFC4 IfcArcIndex.</summary>
     public sealed class CurveArc
     {
+        /// <summary>Sampled 3D points (start, midpoints, and end) in metres on glTF's Y-up axes.</summary>
         public List<(double X, double Y, double Z)> Points { get; set; } = new List<(double X, double Y, double Z)>();
+        /// <summary>Zero-based <c>(Start, Mid, End)</c> point-index triples describing each circular arc segment.</summary>
         public List<(int Start, int Mid, int End)> Segments { get; set; } = new List<(int Start, int Mid, int End)>();
     }
 

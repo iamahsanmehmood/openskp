@@ -9,7 +9,7 @@ namespace OpenSkp
     /// Load an existing legacy-format .skp file and rebuild it as a new,
     /// independent <see cref="SkpBuilder"/>.
     ///
-    /// <see cref="Create"/>-produced files only ever get built by splicing
+    /// <see cref="SkpCreate"/>-produced files only ever get built by splicing
     /// new geometry into the bundled blank scaffold (see Create.cs's own
     /// header comment) - there is no way to append to or patch an arbitrary
     /// existing file's bytes in place, because real SketchUp itself doesn't
@@ -569,10 +569,14 @@ namespace OpenSkp
     /// builder lookup for every replayed component definition.</summary>
     public sealed class OpenExistingResult
     {
+        /// <summary>Builder initialized with the replayed model's materials, layers, definitions, and root geometry.</summary>
         public SkpBuilder Builder { get; }
+        /// <summary>Human-readable descriptions of any source features that could not be reproduced verbatim.</summary>
         public IReadOnlyList<string> Warnings { get; }
+        /// <summary>Replayed component definitions keyed by their definition name, ready for additional <see cref="SkpBuilder.AddInstance"/> calls.</summary>
         public IReadOnlyDictionary<string, ComponentDefinitionBuilder> Definitions { get; }
 
+        /// <summary>Initializes an <see cref="OpenExistingResult"/>.</summary>
         public OpenExistingResult(SkpBuilder builder, IReadOnlyList<string> warnings, IReadOnlyDictionary<string, ComponentDefinitionBuilder> definitions)
         {
             Builder = builder;
@@ -580,6 +584,7 @@ namespace OpenSkp
             Definitions = definitions;
         }
 
+        /// <summary>Deconstructs the result into <c>(builder, warnings, definitions)</c>.</summary>
         public void Deconstruct(out SkpBuilder builder, out IReadOnlyList<string> warnings, out IReadOnlyDictionary<string, ComponentDefinitionBuilder> definitions)
         {
             builder = Builder;

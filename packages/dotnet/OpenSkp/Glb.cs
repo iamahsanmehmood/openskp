@@ -154,6 +154,7 @@ namespace OpenSkp
         public Action<SkpLogLevel, string>? OnLog { get; set; }
     }
 
+    /// <summary>Serializes baked world-space <see cref="Scene"/> meshes to binary glTF 2.0 (<c>.glb</c>).</summary>
     public static class GlbExport
     {
         // glTF's chunk-length fields are uint32 - a GLB file's total size

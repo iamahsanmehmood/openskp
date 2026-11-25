@@ -15,6 +15,7 @@ namespace OpenSkp
     /// </summary>
     public static class SkpFile
     {
+        /// <summary>Parses a <c>.skp</c> byte buffer (VFF 2021+ or classic pre-2021 MFC) into raw definitions, layers, materials, styles, and pages without baking the placed scene graph.</summary>
         public static SkpModel Parse(byte[] buffer, SkpParseOptions? options = null)
         {
             if (buffer == null)
@@ -329,6 +330,7 @@ namespace OpenSkp
             return rawLayer!;
         }
 
+        /// <summary>Reads a <c>.skp</c> file from disk and parses it via <see cref="Parse"/>.</summary>
         public static SkpModel Open(string filePath, SkpParseOptions? options = null)
         {
             return Parse(ReadValidatedBytes(filePath), options);
@@ -366,7 +368,7 @@ namespace OpenSkp
             }
         }
 
-        /// <summary>Same as <see cref="BuildScene(byte[])"/>, reading the
+        /// <summary>Same as <see cref="BuildScene(byte[], SkpParseOptions?)"/>, reading the
         /// file from disk first.</summary>
         public static Scene BuildScene(string filePath, SkpParseOptions? options = null)
         {

@@ -17,14 +17,19 @@ namespace OpenSkp
     /// scale placements correct without a per-instance normal copy.</summary>
     public sealed class LocalPrimitive
     {
+        /// <summary>Flat <c>[x, y, z, ...]</c> vertex positions in definition-local metres (glTF Y-up).</summary>
         public float[] Positions { get; set; } = Array.Empty<float>();
+        /// <summary>Flat <c>[nx, ny, nz, ...]</c> local vertex normals matching <see cref="Positions"/> 1:1.</summary>
         public float[] Normals { get; set; } = Array.Empty<float>();
+        /// <summary>Flat <c>[u, v, ...]</c> texture coordinates matching <see cref="Positions"/> 1:1.</summary>
         public float[] Uvs { get; set; } = Array.Empty<float>();
+        /// <summary>Triangle vertex indices into <see cref="Positions"/>/<see cref="Normals"/>/<see cref="Uvs"/> (3 per triangle).</summary>
         public uint[] Indices { get; set; } = Array.Empty<uint>();
 
         /// <summary>Triangle offsets for separately emitted back sides.</summary>
         public uint[] BackTriangles { get; set; } = Array.Empty<uint>();
 
+        /// <summary>Index into <see cref="InstancedScene.GltfMaterials"/> for this primitive's resolved material.</summary>
         public int MaterialIndex { get; set; }
 
         /// <summary>The back copies of faces with no paint on either side; see
@@ -41,19 +46,28 @@ namespace OpenSkp
     /// therefore needs a separate variant - see <see cref="VariantKey"/>.</summary>
     public sealed class InstancedMeshResource
     {
+        /// <summary>Stable resource identifier (for example <c>"mesh_0"</c>) referenced by <see cref="InstancedNode.MeshResourceId"/>.</summary>
         public string Id { get; set; } = "";
+        /// <summary>Source SketchUp definition entity ID, or <c>null</c> for root-level geometry.</summary>
         public long? DefinitionId { get; set; }
+        /// <summary>Name of the source component or group definition.</summary>
         public string DefinitionName { get; set; } = "";
+        /// <summary>Key describing the inherited material/layer/style context that produced this variant.</summary>
         public string VariantKey { get; set; } = "";
+        /// <summary>Definition-local triangulated primitives grouped by resolved material.</summary>
         public List<LocalPrimitive> Primitives { get; set; } = new List<LocalPrimitive>();
     }
 
     /// <summary>One loose-edge run in definition-local space (metres, glTF Y-up).</summary>
     public sealed class LocalCurve
     {
+        /// <summary>Ordered definition-local polyline vertices in metres on glTF's Y-up axes.</summary>
         public List<(double X, double Y, double Z)> PointsM { get; set; } = new List<(double X, double Y, double Z)>();
+        /// <summary>Whether the curve run forms a closed loop.</summary>
         public bool Closed { get; set; }
+        /// <summary>Explicit layer/tag name assigned to the curve's edges, or <c>""</c> to inherit the placement's layer.</summary>
         public string Layer { get; set; } = "";
+        /// <summary>Analytic circular arc segmentation when the run is a whole circular arc, or <c>null</c>.</summary>
         public CurveArc? Arc { get; set; }
     }
 
@@ -62,9 +76,13 @@ namespace OpenSkp
     /// <see cref="InstancedMeshResource"/>.</summary>
     public sealed class InstancedCurveResource
     {
+        /// <summary>Stable curve-resource identifier referenced by <see cref="InstancedNode.CurveResourceId"/>.</summary>
         public string Id { get; set; } = "";
+        /// <summary>Source SketchUp definition entity ID, or <c>null</c> for root-level loose edges.</summary>
         public long? DefinitionId { get; set; }
+        /// <summary>Name of the source component or group definition.</summary>
         public string DefinitionName { get; set; } = "";
+        /// <summary>Definition-local loose-edge runs belonging to this resource.</summary>
         public List<LocalCurve> Curves { get; set; } = new List<LocalCurve>();
     }
 
@@ -75,6 +93,7 @@ namespace OpenSkp
     /// having been baked into vertex data.</summary>
     public sealed class InstancedNode
     {
+        /// <summary>Resolved display name for this placed node.</summary>
         public string Name { get; set; } = "";
 
         /// <summary>Whether <see cref="Name"/> is a synthetic fallback
@@ -86,7 +105,9 @@ namespace OpenSkp
         /// real data. Mirrors Python's/C++'s own field of the same name.</summary>
         public bool NameIsGenerated { get; set; }
 
+        /// <summary>Name of the source component or group definition.</summary>
         public string DefinitionName { get; set; } = "";
+        /// <summary>Effective SketchUp layer/tag name resolved down the placement chain.</summary>
         public string Layer { get; set; } = "";
 
         /// <summary>This node's transform RELATIVE TO ITS PARENT, as a
@@ -95,7 +116,9 @@ namespace OpenSkp
         /// identity.</summary>
         public double[] Matrix { get; set; } = InstancedSceneBuilder.IdentityGltf;
 
+        /// <summary>Absolute world-space origin in millimetres on SketchUp's Z-up axes, matching <see cref="InstanceNode.PositionMm"/>.</summary>
         public (double X, double Y, double Z) PositionMm { get; set; }
+        /// <summary>Dynamic Component key/value properties (<c>dynamic_attributes</c>) on this placement.</summary>
         public Dictionary<string, string> Properties { get; set; } = new Dictionary<string, string>();
 
         /// <summary>See Scene.cs's InstanceNode.AttributeDictionaries -
@@ -112,8 +135,11 @@ namespace OpenSkp
         /// same synthetic-fallback treatment as a missing one.</summary>
         public string Guid { get; set; } = "";
 
+        /// <summary>ID of the <see cref="InstancedMeshResource"/> placed by this node, or <c>null</c> when it places no faces.</summary>
         public string? MeshResourceId { get; set; }
+        /// <summary>ID of the <see cref="InstancedCurveResource"/> placed by this node, or <c>null</c> when it places no loose edges.</summary>
         public string? CurveResourceId { get; set; }
+        /// <summary>Child nodes nested inside this placement.</summary>
         public List<InstancedNode> Children { get; set; } = new List<InstancedNode>();
     }
 
@@ -121,19 +147,28 @@ namespace OpenSkp
     /// Y-up.</summary>
     public sealed class SceneBounds
     {
+        /// <summary>Minimum corner <c>(X, Y, Z)</c> in metres (glTF Y-up).</summary>
         public (double X, double Y, double Z) Min { get; set; }
+        /// <summary>Maximum corner <c>(X, Y, Z)</c> in metres (glTF Y-up).</summary>
         public (double X, double Y, double Z) Max { get; set; }
+        /// <summary>Extent <c>Max - Min</c> in metres along each axis.</summary>
         public (double X, double Y, double Z) Size { get; set; }
+        /// <summary>Midpoint <c>(Min + Max) / 2</c> in metres.</summary>
         public (double X, double Y, double Z) Center { get; set; }
     }
 
     /// <summary>The result of <see cref="InstancedSceneBuilder.Build"/>.</summary>
     public sealed class InstancedScene
     {
+        /// <summary>Placed axis-aligned scene bounds in metres (Y-up), or <c>null</c> when the scene has no geometry.</summary>
         public SceneBounds? Bounds { get; set; }
+        /// <summary>Root node of the instanced scene graph.</summary>
         public InstancedNode SceneHierarchy { get; set; } = new InstancedNode();
+        /// <summary>Deduplicated definition-local triangulated mesh resources.</summary>
         public List<InstancedMeshResource> MeshResources { get; set; } = new List<InstancedMeshResource>();
+        /// <summary>Deduplicated definition-local loose-edge curve resources.</summary>
         public List<InstancedCurveResource> CurveResources { get; set; } = new List<InstancedCurveResource>();
+        /// <summary>glTF PBR material definitions indexed by <see cref="LocalPrimitive.MaterialIndex"/>.</summary>
         public List<object> GltfMaterials { get; set; } = new List<object>();
 
         /// <summary>Distinct texture images the placed materials use,
