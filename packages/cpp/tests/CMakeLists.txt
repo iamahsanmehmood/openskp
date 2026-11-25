@@ -28,6 +28,7 @@ add_executable(
   legacy_textured_colorize_test.cpp
   legacy_empty_model_test.cpp
   scene_without_camera_test.cpp
+  scene_capture_flags_test.cpp
   scene_hidden_entities_test.cpp
   scene_pages_test.cpp
   instanced_scene_test.cpp
