@@ -23,6 +23,7 @@ fixtures it reuses are genuine SketchUp saves:
 
 from __future__ import annotations
 
+import collections
 import io
 import math
 import random
@@ -471,6 +472,39 @@ def test_material_folder_special_character_table():
     }
     assert actual == expected
 
+
+
+def test_template_materials_are_keyed_by_their_material_xml_name(tmp_path):
+    square = [(0, 0, 0), (10, 0, 0), (10, 10, 0), (0, 10, 0)]
+
+    def shifted(dx):
+        return [(x + dx, y, z) for x, y, z in square]
+
+    builder = create_vff()
+    builder.add_face(shifted(0), material=builder.add_material("a/b", (200, 0, 0)))
+    builder.add_face(shifted(20), material=builder.add_material('1/2" ply', (0, 200, 0)))
+    template = builder.to_bytes()
+
+    reopened = create_vff(template=template)
+    assert "a/b" in reopened.materials_by_name
+    assert '1/2" ply' in reopened.materials_by_name
+    assert "a_b" not in reopened.materials_by_name
+    assert "1_2_ ply" not in reopened.materials_by_name
+    a_over_b = reopened.materials_by_name["a/b"]
+    assert reopened.add_material("a/b", (200, 0, 0)) == a_over_b
+    new_material = reopened.add_material("a_b", (0, 0, 200))
+    assert new_material != a_over_b
+    reopened.add_face(shifted(40), material=new_material)
+
+    names = collections.Counter(material.name for material in parse_bytes(tmp_path, reopened.to_bytes()).materials)
+    for name in ("a/b", '1/2" ply', "a_b"):
+        assert names[name] == 1, names
+
+    fixture = create_vff(
+        template=(WRITER_FIXTURES / "material_folder_names_2025.skp").read_bytes()
+    )
+    assert '1/2" plywood' in fixture.materials_by_name
+    assert "1_2_ plywood" not in fixture.materials_by_name
 
 def test_case_variant_material_and_tag_names_follow_sketchup(tmp_path):
     builder = create_vff()

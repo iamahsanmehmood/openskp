@@ -16,6 +16,7 @@ import re
 import struct
 import time
 import uuid
+import xml.etree.ElementTree as ET
 from typing import Dict, Iterable, KeysView, List, Optional, Sequence, Tuple
 from xml.sax.saxutils import escape as _xml_escape
 
@@ -671,15 +672,33 @@ class Template:
             self.layer_ids[identifier] = name
             self._layer_names.setdefault(name.lower(), name)
 
+    def _material_xml_name(self, folder: str) -> str:
+        """The display name SketchUp wrote inside a material folder."""
+        entry = self._by_name.get(f"materials/{folder}/material.xml")
+        if entry is None:
+            return folder
+        try:
+            root = ET.fromstring(entry.data)
+            namespace = "{http://sketchup.google.com/schemas/sketchup/1.0/material}"
+            material = root.find(f".//{namespace}material")
+            if material is not None and material.get("name"):
+                return material.get("name")
+        except (ET.ParseError, UnicodeDecodeError):
+            pass
+        return folder
+
     def _read_materials(self) -> None:
         for material in self._material_list().children or []:
             if material.tag != T_MATERIAL:
                 continue
             identifier = _find_entity_id(material)
-            name_node = material.child(T_MATERIAL_NAME)
-            if identifier is None or name_node is None:
+            folder_node = material.child(T_MATERIAL_NAME)
+            if identifier is None or folder_node is None:
                 continue
-            name = name_node.payload.decode("utf-8", "replace")
+            # The record stores the archive folder; the real material name
+            # lives in that folder's material.xml (a/b vs its a_b folder).
+            folder = folder_node.payload.decode("utf-8", "replace")
+            name = self._material_xml_name(folder)
             self.material_ids[identifier] = name
             self.materials[name] = identifier
             self._material_names.setdefault(name.lower(), name)
