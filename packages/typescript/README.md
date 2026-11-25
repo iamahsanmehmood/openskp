@@ -88,11 +88,6 @@ import { SkpFile } from 'openskp';
 const skp = SkpFile.open('model.skp');
 const model = skp.parse();
 
-// Browser: parse from a File/Blob's ArrayBuffer
-import { parseSkp } from 'openskp';
-const buffer = await file.arrayBuffer();
-const model2 = parseSkp(buffer);
-
 console.log(model.version, model.layers.length, 'layers');
 
 // Inspect definitions (component geometry) - model.definitions is a Map
@@ -112,6 +107,17 @@ console.log(scene.glbPrimitives.length, 'renderable mesh primitives');
 // once, plus a transform per placement.
 const instanced = skp.buildInstancedScene();
 console.log(instanced.meshResources.length, 'unique meshes');
+```
+
+In the browser, parse a `File` or `Blob` (for example from an
+`<input type="file">`):
+
+```typescript
+import { parseSkp } from 'openskp';
+
+async function read(file: File) {
+  return parseSkp(await file.arrayBuffer());
+}
 ```
 
 ## Choosing an API

@@ -157,7 +157,7 @@ void main() async {
 
   // Export to binary glTF 2.0 (GLB) bytes or file
   final glbBytes = toGlb(scene);
-  await exportGlb(scene, 'my_model.glb');
+  exportGlb(scene, 'my_model.glb');
   print('Exported GLB: ${glbBytes.length} bytes');
 
   // Export to Wavefront OBJ, plus a companion .mtl material library
@@ -292,7 +292,7 @@ data model (the same shape the C# port also follows):
 - `List<GlbPrimitive> glbPrimitives` — Triangulated mesh primitives ready for GPU upload or GLB packaging.
 - `Map<String, MeshMetadata> meshIndex` — Metadata map describing each baked mesh primitive, keyed by the matching `GlbPrimitive.geomName`.
 - `Uint8List toGlb(Scene scene)` — Serializes a baked scene into binary glTF 2.0 (GLB) bytes.
-- `Future<File> exportGlb(Scene scene, String path)` — Exports a baked scene directly to a `.glb` file on disk.
+- `void exportGlb(Scene scene, String path)` — Exports a baked scene directly to a `.glb` file on disk.
 
 ---
 
