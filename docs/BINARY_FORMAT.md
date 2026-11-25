@@ -162,10 +162,40 @@ and `1` → `-1`.
 
 ### 3.6 Dynamic Property Tags
 
+Inside a `D007` entity-properties record, a `DC05` payload holds the
+attribute-dictionary tree. Each dictionary is a `B436` name node immediately
+followed by an entries container (typically `B536`), and each entry is a
+`B636` key immediately followed by one `A438` value wrapper.
+
 | Tag | Name | Payload | Description |
 |-----|------|---------|-------------|
-| `B636` | Property Key | ASCII | Dynamic attribute name |
-| `AD38` | Property Value | ASCII | Dynamic attribute value |
+| `B436` | Dictionary Name | UTF-8 | Attribute dictionary name |
+| `B636` | Property Key | UTF-8 | Dynamic attribute name |
+| `A438` | Property Value | Container | One typed child; empty payload means nil |
+
+An `A438` with no children is `nil`. Otherwise it contains exactly one typed
+child record, whose tag selects the value's type:
+
+| Tag | Type | Payload | Description |
+|-----|------|---------|-------------|
+| `AD38` | String | UTF-8 | Text value |
+| `A738` | Integer | 4B: `int32` LE | Signed 32-bit integer |
+| `A938` | Float | 8B: `float64` | Plain double |
+| `AF38` | Length | 8B: `float64` | Length in inches; same encoding as Float, distinct tag |
+| `AA38` | Boolean | 1B | `0` = false, non-zero = true |
+| `AC38` | Time | 4B: `uint32` LE | Unix seconds (`time_t`) |
+| `B438` | Point3d | 24B: 3×`float64` | x, y, z |
+| `B538` | Vector3d | 24B: 3×`float64` | x, y, z |
+| `AE38` | Array | Container | Sequence of `A438` values; arrays may nest |
+
+Classic (pre-2021) files store the same kinds of value as typed
+`CAttributeNamed` records instead: their boolean type is `0x07` (one-byte
+`u8`) and their time type is `0x09` (unsigned 32-bit seconds). Booleans are
+rendered as `"1"`/`"0"` so the stringified view matches that classic integer
+form.
+
+A type tag the reader does not know, or a known tag whose payload is not the
+size listed above, is returned as `nil`/`None` rather than being guessed at.
 
 ## 4. Coordinate System
 

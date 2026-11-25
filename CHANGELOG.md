@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — Python: VFF attribute dictionaries decode time values
+
+- VFF (SketchUp 2021+) attribute dictionaries now decode `AC38` (4-byte little-endian u32 unix seconds) as an unsigned `int` — the counterpart of the classic reader's `0x09` time type. It was previously returned as `None` because the tag had never been observed in real data. `AA38` booleans (one byte) are already decoded with [#622](https://github.com/iamahsanmehmood/openskp/pull/622) and rendered `"1"`/`"0"` like the classic integer form.
+- A genuine SketchUp 2025 Ruby-saved fixture with `true`, `false`, `Time.at(1700000000)` and `nil` now covers the model, a component definition, its instance, a group and a face, pinning both tags on real data.
+
 ### Added — Python, TypeScript, .NET & Dart: guides inside component definitions, guide tags and hidden guides (#618, #619)
 
 - The writers take construction lines and points inside a component definition, and `open_existing` replays them. A definition whose only guides can't be replayed (half-bounded or zero length) is skipped instead of failing, in all six languages. Guides with NaN or infinite values are rejected.
