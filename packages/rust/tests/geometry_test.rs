@@ -260,6 +260,21 @@ fn attribute_dictionaries_decode_length_and_float_as_distinct_tags_both_f64() {
     assert_eq!(price.to_string(), "120");
 }
 
+// `set_attribute(..., Time.at(1700000000))` in SketchUp 2025: A438 { AC38 u32 }.
+#[test]
+fn attribute_dictionaries_decode_time_value() {
+    let entries = concat(&[
+        &entry("time", &tlv("AC38", &1_700_000_000u32.to_le_bytes())),
+        &entry("late", &tlv("AC38", &u32::MAX.to_le_bytes())),
+        &entry("short", &tlv("AC38", &[1, 2, 3])),
+    ]);
+    let dicts = attribute_dicts_for(&named_dict("d", &entries));
+    assert_eq!(dicts["d"]["time"], ParsedAttribute::Time(1_700_000_000));
+    assert_eq!(dicts["d"]["late"], ParsedAttribute::Time(4_294_967_295));
+    assert_eq!(dicts["d"]["late"].to_string(), "4294967295");
+    assert_eq!(dicts["d"]["short"], ParsedAttribute::Null);
+}
+
 // SketchUp 2024 `set_attribute(..., true)` on a face or instance: A438 { AA38 01 }.
 #[test]
 fn attribute_dictionaries_decode_boolean_value() {

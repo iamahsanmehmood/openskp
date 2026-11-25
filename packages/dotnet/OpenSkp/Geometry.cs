@@ -241,12 +241,8 @@ namespace OpenSkp
         // for the same 8-byte float64 encoding depending on whether the
         // value is a Length or a plain Float - A738 int32, B438 Point3d,
         // B538 Vector3d (each 3 x f64, 24 bytes flat, no per-component
-        // tags). No native bool/time_t tag has been observed in real data
-        // yet - FrameBuilder itself stores booleans as the literal strings
-        // "true"/"false" - so those two of the format's 9 documented types
-        // are not decoded here either, matching Python's own
-        // _decode_vff_attr_value exactly (7/9, not 9/9 - the ceiling is
-        // real ground truth, not an arbitrary stopping point).
+        // tags), AA38 bool (one byte), AC38 time (u32 Unix seconds) -
+        // matching Python's own _decode_vff_attr_value exactly.
         private static readonly HashSet<string> VffAttrDoubleTags = new HashSet<string> { "AF38", "A938" };
 
         /// <summary>Decode one A438-wrapped attribute value node into a
@@ -267,6 +263,8 @@ namespace OpenSkp
             if (tag == "AA38" && payload.Length == 1) return payload[0] != 0;
             if (VffAttrDoubleTags.Contains(tag) && payload.Length == 8) return Tlv.ReadF64(payload, 0);
             if (tag == "A738" && payload.Length == 4) return Tlv.ReadI32(payload, 0);
+            // a time: Unix seconds, unsigned as in classic files
+            if (tag == "AC38" && payload.Length == 4) return Tlv.ReadU32(payload, 0);
             if ((tag == "B438" || tag == "B538") && payload.Length == 24)
             {
                 return new double[] { Tlv.ReadF64(payload, 0), Tlv.ReadF64(payload, 8), Tlv.ReadF64(payload, 16) };

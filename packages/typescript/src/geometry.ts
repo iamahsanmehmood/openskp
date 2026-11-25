@@ -811,6 +811,8 @@ export function decodeVffAttrValue(a438Node: TlvNode): VffAttrValue {
   if (tag === 'AA38' && payload.length === 1) return payload[0] !== 0;
   if (VFF_ATTR_DOUBLE_TAGS.has(tag) && payload.length === 8) return readF64(payload, 0);
   if (tag === 'A738' && payload.length === 4) return readI32(payload, 0);
+  // a time: Unix seconds, unsigned as in classic files
+  if (tag === 'AC38' && payload.length === 4) return readI32(payload, 0) >>> 0;
   if ((tag === 'B438' || tag === 'B538') && payload.length === 24) {
     return [readF64(payload, 0), readF64(payload, 8), readF64(payload, 16)];
   }

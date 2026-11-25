@@ -153,8 +153,9 @@ fn is_prop_container_tag(t: &Tag) -> bool {
 // span whose OWN tag says the real type (AD38 string, A938 Float / AF38
 // Length double, A738 int32, B438/B538 a 3xf64 point/vector, AE38 a nested
 // array, AA38 a one-byte boolean - what a SketchUp 2024 file stores for
-// `set_attribute(..., true)`). An A438 with no children or an unrecognized
-// value tag is Null - a real, present key, not a missing key.
+// `set_attribute(..., true)` - and AC38 a time, u32 Unix seconds). An A438
+// with no children or an unrecognized value tag is Null - a real, present
+// key, not a missing key.
 fn decode_a438_value(p: &[u8], a: usize, z: usize, depth: usize) -> ParsedAttribute {
     if depth > super::bytes::MAX_TLV_DEPTH {
         return ParsedAttribute::Null;
@@ -179,6 +180,9 @@ fn decode_a438_value(p: &[u8], a: usize, z: usize, depth: usize) -> ParsedAttrib
     }
     if tag == "A738" && n == 4 {
         return ParsedAttribute::Integer(i64::from(read_i32(p, sa).unwrap_or(0)));
+    }
+    if tag == "AC38" && n == 4 {
+        return ParsedAttribute::Time(i64::from(read_u32(p, sa).unwrap_or(0)));
     }
     if tag == "B438" && n == 24 {
         return ParsedAttribute::Point3d([f(sa), f(sa + 8), f(sa + 16)]);
