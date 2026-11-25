@@ -144,21 +144,19 @@ def test_embedded_plain_textures_use_white_factor_and_colorized_stay_tinted(tmp_
 
     with_tex_glb = tmp_path / "both_with_textures.glb"
     exporter_mod.export(both_skp, str(with_tex_glb), textures=True)
-    with_tex_mats = _glb_materials_by_alpha_or_factor(with_tex_glb)
+    with_tex_data = with_tex_glb.read_bytes()
+    (with_tex_jlen,) = struct.unpack_from("<I", with_tex_data, 12)
+    with_tex_doc = json.loads(with_tex_data[20 : 20 + with_tex_jlen])
+    with_tex_mats = with_tex_doc["materials"]
     assert len(with_tex_mats) == 2
+    assert len(with_tex_doc["images"]) == 2
     with_tex_factors = [
         m.get("pbrMetallicRoughness", {}).get("baseColorFactor", [1.0, 1.0, 1.0, 1.0])
         for m in with_tex_mats
     ]
     assert all("baseColorTexture" in m.get("pbrMetallicRoughness", {}) for m in with_tex_mats)
-    assert any(
-        all(abs(a - b) < 1e-4 for a, b in zip(f, [1.0, 1.0, 1.0, 1.0]))
-        for f in with_tex_factors
-    )
-    assert any(
-        all(abs(a - b) < 1e-2 for a, b in zip(f, [200 / 255, 80 / 255, 60 / 255, 1.0]))
-        for f in with_tex_factors
-    )
+    for f in with_tex_factors:
+        assert f == pytest.approx([1.0, 1.0, 1.0, 1.0], abs=1e-4)
 
     no_tex_glb = tmp_path / "both_without_textures.glb"
     exporter_mod.export(both_skp, str(no_tex_glb), textures=False)
