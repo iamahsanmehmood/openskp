@@ -1289,8 +1289,12 @@ def _scan_pages(data: bytes, ar) -> list:
                     raise LegacyParseError("unexpected hidden-layers marker")
         except (LegacyParseError, struct.error, IndexError):
             continue
+        # The words this scan accepts (0xc00, 0xc20) carry bits above the
+        # ones a scene's "Properties to save" use: not capture flags as
+        # Page.capture_flags reads them, so they are not passed on as such.
         pages.append({'name': name, 'hidden_layer_ids': hidden_ids,
-                      'capture_flags': flags})
+                      'capture_flags': (None if flags & ~_PAGE_KNOWN_FLAGS
+                                        else flags)})
     return pages
 
 

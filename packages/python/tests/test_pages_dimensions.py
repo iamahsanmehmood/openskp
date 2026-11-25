@@ -214,3 +214,6 @@ def test_scan_pages_legacy_synthetic():
     assert [p['name'] for p in pages] == ["Baseline", "WithHidden"]
     assert pages[0]['hidden_layer_ids'] == []
     assert pages[1]['hidden_layer_ids'] == [5, 6]
+    # 0xc00 and 0xc20 set bits above 0x1FF: not capture flags as
+    # Page.capture_flags reads them (#660).
+    assert [p['capture_flags'] for p in pages] == [None, None]

@@ -499,7 +499,9 @@ class Page:
             ``Face.persistent_id``).
         capture_flags: Which properties the scene saves (the boxes ticked
             under "Properties to save" in SketchUp's Scenes panel), as the
-            u32 the file stores, or ``None`` when the reader found none.
+            u32 the file stores, or ``None`` when the reader found none
+            (or, in the classic fallback scan, a word with bits above
+            ``0x1FF``, which are not these flags).
             The ``use_*`` properties below read its bits. It tells an empty
             ``hidden_entity_ids`` that means "this scene hides nothing" from
             one that means "this scene leaves hidden objects alone".
@@ -580,8 +582,10 @@ class Page:
 
 # Bits of ``Page.capture_flags``, named after SketchUp's public Ruby API
 # (``Sketchup::Page#use_camera?`` and so on). Checked on the fixtures in
-# tests/test_scene_capture_flags.py: 0x001 and 0x020 one at a time, the
-# others only all together (0x080 and 0x100 are never set apart there).
+# tests/test_scene_capture_flags.py (0x001 and 0x020 one at a time, the
+# others all together), and one flag at a time against SketchUp's library
+# over 592 files (#660): hidden geometry alone is 0x090, hidden objects
+# alone 0x110, the older combined 0x010 set with either.
 PAGE_USE_CAMERA = 0x001
 PAGE_USE_RENDERING_OPTIONS = 0x002
 PAGE_USE_SHADOW_INFO = 0x004

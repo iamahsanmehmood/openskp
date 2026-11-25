@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added — Python: which properties a scene saves
 
-- `Page.capture_flags` is the u32 a scene stores for the boxes ticked under "Properties to save": tag `7149` of the `7148` record in 2021+ files, and the u32 after the description in classic files. It is `None` when the reader found none. `use_camera`, `use_rendering_options`, `use_shadow_info`, `use_axes`, `use_hidden_layers`, `use_section_planes`, `use_hidden_geometry` and `use_hidden_objects` read its bits.
+- `Page.capture_flags` is the u32 a scene stores for the boxes ticked under "Properties to save": tag `7149` of the `7148` record in 2021+ files, and the u32 after the description in classic files. It is `None` when the reader found none, or when the classic fallback scan read a word with bits above `0x1FF`. `use_camera`, `use_rendering_options`, `use_shadow_info`, `use_axes`, `use_hidden_layers`, `use_section_planes`, `use_hidden_geometry` and `use_hidden_objects` read its bits.
 - This tells apart the two meanings of an empty `hidden_entity_ids`: a scene that hides nothing (`use_hidden_objects` is `True`: picking it shows every object) and one that doesn't save hidden objects (`False`: picking it leaves them alone).
 - Before SketchUp 2020.1, one bit (`0x010`) covered hidden geometry and hidden objects together. When neither of the split bits (`0x080`, `0x100`) is set, it answers for both.
 
