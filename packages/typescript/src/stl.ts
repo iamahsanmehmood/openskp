@@ -1,7 +1,7 @@
 import { SkpScene, getSurfacePrimitives } from './model';
+import { nodeFs, nodePath } from './node-builtins';
 
 declare const process: any;
-declare const require: any;
 
 function calculateNormal(
   v0: [number, number, number],
@@ -211,8 +211,8 @@ export function exportSTL(
   options?: { binary?: boolean; scale?: number }
 ): void {
   if (typeof process !== 'undefined' && process.versions && process.versions.node) {
-    const fs = require('fs');
-    const path = require('path');
+    const fs = nodeFs();
+    const path = nodePath();
     const binary = options?.binary ?? false;
     const scale = options?.scale ?? 1.0;
 

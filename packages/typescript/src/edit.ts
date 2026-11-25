@@ -93,12 +93,12 @@ import {
   AddFaceOptions,
   AddInstanceOptions,
 } from './create';
+import { nodeFs } from './node-builtins';
 
 // This package has no hard dependency on @types/node (it targets the
 // browser too), so - like index.ts's own SkpFile.open - Node-only globals
 // are declared `any` here rather than pulled in via @types/node.
 declare const process: any;
-declare const require: any;
 
 /** The shared addFace/addInstance surface `SkpBuilder` and
  * `ComponentDefinitionBuilder` both expose - replay works generically
@@ -118,7 +118,7 @@ function readFileToArrayBuffer(path: string): ArrayBuffer {
       'a file-path source for openExisting is only supported in Node.js environments - pass an ArrayBuffer instead'
     );
   }
-  const fs = require('fs');
+  const fs = nodeFs();
   const buffer = fs.readFileSync(path);
   return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
 }

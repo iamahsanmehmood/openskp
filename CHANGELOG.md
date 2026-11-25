@@ -25,6 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 >   read in part says so (#552).
 > - **Scenes** (SketchUp's tabs): they are on `Scene` and `InstancedScene` (#593), with the entities
 >   each scene hides (#472) and the properties it saves (@ultracat in #660).
+> - **npm:** `SkpFile.open`, `save` and the file exports work in Node.js with `import` too; they threw
+>   `Dynamic require of "fs" is not supported`.
 > - **STL files of painted models can be printed** (#601; Python by @rayw-lab in #627; not in Rust
 >   yet), and **IFC and DXF** exports are stricter and more complete: curves as annotations, names
 >   with any character, real units (#285).
@@ -61,6 +63,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 >   members. *.NET:* recompile, some methods have new optional parameters. *C++:* recompile, public
 >   structs have new fields. *Rust:* `to_ifc` returns a `Result`, `ImageOptions` is no longer `Copy`,
 >   and structs built field by field have new fields.
+
+### Fixed — TypeScript: reading and writing files failed in Node.js with `import`
+
+- `SkpFile.open`, `openExisting` with a path, `SkpBuilder.save`, `exportDXF`, `exportIFC`, `exportOBJ`, `exportPLY` and `exportSTL` threw `Dynamic require of "fs" is not supported` when the package was loaded with `import` (the ES module build); `require` worked. CI runs the built package both ways now.
+
+### Fixed — Python: `openskp --help` looked for a file of that name
+
+- It prints the usage now, and `openskp --version` the version.
 
 ### Fixed — All 6 languages and the web viewer: textures came out too dark in GLB files (#657)
 

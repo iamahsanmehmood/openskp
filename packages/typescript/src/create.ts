@@ -52,13 +52,13 @@ import {
   LAYER_WRITER_BASE,
   SCAFFOLD_CLASS_SLOT,
 } from './scaffold';
+import { nodeFs } from './node-builtins';
 
 // This package has no hard dependency on @types/node (it targets the
 // browser too), so - like index.ts's own SkpFile.open - Node-only globals
 // used only by SkpBuilder.save() are declared `any` here rather than
 // pulled in via @types/node.
 declare const process: any;
-declare const require: any;
 declare const Buffer: any;
 
 export type Point3 = [number, number, number];
@@ -3046,7 +3046,7 @@ export class SkpBuilder {
     if (typeof process === 'undefined' || !process.versions || !process.versions.node) {
       throw new Error('SkpBuilder.save is only supported in Node.js environments - use toBytes() elsewhere');
     }
-    const fs = require('fs');
+    const fs = nodeFs();
     fs.writeFileSync(path, Buffer.from(this.toBytes()));
   }
 

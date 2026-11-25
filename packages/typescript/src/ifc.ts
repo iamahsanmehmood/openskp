@@ -1,9 +1,9 @@
 import { SkpScene, GlbPrimitive, getSurfacePrimitives } from './model';
 import { round6 } from './curves';
 import { ifcAttrCount } from './ifc-attr-counts';
+import { nodeFs, nodePath } from './node-builtins';
 
 declare const process: any;
-declare const require: any;
 
 export const METRES_TO_INCHES = 39.37007874015748;
 export const METRES_TO_MM = 1000.0;
@@ -660,8 +660,8 @@ export function exportIFC(
 ): void {
   if (typeof process !== 'undefined' && process.versions && process.versions.node) {
     const text = toIFC(scene, scale, schema, classifier, classifyUsingFullPath);
-    const fs = require('fs');
-    const path = require('path');
+    const fs = nodeFs();
+    const path = nodePath();
     const dir = path.dirname(outputPath);
     if (dir && !fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });

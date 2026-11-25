@@ -42,6 +42,7 @@ import { createGlb } from './instanced-glb';
 import { buildInstancedSceneFromParsed, InstancedScene } from './instanced';
 import { extractThumbnail, SkpThumbnail } from './thumbnail';
 import { toFragments, FragmentExportOptions } from './fragments';
+import { nodeFs, nodePath } from './node-builtins';
 
 export * from './model';
 export type { VffAttrValue } from './geometry';
@@ -98,7 +99,6 @@ export type {
 export { openExisting } from './edit';
 
 declare const process: any;
-declare const require: any;
 
 /**
  * Parse a SketchUp (.skp) file from an ArrayBuffer into its raw,
@@ -858,8 +858,8 @@ export class SkpFile {
 
   static open(filePath: string): SkpFile {
     if (typeof process !== 'undefined' && process.versions && process.versions.node) {
-      const fs = require('fs');
-      const path = require('path');
+      const fs = nodeFs();
+      const path = nodePath();
       if (!fs.existsSync(filePath)) {
         throw new Error(`File not found: ${filePath}`);
       }

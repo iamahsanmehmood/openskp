@@ -1,7 +1,7 @@
 import { SkpScene, getSurfacePrimitives } from './model';
+import { nodeFs, nodePath } from './node-builtins';
 
 declare const process: any;
-declare const require: any;
 
 function getMaterialRGBA(
   scene: SkpScene,
@@ -227,8 +227,8 @@ export function exportPLY(
   options?: { binary?: boolean }
 ): void {
   if (typeof process !== 'undefined' && process.versions && process.versions.node) {
-    const fs = require('fs');
-    const path = require('path');
+    const fs = nodeFs();
+    const path = nodePath();
     const binary = options?.binary ?? false;
 
     const dir = path.dirname(outputPath);
