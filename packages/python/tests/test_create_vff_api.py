@@ -58,7 +58,7 @@ def test_shared_method_signatures_match_create():
         "add_face", "add_component_definition", "add_group", "add_instance",
         "add_circle", "add_arc", "add_polyline", "add_text", "add_dimension",
         "add_construction_line", "add_construction_point", "add_section_plane",
-        "set_guid", "set_document_options",
+        "add_scene", "set_guid", "set_document_options",
     ):
         compare(getattr(classic, name), getattr(vff, name), name)
     classic_definition = classic.add_component_definition("D")
@@ -178,7 +178,7 @@ def test_set_guid_and_document_options():
         builder.set_document_options(length_unit=1)
 
 
-def test_same_annotation_code_writes_both_formats(tmp_path):
+def test_same_annotation_and_scene_code_writes_both_formats(tmp_path):
     def build(builder):
         tag = builder.add_layer("Tag")
         builder.add_text("label", (0, 0, 0), (1, 2, 3), layer=tag, hidden=True)
@@ -187,6 +187,7 @@ def test_same_annotation_code_writes_both_formats(tmp_path):
         builder.add_construction_line((0, 0, 0), direction=(0, 0, 1))
         builder.add_construction_point((1, 2, 3), layer=tag)
         builder.add_section_plane((0, 0, 5), (0, 0, 1))
+        builder.add_scene("Scene A", (40, -40, 30), (0, 0, 0), fov=45.0)
         return parse_bytes(tmp_path, builder.to_bytes())
 
     classic = build(create())
@@ -203,12 +204,16 @@ def test_same_annotation_code_writes_both_formats(tmp_path):
             ],
             "points": [(p.position, p.layer, p.hidden) for p in root.construction_points],
             "sections": [(s.plane, s.name, s.label, s.hidden) for s in root.section_planes],
+            "pages": [
+                (p.name, p.eye, p.target, p.parallel, p.fov, p.ortho_height, p.hidden_layers)
+                for p in model.pages
+            ],
         }
 
     assert annotations(classic) == annotations(vff)
 
 
-def test_annotation_errors_match_create(tmp_path):
+def test_annotation_and_scene_errors_match_create(tmp_path):
     cases = [
         ("bad text type", lambda b: b.add_text(42, (0, 0, 0))),
         ("bad leader type", lambda b: b.add_text("x", (0, 0, 0), leader_type=9)),
@@ -220,6 +225,13 @@ def test_annotation_errors_match_create(tmp_path):
         ("line zero direction", lambda b: b.add_construction_line((0, 0, 0), direction=(0, 0, 0))),
         ("point non-finite", lambda b: b.add_construction_point((float("nan"), 0, 0))),
         ("section zero normal", lambda b: b.add_section_plane((0, 0, 0), (0, 0, 0))),
+        ("scene empty name", lambda b: b.add_scene("", (1, 0, 0), (0, 0, 0))),
+        ("scene duplicate", lambda b: (b.add_scene("S", (1, 0, 0), (0, 0, 0)), b.add_scene("S", (1, 0, 0), (0, 0, 0)))),
+        ("scene eye target", lambda b: b.add_scene("S", (1, 0, 0), (1, 0, 0))),
+        ("scene bad up", lambda b: b.add_scene("S", (1, 0, 0), (0, 0, 0), up=(1, 0, 0))),
+        ("scene bad fov", lambda b: b.add_scene("S", (1, 0, 0), (0, 0, 0), fov=0)),
+        ("scene bad height", lambda b: b.add_scene("S", (1, 0, 0), (0, 0, 0), perspective=False, ortho_height=0)),
+        ("scene unknown layer", lambda b: b.add_scene("S", (1, 0, 0), (0, 0, 0), hidden_layers=(999,))),
     ]
     for label, call in cases:
         classic_error = None

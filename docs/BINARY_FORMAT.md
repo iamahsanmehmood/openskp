@@ -429,7 +429,22 @@ the normal normalized and `d = -(n · point)`, UTF-8 name `5E44` and
 UTF-8 short label/symbol `5F44`. The model's active section id is
 `9413` in the root container.
 
-### 7.9 Records the core writer emits
+### 7.9 Scenes and the model camera
+
+A scene is a `4871` page in the page items list `616D`, with 17 children
+in file order: page base `546F` (entity id plus UTF-8 name `556F`),
+property mask `4971` (u32), camera `4A71` (a `BC34` with eye `BD34`,
+target `BE34`, up `BF34`, perspective `C234`, ortho height `C334` and FOV
+`C434`), empty `4B71`, style `4C71`, rendering `4D71`, shadows `4E71`,
+`5B71` (fifteen `0F7B`-`167B` style/mask subrecords, 71 bytes), axes
+`4F71`, hidden layer ids `5071`, empty `5971`, empty `5171`, animation
+`5271` (one byte), display name `5371`, transition `5471` (one `f64`),
+delay `5571` (one `f64`) and thumbnail flag `5771` (one byte). `626D`
+selects the first page. The model start camera record is `FA01` and
+contains `BC34`; `set_camera` replaces its eye, target, up, perspective,
+height and FOV fields in place.
+
+### 7.10 Records the core writer emits
 
 Everything lives under the root definition container `8813` inside the
 root entity list `F601`, with child pools for vertices (`8913`), edges

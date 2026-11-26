@@ -52,6 +52,7 @@ from .create import (
     Point3,
     SkpBuilder,
     SkpWriteError,
+    _default_up,
     _finite_point3,
     _resolve_construction_line_params,
     _archive_uuid,
@@ -1600,8 +1601,103 @@ class VffBuilder:
             p, n, name=name, symbol=symbol, hidden=hidden, active=active
         )
 
+    def _validate_camera(
+        self,
+        eye: Point3,
+        target: Point3,
+        up: Optional[Point3],
+        perspective: bool,
+        fov: float,
+        ortho_height: float,
+    ) -> Tuple[Point3, Point3, Point3, bool, float, float]:
+        e = (float(eye[0]), float(eye[1]), float(eye[2]))
+        t = (float(target[0]), float(target[1]), float(target[2]))
+        numbers = e + t + (fov, ortho_height) + (
+            tuple(float(v) for v in up) if up is not None else ()
+        )
+        if not all(math.isfinite(float(v)) for v in numbers):
+            raise SkpWriteError("scene camera values must be finite numbers")
+        d = [t[i] - e[i] for i in range(3)]
+        if not all(math.isfinite(value) for value in d):
+            raise SkpWriteError("scene camera values must be finite numbers")
+        if not any(d):
+            raise SkpWriteError("scene camera eye and target coincide")
+        corrected = _default_up(e, t) if up is None else tuple(float(v) for v in up)
+        cross = (
+            d[1] * corrected[2] - d[2] * corrected[1],
+            d[2] * corrected[0] - d[0] * corrected[2],
+            d[0] * corrected[1] - d[1] * corrected[0],
+        )
+        if math.hypot(*cross) <= 1e-9 * math.hypot(*d) * max(
+            math.hypot(*corrected), 1e-300
+        ):
+            raise SkpWriteError(
+                "scene up vector is zero or parallel to the view direction"
+            )
+        if not 0 < float(fov) < 180:
+            raise SkpWriteError(
+                "scene field of view must be between 0 and 180 degrees"
+            )
+        if float(ortho_height) <= 0:
+            raise SkpWriteError("scene ortho_height must be positive")
+        return e, t, corrected, bool(perspective), float(fov), float(ortho_height)
 
+    def add_scene(
+        self,
+        name: str,
+        eye: Point3,
+        target: Point3,
+        up: Optional[Point3] = None,
+        *,
+        perspective: bool = True,
+        fov: float = 35.0,
+        ortho_height: float = 200.0,
+        hidden_layers: Sequence[int] = (),
+    ) -> None:
+        """Add a scene (camera plus hidden tags) without changing the model camera."""
+        if not name:
+            raise SkpWriteError("a scene needs a name")
+        try:
+            units = len(name.encode("utf-16-le")) // 2
+        except UnicodeEncodeError as exc:
+            raise SkpWriteError(f"scene name is not valid text: {exc}") from None
+        if units >= 0xFF:
+            raise SkpWriteError("scene name too long to encode (255 char limit)")
+        if any(s["name"] == name for s in self._template.scenes):
+            raise SkpWriteError(f"a scene named {name!r} already exists")
+        hidden = tuple(dict.fromkeys(hidden_layers))
+        known = set(self.layers_by_name.values())
+        unknown = [h for h in hidden if h not in known]
+        if unknown:
+            raise SkpWriteError(
+                f"hidden_layers has handles add_layer never returned: {unknown}"
+            )
+        e, t, u, perspective, fov, ortho_height = self._validate_camera(
+            eye, target, up, perspective, fov, ortho_height
+        )
+        self._template.add_scene(
+            name, e, t, u, perspective=perspective, fov=fov,
+            ortho_height=ortho_height, hidden_layers=hidden,
+        )
 
+    def set_camera(
+        self,
+        eye: Point3,
+        target: Point3,
+        up: Optional[Point3] = None,
+        *,
+        perspective: bool = True,
+        fov: float = 35.0,
+        ortho_height: float = 200.0,
+    ) -> None:
+        """Set the model's start camera (VFF-only)."""
+        e, t, u, perspective, fov, ortho_height = self._validate_camera(
+            eye, target, up, perspective, fov, ortho_height
+        )
+        self._template.set_camera(
+            e, t, u, perspective=perspective, fov=fov,
+            ortho_height=ortho_height,
+        )
 
     def set_guid(self, guid: str) -> None:
         """Set the file/model UUID (canonical 32 hex digits or 8-4-4-4-12)."""

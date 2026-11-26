@@ -27,3 +27,11 @@ def test_reads_annotations_and_named_section_planes_from_a_sketchup_2025_file():
     assert len(root.construction_points) == 1
 
 
+def test_reads_scene_cameras_and_hidden_tags_from_a_sketchup_2025_file():
+    model = SkpFile.open(str(WRITER_FIXTURES / "genuine_scenes_2025.skp")).parse()
+    pages = {page.name: page for page in model.pages}
+    assert set(pages) == {"Perspective", "Parallel", "Hide B"}
+    assert pages["Perspective"].fov == pytest.approx(45.0)
+    assert pages["Parallel"].parallel is True
+    assert pages["Parallel"].ortho_height == pytest.approx(80.0)
+    assert pages["Hide B"].hidden_layers == ["TagB"]

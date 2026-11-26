@@ -1546,6 +1546,42 @@ def test_annotations_round_trip_at_root_and_in_definition(tmp_path):
     )
 
 
+def test_scenes_and_camera_round_trip(tmp_path):
+    builder = create_vff()
+    visible = builder.add_layer("Visible")
+    hidden = builder.add_layer("Hidden Tag", (1, 2, 3))
+    builder.add_scene(
+        "Perspective", (40, -40, 30), (0, 0, 0),
+        perspective=True, fov=45.0,
+    )
+    builder.add_scene(
+        "Parallel", (0, -60, 0), (0, 0, 0),
+        up=(0, 0, 1), perspective=False, ortho_height=80.0,
+    )
+    builder.add_scene(
+        "Hide B", (10, -10, 10), (0, 0, 0), hidden_layers=(hidden,)
+    )
+    builder.set_camera((50, -50, 50), (0, 0, 0), perspective=True, fov=30.0)
+    data = builder.to_bytes()
+    model = parse_bytes(tmp_path, data)
+    pages = model.pages
+    assert [page.name for page in pages] == ["Perspective", "Parallel", "Hide B"]
+    assert pages[0].parallel is False and pages[0].fov == pytest.approx(45.0)
+    assert pages[1].parallel is True and pages[1].ortho_height == pytest.approx(80.0)
+    assert pages[2].hidden_layers == ["Hidden Tag"]
+
+    # The model's start camera is the separate set_camera record.
+    from openskp._vff_writer.template import T_CAMERA, T_CAMERA_MODEL, T_CAMERA_EYE
+    from openskp._vff_writer.tlv import parse_records
+    from openskp.vff import extract_skp_contents
+
+    model_data = extract_skp_contents(data)["model_data"]
+    document = parse_records(model_data, {0x01F4, T_CAMERA_MODEL, T_CAMERA})[0]
+    camera_section = next(c for c in document.children if c.tag == T_CAMERA_MODEL)
+    camera = next(c for c in camera_section.children if c.tag == T_CAMERA)
+    eye = next(c for c in camera.children if c.tag == T_CAMERA_EYE)
+    assert struct.unpack("<3d", eye.payload) == pytest.approx((50.0, -50.0, 50.0))
+    assert visible != hidden
 
 
 def test_failed_annotation_and_scene_calls_leave_nothing_behind(tmp_path):
@@ -1555,6 +1591,7 @@ def test_failed_annotation_and_scene_calls_leave_nothing_behind(tmp_path):
         lambda b: b.add_construction_line((0, 0, 0)),
         lambda b: b.add_construction_point((float("nan"), 0, 0)),
         lambda b: b.add_section_plane((0, 0, 0), (0, 0, 0)),
+        lambda b: b.add_scene("S", (1, 0, 0), (1, 0, 0)),
     ]
     triangle = [(20, 0, 0), (30, 0, 0), (20, 10, 0)]
     for bad in cases:
@@ -1570,6 +1607,7 @@ def test_failed_annotation_and_scene_calls_leave_nothing_behind(tmp_path):
         assert model.root.construction_lines == []
         assert model.root.construction_points == []
         assert model.root.section_planes == []
+        assert model.pages == []
 
 
 
@@ -1581,11 +1619,32 @@ def test_special_text_and_scene_layer_names_round_trip(tmp_path):
     special = 'Quoted "label" ü 木材\t\n'
     tag = builder.add_layer('Tag "quoted" / ü 木材')
     builder.add_text(special, (0, 0, 0), layer=tag)
+    builder.add_scene("Special scene", (10, -10, 10), (0, 0, 0), hidden_layers=(tag,))
     model = parse_bytes(tmp_path, builder.to_bytes())
     assert model.root.texts[0].text == special
     assert model.root.texts[0].layer == 'Tag "quoted" / ü 木材'
+    assert model.pages[0].hidden_layers == ['Tag "quoted" / ü 木材']
 
 
+def test_set_camera_twice_keeps_the_last_camera(tmp_path):
+    builder = create_vff()
+    builder.set_camera((10, -10, 10), (0, 0, 0))
+    builder.set_camera((20, -20, 20), (0, 0, 0), perspective=False, ortho_height=50.0)
+    data = builder.to_bytes()
+    from openskp._vff_writer.template import (
+        T_CAMERA, T_CAMERA_EYE, T_CAMERA_MODEL, T_CAMERA_TARGET
+    )
+    from openskp._vff_writer.tlv import parse_records
+    from openskp.vff import extract_skp_contents
+
+    model_data = extract_skp_contents(data)["model_data"]
+    document = parse_records(model_data, {0x01F4, T_CAMERA_MODEL, T_CAMERA})[0]
+    section = next(c for c in document.children if c.tag == T_CAMERA_MODEL)
+    camera = next(c for c in section.children if c.tag == T_CAMERA)
+    eye = next(c for c in camera.children if c.tag == T_CAMERA_EYE)
+    target = next(c for c in camera.children if c.tag == T_CAMERA_TARGET)
+    assert struct.unpack("<3d", eye.payload) == pytest.approx((20.0, -20.0, 20.0))
+    assert struct.unpack("<3d", target.payload) == pytest.approx((0.0, 0.0, 0.0))
 
 
 def test_annotations_round_trip_inside_a_group(tmp_path):
@@ -1646,6 +1705,32 @@ def test_second_section_plane_can_be_marked_active(tmp_path):
     assert read_varint(active.payload) == section_ids[1]
     model = parse_bytes(tmp_path, data)
     assert [s.name for s in model.root.section_planes] == ["First", "Second"]
+
+
+def _model_camera_bytes(data: bytes) -> bytes:
+    from openskp._vff_writer.template import T_CAMERA_MODEL
+    from openskp._vff_writer.tlv import parse_records
+    from openskp.vff import extract_skp_contents
+
+    model_data = extract_skp_contents(data)["model_data"]
+    document = parse_records(model_data, {0x01F4, T_CAMERA_MODEL})[0]
+    section = next(c for c in document.children if c.tag == T_CAMERA_MODEL)
+    return section.encode()
+
+
+def test_add_scene_does_not_change_the_model_camera(tmp_path):
+    plain = create_vff()
+    with_scene = create_vff()
+    with_scene.add_scene("S", (10, -10, 10), (0, 0, 0))
+    assert _model_camera_bytes(plain.to_bytes()) == _model_camera_bytes(
+        with_scene.to_bytes()
+    )
+
+    set_camera = create_vff()
+    set_camera.set_camera((20, -20, 20), (0, 0, 0), perspective=False, ortho_height=50)
+    camera_before = _model_camera_bytes(set_camera.to_bytes())
+    set_camera.add_scene("S", (10, -10, 10), (0, 0, 0))
+    assert camera_before == _model_camera_bytes(set_camera.to_bytes())
 
 
 def test_huge_finite_construction_lines_keep_a_unit_direction(tmp_path):
@@ -1712,19 +1797,52 @@ def _first_record_child_tags(data: bytes, tag: int):
 def test_written_annotation_records_match_sketchup_2025_child_layout():
     """The genuine fixtures are SketchUp 2025 Ruby-generated saves."""
     annotations_fixture = (WRITER_FIXTURES / "genuine_annotations_2025.skp").read_bytes()
+    scenes_fixture = (WRITER_FIXTURES / "genuine_scenes_2025.skp").read_bytes()
     builder = create_vff()
     builder.add_text("Text", (0, 0, 0))
     builder.add_dimension((0, 0, 0), (10, 0, 0))
     builder.add_construction_line((0, 0, 0), point2=(1, 1, 1))
     builder.add_construction_point((1, 2, 3))
     builder.add_section_plane((0, 0, 0), (0, 0, 1), name="S", symbol="S")
+    builder.add_scene("Scene", (10, -10, 10), (0, 0, 0))
     written = builder.to_bytes()
     for tag in (0x55F0, 0x5BCC, 0x4269, 0x426C, 0x445C):
         assert _first_record_child_tags(written, tag) == _first_record_child_tags(
             annotations_fixture, tag
         ), hex(tag)
+    assert _first_record_child_tags(written, 0x7148) == _first_record_child_tags(
+        scenes_fixture, 0x7148
+    )
 
 
+def test_huge_finite_camera_values_are_rejected_or_written_finite(tmp_path):
+    for add in (
+        lambda b: b.set_camera((1e200, 0, 0), (0, 0, 0)),
+        lambda b: b.add_scene("S", (1e200, 0, 0), (0, 0, 0)),
+    ):
+        builder = create_vff()
+        try:
+            add(builder)
+        except SkpWriteError as error:
+            assert "scene camera values must be finite numbers" in str(error)
+            assert builder._template.camera is None
+            assert builder._template.scenes == []
+            data = builder.to_bytes()
+            assert _model_camera_bytes(data) == _model_camera_bytes(
+                create_vff().to_bytes()
+            )
+        else:
+            data = builder.to_bytes()
+            if builder._template.camera is not None:
+                camera = builder._template.camera
+                direction = [
+                    camera["target"][i] - camera["eye"][i] for i in range(3)
+                ]
+                assert all(math.isfinite(value) for value in direction)
+                assert math.hypot(*direction) == pytest.approx(1e200)
+            for scene in builder._template.scenes:
+                direction = [scene["target"][i] - scene["eye"][i] for i in range(3)]
+                assert all(math.isfinite(value) for value in direction)
 
 
 def test_binary_format_section7_tags_are_in_file_byte_order():
