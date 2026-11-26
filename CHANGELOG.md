@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Python: `openskp info` and `openskp convert` on the command line (#570)
+
+- `openskp info FILE` prints the SketchUp version, units, counts of definitions, instances, faces, tags and materials, and the tag and material names; `openskp convert FILE OUTPUT` writes GLB, OBJ, STL, PLY, DXF, IFC or JSON, picked from the extension. `openskp FILE` still works and runs `info` (by @isyanpcr, #689).
+
+### Fixed — all six writers: three bugs found with SketchUp's own library (#693)
+
+- A face with both a texture placement (`front_uv`/`back_uv`) and attributes lost its attribute dictionaries in SketchUp. The dictionaries are now written before the texture coordinates, the order SketchUp itself uses.
+- Python, C++ and Rust: `add_circle` scales `front_uv`/`back_uv` by the texture size, as `add_face` does, so the same pins place a texture the same way on a circle and on a face.
+- A polyline, arc or circle drawn over edges that already exist no longer makes SketchUp drop the curve: the existing edges stay out of it, and each run of at least two new edges becomes its own curve. A polyline that runs back over itself writes one edge instead of overlapping copies.
+
 ### Fixed — Rust: STL exports of painted models can be printed (#601)
 
 - A face painted differently on its two sides was written twice, once per side, so the solid had no volume. STL holds one copy of each face now, as in the other five languages (by @vantruong-dang, #688).
