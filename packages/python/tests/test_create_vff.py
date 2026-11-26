@@ -27,6 +27,7 @@ import collections
 import io
 import math
 import random
+import re
 import struct
 import xml.etree.ElementTree as ET
 import zipfile
@@ -1478,3 +1479,98 @@ def test_back_uv_without_back_material_does_not_use_front_texture_size(tmp_path)
     assert vff_face.uv_transform_back == pytest.approx(
         classic_face.uv_transform_back, abs=1e-9
     )
+
+
+def test_texts_and_dimensions_round_trip_at_root_and_in_definition(tmp_path):
+    builder = create_vff()
+    tag = builder.add_layer("Annotations", (10, 20, 30))
+    builder.add_text(
+        "Corner label", (0, 0, 0), (1, 2, 3), layer=tag, hidden=True,
+        screen_position=(0.25, 0.75), display_leader=False,
+    )
+    builder.add_dimension(
+        (0, 0, 0), (10, 0, 0), offset_vector=(0, 5, 0), layer=tag, hidden=True
+    )
+    with builder.add_component_definition("Annotated") as definition:
+        definition.add_text("In component", (0, 0, 0), layer=tag)
+        definition.add_dimension((0, 0, 0), (5, 0, 0), layer=tag)
+    model = parse_bytes(tmp_path, builder.to_bytes())
+    root = model.root
+    assert [text.text for text in root.texts] == ["Corner label"]
+    text = root.texts[0]
+    assert text.layer == "Annotations" and text.hidden is True
+    assert text.screen_position == pytest.approx((0.25, 0.75))
+    assert text.display_leader is False
+    assert len(root.dimensions) == 1
+    assert root.dimensions[0].layer == "Annotations"
+
+    definition_model = next(
+        item for item in model.definitions.values() if item.name == "Annotated"
+    )
+    assert [text.text for text in definition_model.texts] == ["In component"]
+    assert definition_model.texts[0].point == pytest.approx((0.0, 0.0, 0.0))
+    assert definition_model.texts[0].label_point == pytest.approx((15.0, 15.0, 15.0))
+    assert len(definition_model.dimensions) == 1
+    dimension = definition_model.dimensions[0]
+    assert dimension.a == pytest.approx((0.0, 0.0, 0.0))
+    assert dimension.b == pytest.approx((5.0, 0.0, 0.0))
+    assert dimension.offset == pytest.approx(10.0)
+
+
+def _first_record_child_tags(data: bytes, tag: int):
+    from openskp._vff_writer.template import MODEL_CONTAINERS
+    from openskp._vff_writer.tlv import parse_records
+    from openskp.vff import extract_skp_contents
+
+    model_data = extract_skp_contents(data)["model_data"]
+    records = parse_records(
+        model_data,
+        set(MODEL_CONTAINERS)
+        | {0x55F0, 0x55F1, 0x55F4, 0x55F5, 0x5208, 0x5BCC, 0x59D8,
+           0x5BCD, 0x5BCE, 0x4269, 0x4268, 0x426C, 0x445C, 0x7148,
+           0x6F54, 0x34BC},
+    )
+    found = []
+
+    def walk(node):
+        if node.tag == tag and not found:
+            found.append([child.tag for child in node.children or []])
+        for child in node.children or []:
+            walk(child)
+
+    for record_ in records:
+        walk(record_)
+    return found[0]
+
+
+
+
+
+
+def test_binary_format_section7_tags_are_in_file_byte_order():
+    root = Path(__file__).resolve().parents[3]
+    source = (
+        (root / "packages/python/src/openskp/_vff_writer/template.py").read_text(
+            encoding="utf-8"
+        )
+        + (root / "packages/python/src/openskp/_vff_writer/uv.py").read_text(
+            encoding="utf-8"
+        )
+    )
+    allowed = {
+        int(match.group(1), 16).to_bytes(2, "little").hex().upper()
+        for match in re.finditer(
+            r"^T_[A-Z0-9_]+\s*=\s*0x([0-9A-Fa-f]+)", source, re.MULTILINE
+        )
+    }
+    allowed.update(
+        value.to_bytes(2, "little").hex().upper()
+        for value in range(0x7B0F, 0x7B17)
+    )
+    section7 = (
+        (root / "docs/BINARY_FORMAT.md")
+        .read_text(encoding="utf-8")
+        .split("## 7.", 1)[1]
+    )
+    for tag in set(re.findall(r"`([0-9A-F]{4})`", section7)):
+        assert tag in allowed, tag

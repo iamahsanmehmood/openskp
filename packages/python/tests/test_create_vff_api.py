@@ -56,14 +56,15 @@ def test_shared_method_signatures_match_create():
     for name in (
         "to_bytes", "save", "add_material", "add_texture_material", "add_layer",
         "add_face", "add_component_definition", "add_group", "add_instance",
-        "add_circle", "add_arc", "add_polyline", "set_guid", "set_document_options",
+        "add_circle", "add_arc", "add_polyline", "add_text", "add_dimension",
+        "set_guid", "set_document_options",
     ):
         compare(getattr(classic, name), getattr(vff, name), name)
     classic_definition = classic.add_component_definition("D")
     vff_definition = vff.add_component_definition("D")
     for name in (
         "add_face", "add_instance", "add_group_instance",
-        "add_circle", "add_arc", "add_polyline",
+        "add_circle", "add_arc", "add_polyline", "add_text", "add_dimension",
     ):
         compare(
             getattr(classic_definition, name),
@@ -173,3 +174,47 @@ def test_set_guid_and_document_options():
         builder.set_guid("not-a-guid")
     with pytest.raises(SkpWriteError):
         builder.set_document_options(length_unit=1)
+
+
+def test_same_text_and_dimension_code_writes_both_formats(tmp_path):
+    def build(builder):
+        tag = builder.add_layer("Tag")
+        builder.add_text("label", (0, 0, 0), (1, 2, 3), layer=tag, hidden=True)
+        builder.add_dimension((0, 0, 0), (10, 0, 0), offset_vector=(0, 5, 0), layer=tag)
+        return parse_bytes(tmp_path, builder.to_bytes())
+
+    classic = build(create())
+    vff = build(create_vff())
+
+    def annotations(model):
+        root = model.root
+        return {
+            "texts": [(t.text, t.layer, t.hidden, t.point, t.label_point) for t in root.texts],
+            "dimensions": [(d.a, d.b, round(d.offset, 6), d.layer) for d in root.dimensions],
+        }
+
+    assert annotations(classic) == annotations(vff)
+
+
+def test_text_and_dimension_errors_match_create(tmp_path):
+    cases = [
+        ("bad text type", lambda b: b.add_text(42, (0, 0, 0))),
+        ("bad leader type", lambda b: b.add_text("x", (0, 0, 0), leader_type=9)),
+        ("bad screen position", lambda b: b.add_text("x", (0, 0, 0), screen_position=(2, 0))),
+        ("dimension both offsets", lambda b: b.add_dimension((0, 0, 0), (1, 0, 0), 1.0, offset_vector=(0, 1, 0))),
+        ("dimension same points", lambda b: b.add_dimension((0, 0, 0), (0, 0, 0))),
+    ]
+    for label, call in cases:
+        classic_error = None
+        vff_error = None
+        try:
+            call(create())
+        except Exception as exc:
+            classic_error = exc
+        try:
+            call(create_vff())
+        except Exception as exc:
+            vff_error = exc
+        assert classic_error is not None and vff_error is not None, (label, classic_error, vff_error)
+        assert type(vff_error) is type(classic_error), (label, vff_error, classic_error)
+        assert str(vff_error) == str(classic_error), (label, str(vff_error), str(classic_error))

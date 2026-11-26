@@ -89,7 +89,7 @@ yet in that language; see [§3](#3-whats-still-outstanding-after-170).
 | Writer: linear dimensions (`offset_vector`, `layer`, `hidden`) + leader/screen text | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Writer: section planes | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Writer: construction lines/points (root + component definitions, `layer` + `hidden`) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Writer for 2021+ files (`create_vff()`: faces, solid/textured materials, UVs, tags, components, groups, curves, attribute dictionaries) | 🔶 on `main`, not released yet | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Writer for 2021+ files (`create_vff()`: faces, materials, UVs, tags, components, groups, curves, attributes, texts/dimensions) | 🔶 on `main`, not released yet | ❌ | ❌ | ❌ | ❌ | ❌ |
 | Writer: scenes (`add_scene`: camera + hidden layers) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | Editor (`open_existing()`) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | SKP-to-code generator (`to_*_code()`), round-tripping `applied_width`/opacity/`filename` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |

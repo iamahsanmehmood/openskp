@@ -90,6 +90,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `parseSkp`, `buildScene`, `buildInstancedScene`, `openExisting`, `extractThumbnail`, `SkpFile.fromBuffer` and `fromFragments` take any `Uint8Array` (also a Node.js `Buffer`) besides an `ArrayBuffer`, without a copy.
 
+### Added — Python: VFF texts and dimensions
+
+- `create_vff()` now writes leader/screen texts and free linear dimensions at the model root and inside component/group definitions. Shared methods follow `create.py`'s signatures and error messages.
+
 ### Added — Python: native VFF (SketchUp 2021+) writer core
 
 - New `openskp.create_vff` module: builds modern VFF files by extending a SketchUp-written template's `model.dat` record tree, recomputing the archive CRCs and header integrity word and giving the document a fresh GUID/save time. The bundled template is an empty SketchUp 2025 document.

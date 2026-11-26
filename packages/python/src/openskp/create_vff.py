@@ -47,8 +47,10 @@ from ._vff_writer.archive import (
 )
 from ._vff_writer.template import EntityEditor, Template
 from .create import (
+    _DEFAULT_OFFSET,
     DocumentOptions,
     Point3,
+    SkpBuilder,
     SkpWriteError,
     _archive_uuid,
     _circle_basis,
@@ -491,6 +493,63 @@ class ComponentDefinitionBuilder:
             soft_edges,
             smooth_edges,
         )
+
+    def add_text(
+        self,
+        text: str,
+        point: Point3,
+        leader: Point3 = (15.0, 15.0, 15.0),
+        *,
+        layer: Optional[int] = None,
+        hidden: bool = False,
+        leader_type: int = 2,
+        arrow_type: int = 3,
+        screen_position: Optional[Tuple[float, float]] = None,
+        display_leader: bool = True,
+    ) -> None:
+        """Add a text entity inside this definition."""
+        if self._closed:
+            raise SkpWriteError("this definition is already closed")
+        self._builder._validate_layer(layer)
+        # _prepare_text is a pure helper; it never touches the builder.
+        prepared = SkpBuilder._prepare_text(
+            None, text, point, leader=leader, leader_type=leader_type,
+            arrow_type=arrow_type, screen_position=screen_position,
+            display_leader=display_leader,
+        )
+        _, p, lb, screen, eff_leader, arrow, display = prepared
+        self._editor.add_text(
+            text, p, lb, leader_type=eff_leader, arrow_type=arrow,
+            screen_position=screen if screen_position is not None else None,
+            display_leader=display,
+            layer=layer, hidden=hidden,
+        )
+
+    def add_dimension(
+        self,
+        p1: Point3,
+        p2: Point3,
+        offset: Union[float, Point3] = _DEFAULT_OFFSET,
+        *,
+        offset_vector: Optional[Point3] = None,
+        layer: Optional[int] = None,
+        hidden: bool = False,
+    ) -> None:
+        """Add a free linear dimension inside this definition."""
+        if self._closed:
+            raise SkpWriteError("this definition is already closed")
+        self._builder._validate_layer(layer)
+        # _prepare_dimension is a pure helper; it never touches the builder.
+        prepared = SkpBuilder._prepare_dimension(
+            None, p1, p2, offset=offset, offset_vector=offset_vector
+        )
+        a, b, normal, xaxis, scalar, _has_vector = prepared
+        self._editor.add_dimension(
+            a, b, normal, xaxis, scalar, layer=layer, hidden=hidden
+        )
+
+
+
 
     def add_polyline(
         self,
@@ -1374,6 +1433,62 @@ class VffBuilder:
         )
 
     # -- document settings ------------------------------------------------
+
+    def add_text(
+        self,
+        text: str,
+        point: Point3,
+        leader: Point3 = (15.0, 15.0, 15.0),
+        *,
+        layer: Optional[int] = None,
+        hidden: bool = False,
+        leader_type: int = 2,
+        arrow_type: int = 3,
+        screen_position: Optional[Tuple[float, float]] = None,
+        display_leader: bool = True,
+    ) -> None:
+        """Add a leader or screen text to the model root."""
+        self._validate_layer(layer)
+        # _prepare_text is a pure helper; it never touches the builder.
+        prepared = SkpBuilder._prepare_text(
+            None, text, point, leader=leader, leader_type=leader_type,
+            arrow_type=arrow_type, screen_position=screen_position,
+            display_leader=display_leader,
+        )
+        _, p, lb, screen, eff_leader, arrow, display = prepared
+        self._root.add_text(
+            text, p, lb, leader_type=eff_leader, arrow_type=arrow,
+            screen_position=screen if screen_position is not None else None,
+            display_leader=display,
+            layer=layer, hidden=hidden,
+        )
+
+    def add_dimension(
+        self,
+        p1: Point3,
+        p2: Point3,
+        offset: Union[float, Point3] = _DEFAULT_OFFSET,
+        *,
+        offset_vector: Optional[Point3] = None,
+        layer: Optional[int] = None,
+        hidden: bool = False,
+    ) -> None:
+        """Add a free linear dimension to the model root."""
+        self._validate_layer(layer)
+        # _prepare_dimension is a pure helper; it never touches the builder.
+        prepared = SkpBuilder._prepare_dimension(
+            None, p1, p2, offset=offset, offset_vector=offset_vector
+        )
+        a, b, normal, xaxis, scalar, _has_vector = prepared
+        self._root.add_dimension(
+            a, b, normal, xaxis, scalar, layer=layer, hidden=hidden
+        )
+
+
+
+
+
+
 
     def set_guid(self, guid: str) -> None:
         """Set the file/model UUID (canonical 32 hex digits or 8-4-4-4-12)."""

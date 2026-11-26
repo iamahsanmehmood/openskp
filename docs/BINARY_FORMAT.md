@@ -394,7 +394,27 @@ x/y/z scaled by the radius, radius, start angle, end angle. Circles use a
 closed curve with start 0 and end 2π; open arcs use segment count + 1 points
 and the requested angles.
 
-### 7.7 Records the core writer emits
+### 7.7 Annotations: texts and dimensions
+
+A text is a `F055` record in the texts pool `9813`. In file order it holds
+the entity base/drawing (`DC05`/`D007`), UTF-8 string `F155`, empty `FF55`,
+two `f64`s `F255`/`F355` for the optional screen position, the anchor
+connection `F455` (a `0852` with type `0952`, point `0A52` and two null
+refs), the absolute label point as three `f64`s `F555` (not a leader vector;
+verified against the genuine SketchUp save), one byte `F655`, up vector
+`F755`, zero `F855`, font reference `F955`, arrow type `FA55` (u32),
+`FB55` (u32 one), display-leader byte `FC55`, leader type `FD55` (u32) and
+screen flag `FE55` (u32).
+
+A linear dimension is a `CC5B` record in the dimensions pool `9913`:
+entity drawing head `D859` (with empty `D959`, font `DA59`, flag `DB59`,
+arrow `DC59`), start connection `CD5B`, end connection `CE5B`, plane normal
+`CF5B` (3 × `f64`), x-axis `D05B` (3 × `f64`), one `D15B` (u32), zero
+`D35B` (`f64`), signed offset `D25B` (`f64`) and arrow type `D45B`
+(u32). The connection `0852` carries type `0952`, point `0A52`, reference
+wrappers `0B52`/`0C52` and the parsed vertex/path refs `FC53`/`FD53`/`FE53`.
+
+### 7.8 Records the core writer emits
 
 Everything lives under the root definition container `8813` inside the
 root entity list `F601`, with child pools for vertices (`8913`), edges
