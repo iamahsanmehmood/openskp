@@ -358,23 +358,25 @@ namespace OpenSkp.Tests
             })
             {
                 var (withTexJson, _) = ParseGlb(withTexGlb);
+                Assert.Equal(2, withTexJson.GetProperty("images").GetArrayLength());
+                Assert.Equal(2, withTexJson.GetProperty("textures").GetArrayLength());
                 var mats = withTexJson.GetProperty("materials").EnumerateArray().ToList();
                 Assert.Equal(2, mats.Count);
                 var plainGlb = Assert.Single(mats, m => !m.TryGetProperty("extras", out _));
                 var colGlb = Assert.Single(mats, m => m.TryGetProperty("extras", out _));
-                Assert.Equal(0, plainGlb.GetProperty("pbrMetallicRoughness").GetProperty("baseColorTexture").GetProperty("index").GetInt32());
+                int plainTexIdx = plainGlb.GetProperty("pbrMetallicRoughness").GetProperty("baseColorTexture").GetProperty("index").GetInt32();
+                int colTexIdx = colGlb.GetProperty("pbrMetallicRoughness").GetProperty("baseColorTexture").GetProperty("index").GetInt32();
+                Assert.InRange(plainTexIdx, 0, 1);
+                Assert.InRange(colTexIdx, 0, 1);
+                Assert.NotEqual(plainTexIdx, colTexIdx);
                 var plainBcf = plainGlb.GetProperty("pbrMetallicRoughness").GetProperty("baseColorFactor").EnumerateArray().Select(e => e.GetDouble()).ToArray();
                 Assert.Equal(new[] { 1.0, 1.0, 1.0, 1.0 }, plainBcf);
 
                 var colExtras = colGlb.GetProperty("extras").GetProperty("sketchup");
                 Assert.True(colExtras.GetProperty("colorized").GetBoolean());
                 Assert.Equal(1, colExtras.GetProperty("colorize_type").GetInt32());
-                Assert.Equal(0, colGlb.GetProperty("pbrMetallicRoughness").GetProperty("baseColorTexture").GetProperty("index").GetInt32());
                 var colBcf = colGlb.GetProperty("pbrMetallicRoughness").GetProperty("baseColorFactor").EnumerateArray().Select(e => e.GetDouble()).ToArray();
-                Assert.Equal(200.0 / 255.0, colBcf[0], 9);
-                Assert.Equal(80.0 / 255.0, colBcf[1], 9);
-                Assert.Equal(60.0 / 255.0, colBcf[2], 9);
-                Assert.Equal(1.0, colBcf[3], 9);
+                Assert.Equal(new[] { 1.0, 1.0, 1.0, 1.0 }, colBcf);
             }
 
             var expectedLinearTint = new[]

@@ -147,6 +147,44 @@ painted differently on each side; STL does not carry colour. GLB and the
 colour-capable OBJ, PLY, DXF, IFC and Fragments exports retain separately
 painted sides.
 
+### 2. Colorized Textures in GLB
+
+When `Textures = true` is passed to `GlbExport.ToGlb` / `ExportGlb` or
+`InstancedGlbExport.ToInstancedGlb` / `ExportInstancedGlb`, colorized PNG
+textures are baked natively with zero external dependencies (matching
+SketchUp's own shift and tint modes within 1/255). To also bake colorized JPEG
+textures, pass an optional `ISkpImageCodec` — for example using
+[`StbImageSharp`](https://www.nuget.org/packages/StbImageSharp) and
+[`StbImageWriteSharp`](https://www.nuget.org/packages/StbImageWriteSharp)
+(neither is a dependency of `OpenSkp`):
+
+```csharp
+using System.IO;
+using OpenSkp;
+
+sealed class StbJpegCodec : ISkpImageCodec
+{
+    public (int Width, int Height, byte[] Rgba)? Decode(byte[] data, string mimeType)
+    {
+        var img = StbImageSharp.ImageResult.FromMemory(
+            data, StbImageSharp.ColorComponents.RedGreenBlueAlpha);
+        return (img.Width, img.Height, img.Data);
+    }
+
+    public byte[] Encode(byte[] rgba, int width, int height, string mimeType, int quality = 95)
+    {
+        using var ms = new MemoryStream();
+        new StbImageWriteSharp.ImageWriter().WriteJpg(
+            rgba, width, height, StbImageWriteSharp.ColorComponents.RedGreenBlueAlpha, ms, quality);
+        return ms.ToArray();
+    }
+}
+
+byte[] glb = GlbExport.ToGlb(
+    scene,
+    new GlbOptions { Textures = true, ImageCodec = new StbJpegCodec() });
+```
+
 ---
 
 ## ✏️ Writing
