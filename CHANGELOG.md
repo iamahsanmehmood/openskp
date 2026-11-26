@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — .NET: colorized textures are baked into GLB files (#285)
+
+- `GlbExport.ToGlb` / `ExportGlb` and `InstancedGlbExport.ToInstancedGlb` / `ExportInstancedGlb` with `Textures = true` bake colorized PNG textures out of the box (using the BCL's `DeflateStream` on `netstandard2.0`, shift or tint within 1/255 of SketchUp's own result) with a white material factor, once per colour, with no new dependency.
+- Colorized JPEG textures are baked at quality 95 when a synchronous `ISkpImageCodec` (`Decode` / `Encode`, for example `StbImageSharp` + `StbImageWriteSharp`) is passed on `GlbOptions.ImageCodec` or `InstancedGlbOptions.ImageCodec`; without `ImageCodec`, JPEG textures are still embedded and colorized ones keep the tinted factor, with one warning.
+- JPEG textures lose their EXIF `APP1` block (orientation included) without being re-encoded, and textures above 178,956,970 pixels (read from the header before decoding) or ones that fail to decode keep their source bytes and the tinted factor, with one warning.
+
 ### Fixed — TypeScript, .NET and Dart: texture applied size on positioned faces and circles (#696)
 
 - `addFace`/`AddFace` and `addCircle`/`AddCircle` (at the model root and inside component definitions) now solve `frontUv`/`backUv` in SketchUp's normal-derived basis (`|Z x n| < 1e-3` horizontal tolerance, `(-1, 0, 0)` downward X axis) and scale pin coordinates by the material's `(appliedWidth, appliedHeight)`, matching Python, C++ and Rust.

@@ -20,6 +20,13 @@ namespace OpenSkp
         /// a non-PNG/JPEG texture kept via <see cref="SkpParseOptions.OriginalTextures"/>
         /// is omitted from the GLB).</summary>
         public Action<SkpLogLevel, string>? OnLog { get; set; }
+
+        /// <summary>Optional synchronous image codec used to decode and re-encode
+        /// colorized JPEG textures at quality 95 when <see cref="Textures"/> is <c>true</c>.
+        /// Colorized PNG textures are always baked natively without a codec; without
+        /// <see cref="ImageCodec"/>, colorized JPEG textures keep their source bytes
+        /// (with EXIF <c>APP1</c> stripped) and tinted material factor with one warning.</summary>
+        public ISkpImageCodec? ImageCodec { get; set; }
     }
 
     /// <summary>Binary glTF (.glb) export for an <see cref="InstancedScene"/>,
@@ -49,11 +56,12 @@ namespace OpenSkp
             if (scene == null) throw new ArgumentNullException(nameof(scene));
             var resources = scene.MeshResources ?? new List<InstancedMeshResource>();
             var rawMaterials = scene.GltfMaterials ?? new List<object>();
-            var (sceneTextures, materials) = FaceGroups.FilterGltfTextures(
+            var (sceneTextures, materials) = GlbTextures.ResolveGltfTextures(
                 scene.Textures ?? new List<SceneTexture>(),
                 rawMaterials,
                 options?.Textures == true,
-                options?.OnLog);
+                options?.OnLog,
+                options?.ImageCodec);
 
             long totalBinaryLength = 0;
             foreach (var res in resources)
