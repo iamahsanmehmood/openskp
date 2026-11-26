@@ -264,3 +264,105 @@ def test_glb_exports_show_both_sides(module, tmp_path):
     assert _glb_materials(tmp_path / "style.glb") == sorted([(FRONT, False), (BACK, False)])
     export(skp, str(tmp_path / "tag.glb"), unpainted_faces="tag")
     assert _glb_materials(tmp_path / "tag.glb") == [((layer.color_r, layer.color_g, layer.color_b), True)]
+
+
+_PNG_2X2 = bytes.fromhex(
+    "89504e470d0a1a0a0000000d4948445200000002000000020802000000fdd49a73"
+    "0000001649444154789c63b863a3a1517187c1664bc087131a00271e05dd1c14e923"
+    "0000000049454e44ae426082"
+)
+
+
+def test_different_materials_with_same_colour_do_not_merge(tmp_path):
+    from openskp.export import glb as glb_mod, instanced_glb as iglb_mod
+    from openskp.export.stl import to_stl_binary
+
+    png_path = tmp_path / "tex.png"
+    png_path.write_bytes(_PNG_2X2)
+
+    builder = create()
+    tex_front = builder.add_texture_material("TexFront", str(png_path), applied_width=10.0, applied_height=10.0)
+    plain_back = builder.add_material("PlainBack", (255, 255, 255, 255))
+    plain_blue = builder.add_material("PlainBlue", (40, 90, 200, 255))
+    tag_white = builder.add_layer("TagWhite", color=(255, 255, 255))
+    tag_green = builder.add_layer("TagGreen", color=(50, 170, 80))
+
+    def quad(z: float):
+        return [(0.0, 0.0, z), (10.0, 0.0, z), (10.0, 10.0, z), (0.0, 10.0, z)]
+
+    with builder.add_component_definition("PaintedComp") as comp:
+        comp.add_face(quad(40.0))
+
+    builder.add_face(quad(0.0), material=tex_front, back_material=plain_back)
+    builder.add_face(quad(10.0), material=tex_front, layer=tag_white)
+    builder.add_face(quad(20.0), material=tex_front, back_material=tex_front)
+    builder.add_face(quad(30.0), material=plain_blue, back_material=plain_blue)
+    builder.add_instance(comp, material=tex_front)
+    builder.add_face(quad(50.0), layer=tag_green)
+
+    skp = _save(builder, tmp_path, "same_color_different_materials.skp")
+    model = skp.parse()
+    white = (255, 255, 255)
+    blue = (40, 90, 200)
+    green = (50, 170, 80)
+
+    def tris_by_z(built, prims):
+        by_z = {}
+        corners_by_z = {}
+        for p in prims:
+            mat = built.gltf_materials[p.material_index]
+            has_tex = "baseColorTexture" in mat["pbrMetallicRoughness"]
+            rgb = _rgb(built, p)
+            ds = _double_sided(built, p)
+            back_set = set(p.back_triangles)
+            tri_corners = _corners(p)
+            for t, tri in enumerate(tri_corners):
+                z = round(p.positions[p.indices[3 * t] * 3 + 1] / 0.0254)
+                is_back = t in back_set
+                by_z.setdefault(z, []).append((rgb, ds, has_tex, is_back, p.unpainted_back))
+                corners_by_z.setdefault((z, is_back), []).append(tri)
+        for z in by_z:
+            by_z[z].sort()
+        return by_z, corners_by_z
+
+    for built, prims in _built(skp):
+        by_z, corners_by_z = tris_by_z(built, prims)
+        assert by_z[0] == sorted(
+            [(white, False, True, False, False)] * 2 + [(white, False, False, True, False)] * 2
+        )
+        for a, b in zip(corners_by_z[(0, False)], corners_by_z[(0, True)]):
+            assert set(a) == set(b) and not _same_winding(a, b)
+        assert by_z[10] == sorted(
+            [(white, False, True, False, False)] * 2 + [(model.face_back_color, False, False, True, False)] * 2
+        )
+        assert by_z[20] == [(white, True, True, False, False)] * 2
+        assert by_z[30] == [(blue, True, False, False, False)] * 2
+        assert by_z[40] == [(white, True, True, False, False)] * 2
+        assert by_z[50] == sorted(
+            [(model.face_front_color, False, False, False, False)] * 2
+            + [(model.face_back_color, False, False, True, True)] * 2
+        )
+
+    for built, prims in _built(skp, unpainted_faces="tag"):
+        by_z, _ = tris_by_z(built, prims)
+        assert by_z[0] == sorted(
+            [(white, False, True, False, False)] * 2 + [(white, False, False, True, False)] * 2
+        )
+        assert by_z[10] == sorted(
+            [(white, False, True, False, False)] * 2 + [(white, False, False, True, False)] * 2
+        )
+        assert by_z[20] == [(white, True, True, False, False)] * 2
+        assert by_z[30] == [(blue, True, False, False, False)] * 2
+        assert by_z[40] == [(white, True, True, False, False)] * 2
+        assert by_z[50] == [(green, True, False, False, False)] * 2
+
+    assert struct.unpack_from("<I", to_stl_binary(skp.build_scene()), 80) == (12,)
+
+    for mod, name in ((glb_mod, "baked.glb"), (iglb_mod, "inst.glb")):
+        out = tmp_path / name
+        mod.export(skp, str(out), textures=True, unpainted_faces="tag")
+        raw = out.read_bytes()
+        (jlen,) = struct.unpack_from("<I", raw, 12)
+        mats = json.loads(raw[20:20 + jlen])["materials"]
+        mat_flags = {(bool(m.get("doubleSided")), "baseColorTexture" in m["pbrMetallicRoughness"]) for m in mats}
+        assert {(False, True), (False, False), (True, True), (True, False)}.issubset(mat_flags)

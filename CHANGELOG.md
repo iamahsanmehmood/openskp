@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — all six languages: face sides with different materials of the same colour stay separate (#697)
+
+- `build_scene` and `build_instanced_scene` (and GLB / instanced GLB exports) merge a face's front and back into one `doubleSided` primitive only when both sides resolve to the same material, or both are unpainted with the same colour. Previously, matching RGB colours (and colorize modes) merged the two sides even when their materials differed, putting a front texture or material onto a plain or unpainted back of the same colour (and dropping a distinct back texture of the same colour).
+
 ### Changed — .NET: colorized textures are baked into GLB files (#285)
 
 - `GlbExport.ToGlb` / `ExportGlb` and `InstancedGlbExport.ToInstancedGlb` / `ExportInstancedGlb` with `Textures = true` bake colorized PNG textures out of the box (using the BCL's `DeflateStream` on `netstandard2.0`, shift or tint within 1/255 of SketchUp's own result) with a white material factor, once per colour, with no new dependency.

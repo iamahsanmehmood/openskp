@@ -426,10 +426,11 @@ fn loop_vertices(lp: &[CoEdge], b: &GeometryBuilder) -> Vec<EntityId> {
 
 /// Groups a definition's faces by resolved material identity, in local space.
 ///
-/// A face whose front and back resolve to the SAME color is emitted once with
-/// `double_sided` set; a face whose sides differ is emitted as two
-/// single-sided triangle sets (one normal-wound front, one reverse-wound back)
-/// so each side keeps its own color.
+/// A face whose front and back resolve to the same material, or are both
+/// unpainted with the same color, is emitted once with `double_sided` set;
+/// a face whose sides differ is emitted as two single-sided triangle sets
+/// (one normal-wound front, one reverse-wound back) so each side keeps its
+/// own material and color.
 ///
 /// Fails (`OutOfRange`, the C++ `map::at`) when a triangle references a
 /// vertex the builder does not have.
@@ -515,23 +516,17 @@ pub fn build_local_face_groups(
             Ok(())
         };
         let front_raw_col = front_mat.is_some_and(|m| m.colorized);
-        let back_raw_col = back_mat.is_some_and(|m| m.colorized);
         let front_raw_ctype = if front_raw_col {
             front_mat.map_or(0, |m| m.colorize_type)
         } else {
             0
         };
-        let back_raw_ctype = if back_raw_col {
-            back_mat.map_or(0, |m| m.colorize_type)
-        } else {
-            0
+        let same_side = match (front_mat, back_mat) {
+            (None, None) => front == back,
+            (Some(fm), Some(bm)) => std::ptr::eq(fm, bm),
+            _ => false,
         };
-        let same_colorization = if front_mat.is_some() && back_mat.is_some() {
-            front_raw_col == back_raw_col && front_raw_ctype == back_raw_ctype
-        } else {
-            true
-        };
-        if front == back && same_colorization {
+        if same_side {
             let (tw, th) = tile_size(front_mat);
             let tex = (ctx.texture_index_for)(front_mat);
             let col = tex.is_some() && front_raw_col;
@@ -557,6 +552,12 @@ pub fn build_local_face_groups(
                 colorize_type: if fcol { front_raw_ctype } else { 0 },
             };
             add_side(key, false, &f.uv_transform, ftw, fth)?;
+            let back_raw_col = back_mat.is_some_and(|m| m.colorized);
+            let back_raw_ctype = if back_raw_col {
+                back_mat.map_or(0, |m| m.colorize_type)
+            } else {
+                0
+            };
             let (btw, bth) = tile_size(back_mat);
             let btex = (ctx.texture_index_for)(back_mat);
             let bcol = btex.is_some() && back_raw_col;

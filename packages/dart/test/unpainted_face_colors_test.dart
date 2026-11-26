@@ -426,5 +426,246 @@ void main() {
         [(layerRgb, true)],
       );
     });
+
+    test('different materials with the same colour stay separate while identical sides merge (#697)', () {
+      const pngHex =
+          '89504e470d0a1a0a0000000d4948445200000002000000020802000000fdd49a73'
+          '0000001649444154789c63b863a3a1517187c1664bc087131a00271e05dd1c14e923'
+          '0000000049454e44ae426082';
+      final pngBytes = Uint8List.fromList([
+        for (var i = 0; i < pngHex.length; i += 2) int.parse(pngHex.substring(i, i + 2), radix: 16),
+      ]);
+
+      List<Point3> quad(double z) => [
+            (0.0, 0.0, z),
+            (10.0, 0.0, z),
+            (10.0, 10.0, z),
+            (0.0, 10.0, z),
+          ];
+
+      final tmpDir = Directory.systemTemp.createTempSync('openskp_697_mat_');
+      try {
+        final pngPath = '${tmpDir.path}/tex.png';
+        File(pngPath).writeAsBytesSync(pngBytes);
+
+        final builder = create();
+        final texFront =
+            builder.addTextureMaterial('TexFront', pngPath, appliedWidth: 10.0, appliedHeight: 10.0);
+        final plainBack = builder.addMaterial('PlainBack', [255, 255, 255, 255]);
+        final plainBlue = builder.addMaterial('PlainBlue', [40, 90, 200, 255]);
+        final tagWhite = builder.addLayer('TagWhite', color: [255, 255, 255]);
+        final tagGreen = builder.addLayer('TagGreen', color: [50, 170, 80]);
+        final comp = builder.addComponentDefinition('PaintedComp', (def) {
+          def.addFace(quad(40.0));
+        });
+
+        builder.addFace(quad(0.0), material: texFront, backMaterial: plainBack);
+        builder.addFace(quad(10.0), material: texFront, layer: tagWhite);
+        builder.addFace(quad(20.0), material: texFront, backMaterial: texFront);
+        builder.addFace(quad(30.0), material: plainBlue, backMaterial: plainBlue);
+        builder.addInstance(comp, material: texFront);
+        builder.addFace(quad(50.0), layer: tagGreen);
+
+        final skpPath = '${tmpDir.path}/same_color_different_materials.skp';
+        builder.save(skpPath);
+        final skp = SkpFile.open(skpPath);
+        final model = skp.parse();
+        const white = (255, 255, 255);
+        const blue = (40, 90, 200);
+        const green = (50, 170, 80);
+
+        (
+          Map<int, List<((int, int, int), bool, bool, bool, bool)>>,
+          Map<(int, bool), List<((double, double, double), (double, double, double), (double, double, double))>>
+        ) collectByZ(
+          List<Map<String, dynamic>> gltfMats,
+          Iterable<({List<double> positions, List<int> indices, List<int> backTriangles, int materialIndex, bool unpaintedBack})> prims,
+        ) {
+          final byZ = <int, List<((int, int, int), bool, bool, bool, bool)>>{};
+          final cornersByZ =
+              <(int, bool), List<((double, double, double), (double, double, double), (double, double, double))>>{};
+          for (final p in prims) {
+            final pbr = gltfMats[p.materialIndex]['pbrMetallicRoughness'] as Map<String, dynamic>;
+            final hasTex = pbr.containsKey('baseColorTexture');
+            final rgb = _rgbOf(gltfMats, p.materialIndex);
+            final ds = _doubleSidedOf(gltfMats, p.materialIndex);
+            final backSet = p.backTriangles.toSet();
+            final tris = _corners(p.positions, p.indices);
+            for (var t = 0; t < tris.length; t++) {
+              final z = (p.positions[p.indices[3 * t] * 3 + 1] / 0.0254).round();
+              final isBack = backSet.contains(t);
+              byZ.putIfAbsent(z, () => []).add((rgb, ds, hasTex, isBack, p.unpaintedBack));
+              cornersByZ.putIfAbsent((z, isBack), () => []).add(tris[t]);
+            }
+          }
+          for (final list in byZ.values) {
+            list.sort((a, b) => a.toString().compareTo(b.toString()));
+          }
+          return (byZ, cornersByZ);
+        }
+
+        List<((int, int, int), bool, bool, bool, bool)> sortedSides(
+          List<((int, int, int), bool, bool, bool, bool)> items,
+        ) =>
+            [...items]..sort((a, b) => a.toString().compareTo(b.toString()));
+
+        for (final (mats, prims) in [
+          () {
+            final s = skp.buildScene();
+            return (
+              s.gltfMaterials,
+              [
+                for (final p in s.glbPrimitives)
+                  (
+                    positions: p.positions,
+                    indices: p.indices,
+                    backTriangles: p.backTriangles,
+                    materialIndex: p.materialIndex,
+                    unpaintedBack: p.unpaintedBack,
+                  ),
+              ],
+            );
+          }(),
+          () {
+            final s = skp.buildInstancedScene();
+            return (
+              s.gltfMaterials,
+              [
+                for (final r in s.meshResources)
+                  for (final p in r.primitives)
+                    (
+                      positions: p.positions,
+                      indices: p.indices,
+                      backTriangles: p.backTriangles,
+                      materialIndex: p.materialIndex,
+                      unpaintedBack: p.unpaintedBack,
+                    ),
+              ],
+            );
+          }(),
+        ]) {
+          final (byZ, cornersByZ) = collectByZ(mats, prims);
+          expect(
+            byZ[0],
+            sortedSides([
+              (white, false, true, false, false),
+              (white, false, true, false, false),
+              (white, false, false, true, false),
+              (white, false, false, true, false),
+            ]),
+          );
+          final fronts = cornersByZ[(0, false)]!;
+          final backs = cornersByZ[(0, true)]!;
+          for (var i = 0; i < fronts.length; i++) {
+            expect({fronts[i].$1, fronts[i].$2, fronts[i].$3}, {backs[i].$1, backs[i].$2, backs[i].$3});
+            expect(_sameWinding(fronts[i], backs[i]), isFalse);
+          }
+          expect(
+            byZ[10],
+            sortedSides([
+              (white, false, true, false, false),
+              (white, false, true, false, false),
+              (model.faceBackColor!, false, false, true, false),
+              (model.faceBackColor!, false, false, true, false),
+            ]),
+          );
+          expect(byZ[20], [(white, true, true, false, false), (white, true, true, false, false)]);
+          expect(byZ[30], [(blue, true, false, false, false), (blue, true, false, false, false)]);
+          expect(byZ[40], [(white, true, true, false, false), (white, true, true, false, false)]);
+          expect(
+            byZ[50],
+            sortedSides([
+              (model.faceFrontColor!, false, false, false, false),
+              (model.faceFrontColor!, false, false, false, false),
+              (model.faceBackColor!, false, false, true, true),
+              (model.faceBackColor!, false, false, true, true),
+            ]),
+          );
+        }
+
+        const tagOpts = ParseOptions(unpaintedFaces: 'tag');
+        for (final (mats, prims) in [
+          () {
+            final s = skp.buildScene(tagOpts);
+            return (
+              s.gltfMaterials,
+              [
+                for (final p in s.glbPrimitives)
+                  (
+                    positions: p.positions,
+                    indices: p.indices,
+                    backTriangles: p.backTriangles,
+                    materialIndex: p.materialIndex,
+                    unpaintedBack: p.unpaintedBack,
+                  ),
+              ],
+            );
+          }(),
+          () {
+            final s = skp.buildInstancedScene(tagOpts);
+            return (
+              s.gltfMaterials,
+              [
+                for (final r in s.meshResources)
+                  for (final p in r.primitives)
+                    (
+                      positions: p.positions,
+                      indices: p.indices,
+                      backTriangles: p.backTriangles,
+                      materialIndex: p.materialIndex,
+                      unpaintedBack: p.unpaintedBack,
+                    ),
+              ],
+            );
+          }(),
+        ]) {
+          final (byZ, _) = collectByZ(mats, prims);
+          expect(
+            byZ[0],
+            sortedSides([
+              (white, false, true, false, false),
+              (white, false, true, false, false),
+              (white, false, false, true, false),
+              (white, false, false, true, false),
+            ]),
+          );
+          expect(
+            byZ[10],
+            sortedSides([
+              (white, false, true, false, false),
+              (white, false, true, false, false),
+              (white, false, false, true, false),
+              (white, false, false, true, false),
+            ]),
+          );
+          expect(byZ[20], [(white, true, true, false, false), (white, true, true, false, false)]);
+          expect(byZ[30], [(blue, true, false, false, false), (blue, true, false, false, false)]);
+          expect(byZ[40], [(white, true, true, false, false), (white, true, true, false, false)]);
+          expect(byZ[50], [(green, true, false, false, false), (green, true, false, false, false)]);
+        }
+
+        final stlBin = toStlBinary(skp.buildScene());
+        expect(ByteData.sublistView(stlBin).getUint32(80, Endian.little), 12);
+
+        for (final glbBytes in [
+          toGlb(skp.buildScene(tagOpts), textures: true),
+          toInstancedGlb(skp.buildInstancedScene(tagOpts), textures: true),
+        ]) {
+          final jsonLen = ByteData.sublistView(glbBytes).getUint32(12, Endian.little);
+          final doc = jsonDecode(utf8.decode(glbBytes.sublist(20, 20 + jsonLen))) as Map<String, dynamic>;
+          final mats = (doc['materials'] as List).cast<Map<String, dynamic>>();
+          final flags = {
+            for (final m in mats)
+              (
+                m['doubleSided'] == true,
+                (m['pbrMetallicRoughness'] as Map<String, dynamic>).containsKey('baseColorTexture'),
+              ),
+          };
+          expect(flags, containsAll([(false, true), (false, false), (true, true), (true, false)]));
+        }
+      } finally {
+        tmpDir.deleteSync(recursive: true);
+      }
+    });
   });
 }
