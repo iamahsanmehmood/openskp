@@ -132,6 +132,17 @@ painted differently on each side; STL does not carry colour. GLB and the
 colour-capable OBJ, PLY, DXF, IFC and Fragments exports retain separately
 painted sides.
 
+### Colorized textures in GLB
+
+When `textures=True` (the default) is passed to `glb.export()` / `glb.to_glb()`
+or `instanced_glb.export()` / `instanced_glb.to_instanced_glb()` with
+`openskp[textures]` (`Pillow`) installed, colorized PNG and JPEG textures are
+baked with SketchUp's hue shift or tint (within 1/255 of SketchUp's own result)
+and paired with a white material factor, while JPEG EXIF `APP1` orientation
+blocks are stripped without re-encoding. Without `Pillow`, PNG and JPEG textures
+are still embedded and colorized ones keep their material tint factor, logging
+one warning.
+
 ## CLI
 
 Installing `openskp` also provides an `openskp` command-line tool:
@@ -347,7 +358,7 @@ starting code, or for a diffable, reviewable text representation of a
 - `mapbox_earcut >= 1.0` (prebuilt wheel)
 
 Optional extras:
-- `openskp[textures]`: `pillow >= 12.3.0`
+- `openskp[textures]`: `pillow >= 12.3.0` (bakes colorized PNG/JPEG textures in GLB exports)
 - `openskp[fragments]`: `flatbuffers >= 24.0`
 
 ## Used in Production
