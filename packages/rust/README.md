@@ -15,6 +15,8 @@ Not on crates.io yet; depend on it by path or by git:
 openskp = { git = "https://github.com/iamahsanmehmood/openskp" }
 ```
 
+Requires **Rust 1.88 or newer** (2021 edition; tested on `1.88` and `stable` in CI).
+
 ## Reading
 
 ```rust

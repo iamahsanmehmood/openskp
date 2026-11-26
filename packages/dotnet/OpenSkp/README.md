@@ -281,6 +281,12 @@ OpenSKP targets **.NET Standard 2.0**, ensuring full compatibility with:
 - **.NET Framework 4.6.1+** (WPF, WinForms)
 - **Mono / Xamarin / .NET MAUI** (iOS, Android)
 
+The core `OpenSkp` package has **zero NuGet dependencies** (BCL only). Direct
+ThatOpen Fragments (`.frag`) export and import ship in the companion
+[`OpenSkp.Fragments`](https://www.nuget.org/packages/OpenSkp.Fragments) NuGet
+package (`Google.FlatBuffers >= 25.2.10`). Building and running the repository's
+test projects requires the **.NET 9.0+ SDK** (`net9.0`).
+
 ---
 
 ## 🏭 Used in Production
