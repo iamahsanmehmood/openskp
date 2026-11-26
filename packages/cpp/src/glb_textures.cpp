@@ -403,6 +403,29 @@ std::optional<DecodedRgbaImage> decode_texture_rgba(const ByteBuffer& data,
     if (error_out) *error_out = "empty or oversized image buffer";
     return std::nullopt;
   }
+  int info_w = 0;
+  int info_h = 0;
+  int info_comp = 0;
+  if (!stbi_info_from_memory(data.data(), static_cast<int>(data.size()), &info_w, &info_h,
+                             &info_comp) ||
+      info_w <= 0 || info_h <= 0) {
+    if (error_out) {
+      const char* reason = stbi_failure_reason();
+      *error_out = reason ? reason : "image header parse failed";
+    }
+    return std::nullopt;
+  }
+  const std::uint64_t info_pixels =
+      static_cast<std::uint64_t>(info_w) * static_cast<std::uint64_t>(info_h);
+  if (info_pixels > kMaxDecodeTexturePixels) {
+    if (error_out) {
+      *error_out = "image dimensions " + std::to_string(info_w) + "x" + std::to_string(info_h) +
+                   " (" + std::to_string(info_pixels) + " pixels) exceed maximum of " +
+                   std::to_string(kMaxDecodeTexturePixels) + " pixels";
+    }
+    return std::nullopt;
+  }
+
   int width = 0;
   int height = 0;
   int channels_in_file = 0;
@@ -414,6 +437,12 @@ std::optional<DecodedRgbaImage> decode_texture_rgba(const ByteBuffer& data,
       const char* reason = stbi_failure_reason();
       *error_out = reason ? reason : "image decode failed";
     }
+    return std::nullopt;
+  }
+  if (static_cast<std::uint64_t>(width) * static_cast<std::uint64_t>(height) >
+      kMaxDecodeTexturePixels) {
+    stbi_image_free(raw);
+    if (error_out) *error_out = "decoded image dimensions exceed maximum pixel limit";
     return std::nullopt;
   }
   DecodedRgbaImage img;
@@ -837,8 +866,22 @@ ResolvedGltfTextures resolve_gltf_textures(
     }
   }
 
-  std::map<BakeKey, std::optional<int>> image_by_key;
+  std::map<BakeKey, ResolvedMaterialTexture> image_by_key;
   std::map<std::size_t, std::optional<DecodedRgbaImage>> decoded_by_tex;
+
+  auto get_plain_image = [&](std::size_t tex_idx) -> int {
+    const BakeKey key{tex_idx, false, 0, {0, 0, 0}};
+    auto hit = image_by_key.find(key);
+    if (hit != image_by_key.end() && hit->second.gltf_texture_index.has_value()) {
+      return *hit->second.gltf_texture_index;
+    }
+    const auto& tex = raw_textures[tex_idx];
+    ByteBuffer bytes = (tex.mime_type == "image/jpeg") ? strip_jpeg_exif_app1(tex.data) : tex.data;
+    const int gltf_idx = static_cast<int>(out.images.size());
+    out.images.push_back(ResolvedGltfImage{std::move(bytes), tex.mime_type});
+    image_by_key[key] = ResolvedMaterialTexture{gltf_idx, false};
+    return gltf_idx;
+  };
 
   auto get_decoded = [&](std::size_t tex_idx) -> DecodedRgbaImage* {
     auto it = decoded_by_tex.find(tex_idx);
@@ -869,18 +912,7 @@ ResolvedGltfTextures resolve_gltf_textures(
     if (tex.mime_type != "image/png" && tex.mime_type != "image/jpeg") continue;
 
     if (!mat.colorized) {
-      const BakeKey key{tex_idx, false, 0, {0, 0, 0}};
-      auto hit = image_by_key.find(key);
-      if (hit != image_by_key.end()) {
-        out.by_material[mat_i] = {hit->second, false};
-        continue;
-      }
-      ByteBuffer bytes =
-          (tex.mime_type == "image/jpeg") ? strip_jpeg_exif_app1(tex.data) : tex.data;
-      const int gltf_idx = static_cast<int>(out.images.size());
-      out.images.push_back(ResolvedGltfImage{std::move(bytes), tex.mime_type});
-      image_by_key.emplace(key, gltf_idx);
-      out.by_material[mat_i] = {gltf_idx, false};
+      out.by_material[mat_i] = {get_plain_image(tex_idx), false};
       continue;
     }
 
@@ -895,7 +927,7 @@ ResolvedGltfTextures resolve_gltf_textures(
     const BakeKey ckey{tex_idx, true, mat.colorize_type, target_rgb};
     auto hit = image_by_key.find(ckey);
     if (hit != image_by_key.end()) {
-      out.by_material[mat_i] = {hit->second, hit->second.has_value()};
+      out.by_material[mat_i] = hit->second;
       continue;
     }
 
@@ -904,8 +936,9 @@ ResolvedGltfTextures resolve_gltf_textures(
 
     DecodedRgbaImage* decoded = get_decoded(tex_idx);
     if (!decoded) {
-      image_by_key.emplace(ckey, std::nullopt);
-      out.by_material[mat_i] = {std::nullopt, false};
+      const ResolvedMaterialTexture fallback{get_plain_image(tex_idx), false};
+      image_by_key.emplace(ckey, fallback);
+      out.by_material[mat_i] = fallback;
       continue;
     }
 
@@ -953,8 +986,9 @@ ResolvedGltfTextures resolve_gltf_textures(
 
     const int gltf_idx = static_cast<int>(out.images.size());
     out.images.push_back(ResolvedGltfImage{std::move(encoded), output_mime});
-    image_by_key.emplace(ckey, gltf_idx);
-    out.by_material[mat_i] = {gltf_idx, true};
+    const ResolvedMaterialTexture baked_res{gltf_idx, true};
+    image_by_key.emplace(ckey, baked_res);
+    out.by_material[mat_i] = baked_res;
   }
 
   return out;

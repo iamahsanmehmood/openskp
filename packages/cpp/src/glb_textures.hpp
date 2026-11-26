@@ -16,6 +16,8 @@
 namespace openskp {
 
 inline constexpr std::size_t kMaxColorizeBlockPixels = 262144;
+// Same pixel ceiling as Pillow's Image.MAX_IMAGE_PIXELS (178,956,970 pixels).
+inline constexpr std::uint64_t kMaxDecodeTexturePixels = 178956970ULL;
 
 struct StbiImageDeleter {
   void operator()(unsigned char* ptr) const noexcept;

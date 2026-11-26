@@ -460,13 +460,13 @@ TEST(ColorizedTexturesGlb, ColorizedJpegStaysJpeg444AndExifOrientationIsStripped
 }
 
 TEST(ColorizedTexturesGlb, CorruptColorizedTextureWarnsOnceAndStaysSilentOnStderr) {
+  const ByteBuffer truncated_png{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a};
   Scene baked;
   GltfMaterial mat{"CorruptCol", "",   {{200.0 / 255.0, 90.0 / 255.0, 20.0 / 255.0, 1.0}, 0.0, 0.8},
                    false,        true, 0};
   mat.pbr_metallic_roughness.base_color_texture = std::size_t{0};
   baked.gltf_materials.push_back(mat);
-  baked.textures.push_back(
-      {ByteBuffer{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a}, "image/png", "truncated.png"});
+  baked.textures.push_back({truncated_png, "image/png", "truncated.png"});
   baked.glb_primitives.push_back({
       {0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f},
       {0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f},
@@ -493,9 +493,187 @@ TEST(ColorizedTexturesGlb, CorruptColorizedTextureWarnsOnceAndStaysSilentOnStder
   };
   const auto model = load_glb_model(to_glb(baked, logged_opts));
   EXPECT_EQ(warnings.size(), 1u);
-  EXPECT_TRUE(model.images.empty());
+  ASSERT_EQ(model.images.size(), 1u);
+  EXPECT_EQ(model.images[0].mimeType, "image/png");
+  EXPECT_EQ(extract_glb_image_bytes(model, 0), truncated_png);
   ASSERT_EQ(model.materials.size(), 1u);
-  EXPECT_EQ(model.materials[0].pbrMetallicRoughness.baseColorTexture.index, -1);
+  EXPECT_EQ(model.materials[0].pbrMetallicRoughness.baseColorTexture.index, 0);
+  EXPECT_EQ(model.materials[0].pbrMetallicRoughness.baseColorFactor,
+            (std::vector<double>{200.0 / 255.0, 90.0 / 255.0, 20.0 / 255.0, 1.0}));
+}
+
+std::uint32_t crc32_ieee(const std::uint8_t* data, std::size_t len) {
+  std::uint32_t crc = 0xFFFFFFFFu;
+  for (std::size_t i = 0; i < len; ++i) {
+    crc ^= data[i];
+    for (int bit = 0; bit < 8; ++bit) {
+      crc = (crc & 1u) ? ((crc >> 1u) ^ 0xEDB88320u) : (crc >> 1u);
+    }
+  }
+  return ~crc;
+}
+
+void append_png_test_chunk(ByteBuffer& out, const char type[4], const std::uint8_t* payload,
+                           std::size_t len) {
+  const auto append_u32_be = [&](std::uint32_t v) {
+    out.push_back(static_cast<std::uint8_t>((v >> 24) & 0xFFu));
+    out.push_back(static_cast<std::uint8_t>((v >> 16) & 0xFFu));
+    out.push_back(static_cast<std::uint8_t>((v >> 8) & 0xFFu));
+    out.push_back(static_cast<std::uint8_t>(v & 0xFFu));
+  };
+  append_u32_be(static_cast<std::uint32_t>(len));
+  const std::size_t start = out.size();
+  out.insert(out.end(), reinterpret_cast<const std::uint8_t*>(type),
+             reinterpret_cast<const std::uint8_t*>(type) + 4);
+  if (len > 0) out.insert(out.end(), payload, payload + len);
+  append_u32_be(crc32_ieee(out.data() + start, 4 + len));
+}
+
+// Small header-valid PNG declaring arbitrary width x height without compressed pixel
+// rows; stbi_info_from_memory stops at the IDAT header, so it never needs to be decoded.
+ByteBuffer make_declared_size_png(std::uint32_t width, std::uint32_t height) {
+  ByteBuffer out{137, 80, 78, 71, 13, 10, 26, 10};
+  const std::array<std::uint8_t, 13> ihdr{
+      static_cast<std::uint8_t>((width >> 24) & 0xFFu),
+      static_cast<std::uint8_t>((width >> 16) & 0xFFu),
+      static_cast<std::uint8_t>((width >> 8) & 0xFFu),
+      static_cast<std::uint8_t>(width & 0xFFu),
+      static_cast<std::uint8_t>((height >> 24) & 0xFFu),
+      static_cast<std::uint8_t>((height >> 16) & 0xFFu),
+      static_cast<std::uint8_t>((height >> 8) & 0xFFu),
+      static_cast<std::uint8_t>(height & 0xFFu),
+      8,
+      2,
+      0,
+      0,
+      0,
+  };
+  const std::array<std::uint8_t, 2> minimal_idat{0x78, 0x9C};
+  append_png_test_chunk(out, "IHDR", ihdr.data(), ihdr.size());
+  append_png_test_chunk(out, "IDAT", minimal_idat.data(), minimal_idat.size());
+  append_png_test_chunk(out, "IEND", nullptr, 0);
+  return out;
+}
+
+TEST(ColorizedTexturesGlb, OversizeColorizedTextureSkipsDecodeKeepsSourceBytesAndWarnsOnce) {
+  // 1) 50000 x 50000 JPEG header = 2,500,000,000 pixels (> INT_MAX, so 32-bit signed
+  //    multiplication would overflow negative; 64-bit check catches it via stbi_info_from_memory).
+  const std::array<std::uint8_t, 3> one_px{128, 64, 32};
+  ByteBuffer oversize_jpg = encode_jpeg_444(one_px.data(), 1, 1, 3, 95);
+  for (std::size_t i = 0; i + 9 < oversize_jpg.size(); ++i) {
+    if (oversize_jpg[i] == 0xFF && oversize_jpg[i + 1] == 0xC0 && oversize_jpg[i + 4] == 8) {
+      oversize_jpg[i + 5] = static_cast<std::uint8_t>((50000u >> 8) & 0xFFu);
+      oversize_jpg[i + 6] = static_cast<std::uint8_t>(50000u & 0xFFu);
+      oversize_jpg[i + 7] = static_cast<std::uint8_t>((50000u >> 8) & 0xFFu);
+      oversize_jpg[i + 8] = static_cast<std::uint8_t>(50000u & 0xFFu);
+      break;
+    }
+  }
+  std::string wrap_err;
+  EXPECT_FALSE(decode_texture_rgba(oversize_jpg, &wrap_err).has_value());
+  EXPECT_NE(wrap_err.find("50000x50000"), std::string::npos) << wrap_err;
+  EXPECT_NE(wrap_err.find("2500000000"), std::string::npos) << wrap_err;
+  EXPECT_NE(wrap_err.find("178956970"), std::string::npos) << wrap_err;
+
+  // 2) Small header-only PNGs that never get decoded:
+  //    - 20000 x 15000 = 300,000,000 pixels (passes stb_image's internal 2^30 byte check,
+  //      caught directly by our 178,956,970-pixel stbi_info_from_memory limit)
+  //    - 40000 x 40000 = 1,600,000,000 pixels
+  for (const auto& [w, h, check_dim_msg] :
+       std::array<std::tuple<std::uint32_t, std::uint32_t, bool>, 2>{{
+           {20000u, 15000u, true},
+           {40000u, 40000u, false},
+       }}) {
+    const ByteBuffer oversize_png = make_declared_size_png(w, h);
+    ASSERT_LT(oversize_png.size(), 100u);
+
+    GltfMaterial mat_shift{
+        "OversizeShift", "",   {{200.0 / 255.0, 90.0 / 255.0, 20.0 / 255.0, 1.0}, 0.0, 0.8},
+        false,           true, 0};
+    mat_shift.pbr_metallic_roughness.base_color_texture = std::size_t{0};
+
+    GltfMaterial mat_tint{
+        "OversizeTint", "",   {{30.0 / 255.0, 160.0 / 255.0, 60.0 / 255.0, 0.5}, 0.0, 0.8},
+        false,          true, 1};
+    mat_tint.pbr_metallic_roughness.base_color_texture = std::size_t{0};
+
+    Scene baked;
+    baked.gltf_materials = {mat_shift, mat_tint};
+    baked.textures.push_back({oversize_png, "image/png", "oversize.png"});
+    baked.glb_primitives.push_back({
+        {0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f},
+        {0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f},
+        {0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f},
+        {0, 1, 2},
+        0,
+        "tri0",
+    });
+    baked.glb_primitives.push_back({
+        {2.0f, 0.0f, 0.0f, 3.0f, 0.0f, 0.0f, 2.0f, 1.0f, 0.0f},
+        {0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f},
+        {0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f},
+        {0, 1, 2},
+        1,
+        "tri1",
+    });
+
+    InstancedScene inst;
+    inst.gltf_materials = {mat_shift, mat_tint};
+    inst.textures.push_back({oversize_png, "image/png", "oversize.png"});
+    InstancedMeshResource res;
+    res.id = "oversize_mesh";
+    res.definition_name = "OversizeDef";
+    res.primitives.push_back({
+        {0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f},
+        {0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f},
+        {0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f},
+        {0, 1, 2},
+        0,
+    });
+    res.primitives.push_back({
+        {2.0f, 0.0f, 0.0f, 3.0f, 0.0f, 0.0f, 2.0f, 1.0f, 0.0f},
+        {0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f},
+        {0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f},
+        {0, 1, 2},
+        1,
+    });
+    inst.mesh_resources.push_back(std::move(res));
+    inst.scene_hierarchy.name = "Root";
+    InstancedNode child;
+    child.name = "Inst";
+    child.mesh_resource_id = "oversize_mesh";
+    inst.scene_hierarchy.children.push_back(std::move(child));
+
+    for (bool instanced : {false, true}) {
+      std::vector<std::string> warnings;
+      auto log_cb = [&](LogLevel lvl, std::string_view msg) {
+        if (lvl == LogLevel::warning) warnings.emplace_back(msg);
+      };
+      const ByteBuffer glb_bytes = instanced
+                                       ? to_instanced_glb(inst, InstancedGlbOptions{true, log_cb})
+                                       : to_glb(baked, GlbOptions{true, log_cb});
+
+      ASSERT_EQ(warnings.size(), 1u);
+      if (check_dim_msg) {
+        EXPECT_NE(warnings[0].find("20000x15000"), std::string::npos) << warnings[0];
+        EXPECT_NE(warnings[0].find("178956970"), std::string::npos) << warnings[0];
+      }
+
+      const auto model = load_glb_model(glb_bytes);
+      ASSERT_EQ(model.images.size(), 1u);
+      ASSERT_EQ(model.textures.size(), 1u);
+      EXPECT_EQ(model.images[0].mimeType, "image/png");
+      EXPECT_EQ(extract_glb_image_bytes(model, 0), oversize_png);
+
+      ASSERT_EQ(model.materials.size(), 2u);
+      EXPECT_EQ(model.materials[0].pbrMetallicRoughness.baseColorTexture.index, 0);
+      EXPECT_EQ(model.materials[0].pbrMetallicRoughness.baseColorFactor,
+                (std::vector<double>{200.0 / 255.0, 90.0 / 255.0, 20.0 / 255.0, 1.0}));
+      EXPECT_EQ(model.materials[1].pbrMetallicRoughness.baseColorTexture.index, 0);
+      EXPECT_EQ(model.materials[1].pbrMetallicRoughness.baseColorFactor,
+                (std::vector<double>{30.0 / 255.0, 160.0 / 255.0, 60.0 / 255.0, 0.5}));
+    }
+  }
 }
 
 #ifdef _WIN32
