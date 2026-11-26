@@ -2073,6 +2073,35 @@ def _model_face_colors(model_dat):
     return None
 
 
+def _model_color_by_tag(model_dat) -> bool:
+    """Whether SketchUp's "Color by Tag" (``DisplayColorByLayer``) setting is
+    enabled in the model's active rendering options (openskp#697).
+
+    In 2021+ files ``model.dat`` stores the active rendering options in section
+    ``0x01FB > 0x733C``, where child ``0x7347`` is a 1-byte boolean (``0x00``
+    off, ``0x01`` on). SketchUp reads this record directly on load (mirrored as
+    ``<sty:item id="7011">`` in the active/working ``style.xml``)."""
+    n = len(model_dat)
+    at = model_dat.find(b'\xfb\x01')
+    while 0 <= at <= n - 12:
+        outer_len = struct.unpack_from('<I', model_dat, at + 2)[0]
+        if model_dat[at + 6:at + 8] == b'\x3c\x73':
+            inner_len = struct.unpack_from('<I', model_dat, at + 8)[0]
+            if outer_len >= 6 and outer_len - 6 == inner_len and at + 12 + inner_len <= n:
+                p = at + 12
+                end = p + inner_len
+                while p + 6 <= end:
+                    tag, sz = struct.unpack_from('<HI', model_dat, p)
+                    p += 6
+                    if sz > end - p:
+                        break
+                    if tag == 0x7347 and sz == 1 and model_dat[p] <= 1:
+                        return model_dat[p] == 1
+                    p += sz
+        at = model_dat.find(b'\xfb\x01', at + 1)
+    return False
+
+
 def _parse_pages(node):
     """Scenes ("pages"). The 0702 node's payload nests 6D60 > 6D61 > one
     7148 record per page:
@@ -3312,6 +3341,13 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
     except Exception:
         logger.debug("Failed to parse model face colours", exc_info=True)
         face_colors = None
+    try:
+        color_by_tag = _model_color_by_tag(model_dat)
+    except (RecursionError, MemoryError):
+        raise
+    except Exception:
+        logger.debug("Failed to parse model color_by_tag", exc_info=True)
+        color_by_tag = False
 
     return {
         'model_attribute_dictionaries': model_attribute_dicts,
@@ -3328,6 +3364,7 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
         'thumbnail_data': thumbnail_data,
         'styles': styles,
         'face_colors': face_colors,
+        'color_by_tag': color_by_tag,
         'unread_root_entities': 0,
         'units': units,
     }

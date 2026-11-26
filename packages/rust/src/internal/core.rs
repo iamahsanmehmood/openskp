@@ -757,6 +757,7 @@ pub fn full_parse(data: &[u8], o: &ParseOptions) -> Result<RawParsed, SkpParseEr
     }
     assign_vff_annotations(&model, &vertex_positions, &mut p);
     p.face_colors = model_face_colors(&model);
+    p.color_by_tag = model_color_by_tag(&model);
     drop(model);
     let mut real_folders = BTreeSet::new();
     for folder in p.material_id_to_name.values() {
@@ -811,4 +812,52 @@ fn model_face_colors(model_dat: &[u8]) -> Option<(Color3, Color3)> {
         at += 1;
     }
     None
+}
+
+fn model_color_by_tag(model_dat: &[u8]) -> bool {
+    let len = model_dat.len();
+    let mut at = 0;
+    while at + 12 <= len {
+        if model_dat[at] == 0xFB
+            && model_dat[at + 1] == 0x01
+            && model_dat[at + 6] == 0x3C
+            && model_dat[at + 7] == 0x73
+        {
+            let outer_len = u32::from_le_bytes([
+                model_dat[at + 2],
+                model_dat[at + 3],
+                model_dat[at + 4],
+                model_dat[at + 5],
+            ]) as usize;
+            let inner_len = u32::from_le_bytes([
+                model_dat[at + 8],
+                model_dat[at + 9],
+                model_dat[at + 10],
+                model_dat[at + 11],
+            ]) as usize;
+            if outer_len >= 6 && outer_len - 6 == inner_len && inner_len <= len - (at + 12) {
+                let mut p = at + 12;
+                let end = p + inner_len;
+                while p + 6 <= end {
+                    let tag = u16::from_le_bytes([model_dat[p], model_dat[p + 1]]);
+                    let sz = u32::from_le_bytes([
+                        model_dat[p + 2],
+                        model_dat[p + 3],
+                        model_dat[p + 4],
+                        model_dat[p + 5],
+                    ]) as usize;
+                    p += 6;
+                    if sz > end - p {
+                        break;
+                    }
+                    if tag == 0x7347 && sz == 1 && model_dat[p] <= 1 {
+                        return model_dat[p] == 1;
+                    }
+                    p += sz;
+                }
+            }
+        }
+        at += 1;
+    }
+    false
 }

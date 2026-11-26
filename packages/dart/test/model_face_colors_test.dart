@@ -66,4 +66,89 @@ void main() {
       expect((model.faceFrontColor, model.faceBackColor), equals(_written));
     });
   });
+
+  group('SkpModel colorByTag (#697)', () {
+    final cbtCases = <String, bool>{
+      'color_by_tag_v4.skp': true,
+      'color_by_tag_v5.skp': true,
+      'color_by_tag_v6.skp': true,
+      'color_by_tag_2017.skp': true,
+      'color_by_tag_2019.skp': true,
+      'color_by_tag_2020.skp': true,
+      'color_by_tag_2020_off.skp': false,
+      'color_by_tag_2021.skp': true,
+      'color_by_tag_2021_style.skp': true,
+      'color_by_tag_2021_off.skp': false,
+      'legacy_v3_synthetic.skp': false,
+      for (final v in [
+        'v4',
+        'v5',
+        'v6',
+        '2016',
+        '2017',
+        '2018',
+        '2019',
+        '2020',
+        '2021',
+      ])
+        'face_colors_$v.skp': false,
+    };
+
+    for (final entry in cbtCases.entries) {
+      test('matches SketchUp DisplayColorByLayer on ${entry.key}', () {
+        final model = SkpFile.open(
+          '${Directory.current.path}/test/fixtures/${entry.key}',
+        ).parse();
+        expect(model.colorByTag, equals(entry.value));
+      });
+    }
+
+    test('round-trips through classic create() styleItems 7011', () {
+      const quad = [
+        (0.0, 0.0, 0.0),
+        (10.0, 0.0, 0.0),
+        (10.0, 10.0, 0.0),
+        (0.0, 10.0, 0.0),
+      ];
+      for (final (setting, expected) in <(double?, bool)>[
+        (null, false),
+        (0.0, false),
+        (1.0, true),
+      ]) {
+        final builder = create();
+        if (setting != null) {
+          builder.setDocumentOptions(
+            DocumentOptions(styleItems: {7011: setting}),
+          );
+        }
+        builder.addFace(quad);
+        final model = SkpFile.fromBuffer(builder.toBytes()).parse();
+        expect(model.colorByTag, equals(expected));
+      }
+    });
+
+    for (final (onName, offName) in [
+      ('color_by_tag_2020.skp', 'color_by_tag_2020_off.skp'),
+      ('color_by_tag_2021.skp', 'color_by_tag_2021_off.skp'),
+    ]) {
+      test('does not change scene output between $onName and $offName', () {
+        final skpOn = SkpFile.open(
+          '${Directory.current.path}/test/fixtures/$onName',
+        );
+        final skpOff = SkpFile.open(
+          '${Directory.current.path}/test/fixtures/$offName',
+        );
+        expect(skpOn.parse().colorByTag, isTrue);
+        expect(skpOff.parse().colorByTag, isFalse);
+        expect(
+          skpOn.buildScene().gltfMaterials,
+          equals(skpOff.buildScene().gltfMaterials),
+        );
+        expect(
+          skpOn.buildInstancedScene().gltfMaterials,
+          equals(skpOff.buildInstancedScene().gltfMaterials),
+        );
+      });
+    }
+  });
 }

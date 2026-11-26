@@ -645,6 +645,12 @@ class SkpModel {
   /// The same for the back side of a face.
   (int, int, int)? faceBackColor;
 
+  /// Whether SketchUp's "Color by Tag" (`DisplayColorByLayer`) style setting is
+  /// enabled in the model's active rendering options. Read from 2021+ files and
+  /// from classic files of SketchUp 4 to 2020; `false` when off or when the
+  /// file does not give it (SketchUp 3).
+  bool colorByTag = false;
+
   /// How many top-level entities of a classic (pre-2021) file the reader
   /// couldn't read. It keeps what it read before the first root record it
   /// can't parse and drops that record and everything after it, so a nonzero

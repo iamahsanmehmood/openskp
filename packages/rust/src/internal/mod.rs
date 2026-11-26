@@ -477,6 +477,7 @@ pub struct RawParsed {
     pub materials_by_folder: BTreeMap<String, Arc<RawMaterial>>,
     pub styles: Vec<RawStyle>,
     pub face_colors: Option<(Color3, Color3)>,
+    pub color_by_tag: bool,
     pub definitions: BTreeMap<EntityId, RawDefinition>,
     pub root: RawDefinition,
     /// Dictionaries attached to the model entity itself (F601 > 8813 > D007 >
@@ -503,6 +504,7 @@ impl Default for RawParsed {
             materials_by_folder: BTreeMap::new(),
             styles: Vec::new(),
             face_colors: None,
+            color_by_tag: false,
             definitions: BTreeMap::new(),
             root: RawDefinition::root(),
             model_attribute_dicts: BTreeMap::new(),

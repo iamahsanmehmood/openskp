@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed — all six languages: face sides with different materials of the same colour stay separate (#697)
 
 - `build_scene` and `build_instanced_scene` (and GLB / instanced GLB exports) merge a face's front and back into one `doubleSided` primitive only when both sides resolve to the same material, or both are unpainted with the same colour. Previously, matching RGB colours (and colorize modes) merged the two sides even when their materials differed, putting a front texture or material onto a plain or unpainted back of the same colour (and dropping a distinct back texture of the same colour).
+### Added — all six languages: `Model.color_by_tag` style setting (#697)
+
+- `SkpModel` now exposes SketchUp's *Color by Tag* (`DisplayColorByLayer`) style setting as `color_by_tag` (Python, C++, Rust), `colorByTag` (TypeScript, Dart), and `ColorByTag` (.NET), read from the active rendering options in `model.dat` (`0x01FB > 0x733C > 0x7347`) in 2021+ files and from `CRenderingOptions` after the model camera in classic SketchUp 4–2020 files (`false` when off or absent, with scene output unchanged).
 
 ### Changed — .NET: colorized textures are baked into GLB files (#285)
 

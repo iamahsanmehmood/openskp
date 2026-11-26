@@ -368,6 +368,7 @@ function parseToRaw(buffer: BinaryInput, options?: ParseOptions): ParsedRawData 
     materialsByFolder,
     styles,
     faceColors: modelFaceColors(modelData),
+    colorByTag: modelColorByTag(modelData),
     defsDict,
     unreadRootEntities: 0,
   };
@@ -401,6 +402,36 @@ function modelFaceColors(
     }
   }
   return null;
+}
+
+function modelColorByTag(modelData: Uint8Array): boolean {
+  const view = new DataView(modelData.buffer, modelData.byteOffset, modelData.byteLength);
+  for (let at = 0; at + 12 <= modelData.length; at++) {
+    if (
+      modelData[at] === 0xfb &&
+      modelData[at + 1] === 0x01 &&
+      modelData[at + 6] === 0x3c &&
+      modelData[at + 7] === 0x73
+    ) {
+      const outerLen = view.getUint32(at + 2, true);
+      const innerLen = view.getUint32(at + 8, true);
+      if (outerLen >= 6 && outerLen - 6 === innerLen && at + 12 + innerLen <= modelData.length) {
+        let p = at + 12;
+        const end = p + innerLen;
+        while (p + 6 <= end) {
+          const tag = view.getUint16(p, true);
+          const sz = view.getUint32(p + 2, true);
+          p += 6;
+          if (sz > end - p) break;
+          if (tag === 0x7347 && sz === 1 && modelData[p] <= 1) {
+            return modelData[p] === 1;
+          }
+          p += sz;
+        }
+      }
+    }
+  }
+  return false;
 }
 
 /**

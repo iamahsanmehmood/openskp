@@ -301,6 +301,41 @@ std::optional<std::pair<Color3, Color3>> model_face_colors(const ByteBuffer& mod
   return std::nullopt;
 }
 
+bool model_color_by_tag(const ByteBuffer& model_dat) {
+  auto u16 = [&](std::size_t off) -> std::uint16_t {
+    return static_cast<std::uint16_t>(model_dat[off] | (model_dat[off + 1] << 8));
+  };
+  auto u32 = [&](std::size_t off) -> std::uint32_t {
+    return static_cast<std::uint32_t>(model_dat[off]) |
+           (static_cast<std::uint32_t>(model_dat[off + 1]) << 8) |
+           (static_cast<std::uint32_t>(model_dat[off + 2]) << 16) |
+           (static_cast<std::uint32_t>(model_dat[off + 3]) << 24);
+  };
+  for (std::size_t at = 0; at + 12 <= model_dat.size(); ++at) {
+    if (model_dat[at] == 0xFB && model_dat[at + 1] == 0x01 && model_dat[at + 6] == 0x3C &&
+        model_dat[at + 7] == 0x73) {
+      const auto outer_len = static_cast<std::size_t>(u32(at + 2));
+      const auto inner_len = static_cast<std::size_t>(u32(at + 8));
+      if (outer_len >= 6 && outer_len - 6 == inner_len &&
+          inner_len <= model_dat.size() - (at + 12)) {
+        std::size_t p = at + 12;
+        const std::size_t end = p + inner_len;
+        while (p + 6 <= end) {
+          const auto tag = u16(p);
+          const auto sz = static_cast<std::size_t>(u32(p + 2));
+          p += 6;
+          if (sz > end - p) break;
+          if (tag == 0x7347 && sz == 1 && model_dat[p] <= 1) {
+            return model_dat[p] == 1;
+          }
+          p += sz;
+        }
+      }
+    }
+  }
+  return false;
+}
+
 // Style catalog (model.dat record 0602 > 7869). 7969 lists the model's
 // styles as 6C6B entries (DC05 > DE05 entity id, 6F6B name = the style's
 // folder under styles/), 7A69 holds the current style's id, 7B69 the current
@@ -634,6 +669,13 @@ RawParsed full_parse(const ByteBuffer& data, const ParseOptions& o) {
     throw;
   } catch (...) {
     emit_log(o, LogLevel::debug, "Failed to parse model face colours");
+  }
+  try {
+    p.color_by_tag = model_color_by_tag(*model);
+  } catch (const std::bad_alloc&) {
+    throw;
+  } catch (...) {
+    emit_log(o, LogLevel::debug, "Failed to parse model color_by_tag");
   }
   model.reset();
   if (!p.layer_id_to_name.count(1)) p.layer_id_to_name[1] = "Layer0";
