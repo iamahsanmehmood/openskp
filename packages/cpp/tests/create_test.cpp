@@ -1687,5 +1687,139 @@ TEST(Create, InvalidAnnotationInputsLeaveLayerAndDefinitionUsable) {
   EXPECT_EQ(model.definitions.begin()->second.texts[0].text, "Nested valid");
 }
 
+TEST(Create, FaceWithUvAndAttributesWritesDictionariesBeforeTextureCoords) {
+  auto png = write_fake_png("openskp_uv_and_attrs.png");
+  auto builder = create();
+  int tex = builder->add_texture_material("Brick", png);
+  FaceOptions opts;
+  opts.material = tex;
+  opts.front_uv = UvCorrespondence{
+      {Point3{0, 0, 0}, {0.0, 0.0}},
+      {Point3{50, 0, 0}, {1.0, 0.0}},
+      {Point3{0, 50, 0}, {0.0, 1.0}},
+  };
+  opts.attribute_dicts = {
+      {"attributes", {{"d", std::int32_t{1}}}},
+      {"second", {{"k", std::string{"v"}}}},
+  };
+  builder->add_face(square_pts(), opts);
+  ByteBuffer raw = builder->to_bytes();
+  std::filesystem::remove(png);
+
+  const std::uint8_t second_utf16[] = {'s', 0, 'e', 0, 'c', 0, 'o', 0, 'n', 0, 'd', 0};
+  const std::string ftc_ascii = "CFaceTextureCoords";
+  auto dict_it =
+      std::search(raw.begin(), raw.end(), std::begin(second_utf16), std::end(second_utf16));
+  auto ftc_it = std::search(raw.begin(), raw.end(), ftc_ascii.begin(), ftc_ascii.end());
+  ASSERT_NE(dict_it, raw.end());
+  ASSERT_NE(ftc_it, raw.end());
+  EXPECT_LT(dict_it, ftc_it);
+
+  const auto model = parse_skp(raw);
+  ASSERT_EQ(model.root().faces.size(), 1u);
+  const Face& f = model.root().faces.begin()->second;
+  EXPECT_TRUE(f.uv_transform.has_value());
+  EXPECT_EQ(f.attribute_dictionaries.at("attributes").at("d"), ParsedAttribute::from_integer(1));
+  EXPECT_EQ(f.attribute_dictionaries.at("second").at("k").text, "v");
+}
+
+TEST(Create, CirclePinsScaleByAppliedSizeMatchingFace) {
+  auto png = write_fake_png("openskp_circle_uv_scale.png");
+  auto builder = create();
+  int tex = builder->add_texture_material("Brick", png, 20.0, 10.0);
+  int back_tex = builder->add_texture_material("BackBrick", png, 8.0, 4.0);
+  const UvCorrespondence front_pins{
+      {Point3{0, 0, 0}, {0.0, 0.0}},
+      {Point3{50, 0, 0}, {1.0, 0.0}},
+      {Point3{0, 40, 0}, {0.0, 1.0}},
+  };
+  const UvCorrespondence back_pins{
+      {Point3{0, 0, 0}, {0.0, 0.0}},
+      {Point3{20, 0, 0}, {1.0, 0.0}},
+      {Point3{0, 16, 0}, {0.0, 1.0}},
+  };
+
+  auto& def = builder->add_component_definition("DiscDef");
+  FaceOptions fopts;
+  fopts.material = tex;
+  fopts.back_material = back_tex;
+  fopts.front_uv = front_pins;
+  fopts.back_uv = back_pins;
+  def.add_face(square_pts(), fopts);
+  CircleOptions copts;
+  copts.material = tex;
+  copts.back_material = back_tex;
+  copts.front_uv = front_pins;
+  copts.back_uv = back_pins;
+  def.add_circle({200, 0, 0}, {0, 0, 1}, 30.0, copts);
+  def.close();
+  builder->add_instance(def);
+
+  builder->add_face(square_pts(), fopts);
+  builder->add_circle({200, 0, 0}, {0, 0, 1}, 30.0, copts);
+
+  const SkpModel model = round_trip(*builder);
+  std::filesystem::remove(png);
+
+  auto check_owner = [](const Definition& owner) {
+    ASSERT_EQ(owner.faces.size(), 2u);
+    auto it = owner.faces.begin();
+    const Face& quad = it->second;
+    ++it;
+    const Face& disc = it->second;
+    ASSERT_TRUE(quad.uv_transform.has_value());
+    ASSERT_TRUE(disc.uv_transform.has_value());
+    expect_matrix(*disc.uv_transform, *quad.uv_transform);
+    ASSERT_TRUE(quad.uv_transform_back.has_value());
+    ASSERT_TRUE(disc.uv_transform_back.has_value());
+    expect_matrix(*disc.uv_transform_back, *quad.uv_transform_back);
+  };
+  check_owner(model.root());
+  ASSERT_EQ(model.definitions.size(), 1u);
+  check_owner(model.definitions.begin()->second);
+}
+
+TEST(Create, CurvesOverExistingAndRetracingEdgesOmitSharedEdges) {
+  const std::vector<Point3> sq = {{0, 0, 0}, {10, 0, 0}, {10, 10, 0}, {0, 10, 0}};
+
+  auto b1 = create();
+  b1->add_face(sq);
+  PolylineOptions closed_opts;
+  closed_opts.closed = true;
+  b1->add_polyline(sq, closed_opts);
+  const ByteBuffer raw1 = b1->to_bytes();
+  const std::string ccurve_ascii = "CCurve";
+  EXPECT_EQ(std::search(raw1.begin(), raw1.end(), ccurve_ascii.begin(), ccurve_ascii.end()),
+            raw1.end());
+  EXPECT_EQ(parse_skp(raw1).root().edges.size(), 4u);
+
+  auto b2 = create();
+  b2->add_face(sq);
+  b2->add_polyline({{20, -10, 0}, {20, 0, 0}, {10, 0, 0}, {10, 10, 0}, {20, 10, 0}, {20, 20, 0}});
+  b2->add_polyline({{0, 30, 0}, {10, 30, 0}, {0, 30, 0}, {10, 30, 0}});
+  const SkpModel m2 = round_trip(*b2);
+  EXPECT_EQ(m2.root().edges.size(), 9u);
+  std::set<EntityId> unique_curves;
+  std::size_t curved_edge_count = 0;
+  for (const auto& [id, edge] : m2.root().edges) {
+    (void)id;
+    if (edge.curve_id.has_value()) {
+      ++curved_edge_count;
+      unique_curves.insert(*edge.curve_id);
+    }
+  }
+  EXPECT_EQ(curved_edge_count, 4u);
+  EXPECT_EQ(unique_curves.size(), 2u);
+
+  auto b3 = create();
+  CircleOptions c8;
+  c8.num_segments = 8;
+  b3->add_circle({0, 0, 0}, {0, 0, 1}, 10.0, c8);
+  b3->add_circle({0, 0, 0}, {0, 0, 1}, 10.0, c8);
+  const SkpModel m3 = round_trip(*b3);
+  EXPECT_EQ(m3.root().edges.size(), 8u);
+  EXPECT_EQ(m3.root().arcs.size(), 1u);
+}
+
 }  // namespace
 }  // namespace openskp

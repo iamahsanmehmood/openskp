@@ -934,9 +934,9 @@ class ArchiveWriter {
     append_u16(buf, 0x8000u | static_cast<std::uint32_t>(kAttrContainerSlot));
     alloc();
     append_bytes(buf, reinterpret_cast<const std::uint8_t*>("\0\0\0"), 3);
-    if (front_matrix || back_matrix) write_face_texture_coords(front_matrix, back_matrix);
     for (const auto& [dict_name, entries] : attribute_dicts)
       write_attribute_dict(dict_name, entries);
+    if (front_matrix || back_matrix) write_face_texture_coords(front_matrix, back_matrix);
     write_null();  // children-list terminator
     std::uint64_t p = entity_pid(entity_class, pid);
     auto enc = encode_pid(p);
@@ -1547,37 +1547,117 @@ class ArchiveWriter {
     auto points = input_points;
     int n = static_cast<int>(points.size());
     int pair_count = closed ? n : n - 1;
-    std::vector<std::optional<int>> point_slots(static_cast<std::size_t>(n));
-    for (int i = 0; i < n; ++i) {
-      auto it = vertex_slots.find(points[static_cast<std::size_t>(i)]);
-      if (it != vertex_slots.end()) point_slots[static_cast<std::size_t>(i)] = it->second;
+
+    struct SegCurveSpec {
+      bool is_arc = false;
+      ArcCurveParams arc{};
+      int poly_edges = 0;
+      int run_id = -1;
+    };
+
+    std::vector<std::optional<SegCurveSpec>> curve_for_seg(static_cast<std::size_t>(pair_count));
+    if (curve_params || polyline_num_edges) {
+      std::map<Point3, int> temp_slots;
+      int next_temp = -1;
+      std::set<std::pair<int, int>> sim_edges;
+      for (const auto& kv : edge_registry) sim_edges.insert(kv.first);
+      std::vector<bool> seg_is_new(static_cast<std::size_t>(pair_count), false);
+      for (int i = 0; i < pair_count; ++i) {
+        const auto& p1 = points[static_cast<std::size_t>(i)];
+        const auto& p2 = points[static_cast<std::size_t>((i + 1) % n)];
+        if (p1 == p2) continue;
+        auto resolve_sim = [&](const Point3& pt) {
+          auto it = vertex_slots.find(pt);
+          if (it != vertex_slots.end()) return it->second;
+          auto tit = temp_slots.find(pt);
+          if (tit != temp_slots.end()) return tit->second;
+          int t = next_temp--;
+          temp_slots[pt] = t;
+          return t;
+        };
+        int s1 = resolve_sim(p1);
+        int s2 = resolve_sim(p2);
+        if (sim_edges.insert(std::minmax(s1, s2)).second) {
+          seg_is_new[static_cast<std::size_t>(i)] = true;
+        }
+      }
+      std::vector<std::vector<int>> runs;
+      std::vector<int> cur_run;
+      for (int i = 0; i < pair_count; ++i) {
+        if (seg_is_new[static_cast<std::size_t>(i)]) {
+          cur_run.push_back(i);
+        } else if (!cur_run.empty()) {
+          runs.push_back(std::move(cur_run));
+          cur_run.clear();
+        }
+      }
+      if (!cur_run.empty()) runs.push_back(std::move(cur_run));
+      if (closed && runs.size() >= 2 && runs.front().front() == 0 &&
+          runs.back().back() == pair_count - 1) {
+        std::vector<int> merged = runs.back();
+        merged.insert(merged.end(), runs.front().begin(), runs.front().end());
+        std::vector<std::vector<int>> next_runs;
+        next_runs.push_back(std::move(merged));
+        for (std::size_t r = 1; r + 1 < runs.size(); ++r) next_runs.push_back(std::move(runs[r]));
+        runs = std::move(next_runs);
+      }
+      for (std::size_t run_id = 0; run_id < runs.size(); ++run_id) {
+        const auto& run = runs[run_id];
+        int run_len = static_cast<int>(run.size());
+        if (run_len < 2) continue;
+        if (curve_params) {
+          ArcCurveParams sub_cp = *curve_params;
+          if (run_len != curve_params->num_segments) {
+            int s0 = run.front();
+            double sweep = curve_params->end_angle - curve_params->start_angle;
+            double a0 = curve_params->start_angle +
+                        sweep * (static_cast<double>(s0) / curve_params->num_segments);
+            double a1 = curve_params->start_angle +
+                        sweep * (static_cast<double>(s0 + run_len) / curve_params->num_segments);
+            if (closed && s0 + run_len > curve_params->num_segments) {
+              a0 -= 2.0 * kPi;
+              a1 -= 2.0 * kPi;
+            }
+            sub_cp.start_angle = a0;
+            sub_cp.end_angle = a1;
+            sub_cp.num_segments = run_len;
+          }
+          for (int seg_idx : run) {
+            curve_for_seg[static_cast<std::size_t>(seg_idx)] =
+                SegCurveSpec{true, sub_cp, 0, static_cast<int>(run_id)};
+          }
+        } else {
+          for (int seg_idx : run) {
+            curve_for_seg[static_cast<std::size_t>(seg_idx)] =
+                SegCurveSpec{false, {}, run_len, static_cast<int>(run_id)};
+          }
+        }
+      }
     }
+
     EdgeChainResult result;
-    std::optional<int> curve_slot;
+    std::map<int, int> run_curve_slots;
 
     for (int i = 0; i < pair_count; ++i) {
       int v1_idx = i, v2_idx = (i + 1) % n;
-      // Earlier segments may have introduced this same point (closed arcs and
-      // repeated vertices). Refresh slots before looking up the shared edge.
-      for (int idx : {v1_idx, v2_idx}) {
-        auto found = vertex_slots.find(points[static_cast<std::size_t>(idx)]);
-        if (found != vertex_slots.end()) point_slots[static_cast<std::size_t>(idx)] = found->second;
-      }
-      auto v1_known = point_slots[static_cast<std::size_t>(v1_idx)];
-      auto v2_known = point_slots[static_cast<std::size_t>(v2_idx)];
-      if (v1_known && v2_known) {
-        std::pair<int, int> key = std::minmax(*v1_known, *v2_known);
+      const auto& p1 = points[static_cast<std::size_t>(v1_idx)];
+      const auto& p2 = points[static_cast<std::size_t>(v2_idx)];
+      if (p1 == p2) continue;
+      auto it1 = vertex_slots.find(p1);
+      auto it2 = vertex_slots.find(p2);
+      if (it1 != vertex_slots.end() && it2 != vertex_slots.end()) {
+        std::pair<int, int> key = std::minmax(it1->second, it2->second);
         auto it = edge_registry.find(key);
         if (it != edge_registry.end()) {
           int edge_slot = it->second.first;
           int fwd_v1 = it->second.second;
           result.edge_slots.push_back(edge_slot);
-          result.edge_senses.push_back(fwd_v1 == *v1_known ? 0 : 1);
+          result.edge_senses.push_back(fwd_v1 == it1->second ? 0 : 1);
           continue;
         }
       }
 
-      auto endpoints = std::minmax(points[v1_idx], points[v2_idx]);
+      auto endpoints = std::minmax(p1, p2);
       auto id = identities->edges.find({endpoints.first, endpoints.second});
       if (id != identities->edges.end()) identities->pending["CEdge"] = id->second;
       int edge_slot = new_of_known_class("CEdge", 2);
@@ -1588,33 +1668,36 @@ class ArchiveWriter {
       }
       drawbase(0, 0, hidden_edges, soft_edges, smooth_edges, locked, casts_shadows,
                receives_shadows);
-      for (int idx : {v1_idx, v2_idx}) {
-        auto& slot = point_slots[static_cast<std::size_t>(idx)];
-        if (!slot) {
-          slot = write_vertex(points[static_cast<std::size_t>(idx)]);
-          vertex_slots[points[static_cast<std::size_t>(idx)]] = *slot;
+      for (const Point3* pt : {&p1, &p2}) {
+        auto vit = vertex_slots.find(*pt);
+        if (vit == vertex_slots.end()) {
+          vertex_slots[*pt] = write_vertex(*pt);
         } else {
-          backref(*slot);
+          backref(vit->second);
         }
       }
-      if (curve_slot) {
-        backref(*curve_slot);
-      } else if (curve_params) {
-        curve_slot =
-            write_arc_curve(curve_params->center, curve_params->normal, curve_params->xaxis,
-                            curve_params->start_angle, curve_params->end_angle,
-                            curve_params->radius, curve_params->num_segments, curve_params->yaxis);
-      } else if (polyline_num_edges) {
-        curve_slot = write_curve(*polyline_num_edges);
-      } else {
+      const auto& spec = curve_for_seg[static_cast<std::size_t>(i)];
+      if (!spec) {
         write_null();  // curve = None
+      } else {
+        auto cs_it = run_curve_slots.find(spec->run_id);
+        if (cs_it != run_curve_slots.end()) {
+          backref(cs_it->second);
+        } else if (spec->is_arc) {
+          const auto& cp = spec->arc;
+          run_curve_slots[spec->run_id] =
+              write_arc_curve(cp.center, cp.normal, cp.xaxis, cp.start_angle, cp.end_angle,
+                              cp.radius, cp.num_segments, cp.yaxis);
+        } else {
+          run_curve_slots[spec->run_id] = write_curve(spec->poly_edges);
+        }
       }
       result.edge_slots.push_back(edge_slot);
       result.edge_senses.push_back(0);
       result.new_entities += 1;
-      std::pair<int, int> key2 = std::minmax(*point_slots[static_cast<std::size_t>(v1_idx)],
-                                             *point_slots[static_cast<std::size_t>(v2_idx)]);
-      edge_registry[key2] = {edge_slot, *point_slots[static_cast<std::size_t>(v1_idx)]};
+      int s1_final = vertex_slots[p1];
+      int s2_final = vertex_slots[p2];
+      edge_registry[std::minmax(s1_final, s2_final)] = {edge_slot, s1_final};
     }
     return result;
   }
@@ -1866,9 +1949,14 @@ int write_face_or_triangulate(ArchiveWriter& writer, const std::vector<Point3>& 
   return total;
 }
 
+std::optional<UvCorrespondence> scale_pins(const std::optional<UvCorrespondence>& pins,
+                                           const std::map<int, std::pair<double, double>>& sizes,
+                                           int slot);
+
 int do_add_circle(ArchiveWriter& writer, std::map<Point3, int>& vertex_slots,
-                  EdgeRegistry& edge_registry, Point3 center, Point3 normal, double radius,
-                  const CircleOptions& options) {
+                  EdgeRegistry& edge_registry,
+                  const std::map<int, std::pair<double, double>>& applied_sizes, Point3 center,
+                  Point3 normal, double radius, const CircleOptions& options) {
   if (options.num_segments < 3 || options.num_segments > 255) {
     throw SkpWriteError("num_segments must be between 3 and 255, got " +
                         std::to_string(options.num_segments));
@@ -1893,11 +1981,12 @@ int do_add_circle(ArchiveWriter& writer, std::map<Point3, int>& vertex_slots,
   }
   AttributeDictList dicts = resolve_attribute_dicts(options.attributes, options.attribute_dict_name,
                                                     options.attribute_dicts);
-  return writer.write_face(points, vertex_slots, edge_registry, options.material.value_or(0),
-                           options.layer.value_or(0), options.back_material.value_or(0),
-                           options.hidden, false, false, false, options.front_uv, options.back_uv,
-                           dicts, curve_params, {}, options.locked, options.casts_shadows,
-                           options.receives_shadows);
+  auto front_uv = scale_pins(options.front_uv, applied_sizes, options.material.value_or(0));
+  auto back_uv = scale_pins(options.back_uv, applied_sizes, options.back_material.value_or(0));
+  return writer.write_face(
+      points, vertex_slots, edge_registry, options.material.value_or(0), options.layer.value_or(0),
+      options.back_material.value_or(0), options.hidden, false, false, false, front_uv, back_uv,
+      dicts, curve_params, {}, options.locked, options.casts_shadows, options.receives_shadows);
 }
 
 int do_add_arc(ArchiveWriter& writer, std::map<Point3, int>& vertex_slots,
@@ -2344,8 +2433,9 @@ void ComponentDefinitionBuilder::add_circle(Point3 center, Point3 normal, double
   detail::check_material_handle(*impl_->skp, options.material, "material");
   detail::check_material_handle(*impl_->skp, options.back_material, "back_material");
   detail::check_layer_handle(*impl_->skp, options.layer);
-  impl_->new_entity_count += detail::do_add_circle(
-      *impl_->writer, impl_->vertex_slots, impl_->edge_registry, center, normal, radius, options);
+  impl_->new_entity_count +=
+      detail::do_add_circle(*impl_->writer, impl_->vertex_slots, impl_->edge_registry,
+                            impl_->skp->impl_->applied_sizes, center, normal, radius, options);
 }
 
 void ComponentDefinitionBuilder::add_arc(Point3 center, Point3 normal, double radius,
@@ -2766,7 +2856,7 @@ void SkpBuilder::add_circle(Point3 center, Point3 normal, double radius,
   impl_->ensure_geometry_writer();
   impl_->new_entity_count +=
       detail::do_add_circle(*impl_->geometry_writer, impl_->vertex_slots, impl_->edge_registry,
-                            center, normal, radius, options);
+                            impl_->applied_sizes, center, normal, radius, options);
   impl_->face_count += 1;
 }
 

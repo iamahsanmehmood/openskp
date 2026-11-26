@@ -1442,3 +1442,62 @@ describe('DocumentOptions, 64-bit pid counter & degenerate fan handling (#477)',
     expect(dv64.getBigUint64(1987, true)).toBeGreaterThan(0x200000000n);
   });
 });
+
+describe('Face UV + attributes and curves over existing edges', () => {
+  it('writes CAttributeNamed dictionaries before CFaceTextureCoords on faces with both', () => {
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 1, 2, 3]);
+    const builder = create();
+    const tex = builder.addTextureMaterial('Brick', png, 'tex.png');
+    builder.addFace(SQUARE, {
+      material: tex,
+      frontUv: [
+        [[0, 0, 0], [0, 0]],
+        [[50, 0, 0], [1, 0]],
+        [[0, 50, 0], [0, 1]],
+      ],
+      attributeDicts: [
+        ['attributes', { d: 1 }],
+        ['second', { k: 'v' }],
+      ],
+    });
+    const bytes = builder.toBytes();
+    const walked = walk(bytes);
+    const faceRec = walked.root.find(([, name]) => name === 'CFace')![2];
+    const children = faceRec.attrs.children as [string, { name?: string }][];
+    expect(children.map(([cls]) => cls)).toEqual(['CAttributeNamed', 'CAttributeNamed', 'CFaceTextureCoords']);
+    expect(children.slice(0, 2).map(([, v]) => v.name)).toEqual(['attributes', 'second']);
+    const model = parseSkp(toBuffer(bytes));
+    expect(model.root.faces[0].uvTransform).not.toBeNull();
+  });
+
+  it('leaves existing and self-retracing edges out of new polyline, arc, and circle curves', () => {
+    const sq: Point3[] = [[0, 0, 0], [10, 0, 0], [10, 10, 0], [0, 10, 0]];
+
+    const b1 = create();
+    b1.addFace(sq);
+    b1.addPolyline(sq, { closed: true });
+    const w1 = walk(b1.toBytes());
+    const edges1 = w1.root.filter(([, n]) => n === 'CEdge').map(([, , v]) => v);
+    expect(edges1).toHaveLength(4);
+    expect(edges1.every((e) => e.curve === null)).toBe(true);
+
+    const b2 = create();
+    b2.addFace(sq);
+    b2.addPolyline([[20, -10, 0], [20, 0, 0], [10, 0, 0], [10, 10, 0], [20, 10, 0], [20, 20, 0]]);
+    b2.addPolyline([[0, 30, 0], [10, 30, 0], [0, 30, 0], [10, 30, 0]]);
+    const w2 = walk(b2.toBytes());
+    const edges2 = w2.root.filter(([, n]) => n === 'CEdge').map(([, , v]) => v);
+    expect(edges2).toHaveLength(9);
+    const curveIds = edges2.map((e) => e.curve).filter((c): c is number => c !== null);
+    expect(curveIds).toHaveLength(4);
+    expect(new Set(curveIds).size).toBe(2);
+
+    const b3 = create();
+    b3.addCircle([0, 0, 0], [0, 0, 1], 10, { numSegments: 8 });
+    b3.addCircle([0, 0, 0], [0, 0, 1], 10, { numSegments: 8 });
+    const w3 = walk(b3.toBytes());
+    const edges3 = w3.root.filter(([, n]) => n === 'CEdge').map(([, , v]) => v);
+    expect(edges3).toHaveLength(8);
+    expect(new Set(edges3.map((e) => e.curve)).size).toBe(1);
+  });
+});

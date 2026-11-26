@@ -1926,3 +1926,205 @@ fn invalid_annotation_options_leave_archive_usable() {
     assert_eq!(model.root().texts[0].text, "Valid");
     assert_eq!(model.root().texts[0].layer, "AfterReject");
 }
+
+#[test]
+fn face_with_uv_and_attributes_writes_dictionaries_before_texture_coords() {
+    let mut b = create();
+    let tex = b
+        .add_texture_material("Brick", PNG, None, None, None)
+        .unwrap();
+    let opts = FaceOptions {
+        material: Some(tex),
+        front_uv: pins([
+            ([0.0, 0.0, 0.0], [0.0, 0.0]),
+            ([50.0, 0.0, 0.0], [1.0, 0.0]),
+            ([0.0, 50.0, 0.0], [0.0, 1.0]),
+        ]),
+        attribute_dicts: vec![
+            (
+                "attributes".to_owned(),
+                [("d".to_owned(), AttributeValue::Int32(1))]
+                    .into_iter()
+                    .collect(),
+            ),
+            (
+                "second".to_owned(),
+                [("k".to_owned(), AttributeValue::String("v".to_owned()))]
+                    .into_iter()
+                    .collect(),
+            ),
+        ],
+        ..Default::default()
+    };
+    b.add_face(&square(), &opts).unwrap();
+    let raw = b.to_bytes().unwrap();
+    let first_utf16: Vec<u8> = "attributes"
+        .encode_utf16()
+        .flat_map(|u| u.to_le_bytes())
+        .collect();
+    let second_utf16: Vec<u8> = "second"
+        .encode_utf16()
+        .flat_map(|u| u.to_le_bytes())
+        .collect();
+    let ftc_ascii = b"CFaceTextureCoords";
+    let first_pos = raw
+        .windows(first_utf16.len())
+        .position(|w| w == first_utf16.as_slice())
+        .expect("attributes dict present");
+    let dict_pos = raw
+        .windows(second_utf16.len())
+        .position(|w| w == second_utf16.as_slice())
+        .expect("second dict present");
+    let ftc_pos = raw
+        .windows(ftc_ascii.len())
+        .position(|w| w == ftc_ascii)
+        .expect("CFaceTextureCoords present");
+    assert!(
+        first_pos < dict_pos && dict_pos < ftc_pos,
+        "CAttributeNamed dictionaries must precede CFaceTextureCoords"
+    );
+    let model = SkpFile::from_buffer(raw)
+        .parse(&ParseOptions::default())
+        .unwrap();
+    let face = model.root().faces.values().next().unwrap();
+    assert!(face.uv_transform.is_some());
+}
+
+#[test]
+fn circle_pins_scale_by_applied_size_matching_face() {
+    let mut b = create();
+    let tex = b
+        .add_texture_material("Brick", PNG, Some(20.0), Some(10.0), None)
+        .unwrap();
+    let back_tex = b
+        .add_texture_material("BackBrick", PNG, Some(8.0), Some(4.0), None)
+        .unwrap();
+    let front_pins = pins([
+        ([0.0, 0.0, 0.0], [0.0, 0.0]),
+        ([50.0, 0.0, 0.0], [1.0, 0.0]),
+        ([0.0, 40.0, 0.0], [0.0, 1.0]),
+    ]);
+    let back_pins = pins([
+        ([0.0, 0.0, 0.0], [0.0, 0.0]),
+        ([20.0, 0.0, 0.0], [1.0, 0.0]),
+        ([0.0, 16.0, 0.0], [0.0, 1.0]),
+    ]);
+    let fopts = FaceOptions {
+        material: Some(tex),
+        back_material: Some(back_tex),
+        front_uv: front_pins.clone(),
+        back_uv: back_pins.clone(),
+        ..Default::default()
+    };
+    let copts = CircleOptions {
+        material: Some(tex),
+        back_material: Some(back_tex),
+        front_uv: front_pins,
+        back_uv: back_pins,
+        ..Default::default()
+    };
+    let def = {
+        let mut d = b
+            .add_component_definition("DiscDef", &DefinitionOptions::default())
+            .unwrap();
+        d.add_face(&square(), &fopts).unwrap();
+        d.add_circle([200.0, 0.0, 0.0], [0.0, 0.0, 1.0], 30.0, &copts)
+            .unwrap();
+        d.close().unwrap()
+    };
+    b.add_instance(def, &InstanceOptions::default()).unwrap();
+    b.add_face(&square(), &fopts).unwrap();
+    b.add_circle([200.0, 0.0, 0.0], [0.0, 0.0, 1.0], 30.0, &copts)
+        .unwrap();
+
+    let model = round_trip(&mut b);
+    for owner in [model.root(), model.definitions.values().next().unwrap()] {
+        let faces: Vec<_> = owner.faces.values().collect();
+        assert_eq!(faces.len(), 2);
+        let quad_f = faces[0].uv_transform.unwrap();
+        let disc_f = faces[1].uv_transform.unwrap();
+        let quad_b = faces[0].uv_transform_back.unwrap();
+        let disc_b = faces[1].uv_transform_back.unwrap();
+        for i in 0..9 {
+            assert!((quad_f[i] - disc_f[i]).abs() < 1e-9);
+            assert!((quad_b[i] - disc_b[i]).abs() < 1e-9);
+        }
+    }
+}
+
+#[test]
+fn curves_over_existing_and_retracing_edges_omit_shared_edges() {
+    let sq = [
+        [0.0, 0.0, 0.0],
+        [10.0, 0.0, 0.0],
+        [10.0, 10.0, 0.0],
+        [0.0, 10.0, 0.0],
+    ];
+
+    let mut b1 = create();
+    b1.add_face(&sq, &FaceOptions::default()).unwrap();
+    b1.add_polyline(
+        &sq,
+        &PolylineOptions {
+            closed: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let raw1 = b1.to_bytes().unwrap();
+    assert!(!raw1.windows(6).any(|w| w == b"CCurve"));
+    let m1 = SkpFile::from_buffer(raw1)
+        .parse(&ParseOptions::default())
+        .unwrap();
+    assert_eq!(m1.root().edges.len(), 4);
+    assert!(m1.root().edges.values().all(|e| e.curve_id.is_none()));
+
+    let mut b2 = create();
+    b2.add_face(&sq, &FaceOptions::default()).unwrap();
+    b2.add_polyline(
+        &[
+            [20.0, -10.0, 0.0],
+            [20.0, 0.0, 0.0],
+            [10.0, 0.0, 0.0],
+            [10.0, 10.0, 0.0],
+            [20.0, 10.0, 0.0],
+            [20.0, 20.0, 0.0],
+        ],
+        &PolylineOptions::default(),
+    )
+    .unwrap();
+    b2.add_polyline(
+        &[
+            [0.0, 30.0, 0.0],
+            [10.0, 30.0, 0.0],
+            [0.0, 30.0, 0.0],
+            [10.0, 30.0, 0.0],
+        ],
+        &PolylineOptions::default(),
+    )
+    .unwrap();
+    let m2 = round_trip(&mut b2);
+    assert_eq!(m2.root().edges.len(), 9);
+    let curve_ids: Vec<_> = m2
+        .root()
+        .edges
+        .values()
+        .filter_map(|e| e.curve_id)
+        .collect();
+    assert_eq!(curve_ids.len(), 4);
+    let unique_curves: std::collections::BTreeSet<_> = curve_ids.into_iter().collect();
+    assert_eq!(unique_curves.len(), 2);
+
+    let mut b3 = create();
+    let c8 = CircleOptions {
+        num_segments: 8,
+        ..Default::default()
+    };
+    b3.add_circle([0.0, 0.0, 0.0], [0.0, 0.0, 1.0], 10.0, &c8)
+        .unwrap();
+    b3.add_circle([0.0, 0.0, 0.0], [0.0, 0.0, 1.0], 10.0, &c8)
+        .unwrap();
+    let m3 = round_trip(&mut b3);
+    assert_eq!(m3.root().edges.len(), 8);
+    assert_eq!(m3.root().arcs.len(), 1);
+}
