@@ -320,4 +320,165 @@ describe('IFC4 3D Exporter', () => {
     expect(hiddenLines[0]).toContain(',.F.,');
     expect(layerLines.some((l) => l.includes("'Wood'"))).toBe(false);
   });
+
+  it('exports valid IFC2X3 geometry, arcs, proxies, and roof attributes (#658)', () => {
+    const s45 = Math.SQRT1_2;
+    const scene: SkpScene = {
+      sceneHierarchy: {
+        name: 'Root',
+        definitionName: 'RootDef',
+        layer: 'Layer0',
+        positionMm: [0, 0, 0],
+        properties: {},
+        children: [],
+      },
+      meshIndex: {
+        ClosedCrate: {
+          name: 'ClosedCrate',
+          definitionName: 'CrateDef',
+          layer: 'Layer0',
+          positionMm: [0, 0, 0],
+          properties: {},
+          path: 'Root/ClosedCrate',
+        },
+        OpenRoof: {
+          name: 'Gable Roof',
+          definitionName: 'RoofDef',
+          layer: 'Layer0',
+          positionMm: [0, 0, 0],
+          properties: {},
+          path: 'Root/OpenRoof',
+        },
+        FrontDoor: {
+          name: 'Front Door',
+          definitionName: 'DoorDef',
+          layer: 'Layer0',
+          positionMm: [0, 0, 0],
+          properties: {},
+          path: 'Root/FrontDoor',
+        },
+      },
+      glbPrimitives: [
+        {
+          geomName: 'ClosedCrate',
+          materialIndex: 0,
+          positions: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1]),
+          normals: new Float32Array(12),
+          uvs: new Float32Array(8),
+          indices: new Uint32Array([0, 2, 1, 0, 1, 3, 1, 2, 3, 2, 0, 3]),
+        },
+        {
+          geomName: 'OpenRoof',
+          materialIndex: 0,
+          positions: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]),
+          normals: new Float32Array(9),
+          uvs: new Float32Array(6),
+          indices: new Uint32Array([0, 1, 2]),
+        },
+        {
+          geomName: 'FrontDoor',
+          materialIndex: 0,
+          positions: new Float32Array([2, 0, 0, 3, 0, 0, 2, 1, 0]),
+          normals: new Float32Array(9),
+          uvs: new Float32Array(6),
+          indices: new Uint32Array([0, 1, 2]),
+        },
+      ],
+      gltfMaterials: [{ pbrMetallicRoughness: { baseColorFactor: [0.5, 0.5, 0.5, 1.0] } }],
+      curveSets: [
+        {
+          name: 'QuarterArc',
+          layer: 'Layer0',
+          pointsM: [
+            [1, 0, 0],
+            [s45, 0, -s45],
+            [0, 0, -1],
+          ],
+          closed: false,
+          arc: {
+            points: [
+              [1, 0, 0],
+              [s45, 0, -s45],
+              [0, 0, -1],
+            ],
+            segments: [[0, 1, 2]],
+          },
+        },
+        {
+          name: 'FullCircle',
+          layer: 'Layer0',
+          pointsM: [
+            [1, 0, 0],
+            [0, 0, -1],
+            [-1, 0, 0],
+            [0, 0, 1],
+          ],
+          closed: true,
+          arc: {
+            points: [
+              [1, 0, 0],
+              [0, 0, -1],
+              [-1, 0, 0],
+              [0, 0, 1],
+            ],
+            segments: [
+              [0, 1, 2],
+              [2, 3, 0],
+            ],
+          },
+        },
+        {
+          name: 'DegenerateArc',
+          layer: 'Layer0',
+          pointsM: [
+            [0, 0, 0],
+            [1, 0, 0],
+            [2, 0, 0],
+          ],
+          closed: false,
+          arc: {
+            points: [
+              [0, 0, 0],
+              [1, 0, 0],
+              [2, 0, 0],
+            ],
+            segments: [[0, 1, 2]],
+          },
+        },
+      ],
+    };
+
+    const ifcText = toIFC(scene, METRES_TO_MM, 'IFC2X3');
+    expect(ifcText).toContain("FILE_SCHEMA(('IFC2X3'));");
+    expect(ifcText).not.toContain('IFCTRIANGULATEDFACESET(');
+    expect(ifcText).not.toContain('IFCCARTESIANPOINTLIST3D(');
+    expect(ifcText).not.toContain('IFCINDEXEDPOLYCURVE(');
+    expect(ifcText).not.toContain('IFCARCINDEX(');
+
+    expect(ifcText).toContain('IFCCLOSEDSHELL(');
+    expect(ifcText).toContain('IFCFACETEDBREP(');
+    expect(ifcText).toContain("'Body','Brep',");
+    expect(ifcText).toContain('IFCCONNECTEDFACESET(');
+    expect(ifcText).toContain('IFCFACEBASEDSURFACEMODEL(');
+    expect(ifcText).toContain("'Body','SurfaceModel',");
+
+    expect(ifcText.match(/IFCCIRCLE\(/g)?.length).toBe(2);
+    expect(ifcText.match(/IFCTRIMMEDCURVE\(/g)?.length).toBe(1);
+    expect(ifcText).toContain('IFCPARAMETERVALUE(1.570796)');
+    expect(ifcText.match(/IFCPOLYLINE\(/g)?.length).toBe(1);
+
+    const lines = ifcText.split(/\r?\n/);
+    const proxyLine = lines.find((l) => l.includes('=IFCBUILDINGELEMENTPROXY('))!;
+    expect(proxyLine.endsWith(',.ELEMENT.);')).toBe(true);
+    const roofLine = lines.find((l) => l.includes('=IFCROOF('))!;
+    expect(roofLine.endsWith(',.NOTDEFINED.);')).toBe(true);
+    const doorLine = lines.find((l) => l.includes('=IFCDOOR('))!;
+    const doorBody = doorLine.slice(doorLine.indexOf('(') + 1, doorLine.lastIndexOf(')'));
+    expect(doorBody.split(',').length).toBe(10);
+
+    const ids = lines
+      .filter((l) => l.startsWith('#') && l.includes('='))
+      .map((l) => Number(l.slice(1, l.indexOf('='))));
+    expect(ids).toEqual(Array.from({ length: ids.length }, (_, i) => i + 1));
+  });
 });

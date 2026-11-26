@@ -295,5 +295,113 @@ void main() {
       expect(hiddenLines.first, contains(',.F.,'));
       expect(layerLines.any((l) => l.contains("'Wood'")), isFalse);
     });
+
+    test('exports valid IFC2X3 geometry, arcs, proxies, and roof attributes (#658)', () {
+      const s45 = 0.7071067811865476;
+      final scene = Scene(
+        sceneHierarchy: InstanceNode(name: 'Root', definitionName: 'RootDef'),
+        meshIndex: {
+          'ClosedCrate': MeshMetadata(name: 'ClosedCrate', path: 'Root/ClosedCrate'),
+          'OpenRoof': MeshMetadata(name: 'Gable Roof', path: 'Root/OpenRoof'),
+          'FrontDoor': MeshMetadata(name: 'Front Door', path: 'Root/FrontDoor'),
+        },
+        glbPrimitives: [
+          GlbPrimitive(
+            geomName: 'ClosedCrate',
+            materialIndex: 0,
+            positions: Float32List.fromList([0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1]),
+            normals: Float32List(12),
+            uvs: Float32List(8),
+            indices: Uint32List.fromList([0, 2, 1, 0, 1, 3, 1, 2, 3, 2, 0, 3]),
+          ),
+          GlbPrimitive(
+            geomName: 'OpenRoof',
+            materialIndex: 0,
+            positions: Float32List.fromList([0, 0, 0, 1, 0, 0, 0, 1, 0]),
+            normals: Float32List(9),
+            uvs: Float32List(6),
+            indices: Uint32List.fromList([0, 1, 2]),
+          ),
+          GlbPrimitive(
+            geomName: 'FrontDoor',
+            materialIndex: 0,
+            positions: Float32List.fromList([2, 0, 0, 3, 0, 0, 2, 1, 0]),
+            normals: Float32List(9),
+            uvs: Float32List(6),
+            indices: Uint32List.fromList([0, 1, 2]),
+          ),
+        ],
+        gltfMaterials: [
+          {
+            'pbrMetallicRoughness': {
+              'baseColorFactor': [0.5, 0.5, 0.5, 1.0],
+            },
+          },
+        ],
+        curveSets: [
+          CurveSetMetadata(
+            name: 'QuarterArc',
+            pointsM: [(1.0, 0.0, 0.0), (s45, 0.0, -s45), (0.0, 0.0, -1.0)],
+            closed: false,
+            arc: CurveArc(
+              points: [(1.0, 0.0, 0.0), (s45, 0.0, -s45), (0.0, 0.0, -1.0)],
+              segments: [(0, 1, 2)],
+            ),
+          ),
+          CurveSetMetadata(
+            name: 'FullCircle',
+            pointsM: [(1.0, 0.0, 0.0), (0.0, 0.0, -1.0), (-1.0, 0.0, 0.0), (0.0, 0.0, 1.0)],
+            closed: true,
+            arc: CurveArc(
+              points: [(1.0, 0.0, 0.0), (0.0, 0.0, -1.0), (-1.0, 0.0, 0.0), (0.0, 0.0, 1.0)],
+              segments: [(0, 1, 2), (2, 3, 0)],
+            ),
+          ),
+          CurveSetMetadata(
+            name: 'DegenerateArc',
+            pointsM: [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (2.0, 0.0, 0.0)],
+            closed: false,
+            arc: CurveArc(
+              points: [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (2.0, 0.0, 0.0)],
+              segments: [(0, 1, 2)],
+            ),
+          ),
+        ],
+      );
+
+      final ifcText = toIfc(scene, schema: 'IFC2X3');
+      expect(ifcText, contains("FILE_SCHEMA(('IFC2X3'));"));
+      expect(ifcText, isNot(contains('IFCTRIANGULATEDFACESET(')));
+      expect(ifcText, isNot(contains('IFCCARTESIANPOINTLIST3D(')));
+      expect(ifcText, isNot(contains('IFCINDEXEDPOLYCURVE(')));
+      expect(ifcText, isNot(contains('IFCARCINDEX(')));
+
+      expect(ifcText, contains('IFCCLOSEDSHELL('));
+      expect(ifcText, contains('IFCFACETEDBREP('));
+      expect(ifcText, contains("'Body','Brep',"));
+      expect(ifcText, contains('IFCCONNECTEDFACESET('));
+      expect(ifcText, contains('IFCFACEBASEDSURFACEMODEL('));
+      expect(ifcText, contains("'Body','SurfaceModel',"));
+
+      expect(RegExp(r'=IFCCIRCLE\(').allMatches(ifcText).length, equals(2));
+      expect(RegExp(r'=IFCTRIMMEDCURVE\(').allMatches(ifcText).length, equals(1));
+      expect(ifcText, contains('IFCPARAMETERVALUE(1.570796)'));
+      expect(RegExp(r'=IFCPOLYLINE\(').allMatches(ifcText).length, equals(1));
+
+      final lines = ifcText.split(RegExp(r'\r?\n'));
+      final proxyLine = lines.firstWhere((l) => l.contains('=IFCBUILDINGELEMENTPROXY('));
+      expect(proxyLine.endsWith(',.ELEMENT.);'), isTrue);
+      final roofLine = lines.firstWhere((l) => l.contains('=IFCROOF('));
+      expect(roofLine.endsWith(',.NOTDEFINED.);'), isTrue);
+      final doorLine = lines.firstWhere((l) => l.contains('=IFCDOOR('));
+      final doorBody = doorLine.substring(doorLine.indexOf('(') + 1, doorLine.lastIndexOf(')'));
+      expect(doorBody.split(',').length, equals(10));
+
+      final ids = lines
+          .where((l) => l.startsWith('#') && l.contains('='))
+          .map((l) => int.parse(l.substring(1, l.indexOf('='))))
+          .toList();
+      expect(ids, equals(List<int>.generate(ids.length, (i) => i + 1)));
+    });
   });
 }
