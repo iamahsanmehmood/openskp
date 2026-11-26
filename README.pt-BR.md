@@ -80,7 +80,7 @@ Python, TypeScript, .NET, Dart e C++ são pacotes publicados; o Rust está no `m
 | Recurso | Status | Descrição |
 |:--------|:------:|:----------|
 | **Ler SKP 2021+ (VFF)** | ✅ | Suporte completo ao moderno contêiner binário VFF |
-| **Ler SKP clássico 4–2020 (MFC)** | ✅ | Contêiner clássico MFC `CArchive`, com o mesmo formato de saída do VFF. Há suporte ao SketchUp 4–2020, com lacunas conhecidas em arquivos V3 reais e V5 encontrados na prática; veja [docs/LANGUAGE_PARITY.md § 4](docs/LANGUAGE_PARITY.md#4-real-sketchup-file-version-support) |
+| **Ler SKP clássico 4–2020 (MFC)** | ✅ | Contêiner clássico MFC `CArchive`, com o mesmo formato de saída do VFF. Há suporte ao SketchUp 4–2020 (e ao SketchUp 3 no `main` desde o #705, ainda sem release), com uma lacuna conhecida em um arquivo V5 encontrado na prática; veja [docs/LANGUAGE_PARITY.md § 4](docs/LANGUAGE_PARITY.md#4-real-sketchup-file-version-support) |
 | **Extração de geometria 3D** | ✅ | Vértices, arestas, faces, normais e coordenadas UV |
 | **Hierarquia de componentes** | ✅ | Definições de componentes aninhadas e transformações de instâncias |
 | **Geração de cena / triangulação** | ✅ | Geração de cena opcional: o grafo completo da cena posicionada, resolvido em coordenadas do mundo, triangulado e pronto para GLB, nas cinco linguagens |
@@ -250,7 +250,7 @@ Todos os recursos, nas 5 linguagens: ✅ disponível e publicado, ❌ ainda não
 
 ### Suporte a versões reais de arquivos do SketchUp
 
-Arquivos MFC clássicos do **SketchUp 4 ao 2020** e arquivos VFF modernos do **SketchUp 2021+** são lidos nas cinco linguagens, com exceções conhecidas (arquivos reais do SketchUp 3 falham em todos os leitores; um arquivo real do SketchUp 5 encontrado na prática falha no TypeScript). Na escrita, `create()` e `open_existing()` emitem uma base MFC clássica do **SketchUp 2017** (`{17.0.1}`) (`blank_v17.skp`), que o SketchUp 2017 e posteriores abrem nativamente.
+Arquivos MFC clássicos do **SketchUp 4 ao 2020** e arquivos VFF modernos do **SketchUp 2021+** são lidos nas cinco linguagens, com uma exceção conhecida (um arquivo real do SketchUp 5 encontrado na prática falha no TypeScript); arquivos reais do SketchUp 3 são lidos em todos os leitores no `main` desde o #705, ainda sem release. Na escrita, `create()` e `open_existing()` emitem uma base MFC clássica do **SketchUp 2017** (`{17.0.1}`) (`blank_v17.skp`), que o SketchUp 2017 e posteriores abrem nativamente.
 
 Tabela completa de status por versão e por linguagem, com as evidências (fixtures sintéticas, arquivos gravados pelo SDK e a varredura de várias versões com arquivos reais): **[docs/LANGUAGE_PARITY.md § 4](docs/LANGUAGE_PARITY.md#4-real-sketchup-file-version-support)**.
 

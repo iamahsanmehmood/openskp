@@ -88,9 +88,9 @@ C++ implementation to port from — the hard research is already done. See
 
 Tracked in [issue #284](https://github.com/iamahsanmehmood/openskp/issues/284).
 Classic files from SketchUp 4 through 2020 parse across all six readers on
-synthetic, SDK-written, and real multi-version project saves. The remaining
-known gaps are the real SketchUp 3 project save (fails in every reader) and a
-real SketchUp 5 file in the wild (fails in TypeScript) — see
+synthetic, SDK-written, and real multi-version project saves. The real SketchUp 3
+project save reads in all six readers on `main` since #705 (not released yet);
+the remaining known gap is a real SketchUp 5 file in the wild (fails in TypeScript) — see
 [docs/LANGUAGE_PARITY.md § 4](docs/LANGUAGE_PARITY.md#4-real-sketchup-file-version-support)
 for the version-by-version table and evidence.
 
