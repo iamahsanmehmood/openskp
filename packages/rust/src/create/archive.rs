@@ -318,7 +318,7 @@ pub(super) struct ArcCurveParams {
 pub(super) enum ChainCurve<'a> {
     None,
     Arc(&'a ArcCurveParams),
-    Polyline { num_edges: u32 },
+    Polyline,
 }
 
 #[derive(Debug, Default)]
@@ -482,11 +482,11 @@ impl ArchiveWriter {
     ) -> Result<(), SkpWriteError> {
         self.scaffold_class_ref(ATTR_CONTAINER_SLOT);
         self.buf.put_zeros(3);
-        if front_matrix.is_some() || back_matrix.is_some() {
-            self.write_face_texture_coords(front_matrix, back_matrix);
-        }
         for (dict_name, entries) in attribute_dicts {
             self.write_attribute_dict(dict_name, entries)?;
+        }
+        if front_matrix.is_some() || back_matrix.is_some() {
+            self.write_face_texture_coords(front_matrix, back_matrix);
         }
         self.write_null(); // children-list terminator
         let pid = pid.unwrap_or_else(|| self.alloc_pid());
@@ -1221,18 +1221,114 @@ impl ArchiveWriter {
     ) -> EdgeChain {
         let n = points.len();
         let pair_count = if closed { n } else { n.saturating_sub(1) };
-        // Looked up once up front: a coordinate repeated within this chain is only shared once
-        // its own index has been written, exactly like the C++ writer.
-        let mut point_slots: Vec<Option<i32>> = points
-            .iter()
-            .map(|p| topo.vertex_slots.get(&point_key(*p)).copied())
-            .collect();
-        let mut chain = EdgeChain::default();
-        let mut curve_slot: Option<i32> = None;
+        #[derive(Clone, Copy)]
+        enum SegCurveSpec {
+            Arc(ArcCurveParams, usize),
+            Polyline(u32, usize),
+        }
+        let mut curve_for_seg = vec![None::<SegCurveSpec>; pair_count];
+        if !matches!(curve, ChainCurve::None) {
+            let mut temp_slots = HashMap::<[u64; 3], i32>::new();
+            let mut next_temp = -1i32;
+            let mut sim_edges: std::collections::HashSet<(i32, i32)> =
+                topo.edges.keys().copied().collect();
+            let mut seg_is_new = vec![false; pair_count];
+            for (i, is_new) in seg_is_new.iter_mut().enumerate() {
+                let k1 = point_key(points[i]);
+                let k2 = point_key(points[(i + 1) % n]);
+                if k1 == k2 {
+                    continue;
+                }
+                let s1 = topo.vertex_slots.get(&k1).copied().unwrap_or_else(|| {
+                    *temp_slots.entry(k1).or_insert_with(|| {
+                        let t = next_temp;
+                        next_temp -= 1;
+                        t
+                    })
+                });
+                let s2 = topo.vertex_slots.get(&k2).copied().unwrap_or_else(|| {
+                    *temp_slots.entry(k2).or_insert_with(|| {
+                        let t = next_temp;
+                        next_temp -= 1;
+                        t
+                    })
+                });
+                if sim_edges.insert((s1.min(s2), s1.max(s2))) {
+                    *is_new = true;
+                }
+            }
+            let mut runs: Vec<Vec<usize>> = Vec::new();
+            let mut cur_run: Vec<usize> = Vec::new();
+            for (i, &is_new) in seg_is_new.iter().enumerate() {
+                if is_new {
+                    cur_run.push(i);
+                } else if !cur_run.is_empty() {
+                    runs.push(std::mem::take(&mut cur_run));
+                }
+            }
+            if !cur_run.is_empty() {
+                runs.push(cur_run);
+            }
+            if closed
+                && runs.len() >= 2
+                && runs.first().and_then(|r| r.first()) == Some(&0)
+                && runs.last().and_then(|r| r.last()) == Some(&(pair_count - 1))
+            {
+                let first = runs.remove(0);
+                let mut merged = runs.pop().unwrap_or_default();
+                merged.extend(first);
+                runs.insert(0, merged);
+            }
+            for (run_id, run) in runs.iter().enumerate() {
+                let run_len = run.len();
+                if run_len < 2 {
+                    continue;
+                }
+                match curve {
+                    ChainCurve::Arc(params) => {
+                        let mut sub = *params;
+                        if run_len as u32 != params.num_segments {
+                            let s0 = run[0] as f64;
+                            let total = f64::from(params.num_segments);
+                            let sweep = params.end_angle - params.start_angle;
+                            let mut a0 = params.start_angle + sweep * (s0 / total);
+                            let mut a1 =
+                                params.start_angle + sweep * ((s0 + run_len as f64) / total);
+                            if closed && (run[0] + run_len) as u32 > params.num_segments {
+                                a0 -= 2.0 * std::f64::consts::PI;
+                                a1 -= 2.0 * std::f64::consts::PI;
+                            }
+                            sub.start_angle = a0;
+                            sub.end_angle = a1;
+                            sub.num_segments = run_len as u32;
+                        }
+                        for &seg_idx in run {
+                            curve_for_seg[seg_idx] = Some(SegCurveSpec::Arc(sub, run_id));
+                        }
+                    }
+                    ChainCurve::Polyline => {
+                        for &seg_idx in run {
+                            curve_for_seg[seg_idx] =
+                                Some(SegCurveSpec::Polyline(run_len as u32, run_id));
+                        }
+                    }
+                    ChainCurve::None => {}
+                }
+            }
+        }
 
-        for i in 0..pair_count {
-            let (v1, v2) = (i, (i + 1) % n);
-            if let (Some(a), Some(b)) = (point_slots[v1], point_slots[v2]) {
+        let mut chain = EdgeChain::default();
+        let mut run_curve_slots = HashMap::<usize, i32>::new();
+
+        for (i, spec) in curve_for_seg.iter().enumerate() {
+            let p1 = points[i];
+            let p2 = points[(i + 1) % n];
+            let k1 = point_key(p1);
+            let k2 = point_key(p2);
+            if k1 == k2 {
+                continue;
+            }
+            if let (Some(&a), Some(&b)) = (topo.vertex_slots.get(&k1), topo.vertex_slots.get(&k2)) {
                 if let Some(&(edge_slot, fwd_v1)) = topo.edges.get(&(a.min(b), a.max(b))) {
                     chain.edge_slots.push(edge_slot);
                     chain.edge_senses.push(u8::from(fwd_v1 != a));
@@ -1243,31 +1339,39 @@ impl ArchiveWriter {
             let edge_slot = self.new_of_known_class("CEdge", 2);
             self.preamble(None, false);
             self.drawbase(0, 0, flags.hidden, flags);
-            for idx in [v1, v2] {
-                match point_slots[idx] {
+            for (pt, key) in [(p1, k1), (p2, k2)] {
+                match topo.vertex_slots.get(&key).copied() {
                     Some(slot) => self.backref(slot),
                     None => {
-                        let slot = self.write_vertex(points[idx]);
-                        point_slots[idx] = Some(slot);
-                        topo.vertex_slots.insert(point_key(points[idx]), slot);
+                        let slot = self.write_vertex(pt);
+                        topo.vertex_slots.insert(key, slot);
                     }
                 }
             }
-            match (curve_slot, curve) {
-                (Some(slot), _) => self.backref(slot),
-                (None, ChainCurve::Arc(params)) => curve_slot = Some(self.write_arc_curve(params)),
-                (None, ChainCurve::Polyline { num_edges }) => {
-                    curve_slot = Some(self.write_curve(num_edges))
+            match spec {
+                None => self.write_null(),
+                Some(SegCurveSpec::Arc(sub_params, rid)) => {
+                    if let Some(&slot) = run_curve_slots.get(rid) {
+                        self.backref(slot);
+                    } else {
+                        let slot = self.write_arc_curve(sub_params);
+                        run_curve_slots.insert(*rid, slot);
+                    }
                 }
-                (None, ChainCurve::None) => self.write_null(),
+                Some(SegCurveSpec::Polyline(num_edges, rid)) => {
+                    if let Some(&slot) = run_curve_slots.get(rid) {
+                        self.backref(slot);
+                    } else {
+                        let slot = self.write_curve(*num_edges);
+                        run_curve_slots.insert(*rid, slot);
+                    }
+                }
             }
             chain.edge_slots.push(edge_slot);
             chain.edge_senses.push(0);
             chain.new_entities += 1;
-            let (a, b) = (
-                point_slots[v1].unwrap_or_default(),
-                point_slots[v2].unwrap_or_default(),
-            );
+            let a = topo.vertex_slots[&k1];
+            let b = topo.vertex_slots[&k2];
             topo.edges.insert((a.min(b), a.max(b)), (edge_slot, a));
         }
         chain
@@ -1295,18 +1399,8 @@ impl ArchiveWriter {
         closed: bool,
         flags: EdgeFlags,
     ) -> i32 {
-        let n = points.len();
-        let num_edges = if closed { n } else { n - 1 };
-        self.write_edge_chain(
-            points,
-            topo,
-            closed,
-            flags,
-            ChainCurve::Polyline {
-                num_edges: num_edges as u32,
-            },
-        )
-        .new_entities
+        self.write_edge_chain(points, topo, closed, flags, ChainCurve::Polyline)
+            .new_entities
     }
 
     /// One planar face. Returns the number of new entity-list entries (newly declared edges of

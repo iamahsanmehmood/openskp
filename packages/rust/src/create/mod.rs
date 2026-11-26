@@ -900,6 +900,7 @@ fn add_face_to(
 fn add_circle_to(
     writer: &mut ArchiveWriter,
     topo: &mut Topology,
+    applied_sizes: &HashMap<i32, (f64, f64)>,
     center: Point3,
     normal: Point3,
     radius: f64,
@@ -928,14 +929,24 @@ fn add_circle_to(
         &options.attribute_dict_name,
         &options.attribute_dicts,
     )?;
+    let front_uv = scale_pins(
+        options.front_uv.as_deref(),
+        applied_sizes,
+        options.material.unwrap_or(0),
+    );
+    let back_uv = scale_pins(
+        options.back_uv.as_deref(),
+        applied_sizes,
+        options.back_material.unwrap_or(0),
+    );
     let spec = FaceSpec {
         material: options.material.unwrap_or(0),
         layer: options.layer.unwrap_or(0),
         back_material: options.back_material.unwrap_or(0),
         hidden: options.hidden,
         edges: EdgeFlags::default(),
-        front_uv: options.front_uv.as_deref(),
-        back_uv: options.back_uv.as_deref(),
+        front_uv: front_uv.as_deref(),
+        back_uv: back_uv.as_deref(),
         attribute_dicts: &dicts,
         curve: Some(&params),
         holes: &[],
@@ -1655,6 +1666,7 @@ impl SkpBuilder {
         self.new_entity_count += add_circle_to(
             writer,
             &mut self.root_topology,
+            &self.applied_sizes,
             center,
             normal,
             radius,
@@ -2075,9 +2087,21 @@ impl ComponentDefinitionBuilder<'_> {
         self.skp
             .check_material_handle(options.back_material, "back_material")?;
         self.skp.check_layer_handle(options.layer)?;
-        let (writer, def) = self.parts();
-        def.new_entity_count +=
-            add_circle_to(writer, &mut def.topology, center, normal, radius, options)?;
+        let skp = &mut *self.skp;
+        let writer = skp
+            .definition_writer
+            .as_mut()
+            .expect("a definition always has a writer");
+        let def = &mut skp.definitions[self.index];
+        def.new_entity_count += add_circle_to(
+            writer,
+            &mut def.topology,
+            &skp.applied_sizes,
+            center,
+            normal,
+            radius,
+            options,
+        )?;
         Ok(())
     }
 

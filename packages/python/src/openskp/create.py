@@ -963,20 +963,20 @@ class _ArchiveWriter:
     ) -> None:
         """Like `_preamble(real_attrs=True)`, but the attribute container's
         children list holds real content instead of closing immediately:
-        an optional `CFaceTextureCoords` (``front_matrix``/``back_matrix``
-        - faces with explicit texture positioning only; a face with
-        neither side positioned writes none, even if it has
-        ``attribute_dicts``) followed by zero or more named
-        `CAttributeNamed` dictionaries (``attribute_dicts``, custom
-        key/value metadata - the same mechanism SketchUp's own "dynamic
-        component" attributes use)."""
+        zero or more named `CAttributeNamed` dictionaries (``attribute_dicts``,
+        custom key/value metadata - the same mechanism SketchUp's own
+        "dynamic component" attributes use) followed by an optional
+        `CFaceTextureCoords` (``front_matrix``/``back_matrix`` - faces with
+        explicit texture positioning only; written after any named
+        dictionaries so SketchUp's ``SUEntityGetAttributeDictionaries`` does
+        not return the unnamed texture-coords child in place of a dictionary)."""
         self.buf += struct.pack("<H", 0x8000 | _ATTR_CONTAINER_SLOT)
         self._alloc()
         self.buf += bytes(3)  # the container's own nested preamble: null attrs (2) + mask=0 (1)
-        if front_matrix is not None or back_matrix is not None:
-            self.write_face_texture_coords(front_matrix, back_matrix)
         for dict_name, entries in attribute_dicts:
             self.write_attribute_dict(dict_name, entries)
+        if front_matrix is not None or back_matrix is not None:
+            self.write_face_texture_coords(front_matrix, back_matrix)
         self._null()  # children-list terminator
         if pid is None:
             pid = self._alloc_pid()
@@ -1616,15 +1616,78 @@ class _ArchiveWriter:
         """
         n = len(points)
         pair_count = n if closed else n - 1
-        point_slots = [vertex_slots.get(p) for p in points]
+        curve_for_seg: List[Optional[Tuple[str, object, int]]] = [None] * pair_count
+        if curve_params is not None or polyline_num_edges is not None:
+            temp_slots: Dict[Point3, int] = {}
+            next_temp = -1
+            sim_edges = set(edge_registry.keys())
+            seg_is_new = [False] * pair_count
+            for i in range(pair_count):
+                p1, p2 = points[i], points[(i + 1) % n]
+                if p1 == p2:
+                    continue
+                s1 = vertex_slots.get(p1)
+                if s1 is None:
+                    if p1 not in temp_slots:
+                        temp_slots[p1] = next_temp
+                        next_temp -= 1
+                    s1 = temp_slots[p1]
+                s2 = vertex_slots.get(p2)
+                if s2 is None:
+                    if p2 not in temp_slots:
+                        temp_slots[p2] = next_temp
+                        next_temp -= 1
+                    s2 = temp_slots[p2]
+                ek = frozenset((s1, s2))
+                if ek not in sim_edges:
+                    seg_is_new[i] = True
+                    sim_edges.add(ek)
+            runs: List[List[int]] = []
+            cur_run: List[int] = []
+            for i in range(pair_count):
+                if seg_is_new[i]:
+                    cur_run.append(i)
+                elif cur_run:
+                    runs.append(cur_run)
+                    cur_run = []
+            if cur_run:
+                runs.append(cur_run)
+            if closed and len(runs) >= 2 and runs[0][0] == 0 and runs[-1][-1] == pair_count - 1:
+                runs = [runs[-1] + runs[0]] + runs[1:-1]
+            for run_id, run in enumerate(runs):
+                run_len = len(run)
+                if run_len < 2:
+                    continue
+                if curve_params is not None:
+                    center, normal, xaxis, start_a, end_a, radius, total_segs = curve_params
+                    if run_len == total_segs:
+                        sub_params = curve_params
+                    else:
+                        s0 = run[0]
+                        sweep = end_a - start_a
+                        a0 = start_a + sweep * (s0 / total_segs)
+                        a1 = start_a + sweep * ((s0 + run_len) / total_segs)
+                        if closed and s0 + run_len > total_segs:
+                            a0 -= 2.0 * math.pi
+                            a1 -= 2.0 * math.pi
+                        sub_params = (center, normal, xaxis, a0, a1, radius, run_len)
+                    for seg_idx in run:
+                        curve_for_seg[seg_idx] = ("arc", sub_params, run_id)
+                else:
+                    for seg_idx in run:
+                        curve_for_seg[seg_idx] = ("poly", run_len, run_id)
+
         edge_slots: List[int] = []
         edge_senses: List[int] = []
         new_entities = 0
-        curve_slot: Optional[int] = None
+        run_curve_slots: Dict[int, int] = {}
 
         for i in range(pair_count):
-            v1_idx, v2_idx = i, (i + 1) % n
-            v1_known, v2_known = point_slots[v1_idx], point_slots[v2_idx]
+            p1, p2 = points[i], points[(i + 1) % n]
+            if p1 == p2:
+                continue
+            v1_known = vertex_slots.get(p1)
+            v2_known = vertex_slots.get(p2)
             key = (
                 frozenset((v1_known, v2_known))
                 if v1_known is not None and v2_known is not None
@@ -1639,26 +1702,30 @@ class _ArchiveWriter:
             edge_slot = self._new_of_known_class("CEdge", schema=2)
             self._preamble()
             self._drawbase(hidden=hidden_edges, soft=soft_edges, smooth=smooth_edges)
-            for idx in (v1_idx, v2_idx):
-                if point_slots[idx] is None:
-                    point_slots[idx] = self._write_vertex(points[idx])
-                    vertex_slots[points[idx]] = point_slots[idx]
+            for p in (p1, p2):
+                s = vertex_slots.get(p)
+                if s is None:
+                    vertex_slots[p] = self._write_vertex(p)
                 else:
-                    self._backref(point_slots[idx])
-            if curve_slot is not None:
-                self._backref(curve_slot)
-            elif curve_params is not None:
-                curve_slot = self.write_arc_curve(*curve_params)
-            elif polyline_num_edges is not None:
-                curve_slot = self.write_curve(polyline_num_edges)
-            else:
+                    self._backref(s)
+            spec = curve_for_seg[i]
+            if spec is None:
                 self._null()  # curve = None
+            else:
+                kind, param, rid = spec
+                if rid in run_curve_slots:
+                    self._backref(run_curve_slots[rid])
+                elif kind == "arc":
+                    run_curve_slots[rid] = self.write_arc_curve(*param)  # type: ignore[misc]
+                else:
+                    run_curve_slots[rid] = self.write_curve(param)  # type: ignore[arg-type]
             edge_slots.append(edge_slot)
             edge_senses.append(0)
             new_entities += 1
-            edge_registry[frozenset((point_slots[v1_idx], point_slots[v2_idx]))] = (
+            s1_final, s2_final = vertex_slots[p1], vertex_slots[p2]
+            edge_registry[frozenset((s1_final, s2_final))] = (
                 edge_slot,
-                point_slots[v1_idx],
+                s1_final,
             )
 
         return edge_slots, edge_senses, new_entities
@@ -2256,6 +2323,8 @@ class ComponentDefinitionBuilder:
         curve_params = (center, normal, xaxis, 0.0, 2.0 * math.pi, radius, num_segments)
         points = _circle_points(center, normal, radius, num_segments, u, w)
         resolved_attribute_dicts = _resolve_attribute_dicts(attributes, attribute_dict_name, attribute_dicts)
+        front_uv = _scale_pins(front_uv, self._skp._applied_sizes.get(material or 0))
+        back_uv = _scale_pins(back_uv, self._skp._applied_sizes.get(back_material or 0))
         self._new_entity_count += writer.write_face(
             points, self._vertex_slots, self._edge_registry,
             material or 0, layer or 0, back_material or 0,
@@ -3448,6 +3517,8 @@ class SkpBuilder:
         curve_params = (center, normal, xaxis, 0.0, 2.0 * math.pi, radius, num_segments)
         points = _circle_points(center, normal, radius, num_segments, u, w)
         resolved_attribute_dicts = _resolve_attribute_dicts(attributes, attribute_dict_name, attribute_dicts)
+        front_uv = _scale_pins(front_uv, self._applied_sizes.get(material or 0))
+        back_uv = _scale_pins(back_uv, self._applied_sizes.get(back_material or 0))
         self._new_entity_count += self._geometry_writer.write_face(
             points, self._vertex_slots, self._edge_registry,
             material or 0, layer or 0, back_material or 0,

@@ -4461,6 +4461,213 @@ class TestRealSketchUpOracle:
         finally:
             dll.SUTerminate()
 
+    def test_face_with_uv_and_attributes_keeps_dictionaries_in_real_sketchup(self, tmp_path):
+        import ctypes
+
+        class SUPoint3D(ctypes.Structure):
+            _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double), ("z", ctypes.c_double)]
+
+        class SUUVQ(ctypes.Structure):
+            _fields_ = [("u", ctypes.c_double), ("v", ctypes.c_double), ("q", ctypes.c_double)]
+
+        png_path = tmp_path / "tex.png"
+        png_path.write_bytes(_make_test_png())
+        builder = create()
+        tex = builder.add_texture_material(
+            "Brick", str(png_path), applied_width=10.0, applied_height=20.0, filename="tex.png",
+        )
+        builder.add_face(
+            SQUARE,
+            material=tex,
+            back_material=tex,
+            front_uv=[((0.0, 0.0, 0.0), (0.0, 0.0)), ((50.0, 0.0, 0.0), (1.0, 0.0)), ((0.0, 50.0, 0.0), (0.0, 1.0))],
+            back_uv=[((0.0, 0.0, 0.0), (0.0, 0.0)), ((25.0, 0.0, 0.0), (1.0, 0.0)), ((0.0, 25.0, 0.0), (0.0, 1.0))],
+            attribute_dicts=[("attributes", {"d": 1}), ("second", {"label": "ok"})],
+        )
+        out = tmp_path / "face_uv_attrs_oracle.skp"
+        builder.save(str(out))
+
+        dll = ctypes.CDLL(_SDK_DLL_PATH)
+        dll.SUModelCreateFromFile.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_char_p]
+        dll.SUModelRelease.argtypes = [ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUModelFixErrors.argtypes = [ctypes.c_void_p]
+        dll.SUModelGetEntities.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUEntitiesGetFaces.argtypes = [
+            ctypes.c_void_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_size_t),
+        ]
+        dll.SUFaceToEntity.argtypes = [ctypes.c_void_p]
+        dll.SUFaceToEntity.restype = ctypes.c_void_p
+        dll.SUEntityGetNumAttributeDictionaries.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_size_t)]
+        dll.SUEntityGetAttributeDictionaries.argtypes = [
+            ctypes.c_void_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_size_t),
+        ]
+        dll.SUAttributeDictionaryGetName.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUStringCreate.argtypes = [ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUStringRelease.argtypes = [ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUStringGetUTF8Length.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_size_t)]
+        dll.SUStringGetUTF8.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_char_p, ctypes.POINTER(ctypes.c_size_t)]
+        dll.SUFaceGetUVHelper.argtypes = [
+            ctypes.c_void_p, ctypes.c_bool, ctypes.c_bool, ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p),
+        ]
+        dll.SUUVHelperRelease.argtypes = [ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUUVHelperGetFrontUVQ.argtypes = [ctypes.c_void_p, ctypes.POINTER(SUPoint3D), ctypes.POINTER(SUUVQ)]
+        dll.SUUVHelperGetBackUVQ.argtypes = [ctypes.c_void_p, ctypes.POINTER(SUPoint3D), ctypes.POINTER(SUUVQ)]
+        dll.SUInitialize()
+        try:
+            model = ctypes.c_void_p()
+            assert dll.SUModelCreateFromFile(ctypes.byref(model), str(out).encode()) == 0
+            entities = ctypes.c_void_p()
+            dll.SUModelGetEntities(model, ctypes.byref(entities))
+            faces = (ctypes.c_void_p * 1)()
+            got = ctypes.c_size_t()
+            dll.SUEntitiesGetFaces(entities, 1, faces, ctypes.byref(got))
+            assert got.value == 1
+            face_ent = dll.SUFaceToEntity(faces[0])
+            nd = ctypes.c_size_t()
+            dll.SUEntityGetNumAttributeDictionaries(face_ent, ctypes.byref(nd))
+            assert nd.value == 2
+            dicts = (ctypes.c_void_p * 2)()
+            dc = ctypes.c_size_t()
+            assert dll.SUEntityGetAttributeDictionaries(face_ent, 2, dicts, ctypes.byref(dc)) == 0
+            assert dc.value == 2
+            names = []
+            for k in range(2):
+                s = ctypes.c_void_p()
+                dll.SUStringCreate(ctypes.byref(s))
+                dll.SUAttributeDictionaryGetName(dicts[k], ctypes.byref(s))
+                slen = ctypes.c_size_t()
+                dll.SUStringGetUTF8Length(s, ctypes.byref(slen))
+                buf = ctypes.create_string_buffer(slen.value + 1)
+                copied = ctypes.c_size_t()
+                dll.SUStringGetUTF8(s, slen.value + 1, buf, ctypes.byref(copied))
+                names.append(buf.value.decode("utf-8"))
+                dll.SUStringRelease(ctypes.byref(s))
+            assert names == ["attributes", "second"]
+
+            uvh = ctypes.c_void_p()
+            assert dll.SUFaceGetUVHelper(faces[0], True, True, ctypes.c_void_p(0), ctypes.byref(uvh)) == 0
+            fuv, buv = SUUVQ(), SUUVQ()
+            assert dll.SUUVHelperGetFrontUVQ(uvh, ctypes.byref(SUPoint3D(50.0, 0.0, 0.0)), ctypes.byref(fuv)) == 0
+            assert dll.SUUVHelperGetBackUVQ(uvh, ctypes.byref(SUPoint3D(25.0, 0.0, 0.0)), ctypes.byref(buv)) == 0
+            dll.SUUVHelperRelease(ctypes.byref(uvh))
+            assert fuv.u == pytest.approx(1.0)
+            assert buv.u == pytest.approx(1.0)
+            assert dll.SUModelFixErrors(model) == 0
+            dll.SUEntityGetNumAttributeDictionaries(face_ent, ctypes.byref(nd))
+            assert nd.value == 2
+            dll.SUModelRelease(ctypes.byref(model))
+        finally:
+            dll.SUTerminate()
+
+    def test_circle_uv_scales_by_texture_size_in_real_sketchup(self, tmp_path):
+        import ctypes
+
+        class SUPoint3D(ctypes.Structure):
+            _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double), ("z", ctypes.c_double)]
+
+        class SUUVQ(ctypes.Structure):
+            _fields_ = [("u", ctypes.c_double), ("v", ctypes.c_double), ("q", ctypes.c_double)]
+
+        png_path = tmp_path / "tex.png"
+        png_path.write_bytes(_make_test_png())
+        builder = create()
+        tex = builder.add_texture_material(
+            "Brick", str(png_path), applied_width=10.0, applied_height=20.0, filename="tex.png",
+        )
+        pins = [((0.0, 0.0, 0.0), (0.0, 0.0)), ((50.0, 0.0, 0.0), (1.0, 0.0)), ((0.0, 40.0, 0.0), (0.0, 1.0))]
+        builder.add_circle((0.0, 0.0, 0.0), (0.0, 0.0, 1.0), 60.0, material=tex, back_material=tex, front_uv=pins, back_uv=pins)
+        out = tmp_path / "circle_uv_oracle.skp"
+        builder.save(str(out))
+
+        dll = ctypes.CDLL(_SDK_DLL_PATH)
+        dll.SUModelCreateFromFile.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_char_p]
+        dll.SUModelRelease.argtypes = [ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUModelGetEntities.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUEntitiesGetFaces.argtypes = [
+            ctypes.c_void_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_size_t),
+        ]
+        dll.SUFaceGetUVHelper.argtypes = [
+            ctypes.c_void_p, ctypes.c_bool, ctypes.c_bool, ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p),
+        ]
+        dll.SUUVHelperRelease.argtypes = [ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUUVHelperGetFrontUVQ.argtypes = [ctypes.c_void_p, ctypes.POINTER(SUPoint3D), ctypes.POINTER(SUUVQ)]
+        dll.SUUVHelperGetBackUVQ.argtypes = [ctypes.c_void_p, ctypes.POINTER(SUPoint3D), ctypes.POINTER(SUUVQ)]
+        dll.SUInitialize()
+        try:
+            model = ctypes.c_void_p()
+            assert dll.SUModelCreateFromFile(ctypes.byref(model), str(out).encode()) == 0
+            entities = ctypes.c_void_p()
+            dll.SUModelGetEntities(model, ctypes.byref(entities))
+            faces = (ctypes.c_void_p * 1)()
+            got = ctypes.c_size_t()
+            dll.SUEntitiesGetFaces(entities, 1, faces, ctypes.byref(got))
+            assert got.value == 1
+            uvh = ctypes.c_void_p()
+            assert dll.SUFaceGetUVHelper(faces[0], True, True, ctypes.c_void_p(0), ctypes.byref(uvh)) == 0
+            fuv, buv = SUUVQ(), SUUVQ()
+            assert dll.SUUVHelperGetFrontUVQ(uvh, ctypes.byref(SUPoint3D(50.0, 0.0, 0.0)), ctypes.byref(fuv)) == 0
+            assert dll.SUUVHelperGetBackUVQ(uvh, ctypes.byref(SUPoint3D(0.0, 40.0, 0.0)), ctypes.byref(buv)) == 0
+            dll.SUUVHelperRelease(ctypes.byref(uvh))
+            assert (fuv.u, fuv.v) == pytest.approx((1.0, 0.0))
+            assert (buv.u, buv.v) == pytest.approx((0.0, 1.0))
+            dll.SUModelRelease(ctypes.byref(model))
+        finally:
+            dll.SUTerminate()
+
+    def test_curves_over_existing_edges_keep_valid_curves_in_real_sketchup(self, tmp_path):
+        import ctypes
+
+        builder = create()
+        sq = [(0.0, 0.0, 0.0), (10.0, 0.0, 0.0), (10.0, 10.0, 0.0), (0.0, 10.0, 0.0)]
+        builder.add_face(sq)
+        builder.add_polyline(sq, closed=True)
+        builder.add_polyline([(20.0, -10.0, 0.0), (20.0, 0.0, 0.0), (10.0, 0.0, 0.0), (10.0, 10.0, 0.0), (20.0, 10.0, 0.0), (20.0, 20.0, 0.0)])
+        builder.add_polyline([(0.0, 30.0, 0.0), (10.0, 30.0, 0.0), (0.0, 30.0, 0.0), (10.0, 30.0, 0.0)])
+        builder.add_circle((60.0, 0.0, 0.0), (0.0, 0.0, 1.0), 10.0, num_segments=8)
+        builder.add_circle((60.0, 0.0, 0.0), (0.0, 0.0, 1.0), 10.0, num_segments=8)
+        out = tmp_path / "curves_overlap_oracle.skp"
+        builder.save(str(out))
+
+        dll = ctypes.CDLL(_SDK_DLL_PATH)
+        dll.SUModelCreateFromFile.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_char_p]
+        dll.SUModelRelease.argtypes = [ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUModelFixErrors.argtypes = [ctypes.c_void_p]
+        dll.SUModelGetEntities.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+        dll.SUEntitiesGetNumEdges.argtypes = [ctypes.c_void_p, ctypes.c_bool, ctypes.POINTER(ctypes.c_size_t)]
+        dll.SUEntitiesGetNumCurves.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_size_t)]
+        dll.SUEntitiesGetCurves.argtypes = [
+            ctypes.c_void_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_size_t),
+        ]
+        dll.SUCurveGetNumEdges.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_size_t)]
+        dll.SUInitialize()
+        try:
+            model = ctypes.c_void_p()
+            assert dll.SUModelCreateFromFile(ctypes.byref(model), str(out).encode()) == 0
+            entities = ctypes.c_void_p()
+            dll.SUModelGetEntities(model, ctypes.byref(entities))
+            ne_before, nc_before = ctypes.c_size_t(), ctypes.c_size_t()
+            dll.SUEntitiesGetNumEdges(entities, False, ctypes.byref(ne_before))
+            dll.SUEntitiesGetNumCurves(entities, ctypes.byref(nc_before))
+            assert ne_before.value == 4 + 4 + 1 + 8
+            assert nc_before.value == 2
+            curves = (ctypes.c_void_p * 2)()
+            got = ctypes.c_size_t()
+            dll.SUEntitiesGetCurves(entities, 2, curves, ctypes.byref(got))
+            edge_counts = []
+            for i in range(got.value):
+                cne = ctypes.c_size_t()
+                dll.SUCurveGetNumEdges(curves[i], ctypes.byref(cne))
+                edge_counts.append(cne.value)
+            assert edge_counts == [2, 2]
+            assert dll.SUModelFixErrors(model) == 0
+            ne_after, nc_after = ctypes.c_size_t(), ctypes.c_size_t()
+            dll.SUEntitiesGetNumEdges(entities, False, ctypes.byref(ne_after))
+            dll.SUEntitiesGetNumCurves(entities, ctypes.byref(nc_after))
+            assert (ne_after.value, nc_after.value) == (ne_before.value, nc_before.value)
+            dll.SUModelRelease(ctypes.byref(model))
+        finally:
+            dll.SUTerminate()
+
 
 class TestMaterialOpacity:
     def test_solid_material_carries_opacity(self):
@@ -4885,3 +5092,102 @@ def test_guide_options_reject_foreign_layer_handle():
         builder.add_construction_point((1.0, 2.0, 3.0), layer=42)
     with pytest.raises(SkpWriteError):
         builder.add_construction_line((0.0, 0.0, 0.0), point2=(10.0, 0.0, 0.0), layer=42)
+
+
+def test_face_with_uv_and_attributes_writes_dictionaries_before_ftc(tmp_path):
+    png = tmp_path / "tex.png"
+    png.write_bytes(_make_test_png())
+    builder = create()
+    tex = builder.add_texture_material("Brick", str(png), filename="tex.png")
+    pins = [((0.0, 0.0, 0.0), (0.0, 0.0)), ((50.0, 0.0, 0.0), (1.0, 0.0)), ((0.0, 50.0, 0.0), (0.0, 1.0))]
+    builder.add_face(
+        SQUARE,
+        material=tex,
+        front_uv=pins,
+        attribute_dicts=[("attributes", {"d": 1}), ("second", {"k": "v"})],
+    )
+    _, root, _, _ = legacy._walk(builder.to_bytes())
+    face = [v for (_, n, v) in root if n == "CFace"][0]
+    child_classes = [cls_name for cls_name, _ in face["attrs"]["children"]]
+    assert child_classes == ["CAttributeNamed", "CAttributeNamed", "CFaceTextureCoords"]
+    assert [val["name"] for cls_name, val in face["attrs"]["children"] if cls_name == "CAttributeNamed"] == [
+        "attributes",
+        "second",
+    ]
+
+
+def test_add_circle_scales_front_and_back_uv_by_texture_size(tmp_path):
+    png = tmp_path / "tex.png"
+    png.write_bytes(_make_test_png())
+    builder = create()
+    tex = builder.add_texture_material(
+        "Brick", str(png), applied_width=10.0, applied_height=20.0, filename="tex.png",
+    )
+    back_tex = builder.add_texture_material(
+        "BackBrick", str(png), applied_width=4.0, applied_height=8.0, filename="tex.png",
+    )
+    front_pins = [((0.0, 0.0, 0.0), (0.0, 0.0)), ((50.0, 0.0, 0.0), (1.0, 0.0)), ((0.0, 40.0, 0.0), (0.0, 1.0))]
+    back_pins = [((0.0, 0.0, 0.0), (0.0, 0.0)), ((20.0, 0.0, 0.0), (1.0, 0.0)), ((0.0, 16.0, 0.0), (0.0, 1.0))]
+    with builder.add_component_definition("DiscDef") as comp:
+        comp.add_face(SQUARE, material=tex, back_material=back_tex, front_uv=front_pins, back_uv=back_pins)
+        comp.add_circle(
+            (200.0, 0.0, 0.0), (0.0, 0.0, 1.0), 30.0,
+            material=tex, back_material=back_tex, front_uv=front_pins, back_uv=back_pins,
+        )
+    builder.add_instance(comp)
+    builder.add_face(SQUARE, material=tex, back_material=back_tex, front_uv=front_pins, back_uv=back_pins)
+    builder.add_circle(
+        (200.0, 0.0, 0.0), (0.0, 0.0, 1.0), 30.0,
+        material=tex, back_material=back_tex, front_uv=front_pins, back_uv=back_pins,
+    )
+    out = tmp_path / "circle_uv_scaled.skp"
+    builder.save(str(out))
+    model = SkpFile.open(str(out)).parse()
+    root_faces = list(model.root.faces.values())
+    assert len(root_faces) == 2
+    assert root_faces[1].uv_transform == pytest.approx(root_faces[0].uv_transform)
+    assert root_faces[1].uv_transform_back == pytest.approx(root_faces[0].uv_transform_back)
+    def_faces = list(next(iter(model.definitions.values())).faces.values())
+    assert len(def_faces) == 2
+    assert def_faces[1].uv_transform == pytest.approx(def_faces[0].uv_transform)
+    assert def_faces[1].uv_transform_back == pytest.approx(def_faces[0].uv_transform_back)
+
+
+def test_curves_leave_existing_and_retracing_edges_out_of_new_curves(tmp_path):
+    sq = [(0.0, 0.0, 0.0), (10.0, 0.0, 0.0), (10.0, 10.0, 0.0), (0.0, 10.0, 0.0)]
+
+    # 1. Closed polyline over a face's edges: 0 new edges, 0 curves.
+    b1 = create()
+    b1.add_face(sq)
+    b1.add_polyline(sq, closed=True)
+    _, root1, _, _ = legacy._walk(b1.to_bytes())
+    edges1 = [v for (_, n, v) in root1 if n == "CEdge"]
+    assert len(edges1) == 4
+    assert all(e["curve"] is None for e in edges1)
+
+    # 2. Middle shared face edge splits polyline into two 2-edge CCurves; self-retracing collapses to 1 edge (no curve).
+    b2 = create()
+    b2.add_face(sq)
+    b2.add_polyline([(20.0, -10.0, 0.0), (20.0, 0.0, 0.0), (10.0, 0.0, 0.0), (10.0, 10.0, 0.0), (20.0, 10.0, 0.0), (20.0, 20.0, 0.0)])
+    b2.add_polyline([(0.0, 30.0, 0.0), (10.0, 30.0, 0.0), (0.0, 30.0, 0.0), (10.0, 30.0, 0.0)])
+    ar2, root2, _, _ = legacy._walk(b2.to_bytes())
+    edges2 = [v for (_, n, v) in root2 if n == "CEdge"]
+    assert len(edges2) == 4 + 4 + 1
+    curve_slots2 = [e["curve"] for e in edges2 if e["curve"] is not None]
+    assert len(curve_slots2) == 4
+    assert len(set(curve_slots2)) == 2
+    for cslot in set(curve_slots2):
+        assert ar2.slots[cslot][2] == {"k": "curve", "n": 2}
+
+    # 3. Same add_circle twice keeps a single 8-edge CArcCurve; open arc with middle shared chord splits into 2 sub-arcs.
+    u, w = create_module._circle_basis((0.0, 0.0, 1.0))
+    apts = create_module._arc_points((0.0, 60.0, 0.0), (0.0, 0.0, 1.0), 10.0, 5, u, w, 0.0, math.pi)
+    b3 = create()
+    b3.add_circle((0.0, 0.0, 0.0), (0.0, 0.0, 1.0), 10.0, num_segments=8)
+    b3.add_circle((0.0, 0.0, 0.0), (0.0, 0.0, 1.0), 10.0, num_segments=8)
+    b3.add_face([apts[2], apts[3], (0.0, 90.0, 0.0)])
+    b3.add_arc((0.0, 60.0, 0.0), (0.0, 0.0, 1.0), 10.0, 0.0, math.pi, num_segments=5)
+    out3 = tmp_path / "curves_overlap.skp"
+    b3.save(str(out3))
+    parsed3 = SkpFile.open(str(out3)).parse()
+    assert len(parsed3.root.arcs) == 3  # 1 full circle + 2 two-segment sub-arcs

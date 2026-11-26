@@ -1318,6 +1318,92 @@ namespace OpenSkp.Tests
             }
         }
 
+        [Fact]
+        public void FaceWithUvAndAttributesWritesDictionariesBeforeTextureCoords()
+        {
+            string pngPath = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".png");
+            File.WriteAllBytes(pngPath, TinyPng());
+            try
+            {
+                var builder = SkpCreate.NewFile();
+                int brick = builder.AddTextureMaterial("Brick", pngPath, filename: "tex.png");
+                builder.AddFace(
+                    Square(),
+                    material: brick,
+                    frontUv: new[]
+                    {
+                        new UvCorrespondence((0, 0, 0), (0.0, 0.0)),
+                        new UvCorrespondence((50, 0, 0), (1.0, 0.0)),
+                        new UvCorrespondence((0, 50, 0), (0.0, 1.0)),
+                    },
+                    attributeDicts: new[]
+                    {
+                        new AttributeDict("attributes", new Dictionary<string, object> { ["d"] = 1 }),
+                        new AttributeDict("second", new Dictionary<string, object> { ["k"] = "v" }),
+                    });
+                byte[] raw = builder.ToBytes();
+                byte[] dictBytes = System.Text.Encoding.Unicode.GetBytes("second");
+                byte[] ftcBytes = System.Text.Encoding.ASCII.GetBytes("CFaceTextureCoords");
+                int dictPos = IndexOfBytes(raw, dictBytes);
+                int ftcPos = IndexOfBytes(raw, ftcBytes);
+                Assert.True(dictPos >= 0 && ftcPos >= 0);
+                Assert.True(dictPos < ftcPos, "CAttributeNamed dictionaries must precede CFaceTextureCoords");
+                var model = SkpFile.Parse(raw);
+                Assert.NotNull(model.Root.Faces.Values.Single().UvTransform);
+            }
+            finally
+            {
+                File.Delete(pngPath);
+            }
+        }
+
+        [Fact]
+        public void CurvesOverExistingAndRetracingEdgesOmitSharedEdges()
+        {
+            var sq = new (double, double, double)[] { (0, 0, 0), (10, 0, 0), (10, 10, 0), (0, 10, 0) };
+
+            var b1 = SkpCreate.NewFile();
+            b1.AddFace(sq);
+            b1.AddPolyline(sq, closed: true);
+            byte[] raw1 = b1.ToBytes();
+            Assert.Equal(-1, IndexOfBytes(raw1, System.Text.Encoding.ASCII.GetBytes("CCurve")));
+            Assert.Equal(4, SkpFile.Parse(raw1).Root.Edges.Count);
+
+            var b2 = SkpCreate.NewFile();
+            b2.AddFace(sq);
+            b2.AddPolyline(new (double, double, double)[]
+            {
+                (20, -10, 0), (20, 0, 0), (10, 0, 0), (10, 10, 0), (20, 10, 0), (20, 20, 0),
+            });
+            b2.AddPolyline(new (double, double, double)[] { (0, 30, 0), (10, 30, 0), (0, 30, 0), (10, 30, 0) });
+            var m2 = SkpFile.Parse(b2.ToBytes());
+            Assert.Equal(9, m2.Root.Edges.Count);
+            var curveIds = m2.Root.Edges.Values.Where(e => e.CurveId.HasValue).Select(e => e.CurveId!.Value).ToList();
+            Assert.Equal(4, curveIds.Count);
+            Assert.Equal(2, curveIds.Distinct().Count());
+
+            var b3 = SkpCreate.NewFile();
+            b3.AddCircle((0, 0, 0), (0, 0, 1), 10, numSegments: 8);
+            b3.AddCircle((0, 0, 0), (0, 0, 1), 10, numSegments: 8);
+            var m3 = SkpFile.Parse(b3.ToBytes());
+            Assert.Equal(8, m3.Root.Edges.Count);
+            Assert.Single(m3.Root.Arcs);
+        }
+
+        private static int IndexOfBytes(byte[] haystack, byte[] needle)
+        {
+            for (int i = 0; i <= haystack.Length - needle.Length; i++)
+            {
+                bool match = true;
+                for (int j = 0; j < needle.Length; j++)
+                {
+                    if (haystack[i + j] != needle[j]) { match = false; break; }
+                }
+                if (match) return i;
+            }
+            return -1;
+        }
+
         // 1x1 transparent PNG.
         private static byte[] TinyPng() => Convert.FromBase64String(
             "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=");

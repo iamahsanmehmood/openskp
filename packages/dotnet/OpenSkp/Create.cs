@@ -960,16 +960,16 @@ namespace OpenSkp
             AddU16((ushort)(0x8000 | CreateConstants.AttrContainerSlot));
             Alloc();
             AddZeros(3);
-            if (frontMatrix != null || backMatrix != null)
-            {
-                WriteFaceTextureCoords(frontMatrix, backMatrix);
-            }
             if (attributeDicts != null)
             {
                 foreach (var ad in attributeDicts)
                 {
                     WriteAttributeDict(ad.DictName, ad.Entries);
                 }
+            }
+            if (frontMatrix != null || backMatrix != null)
+            {
+                WriteFaceTextureCoords(frontMatrix, backMatrix);
             }
             Null_(); // children-list terminator
             long p = pid ?? AllocPid();
@@ -1489,22 +1489,102 @@ namespace OpenSkp
         {
             int n = points.Count;
             int pairCount = closed ? n : n - 1;
-            var pointSlots = new int?[n];
-            for (int i = 0; i < n; i++)
+            var curveForSeg = new (bool IsArc, ArcCurveParams Arc, int PolyEdges, int RunId)?[pairCount];
+            if (curveParams != null || polylineNumEdges.HasValue)
             {
-                pointSlots[i] = vertexSlots.TryGetValue(points[i], out int s) ? s : (int?)null;
+                var tempSlots = new Dictionary<(double, double, double), int>();
+                int nextTemp = -1;
+                var simEdges = new HashSet<(int, int)>(edgeRegistry.Keys);
+                var segIsNew = new bool[pairCount];
+                for (int i = 0; i < pairCount; i++)
+                {
+                    var p1 = points[i];
+                    var p2 = points[(i + 1) % n];
+                    if (p1 == p2) continue;
+                    if (!vertexSlots.TryGetValue(p1, out int s1) && !tempSlots.TryGetValue(p1, out s1))
+                    {
+                        s1 = nextTemp--;
+                        tempSlots[p1] = s1;
+                    }
+                    if (!vertexSlots.TryGetValue(p2, out int s2) && !tempSlots.TryGetValue(p2, out s2))
+                    {
+                        s2 = nextTemp--;
+                        tempSlots[p2] = s2;
+                    }
+                    var ek = EdgeKeyOf(s1, s2);
+                    if (simEdges.Add(ek))
+                    {
+                        segIsNew[i] = true;
+                    }
+                }
+                var runs = new List<List<int>>();
+                var curRun = new List<int>();
+                for (int i = 0; i < pairCount; i++)
+                {
+                    if (segIsNew[i])
+                    {
+                        curRun.Add(i);
+                    }
+                    else if (curRun.Count > 0)
+                    {
+                        runs.Add(curRun);
+                        curRun = new List<int>();
+                    }
+                }
+                if (curRun.Count > 0) runs.Add(curRun);
+                if (closed && runs.Count >= 2 && runs[0][0] == 0 && runs[runs.Count - 1][runs[runs.Count - 1].Count - 1] == pairCount - 1)
+                {
+                    var merged = new List<int>(runs[runs.Count - 1].Count + runs[0].Count);
+                    merged.AddRange(runs[runs.Count - 1]);
+                    merged.AddRange(runs[0]);
+                    var nextRuns = new List<List<int>> { merged };
+                    for (int r = 1; r < runs.Count - 1; r++) nextRuns.Add(runs[r]);
+                    runs = nextRuns;
+                }
+                for (int runId = 0; runId < runs.Count; runId++)
+                {
+                    var run = runs[runId];
+                    int runLen = run.Count;
+                    if (runLen < 2) continue;
+                    if (curveParams != null)
+                    {
+                        var cp = curveParams.Value;
+                        var subCp = cp;
+                        if (runLen != cp.NumSegments)
+                        {
+                            int s0 = run[0];
+                            double sweep = cp.EndAngle - cp.StartAngle;
+                            double a0 = cp.StartAngle + sweep * ((double)s0 / cp.NumSegments);
+                            double a1 = cp.StartAngle + sweep * ((double)(s0 + runLen) / cp.NumSegments);
+                            if (closed && s0 + runLen > cp.NumSegments)
+                            {
+                                a0 -= 2.0 * Math.PI;
+                                a1 -= 2.0 * Math.PI;
+                            }
+                            subCp = new ArcCurveParams(cp.Center, cp.Normal, cp.XAxis, a0, a1, cp.Radius, runLen);
+                        }
+                        foreach (int segIdx in run) curveForSeg[segIdx] = (true, subCp, 0, runId);
+                    }
+                    else
+                    {
+                        foreach (int segIdx in run) curveForSeg[segIdx] = (false, default, runLen, runId);
+                    }
+                }
             }
 
             var edgeSlots = new List<int>();
             var edgeSenses = new List<int>();
             int newEntities = 0;
-            int? curveSlot = null;
+            var runCurveSlots = new Dictionary<int, int>();
 
             for (int i = 0; i < pairCount; i++)
             {
-                int v1Idx = i, v2Idx = (i + 1) % n;
-                int? v1Known = pointSlots[v1Idx], v2Known = pointSlots[v2Idx];
-                (int, int)? key = (v1Known.HasValue && v2Known.HasValue) ? EdgeKeyOf(v1Known.Value, v2Known.Value) : ((int, int)?)null;
+                var p1 = points[i];
+                var p2 = points[(i + 1) % n];
+                if (p1 == p2) continue;
+                bool hasV1 = vertexSlots.TryGetValue(p1, out int v1Known);
+                bool hasV2 = vertexSlots.TryGetValue(p2, out int v2Known);
+                (int, int)? key = (hasV1 && hasV2) ? EdgeKeyOf(v1Known, v2Known) : ((int, int)?)null;
                 if (key.HasValue && edgeRegistry.TryGetValue(key.Value, out var existing))
                 {
                     edgeSlots.Add(existing.EdgeSlot);
@@ -1515,40 +1595,45 @@ namespace OpenSkp
                 int edgeSlot = NewOfKnownClass("CEdge", 2);
                 Preamble();
                 Drawbase(hidden: hiddenEdges, soft: softEdges, smooth: smoothEdges);
-                foreach (int idx in new[] { v1Idx, v2Idx })
+                foreach (var pt in new[] { p1, p2 })
                 {
-                    if (pointSlots[idx] == null)
+                    if (!vertexSlots.TryGetValue(pt, out int vs))
                     {
-                        int vs = WriteVertex(points[idx]);
-                        pointSlots[idx] = vs;
-                        vertexSlots[points[idx]] = vs;
+                        vs = WriteVertex(pt);
+                        vertexSlots[pt] = vs;
                     }
                     else
                     {
-                        Backref(pointSlots[idx]!.Value);
+                        Backref(vs);
                     }
                 }
-                if (curveSlot != null)
+                var spec = curveForSeg[i];
+                if (spec == null)
                 {
-                    Backref(curveSlot.Value);
-                }
-                else if (curveParams != null)
-                {
-                    var cp = curveParams.Value;
-                    curveSlot = WriteArcCurve(cp.Center, cp.Normal, cp.XAxis, cp.StartAngle, cp.EndAngle, cp.Radius, cp.NumSegments);
-                }
-                else if (polylineNumEdges.HasValue)
-                {
-                    curveSlot = WriteCurve(polylineNumEdges.Value);
+                    Null_(); // curve = null
                 }
                 else
                 {
-                    Null_(); // curve = null
+                    var sv = spec.Value;
+                    if (runCurveSlots.TryGetValue(sv.RunId, out int cSlot))
+                    {
+                        Backref(cSlot);
+                    }
+                    else if (sv.IsArc)
+                    {
+                        var cp = sv.Arc;
+                        runCurveSlots[sv.RunId] = WriteArcCurve(cp.Center, cp.Normal, cp.XAxis, cp.StartAngle, cp.EndAngle, cp.Radius, cp.NumSegments);
+                    }
+                    else
+                    {
+                        runCurveSlots[sv.RunId] = WriteCurve(sv.PolyEdges);
+                    }
                 }
                 edgeSlots.Add(edgeSlot);
                 edgeSenses.Add(0);
                 newEntities++;
-                edgeRegistry[EdgeKeyOf(pointSlots[v1Idx]!.Value, pointSlots[v2Idx]!.Value)] = (edgeSlot, pointSlots[v1Idx]!.Value);
+                int s1Final = vertexSlots[p1], s2Final = vertexSlots[p2];
+                edgeRegistry[EdgeKeyOf(s1Final, s2Final)] = (edgeSlot, s1Final);
             }
 
             return (edgeSlots, edgeSenses, newEntities);
