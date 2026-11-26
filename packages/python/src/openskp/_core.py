@@ -107,6 +107,8 @@ CONTAINER_TAGS = {
     # 9213 → entity 6C42. 6842 is the drawbase wrapper those entities share.
     # 6A42 / 6D42 / 6E42 / 6F42 stay leaves.
     '9113', '9213', '6942', '6C42', '6842',
+    # 2021+ section planes: pool 9313 -> 5C44, plane/name/symbol inside.
+    '9313', '5C44',
 }
 
 # Every byte value's 2-character uppercase hex form, precomputed once.
@@ -2344,6 +2346,15 @@ def _direct_child(children, tag):
     return None
 
 
+def _drawing_hidden(record_node):
+    """Display-flags hidden bit of a drawing-element record, else False."""
+    drawing = _find_tag(record_node.children, 'D007')
+    if drawing is None:
+        return False
+    flags = _find_tag(drawing.children, 'D307')
+    return bool(flags is not None and flags.payload and (flags.payload[0] & 1))
+
+
 def _extract_geometry_nodes(elements, builder):
     vertices, edges, faces = builder.vertices, builder.edges, builder.faces
     edge_flags = builder.edge_flags
@@ -2658,6 +2669,24 @@ def _extract_geometry_nodes(elements, builder):
                     'layer_id': cp_layer_id,
                     'hidden': cp_hidden,
                 })
+
+        elif tag == '5C44':
+            plane_node = _find_tag(el.children, '5D44')
+            name_node = _find_tag(el.children, '5E44')
+            symbol_node = _find_tag(el.children, '5F44')
+            plane = (
+                [0.0, 0.0, 1.0, 0.0]
+                if plane_node is None or len(plane_node.payload) != 32
+                else list(struct.unpack('<4d', plane_node.payload))
+            )
+            builder.section_planes.append({
+                'plane': plane,
+                'name': name_node.payload.decode('utf-8', errors='replace')
+                        if name_node is not None else '',
+                'label': symbol_node.payload.decode('utf-8', errors='replace')
+                         if symbol_node is not None else '',
+                'hidden': _drawing_hidden(el),
+            })
 
         elif tag == '2C4C':
             # A Curve (384A: its entity id and edge count) and, when the curve
