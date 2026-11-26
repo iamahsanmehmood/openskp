@@ -13,7 +13,26 @@ The releases 1.3.0 to 1.6.0 and the details of every release are in the
   quality 95; without it, colorized JPEGs keep their tinted factor with one
   warning. JPEG EXIF `APP1` orientation blocks are stripped without
   re-encoding, and textures above 178,956,970 pixels keep their source bytes
-  and tinted factor with one warning.
+  and tinted factor with one warning (#285).
+- **SketchUp 3 files:** curves and arcs, painted component and group instances,
+  text fonts, infinite guide lines and zero-material headers in SketchUp 3
+  (`{3.0.x}`) files are read properly (#284).
+- **Color by Tag:** `SkpModel.colorByTag` reads SketchUp's active *Color by Tag*
+  (`DisplayColorByLayer`) style setting in SketchUp 4–2020 and 2021+ files
+  (#697).
+- **Textures and writer parity:** `addFace` and `addCircle` solve `frontUv` /
+  `backUv` in SketchUp's normal-derived basis and scale pins by
+  `(appliedWidth, appliedHeight)`; `openExisting()` and `toDartCode()` keep
+  `appliedHeight` instead of resetting it to `1.0` (#696). Faces with both UV
+  pins and attributes keep their attribute dictionaries in SketchUp, and curves
+  drawn over existing edges split cleanly without dropping the curve (#693).
+- **Changed results:** `buildScene()` and `buildInstancedScene()` project
+  default face UVs in SketchUp's basis (changing UVs on nearly horizontal and
+  downward textured faces to match SketchUp and Python, #696), keep front and
+  back sides separate whenever they do not resolve to the same material even if
+  their RGB colours match (#697), and with `ParseOptions(unpaintedFaces: 'tag')`
+  colour each unpainted face side by its own `Face.layer` tag before falling
+  back to the placement's tag (#697).
 
 ## 1.7.0
 

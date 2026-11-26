@@ -56,6 +56,7 @@ yet in that language; see [§3](#3-whats-still-outstanding-after-170).
 | Materials & textures (solid, textured, colorized flag/type, PNG/JPEG/BMP/GIF/TGA/TIFF) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Styles (`styles[].front_color`/`back_color` on 2021+ files) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Model rendering-options face colours (`face_front_color`/`face_back_color`, SketchUp 4–2025, [#533](https://github.com/iamahsanmehmood/openskp/issues/533)) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Model rendering-options "Color by Tag" setting (`color_by_tag` / `colorByTag` / `ColorByTag`, SketchUp 4–2025, [#697](https://github.com/iamahsanmehmood/openskp/issues/697)) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Scenes show unpainted faces in the model's front/back face colours (`unpainted_faces`, `surface_primitives`, [#533](https://github.com/iamahsanmehmood/openskp/issues/533)) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Dynamic Component / entity attributes (instance & face dictionaries; single & multiple dictionaries) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Definition- & model-level attribute dictionaries (Dynamic Components formulas/options, VFF + classic) | ✅ | 🔶 VFF defs only | 🔶 VFF defs only | 🔶 VFF defs only | 🔶 VFF + classic defs, VFF model | ✅ |
@@ -94,7 +95,9 @@ yet in that language; see [§3](#3-whats-still-outstanding-after-170).
 | Editor (`open_existing()`) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | SKP-to-code generator (`to_*_code()`), round-tripping `applied_width`/opacity/`filename` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Export** | | | | | | |
-| GLB (flat & instanced, linear `baseColorFactor`) / OBJ+MTL / STL / PLY / DXF 3D / IFC4 / JSON | ✅ | ✅ | ✅ | ✅ | ✅ | 🔶 *(STL keeps painted back-side duplicates, [#601](https://github.com/iamahsanmehmood/openskp/issues/601))* |
+| GLB (flat & instanced, linear `baseColorFactor`) / OBJ+MTL / STL / PLY / DXF 3D / IFC4 / JSON | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| GLB colorized texture baking (hue shift & tint, JPEG EXIF `APP1` strip; [#285](https://github.com/iamahsanmehmood/openskp/issues/285)) | ✅ *(Pillow)* | ✅ *(PNG built-in; JPEG via `imageCodec`)* | ✅ *(PNG built-in; JPEG via `ImageCodec`)* | ✅ *(PNG built-in; JPEG via `imageCodec`)* | ✅ *(PNG & JPEG built-in)* | ✅ *(PNG built-in; JPEG via `ImageCodec`)* |
+| Command-line tool (`openskp info` / `openskp convert`, [#570](https://github.com/iamahsanmehmood/openskp/issues/570)) | ✅ *(on `main`)* | ❌ | ❌ | ❌ | ❌ | ❌ |
 | IFC export: mm unit/axis fix, real names + layer visibility, plugin-attribute Psets, full-path classification | ✅ *(+ `IFCELEMENTASSEMBLY`, 3-arg classifier)* | ✅ *(2-arg classifier; no `IFCELEMENTASSEMBLY`)* | ✅ *(2-arg classifier; no `IFCELEMENTASSEMBLY`)* | ✅ *(2-arg classifier; no `IFCELEMENTASSEMBLY`)* | ✅ *(2-arg classifier; no `IFCELEMENTASSEMBLY`)* | ✅ *(2-arg classifier; no `IFCELEMENTASSEMBLY`)* |
 | IFC export: loose-edge curve sets + analytic arcs as `IfcAnnotation` / `IfcIndexedPolyCurve`, IFC4 STEP conformance | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Direct SketchUp → Fragments (`.frag`) export ([details](#fragments-frag-support)) | ✅ | ✅ | ✅ | 🔶 on `main`, not on pub.dev | ✅ | ✅ |
@@ -134,7 +137,9 @@ What remains open across languages after **1.7.0** is tracked in
 
 | Item | Present in | Needs porting to |
 |:---|:---|:---|
+| Writer for 2021+ VFF files (`create_vff()`: faces, solid/textured materials, UVs, tags, components, groups, curves, attribute dictionaries) | Python (`create_vff.py`, on `main`) | TypeScript, .NET, Dart, C++, Rust *(plus VFF `add_image`, annotations, and scenes in Python)* |
 | Writer: scenes (`add_scene`: camera + hidden layers) | Python (`create.py`) | TypeScript, .NET, Dart, C++, Rust |
+| Command-line tool (`openskp info` / `openskp convert`, [#570](https://github.com/iamahsanmehmood/openskp/issues/570)) | Python (`cli.py`, on `main`) | TypeScript, .NET, Dart, C++, Rust |
 | Material names on scene glTF materials | Python (`scene.py`, `instanced_scene.py`) | TypeScript, .NET, Dart, C++, Rust — `gltf_materials` entries built from `.skp` omit `name` |
 | Definition- and model-level attribute dictionaries, plus `InstanceNode.definition_attribute_dictionaries` | Python & Rust (VFF + classic definitions & model, plus `InstanceNode` definition dicts); C++ (VFF + classic definitions, VFF model); TypeScript, .NET, Dart (VFF definitions only) | TypeScript, .NET, Dart (classic definition dicts, VFF + classic model dicts, `InstanceNode` definition dicts); C++ (classic model dicts, `InstanceNode` definition dicts) |
 | Attribute dictionaries in JSON / GLB metadata export | Python (`json_export.py`, `glb.py`, `instanced_glb.py`), C++ (`json_export.cpp`), Rust (`json_export.rs`) | TypeScript (`index.ts`), .NET (`JsonExport.cs`), Dart (`json_export.dart`) — emit `properties` only |
@@ -143,7 +148,6 @@ What remains open across languages after **1.7.0** is tracked in
 | Component scale-grip suppression mask (`Definition.no_scale_mask`, read + written + replayed + codegen) | C++ (`model.hpp`, `create.hpp`), Rust (`model.rs`, `create/mod.rs`) | Python, TypeScript, .NET, Dart |
 | Per-instance `InstancedNode.hidden` flag | TypeScript (`instanced.ts`), Rust (`instanced_scene.rs`) | Python, .NET, Dart, C++ |
 | Tag line style name exposed on `Layer` (`Layer::line_style`) | C++ (`model.hpp`, VFF + classic 2019–2020) | Python, TypeScript, .NET, Dart, Rust *(read `CCustomLineStyle` for stream alignment without exposing the name on `Layer`)* |
-| STL export omits painted back-side duplicate triangles ([#601](https://github.com/iamahsanmehmood/openskp/issues/601)) | Python, TypeScript, .NET, Dart, C++ | Rust (`stl_export.rs`) |
 | Writer randomizes scaffold file GUID at `0x34..0x43` | C++ (`create.cpp`), Rust (`create/mod.rs`) | Python, TypeScript, .NET, Dart — currently preserve `blank_v17.skp`'s GUID |
 
 ## 4. Real SketchUp file version support

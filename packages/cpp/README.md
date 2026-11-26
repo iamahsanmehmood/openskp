@@ -147,7 +147,11 @@ colour-capable OBJ, PLY, DXF, IFC and Fragments exports retain separately
 painted sides.
 
 `to_glb()` returns the complete binary asset as a `ByteBuffer`.
-`export_glb()` writes those bytes to disk. Metadata JSON export is provided
+`export_glb()` writes those bytes to disk. With `textures = true`, `to_glb` /
+`export_glb` and `to_instanced_glb` / `export_instanced_glb` bake colorized PNG
+and JPEG textures out of the box (hue shift and tint within 1/255 of SketchUp's
+own result, with no extra dependency) and strip JPEG EXIF `APP1` orientation
+blocks without re-encoding. Metadata JSON export is provided
 via `to_json(model, &scene)`, which returns a `JsonValue` tree — pass it to
 `to_json_string(value, indent)` for actual JSON text, or use
 `export_json(model, path, &scene)` to write a file directly (note: `path`
@@ -176,8 +180,8 @@ per-side texture positioning, and custom key/value attribute
 dictionaries. Checked against SketchUp's C library via
 `tools/check_native_skp.py` and diffed against the Python and Rust writers in
 CI (see [Writer validation](https://github.com/iamahsanmehmood/openskp/blob/main/docs/LANGUAGE_PARITY.md#writer-validation)
-for the persistent-ID, file-GUID, and textured-material alpha differences
-relative to Python), plus its own full test suite passing in CI across GCC,
+for the randomized 16-byte file GUID at `0x34..0x43` — the only non-GUID/timestamp
+byte difference relative to Python), plus its own full test suite passing in CI across GCC,
 Clang, and MSVC.
 Each new builder now has a distinct file/model GUID, stable across repeated writes.
 Use `builder->set_guid("00112233-4455-4677-8899-aabbccddeeff")` to preserve a known
@@ -193,10 +197,12 @@ instead of exposing Windows GUID storage order. Consumers that persisted old
 raw-order strings should migrate or normalize them before comparing identities.
 The same component now retains the same GUID across classic and VFF containers.
 
-For VFF files, `Definition::parsed_dictionaries` exposes the definition's own
-attribute dictionaries with native value types, including booleans, integers,
-`nil`, and nested arrays. Attributes on child instances stay on those instances.
-The new field is empty for legacy files.
+For both VFF (2021+) and classic (pre-2021) files, `Definition::parsed_dictionaries`
+exposes the definition's own attribute dictionaries with native value types,
+including booleans, integers, `nil`, `Point3d`/`Vector3d`/`Length` values, and
+nested arrays (`SkpModel::attribute_dictionaries` exposes model-level
+dictionaries on VFF files). Attributes on child instances stay on those
+instances.
 
 `openskp::open_existing()` loads an *existing* legacy-format file and
 rebuilds it as a new builder, so more geometry can be added before
@@ -326,7 +332,7 @@ ABGR integers; booleans use 0 or 1. For example, `{{4000, 0xff563412u},
 and sets profile width to 5. Supported fields update current rendering options
 and the scaffold's saved and working styles. Items absent from the fixed v17
 scaffold are ignored. This does not add scene, watermark-image, or modern SKP
-compression support. These display-setting additions are currently C++ only.
+compression support.
 
 Native compatibility tests inspect serialized face equations and persistent IDs,
 not only OpenSKP self round-trips. Face planes use `ax+by+cz+d=0`; persistent IDs
@@ -334,8 +340,7 @@ are document-wide and the next-ID header is 64-bit. Nonplanar fan triangulation
 skips degenerate wedges before writing any valid triangles. Legacy textured
 materials store image-average and paint colors separately, followed by material
 type (1 textured / 2 colorized) and colorize mode (0 shift / 1 tint); image alpha
-is not a colorization flag. Other language implementations may need matching
-corrections to these fields. No proprietary SDK is needed at runtime or in CI.
+is not a colorization flag. No proprietary SDK is needed at runtime or in CI.
 
 For optional independent validation with your own locally installed SketchUp C API:
 

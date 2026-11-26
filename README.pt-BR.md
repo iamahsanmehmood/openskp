@@ -1,4 +1,4 @@
-> Tradução para o português do Brasil do [README.md](README.md), baseada no commit `68a1375` do README em inglês. Em caso de divergência, o [README em inglês](README.md) é a versão de referência.
+> Tradução para o português do Brasil do [README.md](README.md), mantida em sincronia com o README em inglês. Em caso de divergência, o [README em inglês](README.md) é a versão de referência.
 
 <div align="center">
 
@@ -64,7 +64,7 @@ O mesmo em [TypeScript](#-typescript--javascript), [.NET](#-net--c), [Dart](#-da
 O OpenSKP é um kit de ferramentas open source para arquivos do SketchUp (`.skp`), construído inteiramente por engenharia reversa. Cada linguagem tem sua própria implementação nativa, e não um binding em torno de um núcleo compartilhado.
 
 - **Leia** arquivos do SketchUp 2021+ e os clássicos, do SketchUp 4 ao 2020 ([exceções conhecidas](docs/LANGUAGE_PARITY.md#4-real-sketchup-file-version-support)): geometria, materiais e texturas, componentes, tags, cenas, cotas e atributos.
-- **Escreva** modelos reais e editáveis do zero, ou estenda um arquivo existente com `open_existing()`. Os arquivos são salvos no formato do SketchUp 2017. Veja [Recursos de escrita](docs/DEVELOPER_GUIDE.md#write-capabilities) e [como cada escritor é verificado](docs/LANGUAGE_PARITY.md#writer-validation).
+- **Escreva** modelos reais e editáveis do zero, ou estenda um arquivo existente com `open_existing()`: `create()` e `open_existing()` salvam os arquivos no formato clássico do SketchUp 2017 em todas as linguagens, e o Python (no `main`) também conta com `create_vff()` para arquivos VFF do SketchUp 2021+. Veja [Recursos de escrita](docs/DEVELOPER_GUIDE.md#write-capabilities) e [como cada escritor é verificado](docs/LANGUAGE_PARITY.md#writer-validation).
 - **Converta** para GLB, OBJ, STL, PLY, DXF, IFC4 e JSON sem nenhum SDK de CAD ou BIM, e também de e para Fragments (`.frag`). Veja [Recursos de exportação](docs/DEVELOPER_GUIDE.md#export-capabilities).
 - **Gere código** que reconstrói um modelo, por exemplo como ponto de partida para um agente de programação com IA ou para comparar dois modelos como texto. Veja [Gerando código a partir de um arquivo](docs/DEVELOPER_GUIDE.md#generating-code-from-a-file).
 
@@ -86,7 +86,7 @@ Python, TypeScript, .NET, Dart e C++ são pacotes publicados; o Rust está no `m
 | **Geração de cena / triangulação** | ✅ | Geração de cena opcional: o grafo completo da cena posicionada, resolvido em coordenadas do mundo, triangulado e pronto para GLB, nas cinco linguagens |
 | **Camadas / Tags** | ✅ | Definições de camadas com cores e visibilidade (estado `hidden`), totalmente expostas nas cinco linguagens |
 | **Materiais e texturas** | ✅ | Propriedades de materiais, cores, transparência, materiais colorizados e imagens de textura incorporadas |
-| **Estilos** | ✅ | `styles[].front_color`/`back_color` (2021+) e as cores de face do modelo, `face_front_color`/`face_back_color` (SketchUp 4–2025), nas cinco linguagens; as cenas mostram as faces sem pintura nessas cores ([#533](https://github.com/iamahsanmehmood/openskp/issues/533)) |
+| **Estilos** | ✅ | `styles[].front_color`/`back_color` (2021+), as cores de face do modelo `face_front_color`/`face_back_color` ([#533](https://github.com/iamahsanmehmood/openskp/issues/533)) e `color_by_tag` (no `main`, [#697](https://github.com/iamahsanmehmood/openskp/issues/697)) do SketchUp 4 ao 2025; as cenas mostram as faces sem pintura nessas cores |
 | **Componentes dinâmicos** | 🔶 | Dicionários de atributos de instâncias e faces extraídos nas cinco linguagens (2021+ e pré-2021); os dicionários no nível de **definição e de modelo** (fórmulas/opções de Componentes Dinâmicos) estão completos apenas no Python; veja [a tabela](docs/LANGUAGE_PARITY.md#2-feature-matrix) |
 | **Observabilidade** | ✅ | Relatório de progresso opcional + erros estruturados que informam a localização; veja [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md) |
 | **Converter para GLB / OBJ / STL / PLY / DXF 3D / IFC4 / JSON** | ✅ | Conversão nativa, feita do zero, para glTF (GLB), Wavefront OBJ, STL, PLY, DXF 3D (malha poliface do AutoCAD), IFC4 (BIM) e metadados JSON, disponível nas cinco linguagens e sem SDK de CAD/BIM de terceiros; veja [Recursos de exportação](docs/DEVELOPER_GUIDE.md#export-capabilities) |
@@ -200,8 +200,8 @@ Importação/exportação nativa de `.skp` para outras ferramentas, construída 
 
 | Add-on | Status | Repositório |
 |:-------|:-------|:------------|
-| **FreeCAD** | Importação + exportação, com geometria B-rep real (não uma malha triangulada), com a hierarquia de componentes, as cores e as tags. As texturas ainda não são transportadas. | [freecad-openskp](https://github.com/iamahsanmehmood/freecad-openskp) |
-| **Blender** | Importação + exportação, com arquitetura de instanciamento por coleções (um componente posicionado 1.000 vezes custa uma malha, não 1.000). Materiais, texturas e tags na importação; cores e tags na exportação. | [blender-openskp](https://github.com/iamahsanmehmood/blender-openskp) · [Blender Extensions](https://extensions.blender.org/add-ons/openskp-import-export/) |
+| **FreeCAD** | Importação + exportação, com geometria B-rep real (não uma malha triangulada), com a hierarquia de componentes, as cores, as texturas e as tags. | [freecad-openskp](https://github.com/iamahsanmehmood/freecad-openskp) |
+| **Blender** | Importação + exportação, com arquitetura de instanciamento por coleções (um componente posicionado 1.000 vezes custa uma malha, não 1.000). Materiais (com grupos de nós compartilhados), texturas, tags, câmeras de cenas, textos e cotas na importação; componentes, cores e tags na exportação. | [blender-openskp](https://github.com/iamahsanmehmood/blender-openskp) · [Blender Extensions](https://extensions.blender.org/add-ons/openskp-import-export/) |
 
 Ambos estão no início e em desenvolvimento ativo: bugs reais são encontrados e corrigidos testando com arquivos reais, e não esperando que tudo fique perfeito. Experimente-os e abra uma issue no repositório do próprio add-on (não aqui) para qualquer questão específica do comportamento do FreeCAD/Blender.
 
@@ -217,7 +217,7 @@ Ambos estão no início e em desenvolvimento ativo: bugs reais são encontrados 
 | 🎯 **Dart / Flutter** | [![Pub](https://img.shields.io/pub/v/openskp.svg?label=)](https://pub.dev/packages/openskp) | ✅ Disponível | `dart pub add openskp` |
 | ⚙️ **C++17** | [![C++](https://img.shields.io/github/v/release/iamahsanmehmood/openskp?filter=cpp-v*&label=)](https://github.com/iamahsanmehmood/openskp/releases?q=cpp-) | ✅ Pacote de código-fonte | `find_package(OpenSkp CONFIG REQUIRED)` |
 
-As cinco linguagens estão na versão **1.7.0**, a partir do lançamento sincronizado de 25/11/2026. O número de versão é o mesmo, e a capacidade, quase: só o Python escreve cenas (`add_scene`), e algumas diferenças menores estão listadas abaixo. As cinco leem tanto o moderno contêiner VFF (2021+) quanto o clássico MFC (SketchUp 4–2020) de `.skp`, e oferecem as mesmas APIs opcionais de geração de cena (`buildScene()`) e de observabilidade. Os detalhes completos sobre o que difere entre as linguagens, e quais versões reais de arquivos do SketchUp são lidas hoje, estão na seção logo abaixo.
+As cinco linguagens estão na versão **1.7.0**, a partir do lançamento sincronizado de 25/11/2026. O número de versão é o mesmo, e a capacidade, quase: só o Python escreve cenas (`add_scene`) e, no `main`, arquivos VFF 2021+ (`create_vff`) e uma CLI (`openskp info` / `convert`), e algumas diferenças menores estão listadas abaixo. As cinco leem tanto o moderno contêiner VFF (2021+) quanto o clássico MFC (SketchUp 4–2020) de `.skp`, e oferecem as mesmas APIs opcionais de geração de cena (`buildScene()`) e de observabilidade. Os detalhes completos sobre o que difere entre as linguagens, e quais versões reais de arquivos do SketchUp são lidas hoje, estão na seção logo abaixo.
 
 ---
 
@@ -229,17 +229,18 @@ Todos os recursos, nas 5 linguagens: ✅ disponível e publicado, ❌ ainda não
 |:---|:---:|:---:|:---:|:---:|:---:|
 | Ler VFF (2021+) e MFC clássico (SketchUp 4–2020; [§4](docs/LANGUAGE_PARITY.md#4-real-sketchup-file-version-support)) | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Geometria, tags, materiais/texturas | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Estilos e as cores de face do modelo (`face_front_color`/`face_back_color`), usadas nas cenas | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Estilos, cores de face do modelo (`face_front_color`/`face_back_color`, usadas nas cenas) e `color_by_tag` (no `main`) | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Componentes dinâmicos / dicionários de atributos (instância/face nas 5; dicionários de definição e de modelo completos no Python) | ✅ | 🔶 | 🔶 | 🔶 | 🔶 |
 | Dicionários de atributos: multidicionário + valores tipados (`Point3d`/`Length`/listas aninhadas; 9/9 clássico e VFF) | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Dicionários de atributos expostos nos metadados de exportação GLB/JSON (não apenas nos Psets IFC) | ✅ | ❌ | ❌ | ❌ | ✅ JSON |
 | Páginas/cenas VFF + leitura de cotas | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Leitura de páginas/cenas legadas (pré-2021) | ✅ com câmeras (2014–2020) | ✅ | ✅ | ✅ | ✅ |
-| Leitura de linhas/pontos de construção | ✅ legado + VFF | ✅ | ✅ | ✅ | ✅ legado + VFF |
+| Leitura de páginas/cenas legadas (pré-2021) | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Leitura de linhas/pontos de construção | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Geração de cena, saída de cena que preserva instanciamento | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Suporte a curvas de arestas soltas (estruturas) | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Escritor: materiais/tags/definições/grupos/faces/curvas/imagens | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Escritor: cotas, planos de corte, geometria de construção | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Escritor: VFF 2021+ (`create_vff`) | 🔶 | ❌ | ❌ | ❌ | ❌ |
 | Escritor: cenas (câmera + camadas ocultas) | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Editor (`open_existing()`), gerador de código | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Exportação: GLB / OBJ / STL / PLY / DXF / IFC4 / JSON | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -250,7 +251,7 @@ Todos os recursos, nas 5 linguagens: ✅ disponível e publicado, ❌ ainda não
 
 ### Suporte a versões reais de arquivos do SketchUp
 
-Arquivos MFC clássicos do **SketchUp 4 ao 2020** e arquivos VFF modernos do **SketchUp 2021+** são lidos nas cinco linguagens, com uma exceção conhecida (um arquivo real do SketchUp 5 encontrado na prática falha no TypeScript); arquivos reais do SketchUp 3 são lidos em todos os leitores no `main` desde o #705, ainda sem release. Na escrita, `create()` e `open_existing()` emitem uma base MFC clássica do **SketchUp 2017** (`{17.0.1}`) (`blank_v17.skp`), que o SketchUp 2017 e posteriores abrem nativamente.
+Arquivos MFC clássicos do **SketchUp 4 ao 2020** e arquivos VFF modernos do **SketchUp 2021+** são lidos nas cinco linguagens, com uma exceção conhecida (um arquivo real do SketchUp 5 encontrado na prática falha no TypeScript); arquivos reais do SketchUp 3 são lidos em todos os leitores no `main` desde o #705, ainda sem release. Na escrita, `create()` e `open_existing()` emitem uma base MFC clássica do **SketchUp 2017** (`{17.0.1}`) (`blank_v17.skp`) em todas as linguagens, que o SketchUp 2017 e posteriores abrem nativamente; no Python (no `main`), `create_vff()` também escreve arquivos VFF do SketchUp 2021+ a partir de um modelo do SketchUp 2025.
 
 Tabela completa de status por versão e por linguagem, com as evidências (fixtures sintéticas, arquivos gravados pelo SDK e a varredura de várias versões com arquivos reais): **[docs/LANGUAGE_PARITY.md § 4](docs/LANGUAGE_PARITY.md#4-real-sketchup-file-version-support)**.
 
@@ -630,7 +631,7 @@ Os campos `position_mm` do grafo de cena (`InstanceNode`/`MeshMetadata`) usam a 
 
 ### Escrita
 
-Todo escritor produz apenas um contêiner **MFC clássico do SketchUp 2017 (`{17.0.1}`)**, nunca VFF: o SketchUp 2017 e posteriores o abrem nativamente, e foi com base nesse formato que a lógica de escritor/editor deste projeto foi submetida a engenharia reversa. Em vez de sintetizar um arquivo a partir do nada, o escritor de cada linguagem inclui uma pequena [base de documento em branco do SketchUp 2017 criada pelo SDK](packages/python/src/openskp/create.py), declarada abertamente (`blank_v17.skp`), e insere nela novas entidades do grafo de objetos class-ref/back-ref, a mesma codificação que [docs/BINARY_FORMAT.md](docs/BINARY_FORMAT.md) documenta para a leitura, só que invertida. Veja [Recursos de escrita](docs/DEVELOPER_GUIDE.md#write-capabilities) no Guia do Desenvolvedor para a API completa e o comportamento.
+`create()` e `open_existing()` produzem um contêiner **MFC clássico do SketchUp 2017 (`{17.0.1}`)** em todas as linguagens: o SketchUp 2017 e posteriores o abrem nativamente, e foi com base nesse formato que o escritor e o editor clássicos deste projeto foram submetidos a engenharia reversa. Em vez de sintetizar um arquivo a partir do nada, o escritor clássico de cada linguagem inclui uma pequena [base de documento em branco do SketchUp 2017 criada pelo SDK](packages/python/src/openskp/create.py), declarada abertamente (`blank_v17.skp`), e insere nela novas entidades do grafo de objetos class-ref/back-ref, a mesma codificação que [docs/BINARY_FORMAT.md](docs/BINARY_FORMAT.md) documenta para a leitura, só que invertida. O Python (no `main`) também oferece [`create_vff()`](packages/python/src/openskp/create_vff.py), que escreve arquivos modernos **VFF do SketchUp 2021+** estendendo um modelo embutido do SketchUp 2025 e recalculando seu cabeçalho ZIP/de integridade. Veja [Recursos de escrita](docs/DEVELOPER_GUIDE.md#write-capabilities) no Guia do Desenvolvedor para a API completa e o comportamento.
 
 ### Conversão
 

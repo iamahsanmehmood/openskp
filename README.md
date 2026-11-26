@@ -62,7 +62,7 @@ The same in [TypeScript](#-typescript--javascript), [.NET](#-net--c), [Dart](#-d
 OpenSKP is an open-source toolkit for SketchUp (`.skp`) files, built entirely through reverse engineering. Each language has its own native implementation, not a binding around a shared core.
 
 - **Read** SketchUp 2021+ files and the classic ones from SketchUp 4 to 2020 ([known exceptions](docs/LANGUAGE_PARITY.md#4-real-sketchup-file-version-support)): geometry, materials and textures, components, tags, scenes, dimensions and attributes.
-- **Write** real, editable models from scratch, or extend an existing file with `open_existing()`. Files are saved in the SketchUp 2017 format. See [Write capabilities](docs/DEVELOPER_GUIDE.md#write-capabilities) and [how each writer is checked](docs/LANGUAGE_PARITY.md#writer-validation).
+- **Write** real, editable models from scratch, or extend an existing file with `open_existing()`: `create()` and `open_existing()` save files in the SketchUp 2017 classic format in every language, and Python (on `main`) also has `create_vff()` for SketchUp 2021+ VFF files. See [Write capabilities](docs/DEVELOPER_GUIDE.md#write-capabilities) and [how each writer is checked](docs/LANGUAGE_PARITY.md#writer-validation).
 - **Convert** to GLB, OBJ, STL, PLY, DXF, IFC4 and JSON without a CAD or BIM SDK; also to and from Fragments (`.frag`). See [Export capabilities](docs/DEVELOPER_GUIDE.md#export-capabilities).
 - **Generate code** that rebuilds a model, for example as a start for an AI coding agent or to compare two models as text. See [Generating code from a file](docs/DEVELOPER_GUIDE.md#generating-code-from-a-file).
 
@@ -84,7 +84,7 @@ Python, TypeScript, .NET, Dart and C++ are published packages; Rust is on `main`
 | **Scene Baking / Triangulation** | ✅ | Opt-in scene baking: full placed scene graph resolved to world-space, triangulated, GLB-ready — in all five languages |
 | **Layers / Tags** | ✅ | Layer definitions with colors and visibility (`hidden` state) — fully exposed across all five languages |
 | **Materials & Textures** | ✅ | Material properties, colors, transparency, colorized materials, and embedded texture images |
-| **Styles** | ✅ | `styles[].front_color`/`back_color` (2021+) and the model's face colours `face_front_color`/`face_back_color` (SketchUp 4–2025) in all five languages; scenes show unpainted faces in those colours ([#533](https://github.com/iamahsanmehmood/openskp/issues/533)) |
+| **Styles** | ✅ | `styles[].front_color`/`back_color` (2021+), the model's face colours `face_front_color`/`face_back_color` ([#533](https://github.com/iamahsanmehmood/openskp/issues/533)), and `color_by_tag` (on `main`, [#697](https://github.com/iamahsanmehmood/openskp/issues/697)) across SketchUp 4–2025; scenes show unpainted faces in those colours |
 | **Dynamic Components** | 🔶 | Instance and face attribute dictionaries extracted in all five languages (2021+ and pre-2021); **definition- and model-level** attribute dictionaries (Dynamic Components formulas/options) are complete in Python only, see [the table](docs/LANGUAGE_PARITY.md#2-feature-matrix) |
 | **Observability** | ✅ | Opt-in progress reporting + structured, location-carrying parse errors — see [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md) |
 | **Convert to GLB / OBJ / STL / PLY / DXF 3D / IFC4 / JSON** | ✅ | Native, from-scratch conversion to glTF (GLB), Wavefront OBJ, STL, PLY, DXF 3D (AutoCAD Polyface Mesh), IFC4 (BIM), and JSON metadata — available in all five languages, no third-party CAD/BIM SDK involved — see [Export capabilities](docs/DEVELOPER_GUIDE.md#export-capabilities) |
@@ -199,8 +199,8 @@ Trimble SDK, no SketchUp install:
 
 | Addon | Status | Repo |
 |:------|:-------|:-----|
-| **FreeCAD** | Import + export, real B-rep geometry (not a triangulated mesh), with the component hierarchy, colours and tags. Textures not yet carried over. | [freecad-openskp](https://github.com/iamahsanmehmood/freecad-openskp) |
-| **Blender** | Import + export, collection-instancing architecture (a component placed 1,000 times costs one mesh, not 1,000). Materials, textures and tags on import; colours and tags on export. | [blender-openskp](https://github.com/iamahsanmehmood/blender-openskp) · [Blender Extensions](https://extensions.blender.org/add-ons/openskp-import-export/) |
+| **FreeCAD** | Import + export, real B-rep geometry (not a triangulated mesh), with the component hierarchy, colours, textures and tags. | [freecad-openskp](https://github.com/iamahsanmehmood/freecad-openskp) |
+| **Blender** | Import + export, collection-instancing architecture (a component placed 1,000 times costs one mesh, not 1,000). Materials (with shared shader node groups), textures, tags, scene cameras, texts and dimensions on import; components, colours and tags on export. | [blender-openskp](https://github.com/iamahsanmehmood/blender-openskp) · [Blender Extensions](https://extensions.blender.org/add-ons/openskp-import-export/) |
 
 Both are early and under active development — real bugs get found and
 fixed by testing against real files, not by waiting until everything's
@@ -221,7 +221,7 @@ for anything specific to FreeCAD/Blender behavior.
 
 All five languages are on **1.7.0** as of the 2026-11-25 synchronized
 release. The version number is the same, the capability nearly so: Python alone
-writes scenes (`add_scene`), and a few smaller differences are listed below. All five parse both the modern VFF (2021+)
+writes scenes (`add_scene`) — and, on `main`, 2021+ VFF files (`create_vff`) and a CLI (`openskp info` / `convert`) — and a few smaller differences are listed below. All five parse both the modern VFF (2021+)
 and classic MFC (SketchUp 4–2020) `.skp` containers, and support the same
 opt-in scene-baking (`buildScene()`) and observability APIs. Full detail
 on what differs between languages, and which real SketchUp file versions
@@ -240,17 +240,18 @@ condensed version.
 |:---|:---:|:---:|:---:|:---:|:---:|
 | Parse VFF (2021+) & classic MFC (SketchUp 4–2020; [§4](docs/LANGUAGE_PARITY.md#4-real-sketchup-file-version-support)) | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Geometry, layers, materials/textures | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Styles and the model's face colours (`face_front_color`/`face_back_color`), used in scenes | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Styles, model face colours (`face_front_color`/`face_back_color`, used in scenes), and `color_by_tag` (on `main`) | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Dynamic Components / attribute dicts (instance/face in all 5; definition and model dicts complete in Python) | ✅ | 🔶 | 🔶 | 🔶 | 🔶 |
 | Attribute dicts: multi-dictionary + typed values (`Point3d`/`Length`/nested lists; 9/9 classic and VFF) | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Attribute dicts surfaced in GLB/JSON metadata export (not just IFC Psets) | ✅ | ❌ | ❌ | ❌ | ✅ JSON |
 | VFF pages/scenes + dimension parsing | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Legacy (pre-2021) pages/scenes reading | ✅ with cameras (2014–2020) | ✅ | ✅ | ✅ | ✅ |
-| Construction lines/points reading | ✅ legacy + VFF | ✅ | ✅ | ✅ | ✅ legacy + VFF |
+| Legacy (pre-2021) pages/scenes reading | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Construction lines/points reading | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Scene baking, instancing-preserving scene output | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Loose-edge curve support (structural framing) | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Writer: materials/layers/definitions/groups/faces/curves/images | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Writer: dimensions, section planes, construction geometry | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Writer: 2021+ VFF (`create_vff`) | 🔶 | ❌ | ❌ | ❌ | ❌ |
 | Writer: scenes (camera + hidden layers) | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Editor (`open_existing()`), code generator | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Export: GLB / OBJ / STL / PLY / DXF / IFC4 / JSON | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -261,7 +262,7 @@ condensed version.
 
 ### Real SketchUp file version support
 
-Classic MFC files from **SketchUp 4 through 2020** and modern VFF files from **SketchUp 2021+** are read across all five languages, with one known exception (a real SketchUp 5 file in the wild fails in TypeScript); real SketchUp 3 files read in every reader on `main` since #705, not released yet. For writing, `create()` and `open_existing()` emit a **SketchUp 2017** (`{17.0.1}`) classic MFC scaffold (`blank_v17.skp`) that SketchUp 2017 and newer open natively.
+Classic MFC files from **SketchUp 4 through 2020** and modern VFF files from **SketchUp 2021+** are read across all five languages, with one known exception (a real SketchUp 5 file in the wild fails in TypeScript); real SketchUp 3 files read in every reader on `main` since #705, not released yet. For writing, `create()` and `open_existing()` emit a **SketchUp 2017** (`{17.0.1}`) classic MFC scaffold (`blank_v17.skp`) in every language that SketchUp 2017 and newer open natively; in Python (on `main`), `create_vff()` also writes SketchUp 2021+ VFF files from a SketchUp 2025 template.
 
 Full per-version, per-language status table and evidence (synthetic fixtures, SDK-written files, and the real-world multi-version sweep): **[docs/LANGUAGE_PARITY.md § 4](docs/LANGUAGE_PARITY.md#4-real-sketchup-file-version-support)**.
 
@@ -691,15 +692,18 @@ metadata for placement/inspection rather than renderer-facing vertex data.
 
 ### Writing
 
-Every writer only ever produces a **SketchUp 2017 (`{17.0.1}`) classic MFC**
-container, never VFF — SketchUp 2017 and newer open it natively, and it is
-the format this project's writer/editor logic was reverse-engineered
-against. Rather than synthesizing a file from nothing, each language's
+`create()` and `open_existing()` produce a **SketchUp 2017 (`{17.0.1}`) classic MFC**
+container in every language — SketchUp 2017 and newer open it natively, and it is
+the format this project's classic writer and editor were reverse-engineered
+against. Rather than synthesizing a file from nothing, each language's classic
 writer bundles a small, disclosed
 [SDK-authored SketchUp 2017 blank-document scaffold](packages/python/src/openskp/create.py)
 (`blank_v17.skp`) and splices new class-ref/back-ref object-graph entities into it — the
 same encoding [docs/BINARY_FORMAT.md](docs/BINARY_FORMAT.md) documents for
-reading, just inverted. See
+reading, just inverted. Python (on `main`) also provides
+[`create_vff()`](packages/python/src/openskp/create_vff.py), which writes
+modern **SketchUp 2021+ VFF** files by extending a bundled SketchUp 2025
+template and recomputing its ZIP/integrity header. See
 [Write capabilities](docs/DEVELOPER_GUIDE.md#write-capabilities) in the
 Developer Guide for the full API and behavior.
 
