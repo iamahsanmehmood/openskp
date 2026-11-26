@@ -64,7 +64,7 @@ Issues = "https://github.com/iamahsanmehmood/openskp/issues"
 Changelog = "https://github.com/iamahsanmehmood/openskp/blob/main/CHANGELOG.md"
 
 [project.scripts]
-openskp = "openskp.__init__:main"
+openskp = "openskp.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

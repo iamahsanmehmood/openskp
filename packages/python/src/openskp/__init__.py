@@ -18,6 +18,7 @@ Example::
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from importlib.metadata import PackageNotFoundError, version as _version
 
 from .codegen import to_python_code
@@ -75,27 +76,8 @@ __all__: list[str] = [
 ]
 
 
-def main() -> None:
-    """CLI entry point (placeholder).
+def main(argv: Sequence[str] | None = None) -> int:
+    """CLI entry point, delegated to :func:`openskp.cli.main`."""
+    from .cli import main as _cli_main
 
-    Prints version information.  A richer CLI may be added in future
-    releases.
-    """
-    import sys
-
-    if sys.argv[1:2] in (["-h"], ["--help"]):
-        print("usage: openskp [--version] [FILE.skp]")
-        return
-    print(f"openskp {__version__}")
-    if len(sys.argv) > 1 and sys.argv[1] != "--version":
-        filepath = sys.argv[1]
-        try:
-            skp = SkpFile.open(filepath)
-            model = skp.parse()
-            print(f"Version:     {model.version}")
-            print(f"Definitions: {len(model.definitions)}")
-            print(f"Layers:      {len(model.layers)}")
-            print(f"Materials:   {len(model.materials)}")
-        except Exception as exc:
-            print(f"Error: {exc}", file=sys.stderr)
-            sys.exit(1)
+    return _cli_main(argv)
