@@ -438,13 +438,31 @@ impl<'a> Archive<'a> {
     }
 
     // `preamble` for the entity types that carry NO attribute-container
-    // pointer in a SketchUp 3 file: vertex, loop, edge-use, material, layer.
-    // (Edge, face, definition, instance and thumbnail still open with one.)
+    // pointer in a SketchUp 3 file: vertex, loop, edge-use, curve, arc-curve,
+    // font, material, layer. (Edge, face, definition, instance and thumbnail
+    // still open with one.)
     fn early_preamble(&mut self) -> Result<Option<u64>> {
         if self.ver < FIRST_V4 {
             return Ok(None);
         }
         self.preamble()
+    }
+
+    // SketchUp 3's CCurve and CArcCurve open with two CEdge pointers (first and
+    // last edge of the curve). When the curve is reached from its first edge,
+    // the last edge is serialized inline here before its loop or entity list
+    // back-references it.
+    fn read_curve_v3_edges(&mut self) -> Result<()> {
+        for _ in 0..2 {
+            let q = self.object(Some("CEdge"))?;
+            if !q.name.is_empty() && &*q.name != "CEdge" {
+                return Err(Error::runtime(format!(
+                    "curve edge pointer resolved to {}",
+                    q.name
+                )));
+            }
+        }
+        Ok(())
     }
 
     fn draw(&mut self, v: &mut LegacyValue) -> Result<()> {
@@ -742,14 +760,20 @@ impl<'a> Archive<'a> {
                 }
             }
             "CCurve" => {
-                self.preamble()?;
+                self.early_preamble()?;
                 v.k = LegacyKind::Curve;
+                if self.ver < FIRST_V4 {
+                    self.read_curve_v3_edges()?;
+                }
                 self.r.u8()?;
                 self.r.u32()?;
             }
             "CArcCurve" => {
-                self.preamble()?;
+                self.early_preamble()?;
                 v.k = LegacyKind::ArcCurve;
+                if self.ver < FIRST_V4 {
+                    self.read_curve_v3_edges()?;
+                }
                 self.r.skip(5)?;
                 // center[3], normal[3], x_axis[3], start_angle, end_angle, y_axis[3]
                 v.arc.center = self.r.vec3()?;
@@ -857,15 +881,17 @@ impl<'a> Archive<'a> {
                 }
             }
             "CSkFont" => {
-                self.object(Some("CAttributeContainer"))?;
-                if self.pid {
-                    // the mask byte says how many pid bytes follow (SketchUp
-                    // 2017+ writes two or more here)
-                    let mask = self.r.u8()?;
-                    self.r.skip(mask.count_ones() as usize)?;
+                if self.ver >= FIRST_V4 {
+                    self.object(Some("CAttributeContainer"))?;
+                    if self.pid {
+                        // the mask byte says how many pid bytes follow (SketchUp
+                        // 2017+ writes two or more here)
+                        let mask = self.r.u8()?;
+                        self.r.skip(mask.count_ones() as usize)?;
+                    }
                 }
                 self.r.utf16()?;
-                self.r.skip(15)?;
+                self.r.skip(if self.ver < FIRST_V4 { 6 } else { 15 })?;
             }
             "CDimensionLinear" => self.read_dimension_linear(v)?,
             "CText" => self.read_text(v)?,
@@ -1083,6 +1109,12 @@ impl<'a> Archive<'a> {
         self.preamble()?;
         v.k = LegacyKind::ConstructionLine;
         self.draw(v)?;
+        if self.ver < FIRST_V4 {
+            let lp = self.r.f64s(6)?;
+            v.xyz = [lp[0], lp[1], lp[2]];
+            v.direction = [lp[3], lp[4], lp[5]];
+            return Ok(());
+        }
         // point(3) + direction(3) + two signed distance params along
         // direction marking where the visible segment starts/ends. A
         // parameter magnitude past HUGE_PARAM means unbounded in that
@@ -1332,9 +1364,16 @@ impl<'a> Archive<'a> {
 
     #[inline(never)]
     fn read_instance(&mut self, v: &mut LegacyValue) -> Result<()> {
-        v.attrs = self.preamble()?;
+        let (attrs, lead_cls) = self.preamble_cls()?;
+        v.attrs = attrs;
         v.k = LegacyKind::Instance;
         self.draw(v)?;
+        if self.ver < FIRST_V4 && &*lead_cls == "CMaterial" {
+            if let Some(a) = v.attrs {
+                v.mat = a as i32;
+                v.attrs = None;
+            }
+        }
         v.def = self.object(Some("CComponentDefinition"))?.slot;
         v.xf = self.r.f64s(13)?;
         // SketchUp 3 and 4 instances carry no name string (5 is the

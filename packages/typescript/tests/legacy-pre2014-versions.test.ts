@@ -3,6 +3,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { parseSkp } from "../src/index";
 import { isLegacy } from "../src/legacy";
+import { looseEdgeRuns } from "../src/model";
 
 /**
  * Regression tests for the pre-2014 legacy layouts found while chasing
@@ -245,5 +246,84 @@ describe('SketchUp 3 single material (slot-base probe path)', () => {
     const faces = [model.root, ...model.definitions.values()].flatMap((d) => [...d.faces.values()]);
     expect(faces.length).toBe(1);
     expect(faces[0].materialId).toBe(model.materials[0].id);
+  });
+});
+
+describe("SketchUp 3 curves, fonts, guide lines and zero-material header (#284)", () => {
+  it("parses face-bounded CCurve and CArcCurve without loop desync", () => {
+    const model = parse("legacy_v3_curves_and_text.skp");
+    expect(model.version).toBe("{3.0.1}");
+    expect(model.unreadRootEntities).toBe(0);
+    const defs = defsByName(model);
+    expect([...defs.keys()].sort()).toEqual(["ArcDisk", "CurvedPanel"]);
+
+    const panel = defs.get("CurvedPanel")!;
+    expect(counts(panel)).toEqual([1, 6, 6]);
+    expect(panel.arcs.size).toBe(0);
+    const panelCurved = panel.edges.filter((e) => e.curveId != null);
+    expect(panelCurved.length).toBe(4);
+    expect(new Set(panelCurved.map((e) => e.curveId)).size).toBe(1);
+    expect(model.materialsById.get(panel.faces[0].materialId!)!.name).toBe("Red");
+
+    const disk = defs.get("ArcDisk")!;
+    expect(counts(disk)).toEqual([1, 8, 8]);
+    expect(disk.arcs.size).toBe(1);
+    const arc = [...disk.arcs.values()][0];
+    expect(arc.center).toEqual([10, 10, 0]);
+    expect(Math.abs(arc.radius - 8)).toBeLessThan(1e-9);
+    expect(arc.isFullCircle).toBe(true);
+    expect(model.materialsById.get(disk.faces[0].materialId!)!.name).toBe("Blue");
+
+    expect(
+      model.root.instances.map((i) => model.definitions.get(i.refIdx)!.name),
+    ).toEqual(["CurvedPanel", "ArcDisk"]);
+    expect(model.root.instances.map((i) => i.matrix[9])).toEqual([0, 40]);
+    expect(model.root.instances[0].materialId).toBeNull();
+    expect(
+      model.materialsById.get(model.root.instances[1].materialId!)!.name,
+    ).toBe("Red");
+  });
+
+  it("parses root loose curves, CSkFont text and infinite CConstructionLine", () => {
+    const model = parse("legacy_v3_curves_and_text.skp");
+    expect(counts(model.root)).toEqual([0, 9, 11]);
+    expect(model.root.arcs.size).toBe(1);
+    const arc = [...model.root.arcs.values()][0];
+    expect(arc.center).toEqual([0, 40, 0]);
+    expect(Math.abs(arc.radius - 10)).toBeLessThan(1e-9);
+    expect(arc.isFullCircle).toBe(false);
+    expect(
+      looseEdgeRuns(model.root).map((r) => [
+        r.edgeIds.length,
+        r.vertexIds.length,
+        r.closed,
+      ]),
+    ).toEqual([
+      [6, 7, false],
+      [3, 4, false],
+    ]);
+
+    expect(model.root.texts.length).toBe(1);
+    const txt = model.root.texts[0];
+    expect(txt.text).toBe("Label A");
+    expect(txt.point).toEqual([15, 15, 0]);
+    expect(txt.labelPoint).toEqual([20, 20, 10]);
+    expect(txt.screenPosition).toEqual([0, 0]);
+
+    expect(model.root.constructionLines.length).toBe(1);
+    const cl = model.root.constructionLines[0];
+    expect(cl.point).toEqual([0, 0, 0]);
+    expect(cl.direction).toEqual([1, 0, 0]);
+    expect(cl.start).toBeNull();
+    expect(cl.end).toBeNull();
+  });
+
+  it("parses a SketchUp 3 file with zero materials", () => {
+    const model = parse("legacy_v3_no_materials.skp");
+    expect(model.version).toBe("{3.0.1}");
+    expect(model.unreadRootEntities).toBe(0);
+    expect(model.materials.length).toBe(0);
+    expect(model.layers.map((l) => l.name)).toContain("Layer0");
+    expect(counts(model.root)).toEqual([1, 4, 4]);
   });
 });

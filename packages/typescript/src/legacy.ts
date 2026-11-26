@@ -706,8 +706,9 @@ const FIRST_NAMED_INSTANCE = 5;
 const FIRST_SINGLE_PREAMBLE_LINE_STYLE = 20;
 
 /** `preamble` for the entity types that carry NO attribute-container
- * pointer in a SketchUp 3 file: vertex, loop, edge-use, material, layer.
- * (Edge, face, definition, instance and thumbnail still open with one.) */
+ * pointer in a SketchUp 3 file: vertex, loop, edge-use, curve, arc-curve,
+ * font, material, layer. (Edge, face, definition, instance and thumbnail
+ * still open with one.) */
 function earlyPreamble(ar: Archive, r: R): { attrs: any; pid: number; attrsSlot: number | null } {
   if (ar.ver < FIRST_V4) return { attrs: null, pid: 0, attrsSlot: null };
   return preamble(ar, r);
@@ -783,15 +784,28 @@ function readEdge(ar: Archive, r: R): any {
   return { k: 'edge', db, curve: cs, curve_value: cv, v1: s1, v2: s2 };
 }
 
+function readCurveV3Edges(ar: Archive, r: R): void {
+  // SketchUp 3 CCurve / CArcCurve records begin with two CEdge object pointers
+  // (first and last edge; the last edge is serialized inline here).
+  for (let i = 0; i < 2; i++) {
+    const [, en] = ar.readObject(r, 'CEdge');
+    if (en !== null && en !== 'CEdge') {
+      throw new LegacyParseError(`curve edge pointer resolved to ${en} ${r.ctx()}`);
+    }
+  }
+}
+
 function readCurve(ar: Archive, r: R): any {
-  preamble(ar, r);
+  earlyPreamble(ar, r);
+  if (ar.ver < FIRST_V4) readCurveV3Edges(ar, r);
   r.u8();
   const n = r.u32();
   return { k: 'curve', n };
 }
 
 function readArcCurve(ar: Archive, r: R): any {
-  preamble(ar, r);
+  earlyPreamble(ar, r);
+  if (ar.ver < FIRST_V4) readCurveV3Edges(ar, r);
   r.raw(5);
   // center[3], normal[3], x_axis[3], start_angle, end_angle, y_axis[3]; the
   // arc is center + cos(t) * x_axis + sin(t) * y_axis
@@ -1380,6 +1394,16 @@ function readConstructionLine(ar: Archive, r: R): any {
   const db = drawbase(ar, r);
   const point = r.f64s(3);
   const direction = r.f64s(3);
+  if (ar.ver < FIRST_V4) {
+    return {
+      k: 'cline',
+      db,
+      point: [point[0], point[1], point[2]],
+      direction: [direction[0], direction[1], direction[2]],
+      start: null,
+      end: null,
+    };
+  }
   // Signed distance along `direction` from `point` marking where the visible segment
   // starts/ends - ground truth (real SketchUp 2025, SDK/Ruby cross-checked): a bounded
   // segment's start/end exactly equal point/direction scaled by these two parameters
@@ -1464,16 +1488,18 @@ function readSectionPlane(ar: Archive, r: R): any {
 }
 
 function readSkFont(ar: Archive, r: R): any {
-  ar.readObject(r, 'CAttributeContainer');
-  if (ar.hasPid) {
-    // the mask byte says how many pid bytes follow (SketchUp 2017+ writes two or more here)
-    const mask = r.u8();
-    let n = 0;
-    for (let bit = 0; bit < 8; bit++) if (mask & (1 << bit)) n++;
-    r.raw(n);
+  if (ar.ver >= FIRST_V4) {
+    ar.readObject(r, 'CAttributeContainer');
+    if (ar.hasPid) {
+      // the mask byte says how many pid bytes follow (SketchUp 2017+ writes two or more here)
+      const mask = r.u8();
+      let n = 0;
+      for (let bit = 0; bit < 8; bit++) if (mask & (1 << bit)) n++;
+      r.raw(n);
+    }
   }
   r.utf16();
-  r.raw(15);
+  r.raw(ar.ver < FIRST_V4 ? 6 : 15);
   return { k: 'font' };
 }
 
@@ -1932,6 +1958,13 @@ function readDefinition(ar: Archive, r: R): any {
 function readInstance(ar: Archive, r: R): any {
   const pre = preamble(ar, r);
   const db = drawbase(ar, r);
+  let attrs = pre.attrs;
+  if (ar.ver < FIRST_V4 && attrs && typeof attrs === 'object' && attrs.k === 'material') {
+    // SketchUp 3: as on CFace, CDrawingElement opens with its material pointer
+    // rather than an attribute container.
+    db.mat = pre.attrsSlot as number;
+    attrs = null;
+  }
   const [ds, dn] = ar.readObject(r, 'CComponentDefinition');
   if (dn !== 'CComponentDefinition') {
     throw new LegacyParseError(`instance definition ref is ${dn} ${r.ctx()}`);
@@ -1943,7 +1976,7 @@ function readInstance(ar: Archive, r: R): any {
 
   // The trailing instance GUID is a version-14 (SketchUp 2014) addition for
   // BOTH CComponentInstance and CGroup - gated by the file's own version,
-  // not by the class's reported schema. Schema doesn't generalize: a v7
+  // not by the class's own schema. Schema doesn't generalize: a v7
   // file's CComponentInstance reports schema 6, and CGroup reports schema 1
   // on every version, so a schema gate is always true for it and forces a
   // phantom 16-byte read on every pre-2014 group (openskp#284 / #310).
@@ -1956,7 +1989,7 @@ function readInstance(ar: Archive, r: R): any {
     xf,
     name,
     guid: guid.length === 16 ? guidFromWindowsBytes(guid) : '',
-    attrs: pre.attrs,
+    attrs,
   };
 }
 
@@ -2129,7 +2162,7 @@ export function walk(data: Uint8Array): WalkResult {
       throw new LegacyParseError('no CMaterial or CLayer class record found');
     }
     matCount = 0;
-    start = layerHdr - (ver >= 17 ? 9 : 8);
+    start = layerHdr - (ver >= 17 ? 9 : ver < FIRST_V4 ? 4 : 8);
   }
 
   const bases =

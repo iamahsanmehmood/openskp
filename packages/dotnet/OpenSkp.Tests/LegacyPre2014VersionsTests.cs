@@ -223,5 +223,82 @@ namespace OpenSkp.Tests
             Assert.Single(faces);
             Assert.Equal(model.Materials[0].Id, faces[0].MaterialId);
         }
+
+        // ── #284: SketchUp 3 curves, fonts, guide lines & zero-material ─
+
+        [Fact]
+        public void V3CurvesTextAndInfiniteGuideLineParseWithoutLoopDesync()
+        {
+            var model = Parse("legacy_v3_curves_and_text.skp");
+            Assert.Equal("{3.0.1}", model.Version);
+            Assert.Equal(0, model.UnreadRootEntities);
+
+            var defs = ByName(model);
+            Assert.Equal(
+                new[] { "ArcDisk", "CurvedPanel" },
+                defs.Keys.OrderBy(k => k, StringComparer.Ordinal));
+
+            var panel = defs["CurvedPanel"];
+            Assert.Single(panel.Faces);
+            Assert.Equal(6, panel.Edges.Count);
+            Assert.Equal(6, panel.Vertices.Count);
+            Assert.Empty(panel.Arcs);
+            var panelCurved = panel.Edges.Values.Where(e => e.CurveId.HasValue).Select(e => e.CurveId!.Value).ToList();
+            Assert.Equal(4, panelCurved.Count);
+            Assert.Single(panelCurved.Distinct());
+            Assert.Equal("Red", model.MaterialsById[panel.Faces.Values.First().MaterialId!.Value].Name);
+
+            var disk = defs["ArcDisk"];
+            Assert.Single(disk.Faces);
+            Assert.Equal(8, disk.Edges.Count);
+            Assert.Equal(8, disk.Vertices.Count);
+            var diskArc = Assert.Single(disk.Arcs).Value;
+            Assert.Equal((10.0, 10.0, 0.0), diskArc.Center);
+            Assert.True(Math.Abs(diskArc.Radius - 8.0) < 1e-9);
+            Assert.True(diskArc.IsFullCircle);
+            Assert.Equal("Blue", model.MaterialsById[disk.Faces.Values.First().MaterialId!.Value].Name);
+
+            Assert.Equal(
+                new[] { "CurvedPanel", "ArcDisk" },
+                model.Root.Instances.Select(i => model.Definitions[i.RefIdx!.Value].Name));
+            Assert.Null(model.Root.Instances[0].MaterialId);
+            Assert.Equal("Red", model.MaterialsById[model.Root.Instances[1].MaterialId!.Value].Name);
+
+            Assert.Empty(model.Root.Faces);
+            Assert.Equal(9, model.Root.Edges.Count);
+            Assert.Equal(11, model.Root.Vertices.Count);
+            var rootArc = Assert.Single(model.Root.Arcs).Value;
+            Assert.Equal((0.0, 40.0, 0.0), rootArc.Center);
+            Assert.True(Math.Abs(rootArc.Radius - 10.0) < 1e-9);
+            Assert.False(rootArc.IsFullCircle);
+            Assert.Equal(
+                new[] { (6, 7, false), (3, 4, false) },
+                model.Root.LooseEdgeRuns().Select(r => (r.EdgeIds.Count, r.VertexIds.Count, r.Closed)));
+
+            var txt = Assert.Single(model.Root.Texts);
+            Assert.Equal("Label A", txt.Text);
+            Assert.Equal((15.0, 15.0, 0.0), txt.Point);
+            Assert.Equal((20.0, 20.0, 10.0), txt.LabelPoint);
+            Assert.Equal((0.0, 0.0), txt.ScreenPosition);
+
+            var cl = Assert.Single(model.Root.ConstructionLines);
+            Assert.Equal((0.0, 0.0, 0.0), cl.Point);
+            Assert.Equal((1.0, 0.0, 0.0), cl.Direction);
+            Assert.Null(cl.Start);
+            Assert.Null(cl.End);
+        }
+
+        [Fact]
+        public void V3ZeroMaterialsParsesViaLayerHeaderOffset()
+        {
+            var model = Parse("legacy_v3_no_materials.skp");
+            Assert.Equal("{3.0.1}", model.Version);
+            Assert.Equal(0, model.UnreadRootEntities);
+            Assert.Empty(model.Materials);
+            Assert.Contains("Layer0", model.Layers.Select(l => l.Name));
+            Assert.Single(model.Root.Faces);
+            Assert.Equal(4, model.Root.Edges.Count);
+            Assert.Equal(4, model.Root.Vertices.Count);
+        }
     }
 }

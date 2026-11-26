@@ -566,8 +566,9 @@ _FIRST_NAMED_INSTANCE = 5
 
 def _early_preamble(ar, r):
     """``_preamble`` for the entity types that carry NO attribute-container
-    pointer in a SketchUp 3 file: vertex, loop, edge-use, material, layer.
-    (Edge, face, definition, instance and thumbnail still open with one.)"""
+    pointer in a SketchUp 3 file: vertex, loop, edge-use, curve, arc-curve,
+    font, material, layer. (Edge, face, definition, instance and thumbnail
+    still open with one.)"""
     if ar.ver < _FIRST_V4:
         return {'attrs': None, 'pid': 0}
     return _preamble(ar, r)
@@ -639,8 +640,20 @@ def _read_edge(ar, r):
             'v1': s1, 'v2': s2}
 
 
+def _read_curve_v3_edges(ar, r):
+    """SketchUp 3 ``CCurve`` / ``CArcCurve`` records begin with two ``CEdge``
+    object pointers (the curve's first and last edge; the last edge has not
+    been seen yet and is serialized inline here, consuming store-map slots)."""
+    for _ in range(2):
+        _, en, _ = ar.read_object(r, expect='CEdge')
+        if en not in (None, 'CEdge'):
+            raise LegacyParseError(f"curve edge pointer resolved to {en} {r.ctx()}")
+
+
 def _read_curve(ar, r):
-    _preamble(ar, r)
+    _early_preamble(ar, r)
+    if ar.ver < _FIRST_V4:
+        _read_curve_v3_edges(ar, r)
     r.u8()
     n = r.u32()
     return {'k': 'curve', 'n': n}
@@ -681,7 +694,9 @@ def _read_arccurve(ar, r):
     Only schema 3 is decoded; there is no pre-2015 arc in the corpus to
     validate schema 2 against and a changed layout must not be guessed at.
     """
-    _preamble(ar, r)
+    _early_preamble(ar, r)
+    if ar.ver < _FIRST_V4:
+        _read_curve_v3_edges(ar, r)
     r.raw(5)
     v = r.f64s(14)
     return {'k': 'arccurve', 'params': {
@@ -1087,6 +1102,10 @@ def _read_constructionline(ar, r):
     db = _drawbase(ar, r)
     point = r.f64s(3)
     direction = r.f64s(3)
+    if ar.ver < _FIRST_V4:
+        # SketchUp 3 guide lines are always infinite and end at direction.
+        return {'k': 'cline', 'db': db, 'point': tuple(point),
+                'direction': tuple(direction), 'start': None, 'end': None}
     # Signed distance along `direction` from `point` marking where the
     # visible segment starts/ends - ground truth (real SketchUp 2025,
     # SDK/Ruby cross-checked, 2026-09): a bounded segment's start/end
@@ -1166,12 +1185,15 @@ def _read_sectionplane(ar, r):
 
 
 def _read_skfont(ar, r):
-    ar.read_object(r, expect='CAttributeContainer')
-    if ar.has_pid:
-        mask = r.u8()
-        r.raw(bin(mask).count('1'))  # consume the pid bytes the mask declares
+    if ar.ver >= _FIRST_V4:
+        ar.read_object(r, expect='CAttributeContainer')
+        if ar.has_pid:
+            mask = r.u8()
+            r.raw(bin(mask).count('1'))  # consume the pid bytes the mask declares
     r.utf16()
-    r.raw(15)
+    # SketchUp 3 ends at u16 flags + u32 point size (6 bytes); SketchUp 4 adds
+    # u8 + f64 world height (15 bytes total).
+    r.raw(6 if ar.ver < _FIRST_V4 else 15)
     return {'k': 'font'}
 
 
@@ -2022,6 +2044,13 @@ def _read_definition(ar, r):
 def _read_instance(ar, r):
     pre = _preamble(ar, r)
     db = _drawbase(ar, r)
+    attrs = pre['attrs']
+    if (ar.ver < _FIRST_V4 and isinstance(attrs, dict)
+            and attrs.get('k') == 'material'):
+        # SketchUp 3: as on CFace, CDrawingElement opens with its material
+        # pointer rather than an attribute container.
+        db['mat'] = pre['attrs_slot']
+        attrs = None
     ds, dn, _ = ar.read_object(r, expect='CComponentDefinition')
     if dn != 'CComponentDefinition':
         raise LegacyParseError(f"instance definition ref is {dn} {r.ctx()}")
@@ -2059,7 +2088,7 @@ def _read_instance(ar, r):
     return {'k': 'instance', 'db': db, 'def': ds, 'xf': xf,
             'name': name,
             'guid': _guid_from_windows_bytes(guid) if len(guid) == 16 else '',
-            'attrs': pre['attrs']}
+            'attrs': attrs}
 
 
 _READERS = {
@@ -2116,7 +2145,7 @@ def _walk(data: bytes):
         if not lm:
             raise LegacyParseError("no CMaterial or CLayer class record found")
         mat_count = 0
-        start = lm.start() - (9 if ver >= 17 else 8)
+        start = lm.start() - (9 if ver >= 17 else (4 if ver < _FIRST_V4 else 8))
 
     if mat_count >= 2:
         bases = [_bootstrap_two_materials(data, ver, start)]

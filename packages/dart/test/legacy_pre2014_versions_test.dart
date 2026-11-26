@@ -225,4 +225,88 @@ void main() {
       expect(faces.first.materialId, model.materials.first.id);
     });
   });
+
+  group('SketchUp 3 curves, fonts, guide lines and zero-material header (#284)', () {
+    test('parses face-bounded CCurve and CArcCurve without loop desync', () {
+      final model = parse('legacy_v3_curves_and_text.skp');
+      expect(model.version, '{3.0.1}');
+      expect(model.unreadRootEntities, 0);
+      final defs = byName(model);
+      expect(sorted(defs.keys), ['ArcDisk', 'CurvedPanel']);
+
+      final panel = defs['CurvedPanel']!;
+      expect([panel.faces.length, panel.edges.length, panel.vertices.length], [1, 6, 6]);
+      expect(panel.arcs, isEmpty);
+      final panelCurved = panel.edges.values
+          .where((e) => e.curveId != null)
+          .map((e) => e.curveId!)
+          .toList();
+      expect(panelCurved.length, 4);
+      expect(panelCurved.toSet().length, 1);
+      expect(model.materialsById[panel.faces.values.first.materialId]!.name, 'Red');
+
+      final disk = defs['ArcDisk']!;
+      expect([disk.faces.length, disk.edges.length, disk.vertices.length], [1, 8, 8]);
+      expect(disk.arcs.length, 1);
+      final diskArc = disk.arcs.values.first;
+      expect(diskArc.center, (10.0, 10.0, 0.0));
+      expect((diskArc.radius - 8.0).abs(), lessThan(1e-9));
+      expect(diskArc.isFullCircle, isTrue);
+      expect(model.materialsById[disk.faces.values.first.materialId]!.name, 'Blue');
+
+      expect(
+          model.root.instances
+              .map((i) => model.definitions[i.refIdx]!.name)
+              .toList(),
+          ['CurvedPanel', 'ArcDisk']);
+      expect(model.root.instances[0].materialId, isNull);
+      expect(model.materialsById[model.root.instances[1].materialId]!.name, 'Red');
+    });
+
+    test('parses root loose curves, CSkFont text and infinite CConstructionLine', () {
+      final model = parse('legacy_v3_curves_and_text.skp');
+      expect(
+          [model.root.faces.length, model.root.edges.length, model.root.vertices.length],
+          [0, 9, 11]);
+      expect(model.root.arcs.length, 1);
+      final arc = model.root.arcs.values.first;
+      expect(arc.center, (0.0, 40.0, 0.0));
+      expect((arc.radius - 10.0).abs(), lessThan(1e-9));
+      expect(arc.isFullCircle, isFalse);
+      expect(
+          model.root
+              .looseEdgeRuns()
+              .map((r) => [r.edgeIds.length, r.vertexIds.length, r.closed])
+              .toList(),
+          [
+            [6, 7, false],
+            [3, 4, false],
+          ]);
+
+      expect(model.root.texts.length, 1);
+      final txt = model.root.texts.first;
+      expect(txt.text, 'Label A');
+      expect(txt.point, (15.0, 15.0, 0.0));
+      expect(txt.labelPoint, (20.0, 20.0, 10.0));
+      expect(txt.screenPosition, (0.0, 0.0));
+
+      expect(model.root.constructionLines.length, 1);
+      final cl = model.root.constructionLines.first;
+      expect(cl.point, (0.0, 0.0, 0.0));
+      expect(cl.direction, (1.0, 0.0, 0.0));
+      expect(cl.start, isNull);
+      expect(cl.end, isNull);
+    });
+
+    test('parses a SketchUp 3 file with zero materials', () {
+      final model = parse('legacy_v3_no_materials.skp');
+      expect(model.version, '{3.0.1}');
+      expect(model.unreadRootEntities, 0);
+      expect(model.materials, isEmpty);
+      expect(model.layers.map((l) => l.name).toList(), contains('Layer0'));
+      expect(
+          [model.root.faces.length, model.root.edges.length, model.root.vertices.length],
+          [1, 4, 4]);
+    });
+  });
 }
