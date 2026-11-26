@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { create, SkpWriteError, _internal, Point3 } from '../src/create';
-import { parseSkp, buildScene } from '../src/index';
+import { parseSkp, buildScene, openExisting, toTypeScriptCode, computeFaceUv, faceUvBasis } from '../src/index';
 import { walk } from '../src/legacy';
 
 /**
@@ -1499,5 +1499,95 @@ describe('Face UV + attributes and curves over existing edges', () => {
     const edges3 = w3.root.filter(([, n]) => n === 'CEdge').map(([, , v]) => v);
     expect(edges3).toHaveLength(8);
     expect(new Set(edges3.map((e) => e.curve)).size).toBe(1);
+  });
+
+  it('scales frontUv/backUv pins by applied texture size across faces, circles, edit, and codegen', () => {
+    expect(faceUvBasis([9.9e-4, 0, 1])).toEqual({ xr: [1, 0, 0], yr: [0, 1, 0] });
+    expect(faceUvBasis([0, 0, -1])).toEqual({ xr: [-1, 0, 0], yr: [0, 1, 0] });
+    expect(faceUvBasis([3e-4, 0, -1])).toEqual({ xr: [-1, 0, 0], yr: [0, 1, 0] });
+    expect(faceUvBasis([2e-3, 0, 0.999998]).xr[1]).toBeCloseTo(1, 5);
+
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 1, 2, 3]);
+    const quad: Point3[] = [[50, 0, 0], [50, 40, 0], [0, 40, 0], [0, 0, 0]];
+    const fPins: [Point3, [number, number]][] = [
+      [[0, 0, 0], [0.0, 0.0]],
+      [[50, 0, 0], [2.5, 0.0]],
+      [[0, 40, 0], [0.0, 1.0]],
+    ];
+    const bPins: [Point3, [number, number]][] = [
+      [[0, 0, 0], [0.25, 0.5]],
+      [[50, 0, 0], [2.75, 0.5]],
+      [[0, 40, 0], [0.25, 2.5]],
+    ];
+    const cfPins: [Point3, [number, number]][] = [
+      [[100, 20, 0], [0.0, 0.0]],
+      [[140, 20, 0], [2.0, 0.0]],
+      [[120, 40, 0], [0.0, 1.0]],
+    ];
+    const cbPins: [Point3, [number, number]][] = [
+      [[100, 20, 0], [0.5, 0.25]],
+      [[140, 20, 0], [2.5, 0.25]],
+      [[120, 40, 0], [0.5, 1.25]],
+    ];
+
+    const b = create();
+    const frontTex = b.addTextureMaterial('FrontTex', png, 'tex.png', 20, 10);
+    const backTex = b.addTextureMaterial('BackTex', png, 'tex.png', 8, 4);
+    const panel = b.addComponentDefinition('Panel', (def) => {
+      def.addFace(quad, { material: frontTex, backMaterial: backTex, frontUv: fPins, backUv: bPins });
+      def.addCircle([120, 20, 0], [0, 0, 1], 20, {
+        numSegments: 8, material: frontTex, backMaterial: backTex, frontUv: cfPins, backUv: cbPins,
+      });
+    });
+    b.addInstance(panel, { translation: [0, 100, 0] });
+    b.addFace(quad, { material: frontTex, backMaterial: backTex, frontUv: fPins, backUv: bPins });
+    b.addCircle([120, 20, 0], [0, 0, 1], 20, {
+      numSegments: 8, material: frontTex, backMaterial: backTex, frontUv: cfPins, backUv: cbPins,
+    });
+
+    const checkModel = (bytes: Uint8Array) => {
+      const m = parseSkp(toBuffer(bytes));
+      const fm = m.materials.find((x) => x.name === 'FrontTex')!;
+      const bm = m.materials.find((x) => x.name === 'BackTex')!;
+      expect([fm.texture!.width, fm.texture!.height]).toEqual([10, 20]);
+      expect([bm.texture!.width, bm.texture!.height]).toEqual([4, 8]);
+
+      const defFaces = [...m.definitions.values()][0].faces;
+      for (const faces of [defFaces, m.root.faces]) {
+        expect(faces).toHaveLength(2);
+        const { xr, yr } = faceUvBasis([0, 0, 1]);
+        for (const [pt, [eu, ev]] of fPins) {
+          const [u, v] = computeFaceUv(pt, xr, yr, faces[0].uvTransform, 10, 20);
+          expect(u).toBeCloseTo(eu, 4);
+          expect(v).toBeCloseTo(ev, 4);
+        }
+        for (const [pt, [eu, ev]] of bPins) {
+          const [u, v] = computeFaceUv(pt, xr, yr, faces[0].uvTransformBack, 4, 8);
+          expect(u).toBeCloseTo(eu, 4);
+          expect(v).toBeCloseTo(ev, 4);
+        }
+        for (const [pt, [eu, ev]] of cfPins) {
+          const [u, v] = computeFaceUv(pt, xr, yr, faces[1].uvTransform, 10, 20);
+          expect(u).toBeCloseTo(eu, 4);
+          expect(v).toBeCloseTo(ev, 4);
+        }
+        for (const [pt, [eu, ev]] of cbPins) {
+          const [u, v] = computeFaceUv(pt, xr, yr, faces[1].uvTransformBack, 4, 8);
+          expect(u).toBeCloseTo(eu, 4);
+          expect(v).toBeCloseTo(ev, 4);
+        }
+      }
+    };
+
+    const origBytes = b.toBytes();
+    checkModel(origBytes);
+
+    const { builder: edited } = openExisting(origBytes);
+    checkModel(edited.toBytes());
+
+    const code = toTypeScriptCode(parseSkp(toBuffer(origBytes)));
+    const body = code.replace(/^import .*;\n/m, '').replace(/export function build/, 'function build');
+    const regenBytes: Uint8Array = new Function('create', 'atob', `${body}\nreturn build();`)(create, atob);
+    checkModel(regenBytes);
   });
 });

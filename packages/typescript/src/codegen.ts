@@ -55,15 +55,12 @@ function toBase64(bytes: Uint8Array): string {
  * identical, more triangles internally).
  *
  * Every textured face is emitted with explicit `frontUv`/`backUv` (3 real
- * vertices + their actual rendered UV, via `computeFaceUv`/`faceUvBasis` -
- * the same formula the reader/renderer use), never left to the writer's
- * default projection - this reproduces the source file's rendering exactly
- * regardless of whether it originally used a pin or the default
- * projection, and sidesteps `addTextureMaterial`'s default applied-height
- * sentinel corrupting the result (see `addTextureMaterial`'s own note in
- * create.ts). A 4-pin *projective* (non-affine) source mapping can't be
- * reproduced exactly this way - front_uv is an affine (3-point) fit, the
- * same limitation the writer itself already has.
+ * vertices + their actual rendered UV in tiles, via `computeFaceUv`/
+ * `faceUvBasis` - the same formula the reader/renderer use), while the
+ * material carries its real `appliedHeight`/`appliedWidth` and `addFace`
+ * scales the tile pins by that size. A 4-pin *projective* (non-affine)
+ * source mapping can't be reproduced exactly this way - front_uv is an
+ * affine (3-point) fit, the same limitation the writer itself already has.
  */
 export function toTypeScriptCode(model: SkpModel): string {
   const lines: string[] = [];

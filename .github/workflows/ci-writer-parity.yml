@@ -160,6 +160,28 @@ jobs:
                       layer=roof,
                   )
                   b.save("py_rich.skp")
+
+                  b = create()
+                  front_tex = b.add_texture_material("FrontTex", "tex.png", applied_width=10.0, applied_height=20.0)
+                  back_tex = b.add_texture_material("BackTex", "tex.png", applied_width=4.0, applied_height=8.0)
+                  quad = [(50, 0, 0), (50, 40, 0), (0, 40, 0), (0, 0, 0)]
+                  f_pins = [((0, 0, 0), (0.0, 0.0)), ((50, 0, 0), (2.5, 0.0)), ((0, 40, 0), (0.0, 1.0))]
+                  b_pins = [((0, 0, 0), (0.25, 0.5)), ((50, 0, 0), (2.75, 0.5)), ((0, 40, 0), (0.25, 2.5))]
+                  cf_pins = [((100, 100, 0), (0.0, 0.0)), ((140, 100, 0), (2.0, 0.0)), ((120, 120, 0), (0.0, 1.0))]
+                  cb_pins = [((100, 100, 0), (0.5, 0.25)), ((140, 100, 0), (2.5, 0.25)), ((120, 120, 0), (0.5, 1.25))]
+                  with b.add_component_definition("Panel") as panel:
+                      panel.add_face(quad, material=front_tex, back_material=back_tex, front_uv=f_pins, back_uv=b_pins)
+                      panel.add_circle(
+                          (120, 100, 0), (0, 0, 1), 20.0, num_segments=8,
+                          material=front_tex, back_material=back_tex, front_uv=cf_pins, back_uv=cb_pins,
+                      )
+                  b.add_instance(panel, translation=(0, 200, 0))
+                  b.add_face(quad, material=front_tex, back_material=back_tex, front_uv=f_pins, back_uv=b_pins)
+                  b.add_circle(
+                      (120, 100, 0), (0, 0, 1), 20.0, num_segments=8,
+                      material=front_tex, back_material=back_tex, front_uv=cf_pins, back_uv=cb_pins,
+                  )
+                  b.save("py_uv_scaled.skp")
               finally:
                   os.chdir(prev_cwd)
 
@@ -199,6 +221,29 @@ jobs:
               }}
             );
             b.save('ts_rich.skp');
+          }}
+          {{
+            const b = create();
+            const png = new Uint8Array(fs.readFileSync('tex.png'));
+            const frontTex = b.addTextureMaterial('FrontTex', png, 'tex.png', 20.0, 10.0);
+            const backTex = b.addTextureMaterial('BackTex', png, 'tex.png', 8.0, 4.0);
+            const quad = [[50, 0, 0], [50, 40, 0], [0, 40, 0], [0, 0, 0]];
+            const fPins = [[[0, 0, 0], [0.0, 0.0]], [[50, 0, 0], [2.5, 0.0]], [[0, 40, 0], [0.0, 1.0]]];
+            const bPins = [[[0, 0, 0], [0.25, 0.5]], [[50, 0, 0], [2.75, 0.5]], [[0, 40, 0], [0.25, 2.5]]];
+            const cfPins = [[[100, 100, 0], [0.0, 0.0]], [[140, 100, 0], [2.0, 0.0]], [[120, 120, 0], [0.0, 1.0]]];
+            const cbPins = [[[100, 100, 0], [0.5, 0.25]], [[140, 100, 0], [2.5, 0.25]], [[120, 120, 0], [0.5, 1.25]]];
+            const panel = b.addComponentDefinition('Panel', (def) => {{
+              def.addFace(quad, {{ material: frontTex, backMaterial: backTex, frontUv: fPins, backUv: bPins }});
+              def.addCircle([120, 100, 0], [0, 0, 1], 20.0, {{
+                numSegments: 8, material: frontTex, backMaterial: backTex, frontUv: cfPins, backUv: cbPins,
+              }});
+            }});
+            b.addInstance(panel, {{ translation: [0, 200, 0] }});
+            b.addFace(quad, {{ material: frontTex, backMaterial: backTex, frontUv: fPins, backUv: bPins }});
+            b.addCircle([120, 100, 0], [0, 0, 1], 20.0, {{
+              numSegments: 8, material: frontTex, backMaterial: backTex, frontUv: cfPins, backUv: cbPins,
+            }});
+            b.save('ts_uv_scaled.skp');
           }}
           """, encoding="utf-8")
               subprocess.check_call(["node", str(ts_driver)], cwd=str(work))
@@ -254,6 +299,46 @@ jobs:
                   holes: new[] { (IReadOnlyList<(double, double, double)>)new (double, double, double)[] { (20, 20, 0), (40, 20, 0), (40, 40, 0), (20, 40, 0) } });
               b.Save("dotnet_rich.skp");
           }
+          {
+              var b = SkpCreate.NewFile();
+              int frontTex = b.AddTextureMaterial("FrontTex", "tex.png", appliedHeight: 20.0, appliedWidth: 10.0);
+              int backTex = b.AddTextureMaterial("BackTex", "tex.png", appliedHeight: 8.0, appliedWidth: 4.0);
+              var quad = new (double, double, double)[] { (50, 0, 0), (50, 40, 0), (0, 40, 0), (0, 0, 0) };
+              var fPins = new[]
+              {
+                  new UvCorrespondence((0, 0, 0), (0.0, 0.0)),
+                  new UvCorrespondence((50, 0, 0), (2.5, 0.0)),
+                  new UvCorrespondence((0, 40, 0), (0.0, 1.0)),
+              };
+              var bPins = new[]
+              {
+                  new UvCorrespondence((0, 0, 0), (0.25, 0.5)),
+                  new UvCorrespondence((50, 0, 0), (2.75, 0.5)),
+                  new UvCorrespondence((0, 40, 0), (0.25, 2.5)),
+              };
+              var cfPins = new[]
+              {
+                  new UvCorrespondence((100, 100, 0), (0.0, 0.0)),
+                  new UvCorrespondence((140, 100, 0), (2.0, 0.0)),
+                  new UvCorrespondence((120, 120, 0), (0.0, 1.0)),
+              };
+              var cbPins = new[]
+              {
+                  new UvCorrespondence((100, 100, 0), (0.5, 0.25)),
+                  new UvCorrespondence((140, 100, 0), (2.5, 0.25)),
+                  new UvCorrespondence((120, 120, 0), (0.5, 1.25)),
+              };
+              ComponentDefinitionBuilder panel;
+              using (panel = b.AddComponentDefinition("Panel"))
+              {
+                  panel.AddFace(quad, material: frontTex, backMaterial: backTex, frontUv: fPins, backUv: bPins);
+                  panel.AddCircle((120, 100, 0), (0, 0, 1), 20.0, numSegments: 8, material: frontTex, backMaterial: backTex, frontUv: cfPins, backUv: cbPins);
+              }
+              b.AddInstance(panel, translation: (0, 200, 0));
+              b.AddFace(quad, material: frontTex, backMaterial: backTex, frontUv: fPins, backUv: bPins);
+              b.AddCircle((120, 100, 0), (0, 0, 1), 20.0, numSegments: 8, material: frontTex, backMaterial: backTex, frontUv: cfPins, backUv: cbPins);
+              b.Save("dotnet_uv_scaled.skp");
+          }
           """, encoding="utf-8")
               subprocess.check_call(["dotnet", "run", "-c", "Release", "--project", str(net_dir / "Driver.csproj")], cwd=str(work))
 
@@ -291,6 +376,30 @@ jobs:
                 layer: roof,
               );
               b.save('dart_rich.skp');
+            }
+            {
+              final b = create();
+              final frontTex = b.addTextureMaterial('FrontTex', 'tex.png', appliedHeight: 20.0, appliedWidth: 10.0);
+              final backTex = b.addTextureMaterial('BackTex', 'tex.png', appliedHeight: 8.0, appliedWidth: 4.0);
+              final quad = [(50.0, 0.0, 0.0), (50.0, 40.0, 0.0), (0.0, 40.0, 0.0), (0.0, 0.0, 0.0)];
+              final fPins = [((0.0, 0.0, 0.0), (0.0, 0.0)), ((50.0, 0.0, 0.0), (2.5, 0.0)), ((0.0, 40.0, 0.0), (0.0, 1.0))];
+              final bPins = [((0.0, 0.0, 0.0), (0.25, 0.5)), ((50.0, 0.0, 0.0), (2.75, 0.5)), ((0.0, 40.0, 0.0), (0.25, 2.5))];
+              final cfPins = [((100.0, 100.0, 0.0), (0.0, 0.0)), ((140.0, 100.0, 0.0), (2.0, 0.0)), ((120.0, 120.0, 0.0), (0.0, 1.0))];
+              final cbPins = [((100.0, 100.0, 0.0), (0.5, 0.25)), ((140.0, 100.0, 0.0), (2.5, 0.25)), ((120.0, 120.0, 0.0), (0.5, 1.25))];
+              final panel = b.addComponentDefinition('Panel', (def) {
+                def.addFace(quad, material: frontTex, backMaterial: backTex, frontUv: fPins, backUv: bPins);
+                def.addCircle(
+                  (120.0, 100.0, 0.0), (0.0, 0.0, 1.0), 20.0,
+                  numSegments: 8, material: frontTex, backMaterial: backTex, frontUv: cfPins, backUv: cbPins,
+                );
+              });
+              b.addInstance(panel, translation: (0.0, 200.0, 0.0));
+              b.addFace(quad, material: frontTex, backMaterial: backTex, frontUv: fPins, backUv: bPins);
+              b.addCircle(
+                (120.0, 100.0, 0.0), (0.0, 0.0, 1.0), 20.0,
+                numSegments: 8, material: frontTex, backMaterial: backTex, frontUv: cfPins, backUv: cbPins,
+              );
+              b.save('dart_uv_scaled.skp');
             }
           }
           """, encoding="utf-8")
@@ -352,12 +461,59 @@ jobs:
               b->add_face({{0, 0, 0}, {100, 0, 0}, {100, 100, 0}, {0, 100, 0}}, face_opts);
               b->save("cpp_rich.skp");
             }
+            {
+              auto b = openskp::create();
+              int front_tex = b->add_texture_material("FrontTex", "tex.png", 20.0, 10.0);
+              int back_tex = b->add_texture_material("BackTex", "tex.png", 8.0, 4.0);
+              std::vector<openskp::Point3> quad = {{50, 0, 0}, {50, 40, 0}, {0, 40, 0}, {0, 0, 0}};
+              openskp::UvCorrespondence f_pins = {{
+                  {{0, 0, 0}, {0.0, 0.0}},
+                  {{50, 0, 0}, {2.5, 0.0}},
+                  {{0, 40, 0}, {0.0, 1.0}},
+              }};
+              openskp::UvCorrespondence b_pins = {{
+                  {{0, 0, 0}, {0.25, 0.5}},
+                  {{50, 0, 0}, {2.75, 0.5}},
+                  {{0, 40, 0}, {0.25, 2.5}},
+              }};
+              openskp::UvCorrespondence cf_pins = {{
+                  {{100, 100, 0}, {0.0, 0.0}},
+                  {{140, 100, 0}, {2.0, 0.0}},
+                  {{120, 120, 0}, {0.0, 1.0}},
+              }};
+              openskp::UvCorrespondence cb_pins = {{
+                  {{100, 100, 0}, {0.5, 0.25}},
+                  {{140, 100, 0}, {2.5, 0.25}},
+                  {{120, 120, 0}, {0.5, 1.25}},
+              }};
+              openskp::FaceOptions face_opts;
+              face_opts.material = front_tex;
+              face_opts.back_material = back_tex;
+              face_opts.front_uv = f_pins;
+              face_opts.back_uv = b_pins;
+              openskp::CircleOptions circle_opts;
+              circle_opts.num_segments = 8;
+              circle_opts.material = front_tex;
+              circle_opts.back_material = back_tex;
+              circle_opts.front_uv = cf_pins;
+              circle_opts.back_uv = cb_pins;
+              auto& panel = b->add_component_definition("Panel");
+              panel.add_face(quad, face_opts);
+              panel.add_circle({120, 100, 0}, {0, 0, 1}, 20.0, circle_opts);
+              panel.close();
+              openskp::InstanceOptions inst_opts;
+              inst_opts.translation = {0, 200, 0};
+              b->add_instance(panel, inst_opts);
+              b->add_face(quad, face_opts);
+              b->add_circle({120, 100, 0}, {0, 0, 1}, 20.0, circle_opts);
+              b->save("cpp_uv_scaled.skp");
+            }
             return 0;
           }
           """, encoding="utf-8")
               cpp_bin = cpp_dir / "driver"
               subprocess.check_call([
-                  "g++", "-std=c++17", "-O2",
+                  "g++", "-std=c++17", "-O2", "-ffp-contract=off",
                   f"-I{cpp_dir / 'include'}",
                   f"-I{repo / 'packages/cpp/include'}",
                   f"-I{repo / 'packages/cpp/src'}",
@@ -379,8 +535,8 @@ jobs:
           openskp = {{ path = {str(repo / 'packages/rust')!r} }}
           """, encoding="utf-8")
               (rust_dir / "src/main.rs").write_text("""use openskp::create::{
-              create, AttributeDict, DefinitionOptions, FaceOptions, GroupOptions, InstanceOptions,
-              LayerOptions,
+              create, AttributeDict, CircleOptions, DefinitionOptions, FaceOptions, GroupOptions,
+              InstanceOptions, LayerOptions,
           };
 
           fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -473,6 +629,61 @@ jobs:
                   )?;
                   b.save("rust_rich.skp")?;
               }
+              {
+                  let mut b = create();
+                  let front_tex = b.add_texture_material("FrontTex", "tex.png", Some(20.0), Some(10.0), None)?;
+                  let back_tex = b.add_texture_material("BackTex", "tex.png", Some(8.0), Some(4.0), None)?;
+                  let quad = [[50.0, 0.0, 0.0], [50.0, 40.0, 0.0], [0.0, 40.0, 0.0], [0.0, 0.0, 0.0]];
+                  let f_pins = vec![
+                      ([0.0, 0.0, 0.0], [0.0, 0.0]),
+                      ([50.0, 0.0, 0.0], [2.5, 0.0]),
+                      ([0.0, 40.0, 0.0], [0.0, 1.0]),
+                  ];
+                  let b_pins = vec![
+                      ([0.0, 0.0, 0.0], [0.25, 0.5]),
+                      ([50.0, 0.0, 0.0], [2.75, 0.5]),
+                      ([0.0, 40.0, 0.0], [0.25, 2.5]),
+                  ];
+                  let cf_pins = vec![
+                      ([100.0, 100.0, 0.0], [0.0, 0.0]),
+                      ([140.0, 100.0, 0.0], [2.0, 0.0]),
+                      ([120.0, 120.0, 0.0], [0.0, 1.0]),
+                  ];
+                  let cb_pins = vec![
+                      ([100.0, 100.0, 0.0], [0.5, 0.25]),
+                      ([140.0, 100.0, 0.0], [2.5, 0.25]),
+                      ([120.0, 120.0, 0.0], [0.5, 1.25]),
+                  ];
+                  let face_opts = FaceOptions {
+                      material: Some(front_tex),
+                      back_material: Some(back_tex),
+                      front_uv: Some(f_pins),
+                      back_uv: Some(b_pins),
+                      ..Default::default()
+                  };
+                  let circle_opts = CircleOptions {
+                      num_segments: 8,
+                      material: Some(front_tex),
+                      back_material: Some(back_tex),
+                      front_uv: Some(cf_pins),
+                      back_uv: Some(cb_pins),
+                      ..Default::default()
+                  };
+                  let mut panel = b.add_component_definition("Panel", &DefinitionOptions::default())?;
+                  panel.add_face(&quad, &face_opts)?;
+                  panel.add_circle([120.0, 100.0, 0.0], [0.0, 0.0, 1.0], 20.0, &circle_opts)?;
+                  let panel = panel.close()?;
+                  b.add_instance(
+                      panel,
+                      &InstanceOptions {
+                          translation: [0.0, 200.0, 0.0],
+                          ..Default::default()
+                      },
+                  )?;
+                  b.add_face(&quad, &face_opts)?;
+                  b.add_circle([120.0, 100.0, 0.0], [0.0, 0.0, 1.0], 20.0, &circle_opts)?;
+                  b.save("rust_uv_scaled.skp")?;
+              }
               Ok(())
           }
           """, encoding="utf-8")
@@ -483,14 +694,25 @@ jobs:
               writers = ["py", "ts", "dotnet", "dart", "cpp", "rust"]
               failures = []
 
-              for scenario, names, expected_mats, expected_defs, expected_insts in [
-                  ("basic", ["Chair"], ["Red"], [("Chair", 1, False)], [("Chair", {})]),
+              for scenario, names, expected_mats, expected_layers, expected_defs, expected_root_faces, expected_insts in [
+                  ("basic", ["Chair"], ["Red"], ["Layer0", "Roof"], [("Chair", 1, False)], 1, [("Chair", {})]),
                   (
                       "rich",
                       ["Chair", "Box"],
                       ["Red", "Brick"],
+                      ["Layer0", "Roof"],
                       [("Chair", 1, False), ("Box", 1, True)],
+                      1,
                       [("Box", {}), ("Chair", {"attributes": {"tag": "c1"}})],
+                  ),
+                  (
+                      "uv_scaled",
+                      ["Panel"],
+                      ["FrontTex", "BackTex"],
+                      ["Layer0"],
+                      [("Panel", 2, False)],
+                      2,
+                      [("Panel", {})],
                   ),
               ]:
                   raw = {w: (work / f"{w}_{scenario}.skp").read_bytes() for w in writers}
@@ -504,15 +726,19 @@ jobs:
                       insts = [(i.name, i.attribute_dictionaries) for i in m.root.instances]
                       if (mats, layers, defs, len(m.root.faces), insts) != (
                           expected_mats,
-                          ["Layer0", "Roof"],
+                          expected_layers,
                           expected_defs,
-                          1,
+                          expected_root_faces,
                           expected_insts,
                       ):
                           failures.append(
                               f"[{scenario}] {w} parsed structure mismatch: "
                               f"mats={mats}, layers={layers}, defs={defs}, faces={len(m.root.faces)}, insts={insts}"
                           )
+                      if scenario == "uv_scaled":
+                          sizes = [(x.name, x.texture.width, x.texture.height) for x in m.materials]
+                          if sizes != [("FrontTex", 10.0, 20.0), ("BackTex", 4.0, 8.0)]:
+                              failures.append(f"[{scenario}] {w} texture sizes mismatch: {sizes}")
 
                   # Assert TS, .NET, Dart == Python (byte-for-byte outside random UUIDs/timestamps)
                   masked_py = mask_random_fields(raw["py"], names)
@@ -545,7 +771,7 @@ jobs:
                       for idx, (pb, cb) in enumerate(zip(masked_py_gm, masked_cpp)):
                           if pb == cb:
                               continue
-                          if scenario == "rich" and pb == 0xFE and cb == 0xFF:
+                          if scenario in ("rich", "uv_scaled") and pb == 0xFE and cb == 0xFF:
                               alpha_diffs += 1
                           elif cb == pb - 1:
                               pid_diffs += 1

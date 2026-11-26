@@ -629,3 +629,78 @@ fn preserves_texture_filenames_including_empty_without_embedding_temp_path() {
         .collect();
     assert_eq!(rebuilt_names, orig_names);
 }
+
+#[test]
+fn preserves_non_unit_texture_applied_size_and_pinned_uvs() {
+    let png_path = std::env::temp_dir().join("openskp_edit_test_scaled_uv_rs.png");
+    std::fs::write(&png_path, fake_png_bytes()).unwrap();
+    let path = temp_skp("scaled_uv_edit_rs");
+    {
+        let mut builder = create();
+        let front = builder
+            .add_texture_material("FrontTex", &png_path, Some(20.0), Some(10.0), None)
+            .unwrap();
+        let back = builder
+            .add_texture_material("BackTex", &png_path, Some(8.0), Some(4.0), None)
+            .unwrap();
+        let opts = FaceOptions {
+            material: Some(front),
+            back_material: Some(back),
+            front_uv: Some(vec![
+                ([0.0, 0.0, 0.0], [0.0, 0.0]),
+                ([50.0, 0.0, 0.0], [2.5, 0.0]),
+                ([0.0, 40.0, 0.0], [0.0, 1.0]),
+            ]),
+            back_uv: Some(vec![
+                ([0.0, 0.0, 0.0], [0.25, 0.5]),
+                ([50.0, 0.0, 0.0], [2.75, 0.5]),
+                ([0.0, 40.0, 0.0], [0.25, 2.5]),
+            ]),
+            ..Default::default()
+        };
+        builder
+            .add_face(
+                &[
+                    [50.0, 0.0, 0.0],
+                    [50.0, 40.0, 0.0],
+                    [0.0, 40.0, 0.0],
+                    [0.0, 0.0, 0.0],
+                ],
+                &opts,
+            )
+            .unwrap();
+        builder.save(&path).unwrap();
+    }
+    let _ = std::fs::remove_file(&png_path);
+
+    let orig = SkpFile::open(&path)
+        .unwrap()
+        .parse(&ParseOptions::default())
+        .unwrap();
+    let mut edited = open_existing(&path).unwrap();
+    let rebuilt = parse(edited.builder.to_bytes().unwrap());
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(rebuilt.materials.len(), 2);
+    let by_name: std::collections::BTreeMap<_, _> = rebuilt
+        .materials
+        .iter()
+        .map(|m| {
+            let t = m.texture.as_ref().unwrap();
+            (m.name.as_str(), (t.width, t.height))
+        })
+        .collect();
+    assert_eq!(by_name["FrontTex"], (10.0, 20.0));
+    assert_eq!(by_name["BackTex"], (4.0, 8.0));
+
+    let orig_face = orig.root().faces.values().next().unwrap();
+    let rebuilt_face = rebuilt.root().faces.values().next().unwrap();
+    let of = orig_face.uv_transform.unwrap();
+    let rf = rebuilt_face.uv_transform.unwrap();
+    let ob = orig_face.uv_transform_back.unwrap();
+    let rb = rebuilt_face.uv_transform_back.unwrap();
+    for i in 0..9 {
+        assert!((rf[i] - of[i]).abs() < 1e-6);
+        assert!((rb[i] - ob[i]).abs() < 1e-6);
+    }
+}

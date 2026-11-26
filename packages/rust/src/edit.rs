@@ -281,14 +281,22 @@ fn replay_materials(
                     tmp_path.display()
                 ))
             })?;
-            // applied_height: 1.0 - every textured face is replayed with an explicit
-            // front_uv/back_uv (see replay_uv), whose pins already bake in the SOURCE's real tile
-            // size via compute_face_uv - the material's own stored applied height must be a no-op
-            // divisor (1.0) or the read-side UV formula divides by it a second time. This happens
-            // to match add_texture_material's own default too, but is kept explicit since it's a
-            // hard requirement of this call site specifically, not just a safe default.
+            // The source's real applied size travels with the material, and the replayed pins -
+            // in tiles, from compute_face_uv - are scaled by it inside add_face, so the read-side
+            // division by the applied size lands back on the same UV.
+            let app_h = if texture.height != 0.0 {
+                texture.height
+            } else {
+                1.0
+            };
+            let app_w = if texture.width != 0.0 {
+                texture.width
+            } else {
+                1.0
+            };
             let tex_opts = crate::create::TextureMaterialOptions {
-                applied_height: Some(1.0),
+                applied_height: Some(app_h),
+                applied_width: Some(app_w),
                 filename: Some(texture.filename.clone()),
                 ..Default::default()
             };
@@ -586,10 +594,8 @@ impl ReplayContext<'_> {
     }
 
     /// Explicit `front_uv`/`back_uv` for EVERY textured face, not just already-positioned ones -
-    /// `compute_face_uv` already computes the correct final UV for the untouched-projection case
-    /// too (`uv_transform` is unset) using the source's real tile size, so this reproduces a
-    /// default-projected face's true rendering exactly without needing the material's own applied
-    /// width/height to match (which, post-replay, is intentionally 1.0 - see replay_materials).
+    /// `compute_face_uv` computes final tile UVs for both positioned and untouched-projection
+    /// faces, which `add_face` scales back by the material's applied width and height.
     #[allow(clippy::too_many_arguments)] // the C++ signature
     fn replay_uv(
         &self,

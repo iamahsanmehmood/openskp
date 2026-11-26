@@ -123,13 +123,17 @@ List<double> _invert3x3(List<double> m) {
   ];
 }
 
+/// Below this `|Z x n|` length, SketchUp treats a face as horizontal
+/// (measured against SketchUp 2025's SDK: 9.9e-4 snaps, 1.0e-3 turns).
+const double _uvVerticalTolerance = 1e-3;
+
 /// Face-plane basis vectors (xr, yr) for UV projection, from a face normal.
 ((double, double, double), (double, double, double)) faceUvBasis((double, double, double) n) {
   final (nx, ny, nz) = n;
   final cx = -ny, cy = nx;
   final clen = sqrt(cx * cx + cy * cy);
-  if (clen < 1e-9) {
-    return ((1.0, 0.0, 0.0), (0.0, nz >= 0 ? 1.0 : -1.0, 0.0));
+  if (clen < _uvVerticalTolerance) {
+    return ((nz >= 0 ? 1.0 : -1.0, 0.0, 0.0), (0.0, 1.0, 0.0));
   }
   final xr = (cx / clen, cy / clen, 0.0);
   final yr = (ny * xr.$3 - nz * xr.$2, nz * xr.$1 - nx * xr.$3, nx * xr.$2 - ny * xr.$1);

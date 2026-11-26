@@ -55,6 +55,7 @@ import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
 import 'package:meta/meta.dart';
 
+import 'face_groups.dart' show faceUvBasis;
 import 'legacy.dart';
 import 'scaffold_data.dart';
 import 'tlv.dart';
@@ -488,19 +489,20 @@ Matrix3x3? _resolveMatrix3x3(Matrix3x3? matrix3x3, Rotation? rotation) {
   return matrix3x3;
 }
 
-/// The in-plane 2D basis (U, W) real SketchUp uses to parameterize a face's
-/// texture mapping, for a face of ANY orientation - ground truth shows
-/// it's simply the face's own first edge direction (`points[1] -
-/// points[0]`, normalized) as U, and the plane normal crossed with that as
-/// W - both unit vectors.
-(Point3, Point3) _faceUvBasis(List<Point3> points, Point3 normal) {
-  final u = _normalize3((
-    points[1].$1 - points[0].$1,
-    points[1].$2 - points[0].$2,
-    points[1].$3 - points[0].$3,
-  ));
-  final w = _normalize3(_cross(normal, u));
-  return (u, w);
+/// Turn `(point, (u, v))` pins from tiles into texture-space inches so
+/// SketchUp's read-side division by `(appliedWidth, appliedHeight)` lands
+/// back on `(u, v)`.
+List<(Point3, (double, double))>? _scalePins(
+  List<(Point3, (double, double))>? pins,
+  Map<int, (double, double)> appliedSizes,
+  int? material,
+) {
+  if (pins == null || material == null) return pins;
+  final size = appliedSizes[material];
+  if (size == null) return pins;
+  final (w, h) = size;
+  if (w == 1.0 && h == 1.0) return pins;
+  return [for (final (pt, (u, v)) in pins) (pt, (u * w, v * h))];
 }
 
 /// An arbitrary orthonormal in-plane basis (U, W) for a circle/arc's plane,
@@ -576,7 +578,7 @@ List<Point3> _arcPoints(
 /// (scale, rotation, shear, translation; no perspective term).
 ///
 /// [basis] is the face's own (U, W) in-plane unit vectors (see
-/// [_faceUvBasis]) - each correspondence's world point is projected onto
+/// [faceUvBasis]) - each correspondence's world point is projected onto
 /// them via a plain dot product (no origin subtraction, ground-truth
 /// confirmed).
 ///
@@ -604,11 +606,10 @@ List<double> _solveUvMatrix(
 }
 
 List<double> _uvMatrixForFace(
-  List<Point3> points,
   List<(Point3, (double, double))> pairs,
   Point3 normal,
 ) {
-  return _solveUvMatrix(pairs, _faceUvBasis(points, normal));
+  return _solveUvMatrix(pairs, faceUvBasis(normal));
 }
 
 double _spanOf(List<Point3> points) {
@@ -1968,8 +1969,8 @@ class _ArchiveWriter {
     // caller-owned, shared-across-calls maps as it goes, with no rollback
     // if something later in this method throws.
     final (nx, ny, nz, d) = _planeFromPolygon(points);
-    final frontMatrix = frontUv != null ? _uvMatrixForFace(points, frontUv, (nx, ny, nz)) : null;
-    final backMatrix = backUv != null ? _uvMatrixForFace(points, backUv, (nx, ny, nz)) : null;
+    final frontMatrix = frontUv != null ? _uvMatrixForFace(frontUv, (nx, ny, nz)) : null;
+    final backMatrix = backUv != null ? _uvMatrixForFace(backUv, (nx, ny, nz)) : null;
     for (final (_, entries) in attributeDicts) {
       _validateAttributeEntries(entries);
     }
@@ -2402,6 +2403,8 @@ class ComponentDefinitionBuilder implements GeometryHost {
       throw SkpWriteError('a face needs at least 3 points');
     }
     final resolvedAttributeDicts = _attrDicts(attributes, attributeDictName, attributeDicts);
+    final scaledFront = _scalePins(frontUv, _skp._appliedSizes, material);
+    final scaledBack = _scalePins(backUv, _skp._appliedSizes, backMaterial);
     _newEntityCount += _writeFaceOrTriangulate(
       _skp._definitionWriter!,
       points,
@@ -2414,8 +2417,8 @@ class ComponentDefinitionBuilder implements GeometryHost {
       softEdges,
       smoothEdges,
       hiddenEdges,
-      frontUv,
-      backUv,
+      scaledFront,
+      scaledBack,
       resolvedAttributeDicts,
       autoTriangulate,
       holes: holes,
@@ -2454,6 +2457,8 @@ class ComponentDefinitionBuilder implements GeometryHost {
     final CurveParams curveParams = (center, n, xaxis, 0.0, 2.0 * pi, radius, numSegments);
     final points = _circlePoints(center, n, radius, numSegments, u, w);
     final resolvedAttributeDicts = _attrDicts(attributes, attributeDictName, attributeDicts);
+    final scaledFront = _scalePins(frontUv, _skp._appliedSizes, material);
+    final scaledBack = _scalePins(backUv, _skp._appliedSizes, backMaterial);
     _newEntityCount += writer.writeFace(
       points,
       _vertexSlots,
@@ -2462,8 +2467,8 @@ class ComponentDefinitionBuilder implements GeometryHost {
       faceLayer: layer ?? 0,
       backMaterial: backMaterial ?? 0,
       hidden: hidden,
-      frontUv: frontUv,
-      backUv: backUv,
+      frontUv: scaledFront,
+      backUv: scaledBack,
       attributeDicts: resolvedAttributeDicts,
       curveParams: curveParams,
     );
@@ -2769,6 +2774,7 @@ class SkpBuilder implements GeometryHost {
   /// after [openExisting], where every material the source file had is
   /// already here.
   final Map<String, int> materialsByName = {};
+  final Map<int, (double, double)> _appliedSizes = {};
   int _materialCount = 0;
 
   /// Deferred: layers splice in AFTER materials, so the layer writer's
@@ -2958,6 +2964,7 @@ class SkpBuilder implements GeometryHost {
         name, imageBytes, filename ?? imagePath, subtype,
         appliedHeight: appliedHeight, appliedWidth: appliedWidth, opacity: opacity);
     materialsByName[name] = slot;
+    _appliedSizes[slot] = (appliedWidth ?? 1.0, appliedHeight ?? 1.0);
     _materialCount++;
     return slot;
   }
@@ -3394,6 +3401,8 @@ class SkpBuilder implements GeometryHost {
       throw SkpWriteError('a face needs at least 3 points');
     }
     final resolvedAttributeDicts = _attrDicts(attributes, attributeDictName, attributeDicts);
+    final scaledFront = _scalePins(frontUv, _appliedSizes, material);
+    final scaledBack = _scalePins(backUv, _appliedSizes, backMaterial);
     _ensureGeometryWriter();
     _newEntityCount += _writeFaceOrTriangulate(
       _geometryWriter!,
@@ -3407,8 +3416,8 @@ class SkpBuilder implements GeometryHost {
       softEdges,
       smoothEdges,
       hiddenEdges,
-      frontUv,
-      backUv,
+      scaledFront,
+      scaledBack,
       resolvedAttributeDicts,
       autoTriangulate,
       holes: holes,
@@ -3447,6 +3456,8 @@ class SkpBuilder implements GeometryHost {
     }
     final n = _normalize3(normal);
     final resolvedAttributeDicts = _attrDicts(attributes, attributeDictName, attributeDicts);
+    final scaledFront = _scalePins(frontUv, _appliedSizes, material);
+    final scaledBack = _scalePins(backUv, _appliedSizes, backMaterial);
     _ensureGeometryWriter();
     final (u, w) = _circleBasis(n);
     final xaxis = (radius * u.$1, radius * u.$2, radius * u.$3);
@@ -3460,8 +3471,8 @@ class SkpBuilder implements GeometryHost {
       faceLayer: layer ?? 0,
       backMaterial: backMaterial ?? 0,
       hidden: hidden,
-      frontUv: frontUv,
-      backUv: backUv,
+      frontUv: scaledFront,
+      backUv: scaledBack,
       attributeDicts: resolvedAttributeDicts,
       curveParams: curveParams,
     );

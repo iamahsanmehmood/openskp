@@ -423,5 +423,51 @@ TEST(EditTest, PreservesTextureFilenamesIncludingEmptyWithoutEmbeddingTempPath) 
   EXPECT_EQ(by_name, orig_by_name);
 }
 
+TEST(Edit, PreservesNonUnitTextureAppliedSizeAndPinnedUvs) {
+  auto png_path = std::filesystem::temp_directory_path() / "openskp_edit_test_scaled_uv.png";
+  {
+    std::ofstream f(png_path, std::ios::binary);
+    ByteBuffer png = fake_png_bytes();
+    f.write(reinterpret_cast<const char*>(png.data()), static_cast<std::streamsize>(png.size()));
+  }
+  auto path = temp_skp("scaled_uv_edit");
+  {
+    auto builder = create();
+    int front = builder->add_texture_material("FrontTex", png_path, 20.0, 10.0);
+    int back = builder->add_texture_material("BackTex", png_path, 8.0, 4.0);
+    FaceOptions opts;
+    opts.material = front;
+    opts.back_material = back;
+    opts.front_uv = UvCorrespondence{
+        {{{0, 0, 0}, {0.0, 0.0}}, {{50, 0, 0}, {2.5, 0.0}}, {{0, 40, 0}, {0.0, 1.0}}}};
+    opts.back_uv = UvCorrespondence{
+        {{{0, 0, 0}, {0.25, 0.5}}, {{50, 0, 0}, {2.75, 0.5}}, {{0, 40, 0}, {0.25, 2.5}}}};
+    builder->add_face({{50, 0, 0}, {50, 40, 0}, {0, 40, 0}, {0, 0, 0}}, opts);
+    builder->save(path);
+  }
+  std::filesystem::remove(png_path);
+
+  SkpModel orig = SkpFile::open(path).parse();
+  OpenExistingResult result = open_existing(path);
+  SkpModel rebuilt = SkpFile::from_buffer(result.builder->to_bytes()).parse();
+  std::filesystem::remove(path);
+
+  std::map<std::string, std::pair<double, double>> by_name;
+  for (const auto& m : rebuilt.materials) {
+    if (m.texture) by_name[m.name] = {m.texture->width, m.texture->height};
+  }
+  EXPECT_EQ(by_name["FrontTex"], std::make_pair(10.0, 20.0));
+  EXPECT_EQ(by_name["BackTex"], std::make_pair(4.0, 8.0));
+
+  const Face& orig_face = orig.root().faces.begin()->second;
+  const Face& rebuilt_face = rebuilt.root().faces.begin()->second;
+  ASSERT_TRUE(rebuilt_face.uv_transform.has_value());
+  ASSERT_TRUE(rebuilt_face.uv_transform_back.has_value());
+  for (std::size_t i = 0; i < 9; ++i) {
+    EXPECT_NEAR((*rebuilt_face.uv_transform)[i], (*orig_face.uv_transform)[i], 1e-6);
+    EXPECT_NEAR((*rebuilt_face.uv_transform_back)[i], (*orig_face.uv_transform_back)[i], 1e-6);
+  }
+}
+
 }  // namespace
 }  // namespace openskp

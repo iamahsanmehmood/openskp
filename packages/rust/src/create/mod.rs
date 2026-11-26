@@ -421,8 +421,7 @@ pub struct CircleOptions {
     pub layer: Option<i32>,
     pub back_material: Option<i32>,
     pub hidden: bool,
-    /// Explicit texture positioning. Unlike `FaceOptions`, these pins are NOT scaled by the
-    /// material's applied size (matching the C++ writer).
+    /// Explicit texture positioning, scaled by the material's applied size like `FaceOptions`.
     pub front_uv: Option<UvCorrespondence>,
     pub back_uv: Option<UvCorrespondence>,
     pub attributes: AttributeDict,
