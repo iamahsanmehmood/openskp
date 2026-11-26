@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — Python: colorized textures are baked into GLB files (#285)
+
+- `export_glb(..., textures=True)` and the instanced GLB export write a colorized texture with SketchUp's colour already applied (shift or tint, within 1/255 of SketchUp's own result) and a white material factor, instead of the plain texture times the colour. A JPEG stays a JPEG (quality 95, no chroma subsampling), a PNG stays a PNG; each texture is baked once per colour.
+- JPEG textures lose their EXIF block (orientation included) without being re-encoded: SketchUp ignores the orientation, browsers would apply it.
+- Without Pillow, PNG and JPEG textures are still embedded; colorized ones then keep the tinted factor, with one warning.
+
+### Added — .NET: XML documentation in the packages
+
+- `OpenSkp` and `OpenSkp.Fragments` ship their XML documentation, so IDEs show the comments of the public API.
+
+### Changed — Rust: package metadata
+
+- `Cargo.toml` names the readme, homepage, repository and documentation, and the published crate leaves out the test fixtures.
+
 ### Added — TypeScript: `Uint8Array` and Node.js `Buffer` input
 
 - `parseSkp`, `buildScene`, `buildInstancedScene`, `openExisting`, `extractThumbnail`, `SkpFile.fromBuffer` and `fromFragments` take any `Uint8Array` (also a Node.js `Buffer`) besides an `ArrayBuffer`, without a copy.
