@@ -52,6 +52,7 @@ from .create import (
     _archive_uuid,
     _is_coplanar,
     _plane_from_polygon,
+    _resolve_attribute_dicts,
     _resolve_matrix3x3,
 )
 
@@ -190,6 +191,7 @@ class ComponentDefinitionBuilder:
         shadows_face_sun: bool = False,
         guid: Optional[bytes] = None,
         parent: Optional["ComponentDefinitionBuilder"] = None,
+        attribute_dicts: Optional[Sequence[Tuple[str, Dict[str, object]]]] = None,
     ) -> None:
         self._builder = builder
         self.name = name
@@ -203,7 +205,9 @@ class ComponentDefinitionBuilder:
         self._placement = placement or {}
         self._container_id = builder._template.alloc_id()
         self._editor = EntityEditor(
-            builder._template, container_id=self._container_id
+            builder._template,
+            container_id=self._container_id,
+            attributes=attribute_dicts,
         )
         self._closed = False
         self._instance_id: Optional[int] = None
@@ -223,6 +227,9 @@ class ComponentDefinitionBuilder:
         soft_edges: bool = False,
         smooth_edges: bool = False,
         hidden_edges: bool = False,
+        attributes: Optional[Dict[str, object]] = None,
+        attribute_dict_name: str = "attributes",
+        attribute_dicts: Sequence[Tuple[str, Dict[str, object]]] = (),
         auto_triangulate: bool = False,
         holes: Sequence[Sequence[Point3]] = (),
     ) -> None:
@@ -238,6 +245,9 @@ class ComponentDefinitionBuilder:
             soft_edges,
             smooth_edges,
             hidden_edges,
+            _resolve_attribute_dicts(
+                attributes, attribute_dict_name, attribute_dicts
+            ),
             auto_triangulate,
             holes,
         )
@@ -253,6 +263,9 @@ class ComponentDefinitionBuilder:
         rotation: Optional[Rotation] = None,
         material: Optional[int] = None,
         layer: Optional[int] = None,
+        attributes: Optional[Dict[str, object]] = None,
+        attribute_dict_name: str = "attributes",
+        attribute_dicts: Sequence[Tuple[str, Dict[str, object]]] = (),
         hidden: bool = False,
     ) -> None:
         if self._closed:
@@ -268,6 +281,9 @@ class ComponentDefinitionBuilder:
             material=material,
             layer=layer,
             hidden=hidden,
+            attributes=_resolve_attribute_dicts(
+                attributes, attribute_dict_name, attribute_dicts
+            ),
         )
 
     def add_group_instance(
@@ -279,6 +295,9 @@ class ComponentDefinitionBuilder:
         rotation: Optional[Rotation] = None,
         material: Optional[int] = None,
         layer: Optional[int] = None,
+        attributes: Optional[Dict[str, object]] = None,
+        attribute_dict_name: str = "attributes",
+        attribute_dicts: Sequence[Tuple[str, Dict[str, object]]] = (),
         hidden: bool = False,
     ) -> None:
         if self._closed:
@@ -294,6 +313,9 @@ class ComponentDefinitionBuilder:
             material=material,
             layer=layer,
             hidden=hidden,
+            attributes=_resolve_attribute_dicts(
+                attributes, attribute_dict_name, attribute_dicts
+            ),
         )
 
     def add_group(
@@ -304,6 +326,9 @@ class ComponentDefinitionBuilder:
         rotation: Optional[Rotation] = None,
         material: Optional[int] = None,
         layer: Optional[int] = None,
+        attributes: Optional[Dict[str, object]] = None,
+        attribute_dict_name: str = "attributes",
+        attribute_dicts: Sequence[Tuple[str, Dict[str, object]]] = (),
         hidden: bool = False,
     ) -> "GroupBuilder":
         """Start a group placed inside this definition (VFF-only extra)."""
@@ -323,6 +348,9 @@ class ComponentDefinitionBuilder:
                 "material": material,
                 "layer": layer,
                 "hidden": hidden,
+                "attributes": _resolve_attribute_dicts(
+                    attributes, attribute_dict_name, attribute_dicts
+                ),
             },
         )
 
@@ -370,6 +398,7 @@ class ComponentDefinitionBuilder:
                     material=placement["material"],
                     layer=placement["layer"],
                     hidden=placement["hidden"],
+                    attributes=placement.get("attributes"),
                 )
         return self
 
@@ -562,6 +591,7 @@ class VffBuilder:
         soft_edges: bool,
         smooth_edges: bool,
         hidden_edges: bool,
+        attributes: Sequence[Tuple[str, Dict[str, object]]],
         auto_triangulate: bool,
         holes: Sequence[Sequence[Point3]],
     ) -> None:
@@ -605,6 +635,7 @@ class VffBuilder:
                     hidden=hidden,
                     holes=rings,
                     edge_flags=flags,
+                    attributes=attributes,
                 )
             except ValueError as exc:
                 raise SkpWriteError(str(exc)) from exc
@@ -619,6 +650,7 @@ class VffBuilder:
                     back_material=back_material,
                     hidden=hidden,
                     edge_flags=flags,
+                    attributes=attributes,
                 )
             except ValueError as exc:
                 raise SkpWriteError(str(exc)) from exc
@@ -633,6 +665,9 @@ class VffBuilder:
         soft_edges: bool = False,
         smooth_edges: bool = False,
         hidden_edges: bool = False,
+        attributes: Optional[Dict[str, object]] = None,
+        attribute_dict_name: str = "attributes",
+        attribute_dicts: Sequence[Tuple[str, Dict[str, object]]] = (),
         auto_triangulate: bool = False,
         holes: Sequence[Sequence[Point3]] = (),
     ) -> None:
@@ -647,6 +682,9 @@ class VffBuilder:
             soft_edges,
             smooth_edges,
             hidden_edges,
+            _resolve_attribute_dicts(
+                attributes, attribute_dict_name, attribute_dicts
+            ),
             auto_triangulate,
             holes,
         )
@@ -656,6 +694,9 @@ class VffBuilder:
     def add_component_definition(
         self,
         name: str,
+        attributes: Optional[Dict[str, object]] = None,
+        attribute_dict_name: str = "attributes",
+        attribute_dicts: Sequence[Tuple[str, Dict[str, object]]] = (),
         always_faces_camera: bool = False,
         shadows_face_sun: bool = False,
         guid: Optional[str] = None,
@@ -668,6 +709,9 @@ class VffBuilder:
             always_faces_camera=always_faces_camera,
             shadows_face_sun=shadows_face_sun,
             guid=guid_bytes,
+            attribute_dicts=_resolve_attribute_dicts(
+                attributes, attribute_dict_name, attribute_dicts
+            ),
         )
 
     def add_group(
@@ -678,6 +722,9 @@ class VffBuilder:
         rotation: Optional[Rotation] = None,
         material: Optional[int] = None,
         layer: Optional[int] = None,
+        attributes: Optional[Dict[str, object]] = None,
+        attribute_dict_name: str = "attributes",
+        attribute_dicts: Sequence[Tuple[str, Dict[str, object]]] = (),
         hidden: bool = False,
     ) -> GroupBuilder:
         """Start a root-level group (definition kind 1, placed on close)."""
@@ -695,6 +742,9 @@ class VffBuilder:
                 "material": material,
                 "layer": layer,
                 "hidden": hidden,
+                "attributes": _resolve_attribute_dicts(
+                    attributes, attribute_dict_name, attribute_dicts
+                ),
             },
         )
 
@@ -707,6 +757,9 @@ class VffBuilder:
         rotation: Optional[Rotation] = None,
         material: Optional[int] = None,
         layer: Optional[int] = None,
+        attributes: Optional[Dict[str, object]] = None,
+        attribute_dict_name: str = "attributes",
+        attribute_dicts: Sequence[Tuple[str, Dict[str, object]]] = (),
         hidden: bool = False,
     ) -> None:
         """Place one instance of a closed definition in the model root."""
@@ -721,6 +774,9 @@ class VffBuilder:
             material=material,
             layer=layer,
             hidden=hidden,
+            attributes=_resolve_attribute_dicts(
+                attributes, attribute_dict_name, attribute_dicts
+            ),
         )
 
     # -- document settings ------------------------------------------------
@@ -746,6 +802,23 @@ class VffBuilder:
             raise SkpWriteError(
                 "VFF document options are not supported by the VFF writer yet"
             )
+
+    def set_model_attributes(
+        self,
+        attributes: Optional[Dict[str, object]] = None,
+        attribute_dict_name: str = "attributes",
+        attribute_dicts: Sequence[Tuple[str, Dict[str, object]]] = (),
+    ) -> None:
+        """Attach custom dictionaries to the model itself (VFF-only extra).
+
+        Dictionaries go into the model's existing attribute block.  A name
+        that already exists (including one from the template) is replaced
+        with the new dictionary; other dictionaries are preserved, so calls
+        add to the same block rather than replacing it.
+        """
+        self._root.add_model_attributes(
+            _resolve_attribute_dicts(attributes, attribute_dict_name, attribute_dicts)
+        )
 
     # -- output -----------------------------------------------------------
 

@@ -42,7 +42,7 @@ from openskp._vff_writer.archive import (
     read_zip,
 )
 from openskp._vff_writer.tlv import parse_records
-from openskp.create import SkpWriteError
+from openskp.create import Length, Point3d, SkpWriteError, Timestamp, Vector3d
 from openskp.create_vff import (
     DEFAULT_TEMPLATE,
     VffBuilder,
@@ -816,3 +816,201 @@ def test_groups_and_nested_placements(tmp_path):
     assert rotated.matrix[9:12] == [40.0, 40.0, 0.0]
 
 
+def _face_dictionaries(data: bytes):
+    from openskp._core import (
+        CONTAINER_TAGS,
+        extract_attribute_dictionaries,
+        parse_tlv_recursive,
+    )
+    from openskp.vff import extract_skp_contents
+
+    model_data = extract_skp_contents(data)["model_data"]
+    roots = parse_tlv_recursive(model_data, 0, len(model_data), CONTAINER_TAGS)
+    found = []
+
+    def walk(node):
+        if node.tag == "AC0D":
+            drawing = next(
+                (child for child in node.children if child.tag == "D007"), None
+            )
+            if drawing is not None:
+                found.append(extract_attribute_dictionaries(drawing))
+            return
+        for child in node.children:
+            walk(child)
+
+    for root in roots:
+        walk(root)
+    return found
+
+
+ATTRIBUTE_VALUES = {
+    "string": "hello",
+    "int": 42,
+    "float": 1.5,
+    "bool": True,
+    "nothing": None,
+    "length": Length(2.0),
+    "point": Point3d(1, 2, 3),
+    "vector": Vector3d(0, 0, 1),
+    "time": Timestamp(1700000000),
+    "array": [1, [2, "x"], False, None],
+}
+ATTRIBUTE_VALUES_EXPECTED = {
+    "string": "hello",
+    "int": 42,
+    "float": 1.5,
+    "bool": True,
+    "nothing": None,
+    "length": 2.0,
+    "point": (1.0, 2.0, 3.0),
+    "vector": (0.0, 0.0, 1.0),
+    "time": 1700000000,
+    "array": [1, [2, "x"], False, None],
+}
+SQUARE = [(0, 0, 0), (10, 0, 0), (10, 10, 0), (0, 10, 0)]
+
+
+def _plain(value):
+    return list(value) if isinstance(value, tuple) else value
+
+
+def test_face_attribute_dictionary_encodes_every_value_type():
+    builder = create_vff()
+    builder.add_face(SQUARE, attributes=ATTRIBUTE_VALUES)
+    dictionaries = _face_dictionaries(builder.to_bytes())
+    (attributes,) = [entry["attributes"] for entry in dictionaries if "attributes" in entry]
+    for key, expected in ATTRIBUTE_VALUES_EXPECTED.items():
+        assert _plain(attributes[key]) == _plain(expected), (key, attributes[key], expected)
+
+
+def test_face_writes_multiple_attribute_dictionaries():
+    builder = create_vff()
+    builder.add_face(
+        SQUARE,
+        attribute_dicts=[("first", {"a": 1}), ("second", {"b": "two"})],
+    )
+    dictionaries = _face_dictionaries(builder.to_bytes())
+    assert {"first": {"a": 1}, "second": {"b": "two"}} in dictionaries
+
+
+def test_attribute_dictionaries_on_definitions_instances_groups_and_model(tmp_path):
+    builder = create_vff()
+    with builder.add_component_definition("D", attributes={"def": 1}) as definition:
+        definition.add_face(SQUARE, attributes={"face": 2})
+    builder.add_instance(definition, attributes={"instance": 3})
+    with builder.add_group("G", attributes={"group": 4}) as group:
+        group.add_face([(0, 0, 20), (10, 0, 20), (10, 10, 20), (0, 10, 20)])
+    builder.set_model_attributes({"model": 5})
+    model = parse_bytes(tmp_path, builder.to_bytes())
+
+    definition = next(d for d in model.definitions.values() if d.name == "D")
+    assert definition.attribute_dictionaries == {"attributes": {"def": 1}}
+    assert [i.attribute_dictionaries for i in model.root.instances] == [
+        {"attributes": {"instance": 3}},
+        {"attributes": {"group": 4}},
+    ]
+    assert model.attribute_dictionaries["attributes"] == {"model": 5}
+
+
+def test_bad_attribute_values_raise_skpwriteerror():
+    with pytest.raises(SkpWriteError):
+        create_vff().add_face(SQUARE, attributes={"bad": object()})
+    with pytest.raises(SkpWriteError):
+        create_vff().add_face(
+            SQUARE,
+            attributes={"a": 1},
+            attribute_dicts=[("d", {"b": 2})],
+        )
+    with pytest.raises(SkpWriteError):
+        create_vff().add_face(SQUARE, attributes={"time": Timestamp(-1)})
+    with pytest.raises(SkpWriteError):
+        create_vff().add_face(SQUARE, attributes={"int": 1 << 31})
+    with pytest.raises(SkpWriteError):
+        create_vff().add_face(SQUARE, attributes={"float": math.nan})
+
+
+def test_set_model_attributes_keeps_template_and_earlier_dicts(tmp_path):
+    base = parse_bytes(tmp_path, create_vff().to_bytes())
+    builder = create_vff()
+    builder.set_model_attributes({"a": 1}, "D1")
+    builder.set_model_attributes({"b": 2}, "D2")
+    builder.set_model_attributes({"a": 3}, "D1")
+    model = parse_bytes(tmp_path, builder.to_bytes())
+    dictionaries = model.attribute_dictionaries
+    assert set(base.attribute_dictionaries) <= set(dictionaries)
+    assert dictionaries["D1"] == {"a": 3}
+    assert dictionaries["D2"] == {"b": 2}
+    assert len(_model_attribute_blocks(builder.to_bytes())) == 1
+
+
+def _model_attribute_blocks(data: bytes):
+    from openskp._vff_writer.template import MODEL_CONTAINERS
+    from openskp._vff_writer.tlv import parse_records
+    from openskp.vff import extract_skp_contents
+
+    model_data = extract_skp_contents(data)["model_data"]
+    records = parse_records(
+        model_data,
+        set(MODEL_CONTAINERS) | {0x07D0, 0x05DC, 0x05DD},
+    )
+
+    def find(node, tag):
+        if node.tag == tag:
+            return node
+        for child in node.children or []:
+            found = find(child, tag)
+            if found is not None:
+                return found
+        return None
+
+    root = find(records[0], 0x1388)
+    drawing = next(c for c in root.children if c.tag == 0x07D0)
+    entity = next(c for c in drawing.children if c.tag == 0x05DC)
+    return [c for c in entity.children if c.tag == 0x05DD]
+
+
+def _all_attribute_blocks(data: bytes):
+    from openskp._vff_writer.template import MODEL_CONTAINERS
+    from openskp._vff_writer.tlv import parse_records
+    from openskp.vff import extract_skp_contents
+
+    model_data = extract_skp_contents(data)["model_data"]
+    records = parse_records(
+        model_data,
+        set(MODEL_CONTAINERS)
+        | {
+            0x07D0, 0x05DC, 0x05DD, 0x36B1, 0x36B2, 0x36B3,
+            0x2710, 0x2711, 0x2712, 0x2713,
+        },
+    )
+    count = 0
+
+    def has_dictionary(node):
+        if node.tag == 0x36B3:
+            return True
+        return any(has_dictionary(child) for child in node.children or [])
+
+    def walk(node):
+        nonlocal count
+        if node.tag == 0x05DD and not has_dictionary(node):
+            count += 1
+        for child in node.children or []:
+            walk(child)
+
+    for record_ in records:
+        walk(record_)
+    return count
+
+
+def test_model_without_attributes_has_no_empty_blocks(tmp_path):
+    builder = create_vff()
+    builder.add_face(SQUARE)
+    with builder.add_component_definition("D") as definition:
+        definition.add_face(SQUARE)
+    builder.add_instance(definition, translation=(20, 0, 0))
+    with builder.add_group(translation=(0, 20, 0)) as group:
+        group.add_face(SQUARE)
+    data = builder.to_bytes()
+    assert _all_attribute_blocks(data) == 0
+    parse_bytes(tmp_path, data)

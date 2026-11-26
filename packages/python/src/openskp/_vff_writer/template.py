@@ -12,6 +12,7 @@ confirmed against minimal pairs saved by SketchUp itself.
 
 from __future__ import annotations
 
+import math
 import re
 import struct
 import time
@@ -26,7 +27,7 @@ from .archive import (
     entries_of,
     header_offset,
 )
-from ..create import SkpWriteError
+from ..create import Length, Point3d, SkpWriteError, Timestamp, Vector3d
 from .tlv import (
     Record,
     encode_records,
@@ -83,6 +84,7 @@ T_POINT = 0x09C5
 T_EDGE = 0x0BB8
 T_EDGE_START = 0x0BB9
 T_EDGE_END = 0x0BBA
+T_EDGE_CURVE = 0x0BBB
 T_FACE = 0x0DAC
 T_PLANE = 0x0DAD
 T_LOOPS = 0x0DAE
@@ -110,6 +112,26 @@ T_LAYER_SECTION = 0x3A98
 
 T_GROUPS = 0x138D
 T_GROUP = 0x1D4C
+
+T_ATTR_LIST = 0x36B1
+T_ATTR_SET = 0x36B2
+T_ATTR_DICT = 0x36B3
+T_ATTR_EMPTY = 0x36B0
+T_ATTR_NAME = 0x36B4
+T_ATTR_ENTRIES = 0x36B5
+T_ATTR_KEY = 0x36B6
+T_ATTR_TRAILER = 0x36B7
+
+T_VALUE = 0x38A4
+T_VALUE_INT = 0x38A7
+T_VALUE_DOUBLE = 0x38A9
+T_VALUE_BOOL = 0x38AA
+T_VALUE_TIME = 0x38AC
+T_VALUE_STRING = 0x38AD
+T_VALUE_ARRAY = 0x38AE
+T_VALUE_LENGTH = 0x38AF
+T_VALUE_POINT3D = 0x38B4
+T_VALUE_VECTOR3D = 0x38B5
 
 
 T_CAMERA_MODEL = 0x01FA
@@ -226,10 +248,12 @@ _DEFAULT_LAYER_COLOR = (136, 136, 136)
 # ── Small record constructors ────────────────────────────────────────────
 
 
-def _entity_base(entity_id: Optional[int]) -> Record:
+def _entity_base(entity_id: Optional[int], attributes: Optional[Record] = None) -> Record:
     children: List[Record] = []
     if entity_id is not None:
         children.append(record(T_ENTITY_ID, varint(entity_id)))
+    if attributes is not None:
+        children.append(attributes)
     return Record(T_ENTITY_BASE, children=children)
 
 
@@ -238,8 +262,9 @@ def _drawing(
     material: Optional[int] = None,
     layer: Optional[int] = None,
     flags: int = 0x06,
+    attributes: Optional[Record] = None,
 ) -> Record:
-    children = [_entity_base(entity_id)]
+    children = [_entity_base(entity_id, attributes)]
     if material:
         children.append(record(T_FRONT_MATERIAL, varint(material)))
     if layer:
@@ -334,6 +359,95 @@ def _find_entity_id(record_: Record) -> Optional[int]:
         if identifier is not None:
             return identifier
     return None
+
+
+# ── Attribute dictionaries ───────────────────────────────────────────────
+
+
+def _attribute_value(value) -> Record:
+    """One A438-wrapped attribute value, as SketchUp 2025 writes it."""
+    children: List[Record] = []
+    if value is None:
+        pass
+    elif isinstance(value, bool):
+        children.append(record(T_VALUE_BOOL, u8(1 if value else 0)))
+    elif isinstance(value, Timestamp):
+        number = int(value)
+        if not 0 <= number < 1 << 32:
+            raise SkpWriteError("Timestamp must be in [0, 2**32)")
+        children.append(record(T_VALUE_TIME, struct.pack("<I", number)))
+    elif isinstance(value, Length):
+        number = float(value)
+        if not math.isfinite(number):
+            raise SkpWriteError("attribute Length values must be finite")
+        children.append(record(T_VALUE_LENGTH, f64s([number])))
+    elif isinstance(value, int):
+        if not -(1 << 31) <= value < 1 << 31:
+            raise SkpWriteError("attribute integers must fit a signed 32-bit value")
+        children.append(record(T_VALUE_INT, struct.pack("<i", value)))
+    elif isinstance(value, float):
+        number = float(value)
+        if not math.isfinite(number):
+            raise SkpWriteError("attribute Float values must be finite")
+        children.append(record(T_VALUE_DOUBLE, f64s([number])))
+    elif isinstance(value, str):
+        children.append(record(T_VALUE_STRING, value.encode("utf-8")))
+    elif isinstance(value, Point3d):
+        coordinates = [float(value.x), float(value.y), float(value.z)]
+        if not all(math.isfinite(number) for number in coordinates):
+            raise SkpWriteError("attribute Point3d values must be finite")
+        children.append(record(T_VALUE_POINT3D, f64s(coordinates)))
+    elif isinstance(value, Vector3d):
+        coordinates = [float(value.x), float(value.y), float(value.z)]
+        if not all(math.isfinite(number) for number in coordinates):
+            raise SkpWriteError("attribute Vector3d values must be finite")
+        children.append(record(T_VALUE_VECTOR3D, f64s(coordinates)))
+    elif isinstance(value, (list, tuple)):
+        children.append(
+            Record(
+                T_VALUE_ARRAY,
+                children=[_attribute_value(element) for element in value],
+            )
+        )
+    else:
+        raise SkpWriteError(
+            f"unsupported attribute value type: {type(value).__name__}"
+        )
+    return Record(T_VALUE, children=children)
+
+
+def _attribute_dictionary(name: str, entries) -> Record:
+    children: List[Record] = [record(T_ATTR_EMPTY, b"")]
+    children.append(record(T_ATTR_NAME, name.encode("utf-8")))
+    pairs: List[Record] = []
+    for key, value in entries.items():
+        pairs.append(record(T_ATTR_KEY, str(key).encode("utf-8")))
+        pairs.append(_attribute_value(value))
+    children.append(Record(T_ATTR_ENTRIES, children=pairs))
+    children.append(record(T_ATTR_TRAILER, u32(0)))
+    return Record(T_ATTR_DICT, children=children)
+
+
+def _attribute_container(
+    attribute_dicts: Optional[Sequence[Tuple[str, Dict[str, object]]]] = None,
+    uv: Optional[Record] = None,
+) -> Optional[Record]:
+    """The 0x05dd attribute block shared by dictionaries and texture placement."""
+    if uv is None and not attribute_dicts:
+        return None
+    children: List[Record] = []
+    if uv is not None:
+        children.append(uv)
+    for name, entries in attribute_dicts:
+        children.append(_attribute_dictionary(name, entries))
+    if not children:
+        return None
+    return Record(
+        0x05DD,
+        children=[
+            Record(T_ATTR_LIST, children=[Record(T_ATTR_SET, children=children)])
+        ],
+    )
 
 
 # ── Material XML ─────────────────────────────────────────────────────────
@@ -926,11 +1040,14 @@ class EntityEditor:
         *,
         container: Optional[Record] = None,
         container_id: Optional[int] = None,
+        attributes: Optional[Sequence[Tuple[str, Dict[str, object]]]] = None,
     ) -> None:
         self.template = template
         self.fresh = container is None
-        self.container = container if container is not None else self._blank_container(
-            container_id
+        self.container = (
+            container
+            if container is not None
+            else self._blank_container(container_id, _attribute_container(attributes))
         )
         self.container_id = container_id
         self.vertices: Dict[Tuple[float, float, float], int] = {}
@@ -946,8 +1063,10 @@ class EntityEditor:
         self._existing_order = set(self._existing_order_list)
 
     @staticmethod
-    def _blank_container(container_id: Optional[int]) -> Record:
-        children: List[Record] = [_drawing(container_id)]
+    def _blank_container(
+        container_id: Optional[int], attributes: Optional[Record] = None
+    ) -> Record:
+        children: List[Record] = [_drawing(container_id, attributes=attributes)]
         children.append(Record(T_EMPTY, children=[]))
         children.append(_empty_relationships())
         children.append(record(T_FLAGS_CONTAINER, u8(0)))
@@ -1007,6 +1126,7 @@ class EntityEditor:
         layer: Optional[int],
         *,
         flags: int = 0x06,
+        curve: Optional[int] = None,
     ) -> Tuple[int, bool]:
         """Return ``(edge id, forward)`` for the start-to-end direction."""
         key = (start, end) if start <= end else (end, start)
@@ -1020,6 +1140,8 @@ class EntityEditor:
             record(T_EDGE_START, varint(start)),
             record(T_EDGE_END, varint(end)),
         ]
+        if curve is not None:
+            children.append(record(T_EDGE_CURVE, varint(curve)))
         edge = Record(T_EDGE, children=children)
         self._pool(T_EDGES).children.append(edge)
         self.edges[key] = (identifier, start)
@@ -1036,6 +1158,7 @@ class EntityEditor:
         hidden: bool = False,
         holes: Sequence[Sequence[Sequence[float]]] = (),
         edge_flags: int = 0x06,
+        attributes: Optional[Sequence[Tuple[str, Dict[str, object]]]] = None,
     ) -> int:
         outer = [tuple(float(c) for c in p) for p in points]
         if len(outer) < 3:
@@ -1087,6 +1210,7 @@ class EntityEditor:
                 material=material,
                 layer=layer,
                 flags=flags,
+                attributes=_attribute_container(attributes),
             ),
             record(T_PLANE, f64s([*normal, plane_d])),
             Record(T_LOOPS, children=loops),
@@ -1108,6 +1232,7 @@ class EntityEditor:
         material: Optional[int] = None,
         layer: Optional[int] = None,
         hidden: bool = False,
+        attributes: Optional[Sequence[Tuple[str, Dict[str, object]]]] = None,
     ) -> int:
         identifier = self.template.alloc_id()
         flags = 0x06 | (0x01 if hidden else 0)
@@ -1119,6 +1244,7 @@ class EntityEditor:
                     material=material,
                     layer=layer,
                     flags=flags,
+                    attributes=_attribute_container(attributes),
                 ),
                 record(T_INSTANCE_NAME, name.encode("utf-8")),
                 record(T_INSTANCE_TRANSFORM, f64s(matrix13)),
@@ -1143,6 +1269,7 @@ class EntityEditor:
         material: Optional[int] = None,
         layer: Optional[int] = None,
         hidden: bool = False,
+        attributes: Optional[Sequence[Tuple[str, Dict[str, object]]]] = None,
     ) -> int:
         """Place a group: a ``0x1d4c`` wrapper around an ordinary instance."""
         identifier = self.template.alloc_id()
@@ -1155,6 +1282,7 @@ class EntityEditor:
                     material=material,
                     layer=layer,
                     flags=flags,
+                    attributes=_attribute_container(attributes),
                 ),
                 record(T_INSTANCE_NAME, name.encode("utf-8")),
                 record(T_INSTANCE_TRANSFORM, f64s(matrix13)),
@@ -1168,6 +1296,68 @@ class EntityEditor:
             for corner in _box_corners(definition_bounds):
                 self._extend_bounds(_transform_point(corner, matrix13))
         return identifier
+
+    def add_model_attributes(
+        self, attribute_dicts: Sequence[Tuple[str, Dict[str, object]]]
+    ) -> None:
+        """Add dictionaries to the model's existing attribute block.
+
+        A dictionary whose name already exists **replaces** that dictionary
+        in place; dictionaries the template already had under other names,
+        including GeoReference/GSU_ContributorsInfo/temp, are kept.  A
+        second call with different names therefore adds to the same block
+        instead of writing a second one.
+        """
+        if not attribute_dicts:
+            return
+        drawing = next(
+            (child for child in self.container.children or [] if child.tag == T_DRAWING),
+            None,
+        )
+        if drawing is None:
+            raise ValueError("the model container has no drawing element")
+        entity_records = parse_records(
+            drawing.payload,
+            {T_ENTITY_BASE, 0x05DD, T_ATTR_LIST, T_ATTR_SET, T_ATTR_DICT},
+        )
+        entity = next(
+            (candidate for candidate in entity_records if candidate.tag == T_ENTITY_BASE),
+            None,
+        )
+        if entity is None:
+            raise ValueError("the model drawing element is malformed")
+        if entity.children is None:
+            entity.children = []
+        existing = entity.child(0x05DD)
+        if existing is None:
+            entity.children.append(_attribute_container(attribute_dicts))
+            drawing.payload = encode_records(entity_records)
+            return
+        attribute_set = None
+        for candidate in existing.children or []:
+            if candidate.tag == T_ATTR_LIST:
+                attribute_set = candidate.child(T_ATTR_SET)
+                if attribute_set is not None:
+                    break
+        if attribute_set is None:
+            attribute_set = Record(T_ATTR_SET, children=[])
+            existing.children = [
+                Record(T_ATTR_LIST, children=[attribute_set])
+            ] + (existing.children or [])
+        children = attribute_set.children or []
+        for name, entries in attribute_dicts:
+            replacement = _attribute_dictionary(name, entries)
+            for index, current in enumerate(children):
+                if current.tag != T_ATTR_DICT:
+                    continue
+                name_node = current.child(T_ATTR_NAME)
+                if name_node is not None and name_node.payload == name.encode("utf-8"):
+                    children[index] = replacement
+                    break
+            else:
+                children.append(replacement)
+        attribute_set.children = children
+        drawing.payload = encode_records(entity_records)
 
     # -- finalize ---------------------------------------------------------
 
