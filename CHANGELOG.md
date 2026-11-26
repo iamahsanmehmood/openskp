@@ -16,6 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A face with both a texture placement (`front_uv`/`back_uv`) and attributes lost its attribute dictionaries in SketchUp. The dictionaries are now written before the texture coordinates, the order SketchUp itself uses.
 - Python, C++ and Rust: `add_circle` scales `front_uv`/`back_uv` by the texture size, as `add_face` does, so the same pins place a texture the same way on a circle and on a face.
 - A polyline, arc or circle drawn over edges that already exist no longer makes SketchUp drop the curve: the existing edges stay out of it, and each run of at least two new edges becomes its own curve. A polyline that runs back over itself writes one edge instead of overlapping copies.
+### Changed — C++: colorized textures are baked into GLB files (#285)
+
+- `to_glb` / `export_glb` and `to_instanced_glb` / `export_instanced_glb` with `textures = true` write a colorized texture with SketchUp's colour already applied (shift or tint, within 1/255 of SketchUp's own result) and a white material factor, instead of the plain texture times the colour. A JPEG stays a JPEG (quality 95, 4:4:4 without chroma subsampling), a PNG stays a PNG; each texture is baked once per colour, with no new dependency.
+- JPEG textures lose their EXIF `APP1` block (orientation included) without being re-encoded: SketchUp ignores the orientation, browsers would apply it.
+- A texture larger than 178,956,970 pixels (the limit Pillow uses in Python), or one that cannot be decoded, is not baked: it keeps its own bytes and the tinted factor, with one warning. A small file that declares a huge image can no longer make the export allocate gigabytes.
 
 ### Fixed — Rust: STL exports of painted models can be printed (#601)
 

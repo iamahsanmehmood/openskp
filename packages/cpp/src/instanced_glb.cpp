@@ -15,6 +15,7 @@
 #include <openskp/instanced_glb.hpp>
 
 #include "face_groups.hpp"
+#include "glb_textures.hpp"
 
 #define TINYGLTF_IMPLEMENTATION
 #define TINYGLTF_NO_STB_IMAGE
@@ -200,7 +201,8 @@ int emit_node(gltf::Model& model, const InstancedNode& node,
 gltf::Model make_model(const InstancedScene& scene, const InstancedGlbOptions& options) {
   validate_scene(scene);
 
-  const auto filtered = filter_gltf_textures(scene.textures, options.textures, options.log);
+  auto resolved =
+      resolve_gltf_textures(scene.textures, scene.gltf_materials, options.textures, options.log);
 
   gltf::Model model;
   model.asset.version = "2.0";
@@ -209,16 +211,14 @@ gltf::Model make_model(const InstancedScene& scene, const InstancedGlbOptions& o
   model.scenes.emplace_back();
   model.scenes[0].name = "OpenSKP Instanced Scene";
 
-  for (const auto& source : scene.gltf_materials) {
+  for (std::size_t mat_i = 0; mat_i < scene.gltf_materials.size(); ++mat_i) {
+    const auto& source = scene.gltf_materials[mat_i];
     const auto& source_pbr = source.pbr_metallic_roughness;
+    const auto& resolved_mat = resolved.by_material[mat_i];
     gltf::Material material;
-    std::optional<int> mapped_tex;
-    if (options.textures && source_pbr.base_color_texture &&
-        *source_pbr.base_color_texture < filtered.remap.size()) {
-      mapped_tex = filtered.remap[*source_pbr.base_color_texture];
-    }
+    const std::optional<int> mapped_tex = resolved_mat.gltf_texture_index;
     if (mapped_tex) {
-      if (source.colorized) {
+      if (source.colorized && !resolved_mat.colorize_baked) {
         material.pbrMetallicRoughness.baseColorFactor.assign(source_pbr.base_color_factor.begin(),
                                                              source_pbr.base_color_factor.end());
       } else {
@@ -279,7 +279,11 @@ gltf::Model make_model(const InstancedScene& scene, const InstancedGlbOptions& o
                        source.uvs.size() * 4 + source.indices.size() * 4;
       }
     }
-    binary.reserve(total_bytes);
+    for (const auto& img : resolved.images) {
+      total_bytes = (total_bytes + 3) & ~std::size_t{3};
+      total_bytes += img.data.size();
+    }
+    if (total_bytes <= kGlbLimit) binary.reserve(total_bytes);
   }
 
   std::map<std::string, int> mesh_index_by_id;
@@ -347,14 +351,16 @@ gltf::Model make_model(const InstancedScene& scene, const InstancedGlbOptions& o
     model.meshes.push_back(std::move(mesh));
   }
 
-  if (!filtered.textures.empty()) {
+  if (!resolved.images.empty()) {
     model.samplers.emplace_back();
     model.samplers[0].wrapS = TINYGLTF_TEXTURE_WRAP_REPEAT;
     model.samplers[0].wrapT = TINYGLTF_TEXTURE_WRAP_REPEAT;
 
-    for (const auto* tex : filtered.textures) {
+    for (auto& img : resolved.images) {
+      const std::size_t img_len = img.data.size();
       const auto image_offset = append_values(
-          binary, tex->data, [](ByteBuffer& bytes, std::uint8_t value) { bytes.push_back(value); });
+          binary, img.data, [](ByteBuffer& bytes, std::uint8_t value) { bytes.push_back(value); });
+      ByteBuffer{}.swap(img.data);
 
       // Not add_view(): that helper always sets BufferView::target, but an
       // image bufferView must leave target unset (glTF's target enum only
@@ -363,12 +369,12 @@ gltf::Model make_model(const InstancedScene& scene, const InstancedGlbOptions& o
       gltf::BufferView view;
       view.buffer = 0;
       view.byteOffset = image_offset;
-      view.byteLength = tex->data.size();
+      view.byteLength = img_len;
       model.bufferViews.push_back(std::move(view));
       const auto image_view = static_cast<int>(model.bufferViews.size() - 1);
 
       gltf::Image image;
-      image.mimeType = tex->mime_type;
+      image.mimeType = std::move(img.mime_type);
       image.bufferView = image_view;
       model.images.push_back(std::move(image));
 
@@ -400,6 +406,7 @@ ByteBuffer to_instanced_glb(const InstancedScene& scene, const InstancedGlbOptio
   } catch (const std::exception& error) {
     throw std::runtime_error(std::string("failed to serialize instanced GLB: ") + error.what());
   }
+  model = gltf::Model{};
 
   const auto serialized = stream.str();
   if (serialized.size() > kGlbLimit) {
