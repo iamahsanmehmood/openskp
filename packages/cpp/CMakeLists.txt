@@ -135,6 +135,7 @@ set(
   src/fragments_export.cpp
   src/geometry.cpp
   src/glb.cpp
+  src/glb_textures.cpp
   src/ifc_export.cpp
   src/instanced_glb.cpp
   src/instanced_scene.cpp

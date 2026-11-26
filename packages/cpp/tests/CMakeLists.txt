@@ -5,6 +5,7 @@ add_executable(
   classic_instance_attrs_test.cpp
   classic_instance_paint_test.cpp
   codegen_test.cpp
+  colorized_textures_glb_test.cpp
   create_test.cpp
   io_fidelity_test.cpp
   native_compatibility_test.cpp

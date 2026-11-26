@@ -404,28 +404,31 @@ TEST(Glb, ConvertsSrgbBaseColorFactorToLinearInBakedAndInstancedExports) {
     ASSERT_TRUE(
         loader.LoadBinaryFromMemory(&m, &err, &warn, with_tex_bytes.data(), with_tex_bytes.size()));
     ASSERT_EQ(m.materials.size(), 2U);
+    ASSERT_EQ(m.images.size(), 2U);
+    ASSERT_EQ(m.textures.size(), 2U);
     std::size_t saw_plain = 0;
     std::size_t saw_col = 0;
+    int plain_tex = -1;
+    int col_tex = -1;
     for (const auto& gm : m.materials) {
-      EXPECT_EQ(gm.pbrMetallicRoughness.baseColorTexture.index, 0);
+      EXPECT_GE(gm.pbrMetallicRoughness.baseColorTexture.index, 0);
+      EXPECT_LT(gm.pbrMetallicRoughness.baseColorTexture.index, 2);
+      EXPECT_EQ(gm.pbrMetallicRoughness.baseColorFactor, (std::vector<double>{1.0, 1.0, 1.0, 1.0}));
       if (gm.extras.IsObject() && gm.extras.Has("sketchup")) {
         const auto& skp_ext = gm.extras.Get("sketchup");
         ASSERT_TRUE(skp_ext.IsObject());
         EXPECT_TRUE(skp_ext.Get("colorized").Get<bool>());
         EXPECT_EQ(skp_ext.Get("colorize_type").GetNumberAsInt(), 1);
-        EXPECT_NEAR(gm.pbrMetallicRoughness.baseColorFactor[0], 200.0 / 255.0, 1e-12);
-        EXPECT_NEAR(gm.pbrMetallicRoughness.baseColorFactor[1], 80.0 / 255.0, 1e-12);
-        EXPECT_NEAR(gm.pbrMetallicRoughness.baseColorFactor[2], 60.0 / 255.0, 1e-12);
-        EXPECT_DOUBLE_EQ(gm.pbrMetallicRoughness.baseColorFactor[3], 1.0);
+        col_tex = gm.pbrMetallicRoughness.baseColorTexture.index;
         ++saw_col;
       } else {
-        EXPECT_EQ(gm.pbrMetallicRoughness.baseColorFactor,
-                  (std::vector<double>{1.0, 1.0, 1.0, 1.0}));
+        plain_tex = gm.pbrMetallicRoughness.baseColorTexture.index;
         ++saw_plain;
       }
     }
     EXPECT_EQ(saw_plain, 1U);
     EXPECT_EQ(saw_col, 1U);
+    EXPECT_NE(plain_tex, col_tex);
   }
 
   for (const auto& no_tex_bytes : {to_glb(both_baked, GlbOptions{false}),
