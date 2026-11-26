@@ -78,7 +78,7 @@ Python, TypeScript, .NET, Dart and C++ are published packages; Rust is on `main`
 | Feature | Status | Description |
 |:--------|:------:|:------------|
 | **Parse SKP 2021+ (VFF)** | ✅ | Full support for the modern VFF binary container |
-| **Parse classic SKP 4–2020 (MFC)** | ✅ | Classic MFC `CArchive` container — same output shape as VFF. SketchUp 4–2020 are supported, with known gaps on real V3 and wild V5 files — see [docs/LANGUAGE_PARITY.md § 4](docs/LANGUAGE_PARITY.md#4-real-sketchup-file-version-support) |
+| **Parse classic SKP 4–2020 (MFC)** | ✅ | Classic MFC `CArchive` container — same output shape as VFF. SketchUp 4–2020 are supported (SketchUp 3 too on `main` since #705, not released yet), with a known gap on one SketchUp 5 file in the wild — see [docs/LANGUAGE_PARITY.md § 4](docs/LANGUAGE_PARITY.md#4-real-sketchup-file-version-support) |
 | **3D Geometry Extraction** | ✅ | Vertices, edges, faces, normals, and UV coordinates |
 | **Component Hierarchy** | ✅ | Nested component definitions and instance transforms |
 | **Scene Baking / Triangulation** | ✅ | Opt-in scene baking: full placed scene graph resolved to world-space, triangulated, GLB-ready — in all five languages |
@@ -261,7 +261,7 @@ condensed version.
 
 ### Real SketchUp file version support
 
-Classic MFC files from **SketchUp 4 through 2020** and modern VFF files from **SketchUp 2021+** are read across all five languages, with known exceptions (real SketchUp 3 files fail in every reader; a real SketchUp 5 file in the wild fails in TypeScript). For writing, `create()` and `open_existing()` emit a **SketchUp 2017** (`{17.0.1}`) classic MFC scaffold (`blank_v17.skp`) that SketchUp 2017 and newer open natively.
+Classic MFC files from **SketchUp 4 through 2020** and modern VFF files from **SketchUp 2021+** are read across all five languages, with one known exception (a real SketchUp 5 file in the wild fails in TypeScript); real SketchUp 3 files read in every reader on `main` since #705, not released yet. For writing, `create()` and `open_existing()` emit a **SketchUp 2017** (`{17.0.1}`) classic MFC scaffold (`blank_v17.skp`) that SketchUp 2017 and newer open natively.
 
 Full per-version, per-language status table and evidence (synthetic fixtures, SDK-written files, and the real-world multi-version sweep): **[docs/LANGUAGE_PARITY.md § 4](docs/LANGUAGE_PARITY.md#4-real-sketchup-file-version-support)**.
 

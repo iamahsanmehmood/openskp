@@ -151,8 +151,8 @@ What remains open across languages after **1.7.0** is tracked in
 **Reading:** OpenSKP reads both the modern **VFF** container (SketchUp 2021+)
 and the classic **MFC `CArchive`** container (SketchUp 4–2020; SketchUp
 numbering jumps from `8` directly to `2013` / header `13`, with no `9`–`12`
-releases). SketchUp 3 parses on synthetic SDK-downgraded fixtures only and
-fails on the real V3 project in every reader. Every classic version SketchUp's
+releases). SketchUp 3 parses on synthetic SDK-written fixtures and, on `main` since
+#705 (not released yet), on the real V3 project in every reader. Every classic version SketchUp's
 own C library saves (SketchUp 4 through 2020, plus 2021+) is read across all
 six ports with matching rendering-options face colours
 ([#533](https://github.com/iamahsanmehmood/openskp/issues/533),
@@ -172,7 +172,7 @@ accepts any classic MFC (pre-2021) file `parse()` reads, replays it through
 
 | SketchUp version (header) | Container | Python | TS / .NET / Dart / C++ / Rust | Synthetic & SDK-written files | Real files & open gaps |
 |:---|:---|:---:|:---:|:---|:---|
-| **3** (`{3.0.*}`) | Classic MFC | ⚠️ | ⚠️ | **All 6 (tests):** `legacy_v3_synthetic.skp`, `legacy_v3_textured.skp` (`face_front_color`/`face_back_color` unset). Single-material V3 files and draw-block flags are unverified. | ❌ The real multi-version project's V3 save fails in **every** reader (`edge-use parent slot None != current loop`, [#284](https://github.com/iamahsanmehmood/openskp/issues/284)). |
+| **3** (`{3.0.*}`) | Classic MFC | ✅ (`main`) | ✅ (`main`) | **All 6 (tests):** `legacy_v3_synthetic.skp`, `legacy_v3_textured.skp` (`face_front_color`/`face_back_color` unset), and since #705 `legacy_v3_curves_and_text.skp` (curves, arcs, a painted placement, a text and a guide line) and `legacy_v3_no_materials.skp`. | ✅ On `main` since #705 (not released yet): the real multi-version project's V3 save reads in every reader and matches its V6 save (definitions, faces, curves, texts; [#284](https://github.com/iamahsanmehmood/openskp/issues/284)). |
 | **4** (`{4.0.*}`) | Classic MFC | ✅ | ✅ | **All 6 (tests):** `legacy_v4_synthetic.skp`, `legacy_v4_textured.skp`, `face_colors_v4.skp` (plus a 47-definition / 13-dimension SDK-written model checked across readers). (V4 stores no instance/group names.) | ✅ Real V4 cube sample and the real multi-version project's V4 save parse with totals matching V6/2021/2025. |
 | **5** (`{5.0.*}`) | Classic MFC | ✅ (SDK) | ⚠️ TS fails wild file; .NET / Dart / C++ / Rust ✅ (SDK) | **All 6 (tests):** `legacy_v5_synthetic.skp`, `legacy_v5_textured.skp`, `face_colors_v5.skp` (plus the 47-definition SDK-written model). | ⚠️ The multi-version sweep's V5 save is a corrupted 0-byte file. A real wild V5 file (`{5.0.262}`, reported on [#284](https://github.com/iamahsanmehmood/openskp/issues/284)) fails in TypeScript (`back-ref to unwalked slot 20617` on an inline PNG) and has not been tested in the other readers. |
 | **6** (`{6.0.*}`) | Classic MFC | ✅ | ✅ | **All 6 (tests):** `legacy_v6_synthetic.skp`, `nesting_v6.skp`, `instance_scale_term_v6.skp`, `face_colors_v6.skp`. | ✅ Real multi-version project's V6 save parses in all published readers with identical totals. |
@@ -189,8 +189,8 @@ leaving **15 usable files**. **14 of those 15 usable saves** (V4, V6, V7, V8,
 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, and 2025) parse in all
 five published readers with identical geometry and placement totals (32,982
 vertices, 40,925 edges, 9,652 faces, and 150 instances; full scene-build and
-export verification on that project was run in Python). Only **1 of the 15**
-(**V3**) still fails across all readers. If you hit an unparsed classic file in
+export verification on that project was run in Python). The 15th, **V3**,
+reads in all six readers on `main` since #705 (not released yet), with the same totals. If you hit an unparsed classic file in
 the wild, please report it on
 [issue #284](https://github.com/iamahsanmehmood/openskp/issues/284).
 
