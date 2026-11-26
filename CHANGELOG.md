@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — Rust: STL exports of painted models can be printed (#601)
+
+- A face painted differently on its two sides was written twice, once per side, so the solid had no volume. STL holds one copy of each face now, as in the other five languages (by @vantruong-dang, #688).
+- `GlbPrimitive` and `LocalPrimitive` have a new field, `back_triangles` (the back copies); code that builds them field by field needs it.
+
 ### Changed — Python: colorized textures are baked into GLB files (#285)
 
 - `export_glb(..., textures=True)` and the instanced GLB export write a colorized texture with SketchUp's colour already applied (shift or tint, within 1/255 of SketchUp's own result) and a white material factor, instead of the plain texture times the colour. A JPEG stays a JPEG (quality 95, no chroma subsampling), a PNG stays a PNG; each texture is baked once per colour.
