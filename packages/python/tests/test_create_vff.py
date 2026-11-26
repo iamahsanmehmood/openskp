@@ -1287,3 +1287,28 @@ def test_back_uv_without_back_material_does_not_use_front_texture_size(tmp_path)
     assert vff_face.uv_transform_back == pytest.approx(
         classic_face.uv_transform_back, abs=1e-9
     )
+
+
+def test_polylines_at_root_and_in_definitions(tmp_path):
+    builder = create_vff()
+    builder.add_polyline([(0, 0, 0), (10, 0, 0), (10, 10, 0)])
+    builder.add_polyline(
+        [(0, 20, 0), (10, 20, 0), (10, 30, 0)], closed=True
+    )
+    with builder.add_component_definition("CurveDef") as definition:
+        definition.add_polyline([(0, 0, 0), (0, 10, 0), (10, 10, 0)])
+    model = parse_bytes(tmp_path, builder.to_bytes())
+    assert len(model.root.edges) == 5
+    definition_model = next(
+        d for d in model.definitions.values() if d.name == "CurveDef"
+    )
+    assert len(definition_model.edges) == 2
+
+
+def test_bad_polylines_raise_skpwriteerror():
+    with pytest.raises(SkpWriteError):
+        create_vff().add_polyline([(0, 0, 0)])
+    with pytest.raises(SkpWriteError):
+        create_vff().add_polyline([(0, 0, 0), (float("inf"), 0, 0)])
+    with pytest.raises(SkpWriteError):
+        create_vff().add_polyline([(0, 0, 0), (0, 0, 0)])

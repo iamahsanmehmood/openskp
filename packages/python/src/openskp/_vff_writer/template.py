@@ -114,6 +114,14 @@ T_LAYER_SECTION = 0x3A98
 T_GROUPS = 0x138D
 T_GROUP = 0x1D4C
 
+T_CURVE = 0x4A38
+T_CURVE_COUNT = 0x4A39
+T_CURVE_FLAG = 0x4A3A
+T_CURVE_FIRST = 0x4A3B
+T_CURVE_LAST = 0x4A3C
+T_ARC_CURVE = 0x4C2C
+T_ARC_FRAME = 0x4C2D
+
 T_ATTR_LIST = 0x36B1
 T_ATTR_SET = 0x36B2
 T_ATTR_DICT = 0x36B3
@@ -1410,6 +1418,51 @@ class EntityEditor:
             for corner in _box_corners(definition_bounds):
                 self._extend_bounds(_transform_point(corner, matrix13))
         return identifier
+
+    def add_curve_edges(
+        self,
+        points: Sequence[Sequence[float]],
+        *,
+        closed: bool = False,
+        arc_frame: Optional[Sequence[float]] = None,
+        layer: Optional[int] = None,
+        flags: int = 0x06,
+    ) -> Tuple[int, List[int]]:
+        """Create one curve over *points* (edges chained in point order)."""
+        if len(points) < 2:
+            raise ValueError("a curve needs at least two points")
+        curve_id = self.template.alloc_id()
+        edges: List[int] = []
+        count = len(points) if closed else len(points) - 1
+        for index in range(count):
+            start = self.add_vertex(points[index % len(points)])
+            end = self.add_vertex(points[(index + 1) % len(points)])
+            if start == end:
+                raise ValueError("a curve has a repeated adjacent point")
+            edge_id, _forward = self.add_edge(
+                start, end, layer, flags=flags, curve=curve_id
+            )
+            edges.append(edge_id)
+        curve_record = Record(
+            T_CURVE,
+            children=[
+                _entity_base(curve_id),
+                record(T_CURVE_COUNT, u32(len(edges))),
+                record(T_CURVE_FLAG, u8(0)),
+                record(T_CURVE_FIRST, varint(edges[0])),
+                record(T_CURVE_LAST, varint(edges[-1])),
+            ],
+        )
+        if arc_frame is not None:
+            self._pool(T_ARC_CURVES).children.append(
+                Record(
+                    T_ARC_CURVE,
+                    children=[curve_record, record(T_ARC_FRAME, f64s(arc_frame))],
+                )
+            )
+        else:
+            self._pool(T_CURVES).children.append(curve_record)
+        return curve_id, edges
 
     def add_model_attributes(
         self, attribute_dicts: Sequence[Tuple[str, Dict[str, object]]]

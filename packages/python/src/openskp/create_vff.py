@@ -304,6 +304,21 @@ class ComponentDefinitionBuilder:
             holes,
         )
 
+    def add_polyline(
+        self,
+        points: Sequence[Point3],
+        closed: bool = False,
+        hidden_edges: bool = False,
+        soft_edges: bool = False,
+        smooth_edges: bool = False,
+    ) -> None:
+        """Add one freeform polyline curve inside this definition."""
+        if self._closed:
+            raise SkpWriteError("this definition is already closed")
+        self._builder._add_polyline_to(
+            self._editor, points, closed, hidden_edges, soft_edges, smooth_edges
+        )
+
     # -- placements -------------------------------------------------------
 
     def add_instance(
@@ -696,6 +711,27 @@ class VffBuilder:
 
     # -- geometry ---------------------------------------------------------
 
+    def _add_polyline_to(
+        self,
+        editor: EntityEditor,
+        points: Sequence[Point3],
+        closed: bool,
+        hidden_edges: bool,
+        soft_edges: bool,
+        smooth_edges: bool,
+    ) -> None:
+        vertices = _points(points, "polyline")
+        if len(vertices) < 2:
+            raise SkpWriteError("a polyline needs at least 2 points")
+        try:
+            editor.add_curve_edges(
+                vertices,
+                closed=closed,
+                flags=_edge_flags(hidden_edges, soft_edges, smooth_edges),
+            )
+        except ValueError as exc:
+            raise SkpWriteError(str(exc)) from exc
+
     def _add_face_to(
         self,
         editor: EntityEditor,
@@ -820,6 +856,19 @@ class VffBuilder:
         )
 
     # -- definitions ------------------------------------------------------
+
+    def add_polyline(
+        self,
+        points: Sequence[Point3],
+        closed: bool = False,
+        hidden_edges: bool = False,
+        soft_edges: bool = False,
+        smooth_edges: bool = False,
+    ) -> None:
+        """Add one freeform polyline curve to the model root."""
+        self._add_polyline_to(
+            self._root, points, closed, hidden_edges, soft_edges, smooth_edges
+        )
 
     def add_component_definition(
         self,
