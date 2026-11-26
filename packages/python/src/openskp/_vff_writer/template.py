@@ -1238,6 +1238,44 @@ class EntityEditor:
         self.order.append(identifier)
         return identifier, True
 
+    def _face_attribute_block(
+        self,
+        attributes: Optional[Sequence[Tuple[str, Dict[str, object]]]],
+        front_uv: Optional[Sequence[Tuple[Sequence[float], Tuple[float, float]]]],
+        back_uv: Optional[Sequence[Tuple[Sequence[float], Tuple[float, float]]]],
+        material: Optional[int],
+        back_material: Optional[int],
+        normal: Sequence[float],
+    ) -> Optional[Record]:
+        uv_coords = None
+        if front_uv is not None or back_uv is not None:
+            front_matrix = (
+                None
+                if front_uv is None
+                else self._uv_placement(front_uv, material, normal)
+            )
+            back_matrix = (
+                None
+                if back_uv is None
+                else self._uv_placement(back_uv, back_material, normal)
+            )
+            uv_coords = uv_attribute(front_matrix, back_matrix)
+        return _attribute_container(attributes, uv=uv_coords)
+
+    def validate_face_attributes(
+        self,
+        attributes: Optional[Sequence[Tuple[str, Dict[str, object]]]],
+        front_uv: Optional[Sequence[Tuple[Sequence[float], Tuple[float, float]]]],
+        back_uv: Optional[Sequence[Tuple[Sequence[float], Tuple[float, float]]]],
+        material: Optional[int],
+        back_material: Optional[int],
+        normal: Sequence[float],
+    ) -> None:
+        """Raise before geometry is added if attrs/UV cannot be encoded."""
+        self._face_attribute_block(
+            attributes, front_uv, back_uv, material, back_material, normal
+        )
+
     def add_face(
         self,
         points: Sequence[Sequence[float]],
@@ -1265,17 +1303,26 @@ class EntityEditor:
             + normal[1] * outer[0][1]
             + normal[2] * outer[0][2]
         )
-        loops: List[Record] = []
         rings = [outer]
         for hole in holes:
             source = getattr(hole, "points", hole)
             ring = [tuple(float(c) for c in p) for p in source]
             if len(ring) < 3:
                 raise ValueError("a hole needs at least three points")
+            for index in range(len(ring)):
+                if ring[index] == ring[(index + 1) % len(ring)]:
+                    raise ValueError("a face ring has a repeated adjacent point")
             hole_normal = newell_normal(ring)
             if sum(a * b for a, b in zip(hole_normal, normal)) > 0:
                 ring = list(reversed(ring))
             rings.append(ring)
+        for index in range(len(outer)):
+            if outer[index] == outer[(index + 1) % len(outer)]:
+                raise ValueError("a face ring has a repeated adjacent point")
+        attribute_block = self._face_attribute_block(
+            attributes, front_uv, back_uv, material, back_material, normal
+        )
+        loops: List[Record] = []
         for ring in rings:
             uses: List[Record] = []
             for index in range(len(ring)):
@@ -1283,8 +1330,6 @@ class EntityEditor:
                 end_point = ring[(index + 1) % len(ring)]
                 start = self.add_vertex(start_point)
                 end = self.add_vertex(end_point)
-                if start == end:
-                    raise ValueError("a face ring has a repeated adjacent point")
                 edge_id, forward = self.add_edge(start, end, layer, flags=edge_flags)
                 uses.append(
                     Record(
@@ -1298,15 +1343,6 @@ class EntityEditor:
             loops.append(
                 Record(T_LOOP, children=[Record(T_LOOP_EDGES, children=uses)])
             )
-        uv_coords = None
-        if front_uv is not None or back_uv is not None:
-            front_matrix = None
-            back_matrix = None
-            if front_uv is not None:
-                front_matrix = self._uv_placement(front_uv, material, normal)
-            if back_uv is not None:
-                back_matrix = self._uv_placement(back_uv, back_material, normal)
-            uv_coords = uv_attribute(front_matrix, back_matrix)
         identifier = self.template.alloc_id()
         flags = 0x06 | (0x01 if hidden else 0)
         children: List[Record] = [
@@ -1315,7 +1351,7 @@ class EntityEditor:
                 material=material,
                 layer=layer,
                 flags=flags,
-                attributes=_attribute_container(attributes, uv=uv_coords),
+                attributes=attribute_block,
             ),
             record(T_PLANE, f64s([*normal, plane_d])),
             Record(T_LOOPS, children=loops),
@@ -1428,41 +1464,139 @@ class EntityEditor:
         layer: Optional[int] = None,
         flags: int = 0x06,
     ) -> Tuple[int, List[int]]:
-        """Create one curve over *points* (edges chained in point order)."""
+        """Create curves over the not-yet-existing edges of *points*.
+
+        Edges that already exist are left out; the remaining new edges are
+        split into contiguous runs (a run wrapping past a closed ring's end
+        is one run) and only runs of at least two edges get a curve record.
+        This matches create.py's post-review behaviour and keeps the curve
+        records consistent with the edges that actually point at them.
+        """
         if len(points) < 2:
             raise ValueError("a curve needs at least two points")
-        curve_id = self.template.alloc_id()
-        edges: List[int] = []
-        count = len(points) if closed else len(points) - 1
+        coordinates = [tuple(float(c) for c in point) for point in points]
+        count = len(coordinates) if closed else len(coordinates) - 1
+        temp_ids: Dict[Tuple[float, float, float], int] = {}
+        next_temp = -1
+
+        def vertex_id(point: Tuple[float, float, float]) -> int:
+            nonlocal next_temp
+            existing = self.vertices.get(point)
+            if existing is not None:
+                return existing
+            if point not in temp_ids:
+                temp_ids[point] = next_temp
+                next_temp -= 1
+            return temp_ids[point]
+
+        simulated = {frozenset(key) for key in self.edges}
+        seg_new: List[bool] = []
         for index in range(count):
-            start = self.add_vertex(points[index % len(points)])
-            end = self.add_vertex(points[(index + 1) % len(points)])
+            start = coordinates[index % len(coordinates)]
+            end = coordinates[(index + 1) % len(coordinates)]
             if start == end:
                 raise ValueError("a curve has a repeated adjacent point")
+            key = frozenset((vertex_id(start), vertex_id(end)))
+            if key in simulated:
+                seg_new.append(False)
+            else:
+                simulated.add(key)
+                seg_new.append(True)
+
+        runs: List[List[int]] = []
+        current: List[int] = []
+        for index, is_new in enumerate(seg_new):
+            if is_new:
+                current.append(index)
+            elif current:
+                runs.append(current)
+                current = []
+        if current:
+            runs.append(current)
+        if (
+            closed
+            and len(runs) >= 2
+            and runs[0][0] == 0
+            and runs[-1][-1] == count - 1
+        ):
+            runs = [runs[-1] + runs[0]] + runs[1:-1]
+        runs = [run for run in runs if len(run) >= 2]
+
+        curve_for_seg: Dict[int, int] = {}
+        run_curves: List[Tuple[int, List[int], Optional[List[float]]]] = []
+        for run in runs:
+            curve_id = self.template.alloc_id()
+            frame = arc_frame
+            if frame is not None and not (
+                len(run) == count and run[0] == 0
+            ):
+                center = frame[0:3]
+                normal = frame[3:6]
+                offset = frame[6]
+                x_axis = frame[7:10]
+                y_axis = frame[10:13]
+                radius = frame[13]
+                start_angle = frame[14]
+                end_angle = frame[15]
+                sweep = end_angle - start_angle
+                first = run[0]
+                a0 = start_angle + sweep * (first / count)
+                a1 = start_angle + sweep * ((first + len(run)) / count)
+                if closed and first + len(run) > count:
+                    a0 -= 2.0 * math.pi
+                    a1 -= 2.0 * math.pi
+                frame = [
+                    *center,
+                    *normal,
+                    offset,
+                    *x_axis,
+                    *y_axis,
+                    radius,
+                    a0,
+                    a1,
+                ]
+            run_curves.append((curve_id, run, frame))
+            for index in run:
+                curve_for_seg[index] = curve_id
+
+        edges: List[int] = []
+        run_edges: Dict[int, List[int]] = {
+            curve_id: [] for curve_id, _run, _frame in run_curves
+        }
+        for index in range(count):
+            start = self.add_vertex(coordinates[index % len(coordinates)])
+            end = self.add_vertex(coordinates[(index + 1) % len(coordinates)])
+            curve_id = curve_for_seg.get(index)
             edge_id, _forward = self.add_edge(
                 start, end, layer, flags=flags, curve=curve_id
             )
             edges.append(edge_id)
-        curve_record = Record(
-            T_CURVE,
-            children=[
-                _entity_base(curve_id),
-                record(T_CURVE_COUNT, u32(len(edges))),
-                record(T_CURVE_FLAG, u8(0)),
-                record(T_CURVE_FIRST, varint(edges[0])),
-                record(T_CURVE_LAST, varint(edges[-1])),
-            ],
-        )
-        if arc_frame is not None:
-            self._pool(T_ARC_CURVES).children.append(
-                Record(
-                    T_ARC_CURVE,
-                    children=[curve_record, record(T_ARC_FRAME, f64s(arc_frame))],
-                )
+            if curve_id is not None:
+                run_edges[curve_id].append(edge_id)
+
+        first_curve = run_curves[0][0] if run_curves else 0
+        for curve_id, _run, frame in run_curves:
+            curve_edges = run_edges[curve_id]
+            curve_record = Record(
+                T_CURVE,
+                children=[
+                    _entity_base(curve_id),
+                    record(T_CURVE_COUNT, u32(len(curve_edges))),
+                    record(T_CURVE_FLAG, u8(0)),
+                    record(T_CURVE_FIRST, varint(curve_edges[0])),
+                    record(T_CURVE_LAST, varint(curve_edges[-1])),
+                ],
             )
-        else:
-            self._pool(T_CURVES).children.append(curve_record)
-        return curve_id, edges
+            if frame is not None:
+                self._pool(T_ARC_CURVES).children.append(
+                    Record(
+                        T_ARC_CURVE,
+                        children=[curve_record, record(T_ARC_FRAME, f64s(frame))],
+                    )
+                )
+            else:
+                self._pool(T_CURVES).children.append(curve_record)
+        return first_curve, edges
 
     def add_model_attributes(
         self, attribute_dicts: Sequence[Tuple[str, Dict[str, object]]]
