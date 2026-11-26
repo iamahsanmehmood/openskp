@@ -22,12 +22,12 @@ matrix.
 
 | Language | Latest release | Status |
 |:---|:---|:---|
-| Python | [1.7.0 on PyPI](https://pypi.org/project/openskp/) | Reference implementation — ahead on scene writing (`add_scene`), scene material names, `IFCELEMENTASSEMBLY` / 3-arg IFC classifier, and GLB sidecar metadata |
+| Python | [1.7.0 on PyPI](https://pypi.org/project/openskp/) | Reference implementation — ahead on scene writing (`add_scene`), 2021+ VFF writing (`create_vff`, on `main`), the `openskp info` / `convert` CLI (on `main`), scene material names, `IFCELEMENTASSEMBLY` / 3-arg IFC classifier, and GLB sidecar metadata |
 | TypeScript | [1.7.0 on npm](https://www.npmjs.com/package/openskp) | Full 1.7.0 reader, scene, writer, and exporter parity except the items in [Cross-language porting backlog](#cross-language-porting-backlog) |
 | .NET | [1.7.0 on NuGet](https://www.nuget.org/packages/OpenSkp) | Full 1.7.0 reader, scene, writer, and exporter parity except the items in [Cross-language porting backlog](#cross-language-porting-backlog) |
 | Dart | [1.7.0 on pub.dev](https://pub.dev/packages/openskp) | Full 1.7.0 reader, scene, writer, and exporter parity (`openskp_fragments` remains git/path-only) — see [Cross-language porting backlog](#cross-language-porting-backlog) |
 | C++ | [1.7.0 on GitHub releases](https://github.com/iamahsanmehmood/openskp/releases?q=cpp-) | Adds `Definition::no_scale_mask` and `Layer::line_style`; missing `add_scene`, scene material names, classic model attribute dictionaries, and `InstanceNode::definition_attribute_dictionaries` |
-| Rust | `1.7.0` in `packages/rust` *(not on crates.io)* | Matches C++ and Python on VFF + classic definition/model dictionaries, `InstanceNode::definition_attribute_dictionaries`, `no_scale_mask`, and `InstancedNode::hidden`; missing `add_scene`, scene material names, and STL painted back-side deduplication ([#601](https://github.com/iamahsanmehmood/openskp/issues/601)) |
+| Rust | `1.7.0` in `packages/rust` *(not on crates.io)* | Matches C++ and Python on VFF + classic definition/model dictionaries, `InstanceNode::definition_attribute_dictionaries`, `no_scale_mask`, and `InstancedNode::hidden`; missing `add_scene` and scene material names |
 
 Each published language is released independently — see
 [CONTRIBUTING.md § Releasing](CONTRIBUTING.md#releasing-maintainers) for
@@ -43,10 +43,21 @@ line per feature, not one issue per language per feature. What remains open
 across languages after **1.7.0** (see
 [`docs/LANGUAGE_PARITY.md`](docs/LANGUAGE_PARITY.md) for the full matrix):
 
+- **Writer for 2021+ VFF files (`create_vff`)** — Python (on `main`) writes
+  modern SketchUp 2021+ VFF files (faces, holes, solid and textured materials,
+  UVs, tags, component definitions/instances, nested groups, curves, and
+  attribute dictionaries) from a SketchUp 2025 template; porting `create_vff()`
+  to TypeScript, .NET, Dart, C++, and Rust — and adding VFF `add_image`,
+  annotations (texts/dimensions/guides/section planes), and scenes — remains
+  open.
 - **Writer scenes (`add_scene`)** — camera + hidden-layer `CViewPage` scenes in
   new classic files are Python-only (`create.py`). *(Reading scenes — including
   cameras, `hidden_layers`, `hidden_entity_ids`, and `capture_flags` — works in
   all six languages across VFF 2021+ and classic pre-2021 files.)*
+- **Command-line tool (`openskp info` / `openskp convert`)** — Python (on `main`,
+  [#570](https://github.com/iamahsanmehmood/openskp/issues/570)) ships an
+  `openskp` CLI for model inspection and format conversion; TypeScript, .NET,
+  Dart, C++, and Rust are library-only.
 - **Material names on scene `gltf_materials`** — Python preserves SketchUp
   material names on `gltf_materials` and keeps differently named materials of
   the same colour separate; TypeScript, .NET, Dart, C++, and Rust omit `name`
@@ -66,14 +77,15 @@ across languages after **1.7.0** (see
   TypeScript, .NET, and Dart; `Definition.no_scale_mask` in Python, TypeScript,
   .NET, and Dart (present in C++ and Rust); `InstancedNode.hidden` in Python,
   .NET, Dart, and C++ (present in TypeScript and Rust); `Layer.line_style` in
-  Python, TypeScript, .NET, Dart, and Rust (exposed in C++); STL painted
-  back-side deduplication ([#601](https://github.com/iamahsanmehmood/openskp/issues/601))
-  in Rust; randomizing the writer scaffold file GUID at `0x34..0x43` in Python,
-  TypeScript, .NET, and Dart.
-- **Colorized textures in GLB files and scenes (all six languages)** — SketchUp
-  bakes a colorized material's hue-shift or greyscale tint into the image;
-  OpenSKP currently keeps the untinted base image and multiplies by
-  `baseColorFactor` (tracked on
+  Python, TypeScript, .NET, Dart, and Rust (exposed in C++); randomizing the
+  writer scaffold file GUID at `0x34..0x43` in Python, TypeScript, .NET, and
+  Dart.
+- **Colorized textures on in-memory scenes (all six languages)** — GLB and
+  instanced GLB exports on `main` bake a colorized material's hue-shift or tint
+  into the embedded texture across all six languages (and strip JPEG EXIF `APP1`
+  blocks), whereas `Scene` / `InstancedScene` `textures` entries still carry the
+  untinted source image bytes marked with `extras.sketchup.colorized` /
+  `colorize_type` (tracked on
   [issue #285](https://github.com/iamahsanmehmood/openskp/issues/285)).
 
 **Good first contribution?** Most of these have a real, SDK-verified Python or
