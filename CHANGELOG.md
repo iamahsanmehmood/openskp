@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — Rust: colorized textures are baked into GLB files (#285)
+
+- `to_glb` / `export_glb` and `to_instanced_glb` / `export_instanced_glb` with `with_textures(true)` bake colorized PNG textures out of the box (using the in-tree `inflate` / `deflate` / `zip` modules, shift or tint within 1/255 of SketchUp's own result) with a white material factor, once per colour, keeping the crate dependency-free.
+- Colorized JPEG textures are baked at quality 95 when a synchronous `ImageCodec` (`decode` / `encode`) is passed via `GlbOptions::with_image_codec` or `InstancedGlbOptions::with_image_codec`; without a codec, JPEG textures are still embedded and colorized ones keep the tinted factor, with one warning.
+- JPEG textures lose their EXIF `APP1` block (orientation included) without being re-encoded, and textures above 178,956,970 pixels (read from the header before decoding) or ones that fail to decode keep their source bytes and the tinted factor, with one warning.
+
 ### Changed — .NET: colorized textures are baked into GLB files (#285)
 
 - `GlbExport.ToGlb` / `ExportGlb` and `InstancedGlbExport.ToInstancedGlb` / `ExportInstancedGlb` with `Textures = true` bake colorized PNG textures out of the box (using the BCL's `DeflateStream` on `netstandard2.0`, shift or tint within 1/255 of SketchUp's own result) with a white material factor, once per colour, with no new dependency.

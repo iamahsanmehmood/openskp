@@ -544,30 +544,34 @@ fn converts_srgb_base_color_factor_to_linear_in_baked_and_instanced_exports() {
         to_instanced_glb(&both_inst, &InstancedGlbOptions::new().with_textures(true)).unwrap(),
     ] {
         let m = load_glb(&with_tex_bytes);
+        assert_eq!(m.list("images").len(), 2);
+        assert_eq!(m.list("textures").len(), 2);
         let exported = m.list("materials");
         assert_eq!(exported.len(), 2);
         let mut saw_plain = 0usize;
         let mut saw_col = 0usize;
+        let mut plain_tex_idx = -1i64;
+        let mut col_tex_idx = -1i64;
         for gm in exported {
             let pbr = gm.find("pbrMetallicRoughness").unwrap();
-            assert_eq!(int(pbr.find("baseColorTexture").unwrap(), "index"), 0);
+            let tex_idx = int(pbr.find("baseColorTexture").unwrap(), "index");
+            assert!((0..=1).contains(&tex_idx));
             if let Some(extras) = gm.find("extras") {
                 let skp = extras.find("sketchup").unwrap();
                 assert_eq!(skp.find("colorized"), Some(&openskp::JsonValue::Bool(true)));
                 assert_eq!(int(skp, "colorize_type"), 1);
-                let bcf = factor_of(gm);
-                assert!((bcf[0] - 200.0 / 255.0).abs() < 1e-12);
-                assert!((bcf[1] - 80.0 / 255.0).abs() < 1e-12);
-                assert!((bcf[2] - 60.0 / 255.0).abs() < 1e-12);
-                assert_eq!(bcf[3], 1.0);
+                assert_eq!(factor_of(gm), vec![1.0, 1.0, 1.0, 1.0]);
+                col_tex_idx = tex_idx;
                 saw_col += 1;
             } else {
                 assert_eq!(factor_of(gm), vec![1.0, 1.0, 1.0, 1.0]);
+                plain_tex_idx = tex_idx;
                 saw_plain += 1;
             }
         }
         assert_eq!(saw_plain, 1);
         assert_eq!(saw_col, 1);
+        assert_ne!(plain_tex_idx, col_tex_idx);
     }
 
     for no_tex_bytes in [

@@ -42,6 +42,12 @@ STL contains only the front winding of each SketchUp face, including faces paint
 each side; STL does not carry colour. GLB and the colour-capable OBJ, PLY, DXF, IFC and Fragments
 exports retain separately painted sides.
 
+When `GlbOptions::new().with_textures(true)` (or `InstancedGlbOptions::new().with_textures(true)`)
+is used, colorized PNG textures are baked in-tree on top of `inflate` / `deflate` with no external
+crates (matching SketchUp's shift and tint modes within 1/255). To also bake colorized JPEG
+textures, pass a synchronous [`ImageCodec`](https://github.com/iamahsanmehmood/openskp/blob/main/packages/rust/src/glb_textures.rs) via `.with_image_codec(...)` (struct or `(decode, encode)`
+closure pair).
+
 ## Viewer
 
 `viewer/` is a small in-browser `.skp` viewer (Rust → `wasm32`, WebGL2) built into a single HTML file:
