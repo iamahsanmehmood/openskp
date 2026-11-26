@@ -56,6 +56,10 @@ pub struct GlbPrimitive {
     /// Flat `[u, v, ...]` texture coordinates matching positions 1:1.
     pub uvs: Vec<f32>,
     pub indices: Vec<u32>,
+    /// Triangle offsets for separately emitted back sides. A primitive can mix
+    /// front and back triangles when they share a material; their front
+    /// counterparts are still present.
+    pub back_triangles: Vec<u32>,
     pub material_index: usize,
     pub geom_name: String,
     /// True when this primitive is the back copy of a face with no paint on

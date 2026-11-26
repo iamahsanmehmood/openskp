@@ -61,6 +61,7 @@ pub struct Group {
     pub verts: Vec<Vec3>,
     pub uvs: Vec<[f32; 2]>,
     pub tris: Vec<[usize; 3]>,
+    pub back_triangles: Vec<u32>,
     pub map: HashMap<FaceVKey, usize>,
     pub normals: Vec<Vec3>,
 }
@@ -485,6 +486,12 @@ pub fn build_local_face_groups(
                     for (sum, &axis) in group.normals[index].iter_mut().zip(&f.normal) {
                         *sum += if reverse { -axis } else { axis };
                     }
+                }
+                if reverse {
+                    let tri_idx = u32::try_from(group.tris.len()).map_err(|_| {
+                        Error::out_of_range("face group exceeds u32 triangle index limit")
+                    })?;
+                    group.back_triangles.push(tri_idx);
                 }
                 group.tris.push(indices);
             }

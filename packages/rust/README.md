@@ -38,6 +38,10 @@ Both containers are read: VFF (SketchUp 2021+) and the classic MFC `CArchive` (S
 `to_ply_ascii` / `to_ply_binary`, `to_dxf`, `to_ifc`, `to_json`, and `to_fragments`. `read_fragments`
 reads a `.frag` file back.
 
+STL contains only the front winding of each SketchUp face, including faces painted differently on
+each side; STL does not carry colour. GLB and the colour-capable OBJ, PLY, DXF, IFC and Fragments
+exports retain separately painted sides.
+
 ## Viewer
 
 `viewer/` is a small in-browser `.skp` viewer (Rust → `wasm32`, WebGL2) built into a single HTML file:

@@ -14,6 +14,7 @@ fn prim(name: &str, material_index: usize, positions: &[f32], indices: &[u32]) -
         indices: indices.to_vec(),
         material_index,
         geom_name: name.to_string(),
+        back_triangles: Vec::new(),
         unpainted_back: false,
     }
 }

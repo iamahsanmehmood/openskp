@@ -233,6 +233,7 @@ impl<'a> Instancer<'a> {
                 positions: vec![0.0; count * 3],
                 normals: vec![0.0; count * 3],
                 uvs: vec![0.0; count * 2],
+                back_triangles: g.back_triangles.clone(),
                 unpainted_back: group_key.unpainted_back,
                 ..Default::default()
             };
