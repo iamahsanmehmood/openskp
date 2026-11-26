@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import subprocess
 import sys
@@ -49,7 +50,8 @@ def test_info_chair_and_table(capsys: pytest.CaptureFixture[str]) -> None:
     assert rc == 0
     out, err = capsys.readouterr()
     assert err == ""
-    assert "17.0.1" in out
+    assert "Version:        17.0.1" in out
+    assert "{17.0.1}" not in out
     assert "Units:" in out and "unknown" in out
     assert "Definitions:" in out and "9" in out
     assert "Instances:" in out and "15" in out
@@ -62,12 +64,35 @@ def test_info_chair_and_table(capsys: pytest.CaptureFixture[str]) -> None:
         assert material in out
 
 
+def test_legacy_positional_file_routes_to_info(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["openskp", str(CHAIR_AND_TABLE)])
+    rc = openskp.main()
+    assert rc == 0
+    out, err = capsys.readouterr()
+    assert err == ""
+    assert "Version:        17.0.1" in out
+    assert "{17.0.1}" not in out
+    assert "Definitions:    9" in out
+    assert "Instances:      15" in out
+    assert "Faces:          86" in out
+    assert "Tags:           3" in out
+    assert "Materials:      4" in out
+    for tag in ("Layer0", "Chair", "Table"):
+        assert tag in out
+    for material in ("Walnut", "Oak", "Charcoal Linen", "Brass"):
+        assert material in out
+
+
 def test_info_vff_fixture_units_and_root_faces(capsys: pytest.CaptureFixture[str]) -> None:
     rc = cli_main(["info", str(SU_FILE_VFF)])
     assert rc == 0
     out, err = capsys.readouterr()
     assert err == ""
-    assert "25.0.575" in out
+    assert "Version:        25.0.575" in out
+    assert "{25.0.575}" not in out
     assert "Millimeter" in out
     assert "Definitions:    0" in out
     assert "Instances:      0" in out
@@ -189,7 +214,8 @@ def test_subprocess_info_and_convert(tmp_path: pathlib.Path) -> None:
         check=False,
     )
     assert info_proc.returncode == 0
-    assert "17.0.1" in info_proc.stdout
+    assert "Version:        17.0.1" in info_proc.stdout
+    assert "{17.0.1}" not in info_proc.stdout
     assert "Walnut" in info_proc.stdout
     assert info_proc.stderr == ""
 
@@ -212,3 +238,27 @@ def test_subprocess_info_and_convert(tmp_path: pathlib.Path) -> None:
     assert out_json.is_file()
     data = json.loads(out_json.read_text(encoding="utf-8"))
     assert data["total_definitions"] == 9
+
+
+def test_subprocess_info_non_ascii_tag_under_cp1252(tmp_path: pathlib.Path) -> None:
+    builder = openskp.create()
+    tag = builder.add_layer("ünicode 中文", color=(100, 150, 200))
+    builder.add_face(
+        [(0, 0, 0), (10, 0, 0), (10, 10, 0), (0, 10, 0)],
+        layer=tag,
+    )
+    skp_path = tmp_path / "unicode_tag.skp"
+    builder.save(skp_path)
+
+    proc = subprocess.run(
+        [sys.executable, "-m", "openskp.cli", "info", str(skp_path)],
+        capture_output=True,
+        text=True,
+        encoding="cp1252",
+        env={**os.environ, "PYTHONIOENCODING": "cp1252", "PYTHONUTF8": "0"},
+        check=False,
+    )
+    assert proc.returncode == 0
+    assert proc.stderr == ""
+    assert "Version:        17.0.1" in proc.stdout
+    assert "ünicode ??" in proc.stdout

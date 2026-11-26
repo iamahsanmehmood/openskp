@@ -132,6 +132,20 @@ painted differently on each side; STL does not carry colour. GLB and the
 colour-capable OBJ, PLY, DXF, IFC and Fragments exports retain separately
 painted sides.
 
+## CLI
+
+Installing `openskp` also provides an `openskp` command-line tool:
+
+```bash
+# Inspect version, units, counts, tags, and materials
+openskp info model.skp
+
+# Convert to .glb, .obj, .stl, .ply, .dxf, .ifc, or .json (inferred from extension)
+openskp convert model.skp output.glb
+openskp convert model.skp output.obj
+openskp convert model.skp output.ifc
+```
+
 ## Writing
 
 OpenSKP can also *create* new `.skp` files from scratch — a genuine,

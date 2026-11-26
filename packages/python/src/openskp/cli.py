@@ -41,7 +41,7 @@ def _cmd_info(args: argparse.Namespace) -> int:
 
     rows = [
         ("File:", str(src)),
-        ("Version:", model.version),
+        ("Version:", model.version.strip("{}")),
         ("Units:", model.units or "unknown"),
         ("Definitions:", str(definitions_count)),
         ("Instances:", str(instances_count)),
@@ -157,8 +157,19 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the OpenSKP command-line interface."""
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(errors="replace")
+
+    args_list = list(sys.argv[1:] if argv is None else argv)
+    if (
+        len(args_list) == 1
+        and not args_list[0].startswith("-")
+        and args_list[0] not in ("info", "convert")
+    ):
+        args_list = ["info", args_list[0]]
+
     parser = build_parser()
-    args = parser.parse_args(argv)
+    args = parser.parse_args(args_list)
     if not hasattr(args, "func"):
         parser.print_help()
         return 0
