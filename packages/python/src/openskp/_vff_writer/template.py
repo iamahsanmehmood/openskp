@@ -1783,6 +1783,45 @@ class EntityEditor:
         self._extend_bounds(p)
         return identifier
 
+    def add_section_plane(
+        self,
+        point: Sequence[float],
+        normal: Sequence[float],
+        *,
+        name: str = "",
+        symbol: str = "",
+        active: bool = False,
+        hidden: bool = False,
+    ) -> int:
+        p = tuple(float(c) for c in point)
+        n = tuple(float(c) for c in normal)
+        nlen = math.hypot(*n)
+        if nlen == 0.0:
+            raise SkpWriteError("add_section_plane: normal must be nonzero")
+        a, b, c = n[0] / nlen, n[1] / nlen, n[2] / nlen
+        d = -(a * p[0] + b * p[1] + c * p[2])
+        if not math.isfinite(d):
+            raise SkpWriteError(
+                "add_section_plane: section plane offset must be finite"
+            )
+        identifier = self.template.alloc_id()
+        item = Record(
+            T_SECTION,
+            children=[
+                _drawing(
+                    identifier,
+                    flags=0x06 | (0x01 if hidden else 0),
+                ),
+                record(T_SECTION_PLANE, f64s([a, b, c, d])),
+                record(T_SECTION_NAME, name.encode("utf-8")),
+                record(T_SECTION_SYMBOL, symbol.encode("utf-8")),
+            ],
+        )
+        self._pool(T_SECTION_PLANES).children.append(item)
+        self.order.append(identifier)
+        if active:
+            self.active_section = identifier
+        return identifier
 
     def add_curve_edges(
         self,

@@ -57,7 +57,7 @@ def test_shared_method_signatures_match_create():
         "to_bytes", "save", "add_material", "add_texture_material", "add_layer",
         "add_face", "add_component_definition", "add_group", "add_instance",
         "add_circle", "add_arc", "add_polyline", "add_text", "add_dimension",
-        "add_construction_line", "add_construction_point",
+        "add_construction_line", "add_construction_point", "add_section_plane",
         "set_guid", "set_document_options",
     ):
         compare(getattr(classic, name), getattr(vff, name), name)
@@ -184,7 +184,9 @@ def test_same_annotation_code_writes_both_formats(tmp_path):
         builder.add_text("label", (0, 0, 0), (1, 2, 3), layer=tag, hidden=True)
         builder.add_dimension((0, 0, 0), (10, 0, 0), offset_vector=(0, 5, 0), layer=tag)
         builder.add_construction_line((0, 0, 0), point2=(4, 0, 0), layer=tag)
+        builder.add_construction_line((0, 0, 0), direction=(0, 0, 1))
         builder.add_construction_point((1, 2, 3), layer=tag)
+        builder.add_section_plane((0, 0, 5), (0, 0, 1))
         return parse_bytes(tmp_path, builder.to_bytes())
 
     classic = build(create())
@@ -200,6 +202,7 @@ def test_same_annotation_code_writes_both_formats(tmp_path):
                 for line in root.construction_lines
             ],
             "points": [(p.position, p.layer, p.hidden) for p in root.construction_points],
+            "sections": [(s.plane, s.name, s.label, s.hidden) for s in root.section_planes],
         }
 
     assert annotations(classic) == annotations(vff)
@@ -216,6 +219,7 @@ def test_annotation_errors_match_create(tmp_path):
         ("line neither form", lambda b: b.add_construction_line((0, 0, 0))),
         ("line zero direction", lambda b: b.add_construction_line((0, 0, 0), direction=(0, 0, 0))),
         ("point non-finite", lambda b: b.add_construction_point((float("nan"), 0, 0))),
+        ("section zero normal", lambda b: b.add_section_plane((0, 0, 0), (0, 0, 0))),
     ]
     for label, call in cases:
         classic_error = None

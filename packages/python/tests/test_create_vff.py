@@ -1494,11 +1494,17 @@ def test_annotations_round_trip_at_root_and_in_definition(tmp_path):
     builder.add_construction_line((0, 0, 0), point2=(4, 0, 0), layer=tag, hidden=True)
     builder.add_construction_line((0, 0, 0), direction=(0, 0, 1), layer=tag)
     builder.add_construction_point((1, 2, 3), layer=tag, hidden=True)
+    builder.add_section_plane(
+        (0, 0, 5), (0, 0, 1), name="Section A", symbol="A", hidden=True
+    )
     with builder.add_component_definition("Annotated") as definition:
         definition.add_text("In component", (0, 0, 0), layer=tag)
         definition.add_dimension((0, 0, 0), (5, 0, 0), layer=tag)
         definition.add_construction_line((0, 0, 0), point2=(1, 1, 1), layer=tag)
         definition.add_construction_point((2, 2, 2), layer=tag)
+        definition.add_section_plane(
+            (0, 0, 1), (1, 0, 0), name="Inner", symbol="I"
+        )
     model = parse_bytes(tmp_path, builder.to_bytes())
     root = model.root
     assert [text.text for text in root.texts] == ["Corner label"]
@@ -1510,6 +1516,9 @@ def test_annotations_round_trip_at_root_and_in_definition(tmp_path):
     assert root.dimensions[0].layer == "Annotations"
     assert len(root.construction_lines) == 2
     assert len(root.construction_points) == 1
+    section = root.section_planes[0]
+    assert (section.name, section.label, section.hidden) == ("Section A", "A", True)
+    assert section.plane == pytest.approx([0.0, 0.0, 1.0, -5.0])
 
     definition_model = next(
         item for item in model.definitions.values() if item.name == "Annotated"
@@ -1531,6 +1540,10 @@ def test_annotations_round_trip_at_root_and_in_definition(tmp_path):
     assert definition_model.construction_points[0].position == pytest.approx(
         (2.0, 2.0, 2.0)
     )
+    assert definition_model.section_planes[0].name == "Inner"
+    assert definition_model.section_planes[0].plane == pytest.approx(
+        [1.0, 0.0, 0.0, 0.0]
+    )
 
 
 
@@ -1541,6 +1554,7 @@ def test_failed_annotation_and_scene_calls_leave_nothing_behind(tmp_path):
         lambda b: b.add_dimension((0, 0, 0), (0, 0, 0)),
         lambda b: b.add_construction_line((0, 0, 0)),
         lambda b: b.add_construction_point((float("nan"), 0, 0)),
+        lambda b: b.add_section_plane((0, 0, 0), (0, 0, 0)),
     ]
     triangle = [(20, 0, 0), (30, 0, 0), (20, 10, 0)]
     for bad in cases:
@@ -1555,6 +1569,7 @@ def test_failed_annotation_and_scene_calls_leave_nothing_behind(tmp_path):
         assert model.root.dimensions == []
         assert model.root.construction_lines == []
         assert model.root.construction_points == []
+        assert model.root.section_planes == []
 
 
 
@@ -1580,6 +1595,7 @@ def test_annotations_round_trip_inside_a_group(tmp_path):
         group.add_dimension((0, 0, 0), (4, 0, 0))
         group.add_construction_line((0, 0, 0), point2=(2, 2, 2))
         group.add_construction_point((3, 3, 3))
+        group.add_section_plane((0, 0, 2), (0, 0, 1), name="Group section")
     model = parse_bytes(tmp_path, builder.to_bytes())
     group_model = next(
         item for item in model.definitions.values() if item.name == "Annotated Group"
@@ -1589,21 +1605,47 @@ def test_annotations_round_trip_inside_a_group(tmp_path):
     assert group_model.dimensions[0].b == pytest.approx((4.0, 0.0, 0.0))
     assert group_model.construction_lines[0].end == pytest.approx((2.0, 2.0, 2.0))
     assert group_model.construction_points[0].position == pytest.approx((3.0, 3.0, 3.0))
+    assert group_model.section_planes[0].name == "Group section"
 
 
-
-
-def _model_camera_bytes(data: bytes) -> bytes:
-    from openskp._vff_writer.template import T_CAMERA_MODEL
-    from openskp._vff_writer.tlv import parse_records
+def test_second_section_plane_can_be_marked_active(tmp_path):
+    builder = create_vff()
+    builder.add_section_plane((0, 0, 1), (0, 0, 1), name="First")
+    builder.add_section_plane((0, 0, 2), (0, 0, 1), name="Second", active=True)
+    data = builder.to_bytes()
+    from openskp._vff_writer.template import (
+        MODEL_CONTAINERS, T_ACTIVE_SECTION, T_ENTITY_BASE, T_ENTITY_ID,
+        T_SECTION, T_SECTION_PLANES, T_DRAWING
+    )
+    from openskp._vff_writer.tlv import parse_records, read_varint
     from openskp.vff import extract_skp_contents
 
     model_data = extract_skp_contents(data)["model_data"]
-    document = parse_records(model_data, {0x01F4, T_CAMERA_MODEL})[0]
-    section = next(c for c in document.children if c.tag == T_CAMERA_MODEL)
-    return section.encode()
+    document = parse_records(
+        model_data,
+        set(MODEL_CONTAINERS) | {T_ENTITY_BASE, T_DRAWING, T_SECTION, T_ACTIVE_SECTION},
+    )[0]
+    def find(node, tag):
+        if node.tag == tag:
+            return node
+        for child in node.children or []:
+            found = find(child, tag)
+            if found is not None:
+                return found
+        return None
 
-
+    root = find(document, 0x1388)
+    section_pool = next(c for c in root.children if c.tag == T_SECTION_PLANES)
+    section_ids = []
+    for section in section_pool.children or []:
+        base = find(section, T_ENTITY_BASE)
+        section_ids.append(
+            read_varint(next(c for c in base.children if c.tag == T_ENTITY_ID).payload)
+        )
+    active = next(c for c in root.children if c.tag == T_ACTIVE_SECTION)
+    assert read_varint(active.payload) == section_ids[1]
+    model = parse_bytes(tmp_path, data)
+    assert [s.name for s in model.root.section_planes] == ["First", "Second"]
 
 
 def test_huge_finite_construction_lines_keep_a_unit_direction(tmp_path):
@@ -1615,8 +1657,30 @@ def test_huge_finite_construction_lines_keep_a_unit_direction(tmp_path):
         assert line.direction == pytest.approx((1.0, 0.0, 0.0))
 
 
+def test_section_plane_normalises_huge_and_tiny_normals(tmp_path):
+    for normal in ((1e200, 0, 0), (1e-200, 0, 0)):
+        builder = create_vff()
+        builder.add_section_plane((3, 4, 5), normal)
+        model = parse_bytes(tmp_path, builder.to_bytes())
+        plane = model.root.section_planes[0].plane
+        assert plane[:3] == pytest.approx([1.0, 0.0, 0.0])
+        assert math.isfinite(plane[3])
+    with pytest.raises(SkpWriteError, match="offset must be finite"):
+        create_vff().add_section_plane((1.7e308, 1.7e308, 1.7e308), (1, 1, 1))
 
 
+def test_section_plane_name_validation_and_atomicity():
+    cases = [
+        lambda b: b.add_section_plane((0, 0, 0), (0, 0, 1), name=3),
+        lambda b: b.add_section_plane((0, 0, 0), (0, 0, 1), symbol=3),
+        lambda b: b.add_section_plane((0, 0, 0), (0, 0, 1), name="\ud800"),
+        lambda b: b.add_section_plane((0, 0, 0), (0, 0, 1), symbol="\ud800"),
+    ]
+    for bad in cases:
+        builder = create_vff()
+        with pytest.raises(SkpWriteError):
+            bad(builder)
+        assert builder._root._pools.get(0x1393) is None
 
 
 def _first_record_child_tags(data: bytes, tag: int):
@@ -1653,8 +1717,9 @@ def test_written_annotation_records_match_sketchup_2025_child_layout():
     builder.add_dimension((0, 0, 0), (10, 0, 0))
     builder.add_construction_line((0, 0, 0), point2=(1, 1, 1))
     builder.add_construction_point((1, 2, 3))
+    builder.add_section_plane((0, 0, 0), (0, 0, 1), name="S", symbol="S")
     written = builder.to_bytes()
-    for tag in (0x55F0, 0x5BCC, 0x4269, 0x426C):
+    for tag in (0x55F0, 0x5BCC, 0x4269, 0x426C, 0x445C):
         assert _first_record_child_tags(written, tag) == _first_record_child_tags(
             annotations_fixture, tag
         ), hex(tag)

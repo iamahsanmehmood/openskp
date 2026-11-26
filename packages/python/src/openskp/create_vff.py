@@ -295,6 +295,18 @@ def _arc_frame(
     ]
 
 
+def _validate_section_names(name: str, symbol: str) -> None:
+    for value, label in ((name, "name"), (symbol, "symbol")):
+        if not isinstance(value, str):
+            raise SkpWriteError(f"add_section_plane: {label} must be a str")
+        try:
+            value.encode("utf-8")
+        except UnicodeEncodeError:
+            raise SkpWriteError(
+                f"add_section_plane: {label} contains an unpaired UTF-16 surrogate"
+            ) from None
+
+
 def _edge_flags(hidden: bool, soft: bool, smooth: bool) -> int:
     return 0x06 | (0x01 if hidden else 0) | (0x08 if soft else 0) | (0x10 if smooth else 0)
 
@@ -583,6 +595,26 @@ class ComponentDefinitionBuilder:
         except ValueError as exc:
             raise SkpWriteError(str(exc)) from exc
 
+    def add_section_plane(
+        self,
+        point: Point3,
+        normal: Point3,
+        *,
+        name: str = "",
+        symbol: str = "",
+        hidden: bool = False,
+    ) -> None:
+        """Add a section plane inside this definition (VFF-only extra)."""
+        if self._closed:
+            raise SkpWriteError("this definition is already closed")
+        p = _finite_point3(point, "add_section_plane")
+        n = _finite_point3(normal, "add_section_plane")
+        if n == (0.0, 0.0, 0.0):
+            raise SkpWriteError("add_section_plane: normal must be nonzero")
+        _validate_section_names(name, symbol)
+        self._editor.add_section_plane(
+            p, n, name=name, symbol=symbol, hidden=hidden
+        )
 
     def add_polyline(
         self,
@@ -1548,6 +1580,25 @@ class VffBuilder:
         except ValueError as exc:
             raise SkpWriteError(str(exc)) from exc
 
+    def add_section_plane(
+        self,
+        point: Point3,
+        normal: Point3,
+        *,
+        name: str = "",
+        symbol: str = "",
+        hidden: bool = False,
+        active: bool = False,
+    ) -> None:
+        """Add a section plane; VFF extras are keyword-only."""
+        p = _finite_point3(point, "add_section_plane")
+        n = _finite_point3(normal, "add_section_plane")
+        if n == (0.0, 0.0, 0.0):
+            raise SkpWriteError("add_section_plane: normal must be nonzero")
+        _validate_section_names(name, symbol)
+        self._root.add_section_plane(
+            p, n, name=name, symbol=symbol, hidden=hidden, active=active
+        )
 
 
 

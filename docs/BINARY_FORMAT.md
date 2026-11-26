@@ -414,7 +414,7 @@ arrow `DC59`), start connection `CD5B`, end connection `CE5B`, plane normal
 (u32). The connection `0852` carries type `0952`, point `0A52`, reference
 wrappers `0B52`/`0C52` and the parsed vertex/path refs `FC53`/`FD53`/`FE53`.
 
-### 7.8 Construction guides
+### 7.8 Guides and section planes
 
 A construction line is a `6942` record in pool `9113`: its annotation base
 `6842` wraps the drawing, then body `6A42` is eight `f64`s (point x/y/z,
@@ -422,6 +422,12 @@ unit direction x/y/z, start/end distance; unbounded uses ±1e30) and
 stipple `6B42` is `u16 0xFFFF`. A construction point is a `6C42` in pool
 `9213`: base `6842`, position `6D42` (3 × `f64`), zero anchor `6E42`
 (3 × `f64`) and one tail byte `6F42`.
+
+A section plane is a `5C44` record in pool `9313`: drawing (with the
+hidden flag in `D307`), plane `5D44` as four `f64`s `(a, b, c, d)` with
+the normal normalized and `d = -(n · point)`, UTF-8 name `5E44` and
+UTF-8 short label/symbol `5F44`. The model's active section id is
+`9413` in the root container.
 
 ### 7.9 Records the core writer emits
 
