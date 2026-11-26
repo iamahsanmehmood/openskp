@@ -37,7 +37,7 @@ def parse_bytes(tmp_path: Path, data: bytes):
 def test_shared_method_signatures_match_create():
     from openskp.create import create as classic_create
 
-    skip = {"front_uv", "back_uv"}
+    skip = set()
     classic = classic_create()
     vff = create_vff()
 

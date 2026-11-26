@@ -28,6 +28,7 @@ from .archive import (
     header_offset,
 )
 from ..create import Length, Point3d, SkpWriteError, Timestamp, Vector3d
+from .uv import uv_attribute, uv_matrix_from_pins
 from .tlv import (
     Record,
     encode_records,
@@ -435,13 +436,12 @@ def _attribute_container(
     """The 0x05dd attribute block shared by dictionaries and texture placement."""
     if uv is None and not attribute_dicts:
         return None
-    children: List[Record] = []
+    children: List[Record] = [
+        _attribute_dictionary(name, entries)
+        for name, entries in attribute_dicts or ()
+    ]
     if uv is not None:
         children.append(uv)
-    for name, entries in attribute_dicts:
-        children.append(_attribute_dictionary(name, entries))
-    if not children:
-        return None
     return Record(
         0x05DD,
         children=[
@@ -1240,6 +1240,12 @@ class EntityEditor:
         hidden: bool = False,
         holes: Sequence[Sequence[Sequence[float]]] = (),
         edge_flags: int = 0x06,
+        front_uv: Optional[
+            Sequence[Tuple[Sequence[float], Tuple[float, float]]]
+        ] = None,
+        back_uv: Optional[
+            Sequence[Tuple[Sequence[float], Tuple[float, float]]]
+        ] = None,
         attributes: Optional[Sequence[Tuple[str, Dict[str, object]]]] = None,
     ) -> int:
         outer = [tuple(float(c) for c in p) for p in points]
@@ -1284,6 +1290,15 @@ class EntityEditor:
             loops.append(
                 Record(T_LOOP, children=[Record(T_LOOP_EDGES, children=uses)])
             )
+        uv_coords = None
+        if front_uv is not None or back_uv is not None:
+            front_matrix = None
+            back_matrix = None
+            if front_uv is not None:
+                front_matrix = self._uv_placement(front_uv, material, normal)
+            if back_uv is not None:
+                back_matrix = self._uv_placement(back_uv, back_material, normal)
+            uv_coords = uv_attribute(front_matrix, back_matrix)
         identifier = self.template.alloc_id()
         flags = 0x06 | (0x01 if hidden else 0)
         children: List[Record] = [
@@ -1292,7 +1307,7 @@ class EntityEditor:
                 material=material,
                 layer=layer,
                 flags=flags,
-                attributes=_attribute_container(attributes),
+                attributes=_attribute_container(attributes, uv=uv_coords),
             ),
             record(T_PLANE, f64s([*normal, plane_d])),
             Record(T_LOOPS, children=loops),
@@ -1303,6 +1318,23 @@ class EntityEditor:
         self.order.append(identifier)
         return identifier
 
+
+    def _uv_placement(
+        self,
+        pins: Sequence[Tuple[Sequence[float], Tuple[float, float]]],
+        material: Optional[int],
+        normal: Sequence[float],
+    ) -> List[float]:
+        size = (
+            self.template.texture_sizes.get(material)
+            if material is not None
+            else None
+        )
+        tile_width, tile_height = size if size is not None else (1.0, 1.0)
+        try:
+            return uv_matrix_from_pins(pins, normal, tile_width, tile_height)
+        except ValueError as exc:
+            raise SkpWriteError(str(exc)) from exc
 
     def add_instance(
         self,

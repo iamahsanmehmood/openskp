@@ -275,6 +275,8 @@ class ComponentDefinitionBuilder:
         soft_edges: bool = False,
         smooth_edges: bool = False,
         hidden_edges: bool = False,
+        front_uv: Optional[Sequence[Tuple[Sequence[float], Tuple[float, float]]]] = None,
+        back_uv: Optional[Sequence[Tuple[Sequence[float], Tuple[float, float]]]] = None,
         attributes: Optional[Dict[str, object]] = None,
         attribute_dict_name: str = "attributes",
         attribute_dicts: Sequence[Tuple[str, Dict[str, object]]] = (),
@@ -293,6 +295,8 @@ class ComponentDefinitionBuilder:
             soft_edges,
             smooth_edges,
             hidden_edges,
+            front_uv,
+            back_uv,
             _resolve_attribute_dicts(
                 attributes, attribute_dict_name, attribute_dicts
             ),
@@ -703,6 +707,8 @@ class VffBuilder:
         soft_edges: bool,
         smooth_edges: bool,
         hidden_edges: bool,
+        front_uv: Optional[Sequence[Tuple[Sequence[float], Tuple[float, float]]]],
+        back_uv: Optional[Sequence[Tuple[Sequence[float], Tuple[float, float]]]],
         attributes: Sequence[Tuple[str, Dict[str, object]]],
         auto_triangulate: bool,
         holes: Sequence[Sequence[Point3]],
@@ -718,6 +724,10 @@ class VffBuilder:
             if len(ring) < 3:
                 raise SkpWriteError("a hole needs at least 3 points")
         flags = _edge_flags(hidden_edges, soft_edges, smooth_edges)
+        if auto_triangulate and (front_uv is not None or back_uv is not None):
+            raise SkpWriteError(
+                "auto_triangulate cannot be combined with front_uv/back_uv positioning"
+            )
         if rings or not auto_triangulate:
             # Validates the boundary as planar and gives the same message as
             # create.py for an off-plane hole or a non-planar boundary.
@@ -747,6 +757,8 @@ class VffBuilder:
                     hidden=hidden,
                     holes=rings,
                     edge_flags=flags,
+                    front_uv=front_uv,
+                    back_uv=back_uv,
                     attributes=attributes,
                 )
             except ValueError as exc:
@@ -762,6 +774,8 @@ class VffBuilder:
                     back_material=back_material,
                     hidden=hidden,
                     edge_flags=flags,
+                    front_uv=front_uv,
+                    back_uv=back_uv,
                     attributes=attributes,
                 )
             except ValueError as exc:
@@ -777,6 +791,8 @@ class VffBuilder:
         soft_edges: bool = False,
         smooth_edges: bool = False,
         hidden_edges: bool = False,
+        front_uv: Optional[Sequence[Tuple[Sequence[float], Tuple[float, float]]]] = None,
+        back_uv: Optional[Sequence[Tuple[Sequence[float], Tuple[float, float]]]] = None,
         attributes: Optional[Dict[str, object]] = None,
         attribute_dict_name: str = "attributes",
         attribute_dicts: Sequence[Tuple[str, Dict[str, object]]] = (),
@@ -794,6 +810,8 @@ class VffBuilder:
             soft_edges,
             smooth_edges,
             hidden_edges,
+            front_uv,
+            back_uv,
             _resolve_attribute_dicts(
                 attributes, attribute_dict_name, attribute_dicts
             ),

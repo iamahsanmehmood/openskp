@@ -1085,3 +1085,205 @@ def test_texture_read_errors_pass_through_like_create_py(tmp_path):
                 "Tex", (WRITER_FIXTURES / "tex.png").read_bytes(),
                 image_name=image_name,
             )
+
+
+def test_face_uvs_round_trip_through_sketchup_matrix(tmp_path):
+    from openskp._face_groups import compute_face_uv, face_uv_basis
+
+    pins = [
+        ((20, 0, 0), (0.0, 0.0)),
+        ((30, 0, 0), (1.0, 0.0)),
+        ((20, 10, 0), (0.0, 1.0)),
+    ]
+    builder = create_vff()
+    texture = builder.add_texture_material(
+        "Tex", str(WRITER_FIXTURES / "tex.png"), 10.0, 5.0
+    )
+    builder.add_face(
+        [(20, 0, 0), (30, 0, 0), (30, 10, 0), (20, 10, 0)],
+        material=texture,
+        front_uv=pins,
+    )
+    model = parse_bytes(tmp_path, builder.to_bytes())
+    (face,) = model.root.faces.values()
+    assert face.uv_transform is not None
+    xr, yr = face_uv_basis(face.normal)
+    for point, uv in pins:
+        assert compute_face_uv(
+            point, xr, yr, face.uv_transform, 10.0, 5.0
+        ) == pytest.approx(uv, abs=1e-9)
+
+
+def test_face_uv_requires_exactly_three_pins():
+    from openskp.create import create as create_classic
+
+    pins = [
+        ((0, 0, 0), (0.0, 0.0)),
+        ((10, 0, 0), (1.0, 0.0)),
+        ((0, 10, 0), (0.0, 1.0)),
+        ((10, 10, 0), (1.0, 1.0)),
+    ]
+    with pytest.raises(SkpWriteError) as classic:
+        create_classic().add_face(SQUARE, front_uv=pins)
+    with pytest.raises(SkpWriteError) as vff:
+        create_vff().add_face(SQUARE, front_uv=pins)
+    assert str(vff.value) == str(classic.value)
+    assert "texture positioning needs exactly 3" in str(vff.value)
+
+
+def test_bad_face_uvs_raise_skpwriteerror():
+    builder = create_vff()
+    texture = builder.add_texture_material(
+        "Tex", str(WRITER_FIXTURES / "tex.png")
+    )
+    with pytest.raises(SkpWriteError):
+        builder.add_face(
+            SQUARE,
+            material=texture,
+            front_uv=[
+                ((0, 0, 0), (0.0, 0.0)),
+                ((10, 0, 0), (float("nan"), 0.0)),
+                ((0, 10, 0), (0.0, 1.0)),
+            ],
+        )
+    with pytest.raises(SkpWriteError):
+        builder.add_face(
+            SQUARE,
+            material=texture,
+            front_uv=[
+                ((0, 0, 0), (0.0, 0.0)),
+                ((10, 0, 0), (1.0, 0.0)),
+                ((0, 10, 0), (0.0, 1.0)),
+            ],
+            auto_triangulate=True,
+        )
+
+
+def _face_attribute_set_order(data: bytes):
+    from openskp._core import CONTAINER_TAGS, parse_tlv_recursive
+    from openskp.vff import extract_skp_contents
+
+    tags = set(CONTAINER_TAGS) | {
+        "D007", "DC05", "DD05", "B136", "B236",
+    }
+    model_data = extract_skp_contents(data)["model_data"]
+    roots = parse_tlv_recursive(model_data, 0, len(model_data), tags)
+    orders = []
+
+    def walk(node):
+        if node.tag == "AC0D":
+            for child in node.children:
+                if child.tag != "D007":
+                    continue
+                for entity in child.children:
+                    if entity.tag != "DC05":
+                        continue
+                    for block in entity.children:
+                        if block.tag != "DD05":
+                            continue
+                        for container in block.children:
+                            for record_set in container.children:
+                                if record_set.tag == "B236":
+                                    orders.append([c.tag for c in record_set.children])
+        for child in node.children:
+            walk(child)
+
+    for root in roots:
+        walk(root)
+    return orders
+
+
+def test_face_with_uv_and_attributes_keeps_both(tmp_path):
+    pins = [
+        ((0, 0, 0), (0.0, 0.0)),
+        ((10, 0, 0), (1.0, 0.0)),
+        ((0, 10, 0), (0.0, 1.0)),
+    ]
+    builder = create_vff()
+    texture = builder.add_texture_material(
+        "Tex", str(WRITER_FIXTURES / "tex.png"), 10.0, 10.0
+    )
+    builder.add_face(
+        SQUARE,
+        material=texture,
+        front_uv=pins,
+        attribute_dicts=[("attributes", {"d": 1}), ("second", {"label": "ok"})],
+    )
+    data = builder.to_bytes()
+    assert _face_attribute_set_order(data) == [["B336", "B336", "1027"]]
+    dictionaries = [
+        entry for entry in _face_dictionaries(data) if "attributes" in entry
+    ]
+    assert dictionaries == [{"attributes": {"d": 1}, "second": {"label": "ok"}}]
+
+
+def test_face_uvs_on_solid_or_no_material_are_accepted(tmp_path):
+    from openskp.create import create as create_classic
+    from openskp._face_groups import compute_face_uv, face_uv_basis
+
+    pins = [
+        ((0, 0, 0), (0.0, 0.0)),
+        ((10, 0, 0), (1.0, 0.0)),
+        ((0, 10, 0), (0.0, 1.0)),
+    ]
+
+    def build(factory, material):
+        builder = factory()
+        if material == "solid":
+            material = builder.add_material("Red", (255, 0, 0))
+        else:
+            material = None
+        builder.add_face(SQUARE, material=material, front_uv=pins)
+        return parse_bytes(tmp_path, builder.to_bytes())
+
+    for material in ("solid", "none"):
+        classic = build(create_classic, material)
+        vff = build(create_vff, material)
+        (classic_face,) = classic.root.faces.values()
+        (vff_face,) = vff.root.faces.values()
+        assert vff_face.uv_transform is not None
+        assert vff_face.uv_transform == pytest.approx(
+            classic_face.uv_transform, abs=1e-9
+        )
+        xr, yr = face_uv_basis(vff_face.normal)
+        for point, uv in pins:
+            assert compute_face_uv(
+                point, xr, yr, vff_face.uv_transform, 1.0, 1.0
+            ) == pytest.approx(uv, abs=1e-9)
+
+
+def test_back_uv_without_back_material_does_not_use_front_texture_size(tmp_path):
+    from openskp.create import create as create_classic
+
+    front_pins = [
+        ((0, 0, 0), (0.0, 0.0)),
+        ((10, 0, 0), (1.0, 0.0)),
+        ((0, 10, 0), (0.0, 1.0)),
+    ]
+    back_pins = [
+        ((0, 0, 0), (0.0, 0.0)),
+        ((5, 0, 0), (1.0, 0.0)),
+        ((0, 5, 0), (0.0, 1.0)),
+    ]
+
+    def build(factory):
+        builder = factory()
+        texture = builder.add_texture_material(
+            "Tex", str(WRITER_FIXTURES / "tex.png"), 10.0, 10.0
+        )
+        builder.add_face(
+            SQUARE,
+            material=texture,
+            front_uv=front_pins,
+            back_uv=back_pins,
+        )
+        return parse_bytes(tmp_path, builder.to_bytes())
+
+    classic = build(create_classic)
+    vff = build(create_vff)
+    (classic_face,) = classic.root.faces.values()
+    (vff_face,) = vff.root.faces.values()
+    assert vff_face.uv_transform_back is not None
+    assert vff_face.uv_transform_back == pytest.approx(
+        classic_face.uv_transform_back, abs=1e-9
+    )
