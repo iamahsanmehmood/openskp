@@ -1714,7 +1714,74 @@ class EntityEditor:
         self.order.append(identifier)
         return identifier
 
+    def add_guide_line(
+        self,
+        point: Sequence[float],
+        direction: Sequence[float],
+        start_param: float,
+        end_param: float,
+        *,
+        layer: Optional[int] = None,
+        hidden: bool = False,
+    ) -> int:
+        p = tuple(float(c) for c in point)
+        dirv = tuple(float(c) for c in direction)
+        identifier = self.template.alloc_id()
+        item = Record(
+            T_GUIDE_LINE,
+            children=[
+                Record(
+                    T_ANNOTATION_BASE,
+                    children=[
+                        _drawing(
+                            identifier,
+                            layer=layer,
+                            flags=0x06 | (0x01 if hidden else 0),
+                        )
+                    ],
+                ),
+                record(
+                    T_GUIDE_BODY,
+                    f64s([*p, *dirv, float(start_param), float(end_param)]),
+                ),
+                record(T_GUIDE_STIPPLE, struct.pack("<H", 0xFFFF)),
+            ],
+        )
+        self._pool(T_GUIDE_LINES).children.append(item)
+        self.order.append(identifier)
+        return identifier
 
+    def add_guide_point(
+        self,
+        position: Sequence[float],
+        *,
+        layer: Optional[int] = None,
+        hidden: bool = False,
+    ) -> int:
+        p = tuple(float(c) for c in position)
+        identifier = self.template.alloc_id()
+        item = Record(
+            T_GUIDE_POINT,
+            children=[
+                Record(
+                    T_ANNOTATION_BASE,
+                    children=[
+                        _drawing(
+                            identifier,
+                            layer=layer,
+                            flags=0x06 | (0x01 if hidden else 0),
+                        )
+                    ],
+                ),
+                record(T_GUIDE_POSITION, f64s(p)),
+                record(T_GUIDE_ANCHOR, f64s([0.0, 0.0, 0.0])),
+                record(T_GUIDE_TAIL, u8(0)),
+            ],
+        )
+        self._pool(T_GUIDE_POINTS).children.append(item)
+        self.order.append(identifier)
+        self._extend_bounds(p)
+        return identifier
 
 
     def add_curve_edges(

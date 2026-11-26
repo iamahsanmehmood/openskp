@@ -414,7 +414,16 @@ arrow `DC59`), start connection `CD5B`, end connection `CE5B`, plane normal
 (u32). The connection `0852` carries type `0952`, point `0A52`, reference
 wrappers `0B52`/`0C52` and the parsed vertex/path refs `FC53`/`FD53`/`FE53`.
 
-### 7.8 Records the core writer emits
+### 7.8 Construction guides
+
+A construction line is a `6942` record in pool `9113`: its annotation base
+`6842` wraps the drawing, then body `6A42` is eight `f64`s (point x/y/z,
+unit direction x/y/z, start/end distance; unbounded uses ±1e30) and
+stipple `6B42` is `u16 0xFFFF`. A construction point is a `6C42` in pool
+`9213`: base `6842`, position `6D42` (3 × `f64`), zero anchor `6E42`
+(3 × `f64`) and one tail byte `6F42`.
+
+### 7.9 Records the core writer emits
 
 Everything lives under the root definition container `8813` inside the
 root entity list `F601`, with child pools for vertices (`8913`), edges

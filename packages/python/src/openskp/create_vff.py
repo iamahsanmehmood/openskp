@@ -52,6 +52,8 @@ from .create import (
     Point3,
     SkpBuilder,
     SkpWriteError,
+    _finite_point3,
+    _resolve_construction_line_params,
     _archive_uuid,
     _circle_basis,
     _is_coplanar,
@@ -548,7 +550,38 @@ class ComponentDefinitionBuilder:
             a, b, normal, xaxis, scalar, layer=layer, hidden=hidden
         )
 
+    def add_construction_line(
+        self,
+        point: Point3,
+        point2: Optional[Point3] = None,
+        direction: Optional[Point3] = None,
+        layer: Optional[int] = None,
+        hidden: bool = False,
+    ) -> None:
+        if self._closed:
+            raise SkpWriteError("this definition is already closed")
+        self._builder._validate_layer(layer)
+        p, dirv, start, end = _resolve_construction_line_params(
+            point, point2, direction
+        )
+        self._editor.add_guide_line(
+            p, dirv, start, end, layer=layer, hidden=hidden
+        )
 
+    def add_construction_point(
+        self,
+        position: Point3,
+        layer: Optional[int] = None,
+        hidden: bool = False,
+    ) -> None:
+        if self._closed:
+            raise SkpWriteError("this definition is already closed")
+        self._builder._validate_layer(layer)
+        p = _finite_point3(position, "add_construction_point")
+        try:
+            self._editor.add_guide_point(p, layer=layer, hidden=hidden)
+        except ValueError as exc:
+            raise SkpWriteError(str(exc)) from exc
 
 
     def add_polyline(
@@ -1484,7 +1517,36 @@ class VffBuilder:
             a, b, normal, xaxis, scalar, layer=layer, hidden=hidden
         )
 
+    def add_construction_line(
+        self,
+        point: Point3,
+        point2: Optional[Point3] = None,
+        direction: Optional[Point3] = None,
+        layer: Optional[int] = None,
+        hidden: bool = False,
+    ) -> None:
+        """Add a bounded or unbounded construction line to the model root."""
+        self._validate_layer(layer)
+        p, dirv, start, end = _resolve_construction_line_params(
+            point, point2, direction
+        )
+        self._root.add_guide_line(
+            p, dirv, start, end, layer=layer, hidden=hidden
+        )
 
+    def add_construction_point(
+        self,
+        position: Point3,
+        layer: Optional[int] = None,
+        hidden: bool = False,
+    ) -> None:
+        """Add a construction point to the model root."""
+        self._validate_layer(layer)
+        p = _finite_point3(position, "add_construction_point")
+        try:
+            self._root.add_guide_point(p, layer=layer, hidden=hidden)
+        except ValueError as exc:
+            raise SkpWriteError(str(exc)) from exc
 
 
 

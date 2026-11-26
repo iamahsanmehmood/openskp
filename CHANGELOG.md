@@ -90,9 +90,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `parseSkp`, `buildScene`, `buildInstancedScene`, `openExisting`, `extractThumbnail`, `SkpFile.fromBuffer` and `fromFragments` take any `Uint8Array` (also a Node.js `Buffer`) besides an `ArrayBuffer`, without a copy.
 
-### Added — Python: VFF texts and dimensions
+### Added — Python: VFF annotations, guides, section planes and scenes
 
-- `create_vff()` now writes leader/screen texts and free linear dimensions at the model root and inside component/group definitions. Shared methods follow `create.py`'s signatures and error messages.
+- `create_vff()` now writes leader/screen texts, free linear dimensions, construction lines/points, named/symboled section planes (with active section) and scenes, plus a VFF-only `set_camera` for the model start camera. Its shared methods follow `create.py`'s signatures and error messages; texts/dimensions/guides/section planes work at the root and inside component/group definitions.
+- The 2021+ reader gains section-plane extraction (plane, name, label, hidden) for root and definition entities, alongside its existing text/dimension/guide reading.
 
 ### Added — Python: native VFF (SketchUp 2021+) writer core
 

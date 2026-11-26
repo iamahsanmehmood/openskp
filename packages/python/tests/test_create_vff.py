@@ -1481,7 +1481,7 @@ def test_back_uv_without_back_material_does_not_use_front_texture_size(tmp_path)
     )
 
 
-def test_texts_and_dimensions_round_trip_at_root_and_in_definition(tmp_path):
+def test_annotations_round_trip_at_root_and_in_definition(tmp_path):
     builder = create_vff()
     tag = builder.add_layer("Annotations", (10, 20, 30))
     builder.add_text(
@@ -1491,9 +1491,14 @@ def test_texts_and_dimensions_round_trip_at_root_and_in_definition(tmp_path):
     builder.add_dimension(
         (0, 0, 0), (10, 0, 0), offset_vector=(0, 5, 0), layer=tag, hidden=True
     )
+    builder.add_construction_line((0, 0, 0), point2=(4, 0, 0), layer=tag, hidden=True)
+    builder.add_construction_line((0, 0, 0), direction=(0, 0, 1), layer=tag)
+    builder.add_construction_point((1, 2, 3), layer=tag, hidden=True)
     with builder.add_component_definition("Annotated") as definition:
         definition.add_text("In component", (0, 0, 0), layer=tag)
         definition.add_dimension((0, 0, 0), (5, 0, 0), layer=tag)
+        definition.add_construction_line((0, 0, 0), point2=(1, 1, 1), layer=tag)
+        definition.add_construction_point((2, 2, 2), layer=tag)
     model = parse_bytes(tmp_path, builder.to_bytes())
     root = model.root
     assert [text.text for text in root.texts] == ["Corner label"]
@@ -1503,6 +1508,8 @@ def test_texts_and_dimensions_round_trip_at_root_and_in_definition(tmp_path):
     assert text.display_leader is False
     assert len(root.dimensions) == 1
     assert root.dimensions[0].layer == "Annotations"
+    assert len(root.construction_lines) == 2
+    assert len(root.construction_points) == 1
 
     definition_model = next(
         item for item in model.definitions.values() if item.name == "Annotated"
@@ -1515,6 +1522,101 @@ def test_texts_and_dimensions_round_trip_at_root_and_in_definition(tmp_path):
     assert dimension.a == pytest.approx((0.0, 0.0, 0.0))
     assert dimension.b == pytest.approx((5.0, 0.0, 0.0))
     assert dimension.offset == pytest.approx(10.0)
+    assert len(definition_model.construction_lines) == 1
+    line = definition_model.construction_lines[0]
+    assert line.start == pytest.approx((0.0, 0.0, 0.0))
+    assert line.end == pytest.approx((1.0, 1.0, 1.0))
+    assert line.direction == pytest.approx((1 / 3 ** 0.5,) * 3)
+    assert len(definition_model.construction_points) == 1
+    assert definition_model.construction_points[0].position == pytest.approx(
+        (2.0, 2.0, 2.0)
+    )
+
+
+
+
+def test_failed_annotation_and_scene_calls_leave_nothing_behind(tmp_path):
+    cases = [
+        lambda b: b.add_text("x", (0, 0, 0), leader_type=9),
+        lambda b: b.add_dimension((0, 0, 0), (0, 0, 0)),
+        lambda b: b.add_construction_line((0, 0, 0)),
+        lambda b: b.add_construction_point((float("nan"), 0, 0)),
+    ]
+    triangle = [(20, 0, 0), (30, 0, 0), (20, 10, 0)]
+    for bad in cases:
+        builder = create_vff()
+        with pytest.raises(SkpWriteError):
+            bad(builder)
+        builder.add_face(triangle)
+        model = parse_bytes(tmp_path, builder.to_bytes())
+        assert len(model.root.faces) == 1
+        assert len(model.root.edges) == 3
+        assert model.root.texts == []
+        assert model.root.dimensions == []
+        assert model.root.construction_lines == []
+        assert model.root.construction_points == []
+
+
+
+
+
+
+def test_special_text_and_scene_layer_names_round_trip(tmp_path):
+    builder = create_vff()
+    special = 'Quoted "label" ü 木材\t\n'
+    tag = builder.add_layer('Tag "quoted" / ü 木材')
+    builder.add_text(special, (0, 0, 0), layer=tag)
+    model = parse_bytes(tmp_path, builder.to_bytes())
+    assert model.root.texts[0].text == special
+    assert model.root.texts[0].layer == 'Tag "quoted" / ü 木材'
+
+
+
+
+def test_annotations_round_trip_inside_a_group(tmp_path):
+    builder = create_vff()
+    with builder.add_group("Annotated Group") as group:
+        group.add_text("Group text", (1, 2, 3), (4, 5, 6))
+        group.add_dimension((0, 0, 0), (4, 0, 0))
+        group.add_construction_line((0, 0, 0), point2=(2, 2, 2))
+        group.add_construction_point((3, 3, 3))
+    model = parse_bytes(tmp_path, builder.to_bytes())
+    group_model = next(
+        item for item in model.definitions.values() if item.name == "Annotated Group"
+    )
+    assert group_model.texts[0].text == "Group text"
+    assert group_model.texts[0].point == pytest.approx((1.0, 2.0, 3.0))
+    assert group_model.dimensions[0].b == pytest.approx((4.0, 0.0, 0.0))
+    assert group_model.construction_lines[0].end == pytest.approx((2.0, 2.0, 2.0))
+    assert group_model.construction_points[0].position == pytest.approx((3.0, 3.0, 3.0))
+
+
+
+
+def _model_camera_bytes(data: bytes) -> bytes:
+    from openskp._vff_writer.template import T_CAMERA_MODEL
+    from openskp._vff_writer.tlv import parse_records
+    from openskp.vff import extract_skp_contents
+
+    model_data = extract_skp_contents(data)["model_data"]
+    document = parse_records(model_data, {0x01F4, T_CAMERA_MODEL})[0]
+    section = next(c for c in document.children if c.tag == T_CAMERA_MODEL)
+    return section.encode()
+
+
+
+
+def test_huge_finite_construction_lines_keep_a_unit_direction(tmp_path):
+    builder = create_vff()
+    builder.add_construction_line((0, 0, 0), direction=(1e200, 0, 0))
+    builder.add_construction_line((0, 0, 0), point2=(1e200, 0, 0))
+    model = parse_bytes(tmp_path, builder.to_bytes())
+    for line in model.root.construction_lines:
+        assert line.direction == pytest.approx((1.0, 0.0, 0.0))
+
+
+
+
 
 
 def _first_record_child_tags(data: bytes, tag: int):
@@ -1543,6 +1645,19 @@ def _first_record_child_tags(data: bytes, tag: int):
     return found[0]
 
 
+def test_written_annotation_records_match_sketchup_2025_child_layout():
+    """The genuine fixtures are SketchUp 2025 Ruby-generated saves."""
+    annotations_fixture = (WRITER_FIXTURES / "genuine_annotations_2025.skp").read_bytes()
+    builder = create_vff()
+    builder.add_text("Text", (0, 0, 0))
+    builder.add_dimension((0, 0, 0), (10, 0, 0))
+    builder.add_construction_line((0, 0, 0), point2=(1, 1, 1))
+    builder.add_construction_point((1, 2, 3))
+    written = builder.to_bytes()
+    for tag in (0x55F0, 0x5BCC, 0x4269, 0x426C):
+        assert _first_record_child_tags(written, tag) == _first_record_child_tags(
+            annotations_fixture, tag
+        ), hex(tag)
 
 
 

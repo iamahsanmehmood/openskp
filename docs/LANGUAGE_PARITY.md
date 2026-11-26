@@ -63,6 +63,7 @@ yet in that language; see [§3](#3-whats-still-outstanding-after-170).
 | Attribute dicts: typed value decoding, **VFF (2021+) format** (`AD38`/`AA38`/`AF38`/`A938`/`A738`/`AC38`/`B438`/`B538`/`AE38`) | ✅ 9/9 | ✅ 9/9 | ✅ 9/9 | ✅ 9/9 | ✅ 9/9 | ✅ 9/9 |
 | Attribute dicts surfaced in GLB/JSON metadata export (not just IFC Psets) | ✅ (GLB sidecar + JSON) | ❌ | ❌ | ❌ | ✅ (JSON) | ✅ (JSON) |
 | VFF pages/scenes + dimension & text parsing (`offset_vector`, leaders/screen text, `layer`/`hidden`, VFF component ownership) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| VFF 2021+ section planes (plane, name, label, hidden) | ✅ | ❌ | ❌ | ❌ | ✅ | ❌ |
 | Legacy (pre-2021) pages/scenes reading (`CViewPage`, `hidden_entity_ids` + `persistent_id`) | ✅ | ✅ *(no narrow-scan fallback)* | ✅ *(no narrow-scan fallback)* | ✅ *(no narrow-scan fallback)* | ✅ | ✅ |
 | Scene capture flags (`Page.capture_flags` / `use_*`, [#660](https://github.com/iamahsanmehmood/openskp/pull/660)) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Construction lines/points reading (`layer` + `hidden`, legacy + VFF) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -89,7 +90,7 @@ yet in that language; see [§3](#3-whats-still-outstanding-after-170).
 | Writer: linear dimensions (`offset_vector`, `layer`, `hidden`) + leader/screen text | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Writer: section planes | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Writer: construction lines/points (root + component definitions, `layer` + `hidden`) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Writer for 2021+ files (`create_vff()`: faces, materials, UVs, tags, components, groups, curves, attributes, texts/dimensions) | 🔶 on `main`, not released yet | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Writer for 2021+ files (`create_vff()`: faces, materials, UVs, tags, components, groups, curves, attributes, texts/dimensions, guides, section planes, scenes/camera) | 🔶 on `main`, not released yet | ❌ | ❌ | ❌ | ❌ | ❌ |
 | Writer: scenes (`add_scene`: camera + hidden layers) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | Editor (`open_existing()`) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | SKP-to-code generator (`to_*_code()`), round-tripping `applied_width`/opacity/`filename` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
