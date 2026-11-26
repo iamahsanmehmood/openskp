@@ -1180,13 +1180,13 @@ namespace OpenSkp
             };
         }
 
-        public static (string? UniformLayer, string? MajorityLayer) SummarizeFaceLayers(
+        public static (string? UniformLayer, bool HasUntaggedFace) SummarizeFaceLayers(
             GeometryBuilder builder,
             Dictionary<long, string> layerIdToName)
         {
-            if (builder.Faces.Count == 0) return (null, null);
-            var counts = new List<(long Id, int Count)>();
+            if (builder.Faces.Count == 0) return (null, false);
             bool allSame = true;
+            bool hasUntagged = false;
             string? commonName = null;
             foreach (var f in builder.Faces.Values)
             {
@@ -1194,9 +1194,6 @@ namespace OpenSkp
                 if (f.LayerId is long lid && lid != 0 && layerIdToName.TryGetValue(lid, out var resolved) && resolved != "Layer0")
                 {
                     fname = resolved;
-                    int idx = counts.FindIndex(c => c.Id == lid);
-                    if (idx >= 0) counts[idx] = (lid, counts[idx].Count + 1);
-                    else counts.Add((lid, 1));
                 }
                 if (!string.IsNullOrEmpty(fname))
                 {
@@ -1206,24 +1203,10 @@ namespace OpenSkp
                 else
                 {
                     allSame = false;
+                    hasUntagged = true;
                 }
             }
-            string? majorityLayer = null;
-            if (counts.Count > 0)
-            {
-                long bestId = counts[0].Id;
-                int bestCount = counts[0].Count;
-                for (int i = 1; i < counts.Count; i++)
-                {
-                    if (counts[i].Count > bestCount)
-                    {
-                        bestId = counts[i].Id;
-                        bestCount = counts[i].Count;
-                    }
-                }
-                if (layerIdToName.TryGetValue(bestId, out var mname)) majorityLayer = mname;
-            }
-            return (allSame ? commonName : null, majorityLayer);
+            return (allSame ? commonName : null, hasUntagged);
         }
     }
 }

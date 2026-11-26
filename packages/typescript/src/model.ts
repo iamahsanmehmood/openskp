@@ -1244,12 +1244,17 @@ export function buildSceneFromParsed(
     return idx;
   }
 
+  const resolveFaceTagColor = (layerId: number | null | undefined) => {
+    const fname = layerId ? (layerIdToName.get(layerId) ?? '') : '';
+    return fname && fname !== 'Layer0' ? getLayerColor(fname) : null;
+  };
+
   const faceLayerCache = new Map<number | string, FaceLayerSummary>();
   function getFaceLayerSummary(defId: number | string): FaceLayerSummary {
     let hit = faceLayerCache.get(defId);
     if (hit !== undefined) return hit;
     const d = defsDict.get(defId);
-    hit = d ? summarizeFaceLayers(d.builder, layerIdToName) : { uniformLayer: null, majorityLayer: null };
+    hit = d ? summarizeFaceLayers(d.builder, layerIdToName) : { uniformLayer: null, hasUntaggedFace: false };
     faceLayerCache.set(defId, hit);
     return hit;
   }
@@ -1291,7 +1296,7 @@ export function buildSceneFromParsed(
       const [fallbackColor, fallbackBackColor] =
         styleColors ??
         (() => {
-          const c = getLayerColor(summary.majorityLayer ?? parentLayer);
+          const c = getLayerColor(parentLayer);
           return [c, c] as const;
         })();
       const faceGroups = buildLocalFaceGroups(builder, {
@@ -1301,6 +1306,7 @@ export function buildSceneFromParsed(
         inheritedMaterial,
         fallbackLayerColor: fallbackColor,
         fallbackBackColor,
+        faceTagColor: !inheritedMaterial && !styleColors ? resolveFaceTagColor : undefined,
         definitionId: defId,
         respectVisibility: options?.respectEdgeVisibility,
         frontSideOnly: options?.frontSideOnly,

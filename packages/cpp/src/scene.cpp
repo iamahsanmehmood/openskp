@@ -95,16 +95,19 @@ Scene build_scene_raw(RawParsed&& p, const ParseOptions& o) {
         layer == "Layer0" ? summary.uniform_layer.value_or(layer) : layer;
     FaceColorKey fallback{};
     FaceColorKey fallback_back{};
+    bool use_face_tag_colors = false;
     if (auto inherited_color = material_color(inherited_material)) {
       fallback = fallback_back = *inherited_color;
     } else if (style_colors) {
       std::tie(fallback, fallback_back) = *style_colors;
     } else {
-      const std::string color_layer = summary.majority_layer.value_or(layer);
-      fallback = fallback_back = default_color(p, color_layer);
+      fallback = fallback_back = default_color(p, layer);
+      use_face_tag_colors = !inherited_material;
     }
-    auto groups = build_local_face_groups(
-        p, b, FaceGroupContext{texture_index_for, fallback, fallback_back, inherited_material});
+    auto groups =
+        build_local_face_groups(p, b,
+                                FaceGroupContext{texture_index_for, fallback, fallback_back,
+                                                 inherited_material, use_face_tag_colors, o});
     for (auto& kv : groups) {
       auto& g = kv.second;
       if (g.tris.empty()) continue;

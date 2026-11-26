@@ -589,12 +589,22 @@ class SceneBuilder {
       return idx;
     }
 
-    final faceLayerCache = <int, (String?, String?)>{};
-    (String?, String?) getFaceLayerSummary(int? defId, GeometryBuilder builder) {
+    (int, int, int)? resolveFaceTagColor(int? layerId) {
+      if (layerId != null && layerId != 0) {
+        final fname = layerIdToName[layerId] ?? '';
+        if (fname.isNotEmpty && fname != 'Layer0') {
+          return getLayerColor(fname);
+        }
+      }
+      return null;
+    }
+
+    final faceLayerCache = <int, (String?, bool)>{};
+    (String?, bool) getFaceLayerSummary(int? defId, GeometryBuilder builder) {
       final key = defId ?? -1;
       final hit = faceLayerCache[key];
       if (hit != null || faceLayerCache.containsKey(key)) {
-        return hit ?? (null, null);
+        return hit ?? (null, false);
       }
       final summary = Geometry.summarizeFaceLayers(builder, layerIdToName);
       faceLayerCache[key] = summary;
@@ -627,13 +637,16 @@ class SceneBuilder {
         // onto (or the back vanishing from) the far side.
         final (int, int, int) fallbackColor;
         final (int, int, int) fallbackBackColor;
+        (int, int, int)? Function(int?)? faceTagColor;
         if (inheritedColor != null) {
           fallbackColor = fallbackBackColor = inheritedColor;
         } else if (styleColors != null) {
           (fallbackColor, fallbackBackColor) = styleColors;
         } else {
-          final colorLayer = summary.$2 ?? parentLayer;
-          fallbackColor = fallbackBackColor = getLayerColor(colorLayer);
+          fallbackColor = fallbackBackColor = getLayerColor(parentLayer);
+          if (inheritedMaterial == null) {
+            faceTagColor = resolveFaceTagColor;
+          }
         }
         final faceGroups = buildLocalFaceGroups(
           builder,
@@ -644,6 +657,7 @@ class SceneBuilder {
             textureIndexFor: textureIndexFor,
             fallbackColor: fallbackColor,
             fallbackBackColor: fallbackBackColor,
+            faceTagColor: faceTagColor,
             definitionId: defId,
           ),
         );

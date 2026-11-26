@@ -118,53 +118,45 @@ FaceColorKey default_color(const RawParsed& parsed, const std::string& layer) {
   return {color[0], color[1], color[2], 255};
 }
 
+std::optional<std::string> face_layer_name(const RawParsed& parsed, const RawFace& f,
+                                           const ParseOptions& options) {
+  if (!f.layer.empty() && f.layer != "0") {
+    try {
+      const auto id = std::stoll(f.layer);
+      if (id != 0) {
+        auto li = parsed.layer_id_to_name.find(id);
+        if (li != parsed.layer_id_to_name.end() && !li->second.empty() && li->second != "Layer0") {
+          return li->second;
+        }
+      }
+    } catch (...) {
+      emit_log(options, LogLevel::debug,
+               "Failed to resolve face layer id '" + f.layer + "' to a name");
+    }
+  }
+  return std::nullopt;
+}
+
 FaceLayerSummary summarize_face_layers(const RawParsed& parsed, const GeometryBuilder& b,
                                        const ParseOptions& options) {
   FaceLayerSummary out;
   if (b.faces.empty()) return out;
-  std::vector<std::pair<std::string, std::size_t>> counts;
   bool all_same = true;
   std::optional<std::string> common_name;
   for (const auto& [fid, f] : b.faces) {
-    std::string fname;
-    if (!f.layer.empty() && f.layer != "0") {
-      try {
-        const auto id = std::stoll(f.layer);
-        if (id != 0) {
-          auto li = parsed.layer_id_to_name.find(id);
-          if (li != parsed.layer_id_to_name.end() && li->second != "Layer0") {
-            fname = li->second;
-          }
-        }
-      } catch (...) {
-        emit_log(options, LogLevel::debug,
-                 "Failed to resolve face layer id '" + f.layer + "' to a name");
-      }
-    }
-    if (!fname.empty()) {
-      auto it = std::find_if(counts.begin(), counts.end(),
-                             [&](const auto& kv) { return kv.first == fname; });
-      if (it != counts.end()) {
-        ++it->second;
-      } else {
-        counts.emplace_back(fname, 1);
-      }
+    const auto fname = face_layer_name(parsed, f, options);
+    if (fname) {
       if (!common_name) {
-        common_name = fname;
-      } else if (*common_name != fname) {
+        common_name = *fname;
+      } else if (*common_name != *fname) {
         all_same = false;
       }
     } else {
       all_same = false;
+      out.has_untagged_face = true;
     }
   }
   if (all_same) out.uniform_layer = common_name;
-  if (!counts.empty()) {
-    const auto best =
-        std::max_element(counts.begin(), counts.end(),
-                         [](const auto& lhs, const auto& rhs) { return lhs.second < rhs.second; });
-    out.majority_layer = best->first;
-  }
   return out;
 }
 
@@ -378,8 +370,15 @@ std::map<GroupKey, Group> build_local_face_groups(const RawParsed& parsed, const
     if (!front_mat) front_mat = ctx.fallback_material;
     auto back_mat = find_material(parsed, f.back_material_id);
     if (!back_mat) back_mat = ctx.fallback_material;
-    const auto front = material_color(front_mat).value_or(ctx.fallback_color);
-    const auto back = material_color(back_mat).value_or(fallback_back);
+    std::optional<FaceColorKey> face_fallback;
+    if (ctx.use_face_tag_colors && (!front_mat || !back_mat)) {
+      if (const auto fname = face_layer_name(parsed, f, ctx.options)) {
+        face_fallback = default_color(parsed, *fname);
+      }
+    }
+    const auto front =
+        material_color(front_mat).value_or(face_fallback.value_or(ctx.fallback_color));
+    const auto back = material_color(back_mat).value_or(face_fallback.value_or(fallback_back));
 
     std::vector<std::vector<EntityId>> loops;
     for (auto& l : f.loops) {

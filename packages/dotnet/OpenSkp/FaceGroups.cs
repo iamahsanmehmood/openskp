@@ -79,6 +79,11 @@ namespace OpenSkp
             /// means <see cref="FallbackColor"/>.</summary>
             public (int R, int G, int B)? FallbackBackColor;
 
+            /// <summary>Per-face tag colour lookup (<c>Face.LayerId -&gt; (R, G, B)?</c>),
+            /// active when <c>UnpaintedFaces == "tag"</c> (or the file carries no
+            /// style face colours) and no instance paint is inherited (#697).</summary>
+            public Func<long?, (int R, int G, int B)?>? FaceTagColor;
+
             /// <summary>Identifies the definition in a triangulation
             /// failure.</summary>
             public long? DefinitionId;
@@ -670,8 +675,12 @@ namespace OpenSkp
 
                 var (frontMat, frontMatColor) = ctx.ResolveMaterial(fData.MaterialId);
                 var (backMat, backMatColor) = ctx.ResolveMaterial(fData.BackMaterialId);
-                var frontColor = frontMatColor ?? ctx.FallbackColor;
-                var backColor = backMatColor ?? fallbackBackColor;
+                (int R, int G, int B)? faceFallback =
+                    ctx.FaceTagColor != null && (frontMat == null || backMat == null)
+                        ? ctx.FaceTagColor(fData.LayerId)
+                        : null;
+                var frontColor = frontMatColor ?? faceFallback ?? ctx.FallbackColor;
+                var backColor = backMatColor ?? faceFallback ?? fallbackBackColor;
 
                 var loops = new List<List<long>>();
                 foreach (var loop in fData.Loops)

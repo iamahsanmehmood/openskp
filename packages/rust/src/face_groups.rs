@@ -310,6 +310,9 @@ pub struct FaceGroupContext<'a> {
     /// Material painted on the enclosing group/component, inherited whole
     /// (texture, tile size, transparency) by any unpainted face side.
     pub fallback_material: Option<&'a RawMaterial>,
+    /// When `true`, an unpainted face side resolves its own tag's colour before
+    /// falling back to `fallback_color` / `fallback_back_color` (#697).
+    pub use_face_tag_colors: bool,
 }
 
 fn tile_size(material: Option<&RawMaterial>) -> (f64, f64) {
@@ -441,8 +444,22 @@ pub fn build_local_face_groups(
     for f in b.faces.values() {
         let front_mat = find_material(parsed, f.material_id).or(ctx.fallback_material);
         let back_mat = find_material(parsed, f.back_material_id).or(ctx.fallback_material);
-        let front = material_color(front_mat).unwrap_or(ctx.fallback_color);
-        let back = material_color(back_mat).unwrap_or(fallback_back);
+        let face_fallback =
+            if ctx.use_face_tag_colors && (front_mat.is_none() || back_mat.is_none()) {
+                f.layer_id
+                    .filter(|&id| id != 0)
+                    .and_then(|id| parsed.layer_id_to_name.get(&id))
+                    .filter(|name| !name.is_empty() && name.as_str() != "Layer0")
+                    .map(|name| default_color(parsed, name))
+            } else {
+                None
+            };
+        let front = material_color(front_mat)
+            .or(face_fallback)
+            .unwrap_or(ctx.fallback_color);
+        let back = material_color(back_mat)
+            .or(face_fallback)
+            .unwrap_or(fallback_back);
 
         let loops: Vec<Vec<EntityId>> = f
             .loops

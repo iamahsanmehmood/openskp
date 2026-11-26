@@ -375,8 +375,18 @@ namespace OpenSkp
             var curveResourceIdByKey = new Dictionary<string, string?>();
             var preparedCurvesCache = new Dictionary<long, PreparedDefCurves>();
             bool includeCurveSets = options?.IncludeCurveSets ?? true;
-            var faceLayerCache = new Dictionary<long, (string? UniformLayer, string? MajorityLayer)>();
-            (string? UniformLayer, string? MajorityLayer) GetFaceLayerSummary(long? defId, GeometryBuilder builder)
+            (int R, int G, int B)? ResolveFaceTagColor(long? layerId)
+            {
+                if (layerId is long lid && lid != 0 && layerIdToName.TryGetValue(lid, out var fname) &&
+                    !string.IsNullOrEmpty(fname) && fname != "Layer0")
+                {
+                    return GetLayerColor(fname);
+                }
+                return null;
+            }
+
+            var faceLayerCache = new Dictionary<long, (string? UniformLayer, bool HasUntaggedFace)>();
+            (string? UniformLayer, bool HasUntaggedFace) GetFaceLayerSummary(long? defId, GeometryBuilder builder)
             {
                 long key = defId ?? -1L;
                 if (faceLayerCache.TryGetValue(key, out var hit)) return hit;
@@ -479,23 +489,35 @@ namespace OpenSkp
                 if (builder.Faces.Count == 0) return null;
 
                 (int R, int G, int B) fallbackColor, fallbackBackColor;
+                Func<long?, (int R, int G, int B)?>? faceTagColor = null;
+                string colorPart;
                 if (inheritedColor.HasValue)
                 {
                     fallbackColor = fallbackBackColor = inheritedColor.Value;
+                    colorPart = $"{fallbackColor.R},{fallbackColor.G},{fallbackColor.B}";
                 }
                 else if (styleColors.HasValue)
                 {
                     (fallbackColor, fallbackBackColor) = styleColors.Value;
+                    colorPart = $"{fallbackColor.R},{fallbackColor.G},{fallbackColor.B}";
                 }
                 else
                 {
-                    string colorLayer = GetFaceLayerSummary(defId, builder).MajorityLayer ?? layer;
+                    var summary = GetFaceLayerSummary(defId, builder);
+                    string colorLayer = summary.UniformLayer ?? layer;
                     fallbackColor = fallbackBackColor = GetLayerColor(colorLayer);
+                    if (inheritedMaterial == null)
+                    {
+                        faceTagColor = ResolveFaceTagColor;
+                    }
+                    colorPart = (summary.HasUntaggedFace || summary.UniformLayer != null || inheritedMaterial != null)
+                        ? $"{fallbackColor.R},{fallbackColor.G},{fallbackColor.B}"
+                        : "tags";
                 }
                 var matPart = inheritedMaterial != null
                     ? $"|{inheritedMaterial.Name}:{FaceGroups.ResolveTransparency(inheritedMaterial)}:{(inheritedMaterial.Colorized ? 1 : 0)}:{inheritedMaterial.ColorizeType}"
                     : "";
-                var key = $"{(defId.HasValue ? defId.Value.ToString() : "ROOT")}|{fallbackColor.R},{fallbackColor.G},{fallbackColor.B}{matPart}";
+                var key = $"{(defId.HasValue ? defId.Value.ToString() : "ROOT")}|{colorPart}{matPart}";
                 if (fallbackBackColor != fallbackColor)
                 {
                     key += $"/{fallbackBackColor.R},{fallbackBackColor.G},{fallbackBackColor.B}";
@@ -514,6 +536,7 @@ namespace OpenSkp
                     TextureIndexFor = textureIndexFor,
                     FallbackColor = fallbackColor,
                     FallbackBackColor = fallbackBackColor,
+                    FaceTagColor = faceTagColor,
                     DefinitionId = defId,
                 });
 

@@ -236,24 +236,34 @@ InstancedScene build_instanced_scene_raw(RawParsed&& p, const ParseOptions& o) {
 
     FaceColorKey fallback{};
     FaceColorKey fallback_back{};
+    bool use_face_tag_colors = false;
+    std::string key;
     if (auto inherited_color = material_color(inherited_material)) {
       fallback = fallback_back = *inherited_color;
+      key = resource_key(defid, fallback, fallback_back, inherited_material);
     } else if (style_colors) {
       std::tie(fallback, fallback_back) = *style_colors;
+      key = resource_key(defid, fallback, fallback_back, inherited_material);
     } else {
       const auto& summary = get_face_layer_summary(defid, builder);
-      const std::string color_layer = summary.majority_layer.value_or(layer);
+      const std::string color_layer = summary.uniform_layer.value_or(layer);
       fallback = fallback_back = default_color(p, color_layer);
+      use_face_tag_colors = !inherited_material;
+      if (!inherited_material && !summary.has_untagged_face && !summary.uniform_layer) {
+        key = (defid ? std::to_string(*defid) : "ROOT") + std::string("|tags");
+      } else {
+        key = resource_key(defid, fallback, fallback_back, inherited_material);
+      }
     }
-    const auto key = resource_key(defid, fallback, fallback_back, inherited_material);
     auto hit = resource_index_by_key.find(key);
     if (hit != resource_index_by_key.end()) {
       return scene.mesh_resources[hit->second].id;
     }
 
-    auto groups = build_local_face_groups(
-        p, builder,
-        FaceGroupContext{texture_index_for, fallback, fallback_back, inherited_material});
+    auto groups =
+        build_local_face_groups(p, builder,
+                                FaceGroupContext{texture_index_for, fallback, fallback_back,
+                                                 inherited_material, use_face_tag_colors, o});
 
     std::vector<LocalPrimitive> primitives;
     for (auto& kv : groups) {

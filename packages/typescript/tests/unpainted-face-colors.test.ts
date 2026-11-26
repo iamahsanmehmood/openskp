@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import {
   SkpFile,
@@ -223,6 +224,98 @@ describe('Unpainted face colours in scenes and exports (#533)', () => {
     builder.addInstance(part, { layer: tagB, translation: [5, 0, 0] });
     const skp = skpFromBuilder(builder);
     expect(skp.buildInstancedScene().meshResources).toHaveLength(1);
+  });
+
+  it('unpaintedFaces="tag" resolves each face own tag colour and falls back to placement tag (#697)', () => {
+    const rgbA: Rgb = [220, 40, 50];
+    const rgbB: Rgb = [40, 180, 70];
+    const rgbC: Rgb = [50, 90, 230];
+    const rgbD: Rgb = [190, 140, 30];
+    const builder = create();
+    const tagA = builder.addLayer('TagA', { color: rgbA });
+    const tagB = builder.addLayer('TagB', { color: rgbB });
+    const tagC = builder.addLayer('TagC', { color: rgbC });
+    const tagD = builder.addLayer('TagD', { color: rgbD });
+    const panel = builder.addComponentDefinition('Panel', (def) => {
+      def.addFace(
+        [
+          [0, 0, 0],
+          [10, 0, 0],
+          [10, 10, 0],
+          [0, 10, 0],
+        ],
+        { layer: tagA }
+      );
+      def.addFace(
+        [
+          [0, 0, 10],
+          [10, 0, 10],
+          [10, 10, 10],
+          [0, 10, 10],
+        ],
+        { layer: tagB }
+      );
+      def.addFace([
+        [0, 0, 20],
+        [10, 0, 20],
+        [10, 10, 20],
+        [0, 10, 20],
+      ]);
+    });
+    builder.addInstance(panel, { layer: tagC });
+    builder.addInstance(panel, { layer: tagD, translation: [0, 0, 100] });
+
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openskp-697-'));
+    try {
+      const filePath = path.join(tmpDir, 'per_face_tags.skp');
+      builder.save(filePath);
+      const skp = SkpFile.open(filePath);
+      const model = skp.parse();
+
+      const baked = skp.buildScene({ unpaintedFaces: 'tag' });
+      const bakedByZ = Object.fromEntries(
+        baked.glbPrimitives.map((p) => [
+          Math.round(p.positions[1] / 0.0254),
+          [rgbOf(baked, p.materialIndex), doubleSidedOf(baked, p.materialIndex), Boolean(p.unpaintedBack)],
+        ])
+      );
+      expect(bakedByZ).toEqual({
+        0: [rgbA, true, false],
+        10: [rgbB, true, false],
+        20: [rgbC, true, false],
+        100: [rgbA, true, false],
+        110: [rgbB, true, false],
+        120: [rgbD, true, false],
+      });
+
+      const instanced = skp.buildInstancedScene({ unpaintedFaces: 'tag' });
+      expect(instanced.meshResources).toHaveLength(2);
+      const resByZ = instanced.meshResources.map((r) =>
+        Object.fromEntries(
+          r.primitives.map((p) => [
+            Math.round(p.positions[1] / 0.0254),
+            [rgbOf(instanced, p.materialIndex), doubleSidedOf(instanced, p.materialIndex), Boolean(p.unpaintedBack)],
+          ])
+        )
+      );
+      expect(resByZ).toEqual([
+        { 0: [rgbA, true, false], 10: [rgbB, true, false], 20: [rgbC, true, false] },
+        { 0: [rgbA, true, false], 10: [rgbB, true, false], 20: [rgbD, true, false] },
+      ]);
+
+      const styleInst = skp.buildInstancedScene();
+      expect(styleInst.meshResources).toHaveLength(1);
+      expect(
+        styleInst.meshResources[0].primitives
+          .map((p) => [rgbOf(styleInst, p.materialIndex), Boolean(p.unpaintedBack)])
+          .sort((a, b) => Number(a[1]) - Number(b[1]))
+      ).toEqual([
+        [model.faceFrontColor, false],
+        [model.faceBackColor, true],
+      ]);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 
   it('single-colour exports and Fragments keep one copy of each unpainted face', () => {

@@ -357,10 +357,16 @@ export function buildInstancedSceneFromParsed(
    * separate key component - the same (definition, material, layer) always
    * produces byte-identical buffers.
    */
+  const resolveFaceTagColor = (layerId: number | null | undefined) => {
+    const fname = layerId ? (layerIdToName.get(layerId) ?? '') : '';
+    return fname && fname !== 'Layer0' ? getLayerColor(fname) : null;
+  };
+
   function resourceVariantKey(
     defId: number | string,
     inheritedMaterial: Material | undefined,
-    layer: string
+    layer: string,
+    summary: FaceLayerSummary
   ): string {
     const tex = inheritedMaterial?.texture;
     const texKey = tex && tex.data && tex.data.length > 0
@@ -369,16 +375,20 @@ export function buildInstancedSceneFromParsed(
     const matKey = inheritedMaterial
       ? `${inheritedMaterial.name}|${inheritedMaterial.color.r},${inheritedMaterial.color.g},${inheritedMaterial.color.b}|${inheritedMaterial.colorized ? 1 : 0}:${inheritedMaterial.colorizeType}|${texKey}`
       : '-';
+    if (!inheritedMaterial && !styleColors && !summary.hasUntaggedFace && summary.uniformLayer === null) {
+      return `${String(defId)}|${matKey}|tags`;
+    }
+    const colorLayer = summary.uniformLayer ?? layer;
     const fallbackColor = inheritedMaterial
       ? inheritedMaterial.color
       : styleColors
         ? styleColors[0]
-        : getLayerColor(layer);
+        : getLayerColor(colorLayer);
     const fallbackBackColor = inheritedMaterial
       ? inheritedMaterial.color
       : styleColors
         ? styleColors[1]
-        : getLayerColor(layer);
+        : getLayerColor(colorLayer);
     const backPart =
       fallbackBackColor.r !== fallbackColor.r ||
       fallbackBackColor.g !== fallbackColor.g ||
@@ -393,7 +403,7 @@ export function buildInstancedSceneFromParsed(
     let hit = faceLayerCache.get(defId);
     if (hit !== undefined) return hit;
     const d = defsDict.get(defId);
-    hit = d ? summarizeFaceLayers(d.builder, layerIdToName) : { uniformLayer: null, majorityLayer: null };
+    hit = d ? summarizeFaceLayers(d.builder, layerIdToName) : { uniformLayer: null, hasUntaggedFace: false };
     faceLayerCache.set(defId, hit);
     return hit;
   }
@@ -464,11 +474,12 @@ export function buildInstancedSceneFromParsed(
     const d = defsDict.get(defId);
     if (!d || d.builder.faces.size === 0) return undefined;
 
+    const summary = getFaceLayerSummary(defId);
     const colorLayer =
       !inheritedMaterial && !styleColors
-        ? (getFaceLayerSummary(defId).majorityLayer ?? layer)
+        ? (summary.uniformLayer ?? layer)
         : layer;
-    const key = resourceVariantKey(defId, inheritedMaterial, colorLayer);
+    const key = resourceVariantKey(defId, inheritedMaterial, layer, summary);
     const hit = resourceIdByKey.get(key);
     if (hit !== undefined) return hit;
 
@@ -483,6 +494,7 @@ export function buildInstancedSceneFromParsed(
       inheritedMaterial,
       fallbackLayerColor: fallbackColor,
       fallbackBackColor,
+      faceTagColor: !inheritedMaterial && !styleColors ? resolveFaceTagColor : undefined,
       definitionId: defId,
       respectVisibility: options?.respectEdgeVisibility,
       frontSideOnly: options?.frontSideOnly,

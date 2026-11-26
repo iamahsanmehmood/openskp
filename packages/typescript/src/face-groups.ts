@@ -59,6 +59,8 @@ export interface FaceGroupContext {
    * inherited (the model's back face colour). Defaults to
    * {@link fallbackLayerColor}. */
   fallbackBackColor?: { r: number; g: number; b: number };
+  /** Per-face tag colour resolver used in `unpaintedFaces: 'tag'` mode (#697). */
+  faceTagColor?: (layerId: number | null | undefined) => { r: number; g: number; b: number } | null;
   /** Identifies the definition in a triangulation failure. */
   definitionId: number | string;
   /** Skip faces SketchUp itself would not draw (see
@@ -330,8 +332,12 @@ export function buildLocalFaceGroups(
     // panel instead of covering a third of it.
     const frontMat = ctx.resolveMaterial((fData as any).materialId) ?? ctx.inheritedMaterial;
     const backMat = ctx.resolveMaterial((fData as any).backMaterialId) ?? ctx.inheritedMaterial;
-    const frontColor = frontMat?.color ?? fallbackColor;
-    const backColor = backMat?.color ?? fallbackBackColor;
+    const faceFallback =
+      ctx.faceTagColor && (!frontMat || !backMat)
+        ? ctx.faceTagColor((fData as any).layerId)
+        : null;
+    const frontColor = frontMat?.color ?? faceFallback ?? fallbackColor;
+    const backColor = backMat?.color ?? faceFallback ?? fallbackBackColor;
 
     const loops: number[][] = [];
     for (const loop of fData.loops) {
