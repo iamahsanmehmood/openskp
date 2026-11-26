@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — TypeScript: colorized textures are baked into GLB files (#285)
+
+- `toGLB` and `toInstancedGLB` with `{ textures: true }` bake colorized PNG textures out of the box (using the existing `fflate` dependency, shift or tint within 1/255 of SketchUp's own result) with a white material factor, once per colour.
+- Colorized JPEG textures are baked at quality 95 when a synchronous `imageCodec` (`decode` / `encode`, for example `jpeg-js`) is passed on `GlbOptions` or `InstancedGlbOptions`; without `imageCodec`, JPEG textures are still embedded and colorized ones keep the tinted factor, with one warning.
+- JPEG textures lose their EXIF `APP1` block (orientation included) without being re-encoded, and textures above 178,956,970 pixels (read from the header before decoding) or ones that fail to decode keep their source bytes and the tinted factor, with one warning.
+
 ### Added — Python: `openskp info` and `openskp convert` on the command line (#570)
 
 - `openskp info FILE` prints the SketchUp version, units, counts of definitions, instances, faces, tags and materials, and the tag and material names; `openskp convert FILE OUTPUT` writes GLB, OBJ, STL, PLY, DXF, IFC or JSON, picked from the extension. `openskp FILE` still works and runs `info` (by @isyanpcr, #689).

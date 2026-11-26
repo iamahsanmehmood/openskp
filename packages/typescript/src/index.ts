@@ -2,7 +2,8 @@ import { extractSkpContents, readMetaUnits } from './vff';
 import { iterTopLevelLazy, readU32, parseVarInt, TlvNode } from './parser';
 import { SkpParseError } from './errors';
 import { LogLevel, ParseOptions, PROGRESS_INTERVAL, emitLog, emitProgress } from './observability';
-import { filterGltfTextures } from './face-groups';
+import { resolveGltfTextures } from './glb-textures';
+import type { ImageCodec } from './glb-textures';
 import {
   GeometryBuilder,
   collectLayers,
@@ -62,6 +63,7 @@ export type { FragmentExportOptions } from './fragments';
 export { extractThumbnail } from './thumbnail';
 export type { SkpThumbnail } from './thumbnail';
 export type { InstancedGlbOptions } from './instanced-glb';
+export type { ImageCodec, RawRgbaImage } from './glb-textures';
 export * from './errors';
 export * from './observability';
 export { toOBJ, toMTL, exportOBJ } from './obj';
@@ -498,6 +500,11 @@ export interface GlbOptions {
    * exporter has always produced.
    */
   textures?: boolean;
+  /** Optional synchronous codec (`decode` / `encode`, e.g. `jpeg-js`) used to
+   * bake colorized JPEG textures when `textures: true` (PNG textures are baked
+   * natively via `fflate`). Without it, colorized JPEGs keep their source bytes
+   * and tinted material factor with one warning. */
+  imageCodec?: ImageCodec;
   /** Optional log hook receiving warnings (e.g. when a non-PNG/JPEG texture
    * kept via `originalTextures: true` is omitted from the GLB). */
   onLog?: (level: LogLevel, message: string) => void;
@@ -508,11 +515,12 @@ export function toGLB(scene: SkpScene, options?: GlbOptions): Uint8Array {
   const rawMaterials = scene.gltfMaterials || [];
   // Off by default: embedding the images makes the export several times
   // larger, and a caller who only wants geometry should not pay for it.
-  const { textures: sceneTextures, materials } = filterGltfTextures(
+  const { textures: sceneTextures, materials } = resolveGltfTextures(
     scene.textures || [],
     rawMaterials,
     Boolean(options?.textures),
-    options?.onLog
+    options?.onLog,
+    options?.imageCodec
   );
 
   // Narrow each index buffer to UNSIGNED_SHORT where every index fits,

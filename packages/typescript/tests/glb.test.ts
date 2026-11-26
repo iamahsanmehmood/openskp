@@ -245,13 +245,20 @@ describe('toGLB', () => {
     ]) {
       const { json: withTexJson } = parseGlb(glbWithTex);
       expect(withTexJson.materials).toHaveLength(2);
+      expect(withTexJson.images).toHaveLength(2);
+      expect(withTexJson.textures).toHaveLength(2);
       const plainGlbMat = withTexJson.materials.find((m: any) => !m.extras);
       const colGlbMat = withTexJson.materials.find((m: any) => m.extras?.sketchup?.colorized);
-      expect(plainGlbMat.pbrMetallicRoughness.baseColorTexture).toEqual({ index: 0 });
+      const plainTexIdx = plainGlbMat.pbrMetallicRoughness.baseColorTexture.index;
+      const colTexIdx = colGlbMat.pbrMetallicRoughness.baseColorTexture.index;
+      expect(plainTexIdx).toBeGreaterThanOrEqual(0);
+      expect(plainTexIdx).toBeLessThan(2);
+      expect(colTexIdx).toBeGreaterThanOrEqual(0);
+      expect(colTexIdx).toBeLessThan(2);
+      expect(plainTexIdx).not.toBe(colTexIdx);
       expect(plainGlbMat.pbrMetallicRoughness.baseColorFactor).toEqual([1, 1, 1, 1]);
       expect(colGlbMat.extras).toEqual({ sketchup: { colorized: true, colorize_type: 1 } });
-      expect(colGlbMat.pbrMetallicRoughness.baseColorTexture).toEqual({ index: 0 });
-      expect(colGlbMat.pbrMetallicRoughness.baseColorFactor).toEqual([200 / 255, 80 / 255, 60 / 255, 1]);
+      expect(colGlbMat.pbrMetallicRoughness.baseColorFactor).toEqual([1, 1, 1, 1]);
     }
 
     const expectedLinearTint = [
