@@ -36,9 +36,9 @@ This project follows the [Contributor Covenant v2.1](CODE_OF_CONDUCT.md). By par
 |:---------|:------------|
 | Python | Python 3.10+, pip |
 | TypeScript | Node.js 22.18+, 24.11+ or 26+ (the build and test tooling needs it; the published package itself runs on 22.12+), npm or pnpm |
-| .NET | .NET SDK 8.0+ |
+| .NET | .NET SDK 9.0+ (the test projects target `net9.0`; the published `OpenSkp` and `OpenSkp.Fragments` libraries target `netstandard2.0`) |
 | Dart | Dart SDK 3.0+ |
-| C++ | CMake 3.21+, a C++17 compiler |
+| C++ | CMake 3.21+, a C++17 compiler, and a C compiler (for bundled `miniz`) |
 | Rust | Rust 1.88 or newer (via `rustup`; CI tests stable and 1.88); the `wasm32-unknown-unknown` target only for the viewer |
 | All | Git, a good hex editor (recommended) |
 
@@ -87,14 +87,18 @@ npm test
 ### .NET
 
 ```bash
-cd packages/dotnet/OpenSkp.Tests
-dotnet test
+dotnet test packages/dotnet/OpenSkp.Tests/OpenSkp.Tests.csproj
+dotnet test packages/dotnet/OpenSkp.Fragments.Tests/OpenSkp.Fragments.Tests.csproj
 ```
 
 ### Dart
 
 ```bash
 cd packages/dart
+dart pub get
+dart test
+
+cd ../dart_fragments
 dart pub get
 dart test
 ```
@@ -216,7 +220,7 @@ test(python): add regression test for nested component instances
 ### Review Process
 
 - At least **one maintainer approval** is required
-- CI must pass (per-language lint/format checks and test suites)
+- CI must pass (per-language lint/format checks and test suites, plus cross-writer parity and reader fuzzing when applicable)
 - Discussions should be resolved before merge
 - Squash merge is preferred for single-feature PRs
 
@@ -288,7 +292,7 @@ local executable.
 - **Explicit over implicit** — Name things clearly, avoid magic numbers
 - **Parse, don't validate** — Convert raw bytes into typed structures as early as possible
 - **Fail loudly** — Throw descriptive errors with byte offsets when parsing fails
-- **No SketchUp SDK; keep dependencies minimal** — No proprietary SDK in any port. Only .NET (`OpenSkp`) and Rust use the standard library alone; Python requires `numpy`, `shapely`, `mapbox_earcut` (prebuilt wheels), `trimesh`, and `defusedxml`; TypeScript depends on `earcut`, `fflate`, and `flatbuffers`; Dart depends on `archive`, `crypto`, `meta`, and `xml`; C++ fetches `miniz`, `TinyGLTF`, and `FlatBuffers` headers privately via CMake. Avoid adding new runtime dependencies without a clear need
+- **No SketchUp SDK; keep dependencies minimal** — No proprietary SDK in any port. Only .NET (`OpenSkp`, BCL only; the separate opt-in `OpenSkp.Fragments` package adds `Google.FlatBuffers`) and Rust (`std` only, zero crates) require no third-party dependencies in the core package; Python requires `numpy>=2.2.6`, `trimesh>=3.0`, `shapely>=1.8`, `defusedxml>=0.7.1`, and `mapbox_earcut>=1.0` (`numpy`, `shapely`, and `mapbox_earcut` ship prebuilt native wheels), with optional `openskp[textures]` (`pillow>=12.3.0`) and `openskp[fragments]` (`flatbuffers>=24.0`) extras; TypeScript depends on pure-JS `earcut`, `fflate`, and `flatbuffers`; Dart `openskp` depends on pure-Dart `archive`, `crypto`, `meta`, and `xml` (and the separate unpublished `openskp_fragments` package adds `flat_buffers`); C++ fetches `miniz`, `TinyGLTF`, and `FlatBuffers` headers privately via CMake (`GoogleTest` only when `OPENSKP_BUILD_TESTS=ON`), with no transitive dependencies for installed consumers. Avoid adding new runtime dependencies without a clear need
 - **Cross-platform parity** — If you add a feature in one language, document the expected behavior so other platforms can follow
 
 ---

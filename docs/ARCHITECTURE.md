@@ -228,8 +228,8 @@ languages' (and Rust's) callback-based approach does. See
 Python originally used `shapely` (a full computational-geometry library,
 Delaunay-style). TypeScript used [earcut](https://github.com/mapbox/earcut)
 (Mapbox's compact ear-clipping algorithm with hole support) from the start.
-When scene-baking was ported to .NET, Dart, and C++, `earcut` was ported
-faithfully (`Earcut.cs`, `earcut.dart`, `earcut.cpp`), and Python's own scene
+When scene-baking was ported to .NET, Dart, C++, and Rust, `earcut` was ported
+faithfully (`Earcut.cs`, `earcut.dart`, `earcut.cpp`, `earcut.rs`), and Python's own scene
 builder (`_core.py`) likewise switched to `mapbox_earcut` (with a fan fast-path
 for convex polygons and `shapely.ops.unary_union` retained to merge
 overlapping or touching holes before ear-clipping; only the standalone
@@ -240,13 +240,15 @@ polygon — the *rendered result* is equivalent, not the internal triangle split
 
 ## Cross-platform dependency map
 
-| Component | Python | TypeScript | .NET | Dart | C++ |
-|---|---|---|---|---|---|
-| ZIP/VFF extraction | `zipfile` | `fflate` | `System.IO.Compression` | `archive` | private miniz 3.1.2 |
-| XML parsing | `defusedxml` | manual/DOM | `System.Xml` | `xml` | focused scanner |
-| Triangulation | `mapbox_earcut` (`shapely` for overlapping holes & `triangulator.py`) | `earcut` | ported earcut | ported earcut | ported earcut |
-| Matrix math | `numpy` | native | native | native | native |
-| GLB/OBJ/STL/PLY/DXF/IFC/JSON export | all (native / `trimesh`) | all (native) | all (native) | all (native) | all (native + private TinyGLTF 2.9.7) |
+| Component | Python | TypeScript | .NET | Dart | C++ | Rust *(git)* |
+|---|---|---|---|---|---|---|
+| ZIP / DEFLATE | `zipfile` / `zlib` | `fflate` (`^0.8.0`) | `System.IO.Compression` | `archive` (`^4.0.9`) | private `miniz` 3.1.2 | in-tree `inflate.rs` / `deflate.rs` / `zip.rs` (`std` only) |
+| XML parsing | `defusedxml` (`>=0.7.1`) | manual / DOM | `System.Xml` | `xml` (`^7.0.1`) | focused scanner | focused scanner |
+| Triangulation | `mapbox_earcut` (`>=1.0`; `shapely >=1.8` for overlapping holes & `triangulator.py`) | `earcut` (`^3.1.0`) | ported earcut | ported earcut | ported earcut | ported earcut |
+| Matrix math, hashing & annotations | `numpy` (`>=2.2.6`) + `hashlib` | native | native + `System.Security.Cryptography` | native + `crypto` (`^3.0.3`), `meta` (`^1.9.0`) | native | native (`std` only) |
+| GLB/OBJ/STL/PLY/DXF/IFC/JSON export | native + `trimesh` (`>=3.0`) | all native | all native | all native | native + private `TinyGLTF` 2.9.7 | all native |
+| GLB colorized texture baking | optional `pillow` (`>=12.3.0`, `openskp[textures]`) | built-in PNG (`fflate`); optional `imageCodec` for JPEG | built-in PNG (BCL); optional `ISkpImageCodec` for JPEG | built-in PNG (`archive`); optional `SkpImageCodec` for JPEG | private `stb_image` / `stb_image_write` (from `TinyGLTF` 2.9.7) | built-in PNG (`inflate`/`deflate`); optional `ImageCodec` for JPEG |
+| Fragments (`.frag`) serialization | optional `flatbuffers` (`>=24.0`, `openskp[fragments]`) | `flatbuffers` (`^25.9.23`) | `Google.FlatBuffers` (`25.2.10`, in `OpenSkp.Fragments`) | `flat_buffers` (`^25.9.23`, in `openskp_fragments`) | private `FlatBuffers` 25.12.19 headers | in-tree `flatbuffers.rs` (`std` only) |
 
 ## Testing philosophy
 
@@ -255,7 +257,12 @@ fixture (not just synthetic byte sequences) checked in under
 `tests/fixtures/` (or the language's equivalent), with assertions on exact
 face/edge/vertex counts, specific vertex coordinates, material names, and
 bounding boxes — cross-validated against the other languages' output for
-the *same file*. Beyond the checked-in small fixtures, larger real
+the *same file*. In CI, `.github/workflows/ci-writer-parity.yml` diffs writer
+output byte-for-byte across languages, `.github/workflows/ci-cpp.yml` runs the
+C++ test suite under AddressSanitizer and UndefinedBehaviorSanitizer, and
+`.github/workflows/ci-fuzz.yml` mutates the checked-in fixtures (bit flips,
+truncations, insertions, deep nesting) across all six readers under per-file
+time and memory limits. Beyond the checked-in small fixtures, larger real
 production files (tens to hundreds of MB, sourced from actual SketchUp/BIM
 workflows) are used for memory and performance verification but are not
 committed to the repository.
