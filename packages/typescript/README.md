@@ -368,6 +368,30 @@ painted differently on each side; STL does not carry colour. GLB and the
 colour-capable OBJ, PLY, DXF, IFC and Fragments exports retain separately
 painted sides.
 
+### Colorized textures in GLB
+
+With `{ textures: true }`, `toGLB()` and `toInstancedGLB()` bake SketchUp's
+colorized PNG textures (hue shift and tint) automatically using the existing
+`fflate` dependency. To bake colorized JPEG textures synchronously as well,
+pass an `imageCodec` — for example with [`jpeg-js`](https://www.npmjs.com/package/jpeg-js)
+(install separately if needed; not a dependency of `openskp`):
+
+```typescript
+import * as jpeg from 'jpeg-js';
+import { toGLB, type ImageCodec } from 'openskp';
+
+const jpegCodec: ImageCodec = {
+  decode: (bytes) => jpeg.decode(bytes, { useTArray: true }),
+  encode: (image, _mimeType, quality) => jpeg.encode(image, quality).data,
+};
+
+const glb = toGLB(scene, { textures: true, imageCodec: jpegCodec });
+```
+
+Without `imageCodec`, JPEG textures are still embedded (with any EXIF `APP1`
+orientation block stripped) and colorized ones keep their material tint factor,
+logging one warning via `onLog`.
+
 ## Writing
 
 OpenSKP can also *create* new `.skp` files from scratch — a genuine,

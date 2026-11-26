@@ -1,5 +1,6 @@
 import type { InstancedScene, InstancedNode } from './instanced';
-import { filterGltfTextures } from './face-groups';
+import { resolveGltfTextures } from './glb-textures';
+import type { ImageCodec } from './glb-textures';
 import { encodeIndices } from './gltf-indices';
 import type { LogLevel } from './observability';
 
@@ -10,6 +11,11 @@ export interface InstancedGlbOptions {
    * {@link toGLB}: photographic textures can multiply the file size, and
    * the geometry alone is what most callers are after. */
   textures?: boolean;
+  /** Optional synchronous codec (`decode` / `encode`, e.g. `jpeg-js`) used to
+   * bake colorized JPEG textures when `textures: true` (PNG textures are baked
+   * natively via `fflate`). Without it, colorized JPEGs keep their source bytes
+   * and tinted material factor with one warning. */
+  imageCodec?: ImageCodec;
   /** Optional log hook receiving warnings (e.g. when a non-PNG/JPEG texture
    * kept via `originalTextures: true` is omitted from the GLB). */
   onLog?: (level: LogLevel, message: string) => void;
@@ -78,11 +84,12 @@ export function toInstancedGLB(
 ): Uint8Array {
   const resources = scene.meshResources || [];
   const rawMaterials = scene.gltfMaterials || [];
-  const { textures: sceneTextures, materials } = filterGltfTextures(
+  const { textures: sceneTextures, materials } = resolveGltfTextures(
     scene.textures || [],
     rawMaterials,
     Boolean(options?.textures),
-    options?.onLog
+    options?.onLog,
+    options?.imageCodec
   );
 
   // Narrow each index buffer to UNSIGNED_SHORT where every index fits.
