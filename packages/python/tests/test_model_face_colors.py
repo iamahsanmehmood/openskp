@@ -23,7 +23,7 @@ import pathlib
 
 import pytest
 
-from openskp import SkpFile
+from openskp import DocumentOptions, SkpFile, create
 
 FIXTURES = pathlib.Path(__file__).parent / "fixtures"
 
@@ -66,3 +66,64 @@ def test_the_current_colours_not_a_saved_style():
     model = SkpFile.open(FIXTURES / "face_colors_2021.skp").parse()
     assert {(s.front_color, s.back_color) for s in model.styles} >= {SDK_DEFAULT, WRITTEN}
     assert (model.face_front_color, model.face_back_color) == WRITTEN
+
+
+COLOR_BY_TAG_CASES = {
+    "color_by_tag_v4.skp": True,
+    "color_by_tag_v5.skp": True,
+    "color_by_tag_v6.skp": True,
+    "color_by_tag_2017.skp": True,
+    "color_by_tag_2019.skp": True,
+    "color_by_tag_2020.skp": True,
+    "color_by_tag_2020_off.skp": False,
+    "color_by_tag_2021.skp": True,
+    "color_by_tag_2021_style.skp": True,
+    "color_by_tag_2021_off.skp": False,
+    "legacy_v3_synthetic.skp": False,
+    **{name: False for name in CASES},
+}
+
+
+@pytest.mark.parametrize("name", sorted(COLOR_BY_TAG_CASES))
+def test_color_by_tag_matches_sketchup(name):
+    model = SkpFile.open(FIXTURES / name).parse()
+    assert model.color_by_tag is COLOR_BY_TAG_CASES[name]
+
+
+def test_color_by_tag_roundtrips_classic_writer(tmp_path):
+    quad = [(0.0, 0.0, 0.0), (10.0, 0.0, 0.0), (10.0, 10.0, 0.0), (0.0, 10.0, 0.0)]
+    for label, opts, expected in [
+        ("default", None, False),
+        ("off", DocumentOptions(style_items={7011: 0}), False),
+        ("on", DocumentOptions(style_items={7011: 1}), True),
+    ]:
+        out = tmp_path / f"writer_{label}.skp"
+        builder = create()
+        if opts is not None:
+            builder.set_document_options(opts)
+        builder.add_face(quad)
+        builder.save(str(out))
+        assert SkpFile.open(out).parse().color_by_tag is expected
+
+
+@pytest.mark.parametrize(
+    ("on_name", "off_name"),
+    [
+        ("color_by_tag_2020.skp", "color_by_tag_2020_off.skp"),
+        ("color_by_tag_2021.skp", "color_by_tag_2021_off.skp"),
+    ],
+)
+def test_color_by_tag_does_not_change_scene_output(on_name, off_name):
+    skp_on = SkpFile.open(FIXTURES / on_name)
+    skp_off = SkpFile.open(FIXTURES / off_name)
+    assert skp_on.parse().color_by_tag is True
+    assert skp_off.parse().color_by_tag is False
+
+    scene_on = skp_on.build_scene()
+    scene_off = skp_off.build_scene()
+    assert scene_on.gltf_materials == scene_off.gltf_materials
+
+    inst_on = skp_on.build_instanced_scene()
+    inst_off = skp_off.build_instanced_scene()
+    assert inst_on.gltf_materials == inst_off.gltf_materials
+

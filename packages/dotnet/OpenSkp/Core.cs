@@ -33,6 +33,7 @@ namespace OpenSkp
             public Dictionary<string, Geometry.RawMaterial> MaterialsByFolder = new Dictionary<string, Geometry.RawMaterial>();
             public List<Geometry.RawStyle> Styles = new List<Geometry.RawStyle>();
             public ((int R, int G, int B) Front, (int R, int G, int B) Back)? FaceColors = null;
+            public bool ColorByTag = false;
             public Dictionary<long, Geometry.RawDefinition> DefsDict = new Dictionary<long, Geometry.RawDefinition>();
             public Geometry.RawDefinition Root = new Geometry.RawDefinition { Guid = "ROOT", Name = "ROOT_MODEL" };
             public int UnreadRootEntities = 0;
@@ -210,6 +211,17 @@ namespace OpenSkp
                 faceColors = null;
             }
 
+            bool colorByTag;
+            try
+            {
+                colorByTag = ModelColorByTag(modelDat);
+            }
+            catch (Exception e) when (!(e is OutOfMemoryException))
+            {
+                Observability.Log(options, SkpLogLevel.Debug, $"Failed to parse model ColorByTag: {e.Message}");
+                colorByTag = false;
+            }
+
             return new RawParsed
             {
                 Version = version,
@@ -224,6 +236,7 @@ namespace OpenSkp
                 MaterialsByFolder = materialsByFolder,
                 Styles = styles,
                 FaceColors = faceColors,
+                ColorByTag = colorByTag,
                 DefsDict = defsDictRaw,
                 Root = new Geometry.RawDefinition { Guid = "ROOT", Name = "ROOT_MODEL", Builder = rootBuilder },
             };
@@ -365,6 +378,45 @@ namespace OpenSkp
                 at += 1;
             }
             return null;
+        }
+
+        private static readonly byte[] RenderingOptionsOuterTag = { 0xFB, 0x01 };
+
+        private static bool ModelColorByTag(ChunkedBuffer modelDat)
+        {
+            long at = 0;
+            while (at >= 0 && at + 12 <= modelDat.Length)
+            {
+                at = modelDat.IndexOf(RenderingOptionsOuterTag, at);
+                if (at < 0 || at + 12 > modelDat.Length) break;
+                if (modelDat[at + 6] == 0x3C && modelDat[at + 7] == 0x73)
+                {
+                    uint outerLen = modelDat.ReadU32(at + 2);
+                    uint innerLen = modelDat.ReadU32(at + 8);
+                    if (outerLen >= 6
+                        && outerLen - 6 == innerLen
+                        && innerLen <= 65536
+                        && at + 12 + innerLen <= modelDat.Length)
+                    {
+                        byte[] body = modelDat.Slice(at + 12, (int)innerLen);
+                        int p = 0;
+                        while (p + 6 <= body.Length)
+                        {
+                            ushort tag = Tlv.ReadU16(body, p);
+                            uint sz = Tlv.ReadU32(body, p + 2);
+                            p += 6;
+                            if (sz > (uint)(body.Length - p)) break;
+                            if (tag == 0x7347 && sz == 1 && body[p] <= 1)
+                            {
+                                return body[p] == 1;
+                            }
+                            p += (int)sz;
+                        }
+                    }
+                }
+                at += 1;
+            }
+            return false;
         }
     }
 }

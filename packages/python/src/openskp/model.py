@@ -839,6 +839,10 @@ class SkpModel:
             files and from classic files of SketchUp 4 to 2020; ``None``
             when the file does not give it (SketchUp 3).
         face_back_color: The same for the back side of a face.
+        color_by_tag: Whether SketchUp's "Color by Tag" (``DisplayColorByLayer``)
+            style setting is enabled in the model's active rendering options.
+            Read from 2021+ files and from classic files of SketchUp 4 to 2020;
+            ``False`` when off or when the file does not give it (SketchUp 3).
         attribute_dictionaries: The model entity's own attribute
             dictionaries (2021+ files; not read from classic files yet). A
             component saved as its own file keeps its Dynamic Components
@@ -874,6 +878,7 @@ class SkpModel:
     styles: List[Style] = field(default_factory=list)
     face_front_color: Optional[Tuple[int, int, int]] = None
     face_back_color: Optional[Tuple[int, int, int]] = None
+    color_by_tag: bool = False
     units: Optional[str] = None
     unread_root_entities: int = 0
     attribute_dictionaries: Dict[str, Dict[str, Any]] = field(default_factory=dict)
@@ -1209,6 +1214,7 @@ class SkpFile:
         face_colors = parsed.get("face_colors")
         if face_colors:
             model.face_front_color, model.face_back_color = face_colors
+        model.color_by_tag = bool(parsed.get("color_by_tag", False))
 
         # Store raw parsed data for export use
         self._parsed = parsed

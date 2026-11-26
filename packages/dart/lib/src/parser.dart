@@ -203,6 +203,7 @@ class SkpFile {
       model.faceFrontColor = faceColors.$1;
       model.faceBackColor = faceColors.$2;
     }
+    model.colorByTag = parsed.colorByTag;
 
     return model;
   }

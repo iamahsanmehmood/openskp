@@ -1082,6 +1082,7 @@ pub fn parse_legacy(data: &[u8], o: &ParseOptions) -> Result<RawParsed, SkpParse
         })?;
     }
     out.face_colors = model_face_colors(data, walked.ar.ver);
+    out.color_by_tag = model_color_by_tag(data, walked.ar.ver);
     // The model's own dictionaries, which the root definition shares.
     out.model_attribute_dicts = premodel_attribute_dictionaries(data, walked.ar.ver);
     out.root.no_scale_mask = root_no_scale_mask(data, walked.ar.ver);
@@ -1292,8 +1293,17 @@ fn face_colors_distance_after_camera(ver: i32) -> Option<usize> {
     }
 }
 
-fn model_face_colors(data: &[u8], ver: i32) -> Option<(Color3, Color3)> {
-    let distance = face_colors_distance_after_camera(ver)?;
+fn color_by_tag_distance_after_camera(ver: i32) -> Option<usize> {
+    match ver {
+        4 | 5 => Some(29),
+        6..=16 => Some(31),
+        17 | 18 => Some(32),
+        19 | 20 => Some(33),
+        _ => None,
+    }
+}
+
+fn camera_end_offset(data: &[u8], ver: i32) -> Option<usize> {
     let cam_end = (0..data.len().saturating_sub(12)).find_map(|i| {
         if data[i] == 0xFF
             && data[i + 1] == 0xFF
@@ -1334,11 +1344,20 @@ fn model_face_colors(data: &[u8], ver: i32) -> Option<(Color3, Color3)> {
         return None;
     }
     p += 2 * n;
-    let tail = (if ver >= 6 { 33 } else { 10 }) + distance;
+    let tail = if ver >= 6 { 33 } else { 10 };
     if tail > data.len() - p {
         return None;
     }
-    let at = p + tail;
+    Some(p + tail)
+}
+
+fn model_face_colors(data: &[u8], ver: i32) -> Option<(Color3, Color3)> {
+    let distance = face_colors_distance_after_camera(ver)?;
+    let cam_end = camera_end_offset(data, ver)?;
+    if distance > data.len() - cam_end {
+        return None;
+    }
+    let at = cam_end + distance;
     if 8 > data.len() - at || data[at + 3] != 0xFF || data[at + 7] != 0xFF {
         return None;
     }
@@ -1346,4 +1365,18 @@ fn model_face_colors(data: &[u8], ver: i32) -> Option<(Color3, Color3)> {
         [data[at], data[at + 1], data[at + 2]],
         [data[at + 4], data[at + 5], data[at + 6]],
     ))
+}
+
+fn model_color_by_tag(data: &[u8], ver: i32) -> bool {
+    let Some(distance) = color_by_tag_distance_after_camera(ver) else {
+        return false;
+    };
+    let Some(cam_end) = camera_end_offset(data, ver) else {
+        return false;
+    };
+    if distance >= data.len() - cam_end {
+        return false;
+    }
+    let val = data[cam_end + distance];
+    val <= 1 && val == 1
 }

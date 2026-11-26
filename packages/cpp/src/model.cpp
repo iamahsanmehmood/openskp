@@ -338,6 +338,7 @@ SkpModel build_model(RawParsed&& p, const ParseOptions& o) {
     m.face_front_color = p.face_colors->first;
     m.face_back_color = p.face_colors->second;
   }
+  m.color_by_tag = p.color_by_tag;
   return m;
 }
 }  // namespace openskp

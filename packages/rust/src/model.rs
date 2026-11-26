@@ -1041,6 +1041,11 @@ pub struct SkpModel {
     pub face_front_color: Option<Color3>,
     /// The same for the back side of a face.
     pub face_back_color: Option<Color3>,
+    /// Whether SketchUp's "Color by Tag" (`DisplayColorByLayer`) style setting
+    /// is enabled in the model's active rendering options. Read from 2021+
+    /// files and from classic files of SketchUp 4 to 2020; `false` when off or
+    /// when the file does not give it (SketchUp 3).
+    pub color_by_tag: bool,
     /// Dictionaries attached to the model itself (VFF only), values typed.
     pub attribute_dictionaries: ParsedAttrDictionaries,
     pub(crate) root: Definition,
@@ -1062,6 +1067,7 @@ impl Default for SkpModel {
             styles: Vec::new(),
             face_front_color: None,
             face_back_color: None,
+            color_by_tag: false,
             attribute_dictionaries: BTreeMap::new(),
             root: Definition {
                 id: 0,

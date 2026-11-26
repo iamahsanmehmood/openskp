@@ -49,6 +49,11 @@ export interface SkpModel {
   faceFrontColor: [number, number, number] | null;
   /** The same for the back side of a face. */
   faceBackColor: [number, number, number] | null;
+  /** Whether SketchUp's "Color by Tag" (`DisplayColorByLayer`) style setting is
+   * enabled in the model's active rendering options. Read from 2021+ files and
+   * from classic files of SketchUp 4 to 2020; `false` when off or when the
+   * file does not give it (SketchUp 3). */
+  colorByTag: boolean;
   /** The model's unit-system string (e.g. "Millimeter"), read from
    * meta/meta.dat in modern (VFF) files. null for legacy (pre-2021 MFC)
    * files, which carry no equivalent container, or when the tag isn't
@@ -804,6 +809,7 @@ export interface ParsedRawData {
   materialsByFolder: Map<string, Material>;
   styles: Style[];
   faceColors?: [[number, number, number], [number, number, number]] | null;
+  colorByTag?: boolean;
   defsDict: Map<number | string, ParsedDefinition>;
   unreadRootEntities?: number;
 }
@@ -890,6 +896,7 @@ export function buildModelFromParsed(parsed: ParsedRawData): SkpModel {
     styles,
     faceFrontColor: parsed.faceColors?.[0] ?? null,
     faceBackColor: parsed.faceColors?.[1] ?? null,
+    colorByTag: Boolean(parsed.colorByTag),
     units,
     unreadRootEntities: parsed.unreadRootEntities ?? 0,
   };
