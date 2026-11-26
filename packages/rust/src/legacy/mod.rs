@@ -952,7 +952,13 @@ fn walk(data: &[u8]) -> Result<WalkResult<'_>> {
             // C++ size_t arithmetic wraps here, and the first read from the
             // wrapped offset throws out_of_range; fail the same way up front.
             let start = lh
-                .checked_sub(if ver >= 17 { 9 } else { 8 })
+                .checked_sub(if ver >= 17 {
+                    9
+                } else if ver < FIRST_V4 {
+                    4
+                } else {
+                    8
+                })
                 .ok_or_else(|| Error::out_of_range("legacy archive truncated"))?;
             (start, 0)
         }

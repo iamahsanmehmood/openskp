@@ -206,3 +206,103 @@ fn single_material_parses_its_inline_png_and_painted_face() {
     assert_eq!(faces.len(), 1);
     assert_eq!(faces[0].material_id, model.materials[0].id);
 }
+
+#[test]
+fn curves_text_and_guide_line_parse_without_loop_desync() {
+    let model = parse("legacy_v3_curves_and_text.skp");
+    assert_eq!(model.version, "{3.0.1}");
+    assert_eq!(model.unread_root_entities, 0);
+    let defs = by_name(&model);
+    let mats = model.materials_by_id();
+    assert_eq!(
+        defs.keys().copied().collect::<BTreeSet<_>>(),
+        BTreeSet::from(["ArcDisk", "CurvedPanel"])
+    );
+
+    let panel = defs["CurvedPanel"];
+    assert_eq!(
+        (panel.faces.len(), panel.edges.len(), panel.vertices.len()),
+        (1, 6, 6)
+    );
+    assert!(panel.arcs.is_empty());
+    let panel_curved: Vec<_> = panel.edges.values().filter_map(|e| e.curve_id).collect();
+    assert_eq!(panel_curved.len(), 4);
+    assert_eq!(panel_curved.iter().collect::<BTreeSet<_>>().len(), 1);
+    assert_eq!(
+        mats[&panel.faces.values().next().unwrap().material_id.unwrap()].name,
+        "Red"
+    );
+
+    let disk = defs["ArcDisk"];
+    assert_eq!(
+        (disk.faces.len(), disk.edges.len(), disk.vertices.len()),
+        (1, 8, 8)
+    );
+    assert_eq!(disk.arcs.len(), 1);
+    let disk_arc = disk.arcs.values().next().unwrap();
+    assert_eq!(disk_arc.center, [10.0, 10.0, 0.0]);
+    assert_near(disk_arc.radius(), 8.0, 1e-9);
+    assert!(disk_arc.is_full_circle());
+    assert_eq!(
+        mats[&disk.faces.values().next().unwrap().material_id.unwrap()].name,
+        "Blue"
+    );
+
+    assert_eq!(model.root().instances.len(), 2);
+    assert_eq!(def_name(&model, &model.root().instances[0]), "CurvedPanel");
+    assert_eq!(def_name(&model, &model.root().instances[1]), "ArcDisk");
+    assert_eq!(model.root().instances[0].matrix[9], 0.0);
+    assert_eq!(model.root().instances[1].matrix[9], 40.0);
+    assert!(model.root().instances[0].material_id.is_none());
+    assert_eq!(
+        mats[&model.root().instances[1].material_id.unwrap()].name,
+        "Red"
+    );
+
+    assert!(model.root().faces.is_empty());
+    assert_eq!(model.root().edges.len(), 9);
+    assert_eq!(model.root().vertices.len(), 11);
+    assert_eq!(model.root().arcs.len(), 1);
+    let root_arc = model.root().arcs.values().next().unwrap();
+    assert_eq!(root_arc.center, [0.0, 40.0, 0.0]);
+    assert_near(root_arc.radius(), 10.0, 1e-9);
+    assert!(!root_arc.is_full_circle());
+    let runs: Vec<_> = model
+        .root()
+        .loose_edge_runs()
+        .into_iter()
+        .map(|r| (r.edge_ids.len(), r.vertex_ids.len(), r.closed))
+        .collect();
+    assert_eq!(runs, vec![(6, 7, false), (3, 4, false)]);
+
+    assert_eq!(model.root().texts.len(), 1);
+    let txt = &model.root().texts[0];
+    assert_eq!(txt.text, "Label A");
+    assert_eq!(txt.point, Some([15.0, 15.0, 0.0]));
+    assert_eq!(txt.label_point, Some([20.0, 20.0, 10.0]));
+    assert_eq!(txt.screen_position, Some([0.0, 0.0]));
+
+    assert_eq!(model.root().construction_lines.len(), 1);
+    let cl = &model.root().construction_lines[0];
+    assert_eq!(cl.point, [0.0, 0.0, 0.0]);
+    assert_eq!(cl.direction, [1.0, 0.0, 0.0]);
+    assert_eq!(cl.start, None);
+    assert_eq!(cl.end, None);
+}
+
+#[test]
+fn zero_materials_parses_via_layer_header_offset() {
+    let model = parse("legacy_v3_no_materials.skp");
+    assert_eq!(model.version, "{3.0.1}");
+    assert_eq!(model.unread_root_entities, 0);
+    assert!(model.materials.is_empty());
+    assert!(model.layers.iter().any(|l| l.name == "Layer0"));
+    assert_eq!(
+        (
+            model.root().faces.len(),
+            model.root().edges.len(),
+            model.root().vertices.len()
+        ),
+        (1, 4, 4)
+    );
+}

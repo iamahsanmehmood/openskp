@@ -959,8 +959,9 @@ class LegacyReaders {
   static const int firstSinglePreambleLineStyle = 20;
 
   /// [preamble] for the entity types that carry NO attribute-container
-  /// pointer in a SketchUp 3 file: vertex, loop, edge-use, material, layer.
-  /// (Edge, face, definition, instance and thumbnail still open with one.)
+  /// pointer in a SketchUp 3 file: vertex, loop, edge-use, curve, arc-curve,
+  /// font, material, layer. (Edge, face, definition, instance and thumbnail
+  /// still open with one.)
   static PreambleResult earlyPreamble(Archive ar, LR r) {
     if (ar.ver < firstV4) return PreambleResult(null, 0);
     return preamble(ar, r);
@@ -1046,15 +1047,28 @@ class LegacyReaders {
     return EdgeRec(db: db, curve: cs, curveValue: cv, v1: s1, v2: s2);
   }
 
+  static void _readCurveV3Edges(Archive ar, LR r) {
+    // SketchUp 3 CCurve / CArcCurve records begin with two CEdge object
+    // pointers (first and last edge; the last edge is serialized inline).
+    for (var i = 0; i < 2; i++) {
+      final (_, en, __) = ar.readObject(r, 'CEdge');
+      if (en != null && en != 'CEdge') {
+        throw LegacyParseError('curve edge pointer resolved to $en ${r.ctx()}');
+      }
+    }
+  }
+
   static Object readCurve(Archive ar, LR r) {
-    preamble(ar, r);
+    earlyPreamble(ar, r);
+    if (ar.ver < firstV4) _readCurveV3Edges(ar, r);
     r.u8();
     final n = r.u32();
     return CurveRec(n);
   }
 
   static Object readArcCurve(Archive ar, LR r) {
-    preamble(ar, r);
+    earlyPreamble(ar, r);
+    if (ar.ver < firstV4) _readCurveV3Edges(ar, r);
     r.raw(5);
     // center[3], normal[3], x_axis[3], start_angle, end_angle, y_axis[3]
     final v = r.f64s(14);
@@ -1577,6 +1591,9 @@ class LegacyReaders {
     final db = drawbase(ar, r);
     final point = r.f64s(3);
     final direction = r.f64s(3);
+    if (ar.ver < firstV4) {
+      return ConstructionLineRec(db, point, direction, null, null);
+    }
     // Signed distance along `direction` from `point` marking where the visible segment
     // starts/ends - ground truth (real SketchUp 2025, SDK/Ruby cross-checked): a bounded
     // segment's start/end exactly equal point/direction scaled by these two parameters
@@ -1668,19 +1685,21 @@ class LegacyReaders {
   }
 
   static Object readSkFont(Archive ar, LR r) {
-    ar.readObject(r, 'CAttributeContainer');
-    if (ar.hasPid) {
-      // the mask byte says how many pid bytes follow (SketchUp 2017+ writes
-      // two or more here)
-      final mask = r.u8();
-      var n = 0;
-      for (var bit = 0; bit < 8; bit++) {
-        if ((mask & (1 << bit)) != 0) n++;
+    if (ar.ver >= firstV4) {
+      ar.readObject(r, 'CAttributeContainer');
+      if (ar.hasPid) {
+        // the mask byte says how many pid bytes follow (SketchUp 2017+ writes
+        // two or more here)
+        final mask = r.u8();
+        var n = 0;
+        for (var bit = 0; bit < 8; bit++) {
+          if ((mask & (1 << bit)) != 0) n++;
+        }
+        r.raw(n);
       }
-      r.raw(n);
     }
     r.utf16();
-    r.raw(15);
+    r.raw(ar.ver < firstV4 ? 6 : 15);
     return FontRec();
   }
 
@@ -2169,6 +2188,13 @@ class LegacyReaders {
   static Object readInstance(Archive ar, LR r) {
     final pre = preamble(ar, r);
     final db = drawbase(ar, r);
+    var attrs = pre.attrs;
+    if (ar.ver < firstV4 && attrs is MaterialRec && pre.attrsSlot != null) {
+      // SketchUp 3: as on CFace, CDrawingElement opens with its material
+      // pointer rather than an attribute container.
+      db.mat = pre.attrsSlot!;
+      attrs = null;
+    }
     final (ds, dn, _) = ar.readObject(r, 'CComponentDefinition');
     if (dn != 'CComponentDefinition') {
       throw LegacyParseError('instance definition ref is $dn ${r.ctx()}');
@@ -2198,7 +2224,7 @@ class LegacyReaders {
         xf: xf,
         name: name,
         guid: guidHex,
-        attrs: pre.attrs as AttrsRec?);
+        attrs: attrs as AttrsRec?);
   }
 
   static final Map<String, LegacyReader> readers = {
@@ -2399,7 +2425,7 @@ class Legacy {
         throw LegacyParseError('no CMaterial or CLayer class record found');
       }
       matCount = 0;
-      start = layerHdr - (ver >= 17 ? 9 : 8);
+      start = layerHdr - (ver >= 17 ? 9 : (ver < LegacyReaders.firstV4 ? 4 : 8));
     }
 
     final bases = matCount >= 2

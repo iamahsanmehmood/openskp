@@ -641,11 +641,25 @@ struct Archive {
   }
 
   // `preamble` for the entity types that carry NO attribute-container
-  // pointer in a SketchUp 3 file: vertex, loop, edge-use, material, layer.
-  // (Edge, face, definition, instance and thumbnail still open with one.)
+  // pointer in a SketchUp 3 file: vertex, loop, edge-use, curve, arc-curve,
+  // font, material, layer. (Edge, face, definition, instance and thumbnail
+  // still open with one.)
   std::optional<std::uint64_t> early_preamble(V* value = nullptr) {
     if (ver < kFirstV4) return std::nullopt;
     return preamble(value);
+  }
+
+  // SketchUp 3's CCurve and CArcCurve open with two CEdge pointers (first and
+  // last edge of the curve). When the curve is reached from its first edge,
+  // the last edge is serialized inline here before its loop or entity list
+  // back-references it.
+  void read_curve_v3_edges() {
+    for (int i = 0; i < 2; ++i) {
+      auto q = object("CEdge");
+      const auto& en = std::get<1>(q);
+      if (!en.empty() && en != "CEdge")
+        throw std::runtime_error("curve edge pointer resolved to " + en);
+    }
   }
 
   void draw(V& v) {
@@ -861,13 +875,15 @@ struct Archive {
         v->curve_value = std::get<2>(curve);
       }
     } else if (n == "CCurve") {
-      preamble(v.get());
+      early_preamble(v.get());
       v->k = "curve";
+      if (ver < kFirstV4) read_curve_v3_edges();
       r.u8();
       r.u32();
     } else if (n == "CArcCurve") {
-      preamble(v.get());
+      early_preamble(v.get());
       v->k = "arccurve";
+      if (ver < kFirstV4) read_curve_v3_edges();
       r.raw(5);
       // center[3], normal[3], x_axis[3], start_angle, end_angle, y_axis[3]
       auto a = r.f64s(14);
@@ -1097,64 +1113,70 @@ struct Archive {
       preamble(v.get());
       v->k = "constructionline";
       draw(*v);
-      // point(3) + direction(3) + two signed distance params along
-      // direction marking where the visible segment starts/ends - the
-      // same shape Sketchup::ConstructionLine's own start/end/direction
-      // properties expose. A parameter magnitude past kHugeParam means
-      // unbounded in that direction (matches the real API returning nil).
-      auto line_params = r.f64s(8);
-      v->xyz = {line_params[0], line_params[1], line_params[2]};
-      v->direction = {line_params[3], line_params[4], line_params[5]};
-      constexpr double kHugeParam = 1e20;
-      double start_param = line_params[6], end_param = line_params[7];
-      if (std::abs(start_param) < kHugeParam) {
-        v->start = Vec3{v->xyz[0] + v->direction[0] * start_param,
-                        v->xyz[1] + v->direction[1] * start_param,
-                        v->xyz[2] + v->direction[2] * start_param};
-      }
-      if (std::abs(end_param) < kHugeParam) {
-        v->end =
-            Vec3{v->xyz[0] + v->direction[0] * end_param, v->xyz[1] + v->direction[1] * end_param,
-                 v->xyz[2] + v->direction[2] * end_param};
-      }
-      // The trailing block varies by the WRITING BUILD, not cleanly by
-      // version: 7 bytes on the v17 calibration corpus, 4 on v16 and on a
-      // real v18, 0 on another real v17. Self-calibrate on the first
-      // guide line of the file - the length that lands on a legitimate
-      // next tag (strict forms only) - and cache it for the rest of the
-      // file.
-      if (!cline_tail) {
-        size_t dflt = ver == 17 ? 7 : 4;
-        std::vector<size_t> order{dflt};
-        for (size_t c : {size_t(0), size_t(4), size_t(7)})
-          if (c != dflt) order.push_back(c);
-        // Strong tags first (escape / known class / class definition). A
-        // following entity at +4 or +7 is unambiguous. The weak (null)
-        // pass is the last-in-list case: a construction line that is the
-        // last entity in a CComponentDefinition is followed by nrel=0,
-        // which looks like a null tag at every candidate including v17's
-        // preferred 7. Preferring 7 there swallows three bytes of the
-        // definition tail and then caches that 7 for every later guide
-        // in the file - this project's own writer (and real SketchUp
-        // 2025) uses a 4-byte trailer, so the weak pass prefers 4.
-        std::optional<size_t> k;
-        for (size_t cand : order) {
-          if (strict_next_tag(r.p + cand, false)) {
-            k = cand;
-            break;
-          }
+      if (ver < kFirstV4) {
+        auto lp = r.f64s(6);
+        v->xyz = {lp[0], lp[1], lp[2]};
+        v->direction = {lp[3], lp[4], lp[5]};
+      } else {
+        // point(3) + direction(3) + two signed distance params along
+        // direction marking where the visible segment starts/ends - the
+        // same shape Sketchup::ConstructionLine's own start/end/direction
+        // properties expose. A parameter magnitude past kHugeParam means
+        // unbounded in that direction (matches the real API returning nil).
+        auto line_params = r.f64s(8);
+        v->xyz = {line_params[0], line_params[1], line_params[2]};
+        v->direction = {line_params[3], line_params[4], line_params[5]};
+        constexpr double kHugeParam = 1e20;
+        double start_param = line_params[6], end_param = line_params[7];
+        if (std::abs(start_param) < kHugeParam) {
+          v->start = Vec3{v->xyz[0] + v->direction[0] * start_param,
+                          v->xyz[1] + v->direction[1] * start_param,
+                          v->xyz[2] + v->direction[2] * start_param};
         }
-        if (!k) {
-          for (size_t cand : {size_t(4), size_t(0), size_t(7)}) {
-            if (strict_next_tag(r.p + cand, true)) {
+        if (std::abs(end_param) < kHugeParam) {
+          v->end =
+              Vec3{v->xyz[0] + v->direction[0] * end_param, v->xyz[1] + v->direction[1] * end_param,
+                   v->xyz[2] + v->direction[2] * end_param};
+        }
+        // The trailing block varies by the WRITING BUILD, not cleanly by
+        // version: 7 bytes on the v17 calibration corpus, 4 on v16 and on a
+        // real v18, 0 on another real v17. Self-calibrate on the first
+        // guide line of the file - the length that lands on a legitimate
+        // next tag (strict forms only) - and cache it for the rest of the
+        // file.
+        if (!cline_tail) {
+          size_t dflt = ver == 17 ? 7 : 4;
+          std::vector<size_t> order{dflt};
+          for (size_t c : {size_t(0), size_t(4), size_t(7)})
+            if (c != dflt) order.push_back(c);
+          // Strong tags first (escape / known class / class definition). A
+          // following entity at +4 or +7 is unambiguous. The weak (null)
+          // pass is the last-in-list case: a construction line that is the
+          // last entity in a CComponentDefinition is followed by nrel=0,
+          // which looks like a null tag at every candidate including v17's
+          // preferred 7. Preferring 7 there swallows three bytes of the
+          // definition tail and then caches that 7 for every later guide
+          // in the file - this project's own writer (and real SketchUp
+          // 2025) uses a 4-byte trailer, so the weak pass prefers 4.
+          std::optional<size_t> k;
+          for (size_t cand : order) {
+            if (strict_next_tag(r.p + cand, false)) {
               k = cand;
               break;
             }
           }
+          if (!k) {
+            for (size_t cand : {size_t(4), size_t(0), size_t(7)}) {
+              if (strict_next_tag(r.p + cand, true)) {
+                k = cand;
+                break;
+              }
+            }
+          }
+          cline_tail = k ? *k : size_t(4);
         }
-        cline_tail = k ? *k : size_t(4);
+        r.raw(*cline_tail);
       }
-      r.raw(*cline_tail);
     } else if (n == "CConstructionPoint") {
       preamble(v.get());
       v->k = "constructionpoint";
@@ -1176,17 +1198,19 @@ struct Archive {
         v->label = r.utf16();
       }
     } else if (n == "CSkFont") {
-      object("CAttributeContainer");
-      if (pid) {
-        // the mask byte says how many pid bytes follow (SketchUp 2017+ writes two or more here)
-        const int mask = r.u8();
-        int n = 0;
-        for (int bit = 0; bit < 8; ++bit)
-          if (mask & (1 << bit)) ++n;
-        r.raw(n);
+      if (ver >= kFirstV4) {
+        object("CAttributeContainer");
+        if (pid) {
+          // the mask byte says how many pid bytes follow (SketchUp 2017+ writes two or more here)
+          const int mask = r.u8();
+          int n = 0;
+          for (int bit = 0; bit < 8; ++bit)
+            if (mask & (1 << bit)) ++n;
+          r.raw(n);
+        }
       }
       r.utf16();
-      r.raw(15);
+      r.raw(ver < kFirstV4 ? 6 : 15);
     } else if (n == "CDimensionLinear") {
       preamble(v.get());
       v->k = "dimension";
@@ -1442,9 +1466,14 @@ struct Archive {
       auto thumbnail = object("CThumbnail");
       if (std::get<2>(thumbnail)) v->camera = std::get<2>(thumbnail)->camera;
     } else if (n == "CComponentInstance" || n == "CGroup") {
-      v->attrs = preamble(v.get());
+      std::string lead_cls;
+      v->attrs = preamble(v.get(), &lead_cls);
       v->k = "instance";
       draw(*v);
+      if (ver < kFirstV4 && v->attrs && lead_cls == "CMaterial") {
+        v->mat = int(*v->attrs);
+        v->attrs.reset();
+      }
       auto q = object("CComponentDefinition");
       v->def = std::get<0>(q);
       v->xf = r.f64s(13);
@@ -2712,8 +2741,10 @@ RawParsed parse_legacy(const ByteBuffer& data, const ParseOptions& o) {
         }
       if (lh == std::string::npos)
         throw std::runtime_error("no CMaterial or CLayer class record found");
+      size_t hdr_len = ver >= 17 ? 9 : (ver < kFirstV4 ? 4 : 8);
+      if (lh < hdr_len) throw std::out_of_range("legacy archive truncated");
       mc = 0;
-      start = lh - (ver >= 17 ? 9 : 8);
+      start = lh - hdr_len;
     }
 
     std::vector<uint64_t> bases;

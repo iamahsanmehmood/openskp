@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `GlbExport.ToGlb` / `ExportGlb` and `InstancedGlbExport.ToInstancedGlb` / `ExportInstancedGlb` with `Textures = true` bake colorized PNG textures out of the box (using the BCL's `DeflateStream` on `netstandard2.0`, shift or tint within 1/255 of SketchUp's own result) with a white material factor, once per colour, with no new dependency.
 - Colorized JPEG textures are baked at quality 95 when a synchronous `ISkpImageCodec` (`Decode` / `Encode`, for example `StbImageSharp` + `StbImageWriteSharp`) is passed on `GlbOptions.ImageCodec` or `InstancedGlbOptions.ImageCodec`; without `ImageCodec`, JPEG textures are still embedded and colorized ones keep the tinted factor, with one warning.
 - JPEG textures lose their EXIF `APP1` block (orientation included) without being re-encoded, and textures above 178,956,970 pixels (read from the header before decoding) or ones that fail to decode keep their source bytes and the tinted factor, with one warning.
+### Fixed — all six readers: SketchUp 3 curves, painted instances, fonts, guide lines and zero-material headers (#284)
+
+- SketchUp 3 (`{3.0.x}`) `CCurve` and `CArcCurve` records carry no `CAttributeContainer` preamble and open with two `CEdge` pointers (first and last edge of the curve), serializing the last edge inline when the curve is first reached from its starting edge. Reading them as post-V3 curves stopped inside the curve record and failed in face loops with `edge-use parent slot ... != current loop`.
+- Painted `CComponentInstance` and `CGroup` placements in SketchUp 3 open with their `CMaterial` pointer rather than a `CAttributeContainer` (just like `CFace`), preserving `Instance.material_id` across all six ports and fixing a `MaterialRec` cast failure in Dart.
+- SketchUp 3 `CSkFont` records carry no `CAttributeContainer` preamble and end with a 6-byte size/flags block rather than the 15-byte SketchUp 4+ block, fixing `CText` annotations in SketchUp 3 models (which previously failed or left root entities unread).
+- SketchUp 3 `CConstructionLine` records store only `point` and `direction` (infinite guides, with no `start`/`end` parameters or trailing block), and zero-material SketchUp 3 files step back 4 bytes before the first `CLayer` class declaration rather than 8.
 
 ### Fixed — TypeScript, .NET and Dart: texture applied size on positioned faces and circles (#696)
 
