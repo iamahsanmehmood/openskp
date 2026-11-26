@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — all six languages: valid IFC2X3 STEP export (#658)
+
+- `to_ifc(..., schema="IFC2X3")` (`toIFC`, `IfcExport.ToIfc`, `toIfc`, `openskp::to_ifc`) now emits `IFC2X3`-valid geometry and product attributes across all six ports without changing `IFC4` output:
+  - Surface meshes are written as `IfcFacetedBrep` over `IfcClosedShell` (`'Brep'` shape representation) when manifold and closed, or `IfcFaceBasedSurfaceModel` over `IfcConnectedFaceSet` (`'SurfaceModel'` shape representation) when open, using welded `IfcCartesianPoint` / `IfcPolyLoop` / `IfcFaceOuterBound` / `IfcFace` topology instead of the `IFC4`-only `IfcTriangulatedFaceSet` and `IfcCartesianPointList3D`.
+  - Loose circular arcs and circles are written as `IfcTrimmedCurve` over `IfcCircle` (single arc), `IfcCircle` (full 360° circle), or `IfcCompositeCurve` of `IfcCompositeCurveSegment`s (multi-segment arc), falling back to `IfcPolyline` when degenerate, instead of the `IFC4`-only `IfcIndexedPolyCurve` and `IfcArcIndex`.
+  - `IfcBuildingElementProxy`'s ninth attribute is written as `.ELEMENT.` (`CompositionType : OPTIONAL IfcElementCompositionEnum` in `IFC2X3`, rather than `IFC4`'s `.NOTDEFINED.`), and required `IFC2X3` enum ninth attributes such as `IfcRoof.ShapeType` default to `.NOTDEFINED.` instead of `$`.
+
 ### Changed — Dart: colorized textures are baked into GLB files (#285)
 
 - `toGlb` / `exportGlb` and `toInstancedGlb` / `exportInstancedGlb` with `textures: true` bake colorized PNG textures out of the box (using the existing `package:archive` dependency, shift or tint within 1/255 of SketchUp's own result) with a white material factor, once per colour, with no new dependency.

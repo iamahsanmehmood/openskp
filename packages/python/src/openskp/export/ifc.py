@@ -232,6 +232,67 @@ def _get_prim_rgb(scene: Scene, prim_mat_idx: int) -> Tuple[float, float, float,
     return r, g, b, a
 
 
+_IFC2X3_REQUIRED_NOTDEFINED_ATTR8 = frozenset({
+    "IFCROOF",
+    "IFCFOOTING",
+    "IFCPILE",
+    "IFCRAMP",
+    "IFCSTAIR",
+})
+
+
+def _solve_ifc2x3_arc_segment(
+    p0: Tuple[float, float, float],
+    pm: Tuple[float, float, float],
+    p1: Tuple[float, float, float],
+) -> Optional[Tuple[Tuple[float, float, float], float, Tuple[float, float, float], Tuple[float, float, float], float]]:
+    """Return ``(center, radius, axis_z, ref_x, sweep_rad)`` for the 3D circular
+    arc ``p0 -> pm -> p1`` (with ``p0`` at parameter ``0`` and ``SenseAgreement``
+    ``.T.``), or ``None`` if the three points are collinear or degenerate."""
+    ux, uy, uz = pm[0] - p0[0], pm[1] - p0[1], pm[2] - p0[2]
+    vx, vy, vz = p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]
+    wx = uy * vz - uz * vy
+    wy = uz * vx - ux * vz
+    wz = ux * vy - uy * vx
+    u2 = ux * ux + uy * uy + uz * uz
+    v2 = vx * vx + vy * vy + vz * vz
+    w2 = wx * wx + wy * wy + wz * wz
+    if u2 <= 0.0 or v2 <= 0.0 or w2 <= 1e-24 * max(1.0, u2 * v2):
+        return None
+
+    vxw_x = vy * wz - vz * wy
+    vxw_y = vz * wx - vx * wz
+    vxw_z = vx * wy - vy * wx
+    wxu_x = wy * uz - wz * uy
+    wxu_y = wz * ux - wx * uz
+    wxu_z = wx * uy - wy * ux
+
+    inv_2w2 = 0.5 / w2
+    ox = (u2 * vxw_x + v2 * wxu_x) * inv_2w2
+    oy = (u2 * vxw_y + v2 * wxu_y) * inv_2w2
+    oz = (u2 * vxw_z + v2 * wxu_z) * inv_2w2
+    radius = math.sqrt(ox * ox + oy * oy + oz * oz)
+    if not (math.isfinite(radius) and radius > 0.0):
+        return None
+
+    cx, cy, cz = p0[0] + ox, p0[1] + oy, p0[2] + oz
+    inv_r = 1.0 / radius
+    xx, xy, xz = -ox * inv_r, -oy * inv_r, -oz * inv_r
+    inv_w = 1.0 / math.sqrt(w2)
+    zx, zy, zz = wx * inv_w, wy * inv_w, wz * inv_w
+    yx = zy * xz - zz * xy
+    yy = zz * xx - zx * xz
+    yz = zx * xy - zy * xx
+
+    d1x, d1y, d1z = (p1[0] - cx) * inv_r, (p1[1] - cy) * inv_r, (p1[2] - cz) * inv_r
+    sweep = math.atan2(d1x * yx + d1y * yy + d1z * yz, d1x * xx + d1y * xy + d1z * xz)
+    if sweep <= 0.0:
+        sweep += 2.0 * math.pi
+    if not (math.isfinite(sweep) and 0.0 < sweep < 2.0 * math.pi):
+        return None
+    return (cx, cy, cz), radius, (zx, zy, zz), (xx, xy, xz), sweep
+
+
 def to_ifc(
     scene: Scene,
     scale: float = METRES_TO_MM,
@@ -300,6 +361,7 @@ def to_ifc(
             return classify_element(name, layer, path, classify_using_full_path)
 
     schema_str = schema.upper() if schema else "IFC4"
+    is_ifc2x3 = schema_str.startswith("IFC2X3")
     now_iso = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
     timestamp_epoch = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
 
@@ -580,57 +642,117 @@ def to_ifc(
                 raise ValueError("IFC coordinates must be finite")
 
         arc = getattr(cs, "arc", None)
-        if arc and len(arc.get("points") or ()) >= 3:
-            # A run that provably IS one whole
-            # circular arc is emitted as an IfcIndexedPolyCurve with
-            # IfcArcIndex segments, not as a polyline of its tessellation.
-            #
-            # This is the only place in the export where the analytic curve
-            # survives: everything else is chords. It matters downstream -
-            # a Revit/Bonsai endpoint receives an arc it can dimension,
-            # snap to and re-fillet, where a 13-point polyline is just 13
-            # points. The arc is not approximated here; the three points of
-            # an IfcArcIndex are exact (they are the frame's own
-            # center + cos(t)*x_axis + sin(t)*y_axis at the two ends and the
-            # middle), verified against SketchUp's own COLLADA export of
-            # arc.skp to 4e-8 inch.
-            #
-            # IFC4 declarations, read off ifcopenshell 0.8.5 rather than
-            # from a secondhand table:
-            #   IfcIndexedPolyCurve(Points, Segments, SelfIntersect)
-            #   IfcCartesianPointList3D(CoordList) - Points is typed
-            #     IfcCartesianPointList, the abstract supertype, which is
-            #     exactly why no placement is needed: a standalone point
-            #     list is legal here and nowhere else.
-            #   IfcArcIndex = LIST [3:3] OF IfcPositiveInteger (start,
-            #     a point ON the arc, end), IfcLineIndex = LIST [2:?].
-            # CoordList is 1-based.
-            #
-            # IfcArcIndex is a DEFINED TYPE, not an entity, so it cannot
-            # take a line of its own - it is a typed parameter written
-            # inline inside Segments:
-            #   (IFCARCINDEX((1,2,3)),IFCARCINDEX((3,4,1)))
-            # Writing `#24=IFCARCINDEX((1,2,3));` is not merely unidiomatic,
-            # it is a syntax error, and ifcopenshell 0.8.5 reacts by
-            # truncating the file at that line WITHOUT a word: a 33-entity
-            # export parsed as 23 entities, with the IfcAnnotation, the
-            # layer assignment and the containment relationship all past the
-            # cut. Hence no ids for the segments.
-            segs = ",".join(
-                "IFCARCINDEX((%s))" % ",".join(str(i + 1) for i in seg)
-                for seg in arc["segments"]
-            )
-            pt_list_id = next_id()
-            lines.append(
-                f"#{pt_list_id}=IFCCARTESIANPOINTLIST3D("
-                f"({','.join(_ifc_coord(p) for p in arc['points'])}));"
-            )
-            curve_id = next_id()
-            lines.append(
-                f"#{curve_id}=IFCINDEXEDPOLYCURVE(#{pt_list_id},"
-                f"({segs}),.F.);"
-            )
-        else:
+        curve_id: Optional[int] = None
+        if arc and len(arc.get("points") or ()) >= 3 and arc.get("segments"):
+            if not is_ifc2x3:
+                # A run that provably IS one whole
+                # circular arc is emitted as an IfcIndexedPolyCurve with
+                # IfcArcIndex segments, not as a polyline of its tessellation.
+                segs = ",".join(
+                    "IFCARCINDEX((%s))" % ",".join(str(i + 1) for i in seg)
+                    for seg in arc["segments"]
+                )
+                pt_list_id = next_id()
+                lines.append(
+                    f"#{pt_list_id}=IFCCARTESIANPOINTLIST3D("
+                    f"({','.join(_ifc_coord(p) for p in arc['points'])}));"
+                )
+                curve_id = next_id()
+                lines.append(
+                    f"#{curve_id}=IFCINDEXEDPOLYCURVE(#{pt_list_id},"
+                    f"({segs}),.F.);"
+                )
+            else:
+                arc_pts_zup: List[Tuple[float, float, float]] = []
+                for p in arc["points"]:
+                    if not (math.isfinite(p[0]) and math.isfinite(p[1]) and math.isfinite(p[2])):
+                        raise ValueError("IFC coordinates must be finite")
+                    sx, sy, sz = p[0] * scale, -p[2] * scale, p[1] * scale
+                    if not (math.isfinite(sx) and math.isfinite(sy) and math.isfinite(sz)):
+                        raise ValueError("IFC coordinates must be finite")
+                    arc_pts_zup.append((sx, sy, sz))
+
+                raw_segs = [tuple(seg) for seg in arc["segments"]]
+                solved_segs = []
+                valid_arc = True
+                for seg in raw_segs:
+                    if len(seg) != 3 or any(idx < 0 or idx >= len(arc_pts_zup) for idx in seg):
+                        valid_arc = False
+                        break
+                    solved = _solve_ifc2x3_arc_segment(
+                        arc_pts_zup[seg[0]], arc_pts_zup[seg[1]], arc_pts_zup[seg[2]]
+                    )
+                    if solved is None:
+                        valid_arc = False
+                        break
+                    solved_segs.append(solved)
+
+                def _emit_ifc2x3_circle(
+                    center: Tuple[float, float, float],
+                    radius: float,
+                    axis_z: Tuple[float, float, float],
+                    ref_x: Tuple[float, float, float],
+                ) -> int:
+                    c_id = next_id()
+                    lines.append(
+                        f"#{c_id}=IFCCARTESIANPOINT("
+                        f"({_step_real(center[0])},{_step_real(center[1])},{_step_real(center[2])}));"
+                    )
+                    z_id = next_id()
+                    lines.append(
+                        f"#{z_id}=IFCDIRECTION("
+                        f"({_step_real(axis_z[0])},{_step_real(axis_z[1])},{_step_real(axis_z[2])}));"
+                    )
+                    x_id = next_id()
+                    lines.append(
+                        f"#{x_id}=IFCDIRECTION("
+                        f"({_step_real(ref_x[0])},{_step_real(ref_x[1])},{_step_real(ref_x[2])}));"
+                    )
+                    pl_id = next_id()
+                    lines.append(f"#{pl_id}=IFCAXIS2PLACEMENT3D(#{c_id},#{z_id},#{x_id});")
+                    circ_id = next_id()
+                    lines.append(f"#{circ_id}=IFCCIRCLE(#{pl_id},{_step_real(radius)});")
+                    return circ_id
+
+                if valid_arc and len(solved_segs) == 1:
+                    center, radius, axis_z, ref_x, sweep = solved_segs[0]
+                    circ_id = _emit_ifc2x3_circle(center, radius, axis_z, ref_x)
+                    curve_id = next_id()
+                    lines.append(
+                        f"#{curve_id}=IFCTRIMMEDCURVE(#{circ_id},"
+                        f"(IFCPARAMETERVALUE(0.0)),"
+                        f"(IFCPARAMETERVALUE({_step_real(sweep)})),.T.,.PARAMETER.);"
+                    )
+                elif (
+                    valid_arc
+                    and len(solved_segs) == 2
+                    and raw_segs[0] == (0, 1, 2)
+                    and raw_segs[1] == (2, 3, 0)
+                    and abs(solved_segs[0][1] - solved_segs[1][1]) <= 1e-3 * max(1.0, solved_segs[0][1])
+                    and math.dist(solved_segs[0][0], solved_segs[1][0]) <= 1e-3 * max(1.0, solved_segs[0][1])
+                ):
+                    center, radius, axis_z, ref_x, _ = solved_segs[0]
+                    curve_id = _emit_ifc2x3_circle(center, radius, axis_z, ref_x)
+                elif valid_arc and len(solved_segs) >= 2:
+                    comp_seg_ids: List[int] = []
+                    for center, radius, axis_z, ref_x, sweep in solved_segs:
+                        circ_id = _emit_ifc2x3_circle(center, radius, axis_z, ref_x)
+                        trim_id = next_id()
+                        lines.append(
+                            f"#{trim_id}=IFCTRIMMEDCURVE(#{circ_id},"
+                            f"(IFCPARAMETERVALUE(0.0)),"
+                            f"(IFCPARAMETERVALUE({_step_real(sweep)})),.T.,.PARAMETER.);"
+                        )
+                        cseg_id = next_id()
+                        lines.append(
+                            f"#{cseg_id}=IFCCOMPOSITECURVESEGMENT(.CONTINUOUS.,.T.,#{trim_id});"
+                        )
+                        comp_seg_ids.append(cseg_id)
+                    curve_id = next_id()
+                    cseg_refs = ",".join(f"#{sid}" for sid in comp_seg_ids)
+                    lines.append(f"#{curve_id}=IFCCOMPOSITECURVE(({cseg_refs}),.F.);")
+
+        if curve_id is None:
             pt_refs: List[str] = []
             coord_strs: List[str] = [_ifc_coord(p) for p in pts]
             # IfcPolyline has no implicit closing segment - a closed run
@@ -732,61 +854,112 @@ def to_ifc(
             vz = _step_real(py * scale)
             pt_coords.append(f"({vx},{vy},{vz})")
 
-        pt_list_id = next_id()
-        lines.append(f"#{pt_list_id}=IFCCARTESIANPOINTLIST3D(({','.join(pt_coords)}));")
+        if not is_ifc2x3:
+            pt_list_id = next_id()
+            lines.append(f"#{pt_list_id}=IFCCARTESIANPOINTLIST3D(({','.join(pt_coords)}));")
 
-        # 2. Triangulated Face Set (1-based indices)
-        face_indices: List[str] = []
-        for i in range(tri_count):
-            idx0 = prim.indices[i * 3] + 1
-            idx1 = prim.indices[i * 3 + 1] + 1
-            idx2 = prim.indices[i * 3 + 2] + 1
-            face_indices.append(f"({idx0},{idx1},{idx2})")
+            # 2. Triangulated Face Set (1-based indices)
+            face_indices: List[str] = []
+            for i in range(tri_count):
+                idx0 = prim.indices[i * 3] + 1
+                idx1 = prim.indices[i * 3 + 1] + 1
+                idx2 = prim.indices[i * 3 + 2] + 1
+                face_indices.append(f"({idx0},{idx1},{idx2})")
 
-        # `Closed` was a hardcoded `.TRUE.`.
-        #
-        # Two separate bugs in one token. (a) The literal: `Closed` is an
-        # IfcBoolean, whose STEP spelling in IFC4 is `.T.`/`.F.` - `.TRUE.`
-        # is the IFC2x spelling, and ifcopenshell's validate() flags it:
-        #   "An enumeration literal 'TRUE' is not expected at attribute
-        #    index '2'"
-        # (b) The *claim*: `.TRUE.` says every mesh this exporter ever wrote
-        # is a closed manifold. The exporter never checked. Now it is:
-        # a triangle mesh is closed iff every undirected edge is shared by
-        # exactly two triangles - no boundary edge, no edge used 3+ times.
-        #
-        # The weld-by-position step is not decoration. Reading closure off
-        # the index buffer directly reports False for *every* mesh this
-        # pipeline produces, because the vertices it emits are per-face, not
-        # shared - measured on mx_Primitives: 576 verts / 276 tris, 576
-        # boundary edges, i.e. no edge shared at all. That is a fact about
-        # this exporter's output layout, not about the geometry: weld by
-        # rounded position first and the same two models come out 1/1 and
-        # 16/16 closed. Rounding to 6 dp matches the coordinates written to
-        # IFCCARTESIANPOINTLIST3D above, so the two agree on what "same
-        # point" means.
-        _weld: Dict[Tuple[float, float, float], int] = {}
-        _remap = [0] * v_count
-        for i in range(v_count):
-            _key = (round(prim.positions[i * 3], 6),
-                    round(prim.positions[i * 3 + 1], 6),
-                    round(prim.positions[i * 3 + 2], 6))
-            _remap[i] = _weld.setdefault(_key, len(_weld))
-        _edge_use: Dict[Tuple[int, int], int] = {}
-        for i in range(tri_count):
-            _a = _remap[prim.indices[i * 3]]
-            _b = _remap[prim.indices[i * 3 + 1]]
-            _c = _remap[prim.indices[i * 3 + 2]]
-            for _u, _v in ((_a, _b), (_b, _c), (_c, _a)):
-                _k = (_u, _v) if _u < _v else (_v, _u)
-                _edge_use[_k] = _edge_use.get(_k, 0) + 1
-        _closed = bool(_edge_use) and all(n == 2 for n in _edge_use.values())
+            _weld: Dict[Tuple[float, float, float], int] = {}
+            _remap = [0] * v_count
+            for i in range(v_count):
+                _key = (round(prim.positions[i * 3], 6),
+                        round(prim.positions[i * 3 + 1], 6),
+                        round(prim.positions[i * 3 + 2], 6))
+                _remap[i] = _weld.setdefault(_key, len(_weld))
+            _edge_use: Dict[Tuple[int, int], int] = {}
+            for i in range(tri_count):
+                _a = _remap[prim.indices[i * 3]]
+                _b = _remap[prim.indices[i * 3 + 1]]
+                _c = _remap[prim.indices[i * 3 + 2]]
+                for _u, _v in ((_a, _b), (_b, _c), (_c, _a)):
+                    _k = (_u, _v) if _u < _v else (_v, _u)
+                    _edge_use[_k] = _edge_use.get(_k, 0) + 1
+            _closed = bool(_edge_use) and all(n == 2 for n in _edge_use.values())
 
-        face_set_id = next_id()
-        lines.append(
-            f"#{face_set_id}=IFCTRIANGULATEDFACESET(#{pt_list_id},$,"
-            f"{'.T.' if _closed else '.F.'},({','.join(face_indices)}),$);"
-        )
+            face_set_id = next_id()
+            lines.append(
+                f"#{face_set_id}=IFCTRIANGULATEDFACESET(#{pt_list_id},$,"
+                f"{'.T.' if _closed else '.F.'},({','.join(face_indices)}),$);"
+            )
+            body_rep_type = "Tessellation"
+        else:
+            coord_to_uid: Dict[str, int] = {}
+            unique_coords: List[str] = []
+            v_to_uid = [0] * v_count
+            for i, c_str in enumerate(pt_coords):
+                uid = coord_to_uid.get(c_str)
+                if uid is None:
+                    uid = len(unique_coords)
+                    coord_to_uid[c_str] = uid
+                    unique_coords.append(c_str)
+                v_to_uid[i] = uid
+
+            valid_tris: List[Tuple[int, int, int]] = []
+            out_of_range = False
+            for i in range(tri_count):
+                i0 = prim.indices[i * 3]
+                i1 = prim.indices[i * 3 + 1]
+                i2 = prim.indices[i * 3 + 2]
+                if i0 >= v_count or i1 >= v_count or i2 >= v_count:
+                    out_of_range = True
+                    continue
+                u0, u1, u2 = v_to_uid[i0], v_to_uid[i1], v_to_uid[i2]
+                if u0 == u1 or u1 == u2 or u2 == u0:
+                    continue
+                valid_tris.append((u0, u1, u2))
+
+            if not valid_tris:
+                continue
+
+            used_uid_to_pt_id: Dict[int, int] = {}
+            for u0, u1, u2 in valid_tris:
+                for uid in (u0, u1, u2):
+                    if uid not in used_uid_to_pt_id:
+                        pt_id = next_id()
+                        lines.append(f"#{pt_id}=IFCCARTESIANPOINT({unique_coords[uid]});")
+                        used_uid_to_pt_id[uid] = pt_id
+
+            face_ids: List[int] = []
+            half_edges: Dict[Tuple[int, int], int] = {}
+            for u0, u1, u2 in valid_tris:
+                for ha, hb in ((u0, u1), (u1, u2), (u2, u0)):
+                    half_edges[(ha, hb)] = half_edges.get((ha, hb), 0) + 1
+                loop_id = next_id()
+                lines.append(
+                    f"#{loop_id}=IFCPOLYLOOP("
+                    f"(#{used_uid_to_pt_id[u0]},#{used_uid_to_pt_id[u1]},#{used_uid_to_pt_id[u2]}));"
+                )
+                bound_id = next_id()
+                lines.append(f"#{bound_id}=IFCFACEOUTERBOUND(#{loop_id},.T.);")
+                face_id = next_id()
+                lines.append(f"#{face_id}=IFCFACE((#{bound_id}));")
+                face_ids.append(face_id)
+
+            is_closed_solid = (
+                not out_of_range
+                and len(valid_tris) >= 4
+                and all(cnt == 1 and half_edges.get((hb, ha), 0) == 1 for (ha, hb), cnt in half_edges.items())
+            )
+            face_refs = ",".join(f"#{fid}" for fid in face_ids)
+            if is_closed_solid:
+                shell_id = next_id()
+                lines.append(f"#{shell_id}=IFCCLOSEDSHELL(({face_refs}));")
+                face_set_id = next_id()
+                lines.append(f"#{face_set_id}=IFCFACETEDBREP(#{shell_id});")
+                body_rep_type = "Brep"
+            else:
+                cfs_id = next_id()
+                lines.append(f"#{cfs_id}=IFCCONNECTEDFACESET(({face_refs}));")
+                face_set_id = next_id()
+                lines.append(f"#{face_set_id}=IFCFACEBASEDSURFACEMODEL((#{cfs_id}));")
+                body_rep_type = "SurfaceModel"
 
         layer_items.setdefault(layer_key, []).append(face_set_id)
 
@@ -824,7 +997,7 @@ def to_ifc(
         # 4. Shape Representation & Product Definition Shape
         shape_rep_id = next_id()
         lines.append(
-            f"#{shape_rep_id}=IFCSHAPEREPRESENTATION(#{geom_ctx_id},'Body','Tessellation',(#{face_set_id}));"
+            f"#{shape_rep_id}=IFCSHAPEREPRESENTATION(#{geom_ctx_id},'Body','{body_rep_type}',(#{face_set_id}));"
         )
 
         prod_shape_id = next_id()
@@ -866,7 +1039,12 @@ def to_ifc(
             attrs.append("$")
         # IfcBuildingElementProxy 的第 9 个属性正是 PredefinedType，写
         # .NOTDEFINED. 比 $ 更明确（IFC4 里该属性可选，两者都合法）
-        if step_type == "IFCBUILDINGELEMENTPROXY" and total == 9:
+        if is_ifc2x3:
+            if step_type == "IFCBUILDINGELEMENTPROXY" and total == 9:
+                attrs[8] = ".ELEMENT."
+            elif step_type in _IFC2X3_REQUIRED_NOTDEFINED_ATTR8 and total >= 9:
+                attrs[8] = ".NOTDEFINED."
+        elif step_type == "IFCBUILDINGELEMENTPROXY" and total == 9:
             attrs[8] = ".NOTDEFINED."
         lines.append(f"#{product_id}={step_type}({','.join(attrs)});")
 

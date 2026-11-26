@@ -329,3 +329,135 @@ class TestClosedFlag:
              *self.A, *self.B],
             [0, 1, 2, 0, 1, 3, 0, 1, 4, 0, 1, 5]))
         assert _closed_flag(text) == ".F."
+
+
+def _assert_dense_ids(text: str) -> None:
+    ids = [
+        int(line[1:line.index("=")])
+        for line in text.splitlines()
+        if line.startswith("#") and "=" in line
+    ]
+    assert ids == list(range(1, len(ids) + 1))
+
+
+class TestIfc2x3Conformance:
+    """schema='IFC2X3' writes IFC2X3-valid geometry, curves, and product attributes (#658)."""
+
+    A = (0.0, 0.0, 0.0)
+    B = (1.0, 0.0, 0.0)
+    C = (0.0, 1.0, 0.0)
+    D = (0.0, 0.0, 1.0)
+
+    def test_closed_solid_uses_faceted_brep_and_open_mesh_uses_surface_model(self):
+        closed_scene = _mesh_scene(
+            "Tetra",
+            [*self.A, *self.B, *self.C, *self.D],
+            [0, 2, 1, 0, 1, 3, 1, 2, 3, 2, 0, 3],
+        )
+        closed_text = to_ifc(closed_scene, schema="IFC2X3")
+        assert "FILE_SCHEMA(('IFC2X3'));" in closed_text
+        assert "IFCTRIANGULATEDFACESET(" not in closed_text
+        assert "IFCCARTESIANPOINTLIST3D(" not in closed_text
+        assert closed_text.count("IFCPOLYLOOP(") == 4
+        assert closed_text.count("IFCFACEOUTERBOUND(") == 4
+        assert closed_text.count("IFCFACE(") == 4
+        assert "IFCCLOSEDSHELL(" in closed_text
+        assert "IFCFACETEDBREP(" in closed_text
+        assert "'Body','Brep'," in closed_text
+        _assert_dense_ids(closed_text)
+
+        open_scene = _mesh_scene("Sheet", [*self.A, *self.B, *self.C], [0, 1, 2])
+        open_text = to_ifc(open_scene, schema="IFC2X3")
+        assert "IFCTRIANGULATEDFACESET(" not in open_text
+        assert "IFCCARTESIANPOINTLIST3D(" not in open_text
+        assert "IFCCONNECTEDFACESET(" in open_text
+        assert "IFCFACEBASEDSURFACEMODEL(" in open_text
+        assert "'Body','SurfaceModel'," in open_text
+        _assert_dense_ids(open_text)
+
+    def test_arcs_and_circles_use_trimmed_curve_circle_and_composite_curve(self):
+        s45 = math.sqrt(0.5)
+        open_arc = CurveSetMetadata(
+            name="QuarterArc",
+            points_m=[(1.0, 0.0, 0.0), (s45, 0.0, -s45), (0.0, 0.0, -1.0)],
+            closed=False,
+            arc={
+                "points": [(1.0, 0.0, 0.0), (s45, 0.0, -s45), (0.0, 0.0, -1.0)],
+                "segments": [(0, 1, 2)],
+            },
+        )
+        closed_circle = CurveSetMetadata(
+            name="FullCircle",
+            points_m=[(1.0, 0.0, 0.0), (0.0, 0.0, -1.0), (-1.0, 0.0, 0.0), (0.0, 0.0, 1.0)],
+            closed=True,
+            arc={
+                "points": [(1.0, 0.0, 0.0), (0.0, 0.0, -1.0), (-1.0, 0.0, 0.0), (0.0, 0.0, 1.0)],
+                "segments": [(0, 1, 2), (2, 3, 0)],
+            },
+        )
+        two_seg_arc = CurveSetMetadata(
+            name="WaveArc",
+            points_m=[
+                (0.0, 0.0, 0.0), (1.0, 0.0, -1.0), (2.0, 0.0, 0.0),
+                (3.0, 0.0, 1.0), (4.0, 0.0, 0.0),
+            ],
+            closed=False,
+            arc={
+                "points": [
+                    (0.0, 0.0, 0.0), (1.0, 0.0, -1.0), (2.0, 0.0, 0.0),
+                    (3.0, 0.0, 1.0), (4.0, 0.0, 0.0),
+                ],
+                "segments": [(0, 1, 2), (2, 3, 4)],
+            },
+        )
+        collinear_arc = CurveSetMetadata(
+            name="DegenerateArc",
+            points_m=[(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (2.0, 0.0, 0.0)],
+            closed=False,
+            arc={
+                "points": [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (2.0, 0.0, 0.0)],
+                "segments": [(0, 1, 2)],
+            },
+        )
+
+        scene = Scene(
+            scene_hierarchy=InstanceNode(name="Root"),
+            curve_sets=[open_arc, closed_circle, two_seg_arc, collinear_arc],
+        )
+        text = to_ifc(scene, schema="IFC2X3")
+        assert "IFCINDEXEDPOLYCURVE(" not in text
+        assert "IFCARCINDEX(" not in text
+        assert "IFCCARTESIANPOINTLIST3D(" not in text
+        assert text.count("IFCCIRCLE(") == 4
+        assert text.count("IFCTRIMMEDCURVE(") == 3
+        assert "IFCPARAMETERVALUE(1.570796)" in text
+        assert text.count("IFCCOMPOSITECURVE(") == 1
+        assert text.count("IFCCOMPOSITECURVESEGMENT(") == 2
+        assert text.count("IFCPOLYLINE(") == 1
+        _assert_dense_ids(text)
+
+    def test_proxy_composition_type_roof_shape_type_and_door_attr_count(self):
+        ifc2x3_counts = json.loads(_ATTR_COUNTS.read_text(encoding="utf-8"))["IFC2X3"]
+        proxy_text = to_ifc(
+            _mesh_scene("Mystery Box", [*self.A, *self.B, *self.C], [0, 1, 2]),
+            schema="IFC2X3",
+        )
+        proxy_attrs = _split_attributes(_entity_line(proxy_text, "IFCBUILDINGELEMENTPROXY("))
+        assert len(proxy_attrs) == ifc2x3_counts["IfcBuildingElementProxy"] == 9
+        assert proxy_attrs[8] == ".ELEMENT."
+
+        roof_text = to_ifc(
+            _mesh_scene("Gable Roof", [*self.A, *self.B, *self.C], [0, 1, 2]),
+            schema="IFC2X3",
+        )
+        roof_attrs = _split_attributes(_entity_line(roof_text, "IFCROOF("))
+        assert len(roof_attrs) == ifc2x3_counts["IfcRoof"] == 9
+        assert roof_attrs[8] == ".NOTDEFINED."
+
+        door_text = to_ifc(
+            _mesh_scene("Front Door", [*self.A, *self.B, *self.C], [0, 1, 2]),
+            schema="IFC2X3",
+        )
+        door_attrs = _split_attributes(_entity_line(door_text, "IFCDOOR("))
+        assert len(door_attrs) == ifc2x3_counts["IfcDoor"] == 10
+        _assert_dense_ids(door_text)

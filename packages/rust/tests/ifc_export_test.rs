@@ -1419,3 +1419,146 @@ mod curve_annotations {
         assert!(!text.contains("IFCINDEXEDPOLYCURVE("));
     }
 }
+
+mod ifc2x3_conformance {
+    use super::*;
+
+    fn ifc2x3(scene: &Scene) -> String {
+        to_ifc(scene, METRES_TO_MM, "IFC2X3", None, false).unwrap()
+    }
+
+    #[test]
+    fn closed_solid_uses_faceted_brep_and_open_mesh_uses_surface_model() {
+        let tetra = mesh_scene(
+            "ClosedCrate",
+            &[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+            &[0, 2, 1, 0, 1, 3, 1, 2, 3, 2, 0, 3],
+        );
+        let closed_text = ifc2x3(&tetra);
+        assert!(closed_text.contains("FILE_SCHEMA(('IFC2X3'));"));
+        assert!(!closed_text.contains("IFCTRIANGULATEDFACESET("));
+        assert!(!closed_text.contains("IFCCARTESIANPOINTLIST3D("));
+        assert_eq!(closed_text.matches("IFCPOLYLOOP(").count(), 4);
+        assert_eq!(closed_text.matches("IFCFACEOUTERBOUND(").count(), 4);
+        assert_eq!(closed_text.matches("IFCFACE(").count(), 4);
+        assert!(closed_text.contains("IFCCLOSEDSHELL("));
+        assert!(closed_text.contains("IFCFACETEDBREP("));
+        assert!(closed_text.contains("'Body','Brep',"));
+        assert_ids_are_dense(&closed_text);
+        assert_step_well_formed(&closed_text);
+
+        let open_text = ifc2x3(&mesh_scene("OpenSheet", &TRIANGLE, &[0, 1, 2]));
+        assert!(!open_text.contains("IFCTRIANGULATEDFACESET("));
+        assert!(!open_text.contains("IFCCARTESIANPOINTLIST3D("));
+        assert!(open_text.contains("IFCCONNECTEDFACESET("));
+        assert!(open_text.contains("IFCFACEBASEDSURFACEMODEL("));
+        assert!(open_text.contains("'Body','SurfaceModel',"));
+        assert_ids_are_dense(&open_text);
+        assert_step_well_formed(&open_text);
+    }
+
+    #[test]
+    fn arcs_and_circles_use_trimmed_curve_circle_and_composite_curve() {
+        let s45 = std::f64::consts::FRAC_1_SQRT_2;
+        let scene = Scene {
+            scene_hierarchy: root(),
+            curve_sets: vec![
+                CurveSetMetadata {
+                    name: "QuarterArc".to_string(),
+                    points_m: vec![[1.0, 0.0, 0.0], [s45, 0.0, -s45], [0.0, 0.0, -1.0]],
+                    closed: false,
+                    arc: Some(CurveArc {
+                        points: vec![[1.0, 0.0, 0.0], [s45, 0.0, -s45], [0.0, 0.0, -1.0]],
+                        segments: vec![[0, 1, 2]],
+                    }),
+                    ..CurveSetMetadata::default()
+                },
+                CurveSetMetadata {
+                    name: "FullCircle".to_string(),
+                    points_m: vec![
+                        [1.0, 0.0, 0.0],
+                        [0.0, 0.0, -1.0],
+                        [-1.0, 0.0, 0.0],
+                        [0.0, 0.0, 1.0],
+                    ],
+                    closed: true,
+                    arc: Some(CurveArc {
+                        points: vec![
+                            [1.0, 0.0, 0.0],
+                            [0.0, 0.0, -1.0],
+                            [-1.0, 0.0, 0.0],
+                            [0.0, 0.0, 1.0],
+                        ],
+                        segments: vec![[0, 1, 2], [2, 3, 0]],
+                    }),
+                    ..CurveSetMetadata::default()
+                },
+                CurveSetMetadata {
+                    name: "WaveArc".to_string(),
+                    points_m: vec![
+                        [0.0, 0.0, 0.0],
+                        [1.0, 0.0, -1.0],
+                        [2.0, 0.0, 0.0],
+                        [3.0, 0.0, 1.0],
+                        [4.0, 0.0, 0.0],
+                    ],
+                    closed: false,
+                    arc: Some(CurveArc {
+                        points: vec![
+                            [0.0, 0.0, 0.0],
+                            [1.0, 0.0, -1.0],
+                            [2.0, 0.0, 0.0],
+                            [3.0, 0.0, 1.0],
+                            [4.0, 0.0, 0.0],
+                        ],
+                        segments: vec![[0, 1, 2], [2, 3, 4]],
+                    }),
+                    ..CurveSetMetadata::default()
+                },
+                CurveSetMetadata {
+                    name: "DegenerateArc".to_string(),
+                    points_m: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0]],
+                    closed: false,
+                    arc: Some(CurveArc {
+                        points: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0]],
+                        segments: vec![[0, 1, 2]],
+                    }),
+                    ..CurveSetMetadata::default()
+                },
+            ],
+            ..Scene::default()
+        };
+
+        let text = ifc2x3(&scene);
+        assert!(!text.contains("IFCINDEXEDPOLYCURVE("));
+        assert!(!text.contains("IFCARCINDEX("));
+        assert!(!text.contains("IFCCARTESIANPOINTLIST3D("));
+        assert_eq!(text.matches("=IFCCIRCLE(").count(), 4);
+        assert_eq!(text.matches("=IFCTRIMMEDCURVE(").count(), 3);
+        assert!(text.contains("IFCPARAMETERVALUE(1.570796)"));
+        assert_eq!(text.matches("=IFCCOMPOSITECURVE(").count(), 1);
+        assert_eq!(text.matches("=IFCCOMPOSITECURVESEGMENT(").count(), 2);
+        assert_eq!(text.matches("=IFCPOLYLINE(").count(), 1);
+        assert_ids_are_dense(&text);
+        assert_step_well_formed(&text);
+    }
+
+    #[test]
+    fn proxy_composition_type_roof_shape_type_and_door_attr_count() {
+        let proxy_text = ifc2x3(&mesh_scene("Mystery Box", &TRIANGLE, &[0, 1, 2]));
+        let proxy_attrs = split_attributes(entity_line(&proxy_text, "IFCBUILDINGELEMENTPROXY("));
+        assert_eq!(proxy_attrs.len(), 9);
+        assert_eq!(proxy_attrs[8], ".ELEMENT.");
+
+        let roof_text = ifc2x3(&mesh_scene("Gable Roof", &TRIANGLE, &[0, 1, 2]));
+        let roof_attrs = split_attributes(entity_line(&roof_text, "IFCROOF("));
+        assert_eq!(roof_attrs.len(), 9);
+        assert_eq!(roof_attrs[8], ".NOTDEFINED.");
+
+        let door_text = ifc2x3(&mesh_scene("Front Door", &TRIANGLE, &[0, 1, 2]));
+        let door_attrs = split_attributes(entity_line(&door_text, "IFCDOOR("));
+        assert_eq!(door_attrs.len(), 10);
+        assert_ids_are_dense(&door_text);
+        assert_step_well_formed(&door_text);
+    }
+}
