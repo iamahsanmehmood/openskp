@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `toGLB` and `toInstancedGLB` with `{ textures: true }` bake colorized PNG textures out of the box (using the existing `fflate` dependency, shift or tint within 1/255 of SketchUp's own result) with a white material factor, once per colour.
 - Colorized JPEG textures are baked at quality 95 when a synchronous `imageCodec` (`decode` / `encode`, for example `jpeg-js`) is passed on `GlbOptions` or `InstancedGlbOptions`; without `imageCodec`, JPEG textures are still embedded and colorized ones keep the tinted factor, with one warning.
 - JPEG textures lose their EXIF `APP1` block (orientation included) without being re-encoded, and textures above 178,956,970 pixels (read from the header before decoding) or ones that fail to decode keep their source bytes and the tinted factor, with one warning.
+### Fixed — all six languages: per-face tag colours with `unpainted_faces="tag"` (#697)
+
+- With `unpainted_faces="tag"` (and in SketchUp 3 files that carry no face colours), `build_scene` and `build_instanced_scene` give each unpainted face side its own tag's colour (`Face.layer`), falling back to the enclosing placement's tag colour only when the face itself is untagged (`Layer0`), matching SketchUp's *Color by Tag* view. Previously one fallback tag colour was chosen per component definition.
 
 ### Added — Python: `openskp info` and `openskp convert` on the command line (#570)
 

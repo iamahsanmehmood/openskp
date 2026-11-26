@@ -333,12 +333,22 @@ class InstancedSceneBuilder {
     final curveResourceIdByKey = <String, String?>{};
     final preparedCurvesCache = <int, PreparedDefCurves>{};
     final includeCurveSets = options?.includeCurveSets ?? true;
-    final faceLayerCache = <int, (String?, String?)>{};
-    (String?, String?) getFaceLayerSummary(int? defId, GeometryBuilder builder) {
+    (int, int, int)? resolveFaceTagColor(int? layerId) {
+      if (layerId != null && layerId != 0) {
+        final fname = layerIdToName[layerId] ?? '';
+        if (fname.isNotEmpty && fname != 'Layer0') {
+          return getLayerColor(fname);
+        }
+      }
+      return null;
+    }
+
+    final faceLayerCache = <int, (String?, bool)>{};
+    (String?, bool) getFaceLayerSummary(int? defId, GeometryBuilder builder) {
       final key = defId ?? -1;
       final hit = faceLayerCache[key];
       if (hit != null || faceLayerCache.containsKey(key)) {
-        return hit ?? (null, null);
+        return hit ?? (null, false);
       }
       final summary = Geometry.summarizeFaceLayers(builder, layerIdToName);
       faceLayerCache[key] = summary;
@@ -432,13 +442,24 @@ class InstancedSceneBuilder {
 
       final (int, int, int) fallbackColor;
       final (int, int, int) fallbackBackColor;
+      (int, int, int)? Function(int?)? faceTagColor;
+      String colorPart;
       if (inheritedColor != null) {
         fallbackColor = fallbackBackColor = inheritedColor;
+        colorPart = '${fallbackColor.$1},${fallbackColor.$2},${fallbackColor.$3}';
       } else if (styleColors != null) {
         (fallbackColor, fallbackBackColor) = styleColors;
+        colorPart = '${fallbackColor.$1},${fallbackColor.$2},${fallbackColor.$3}';
       } else {
-        final colorLayer = getFaceLayerSummary(defId, builder).$2 ?? layer;
+        final summary = getFaceLayerSummary(defId, builder);
+        final colorLayer = summary.$1 ?? layer;
         fallbackColor = fallbackBackColor = getLayerColor(colorLayer);
+        if (inheritedMaterial == null) {
+          faceTagColor = resolveFaceTagColor;
+        }
+        colorPart = (summary.$2 || summary.$1 != null || inheritedMaterial != null)
+            ? '${fallbackColor.$1},${fallbackColor.$2},${fallbackColor.$3}'
+            : 'tags';
       }
       final backPart = fallbackBackColor != fallbackColor
           ? '/${fallbackBackColor.$1},${fallbackBackColor.$2},${fallbackBackColor.$3}'
@@ -446,8 +467,7 @@ class InstancedSceneBuilder {
       final matPart = inheritedMaterial != null
           ? '|${inheritedMaterial.name}:${resolveTransparency(inheritedMaterial)}:${inheritedMaterial.colorized ? 1 : 0}:${inheritedMaterial.colorizeType}'
           : '';
-      final key =
-          '${defId ?? 'ROOT'}|${fallbackColor.$1},${fallbackColor.$2},${fallbackColor.$3}$matPart$backPart';
+      final key = '${defId ?? 'ROOT'}|$colorPart$matPart$backPart';
       final hit = resourceIdByKey[key];
       if (hit != null) return hit;
 
@@ -458,6 +478,7 @@ class InstancedSceneBuilder {
           textureIndexFor: textureIndexFor,
           fallbackColor: fallbackColor,
           fallbackBackColor: fallbackBackColor,
+          faceTagColor: faceTagColor,
           definitionId: defId,
         ),
       );

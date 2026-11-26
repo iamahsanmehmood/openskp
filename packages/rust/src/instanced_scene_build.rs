@@ -190,23 +190,36 @@ impl<'a> Instancer<'a> {
         if builder.faces.is_empty() {
             return Ok(None);
         }
-        let (fallback, fallback_back) = match material_color(inherited_material) {
-            Some(c) => (c, c),
+        let mut use_face_tag_colors = false;
+        let (fallback, fallback_back, key) = match material_color(inherited_material) {
+            Some(c) => (c, c, resource_key(defid, &c, &c, inherited_material)),
             None => match self.style_colors {
-                Some((front, back)) => (front, back),
+                Some((front, back)) => (
+                    front,
+                    back,
+                    resource_key(defid, &front, &back, inherited_material),
+                ),
                 None => {
-                    let majority = self
-                        .face_layer_summary(defid, builder)
-                        .majority_layer
-                        .clone();
-                    let color_layer = majority.as_deref().unwrap_or(layer);
+                    let summary = self.face_layer_summary(defid, builder).clone();
+                    let color_layer = summary.uniform_layer.as_deref().unwrap_or(layer);
                     let c = default_color(self.p, color_layer);
-                    (c, c)
+                    use_face_tag_colors = inherited_material.is_none();
+                    let key = if inherited_material.is_none()
+                        && !summary.has_untagged_face
+                        && summary.uniform_layer.is_none()
+                    {
+                        match defid {
+                            Some(id) => format!("{id}|tags"),
+                            None => "ROOT|tags".to_owned(),
+                        }
+                    } else {
+                        resource_key(defid, &c, &c, inherited_material)
+                    };
+                    (c, c, key)
                 }
             },
         };
         let p = self.p;
-        let key = resource_key(defid, &fallback, &fallback_back, inherited_material);
         if let Some(&hit) = self.resource_index_by_key.get(&key) {
             return Ok(Some(self.mesh_resources[hit].id.clone()));
         }
@@ -219,6 +232,7 @@ impl<'a> Instancer<'a> {
                 fallback_color: fallback,
                 fallback_back_color: Some(fallback_back),
                 fallback_material: inherited_material,
+                use_face_tag_colors,
             };
             build_local_face_groups(p, builder, &mut ctx).map_err(build_error)?
         };

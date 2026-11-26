@@ -300,6 +300,87 @@ void main() {
       );
     });
 
+    test('unpaintedFaces="tag" resolves each face own tag colour and falls back to placement tag (#697)', () {
+      const rgbA = (220, 40, 50);
+      const rgbB = (40, 180, 70);
+      const rgbC = (50, 90, 230);
+      const rgbD = (190, 140, 30);
+
+      final builder = create();
+      final tagA = builder.addLayer('TagA', color: [rgbA.$1, rgbA.$2, rgbA.$3]);
+      final tagB = builder.addLayer('TagB', color: [rgbB.$1, rgbB.$2, rgbB.$3]);
+      final tagC = builder.addLayer('TagC', color: [rgbC.$1, rgbC.$2, rgbC.$3]);
+      final tagD = builder.addLayer('TagD', color: [rgbD.$1, rgbD.$2, rgbD.$3]);
+      final panel = builder.addComponentDefinition('Panel', (def) {
+        def.addFace(
+          [(0.0, 0.0, 0.0), (10.0, 0.0, 0.0), (10.0, 10.0, 0.0), (0.0, 10.0, 0.0)],
+          layer: tagA,
+        );
+        def.addFace(
+          [(0.0, 0.0, 10.0), (10.0, 0.0, 10.0), (10.0, 10.0, 10.0), (0.0, 10.0, 10.0)],
+          layer: tagB,
+        );
+        def.addFace([(0.0, 0.0, 20.0), (10.0, 0.0, 20.0), (10.0, 10.0, 20.0), (0.0, 10.0, 20.0)]);
+      });
+      builder.addInstance(panel, layer: tagC);
+      builder.addInstance(panel, layer: tagD, translation: (0.0, 0.0, 100.0));
+
+      final tmpDir = Directory.systemTemp.createTempSync('openskp_697_');
+      try {
+        final path = '${tmpDir.path}/per_face_tags.skp';
+        builder.save(path);
+        final skp = SkpFile.open(path);
+        final model = skp.parse();
+        const tagOpts = ParseOptions(unpaintedFaces: 'tag');
+
+        final baked = skp.buildScene(tagOpts);
+        final bakedByZ = {
+          for (final p in baked.glbPrimitives)
+            (p.positions[1] / 0.0254).round(): (
+              _rgbOf(baked.gltfMaterials, p.materialIndex),
+              _doubleSidedOf(baked.gltfMaterials, p.materialIndex),
+              p.unpaintedBack,
+            ),
+        };
+        expect(bakedByZ, {
+          0: (rgbA, true, false),
+          10: (rgbB, true, false),
+          20: (rgbC, true, false),
+          100: (rgbA, true, false),
+          110: (rgbB, true, false),
+          120: (rgbD, true, false),
+        });
+
+        final instanced = skp.buildInstancedScene(tagOpts);
+        expect(instanced.meshResources.length, 2);
+        final resByZ = [
+          for (final r in instanced.meshResources)
+            {
+              for (final p in r.primitives)
+                (p.positions[1] / 0.0254).round(): (
+                  _rgbOf(instanced.gltfMaterials, p.materialIndex),
+                  _doubleSidedOf(instanced.gltfMaterials, p.materialIndex),
+                  p.unpaintedBack,
+                ),
+            },
+        ];
+        expect(resByZ, [
+          {0: (rgbA, true, false), 10: (rgbB, true, false), 20: (rgbC, true, false)},
+          {0: (rgbA, true, false), 10: (rgbB, true, false), 20: (rgbD, true, false)},
+        ]);
+
+        final styleInst = skp.buildInstancedScene();
+        expect(styleInst.meshResources.length, 1);
+        final styleSides = [
+          for (final p in styleInst.meshResources.first.primitives)
+            (_rgbOf(styleInst.gltfMaterials, p.materialIndex), p.unpaintedBack),
+        ]..sort((a, b) => (a.$2 ? 1 : 0).compareTo(b.$2 ? 1 : 0));
+        expect(styleSides, [(model.faceFrontColor!, false), (model.faceBackColor!, true)]);
+      } finally {
+        tmpDir.deleteSync(recursive: true);
+      }
+    });
+
     test('single-colour exports keep one copy of each unpainted face', () {
       final skp = SkpFile.fromBuffer(_boxBytes());
       final style = skp.buildScene();

@@ -122,11 +122,11 @@ pub(crate) fn definition_name(p: &RawParsed, i: &RawInstance) -> String {
 
 /// Per-definition face-tag summary: `uniform_layer` is `Some` only when every
 /// face of the definition has the same tag (other than `Layer0`);
-/// `majority_layer` is the most common non-`Layer0` face tag.
+/// `has_untagged_face` is `true` when at least one face has no non-`Layer0` tag.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct FaceLayerSummary {
     pub uniform_layer: Option<String>,
-    pub majority_layer: Option<String>,
+    pub has_untagged_face: bool,
 }
 
 pub(crate) fn summarize_face_layers(p: &RawParsed, b: &GeometryBuilder) -> FaceLayerSummary {
@@ -134,20 +134,15 @@ pub(crate) fn summarize_face_layers(p: &RawParsed, b: &GeometryBuilder) -> FaceL
         return FaceLayerSummary::default();
     }
     let mut all_same = true;
+    let mut has_untagged_face = false;
     let mut common_name: Option<String> = None;
-    let mut counts: Vec<(EntityId, usize)> = Vec::new();
     for f in b.faces.values() {
         let resolved = f
             .layer_id
             .filter(|&id| id != 0)
             .and_then(|id| p.layer_id_to_name.get(&id))
             .filter(|name| !name.is_empty() && name.as_str() != "Layer0");
-        if let (Some(id), Some(name)) = (f.layer_id, resolved) {
-            if let Some(entry) = counts.iter_mut().find(|(cid, _)| *cid == id) {
-                entry.1 += 1;
-            } else {
-                counts.push((id, 1));
-            }
+        if let Some(name) = resolved {
             match &common_name {
                 None => common_name = Some(name.clone()),
                 Some(prev) if prev != name => all_same = false,
@@ -155,19 +150,12 @@ pub(crate) fn summarize_face_layers(p: &RawParsed, b: &GeometryBuilder) -> FaceL
             }
         } else {
             all_same = false;
+            has_untagged_face = true;
         }
     }
-    let uniform_layer = if all_same { common_name } else { None };
-    let majority_layer = counts
-        .into_iter()
-        .fold(None::<(EntityId, usize)>, |best, cur| match best {
-            Some((_, bc)) if cur.1 <= bc => best,
-            _ => Some(cur),
-        })
-        .and_then(|(id, _)| p.layer_id_to_name.get(&id).cloned());
     FaceLayerSummary {
-        uniform_layer,
-        majority_layer,
+        uniform_layer: if all_same { common_name } else { None },
+        has_untagged_face,
     }
 }
 
@@ -374,13 +362,14 @@ impl<'a> Baker<'a> {
             layer
         };
         let p = self.p;
+        let mut use_face_tag_colors = false;
         let (fallback, fallback_back) = match material_color(inherited_material) {
             Some(c) => (c, c),
             None => match self.style_colors {
                 Some((front, back)) => (front, back),
                 None => {
-                    let color_layer = summary.majority_layer.as_deref().unwrap_or(layer);
-                    let c = default_color(p, color_layer);
+                    use_face_tag_colors = inherited_material.is_none();
+                    let c = default_color(p, layer);
                     (c, c)
                 }
             },
@@ -393,6 +382,7 @@ impl<'a> Baker<'a> {
                 fallback_color: fallback,
                 fallback_back_color: Some(fallback_back),
                 fallback_material: inherited_material,
+                use_face_tag_colors,
             };
             build_local_face_groups(p, b, &mut ctx).map_err(build_error)?
         };

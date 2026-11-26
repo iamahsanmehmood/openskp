@@ -23,7 +23,7 @@ import re
 import time
 from array import array
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from . import _core
 from ._curves import (
@@ -576,19 +576,25 @@ def build_scene(
         color_to_material_index[key] = idx
         return idx
 
-    face_layer_summary_cache: Dict[Any, Tuple[Optional[str], Optional[str]]] = {}
+    def resolve_face_tag_color(layer_id: Any) -> Optional[Tuple[int, int, int]]:
+        fname = layer_id_to_name.get(layer_id, "") if layer_id else ""
+        if fname and fname != "Layer0":
+            return get_layer_color(fname)
+        return None
 
-    def _face_layer_summary(def_id: Any) -> Tuple[Optional[str], Optional[str]]:
+    face_layer_summary_cache: Dict[Any, Tuple[Optional[str], bool]] = {}
+
+    def _face_layer_summary(def_id: Any) -> Tuple[Optional[str], bool]:
         hit = face_layer_summary_cache.get(def_id)
         if hit is not None or def_id in face_layer_summary_cache:
             return hit  # type: ignore[return-value]
         d = defs_dict.get(def_id)
         if d is None or not d["builder"].faces:
-            res: Tuple[Optional[str], Optional[str]] = (None, None)
+            res: Tuple[Optional[str], bool] = (None, False)
             face_layer_summary_cache[def_id] = res
             return res
-        counts: Dict[Any, int] = {}
         all_same = True
+        has_untagged = False
         common_name: Optional[str] = None
         for f in d["builder"].faces.values():
             lid = f.get("layer")
@@ -596,18 +602,14 @@ def build_scene(
             if fname == "Layer0":
                 fname = ""
             if fname:
-                counts[lid] = counts.get(lid, 0) + 1
                 if common_name is None:
                     common_name = fname
                 elif fname != common_name:
                     all_same = False
             else:
                 all_same = False
-        uniform_layer = common_name if all_same else None
-        majority_layer = (
-            layer_id_to_name.get(max(counts, key=counts.get)) if counts else None
-        )
-        res = (uniform_layer, majority_layer)
+                has_untagged = True
+        res = (common_name if all_same else None, has_untagged)
         face_layer_summary_cache[def_id] = res
         return res
 
@@ -623,7 +625,7 @@ def build_scene(
         if d is None:
             return []
         builder = d["builder"]
-        uniform_layer, majority_layer = _face_layer_summary(def_id)
+        uniform_layer, _ = _face_layer_summary(def_id)
         mesh_layer = (
             (uniform_layer if uniform_layer is not None else parent_layer)
             if parent_layer == "Layer0"
@@ -634,16 +636,18 @@ def build_scene(
             # An untagged (Layer0) placement's own mesh takes its faces' tag
             # only when every face of the definition has the same tag (other
             # than Layer0); tagged placements keep their own or inherited tag,
-            # and child instances never inherit a face's tag. For
-            # unpainted_faces="tag" and files without style face colours, the
-            # majority face tag still supplies the unpainted fallback colour.
+            # and child instances never inherit a face's tag. In tag mode, each
+            # unpainted face resolves its own tag colour first and falls back to
+            # parent_layer when untagged (#697).
+            face_tag_color_fn: Optional[Callable[[Any], Optional[Tuple[int, int, int]]]] = None
             if inherited_color is not None:
                 fallback_color = fallback_back_color = inherited_color
             elif style_colors is not None:
                 fallback_color, fallback_back_color = style_colors
             else:
-                color_layer = majority_layer if majority_layer is not None else parent_layer
-                fallback_color = fallback_back_color = get_layer_color(color_layer)
+                fallback_color = fallback_back_color = get_layer_color(parent_layer)
+                if inherited_material is None:
+                    face_tag_color_fn = resolve_face_tag_color
             face_groups = build_local_face_groups(
                 builder,
                 FaceGroupContext(
@@ -655,6 +659,7 @@ def build_scene(
                     definition_id=def_id,
                     fallback_material=inherited_material,
                     fallback_back_color=fallback_back_color,
+                    face_tag_color=face_tag_color_fn,
                 ),
             )
 

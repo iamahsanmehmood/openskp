@@ -83,6 +83,11 @@ class FaceGroupContext {
   /// model's back face color). `null` means [fallbackColor].
   final (int, int, int)? fallbackBackColor;
 
+  /// Per-face tag colour lookup (`face.layerId -> (r, g, b)?`), active when
+  /// `unpaintedFaces == 'tag'` (or the file carries no style face colours)
+  /// and no instance paint is inherited (#697).
+  final (int, int, int)? Function(int?)? faceTagColor;
+
   /// Identifies the definition in a triangulation failure.
   final int? definitionId;
 
@@ -91,6 +96,7 @@ class FaceGroupContext {
     required this.textureIndexFor,
     required this.fallbackColor,
     this.fallbackBackColor,
+    this.faceTagColor,
     this.definitionId,
   });
 }
@@ -285,8 +291,13 @@ Map<FaceGroupKey, LocalFaceGroup> buildLocalFaceGroups(GeometryBuilder builder, 
 
     final frontMat = ctx.resolveMaterial(fData.materialId);
     final backMat = ctx.resolveMaterial(fData.backMaterialId);
-    final frontColor = (frontMat != null) ? (frontMat.r, frontMat.g, frontMat.b) : ctx.fallbackColor;
-    final backColor = (backMat != null) ? (backMat.r, backMat.g, backMat.b) : fallbackBackColor;
+    final faceFallback = (ctx.faceTagColor != null && (frontMat == null || backMat == null))
+        ? ctx.faceTagColor!(fData.layerId)
+        : null;
+    final frontColor =
+        (frontMat != null) ? (frontMat.r, frontMat.g, frontMat.b) : (faceFallback ?? ctx.fallbackColor);
+    final backColor =
+        (backMat != null) ? (backMat.r, backMat.g, backMat.b) : (faceFallback ?? fallbackBackColor);
 
     final loops = <List<int>>[];
     for (final loop in fData.loops) {

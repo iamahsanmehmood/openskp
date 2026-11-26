@@ -306,6 +306,79 @@ namespace OpenSkp.Tests
         }
 
         [Fact]
+        public void TagModeResolvesEachFacesOwnTagColour()
+        {
+            var rgbA = (220, 40, 50);
+            var rgbB = (40, 180, 70);
+            var rgbC = (50, 90, 230);
+            var rgbD = (190, 140, 30);
+
+            var builder = SkpCreate.NewFile();
+            int tagA = builder.AddLayer("TagA", color: rgbA);
+            int tagB = builder.AddLayer("TagB", color: rgbB);
+            int tagC = builder.AddLayer("TagC", color: rgbC);
+            int tagD = builder.AddLayer("TagD", color: rgbD);
+            ComponentDefinitionBuilder panel;
+            using (panel = builder.AddComponentDefinition("Panel"))
+            {
+                panel.AddFace(new (double, double, double)[] { (0, 0, 0), (10, 0, 0), (10, 10, 0), (0, 10, 0) }, layer: tagA);
+                panel.AddFace(new (double, double, double)[] { (0, 0, 10), (10, 0, 10), (10, 10, 10), (0, 10, 10) }, layer: tagB);
+                panel.AddFace(new (double, double, double)[] { (0, 0, 20), (10, 0, 20), (10, 10, 20), (0, 10, 20) });
+            }
+            builder.AddInstance(panel, layer: tagC);
+            builder.AddInstance(panel, layer: tagD, translation: (0, 0, 100));
+
+            string tmpPath = Path.Combine(Path.GetTempPath(), $"openskp_697_{Guid.NewGuid():N}.skp");
+            try
+            {
+                builder.Save(tmpPath);
+                var model = SkpFile.Open(tmpPath);
+                var tagOpts = new SkpParseOptions { UnpaintedFaces = "tag" };
+
+                var baked = SkpFile.BuildScene(tmpPath, tagOpts);
+                var bakedByZ = baked.GlbPrimitives.ToDictionary(
+                    p => (int)Math.Round(p.Positions[1] / 0.0254),
+                    p => (RgbOf(baked.GltfMaterials, p.MaterialIndex), DoubleSidedOf(baked.GltfMaterials, p.MaterialIndex), p.UnpaintedBack));
+                Assert.Equal(6, bakedByZ.Count);
+                Assert.Equal((rgbA, true, false), bakedByZ[0]);
+                Assert.Equal((rgbB, true, false), bakedByZ[10]);
+                Assert.Equal((rgbC, true, false), bakedByZ[20]);
+                Assert.Equal((rgbA, true, false), bakedByZ[100]);
+                Assert.Equal((rgbB, true, false), bakedByZ[110]);
+                Assert.Equal((rgbD, true, false), bakedByZ[120]);
+
+                var instanced = SkpFile.BuildInstancedScene(tmpPath, tagOpts);
+                Assert.Equal(2, instanced.MeshResources.Count);
+                var res0ByZ = instanced.MeshResources[0].Primitives.ToDictionary(
+                    p => (int)Math.Round(p.Positions[1] / 0.0254),
+                    p => (RgbOf(instanced.GltfMaterials, p.MaterialIndex), DoubleSidedOf(instanced.GltfMaterials, p.MaterialIndex), p.UnpaintedBack));
+                var res1ByZ = instanced.MeshResources[1].Primitives.ToDictionary(
+                    p => (int)Math.Round(p.Positions[1] / 0.0254),
+                    p => (RgbOf(instanced.GltfMaterials, p.MaterialIndex), DoubleSidedOf(instanced.GltfMaterials, p.MaterialIndex), p.UnpaintedBack));
+                Assert.Equal(3, res0ByZ.Count);
+                Assert.Equal((rgbA, true, false), res0ByZ[0]);
+                Assert.Equal((rgbB, true, false), res0ByZ[10]);
+                Assert.Equal((rgbC, true, false), res0ByZ[20]);
+                Assert.Equal(3, res1ByZ.Count);
+                Assert.Equal((rgbA, true, false), res1ByZ[0]);
+                Assert.Equal((rgbB, true, false), res1ByZ[10]);
+                Assert.Equal((rgbD, true, false), res1ByZ[20]);
+
+                var styleInst = SkpFile.BuildInstancedScene(tmpPath);
+                Assert.Single(styleInst.MeshResources);
+                var styleSides = styleInst.MeshResources[0].Primitives
+                    .OrderBy(p => p.UnpaintedBack)
+                    .Select(p => (RgbOf(styleInst.GltfMaterials, p.MaterialIndex), p.UnpaintedBack))
+                    .ToList();
+                Assert.Equal(new[] { (model.FaceFrontColor!.Value, false), (model.FaceBackColor!.Value, true) }, styleSides);
+            }
+            finally
+            {
+                if (File.Exists(tmpPath)) File.Delete(tmpPath);
+            }
+        }
+
+        [Fact]
         public void SingleColourExportsKeepOneCopyOfEachFace()
         {
             var bytes = BuildBoxBytes();
