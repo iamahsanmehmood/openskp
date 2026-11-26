@@ -3005,6 +3005,19 @@ class Legacy {
       faceColors = null;
     }
 
+    bool colorByTag = false;
+    try {
+      colorByTag = _modelColorByTag(data, ar.ver);
+    } on OutOfMemoryError {
+      rethrow;
+    } on StackOverflowError {
+      rethrow;
+    } catch (e) {
+      emitLog(options, SkpLogLevel.debug,
+          'Failed to read legacy model colorByTag: $e');
+      colorByTag = false;
+    }
+
     return RawParsed()
       ..version = version
       // Legacy (pre-2021 MFC) files carry no meta/meta.dat container -
@@ -3021,6 +3034,7 @@ class Legacy {
       ..materials.addAll(materialsMap)
       ..styles.addAll(const [])
       ..faceColors = faceColors
+      ..colorByTag = colorByTag
       ..defsDict.addAll(defsDict)
       ..unreadRootEntities = ar.unreadRootEntities
       ..root =
@@ -3037,10 +3051,15 @@ class Legacy {
     return null;
   }
 
-  static ((int, int, int), (int, int, int))? _modelFaceColors(
-      Uint8List data, int ver) {
-    final distance = _faceColorsDistanceAfterCamera(ver);
-    if (distance == null) return null;
+  static int? _colorByTagDistanceAfterCamera(int ver) {
+    if (ver == 4 || ver == 5) return 29;
+    if (ver >= 6 && ver <= 16) return 31;
+    if (ver == 17 || ver == 18) return 32;
+    if (ver == 19 || ver == 20) return 33;
+    return null;
+  }
+
+  static int? _cameraEndOffset(Uint8List data, int ver) {
     int camEnd = -1;
     for (int i = 0; i + 13 <= data.length; i++) {
       if (data[i] == 0xFF &&
@@ -3082,9 +3101,18 @@ class Legacy {
     }
     if (n > (data.length - p) ~/ 2) return null;
     p += 2 * n;
-    final tail = (ver >= 6 ? 33 : 10) + distance;
+    final tail = ver >= 6 ? 33 : 10;
     if (tail > data.length - p) return null;
-    final at = p + tail;
+    return p + tail;
+  }
+
+  static ((int, int, int), (int, int, int))? _modelFaceColors(
+      Uint8List data, int ver) {
+    final distance = _faceColorsDistanceAfterCamera(ver);
+    if (distance == null) return null;
+    final camEnd = _cameraEndOffset(data, ver);
+    if (camEnd == null || distance > data.length - camEnd) return null;
+    final at = camEnd + distance;
     if (8 > data.length - at || data[at + 3] != 0xFF || data[at + 7] != 0xFF) {
       return null;
     }
@@ -3092,5 +3120,14 @@ class Legacy {
       (data[at], data[at + 1], data[at + 2]),
       (data[at + 4], data[at + 5], data[at + 6]),
     );
+  }
+
+  static bool _modelColorByTag(Uint8List data, int ver) {
+    final distance = _colorByTagDistanceAfterCamera(ver);
+    if (distance == null) return false;
+    final camEnd = _cameraEndOffset(data, ver);
+    if (camEnd == null || distance >= data.length - camEnd) return false;
+    final val = data[camEnd + distance];
+    return val <= 1 && val == 1;
   }
 }

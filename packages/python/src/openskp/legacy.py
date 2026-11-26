@@ -2654,15 +2654,13 @@ def _add_edge(builder, slot, e, slots, pids=None):
 # camera elsewhere (a fixed block in the thumbnail) and is not read.
 _FACE_COLORS_AFTER_CAMERA = {4: 50, 5: 61, 17: 64, 18: 64, 19: 65, 20: 66}
 _FACE_COLORS_AFTER_CAMERA.update({v: 63 for v in range(6, 17)})
+_COLOR_BY_TAG_AFTER_CAMERA = {4: 29, 5: 29, 17: 32, 18: 32, 19: 33, 20: 33}
+_COLOR_BY_TAG_AFTER_CAMERA.update({v: 31 for v in range(6, 17)})
 _CAMERA_DECL_RE = re.compile(rb'\xff\xff..\x07\x00CCamera', re.DOTALL)
 
 
-def _model_face_colors(data: bytes, ver: int):
-    """``(front, back)`` - the model's face colours as SketchUp shows them on
-    an unpainted face's front and back side, each ``(r, g, b)`` - or ``None``
-    when this reader does not know where the file keeps them."""
-    distance = _FACE_COLORS_AFTER_CAMERA.get(ver)
-    m = _CAMERA_DECL_RE.search(data) if distance is not None else None
+def _camera_end(data: bytes, ver: int) -> Optional[int]:
+    m = _CAMERA_DECL_RE.search(data)
     if m is None:
         return None
     r = _R(data, m.end())
@@ -2670,11 +2668,40 @@ def _model_face_colors(data: bytes, ver: int):
     r.u16()
     r.utf16()
     r.raw(33 if ver >= 6 else 10)
-    at = r.pos + distance
+    return r.pos
+
+
+def _model_face_colors(data: bytes, ver: int):
+    """``(front, back)`` - the model's face colours as SketchUp shows them on
+    an unpainted face's front and back side, each ``(r, g, b)`` - or ``None``
+    when this reader does not know where the file keeps them."""
+    distance = _FACE_COLORS_AFTER_CAMERA.get(ver)
+    if distance is None:
+        return None
+    cam_end = _camera_end(data, ver)
+    if cam_end is None:
+        return None
+    at = cam_end + distance
     rgba = data[at:at + 8]
     if len(rgba) != 8 or rgba[3] != 0xFF or rgba[7] != 0xFF:
         return None  # not the two opaque colours this layout puts there
     return tuple(rgba[0:3]), tuple(rgba[4:7])
+
+
+def _model_color_by_tag(data: bytes, ver: int) -> bool:
+    """Whether SketchUp's "Color by Tag" (``DisplayColorByLayer``) setting is
+    enabled in a classic file's ``CRenderingOptions`` header block (SketchUp 4
+    to 2020), or ``False`` when off or absent (openskp#697)."""
+    distance = _COLOR_BY_TAG_AFTER_CAMERA.get(ver)
+    if distance is None:
+        return False
+    cam_end = _camera_end(data, ver)
+    if cam_end is None:
+        return False
+    at = cam_end + distance
+    if at >= len(data) or data[at] > 1:
+        return False
+    return data[at] == 1
 
 
 def _premodel_attribute_dictionaries(data: bytes) -> Dict[str, Dict[str, Any]]:
@@ -2907,6 +2934,11 @@ def full_parse_legacy(skp_path: str) -> Dict[str, Any]:
     except (LegacyParseError, struct.error, IndexError, UnicodeDecodeError, ValueError):
         logger.debug("model face colours unreadable", exc_info=True)
         face_colors = None
+    try:
+        color_by_tag = _model_color_by_tag(data, ar.ver)
+    except (LegacyParseError, struct.error, IndexError, UnicodeDecodeError, ValueError):
+        logger.debug("model color_by_tag unreadable", exc_info=True)
+        color_by_tag = False
 
     try:
         pages = _read_page_list(data, ar)
@@ -2939,6 +2971,7 @@ def full_parse_legacy(skp_path: str) -> Dict[str, Any]:
         'thumbnail_data': None,
         'styles': [],
         'face_colors': face_colors,
+        'color_by_tag': color_by_tag,
         'unread_root_entities': ar.unread_root_entities,
         # Legacy (pre-2021 MFC) files carry no meta/meta.dat container -
         # that's a VFF/ZIP-only construct - so there is no known source

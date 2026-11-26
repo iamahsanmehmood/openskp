@@ -614,6 +614,12 @@ namespace OpenSkp
         /// <summary>The same for the back side of a face.</summary>
         public (int R, int G, int B)? FaceBackColor { get; set; }
 
+        /// <summary>Whether SketchUp's "Color by Tag" (<c>DisplayColorByLayer</c>)
+        /// style setting is enabled in the model's active rendering options.
+        /// Read from 2021+ files and from classic files of SketchUp 4 to 2020;
+        /// <c>false</c> when off or when the file does not give it (SketchUp 3).</summary>
+        public bool ColorByTag { get; set; }
+
         /// <summary>How many top-level entities of a classic (pre-2021) file
         /// the reader couldn't read. It keeps what it read before the first
         /// root record it can't parse and drops that record and everything

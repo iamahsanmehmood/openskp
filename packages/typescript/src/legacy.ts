@@ -2694,14 +2694,15 @@ function faceColorsDistanceAfterCamera(ver: number): number | null {
   return null;
 }
 
-/** `[front, back]` - the model's face colours from the rendering options after
- * the model's first `CCamera` record (SketchUp 4..2020), or `null`. */
-function modelFaceColors(
-  data: Uint8Array,
-  ver: number
-): [[number, number, number], [number, number, number]] | null {
-  const distance = faceColorsDistanceAfterCamera(ver);
-  if (distance === null) return null;
+function colorByTagDistanceAfterCamera(ver: number): number | null {
+  if (ver === 4 || ver === 5) return 29;
+  if (ver >= 6 && ver <= 16) return 31;
+  if (ver === 17 || ver === 18) return 32;
+  if (ver === 19 || ver === 20) return 33;
+  return null;
+}
+
+function cameraEndOffset(data: Uint8Array, ver: number): number | null {
   let camEnd = -1;
   for (let i = 0; i + 13 <= data.length; i++) {
     if (
@@ -2743,9 +2744,22 @@ function modelFaceColors(
   }
   if (n > Math.floor((data.length - p) / 2)) return null;
   p += 2 * n;
-  const tail = (ver >= 6 ? 33 : 10) + distance;
+  const tail = ver >= 6 ? 33 : 10;
   if (tail > data.length - p) return null;
-  const at = p + tail;
+  return p + tail;
+}
+
+/** `[front, back]` - the model's face colours from the rendering options after
+ * the model's first `CCamera` record (SketchUp 4..2020), or `null`. */
+function modelFaceColors(
+  data: Uint8Array,
+  ver: number
+): [[number, number, number], [number, number, number]] | null {
+  const distance = faceColorsDistanceAfterCamera(ver);
+  if (distance === null) return null;
+  const camEnd = cameraEndOffset(data, ver);
+  if (camEnd === null || distance > data.length - camEnd) return null;
+  const at = camEnd + distance;
   if (8 > data.length - at || data[at + 3] !== 0xff || data[at + 7] !== 0xff) {
     return null;
   }
@@ -2753,6 +2767,15 @@ function modelFaceColors(
     [data[at], data[at + 1], data[at + 2]],
     [data[at + 4], data[at + 5], data[at + 6]],
   ];
+}
+
+function modelColorByTag(data: Uint8Array, ver: number): boolean {
+  const distance = colorByTagDistanceAfterCamera(ver);
+  if (distance === null) return false;
+  const camEnd = cameraEndOffset(data, ver);
+  if (camEnd === null || distance >= data.length - camEnd) return false;
+  const val = data[camEnd + distance];
+  return val <= 1 && val === 1;
 }
 
 class LegacyBuilder {
@@ -3172,6 +3195,12 @@ export function parseLegacyToRaw(data: Uint8Array, options?: ParseOptions): Pars
   } catch {
     faceColors = null;
   }
+  let colorByTag: boolean;
+  try {
+    colorByTag = modelColorByTag(data, ar.ver);
+  } catch {
+    colorByTag = false;
+  }
 
   emitLog(
     options,
@@ -3199,6 +3228,7 @@ export function parseLegacyToRaw(data: Uint8Array, options?: ParseOptions): Pars
     materialsByFolder: new Map(),
     styles: [],
     faceColors,
+    colorByTag,
     defsDict,
     unreadRootEntities: ar.unreadRootEntities,
   };

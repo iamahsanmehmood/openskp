@@ -777,6 +777,11 @@ class OPENSKP_EXPORT SkpModel {
   std::optional<Color3> face_front_color;
   /// The same for the back side of a face.
   std::optional<Color3> face_back_color;
+  /// Whether SketchUp's "Color by Tag" (`DisplayColorByLayer`) style setting is
+  /// enabled in the model's active rendering options. Read from 2021+ files and
+  /// from classic files of SketchUp 4 to 2020; `false` when off or when the
+  /// file does not give it (SketchUp 3).
+  bool color_by_tag{false};
   /// Every attribute dictionary attached to the model itself (Ruby's
   /// `Sketchup::Model#attribute_dictionaries`), keyed by the dictionary's
   /// own declared name - where extensions typically persist model-wide

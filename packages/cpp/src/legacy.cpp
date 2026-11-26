@@ -2618,9 +2618,15 @@ int face_colors_distance_after_camera(int ver) {
   return -1;
 }
 
-std::optional<std::pair<Color3, Color3>> model_face_colors(const ByteBuffer& data, int ver) {
-  int distance = face_colors_distance_after_camera(ver);
-  if (distance < 0) return std::nullopt;
+int color_by_tag_distance_after_camera(int ver) {
+  if (ver == 4 || ver == 5) return 29;
+  if (ver >= 6 && ver <= 16) return 31;
+  if (ver == 17 || ver == 18) return 32;
+  if (ver == 19 || ver == 20) return 33;
+  return -1;
+}
+
+std::optional<std::size_t> camera_end_offset(const ByteBuffer& data, int ver) {
   std::size_t cam_end = std::string::npos;
   for (std::size_t i = 0; i + 13 <= data.size(); ++i) {
     if (data[i] == 0xFF && data[i + 1] == 0xFF && data[i + 4] == 0x07 && data[i + 5] == 0x00 &&
@@ -2651,14 +2657,31 @@ std::optional<std::pair<Color3, Color3>> model_face_colors(const ByteBuffer& dat
   }
   if (n > (data.size() - p) / 2) return std::nullopt;
   p += static_cast<std::size_t>(2 * n);
-  const auto tail = static_cast<std::size_t>((ver >= 6 ? 33 : 10) + distance);
+  const auto tail = static_cast<std::size_t>(ver >= 6 ? 33 : 10);
   if (tail > data.size() - p) return std::nullopt;
-  const std::size_t at = p + tail;
+  return p + tail;
+}
+
+std::optional<std::pair<Color3, Color3>> model_face_colors(const ByteBuffer& data, int ver) {
+  int distance = face_colors_distance_after_camera(ver);
+  if (distance < 0) return std::nullopt;
+  auto cam_end = camera_end_offset(data, ver);
+  if (!cam_end || static_cast<std::size_t>(distance) > data.size() - *cam_end) return std::nullopt;
+  const std::size_t at = *cam_end + static_cast<std::size_t>(distance);
   if (8 > data.size() - at || data[at + 3] != 0xFF || data[at + 7] != 0xFF) {
     return std::nullopt;
   }
   return std::make_pair(Color3{data[at], data[at + 1], data[at + 2]},
                         Color3{data[at + 4], data[at + 5], data[at + 6]});
+}
+
+bool model_color_by_tag(const ByteBuffer& data, int ver) {
+  int distance = color_by_tag_distance_after_camera(ver);
+  if (distance < 0) return false;
+  auto cam_end = camera_end_offset(data, ver);
+  if (!cam_end || static_cast<std::size_t>(distance) >= data.size() - *cam_end) return false;
+  const auto val = data[*cam_end + static_cast<std::size_t>(distance)];
+  return val <= 1 && val == 1;
 }
 
 }  // namespace
@@ -2859,6 +2882,13 @@ RawParsed parse_legacy(const ByteBuffer& data, const ParseOptions& o) {
       throw;
     } catch (...) {
       out.face_colors = std::nullopt;
+    }
+    try {
+      out.color_by_tag = model_color_by_tag(data, ar.ver);
+    } catch (const std::bad_alloc&) {
+      throw;
+    } catch (...) {
+      out.color_by_tag = false;
     }
     try {
       // whole scene records first; the narrow scan only when the full reader gives up on one

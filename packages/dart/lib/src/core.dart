@@ -31,6 +31,7 @@ class RawParsed {
   final Map<String, RawMaterial> materialsByFolder = {};
   final List<RawStyle> styles = [];
   ((int, int, int), (int, int, int))? faceColors;
+  bool colorByTag = false;
   final Map<int, RawDefinition> defsDict = {};
   RawDefinition root = RawDefinition(guid: 'ROOT', name: 'ROOT_MODEL');
   int unreadRootEntities = 0;
@@ -215,6 +216,18 @@ class Core {
       faceColors = null;
     }
 
+    bool colorByTag = false;
+    try {
+      colorByTag = _modelColorByTag(modelDat);
+    } on OutOfMemoryError {
+      rethrow;
+    } on StackOverflowError {
+      rethrow;
+    } catch (e) {
+      emitLog(options, SkpLogLevel.debug, 'Failed to parse model colorByTag: $e');
+      colorByTag = false;
+    }
+
     return RawParsed()
       ..version = version
       ..units = units
@@ -228,6 +241,7 @@ class Core {
       ..materialsByFolder.addAll(materialsByFolder)
       ..styles.addAll(styles)
       ..faceColors = faceColors
+      ..colorByTag = colorByTag
       ..defsDict.addAll(defsDictRaw)
       ..root =
           RawDefinition(guid: 'ROOT', name: 'ROOT_MODEL', builder: rootBuilder);
@@ -331,5 +345,34 @@ class Core {
       }
     }
     return null;
+  }
+
+  static bool _modelColorByTag(Uint8List modelDat) {
+    for (int at = 0; at + 12 <= modelDat.length; at++) {
+      if (modelDat[at] == 0xFB &&
+          modelDat[at + 1] == 0x01 &&
+          modelDat[at + 6] == 0x3C &&
+          modelDat[at + 7] == 0x73) {
+        final outerLen = Tlv.readU32(modelDat, at + 2);
+        final innerLen = Tlv.readU32(modelDat, at + 8);
+        if (outerLen >= 6 &&
+            outerLen - 6 == innerLen &&
+            at + 12 + innerLen <= modelDat.length) {
+          int p = at + 12;
+          final end = p + innerLen;
+          while (p + 6 <= end) {
+            final tag = Tlv.readU16(modelDat, p);
+            final sz = Tlv.readU32(modelDat, p + 2);
+            p += 6;
+            if (sz > end - p) break;
+            if (tag == 0x7347 && sz == 1 && modelDat[p] <= 1) {
+              return modelDat[p] == 1;
+            }
+            p += sz;
+          }
+        }
+      }
+    }
+    return false;
   }
 }

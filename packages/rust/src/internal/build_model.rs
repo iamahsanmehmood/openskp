@@ -293,6 +293,7 @@ pub fn build_model(p: RawParsed, o: &ParseOptions) -> SkpModel {
         m.face_front_color = Some(front);
         m.face_back_color = Some(back);
     }
+    m.color_by_tag = p.color_by_tag;
     m
 }
 

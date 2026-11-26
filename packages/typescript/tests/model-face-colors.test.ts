@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
-import { parseSkp } from '../src/index';
+import { SkpFile, create, parseSkp } from '../src/index';
 
 type Rgb = [number, number, number];
 
@@ -65,3 +65,61 @@ describe('SkpModel faceFrontColor and faceBackColor (#533)', () => {
     expect([model.faceFrontColor, model.faceBackColor]).toEqual(WRITTEN);
   });
 });
+
+const COLOR_BY_TAG_CASES: [string, boolean][] = [
+  ['color_by_tag_v4.skp', true],
+  ['color_by_tag_v5.skp', true],
+  ['color_by_tag_v6.skp', true],
+  ['color_by_tag_2017.skp', true],
+  ['color_by_tag_2019.skp', true],
+  ['color_by_tag_2020.skp', true],
+  ['color_by_tag_2020_off.skp', false],
+  ['color_by_tag_2021.skp', true],
+  ['color_by_tag_2021_style.skp', true],
+  ['color_by_tag_2021_off.skp', false],
+  ['legacy_v3_synthetic.skp', false],
+  ...CASES.map(([name]): [string, boolean] => [name, false]),
+];
+
+describe('SkpModel colorByTag (#697)', () => {
+  it.each(COLOR_BY_TAG_CASES)('matches SketchUp DisplayColorByLayer on %s', (name, expected) => {
+    const model = parseSkp(loadFixture(name));
+    expect(model.colorByTag).toBe(expected);
+  });
+
+  it('round-trips through classic create() styleItems 7011', () => {
+    const quad: [number, number, number][] = [
+      [0, 0, 0],
+      [10, 0, 0],
+      [10, 10, 0],
+      [0, 10, 0],
+    ];
+    for (const [styleItems, expected] of [
+      [undefined, false],
+      [{ 7011: 0 }, false],
+      [{ 7011: 1 }, true],
+    ] as const) {
+      const builder = create();
+      if (styleItems !== undefined) {
+        builder.setDocumentOptions({ styleItems });
+      }
+      builder.addFace(quad);
+      const bytes = builder.toBytes();
+      const ab = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+      expect(parseSkp(ab).colorByTag).toBe(expected);
+    }
+  });
+
+  it.each([
+    ['color_by_tag_2020.skp', 'color_by_tag_2020_off.skp'],
+    ['color_by_tag_2021.skp', 'color_by_tag_2021_off.skp'],
+  ])('does not change scene output between %s and %s', (onName, offName) => {
+    const skpOn = SkpFile.fromBuffer(loadFixture(onName));
+    const skpOff = SkpFile.fromBuffer(loadFixture(offName));
+    expect(skpOn.parse().colorByTag).toBe(true);
+    expect(skpOff.parse().colorByTag).toBe(false);
+    expect(skpOn.buildScene().gltfMaterials).toEqual(skpOff.buildScene().gltfMaterials);
+    expect(skpOn.buildInstancedScene().gltfMaterials).toEqual(skpOff.buildInstancedScene().gltfMaterials);
+  });
+});
+

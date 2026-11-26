@@ -3187,6 +3187,17 @@ namespace OpenSkp
                 faceColors = null;
             }
 
+            bool colorByTag;
+            try
+            {
+                colorByTag = ModelColorByTag(data, ar.Ver);
+            }
+            catch (Exception e) when (!(e is OutOfMemoryException))
+            {
+                Observability.Log(options, SkpLogLevel.Debug, $"Failed to read legacy model ColorByTag: {e.Message}");
+                colorByTag = false;
+            }
+
             return new Core.RawParsed
             {
                 Version = version,
@@ -3204,6 +3215,7 @@ namespace OpenSkp
                 MaterialsByFolder = new Dictionary<string, Geometry.RawMaterial>(),
                 Styles = new List<Geometry.RawStyle>(),
                 FaceColors = faceColors,
+                ColorByTag = colorByTag,
                 DefsDict = defsDict,
                 UnreadRootEntities = ar.UnreadRootEntities,
                 Root = new Geometry.RawDefinition
@@ -3265,10 +3277,17 @@ namespace OpenSkp
             return null;
         }
 
-        private static ((int R, int G, int B) Front, (int R, int G, int B) Back)? ModelFaceColors(byte[] data, int ver)
+        private static int? ColorByTagDistanceAfterCamera(int ver)
         {
-            int? distance = FaceColorsDistanceAfterCamera(ver);
-            if (!distance.HasValue) return null;
+            if (ver == 4 || ver == 5) return 29;
+            if (ver >= 6 && ver <= 16) return 31;
+            if (ver == 17 || ver == 18) return 32;
+            if (ver == 19 || ver == 20) return 33;
+            return null;
+        }
+
+        private static int? CameraEndOffset(byte[] data, int ver)
+        {
             int camEnd = -1;
             for (int i = 0; i + 13 <= data.Length; i++)
             {
@@ -3312,9 +3331,18 @@ namespace OpenSkp
             }
             if (n > (uint)((data.Length - p) / 2)) return null;
             p += (int)(2 * n);
-            int tail = (ver >= 6 ? 33 : 10) + distance.Value;
+            int tail = ver >= 6 ? 33 : 10;
             if (tail > data.Length - p) return null;
-            int at = p + tail;
+            return p + tail;
+        }
+
+        private static ((int R, int G, int B) Front, (int R, int G, int B) Back)? ModelFaceColors(byte[] data, int ver)
+        {
+            int? distance = FaceColorsDistanceAfterCamera(ver);
+            if (!distance.HasValue) return null;
+            int? camEnd = CameraEndOffset(data, ver);
+            if (!camEnd.HasValue || distance.Value > data.Length - camEnd.Value) return null;
+            int at = camEnd.Value + distance.Value;
             if (8 > data.Length - at || data[at + 3] != 0xFF || data[at + 7] != 0xFF)
             {
                 return null;
@@ -3323,6 +3351,16 @@ namespace OpenSkp
                 (data[at], data[at + 1], data[at + 2]),
                 (data[at + 4], data[at + 5], data[at + 6])
             );
+        }
+
+        private static bool ModelColorByTag(byte[] data, int ver)
+        {
+            int? distance = ColorByTagDistanceAfterCamera(ver);
+            if (!distance.HasValue) return false;
+            int? camEnd = CameraEndOffset(data, ver);
+            if (!camEnd.HasValue || distance.Value >= data.Length - camEnd.Value) return false;
+            byte val = data[camEnd.Value + distance.Value];
+            return val <= 1 && val == 1;
         }
     }
 }
