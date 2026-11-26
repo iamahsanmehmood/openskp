@@ -195,6 +195,10 @@ class FaceGroupContext:
     # The same as fallback_color for a face's back side, where it differs
     # (the model's back face color). ``None`` means ``fallback_color``.
     fallback_back_color: Optional[Tuple[int, int, int]] = None
+    # Per-face tag colour lookup (``f_data.get("layer") -> (r, g, b) | None``),
+    # set when ``unpainted_faces == "tag"`` (or the file carries no style face
+    # colours) and no material is inherited from an enclosing instance (#697).
+    face_tag_color: Optional[Callable[[Any], Optional[Tuple[int, int, int]]]] = None
 
 
 def unpainted_style_colors(
@@ -317,8 +321,13 @@ def build_local_face_groups(builder: Any, ctx: FaceGroupContext) -> Dict[FaceGro
         back_mat = resolve_material(
             f_data.get("back_material_id"), ctx.material_id_to_name, ctx.materials, ctx.materials_by_folder
         ) or ctx.fallback_material
-        front_color = resolve_color(front_mat) or ctx.fallback_color
-        back_color = resolve_color(back_mat) or fallback_back_color
+        face_fallback = (
+            ctx.face_tag_color(f_data.get("layer"))
+            if ctx.face_tag_color is not None and (front_mat is None or back_mat is None)
+            else None
+        )
+        front_color = resolve_color(front_mat) or face_fallback or ctx.fallback_color
+        back_color = resolve_color(back_mat) or face_fallback or fallback_back_color
 
         loops = []
         for loop in f_data["loops"]:

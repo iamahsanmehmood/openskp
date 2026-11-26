@@ -78,12 +78,14 @@ struct Group {
 
 struct FaceLayerSummary {
   std::optional<std::string> uniform_layer;
-  std::optional<std::string> majority_layer;
+  bool has_untagged_face{};
 };
 
 std::shared_ptr<RawMaterial> find_material(const RawParsed& parsed, std::optional<EntityId> id);
 std::optional<FaceColorKey> material_color(const std::shared_ptr<RawMaterial>& material);
 FaceColorKey default_color(const RawParsed& parsed, const std::string& layer);
+std::optional<std::string> face_layer_name(const RawParsed& parsed, const RawFace& f,
+                                           const ParseOptions& options = {});
 FaceLayerSummary summarize_face_layers(const RawParsed& parsed, const GeometryBuilder& b,
                                        const ParseOptions& options = {});
 std::optional<std::pair<FaceColorKey, FaceColorKey>> unpainted_style_colors(
@@ -126,6 +128,10 @@ struct FaceGroupContext {
   // Material painted on the enclosing group/component, inherited whole
   // (texture, tile size, transparency) by any unpainted face side.
   std::shared_ptr<RawMaterial> fallback_material;
+  // When true, an unpainted face side resolves its own tag's colour before
+  // falling back to fallback_color / fallback_back_color (#697).
+  bool use_face_tag_colors{};
+  ParseOptions options{};
 };
 
 // Group a definition's faces by resolved material identity, in local

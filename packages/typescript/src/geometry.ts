@@ -1270,29 +1270,29 @@ export function resolveTextureBytes(
 
 export interface FaceLayerSummary {
   uniformLayer: string | null;
-  majorityLayer: string | null;
+  hasUntaggedFace: boolean;
 }
 
 /**
  * Summarize a definition's face layers once per definition: `uniformLayer` is
  * set only when every face of the definition has the same tag (other than
- * `Layer0`); `majorityLayer` is the most common non-`Layer0` face tag.
+ * `Layer0`); `hasUntaggedFace` records whether at least one face has no
+ * explicit non-`Layer0` tag.
  */
 export function summarizeFaceLayers(
   builder: GeometryBuilder,
   layerIdToName: Map<number, string>
 ): FaceLayerSummary {
   if (builder.faces.size === 0) {
-    return { uniformLayer: null, majorityLayer: null };
+    return { uniformLayer: null, hasUntaggedFace: false };
   }
-  const counts = new Map<number, number>();
   let allSame = true;
+  let hasUntaggedFace = false;
   let commonName: string | null = null;
   for (const f of builder.faces.values()) {
     const lid = f.layerId;
     const fname = lid ? (layerIdToName.get(lid) ?? '') : '';
     if (fname && fname !== 'Layer0') {
-      counts.set(lid!, (counts.get(lid!) ?? 0) + 1);
       if (commonName === null) {
         commonName = fname;
       } else if (fname !== commonName) {
@@ -1300,18 +1300,11 @@ export function summarizeFaceLayers(
       }
     } else {
       allSame = false;
-    }
-  }
-  let majorityLayer: string | null = null;
-  let bestCount = 0;
-  for (const [id, count] of counts) {
-    if (count > bestCount) {
-      bestCount = count;
-      majorityLayer = layerIdToName.get(id) ?? null;
+      hasUntaggedFace = true;
     }
   }
   return {
     uniformLayer: allSame ? commonName : null,
-    majorityLayer,
+    hasUntaggedFace,
   };
 }

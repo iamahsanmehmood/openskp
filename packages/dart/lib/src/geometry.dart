@@ -1044,19 +1044,18 @@ class Geometry {
     );
   }
 
-  static (String? uniformLayer, String? majorityLayer) summarizeFaceLayers(
+  static (String? uniformLayer, bool hasUntaggedFace) summarizeFaceLayers(
     GeometryBuilder builder,
     Map<int, String> layerIdToName,
   ) {
-    if (builder.faces.isEmpty) return (null, null);
-    final counts = <int, int>{};
+    if (builder.faces.isEmpty) return (null, false);
     var allSame = true;
+    var hasUntagged = false;
     String? commonName;
     for (final f in builder.faces.values) {
       final lid = f.layerId;
       final fname = (lid != null && lid != 0) ? (layerIdToName[lid] ?? '') : '';
       if (fname.isNotEmpty && fname != 'Layer0') {
-        counts[lid!] = (counts[lid] ?? 0) + 1;
         if (commonName == null) {
           commonName = fname;
         } else if (commonName != fname) {
@@ -1064,17 +1063,10 @@ class Geometry {
         }
       } else {
         allSame = false;
+        hasUntagged = true;
       }
     }
-    String? majorityLayer;
-    var bestCount = 0;
-    for (final entry in counts.entries) {
-      if (entry.value > bestCount) {
-        bestCount = entry.value;
-        majorityLayer = layerIdToName[entry.key];
-      }
-    }
-    return (allSame ? commonName : null, majorityLayer);
+    return (allSame ? commonName : null, hasUntagged);
   }
 }
 

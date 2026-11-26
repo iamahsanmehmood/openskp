@@ -3,7 +3,9 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
 #include <gtest/gtest.h>
+#include <map>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -311,6 +313,110 @@ TEST(UnpaintedFaceColors, ComponentOnTwoTagsIsOneMeshResource) {
 
   const auto skp = SkpFile::from_buffer(builder->to_bytes());
   EXPECT_EQ(skp.build_instanced_scene().mesh_resources.size(), 1u);
+}
+
+TEST(UnpaintedFaceColors, TagModeResolvesEachFacesOwnTagColour) {
+  const Color3 rgb_a{220, 40, 50};
+  const Color3 rgb_b{40, 180, 70};
+  const Color3 rgb_c{50, 90, 230};
+  const Color3 rgb_d{190, 140, 30};
+
+  auto builder = create();
+  LayerOptions opts_a;
+  opts_a.color = Color4{rgb_a[0], rgb_a[1], rgb_a[2], 255};
+  const int tag_a = builder->add_layer("TagA", opts_a);
+  LayerOptions opts_b;
+  opts_b.color = Color4{rgb_b[0], rgb_b[1], rgb_b[2], 255};
+  const int tag_b = builder->add_layer("TagB", opts_b);
+  LayerOptions opts_c;
+  opts_c.color = Color4{rgb_c[0], rgb_c[1], rgb_c[2], 255};
+  const int tag_c = builder->add_layer("TagC", opts_c);
+  LayerOptions opts_d;
+  opts_d.color = Color4{rgb_d[0], rgb_d[1], rgb_d[2], 255};
+  const int tag_d = builder->add_layer("TagD", opts_d);
+
+  auto& panel = builder->add_component_definition("Panel");
+  FaceOptions f_a;
+  f_a.layer = tag_a;
+  panel.add_face({{0, 0, 0}, {10, 0, 0}, {10, 10, 0}, {0, 10, 0}}, f_a);
+  FaceOptions f_b;
+  f_b.layer = tag_b;
+  panel.add_face({{0, 0, 10}, {10, 0, 10}, {10, 10, 10}, {0, 10, 10}}, f_b);
+  panel.add_face({{0, 0, 20}, {10, 0, 20}, {10, 10, 20}, {0, 10, 20}});
+  panel.close();
+
+  InstanceOptions inst_c;
+  inst_c.layer = tag_c;
+  builder->add_instance(panel, inst_c);
+
+  InstanceOptions inst_d;
+  inst_d.layer = tag_d;
+  inst_d.translation = {0, 0, 100};
+  builder->add_instance(panel, inst_d);
+
+  const auto tmp_path = std::filesystem::temp_directory_path() / "openskp_697_per_face_tags.skp";
+
+  struct TempCleaner {
+    std::filesystem::path p;
+
+    ~TempCleaner() {
+      std::error_code ec;
+      std::filesystem::remove(p, ec);
+    }
+  } cleaner{tmp_path};
+
+  builder->save(tmp_path.string());
+  const auto skp = SkpFile::open(tmp_path.string());
+  const auto model = skp.parse();
+
+  ParseOptions tag_opts;
+  tag_opts.unpainted_faces = "tag";
+  using Side = std::tuple<Color3, bool, bool>;
+
+  const auto baked = skp.build_scene(tag_opts);
+  std::map<int, Side> baked_by_z;
+  for (const auto& p : baked.glb_primitives) {
+    const int z_in = static_cast<int>(std::lround(p.positions.at(1) / 0.0254));
+    baked_by_z[z_in] =
+        Side{rgb_of(baked.gltf_materials, p.material_index),
+             baked.gltf_materials.at(p.material_index).double_sided, p.unpainted_back};
+  }
+  const std::map<int, Side> expected_baked{
+      {0, {rgb_a, true, false}},   {10, {rgb_b, true, false}},  {20, {rgb_c, true, false}},
+      {100, {rgb_a, true, false}}, {110, {rgb_b, true, false}}, {120, {rgb_d, true, false}},
+  };
+  EXPECT_EQ(baked_by_z, expected_baked);
+
+  const auto instanced = skp.build_instanced_scene(tag_opts);
+  ASSERT_EQ(instanced.mesh_resources.size(), 2u);
+  std::vector<std::map<int, Side>> res_by_z;
+  for (const auto& r : instanced.mesh_resources) {
+    std::map<int, Side> m;
+    for (const auto& p : r.primitives) {
+      const int z_in = static_cast<int>(std::lround(p.positions.at(1) / 0.0254));
+      m[z_in] = Side{rgb_of(instanced.gltf_materials, p.material_index),
+                     instanced.gltf_materials.at(p.material_index).double_sided, p.unpainted_back};
+    }
+    res_by_z.push_back(std::move(m));
+  }
+  const std::vector<std::map<int, Side>> expected_inst{
+      {{0, {rgb_a, true, false}}, {10, {rgb_b, true, false}}, {20, {rgb_c, true, false}}},
+      {{0, {rgb_a, true, false}}, {10, {rgb_b, true, false}}, {20, {rgb_d, true, false}}},
+  };
+  EXPECT_EQ(res_by_z, expected_inst);
+
+  const auto style_inst = skp.build_instanced_scene();
+  ASSERT_EQ(style_inst.mesh_resources.size(), 1u);
+  std::vector<std::pair<Color3, bool>> style_sides;
+  for (const auto& p : style_inst.mesh_resources[0].primitives) {
+    style_sides.emplace_back(rgb_of(style_inst.gltf_materials, p.material_index), p.unpainted_back);
+  }
+  std::sort(style_sides.begin(), style_sides.end(),
+            [](const auto& a, const auto& b) { return a.second < b.second; });
+  ASSERT_TRUE(model.face_front_color.has_value());
+  ASSERT_TRUE(model.face_back_color.has_value());
+  EXPECT_EQ(style_sides, (std::vector<std::pair<Color3, bool>>{{*model.face_front_color, false},
+                                                               {*model.face_back_color, true}}));
 }
 
 TEST(UnpaintedFaceColors, SingleColourExportsAndFragmentsKeepOneCopyOfEachFace) {

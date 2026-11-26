@@ -25,7 +25,7 @@ import re
 import time
 from array import array
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from . import _core
 from ._curves import _prepare_definition_curves, _solve_run_arc
@@ -414,19 +414,25 @@ def build_instanced_scene(
 
     mesh_resources: List[InstancedMeshResource] = []
     resource_id_by_key: Dict[str, str] = {}
-    face_layer_summary_cache: Dict[Any, Tuple[Optional[str], Optional[str]]] = {}
+    def resolve_face_tag_color(layer_id: Any) -> Optional[Tuple[int, int, int]]:
+        fname = layer_id_to_name.get(layer_id, "") if layer_id else ""
+        if fname and fname != "Layer0":
+            return get_layer_color(fname)
+        return None
 
-    def _face_layer_summary(def_id: Any) -> Tuple[Optional[str], Optional[str]]:
+    face_layer_summary_cache: Dict[Any, Tuple[Optional[str], bool]] = {}
+
+    def _face_layer_summary(def_id: Any) -> Tuple[Optional[str], bool]:
         hit = face_layer_summary_cache.get(def_id)
         if hit is not None or def_id in face_layer_summary_cache:
             return hit  # type: ignore[return-value]
         d = defs_dict.get(def_id)
         if d is None or not d["builder"].faces:
-            res: Tuple[Optional[str], Optional[str]] = (None, None)
+            res: Tuple[Optional[str], bool] = (None, False)
             face_layer_summary_cache[def_id] = res
             return res
-        counts: Dict[Any, int] = {}
         all_same = True
+        has_untagged = False
         common_name: Optional[str] = None
         for f in d["builder"].faces.values():
             lid = f.get("layer")
@@ -434,18 +440,14 @@ def build_instanced_scene(
             if fname == "Layer0":
                 fname = ""
             if fname:
-                counts[lid] = counts.get(lid, 0) + 1
                 if common_name is None:
                     common_name = fname
                 elif fname != common_name:
                     all_same = False
             else:
                 all_same = False
-        uniform_layer = common_name if all_same else None
-        majority_layer = (
-            layer_id_to_name.get(max(counts, key=counts.get)) if counts else None
-        )
-        res = (uniform_layer, majority_layer)
+                has_untagged = True
+        res = (common_name if all_same else None, has_untagged)
         face_layer_summary_cache[def_id] = res
         return res
 
@@ -473,17 +475,28 @@ def build_instanced_scene(
         if d is None or not d["builder"].faces:
             return None
 
+        face_tag_color_fn: Optional[Callable[[Any], Optional[Tuple[int, int, int]]]] = None
+        color_part: str
         if inherited_color is not None:
             fallback_color = fallback_back_color = inherited_color
+            color_part = f"{fallback_color[0]},{fallback_color[1]},{fallback_color[2]}"
         elif style_colors is not None:
             fallback_color, fallback_back_color = style_colors
+            color_part = f"{fallback_color[0]},{fallback_color[1]},{fallback_color[2]}"
+            if fallback_back_color != fallback_color:
+                color_part += f"/{fallback_back_color[0]},{fallback_back_color[1]},{fallback_back_color[2]}"
         else:
-            _, majority_layer = _face_layer_summary(def_id)
-            color_layer = majority_layer if majority_layer is not None else layer
+            uniform_layer, has_untagged = _face_layer_summary(def_id)
+            color_layer = uniform_layer if uniform_layer is not None else layer
             fallback_color = fallback_back_color = get_layer_color(color_layer)
-        key = f"{def_id}|{fallback_color[0]},{fallback_color[1]},{fallback_color[2]}"
-        if fallback_back_color != fallback_color:
-            key += f"/{fallback_back_color[0]},{fallback_back_color[1]},{fallback_back_color[2]}"
+            if inherited_material is None:
+                face_tag_color_fn = resolve_face_tag_color
+            color_part = (
+                f"{fallback_color[0]},{fallback_color[1]},{fallback_color[2]}"
+                if (has_untagged or uniform_layer is not None or inherited_material is not None)
+                else "tags"
+            )
+        key = f"{def_id}|{color_part}"
         if inherited_material is not None:
             key += f"|{inherited_material.get('name', '')}"
         hit = resource_id_by_key.get(key)
@@ -501,6 +514,7 @@ def build_instanced_scene(
                 definition_id=def_id,
                 fallback_material=inherited_material,
                 fallback_back_color=fallback_back_color,
+                face_tag_color=face_tag_color_fn,
             ),
         )
 

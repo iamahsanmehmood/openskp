@@ -361,8 +361,18 @@ namespace OpenSkp
                 }
             }
 
-            var faceLayerCache = new Dictionary<long, (string? UniformLayer, string? MajorityLayer)>();
-            (string? UniformLayer, string? MajorityLayer) GetFaceLayerSummary(long? defId, GeometryBuilder builder)
+            (int R, int G, int B)? ResolveFaceTagColor(long? layerId)
+            {
+                if (layerId is long lid && lid != 0 && layerIdToName.TryGetValue(lid, out var fname) &&
+                    !string.IsNullOrEmpty(fname) && fname != "Layer0")
+                {
+                    return GetLayerColor(fname);
+                }
+                return null;
+            }
+
+            var faceLayerCache = new Dictionary<long, (string? UniformLayer, bool HasUntaggedFace)>();
+            (string? UniformLayer, bool HasUntaggedFace) GetFaceLayerSummary(long? defId, GeometryBuilder builder)
             {
                 long key = defId ?? -1L;
                 if (faceLayerCache.TryGetValue(key, out var hit)) return hit;
@@ -388,6 +398,7 @@ namespace OpenSkp
                 if (builder.Faces.Count > 0)
                 {
                     (int R, int G, int B) fallbackColor, fallbackBackColor;
+                    Func<long?, (int R, int G, int B)?>? faceTagColor = null;
                     if (inheritedColor.HasValue)
                     {
                         fallbackColor = fallbackBackColor = inheritedColor.Value;
@@ -398,8 +409,11 @@ namespace OpenSkp
                     }
                     else
                     {
-                        string colorLayer = summary.MajorityLayer ?? parentLayer;
-                        fallbackColor = fallbackBackColor = GetLayerColor(colorLayer);
+                        fallbackColor = fallbackBackColor = GetLayerColor(parentLayer);
+                        if (inheritedMaterial == null)
+                        {
+                            faceTagColor = ResolveFaceTagColor;
+                        }
                     }
                     var faceGroups = FaceGroups.BuildLocalFaceGroups(builder, new FaceGroups.Context
                     {
@@ -413,6 +427,7 @@ namespace OpenSkp
                         TextureIndexFor = textureIndexFor,
                         FallbackColor = fallbackColor,
                         FallbackBackColor = fallbackBackColor,
+                        FaceTagColor = faceTagColor,
                         DefinitionId = defId,
                     });
 

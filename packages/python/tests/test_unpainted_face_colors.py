@@ -128,6 +128,62 @@ def test_a_component_on_two_tags_is_one_mesh(tmp_path):
     assert len(skp.build_instanced_scene().mesh_resources) == 1
 
 
+def test_tag_mode_resolves_each_faces_own_tag_colour(tmp_path):
+    """openskp#697 item 1: with unpainted_faces='tag', each unpainted face in a
+    component takes its own tag's colour and an untagged face inherits the
+    enclosing placement's tag colour."""
+    rgb_a, rgb_b, rgb_c, rgb_d = (220, 40, 50), (40, 180, 70), (50, 90, 230), (190, 140, 30)
+    builder = create()
+    tag_a = builder.add_layer("TagA", color=rgb_a)
+    tag_b = builder.add_layer("TagB", color=rgb_b)
+    tag_c = builder.add_layer("TagC", color=rgb_c)
+    tag_d = builder.add_layer("TagD", color=rgb_d)
+    with builder.add_component_definition("Panel") as panel:
+        panel.add_face([(0, 0, 0), (10, 0, 0), (10, 10, 0), (0, 10, 0)], layer=tag_a)
+        panel.add_face([(0, 0, 10), (10, 0, 10), (10, 10, 10), (0, 10, 10)], layer=tag_b)
+        panel.add_face([(0, 0, 20), (10, 0, 20), (10, 10, 20), (0, 10, 20)])
+    builder.add_instance(panel, layer=tag_c)
+    builder.add_instance(panel, layer=tag_d, translation=(0, 0, 100))
+
+    skp = _save(builder, tmp_path, "per_face_tags.skp")
+    model = skp.parse()
+    front, back = model.face_front_color, model.face_back_color
+
+    baked = skp.build_scene(unpainted_faces="tag")
+    baked_by_z = {
+        round(p.positions[1] / 0.0254): (_rgb(baked, p), _double_sided(baked, p), p.unpainted_back)
+        for p in baked.glb_primitives
+    }
+    assert baked_by_z == {
+        0: (rgb_a, True, False),
+        10: (rgb_b, True, False),
+        20: (rgb_c, True, False),
+        100: (rgb_a, True, False),
+        110: (rgb_b, True, False),
+        120: (rgb_d, True, False),
+    }
+
+    instanced = skp.build_instanced_scene(unpainted_faces="tag")
+    assert len(instanced.mesh_resources) == 2
+    res_by_z = [
+        {
+            round(p.positions[1] / 0.0254): (_rgb(instanced, p), _double_sided(instanced, p), p.unpainted_back)
+            for p in r.primitives
+        }
+        for r in instanced.mesh_resources
+    ]
+    assert res_by_z == [
+        {0: (rgb_a, True, False), 10: (rgb_b, True, False), 20: (rgb_c, True, False)},
+        {0: (rgb_a, True, False), 10: (rgb_b, True, False), 20: (rgb_d, True, False)},
+    ]
+
+    style_inst = skp.build_instanced_scene()
+    assert len(style_inst.mesh_resources) == 1
+    assert sorted((_rgb(style_inst, p), p.unpainted_back) for p in style_inst.mesh_resources[0].primitives) == sorted(
+        [(front, False), (back, True)]
+    )
+
+
 def _box(tmp_path):
     builder = create()
     p = [(x, y, z) for z in (0, 10) for y in (0, 10) for x in (0, 10)]

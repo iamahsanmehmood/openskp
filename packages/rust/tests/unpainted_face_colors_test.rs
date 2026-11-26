@@ -1,7 +1,7 @@
 mod common;
 mod gltf_helper;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use gltf_helper::{load_glb, numbers};
 use openskp::create::{create, DefinitionOptions, FaceOptions, InstanceOptions, LayerOptions};
@@ -374,6 +374,189 @@ fn component_on_two_tags_is_one_mesh_resource() {
     let skp = SkpFile::from_buffer(b.to_bytes().unwrap());
     let inst = skp.build_instanced_scene(&ParseOptions::default()).unwrap();
     assert_eq!(inst.mesh_resources.len(), 1);
+}
+
+#[test]
+fn tag_mode_resolves_each_faces_own_tag_colour() {
+    let rgb_a: Color3 = [220, 40, 50];
+    let rgb_b: Color3 = [40, 180, 70];
+    let rgb_c: Color3 = [50, 90, 230];
+    let rgb_d: Color3 = [190, 140, 30];
+
+    let mut b = create();
+    let tag_a = b
+        .add_layer(
+            "TagA",
+            &LayerOptions {
+                color: Some([rgb_a[0], rgb_a[1], rgb_a[2], 255]),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let tag_b = b
+        .add_layer(
+            "TagB",
+            &LayerOptions {
+                color: Some([rgb_b[0], rgb_b[1], rgb_b[2], 255]),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let tag_c = b
+        .add_layer(
+            "TagC",
+            &LayerOptions {
+                color: Some([rgb_c[0], rgb_c[1], rgb_c[2], 255]),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let tag_d = b
+        .add_layer(
+            "TagD",
+            &LayerOptions {
+                color: Some([rgb_d[0], rgb_d[1], rgb_d[2], 255]),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    let mut panel_builder = b
+        .add_component_definition("Panel", &DefinitionOptions::default())
+        .unwrap();
+    panel_builder
+        .add_face(
+            &quad_at_z(0.0),
+            &FaceOptions {
+                layer: Some(tag_a),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    panel_builder
+        .add_face(
+            &quad_at_z(10.0),
+            &FaceOptions {
+                layer: Some(tag_b),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    panel_builder
+        .add_face(&quad_at_z(20.0), &FaceOptions::default())
+        .unwrap();
+    let panel = panel_builder.close().unwrap();
+
+    b.add_instance(
+        panel,
+        &InstanceOptions {
+            layer: Some(tag_c),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    b.add_instance(
+        panel,
+        &InstanceOptions {
+            layer: Some(tag_d),
+            translation: [0.0, 0.0, 100.0],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    let tmp_path = std::env::temp_dir().join(format!("openskp_697_{}.skp", std::process::id()));
+    b.save(&tmp_path).unwrap();
+    let skp = SkpFile::open(&tmp_path).unwrap();
+    let _ = std::fs::remove_file(&tmp_path);
+
+    let style_opts = ParseOptions::default();
+    let tag_opts = ParseOptions::new().with_unpainted_faces("tag");
+    let model = skp.parse(&style_opts).unwrap();
+
+    let baked = skp.build_scene(&tag_opts).unwrap();
+    let mut baked_by_z: BTreeMap<i32, (Color3, bool, bool)> = BTreeMap::new();
+    for p in &baked.glb_primitives {
+        let z_in = (f64::from(p.positions[1]) / 0.0254).round() as i32;
+        baked_by_z.insert(
+            z_in,
+            (
+                rgb_of(&baked.gltf_materials, p.material_index),
+                baked.gltf_materials[p.material_index].double_sided,
+                p.unpainted_back,
+            ),
+        );
+    }
+    assert_eq!(
+        baked_by_z,
+        BTreeMap::from([
+            (0, (rgb_a, true, false)),
+            (10, (rgb_b, true, false)),
+            (20, (rgb_c, true, false)),
+            (100, (rgb_a, true, false)),
+            (110, (rgb_b, true, false)),
+            (120, (rgb_d, true, false)),
+        ])
+    );
+
+    let instanced = skp.build_instanced_scene(&tag_opts).unwrap();
+    assert_eq!(instanced.mesh_resources.len(), 2);
+    let res_by_z: Vec<BTreeMap<i32, (Color3, bool, bool)>> = instanced
+        .mesh_resources
+        .iter()
+        .map(|r| {
+            r.primitives
+                .iter()
+                .map(|p| {
+                    let z_in = (f64::from(p.positions[1]) / 0.0254).round() as i32;
+                    (
+                        z_in,
+                        (
+                            rgb_of(&instanced.gltf_materials, p.material_index),
+                            instanced.gltf_materials[p.material_index].double_sided,
+                            p.unpainted_back,
+                        ),
+                    )
+                })
+                .collect()
+        })
+        .collect();
+    assert_eq!(
+        res_by_z,
+        vec![
+            BTreeMap::from([
+                (0, (rgb_a, true, false)),
+                (10, (rgb_b, true, false)),
+                (20, (rgb_c, true, false)),
+            ]),
+            BTreeMap::from([
+                (0, (rgb_a, true, false)),
+                (10, (rgb_b, true, false)),
+                (20, (rgb_d, true, false)),
+            ]),
+        ]
+    );
+
+    let style_inst = skp.build_instanced_scene(&style_opts).unwrap();
+    assert_eq!(style_inst.mesh_resources.len(), 1);
+    let mut style_sides: Vec<(Color3, bool)> = style_inst.mesh_resources[0]
+        .primitives
+        .iter()
+        .map(|p| {
+            (
+                rgb_of(&style_inst.gltf_materials, p.material_index),
+                p.unpainted_back,
+            )
+        })
+        .collect();
+    style_sides.sort_by_key(|&(_, back)| back);
+    assert_eq!(
+        style_sides,
+        vec![
+            (model.face_front_color.unwrap(), false),
+            (model.face_back_color.unwrap(), true),
+        ]
+    );
 }
 
 #[test]
