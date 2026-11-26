@@ -105,6 +105,55 @@ namespace OpenSkp.Tests
         }
 
         [Fact]
+        public void GeneratedCodePreservesScaledTextureSizeAndPinnedUvs()
+        {
+            string pngPath = Path.Combine(Path.GetTempPath(), "openskp_codegen_uv_" + Guid.NewGuid() + ".png");
+            File.WriteAllBytes(pngPath, new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3, 4 });
+            try
+            {
+                var builder = SkpCreate.NewFile();
+                int frontTex = builder.AddTextureMaterial("FrontTex", pngPath, appliedHeight: 20.0, appliedWidth: 10.0, filename: "tex.png");
+                int backTex = builder.AddTextureMaterial("BackTex", pngPath, appliedHeight: 8.0, appliedWidth: 4.0, filename: "tex.png");
+                builder.AddFace(
+                    new (double, double, double)[] { (50, 0, 0), (50, 40, 0), (0, 40, 0), (0, 0, 0) },
+                    material: frontTex,
+                    backMaterial: backTex,
+                    frontUv: new[]
+                    {
+                        new UvCorrespondence((0, 0, 0), (0.0, 0.0)),
+                        new UvCorrespondence((50, 0, 0), (2.5, 0.0)),
+                        new UvCorrespondence((0, 40, 0), (0.0, 1.0)),
+                    },
+                    backUv: new[]
+                    {
+                        new UvCorrespondence((0, 0, 0), (0.25, 0.5)),
+                        new UvCorrespondence((50, 0, 0), (2.75, 0.5)),
+                        new UvCorrespondence((0, 40, 0), (0.25, 2.5)),
+                    });
+
+                var orig = SkpFile.Parse(builder.ToBytes());
+                var regen = SkpFile.Parse(CompileAndRun(Codegen.ToCSharpCode(orig)));
+
+                var fm = regen.Materials.Single(m => m.Name == "FrontTex");
+                var bm = regen.Materials.Single(m => m.Name == "BackTex");
+                Assert.Equal((10.0, 20.0), (fm.Texture!.Width, fm.Texture.Height));
+                Assert.Equal((4.0, 8.0), (bm.Texture!.Width, bm.Texture.Height));
+
+                var origFace = orig.Root.Faces.Values.Single();
+                var regenFace = regen.Root.Faces.Values.Single();
+                for (int i = 0; i < 9; i++)
+                {
+                    Assert.Equal(origFace.UvTransform![i], regenFace.UvTransform![i], 3);
+                    Assert.Equal(origFace.UvTransformBack![i], regenFace.UvTransformBack![i], 3);
+                }
+            }
+            finally
+            {
+                if (File.Exists(pngPath)) File.Delete(pngPath);
+            }
+        }
+
+        [Fact]
         public void GeneratedCodePreservesTextureFilenamesIncludingEmptyAndNeverEmbedsTempFolder()
         {
             string tempDir = Path.GetTempPath().TrimEnd('\\', '/');

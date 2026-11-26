@@ -119,15 +119,13 @@ std::map<const Material*, int> replay_materials(SkpBuilder& builder, const SkpMo
                 static_cast<std::streamsize>(mat.texture->data->size()));
       }
       try {
-        // applied_height: 1.0 - every textured face is now replayed with
-        // an explicit front_uv/back_uv (see replay_uv), whose pins already
-        // bake in the SOURCE's real tile size via compute_face_uv - the
-        // material's own stored applied height must be a no-op divisor
-        // (1.0) or the read-side UV formula divides by it a second time.
-        // This happens to match add_texture_material's own default too,
-        // but is kept explicit here since it's a hard requirement of this
-        // call site specifically, not just a safe default.
-        slot = builder.add_texture_material(mat.name, tmp_path, 1.0, std::nullopt, std::nullopt,
+        // The source's real applied size travels with the material, and the
+        // replayed pins - in tiles, from compute_face_uv - are scaled by it
+        // inside add_face, so the read-side division by the applied size
+        // lands back on the same UV.
+        double app_h = mat.texture->height != 0.0 ? mat.texture->height : 1.0;
+        double app_w = mat.texture->width != 0.0 ? mat.texture->width : 1.0;
+        slot = builder.add_texture_material(mat.name, tmp_path, app_h, app_w, std::nullopt,
                                             mat.texture->filename);
       } catch (...) {
         std::error_code ec;

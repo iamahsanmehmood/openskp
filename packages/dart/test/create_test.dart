@@ -3,6 +3,7 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:openskp/openskp.dart';
+import 'package:openskp/src/face_groups.dart' show computeFaceUv, faceUvBasis;
 import 'package:openskp/src/legacy.dart' show AttrsRec, DictRec, InstanceRec, Legacy;
 import 'package:test/test.dart';
 
@@ -1783,6 +1784,99 @@ void main() {
       final m3 = SkpFile.fromBuffer(b3.toBytes()).parse();
       expect(m3.root.edges.length, 8);
       expect(m3.root.arcs.length, 1);
+    });
+
+    test('scales frontUv/backUv pins by applied texture size across faces, circles, and edit', () {
+      expect(faceUvBasis((9.9e-4, 0.0, 1.0)), ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0)));
+      expect(faceUvBasis((0.0, 0.0, -1.0)), ((-1.0, 0.0, 0.0), (0.0, 1.0, 0.0)));
+      expect(faceUvBasis((3e-4, 0.0, -1.0)), ((-1.0, 0.0, 0.0), (0.0, 1.0, 0.0)));
+      expect(faceUvBasis((2e-3, 0.0, 0.999998)).$1.$2, closeTo(1.0, 1e-5));
+
+      final dir = Directory.systemTemp.createTempSync('openskp_uv_size_');
+      try {
+        final pngPath = '${dir.path}/tex.png';
+        File(pngPath).writeAsBytesSync([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 1, 2, 3]);
+        const quad = [(50.0, 0.0, 0.0), (50.0, 40.0, 0.0), (0.0, 40.0, 0.0), (0.0, 0.0, 0.0)];
+        const fPins = [
+          ((0.0, 0.0, 0.0), (0.0, 0.0)),
+          ((50.0, 0.0, 0.0), (2.5, 0.0)),
+          ((0.0, 40.0, 0.0), (0.0, 1.0)),
+        ];
+        const bPins = [
+          ((0.0, 0.0, 0.0), (0.25, 0.5)),
+          ((50.0, 0.0, 0.0), (2.75, 0.5)),
+          ((0.0, 40.0, 0.0), (0.25, 2.5)),
+        ];
+        const cfPins = [
+          ((100.0, 20.0, 0.0), (0.0, 0.0)),
+          ((140.0, 20.0, 0.0), (2.0, 0.0)),
+          ((120.0, 40.0, 0.0), (0.0, 1.0)),
+        ];
+        const cbPins = [
+          ((100.0, 20.0, 0.0), (0.5, 0.25)),
+          ((140.0, 20.0, 0.0), (2.5, 0.25)),
+          ((120.0, 40.0, 0.0), (0.5, 1.25)),
+        ];
+
+        final b = create();
+        final frontTex = b.addTextureMaterial('FrontTex', pngPath, appliedHeight: 20.0, appliedWidth: 10.0, filename: 'tex.png');
+        final backTex = b.addTextureMaterial('BackTex', pngPath, appliedHeight: 8.0, appliedWidth: 4.0, filename: 'tex.png');
+        final panel = b.addComponentDefinition('Panel', (def) {
+          def.addFace(quad, material: frontTex, backMaterial: backTex, frontUv: fPins, backUv: bPins);
+          def.addCircle(
+            (120.0, 20.0, 0.0), (0.0, 0.0, 1.0), 20.0,
+            numSegments: 8, material: frontTex, backMaterial: backTex, frontUv: cfPins, backUv: cbPins,
+          );
+        });
+        b.addInstance(panel, translation: (0.0, 100.0, 0.0));
+        b.addFace(quad, material: frontTex, backMaterial: backTex, frontUv: fPins, backUv: bPins);
+        b.addCircle(
+          (120.0, 20.0, 0.0), (0.0, 0.0, 1.0), 20.0,
+          numSegments: 8, material: frontTex, backMaterial: backTex, frontUv: cfPins, backUv: cbPins,
+        );
+
+        void checkModel(Uint8List raw) {
+          final m = SkpFile.fromBuffer(raw).parse();
+          final fm = m.materials.firstWhere((x) => x.name == 'FrontTex');
+          final bm = m.materials.firstWhere((x) => x.name == 'BackTex');
+          expect((fm.texture!.width, fm.texture!.height), (10.0, 20.0));
+          expect((bm.texture!.width, bm.texture!.height), (4.0, 8.0));
+
+          final (xr, yr) = faceUvBasis((0.0, 0.0, 1.0));
+          for (final faces in [m.definitions.values.single.faces.values.toList(), m.root.faces.values.toList()]) {
+            expect(faces.length, 2);
+            for (final (pt, (eu, ev)) in fPins) {
+              final (u, v) = computeFaceUv(pt, xr, yr, faces[0].uvTransform, 10.0, 20.0);
+              expect(u, closeTo(eu, 1e-4));
+              expect(v, closeTo(ev, 1e-4));
+            }
+            for (final (pt, (eu, ev)) in bPins) {
+              final (u, v) = computeFaceUv(pt, xr, yr, faces[0].uvTransformBack, 4.0, 8.0);
+              expect(u, closeTo(eu, 1e-4));
+              expect(v, closeTo(ev, 1e-4));
+            }
+            for (final (pt, (eu, ev)) in cfPins) {
+              final (u, v) = computeFaceUv(pt, xr, yr, faces[1].uvTransform, 10.0, 20.0);
+              expect(u, closeTo(eu, 1e-4));
+              expect(v, closeTo(ev, 1e-4));
+            }
+            for (final (pt, (eu, ev)) in cbPins) {
+              final (u, v) = computeFaceUv(pt, xr, yr, faces[1].uvTransformBack, 4.0, 8.0);
+              expect(u, closeTo(eu, 1e-4));
+              expect(v, closeTo(ev, 1e-4));
+            }
+          }
+        }
+
+        final skpPath = '${dir.path}/orig.skp';
+        b.save(skpPath);
+        checkModel(File(skpPath).readAsBytesSync());
+
+        final edited = openExisting(skpPath);
+        checkModel(edited.builder.toBytes());
+      } finally {
+        dir.deleteSync(recursive: true);
+      }
     });
   });
 }

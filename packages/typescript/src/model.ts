@@ -1055,10 +1055,14 @@ function invertMatrix3x3(m: number[]): number[] {
   ];
 }
 
+/** Below this `|Z x n|` length, SketchUp treats a face as horizontal
+ * (measured against SketchUp 2025's SDK: 9.9e-4 snaps, 1.0e-3 turns). */
+const UV_VERTICAL_TOLERANCE = 1e-3;
+
 /** Face-plane basis vectors (xr, yr) for UV projection, from a face
  * normal. See `Face.uvTransform`'s docs for the recipe this implements.
- * Exported for edit.ts's own UV replay, which needs the identical basis
- * a source face's uvTransform was computed against. */
+ * Exported for create.ts, edit.ts and codegen.ts, which need the identical
+ * basis a face's uvTransform is defined against. */
 export function faceUvBasis(n: [number, number, number]): { xr: [number, number, number]; yr: [number, number, number] } {
   const [nx, ny, nz] = n;
   const cx = -ny;
@@ -1066,9 +1070,9 @@ export function faceUvBasis(n: [number, number, number]): { xr: [number, number,
   const clen = Math.sqrt(cx * cx + cy * cy);
   let xr: [number, number, number];
   let yr: [number, number, number];
-  if (clen < 1e-9) {
-    xr = [1, 0, 0];
-    yr = [0, nz >= 0 ? 1 : -1, 0];
+  if (clen < UV_VERTICAL_TOLERANCE) {
+    xr = nz >= 0 ? [1, 0, 0] : [-1, 0, 0];
+    yr = [0, 1, 0];
   } else {
     xr = [cx / clen, cy / clen, 0];
     yr = [ny * xr[2] - nz * xr[1], nz * xr[0] - nx * xr[2], nx * xr[1] - ny * xr[0]];

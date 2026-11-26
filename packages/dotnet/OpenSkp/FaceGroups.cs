@@ -492,21 +492,21 @@ namespace OpenSkp
             };
         }
 
+        internal const double UvVerticalTolerance = 1e-3;
+
         /// <summary>Face-plane basis vectors (xr, yr) for UV projection,
         /// from a face normal. See Face.UvTransform's docs for the recipe
-        /// this implements. Internal (not private) so Edit.cs can reuse
-        /// this same read-side UV basis/sampling when replaying a source
-        /// face's stored uv_transform into the 3-point correspondences
-        /// SkpBuilder.AddFace's front_uv/back_uv expects.</summary>
+        /// this implements. Internal (not private) so Create.cs, Edit.cs
+        /// and Codegen.cs reuse the identical basis.</summary>
         internal static ((double X, double Y, double Z) Xr, (double X, double Y, double Z) Yr) FaceUvBasis((double X, double Y, double Z) n)
         {
             double cx = -n.Y, cy = n.X;
             double clen = Math.Sqrt(cx * cx + cy * cy);
             (double, double, double) xr, yr;
-            if (clen < 1e-9)
+            if (clen < UvVerticalTolerance)
             {
-                xr = (1.0, 0.0, 0.0);
-                yr = (0.0, n.Z >= 0 ? 1.0 : -1.0, 0.0);
+                xr = (n.Z >= 0 ? 1.0 : -1.0, 0.0, 0.0);
+                yr = (0.0, 1.0, 0.0);
             }
             else
             {

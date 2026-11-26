@@ -1390,6 +1390,105 @@ namespace OpenSkp.Tests
             Assert.Single(m3.Root.Arcs);
         }
 
+        [Fact]
+        public void ScalesUvPinsByAppliedTextureSizeAcrossFacesCirclesAndEdit()
+        {
+            string pngPath = Path.Combine(Path.GetTempPath(), "openskp_uv_size_" + Guid.NewGuid() + ".png");
+            string skpPath = Path.Combine(Path.GetTempPath(), "openskp_uv_size_" + Guid.NewGuid() + ".skp");
+            File.WriteAllBytes(pngPath, TinyPng());
+            try
+            {
+                var quad = new (double, double, double)[] { (50, 0, 0), (50, 40, 0), (0, 40, 0), (0, 0, 0) };
+                var downQuad = new (double, double, double)[] { (0, 0, 10), (0, 40, 10), (50, 40, 10), (50, 0, 10) };
+                var fPins = new[]
+                {
+                    new UvCorrespondence((0, 0, 0), (0.0, 0.0)),
+                    new UvCorrespondence((50, 0, 0), (2.5, 0.0)),
+                    new UvCorrespondence((0, 40, 0), (0.0, 1.0)),
+                };
+                var downPins = new[]
+                {
+                    new UvCorrespondence((0, 0, 10), (0.0, 0.0)),
+                    new UvCorrespondence((50, 0, 10), (2.5, 0.0)),
+                    new UvCorrespondence((0, 40, 10), (0.0, 1.0)),
+                };
+                var bPins = new[]
+                {
+                    new UvCorrespondence((0, 0, 0), (0.25, 0.5)),
+                    new UvCorrespondence((50, 0, 0), (2.75, 0.5)),
+                    new UvCorrespondence((0, 40, 0), (0.25, 2.5)),
+                };
+                var cfPins = new[]
+                {
+                    new UvCorrespondence((100, 20, 0), (0.0, 0.0)),
+                    new UvCorrespondence((140, 20, 0), (2.0, 0.0)),
+                    new UvCorrespondence((120, 40, 0), (0.0, 1.0)),
+                };
+                var cbPins = new[]
+                {
+                    new UvCorrespondence((100, 20, 0), (0.5, 0.25)),
+                    new UvCorrespondence((140, 20, 0), (2.5, 0.25)),
+                    new UvCorrespondence((120, 40, 0), (0.5, 1.25)),
+                };
+
+                var b = SkpCreate.NewFile();
+                int frontTex = b.AddTextureMaterial("FrontTex", pngPath, appliedHeight: 20.0, appliedWidth: 10.0, filename: "tex.png");
+                int backTex = b.AddTextureMaterial("BackTex", pngPath, appliedHeight: 8.0, appliedWidth: 4.0, filename: "tex.png");
+                ComponentDefinitionBuilder panel;
+                using (panel = b.AddComponentDefinition("Panel"))
+                {
+                    panel.AddFace(quad, material: frontTex, backMaterial: backTex, frontUv: fPins, backUv: bPins);
+                    panel.AddCircle((120, 20, 0), (0, 0, 1), 20.0, numSegments: 8, material: frontTex, backMaterial: backTex, frontUv: cfPins, backUv: cbPins);
+                }
+                b.AddInstance(panel, translation: (0, 100, 0));
+                b.AddFace(quad, material: frontTex, backMaterial: backTex, frontUv: fPins, backUv: bPins);
+                b.AddCircle((120, 20, 0), (0, 0, 1), 20.0, numSegments: 8, material: frontTex, backMaterial: backTex, frontUv: cfPins, backUv: cbPins);
+                b.AddFace(downQuad, material: frontTex, frontUv: downPins);
+                b.Save(skpPath);
+
+                static void CheckModel(byte[] raw)
+                {
+                    var m = SkpFile.Parse(raw);
+                    var fm = m.Materials.Single(x => x.Name == "FrontTex");
+                    var bm = m.Materials.Single(x => x.Name == "BackTex");
+                    Assert.Equal((10.0, 20.0), (fm.Texture!.Width, fm.Texture.Height));
+                    Assert.Equal((4.0, 8.0), (bm.Texture!.Width, bm.Texture.Height));
+
+                    double[] expectedFaceFront = { 2.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 1.0 };
+                    double[] expectedFaceBack = { 5.0, 0.0, 0.0, 0.0, 2.5, 0.0, -5.0, -10.0, 1.0 };
+                    double[] expectedCircleFront = { 2.0, 0.0, 0.0, 1.0, 1.0, 0.0, 100.0, 20.0, 1.0 };
+                    double[] expectedCircleBack = { 5.0, 0.0, 0.0, 2.5, 2.5, 0.0, 85.0, 15.0, 1.0 };
+                    double[] expectedDownFront = { -2.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 1.0 };
+
+                    var defFaces = m.Definitions.Values.Single().Faces.Values.ToList();
+                    var rootFaces = m.Root.Faces.Values.ToList();
+                    foreach (var faces in new[] { defFaces, rootFaces })
+                    {
+                        for (int i = 0; i < 9; i++)
+                        {
+                            Assert.Equal(expectedFaceFront[i], faces[0].UvTransform![i], 3);
+                            Assert.Equal(expectedFaceBack[i], faces[0].UvTransformBack![i], 3);
+                            Assert.Equal(expectedCircleFront[i], faces[1].UvTransform![i], 3);
+                            Assert.Equal(expectedCircleBack[i], faces[1].UvTransformBack![i], 3);
+                        }
+                    }
+                    for (int i = 0; i < 9; i++)
+                    {
+                        Assert.Equal(expectedDownFront[i], rootFaces[2].UvTransform![i], 3);
+                    }
+                }
+
+                CheckModel(File.ReadAllBytes(skpPath));
+                var edited = SkpEdit.OpenExisting(skpPath);
+                CheckModel(edited.Builder.ToBytes());
+            }
+            finally
+            {
+                if (File.Exists(pngPath)) File.Delete(pngPath);
+                if (File.Exists(skpPath)) File.Delete(skpPath);
+            }
+        }
+
         private static int IndexOfBytes(byte[] haystack, byte[] needle)
         {
             for (int i = 0; i <= haystack.Length - needle.Length; i++)

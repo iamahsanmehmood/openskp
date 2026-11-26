@@ -90,8 +90,8 @@ namespace OpenSkp
                     // The real applied size: the generated AddFace pins are in
                     // tiles and the writer scales them by the material's size, so
                     // the material keeps its size and the faces their mapping.
-                    double appH = mat.Texture.Height > 1e-9 ? mat.Texture.Height : 1.0;
-                    double appW = mat.Texture.Width > 1e-9 ? mat.Texture.Width : 1.0;
+                    double appH = mat.Texture.Height != 0.0 ? mat.Texture.Height : 1.0;
+                    double appW = mat.Texture.Width != 0.0 ? mat.Texture.Width : 1.0;
                     string optOpacity = mat.Transparency < 1.0 - 1e-6 ? $", opacity: {Round(mat.Transparency)}" : "";
                     string storedName = mat.Texture.Filename ?? "";
                     Push($"        var _texPath{i} = System.IO.Path.Combine(System.IO.Path.GetTempPath(), Guid.NewGuid() + \"{ext}\");");
@@ -152,7 +152,7 @@ namespace OpenSkp
                     parts.Add($"material: {matVar[fm.Name]}");
                     if (texturedMats.Contains(fm.Name))
                     {
-                        var triple = UvTripleStr(points, face.Normal, face.UvTransform, fm.Texture!.Width > 1e-9 ? fm.Texture.Width : 1.0, fm.Texture.Height > 1e-9 ? fm.Texture.Height : 1.0);
+                        var triple = UvTripleStr(points, face.Normal, face.UvTransform, fm.Texture!.Width != 0.0 ? fm.Texture.Width : 1.0, fm.Texture.Height != 0.0 ? fm.Texture.Height : 1.0);
                         if (triple != null) { parts.Add($"frontUv: {triple}"); hasUv = true; }
                     }
                 }
@@ -161,7 +161,7 @@ namespace OpenSkp
                     parts.Add($"backMaterial: {matVar[bm.Name]}");
                     if (texturedMats.Contains(bm.Name))
                     {
-                        var triple = UvTripleStr(points, face.Normal, face.UvTransformBack, bm.Texture!.Width > 1e-9 ? bm.Texture.Width : 1.0, bm.Texture.Height > 1e-9 ? bm.Texture.Height : 1.0);
+                        var triple = UvTripleStr(points, face.Normal, face.UvTransformBack, bm.Texture!.Width != 0.0 ? bm.Texture.Width : 1.0, bm.Texture.Height != 0.0 ? bm.Texture.Height : 1.0);
                         if (triple != null) { parts.Add($"backUv: {triple}"); hasUv = true; }
                     }
                 }

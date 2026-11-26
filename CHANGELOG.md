@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — TypeScript, .NET and Dart writers: texture applied size on positioned faces and circles
+
+- `addFace`/`AddFace` and `addCircle`/`AddCircle` (at the model root and inside component definitions) now solve `frontUv`/`backUv` in SketchUp's normal-derived basis (`|Z x n| < 1e-3` horizontal tolerance, `(-1, 0, 0)` downward X axis) and scale pin coordinates by the material's `(appliedWidth, appliedHeight)`, matching Python, C++ and Rust.
+- `openExisting`/`OpenExisting` (including C++ and Rust) and `toTypeScriptCode`/`ToCSharpCode`/`toDartCode` preserve a textured material's real applied width and height instead of resetting `appliedHeight` to `1.0`, while keeping pinned and default-projected UVs intact.
+
 ### Added — Python: `openskp info` and `openskp convert` on the command line (#570)
 
 - `openskp info FILE` prints the SketchUp version, units, counts of definitions, instances, faces, tags and materials, and the tag and material names; `openskp convert FILE OUTPUT` writes GLB, OBJ, STL, PLY, DXF, IFC or JSON, picked from the extension. `openskp FILE` still works and runs `info` (by @isyanpcr, #689).

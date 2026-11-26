@@ -1,6 +1,6 @@
 import 'dart:convert';
-import 'dart:math';
 
+import 'face_groups.dart' show computeFaceUv, faceUvBasis;
 import 'model.dart';
 
 /// Generates Dart source that rebuilds a parsed [SkpModel] from scratch
@@ -104,55 +104,6 @@ String toDartCode(SkpModel model) {
     return null;
   }
 
-  ((double, double, double), (double, double, double)) faceUvBasis((double, double, double) n) {
-    final cx = -n.$2, cy = n.$1;
-    final clenSq = cx * cx + cy * cy;
-    if (clenSq < 1e-18) {
-      final yr = (0.0, n.$3 >= 0 ? 1.0 : -1.0, 0.0);
-      return ((1.0, 0.0, 0.0), yr);
-    }
-    final clen = sqrt(clenSq);
-    final xr = (cx / clen, cy / clen, 0.0);
-    final yr = (
-      n.$2 * xr.$3 - n.$3 * xr.$2,
-      n.$3 * xr.$1 - n.$1 * xr.$3,
-      n.$1 * xr.$2 - n.$2 * xr.$1,
-    );
-    return (xr, yr);
-  }
-
-  List<double> invert3x3(List<double> m) {
-    final a = m[0], b = m[1], c = m[2];
-    final d = m[3], e = m[4], f = m[5];
-    final g = m[6], h = m[7], i = m[8];
-    final det = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
-    final invDet = det.abs() < 1e-15 ? 0.0 : 1.0 / det;
-    return [
-      (e * i - f * h) * invDet, (c * h - b * i) * invDet, (b * f - c * e) * invDet,
-      (f * g - d * i) * invDet, (a * i - c * g) * invDet, (c * d - a * f) * invDet,
-      (d * h - e * g) * invDet, (b * g - a * h) * invDet, (a * e - b * d) * invDet,
-    ];
-  }
-
-  (double, double) computeFaceUv(
-    (double, double, double) p,
-    (double, double, double) xr,
-    (double, double, double) yr,
-    List<double>? uvTransform,
-    double tileW,
-    double tileH,
-  ) {
-    final px = p.$1 * xr.$1 + p.$2 * xr.$2 + p.$3 * xr.$3;
-    final py = p.$1 * yr.$1 + p.$2 * yr.$2 + p.$3 * yr.$3;
-    if (uvTransform == null) return (px / tileW, py / tileH);
-    final inv = invert3x3(uvTransform);
-    final u = px * inv[0] + py * inv[3] + inv[6];
-    final v = px * inv[1] + py * inv[4] + inv[7];
-    var q = px * inv[2] + py * inv[5] + inv[8];
-    if (q.abs() < 1e-12) q = 1.0;
-    return (u / q / tileW, v / q / tileH);
-  }
-
   final materialsById = model.materialsById;
   final matVar = <String, String>{};
   final texturedMats = <String>{};
@@ -174,8 +125,8 @@ String toDartCode(SkpModel model) {
       // The real applied size: the generated addFace pins are in
       // tiles and the writer scales them by the material's size, so
       // the material keeps its size and the faces their mapping.
-      final appH = tex.height > 1e-9 ? tex.height : 1.0;
-      final appW = tex.width > 1e-9 ? tex.width : 1.0;
+      final appH = tex.height != 0.0 ? tex.height : 1.0;
+      final appW = tex.width != 0.0 ? tex.width : 1.0;
       final optOpacity = mat.transparency < 1.0 - 1e-6 ? ', opacity: ${round(mat.transparency)}' : '';
       push('  final _texBytes$i = base64Decode(');
       push("    '$b64',");

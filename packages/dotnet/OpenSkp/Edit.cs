@@ -176,18 +176,15 @@ namespace OpenSkp
                     try
                     {
                         File.WriteAllBytes(tmpPath, mat.Texture.Data);
-                        // appliedHeight: 1.0 - every textured face is now
-                        // replayed with an explicit FrontUv/BackUv (see
-                        // ReplayUv), whose pins already bake in the
-                        // SOURCE's real tile size via ComputeFaceUv - the
-                        // material's own stored applied height must be a
-                        // no-op divisor (1.0) or the read-side UV formula
-                        // divides by it a second time. This happens to
-                        // match AddTextureMaterial's own default too, but
-                        // is kept explicit here since it's a hard
-                        // requirement of this call site specifically, not
-                        // just a safe default.
-                        slot = builder.AddTextureMaterial(mat.Name, tmpPath, appliedHeight: 1.0, filename: mat.Texture.Filename ?? "");
+                        // The source's real applied size travels with the
+                        // material, and the replayed pins - in tiles, from
+                        // ComputeFaceUv - are scaled by it inside AddFace,
+                        // so the read-side division by the applied size
+                        // lands back on the same UV.
+                        double appH = mat.Texture.Height != 0.0 ? mat.Texture.Height : 1.0;
+                        double appW = mat.Texture.Width != 0.0 ? mat.Texture.Width : 1.0;
+                        slot = builder.AddTextureMaterial(
+                            mat.Name, tmpPath, appliedHeight: appH, appliedWidth: appW, filename: mat.Texture.Filename ?? "");
                     }
                     finally
                     {
