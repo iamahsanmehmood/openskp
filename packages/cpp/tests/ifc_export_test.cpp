@@ -420,5 +420,131 @@ TEST(IfcExport, CustomClassifierReceivesRawUnescapedText) {
   EXPECT_NE(ifc_text.find(",.F.,.F.,.F.,());"), std::string::npos);
 }
 
+TEST(IfcExport, ExportsValidIfc2x3GeometryArcsProxiesAndRoofAttributes) {
+  constexpr double kS45 = 0.7071067811865476;
+  Scene scene;
+  scene.scene_hierarchy.name = "Root";
+
+  GlbPrimitive closed_prim;
+  closed_prim.geom_name = "ClosedCrate";
+  closed_prim.material_index = 0;
+  closed_prim.positions = {0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f};
+  closed_prim.normals.assign(12, 0.0f);
+  closed_prim.uvs.assign(8, 0.0f);
+  closed_prim.indices = {0, 2, 1, 0, 1, 3, 1, 2, 3, 2, 0, 3};
+
+  GlbPrimitive roof_prim;
+  roof_prim.geom_name = "OpenRoof";
+  roof_prim.material_index = 0;
+  roof_prim.positions = {0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f};
+  roof_prim.normals.assign(9, 0.0f);
+  roof_prim.uvs.assign(6, 0.0f);
+  roof_prim.indices = {0, 1, 2};
+
+  GlbPrimitive door_prim;
+  door_prim.geom_name = "FrontDoor";
+  door_prim.material_index = 0;
+  door_prim.positions = {2.0f, 0.0f, 0.0f, 3.0f, 0.0f, 0.0f, 2.0f, 1.0f, 0.0f};
+  door_prim.normals.assign(9, 0.0f);
+  door_prim.uvs.assign(6, 0.0f);
+  door_prim.indices = {0, 1, 2};
+
+  scene.glb_primitives = {closed_prim, roof_prim, door_prim};
+  MeshMetadata closed_meta;
+  closed_meta.name = "ClosedCrate";
+  closed_meta.layer = "Layer0";
+  closed_meta.path = "Root/1";
+  scene.mesh_index["ClosedCrate"] = closed_meta;
+  MeshMetadata roof_meta;
+  roof_meta.name = "Gable Roof";
+  roof_meta.layer = "Layer0";
+  roof_meta.path = "Root/2";
+  scene.mesh_index["OpenRoof"] = roof_meta;
+  MeshMetadata door_meta;
+  door_meta.name = "Front Door";
+  door_meta.layer = "Layer0";
+  door_meta.path = "Root/3";
+  scene.mesh_index["FrontDoor"] = door_meta;
+  scene.gltf_materials = {GltfMaterial{}};
+
+  CurveSetMetadata quarter_arc;
+  quarter_arc.name = "QuarterArc";
+  quarter_arc.points_m = {{1.0, 0.0, 0.0}, {kS45, 0.0, -kS45}, {0.0, 0.0, -1.0}};
+  quarter_arc.closed = false;
+  quarter_arc.arc = CurveArc{{{1.0, 0.0, 0.0}, {kS45, 0.0, -kS45}, {0.0, 0.0, -1.0}}, {{0, 1, 2}}};
+
+  CurveSetMetadata full_circle;
+  full_circle.name = "FullCircle";
+  full_circle.points_m = {{1.0, 0.0, 0.0}, {0.0, 0.0, -1.0}, {-1.0, 0.0, 0.0}, {0.0, 0.0, 1.0}};
+  full_circle.closed = true;
+  full_circle.arc = CurveArc{
+      {{1.0, 0.0, 0.0}, {0.0, 0.0, -1.0}, {-1.0, 0.0, 0.0}, {0.0, 0.0, 1.0}},
+      {{0, 1, 2}, {2, 3, 0}},
+  };
+
+  CurveSetMetadata degenerate_arc;
+  degenerate_arc.name = "DegenerateArc";
+  degenerate_arc.points_m = {{0.0, 0.0, 0.0}, {1.0, 0.0, 0.0}, {2.0, 0.0, 0.0}};
+  degenerate_arc.closed = false;
+  degenerate_arc.arc = CurveArc{{{0.0, 0.0, 0.0}, {1.0, 0.0, 0.0}, {2.0, 0.0, 0.0}}, {{0, 1, 2}}};
+
+  scene.curve_sets = {quarter_arc, full_circle, degenerate_arc};
+
+  const std::string ifc_text = to_ifc(scene, METRES_TO_MM, "IFC2X3");
+  EXPECT_NE(ifc_text.find("FILE_SCHEMA(('IFC2X3'));"), std::string::npos);
+  EXPECT_EQ(ifc_text.find("IFCTRIANGULATEDFACESET("), std::string::npos);
+  EXPECT_EQ(ifc_text.find("IFCCARTESIANPOINTLIST3D("), std::string::npos);
+  EXPECT_EQ(ifc_text.find("IFCINDEXEDPOLYCURVE("), std::string::npos);
+  EXPECT_EQ(ifc_text.find("IFCARCINDEX("), std::string::npos);
+
+  EXPECT_NE(ifc_text.find("IFCCLOSEDSHELL("), std::string::npos);
+  EXPECT_NE(ifc_text.find("IFCFACETEDBREP("), std::string::npos);
+  EXPECT_NE(ifc_text.find("'Body','Brep',"), std::string::npos);
+  EXPECT_NE(ifc_text.find("IFCCONNECTEDFACESET("), std::string::npos);
+  EXPECT_NE(ifc_text.find("IFCFACEBASEDSURFACEMODEL("), std::string::npos);
+  EXPECT_NE(ifc_text.find("'Body','SurfaceModel',"), std::string::npos);
+  EXPECT_NE(ifc_text.find("IFCPARAMETERVALUE(1.570796)"), std::string::npos);
+
+  std::istringstream stream(ifc_text);
+  std::string line, proxy_line, roof_line, door_line;
+  int circle_count = 0, trim_count = 0, polyline_count = 0;
+  std::vector<int> ids;
+  while (std::getline(stream, line)) {
+    if (!line.empty() && line.back() == '\r') line.pop_back();
+    if (line.find("=IFCCIRCLE(") != std::string::npos) ++circle_count;
+    if (line.find("=IFCTRIMMEDCURVE(") != std::string::npos) ++trim_count;
+    if (line.find("=IFCPOLYLINE(") != std::string::npos) ++polyline_count;
+    if (line.find("=IFCBUILDINGELEMENTPROXY(") != std::string::npos) proxy_line = line;
+    if (line.find("=IFCROOF(") != std::string::npos) roof_line = line;
+    if (line.find("=IFCDOOR(") != std::string::npos) door_line = line;
+    if (!line.empty() && line[0] == '#') {
+      const auto eq = line.find('=');
+      if (eq != std::string::npos) {
+        ids.push_back(std::stoi(line.substr(1, eq - 1)));
+      }
+    }
+  }
+  EXPECT_EQ(circle_count, 2);
+  EXPECT_EQ(trim_count, 1);
+  EXPECT_EQ(polyline_count, 1);
+  EXPECT_NE(proxy_line.find(",.ELEMENT.);"), std::string::npos);
+  EXPECT_NE(roof_line.find(",.NOTDEFINED.);"), std::string::npos);
+
+  ASSERT_FALSE(door_line.empty());
+  const auto lp = door_line.find('(');
+  const auto rp = door_line.rfind(')');
+  const std::string door_body = door_line.substr(lp + 1, rp - lp - 1);
+  int commas = 0;
+  for (char ch : door_body) {
+    if (ch == ',') ++commas;
+  }
+  EXPECT_EQ(commas + 1, 10);
+
+  ASSERT_FALSE(ids.empty());
+  for (std::size_t i = 0; i < ids.size(); ++i) {
+    EXPECT_EQ(ids[i], static_cast<int>(i + 1));
+  }
+}
+
 }  // namespace
 }  // namespace openskp

@@ -320,7 +320,7 @@ pub fn classify_element(
 /// `schema`, from the schema-generated table the Python port ships as
 /// `ifc_attr_counts.json`. Unknown schemas use IFC4's table.
 fn attr_count(schema: &str, step_type: &str) -> Option<usize> {
-    let table = if schema == "IFC2X3" {
+    let table = if schema.starts_with("IFC2X3") {
         IFC2X3_ATTR_COUNTS
     } else {
         IFC4_ATTR_COUNTS
@@ -329,6 +329,116 @@ fn attr_count(schema: &str, step_type: &str) -> Option<usize> {
         .binary_search_by(|(name, _)| (*name).cmp(step_type))
         .ok()
         .map(|i| usize::from(table[i].1))
+}
+
+fn needs_ifc2x3_notdefined_attr8(step_type: &str) -> bool {
+    matches!(
+        step_type,
+        "IFCROOF" | "IFCFOOTING" | "IFCPILE" | "IFCRAMP" | "IFCSTAIR"
+    )
+}
+
+#[derive(Clone, Copy)]
+struct SolvedArcSeg {
+    center: [f64; 3],
+    radius: f64,
+    axis_z: [f64; 3],
+    ref_x: [f64; 3],
+    sweep: f64,
+}
+
+fn solve_ifc2x3_arc_segment(p0: [f64; 3], pm: [f64; 3], p1: [f64; 3]) -> Option<SolvedArcSeg> {
+    let (ux, uy, uz) = (pm[0] - p0[0], pm[1] - p0[1], pm[2] - p0[2]);
+    let (vx, vy, vz) = (p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]);
+    let wx = uy * vz - uz * vy;
+    let wy = uz * vx - ux * vz;
+    let wz = ux * vy - uy * vx;
+    let u2 = ux * ux + uy * uy + uz * uz;
+    let v2 = vx * vx + vy * vy + vz * vz;
+    let w2 = wx * wx + wy * wy + wz * wz;
+    if u2 <= 0.0 || v2 <= 0.0 || w2 <= 1e-24 * (u2 * v2).max(1.0) {
+        return None;
+    }
+
+    let vxw_x = vy * wz - vz * wy;
+    let vxw_y = vz * wx - vx * wz;
+    let vxw_z = vx * wy - vy * wx;
+    let wxu_x = wy * uz - wz * uy;
+    let wxu_y = wz * ux - wx * uz;
+    let wxu_z = wx * uy - wy * ux;
+
+    let inv_2w2 = 0.5 / w2;
+    let ox = (u2 * vxw_x + v2 * wxu_x) * inv_2w2;
+    let oy = (u2 * vxw_y + v2 * wxu_y) * inv_2w2;
+    let oz = (u2 * vxw_z + v2 * wxu_z) * inv_2w2;
+    let radius = (ox * ox + oy * oy + oz * oz).sqrt();
+    if !radius.is_finite() || radius <= 0.0 {
+        return None;
+    }
+
+    let (cx, cy, cz) = (p0[0] + ox, p0[1] + oy, p0[2] + oz);
+    let inv_r = 1.0 / radius;
+    let (xx, xy, xz) = (-ox * inv_r, -oy * inv_r, -oz * inv_r);
+    let inv_w = 1.0 / w2.sqrt();
+    let (zx, zy, zz) = (wx * inv_w, wy * inv_w, wz * inv_w);
+    let yx = zy * xz - zz * xy;
+    let yy = zz * xx - zx * xz;
+    let yz = zx * xy - zy * xx;
+
+    let (d1x, d1y, d1z) = (
+        (p1[0] - cx) * inv_r,
+        (p1[1] - cy) * inv_r,
+        (p1[2] - cz) * inv_r,
+    );
+    let mut sweep = (d1x * yx + d1y * yy + d1z * yz).atan2(d1x * xx + d1y * xy + d1z * xz);
+    if sweep <= 0.0 {
+        sweep += std::f64::consts::TAU;
+    }
+    if !sweep.is_finite() || sweep <= 0.0 || sweep >= std::f64::consts::TAU {
+        return None;
+    }
+
+    Some(SolvedArcSeg {
+        center: [cx, cy, cz],
+        radius,
+        axis_z: [zx, zy, zz],
+        ref_x: [xx, xy, xz],
+        sweep,
+    })
+}
+
+fn emit_ifc2x3_circle(w: &mut StepWriter, seg: &SolvedArcSeg) -> usize {
+    let c_id = w.id();
+    w.line(format_args!(
+        "#{c_id}=IFCCARTESIANPOINT(({},{},{}));",
+        fixed(seg.center[0], 6),
+        fixed(seg.center[1], 6),
+        fixed(seg.center[2], 6)
+    ));
+    let z_id = w.id();
+    w.line(format_args!(
+        "#{z_id}=IFCDIRECTION(({},{},{}));",
+        fixed(seg.axis_z[0], 6),
+        fixed(seg.axis_z[1], 6),
+        fixed(seg.axis_z[2], 6)
+    ));
+    let x_id = w.id();
+    w.line(format_args!(
+        "#{x_id}=IFCDIRECTION(({},{},{}));",
+        fixed(seg.ref_x[0], 6),
+        fixed(seg.ref_x[1], 6),
+        fixed(seg.ref_x[2], 6)
+    ));
+    let pl_id = w.id();
+    w.line(format_args!(
+        "#{pl_id}=IFCAXIS2PLACEMENT3D(#{c_id},#{z_id},#{x_id});"
+    ));
+    let circ_id = w.id();
+    w.line(format_args!(
+        "#{circ_id}=IFCCIRCLE(#{pl_id},{});",
+        fixed(seg.radius, 6)
+    ));
+    circ_id
 }
 
 // ---------------------------------------------------------------------------
@@ -511,6 +621,7 @@ pub fn to_ifc(
     } else {
         schema.to_ascii_uppercase()
     };
+    let is_ifc2x3 = schema_str.starts_with("IFC2X3");
 
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -669,8 +780,13 @@ pub fn to_ifc(
             return Err(IfcError::NonFiniteCoordinate);
         }
 
-        let curve_id = match cs.arc.as_ref().filter(|arc| arc.points.len() >= 3) {
-            Some(arc) => {
+        let mut opt_curve_id: Option<usize> = None;
+        if let Some(arc) = cs
+            .arc
+            .as_ref()
+            .filter(|arc| arc.points.len() >= 3 && (!is_ifc2x3 || !arc.segments.is_empty()))
+        {
+            if !is_ifc2x3 {
                 // A run that provably IS one whole circular arc stays an arc:
                 // an IfcIndexedPolyCurve over an IfcCartesianPointList3D
                 // (1-based), with IfcArcIndex (start, a point on the arc,
@@ -693,13 +809,95 @@ pub fn to_ifc(
                     "#{pt_list_id}=IFCCARTESIANPOINTLIST3D(({}));",
                     coords.join(",")
                 ));
-                let curve_id = w.id();
+                let cid = w.id();
                 w.line(format_args!(
-                    "#{curve_id}=IFCINDEXEDPOLYCURVE(#{pt_list_id},({}),.F.);",
+                    "#{cid}=IFCINDEXEDPOLYCURVE(#{pt_list_id},({}),.F.);",
                     segs.join(",")
                 ));
-                curve_id
+                opt_curve_id = Some(cid);
+            } else {
+                let mut arc_pts_zup: Vec<[f64; 3]> = Vec::with_capacity(arc.points.len());
+                for p in &arc.points {
+                    if !p[0].is_finite() || !p[1].is_finite() || !p[2].is_finite() {
+                        return Err(IfcError::NonFiniteCoordinate);
+                    }
+                    let (sx, sy, sz) = (p[0] * scale, -p[2] * scale, p[1] * scale);
+                    if !sx.is_finite() || !sy.is_finite() || !sz.is_finite() {
+                        return Err(IfcError::NonFiniteCoordinate);
+                    }
+                    arc_pts_zup.push([sx, sy, sz]);
+                }
+
+                let mut solved_segs: Vec<SolvedArcSeg> = Vec::with_capacity(arc.segments.len());
+                let mut valid_arc = true;
+                for s in &arc.segments {
+                    let (Some(&p0), Some(&pm), Some(&p1)) = (
+                        arc_pts_zup.get(s[0]),
+                        arc_pts_zup.get(s[1]),
+                        arc_pts_zup.get(s[2]),
+                    ) else {
+                        valid_arc = false;
+                        break;
+                    };
+                    let Some(solved) = solve_ifc2x3_arc_segment(p0, pm, p1) else {
+                        valid_arc = false;
+                        break;
+                    };
+                    solved_segs.push(solved);
+                }
+
+                if valid_arc && solved_segs.len() == 1 {
+                    let circ_id = emit_ifc2x3_circle(&mut w, &solved_segs[0]);
+                    let cid = w.id();
+                    w.line(format_args!(
+                        "#{cid}=IFCTRIMMEDCURVE(#{circ_id},(IFCPARAMETERVALUE(0.0)),\
+                         (IFCPARAMETERVALUE({})),.T.,.PARAMETER.);",
+                        fixed(solved_segs[0].sweep, 6)
+                    ));
+                    opt_curve_id = Some(cid);
+                } else if valid_arc
+                    && solved_segs.len() == 2
+                    && arc.segments[0] == [0, 1, 2]
+                    && arc.segments[1] == [2, 3, 0]
+                    && (solved_segs[0].radius - solved_segs[1].radius).abs()
+                        <= 1e-3 * solved_segs[0].radius.max(1.0)
+                {
+                    let dcx = solved_segs[0].center[0] - solved_segs[1].center[0];
+                    let dcy = solved_segs[0].center[1] - solved_segs[1].center[1];
+                    let dcz = solved_segs[0].center[2] - solved_segs[1].center[2];
+                    if (dcx * dcx + dcy * dcy + dcz * dcz).sqrt()
+                        <= 1e-3 * solved_segs[0].radius.max(1.0)
+                    {
+                        opt_curve_id = Some(emit_ifc2x3_circle(&mut w, &solved_segs[0]));
+                    }
+                }
+                if valid_arc && opt_curve_id.is_none() && solved_segs.len() >= 2 {
+                    let mut comp_seg_ids = Vec::with_capacity(solved_segs.len());
+                    for seg in &solved_segs {
+                        let circ_id = emit_ifc2x3_circle(&mut w, seg);
+                        let trim_id = w.id();
+                        w.line(format_args!(
+                            "#{trim_id}=IFCTRIMMEDCURVE(#{circ_id},(IFCPARAMETERVALUE(0.0)),\
+                             (IFCPARAMETERVALUE({})),.T.,.PARAMETER.);",
+                            fixed(seg.sweep, 6)
+                        ));
+                        let cseg_id = w.id();
+                        w.line(format_args!(
+                            "#{cseg_id}=IFCCOMPOSITECURVESEGMENT(.CONTINUOUS.,.T.,#{trim_id});"
+                        ));
+                        comp_seg_ids.push(cseg_id);
+                    }
+                    let cid = w.id();
+                    w.line(format_args!(
+                        "#{cid}=IFCCOMPOSITECURVE(({}),.F.);",
+                        id_refs(&comp_seg_ids)
+                    ));
+                    opt_curve_id = Some(cid);
+                }
             }
+        }
+        let curve_id = match opt_curve_id {
+            Some(cid) => cid,
             None => {
                 let mut coords: Vec<String> = cs
                     .points_m
@@ -808,44 +1006,143 @@ pub fn to_ifc(
 
         let (step_type, _) = classify(raw_name, classify_layer, path_name);
 
-        let mut pt_list = String::new();
-        for (i, p) in prim.positions.as_chunks::<3>().0.iter().enumerate() {
-            if i > 0 {
-                pt_list.push(',');
+        let (face_set_id, body_rep_type) = if !is_ifc2x3 {
+            let mut pt_list = String::new();
+            for (i, p) in prim.positions.as_chunks::<3>().0.iter().enumerate() {
+                if i > 0 {
+                    pt_list.push(',');
+                }
+                pt_list.push_str(&ifc_coord(
+                    f64::from(p[0]),
+                    f64::from(p[1]),
+                    f64::from(p[2]),
+                    scale,
+                )?);
             }
-            pt_list.push_str(&ifc_coord(
-                f64::from(p[0]),
-                f64::from(p[1]),
-                f64::from(p[2]),
-                scale,
-            )?);
-        }
-        let pt_list_id = w.id();
-        w.line(format_args!(
-            "#{pt_list_id}=IFCCARTESIANPOINTLIST3D(({pt_list}));"
-        ));
+            let pt_list_id = w.id();
+            w.line(format_args!(
+                "#{pt_list_id}=IFCCARTESIANPOINTLIST3D(({pt_list}));"
+            ));
 
-        let mut faces = String::new();
-        for (i, tri) in prim.indices.as_chunks::<3>().0.iter().enumerate() {
-            if i > 0 {
-                faces.push(',');
+            let mut faces = String::new();
+            for (i, tri) in prim.indices.as_chunks::<3>().0.iter().enumerate() {
+                if i > 0 {
+                    faces.push(',');
+                }
+                let _ = write!(
+                    faces,
+                    "({},{},{})",
+                    tri[0].wrapping_add(1),
+                    tri[1].wrapping_add(1),
+                    tri[2].wrapping_add(1)
+                );
             }
-            let _ = write!(
-                faces,
-                "({},{},{})",
-                tri[0].wrapping_add(1),
-                tri[1].wrapping_add(1),
-                tri[2].wrapping_add(1)
-            );
-        }
 
-        // `Closed` is an IfcBoolean (`.T.`/`.F.` in IFC4, not IFC2x's
-        // `.TRUE.`), and it is computed rather than claimed.
-        let closed = if mesh_is_closed(prim) { ".T." } else { ".F." };
-        let face_set_id = w.id();
-        w.line(format_args!(
-            "#{face_set_id}=IFCTRIANGULATEDFACESET(#{pt_list_id},$,{closed},({faces}),$);"
-        ));
+            // `Closed` is an IfcBoolean (`.T.`/`.F.` in IFC4, not IFC2x's
+            // `.TRUE.`), and it is computed rather than claimed.
+            let closed = if mesh_is_closed(prim) { ".T." } else { ".F." };
+            let face_set_id = w.id();
+            w.line(format_args!(
+                "#{face_set_id}=IFCTRIANGULATEDFACESET(#{pt_list_id},$,{closed},({faces}),$);"
+            ));
+            (face_set_id, "Tessellation")
+        } else {
+            let mut coord_to_uid: HashMap<String, usize> = HashMap::with_capacity(v_count);
+            let mut unique_coords: Vec<String> = Vec::with_capacity(v_count);
+            let mut v_to_uid: Vec<usize> = Vec::with_capacity(v_count);
+            for p in prim.positions.as_chunks::<3>().0 {
+                let c_str = ifc_coord(f64::from(p[0]), f64::from(p[1]), f64::from(p[2]), scale)?;
+                let uid = match coord_to_uid.get(&c_str) {
+                    Some(&u) => u,
+                    None => {
+                        let u = unique_coords.len();
+                        unique_coords.push(c_str.clone());
+                        coord_to_uid.insert(c_str, u);
+                        u
+                    }
+                };
+                v_to_uid.push(uid);
+            }
+
+            let mut valid_tris: Vec<[usize; 3]> = Vec::with_capacity(tri_count);
+            let mut out_of_range = false;
+            for tri in prim.indices.as_chunks::<3>().0 {
+                let (Some(&u0), Some(&u1), Some(&u2)) = (
+                    v_to_uid.get(tri[0] as usize),
+                    v_to_uid.get(tri[1] as usize),
+                    v_to_uid.get(tri[2] as usize),
+                ) else {
+                    out_of_range = true;
+                    continue;
+                };
+                if u0 == u1 || u1 == u2 || u2 == u0 {
+                    continue;
+                }
+                valid_tris.push([u0, u1, u2]);
+            }
+            if valid_tris.is_empty() {
+                continue;
+            }
+
+            let mut used_pt_id: Vec<usize> = vec![0; unique_coords.len()];
+            for &[u0, u1, u2] in &valid_tris {
+                for uid in [u0, u1, u2] {
+                    if used_pt_id[uid] == 0 {
+                        let pt_id = w.id();
+                        w.line(format_args!(
+                            "#{pt_id}=IFCCARTESIANPOINT({});",
+                            unique_coords[uid]
+                        ));
+                        used_pt_id[uid] = pt_id;
+                    }
+                }
+            }
+
+            let mut face_ids: Vec<usize> = Vec::with_capacity(valid_tris.len());
+            let mut half_edges: HashMap<(usize, usize), u32> =
+                HashMap::with_capacity(valid_tris.len() * 3);
+            for &[u0, u1, u2] in &valid_tris {
+                for he in [(u0, u1), (u1, u2), (u2, u0)] {
+                    *half_edges.entry(he).or_insert(0) += 1;
+                }
+                let loop_id = w.id();
+                w.line(format_args!(
+                    "#{loop_id}=IFCPOLYLOOP((#{},#{},#{}));",
+                    used_pt_id[u0], used_pt_id[u1], used_pt_id[u2]
+                ));
+                let bound_id = w.id();
+                w.line(format_args!(
+                    "#{bound_id}=IFCFACEOUTERBOUND(#{loop_id},.T.);"
+                ));
+                let face_id = w.id();
+                w.line(format_args!("#{face_id}=IFCFACE((#{bound_id}));"));
+                face_ids.push(face_id);
+            }
+
+            let is_closed_solid = !out_of_range
+                && valid_tris.len() >= 4
+                && half_edges
+                    .iter()
+                    .all(|(&(ha, hb), &cnt)| cnt == 1 && half_edges.get(&(hb, ha)) == Some(&1));
+            let face_refs = id_refs(&face_ids);
+            if is_closed_solid {
+                let shell_id = w.id();
+                w.line(format_args!("#{shell_id}=IFCCLOSEDSHELL(({face_refs}));"));
+                let fs_id = w.id();
+                w.line(format_args!("#{fs_id}=IFCFACETEDBREP(#{shell_id});"));
+                (fs_id, "Brep")
+            } else {
+                let cfs_id = w.id();
+                w.line(format_args!(
+                    "#{cfs_id}=IFCCONNECTEDFACESET(({face_refs}));"
+                ));
+                let fs_id = w.id();
+                w.line(format_args!(
+                    "#{fs_id}=IFCFACEBASEDSURFACEMODEL((#{cfs_id}));"
+                ));
+                (fs_id, "SurfaceModel")
+            }
+        };
 
         layer_items.add(raw_layer, face_set_id);
 
@@ -885,7 +1182,7 @@ pub fn to_ifc(
         ));
         let shape_rep_id = w.id();
         w.line(format_args!(
-            "#{shape_rep_id}=IFCSHAPEREPRESENTATION(#{geom_ctx_id},'Body','Tessellation',(#{face_set_id}));"
+            "#{shape_rep_id}=IFCSHAPEREPRESENTATION(#{geom_ctx_id},'Body','{body_rep_type}',(#{face_set_id}));"
         ));
         let prod_shape_id = w.id();
         w.line(format_args!(
@@ -915,8 +1212,14 @@ pub fn to_ifc(
             .unwrap_or(9)
             .max(attrs.len());
         attrs.resize(total, "$".to_string());
-        // IfcBuildingElementProxy's 9th attribute is its PredefinedType.
-        if step_type == "IFCBUILDINGELEMENTPROXY" && total == 9 {
+        if is_ifc2x3 {
+            if step_type == "IFCBUILDINGELEMENTPROXY" && total == 9 {
+                attrs[8] = ".ELEMENT.".to_string();
+            } else if needs_ifc2x3_notdefined_attr8(&step_type) && total >= 9 {
+                attrs[8] = ".NOTDEFINED.".to_string();
+            }
+        } else if step_type == "IFCBUILDINGELEMENTPROXY" && total == 9 {
+            // IfcBuildingElementProxy's 9th attribute in IFC4 is its PredefinedType.
             attrs[8] = ".NOTDEFINED.".to_string();
         }
         w.line(format_args!(

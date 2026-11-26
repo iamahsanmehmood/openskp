@@ -253,6 +253,94 @@ std::string ifc_coord(double x, double y, double z, double scale) {
   return out;
 }
 
+std::string fixed6_str(double val) {
+  if (!std::isfinite(val)) {
+    throw std::invalid_argument("IFC coordinates must be finite");
+  }
+  std::string out;
+  out.reserve(24);
+  append_fixed6(out, val);
+  return out;
+}
+
+std::string fixed6_vec3(const std::array<double, 3>& v) {
+  if (!std::isfinite(v[0]) || !std::isfinite(v[1]) || !std::isfinite(v[2])) {
+    throw std::invalid_argument("IFC coordinates must be finite");
+  }
+  std::string out;
+  out.reserve(40);
+  out.push_back('(');
+  append_fixed6(out, v[0]);
+  out.push_back(',');
+  append_fixed6(out, v[1]);
+  out.push_back(',');
+  append_fixed6(out, v[2]);
+  out.push_back(')');
+  return out;
+}
+
+struct SolvedArcSeg {
+  std::array<double, 3> center;
+  double radius;
+  std::array<double, 3> axis_z;
+  std::array<double, 3> ref_x;
+  double sweep;
+};
+
+std::optional<SolvedArcSeg> solve_ifc2x3_arc_segment(const std::array<double, 3>& p0,
+                                                     const std::array<double, 3>& pm,
+                                                     const std::array<double, 3>& p1) {
+  constexpr double kTwoPi = 6.28318530717958647692;
+  const double ux = pm[0] - p0[0], uy = pm[1] - p0[1], uz = pm[2] - p0[2];
+  const double vx = p1[0] - p0[0], vy = p1[1] - p0[1], vz = p1[2] - p0[2];
+  const double wx = uy * vz - uz * vy;
+  const double wy = uz * vx - ux * vz;
+  const double wz = ux * vy - uy * vx;
+  const double u2 = ux * ux + uy * uy + uz * uz;
+  const double v2 = vx * vx + vy * vy + vz * vz;
+  const double w2 = wx * wx + wy * wy + wz * wz;
+  if (u2 <= 0.0 || v2 <= 0.0 || w2 <= 1e-24 * std::max(1.0, u2 * v2)) {
+    return std::nullopt;
+  }
+
+  const double vxw_x = vy * wz - vz * wy;
+  const double vxw_y = vz * wx - vx * wz;
+  const double vxw_z = vx * wy - vy * wx;
+  const double wxu_x = wy * uz - wz * uy;
+  const double wxu_y = wz * ux - wx * uz;
+  const double wxu_z = wx * uy - wy * ux;
+
+  const double inv_2w2 = 0.5 / w2;
+  const double ox = (u2 * vxw_x + v2 * wxu_x) * inv_2w2;
+  const double oy = (u2 * vxw_y + v2 * wxu_y) * inv_2w2;
+  const double oz = (u2 * vxw_z + v2 * wxu_z) * inv_2w2;
+  const double radius = std::sqrt(ox * ox + oy * oy + oz * oz);
+  if (!std::isfinite(radius) || radius <= 0.0) return std::nullopt;
+
+  const double cx = p0[0] + ox, cy = p0[1] + oy, cz = p0[2] + oz;
+  const double inv_r = 1.0 / radius;
+  const double xx = -ox * inv_r, xy = -oy * inv_r, xz = -oz * inv_r;
+  const double inv_w = 1.0 / std::sqrt(w2);
+  const double zx = wx * inv_w, zy = wy * inv_w, zz = wz * inv_w;
+  const double yx = zy * xz - zz * xy;
+  const double yy = zz * xx - zx * xz;
+  const double yz = zx * xy - zy * xx;
+
+  const double d1x = (p1[0] - cx) * inv_r;
+  const double d1y = (p1[1] - cy) * inv_r;
+  const double d1z = (p1[2] - cz) * inv_r;
+  double sweep = std::atan2(d1x * yx + d1y * yy + d1z * yz, d1x * xx + d1y * xy + d1z * xz);
+  if (sweep <= 0.0) sweep += kTwoPi;
+  if (!std::isfinite(sweep) || sweep <= 0.0 || sweep >= kTwoPi) return std::nullopt;
+
+  return SolvedArcSeg{{cx, cy, cz}, radius, {zx, zy, zz}, {xx, xy, xz}, sweep};
+}
+
+bool needs_ifc2x3_notdefined_attr8(const std::string& step_type) {
+  return step_type == "IFCROOF" || step_type == "IFCFOOTING" || step_type == "IFCPILE" ||
+         step_type == "IFCRAMP" || step_type == "IFCSTAIR";
+}
+
 }  // namespace
 
 std::string generate_ifc_guid() {
@@ -363,6 +451,7 @@ std::string to_ifc(const Scene& scene, double scale, const std::string& schema,
   std::string schema_str = schema.empty() ? "IFC4" : schema;
   std::transform(schema_str.begin(), schema_str.end(), schema_str.begin(),
                  [](unsigned char c) { return std::toupper(c); });
+  const bool is_ifc2x3 = schema_str.rfind("IFC2X3", 0) == 0;
 
   auto now = std::chrono::system_clock::now();
   auto timestamp_epoch =
@@ -494,26 +583,118 @@ std::string to_ifc(const Scene& scene, double scale, const std::string& schema,
     }
 
     int curve_id = 0;
-    if (cs.arc && cs.arc->points.size() >= 3) {
-      std::ostringstream seg_ss;
-      for (std::size_t i = 0; i < cs.arc->segments.size(); ++i) {
-        if (i > 0) seg_ss << ",";
-        const auto& s = cs.arc->segments[i];
-        seg_ss << "IFCARCINDEX((" << (s[0] + 1) << "," << (s[1] + 1) << "," << (s[2] + 1) << "))";
+    if (cs.arc && cs.arc->points.size() >= 3 && (!is_ifc2x3 || !cs.arc->segments.empty())) {
+      if (!is_ifc2x3) {
+        std::ostringstream seg_ss;
+        for (std::size_t i = 0; i < cs.arc->segments.size(); ++i) {
+          if (i > 0) seg_ss << ",";
+          const auto& s = cs.arc->segments[i];
+          seg_ss << "IFCARCINDEX((" << (s[0] + 1) << "," << (s[1] + 1) << "," << (s[2] + 1) << "))";
+        }
+        std::string coord_str;
+        coord_str.reserve(cs.arc->points.size() * 36);
+        for (std::size_t i = 0; i < cs.arc->points.size(); ++i) {
+          if (i > 0) coord_str.push_back(',');
+          const auto& p = cs.arc->points[i];
+          append_ifc_coord(coord_str, p[0], p[1], p[2], scale);
+        }
+        const int pt_list_id = next_id();
+        ss << "#" << pt_list_id << "=IFCCARTESIANPOINTLIST3D((" << coord_str << "));\r\n";
+        curve_id = next_id();
+        ss << "#" << curve_id << "=IFCINDEXEDPOLYCURVE(#" << pt_list_id << ",(" << seg_ss.str()
+           << "),.F.);\r\n";
+      } else {
+        std::vector<std::array<double, 3>> arc_pts_zup;
+        arc_pts_zup.reserve(cs.arc->points.size());
+        for (const auto& p : cs.arc->points) {
+          if (!std::isfinite(p[0]) || !std::isfinite(p[1]) || !std::isfinite(p[2])) {
+            throw std::invalid_argument("IFC coordinates must be finite");
+          }
+          const double sx = p[0] * scale, sy = -p[2] * scale, sz = p[1] * scale;
+          if (!std::isfinite(sx) || !std::isfinite(sy) || !std::isfinite(sz)) {
+            throw std::invalid_argument("IFC coordinates must be finite");
+          }
+          arc_pts_zup.push_back({sx, sy, sz});
+        }
+
+        std::vector<SolvedArcSeg> solved_segs;
+        solved_segs.reserve(cs.arc->segments.size());
+        bool valid_arc = true;
+        for (const auto& s : cs.arc->segments) {
+          if (s[0] >= arc_pts_zup.size() || s[1] >= arc_pts_zup.size() ||
+              s[2] >= arc_pts_zup.size()) {
+            valid_arc = false;
+            break;
+          }
+          auto solved =
+              solve_ifc2x3_arc_segment(arc_pts_zup[s[0]], arc_pts_zup[s[1]], arc_pts_zup[s[2]]);
+          if (!solved) {
+            valid_arc = false;
+            break;
+          }
+          solved_segs.push_back(*solved);
+        }
+
+        auto emit_circle = [&](const SolvedArcSeg& seg) -> int {
+          const int c_id = next_id();
+          ss << "#" << c_id << "=IFCCARTESIANPOINT(" << fixed6_vec3(seg.center) << ");\r\n";
+          const int z_id = next_id();
+          ss << "#" << z_id << "=IFCDIRECTION(" << fixed6_vec3(seg.axis_z) << ");\r\n";
+          const int x_id = next_id();
+          ss << "#" << x_id << "=IFCDIRECTION(" << fixed6_vec3(seg.ref_x) << ");\r\n";
+          const int pl_id = next_id();
+          ss << "#" << pl_id << "=IFCAXIS2PLACEMENT3D(#" << c_id << ",#" << z_id << ",#" << x_id
+             << ");\r\n";
+          const int circ_id = next_id();
+          ss << "#" << circ_id << "=IFCCIRCLE(#" << pl_id << "," << fixed6_str(seg.radius)
+             << ");\r\n";
+          return circ_id;
+        };
+
+        if (valid_arc && solved_segs.size() == 1) {
+          const int circ_id = emit_circle(solved_segs[0]);
+          curve_id = next_id();
+          ss << "#" << curve_id << "=IFCTRIMMEDCURVE(#" << circ_id
+             << ",(IFCPARAMETERVALUE(0.0)),(IFCPARAMETERVALUE(" << fixed6_str(solved_segs[0].sweep)
+             << ")),.T.,.PARAMETER.);\r\n";
+        } else if (valid_arc && solved_segs.size() == 2 &&
+                   cs.arc->segments[0] == std::array<std::size_t, 3>{0, 1, 2} &&
+                   cs.arc->segments[1] == std::array<std::size_t, 3>{2, 3, 0} &&
+                   std::abs(solved_segs[0].radius - solved_segs[1].radius) <=
+                       1e-3 * std::max(1.0, solved_segs[0].radius)) {
+          const double dcx = solved_segs[0].center[0] - solved_segs[1].center[0];
+          const double dcy = solved_segs[0].center[1] - solved_segs[1].center[1];
+          const double dcz = solved_segs[0].center[2] - solved_segs[1].center[2];
+          if (std::sqrt(dcx * dcx + dcy * dcy + dcz * dcz) <=
+              1e-3 * std::max(1.0, solved_segs[0].radius)) {
+            curve_id = emit_circle(solved_segs[0]);
+          }
+        }
+        if (valid_arc && curve_id == 0 && solved_segs.size() >= 2) {
+          std::vector<int> comp_seg_ids;
+          comp_seg_ids.reserve(solved_segs.size());
+          for (const auto& seg : solved_segs) {
+            const int circ_id = emit_circle(seg);
+            const int trim_id = next_id();
+            ss << "#" << trim_id << "=IFCTRIMMEDCURVE(#" << circ_id
+               << ",(IFCPARAMETERVALUE(0.0)),(IFCPARAMETERVALUE(" << fixed6_str(seg.sweep)
+               << ")),.T.,.PARAMETER.);\r\n";
+            const int cseg_id = next_id();
+            ss << "#" << cseg_id << "=IFCCOMPOSITECURVESEGMENT(.CONTINUOUS.,.T.,#" << trim_id
+               << ");\r\n";
+            comp_seg_ids.push_back(cseg_id);
+          }
+          curve_id = next_id();
+          ss << "#" << curve_id << "=IFCCOMPOSITECURVE((";
+          for (std::size_t i = 0; i < comp_seg_ids.size(); ++i) {
+            if (i > 0) ss << ",";
+            ss << "#" << comp_seg_ids[i];
+          }
+          ss << "),.F.);\r\n";
+        }
       }
-      std::string coord_str;
-      coord_str.reserve(cs.arc->points.size() * 36);
-      for (std::size_t i = 0; i < cs.arc->points.size(); ++i) {
-        if (i > 0) coord_str.push_back(',');
-        const auto& p = cs.arc->points[i];
-        append_ifc_coord(coord_str, p[0], p[1], p[2], scale);
-      }
-      const int pt_list_id = next_id();
-      ss << "#" << pt_list_id << "=IFCCARTESIANPOINTLIST3D((" << coord_str << "));\r\n";
-      curve_id = next_id();
-      ss << "#" << curve_id << "=IFCINDEXEDPOLYCURVE(#" << pt_list_id << ",(" << seg_ss.str()
-         << "),.F.);\r\n";
-    } else {
+    }
+    if (curve_id == 0) {
       std::vector<std::string> coords;
       coords.reserve(cs.points_m.size() + (cs.closed ? 1 : 0));
       for (const auto& p : cs.points_m) {
@@ -599,28 +780,129 @@ std::string to_ifc(const Scene& scene, double scale, const std::string& schema,
     // for GLB export, but IFC (like SketchUp itself) is Z-up, so it has
     // to be converted back rather than passed through raw, or the
     // exported building comes out rotated ~90 degrees and mirrored.
-    std::string pt_coords;
-    pt_coords.reserve(v_count * 36);
-    for (size_t i = 0; i < v_count; ++i) {
-      if (i > 0) pt_coords.push_back(',');
-      append_ifc_coord(pt_coords, prim.positions[i * 3], prim.positions[i * 3 + 1],
-                       prim.positions[i * 3 + 2], scale);
+    int face_set_id = 0;
+    const char* body_rep_type = "Tessellation";
+    if (!is_ifc2x3) {
+      std::string pt_coords;
+      pt_coords.reserve(v_count * 36);
+      for (size_t i = 0; i < v_count; ++i) {
+        if (i > 0) pt_coords.push_back(',');
+        append_ifc_coord(pt_coords, prim.positions[i * 3], prim.positions[i * 3 + 1],
+                         prim.positions[i * 3 + 2], scale);
+      }
+
+      int pt_list_id = next_id();
+      ss << "#" << pt_list_id << "=IFCCARTESIANPOINTLIST3D((" << pt_coords << "));\r\n";
+
+      std::ostringstream face_ss;
+      for (size_t i = 0; i < tri_count; ++i) {
+        if (i > 0) face_ss << ",";
+        face_ss << "(" << (prim.indices[i * 3] + 1) << "," << (prim.indices[i * 3 + 1] + 1) << ","
+                << (prim.indices[i * 3 + 2] + 1) << ")";
+      }
+
+      const char* closed = mesh_is_closed(prim) ? ".T." : ".F.";
+      face_set_id = next_id();
+      ss << "#" << face_set_id << "=IFCTRIANGULATEDFACESET(#" << pt_list_id << ",$," << closed
+         << ",(" << face_ss.str() << "),$);\r\n";
+    } else {
+      std::unordered_map<std::string, std::uint32_t> coord_to_uid;
+      coord_to_uid.reserve(v_count);
+      std::vector<std::string> unique_coords;
+      unique_coords.reserve(v_count);
+      std::vector<std::uint32_t> v_to_uid(v_count, 0);
+      for (size_t i = 0; i < v_count; ++i) {
+        std::string c_str = ifc_coord(prim.positions[i * 3], prim.positions[i * 3 + 1],
+                                      prim.positions[i * 3 + 2], scale);
+        auto [it, inserted] =
+            coord_to_uid.emplace(c_str, static_cast<std::uint32_t>(unique_coords.size()));
+        if (inserted) {
+          unique_coords.push_back(std::move(c_str));
+        }
+        v_to_uid[i] = it->second;
+      }
+
+      std::vector<std::array<std::uint32_t, 3>> valid_tris;
+      valid_tris.reserve(tri_count);
+      bool out_of_range = false;
+      for (size_t i = 0; i < tri_count; ++i) {
+        const std::uint32_t i0 = prim.indices[i * 3];
+        const std::uint32_t i1 = prim.indices[i * 3 + 1];
+        const std::uint32_t i2 = prim.indices[i * 3 + 2];
+        if (i0 >= v_count || i1 >= v_count || i2 >= v_count) {
+          out_of_range = true;
+          continue;
+        }
+        const std::uint32_t u0 = v_to_uid[i0];
+        const std::uint32_t u1 = v_to_uid[i1];
+        const std::uint32_t u2 = v_to_uid[i2];
+        if (u0 == u1 || u1 == u2 || u2 == u0) continue;
+        valid_tris.push_back({u0, u1, u2});
+      }
+      if (valid_tris.empty()) continue;
+
+      std::vector<int> used_pt_id(unique_coords.size(), 0);
+      for (const auto& tri : valid_tris) {
+        for (const std::uint32_t uid : tri) {
+          if (used_pt_id[uid] == 0) {
+            const int pt_id = next_id();
+            ss << "#" << pt_id << "=IFCCARTESIANPOINT(" << unique_coords[uid] << ");\r\n";
+            used_pt_id[uid] = pt_id;
+          }
+        }
+      }
+
+      std::vector<int> face_ids;
+      face_ids.reserve(valid_tris.size());
+      std::unordered_map<std::uint64_t, std::uint32_t> half_edges;
+      half_edges.reserve(valid_tris.size() * 3);
+      for (const auto& [u0, u1, u2] : valid_tris) {
+        for (const auto& [ha, hb] : std::array<std::pair<std::uint32_t, std::uint32_t>, 3>{
+                 {{u0, u1}, {u1, u2}, {u2, u0}}}) {
+          ++half_edges[(static_cast<std::uint64_t>(ha) << 32) | hb];
+        }
+        const int loop_id = next_id();
+        ss << "#" << loop_id << "=IFCPOLYLOOP((#" << used_pt_id[u0] << ",#" << used_pt_id[u1]
+           << ",#" << used_pt_id[u2] << "));\r\n";
+        const int bound_id = next_id();
+        ss << "#" << bound_id << "=IFCFACEOUTERBOUND(#" << loop_id << ",.T.);\r\n";
+        const int face_id = next_id();
+        ss << "#" << face_id << "=IFCFACE((#" << bound_id << "));\r\n";
+        face_ids.push_back(face_id);
+      }
+
+      bool is_closed_solid = !out_of_range && valid_tris.size() >= 4;
+      if (is_closed_solid) {
+        for (const auto& [hk, cnt] : half_edges) {
+          const std::uint32_t ha = static_cast<std::uint32_t>(hk >> 32);
+          const std::uint32_t hb = static_cast<std::uint32_t>(hk & 0xFFFFFFFFu);
+          const auto rev_it = half_edges.find((static_cast<std::uint64_t>(hb) << 32) | ha);
+          if (cnt != 1 || rev_it == half_edges.end() || rev_it->second != 1) {
+            is_closed_solid = false;
+            break;
+          }
+        }
+      }
+
+      std::ostringstream fref_ss;
+      for (std::size_t i = 0; i < face_ids.size(); ++i) {
+        if (i > 0) fref_ss << ",";
+        fref_ss << "#" << face_ids[i];
+      }
+      if (is_closed_solid) {
+        const int shell_id = next_id();
+        ss << "#" << shell_id << "=IFCCLOSEDSHELL((" << fref_ss.str() << "));\r\n";
+        face_set_id = next_id();
+        ss << "#" << face_set_id << "=IFCFACETEDBREP(#" << shell_id << ");\r\n";
+        body_rep_type = "Brep";
+      } else {
+        const int cfs_id = next_id();
+        ss << "#" << cfs_id << "=IFCCONNECTEDFACESET((" << fref_ss.str() << "));\r\n";
+        face_set_id = next_id();
+        ss << "#" << face_set_id << "=IFCFACEBASEDSURFACEMODEL((#" << cfs_id << "));\r\n";
+        body_rep_type = "SurfaceModel";
+      }
     }
-
-    int pt_list_id = next_id();
-    ss << "#" << pt_list_id << "=IFCCARTESIANPOINTLIST3D((" << pt_coords << "));\r\n";
-
-    std::ostringstream face_ss;
-    for (size_t i = 0; i < tri_count; ++i) {
-      if (i > 0) face_ss << ",";
-      face_ss << "(" << (prim.indices[i * 3] + 1) << "," << (prim.indices[i * 3 + 1] + 1) << ","
-              << (prim.indices[i * 3 + 2] + 1) << ")";
-    }
-
-    const char* closed = mesh_is_closed(prim) ? ".T." : ".F.";
-    int face_set_id = next_id();
-    ss << "#" << face_set_id << "=IFCTRIANGULATEDFACESET(#" << pt_list_id << ",$," << closed << ",("
-       << face_ss.str() << "),$);\r\n";
 
     add_layer_item(raw_layer, face_set_id);
 
@@ -658,8 +940,8 @@ std::string to_ifc(const Scene& scene, double scale, const std::string& schema,
        << "),$);\r\n";
 
     int shape_rep_id = next_id();
-    ss << "#" << shape_rep_id << "=IFCSHAPEREPRESENTATION(#" << geom_ctx_id
-       << ",'Body','Tessellation',(#" << face_set_id << "));\r\n";
+    ss << "#" << shape_rep_id << "=IFCSHAPEREPRESENTATION(#" << geom_ctx_id << ",'Body','"
+       << body_rep_type << "',(#" << face_set_id << "));\r\n";
 
     int prod_shape_id = next_id();
     ss << "#" << prod_shape_id << "=IFCPRODUCTDEFINITIONSHAPE($,$,(#" << shape_rep_id << "));\r\n";
@@ -683,7 +965,13 @@ std::string to_ifc(const Scene& scene, double scale, const std::string& schema,
     const std::size_t total =
         std::max(attrs.size(), (declared && *declared > 0) ? *declared : std::size_t{9});
     attrs.resize(total, "$");
-    if (step_type == "IFCBUILDINGELEMENTPROXY" && total == 9) {
+    if (is_ifc2x3) {
+      if (step_type == "IFCBUILDINGELEMENTPROXY" && total == 9) {
+        attrs[8] = ".ELEMENT.";
+      } else if (needs_ifc2x3_notdefined_attr8(step_type) && total >= 9) {
+        attrs[8] = ".NOTDEFINED.";
+      }
+    } else if (step_type == "IFCBUILDINGELEMENTPROXY" && total == 9) {
       attrs[8] = ".NOTDEFINED.";
     }
     ss << "#" << product_id << "=" << step_type << "(";

@@ -276,6 +276,74 @@ function ifcCoord(x: number, y: number, z: number, scale: number): string {
   return `(${vx},${vy},${vz})`;
 }
 
+const IFC2X3_REQUIRED_NOTDEFINED_ATTR8 = new Set([
+  'IFCROOF',
+  'IFCFOOTING',
+  'IFCPILE',
+  'IFCRAMP',
+  'IFCSTAIR',
+]);
+
+interface SolvedArcSeg {
+  center: [number, number, number];
+  radius: number;
+  axisZ: [number, number, number];
+  refX: [number, number, number];
+  sweep: number;
+}
+
+function solveIfc2x3ArcSegment(
+  p0: [number, number, number],
+  pm: [number, number, number],
+  p1: [number, number, number]
+): SolvedArcSeg | null {
+  const ux = pm[0] - p0[0], uy = pm[1] - p0[1], uz = pm[2] - p0[2];
+  const vx = p1[0] - p0[0], vy = p1[1] - p0[1], vz = p1[2] - p0[2];
+  const wx = uy * vz - uz * vy;
+  const wy = uz * vx - ux * vz;
+  const wz = ux * vy - uy * vx;
+  const u2 = ux * ux + uy * uy + uz * uz;
+  const v2 = vx * vx + vy * vy + vz * vz;
+  const w2 = wx * wx + wy * wy + wz * wz;
+  if (u2 <= 0 || v2 <= 0 || w2 <= 1e-24 * Math.max(1, u2 * v2)) return null;
+
+  const vxwX = vy * wz - vz * wy;
+  const vxwY = vz * wx - vx * wz;
+  const vxwZ = vx * wy - vy * wx;
+  const wxuX = wy * uz - wz * uy;
+  const wxuY = wz * ux - wx * uz;
+  const wxuZ = wx * uy - wy * ux;
+
+  const inv2w2 = 0.5 / w2;
+  const ox = (u2 * vxwX + v2 * wxuX) * inv2w2;
+  const oy = (u2 * vxwY + v2 * wxuY) * inv2w2;
+  const oz = (u2 * vxwZ + v2 * wxuZ) * inv2w2;
+  const radius = Math.sqrt(ox * ox + oy * oy + oz * oz);
+  if (!Number.isFinite(radius) || radius <= 0) return null;
+
+  const cx = p0[0] + ox, cy = p0[1] + oy, cz = p0[2] + oz;
+  const invR = 1 / radius;
+  const xx = -ox * invR, xy = -oy * invR, xz = -oz * invR;
+  const invW = 1 / Math.sqrt(w2);
+  const zx = wx * invW, zy = wy * invW, zz = wz * invW;
+  const yx = zy * xz - zz * xy;
+  const yy = zz * xx - zx * xz;
+  const yz = zx * xy - zy * xx;
+
+  const d1x = (p1[0] - cx) * invR, d1y = (p1[1] - cy) * invR, d1z = (p1[2] - cz) * invR;
+  let sweep = Math.atan2(d1x * yx + d1y * yy + d1z * yz, d1x * xx + d1y * xy + d1z * xz);
+  if (sweep <= 0) sweep += 2 * Math.PI;
+  if (!Number.isFinite(sweep) || sweep <= 0 || sweep >= 2 * Math.PI) return null;
+
+  return {
+    center: [cx, cy, cz],
+    radius,
+    axisZ: [zx, zy, zz],
+    refX: [xx, xy, xz],
+    sweep,
+  };
+}
+
 /**
  * Serialize a baked SkpScene to ISO-10303-21 STEP ASCII IFC4 format.
  *
@@ -305,6 +373,7 @@ export function toIFC(
         classifyElement(name, layer, path, classifyUsingFullPath);
 
   const schemaStr = (schema || 'IFC4').toUpperCase();
+  const isIfc2x3 = schemaStr.startsWith('IFC2X3');
   const nowIso = new Date().toISOString().replace(/\.\d{3}Z$/, '');
   const timestampEpoch = Math.floor(Date.now() / 1000);
 
@@ -460,17 +529,111 @@ export function toIFC(
         }
       }
 
-      let curveId: number;
-      if (cs.arc && cs.arc.points.length >= 3) {
-        const segs = cs.arc.segments.map(
-          (s) => `IFCARCINDEX((${s[0] + 1},${s[1] + 1},${s[2] + 1}))`
-        );
-        const coords = cs.arc.points.map((p) => ifcCoord(p[0], p[1], p[2], scale));
-        const ptListId = nextId();
-        lines.push(`#${ptListId}=IFCCARTESIANPOINTLIST3D((${coords.join(',')}));`);
-        curveId = nextId();
-        lines.push(`#${curveId}=IFCINDEXEDPOLYCURVE(#${ptListId},(${segs.join(',')}),.F.);`);
-      } else {
+      let curveId: number | null = null;
+      if (cs.arc && cs.arc.points.length >= 3 && cs.arc.segments.length >= 1) {
+        if (!isIfc2x3) {
+          const segs = cs.arc.segments.map(
+            (s) => `IFCARCINDEX((${s[0] + 1},${s[1] + 1},${s[2] + 1}))`
+          );
+          const coords = cs.arc.points.map((p) => ifcCoord(p[0], p[1], p[2], scale));
+          const ptListId = nextId();
+          lines.push(`#${ptListId}=IFCCARTESIANPOINTLIST3D((${coords.join(',')}));`);
+          curveId = nextId();
+          lines.push(`#${curveId}=IFCINDEXEDPOLYCURVE(#${ptListId},(${segs.join(',')}),.F.);`);
+        } else {
+          const arcPtsZup: [number, number, number][] = [];
+          for (const p of cs.arc.points) {
+            if (!Number.isFinite(p[0]) || !Number.isFinite(p[1]) || !Number.isFinite(p[2])) {
+              throw new Error('IFC coordinates must be finite');
+            }
+            const sx = p[0] * scale, sy = -p[2] * scale, sz = p[1] * scale;
+            if (!Number.isFinite(sx) || !Number.isFinite(sy) || !Number.isFinite(sz)) {
+              throw new Error('IFC coordinates must be finite');
+            }
+            arcPtsZup.push([sx, sy, sz]);
+          }
+          const solvedSegs: SolvedArcSeg[] = [];
+          let validArc = true;
+          for (const s of cs.arc.segments) {
+            if (
+              s.length !== 3 ||
+              s[0] < 0 || s[0] >= arcPtsZup.length ||
+              s[1] < 0 || s[1] >= arcPtsZup.length ||
+              s[2] < 0 || s[2] >= arcPtsZup.length
+            ) {
+              validArc = false;
+              break;
+            }
+            const solved = solveIfc2x3ArcSegment(arcPtsZup[s[0]], arcPtsZup[s[1]], arcPtsZup[s[2]]);
+            if (!solved) {
+              validArc = false;
+              break;
+            }
+            solvedSegs.push(solved);
+          }
+
+          const emitCircle = (seg: SolvedArcSeg): number => {
+            const cId = nextId();
+            lines.push(
+              `#${cId}=IFCCARTESIANPOINT((${fmtReal6(seg.center[0])},${fmtReal6(seg.center[1])},${fmtReal6(seg.center[2])}));`
+            );
+            const zId = nextId();
+            lines.push(
+              `#${zId}=IFCDIRECTION((${fmtReal6(seg.axisZ[0])},${fmtReal6(seg.axisZ[1])},${fmtReal6(seg.axisZ[2])}));`
+            );
+            const xId = nextId();
+            lines.push(
+              `#${xId}=IFCDIRECTION((${fmtReal6(seg.refX[0])},${fmtReal6(seg.refX[1])},${fmtReal6(seg.refX[2])}));`
+            );
+            const plId = nextId();
+            lines.push(`#${plId}=IFCAXIS2PLACEMENT3D(#${cId},#${zId},#${xId});`);
+            const circId = nextId();
+            lines.push(`#${circId}=IFCCIRCLE(#${plId},${fmtReal6(seg.radius)});`);
+            return circId;
+          };
+
+          if (validArc && solvedSegs.length === 1) {
+            const circId = emitCircle(solvedSegs[0]);
+            curveId = nextId();
+            lines.push(
+              `#${curveId}=IFCTRIMMEDCURVE(#${circId},(IFCPARAMETERVALUE(0.0)),(IFCPARAMETERVALUE(${fmtReal6(solvedSegs[0].sweep)})),.T.,.PARAMETER.);`
+            );
+          } else if (
+            validArc &&
+            solvedSegs.length === 2 &&
+            cs.arc.segments[0][0] === 0 &&
+            cs.arc.segments[0][1] === 1 &&
+            cs.arc.segments[0][2] === 2 &&
+            cs.arc.segments[1][0] === 2 &&
+            cs.arc.segments[1][1] === 3 &&
+            cs.arc.segments[1][2] === 0 &&
+            Math.abs(solvedSegs[0].radius - solvedSegs[1].radius) <= 1e-3 * Math.max(1, solvedSegs[0].radius) &&
+            Math.hypot(
+              solvedSegs[0].center[0] - solvedSegs[1].center[0],
+              solvedSegs[0].center[1] - solvedSegs[1].center[1],
+              solvedSegs[0].center[2] - solvedSegs[1].center[2]
+            ) <= 1e-3 * Math.max(1, solvedSegs[0].radius)
+          ) {
+            curveId = emitCircle(solvedSegs[0]);
+          } else if (validArc && solvedSegs.length >= 2) {
+            const compSegIds: number[] = [];
+            for (const seg of solvedSegs) {
+              const circId = emitCircle(seg);
+              const trimId = nextId();
+              lines.push(
+                `#${trimId}=IFCTRIMMEDCURVE(#${circId},(IFCPARAMETERVALUE(0.0)),(IFCPARAMETERVALUE(${fmtReal6(seg.sweep)})),.T.,.PARAMETER.);`
+              );
+              const csegId = nextId();
+              lines.push(`#${csegId}=IFCCOMPOSITECURVESEGMENT(.CONTINUOUS.,.T.,#${trimId});`);
+              compSegIds.push(csegId);
+            }
+            curveId = nextId();
+            const csegRefs = compSegIds.map((sid) => `#${sid}`).join(',');
+            lines.push(`#${curveId}=IFCCOMPOSITECURVE((${csegRefs}),.F.);`);
+          }
+        }
+      }
+      if (curveId === null) {
         const coords = cs.pointsM.map((p) => ifcCoord(p[0], p[1], p[2], scale));
         if (cs.closed) {
           coords.push(coords[0]);
@@ -535,21 +698,110 @@ export function toIFC(
       ptCoords[i] = ifcCoord(positions[base], positions[base + 1], positions[base + 2], scale);
     }
 
-    const ptListId = nextId();
-    lines.push(`#${ptListId}=IFCCARTESIANPOINTLIST3D((${ptCoords.join(',')}));`);
-
     const indices = prim.indices;
-    const faceIndices = new Array<string>(triCount);
-    for (let i = 0; i < triCount; i++) {
-      const base = i * 3;
-      faceIndices[i] = `(${indices[base] + 1},${indices[base + 1] + 1},${indices[base + 2] + 1})`;
-    }
+    let faceSetId: number;
+    let bodyRepType: string;
+    if (!isIfc2x3) {
+      const ptListId = nextId();
+      lines.push(`#${ptListId}=IFCCARTESIANPOINTLIST3D((${ptCoords.join(',')}));`);
 
-    const closed = meshIsClosed(prim) ? '.T.' : '.F.';
-    const faceSetId = nextId();
-    lines.push(
-      `#${faceSetId}=IFCTRIANGULATEDFACESET(#${ptListId},$,${closed},(${faceIndices.join(',')}),$);`
-    );
+      const faceIndices = new Array<string>(triCount);
+      for (let i = 0; i < triCount; i++) {
+        const base = i * 3;
+        faceIndices[i] = `(${indices[base] + 1},${indices[base + 1] + 1},${indices[base + 2] + 1})`;
+      }
+
+      const closed = meshIsClosed(prim) ? '.T.' : '.F.';
+      faceSetId = nextId();
+      lines.push(
+        `#${faceSetId}=IFCTRIANGULATEDFACESET(#${ptListId},$,${closed},(${faceIndices.join(',')}),$);`
+      );
+      bodyRepType = 'Tessellation';
+    } else {
+      const coordToUid = new Map<string, number>();
+      const uniqueCoords: string[] = [];
+      const vToUid = new Int32Array(vCount);
+      for (let i = 0; i < vCount; i++) {
+        const cStr = ptCoords[i];
+        let uid = coordToUid.get(cStr);
+        if (uid === undefined) {
+          uid = uniqueCoords.length;
+          coordToUid.set(cStr, uid);
+          uniqueCoords.push(cStr);
+        }
+        vToUid[i] = uid;
+      }
+
+      const validTris: [number, number, number][] = [];
+      let outOfRange = false;
+      for (let i = 0; i < triCount; i++) {
+        const i0 = indices[i * 3];
+        const i1 = indices[i * 3 + 1];
+        const i2 = indices[i * 3 + 2];
+        if (i0 >= vCount || i1 >= vCount || i2 >= vCount) {
+          outOfRange = true;
+          continue;
+        }
+        const u0 = vToUid[i0], u1 = vToUid[i1], u2 = vToUid[i2];
+        if (u0 === u1 || u1 === u2 || u2 === u0) continue;
+        validTris.push([u0, u1, u2]);
+      }
+      if (validTris.length === 0) continue;
+
+      const usedPtId = new Int32Array(uniqueCoords.length);
+      for (const [u0, u1, u2] of validTris) {
+        for (const uid of [u0, u1, u2]) {
+          if (usedPtId[uid] === 0) {
+            const ptId = nextId();
+            lines.push(`#${ptId}=IFCCARTESIANPOINT(${uniqueCoords[uid]});`);
+            usedPtId[uid] = ptId;
+          }
+        }
+      }
+
+      const faceIds: number[] = [];
+      const halfEdges = new Map<bigint, number>();
+      for (const [u0, u1, u2] of validTris) {
+        for (const [ha, hb] of [[u0, u1], [u1, u2], [u2, u0]] as const) {
+          const hk = (BigInt(ha) << 32n) | BigInt(hb);
+          halfEdges.set(hk, (halfEdges.get(hk) ?? 0) + 1);
+        }
+        const loopId = nextId();
+        lines.push(`#${loopId}=IFCPOLYLOOP((#${usedPtId[u0]},#${usedPtId[u1]},#${usedPtId[u2]}));`);
+        const boundId = nextId();
+        lines.push(`#${boundId}=IFCFACEOUTERBOUND(#${loopId},.T.);`);
+        const faceId = nextId();
+        lines.push(`#${faceId}=IFCFACE((#${boundId}));`);
+        faceIds.push(faceId);
+      }
+
+      let isClosedSolid = !outOfRange && validTris.length >= 4;
+      if (isClosedSolid) {
+        for (const [hk, cnt] of halfEdges.entries()) {
+          const ha = hk >> 32n;
+          const hb = hk & 0xffffffffn;
+          const rev = (hb << 32n) | ha;
+          if (cnt !== 1 || halfEdges.get(rev) !== 1) {
+            isClosedSolid = false;
+            break;
+          }
+        }
+      }
+      const faceRefs = faceIds.map((fid) => `#${fid}`).join(',');
+      if (isClosedSolid) {
+        const shellId = nextId();
+        lines.push(`#${shellId}=IFCCLOSEDSHELL((${faceRefs}));`);
+        faceSetId = nextId();
+        lines.push(`#${faceSetId}=IFCFACETEDBREP(#${shellId});`);
+        bodyRepType = 'Brep';
+      } else {
+        const cfsId = nextId();
+        lines.push(`#${cfsId}=IFCCONNECTEDFACESET((${faceRefs}));`);
+        faceSetId = nextId();
+        lines.push(`#${faceSetId}=IFCFACEBASEDSURFACEMODEL((#${cfsId}));`);
+        bodyRepType = 'SurfaceModel';
+      }
+    }
 
     addLayerItem(rawLayer, faceSetId);
 
@@ -583,7 +835,7 @@ export function toIFC(
 
     const shapeRepId = nextId();
     lines.push(
-      `#${shapeRepId}=IFCSHAPEREPRESENTATION(#${geomCtxId},'Body','Tessellation',(#${faceSetId}));`
+      `#${shapeRepId}=IFCSHAPEREPRESENTATION(#${geomCtxId},'Body','${bodyRepType}',(#${faceSetId}));`
     );
 
     const prodShapeId = nextId();
@@ -608,7 +860,13 @@ export function toIFC(
     while (attrs.length < total) {
       attrs.push('$');
     }
-    if (stepType === 'IFCBUILDINGELEMENTPROXY' && total === 9) {
+    if (isIfc2x3) {
+      if (stepType === 'IFCBUILDINGELEMENTPROXY' && total === 9) {
+        attrs[8] = '.ELEMENT.';
+      } else if (IFC2X3_REQUIRED_NOTDEFINED_ATTR8.has(stepType) && total >= 9) {
+        attrs[8] = '.NOTDEFINED.';
+      }
+    } else if (stepType === 'IFCBUILDINGELEMENTPROXY' && total === 9) {
       attrs[8] = '.NOTDEFINED.';
     }
     lines.push(`#${productId}=${stepType}(${attrs.join(',')});`);

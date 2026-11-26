@@ -198,6 +198,81 @@ String _ifcCoord(double x, double y, double z, double scale) {
   return '($vx,$vy,$vz)';
 }
 
+const _ifc2x3RequiredNotDefinedAttr8 = <String>{
+  'IFCROOF',
+  'IFCFOOTING',
+  'IFCPILE',
+  'IFCRAMP',
+  'IFCSTAIR',
+};
+
+typedef _SolvedArcSeg = ({
+  (double, double, double) center,
+  double radius,
+  (double, double, double) axisZ,
+  (double, double, double) refX,
+  double sweep,
+});
+
+_SolvedArcSeg? _solveIfc2x3ArcSegment(
+  (double, double, double) p0,
+  (double, double, double) pm,
+  (double, double, double) p1,
+) {
+  final ux = pm.$1 - p0.$1, uy = pm.$2 - p0.$2, uz = pm.$3 - p0.$3;
+  final vx = p1.$1 - p0.$1, vy = p1.$2 - p0.$2, vz = p1.$3 - p0.$3;
+  final wx = uy * vz - uz * vy;
+  final wy = uz * vx - ux * vz;
+  final wz = ux * vy - uy * vx;
+  final u2 = ux * ux + uy * uy + uz * uz;
+  final v2 = vx * vx + vy * vy + vz * vz;
+  final w2 = wx * wx + wy * wy + wz * wz;
+  if (u2 <= 0.0 || v2 <= 0.0 || w2 <= 1e-24 * math.max(1.0, u2 * v2)) {
+    return null;
+  }
+
+  final vxwX = vy * wz - vz * wy;
+  final vxwY = vz * wx - vx * wz;
+  final vxwZ = vx * wy - vy * wx;
+  final wxuX = wy * uz - wz * uy;
+  final wxuY = wz * ux - wx * uz;
+  final wxuZ = wx * uy - wy * ux;
+
+  final inv2w2 = 0.5 / w2;
+  final ox = (u2 * vxwX + v2 * wxuX) * inv2w2;
+  final oy = (u2 * vxwY + v2 * wxuY) * inv2w2;
+  final oz = (u2 * vxwZ + v2 * wxuZ) * inv2w2;
+  final radius = math.sqrt(ox * ox + oy * oy + oz * oz);
+  if (!radius.isFinite || radius <= 0.0) return null;
+
+  final cx = p0.$1 + ox, cy = p0.$2 + oy, cz = p0.$3 + oz;
+  final invR = 1.0 / radius;
+  final xx = -ox * invR, xy = -oy * invR, xz = -oz * invR;
+  final invW = 1.0 / math.sqrt(w2);
+  final zx = wx * invW, zy = wy * invW, zz = wz * invW;
+  final yx = zy * xz - zz * xy;
+  final yy = zz * xx - zx * xz;
+  final yz = zx * xy - zy * xx;
+
+  final d1x = (p1.$1 - cx) * invR;
+  final d1y = (p1.$2 - cy) * invR;
+  final d1z = (p1.$3 - cz) * invR;
+  var sweep = math.atan2(
+    d1x * yx + d1y * yy + d1z * yz,
+    d1x * xx + d1y * xy + d1z * xz,
+  );
+  if (sweep <= 0.0) sweep += 2.0 * math.pi;
+  if (!sweep.isFinite || sweep <= 0.0 || sweep >= 2.0 * math.pi) return null;
+
+  return (
+    center: (cx, cy, cz),
+    radius: radius,
+    axisZ: (zx, zy, zz),
+    refX: (xx, xy, xz),
+    sweep: sweep,
+  );
+}
+
 /**
  * Serialize a baked Scene into ISO-10303-21 STEP ASCII IFC4 format.
  */
@@ -217,6 +292,7 @@ String toIfc(
           : (name, layer, path) =>
               classifyElement(name, layer, path, classifyUsingFullPath);
   final schemaStr = schema.isEmpty ? 'IFC4' : schema.toUpperCase();
+  final isIfc2x3 = schemaStr.startsWith('IFC2X3');
   final nowIso = DateTime.now().toUtc().toIso8601String().split('.').first;
   final timestampEpoch = DateTime.now().toUtc().millisecondsSinceEpoch ~/ 1000;
 
@@ -351,19 +427,113 @@ String toIfc(
       }
     }
 
-    int curveId;
+    int? curveId;
     final arc = cs.arc;
-    if (arc != null && arc.points.length >= 3) {
-      final segs = arc.segments
-          .map((s) => 'IFCARCINDEX((${s.$1 + 1},${s.$2 + 1},${s.$3 + 1}))')
-          .join(',');
-      final coords =
-          arc.points.map((p) => _ifcCoord(p.$1, p.$2, p.$3, scale)).join(',');
-      final ptListId = nextId();
-      lines.add('#$ptListId=IFCCARTESIANPOINTLIST3D(($coords));');
-      curveId = nextId();
-      lines.add('#$curveId=IFCINDEXEDPOLYCURVE(#$ptListId,($segs),.F.);');
-    } else {
+    if (arc != null &&
+        arc.points.length >= 3 &&
+        (!isIfc2x3 || arc.segments.isNotEmpty)) {
+      if (!isIfc2x3) {
+        final segs = arc.segments
+            .map((s) => 'IFCARCINDEX((${s.$1 + 1},${s.$2 + 1},${s.$3 + 1}))')
+            .join(',');
+        final coords =
+            arc.points.map((p) => _ifcCoord(p.$1, p.$2, p.$3, scale)).join(',');
+        final ptListId = nextId();
+        lines.add('#$ptListId=IFCCARTESIANPOINTLIST3D(($coords));');
+        curveId = nextId();
+        lines.add('#$curveId=IFCINDEXEDPOLYCURVE(#$ptListId,($segs),.F.);');
+      } else {
+        final arcPtsZup = <(double, double, double)>[];
+        for (final p in arc.points) {
+          if (!p.$1.isFinite || !p.$2.isFinite || !p.$3.isFinite) {
+            throw ArgumentError('IFC coordinates must be finite');
+          }
+          final sx = p.$1 * scale, sy = -p.$3 * scale, sz = p.$2 * scale;
+          if (!sx.isFinite || !sy.isFinite || !sz.isFinite) {
+            throw ArgumentError('IFC coordinates must be finite');
+          }
+          arcPtsZup.add((sx, sy, sz));
+        }
+
+        final solvedSegs = <_SolvedArcSeg>[];
+        var validArc = true;
+        for (final s in arc.segments) {
+          if (s.$1 < 0 ||
+              s.$1 >= arcPtsZup.length ||
+              s.$2 < 0 ||
+              s.$2 >= arcPtsZup.length ||
+              s.$3 < 0 ||
+              s.$3 >= arcPtsZup.length) {
+            validArc = false;
+            break;
+          }
+          final solved = _solveIfc2x3ArcSegment(
+            arcPtsZup[s.$1],
+            arcPtsZup[s.$2],
+            arcPtsZup[s.$3],
+          );
+          if (solved == null) {
+            validArc = false;
+            break;
+          }
+          solvedSegs.add(solved);
+        }
+
+        int emitCircle(_SolvedArcSeg seg) {
+          final cId = nextId();
+          lines.add(
+              '#$cId=IFCCARTESIANPOINT((${_fmtReal6(seg.center.$1)},${_fmtReal6(seg.center.$2)},${_fmtReal6(seg.center.$3)}));');
+          final zId = nextId();
+          lines.add(
+              '#$zId=IFCDIRECTION((${_fmtReal6(seg.axisZ.$1)},${_fmtReal6(seg.axisZ.$2)},${_fmtReal6(seg.axisZ.$3)}));');
+          final xId = nextId();
+          lines.add(
+              '#$xId=IFCDIRECTION((${_fmtReal6(seg.refX.$1)},${_fmtReal6(seg.refX.$2)},${_fmtReal6(seg.refX.$3)}));');
+          final plId = nextId();
+          lines.add('#$plId=IFCAXIS2PLACEMENT3D(#$cId,#$zId,#$xId);');
+          final circId = nextId();
+          lines.add('#$circId=IFCCIRCLE(#$plId,${_fmtReal6(seg.radius)});');
+          return circId;
+        }
+
+        if (validArc && solvedSegs.length == 1) {
+          final circId = emitCircle(solvedSegs[0]);
+          curveId = nextId();
+          lines.add(
+              '#$curveId=IFCTRIMMEDCURVE(#$circId,(IFCPARAMETERVALUE(0.0)),(IFCPARAMETERVALUE(${_fmtReal6(solvedSegs[0].sweep)})),.T.,.PARAMETER.);');
+        } else if (validArc &&
+            solvedSegs.length == 2 &&
+            arc.segments[0] == (0, 1, 2) &&
+            arc.segments[1] == (2, 3, 0) &&
+            (solvedSegs[0].radius - solvedSegs[1].radius).abs() <=
+                1e-3 * math.max(1.0, solvedSegs[0].radius)) {
+          final dcx = solvedSegs[0].center.$1 - solvedSegs[1].center.$1;
+          final dcy = solvedSegs[0].center.$2 - solvedSegs[1].center.$2;
+          final dcz = solvedSegs[0].center.$3 - solvedSegs[1].center.$3;
+          if (math.sqrt(dcx * dcx + dcy * dcy + dcz * dcz) <=
+              1e-3 * math.max(1.0, solvedSegs[0].radius)) {
+            curveId = emitCircle(solvedSegs[0]);
+          }
+        }
+        if (validArc && curveId == null && solvedSegs.length >= 2) {
+          final compSegIds = <int>[];
+          for (final seg in solvedSegs) {
+            final circId = emitCircle(seg);
+            final trimId = nextId();
+            lines.add(
+                '#$trimId=IFCTRIMMEDCURVE(#$circId,(IFCPARAMETERVALUE(0.0)),(IFCPARAMETERVALUE(${_fmtReal6(seg.sweep)})),.T.,.PARAMETER.);');
+            final csegId = nextId();
+            lines.add(
+                '#$csegId=IFCCOMPOSITECURVESEGMENT(.CONTINUOUS.,.T.,#$trimId);');
+            compSegIds.add(csegId);
+          }
+          curveId = nextId();
+          final csegRefs = compSegIds.map((sid) => '#$sid').join(',');
+          lines.add('#$curveId=IFCCOMPOSITECURVE(($csegRefs),.F.);');
+        }
+      }
+    }
+    if (curveId == null) {
       final coords =
           cs.pointsM.map((p) => _ifcCoord(p.$1, p.$2, p.$3, scale)).toList();
       if (cs.closed) {
@@ -432,21 +602,102 @@ String toIfc(
       ));
     }
 
-    final ptListId = nextId();
-    lines.add('#$ptListId=IFCCARTESIANPOINTLIST3D((${ptCoords.join(',')}));');
+    int faceSetId;
+    String bodyRepType;
+    if (!isIfc2x3) {
+      final ptListId = nextId();
+      lines.add('#$ptListId=IFCCARTESIANPOINTLIST3D((${ptCoords.join(',')}));');
 
-    final faceIndices = <String>[];
-    for (var i = 0; i < triCount; i++) {
-      final idx0 = prim.indices[i * 3] + 1;
-      final idx1 = prim.indices[i * 3 + 1] + 1;
-      final idx2 = prim.indices[i * 3 + 2] + 1;
-      faceIndices.add('($idx0,$idx1,$idx2)');
+      final faceIndices = <String>[];
+      for (var i = 0; i < triCount; i++) {
+        final idx0 = prim.indices[i * 3] + 1;
+        final idx1 = prim.indices[i * 3 + 1] + 1;
+        final idx2 = prim.indices[i * 3 + 2] + 1;
+        faceIndices.add('($idx0,$idx1,$idx2)');
+      }
+
+      final closed = _meshIsClosed(prim) ? '.T.' : '.F.';
+      faceSetId = nextId();
+      lines.add(
+          '#$faceSetId=IFCTRIANGULATEDFACESET(#$ptListId,\$,$closed,(${faceIndices.join(',')}),\$);');
+      bodyRepType = 'Tessellation';
+    } else {
+      final coordToUid = <String, int>{};
+      final uniqueCoords = <String>[];
+      final vToUid = List<int>.filled(vCount, 0);
+      for (var i = 0; i < vCount; i++) {
+        final cStr = ptCoords[i];
+        var uid = coordToUid[cStr];
+        if (uid == null) {
+          uid = uniqueCoords.length;
+          coordToUid[cStr] = uid;
+          uniqueCoords.add(cStr);
+        }
+        vToUid[i] = uid;
+      }
+
+      final validTris = <(int, int, int)>[];
+      var outOfRange = false;
+      for (var i = 0; i < triCount; i++) {
+        final i0 = prim.indices[i * 3];
+        final i1 = prim.indices[i * 3 + 1];
+        final i2 = prim.indices[i * 3 + 2];
+        if (i0 >= vCount || i1 >= vCount || i2 >= vCount) {
+          outOfRange = true;
+          continue;
+        }
+        final u0 = vToUid[i0], u1 = vToUid[i1], u2 = vToUid[i2];
+        if (u0 == u1 || u1 == u2 || u2 == u0) continue;
+        validTris.add((u0, u1, u2));
+      }
+      if (validTris.isEmpty) continue;
+
+      final usedPtId = List<int>.filled(uniqueCoords.length, 0);
+      for (final (u0, u1, u2) in validTris) {
+        for (final uid in [u0, u1, u2]) {
+          if (usedPtId[uid] == 0) {
+            final ptId = nextId();
+            lines.add('#$ptId=IFCCARTESIANPOINT(${uniqueCoords[uid]});');
+            usedPtId[uid] = ptId;
+          }
+        }
+      }
+
+      final faceIds = <int>[];
+      final halfEdges = <(int, int), int>{};
+      for (final (u0, u1, u2) in validTris) {
+        for (final he in [(u0, u1), (u1, u2), (u2, u0)]) {
+          halfEdges[he] = (halfEdges[he] ?? 0) + 1;
+        }
+        final loopId = nextId();
+        lines.add(
+            '#$loopId=IFCPOLYLOOP((#${usedPtId[u0]},#${usedPtId[u1]},#${usedPtId[u2]}));');
+        final boundId = nextId();
+        lines.add('#$boundId=IFCFACEOUTERBOUND(#$loopId,.T.);');
+        final faceId = nextId();
+        lines.add('#$faceId=IFCFACE((#$boundId));');
+        faceIds.add(faceId);
+      }
+
+      final isClosedSolid = !outOfRange &&
+          validTris.length >= 4 &&
+          halfEdges.entries.every(
+              (e) => e.value == 1 && halfEdges[(e.key.$2, e.key.$1)] == 1);
+      final faceRefs = faceIds.map((fid) => '#$fid').join(',');
+      if (isClosedSolid) {
+        final shellId = nextId();
+        lines.add('#$shellId=IFCCLOSEDSHELL(($faceRefs));');
+        faceSetId = nextId();
+        lines.add('#$faceSetId=IFCFACETEDBREP(#$shellId);');
+        bodyRepType = 'Brep';
+      } else {
+        final cfsId = nextId();
+        lines.add('#$cfsId=IFCCONNECTEDFACESET(($faceRefs));');
+        faceSetId = nextId();
+        lines.add('#$faceSetId=IFCFACEBASEDSURFACEMODEL((#$cfsId));');
+        bodyRepType = 'SurfaceModel';
+      }
     }
-
-    final closed = _meshIsClosed(prim) ? '.T.' : '.F.';
-    final faceSetId = nextId();
-    lines.add(
-        '#$faceSetId=IFCTRIANGULATEDFACESET(#$ptListId,\$,$closed,(${faceIndices.join(',')}),\$);');
 
     addLayerItem(rawLayer, faceSetId);
 
@@ -483,7 +734,7 @@ String toIfc(
 
     final shapeRepId = nextId();
     lines.add(
-        '#$shapeRepId=IFCSHAPEREPRESENTATION(#$geomCtxId,\'Body\',\'Tessellation\',(#$faceSetId));');
+        '#$shapeRepId=IFCSHAPEREPRESENTATION(#$geomCtxId,\'Body\',\'$bodyRepType\',(#$faceSetId));');
 
     final prodShapeId = nextId();
     lines.add('#$prodShapeId=IFCPRODUCTDEFINITIONSHAPE(\$,\$,(#$shapeRepId));');
@@ -509,7 +760,14 @@ String toIfc(
     while (attrs.length < total) {
       attrs.add('\$');
     }
-    if (stepType == 'IFCBUILDINGELEMENTPROXY' && total == 9) {
+    if (isIfc2x3) {
+      if (stepType == 'IFCBUILDINGELEMENTPROXY' && total == 9) {
+        attrs[8] = '.ELEMENT.';
+      } else if (_ifc2x3RequiredNotDefinedAttr8.contains(stepType) &&
+          total >= 9) {
+        attrs[8] = '.NOTDEFINED.';
+      }
+    } else if (stepType == 'IFCBUILDINGELEMENTPROXY' && total == 9) {
       attrs[8] = '.NOTDEFINED.';
     }
     lines.add('#$productId=$stepType(${attrs.join(',')});');

@@ -301,5 +301,139 @@ namespace OpenSkp.Tests
             Assert.Contains(",.F.,", hiddenLines[0]);
             Assert.DoesNotContain(layerLines, l => l.Contains("'Wood'"));
         }
+
+        [Fact]
+        public void ToIfc_Ifc2x3SchemaEmitsBrepSurfaceModelTrimmedCurvesAndProxyCompositionType()
+        {
+            double s45 = Math.Sqrt(0.5);
+            var scene = new Scene
+            {
+                SceneHierarchy = new InstanceNode { Name = "Root", DefinitionName = "RootDef" },
+                MeshIndex = new Dictionary<string, MeshMetadata>
+                {
+                    ["ClosedCrate"] = new MeshMetadata { Name = "ClosedCrate", Path = "Root/ClosedCrate" },
+                    ["OpenRoof"] = new MeshMetadata { Name = "Gable Roof", Path = "Root/OpenRoof" },
+                    ["FrontDoor"] = new MeshMetadata { Name = "Front Door", Path = "Root/FrontDoor" },
+                },
+                GlbPrimitives = new List<GlbPrimitive>
+                {
+                    new GlbPrimitive
+                    {
+                        GeomName = "ClosedCrate",
+                        MaterialIndex = 0,
+                        Positions = new float[] { 0f, 0f, 0f, 1f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 1f },
+                        Normals = new float[12],
+                        Uvs = new float[8],
+                        Indices = new uint[] { 0, 2, 1, 0, 1, 3, 1, 2, 3, 2, 0, 3 },
+                    },
+                    new GlbPrimitive
+                    {
+                        GeomName = "OpenRoof",
+                        MaterialIndex = 0,
+                        Positions = new float[] { 0f, 0f, 0f, 1f, 0f, 0f, 0f, 1f, 0f },
+                        Normals = new float[9],
+                        Uvs = new float[6],
+                        Indices = new uint[] { 0, 1, 2 },
+                    },
+                    new GlbPrimitive
+                    {
+                        GeomName = "FrontDoor",
+                        MaterialIndex = 0,
+                        Positions = new float[] { 2f, 0f, 0f, 3f, 0f, 0f, 2f, 1f, 0f },
+                        Normals = new float[9],
+                        Uvs = new float[6],
+                        Indices = new uint[] { 0, 1, 2 },
+                    },
+                },
+                CurveSets = new List<CurveSetMetadata>
+                {
+                    new CurveSetMetadata
+                    {
+                        Name = "QuarterArc",
+                        PointsM = new List<(double X, double Y, double Z)>
+                        {
+                            (1.0, 0.0, 0.0), (s45, 0.0, -s45), (0.0, 0.0, -1.0)
+                        },
+                        Closed = false,
+                        Arc = new CurveArc
+                        {
+                            Points = new List<(double X, double Y, double Z)>
+                            {
+                                (1.0, 0.0, 0.0), (s45, 0.0, -s45), (0.0, 0.0, -1.0)
+                            },
+                            Segments = new List<(int Start, int Mid, int End)> { (0, 1, 2) },
+                        },
+                    },
+                    new CurveSetMetadata
+                    {
+                        Name = "FullCircle",
+                        PointsM = new List<(double X, double Y, double Z)>
+                        {
+                            (1.0, 0.0, 0.0), (0.0, 0.0, -1.0), (-1.0, 0.0, 0.0), (0.0, 0.0, 1.0)
+                        },
+                        Closed = true,
+                        Arc = new CurveArc
+                        {
+                            Points = new List<(double X, double Y, double Z)>
+                            {
+                                (1.0, 0.0, 0.0), (0.0, 0.0, -1.0), (-1.0, 0.0, 0.0), (0.0, 0.0, 1.0)
+                            },
+                            Segments = new List<(int Start, int Mid, int End)> { (0, 1, 2), (2, 3, 0) },
+                        },
+                    },
+                    new CurveSetMetadata
+                    {
+                        Name = "DegenerateArc",
+                        PointsM = new List<(double X, double Y, double Z)>
+                        {
+                            (0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (2.0, 0.0, 0.0)
+                        },
+                        Closed = false,
+                        Arc = new CurveArc
+                        {
+                            Points = new List<(double X, double Y, double Z)>
+                            {
+                                (0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (2.0, 0.0, 0.0)
+                            },
+                            Segments = new List<(int Start, int Mid, int End)> { (0, 1, 2) },
+                        },
+                    },
+                },
+            };
+
+            string ifcText = IfcExport.ToIfc(scene, IfcExport.MetresToMm, "IFC2X3");
+            Assert.Contains("FILE_SCHEMA(('IFC2X3'));", ifcText);
+            Assert.DoesNotContain("IFCTRIANGULATEDFACESET(", ifcText);
+            Assert.DoesNotContain("IFCCARTESIANPOINTLIST3D(", ifcText);
+            Assert.DoesNotContain("IFCINDEXEDPOLYCURVE(", ifcText);
+            Assert.DoesNotContain("IFCARCINDEX(", ifcText);
+
+            Assert.Contains("IFCCLOSEDSHELL(", ifcText);
+            Assert.Contains("IFCFACETEDBREP(", ifcText);
+            Assert.Contains("'Body','Brep',", ifcText);
+            Assert.Contains("IFCCONNECTEDFACESET(", ifcText);
+            Assert.Contains("IFCFACEBASEDSURFACEMODEL(", ifcText);
+            Assert.Contains("'Body','SurfaceModel',", ifcText);
+
+            string[] lines = ifcText.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None);
+            Assert.Equal(2, lines.Count(l => l.Contains("=IFCCIRCLE(")));
+            Assert.Equal(1, lines.Count(l => l.Contains("=IFCTRIMMEDCURVE(")));
+            Assert.Contains("IFCPARAMETERVALUE(1.570796)", ifcText);
+            Assert.Equal(1, lines.Count(l => l.Contains("=IFCPOLYLINE(")));
+
+            string proxyLine = lines.Single(l => l.Contains("=IFCBUILDINGELEMENTPROXY("));
+            Assert.EndsWith(",.ELEMENT.);", proxyLine);
+            string roofLine = lines.Single(l => l.Contains("=IFCROOF("));
+            Assert.EndsWith(",.NOTDEFINED.);", roofLine);
+            string doorLine = lines.Single(l => l.Contains("=IFCDOOR("));
+            string doorBody = doorLine.Substring(doorLine.IndexOf('(') + 1, doorLine.LastIndexOf(')') - doorLine.IndexOf('(') - 1);
+            Assert.Equal(10, doorBody.Split(',').Length);
+
+            int[] ids = lines
+                .Where(l => l.StartsWith("#", StringComparison.Ordinal) && l.Contains("="))
+                .Select(l => int.Parse(l.Substring(1, l.IndexOf('=') - 1)))
+                .ToArray();
+            Assert.Equal(Enumerable.Range(1, ids.Length).ToArray(), ids);
+        }
     }
 }
