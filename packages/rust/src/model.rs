@@ -217,14 +217,13 @@ impl fmt::Display for ParsedAttribute {
                 format_double(v[2])
             ),
             ParsedAttribute::Array(items) => {
-                let mut joined = String::new();
-                for item in items {
-                    if !joined.is_empty() {
-                        joined.push(',');
+                for (i, item) in items.iter().enumerate() {
+                    if i > 0 {
+                        f.write_str(",")?;
                     }
-                    joined.push_str(&item.to_string());
+                    write!(f, "{item}")?;
                 }
-                f.write_str(&joined)
+                Ok(())
             }
         }
     }

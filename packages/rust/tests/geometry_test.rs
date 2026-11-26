@@ -383,6 +383,42 @@ fn attribute_dictionaries_decode_nested_array() {
     assert_eq!(cords.to_string(), "25.17,0.07,25.17,15.35");
 }
 
+#[test]
+fn attribute_dictionaries_keep_commas_for_leading_empty_array_elements() {
+    let leading_null = concat(&[&entry_value(&[]), &entry_value(&tlv("AD38", &bytes("x")))]);
+    let two_nulls = concat(&[&entry_value(&[]), &entry_value(&[])]);
+    let leading_empty_str = concat(&[
+        &entry_value(&tlv("AD38", &[])),
+        &entry_value(&tlv("AD38", &bytes("x"))),
+    ]);
+    let leading_empty_arr = concat(&[
+        &entry_value(&tlv("AE38", &[])),
+        &entry_value(&tlv("AD38", &bytes("x"))),
+    ]);
+    let middle_null = concat(&[
+        &entry_value(&tlv("A738", &1i32.to_le_bytes())),
+        &entry_value(&[]),
+        &entry_value(&tlv("AD38", &bytes("x"))),
+    ]);
+    let trailing_null = concat(&[&entry_value(&tlv("AD38", &bytes("x"))), &entry_value(&[])]);
+    let entries = concat(&[
+        &entry("leading_null", &tlv("AE38", &leading_null)),
+        &entry("two_nulls", &tlv("AE38", &two_nulls)),
+        &entry("leading_empty_str", &tlv("AE38", &leading_empty_str)),
+        &entry("leading_empty_arr", &tlv("AE38", &leading_empty_arr)),
+        &entry("middle_null", &tlv("AE38", &middle_null)),
+        &entry("trailing_null", &tlv("AE38", &trailing_null)),
+    ]);
+    let dicts = attribute_dicts_for(&named_dict("dynamic_attributes", &entries));
+    let props = openskp::stringify_attr_dict(&dicts["dynamic_attributes"]);
+    assert_eq!(props["leading_null"], ",x");
+    assert_eq!(props["two_nulls"], ",");
+    assert_eq!(props["leading_empty_str"], ",x");
+    assert_eq!(props["leading_empty_arr"], ",x");
+    assert_eq!(props["middle_null"], "1,,x");
+    assert_eq!(props["trailing_null"], "x,");
+}
+
 // A type tag this decoder doesn't know is left as Null rather than
 // misinterpreted.
 #[test]
