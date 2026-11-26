@@ -188,6 +188,42 @@ painted differently on each side; STL does not carry colour. GLB and the
 colour-capable OBJ, PLY, DXF, IFC and Fragments exports retain separately
 painted sides.
 
+#### Colorized textures in GLB
+
+When `textures: true` is passed to `toGlb` / `exportGlb` or `toInstancedGlb` /
+`exportInstancedGlb`, colorized PNG textures are baked out of the box using the
+existing `package:archive` zlib codec (matching SketchUp's shift and tint modes
+within 1/255). To also bake colorized JPEG textures, pass an optional
+`SkpImageCodec` — for example using [`package:image`](https://pub.dev/packages/image)
+(not a dependency of `openskp`):
+
+```dart
+import 'package:image/image.dart' as img;
+import 'package:openskp/openskp.dart';
+
+final jpegCodec = SkpImageCodec(
+  decode: (data, mimeType) {
+    final decoded = img.decodeJpg(data) ?? img.decodeImage(data);
+    if (decoded == null) return null;
+    final rgba = decoded.getBytes(order: img.ChannelOrder.rgba);
+    return (width: decoded.width, height: decoded.height, rgba: rgba);
+  },
+  encode: (rgba, width, height, mimeType, {int quality = 95}) {
+    final image = img.Image.fromBytes(
+      width: width,
+      height: height,
+      bytes: rgba.buffer,
+      bytesOffset: rgba.offsetInBytes,
+      numChannels: 4,
+      order: img.ChannelOrder.rgba,
+    );
+    return img.encodeJpg(image, quality: quality);
+  },
+);
+
+final glbBytes = toGlb(scene, textures: true, imageCodec: jpegCodec);
+```
+
 ---
 
 ## ✏️ Writing

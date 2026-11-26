@@ -2,10 +2,9 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'glb.dart' show normalizeEmbeddedTextureFactors;
+import 'glb_textures.dart' show SkpImageCodec, resolveGltfTextures;
 import 'instanced_scene.dart';
 import 'observability.dart' show SkpLogLevel;
-import 'scene.dart' show filterGltfTextures;
 
 /// glTF's chunk-length fields are uint32 - a GLB file's total size (and
 /// each individual chunk) is hard-capped at 4GB by the format itself, not
@@ -17,7 +16,7 @@ const int _glbSizeLimit = 0xFFFFFFFF;
 /// buffer exactly once, and every placement is a glTF node whose `mesh`
 /// points at it.
 ///
-/// This is what [toGlb] cannot do from a baked Scene, whose primitives
+/// This is what `toGlb` cannot do from a baked Scene, whose primitives
 /// already have the world transform folded into their vertex data - there
 /// is nothing left to share. Here, a component placed 1,000 times
 /// contributes one copy of its vertex/index buffers plus 1,000 node
@@ -26,12 +25,16 @@ const int _glbSizeLimit = 0xFFFFFFFF;
 /// A definition that resolves to several materials becomes ONE glTF mesh
 /// with several primitives (the normal glTF representation), not several
 /// nodes - matching the TypeScript reference implementation
-/// (instanced-glb.ts, openskp#200). [toGlb] is untouched and still
+/// (instanced-glb.ts, openskp#200). `toGlb` is untouched and still
 /// produces exactly what it always has.
 ///
 /// [textures]: embed the scene's texture images in the GLB and point each
 /// textured material's `baseColorTexture` at them. Off by default,
-/// matching [toGlb]'s own `textures` parameter.
+/// matching `toGlb`'s own `textures` parameter.
+///
+/// [imageCodec]: optional synchronous [SkpImageCodec] used to decode and
+/// re-encode colorized JPEG textures at quality 95 when [textures] is `true`
+/// (colorized PNG textures are baked natively via `package:archive`).
 ///
 /// [onLog]: optional callback receiving warnings (for example, when a
 /// non-PNG/JPEG texture kept via `ParseOptions(originalTextures: true)` is
@@ -39,17 +42,18 @@ const int _glbSizeLimit = 0xFFFFFFFF;
 Uint8List toInstancedGlb(
   InstancedScene scene, {
   bool textures = false,
+  SkpImageCodec? imageCodec,
   void Function(SkpLogLevel level, String message)? onLog,
 }) {
   final resources = scene.meshResources;
   final rawMaterials = scene.gltfMaterials;
-  final (sceneTextures, filteredMaterials) = filterGltfTextures(
+  final (sceneTextures, materials) = resolveGltfTextures(
     scene.textures,
     rawMaterials,
     textures,
     onLog,
+    imageCodec,
   );
-  final materials = normalizeEmbeddedTextureFactors(filteredMaterials);
 
   var totalBinaryLength = 0;
   for (final res in resources) {
@@ -266,9 +270,17 @@ void exportInstancedGlb(
   InstancedScene scene,
   String path, {
   bool textures = false,
+  SkpImageCodec? imageCodec,
   void Function(SkpLogLevel level, String message)? onLog,
 }) {
-  File(path).writeAsBytesSync(toInstancedGlb(scene, textures: textures, onLog: onLog));
+  File(path).writeAsBytesSync(
+    toInstancedGlb(
+      scene,
+      textures: textures,
+      imageCodec: imageCodec,
+      onLog: onLog,
+    ),
+  );
 }
 
 Uint8List _createGlb(Map<String, dynamic> json, Uint8List binaryBuffer) {

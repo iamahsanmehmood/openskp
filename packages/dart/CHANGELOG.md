@@ -3,6 +3,18 @@
 The releases 1.3.0 to 1.6.0 and the details of every release are in the
 [project changelog](https://github.com/iamahsanmehmood/openskp/blob/main/CHANGELOG.md).
 
+## Unreleased
+
+- **Colorized textures in GLB:** `toGlb` / `exportGlb` and `toInstancedGlb` /
+  `exportInstancedGlb` with `textures: true` bake colorized PNG textures out of
+  the box (shift or tint within 1/255 of SketchUp's own result, once per
+  colour, using the existing `archive` dependency). Pass an optional
+  `SkpImageCodec` (`imageCodec:`) to also bake colorized JPEG textures at
+  quality 95; without it, colorized JPEGs keep their tinted factor with one
+  warning. JPEG EXIF `APP1` orientation blocks are stripped without
+  re-encoding, and textures above 178,956,970 pixels keep their source bytes
+  and tinted factor with one warning.
+
 ## 1.7.0
 
 - **Privacy:** `openExisting()` and the code made by `toDartCode()` no longer
