@@ -1,5 +1,7 @@
 <div align="center">
 
+**English** · [Português (Brasil)](README.pt-BR.md)
+
 <img src="assets/logo.png" width="150" alt="OpenSKP logo"/>
 
 # OpenSKP
