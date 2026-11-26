@@ -362,13 +362,20 @@ void main() {
         toInstancedGlb(bothInstanced, textures: true),
       ]) {
         final withTexJson = _parseGlb(withTexBytes).json;
+        expect(withTexJson['images'], hasLength(2));
+        expect(withTexJson['textures'], hasLength(2));
         final mats =
             (withTexJson['materials'] as List).cast<Map<String, dynamic>>();
         expect(mats, hasLength(2));
         final plainGlbMat = mats.firstWhere((m) => !m.containsKey('extras'));
         final colGlbMat = mats.firstWhere((m) => m.containsKey('extras'));
-        expect((plainGlbMat['pbrMetallicRoughness'] as Map)['baseColorTexture'],
-            equals({'index': 0}));
+        final plainTexIdx = ((plainGlbMat['pbrMetallicRoughness'] as Map)['baseColorTexture']
+            as Map)['index'] as int;
+        final colTexIdx = ((colGlbMat['pbrMetallicRoughness'] as Map)['baseColorTexture']
+            as Map)['index'] as int;
+        expect(plainTexIdx, inInclusiveRange(0, 1));
+        expect(colTexIdx, inInclusiveRange(0, 1));
+        expect(plainTexIdx, isNot(equals(colTexIdx)));
         expect((plainGlbMat['pbrMetallicRoughness'] as Map)['baseColorFactor'],
             equals([1.0, 1.0, 1.0, 1.0]));
         expect(
@@ -380,11 +387,9 @@ void main() {
             },
           }),
         );
-        expect((colGlbMat['pbrMetallicRoughness'] as Map)['baseColorTexture'],
-            equals({'index': 0}));
         expect(
           (colGlbMat['pbrMetallicRoughness'] as Map)['baseColorFactor'],
-          equals([200 / 255, 80 / 255, 60 / 255, 1.0]),
+          equals([1.0, 1.0, 1.0, 1.0]),
         );
       }
 

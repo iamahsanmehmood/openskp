@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'glb_textures.dart' show SkpImageCodec, resolveGltfTextures;
 import 'observability.dart' show SkpLogLevel;
 import 'scene.dart';
 
@@ -9,28 +10,6 @@ import 'scene.dart';
 /// each individual chunk) is hard-capped at 4GB by the format itself, not
 /// an arbitrary choice here.
 const int _glbSizeLimit = 0xFFFFFFFF;
-
-/// Sets `baseColorFactor` to `[1, 1, 1, alpha]` on GLB materials that carry an
-/// embedded `baseColorTexture` and are not marked `extras.sketchup.colorized`,
-/// without mutating the input scene's `gltfMaterials`.
-List<Map<String, dynamic>> normalizeEmbeddedTextureFactors(
-  List<Map<String, dynamic>> materials,
-) {
-  return materials.map((m) {
-    final pbr = m['pbrMetallicRoughness'] as Map<String, dynamic>?;
-    if (pbr == null || !pbr.containsKey('baseColorTexture')) return m;
-    final extras = m['extras'];
-    final sketchup = extras is Map ? extras['sketchup'] : null;
-    final isColorized = sketchup is Map && sketchup['colorized'] == true;
-    if (isColorized) return m;
-    final bcf = pbr['baseColorFactor'];
-    final alpha =
-        (bcf is List && bcf.length > 3) ? (bcf[3] as num).toDouble() : 1.0;
-    final newPbr = Map<String, dynamic>.from(pbr)
-      ..['baseColorFactor'] = <double>[1.0, 1.0, 1.0, alpha];
-    return Map<String, dynamic>.from(m)..['pbrMetallicRoughness'] = newPbr;
-  }).toList();
-}
 
 /// Serializes a baked [Scene] to binary glTF 2.0 (GLB) bytes.
 ///
@@ -47,23 +26,28 @@ List<Map<String, dynamic>> normalizeEmbeddedTextureFactors(
 /// multiply the file size, and the geometry alone is what most callers
 /// are after.
 ///
+/// [imageCodec]: optional synchronous [SkpImageCodec] used to decode and
+/// re-encode colorized JPEG textures at quality 95 when [textures] is `true`
+/// (colorized PNG textures are baked natively via `package:archive`).
+///
 /// [onLog]: optional callback receiving warnings (for example, when a
 /// non-PNG/JPEG texture kept via `ParseOptions(originalTextures: true)` is
 /// omitted from the GLB).
 Uint8List toGlb(
   Scene scene, {
   bool textures = false,
+  SkpImageCodec? imageCodec,
   void Function(SkpLogLevel level, String message)? onLog,
 }) {
   final prims = scene.glbPrimitives;
   final rawMaterials = scene.gltfMaterials;
-  final (sceneTextures, filteredMaterials) = filterGltfTextures(
+  final (sceneTextures, materials) = resolveGltfTextures(
     scene.textures,
     rawMaterials,
     textures,
     onLog,
+    imageCodec,
   );
-  final materials = normalizeEmbeddedTextureFactors(filteredMaterials);
 
   _validateScene(prims, materials);
 
@@ -279,9 +263,12 @@ void exportGlb(
   Scene scene,
   String path, {
   bool textures = false,
+  SkpImageCodec? imageCodec,
   void Function(SkpLogLevel level, String message)? onLog,
 }) {
-  File(path).writeAsBytesSync(toGlb(scene, textures: textures, onLog: onLog));
+  File(path).writeAsBytesSync(
+    toGlb(scene, textures: textures, imageCodec: imageCodec, onLog: onLog),
+  );
 }
 
 void _validateScene(List<GlbPrimitive> prims, List<Map<String, dynamic>> materials) {

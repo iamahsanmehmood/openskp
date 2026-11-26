@@ -16,6 +16,7 @@ export 'src/instanced_scene.dart'
         LocalCurve,
         SceneBounds;
 export 'src/glb.dart' show toGlb, exportGlb;
+export 'src/glb_textures.dart' show SkpImageCodec;
 export 'src/instanced_glb.dart' show toInstancedGlb, exportInstancedGlb;
 export 'src/json_export.dart' show toJson;
 export 'src/obj_export.dart' show toObj, toMtl, exportObj;
