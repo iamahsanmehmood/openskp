@@ -156,3 +156,82 @@ class TestSketchUp3SingleMaterial:
         faces = [f for d in [model.root, *model.definitions.values()] for f in d.faces.values()]
         assert len(faces) == 1
         assert model.materials[0].id == faces[0].material_id
+
+
+CURVES_AND_TEXT = FIXTURES / "legacy_v3_curves_and_text.skp"
+NO_MATERIALS = FIXTURES / "legacy_v3_no_materials.skp"
+
+
+class TestSketchUp3CurvesTextAndGuides:
+    """SketchUp 3 CCurve and CArcCurve open with two CEdge pointers (no
+    CAttributeContainer preamble), CSkFont has no preamble and a 6-byte tail,
+    and CConstructionLine stores only point + direction (#284).
+    """
+
+    def test_face_bounded_curves_and_arc_curves_parse_without_loop_desync(self):
+        model = SkpFile.open(str(CURVES_AND_TEXT)).parse()
+        assert model.version == "{3.0.1}"
+        assert model.unread_root_entities == 0
+        defs = _defs(model)
+        assert set(defs) == {"CurvedPanel", "ArcDisk"}
+
+        panel = defs["CurvedPanel"]
+        assert (len(panel.faces), len(panel.edges), len(panel.vertices)) == (1, 6, 6)
+        assert len(panel.arcs) == 0
+        curved = [e.curve_id for e in panel.edges.values() if e.curve_id is not None]
+        assert len(curved) == 4 and len(set(curved)) == 1
+        panel_face = next(iter(panel.faces.values()))
+        assert model.materials_by_id[panel_face.material_id].name == "Red"
+
+        disk = defs["ArcDisk"]
+        assert (len(disk.faces), len(disk.edges), len(disk.vertices)) == (1, 8, 8)
+        assert len(disk.arcs) == 1
+        arc = next(iter(disk.arcs.values()))
+        assert arc.center == (10.0, 10.0, 0.0)
+        assert abs(arc.radius - 8.0) < 1e-9
+        assert arc.is_full_circle is True
+        disk_face = next(iter(disk.faces.values()))
+        assert model.materials_by_id[disk_face.material_id].name == "Blue"
+
+        assert _names_of(model, model.root.instances) == ["CurvedPanel", "ArcDisk"]
+        assert [i.matrix[9] for i in model.root.instances] == [0.0, 40.0]
+        assert model.root.instances[0].material_id is None
+        assert model.materials_by_id[model.root.instances[1].material_id].name == "Red"
+
+    def test_loose_curves_font_text_and_infinite_guide_line_at_root(self):
+        from openskp.model import loose_edge_runs
+
+        model = SkpFile.open(str(CURVES_AND_TEXT)).parse()
+        assert (len(model.root.faces), len(model.root.edges), len(model.root.vertices)) == (0, 9, 11)
+        assert len(model.root.arcs) == 1
+        arc = next(iter(model.root.arcs.values()))
+        assert arc.center == (0.0, 40.0, 0.0)
+        assert abs(arc.radius - 10.0) < 1e-9
+        assert arc.is_full_circle is False
+        assert [(len(r[0]), len(r[1]), r[2]) for r in loose_edge_runs(model.root)] == [
+            (6, 7, False),
+            (3, 4, False),
+        ]
+
+        assert len(model.root.texts) == 1
+        txt = model.root.texts[0]
+        assert txt.text == "Label A"
+        assert txt.point == (15.0, 15.0, 0.0)
+        assert txt.label_point == (20.0, 20.0, 10.0)
+        assert txt.screen_position == (0.0, 0.0)
+
+        assert len(model.root.construction_lines) == 1
+        cl = model.root.construction_lines[0]
+        assert cl.point == (0.0, 0.0, 0.0)
+        assert cl.direction == (1.0, 0.0, 0.0)
+        assert cl.start is None and cl.end is None
+
+
+class TestSketchUp3ZeroMaterials:
+    def test_parses_when_file_has_no_cmaterial_class(self):
+        model = SkpFile.open(str(NO_MATERIALS)).parse()
+        assert model.version == "{3.0.1}"
+        assert model.unread_root_entities == 0
+        assert model.materials == []
+        assert "Layer0" in [layer.name for layer in model.layers]
+        assert (len(model.root.faces), len(model.root.edges), len(model.root.vertices)) == (1, 4, 4)

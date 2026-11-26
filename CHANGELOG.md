@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — all six readers: SketchUp 3 curves, painted instances, fonts, guide lines and zero-material headers (#284)
+
+- SketchUp 3 (`{3.0.x}`) `CCurve` and `CArcCurve` records carry no `CAttributeContainer` preamble and open with two `CEdge` pointers (first and last edge of the curve), serializing the last edge inline when the curve is first reached from its starting edge. Reading them as post-V3 curves stopped inside the curve record and failed in face loops with `edge-use parent slot ... != current loop`.
+- Painted `CComponentInstance` and `CGroup` placements in SketchUp 3 open with their `CMaterial` pointer rather than a `CAttributeContainer` (just like `CFace`), preserving `Instance.material_id` across all six ports and fixing a `MaterialRec` cast failure in Dart.
+- SketchUp 3 `CSkFont` records carry no `CAttributeContainer` preamble and end with a 6-byte size/flags block rather than the 15-byte SketchUp 4+ block, fixing `CText` annotations in SketchUp 3 models (which previously failed or left root entities unread).
+- SketchUp 3 `CConstructionLine` records store only `point` and `direction` (infinite guides, with no `start`/`end` parameters or trailing block), and zero-material SketchUp 3 files step back 4 bytes before the first `CLayer` class declaration rather than 8.
+
 ### Fixed — TypeScript, .NET and Dart: texture applied size on positioned faces and circles (#696)
 
 - `addFace`/`AddFace` and `addCircle`/`AddCircle` (at the model root and inside component definitions) now solve `frontUv`/`backUv` in SketchUp's normal-derived basis (`|Z x n| < 1e-3` horizontal tolerance, `(-1, 0, 0)` downward X axis) and scale pin coordinates by the material's `(appliedWidth, appliedHeight)`, matching Python, C++ and Rust.

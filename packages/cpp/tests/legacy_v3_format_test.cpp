@@ -160,5 +160,102 @@ TEST(LegacyV3Format, SingleMaterialParsesItsInlinePngAndPaintedFace) {
   EXPECT_EQ(face->material_id, model.materials[0].id);
 }
 
+TEST(LegacyV3Format, CurvesTextAndGuideLineParseWithoutLoopDesync) {
+  auto model = SkpFile::open(test::fixture("legacy_v3_curves_and_text.skp")).parse();
+  EXPECT_EQ(model.version, "{3.0.1}");
+  EXPECT_EQ(model.unread_root_entities, 0u);
+  auto defs = by_name(model);
+  auto mats = model.materials_by_id();
+  ASSERT_EQ(defs.size(), 2u);
+  ASSERT_TRUE(defs.count("CurvedPanel"));
+  ASSERT_TRUE(defs.count("ArcDisk"));
+
+  const auto* panel = defs.at("CurvedPanel");
+  EXPECT_EQ(panel->faces.size(), 1u);
+  EXPECT_EQ(panel->edges.size(), 6u);
+  EXPECT_EQ(panel->vertices.size(), 6u);
+  EXPECT_TRUE(panel->arcs.empty());
+  std::set<EntityId> panel_curves;
+  size_t panel_curved_edges = 0;
+  for (const auto& [id, edge] : panel->edges) {
+    if (edge.curve_id) {
+      ++panel_curved_edges;
+      panel_curves.insert(*edge.curve_id);
+    }
+  }
+  EXPECT_EQ(panel_curved_edges, 4u);
+  EXPECT_EQ(panel_curves.size(), 1u);
+  ASSERT_TRUE(panel->faces.begin()->second.material_id.has_value());
+  EXPECT_EQ(mats.at(*panel->faces.begin()->second.material_id)->name, "Red");
+
+  const auto* disk = defs.at("ArcDisk");
+  EXPECT_EQ(disk->faces.size(), 1u);
+  EXPECT_EQ(disk->edges.size(), 8u);
+  EXPECT_EQ(disk->vertices.size(), 8u);
+  ASSERT_EQ(disk->arcs.size(), 1u);
+  const auto& disk_arc = disk->arcs.begin()->second;
+  EXPECT_EQ(disk_arc.center, (Vec3{10.0, 10.0, 0.0}));
+  EXPECT_NEAR(disk_arc.radius(), 8.0, 1e-9);
+  EXPECT_TRUE(disk_arc.is_full_circle());
+  ASSERT_TRUE(disk->faces.begin()->second.material_id.has_value());
+  EXPECT_EQ(mats.at(*disk->faces.begin()->second.material_id)->name, "Blue");
+
+  ASSERT_EQ(model.root().instances.size(), 2u);
+  EXPECT_EQ(def_name(model, model.root().instances[0]), "CurvedPanel");
+  EXPECT_EQ(def_name(model, model.root().instances[1]), "ArcDisk");
+  EXPECT_DOUBLE_EQ(model.root().instances[0].matrix[9], 0.0);
+  EXPECT_DOUBLE_EQ(model.root().instances[1].matrix[9], 40.0);
+  EXPECT_FALSE(model.root().instances[0].material_id.has_value());
+  ASSERT_TRUE(model.root().instances[1].material_id.has_value());
+  EXPECT_EQ(mats.at(*model.root().instances[1].material_id)->name, "Red");
+
+  EXPECT_TRUE(model.root().faces.empty());
+  EXPECT_EQ(model.root().edges.size(), 9u);
+  EXPECT_EQ(model.root().vertices.size(), 11u);
+  ASSERT_EQ(model.root().arcs.size(), 1u);
+  const auto& root_arc = model.root().arcs.begin()->second;
+  EXPECT_EQ(root_arc.center, (Vec3{0.0, 40.0, 0.0}));
+  EXPECT_NEAR(root_arc.radius(), 10.0, 1e-9);
+  EXPECT_FALSE(root_arc.is_full_circle());
+  auto runs = model.root().loose_edge_runs();
+  ASSERT_EQ(runs.size(), 2u);
+  EXPECT_EQ(runs[0].edge_ids.size(), 6u);
+  EXPECT_EQ(runs[0].vertex_ids.size(), 7u);
+  EXPECT_FALSE(runs[0].closed);
+  EXPECT_EQ(runs[1].edge_ids.size(), 3u);
+  EXPECT_EQ(runs[1].vertex_ids.size(), 4u);
+  EXPECT_FALSE(runs[1].closed);
+
+  ASSERT_EQ(model.root().texts.size(), 1u);
+  const auto& txt = model.root().texts[0];
+  EXPECT_EQ(txt.text, "Label A");
+  EXPECT_EQ(txt.point, (std::optional<Vec3>{Vec3{15.0, 15.0, 0.0}}));
+  EXPECT_EQ(txt.label_point, (std::optional<Vec3>{Vec3{20.0, 20.0, 10.0}}));
+  EXPECT_EQ(txt.screen_position,
+            (std::optional<std::array<double, 2>>{std::array<double, 2>{0.0, 0.0}}));
+
+  ASSERT_EQ(model.root().construction_lines.size(), 1u);
+  const auto& cl = model.root().construction_lines[0];
+  EXPECT_EQ(cl.point, (Vec3{0.0, 0.0, 0.0}));
+  EXPECT_EQ(cl.direction, (Vec3{1.0, 0.0, 0.0}));
+  EXPECT_FALSE(cl.start.has_value());
+  EXPECT_FALSE(cl.end.has_value());
+}
+
+TEST(LegacyV3Format, ZeroMaterialsParsesViaLayerHeaderOffset) {
+  auto model = SkpFile::open(test::fixture("legacy_v3_no_materials.skp")).parse();
+  EXPECT_EQ(model.version, "{3.0.1}");
+  EXPECT_EQ(model.unread_root_entities, 0u);
+  EXPECT_TRUE(model.materials.empty());
+  bool has_layer0 = false;
+  for (const auto& l : model.layers) {
+    if (l.name == "Layer0") has_layer0 = true;
+  }
+  EXPECT_TRUE(has_layer0);
+  EXPECT_EQ(model.root().faces.size(), 1u);
+  EXPECT_EQ(model.root().edges.size(), 4u);
+  EXPECT_EQ(model.root().vertices.size(), 4u);
+}
+
 }  // namespace
 }  // namespace openskp

@@ -900,8 +900,8 @@ namespace OpenSkp
 
         /// <summary><see cref="Preamble"/> for the entity types that carry NO
         /// attribute-container pointer in a SketchUp 3 file: vertex, loop,
-        /// edge-use, material, layer. (Edge, face, definition, instance and
-        /// thumbnail still open with one.)</summary>
+        /// edge-use, curve, arc-curve, font, material, layer. (Edge, face,
+        /// definition, instance and thumbnail still open with one.)</summary>
         public static PreambleResult EarlyPreamble(Archive ar, LR r)
         {
             if (ar.Ver < FirstV4) return new PreambleResult();
@@ -1015,9 +1015,24 @@ namespace OpenSkp
             return new EdgeRec { Db = db, Curve = cs, CurveValue = cv, V1 = s1, V2 = s2 };
         }
 
+        private static void ReadCurveV3Edges(Archive ar, LR r)
+        {
+            // SketchUp 3 CCurve / CArcCurve records begin with two CEdge object
+            // pointers (first and last edge; the last edge is serialized inline).
+            for (int i = 0; i < 2; i++)
+            {
+                var (_, en, _) = ar.ReadObject(r, "CEdge");
+                if (en != null && en != "CEdge")
+                {
+                    throw new LegacyParseError($"curve edge pointer resolved to {en} {r.Ctx()}");
+                }
+            }
+        }
+
         public static object ReadCurve(Archive ar, LR r)
         {
-            Preamble(ar, r);
+            EarlyPreamble(ar, r);
+            if (ar.Ver < FirstV4) ReadCurveV3Edges(ar, r);
             r.U8();
             uint n = r.U32();
             return new CurveRec { N = n };
@@ -1025,7 +1040,8 @@ namespace OpenSkp
 
         public static object ReadArcCurve(Archive ar, LR r)
         {
-            Preamble(ar, r);
+            EarlyPreamble(ar, r);
+            if (ar.Ver < FirstV4) ReadCurveV3Edges(ar, r);
             r.Raw(5);
             // center[3], normal[3], x_axis[3], start_angle, end_angle, y_axis[3]
             var v = r.F64s(14);
@@ -1562,6 +1578,15 @@ namespace OpenSkp
             var db = Drawbase(ar, r);
             var point = r.F64s(3);
             var direction = r.F64s(3);
+            if (ar.Ver < FirstV4)
+            {
+                return new ConstructionLineRec
+                {
+                    Db = db,
+                    Point = (point[0], point[1], point[2]),
+                    Direction = (direction[0], direction[1], direction[2]),
+                };
+            }
             // Signed distance along `direction` from `point` marking where the visible segment
             // starts/ends - ground truth (real SketchUp 2025, SDK/Ruby cross-checked): a bounded
             // segment's start/end exactly equal point/direction scaled by these two parameters
@@ -1661,17 +1686,20 @@ namespace OpenSkp
 
         public static object ReadSkFont(Archive ar, LR r)
         {
-            ar.ReadObject(r, "CAttributeContainer");
-            if (ar.HasPid)
+            if (ar.Ver >= FirstV4)
             {
-                // the mask byte says how many pid bytes follow (SketchUp 2017+ writes two or more here)
-                int mask = r.U8();
-                int n = 0;
-                for (int bit = 0; bit < 8; bit++) if ((mask & (1 << bit)) != 0) n++;
-                r.Raw(n);
+                ar.ReadObject(r, "CAttributeContainer");
+                if (ar.HasPid)
+                {
+                    // the mask byte says how many pid bytes follow (SketchUp 2017+ writes two or more here)
+                    int mask = r.U8();
+                    int n = 0;
+                    for (int bit = 0; bit < 8; bit++) if ((mask & (1 << bit)) != 0) n++;
+                    r.Raw(n);
+                }
             }
             r.Utf16();
-            r.Raw(15);
+            r.Raw(ar.Ver < FirstV4 ? 6 : 15);
             return new FontRec();
         }
 
@@ -2218,6 +2246,12 @@ namespace OpenSkp
         {
             var pre = Preamble(ar, r);
             var db = Drawbase(ar, r);
+            var attrs = pre.Attrs as AttrsRec;
+            if (ar.Ver < FirstV4 && pre.Attrs is MaterialRec && pre.AttrsSlot != null)
+            {
+                db.Mat = pre.AttrsSlot.Value;
+                attrs = null;
+            }
             var (ds, dn, _) = ar.ReadObject(r, "CComponentDefinition");
             if (dn != "CComponentDefinition")
             {
@@ -2239,7 +2273,7 @@ namespace OpenSkp
             byte[] guid = ar.Ver >= 14 ? r.Raw(16) : Array.Empty<byte>();
             string guidHex = guid.Length == 16 ? Geometry.GuidFromWindowsBytes(guid) : LegacyBytes.ToHex(guid);
 
-            return new InstanceRec { Db = db, Def = ds, Xf = xf, Name = name, Guid = guidHex, Attrs = pre.Attrs as AttrsRec };
+            return new InstanceRec { Db = db, Def = ds, Xf = xf, Name = name, Guid = guidHex, Attrs = attrs };
         }
 
         // SketchUp's Dynamic Components extension stores its data in an
@@ -2517,7 +2551,7 @@ namespace OpenSkp
                     throw new LegacyParseError("no CMaterial or CLayer class record found");
                 }
                 matCount = 0;
-                start = layerHdr - (ver >= 17 ? 9 : 8);
+                start = layerHdr - (ver >= 17 ? 9 : ver < LegacyReaders.FirstV4 ? 4 : 8);
             }
 
             List<int> bases = matCount >= 2
