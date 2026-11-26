@@ -7,10 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed — TypeScript, .NET and Dart writers: texture applied size on positioned faces and circles
+### Fixed — TypeScript, .NET and Dart: texture applied size on positioned faces and circles (#696)
 
 - `addFace`/`AddFace` and `addCircle`/`AddCircle` (at the model root and inside component definitions) now solve `frontUv`/`backUv` in SketchUp's normal-derived basis (`|Z x n| < 1e-3` horizontal tolerance, `(-1, 0, 0)` downward X axis) and scale pin coordinates by the material's `(appliedWidth, appliedHeight)`, matching Python, C++ and Rust.
 - `openExisting`/`OpenExisting` (including C++ and Rust) and `toTypeScriptCode`/`ToCSharpCode`/`toDartCode` preserve a textured material's real applied width and height instead of resetting `appliedHeight` to `1.0`, while keeping pinned and default-projected UVs intact.
+- **Changed results:** the scenes of TypeScript, .NET and Dart now project a face's texture in SketchUp's own basis, as Python does since 1.3.0 (a nearly horizontal face counts as horizontal, and a downward face uses the downward X axis). Texture coordinates in their GLB, OBJ and other exports change for such faces and now match Python and SketchUp.
+
 ### Changed — TypeScript: colorized textures are baked into GLB files (#285)
 
 - `toGLB` and `toInstancedGLB` with `{ textures: true }` bake colorized PNG textures out of the box (using the existing `fflate` dependency, shift or tint within 1/255 of SketchUp's own result) with a white material factor, once per colour.
@@ -26,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A face with both a texture placement (`front_uv`/`back_uv`) and attributes lost its attribute dictionaries in SketchUp. The dictionaries are now written before the texture coordinates, the order SketchUp itself uses.
 - Python, C++ and Rust: `add_circle` scales `front_uv`/`back_uv` by the texture size, as `add_face` does, so the same pins place a texture the same way on a circle and on a face.
 - A polyline, arc or circle drawn over edges that already exist no longer makes SketchUp drop the curve: the existing edges stay out of it, and each run of at least two new edges becomes its own curve. A polyline that runs back over itself writes one edge instead of overlapping copies.
+
 ### Changed — C++: colorized textures are baked into GLB files (#285)
 
 - `to_glb` / `export_glb` and `to_instanced_glb` / `export_instanced_glb` with `textures = true` write a colorized texture with SketchUp's colour already applied (shift or tint, within 1/255 of SketchUp's own result) and a white material factor, instead of the plain texture times the colour. A JPEG stays a JPEG (quality 95, 4:4:4 without chroma subsampling), a PNG stays a PNG; each texture is baked once per colour, with no new dependency.
