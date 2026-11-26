@@ -311,6 +311,52 @@ void main() {
         if (f.existsSync()) f.deleteSync();
       }
     });
+
+    test('generated code preserves scaled texture dimensions and pinned UVs', () {
+      final tmpDir = Directory.systemTemp.createTempSync('openskp_codegen_uv_');
+      final tmpOut = '$packageRoot/.tmp_codegen_uv_${DateTime.now().microsecondsSinceEpoch}.skp';
+      try {
+        final pngPath = '${tmpDir.path}/tex.png';
+        File(pngPath).writeAsBytesSync([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3, 4]);
+        final b = create();
+        final frontTex = b.addTextureMaterial('FrontTex', pngPath, appliedHeight: 20.0, appliedWidth: 10.0, filename: 'tex.png');
+        final backTex = b.addTextureMaterial('BackTex', pngPath, appliedHeight: 8.0, appliedWidth: 4.0, filename: 'tex.png');
+        b.addFace(
+          [(50.0, 0.0, 0.0), (50.0, 40.0, 0.0), (0.0, 40.0, 0.0), (0.0, 0.0, 0.0)],
+          material: frontTex,
+          backMaterial: backTex,
+          frontUv: [
+            ((0.0, 0.0, 0.0), (0.0, 0.0)),
+            ((50.0, 0.0, 0.0), (2.5, 0.0)),
+            ((0.0, 40.0, 0.0), (0.0, 1.0)),
+          ],
+          backUv: [
+            ((0.0, 0.0, 0.0), (0.25, 0.5)),
+            ((50.0, 0.0, 0.0), (2.75, 0.5)),
+            ((0.0, 40.0, 0.0), (0.25, 2.5)),
+          ],
+        );
+        final orig = SkpFile.fromBuffer(b.toBytes()).parse();
+        final regenBytes = runGeneratedCode(toDartCode(orig), tmpOut);
+        final regen = SkpFile.fromBuffer(Uint8List.fromList(regenBytes)).parse();
+
+        final fm = regen.materials.firstWhere((m) => m.name == 'FrontTex');
+        final bm = regen.materials.firstWhere((m) => m.name == 'BackTex');
+        expect((fm.texture!.width, fm.texture!.height), (10.0, 20.0));
+        expect((bm.texture!.width, bm.texture!.height), (4.0, 8.0));
+
+        final origFace = orig.root.faces.values.single;
+        final regenFace = regen.root.faces.values.single;
+        for (var i = 0; i < 9; i++) {
+          expect(regenFace.uvTransform![i], closeTo(origFace.uvTransform![i], 1e-3));
+          expect(regenFace.uvTransformBack![i], closeTo(origFace.uvTransformBack![i], 1e-3));
+        }
+      } finally {
+        tmpDir.deleteSync(recursive: true);
+        final f = File(tmpOut);
+        if (f.existsSync()) f.deleteSync();
+      }
+    });
   });
 
   // single_material_v17.skp is deliberately excluded: it declares one

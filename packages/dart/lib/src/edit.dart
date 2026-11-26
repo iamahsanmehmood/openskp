@@ -71,6 +71,7 @@ import 'dart:io';
 import 'dart:math';
 
 import 'create.dart';
+import 'face_groups.dart' show computeFaceUv, faceUvBasis;
 import 'legacy.dart';
 import 'model.dart';
 import 'parser.dart';
@@ -163,18 +164,15 @@ Map<Material, int> _replayMaterials(SkpBuilder builder, SkpModel model, List<Str
       final tmpFile = File('${tmpDir.path}${Platform.pathSeparator}texture$suffix');
       tmpFile.writeAsBytesSync(texData);
       try {
-        // appliedHeight: 1.0 - every textured face is now replayed with
-        // an explicit frontUv/backUv (see _replayUv), whose pins already
-        // bake in the SOURCE's real tile size via computeFaceUv - the
-        // material's own stored applied height must be a no-op divisor
-        // (1.0) or the read-side UV formula divides by it a second time.
-        // This happens to match addTextureMaterial's own default too, but
-        // is kept explicit here since it's a hard requirement of this
-        // call site specifically, not just a safe default.
+        // The source's real applied size travels with the material, and the
+        // replayed pins - in tiles, from computeFaceUv - are scaled by it
+        // inside addFace, so the read-side division by the applied size
+        // lands back on the same UV.
         slot = builder.addTextureMaterial(
           mat.name,
           tmpFile.path,
-          appliedHeight: 1.0,
+          appliedHeight: _tileDimension(tex.height),
+          appliedWidth: _tileDimension(tex.width),
           filename: tex.filename,
         );
       } finally {
@@ -431,12 +429,9 @@ List<Point3>? _nonCollinearTriple(List<Point3> points) {
 }
 
 /// Explicit frontUv/backUv for EVERY textured face, not just already-
-/// positioned ones - _computeFaceUv already computes the correct final UV
-/// for the untouched-projection case too (uvTransform is null) using the
-/// source's real tile size, so this reproduces a default-projected face's
-/// true rendering exactly without needing the material's own applied
-/// width/height to match (which, post-replay, is intentionally 1.0 - see
-/// _replayMaterials).
+/// positioned ones - [computeFaceUv] computes final tile UVs for both
+/// positioned and untouched-projection faces, which `addFace` scales back
+/// by the material's applied width and height.
 List<(Point3, (double, double))>? _replayUv(
   int? materialId,
   List<double>? uvTransform,
@@ -458,12 +453,12 @@ List<(Point3, (double, double))>? _replayUv(
   if (normal == null) return null;
   final tileW = _tileDimension(mat!.texture!.width);
   final tileH = _tileDimension(mat.texture!.height);
-  final (xr, yr) = _faceUvBasis(normal);
+  final (xr, yr) = faceUvBasis(normal);
   final sample = _nonCollinearTriple(points);
   if (sample == null) return null; // every vertex triple collinear - a sliver face
   final pairs = <(Point3, (double, double))>[];
   for (final p in sample) {
-    final uv = _computeFaceUv(p, xr, yr, uvTransform, tileW, tileH);
+    final uv = computeFaceUv(p, xr, yr, uvTransform, tileW, tileH);
     pairs.add((p, uv));
   }
   return pairs;
@@ -522,65 +517,6 @@ void _replayInstance(
   } on SkpWriteError catch (exc) {
     warnings.add("$context: instance '${inst.name}' skipped ($exc)");
   }
-}
-
-// ── UV-basis helpers for replaying an already-stored uvTransform ──────────
-//
-// Distinct from create.dart's own `_faceUvBasis` (which derives a basis
-// from a face's first edge, for ENCODING a caller-chosen positioning): this
-// is the READ-side convention (normal-only, Z-cross based) the parser
-// itself used to interpret a face's stored uvTransform, duplicated here
-// (matching scene.dart's private helpers of the same name/shape, and
-// Python's edit.py, which imports these from openskp.scene directly) so
-// replay recovers the same sample UV coordinates the original file encoded.
-
-List<double> _invert3x3(List<double> m) {
-  final a = m[0], b = m[1], c = m[2];
-  final d = m[3], e = m[4], f = m[5];
-  final g = m[6], h = m[7], i = m[8];
-  final det = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
-  if (det.abs() < 1e-12) {
-    return [1, 0, 0, 0, 1, 0, 0, 0, 1];
-  }
-  final invDet = 1 / det;
-  return [
-    (e * i - f * h) * invDet, (c * h - b * i) * invDet, (b * f - c * e) * invDet,
-    (f * g - d * i) * invDet, (a * i - c * g) * invDet, (c * d - a * f) * invDet,
-    (d * h - e * g) * invDet, (b * g - a * h) * invDet, (a * e - b * d) * invDet,
-  ];
-}
-
-((double, double, double), (double, double, double)) _faceUvBasis((double, double, double) n) {
-  final (nx, ny, nz) = n;
-  final cx = -ny, cy = nx;
-  final clen = sqrt(cx * cx + cy * cy);
-  if (clen < 1e-9) {
-    return ((1.0, 0.0, 0.0), (0.0, nz >= 0 ? 1.0 : -1.0, 0.0));
-  }
-  final xr = (cx / clen, cy / clen, 0.0);
-  final yr = (ny * xr.$3 - nz * xr.$2, nz * xr.$1 - nx * xr.$3, nx * xr.$2 - ny * xr.$1);
-  return (xr, yr);
-}
-
-(double, double) _computeFaceUv(
-  (double, double, double) p,
-  (double, double, double) xr,
-  (double, double, double) yr,
-  List<double>? uvTransform,
-  double tileW,
-  double tileH,
-) {
-  final px = p.$1 * xr.$1 + p.$2 * xr.$2 + p.$3 * xr.$3;
-  final py = p.$1 * yr.$1 + p.$2 * yr.$2 + p.$3 * yr.$3;
-  if (uvTransform == null) {
-    return (px / tileW, py / tileH);
-  }
-  final inv = _invert3x3(uvTransform);
-  final u = px * inv[0] + py * inv[3] + inv[6];
-  final v = px * inv[1] + py * inv[4] + inv[7];
-  var q = px * inv[2] + py * inv[5] + inv[8];
-  if (q.abs() < 1e-12) q = 1.0;
-  return (u / q / tileW, v / q / tileH);
 }
 
 /// Same reconstruction [SceneBuilder] uses internally (see scene.dart) -

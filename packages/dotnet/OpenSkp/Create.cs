@@ -432,26 +432,34 @@ namespace OpenSkp
             return matrix3x3;
         }
 
-        /// <summary>The in-plane 2D basis (U, W) real SketchUp uses to
-        /// parameterize a face's texture mapping, for a face of ANY
-        /// orientation (not just axis-aligned) - ground truth shows it's
-        /// simply the face's own first edge direction (points[1] -
-        /// points[0], normalized) as U, and the plane normal crossed with
-        /// that as W - both unit vectors.</summary>
-        internal static ((double X, double Y, double Z) U, (double X, double Y, double Z) W) FaceUvBasis(
-            IReadOnlyList<(double X, double Y, double Z)> points, (double X, double Y, double Z) normal)
+        /// <summary>Turn (point, (u, v)) pins from tiles into texture-space
+        /// inches so SketchUp's read-side division by (appliedWidth,
+        /// appliedHeight) lands back on (u, v).</summary>
+        internal static IReadOnlyList<UvCorrespondence>? ScalePins(
+            IReadOnlyList<UvCorrespondence>? pins,
+            Dictionary<int, (double Width, double Height)> appliedSizes,
+            int? material)
         {
-            var u = Normalize3((points[1].X - points[0].X, points[1].Y - points[0].Y, points[1].Z - points[0].Z));
-            var w = Normalize3(Cross(normal, u));
-            return (u, w);
+            if (pins == null || !material.HasValue || !appliedSizes.TryGetValue(material.Value, out var size))
+            {
+                return pins;
+            }
+            if (size.Width == 1.0 && size.Height == 1.0)
+            {
+                return pins;
+            }
+            var scaled = new List<UvCorrespondence>(pins.Count);
+            foreach (var p in pins)
+            {
+                scaled.Add(new UvCorrespondence(p.Point, (p.Uv.U * size.Width, p.Uv.V * size.Height)));
+            }
+            return scaled;
         }
 
         /// <summary>An arbitrary orthonormal in-plane basis (U, W) for a
-        /// circle/arc's plane, given only its normal - unlike
-        /// <see cref="FaceUvBasis"/> there's no "first edge" to derive U
-        /// from here, so pick whichever of world +Z/+X is less parallel to
-        /// normal as a seed and Gram-Schmidt it against normal to get U,
-        /// then W = normal x U.</summary>
+        /// circle/arc's plane, given only its normal: pick whichever of
+        /// world +Z/+X is less parallel to normal as a seed and
+        /// Gram-Schmidt it against normal to get U, then W = normal x U.</summary>
         internal static ((double X, double Y, double Z) U, (double X, double Y, double Z) W) CircleBasis((double X, double Y, double Z) normal)
         {
             (double X, double Y, double Z) seed = Math.Abs(normal.Z) < 0.9 ? (0.0, 0.0, 1.0) : (1.0, 0.0, 0.0);
@@ -531,11 +539,10 @@ namespace OpenSkp
         }
 
         internal static double[] UvMatrixForFace(
-            IReadOnlyList<(double X, double Y, double Z)> points,
             IReadOnlyList<((double X, double Y, double Z) Point, (double U, double V) Uv)> pairs,
             (double X, double Y, double Z) normal)
         {
-            return SolveUvMatrix(pairs, FaceUvBasis(points, normal));
+            return SolveUvMatrix(pairs, FaceGroups.FaceUvBasis(normal));
         }
 
         private static double MaxSpan(IReadOnlyList<(double X, double Y, double Z)> points)
@@ -1705,8 +1712,8 @@ namespace OpenSkp
             // many, see Edit.cs) would otherwise be left with orphaned,
             // uncounted edges silently corrupting the rest of the file.
             var (nx, ny, nz, d) = CreateMath.PlaneFromPolygon(points);
-            double[]? frontMatrix = frontUv != null ? CreateMath.UvMatrixForFace(points, ToPairs(frontUv), (nx, ny, nz)) : null;
-            double[]? backMatrix = backUv != null ? CreateMath.UvMatrixForFace(points, ToPairs(backUv), (nx, ny, nz)) : null;
+            double[]? frontMatrix = frontUv != null ? CreateMath.UvMatrixForFace(ToPairs(frontUv), (nx, ny, nz)) : null;
+            double[]? backMatrix = backUv != null ? CreateMath.UvMatrixForFace(ToPairs(backUv), (nx, ny, nz)) : null;
             if (attributeDicts != null)
             {
                 foreach (var ad in attributeDicts) ValidateAttributeEntries(ad.Entries);
@@ -2202,11 +2209,13 @@ namespace OpenSkp
                 throw new SkpWriteException("a face needs at least 3 points");
             }
             var resolvedAttributeDicts = BuildAttributeDicts(attributes, attributeDictName, attributeDicts);
+            var scaledFront = CreateMath.ScalePins(frontUv, Skp.AppliedSizes, material);
+            var scaledBack = CreateMath.ScalePins(backUv, Skp.AppliedSizes, backMaterial);
             _newEntityCount += FaceWriting.WriteFaceOrTriangulate(
                 Skp.DefinitionWriter!, points, _vertexSlots, _edgeRegistry,
                 material ?? 0, layer ?? 0, backMaterial ?? 0,
                 hidden, softEdges, smoothEdges, hiddenEdges,
-                frontUv, backUv, resolvedAttributeDicts, autoTriangulate,
+                scaledFront, scaledBack, resolvedAttributeDicts, autoTriangulate,
                 holes: holes);
         }
 
@@ -2237,11 +2246,13 @@ namespace OpenSkp
             var curveParams = new ArcCurveParams(center, normal, xAxis, 0.0, 2.0 * Math.PI, radius, numSegments);
             var points = CreateMath.CirclePoints(center, radius, numSegments, u, w);
             var resolvedAttributeDicts = BuildAttributeDicts(attributes, attributeDictName, attributeDicts);
+            var scaledFront = CreateMath.ScalePins(frontUv, Skp.AppliedSizes, material);
+            var scaledBack = CreateMath.ScalePins(backUv, Skp.AppliedSizes, backMaterial);
             _newEntityCount += writer.WriteFace(
                 points, _vertexSlots, _edgeRegistry,
                 material ?? 0, layer ?? 0, backMaterial ?? 0,
                 hidden, false, false, false,
-                frontUv, backUv, resolvedAttributeDicts,
+                scaledFront, scaledBack, resolvedAttributeDicts,
                 curveParams: curveParams);
         }
 
@@ -2607,6 +2618,8 @@ namespace OpenSkp
         /// already de-dupe by name through this same dictionary), not
         /// something a caller needs to maintain separately.</summary>
         public Dictionary<string, int> MaterialsByName { get; } = new Dictionary<string, int>();
+        internal readonly Dictionary<int, (double Width, double Height)> AppliedSizes =
+            new Dictionary<int, (double Width, double Height)>();
         private int _materialCount;
 
         // Deferred: layers splice in AFTER materials, so the layer
@@ -2872,6 +2885,7 @@ namespace OpenSkp
             int subtype = CreateMath.DetectImageSubtype(imageBytes);
             int slot = _materialWriter.WriteTexturedMaterial(name, imageBytes, filename ?? imagePath, subtype, appliedHeight, appliedWidth, opacity);
             MaterialsByName[name] = slot;
+            AppliedSizes[slot] = (appliedWidth ?? 1.0, appliedHeight ?? 1.0);
             _materialCount += 1;
             return slot;
         }
@@ -3303,12 +3317,14 @@ namespace OpenSkp
                 throw new SkpWriteException("a face needs at least 3 points");
             }
             var resolvedAttributeDicts = ComponentDefinitionBuilder.BuildAttributeDicts(attributes, attributeDictName, attributeDicts);
+            var scaledFront = CreateMath.ScalePins(frontUv, AppliedSizes, material);
+            var scaledBack = CreateMath.ScalePins(backUv, AppliedSizes, backMaterial);
             EnsureGeometryWriter();
             _newEntityCount += FaceWriting.WriteFaceOrTriangulate(
                 _geometryWriter!, points, _vertexSlots, _edgeRegistry,
                 material ?? 0, layer ?? 0, backMaterial ?? 0,
                 hidden, softEdges, smoothEdges, hiddenEdges,
-                frontUv, backUv, resolvedAttributeDicts, autoTriangulate,
+                scaledFront, scaledBack, resolvedAttributeDicts, autoTriangulate,
                 holes: holes);
             _faceCount += 1;
         }
@@ -3341,6 +3357,8 @@ namespace OpenSkp
             }
             normal = CreateMath.Normalize3(normal);
             var resolvedAttributeDicts = ComponentDefinitionBuilder.BuildAttributeDicts(attributes, attributeDictName, attributeDicts);
+            var scaledFront = CreateMath.ScalePins(frontUv, AppliedSizes, material);
+            var scaledBack = CreateMath.ScalePins(backUv, AppliedSizes, backMaterial);
             EnsureGeometryWriter();
             var (u, w) = CreateMath.CircleBasis(normal);
             var xAxis = (radius * u.X, radius * u.Y, radius * u.Z);
@@ -3350,7 +3368,7 @@ namespace OpenSkp
                 points, _vertexSlots, _edgeRegistry,
                 material ?? 0, layer ?? 0, backMaterial ?? 0,
                 hidden, false, false, false,
-                frontUv, backUv, resolvedAttributeDicts,
+                scaledFront, scaledBack, resolvedAttributeDicts,
                 curveParams: curveParams);
             _faceCount += 1;
         }

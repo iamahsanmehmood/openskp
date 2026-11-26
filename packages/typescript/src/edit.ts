@@ -215,15 +215,13 @@ function replayMaterials(builder: SkpBuilder, model: SkpModel, warnings: string[
   for (const mat of model.materials) {
     let slot: number;
     if (mat.texture !== null && mat.texture.data !== null) {
-      // appliedHeight: 1.0 - every textured face is now replayed with an
-      // explicit frontUv/backUv (see replayUv), whose pins already bake
-      // in the SOURCE's real tile size via computeFaceUv - the
-      // material's own stored applied height must be a no-op divisor
-      // (1.0) or the read-side UV formula divides by it a second time.
-      // This happens to match addTextureMaterial's own default too, but
-      // is kept explicit here since it's a hard requirement of this call
-      // site specifically, not just a safe default.
-      slot = builder.addTextureMaterial(mat.name, mat.texture.data, mat.texture.filename, 1.0);
+      // The source's real applied size travels with the material, and the
+      // replayed pins - in tiles, from computeFaceUv - are scaled by it
+      // inside addFace, so the read-side division by the applied size lands
+      // back on the same UV.
+      const appH = mat.texture.height || 1.0;
+      const appW = mat.texture.width || 1.0;
+      slot = builder.addTextureMaterial(mat.name, mat.texture.data, mat.texture.filename, appH, appW);
       if (mat.colorized) {
         warnings.push(`material ${JSON.stringify(mat.name)}: colorized tint not reproduced (base texture only)`);
       }
@@ -480,12 +478,9 @@ function replayUv(
   side: 'front' | 'back'
 ): UvPair[] | undefined {
   // Explicit frontUv/backUv for EVERY textured face, not just
-  // already-positioned ones - computeFaceUv already computes the correct
-  // final UV for the untouched-projection case too (uvTransform === null)
-  // using the source's real tile size, so this reproduces a
-  // default-projected face's true rendering exactly without needing the
-  // material's own applied width/height to match (which, post-replay, is
-  // intentionally 1.0 - see replayMaterials).
+  // already-positioned ones - computeFaceUv computes final tile UVs for
+  // both positioned and untouched-projection faces, which addFace scales
+  // back by the material's applied width and height.
   if (materialId === null) return undefined;
   const mat = model.materialsById.get(materialId);
   if (!mat || !mat.texture) return undefined; // solid color - no UV to replay

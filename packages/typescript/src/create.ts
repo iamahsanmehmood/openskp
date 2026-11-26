@@ -53,6 +53,7 @@ import {
   SCAFFOLD_CLASS_SLOT,
 } from './scaffold';
 import { nodeFs } from './node-builtins';
+import { faceUvBasis } from './model';
 
 // This package has no hard dependency on @types/node (it targets the
 // browser too), so - like index.ts's own SkpFile.open - Node-only globals
@@ -325,14 +326,17 @@ function resolveMatrix3x3(matrix3x3?: Matrix3x3, rotation?: Rotation): Matrix3x3
   return matrix3x3;
 }
 
-/** The in-plane 2D basis (U, W) real SketchUp uses to parameterize a
- * face's texture mapping: the face's own first edge direction
- * (points[1] - points[0], normalized) as U, and the plane normal crossed
- * with that as W. */
-function faceUvBasis(points: readonly Point3[], normal: Point3): [Point3, Point3] {
-  const u = normalize3([points[1][0] - points[0][0], points[1][1] - points[0][1], points[1][2] - points[0][2]]);
-  const w = normalize3(cross(normal, u));
-  return [u, w];
+/** Turn `(point, (u, v))` pins from tiles into texture-space inches so
+ * SketchUp's read-side division by `(appliedWidth, appliedHeight)` lands
+ * back on `(u, v)`. */
+function scalePins(
+  pins: readonly UvPair[] | undefined,
+  size: readonly [number, number] | undefined
+): readonly UvPair[] | undefined {
+  if (pins === undefined || size === undefined) return pins;
+  const [w, h] = size;
+  if (w === 1.0 && h === 1.0) return pins;
+  return pins.map(([pt, [u, v]]): UvPair => [pt, [u * w, v * h]]);
 }
 
 /** An arbitrary orthonormal in-plane basis (U, W) for a circle/arc's
@@ -395,8 +399,9 @@ function solveUvMatrix(pairs: readonly UvPair[], basis: [Point3, Point3]): numbe
   return [a0, b0, 0.0, c0, d0, 0.0, e0, f0, 1.0];
 }
 
-function uvMatrixForFace(points: readonly Point3[], pairs: readonly UvPair[], normal: Point3): number[] {
-  return solveUvMatrix(pairs, faceUvBasis(points, normal));
+function uvMatrixForFace(pairs: readonly UvPair[], normal: Point3): number[] {
+  const { xr, yr } = faceUvBasis(normal);
+  return solveUvMatrix(pairs, [xr, yr]);
 }
 
 // ---------------------------------------------------------------------
@@ -1549,8 +1554,8 @@ class ArchiveWriter {
     // this writer's own buffer AND those caller-owned, shared-across-calls
     // maps as it goes, with no rollback if something later here throws.
     const [nx, ny, nz, d] = planeFromPolygon(points);
-    const frontMatrix = frontUv !== undefined ? uvMatrixForFace(points, frontUv, [nx, ny, nz]) : undefined;
-    const backMatrix = backUv !== undefined ? uvMatrixForFace(points, backUv, [nx, ny, nz]) : undefined;
+    const frontMatrix = frontUv !== undefined ? uvMatrixForFace(frontUv, [nx, ny, nz]) : undefined;
+    const backMatrix = backUv !== undefined ? uvMatrixForFace(backUv, [nx, ny, nz]) : undefined;
     for (const [, entries] of attributeDicts) this.validateAttributeEntries(entries);
     const span = Math.max(
       ...[0, 1, 2].map((i) => Math.max(...points.map((p) => p[i])) - Math.min(...points.map((p) => p[i])))
@@ -2160,12 +2165,14 @@ export class ComponentDefinitionBuilder {
     if (pts.length < 3) throw new SkpWriteError('a face needs at least 3 points');
     const holes = (options.holes ?? []).map((h) => h.map(toPoint3));
     const attributeDicts = attributeDictsFrom(options.attributes, options.attributeDictName ?? 'attributes', options.attributeDicts);
+    const frontUv = scalePins(options.frontUv, options.material !== undefined ? this._skp._appliedSizes.get(options.material) : undefined);
+    const backUv = scalePins(options.backUv, options.backMaterial !== undefined ? this._skp._appliedSizes.get(options.backMaterial) : undefined);
     this.newEntityCount += writeFaceOrTriangulate({
       writer: this._skp._definitionWriter(),
       points: pts, vertexSlots: this.vertexSlots, edgeRegistry: this.edgeRegistry,
       material: options.material ?? 0, layer: options.layer ?? 0, backMaterial: options.backMaterial ?? 0,
       hidden: options.hidden ?? false, softEdges: options.softEdges ?? false, smoothEdges: options.smoothEdges ?? false,
-      hiddenEdges: options.hiddenEdges ?? false, frontUv: options.frontUv, backUv: options.backUv,
+      hiddenEdges: options.hiddenEdges ?? false, frontUv, backUv,
       attributeDicts, autoTriangulate: options.autoTriangulate ?? false, holes,
     });
   }
@@ -2186,11 +2193,13 @@ export class ComponentDefinitionBuilder {
     const curveParams: CurveParams = { center: c, normal: n, xaxis, startAngle: 0, endAngle: 2 * Math.PI, radius, numSegments };
     const points = circlePoints(c, radius, numSegments, u, w);
     const attributeDicts = attributeDictsFrom(options.attributes, options.attributeDictName ?? 'attributes', options.attributeDicts);
+    const frontUv = scalePins(options.frontUv, options.material !== undefined ? this._skp._appliedSizes.get(options.material) : undefined);
+    const backUv = scalePins(options.backUv, options.backMaterial !== undefined ? this._skp._appliedSizes.get(options.backMaterial) : undefined);
     this.newEntityCount += this._skp._definitionWriter().writeFace(
       points, this.vertexSlots, this.edgeRegistry,
       options.material ?? 0, options.layer ?? 0, options.backMaterial ?? 0,
       options.hidden ?? false, false, false, false,
-      options.frontUv, options.backUv, attributeDicts, curveParams
+      frontUv, backUv, attributeDicts, curveParams
     );
   }
 
@@ -2375,6 +2384,8 @@ export class SkpBuilder {
   /** Every material registered so far, by name - populated by
    * addMaterial/addTextureMaterial as a side effect. */
   readonly materialsByName = new Map<string, number>();
+  /** @internal */
+  readonly _appliedSizes = new Map<number, [number, number]>();
   private materialCount = 0;
 
   private layerWriterBase = LAYER_WRITER_BASE;
@@ -2512,6 +2523,7 @@ export class SkpBuilder {
       name, imageBytes, texturePath, subtype, appliedHeight, appliedWidth, opacity
     );
     this.materialsByName.set(name, slot);
+    this._appliedSizes.set(slot, [appliedWidth ?? 1.0, appliedHeight ?? 1.0]);
     this.materialCount += 1;
     return slot;
   }
@@ -2813,13 +2825,15 @@ export class SkpBuilder {
     if (pts.length < 3) throw new SkpWriteError('a face needs at least 3 points');
     const holes = (options.holes ?? []).map((h) => h.map(toPoint3));
     const attributeDicts = attributeDictsFrom(options.attributes, options.attributeDictName ?? 'attributes', options.attributeDicts);
+    const frontUv = scalePins(options.frontUv, options.material !== undefined ? this._appliedSizes.get(options.material) : undefined);
+    const backUv = scalePins(options.backUv, options.backMaterial !== undefined ? this._appliedSizes.get(options.backMaterial) : undefined);
     this.ensureGeometryWriter();
     this.newEntityCount += writeFaceOrTriangulate({
       writer: this.geometryWriter as ArchiveWriter,
       points: pts, vertexSlots: this.vertexSlots, edgeRegistry: this.edgeRegistry,
       material: options.material ?? 0, layer: options.layer ?? 0, backMaterial: options.backMaterial ?? 0,
       hidden: options.hidden ?? false, softEdges: options.softEdges ?? false, smoothEdges: options.smoothEdges ?? false,
-      hiddenEdges: options.hiddenEdges ?? false, frontUv: options.frontUv, backUv: options.backUv,
+      hiddenEdges: options.hiddenEdges ?? false, frontUv, backUv,
       attributeDicts, autoTriangulate: options.autoTriangulate ?? false, holes,
     });
     this.faceCount += 1;
@@ -2838,6 +2852,8 @@ export class SkpBuilder {
     const c = toPoint3(center);
     const n = normalize3(toPoint3(normal));
     const attributeDicts = attributeDictsFrom(options.attributes, options.attributeDictName ?? 'attributes', options.attributeDicts);
+    const frontUv = scalePins(options.frontUv, options.material !== undefined ? this._appliedSizes.get(options.material) : undefined);
+    const backUv = scalePins(options.backUv, options.backMaterial !== undefined ? this._appliedSizes.get(options.backMaterial) : undefined);
     this.ensureGeometryWriter();
     const [u, w] = circleBasis(n);
     const xaxis: Point3 = [radius * u[0], radius * u[1], radius * u[2]];
@@ -2847,7 +2863,7 @@ export class SkpBuilder {
       points, this.vertexSlots, this.edgeRegistry,
       options.material ?? 0, options.layer ?? 0, options.backMaterial ?? 0,
       options.hidden ?? false, false, false, false,
-      options.frontUv, options.backUv, attributeDicts, curveParams
+      frontUv, backUv, attributeDicts, curveParams
     );
     this.faceCount += 1;
   }
