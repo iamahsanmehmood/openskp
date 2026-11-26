@@ -745,11 +745,11 @@ class ArchiveWriter {
     this.pushU16(0x8000 | ATTR_CONTAINER_SLOT);
     this.alloc();
     this.pushZeros(3);
-    if (frontMatrix !== undefined || backMatrix !== undefined) {
-      this.writeFaceTextureCoords(frontMatrix, backMatrix);
-    }
     for (const [dictName, entries] of attributeDicts) {
       this.writeAttributeDict(dictName, entries);
+    }
+    if (frontMatrix !== undefined || backMatrix !== undefined) {
+      this.writeFaceTextureCoords(frontMatrix, backMatrix);
     }
     this.writeNull(); // children-list terminator
     const realPid = pid === undefined ? this.allocPid() : pid;
@@ -1371,17 +1371,90 @@ class ArchiveWriter {
   ): [number[], number[], number] {
     const n = points.length;
     const pairCount = closed ? n : n - 1;
-    const pointSlots: Array<number | undefined> = points.map((p) => vertexSlots.get(vertexKey(p)));
+    type SegCurve = { kind: 'arc'; params: CurveParams; runId: number } | { kind: 'poly'; numEdges: number; runId: number };
+    const curveForSeg: Array<SegCurve | undefined> = new Array(pairCount).fill(undefined);
+    if (curveParams !== undefined || polylineNumEdges !== undefined) {
+      const tempSlots = new Map<string, number>();
+      let nextTemp = -1;
+      const simEdges = new Set<string>(edgeRegistry.keys());
+      const segIsNew = new Array<boolean>(pairCount).fill(false);
+      for (let i = 0; i < pairCount; i++) {
+        const k1 = vertexKey(points[i]);
+        const k2 = vertexKey(points[(i + 1) % n]);
+        if (k1 === k2) continue;
+        let s1 = vertexSlots.get(k1);
+        if (s1 === undefined) {
+          s1 = tempSlots.get(k1);
+          if (s1 === undefined) {
+            s1 = nextTemp--;
+            tempSlots.set(k1, s1);
+          }
+        }
+        let s2 = vertexSlots.get(k2);
+        if (s2 === undefined) {
+          s2 = tempSlots.get(k2);
+          if (s2 === undefined) {
+            s2 = nextTemp--;
+            tempSlots.set(k2, s2);
+          }
+        }
+        const ek = edgeKey(s1, s2);
+        if (!simEdges.has(ek)) {
+          segIsNew[i] = true;
+          simEdges.add(ek);
+        }
+      }
+      let runs: number[][] = [];
+      let curRun: number[] = [];
+      for (let i = 0; i < pairCount; i++) {
+        if (segIsNew[i]) {
+          curRun.push(i);
+        } else if (curRun.length > 0) {
+          runs.push(curRun);
+          curRun = [];
+        }
+      }
+      if (curRun.length > 0) runs.push(curRun);
+      if (closed && runs.length >= 2 && runs[0][0] === 0 && runs[runs.length - 1][runs[runs.length - 1].length - 1] === pairCount - 1) {
+        runs = [[...runs[runs.length - 1], ...runs[0]], ...runs.slice(1, -1)];
+      }
+      for (let runId = 0; runId < runs.length; runId++) {
+        const run = runs[runId];
+        const runLen = run.length;
+        if (runLen < 2) continue;
+        if (curveParams !== undefined) {
+          let subParams = curveParams;
+          if (runLen !== curveParams.numSegments) {
+            const s0 = run[0];
+            const sweep = curveParams.endAngle - curveParams.startAngle;
+            let a0 = curveParams.startAngle + sweep * (s0 / curveParams.numSegments);
+            let a1 = curveParams.startAngle + sweep * ((s0 + runLen) / curveParams.numSegments);
+            if (closed && s0 + runLen > curveParams.numSegments) {
+              a0 -= 2 * Math.PI;
+              a1 -= 2 * Math.PI;
+            }
+            subParams = { ...curveParams, startAngle: a0, endAngle: a1, numSegments: runLen };
+          }
+          for (const segIdx of run) curveForSeg[segIdx] = { kind: 'arc', params: subParams, runId };
+        } else {
+          for (const segIdx of run) curveForSeg[segIdx] = { kind: 'poly', numEdges: runLen, runId };
+        }
+      }
+    }
+
     const edgeSlots: number[] = [];
     const edgeSenses: number[] = [];
     let newEntities = 0;
-    let curveSlot: number | undefined;
+    const runCurveSlots = new Map<number, number>();
 
     for (let i = 0; i < pairCount; i++) {
-      const v1Idx = i;
-      const v2Idx = (i + 1) % n;
-      const v1Known = pointSlots[v1Idx];
-      const v2Known = pointSlots[v2Idx];
+      const p1 = points[i];
+      const p2 = points[(i + 1) % n];
+      const k1 = vertexKey(p1);
+      const k2 = vertexKey(p2);
+      if (k1 === k2) continue;
+      const v1Known = vertexSlots.get(k1);
+      const v2Known = vertexSlots.get(k2);
       const key = v1Known !== undefined && v2Known !== undefined ? edgeKey(v1Known, v2Known) : undefined;
       if (key !== undefined && edgeRegistry.has(key)) {
         const [edgeSlot, fwdV1] = edgeRegistry.get(key)!;
@@ -1393,31 +1466,34 @@ class ArchiveWriter {
       const edgeSlot = this.newOfKnownClass('CEdge', 2);
       this.preamble();
       this.drawbase(0, 0, hiddenEdges, softEdges, smoothEdges);
-      for (const idx of [v1Idx, v2Idx]) {
-        if (pointSlots[idx] === undefined) {
-          const s = this.writeVertex(points[idx]);
-          pointSlots[idx] = s;
-          vertexSlots.set(vertexKey(points[idx]), s);
+      for (const [pt, vk] of [[p1, k1], [p2, k2]] as const) {
+        const known = vertexSlots.get(vk);
+        if (known === undefined) {
+          const s = this.writeVertex(pt);
+          vertexSlots.set(vk, s);
         } else {
-          this.writeBackref(pointSlots[idx] as number);
+          this.writeBackref(known);
         }
       }
-      if (curveSlot !== undefined) {
-        this.writeBackref(curveSlot);
-      } else if (curveParams !== undefined) {
-        curveSlot = this.writeArcCurve(curveParams);
-      } else if (polylineNumEdges !== undefined) {
-        curveSlot = this.writeCurve(polylineNumEdges);
-      } else {
+      const spec = curveForSeg[i];
+      if (spec === undefined) {
         this.writeNull(); // curve = None
+      } else {
+        const existingCurveSlot = runCurveSlots.get(spec.runId);
+        if (existingCurveSlot !== undefined) {
+          this.writeBackref(existingCurveSlot);
+        } else if (spec.kind === 'arc') {
+          runCurveSlots.set(spec.runId, this.writeArcCurve(spec.params));
+        } else {
+          runCurveSlots.set(spec.runId, this.writeCurve(spec.numEdges));
+        }
       }
       edgeSlots.push(edgeSlot);
       edgeSenses.push(0);
       newEntities += 1;
-      edgeRegistry.set(edgeKey(pointSlots[v1Idx] as number, pointSlots[v2Idx] as number), [
-        edgeSlot,
-        pointSlots[v1Idx] as number,
-      ]);
+      const s1Final = vertexSlots.get(k1) as number;
+      const s2Final = vertexSlots.get(k2) as number;
+      edgeRegistry.set(edgeKey(s1Final, s2Final), [edgeSlot, s1Final]);
     }
 
     return [edgeSlots, edgeSenses, newEntities];

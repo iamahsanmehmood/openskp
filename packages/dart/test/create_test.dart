@@ -1691,4 +1691,98 @@ void main() {
       }
     });
   });
+
+  group('Face UV + attributes and curves over existing edges', () {
+    int indexOfBytes(Uint8List haystack, List<int> needle) {
+      for (var i = 0; i <= haystack.length - needle.length; i++) {
+        var ok = true;
+        for (var j = 0; j < needle.length; j++) {
+          if (haystack[i + j] != needle[j]) {
+            ok = false;
+            break;
+          }
+        }
+        if (ok) return i;
+      }
+      return -1;
+    }
+
+    test('writes CAttributeNamed dictionaries before CFaceTextureCoords on faces with both', () {
+      final dir = Directory.systemTemp.createTempSync('openskp_dart_uv_attr_');
+      try {
+        final pngPath = '${dir.path}/tex.png';
+        File(pngPath).writeAsBytesSync(const [
+          0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+          0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+          0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+          0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53,
+          0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41,
+          0x54, 0x08, 0xD7, 0x63, 0xF8, 0xCF, 0xC0, 0x00,
+          0x00, 0x03, 0x01, 0x01, 0x00, 0x18, 0xDD, 0x8D,
+          0xB0, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E,
+          0x44, 0xAE, 0x42, 0x60, 0x82,
+        ]);
+        final builder = create();
+        final tex = builder.addTextureMaterial('Brick', pngPath, filename: 'tex.png');
+        builder.addFace(
+          square,
+          material: tex,
+          frontUv: [
+            ((0.0, 0.0, 0.0), (0.0, 0.0)),
+            ((50.0, 0.0, 0.0), (1.0, 0.0)),
+            ((0.0, 50.0, 0.0), (0.0, 1.0)),
+          ],
+          attributeDicts: [
+            ('attributes', {'d': 1}),
+            ('second', {'k': 'v'}),
+          ],
+        );
+        final raw = builder.toBytes();
+        final secondUtf16 = <int>[for (final cu in 'second'.codeUnits) ...[cu, 0]];
+        final ftcAscii = 'CFaceTextureCoords'.codeUnits;
+        final dictPos = indexOfBytes(raw, secondUtf16);
+        final ftcPos = indexOfBytes(raw, ftcAscii);
+        expect(dictPos, greaterThanOrEqualTo(0));
+        expect(ftcPos, greaterThan(dictPos));
+        final model = SkpFile.fromBuffer(raw).parse();
+        expect(model.root.faces.values.single.uvTransform, isNotNull);
+      } finally {
+        dir.deleteSync(recursive: true);
+      }
+    });
+
+    test('leaves existing and self-retracing edges out of new polyline, arc, and circle curves', () {
+      const sq = [(0.0, 0.0, 0.0), (10.0, 0.0, 0.0), (10.0, 10.0, 0.0), (0.0, 10.0, 0.0)];
+
+      final b1 = create();
+      b1.addFace(sq);
+      b1.addPolyline(sq, closed: true);
+      final raw1 = b1.toBytes();
+      expect(indexOfBytes(raw1, 'CCurve'.codeUnits), -1);
+      expect(SkpFile.fromBuffer(raw1).parse().root.edges.length, 4);
+
+      final b2 = create();
+      b2.addFace(sq);
+      b2.addPolyline([
+        (20.0, -10.0, 0.0), (20.0, 0.0, 0.0), (10.0, 0.0, 0.0),
+        (10.0, 10.0, 0.0), (20.0, 10.0, 0.0), (20.0, 20.0, 0.0),
+      ]);
+      b2.addPolyline([(0.0, 30.0, 0.0), (10.0, 30.0, 0.0), (0.0, 30.0, 0.0), (10.0, 30.0, 0.0)]);
+      final m2 = SkpFile.fromBuffer(b2.toBytes()).parse();
+      expect(m2.root.edges.length, 9);
+      final curveIds = m2.root.edges.values
+          .map((e) => e.curveId)
+          .whereType<int>()
+          .toList();
+      expect(curveIds.length, 4);
+      expect(curveIds.toSet().length, 2);
+
+      final b3 = create();
+      b3.addCircle((0.0, 0.0, 0.0), (0.0, 0.0, 1.0), 10.0, numSegments: 8);
+      b3.addCircle((0.0, 0.0, 0.0), (0.0, 0.0, 1.0), 10.0, numSegments: 8);
+      final m3 = SkpFile.fromBuffer(b3.toBytes()).parse();
+      expect(m3.root.edges.length, 8);
+      expect(m3.root.arcs.length, 1);
+    });
+  });
 }

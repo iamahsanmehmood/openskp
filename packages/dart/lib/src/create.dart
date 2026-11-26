@@ -966,11 +966,11 @@ class _ArchiveWriter {
     buf.addAll(_u16(0x8000 | _attrContainerSlot));
     _alloc();
     buf.addAll([0, 0, 0]);
-    if (frontMatrix != null || backMatrix != null) {
-      writeFaceTextureCoords(frontMatrix, backMatrix);
-    }
     for (final (dictName, entries) in attributeDicts) {
       writeAttributeDict(dictName, entries);
+    }
+    if (frontMatrix != null || backMatrix != null) {
+      writeFaceTextureCoords(frontMatrix, backMatrix);
     }
     _null(); // children-list terminator
     final p = pid ?? _allocPid();
@@ -1756,17 +1756,79 @@ class _ArchiveWriter {
   }) {
     final n = points.length;
     final pairCount = closed ? n : n - 1;
-    final pointSlots = List<int?>.generate(n, (i) => vertexSlots[points[i]]);
+    final curveForSeg = List<(CurveParams?, int, int)?>.filled(pairCount, null);
+    if (curveParams != null || polylineNumEdges != null) {
+      final tempSlots = <Point3, int>{};
+      var nextTemp = -1;
+      final simEdges = <(int, int)>{...edgeRegistry.keys};
+      final segIsNew = List<bool>.filled(pairCount, false);
+      for (var i = 0; i < pairCount; i++) {
+        final p1 = points[i];
+        final p2 = points[(i + 1) % n];
+        if (p1 == p2) continue;
+        final s1 = vertexSlots[p1] ?? tempSlots.putIfAbsent(p1, () => nextTemp--);
+        final s2 = vertexSlots[p2] ?? tempSlots.putIfAbsent(p2, () => nextTemp--);
+        if (simEdges.add(_edgeKey(s1, s2))) {
+          segIsNew[i] = true;
+        }
+      }
+      var runs = <List<int>>[];
+      var curRun = <int>[];
+      for (var i = 0; i < pairCount; i++) {
+        if (segIsNew[i]) {
+          curRun.add(i);
+        } else if (curRun.isNotEmpty) {
+          runs.add(curRun);
+          curRun = <int>[];
+        }
+      }
+      if (curRun.isNotEmpty) runs.add(curRun);
+      if (closed && runs.length >= 2 && runs.first.first == 0 && runs.last.last == pairCount - 1) {
+        runs = [
+          [...runs.last, ...runs.first],
+          ...runs.sublist(1, runs.length - 1),
+        ];
+      }
+      for (var runId = 0; runId < runs.length; runId++) {
+        final run = runs[runId];
+        final runLen = run.length;
+        if (runLen < 2) continue;
+        if (curveParams != null) {
+          final (center, normal, xaxis, startAngle, endAngle, radius, numSegments) = curveParams;
+          CurveParams subParams = curveParams;
+          if (runLen != numSegments) {
+            final s0 = run[0];
+            final sweep = endAngle - startAngle;
+            var a0 = startAngle + sweep * (s0 / numSegments);
+            var a1 = startAngle + sweep * ((s0 + runLen) / numSegments);
+            if (closed && s0 + runLen > numSegments) {
+              a0 -= 2.0 * pi;
+              a1 -= 2.0 * pi;
+            }
+            subParams = (center, normal, xaxis, a0, a1, radius, runLen);
+          }
+          for (final segIdx in run) {
+            curveForSeg[segIdx] = (subParams, 0, runId);
+          }
+        } else {
+          for (final segIdx in run) {
+            curveForSeg[segIdx] = (null, runLen, runId);
+          }
+        }
+      }
+    }
+
     final edgeSlots = <int>[];
     final edgeSenses = <int>[];
     var newEntities = 0;
-    int? curveSlot;
+    final runCurveSlots = <int, int>{};
 
     for (var i = 0; i < pairCount; i++) {
-      final v1Idx = i;
-      final v2Idx = (i + 1) % n;
-      final v1Known = pointSlots[v1Idx];
-      final v2Known = pointSlots[v2Idx];
+      final p1 = points[i];
+      final p2 = points[(i + 1) % n];
+      if (p1 == p2) continue;
+      final v1Known = vertexSlots[p1];
+      final v2Known = vertexSlots[p2];
       final key = (v1Known != null && v2Known != null) ? _edgeKey(v1Known, v2Known) : null;
       if (key != null && edgeRegistry.containsKey(key)) {
         final (edgeSlot, fwdV1) = edgeRegistry[key]!;
@@ -1778,29 +1840,35 @@ class _ArchiveWriter {
       final edgeSlot = _newOfKnownClass('CEdge', schema: 2);
       _preamble();
       _drawbase(hidden: hiddenEdges, soft: softEdges, smooth: smoothEdges);
-      for (final idx in [v1Idx, v2Idx]) {
-        if (pointSlots[idx] == null) {
-          final s = _writeVertex(points[idx]);
-          pointSlots[idx] = s;
-          vertexSlots[points[idx]] = s;
+      for (final pt in [p1, p2]) {
+        final known = vertexSlots[pt];
+        if (known == null) {
+          vertexSlots[pt] = _writeVertex(pt);
         } else {
-          _backref(pointSlots[idx]!);
+          _backref(known);
         }
       }
-      if (curveSlot != null) {
-        _backref(curveSlot);
-      } else if (curveParams != null) {
-        final (center, normal, xaxis, startAngle, endAngle, radius, numSegments) = curveParams;
-        curveSlot = writeArcCurve(center, normal, xaxis, startAngle, endAngle, radius, numSegments);
-      } else if (polylineNumEdges != null) {
-        curveSlot = writeCurve(polylineNumEdges);
-      } else {
+      final spec = curveForSeg[i];
+      if (spec == null) {
         _null(); // curve = None
+      } else {
+        final (arcSpec, polyEdges, runId) = spec;
+        final existingCurveSlot = runCurveSlots[runId];
+        if (existingCurveSlot != null) {
+          _backref(existingCurveSlot);
+        } else if (arcSpec != null) {
+          final (center, normal, xaxis, startAngle, endAngle, radius, numSegments) = arcSpec;
+          runCurveSlots[runId] = writeArcCurve(center, normal, xaxis, startAngle, endAngle, radius, numSegments);
+        } else {
+          runCurveSlots[runId] = writeCurve(polyEdges);
+        }
       }
       edgeSlots.add(edgeSlot);
       edgeSenses.add(0);
       newEntities += 1;
-      edgeRegistry[_edgeKey(pointSlots[v1Idx]!, pointSlots[v2Idx]!)] = (edgeSlot, pointSlots[v1Idx]!);
+      final s1Final = vertexSlots[p1]!;
+      final s2Final = vertexSlots[p2]!;
+      edgeRegistry[_edgeKey(s1Final, s2Final)] = (edgeSlot, s1Final);
     }
 
     return (edgeSlots, edgeSenses, newEntities);
