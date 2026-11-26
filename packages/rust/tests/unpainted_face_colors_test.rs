@@ -645,3 +645,329 @@ fn glb_exports_show_both_sides() {
     assert_eq!(glb_materials(&inst_style_glb), expected_style);
     assert_eq!(glb_materials(&inst_tag_glb), vec![(layer_rgb, true)]);
 }
+
+#[test]
+fn different_materials_with_same_colour_stay_separate() {
+    const PNG_2X2: &[u8] = &[
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x02, 0x08, 0x02, 0x00, 0x00, 0x00, 0xfd,
+        0xd4, 0x9a, 0x73, 0x00, 0x00, 0x00, 0x16, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0xb8,
+        0x63, 0xa3, 0xa1, 0x51, 0x71, 0x87, 0xc1, 0x66, 0x4b, 0xc0, 0x87, 0x13, 0x1a, 0x00, 0x27,
+        0x1e, 0x05, 0xdd, 0x1c, 0x14, 0xe9, 0x23, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44,
+        0xae, 0x42, 0x60, 0x82,
+    ];
+
+    let tmp_dir = std::env::temp_dir();
+    let pid = std::process::id();
+    let png_path = tmp_dir.join(format!("openskp_697_tex_{pid}.png"));
+    let skp_path = tmp_dir.join(format!("openskp_697_same_color_diff_mat_{pid}.skp"));
+
+    struct TempGuard(std::path::PathBuf, std::path::PathBuf);
+    impl Drop for TempGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+            let _ = std::fs::remove_file(&self.1);
+        }
+    }
+    let _guard = TempGuard(png_path.clone(), skp_path.clone());
+    std::fs::write(&png_path, PNG_2X2).unwrap();
+
+    let mut b = create();
+    let tex_front = b
+        .add_texture_material("TexFront", &png_path, Some(10.0), Some(10.0), None)
+        .unwrap();
+    let plain_back = b
+        .add_material("PlainBack", [255u8, 255, 255], None)
+        .unwrap();
+    let plain_blue = b.add_material("PlainBlue", [40u8, 90, 200], None).unwrap();
+    let tag_white = b
+        .add_layer(
+            "TagWhite",
+            &LayerOptions {
+                color: Some([255, 255, 255, 255]),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let tag_green = b
+        .add_layer(
+            "TagGreen",
+            &LayerOptions {
+                color: Some([50, 170, 80, 255]),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    let mut comp_b = b
+        .add_component_definition("PaintedComp", &DefinitionOptions::default())
+        .unwrap();
+    comp_b
+        .add_face(&quad_at_z(40.0), &FaceOptions::default())
+        .unwrap();
+    let comp = comp_b.close().unwrap();
+
+    b.add_face(
+        &quad_at_z(0.0),
+        &FaceOptions {
+            material: Some(tex_front),
+            back_material: Some(plain_back),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    b.add_face(
+        &quad_at_z(10.0),
+        &FaceOptions {
+            material: Some(tex_front),
+            layer: Some(tag_white),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    b.add_face(
+        &quad_at_z(20.0),
+        &FaceOptions {
+            material: Some(tex_front),
+            back_material: Some(tex_front),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    b.add_face(
+        &quad_at_z(30.0),
+        &FaceOptions {
+            material: Some(plain_blue),
+            back_material: Some(plain_blue),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    b.add_instance(
+        comp,
+        &InstanceOptions {
+            material: Some(tex_front),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    b.add_face(
+        &quad_at_z(50.0),
+        &FaceOptions {
+            layer: Some(tag_green),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    b.save(&skp_path).unwrap();
+    let skp = SkpFile::open(&skp_path).unwrap();
+    let style_opts = ParseOptions::default();
+    let tag_opts = ParseOptions::new().with_unpainted_faces("tag");
+    let model = skp.parse(&style_opts).unwrap();
+    let white: Color3 = [255, 255, 255];
+    let blue: Color3 = [40, 90, 200];
+    let green: Color3 = [50, 170, 80];
+
+    type TriSide = (Color3, bool, bool, bool, bool);
+
+    #[allow(clippy::too_many_arguments)]
+    fn collect_prim(
+        mats: &[GltfMaterial],
+        pos: &[f32],
+        idx: &[u32],
+        back_tris: &[u32],
+        mat_idx: usize,
+        unp_back: bool,
+        by_z: &mut BTreeMap<i32, Vec<TriSide>>,
+        c_by_z: &mut BTreeMap<(i32, bool), Vec<Tri>>,
+    ) {
+        let mat = &mats[mat_idx];
+        let has_tex = mat.pbr_metallic_roughness.base_color_texture.is_some();
+        let rgb = rgb_of(mats, mat_idx);
+        let back_set: BTreeSet<u32> = back_tris.iter().copied().collect();
+        let tris = corners(pos, idx);
+        for (t, tri) in tris.into_iter().enumerate() {
+            let z = (f64::from(pos[idx[3 * t] as usize * 3 + 1]) / 0.0254).round() as i32;
+            let is_back = back_set.contains(&(t as u32));
+            by_z.entry(z)
+                .or_default()
+                .push((rgb, mat.double_sided, has_tex, is_back, unp_back));
+            c_by_z.entry((z, is_back)).or_default().push(tri);
+        }
+    }
+
+    fn sorted_vec(mut v: Vec<TriSide>) -> Vec<TriSide> {
+        v.sort();
+        v
+    }
+
+    let check_style = |by_z: &BTreeMap<i32, Vec<TriSide>>,
+                       c_by_z: &BTreeMap<(i32, bool), Vec<Tri>>| {
+        assert_eq!(
+            by_z[&0],
+            sorted_vec(vec![
+                (white, false, true, false, false),
+                (white, false, true, false, false),
+                (white, false, false, true, false),
+                (white, false, false, true, false),
+            ])
+        );
+        let fronts = &c_by_z[&(0, false)];
+        let backs = &c_by_z[&(0, true)];
+        assert_eq!(fronts.len(), backs.len());
+        for (fa, ba) in fronts.iter().zip(backs) {
+            let fs: BTreeSet<Pt> = fa.iter().copied().collect();
+            let bs: BTreeSet<Pt> = ba.iter().copied().collect();
+            assert_eq!(fs, bs);
+            assert!(!same_winding(fa, ba));
+        }
+        let fb = model.face_back_color.unwrap();
+        let ff = model.face_front_color.unwrap();
+        assert_eq!(
+            by_z[&10],
+            sorted_vec(vec![
+                (white, false, true, false, false),
+                (white, false, true, false, false),
+                (fb, false, false, true, false),
+                (fb, false, false, true, false),
+            ])
+        );
+        assert_eq!(by_z[&20], vec![(white, true, true, false, false); 2]);
+        assert_eq!(by_z[&30], vec![(blue, true, false, false, false); 2]);
+        assert_eq!(by_z[&40], vec![(white, true, true, false, false); 2]);
+        assert_eq!(
+            by_z[&50],
+            sorted_vec(vec![
+                (ff, false, false, false, false),
+                (ff, false, false, false, false),
+                (fb, false, false, true, true),
+                (fb, false, false, true, true),
+            ])
+        );
+    };
+
+    let baked = skp.build_scene(&style_opts).unwrap();
+    let mut by_z = BTreeMap::new();
+    let mut c_by_z = BTreeMap::new();
+    for p in &baked.glb_primitives {
+        collect_prim(
+            &baked.gltf_materials,
+            &p.positions,
+            &p.indices,
+            &p.back_triangles,
+            p.material_index,
+            p.unpainted_back,
+            &mut by_z,
+            &mut c_by_z,
+        );
+    }
+    for v in by_z.values_mut() {
+        v.sort();
+    }
+    check_style(&by_z, &c_by_z);
+
+    let inst = skp.build_instanced_scene(&style_opts).unwrap();
+    by_z.clear();
+    c_by_z.clear();
+    for r in &inst.mesh_resources {
+        for p in &r.primitives {
+            collect_prim(
+                &inst.gltf_materials,
+                &p.positions,
+                &p.indices,
+                &p.back_triangles,
+                p.material_index,
+                p.unpainted_back,
+                &mut by_z,
+                &mut c_by_z,
+            );
+        }
+    }
+    for v in by_z.values_mut() {
+        v.sort();
+    }
+    check_style(&by_z, &c_by_z);
+
+    let check_tag = |by_z: &BTreeMap<i32, Vec<TriSide>>| {
+        let split_white = sorted_vec(vec![
+            (white, false, true, false, false),
+            (white, false, true, false, false),
+            (white, false, false, true, false),
+            (white, false, false, true, false),
+        ]);
+        assert_eq!(by_z[&0], split_white);
+        assert_eq!(by_z[&10], split_white);
+        assert_eq!(by_z[&20], vec![(white, true, true, false, false); 2]);
+        assert_eq!(by_z[&30], vec![(blue, true, false, false, false); 2]);
+        assert_eq!(by_z[&40], vec![(white, true, true, false, false); 2]);
+        assert_eq!(by_z[&50], vec![(green, true, false, false, false); 2]);
+    };
+
+    let baked_tag = skp.build_scene(&tag_opts).unwrap();
+    by_z.clear();
+    c_by_z.clear();
+    for p in &baked_tag.glb_primitives {
+        collect_prim(
+            &baked_tag.gltf_materials,
+            &p.positions,
+            &p.indices,
+            &p.back_triangles,
+            p.material_index,
+            p.unpainted_back,
+            &mut by_z,
+            &mut c_by_z,
+        );
+    }
+    for v in by_z.values_mut() {
+        v.sort();
+    }
+    check_tag(&by_z);
+
+    let inst_tag = skp.build_instanced_scene(&tag_opts).unwrap();
+    by_z.clear();
+    c_by_z.clear();
+    for r in &inst_tag.mesh_resources {
+        for p in &r.primitives {
+            collect_prim(
+                &inst_tag.gltf_materials,
+                &p.positions,
+                &p.indices,
+                &p.back_triangles,
+                p.material_index,
+                p.unpainted_back,
+                &mut by_z,
+                &mut c_by_z,
+            );
+        }
+    }
+    for v in by_z.values_mut() {
+        v.sort();
+    }
+    check_tag(&by_z);
+
+    let stl_bin = to_stl_binary(&baked, 1.0);
+    let stl_count = u32::from_le_bytes(stl_bin[80..84].try_into().unwrap());
+    assert_eq!(stl_count, 12);
+
+    let glb_bytes = to_glb(&baked_tag, &GlbOptions::new().with_textures(true)).unwrap();
+    let iglb_bytes =
+        to_instanced_glb(&inst_tag, &InstancedGlbOptions::new().with_textures(true)).unwrap();
+    for bytes in [glb_bytes, iglb_bytes] {
+        let loaded = load_glb(&bytes);
+        let mut flags = BTreeSet::new();
+        for m in loaded.list("materials") {
+            let ds = m
+                .find("doubleSided")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let pbr = m.find("pbrMetallicRoughness").unwrap();
+            let has_tex = pbr.find("baseColorTexture").is_some();
+            flags.insert((ds, has_tex));
+        }
+        assert!(flags.contains(&(false, true)));
+        assert!(flags.contains(&(false, false)));
+        assert!(flags.contains(&(true, true)));
+        assert!(flags.contains(&(true, false)));
+    }
+}

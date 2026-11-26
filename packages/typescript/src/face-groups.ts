@@ -189,11 +189,12 @@ function smoothCornerNormals(
 /**
  * Group a definition's faces by resolved material identity, in local space.
  *
- * A face whose front/back resolve to the SAME colour is emitted once with
- * `doubleSided` set; a face whose sides genuinely differ is emitted as two
- * single-sided triangle sets (one normal-wound front, one reverse-wound
- * back) so each side keeps its own colour - unless `ctx.frontSideOnly`,
- * which always takes the first branch with the front material.
+ * A face whose front and back resolve to the same material, or are both
+ * unpainted with the same colour, is emitted once with `doubleSided` set;
+ * a face whose sides differ is emitted as two single-sided triangle sets
+ * (one normal-wound front, one reverse-wound back) so each side keeps its
+ * own material and colour - unless `ctx.frontSideOnly`, which always takes
+ * the first branch with the front material.
  *
  * Vertices on a surface SketchUp smooths take that surface's normal, so
  * curved geometry shades smoothly instead of faceted.
@@ -364,18 +365,13 @@ export function buildLocalFaceGroups(
     const uvTransform = (fData as any).uvTransform as number[] | null | undefined;
     const uvTransformBack = (fData as any).uvTransformBack as number[] | null | undefined;
 
-    const frontCol = Boolean(frontMat?.colorized);
-    const backCol = Boolean(backMat?.colorized);
-    const frontCType = frontCol ? (frontMat?.colorizeType ?? 0) : 0;
-    const backCType = backCol ? (backMat?.colorizeType ?? 0) : 0;
-    const sameColorization =
-      frontMat && backMat ? frontCol === backCol && frontCType === backCType : true;
-    const sameColor =
-      frontColor.r === backColor.r &&
-      frontColor.g === backColor.g &&
-      frontColor.b === backColor.b &&
-      sameColorization;
-    if (sameColor || ctx.frontSideOnly) {
+    const sameSide =
+      !frontMat && !backMat
+        ? frontColor.r === backColor.r &&
+          frontColor.g === backColor.g &&
+          frontColor.b === backColor.b
+        : frontMat === backMat;
+    if (sameSide || ctx.frontSideOnly) {
       addSide(triangles, fn, frontColor, true, false, frontMat, uvTransform, xr, yr, fId);
     } else {
       addSide(triangles, fn, frontColor, false, false, frontMat, uvTransform, xr, yr, fId);

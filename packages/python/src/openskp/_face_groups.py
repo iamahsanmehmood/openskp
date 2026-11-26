@@ -306,10 +306,11 @@ def build_local_face_groups(builder: Any, ctx: FaceGroupContext) -> Dict[FaceGro
     """Group a definition's faces by resolved material identity, in local
     space.
 
-    A face whose front/back resolve to the SAME color is emitted once with
-    ``double_sided`` set; a face whose sides genuinely differ is emitted as
-    two single-sided triangle sets (one normal-wound front, one
-    reverse-wound back) so each side keeps its own color.
+    A face whose front and back resolve to the same material, or are both
+    unpainted with the same colour, is emitted once with ``double_sided`` set;
+    a face whose sides differ is emitted as two single-sided triangle sets
+    (one normal-wound front, one reverse-wound back) so each side keeps its
+    own material and colour.
     """
     face_groups: Dict[FaceGroupKey, Dict[str, Any]] = {}
     fallback_back_color = ctx.fallback_back_color if ctx.fallback_back_color is not None else ctx.fallback_color
@@ -348,16 +349,12 @@ def build_local_face_groups(builder: Any, ctx: FaceGroupContext) -> Dict[FaceGro
         fn = f_data["normal"]
         xr, yr = face_uv_basis(fn)
 
-        front_col = bool(front_mat.get("colorized")) if front_mat else False
-        back_col = bool(back_mat.get("colorized")) if back_mat else False
-        front_ctype = int(front_mat.get("colorize_type") or 0) if front_mat and front_col else 0
-        back_ctype = int(back_mat.get("colorize_type") or 0) if back_mat and back_col else 0
-        same_colorization = (
-            (front_col == back_col and front_ctype == back_ctype)
-            if (front_mat is not None and back_mat is not None)
-            else True
+        same_side = (
+            front_color == back_color
+            if front_mat is None and back_mat is None
+            else front_mat is back_mat
         )
-        if front_color == back_color and same_colorization:
+        if same_side:
             _add_face_side(face_groups, builder, triangles, fn, front_color, True, False, front_mat,
                            f_data.get("uv_transform"), xr, yr, ctx.texture_index_for)
         else:
