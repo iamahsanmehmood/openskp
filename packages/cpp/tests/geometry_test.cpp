@@ -298,6 +298,34 @@ TEST(Geometry, AttributeDictionariesDecodeNestedArray) {
   EXPECT_EQ(cords.to_string(), "25.17,0.07,25.17,15.35");
 }
 
+TEST(Geometry, AttributeDictionariesKeepCommasForLeadingEmptyArrayElements) {
+  auto leading_null = concat({entry_value({}), entry_value(tlv("AD38", test::bytes("x")))});
+  auto two_nulls = concat({entry_value({}), entry_value({})});
+  auto leading_empty_str =
+      concat({entry_value(tlv("AD38", {})), entry_value(tlv("AD38", test::bytes("x")))});
+  auto leading_empty_arr =
+      concat({entry_value(tlv("AE38", {})), entry_value(tlv("AD38", test::bytes("x")))});
+  auto middle_null = concat({entry_value(tlv("A738", i32_bytes(1))), entry_value({}),
+                             entry_value(tlv("AD38", test::bytes("x")))});
+  auto trailing_null = concat({entry_value(tlv("AD38", test::bytes("x"))), entry_value({})});
+  auto entries = concat({
+      entry("leading_null", tlv("AE38", leading_null)),
+      entry("two_nulls", tlv("AE38", two_nulls)),
+      entry("leading_empty_str", tlv("AE38", leading_empty_str)),
+      entry("leading_empty_arr", tlv("AE38", leading_empty_arr)),
+      entry("middle_null", tlv("AE38", middle_null)),
+      entry("trailing_null", tlv("AE38", trailing_null)),
+  });
+  auto dicts = attribute_dicts_for(named_dict("dynamic_attributes", entries));
+  auto props = stringify_attr_dict(dicts.at("dynamic_attributes"));
+  EXPECT_EQ(props.at("leading_null"), ",x");
+  EXPECT_EQ(props.at("two_nulls"), ",");
+  EXPECT_EQ(props.at("leading_empty_str"), ",x");
+  EXPECT_EQ(props.at("leading_empty_arr"), ",x");
+  EXPECT_EQ(props.at("middle_null"), "1,,x");
+  EXPECT_EQ(props.at("trailing_null"), "x,");
+}
+
 TEST(Geometry, AttributeDictionariesLeaveUnrecognizedValueTagAsNull) {
   // A type tag this decoder doesn't (yet) know is left as Null rather than
   // misinterpreted - safer than a wrong guess.

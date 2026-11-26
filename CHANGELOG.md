@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — C++ and Rust: leading empty array elements in stringified attributes (#642)
+
+- `ParsedAttribute::to_string` in C++ and `Display for ParsedAttribute` in Rust now emit a comma before every element after index `0` instead of checking whether the output string is non-empty, so arrays starting with `null`, `""`, or `[]` (such as `[null, "x"]` -> `",x"` and `[null, null]` -> `","`) match Python, TypeScript, .NET, and Dart in `properties` and scene `attribute_dictionaries`.
+
 ### Changed — Dart: colorized textures are baked into GLB files (#285)
 
 - `toGlb` / `exportGlb` and `toInstancedGlb` / `exportInstancedGlb` with `textures: true` bake colorized PNG textures out of the box (using the existing `package:archive` dependency, shift or tint within 1/255 of SketchUp's own result) with a white material factor, once per colour, with no new dependency.

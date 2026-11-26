@@ -44,9 +44,9 @@ std::string ParsedAttribute::to_string() const {
       return format_double(vec[0]) + "," + format_double(vec[1]) + "," + format_double(vec[2]);
     case Kind::Array: {
       std::string joined;
-      for (const auto& item : array) {
-        if (!joined.empty()) joined += ",";
-        joined += item.to_string();
+      for (std::size_t i = 0; i < array.size(); ++i) {
+        if (i > 0) joined += ",";
+        joined += array[i].to_string();
       }
       return joined;
     }
