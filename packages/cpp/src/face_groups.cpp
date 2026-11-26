@@ -423,14 +423,8 @@ std::map<GroupKey, Group> build_local_face_groups(const RawParsed& parsed, const
         group.tris.push_back(indices);
       }
     };
-    const bool front_raw_col = front_mat && front_mat->colorized;
-    const bool back_raw_col = back_mat && back_mat->colorized;
-    const int front_raw_ctype = front_raw_col ? front_mat->colorize_type : 0;
-    const int back_raw_ctype = back_raw_col ? back_mat->colorize_type : 0;
-    const bool same_colorization = (front_mat && back_mat) ? (front_raw_col == back_raw_col &&
-                                                              front_raw_ctype == back_raw_ctype)
-                                                           : true;
-    if (front == back && same_colorization) {
+    const bool same_side = (!front_mat && !back_mat) ? (front == back) : (front_mat == back_mat);
+    if (same_side) {
       const auto [tw, th] = tile_size(front_mat);
       const auto tex = ctx.texture_index_for(front_mat);
       const bool col = front_mat && tex.has_value() && front_mat->colorized;

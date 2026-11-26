@@ -368,10 +368,11 @@ namespace OpenSkp
         /// <summary>Group a definition's faces by resolved material
         /// identity, in local space.
         ///
-        /// A face whose front/back resolve to the SAME color is emitted
-        /// once with DoubleSided set; a face whose sides genuinely differ
-        /// is emitted as two single-sided triangle sets (one normal-wound
-        /// front, one reverse-wound back) so each side keeps its own
+        /// A face whose front and back resolve to the same material, or
+        /// are both unpainted with the same color, is emitted once with
+        /// DoubleSided set; a face whose sides differ is emitted as two
+        /// single-sided triangle sets (one normal-wound front, one
+        /// reverse-wound back) so each side keeps its own material and
         /// color.</summary>
         public static Dictionary<((int R, int G, int B) Color, bool DoubleSided, int? TextureIndex, double Transparency, bool UnpaintedBack, bool Colorized, int ColorizeType), FaceGroup> BuildLocalFaceGroups(GeometryBuilder builder, Context ctx)
         {
@@ -498,15 +499,10 @@ namespace OpenSkp
                 var uvTransform = fData.UvTransform;
                 var uvTransformBack = fData.UvTransformBack;
 
-                bool frontCol = frontMat?.Colorized == true;
-                bool backCol = backMat?.Colorized == true;
-                int frontCType = frontCol ? frontMat!.ColorizeType : 0;
-                int backCType = backCol ? backMat!.ColorizeType : 0;
-                bool sameColorization = (frontMat != null && backMat != null)
-                    ? (frontCol == backCol && frontCType == backCType)
-                    : true;
-                bool sameColor = frontColor.R == backColor.R && frontColor.G == backColor.G && frontColor.B == backColor.B && sameColorization;
-                if (sameColor)
+                bool sameSide = (frontMat == null && backMat == null)
+                    ? (frontColor.R == backColor.R && frontColor.G == backColor.G && frontColor.B == backColor.B)
+                    : ReferenceEquals(frontMat, backMat);
+                if (sameSide)
                 {
                     AddSide(triangles, fn, frontColor, true, false, frontMat, uvTransform, xr, yr);
                 }

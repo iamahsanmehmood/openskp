@@ -436,5 +436,229 @@ namespace OpenSkp.Tests
                 new List<((int, int, int), bool)> { (layerRgb, true) },
                 GlbMaterials(InstancedGlbExport.ToInstancedGlb(SkpFile.BuildInstancedScene(path, new SkpParseOptions { UnpaintedFaces = "tag" }))));
         }
+
+        [Fact]
+        public void DifferentMaterialsWithSameColourStaySeparate()
+        {
+            const string pngHex =
+                "89504e470d0a1a0a0000000d4948445200000002000000020802000000fdd49a73" +
+                "0000001649444154789c63b863a3a1517187c1664bc087131a00271e05dd1c14e923" +
+                "0000000049454e44ae426082";
+            var pngBytes = new byte[pngHex.Length / 2];
+            for (int i = 0; i < pngBytes.Length; i++)
+            {
+                pngBytes[i] = Convert.ToByte(pngHex.Substring(i * 2, 2), 16);
+            }
+
+            static (double, double, double)[] Quad(double z) =>
+                new (double, double, double)[] { (0, 0, z), (10, 0, z), (10, 10, z), (0, 10, z) };
+
+            string tmpId = Guid.NewGuid().ToString("N");
+            string pngPath = Path.Combine(Path.GetTempPath(), $"openskp_697_{tmpId}.png");
+            string skpPath = Path.Combine(Path.GetTempPath(), $"openskp_697_{tmpId}.skp");
+            try
+            {
+                File.WriteAllBytes(pngPath, pngBytes);
+                var builder = SkpCreate.NewFile();
+                int texFront = builder.AddTextureMaterial("TexFront", pngPath, appliedHeight: 10.0, appliedWidth: 10.0);
+                int plainBack = builder.AddMaterial("PlainBack", (255, 255, 255, 255));
+                int plainBlue = builder.AddMaterial("PlainBlue", (40, 90, 200, 255));
+                int tagWhite = builder.AddLayer("TagWhite", color: (255, 255, 255));
+                int tagGreen = builder.AddLayer("TagGreen", color: (50, 170, 80));
+                ComponentDefinitionBuilder comp;
+                using (comp = builder.AddComponentDefinition("PaintedComp"))
+                {
+                    comp.AddFace(Quad(40));
+                }
+
+                builder.AddFace(Quad(0), material: texFront, backMaterial: plainBack);
+                builder.AddFace(Quad(10), material: texFront, layer: tagWhite);
+                builder.AddFace(Quad(20), material: texFront, backMaterial: texFront);
+                builder.AddFace(Quad(30), material: plainBlue, backMaterial: plainBlue);
+                builder.AddInstance(comp, material: texFront);
+                builder.AddFace(Quad(50), layer: tagGreen);
+
+                builder.Save(skpPath);
+                var model = SkpFile.Open(skpPath);
+                var white = (255, 255, 255);
+                var blue = (40, 90, 200);
+                var green = (50, 170, 80);
+
+                static bool HasTexOf(IReadOnlyList<object> gltfMaterials, int matIdx)
+                {
+                    var mat = (IDictionary<string, object>)gltfMaterials[matIdx];
+                    var pbr = (IDictionary<string, object>)mat["pbrMetallicRoughness"];
+                    return pbr.ContainsKey("baseColorTexture");
+                }
+
+                static List<((int, int, int), bool, bool, bool, bool)> SortSides(
+                    IEnumerable<((int, int, int), bool, bool, bool, bool)> src) =>
+                    src.OrderBy(x => x.Item1.Item1)
+                        .ThenBy(x => x.Item1.Item2)
+                        .ThenBy(x => x.Item1.Item3)
+                        .ThenBy(x => x.Item2)
+                        .ThenBy(x => x.Item3)
+                        .ThenBy(x => x.Item4)
+                        .ThenBy(x => x.Item5)
+                        .ToList();
+
+                static (
+                    Dictionary<int, List<((int, int, int), bool, bool, bool, bool)>> ByZ,
+                    Dictionary<(int, bool), List<(Pt A, Pt B, Pt C)>> CornersByZ
+                ) Collect(
+                    IReadOnlyList<object> mats,
+                    IEnumerable<(float[] Positions, uint[] Indices, IReadOnlyList<uint> BackTriangles, int MaterialIndex, bool UnpaintedBack)> prims)
+                {
+                    var byZ = new Dictionary<int, List<((int, int, int), bool, bool, bool, bool)>>();
+                    var cByZ = new Dictionary<(int, bool), List<(Pt A, Pt B, Pt C)>>();
+                    foreach (var p in prims)
+                    {
+                        var rgb = RgbOf(mats, p.MaterialIndex);
+                        bool ds = DoubleSidedOf(mats, p.MaterialIndex);
+                        bool hasTex = HasTexOf(mats, p.MaterialIndex);
+                        var backSet = new HashSet<uint>(p.BackTriangles);
+                        var tris = Corners(p.Positions, p.Indices);
+                        for (int t = 0; t < tris.Count; t++)
+                        {
+                            int z = (int)Math.Round(p.Positions[p.Indices[3 * t] * 3 + 1] / 0.0254);
+                            bool isBack = backSet.Contains((uint)t);
+                            if (!byZ.TryGetValue(z, out var list))
+                            {
+                                list = new List<((int, int, int), bool, bool, bool, bool)>();
+                                byZ[z] = list;
+                            }
+                            list.Add((rgb, ds, hasTex, isBack, p.UnpaintedBack));
+                            if (!cByZ.TryGetValue((z, isBack), out var clist))
+                            {
+                                clist = new List<(Pt A, Pt B, Pt C)>();
+                                cByZ[(z, isBack)] = clist;
+                            }
+                            clist.Add(tris[t]);
+                        }
+                    }
+                    foreach (var z in byZ.Keys.ToList())
+                    {
+                        byZ[z] = SortSides(byZ[z]);
+                    }
+                    return (byZ, cByZ);
+                }
+
+                var styleBaked = SkpFile.BuildScene(skpPath);
+                var styleInst = SkpFile.BuildInstancedScene(skpPath);
+                foreach (var (mats, prims) in new[]
+                {
+                    (
+                        styleBaked.GltfMaterials,
+                        styleBaked.GlbPrimitives.Select(p => (p.Positions, p.Indices, (IReadOnlyList<uint>)p.BackTriangles, p.MaterialIndex, p.UnpaintedBack))
+                    ),
+                    (
+                        styleInst.GltfMaterials,
+                        styleInst.MeshResources.SelectMany(r => r.Primitives).Select(p => (p.Positions, p.Indices, (IReadOnlyList<uint>)p.BackTriangles, p.MaterialIndex, p.UnpaintedBack))
+                    ),
+                })
+                {
+                    var (byZ, cByZ) = Collect(mats, prims);
+                    Assert.Equal(
+                        SortSides(new[]
+                        {
+                            (white, false, true, false, false),
+                            (white, false, true, false, false),
+                            (white, false, false, true, false),
+                            (white, false, false, true, false),
+                        }),
+                        byZ[0]);
+                    var fronts = cByZ[(0, false)];
+                    var backs = cByZ[(0, true)];
+                    Assert.Equal(fronts.Count, backs.Count);
+                    for (int i = 0; i < fronts.Count; i++)
+                    {
+                        Assert.Equal(
+                            new HashSet<Pt> { fronts[i].A, fronts[i].B, fronts[i].C },
+                            new HashSet<Pt> { backs[i].A, backs[i].B, backs[i].C });
+                        Assert.False(SameWinding(fronts[i], backs[i]));
+                    }
+                    Assert.Equal(
+                        SortSides(new[]
+                        {
+                            (white, false, true, false, false),
+                            (white, false, true, false, false),
+                            (model.FaceBackColor!.Value, false, false, true, false),
+                            (model.FaceBackColor!.Value, false, false, true, false),
+                        }),
+                        byZ[10]);
+                    Assert.Equal(new[] { (white, true, true, false, false), (white, true, true, false, false) }, byZ[20]);
+                    Assert.Equal(new[] { (blue, true, false, false, false), (blue, true, false, false, false) }, byZ[30]);
+                    Assert.Equal(new[] { (white, true, true, false, false), (white, true, true, false, false) }, byZ[40]);
+                    Assert.Equal(
+                        SortSides(new[]
+                        {
+                            (model.FaceFrontColor!.Value, false, false, false, false),
+                            (model.FaceFrontColor!.Value, false, false, false, false),
+                            (model.FaceBackColor!.Value, false, false, true, true),
+                            (model.FaceBackColor!.Value, false, false, true, true),
+                        }),
+                        byZ[50]);
+                }
+
+                var tagOpts = new SkpParseOptions { UnpaintedFaces = "tag" };
+                var tagBaked = SkpFile.BuildScene(skpPath, tagOpts);
+                var tagInst = SkpFile.BuildInstancedScene(skpPath, tagOpts);
+                foreach (var (mats, prims) in new[]
+                {
+                    (
+                        tagBaked.GltfMaterials,
+                        tagBaked.GlbPrimitives.Select(p => (p.Positions, p.Indices, (IReadOnlyList<uint>)p.BackTriangles, p.MaterialIndex, p.UnpaintedBack))
+                    ),
+                    (
+                        tagInst.GltfMaterials,
+                        tagInst.MeshResources.SelectMany(r => r.Primitives).Select(p => (p.Positions, p.Indices, (IReadOnlyList<uint>)p.BackTriangles, p.MaterialIndex, p.UnpaintedBack))
+                    ),
+                })
+                {
+                    var (byZ, _) = Collect(mats, prims);
+                    var splitWhite = SortSides(new[]
+                    {
+                        (white, false, true, false, false),
+                        (white, false, true, false, false),
+                        (white, false, false, true, false),
+                        (white, false, false, true, false),
+                    });
+                    Assert.Equal(splitWhite, byZ[0]);
+                    Assert.Equal(splitWhite, byZ[10]);
+                    Assert.Equal(new[] { (white, true, true, false, false), (white, true, true, false, false) }, byZ[20]);
+                    Assert.Equal(new[] { (blue, true, false, false, false), (blue, true, false, false, false) }, byZ[30]);
+                    Assert.Equal(new[] { (white, true, true, false, false), (white, true, true, false, false) }, byZ[40]);
+                    Assert.Equal(new[] { (green, true, false, false, false), (green, true, false, false, false) }, byZ[50]);
+                }
+
+                Assert.Equal(12u, BitConverter.ToUInt32(StlExport.ToStlBinary(styleBaked), 80));
+
+                foreach (var glbBytes in new[]
+                {
+                    GlbExport.ToGlb(tagBaked, new GlbOptions { Textures = true }),
+                    InstancedGlbExport.ToInstancedGlb(tagInst, new InstancedGlbOptions { Textures = true }),
+                })
+                {
+                    uint jsonLen = BitConverter.ToUInt32(glbBytes, 12);
+                    using var doc = JsonDocument.Parse(Encoding.UTF8.GetString(glbBytes, 20, (int)jsonLen));
+                    var flags = new HashSet<(bool, bool)>();
+                    foreach (var m in doc.RootElement.GetProperty("materials").EnumerateArray())
+                    {
+                        bool ds = m.TryGetProperty("doubleSided", out var dse) && dse.GetBoolean();
+                        bool hasTex = m.GetProperty("pbrMetallicRoughness").TryGetProperty("baseColorTexture", out _);
+                        flags.Add((ds, hasTex));
+                    }
+                    Assert.Contains((false, true), flags);
+                    Assert.Contains((false, false), flags);
+                    Assert.Contains((true, true), flags);
+                    Assert.Contains((true, false), flags);
+                }
+            }
+            finally
+            {
+                if (File.Exists(pngPath)) File.Delete(pngPath);
+                if (File.Exists(skpPath)) File.Delete(skpPath);
+            }
+        }
     }
 }

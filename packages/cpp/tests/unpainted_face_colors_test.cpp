@@ -482,5 +482,238 @@ TEST(UnpaintedFaceColors, GlbExportsShowBothSides) {
             (std::vector<std::pair<Color3, bool>>{{layer_rgb, true}}));
 }
 
+TEST(UnpaintedFaceColors, DifferentMaterialsWithSameColourStaySeparate) {
+  static constexpr std::uint8_t kPng2x2[] = {
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48,
+      0x44, 0x52, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x02, 0x08, 0x02, 0x00, 0x00,
+      0x00, 0xfd, 0xd4, 0x9a, 0x73, 0x00, 0x00, 0x00, 0x16, 0x49, 0x44, 0x41, 0x54, 0x78,
+      0x9c, 0x63, 0xb8, 0x63, 0xa3, 0xa1, 0x51, 0x71, 0x87, 0xc1, 0x66, 0x4b, 0xc0, 0x87,
+      0x13, 0x1a, 0x00, 0x27, 0x1e, 0x05, 0xdd, 0x1c, 0x14, 0xe9, 0x23, 0x00, 0x00, 0x00,
+      0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82};
+
+  const auto tmp_dir = std::filesystem::temp_directory_path();
+  const auto png_path = tmp_dir / "openskp_697_tex.png";
+  const auto skp_path = tmp_dir / "openskp_697_same_color_diff_mat.skp";
+
+  struct Cleaner {
+    std::filesystem::path a;
+    std::filesystem::path b;
+
+    ~Cleaner() {
+      std::error_code ec;
+      std::filesystem::remove(a, ec);
+      std::filesystem::remove(b, ec);
+    }
+  } cleaner{png_path, skp_path};
+
+  {
+    std::FILE* fp = std::fopen(png_path.string().c_str(), "wb");
+    ASSERT_NE(fp, nullptr);
+    ASSERT_EQ(std::fwrite(kPng2x2, 1, sizeof(kPng2x2), fp), sizeof(kPng2x2));
+    std::fclose(fp);
+  }
+
+  auto quad = [](double z) -> std::vector<Point3> {
+    return {{0, 0, z}, {10, 0, z}, {10, 10, z}, {0, 10, z}};
+  };
+
+  auto builder = create();
+  const int tex_front = builder->add_texture_material("TexFront", png_path, 10.0, 10.0);
+  const int plain_back = builder->add_material("PlainBack", Color4{255, 255, 255, 255});
+  const int plain_blue = builder->add_material("PlainBlue", Color4{40, 90, 200, 255});
+  LayerOptions lo_white;
+  lo_white.color = Color4{255, 255, 255, 255};
+  const int tag_white = builder->add_layer("TagWhite", lo_white);
+  LayerOptions lo_green;
+  lo_green.color = Color4{50, 170, 80, 255};
+  const int tag_green = builder->add_layer("TagGreen", lo_green);
+
+  auto& comp = builder->add_component_definition("PaintedComp");
+  comp.add_face(quad(40.0));
+  comp.close();
+
+  FaceOptions f0;
+  f0.material = tex_front;
+  f0.back_material = plain_back;
+  builder->add_face(quad(0.0), f0);
+
+  FaceOptions f10;
+  f10.material = tex_front;
+  f10.layer = tag_white;
+  builder->add_face(quad(10.0), f10);
+
+  FaceOptions f20;
+  f20.material = tex_front;
+  f20.back_material = tex_front;
+  builder->add_face(quad(20.0), f20);
+
+  FaceOptions f30;
+  f30.material = plain_blue;
+  f30.back_material = plain_blue;
+  builder->add_face(quad(30.0), f30);
+
+  InstanceOptions inst40;
+  inst40.material = tex_front;
+  builder->add_instance(comp, inst40);
+
+  FaceOptions f50;
+  f50.layer = tag_green;
+  builder->add_face(quad(50.0), f50);
+
+  builder->save(skp_path.string());
+  const auto skp = SkpFile::open(skp_path.string());
+  const auto model = skp.parse();
+  ASSERT_TRUE(model.face_front_color.has_value());
+  ASSERT_TRUE(model.face_back_color.has_value());
+  const Color3 white{255, 255, 255};
+  const Color3 blue{40, 90, 200};
+  const Color3 green{50, 170, 80};
+
+  using TriSide = std::tuple<Color3, bool, bool, bool, bool>;
+  auto collect_prim = [](const std::vector<GltfMaterial>& mats, const std::vector<float>& pos,
+                         const std::vector<std::uint32_t>& idx,
+                         const std::vector<std::uint32_t>& back_tris, std::size_t mat_idx,
+                         bool unp_back, std::map<int, std::vector<TriSide>>& by_z,
+                         std::map<std::pair<int, bool>, std::vector<Tri>>* c_by_z) {
+    const auto& mat = mats.at(mat_idx);
+    const bool has_tex = mat.pbr_metallic_roughness.base_color_texture.has_value();
+    const Color3 rgb = rgb_of(mats, mat_idx);
+    const std::set<std::uint32_t> back_set(back_tris.begin(), back_tris.end());
+    const auto tris = corners(pos, idx);
+    for (std::size_t t = 0; t < tris.size(); ++t) {
+      const int z = static_cast<int>(std::lround(pos.at(idx.at(3 * t) * 3 + 1) / 0.0254));
+      const bool is_back = back_set.count(static_cast<std::uint32_t>(t)) > 0;
+      by_z[z].emplace_back(rgb, mat.double_sided, has_tex, is_back, unp_back);
+      if (c_by_z != nullptr) (*c_by_z)[{z, is_back}].push_back(tris[t]);
+    }
+  };
+
+  auto sort_map = [](std::map<int, std::vector<TriSide>>& m) {
+    for (auto& kv : m) std::sort(kv.second.begin(), kv.second.end());
+  };
+  auto sorted_vec = [](std::vector<TriSide> v) {
+    std::sort(v.begin(), v.end());
+    return v;
+  };
+
+  auto check_style = [&](const std::map<int, std::vector<TriSide>>& by_z,
+                         const std::map<std::pair<int, bool>, std::vector<Tri>>& c_by_z) {
+    EXPECT_EQ(by_z.at(0), sorted_vec({{white, false, true, false, false},
+                                      {white, false, true, false, false},
+                                      {white, false, false, true, false},
+                                      {white, false, false, true, false}}));
+    const auto& fronts = c_by_z.at({0, false});
+    const auto& backs = c_by_z.at({0, true});
+    ASSERT_EQ(fronts.size(), backs.size());
+    for (std::size_t i = 0; i < fronts.size(); ++i) {
+      EXPECT_EQ((std::set<Pt>{fronts[i][0], fronts[i][1], fronts[i][2]}),
+                (std::set<Pt>{backs[i][0], backs[i][1], backs[i][2]}));
+      EXPECT_FALSE(same_winding(fronts[i], backs[i]));
+    }
+    EXPECT_EQ(by_z.at(10), sorted_vec({{white, false, true, false, false},
+                                       {white, false, true, false, false},
+                                       {*model.face_back_color, false, false, true, false},
+                                       {*model.face_back_color, false, false, true, false}}));
+    EXPECT_EQ(by_z.at(20), (std::vector<TriSide>(2, {white, true, true, false, false})));
+    EXPECT_EQ(by_z.at(30), (std::vector<TriSide>(2, {blue, true, false, false, false})));
+    EXPECT_EQ(by_z.at(40), (std::vector<TriSide>(2, {white, true, true, false, false})));
+    EXPECT_EQ(by_z.at(50), sorted_vec({{*model.face_front_color, false, false, false, false},
+                                       {*model.face_front_color, false, false, false, false},
+                                       {*model.face_back_color, false, false, true, true},
+                                       {*model.face_back_color, false, false, true, true}}));
+  };
+
+  {
+    const auto baked = skp.build_scene();
+    std::map<int, std::vector<TriSide>> by_z;
+    std::map<std::pair<int, bool>, std::vector<Tri>> c_by_z;
+    for (const auto& p : baked.glb_primitives) {
+      collect_prim(baked.gltf_materials, p.positions, p.indices, p.back_triangles, p.material_index,
+                   p.unpainted_back, by_z, &c_by_z);
+    }
+    sort_map(by_z);
+    check_style(by_z, c_by_z);
+
+    const auto inst = skp.build_instanced_scene();
+    by_z.clear();
+    c_by_z.clear();
+    for (const auto& r : inst.mesh_resources) {
+      for (const auto& p : r.primitives) {
+        collect_prim(inst.gltf_materials, p.positions, p.indices, p.back_triangles,
+                     p.material_index, p.unpainted_back, by_z, &c_by_z);
+      }
+    }
+    sort_map(by_z);
+    check_style(by_z, c_by_z);
+  }
+
+  ParseOptions tag_opts;
+  tag_opts.unpainted_faces = "tag";
+  auto check_tag = [&](const std::map<int, std::vector<TriSide>>& by_z) {
+    const auto split_white = sorted_vec({{white, false, true, false, false},
+                                         {white, false, true, false, false},
+                                         {white, false, false, true, false},
+                                         {white, false, false, true, false}});
+    EXPECT_EQ(by_z.at(0), split_white);
+    EXPECT_EQ(by_z.at(10), split_white);
+    EXPECT_EQ(by_z.at(20), (std::vector<TriSide>(2, {white, true, true, false, false})));
+    EXPECT_EQ(by_z.at(30), (std::vector<TriSide>(2, {blue, true, false, false, false})));
+    EXPECT_EQ(by_z.at(40), (std::vector<TriSide>(2, {white, true, true, false, false})));
+    EXPECT_EQ(by_z.at(50), (std::vector<TriSide>(2, {green, true, false, false, false})));
+  };
+
+  {
+    const auto baked_tag = skp.build_scene(tag_opts);
+    std::map<int, std::vector<TriSide>> by_z;
+    for (const auto& p : baked_tag.glb_primitives) {
+      collect_prim(baked_tag.gltf_materials, p.positions, p.indices, p.back_triangles,
+                   p.material_index, p.unpainted_back, by_z, nullptr);
+    }
+    sort_map(by_z);
+    check_tag(by_z);
+
+    const auto inst_tag = skp.build_instanced_scene(tag_opts);
+    by_z.clear();
+    for (const auto& r : inst_tag.mesh_resources) {
+      for (const auto& p : r.primitives) {
+        collect_prim(inst_tag.gltf_materials, p.positions, p.indices, p.back_triangles,
+                     p.material_index, p.unpainted_back, by_z, nullptr);
+      }
+    }
+    sort_map(by_z);
+    check_tag(by_z);
+
+    const auto stl_bin = to_stl_binary(skp.build_scene());
+    ASSERT_GE(stl_bin.size(), 84u);
+    std::uint32_t stl_count = 0;
+    std::memcpy(&stl_count, stl_bin.data() + 80, 4);
+    EXPECT_EQ(stl_count, 12u);
+
+    GlbOptions glb_opts;
+    glb_opts.textures = true;
+    InstancedGlbOptions iglb_opts;
+    iglb_opts.textures = true;
+    for (const auto& bytes : {to_glb(baked_tag, glb_opts), to_instanced_glb(inst_tag, iglb_opts)}) {
+      tinygltf::Model gltf;
+      tinygltf::TinyGLTF loader;
+      loader.SetImageLoader([](tinygltf::Image*, const int, std::string*, std::string*, int, int,
+                               const unsigned char*, int, void*) { return true; },
+                            nullptr);
+      std::string err;
+      std::string warn;
+      ASSERT_TRUE(loader.LoadBinaryFromMemory(&gltf, &err, &warn, bytes.data(),
+                                              static_cast<unsigned int>(bytes.size())));
+      std::set<std::pair<bool, bool>> flags;
+      for (const auto& m : gltf.materials) {
+        flags.emplace(m.doubleSided, m.pbrMetallicRoughness.baseColorTexture.index >= 0);
+      }
+      EXPECT_GT(flags.count({false, true}), 0u);
+      EXPECT_GT(flags.count({false, false}), 0u);
+      EXPECT_GT(flags.count({true, true}), 0u);
+      EXPECT_GT(flags.count({true, false}), 0u);
+    }
+  }
+}
+
 }  // namespace
 }  // namespace openskp

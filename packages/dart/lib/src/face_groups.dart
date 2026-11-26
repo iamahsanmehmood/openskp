@@ -192,10 +192,11 @@ List<int> reconstructLoopVertices(List<(int, int)> loop, Map<int, (int?, int?)> 
 /// Group a definition's faces by resolved material identity, in local
 /// space.
 ///
-/// A face whose front/back resolve to the SAME color is emitted once with
-/// doubleSided set; a face whose sides genuinely differ is emitted as two
-/// single-sided triangle sets (one normal-wound front, one reverse-wound
-/// back) so each side keeps its own color.
+/// A face whose front and back resolve to the same material, or are both
+/// unpainted with the same color, is emitted once with doubleSided set; a
+/// face whose sides differ is emitted as two single-sided triangle sets
+/// (one normal-wound front, one reverse-wound back) so each side keeps its
+/// own material and color.
 Map<FaceGroupKey, LocalFaceGroup> buildLocalFaceGroups(GeometryBuilder builder, FaceGroupContext ctx) {
   final faceGroups = <FaceGroupKey, LocalFaceGroup>{};
   final fallbackBackColor = ctx.fallbackBackColor ?? ctx.fallbackColor;
@@ -321,14 +322,10 @@ Map<FaceGroupKey, LocalFaceGroup> buildLocalFaceGroups(GeometryBuilder builder, 
     final uvTransform = fData.uvTransform;
     final uvTransformBack = fData.uvTransformBack;
 
-    final frontCol = frontMat?.colorized ?? false;
-    final backCol = backMat?.colorized ?? false;
-    final frontCType = frontCol ? frontMat!.colorizeType : 0;
-    final backCType = backCol ? backMat!.colorizeType : 0;
-    final sameColorization = (frontMat != null && backMat != null)
-        ? (frontCol == backCol && frontCType == backCType)
-        : true;
-    if (frontColor == backColor && sameColorization) {
+    final sameSide = (frontMat == null && backMat == null)
+        ? frontColor == backColor
+        : identical(frontMat, backMat);
+    if (sameSide) {
       addSide(triangles, fn, frontColor, true, false, frontMat, uvTransform, xr,
           yr);
     } else {

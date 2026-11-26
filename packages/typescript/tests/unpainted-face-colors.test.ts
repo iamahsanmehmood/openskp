@@ -398,4 +398,181 @@ describe('Unpainted face colours in scenes and exports (#533)', () => {
     expect(scene.surfacePrimitives!.length).toBeGreaterThan(0);
     expect(toSTLAscii({ ...scene, glbPrimitives: [] })).not.toContain('facet');
   });
+
+  it('keeps different materials with the same colour separate while merging identical sides (#697)', () => {
+    const pngHex =
+      '89504e470d0a1a0a0000000d4948445200000002000000020802000000fdd49a73' +
+      '0000001649444154789c63b863a3a1517187c1664bc087131a00271e05dd1c14e923' +
+      '0000000049454e44ae426082';
+    const pngBytes = Uint8Array.from(Buffer.from(pngHex, 'hex'));
+    const quad = (z: number): [number, number, number][] => [
+      [0, 0, z],
+      [10, 0, z],
+      [10, 10, z],
+      [0, 10, z],
+    ];
+
+    const builder = create();
+    const texFront = builder.addTextureMaterial('TexFront', pngBytes, 'tex.png', 10, 10);
+    const plainBack = builder.addMaterial('PlainBack', [255, 255, 255, 255]);
+    const plainBlue = builder.addMaterial('PlainBlue', [40, 90, 200, 255]);
+    const tagWhite = builder.addLayer('TagWhite', { color: [255, 255, 255] });
+    const tagGreen = builder.addLayer('TagGreen', { color: [50, 170, 80] });
+    const comp = builder.addComponentDefinition('PaintedComp', (def) => {
+      def.addFace(quad(40));
+    });
+
+    builder.addFace(quad(0), { material: texFront, backMaterial: plainBack });
+    builder.addFace(quad(10), { material: texFront, layer: tagWhite });
+    builder.addFace(quad(20), { material: texFront, backMaterial: texFront });
+    builder.addFace(quad(30), { material: plainBlue, backMaterial: plainBlue });
+    builder.addInstance(comp, { material: texFront });
+    builder.addFace(quad(50), { layer: tagGreen });
+
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openskp-697-mat-'));
+    try {
+      const filePath = path.join(tmpDir, 'same_color_different_materials.skp');
+      builder.save(filePath);
+      const skp = SkpFile.open(filePath);
+      const model = skp.parse();
+      const white: Rgb = [255, 255, 255];
+      const blue: Rgb = [40, 90, 200];
+      const green: Rgb = [50, 170, 80];
+
+      type SideEntry = [Rgb, boolean, boolean, boolean, boolean];
+      const sortSides = (arr: SideEntry[]) =>
+        [...arr].sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+
+      const trisByZ = (
+        built: { gltfMaterials: unknown[] },
+        prims: {
+          positions: Float32Array;
+          indices: Uint32Array;
+          materialIndex: number;
+          unpaintedBack?: boolean;
+          backTriangles?: ArrayLike<number>;
+        }[]
+      ) => {
+        const byZ: Record<number, SideEntry[]> = {};
+        const cornersByZ: Record<string, Tri[]> = {};
+        for (const p of prims) {
+          const mat = built.gltfMaterials[p.materialIndex] as any;
+          const hasTex = Boolean(mat?.pbrMetallicRoughness?.baseColorTexture);
+          const rgb = rgbOf(built, p.materialIndex);
+          const ds = doubleSidedOf(built, p.materialIndex);
+          const backSet = new Set<number>(Array.from(p.backTriangles ?? []));
+          const tris = corners(p);
+          for (let t = 0; t < tris.length; t++) {
+            const z = Math.round(p.positions[p.indices[3 * t] * 3 + 1] / 0.0254);
+            const isBack = backSet.has(t);
+            (byZ[z] ??= []).push([rgb, ds, hasTex, isBack, Boolean(p.unpaintedBack)]);
+            (cornersByZ[`${z}:${isBack}`] ??= []).push(tris[t]);
+          }
+        }
+        for (const z of Object.keys(byZ)) {
+          byZ[Number(z)] = sortSides(byZ[Number(z)]);
+        }
+        return { byZ, cornersByZ };
+      };
+
+      for (const [built, prims] of builtPairs(skp)) {
+        const { byZ, cornersByZ } = trisByZ(built, prims);
+        expect(byZ[0]).toEqual(
+          sortSides([
+            [white, false, true, false, false],
+            [white, false, true, false, false],
+            [white, false, false, true, false],
+            [white, false, false, true, false],
+          ])
+        );
+        const fronts = cornersByZ['0:false'];
+        const backs = cornersByZ['0:true'];
+        expect(fronts).toHaveLength(backs.length);
+        for (let i = 0; i < fronts.length; i++) {
+          expect(sameVertexSet(fronts[i], backs[i])).toBe(true);
+          expect(sameWinding(fronts[i], backs[i])).toBe(false);
+        }
+        expect(byZ[10]).toEqual(
+          sortSides([
+            [white, false, true, false, false],
+            [white, false, true, false, false],
+            [model.faceBackColor!, false, false, true, false],
+            [model.faceBackColor!, false, false, true, false],
+          ])
+        );
+        expect(byZ[20]).toEqual([
+          [white, true, true, false, false],
+          [white, true, true, false, false],
+        ]);
+        expect(byZ[30]).toEqual([
+          [blue, true, false, false, false],
+          [blue, true, false, false, false],
+        ]);
+        expect(byZ[40]).toEqual([
+          [white, true, true, false, false],
+          [white, true, true, false, false],
+        ]);
+        expect(byZ[50]).toEqual(
+          sortSides([
+            [model.faceFrontColor!, false, false, false, false],
+            [model.faceFrontColor!, false, false, false, false],
+            [model.faceBackColor!, false, false, true, true],
+            [model.faceBackColor!, false, false, true, true],
+          ])
+        );
+      }
+
+      for (const [built, prims] of builtPairs(skp, { unpaintedFaces: 'tag' })) {
+        const { byZ } = trisByZ(built, prims);
+        const splitWhite = sortSides([
+          [white, false, true, false, false],
+          [white, false, true, false, false],
+          [white, false, false, true, false],
+          [white, false, false, true, false],
+        ]);
+        expect(byZ[0]).toEqual(splitWhite);
+        expect(byZ[10]).toEqual(splitWhite);
+        expect(byZ[20]).toEqual([
+          [white, true, true, false, false],
+          [white, true, true, false, false],
+        ]);
+        expect(byZ[30]).toEqual([
+          [blue, true, false, false, false],
+          [blue, true, false, false, false],
+        ]);
+        expect(byZ[40]).toEqual([
+          [white, true, true, false, false],
+          [white, true, true, false, false],
+        ]);
+        expect(byZ[50]).toEqual([
+          [green, true, false, false, false],
+          [green, true, false, false, false],
+        ]);
+      }
+
+      const stlBin = toSTLBinary(skp.buildScene());
+      const stlView = new DataView(stlBin.buffer, stlBin.byteOffset, stlBin.byteLength);
+      expect(stlView.getUint32(80, true)).toBe(12);
+
+      for (const glbBytes of [
+        toGLB(skp.buildScene({ unpaintedFaces: 'tag' }), { textures: true }),
+        toInstancedGLB(skp.buildInstancedScene({ unpaintedFaces: 'tag' }), { textures: true }),
+      ]) {
+        const dv = new DataView(glbBytes.buffer, glbBytes.byteOffset, glbBytes.byteLength);
+        const jsonLen = dv.getUint32(12, true);
+        const doc = JSON.parse(Buffer.from(glbBytes.subarray(20, 20 + jsonLen)).toString('utf8'));
+        const flags = new Set<string>(
+          doc.materials.map(
+            (m: any) => `${Boolean(m.doubleSided)}:${Boolean(m.pbrMetallicRoughness?.baseColorTexture)}`
+          )
+        );
+        expect(flags.has('false:true')).toBe(true);
+        expect(flags.has('false:false')).toBe(true);
+        expect(flags.has('true:true')).toBe(true);
+        expect(flags.has('true:false')).toBe(true);
+      }
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
 });
