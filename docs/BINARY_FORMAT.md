@@ -333,7 +333,68 @@ writer reproduces the observed rule:
 Names containing characters XML 1.0 cannot hold raise `SkpWriteError`
 instead. The `/` and `"` cases therefore never nest or break a ZIP path.
 
-### 7.4 Records the core writer emits
+### 7.4 Attribute dictionaries
+
+A drawing element's entity-base record (`DC05`) may carry an attribute block
+`DD05` after the entity id. Inside it, `B136` contains one `B236` set whose
+children are either `B336` dictionaries or the `1027` texture-placement
+record described below.
+
+A dictionary `B336` is laid out in file order as: empty `B036`, UTF-8 name
+`B436`, a `B536` entries record, then a `B736` trailer (one `u32`, zero).
+Each entry in `B536` is a UTF-8 key `B636` followed by one `A438` value
+wrapper. The wrapper's first child gives the type: `A738` signed 32-bit
+integer, `A938` little-endian `f64`, `AA38` one bool byte, `AC38` `u32`
+Unix time, `AD38` UTF-8 string, `AE38` array of further `A438` wrappers,
+`AF38` `f64` Length, `B438` three `f64`s Point3d, `B538` three `f64`s
+Vector3d. A null value is an empty `A438`; an empty array is an `AE38` with
+no children. The writer rejects non-finite floats, out-of-range integers and
+timestamps, and unsupported value types.
+
+### 7.5 Texture materials and UV placement
+
+A texture material is still a `C832` record whose name `CC32` is the folder,
+but its `material.xml` has `type="1"` and `hasTexture="1"`. The
+`<mat:texture>` element, in attribute order, stores the original
+`textureFilename`, the applied tile size as `xScale`/`yScale` in inches and
+an `avgColor` packed as `ABGR` (`0xFF` alpha in the top byte, then blue,
+green, red). Its
+`<mat:image>` names the archive entry as `./<basename>` and `file_name`.
+The image bytes sit next to `material.xml` as
+`materials/<folder>/<basename>`, stored (`0x0000`) rather than DEFLATEd.
+SketchUp keeps the source file's basename verbatim, including spaces, `#`,
+`'`, `&` and UTF-8; the writer replaces path separators and `"` with `_`
+because Windows cannot represent them, and rejects control characters.
+`textureFilename` is XML-escaped independently of the archive name.
+
+A positioned face adds the `1027` record inside its attribute block:
+`B036` empty, `1127` front side, `1227` back side. Each side contains a
+`u32` flags `1427` (1 when positioned), nine `f64`s matrix `1527`, three
+`f64`s offset `1627` (zero) and empty pins `1727`. The stored matrix is the
+inverse of the pin map: it maps texture-tile coordinates (multiplied by the
+applied size) to face-plane coordinates, which is what `Face.uv_transform`
+and the writer's `uv.py` expose. Its inverse maps face-plane coordinates to
+texture coordinates; an unpositioned side stores the identity with flags 0.
+
+### 7.6 Curves and arcs
+
+A plain curve is a `384A` record containing the entity base (`DC05`/`DE05`),
+a `u32` edge count `394A`, flag byte `3A4A` (zero), and the first `3B4A` and
+last `3C4A` edge ids. Each of its edges is an ordinary `B80B` record with an
+extra edge-curve reference `BB0B`; the curve record itself sits in the curves
+pool `9613`. A polyline writes curves over its chained edges (closing the
+last-to-first edge when requested); edges that already exist are skipped and
+the remaining new edges are grouped into contiguous runs of at least two,
+with a wrap-around run kept as one curve.
+
+An arc or circle wraps that same curve in `2C4C` inside the arc-curves pool
+`9713`, followed by a `2D4C` frame of 16 `f64`s in file order: centre x/y/z,
+unit normal x/y/z, plane offset, x-axis x/y/z scaled by the radius, y-axis
+x/y/z scaled by the radius, radius, start angle, end angle. Circles use a
+closed curve with start 0 and end 2π; open arcs use segment count + 1 points
+and the requested angles.
+
+### 7.7 Records the core writer emits
 
 Everything lives under the root definition container `8813` inside the
 root entity list `F601`, with child pools for vertices (`8913`), edges

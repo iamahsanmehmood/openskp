@@ -16,7 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - New `openskp.create_vff` module: builds modern VFF files by extending a SketchUp-written template's `model.dat` record tree, recomputing the archive CRCs and header integrity word and giving the document a fresh GUID/save time. The bundled template is an empty SketchUp 2025 document.
 - Core scope: faces (holes, edge hidden/soft/smooth flags and `auto_triangulate`), solid-colour materials, tags, component definitions (including always-faces-camera/shadows-face-sun and explicit GUIDs), instances, and (nested) groups. Shared methods follow `create()`'s names, argument order, defaults and `SkpWriteError` cases; `set_guid` and default `set_document_options` are supported.
 - Material and tag archive folder names follow SketchUp's own sanitising, `_N` collision suffixes (with its drive-prefix fallback for names like `a:b`), case-insensitive collision matching and long-name truncation. Case-variant material names get SketchUp's bare-counter rename (`wood1`) and case-variant tags resolve to the existing tag.
-- Textures/UVs, curves, attribute dictionaries, texts/dimensions/guides/section planes and scenes are follow-up work; `open_existing()` does not yet extend VFF sources.
+- Texture materials (PNG/JPEG, applied size, opacity, average colour), per-face `front_uv`/`back_uv` placement, attribute dictionaries on entities and the model, and polyline/circle/arc curves. `add_texture_material` keeps `create()`'s signature; bytes, `image_name` and `average_color` are VFF-only keyword extras.
+- Texts/dimensions/guides/section planes and scenes are follow-up work; `open_existing()` and `add_image` do not yet extend VFF sources.
 
 ## [1.7.0] — 2026-11-25 — all 5 languages
 

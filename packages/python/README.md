@@ -247,15 +247,18 @@ with builder.add_component_definition("Box") as box:
 builder.add_instance(box, translation=(20, 0, 0), layer=tag)
 with builder.add_group("Base", translation=(0, 20, 0), layer=tag) as base:
     base.add_face([(0, 0, 0), (10, 0, 0), (10, 10, 0), (0, 10, 0)])
+builder.add_circle((40, 0, 0), (0, 0, 1), 10, attributes={"kind": "circle"})
 builder.save("modern.skp")
 ```
 
-This first version covers the core: the container/template and integrity
-word, faces (holes, edge flags, `auto_triangulate`), solid-colour materials,
-tags, component definitions and instances, and (nested) groups. Textures and
-UVs, curves, attribute dictionaries, texts/dimensions/guides/section planes
-and scenes are follow-up work; `open_existing()` does not yet extend VFF
-sources. `set_guid` and the default `set_document_options` are supported;
+This version covers the container/template and integrity word, faces (holes,
+edge flags, `auto_triangulate`, `front_uv`/`back_uv`), solid and image-textured
+materials, tags, component definitions and instances, (nested) groups,
+attribute dictionaries on faces/definitions/instances/groups (plus the
+VFF-only `set_model_attributes`), and polyline/circle/arc curves. Texts,
+dimensions, guides, section planes and scenes are follow-up work;
+`open_existing()` does not yet extend VFF sources, and `add_image` is not
+implemented. `set_guid` and the default `set_document_options` are supported;
 non-default document display settings are not encoded yet.
 
 ### Editing an existing file
