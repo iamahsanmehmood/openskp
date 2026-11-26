@@ -5,17 +5,17 @@
 //! accessors, buffer views, materials and key layout) - see
 //! `json_writer::Flavor::Gltf` for the JSON formatting rules it mirrors.
 
-use std::collections::HashSet;
 use std::fmt;
 use std::io;
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::face_groups::describe_image_format;
+use crate::glb_textures::{resolve_gltf_textures, ResolvedGltfImage, ResolvedMaterialTexture};
+pub use crate::glb_textures::{DecodedRgbaImage, ImageCodec};
 use crate::json_export::JsonValue;
 use crate::json_writer::{self, Flavor};
 use crate::observability::{LogFn, LogLevel};
-use crate::scene::{GltfMaterial, Scene, SceneTexture};
+use crate::scene::{GltfMaterial, Scene};
 
 /// Options for [`to_glb`] / [`export_glb`].
 #[derive(Clone, Default)]
@@ -29,10 +29,14 @@ pub struct GlbOptions {
     /// non-PNG/JPEG texture kept via [`crate::ParseOptions::original_textures`]
     /// is omitted from the GLB).
     pub log: Option<Arc<LogFn>>,
+    /// Optional synchronous codec used to decode and re-encode colorized JPEG
+    /// textures at quality 95 when [`Self::textures`] is `true` (colorized PNG
+    /// textures are baked natively in-tree).
+    pub image_codec: Option<Arc<dyn ImageCodec>>,
 }
 
 impl GlbOptions {
-    /// Default options (`textures: false`, no log callback).
+    /// Default options (`textures: false`, no log callback or image codec).
     pub fn new() -> Self {
         Self::default()
     }
@@ -48,6 +52,12 @@ impl GlbOptions {
         self.log = Some(Arc::new(f));
         self
     }
+
+    /// Sets the synchronous image codec used to bake colorized JPEG textures.
+    pub fn with_image_codec(mut self, codec: impl ImageCodec + 'static) -> Self {
+        self.image_codec = Some(Arc::new(codec));
+        self
+    }
 }
 
 impl fmt::Debug for GlbOptions {
@@ -55,6 +65,7 @@ impl fmt::Debug for GlbOptions {
         f.debug_struct("GlbOptions")
             .field("textures", &self.textures)
             .field("log", &self.log.is_some())
+            .field("image_codec", &self.image_codec.is_some())
             .finish()
     }
 }
@@ -400,10 +411,10 @@ impl GltfBuilder {
         Ok(prim)
     }
 
-    /// Embeds every texture image and returns `(samplers, images, textures)`.
+    /// Embeds every resolved texture image and returns `(samplers, images, textures)`.
     pub fn add_textures(
         &mut self,
-        textures: &[&SceneTexture],
+        textures: &[ResolvedGltfImage<'_>],
     ) -> GlbResult<(JsonValue, JsonValue, JsonValue)> {
         let mut sampler = JsonValue::object();
         sampler.set("wrapS", WRAP_REPEAT);
@@ -412,12 +423,12 @@ impl GltfBuilder {
         let mut images = JsonValue::array();
         let mut gltf_textures = JsonValue::array();
         for (i, tex) in textures.iter().enumerate() {
-            let off = self.append_bytes(&tex.data)?;
+            let off = self.append_bytes(&tex.bytes)?;
             // An image view has no target: glTF's target enum only covers
             // vertex/index buffers.
-            let view = self.add_view(off, tex.data.len(), None);
+            let view = self.add_view(off, tex.bytes.len(), None);
             let mut image = JsonValue::object();
-            image.set("mimeType", &tex.mime_type);
+            image.set("mimeType", tex.mime_type);
             image.set("bufferView", view);
             images.push(image);
             let mut texture = JsonValue::object();
@@ -427,44 +438,6 @@ impl GltfBuilder {
         }
         Ok((samplers, images, gltf_textures))
     }
-}
-
-pub(crate) fn filter_gltf_textures<'a>(
-    raw_textures: &'a [SceneTexture],
-    embed: bool,
-    log: Option<&Arc<LogFn>>,
-) -> (Vec<&'a SceneTexture>, Vec<Option<usize>>) {
-    if !embed || raw_textures.is_empty() {
-        return (Vec::new(), Vec::new());
-    }
-    let mut kept = Vec::with_capacity(raw_textures.len());
-    let mut remap = Vec::with_capacity(raw_textures.len());
-    let mut warned: HashSet<(String, String)> = HashSet::new();
-    for tex in raw_textures {
-        if tex.mime_type == "image/png" || tex.mime_type == "image/jpeg" {
-            remap.push(Some(kept.len()));
-            kept.push(tex);
-        } else {
-            remap.push(None);
-            if let Some(cb) = log {
-                let base = tex.filename.rsplit(['/', '\\']).next().unwrap_or("");
-                let fmt = describe_image_format(&tex.data, &tex.filename);
-                if warned.insert((base.to_owned(), fmt.clone())) {
-                    let label = if base.is_empty() {
-                        String::new()
-                    } else {
-                        format!(" '{base}'")
-                    };
-                    let msg = format!(
-                        "Texture{label} is {fmt}, which glTF 2.0 cannot carry \
-                         (only PNG and JPEG): leaving it out of the GLB"
-                    );
-                    cb(LogLevel::Warning, &msg);
-                }
-            }
-        }
-    }
-    (kept, remap)
 }
 
 fn srgb_to_linear(c: f64) -> f64 {
@@ -486,12 +459,11 @@ fn srgb_to_linear(c: f64) -> f64 {
 pub(crate) fn material_json(
     source: &GltfMaterial,
     embed_textures: bool,
-    remap: &[Option<usize>],
+    resolved: Option<ResolvedMaterialTexture>,
 ) -> JsonValue {
     let pbr = &source.pbr_metallic_roughness;
     let mapped_texture = if embed_textures {
-        pbr.base_color_texture
-            .and_then(|idx| remap.get(idx).copied().flatten())
+        resolved.map(|r| r.image_index)
     } else {
         None
     };
@@ -513,8 +485,8 @@ pub(crate) fn material_json(
     if source.double_sided {
         material.set("doubleSided", true);
     }
-    let factor = if mapped_texture.is_some() {
-        if source.colorized {
+    let factor = if let Some(res) = resolved.filter(|_| embed_textures) {
+        if source.colorized && !res.baked {
             pbr.base_color_factor
         } else {
             [1.0, 1.0, 1.0, pbr.base_color_factor[3]]
@@ -642,12 +614,19 @@ pub(crate) fn document(
 /// holding one primitive per [`crate::GlbPrimitive`], under a single node.
 pub fn to_glb(scene: &Scene, options: &GlbOptions) -> GlbResult<Vec<u8>> {
     validate_scene(scene)?;
-    let (kept_textures, remap) =
-        filter_gltf_textures(&scene.textures, options.textures, options.log.as_ref());
+    let resolved = resolve_gltf_textures(
+        &scene.textures,
+        &scene.gltf_materials,
+        options.textures,
+        options.log.as_ref(),
+        options.image_codec.as_ref(),
+        None,
+    );
     let materials: Vec<JsonValue> = scene
         .gltf_materials
         .iter()
-        .map(|m| material_json(m, options.textures, &remap))
+        .enumerate()
+        .map(|(i, m)| material_json(m, options.textures, resolved.by_material[i]))
         .collect();
 
     let mut gltf_scene = JsonValue::object();
@@ -678,8 +657,8 @@ pub fn to_glb(scene: &Scene, options: &GlbOptions) -> GlbResult<Vec<u8>> {
             p.material_index,
         )?);
     }
-    let textures = if !kept_textures.is_empty() {
-        Some(builder.add_textures(&kept_textures)?)
+    let textures = if !resolved.images.is_empty() {
+        Some(builder.add_textures(&resolved.images)?)
     } else {
         None
     };

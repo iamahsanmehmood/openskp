@@ -49,6 +49,8 @@ pub mod earcut;
 #[doc(hidden)]
 pub mod face_groups;
 #[doc(hidden)]
+pub mod glb_textures;
+#[doc(hidden)]
 pub mod instanced_scene_build;
 #[doc(hidden)]
 pub mod internal;
@@ -65,7 +67,7 @@ pub use fragments::{
     export_fragments, from_fragments, from_fragments_with_options, read_fragments,
     read_fragments_with_options, to_fragments, FragmentsError,
 };
-pub use glb::{export_glb, to_glb, GlbError, GlbOptions, GlbResult};
+pub use glb::{export_glb, to_glb, DecodedRgbaImage, GlbError, GlbOptions, GlbResult, ImageCodec};
 pub use ifc_export::{
     classify_element, export_ifc, generate_ifc_guid, to_ifc, IfcClassifier, IfcError, METRES_TO_MM,
 };
