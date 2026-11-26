@@ -12,6 +12,7 @@ confirmed against minimal pairs saved by SketchUp itself.
 
 from __future__ import annotations
 
+import math
 import re
 import struct
 import time
@@ -26,7 +27,8 @@ from .archive import (
     entries_of,
     header_offset,
 )
-from ..create import SkpWriteError
+from ..create import Length, Point3d, SkpWriteError, Timestamp, Vector3d
+from .uv import uv_attribute, uv_matrix_from_pins
 from .tlv import (
     Record,
     encode_records,
@@ -83,6 +85,7 @@ T_POINT = 0x09C5
 T_EDGE = 0x0BB8
 T_EDGE_START = 0x0BB9
 T_EDGE_END = 0x0BBA
+T_EDGE_CURVE = 0x0BBB
 T_FACE = 0x0DAC
 T_PLANE = 0x0DAD
 T_LOOPS = 0x0DAE
@@ -110,6 +113,34 @@ T_LAYER_SECTION = 0x3A98
 
 T_GROUPS = 0x138D
 T_GROUP = 0x1D4C
+
+T_CURVE = 0x4A38
+T_CURVE_COUNT = 0x4A39
+T_CURVE_FLAG = 0x4A3A
+T_CURVE_FIRST = 0x4A3B
+T_CURVE_LAST = 0x4A3C
+T_ARC_CURVE = 0x4C2C
+T_ARC_FRAME = 0x4C2D
+
+T_ATTR_LIST = 0x36B1
+T_ATTR_SET = 0x36B2
+T_ATTR_DICT = 0x36B3
+T_ATTR_EMPTY = 0x36B0
+T_ATTR_NAME = 0x36B4
+T_ATTR_ENTRIES = 0x36B5
+T_ATTR_KEY = 0x36B6
+T_ATTR_TRAILER = 0x36B7
+
+T_VALUE = 0x38A4
+T_VALUE_INT = 0x38A7
+T_VALUE_DOUBLE = 0x38A9
+T_VALUE_BOOL = 0x38AA
+T_VALUE_TIME = 0x38AC
+T_VALUE_STRING = 0x38AD
+T_VALUE_ARRAY = 0x38AE
+T_VALUE_LENGTH = 0x38AF
+T_VALUE_POINT3D = 0x38B4
+T_VALUE_VECTOR3D = 0x38B5
 
 
 T_CAMERA_MODEL = 0x01FA
@@ -226,10 +257,12 @@ _DEFAULT_LAYER_COLOR = (136, 136, 136)
 # ── Small record constructors ────────────────────────────────────────────
 
 
-def _entity_base(entity_id: Optional[int]) -> Record:
+def _entity_base(entity_id: Optional[int], attributes: Optional[Record] = None) -> Record:
     children: List[Record] = []
     if entity_id is not None:
         children.append(record(T_ENTITY_ID, varint(entity_id)))
+    if attributes is not None:
+        children.append(attributes)
     return Record(T_ENTITY_BASE, children=children)
 
 
@@ -238,8 +271,9 @@ def _drawing(
     material: Optional[int] = None,
     layer: Optional[int] = None,
     flags: int = 0x06,
+    attributes: Optional[Record] = None,
 ) -> Record:
-    children = [_entity_base(entity_id)]
+    children = [_entity_base(entity_id, attributes)]
     if material:
         children.append(record(T_FRONT_MATERIAL, varint(material)))
     if layer:
@@ -336,6 +370,94 @@ def _find_entity_id(record_: Record) -> Optional[int]:
     return None
 
 
+# ── Attribute dictionaries ───────────────────────────────────────────────
+
+
+def _attribute_value(value) -> Record:
+    """One A438-wrapped attribute value, as SketchUp 2025 writes it."""
+    children: List[Record] = []
+    if value is None:
+        pass
+    elif isinstance(value, bool):
+        children.append(record(T_VALUE_BOOL, u8(1 if value else 0)))
+    elif isinstance(value, Timestamp):
+        number = int(value)
+        if not 0 <= number < 1 << 32:
+            raise SkpWriteError("Timestamp must be in [0, 2**32)")
+        children.append(record(T_VALUE_TIME, struct.pack("<I", number)))
+    elif isinstance(value, Length):
+        number = float(value)
+        if not math.isfinite(number):
+            raise SkpWriteError("attribute Length values must be finite")
+        children.append(record(T_VALUE_LENGTH, f64s([number])))
+    elif isinstance(value, int):
+        if not -(1 << 31) <= value < 1 << 31:
+            raise SkpWriteError("attribute integers must fit a signed 32-bit value")
+        children.append(record(T_VALUE_INT, struct.pack("<i", value)))
+    elif isinstance(value, float):
+        number = float(value)
+        if not math.isfinite(number):
+            raise SkpWriteError("attribute Float values must be finite")
+        children.append(record(T_VALUE_DOUBLE, f64s([number])))
+    elif isinstance(value, str):
+        children.append(record(T_VALUE_STRING, value.encode("utf-8")))
+    elif isinstance(value, Point3d):
+        coordinates = [float(value.x), float(value.y), float(value.z)]
+        if not all(math.isfinite(number) for number in coordinates):
+            raise SkpWriteError("attribute Point3d values must be finite")
+        children.append(record(T_VALUE_POINT3D, f64s(coordinates)))
+    elif isinstance(value, Vector3d):
+        coordinates = [float(value.x), float(value.y), float(value.z)]
+        if not all(math.isfinite(number) for number in coordinates):
+            raise SkpWriteError("attribute Vector3d values must be finite")
+        children.append(record(T_VALUE_VECTOR3D, f64s(coordinates)))
+    elif isinstance(value, (list, tuple)):
+        children.append(
+            Record(
+                T_VALUE_ARRAY,
+                children=[_attribute_value(element) for element in value],
+            )
+        )
+    else:
+        raise SkpWriteError(
+            f"unsupported attribute value type: {type(value).__name__}"
+        )
+    return Record(T_VALUE, children=children)
+
+
+def _attribute_dictionary(name: str, entries) -> Record:
+    children: List[Record] = [record(T_ATTR_EMPTY, b"")]
+    children.append(record(T_ATTR_NAME, name.encode("utf-8")))
+    pairs: List[Record] = []
+    for key, value in entries.items():
+        pairs.append(record(T_ATTR_KEY, str(key).encode("utf-8")))
+        pairs.append(_attribute_value(value))
+    children.append(Record(T_ATTR_ENTRIES, children=pairs))
+    children.append(record(T_ATTR_TRAILER, u32(0)))
+    return Record(T_ATTR_DICT, children=children)
+
+
+def _attribute_container(
+    attribute_dicts: Optional[Sequence[Tuple[str, Dict[str, object]]]] = None,
+    uv: Optional[Record] = None,
+) -> Optional[Record]:
+    """The 0x05dd attribute block shared by dictionaries and texture placement."""
+    if uv is None and not attribute_dicts:
+        return None
+    children: List[Record] = [
+        _attribute_dictionary(name, entries)
+        for name, entries in attribute_dicts or ()
+    ]
+    if uv is not None:
+        children.append(uv)
+    return Record(
+        0x05DD,
+        children=[
+            Record(T_ATTR_LIST, children=[Record(T_ATTR_SET, children=children)])
+        ],
+    )
+
+
 # ── Material XML ─────────────────────────────────────────────────────────
 
 def _pbr_block(x_scale: float, y_scale: float) -> str:
@@ -379,12 +501,18 @@ def _validate_xml_name(name: str, kind: str) -> None:
             )
 
 
+def _packed_average(rgb: Tuple[int, int, int]) -> int:
+    red, green, blue = rgb
+    return (0xFF << 24) | (blue << 16) | (green << 8) | red
+
+
 def material_xml(
     name: str,
     rgb: Tuple[int, int, int] = (255, 255, 255),
     *,
     layer_color: bool = False,
     opacity: float = 1.0,
+    texture: Optional[Dict[str, object]] = None,
 ) -> bytes:
     """A ``material.xml`` as SketchUp 2025 writes it.
 
@@ -401,9 +529,31 @@ def material_xml(
         trans_attr, use_trans = "0.5", "0"
     else:
         trans_attr, use_trans = _xml_number(1.0 - opacity), "1"
-    type_attr = "0"
-    has_texture = "0"
-    block = _pbr_block(1.0, 1.0)
+    if texture is None:
+        type_attr = "0"
+        has_texture = "0"
+        block = _pbr_block(1.0, 1.0)
+    else:
+        width = float(texture["width"])
+        height = float(texture["height"])
+        filename = str(texture["filename"])
+        basename = str(texture["basename"])
+        _validate_xml_name(filename, "texture file")
+        _validate_xml_name(basename, "texture file")
+        packed = _packed_average((red, green, blue))
+        type_attr = "1"
+        has_texture = "1"
+        block = (
+            f'    <mat:texture textureFilename="{_xml_attr(filename)}" '
+            f'xScale="{_xml_number(width)}" yScale="{_xml_number(height)}" '
+            f'avgColor="{packed}">\n'
+            "      <mat:images>\n"
+            f'        <mat:image id="1" path="./{_xml_attr(basename)}" '
+            f'file_name="{_xml_attr(basename)}"/>\n'
+            "      </mat:images>\n"
+            "    </mat:texture>\n"
+            + _pbr_block(width, height)
+        )
     text = (
         '<?xml version="1.0" encoding="UTF-8" standalone="no" ?>\n'
         '<materialDocument xmlns="http://sketchup.google.com/schemas/sketchup/1.0/material" '
@@ -495,6 +645,7 @@ class Template:
         self.materials: Dict[str, int] = {}
         self.material_ids: Dict[int, str] = {}
         self._material_names: Dict[str, str] = {}
+        self.texture_sizes: Dict[int, Tuple[float, float]] = {}
         self.material_folders: List[str] = [
             entry.name.split("/")[1]
             for entry in self.entries
@@ -705,20 +856,24 @@ class Template:
 
     # -- adding materials / layers ---------------------------------------
 
+    def _unique_material_name(self, name: str) -> str:
+        if name in self.materials:
+            return name
+        if name.lower() in self._material_names:
+            base = name
+            counter = 1
+            while f"{base}{counter}".lower() in self._material_names:
+                counter += 1
+            return f"{base}{counter}"
+        return name
+
     def add_material(
         self, name: str, rgb: Tuple[int, int, int], opacity: float = 1.0
     ) -> int:
         _validate_xml_name(name, "material")
         if name in self.materials:
             return self.materials[name]
-        if name.lower() in self._material_names:
-            # SketchUp appends a bare counter to a case-insensitive duplicate:
-            # "wood" after "Wood" becomes "wood1", then "wood2", ...
-            base = name
-            counter = 1
-            while f"{base}{counter}".lower() in self._material_names:
-                counter += 1
-            name = f"{base}{counter}"
+        name = self._unique_material_name(name)
         folder = _material_folder_for(name, self._material_folder_keys)
         identifier = self.alloc_id()
         self._material_list().children.append(_material_record(identifier, folder, 0))
@@ -733,6 +888,55 @@ class Template:
         )
         return identifier
 
+
+    def add_texture_material(
+        self,
+        name: str,
+        image: bytes,
+        image_name: str,
+        width: float,
+        height: float,
+        opacity: float,
+        average_rgb: Tuple[int, int, int],
+        texture_filename: str,
+    ) -> int:
+        """Append an image-textured material and its two archive entries."""
+        if name in self.materials:
+            return self.materials[name]
+        if width <= 0 or height <= 0:
+            raise SkpWriteError("a texture's applied size must be positive")
+        name = self._unique_material_name(name)
+        folder = _material_folder_for(name, self._material_folder_keys)
+        identifier = self.alloc_id()
+        self._material_list().children.append(
+            _material_record(identifier, folder, 0)
+        )
+        self.material_ids[identifier] = name
+        self.material_folders.append(folder)
+        self._material_folder_keys.add(folder.lower())
+        self.materials[name] = identifier
+        self._material_names[name.lower()] = name
+        self.texture_sizes[identifier] = (float(width), float(height))
+        self._add_entry(
+            f"materials/{folder}/{image_name}",
+            image,
+            flag=0x0000,
+        )
+        self._add_entry(
+            f"materials/{folder}/material.xml",
+            material_xml(
+                name,
+                average_rgb,
+                opacity=opacity,
+                texture={
+                    "width": float(width),
+                    "height": float(height),
+                    "filename": texture_filename,
+                    "basename": image_name,
+                },
+            ),
+        )
+        return identifier
 
     def add_layer(
         self,
@@ -926,11 +1130,14 @@ class EntityEditor:
         *,
         container: Optional[Record] = None,
         container_id: Optional[int] = None,
+        attributes: Optional[Sequence[Tuple[str, Dict[str, object]]]] = None,
     ) -> None:
         self.template = template
         self.fresh = container is None
-        self.container = container if container is not None else self._blank_container(
-            container_id
+        self.container = (
+            container
+            if container is not None
+            else self._blank_container(container_id, _attribute_container(attributes))
         )
         self.container_id = container_id
         self.vertices: Dict[Tuple[float, float, float], int] = {}
@@ -946,8 +1153,10 @@ class EntityEditor:
         self._existing_order = set(self._existing_order_list)
 
     @staticmethod
-    def _blank_container(container_id: Optional[int]) -> Record:
-        children: List[Record] = [_drawing(container_id)]
+    def _blank_container(
+        container_id: Optional[int], attributes: Optional[Record] = None
+    ) -> Record:
+        children: List[Record] = [_drawing(container_id, attributes=attributes)]
         children.append(Record(T_EMPTY, children=[]))
         children.append(_empty_relationships())
         children.append(record(T_FLAGS_CONTAINER, u8(0)))
@@ -1007,6 +1216,7 @@ class EntityEditor:
         layer: Optional[int],
         *,
         flags: int = 0x06,
+        curve: Optional[int] = None,
     ) -> Tuple[int, bool]:
         """Return ``(edge id, forward)`` for the start-to-end direction."""
         key = (start, end) if start <= end else (end, start)
@@ -1020,11 +1230,51 @@ class EntityEditor:
             record(T_EDGE_START, varint(start)),
             record(T_EDGE_END, varint(end)),
         ]
+        if curve is not None:
+            children.append(record(T_EDGE_CURVE, varint(curve)))
         edge = Record(T_EDGE, children=children)
         self._pool(T_EDGES).children.append(edge)
         self.edges[key] = (identifier, start)
         self.order.append(identifier)
         return identifier, True
+
+    def _face_attribute_block(
+        self,
+        attributes: Optional[Sequence[Tuple[str, Dict[str, object]]]],
+        front_uv: Optional[Sequence[Tuple[Sequence[float], Tuple[float, float]]]],
+        back_uv: Optional[Sequence[Tuple[Sequence[float], Tuple[float, float]]]],
+        material: Optional[int],
+        back_material: Optional[int],
+        normal: Sequence[float],
+    ) -> Optional[Record]:
+        uv_coords = None
+        if front_uv is not None or back_uv is not None:
+            front_matrix = (
+                None
+                if front_uv is None
+                else self._uv_placement(front_uv, material, normal)
+            )
+            back_matrix = (
+                None
+                if back_uv is None
+                else self._uv_placement(back_uv, back_material, normal)
+            )
+            uv_coords = uv_attribute(front_matrix, back_matrix)
+        return _attribute_container(attributes, uv=uv_coords)
+
+    def validate_face_attributes(
+        self,
+        attributes: Optional[Sequence[Tuple[str, Dict[str, object]]]],
+        front_uv: Optional[Sequence[Tuple[Sequence[float], Tuple[float, float]]]],
+        back_uv: Optional[Sequence[Tuple[Sequence[float], Tuple[float, float]]]],
+        material: Optional[int],
+        back_material: Optional[int],
+        normal: Sequence[float],
+    ) -> None:
+        """Raise before geometry is added if attrs/UV cannot be encoded."""
+        self._face_attribute_block(
+            attributes, front_uv, back_uv, material, back_material, normal
+        )
 
     def add_face(
         self,
@@ -1036,6 +1286,13 @@ class EntityEditor:
         hidden: bool = False,
         holes: Sequence[Sequence[Sequence[float]]] = (),
         edge_flags: int = 0x06,
+        front_uv: Optional[
+            Sequence[Tuple[Sequence[float], Tuple[float, float]]]
+        ] = None,
+        back_uv: Optional[
+            Sequence[Tuple[Sequence[float], Tuple[float, float]]]
+        ] = None,
+        attributes: Optional[Sequence[Tuple[str, Dict[str, object]]]] = None,
     ) -> int:
         outer = [tuple(float(c) for c in p) for p in points]
         if len(outer) < 3:
@@ -1046,17 +1303,26 @@ class EntityEditor:
             + normal[1] * outer[0][1]
             + normal[2] * outer[0][2]
         )
-        loops: List[Record] = []
         rings = [outer]
         for hole in holes:
             source = getattr(hole, "points", hole)
             ring = [tuple(float(c) for c in p) for p in source]
             if len(ring) < 3:
                 raise ValueError("a hole needs at least three points")
+            for index in range(len(ring)):
+                if ring[index] == ring[(index + 1) % len(ring)]:
+                    raise ValueError("a face ring has a repeated adjacent point")
             hole_normal = newell_normal(ring)
             if sum(a * b for a, b in zip(hole_normal, normal)) > 0:
                 ring = list(reversed(ring))
             rings.append(ring)
+        for index in range(len(outer)):
+            if outer[index] == outer[(index + 1) % len(outer)]:
+                raise ValueError("a face ring has a repeated adjacent point")
+        attribute_block = self._face_attribute_block(
+            attributes, front_uv, back_uv, material, back_material, normal
+        )
+        loops: List[Record] = []
         for ring in rings:
             uses: List[Record] = []
             for index in range(len(ring)):
@@ -1064,8 +1330,6 @@ class EntityEditor:
                 end_point = ring[(index + 1) % len(ring)]
                 start = self.add_vertex(start_point)
                 end = self.add_vertex(end_point)
-                if start == end:
-                    raise ValueError("a face ring has a repeated adjacent point")
                 edge_id, forward = self.add_edge(start, end, layer, flags=edge_flags)
                 uses.append(
                     Record(
@@ -1087,6 +1351,7 @@ class EntityEditor:
                 material=material,
                 layer=layer,
                 flags=flags,
+                attributes=attribute_block,
             ),
             record(T_PLANE, f64s([*normal, plane_d])),
             Record(T_LOOPS, children=loops),
@@ -1098,6 +1363,23 @@ class EntityEditor:
         return identifier
 
 
+    def _uv_placement(
+        self,
+        pins: Sequence[Tuple[Sequence[float], Tuple[float, float]]],
+        material: Optional[int],
+        normal: Sequence[float],
+    ) -> List[float]:
+        size = (
+            self.template.texture_sizes.get(material)
+            if material is not None
+            else None
+        )
+        tile_width, tile_height = size if size is not None else (1.0, 1.0)
+        try:
+            return uv_matrix_from_pins(pins, normal, tile_width, tile_height)
+        except ValueError as exc:
+            raise SkpWriteError(str(exc)) from exc
+
     def add_instance(
         self,
         definition_container_id: int,
@@ -1108,6 +1390,7 @@ class EntityEditor:
         material: Optional[int] = None,
         layer: Optional[int] = None,
         hidden: bool = False,
+        attributes: Optional[Sequence[Tuple[str, Dict[str, object]]]] = None,
     ) -> int:
         identifier = self.template.alloc_id()
         flags = 0x06 | (0x01 if hidden else 0)
@@ -1119,6 +1402,7 @@ class EntityEditor:
                     material=material,
                     layer=layer,
                     flags=flags,
+                    attributes=_attribute_container(attributes),
                 ),
                 record(T_INSTANCE_NAME, name.encode("utf-8")),
                 record(T_INSTANCE_TRANSFORM, f64s(matrix13)),
@@ -1143,6 +1427,7 @@ class EntityEditor:
         material: Optional[int] = None,
         layer: Optional[int] = None,
         hidden: bool = False,
+        attributes: Optional[Sequence[Tuple[str, Dict[str, object]]]] = None,
     ) -> int:
         """Place a group: a ``0x1d4c`` wrapper around an ordinary instance."""
         identifier = self.template.alloc_id()
@@ -1155,6 +1440,7 @@ class EntityEditor:
                     material=material,
                     layer=layer,
                     flags=flags,
+                    attributes=_attribute_container(attributes),
                 ),
                 record(T_INSTANCE_NAME, name.encode("utf-8")),
                 record(T_INSTANCE_TRANSFORM, f64s(matrix13)),
@@ -1168,6 +1454,211 @@ class EntityEditor:
             for corner in _box_corners(definition_bounds):
                 self._extend_bounds(_transform_point(corner, matrix13))
         return identifier
+
+    def add_curve_edges(
+        self,
+        points: Sequence[Sequence[float]],
+        *,
+        closed: bool = False,
+        arc_frame: Optional[Sequence[float]] = None,
+        layer: Optional[int] = None,
+        flags: int = 0x06,
+    ) -> Tuple[int, List[int]]:
+        """Create curves over the not-yet-existing edges of *points*.
+
+        Edges that already exist are left out; the remaining new edges are
+        split into contiguous runs (a run wrapping past a closed ring's end
+        is one run) and only runs of at least two edges get a curve record.
+        This matches create.py's post-review behaviour and keeps the curve
+        records consistent with the edges that actually point at them.
+        """
+        if len(points) < 2:
+            raise ValueError("a curve needs at least two points")
+        coordinates = [tuple(float(c) for c in point) for point in points]
+        count = len(coordinates) if closed else len(coordinates) - 1
+        temp_ids: Dict[Tuple[float, float, float], int] = {}
+        next_temp = -1
+
+        def vertex_id(point: Tuple[float, float, float]) -> int:
+            nonlocal next_temp
+            existing = self.vertices.get(point)
+            if existing is not None:
+                return existing
+            if point not in temp_ids:
+                temp_ids[point] = next_temp
+                next_temp -= 1
+            return temp_ids[point]
+
+        simulated = {frozenset(key) for key in self.edges}
+        seg_new: List[bool] = []
+        for index in range(count):
+            start = coordinates[index % len(coordinates)]
+            end = coordinates[(index + 1) % len(coordinates)]
+            if start == end:
+                raise ValueError("a curve has a repeated adjacent point")
+            key = frozenset((vertex_id(start), vertex_id(end)))
+            if key in simulated:
+                seg_new.append(False)
+            else:
+                simulated.add(key)
+                seg_new.append(True)
+
+        runs: List[List[int]] = []
+        current: List[int] = []
+        for index, is_new in enumerate(seg_new):
+            if is_new:
+                current.append(index)
+            elif current:
+                runs.append(current)
+                current = []
+        if current:
+            runs.append(current)
+        if (
+            closed
+            and len(runs) >= 2
+            and runs[0][0] == 0
+            and runs[-1][-1] == count - 1
+        ):
+            runs = [runs[-1] + runs[0]] + runs[1:-1]
+        runs = [run for run in runs if len(run) >= 2]
+
+        curve_for_seg: Dict[int, int] = {}
+        run_curves: List[Tuple[int, List[int], Optional[List[float]]]] = []
+        for run in runs:
+            curve_id = self.template.alloc_id()
+            frame = arc_frame
+            if frame is not None and not (
+                len(run) == count and run[0] == 0
+            ):
+                center = frame[0:3]
+                normal = frame[3:6]
+                offset = frame[6]
+                x_axis = frame[7:10]
+                y_axis = frame[10:13]
+                radius = frame[13]
+                start_angle = frame[14]
+                end_angle = frame[15]
+                sweep = end_angle - start_angle
+                first = run[0]
+                a0 = start_angle + sweep * (first / count)
+                a1 = start_angle + sweep * ((first + len(run)) / count)
+                if closed and first + len(run) > count:
+                    a0 -= 2.0 * math.pi
+                    a1 -= 2.0 * math.pi
+                frame = [
+                    *center,
+                    *normal,
+                    offset,
+                    *x_axis,
+                    *y_axis,
+                    radius,
+                    a0,
+                    a1,
+                ]
+            run_curves.append((curve_id, run, frame))
+            for index in run:
+                curve_for_seg[index] = curve_id
+
+        edges: List[int] = []
+        run_edges: Dict[int, List[int]] = {
+            curve_id: [] for curve_id, _run, _frame in run_curves
+        }
+        for index in range(count):
+            start = self.add_vertex(coordinates[index % len(coordinates)])
+            end = self.add_vertex(coordinates[(index + 1) % len(coordinates)])
+            curve_id = curve_for_seg.get(index)
+            edge_id, _forward = self.add_edge(
+                start, end, layer, flags=flags, curve=curve_id
+            )
+            edges.append(edge_id)
+            if curve_id is not None:
+                run_edges[curve_id].append(edge_id)
+
+        first_curve = run_curves[0][0] if run_curves else 0
+        for curve_id, _run, frame in run_curves:
+            curve_edges = run_edges[curve_id]
+            curve_record = Record(
+                T_CURVE,
+                children=[
+                    _entity_base(curve_id),
+                    record(T_CURVE_COUNT, u32(len(curve_edges))),
+                    record(T_CURVE_FLAG, u8(0)),
+                    record(T_CURVE_FIRST, varint(curve_edges[0])),
+                    record(T_CURVE_LAST, varint(curve_edges[-1])),
+                ],
+            )
+            if frame is not None:
+                self._pool(T_ARC_CURVES).children.append(
+                    Record(
+                        T_ARC_CURVE,
+                        children=[curve_record, record(T_ARC_FRAME, f64s(frame))],
+                    )
+                )
+            else:
+                self._pool(T_CURVES).children.append(curve_record)
+        return first_curve, edges
+
+    def add_model_attributes(
+        self, attribute_dicts: Sequence[Tuple[str, Dict[str, object]]]
+    ) -> None:
+        """Add dictionaries to the model's existing attribute block.
+
+        A dictionary whose name already exists **replaces** that dictionary
+        in place; dictionaries the template already had under other names,
+        including GeoReference/GSU_ContributorsInfo/temp, are kept.  A
+        second call with different names therefore adds to the same block
+        instead of writing a second one.
+        """
+        if not attribute_dicts:
+            return
+        drawing = next(
+            (child for child in self.container.children or [] if child.tag == T_DRAWING),
+            None,
+        )
+        if drawing is None:
+            raise ValueError("the model container has no drawing element")
+        entity_records = parse_records(
+            drawing.payload,
+            {T_ENTITY_BASE, 0x05DD, T_ATTR_LIST, T_ATTR_SET, T_ATTR_DICT},
+        )
+        entity = next(
+            (candidate for candidate in entity_records if candidate.tag == T_ENTITY_BASE),
+            None,
+        )
+        if entity is None:
+            raise ValueError("the model drawing element is malformed")
+        if entity.children is None:
+            entity.children = []
+        existing = entity.child(0x05DD)
+        if existing is None:
+            entity.children.append(_attribute_container(attribute_dicts))
+            drawing.payload = encode_records(entity_records)
+            return
+        attribute_set = None
+        for candidate in existing.children or []:
+            if candidate.tag == T_ATTR_LIST:
+                attribute_set = candidate.child(T_ATTR_SET)
+                if attribute_set is not None:
+                    break
+        if attribute_set is None:
+            attribute_set = Record(T_ATTR_SET, children=[])
+            existing.children = [
+                Record(T_ATTR_LIST, children=[attribute_set])
+            ] + (existing.children or [])
+        children = attribute_set.children or []
+        for name, entries in attribute_dicts:
+            replacement = _attribute_dictionary(name, entries)
+            for index, current in enumerate(children):
+                if current.tag != T_ATTR_DICT:
+                    continue
+                name_node = current.child(T_ATTR_NAME)
+                if name_node is not None and name_node.payload == name.encode("utf-8"):
+                    children[index] = replacement
+                    break
+            else:
+                children.append(replacement)
+        attribute_set.children = children
+        drawing.payload = encode_records(entity_records)
 
     # -- finalize ---------------------------------------------------------
 

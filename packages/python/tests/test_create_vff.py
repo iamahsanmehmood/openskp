@@ -42,7 +42,7 @@ from openskp._vff_writer.archive import (
     read_zip,
 )
 from openskp._vff_writer.tlv import parse_records
-from openskp.create import SkpWriteError
+from openskp.create import Length, Point3d, SkpWriteError, Timestamp, Vector3d
 from openskp.create_vff import (
     DEFAULT_TEMPLATE,
     VffBuilder,
@@ -816,3 +816,665 @@ def test_groups_and_nested_placements(tmp_path):
     assert rotated.matrix[9:12] == [40.0, 40.0, 0.0]
 
 
+def _face_dictionaries(data: bytes):
+    from openskp._core import (
+        CONTAINER_TAGS,
+        extract_attribute_dictionaries,
+        parse_tlv_recursive,
+    )
+    from openskp.vff import extract_skp_contents
+
+    model_data = extract_skp_contents(data)["model_data"]
+    roots = parse_tlv_recursive(model_data, 0, len(model_data), CONTAINER_TAGS)
+    found = []
+
+    def walk(node):
+        if node.tag == "AC0D":
+            drawing = next(
+                (child for child in node.children if child.tag == "D007"), None
+            )
+            if drawing is not None:
+                found.append(extract_attribute_dictionaries(drawing))
+            return
+        for child in node.children:
+            walk(child)
+
+    for root in roots:
+        walk(root)
+    return found
+
+
+ATTRIBUTE_VALUES = {
+    "string": "hello",
+    "int": 42,
+    "float": 1.5,
+    "bool": True,
+    "nothing": None,
+    "length": Length(2.0),
+    "point": Point3d(1, 2, 3),
+    "vector": Vector3d(0, 0, 1),
+    "time": Timestamp(1700000000),
+    "array": [1, [2, "x"], False, None],
+}
+ATTRIBUTE_VALUES_EXPECTED = {
+    "string": "hello",
+    "int": 42,
+    "float": 1.5,
+    "bool": True,
+    "nothing": None,
+    "length": 2.0,
+    "point": (1.0, 2.0, 3.0),
+    "vector": (0.0, 0.0, 1.0),
+    "time": 1700000000,
+    "array": [1, [2, "x"], False, None],
+}
+SQUARE = [(0, 0, 0), (10, 0, 0), (10, 10, 0), (0, 10, 0)]
+
+
+def _plain(value):
+    return list(value) if isinstance(value, tuple) else value
+
+
+def test_face_attribute_dictionary_encodes_every_value_type():
+    builder = create_vff()
+    builder.add_face(SQUARE, attributes=ATTRIBUTE_VALUES)
+    dictionaries = _face_dictionaries(builder.to_bytes())
+    (attributes,) = [entry["attributes"] for entry in dictionaries if "attributes" in entry]
+    for key, expected in ATTRIBUTE_VALUES_EXPECTED.items():
+        assert _plain(attributes[key]) == _plain(expected), (key, attributes[key], expected)
+
+
+def test_face_writes_multiple_attribute_dictionaries():
+    builder = create_vff()
+    builder.add_face(
+        SQUARE,
+        attribute_dicts=[("first", {"a": 1}), ("second", {"b": "two"})],
+    )
+    dictionaries = _face_dictionaries(builder.to_bytes())
+    assert {"first": {"a": 1}, "second": {"b": "two"}} in dictionaries
+
+
+def test_attribute_dictionaries_on_definitions_instances_groups_and_model(tmp_path):
+    builder = create_vff()
+    with builder.add_component_definition("D", attributes={"def": 1}) as definition:
+        definition.add_face(SQUARE, attributes={"face": 2})
+    builder.add_instance(definition, attributes={"instance": 3})
+    with builder.add_group("G", attributes={"group": 4}) as group:
+        group.add_face([(0, 0, 20), (10, 0, 20), (10, 10, 20), (0, 10, 20)])
+    builder.set_model_attributes({"model": 5})
+    model = parse_bytes(tmp_path, builder.to_bytes())
+
+    definition = next(d for d in model.definitions.values() if d.name == "D")
+    assert definition.attribute_dictionaries == {"attributes": {"def": 1}}
+    assert [i.attribute_dictionaries for i in model.root.instances] == [
+        {"attributes": {"instance": 3}},
+        {"attributes": {"group": 4}},
+    ]
+    assert model.attribute_dictionaries["attributes"] == {"model": 5}
+
+
+def test_bad_attribute_values_raise_skpwriteerror():
+    with pytest.raises(SkpWriteError):
+        create_vff().add_face(SQUARE, attributes={"bad": object()})
+    with pytest.raises(SkpWriteError):
+        create_vff().add_face(
+            SQUARE,
+            attributes={"a": 1},
+            attribute_dicts=[("d", {"b": 2})],
+        )
+    with pytest.raises(SkpWriteError):
+        create_vff().add_face(SQUARE, attributes={"time": Timestamp(-1)})
+    with pytest.raises(SkpWriteError):
+        create_vff().add_face(SQUARE, attributes={"int": 1 << 31})
+    with pytest.raises(SkpWriteError):
+        create_vff().add_face(SQUARE, attributes={"float": math.nan})
+
+
+def test_texture_materials_round_trip(tmp_path):
+    png = (WRITER_FIXTURES / "tex.png").read_bytes()
+    jpeg = (WRITER_FIXTURES / "tex.jpg").read_bytes()
+    builder = create_vff()
+    png_handle = builder.add_texture_material(
+        "TexPNG", str(WRITER_FIXTURES / "tex.png"), 10.0, 5.0
+    )
+    builder.add_texture_material(
+        "TexJPEG", jpeg, 8.0, 4.0, image_name="tex.jpg"
+    )
+    builder.add_face(SQUARE, material=png_handle)
+    model = parse_bytes(tmp_path, builder.to_bytes())
+    textures = {material.name: material.texture for material in model.materials}
+    assert textures["TexPNG"].data == png
+    assert textures["TexPNG"].width == 10.0
+    assert textures["TexPNG"].height == 5.0
+    assert textures["TexJPEG"].data == jpeg
+    assert textures["TexJPEG"].filename == "tex.jpg"
+    assert textures["TexJPEG"].width == 8.0
+
+
+def test_texture_filename_override_and_special_names(tmp_path):
+    builder = create_vff()
+    handle = builder.add_texture_material(
+        "Tex", (WRITER_FIXTURES / "tex.png").read_bytes(),
+        filename="C:/Textures/tex.png", image_name="té#xt ure.png",
+    )
+    builder.add_face(SQUARE, material=handle)
+    model = parse_bytes(tmp_path, builder.to_bytes())
+    texture = model.materials[0].texture
+    assert texture.filename == "C:/Textures/tex.png"
+    entries = [entry.name for entry in read_zip(builder.to_bytes(), builder.to_bytes().find(b"PK\x03\x04"))]
+    assert any(entry.endswith("/té#xt ure.png") for entry in entries), entries
+
+
+def test_texture_read_errors_pass_through_like_create_py(tmp_path):
+    from openskp.create import create as create_classic
+
+    with pytest.raises(FileNotFoundError):
+        create_vff().add_texture_material("Tex", "/nonexistent/texture.png")
+    directory = tmp_path / "texture-dir"
+    directory.mkdir()
+    # Windows raises PermissionError when read_bytes hits a directory.
+    with pytest.raises((IsADirectoryError, PermissionError)) as vff_error:
+        create_vff().add_texture_material("Tex", str(directory))
+    with pytest.raises((IsADirectoryError, PermissionError)) as classic_error:
+        create_classic().add_texture_material("Tex", str(directory))
+    assert type(vff_error.value) is type(classic_error.value)
+    assert not isinstance(vff_error.value, SkpWriteError)
+    with pytest.raises(SkpWriteError):
+        create_vff().add_texture_material("Tex", b"not an image")
+    with pytest.raises(SkpWriteError):
+        create_vff().add_texture_material(
+            "Tex", (WRITER_FIXTURES / "tex.png").read_bytes(), float("nan")
+        )
+    with pytest.raises(SkpWriteError):
+        create_vff().add_texture_material(
+            "Tex", (WRITER_FIXTURES / "tex.png").read_bytes(), image_name="bad\x01.png"
+        )
+    with pytest.raises(SkpWriteError):
+        create_vff().add_texture_material(
+            "Tex", (WRITER_FIXTURES / "tex.png").read_bytes(), image_name="bad\n.png"
+        )
+    for image_name in (".", ".."):
+        with pytest.raises(SkpWriteError):
+            create_vff().add_texture_material(
+                "Tex", (WRITER_FIXTURES / "tex.png").read_bytes(),
+                image_name=image_name,
+            )
+
+
+def test_face_uvs_round_trip_through_sketchup_matrix(tmp_path):
+    from openskp._face_groups import compute_face_uv, face_uv_basis
+
+    pins = [
+        ((20, 0, 0), (0.0, 0.0)),
+        ((30, 0, 0), (1.0, 0.0)),
+        ((20, 10, 0), (0.0, 1.0)),
+    ]
+    builder = create_vff()
+    texture = builder.add_texture_material(
+        "Tex", str(WRITER_FIXTURES / "tex.png"), 10.0, 5.0
+    )
+    builder.add_face(
+        [(20, 0, 0), (30, 0, 0), (30, 10, 0), (20, 10, 0)],
+        material=texture,
+        front_uv=pins,
+    )
+    model = parse_bytes(tmp_path, builder.to_bytes())
+    (face,) = model.root.faces.values()
+    assert face.uv_transform is not None
+    xr, yr = face_uv_basis(face.normal)
+    for point, uv in pins:
+        assert compute_face_uv(
+            point, xr, yr, face.uv_transform, 10.0, 5.0
+        ) == pytest.approx(uv, abs=1e-9)
+
+
+def test_face_uv_requires_exactly_three_pins():
+    from openskp.create import create as create_classic
+
+    pins = [
+        ((0, 0, 0), (0.0, 0.0)),
+        ((10, 0, 0), (1.0, 0.0)),
+        ((0, 10, 0), (0.0, 1.0)),
+        ((10, 10, 0), (1.0, 1.0)),
+    ]
+    with pytest.raises(SkpWriteError) as classic:
+        create_classic().add_face(SQUARE, front_uv=pins)
+    with pytest.raises(SkpWriteError) as vff:
+        create_vff().add_face(SQUARE, front_uv=pins)
+    assert str(vff.value) == str(classic.value)
+    assert "texture positioning needs exactly 3" in str(vff.value)
+
+
+def test_bad_face_uvs_raise_skpwriteerror():
+    builder = create_vff()
+    texture = builder.add_texture_material(
+        "Tex", str(WRITER_FIXTURES / "tex.png")
+    )
+    with pytest.raises(SkpWriteError):
+        builder.add_face(
+            SQUARE,
+            material=texture,
+            front_uv=[
+                ((0, 0, 0), (0.0, 0.0)),
+                ((10, 0, 0), (float("nan"), 0.0)),
+                ((0, 10, 0), (0.0, 1.0)),
+            ],
+        )
+    with pytest.raises(SkpWriteError):
+        builder.add_face(
+            SQUARE,
+            material=texture,
+            front_uv=[
+                ((0, 0, 0), (0.0, 0.0)),
+                ((10, 0, 0), (1.0, 0.0)),
+                ((0, 10, 0), (0.0, 1.0)),
+            ],
+            auto_triangulate=True,
+        )
+
+
+def test_polylines_at_root_and_in_definitions(tmp_path):
+    builder = create_vff()
+    builder.add_polyline([(0, 0, 0), (10, 0, 0), (10, 10, 0)])
+    builder.add_polyline(
+        [(0, 20, 0), (10, 20, 0), (10, 30, 0)], closed=True
+    )
+    with builder.add_component_definition("CurveDef") as definition:
+        definition.add_polyline([(0, 0, 0), (0, 10, 0), (10, 10, 0)])
+    model = parse_bytes(tmp_path, builder.to_bytes())
+    assert len(model.root.edges) == 5
+    definition_model = next(
+        d for d in model.definitions.values() if d.name == "CurveDef"
+    )
+    assert len(definition_model.edges) == 2
+
+
+def test_bad_polylines_raise_skpwriteerror():
+    with pytest.raises(SkpWriteError):
+        create_vff().add_polyline([(0, 0, 0)])
+    with pytest.raises(SkpWriteError):
+        create_vff().add_polyline([(0, 0, 0), (float("inf"), 0, 0)])
+    with pytest.raises(SkpWriteError):
+        create_vff().add_polyline([(0, 0, 0), (0, 0, 0)])
+
+
+def test_circles_and_arcs_at_root_and_in_definitions(tmp_path):
+    builder = create_vff()
+    builder.add_circle((0, 0, 0), (0, 0, 1), 10, 12)
+    builder.add_arc((30, 0, 0), (0, 0, 1), 10, 0.0, math.pi / 2, 8)
+    with builder.add_component_definition("Curves") as definition:
+        definition.add_circle((0, 0, 0), (1, 0, 0), 5, 6)
+        definition.add_arc((20, 0, 0), (1, 0, 0), 5, 0.5, 1.5, 4)
+    model = parse_bytes(tmp_path, builder.to_bytes())
+
+    root_arcs = sorted(
+        model.root.arcs.values(), key=lambda arc: arc.center[0]
+    )
+    assert len(root_arcs) == 2
+    circle, arc = root_arcs
+    assert circle.center == (0.0, 0.0, 0.0)
+    assert circle.normal == (0.0, 0.0, 1.0)
+    assert circle.start_angle == 0.0
+    assert circle.end_angle == pytest.approx(2.0 * math.pi)
+    assert arc.center == (30.0, 0.0, 0.0)
+    assert arc.start_angle == 0.0
+    assert arc.end_angle == pytest.approx(math.pi / 2)
+    assert len(model.root.faces) == 1
+    assert len(model.root.edges) == 20
+
+    definition_model = next(
+        d for d in model.definitions.values() if d.name == "Curves"
+    )
+    assert len(definition_model.arcs) == 2
+    assert len(definition_model.faces) == 1
+    assert len(definition_model.edges) == 10
+
+
+def test_circle_curve_handle_can_be_a_face_hole(tmp_path):
+    builder = create_vff()
+    hole = builder.add_circle_curve((5, 5, 0), (0, 0, 1), 2, 8)
+    builder.add_face(
+        [(0, 0, 0), (10, 0, 0), (10, 10, 0), (0, 10, 0)], holes=[hole]
+    )
+    model = parse_bytes(tmp_path, builder.to_bytes())
+    (face,) = model.root.faces.values()
+    assert len(face.loops) == 2
+
+
+def test_bad_curves_raise_skpwriteerror():
+    for segments in (2, 256):
+        with pytest.raises(
+            SkpWriteError, match=rf"num_segments must be between 3 and 255, got {segments}"
+        ):
+            create_vff().add_circle((0, 0, 0), (0, 0, 1), 1, segments)
+        with pytest.raises(
+            SkpWriteError, match=rf"num_segments must be between 3 and 255, got {segments}"
+        ):
+            create_vff().add_arc((0, 0, 0), (0, 0, 1), 1, 0.0, 1.0, segments)
+    with pytest.raises(SkpWriteError, match="zero vector"):
+        create_vff().add_circle((0, 0, 0), (0, 0, 0), 1)
+    with pytest.raises(SkpWriteError, match="finite"):
+        create_vff().add_circle((0, 0, 0), (0, 0, 1), float("inf"))
+    with pytest.raises(SkpWriteError, match="must differ"):
+        create_vff().add_arc((0, 0, 0), (0, 0, 1), 1, 0.5, 0.5)
+    with pytest.raises(SkpWriteError, match="finite"):
+        create_vff().add_arc((0, 0, 0), (0, 0, 1), 1, 0.0, float("inf"))
+    with pytest.raises(SkpWriteError, match="non-finite"):
+        create_vff().add_arc((1e308, 0, 0), (0, 0, 1), 1e308, 0.0, 1.0)
+
+
+def _face_attribute_set_order(data: bytes):
+    from openskp._core import CONTAINER_TAGS, parse_tlv_recursive
+    from openskp.vff import extract_skp_contents
+
+    tags = set(CONTAINER_TAGS) | {
+        "D007", "DC05", "DD05", "B136", "B236",
+    }
+    model_data = extract_skp_contents(data)["model_data"]
+    roots = parse_tlv_recursive(model_data, 0, len(model_data), tags)
+    orders = []
+
+    def walk(node):
+        if node.tag == "AC0D":
+            for child in node.children:
+                if child.tag != "D007":
+                    continue
+                for entity in child.children:
+                    if entity.tag != "DC05":
+                        continue
+                    for block in entity.children:
+                        if block.tag != "DD05":
+                            continue
+                        for container in block.children:
+                            for record_set in container.children:
+                                if record_set.tag == "B236":
+                                    orders.append([c.tag for c in record_set.children])
+        for child in node.children:
+            walk(child)
+
+    for root in roots:
+        walk(root)
+    return orders
+
+
+def test_face_with_uv_and_attributes_keeps_both(tmp_path):
+    pins = [
+        ((0, 0, 0), (0.0, 0.0)),
+        ((10, 0, 0), (1.0, 0.0)),
+        ((0, 10, 0), (0.0, 1.0)),
+    ]
+    builder = create_vff()
+    texture = builder.add_texture_material(
+        "Tex", str(WRITER_FIXTURES / "tex.png"), 10.0, 10.0
+    )
+    builder.add_face(
+        SQUARE,
+        material=texture,
+        front_uv=pins,
+        attribute_dicts=[("attributes", {"d": 1}), ("second", {"label": "ok"})],
+    )
+    data = builder.to_bytes()
+    assert _face_attribute_set_order(data) == [["B336", "B336", "1027"]]
+    dictionaries = [
+        entry for entry in _face_dictionaries(data) if "attributes" in entry
+    ]
+    assert dictionaries == [{"attributes": {"d": 1}, "second": {"label": "ok"}}]
+
+
+def test_set_model_attributes_keeps_template_and_earlier_dicts(tmp_path):
+    base = parse_bytes(tmp_path, create_vff().to_bytes())
+    builder = create_vff()
+    builder.set_model_attributes({"a": 1}, "D1")
+    builder.set_model_attributes({"b": 2}, "D2")
+    builder.set_model_attributes({"a": 3}, "D1")
+    model = parse_bytes(tmp_path, builder.to_bytes())
+    dictionaries = model.attribute_dictionaries
+    assert set(base.attribute_dictionaries) <= set(dictionaries)
+    assert dictionaries["D1"] == {"a": 3}
+    assert dictionaries["D2"] == {"b": 2}
+    assert len(_model_attribute_blocks(builder.to_bytes())) == 1
+
+
+def _model_attribute_blocks(data: bytes):
+    from openskp._vff_writer.template import MODEL_CONTAINERS
+    from openskp._vff_writer.tlv import parse_records
+    from openskp.vff import extract_skp_contents
+
+    model_data = extract_skp_contents(data)["model_data"]
+    records = parse_records(
+        model_data,
+        set(MODEL_CONTAINERS) | {0x07D0, 0x05DC, 0x05DD},
+    )
+
+    def find(node, tag):
+        if node.tag == tag:
+            return node
+        for child in node.children or []:
+            found = find(child, tag)
+            if found is not None:
+                return found
+        return None
+
+    root = find(records[0], 0x1388)
+    drawing = next(c for c in root.children if c.tag == 0x07D0)
+    entity = next(c for c in drawing.children if c.tag == 0x05DC)
+    return [c for c in entity.children if c.tag == 0x05DD]
+
+
+def _all_attribute_blocks(data: bytes):
+    from openskp._vff_writer.template import MODEL_CONTAINERS
+    from openskp._vff_writer.tlv import parse_records
+    from openskp.vff import extract_skp_contents
+
+    model_data = extract_skp_contents(data)["model_data"]
+    records = parse_records(
+        model_data,
+        set(MODEL_CONTAINERS)
+        | {
+            0x07D0, 0x05DC, 0x05DD, 0x36B1, 0x36B2, 0x36B3,
+            0x2710, 0x2711, 0x2712, 0x2713,
+        },
+    )
+    count = 0
+
+    def has_dictionary(node):
+        if node.tag == 0x36B3:
+            return True
+        return any(has_dictionary(child) for child in node.children or [])
+
+    def walk(node):
+        nonlocal count
+        if node.tag == 0x05DD and not has_dictionary(node):
+            count += 1
+        for child in node.children or []:
+            walk(child)
+
+    for record_ in records:
+        walk(record_)
+    return count
+
+
+def test_model_without_attributes_has_no_empty_blocks(tmp_path):
+    builder = create_vff()
+    builder.add_face(SQUARE)
+    with builder.add_component_definition("D") as definition:
+        definition.add_face(SQUARE)
+    builder.add_instance(definition, translation=(20, 0, 0))
+    with builder.add_group(translation=(0, 20, 0)) as group:
+        group.add_face(SQUARE)
+    data = builder.to_bytes()
+    assert _all_attribute_blocks(data) == 0
+    parse_bytes(tmp_path, data)
+
+
+def test_failed_geometry_calls_leave_no_geometry(tmp_path):
+    bad_nan_pins = [
+        ((0, 0, 0), (0.0, 0.0)),
+        ((10, 0, 0), (float("nan"), 0.0)),
+        ((0, 10, 0), (0.0, 1.0)),
+    ]
+    cases = [
+        lambda b: b.add_face(SQUARE, attributes={"x": object()}),
+        lambda b: b.add_face(SQUARE, attributes={"x": 2 ** 40}),
+        lambda b: b.add_circle(
+            (0, 0, 0), (0, 0, 1), 5,
+            holes=[[(1, 1, 1), (2, 1, 1), (2, 2, 1)]],
+        ),
+        lambda b: b.add_circle(
+            (0, 0, 0), (0, 0, 1), 5, attributes={"x": object()}
+        ),
+        lambda b: b.add_face(
+            SQUARE, material=b.add_texture_material("Tex", str(WRITER_FIXTURES / "tex.png")),
+            front_uv=bad_nan_pins,
+        ),
+        lambda b: b.add_circle(
+            (0, 0, 0), (0, 0, 1), 5,
+            material=b.add_texture_material("Tex2", str(WRITER_FIXTURES / "tex.png")),
+            front_uv=bad_nan_pins,
+        ),
+    ]
+    triangle = [(20, 0, 0), (30, 0, 0), (20, 10, 0)]
+    for bad in cases:
+        builder = create_vff()
+        with pytest.raises(SkpWriteError):
+            bad(builder)
+        builder.add_face(triangle)
+        model = parse_bytes(tmp_path, builder.to_bytes())
+        assert len(model.root.faces) == 1
+        assert len(model.root.edges) == 3
+        assert len(model.root.vertices) == 3
+
+
+def _curve_records(data: bytes):
+    from openskp._vff_writer.template import MODEL_CONTAINERS
+    from openskp._vff_writer.tlv import parse_records
+    from openskp.vff import extract_skp_contents
+
+    model_data = extract_skp_contents(data)["model_data"]
+    records = parse_records(
+        model_data,
+        set(MODEL_CONTAINERS)
+        | {0x0DAC, 0x0BB8, 0x4A38, 0x4C2C, 0x07D0, 0x05DC},
+    )
+    curves = []
+
+    def walk(node):
+        if node.tag == 0x4A38:
+            curves.append(node)
+        for child in node.children or []:
+            walk(child)
+
+    for record_ in records:
+        walk(record_)
+    return curves
+
+
+def test_curves_leave_existing_edges_out(tmp_path):
+    square = [(0, 0, 0), (10, 0, 0), (10, 10, 0), (0, 10, 0)]
+    builder = create_vff()
+    builder.add_face(square)
+    builder.add_polyline([(0, 0, 0), (10, 0, 0), (10, 10, 0), (0, 10, 0)])
+    model = parse_bytes(tmp_path, builder.to_bytes())
+    assert len(model.root.edges) == 4
+    assert _curve_records(builder.to_bytes()) == []
+
+    builder = create_vff()
+    builder.add_circle((0, 0, 0), (0, 0, 1), 5, 12)
+    builder.add_circle((0, 0, 0), (0, 0, 1), 5, 12)
+    data = builder.to_bytes()
+    model = parse_bytes(tmp_path, data)
+    assert len(model.root.edges) == 12
+    assert len(_curve_records(data)) == 1
+
+    builder = create_vff()
+    builder.add_polyline([(0, 0, 0), (1, 0, 0), (0, 0, 0), (1, 0, 0)])
+    data = builder.to_bytes()
+    assert len(parse_bytes(tmp_path, data).root.edges) == 1
+    assert _curve_records(data) == []
+
+
+def test_curve_over_a_partly_existing_chain_keeps_new_runs(tmp_path):
+    square = [(0, 0, 0), (10, 0, 0), (10, 10, 0), (0, 10, 0)]
+    builder = create_vff()
+    builder.add_face(square)
+    builder.add_polyline(
+        [(0, 0, 0), (10, 0, 0), (20, 0, 0), (30, 0, 0)]
+    )
+    data = builder.to_bytes()
+    assert len(parse_bytes(tmp_path, data).root.edges) == 6
+    curves = _curve_records(data)
+    assert len(curves) == 1
+    count = next(c for c in curves[0].children if c.tag == 0x4A39)
+    assert count.payload == (2).to_bytes(4, "little")
+
+
+def test_face_uvs_on_solid_or_no_material_are_accepted(tmp_path):
+    from openskp.create import create as create_classic
+    from openskp._face_groups import compute_face_uv, face_uv_basis
+
+    pins = [
+        ((0, 0, 0), (0.0, 0.0)),
+        ((10, 0, 0), (1.0, 0.0)),
+        ((0, 10, 0), (0.0, 1.0)),
+    ]
+
+    def build(factory, material):
+        builder = factory()
+        if material == "solid":
+            material = builder.add_material("Red", (255, 0, 0))
+        else:
+            material = None
+        builder.add_face(SQUARE, material=material, front_uv=pins)
+        return parse_bytes(tmp_path, builder.to_bytes())
+
+    for material in ("solid", "none"):
+        classic = build(create_classic, material)
+        vff = build(create_vff, material)
+        (classic_face,) = classic.root.faces.values()
+        (vff_face,) = vff.root.faces.values()
+        assert vff_face.uv_transform is not None
+        assert vff_face.uv_transform == pytest.approx(
+            classic_face.uv_transform, abs=1e-9
+        )
+        xr, yr = face_uv_basis(vff_face.normal)
+        for point, uv in pins:
+            assert compute_face_uv(
+                point, xr, yr, vff_face.uv_transform, 1.0, 1.0
+            ) == pytest.approx(uv, abs=1e-9)
+
+
+def test_back_uv_without_back_material_does_not_use_front_texture_size(tmp_path):
+    from openskp.create import create as create_classic
+
+    front_pins = [
+        ((0, 0, 0), (0.0, 0.0)),
+        ((10, 0, 0), (1.0, 0.0)),
+        ((0, 10, 0), (0.0, 1.0)),
+    ]
+    back_pins = [
+        ((0, 0, 0), (0.0, 0.0)),
+        ((5, 0, 0), (1.0, 0.0)),
+        ((0, 5, 0), (0.0, 1.0)),
+    ]
+
+    def build(factory):
+        builder = factory()
+        texture = builder.add_texture_material(
+            "Tex", str(WRITER_FIXTURES / "tex.png"), 10.0, 10.0
+        )
+        builder.add_face(
+            SQUARE,
+            material=texture,
+            front_uv=front_pins,
+            back_uv=back_pins,
+        )
+        return parse_bytes(tmp_path, builder.to_bytes())
+
+    classic = build(create_classic)
+    vff = build(create_vff)
+    (classic_face,) = classic.root.faces.values()
+    (vff_face,) = vff.root.faces.values()
+    assert vff_face.uv_transform_back is not None
+    assert vff_face.uv_transform_back == pytest.approx(
+        classic_face.uv_transform_back, abs=1e-9
+    )

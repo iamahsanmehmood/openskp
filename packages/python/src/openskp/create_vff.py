@@ -35,6 +35,7 @@ empty-document boilerplate, nothing authored by this project.
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple, Union
 
@@ -50,14 +51,17 @@ from .create import (
     Point3,
     SkpWriteError,
     _archive_uuid,
+    _circle_basis,
     _is_coplanar,
     _plane_from_polygon,
+    _resolve_attribute_dicts,
     _resolve_matrix3x3,
 )
 
 __all__ = [
     "VffBuilder",
     "VffComponentDefinitionBuilder",
+    "CurveHandle",
     "ComponentDefinitionBuilder",
     "create",
     "create_vff",
@@ -119,6 +123,172 @@ def _validated_rgba(
     ):
         raise SkpWriteError("rgba must be 3 or 4 integers in 0-255")
     return int(rgba[0]), int(rgba[1]), int(rgba[2]), int(rgba[3])
+
+
+def _image_extension(image: bytes) -> str:
+    if image[:8] == b"\x89PNG\r\n\x1a\n":
+        return "png"
+    if image[:3] == b"\xff\xd8\xff":
+        return "jpg"
+    raise SkpWriteError(
+        "unrecognized image format - only PNG and JPEG textures are supported "
+        "(detected from the file's own magic bytes, not any extension)"
+    )
+
+
+def _average_color(image: bytes) -> Tuple[int, int, int]:
+    """Average RGB of a texture, via Pillow when installed, else mid-grey.
+
+    The fallback is deliberate so the writer works without Pillow, but the
+    resulting archive's average colour (and therefore material colour) then
+    differs from a Pillow-equipped run; pass ``average_color=`` for a stable
+    result across environments.
+    """
+    try:
+        import io
+
+        from PIL import Image
+    except Exception:
+        return (128, 128, 128)
+    try:
+        with Image.open(io.BytesIO(image)) as picture:
+            data = picture.convert("RGB").tobytes()
+        count = len(data) // 3
+        if not count:
+            return (128, 128, 128)
+        return (
+            sum(data[0::3]) // count,
+            sum(data[1::3]) // count,
+            sum(data[2::3]) // count,
+        )
+    except Exception:
+        return (128, 128, 128)
+
+
+def _texture_entry_name(name: str) -> str:
+    """Archive basename SketchUp can represent for a texture image."""
+    name = name.replace("/", "_").replace("\\", "_").replace('"', "_")
+    if name in (".", ".."):
+        raise SkpWriteError("a texture image name cannot be '.' or '..'")
+    for char in name:
+        codepoint = ord(char)
+        if codepoint < 0x20 or 0xD800 <= codepoint <= 0xDFFF:
+            raise SkpWriteError(
+                f"texture file name contains a character a ZIP entry cannot hold: {char!r}"
+            )
+    return name or "texture"
+
+
+@dataclass
+class CurveHandle:
+    """A curve written by :meth:`VffBuilder.add_circle_curve`."""
+
+    points: List[Tuple[float, float, float]]
+    curve_id: int
+    edge_ids: List[int] = field(default_factory=list)
+
+
+def _normalized(vector: Sequence[float]) -> Tuple[float, float, float]:
+    length = math.sqrt(sum(float(c) * float(c) for c in vector))
+    if not math.isfinite(length) or length < 1e-12:
+        raise SkpWriteError("a curve normal must not be the zero vector")
+    return tuple(float(c) / length for c in vector)  # type: ignore[return-value]
+
+
+def _circle_points(centre, num_segments, radius, u, w):
+    points = []
+    for index in range(num_segments):
+        angle = 2.0 * math.pi * index / num_segments
+        c, s = math.cos(angle), math.sin(angle)
+        points.append(
+            (
+                centre[0] + radius * (c * u[0] + s * w[0]),
+                centre[1] + radius * (c * u[1] + s * w[1]),
+                centre[2] + radius * (c * u[2] + s * w[2]),
+            )
+        )
+    return points
+
+
+def _arc_points(centre, num_segments, radius, u, w, start_angle, end_angle):
+    points = []
+    for index in range(num_segments + 1):
+        angle = start_angle + (end_angle - start_angle) * index / num_segments
+        c, s = math.cos(angle), math.sin(angle)
+        points.append(
+            (
+                centre[0] + radius * (c * u[0] + s * w[0]),
+                centre[1] + radius * (c * u[1] + s * w[1]),
+                centre[2] + radius * (c * u[2] + s * w[2]),
+            )
+        )
+    return points
+
+
+def _curve_points(
+    center: Sequence[float],
+    normal: Sequence[float],
+    radius: float,
+    num_segments: int,
+    start_angle: Optional[float] = None,
+    end_angle: Optional[float] = None,
+):
+    if not 3 <= num_segments <= 255:
+        raise SkpWriteError(
+            f"num_segments must be between 3 and 255, got {num_segments}"
+        )
+    centre = tuple(float(c) for c in center)
+    if not all(math.isfinite(c) for c in centre):
+        raise SkpWriteError("a curve centre must contain only finite numbers")
+    radius = float(radius)
+    if not math.isfinite(radius):
+        raise SkpWriteError("a curve radius must be finite")
+    unit_normal = _normalized(normal)
+    u, w = _circle_basis(unit_normal)
+    if start_angle is None or end_angle is None:
+        points = _circle_points(centre, num_segments, radius, u, w)
+    else:
+        start_angle = float(start_angle)
+        end_angle = float(end_angle)
+        if not math.isfinite(start_angle) or not math.isfinite(end_angle):
+            raise SkpWriteError("arc angles must contain only finite numbers")
+        points = _arc_points(
+            centre,
+            num_segments,
+            radius,
+            u,
+            w,
+            start_angle,
+            end_angle,
+        )
+    if not all(math.isfinite(value) for point in points for value in point):
+        raise SkpWriteError(
+            "curve points overflowed to a non-finite coordinate; "
+            "use a smaller centre, radius or angle"
+        )
+    return centre, unit_normal, u, w, points
+
+
+def _arc_frame(
+    center: Sequence[float],
+    normal: Sequence[float],
+    radius: float,
+    u: Sequence[float],
+    w: Sequence[float],
+    start_angle: float,
+    end_angle: float,
+) -> List[float]:
+    offset = -sum(float(normal[i]) * float(center[i]) for i in range(3))
+    return [
+        *[float(c) for c in center],
+        *[float(c) for c in normal],
+        offset,
+        *(radius * float(c) for c in u),
+        *(radius * float(c) for c in w),
+        float(radius),
+        float(start_angle),
+        float(end_angle),
+    ]
 
 
 def _edge_flags(hidden: bool, soft: bool, smooth: bool) -> int:
@@ -190,6 +360,7 @@ class ComponentDefinitionBuilder:
         shadows_face_sun: bool = False,
         guid: Optional[bytes] = None,
         parent: Optional["ComponentDefinitionBuilder"] = None,
+        attribute_dicts: Optional[Sequence[Tuple[str, Dict[str, object]]]] = None,
     ) -> None:
         self._builder = builder
         self.name = name
@@ -203,7 +374,9 @@ class ComponentDefinitionBuilder:
         self._placement = placement or {}
         self._container_id = builder._template.alloc_id()
         self._editor = EntityEditor(
-            builder._template, container_id=self._container_id
+            builder._template,
+            container_id=self._container_id,
+            attributes=attribute_dicts,
         )
         self._closed = False
         self._instance_id: Optional[int] = None
@@ -223,6 +396,11 @@ class ComponentDefinitionBuilder:
         soft_edges: bool = False,
         smooth_edges: bool = False,
         hidden_edges: bool = False,
+        front_uv: Optional[Sequence[Tuple[Sequence[float], Tuple[float, float]]]] = None,
+        back_uv: Optional[Sequence[Tuple[Sequence[float], Tuple[float, float]]]] = None,
+        attributes: Optional[Dict[str, object]] = None,
+        attribute_dict_name: str = "attributes",
+        attribute_dicts: Sequence[Tuple[str, Dict[str, object]]] = (),
         auto_triangulate: bool = False,
         holes: Sequence[Sequence[Point3]] = (),
     ) -> None:
@@ -238,8 +416,95 @@ class ComponentDefinitionBuilder:
             soft_edges,
             smooth_edges,
             hidden_edges,
+            front_uv,
+            back_uv,
+            _resolve_attribute_dicts(
+                attributes, attribute_dict_name, attribute_dicts
+            ),
             auto_triangulate,
             holes,
+        )
+
+    def add_circle(
+        self,
+        center: Point3,
+        normal: Tuple[float, float, float],
+        radius: float,
+        num_segments: int = 24,
+        material: Optional[int] = None,
+        layer: Optional[int] = None,
+        back_material: Optional[int] = None,
+        hidden: bool = False,
+        front_uv: Optional[Sequence[Tuple[Sequence[float], Tuple[float, float]]]] = None,
+        back_uv: Optional[Sequence[Tuple[Sequence[float], Tuple[float, float]]]] = None,
+        attributes: Optional[Dict[str, object]] = None,
+        attribute_dict_name: str = "attributes",
+        attribute_dicts: Sequence[Tuple[str, Dict[str, object]]] = (),
+        *,
+        holes: Sequence[Sequence[Point3]] = (),
+    ) -> None:
+        """Add one circular face inside this definition."""
+        if self._closed:
+            raise SkpWriteError("this definition is already closed")
+        self._builder._add_circle_to(
+            self._editor,
+            center,
+            normal,
+            radius,
+            num_segments,
+            material,
+            layer,
+            back_material,
+            hidden,
+            front_uv,
+            back_uv,
+            attributes,
+            attribute_dict_name,
+            attribute_dicts,
+            holes,
+        )
+
+    def add_arc(
+        self,
+        center: Point3,
+        normal: Tuple[float, float, float],
+        radius: float,
+        start_angle: float,
+        end_angle: float,
+        num_segments: int = 24,
+        hidden_edges: bool = False,
+        soft_edges: bool = False,
+        smooth_edges: bool = False,
+    ) -> None:
+        """Add one open arc inside this definition."""
+        if self._closed:
+            raise SkpWriteError("this definition is already closed")
+        self._builder._add_arc_to(
+            self._editor,
+            center,
+            normal,
+            radius,
+            start_angle,
+            end_angle,
+            num_segments,
+            hidden_edges,
+            soft_edges,
+            smooth_edges,
+        )
+
+    def add_polyline(
+        self,
+        points: Sequence[Point3],
+        closed: bool = False,
+        hidden_edges: bool = False,
+        soft_edges: bool = False,
+        smooth_edges: bool = False,
+    ) -> None:
+        """Add one freeform polyline curve inside this definition."""
+        if self._closed:
+            raise SkpWriteError("this definition is already closed")
+        self._builder._add_polyline_to(
+            self._editor, points, closed, hidden_edges, soft_edges, smooth_edges
         )
 
     # -- placements -------------------------------------------------------
@@ -253,6 +518,9 @@ class ComponentDefinitionBuilder:
         rotation: Optional[Rotation] = None,
         material: Optional[int] = None,
         layer: Optional[int] = None,
+        attributes: Optional[Dict[str, object]] = None,
+        attribute_dict_name: str = "attributes",
+        attribute_dicts: Sequence[Tuple[str, Dict[str, object]]] = (),
         hidden: bool = False,
     ) -> None:
         if self._closed:
@@ -268,6 +536,9 @@ class ComponentDefinitionBuilder:
             material=material,
             layer=layer,
             hidden=hidden,
+            attributes=_resolve_attribute_dicts(
+                attributes, attribute_dict_name, attribute_dicts
+            ),
         )
 
     def add_group_instance(
@@ -279,6 +550,9 @@ class ComponentDefinitionBuilder:
         rotation: Optional[Rotation] = None,
         material: Optional[int] = None,
         layer: Optional[int] = None,
+        attributes: Optional[Dict[str, object]] = None,
+        attribute_dict_name: str = "attributes",
+        attribute_dicts: Sequence[Tuple[str, Dict[str, object]]] = (),
         hidden: bool = False,
     ) -> None:
         if self._closed:
@@ -294,6 +568,9 @@ class ComponentDefinitionBuilder:
             material=material,
             layer=layer,
             hidden=hidden,
+            attributes=_resolve_attribute_dicts(
+                attributes, attribute_dict_name, attribute_dicts
+            ),
         )
 
     def add_group(
@@ -304,6 +581,9 @@ class ComponentDefinitionBuilder:
         rotation: Optional[Rotation] = None,
         material: Optional[int] = None,
         layer: Optional[int] = None,
+        attributes: Optional[Dict[str, object]] = None,
+        attribute_dict_name: str = "attributes",
+        attribute_dicts: Sequence[Tuple[str, Dict[str, object]]] = (),
         hidden: bool = False,
     ) -> "GroupBuilder":
         """Start a group placed inside this definition (VFF-only extra)."""
@@ -323,6 +603,9 @@ class ComponentDefinitionBuilder:
                 "material": material,
                 "layer": layer,
                 "hidden": hidden,
+                "attributes": _resolve_attribute_dicts(
+                    attributes, attribute_dict_name, attribute_dicts
+                ),
             },
         )
 
@@ -370,6 +653,7 @@ class ComponentDefinitionBuilder:
                     material=placement["material"],
                     layer=placement["layer"],
                     hidden=placement["hidden"],
+                    attributes=placement.get("attributes"),
                 )
         return self
 
@@ -500,6 +784,70 @@ class VffBuilder:
         self.materials_by_name[name] = identifier
         return identifier
 
+    def add_texture_material(
+        self,
+        name: str,
+        image_path: str,
+        applied_width: Optional[float] = None,
+        applied_height: Optional[float] = None,
+        opacity: Optional[float] = None,
+        filename: Optional[str] = None,
+        *,
+        image_name: Optional[str] = None,
+        average_color: Optional[Sequence[int]] = None,
+    ) -> int:
+        """Register a PNG/JPEG-textured material and return a handle.
+
+        ``image_path`` may be a path or, as a VFF-only extra, the image bytes.
+        ``image_name`` overrides the archive entry name for bytes/paths, and
+        ``average_color`` overrides the average RGB SketchUp shows before the
+        texture is drawn. Without ``average_color`` the average is computed
+        with Pillow when available and falls back to mid-grey otherwise, so
+        pass it explicitly when the bytes must not depend on the environment.
+        """
+        if name in self.materials_by_name:
+            return self.materials_by_name[name]
+        if isinstance(image_path, (bytes, bytearray)):
+            image_bytes = bytes(image_path)
+            extension = _image_extension(image_bytes)
+            source_name = image_name or f"texture.{extension}"
+            stored_filename = filename if filename is not None else source_name
+        else:
+            image_bytes = Path(image_path).read_bytes()
+            extension = _image_extension(image_bytes)
+            source_name = image_name or Path(image_path).name or f"texture.{extension}"
+            stored_filename = image_path if filename is None else filename
+        entry_name = _texture_entry_name(source_name)
+        width = 1.0 if applied_width is None else float(applied_width)
+        height = 1.0 if applied_height is None else float(applied_height)
+        if not math.isfinite(width) or not math.isfinite(height):
+            raise SkpWriteError("a texture's applied size must be finite")
+        if width <= 0 or height <= 0:
+            raise SkpWriteError("a texture's applied size must be positive")
+        alpha = 1.0 if opacity is None else float(opacity)
+        if not math.isfinite(alpha):
+            raise SkpWriteError("texture opacity must be finite")
+        if average_color is not None:
+            red, green, blue, _alpha = _validated_rgba(average_color)
+            average = (red, green, blue)
+        else:
+            average = _average_color(image_bytes)
+        try:
+            identifier = self._template.add_texture_material(
+                name,
+                image_bytes,
+                entry_name,
+                width,
+                height,
+                alpha,
+                average,
+                stored_filename,
+            )
+        except ValueError as exc:
+            raise SkpWriteError(str(exc)) from exc
+        self.materials_by_name[name] = identifier
+        return identifier
+
     def add_layer(
         self,
         name: str,
@@ -551,6 +899,169 @@ class VffBuilder:
 
     # -- geometry ---------------------------------------------------------
 
+    def _add_circle_to(
+        self,
+        editor: EntityEditor,
+        center: Point3,
+        normal: Tuple[float, float, float],
+        radius: float,
+        num_segments: int,
+        material: Optional[int],
+        layer: Optional[int],
+        back_material: Optional[int],
+        hidden: bool,
+        front_uv: Optional[Sequence[Tuple[Sequence[float], Tuple[float, float]]]],
+        back_uv: Optional[Sequence[Tuple[Sequence[float], Tuple[float, float]]]],
+        attributes: Optional[Dict[str, object]],
+        attribute_dict_name: str,
+        attribute_dicts: Sequence[Tuple[str, Dict[str, object]]],
+        holes: Sequence[Sequence[Point3]],
+    ) -> None:
+        self._validate_material(material)
+        self._validate_material(back_material)
+        self._validate_layer(layer)
+        resolved_attributes = _resolve_attribute_dicts(
+            attributes, attribute_dict_name, attribute_dicts
+        )
+        centre, unit_normal, _u, _w, points = _curve_points(
+            center, normal, radius, num_segments
+        )
+        rings = [
+            _points(getattr(hole, "points", hole), "hole") for hole in holes
+        ]
+        for ring in rings:
+            if len(ring) < 3:
+                raise SkpWriteError("a hole needs at least 3 points")
+        nx, ny, nz, plane_d = _plane_from_polygon(points)
+        span = max(
+            max(point[i] for point in points) - min(point[i] for point in points)
+            for i in range(3)
+        )
+        tolerance = max(span, 1.0) * 1e-6
+        for ring in rings:
+            for point in ring:
+                distance = nx * point[0] + ny * point[1] + nz * point[2] - plane_d
+                if abs(distance) > tolerance:
+                    raise SkpWriteError(
+                        f"hole point {point} is {abs(distance):.6g} units off the "
+                        "face's own plane - a hole must lie on the same plane as "
+                        "the outer boundary"
+                    )
+        editor.validate_face_attributes(
+            resolved_attributes,
+            front_uv,
+            back_uv,
+            material,
+            back_material,
+            unit_normal,
+        )
+        curve = self._write_circle_curve(
+            editor, center, normal, radius, num_segments
+        )
+        self._add_face_to(
+            editor,
+            curve.points,
+            material,
+            layer,
+            back_material,
+            hidden,
+            False,
+            False,
+            False,
+            front_uv,
+            back_uv,
+            resolved_attributes,
+            False,
+            holes,
+        )
+
+    def _write_circle_curve(
+        self,
+        editor: EntityEditor,
+        center: Point3,
+        normal: Tuple[float, float, float],
+        radius: float,
+        num_segments: int,
+        flags: int = 0x06,
+    ) -> CurveHandle:
+        centre, unit_normal, u, w, points = _curve_points(
+            center, normal, radius, num_segments
+        )
+        frame = _arc_frame(
+            centre, unit_normal, float(radius), u, w, 0.0, 2.0 * math.pi
+        )
+        try:
+            curve_id, edges = editor.add_curve_edges(
+                points, closed=True, arc_frame=frame, flags=flags
+            )
+        except ValueError as exc:
+            raise SkpWriteError(str(exc)) from exc
+        return CurveHandle(points, curve_id, edges)
+
+    def _add_arc_to(
+        self,
+        editor: EntityEditor,
+        center: Point3,
+        normal: Tuple[float, float, float],
+        radius: float,
+        start_angle: float,
+        end_angle: float,
+        num_segments: int,
+        hidden_edges: bool,
+        soft_edges: bool,
+        smooth_edges: bool,
+    ) -> None:
+        if float(start_angle) == float(end_angle):
+            raise SkpWriteError(
+                "start_angle and end_angle must differ - use add_circle for a full circle"
+            )
+        centre, unit_normal, u, w, points = _curve_points(
+            center,
+            normal,
+            radius,
+            num_segments,
+            float(start_angle),
+            float(end_angle),
+        )
+        frame = _arc_frame(
+            centre,
+            unit_normal,
+            float(radius),
+            u,
+            w,
+            float(start_angle),
+            float(end_angle),
+        )
+        try:
+            editor.add_curve_edges(
+                points,
+                arc_frame=frame,
+                flags=_edge_flags(hidden_edges, soft_edges, smooth_edges),
+            )
+        except ValueError as exc:
+            raise SkpWriteError(str(exc)) from exc
+
+    def _add_polyline_to(
+        self,
+        editor: EntityEditor,
+        points: Sequence[Point3],
+        closed: bool,
+        hidden_edges: bool,
+        soft_edges: bool,
+        smooth_edges: bool,
+    ) -> None:
+        vertices = _points(points, "polyline")
+        if len(vertices) < 2:
+            raise SkpWriteError("a polyline needs at least 2 points")
+        try:
+            editor.add_curve_edges(
+                vertices,
+                closed=closed,
+                flags=_edge_flags(hidden_edges, soft_edges, smooth_edges),
+            )
+        except ValueError as exc:
+            raise SkpWriteError(str(exc)) from exc
+
     def _add_face_to(
         self,
         editor: EntityEditor,
@@ -562,6 +1073,9 @@ class VffBuilder:
         soft_edges: bool,
         smooth_edges: bool,
         hidden_edges: bool,
+        front_uv: Optional[Sequence[Tuple[Sequence[float], Tuple[float, float]]]],
+        back_uv: Optional[Sequence[Tuple[Sequence[float], Tuple[float, float]]]],
+        attributes: Sequence[Tuple[str, Dict[str, object]]],
         auto_triangulate: bool,
         holes: Sequence[Sequence[Point3]],
     ) -> None:
@@ -571,11 +1085,17 @@ class VffBuilder:
         outer = _points(points, "face")
         if len(outer) < 3:
             raise SkpWriteError("a face needs at least 3 points")
-        rings = [_points(hole, "hole") for hole in holes]
+        rings = [
+            _points(getattr(hole, "points", hole), "hole") for hole in holes
+        ]
         for ring in rings:
             if len(ring) < 3:
                 raise SkpWriteError("a hole needs at least 3 points")
         flags = _edge_flags(hidden_edges, soft_edges, smooth_edges)
+        if auto_triangulate and (front_uv is not None or back_uv is not None):
+            raise SkpWriteError(
+                "auto_triangulate cannot be combined with front_uv/back_uv positioning"
+            )
         if rings or not auto_triangulate:
             # Validates the boundary as planar and gives the same message as
             # create.py for an off-plane hole or a non-planar boundary.
@@ -605,6 +1125,9 @@ class VffBuilder:
                     hidden=hidden,
                     holes=rings,
                     edge_flags=flags,
+                    front_uv=front_uv,
+                    back_uv=back_uv,
+                    attributes=attributes,
                 )
             except ValueError as exc:
                 raise SkpWriteError(str(exc)) from exc
@@ -619,6 +1142,9 @@ class VffBuilder:
                     back_material=back_material,
                     hidden=hidden,
                     edge_flags=flags,
+                    front_uv=front_uv,
+                    back_uv=back_uv,
+                    attributes=attributes,
                 )
             except ValueError as exc:
                 raise SkpWriteError(str(exc)) from exc
@@ -633,6 +1159,11 @@ class VffBuilder:
         soft_edges: bool = False,
         smooth_edges: bool = False,
         hidden_edges: bool = False,
+        front_uv: Optional[Sequence[Tuple[Sequence[float], Tuple[float, float]]]] = None,
+        back_uv: Optional[Sequence[Tuple[Sequence[float], Tuple[float, float]]]] = None,
+        attributes: Optional[Dict[str, object]] = None,
+        attribute_dict_name: str = "attributes",
+        attribute_dicts: Sequence[Tuple[str, Dict[str, object]]] = (),
         auto_triangulate: bool = False,
         holes: Sequence[Sequence[Point3]] = (),
     ) -> None:
@@ -647,15 +1178,119 @@ class VffBuilder:
             soft_edges,
             smooth_edges,
             hidden_edges,
+            front_uv,
+            back_uv,
+            _resolve_attribute_dicts(
+                attributes, attribute_dict_name, attribute_dicts
+            ),
             auto_triangulate,
             holes,
         )
 
     # -- definitions ------------------------------------------------------
 
+    def add_circle_curve(
+        self,
+        center: Point3,
+        normal: Tuple[float, float, float],
+        radius: float,
+        num_segments: int = 24,
+        hidden_edges: bool = False,
+        soft_edges: bool = False,
+        smooth_edges: bool = False,
+    ) -> CurveHandle:
+        """Add only a circle's curve and edges (VFF-only extra)."""
+        return self._write_circle_curve(
+            self._root,
+            center,
+            normal,
+            radius,
+            num_segments,
+            _edge_flags(hidden_edges, soft_edges, smooth_edges),
+        )
+
+    def add_circle(
+        self,
+        center: Point3,
+        normal: Tuple[float, float, float],
+        radius: float,
+        num_segments: int = 24,
+        material: Optional[int] = None,
+        layer: Optional[int] = None,
+        back_material: Optional[int] = None,
+        hidden: bool = False,
+        front_uv: Optional[Sequence[Tuple[Sequence[float], Tuple[float, float]]]] = None,
+        back_uv: Optional[Sequence[Tuple[Sequence[float], Tuple[float, float]]]] = None,
+        attributes: Optional[Dict[str, object]] = None,
+        attribute_dict_name: str = "attributes",
+        attribute_dicts: Sequence[Tuple[str, Dict[str, object]]] = (),
+        *,
+        holes: Sequence[Sequence[Point3]] = (),
+    ) -> None:
+        """Add one circular face to the model root."""
+        self._add_circle_to(
+            self._root,
+            center,
+            normal,
+            radius,
+            num_segments,
+            material,
+            layer,
+            back_material,
+            hidden,
+            front_uv,
+            back_uv,
+            attributes,
+            attribute_dict_name,
+            attribute_dicts,
+            holes,
+        )
+
+    def add_arc(
+        self,
+        center: Point3,
+        normal: Tuple[float, float, float],
+        radius: float,
+        start_angle: float,
+        end_angle: float,
+        num_segments: int = 24,
+        hidden_edges: bool = False,
+        soft_edges: bool = False,
+        smooth_edges: bool = False,
+    ) -> None:
+        """Add one open arc to the model root."""
+        self._add_arc_to(
+            self._root,
+            center,
+            normal,
+            radius,
+            start_angle,
+            end_angle,
+            num_segments,
+            hidden_edges,
+            soft_edges,
+            smooth_edges,
+        )
+
+    def add_polyline(
+        self,
+        points: Sequence[Point3],
+        closed: bool = False,
+        hidden_edges: bool = False,
+        soft_edges: bool = False,
+        smooth_edges: bool = False,
+    ) -> None:
+        """Add one freeform polyline curve to the model root."""
+        self._add_polyline_to(
+            self._root, points, closed, hidden_edges, soft_edges, smooth_edges
+        )
+
     def add_component_definition(
         self,
         name: str,
+        attributes: Optional[Dict[str, object]] = None,
+        attribute_dict_name: str = "attributes",
+        attribute_dicts: Sequence[Tuple[str, Dict[str, object]]] = (),
         always_faces_camera: bool = False,
         shadows_face_sun: bool = False,
         guid: Optional[str] = None,
@@ -668,6 +1303,9 @@ class VffBuilder:
             always_faces_camera=always_faces_camera,
             shadows_face_sun=shadows_face_sun,
             guid=guid_bytes,
+            attribute_dicts=_resolve_attribute_dicts(
+                attributes, attribute_dict_name, attribute_dicts
+            ),
         )
 
     def add_group(
@@ -678,6 +1316,9 @@ class VffBuilder:
         rotation: Optional[Rotation] = None,
         material: Optional[int] = None,
         layer: Optional[int] = None,
+        attributes: Optional[Dict[str, object]] = None,
+        attribute_dict_name: str = "attributes",
+        attribute_dicts: Sequence[Tuple[str, Dict[str, object]]] = (),
         hidden: bool = False,
     ) -> GroupBuilder:
         """Start a root-level group (definition kind 1, placed on close)."""
@@ -695,6 +1336,9 @@ class VffBuilder:
                 "material": material,
                 "layer": layer,
                 "hidden": hidden,
+                "attributes": _resolve_attribute_dicts(
+                    attributes, attribute_dict_name, attribute_dicts
+                ),
             },
         )
 
@@ -707,6 +1351,9 @@ class VffBuilder:
         rotation: Optional[Rotation] = None,
         material: Optional[int] = None,
         layer: Optional[int] = None,
+        attributes: Optional[Dict[str, object]] = None,
+        attribute_dict_name: str = "attributes",
+        attribute_dicts: Sequence[Tuple[str, Dict[str, object]]] = (),
         hidden: bool = False,
     ) -> None:
         """Place one instance of a closed definition in the model root."""
@@ -721,6 +1368,9 @@ class VffBuilder:
             material=material,
             layer=layer,
             hidden=hidden,
+            attributes=_resolve_attribute_dicts(
+                attributes, attribute_dict_name, attribute_dicts
+            ),
         )
 
     # -- document settings ------------------------------------------------
@@ -746,6 +1396,23 @@ class VffBuilder:
             raise SkpWriteError(
                 "VFF document options are not supported by the VFF writer yet"
             )
+
+    def set_model_attributes(
+        self,
+        attributes: Optional[Dict[str, object]] = None,
+        attribute_dict_name: str = "attributes",
+        attribute_dicts: Sequence[Tuple[str, Dict[str, object]]] = (),
+    ) -> None:
+        """Attach custom dictionaries to the model itself (VFF-only extra).
+
+        Dictionaries go into the model's existing attribute block.  A name
+        that already exists (including one from the template) is replaced
+        with the new dictionary; other dictionaries are preserved, so calls
+        add to the same block rather than replacing it.
+        """
+        self._root.add_model_attributes(
+            _resolve_attribute_dicts(attributes, attribute_dict_name, attribute_dicts)
+        )
 
     # -- output -----------------------------------------------------------
 
