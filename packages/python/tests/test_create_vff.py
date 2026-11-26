@@ -1014,3 +1014,74 @@ def test_model_without_attributes_has_no_empty_blocks(tmp_path):
     data = builder.to_bytes()
     assert _all_attribute_blocks(data) == 0
     parse_bytes(tmp_path, data)
+
+
+def test_texture_materials_round_trip(tmp_path):
+    png = (WRITER_FIXTURES / "tex.png").read_bytes()
+    jpeg = (WRITER_FIXTURES / "tex.jpg").read_bytes()
+    builder = create_vff()
+    png_handle = builder.add_texture_material(
+        "TexPNG", str(WRITER_FIXTURES / "tex.png"), 10.0, 5.0
+    )
+    builder.add_texture_material(
+        "TexJPEG", jpeg, 8.0, 4.0, image_name="tex.jpg"
+    )
+    builder.add_face(SQUARE, material=png_handle)
+    model = parse_bytes(tmp_path, builder.to_bytes())
+    textures = {material.name: material.texture for material in model.materials}
+    assert textures["TexPNG"].data == png
+    assert textures["TexPNG"].width == 10.0
+    assert textures["TexPNG"].height == 5.0
+    assert textures["TexJPEG"].data == jpeg
+    assert textures["TexJPEG"].filename == "tex.jpg"
+    assert textures["TexJPEG"].width == 8.0
+
+
+def test_texture_filename_override_and_special_names(tmp_path):
+    builder = create_vff()
+    handle = builder.add_texture_material(
+        "Tex", (WRITER_FIXTURES / "tex.png").read_bytes(),
+        filename="C:/Textures/tex.png", image_name="té#xt ure.png",
+    )
+    builder.add_face(SQUARE, material=handle)
+    model = parse_bytes(tmp_path, builder.to_bytes())
+    texture = model.materials[0].texture
+    assert texture.filename == "C:/Textures/tex.png"
+    entries = [entry.name for entry in read_zip(builder.to_bytes(), builder.to_bytes().find(b"PK\x03\x04"))]
+    assert any(entry.endswith("/té#xt ure.png") for entry in entries), entries
+
+
+def test_texture_read_errors_pass_through_like_create_py(tmp_path):
+    from openskp.create import create as create_classic
+
+    with pytest.raises(FileNotFoundError):
+        create_vff().add_texture_material("Tex", "/nonexistent/texture.png")
+    directory = tmp_path / "texture-dir"
+    directory.mkdir()
+    # Windows raises PermissionError when read_bytes hits a directory.
+    with pytest.raises((IsADirectoryError, PermissionError)) as vff_error:
+        create_vff().add_texture_material("Tex", str(directory))
+    with pytest.raises((IsADirectoryError, PermissionError)) as classic_error:
+        create_classic().add_texture_material("Tex", str(directory))
+    assert type(vff_error.value) is type(classic_error.value)
+    assert not isinstance(vff_error.value, SkpWriteError)
+    with pytest.raises(SkpWriteError):
+        create_vff().add_texture_material("Tex", b"not an image")
+    with pytest.raises(SkpWriteError):
+        create_vff().add_texture_material(
+            "Tex", (WRITER_FIXTURES / "tex.png").read_bytes(), float("nan")
+        )
+    with pytest.raises(SkpWriteError):
+        create_vff().add_texture_material(
+            "Tex", (WRITER_FIXTURES / "tex.png").read_bytes(), image_name="bad\x01.png"
+        )
+    with pytest.raises(SkpWriteError):
+        create_vff().add_texture_material(
+            "Tex", (WRITER_FIXTURES / "tex.png").read_bytes(), image_name="bad\n.png"
+        )
+    for image_name in (".", ".."):
+        with pytest.raises(SkpWriteError):
+            create_vff().add_texture_material(
+                "Tex", (WRITER_FIXTURES / "tex.png").read_bytes(),
+                image_name=image_name,
+            )

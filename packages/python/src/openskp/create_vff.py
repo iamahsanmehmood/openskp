@@ -122,6 +122,54 @@ def _validated_rgba(
     return int(rgba[0]), int(rgba[1]), int(rgba[2]), int(rgba[3])
 
 
+def _image_extension(image: bytes) -> str:
+    if image[:8] == b"\x89PNG\r\n\x1a\n":
+        return "png"
+    if image[:3] == b"\xff\xd8\xff":
+        return "jpg"
+    raise SkpWriteError(
+        "unrecognized image format - only PNG and JPEG textures are supported "
+        "(detected from the file's own magic bytes, not any extension)"
+    )
+
+
+def _average_color(image: bytes) -> Tuple[int, int, int]:
+    """Average RGB of a texture, via Pillow when installed, else mid-grey."""
+    try:
+        import io
+
+        from PIL import Image
+    except Exception:
+        return (128, 128, 128)
+    try:
+        with Image.open(io.BytesIO(image)) as picture:
+            data = picture.convert("RGB").tobytes()
+        count = len(data) // 3
+        if not count:
+            return (128, 128, 128)
+        return (
+            sum(data[0::3]) // count,
+            sum(data[1::3]) // count,
+            sum(data[2::3]) // count,
+        )
+    except Exception:
+        return (128, 128, 128)
+
+
+def _texture_entry_name(name: str) -> str:
+    """Archive basename SketchUp can represent for a texture image."""
+    name = name.replace("/", "_").replace("\\", "_").replace('"', "_")
+    if name in (".", ".."):
+        raise SkpWriteError("a texture image name cannot be '.' or '..'")
+    for char in name:
+        codepoint = ord(char)
+        if codepoint < 0x20 or 0xD800 <= codepoint <= 0xDFFF:
+            raise SkpWriteError(
+                f"texture file name contains a character a ZIP entry cannot hold: {char!r}"
+            )
+    return name or "texture"
+
+
 def _edge_flags(hidden: bool, soft: bool, smooth: bool) -> int:
     return 0x06 | (0x01 if hidden else 0) | (0x08 if soft else 0) | (0x10 if smooth else 0)
 
@@ -523,6 +571,70 @@ class VffBuilder:
                 name,
                 (red, green, blue),
                 opacity=1.0 if opacity is None else float(opacity),
+            )
+        except ValueError as exc:
+            raise SkpWriteError(str(exc)) from exc
+        self.materials_by_name[name] = identifier
+        return identifier
+
+    def add_texture_material(
+        self,
+        name: str,
+        image_path: str,
+        applied_width: Optional[float] = None,
+        applied_height: Optional[float] = None,
+        opacity: Optional[float] = None,
+        filename: Optional[str] = None,
+        *,
+        image_name: Optional[str] = None,
+        average_color: Optional[Sequence[int]] = None,
+    ) -> int:
+        """Register a PNG/JPEG-textured material and return a handle.
+
+        ``image_path`` may be a path or, as a VFF-only extra, the image bytes.
+        ``image_name`` overrides the archive entry name for bytes/paths, and
+        ``average_color`` overrides the average RGB SketchUp shows before the
+        texture is drawn. Without it the average is computed with Pillow when
+        available and falls back to mid-grey otherwise, so pass it explicitly
+        when the bytes must not depend on the environment.
+        """
+        if name in self.materials_by_name:
+            return self.materials_by_name[name]
+        if isinstance(image_path, (bytes, bytearray)):
+            image_bytes = bytes(image_path)
+            extension = _image_extension(image_bytes)
+            source_name = image_name or f"texture.{extension}"
+            stored_filename = filename if filename is not None else source_name
+        else:
+            image_bytes = Path(image_path).read_bytes()
+            extension = _image_extension(image_bytes)
+            source_name = image_name or Path(image_path).name or f"texture.{extension}"
+            stored_filename = image_path if filename is None else filename
+        entry_name = _texture_entry_name(source_name)
+        width = 1.0 if applied_width is None else float(applied_width)
+        height = 1.0 if applied_height is None else float(applied_height)
+        if not math.isfinite(width) or not math.isfinite(height):
+            raise SkpWriteError("a texture's applied size must be finite")
+        if width <= 0 or height <= 0:
+            raise SkpWriteError("a texture's applied size must be positive")
+        alpha = 1.0 if opacity is None else float(opacity)
+        if not math.isfinite(alpha):
+            raise SkpWriteError("texture opacity must be finite")
+        if average_color is not None:
+            red, green, blue, _alpha = _validated_rgba(average_color)
+            average = (red, green, blue)
+        else:
+            average = _average_color(image_bytes)
+        try:
+            identifier = self._template.add_texture_material(
+                name,
+                image_bytes,
+                entry_name,
+                width,
+                height,
+                alpha,
+                average,
+                stored_filename,
             )
         except ValueError as exc:
             raise SkpWriteError(str(exc)) from exc

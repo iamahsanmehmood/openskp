@@ -493,12 +493,18 @@ def _validate_xml_name(name: str, kind: str) -> None:
             )
 
 
+def _packed_average(rgb: Tuple[int, int, int]) -> int:
+    red, green, blue = rgb
+    return (0xFF << 24) | (blue << 16) | (green << 8) | red
+
+
 def material_xml(
     name: str,
     rgb: Tuple[int, int, int] = (255, 255, 255),
     *,
     layer_color: bool = False,
     opacity: float = 1.0,
+    texture: Optional[Dict[str, object]] = None,
 ) -> bytes:
     """A ``material.xml`` as SketchUp 2025 writes it.
 
@@ -515,9 +521,31 @@ def material_xml(
         trans_attr, use_trans = "0.5", "0"
     else:
         trans_attr, use_trans = _xml_number(1.0 - opacity), "1"
-    type_attr = "0"
-    has_texture = "0"
-    block = _pbr_block(1.0, 1.0)
+    if texture is None:
+        type_attr = "0"
+        has_texture = "0"
+        block = _pbr_block(1.0, 1.0)
+    else:
+        width = float(texture["width"])
+        height = float(texture["height"])
+        filename = str(texture["filename"])
+        basename = str(texture["basename"])
+        _validate_xml_name(filename, "texture file")
+        _validate_xml_name(basename, "texture file")
+        packed = _packed_average((red, green, blue))
+        type_attr = "1"
+        has_texture = "1"
+        block = (
+            f'    <mat:texture textureFilename="{_xml_attr(filename)}" '
+            f'xScale="{_xml_number(width)}" yScale="{_xml_number(height)}" '
+            f'avgColor="{packed}">\n'
+            "      <mat:images>\n"
+            f'        <mat:image id="1" path="./{_xml_attr(basename)}" '
+            f'file_name="{_xml_attr(basename)}"/>\n'
+            "      </mat:images>\n"
+            "    </mat:texture>\n"
+            + _pbr_block(width, height)
+        )
     text = (
         '<?xml version="1.0" encoding="UTF-8" standalone="no" ?>\n'
         '<materialDocument xmlns="http://sketchup.google.com/schemas/sketchup/1.0/material" '
@@ -609,6 +637,7 @@ class Template:
         self.materials: Dict[str, int] = {}
         self.material_ids: Dict[int, str] = {}
         self._material_names: Dict[str, str] = {}
+        self.texture_sizes: Dict[int, Tuple[float, float]] = {}
         self.material_folders: List[str] = [
             entry.name.split("/")[1]
             for entry in self.entries
@@ -819,20 +848,24 @@ class Template:
 
     # -- adding materials / layers ---------------------------------------
 
+    def _unique_material_name(self, name: str) -> str:
+        if name in self.materials:
+            return name
+        if name.lower() in self._material_names:
+            base = name
+            counter = 1
+            while f"{base}{counter}".lower() in self._material_names:
+                counter += 1
+            return f"{base}{counter}"
+        return name
+
     def add_material(
         self, name: str, rgb: Tuple[int, int, int], opacity: float = 1.0
     ) -> int:
         _validate_xml_name(name, "material")
         if name in self.materials:
             return self.materials[name]
-        if name.lower() in self._material_names:
-            # SketchUp appends a bare counter to a case-insensitive duplicate:
-            # "wood" after "Wood" becomes "wood1", then "wood2", ...
-            base = name
-            counter = 1
-            while f"{base}{counter}".lower() in self._material_names:
-                counter += 1
-            name = f"{base}{counter}"
+        name = self._unique_material_name(name)
         folder = _material_folder_for(name, self._material_folder_keys)
         identifier = self.alloc_id()
         self._material_list().children.append(_material_record(identifier, folder, 0))
@@ -847,6 +880,55 @@ class Template:
         )
         return identifier
 
+
+    def add_texture_material(
+        self,
+        name: str,
+        image: bytes,
+        image_name: str,
+        width: float,
+        height: float,
+        opacity: float,
+        average_rgb: Tuple[int, int, int],
+        texture_filename: str,
+    ) -> int:
+        """Append an image-textured material and its two archive entries."""
+        if name in self.materials:
+            return self.materials[name]
+        if width <= 0 or height <= 0:
+            raise SkpWriteError("a texture's applied size must be positive")
+        name = self._unique_material_name(name)
+        folder = _material_folder_for(name, self._material_folder_keys)
+        identifier = self.alloc_id()
+        self._material_list().children.append(
+            _material_record(identifier, folder, 0)
+        )
+        self.material_ids[identifier] = name
+        self.material_folders.append(folder)
+        self._material_folder_keys.add(folder.lower())
+        self.materials[name] = identifier
+        self._material_names[name.lower()] = name
+        self.texture_sizes[identifier] = (float(width), float(height))
+        self._add_entry(
+            f"materials/{folder}/{image_name}",
+            image,
+            flag=0x0000,
+        )
+        self._add_entry(
+            f"materials/{folder}/material.xml",
+            material_xml(
+                name,
+                average_rgb,
+                opacity=opacity,
+                texture={
+                    "width": float(width),
+                    "height": float(height),
+                    "filename": texture_filename,
+                    "basename": image_name,
+                },
+            ),
+        )
+        return identifier
 
     def add_layer(
         self,
