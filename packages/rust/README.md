@@ -2,7 +2,7 @@
 
 **The open-source SketchUp (`.skp`) file parser, writer, and converter — Rust edition.**
 
-A pure Rust port of the [C++ package](../cpp), with no external crates: DEFLATE, ZIP and
+A pure Rust port of the [C++ package](https://github.com/iamahsanmehmood/openskp/blob/main/packages/cpp), with no external crates: DEFLATE, ZIP and
 FlatBuffers are implemented in-tree.
 
 > [!IMPORTANT]
@@ -24,7 +24,7 @@ let model = SkpFile::open("building.skp")?.parse(&ParseOptions::default())?;
 println!("{} {} definitions", model.version, model.definitions.len());
 ```
 
-Both containers are read: VFF (SketchUp 2021+) and the classic MFC `CArchive` (SketchUp 4–2020; see [docs/LANGUAGE_PARITY.md](../../docs/LANGUAGE_PARITY.md#4-real-sketchup-file-version-support)).
+Both containers are read: VFF (SketchUp 2021+) and the classic MFC `CArchive` (SketchUp 4–2020; see [docs/LANGUAGE_PARITY.md](https://github.com/iamahsanmehmood/openskp/blob/main/docs/LANGUAGE_PARITY.md#4-real-sketchup-file-version-support)).
 
 ## Writing, editing and code generation
 
@@ -62,4 +62,4 @@ writer (from `oracle_driver.cpp`); the Rust writer must reproduce them byte for 
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT — see [LICENSE](https://github.com/iamahsanmehmood/openskp/blob/main/LICENSE).
