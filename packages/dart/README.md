@@ -53,7 +53,7 @@ Enable mobile (iOS/Android), desktop, and web developers to parse and build 3D S
 
 ## ✨ Features
 
-- **Zero Native Dependencies**: 100% pure Dart implementation.
+- **Zero Native Dependencies**: 100% pure Dart implementation (Dart SDK `^3.0.0`; pure-Dart dependencies: `archive`, `crypto`, `meta`, `xml`).
 - **Full-fidelity parsing**: vertices, edges, faces, normals, UV
   coordinates, nested component hierarchies, layers/tags, materials,
   textures, styles, and dynamic-component attributes.
@@ -63,7 +63,7 @@ Enable mobile (iOS/Android), desktop, and web developers to parse and build 3D S
   scene graph to world-space, triangulated, export-ready geometry.
 - **Native multi-format conversion**: glTF (GLB), Wavefront OBJ/MTL, STL,
   PLY, AutoCAD DXF (3DFACE and Polyface Mesh), IFC4 (BIM/ISO 10303-21
-  STEP) — all written from scratch, no third-party CAD/BIM SDK involved.
+  STEP), and JSON — all written from scratch, no third-party CAD/BIM SDK involved.
   The DXF writer is verified against real desktop AutoCAD, not just
   lenient DXF readers.
 - **Write support**: build new legacy-format `.skp` files from scratch:

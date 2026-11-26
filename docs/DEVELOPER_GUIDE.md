@@ -69,10 +69,11 @@ geometry processing, or anything that doesn't need a renderable mesh.
 
 **`buildScene()`** walks the *entire placed scene graph*: every instance
 of every component, nested arbitrarily deep, each with its transform
-resolved to world space, each face triangulated (via Ear Clipping - `earcut` in
-TypeScript, Dart, .NET, and C++; Delaunay triangulation in Python) and grouped by resolved color into
-GLB-ready mesh primitives. For a file that reuses a handful of definitions
-GLB-ready mesh primitives. For a file that reuses a handful of definitions
+resolved to world space, each face triangulated via ear clipping (`mapbox_earcut`
+in Python, with `shapely` retained to merge overlapping holes; `earcut` in
+TypeScript; and ported `earcut` in .NET, Dart, C++, and Rust) and grouped by
+resolved color into GLB-ready mesh primitives. For a file that reuses a handful
+of definitions
 across many thousands of placements (a park bench repeated 400 times, say),
 this can produce **far more data** than the file's raw, un-instanced
 geometry — that's the whole reason it's a separate, opt-in call rather than

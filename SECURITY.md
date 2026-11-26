@@ -2,14 +2,18 @@
 
 ## Supported Versions
 
-OpenSKP ships one version number across all five language packages
-(Python, TypeScript, .NET, Dart, C++). Security fixes are made against the
-latest release; older versions are not backported.
+OpenSKP ships one version number across all five published language packages
+(Python, TypeScript, .NET, Dart, C++), with the unpublished Rust crate
+(`packages/rust`) and Dart `openskp_fragments` (`packages/dart_fragments`)
+tracked on `main`. Security fixes are made against the latest release (`1.7.x`
+today, and `1.8.x` once released) and `main`; older release lines are not
+backported.
 
-| Version | Supported          |
-| ------- | ------------------ |
-| 1.6.x   | :white_check_mark: |
-| < 1.6   | :x:                |
+| Version | Supported                            |
+| ------- | ------------------------------------ |
+| 1.8.x   | :white_check_mark: *(once released)* |
+| 1.7.x   | :white_check_mark:                   |
+| < 1.7   | :x:                                  |
 
 ## Reporting a Vulnerability
 
@@ -41,6 +45,17 @@ untrusted input. Reports of particular interest:
 Issues that require an already-malicious actor with write access to the
 `.skp` file being parsed are still in scope — the library's job is to
 handle arbitrary, untrusted files safely, not just well-formed ones.
+
+Current parser and CI safeguards include a 64-level container/object and
+attribute nesting cap in both the 2021+ VFF/TLV readers and the classic MFC
+`CArchive` readers across all six ports, ZIP/DEFLATE decompression-bomb limits,
+a header-checked 178,956,970-pixel cap before decoding embedded textures for GLB
+colorization, C++ AddressSanitizer and UndefinedBehaviorSanitizer runs in CI
+(`.github/workflows/ci-cpp.yml`), and automated fixture-mutation fuzzing across
+all six readers under per-file time and memory limits
+(`.github/workflows/ci-fuzz.yml`). Any input that bypasses these checks —
+causing a crash, hang, unbounded allocation, or unwrapped internal exception —
+is in scope.
 
 ## Response
 
